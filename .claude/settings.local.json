@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(AUTOTESTER_ROM='/Users/acagliano/Desktop/TI Programming/emulator stuff/ti84+ce.rom' make test:*)",
+      "Bash(AUTOTESTER_ROM='/Users/acagliano/Desktop/TI Programming/emulator stuff/ti84+ce.rom' make test:tls_handshake_full:*)"
+    ]
+  }
+}

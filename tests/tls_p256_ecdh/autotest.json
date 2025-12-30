@@ -1,0 +1,24 @@
+{
+    "transfer_files": [
+        "bin/P256ECDH.8xp"
+    ],
+    "target": {
+        "name": "P256ECDH",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1"
+    ],
+    "hashes": {
+        "1": {
+            "description": "P-256 ECDH test output",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "9F1FC020"
+            ],
+            "timeout": 30000
+        }
+    }
+}

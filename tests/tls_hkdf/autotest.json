@@ -1,0 +1,22 @@
+{
+    "transfer_files": [
+        "bin/HKDF.8xp"
+    ],
+    "target": {
+        "name": "HKDF",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1"
+    ],
+    "hashes": {
+        "1": {
+            "description": "HKDF RFC 5869 test output",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": ["9F1FC020"],
+            "timeout": 30000
+        }
+    }
+}

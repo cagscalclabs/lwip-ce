@@ -1,0 +1,24 @@
+{
+    "transfer_files": [
+        "bin/X25519.8xp"
+    ],
+    "target": {
+        "name": "X25519",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1"
+    ],
+    "hashes": {
+        "1": {
+            "description": "x25519 ECDH test output",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "9F1FC020"
+            ],
+            "timeout": 60000
+        }
+    }
+}

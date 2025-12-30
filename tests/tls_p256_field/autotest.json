@@ -1,0 +1,24 @@
+{
+    "transfer_files": [
+        "bin/P256FLD.8xp"
+    ],
+    "target": {
+        "name": "P256FLD",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1"
+    ],
+    "hashes": {
+        "1": {
+            "description": "P-256 field arithmetic test output",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "9F1FC020"
+            ],
+            "timeout": 10000
+        }
+    }
+}
