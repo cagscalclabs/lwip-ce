@@ -30,7 +30,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev
+          sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb
 
       - name: Download and extract CEdev
         run: |
@@ -43,7 +43,7 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          ROM_URL="${{ env.HOST_DOMAIN }}${{ secrets.CEMU_PATH }}"
+          ROM_URL="${{ secrets.CEMU_PATH }}"
           echo "Downloading ROM from: ${ROM_URL%%\?*}"  # Print URL without query params
           curl -A "github/workflows" \
             -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" \
@@ -82,6 +82,13 @@ jobs:
 
       - name: Install Autotester CLI
         run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
+
+      - name: Verify Autotester Setup
+        run: |
+          echo "Testing autotester with xvfb..."
+          echo "ROM path: ${{env.AUTOTESTER_ROM}}"
+          ls -lh ${{env.AUTOTESTER_ROM}}
+          xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
       - name: Run Unit Tests
         run: |
