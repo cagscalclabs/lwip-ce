@@ -43,10 +43,10 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          ROM_URL="${{ secrets.CEMU_PATH }}"
-          echo "Downloading ROM from: ${ROM_URL%%\?*}"  # Print URL without query params
+          ROM_URL="${{ secrets.CL_SECRETS_URL }}/CE.rom"
+          echo "Downloading ROM from: ${ROM_URL}"
           curl -A "github/workflows" \
-            -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" \
+            -H "Authorization: Bearer ${{ secrets.CL_SECRETS_TOKEN }}" \
             -fSL "$ROM_URL" \
             -o ${{ env.AUTOTESTER_ROM }} \
             --retry 3 \
