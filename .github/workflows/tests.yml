@@ -56,10 +56,10 @@ jobs:
       - name: Build CEmu
         working-directory: ${{env.CEMU_PATH}}/gui/qt
         run: |
-          # Configure CEmu (Linux equivalent of Mac-arm64-Qt6 preset)
-          cmake -G Ninja --preset Linux-Qt6 -DDEPS_RELEASE_ONLY=ON
+          # Configure CEmu using Linux preset
+          cmake -G Ninja --preset Linux-x64 -DDEPS_RELEASE_ONLY=ON
           # Build CEmu
-          cmake --build --preset Linux-Qt6-Release
+          cmake --build --preset Linux-x64-Release
 
       - name: Build Autotester CLI
         working-directory: ${{env.CEMU_PATH}}/tests/autotester
