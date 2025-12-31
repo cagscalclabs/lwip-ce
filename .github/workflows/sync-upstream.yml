@@ -91,6 +91,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Pull Request
+        id: create_pr
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -154,3 +155,10 @@ jobs:
         with:
           name: conflict-summary
           path: conflict_summary.md
+
+      - name: Enable auto-merge for clean PRs
+        if: steps.merge.outputs.has_conflicts == 'false' && steps.create_pr.outputs.pull-request-number != ''
+        run: |
+          gh pr merge ${{ steps.create_pr.outputs.pull-request-number }} --auto --merge --delete-branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
