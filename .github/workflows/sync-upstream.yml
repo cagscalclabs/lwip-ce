@@ -6,6 +6,10 @@ on:
     - cron: '0 0 1 */3 *'
   workflow_dispatch:  # Allow manual triggering
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
