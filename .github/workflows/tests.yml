@@ -46,27 +46,21 @@ jobs:
           curl -A "github/workflows" -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" -sL ${{ secrets.CEMU_PATH }} -o ${{ env.AUTOTESTER_ROM }}
 
       - name: Checkout CEmu
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: CE-Programming/CEmu
-          ref: master
+          ref: latest-stable
           path: ${{env.CEMU_PATH}}
           persist-credentials: false
 
-      - name: Build CEmu Core
-        working-directory: ${{env.CEMU_PATH}}/core
-        run: |
-          qmake
-          make -j$(nproc)
+      - name: Build CEmu
+        run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
-        working-directory: ${{env.CEMU_PATH}}/tests/autotester
-        run: |
-          qmake
-          make -j$(nproc)
+        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
 
       - name: Install Autotester CLI
-        run: cp ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
+        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
 
       - name: Run Unit Tests
         run: |
