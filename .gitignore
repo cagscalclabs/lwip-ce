@@ -3,8 +3,11 @@
 
 # VS Code and XCode workspace files/directories
 .vscode
-*.xcworkspace   
+*.xcworkspace
 *.code-workspace
+
+# Claude Code hidden directory
+.claude
 
 # build and object directories
 obj
