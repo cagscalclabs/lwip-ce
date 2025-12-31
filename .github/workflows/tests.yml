@@ -29,8 +29,9 @@ jobs:
           ref: 'tls'
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y make tar wget
-        
+        run: |
+          sudo apt-get update && sudo apt-get install -y make tar wget cmake ninja-build qtbase5-dev qtdeclarative5-dev libqt5svg5-dev
+
       - name: Download and extract CEdev
         run: |
           curl -sL github.com/CE-Programming/toolchain/releases/download/v14.0/CEdev-Linux.tar.gz | tar xz
@@ -51,15 +52,23 @@ jobs:
           ref: master
           path: ${{env.CEMU_PATH}}
           persist-credentials: false
-          
+
       - name: Build CEmu
-        run: make -j4 -C ${{env.CEMU_PATH}}/core
-        
+        working-directory: ${{env.CEMU_PATH}}/gui/qt
+        run: |
+          # Configure CEmu (Linux equivalent of Mac-arm64-Qt6 preset)
+          cmake -G Ninja --preset Linux-Qt6 -DDEPS_RELEASE_ONLY=ON
+          # Build CEmu
+          cmake --build --preset Linux-Qt6-Release
+
       - name: Build Autotester CLI
-        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester ${{matrix.ldflags}}
-        
+        working-directory: ${{env.CEMU_PATH}}/tests/autotester
+        run: |
+          cmake -B build -G Ninja
+          cmake --build build
+
       - name: Install Autotester CLI
-        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester${{matrix.exe}} ${{env.CEDEV_BIN}}/cemu-autotester${{matrix.exe}}
+        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/build/autotester ${{env.CEDEV_BIN}}/cemu-autotester
 
       - name: Run Unit Tests
         run: |
