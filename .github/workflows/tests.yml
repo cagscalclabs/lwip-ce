@@ -43,7 +43,7 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          curl -A "github/workflows" -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" -sL ${{ secrets.CEMU_PATH }} -o ${{ env.AUTOTESTER_ROM }}
+          curl -A "github/workflows" -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" -sL "${{ env.HOST_DOMAIN }}${{ secrets.CEMU_PATH }}" -o ${{ env.AUTOTESTER_ROM }}
 
       - name: Checkout CEmu
         uses: actions/checkout@v4
