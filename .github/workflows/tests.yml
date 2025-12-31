@@ -43,7 +43,28 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          curl -A "github/workflows" -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" -sL "${{ env.HOST_DOMAIN }}${{ secrets.CEMU_PATH }}" -o ${{ env.AUTOTESTER_ROM }}
+          ROM_URL="${{ env.HOST_DOMAIN }}${{ secrets.CEMU_PATH }}"
+          echo "Downloading ROM from: ${ROM_URL%%\?*}"  # Print URL without query params
+          curl -A "github/workflows" \
+            -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" \
+            -fSL "$ROM_URL" \
+            -o ${{ env.AUTOTESTER_ROM }} \
+            --retry 3 \
+            --retry-delay 2
+
+          # Verify download
+          if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
+            echo "ERROR: ROM file not created"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s "${{ env.AUTOTESTER_ROM }}" 2>/dev/null || stat -f%z "${{ env.AUTOTESTER_ROM }}")
+          echo "Downloaded ROM size: ${FILE_SIZE} bytes"
+
+          if [ "$FILE_SIZE" -lt 1000000 ]; then
+            echo "WARNING: ROM file seems too small (expected ~2-4MB)"
+            file "${{ env.AUTOTESTER_ROM }}"
+          fi
 
       - name: Checkout CEmu
         uses: actions/checkout@v4
