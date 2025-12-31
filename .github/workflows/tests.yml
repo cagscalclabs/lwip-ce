@@ -30,7 +30,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y make tar wget cmake ninja-build qtbase5-dev qtdeclarative5-dev libqt5svg5-dev
+          sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev
 
       - name: Download and extract CEdev
         run: |
@@ -53,22 +53,20 @@ jobs:
           path: ${{env.CEMU_PATH}}
           persist-credentials: false
 
-      - name: Build CEmu
-        working-directory: ${{env.CEMU_PATH}}/gui/qt
+      - name: Build CEmu Core
+        working-directory: ${{env.CEMU_PATH}}/core
         run: |
-          # Configure CEmu using Linux preset
-          cmake -G Ninja --preset Linux-x64 -DDEPS_RELEASE_ONLY=ON
-          # Build CEmu
-          cmake --build --preset Linux-x64-Release
+          qmake
+          make -j$(nproc)
 
       - name: Build Autotester CLI
         working-directory: ${{env.CEMU_PATH}}/tests/autotester
         run: |
-          cmake -B build -G Ninja
-          cmake --build build
+          qmake
+          make -j$(nproc)
 
       - name: Install Autotester CLI
-        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/build/autotester ${{env.CEDEV_BIN}}/cemu-autotester
+        run: cp ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
 
       - name: Run Unit Tests
         run: |
