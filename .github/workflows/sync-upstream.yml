@@ -1,0 +1,164 @@
+name: Sync Upstream lwIP
+
+on:
+  schedule:
+    # Run every 3 months on the 1st at 00:00 UTC
+    - cron: '0 0 1 */3 *'
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    # Only run on master branch
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/lwip-tcpip/lwip.git || true
+          git fetch upstream
+
+      - name: Create sync branch
+        id: sync
+        run: |
+          BRANCH_NAME="sync-upstream-$(date +%Y-%m-%d)"
+          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+
+          git checkout -b ${BRANCH_NAME}
+
+      - name: Merge upstream changes
+        id: merge
+        continue-on-error: true
+        run: |
+          # Attempt merge with our strategy (prefer local changes)
+          if git merge upstream/master -X ours -m "Merge upstream lwIP changes from $(date +%Y-%m-%d)"; then
+            echo "merge_status=success" >> $GITHUB_OUTPUT
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+          else
+            echo "merge_status=conflicts" >> $GITHUB_OUTPUT
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+
+            # Capture conflict information
+            echo "## Merge Conflicts Detected" > conflict_summary.md
+            echo "" >> conflict_summary.md
+            echo "The following files have conflicts:" >> conflict_summary.md
+            echo '```' >> conflict_summary.md
+            git status --short | grep '^UU\|^AA\|^DD\|^DU\|^UD' >> conflict_summary.md || echo "No standard conflicts" >> conflict_summary.md
+            echo '```' >> conflict_summary.md
+            echo "" >> conflict_summary.md
+
+            # For modify/delete conflicts, auto-resolve by keeping deleted
+            echo "### Auto-Resolving Modify/Delete Conflicts" >> conflict_summary.md
+            git status --short | grep '^DU' | awk '{print $2}' | while read file; do
+              echo "- Keeping deleted: $file" >> conflict_summary.md
+              git rm "$file" || true
+            done
+
+            # Commit what we can
+            if git commit -m "Merge upstream lwIP changes (auto-resolved modify/delete conflicts)"; then
+              echo "Auto-resolved some conflicts" >> conflict_summary.md
+            fi
+          fi
+
+      - name: Push sync branch
+        if: always()
+        run: |
+          git push origin ${{ steps.sync.outputs.branch_name }}
+
+      - name: Get commit information
+        id: commits
+        run: |
+          # Get list of new commits from upstream
+          COMMITS=$(git log --oneline HEAD~10..upstream/master --pretty=format:"- %h %s" || echo "- Unable to fetch commits")
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        id: create_pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.sync.outputs.branch_name }}
+          base: master
+          title: "🔄 Sync upstream lwIP changes ($(date +%Y-%m-%d))"
+          body: |
+            ## Automated Upstream Sync
+
+            This PR automatically merges changes from the upstream lwIP repository.
+
+            **Source:** https://github.com/lwip-tcpip/lwip
+            **Merge Strategy:** `-X ours` (prefers local changes on conflicts)
+            **Status:** ${{ steps.merge.outputs.has_conflicts == 'true' && '⚠️ Has Conflicts' || '✅ Clean Merge' }}
+
+            ### Recent Upstream Commits
+
+            ${{ steps.commits.outputs.commits }}
+
+            ### What to Review
+
+            1. **Check CHANGELOG** - Review upstream changes for security fixes
+            2. **Review Conflicts** - If any conflicts remain, review carefully
+            3. **Test on Feature Branches** - After merging to master, rebase feature branches:
+               ```bash
+               git checkout master
+               git pull
+               git checkout tls
+               git rebase master
+               ```
+            4. **Check altcp API** - Verify no breaking changes to altcp layer
+
+            ### Merge Conflicts
+
+            ${{ steps.merge.outputs.has_conflicts == 'true' && 'This PR has merge conflicts that need manual resolution.' || 'No conflicts detected. Safe to merge after testing.' }}
+
+            ${{ steps.merge.outputs.has_conflicts == 'true' && '```' || '' }}
+            ${{ steps.merge.outputs.has_conflicts == 'true' && steps.merge.outputs.conflict_summary || '' }}
+            ${{ steps.merge.outputs.has_conflicts == 'true' && '```' || '' }}
+
+            ### Automated Actions Taken
+
+            - ✅ Fetched latest from upstream lwIP
+            - ✅ Merged using `-X ours` strategy
+            - ✅ Auto-resolved modify/delete conflicts (kept files deleted)
+            ${{ steps.merge.outputs.has_conflicts == 'true' && '- ⚠️ Some conflicts require manual resolution' || '- ✅ All conflicts auto-resolved' }}
+
+            ---
+
+            **Note:** This is an automated PR. Review carefully before merging.
+            Always test the TLS implementation after merging upstream changes.
+          labels: |
+            upstream-sync
+            automated
+            ${{ steps.merge.outputs.has_conflicts == 'true' && 'needs-review' || 'ready-to-test' }}
+          draft: ${{ steps.merge.outputs.has_conflicts == 'true' }}
+
+      - name: Upload conflict summary
+        if: steps.merge.outputs.has_conflicts == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: conflict-summary
+          path: conflict_summary.md
+
+      - name: Enable auto-merge for clean PRs
+        if: steps.merge.outputs.has_conflicts == 'false' && steps.create_pr.outputs.pull-request-number != ''
+        run: |
+          gh pr merge ${{ steps.create_pr.outputs.pull-request-number }} --auto --merge --delete-branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
