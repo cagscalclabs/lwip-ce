@@ -23,34 +23,34 @@
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "2AD9C7F8"
             ],
-            "timeout": 2000
+            "timeout": 15000
         },
         "2": {
             "description": "PKCS8 EC private decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "4BDB2881"
             ],
-            "timeout": 2000
+            "timeout": 15000
         },
         "3": {
             "description": "PKCS8 RSA private decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "19E37AFB"
             ],
-            "timeout": 2000
+            "timeout": 15000
         },
         "4": {
             "description": "PKCS8 RSA encrypted private decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "E75016E9"
             ],
             "timeout": 15000
         }

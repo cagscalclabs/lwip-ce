@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "keyobject.h"
+#include "lwip/mem.h"
 
 /* lwIP memory allocator function pointers */
 extern void *(*caller_malloc_ref)(size_t);
@@ -33,6 +34,7 @@ int main(void)
     /* Set up memory allocator for lwIP's custom malloc */
     caller_malloc_ref = malloc;
     caller_free_ref = free;
+    mem_init();
 
     // PKCS#1 RSA key
     struct tls_keyobject *pk = tls_keyobject_import_private((const char *)test1, strlen((const char *)test1), NULL);
@@ -56,7 +58,6 @@ int main(void)
         os_FontDrawText(buf, 5, 40 + i * 12);
     }
     tls_keyobject_destroy(pk);
-    printf("success");
     os_GetKey();
     os_ClrHome();
 
@@ -82,7 +83,6 @@ int main(void)
         os_FontDrawText(buf, 5, 40 + i * 12);
     }
     tls_keyobject_destroy(pk);
-    printf("success");
     os_GetKey();
     os_ClrHome();
 
@@ -108,7 +108,6 @@ int main(void)
         os_FontDrawText(buf, 5, 40 + i * 12);
     }
     tls_keyobject_destroy(pk);
-    printf("success");
     os_GetKey();
     os_ClrHome();
 
@@ -136,10 +135,5 @@ int main(void)
     tls_keyobject_destroy(pk);
 
     os_GetKey();
-    os_ClrHome();
-
-    printf("success");
-    os_GetKey();
-
     return 0;
 }

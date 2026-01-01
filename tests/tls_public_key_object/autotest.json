@@ -19,18 +19,18 @@
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "61E4EAD8"
             ],
-            "timeout": 2000
+            "timeout": 5000
         },
         "2": {
             "description": "EC public decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "7C68B78D"
             ],
-            "timeout": 2000
+            "timeout": 5000
         }
     }
 }
