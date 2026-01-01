@@ -153,9 +153,31 @@ jobs:
           echo -e "}}" >> ${{github.workspace}}/results.json
           rm ${{github.workspace}}/summary.json
 
-      - name: Publish CTRF Detailed Test Summary Results
-        run: npx github-actions-ctrf tests ${{github.workspace}}/results.json
+      - name: Publish Test Summary
         if: always()
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Parse results.json for summary stats
+          total=$(jq -r '.results.summary.tests' ${{github.workspace}}/results.json)
+          passed=$(jq -r '.results.summary.passed' ${{github.workspace}}/results.json)
+          failed=$(jq -r '.results.summary.failed' ${{github.workspace}}/results.json)
+
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Add detailed test results table
+          echo "### Individual Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Name | Status | Duration (ms) |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|---------------|" >> $GITHUB_STEP_SUMMARY
+
+          jq -r '.results.tests[] | "| \(.name) | \(if .status == "passed" then "✅ Passed" else "❌ Failed" end) | \(.duration) |"' ${{github.workspace}}/results.json >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Results Logfile
         uses: actions/upload-artifact@v4
