@@ -17,6 +17,9 @@ SOURCES = src/main.c
 # Pull in required TLS core files
 EXTRA_C_SOURCES = ../../src/tls/core/aes.c
 
+# Assembly files (bytelen_to_bitlen is only in bytes.asm, gf128_mul has C implementation)
+EXTRA_ASM_SOURCES = ../../src/tls/core/bytes.asm
+
 # ----------------------------
 
 # Add header directories
