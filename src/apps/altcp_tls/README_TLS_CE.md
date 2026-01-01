@@ -287,7 +287,7 @@ In `lwipopts.h`:
 
 ## Testing
 
-See `tests/tls_handshake_full/` for comprehensive test suite:
+See `tests/tls_handshake_psk/` for comprehensive PSK handshake test suite:
 - Test 1: Loopback encrypt/decrypt
 - Test 2: Mock server handshake
 - Test 3: Sequence number increment
