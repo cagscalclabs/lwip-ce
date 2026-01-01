@@ -6,7 +6,7 @@
 #include <time.h>
 #include <debug.h>
 
-#include "tls/includes/hash.h"
+#include "hash.h"
 
 // input vectors
 const char *test1 = "The fox jumped over the dog!";

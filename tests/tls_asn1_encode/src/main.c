@@ -4,8 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "tls/includes/asn1.h"
-#include "tls/includes/base64.h"
+#include "asn1.h"
+#include "base64.h"
 
 // test vectors
 // A 2048 bit public key

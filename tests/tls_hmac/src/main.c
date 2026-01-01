@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "tls/includes/hmac.h"
+#include "hmac.h"
 
 // input vectors
 const char *test1 = "The fox jumped over the dog!";

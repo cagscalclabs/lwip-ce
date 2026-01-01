@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include "lwip/mem.h"
 
-#include "tls/includes/keyobject.h"
+#include "keyobject.h"
 
 // test vectors
 const char *test1 = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGyysU2q4d1q5X2gC4cSZIgRScpt6W0w3ypyYWrM+85s4YeIniKhjuA7EUSWlAG3BJuElaEJNsWFtDFItptYzIkLLvPzz4ecJfvfFu5o4r3H//a7DpyiXwe2e4GEwwCV8FtHlrZaUcqb/mjRiziEwvmKPTCO/GkQyXI0wHQCOijQIDAQAB\n-----END PUBLIC KEY-----";

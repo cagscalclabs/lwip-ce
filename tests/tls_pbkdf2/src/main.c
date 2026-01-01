@@ -4,8 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "tls/includes/hash.h"
-#include "tls/includes/passwords.h"
+#include "hash.h"
+#include "passwords.h"
 
 // input vectors
 const char *test1 = "Science7!";

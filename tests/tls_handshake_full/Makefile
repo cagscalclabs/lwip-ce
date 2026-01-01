@@ -8,21 +8,15 @@ ARCHIVED = NO
 DESCRIPTION = "TLS 1.3 Full Handshake Test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes -I../../src/crypto -I../../src/arch/share
-CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes -I../../src/crypto -I../../src/arch/share
+CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
+CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
 
 # Test main
 SOURCES = src/main.c
 
-# Pull in only TLS core files (handshake, HKDF, etc.)
-SOURCES += $(wildcard ../../src/tls/core/*.c)
-
-# Pull in only crypto files (no networking, no drivers)
-SOURCES += $(wildcard ../../src/crypto/*.c)
-
-# Pull in assembly files from crypto and arch (no driver ASM)
-ASM = $(wildcard ../../src/crypto/*.asm)
-ASM += $(wildcard ../../src/arch/share/*.asm)
+# Pull in TLS core files (test currently incomplete, needs implementation)
+# Once test functions are implemented, uncomment and add needed sources:
+# EXTRA_C_SOURCES = ../../src/tls/core/handshake.c ../../src/tls/core/hkdf.c etc.
 
 # ----------------------------
 

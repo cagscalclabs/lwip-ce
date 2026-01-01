@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include "lwip/mem.h"
 
-#include "tls/includes/keyobject.h"
+#include "keyobject.h"
 
 // test vectors
 

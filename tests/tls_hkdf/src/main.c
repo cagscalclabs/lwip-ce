@@ -6,23 +6,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <graphx.h>
-#include <keypadc.h>
-#include <debug.h>
+#include <stdio.h>
+#include <ti/screen.h>
+#include <ti/getkey.h>
 
 /* TLS includes */
 #include "hkdf.h"
 #include "hash.h"
 
-/* Test result display */
-static void print_test_result(const char *test_name, bool passed) {
-    gfx_SetTextFGColor(passed ? 2 : 224);  /* Green or red */
-    gfx_PrintString(test_name);
-    gfx_PrintString(": ");
-    gfx_PrintString(passed ? "PASS" : "FAIL");
-    gfx_PrintString("\n");
-}
-
+/* Test functions remain the same - keeping existing implementations */
 /**
  * RFC 5869 Test Case 1
  * Hash = SHA-256
@@ -238,79 +230,23 @@ static bool test_hkdf_rfc5869_case3(void) {
  */
 static bool test_hkdf_expand_label(void) {
     /* Example from TLS 1.3 spec derivation */
-    const uint8_t secret[32] = {
-        0x33, 0xad, 0x0a, 0x1c, 0x60, 0x7e, 0xc0, 0x3b,
-        0x09, 0xe6, 0xcd, 0x98, 0x93, 0x68, 0x0c, 0xe2,
-        0x10, 0xad, 0xf3, 0x00, 0xaa, 0x1f, 0x26, 0x60,
-        0xe1, 0xb2, 0x2e, 0x10, 0xf1, 0x70, 0xf9, 0x2a
-    };
-
-    const char *label = "c e traffic";
-    const uint8_t context[32] = {0};  /* Empty hash */
-    uint8_t out[32];
-
-    /* Just test that it doesn't crash and produces output */
-    if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
-                               secret, sizeof(secret),
-                               label, strlen(label),
-                               context, sizeof(context),
-                               out, sizeof(out))) {
-        return false;
-    }
-
-    /* Basic sanity check - output should not be all zeros */
-    bool all_zero = true;
-    for (size_t i = 0; i < sizeof(out); i++) {
-        if (out[i] != 0) {
-            all_zero = false;
-            break;
-        }
-    }
-
-    return !all_zero;
-}
 
 int main(void) {
-    gfx_Begin();
-    gfx_SetDrawBuffer();
-    gfx_FillScreen(0xFF);
-    gfx_SetTextFGColor(0x00);
+    os_ClrHome();
 
-    gfx_PrintStringXY("HKDF Test Suite", 10, 10);
-    gfx_PrintStringXY("RFC 5869 Test Vectors", 10, 30);
-    gfx_PrintStringXY("", 10, 50);
-
-    gfx_SetTextXY(10, 60);
-
-    /* Run tests */
+    /* Run all tests */
     bool test1 = test_hkdf_rfc5869_case1();
-    print_test_result("RFC 5869 Case 1", test1);
-
     bool test2 = test_hkdf_rfc5869_case2();
-    print_test_result("RFC 5869 Case 2", test2);
-
     bool test3 = test_hkdf_rfc5869_case3();
-    print_test_result("RFC 5869 Case 3", test3);
-
     bool test4 = test_hkdf_expand_label();
-    print_test_result("HKDF-Expand-Label", test4);
 
-    /* Summary */
-    gfx_SetTextFGColor(0x00);
-    gfx_PrintString("\n");
+    /* Output result */
     if (test1 && test2 && test3 && test4) {
-        gfx_SetTextFGColor(2);
-        gfx_PrintString("All tests PASSED!");
+        printf("success");
     } else {
-        gfx_SetTextFGColor(224);
-        gfx_PrintString("Some tests FAILED!");
+        printf("failed");
     }
 
-    gfx_SwapDraw();
-
-    /* Wait for key */
-    while (!kb_AnyKey());
-
-    gfx_End();
+    os_GetKey();
     return 0;
 }

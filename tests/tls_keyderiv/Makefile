@@ -15,15 +15,10 @@ CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
 SOURCES = src/main.c
 
 # Pull in required TLS core files
-SOURCES += ../../src/tls/core/handshake.c
-SOURCES += ../../src/tls/core/hkdf.c
-SOURCES += ../../src/tls/core/hmac.c
-SOURCES += ../../src/tls/core/hash.c
+EXTRA_C_SOURCES = ../../src/tls/core/handshake.c ../../src/tls/core/hkdf.c ../../src/tls/core/hmac.c ../../src/tls/core/hash.c
 
-# Assembly files from TLS core and arch
-ASM = ../../src/tls/core/sha256.asm
-ASM += ../../src/tls/core/random.asm
-ASM += $(wildcard ../../src/arch/share/*.asm)
+# Assembly files from TLS core
+EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/random.asm ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm
 
 # ----------------------------
 

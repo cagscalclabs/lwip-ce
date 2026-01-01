@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "tls/includes/base64.h"
+#include "base64.h"
 
 // test vectors
 const char *test1 = "Science7!";

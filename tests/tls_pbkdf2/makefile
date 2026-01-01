@@ -8,11 +8,21 @@ ARCHIVED = NO
 DESCRIPTION = "tls_pbkdf2 test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -Isrc/include
-CXXFLAGS = -Wall -Wextra -Oz -Isrc/include
+CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
+CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
+
+# Test main
+SOURCES = src/main.c
+
+# Pull in required TLS core files
+EXTRA_C_SOURCES = ../../src/tls/core/passwords.c ../../src/tls/core/hash.c ../../src/tls/core/hmac.c
+
+# Assembly files from TLS core
+EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm
 
 # ----------------------------
 
-HEADER_DIRS := src/include $(HEADER_DIRS)
+# Add header directories
+HEADER_DIRS := ../../src/include ../../src/tls/includes src/include $(HEADER_DIRS)
 
 include $(shell cedev-config --makefile)
