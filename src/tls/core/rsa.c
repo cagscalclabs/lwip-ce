@@ -5,7 +5,7 @@
 #include "../includes/random.h"
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
-#include "../includes/tls.h"
+#include "tls.h"
 
 /* External reference to TLS context for scratch buffers */
 extern struct tls_context {
