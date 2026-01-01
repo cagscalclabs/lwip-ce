@@ -1,0 +1,36 @@
+{
+  "transfer_files": [
+    "bin/OAEPTEST.8xp"
+  ],
+  "target": {
+    "name": "OAEPTEST",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "oaep encode test",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "806269A3"
+      ],
+      "timeout": 2000
+    },
+    "2": {
+      "description": "oaep decode test",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "A428EA0F"
+      ],
+      "timeout": 2000
+    }
+  }
+}
