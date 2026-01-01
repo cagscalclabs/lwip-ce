@@ -11,8 +11,11 @@ COMPRESSED = NO
 CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
 CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
 
-# Test main and x25519 implementation
-SOURCES = src/main.c src/x25519.c
+# Test main
+SOURCES = src/main.c
+
+# Pull in required TLS core files
+EXTRA_C_SOURCES = ../../src/tls/core/x25519.c
 
 # Assembly files (local wrappers)
 ASM = src/x25519_field.asm src/x25519_karat.asm src/x25519_mul_wrapper.asm

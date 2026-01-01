@@ -14,34 +14,28 @@
 #include "hkdf.h"
 #include "hash.h"
 
-/* Test 1 and 3 are from our working implementation */
-/* Test 2 stub  - to be implemented later */
+/* TODO: Implement test functions */
 
-static bool test_loopback_encrypt_decrypt(void);
-static bool test_sequence_number_increment(void);
+static bool test_loopback_encrypt_decrypt(void) {
+    return false; /* Not yet implemented */
+}
+
+static bool test_sequence_number_increment(void) {
+    return false; /* Not yet implemented */
+}
 
 int main(void) {
     os_ClrHome();
 
-    /* Test 1: Loopback encrypt/decrypt */
-    if (!test_loopback_encrypt_decrypt()) {
-        printf("failed");
-    } else {
-        printf("success");
-    }
-    os_GetKey();
-    os_ClrHome();
+    bool test1 = test_loopback_encrypt_decrypt();
+    bool test2 = test_sequence_number_increment();
 
-    /* Test 3: Sequence number increment */
-    if (!test_sequence_number_increment()) {
-        printf("failed");
-    } else {
+    if (test1 && test2) {
         printf("success");
+    } else {
+        printf("failed");
     }
-    os_GetKey();
-    os_ClrHome();
 
+    os_GetKey();
     return 0;
 }
-
-/* Full test implementations would go here */
