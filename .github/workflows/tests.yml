@@ -10,7 +10,8 @@ env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
   LWIP_TESTS: ${{github.workspace}}/tests
   CEMU_PATH: ${{github.workspace}}/CEmu
-  HOST_DOMAIN: "https://cagstech.com"
+  CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
+  SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
 jobs:
@@ -43,14 +44,24 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          ROM_URL="${{ secrets.CL_SECRETS_URL }}/CE.rom"
           echo "Downloading ROM from: ${ROM_URL}"
-          curl -A "github/workflows" \
-            -H "Authorization: Bearer ${{ secrets.CL_SECRETS_TOKEN }}" \
-            -fSL "$ROM_URL" \
+          # Try download with verbose output
+          HTTP_CODE=$(curl -A "github/workflows" \
+            -H "Authorization: Bearer ${{ env.SECRETS_TOKEN }}" \
+            -w "%{http_code}" \
             -o ${{ env.AUTOTESTER_ROM }} \
+            -SL ${{env.CEMU_ROM_PATH}} \
             --retry 3 \
-            --retry-delay 2
+            --retry-delay 2)
+
+          echo "HTTP response code: ${HTTP_CODE}"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Download failed with HTTP code ${HTTP_CODE}"
+            echo "Checking if file was created anyway..."
+            ls -lh ${{ env.AUTOTESTER_ROM }} || echo "No file created"
+            exit 1
+          fi
 
           # Verify download
           if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
