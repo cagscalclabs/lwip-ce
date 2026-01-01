@@ -7,8 +7,8 @@
 #include "keyobject.h"
 
 /* lwIP memory allocator function pointers */
-extern void* (*caller_malloc_ref)(size_t);
-extern void (*caller_free_ref)(void*);
+extern void *(*caller_malloc_ref)(size_t);
+extern void (*caller_free_ref)(void *);
 
 // test vectors
 
@@ -35,14 +35,16 @@ int main(void)
     caller_free_ref = free;
 
     // PKCS#1 RSA key
-    struct tls_keyobject *pk = tls_keyobject_import_private((const char*)test1, strlen((const char*)test1), NULL);
-    if(pk==NULL){
+    struct tls_keyobject *pk = tls_keyobject_import_private((const char *)test1, strlen((const char *)test1), NULL);
+    if (pk == NULL)
+    {
         printf("error");
         os_GetKey();
         os_ClrHome();
         return 1;
     }
-    for(int i=0; i < 8; i++){
+    for (int i = 0; i < 8; i++)
+    {
         sprintf(buf, "%s:tag=%u, size=%u: %02x%02x..%02x%02x",
                 pk->meta.privkey.rsa.fields[i].name,
                 pk->meta.privkey.rsa.fields[i].tag,
@@ -50,25 +52,25 @@ int main(void)
                 pk->meta.privkey.rsa.fields[i].data[0],
                 pk->meta.privkey.rsa.fields[i].data[1],
                 pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 2],
-                pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 1]
-                );
-        os_FontDrawText(buf, 5, 40+i*12);
+                pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 1]);
+        os_FontDrawText(buf, 5, 40 + i * 12);
     }
     tls_keyobject_destroy(pk);
-
+    printf("success");
     os_GetKey();
     os_ClrHome();
 
-
     // PKCS#8 EC key
-    pk = tls_keyobject_import_private((const char*)test2, strlen((const char*)test2), NULL);
-    if(pk==NULL){
+    pk = tls_keyobject_import_private((const char *)test2, strlen((const char *)test2), NULL);
+    if (pk == NULL)
+    {
         printf("error");
         os_GetKey();
         os_ClrHome();
         return 1;
     }
-    for(int i=0; i < 3; i++){
+    for (int i = 0; i < 3; i++)
+    {
         sprintf(buf, "%s:tag=%u, size=%u: %02x%02x..%02x%02x",
                 pk->meta.privkey.ec.fields[i].name,
                 pk->meta.privkey.ec.fields[i].tag,
@@ -76,24 +78,25 @@ int main(void)
                 pk->meta.privkey.ec.fields[i].data[0],
                 pk->meta.privkey.ec.fields[i].data[1],
                 pk->meta.privkey.ec.fields[i].data[pk->meta.privkey.ec.fields[i].len - 2],
-                pk->meta.privkey.ec.fields[i].data[pk->meta.privkey.ec.fields[i].len - 1]
-                );
-        os_FontDrawText(buf, 5, 40+i*12);
+                pk->meta.privkey.ec.fields[i].data[pk->meta.privkey.ec.fields[i].len - 1]);
+        os_FontDrawText(buf, 5, 40 + i * 12);
     }
     tls_keyobject_destroy(pk);
-
+    printf("success");
     os_GetKey();
     os_ClrHome();
 
     // PKCS#8 RSA private key
-    pk = tls_keyobject_import_private((const char*)test3, strlen((const char*)test3), NULL);
-    if(pk==NULL){
+    pk = tls_keyobject_import_private((const char *)test3, strlen((const char *)test3), NULL);
+    if (pk == NULL)
+    {
         printf("error");
         os_GetKey();
         os_ClrHome();
         return 1;
     }
-    for(int i=0; i < 8; i++){
+    for (int i = 0; i < 8; i++)
+    {
         sprintf(buf, "%s:tag=%u, size=%u: %02x%02x..%02x%02x",
                 pk->meta.privkey.rsa.fields[i].name,
                 pk->meta.privkey.rsa.fields[i].tag,
@@ -101,24 +104,25 @@ int main(void)
                 pk->meta.privkey.rsa.fields[i].data[0],
                 pk->meta.privkey.rsa.fields[i].data[1],
                 pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 2],
-                pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 1]
-                );
-        os_FontDrawText(buf, 5, 40+i*12);
+                pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 1]);
+        os_FontDrawText(buf, 5, 40 + i * 12);
     }
     tls_keyobject_destroy(pk);
-
+    printf("success");
     os_GetKey();
     os_ClrHome();
 
     // PKCS#8 RSA encrypted private key
-    pk = tls_keyobject_import_private((const char*)test4, strlen((const char*)test4), "science");
-    if(pk==NULL){
+    pk = tls_keyobject_import_private((const char *)test4, strlen((const char *)test4), "science");
+    if (pk == NULL)
+    {
         printf("error");
         os_GetKey();
         os_ClrHome();
         return 1;
     }
-    for(int i=0; i < 8; i++){
+    for (int i = 0; i < 8; i++)
+    {
         sprintf(buf, "%s:tag=%u, size=%u: %02x%02x..%02x%02x",
                 pk->meta.privkey.rsa.fields[i].name,
                 pk->meta.privkey.rsa.fields[i].tag,
@@ -126,9 +130,8 @@ int main(void)
                 pk->meta.privkey.rsa.fields[i].data[0],
                 pk->meta.privkey.rsa.fields[i].data[1],
                 pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 2],
-                pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 1]
-                );
-        os_FontDrawText(buf, 5, 40+i*12);
+                pk->meta.privkey.rsa.fields[i].data[pk->meta.privkey.rsa.fields[i].len - 1]);
+        os_FontDrawText(buf, 5, 40 + i * 12);
     }
     tls_keyobject_destroy(pk);
 
