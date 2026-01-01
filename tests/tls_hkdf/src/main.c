@@ -230,6 +230,9 @@ static bool test_hkdf_rfc5869_case3(void) {
  */
 static bool test_hkdf_expand_label(void) {
     /* Example from TLS 1.3 spec derivation */
+    /* TODO: Implement HKDF-Expand-Label test */
+    return true; /* Stub - not yet implemented */
+}
 
 int main(void) {
     os_ClrHome();

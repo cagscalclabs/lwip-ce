@@ -697,6 +697,7 @@ enum _aes_op_assoc
 #define AES_GCM_NONCE_LEN 12
 #define AES_GCM_CTR_LEN 4
 #define AES_GCM_POLY 0xe1 // polynomial used in AES-GCM
+/*
 void gf128_mul(uint8_t *a, const uint8_t *b, uint8_t *c)
 {
     uint8_t v[16] = {0};
@@ -745,7 +746,7 @@ void gf128_mul(uint8_t *a, const uint8_t *b, uint8_t *c)
         xor_buf(r, c, 16);
     }
 }
-
+*/
 #define ghash_start(buf) memset((buf), 0, 16)
 
 void ghash(struct tls_aes_context *ctx, uint8_t *out_buf, const uint8_t *data, size_t len)
