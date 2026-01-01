@@ -6,9 +6,9 @@ char b64_charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 static int mod_table[] = {0, 2, 1};
 size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
     size_t olen = 4 * ((len + 2) / 3);
-    int j = 0;
-    for (int i = 0; i < len;) {
-        
+    size_t j = 0;
+    for (size_t i = 0; i < len;) {
+
         uint32_t octet_a = i < len ? (unsigned char)inbuf[i++] : 0;
         uint32_t octet_b = i < len ? (unsigned char)inbuf[i++] : 0;
         uint32_t octet_c = i < len ? (unsigned char)inbuf[i++] : 0;
@@ -28,13 +28,13 @@ size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
 }
 
 size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
-    
+
     size_t olen = len / 4 * 3;
     size_t j = 0;
     if (inbuf[len - 1] == '=') olen--;
     if (inbuf[len - 2] == '=') olen--;
-    
-    for (int i = 0; i < len;) {
+
+    for (size_t i = 0; i < len;) {
         
         uint32_t sextet_a = inbuf[i] == '=' ? 0 & i++ : strchr(b64_charset, inbuf[i++]) - b64_charset;
         uint32_t sextet_b = inbuf[i] == '=' ? 0 & i++ : strchr(b64_charset, inbuf[i++]) - b64_charset;
