@@ -172,12 +172,24 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Add detailed test results table
-          echo "### Individual Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Name | Status | Duration (ms) |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|--------|---------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Test Cases | Status | Duration (ms) |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------------|--------|---------------|" >> $GITHUB_STEP_SUMMARY
 
-          jq -r '.results.tests[] | "| \(.name) | \(if .status == "passed" then "✅ Passed" else "❌ Failed" end) | \(.duration) |"' ${{github.workspace}}/results.json >> $GITHUB_STEP_SUMMARY
+          # For each test, count the number of hashWait entries in its autotest.json
+          jq -r '.results.tests[] | .name' ${{github.workspace}}/results.json | while read test_name; do
+            test_dir="$LWIP_TESTS/$test_name"
+            # Count hashWait entries in the sequence array
+            test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
+
+            # Get status and duration from results
+            status=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .status" ${{github.workspace}}/results.json)
+            duration=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .duration" ${{github.workspace}}/results.json)
+
+            status_icon=$([ "$status" = "passed" ] && echo "✅ Passed" || echo "❌ Failed")
+            echo "| $test_name | $test_count | $status_icon | $duration |" >> $GITHUB_STEP_SUMMARY
+          done
 
       - name: Upload Results Logfile
         uses: actions/upload-artifact@v4
