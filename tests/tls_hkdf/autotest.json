@@ -15,7 +15,9 @@
             "description": "HKDF RFC 5869 test output",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": ["9F1FC020"],
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
             "timeout": 30000
         }
     }

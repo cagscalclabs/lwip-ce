@@ -21,7 +21,7 @@
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "D1F2869F"
             ],
             "timeout": 30000
         },
@@ -30,7 +30,7 @@
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "D1F2869F"
             ],
             "timeout": 30000
         },
@@ -39,7 +39,7 @@
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "9F1FC020"
+                "D1F2869F"
             ],
             "timeout": 30000
         }

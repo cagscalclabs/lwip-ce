@@ -14,9 +14,23 @@ CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
 # Test main
 SOURCES = src/main.c
 
-# Pull in TLS core files (test currently incomplete, needs implementation)
-# Once test functions are implemented, uncomment and add needed sources:
-# EXTRA_C_SOURCES = ../../src/tls/core/handshake.c ../../src/tls/core/hkdf.c etc.
+# Pull in TLS core files needed for handshake test
+EXTRA_C_SOURCES = \
+	../../src/tls/core/handshake.c \
+	../../src/tls/core/hkdf.c \
+	../../src/tls/core/hmac.c \
+	../../src/tls/core/hash.c \
+	../../src/tls/core/aes.c \
+	../../src/core/mem.c \
+	../../src/core/stats.c
+
+# Assembly files
+EXTRA_ASM_SOURCES = \
+	../../src/tls/core/sha256.asm \
+	../../src/tls/core/bytes.asm \
+	../../src/tls/core/share/bigint.asm \
+	../../src/tls/core/share/helpers.asm \
+	../../src/tls/core/random.asm
 
 # ----------------------------
 
