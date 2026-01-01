@@ -1,86 +1,171 @@
-# TLS IMPLEMENTATION NOTES #
+# TLS 1.3 Implementation Details
 
+## Architecture
 
-## True Random Number Generator ##
+### Current Implementation Status
+- **Protocol**: TLS 1.3 only
+- **Mode**: PSK-only (Pre-Shared Key without ECDHE)
+- **Cipher Suite**: TLS_AES_128_GCM_SHA256 (0x13, 0x01)
+- **State**: Handshake, key derivation, and AES-GCM encryption/decryption working
 
-### Source of Randomness ###
-Unmapped memory is a region of memory that lacks memory cells and exhibits fluctuations in voltage affecting the value of bits caused by bus noise (Cemetech user `Zeroko` suggests this is quantum in nature). Because there are no memory cells, the controller attempts to pull the voltage on the lines closer to neutral but not necessarily reaching it (which can result in some correlation across subsequent reads).
+### Not Yet Implemented
+- Full ECDHE (Elliptic Curve Diffie-Hellman Ephemeral) handshake
+- Certificate validation beyond parsing
+- RSA signature verification
+- ECDSA signature verification
+- 0-RTT session resumption
+- Additional cipher suites
 
-### Source-Finding Algorithm ###
-- Poll 513 bytes starting at $D65800 - unmapped memory.
-- Repeat 256 times per byte:
-    - Xor two consecutive reads from byte together.
-    - Add number of set bits to a "score".
-    - If new score better than current, set new score.
-- Save address with highest score.
-- If selected score less than `256 * 8 / 3`, return false.
-- Else return true.
+## Cryptographic Primitives
 
-### Entropy Extraction Algorithm ###
-- For each byte in a 119-byte entropy pool:
-    - Read from selected source address once.
-    - Read 16 more times xoring into cumulative result (to offset correlation).
-    - Write to current location in pool.
-- Feed entropy pool to SHA-256 hash.
-- Compress output hash into a `uint64_t` by xoring 4 bytes of the digest into a each byte of the `uint64_t`.
-- Return the resulting `uint64_t`.
+### Random Number Generator
 
-### Approximate Entropy of Generator ###
-- I will approximate minimum entropy for the source using the minimum score like so:
-    - P0 = probability 0s = `(256 * 8 / 3) / (256 * 8)` = 0.333
-    - P1 = probability 1s = `1 - P0` = 0.667
-    - *vice versa doesn't affect the computation*
-    - H = `(P0 * log2(1/P0)) + (P1 * log2(1/P1))`
-    - H = `(0.333 * log2(1/0.333)) + (0.667 * log2(1/0.667))`
-    - H = `(0.333 * 1.586) + (0.667 * 0.584) = 0.918`
-    - E = `2.576 * sqrt((0.333 * (1 - 0.333)) / 256) = 0.076` margin of error at 99% confidence
-    - H = `0.918 +/- 0.076 bits/byte`
-    - H[low-high] = `[0.842-0.994] bits/byte`
-    - H[low] on a 119-byte pool yields 100.2 bits of entropy, sufficient for a u64.
-    - *This is an estimate based on minimum allowed score. Actual source may be higher.*
-    - *It should be noted that Cemetech user `Zeroko` ran Dieharders on 1G of data extracted directly from an entropic source in the unmapped region (using our extraction process) and it passed all tests.*
+**Entropy Source**: Unmapped memory region at `$D65800`
+- Exhibits quantum noise-induced voltage fluctuations (no memory cells)
+- Validated via Dieharder statistical tests (1GB sample)
 
+**Source Selection Algorithm**:
+1. Poll 513 bytes starting at `$D65800`
+2. For each byte, repeat 256 times:
+   - XOR two consecutive reads
+   - Count set bits, accumulate score
+3. Select address with highest score
+4. Require minimum score: `256 * 8 / 3` (ensures sufficient entropy)
 
-https://www.rfc-editor.org/rfc/pdfrfc/rfc8446.txt.pdf
+**Entropy Extraction**:
+1. Read 119-byte pool from selected source (17 reads per byte, XORed to reduce correlation)
+2. Hash pool with SHA-256
+3. Compress 32-byte digest to `uint64_t` by XORing each 4 bytes
+4. Minimum entropy: ~100 bits at 99% confidence
 
-TLS 1.3
-----------
-- TLS_AES_128_GCM_SHA256 (0x13, 0x01)
-- TLS_AES_256_GCM_SHA384 (0x13, 0x02) ** if we implement SHA-384
-- TLS_AES_128_CCM_SHA256 (0x13, 0x04) ** if we implement CCM
-- TLS_AES_128_CCM_8_SHA256 (0x13, 0x05) ** if we implement CCM
-  
-I think we should only implement TLS 1.3. It seems to be a shorter handshake?
+### Hash Functions
+- **SHA-256**: Implemented (assembly optimized)
+- **SHA-384**: Not implemented
 
-TODO
----------
-- RSA bigint ^ bigint % bigint
-- RSA PSS
-- SECP256r1 ECDHE/ECDSA
+### Key Derivation
+- **HKDF** (HMAC-based KDF, RFC 5869): Implemented
+- **HKDF-Expand-Label** (TLS 1.3 specific): Implemented
+- Uses SHA-256 as underlying hash
 
+### Symmetric Encryption
+- **AES-GCM**: Implemented (supports 128, 192, and 256-bit keys)
+- **AES-CBC**: Implemented (supports 128, 192, and 256-bit keys)
+- **AES-CCM**: Not implemented
 
-TLS NEGOTIATION PROCESS
-========================
+### Asymmetric Cryptography
+- **RSA**: Modular exponentiation implemented, PSS padding not implemented
+- **X25519**: Field arithmetic implemented, key exchange not integrated
 
-Source: https://www.cloudflare.com/learning/ssl/what-happens-in-a-tls-handshake/
+## Required Object Identifiers (ASN.1)
 
-TLS v1.3
----------
+### For TLS 1.3 Compliance
 
-1. Client hello: The client sends a client hello message with the protocol version, the client random, and a list of cipher suites. Because support for insecure cipher suites has been removed from TLS 1.3, the number of possible cipher suites is vastly reduced. The client hello also includes the parameters that will be used for calculating the premaster secret. Essentially, the client is assuming that it knows the server’s preferred key exchange method (which, due to the simplified list of cipher suites, it probably does). This cuts down the overall length of the handshake — one of the important differences between TLS 1.3 handshakes and TLS 1.0, 1.1, and 1.2 handshakes.
+#### Cipher Suites (TLS Extension)
+These are negotiated in TLS handshake, not ASN.1 OIDs:
+- **TLS_AES_128_GCM_SHA256**: `0x13, 0x01` (REQUIRED, currently supported)
+- **TLS_AES_256_GCM_SHA384**: `0x13, 0x02` (recommended, requires SHA-384)
+- **TLS_CHACHA20_POLY1305_SHA256**: `0x13, 0x03` (optional)
 
-2. Server generates master secret: At this point, the server has received the client random and the client's parameters and cipher suites. It already has the server random, since it can generate that on its own. Therefore, the server can create the master secret.
+#### Supported Groups (ECDHE)
+For full TLS 1.3 compliance, must support at least one of:
+- **secp256r1** (P-256): `1.2.840.10045.3.1.7` - Currently `TLS_OID_EC_SECP256R1`
+- **x25519**: `1.3.101.110` - Not yet defined in enum
+- **secp384r1** (P-384): `1.3.132.0.34` - Not yet defined
 
-3. Server hello and "Finished": The server hello includes the server’s certificate, digital signature, server random, and chosen cipher suite. Because it already has the master secret, it also sends a "Finished" message.
+#### Signature Algorithms (X.509)
+Currently defined in `keyobject.h`:
+- **sha256WithRSAEncryption**: `1.2.840.113549.1.1.11` - `TLS_OID_SHA256_RSA_ENCRYPTION`
+- **ecdsa-with-SHA256**: `1.2.840.10045.4.3.2` - `TLS_OID_SHA256_ECDSA`
 
-4. Final steps and client "Finished": Client verifies signature and certificate, generates master secret, and sends "Finished" message.
+For broader compatibility, consider adding:
+- **sha384WithRSAEncryption**: `1.2.840.113549.1.1.12` - Already defined as `TLS_OID_SHA384_RSA_ENCRYPTION`
+- **ecdsa-with-SHA384**: `1.2.840.10045.4.3.3` - Not yet defined
+- **rsassa-pss**: `1.2.840.113549.1.1.10` - Not yet defined
 
-5. Secure symmetric encryption achieved
+#### Public Key Algorithms
+Currently defined:
+- **rsaEncryption**: `1.2.840.113549.1.1.1` - `TLS_OID_RSA_ENCRYPTION`
+- **id-ecPublicKey**: `1.2.840.10045.2.1` - `TLS_OID_EC_PUBLICKEY`
 
+#### Encryption Algorithms (for encrypted private keys)
+Currently defined:
+- **aes128-GCM**: `2.16.840.1.101.3.4.1.2` - `TLS_OID_AES_128_GCM`
+- **aes256-GCM**: `2.16.840.1.101.3.4.2.1` - `TLS_OID_AES_256_GCM`
+- **aes128-CBC**: `2.16.840.1.101.3.4.1.2` - `TLS_OID_AES_128_CBC`
+- **aes256-CBC**: `2.16.840.1.101.3.4.1.42` - `TLS_OID_AES_256_CBC`
 
-0-RTT mode for session resumption
-----------------------------------
+#### Key Derivation Functions
+Currently defined:
+- **PBKDF2**: `1.2.840.113549.1.5.12` - `TLS_OID_PBKDF2`
+- **PBES2**: `1.2.840.113549.1.5.13` - `TLS_OID_PBES2`
+- **HMAC-SHA256**: `1.2.840.113549.2.9` - `TLS_OID_HMAC_SHA256`
 
-TLS 1.3 also supports an even faster version of the TLS handshake that does not require any round trips, or back-and-forth communication between client and server, at all. If the client and the server have connected to each other before (as in, if the user has visited the website before), they can each derive another shared secret from the first session, called the "resumption main secret." The server also sends the client something called a session ticket during this first session. The client can use this shared secret to send encrypted data to the server on its first message of the next session, along with that session ticket. And TLS resumes between client and server.
+## Minimum Compliance Requirements
 
+### For Basic TLS 1.3 Server Compatibility
+1. **Cipher Suite**: TLS_AES_128_GCM_SHA256 ✅ (implemented)
+2. **Key Exchange**: At least one of:
+   - ECDHE with secp256r1 ⚠️ (partially implemented)
+   - ECDHE with x25519 ⚠️ (field arithmetic only)
+3. **Signature Algorithm**: At least one of:
+   - ecdsa_secp256r1_sha256 ❌ (not implemented)
+   - rsa_pss_rsae_sha256 ❌ (not implemented)
+   - rsa_pkcs1_sha256 ⚠️ (verify only, no PSS)
 
+### Current Workaround
+**PSK-only mode**: Bypasses certificate authentication and ECDHE by using pre-shared keys. This works but is not standard TLS 1.3 full handshake.
+
+## Implementation Roadmap
+
+### Phase 1: Complete ECDHE (for full handshake)
+1. Finish P-256 point multiplication
+2. Implement ECDH shared secret derivation
+3. Integrate into handshake state machine
+
+### Phase 2: Certificate Validation
+1. Implement ECDSA signature verification (P-256 + SHA-256)
+2. Implement RSA-PSS signature verification
+3. Add certificate chain validation
+4. Add hostname verification
+
+### Phase 3: Session Resumption
+1. Implement PSK ticket generation
+2. Implement 0-RTT early data
+3. Add resumption secret derivation
+
+### Phase 4: Additional Cipher Suites
+1. Implement SHA-384 (for AES-256-GCM)
+2. Consider ChaCha20-Poly1305 (optional)
+
+## File Organization
+
+### Core Cryptographic Components
+- `src/tls/core/sha256.asm` - SHA-256 hash (optimized assembly)
+- `src/tls/core/aes.c` - AES block cipher
+- `src/tls/core/gcm.c` - GCM authenticated encryption mode
+- `src/tls/core/hmac.c` - HMAC construction
+- `src/tls/core/hkdf.c` - HKDF key derivation
+- `src/tls/core/random.asm` - TRNG implementation
+- `src/tls/core/rsa.c` - RSA modular exponentiation
+- `src/tls/core/share/p256_*.asm` - P-256 field arithmetic
+- `src/tls/core/share/x25519_*.asm` - X25519 field arithmetic
+
+### Protocol Components
+- `src/tls/core/handshake.c` - TLS 1.3 handshake state machine
+- `src/tls/core/keyobject.c` - X.509 certificate/key parsing
+- `src/tls/core/asn1.c` - ASN.1 DER parser
+- `src/tls/core/base64.c` - Base64 codec (for PEM)
+
+### Integration
+- `src/apps/altcp_tls/altcp_tls_ce.c` - lwIP integration layer
+
+## Testing
+
+### Current Test Suites
+- `tests/tls_handshake_psk/` - PSK handshake, key derivation, encrypt/decrypt
+- `tests/tls_x509_object/` - X.509 certificate parsing (RSA + ECDSA)
+- `tests/tls_hkdf/` - HKDF key derivation vectors
+- `tests/tls_p256_ecdh/` - P-256 ECDH test vectors
+- `tests/tls_x25519/` - X25519 key exchange vectors
+
+All tests use CEmu autotester with CRC validation of VRAM output.
