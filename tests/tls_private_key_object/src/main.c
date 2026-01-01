@@ -3,9 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "lwip/mem.h"
 
 #include "keyobject.h"
+
+/* lwIP memory allocator function pointers */
+extern void* (*caller_malloc_ref)(size_t);
+extern void (*caller_free_ref)(void*);
 
 // test vectors
 
@@ -18,26 +21,21 @@ uint8_t test3[] = "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASC
 
 uint8_t test4[] = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFNDBeBgkqhkiG9w0BBQ0wUTAwBgkqhkiG9w0BBQwwIwQQhujZEW3F0NJMHwLtKIxS0QIBZDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBAgQQ44XgBep2XL0Dj/majjKoIgSCBNBrfsH1joRn1k99sqkURfdxWcKJVjRxJbfQ3/4Wg0lm6pK8jLUvqz6rBXL/vCIwRRF4kR/E2CmTPp7751qnCKm/VbUIFOKB1an9FHHsMarlOqWSTv/B33QjsKKpu5k+l96Qj5HclCGvcBrEN26n45EVPp2k1FCm3ZQFZwY9J8bg3qLGQpjfx/8fVoj3vY82AyF/XQnDNlt2Z0XEOHY3G6quVBK6JtoqOyhfKN3AYr+FklYMSlpANWAJRwLRPM7JvSvdM+KaMSwvQ6hmDuaLN7TnoBmwbPVodz6O+3mGgW+2ELXcYiRFF8K6LeHcp4Nzd+9mZlC9LXMSgwOq1UDrOrB9n3cyjVGKNLN4sNEkGlqJBQ7tP0cKJegf/bVTGmPmxVQWQbxTeqUSXI7UPKehiAQswVCbFwzS6uaKniJACgerfQPpwS5ufUNUvxJSHNntwwPv85ZxkM92bJy/DTyhE9uoavXfulXOQJPz/fu+PFnTtCpmUeJDNnBfElP5k3hFCgf57ssqRlllvATWRirSRBfjr8oa3YenDTpIkZxiJHFkyp46Q3JrTARidevBtLZOSVVH7jOebLW4DFNuQXU6J1UbL9QxSvtYhCI7emHFWBAk7lrscxwyr50tcCsyHkV8lhQQhupLr4Bj8F9Gca51wRmVnmm74+y6oNGAgRlFDCuucH83vCpkkvtDoP9gx+rqSE1oXnDPq6s6la3juEvAL88SvG2GCC3Dif8NhMrMusbOArhZKdGt/sOdJX2pJGjdDXFEqjgld36ArdskM4uOc8Ifq18B2pb2wB6/Op0cflSo9OCqJndK4m/spRtLEGLqj1d18iwg5zt66VlQf5vm8B8lO3jvfapjm4x+ZhDh0H7l/aHSAHL34f3eJjTobeDVO3i4DTS32XSPbJBIo/s1B4vbOJFEAohCiNElRuNT2qJlTpmZTj3hKSKgiSoEE2HnYfPas+R2ncY+AG7QRz3olh3e4Fn80JoIyvA7IgiWfb+RmgK3WkKfHg6FXlmO+bAunGE2ouho2MroatGCYzJ9DcEXCkmEwOETtUYtjuH+0kWuQO32ZtgceQtEUxbjDVQhiR6cNatPnKD3qJxNPrDTFELbqZ8vlRwIckx5isScViTT6REyGzw8YVw7vCYGLKRjhwGFpnfwCawpKBm91IvEelkAYC0YRGLzvO702aafCITHKqhOgbahDIaK1hlxnYCRnscHCVnWnnQY2p+quOWRNDPi2ISSnFXpMRhBBeZADz+lubnbNbCLoNzd3X9UngrzxeEnQV+GC50hfb7wmG4n/th//wMstU+n73DhXwBYAbxcskCWvnLF/HXnsxGqMu7ufSUX+pliGsFQ041Zjpk7jfZQ1tvQ904FEEPVklwFKg2TLllKEbPOU4y95IkKTJ8gq9RWkVE918KJPnbKHGc04HLjPQvOgSAfPxcHFe9WJFei74qerCPHNMruFQZ+32MYlxX/b97tcBjDHxGfwhR8j5LKK0fTQpJ9RP4DFit0TaEdLR+gPY2Z3eStmNvKx/+M+9MfEipMYUjqIOVmVEaz3T4a87mDl0AAMYWdMICzfFhZTv3uDlN3UrYjMzNy/tr412PDsWy/+k9BU4DW4aAKEAw7VxzGVxpT6M4L7Z43e30PUg==\n-----END ENCRYPTED PRIVATE KEY-----";
 
-
 /* Main function, called first */
 int main(void)
 {
+    char buf[128];
+
     /* Clear the homescreen */
     os_ClrHome();
     os_FontSelect(os_SmallFont);
-    
-    struct mem_configurator conf = {
-        MEM_CONFIGURATOR_V1,
-        malloc,
-        free,
-        1024*12
-    };
-    
-    char buf[128];
-    mem_configure(&conf);
-    
+
+    /* Set up memory allocator for lwIP's custom malloc */
+    caller_malloc_ref = malloc;
+    caller_free_ref = free;
+
     // PKCS#1 RSA key
-    struct tls_keyobject *pk = tls_keyobject_import_private(test1, strlen(test1), NULL);
+    struct tls_keyobject *pk = tls_keyobject_import_private((const char*)test1, strlen((const char*)test1), NULL);
     if(pk==NULL){
         printf("error");
         os_GetKey();
@@ -57,13 +55,13 @@ int main(void)
         os_FontDrawText(buf, 5, 40+i*12);
     }
     tls_keyobject_destroy(pk);
-    
+
     os_GetKey();
     os_ClrHome();
-    
-    
+
+
     // PKCS#8 EC key
-    pk = tls_keyobject_import_private(test2, strlen(test2), NULL);
+    pk = tls_keyobject_import_private((const char*)test2, strlen((const char*)test2), NULL);
     if(pk==NULL){
         printf("error");
         os_GetKey();
@@ -83,12 +81,12 @@ int main(void)
         os_FontDrawText(buf, 5, 40+i*12);
     }
     tls_keyobject_destroy(pk);
-    
+
     os_GetKey();
     os_ClrHome();
-    
+
     // PKCS#8 RSA private key
-    pk = tls_keyobject_import_private(test3, strlen(test3), NULL);
+    pk = tls_keyobject_import_private((const char*)test3, strlen((const char*)test3), NULL);
     if(pk==NULL){
         printf("error");
         os_GetKey();
@@ -108,12 +106,12 @@ int main(void)
         os_FontDrawText(buf, 5, 40+i*12);
     }
     tls_keyobject_destroy(pk);
-    
+
     os_GetKey();
     os_ClrHome();
-    
+
     // PKCS#8 RSA encrypted private key
-    pk = tls_keyobject_import_private(test4, strlen(test4), "science");
+    pk = tls_keyobject_import_private((const char*)test4, strlen((const char*)test4), "science");
     if(pk==NULL){
         printf("error");
         os_GetKey();
@@ -133,9 +131,12 @@ int main(void)
         os_FontDrawText(buf, 5, 40+i*12);
     }
     tls_keyobject_destroy(pk);
-    
+
     os_GetKey();
     os_ClrHome();
-    
+
+    printf("success");
+    os_GetKey();
+
     return 0;
 }
