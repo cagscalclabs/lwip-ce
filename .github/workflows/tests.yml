@@ -44,7 +44,6 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          echo "Downloading ROM from: ${ROM_URL}"
           # Try download with verbose output
           HTTP_CODE=$(curl -A "github/workflows" \
             -H "Authorization: Bearer ${{ env.SECRETS_TOKEN }}" \

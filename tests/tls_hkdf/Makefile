@@ -11,11 +11,17 @@ COMPRESSED = NO
 CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
 CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
 
-# Test main and TLS implementations
-SOURCES = src/main.c src/hkdf.c src/hmac.c src/hash.c
+# Test main
+SOURCES = src/main.c
 
-# Assembly files
-ASM = src/sha256.asm src/share/bigint.asm
+# Pull in required TLS core files
+SOURCES += ../../src/tls/core/hkdf.c
+SOURCES += ../../src/tls/core/hmac.c
+SOURCES += ../../src/tls/core/hash.c
+
+# Assembly files from TLS core
+ASM = ../../src/tls/core/sha256.asm
+ASM += $(wildcard ../../src/arch/share/*.asm)
 
 # ----------------------------
 
