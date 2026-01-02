@@ -19,6 +19,7 @@ EXTRA_C_SOURCES = \
 	../../src/tls/core/keyobject.c \
 	../../src/tls/core/asn1.c \
 	../../src/tls/core/base64.c \
+	../../src/tls/core/hash.c \
 	../../src/core/mem.c \
 	../../src/core/stats.c
 
@@ -26,7 +27,8 @@ EXTRA_C_SOURCES = \
 EXTRA_ASM_SOURCES = \
 	../../src/tls/core/share/helpers.asm \
 	../../src/tls/core/bytes.asm \
-	../../src/tls/core/share/bigint.asm
+	../../src/tls/core/share/bigint.asm \
+	../../src/tls/core/sha256.asm
 
 # ----------------------------
 

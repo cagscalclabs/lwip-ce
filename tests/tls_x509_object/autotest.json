@@ -1,39 +1,36 @@
 {
-    "transfer_files":
-    [
+    "transfer_files": [
         "bin/DEMO.8xp"
     ],
-    "target":
-    {
+    "target": {
         "name": "DEMO",
         "isASM": true
     },
-    "sequence":
-    [
+    "sequence": [
         "action|launch",
         "hashWait|1",
         "key|enter",
         "hashWait|2",
         "key|enter"
     ],
-    "hashes":
-    {
-        "1":
-        {
+    "hashes": {
+        "1": {
             "description": "x.509 test 1",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "64F87F80" ],
+            "expected_CRCs": [
+                "29DDF567"
+            ],
             "timeout": 2000
         },
-        "2":
-        {
-            "description": "EC public decode",
+        "2": {
+            "description": "x.509 test 2",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "8993ECA6" ],
+            "expected_CRCs": [
+                "E2D4BEBD"
+            ],
             "timeout": 2000
         }
     }
 }
-

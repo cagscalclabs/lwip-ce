@@ -45,7 +45,7 @@ extern uint8_t tls_objectid_bytes[][10];
 #define TLS_PRIVKEY_EC_FIELDS   3
 #define TLS_PUBKEY_RSA_FIELDS   2
 #define TLS_PUBKEY_EC_FIELDS    1
-#define TLS_CERTIFICATE_FIELDS  9
+#define TLS_CERTIFICATE_FIELDS  10
 
 
 /// @brief Defines a container for metadata for various key and certificate types supported by this library.
@@ -62,6 +62,7 @@ struct tls_keyobject {
                 struct tls_asn1_serialization valid_before;
                 struct tls_asn1_serialization valid_after;
                 struct tls_asn1_serialization subject;
+                struct tls_asn1_serialization spki_raw;         /**< Raw DER bytes of SubjectPublicKeyInfo (for SPKI pinning) */
                 struct tls_asn1_serialization ca_signature_alg;
                 struct tls_asn1_serialization ca_signature;
                 union {

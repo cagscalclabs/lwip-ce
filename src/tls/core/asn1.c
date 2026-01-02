@@ -26,21 +26,23 @@ bool tls_asn1_decode_next(struct tls_asn1_decoder_context *ctx, const struct tls
     uint8_t this_tag;
     size_t this_len;
     uint8_t *asn1_current;
+    uint8_t *tag_start;  /* For raw_output mode: points to tag byte */
     bool has_result = false;
-    
+
 restart:
     asn1_current = (uint8_t*)ctx->node[ctx->depth].start;
     this_len = 0;
-        
+
     while(*asn1_current == 0){
         // remove leading 0s
         asn1_current++;
     }
-        
+
     if(ctx->depth >= ASN1_MAX_DEPTH)
         return false;
-        
-    // get tag of element
+
+    // get tag of element (save position for raw_output)
+    tag_start = asn1_current;  /* Save tag position before advancing */
     this_tag = *asn1_current++;
 
     if(asn1_current > ctx->node[ctx->depth].next){
@@ -86,9 +88,19 @@ restart:
 skip_checks:
     has_result = true;
     if((schema==NULL) || (schema && schema->output)){
-        if(data) *data = asn1_current;
-        if(tag) *tag = this_tag;
-        if(len) *len = this_len;
+        /* If raw_output is set, return pointer to tag byte and include tag+length in size */
+        if(schema && schema->raw_output){
+            /* Use tag_start captured at line 45 before advancing past tag */
+            if(data) *data = tag_start;
+            if(tag) *tag = this_tag;
+            /* Length includes tag + length encoding + content */
+            if(len) *len = (asn1_current - tag_start) + this_len;
+        } else {
+            /* Normal output: just the content */
+            if(data) *data = asn1_current;
+            if(tag) *tag = this_tag;
+            if(len) *len = this_len;
+        }
         if(depth) *depth = ctx->depth;
     }
 seek_next:
