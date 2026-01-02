@@ -11,11 +11,18 @@
 #if LWIP_ALTCP /* don't build if not configured for use in lwipopts.h */
 
 #include "lwip/altcp.h"
+#include "lwip/altcp_tcp.h"
 #include "lwip/priv/altcp_priv.h"
+#include "lwip/mem.h"
 #include "altcp_tls_ce.h"
 #include "../../tls/includes/handshake.h"
 
 #include <string.h>
+
+/* Debug flag for TLS CE layer */
+#ifndef ALTCP_TLS_CE_DEBUG
+#define ALTCP_TLS_CE_DEBUG LWIP_DBG_OFF
+#endif
 
 /* Forward declarations */
 static err_t altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p, err_t err);
@@ -255,7 +262,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         if (config->is_server) {
             /* Server: expect ClientHello, send ServerHello */
             /* @todo: implement server handshake processing */
-            LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("TLS CE: server handshake not yet implemented\n"));
+            LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: server handshake not yet implemented\n"));
             altcp_abort(conn);
             return ERR_ABRT;
         } else {
@@ -266,7 +273,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 uint8_t server_hello[512];
 
                 if (server_hello_len > sizeof(server_hello)) {
-                    LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("TLS CE: ServerHello too large\n"));
+                    LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: ServerHello too large\n"));
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
@@ -275,7 +282,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                 /* Process ServerHello */
                 if (!tls_process_server_hello(&state->tls_ctx, server_hello, server_hello_len)) {
-                    LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("TLS CE: ServerHello processing failed\n"));
+                    LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: ServerHello processing failed\n"));
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
@@ -286,7 +293,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                 /* Derive handshake keys */
                 if (!tls_derive_handshake_keys(&state->tls_ctx)) {
-                    LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("TLS CE: handshake key derivation failed\n"));
+                    LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
@@ -295,7 +302,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 uint8_t finished[36];
                 size_t finished_len = 0;
                 if (!tls_generate_finished(&state->tls_ctx, true, finished, sizeof(finished), &finished_len)) {
-                    LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("TLS CE: Finished generation failed\n"));
+                    LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished generation failed\n"));
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
@@ -310,7 +317,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                 /* Derive application keys */
                 if (!tls_derive_application_keys(&state->tls_ctx)) {
-                    LWIP_DEBUGF(ALTCP_MBEDTLS_DEBUG, ("TLS CE: application key derivation failed\n"));
+                    LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: application key derivation failed\n"));
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }

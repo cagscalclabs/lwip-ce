@@ -1,0 +1,25 @@
+{
+    "transfer_files": [
+        "bin/TLSFULL.8xp"
+    ],
+    "target": {
+        "name": "TLSFULL",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1",
+        "key|enter"
+    ],
+    "hashes": {
+        "1": {
+            "description": "TLS full handshake",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "179B0D3C"
+            ],
+            "timeout": 30000
+        }
+    }
+}

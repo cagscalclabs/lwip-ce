@@ -11,7 +11,7 @@
 #if LWIP_ALTCP
 
 #include "lwip/altcp.h"
-#include "lwip/apps/altcp_tls_ce.h"
+#include "altcp_tls_ce.h"
 #include "lwip/ip_addr.h"
 #include <string.h>
 
@@ -35,6 +35,7 @@ void example_tls_client_connect(void)
     struct altcp_pcb *tls_conn;
     struct tls_psk_identity psk_identity;
     uint8_t psk[32];
+    ip4_addr_t server_ipv4;
     ip_addr_t server_ip;
     err_t err;
 
@@ -63,7 +64,8 @@ void example_tls_client_connect(void)
     altcp_arg(tls_conn, NULL); /* Application context */
 
     /* Connect to server */
-    IP4_ADDR(&server_ip, 192, 168, 1, 100); /* Example server IP */
+    IP4_ADDR(&server_ipv4, 192, 168, 1, 100); /* Example server IP */
+    ip_addr_copy_from_ip4(server_ip, server_ipv4);
     err = altcp_connect(tls_conn, &server_ip, 443, tls_client_connected);
 
     if (err != ERR_OK) {
