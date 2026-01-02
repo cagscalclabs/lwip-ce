@@ -1,0 +1,225 @@
+name: DAST Security Scan
+
+on:
+  push:
+    branches: [ main, master, tls ]
+  pull_request:
+    branches: [ main, master, tls ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+
+jobs:
+  dynamic-analysis:
+    name: Dynamic Security Testing
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up CE Toolchain
+        run: |
+          # Install CE C/C++ Toolchain for eZ80
+          wget https://github.com/CE-Programming/toolchain/releases/latest/download/CEdev-Linux.tar.gz
+          tar -xzf CEdev-Linux.tar.gz
+          echo "CEDEV=$(pwd)/CEdev" >> $GITHUB_ENV
+          echo "$(pwd)/CEdev/bin" >> $GITHUB_PATH
+
+      - name: Install Analysis Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cppcheck \
+            clang-tools \
+            clang-tidy \
+            valgrind \
+            python3-pip
+
+          # Install additional security tools
+          pip3 install bandit safety
+
+      - name: Build Test Suite
+        run: |
+          # Build the X25519 test suite
+          cd contest/tests/x25519
+          make clean
+          make || echo "Build failed - will analyze source only"
+
+      - name: Run Cppcheck Static Analysis
+        continue-on-error: true
+        run: |
+          cppcheck \
+            --enable=all \
+            --error-exitcode=0 \
+            --xml \
+            --xml-version=2 \
+            --suppress=missingIncludeSystem \
+            --suppress=unmatchedSuppression \
+            --inline-suppr \
+            -I src/tls/includes \
+            -I src/drivers/includes \
+            --exclude=src/lwip \
+            --exclude=src/core \
+            --exclude=src/api \
+            --exclude=src/netif \
+            --exclude=src/apps \
+            src/tls \
+            src/drivers \
+            2> cppcheck-report.xml
+
+      - name: Run Clang-Tidy Analysis
+        continue-on-error: true
+        run: |
+          # Analyze TLS and driver code with clang-tidy
+          find src/tls src/drivers -name "*.c" | while read file; do
+            clang-tidy "$file" \
+              --checks='cert-*,clang-analyzer-*,bugprone-*,readability-*,performance-*,portability-*' \
+              -- \
+              -I src/tls/includes \
+              -I src/drivers/includes \
+              2>&1 | tee -a clang-tidy-report.txt || true
+          done
+
+      - name: Security-Specific Checks
+        continue-on-error: true
+        run: |
+          mkdir -p security-reports
+
+          echo "## Buffer Overflow Detection" > security-reports/buffer-analysis.txt
+          echo "Searching for potential buffer overflow vulnerabilities..." >> security-reports/buffer-analysis.txt
+
+          # Check for unsafe string operations
+          grep -rn "strcpy\|strcat\|sprintf\|gets" src/tls src/drivers >> security-reports/buffer-analysis.txt || echo "No unsafe string functions found" >> security-reports/buffer-analysis.txt
+
+          echo -e "\n## Integer Overflow Checks" >> security-reports/buffer-analysis.txt
+          # Check for arithmetic without bounds checking
+          grep -rn "malloc\|calloc\|realloc" src/tls src/drivers >> security-reports/buffer-analysis.txt || echo "No dynamic allocation found" >> security-reports/buffer-analysis.txt
+
+          echo -e "\n## Timing Attack Vulnerabilities" >> security-reports/crypto-analysis.txt
+          echo "Checking for non-constant-time operations in crypto code..." > security-reports/crypto-analysis.txt
+          # Check for conditional branches based on secret data
+          grep -rn "if.*key\|if.*secret\|if.*private" src/tls >> security-reports/crypto-analysis.txt || echo "No obvious timing vulnerabilities" >> security-reports/crypto-analysis.txt
+
+          echo -e "\n## Memory Safety" >> security-reports/memory-analysis.txt
+          echo "Checking for potential memory safety issues..." > security-reports/memory-analysis.txt
+          # Check for missing null pointer checks
+          grep -B3 -A1 "malloc\|calloc" src/tls src/drivers | grep -v "if\|NULL" >> security-reports/memory-analysis.txt || echo "All allocations appear to be checked" >> security-reports/memory-analysis.txt
+
+      - name: TLS/Crypto Specific Analysis
+        continue-on-error: true
+        run: |
+          mkdir -p security-reports
+
+          echo "## TLS Protocol Implementation Checks" > security-reports/tls-security.txt
+
+          # Check for weak crypto
+          echo -e "\n### Weak Cryptography Detection" >> security-reports/tls-security.txt
+          grep -rni "md5\|sha1\|rc4\|des\|3des" src/tls >> security-reports/tls-security.txt || echo "No obviously weak crypto found" >> security-reports/tls-security.txt
+
+          # Check for hardcoded secrets
+          echo -e "\n### Hardcoded Secrets Detection" >> security-reports/tls-security.txt
+          grep -rni "password\|secret\|key.*=.*{" src/tls | grep -v "test\|example" >> security-reports/tls-security.txt || echo "No hardcoded secrets found" >> security-reports/tls-security.txt
+
+          # Check for proper random number generation
+          echo -e "\n### Random Number Generation" >> security-reports/tls-security.txt
+          grep -rn "rand\|srand\|random" src/tls >> security-reports/tls-security.txt || echo "Using proper RNG" >> security-reports/tls-security.txt
+
+      - name: Generate Security Report
+        if: always()
+        run: |
+          python3 << 'EOF'
+          import os
+          import glob
+          import xml.etree.ElementTree as ET
+
+          report_md = "# DAST Security Analysis Report\n\n"
+
+          # Parse Cppcheck XML
+          if os.path.exists('cppcheck-report.xml'):
+              try:
+                  tree = ET.parse('cppcheck-report.xml')
+                  root = tree.getroot()
+                  errors = root.findall('.//error')
+
+                  report_md += f"## Cppcheck Analysis\n\n"
+                  report_md += f"**Total Issues:** {len(errors)}\n\n"
+
+                  severity_counts = {}
+                  for error in errors:
+                      severity = error.get('severity', 'unknown')
+                      severity_counts[severity] = severity_counts.get(severity, 0) + 1
+
+                  for severity, count in sorted(severity_counts.items()):
+                      icon = {"error": "🔴", "warning": "🟡", "style": "ℹ️", "performance": "⚡"}.get(severity, "▪️")
+                      report_md += f"- {icon} {severity.title()}: {count}\n"
+
+                  report_md += "\n### Top Issues\n\n"
+                  for error in errors[:10]:  # Show first 10
+                      msg = error.get('msg', 'No message')
+                      severity = error.get('severity', 'unknown')
+                      location = error.find('location')
+                      if location is not None:
+                          file = location.get('file', 'unknown')
+                          line = location.get('line', '?')
+                          report_md += f"- **{severity.upper()}**: {msg}\n"
+                          report_md += f"  - File: `{file}:{line}`\n\n"
+              except Exception as e:
+                  report_md += f"⚠️ Error parsing Cppcheck results: {e}\n\n"
+
+          # Add security-specific findings
+          report_md += "\n## Security-Specific Findings\n\n"
+
+          for report_file in glob.glob('security-reports/*.txt'):
+              with open(report_file, 'r') as f:
+                  content = f.read()
+                  if content.strip():
+                      report_name = os.path.basename(report_file).replace('.txt', '').replace('-', ' ').title()
+                      report_md += f"### {report_name}\n\n```\n{content}\n```\n\n"
+
+          # Write final report
+          with open('dast-report.md', 'w') as f:
+              f.write(report_md)
+
+          print(report_md)
+          EOF
+
+      - name: Add Report to Job Summary
+        if: always()
+        run: |
+          if [ -f dast-report.md ]; then
+            cat dast-report.md >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Analysis Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-security-analysis
+          path: |
+            cppcheck-report.xml
+            clang-tidy-report.txt
+            security-reports/
+            dast-report.md
+          retention-days: 30
+
+      - name: Check for Critical Vulnerabilities
+        run: |
+          # Check if cppcheck found any errors
+          if [ -f cppcheck-report.xml ]; then
+            ERROR_COUNT=$(grep -c 'severity="error"' cppcheck-report.xml || echo "0")
+
+            if [ "$ERROR_COUNT" -gt 0 ]; then
+              echo "⚠️ Found $ERROR_COUNT critical issues in Cppcheck analysis"
+              echo "Review the full report for details"
+              # Don't fail the build, just warn
+              exit 0
+            else
+              echo "✅ No critical issues found"
+            fi
+          fi

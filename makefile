@@ -12,11 +12,15 @@ APP_VERSION = 0
 CFLAGS = -Wall -Wextra -Oz -I src/include
 CXXFLAGS = -Wall -Wextra -Oz -I src/include
 OUTPUT_MAP = YES
+HAS_LIBC = NO
 
 BSSHEAP_LOW ?= D052C6
 # BSSHEAP_LOW ?= D11FD8
 # BSSHEAP_HIGH ?= D13FD8
 # ----------------------------
+
+ALLOCATOR = CUSTOM
+EXTRA_ASM_SOURCES = src/custom_allocator.src
 
 include app_tools/makefile
 

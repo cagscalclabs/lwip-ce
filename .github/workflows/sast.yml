@@ -1,0 +1,181 @@
+name: SAST Security Scan
+
+on:
+  push:
+    branches: [ main, master, tls ]
+  pull_request:
+    branches: [ main, master, tls ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  semgrep-scan:
+    name: Static Security Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Run Semgrep Security Scan
+        id: semgrep
+        continue-on-error: true
+        run: |
+          # Scan only lwip-ce drivers and TLS code (exclude upstream lwIP)
+          semgrep scan \
+            --config auto \
+            --config "p/c" \
+            --config "p/owasp-top-ten" \
+            --config "p/security-audit" \
+            --json \
+            --output semgrep-results.json \
+            --exclude "src/lwip/**" \
+            --exclude "src/core/**" \
+            --exclude "src/api/**" \
+            --exclude "src/netif/**" \
+            --exclude "src/apps/**" \
+            --include "src/tls/**" \
+            --include "src/drivers/**" \
+            src/
+
+          # Also generate SARIF format for GitHub Security tab
+          semgrep scan \
+            --config auto \
+            --config "p/c" \
+            --config "p/owasp-top-ten" \
+            --config "p/security-audit" \
+            --sarif \
+            --output semgrep-results.sarif \
+            --exclude "src/lwip/**" \
+            --exclude "src/core/**" \
+            --exclude "src/api/**" \
+            --exclude "src/netif/**" \
+            --exclude "src/apps/**" \
+            --include "src/tls/**" \
+            --include "src/drivers/**" \
+            src/
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+      - name: Generate Human-Readable Report
+        if: always()
+        run: |
+          python3 << 'EOF'
+          import json
+          import sys
+
+          try:
+              with open('semgrep-results.json', 'r') as f:
+                  results = json.load(f)
+          except FileNotFoundError:
+              print("⚠️ No semgrep results file found")
+              sys.exit(0)
+
+          findings = results.get('results', [])
+          errors = results.get('errors', [])
+
+          # Categorize by severity
+          critical = [f for f in findings if f.get('extra', {}).get('severity') == 'ERROR']
+          high = [f for f in findings if f.get('extra', {}).get('severity') == 'WARNING']
+          medium = [f for f in findings if f.get('extra', {}).get('metadata', {}).get('impact') == 'MEDIUM']
+          low = [f for f in findings if f.get('extra', {}).get('metadata', {}).get('impact') == 'LOW']
+          info = [f for f in findings if f.get('extra', {}).get('severity') == 'INFO']
+
+          # Generate summary
+          with open('semgrep-summary.txt', 'w') as f:
+              f.write("# Semgrep Security Scan Results\n\n")
+              f.write(f"**Total Findings:** {len(findings)}\n\n")
+              f.write(f"- 🔴 Critical: {len(critical)}\n")
+              f.write(f"- 🟠 High: {len(high)}\n")
+              f.write(f"- 🟡 Medium: {len(medium)}\n")
+              f.write(f"- 🟢 Low: {len(low)}\n")
+              f.write(f"- ℹ️ Info: {len(info)}\n\n")
+
+              if errors:
+                  f.write(f"⚠️ **Scan Errors:** {len(errors)}\n\n")
+
+              # Detail critical and high severity findings
+              if critical:
+                  f.write("\n## 🔴 Critical Severity Issues\n\n")
+                  for finding in critical:
+                      f.write(f"- **{finding.get('check_id', 'Unknown')}**\n")
+                      f.write(f"  - File: `{finding.get('path', 'Unknown')}`\n")
+                      f.write(f"  - Line: {finding.get('start', {}).get('line', 'Unknown')}\n")
+                      f.write(f"  - Message: {finding.get('extra', {}).get('message', 'No message')}\n\n")
+
+              if high:
+                  f.write("\n## 🟠 High Severity Issues\n\n")
+                  for finding in high:
+                      f.write(f"- **{finding.get('check_id', 'Unknown')}**\n")
+                      f.write(f"  - File: `{finding.get('path', 'Unknown')}`\n")
+                      f.write(f"  - Line: {finding.get('start', {}).get('line', 'Unknown')}\n")
+                      f.write(f"  - Message: {finding.get('extra', {}).get('message', 'No message')}\n\n")
+
+          # Print summary to console
+          with open('semgrep-summary.txt', 'r') as f:
+              print(f.read())
+
+          # Set outputs for workflow
+          print(f"::set-output name=critical_count::{len(critical)}")
+          print(f"::set-output name=high_count::{len(high)}")
+          print(f"::set-output name=total_count::{len(findings)}")
+          EOF
+
+      - name: Add Report to Job Summary
+        if: always()
+        run: |
+          if [ -f semgrep-summary.txt ]; then
+            cat semgrep-summary.txt >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Scan Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-security-scan
+          path: |
+            semgrep-results.json
+            semgrep-results.sarif
+            semgrep-summary.txt
+          retention-days: 30
+
+      - name: Check for Critical Issues
+        run: |
+          if [ -f semgrep-results.json ]; then
+            CRITICAL_COUNT=$(python3 -c "
+          import json
+          with open('semgrep-results.json') as f:
+              results = json.load(f)
+              findings = results.get('results', [])
+              critical = [f for f in findings if f.get('extra', {}).get('severity') == 'ERROR']
+              print(len(critical))
+          ")
+
+            if [ "$CRITICAL_COUNT" -gt 0 ]; then
+              echo "❌ Found $CRITICAL_COUNT critical security issues"
+              exit 1
+            else
+              echo "✅ No critical security issues found"
+            fi
+          fi
