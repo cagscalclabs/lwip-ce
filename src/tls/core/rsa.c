@@ -8,7 +8,8 @@
 #include "../includes/tls.h"
 
 /* External reference to TLS context for scratch buffers */
-extern struct tls_context {
+extern struct tls_context
+{
     uint8_t *rsa_scratch;
     uint8_t *ecc_scratch;
     bool initialized;
@@ -40,7 +41,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     size_t db_len = modulus_len - hash.digestlen - 1;
     size_t encode_lhash = ENCODE_SALT + hash.digestlen;
     size_t encode_ps = encode_lhash + hash.digestlen;
-    uint8_t *mgf1_digest = tls_ctx.rsa_scratch;  /* Use TLS scratch buffer */
+    uint8_t *mgf1_digest = tls_ctx.rsa_scratch; /* Use TLS scratch buffer */
 
     if ((in_len + min_padding_len) > modulus_len)
         return false;
@@ -163,6 +164,27 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     }
     if (!tls_rsa_encode_oaep(inbuf, in_len, &outbuf[spos], keylen - spos, NULL, hash_alg))
         return false;
+    powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
+    return true;
+}
+
+bool tls_rsa_decrypt_signature(const uint8_t *signature,
+                               size_t signature_len,
+                               uint8_t outbuf,
+                               const uint8_t *pubkey,
+                               size_t keylen)
+{
+    size_t spos = 0;
+    if ((signature == NULL) ||
+        (pubkey == NULL) ||
+        (outbuf == NULL) ||
+        (signature_len == 0) ||
+        (keylen < RSA_MODULUS_MAX_SUPPORTED) ||
+        (keylen > RSA_MODULUS_MIN_SUPPORTED) ||
+        (!(pubkey[keylen - 1] & 1)))
+        return false;
+
+    memcpy(outbuf, signature, keylen);
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
     return true;
 }
@@ -340,23 +362,26 @@ static bool tls_modexp65537_be(const uint8_t *base, const uint8_t *mod, size_t l
  * RSA modular exponentiation - the caller must decrypt the signature first.
  *
  * Uses internal TLS scratch buffer for temporary computations.
+ * em_bits is derived internally as (em_len * 8) - 1.
  *
  * @param encoded_msg   The decrypted signature (EM), big-endian, emLen bytes
  * @param em_len        Length of encoded message in bytes (same as modulus length)
- * @param em_bits       Length of encoded message in bits (modBits - 1)
  * @param mhash         Hash of the message being verified
  * @param mhash_len     Length of mhash (must equal hash digest length)
  * @param hash_alg      Hash algorithm ID (TLS_HASH_SHA256, etc.)
  * @return true if PSS padding is valid, false otherwise
  */
-bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len, uint16_t em_bits,
+bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
                         const uint8_t *mhash, size_t mhash_len,
                         uint8_t hash_alg)
 {
     if (encoded_msg == NULL || mhash == NULL)
         return false;
-    if (em_len == 0 || em_bits == 0)
+    if (em_len == 0)
         return false;
+
+    /* Derive em_bits from em_len: modBits - 1 */
+    uint16_t em_bits = (uint16_t)((em_len * 8) - 1);
 
     /* Check TLS context is initialized */
     if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)

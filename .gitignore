@@ -17,4 +17,4 @@ bin
 *makefsdata.c.*
 *.fsdata
 .venv
-
+*_private.pem
