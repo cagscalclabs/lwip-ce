@@ -1,0 +1,69 @@
+{
+  "transfer_files": [
+    "bin/X25519T.8xp"
+  ],
+  "target": {
+    "name": "X25519T",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter",
+    "hashWait|4",
+    "key|enter",
+    "hashWait|5",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "test 1 - Alice * Bob",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "4013917A"
+      ],
+      "timeout": 30000
+    },
+    "2": {
+      "description": "test 2 - Bob * Alice",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "E0AEF5AA"
+      ],
+      "timeout": 30000
+    },
+    "3": {
+      "description": "test 3 - public key generation",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "DB48F62D"
+      ],
+      "timeout": 30000
+    },
+    "4": {
+      "description": "test 4 - iterative (k=9, u=9)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "C08FD34D"
+      ],
+      "timeout": 30000
+    },
+    "5": {
+      "description": "test 5 - clamping",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "42229300"
+      ],
+      "timeout": 30000
+    }
+  }
+}
