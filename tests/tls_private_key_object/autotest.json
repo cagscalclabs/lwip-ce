@@ -1,4 +1,5 @@
 {
+    "description": "Test decoding of PKCS#8 and PKCS#1 RSA private key objects",
     "transfer_files": [
         "bin/DEMO.8xp"
     ],
@@ -19,7 +20,7 @@
     ],
     "hashes": {
         "1": {
-            "description": "PKCS1 RSA private decode",
+            "description": "Test PKCS#1 RSA private key decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -28,7 +29,7 @@
             "timeout": 15000
         },
         "2": {
-            "description": "PKCS8 EC private decode",
+            "description": "Test PKCS#8 EC private key decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -37,7 +38,7 @@
             "timeout": 15000
         },
         "3": {
-            "description": "PKCS8 RSA private decode",
+            "description": "Test PKCS#8 RSA private key decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -46,7 +47,7 @@
             "timeout": 15000
         },
         "4": {
-            "description": "PKCS8 RSA encrypted private decode",
+            "description": "Test PKCS8 RSA encrypted private key decode",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [

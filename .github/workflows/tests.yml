@@ -174,8 +174,6 @@ jobs:
           # Add detailed test results table
           echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Module | Status | Duration (ms) | Description |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|--------|---------------|-------------|" >> $GITHUB_STEP_SUMMARY
 
           # For each test, count the number of hashWait entries in its autotest.json
           jq -r '.results.tests[] | .name' ${{github.workspace}}/results.json | while read test_name; do
@@ -200,14 +198,13 @@ jobs:
               status_icon="❌ Failed"
             fi
 
-            echo "| $test_name | $status_icon | $duration | $module_desc |" >> $GITHUB_STEP_SUMMARY
-
-            # Per-hash test breakdown
+            # Per-module table
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "#### $test_name tests" >> $GITHUB_STEP_SUMMARY
+            echo "#### $test_name" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Test | Status | Description |" >> $GITHUB_STEP_SUMMARY
-            echo "|------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Module | Tests | Status | Description |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| $test_name |  | $status_icon | $module_desc |" >> $GITHUB_STEP_SUMMARY
 
             jq -r '.hashes // {} | to_entries[]? | "\(.key)|\(.value.description // "(no description)")"' "$test_dir/autotest.json" 2>/dev/null | while IFS='|' read -r hash_id hash_desc; do
               hash_desc=${hash_desc//$'\n'/ }
@@ -217,10 +214,10 @@ jobs:
               else
                 hash_status="❌ Failed"
               fi
-              echo "| $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
+              echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
             done
             if [ "$test_count" -eq 0 ]; then
-              echo "| (none) | $status_icon | (no hash tests) |" >> $GITHUB_STEP_SUMMARY
+              echo "|  | (none) | $status_icon | (no hash tests) |" >> $GITHUB_STEP_SUMMARY
             fi
             echo "" >> $GITHUB_STEP_SUMMARY
           done
