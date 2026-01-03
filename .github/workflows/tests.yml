@@ -206,7 +206,10 @@ jobs:
             echo "|--------|-------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
             echo "| $test_name |  | $status_icon | $module_desc |" >> $GITHUB_STEP_SUMMARY
 
-            jq -r '.hashes // {} | to_entries[]? | "\(.key)|\(.value.description // "(no description)")"' "$test_dir/autotest.json" 2>/dev/null | while IFS='|' read -r hash_id hash_desc; do
+            # Use sequence order to map hashWait -> hash id -> description
+            jq -r '.sequence // [] | map(select(startswith("hashWait")))[]' "$test_dir/autotest.json" 2>/dev/null | while read -r seq_entry; do
+              hash_id="${seq_entry#hashWait|}"
+              hash_desc=$(jq -r ".hashes[\"$hash_id\"].description // \"(no description)\"" "$test_dir/autotest.json" 2>/dev/null)
               hash_desc=${hash_desc//$'\n'/ }
               hash_desc=${hash_desc//|/\\|}
               if [ "$status" = "passed" ]; then

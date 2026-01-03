@@ -1,15 +1,13 @@
 {
-    "transfer_files":
-    [
+    "description": "Test Password-Based Key Derivation",
+    "transfer_files": [
         "bin/DEMO.8xp"
     ],
-    "target":
-    {
+    "target": {
         "name": "DEMO",
         "isASM": true
     },
-    "sequence":
-    [
+    "sequence": [
         "action|launch",
         "hashWait|1",
         "key|enter",
@@ -18,32 +16,33 @@
         "hashWait|3",
         "key|enter"
     ],
-    "hashes":
-    {
-        "1":
-        {
-            "description": "10 rounds, 16 bytes out",
+    "hashes": {
+        "1": {
+            "description": "Test 10 rounds, 16 bytes out",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "D1F2869F" ],
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
             "timeout": 1000
         },
-        "2":
-        {
-            "description": "100 rounds, 24 bytes out",
+        "2": {
+            "description": "Test 100 rounds, 24 bytes out",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "D1F2869F" ],
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
             "timeout": 5000
         },
-        "3":
-        {
-            "description": "1000 rounds, 32 bytes out",
+        "3": {
+            "description": "Test 1000 rounds, 32 bytes out",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "D1F2869F" ],
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
             "timeout": 30000
         }
     }
 }
-
