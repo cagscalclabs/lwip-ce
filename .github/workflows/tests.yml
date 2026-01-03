@@ -174,8 +174,8 @@ jobs:
           # Add detailed test results table
           echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Module | Tests Run | Passed | Failed | Status | Duration (ms) |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-----------|--------|--------|--------|---------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Tests Run | Passed | Failed | Status | Duration (ms) | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-----------|--------|--------|--------|---------------|-------------|" >> $GITHUB_STEP_SUMMARY
 
           # For each test, count the number of hashWait entries in its autotest.json
           jq -r '.results.tests[] | .name' ${{github.workspace}}/results.json | while read test_name; do
@@ -186,6 +186,20 @@ jobs:
             # Get status and duration from results
             status=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .status" ${{github.workspace}}/results.json)
             duration=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .duration" ${{github.workspace}}/results.json)
+
+            # Build description from autotest.json
+            module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
+            hash_descs=$(jq -r '.hashes // {} | to_entries[]? | .value.description // empty' "$test_dir/autotest.json" 2>/dev/null | paste -sd '; ' -)
+            if [ -n "$hash_descs" ] && [ -n "$module_desc" ]; then
+              desc="$module_desc — $hash_descs"
+            elif [ -n "$hash_descs" ]; then
+              desc="$hash_descs"
+            else
+              desc="$module_desc"
+            fi
+            desc=${desc:-"(no description)"}
+            desc=${desc//$'\n'/ }
+            desc=${desc//|/\\|}
 
             # Calculate passed/failed based on module status
             if [ "$status" = "passed" ]; then
@@ -198,7 +212,7 @@ jobs:
               status_icon="❌ Failed"
             fi
 
-            echo "| $test_name | $test_count | $passed | $failed | $status_icon | $duration |" >> $GITHUB_STEP_SUMMARY
+            echo "| $test_name | $test_count | $passed | $failed | $status_icon | $duration | $desc |" >> $GITHUB_STEP_SUMMARY
           done
 
       - name: Upload Results Logfile

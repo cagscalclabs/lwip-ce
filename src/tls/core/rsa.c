@@ -153,8 +153,8 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (pubkey == NULL) ||
         (outbuf == NULL) ||
         (in_len == 0) ||
-        (keylen < RSA_MODULUS_MAX_SUPPORTED) ||
-        (keylen > RSA_MODULUS_MIN_SUPPORTED) ||
+        (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
+        (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(pubkey[keylen - 1] & 1)))
         return false;
 
@@ -174,183 +174,17 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
                                const uint8_t *pubkey,
                                size_t keylen)
 {
-    size_t spos = 0;
     if ((signature == NULL) ||
         (pubkey == NULL) ||
         (outbuf == NULL) ||
         (signature_len == 0) ||
-        (keylen < RSA_MODULUS_MAX_SUPPORTED) ||
-        (keylen > RSA_MODULUS_MIN_SUPPORTED) ||
+        (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
+        (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(pubkey[keylen - 1] & 1)))
         return false;
 
     memcpy(outbuf, signature, keylen);
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
-    return true;
-}
-
-/* internal: count significant bits in big-endian modulus */
-static uint16_t tls_rsa_mod_bitlen(const uint8_t *mod, size_t mod_len)
-{
-    size_t i = 0;
-    while (i < mod_len && mod[i] == 0)
-        i++;
-    if (i == mod_len)
-        return 0;
-    uint8_t msb = mod[i];
-    uint8_t bits = 8;
-    while (bits && ((msb >> (bits - 1)) == 0))
-        bits--;
-    return (uint16_t)((mod_len - i - 1) * 8 + bits);
-}
-
-/* big-endian comparison: returns -1,0,1 */
-static int tls_big_cmp_be(const uint8_t *a, const uint8_t *b, size_t len)
-{
-    for (size_t i = 0; i < len; i++)
-    {
-        if (a[i] != b[i])
-            return (a[i] > b[i]) ? 1 : -1;
-    }
-    return 0;
-}
-
-/* big-endian subtract: assumes a >= b, stores into a */
-static void tls_big_sub_be(uint8_t *a, const uint8_t *b, size_t len)
-{
-    int borrow = 0;
-    for (size_t i = 0; i < len; i++)
-    {
-        size_t idx = len - 1 - i;
-        int diff = (int)a[idx] - (int)b[idx] - borrow;
-        if (diff < 0)
-        {
-            diff += 256;
-            borrow = 1;
-        }
-        else
-        {
-            borrow = 0;
-        }
-        a[idx] = (uint8_t)diff;
-    }
-}
-
-/* shift remainder left by 8 and add byte */
-static void tls_big_shift8_add(uint8_t *r, size_t len, uint8_t byte)
-{
-    memmove(r, r + 1, len - 1);
-    r[len - 1] = byte;
-}
-
-/* shift-left by one byte (8 bits) modulo mod (all big-endian, len bytes) */
-static void tls_big_lshift8_mod(uint8_t *val, const uint8_t *mod, size_t len)
-{
-    uint16_t carry = 0;
-    for (size_t i = 0; i < len; i++)
-    {
-        size_t idx = len - 1 - i;
-        uint16_t v = ((uint16_t)val[idx] << 8) | carry;
-        val[idx] = (uint8_t)v;
-        carry = (uint8_t)(v >> 8);
-    }
-    if (tls_big_cmp_be(val, mod, len) >= 0)
-        tls_big_sub_be(val, mod, len);
-}
-
-/* Compute (a * b) mod mod (all big-endian, same length).
- * scratch: prod[2*len] || rem[len]
- */
-static void tls_big_mul_mod_be(const uint8_t *a, const uint8_t *b, size_t len,
-                               const uint8_t *mod, uint8_t *out,
-                               uint8_t *scratch)
-{
-    uint8_t *prod = scratch;
-    uint8_t *rem = prod + (len << 1);
-    memset(prod, 0, (len << 1));
-    /* schoolbook mul */
-    for (size_t i = 0; i < len; i++)
-    {
-        uint32_t carry = 0;
-        uint8_t ai = a[len - 1 - i];
-        for (size_t j = 0; j < len; j++)
-        {
-            size_t idx = (len << 1) - 1 - (i + j);
-            uint32_t sum = (uint32_t)prod[idx] + (uint32_t)ai * b[len - 1 - j] + carry;
-            prod[idx] = (uint8_t)sum;
-            carry = sum >> 8;
-        }
-        size_t k = (len << 1) - 1 - (i + len);
-        while (carry)
-        {
-            uint32_t sum = (uint32_t)prod[k] + carry;
-            prod[k] = (uint8_t)sum;
-            carry = sum >> 8;
-            if (k == 0)
-                break;
-            k--;
-        }
-    }
-    /* modulo via long division */
-    memset(rem, 0, len);
-    for (size_t idx = 0; idx < (len << 1); idx++)
-    {
-        tls_big_shift8_add(rem, len, prod[idx]);
-        while (tls_big_cmp_be(rem, mod, len) >= 0)
-        {
-            tls_big_sub_be(rem, mod, len);
-        }
-    }
-    memcpy(out, rem, len);
-}
-
-/* Compute base^65537 mod modulus using square-and-multiply.
- * All inputs/outputs are big-endian.
- * scratch layout: prod[2*len] || rem[len] || x[len] || tmp[len]
- * scratch_len must be >= 5*len
- */
-static bool tls_modexp65537_be(const uint8_t *base, const uint8_t *mod, size_t len,
-                               uint8_t *out, uint8_t *scratch, size_t scratch_len)
-{
-    size_t need = len * 5; /* prod(2*len) + rem(len) + x(len) + tmp(len) */
-    if (scratch_len < need || len == 0)
-        return false;
-
-    uint8_t *mul_scratch = scratch;   /* 3*len for tls_big_mul_mod_be */
-    uint8_t *x = scratch + (len * 3); /* accumulator */
-    uint8_t *tmp = x + len;           /* temporary for squaring */
-
-    /* x = base mod modulus (in case base >= mod) */
-    memcpy(x, base, len);
-    if (tls_big_cmp_be(x, mod, len) >= 0)
-    {
-        /* reduce base modulo mod - use tmp for remainder computation */
-        uint8_t *rem = tmp;
-        memset(rem, 0, len);
-        for (size_t idx = 0; idx < len; idx++)
-        {
-            tls_big_shift8_add(rem, len, x[idx]);
-            while (tls_big_cmp_be(rem, mod, len) >= 0)
-                tls_big_sub_be(rem, mod, len);
-        }
-        memcpy(x, rem, len);
-    }
-
-    /* 65537 = 0x10001 = 2^16 + 1
-     * Compute: x = base^(2^16) mod n, then x = x * base mod n
-     */
-
-    /* Square 16 times: x = base^(2^16) mod n */
-    for (int i = 0; i < 16; i++)
-    {
-        tls_big_mul_mod_be(x, x, len, mod, tmp, mul_scratch);
-        memcpy(x, tmp, len);
-    }
-
-    /* Multiply by base: x = x * base mod n */
-    tls_big_mul_mod_be(x, base, len, mod, tmp, mul_scratch);
-    memcpy(out, tmp, len);
-
     return true;
 }
 

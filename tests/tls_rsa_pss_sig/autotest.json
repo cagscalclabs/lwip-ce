@@ -1,10 +1,10 @@
 {
-  "description": "Tests PSS verification primitive standalone",
+  "description": "RSA-PSS signature verification using a known signature and public key",
   "transfer_files": [
-    "bin/PSSTEST.8xp"
+    "bin/PSSSIG.8xp"
   ],
   "target": {
-    "name": "PSSTEST",
+    "name": "PSSSIG",
     "isASM": true
   },
   "sequence": [
@@ -14,13 +14,13 @@
   ],
   "hashes": {
     "1": {
-      "description": "Verify PSS PKCS_1.5 works",
+      "description": "RSA sig-decrypt and verify w/ PSS PKCS_1.5",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "A2D7C0AB"
+        "63C8DC8B"
       ],
-      "timeout": 2000
+      "timeout": 15000
     }
   }
 }
