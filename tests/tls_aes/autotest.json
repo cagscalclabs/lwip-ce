@@ -20,7 +20,7 @@
     ],
     "hashes": {
         "1": {
-            "description": "AES-GCM encrypt - NIST SP 800-38D, Appendix B, Test Case 4",
+            "description": "AES-GCM encrypt - GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -29,7 +29,7 @@
             "timeout": 1500
         },
         "2": {
-            "description": "AES-GCM decrypt - NIST SP 800-38D, Appendix B, Test Case 4",
+            "description": "AES-GCM decrypt - GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [

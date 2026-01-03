@@ -7,8 +7,8 @@
 #include "aes.h"
 
 /*
- * NIST SP 800-38D Test Case 4 (AES-128-GCM with AAD)
- * Source: GCM Specification (gcm-spec.pdf), Appendix B, Test Case 4
+ * AES-128-GCM Test Case 4 (with AAD)
+ * Source: McGrew/Viega GCM Specification, Appendix B, Test Case 4
  */
 uint8_t gcm_key[] = {
     0xfe,0xff,0xe9,0x92,0x86,0x65,0x73,0x1c,0x6d,0x6a,0x8f,0x94,0x67,0x30,0x83,0x08
@@ -80,7 +80,7 @@ int main(void)
 
     os_ClrHome();
 
-    // Test 1: AES-GCM encrypt (NIST SP 800-38D Test Case 4)
+    // Test 1: AES-GCM encrypt (GCM Spec Test Case 4)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm_key, sizeof gcm_key, gcm_iv, sizeof gcm_iv);
@@ -92,7 +92,7 @@ int main(void)
          (memcmp(tag, gcm_tag, TLS_AES_AUTH_TAG_SIZE) == 0);
     show_result(ok);
 
-    // Test 2: AES-GCM decrypt (NIST SP 800-38D Test Case 4)
+    // Test 2: AES-GCM decrypt (GCM Spec Test Case 4)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm_key, sizeof gcm_key, gcm_iv, sizeof gcm_iv);

@@ -18,7 +18,7 @@
     ],
     "hashes": {
         "1": {
-            "description": "Test 10 rounds, 16 bytes out",
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 1 (c=1)",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -27,22 +27,22 @@
             "timeout": 1000
         },
         "2": {
-            "description": "Test 100 rounds, 24 bytes out",
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 2 (c=2)",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
                 "D1F2869F"
             ],
-            "timeout": 5000
+            "timeout": 1000
         },
         "3": {
-            "description": "Test 1000 rounds, 32 bytes out",
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 7 (c=1, 32 bytes)",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
                 "D1F2869F"
             ],
-            "timeout": 30000
+            "timeout": 1000
         }
     }
 }

@@ -11,14 +11,32 @@
         "action|launch",
         "hashWait|1",
         "key|enter",
-        "hashWait|1",
+        "hashWait|2",
         "key|enter",
-        "hashWait|1",
+        "hashWait|3",
         "key|enter"
     ],
     "hashes": {
         "1": {
-            "description": "Test SHA-256 primitive",
+            "description": "SHA-256 short message 'abc' - NIST FIPS 180-4, Example 1",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "2": {
+            "description": "SHA-256 empty message - NIST FIPS 180-4, Empty String",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "3": {
+            "description": "SHA-256 two-block message - NIST FIPS 180-4, Example 2",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [

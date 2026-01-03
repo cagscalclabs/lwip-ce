@@ -11,14 +11,32 @@
         "action|launch",
         "hashWait|1",
         "key|enter",
-        "hashWait|1",
+        "hashWait|2",
         "key|enter",
-        "hashWait|1",
+        "hashWait|3",
         "key|enter"
     ],
     "hashes": {
         "1": {
-            "description": "Test HMAC_SHA_256",
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 1",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "2": {
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 2",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "3": {
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 3",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
