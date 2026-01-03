@@ -95,14 +95,6 @@ static const uint8_t serverhello_packet[] = {
     0x00, 0x00  /* Selected identity: 0 */
 };
 
-/* Expected handshake transcript hash after ClientHello + ServerHello */
-static const uint8_t expected_transcript_hash[32] = {
-    /* @todo: Fill with actual hash from real handshake capture */
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-
 /* Helper to print a line */
 #define TLS_HANDSHAKE_DEBUG
 
@@ -112,6 +104,16 @@ static void print_line(const char *msg)
     os_FontDrawText(msg, 0, output_y);
     output_y += 12;
 #endif
+}
+
+static void show_result(bool ok)
+{
+    if (ok)
+        printf("success");
+    else
+        printf("failed");
+    os_GetKey();
+    os_ClrHome();
 }
 
 /* Test helper macros */
@@ -172,7 +174,7 @@ static void print_line(const char *msg)
 /**
  * Test 1: Initialize TLS context with PSK
  */
-static void test_init_psk_context(void)
+static bool test_init_psk_context(void)
 {
     struct tls_handshake_context ctx;
     struct tls_psk_identity psk_identity;
@@ -207,12 +209,13 @@ static void test_init_psk_context(void)
                                      sizeof(failed_tests) - failed_tests_len,
                                      "Test 1 ");
     }
+    return tests_failed == initial_failed;
 }
 
 /**
  * Test 2: Process ServerHello packet
  */
-static void test_process_serverhello(struct tls_handshake_context *ctx,
+static bool test_process_serverhello(struct tls_handshake_context *ctx,
                                      uint8_t *client_hello_buf,
                                      size_t *client_hello_len)
 {
@@ -247,12 +250,13 @@ static void test_process_serverhello(struct tls_handshake_context *ctx,
                                      sizeof(failed_tests) - failed_tests_len,
                                      "Test 2 ");
     }
+    return tests_failed == initial_failed;
 }
 
 /**
  * Test 3: Derive handshake keys
  */
-static void test_derive_handshake_keys(struct tls_handshake_context *ctx)
+static bool test_derive_handshake_keys(struct tls_handshake_context *ctx)
 {
     bool ret;
     int initial_failed = tests_failed;
@@ -293,12 +297,13 @@ static void test_derive_handshake_keys(struct tls_handshake_context *ctx)
                                      sizeof(failed_tests) - failed_tests_len,
                                      "Test 3 ");
     }
+    return tests_failed == initial_failed;
 }
 
 /**
  * Test 4: Generate Finished message
  */
-static void test_generate_finished(struct tls_handshake_context *ctx)
+static bool test_generate_finished(struct tls_handshake_context *ctx)
 {
     uint8_t finished_msg[64];
     size_t finished_len;
@@ -321,6 +326,7 @@ static void test_generate_finished(struct tls_handshake_context *ctx)
                                      sizeof(failed_tests) - failed_tests_len,
                                      "Test 4 ");
     }
+    return tests_failed == initial_failed;
 }
 
 /**
@@ -340,11 +346,7 @@ int main(void)
     os_ClrHome();
 
     /* Test 1: Initialize PSK context */
-    test_init_psk_context();
-#ifndef TLS_HANDSHAKE_DEBUG
-    os_GetKey();
-#endif
-    os_ClrHome();
+    show_result(test_init_psk_context());
     os_FontSelect(os_SmallFont);
 
     /* Initialize context for remaining tests */
@@ -354,42 +356,15 @@ int main(void)
     tls_handshake_init(&ctx, test_psk, &psk_identity);
 
     /* Test 2: Process ServerHello */
-    test_process_serverhello(&ctx, client_hello_buf, &client_hello_len);
-#ifndef TLS_HANDSHAKE_DEBUG
-    os_GetKey();
-#endif
-    os_ClrHome();
+    show_result(test_process_serverhello(&ctx, client_hello_buf, &client_hello_len));
     os_FontSelect(os_SmallFont);
 
     /* Test 3: Derive handshake keys */
-    test_derive_handshake_keys(&ctx);
-#ifndef TLS_HANDSHAKE_DEBUG
-    os_GetKey();
-#endif
-    os_ClrHome();
+    show_result(test_derive_handshake_keys(&ctx));
     os_FontSelect(os_SmallFont);
 
     /* Test 4: Generate Finished message */
-    test_generate_finished(&ctx);
-#ifndef TLS_HANDSHAKE_DEBUG
-    os_GetKey();
-#endif
-    os_ClrHome();
-    os_FontSelect(os_SmallFont);
-
-    /* Print final result */
-    output_y = 30;
-    if (tests_failed == 0)
-    {
-        os_FontDrawText("all tests PASSED", 0, 30);
-    }
-    else
-    {
-        sprintf(output_buf, "FAILED: %s", failed_tests);
-        os_FontDrawText(output_buf, 0, 30);
-    }
-
-    os_GetKey();
+    show_result(test_generate_finished(&ctx));
 
     /* Return 0 for success, 1 for failure */
     return (tests_failed == 0) ? 0 : 1;

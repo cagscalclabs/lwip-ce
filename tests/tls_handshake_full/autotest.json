@@ -1,4 +1,5 @@
 {
+    "description": "Test components of the full TLS 1.3 handshake",
     "transfer_files": [
         "bin/TLSFULL.8xp"
     ],
@@ -9,15 +10,48 @@
     "sequence": [
         "action|launch",
         "hashWait|1",
+        "key|enter",
+        "hashWait|2",
+        "key|enter",
+        "hashWait|3",
+        "key|enter",
+        "hashWait|4",
         "key|enter"
     ],
     "hashes": {
         "1": {
-            "description": "TLS full handshake",
+            "description": "TLS init PSK context",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "179B0D3C"
+                "D1F2869F"
+            ],
+            "timeout": 30000
+        },
+        "2": {
+            "description": "TLS process ServerHello",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 30000
+        },
+        "3": {
+            "description": "TLS derive handshake keys",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 30000
+        },
+        "4": {
+            "description": "TLS generate Finished",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
             ],
             "timeout": 30000
         }
