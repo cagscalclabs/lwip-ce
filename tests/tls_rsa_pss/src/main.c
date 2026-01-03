@@ -60,7 +60,7 @@ static bool test_pss_verify(void)
 
     /* Test PSS Verify against OpenSSL-generated encoding */
     bool verify_ok = tls_rsa_pss_verify(
-        expected_encoded_msg, em_len, em_bits,
+        expected_encoded_msg, em_len,
         mhash, sizeof(mhash),
         TLS_HASH_SHA256);
 
