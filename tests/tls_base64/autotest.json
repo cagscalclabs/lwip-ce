@@ -1,0 +1,78 @@
+{
+    "transfer_files":
+    [
+        "bin/DEMO.8xp"
+    ],
+    "target":
+    {
+        "name": "DEMO",
+        "isASM": true
+    },
+    "sequence":
+    [
+        "action|launch",
+        "hashWait|1",
+        "key|enter",
+        "hashWait|2",
+        "key|enter",
+        "hashWait|3",
+        "key|enter",
+        "hashWait|4",
+        "key|enter",
+        "hashWait|5",
+        "key|enter",
+        "hashWait|6",
+        "key|enter"
+    ],
+    "hashes":
+    {
+        "1":
+        {
+            "description": "base64 encode 1",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "D1F2869F" ],
+            "timeout": 1000
+        },
+        "2":
+        {
+            "description": "base64 encode 2",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "D1F2869F" ],
+            "timeout": 1000
+        },
+        "3":
+        {
+            "description": "base64 encode 3",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "D1F2869F" ],
+            "timeout": 1000
+        },
+        "4":
+        {
+            "description": "base64 decode 1",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "D1F2869F" ],
+            "timeout": 1000
+        },
+        "5":
+        {
+            "description": "base64 decode 2",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "D1F2869F" ],
+            "timeout": 1000
+        },
+        "6":
+        {
+            "description": "base64 decode 3",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "D1F2869F" ],
+            "timeout": 1000
+        }
+    }
+}
