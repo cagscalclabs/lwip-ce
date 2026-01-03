@@ -1,4 +1,5 @@
 #include <ti/vars.h>
+#include <string.h>
 
 #include "../includes/truststore.h"
 #include "../includes/rsa.h"

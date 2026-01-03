@@ -738,20 +738,6 @@ error:
     return NULL;
 }
 
-bool tls_x509_spki_verify(uint8_t *x509_spki_field, size_t x509_spki_len, uint8_t *expected, uint8_t hash_alg)
-{
-    struct tls_hash_context hash_ctx;
-    uint8_t h_out[64];
-    if (!tls_hash_context_init(&hash_ctx, hash_alg))
-    {
-        return false;
-    }
-    tls_hash_update(&hash_ctx, x509_spki_field, x509_spki_len); /* Up to and including binder length */
-    tls_hash_digest(&hash_ctx, h_out);
-
-    return tls_bytes_compare(h_out, expected, hash_ctx.len);
-}
-
 void tls_keyobject_destroy(struct tls_keyobject *kf)
 {
     // securely unrefs the keyobject

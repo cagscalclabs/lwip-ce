@@ -170,7 +170,7 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
 bool tls_rsa_decrypt_signature(const uint8_t *signature,
                                size_t signature_len,
-                               uint8_t outbuf,
+                               uint8_t *outbuf,
                                const uint8_t *pubkey,
                                size_t keylen)
 {

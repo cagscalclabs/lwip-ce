@@ -37,7 +37,7 @@ bool tls_truststore_init(void);
  * @returns [bool] True if match found, false if otherwise.
  * @note So that we don't spend 12 hours on calculator doing a
  * complete full-chain validation on every TLS connection, we're
- * using pinned  SPKI hashes of common intermediate roots, and the
+ * using pinned SPKI hashes of common intermediate roots, and the
  * security measure is that IF our chain contains a certificate where
  * the SPKI hash matches something in our trust store, we trust the
  * remote. The current SPKI trust store will be generated every so
