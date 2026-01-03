@@ -18,5 +18,3 @@ bin
 *.fsdata
 .venv
 
-# contest directory (work in progress)
-contest

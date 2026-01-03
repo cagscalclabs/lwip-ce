@@ -19,6 +19,7 @@ BSSHEAP_LOW ?= D052C6
 # BSSHEAP_HIGH ?= D13FD8
 # ----------------------------
 
+# This is just to shut up the linker, lwIP is an app, it takes user malloc
 ALLOCATOR = CUSTOM
 EXTRA_ASM_SOURCES = src/custom_allocator.src
 
