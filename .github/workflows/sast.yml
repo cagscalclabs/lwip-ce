@@ -72,7 +72,7 @@ jobs:
             src/
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep-results.sarif
@@ -137,9 +137,11 @@ jobs:
               print(f.read())
 
           # Set outputs for workflow
-          print(f"::set-output name=critical_count::{len(critical)}")
-          print(f"::set-output name=high_count::{len(high)}")
-          print(f"::set-output name=total_count::{len(findings)}")
+          import os
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"critical_count={len(critical)}\n")
+              f.write(f"high_count={len(high)}\n")
+              f.write(f"total_count={len(findings)}\n")
           EOF
 
       - name: Add Report to Job Summary
