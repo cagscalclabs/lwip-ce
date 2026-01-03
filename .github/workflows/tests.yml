@@ -174,8 +174,8 @@ jobs:
           # Add detailed test results table
           echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Module | Tests Run | Passed | Failed | Status | Duration (ms) | Description |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-----------|--------|--------|--------|---------------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Status | Duration (ms) | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|--------|---------------|-------------|" >> $GITHUB_STEP_SUMMARY
 
           # For each test, count the number of hashWait entries in its autotest.json
           jq -r '.results.tests[] | .name' ${{github.workspace}}/results.json | while read test_name; do
@@ -189,30 +189,40 @@ jobs:
 
             # Build description from autotest.json
             module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
-            hash_descs=$(jq -r '.hashes // {} | to_entries[]? | .value.description // empty' "$test_dir/autotest.json" 2>/dev/null | paste -sd '; ' -)
-            if [ -n "$hash_descs" ] && [ -n "$module_desc" ]; then
-              desc="$module_desc — $hash_descs"
-            elif [ -n "$hash_descs" ]; then
-              desc="$hash_descs"
-            else
-              desc="$module_desc"
-            fi
-            desc=${desc:-"(no description)"}
-            desc=${desc//$'\n'/ }
-            desc=${desc//|/\\|}
+            module_desc=${module_desc:-"(no description)"}
+            module_desc=${module_desc//$'\n'/ }
+            module_desc=${module_desc//|/\\|}
 
-            # Calculate passed/failed based on module status
+            # Module status label
             if [ "$status" = "passed" ]; then
-              passed=$test_count
-              failed=0
               status_icon="✅ Passed"
             else
-              passed=0
-              failed=$test_count
               status_icon="❌ Failed"
             fi
 
-            echo "| $test_name | $test_count | $passed | $failed | $status_icon | $duration | $desc |" >> $GITHUB_STEP_SUMMARY
+            echo "| $test_name | $status_icon | $duration | $module_desc |" >> $GITHUB_STEP_SUMMARY
+
+            # Per-hash test breakdown
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### $test_name tests" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Test | Status | Description |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+
+            jq -r '.hashes // {} | to_entries[]? | "\(.key)|\(.value.description // "(no description)")"' "$test_dir/autotest.json" 2>/dev/null | while IFS='|' read -r hash_id hash_desc; do
+              hash_desc=${hash_desc//$'\n'/ }
+              hash_desc=${hash_desc//|/\\|}
+              if [ "$status" = "passed" ]; then
+                hash_status="✅ Passed"
+              else
+                hash_status="❌ Failed"
+              fi
+              echo "| $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
+            done
+            if [ "$test_count" -eq 0 ]; then
+              echo "| (none) | $status_icon | (no hash tests) |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
           done
 
       - name: Upload Results Logfile
