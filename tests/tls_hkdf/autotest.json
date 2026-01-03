@@ -12,7 +12,7 @@
     ],
     "hashes": {
         "1": {
-            "description": "HKDF RFC 5869 test output",
+            "description": "HKDF-SHA256 - RFC 5869, Appendix A, Test Cases 1-3",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [

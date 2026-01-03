@@ -6,18 +6,23 @@
 
 #include "base64.h"
 
-// test vectors
-const char *test1 = "Science7!";
-const char *test2 = "Cemetech12?";
-const char *test3 = "Leading the way to the future!";
+/*
+ * RFC 4648 Base64 Test Vectors
+ * Source: RFC 4648, Section 10
+ */
 
-const char *encoded1 = "U2NpZW5jZTch";
-const char *encoded2 = "Q2VtZXRlY2gxMj8=";
-const char *encoded3 = "TGVhZGluZyB0aGUgd2F5IHRvIHRoZSBmdXR1cmUh";
+/* Test vectors from RFC 4648 Section 10 */
+const char *test1 = "f";
+const char *test2 = "foo";
+const char *test3 = "foobar";
 
-const char *decoded1 = "Science7!";
-const char *decoded2 = "Cemetech12?";
-const char *decoded3 = "Leading the way to the future!";
+const char *encoded1 = "Zg==";
+const char *encoded2 = "Zm9v";
+const char *encoded3 = "Zm9vYmFy";
+
+const char *decoded1 = "f";
+const char *decoded2 = "foo";
+const char *decoded3 = "foobar";
 
 
 static void show_result(bool ok)

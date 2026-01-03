@@ -28,7 +28,7 @@
     {
         "1":
         {
-            "description": "base64 encode 1",
+            "description": "Base64 encode 'f' - RFC 4648, Section 10, Vector 2",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [ "D1F2869F" ],
@@ -36,7 +36,7 @@
         },
         "2":
         {
-            "description": "base64 encode 2",
+            "description": "Base64 encode 'foo' - RFC 4648, Section 10, Vector 4",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [ "D1F2869F" ],
@@ -44,7 +44,7 @@
         },
         "3":
         {
-            "description": "base64 encode 3",
+            "description": "Base64 encode 'foobar' - RFC 4648, Section 10, Vector 7",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [ "D1F2869F" ],
@@ -52,7 +52,7 @@
         },
         "4":
         {
-            "description": "base64 decode 1",
+            "description": "Base64 decode 'Zg==' - RFC 4648, Section 10, Vector 2",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [ "D1F2869F" ],
@@ -60,7 +60,7 @@
         },
         "5":
         {
-            "description": "base64 decode 2",
+            "description": "Base64 decode 'Zm9v' - RFC 4648, Section 10, Vector 4",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [ "D1F2869F" ],
@@ -68,7 +68,7 @@
         },
         "6":
         {
-            "description": "base64 decode 3",
+            "description": "Base64 decode 'Zm9vYmFy' - RFC 4648, Section 10, Vector 7",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [ "D1F2869F" ],

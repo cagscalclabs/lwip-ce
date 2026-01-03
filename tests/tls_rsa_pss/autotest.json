@@ -14,7 +14,7 @@
   ],
   "hashes": {
     "1": {
-      "description": "Verify PSS PKCS_1.5 works",
+      "description": "RSA-PSS verify - RFC 8017 (PKCS#1 v2.2) SHA-256, OpenSSL-generated",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
