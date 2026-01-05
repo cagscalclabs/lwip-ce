@@ -16,13 +16,40 @@
 #include "lwip/mem.h"
 #include "altcp_tls_ce.h"
 #include "../../tls/includes/handshake.h"
+#include "../../drivers/mem.h"
 
 #include <string.h>
+#include <limits.h>
 
 /* Debug flag for TLS CE layer */
 #ifndef ALTCP_TLS_CE_DEBUG
 #define ALTCP_TLS_CE_DEBUG LWIP_DBG_OFF
 #endif
+
+static enum mem_pressure_level g_tls_rx_throttle_level = MEM_PRESSURE_NONE;
+static bool g_tls_hook_registered = false;
+static altcp_tls_ce_state_t *g_tls_state_head = NULL;
+
+static void tls_state_add(altcp_tls_ce_state_t *state)
+{
+    state->next = g_tls_state_head;
+    g_tls_state_head = state;
+}
+
+static void tls_state_remove(altcp_tls_ce_state_t *state)
+{
+    altcp_tls_ce_state_t **pp = &g_tls_state_head;
+    while (*pp)
+    {
+        if (*pp == state)
+        {
+            *pp = state->next;
+            state->next = NULL;
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
 
 /* Forward declarations */
 static err_t altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p, err_t err);
@@ -701,6 +728,7 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
 
     memset(state, 0, sizeof(altcp_tls_ce_state_t));
     state->conf = conf;
+    state->conn = conn;
     state->rx_ring_size = config->rx_ring_size ? config->rx_ring_size : ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE;
     state->rx_ring = (uint8_t *)mem_malloc(state->rx_ring_size);
     if (state->rx_ring == NULL) {
@@ -719,6 +747,14 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     conn->inner_conn = inner_conn;
     conn->fns = &altcp_tls_ce_functions;
     conn->state = state;
+    state->rx_throttle_pending = 0;
+    state->rx_mild_toggle = 0;
+    tls_state_add(state);
+    if (!g_tls_hook_registered)
+    {
+        mem_register_pressure_hook_tls_rx(altcp_tls_ce_set_rx_throttle);
+        g_tls_hook_registered = true;
+    }
 
     return ERR_OK;
 }
@@ -769,6 +805,28 @@ altcp_tls_ce_alloc(void *arg, u8_t ip_type)
 
 /* ========== Virtual Functions ========== */
 
+void altcp_tls_ce_set_rx_throttle(enum mem_pressure_level level)
+{
+    g_tls_rx_throttle_level = level;
+    if (level == MEM_PRESSURE_NONE)
+    {
+        altcp_tls_ce_state_t *state = g_tls_state_head;
+        while (state)
+        {
+            size_t pending = state->rx_throttle_pending;
+            while (pending > 0 && state->conn && state->conn->inner_conn)
+            {
+                int chunk = (pending > (size_t)INT_MAX) ? INT_MAX : (int)pending;
+                altcp_tls_ce_lower_recved(state->conn->inner_conn, chunk);
+                pending -= (size_t)chunk;
+            }
+            state->rx_throttle_pending = 0;
+            state->rx_mild_toggle = 0;
+            state = state->next;
+        }
+    }
+}
+
 static void
 altcp_tls_ce_set_poll(struct altcp_pcb *conn, u8_t interval)
 {
@@ -801,6 +859,29 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
         lower_recved = (u16_t)state->rx_passed_unrecved;
     }
     state->rx_passed_unrecved -= lower_recved;
+
+    if (g_tls_rx_throttle_level == MEM_PRESSURE_MILD)
+    {
+        state->rx_mild_toggle ^= 1u;
+        if (state->rx_mild_toggle == 0)
+        {
+            state->rx_throttle_pending += lower_recved;
+            return;
+        }
+
+        if (state->rx_throttle_pending > 0 && conn->inner_conn)
+        {
+            size_t pending = state->rx_throttle_pending;
+            int chunk = (pending > (size_t)INT_MAX) ? INT_MAX : (int)pending;
+            altcp_tls_ce_lower_recved(conn->inner_conn, chunk);
+            state->rx_throttle_pending -= (size_t)chunk;
+        }
+    }
+    else if (g_tls_rx_throttle_level != MEM_PRESSURE_NONE)
+    {
+        state->rx_throttle_pending += lower_recved;
+        return;
+    }
 
     altcp_recved(conn->inner_conn, lower_recved);
 }
@@ -971,6 +1052,8 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
                 state->rx_ring_len = 0;
             }
 
+            tls_state_remove(state);
+            state->conn = NULL;
             mem_free(state);
             conn->state = NULL;
         }

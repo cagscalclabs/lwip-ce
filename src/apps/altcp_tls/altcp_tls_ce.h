@@ -15,6 +15,7 @@
 
 #include "lwip/altcp.h"
 #include "../../tls/includes/handshake.h"
+#include "../../drivers/mem.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,6 +31,7 @@ extern "C" {
 typedef struct altcp_tls_ce_state {
     void *conf;                              /* Configuration handle */
     struct tls_handshake_context tls_ctx;    /* TLS 1.3 handshake context */
+    struct altcp_pcb *conn;                  /* Owning altcp pcb */
     struct pbuf *rx;                         /* Encrypted RX data from TCP */
     struct pbuf *rx_app;                     /* Decrypted application data */
     int rx_passed_unrecved;                  /* Data passed to app but not recved */
@@ -40,6 +42,9 @@ typedef struct altcp_tls_ce_state {
     size_t rx_ring_len;                      /* TLS record ring length */
     size_t rx_ring_size;                     /* TLS record ring size */
     uint8_t *rx_ring;                        /* TLS record ring buffer */
+    size_t rx_throttle_pending;              /* Pending bytes to recved */
+    uint8_t rx_mild_toggle;                  /* Mild pressure toggle */
+    struct altcp_tls_ce_state *next;         /* Linked list of states */
     u8_t flags;                              /* State flags */
 } altcp_tls_ce_state_t;
 
@@ -121,6 +126,8 @@ struct altcp_pcb *altcp_tls_ce_new(
     struct altcp_tls_ce_config *config,
     u8_t ip_type
 );
+
+void altcp_tls_ce_set_rx_throttle(enum mem_pressure_level level);
 
 /**
  * @brief Allocator function for use with altcp_new

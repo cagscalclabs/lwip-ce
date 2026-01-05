@@ -591,6 +591,8 @@ plug_holes(struct mem *mem)
 /**
  * Zero the heap and initialize start, end and lowest-free
  */
+/* mem_init is disabled for this build. */
+#if 0
 void mem_init(void)
 {
   struct mem *mem;
@@ -622,6 +624,7 @@ void mem_init(void)
     LWIP_ASSERT("failed to create mem_mutex", 0);
   }
 }
+#endif
 
 /* Check if a struct mem is correctly linked.
  * If not, double-free is a possible reason.
