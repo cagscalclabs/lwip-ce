@@ -234,9 +234,11 @@ void mem_overflow_init_raw(void *p, size_t size)
 /** mem_init is not used when using pools instead of a heap or using
  * C library malloc().
  */
+#if 0
 void mem_init(void)
 {
 }
+#endif
 
 /** mem_trim is not used when using pools instead of a heap or using
  * C library malloc(): we can't free part of a pool element and the stack

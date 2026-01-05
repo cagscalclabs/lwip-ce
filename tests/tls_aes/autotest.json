@@ -16,11 +16,12 @@
         "hashWait|3",
         "key|enter",
         "hashWait|4",
+        "key|enter",
         "key|enter"
     ],
     "hashes": {
         "1": {
-            "description": "AES-GCM encrypt - GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
+            "description": "GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -29,7 +30,7 @@
             "timeout": 1500
         },
         "2": {
-            "description": "AES-GCM decrypt - GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
+            "description": "GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -38,7 +39,7 @@
             "timeout": 1500
         },
         "3": {
-            "description": "AES-CBC encrypt - NIST SP 800-38A, Appendix F.2.1, CBC-AES128.Encrypt",
+            "description": "NIST SP 800-38A, Appendix F.2.1, CBC-AES128.Encrypt",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -47,7 +48,7 @@
             "timeout": 1500
         },
         "4": {
-            "description": "AES-CBC decrypt - NIST SP 800-38A, Appendix F.2.1, CBC-AES128.Decrypt",
+            "description": "NIST SP 800-38A, Appendix F.2.1, CBC-AES128.Decrypt",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [

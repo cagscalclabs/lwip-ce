@@ -51,6 +51,92 @@ static void transcript_hash_digest(struct tls_hash_context *ctx,
     tls_hash_digest(&ctx_copy, digest);
 }
 
+/* enum tls_server_handshake_type {
+ *     TLS_SERVER_HANDSHAKE_HELLO_REQUEST = 0x00,
+ *     TLS_SERVER_HANDSHAKE_SERVER_HELLO = 0x02,
+ *     TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET = 0x04,
+ *     TLS_SERVER_HANDSHAKE_ENCRYPTED_EXTENSIONS = 0x08,
+ *     TLS_SERVER_HANDSHAKE_CERTIFICATE = 0x0b,
+ *     TLS_SERVER_HANDSHAKE_SERVER_KEY_EXCHANGE = 0x0c,
+ *     TLS_SERVER_HANDSHAKE_CERTIFICATE_REQUEST = 0x0d,
+ *     TLS_SERVER_HANDSHAKE_SERVER_HELLO_DONE = 0x0e,
+ *     TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY = 0x0f,
+ *     TLS_SERVER_HANDSHAKE_FINISHED = 0x14,
+ *     TLS_SERVER_HANDSHAKE_KEY_UPDATE = 0x18,
+ *     TLS_SERVER_HANDSHAKE_MESSAGE_HASH = 0xfe
+ * };
+ */
+
+bool tls_process_record(struct tls_handshake_context *ctx,
+                        const uint8_t *data,
+                        size_t data_len)
+{
+    if (!ctx || !data || data_len < 5)
+    {
+        return false;
+    }
+
+    uint8_t content_type = data[0];
+    size_t record_len = ((size_t)data[3] << 8) | (size_t)data[4];
+
+    if (data_len != 5 + record_len)
+    {
+        return false;
+    }
+
+    switch (content_type)
+    {
+    case TLS_CONTENT_TYPE_HANDSHAKE:
+    {
+        const uint8_t *payload = data + 5;
+        size_t offset = 0;
+
+        while (offset + 4 <= record_len)
+        {
+            uint8_t msg_type = payload[offset];
+            size_t msg_len = ((size_t)payload[offset + 1] << 16) |
+                             ((size_t)payload[offset + 2] << 8) |
+                             (size_t)payload[offset + 3];
+            size_t msg_end = offset + 4 + msg_len;
+
+            if (msg_end > record_len)
+            {
+                return false;
+            }
+
+            switch (msg_type)
+            {
+            case TLS_HANDSHAKE_SERVER_HELLO:
+                if (!tls_recv_server_hello(ctx, payload + offset, msg_end - offset))
+                {
+                    return false;
+                }
+                break;
+            case TLS_HANDSHAKE_CERTIFICATE:
+                if (!tls_recv_certificate(ctx, payload + offset, msg_end - offset))
+                {
+                    return false;
+                }
+                break;
+            case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
+            case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
+            case TLS_HANDSHAKE_FINISHED:
+            default:
+                /* TODO: implement additional handshake message handlers */
+                break;
+            }
+
+            offset = msg_end;
+        }
+
+        return (offset == record_len);
+    }
+    default:
+        /* TODO: handle alerts and application data records */
+        return false;
+    }
+}
+
 /*
  * ============================================================================
  * Handshake Functions
@@ -116,7 +202,7 @@ bool tls_handshake_init(
  * - CompressionMethods (1 byte length + data): null compression
  * - Extensions: supported_versions, psk_key_exchange_modes, pre_shared_key
  */
-bool tls_generate_client_hello(
+bool tls_send_client_hello(
     struct tls_handshake_context *ctx,
     uint8_t *out,
     size_t out_len,
@@ -331,7 +417,7 @@ bool tls_generate_client_hello(
  * - CompressionMethod (1 byte): 0x00
  * - Extensions: supported_versions, pre_shared_key
  */
-bool tls_process_server_hello(
+bool tls_recv_server_hello(
     struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len)
@@ -353,7 +439,9 @@ bool tls_process_server_hello(
     }
 
     /* Step 2: Parse length */
-    uint32_t msg_len = (data[offset] << 16) | (data[offset + 1] << 8) | data[offset + 2];
+    size_t msg_len = ((size_t)data[offset] << 16) |
+                     ((size_t)data[offset + 1] << 8) |
+                     (size_t)data[offset + 2];
     offset += 3;
 
     if (offset + msg_len > data_len)
@@ -506,7 +594,74 @@ bool tls_process_server_hello(
         transcript_hash_update(ctx->transcript_hash, data, msg_end);
     }
 
+    /* TODO(cert-chain): For full (non-PSK) handshakes, parse the incoming
+     * Certificate message after ServerHello/EncryptedExtensions.
+     * When you have that handshake message buffer, the certificate bytes start at:
+     * cert_msg + 4 (handshake header) + 1 (context len) + 3 (cert_list_len).
+     */
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
+    return true;
+}
+
+/**
+ * @brief Process Certificate message (server -> client)
+ *
+ * Expected structure (TLS 1.3):
+ * - HandshakeType (1 byte): 0x0b (Certificate)
+ * - Length (3 bytes)
+ * - certificate_request_context (1 byte length + data)
+ * - certificate_list (3 byte length + entries)
+ */
+bool tls_recv_certificate(
+    struct tls_handshake_context *ctx,
+    const uint8_t *data,
+    size_t data_len)
+{
+    if (!ctx || !data || data_len < 4)
+    {
+        return false;
+    }
+
+    size_t offset = 0;
+
+    if (data[offset++] != TLS_HANDSHAKE_CERTIFICATE)
+    {
+        return false;
+    }
+
+    size_t msg_len = ((size_t)data[offset] << 16) |
+                     ((size_t)data[offset + 1] << 8) |
+                     (size_t)data[offset + 2];
+    offset += 3;
+
+    if ((offset >= data_len) && (offset + msg_len > data_len))
+    {
+        return false;
+    }
+
+    // pass the cert request context field
+    size_t context_len = data[offset++];
+    offset += context_len;
+    if (offset > data_len)
+        return false;
+
+    // get length of certificate chain
+    size_t current_parse_len = 0;
+    size_t cert_chain_len = ((size_t)data[offset] << 16) |
+                            ((size_t)data[offset + 1] << 8) |
+                            (size_t)data[offset + 2];
+    offset += 3;
+    if (offset + cert_chain_len != data_len)
+        return false;
+
+    while (current_parse_len < cert_chain_len)
+    {
+        // parse chain
+    }
+
+    /* When you have that handshake message buffer, the certificate bytes start at:
+     * data + 4 (handshake header) + 1 (context len) + 3 (cert_list_len).
+     */
     return true;
 }
 
@@ -785,7 +940,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
  * Finished = HMAC(finished_key, transcript_hash)
  * where finished_key = HKDF-Expand-Label(traffic_secret, "finished", "", 32)
  */
-bool tls_generate_finished(
+bool tls_send_finished(
     struct tls_handshake_context *ctx,
     bool is_client,
     uint8_t *out,
@@ -874,7 +1029,7 @@ bool tls_generate_finished(
 /**
  * @brief Verify Finished message
  */
-bool tls_verify_finished(
+bool tls_recv_finished(
     struct tls_handshake_context *ctx,
     bool is_client,
     const uint8_t *data,
@@ -900,7 +1055,9 @@ bool tls_verify_finished(
     }
 
     /* Parse length */
-    uint32_t msg_len = (data[offset] << 16) | (data[offset + 1] << 8) | data[offset + 2];
+    size_t msg_len = ((size_t)data[offset] << 16) |
+                     ((size_t)data[offset + 1] << 8) |
+                     (size_t)data[offset + 2];
     offset += 3;
 
     if (msg_len != 32 || offset + 32 > data_len)

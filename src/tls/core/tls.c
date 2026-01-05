@@ -18,7 +18,7 @@
  *
  * Memory Budget:
  * - RSA scratch buffer: 1KB (for OAEP/PSS with up to 4096-bit keys)
- * - ECC scratch buffer: 1KB (reserved for future P-256/X25519 operations)
+ * - ECC scratch buffer: 1KB (reserved for future X25519 operations)
  * - Total TLS overhead: ~2KB
  */
 
@@ -29,7 +29,7 @@
  */
 #define RSA_SCRATCH_SIZE (RSA_MODULUS_MAX_SUPPORTED * 2)
 
-/* ECC scratch buffer (reserved for future P-256/X25519 operations) */
+/* ECC scratch buffer (reserved for future X25519 operations) */
 #define ECC_SCRATCH_SIZE 1024
 
 /* TLS context structure */

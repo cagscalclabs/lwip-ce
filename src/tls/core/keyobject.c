@@ -17,7 +17,6 @@ uint8_t tls_objectid_bytes[][10] = {
     {0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01}, // TLS_OID_RSA_ENCRYPTION
     {0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01},             // TLS_OID_EC_PUBLICKEY
     {0x2B, 0x81, 0x04, 0x01, 0x08},                         // TLS_OID_EC_PRIVATEKEY
-    {0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07},       // TLS_OID_EC_SECP256R1
 
     // encryption algorithm identifiers (encrypted private key)
     {0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x06}, // TLS_OID_AES_128_GCM
@@ -77,9 +76,9 @@ struct tls_asn1_schema tls_pkcs1_pubkey_schema[] = {
 /* -------------------------------------------------------------------------
  ECPrivateKey ::= SEQUENCE {
      version        1,
-     privateKey     OCTET STRING,  -- Encoded private key value (d)
-     parameters     [0] EXPLICIT ECParameters OPTIONAL,  -- Omitted if implied by curve
-     publicKey      [0] EXPLICIT BIT STRING OPTIONAL     -- Optional encoded public key
+     privateKey     OCTET STRING,
+     parameters     [0] EXPLICIT ECParameters OPTIONAL,
+     publicKey      [0] EXPLICIT BIT STRING OPTIONAL
  }
  */
 struct tls_asn1_schema tls_sec1_privkey_schema[] = {
@@ -93,7 +92,7 @@ struct tls_asn1_schema tls_sec1_privkey_schema[] = {
     {NULL, 0, 0, false, false, false, ASN1_MATCH, false}};
 
 /* -------------------------------------------------------------------------
- ECPoint ::= OCTET STRING    -- Represents the public key (Q = d * G)
+ ECPoint ::= OCTET STRING
  */
 struct tls_asn1_schema tls_sec1_pubkey_schema[] = {
     {"EC Point", ASN1_OCTETSTRING, 0, false, false, true, ASN1_MATCH, false},
@@ -103,8 +102,8 @@ struct tls_asn1_schema tls_sec1_pubkey_schema[] = {
  PrivateKeyInfo ::= SEQUENCE {
      version                   Version,          -- Version is usually v1 (INTEGER 0)
      privateKeyAlgorithm        SEQUENCE {
-         algorithm              OBJECT IDENTIFIER {id-ecPublicKey} (1.2.840.10045.2.1),
-         parameters             OBJECT IDENTIFIER {secp256r1} (1.2.840.10045.3.1.7)
+         algorithm              OBJECT IDENTIFIER,
+         parameters             OBJECT IDENTIFIER
      },
      privateKey                 OCTET STRING,     -- Encoded private key
      attributes                 [0] IMPLICIT SET OF Attribute OPTIONAL   -- Optional attributes
@@ -160,8 +159,8 @@ struct tls_asn1_schema tls_pkcs8_encrypted_privkey_schema[] = {
 /* -------------------------------------------------------------------------
  SubjectPublicKeyInfo ::= SEQUENCE {
      algorithm            SEQUENCE {
-         algorithm        OBJECT IDENTIFIER {id-ecPublicKey} (1.2.840.10045.2.1),
-         parameters       OBJECT IDENTIFIER {secp256r1} (1.2.840.10045.3.1.7)
+         algorithm        OBJECT IDENTIFIER,
+         parameters       OBJECT IDENTIFIER
      },
      subjectPublicKey     BIT STRING  -- Encoded public key
  }
@@ -250,7 +249,7 @@ struct tls_asn1_schema tls_x509_cert_schema[] = {
     {"algorithm", ASN1_OBJECTID, 2, false, false, true, ASN1_MATCH, false},
     {"parameters", ASN1_OBJECTID, 2, true, true, true, ASN1_MATCH, false},
     {"signatureValue", ASN1_BITSTRING, 1, false, false, true, ASN1_MATCH, false},
-    // then decode using pkcs1/sec1 rules
+    // then decode using pkcs1 rules
     {NULL, 0, 0, false, false, false, false, false}};
 
 struct tls_lookup_data
@@ -407,9 +406,7 @@ file_type_ok:
 
         if (memcmp(tmp_serialize[0].data, tls_objectid_bytes[TLS_OID_RSA_ENCRYPTION], tmp_serialize[0].len) == 0)
             decoder_schema = tls_pkcs1_privkey_schema;
-        else if (
-            (memcmp(tmp_serialize[0].data, tls_objectid_bytes[TLS_OID_EC_PUBLICKEY], tmp_serialize[0].len) == 0) &&
-            (memcmp(tmp_serialize[1].data, tls_objectid_bytes[TLS_OID_EC_SECP256R1], tmp_serialize[1].len) == 0))
+        else if (memcmp(tmp_serialize[0].data, tls_objectid_bytes[TLS_OID_EC_PUBLICKEY], tmp_serialize[0].len) == 0)
             decoder_schema = tls_sec1_privkey_schema;
         else
             goto error;
@@ -436,28 +433,6 @@ file_type_ok:
         }
         return kf;
     }
-    if (decoder_schema == tls_sec1_privkey_schema)
-    {
-        kf->type |= TLS_KEY_ECC;
-        serialized_count = 0;
-        for (uint24_t i = 0; decoder_schema[i].name != NULL; i++)
-        {
-            if (!tls_asn1_decode_next(&asn1_ctx,
-                                      &decoder_schema[i],
-                                      &kf->meta.privkey.ec.fields[serialized_count].tag,
-                                      &kf->meta.privkey.ec.fields[serialized_count].data,
-                                      &kf->meta.privkey.ec.fields[serialized_count].len,
-                                      NULL))
-                goto error;
-            if (decoder_schema[i].output)
-            {
-                kf->meta.privkey.ec.fields[serialized_count].name = decoder_schema[i].name;
-                serialized_count++;
-            }
-        }
-        return kf;
-    }
-
 error:
     memset(kf, 0, kf->length);
     mem_free(kf);
@@ -533,9 +508,7 @@ file_type_ok:
 
     if (memcmp(tmp_serialize[0].data, tls_objectid_bytes[TLS_OID_RSA_ENCRYPTION], tmp_serialize[0].len) == 0)
         decoder_schema = tls_pkcs1_pubkey_schema;
-    else if (
-        (memcmp(tmp_serialize[0].data, tls_objectid_bytes[TLS_OID_EC_PUBLICKEY], tmp_serialize[0].len) == 0) &&
-        (memcmp(tmp_serialize[1].data, tls_objectid_bytes[TLS_OID_EC_SECP256R1], tmp_serialize[1].len) == 0))
+    else if (memcmp(tmp_serialize[0].data, tls_objectid_bytes[TLS_OID_EC_PUBLICKEY], tmp_serialize[0].len) == 0)
     {
         kf->type |= TLS_KEY_ECC;
         kf->meta.pubkey.ec.field.pubkey.tag = tmp_serialize[2].tag;
@@ -566,6 +539,27 @@ file_type_ok:
             if (decoder_schema[i].output)
             {
                 kf->meta.pubkey.rsa.fields[serialized_count].name = decoder_schema[i].name;
+                serialized_count++;
+            }
+        }
+        return kf;
+    }
+    if (decoder_schema == tls_sec1_privkey_schema)
+    {
+        kf->type |= TLS_KEY_ECC;
+        serialized_count = 0;
+        for (uint24_t i = 0; decoder_schema[i].name != NULL; i++)
+        {
+            if (!tls_asn1_decode_next(&asn1_ctx,
+                                      &decoder_schema[i],
+                                      &kf->meta.privkey.ec.fields[serialized_count].tag,
+                                      &kf->meta.privkey.ec.fields[serialized_count].data,
+                                      &kf->meta.privkey.ec.fields[serialized_count].len,
+                                      NULL))
+                goto error;
+            if (decoder_schema[i].output)
+            {
+                kf->meta.privkey.ec.fields[serialized_count].name = decoder_schema[i].name;
                 serialized_count++;
             }
         }
@@ -720,9 +714,7 @@ file_type_ok:
         }
         return kf;
     }
-    else if (
-        (memcmp(tmp_serialize[TLS_X509_IDX_PKEYALG].data, tls_objectid_bytes[TLS_OID_EC_PUBLICKEY], tmp_serialize[TLS_X509_IDX_PKEYALG].len) == 0) &&
-        (memcmp(tmp_serialize[TLS_X509_IDX_PKEYPARAM].data, tls_objectid_bytes[TLS_OID_EC_SECP256R1], tmp_serialize[TLS_X509_IDX_PKEYPARAM].len) == 0))
+    else if (memcmp(tmp_serialize[TLS_X509_IDX_PKEYALG].data, tls_objectid_bytes[TLS_OID_EC_PUBLICKEY], tmp_serialize[TLS_X509_IDX_PKEYALG].len) == 0)
     {
         kf->type |= (TLS_KEY_ECC | 0);
         kf->meta.certificate.field.pubkey.ec.ec_point.tag = tmp_serialize[TLS_X509_IDX_PKEYBITS].tag;
@@ -731,6 +723,8 @@ file_type_ok:
         kf->meta.certificate.field.pubkey.ec.ec_point.name = tls_sec1_pubkey_schema[0].name;
         return kf;
     }
+    else
+        goto error;
 
 error:
     memset(kf, 0, kf->length);

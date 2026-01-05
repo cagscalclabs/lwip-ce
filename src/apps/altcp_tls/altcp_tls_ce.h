@@ -20,6 +20,10 @@
 extern "C" {
 #endif
 
+#ifndef ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE
+#define ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE 4096
+#endif
+
 /**
  * @brief TLS connection state for CE implementation
  */
@@ -32,6 +36,10 @@ typedef struct altcp_tls_ce_state {
     int bio_bytes_read;                      /* Bytes read from TCP */
     int bio_bytes_appl;                      /* Application data bytes */
     int overhead_bytes_adjust;               /* TLS overhead tracking */
+    size_t rx_ring_head;                     /* TLS record ring head */
+    size_t rx_ring_len;                      /* TLS record ring length */
+    size_t rx_ring_size;                     /* TLS record ring size */
+    uint8_t *rx_ring;                        /* TLS record ring buffer */
     u8_t flags;                              /* State flags */
 } altcp_tls_ce_state_t;
 
@@ -46,6 +54,7 @@ typedef struct altcp_tls_ce_state {
  */
 struct altcp_tls_ce_config {
     u8_t is_server;                          /* Server mode flag */
+    size_t rx_ring_size;                     /* TLS record ring size */
 
     /* PSK configuration */
     u8_t psk[32];                            /* Pre-shared key */

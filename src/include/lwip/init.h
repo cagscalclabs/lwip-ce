@@ -104,6 +104,7 @@ struct lwip_configurator {
 
 /* Modules initialization */
 err_t lwip_init(struct lwip_configurator *conf);
+void lwip_init_runtime(void);
 
 
 #ifdef __cplusplus

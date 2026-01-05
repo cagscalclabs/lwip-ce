@@ -1,5 +1,5 @@
 ; X25519 Field Arithmetic - Optimized for ez80
-; Prime: p = 2^255 - 19 (much simpler than P-256!)
+; Prime: p = 2^255 - 19
 ; All values are 32-byte little-endian
 
 assume adl=1
@@ -158,7 +158,7 @@ _x25519_sub:
 ;----------------------------------------------------------------------
 ; x25519_mul: out = (a * b) mod (2^255-19)
 ; Uses simple schoolbook multiplication + fast reduction
-; Much simpler than P-256!
+; Simpler reduction for 2^255 - 19.
 ;----------------------------------------------------------------------
 ; Old schoolbook multiplication - replaced by Karatsuba in x25519_mul_wrapper.asm
 ; Renamed to avoid conflict - not called when using Karatsuba wrapper
