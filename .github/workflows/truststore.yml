@@ -158,7 +158,8 @@ jobs:
 
           created_ts = int(time.time())
           entry_count = len(entries)
-          header = struct.pack("<IHH", created_ts, entry_count, 0)
+          version = 0
+          header_fields = struct.pack("<H", version) + struct.pack("<IH", created_ts, entry_count)
 
           entry_bytes = bytearray()
           for owner_id, issuer_id, not_before, not_after, spki_hash in entries:
@@ -175,7 +176,7 @@ jobs:
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
 
           with open(data_path, "wb") as f:
-              f.write(header)
+              f.write(header_fields)
               f.write(entry_bytes)
 
           run_cmd(
@@ -199,7 +200,8 @@ jobs:
 
           with open(bin_path, "wb") as f:
               f.write(open(sig_path, "rb").read())
-              f.write(open(data_path, "rb").read())
+              f.write(header_fields)
+              f.write(entry_bytes)
 
           print(f"entries={entry_count}")
           print(f"bin={bin_path}")
