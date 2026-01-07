@@ -8,6 +8,8 @@ on:
 jobs:
   truststore:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@main
@@ -246,8 +248,9 @@ jobs:
             -signature truststore_out/lwIPSPKI.sig \
             truststore_out/lwIPSPKI.data >/dev/null
 
-      - name: Upload truststore artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload truststore release asset
+        uses: softprops/action-gh-release@v2
         with:
-          name: lwIPSPKI.8xv
-          path: truststore_out/lwIPSPKI.8xv
+          tag_name: truststore-latest
+          name: truststore-latest
+          files: truststore_out/lwIPSPKI.8xv
