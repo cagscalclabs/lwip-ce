@@ -200,17 +200,30 @@ jobs:
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as summary:
                   summary.write("## Truststore Entries\n\n")
-                  summary.write("owner | issuer | not-before | not-after\n")
-                  summary.write("\n```\n")
+                  ca_entries = []
+                  custom_entries = []
                   for owner_id, issuer_id, not_before, not_after, _spki_hash in entries:
                       owner = owner_id.split(b"\x00", 1)[0].decode("ascii", "ignore")
                       issuer = issuer_id.split(b"\x00", 1)[0].decode("ascii", "ignore")
-                      if owner == issuer:
-                          issuer = "--"
                       nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
                       na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
-                      summary.write(f"owner: {owner}\tissuer: {issuer}\tnot-before: {nb}\tnot-after: {na}\n")
-                  summary.write("```\n")
+                      if owner == issuer:
+                          ca_entries.append((owner, nb, na))
+                      else:
+                          custom_entries.append((owner, issuer, nb, na))
+
+                  summary.write("### CA entries\n\n")
+                  summary.write("CA Name | Not Before | Not After\n")
+                  summary.write("--- | --- | ---\n")
+                  for owner, nb, na in ca_entries:
+                      summary.write(f"{owner} | {nb} | {na}\n")
+
+                  if custom_entries:
+                      summary.write("\n### Custom entries\n\n")
+                      summary.write("Owner | Issuer | Not Before | Not After\n")
+                      summary.write("--- | --- | --- | ---\n")
+                      for owner, issuer, nb, na in custom_entries:
+                          summary.write(f"{owner} | {issuer} | {nb} | {na}\n")
           PY
 
       - name: Build AppVar

@@ -43,6 +43,7 @@
 #include "lwip/stats.h"
 #include "lwip/sys.h"
 #include "lwip/mem.h"
+#include "drivers/mem.h"
 #include "lwip/memp.h"
 #include "lwip/pbuf.h"
 #include "lwip/netif.h"
@@ -345,8 +346,18 @@ lwip_init(struct lwip_configurator *conf)
 {
     if(conf==NULL) return ERR_ARG;
     memcpy(&usb_fn, &conf->usb_conf, sizeof(struct usb_configurator));
-    caller_malloc_ref = conf->malloc_conf.caller_malloc;
-    caller_free_ref = conf->malloc_conf.caller_free;
+    {
+        const struct mem_buffer_pool_cfg pools[] = {
+            {LWIP_MEMPOOL_SMALL_BLOCK, LWIP_MEMPOOL_SMALL_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL},
+            {LWIP_MEMPOOL_MEDIUM_BLOCK, LWIP_MEMPOOL_MEDIUM_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL},
+            {LWIP_MEMPOOL_LARGE_BLOCK, LWIP_MEMPOOL_LARGE_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL}
+        };
+        mem_buffer_lwip_init_pools(
+            pools,
+            sizeof(pools) / sizeof(pools[0])
+        );
+    }
+    mem_set_pressure_clear_pct(LWIP_MEM_PRESSURE_CLEAR_PCT);
 #ifndef LWIP_SKIP_CONST_CHECK
   int a = 0;
   LWIP_UNUSED_ARG(a);
@@ -361,7 +372,6 @@ lwip_init(struct lwip_configurator *conf)
 #if !NO_SYS
   sys_init();
 #endif /* !NO_SYS */
-  mem_init();
   memp_init();
   pbuf_init();
   netif_init();

@@ -4,8 +4,36 @@
 #include <string.h>
 #include <stdio.h>
 #include "lwip/mem.h"
+#include "drivers/mem.h"
 
 #include "tls/includes/keyobject.h"
+
+#define TLS_TEST_MAX_HEAP (20u * 1024u)
+#define TLS_TEST_POOL_BYTES (16u * 1024u)
+#define TLS_TEST_POOL_BLOCK 256u
+
+static struct mem_buffer *tls_test_heap;
+
+static bool tls_test_mem_init(void)
+{
+    if (!mem_init(TLS_TEST_MAX_HEAP, malloc, free, realloc))
+    {
+        return false;
+    }
+    tls_test_heap = mem_buffer_create(
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BLOCK,
+        BUFFER_MALLOC_TYPE,
+        NULL);
+    if (!tls_test_heap)
+    {
+        return false;
+    }
+    mem_buffer_set_lwip_heap(tls_test_heap);
+    mem_buffer_set_owner(tls_test_heap, MEM_BUF_OWNER_TLS_RX);
+    return true;
+}
 
 // test vectors
 
@@ -26,15 +54,14 @@ int main(void)
     os_ClrHome();
     os_FontSelect(os_SmallFont);
     
-    struct mem_configurator conf = {
-        MEM_CONFIGURATOR_V1,
-        malloc,
-        free,
-        1024*12
-    };
-    
     char buf[128];
-    mem_configure(&conf);
+    if (!tls_test_mem_init())
+    {
+        printf("mem init failed");
+        os_GetKey();
+        os_ClrHome();
+        return 1;
+    }
     
     // PKCS#1 RSA key
     struct tls_keyobject *pk = tls_keyobject_import_private(test1, strlen(test1), NULL);

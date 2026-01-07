@@ -98,9 +98,9 @@
 #define MEM_CUSTOM_ALLOCATOR 1
 #define MEMP_MEM_MALLOC 1
 #if MEM_CUSTOM_ALLOCATOR==1
-#define MEM_CUSTOM_FREE                 custom_free
-#define MEM_CUSTOM_MALLOC               custom_malloc
-#define MEM_CUSTOM_CALLOC               custom_calloc
+#define MEM_CUSTOM_FREE                 mem_buffer_custom_free
+#define MEM_CUSTOM_MALLOC               mem_buffer_custom_malloc
+#define MEM_CUSTOM_CALLOC               mem_buffer_custom_calloc
 
 #endif
 
@@ -159,6 +159,22 @@ a lot of data that needs to be copied, this should be set high. */
 
 /* PBUF_POOL_SIZE: the number of buffers in the pbuf pool. */
 #define PBUF_POOL_SIZE ((MAX_HEAP_USAGE / 2) / PBUF_POOL_BUFSIZE)
+
+/* ---------- Custom mem_buffer pool sizing ---------- */
+#define LWIP_MEMPOOL_SMALL_BLOCK 64
+#define LWIP_MEMPOOL_SMALL_COUNT 96
+#define LWIP_MEMPOOL_MEDIUM_BLOCK PBUF_POOL_BUFSIZE
+#define LWIP_MEMPOOL_MEDIUM_COUNT PBUF_POOL_SIZE
+#define LWIP_MEMPOOL_LARGE_BLOCK 512
+#define LWIP_MEMPOOL_LARGE_COUNT 8
+#define LWIP_MEMBUF_GROW_STEP 256
+#define LWIP_MEMBUF_SHRINK_STEP 256
+#define LWIP_MEMBUF_GROW_THRESHOLD 85
+#define LWIP_MEMBUF_SHRINK_THRESHOLD 30
+#define LWIP_MEMBUF_SHRINK_HOLD 1
+#ifndef LWIP_MEM_PRESSURE_CLEAR_PCT
+#define LWIP_MEM_PRESSURE_CLEAR_PCT 70
+#endif
 
 /** SYS_LIGHTWEIGHT_PROT
  * define SYS_LIGHTWEIGHT_PROT in lwipopts.h if you want inter-task protection

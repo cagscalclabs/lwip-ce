@@ -108,7 +108,7 @@ section .text
 public _powmod_exp_u24
 
 ;void powmod_exp_u24(uint8_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
-_powmod_exp_u24
+_powmod_exp_u24:
    push   ix
    ld   ix, 0
    lea   bc, ix
