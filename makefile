@@ -21,7 +21,7 @@ BSSHEAP_LOW ?= D052C6
 
 # This is just to shut up the linker, lwIP is an app, it takes user malloc
 ALLOCATOR = CUSTOM
-EXTRA_ASM_SOURCES = src/custom_allocator.src
+EXTRA_ASM_SOURCES = src/custom_allocator.src src/runtime_init_symbols.src src/functable.asm
 
 include app_tools/makefile
 
@@ -40,3 +40,10 @@ $(HELPER_FILES):
 	
 
 .PHONY: functiontable
+
+release:
+	./make_functable.sh
+	$(MAKE) LINKER_SCRIPT=app_tools/lib_linker_script
+	$(MAKE) -C libload
+
+.PHONY: release

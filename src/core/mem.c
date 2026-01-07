@@ -234,9 +234,11 @@ void mem_overflow_init_raw(void *p, size_t size)
 /** mem_init is not used when using pools instead of a heap or using
  * C library malloc().
  */
+#if 0
 void mem_init(void)
 {
 }
+#endif
 
 /** mem_trim is not used when using pools instead of a heap or using
  * C library malloc(): we can't free part of a pool element and the stack
@@ -589,6 +591,8 @@ plug_holes(struct mem *mem)
 /**
  * Zero the heap and initialize start, end and lowest-free
  */
+/* mem_init is disabled for this build. */
+#if 0
 void mem_init(void)
 {
   struct mem *mem;
@@ -620,6 +624,7 @@ void mem_init(void)
     LWIP_ASSERT("failed to create mem_mutex", 0);
   }
 }
+#endif
 
 /* Check if a struct mem is correctly linked.
  * If not, double-free is a possible reason.

@@ -13,17 +13,22 @@
  * +---------------------+
  * | Signature (256B)    |  <- RSA-2048 sig over header + entries
  * +---------------------+
- * | Header (4B)         |  <- tls_truststore_header
+ * | Header (8B)         |  <- tls_truststore_header
  * +---------------------+
  * | SPKI entries...     |  <- Array of tls_spki_entry structs
  * +---------------------+
  *
  * struct tls_truststore_header {
  *    uint32_t created_timestamp;  // Unix timestamp
+ *    uint16_t entry_count;        // Number of SPKI entries
+ *    uint16_t reserved;           // Reserved for future use
  * };
  *
  * struct tls_spki_entry {
  *    uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN];  // 32 bytes
+ *    uint8_t issuer_id[TLS_SPKI_ISSUER_LEN];   // 32 bytes
+ *    uint32_t not_before;                      // Unix timestamp
+ *    uint32_t not_after;                       // Unix timestamp
  *    uint8_t hash[TLS_SPKI_HASH_MAX_LEN];       // 32 bytes
  * };
  *
@@ -78,10 +83,10 @@ bool tls_truststore_init(void)
         return false;
     uint16_t spki_store_len = truststore_size - TRUSTSTORE_SIG_LEN - 2;
     uint8_t *spki_store_sig = ((uint8_t *)truststore_data) + 2;
-    uint8_t *spki_created_time = spki_store_sig + TRUSTSTORE_SIG_LEN;
+    uint8_t *spki_header = spki_store_sig + TRUSTSTORE_SIG_LEN;
 
     // Hash the SPKI store and created header
-    tls_hash_update(&hash_ctx, spki_created_time, spki_store_len);
+    tls_hash_update(&hash_ctx, spki_header, spki_store_len);
     tls_hash_digest(&hash_ctx, tstore_hash);
 
     // Decrypt the SPKI store signature
@@ -113,7 +118,8 @@ bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result)
     if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN + 2)
         return false;
 
-    uint8_t *spki_db_start = (uint8_t *)truststore_data + 2 + TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN;
+    struct tls_truststore_header *header = (struct tls_truststore_header *)((uint8_t *)truststore_data + 2 + TRUSTSTORE_SIG_LEN);
+    uint8_t *spki_db_start = (uint8_t *)header + TLS_SPKI_HEADER_LEN;
     uint16_t spki_db_len = truststore_size - 2 - TRUSTSTORE_SIG_LEN - TLS_SPKI_HEADER_LEN;
 
     // the db length not being a multiple of struct size at this point
@@ -121,6 +127,8 @@ bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result)
     if (spki_db_len % sizeof(struct tls_spki_entry))
         return false;
     uint16_t spki_count = spki_db_len / sizeof(struct tls_spki_entry);
+    if (header->entry_count != spki_count)
+        return false;
     for (uint16_t i = 0; i < spki_count; i++)
     {
         struct tls_spki_entry *entry = &((struct tls_spki_entry *)spki_db_start)[i];

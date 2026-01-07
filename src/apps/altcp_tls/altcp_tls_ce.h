@@ -15,9 +15,14 @@
 
 #include "lwip/altcp.h"
 #include "../../tls/includes/handshake.h"
+#include "../../drivers/mem.h"
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#ifndef ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE
+#define ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE 4096
 #endif
 
 /**
@@ -26,12 +31,20 @@ extern "C" {
 typedef struct altcp_tls_ce_state {
     void *conf;                              /* Configuration handle */
     struct tls_handshake_context tls_ctx;    /* TLS 1.3 handshake context */
+    struct altcp_pcb *conn;                  /* Owning altcp pcb */
     struct pbuf *rx;                         /* Encrypted RX data from TCP */
     struct pbuf *rx_app;                     /* Decrypted application data */
     int rx_passed_unrecved;                  /* Data passed to app but not recved */
     int bio_bytes_read;                      /* Bytes read from TCP */
     int bio_bytes_appl;                      /* Application data bytes */
     int overhead_bytes_adjust;               /* TLS overhead tracking */
+    size_t rx_ring_head;                     /* TLS record ring head */
+    size_t rx_ring_len;                      /* TLS record ring length */
+    size_t rx_ring_size;                     /* TLS record ring size */
+    uint8_t *rx_ring;                        /* TLS record ring buffer */
+    size_t rx_throttle_pending;              /* Pending bytes to recved */
+    uint8_t rx_mild_toggle;                  /* Mild pressure toggle */
+    struct altcp_tls_ce_state *next;         /* Linked list of states */
     u8_t flags;                              /* State flags */
 } altcp_tls_ce_state_t;
 
@@ -46,6 +59,7 @@ typedef struct altcp_tls_ce_state {
  */
 struct altcp_tls_ce_config {
     u8_t is_server;                          /* Server mode flag */
+    size_t rx_ring_size;                     /* TLS record ring size */
 
     /* PSK configuration */
     u8_t psk[32];                            /* Pre-shared key */
@@ -112,6 +126,8 @@ struct altcp_pcb *altcp_tls_ce_new(
     struct altcp_tls_ce_config *config,
     u8_t ip_type
 );
+
+void altcp_tls_ce_set_rx_throttle(enum mem_pressure_level level);
 
 /**
  * @brief Allocator function for use with altcp_new

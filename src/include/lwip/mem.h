@@ -40,14 +40,15 @@
 #include "lwip/opt.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 #if MEM_CUSTOM_ALLOCATOR
 
 #include "lwip/arch.h"
 
-typedef size_t mem_size_t;
+    typedef size_t mem_size_t;
 #define MEM_SIZE_F SZT_F
 
 #elif MEM_USE_POOLS
@@ -69,22 +70,16 @@ typedef u16_t mem_size_t;
 #endif /* MEM_SIZE > 64000 */
 #endif
 
-void  mem_init(void);
-void *mem_trim(void *mem, mem_size_t size);
-void *mem_malloc(mem_size_t size);
-void *mem_calloc(mem_size_t count, mem_size_t size);
-void  mem_free(void *mem);
+    /* void  mem_init(void); */
+    void *mem_trim(void *mem, mem_size_t size);
+    void *mem_malloc(mem_size_t size);
+    void *mem_calloc(mem_size_t count, mem_size_t size);
+    void mem_free(void *mem);
 
-// custom mem allocation for lwip => pass in program malloc
-void* custom_malloc(size_t size);
-void custom_free(void* ptr);
-void* custom_calloc(size_t num, size_t size);
-
-
-extern void* (*caller_malloc_ref)(size_t);
-extern void (*caller_free_ref)(void*);
-
-
+    /* Custom mem allocation for lwIP (provided by drivers/mem.c) */
+    void *mem_buffer_custom_malloc(size_t size);
+    void mem_buffer_custom_free(void *ptr);
+    void *mem_buffer_custom_calloc(size_t num, size_t size);
 
 #ifdef __cplusplus
 }

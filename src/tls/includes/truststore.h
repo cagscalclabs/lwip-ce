@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #define TLS_SPKI_OWNER_ID_LEN 32
+#define TLS_SPKI_ISSUER_LEN 32
 #define TLS_SPKI_HASH_MAX_LEN 32
 
 #define TLS_TRUSTSTORE_AGE_WARN_DAYS 365 /* Warn if truststore older than this */
@@ -13,12 +14,17 @@
 struct tls_truststore_header
 {
     uint32_t created_timestamp; /* Unix timestamp when truststore was generated */
+    uint16_t entry_count;       /* Number of SPKI entries in truststore */
+    uint16_t reserved;          /* Reserved for future use */
 };
 #define TLS_SPKI_HEADER_LEN sizeof(struct tls_truststore_header)
 
 struct tls_spki_entry
 {
     uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN]; /* CN or identifier (null-terminated, padded) */
+    uint8_t issuer_id[TLS_SPKI_ISSUER_LEN];  /* Issuer CN (null-terminated, padded) */
+    uint32_t not_before;                     /* Unix timestamp */
+    uint32_t not_after;                      /* Unix timestamp */
     uint8_t hash[TLS_SPKI_HASH_MAX_LEN];     /* SPKI hash (SHA-256)*/
 };
 
