@@ -202,7 +202,7 @@ jobs:
           convbin -i truststore_out/lwIPSPKI.bin -o truststore_out/lwIPSPKI.8xv -j bin -k 8xv -n lwIPSPKI -r
 
       - name: Upload truststore artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: lwip-truststore
           path: truststore_out/
