@@ -31,6 +31,20 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y make tar wget cmake ninja-build qtbase5-dev qtdeclarative5-dev libqt5svg5-dev
+          sudo apt-get install -y build-essential pkg-config libgl1-mesa-dev
+
+      - name: Checkout vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: master
+          path: ${{github.workspace}}/vcpkg
+          persist-credentials: false
+
+      - name: Bootstrap vcpkg
+        working-directory: ${{github.workspace}}/vcpkg
+        run: |
+          ./bootstrap-vcpkg.sh
 
       - name: Download and extract CEdev
         run: |
@@ -57,7 +71,7 @@ jobs:
         working-directory: ${{env.CEMU_PATH}}/gui/qt
         run: |
           # Configure CEmu using Linux preset
-          cmake -G Ninja --preset Linux-x64 -DDEPS_RELEASE_ONLY=ON
+          cmake -G Ninja --preset Linux-x64 -DDEPS_RELEASE_ONLY=ON -DVCPKG_ROOT=${{github.workspace}}/vcpkg
           # Build CEmu
           cmake --build --preset Linux-x64-Release
 
