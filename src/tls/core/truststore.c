@@ -9,8 +9,6 @@
 /*
  * Truststore appvar format:
  * +---------------------+
- * | size (2B)           |  <- TI's native length field
- * +---------------------+
  * | Signature (256B)    |  <- RSA-2048 sig over header + entries
  * +---------------------+
  * | Header (8B)         |  <- tls_truststore_header
@@ -82,10 +80,10 @@ bool tls_truststore_init(void)
 
     // Get length of store, spki db len, and sig ptr
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN + 2)
+    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN)
         return false;
-    uint16_t spki_store_len = truststore_size - TRUSTSTORE_SIG_LEN - 2;
-    uint8_t *spki_store_sig = ((uint8_t *)truststore_var) + 2;
+    uint16_t spki_store_len = truststore_size - TRUSTSTORE_SIG_LEN;
+    uint8_t *spki_store_sig = (uint8_t *)truststore_var + 2;
     uint8_t *spki_header = spki_store_sig + TRUSTSTORE_SIG_LEN;
 
     struct tls_truststore_header *header = (struct tls_truststore_header *)spki_header;
@@ -121,14 +119,15 @@ bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result)
 
     // set up lookup pointers and size words
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN + 2)
+    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN)
         return false;
 
-    struct tls_truststore_header *header = (struct tls_truststore_header *)((uint8_t *)truststore_var + 2 + TRUSTSTORE_SIG_LEN);
+    struct tls_truststore_header *header =
+        (struct tls_truststore_header *)((uint8_t *)truststore_var + 2 + TRUSTSTORE_SIG_LEN);
     if (header->version != TLS_TRUSTSTORE_VERSION)
         return false;
     uint8_t *spki_db_start = (uint8_t *)header + TLS_SPKI_HEADER_LEN;
-    uint16_t spki_db_len = truststore_size - 2 - TRUSTSTORE_SIG_LEN - TLS_SPKI_HEADER_LEN;
+    uint16_t spki_db_len = truststore_size - TRUSTSTORE_SIG_LEN - TLS_SPKI_HEADER_LEN;
 
     // the db length not being a multiple of struct size at this point
     // means something is wrong

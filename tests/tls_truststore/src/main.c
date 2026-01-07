@@ -23,14 +23,15 @@
 #define TLS_TEST_POOL_BLOCK 256u
 
 #define TRUSTSTORE_SIG_LEN 256
+#define TLS_TRUSTSTORE_VERSION 0
 
 static struct mem_buffer *tls_test_heap;
-static int text_y = 0;
+static int text_y = 20;
 
 static void draw_line(const char *msg)
 {
     os_FontDrawText(msg, 2, text_y);
-    text_y += 10;
+    text_y += 12;
 }
 
 static bool tls_test_mem_init(void)
@@ -63,7 +64,7 @@ static const struct tls_spki_entry *tls_truststore_first_entry(void)
     }
 
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN + 2)
+    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN)
     {
         return NULL;
     }
@@ -84,7 +85,7 @@ int main(void)
 {
     os_ClrHome();
     os_FontSelect(os_SmallFont);
-    text_y = 0;
+    text_y = 30;
 
     if (!tls_test_mem_init())
     {
@@ -100,11 +101,37 @@ int main(void)
         return 1;
     }
 
+    {
+        int archived = 0;
+        var_t *truststore_var = os_GetAppVarData("lwIPSPKI", &archived);
+        if (!truststore_var)
+        {
+            draw_line("appvar missing");
+            os_GetKey();
+            return 1;
+        }
+        uint16_t truststore_size = *((uint16_t *)truststore_var);
+        (void)archived;
+        if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN)
+        {
+            draw_line("appvar size bad");
+            os_GetKey();
+            return 1;
+        }
+        uint8_t *base = (uint8_t *)truststore_var + 2;
+        struct tls_truststore_header *header =
+            (struct tls_truststore_header *)(base + TRUSTSTORE_SIG_LEN);
+        if (header->version != TLS_TRUSTSTORE_VERSION)
+        {
+            draw_line("appvar version bad");
+            os_GetKey();
+            return 1;
+        }
+    }
+
     bool sig_ok = tls_truststore_init();
     draw_line(sig_ok ? "Test 1 (Sig verified): pass" : "Test 1 (Sig verified): fail");
     os_GetKey();
-    os_ClrHome();
-    text_y = 0;
 
     const struct tls_spki_entry *entry = tls_truststore_first_entry();
     bool owner_ok = false;
