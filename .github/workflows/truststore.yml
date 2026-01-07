@@ -249,5 +249,5 @@ jobs:
       - name: Upload truststore artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lwip-truststore
+          name: lwIPSPKI.8xv
           path: truststore_out/lwIPSPKI.8xv
