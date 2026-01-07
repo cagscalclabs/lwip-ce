@@ -1,0 +1,38 @@
+{
+  "description": "Truststore signature verification and first-entry owner check",
+  "transfer_files": [
+    "bin/TRUSTST.8xp",
+    "lwIPSPKI.8xv"
+  ],
+  "target": {
+    "name": "TRUSTST",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "Verify truststore signature",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "8435115C"
+      ],
+      "timeout": 30000
+    },
+    "2": {
+      "description": "Verify first entry expected",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "0AB43695"
+      ],
+      "timeout": 2000
+    }
+  }
+}

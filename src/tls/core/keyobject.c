@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "lwip/mem.h"
+#include "drivers/mem.h"
 
 #include "../includes/base64.h"
 #include "../includes/asn1.h"
@@ -273,6 +274,36 @@ struct tls_lookup_data pkcs_lookups[] = {
 #define PKCS_LOOKUP_END 8
 };
 
+static struct mem_buffer *g_keyobject_buffer = NULL;
+
+void tls_keyobject_set_buffer(struct mem_buffer *buf)
+{
+    g_keyobject_buffer = buf;
+}
+
+static void *keyobject_alloc(size_t size)
+{
+    if (g_keyobject_buffer)
+    {
+        return mem_buffer_malloc(g_keyobject_buffer, size);
+    }
+    return mem_malloc(size);
+}
+
+static void keyobject_free(void *ptr)
+{
+    if (!ptr)
+    {
+        return;
+    }
+    if (g_keyobject_buffer)
+    {
+        mem_buffer_free(g_keyobject_buffer, ptr);
+        return;
+    }
+    mem_free(ptr);
+}
+
 struct tls_keyobject *tls_keyobject_import_private(const char *pem_data, size_t size, const char *password)
 {
     if ((pem_data == NULL) || (size == 0))
@@ -299,22 +330,17 @@ file_type_ok:
     if (b64_size > size)
         return NULL;
 
-    // decode base64 into DER
-    uint8_t *asn1_buf = mem_malloc(b64_size / 3 * 4);
-    if (asn1_buf == NULL)
-        return NULL;
-
-    size_t asn1_size = tls_base64_decode(b64_start, b64_size, asn1_buf);
-    size_t tot_len = sizeof(struct tls_keyobject) + asn1_size;
-    // allocate context
-    struct tls_keyobject *kf = mem_malloc(tot_len);
+    // decode base64 directly into keyobject buffer
+    size_t max_der = b64_size / 3 * 4;
+    size_t tot_len = sizeof(struct tls_keyobject) + max_der;
+    struct tls_keyobject *kf = keyobject_alloc(tot_len);
     if (kf == NULL)
         return NULL;
 
-    kf->length = tot_len;
-    // copy ASN.1 data to struct data field
-    memcpy(kf->data, asn1_buf, asn1_size);
-    mem_free(asn1_buf);
+    size_t asn1_size = tls_base64_decode(b64_start, b64_size, kf->data);
+    if (asn1_size == 0 || asn1_size > max_der)
+        goto error;
+    kf->length = sizeof(struct tls_keyobject) + asn1_size;
     if (!tls_asn1_decoder_init(&asn1_ctx, kf->data, asn1_size))
         goto error;
 
@@ -433,9 +459,31 @@ file_type_ok:
         }
         return kf;
     }
+    if (decoder_schema == tls_sec1_privkey_schema)
+    {
+        kf->type |= TLS_KEY_ECC;
+        decoder_schema = tls_sec1_privkey_schema;
+        serialized_count = 0;
+        for (uint24_t i = 0; decoder_schema[i].name != NULL; i++)
+        {
+            if (!tls_asn1_decode_next(&asn1_ctx,
+                                      &decoder_schema[i],
+                                      &kf->meta.privkey.ec.fields[serialized_count].tag,
+                                      &kf->meta.privkey.ec.fields[serialized_count].data,
+                                      &kf->meta.privkey.ec.fields[serialized_count].len,
+                                      NULL))
+                goto error;
+            if (decoder_schema[i].output)
+            {
+                kf->meta.privkey.ec.fields[serialized_count].name = decoder_schema[i].name;
+                serialized_count++;
+            }
+        }
+        return kf;
+    }
 error:
     memset(kf, 0, kf->length);
-    mem_free(kf);
+    keyobject_free(kf);
     return NULL;
 }
 
@@ -465,22 +513,17 @@ file_type_ok:
     if (b64_size > size)
         return NULL;
 
-    // decode base64 into DER
-    uint8_t *asn1_buf = mem_malloc(b64_size / 3 * 4);
-    if (asn1_buf == NULL)
-        return NULL;
-
-    size_t asn1_size = tls_base64_decode(b64_start, b64_size, asn1_buf);
-    size_t tot_len = sizeof(struct tls_keyobject) + asn1_size;
-    // allocate context
-    struct tls_keyobject *kf = mem_malloc(tot_len);
+    // decode base64 directly into keyobject buffer
+    size_t max_der = b64_size / 3 * 4;
+    size_t tot_len = sizeof(struct tls_keyobject) + max_der;
+    struct tls_keyobject *kf = keyobject_alloc(tot_len);
     if (kf == NULL)
         return NULL;
 
-    kf->length = tot_len;
-    // copy ASN.1 data to struct data field
-    memcpy(kf->data, asn1_buf, asn1_size);
-    mem_free(asn1_buf);
+    size_t asn1_size = tls_base64_decode(b64_start, b64_size, kf->data);
+    if (asn1_size == 0 || asn1_size > max_der)
+        goto error;
+    kf->length = sizeof(struct tls_keyobject) + asn1_size;
     if (!tls_asn1_decoder_init(&asn1_ctx, kf->data, asn1_size))
         goto error;
 
@@ -568,7 +611,7 @@ file_type_ok:
 
 error:
     memset(kf, 0, kf->length);
-    mem_free(kf);
+    keyobject_free(kf);
     return NULL;
 }
 
@@ -612,22 +655,17 @@ file_type_ok:
     if (b64_size > size)
         return NULL;
 
-    // decode base64 into DER
-    uint8_t *asn1_buf = mem_malloc(b64_size / 3 * 4);
-    if (asn1_buf == NULL)
-        return NULL;
-
-    size_t asn1_size = tls_base64_decode(b64_start, b64_size, asn1_buf);
-    size_t tot_len = sizeof(struct tls_keyobject) + asn1_size;
-    // allocate context
-    struct tls_keyobject *kf = mem_malloc(tot_len);
+    // decode base64 directly into keyobject buffer
+    size_t max_der = b64_size / 3 * 4;
+    size_t tot_len = sizeof(struct tls_keyobject) + max_der;
+    struct tls_keyobject *kf = keyobject_alloc(tot_len);
     if (kf == NULL)
         return NULL;
 
-    kf->length = tot_len;
-    // copy ASN.1 data to struct data field
-    memcpy(kf->data, asn1_buf, asn1_size);
-    mem_free(asn1_buf);
+    size_t asn1_size = tls_base64_decode(b64_start, b64_size, kf->data);
+    if (asn1_size == 0 || asn1_size > max_der)
+        goto error;
+    kf->length = sizeof(struct tls_keyobject) + asn1_size;
     if (!tls_asn1_decoder_init(&asn1_ctx, kf->data, asn1_size))
         goto error;
 
@@ -728,7 +766,7 @@ file_type_ok:
 
 error:
     memset(kf, 0, kf->length);
-    mem_free(kf);
+    keyobject_free(kf);
     return NULL;
 }
 
@@ -736,6 +774,6 @@ void tls_keyobject_destroy(struct tls_keyobject *kf)
 {
     // securely unrefs the keyobject
     memset(kf, 0, kf->length);
-    mem_free(kf);
+    keyobject_free(kf);
     kf = NULL;
 }

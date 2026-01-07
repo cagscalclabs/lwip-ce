@@ -33,7 +33,8 @@ enum mem_buffer_owner
     MEM_BUF_OWNER_ETH_RX,
     MEM_BUF_OWNER_ETH_TX,
     MEM_BUF_OWNER_TLS_RX,
-    MEM_BUF_OWNER_TLS_TX
+    MEM_BUF_OWNER_TLS_TX,
+    MEM_BUF_OWNER_FILEIO
 };
 
 /* Pressure hooks for backpressure throttling (e.g. ethernet/tls RX). */
@@ -103,7 +104,8 @@ enum mem_buffer_flags
 {
     BUFFER_SECURE_MODE = 1u << 0,
     BUFFER_LOCK_SIZE = 1u << 1,
-    BUFFER_MALLOC_TYPE = 1u << 2
+    BUFFER_MALLOC_TYPE = 1u << 2,
+    BUFFER_FILEIO_TYPE = 1u << 3
 };
 
 /* Pool config for lwIP custom allocator. */
@@ -122,12 +124,13 @@ bool mem_init(size_t max_heap,
               mem_malloc_fn malloc_fn,
               mem_free_fn free_fn,
               mem_realloc_fn realloc_fn);
+bool mem_is_ready(void);
 void mem_set_internal_lowmem_cb(mem_low_mem_cb low_mem_cb);
 void mem_register_pressure_hook_eth_rx(void (*hook)(enum mem_pressure_level level));
 void mem_register_pressure_hook_tls_rx(void (*hook)(enum mem_pressure_level level));
 void mem_set_pressure_clear_pct(uint8_t pct);
 
-/* Create/destroy a ring or pool buffer. */
+/* Create/destroy a ring or pool buffer. For malloc buffers, lock_size or step 0 uses one block at cap. */
 struct mem_buffer *mem_buffer_create(size_t initial_cap,
                                      size_t max_cap,
                                      size_t lock_size,

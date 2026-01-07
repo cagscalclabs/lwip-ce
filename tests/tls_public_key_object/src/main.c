@@ -9,10 +9,9 @@
 #include "tls/includes/keyobject.h"
 
 #define TLS_TEST_MAX_HEAP (20u * 1024u)
-#define TLS_TEST_POOL_BYTES (16u * 1024u)
-#define TLS_TEST_POOL_BLOCK 256u
+#define TLS_TEST_KEYIO_BYTES (8u * 1024u)
 
-static struct mem_buffer *tls_test_heap;
+static struct mem_buffer *tls_test_keyio;
 
 static bool tls_test_mem_init(void)
 {
@@ -20,18 +19,18 @@ static bool tls_test_mem_init(void)
     {
         return false;
     }
-    tls_test_heap = mem_buffer_create(
-        TLS_TEST_POOL_BYTES,
-        TLS_TEST_POOL_BYTES,
-        TLS_TEST_POOL_BLOCK,
-        BUFFER_MALLOC_TYPE,
+    tls_test_keyio = mem_buffer_create(
+        TLS_TEST_KEYIO_BYTES,
+        TLS_TEST_KEYIO_BYTES,
+        0,
+        BUFFER_FILEIO_TYPE,
         NULL);
-    if (!tls_test_heap)
+    if (!tls_test_keyio)
     {
         return false;
     }
-    mem_buffer_set_lwip_heap(tls_test_heap);
-    mem_buffer_set_owner(tls_test_heap, MEM_BUF_OWNER_TLS_RX);
+    mem_buffer_set_owner(tls_test_keyio, MEM_BUF_OWNER_FILEIO);
+    tls_keyobject_set_buffer(tls_test_keyio);
     return true;
 }
 

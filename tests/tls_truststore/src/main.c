@@ -25,6 +25,13 @@
 #define TRUSTSTORE_SIG_LEN 256
 
 static struct mem_buffer *tls_test_heap;
+static int text_y = 0;
+
+static void draw_line(const char *msg)
+{
+    os_FontDrawText(msg, 2, text_y);
+    text_y += 10;
+}
 
 static bool tls_test_mem_init(void)
 {
@@ -77,25 +84,27 @@ int main(void)
 {
     os_ClrHome();
     os_FontSelect(os_SmallFont);
+    text_y = 0;
 
     if (!tls_test_mem_init())
     {
-        printf("mem init failed\n");
+        draw_line("mem init failed");
         os_GetKey();
         return 1;
     }
 
     if (!tls_init())
     {
-        printf("tls init failed\n");
+        draw_line("tls init failed");
         os_GetKey();
         return 1;
     }
 
     bool sig_ok = tls_truststore_init();
-    printf("Test 1 (Sig verified): %s\n", sig_ok ? "pass" : "fail");
+    draw_line(sig_ok ? "Test 1 (Sig verified): pass" : "Test 1 (Sig verified): fail");
     os_GetKey();
     os_ClrHome();
+    text_y = 0;
 
     const struct tls_spki_entry *entry = tls_truststore_first_entry();
     bool owner_ok = false;
@@ -107,7 +116,7 @@ int main(void)
         owner_ok = (owner_len == expected_len) &&
                    (memcmp(entry->owner_id, expected, expected_len) == 0);
     }
-    printf("Test 2 (First entry): %s\n", owner_ok ? "pass" : "fail");
+    draw_line(owner_ok ? "Test 2 (First entry): pass" : "Test 2 (First entry): fail");
     os_GetKey();
     tls_cleanup();
     return (sig_ok && owner_ok) ? 0 : 1;

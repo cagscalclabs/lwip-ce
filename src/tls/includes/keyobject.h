@@ -41,6 +41,8 @@ enum tls_objectids
 /// @brief Array of bytearrays describing <b>OBJECT IDENTIFIERS</b> supported by this library.
 extern uint8_t tls_objectid_bytes[][10];
 
+struct mem_buffer;
+
 #define TLS_PRIVKEY_RSA_FIELDS 8
 #define TLS_PRIVKEY_EC_FIELDS 3
 #define TLS_PUBKEY_RSA_FIELDS 2
@@ -139,6 +141,12 @@ struct tls_keyobject
     } meta;
     uint8_t data[];
 };
+
+/**
+ * @brief Sets the memory buffer used for keyobject allocations.
+ * @param buf Optional buffer for keyobject allocations (pass NULL to use mem_malloc/free).
+ */
+void tls_keyobject_set_buffer(struct mem_buffer *buf);
 
 /****************************************************************************************
  * @brief Parses a PKCS#1, SEC1, or PKCS#8 private key and returns a structure populated with key metadata.

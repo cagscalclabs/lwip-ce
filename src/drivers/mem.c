@@ -433,6 +433,11 @@ bool mem_init(size_t max_heap,
     return true;
 }
 
+bool mem_is_ready(void)
+{
+    return g_mem_cfg_ready;
+}
+
 void mem_set_internal_lowmem_cb(mem_low_mem_cb low_mem_cb)
 {
     g_mem_cfg.internal_low_mem_cb = low_mem_cb;
@@ -479,6 +484,11 @@ struct mem_buffer *mem_buffer_create(size_t initial_cap,
         return NULL;
     }
 
+    if ((flags & BUFFER_FILEIO_TYPE) != 0)
+    {
+        flags |= BUFFER_MALLOC_TYPE;
+    }
+
     struct mem_buffer *rb = (struct mem_buffer *)cfg->malloc_fn(sizeof(struct mem_buffer));
     if (!rb)
     {
@@ -511,7 +521,7 @@ struct mem_buffer *mem_buffer_create(size_t initial_cap,
     rb->u.pool.pool_used_blocks = 0;
     rb->u.pool.pool_bitmap = NULL;
     rb->u.pool.pool_bitmap_bytes = 0;
-    rb->owner = MEM_BUF_OWNER_UNKNOWN;
+    rb->owner = ((flags & BUFFER_FILEIO_TYPE) != 0) ? MEM_BUF_OWNER_FILEIO : MEM_BUF_OWNER_UNKNOWN;
     rb->last_pressure_level = MEM_PRESSURE_NONE;
     rb->step = cfg->step;
     rb->grow_threshold_pct = cfg->grow_threshold_pct;
@@ -588,7 +598,11 @@ struct mem_buffer *mem_buffer_create(size_t initial_cap,
     if ((flags & BUFFER_MALLOC_TYPE) != 0)
     {
         size_t block_size = lock_size ? lock_size : rb->step;
-        if (block_size == 0 || rb->cap < block_size)
+        if (block_size == 0)
+        {
+            block_size = 256u;
+        }
+        if (rb->cap < block_size)
         {
             mem_buffer_destroy(rb);
             return NULL;
@@ -921,6 +935,95 @@ void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
     }
 
     size_t needed = size + MEM_POOL_HEADER_SIZE;
+    if (rb->u.pool.pool_block_size == 0)
+    {
+        return NULL;
+    }
+
+    if (needed > rb->cap && (rb->flags & BUFFER_LOCK_SIZE) == 0)
+    {
+        size_t step = rb->step ? rb->step : 256u;
+        size_t desired = align_step(needed, step);
+        if (desired < needed)
+        {
+            return NULL;
+        }
+        if (rb->max_cap != SIZE_MAX && desired > rb->max_cap)
+        {
+            desired = rb->max_cap;
+        }
+        if (desired < needed || desired <= rb->cap)
+        {
+            return NULL;
+        }
+
+        size_t grow = desired - rb->cap;
+        if (!mem_buffer_charge(rb->cfg, grow))
+        {
+            mem_buffer_notify_lowmem(rb, desired, MEM_PRESSURE_CRITICAL);
+            return NULL;
+        }
+        size_t old_cap = rb->cap;
+        size_t old_blocks = rb->u.pool.pool_block_count;
+        size_t old_bitmap_bytes = rb->u.pool.pool_bitmap_bytes;
+
+        if (!mem_buffer_resize(rb, desired))
+        {
+            mem_buffer_release(rb->cfg, grow);
+            mem_buffer_notify_lowmem(rb, desired, MEM_PRESSURE_CRITICAL);
+            return NULL;
+        }
+
+        size_t new_block_count = rb->cap / rb->u.pool.pool_block_size;
+        size_t new_bitmap_bytes = (new_block_count + 7u) / 8u;
+        if (new_bitmap_bytes > rb->u.pool.pool_bitmap_bytes)
+        {
+            size_t bitmap_grow = new_bitmap_bytes - rb->u.pool.pool_bitmap_bytes;
+            if (!mem_buffer_charge(rb->cfg, bitmap_grow))
+            {
+                mem_buffer_resize(rb, old_cap);
+                mem_buffer_release(rb->cfg, grow);
+                mem_buffer_notify_lowmem(rb, desired, MEM_PRESSURE_CRITICAL);
+                return NULL;
+            }
+            uint8_t *new_bitmap = NULL;
+            if (rb->cfg->realloc_fn)
+            {
+                new_bitmap = (uint8_t *)rb->cfg->realloc_fn(rb->u.pool.pool_bitmap, new_bitmap_bytes);
+            }
+            else
+            {
+                new_bitmap = (uint8_t *)rb->cfg->malloc_fn(new_bitmap_bytes);
+                if (new_bitmap)
+                {
+                    memcpy(new_bitmap, rb->u.pool.pool_bitmap, rb->u.pool.pool_bitmap_bytes);
+                    rb->cfg->free_fn(rb->u.pool.pool_bitmap);
+                }
+            }
+            if (!new_bitmap)
+            {
+                mem_buffer_release(rb->cfg, bitmap_grow);
+                mem_buffer_resize(rb, old_cap);
+                mem_buffer_release(rb->cfg, grow);
+                mem_buffer_notify_lowmem(rb, desired, MEM_PRESSURE_CRITICAL);
+                return NULL;
+            }
+            memset(new_bitmap + old_bitmap_bytes, 0, new_bitmap_bytes - old_bitmap_bytes);
+            rb->u.pool.pool_bitmap = new_bitmap;
+            rb->u.pool.pool_bitmap_bytes = new_bitmap_bytes;
+        }
+
+        rb->u.pool.pool_block_count = new_block_count;
+        if (rb->u.pool.pool_used_blocks > new_block_count)
+        {
+            rb->u.pool.pool_used_blocks = new_block_count;
+        }
+        if (old_blocks != new_block_count)
+        {
+            mem_pressure_maybe_clear(rb);
+        }
+    }
+
     size_t blocks_needed = (needed + rb->u.pool.pool_block_size - 1) / rb->u.pool.pool_block_size;
     if (blocks_needed == 0 || blocks_needed > rb->u.pool.pool_block_count)
     {

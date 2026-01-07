@@ -76,6 +76,46 @@ jobs:
             file "${{ env.AUTOTESTER_ROM }}"
           fi
 
+      - name: Download truststore AppVar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+          tag = "truststore-latest"
+          asset_name = "lwIPSPKI.8xv"
+          api = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+          req = urllib.request.Request(
+              api,
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+              },
+          )
+          with urllib.request.urlopen(req) as resp:
+              data = json.load(resp)
+          assets = data.get("assets", [])
+          asset = next((a for a in assets if a.get("name") == asset_name), None)
+          if not asset:
+              raise SystemExit(f"missing release asset {asset_name} on tag {tag}")
+          req = urllib.request.Request(
+              asset["url"],
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/octet-stream",
+              },
+          )
+          out_path = os.path.join("tests", "tls_truststore", asset_name)
+          with urllib.request.urlopen(req) as resp, open(out_path, "wb") as f:
+              f.write(resp.read())
+          print(f"downloaded {asset_name} -> {out_path}")
+          PY
+
       - name: Checkout CEmu
         uses: actions/checkout@v4
         with:
