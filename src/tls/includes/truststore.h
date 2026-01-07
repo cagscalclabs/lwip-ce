@@ -15,7 +15,7 @@ struct tls_truststore_header
 {
     uint32_t created_timestamp; /* Unix timestamp when truststore was generated */
     uint16_t entry_count;       /* Number of SPKI entries in truststore */
-    uint16_t reserved;          /* Reserved for future use */
+    uint16_t version;           /* Truststore format version */
 };
 #define TLS_SPKI_HEADER_LEN sizeof(struct tls_truststore_header)
 
