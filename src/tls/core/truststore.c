@@ -76,6 +76,7 @@ bool tls_truststore_init(void)
     // Return with error if not found.
     if (!os_ChkFindSym(OS_TYPE_APPVAR, truststore_name, NULL, &truststore_data))
         return false;
+    printf("appvar found\n");
 
     // Get length of store, spki db len, and sig ptr
     uint16_t truststore_size = *((uint16_t *)truststore_data);
@@ -84,7 +85,7 @@ bool tls_truststore_init(void)
     uint16_t spki_store_len = truststore_size - TRUSTSTORE_SIG_LEN - 2;
     uint8_t *spki_store_sig = ((uint8_t *)truststore_data) + 2;
     uint8_t *spki_header = spki_store_sig + TRUSTSTORE_SIG_LEN;
-
+    printf("beginning validation\n");
     // Hash the SPKI store and created header
     tls_hash_update(&hash_ctx, spki_header, spki_store_len);
     tls_hash_digest(&hash_ctx, tstore_hash);
@@ -92,7 +93,7 @@ bool tls_truststore_init(void)
     // Decrypt the SPKI store signature
     if (!tls_rsa_decrypt_signature(spki_store_sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
         return false;
-
+    printf("decrypt done\n");
     // Verify the signature
     bool verified = tls_rsa_pss_verify(d_sig, sizeof(trust_store_pubkey), tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
     if (verified)

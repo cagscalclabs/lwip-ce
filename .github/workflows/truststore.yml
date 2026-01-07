@@ -29,6 +29,11 @@ jobs:
         run: |
           printf '%s' "$TRUSTSTORE_SIGNER" > truststore_signer.pem
           chmod 600 truststore_signer.pem
+          if [ ! -s truststore_signer.pem ]; then
+            echo "TRUSTSTORE_SIGNER is empty or unavailable."
+            exit 1
+          fi
+          openssl pkey -in truststore_signer.pem -noout >/dev/null
 
       - name: Generate truststore binary
         run: |
@@ -229,6 +234,17 @@ jobs:
       - name: Build AppVar
         run: |
           convbin -i truststore_out/lwIPSPKI.bin -o truststore_out/lwIPSPKI.8xv -j bin -k 8xv -n lwIPSPKI -r
+
+      - name: Verify truststore signature
+        run: |
+          openssl pkey -in truststore_signer.pem -pubout -out truststore_pub.pem
+          openssl dgst -sha256 \
+            -sigopt rsa_padding_mode:pss \
+            -sigopt rsa_pss_saltlen:-1 \
+            -sigopt rsa_mgf1_md:sha256 \
+            -verify truststore_pub.pem \
+            -signature truststore_out/lwIPSPKI.sig \
+            truststore_out/lwIPSPKI.data >/dev/null
 
       - name: Upload truststore artifact
         uses: actions/upload-artifact@v4
