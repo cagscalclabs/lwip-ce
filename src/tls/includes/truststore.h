@@ -9,13 +9,21 @@
 #define TLS_SPKI_ISSUER_LEN 32
 #define TLS_SPKI_HASH_MAX_LEN 32
 
-#define TLS_TRUSTSTORE_AGE_WARN_DAYS 365 /* Warn if truststore older than this */
+typedef enum {
+    TLS_STORE_OK = 0,
+    TLS_STORE_NOT_FOUND,
+    TLS_STORE_SIZE_INVALID,
+    TLS_STORE_VERSION_MISMATCH,
+    TLS_STORE_HASH_FAIL,
+    TLS_STORE_SIG_INVALID
+} tls_truststore_status_t;
 
 struct tls_truststore_header
 {
+    uint8_t sig[256];           /* RSA-2048 signature over header fields + entries */
+    uint16_t version;           /* Truststore format version */
     uint32_t created_timestamp; /* Unix timestamp when truststore was generated */
     uint16_t entry_count;       /* Number of SPKI entries in truststore */
-    uint16_t version;           /* Truststore format version */
 };
 #define TLS_SPKI_HEADER_LEN sizeof(struct tls_truststore_header)
 
@@ -32,9 +40,9 @@ struct tls_spki_entry
  * @brief Initializes the trust store, checks for the SPKI appvar,
  * RSA-decrypts the signature, verifies the signature, sets a flag
  * for session if looks good.
- * @returns [bool] True if successful, false if error
+ * @returns [tls_truststore_status_t] status code
  */
-bool tls_truststore_init(void);
+tls_truststore_status_t tls_truststore_init(void);
 
 /********************
  * @brief Attempts to find an SPKI hash in the trust store.

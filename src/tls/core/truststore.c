@@ -9,17 +9,16 @@
 /*
  * Truststore appvar format:
  * +---------------------+
- * | Signature (256B)    |  <- RSA-2048 sig over header + entries
- * +---------------------+
- * | Header (8B)         |  <- tls_truststore_header
+ * | Header (264B)       |  <- tls_truststore_header (sig, version, timestamp, count)
  * +---------------------+
  * | SPKI entries...     |  <- Array of tls_spki_entry structs
  * +---------------------+
  *
  * struct tls_truststore_header {
+ *    uint8_t sig[256];            // RSA-2048 signature over header fields + entries
+ *    uint16_t version;            // Truststore format version
  *    uint32_t created_timestamp;  // Unix timestamp
  *    uint16_t entry_count;        // Number of SPKI entries
- *    uint16_t version;            // Truststore format version
  * };
  *
  * struct tls_spki_entry {
@@ -61,7 +60,7 @@ uint8_t trust_store_pubkey[] = {
     0x3D, 0x4D, 0xA5, 0x7B, 0x4B, 0xD5, 0x1A, 0xD0, 0x68, 0xD6, 0x59, 0x7B, 0xF6, 0x23, 0x69, 0x95};
 
 #define TRUSTSTORE_SIG_LEN 256
-bool tls_truststore_init(void)
+tls_truststore_status_t tls_truststore_init(void)
 {
     var_t *truststore_var;
     uint8_t d_sig[TRUSTSTORE_SIG_LEN];
@@ -70,38 +69,39 @@ bool tls_truststore_init(void)
 
     // If hash init fails, error out early
     if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-        return false;
+        return TLS_STORE_HASH_FAIL;
 
     // Attempt to load the trust store.
     // Return with error if not found.
     truststore_var = os_GetAppVarData(truststore_name, NULL);
     if (!truststore_var)
-        return false;
+        return TLS_STORE_NOT_FOUND;
 
     // Get length of store, spki db len, and sig ptr
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN)
-        return false;
-    uint16_t spki_store_len = truststore_size - TRUSTSTORE_SIG_LEN;
-    uint8_t *spki_store_sig = (uint8_t *)truststore_var + 2;
-    uint8_t *spki_header = spki_store_sig + TRUSTSTORE_SIG_LEN;
-
+    if (truststore_size < TLS_SPKI_HEADER_LEN)
+        return TLS_STORE_SIZE_INVALID;
+    uint8_t *spki_header = (uint8_t *)truststore_var + 2;
     struct tls_truststore_header *header = (struct tls_truststore_header *)spki_header;
     if (header->version != TLS_TRUSTSTORE_VERSION)
-        return false;
+        return TLS_STORE_VERSION_MISMATCH;
+    uint8_t *spki_db_start = spki_header + TLS_SPKI_HEADER_LEN;
+    uint16_t spki_store_len = truststore_size - TLS_SPKI_HEADER_LEN;
 
-    // Hash the SPKI store and created header
-    tls_hash_update(&hash_ctx, spki_header, spki_store_len);
+    // Hash header fields (version + timestamp + entry_count) and entries
+    tls_hash_update(&hash_ctx, &header->version,
+                    sizeof(header->version) + sizeof(header->created_timestamp) + sizeof(header->entry_count));
+    tls_hash_update(&hash_ctx, spki_db_start, spki_store_len);
     tls_hash_digest(&hash_ctx, tstore_hash);
 
     // Decrypt the SPKI store signature
-    if (!tls_rsa_decrypt_signature(spki_store_sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
-        return false;
+    if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
+        return TLS_STORE_SIG_INVALID;
     // Verify the signature
     bool verified = tls_rsa_pss_verify(d_sig, sizeof(trust_store_pubkey), tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
     if (verified)
         truststore_valid_for_session = true;
-    return verified;
+    return verified ? TLS_STORE_OK : TLS_STORE_SIG_INVALID;
 }
 
 bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result)
@@ -119,15 +119,15 @@ bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result)
 
     // set up lookup pointers and size words
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN)
+    if (truststore_size < TLS_SPKI_HEADER_LEN)
         return false;
 
     struct tls_truststore_header *header =
-        (struct tls_truststore_header *)((uint8_t *)truststore_var + 2 + TRUSTSTORE_SIG_LEN);
+        (struct tls_truststore_header *)((uint8_t *)truststore_var + 2);
     if (header->version != TLS_TRUSTSTORE_VERSION)
         return false;
     uint8_t *spki_db_start = (uint8_t *)header + TLS_SPKI_HEADER_LEN;
-    uint16_t spki_db_len = truststore_size - TRUSTSTORE_SIG_LEN - TLS_SPKI_HEADER_LEN;
+    uint16_t spki_db_len = truststore_size - TLS_SPKI_HEADER_LEN;
 
     // the db length not being a multiple of struct size at this point
     // means something is wrong
