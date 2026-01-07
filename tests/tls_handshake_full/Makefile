@@ -22,6 +22,7 @@ EXTRA_C_SOURCES = \
 	../../src/tls/core/hash.c \
 	../../src/tls/core/aes.c \
 	../../src/core/mem.c \
+	../../src/drivers/mem.c \
 	../../src/core/stats.c
 
 # Assembly files

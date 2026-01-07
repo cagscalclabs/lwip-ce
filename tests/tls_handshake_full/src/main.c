@@ -250,14 +250,14 @@ static bool test_process_serverhello(struct tls_handshake_context *ctx,
     print_line("=== Test 2: ServerHello ===");
 
     /* Generate ClientHello to set state to CLIENT_HELLO_SENT */
-    ret = tls_generate_client_hello(ctx, client_hello_buf, 512, client_hello_len);
+    ret = tls_send_client_hello(ctx, client_hello_buf, 512, client_hello_len);
     TEST_ASSERT(ret, "ClientHello generation should succeed");
 
     /* Process ServerHello (skip TLS record header, process handshake message) */
     const uint8_t *handshake_msg = serverhello_packet + 5; /* Skip record header */
     size_t handshake_len = sizeof(serverhello_packet) - 5;
 
-    ret = tls_process_server_hello(ctx, handshake_msg, handshake_len);
+    ret = tls_recv_server_hello(ctx, handshake_msg, handshake_len);
     TEST_ASSERT(ret, "ServerHello processing should succeed");
 
     /* Verify cipher suite was extracted */
@@ -338,7 +338,7 @@ static bool test_generate_finished(struct tls_handshake_context *ctx)
     print_line("=== Test 4: Finished ===");
 
     /* Generate Finished message */
-    ret = tls_generate_finished(ctx, true, finished_msg, sizeof(finished_msg), &finished_len);
+    ret = tls_send_finished(ctx, true, finished_msg, sizeof(finished_msg), &finished_len);
     TEST_ASSERT(ret, "Finished generation should succeed");
 
     /* Verify length (should be 36 bytes: 4-byte header + 32-byte verify_data) */

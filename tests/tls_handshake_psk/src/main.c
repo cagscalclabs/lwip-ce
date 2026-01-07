@@ -154,7 +154,7 @@ static bool test_mock_server_handshake(void)
     /* Generate ClientHello */
     uint8_t client_hello[512];
     size_t client_hello_len = 0;
-    if (!tls_generate_client_hello(&ctx, client_hello, sizeof(client_hello),
+    if (!tls_send_client_hello(&ctx, client_hello, sizeof(client_hello),
                                    &client_hello_len))
     {
         tls_handshake_cleanup(&ctx);

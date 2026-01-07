@@ -19,6 +19,9 @@
 #include "lwip/mem.h"
 #include "drivers/mem.h"
 
+static const uint8_t test_rsa_pubkey_2048[256];
+static const uint8_t test_rsa_sig_2048[256];
+
 #define TLS_TEST_MAX_HEAP (20u * 1024u)
 #define TLS_TEST_POOL_BYTES (16u * 1024u)
 #define TLS_TEST_POOL_BLOCK 256u
