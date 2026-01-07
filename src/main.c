@@ -111,6 +111,10 @@ void ethif_status_callback_fn(struct netif *netif)
 int main(void)
 {
     uint8_t key;
+    os_ClrLCDFull();
+    os_HomeUp();
+    os_PutStrFull("start");
+    os_NewLine();
     if(lwip_init(&lwip_conf)!= ERR_OK)
         return 1;
     os_ClrLCDFull();

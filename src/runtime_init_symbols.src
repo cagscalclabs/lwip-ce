@@ -1,0 +1,7 @@
+section .init_array
+public init_array
+init_array:
+
+section .ctors
+public ctors
+ctors:

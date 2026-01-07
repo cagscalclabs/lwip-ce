@@ -1,0 +1,37 @@
+{
+  "description": "Tests OAEP primitive standalone",
+  "transfer_files": [
+    "bin/OAEPTEST.8xp"
+  ],
+  "target": {
+    "name": "OAEPTEST",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "RSA-OAEP encode - RFC 8017 (PKCS#1 v2.2) SHA-256",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "806269A3"
+      ],
+      "timeout": 2000
+    },
+    "2": {
+      "description": "RSA-OAEP decode - RFC 8017 (PKCS#1 v2.2) SHA-256",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "A428EA0F"
+      ],
+      "timeout": 2000
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+    "transfer_files":
+    [
+        "bin/DEMO.8xp"
+    ],
+    "target":
+    {
+        "name": "DEMO",
+        "isASM": true
+    },
+    "sequence":
+    [
+        "action|launch",
+        "hashWait|1",
+        "key|enter",
+        "hashWait|2",
+        "key|enter",
+        "hashWait|2",
+        "key|enter"
+    ],
+    "hashes":
+    {
+        "1":
+        {
+            "description": "ASN.1 encode sequence",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "D1F2869F" ],
+            "timeout": 2000
+        },
+        "2":
+        {
+            "description": "ASN.1 u4096 privkey decode partial",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "966ED4C8",
+                "93738B6E"
+            ],
+            "timeout": 2000
+        }
+    }
+}

@@ -59,6 +59,7 @@ struct tls_asn1_schema {
     bool allow_null:1;      /**< flag indicating if item in schema can be NULL. */
     bool output:1;          /**< flag indicating if item in schema should be returned. */
     bool mode:1;            /**< flag indicating if this tag should be parsed as MATCH or SEEK. See \p tls_asn1_parse_mode */
+    bool raw_output:1;      /**< flag indicating if raw DER bytes (including tag+length) should be returned instead of parsed content */
 };
 
 enum tls_asn1_parse_mode {

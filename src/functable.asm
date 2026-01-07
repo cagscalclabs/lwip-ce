@@ -1,272 +1,355 @@
 section .rodata
 public _app_library_table
+extern app
 
 _app_library_table:
-    dl _eth_get_interfaces
-    dl _eth_usb_event_callback
-    dl _etharp_acd_announce
-    dl _etharp_acd_probe
-    dl _etharp_cleanup_netif
-    dl _etharp_find_addr
-    dl _etharp_get_entry
-    dl _etharp_input
-    dl _etharp_output
-    dl _etharp_query
-    dl _etharp_request
-    dl _etharp_tmr
-    dl _ethip6_output
-    dl _igmp_init
-    dl _igmp_input
-    dl _igmp_joingroup
-    dl _igmp_joingroup_netif
-    dl _igmp_leavegroup
-    dl _igmp_leavegroup_netif
-    dl _igmp_lookfor_group
-    dl _igmp_report_groups
-    dl _igmp_start
-    dl _igmp_stop
-    dl _igmp_tmr
-    dl _stats_display
-    dl _stats_display_igmp
-    dl _stats_display_mem
-    dl _stats_display_memp
-    dl _stats_display_proto
-    dl _stats_display_sys
-    dl _stats_init
-    dl _ip4_input
-    dl _ip4_output
-    dl _ip4_output_if
-    dl _ip4_output_if_opt
-    dl _ip4_output_if_opt_src
-    dl _ip4_output_if_src
-    dl _ip4_route
-    dl _ip4_set_default_multicast_netif
-    dl _ip4_addr_isbroadcast_u32
-    dl _ip4_addr_netmask_valid
-    dl _ip4addr_aton
-    dl _ip4addr_ntoa
-    dl _ip4addr_ntoa_r
-    dl _ipaddr_addr
-    dl _ip4_frag
-    dl _ip4_reass
-    dl _ip_reass_tmr
-    dl _ip6_input
-    dl _ip6_options_add_hbh_ra
-    dl _ip6_output
-    dl _ip6_output_if
-    dl _ip6_output_if_src
-    dl _ip6_route
-    dl _ip6_select_source_address
-    dl _ip6addr_aton
-    dl _ip6addr_ntoa
-    dl _ip6addr_ntoa_r
-    dl _ip6_frag
-    dl _ip6_reass
-    dl _ip6_reass_tmr
-    dl _ip_input
-    dl _ipaddr_aton
-    dl _ipaddr_ntoa
-    dl _ipaddr_ntoa_r
-    dl _autoip_accept_packet
-    dl _autoip_network_changed_link_down
-    dl _autoip_network_changed_link_up
-    dl _autoip_remove_struct
-    dl _autoip_set_struct
-    dl _autoip_start
-    dl _autoip_stop
-    dl _autoip_supplied_address
-    dl _pbuf_add_header
-    dl _pbuf_add_header_force
-    dl _pbuf_alloc
-    dl _pbuf_alloc_reference
-    dl _pbuf_alloced_custom
-    dl _pbuf_cat
-    dl _pbuf_chain
-    dl _pbuf_clen
-    dl _pbuf_clone
-    dl _pbuf_coalesce
-    dl _pbuf_copy
-    dl _pbuf_copy_partial
-    dl _pbuf_copy_partial_pbuf
-    dl _pbuf_dechain
-    dl _pbuf_free
-    dl _pbuf_free_header
-    dl _pbuf_free_ooseq
-    dl _pbuf_get_at
-    dl _pbuf_get_contiguous
-    dl _pbuf_header
-    dl _pbuf_header_force
-    dl _pbuf_memcmp
-    dl _pbuf_memfind
-    dl _pbuf_put_at
-    dl _pbuf_realloc
-    dl _pbuf_ref
-    dl _pbuf_remove_header
-    dl _pbuf_skip
-    dl _pbuf_strstr
-    dl _pbuf_take
-    dl _pbuf_take_at
-    dl _pbuf_try_get_at
-    dl _custom_calloc
-    dl _custom_free
-    dl _custom_malloc
-    dl _mem_calloc
-    dl _mem_free
-    dl _mem_init
-    dl _mem_malloc
-    dl _mem_trim
-    dl _memp_free
-    dl _memp_init
-    dl _memp_malloc
-    dl _lwip_init
-    dl _netif_add
-    dl _netif_add_ext_callback
-    dl _netif_add_ip6_address
-    dl _netif_add_noaddr
-    dl _netif_alloc_client_data_id
-    dl _netif_create_ip6_linklocal_address
-    dl _netif_find
-    dl _netif_get_by_index
-    dl _netif_get_ip6_addr_match
-    dl _netif_index_to_name
-    dl _netif_init
-    dl _netif_input
-    dl _netif_invoke_ext_callback
-    dl _netif_ip6_addr_set
-    dl _netif_ip6_addr_set_parts
-    dl _netif_ip6_addr_set_state
-    dl _netif_loop_output
-    dl _netif_name_to_index
-    dl _netif_poll
-    dl _netif_poll_all
-    dl _netif_remove
-    dl _netif_remove_ext_callback
-    dl _netif_set_addr
-    dl _netif_set_default
-    dl _netif_set_down
-    dl _netif_set_gw
-    dl _netif_set_ipaddr
-    dl _netif_set_link_callback
-    dl _netif_set_link_down
-    dl _netif_set_link_up
-    dl _netif_set_netmask
-    dl _netif_set_remove_callback
-    dl _netif_set_status_callback
-    dl _netif_set_up
-    dl _dhcp_cleanup
-    dl _dhcp_coarse_tmr
-    dl _dhcp_fine_tmr
-    dl _dhcp_inform
-    dl _dhcp_network_changed_link_up
-    dl _dhcp_release
-    dl _dhcp_release_and_stop
-    dl _dhcp_renew
-    dl _dhcp_set_struct
-    dl _dhcp_start
-    dl _dhcp_stop
-    dl _dhcp_supplied_address
-    dl _dns_gethostbyname
-    dl _dns_gethostbyname_addrtype
-    dl _dns_getserver
-    dl _dns_init
-    dl _dns_setserver
-    dl _dns_tmr
-    dl _nd6_adjust_mld_membership
-    dl _nd6_cleanup_netif
-    dl _nd6_clear_destination_cache
-    dl _nd6_find_route
-    dl _nd6_get_destination_mtu
-    dl _nd6_get_next_hop_addr_or_queue
-    dl _nd6_input
-    dl _nd6_reachability_hint
-    dl _nd6_restart_netif
-    dl _nd6_tmr
-    dl _raw_bind
-    dl _raw_bind_netif
-    dl _raw_connect
-    dl _raw_disconnect
-    dl _raw_new
-    dl _raw_new_ip_type
-    dl _raw_recv
-    dl _raw_remove
-    dl _raw_send
-    dl _raw_sendto
-    dl _raw_sendto_if_src
-    dl _tcp_abort
-    dl _tcp_accept
-    dl _tcp_arg
-    dl _tcp_backlog_accepted
-    dl _tcp_backlog_delayed
-    dl _tcp_bind
-    dl _tcp_bind_netif
-    dl _tcp_close
-    dl _tcp_connect
-    dl _tcp_err
-    dl _tcp_listen_with_backlog
-    dl _tcp_listen_with_backlog_and_err
-    dl _tcp_new
-    dl _tcp_new_ip_type
-    dl _tcp_output
-    dl _tcp_poll
-    dl _tcp_recv
-    dl _tcp_recved
-    dl _tcp_sent
-    dl _tcp_setprio
-    dl _tcp_shutdown
-    dl _tcp_tcp_get_tcp_addrinfo
-    dl _tcp_write
-    dl _altcp_abort
-    dl _altcp_accept
-    dl _altcp_arg
-    dl _altcp_bind
-    dl _altcp_close
-    dl _altcp_connect
-    dl _altcp_dbg_get_tcp_state
-    dl _altcp_err
-    dl _altcp_get_ip
-    dl _altcp_get_port
-    dl _altcp_get_tcp_addrinfo
-    dl _altcp_listen_with_backlog_and_err
-    dl _altcp_mss
-    dl _altcp_nagle_disable
-    dl _altcp_nagle_disabled
-    dl _altcp_nagle_enable
-    dl _altcp_new
-    dl _altcp_new_ip6
-    dl _altcp_new_ip_type
-    dl _altcp_output
-    dl _altcp_poll
-    dl _altcp_recv
-    dl _altcp_recved
-    dl _altcp_sent
-    dl _altcp_setprio
-    dl _altcp_shutdown
-    dl _altcp_sndbuf
-    dl _altcp_sndqueuelen
-    dl _altcp_write
-    dl _altcp_tcp_alloc
-    dl _altcp_tcp_new_ip_type
-    dl _altcp_tcp_wrap
-    dl _tcp_debug_state_str
-    dl _udp_bind
-    dl _udp_bind_netif
-    dl _udp_connect
-    dl _udp_disconnect
-    dl _udp_init
-    dl _udp_input
-    dl _udp_netif_ip_addr_changed
-    dl _udp_new
-    dl _udp_new_ip_type
-    dl _udp_recv
-    dl _udp_remove
-    dl _udp_send
-    dl _udp_sendto
-    dl _udp_sendto_if
-    dl _udp_sendto_if_src
+    dl _eth_get_interfaces - app
+    dl _eth_usb_event_callback - app
+    dl _mem_buffer_capacity - app
+    dl _mem_buffer_create - app
+    dl _mem_buffer_destroy - app
+    dl _mem_buffer_free - app
+    dl _mem_buffer_len - app
+    dl _mem_buffer_malloc - app
+    dl _mem_buffer_pop - app
+    dl _mem_buffer_push - app
+    dl _mem_buffer_set_grow - app
+    dl _mem_buffer_set_max_size - app
+    dl _mem_buffer_set_shrink - app
+    dl _mem_buffer_space - app
+    dl _mem_init - app
+    dl _etharp_acd_announce - app
+    dl _etharp_acd_probe - app
+    dl _etharp_cleanup_netif - app
+    dl _etharp_find_addr - app
+    dl _etharp_get_entry - app
+    dl _etharp_input - app
+    dl _etharp_output - app
+    dl _etharp_query - app
+    dl _etharp_request - app
+    dl _etharp_tmr - app
+    dl _ethip6_output - app
+    dl _igmp_init - app
+    dl _igmp_input - app
+    dl _igmp_joingroup - app
+    dl _igmp_joingroup_netif - app
+    dl _igmp_leavegroup - app
+    dl _igmp_leavegroup_netif - app
+    dl _igmp_lookfor_group - app
+    dl _igmp_report_groups - app
+    dl _igmp_start - app
+    dl _igmp_stop - app
+    dl _igmp_tmr - app
+    dl _stats_display - app
+    dl _stats_display_igmp - app
+    dl _stats_display_mem - app
+    dl _stats_display_memp - app
+    dl _stats_display_proto - app
+    dl _stats_display_sys - app
+    dl _stats_init - app
+    dl _ip4_input - app
+    dl _ip4_output - app
+    dl _ip4_output_if - app
+    dl _ip4_output_if_opt - app
+    dl _ip4_output_if_opt_src - app
+    dl _ip4_output_if_src - app
+    dl _ip4_route - app
+    dl _ip4_set_default_multicast_netif - app
+    dl _ip4_addr_isbroadcast_u32 - app
+    dl _ip4_addr_netmask_valid - app
+    dl _ip4addr_aton - app
+    dl _ip4addr_ntoa - app
+    dl _ip4addr_ntoa_r - app
+    dl _ipaddr_addr - app
+    dl _ip4_frag - app
+    dl _ip4_reass - app
+    dl _ip_reass_tmr - app
+    dl _ip6_input - app
+    dl _ip6_options_add_hbh_ra - app
+    dl _ip6_output - app
+    dl _ip6_output_if - app
+    dl _ip6_output_if_src - app
+    dl _ip6_route - app
+    dl _ip6_select_source_address - app
+    dl _ip6addr_aton - app
+    dl _ip6addr_ntoa - app
+    dl _ip6addr_ntoa_r - app
+    dl _ip6_frag - app
+    dl _ip6_reass - app
+    dl _ip6_reass_tmr - app
+    dl _ip_input - app
+    dl _ipaddr_aton - app
+    dl _ipaddr_ntoa - app
+    dl _ipaddr_ntoa_r - app
+    dl _autoip_accept_packet - app
+    dl _autoip_network_changed_link_down - app
+    dl _autoip_network_changed_link_up - app
+    dl _autoip_remove_struct - app
+    dl _autoip_set_struct - app
+    dl _autoip_start - app
+    dl _autoip_stop - app
+    dl _autoip_supplied_address - app
+    dl _pbuf_add_header - app
+    dl _pbuf_add_header_force - app
+    dl _pbuf_alloc - app
+    dl _pbuf_alloc_reference - app
+    dl _pbuf_alloced_custom - app
+    dl _pbuf_cat - app
+    dl _pbuf_chain - app
+    dl _pbuf_clen - app
+    dl _pbuf_clone - app
+    dl _pbuf_coalesce - app
+    dl _pbuf_copy - app
+    dl _pbuf_copy_partial - app
+    dl _pbuf_copy_partial_pbuf - app
+    dl _pbuf_dechain - app
+    dl _pbuf_free - app
+    dl _pbuf_free_header - app
+    dl _pbuf_free_ooseq - app
+    dl _pbuf_get_at - app
+    dl _pbuf_get_contiguous - app
+    dl _pbuf_header - app
+    dl _pbuf_header_force - app
+    dl _pbuf_memcmp - app
+    dl _pbuf_memfind - app
+    dl _pbuf_put_at - app
+    dl _pbuf_realloc - app
+    dl _pbuf_ref - app
+    dl _pbuf_remove_header - app
+    dl _pbuf_skip - app
+    dl _pbuf_strstr - app
+    dl _pbuf_take - app
+    dl _pbuf_take_at - app
+    dl _pbuf_try_get_at - app
+    dl _custom_calloc - app
+    dl _custom_free - app
+    dl _custom_malloc - app
+    dl _mem_calloc - app
+    dl _mem_free - app
+    dl _mem_malloc - app
+    dl _mem_trim - app
+    dl _memp_free - app
+    dl _memp_init - app
+    dl _memp_malloc - app
+    dl _lwip_init - app
+    dl _lwip_init_runtime - app
+    dl _netif_add - app
+    dl _netif_add_ext_callback - app
+    dl _netif_add_ip6_address - app
+    dl _netif_add_noaddr - app
+    dl _netif_alloc_client_data_id - app
+    dl _netif_create_ip6_linklocal_address - app
+    dl _netif_find - app
+    dl _netif_get_by_index - app
+    dl _netif_get_ip6_addr_match - app
+    dl _netif_index_to_name - app
+    dl _netif_init - app
+    dl _netif_input - app
+    dl _netif_invoke_ext_callback - app
+    dl _netif_ip6_addr_set - app
+    dl _netif_ip6_addr_set_parts - app
+    dl _netif_ip6_addr_set_state - app
+    dl _netif_loop_output - app
+    dl _netif_name_to_index - app
+    dl _netif_poll - app
+    dl _netif_poll_all - app
+    dl _netif_remove - app
+    dl _netif_remove_ext_callback - app
+    dl _netif_set_addr - app
+    dl _netif_set_default - app
+    dl _netif_set_down - app
+    dl _netif_set_gw - app
+    dl _netif_set_ipaddr - app
+    dl _netif_set_link_callback - app
+    dl _netif_set_link_down - app
+    dl _netif_set_link_up - app
+    dl _netif_set_netmask - app
+    dl _netif_set_remove_callback - app
+    dl _netif_set_status_callback - app
+    dl _netif_set_up - app
+    dl _dhcp_cleanup - app
+    dl _dhcp_coarse_tmr - app
+    dl _dhcp_fine_tmr - app
+    dl _dhcp_inform - app
+    dl _dhcp_network_changed_link_up - app
+    dl _dhcp_release - app
+    dl _dhcp_release_and_stop - app
+    dl _dhcp_renew - app
+    dl _dhcp_set_struct - app
+    dl _dhcp_start - app
+    dl _dhcp_stop - app
+    dl _dhcp_supplied_address - app
+    dl _dns_gethostbyname - app
+    dl _dns_gethostbyname_addrtype - app
+    dl _dns_getserver - app
+    dl _dns_init - app
+    dl _dns_setserver - app
+    dl _dns_tmr - app
+    dl _nd6_adjust_mld_membership - app
+    dl _nd6_cleanup_netif - app
+    dl _nd6_clear_destination_cache - app
+    dl _nd6_find_route - app
+    dl _nd6_get_destination_mtu - app
+    dl _nd6_get_next_hop_addr_or_queue - app
+    dl _nd6_input - app
+    dl _nd6_reachability_hint - app
+    dl _nd6_restart_netif - app
+    dl _nd6_tmr - app
+    dl _raw_bind - app
+    dl _raw_bind_netif - app
+    dl _raw_connect - app
+    dl _raw_disconnect - app
+    dl _raw_new - app
+    dl _raw_new_ip_type - app
+    dl _raw_recv - app
+    dl _raw_remove - app
+    dl _raw_send - app
+    dl _raw_sendto - app
+    dl _raw_sendto_if_src - app
+    dl _tcp_abort - app
+    dl _tcp_accept - app
+    dl _tcp_arg - app
+    dl _tcp_backlog_accepted - app
+    dl _tcp_backlog_delayed - app
+    dl _tcp_bind - app
+    dl _tcp_bind_netif - app
+    dl _tcp_close - app
+    dl _tcp_connect - app
+    dl _tcp_err - app
+    dl _tcp_listen_with_backlog - app
+    dl _tcp_listen_with_backlog_and_err - app
+    dl _tcp_new - app
+    dl _tcp_new_ip_type - app
+    dl _tcp_output - app
+    dl _tcp_poll - app
+    dl _tcp_recv - app
+    dl _tcp_recved - app
+    dl _tcp_sent - app
+    dl _tcp_setprio - app
+    dl _tcp_shutdown - app
+    dl _tcp_tcp_get_tcp_addrinfo - app
+    dl _tcp_write - app
+    dl _altcp_abort - app
+    dl _altcp_accept - app
+    dl _altcp_arg - app
+    dl _altcp_bind - app
+    dl _altcp_close - app
+    dl _altcp_connect - app
+    dl _altcp_dbg_get_tcp_state - app
+    dl _altcp_err - app
+    dl _altcp_get_ip - app
+    dl _altcp_get_port - app
+    dl _altcp_get_tcp_addrinfo - app
+    dl _altcp_listen_with_backlog_and_err - app
+    dl _altcp_mss - app
+    dl _altcp_nagle_disable - app
+    dl _altcp_nagle_disabled - app
+    dl _altcp_nagle_enable - app
+    dl _altcp_new - app
+    dl _altcp_new_ip6 - app
+    dl _altcp_new_ip_type - app
+    dl _altcp_output - app
+    dl _altcp_poll - app
+    dl _altcp_recv - app
+    dl _altcp_recved - app
+    dl _altcp_sent - app
+    dl _altcp_setprio - app
+    dl _altcp_shutdown - app
+    dl _altcp_sndbuf - app
+    dl _altcp_sndqueuelen - app
+    dl _altcp_write - app
+    dl _altcp_tcp_alloc - app
+    dl _altcp_tcp_new_ip_type - app
+    dl _altcp_tcp_wrap - app
+    dl _tcp_debug_state_str - app
+    dl _udp_bind - app
+    dl _udp_bind_netif - app
+    dl _udp_connect - app
+    dl _udp_disconnect - app
+    dl _udp_init - app
+    dl _udp_input - app
+    dl _udp_netif_ip_addr_changed - app
+    dl _udp_new - app
+    dl _udp_new_ip_type - app
+    dl _udp_recv - app
+    dl _udp_remove - app
+    dl _udp_send - app
+    dl _udp_sendto - app
+    dl _udp_sendto_if - app
+    dl _udp_sendto_if_src - app
+    dl _tls_random - app
+    dl _tls_random_bytes - app
+    dl _tls_random_init_entropy - app
+    dl _tls_hash_context_init - app
+    dl _tls_hash_digest - app
+    dl _tls_hash_update - app
+    dl _tls_mgf1 - app
+    dl _tls_sha256_digest - app
+    dl _tls_sha256_init - app
+    dl _tls_sha256_update - app
+    dl _tls_rsa_decode_oaep - app
+    dl _tls_rsa_decrypt_signature - app
+    dl _tls_rsa_encode_oaep - app
+    dl _tls_rsa_encrypt - app
+    dl _tls_rsa_pss_verify - app
+    dl _tls_bytes_compare - app
+    dl _tls_pbkdf2 - app
+    dl _tls_aes_decrypt - app
+    dl _tls_aes_digest - app
+    dl _tls_aes_encrypt - app
+    dl _tls_aes_init - app
+    dl _tls_aes_update_aad - app
+    dl _tls_aes_verify - app
+    dl _tls_hmac_context_init - app
+    dl _tls_hmac_digest - app
+    dl _tls_hmac_update - app
+    dl _tls_keyobject_destroy - app
+    dl _tls_keyobject_import_certificate - app
+    dl _tls_keyobject_import_private - app
+    dl _tls_keyobject_import_public - app
+    dl _tls_derive_secret - app
+    dl _tls_hkdf_expand - app
+    dl _tls_hkdf_expand_label - app
+    dl _tls_hkdf_extract - app
+    dl _tls_decrypt_data - app
+    dl _tls_derive_application_keys - app
+    dl _tls_derive_handshake_keys - app
+    dl _tls_encrypt_data - app
+    dl _tls_handshake_cleanup - app
+    dl _tls_handshake_init - app
+    dl _tls_process_record - app
+    dl _tls_recv_certificate - app
+    dl _tls_recv_finished - app
+    dl _tls_recv_server_hello - app
+    dl _tls_send_alert - app
+    dl _tls_send_client_hello - app
+    dl _tls_send_finished - app
+    dl _tls_asn1_decode_next - app
+    dl _tls_asn1_decoder_init - app
+    dl _tls_asn1_encode - app
+    dl _tls_base64_decode - app
+    dl _tls_base64_encode - app
+    dl _tls_cleanup - app
+    dl _tls_init - app
+    dl _tls_truststore_init - app
+    dl _tls_truststore_lookup - app
 
 
 extern _eth_get_interfaces
 extern _eth_usb_event_callback
+extern _mem_buffer_capacity
+extern _mem_buffer_create
+extern _mem_buffer_destroy
+extern _mem_buffer_free
+extern _mem_buffer_len
+extern _mem_buffer_malloc
+extern _mem_buffer_pop
+extern _mem_buffer_push
+extern _mem_buffer_set_grow
+extern _mem_buffer_set_max_size
+extern _mem_buffer_set_shrink
+extern _mem_buffer_space
+extern _mem_init
 extern _etharp_acd_announce
 extern _etharp_acd_probe
 extern _etharp_cleanup_netif
@@ -374,15 +457,14 @@ extern _custom_calloc
 extern _custom_free
 extern _custom_malloc
 extern _mem_calloc
-extern _mem_configure
 extern _mem_free
-extern _mem_init
 extern _mem_malloc
 extern _mem_trim
 extern _memp_free
 extern _memp_init
 extern _memp_malloc
 extern _lwip_init
+extern _lwip_init_runtime
 extern _netif_add
 extern _netif_add_ext_callback
 extern _netif_add_ip6_address
@@ -527,3 +609,59 @@ extern _udp_send
 extern _udp_sendto
 extern _udp_sendto_if
 extern _udp_sendto_if_src
+extern _tls_random
+extern _tls_random_bytes
+extern _tls_random_init_entropy
+extern _tls_hash_context_init
+extern _tls_hash_digest
+extern _tls_hash_update
+extern _tls_mgf1
+extern _tls_sha256_digest
+extern _tls_sha256_init
+extern _tls_sha256_update
+extern _tls_rsa_decode_oaep
+extern _tls_rsa_decrypt_signature
+extern _tls_rsa_encode_oaep
+extern _tls_rsa_encrypt
+extern _tls_rsa_pss_verify
+extern _tls_bytes_compare
+extern _tls_pbkdf2
+extern _tls_aes_decrypt
+extern _tls_aes_digest
+extern _tls_aes_encrypt
+extern _tls_aes_init
+extern _tls_aes_update_aad
+extern _tls_aes_verify
+extern _tls_hmac_context_init
+extern _tls_hmac_digest
+extern _tls_hmac_update
+extern _tls_keyobject_destroy
+extern _tls_keyobject_import_certificate
+extern _tls_keyobject_import_private
+extern _tls_keyobject_import_public
+extern _tls_derive_secret
+extern _tls_hkdf_expand
+extern _tls_hkdf_expand_label
+extern _tls_hkdf_extract
+extern _tls_decrypt_data
+extern _tls_derive_application_keys
+extern _tls_derive_handshake_keys
+extern _tls_encrypt_data
+extern _tls_handshake_cleanup
+extern _tls_handshake_init
+extern _tls_process_record
+extern _tls_recv_certificate
+extern _tls_recv_finished
+extern _tls_recv_server_hello
+extern _tls_send_alert
+extern _tls_send_client_hello
+extern _tls_send_finished
+extern _tls_asn1_decode_next
+extern _tls_asn1_decoder_init
+extern _tls_asn1_encode
+extern _tls_base64_decode
+extern _tls_base64_encode
+extern _tls_cleanup
+extern _tls_init
+extern _tls_truststore_init
+extern _tls_truststore_lookup

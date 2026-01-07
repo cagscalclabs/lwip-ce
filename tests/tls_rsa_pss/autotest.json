@@ -1,0 +1,26 @@
+{
+  "description": "Tests PSS verification primitive standalone",
+  "transfer_files": [
+    "bin/PSSTEST.8xp"
+  ],
+  "target": {
+    "name": "PSSTEST",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "RSA-PSS verify - RFC 8017 (PKCS#1 v2.2) SHA-256, OpenSSL-generated",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "A2D7C0AB"
+      ],
+      "timeout": 2000
+    }
+  }
+}

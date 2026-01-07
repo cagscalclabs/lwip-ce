@@ -1,49 +1,49 @@
 {
-    "transfer_files":
-    [
+    "description": "Test Password-Based Key Derivation",
+    "transfer_files": [
         "bin/DEMO.8xp"
     ],
-    "target":
-    {
+    "target": {
         "name": "DEMO",
         "isASM": true
     },
-    "sequence":
-    [
+    "sequence": [
         "action|launch",
         "hashWait|1",
         "key|enter",
         "hashWait|2",
         "key|enter",
         "hashWait|3",
+        "key|enter",
         "key|enter"
     ],
-    "hashes":
-    {
-        "1":
-        {
-            "description": "10 rounds, 16 bytes out",
+    "hashes": {
+        "1": {
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 1 (c=1)",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "D1F2869F" ],
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
             "timeout": 1000
         },
-        "2":
-        {
-            "description": "100 rounds, 24 bytes out",
+        "2": {
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 2 (c=2)",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "D1F2869F" ],
-            "timeout": 5000
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
         },
-        "3":
-        {
-            "description": "1000 rounds, 32 bytes out",
+        "3": {
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 7 (c=1, 32 bytes)",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "D1F2869F" ],
-            "timeout": 30000
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
         }
     }
 }
-

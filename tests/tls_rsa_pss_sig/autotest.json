@@ -1,0 +1,27 @@
+{
+  "description": "RSA-PSS signature verification using a known signature and public key",
+  "transfer_files": [
+    "bin/PSSSIG.8xp"
+  ],
+  "target": {
+    "name": "PSSSIG",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "RSA-2048-PSS signature verify - RFC 8017 SHA-256, OpenSSL-generated",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "63C8DC8B"
+      ],
+      "timeout": 15000
+    }
+  }
+}

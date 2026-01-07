@@ -1,33 +1,49 @@
 {
-    "transfer_files":
-    [
+    "description": "Test TLS_HMAC primitive",
+    "transfer_files": [
         "bin/DEMO.8xp"
     ],
-    "target":
-    {
+    "target": {
         "name": "DEMO",
         "isASM": true
     },
-    "sequence":
-    [
+    "sequence": [
         "action|launch",
         "hashWait|1",
         "key|enter",
-        "hashWait|1",
+        "hashWait|2",
         "key|enter",
-        "hashWait|1",
+        "hashWait|3",
+        "key|enter",
         "key|enter"
     ],
-    "hashes":
-    {
-        "1":
-        {
-            "description": "SHA-256 match",
+    "hashes": {
+        "1": {
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 1",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "D1F2869F" ],
-            "timeout":1000
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "2": {
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 2",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "3": {
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 3",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
         }
     }
 }
-

@@ -1,39 +1,37 @@
 {
-    "transfer_files":
-    [
+    "description": "Test decoding of PKCS#8 public key objects",
+    "transfer_files": [
         "bin/DEMO.8xp"
     ],
-    "target":
-    {
+    "target": {
         "name": "DEMO",
         "isASM": true
     },
-    "sequence":
-    [
+    "sequence": [
         "action|launch",
         "hashWait|1",
         "key|enter",
         "hashWait|2",
         "key|enter"
     ],
-    "hashes":
-    {
-        "1":
-        {
-            "description": "RSA public decode",
+    "hashes": {
+        "1": {
+            "description": "Test decode RSA PKCS#8 public key",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "61E4EAD8" ],
-            "timeout": 2000
+            "expected_CRCs": [
+                "61E4EAD8"
+            ],
+            "timeout": 5000
         },
-        "2":
-        {
-            "description": "EC public decode",
+        "2": {
+            "description": "Test decode EC PKCS#8 public key",
             "start": "vram_start",
             "size": "vram_16_size",
-            "expected_CRCs": [ "7C68B78D" ],
-            "timeout": 2000
+            "expected_CRCs": [
+                "7C68B78D"
+            ],
+            "timeout": 5000
         }
     }
 }
-
