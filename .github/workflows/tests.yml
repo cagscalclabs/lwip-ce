@@ -29,22 +29,7 @@ jobs:
           ref: 'tls'
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y make tar wget cmake ninja-build qtbase5-dev qtdeclarative5-dev libqt5svg5-dev
-          sudo apt-get install -y build-essential pkg-config libgl1-mesa-dev
-
-      - name: Checkout vcpkg
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/vcpkg
-          ref: master
-          path: ${{github.workspace}}/vcpkg
-          persist-credentials: false
-
-      - name: Bootstrap vcpkg
-        working-directory: ${{github.workspace}}/vcpkg
-        run: |
-          ./bootstrap-vcpkg.sh
+        run: sudo apt-get update && sudo apt-get install -y make tar wget
 
       - name: Download and extract CEdev
         run: |
@@ -68,21 +53,13 @@ jobs:
           persist-credentials: false
 
       - name: Build CEmu
-        working-directory: ${{env.CEMU_PATH}}/gui/qt
-        run: |
-          # Configure CEmu using Linux preset
-          cmake -G Ninja --preset Linux-x64 -DDEPS_RELEASE_ONLY=ON -DVCPKG_ROOT=${{github.workspace}}/vcpkg
-          # Build CEmu
-          cmake --build --preset Linux-x64-Release
+        run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
-        working-directory: ${{env.CEMU_PATH}}/tests/autotester
-        run: |
-          cmake -B build -G Ninja
-          cmake --build build
+        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester ${{matrix.ldflags}}
 
       - name: Install Autotester CLI
-        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/build/autotester ${{env.CEDEV_BIN}}/cemu-autotester
+        run: cp ${{env.CEMU_PATH}}/tests/autotester/autotester${{matrix.exe}} ${{env.CEDEV_BIN}}/cemu-autotester${{matrix.exe}}
 
       - name: Run Unit Tests
         run: |
@@ -113,7 +90,7 @@ jobs:
             done
             end_time=$(($(date +%s%N)/1000000))
             echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" >> ${{github.workspace}}/summary.json
-            cmake -E echo "$total_tests modules tested, $total_passed passed, $total_failed failed!"
+            echo "$total_tests modules tested, $total_passed passed, $total_failed failed!"
             exit $total_failed
           }
 
