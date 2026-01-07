@@ -21,8 +21,8 @@
 #include "lwip/mem.h"
 #include "drivers/mem.h"
 
-#define TLS_TEST_MAX_HEAP (96u * 1024u)
-#define TLS_TEST_POOL_BYTES (64u * 1024u)
+#define TLS_TEST_MAX_HEAP (20u * 1024u)
+#define TLS_TEST_POOL_BYTES (16u * 1024u)
 #define TLS_TEST_POOL_BLOCK 256u
 
 static struct mem_buffer *tls_test_heap;

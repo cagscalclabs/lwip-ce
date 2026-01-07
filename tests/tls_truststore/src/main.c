@@ -49,28 +49,21 @@ static bool tls_test_mem_init(void)
 
 static const struct tls_spki_entry *tls_truststore_first_entry(void)
 {
-    void *truststore_data = NULL;
-    if (!os_ChkFindSym(OS_TYPE_APPVAR, "lwIPSPKI", NULL, &truststore_data))
+    var_t *truststore_var = os_GetAppVarData("lwIPSPKI", NULL);
+    if (!truststore_var)
     {
         return NULL;
     }
 
-    uint16_t truststore_size = *((uint16_t *)truststore_data);
-    printf("size: %u\n", truststore_size);
+    uint16_t truststore_size = *((uint16_t *)truststore_var);
     if (truststore_size < TRUSTSTORE_SIG_LEN + TLS_SPKI_HEADER_LEN + 2)
     {
         return NULL;
     }
 
-    uint8_t *sig = (uint8_t *)truststore_data + 2;
-    printf("sig: %02x %02x %02x %02x\n", sig[0], sig[1], sig[2], sig[3]);
-
+    uint8_t *base = (uint8_t *)truststore_var + 2;
     struct tls_truststore_header *header =
-        (struct tls_truststore_header *)((uint8_t *)truststore_data + 2 + TRUSTSTORE_SIG_LEN);
-    printf("hdr: %02x %02x %02x %02x\n",
-           ((uint8_t *)header)[0], ((uint8_t *)header)[1],
-           ((uint8_t *)header)[2], ((uint8_t *)header)[3]);
-    printf("cnt: %u\n", header->entry_count);
+        (struct tls_truststore_header *)(base + TRUSTSTORE_SIG_LEN);
     if (header->entry_count == 0)
     {
         return NULL;
@@ -99,25 +92,23 @@ int main(void)
         return 1;
     }
 
-    if (!tls_truststore_init())
-    {
-        printf("truststore sig bad\n");
-        os_GetKey();
-        tls_cleanup();
-        // return 1;
-    }
+    bool sig_ok = tls_truststore_init();
+    printf("Test 1 (Sig verified): %s\n", sig_ok ? "pass" : "fail");
+    os_GetKey();
+    os_ClrHome();
 
     const struct tls_spki_entry *entry = tls_truststore_first_entry();
-    if (!entry)
+    bool owner_ok = false;
+    if (entry)
     {
-        printf("no entries\n");
-        os_GetKey();
-        tls_cleanup();
-        return 1;
+        const char expected[] = "COMODO Certification Authority";
+        size_t expected_len = sizeof(expected) - 1;
+        size_t owner_len = strnlen((const char *)entry->owner_id, TLS_SPKI_OWNER_ID_LEN);
+        owner_ok = (owner_len == expected_len) &&
+                   (memcmp(entry->owner_id, expected, expected_len) == 0);
     }
-
-    printf("owner: %.*s\n", TLS_SPKI_OWNER_ID_LEN, entry->owner_id);
+    printf("Test 2 (First entry): %s\n", owner_ok ? "pass" : "fail");
     os_GetKey();
     tls_cleanup();
-    return 0;
+    return (sig_ok && owner_ok) ? 0 : 1;
 }
