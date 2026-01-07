@@ -165,6 +165,7 @@ jobs:
           data_path = os.path.join("truststore_out", "lwIPSPKI.data")
           sig_path = os.path.join("truststore_out", "lwIPSPKI.sig")
           bin_path = os.path.join("truststore_out", "lwIPSPKI.bin")
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
 
           with open(data_path, "wb") as f:
               f.write(header)
@@ -195,6 +196,18 @@ jobs:
 
           print(f"entries={entry_count}")
           print(f"bin={bin_path}")
+
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as summary:
+                  summary.write("## Truststore Entries\n\n")
+                  summary.write("Owner | Issuer | Not Before | Not After\n")
+                  summary.write("--- | --- | --- | ---\n")
+                  for owner_id, issuer_id, not_before, not_after, _spki_hash in entries:
+                      owner = owner_id.split(b"\x00", 1)[0].decode("ascii", "ignore")
+                      issuer = issuer_id.split(b"\x00", 1)[0].decode("ascii", "ignore")
+                      nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
+                      na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
+                      summary.write(f"{owner} | {issuer} | {nb} | {na}\n")
           PY
 
       - name: Build AppVar
