@@ -20,7 +20,7 @@
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "29DDF567"
+                "64F87F80"
             ],
             "timeout": 2000
         },
@@ -29,7 +29,7 @@
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
-                "E2D4BEBD"
+                "8993ECA6"
             ],
             "timeout": 2000
         }
