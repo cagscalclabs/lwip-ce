@@ -10,7 +10,8 @@ env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
   LWIP_TESTS: ${{github.workspace}}/tests
   CEMU_PATH: ${{github.workspace}}/CEmu
-  HOST_DOMAIN: "https://cagstech.com"
+  CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
+  SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
 jobs:
@@ -29,7 +30,8 @@ jobs:
           ref: 'tls'
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y make tar wget
+        run: |
+          sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb
 
       - name: Download and extract CEdev
         run: |
@@ -42,13 +44,43 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          curl -A "github/workflows" -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" -sL ${{ secrets.CEMU_PATH }} -o ${{ env.AUTOTESTER_ROM }}
+          # Try download with verbose output
+          HTTP_CODE=$(curl -A "github/workflows" \
+            -H "Authorization: Bearer ${{ env.SECRETS_TOKEN }}" \
+            -w "%{http_code}" \
+            -o ${{ env.AUTOTESTER_ROM }} \
+            -SL ${{env.CEMU_ROM_PATH}} \
+            --retry 3 \
+            --retry-delay 2)
+
+          echo "HTTP response code: ${HTTP_CODE}"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Download failed with HTTP code ${HTTP_CODE}"
+            echo "Checking if file was created anyway..."
+            ls -lh ${{ env.AUTOTESTER_ROM }} || echo "No file created"
+            exit 1
+          fi
+
+          # Verify download
+          if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
+            echo "ERROR: ROM file not created"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s "${{ env.AUTOTESTER_ROM }}" 2>/dev/null || stat -f%z "${{ env.AUTOTESTER_ROM }}")
+          echo "Downloaded ROM size: ${FILE_SIZE} bytes"
+
+          if [ "$FILE_SIZE" -lt 1000000 ]; then
+            echo "WARNING: ROM file seems too small (expected ~2-4MB)"
+            file "${{ env.AUTOTESTER_ROM }}"
+          fi
 
       - name: Checkout CEmu
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: CE-Programming/CEmu
-          ref: master
+          ref: latest-stable
           path: ${{env.CEMU_PATH}}
           persist-credentials: false
 
@@ -56,10 +88,17 @@ jobs:
         run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
-        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester ${{matrix.ldflags}}
+        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
 
       - name: Install Autotester CLI
-        run: cp ${{env.CEMU_PATH}}/tests/autotester/autotester${{matrix.exe}} ${{env.CEDEV_BIN}}/cemu-autotester${{matrix.exe}}
+        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
+
+      - name: Verify Autotester Setup
+        run: |
+          echo "Testing autotester with xvfb..."
+          echo "ROM path: ${{env.AUTOTESTER_ROM}}"
+          ls -lh ${{env.AUTOTESTER_ROM}}
+          xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
       - name: Run Unit Tests
         run: |
@@ -90,7 +129,7 @@ jobs:
             done
             end_time=$(($(date +%s%N)/1000000))
             echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" >> ${{github.workspace}}/summary.json
-            echo "$total_tests modules tested, $total_passed passed, $total_failed failed!"
+            cmake -E echo "$total_tests modules tested, $total_passed passed, $total_failed failed!"
             exit $total_failed
           }
 
@@ -114,9 +153,77 @@ jobs:
           echo -e "}}" >> ${{github.workspace}}/results.json
           rm ${{github.workspace}}/summary.json
 
-      - name: Publish CTRF Detailed Test Summary Results
-        run: npx github-actions-ctrf tests ${{github.workspace}}/results.json
+      - name: Publish Test Summary
         if: always()
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Parse results.json for summary stats
+          total=$(jq -r '.results.summary.tests' ${{github.workspace}}/results.json)
+          passed=$(jq -r '.results.summary.passed' ${{github.workspace}}/results.json)
+          failed=$(jq -r '.results.summary.failed' ${{github.workspace}}/results.json)
+
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Add detailed test results table
+          echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # For each test, count the number of hashWait entries in its autotest.json
+          jq -r '.results.tests[] | .name' ${{github.workspace}}/results.json | while read test_name; do
+            test_dir="$LWIP_TESTS/$test_name"
+            # Count hashWait entries in the sequence array
+            test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
+
+            # Get status and duration from results
+            status=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .status" ${{github.workspace}}/results.json)
+            duration=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .duration" ${{github.workspace}}/results.json)
+
+            # Build description from autotest.json
+            module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
+            module_desc=${module_desc:-"(no description)"}
+            module_desc=${module_desc//$'\n'/ }
+            module_desc=${module_desc//|/\\|}
+
+            # Module status label
+            if [ "$status" = "passed" ]; then
+              status_icon="✅ Passed"
+            else
+              status_icon="❌ Failed"
+            fi
+
+            # Per-module table
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### $test_name" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Module | Tests | Status | Description |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| $test_name |  | $status_icon | $module_desc |" >> $GITHUB_STEP_SUMMARY
+
+            # Use sequence order to map hashWait -> hash id -> description
+            jq -r '.sequence // [] | map(select(startswith("hashWait")))[]' "$test_dir/autotest.json" 2>/dev/null | while read -r seq_entry; do
+              hash_id="${seq_entry#hashWait|}"
+              hash_desc=$(jq -r ".hashes[\"$hash_id\"].description // \"(no description)\"" "$test_dir/autotest.json" 2>/dev/null)
+              hash_desc=${hash_desc//$'\n'/ }
+              hash_desc=${hash_desc//|/\\|}
+              if [ "$status" = "passed" ]; then
+                hash_status="✅ Passed"
+              else
+                hash_status="❌ Failed"
+              fi
+              echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
+            done
+            if [ "$test_count" -eq 0 ]; then
+              echo "|  | (none) | $status_icon | (no hash tests) |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
 
       - name: Upload Results Logfile
         uses: actions/upload-artifact@v4
