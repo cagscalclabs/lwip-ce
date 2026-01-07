@@ -8,7 +8,9 @@
     },
     "sequence": [
         "action|launch",
-        "hashWait|1"
+        "hashWait|1",
+        "key|enter",
+        "key|enter"
     ],
     "hashes": {
         "1": {

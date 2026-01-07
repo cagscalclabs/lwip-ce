@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "hmac.h"
 
@@ -50,6 +51,76 @@ const uint8_t expected3[] = {
     0x29,0x59,0x09,0x8b,0x3e,0xf8,0xc1,0x22,0xd9,0x63,0x55,0x14,0xce,0xd5,0x65,0xfe
 };
 
+static volatile uint8_t timing_sink = 0;
+
+struct timing_group {
+    uint16_t len;
+    uint16_t samples;
+    uint32_t mean;
+    uint32_t stddev;
+    uint32_t pct_x100;
+};
+
+static uint32_t isqrt_u64(uint64_t x)
+{
+    uint64_t op = x;
+    uint64_t res = 0;
+    uint64_t one = (uint64_t)1 << 62;
+    while (one > op)
+        one >>= 2;
+    while (one != 0)
+    {
+        if (op >= res + one)
+        {
+            op -= res + one;
+            res = (res >> 1) + one;
+        }
+        else
+        {
+            res >>= 1;
+        }
+        one >>= 2;
+    }
+    return (uint32_t)res;
+}
+
+static void compute_stats(const uint32_t *samples, uint16_t count, struct timing_group *out)
+{
+    uint64_t sum = 0;
+    for (uint16_t i = 0; i < count; i++)
+        sum += samples[i];
+    uint32_t mean = (count != 0) ? (uint32_t)(sum / count) : 0;
+    uint64_t var_sum = 0;
+    for (uint16_t i = 0; i < count; i++)
+    {
+        int64_t diff = (int64_t)samples[i] - (int64_t)mean;
+        var_sum += (uint64_t)(diff * diff);
+    }
+    uint32_t var = (count != 0) ? (uint32_t)(var_sum / count) : 0;
+    uint32_t stddev = isqrt_u64(var);
+    uint32_t pct_x100 = (mean != 0) ? (uint32_t)(((uint64_t)stddev * 10000u) / mean) : 0;
+    out->mean = mean;
+    out->stddev = stddev;
+    out->pct_x100 = pct_x100;
+}
+
+static uint32_t time_hmac(const uint8_t *data, size_t len)
+{
+    struct tls_hmac_context ctx;
+    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    clock_t start = clock();
+    bool ok = tls_hmac_context_init(&ctx, TLS_HASH_SHA256, key1, sizeof key1);
+    if (ok)
+    {
+        ctx.update(&ctx, data, len);
+        ctx.digest(&ctx, digest);
+        timing_sink ^= digest[0];
+    }
+    if (!ok)
+        timing_sink ^= 0xFF;
+    return (uint32_t)(clock() - start);
+}
+
 
 /* Main function, called first */
 int main(void)
@@ -87,5 +158,39 @@ int main(void)
     else printf("failed");
     os_GetKey();
     os_ClrHome();
+
+    {
+        const uint16_t samples = 5;
+        const uint16_t lens[2] = {32, 256};
+        struct timing_group groups[2] = {0};
+        uint8_t buf[256];
+        uint32_t ticks[5];
+
+        for (uint8_t g = 0; g < 2; g++)
+        {
+            uint16_t len = lens[g];
+            for (uint16_t i = 0; i < samples; i++)
+            {
+                for (uint16_t j = 0; j < len; j++)
+                    buf[j] = (uint8_t)(j + i);
+                ticks[i] = time_hmac(buf, len);
+            }
+            groups[g].len = len;
+            groups[g].samples = samples;
+            compute_stats(ticks, samples, &groups[g]);
+        }
+
+        printf("timing len=%u dev=%u.%02u%%\n",
+               groups[0].len,
+               groups[0].pct_x100 / 100,
+               groups[0].pct_x100 % 100);
+        printf("timing len=%u dev=%u.%02u%%",
+               groups[1].len,
+               groups[1].pct_x100 / 100,
+               groups[1].pct_x100 % 100);
+        os_GetKey();
+        os_ClrHome();
+    }
+
     return 0;
 }

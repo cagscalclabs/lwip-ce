@@ -12,7 +12,6 @@
 - Full ECDHE (Elliptic Curve Diffie-Hellman Ephemeral) handshake
 - Certificate validation beyond parsing
 - RSA signature verification
-- ECDSA signature verification
 - 0-RTT session resumption
 - Additional cipher suites
 
@@ -68,7 +67,6 @@ These are negotiated in TLS handshake, not ASN.1 OIDs:
 
 #### Supported Groups (ECDHE)
 For full TLS 1.3 compliance, must support at least one of:
-- **secp256r1** (P-256): `1.2.840.10045.3.1.7` - Currently `TLS_OID_EC_SECP256R1`
 - **x25519**: `1.3.101.110` - Not yet defined in enum
 - **secp384r1** (P-384): `1.3.132.0.34` - Not yet defined
 
@@ -79,7 +77,6 @@ Currently defined in `keyobject.h`:
 
 For broader compatibility, consider adding:
 - **sha384WithRSAEncryption**: `1.2.840.113549.1.1.12` - Already defined as `TLS_OID_SHA384_RSA_ENCRYPTION`
-- **ecdsa-with-SHA384**: `1.2.840.10045.4.3.3` - Not yet defined
 - **rsassa-pss**: `1.2.840.113549.1.1.10` - Not yet defined
 
 #### Public Key Algorithms
@@ -105,10 +102,8 @@ Currently defined:
 ### For Basic TLS 1.3 Server Compatibility
 1. **Cipher Suite**: TLS_AES_128_GCM_SHA256 ✅ (implemented)
 2. **Key Exchange**: At least one of:
-   - ECDHE with secp256r1 ⚠️ (partially implemented)
    - ECDHE with x25519 ⚠️ (field arithmetic only)
 3. **Signature Algorithm**: At least one of:
-   - ecdsa_secp256r1_sha256 ❌ (not implemented)
    - rsa_pss_rsae_sha256 ❌ (not implemented)
    - rsa_pkcs1_sha256 ⚠️ (verify only, no PSS)
 
@@ -118,15 +113,13 @@ Currently defined:
 ## Implementation Roadmap
 
 ### Phase 1: Complete ECDHE (for full handshake)
-1. Finish P-256 point multiplication
-2. Implement ECDH shared secret derivation
-3. Integrate into handshake state machine
+1. Implement x25519 shared secret derivation
+2. Integrate into handshake state machine
 
 ### Phase 2: Certificate Validation
-1. Implement ECDSA signature verification (P-256 + SHA-256)
-2. Implement RSA-PSS signature verification
-3. Add certificate chain validation
-4. Add hostname verification
+1. Implement RSA-PSS signature verification
+2. Add certificate chain validation
+3. Add hostname verification
 
 ### Phase 3: Session Resumption
 1. Implement PSK ticket generation
@@ -147,7 +140,6 @@ Currently defined:
 - `src/tls/core/hkdf.c` - HKDF key derivation
 - `src/tls/core/random.asm` - TRNG implementation
 - `src/tls/core/rsa.c` - RSA modular exponentiation
-- `src/tls/core/share/p256_*.asm` - P-256 field arithmetic
 - `src/tls/core/share/x25519_*.asm` - X25519 field arithmetic
 
 ### Protocol Components
@@ -163,9 +155,8 @@ Currently defined:
 
 ### Current Test Suites
 - `tests/tls_handshake_psk/` - PSK handshake, key derivation, encrypt/decrypt
-- `tests/tls_x509_object/` - X.509 certificate parsing (RSA + ECDSA)
+- `tests/tls_x509_object/` - X.509 certificate parsing (RSA)
 - `tests/tls_hkdf/` - HKDF key derivation vectors
-- `tests/tls_p256_ecdh/` - P-256 ECDH test vectors
 - `tests/tls_x25519/` - X25519 key exchange vectors
 
 All tests use CEmu autotester with CRC validation of VRAM output.

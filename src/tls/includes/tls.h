@@ -7,9 +7,9 @@
 /**
  * @brief Initialize the TLS subsystem.
  *
- * Allocates static memory for cryptographic operations including:
+ * Allocates memory for cryptographic operations including:
  * - RSA scratch buffers (for OAEP and PSS operations)
- * - ECC scratch buffers (for ECDH and ECDSA operations)
+ * - ECC scratch buffers (for ECDH operations)
  *
  * This function must be called before any TLS operations.
  * Uses lwIP's memory allocator for controlled allocation.

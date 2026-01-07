@@ -37,8 +37,24 @@ extern "C" {
 /* Handshake Message Types */
 #define TLS_HANDSHAKE_CLIENT_HELLO      0x01
 #define TLS_HANDSHAKE_SERVER_HELLO      0x02
+#define TLS_HANDSHAKE_CERTIFICATE       0x0b
 #define TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS 0x08
 #define TLS_HANDSHAKE_FINISHED          0x14
+/* Server-side handshake message types across TLS versions */
+enum tls_server_handshake_type {
+    TLS_SERVER_HANDSHAKE_HELLO_REQUEST = 0x00,      /* TLS 1.2 and earlier */
+    TLS_SERVER_HANDSHAKE_SERVER_HELLO = 0x02,
+    TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET = 0x04,
+    TLS_SERVER_HANDSHAKE_ENCRYPTED_EXTENSIONS = 0x08,
+    TLS_SERVER_HANDSHAKE_CERTIFICATE = 0x0b,
+    TLS_SERVER_HANDSHAKE_SERVER_KEY_EXCHANGE = 0x0c, /* TLS 1.2 and earlier */
+    TLS_SERVER_HANDSHAKE_CERTIFICATE_REQUEST = 0x0d,
+    TLS_SERVER_HANDSHAKE_SERVER_HELLO_DONE = 0x0e,   /* TLS 1.2 and earlier */
+    TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY = 0x0f,
+    TLS_SERVER_HANDSHAKE_FINISHED = 0x14,
+    TLS_SERVER_HANDSHAKE_KEY_UPDATE = 0x18,
+    TLS_SERVER_HANDSHAKE_MESSAGE_HASH = 0xfe        /* TLS 1.3 HRR transcript */
+};
 
 /* Content Types */
 #define TLS_CONTENT_TYPE_HANDSHAKE      0x16
@@ -156,7 +172,7 @@ bool tls_handshake_init(
  *
  * TODO: Implement ClientHello generation
  */
-bool tls_generate_client_hello(
+bool tls_send_client_hello(
     struct tls_handshake_context *ctx,
     uint8_t *out,
     size_t out_len,
@@ -179,7 +195,24 @@ bool tls_generate_client_hello(
  *
  * TODO: Implement ServerHello parsing
  */
-bool tls_process_server_hello(
+bool tls_recv_server_hello(
+    struct tls_handshake_context *ctx,
+    const uint8_t *data,
+    size_t data_len
+);
+
+/**
+ * @brief Process Certificate message (server -> client)
+ *
+ * Parses the TLS 1.3 Certificate handshake message (type 0x0b).
+ * This is where the peer's certificate chain can be verified.
+ *
+ * @param ctx Handshake context
+ * @param data Certificate message data
+ * @param data_len Length of Certificate message
+ * @return true on success, false on failure
+ */
+bool tls_recv_certificate(
     struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len
@@ -232,7 +265,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx);
  *
  * TODO: Implement Finished message generation
  */
-bool tls_generate_finished(
+bool tls_send_finished(
     struct tls_handshake_context *ctx,
     bool is_client,
     uint8_t *out,
@@ -254,9 +287,23 @@ bool tls_generate_finished(
  *
  * TODO: Implement Finished message verification
  */
-bool tls_verify_finished(
+bool tls_recv_finished(
     struct tls_handshake_context *ctx,
     bool is_client,
+    const uint8_t *data,
+    size_t data_len
+);
+
+/**
+ * @brief Process a full TLS record (header + payload)
+ *
+ * @param ctx Handshake context
+ * @param data TLS record buffer
+ * @param data_len Length of TLS record buffer
+ * @return true on success, false on failure
+ */
+bool tls_process_record(
+    struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len
 );

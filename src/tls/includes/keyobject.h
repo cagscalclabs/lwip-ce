@@ -12,7 +12,7 @@ enum tls_key_type_flags
     TLS_KEY_PUBLIC = 0,        /**< Indicates the @b tls_keyobject describes a public key. */
     TLS_KEY_PRIVATE = 1,       /**< Indicates the @b tls_keyobject describes a private key. */
     TLS_KEY_RSA = (0 << 1),    /**< Indicates the @b tls_keyobject describes an RSA key. */
-    TLS_KEY_ECC = (1 << 1),    /**< Indicates the @b tls_keyobject describes an EC prime256v1 key. */
+    TLS_KEY_ECC = (1 << 1),    /**< Indicates the @b tls_keyobject describes an EC key. */
     TLS_CERTIFICATE = (1 << 2) /**< Indicates the @b tls_keyobject describes an X.509 certificate. */
 };
 
@@ -22,8 +22,6 @@ enum tls_objectids
     TLS_OID_RSA_ENCRYPTION, /**< RSAEncryption => 1.2.840.113549.1.1.1 */
     TLS_OID_EC_PUBLICKEY,   /**< id-ecPublicKey => 1.2.840.10045.2.1 */
     TLS_OID_EC_PRIVATEKEY,  /**< id-ecPrivateKey => 1.3.132.1.8 */
-    TLS_OID_EC_SECP256R1,   /**< secp256r1 (prime256v1) => 1.2.840.10045.3.1.7 */
-
     // encryption algorithm identifiers
     TLS_OID_AES_128_GCM, /**< AES-128-GCM => 2.16.840.1.101.3.4.1.2 */
     TLS_OID_AES_128_CBC, /**< AES-128-CBC  => 2.16.840.1.101.3.4.1.2 */
@@ -177,16 +175,6 @@ struct tls_keyobject *tls_keyobject_import_public(const char *pem_data, size_t s
  * @note Data is passed by copy
  */
 struct tls_keyobject *tls_keyobject_import_certificate(const char *pem_data, size_t size);
-
-/****************************************************************************************
- * @brief Performs SPKI validation for a given certificate's SubjectPublicKeyInfo Field.
- * @param x509_spki_field   Pointer to SubjectPublicKeyInfo field.
- * @param x509_spki_len     Length of SubjectPublicKeyInfo field.
- * @param expected          Hash expected for this certificate.
- * @param hash_alg          Hash algorithm ID to use
- * @returns [bool] True if hash matches expected, false if not or error
- */
-bool tls_x509_spki_verify(uint8_t *x509_spki_field, size_t x509_spki_len, uint8_t *expected, uint8_t hash_alg);
 
 /****************************************************************************************
  * @brief Erases a @b tls_keyobject, deallocates it, and then sets the pointer to @b NULL.

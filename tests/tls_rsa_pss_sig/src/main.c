@@ -10,6 +10,7 @@
 #include <ti/screen.h>
 #include <ti/getkey.h>
 #include <stdlib.h>
+#include <time.h>
 
 /* TLS includes */
 #include "rsa.h"
@@ -20,6 +21,92 @@
 /* External memory allocator refs */
 extern void *(*caller_malloc_ref)(size_t);
 extern void (*caller_free_ref)(void *);
+
+static volatile uint8_t timing_sink = 0;
+
+struct timing_group {
+    uint16_t len;
+    uint16_t samples;
+    uint32_t mean;
+    uint32_t stddev;
+    uint32_t pct_x100;
+};
+
+static uint32_t isqrt_u64(uint64_t x)
+{
+    uint64_t op = x;
+    uint64_t res = 0;
+    uint64_t one = (uint64_t)1 << 62;
+    while (one > op)
+        one >>= 2;
+    while (one != 0)
+    {
+        if (op >= res + one)
+        {
+            op -= res + one;
+            res = (res >> 1) + one;
+        }
+        else
+        {
+            res >>= 1;
+        }
+        one >>= 2;
+    }
+    return (uint32_t)res;
+}
+
+static void compute_stats(const uint32_t *samples, uint16_t count, struct timing_group *out)
+{
+    uint64_t sum = 0;
+    for (uint16_t i = 0; i < count; i++)
+        sum += samples[i];
+    uint32_t mean = (count != 0) ? (uint32_t)(sum / count) : 0;
+    uint64_t var_sum = 0;
+    for (uint16_t i = 0; i < count; i++)
+    {
+        int64_t diff = (int64_t)samples[i] - (int64_t)mean;
+        var_sum += (uint64_t)(diff * diff);
+    }
+    uint32_t var = (count != 0) ? (uint32_t)(var_sum / count) : 0;
+    uint32_t stddev = isqrt_u64(var);
+    uint32_t pct_x100 = (mean != 0) ? (uint32_t)(((uint64_t)stddev * 10000u) / mean) : 0;
+    out->mean = mean;
+    out->stddev = stddev;
+    out->pct_x100 = pct_x100;
+}
+
+static uint32_t time_pss_verify(void)
+{
+    const uint8_t msg[] = "hello world";
+    uint8_t mhash[TLS_SHA256_DIGEST_LEN];
+    uint8_t decoded_sig[sizeof(test_rsa_pubkey_2048)];
+    struct tls_hash_context hash_ctx;
+    clock_t start = clock();
+
+    bool ok = tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256);
+    if (ok)
+    {
+        tls_hash_update(&hash_ctx, msg, sizeof(msg) - 1);
+        tls_hash_digest(&hash_ctx, mhash);
+    }
+    if (ok)
+    {
+        ok = tls_rsa_decrypt_signature(
+            test_rsa_sig_2048, sizeof(test_rsa_sig_2048),
+            decoded_sig, test_rsa_pubkey_2048, sizeof(test_rsa_pubkey_2048));
+    }
+    if (ok)
+    {
+        ok = tls_rsa_pss_verify(
+            decoded_sig, sizeof(decoded_sig),
+            mhash, sizeof(mhash),
+            TLS_HASH_SHA256);
+    }
+    timing_sink ^= decoded_sig[0];
+    if (!ok)
+        timing_sink ^= 0xFF;
+    return (uint32_t)(clock() - start);
+}
 
 /**
  * Test 1: RSA-PSS Verify (signature + public key)
@@ -599,6 +686,23 @@ int main(void)
 
     /* Cleanup */
     tls_cleanup();
+
+    {
+        const uint16_t samples = 5;
+        struct timing_group group = {0};
+        uint32_t ticks[5];
+        for (uint16_t i = 0; i < samples; i++)
+            ticks[i] = time_pss_verify();
+        group.len = (uint16_t)sizeof(test_rsa_sig_2048);
+        group.samples = samples;
+        compute_stats(ticks, samples, &group);
+        printf("timing len=%u dev=%u.%02u%%",
+               group.len,
+               group.pct_x100 / 100,
+               group.pct_x100 % 100);
+        os_GetKey();
+        os_ClrHome();
+    }
 
     return test1 ? 0 : 1;
 }
