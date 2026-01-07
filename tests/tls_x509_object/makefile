@@ -8,8 +8,8 @@ ARCHIVED = NO
 DESCRIPTION = "X.509 certificate test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
-CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
+CFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
+CXXFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
 
 # Test main
 SOURCES = src/main.c

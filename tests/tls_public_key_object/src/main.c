@@ -6,10 +6,34 @@
 
 #include "keyobject.h"
 #include "lwip/mem.h"
+#include "drivers/mem.h"
 
-/* lwIP memory allocator function pointers */
-extern void *(*caller_malloc_ref)(size_t);
-extern void (*caller_free_ref)(void *);
+#define TLS_TEST_MAX_HEAP (64u * 1024u)
+#define TLS_TEST_POOL_BYTES (48u * 1024u)
+#define TLS_TEST_POOL_BLOCK 256u
+
+static struct mem_buffer *tls_test_heap;
+
+static bool tls_test_mem_init(void)
+{
+    if (!mem_init(TLS_TEST_MAX_HEAP, malloc, free, realloc))
+    {
+        return false;
+    }
+    tls_test_heap = mem_buffer_create(
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BLOCK,
+        BUFFER_MALLOC_TYPE,
+        NULL);
+    if (!tls_test_heap)
+    {
+        return false;
+    }
+    mem_buffer_set_lwip_heap(tls_test_heap);
+    mem_buffer_set_owner(tls_test_heap, MEM_BUF_OWNER_TLS_RX);
+    return true;
+}
 
 // test vectors
 const char *test1 = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGyysU2q4d1q5X2gC4cSZIgRScpt6W0w3ypyYWrM+85s4YeIniKhjuA7EUSWlAG3BJuElaEJNsWFtDFItptYzIkLLvPzz4ecJfvfFu5o4r3H//a7DpyiXwe2e4GEwwCV8FtHlrZaUcqb/mjRiziEwvmKPTCO/GkQyXI0wHQCOijQIDAQAB\n-----END PUBLIC KEY-----";
@@ -26,9 +50,13 @@ int main(void)
     os_FontSelect(os_SmallFont);
 
     /* Set up memory allocator for lwIP's custom malloc */
-    caller_malloc_ref = malloc;
-    caller_free_ref = free;
-    mem_init();
+    if (!tls_test_mem_init())
+    {
+        printf("error");
+        os_GetKey();
+        os_ClrHome();
+        return 1;
+    }
 
     // PKCS#8 RSA public key
     struct tls_keyobject *pk = tls_keyobject_import_public(test1, strlen(test1));

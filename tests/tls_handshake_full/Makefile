@@ -8,8 +8,8 @@ ARCHIVED = NO
 DESCRIPTION = "TLS 1.3 Full Handshake Test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
-CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
+CFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
+CXXFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
 
 # Test main
 SOURCES = src/main.c

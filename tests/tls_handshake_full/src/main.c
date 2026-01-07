@@ -19,10 +19,34 @@
 /* TLS implementation headers */
 #include "handshake.h"
 #include "lwip/mem.h"
+#include "drivers/mem.h"
 
-/* lwIP memory allocator function pointers */
-extern void *(*caller_malloc_ref)(size_t);
-extern void (*caller_free_ref)(void *);
+#define TLS_TEST_MAX_HEAP (96u * 1024u)
+#define TLS_TEST_POOL_BYTES (64u * 1024u)
+#define TLS_TEST_POOL_BLOCK 256u
+
+static struct mem_buffer *tls_test_heap;
+
+static bool tls_test_mem_init(void)
+{
+    if (!mem_init(TLS_TEST_MAX_HEAP, malloc, free, realloc))
+    {
+        return false;
+    }
+    tls_test_heap = mem_buffer_create(
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BLOCK,
+        BUFFER_MALLOC_TYPE,
+        NULL);
+    if (!tls_test_heap)
+    {
+        return false;
+    }
+    mem_buffer_set_lwip_heap(tls_test_heap);
+    mem_buffer_set_owner(tls_test_heap, MEM_BUF_OWNER_TLS_RX);
+    return true;
+}
 
 /* Test configuration */
 #define TEST_PSK_LEN 32
@@ -340,8 +364,12 @@ int main(void)
     size_t client_hello_len;
 
     /* Set up lwIP memory allocators */
-    caller_malloc_ref = malloc;
-    caller_free_ref = free;
+    if (!tls_test_mem_init())
+    {
+        printf("mem init failed\n");
+        os_GetKey();
+        return 1;
+    }
 
     os_ClrHome();
 

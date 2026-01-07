@@ -8,8 +8,8 @@ ARCHIVED = NO
 DESCRIPTION = "RSA-PSS Signature Verify"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
-CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes
+CFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
+CXXFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
 
 # Test main
 SOURCES = src/main.c

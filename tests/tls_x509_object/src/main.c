@@ -4,8 +4,36 @@
 #include <string.h>
 #include <stdio.h>
 #include "lwip/mem.h"
+#include "drivers/mem.h"
 #include "keyobject.h"
 #include "hash.h"
+
+#define TLS_TEST_MAX_HEAP (96u * 1024u)
+#define TLS_TEST_POOL_BYTES (64u * 1024u)
+#define TLS_TEST_POOL_BLOCK 256u
+
+static struct mem_buffer *tls_test_heap;
+
+static bool tls_test_mem_init(void)
+{
+    if (!mem_init(TLS_TEST_MAX_HEAP, malloc, free, realloc))
+    {
+        return false;
+    }
+    tls_test_heap = mem_buffer_create(
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BYTES,
+        TLS_TEST_POOL_BLOCK,
+        BUFFER_MALLOC_TYPE,
+        NULL);
+    if (!tls_test_heap)
+    {
+        return false;
+    }
+    mem_buffer_set_lwip_heap(tls_test_heap);
+    mem_buffer_set_owner(tls_test_heap, MEM_BUF_OWNER_TLS_RX);
+    return true;
+}
 
 // test vectors
 const char *test1 = "-----BEGIN CERTIFICATE-----\nMIIDnzCCAoegAwIBAgIUHE/g0NoguFZkQL9VBbXbIm/7WDswDQYJKoZIhvcNAQELBQAwXzELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAk5ZMQswCQYDVQQHDAJOWTERMA8GA1UECgwIY2Fnc3RlY2gxETAPBgNVBAsMCGNhZ3N0ZWNoMRAwDgYDVQQDDAdBbnRob255MB4XDTI0MDkwODA1NDc1M1oXDTI1MDkwODA1NDc1M1owXzELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAk5ZMQswCQYDVQQHDAJOWTERMA8GA1UECgwIY2Fnc3RlY2gxETAPBgNVBAsMCGNhZ3N0ZWNoMRAwDgYDVQQDDAdBbnRob255MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8q4s1a+ReNvXPOhFhdpNGwCwfR6WHzRoksko2SJCqwhO9b9+0cUM6WQxCPDtAxba8g6FgJTc2m9x/I1gybyn7++ZrtNaMXgICIFza5rh5pBNbtHiL+5v1fy7wIkKo34jK3VryRNQTbb5VJqfGD33OJYUp3BfpShRkIwgxocloqXqwB9UOzUF99icUvC3wDy85y4zolIpNEM8zQqEuQSJIISUQuevo0DlvMtB/DMeGQP64pE5/HDz89+agFka1sDWguGyp3TbzvXxiEoigxsj2208unqozsNIYTRGxPF5deNJ/x+3kW4ivBVzpC01/3ETpiMYotxaEARoO0maBDpKzQIDAQABo1MwUTAdBgNVHQ4EFgQUrv2AiZkx1XiN7qY3wGkpiJ5GCjMwHwYDVR0jBBgwFoAUrv2AiZkx1XiN7qY3wGkpiJ5GCjMwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEA6YccSZu9vRgEZ3oHSpB7LRxYF5FxwH2WCUtnxz3uIafzbjnyP7tLkTL845JeVFgAi/ZHpJGKLOxXIqIffGnUe6wuaYFr2M2QdzkKIRvr0/Mi5XFRX0PI7/dAFZhj5DFtdM9avzdczka4r8AB8nHZwcmlQbxdbs/hv1nVsr6mfh5FntuPY3cNulkLwOhqUCKEFl1CoCpz68ejKhszhTrYWVLTfNrm3HwQlMRqXvmv1jWsh9X8sm/IM1psUPmm95VY+2OxBwJRHh1hYVlBn8RxnCM4EGTAqowTv/r8sktY2gW2HulwdMSzxOlApL5f5yiwKkSmPVU7SIUuC5UVOujblw==\n-----END CERTIFICATE-----";
@@ -17,14 +45,14 @@ int main(void)
     os_ClrHome();
     os_FontSelect(os_SmallFont);
 
-    /* lwIP memory allocator function pointers */
-    extern void *(*caller_malloc_ref)(size_t);
-    extern void (*caller_free_ref)(void *);
-
     /* Set up memory allocator for lwIP's custom malloc */
-    caller_malloc_ref = malloc;
-    caller_free_ref = free;
-    mem_init();
+    if (!tls_test_mem_init())
+    {
+        printf("error");
+        os_GetKey();
+        os_ClrHome();
+        return 1;
+    }
 
     int i;
     char buf[128];
