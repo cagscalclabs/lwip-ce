@@ -21,6 +21,8 @@
 ## Reporting a Vulnerability
 
 If you have encountered what you believe to be a security issue in this project please report it via the Issues tab on GitHub.
+
 - If you are reporting a security issue *within* the project, please apply the `vulnerability` tag.
 - If you are reporting malware (software that abuses arbitrary code execution to malicious effect), please apply the `malware-report` tag.
+
 Both will be investigated and, if verified, will result in a security advisory. Advisories will contain: (for `vulnerability`) the algorithm and version with the issue and the version that patches it, or (for `malware-report`) the name of the program, author name, and what it does.
