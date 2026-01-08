@@ -1,4 +1,4 @@
-![lwIP Main Build](https://github.com/cagstech/lwip-ce/actions/workflows/build.yml/badge.svg) ![Module Tests](https://github.com/cagstech/lwip-ce/actions/workflows/tests.yml/badge.svg)
+![lwIP Main Build](https://github.com/cagstech/lwip-ce/actions/workflows/build.yml/badge.svg&branch=master&cache=1) ![Module Tests](https://github.com/cagstech/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=tls&cache=1) ![SAST](https://github.com/cagstech/lwip-ce/actions/workflows/sast.yml/badge.svg?cache=1)
 
 
 # lwIP-CE #
