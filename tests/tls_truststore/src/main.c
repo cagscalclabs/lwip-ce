@@ -175,6 +175,22 @@ int main(void)
     }
     draw_line(owner_ok ? "Test 2 (First entry): pass" : "Test 2 (First entry): fail");
     os_GetKey();
+
+    bool lookup_ok = false;
+    if (entry)
+    {
+        struct tls_spki_entry found = {0};
+        if (tls_truststore_lookup((uint8_t *)entry->hash, &found))
+        {
+            const char expected[] = "COMODO Certification Authority";
+            size_t expected_len = sizeof(expected) - 1;
+            size_t owner_len = strnlen((const char *)found.owner_id, TLS_SPKI_OWNER_ID_LEN);
+            lookup_ok = (owner_len == expected_len) &&
+                        (memcmp(found.owner_id, expected, expected_len) == 0);
+        }
+    }
+    draw_line(lookup_ok ? "Test 3 (Hash lookup): pass" : "Test 3 (Hash lookup): fail");
+    os_GetKey();
     tls_cleanup();
-    return (sig_ok && owner_ok) ? 0 : 1;
+    return (sig_ok && owner_ok && lookup_ok) ? 0 : 1;
 }

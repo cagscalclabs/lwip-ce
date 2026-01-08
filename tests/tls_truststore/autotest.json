@@ -13,6 +13,8 @@
     "hashWait|1",
     "key|enter",
     "hashWait|2",
+    "key|enter",
+    "hashWait|3",
     "key|enter"
   ],
   "hashes": {
@@ -31,6 +33,15 @@
       "size": "vram_16_size",
       "expected_CRCs": [
         "BBA2725D"
+      ],
+      "timeout": 2000
+    },
+    "3": {
+      "description": "Verify hash lookup ok",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "78FA562E"
       ],
       "timeout": 2000
     }
