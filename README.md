@@ -1,14 +1,17 @@
+![lwIP Main Build](https://github.com/cagstech/lwip-ce/actions/workflows/build.yml/badge.svg&cache=1) ![Module Tests](https://github.com/cagstech/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=tls&cache=1) ![SAST](https://github.com/cagstech/lwip-ce/actions/workflows/sast.yml/badge.svg?cache=1)
+
+
 # lwIP-CE #
 
 ## Stability Reports ##
 
 Status of lwIP application build from branch `master`.
 
-![AUTOBUILD](https://github.com/cagstech/lwip-ce/actions/workflows/build.yml/badge.svg)
+
 
 Status of TLS unit tests.
 
-![AUTOBUILD](https://github.com/cagstech/lwip-ce/actions/workflows/tests.yml/badge.svg)
+
 
 ## What are lwIP and lwIP-CE ##
 
