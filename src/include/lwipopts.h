@@ -173,7 +173,7 @@ a lot of data that needs to be copied, this should be set high. */
 #define LWIP_MEMBUF_SHRINK_THRESHOLD 30
 #define LWIP_MEMBUF_SHRINK_HOLD 1
 #ifndef LWIP_MEM_PRESSURE_CLEAR_PCT
-#define LWIP_MEM_PRESSURE_CLEAR_PCT 70
+#define LWIP_MEM_PRESSURE_CLEAR_PCT 65
 #endif
 
 /** SYS_LIGHTWEIGHT_PROT

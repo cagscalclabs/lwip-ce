@@ -39,38 +39,100 @@ struct usb_configurator usb_fn = {0};
 static enum mem_pressure_level g_eth_rx_throttle_level = MEM_PRESSURE_NONE;
 static bool g_eth_hook_registered = false;
 static bool g_eth_rx_drain_scheduled = false;
+static bool g_eth_rx_sched_scheduled = false;
 
 #define ETH_RX_RING_INIT_SIZE 512u
 #define ETH_RX_RING_MAX_SIZE 2048u
 #define ETH_RX_RING_STEP_SIZE 512u
 #define ETH_RX_DRAIN_INTERVAL_MS 10u
+#define ETH_RX_SCHED_INTERVAL_MS 20u
 #define ETH_RX_DRAIN_MAX_NONE 8u
 #define ETH_RX_DRAIN_MAX_MILD 4u
 #define ETH_RX_DRAIN_MAX_HIGH 2u
 #define ETH_RX_DRAIN_MAX_CRITICAL 1u
 static uint32_t g_eth_rx_drain_interval_ms = ETH_RX_DRAIN_INTERVAL_MS;
+static uint32_t g_eth_rx_sched_interval_ms = ETH_RX_SCHED_INTERVAL_MS;
 
-static bool eth_should_schedule_rx(void)
+static uint32_t eth_rx_schedule_interval_ms(void)
 {
-    return (g_eth_rx_throttle_level == MEM_PRESSURE_NONE ||
-            g_eth_rx_throttle_level == MEM_PRESSURE_MILD);
+    uint32_t base = ETH_RX_SCHED_INTERVAL_MS;
+    switch (g_eth_rx_throttle_level)
+    {
+    case MEM_PRESSURE_NONE:
+        return base;
+    case MEM_PRESSURE_MILD:
+        return base * 2u;
+    case MEM_PRESSURE_HIGH:
+        return base * 4u;
+    case MEM_PRESSURE_SEVERE:
+        return base * 8u;
+    case MEM_PRESSURE_CRITICAL:
+        return base * 8u;
+    default:
+        return base * 2u;
+    }
 }
 
 static uint16_t eth_drain_budget(void)
 {
-    switch (g_eth_rx_throttle_level)
+    enum mem_pressure_level level = mem_get_global_pressure_level();
+    uint16_t budget = ETH_RX_DRAIN_MAX_NONE;
+    switch (level)
     {
     case MEM_PRESSURE_NONE:
-        return ETH_RX_DRAIN_MAX_NONE;
+        return budget;
     case MEM_PRESSURE_MILD:
-        return ETH_RX_DRAIN_MAX_MILD;
+        budget = ETH_RX_DRAIN_MAX_NONE / 2u;
+        break;
     case MEM_PRESSURE_HIGH:
-        return ETH_RX_DRAIN_MAX_HIGH;
+        budget = ETH_RX_DRAIN_MAX_NONE / 4u;
+        break;
+    case MEM_PRESSURE_SEVERE:
+        budget = ETH_RX_DRAIN_MAX_NONE / 8u;
+        break;
     case MEM_PRESSURE_CRITICAL:
-        return ETH_RX_DRAIN_MAX_CRITICAL;
+        return 0;
     default:
-        return ETH_RX_DRAIN_MAX_MILD;
+        budget = ETH_RX_DRAIN_MAX_NONE / 2u;
+        break;
     }
+    if (budget == 0)
+    {
+        budget = 1;
+    }
+    return budget;
+}
+
+static void eth_schedule_rx_for_netifs(void)
+{
+    struct netif *netif = NULL;
+    NETIF_FOREACH(netif)
+    {
+        if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
+        {
+            continue;
+        }
+        eth_device_t *dev = (eth_device_t *)netif->state;
+        if (!dev->rx.callback || dev->rx_transfer_active)
+        {
+            continue;
+        }
+        size_t len = (dev->type == USB_NCM_SUBCLASS) ? NCM_RX_NTB_MAX_SIZE : ETHERNET_MTU;
+        usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, len, dev->rx.callback, dev);
+        dev->rx_transfer_active = true;
+    }
+}
+
+static void eth_rx_schedule_timer(void *arg)
+{
+    LWIP_UNUSED_ARG(arg);
+    if (g_eth_rx_throttle_level == MEM_PRESSURE_CRITICAL)
+    {
+        g_eth_rx_sched_scheduled = false;
+        return;
+    }
+    eth_schedule_rx_for_netifs();
+    sys_timeout(g_eth_rx_sched_interval_ms, eth_rx_schedule_timer, NULL);
 }
 
 static bool eth_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len)
@@ -190,24 +252,16 @@ static void eth_register_pressure_hook(void)
 void eth_set_rx_throttle(enum mem_pressure_level level)
 {
     g_eth_rx_throttle_level = level;
-    if (eth_should_schedule_rx())
+    g_eth_rx_sched_interval_ms = eth_rx_schedule_interval_ms();
+    if (g_eth_rx_throttle_level == MEM_PRESSURE_CRITICAL)
     {
-        struct netif *netif = NULL;
-        NETIF_FOREACH(netif)
-        {
-            if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
-            {
-                continue;
-            }
-            eth_device_t *dev = (eth_device_t *)netif->state;
-            if (!dev->rx.callback || dev->rx_transfer_active)
-            {
-                continue;
-            }
-            size_t len = (dev->type == USB_NCM_SUBCLASS) ? NCM_RX_NTB_MAX_SIZE : ETHERNET_MTU;
-            usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, len, dev->rx.callback, dev);
-            dev->rx_transfer_active = true;
-        }
+        g_eth_rx_sched_scheduled = false;
+        return;
+    }
+    if (!g_eth_rx_sched_scheduled)
+    {
+        sys_timeout(g_eth_rx_sched_interval_ms, eth_rx_schedule_timer, NULL);
+        g_eth_rx_sched_scheduled = true;
     }
 }
 
@@ -370,11 +424,6 @@ usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
                     ("ecm_rx: endpoint failure, retry=%u", rx_retries));
         rx_retries++;
-        if (eth_should_schedule_rx())
-        {
-            usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, ETHERNET_MTU, dev->rx.callback, data);
-            dev->rx_transfer_active = true;
-        }
         return USB_SUCCESS;
     }
     else if (transferred)
@@ -383,12 +432,6 @@ usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
         bool pushed = eth_ring_push_frame(dev, recvbuf, (uint16_t)transferred);
         LINK_STATS_INC(link.recv);
         MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
-
-        if (pushed && eth_should_schedule_rx())
-        {
-            usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, ETHERNET_MTU, dev->rx.callback, data);
-            dev->rx_transfer_active = true;
-        }
     }
     return USB_SUCCESS;
 }
@@ -516,11 +559,6 @@ usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
                     ("ncm_rx: endpoint failure, retry=%u", rx_retries));
         rx_retries++;
-        if (eth_should_schedule_rx())
-        {
-            usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, NCM_RX_NTB_MAX_SIZE, dev->rx.callback, data);
-            dev->rx_transfer_active = true;
-        }
         return USB_SUCCESS;
     }
     if (transferred)
@@ -567,13 +605,6 @@ usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
 
         LINK_STATS_INC(link.recv);
         MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
-
-        // queue up next transfer first
-        if (eth_should_schedule_rx())
-        {
-            usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, NCM_RX_NTB_MAX_SIZE, dev->rx.callback, data);
-            dev->rx_transfer_active = true;
-        }
     }
     return USB_SUCCESS;
 }
@@ -986,18 +1017,17 @@ init_success:
         sys_timeout(g_eth_rx_drain_interval_ms, eth_rx_drain_timer, NULL);
         g_eth_rx_drain_scheduled = true;
     }
+    if (!g_eth_rx_sched_scheduled && g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL)
+    {
+        g_eth_rx_sched_interval_ms = eth_rx_schedule_interval_ms();
+        sys_timeout(g_eth_rx_sched_interval_ms, eth_rx_schedule_timer, NULL);
+        g_eth_rx_sched_scheduled = true;
+    }
 
     eth_register_pressure_hook();
     netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
     // enqueue callbacks for receiving interrupt and RX transfers from this device.
     usb_fn.schedule_transfer(eth->interrupt.endpoint, eth->interrupt.buf, INTERRUPT_RX_MAX, interrupt_receive_callback, eth);
-    if (eth_should_schedule_rx())
-    {
-        usb_fn.schedule_transfer(eth->rx.endpoint, eth->rx.buf,
-                                 (tmp.type == USB_NCM_SUBCLASS) ? NCM_RX_NTB_MAX_SIZE : ETHERNET_MTU,
-                                 eth->rx.callback, eth);
-        eth->rx_transfer_active = true;
-    }
     return true;
 }
 

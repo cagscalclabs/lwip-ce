@@ -17,6 +17,7 @@ enum mem_pressure_level
     MEM_PRESSURE_NONE = 0,
     MEM_PRESSURE_MILD,
     MEM_PRESSURE_HIGH,
+    MEM_PRESSURE_SEVERE,
     MEM_PRESSURE_CRITICAL
 };
 
@@ -128,6 +129,7 @@ bool mem_is_ready(void);
 void mem_set_internal_lowmem_cb(mem_low_mem_cb low_mem_cb);
 void mem_register_pressure_hook_eth_rx(void (*hook)(enum mem_pressure_level level));
 void mem_register_pressure_hook_tls_rx(void (*hook)(enum mem_pressure_level level));
+enum mem_pressure_level mem_get_global_pressure_level(void);
 void mem_set_pressure_clear_pct(uint8_t pct);
 
 /* Create/destroy a ring or pool buffer. For malloc buffers, lock_size or step 0 uses one block at cap. */

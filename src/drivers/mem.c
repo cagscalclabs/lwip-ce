@@ -204,13 +204,24 @@ static uint8_t mem_buffer_usage_pct(const struct mem_buffer *rb, size_t used_byt
     return (heap_pct > buf_pct) ? heap_pct : buf_pct;
 }
 
+enum {
+    MEM_PRESSURE_MILD_PCT = 70,
+    MEM_PRESSURE_HIGH_PCT = 85,
+    MEM_PRESSURE_SEVERE_PCT = 95,
+    MEM_PRESSURE_RELIEF_MARGIN = 5
+};
+
 static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct)
 {
-    if (usage_pct >= 85)
+    if (usage_pct >= MEM_PRESSURE_SEVERE_PCT)
+    {
+        return MEM_PRESSURE_SEVERE;
+    }
+    if (usage_pct >= MEM_PRESSURE_HIGH_PCT)
     {
         return MEM_PRESSURE_HIGH;
     }
-    if (usage_pct >= 70)
+    if (usage_pct >= MEM_PRESSURE_MILD_PCT)
     {
         return MEM_PRESSURE_MILD;
     }
@@ -220,12 +231,36 @@ static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct)
 static enum mem_pressure_level mem_pressure_level_relief(enum mem_pressure_level current, uint8_t usage_pct)
 {
     enum mem_pressure_level level = mem_pressure_level_from_usage(usage_pct);
-    if (current == MEM_PRESSURE_CRITICAL && level < MEM_PRESSURE_HIGH)
+    if (current == MEM_PRESSURE_CRITICAL)
     {
+        if (usage_pct < (MEM_PRESSURE_SEVERE_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_SEVERE;
+        }
+        return MEM_PRESSURE_CRITICAL;
+    }
+    if (current == MEM_PRESSURE_SEVERE)
+    {
+        if (usage_pct < (MEM_PRESSURE_SEVERE_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_HIGH;
+        }
+        return MEM_PRESSURE_SEVERE;
+    }
+    if (current == MEM_PRESSURE_HIGH)
+    {
+        if (usage_pct < (MEM_PRESSURE_HIGH_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_MILD;
+        }
         return MEM_PRESSURE_HIGH;
     }
-    if (current == MEM_PRESSURE_HIGH && level < MEM_PRESSURE_MILD)
+    if (current == MEM_PRESSURE_MILD)
     {
+        if (usage_pct < (MEM_PRESSURE_MILD_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_NONE;
+        }
         return MEM_PRESSURE_MILD;
     }
     return level;
@@ -234,6 +269,10 @@ static enum mem_pressure_level mem_pressure_level_relief(enum mem_pressure_level
 static void mem_pressure_update_effective(void)
 {
     enum mem_pressure_level eth_effective = g_pressure_global_active ? g_pressure_global_level : g_pressure_eth_level;
+    if (g_pressure_global_active && g_pressure_global_level == MEM_PRESSURE_CRITICAL)
+    {
+        eth_effective = MEM_PRESSURE_SEVERE;
+    }
     if (g_pressure_eth_active && g_pressure_eth_level > eth_effective)
     {
         eth_effective = g_pressure_eth_level;
@@ -455,6 +494,10 @@ void mem_register_pressure_hook_tls_rx(void (*hook)(enum mem_pressure_level leve
     mem_pressure_update_effective();
 }
 
+enum mem_pressure_level mem_get_global_pressure_level(void)
+{
+    return g_pressure_global_active ? g_pressure_global_level : MEM_PRESSURE_NONE;
+}
 void mem_set_pressure_clear_pct(uint8_t pct)
 {
     if (pct <= 100)

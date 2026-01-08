@@ -825,6 +825,15 @@ void altcp_tls_ce_set_rx_throttle(enum mem_pressure_level level)
             state = state->next;
         }
     }
+    else
+    {
+        altcp_tls_ce_state_t *state = g_tls_state_head;
+        while (state)
+        {
+            state->rx_mild_toggle = 0;
+            state = state->next;
+        }
+    }
 }
 
 static void
@@ -860,15 +869,42 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
     }
     state->rx_passed_unrecved -= lower_recved;
 
-    if (g_tls_rx_throttle_level == MEM_PRESSURE_MILD)
+    uint8_t throttle_div = 1u;
+    switch (g_tls_rx_throttle_level)
     {
-        state->rx_mild_toggle ^= 1u;
-        if (state->rx_mild_toggle == 0)
+    case MEM_PRESSURE_NONE:
+        throttle_div = 1u;
+        break;
+    case MEM_PRESSURE_MILD:
+        throttle_div = 2u;
+        break;
+    case MEM_PRESSURE_HIGH:
+        throttle_div = 4u;
+        break;
+    case MEM_PRESSURE_SEVERE:
+        throttle_div = 8u;
+        break;
+    case MEM_PRESSURE_CRITICAL:
+        throttle_div = 0u;
+        break;
+    default:
+        throttle_div = 2u;
+        break;
+    }
+
+    if (throttle_div == 0u)
+    {
+        state->rx_throttle_pending += lower_recved;
+        return;
+    }
+    if (throttle_div > 1u)
+    {
+        state->rx_throttle_pending += lower_recved;
+        state->rx_mild_toggle = (uint8_t)((state->rx_mild_toggle + 1u) % throttle_div);
+        if (state->rx_mild_toggle != 0u)
         {
-            state->rx_throttle_pending += lower_recved;
             return;
         }
-
         if (state->rx_throttle_pending > 0 && conn->inner_conn)
         {
             size_t pending = state->rx_throttle_pending;
@@ -876,10 +912,6 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
             altcp_tls_ce_lower_recved(conn->inner_conn, chunk);
             state->rx_throttle_pending -= (size_t)chunk;
         }
-    }
-    else if (g_tls_rx_throttle_level != MEM_PRESSURE_NONE)
-    {
-        state->rx_throttle_pending += lower_recved;
         return;
     }
 

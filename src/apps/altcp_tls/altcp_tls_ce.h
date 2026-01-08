@@ -43,7 +43,7 @@ typedef struct altcp_tls_ce_state {
     size_t rx_ring_size;                     /* TLS record ring size */
     uint8_t *rx_ring;                        /* TLS record ring buffer */
     size_t rx_throttle_pending;              /* Pending bytes to recved */
-    uint8_t rx_mild_toggle;                  /* Mild pressure toggle */
+    uint8_t rx_mild_toggle;                  /* Throttle counter */
     struct altcp_tls_ce_state *next;         /* Linked list of states */
     u8_t flags;                              /* State flags */
 } altcp_tls_ce_state_t;
