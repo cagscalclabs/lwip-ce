@@ -15,7 +15,7 @@ jobs:
       id: check-security
       if: github.event_name == 'issues'
       run: |
-        if [[ "${{ contains(github.event.issue.labels.*.name, 'security') }}" == "true" ]]; then
+        if [[ "${{ contains(github.event.issue.labels.*.name, 'vulnerability') }}" == "true" ]] || [[ "${{ contains(github.event.issue.labels.*.name, 'malware-report') }}" == "true" ]]; then
           echo "is_security=true" >> $GITHUB_OUTPUT
         else
           echo "is_security=false" >> $GITHUB_OUTPUT
