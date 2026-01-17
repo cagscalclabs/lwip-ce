@@ -1,17 +1,12 @@
 #ifndef LWIP_LWIPOPTS_H
 #define LWIP_LWIPOPTS_H
 
+#include <stdint.h>
+
 #include "ti/getkey.h"
-#define LWIP_DEBUG 1
-#define LWIP_PLATFORM_ASSERT(x)                            \
-   do                                                      \
-   {                                                       \
-      printf("Assertion \"%s\" failed at line %d in %s\n", \
-             x, __LINE__, __FILE__);                       \
-      fflush(NULL);                                        \
-      os_GetKey();                                         \
-      abort();                                             \
-   } while (0)
+#include "lwip/sntp_time.h"
+#define LWIP_DEBUG 0
+#define LWIP_NOASSERT 1
 
 #define LWIP_IPV4 1
 #define LWIP_IPV6 1
@@ -31,14 +26,18 @@
 #define LWIP_IGMP LWIP_IPV4
 #define LWIP_ICMP LWIP_IPV4
 
-#define LWIP_SNMP LWIP_UDP
-#define MIB2_STATS LWIP_SNMP
+#define LWIP_SNMP 0
+#define MIB2_STATS 0
 #ifdef LWIP_HAVE_MBEDTLS
 #define LWIP_SNMP_V3 (LWIP_SNMP)
 #endif
 
 #define LWIP_DNS LWIP_UDP
 #define LWIP_MDNS_RESPONDER LWIP_UDP
+#define LWIP_DHCP_GET_NTP_SRV 1
+#define SNTP_GET_SERVERS_FROM_DHCP 1
+
+#define SNTP_SET_SYSTEM_TIME(sec) lwip_sntp_set_time((uint32_t)(sec))
 
 #define LWIP_NUM_NETIF_CLIENT_DATA (LWIP_MDNS_RESPONDER)
 
@@ -129,13 +128,13 @@ a lot of data that needs to be copied, this should be set high. */
 #define MEMP_NUM_UDP_PCB 4
 /* MEMP_NUM_TCP_PCB: the number of simulatenously active TCP
    connections. */
-#define MEMP_NUM_TCP_PCB 4
+#define MEMP_NUM_TCP_PCB 16
 /* MEMP_NUM_TCP_PCB_LISTEN: the number of listening TCP
    connections. */
-#define MEMP_NUM_TCP_PCB_LISTEN 2
+#define MEMP_NUM_TCP_PCB_LISTEN 4
 /* MEMP_NUM_TCP_SEG: the number of simultaneously queued TCP
    segments. */
-#define MEMP_NUM_TCP_SEG 16
+#define MEMP_NUM_TCP_SEG 32
 /* MEMP_NUM_SYS_TIMEOUT: the number of simulateously active
    timeouts. */
 #define MEMP_NUM_SYS_TIMEOUT 32
@@ -204,7 +203,7 @@ a lot of data that needs to be copied, this should be set high. */
 #define TCP_OVERSIZE TCP_MSS
 
 /* TCP sender buffer space (bytes). */
-#define TCP_SND_BUF (4 * TCP_MSS)
+#define TCP_SND_BUF (8 * TCP_MSS)
 
 /* TCP sender buffer space (pbufs). This must be at least = 2 *
    TCP_SND_BUF/TCP_MSS for things to work. */
@@ -216,7 +215,11 @@ a lot of data that needs to be copied, this should be set high. */
 #define TCP_SNDLOWAT (TCP_SND_BUF / 2)
 
 /* TCP receive window. */
-#define TCP_WND (8 * TCP_MSS)
+#define TCP_WND (16 * TCP_MSS)
+
+/* TCP Maximum Segment Lifetime in milliseconds.
+   TIME_WAIT lasts 2*MSL. Default is 60000 (60s), set to 15000 for 30s TIME_WAIT. */
+#define TCP_MSL 15000UL
 
 /* Maximum number of retransmissions of data segments. */
 #define TCP_MAXRTX 6
@@ -272,8 +275,8 @@ a lot of data that needs to be copied, this should be set high. */
 
 /* ---------- Statistics options ---------- */
 
-#define LWIP_STATS 1
-#define LWIP_STATS_DISPLAY 1
+#define LWIP_STATS 0
+#define LWIP_STATS_DISPLAY 0
 
 #if LWIP_STATS
 #define LINK_STATS 1

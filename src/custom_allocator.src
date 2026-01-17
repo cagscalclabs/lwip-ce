@@ -1,6 +1,10 @@
 ; Custom allocator stubs for lwIP APP build
 ; These provide __custom_malloc, __custom_free, __custom_realloc
 ; that the ALLOCATOR=CUSTOM linker mode expects
+;
+; IMPORTANT: These stubs just return NULL. The C runtime should not
+; need malloc before main(). If it does, something is wrong.
+; lwIP uses its own internal memory system (mem_buffer_custom_*).
 
 section .text
 
@@ -9,32 +13,27 @@ public __custom_free
 public __custom_realloc
 public __custom_calloc
 
-extern _mem_malloc
-extern _mem_free
-
 ; void *__custom_malloc(size_t size)
-; size is in HL (24-bit)
+; Return NULL - runtime should not need this
 __custom_malloc:
-    call _mem_malloc
+    or a,a
+    sbc hl,hl  ; return NULL
     ret
 
 ; void __custom_free(void *ptr)
-; ptr is in HL (24-bit pointer)
+; Do nothing
 __custom_free:
-    call _mem_free
     ret
 
 ; void *__custom_realloc(void *ptr, size_t size)
-; ptr in first arg, size in second arg
-; lwIP doesn't provide realloc, so return NULL
+; Return NULL
 __custom_realloc:
     or a,a
     sbc hl,hl  ; return NULL
     ret
 
 ; void *__custom_calloc(size_t nmemb, size_t size)
-; nmemb * size, then zero the memory
-; lwIP doesn't provide calloc, so return NULL for now
+; Return NULL
 __custom_calloc:
     or a,a
     sbc hl,hl  ; return NULL

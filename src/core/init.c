@@ -60,6 +60,7 @@
 #include "lwip/nd6.h"
 #include "lwip/mld6.h"
 #include "lwip/api.h"
+#include "lwip/app_config.h"
 
 #include "netif/ppp/ppp_opts.h"
 #include "netif/ppp/ppp_impl.h"
@@ -345,6 +346,7 @@ err_t
 lwip_init(struct lwip_configurator *conf)
 {
     if(conf==NULL) return ERR_ARG;
+    lwip_app_config_refresh();
     memcpy(&usb_fn, &conf->usb_conf, sizeof(struct usb_configurator));
     {
         const struct mem_buffer_pool_cfg pools[] = {

@@ -28,6 +28,31 @@ struct tls_spki_entry
     uint8_t hash[TLS_SPKI_HASH_MAX_LEN];     /* SPKI hash (SHA-256)*/
 };
 
+enum tls_truststore_status
+{
+    TLS_STORE_UNINITIALIZED = 0,
+    TLS_STORE_OK,
+    TLS_STORE_NOT_FOUND,
+    TLS_STORE_HASH_INIT_FAIL,
+    TLS_STORE_SIZE_INVALID,
+    TLS_STORE_VERSION_MISMATCH,
+    TLS_STORE_SIG_DECRYPT_FAIL,
+    TLS_STORE_SIG_INVALID,
+    TLS_STORE_ENTRY_MISMATCH,
+    TLS_STORE_TIME_INVALID
+};
+
+struct tls_truststore_state
+{
+    enum tls_truststore_status status;
+    uint16_t size;
+    uint16_t entry_count;
+    uint16_t version;
+    uint32_t created_timestamp;
+};
+
+enum tls_truststore_status tls_truststore_status(void);
+
 /******************
  * @brief Initializes the trust store, checks for the SPKI appvar,
  * RSA-decrypts the signature, verifies the signature, sets a flag
@@ -52,5 +77,9 @@ bool tls_truststore_init(void);
  * will be distributed in this application.
  */
 bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result);
+bool tls_truststore_lookup_ex(uint8_t *recvd_hash,
+                              const uint8_t *owner_id,
+                              const uint8_t *issuer_id,
+                              struct tls_spki_entry *result);
 
 #endif /* TLS_TRUSTSTORE_H */

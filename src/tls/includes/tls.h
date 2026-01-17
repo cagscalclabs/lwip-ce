@@ -4,6 +4,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "truststore.h"
+
+struct tls_context
+{
+    uint8_t *rsa_scratch;
+    uint8_t *ecc_scratch;
+    bool initialized;
+    struct tls_truststore_state truststore;
+};
+
+extern struct tls_context tls_ctx;
+
 /**
  * @brief Initialize the TLS subsystem.
  *
