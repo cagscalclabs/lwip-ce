@@ -1,0 +1,51 @@
+name: Auto Assign
+on:
+  issues:
+    types: [opened, labeled]
+  pull_request:
+    types: [opened]
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+    - name: 'Check for security label'
+      id: check-security
+      if: github.event_name == 'issues'
+      run: |
+        if [[ "${{ contains(github.event.issue.labels.*.name, 'vulnerability') }}" == "true" ]] || [[ "${{ contains(github.event.issue.labels.*.name, 'malware-report') }}" == "true" ]]; then
+          echo "is_security=true" >> $GITHUB_OUTPUT
+        else
+          echo "is_security=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: 'Notify security team'
+      if: github.event_name == 'issues' && steps.check-security.outputs.is_security == 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: '@cagscalclabs/security - A recently opened issue has been marked as a security issue.'
+          });
+    
+    - name: 'Auto-assign regular issue'
+      if: github.event_name == 'issues' && steps.check-security.outputs.is_security == 'false'
+      uses: pozil/auto-assign-issue@v1
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+        assignees: acagliano
+        numOfAssignee: 1
+    
+    - name: 'Auto-assign pull request'
+      if: github.event_name == 'pull_request'
+      uses: pozil/auto-assign-issue@v1
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+        assignees: acagliano
+        numOfAssignee: 1
