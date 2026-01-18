@@ -13,7 +13,11 @@
 #include "lwip/mem.h"
 #include "lwip/dhcp.h"
 #include "lwip/apps/httpd.h"
+#include "lwip/apps/sntp.h"
 #include "lwip/app_config.h"
+
+#include <sys/rtc.h>
+#include <time.h>
 
 #include <usbdrvce.h>
 #include "drivers/usb_ethernet.h"
@@ -23,6 +27,7 @@ static struct lwip_app_config g_cfg;
 static bool run_main = false;
 static bool dhcp_started = false;
 static bool httpd_running = false;
+static bool sntp_started = false;
 
 struct lwip_configurator lwip_conf = {
     LWIP_CONFIGURATOR_V1,
@@ -131,8 +136,9 @@ static void redraw_menu(uint8_t selected)
     draw_checkbox(20, "Enable DNS", (g_cfg.flags & LWIP_CFG_FLAG_DNS) != 0, selected == 2);
     draw_checkbox(30, "HTTP test", (g_cfg.flags & LWIP_CFG_FLAG_HTTP_TEST) != 0, selected == 3);
     draw_value(40, "Max heap:", g_cfg.max_heap, selected == 4);
-    draw_action(50, "Start HTTP test", selected == 5);
-    draw_action(60, "Save & Exit", selected == 6);
+    draw_action(50, "Start NTP test", selected == 5);
+    draw_action(60, "Start HTTP test", selected == 6);
+    draw_action(70, "Save & Exit", selected == 7);
     draw_line(70, "48k available");
     draw_line(80, "Too high = low app RAM");
     draw_line(90, "2nd=toggle  <>=adjust");
@@ -146,6 +152,120 @@ static void ethif_status_callback_fn(struct netif *netif)
         printf("httpd listen on %s\n", ip4addr_ntoa(netif_ip4_addr(netif)));
         httpd_running = true;
     }
+}
+
+static void run_ntp_test(void)
+{
+    struct netif *ethif = NULL;
+
+    if (lwip_init(&lwip_conf) != ERR_OK)
+    {
+        printf("lwIP init failed\n");
+        os_GetKey();
+        return;
+    }
+
+    if (usb_Init(eth_usb_event_callback, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
+    {
+        printf("USB init failed\n");
+        os_GetKey();
+        return;
+    }
+
+    printf("NTP Test Starting...\n");
+    printf("Waiting for network...\n");
+
+    run_main = true;
+    bool time_synced = false;
+    uint32_t timeout = 300; // 30 seconds
+
+    do
+    {
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            run_main = false;
+        }
+
+        // Start DHCP if not started
+        if (netif_default && (!dhcp_started))
+        {
+            dhcp_start(netif_default);
+            dhcp_started = true;
+        }
+
+        // Start SNTP once we have an IP
+        if (netif_default && dhcp_supplied_address(netif_default) && (!sntp_started))
+        {
+            printf("IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
+            printf("Starting SNTP...\n");
+
+            // Set NTP server (time.nist.gov: 132.163.96.1)
+            ip_addr_t ntp_server;
+            IP_ADDR4(&ntp_server, 132, 163, 96, 1);
+            sntp_setserver(0, &ntp_server);
+
+            sntp_setoperatingmode(SNTP_OPMODE_POLL);
+            sntp_init();
+            sntp_started = true;
+
+            printf("Waiting for time sync...\n");
+            printf("This may take 5-10s\n");
+        }
+
+        // Display time once synced
+        if (sntp_started && !time_synced)
+        {
+            // Check if we got a time (RTC should be set by SNTP_SET_SYSTEM_TIME)
+            uint8_t sec, min, hr;
+            boot_GetTime(&sec, &min, &hr);
+
+            // If time looks valid (not 00:00:00), display it
+            if (sec != 0 || min != 0 || hr != 0)
+            {
+                printf("Time synced!\n");
+                printf("Current time: %02u:%02u:%02u\n", hr, min, sec);
+                printf("(UTC time)\n");
+                printf("\nPress Clear to exit\n");
+                time_synced = true;
+            }
+        }
+
+        if (!netif_default)
+        {
+            dhcp_started = false;
+            sntp_started = false;
+        }
+
+        usb_HandleEvents();
+        sys_check_timeouts();
+
+        // Timeout check
+        if (!time_synced && sntp_started)
+        {
+            timeout--;
+            if (timeout == 0)
+            {
+                printf("Time sync timeout\n");
+                printf("Press any key\n");
+                os_GetKey();
+                run_main = false;
+            }
+        }
+
+    } while (run_main);
+
+    if (sntp_started)
+    {
+        sntp_stop();
+    }
+    if (dhcp_started && ethif)
+    {
+        dhcp_release_and_stop(ethif);
+    }
+    usb_Cleanup();
+    sntp_started = false;
+    dhcp_started = false;
 }
 
 static void run_http_test_server(void)
@@ -217,12 +337,12 @@ int main(void)
 
         if (key == sk_Up)
         {
-            selected = (selected == 0) ? 6 : (selected - 1);
+            selected = (selected == 0) ? 7 : (selected - 1);
             redraw = true;
         }
         else if (key == sk_Down)
         {
-            selected = (selected + 1) % 7;
+            selected = (selected + 1) % 8;
             redraw = true;
         }
         else if (key == sk_2nd)
@@ -258,13 +378,18 @@ int main(void)
         {
             if (selected == 5)
             {
+                run_ntp_test();
+                redraw = true;
+            }
+            else if (selected == 6)
+            {
                 if ((g_cfg.flags & LWIP_CFG_FLAG_HTTP_TEST) != 0)
                 {
                     run_http_test_server();
                 }
                 redraw = true;
             }
-            else if (selected == 6)
+            else if (selected == 7)
             {
                 cfg_save(&g_cfg);
                 break;
