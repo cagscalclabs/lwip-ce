@@ -353,9 +353,32 @@ static bool config_edit_ip(struct config_option *opt)
     return true;
 }
 
+// NTP test state - callbacks set these
+static volatile bool ntp_link_up = false;
+static volatile bool ntp_has_ip = false;
+
+static void ntp_test_link_callback(struct netif *netif)
+{
+    (void)netif;
+    ntp_link_up = netif_is_link_up(netif);
+}
+
+static void ntp_test_status_callback(struct netif *netif)
+{
+    (void)netif;
+    if (netif_is_up(netif) && !ip4_addr_isany(netif_ip4_addr(netif)))
+    {
+        ntp_has_ip = true;
+    }
+}
+
 static bool config_run_ntp_test(struct config_option *opt)
 {
     (void)opt;
+
+    // Reset state
+    ntp_link_up = false;
+    ntp_has_ip = false;
 
     // Start network stack
     if (!start_lwip_stack(&g_cfg))
@@ -368,40 +391,20 @@ static bool config_run_ntp_test(struct config_option *opt)
     os_SetDrawFGColor(COLOR_BLACK);
 
     os_FontDrawText("NTP Test Running", 10, 10);
-    os_FontDrawText("Waiting for network...", 10, 30);
+    os_FontDrawText("Plug in USB Ethernet adapter", 10, 30);
+    os_FontDrawText("Waiting for device...", 10, 50);
 
-    // Wait for IP address (via DHCP or static)
-    bool has_ip = false;
-    int timeout = 300; // 30 seconds at ~10Hz
-
-    while (timeout > 0)
+    // Wait for netif to be created (device enumeration)
+    int timeout = 100; // 10 seconds
+    while (timeout > 0 && !netif_default)
     {
         usb_HandleEvents();
         sys_check_timeouts();
-        apply_network_config(&g_cfg);
 
-        if (netif_default)
-        {
-            if ((g_cfg.flags & LWIP_CFG_DHCP) != 0)
-            {
-                has_ip = dhcp_supplied_address(netif_default);
-            }
-            else
-            {
-                has_ip = !ip4_addr_isany(netif_ip4_addr(netif_default));
-            }
-
-            if (has_ip)
-            {
-                break;
-            }
-        }
-
-        // Check for Clear key to cancel
         uint8_t key = os_GetCSC();
         if (key == sk_Clear)
         {
-            os_FontDrawText("Test cancelled", 10, 50);
+            os_FontDrawText("Test cancelled", 10, 70);
             delay_ms(100);
             return true;
         }
@@ -410,16 +413,93 @@ static bool config_run_ntp_test(struct config_option *opt)
         timeout--;
     }
 
-    // Clear waiting message
-    fill_rect(0, 30, 320, 20, COLOR_WHITE);
-
-    if (!has_ip)
+    if (!netif_default)
     {
-        os_FontDrawText("Failed to get IP address", 10, 30);
-        os_FontDrawText("Press any key", 10, 50);
+        os_FontDrawText("No USB Ethernet device found", 10, 70);
+        os_FontDrawText("Check connection and try again", 10, 90);
+        os_FontDrawText("Press any key", 10, 110);
         os_GetKey();
         return true;
     }
+
+    // Register callbacks for async notifications
+    netif_set_link_callback(netif_default, ntp_test_link_callback);
+    netif_set_status_callback(netif_default, ntp_test_status_callback);
+
+    // Check initial state (callbacks only fire on changes)
+    ntp_link_up = netif_is_link_up(netif_default);
+    if (netif_is_up(netif_default) && !ip4_addr_isany(netif_ip4_addr(netif_default)))
+    {
+        ntp_has_ip = true;
+    }
+
+    // Apply network config (starts DHCP if enabled)
+    apply_network_config(&g_cfg);
+
+    fill_rect(0, 50, 320, 20, COLOR_WHITE);
+    os_FontDrawText("Waiting for link...", 10, 50);
+
+    // Wait for link up (callback sets ntp_link_up)
+    timeout = 100; // 10 seconds
+    while (timeout > 0 && !ntp_link_up)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            os_FontDrawText("Test cancelled", 10, 70);
+            delay_ms(100);
+            return true;
+        }
+
+        delay_ms(100);
+        timeout--;
+    }
+
+    if (!ntp_link_up)
+    {
+        os_FontDrawText("Link not detected", 10, 70);
+        os_FontDrawText("Check cable connection", 10, 90);
+        os_FontDrawText("Press any key", 10, 110);
+        os_GetKey();
+        return true;
+    }
+
+    fill_rect(0, 50, 320, 20, COLOR_WHITE);
+    os_FontDrawText("Link up! Getting IP...", 10, 50);
+
+    // Wait for IP address (callback sets ntp_has_ip)
+    timeout = 300; // 30 seconds for DHCP
+    while (timeout > 0 && !ntp_has_ip)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            os_FontDrawText("Test cancelled", 10, 70);
+            delay_ms(100);
+            return true;
+        }
+
+        delay_ms(100);
+        timeout--;
+    }
+
+    if (!ntp_has_ip)
+    {
+        os_FontDrawText("Failed to get IP address", 10, 70);
+        os_FontDrawText("Check DHCP/network config", 10, 90);
+        os_FontDrawText("Press any key", 10, 110);
+        os_GetKey();
+        return true;
+    }
+
+    // Clear waiting messages
+    fill_rect(0, 30, 320, 40, COLOR_WHITE);
 
     // Display IP address
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
@@ -431,6 +511,11 @@ static bool config_run_ntp_test(struct config_option *opt)
     // Start SNTP
     os_FontDrawText("Starting SNTP...", 10, 50);
 
+    // Apply timezone and DST settings before starting SNTP
+    lwip_sntp_set_timezone_offset((int32_t)g_cfg.tz_offset_minutes * 60);
+    lwip_sntp_set_dst_enabled(g_cfg.dst_enabled != 0);
+    lwip_sntp_reset_flag();
+
     ip_addr_t ntp_server;
     IP_ADDR4(&ntp_server, 132, 163, 96, 1); // time.nist.gov
     sntp_setserver(0, &ntp_server);
@@ -438,34 +523,16 @@ static bool config_run_ntp_test(struct config_option *opt)
     sntp_init();
 
     os_FontDrawText("Waiting for time sync...", 10, 70);
-    os_FontDrawText("This may take 5-10 seconds", 10, 90);
+    os_FontDrawText("This may take up to 30 seconds", 10, 90);
 
-    // Wait for time sync (check RTC for non-zero time)
-    bool time_synced = false;
-    timeout = 200; // 20 seconds
+    // Wait for time sync (flag set by lwip_sntp_set_time callback)
+    // Allow time for initial request (15s timeout) + at least one retry
+    timeout = 450; // 45 seconds
 
-    while (timeout > 0)
+    while (timeout > 0 && !lwip_sntp_time_was_set())
     {
         usb_HandleEvents();
         sys_check_timeouts();
-
-        uint8_t sec, min, hr;
-        boot_GetTime(&sec, &min, &hr);
-
-        // If time looks valid (not midnight), assume synced
-        if (sec != 0 || min != 0 || hr != 0)
-        {
-            time_synced = true;
-
-            fill_rect(0, 70, 320, 40, COLOR_WHITE);
-            os_FontDrawText("Time synced!", 10, 70);
-
-            char time_buf[32];
-            snprintf(time_buf, sizeof(time_buf), "Time: %02u:%02u:%02u UTC", hr, min, sec);
-            os_FontDrawText(time_buf, 10, 90);
-
-            break;
-        }
 
         uint8_t key = os_GetCSC();
         if (key == sk_Clear)
@@ -477,7 +544,20 @@ static bool config_run_ntp_test(struct config_option *opt)
         timeout--;
     }
 
-    if (!time_synced)
+    if (lwip_sntp_time_was_set())
+    {
+        fill_rect(0, 70, 320, 40, COLOR_WHITE);
+        os_FontDrawText("Time synced!", 10, 70);
+
+        // Read the time that was just set
+        uint8_t sec, min, hr;
+        boot_GetTime(&sec, &min, &hr);
+
+        char time_buf[32];
+        snprintf(time_buf, sizeof(time_buf), "Time: %02u:%02u:%02u (Local)", hr, min, sec);
+        os_FontDrawText(time_buf, 10, 90);
+    }
+    else
     {
         fill_rect(0, 70, 320, 40, COLOR_WHITE);
         os_FontDrawText("Time sync timeout", 10, 70);

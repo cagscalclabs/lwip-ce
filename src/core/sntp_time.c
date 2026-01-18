@@ -1,10 +1,14 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include <sys/rtc.h>
+#include <graphx.h>
+#include <tice.h>
 
 static int32_t g_tz_offset_seconds = 0;
 static bool g_dst_enabled = false;
+volatile bool g_sntp_time_set = false;
 
 static bool is_leap_year(uint16_t year)
 {
@@ -19,6 +23,16 @@ void lwip_sntp_set_timezone_offset(int32_t seconds)
 void lwip_sntp_set_dst_enabled(bool enabled)
 {
     g_dst_enabled = enabled;
+}
+
+void lwip_sntp_reset_flag(void)
+{
+    g_sntp_time_set = false;
+}
+
+bool lwip_sntp_time_was_set(void)
+{
+    return g_sntp_time_set;
 }
 
 void lwip_sntp_set_time(uint32_t seconds)
@@ -80,6 +94,7 @@ void lwip_sntp_set_time(uint32_t seconds)
     while (rtc_IsBusy()) {}
 
     // TI-84 CE RTC uses 2-digit years (0-99 representing 2000-2099)
+
     uint16_t year_2digit = (year >= 2000u) ? (year - 2000u) : year;
     if (year_2digit > 99u)
     {
@@ -87,4 +102,7 @@ void lwip_sntp_set_time(uint32_t seconds)
     }
 
     boot_SetDate(day, month, year_2digit);
+
+    // Signal that time has been set (after all RTC operations complete)
+    g_sntp_time_set = true;
 }
