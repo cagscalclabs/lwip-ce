@@ -390,6 +390,7 @@ usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoi
         if (eth_xmit_fatal_error(dev, tx_retries))
         {
             pbuf_free(data);
+            tx_retries = 0;  // Reset retry counter on fatal error
             return USB_ERROR_FAILED;
         }
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
@@ -399,6 +400,10 @@ usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoi
         usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len, bulk_transmit_callback, tbuf);
         return USB_SUCCESS;
     }
+
+    // Successful transmission - reset retry counter
+    tx_retries = 0;
+
     if (data)
         pbuf_free(data);
 

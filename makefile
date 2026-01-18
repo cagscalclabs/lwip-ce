@@ -11,17 +11,16 @@ APP_VERSION = 0
 
 CFLAGS = -Wall -Wextra -Oz -I src/include
 CXXFLAGS = -Wall -Wextra -Oz -I src/include
-OUTPUT_MAP = YES
+OUTPUT_MAP = NO
 HAS_LIBC = YES
 
-BSSHEAP_LOW ?= D052C6
+# BSSHEAP_LOW ?= D052C6
 # BSSHEAP_LOW ?= D11FD8
 # BSSHEAP_HIGH ?= D13FD8
 # ----------------------------
 
-# This is just to shut up the linker, lwIP is an app, it takes user malloc
-ALLOCATOR = CUSTOM
-EXTRA_ASM_SOURCES = src/custom_allocator.src src/runtime_init_symbols.src src/functable.asm
+# Include standard allocator from toolchain
+EXTRA_ASM_SOURCES = $(CEDEV)/lib/libc/allocator_standard.c.src
 
 include app_tools/makefile
 
@@ -33,17 +32,4 @@ EXCLUDE_LIST := src/include/lwip/debug.h
 FUNCTABLE_FILE := src/functable.h
 HELPER_FILES := $(FUNCTABLE_FILE) tmp/headers.tmp
 
-functiontable: $(HELPER_FILES)
 
-$(HELPER_FILES):
-	./make_functable.sh
-	
-
-.PHONY: functiontable
-
-release:
-	./make_functable.sh
-	$(MAKE) LINKER_SCRIPT=app_tools/lib_linker_script
-	$(MAKE) -C libload
-
-.PHONY: release

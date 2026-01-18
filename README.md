@@ -41,12 +41,13 @@ Programs using lwIP as a dynamic library need to follow a specific initializatio
         // If you use any other modules in your program
         // you'll need to include those headers too.
     
-2. **Configure lwIP to Use the Program's Malloc Implementation**: This is something you cannot skip. In order to allocate memory and not conflict with your own program, lwIP needs to use your program's implementation of malloc. This is so important that I actually modified the lwIP source to return an error on init if this is not done. *Note: The max_heap (third) argument to that function sets a limit on how much heap space lwIP is allowed to use. This is useful for tailoring memory constraints to your use case. If your program needs more for itself, configure lwIP to use less. If you anticipate sending lots of data with lwIP, set it higher.*
+2. **Initialize the lwIP Memory System**: This is something you cannot skip. lwIP uses the project's custom allocator and memory pressure system. Initialize it before calling `lwip_init()` so the core pools can be created.
 
-        #define LWIP_MAX_HEAP   (1024 * 16)
-        lwip_configure_allocator(malloc, free, LWIP_MAX_HEAP);
+        #define LWIP_MAX_HEAP   (1024 * 32)
+        if (!mem_init(LWIP_MAX_HEAP, malloc, free, realloc))
+            goto exit;      // whatever your exit w/ error method is
 
-3. **Initialize the lwIP Stack**: Finally we fire up the IP stack.
+3. **Initialize the lwIP Stack**: Fire up the IP stack after memory init.
 
         if(lwip_init() != ERR_OK)
             goto exit;      // whatever your exit w/ error method is

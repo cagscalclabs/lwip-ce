@@ -7,14 +7,6 @@
 #include "../includes/rsa.h"
 #include "../includes/tls.h"
 
-/* External reference to TLS context for scratch buffers */
-extern struct tls_context
-{
-    uint8_t *rsa_scratch;
-    uint8_t *ecc_scratch;
-    bool initialized;
-} tls_ctx;
-
 #define ENCODE_START 0
 #define ENCODE_SALT (1 + ENCODE_START)
 bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,

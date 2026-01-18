@@ -44,7 +44,6 @@
 #include "lwip/sys.h"
 #include "lwip/mem.h"
 #include "drivers/mem.h"
-#include "lwip/app_config.h"
 #include "lwip/memp.h"
 #include "lwip/pbuf.h"
 #include "lwip/netif.h"
@@ -61,11 +60,10 @@
 #include "lwip/nd6.h"
 #include "lwip/mld6.h"
 #include "lwip/api.h"
+#include "lwip/app_config.h"
 
 #include "netif/ppp/ppp_opts.h"
 #include "netif/ppp/ppp_impl.h"
-
-#include <ti/vars.h>
 
 #ifndef LWIP_SKIP_PACKING_CHECK
 
@@ -348,39 +346,7 @@ err_t
 lwip_init(struct lwip_configurator *conf)
 {
     if(conf==NULL) return ERR_ARG;
-    struct lwip_app_config cfg;
-    cfg.version = LWIP_CFG_VERSION;
-    cfg.flags = LWIP_CFG_DEFAULT_FLAGS;
-    cfg.max_heap = LWIP_CFG_DEFAULT_MAX_HEAP;
-
-    int archived = 0;
-    var_t *cfg_data = os_GetAppVarData(LWIP_CFG_VAR_NAME, &archived);
-    if (cfg_data)
-    {
-        size_t cfg_size = 0;
-        if (os_GetVarSize(LWIP_CFG_VAR_NAME, &cfg_size) == 0 &&
-            cfg_size >= sizeof(cfg))
-        {
-            memcpy(&cfg, cfg_data, sizeof(cfg));
-            if (cfg.version != LWIP_CFG_VERSION)
-            {
-                cfg.version = LWIP_CFG_VERSION;
-                cfg.flags = LWIP_CFG_DEFAULT_FLAGS;
-                cfg.max_heap = LWIP_CFG_DEFAULT_MAX_HEAP;
-            }
-        }
-    }
-
-    if (!mem_is_ready())
-    {
-        if (!mem_init(cfg.max_heap,
-                      conf->malloc_conf.caller_malloc,
-                      conf->malloc_conf.caller_free,
-                      NULL))
-        {
-            return ERR_MEM;
-        }
-    }
+    lwip_app_config_refresh();
     memcpy(&usb_fn, &conf->usb_conf, sizeof(struct usb_configurator));
     {
         const struct mem_buffer_pool_cfg pools[] = {

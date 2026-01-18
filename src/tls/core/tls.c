@@ -32,19 +32,17 @@
 /* ECC scratch buffer (reserved for future X25519 operations) */
 #define ECC_SCRATCH_SIZE 1024
 
-/* TLS context structure */
-struct tls_context
-{
-    uint8_t *rsa_scratch; /* RSA operations scratch buffer */
-    uint8_t *ecc_scratch; /* ECC operations scratch buffer (future) */
-    bool initialized;     /* Initialization flag */
-};
-
 /* Global TLS context (non-static so RSA/ECC code can access scratch buffers) */
 struct tls_context tls_ctx = {
     .rsa_scratch = NULL,
     .ecc_scratch = NULL,
-    .initialized = false};
+    .initialized = false,
+    .truststore = {
+        .status = TLS_STORE_UNINITIALIZED,
+        .size = 0,
+        .entry_count = 0,
+        .version = 0,
+        .created_timestamp = 0}};
 
 bool tls_init(void)
 {
@@ -89,4 +87,9 @@ void tls_cleanup(void)
     }
 
     tls_ctx.initialized = false;
+    tls_ctx.truststore.status = TLS_STORE_UNINITIALIZED;
+    tls_ctx.truststore.size = 0;
+    tls_ctx.truststore.entry_count = 0;
+    tls_ctx.truststore.version = 0;
+    tls_ctx.truststore.created_timestamp = 0;
 }
