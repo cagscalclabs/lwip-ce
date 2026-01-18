@@ -63,6 +63,7 @@ typedef enum
     OPT_CERT_SPKI,
     OPT_CERT_DATES,
     OPT_CERT_OWNER,
+    OPT_NTP_TEST,
     OPT_HTTP_TEST,
     OPT_COUNT
 } config_option_id;
@@ -126,6 +127,7 @@ static void fill_rect(int x, int y, int w, int h, uint16_t color);
 
 static bool config_toggle_option(struct config_option *opt);
 static bool config_edit_ip(struct config_option *opt);
+static bool config_run_ntp_test(struct config_option *opt);
 static bool config_run_http_test(struct config_option *opt);
 
 static struct config_option config_options[] = {
@@ -143,6 +145,7 @@ static struct config_option config_options[] = {
     {"  Lifespan", TAB_SECURITY, OPT_CERT_DATES, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
     {"  Owner", TAB_SECURITY, OPT_CERT_OWNER, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
 
+    {"NTP Test", TAB_TEST, OPT_NTP_TEST, F_TYPE_ACTION, config_run_ntp_test, {0}},
     {"HTTP Test", TAB_TEST, OPT_HTTP_TEST, F_TYPE_ACTION, config_run_http_test, {0}},
 };
 
@@ -212,6 +215,7 @@ static void option_sync_from_cfg(struct config_option *opt)
     case OPT_CERT_OWNER:
         option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_CERT_CHECK_OWNER) != 0);
         break;
+    case OPT_NTP_TEST:
     case OPT_HTTP_TEST:
         // Action type, no sync needed
         break;
@@ -280,6 +284,7 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_CERT_OWNER:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
+    case OPT_NTP_TEST:
     case OPT_HTTP_TEST:
         snprintf(buf, buf_len, "<Enter>");
         break;
@@ -345,6 +350,167 @@ static bool config_edit_ip(struct config_option *opt)
 {
     (void)opt;
     edit_ip_config(&g_cfg);
+    return true;
+}
+
+static bool config_run_ntp_test(struct config_option *opt)
+{
+    (void)opt;
+
+    // Start network stack
+    if (!start_lwip_stack(&g_cfg))
+    {
+        return true;
+    }
+
+    // Clear screen
+    fill_rect(0, 0, 320, 240, COLOR_WHITE);
+    os_SetDrawFGColor(COLOR_BLACK);
+
+    os_FontDrawText("NTP Test Running", 10, 10);
+    os_FontDrawText("Waiting for network...", 10, 30);
+
+    // Wait for IP address (via DHCP or static)
+    bool has_ip = false;
+    int timeout = 300; // 30 seconds at ~10Hz
+
+    while (timeout > 0)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+        apply_network_config(&g_cfg);
+
+        if (netif_default)
+        {
+            if ((g_cfg.flags & LWIP_CFG_DHCP) != 0)
+            {
+                has_ip = dhcp_supplied_address(netif_default);
+            }
+            else
+            {
+                has_ip = !ip4_addr_isany(netif_ip4_addr(netif_default));
+            }
+
+            if (has_ip)
+            {
+                break;
+            }
+        }
+
+        // Check for Clear key to cancel
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            os_FontDrawText("Test cancelled", 10, 50);
+            delay_ms(100);
+            return true;
+        }
+
+        delay_ms(100);
+        timeout--;
+    }
+
+    // Clear waiting message
+    fill_rect(0, 30, 320, 20, COLOR_WHITE);
+
+    if (!has_ip)
+    {
+        os_FontDrawText("Failed to get IP address", 10, 30);
+        os_FontDrawText("Press any key", 10, 50);
+        os_GetKey();
+        return true;
+    }
+
+    // Display IP address
+    const ip4_addr_t *ip = netif_ip4_addr(netif_default);
+    char ip_buf[64];
+    snprintf(ip_buf, sizeof(ip_buf), "IP: %d.%d.%d.%d",
+             ip4_addr1(ip), ip4_addr2(ip), ip4_addr3(ip), ip4_addr4(ip));
+    os_FontDrawText(ip_buf, 10, 30);
+
+    // Start SNTP
+    os_FontDrawText("Starting SNTP...", 10, 50);
+
+    ip_addr_t ntp_server;
+    IP_ADDR4(&ntp_server, 132, 163, 96, 1); // time.nist.gov
+    sntp_setserver(0, &ntp_server);
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_init();
+
+    os_FontDrawText("Waiting for time sync...", 10, 70);
+    os_FontDrawText("This may take 5-10 seconds", 10, 90);
+
+    // Wait for time sync (check RTC for non-zero time)
+    bool time_synced = false;
+    timeout = 200; // 20 seconds
+
+    while (timeout > 0)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+
+        uint8_t sec, min, hr;
+        boot_GetTime(&sec, &min, &hr);
+
+        // If time looks valid (not midnight), assume synced
+        if (sec != 0 || min != 0 || hr != 0)
+        {
+            time_synced = true;
+
+            fill_rect(0, 70, 320, 40, COLOR_WHITE);
+            os_FontDrawText("Time synced!", 10, 70);
+
+            char time_buf[32];
+            snprintf(time_buf, sizeof(time_buf), "Time: %02u:%02u:%02u UTC", hr, min, sec);
+            os_FontDrawText(time_buf, 10, 90);
+
+            break;
+        }
+
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            break;
+        }
+
+        delay_ms(100);
+        timeout--;
+    }
+
+    if (!time_synced)
+    {
+        fill_rect(0, 70, 320, 40, COLOR_WHITE);
+        os_FontDrawText("Time sync timeout", 10, 70);
+    }
+
+    os_FontDrawText("Press Clear to exit", 10, 120);
+
+    // Wait for Clear
+    while (os_GetCSC())
+        ;
+
+    while (1)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            break;
+        }
+
+        delay_ms(100);
+    }
+
+    // Shutdown
+    sntp_stop();
+    os_FontDrawText("Shutting down...", 10, 140);
+    delay_ms(100);
+
+    // Clear screen before returning to wizard
+    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+
     return true;
 }
 

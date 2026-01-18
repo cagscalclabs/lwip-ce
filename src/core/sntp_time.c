@@ -78,5 +78,13 @@ void lwip_sntp_set_time(uint32_t seconds)
     while (rtc_IsBusy()) {}
     boot_SetTime(secs, minutes, hours);
     while (rtc_IsBusy()) {}
-    boot_SetDate(day, month, year);
+
+    // TI-84 CE RTC uses 2-digit years (0-99 representing 2000-2099)
+    uint16_t year_2digit = (year >= 2000u) ? (year - 2000u) : year;
+    if (year_2digit > 99u)
+    {
+        year_2digit = 99u; // Cap at 2099
+    }
+
+    boot_SetDate(day, month, year_2digit);
 }

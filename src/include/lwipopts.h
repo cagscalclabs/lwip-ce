@@ -326,22 +326,8 @@ a lot of data that needs to be copied, this should be set high. */
 
 /* ---------- SNTP options ---------- */
 /* Set the system time when SNTP receives a response */
-#include <sys/rtc.h>
-#include <time.h>
-
-static inline void sntp_set_system_time_impl(uint32_t sec)
-{
-    // SNTP provides Unix timestamp (seconds since Jan 1, 1970)
-    // Convert to time structure
-    time_t unix_time = (time_t)sec;
-    struct tm *timeinfo = gmtime(&unix_time);
-
-    if (timeinfo)
-    {
-        boot_SetTime(timeinfo->tm_sec, timeinfo->tm_min, timeinfo->tm_hour);
-    }
-}
-
-#define SNTP_SET_SYSTEM_TIME(sec) sntp_set_system_time_impl(sec)
+/* Use the wrapper function that applies timezone and DST offsets */
+extern void lwip_sntp_set_time(uint32_t seconds);
+#define SNTP_SET_SYSTEM_TIME(sec) lwip_sntp_set_time(sec)
 
 #endif // LWIP_LWIPOPTS_H
