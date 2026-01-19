@@ -6,10 +6,12 @@
 
 #include <ti/getcsc.h>
 #include <ti/screen.h>
+#include <sys/rtc.h>
 #include <usbdrvce.h>
 
 #include "lwip/init.h"
 #include "lwip/timeouts.h"
+#include "lwip/sys.h"
 #include "lwip/netif.h"
 #include "lwip/mem.h"
 #include "lwip/dhcp.h"
@@ -19,6 +21,11 @@
 #include "lwip/apps/sntp.h"
 #include "lwip/sntp_time.h"
 #include "lwip/app_config.h"
+#include "lwip/dns.h"
+#include "lwip/icmp.h"
+#include "lwip/raw.h"
+#include "lwip/inet_chksum.h"
+#include "lwip/tcp.h"
 
 #include "drivers/mem.h"
 #include "drivers/usb_ethernet.h"
@@ -65,6 +72,9 @@ typedef enum
     OPT_CERT_OWNER,
     OPT_NTP_TEST,
     OPT_HTTP_TEST,
+    OPT_DNS_TEST,
+    OPT_PING_TEST,
+    OPT_TCP_ECHO_TEST,
     OPT_COUNT
 } config_option_id;
 
@@ -129,6 +139,9 @@ static bool config_toggle_option(struct config_option *opt);
 static bool config_edit_ip(struct config_option *opt);
 static bool config_run_ntp_test(struct config_option *opt);
 static bool config_run_http_test(struct config_option *opt);
+static bool config_run_dns_test(struct config_option *opt);
+static bool config_run_ping_test(struct config_option *opt);
+static bool config_run_tcp_echo_test(struct config_option *opt);
 
 static struct config_option config_options[] = {
     {"Max Heap", TAB_GENERAL, OPT_MAX_HEAP, F_TYPE_INT_SLIDER, NULL, {0}},
@@ -147,6 +160,9 @@ static struct config_option config_options[] = {
 
     {"NTP Test", TAB_TEST, OPT_NTP_TEST, F_TYPE_ACTION, config_run_ntp_test, {0}},
     {"HTTP Test", TAB_TEST, OPT_HTTP_TEST, F_TYPE_ACTION, config_run_http_test, {0}},
+    {"DNS Test", TAB_TEST, OPT_DNS_TEST, F_TYPE_ACTION, config_run_dns_test, {0}},
+    {"Ping Test", TAB_TEST, OPT_PING_TEST, F_TYPE_ACTION, config_run_ping_test, {0}},
+    {"TCP Echo Test", TAB_TEST, OPT_TCP_ECHO_TEST, F_TYPE_ACTION, config_run_tcp_echo_test, {0}},
 };
 
 #define CONFIG_OPTION_COUNT (sizeof(config_options) / sizeof(config_options[0]))
@@ -286,6 +302,9 @@ static void format_option_value(const struct config_option *opt, char *buf, size
         break;
     case OPT_NTP_TEST:
     case OPT_HTTP_TEST:
+    case OPT_DNS_TEST:
+    case OPT_PING_TEST:
+    case OPT_TCP_ECHO_TEST:
         snprintf(buf, buf_len, "<Enter>");
         break;
     case OPT_IP_MODE:
@@ -353,49 +372,77 @@ static bool config_edit_ip(struct config_option *opt)
     return true;
 }
 
-// NTP test state - callbacks set these
-static volatile bool ntp_link_up = false;
-static volatile bool ntp_has_ip = false;
+// Common test network state - callbacks set these
+static volatile bool test_link_up = false;
+static volatile bool test_has_ip = false;
 
-static void ntp_test_link_callback(struct netif *netif)
+static void test_link_callback(struct netif *netif)
 {
     (void)netif;
-    ntp_link_up = netif_is_link_up(netif);
+    test_link_up = netif_is_link_up(netif);
 }
 
-static void ntp_test_status_callback(struct netif *netif)
+static void test_status_callback(struct netif *netif)
 {
     (void)netif;
     if (netif_is_up(netif) && !ip4_addr_isany(netif_ip4_addr(netif)))
     {
-        ntp_has_ip = true;
+        test_has_ip = true;
     }
 }
 
-static bool config_run_ntp_test(struct config_option *opt)
+// Common cleanup for all tests - waits for Clear key and clears screen
+static void cleanup_test_screen(void)
 {
-    (void)opt;
+    os_FontDrawText("Press Clear to exit", 10, 180);
 
+    // Clear any pending keys
+    while (os_GetCSC())
+        ;
+
+    // Wait for Clear key
+    while (1)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            break;
+        }
+        delay_ms(10);
+    }
+
+    // Clear screen before returning to wizard
+    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+}
+
+// Common network setup for all tests
+// Returns true on success, false on failure/cancel
+static bool setup_test_network(const char *test_name)
+{
     // Reset state
-    ntp_link_up = false;
-    ntp_has_ip = false;
+    test_link_up = false;
+    test_has_ip = false;
 
     // Start network stack
     if (!start_lwip_stack(&g_cfg))
     {
-        return true;
+        return false;
     }
 
     // Clear screen
     fill_rect(0, 0, 320, 240, COLOR_WHITE);
     os_SetDrawFGColor(COLOR_BLACK);
 
-    os_FontDrawText("NTP Test Running", 10, 10);
-    os_FontDrawText("Plug in USB Ethernet adapter", 10, 30);
-    os_FontDrawText("Waiting for device...", 10, 50);
+    char title[32];
+    snprintf(title, sizeof(title), "%s Running", test_name);
+    os_FontDrawText(title, 10, 10);
+    os_FontDrawText("Waiting for network...", 10, 50);
 
     // Wait for netif to be created (device enumeration)
-    int timeout = 100; // 10 seconds
+    int timeout = 1000; // 10 seconds at 10ms intervals
     while (timeout > 0 && !netif_default)
     {
         usb_HandleEvents();
@@ -406,31 +453,30 @@ static bool config_run_ntp_test(struct config_option *opt)
         {
             os_FontDrawText("Test cancelled", 10, 70);
             delay_ms(100);
-            return true;
+            return false;
         }
 
-        delay_ms(100);
+        delay_ms(10);
         timeout--;
     }
 
     if (!netif_default)
     {
-        os_FontDrawText("No USB Ethernet device found", 10, 70);
-        os_FontDrawText("Check connection and try again", 10, 90);
-        os_FontDrawText("Press any key", 10, 110);
+        os_FontDrawText("No network device found", 10, 70);
+        os_FontDrawText("Press any key", 10, 90);
         os_GetKey();
-        return true;
+        return false;
     }
 
     // Register callbacks for async notifications
-    netif_set_link_callback(netif_default, ntp_test_link_callback);
-    netif_set_status_callback(netif_default, ntp_test_status_callback);
+    netif_set_link_callback(netif_default, test_link_callback);
+    netif_set_status_callback(netif_default, test_status_callback);
 
     // Check initial state (callbacks only fire on changes)
-    ntp_link_up = netif_is_link_up(netif_default);
+    test_link_up = netif_is_link_up(netif_default);
     if (netif_is_up(netif_default) && !ip4_addr_isany(netif_ip4_addr(netif_default)))
     {
-        ntp_has_ip = true;
+        test_has_ip = true;
     }
 
     // Apply network config (starts DHCP if enabled)
@@ -439,9 +485,9 @@ static bool config_run_ntp_test(struct config_option *opt)
     fill_rect(0, 50, 320, 20, COLOR_WHITE);
     os_FontDrawText("Waiting for link...", 10, 50);
 
-    // Wait for link up (callback sets ntp_link_up)
-    timeout = 100; // 10 seconds
-    while (timeout > 0 && !ntp_link_up)
+    // Wait for link up (callback sets test_link_up)
+    timeout = 1000; // 10 seconds at 10ms intervals
+    while (timeout > 0 && !test_link_up)
     {
         usb_HandleEvents();
         sys_check_timeouts();
@@ -451,28 +497,28 @@ static bool config_run_ntp_test(struct config_option *opt)
         {
             os_FontDrawText("Test cancelled", 10, 70);
             delay_ms(100);
-            return true;
+            return false;
         }
 
-        delay_ms(100);
+        delay_ms(10);
         timeout--;
     }
 
-    if (!ntp_link_up)
+    if (!test_link_up)
     {
         os_FontDrawText("Link not detected", 10, 70);
         os_FontDrawText("Check cable connection", 10, 90);
         os_FontDrawText("Press any key", 10, 110);
         os_GetKey();
-        return true;
+        return false;
     }
 
     fill_rect(0, 50, 320, 20, COLOR_WHITE);
     os_FontDrawText("Link up! Getting IP...", 10, 50);
 
-    // Wait for IP address (callback sets ntp_has_ip)
-    timeout = 300; // 30 seconds for DHCP
-    while (timeout > 0 && !ntp_has_ip)
+    // Wait for IP address (callback sets test_has_ip)
+    timeout = 3000; // 30 seconds for DHCP at 10ms intervals
+    while (timeout > 0 && !test_has_ip)
     {
         usb_HandleEvents();
         sys_check_timeouts();
@@ -482,31 +528,41 @@ static bool config_run_ntp_test(struct config_option *opt)
         {
             os_FontDrawText("Test cancelled", 10, 70);
             delay_ms(100);
-            return true;
+            return false;
         }
 
-        delay_ms(100);
+        delay_ms(10);
         timeout--;
     }
 
-    if (!ntp_has_ip)
+    if (!test_has_ip)
     {
         os_FontDrawText("Failed to get IP address", 10, 70);
         os_FontDrawText("Check DHCP/network config", 10, 90);
         os_FontDrawText("Press any key", 10, 110);
         os_GetKey();
-        return true;
+        return false;
     }
 
-    // Clear waiting messages
+    // Clear waiting messages and display IP
     fill_rect(0, 30, 320, 40, COLOR_WHITE);
-
-    // Display IP address
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     char ip_buf[64];
     snprintf(ip_buf, sizeof(ip_buf), "IP: %d.%d.%d.%d",
              ip4_addr1(ip), ip4_addr2(ip), ip4_addr3(ip), ip4_addr4(ip));
     os_FontDrawText(ip_buf, 10, 30);
+
+    return true;
+}
+
+static bool config_run_ntp_test(struct config_option *opt)
+{
+    (void)opt;
+
+    if (!setup_test_network("NTP Test"))
+    {
+        return true;
+    }
 
     // Start SNTP
     os_FontDrawText("Starting SNTP...", 10, 50);
@@ -527,7 +583,7 @@ static bool config_run_ntp_test(struct config_option *opt)
 
     // Wait for time sync (flag set by lwip_sntp_set_time callback)
     // Allow time for initial request (15s timeout) + at least one retry
-    timeout = 450; // 45 seconds
+    int timeout = 4500; // 45 seconds at 10ms intervals
 
     while (timeout > 0 && !lwip_sntp_time_was_set())
     {
@@ -540,7 +596,7 @@ static bool config_run_ntp_test(struct config_option *opt)
             break;
         }
 
-        delay_ms(100);
+        delay_ms(10);
         timeout--;
     }
 
@@ -563,34 +619,10 @@ static bool config_run_ntp_test(struct config_option *opt)
         os_FontDrawText("Time sync timeout", 10, 70);
     }
 
-    os_FontDrawText("Press Clear to exit", 10, 120);
-
-    // Wait for Clear
-    while (os_GetCSC())
-        ;
-
-    while (1)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            break;
-        }
-
-        delay_ms(100);
-    }
-
     // Shutdown
     sntp_stop();
-    os_FontDrawText("Shutting down...", 10, 140);
-    delay_ms(100);
 
-    // Clear screen before returning to wizard
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-
+    cleanup_test_screen();
     return true;
 }
 
@@ -598,76 +630,10 @@ static bool config_run_http_test(struct config_option *opt)
 {
     (void)opt;
 
-    // Start network stack
-    if (!start_lwip_stack(&g_cfg))
+    if (!setup_test_network("HTTP Test"))
     {
         return true;
     }
-
-    // Clear screen
-    fill_rect(0, 0, 320, 240, COLOR_WHITE);
-    os_SetDrawFGColor(COLOR_BLACK);
-
-    os_FontDrawText("HTTP Test Running", 10, 10);
-    os_FontDrawText("Waiting for network...", 10, 30);
-
-    // Wait for IP address (via DHCP or static)
-    bool has_ip = false;
-    int timeout = 300; // 30 seconds at ~10Hz
-
-    while (timeout > 0)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-        apply_network_config(&g_cfg);
-
-        if (netif_default)
-        {
-            if ((g_cfg.flags & LWIP_CFG_DHCP) != 0)
-            {
-                has_ip = dhcp_supplied_address(netif_default);
-            }
-            else
-            {
-                has_ip = !ip4_addr_isany(netif_ip4_addr(netif_default));
-            }
-
-            if (has_ip)
-            {
-                break;
-            }
-        }
-
-        // Check for Clear key to cancel
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            os_FontDrawText("Test cancelled", 10, 50);
-            delay_ms(100);
-            return true;
-        }
-
-        delay_ms(100);
-        timeout--;
-    }
-
-    // Clear waiting message
-    fill_rect(0, 30, 320, 20, COLOR_WHITE);
-
-    if (!has_ip)
-    {
-        os_FontDrawText("Failed to get IP address", 10, 30);
-        os_FontDrawText("Press any key", 10, 50);
-        os_GetKey();
-        return true;
-    }
-
-    // Display IP address
-    const ip4_addr_t *ip = netif_ip4_addr(netif_default);
-    char ip_buf[20];
-    snprintf(ip_buf, sizeof(ip_buf), "IP: %d.%d.%d.%d",
-             ip4_addr1(ip), ip4_addr2(ip), ip4_addr3(ip), ip4_addr4(ip));
-    os_FontDrawText(ip_buf, 10, 30);
 
     // Start HTTP server
     g_cfg.flags |= LWIP_CFG_TEST_HTTP;
@@ -720,6 +686,492 @@ static bool config_run_http_test(struct config_option *opt)
 
     return true;
 }
+
+// DNS Test - callback state
+static volatile bool dns_result_ready = false;
+static volatile ip_addr_t dns_resolved_ip;
+static volatile err_t dns_result_err;
+
+static void dns_test_callback(const char *name, const ip_addr_t *ipaddr, void *callback_arg)
+{
+    (void)name;
+    (void)callback_arg;
+
+    if (ipaddr != NULL)
+    {
+        dns_resolved_ip = *ipaddr;
+        dns_result_err = ERR_OK;
+    }
+    else
+    {
+        dns_result_err = ERR_TIMEOUT;
+    }
+    dns_result_ready = true;
+}
+
+static bool config_run_dns_test(struct config_option *opt)
+{
+    (void)opt;
+
+    if (!setup_test_network("DNS Test"))
+    {
+        return true;
+    }
+
+    os_FontDrawText("Target: example.com", 10, 50);
+
+    // Start DNS lookup
+    int timeout;
+    dns_result_ready = false;
+    os_FontDrawText("Resolving example.com...", 10, 50);
+
+    ip_addr_t addr;
+    err_t err = dns_gethostbyname("example.com", &addr, dns_test_callback, NULL);
+
+    if (err == ERR_OK)
+    {
+        // Immediate result (cached)
+        dns_resolved_ip = addr;
+        dns_result_ready = true;
+        dns_result_err = ERR_OK;
+    }
+    else if (err == ERR_INPROGRESS)
+    {
+        // Wait for callback
+        timeout = 1000; // 10 seconds at 10ms intervals
+        while (timeout > 0 && !dns_result_ready)
+        {
+            usb_HandleEvents();
+            sys_check_timeouts();
+
+            uint8_t key = os_GetCSC();
+            if (key == sk_Clear)
+            {
+                os_FontDrawText("Cancelled", 10, 70);
+                delay_ms(1000);
+                return true;
+            }
+
+            delay_ms(10);
+            timeout--;
+        }
+    }
+    else
+    {
+        dns_result_err = err;
+        dns_result_ready = true;
+    }
+
+    fill_rect(0, 50, 320, 40, COLOR_WHITE);
+    if (dns_result_ready && dns_result_err == ERR_OK)
+    {
+        os_FontDrawText("DNS lookup successful!", 10, 50);
+        char result_buf[64];
+        snprintf(result_buf, sizeof(result_buf), "example.com = %d.%d.%d.%d",
+                 ip4_addr1(&dns_resolved_ip.u_addr.ip4),
+                 ip4_addr2(&dns_resolved_ip.u_addr.ip4),
+                 ip4_addr3(&dns_resolved_ip.u_addr.ip4),
+                 ip4_addr4(&dns_resolved_ip.u_addr.ip4));
+        os_FontDrawText(result_buf, 10, 70);
+    }
+    else
+    {
+        os_FontDrawText("DNS lookup failed", 10, 50);
+        char err_buf[64];
+        snprintf(err_buf, sizeof(err_buf), "Error: %d", dns_result_err);
+        os_FontDrawText(err_buf, 10, 70);
+    }
+
+    cleanup_test_screen();
+    return true;
+}
+
+// Ping test state
+static volatile bool ping_reply_received = false;
+static volatile uint32_t ping_start_time = 0;
+static volatile uint32_t ping_rtt_ms = 0;
+static uint16_t ping_seq_num = 0;
+
+static uint8_t ping_recv_callback(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr)
+{
+    (void)arg;
+    (void)pcb;
+    (void)addr;
+
+    if (!p || p->len < sizeof(struct icmp_echo_hdr))
+    {
+        if (p) pbuf_free(p);
+        return 0; // don't eat packet if invalid
+    }
+
+    struct icmp_echo_hdr *iecho = (struct icmp_echo_hdr *)p->payload;
+
+    if ((iecho->type == ICMP_ER) && (iecho->id == 0xABCD) && (lwip_ntohs(iecho->seqno) == ping_seq_num))
+    {
+        uint32_t now = sys_now();
+        ping_rtt_ms = now - ping_start_time;
+        ping_reply_received = true;
+    }
+
+    pbuf_free(p);
+    return 1; // eat packet
+}
+
+static bool config_run_ping_test(struct config_option *opt)
+{
+    (void)opt;
+
+    if (!setup_test_network("Ping Test"))
+    {
+        return true;
+    }
+
+    // Create RAW socket for ICMP
+    struct raw_pcb *ping_pcb = raw_new(IP_PROTO_ICMP);
+    if (!ping_pcb)
+    {
+        os_FontDrawText("Failed to create ICMP socket", 10, 50);
+        os_FontDrawText("Press any key", 10, 70);
+        os_GetKey();
+        return true;
+    }
+
+    raw_recv(ping_pcb, ping_recv_callback, NULL);
+    raw_bind_netif(ping_pcb, netif_default);
+
+    // Target: Google DNS (8.8.8.8) - reliable ping responder
+    ip_addr_t ping_target;
+    IP_ADDR4(&ping_target, 8, 8, 8, 8);
+
+    char target_buf[64];
+    snprintf(target_buf, sizeof(target_buf), "Target: 8.8.8.8 (Google DNS)");
+    fill_rect(0, 30, 320, 20, COLOR_WHITE);
+    os_FontDrawText(target_buf, 10, 30);
+
+    os_FontDrawText("Sending ping...", 10, 50);
+
+    // Send 4 pings
+    int timeout;
+    int successful_pings = 0;
+    uint32_t total_rtt = 0;
+
+    for (int i = 0; i < 4; i++)
+    {
+        ping_reply_received = false;
+        ping_seq_num = i + 1;
+
+        // Allocate ICMP echo request
+        struct pbuf *p = pbuf_alloc(PBUF_IP, sizeof(struct icmp_echo_hdr) + 32, PBUF_RAM);
+        if (!p)
+        {
+            continue;
+        }
+
+        struct icmp_echo_hdr *iecho = (struct icmp_echo_hdr *)p->payload;
+        ICMPH_TYPE_SET(iecho, ICMP_ECHO);
+        ICMPH_CODE_SET(iecho, 0);
+        iecho->chksum = 0;
+        iecho->id = 0xABCD;
+        iecho->seqno = lwip_htons(ping_seq_num);
+
+        // Fill data
+        char *data = (char *)iecho + sizeof(struct icmp_echo_hdr);
+        for (int j = 0; j < 32; j++)
+        {
+            data[j] = 0x61 + (j % 26); // a-z pattern
+        }
+
+        // Calculate checksum
+        iecho->chksum = inet_chksum(iecho, sizeof(struct icmp_echo_hdr) + 32);
+
+        // Send
+        ping_start_time = sys_now();
+        err_t err = raw_sendto(ping_pcb, p, &ping_target);
+        pbuf_free(p);
+
+        if (err != ERR_OK)
+        {
+            char err_buf[64];
+            snprintf(err_buf, sizeof(err_buf), "Ping %d: Send failed", i + 1);
+            os_FontDrawText(err_buf, 10, 70 + i * 15);
+            continue;
+        }
+
+        // Wait for reply (2 second timeout)
+        // Process network events frequently to avoid missing replies
+        timeout = 200; // 200 iterations * 10ms = 2 seconds
+        while (timeout > 0 && !ping_reply_received)
+        {
+            usb_HandleEvents();
+            sys_check_timeouts();
+
+            uint8_t key = os_GetCSC();
+            if (key == sk_Clear)
+            {
+                raw_remove(ping_pcb);
+                fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+                return true;
+            }
+
+            delay_ms(10); // Shorter delay for faster network processing
+            timeout--;
+        }
+
+        // Display result
+        char result_buf[64];
+        if (ping_reply_received)
+        {
+            snprintf(result_buf, sizeof(result_buf), "Ping %d: %lu ms", i + 1, (unsigned long)ping_rtt_ms);
+            successful_pings++;
+            total_rtt += ping_rtt_ms;
+        }
+        else
+        {
+            snprintf(result_buf, sizeof(result_buf), "Ping %d: Timeout", i + 1);
+        }
+        os_FontDrawText(result_buf, 10, 70 + i * 15);
+
+        // Wait 500ms before next ping (process events while waiting)
+        if (i < 3)
+        {
+            for (int wait = 0; wait < 50; wait++)
+            {
+                usb_HandleEvents();
+                sys_check_timeouts();
+                delay_ms(10);
+            }
+        }
+    }
+
+    // Display statistics
+    char stats_buf[64];
+    snprintf(stats_buf, sizeof(stats_buf), "Success: %d/4", successful_pings);
+    os_FontDrawText(stats_buf, 10, 140);
+
+    if (successful_pings > 0)
+    {
+        uint32_t avg_rtt = total_rtt / successful_pings;
+        snprintf(stats_buf, sizeof(stats_buf), "Avg RTT: %lu ms", (unsigned long)avg_rtt);
+        os_FontDrawText(stats_buf, 10, 155);
+    }
+
+    raw_remove(ping_pcb);
+
+    cleanup_test_screen();
+    return true;
+}
+
+// TCP Echo test state
+static volatile bool tcp_echo_connected = false;
+static volatile bool tcp_echo_data_received = false;
+static volatile bool tcp_echo_error = false;
+static char tcp_echo_recv_buf[128];
+static size_t tcp_echo_recv_len = 0;
+
+static err_t tcp_echo_connected_callback(void *arg, struct tcp_pcb *tpcb, err_t err)
+{
+    (void)arg;
+    (void)tpcb;
+
+    if (err == ERR_OK)
+    {
+        tcp_echo_connected = true;
+    }
+    else
+    {
+        tcp_echo_error = true;
+    }
+    return ERR_OK;
+}
+
+static err_t tcp_echo_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
+{
+    (void)arg;
+    (void)err;
+
+    if (p == NULL)
+    {
+        // Connection closed
+        tcp_close(tpcb);
+        return ERR_OK;
+    }
+
+    // Copy received data
+    size_t to_copy = (p->tot_len < sizeof(tcp_echo_recv_buf) - 1) ? p->tot_len : (sizeof(tcp_echo_recv_buf) - 1);
+    pbuf_copy_partial(p, tcp_echo_recv_buf, to_copy, 0);
+    tcp_echo_recv_buf[to_copy] = '\0';
+    tcp_echo_recv_len = to_copy;
+    tcp_echo_data_received = true;
+
+    tcp_recved(tpcb, p->tot_len);
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+static void tcp_echo_error_callback(void *arg, err_t err)
+{
+    (void)arg;
+    (void)err;
+    tcp_echo_error = true;
+}
+
+static bool config_run_tcp_echo_test(struct config_option *opt)
+{
+    (void)opt;
+
+    if (!setup_test_network("TCP Echo Test"))
+    {
+        return true;
+    }
+
+    os_FontDrawText("Target: tcpbin.com:4242", 10, 50);
+
+    // Resolve tcpbin.com
+    int timeout;
+    os_FontDrawText("Resolving tcpbin.com...", 10, 50);
+    dns_result_ready = false;
+
+    ip_addr_t server_addr;
+    err_t err = dns_gethostbyname("tcpbin.com", &server_addr, dns_test_callback, NULL);
+
+    if (err == ERR_INPROGRESS)
+    {
+        timeout = 1000; // 10 seconds at 10ms intervals
+        while (timeout > 0 && !dns_result_ready)
+        {
+            usb_HandleEvents();
+            sys_check_timeouts();
+            delay_ms(10);
+            timeout--;
+        }
+
+        if (!dns_result_ready || dns_result_err != ERR_OK)
+        {
+            os_FontDrawText("DNS lookup failed", 10, 70);
+            os_FontDrawText("Press any key", 10, 90);
+            os_GetKey();
+            return true;
+        }
+        server_addr = dns_resolved_ip;
+    }
+    else if (err != ERR_OK)
+    {
+        os_FontDrawText("DNS lookup failed", 10, 70);
+        os_FontDrawText("Press any key", 10, 90);
+        os_GetKey();
+        return true;
+    }
+
+    // Create TCP connection
+    os_FontDrawText("Connecting to server...", 10, 50);
+
+    struct tcp_pcb *tcp_pcb = tcp_new();
+    if (!tcp_pcb)
+    {
+        os_FontDrawText("Failed to create TCP socket", 10, 70);
+        os_FontDrawText("Press any key", 10, 90);
+        os_GetKey();
+        return true;
+    }
+
+    tcp_echo_connected = false;
+    tcp_echo_error = false;
+    tcp_echo_data_received = false;
+
+    tcp_arg(tcp_pcb, NULL);
+    tcp_recv(tcp_pcb, tcp_echo_recv_callback);
+    tcp_err(tcp_pcb, tcp_echo_error_callback);
+
+    err = tcp_connect(tcp_pcb, &server_addr, 4242, tcp_echo_connected_callback);
+    if (err != ERR_OK)
+    {
+        tcp_abort(tcp_pcb);
+        os_FontDrawText("Connection failed", 10, 70);
+        os_FontDrawText("Press any key", 10, 90);
+        os_GetKey();
+        return true;
+    }
+
+    // Wait for connection
+    timeout = 1000; // 10 seconds at 10ms intervals
+    while (timeout > 0 && !tcp_echo_connected && !tcp_echo_error)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+        delay_ms(10);
+        timeout--;
+    }
+
+    if (tcp_echo_error || !tcp_echo_connected)
+    {
+        tcp_abort(tcp_pcb);
+        os_FontDrawText("Connection timeout/error", 10, 70);
+        os_FontDrawText("Press any key", 10, 90);
+        os_GetKey();
+        return true;
+    }
+
+    os_FontDrawText("Connected! Sending test data...", 10, 50);
+
+    // Send test message
+    const char *test_msg = "Hello from TI-84 CE!\r\n";
+    err = tcp_write(tcp_pcb, test_msg, strlen(test_msg), TCP_WRITE_FLAG_COPY);
+    if (err != ERR_OK)
+    {
+        tcp_close(tcp_pcb);
+        os_FontDrawText("Send failed", 10, 70);
+        os_FontDrawText("Press any key", 10, 90);
+        os_GetKey();
+        return true;
+    }
+
+    tcp_output(tcp_pcb);
+
+    // Wait for echo response
+    os_FontDrawText("Waiting for echo...", 10, 70);
+    timeout = 1000; // 10 seconds at 10ms intervals
+    while (timeout > 0 && !tcp_echo_data_received && !tcp_echo_error)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+        delay_ms(10);
+        timeout--;
+    }
+
+    fill_rect(0, 50, 320, 100, COLOR_WHITE);
+    if (tcp_echo_data_received)
+    {
+        os_FontDrawText("Echo received!", 10, 50);
+        os_FontDrawText("Sent:", 10, 70);
+        os_FontDrawText("  Hello from TI-84 CE!", 10, 85);
+        os_FontDrawText("Received:", 10, 105);
+
+        char recv_display[40];
+        snprintf(recv_display, sizeof(recv_display), "  %.30s", tcp_echo_recv_buf);
+        os_FontDrawText(recv_display, 10, 120);
+
+        // Check if our sent message is contained in the response
+        // (echo servers may add extra characters like prompts)
+        if (strstr(tcp_echo_recv_buf, "Hello from TI-84 CE!") != NULL)
+        {
+            os_FontDrawText("Test PASSED!", 10, 140);
+        }
+        else
+        {
+            os_FontDrawText("Data mismatch - Test FAILED", 10, 140);
+        }
+    }
+    else
+    {
+        os_FontDrawText("No echo received (timeout)", 10, 50);
+    }
+
+    tcp_close(tcp_pcb);
+
+    cleanup_test_screen();
+    return true;
+}
+
 // Layout: 3 columns
 // TABS: 0-85, OPTIONS: 95-250, VALUES: 250-320
 #define COL_TABS_X 0
@@ -1667,6 +2119,12 @@ int main(void)
         {
             if (focus == FOCUS_TABS)
             {
+                // Enter on tab - switch to options (like Right arrow)
+                if (sel_index[tab] >= 0)
+                {
+                    focus = FOCUS_OPTIONS;
+                    draw_option_marker(tab, sel_index[tab], true);
+                }
                 continue;
             }
             int opt_index = sel_index[tab];
