@@ -305,6 +305,12 @@ bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
     return false;
 }
 
+struct eth_tx_ctx
+{
+    eth_device_t *dev;
+    struct pbuf *p;
+};
+
 ///---------------------------------------------------
 /// @brief interrupt transfer callback function
 usb_error_t
@@ -316,7 +322,6 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
     eth_device_t *dev = (eth_device_t *)data;
     uint8_t *ibuf = dev->interrupt.buf;
     static uint8_t int_retries = 0;
-    static bool default_netif_set = false;
     if (status)
     {
         // much like RX, we will retry a INT USB_CDC_MAX_RETRIES times
@@ -344,10 +349,9 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                         netif_set_link_up(&dev->iface);
                         if (ETH_START_DHCP_ON_ALL)
                             dhcp_start(&dev->iface);
-                        if (!default_netif_set)
+                        if (netif_default == NULL)
                         {
                             netif_set_default(&dev->iface);
-                            default_netif_set = true;
                         }
                     }
                     else
@@ -355,8 +359,7 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                         netif_set_link_down(&dev->iface);
                         if (netif_default == &dev->iface)
                         {
-                            netif_default = NULL;
-                            default_netif_set = false;
+                            netif_set_default(NULL);
                         }
                     }
                     break;
@@ -381,15 +384,17 @@ usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoi
                                    usb_transfer_data_t *data)
 {
     // Handle completion or error of the transfer, if needed
-    eth_device_t *dev = (eth_device_t *)data;
+    struct eth_tx_ctx *ctx = (struct eth_tx_ctx *)data;
+    eth_device_t *dev = ctx->dev;
+    struct pbuf *tbuf = ctx->p;
     static uint8_t tx_retries = 0;
     if (status)
     {
         // much like RX, we will retry a TX USB_CDC_MAX_RETRIES times
-        struct pbuf *tbuf = (struct pbuf *)data;
         if (eth_xmit_fatal_error(dev, tx_retries))
         {
-            pbuf_free(data);
+            pbuf_free(tbuf);
+            free(ctx);
             tx_retries = 0;  // Reset retry counter on fatal error
             return USB_ERROR_FAILED;
         }
@@ -397,15 +402,16 @@ usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoi
                     ("tx: endpoint failure, retry=%u", tx_retries));
         // increment TX retry counter and queue the transfer again
         tx_retries++;
-        usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len, bulk_transmit_callback, tbuf);
+        usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len, bulk_transmit_callback, ctx);
         return USB_SUCCESS;
     }
 
     // Successful transmission - reset retry counter
     tx_retries = 0;
 
-    if (data)
-        pbuf_free(data);
+    if (tbuf)
+        pbuf_free(tbuf);
+    free(ctx);
 
     return USB_SUCCESS;
 }
@@ -449,12 +455,26 @@ err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     if (p->tot_len > ETHERNET_MTU)
         return ERR_MEM;
     struct pbuf *tbuf = pbuf_alloc(PBUF_RAW, p->tot_len, PBUF_RAM);
+    if (tbuf == NULL)
+        return ERR_MEM;
+    struct eth_tx_ctx *ctx = malloc(sizeof(*ctx));
+    if (ctx == NULL)
+    {
+        pbuf_free(tbuf);
+        return ERR_MEM;
+    }
     LINK_STATS_INC(link.xmit);
     // Update SNMP stats(only if you use SNMP)
     MIB2_STATS_NETIF_ADD(netif, ifoutoctets, p->tot_len);
     if (pbuf_copy(tbuf, p))
+    {
+        pbuf_free(tbuf);
+        free(ctx);
         return ERR_MEM;
-    usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len, bulk_transmit_callback, tbuf);
+    }
+    ctx->dev = dev;
+    ctx->p = tbuf;
+    usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len, bulk_transmit_callback, ctx);
     return ERR_OK;
 }
 
@@ -632,6 +652,12 @@ err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     struct pbuf *obuf = pbuf_alloc(PBUF_RAW, ETHERNET_MTU + NCM_HBUF_SIZE, PBUF_RAM);
     if (obuf == NULL)
         return ERR_MEM;
+    struct eth_tx_ctx *ctx = malloc(sizeof(*ctx));
+    if (ctx == NULL)
+    {
+        pbuf_free(obuf);
+        return ERR_MEM;
+    }
 
     memset(obuf->payload, 0, ETHERNET_MTU + NCM_HBUF_SIZE);
 
@@ -667,7 +693,9 @@ err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 
     // queue the TX
     // printf("sent packet %u at time %lu\n", sequence, sys_now());
-    usb_fn.schedule_transfer(dev->tx.endpoint, obuf->payload, ETHERNET_MTU + NCM_HBUF_SIZE, bulk_transmit_callback, obuf);
+    ctx->dev = dev;
+    ctx->p = obuf;
+    usb_fn.schedule_transfer(dev->tx.endpoint, obuf->payload, obuf->tot_len, bulk_transmit_callback, ctx);
     return ERR_OK;
 }
 
@@ -970,6 +998,10 @@ init_success:
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                     ("RESUME, netif=%c%c%u <- device=%p", eth->iface.name[0], eth->iface.name[1], eth->iface.num, device));
         eth_netif_init(&eth->iface);
+        if (netif_default == NULL)
+        {
+            netif_set_default(&eth->iface);
+        }
     }
     else
     {
@@ -985,6 +1017,10 @@ init_success:
                         ("ERROR, ? netif= <- device=%p, netif add failed", device));
             free(eth);
             return false;
+        }
+        if (netif_default == NULL)
+        {
+            netif_set_default(iface);
         }
         // fetch next available device number to use
         // set pointer to eth_device_t as associated data for usb device too

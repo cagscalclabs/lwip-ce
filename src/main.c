@@ -16,6 +16,7 @@
 #include "lwip/mem.h"
 #include "lwip/dhcp.h"
 #include "lwip/ip4_addr.h"
+#include "lwip/ip4.h"
 #include "lwip/ip_addr.h"
 #include "lwip/apps/httpd.h"
 #include "lwip/apps/sntp.h"
@@ -110,6 +111,7 @@ static bool httpd_running = false;
 static bool sntp_started = false;
 static bool manual_ip_applied = false;
 static bool lwip_started = false;
+static volatile bool netif_unavailable = false;
 
 static lwip_app_config_t g_cfg;
 
@@ -376,6 +378,64 @@ static bool config_edit_ip(struct config_option *opt)
 static volatile bool test_link_up = false;
 static volatile bool test_has_ip = false;
 
+NETIF_DECLARE_EXT_CALLBACK(netif_ext_cb);
+
+static void netif_ext_callback(struct netif *netif, netif_nsc_reason_t reason,
+                               const netif_ext_callback_args_t *args)
+{
+    if ((reason & LWIP_NSC_NETIF_REMOVED) != 0)
+    {
+        netif_unavailable = true;
+    }
+    if ((reason & LWIP_NSC_LINK_CHANGED) != 0)
+    {
+        if (!args || args->link_changed.state == 0)
+        {
+            netif_unavailable = true;
+        }
+        else
+        {
+            netif_unavailable = false;
+        }
+    }
+    if ((reason & LWIP_NSC_STATUS_CHANGED) != 0)
+    {
+        if (!args || args->status_changed.state == 0)
+        {
+            netif_unavailable = true;
+        }
+    }
+
+    if (netif_unavailable)
+    {
+        if (netif)
+        {
+            dhcp_stop(netif);
+        }
+        if (sntp_started || sntp_enabled())
+        {
+            sntp_stop();
+            sntp_started = false;
+        }
+        httpd_running = false;
+        dhcp_started = false;
+        manual_ip_applied = false;
+    }
+}
+
+static struct netif *find_first_ethernet_netif(void)
+{
+    struct netif *netif;
+    NETIF_FOREACH(netif)
+    {
+        if ((netif->flags & NETIF_FLAG_ETHERNET) != 0)
+        {
+            return netif;
+        }
+    }
+    return NULL;
+}
+
 static void test_link_callback(struct netif *netif)
 {
     (void)netif;
@@ -418,6 +478,22 @@ static void cleanup_test_screen(void)
     fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
 }
 
+static void cleanup_test_screen_fast(void)
+{
+    while (os_GetCSC())
+        ;
+    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+}
+
+static bool test_network_available(void)
+{
+    if (netif_unavailable || !netif_default)
+    {
+        return false;
+    }
+    return netif_is_link_up(netif_default);
+}
+
 // Common network setup for all tests
 // Returns true on success, false on failure/cancel
 static bool setup_test_network(const char *test_name)
@@ -443,29 +519,46 @@ static bool setup_test_network(const char *test_name)
 
     // Wait for netif to be created (device enumeration)
     int timeout = 1000; // 10 seconds at 10ms intervals
-    while (timeout > 0 && !netif_default)
+    struct netif *found_netif = NULL;
+    while (timeout > 0 && !found_netif)
     {
         usb_HandleEvents();
         sys_check_timeouts();
+
+        if (netif_unavailable)
+        {
+            os_FontDrawText("Network unavailable", 10, 70);
+            delay_ms(100);
+            cleanup_test_screen_fast();
+            return false;
+        }
 
         uint8_t key = os_GetCSC();
         if (key == sk_Clear)
         {
             os_FontDrawText("Test cancelled", 10, 70);
             delay_ms(100);
+            cleanup_test_screen_fast();
             return false;
         }
 
         delay_ms(10);
         timeout--;
+        found_netif = find_first_ethernet_netif();
     }
 
-    if (!netif_default)
+    if (!found_netif)
     {
         os_FontDrawText("No network device found", 10, 70);
         os_FontDrawText("Press any key", 10, 90);
         os_GetKey();
+        cleanup_test_screen_fast();
         return false;
+    }
+
+    if (!netif_default || ((netif_default->flags & NETIF_FLAG_ETHERNET) == 0))
+    {
+        netif_set_default(found_netif);
     }
 
     // Register callbacks for async notifications
@@ -492,11 +585,20 @@ static bool setup_test_network(const char *test_name)
         usb_HandleEvents();
         sys_check_timeouts();
 
+        if (netif_unavailable)
+        {
+            os_FontDrawText("Network unavailable", 10, 70);
+            delay_ms(100);
+            cleanup_test_screen_fast();
+            return false;
+        }
+
         uint8_t key = os_GetCSC();
         if (key == sk_Clear)
         {
             os_FontDrawText("Test cancelled", 10, 70);
             delay_ms(100);
+            cleanup_test_screen_fast();
             return false;
         }
 
@@ -510,6 +612,7 @@ static bool setup_test_network(const char *test_name)
         os_FontDrawText("Check cable connection", 10, 90);
         os_FontDrawText("Press any key", 10, 110);
         os_GetKey();
+        cleanup_test_screen_fast();
         return false;
     }
 
@@ -523,11 +626,20 @@ static bool setup_test_network(const char *test_name)
         usb_HandleEvents();
         sys_check_timeouts();
 
+        if (netif_unavailable)
+        {
+            os_FontDrawText("Network unavailable", 10, 70);
+            delay_ms(100);
+            cleanup_test_screen_fast();
+            return false;
+        }
+
         uint8_t key = os_GetCSC();
         if (key == sk_Clear)
         {
             os_FontDrawText("Test cancelled", 10, 70);
             delay_ms(100);
+            cleanup_test_screen_fast();
             return false;
         }
 
@@ -541,6 +653,7 @@ static bool setup_test_network(const char *test_name)
         os_FontDrawText("Check DHCP/network config", 10, 90);
         os_FontDrawText("Press any key", 10, 110);
         os_GetKey();
+        cleanup_test_screen_fast();
         return false;
     }
 
@@ -564,6 +677,12 @@ static bool config_run_ntp_test(struct config_option *opt)
         return true;
     }
 
+    if (sntp_enabled())
+    {
+        sntp_stop();
+        sntp_started = false;
+    }
+
     // Start SNTP
     os_FontDrawText("Starting SNTP...", 10, 50);
 
@@ -573,7 +692,17 @@ static bool config_run_ntp_test(struct config_option *opt)
     lwip_sntp_reset_flag();
 
     ip_addr_t ntp_server;
-    IP_ADDR4(&ntp_server, 132, 163, 96, 1); // time.nist.gov
+    const ip_addr_t *dhcp_server = sntp_getserver(0);
+    if (dhcp_server && !ip_addr_isany(dhcp_server))
+    {
+        ntp_server = *dhcp_server;
+    }
+    else
+    {
+        IP_ADDR4(&ntp_server, 162, 159, 200, 1); // time.cloudflare.com
+    }
+
+    sntp_servermode_dhcp(0);
     sntp_setserver(0, &ntp_server);
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_init();
@@ -589,6 +718,15 @@ static bool config_run_ntp_test(struct config_option *opt)
     {
         usb_HandleEvents();
         sys_check_timeouts();
+
+        if (!test_network_available())
+        {
+            os_FontDrawText("Network lost", 10, 110);
+            sntp_stop();
+            sntp_started = false;
+            cleanup_test_screen_fast();
+            return true;
+        }
 
         uint8_t key = os_GetCSC();
         if (key == sk_Clear)
@@ -621,6 +759,7 @@ static bool config_run_ntp_test(struct config_option *opt)
 
     // Shutdown
     sntp_stop();
+    sntp_started = false;
 
     cleanup_test_screen();
     return true;
@@ -744,11 +883,19 @@ static bool config_run_dns_test(struct config_option *opt)
             usb_HandleEvents();
             sys_check_timeouts();
 
+            if (!test_network_available())
+            {
+                os_FontDrawText("Network lost", 10, 70);
+                cleanup_test_screen_fast();
+                return true;
+            }
+
             uint8_t key = os_GetCSC();
             if (key == sk_Clear)
             {
                 os_FontDrawText("Cancelled", 10, 70);
                 delay_ms(1000);
+                cleanup_test_screen_fast();
                 return true;
             }
 
@@ -798,13 +945,21 @@ static uint8_t ping_recv_callback(void *arg, struct raw_pcb *pcb, struct pbuf *p
     (void)pcb;
     (void)addr;
 
-    if (!p || p->len < sizeof(struct icmp_echo_hdr))
+    if (!p || p->len < (sizeof(struct ip_hdr) + sizeof(struct icmp_echo_hdr)))
     {
         if (p) pbuf_free(p);
         return 0; // don't eat packet if invalid
     }
 
-    struct icmp_echo_hdr *iecho = (struct icmp_echo_hdr *)p->payload;
+    struct ip_hdr *iphdr = (struct ip_hdr *)p->payload;
+    uint16_t iphdr_len = IPH_HL_BYTES(iphdr);
+    if (p->len < (iphdr_len + sizeof(struct icmp_echo_hdr)))
+    {
+        pbuf_free(p);
+        return 0; // don't eat packet if invalid
+    }
+
+    struct icmp_echo_hdr *iecho = (struct icmp_echo_hdr *)((uint8_t *)p->payload + iphdr_len);
 
     if ((iecho->type == ICMP_ER) && (iecho->id == 0xABCD) && (lwip_ntohs(iecho->seqno) == ping_seq_num))
     {
@@ -833,6 +988,7 @@ static bool config_run_ping_test(struct config_option *opt)
         os_FontDrawText("Failed to create ICMP socket", 10, 50);
         os_FontDrawText("Press any key", 10, 70);
         os_GetKey();
+        cleanup_test_screen_fast();
         return true;
     }
 
@@ -904,6 +1060,13 @@ static bool config_run_ping_test(struct config_option *opt)
         {
             usb_HandleEvents();
             sys_check_timeouts();
+
+            if (!test_network_available())
+            {
+                raw_remove(ping_pcb);
+                cleanup_test_screen_fast();
+                return true;
+            }
 
             uint8_t key = os_GetCSC();
             if (key == sk_Clear)
@@ -1041,6 +1204,13 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
         {
             usb_HandleEvents();
             sys_check_timeouts();
+            if (os_GetCSC() == sk_Clear)
+            {
+                os_FontDrawText("Cancelled", 10, 70);
+                delay_ms(100);
+                cleanup_test_screen_fast();
+                return true;
+            }
             delay_ms(10);
             timeout--;
         }
@@ -1050,6 +1220,7 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
             os_FontDrawText("DNS lookup failed", 10, 70);
             os_FontDrawText("Press any key", 10, 90);
             os_GetKey();
+            cleanup_test_screen_fast();
             return true;
         }
         server_addr = dns_resolved_ip;
@@ -1059,6 +1230,7 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
         os_FontDrawText("DNS lookup failed", 10, 70);
         os_FontDrawText("Press any key", 10, 90);
         os_GetKey();
+        cleanup_test_screen_fast();
         return true;
     }
 
@@ -1071,6 +1243,7 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
         os_FontDrawText("Failed to create TCP socket", 10, 70);
         os_FontDrawText("Press any key", 10, 90);
         os_GetKey();
+        cleanup_test_screen_fast();
         return true;
     }
 
@@ -1089,6 +1262,7 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
         os_FontDrawText("Connection failed", 10, 70);
         os_FontDrawText("Press any key", 10, 90);
         os_GetKey();
+        cleanup_test_screen_fast();
         return true;
     }
 
@@ -1098,6 +1272,18 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
     {
         usb_HandleEvents();
         sys_check_timeouts();
+        if (!test_network_available())
+        {
+            tcp_abort(tcp_pcb);
+            cleanup_test_screen_fast();
+            return true;
+        }
+        if (os_GetCSC() == sk_Clear)
+        {
+            tcp_abort(tcp_pcb);
+            cleanup_test_screen_fast();
+            return true;
+        }
         delay_ms(10);
         timeout--;
     }
@@ -1108,6 +1294,7 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
         os_FontDrawText("Connection timeout/error", 10, 70);
         os_FontDrawText("Press any key", 10, 90);
         os_GetKey();
+        cleanup_test_screen_fast();
         return true;
     }
 
@@ -1122,6 +1309,7 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
         os_FontDrawText("Send failed", 10, 70);
         os_FontDrawText("Press any key", 10, 90);
         os_GetKey();
+        cleanup_test_screen_fast();
         return true;
     }
 
@@ -1134,6 +1322,18 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
     {
         usb_HandleEvents();
         sys_check_timeouts();
+        if (!test_network_available())
+        {
+            tcp_close(tcp_pcb);
+            cleanup_test_screen_fast();
+            return true;
+        }
+        if (os_GetCSC() == sk_Clear)
+        {
+            tcp_close(tcp_pcb);
+            cleanup_test_screen_fast();
+            return true;
+        }
         delay_ms(10);
         timeout--;
     }
@@ -1925,6 +2125,8 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
         os_GetKey();
         return false;
     }
+
+    netif_add_ext_callback(&netif_ext_cb, netif_ext_callback);
 
     if (usb_Init(eth_usb_event_callback, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
     {
