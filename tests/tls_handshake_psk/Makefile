@@ -23,7 +23,8 @@ EXTRA_C_SOURCES = \
 	../../src/tls/core/aes.c \
 	../../src/core/mem.c \
 	../../src/drivers/mem.c \
-	../../src/core/stats.c
+	../../src/core/stats.c \
+	../../src/core/logging.c
 
 # Assembly files
 EXTRA_ASM_SOURCES = \
