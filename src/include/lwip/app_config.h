@@ -5,14 +5,16 @@
 #include <stdint.h>
 
 #define LWIP_CFG_APPVAR "lwIPCFG"
-#define LWIP_CFG_VERSION 2u
+#define LWIP_CFG_VERSION 1u
 
 #define LWIP_CFG_ENABLE_TLS        (1u << 0)
+#define LWIP_CFG_LOG_USB           (1u << 1)
 #define LWIP_CFG_AUTO_NTP          (1u << 2)
 #define LWIP_CFG_DHCP              (1u << 3)
 #define LWIP_CFG_TEST_HTTP         (1u << 4)
 #define LWIP_CFG_CERT_CHECK_DATES  (1u << 5)
 #define LWIP_CFG_CERT_CHECK_OWNER  (1u << 6)
+#define LWIP_CFG_LOG_TLS           (1u << 7)
 
 typedef struct lwip_app_config {
     uint16_t version;
@@ -22,6 +24,7 @@ typedef struct lwip_app_config {
     int16_t tz_offset_minutes;
     uint8_t dst_enabled;
     uint8_t reserved2;
+    uint16_t log_size_bytes;
     uint8_t ip_addr[4];
     uint8_t ip_gateway[4];
     uint8_t ip_netmask[4];

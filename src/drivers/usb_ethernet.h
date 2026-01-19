@@ -215,6 +215,7 @@ struct usb_configurator {
     void (*set_endpoint_data)(usb_endpoint_t endpoint, usb_endpoint_data_t *data);
     usb_endpoint_data_t* (*get_endpoint_data)(usb_endpoint_t endpoint);
     void (*set_endpoint_flags)(usb_endpoint_t endpoint, usb_endpoint_flags_t flags);
+    usb_error_t (*set_endpoint_halt)(usb_endpoint_t endpoint);
 };
 extern struct usb_configurator usb_fn;
 

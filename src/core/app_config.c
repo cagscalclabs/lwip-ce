@@ -26,6 +26,7 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     cfg->flags = LWIP_CFG_ENABLE_TLS | LWIP_CFG_DHCP;
     cfg->tz_offset_minutes = 0;
     cfg->dst_enabled = 0;
+    cfg->log_size_bytes = 4096u;
 }
 
 bool lwip_app_config_load(lwip_app_config_t *cfg)
@@ -50,7 +51,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
         memcpy(cfg, stored, sizeof(*cfg));
         return true;
     }
-    if (stored->version == 1u && size >= sizeof(lwip_app_config_v1_t))
+    if (stored->version == LWIP_CFG_VERSION && size >= sizeof(lwip_app_config_v1_t))
     {
         const lwip_app_config_v1_t *stored_v1 = (const lwip_app_config_v1_t *)data;
         lwip_app_config_defaults(cfg);

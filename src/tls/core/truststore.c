@@ -1,6 +1,7 @@
 #include <ti/vars.h>
 #include <string.h>
 
+#include "lwip/logging.h"
 #include "../includes/truststore.h"
 #include "../includes/tls.h"
 #include "../includes/rsa.h"
@@ -146,6 +147,10 @@ static bool tls_truststore_match_id(const uint8_t *entry_id, const uint8_t *id)
 static void tls_truststore_set_status(enum tls_truststore_status status)
 {
     tls_ctx.truststore.status = status;
+    if (status != TLS_STORE_OK && status != TLS_STORE_UNINITIALIZED)
+    {
+        lwip_log_event(LWIP_LOG_MODULE_TLS, LWIP_LOG_TLS_TRUSTSTORE_FAIL);
+    }
 }
 
 enum tls_truststore_status tls_truststore_status(void)

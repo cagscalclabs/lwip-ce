@@ -37,8 +37,6 @@
 #define LWIP_DHCP_GET_NTP_SRV 1
 #define SNTP_GET_SERVERS_FROM_DHCP 1
 
-#define SNTP_SET_SYSTEM_TIME(sec) lwip_sntp_set_time((uint32_t)(sec))
-
 #define LWIP_NUM_NETIF_CLIENT_DATA (LWIP_MDNS_RESPONDER)
 
 #define LWIP_HAVE_LOOPIF 1
@@ -328,6 +326,6 @@ a lot of data that needs to be copied, this should be set high. */
 /* Set the system time when SNTP receives a response */
 /* Use the wrapper function that applies timezone and DST offsets */
 extern void lwip_sntp_set_time(uint32_t seconds);
-#define SNTP_SET_SYSTEM_TIME(sec) lwip_sntp_set_time(sec)
+#define SNTP_SET_SYSTEM_TIME(sec) lwip_sntp_set_time((uint32_t)(sec))
 
 #endif // LWIP_LWIPOPTS_H

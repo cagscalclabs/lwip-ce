@@ -26,6 +26,7 @@
 #include "mem.h"
 #include "lwip/netif.h"
 #include "lwip/timeouts.h"
+#include "lwip/logging.h"
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_START_DHCP_ON_ALL true
@@ -38,6 +39,23 @@ bool eth_disabled_with_error = false;
 struct usb_configurator usb_fn = {0};
 static enum mem_pressure_level g_eth_rx_throttle_level = MEM_PRESSURE_NONE;
 static bool g_eth_hook_registered = false;
+
+static void log_usb_transfer_status(usb_transfer_status_t status)
+{
+    if (status & USB_TRANSFER_NO_DEVICE)
+    {
+        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_ENDPOINT_NO_DEVICE);
+    }
+    if (status & USB_TRANSFER_STALLED)
+    {
+        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_ENDPOINT_STALL);
+    }
+    if (status & (USB_TRANSFER_ERROR | USB_TRANSFER_HOST_ERROR | USB_TRANSFER_BUS_ERROR |
+                  USB_TRANSFER_OVERFLOW | USB_TRANSFER_FAILED))
+    {
+        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_ENDPOINT_ERROR);
+    }
+}
 static bool g_eth_rx_drain_scheduled = false;
 static bool g_eth_rx_sched_scheduled = false;
 
@@ -296,6 +314,7 @@ bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
     {
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
                     ("int: endpoint failure, giving up"));
+        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_FATAL_RETRY);
         // if it fails repeatedly, free the pbuf, disable the device,
         // and set driver error state
         usb_fn.disable_device(dev->device);
@@ -324,6 +343,7 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
     static uint8_t int_retries = 0;
     if (status)
     {
+        log_usb_transfer_status(status);
         // much like RX, we will retry a INT USB_CDC_MAX_RETRIES times
         if (eth_xmit_fatal_error(dev, int_retries))
             return USB_ERROR_FAILED;
@@ -390,6 +410,7 @@ usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoi
     static uint8_t tx_retries = 0;
     if (status)
     {
+        log_usb_transfer_status(status);
         // much like RX, we will retry a TX USB_CDC_MAX_RETRIES times
         if (eth_xmit_fatal_error(dev, tx_retries))
         {
@@ -429,6 +450,7 @@ usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
     dev->rx_transfer_active = false;
     if (status)
     {
+        log_usb_transfer_status(status);
         if (eth_xmit_fatal_error(dev, rx_retries))
             return USB_ERROR_FAILED;
 
@@ -576,6 +598,7 @@ usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
     dev->rx_transfer_active = false;
     if (status)
     {
+        log_usb_transfer_status(status);
         if (eth_xmit_fatal_error(dev, rx_retries))
         {
             pbuf_free(data);
@@ -1110,8 +1133,26 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
     case USB_DEVICE_DISABLED_EVENT:
     {
         eth_device_t *eth_device = (eth_device_t *)usb_fn.get_device_data(usb_device);
-        netif_set_link_down(&eth_device->iface);
-        netif_set_down(&eth_device->iface);
+        if (eth_device)
+        {
+            netif_set_link_down(&eth_device->iface);
+            netif_set_down(&eth_device->iface);
+            if (eth_device->rx.endpoint)
+            {
+                usb_fn.set_endpoint_flags(eth_device->rx.endpoint, USB_MANUAL_TERMINATE);
+                usb_fn.set_endpoint_halt(eth_device->rx.endpoint);
+            }
+            if (eth_device->tx.endpoint)
+            {
+                usb_fn.set_endpoint_flags(eth_device->tx.endpoint, USB_MANUAL_TERMINATE);
+                usb_fn.set_endpoint_halt(eth_device->tx.endpoint);
+            }
+            if (eth_device->interrupt.endpoint)
+            {
+                usb_fn.set_endpoint_flags(eth_device->interrupt.endpoint, USB_MANUAL_TERMINATE);
+                usb_fn.set_endpoint_halt(eth_device->interrupt.endpoint);
+            }
+        }
         if (eth_disabled_with_error && ETH_DO_RESTART_ON_ERROR)
         {
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,

@@ -13,6 +13,7 @@
 #include "../includes/random.h"
 #include "../includes/hkdf.h"
 #include <string.h>
+#include "lwip/logging.h"
 
 /*
  * ============================================================================
@@ -1350,6 +1351,7 @@ bool tls_send_alert(
     if (level == TLS_ALERT_LEVEL_FATAL)
     {
         ctx->state = TLS_STATE_ERROR;
+        lwip_log_event(LWIP_LOG_MODULE_TLS, LWIP_LOG_TLS_FATAL_ALERT);
     }
 
     return false;
