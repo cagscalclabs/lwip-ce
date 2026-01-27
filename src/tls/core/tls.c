@@ -38,7 +38,7 @@ struct tls_context tls_ctx = {
     .ecc_scratch = NULL,
     .initialized = false,
     .truststore = {
-        .status = TLS_STORE_UNINITIALIZED,
+        .status = TLS_STORE_NOT_FOUND,
         .size = 0,
         .entry_count = 0,
         .version = 0,
@@ -87,7 +87,7 @@ void tls_cleanup(void)
     }
 
     tls_ctx.initialized = false;
-    tls_ctx.truststore.status = TLS_STORE_UNINITIALIZED;
+    tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
     tls_ctx.truststore.size = 0;
     tls_ctx.truststore.entry_count = 0;
     tls_ctx.truststore.version = 0;

@@ -33,7 +33,7 @@ static void draw_line(const char *msg)
     text_y += 12;
 }
 
-static const char *truststore_status_str(enum tls_truststore_status status)
+static const char *truststore_status_str(tls_truststore_status_t status)
 {
     switch (status)
     {
@@ -45,7 +45,7 @@ static const char *truststore_status_str(enum tls_truststore_status status)
         return "size bad";
     case TLS_STORE_VERSION_MISMATCH:
         return "version bad";
-    case TLS_STORE_HASH_INIT_FAIL:
+    case TLS_STORE_HASH_FAIL:
         return "hash fail";
     case TLS_STORE_SIG_INVALID:
         return "sig invalid";
@@ -149,7 +149,7 @@ int main(void)
         }
     }
 
-    enum tls_truststore_status status = tls_truststore_init();
+    tls_truststore_status_t status = tls_truststore_init();
     bool sig_ok = (status == TLS_STORE_OK);
     if (sig_ok)
     {
