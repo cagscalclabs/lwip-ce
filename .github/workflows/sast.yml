@@ -1,4 +1,4 @@
-name: SAST Security Scan
+name: SAST
 
 on:
   push:
