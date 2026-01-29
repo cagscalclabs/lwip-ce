@@ -178,7 +178,7 @@ bool tls_handshake_init(
     }
 
     /* Clear context */
-    memset(ctx, 0, sizeof(*ctx));
+    tls_secure_memzero(ctx, sizeof(*ctx));
 
     /* Copy PSK and identity */
     memcpy(ctx->psk, psk, 32);
@@ -1132,7 +1132,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
      * TODO: Extract from ctx->transcript_hash when implemented
      * For now, use placeholder zeros for testing
      */
-    memset(transcript_hash, 0, 32);
+    tls_secure_memzero(transcript_hash, 32);
     if (ctx->transcript_hash)
     {
         transcript_hash_digest(ctx->transcript_hash, transcript_hash);
@@ -1260,7 +1260,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
      * TODO: Extract from ctx->transcript_hash when implemented
      * For now, use placeholder zeros for testing
      */
-    memset(transcript_hash, 0, 32);
+    tls_secure_memzero(transcript_hash, 32);
     if (ctx->transcript_hash)
     {
         transcript_hash_digest(ctx->transcript_hash, transcript_hash);
@@ -1383,7 +1383,7 @@ bool tls_send_finished(
     }
     else
     {
-        memset(transcript_hash, 0, 32);
+        tls_secure_memzero(transcript_hash, 32);
     }
 
     /* Step 4: Compute verify_data = HMAC(finished_key, transcript_hash) */
@@ -1488,7 +1488,7 @@ bool tls_recv_finished(
     }
     else
     {
-        memset(transcript_hash, 0, 32);
+        tls_secure_memzero(transcript_hash, 32);
     }
 
     /* Compute expected verify_data */

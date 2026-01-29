@@ -747,7 +747,7 @@ void gf128_mul(uint8_t *a, const uint8_t *b, uint8_t *c)
     }
 }
 */
-#define ghash_start(buf) memset((buf), 0, 16)
+#define ghash_start(buf) tls_secure_memzero((buf), 16)
 
 void ghash(struct tls_aes_context *ctx, uint8_t *out_buf, const uint8_t *data, size_t len)
 {
@@ -820,14 +820,14 @@ void aes_gcm_prepare_iv(struct tls_aes_context *ctx, const uint8_t *iv, size_t i
          * J_0 = GHASH_H(IV || 0^(s+64) || [len(IV)]_64)
          */
         // hash the IV. Pad to block size
-        memset(tbuf, 0, AES_BLOCK_SIZE);
+        tls_secure_memzero(tbuf, AES_BLOCK_SIZE);
         memcpy(tbuf, iv, iv_len);
-        memset(ctx->iv, 0, AES_BLOCK_SIZE);
+        tls_secure_memzero(ctx->iv, AES_BLOCK_SIZE);
         ghash(ctx, ctx->iv, tbuf, sizeof(tbuf));
         // xor_buf(tbuf, ctx->iv, AES_BLOCK_SIZE);
         // gf128_mul(out_buf, ctx->mode.gcm.ghash_key, out_buf);
 
-        memset(tbuf, 0, AES_BLOCK_SIZE >> 1);
+        tls_secure_memzero(tbuf, AES_BLOCK_SIZE >> 1);
         bytelen_to_bitlen(iv_len, &tbuf[8]); // outputs in BE
 
         ghash(ctx, ctx->iv, tbuf, sizeof(tbuf));
@@ -854,7 +854,7 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
 
     if (iv_len > AES_BLOCK_SIZE)
         return false;
-    memset(ctx, 0, sizeof(struct tls_aes_context));
+    tls_secure_memzero(ctx, sizeof(struct tls_aes_context));
     key_len <<= 3;
     switch (key_len)
     {
@@ -902,7 +902,7 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         aes_encrypt_block(tmp, ctx->_private.ghash_key, ctx);
         // sort out IV wonkiness in GCM mode
         aes_gcm_prepare_iv(ctx, iv, iv_len);
-        memset(ctx->_private.auth_tag, 0, AES_BLOCK_SIZE);
+        tls_secure_memzero(ctx->_private.auth_tag, AES_BLOCK_SIZE);
         memcpy(ctx->_private.auth_j0, ctx->iv, AES_BLOCK_SIZE);
         increment_iv(ctx->iv, AES_GCM_NONCE_LEN, AES_GCM_CTR_LEN);
         break;
@@ -949,7 +949,7 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
     uint8_t *tag = ctx->_private.auth_tag;
 
     // pad rest of ciphertext cache with 0s
-    memset(tbuf, 0, AES_BLOCK_SIZE);
+    tls_secure_memzero(tbuf, AES_BLOCK_SIZE);
     ghash(ctx, tag, tbuf, AES_BLOCK_SIZE - ctx->_private.aad_cache_len);
     // at this point, tag should be GHASH(0-padded aad || 0-padded ciphertext)
 
@@ -1000,7 +1000,7 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             (ctx->_private.aad_cache_len))
         {
             // pad rest of aad cache with 0's
-            memset(buf, 0, AES_BLOCK_SIZE);
+            tls_secure_memzero(buf, AES_BLOCK_SIZE);
             ghash(ctx, tag, buf, AES_BLOCK_SIZE - ctx->_private.aad_cache_len);
         }
         ctx->_private.lock = LOCK_ALLOW_ENCRYPT;
@@ -1051,7 +1051,7 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         }
     }
     }
-    memset(buf, 0, AES_BLOCK_SIZE);
+    tls_secure_memzero(buf, AES_BLOCK_SIZE);
     return true;
 }
 
@@ -1086,7 +1086,7 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             (ctx->_private.aad_cache_len))
         {
             // pad rest of aad cache with 0's
-            memset(buf_in, 0, AES_BLOCK_SIZE);
+            tls_secure_memzero(buf_in, AES_BLOCK_SIZE);
             ghash(ctx, tag, buf_in, AES_BLOCK_SIZE - ctx->_private.aad_cache_len);
         }
         ghash(ctx, tag, inbuf, in_len);
@@ -1138,8 +1138,8 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         break;
     }
     }
-    memset(buf_in, 0, sizeof buf_in);
-    memset(buf_out, 0, sizeof buf_out);
+    tls_secure_memzero(buf_in, sizeof buf_in);
+    tls_secure_memzero(buf_out, sizeof buf_out);
     return true;
 }
 
