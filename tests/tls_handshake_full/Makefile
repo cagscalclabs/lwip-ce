@@ -21,6 +21,7 @@ EXTRA_C_SOURCES = \
 	../../src/tls/core/hmac.c \
 	../../src/tls/core/hash.c \
 	../../src/tls/core/aes.c \
+	../../src/tls/core/bytes.c \
 	../../src/core/mem.c \
 	../../src/drivers/mem.c \
 	../../src/core/stats.c \
