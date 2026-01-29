@@ -1,5 +1,6 @@
 #include "mem.h"
 #include <string.h>
+#include "../tls/includes/bytes.h"
 
 #define MEM_POOL_HEADER_SIZE (sizeof(uint16_t))
 
@@ -146,7 +147,7 @@ static bool mem_buffer_resize(struct mem_buffer *rb, size_t new_cap)
     {
         if ((rb->flags & BUFFER_SECURE_MODE) != 0 && shrink > 0)
         {
-            memset(rb->buf + new_cap, 0, shrink);
+            tls_secure_memzero(rb->buf + new_cap, shrink);
         }
         new_buf = (uint8_t *)g_mem_cfg.realloc_fn(rb->buf, new_cap);
         if (!new_buf)
@@ -190,7 +191,7 @@ static bool mem_buffer_resize(struct mem_buffer *rb, size_t new_cap)
 
         if ((rb->flags & BUFFER_SECURE_MODE) != 0)
         {
-            memset(rb->buf, 0, rb->current_size);
+            tls_secure_memzero(rb->buf, rb->current_size);
         }
         g_mem_cfg.free_fn(rb->buf);
     }
@@ -521,7 +522,7 @@ void mem_buffer_destroy(struct mem_buffer *rb)
     {
         if ((rb->flags & BUFFER_SECURE_MODE) != 0)
         {
-            memset(rb->buf, 0, rb->current_size);
+            tls_secure_memzero(rb->buf, rb->current_size);
         }
         g_mem_cfg.free_fn(rb->buf);
         if (!skip_heap_accounting)
@@ -534,7 +535,7 @@ void mem_buffer_destroy(struct mem_buffer *rb)
     {
         if ((rb->flags & BUFFER_SECURE_MODE) != 0)
         {
-            memset(rb->u.pool.pool_bitmap, 0, rb->u.pool.pool_bitmap_bytes);
+            tls_secure_memzero(rb->u.pool.pool_bitmap, rb->u.pool.pool_bitmap_bytes);
         }
         g_mem_cfg.free_fn(rb->u.pool.pool_bitmap);
         if (!skip_heap_accounting)
@@ -797,8 +798,8 @@ size_t mem_buffer_pop(struct mem_buffer *rb, uint8_t *out, size_t len)
 
     if ((rb->flags & BUFFER_SECURE_MODE) != 0)
     {
-        memset(rb->buf + rb->u.ring.head, 0, first);
-        memset(rb->buf, 0, len - first);
+        tls_secure_memzero(rb->buf + rb->u.ring.head, first);
+        tls_secure_memzero(rb->buf, len - first);
     }
 
     size_t old_head = rb->u.ring.head;
@@ -991,7 +992,7 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
 
     if ((rb->flags & BUFFER_SECURE_MODE) != 0)
     {
-        memset(base, 0, blocks * rb->u.pool.pool_block_size);
+        tls_secure_memzero(base, blocks * rb->u.pool.pool_block_size);
     }
 
     for (size_t j = 0; j < blocks; j++)

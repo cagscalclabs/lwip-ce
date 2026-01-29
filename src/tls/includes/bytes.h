@@ -12,6 +12,15 @@
  */
 bool tls_bytes_compare(const void *buf1, const void *buf2, size_t len);
 
+/***********************************************************************
+ * @brief Secure memory zeroing that cannot be optimized away.
+ * @param ptr       Pointer to buffer to zero.
+ * @param len       Number of bytes to zero.
+ *
+ * Uses volatile to prevent compiler from optimizing away the zeroing,
+ * which is critical for clearing sensitive data like cryptographic keys.
+ */
+void tls_secure_memzero(void *ptr, size_t len);
 
 #endif
 

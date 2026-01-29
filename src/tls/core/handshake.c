@@ -1705,7 +1705,7 @@ bool tls_decrypt_data(
     if (diff != 0)
     {
         /* Tag verification failed - possible tampering or decryption error */
-        memset(plaintext, 0, actual_plaintext_len); /* Clear plaintext */
+        tls_secure_memzero(plaintext, actual_plaintext_len); /* Clear plaintext */
         return false;
     }
 
@@ -1763,9 +1763,9 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     /* Transcript hash uses embedded storage, no need to free */
 
     /* Securely zero sensitive data */
-    memset(ctx->psk, 0, sizeof(ctx->psk));
-    memset(&ctx->keys, 0, sizeof(ctx->keys));
-    memset(ctx, 0, sizeof(*ctx));
+    tls_secure_memzero(ctx->psk, sizeof(ctx->psk));
+    tls_secure_memzero(&ctx->keys, sizeof(ctx->keys));
+    tls_secure_memzero(ctx, sizeof(*ctx));
 }
 
 /*
