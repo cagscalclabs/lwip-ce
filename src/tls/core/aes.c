@@ -138,7 +138,7 @@ void aes_AddRoundKey(uint8_t state[][4], const uint32_t w[])
     state[1][3] ^= subkey[1];
     state[2][3] ^= subkey[2];
     state[3][3] ^= subkey[3];
-    memset(subkey, 0, sizeof subkey);
+    tls_secure_memzero(subkey, sizeof subkey);
 }
 
 /////////////////
@@ -341,7 +341,7 @@ void aes_MixColumns(uint8_t state[][4])
     state[3][3] ^= col[1];
     state[3][3] ^= col[2];
     state[3][3] ^= gf_mul[col[3]][0];
-    memset(col, 0, sizeof col);
+    tls_secure_memzero(col, sizeof col);
 }
 
 void aes_InvMixColumns(uint8_t state[][4])
@@ -432,7 +432,7 @@ void aes_InvMixColumns(uint8_t state[][4])
     state[3][3] ^= gf_mul[col[1]][4];
     state[3][3] ^= gf_mul[col[2]][2];
     state[3][3] ^= gf_mul[col[3]][5];
-    memset(col, 0, sizeof col);
+    tls_secure_memzero(col, sizeof col);
 }
 
 void aes_encrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *ks)
@@ -556,7 +556,7 @@ void aes_encrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *
     out[13] = state[1][3];
     out[14] = state[2][3];
     out[15] = state[3][3];
-    memset(state, 0, sizeof state);
+    tls_secure_memzero(state, sizeof state);
 }
 
 void aes_decrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *ks)
@@ -672,7 +672,7 @@ void aes_decrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *
     out[13] = state[1][3];
     out[14] = state[2][3];
     out[15] = state[3][3];
-    memset(state, 0, sizeof state);
+    tls_secure_memzero(state, sizeof state);
 }
 
 void increment_iv(uint8_t iv[], size_t counter_start, size_t counter_size)

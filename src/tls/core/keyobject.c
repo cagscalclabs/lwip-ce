@@ -9,6 +9,7 @@
 #include "../includes/passwords.h"
 #include "../includes/aes.h"
 #include "../includes/hash.h"
+#include "../includes/bytes.h"
 
 void rmemcpy(void *dest, void *src, size_t len);
 
@@ -434,7 +435,7 @@ file_type_ok:
         return kf;
     }
 error:
-    memset(kf, 0, kf->length);
+    tls_secure_memzero(kf, kf->length);
     mem_free(kf);
     return NULL;
 }
@@ -567,7 +568,7 @@ file_type_ok:
     }
 
 error:
-    memset(kf, 0, kf->length);
+    tls_secure_memzero(kf, kf->length);
     mem_free(kf);
     return NULL;
 }
@@ -727,7 +728,7 @@ file_type_ok:
         goto error;
 
 error:
-    memset(kf, 0, kf->length);
+    tls_secure_memzero(kf, kf->length);
     mem_free(kf);
     return NULL;
 }
