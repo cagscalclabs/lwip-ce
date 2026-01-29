@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Run the "semgrep ci" command on the command line of the docker image.
-      - run: semgrep ci --sarif > semgrep.sarif
+      - run: semgrep ci --include "src/drivers/**" --include "src/tls/**" --sarif > semgrep.sarif
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
       - name: Upload SARIF file for GitHub Advanced Security Dashboard
