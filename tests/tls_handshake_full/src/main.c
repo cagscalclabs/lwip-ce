@@ -34,17 +34,16 @@ static bool tls_test_mem_init(void)
         return false;
     }
     tls_test_heap = mem_buffer_create(
+        MEM_BUFFER_POOL,
         TLS_TEST_POOL_BYTES,
         TLS_TEST_POOL_BYTES,
         TLS_TEST_POOL_BLOCK,
-        BUFFER_MALLOC_TYPE,
-        NULL);
+        0);
     if (!tls_test_heap)
     {
         return false;
     }
     mem_buffer_set_lwip_heap(tls_test_heap);
-    mem_buffer_set_owner(tls_test_heap, MEM_BUF_OWNER_TLS_RX);
     return true;
 }
 

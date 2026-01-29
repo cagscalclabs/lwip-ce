@@ -38,10 +38,7 @@ typedef struct altcp_tls_ce_state {
     int bio_bytes_read;                      /* Bytes read from TCP */
     int bio_bytes_appl;                      /* Application data bytes */
     int overhead_bytes_adjust;               /* TLS overhead tracking */
-    size_t rx_ring_head;                     /* TLS record ring head */
-    size_t rx_ring_len;                      /* TLS record ring length */
-    size_t rx_ring_size;                     /* TLS record ring size */
-    uint8_t *rx_ring;                        /* TLS record ring buffer */
+    struct mem_buffer *rx_ring;              /* TLS record ring buffer */
     size_t rx_throttle_pending;              /* Pending bytes to recved */
     uint8_t rx_mild_toggle;                  /* Throttle counter */
     struct altcp_tls_ce_state *next;         /* Linked list of states */

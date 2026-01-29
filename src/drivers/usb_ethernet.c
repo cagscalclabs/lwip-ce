@@ -38,7 +38,6 @@ static uint8_t ifnums_used = 0;
 bool eth_disabled_with_error = false;
 struct usb_configurator usb_fn = {0};
 static enum mem_pressure_level g_eth_rx_throttle_level = MEM_PRESSURE_NONE;
-static bool g_eth_hook_registered = false;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
 {
@@ -244,11 +243,11 @@ static void eth_rx_drain_timer(void *arg)
             continue;
         }
         eth_device_t *dev = (eth_device_t *)netif->state;
-        if (!dev->rx_ring || !dev->rx_ring->drain_fn)
+        if (!dev->rx_ring || !dev->rx_ring->u.ring.drain_fn)
         {
             continue;
         }
-        size_t drained = dev->rx_ring->drain_fn(dev->rx_ring, dev->rx_ring->drain_fn_data, budget);
+        size_t drained = dev->rx_ring->u.ring.drain_fn(dev->rx_ring, dev->rx_ring->u.ring.drain_fn_data, budget);
         if (drained > budget)
         {
             drained = budget;
@@ -258,13 +257,12 @@ static void eth_rx_drain_timer(void *arg)
     sys_timeout(g_eth_rx_drain_interval_ms, eth_rx_drain_timer, NULL);
 }
 
-static void eth_register_pressure_hook(void)
+
+static void eth_rx_ring_pressure_cb(struct mem_buffer *mb, size_t requested, enum mem_pressure_level level)
 {
-    if (!g_eth_hook_registered)
-    {
-        mem_register_pressure_hook_eth_rx(eth_set_rx_throttle);
-        g_eth_hook_registered = true;
-    }
+    (void)mb;
+    (void)requested;
+    eth_set_rx_throttle(level);
 }
 
 void eth_set_rx_throttle(enum mem_pressure_level level)
@@ -379,7 +377,19 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                         netif_set_link_down(&dev->iface);
                         if (netif_default == &dev->iface)
                         {
-                            netif_set_default(NULL);
+                            /* Find another connected netif to promote as default */
+                            struct netif *candidate = netif_list;
+                            struct netif *new_default = NULL;
+                            while (candidate)
+                            {
+                                if (candidate != &dev->iface && netif_is_link_up(candidate))
+                                {
+                                    new_default = candidate;
+                                    break;
+                                }
+                                candidate = candidate->next;
+                            }
+                            netif_set_default(new_default);
                         }
                     }
                     break;
@@ -1066,13 +1076,13 @@ init_success:
 
     if (!eth->rx_ring)
     {
-        eth->rx_ring = mem_buffer_create(ETH_RX_RING_INIT_SIZE, ETH_RX_RING_MAX_SIZE, 0, 0, NULL);
+        eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE, ETH_RX_RING_MAX_SIZE, ETH_RX_RING_STEP_SIZE, 0);
         if (!eth->rx_ring)
         {
             return false;
         }
-        mem_buffer_set_owner(eth->rx_ring, MEM_BUF_OWNER_ETH_RX);
         mem_buffer_set_drain(eth->rx_ring, eth_rx_ring_drain, &eth->iface);
+        mem_buffer_set_pressure_cb(eth->rx_ring, eth_rx_ring_pressure_cb);
         mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
         mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
     }
@@ -1088,7 +1098,6 @@ init_success:
         g_eth_rx_sched_scheduled = true;
     }
 
-    eth_register_pressure_hook();
     netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
     // enqueue callbacks for receiving interrupt and RX transfers from this device.
     usb_fn.schedule_transfer(eth->interrupt.endpoint, eth->interrupt.buf, INTERRUPT_RX_MAX, interrupt_receive_callback, eth);

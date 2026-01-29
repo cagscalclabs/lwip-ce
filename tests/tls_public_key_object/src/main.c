@@ -20,16 +20,15 @@ static bool tls_test_mem_init(void)
         return false;
     }
     tls_test_keyio = mem_buffer_create(
+        MEM_BUFFER_FILE,
         TLS_TEST_KEYIO_BYTES,
         TLS_TEST_KEYIO_BYTES,
-        0,
-        BUFFER_FILEIO_TYPE,
-        NULL);
+        256,
+        0);
     if (!tls_test_keyio)
     {
         return false;
     }
-    mem_buffer_set_owner(tls_test_keyio, MEM_BUF_OWNER_FILEIO);
     tls_keyobject_set_buffer(tls_test_keyio);
     return true;
 }

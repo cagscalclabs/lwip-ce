@@ -135,9 +135,18 @@ struct tls_handshake_context {
         TLS_STATE_INIT,
         TLS_STATE_CLIENT_HELLO_SENT,
         TLS_STATE_SERVER_HELLO_RECEIVED,
+        TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED,
+        TLS_STATE_CERTIFICATE_RECEIVED,
+        TLS_STATE_CERTIFICATE_VERIFY_RECEIVED,
         TLS_STATE_HANDSHAKE_COMPLETE,
         TLS_STATE_ERROR
     } state;
+
+    /* Certificate validation state (SPKI pinning) */
+    struct {
+        uint8_t server_cert_spki_hash[32];  /* SHA-256 of server's SPKI */
+        bool certificate_validated;          /* True if cert chain validated via SPKI pin */
+    } cert_state;
 };
 
 /**
@@ -213,6 +222,41 @@ bool tls_recv_server_hello(
  * @return true on success, false on failure
  */
 bool tls_recv_certificate(
+    struct tls_handshake_context *ctx,
+    const uint8_t *data,
+    size_t data_len
+);
+
+/**
+ * @brief Process EncryptedExtensions message (server -> client)
+ *
+ * Parses the TLS 1.3 EncryptedExtensions handshake message (type 0x08).
+ * This message contains extensions that are encrypted under handshake keys.
+ *
+ * @param ctx Handshake context
+ * @param data EncryptedExtensions message data
+ * @param data_len Length of EncryptedExtensions message
+ * @return true on success, false on failure
+ */
+bool tls_recv_encrypted_extensions(
+    struct tls_handshake_context *ctx,
+    const uint8_t *data,
+    size_t data_len
+);
+
+/**
+ * @brief Process CertificateVerify message (server -> client)
+ *
+ * Parses the TLS 1.3 CertificateVerify message (type 0x0f) and updates
+ * the transcript hash. Note: We rely on SPKI pinning for certificate
+ * validation rather than verifying this signature.
+ *
+ * @param ctx Handshake context
+ * @param data CertificateVerify message data
+ * @param data_len Length of CertificateVerify message
+ * @return true on success, false on parse failure
+ */
+bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len

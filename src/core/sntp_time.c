@@ -106,3 +106,68 @@ void lwip_sntp_set_time(uint32_t seconds)
     // Signal that time has been set (after all RTC operations complete)
     g_sntp_time_set = true;
 }
+
+uint32_t lwip_sntp_get_unix_time(void)
+{
+    static const uint16_t days_before_month[] = {
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+    };
+
+    /* If time was never set via SNTP, return 0 */
+    if (!g_sntp_time_set)
+    {
+        return 0;
+    }
+
+    uint8_t sec, min, hr;
+    uint8_t day, month, year_2digit;
+
+    while (rtc_IsBusy()) {}
+    boot_GetTime(&sec, &min, &hr);
+    boot_GetDate(&day, &month, &year_2digit);
+
+    /* TI-84 CE RTC uses 2-digit years (0-99 representing 2000-2099) */
+    uint16_t year = (uint16_t)year_2digit + 2000u;
+
+    /* Calculate days since Jan 1, 1970 */
+    uint32_t days = 0;
+
+    /* Add days for complete years */
+    for (uint16_t y = 1970u; y < year; y++)
+    {
+        days += is_leap_year(y) ? 366u : 365u;
+    }
+
+    /* Add days for complete months in current year */
+    if (month >= 1u && month <= 12u)
+    {
+        days += days_before_month[month - 1u];
+        /* Add leap day if past February in a leap year */
+        if (month > 2u && is_leap_year(year))
+        {
+            days += 1u;
+        }
+    }
+
+    /* Add days in current month (day is 1-based) */
+    days += (day - 1u);
+
+    /* Convert to seconds and add time */
+    uint32_t timestamp = days * 86400u;
+    timestamp += (uint32_t)hr * 3600u;
+    timestamp += (uint32_t)min * 60u;
+    timestamp += sec;
+
+    /* Subtract timezone and DST adjustments to get UTC */
+    int64_t utc = (int64_t)timestamp - (int64_t)g_tz_offset_seconds;
+    if (g_dst_enabled)
+    {
+        utc -= 3600;
+    }
+    if (utc < 0)
+    {
+        utc = 0;
+    }
+
+    return (uint32_t)utc;
+}

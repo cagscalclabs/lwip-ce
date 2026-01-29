@@ -350,16 +350,15 @@ lwip_init(struct lwip_configurator *conf)
     memcpy(&usb_fn, &conf->usb_conf, sizeof(struct usb_configurator));
     {
         const struct mem_buffer_pool_cfg pools[] = {
-            {LWIP_MEMPOOL_SMALL_BLOCK, LWIP_MEMPOOL_SMALL_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL},
-            {LWIP_MEMPOOL_MEDIUM_BLOCK, LWIP_MEMPOOL_MEDIUM_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL},
-            {LWIP_MEMPOOL_LARGE_BLOCK, LWIP_MEMPOOL_LARGE_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL}
+            {LWIP_MEMPOOL_SMALL_BLOCK, LWIP_MEMPOOL_SMALL_COUNT, 0, 0},
+            {LWIP_MEMPOOL_MEDIUM_BLOCK, LWIP_MEMPOOL_MEDIUM_COUNT, 0, 0},
+            {LWIP_MEMPOOL_LARGE_BLOCK, LWIP_MEMPOOL_LARGE_COUNT, 0, 0}
         };
         mem_buffer_lwip_init_pools(
             pools,
             sizeof(pools) / sizeof(pools[0])
         );
     }
-    mem_set_pressure_clear_pct(LWIP_MEM_PRESSURE_CLEAR_PCT);
 #ifndef LWIP_SKIP_CONST_CHECK
   int a = 0;
   LWIP_UNUSED_ARG(a);
