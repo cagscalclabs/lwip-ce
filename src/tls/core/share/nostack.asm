@@ -13,10 +13,10 @@ public erase_stack
 erase_stack:
 	
 	; save a, hl, e
-	ld (.smc_a), a
-	ld (.smc_hl), hl
+	ld (saved_a), a
+	ld (saved_hl), hl
 	ld a, e
-	ld (.smc_e), a
+	ld (saved_e), a
 	
 	; set from stackBot + 4 to ix - 1 to 0
 	lea de, ix - 2
@@ -29,12 +29,15 @@ erase_stack:
 	lddr
 	
 	; restore a, hl, e
-	ld e, 0
-.smc_e:=$-1
-	ld a, 0
-.smc_a:=$-1
-	ld hl, 0
-.smc_hl:=$-3
+	ld a, (saved_e)
+	ld e, a
+	ld a, (saved_a)
+	ld hl, (saved_hl)
 	ld sp, ix
 	pop ix
 	ret
+
+section .bss
+saved_a: db 0
+saved_e: db 0
+saved_hl: db 0, 0, 0

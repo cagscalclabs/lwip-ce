@@ -11,15 +11,14 @@ macro save_interrupts?
 	ld a,i
 	push af
 	pop bc
-	ld (.__interrupt_state),bc
+	ld (__interrupt_state),bc
 	di
 end macro
 
 ;------------------------------------------
 ; helper macro for restoring the interrupt state
 macro restore_interrupts? parent
-	ld bc,0
-parent.__interrupt_state = $-3
+	ld bc,(__interrupt_state)
 	push bc
 	pop af
 	ret po
@@ -29,8 +28,7 @@ end macro
 ;------------------------------------------
 ; helper macro for restoring the interrupt state without prematurely returning
 macro restore_interrupts_noret? parent
-	ld bc,0
-parent.__interrupt_state = $-3
+	ld bc,(__interrupt_state)
 	push bc
 	pop af
 	jp po,parent.__dont_reenable_interrupts
@@ -41,8 +39,7 @@ end macro
 ;------------------------------------------
 ; helper macro for restoring the interrupt state, preserving a
 macro restore_interrupts_preserve_a? parent
-	ld bc,0
-parent.__interrupt_state = $-3
+	ld bc,(__interrupt_state)
 	push bc
 	ld c,a
 	pop af
@@ -54,8 +51,7 @@ end macro
 ;------------------------------------------
 ; helper macro for restoring the interrupt state without prematurely returning, preserving a
 macro restore_interrupts_preserve_a? parent
-	ld bc,0
-parent.__interrupt_state = $-3
+	ld bc,(__interrupt_state)
 	push bc
 	ld c,a
 	pop af
@@ -64,3 +60,7 @@ parent.__interrupt_state = $-3
 	ei
 parent.__dont_reenable_interrupts = $
 end macro
+
+section .bss
+__interrupt_state: dw 0
+section .text

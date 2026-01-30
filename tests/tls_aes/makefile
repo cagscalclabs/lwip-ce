@@ -18,7 +18,9 @@ SOURCES = src/main.c
 EXTRA_C_SOURCES = ../../src/tls/core/aes.c ../../src/tls/core/bytes.c
 
 # Assembly files (bytelen_to_bitlen in bytes.asm, gf128_mul in bigint.asm for GCM)
-EXTRA_ASM_SOURCES = ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm
+EXTRA_ASM_SOURCES = ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm \
+	../../src/tls/core/share/crypto_guard.asm \
+	../../src/tls/core/share/nostack.asm
 
 # ----------------------------
 

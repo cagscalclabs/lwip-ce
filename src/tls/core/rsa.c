@@ -6,13 +6,14 @@
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
 #include "../includes/tls.h"
+#include "../includes/crypto_guard.h"
 
 #define ENCODE_START 0
 #define ENCODE_SALT (1 + ENCODE_START)
+// CRYPTO_FN
 bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
                          size_t modulus_len, const char *auth, uint8_t hash_alg)
 {
-
     // initial sanity checks
     if ((modulus_len > RSA_MODULUS_MAX_SUPPORTED) ||
         (modulus_len < RSA_MODULUS_MIN_SUPPORTED) ||
@@ -25,9 +26,12 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
         return false;
 
+    uint8_t intr_state = tls_crypto_enter();
+    bool ok = false;
+
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
-        return false;
+        goto cleanup;
     size_t min_padding_len = (hash.digestlen << 1) + 2;
     size_t ps_len = modulus_len - in_len - min_padding_len;
     size_t db_len = modulus_len - hash.digestlen - 1;
@@ -36,7 +40,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     uint8_t *mgf1_digest = tls_ctx.rsa_scratch; /* Use TLS scratch buffer */
 
     if ((in_len + min_padding_len) > modulus_len)
-        return false;
+        goto cleanup;
 
     // set first byte to 00
     outbuf[ENCODE_START] = 0x00;
@@ -67,12 +71,16 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         outbuf[ENCODE_SALT + i] ^= mgf1_digest[i];
 
     // Return the static size of 256
-    return true;
+    ok = true;
+cleanup:
+    tls_crypto_exit(intr_state);
+    tls_crypto_erase_stack();
+    return ok;
 }
 
+// CRYPTO_FN
 size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf, const char *auth, uint8_t hash_alg)
 {
-
     if ((in_len > RSA_MODULUS_MAX_SUPPORTED) ||
         (in_len < RSA_MODULUS_MIN_SUPPORTED) ||
         (inbuf == NULL) ||
@@ -83,9 +91,12 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
         return 0;
 
+    uint8_t intr_state = tls_crypto_enter();
+    size_t out_len = 0;
+
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
-        return false;
+        goto cleanup;
 
     size_t db_len = in_len - hash.digestlen - 1;
     uint8_t sha256_digest[TLS_SHA256_DIGEST_LEN];
@@ -122,21 +133,26 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     hash.digest(&hash._private, sha256_digest);
 
     if (!tls_bytes_compare(sha256_digest, &tmp[encode_lhash], TLS_SHA256_DIGEST_LEN))
-        return 0;
+        goto cleanup;
 
     for (i = encode_ps; i < in_len; i++)
         if (tmp[i] == 0x01)
             break;
     if (i == in_len)
-        return false;
+        goto cleanup;
     i++;
     memcpy(outbuf, &tmp[i], in_len - i);
 
-    return in_len - i;
+    out_len = in_len - i;
+cleanup:
+    tls_crypto_exit(intr_state);
+    tls_crypto_erase_stack();
+    return out_len;
 }
 
 void powmod_exp_u24(uint8_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
 #define RSA_PUBLIC_EXP 65537
+// CRYPTO_FN
 bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
                      const uint8_t *pubkey, size_t keylen, uint8_t hash_alg)
 {
@@ -150,16 +166,24 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (!(pubkey[keylen - 1] & 1)))
         return false;
 
+    uint8_t intr_state = tls_crypto_enter();
+    bool ok = false;
+
     while (pubkey[spos] == 0)
     {
         outbuf[spos++] = 0;
     }
     if (!tls_rsa_encode_oaep(inbuf, in_len, &outbuf[spos], keylen - spos, NULL, hash_alg))
-        return false;
+        goto cleanup;
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
-    return true;
+    ok = true;
+cleanup:
+    tls_crypto_exit(intr_state);
+    tls_crypto_erase_stack();
+    return ok;
 }
 
+// CRYPTO_FN
 bool tls_rsa_decrypt_signature(const uint8_t *signature,
                                size_t signature_len,
                                uint8_t *outbuf,
@@ -175,9 +199,15 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
         (!(pubkey[keylen - 1] & 1)))
         return false;
 
+    uint8_t intr_state = tls_crypto_enter();
+    bool ok = false;
+
     memcpy(outbuf, signature, keylen);
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
-    return true;
+    ok = true;
+    tls_crypto_exit(intr_state);
+    tls_crypto_erase_stack();
+    return ok;
 }
 
 /**
@@ -197,6 +227,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
  * @param hash_alg      Hash algorithm ID (TLS_HASH_SHA256, etc.)
  * @return true if PSS padding is valid, false otherwise
  */
+// CRYPTO_FN
 bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
                         const uint8_t *mhash, size_t mhash_len,
                         uint8_t hash_alg)
@@ -213,11 +244,14 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
         return false;
 
+    uint8_t intr_state = tls_crypto_enter();
+    bool ok = false;
+
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
-        return false;
+        goto cleanup;
     if (mhash_len != hash.digestlen)
-        return false; /* enforce TLS 1.3 salt length rule */
+        goto cleanup; /* enforce TLS 1.3 salt length rule */
 
     size_t db_len = em_len - hash.digestlen - 1;
 
@@ -232,16 +266,16 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     /* RFC 8017: Verify unused bits are zero */
     uint8_t unused = (uint8_t)(em_len * 8 - em_bits);
     if (unused > 8 || unused == 0)
-        return false;
+        goto cleanup;
     uint8_t top_mask = (uint8_t)(0xFFu >> unused);
 
     if ((em[0] & ~top_mask) != 0)
-        return false;
+        goto cleanup;
     em[0] &= top_mask;
 
     /* Verify 0xBC trailer */
     if (em[em_len - 1] != 0xBC)
-        return false;
+        goto cleanup;
 
     /* Extract H and DB pointers */
     uint8_t *H = &em[em_len - 1 - hash.digestlen];
@@ -249,7 +283,7 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
 
     /* Unmask DB: maskedDB XOR MGF(H, dbLen) */
     if (!tls_mgf1(H, hash.digestlen, tmp, db_len, hash_alg))
-        return false;
+        goto cleanup;
     for (size_t i = 0; i < db_len; i++)
         DB[i] ^= tmp[i];
     DB[0] &= top_mask;
@@ -259,12 +293,12 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     while (ps_end < db_len && DB[ps_end] == 0)
         ps_end++;
     if (ps_end >= db_len || DB[ps_end] != 0x01)
-        return false;
+        goto cleanup;
     ps_end++;
 
     /* TLS 1.3 requires salt length == hash length */
     if (db_len - ps_end != hash.digestlen)
-        return false;
+        goto cleanup;
     uint8_t *salt = &DB[ps_end];
 
     /* Compute H' = Hash(0x00*8 || mHash || salt) */
@@ -276,5 +310,9 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     hash.digest(&hash._private, tmp); /* write H' to tmp */
 
     /* Verify H' == H */
-    return tls_bytes_compare(tmp, H, hash.digestlen);
+    ok = tls_bytes_compare(tmp, H, hash.digestlen);
+cleanup:
+    tls_crypto_exit(intr_state);
+    tls_crypto_erase_stack();
+    return ok;
 }

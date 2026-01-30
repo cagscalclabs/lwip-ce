@@ -33,7 +33,9 @@ EXTRA_ASM_SOURCES = \
 	../../src/tls/core/bytes.asm \
 	../../src/tls/core/share/bigint.asm \
 	../../src/tls/core/share/helpers.asm \
-	../../src/tls/core/random.asm
+	../../src/tls/core/random.asm \
+	../../src/tls/core/share/crypto_guard.asm \
+	../../src/tls/core/share/nostack.asm
 
 # ----------------------------
 

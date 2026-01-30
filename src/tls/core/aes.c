@@ -4,6 +4,7 @@
 
 #include "../includes/aes.h"
 #include "../includes/bytes.h"
+#include "../includes/crypto_guard.h"
 
 #define MIN(x, y) ((x) < (y)) ? (x) : (y)
 #define KE_ROTWORD(x) (((x) << 8) | ((x) >> 24))
@@ -967,21 +968,24 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
 }
 
 #define AES_BLOCKSIZE 16
+// CRYPTO_FN
 bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
     uint8_t buf[AES_BLOCK_SIZE];
     // int keysize = key->keysize;
     // uint32_t *round_keys = key->round_keys;
     int blocks, idx;
+    bool ok = false;
 
     if (inbuf == NULL || outbuf == NULL || ctx == NULL)
         return false;
     if (in_len == 0)
         return false;
+    uint8_t intr_state = tls_crypto_enter();
     if (ctx->op_assoc == AES_OP_DECRYPT)
-        return false;
+        goto cleanup;
     if (ctx->_private.lock > LOCK_ALLOW_ENCRYPT)
-        return false;
+        goto cleanup;
     ctx->op_assoc = AES_OP_ENCRYPT;
     uint8_t *iv = ctx->iv;
 
@@ -1051,11 +1055,16 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         }
     }
     }
+    ok = true;
+cleanup:
     tls_secure_memzero(buf, AES_BLOCK_SIZE);
-    return true;
+    tls_crypto_exit(intr_state);
+    tls_crypto_erase_stack();
+    return ok;
 }
 
 bool decrypt_call_from_verify = false;
+// CRYPTO_FN
 bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
 
@@ -1065,13 +1074,15 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         return false;
     uint8_t buf_in[AES_BLOCK_SIZE], buf_out[AES_BLOCK_SIZE];
     int idx, blocks = in_len / AES_BLOCK_SIZE;
+    bool ok = false;
 
     if (!decrypt_call_from_verify && (outbuf == NULL))
         return false;
+    uint8_t intr_state = tls_crypto_enter();
     if (ctx->op_assoc == AES_OP_ENCRYPT)
-        return false;
+        goto cleanup;
     if (ctx->_private.lock > LOCK_ALLOW_ENCRYPT)
-        return false;
+        goto cleanup;
     ctx->op_assoc = AES_OP_DECRYPT;
     uint8_t *iv = ctx->iv;
 
@@ -1125,7 +1136,7 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     case TLS_AES_CBC:
     {
         if ((in_len % AES_BLOCK_SIZE) != 0)
-            return false;
+            goto cleanup;
 
         for (idx = 0; idx < blocks; idx++)
         {
@@ -1135,12 +1146,17 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             memcpy(&outbuf[idx * AES_BLOCK_SIZE], buf_out, AES_BLOCK_SIZE);
             memcpy(iv, buf_in, AES_BLOCK_SIZE);
         }
+        ok = true;
         break;
     }
     }
+    ok = true;
+cleanup:
     tls_secure_memzero(buf_in, sizeof buf_in);
     tls_secure_memzero(buf_out, sizeof buf_out);
-    return true;
+    tls_crypto_exit(intr_state);
+    tls_crypto_erase_stack();
+    return ok;
 }
 
 bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *tag)

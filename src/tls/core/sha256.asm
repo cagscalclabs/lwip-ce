@@ -201,6 +201,7 @@ end macro
 
 
 ; initialize sha256 hash state
+; CRYPTO_FN
 _tls_sha256_init:
 	pop iy,de
 	push de
@@ -214,6 +215,7 @@ _tls_sha256_init:
 	jp (iy)
 
 ; update sha256 hash state
+; CRYPTO_FN
 _tls_sha256_update:
 	save_interrupts
 	call __frameset0
@@ -273,6 +275,7 @@ _tls_sha256_update:
 	ret
  
 ; return sha256 digest
+; CRYPTO_FN
 _tls_sha256_digest:
 	save_interrupts
 	ld hl,-_sha256ctx_size
