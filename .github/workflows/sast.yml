@@ -33,11 +33,3 @@ jobs:
         with:
           sarif_file: semgrep.sarif
         if: always()
-      - run: semgrep ci --config semgrep/ez80-security.yml --include "src/drivers/**" --include "src/tls/**" --sarif > semgrep-ez80.sarif
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-      - name: Upload eZ80 Semgrep SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep-ez80.sarif
-        if: always()

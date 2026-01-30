@@ -11,6 +11,9 @@ APP_VERSION = 0
 
 CFLAGS = -Wall -Wextra -Oz -I src/include
 CXXFLAGS = -Wall -Wextra -Oz -I src/include
+EXTRA_LDFLAGS += -Wl,--gc-sections
+CFLAGS += -ffunction-sections -fdata-sections
+CXXFLAGS += -ffunction-sections -fdata-sections
 OUTPUT_MAP = NO
 HAS_LIBC = YES
 
@@ -31,5 +34,4 @@ HEADER_DIRS := src/include/lwip/
 EXCLUDE_LIST := src/include/lwip/debug.h
 FUNCTABLE_FILE := src/functable.h
 HELPER_FILES := $(FUNCTABLE_FILE) tmp/headers.tmp
-
 
