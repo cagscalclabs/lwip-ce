@@ -6,6 +6,14 @@
 
 assume adl=1
 
+section .data
+public _erase_saved_a
+public _erase_saved_e
+public _erase_saved_hl
+_erase_saved_a: db 0
+_erase_saved_e: db 0
+_erase_saved_hl: db 0, 0, 0
+
 section .text
 public erase_stack
 
@@ -13,10 +21,10 @@ public erase_stack
 erase_stack:
 	
 	; save a, hl, e
-	ld (saved_a), a
-	ld (saved_hl), hl
+	ld (_erase_saved_a), a
+	ld (_erase_saved_hl), hl
 	ld a, e
-	ld (saved_e), a
+	ld (_erase_saved_e), a
 	
 	; set from stackBot + 4 to ix - 1 to 0
 	lea de, ix - 2
@@ -29,15 +37,10 @@ erase_stack:
 	lddr
 	
 	; restore a, hl, e
-	ld a, (saved_e)
+	ld a, (_erase_saved_e)
 	ld e, a
-	ld a, (saved_a)
-	ld hl, (saved_hl)
+	ld a, (_erase_saved_a)
+	ld hl, (_erase_saved_hl)
 	ld sp, ix
 	pop ix
 	ret
-
-section .bss
-saved_a: db 0
-saved_e: db 0
-saved_hl: db 0, 0, 0

@@ -11,9 +11,6 @@ COMPRESSED = NO
 CFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
 CXXFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
 
-CFLAGS += -ffunction-sections -fdata-sections
-CXXFLAGS += -ffunction-sections -fdata-sections
-EXTRA_LDFLAGS += -Wl,--gc-sections
 
 # Test main
 SOURCES = src/main.c
@@ -29,7 +26,7 @@ EXTRA_C_SOURCES = \
 	../../src/core/mem.c \
 	../../src/drivers/mem.c \
 	../../src/core/stats.c \
-	../../src/core/logging.c
+	../common/tls_stubs.c
 
 # Assembly files
 EXTRA_ASM_SOURCES = \

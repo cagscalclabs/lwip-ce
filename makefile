@@ -11,9 +11,6 @@ APP_VERSION = 0
 
 CFLAGS = -Wall -Wextra -Oz -I src/include
 CXXFLAGS = -Wall -Wextra -Oz -I src/include
-EXTRA_LDFLAGS += -Wl,--gc-sections
-CFLAGS += -ffunction-sections -fdata-sections
-CXXFLAGS += -ffunction-sections -fdata-sections
 OUTPUT_MAP = NO
 HAS_LIBC = YES
 

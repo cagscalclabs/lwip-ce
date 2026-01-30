@@ -11,9 +11,6 @@ COMPRESSED = NO
 CFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
 CXXFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
 
-CFLAGS += -ffunction-sections -fdata-sections
-CXXFLAGS += -ffunction-sections -fdata-sections
-EXTRA_LDFLAGS += -Wl,--gc-sections
 
 # ----------------------------
 
