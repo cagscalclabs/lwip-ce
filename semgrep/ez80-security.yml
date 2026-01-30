@@ -1,0 +1,78 @@
+rules:
+  - id: ez80-crypto-nointerrupts
+    languages: [generic]
+    message: "Crypto function marked with CRYPTO_FN but doesn't mask interrupts."
+    severity: WARNING
+    patterns:
+      - pattern-regex: '(?i)\\bCRYPTO_FN\\b'
+      - pattern-not-regex: '(?i)save_interrupts\\?'
+    paths:
+      include:
+        - "**/*.asm"
+        - "**/*.inc"
+
+  - id: ez80-crypto-norestore-interrupts
+    languages: [generic]
+    message: "Crypto function marked with CRYPTO_FN but doesn't restore interrupts."
+    severity: WARNING
+    patterns:
+      - pattern-regex: '(?i)\\bCRYPTO_FN\\b'
+      - pattern-not-regex: '(?i)restore_interrupts'
+    paths:
+      include:
+        - "**/*.asm"
+        - "**/*.inc"
+
+  - id: ez80-crypto-marker-missing-erase-stack
+    languages: [generic]
+    message: "Crypto function marked with CRYPTO_FN but missing erase_stack."
+    severity: WARNING
+    patterns:
+      - pattern-regex: '(?i)\\bCRYPTO_FN\\b'
+      - pattern-not-regex: '(?i)erase_stack'
+    paths:
+      include:
+        - "**/*.asm"
+        - "**/*.inc"
+
+  - id: ez80-ld-sp-review
+    languages: [generic]
+    message: "Review direct SP writes in assembly; ensure stack is restored/cleared safely."
+    severity: WARNING
+    pattern-regex: '(?i)\\bld\\s+sp\\s*,'
+    paths:
+      include:
+        - "**/*.asm"
+        - "**/*.inc"
+      exclude:
+        - src/tls/core/share/nostack.asm
+
+  - id: c-crypto-guards-missing
+    languages: [c]
+    message: "CRYPTO_FN function missing one or more crypto guards (tls_crypto_enter/exit/erase_stack). These guard functions mask interrupts and clear the stack after each primitive."
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              // CRYPTO_FN
+              $RET $F(...) {
+                ...
+              }
+          - pattern-inside: |
+              /* CRYPTO_FN */
+              $RET $F(...) {
+                ...
+              }
+      - pattern-not-inside: |
+          $RET $F(...) {
+            ...
+            tls_crypto_enter(...)
+            ...
+            tls_crypto_exit(...)
+            ...
+            tls_crypto_erase_stack(...)
+            ...
+          }
+    paths:
+      include:
+        - "**/*.c"
