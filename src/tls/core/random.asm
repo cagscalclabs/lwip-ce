@@ -14,6 +14,9 @@ public _tls_random_init_entropy
 public _tls_random
 public _tls_random_bytes
 
+extern _tls_crypto_guard_start
+extern _tls_crypto_guard_stop
+
 ;-------------------------------------
 ; bool tls_random_init_entropy(void);
 _tls_random_init_entropy:
@@ -86,7 +89,7 @@ _tls_random_init_entropy:
 ;--------------------------------------
 ; uint64_t tls_random(void);
 _tls_random:
-    save_interrupts
+    call _tls_crypto_guard_start
 ; set rand to 0
     or a,a
     sbc hl,hl
@@ -163,7 +166,7 @@ _tls_random:
     ld bc, _sprng_rand - _sprng_entropy_pool - 1
     ldir
 .return:
-    restore_interrupts_noret _tls_random
+    call _tls_crypto_guard_stop
 ; load 64 bits from _sprng_rand into BC:UDE:UHL
     ld hl,_sprng_rand
     ld c,(hl)
