@@ -7,7 +7,6 @@ assume adl=1
 section .text
 
 include "share/virtuals.inc"
-include "share/nointerrupts.inc"
 
 public _tls_sha256_init
 public _tls_sha256_update
