@@ -19,7 +19,7 @@ SOURCES = src/main.c
 EXTRA_C_SOURCES = ../../src/tls/core/rsa.c ../../src/tls/core/hash.c ../../src/tls/core/hmac.c ../../src/tls/core/tls.c ../../src/tls/core/bytes.c ../../src/core/mem.c ../../src/drivers/mem.c ../../src/core/stats.c
 
 # Assembly files from TLS core
-EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm ../../src/tls/core/random.asm
+EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm ../../src/tls/core/random.asm ../../src/tls/core/share/crypto_guard.asm
 
 # ----------------------------
 
@@ -27,5 +27,4 @@ EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/bytes.asm .
 HEADER_DIRS := ../../src/include ../../src/tls/includes src/include $(HEADER_DIRS)
 
 include $(shell cedev-config --makefile)
-EXTRA_ASM_SOURCES += ../../src/tls/core/share/crypto_guard.asm
 

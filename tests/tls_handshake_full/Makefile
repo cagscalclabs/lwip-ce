@@ -23,6 +23,7 @@ EXTRA_C_SOURCES = \
 	../../src/tls/core/hash.c \
 	../../src/tls/core/aes.c \
 	../../src/tls/core/bytes.c \
+	../../src/drivers/mem.c \
 	../common/tls_stubs.c
 
 # Assembly files
@@ -30,6 +31,7 @@ EXTRA_ASM_SOURCES = \
 	../../src/tls/core/sha256.asm \
 	../../src/tls/core/bytes.asm \
 	../../src/tls/core/random.asm \
+	../../src/tls/core/share/bigint.asm \
 	../../src/tls/core/share/crypto_guard.asm \
 
 # ----------------------------

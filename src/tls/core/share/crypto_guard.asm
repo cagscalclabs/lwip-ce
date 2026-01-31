@@ -35,7 +35,7 @@ _tls_crypto_guard_stop:
 	ld a, e
 	ld (_erase_saved_e), a
 
-	; set from current return address to ix - 1 to 0
+	; wipe from current return address (sp + 3) up to saved SP - 1
 	ld hl, 3
 	add hl, sp
 	ex de, hl
@@ -49,6 +49,11 @@ _tls_crypto_guard_stop:
 	ld hl, (_cg_saved_sp)
 	dec hl
 	ld (hl), 0
+	jr z, .no_wipe
+	dec bc
+	push hl
+	pop de
+	dec de
 	lddr
 .no_wipe:
 
