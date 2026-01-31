@@ -1,3 +1,5 @@
+include "virtuals.inc"
+
 ; -----------------------------------
 ; C-callable crypto guards (ez80)
 ; -----------------------------------
@@ -10,30 +12,20 @@ section .text
 public _tls_crypto_guard_start
 public _tls_crypto_guard_stop
 
-; void tls_crypto_guard_start(void)
+; bool tls_crypto_guard_start(void)
 _tls_crypto_guard_start:
-	ld a, (_cg_enabled)
-	or a
-	ret nz
-	di
-	inc a
-	ld (_cg_enabled),a
 	ld a, i
-	ld (_cg_interrupt_state), a
 	ld hl, 0
 	add hl, sp
-	ld (_cg_saved_sp), hl
+	call _cg_push_state
 	ret
 
-; void tls_crypto_guard_stop(void)
+; bool tls_crypto_guard_stop(void)
 _tls_crypto_guard_stop:
-	xor a
-	ld (_cg_enabled), a
-	; save a, hl, e
-	ld (_erase_saved_a), a
-	ld (_erase_saved_hl), hl
-	ld a, e
-	ld (_erase_saved_e), a
+
+	call _cg_pop_state
+	or a
+	ret z		; return if failed
 
 	; wipe from current return address (sp + 3) up to saved SP - 1
 	ld hl, 3
@@ -56,21 +48,93 @@ _tls_crypto_guard_stop:
 	dec de
 	lddr
 .no_wipe:
-
-	ld a, (_cg_interrupt_state)
-	or a
-	jr z, .done
-	ei
 .done:
-	ld a, (_erase_saved_e)
-	ld e, a
-	ld a, (_erase_saved_a)
-	ld hl, (_erase_saved_hl)
 	ret
 
 _erase_saved_a: db 0
 _erase_saved_e: db 0
 _erase_saved_hl: db 0, 0, 0
-_cg_enabled: db 0
-_cg_interrupt_state: db 0
-_cg_saved_sp: db 0, 0, 0
+
+_cg_push_state:
+; push state, A = interrupt state, HL = SP
+; returns A = success/fail
+	di
+	push hl
+		push af
+			; test if we have a stack pointer
+			ld hl, (_crypto_guard_stack_ptr)
+			ld de, 0
+			add hl, de
+			or a
+			sbc hl, de
+			jr nz, .not_zero
+			ld hl, _crypto_guard_stack_start
+			ld (_crypto_guard_stack_ptr), hl	; set the starting pointer
+			jr .skip_stack_end_test
+		.not_zero:
+			; test if we're at the stack end
+			ld bc, (_crypto_guard_stack_ptr)
+			ld hl, _crypto_guard_stack_end
+			or a
+			sbc hl, bc
+			jr z, .exit_no_push
+		.skip_stack_end_test:
+		pop af
+		; save interrupt state
+		ld hl, (_crypto_guard_stack_ptr)
+		ld (hl), a
+	pop de
+	inc hl
+	; save stack pointer
+	ld (hl), de
+	inc hl
+	inc hl
+	inc hl
+	ld (_crypto_guard_stack_ptr), hl
+	ld a, 1
+	ret
+.exit_no_push
+		pop af
+	pop hl
+	ld a, 0
+	ret
+
+
+_cg_pop_state:
+; pops last state off the stack
+; returns A = success/fail, HL = previous SP
+	; test if we have a stack pointer
+	ld hl, (_crypto_guard_stack_ptr)
+	ld de, 0
+	add hl, de
+	or a
+	sbc hl, de
+	jr z, .not_zero
+	ld hl, (_crypto_guard_stack_ptr)
+	ld bc, _crypto_guard_stack_start
+	or a
+	sbc hl, bc
+	jr z, .no_state
+	ld hl, (_crypto_guard_stack_ptr)
+	dec hl
+	dec hl
+	dec hl
+	push hl
+		dec hl
+		ld (_crypto_guard_stack_ptr), hl
+		ld a, (hl)
+	pop hl
+	ld hl, (hl)
+	or a
+	jr z, .no_interrupt_enable
+	ei
+.no_interrupt_enable:
+	ld a, 1
+	ret
+.no_state:
+	ld a, 0
+	ret
+
+
+
+_cg_stack_inc		:= 4

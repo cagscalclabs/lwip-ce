@@ -19,5 +19,7 @@ virtual at $E30800
     _sprng_rand             rb 8
     _sprng_hash_ctx         rb _sha256ctx_size
     _sprng_read_addr        rb 3
-
+    _crypto_guard_stack_start rb 10*4
+    _crypto_guard_stack_ptr rb 3
 end virtual
+_crypto_guard_stack_end := _crypto_guard_stack_ptr
