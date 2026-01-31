@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /* C-callable wrappers for crypto side-channel hardening. */
-void tls_crypto_guard_start(void);
-void tls_crypto_guard_stop(void);
+void tls_crypto_guard_enable(void);
+void tls_crypto_guard_disable(void);
 
 #endif

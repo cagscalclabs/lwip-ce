@@ -3,8 +3,8 @@ include "virtuals.inc"
 ; -----------------------------------
 ; C-callable crypto guards (ez80)
 ; -----------------------------------
-; tls_crypto_guard_start() -> save interrupt state + frame pointer, disable interrupts
-; tls_crypto_guard_stop()  -> clear stack, restore interrupts/frame pointer
+; tls_crypto_guard_enable() -> save interrupt state + frame pointer, disable interrupts
+; tls_crypto_guard_disable()  -> clear stack, restore interrupts/frame pointer
 
 assume adl=1
 section .text
@@ -43,12 +43,18 @@ _tls_crypto_guard_disable:
 ; set hl to SP - 1: scf \ sbc hl, hl \ add hl, sp
 ; _erase_stack:
 	; set from stackBot + 4 to ix - 1 to 0
-	lea de, ix - 2
+	scf
+	sbc hl, hl
+	add hl, sp
+	dec hl
+	ex de, hl
 	ld hl, -(stackBot + 3)
 	add hl, de
 	push hl
 	pop bc
-	lea hl, ix - 1
+	scf
+	sbc hl, hl
+	add hl, sp
 	ld (hl), 0
 	lddr
 

@@ -26,7 +26,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
         return false;
 
-    tls_crypto_guard_start();
+    tls_crypto_guard_enable();
     bool ok = false;
 
     struct tls_hash_context hash;
@@ -73,7 +73,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     // Return the static size of 256
     ok = true;
 cleanup:
-    tls_crypto_guard_stop();
+    tls_crypto_guard_disable();
     return ok;
 }
 
@@ -90,7 +90,7 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
         return 0;
 
-    tls_crypto_guard_start();
+    tls_crypto_guard_enable();
     size_t out_len = 0;
 
     struct tls_hash_context hash;
@@ -144,7 +144,7 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
     out_len = in_len - i;
 cleanup:
-    tls_crypto_guard_stop();
+    tls_crypto_guard_disable();
     return out_len;
 }
 
@@ -164,7 +164,7 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (!(pubkey[keylen - 1] & 1)))
         return false;
 
-    tls_crypto_guard_start();
+    tls_crypto_guard_enable();
     bool ok = false;
 
     while (pubkey[spos] == 0)
@@ -176,7 +176,7 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
     ok = true;
 cleanup:
-    tls_crypto_guard_stop();
+    tls_crypto_guard_disable();
     return ok;
 }
 
@@ -196,13 +196,13 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
         (!(pubkey[keylen - 1] & 1)))
         return false;
 
-    tls_crypto_guard_start();
+    tls_crypto_guard_enable();
     bool ok = false;
 
     memcpy(outbuf, signature, keylen);
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
     ok = true;
-    tls_crypto_guard_stop();
+    tls_crypto_guard_disable();
     return ok;
 }
 
@@ -240,7 +240,7 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
         return false;
 
-    tls_crypto_guard_start();
+    tls_crypto_guard_enable();
     bool ok = false;
 
     struct tls_hash_context hash;
@@ -308,6 +308,6 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     /* Verify H' == H */
     ok = tls_bytes_compare(tmp, H, hash.digestlen);
 cleanup:
-    tls_crypto_guard_stop();
+    tls_crypto_guard_disable();
     return ok;
 }
