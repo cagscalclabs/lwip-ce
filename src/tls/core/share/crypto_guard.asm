@@ -15,19 +15,20 @@ _tls_crypto_guard_start:
 	ld a, (_cg_enabled)
 	or a
 	ret nz
+	di
+	inc a
+	ld (_cg_enabled),a
 	ld a, i
 	ld (_cg_interrupt_state), a
-	ld (_cg_saved_ix), ix
-	di
-	ld a, 1
-	ld (_cg_enabled), a
+	ld hl, 0
+	add hl, sp
+	ld (_cg_saved_sp), hl
 	ret
 
 ; void tls_crypto_guard_stop(void)
 _tls_crypto_guard_stop:
 	xor a
 	ld (_cg_enabled), a
-	ld ix, (_cg_saved_ix)
 	; save a, hl, e
 	ld (_erase_saved_a), a
 	ld (_erase_saved_hl), hl
@@ -38,13 +39,14 @@ _tls_crypto_guard_stop:
 	ld hl, 3
 	add hl, sp
 	ex de, hl
-	lea hl, ix - 1
-	or a
+	ld hl, (_cg_saved_sp)
+	dec hl
 	sbc hl, de
 	jr c, .no_wipe
 	push hl
 	pop bc
-	lea hl, ix - 1
+	ld hl, (_cg_saved_sp)
+	dec hl
 	ld (hl), 0
 	lddr
 .no_wipe:
@@ -65,4 +67,4 @@ _erase_saved_e: db 0
 _erase_saved_hl: db 0, 0, 0
 _cg_enabled: db 0
 _cg_interrupt_state: db 0
-_cg_saved_ix: db 0, 0, 0
+_cg_saved_sp: db 0, 0, 0
