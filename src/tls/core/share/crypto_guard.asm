@@ -41,6 +41,7 @@ _tls_crypto_guard_stop:
 	ex de, hl
 	ld hl, (_cg_saved_sp)
 	dec hl
+	or a
 	sbc hl, de
 	jr c, .no_wipe
 	push hl
