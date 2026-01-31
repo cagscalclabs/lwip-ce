@@ -3,8 +3,8 @@ include "virtuals.inc"
 ; -----------------------------------
 ; C-callable crypto guards (ez80)
 ; -----------------------------------
-; tls_crypto_guard_enable() -> save interrupt state + frame pointer, disable interrupts
-; tls_crypto_guard_disable()  -> clear stack, restore interrupts/frame pointer
+; tls_crypto_guard_enable() -> save interrupt state, disable interrupts
+; tls_crypto_guard_disable()  -> clear stack, restore interrupt state
 
 assume adl=1
 section .text
@@ -16,31 +16,31 @@ public _tls_crypto_guard_disable
 
 ; void tls_crypto_guard_enable(void)
 _tls_crypto_guard_enable:
+	; if pointer is zero check
 	ld hl, (_crypto_guard_state_ptr)
 	ld a, h
 	or l
 	jr nz, .has_ptr
 ; .no_has_ptr
-	ld hl, _crypto_guard_state_start
+	ld hl, _crypto_guard_state_start	; init pointer to start of state stack
 	jr .save_state
 .has_ptr:
+	; if pointer is at end of state stack
 	ld bc, _crypto_guard_state_end
 	or a
 	sbc hl, bc
 	ld hl, (_crypto_guard_state_ptr)
-	ret z
+	ret z	; do nothing
 .save_state:
-	ld a, i
+	ld a, i								; interrupt state into a
 	ld (hl), a
 	inc hl
-	ld (_crypto_guard_state_ptr), hl
+	ld (_crypto_guard_state_ptr), hl	; advance state ptr
 	di
 	ret
 
 ; void tls_crypto_guard_disable(void)
 _tls_crypto_guard_disable:
-; load sp into hl, store 0 to data at hl, decrement hl, store hl to de, subtract stack bottom to store into bc, lddr
-; set hl to SP - 1: scf \ sbc hl, hl \ add hl, sp
 ; _erase_stack:
 	; set from stackBot + 4 to ix - 1 to 0
 	scf
