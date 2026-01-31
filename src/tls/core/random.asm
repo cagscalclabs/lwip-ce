@@ -184,7 +184,6 @@ _tls_random:
 ; -----------------------------------------------
 ; void* tls_random_bytes(void* buf, size_t len);
 _tls_random_bytes:
-    save_interrupts
     ld hl,-3
     call __frameset
     ld hl,(ix+6)
@@ -212,7 +211,6 @@ _tls_random_bytes:
     ldir ; copy to dest
     jr .loop
 .done:
-    restore_interrupts_noret _tls_random_bytes
     ld hl,(ix+6) ; return pointer to dest
     ld sp,ix
     pop ix

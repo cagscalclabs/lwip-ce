@@ -27,3 +27,5 @@ EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/bytes.asm .
 HEADER_DIRS := ../../src/include ../../src/tls/includes src/include $(HEADER_DIRS)
 
 include $(shell cedev-config --makefile)
+EXTRA_ASM_SOURCES += ../../src/tls/core/share/crypto_guard.asm
+
