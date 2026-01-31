@@ -20,7 +20,6 @@ EXTRA_C_SOURCES = ../../src/tls/core/rsa.c ../../src/tls/core/hash.c ../../src/t
 
 # Assembly files from TLS core
 EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm ../../src/tls/core/random.asm
-EXTRA_ASM_SOURCES += ../../src/tls/core/share/crypto_guard.asm ../../src/tls/core/share/nostack.asm
 
 # ----------------------------
 
