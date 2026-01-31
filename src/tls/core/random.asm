@@ -9,7 +9,6 @@ assume adl=1
 section .text
 
 include "share/virtuals.inc"
-include "share/nointerrupts.inc"
 
 public _tls_random_init_entropy
 public _tls_random
