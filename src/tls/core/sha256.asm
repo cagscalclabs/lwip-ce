@@ -217,7 +217,6 @@ _tls_sha256_init:
 ; update sha256 hash state
 ; CRYPTO_FN
 _tls_sha256_update:
-	save_interrupts
 	call __frameset0
 	; (ix + 0) RV
 	; (ix + 3) old IX
@@ -271,13 +270,11 @@ _tls_sha256_update:
 	sub a,iyl
 	ld (iy + sha256_offset_datalen), a   ;save current datalen
 	pop ix
-	restore_interrupts _tls_sha256_update
 	ret
  
 ; return sha256 digest
 ; CRYPTO_FN
 _tls_sha256_digest:
-	save_interrupts
 	ld hl,-_sha256ctx_size
 	call __frameset
 	; ix-_sha256ctx_size to ix-1
@@ -343,7 +340,6 @@ _tls_sha256_digest:
 	call _sha256_reverse_endianness
 	ld sp,ix
 	pop ix
-	restore_interrupts _tls_sha256_digest
 	ret
 
 

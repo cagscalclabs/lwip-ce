@@ -981,7 +981,7 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         return false;
     if (in_len == 0)
         return false;
-    uint8_t intr_state = tls_crypto_enter();
+    tls_crypto_guard_start();
     if (ctx->op_assoc == AES_OP_DECRYPT)
         goto cleanup;
     if (ctx->_private.lock > LOCK_ALLOW_ENCRYPT)
@@ -1058,8 +1058,7 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     ok = true;
 cleanup:
     tls_secure_memzero(buf, AES_BLOCK_SIZE);
-    tls_crypto_exit(intr_state);
-    tls_crypto_erase_stack();
+    tls_crypto_guard_stop();
     return ok;
 }
 
@@ -1078,7 +1077,7 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
 
     if (!decrypt_call_from_verify && (outbuf == NULL))
         return false;
-    uint8_t intr_state = tls_crypto_enter();
+    tls_crypto_guard_start();
     if (ctx->op_assoc == AES_OP_ENCRYPT)
         goto cleanup;
     if (ctx->_private.lock > LOCK_ALLOW_ENCRYPT)
@@ -1154,8 +1153,7 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
 cleanup:
     tls_secure_memzero(buf_in, sizeof buf_in);
     tls_secure_memzero(buf_out, sizeof buf_out);
-    tls_crypto_exit(intr_state);
-    tls_crypto_erase_stack();
+    tls_crypto_guard_stop();
     return ok;
 }
 

@@ -4,8 +4,7 @@
 #include <stdint.h>
 
 /* C-callable wrappers for crypto side-channel hardening. */
-uint8_t tls_crypto_enter(void);
-void tls_crypto_exit(uint8_t state);
-void tls_crypto_erase_stack(void);
+void tls_crypto_guard_start(void);
+void tls_crypto_guard_stop(void);
 
 #endif
