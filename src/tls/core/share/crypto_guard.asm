@@ -24,7 +24,6 @@ _tls_crypto_guard_start:
 	ret
 
 ; void tls_crypto_guard_stop(void)
-?stackBot		:= 0D1987Eh
 _tls_crypto_guard_stop:
 	xor a
 	ld (_cg_enabled), a
@@ -35,15 +34,20 @@ _tls_crypto_guard_stop:
 	ld a, e
 	ld (_erase_saved_e), a
 
-	; set from stackBot + 4 to ix - 1 to 0
-	lea de, ix - 2
-	ld hl, -(stackBot + 3)
-	add hl, de
+	; set from current return address to ix - 1 to 0
+	ld hl, 3
+	add hl, sp
+	ex de, hl
+	lea hl, ix - 1
+	or a
+	sbc hl, de
+	jr c, .no_wipe
 	push hl
 	pop bc
 	lea hl, ix - 1
 	ld (hl), 0
 	lddr
+.no_wipe:
 
 	ld a, (_cg_interrupt_state)
 	or a
