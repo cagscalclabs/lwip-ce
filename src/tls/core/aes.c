@@ -1464,7 +1464,7 @@ bool tls_aes_ccm_decrypt(const uint8_t *key, size_t key_len,
     if (!tls_aes_digest(&ctx, digest))
         return false;
     ok = tls_bytes_compare(tag, digest, tag_len);
-    if (!ok)
+    if (!ok && (plaintext != ciphertext))
         tls_secure_memzero(plaintext, ct_len);
     tls_secure_memzero(digest, sizeof digest);
     return ok;
