@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <time.h>
 
 #include "aes.h"
 
@@ -50,74 +49,36 @@ uint8_t cbc_ciphertext[] = {
     0x73, 0xbe, 0xd6, 0xb8, 0xe3, 0xc1, 0x74, 0x3b, 0x71, 0x16, 0xe6, 0x9e, 0x22, 0x22, 0x95, 0x16,
     0x3f, 0xf1, 0xca, 0xa1, 0x68, 0x1f, 0xac, 0x09, 0x12, 0x0e, 0xca, 0x30, 0x75, 0x86, 0xe1, 0xa7};
 
-static volatile uint8_t timing_sink = 0;
+/*
+ * AES-CCM Packet Vectors #1 and #2
+ * Source: RFC 3610, Section 8 (Test Vectors)
+ * https://www.rfc-editor.org/rfc/rfc3610
+ */
+uint8_t ccm_key[] = {
+    0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf};
+uint8_t ccm_nonce_1[] = {
+    0x00, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5};
+uint8_t ccm_nonce_2[] = {
+    0x00, 0x00, 0x00, 0x04, 0x03, 0x02, 0x01, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5};
+uint8_t ccm_aad[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+uint8_t ccm_plaintext_1[] = {
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e};
+uint8_t ccm_ciphertext_1[] = {
+    0x58, 0x8c, 0x97, 0x9a, 0x61, 0xc6, 0x63, 0xd2, 0xf0, 0x66, 0xd0, 0xc2, 0xc0, 0xf9, 0x89, 0x80,
+    0x6d, 0x5f, 0x6b, 0x61, 0xda, 0xc3, 0x84};
+uint8_t ccm_tag_1[] = {
+    0x17, 0xe8, 0xd1, 0x2c, 0xfd, 0xf9, 0x26, 0xe0};
+uint8_t ccm_plaintext_2[] = {
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};
+uint8_t ccm_ciphertext_2[] = {
+    0x72, 0xc9, 0x1a, 0x36, 0xe1, 0x35, 0xf8, 0xcf, 0x29, 0x1c, 0xa8, 0x94, 0x08, 0x5c, 0x87, 0xe3,
+    0xcc, 0x15, 0xc4, 0x39, 0xc9, 0xe4, 0x3a, 0x3b};
+uint8_t ccm_tag_2[] = {
+    0xa0, 0x91, 0xd5, 0x6e, 0x10, 0x40, 0x09, 0x16};
 
-struct timing_group
-{
-    uint16_t len;
-    uint16_t samples;
-    uint32_t mean;
-    uint32_t stddev;
-    uint32_t pct_x100;
-};
-
-static uint32_t isqrt_u64(uint64_t x)
-{
-    uint64_t op = x;
-    uint64_t res = 0;
-    uint64_t one = (uint64_t)1 << 62;
-    while (one > op)
-        one >>= 2;
-    while (one != 0)
-    {
-        if (op >= res + one)
-        {
-            op -= res + one;
-            res = (res >> 1) + one;
-        }
-        else
-        {
-            res >>= 1;
-        }
-        one >>= 2;
-    }
-    return (uint32_t)res;
-}
-
-static void compute_stats(const uint32_t *samples, uint16_t count, struct timing_group *out)
-{
-    uint64_t sum = 0;
-    for (uint16_t i = 0; i < count; i++)
-        sum += samples[i];
-    uint32_t mean = (count != 0) ? (uint32_t)(sum / count) : 0;
-    uint64_t var_sum = 0;
-    for (uint16_t i = 0; i < count; i++)
-    {
-        int64_t diff = (int64_t)samples[i] - (int64_t)mean;
-        var_sum += (uint64_t)(diff * diff);
-    }
-    uint32_t var = (count != 0) ? (uint32_t)(var_sum / count) : 0;
-    uint32_t stddev = isqrt_u64(var);
-    uint32_t pct_x100 = (mean != 0) ? (uint32_t)(((uint64_t)stddev * 10000u) / mean) : 0;
-    out->mean = mean;
-    out->stddev = stddev;
-    out->pct_x100 = pct_x100;
-}
-
-static uint32_t time_aes_gcm_encrypt(const uint8_t *in, size_t len, uint8_t *out)
-{
-    struct tls_aes_context ctx;
-    uint8_t tag[TLS_AES_AUTH_TAG_SIZE];
-    clock_t start = clock();
-    bool ok = tls_aes_init(&ctx, TLS_AES_GCM, gcm_key, sizeof gcm_key, gcm_iv, sizeof gcm_iv);
-    ok &= tls_aes_update_aad(&ctx, gcm_aad, sizeof gcm_aad);
-    ok &= tls_aes_encrypt(&ctx, in, len, out);
-    ok &= tls_aes_digest(&ctx, tag);
-    timing_sink ^= tag[0];
-    if (!ok)
-        timing_sink ^= 0xFF;
-    return (uint32_t)(clock() - start);
-}
 
 static void show_result(bool ok)
 {
@@ -177,39 +138,74 @@ int main(void)
     ok = status && (memcmp(tbuf, cbc_plaintext, sizeof cbc_plaintext) == 0);
     show_result(ok);
 
-    {
-        const uint16_t samples = 5;
-        const uint16_t lens[2] = {32, 128};
-        struct timing_group groups[2] = {0};
-        uint8_t buf[128];
-        uint8_t out[128];
-        uint32_t ticks[5];
+    // Test 5: AES-CCM encrypt (RFC 3610 Packet Vector #1)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    memset(tag, 0, sizeof(tag));
+    status &= tls_aes_ccm_encrypt(ccm_key, sizeof ccm_key,
+                                  ccm_nonce_1, sizeof ccm_nonce_1,
+                                  ccm_aad, sizeof ccm_aad,
+                                  ccm_plaintext_1, sizeof ccm_plaintext_1,
+                                  tbuf, tag, sizeof ccm_tag_1);
+    ok = status &&
+         (memcmp(tbuf, ccm_ciphertext_1, sizeof ccm_ciphertext_1) == 0) &&
+         (memcmp(tag, ccm_tag_1, sizeof ccm_tag_1) == 0);
+    show_result(ok);
 
-        for (uint8_t g = 0; g < 2; g++)
-        {
-            uint16_t len = lens[g];
-            for (uint16_t i = 0; i < samples; i++)
-            {
-                for (uint16_t j = 0; j < len; j++)
-                    buf[j] = (uint8_t)(j + i);
-                ticks[i] = time_aes_gcm_encrypt(buf, len, out);
-            }
-            groups[g].len = len;
-            groups[g].samples = samples;
-            compute_stats(ticks, samples, &groups[g]);
-        }
+    // Test 6: AES-CCM decrypt (RFC 3610 Packet Vector #1)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_ccm_decrypt(ccm_key, sizeof ccm_key,
+                                  ccm_nonce_1, sizeof ccm_nonce_1,
+                                  ccm_aad, sizeof ccm_aad,
+                                  ccm_ciphertext_1, sizeof ccm_ciphertext_1,
+                                  ccm_tag_1, sizeof ccm_tag_1,
+                                  tbuf);
+    ok = status && (memcmp(tbuf, ccm_plaintext_1, sizeof ccm_plaintext_1) == 0);
+    show_result(ok);
 
-        printf("timing len=%u dev=%u.%02u%%\n",
-               groups[0].len,
-               groups[0].pct_x100 / 100,
-               groups[0].pct_x100 % 100);
-        printf("timing len=%u dev=%u.%02u%%",
-               groups[1].len,
-               groups[1].pct_x100 / 100,
-               groups[1].pct_x100 % 100);
-        os_GetKey();
-        os_ClrHome();
-    }
+    // Test 7: AES-CCM encrypt (RFC 3610 Packet Vector #2)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    memset(tag, 0, sizeof(tag));
+    status &= tls_aes_ccm_encrypt(ccm_key, sizeof ccm_key,
+                                  ccm_nonce_2, sizeof ccm_nonce_2,
+                                  ccm_aad, sizeof ccm_aad,
+                                  ccm_plaintext_2, sizeof ccm_plaintext_2,
+                                  tbuf, tag, sizeof ccm_tag_2);
+    ok = status &&
+         (memcmp(tbuf, ccm_ciphertext_2, sizeof ccm_ciphertext_2) == 0) &&
+         (memcmp(tag, ccm_tag_2, sizeof ccm_tag_2) == 0);
+    show_result(ok);
+
+    // Test 8: AES-CCM decrypt (RFC 3610 Packet Vector #2)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_ccm_decrypt(ccm_key, sizeof ccm_key,
+                                  ccm_nonce_2, sizeof ccm_nonce_2,
+                                  ccm_aad, sizeof ccm_aad,
+                                  ccm_ciphertext_2, sizeof ccm_ciphertext_2,
+                                  ccm_tag_2, sizeof ccm_tag_2,
+                                  tbuf);
+    ok = status && (memcmp(tbuf, ccm_plaintext_2, sizeof ccm_plaintext_2) == 0);
+    show_result(ok);
+
+    // Test 9: AES-CCM decrypt rejects bad tag and zeroes plaintext
+    status = true;
+    memset(tbuf, 0xaa, sizeof(tbuf));
+    uint8_t bad_tag[sizeof ccm_tag_2];
+    memcpy(bad_tag, ccm_tag_2, sizeof bad_tag);
+    bad_tag[0] ^= 0x01;
+    ok = tls_aes_ccm_decrypt(ccm_key, sizeof ccm_key,
+                             ccm_nonce_2, sizeof ccm_nonce_2,
+                             ccm_aad, sizeof ccm_aad,
+                             ccm_ciphertext_2, sizeof ccm_ciphertext_2,
+                             bad_tag, sizeof bad_tag,
+                             tbuf);
+    status &= !ok;
+    for (size_t i = 0; i < sizeof ccm_plaintext_2; i++)
+        status &= (tbuf[i] == 0);
+    show_result(status);
 
     return 0;
 }

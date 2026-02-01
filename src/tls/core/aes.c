@@ -66,7 +66,7 @@ static const uint8_t gf_mul[256][6] = {
 
 /*********************** FUNCTION DEFINITIONS ***********************/
 // XORs the in and out buffers, storing the result in out. Length is in bytes.
-void xor_buf(const uint8_t in[], uint8_t out[], size_t len)
+static void xor_buf(const uint8_t in[], uint8_t out[], size_t len)
 {
     size_t idx;
 
@@ -79,7 +79,7 @@ void xor_buf(const uint8_t in[], uint8_t out[], size_t len)
 /////////////////
 
 // Substitutes a word using the AES S-Box.
-uint32_t aes_SubWord(uint32_t word)
+static uint32_t aes_SubWord(uint32_t word)
 {
     uint32_t result;
 
@@ -98,7 +98,7 @@ uint32_t aes_SubWord(uint32_t word)
 // form of 4 integers (the "w" array). Each integer is XOR'd by one column of the state.
 // Also performs the job of aes_InvAddRoundKey(); since the function is a simple XOR process,
 // it is its own inverse.
-void aes_AddRoundKey(uint8_t state[][4], const uint32_t w[])
+static void aes_AddRoundKey(uint8_t state[][4], const uint32_t w[])
 {
     uint8_t subkey[4];
 
@@ -148,7 +148,7 @@ void aes_AddRoundKey(uint8_t state[][4], const uint32_t w[])
 
 // Performs the aes_SubBytes step. All bytes in the state are substituted with a
 // pre-calculated value from a lookup table.
-void aes_SubBytes(uint8_t state[][4])
+static void aes_SubBytes(uint8_t state[][4])
 {
     state[0][0] = aes_sbox[state[0][0] >> 4][state[0][0] & 0x0F];
     state[0][1] = aes_sbox[state[0][1] >> 4][state[0][1] & 0x0F];
@@ -168,7 +168,7 @@ void aes_SubBytes(uint8_t state[][4])
     state[3][3] = aes_sbox[state[3][3] >> 4][state[3][3] & 0x0F];
 }
 
-void aes_InvSubBytes(uint8_t state[][4])
+static void aes_InvSubBytes(uint8_t state[][4])
 {
     state[0][0] = aes_invsbox[state[0][0] >> 4][state[0][0] & 0x0F];
     state[0][1] = aes_invsbox[state[0][1] >> 4][state[0][1] & 0x0F];
@@ -193,7 +193,7 @@ void aes_InvSubBytes(uint8_t state[][4])
 /////////////////
 
 // Performs the aes_ShiftRows step. All rows are shifted cylindrically to the left.
-void aes_ShiftRows(uint8_t state[][4])
+static void aes_ShiftRows(uint8_t state[][4])
 {
     int t;
 
@@ -220,7 +220,7 @@ void aes_ShiftRows(uint8_t state[][4])
 }
 
 // All rows are shifted cylindrically to the right.
-void aes_InvShiftRows(uint8_t state[][4])
+static void aes_InvShiftRows(uint8_t state[][4])
 {
     int t;
 
@@ -254,7 +254,7 @@ void aes_InvShiftRows(uint8_t state[][4])
 // multiplication in a Galios Field 2^8. All multiplication is pre-computed in a table.
 // Addition is equivilent to XOR. (Must always make a copy of the column as the original
 // values will be destoyed.)
-void aes_MixColumns(uint8_t state[][4])
+static void aes_MixColumns(uint8_t state[][4])
 {
     uint8_t col[4];
 
@@ -345,7 +345,7 @@ void aes_MixColumns(uint8_t state[][4])
     tls_secure_memzero(col, sizeof col);
 }
 
-void aes_InvMixColumns(uint8_t state[][4])
+static void aes_InvMixColumns(uint8_t state[][4])
 {
     uint8_t col[4];
 
@@ -436,7 +436,7 @@ void aes_InvMixColumns(uint8_t state[][4])
     tls_secure_memzero(col, sizeof col);
 }
 
-void aes_encrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *ks)
+static void aes_encrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *ks)
 {
     uint8_t state[4][4];
     int keysize = ks->keysize;
@@ -560,7 +560,7 @@ void aes_encrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *
     tls_secure_memzero(state, sizeof state);
 }
 
-void aes_decrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *ks)
+static void aes_decrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *ks)
 {
     uint8_t state[4][4];
     int keysize = ks->keysize;
@@ -676,7 +676,7 @@ void aes_decrypt_block(const uint8_t *in, uint8_t *out, struct tls_aes_context *
     tls_secure_memzero(state, sizeof state);
 }
 
-void increment_iv(uint8_t iv[], size_t counter_start, size_t counter_size)
+static void increment_iv(uint8_t iv[], size_t counter_start, size_t counter_size)
 {
     uint24_t idx;
 
@@ -689,94 +689,235 @@ void increment_iv(uint8_t iv[], size_t counter_start, size_t counter_size)
     }
 }
 
+// CCM helpers
+#define AES_CCM_NONCE_MIN_LEN 7
+#define AES_CCM_NONCE_MAX_LEN 13
+#define AES_CCM_TAG_MIN_LEN 4
+#define AES_CCM_TAG_MAX_LEN 16
+
+static bool ccm_validate_params(size_t nonce_len, uint8_t tag_len, size_t msg_len)
+{
+    if ((nonce_len < AES_CCM_NONCE_MIN_LEN) || (nonce_len > AES_CCM_NONCE_MAX_LEN))
+        return false;
+    if ((tag_len < AES_CCM_TAG_MIN_LEN) || (tag_len > AES_CCM_TAG_MAX_LEN) || (tag_len & 1))
+        return false;
+    uint8_t L = 15 - (uint8_t)nonce_len;
+    if ((L < 2) || (L > 8))
+        return false;
+    if (L < 8)
+    {
+        uint64_t max = 1ULL << (8 * L);
+        if ((uint64_t)msg_len >= max)
+            return false;
+    }
+    return true;
+}
+
+static void ccm_store_len_be(uint8_t *dst, size_t len, uint8_t bytes)
+{
+    uint64_t v = (uint64_t)len;
+    for (uint8_t idx = 0; idx < bytes; idx++)
+        dst[bytes - 1 - idx] = (uint8_t)((v >> (idx * 8)) & 0xFF);
+}
+
+static void ccm_mac_update_block(struct tls_aes_context *ctx, const uint8_t *block)
+{
+    xor_buf(block, ctx->private.ccm.mac, AES_BLOCK_SIZE);
+    aes_encrypt_block(ctx->private.ccm.mac, ctx->private.ccm.mac, ctx);
+}
+
+static bool ccm_update_aad(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len)
+{
+    uint8_t block[AES_BLOCK_SIZE];
+    uint8_t hdr[10];
+    size_t hdr_len;
+    size_t hdr_pos = 0;
+    size_t aad_pos = 0;
+
+    if (aad_len == 0)
+        return ctx->private.ccm.aad_len_total == 0;
+    if ((aad == NULL) || (ctx->private.ccm.aad_len != 0))
+        return false;
+    if (ctx->private.ccm.aad_len_total != aad_len)
+        return false;
+
+    uint64_t len64 = (uint64_t)aad_len;
+    if (len64 < 0xFF00)
+    {
+        hdr_len = 2;
+        hdr[0] = (uint8_t)((len64 >> 8) & 0xFF);
+        hdr[1] = (uint8_t)(len64 & 0xFF);
+    }
+    else if (len64 <= 0xFFFFFFFFu)
+    {
+        uint32_t len32 = (uint32_t)len64;
+        hdr_len = 6;
+        hdr[0] = 0xFF;
+        hdr[1] = 0xFE;
+        hdr[2] = (uint8_t)((len32 >> 24) & 0xFF);
+        hdr[3] = (uint8_t)((len32 >> 16) & 0xFF);
+        hdr[4] = (uint8_t)((len32 >> 8) & 0xFF);
+        hdr[5] = (uint8_t)(len32 & 0xFF);
+    }
+    else
+    {
+        hdr_len = 10;
+        hdr[0] = 0xFF;
+        hdr[1] = 0xFF;
+        hdr[2] = (uint8_t)((len64 >> 56) & 0xFF);
+        hdr[3] = (uint8_t)((len64 >> 48) & 0xFF);
+        hdr[4] = (uint8_t)((len64 >> 40) & 0xFF);
+        hdr[5] = (uint8_t)((len64 >> 32) & 0xFF);
+        hdr[6] = (uint8_t)((len64 >> 24) & 0xFF);
+        hdr[7] = (uint8_t)((len64 >> 16) & 0xFF);
+        hdr[8] = (uint8_t)((len64 >> 8) & 0xFF);
+        hdr[9] = (uint8_t)(len64 & 0xFF);
+    }
+
+    while ((hdr_pos < hdr_len) || (aad_pos < aad_len))
+    {
+        size_t idx = 0;
+        while ((idx < AES_BLOCK_SIZE) && (hdr_pos < hdr_len))
+            block[idx++] = hdr[hdr_pos++];
+        while ((idx < AES_BLOCK_SIZE) && (aad_pos < aad_len))
+            block[idx++] = aad[aad_pos++];
+        while (idx < AES_BLOCK_SIZE)
+            block[idx++] = 0;
+        ccm_mac_update_block(ctx, block);
+    }
+
+    ctx->private.ccm.aad_len = aad_len;
+    tls_secure_memzero(block, sizeof block);
+    tls_secure_memzero(hdr, sizeof hdr);
+    return true;
+}
+
+static void ccm_prepare_counter(struct tls_aes_context *ctx, uint32_t counter)
+{
+    uint8_t L = ctx->private.ccm.L;
+    size_t counter_start = AES_BLOCK_SIZE - L;
+    tls_secure_memzero(ctx->private.ccm.ctr, AES_BLOCK_SIZE);
+    ctx->private.ccm.ctr[0] = (uint8_t)(L - 1);
+    memcpy(&ctx->private.ccm.ctr[1], ctx->private.ccm.nonce, ctx->private.ccm.nonce_len);
+    ccm_store_len_be(&ctx->private.ccm.ctr[counter_start], counter, L);
+}
+
+static bool ccm_process_message(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len,
+                                uint8_t *outbuf, bool encrypt)
+{
+    if ((ctx->private.ccm.msg_processed != 0) || (in_len != ctx->private.ccm.msg_len))
+        return false;
+
+    size_t blocks = in_len / AES_BLOCK_SIZE;
+    size_t rem = in_len % AES_BLOCK_SIZE;
+    uint8_t tmp[AES_BLOCK_SIZE];
+    uint8_t keystream[AES_BLOCK_SIZE];
+
+    for (size_t idx = 0; idx < blocks; idx++)
+    {
+        const uint8_t *in = &inbuf[idx * AES_BLOCK_SIZE];
+        uint8_t *out = outbuf ? &outbuf[idx * AES_BLOCK_SIZE] : NULL;
+
+        aes_encrypt_block(ctx->private.ccm.ctr, keystream, ctx);
+        if (encrypt)
+        {
+            memcpy(tmp, in, AES_BLOCK_SIZE);
+            ccm_mac_update_block(ctx, tmp);
+            if (out)
+            {
+                memcpy(out, in, AES_BLOCK_SIZE);
+                xor_buf(keystream, out, AES_BLOCK_SIZE);
+            }
+        }
+        else
+        {
+            memcpy(tmp, in, AES_BLOCK_SIZE);
+            xor_buf(keystream, tmp, AES_BLOCK_SIZE);
+            ccm_mac_update_block(ctx, tmp);
+            if (out)
+                memcpy(out, tmp, AES_BLOCK_SIZE);
+        }
+        increment_iv(ctx->private.ccm.ctr, AES_BLOCK_SIZE - ctx->private.ccm.L, ctx->private.ccm.L);
+    }
+
+    if (rem)
+    {
+        size_t offset = blocks * AES_BLOCK_SIZE;
+        const uint8_t *in = &inbuf[offset];
+        uint8_t *out = outbuf ? &outbuf[offset] : NULL;
+        tls_secure_memzero(tmp, AES_BLOCK_SIZE);
+        aes_encrypt_block(ctx->private.ccm.ctr, keystream, ctx);
+        if (encrypt)
+        {
+            memcpy(tmp, in, rem);
+            ccm_mac_update_block(ctx, tmp);
+            if (out)
+            {
+                memcpy(out, in, rem);
+                xor_buf(keystream, out, rem);
+            }
+        }
+        else
+        {
+            memcpy(tmp, in, rem);
+            xor_buf(keystream, tmp, rem);
+            ccm_mac_update_block(ctx, tmp);
+            if (out)
+                memcpy(out, tmp, rem);
+        }
+        increment_iv(ctx->private.ccm.ctr, AES_BLOCK_SIZE - ctx->private.ccm.L, ctx->private.ccm.L);
+    }
+
+    ctx->private.ccm.msg_processed = in_len;
+    tls_secure_memzero(tmp, sizeof tmp);
+    tls_secure_memzero(keystream, sizeof keystream);
+    return true;
+}
+
 enum _aes_op_assoc
 {
     AES_OP_NONE,
     AES_OP_ENCRYPT,
     AES_OP_DECRYPT
 };
+enum GCM_OPS_ALLOWED
+{
+    LOCK_ALLOW_ALL,
+    LOCK_ALLOW_ENCRYPT,
+    LOCK_ALLOW_NONE
+};
 #define AES_GCM_NONCE_LEN 12
 #define AES_GCM_CTR_LEN 4
 #define AES_GCM_POLY 0xe1 // polynomial used in AES-GCM
-/*
-void gf128_mul(uint8_t *a, const uint8_t *b, uint8_t *c)
-{
-    uint8_t v[16] = {0};
-    uint8_t z[16] = {0};
-    uint8_t hibit = 0;
-    int i, j;
-
-    for (i = 0; i < 16; i++)
-    {
-        for (j = 0; j < 8; j++)
-        {
-            if (b[i] & (1 << j))
-            {
-                xor_buf(&a[15 - i], v, 16);
-            }
-        }
-    }
-
-    for (i = 0; i < 16; i++)
-    {
-        for (j = 0; j < 8; j++)
-        {
-            if (a[i] & (1 << j))
-            {
-                xor_buf(&v[15 - i], z, 16);
-            }
-        }
-    }
-
-    for (i = 0; i < 16; i++)
-    {
-        c[i] = z[15 - i];
-    }
-
-    for (i = 0; i < 15; i++)
-    {
-        if (a[i] & 0x80)
-        {
-            hibit = 1;
-        }
-    }
-
-    if (hibit)
-    {
-        uint8_t r[16] = {0x87, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-        xor_buf(r, c, 16);
-    }
-}
-*/
 #define ghash_start(buf) tls_secure_memzero((buf), 16)
 
-void ghash(struct tls_aes_context *ctx, uint8_t *out_buf, const uint8_t *data, size_t len)
+static void ghash(struct tls_aes_context *ctx, uint8_t *out_buf, const uint8_t *data, size_t len)
 {
     uint8_t tbuf[AES_BLOCK_SIZE];
     size_t data_offset = 0;
 
     // the cache allows for incomplete blocks to be queued
     // the next call to update will concat the queue and new aad
-    if (ctx->_private.aad_cache_len)
+    if (ctx->private.gcm.aad_cache_len)
     {
-        size_t cache_len = ctx->_private.aad_cache_len;
+        size_t cache_len = ctx->private.gcm.aad_cache_len;
         data_offset = MIN(len, AES_BLOCK_SIZE - cache_len);
         if (data_offset + cache_len < AES_BLOCK_SIZE)
         {
             // if new aad is not enough to fill a block, update queue and stop w/o processing
-            memcpy(&ctx->_private.aad_cache[cache_len], data, data_offset);
-            ctx->_private.aad_cache_len += data_offset;
+            memcpy(&ctx->private.gcm.aad_cache[cache_len], data, data_offset);
+            ctx->private.gcm.aad_cache_len += data_offset;
             return;
         }
         else
         {
             // if new aad is enough to fill a block, concat queue and rest of block from aad
             // then update hash
-            memcpy(tbuf, ctx->_private.aad_cache, cache_len);
+            memcpy(tbuf, ctx->private.gcm.aad_cache, cache_len);
             memcpy(&tbuf[cache_len], data, data_offset);
             xor_buf(tbuf, out_buf, AES_BLOCK_SIZE);
-            gf128_mul(out_buf, ctx->_private.ghash_key, out_buf);
-            ctx->_private.aad_cache_len = 0;
+            gf128_mul(out_buf, ctx->private.gcm.ghash_key, out_buf);
+            ctx->private.gcm.aad_cache_len = 0;
         }
     }
 
@@ -788,20 +929,20 @@ void ghash(struct tls_aes_context *ctx, uint8_t *out_buf, const uint8_t *data, s
         {
             // if aad_len < block size, write bytes to queue.
             // no return here because this condition should just exit out next loop
-            memcpy(ctx->_private.aad_cache, &data[idx], bytes_copy);
-            ctx->_private.aad_cache_len = bytes_copy;
+            memcpy(ctx->private.gcm.aad_cache, &data[idx], bytes_copy);
+            ctx->private.gcm.aad_cache_len = bytes_copy;
         }
         else
         {
             // if aad_len >= block size, update hash for block
             memcpy(tbuf, &data[idx], AES_BLOCK_SIZE);
             xor_buf(tbuf, out_buf, AES_BLOCK_SIZE);
-            gf128_mul(out_buf, ctx->_private.ghash_key, out_buf);
+            gf128_mul(out_buf, ctx->private.gcm.ghash_key, out_buf);
         }
     }
 }
 
-void aes_gcm_prepare_iv(struct tls_aes_context *ctx, const uint8_t *iv, size_t iv_len)
+static void aes_gcm_prepare_iv(struct tls_aes_context *ctx, const uint8_t *iv, size_t iv_len)
 {
     uint8_t tbuf[AES_BLOCK_SIZE];
     // memset(ctx->iv, 0, AES_BLOCK_SIZE);
@@ -900,16 +1041,16 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
     {
         // generate ghash key
         uint8_t tmp[16] = {0};
-        aes_encrypt_block(tmp, ctx->_private.ghash_key, ctx);
+        aes_encrypt_block(tmp, ctx->private.gcm.ghash_key, ctx);
         // sort out IV wonkiness in GCM mode
         aes_gcm_prepare_iv(ctx, iv, iv_len);
-        tls_secure_memzero(ctx->_private.auth_tag, AES_BLOCK_SIZE);
-        memcpy(ctx->_private.auth_j0, ctx->iv, AES_BLOCK_SIZE);
+        tls_secure_memzero(ctx->private.gcm.auth_tag, AES_BLOCK_SIZE);
+        memcpy(ctx->private.gcm.auth_j0, ctx->iv, AES_BLOCK_SIZE);
         increment_iv(ctx->iv, AES_GCM_NONCE_LEN, AES_GCM_CTR_LEN);
         break;
     }
     case TLS_AES_CBC:
-        // i don't thing anything needs setup here
+        // i don't think anything needs setup here
         break;
     default:
         return false;
@@ -919,52 +1060,110 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
     return true;
 }
 
-enum GCM_OPS_ALLOWED
+bool tls_aes_ccm_init(struct tls_aes_context *ctx,
+                      const uint8_t *key, size_t key_len,
+                      const uint8_t *nonce, size_t nonce_len,
+                      uint8_t tag_len, size_t msg_len, size_t aad_len)
 {
-    LOCK_ALLOW_ALL,
-    LOCK_ALLOW_ENCRYPT,
-    LOCK_ALLOW_NONE
-};
+    uint8_t b0[AES_BLOCK_SIZE];
+    uint8_t zero_iv[AES_BLOCK_SIZE] = {0};
+
+    if ((ctx == NULL) || (key == NULL) || (nonce == NULL))
+        return false;
+    if (!ccm_validate_params(nonce_len, tag_len, msg_len))
+        return false;
+
+    if (!tls_aes_init(ctx, TLS_AES_CBC, key, key_len, zero_iv, 0))
+        return false;
+
+    ctx->mode = TLS_AES_CCM;
+    ctx->private.ccm.nonce_len = (uint8_t)nonce_len;
+    ctx->private.ccm.tag_len = tag_len;
+    ctx->private.ccm.L = (uint8_t)(15 - nonce_len);
+    ctx->private.ccm.msg_len = msg_len;
+    ctx->private.ccm.aad_len_total = aad_len;
+    ctx->private.ccm.lock = LOCK_ALLOW_ALL;
+    ctx->private.ccm.msg_processed = 0;
+    ctx->private.ccm.aad_len = 0;
+
+    memcpy(ctx->private.ccm.nonce, nonce, nonce_len);
+
+    b0[0] = (uint8_t)((aad_len ? 0x40 : 0x00) | (((tag_len - 2) / 2) << 3) | (ctx->private.ccm.L - 1));
+    memcpy(&b0[1], nonce, nonce_len);
+    ccm_store_len_be(&b0[AES_BLOCK_SIZE - ctx->private.ccm.L], msg_len, ctx->private.ccm.L);
+    aes_encrypt_block(b0, ctx->private.ccm.mac, ctx);
+
+    ccm_prepare_counter(ctx, 0);
+    aes_encrypt_block(ctx->private.ccm.ctr, ctx->private.ccm.s0, ctx);
+    ccm_prepare_counter(ctx, 1);
+
+    tls_secure_memzero(b0, sizeof b0);
+    return true;
+}
 
 bool tls_aes_update_aad(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len)
 {
-    if (ctx->mode != TLS_AES_GCM)
-        return false;
-    if (ctx->_private.lock > LOCK_ALLOW_ALL)
-        return false;
-
-    // update the tag for full blocks of aad in input, cache any partial blocks
-    ghash(ctx, ctx->_private.auth_tag, aad, aad_len);
-    ctx->_private.aad_len += aad_len;
-    return true;
+    if (ctx->mode == TLS_AES_GCM)
+    {
+        if (ctx->private.gcm.lock > LOCK_ALLOW_ALL)
+            return false;
+        // update the tag for full blocks of aad in input, cache any partial blocks
+        ghash(ctx, ctx->private.gcm.auth_tag, aad, aad_len);
+        ctx->private.gcm.aad_len += aad_len;
+        return true;
+    }
+    if (ctx->mode == TLS_AES_CCM)
+    {
+        if (ctx->private.ccm.lock > LOCK_ALLOW_ALL)
+            return false;
+        return ccm_update_aad(ctx, aad, aad_len);
+    }
+    return false;
 }
 
 bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
 {
-    if (ctx->mode != TLS_AES_GCM)
-        return false;
     if ((ctx == NULL) || (digest == NULL))
         return false;
-    ctx->_private.lock = LOCK_ALLOW_NONE;
-    uint8_t tbuf[AES_BLOCK_SIZE];
-    uint8_t *tag = ctx->_private.auth_tag;
+    if (ctx->mode == TLS_AES_GCM)
+    {
+        ctx->private.gcm.lock = LOCK_ALLOW_NONE;
+        uint8_t tbuf[AES_BLOCK_SIZE];
+        uint8_t *tag = ctx->private.gcm.auth_tag;
 
-    // pad rest of ciphertext cache with 0s
-    tls_secure_memzero(tbuf, AES_BLOCK_SIZE);
-    ghash(ctx, tag, tbuf, AES_BLOCK_SIZE - ctx->_private.aad_cache_len);
-    // at this point, tag should be GHASH(0-padded aad || 0-padded ciphertext)
+        // pad rest of ciphertext cache with 0s
+        tls_secure_memzero(tbuf, AES_BLOCK_SIZE);
+        ghash(ctx, tag, tbuf, AES_BLOCK_SIZE - ctx->private.gcm.aad_cache_len);
+        // at this point, tag should be GHASH(0-padded aad || 0-padded ciphertext)
 
-    // final tag computed as GHASH( 0-padded aad || 0-padded ciphertext || u64-be-aad-len || u64-be-ciphertext-len)
-    bytelen_to_bitlen(ctx->_private.aad_len, tbuf);
-    bytelen_to_bitlen(ctx->_private.ct_len, &tbuf[8]);
-    ghash(ctx, tag, tbuf, AES_BLOCK_SIZE);
+        // final tag computed as GHASH( 0-padded aad || 0-padded ciphertext || u64-be-aad-len || u64-be-ciphertext-len)
+        bytelen_to_bitlen(ctx->private.gcm.aad_len, tbuf);
+        bytelen_to_bitlen(ctx->private.gcm.ct_len, &tbuf[8]);
+        ghash(ctx, tag, tbuf, AES_BLOCK_SIZE);
 
-    // encrypt auth tag with CTR0
-    aes_encrypt_block(ctx->_private.auth_j0, tbuf, ctx);
-    xor_buf(tag, tbuf, AES_BLOCK_SIZE);
+        // encrypt auth tag with CTR0
+        aes_encrypt_block(ctx->private.gcm.auth_j0, tbuf, ctx);
+        xor_buf(tag, tbuf, AES_BLOCK_SIZE);
 
-    memcpy(digest, tbuf, AES_BLOCK_SIZE);
-    return true;
+        memcpy(digest, tbuf, AES_BLOCK_SIZE);
+        return true;
+    }
+    if (ctx->mode == TLS_AES_CCM)
+    {
+        if (ctx->private.ccm.aad_len_total != ctx->private.ccm.aad_len)
+            return false;
+        if (ctx->private.ccm.msg_processed != ctx->private.ccm.msg_len)
+            return false;
+        ctx->private.ccm.lock = LOCK_ALLOW_NONE;
+        uint8_t tbuf[AES_BLOCK_SIZE];
+        memcpy(tbuf, ctx->private.ccm.mac, AES_BLOCK_SIZE);
+        xor_buf(ctx->private.ccm.s0, tbuf, AES_BLOCK_SIZE);
+        tls_secure_memzero(digest, AES_BLOCK_SIZE);
+        memcpy(digest, tbuf, ctx->private.ccm.tag_len);
+        tls_secure_memzero(tbuf, sizeof tbuf);
+        return true;
+    }
+    return false;
 }
 
 #define AES_BLOCKSIZE 16
@@ -979,12 +1178,12 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
 
     if (inbuf == NULL || outbuf == NULL || ctx == NULL)
         return false;
-    if (in_len == 0)
+    if ((in_len == 0) && !(ctx && (ctx->mode == TLS_AES_CCM) && (ctx->private.ccm.msg_len == 0)))
         return false;
     tls_crypto_guard_enable();
     if (ctx->op_assoc == AES_OP_DECRYPT)
         goto cleanup;
-    if (ctx->_private.lock > LOCK_ALLOW_ENCRYPT)
+    if (ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT)
         goto cleanup;
     ctx->op_assoc = AES_OP_ENCRYPT;
     uint8_t *iv = ctx->iv;
@@ -994,26 +1193,26 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     case TLS_AES_GCM:
     {
 
-        uint8_t *tag = ctx->_private.auth_tag;
+        uint8_t *tag = ctx->private.gcm.auth_tag;
 
         blocks = (in_len / AES_BLOCK_SIZE);
 
-        size_t bytes_to_copy = ctx->_private.last_block_len;
+        size_t bytes_to_copy = ctx->private.gcm.last_block_len;
         size_t bytes_offset = 0;
-        if ((ctx->_private.lock == LOCK_ALLOW_ALL) &&
-            (ctx->_private.aad_cache_len))
+        if ((ctx->private.gcm.lock == LOCK_ALLOW_ALL) &&
+            (ctx->private.gcm.aad_cache_len))
         {
             // pad rest of aad cache with 0's
             tls_secure_memzero(buf, AES_BLOCK_SIZE);
-            ghash(ctx, tag, buf, AES_BLOCK_SIZE - ctx->_private.aad_cache_len);
+            ghash(ctx, tag, buf, AES_BLOCK_SIZE - ctx->private.gcm.aad_cache_len);
         }
-        ctx->_private.lock = LOCK_ALLOW_ENCRYPT;
+        ctx->private.gcm.lock = LOCK_ALLOW_ENCRYPT;
         // xor last bytes of encryption buf w/ new plaintext for new ciphertext
         if (bytes_to_copy % AES_BLOCK_SIZE)
         {
             bytes_offset = AES_BLOCK_SIZE - bytes_to_copy;
             memcpy(outbuf, inbuf, bytes_offset);
-            xor_buf(&ctx->_private.last_block[bytes_to_copy], outbuf, bytes_offset);
+            xor_buf(&ctx->private.gcm.last_block[bytes_to_copy], outbuf, bytes_offset);
             blocks = ((in_len - bytes_offset) / AES_BLOCK_SIZE);
         }
 
@@ -1030,14 +1229,14 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             increment_iv(iv, AES_GCM_NONCE_LEN, AES_GCM_CTR_LEN); // increment iv for continued use
             if (idx == blocks)
             {
-                memcpy(ctx->_private.last_block, buf, AES_BLOCK_SIZE);
-                ctx->_private.last_block_len = bytes_to_copy;
+                memcpy(ctx->private.gcm.last_block, buf, AES_BLOCK_SIZE);
+                ctx->private.gcm.last_block_len = bytes_to_copy;
             }
         }
 
         // authenticate the ciphertext
         ghash(ctx, tag, outbuf, in_len);
-        ctx->_private.ct_len += in_len;
+        ctx->private.gcm.ct_len += in_len;
         break;
     }
     case TLS_AES_CBC:
@@ -1053,6 +1252,16 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             aes_encrypt_block(buf, &outbuf[idx * AES_BLOCK_SIZE], ctx);
             memcpy(iv, &outbuf[idx * AES_BLOCK_SIZE], AES_BLOCK_SIZE);
         }
+        break;
+    }
+    case TLS_AES_CCM:
+    {
+        if (ctx->private.ccm.lock > LOCK_ALLOW_ENCRYPT)
+            goto cleanup;
+        ctx->private.ccm.lock = LOCK_ALLOW_ENCRYPT;
+        if (!ccm_process_message(ctx, inbuf, in_len, outbuf, true))
+            goto cleanup;
+        break;
     }
     }
     ok = true;
@@ -1069,7 +1278,7 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
 
     if ((ctx == NULL) ||
         (inbuf == NULL) ||
-        (in_len == 0))
+        ((in_len == 0) && !(ctx->mode == TLS_AES_CCM && ctx->private.ccm.msg_len == 0)))
         return false;
     uint8_t buf_in[AES_BLOCK_SIZE], buf_out[AES_BLOCK_SIZE];
     int idx, blocks = in_len / AES_BLOCK_SIZE;
@@ -1080,7 +1289,7 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     tls_crypto_guard_enable();
     if (ctx->op_assoc == AES_OP_ENCRYPT)
         goto cleanup;
-    if (ctx->_private.lock > LOCK_ALLOW_ENCRYPT)
+    if (ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT)
         goto cleanup;
     ctx->op_assoc = AES_OP_DECRYPT;
     uint8_t *iv = ctx->iv;
@@ -1089,27 +1298,27 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     {
     case TLS_AES_GCM:
     {
-        uint8_t *tag = ctx->_private.auth_tag;
-        size_t bytes_to_copy = ctx->_private.last_block_len;
+        uint8_t *tag = ctx->private.gcm.auth_tag;
+        size_t bytes_to_copy = ctx->private.gcm.last_block_len;
         size_t bytes_offset = 0;
-        if ((ctx->_private.lock == LOCK_ALLOW_ALL) &&
-            (ctx->_private.aad_cache_len))
+        if ((ctx->private.gcm.lock == LOCK_ALLOW_ALL) &&
+            (ctx->private.gcm.aad_cache_len))
         {
             // pad rest of aad cache with 0's
             tls_secure_memzero(buf_in, AES_BLOCK_SIZE);
-            ghash(ctx, tag, buf_in, AES_BLOCK_SIZE - ctx->_private.aad_cache_len);
+            ghash(ctx, tag, buf_in, AES_BLOCK_SIZE - ctx->private.gcm.aad_cache_len);
         }
         ghash(ctx, tag, inbuf, in_len);
-        ctx->_private.ct_len += in_len;
+        ctx->private.gcm.ct_len += in_len;
 
         if (outbuf)
         {
-            ctx->_private.lock = LOCK_ALLOW_ENCRYPT;
+            ctx->private.gcm.lock = LOCK_ALLOW_ENCRYPT;
             if (bytes_to_copy % AES_BLOCK_SIZE)
             {
                 bytes_offset = AES_BLOCK_SIZE - bytes_to_copy;
                 memcpy(outbuf, inbuf, bytes_offset);
-                xor_buf(&ctx->_private.last_block[bytes_to_copy], outbuf, bytes_offset);
+                xor_buf(&ctx->private.gcm.last_block[bytes_to_copy], outbuf, bytes_offset);
                 blocks = ((in_len - bytes_offset) / AES_BLOCK_SIZE);
             }
 
@@ -1125,8 +1334,8 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
                 increment_iv(iv, AES_GCM_NONCE_LEN, AES_GCM_CTR_LEN); // increment iv for continued use
                 if (idx == blocks)
                 {
-                    memcpy(ctx->_private.last_block, buf_in, AES_BLOCK_SIZE);
-                    ctx->_private.last_block_len = bytes_to_copy;
+                    memcpy(ctx->private.gcm.last_block, buf_in, AES_BLOCK_SIZE);
+                    ctx->private.gcm.last_block_len = bytes_to_copy;
                 }
             }
         }
@@ -1148,6 +1357,16 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         ok = true;
         break;
     }
+    case TLS_AES_CCM:
+    {
+        if (ctx->private.ccm.lock > LOCK_ALLOW_ENCRYPT)
+            goto cleanup;
+        ctx->private.ccm.lock = LOCK_ALLOW_ENCRYPT;
+        if (!ccm_process_message(ctx, inbuf, in_len, outbuf, false))
+            goto cleanup;
+        ok = true;
+        break;
+    }
     }
     ok = true;
 cleanup:
@@ -1159,7 +1378,7 @@ cleanup:
 
 bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *tag)
 {
-    if (ctx->mode != TLS_AES_GCM)
+    if ((ctx->mode != TLS_AES_GCM) && (ctx->mode != TLS_AES_CCM))
         return false;
     if ((ctx == NULL) ||
         (ciphertext == NULL) ||
@@ -1182,5 +1401,71 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
     tls_aes_digest(&tmp, digest);
 
     // memset(&tmp, 0, sizeof(tmp));
+    if (ctx->mode == TLS_AES_CCM)
+        return tls_bytes_compare(tag, digest, ctx->private.ccm.tag_len);
     return tls_bytes_compare(tag, digest, AES_BLOCK_SIZE);
+}
+
+bool tls_aes_ccm_encrypt(const uint8_t *key, size_t key_len,
+                         const uint8_t *nonce, size_t nonce_len,
+                         const uint8_t *aad, size_t aad_len,
+                         const uint8_t *plaintext, size_t pt_len,
+                         uint8_t *ciphertext, uint8_t *tag, size_t tag_len)
+{
+    struct tls_aes_context ctx;
+    uint8_t digest[AES_BLOCK_SIZE];
+
+    if ((key == NULL) || (nonce == NULL) || (plaintext == NULL) || (ciphertext == NULL) || (tag == NULL))
+        return false;
+    if (aad && (aad_len == 0))
+        return false;
+
+    if (!tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len, (uint8_t)tag_len, pt_len, aad_len))
+        return false;
+    if (aad_len)
+    {
+        if (!tls_aes_update_aad(&ctx, aad, aad_len))
+            return false;
+    }
+    if (!tls_aes_encrypt(&ctx, plaintext, pt_len, ciphertext))
+        return false;
+    if (!tls_aes_digest(&ctx, digest))
+        return false;
+    memcpy(tag, digest, tag_len);
+    tls_secure_memzero(digest, sizeof digest);
+    return true;
+}
+
+bool tls_aes_ccm_decrypt(const uint8_t *key, size_t key_len,
+                         const uint8_t *nonce, size_t nonce_len,
+                         const uint8_t *aad, size_t aad_len,
+                         const uint8_t *ciphertext, size_t ct_len,
+                         const uint8_t *tag, size_t tag_len,
+                         uint8_t *plaintext)
+{
+    struct tls_aes_context ctx;
+    uint8_t digest[AES_BLOCK_SIZE];
+    bool ok = false;
+
+    if ((key == NULL) || (nonce == NULL) || (ciphertext == NULL) || (tag == NULL) || (plaintext == NULL))
+        return false;
+    if (aad && (aad_len == 0))
+        return false;
+
+    if (!tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len, (uint8_t)tag_len, ct_len, aad_len))
+        return false;
+    if (aad_len)
+    {
+        if (!tls_aes_update_aad(&ctx, aad, aad_len))
+            return false;
+    }
+    if (!tls_aes_decrypt(&ctx, ciphertext, ct_len, plaintext))
+        return false;
+    if (!tls_aes_digest(&ctx, digest))
+        return false;
+    ok = tls_bytes_compare(tag, digest, tag_len);
+    if (!ok)
+        tls_secure_memzero(plaintext, ct_len);
+    tls_secure_memzero(digest, sizeof digest);
+    return ok;
 }
