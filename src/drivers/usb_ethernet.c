@@ -27,13 +27,11 @@
 #include "lwip/netif.h"
 #include "lwip/timeouts.h"
 #include "lwip/logging.h"
+#include "lwip/app_config.h"
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_START_DHCP_ON_ALL true
 #define ETH_DO_RESTART_ON_ERROR true
-
-/// Define Default Hostname for NETIFs
-const char hostname[] = "ti84plusce";
 static uint8_t ifnums_used = 0;
 bool eth_disabled_with_error = false;
 struct usb_configurator usb_fn = {0};
@@ -1069,7 +1067,7 @@ init_success:
         iface->ip6_autoconfig_enabled = 1;
 
         ifnums_used |= 1 << ifnum_assigned;  // set flag marking the ifnum used
-        netif_set_hostname(iface, hostname); // set default hostname
+        netif_set_hostname(iface, lwip_app_config_get()->hostname); // set hostname from config
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                     ("NEW, netif=%c%c%u <- device=%p", iface->name[0], iface->name[1], iface->num, device));
     }

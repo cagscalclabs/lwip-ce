@@ -1,0 +1,80 @@
+{
+    "transfer_files": [
+        "bin/X25519.8xp"
+    ],
+    "target": {
+        "name": "X25519",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1",
+        "key|enter",
+        "hashWait|2",
+        "key|enter",
+        "hashWait|3",
+        "key|enter",
+        "hashWait|4",
+        "key|enter",
+        "hashWait|5",
+        "key|enter",
+        "hashWait|6",
+        "key|enter"
+    ],
+    "hashes": {
+        "1": {
+            "description": "x25519 RFC 7748, 6.1 - Alice private * Bob public",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "0F2E31E9"
+            ],
+            "timeout": 90000
+        },
+        "2": {
+            "description": "x25519 RFC 7748, 6.1 - Bob private * Alice public",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D24850A3"
+            ],
+            "timeout": 90000
+        },
+        "3": {
+            "description": "x25519 RFC 7748, 6.1 - Alice pubkey gen",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "0F15BA35"
+            ],
+            "timeout": 90000
+        },
+        "4": {
+            "description": "x25519 RFC 7748, 5.2 - one iteration (k=9, u=9)",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "38FD2513"
+            ],
+            "timeout": 90000
+        },
+        "5": {
+            "description": "x25519 RFC 7748 - Edge case, clamping test",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "0BEE81DC"
+            ],
+            "timeout": 90000
+        },
+        "6": {
+            "description": "x25519 RFC 7748 - Edge case, high bit test",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "1CFDDA02"
+            ],
+            "timeout": 90000
+        }
+    }
+}

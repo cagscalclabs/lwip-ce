@@ -53,6 +53,10 @@ static size_t mem_buffer_used_bytes(const struct mem_buffer *rb)
     {
         return rb->u.pool.pool_used_blocks * rb->u.pool.pool_block_size;
     }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        return rb->u.file.used_bytes;
+    }
     return rb->u.ring.len;
 }
 
@@ -314,7 +318,7 @@ static enum mem_pressure_level mem_pressure_level_relief(enum mem_pressure_level
 
 static bool mem_buffer_is_pool_type(const struct mem_buffer *rb)
 {
-    return rb && (rb->type == MEM_BUFFER_POOL || rb->type == MEM_BUFFER_FILE);
+    return rb && (rb->type == MEM_BUFFER_POOL);
 }
 
 static void mem_pressure_maybe_clear(struct mem_buffer *rb)
@@ -380,25 +384,23 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
     {
         return NULL;
     }
-    if (initial_size == 0 || !g_mem_cfg.malloc_fn || !g_mem_cfg.free_fn)
+    if ((initial_size == 0 && type != MEM_BUFFER_FILE) || !g_mem_cfg.malloc_fn || !g_mem_cfg.free_fn)
     {
         return NULL;
     }
 
     /* BUFFER_USER_ALLOC buffers don't count toward heap */
     bool skip_heap_accounting = (flags & BUFFER_USER_ALLOC) != 0;
+    if (type == MEM_BUFFER_FILE)
+    {
+        skip_heap_accounting = true;
+    }
     if (!skip_heap_accounting)
     {
         if (!mem_buffer_charge(sizeof(struct mem_buffer) + initial_size))
         {
             return NULL;
         }
-    }
-
-    /* MEM_BUFFER_FILE implies secure mode */
-    if (type == MEM_BUFFER_FILE)
-    {
-        flags |= BUFFER_SECURE_MODE;
     }
 
     struct mem_buffer *rb = (struct mem_buffer *)g_mem_cfg.malloc_fn(sizeof(struct mem_buffer));
@@ -411,21 +413,25 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         return NULL;
     }
 
-    rb->buf = (uint8_t *)g_mem_cfg.malloc_fn(initial_size);
-    if (!rb->buf)
+    rb->buf = NULL;
+    if (type != MEM_BUFFER_FILE)
     {
-        g_mem_cfg.free_fn(rb);
-        if (!skip_heap_accounting)
+        rb->buf = (uint8_t *)g_mem_cfg.malloc_fn(initial_size);
+        if (!rb->buf)
         {
-            mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+            g_mem_cfg.free_fn(rb);
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+            }
+            return NULL;
         }
-        return NULL;
     }
 
     rb->type = type;
     rb->flags = flags;
     rb->initial_size = initial_size;
-    rb->current_size = initial_size;
+    rb->current_size = (type == MEM_BUFFER_FILE) ? 0 : initial_size;
     rb->max_size = (max_size == 0 || max_size == (size_t)-1) ? SIZE_MAX : max_size;
     if (rb->max_size != SIZE_MAX && rb->max_size < rb->current_size)
     {
@@ -450,9 +456,29 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         rb->u.ring.drain_fn = NULL;
         rb->u.ring.drain_fn_data = NULL;
     }
+    else if (type == MEM_BUFFER_FILE)
+    {
+        rb->u.file.used_bytes = 0;
+        rb->u.file.max_slots = MEM_FILE_MAX_SLOTS;
+        rb->u.file.slots = (struct mem_file_slot *)g_mem_cfg.malloc_fn(sizeof(struct mem_file_slot) * MEM_FILE_MAX_SLOTS);
+        if (!rb->u.file.slots)
+        {
+            g_mem_cfg.free_fn(rb);
+            if (rb->buf)
+            {
+                g_mem_cfg.free_fn(rb->buf);
+            }
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+            }
+            return NULL;
+        }
+        memset(rb->u.file.slots, 0, sizeof(struct mem_file_slot) * MEM_FILE_MAX_SLOTS);
+    }
     else
     {
-        /* Pool or File type */
+        /* Pool type */
         size_t block_size = step_size;
         if (block_size == 0)
         {
@@ -531,6 +557,24 @@ void mem_buffer_destroy(struct mem_buffer *rb)
         }
         rb->buf = NULL;
     }
+    if (rb->type == MEM_BUFFER_FILE && rb->u.file.slots)
+    {
+        for (size_t i = 0; i < rb->u.file.max_slots; i++)
+        {
+            if (rb->u.file.slots[i].ptr)
+            {
+                if ((rb->flags & BUFFER_SECURE_MODE) != 0)
+                {
+                    tls_secure_memzero(rb->u.file.slots[i].ptr, rb->u.file.slots[i].size);
+                }
+                g_mem_cfg.free_fn(rb->u.file.slots[i].ptr);
+                rb->u.file.slots[i].ptr = NULL;
+                rb->u.file.slots[i].size = 0;
+            }
+        }
+        g_mem_cfg.free_fn(rb->u.file.slots);
+        rb->u.file.slots = NULL;
+    }
     if (mem_buffer_is_pool_type(rb) && rb->u.pool.pool_bitmap)
     {
         if ((rb->flags & BUFFER_SECURE_MODE) != 0)
@@ -554,17 +598,49 @@ void mem_buffer_destroy(struct mem_buffer *rb)
 
 size_t mem_buffer_len(const struct mem_buffer *rb)
 {
-    return rb ? rb->u.ring.len : 0;
+    if (!rb)
+    {
+        return 0;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        return rb->u.file.used_bytes;
+    }
+    return rb->u.ring.len;
 }
 
 size_t mem_buffer_capacity(const struct mem_buffer *rb)
 {
-    return rb ? rb->current_size : 0;
+    if (!rb)
+    {
+        return 0;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        return rb->max_size;
+    }
+    return rb->current_size;
 }
 
 size_t mem_buffer_space(const struct mem_buffer *rb)
 {
-    if (!rb || rb->current_size < rb->u.ring.len)
+    if (!rb)
+    {
+        return 0;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        if (rb->max_size == SIZE_MAX)
+        {
+            return SIZE_MAX;
+        }
+        if (rb->max_size < rb->u.file.used_bytes)
+        {
+            return 0;
+        }
+        return rb->max_size - rb->u.file.used_bytes;
+    }
+    if (rb->current_size < rb->u.ring.len)
     {
         return 0;
     }
@@ -611,6 +687,15 @@ bool mem_buffer_set_drain(struct mem_buffer *rb, mem_drain_fn drain_fn, void *dr
         return true;
     }
     return false;
+}
+
+size_t mem_buffer_drain(struct mem_buffer *rb, size_t budget)
+{
+    if (!rb || rb->type != MEM_BUFFER_RING || !rb->u.ring.drain_fn || budget == 0)
+    {
+        return 0;
+    }
+    return rb->u.ring.drain_fn(rb, rb->u.ring.drain_fn_data, budget);
 }
 
 static void mem_buffer_notify_pressure(struct mem_buffer *rb, size_t requested, enum mem_pressure_level level)
@@ -813,7 +898,34 @@ size_t mem_buffer_pop(struct mem_buffer *rb, uint8_t *out, size_t len)
 
 void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
 {
-    if (!rb || !mem_buffer_is_pool_type(rb) || size == 0)
+    if (!rb || size == 0)
+    {
+        return NULL;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        if (rb->max_size != SIZE_MAX && rb->u.file.used_bytes + size > rb->max_size)
+        {
+            return NULL;
+        }
+        for (size_t i = 0; i < rb->u.file.max_slots; i++)
+        {
+            if (!rb->u.file.slots[i].ptr)
+            {
+                uint8_t *ptr = (uint8_t *)g_mem_cfg.malloc_fn(size);
+                if (!ptr)
+                {
+                    return NULL;
+                }
+                rb->u.file.slots[i].ptr = ptr;
+                rb->u.file.slots[i].size = size;
+                rb->u.file.used_bytes += size;
+                return ptr;
+            }
+        }
+        return NULL;
+    }
+    if (!mem_buffer_is_pool_type(rb))
     {
         return NULL;
     }
@@ -968,7 +1080,37 @@ void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
 
 void mem_buffer_free(struct mem_buffer *rb, void *ptr)
 {
-    if (!rb || !mem_buffer_is_pool_type(rb) || !ptr)
+    if (!rb || !ptr)
+    {
+        return;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        for (size_t i = 0; i < rb->u.file.max_slots; i++)
+        {
+            if (rb->u.file.slots[i].ptr == ptr)
+            {
+                if ((rb->flags & BUFFER_SECURE_MODE) != 0)
+                {
+                    tls_secure_memzero(rb->u.file.slots[i].ptr, rb->u.file.slots[i].size);
+                }
+                g_mem_cfg.free_fn(rb->u.file.slots[i].ptr);
+                if (rb->u.file.used_bytes >= rb->u.file.slots[i].size)
+                {
+                    rb->u.file.used_bytes -= rb->u.file.slots[i].size;
+                }
+                else
+                {
+                    rb->u.file.used_bytes = 0;
+                }
+                rb->u.file.slots[i].ptr = NULL;
+                rb->u.file.slots[i].size = 0;
+                return;
+            }
+        }
+        return;
+    }
+    if (!mem_buffer_is_pool_type(rb))
     {
         return;
     }

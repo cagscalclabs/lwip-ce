@@ -256,3 +256,9 @@ jobs:
           tag_name: truststore-latest
           name: truststore-latest
           files: truststore_out/lwIPSPKI.8xv
+          body: |
+            This release contains the latest generated truststore AppVar for TI-84+ CE.
+
+            The truststore is generated from the CA certificates available on the runner environment at the time of generation. It includes metadata such as certificate owner, issuer, validity period, and a hash of the public key.
+
+            The AppVar can be downloaded and used in CE projects to provide a set of trusted CA certificates for TLS connections.

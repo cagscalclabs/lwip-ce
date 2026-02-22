@@ -29,8 +29,13 @@
 #include "lwip/tcp.h"
 #include "lwip/logging.h"
 
+#include "lwip/altcp.h"
+#include "lwip/altcp_tls.h"
+
 #include "drivers/mem.h"
 #include "drivers/usb_ethernet.h"
+#include "tls/includes/handshake.h"
+#include "apps/altcp_tls/altcp_tls_ce.h"
 
 #define LWIP_CFG_HEAP_MIN (8u * 1024u)
 #define LWIP_CFG_HEAP_MAX (48u * 1024u)
@@ -46,21 +51,12 @@
 
 typedef enum
 {
-    TAB_GENERAL = 0,
-    TAB_NETWORK,
-    TAB_SECURITY,
-    TAB_TEST,
-    TAB_ABOUT,
-    TAB_COUNT
-} ui_tab_t;
-
-typedef enum
-{
     F_TYPE_BOOL_TOGGLE,
     F_TYPE_STRING,
     F_TYPE_INT_SLIDER,
     F_TYPE_ACTION,
-    F_TYPE_LABEL
+    F_TYPE_LABEL,
+    F_TYPE_SEPARATOR
 } f_type;
 
 typedef enum
@@ -68,24 +64,29 @@ typedef enum
     OPT_MAX_HEAP = 0,
     OPT_TZ_OFFSET,
     OPT_DST,
-    OPT_LOG_GROUP,
+    OPT_SEP_LOGGING,
     OPT_LOG_USB,
     OPT_LOG_TLS,
     OPT_LOG_SIZE,
     OPT_VIEW_LOGS,
+    OPT_SEP_NETWORK,
     OPT_AUTO_NTP,
     OPT_IP_MODE,
     OPT_EDIT_IP,
+    OPT_HOSTNAME,
+    OPT_SEP_SECURITY,
     OPT_ENABLE_TLS,
-    OPT_CERT_GROUP,
-    OPT_CERT_SPKI,
     OPT_CERT_DATES,
     OPT_CERT_OWNER,
+    OPT_SEP_TESTS,
     OPT_NTP_TEST,
     OPT_HTTP_TEST,
     OPT_DNS_TEST,
     OPT_PING_TEST,
     OPT_TCP_ECHO_TEST,
+    OPT_TLS_TEST,
+    OPT_SEP_ABOUT,
+    OPT_ABOUT,
     OPT_COUNT
 } config_option_id;
 
@@ -97,19 +98,12 @@ typedef enum
     EDIT_LOG
 } edit_mode_t;
 
-typedef enum
-{
-    FOCUS_TABS = 0,
-    FOCUS_OPTIONS
-} focus_mode_t;
-
 struct config_option;
 typedef bool (*config_setter_fn)(struct config_option *opt);
 
 struct config_option
 {
     const char *name;
-    ui_tab_t tab;
     config_option_id id;
     f_type type;
     config_setter_fn setter;
@@ -126,62 +120,77 @@ static volatile bool netif_unavailable = false;
 
 static lwip_app_config_t g_cfg;
 
+// Legacy color constants (used by test functions)
 #define COLOR_WHITE 0xFFFF
 #define COLOR_BLACK 0x0000
-#define COLOR_LIGHT_GRAY 0xD6BA  // Light gray for help area background
+#define COLOR_LIGHT_GRAY 0xD6BA
+
+// New UI color palette
+#define UI_COLOR_BG         0xFFFF  // White background
+#define UI_COLOR_FG         0x0000  // Black text
+#define UI_COLOR_ACCENT     0x001F  // Blue accent (RGB565)
+#define UI_COLOR_SELECTED   0x7BEF  // Light blue selection
+#define UI_COLOR_SEPARATOR  0xC618  // Gray for separators
+#define UI_COLOR_HEADER     0x0000  // Black header
+#define UI_COLOR_EDIT_BG    0xFFE0  // Yellow for edit mode
 
 static void delay_ms(unsigned int ms)
 {
-    // Simple busy loop delay (approximate, based on ~15 MHz CPU)
     for (unsigned int i = 0; i < ms; i++)
     {
-        for (volatile unsigned int j = 0; j < 1500; j++)
-        {
-            // Busy wait
-        }
+        for (volatile unsigned int j = 0; j < 1500; j++) { }
     }
 }
 
+// Forward declarations
 static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes);
 static void edit_ip_config(lwip_app_config_t *cfg);
+static void edit_hostname_config(lwip_app_config_t *cfg);
 static bool start_lwip_stack(const lwip_app_config_t *cfg);
 static void apply_network_config(const lwip_app_config_t *cfg);
 static void fill_rect(int x, int y, int w, int h, uint16_t color);
+static void ui_draw_header(const char *title);
+static void ui_draw_footer(const char *line1, const char *line2);
 
 static bool config_toggle_option(struct config_option *opt);
 static bool config_edit_ip(struct config_option *opt);
+static bool config_edit_hostname(struct config_option *opt);
 static bool config_run_ntp_test(struct config_option *opt);
 static bool config_run_http_test(struct config_option *opt);
 static bool config_run_dns_test(struct config_option *opt);
 static bool config_run_ping_test(struct config_option *opt);
 static bool config_run_tcp_echo_test(struct config_option *opt);
+static bool config_run_tls_test(struct config_option *opt);
 static bool config_run_view_logs(struct config_option *opt);
+static bool config_show_about(struct config_option *opt);
 
 static struct config_option config_options[] = {
-    {"Max Heap", TAB_GENERAL, OPT_MAX_HEAP, F_TYPE_INT_SLIDER, NULL, {0}},
-    {"TZ Offset", TAB_GENERAL, OPT_TZ_OFFSET, F_TYPE_INT_SLIDER, NULL, {0}},
-    {"DST", TAB_GENERAL, OPT_DST, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"Logging:", TAB_GENERAL, OPT_LOG_GROUP, F_TYPE_LABEL, NULL, {0}},
-    {"  USB errors", TAB_GENERAL, OPT_LOG_USB, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"  TLS errors", TAB_GENERAL, OPT_LOG_TLS, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"  Log size", TAB_GENERAL, OPT_LOG_SIZE, F_TYPE_INT_SLIDER, NULL, {0}},
-    {"View Log", TAB_GENERAL, OPT_VIEW_LOGS, F_TYPE_ACTION, config_run_view_logs, {0}},
-
-    {"Enable NTP", TAB_NETWORK, OPT_AUTO_NTP, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"Enable DHCP", TAB_NETWORK, OPT_IP_MODE, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"IP Conf", TAB_NETWORK, OPT_EDIT_IP, F_TYPE_ACTION, config_edit_ip, {0}},
-
-    {"Enable TLS", TAB_SECURITY, OPT_ENABLE_TLS, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"Cert Trust Settings:", TAB_SECURITY, OPT_CERT_GROUP, F_TYPE_LABEL, NULL, {0}},
-    {"  SPKI Hash", TAB_SECURITY, OPT_CERT_SPKI, F_TYPE_LABEL, NULL, {0}},
-    {"  Lifespan", TAB_SECURITY, OPT_CERT_DATES, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"  Owner", TAB_SECURITY, OPT_CERT_OWNER, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-
-    {"NTP Test", TAB_TEST, OPT_NTP_TEST, F_TYPE_ACTION, config_run_ntp_test, {0}},
-    {"HTTP Test", TAB_TEST, OPT_HTTP_TEST, F_TYPE_ACTION, config_run_http_test, {0}},
-    {"DNS Test", TAB_TEST, OPT_DNS_TEST, F_TYPE_ACTION, config_run_dns_test, {0}},
-    {"Ping Test", TAB_TEST, OPT_PING_TEST, F_TYPE_ACTION, config_run_ping_test, {0}},
-    {"TCP Echo Test", TAB_TEST, OPT_TCP_ECHO_TEST, F_TYPE_ACTION, config_run_tcp_echo_test, {0}},
+    {"Max Heap",        OPT_MAX_HEAP,     F_TYPE_INT_SLIDER,   NULL, {0}},
+    {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
+    {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"-- Logging --",   OPT_SEP_LOGGING,  F_TYPE_SEPARATOR,    NULL, {0}},
+    {"Log USB Errors",  OPT_LOG_USB,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Log TLS Errors",  OPT_LOG_TLS,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Log Size",        OPT_LOG_SIZE,     F_TYPE_INT_SLIDER,   NULL, {0}},
+    {"View Log",        OPT_VIEW_LOGS,    F_TYPE_ACTION,       config_run_view_logs, {0}},
+    {"-- Network --",   OPT_SEP_NETWORK,  F_TYPE_SEPARATOR,    NULL, {0}},
+    {"Auto NTP",        OPT_AUTO_NTP,     F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"DHCP",            OPT_IP_MODE,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"IP Config",       OPT_EDIT_IP,      F_TYPE_ACTION,       config_edit_ip, {0}},
+    {"Hostname",        OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
+    {"-- Security --",  OPT_SEP_SECURITY, F_TYPE_SEPARATOR,    NULL, {0}},
+    {"TLS",             OPT_ENABLE_TLS,   F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Cert Lifespan",   OPT_CERT_DATES,   F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Cert Owner",      OPT_CERT_OWNER,   F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
+    {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
+    {"HTTP Test",       OPT_HTTP_TEST,    F_TYPE_ACTION,       config_run_http_test, {0}},
+    {"DNS Test",        OPT_DNS_TEST,     F_TYPE_ACTION,       config_run_dns_test, {0}},
+    {"Ping Test",       OPT_PING_TEST,    F_TYPE_ACTION,       config_run_ping_test, {0}},
+    {"TCP Echo",        OPT_TCP_ECHO_TEST,F_TYPE_ACTION,       config_run_tcp_echo_test, {0}},
+    {"TLS Test",        OPT_TLS_TEST,     F_TYPE_ACTION,       config_run_tls_test, {0}},
+    {"-- Info --",      OPT_SEP_ABOUT,    F_TYPE_SEPARATOR,    NULL, {0}},
+    {"About",           OPT_ABOUT,        F_TYPE_ACTION,       config_show_about, {0}},
 };
 
 #define CONFIG_OPTION_COUNT (sizeof(config_options) / sizeof(config_options[0]))
@@ -259,13 +268,8 @@ static void option_sync_from_cfg(struct config_option *opt)
     case OPT_CERT_OWNER:
         option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_CERT_CHECK_OWNER) != 0);
         break;
-    case OPT_LOG_GROUP:
-    case OPT_VIEW_LOGS:
-    case OPT_NTP_TEST:
-    case OPT_HTTP_TEST:
-        // Action type, no sync needed
-        break;
     default:
+        // Action/separator types, no sync needed
         break;
     }
 }
@@ -296,14 +300,14 @@ static void config_sync_from_cfg(void)
 
 static bool option_is_selectable(const struct config_option *opt)
 {
-    return opt->type != F_TYPE_LABEL;
+    return opt->type != F_TYPE_LABEL && opt->type != F_TYPE_SEPARATOR;
 }
 
-static int find_first_option(ui_tab_t tab)
+static int find_first_selectable(void)
 {
     for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
     {
-        if (config_options[i].tab == tab && option_is_selectable(&config_options[i]))
+        if (option_is_selectable(&config_options[i]))
         {
             return (int)i;
         }
@@ -311,7 +315,7 @@ static int find_first_option(ui_tab_t tab)
     return -1;
 }
 
-static int find_next_option(ui_tab_t tab, int current, int dir)
+static int find_next_selectable(int current, int dir)
 {
     int i = current;
     while (1)
@@ -321,7 +325,7 @@ static int find_next_option(ui_tab_t tab, int current, int dir)
         {
             break;
         }
-        if (config_options[i].tab == tab && option_is_selectable(&config_options[i]))
+        if (option_is_selectable(&config_options[i]))
         {
             return i;
         }
@@ -368,8 +372,10 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_DNS_TEST:
     case OPT_PING_TEST:
     case OPT_TCP_ECHO_TEST:
+    case OPT_TLS_TEST:
     case OPT_VIEW_LOGS:
-        snprintf(buf, buf_len, "<Enter>");
+    case OPT_ABOUT:
+        snprintf(buf, buf_len, ">");
         break;
     case OPT_IP_MODE:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
@@ -377,7 +383,7 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_EDIT_IP:
         if (g_cfg.flags & LWIP_CFG_DHCP)
         {
-            snprintf(buf, buf_len, "auto");
+            snprintf(buf, buf_len, "(DHCP)");
         }
         else
         {
@@ -386,11 +392,9 @@ static void format_option_value(const struct config_option *opt, char *buf, size
                      g_cfg.ip_addr[2], g_cfg.ip_addr[3]);
         }
         break;
-    case OPT_CERT_SPKI:
-        snprintf(buf, buf_len, "ALWAYS");
+    case OPT_HOSTNAME:
+        snprintf(buf, buf_len, "%s", g_cfg.hostname);
         break;
-    case OPT_LOG_GROUP:
-    case OPT_CERT_GROUP:
     default:
         buf[0] = '\0';
         break;
@@ -444,6 +448,50 @@ static bool config_edit_ip(struct config_option *opt)
 {
     (void)opt;
     edit_ip_config(&g_cfg);
+    return true;
+}
+
+static bool config_edit_hostname(struct config_option *opt)
+{
+    (void)opt;
+    edit_hostname_config(&g_cfg);
+    return true;
+}
+
+static bool config_show_about(struct config_option *opt)
+{
+    (void)opt;
+
+    boot_ClearVRAM();
+    os_FontSelect(os_SmallFont);
+
+    ui_draw_header("About lwIP-CE");
+
+    int y = 26;
+    int line_h = 13;
+
+    os_SetDrawFGColor(UI_COLOR_FG);
+    os_FontDrawTransText("Lightweight IP stack for embedded systems", 10, y);
+
+    y += line_h + 2;
+    os_SetDrawFGColor(UI_COLOR_ACCENT);
+    os_FontDrawTransText("github.com/lwip-tcpip/lwip", 10, y);
+
+    y += line_h + 6;
+    os_SetDrawFGColor(UI_COLOR_FG);
+    os_FontDrawTransText("CE port: commandblockguy", 10, y);
+
+    y += line_h;
+    os_FontDrawTransText("USB Ethernet: acagliano", 10, y);
+
+    y += line_h + 4;
+    os_FontDrawTransText("TLS: acagliano, beckadamtheinventor,", 10, y);
+    y += line_h;
+    os_FontDrawTransText("     jacobly, calc84maniac", 10, y);
+
+    ui_draw_footer("<clear> Back", NULL);
+
+    while (os_GetCSC() != sk_Clear) { }
     return true;
 }
 
@@ -518,7 +566,8 @@ static void test_link_callback(struct netif *netif)
 static void test_status_callback(struct netif *netif)
 {
     (void)netif;
-    if (netif_is_up(netif) && !ip4_addr_isany(netif_ip4_addr(netif)))
+    if (netif_is_up(netif) && !ip4_addr_isany(netif_ip4_addr(netif))
+        && !ip4_addr_isloopback(netif_ip4_addr(netif)))
     {
         test_has_ip = true;
     }
@@ -640,7 +689,8 @@ static bool setup_test_network(const char *test_name)
 
     // Check initial state (callbacks only fire on changes)
     test_link_up = netif_is_link_up(netif_default);
-    if (netif_is_up(netif_default) && !ip4_addr_isany(netif_ip4_addr(netif_default)))
+    if (netif_is_up(netif_default) && !ip4_addr_isany(netif_ip4_addr(netif_default))
+        && !ip4_addr_isloopback(netif_ip4_addr(netif_default)))
     {
         test_has_ip = true;
     }
@@ -1445,6 +1495,292 @@ static bool config_run_tcp_echo_test(struct config_option *opt)
     return true;
 }
 
+/* ========== TLS Connection Test ========== */
+
+/* TLS test state */
+static volatile bool tls_test_connected = false;
+static volatile bool tls_test_error = false;
+static volatile bool tls_test_data_received = false;
+static char tls_test_recv_buf[256];
+static size_t tls_test_recv_len = 0;
+
+static err_t tls_test_connected_callback(void *arg, struct altcp_pcb *tpcb, err_t err)
+{
+    (void)arg;
+
+    if (err == ERR_OK)
+    {
+        tls_test_connected = true;
+
+        /* Send HTTP GET request */
+        const char *request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+        err_t write_err = altcp_write(tpcb, request, (u16_t)strlen(request), TCP_WRITE_FLAG_COPY);
+        if (write_err == ERR_OK)
+        {
+            altcp_output(tpcb);
+        }
+        else
+        {
+            tls_test_error = true;
+            altcp_abort(tpcb);
+            return ERR_ABRT;
+        }
+    }
+    else
+    {
+        tls_test_error = true;
+    }
+    return ERR_OK;
+}
+
+static err_t tls_test_recv_callback(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err)
+{
+    (void)arg;
+    (void)err;
+
+    if (p == NULL)
+    {
+        altcp_close(tpcb);
+        return ERR_OK;
+    }
+
+    if (!tls_test_data_received)
+    {
+        size_t to_copy = (p->tot_len < sizeof(tls_test_recv_buf) - 1)
+                             ? p->tot_len
+                             : (sizeof(tls_test_recv_buf) - 1);
+        pbuf_copy_partial(p, tls_test_recv_buf, (u16_t)to_copy, 0);
+        tls_test_recv_buf[to_copy] = '\0';
+        tls_test_recv_len = to_copy;
+        tls_test_data_received = true;
+    }
+
+    altcp_recved(tpcb, p->tot_len);
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+static void tls_test_error_callback(void *arg, err_t err)
+{
+    (void)arg;
+    (void)err;
+    tls_test_error = true;
+}
+
+static bool config_run_tls_test(struct config_option *opt)
+{
+    (void)opt;
+
+    if (!setup_test_network("TLS Test"))
+    {
+        return true;
+    }
+
+    os_FontDrawText("Target: example.com:443", 10, 50);
+
+    /* Resolve example.com */
+    int timeout;
+    fill_rect(0, 50, 320, 14, COLOR_WHITE);
+    os_FontDrawText("Resolving example.com...", 10, 50);
+    dns_result_ready = false;
+
+    ip_addr_t server_addr;
+    err_t err = dns_gethostbyname("example.com", &server_addr, dns_test_callback, NULL);
+
+    if (err == ERR_INPROGRESS)
+    {
+        timeout = 1000;
+        while (timeout > 0 && !dns_result_ready)
+        {
+            usb_HandleEvents();
+            sys_check_timeouts();
+            if (os_GetCSC() == sk_Clear)
+            {
+                cleanup_test_screen_fast();
+                return true;
+            }
+            delay_ms(10);
+            timeout--;
+        }
+
+        if (!dns_result_ready || dns_result_err != ERR_OK)
+        {
+            os_FontDrawText("DNS lookup failed", 10, 70);
+            cleanup_test_screen();
+            return true;
+        }
+        server_addr = dns_resolved_ip;
+    }
+    else if (err != ERR_OK)
+    {
+        os_FontDrawText("DNS lookup failed", 10, 70);
+        cleanup_test_screen();
+        return true;
+    }
+
+    /* Show resolved IP and reject loopback */
+    {
+        char ip_buf[48];
+        snprintf(ip_buf, sizeof(ip_buf), "-> %d.%d.%d.%d",
+                 ip4_addr1(&server_addr.u_addr.ip4),
+                 ip4_addr2(&server_addr.u_addr.ip4),
+                 ip4_addr3(&server_addr.u_addr.ip4),
+                 ip4_addr4(&server_addr.u_addr.ip4));
+        fill_rect(0, 50, 320, 14, COLOR_WHITE);
+        os_FontDrawText(ip_buf, 10, 50);
+
+        if (ip4_addr1(&server_addr.u_addr.ip4) == 127) {
+            os_FontDrawText("Loopback addr - DNS issue", 10, 70);
+            cleanup_test_screen();
+            return true;
+        }
+    }
+
+    /* Create ECDHE-only TLS config + connection (includes ~5s X25519 keygen) */
+    os_FontDrawText("X25519 keygen (~5s)...", 10, 70);
+
+    struct altcp_tls_ce_config *tls_conf = altcp_tls_ce_create_config_client_ecdhe("example.com");
+    if (!tls_conf)
+    {
+        os_FontDrawText("Config creation failed", 10, 90);
+        cleanup_test_screen();
+        return true;
+    }
+
+    /* Flush any pending events/cleanup from prior tests */
+    usb_HandleEvents();
+    sys_check_timeouts();
+
+    struct altcp_pcb *tls_pcb = altcp_tls_ce_new(tls_conf, IPADDR_TYPE_V4);
+    if (!tls_pcb)
+    {
+        altcp_tls_ce_free_config(tls_conf);
+        os_FontDrawText("TLS PCB creation failed", 10, 70);
+        cleanup_test_screen();
+        return true;
+    }
+
+    tls_test_connected = false;
+    tls_test_error = false;
+    tls_test_data_received = false;
+    tls_test_recv_len = 0;
+
+    altcp_arg(tls_pcb, NULL);
+    altcp_recv(tls_pcb, tls_test_recv_callback);
+    altcp_err(tls_pcb, tls_test_error_callback);
+
+    fill_rect(0, 70, 320, 14, COLOR_WHITE);
+    os_FontDrawText("Connecting + handshake...", 10, 70);
+
+    err = altcp_connect(tls_pcb, &server_addr, 443, tls_test_connected_callback);
+    if (err != ERR_OK)
+    {
+        altcp_abort(tls_pcb);
+        altcp_tls_ce_free_config(tls_conf);
+        os_FontDrawText("Connect failed", 10, 70);
+        cleanup_test_screen();
+        return true;
+    }
+
+    /* Wait for TLS handshake + connected callback (may take ~15-20s for ECDHE) */
+    timeout = 6000; /* 60 seconds */
+    while (timeout > 0 && !tls_test_connected && !tls_test_error)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+        if (!test_network_available())
+        {
+            altcp_abort(tls_pcb);
+            altcp_tls_ce_free_config(tls_conf);
+            cleanup_test_screen_fast();
+            return true;
+        }
+        if (os_GetCSC() == sk_Clear)
+        {
+            altcp_abort(tls_pcb);
+            altcp_tls_ce_free_config(tls_conf);
+            cleanup_test_screen_fast();
+            return true;
+        }
+        delay_ms(10);
+        timeout--;
+    }
+
+    if (tls_test_error || !tls_test_connected)
+    {
+        altcp_abort(tls_pcb);
+        altcp_tls_ce_free_config(tls_conf);
+        fill_rect(0, 70, 320, 14, COLOR_WHITE);
+        os_FontDrawText("Handshake failed/timeout", 10, 70);
+        cleanup_test_screen();
+        return true;
+    }
+
+    fill_rect(0, 70, 320, 14, COLOR_WHITE);
+    os_FontDrawText("TLS connected! Waiting...", 10, 70);
+
+    /* Wait for HTTP response */
+    timeout = 1000; /* 10 seconds */
+    while (timeout > 0 && !tls_test_data_received && !tls_test_error)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+        if (!test_network_available())
+        {
+            altcp_close(tls_pcb);
+            altcp_tls_ce_free_config(tls_conf);
+            cleanup_test_screen_fast();
+            return true;
+        }
+        if (os_GetCSC() == sk_Clear)
+        {
+            altcp_close(tls_pcb);
+            altcp_tls_ce_free_config(tls_conf);
+            cleanup_test_screen_fast();
+            return true;
+        }
+        delay_ms(10);
+        timeout--;
+    }
+
+    fill_rect(0, 70, 320, 150, COLOR_WHITE);
+    if (tls_test_data_received)
+    {
+        /* Check for HTTP 200 OK */
+        if (strstr(tls_test_recv_buf, "200 OK") != NULL)
+        {
+            os_SetDrawFGColor(0x07E0); /* Green */
+            os_FontDrawText("TLS Test PASSED!", 10, 70);
+            os_SetDrawFGColor(COLOR_BLACK);
+            os_FontDrawText("Got HTTP 200 from example.com", 10, 90);
+        }
+        else
+        {
+            os_FontDrawText("Got response (not 200):", 10, 70);
+        }
+
+        /* Show first line of response */
+        char *newline = strchr(tls_test_recv_buf, '\r');
+        if (newline) *newline = '\0';
+        char status_line[48];
+        snprintf(status_line, sizeof(status_line), "  %.44s", tls_test_recv_buf);
+        os_FontDrawText(status_line, 10, 110);
+    }
+    else
+    {
+        os_SetDrawFGColor(0xF800); /* Red */
+        os_FontDrawText("TLS Test FAILED", 10, 70);
+        os_SetDrawFGColor(COLOR_BLACK);
+        os_FontDrawText("No response received", 10, 90);
+    }
+
+    altcp_close(tls_pcb);
+    altcp_tls_ce_free_config(tls_conf);
+
+    cleanup_test_screen();
+    return true;
+}
+
 static const char *log_code_label(uint8_t module, uint8_t code)
 {
     if (module == LWIP_LOG_MODULE_USB)
@@ -1556,301 +1892,278 @@ static bool config_run_view_logs(struct config_option *opt)
     }
 }
 
-// Layout: 3 columns
-// TABS: 0-85, OPTIONS: 95-250, VALUES: 250-320
-#define COL_TABS_X 0
-#define COL_TABS_W 85
-#define COL_OPTIONS_X 95
-#define COL_OPTIONS_W 155
-#define COL_VALUES_X 250
-#define COL_VALUES_W 70
+// ============================================================================
+// NEW CLEAN UI DESIGN - Single scrollable menu
+// ============================================================================
 
-#define CONTENT_START_Y 30
-#define TAB_ROW_HEIGHT 20
-#define OPT_ROW_HEIGHT 14
-
-// VRAM is at 0xD40000, 320x240 in 8bpp mode (palette), or 16bpp (RGB565)
-// TI-OS uses 16bpp by default
-#define LCD_WIDTH 320
-#define LCD_HEIGHT 240
 #define VRAM_BASE ((uint16_t *)0xD40000)
 
-// Fill a rectangle with a 16-bit BGR565 color
-static void fill_rect(int x, int y, int w, int h, uint16_t color)
+// Layout constants
+#define UI_HEADER_H     22
+#define UI_FOOTER_H     28
+#define UI_CONTENT_Y    (UI_HEADER_H)
+#define UI_CONTENT_H    (LCD_HEIGHT - UI_HEADER_H - UI_FOOTER_H)
+#define UI_ROW_H        16
+#define UI_VISIBLE_ROWS (UI_CONTENT_H / UI_ROW_H)
+#define UI_MARGIN       8
+#define UI_VALUE_X      180
+#define UI_FOOTER_LINE_H 12
+
+// Fill rectangle with clipping
+static void ui_fill_rect(int x, int y, int w, int h, uint16_t color)
 {
-    if (x < 0)
-    {
-        w += x;
-        x = 0;
-    }
-    if (y < 0)
-    {
-        h += y;
-        y = 0;
-    }
-    if (x + w > LCD_WIDTH)
-    {
-        w = LCD_WIDTH - x;
-    }
-    if (y + h > LCD_HEIGHT)
-    {
-        h = LCD_HEIGHT - y;
-    }
-    if (w <= 0 || h <= 0)
-        return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
+    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
+    if (w <= 0 || h <= 0) return;
 
     for (int row = y; row < y + h; row++)
     {
         uint16_t *ptr = VRAM_BASE + row * LCD_WIDTH + x;
         for (int col = 0; col < w; col++)
-        {
             *ptr++ = color;
-        }
     }
 }
 
-// Colors defined at top of file
-
-#define BANNER_HEIGHT 24
-
-// Draw a key label with rounded appearance
-// Returns the width used (for chaining)
-static int draw_key_label(const char *key, int x, int y)
+// Alias for backward compatibility with test functions
+static void fill_rect(int x, int y, int w, int h, uint16_t color)
 {
-    int text_w = (int)os_FontGetWidth(key);
-    int box_w = text_w + 8;  // More padding
-    int box_h = 17;
-
-    // Draw white box with black border (2px thick for better visibility)
-    fill_rect(x, y, box_w, box_h, COLOR_WHITE);
-    fill_rect(x, y, box_w, 2, COLOR_BLACK);             // top (2px)
-    fill_rect(x, y + box_h - 2, box_w, 2, COLOR_BLACK); // bottom (2px)
-    fill_rect(x, y, 2, box_h, COLOR_BLACK);             // left (2px)
-    fill_rect(x + box_w - 2, y, 2, box_h, COLOR_BLACK); // right (2px)
-
-    os_SetDrawFGColor(COLOR_BLACK);
-    os_FontDrawTransText(key, x + 4, y + 2);
-
-    return box_w;
+    ui_fill_rect(x, y, w, h, color);
 }
 
-// Draw help text with key labels, centered
-static void draw_help_line(int y, const char *items[], int count)
+// Draw horizontal line
+static void ui_hline(int x, int y, int w, uint16_t color)
 {
-    // Calculate total width needed for all pairs
-    int total_width = 0;
-    for (int i = 0; i < count; i += 2)
+    ui_fill_rect(x, y, w, 1, color);
+}
+
+// Draw box with border
+static void ui_box(int x, int y, int w, int h, uint16_t bg, uint16_t border)
+{
+    ui_fill_rect(x, y, w, h, bg);
+    ui_fill_rect(x, y, w, 2, border);           // top
+    ui_fill_rect(x, y + h - 2, w, 2, border);   // bottom
+    ui_fill_rect(x, y, 2, h, border);           // left
+    ui_fill_rect(x + w - 2, y, 2, h, border);   // right
+}
+
+// Scroll content area by shifting VRAM pixels
+// amount > 0: scroll down by N rows (content moves up, new rows appear at bottom)
+// amount < 0: scroll up by N rows (content moves down, new rows appear at top)
+static void ui_scroll_content(int amount)
+{
+    if (amount == 0) return;
+
+    int pixel_shift = (amount > 0 ? amount : -amount) * UI_ROW_H;
+    if (pixel_shift >= UI_CONTENT_H)
     {
-        int key_w = (int)os_FontGetWidth(items[i]) + 8;  // Match box padding
-        int action_w = (int)os_FontGetWidth(items[i + 1]);
-        total_width += key_w + 3 + action_w;  // 3px between key and action
-        if (i > 0)
-            total_width += 16;  // spacing between pairs
-    }
-
-    // Center the content
-    int x = (LCD_WIDTH - total_width) / 2;
-
-    for (int i = 0; i < count; i += 2)
-    {
-        if (i > 0)
-            x += 16;  // spacing between pairs
-
-        x += draw_key_label(items[i], x, y);
-        x += 3;  // space between key box and action text
-
-        os_SetDrawFGColor(COLOR_BLACK);
-        os_FontDrawTransText(items[i + 1], x, y + 3);
-
-        // Move to next position
-        int action_w = (int)os_FontGetWidth(items[i + 1]);
-        x += action_w;
-    }
-}
-
-static void draw_help_area(int y_start, const char *items[], int count)
-{
-    // Fill help area with light gray background
-    fill_rect(0, y_start, LCD_WIDTH, LCD_HEIGHT - y_start, COLOR_LIGHT_GRAY);
-
-    // Draw separator line (2px for better visibility)
-    fill_rect(0, y_start, LCD_WIDTH, 2, COLOR_BLACK);
-
-    // Draw centered help content
-    draw_help_line(y_start + 5, items, count);
-}
-
-static const char *tab_labels[TAB_COUNT] = {
-    "General", "Network", "Security", "Test", "About"};
-
-// Draw top banner
-static void draw_banner(void)
-{
-    fill_rect(0, 0, LCD_WIDTH, BANNER_HEIGHT, COLOR_BLACK);
-    os_SetDrawFGColor(COLOR_WHITE);
-    os_FontDrawTransText("lwIP Config Wizard", 4, 6);
-}
-
-// Get Y position for a tab index
-static int tab_y(int idx)
-{
-    return CONTENT_START_Y + (idx * TAB_ROW_HEIGHT);
-}
-
-// Get Y position for an option's row within its tab
-static int option_row_y(ui_tab_t tab, int opt_idx)
-{
-    int y = CONTENT_START_Y;
-    for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
-    {
-        if (config_options[i].tab != tab)
-            continue;
-        if ((int)i == opt_idx)
-            return y;
-        y += OPT_ROW_HEIGHT;
-    }
-    return -1;
-}
-
-// Draw a single tab row
-static void draw_single_tab(int idx, bool selected)
-{
-    int y = tab_y(idx);
-    fill_rect(COL_TABS_X, y, COL_TABS_W, TAB_ROW_HEIGHT, selected ? COLOR_BLACK : COLOR_WHITE);
-    os_SetDrawFGColor(selected ? COLOR_WHITE : COLOR_BLACK);
-    os_FontDrawTransText(tab_labels[idx], COL_TABS_X + 4, y + 3);
-}
-
-// Draw all tabs
-static void draw_tabs(ui_tab_t tab)
-{
-    for (int i = 0; i < TAB_COUNT; i++)
-    {
-        draw_single_tab(i, i == (int)tab);
-    }
-}
-
-// Draw option selector marker (or clear it)
-// When active, draws a black bar with white ">" to show focus is in options column
-static void draw_option_marker(ui_tab_t tab, int opt_idx, bool show)
-{
-    int y = option_row_y(tab, opt_idx);
-    if (y < 0)
+        // Scrolling more than visible area, just clear
+        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
         return;
-    fill_rect(COL_OPTIONS_X - 1, y + 3, 6, OPT_ROW_HEIGHT, show ? COLOR_BLACK : COLOR_WHITE);
-}
-
-// Draw a single option's value (with optional edit highlight)
-static void draw_option_value_ex(int opt_idx, bool editing)
-{
-    const struct config_option *opt = &config_options[opt_idx];
-    int y = option_row_y(opt->tab, opt_idx);
-    if (y < 0)
-        return;
-
-    if (opt->id == OPT_EDIT_IP)
-    {
-        int line_h = (int)os_FontGetHeight() + 2;
-        int start_y = y + OPT_ROW_HEIGHT + 4;
-        if (!(g_cfg.flags & LWIP_CFG_DHCP))
-        {
-            int label_x = COL_OPTIONS_X + 15;
-            int value_x = COL_OPTIONS_X + 69;
-            fill_rect(COL_OPTIONS_X, start_y, COL_OPTIONS_W + COL_VALUES_W,
-                      line_h * 3 + 2, COLOR_WHITE);
-            os_SetDrawFGColor(COLOR_BLACK);
-            os_FontDrawTransText("IP:", label_x, start_y);
-            os_FontDrawTransText("Mask:", label_x, start_y + line_h);
-            os_FontDrawTransText("GW:", label_x, start_y + line_h * 2);
-
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
-                     g_cfg.ip_addr[0], g_cfg.ip_addr[1],
-                     g_cfg.ip_addr[2], g_cfg.ip_addr[3]);
-            os_FontDrawTransText(buf, value_x, start_y);
-            snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
-                     g_cfg.ip_netmask[0], g_cfg.ip_netmask[1],
-                     g_cfg.ip_netmask[2], g_cfg.ip_netmask[3]);
-            os_FontDrawTransText(buf, value_x, start_y + line_h);
-            snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
-                     g_cfg.ip_gateway[0], g_cfg.ip_gateway[1],
-                     g_cfg.ip_gateway[2], g_cfg.ip_gateway[3]);
-            os_FontDrawTransText(buf, value_x, start_y + line_h * 2);
-            return;
-        }
-        fill_rect(COL_OPTIONS_X, start_y, COL_OPTIONS_W + COL_VALUES_W,
-                  line_h * 3 + 2, COLOR_WHITE);
     }
 
-    // Clear value area (add 2 extra pixels height to catch last row)
-    fill_rect(COL_VALUES_X, y + 1, COL_VALUES_W, OPT_ROW_HEIGHT + 2, COLOR_WHITE);
+    uint16_t *vram = VRAM_BASE;
 
-    char value[24];
-    format_option_value(opt, value, sizeof(value));
-
-    if (editing)
+    if (amount > 0)
     {
-        // Draw black box around value to indicate editing
-        int edit_w = 315 - (COL_VALUES_X + 2);
-        if (edit_w < 0)
-        {
-            edit_w = 0;
-        }
-        fill_rect(COL_VALUES_X + 2, y + 1, edit_w, OPT_ROW_HEIGHT + 2, COLOR_BLACK);
-        os_SetDrawFGColor(COLOR_WHITE);
+        // Scroll down: shift pixels up
+        uint16_t *dst = vram + UI_CONTENT_Y * LCD_WIDTH;
+        uint16_t *src = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
+        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
+        memmove(dst, src, copy_pixels * sizeof(uint16_t));
+        // Clear the newly exposed area at bottom
+        ui_fill_rect(0, UI_CONTENT_Y + UI_CONTENT_H - pixel_shift, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
     }
     else
     {
-        os_SetDrawFGColor(COLOR_BLACK);
+        // Scroll up: shift pixels down
+        uint16_t *dst = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
+        uint16_t *src = vram + UI_CONTENT_Y * LCD_WIDTH;
+        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
+        memmove(dst, src, copy_pixels * sizeof(uint16_t));
+        // Clear the newly exposed area at top
+        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
     }
-    os_FontDrawTransText(value, COL_VALUES_X + 4, y + 2);
 }
 
-// Draw a single option's value
-static void draw_option_value(int opt_idx)
+// Draw header bar
+static void ui_draw_header(const char *title)
 {
-    draw_option_value_ex(opt_idx, false);
+    ui_fill_rect(0, 0, LCD_WIDTH, UI_HEADER_H, UI_COLOR_HEADER);
+    os_SetDrawFGColor(UI_COLOR_BG);
+    int tw = (int)os_FontGetWidth(title);
+    os_FontDrawTransText(title, (LCD_WIDTH - tw) / 2, 5);
 }
 
-// Draw all options and values for a tab
-static void draw_tab_content(ui_tab_t tab, int selected_idx)
+// Draw footer with help text (supports two lines)
+static void ui_draw_footer(const char *line1, const char *line2)
 {
-    // Clear options and values columns
-    fill_rect(COL_OPTIONS_X, CONTENT_START_Y, COL_OPTIONS_W + COL_VALUES_W, OPT_ROW_HEIGHT * 10, COLOR_WHITE);
+    int y = LCD_HEIGHT - UI_FOOTER_H;
+    ui_fill_rect(0, y, LCD_WIDTH, UI_FOOTER_H, UI_COLOR_SEPARATOR);
+    ui_hline(0, y, LCD_WIDTH, UI_COLOR_FG);
+    os_SetDrawFGColor(UI_COLOR_FG);
 
-    os_SetDrawFGColor(COLOR_BLACK);
-
-    if (tab == TAB_ABOUT)
+    // Center each line
+    if (line1)
     {
-        int y = CONTENT_START_Y;
-        os_FontDrawTransText("lwIP = lightweight IP", COL_OPTIONS_X + 4, y);
-        os_FontDrawTransText("stack for embedded", COL_OPTIONS_X + 4, y + 12);
-        os_FontDrawTransText("Ported From:", COL_OPTIONS_X + 4, y + 28);
-        os_FontDrawTransText("github.com/lwip-tcpip/lwip", COL_OPTIONS_X + 9, y + 40);
-        os_FontDrawTransText("Adapted by: commandblockguy", COL_OPTIONS_X + 4, y + 52);
-        os_FontDrawTransText("Ethernet by: acagliano", COL_OPTIONS_X + 4, y + 64);
-        os_FontDrawTransText("TLS by: acagliano,beckadam", COL_OPTIONS_X + 4, y + 76);
-        os_FontDrawTransText("jacobly, calc84maniac", COL_OPTIONS_X + 14, y + 88);
+        int w1 = (int)os_FontGetWidth(line1);
+        os_FontDrawTransText(line1, (LCD_WIDTH - w1) / 2, y + 2);
+    }
+    if (line2)
+    {
+        int w2 = (int)os_FontGetWidth(line2);
+        os_FontDrawTransText(line2, (LCD_WIDTH - w2) / 2, y + 2 + UI_FOOTER_LINE_H);
+    }
+}
+
+// Draw a single menu row
+static void ui_draw_row(int row_y, const char *label, const char *value,
+                        bool selected, bool editing, bool is_separator)
+{
+    uint16_t bg = UI_COLOR_BG;
+    uint16_t fg = UI_COLOR_FG;
+
+    if (is_separator)
+    {
+        // Separator: centered text with lines
+        ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, UI_COLOR_BG);
+        os_SetDrawFGColor(UI_COLOR_SEPARATOR);
+        int lw = (int)os_FontGetWidth(label);
+        int lx = (LCD_WIDTH - lw) / 2;
+        ui_hline(UI_MARGIN, row_y + UI_ROW_H/2, lx - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
+        ui_hline(lx + lw + 4, row_y + UI_ROW_H/2, LCD_WIDTH - lx - lw - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
+        os_FontDrawTransText(label, lx, row_y + 2);
         return;
     }
 
-    int y = CONTENT_START_Y;
-    for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
+    if (selected)
     {
-        const struct config_option *opt = &config_options[i];
-        if (opt->tab != tab)
-            continue;
-
-        // Draw option name
-        os_SetDrawFGColor(COLOR_BLACK);
-        os_FontDrawTransText(opt->name, COL_OPTIONS_X + 9, y + 2);
-
-        // Draw option value
-        draw_option_value_ex((int)i, false);
-
-        y += OPT_ROW_HEIGHT;
+        bg = editing ? UI_COLOR_EDIT_BG : UI_COLOR_SELECTED;
     }
-    (void)selected_idx; // Not used here anymore - marker drawn separately when focused
+
+    ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, bg);
+
+    // Selection indicator
+    if (selected)
+    {
+        ui_fill_rect(2, row_y + 2, 4, UI_ROW_H - 4, UI_COLOR_ACCENT);
+    }
+
+    // Label
+    os_SetDrawFGColor(fg);
+    os_FontDrawTransText(label, UI_MARGIN + 6, row_y + 2);
+
+    // Value (right-aligned area)
+    if (value && value[0])
+    {
+        int vw = (int)os_FontGetWidth(value);
+        int vx = LCD_WIDTH - UI_MARGIN - vw;
+        if (vx < UI_VALUE_X) vx = UI_VALUE_X;
+        os_FontDrawTransText(value, vx, row_y + 2);
+    }
+}
+
+// Calculate visible row Y position
+static int ui_row_y(int visible_idx)
+{
+    return UI_CONTENT_Y + visible_idx * UI_ROW_H;
+}
+
+// Draw scrollbar if needed
+static void ui_draw_scrollbar(int scroll_pos, int total_items)
+{
+    if (total_items <= UI_VISIBLE_ROWS) return;
+
+    int sb_x = LCD_WIDTH - 6;
+    int sb_h = UI_CONTENT_H;
+    int thumb_h = (sb_h * UI_VISIBLE_ROWS) / total_items;
+    if (thumb_h < 10) thumb_h = 10;
+    int thumb_y = UI_CONTENT_Y + (scroll_pos * (sb_h - thumb_h)) / (total_items - UI_VISIBLE_ROWS);
+
+    ui_fill_rect(sb_x, UI_CONTENT_Y, 4, sb_h, UI_COLOR_SEPARATOR);
+    ui_fill_rect(sb_x, thumb_y, 4, thumb_h, UI_COLOR_FG);
+}
+
+// Draw a single option row by index (for optimized redraws)
+static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, bool editing)
+{
+    int v = idx - scroll_pos;
+    if (v < 0 || v >= UI_VISIBLE_ROWS) return;
+    if (idx < 0 || idx >= (int)CONFIG_OPTION_COUNT) return;
+
+    const struct config_option *opt = &config_options[idx];
+    char value[32] = {0};
+
+    bool is_sep = (opt->type == F_TYPE_SEPARATOR);
+    if (!is_sep)
+    {
+        format_option_value(opt, value, sizeof(value));
+    }
+
+    ui_draw_row(ui_row_y(v), opt->name, value,
+                idx == selected_idx, editing && idx == selected_idx, is_sep);
+}
+
+// Draw entire menu
+static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
+{
+    // Clear content area
+    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
+
+    // Draw visible rows
+    for (int v = 0; v < UI_VISIBLE_ROWS; v++)
+    {
+        int idx = scroll_pos + v;
+        if (idx >= (int)CONFIG_OPTION_COUNT) break;
+
+        const struct config_option *opt = &config_options[idx];
+        char value[32] = {0};
+
+        bool is_sep = (opt->type == F_TYPE_SEPARATOR);
+        if (!is_sep)
+        {
+            format_option_value(opt, value, sizeof(value));
+        }
+
+        ui_draw_row(ui_row_y(v), opt->name, value,
+                    idx == selected_idx, editing && idx == selected_idx, is_sep);
+    }
+
+    ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
+}
+
+// Draw footer based on current mode
+static void ui_draw_mode_footer(bool editing)
+{
+    if (editing)
+    {
+        ui_draw_footer("<left/right> Adjust value",
+                       "<enter> Confirm  <clear> Cancel");
+    }
+    else
+    {
+        ui_draw_footer("<up/down> Navigate  <enter> Select",
+                       "<2nd> Save  <clear> Exit");
+    }
+}
+
+// Full screen redraw
+static void ui_draw_full(int selected_idx, int scroll_pos, bool editing)
+{
+    ui_draw_header("lwIP Configuration");
+    ui_draw_menu(selected_idx, scroll_pos, editing);
+    ui_draw_mode_footer(editing);
+}
+
+// Ensure selected item is visible, returns new scroll position
+static int ui_ensure_visible(int selected_idx, int scroll_pos)
+{
+    if (selected_idx < scroll_pos)
+        return selected_idx;
+    if (selected_idx >= scroll_pos + UI_VISIBLE_ROWS)
+        return selected_idx - UI_VISIBLE_ROWS + 1;
+    return scroll_pos;
 }
 
 static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes)
@@ -1872,310 +2185,365 @@ static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes)
     snprintf(buf, buf_len, "UTC%c%u:%02u", sign, hours, mins);
 }
 
-static void draw_ip_line(int y, const char *label, const uint8_t ip[4])
+// ============================================================================
+// Modal Dialog Functions - Clean professional design
+// ============================================================================
+
+// Draw a modal dialog box
+static void ui_dialog_box(int x, int y, int w, int h, const char *title)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%s: %u.%u.%u.%u", label, ip[0], ip[1], ip[2], ip[3]);
-    os_FontDrawText(buf, 4, y);
+    // Shadow effect
+    ui_fill_rect(x + 3, y + 3, w, h, UI_COLOR_SEPARATOR);
+    // Main box
+    ui_box(x, y, w, h, UI_COLOR_BG, UI_COLOR_FG);
+    // Title bar
+    ui_fill_rect(x + 2, y + 2, w - 4, 18, UI_COLOR_HEADER);
+    os_SetDrawFGColor(UI_COLOR_BG);
+    int tw = (int)os_FontGetWidth(title);
+    os_FontDrawTransText(title, x + (w - tw) / 2, y + 4);
 }
 
-static void draw_ip_row(int y, const char *label, const uint8_t *addr,
-                        bool selected_field, int selected_octet)
+// Draw text input field
+static void ui_input_field(int x, int y, int w, const char *text, bool cursor)
 {
-    uint16_t row_bg = selected_field ? 0xE71C : COLOR_WHITE;
-    fill_rect(COL_OPTIONS_X, y - 2, 220, 26, row_bg);
+    ui_fill_rect(x, y, w, 16, UI_COLOR_BG);
+    ui_fill_rect(x, y + 14, w, 2, UI_COLOR_FG);
+    os_SetDrawFGColor(UI_COLOR_FG);
+    os_FontDrawTransText(text, x + 2, y + 2);
 
-    os_SetDrawFGColor(COLOR_BLACK);
-    os_FontDrawTransText(label, COL_OPTIONS_X + 4, y);
+    // Draw block cursor after text (flush with underline)
+    if (cursor)
+    {
+        int text_w = (int)os_FontGetWidth(text);
+        ui_fill_rect(x + 2 + text_w + 1, y + 4, 8, 10, UI_COLOR_ACCENT);
+    }
+}
+
+// Draw slider control
+static void ui_slider(int x, int y, int w, int value, int min_val, int max_val)
+{
+    int range = max_val - min_val;
+    int pos = range > 0 ? ((value - min_val) * (w - 12)) / range : 0;
+
+    // Track
+    ui_fill_rect(x, y + 5, w, 4, UI_COLOR_SEPARATOR);
+    // Thumb
+    ui_fill_rect(x + pos, y, 12, 14, UI_COLOR_ACCENT);
+}
+
+// Map scancode to digit character
+static char scancode_to_digit(uint8_t key)
+{
+    switch (key)
+    {
+        case sk_0: return '0';
+        case sk_1: return '1';
+        case sk_2: return '2';
+        case sk_3: return '3';
+        case sk_4: return '4';
+        case sk_5: return '5';
+        case sk_6: return '6';
+        case sk_7: return '7';
+        case sk_8: return '8';
+        case sk_9: return '9';
+        default: return 0;
+    }
+}
+
+// Helper to draw just the number input field
+static void ui_draw_number_input(int x, int y, int w, const char *digits)
+{
+    ui_input_field(x, y, w, digits, true);
+}
+
+// Numeric entry dialog (0-255)
+static bool ui_edit_number(const char *title, uint8_t *value, uint8_t max_val)
+{
+    char digits[4] = {0};
+    int pos = 0;
+
+    // Dialog layout
+    const int dlg_x = 70, dlg_y = 80, dlg_w = 180, dlg_h = 60;
+    const int input_x = 90, input_y = 110, input_w = 100;
+
+    // Initial full draw
+    ui_dialog_box(dlg_x, dlg_y, dlg_w, dlg_h, title);
+    ui_draw_number_input(input_x, input_y, input_w, digits);
+    ui_draw_footer("<0-9> Type  <del> Back",
+                   "<enter> OK  <clear> Cancel");
+
+    while (1)
+    {
+        uint8_t key = 0;
+        do { key = os_GetCSC(); } while (key == 0);
+
+        if (key == sk_Clear) return false;
+        if (key == sk_Enter && pos > 0)
+        {
+            int val = 0;
+            for (int i = 0; i < pos; i++)
+                val = val * 10 + (digits[i] - '0');
+            if (val <= max_val)
+            {
+                *value = (uint8_t)val;
+                return true;
+            }
+            // Value too large - just continue, don't update
+            continue;
+        }
+        if (key == sk_Del && pos > 0)
+        {
+            digits[--pos] = 0;
+            ui_draw_number_input(input_x, input_y, input_w, digits);
+            continue;
+        }
+
+        char c = scancode_to_digit(key);
+        if (c && pos < 3)
+        {
+            digits[pos++] = c;
+            digits[pos] = 0;
+            ui_draw_number_input(input_x, input_y, input_w, digits);
+        }
+    }
+}
+
+// Input modes for text editing
+typedef enum {
+    INPUT_MODE_LOWER = 0,  // a-z
+    INPUT_MODE_UPPER,      // A-Z
+    INPUT_MODE_DIGIT,      // 0-9
+    INPUT_MODE_COUNT
+} input_mode_t;
+
+static const char *input_mode_names[INPUT_MODE_COUNT] = {"a-z", "A-Z", "0-9"};
+
+static char scancode_to_alpha(uint8_t key, input_mode_t mode)
+{
+    // Letter keymap (lowercase)
+    static const char keymap[64] = {
+        0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   '"', 'w', 'r', 'm', 'h', 0,
+        0,   '?', '[', 'v', 'q', 'l', 'g', 0,
+        0,   ':', 'z', 'u', 'p', 'k', 'f', 'c',
+        0,   ' ', 'y', 't', 'o', 'j', 'e', 'b',
+        0,   0,   'x', 's', 'n', 'i', 'd', 'a',
+        0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0
+    };
+
+    // Handle digit mode
+    if (mode == INPUT_MODE_DIGIT)
+    {
+        if (key == sk_0) return '0';
+        if (key == sk_1) return '1';
+        if (key == sk_2) return '2';
+        if (key == sk_3) return '3';
+        if (key == sk_4) return '4';
+        if (key == sk_5) return '5';
+        if (key == sk_6) return '6';
+        if (key == sk_7) return '7';
+        if (key == sk_8) return '8';
+        if (key == sk_9) return '9';
+        // Allow space in digit mode too
+        if (key < 64 && keymap[key] == ' ') return ' ';
+        return 0;
+    }
+
+    // Handle letter modes
+    if (key >= 64) return 0;
+    char c = keymap[key];
+    if (c >= 'a' && c <= 'z' && mode == INPUT_MODE_UPPER)
+    {
+        c = (char)(c - 'a' + 'A');
+    }
+    return c;
+}
+
+// Helper to draw just the mode indicator
+static void ui_draw_hostname_mode(int y, input_mode_t mode)
+{
+    // Clear mode area and redraw
+    ui_fill_rect(55, y, 100, 14, UI_COLOR_BG);
+    char mode_str[24];
+    snprintf(mode_str, sizeof(mode_str), "Mode: %s", input_mode_names[mode]);
+    os_SetDrawFGColor(UI_COLOR_ACCENT);
+    os_FontDrawTransText(mode_str, 55, y);
+}
+
+// Helper to draw just the hostname input field
+static void ui_draw_hostname_input(int y, const char *buffer)
+{
+    ui_input_field(55, y, 200, buffer, true);
+}
+
+static void edit_hostname_config(lwip_app_config_t *cfg)
+{
+    char buffer[LWIP_CFG_HOSTNAME_MAX];
+    strncpy(buffer, cfg->hostname, LWIP_CFG_HOSTNAME_MAX - 1);
+    buffer[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
+    int pos = (int)strlen(buffer);
+    input_mode_t mode = INPUT_MODE_LOWER;
+
+    // Dialog layout constants
+    const int dlg_x = 30, dlg_y = 60, dlg_w = 260, dlg_h = 70;
+    const int mode_y = 82;
+    const int input_y = 98;
+
+    // Initial full draw
+    ui_dialog_box(dlg_x, dlg_y, dlg_w, dlg_h, "Edit Hostname");
+    ui_draw_hostname_mode(mode_y, mode);
+    ui_draw_hostname_input(input_y, buffer);
+    ui_draw_footer("<alpha> Mode  <del> Back",
+                   "<enter> OK  <clear> Cancel");
+
+    while (1)
+    {
+        uint8_t key = 0;
+        do { key = os_GetCSC(); } while (key == 0);
+
+        if (key == sk_Clear) return;
+        if (key == sk_Enter)
+        {
+            strncpy(cfg->hostname, buffer, LWIP_CFG_HOSTNAME_MAX - 1);
+            cfg->hostname[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
+            return;
+        }
+        if (key == sk_Del && pos > 0)
+        {
+            buffer[--pos] = '\0';
+            ui_draw_hostname_input(input_y, buffer);
+            continue;
+        }
+        if (key == sk_Alpha)
+        {
+            mode = (input_mode_t)((mode + 1) % INPUT_MODE_COUNT);
+            ui_draw_hostname_mode(mode_y, mode);
+            continue;
+        }
+
+        char c = scancode_to_alpha(key, mode);
+        if (c && pos < LWIP_CFG_HOSTNAME_MAX - 1)
+        {
+            buffer[pos++] = c;
+            buffer[pos] = '\0';
+            ui_draw_hostname_input(input_y, buffer);
+        }
+    }
+}
+
+// IP config layout constants
+#define IP_ROW_Y(f)     (50 + (f) * 28)
+#define IP_LABEL_X      20
+#define IP_ADDR_X       100
+#define IP_OCTET_W      38
+
+// Draw just the octets for a single IP row (not the label)
+static void ui_draw_ip_octets(int y, const uint8_t *addr, bool selected, int sel_octet)
+{
+    // Clear octet area
+    ui_fill_rect(IP_ADDR_X - 2, y + 2, 4 * IP_OCTET_W, 18,
+                 selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
 
     for (int o = 0; o < 4; o++)
     {
         char buf[8];
         snprintf(buf, sizeof(buf), "%u", addr[o]);
-        int x = COL_OPTIONS_X + 60 + o * 40;
+        int x = IP_ADDR_X + o * IP_OCTET_W;
 
-        if (selected_field && o == selected_octet)
+        if (selected && o == sel_octet)
         {
-            fill_rect(x - 2, y + 10, 30, 14, COLOR_BLACK);
-            os_SetDrawFGColor(COLOR_WHITE);
+            ui_fill_rect(x - 2, y + 2, 32, 18, UI_COLOR_ACCENT);
+            os_SetDrawFGColor(UI_COLOR_BG);
         }
         else
         {
-            os_SetDrawFGColor(COLOR_BLACK);
+            os_SetDrawFGColor(UI_COLOR_FG);
         }
-        os_FontDrawTransText(buf, x, y + 12);
+        os_FontDrawTransText(buf, x, y + 4);
 
         if (o < 3)
         {
-            os_SetDrawFGColor(COLOR_BLACK);
-            os_FontDrawTransText(".", x + 22, y + 12);
+            os_SetDrawFGColor(UI_COLOR_FG);
+            os_FontDrawTransText(".", x + 26, y + 4);
         }
     }
 }
 
-// Slider dialog for heap size
-// Returns true if value was changed
-static bool show_heap_slider_dialog(uint16_t *heap_bytes)
+// Draw full IP row (label + octets)
+static void ui_draw_ip_row_full(int y, const char *label, const uint8_t *addr,
+                                 bool selected, int sel_octet)
 {
-    uint16_t orig = *heap_bytes;
-    bool done = false;
+    uint16_t bg = selected ? UI_COLOR_SELECTED : UI_COLOR_BG;
+    ui_fill_rect(10, y, 300, 22, bg);
 
-    // Calculate slider position (0-100)
-    int range = LWIP_CFG_HEAP_MAX - LWIP_CFG_HEAP_MIN;
+    os_SetDrawFGColor(UI_COLOR_FG);
+    os_FontDrawTransText(label, IP_LABEL_X, y + 4);
 
-    while (!done)
-    {
-        // Draw dialog
-        fill_rect(40, 80, 240, 80, COLOR_WHITE);
-        fill_rect(40, 80, 240, 2, COLOR_BLACK);
-        fill_rect(40, 158, 240, 2, COLOR_BLACK);
-        fill_rect(40, 80, 2, 80, COLOR_BLACK);
-        fill_rect(278, 80, 2, 80, COLOR_BLACK);
-
-        os_SetDrawFGColor(COLOR_BLACK);
-        os_FontDrawTransText("Max Heap Size", 100, 90);
-
-        // Draw slider track
-        fill_rect(60, 115, 200, 6, COLOR_BLACK);
-
-        // Calculate position (0-192 within the track)
-        int pos = ((*heap_bytes - LWIP_CFG_HEAP_MIN) * 192) / range;
-        fill_rect(60 + pos, 110, 8, 16, COLOR_BLACK);
-
-        // Draw value
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%uk", *heap_bytes / 1024u);
-        os_FontDrawTransText(buf, 140, 135);
-
-        // Draw help with key boxes
-        int hx = 55;
-        hx += draw_key_label("<", hx, 146) + 1;
-        hx += draw_key_label(">", hx, 146) + 3;
-        os_SetDrawFGColor(COLOR_BLACK);
-        os_FontDrawTransText("Adjust", hx, 147);
-        hx += 42;
-        hx += draw_key_label("enter", hx, 146) + 3;
-        os_FontDrawTransText("OK", hx, 147);
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            *heap_bytes = orig;
-            return false;
-        }
-        if (key == sk_Enter)
-        {
-            done = true;
-        }
-        if (key == sk_Left && *heap_bytes > LWIP_CFG_HEAP_MIN)
-        {
-            *heap_bytes -= LWIP_CFG_HEAP_STEP;
-        }
-        if (key == sk_Right && *heap_bytes + LWIP_CFG_HEAP_STEP <= LWIP_CFG_HEAP_MAX)
-        {
-            *heap_bytes += LWIP_CFG_HEAP_STEP;
-        }
-    }
-    return *heap_bytes != orig;
-}
-
-// Numeric IP entry dialog with manual digit input
-static bool edit_ip_octet(uint8_t *octet)
-{
-    char digits[4] = {0};
-    int pos = 0;
-    bool done = false;
-    bool needs_redraw = true;
-    const int box_x = 100;
-    const int box_y = 100;
-    const int box_w = 120;
-    const int box_h = 40;
-    const int text_x = 145;
-    const int text_y = 115;
-    const int text_w = 30;
-    const int text_h = 12;
-
-    while (!done)
-    {
-        if (needs_redraw)
-        {
-            // Draw entry box
-            fill_rect(box_x, box_y, box_w, box_h, COLOR_WHITE);
-            fill_rect(box_x, box_y, box_w, 2, COLOR_BLACK);
-            fill_rect(box_x, box_y + box_h - 2, box_w, 2, COLOR_BLACK);
-            fill_rect(box_x, box_y, 2, box_h, COLOR_BLACK);
-            fill_rect(box_x + box_w - 2, box_y, 2, box_h, COLOR_BLACK);
-
-            os_SetDrawFGColor(COLOR_BLACK);
-            char buf[8];
-            snprintf(buf, sizeof(buf), "%s_", digits);
-            os_FontDrawTransText(buf, text_x, text_y);
-            needs_redraw = false;
-        }
-
-        uint8_t key = os_GetCSC();
-        if (key == 0)
-        {
-            continue;
-        }
-        if (key == sk_Clear)
-        {
-            return false;
-        }
-        if (key == sk_Enter && pos > 0)
-        {
-            int val = 0;
-            for (int i = 0; i < pos; i++)
-            {
-                val = val * 10 + (digits[i] - '0');
-            }
-            if (val <= 255)
-            {
-                *octet = (uint8_t)val;
-                return true;
-            }
-        }
-        if (key == sk_Del && pos > 0)
-        {
-            pos--;
-            digits[pos] = 0;
-            fill_rect(text_x, text_y, text_w, text_h, COLOR_WHITE);
-            os_SetDrawFGColor(COLOR_BLACK);
-            char buf[8];
-            snprintf(buf, sizeof(buf), "%s_", digits);
-            os_FontDrawTransText(buf, text_x, text_y);
-        }
-        // Number keys 0-9
-        if (pos < 3)
-        {
-            char c = 0;
-            if (key == sk_0)
-                c = '0';
-            else if (key == sk_1)
-                c = '1';
-            else if (key == sk_2)
-                c = '2';
-            else if (key == sk_3)
-                c = '3';
-            else if (key == sk_4)
-                c = '4';
-            else if (key == sk_5)
-                c = '5';
-            else if (key == sk_6)
-                c = '6';
-            else if (key == sk_7)
-                c = '7';
-            else if (key == sk_8)
-                c = '8';
-            else if (key == sk_9)
-                c = '9';
-            if (c)
-            {
-                digits[pos++] = c;
-                digits[pos] = 0;
-                fill_rect(text_x, text_y, text_w, text_h, COLOR_WHITE);
-                os_SetDrawFGColor(COLOR_BLACK);
-                char buf[8];
-                snprintf(buf, sizeof(buf), "%s_", digits);
-                os_FontDrawTransText(buf, text_x, text_y);
-            }
-        }
-    }
-    return false;
+    ui_draw_ip_octets(y, addr, selected, sel_octet);
 }
 
 static void edit_ip_config(lwip_app_config_t *cfg)
 {
-    int field = 0; // 0=IP, 1=GW, 2=Mask
-    int octet = 0; // 0-3
-    bool done = false;
-    bool needs_redraw = true;
-    const char *labels[3] = {"IP Addr", "Gateway", "Netmask"};
+    int field = 0;
+    int octet = 0;
+    const char *labels[3] = {"IP", "Gateway", "Netmask"};
     uint8_t *addrs[3] = {cfg->ip_addr, cfg->ip_gateway, cfg->ip_netmask};
 
-    while (!done)
+    // Initial full draw
+    boot_ClearVRAM();
+    os_FontSelect(os_SmallFont);
+    ui_draw_header("IP Configuration");
+    for (int f = 0; f < 3; f++)
     {
-        if (needs_redraw)
+        ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
+    }
+    ui_draw_footer("<arrows> Navigate  <enter> Edit",
+                   "<clear> Done");
+
+    while (1)
+    {
+        uint8_t key = 0;
+        do { key = os_GetCSC(); } while (key == 0);
+
+        if (key == sk_Clear) return;
+
+        int old_field = field;
+        int old_octet = octet;
+
+        if (key == sk_Up && field > 0) field--;
+        else if (key == sk_Down && field < 2) field++;
+        else if (key == sk_Left && octet > 0) octet--;
+        else if (key == sk_Right && octet < 3) octet++;
+        else if (key == sk_Enter)
         {
-            boot_ClearVRAM();
-            os_FontSelect(os_SmallFont);
-
-            draw_banner();
-            os_SetDrawFGColor(COLOR_BLACK);
-            os_FontDrawTransText("IP Configuration", COL_OPTIONS_X + 20, CONTENT_START_Y);
-
-            for (int f = 0; f < 3; f++)
+            if (ui_edit_number("Edit Octet", &addrs[field][octet], 255))
             {
-                int y = CONTENT_START_Y + 20 + f * 30;
-                draw_ip_row(y, labels[f], addrs[f], f == field, octet);
-            }
-
-            // Draw help with key boxes
-            const char *ip_help[] = {"arrows", "Move", "enter", "Edit", "clear", "Done"};
-            draw_help_area(200, ip_help, 6);
-            needs_redraw = false;
-        }
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            done = true;
-            continue;
-        }
-        if (key == sk_Up && field > 0)
-        {
-            int prev_field = field;
-            field--;
-            draw_ip_row(CONTENT_START_Y + 20 + prev_field * 30, labels[prev_field],
-                        addrs[prev_field], false, octet);
-            draw_ip_row(CONTENT_START_Y + 20 + field * 30, labels[field],
-                        addrs[field], true, octet);
-            continue;
-        }
-        if (key == sk_Down && field < 2)
-        {
-            int prev_field = field;
-            field++;
-            draw_ip_row(CONTENT_START_Y + 20 + prev_field * 30, labels[prev_field],
-                        addrs[prev_field], false, octet);
-            draw_ip_row(CONTENT_START_Y + 20 + field * 30, labels[field],
-                        addrs[field], true, octet);
-            continue;
-        }
-        if (key == sk_Left && octet > 0)
-        {
-            octet--;
-            draw_ip_row(CONTENT_START_Y + 20 + field * 30, labels[field],
-                        addrs[field], true, octet);
-            continue;
-        }
-        if (key == sk_Right && octet < 3)
-        {
-            octet++;
-            draw_ip_row(CONTENT_START_Y + 20 + field * 30, labels[field],
-                        addrs[field], true, octet);
-            continue;
-        }
-        if (key == sk_Enter)
-        {
-            if (edit_ip_octet(&addrs[field][octet]))
-            {
-                fill_rect(100, 100, 120, 40, COLOR_WHITE);
+                // Full redraw after modal dialog
+                boot_ClearVRAM();
+                os_FontSelect(os_SmallFont);
+                ui_draw_header("IP Configuration");
                 for (int f = 0; f < 3; f++)
                 {
-                    int y = CONTENT_START_Y + 20 + f * 30;
-                    draw_ip_row(y, labels[f], addrs[f], f == field, octet);
+                    ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
                 }
+                ui_draw_footer("<arrows> Navigate  <enter> Edit",
+                               "<clear> Done");
             }
-            else
-            {
-                fill_rect(100, 100, 120, 40, COLOR_WHITE);
-                for (int f = 0; f < 3; f++)
-                {
-                    int y = CONTENT_START_Y + 20 + f * 30;
-                    draw_ip_row(y, labels[f], addrs[f], f == field, octet);
-                }
-            }
+            continue;
+        }
+
+        // Only redraw changed rows
+        if (field != old_field)
+        {
+            // Row changed - redraw old and new rows
+            ui_draw_ip_row_full(IP_ROW_Y(old_field), labels[old_field], addrs[old_field], false, -1);
+            ui_draw_ip_row_full(IP_ROW_Y(field), labels[field], addrs[field], true, octet);
+        }
+        else if (octet != old_octet)
+        {
+            // Just octet changed - only redraw octets on current row
+            ui_draw_ip_octets(IP_ROW_Y(field), addrs[field], true, octet);
         }
     }
 }
@@ -2352,23 +2720,12 @@ int main(void)
     boot_ClearVRAM();
     os_FontSelect(os_SmallFont);
 
-    ui_tab_t tab = TAB_GENERAL;
-    int sel_index[TAB_COUNT];
-    for (int i = 0; i < TAB_COUNT; i++)
-    {
-        sel_index[i] = find_first_option((ui_tab_t)i);
-    }
+    // New single-menu state
+    int selected = find_first_selectable();
+    int scroll_pos = 0;
     edit_mode_t edit_mode = EDIT_NONE;
-    focus_mode_t focus = FOCUS_TABS;
     int edit_option = -1;
-
-    // Initial full draw
-    draw_banner();
-    draw_tabs(tab);
-    draw_tab_content(tab, sel_index[tab]);
-    // Draw help line with key boxes
-    const char *main_help[] = {"2nd", "Save", "clear", "Exit"};
-    draw_help_area(200, main_help, 4);
+    bool needs_redraw = true;
 
     while (run_main)
     {
@@ -2379,33 +2736,42 @@ int main(void)
             sys_check_timeouts();
         }
 
-        uint8_t key = os_GetCSC();
-        if (key == 0)
+        if (needs_redraw)
         {
-            continue;
+            ui_draw_full(selected, scroll_pos, edit_mode != EDIT_NONE);
+            needs_redraw = false;
         }
+
+        uint8_t key = os_GetCSC();
+        if (key == 0) continue;
+
+        // Exit
         if (key == sk_Clear && edit_mode == EDIT_NONE)
         {
             run_main = false;
             break;
         }
+
+        // Save
         if (key == sk_2nd)
         {
             lwip_app_config_save(&g_cfg);
             config_sync_from_cfg();
-            // Redraw all values in current tab
-            draw_tab_content(tab, sel_index[tab]);
+            ui_draw_menu(selected, scroll_pos, false);
             continue;
         }
 
+        // Handle edit mode (slider adjustments)
         if (edit_mode != EDIT_NONE)
         {
             if (key == sk_Clear || key == sk_Enter)
             {
-                int prev_opt = edit_option;
+                int old_edit = edit_option;
                 edit_mode = EDIT_NONE;
                 edit_option = -1;
-                draw_option_value(prev_opt); // Remove edit highlight
+                // Redraw the single row exiting edit mode and update footer
+                ui_draw_single_option(old_edit, scroll_pos, selected, false);
+                ui_draw_mode_footer(false);
                 continue;
             }
             bool value_changed = false;
@@ -2473,150 +2839,120 @@ int main(void)
             }
             if (value_changed)
             {
-                draw_option_value_ex(edit_option, true); // Redraw with edit highlight
+                // Only redraw the single row being edited
+                ui_draw_single_option(selected, scroll_pos, selected, true);
             }
             continue;
         }
 
-        if (key == sk_Right)
+        // Navigation - Up/Down
+        if (key == sk_Up || key == sk_Down)
         {
-            if (focus == FOCUS_TABS)
+            int dir = (key == sk_Up) ? -1 : 1;
+            int new_sel = find_next_selectable(selected, dir);
+            if (new_sel != selected)
             {
-                if (sel_index[tab] >= 0)
+                int old_sel = selected;
+                int old_scroll = scroll_pos;
+                selected = new_sel;
+                scroll_pos = ui_ensure_visible(selected, scroll_pos);
+                if (scroll_pos != old_scroll)
                 {
-                    focus = FOCUS_OPTIONS;
-                    draw_option_marker(tab, sel_index[tab], true);
-                }
-            }
-            continue;
-        }
-        if (key == sk_Up)
-        {
-            if (focus == FOCUS_TABS)
-            {
-                ui_tab_t old_tab = tab;
-                tab = (tab == 0) ? (TAB_COUNT - 1) : (ui_tab_t)(tab - 1);
-                draw_single_tab((int)old_tab, false);
-                draw_single_tab((int)tab, true);
-                draw_tab_content(tab, sel_index[tab]);
-            }
-            else if (sel_index[tab] >= 0)
-            {
-                int old_idx = sel_index[tab];
-                sel_index[tab] = find_next_option(tab, sel_index[tab], -1);
-                if (old_idx != sel_index[tab])
-                {
-                    draw_option_marker(tab, old_idx, false);
-                    draw_option_marker(tab, sel_index[tab], true);
-                }
-            }
-            continue;
-        }
-        if (key == sk_Down)
-        {
-            if (focus == FOCUS_TABS)
-            {
-                ui_tab_t old_tab = tab;
-                tab = (tab == (TAB_COUNT - 1)) ? 0 : (ui_tab_t)(tab + 1);
-                draw_single_tab((int)old_tab, false);
-                draw_single_tab((int)tab, true);
-                draw_tab_content(tab, sel_index[tab]);
-            }
-            else if (sel_index[tab] >= 0)
-            {
-                int old_idx = sel_index[tab];
-                sel_index[tab] = find_next_option(tab, sel_index[tab], 1);
-                if (old_idx != sel_index[tab])
-                {
-                    draw_option_marker(tab, old_idx, false);
-                    draw_option_marker(tab, sel_index[tab], true);
-                }
-            }
-            continue;
-        }
-        if (key == sk_Enter)
-        {
-            if (focus == FOCUS_TABS)
-            {
-                // Enter on tab - switch to options (like Right arrow)
-                if (sel_index[tab] >= 0)
-                {
-                    focus = FOCUS_OPTIONS;
-                    draw_option_marker(tab, sel_index[tab], true);
-                }
-                continue;
-            }
-            int opt_index = sel_index[tab];
-            if (opt_index >= 0)
-            {
-                struct config_option *opt = &config_options[opt_index];
-                if (opt->type == F_TYPE_INT_SLIDER)
-                {
-                    if (opt->id == OPT_MAX_HEAP)
+                    // Page shifted - use fast VRAM scroll
+                    int scroll_diff = scroll_pos - old_scroll;
+                    int abs_diff = scroll_diff > 0 ? scroll_diff : -scroll_diff;
+
+                    // Redraw old selection as unselected BEFORE scroll
+                    // so shifted pixels don't have selection highlight
+                    ui_draw_single_option(old_sel, old_scroll, old_sel + 1, false);
+
+                    // Shift VRAM content
+                    ui_scroll_content(scroll_diff);
+
+                    // Draw the new rows that scrolled into view
+                    if (scroll_diff > 0)
                     {
-                        edit_mode = EDIT_HEAP;
-                        edit_option = opt_index;
-                        draw_option_value_ex(opt_index, true); // Show edit highlight
-                    }
-                    else if (opt->id == OPT_TZ_OFFSET)
-                    {
-                        edit_mode = EDIT_TZ;
-                        edit_option = opt_index;
-                        draw_option_value_ex(opt_index, true); // Show edit highlight
-                    }
-                    else if (opt->id == OPT_LOG_SIZE)
-                    {
-                        edit_mode = EDIT_LOG;
-                        edit_option = opt_index;
-                        draw_option_value_ex(opt_index, true); // Show edit highlight
-                    }
-                }
-                else if (opt->setter)
-                {
-                    if (opt->type == F_TYPE_ACTION && opt->id == OPT_EDIT_IP &&
-                        (g_cfg.flags & LWIP_CFG_DHCP))
-                    {
-                        continue;
-                    }
-                    if (opt->setter(opt))
-                    {
-                        // Full dialogs (IP config) clear the screen, so redraw everything
-                        if (opt->type == F_TYPE_ACTION)
+                        // Scrolled down: draw new rows at bottom
+                        for (int i = 0; i < abs_diff && i < UI_VISIBLE_ROWS; i++)
                         {
-                            draw_banner();
-                            draw_tabs(tab);
-                            draw_tab_content(tab, sel_index[tab]);
-                            const char *main_help[] = {"2nd", "Save", "clear", "Exit"};
-                            draw_help_area(200, main_help, 4);
-                            if (focus == FOCUS_OPTIONS)
-                            {
-                                draw_option_marker(tab, sel_index[tab], true);
-                            }
-                        }
-                        else
-                        {
-                            draw_option_value(opt_index);
-                            if (opt->id == OPT_IP_MODE)
-                            {
-                                for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
-                                {
-                                    if (config_options[i].id == OPT_EDIT_IP)
-                                    {
-                                        draw_option_value((int)i);
-                                        break;
-                                    }
-                                }
-                            }
+                            int idx = scroll_pos + UI_VISIBLE_ROWS - 1 - i;
+                            if (idx < (int)CONFIG_OPTION_COUNT)
+                                ui_draw_single_option(idx, scroll_pos, selected, false);
                         }
                     }
+                    else
+                    {
+                        // Scrolled up: draw new rows at top
+                        for (int i = 0; i < abs_diff && i < UI_VISIBLE_ROWS; i++)
+                        {
+                            int idx = scroll_pos + i;
+                            if (idx >= 0)
+                                ui_draw_single_option(idx, scroll_pos, selected, false);
+                        }
+                    }
+                    // Redraw new selection
+                    ui_draw_single_option(selected, scroll_pos, selected, false);
+                    // Update scrollbar
+                    ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
+                }
+                else
+                {
+                    // Same page, only redraw old and new rows
+                    ui_draw_single_option(old_sel, scroll_pos, selected, false);
+                    ui_draw_single_option(selected, scroll_pos, selected, false);
                 }
             }
+            continue;
         }
-        if (key == sk_Left && focus == FOCUS_OPTIONS && edit_mode == EDIT_NONE)
+
+        // Enter - activate option
+        if (key == sk_Enter && selected >= 0)
         {
-            focus = FOCUS_TABS;
-            draw_option_marker(tab, sel_index[tab], false);
+            struct config_option *opt = &config_options[selected];
+
+            if (opt->type == F_TYPE_INT_SLIDER)
+            {
+                // Enter edit mode for sliders
+                if (opt->id == OPT_MAX_HEAP)
+                {
+                    edit_mode = EDIT_HEAP;
+                    edit_option = selected;
+                }
+                else if (opt->id == OPT_TZ_OFFSET)
+                {
+                    edit_mode = EDIT_TZ;
+                    edit_option = selected;
+                }
+                else if (opt->id == OPT_LOG_SIZE)
+                {
+                    edit_mode = EDIT_LOG;
+                    edit_option = selected;
+                }
+                // Redraw the single row entering edit mode and update footer
+                ui_draw_single_option(selected, scroll_pos, selected, true);
+                ui_draw_mode_footer(true);
+            }
+            else if (opt->type == F_TYPE_BOOL_TOGGLE && opt->setter)
+            {
+                opt->setter(opt);
+                // Only redraw the single row that toggled
+                ui_draw_single_option(selected, scroll_pos, selected, false);
+            }
+            else if (opt->type == F_TYPE_ACTION && opt->setter)
+            {
+                // Skip IP config if DHCP is on
+                if (opt->id == OPT_EDIT_IP && (g_cfg.flags & LWIP_CFG_DHCP))
+                {
+                    continue;
+                }
+                opt->setter(opt);
+                // Action dialogs clear screen, redraw everything
+                needs_redraw = true;
+            }
+            continue;
         }
+
+        // Left/Right for slider quick adjust in edit mode is handled above
     }
 
     if (lwip_started)

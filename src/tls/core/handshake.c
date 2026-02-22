@@ -15,7 +15,11 @@
 #include "../includes/asn1.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
+#include "../includes/x25519.h"
 #include <string.h>
+#include <usbdrvce.h>
+#include "../../drivers/mem.h"
+#include "lwip/timeouts.h"
 #include "lwip/logging.h"
 #include "lwip/sntp_time.h"
 #include "lwip/app_config.h"
@@ -152,8 +156,119 @@ bool tls_process_record(struct tls_handshake_context *ctx,
 
         return (offset == record_len);
     }
+    case TLS_CONTENT_TYPE_CHANGE_CIPHER_SPEC:
+        /* TLS 1.3 middlebox compatibility: ignore CCS records */
+        return true;
+
+    case TLS_CONTENT_TYPE_ALERT:
+    {
+        const uint8_t *payload = data + 5;
+        if (record_len >= 2) {
+            /* payload[0] = level (1=warning, 2=fatal), payload[1] = description */
+            if (payload[0] == 2) {
+                ctx->state = TLS_STATE_ERROR;
+            }
+        }
+        return true;
+    }
+
+    case TLS_CONTENT_TYPE_APPLICATION_DATA:
+    {
+        /* Encrypted record — decrypt and process inner content */
+        bool use_hs_keys = (ctx->state >= TLS_STATE_HANDSHAKE_KEYS_DERIVED &&
+                            ctx->state < TLS_STATE_HANDSHAKE_COMPLETE);
+
+        /* Allocate decryption buffer on heap — records can be up to ~16KB */
+        size_t dec_buf_size = record_len; /* plaintext <= ciphertext */
+        uint8_t *dec_buf = (uint8_t *)mem_buffer_custom_malloc(dec_buf_size);
+        if (!dec_buf) {
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
+        size_t dec_len = 0;
+        uint8_t inner_type = 0;
+
+        if (!tls_decrypt_record(ctx, use_hs_keys,
+                                data, data_len,
+                                dec_buf, dec_buf_size,
+                                &dec_len, &inner_type))
+        {
+            mem_buffer_custom_free(dec_buf);
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
+
+        if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE) {
+            /* Process decrypted handshake messages.
+             *
+             * LIMITATION: Each handshake message must fit entirely within a
+             * single TLS record. Cross-record handshake message fragmentation
+             * (where a message spans two encrypted records) is not supported.
+             * In practice, servers fit handshake messages within the 16KB
+             * record limit. If a message spans records, the handshake will
+             * fail at the msg_end > dec_len check below. */
+            size_t offset = 0;
+            while (offset + 4 <= dec_len)
+            {
+                uint8_t msg_type = dec_buf[offset];
+                size_t msg_len = ((size_t)dec_buf[offset + 1] << 16) |
+                                 ((size_t)dec_buf[offset + 2] << 8) |
+                                 (size_t)dec_buf[offset + 3];
+                size_t msg_end = offset + 4 + msg_len;
+
+                if (msg_end > dec_len) {
+                    mem_buffer_custom_free(dec_buf);
+                    return false;
+                }
+
+                switch (msg_type)
+                {
+                case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
+                    if (!tls_recv_encrypted_extensions(ctx, dec_buf + offset, msg_end - offset)) {
+                        mem_buffer_custom_free(dec_buf);
+                        return false;
+                    }
+                    break;
+                case TLS_HANDSHAKE_CERTIFICATE:
+                    if (!tls_recv_certificate(ctx, dec_buf + offset, msg_end - offset)) {
+                        mem_buffer_custom_free(dec_buf);
+                        return false;
+                    }
+                    break;
+                case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
+                    if (!tls_recv_certificate_verify(ctx, dec_buf + offset, msg_end - offset)) {
+                        mem_buffer_custom_free(dec_buf);
+                        return false;
+                    }
+                    break;
+                case TLS_HANDSHAKE_FINISHED:
+                    if (!tls_recv_finished(ctx, true, dec_buf + offset, msg_end - offset)) {
+                        mem_buffer_custom_free(dec_buf);
+                        return false;
+                    }
+                    break;
+                default:
+                    break;
+                }
+
+                offset = msg_end;
+            }
+            mem_buffer_custom_free(dec_buf);
+            return (offset == dec_len);
+        } else if (inner_type == TLS_CONTENT_TYPE_ALERT) {
+            if (dec_len >= 2 && dec_buf[0] == 2) {
+                ctx->state = TLS_STATE_ERROR;
+            }
+            mem_buffer_custom_free(dec_buf);
+            return true;
+        }
+
+        /* Application data during handshake is unexpected */
+        mem_buffer_custom_free(dec_buf);
+        return false;
+    }
+
     default:
-        /* TODO: handle alerts and application data records */
         return false;
     }
 }
@@ -172,7 +287,7 @@ bool tls_handshake_init(
     const uint8_t psk[32],
     const struct tls_psk_identity *psk_identity)
 {
-    if (!ctx || !psk || !psk_identity)
+    if (!ctx)
     {
         return false;
     }
@@ -180,9 +295,17 @@ bool tls_handshake_init(
     /* Clear context */
     tls_secure_memzero(ctx, sizeof(*ctx));
 
-    /* Copy PSK and identity */
-    memcpy(ctx->psk, psk, 32);
-    memcpy(&ctx->psk_identity, psk_identity, sizeof(*psk_identity));
+    /* Copy PSK and identity (NULL = pure ECDHE mode, PSK stays zeroed) */
+    if (psk && psk_identity)
+    {
+        memcpy(ctx->psk, psk, 32);
+        memcpy(&ctx->psk_identity, psk_identity, sizeof(*psk_identity));
+        ctx->psk_mode = true;
+    }
+    else
+    {
+        ctx->psk_mode = false;
+    }
 
     /* Set cipher suite */
     ctx->cipher_suite = TLS_AES_128_GCM_SHA256;
@@ -206,6 +329,23 @@ bool tls_handshake_init(
         ctx->transcript_hash = NULL;
         return false;
     }
+
+    /* Generate ephemeral X25519 keypair for ECDHE */
+    for (size_t i = 0; i < 4; i++)
+    {
+        uint64_t rand = tls_random();
+        memcpy(&ctx->ecdhe_private[i * 8], &rand, 8);
+    }
+
+    if (!tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
+                               NULL, NULL))
+    {
+        tls_secure_memzero(ctx->ecdhe_private, 32);
+        return false;
+    }
+
+    ctx->ecdhe_negotiated = false;
+    ctx->hostname = NULL;
 
     return true;
 }
@@ -292,126 +432,182 @@ bool tls_send_client_hello(
     out[offset++] = 0x03;
     out[offset++] = 0x04; /* TLS 1.3 */
 
-    /* Extension 2: psk_key_exchange_modes */
+    /* Extension 2: supported_groups */
     out[offset++] = 0x00;
-    out[offset++] = 0x2d; /* Extension type */
+    out[offset++] = 0x0a; /* Extension type: supported_groups */
     out[offset++] = 0x00;
-    out[offset++] = 0x02; /* Extension length */
-    out[offset++] = 0x01; /* Modes length */
-    out[offset++] = 0x00; /* psk_ke (PSK-only, no ECDHE) */
-
-    /* Extension 3: pre_shared_key (MUST be last extension) */
-    size_t psk_ext_offset = offset;
+    out[offset++] = 0x04; /* Extension length */
     out[offset++] = 0x00;
-    out[offset++] = 0x29; /* Extension type */
+    out[offset++] = 0x02; /* Named group list length */
+    out[offset++] = 0x00;
+    out[offset++] = 0x1d; /* x25519 */
 
-    size_t psk_ext_len_offset = offset;
-    offset += 2; /* Extension length (fill later) */
-
-    size_t psk_ext_start = offset;
-
-    /* PSK identities */
-    size_t identities_len_offset = offset;
-    offset += 2; /* Identities length (fill later) */
-
-    size_t identities_start = offset;
-
-    /* PSK identity */
-    out[offset++] = (uint8_t)(ctx->psk_identity.identity_len >> 8);
-    out[offset++] = (uint8_t)(ctx->psk_identity.identity_len & 0xFF);
-    if (offset + ctx->psk_identity.identity_len > out_len)
-        return false;
-    memcpy(out + offset, ctx->psk_identity.identity, ctx->psk_identity.identity_len);
-    offset += ctx->psk_identity.identity_len;
-
-    /* Obfuscated ticket age (4 bytes) */
-    out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 24);
-    out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 16);
-    out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 8);
-    out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age & 0xFF);
-
-    /* Fill in identities length */
-    size_t identities_len = offset - identities_start;
-    out[identities_len_offset] = (uint8_t)(identities_len >> 8);
-    out[identities_len_offset + 1] = (uint8_t)(identities_len & 0xFF);
-
-    /* PSK binders */
-    binder_offset = offset;
-    size_t binders_len_offset = offset;
-    offset += 2; /* Binders length (fill later) */
-
-    /* Binder length (SHA-256 = 32 bytes) */
-    out[offset++] = 32;
-
-    /* Calculate PSK binder:
-     * 1. Compute early_secret from PSK
-     * 2. Derive binder_key = HKDF-Expand-Label(early_secret, "res binder", "", 32)
-     * 3. Derive finished_key = HKDF-Expand-Label(binder_key, "finished", "", 32)
-     * 4. Hash ClientHello up to (but not including) binder value
-     * 5. binder = HMAC(finished_key, partial_hash)
-     */
-
-    /* Compute early_secret */
-    if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret))
-    {
-        return false;
-    }
-
-    /* Derive binder_key */
-    if (!tls_hkdf_expand_label(TLS_HASH_SHA256, early_secret, 32,
-                               "res binder", 10, NULL, 0, binder_key, 32))
-    {
-        return false;
-    }
-
-    /* Derive finished_key */
-    if (!tls_hkdf_expand_label(TLS_HASH_SHA256, binder_key, 32,
-                               "finished", 8, NULL, 0, finished_key, 32))
-    {
-        return false;
-    }
-
-    /* Hash ClientHello up to binders (but with correct length fields filled) */
-    /* First, fill in all length fields temporarily */
-    size_t total_msg_len = offset + 32 - msg_start; /* +32 for binder value */
-    out[0] = TLS_HANDSHAKE_CLIENT_HELLO;
-    out[1] = (uint8_t)(total_msg_len >> 16);
-    out[2] = (uint8_t)(total_msg_len >> 8);
-    out[3] = (uint8_t)(total_msg_len & 0xFF);
-
-    size_t ext_len = offset + 32 + 2 - ext_start; /* +32 binder +2 binders_len */
-    out[ext_len_offset] = (uint8_t)(ext_len >> 8);
-    out[ext_len_offset + 1] = (uint8_t)(ext_len & 0xFF);
-
-    size_t psk_ext_len = offset + 32 + 2 - psk_ext_start; /* +32 binder +2 binders_len */
-    out[psk_ext_len_offset] = (uint8_t)(psk_ext_len >> 8);
-    out[psk_ext_len_offset + 1] = (uint8_t)(psk_ext_len & 0xFF);
-
-    size_t binders_len = 1 + 32; /* length byte + binder value */
-    out[binders_len_offset] = (uint8_t)(binders_len >> 8);
-    out[binders_len_offset + 1] = (uint8_t)(binders_len & 0xFF);
-
-    /* Compute transcript hash of ClientHello truncated before binders */
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-    {
-        return false;
-    }
-    tls_hash_update(&hash_ctx, out, binder_offset + 3); /* Up to and including binder length */
-    tls_hash_digest(&hash_ctx, partial_hash);
-
-    /* Compute binder = HMAC(finished_key, partial_hash) */
-    if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
-    {
-        return false;
-    }
-    tls_hmac_update(&hmac_ctx, partial_hash, 32);
-    tls_hmac_digest(&hmac_ctx, binder);
-
-    /* Write binder value */
+    /* Extension 3: key_share */
+    out[offset++] = 0x00;
+    out[offset++] = 0x33; /* Extension type: key_share */
+    out[offset++] = 0x00;
+    out[offset++] = 0x26; /* Extension length: 38 */
+    out[offset++] = 0x00;
+    out[offset++] = 0x24; /* Client shares length: 36 */
+    out[offset++] = 0x00;
+    out[offset++] = 0x1d; /* Named group: x25519 */
+    out[offset++] = 0x00;
+    out[offset++] = 0x20; /* Key exchange length: 32 */
     if (offset + 32 > out_len)
         return false;
-    memcpy(out + offset, binder, 32);
+    memcpy(out + offset, ctx->ecdhe_public, 32);
     offset += 32;
+
+    /* Extension 4: signature_algorithms (required for ECDHE) */
+    out[offset++] = 0x00;
+    out[offset++] = 0x0d; /* Extension type: signature_algorithms */
+    out[offset++] = 0x00;
+    out[offset++] = 0x0a; /* Extension length: 10 */
+    out[offset++] = 0x00;
+    out[offset++] = 0x08; /* Signature algorithms list length: 8 */
+    out[offset++] = 0x04;
+    out[offset++] = 0x03; /* ecdsa_secp256r1_sha256 */
+    out[offset++] = 0x08;
+    out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
+    out[offset++] = 0x04;
+    out[offset++] = 0x01; /* rsa_pkcs1_sha256 */
+    out[offset++] = 0x08;
+    out[offset++] = 0x09; /* rsa_pss_rsae_sha384 */
+
+    /* Extension 5: server_name (SNI) */
+    if (ctx->hostname) {
+        size_t hostname_len = strlen(ctx->hostname);
+        if (offset + 9 + hostname_len > out_len)
+            return false;
+        out[offset++] = 0x00;
+        out[offset++] = 0x00; /* Extension type: server_name */
+        /* Extension length = hostname_len + 5 */
+        size_t sni_ext_len = hostname_len + 5;
+        out[offset++] = (uint8_t)(sni_ext_len >> 8);
+        out[offset++] = (uint8_t)(sni_ext_len & 0xFF);
+        /* Server name list length = hostname_len + 3 */
+        size_t sni_list_len = hostname_len + 3;
+        out[offset++] = (uint8_t)(sni_list_len >> 8);
+        out[offset++] = (uint8_t)(sni_list_len & 0xFF);
+        out[offset++] = 0x00; /* Host name type */
+        out[offset++] = (uint8_t)(hostname_len >> 8);
+        out[offset++] = (uint8_t)(hostname_len & 0xFF);
+        memcpy(out + offset, ctx->hostname, hostname_len);
+        offset += hostname_len;
+    }
+
+    if (ctx->psk_mode) {
+        /* Extension 4: psk_key_exchange_modes */
+        out[offset++] = 0x00;
+        out[offset++] = 0x2d; /* Extension type */
+        out[offset++] = 0x00;
+        out[offset++] = 0x03; /* Extension length */
+        out[offset++] = 0x02; /* Modes length */
+        out[offset++] = 0x01; /* psk_dhe_ke (PSK with ECDHE) */
+        out[offset++] = 0x00; /* psk_ke (PSK-only fallback) */
+
+        /* Extension 5: pre_shared_key (MUST be last extension) */
+        out[offset++] = 0x00;
+        out[offset++] = 0x29; /* Extension type */
+
+        size_t psk_ext_len_offset = offset;
+        offset += 2; /* Extension length (fill later) */
+
+        size_t psk_ext_start = offset;
+
+        /* PSK identities */
+        size_t identities_len_offset = offset;
+        offset += 2; /* Identities length (fill later) */
+
+        size_t identities_start = offset;
+
+        /* PSK identity */
+        out[offset++] = (uint8_t)(ctx->psk_identity.identity_len >> 8);
+        out[offset++] = (uint8_t)(ctx->psk_identity.identity_len & 0xFF);
+        if (offset + ctx->psk_identity.identity_len > out_len)
+            return false;
+        memcpy(out + offset, ctx->psk_identity.identity, ctx->psk_identity.identity_len);
+        offset += ctx->psk_identity.identity_len;
+
+        /* Obfuscated ticket age (4 bytes) */
+        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 24);
+        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 16);
+        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 8);
+        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age & 0xFF);
+
+        /* Fill in identities length */
+        size_t identities_len = offset - identities_start;
+        out[identities_len_offset] = (uint8_t)(identities_len >> 8);
+        out[identities_len_offset + 1] = (uint8_t)(identities_len & 0xFF);
+
+        /* PSK binders */
+        binder_offset = offset;
+        size_t binders_len_offset = offset;
+        offset += 2; /* Binders length (fill later) */
+
+        /* Binder length (SHA-256 = 32 bytes) */
+        out[offset++] = 32;
+
+        /* Calculate PSK binder */
+        if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret))
+            return false;
+
+        if (!tls_hkdf_expand_label(TLS_HASH_SHA256, early_secret, 32,
+                                   "res binder", 10, NULL, 0, binder_key, 32))
+            return false;
+
+        if (!tls_hkdf_expand_label(TLS_HASH_SHA256, binder_key, 32,
+                                   "finished", 8, NULL, 0, finished_key, 32))
+            return false;
+
+        /* Fill in length fields for binder hash computation */
+        size_t total_msg_len = offset + 32 - msg_start;
+        out[0] = TLS_HANDSHAKE_CLIENT_HELLO;
+        out[1] = (uint8_t)(total_msg_len >> 16);
+        out[2] = (uint8_t)(total_msg_len >> 8);
+        out[3] = (uint8_t)(total_msg_len & 0xFF);
+
+        size_t ext_len = offset + 32 + 2 - ext_start;
+        out[ext_len_offset] = (uint8_t)(ext_len >> 8);
+        out[ext_len_offset + 1] = (uint8_t)(ext_len & 0xFF);
+
+        size_t psk_ext_len = offset + 32 + 2 - psk_ext_start;
+        out[psk_ext_len_offset] = (uint8_t)(psk_ext_len >> 8);
+        out[psk_ext_len_offset + 1] = (uint8_t)(psk_ext_len & 0xFF);
+
+        size_t binders_len = 1 + 32;
+        out[binders_len_offset] = (uint8_t)(binders_len >> 8);
+        out[binders_len_offset + 1] = (uint8_t)(binders_len & 0xFF);
+
+        /* Compute transcript hash of ClientHello truncated before binders */
+        if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+            return false;
+        tls_hash_update(&hash_ctx, out, binder_offset + 3);
+        tls_hash_digest(&hash_ctx, partial_hash);
+
+        /* Compute binder = HMAC(finished_key, partial_hash) */
+        if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
+            return false;
+        tls_hmac_update(&hmac_ctx, partial_hash, 32);
+        tls_hmac_digest(&hmac_ctx, binder);
+
+        /* Write binder value */
+        if (offset + 32 > out_len)
+            return false;
+        memcpy(out + offset, binder, 32);
+        offset += 32;
+    } else {
+        /* Pure ECDHE mode: no PSK extensions, just finalize lengths */
+        size_t ext_len = offset - ext_start;
+        out[ext_len_offset] = (uint8_t)(ext_len >> 8);
+        out[ext_len_offset + 1] = (uint8_t)(ext_len & 0xFF);
+
+        size_t total_msg_len = offset - msg_start;
+        out[0] = TLS_HANDSHAKE_CLIENT_HELLO;
+        out[1] = (uint8_t)(total_msg_len >> 16);
+        out[2] = (uint8_t)(total_msg_len >> 8);
+        out[3] = (uint8_t)(total_msg_len & 0xFF);
+    }
 
     *written = offset;
 
@@ -489,6 +685,24 @@ bool tls_recv_server_hello(
     }
     memcpy(ctx->server_random, data + offset, 32);
     offset += 32;
+
+    /* Check for HelloRetryRequest (RFC 8446 Section 4.1.3):
+     * HRR is signaled by a special server_random value = SHA-256("HelloRetryRequest") */
+    {
+        static const uint8_t hrr_random[32] = {
+            0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11,
+            0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+            0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
+            0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C
+        };
+        if (memcmp(ctx->server_random, hrr_random, 32) == 0) {
+            /* Server requested HelloRetryRequest.
+             * We only support x25519, so if the server doesn't accept it,
+             * there's nothing we can do — abort gracefully. */
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
+    }
 
     /* Step 5: Skip session ID */
     if (offset >= msg_end)
@@ -577,7 +791,38 @@ bool tls_recv_server_hello(
             found_supported_versions = true;
             break;
 
+        case TLS_EXT_KEY_SHARE:
+        {
+            /* ServerHello key_share: named_group (2) + key_exchange_length (2) + key_exchange */
+            if (ext_data_len < 36)
+            {
+                ctx->state = TLS_STATE_ERROR;
+                return false;
+            }
+            uint16_t group = (data[offset] << 8) | data[offset + 1];
+            uint16_t ke_len = (data[offset + 2] << 8) | data[offset + 3];
+            if (group != TLS_NAMED_GROUP_X25519 || ke_len != 32)
+            {
+                ctx->state = TLS_STATE_ERROR;
+                return false;
+            }
+            /* Compute shared secret from server's public key */
+            if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
+                                    data + offset + 4,
+                                    NULL, NULL))
+            {
+                tls_secure_memzero(ctx->ecdhe_private, 32);
+                ctx->state = TLS_STATE_ERROR;
+                return false;
+            }
+            /* Securely erase private key immediately */
+            tls_secure_memzero(ctx->ecdhe_private, 32);
+            ctx->ecdhe_negotiated = true;
+            break;
+        }
+
         case TLS_EXT_PRE_SHARED_KEY:
+        {
             /* Extract selected PSK identity (2 bytes, should be 0 for first PSK) */
             if (ext_data_len != 2)
             {
@@ -593,6 +838,7 @@ bool tls_recv_server_hello(
             }
             found_psk = true;
             break;
+        }
 
         default:
             /* Skip unknown extensions */
@@ -603,7 +849,7 @@ bool tls_recv_server_hello(
     }
 
     /* Verify required extensions were present */
-    if (!found_supported_versions || !found_psk)
+    if (!found_supported_versions || (ctx->psk_mode && !found_psk))
     {
         ctx->state = TLS_STATE_ERROR;
         return false;
@@ -1119,13 +1365,22 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
-    /* Step 4: Compute handshake_secret (PSK-only mode, no ECDHE)
-     * handshake_secret = HKDF-Extract(salt=derived, IKM=0)
+    /* Step 4: Compute handshake_secret
+     * PSK+ECDHE: handshake_secret = HKDF-Extract(salt=derived, IKM=ecdhe_shared)
+     * PSK-only:  handshake_secret = HKDF-Extract(salt=derived, IKM=0)
      */
-    if (!tls_hkdf_extract(TLS_HASH_SHA256, derived_secret, 32,
-                          zero_ikm, 32, handshake_secret))
     {
-        return false;
+        const uint8_t *ecdhe_ikm = ctx->ecdhe_negotiated ? ctx->ecdhe_shared : zero_ikm;
+        if (!tls_hkdf_extract(TLS_HASH_SHA256, derived_secret, 32,
+                              ecdhe_ikm, 32, handshake_secret))
+        {
+            return false;
+        }
+        /* Securely erase shared secret after use */
+        if (ctx->ecdhe_negotiated)
+        {
+            tls_secure_memzero(ctx->ecdhe_shared, 32);
+        }
     }
 
     /* Step 5: Get transcript hash (ClientHello...ServerHello)
@@ -1199,6 +1454,9 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 
     /* Store handshake_secret for later use in application key derivation */
     memcpy(ctx->keys.handshake_secret, handshake_secret, 32);
+
+    /* Advance state so this function is not called again */
+    ctx->state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
 
     return true;
 }
@@ -1517,6 +1775,12 @@ bool tls_recv_finished(
         transcript_hash_update(ctx->transcript_hash, data, offset + 32);
     }
 
+    /* Step 5: Update state */
+    if (is_client) {
+        /* Client verified server's Finished */
+        ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+    }
+
     return true;
 }
 
@@ -1717,6 +1981,178 @@ bool tls_decrypt_data(
 }
 
 /**
+ * @brief Decrypt a TLS 1.3 record (handshake or application phase)
+ *
+ * In TLS 1.3, encrypted records have outer content type 0x17.
+ * The actual content type is appended after the plaintext inside the
+ * encrypted payload: [plaintext || content_type || padding_zeros]
+ *
+ * @param record     Full TLS record (5-byte header + encrypted payload)
+ * @param record_len Length of full record
+ * @param use_handshake_keys  true = handshake keys, false = application keys
+ */
+bool tls_decrypt_record(
+    struct tls_handshake_context *ctx,
+    bool use_handshake_keys,
+    const uint8_t *record, size_t record_len,
+    uint8_t *plaintext, size_t plaintext_len,
+    size_t *written, uint8_t *inner_content_type)
+{
+    if (!ctx || !record || !plaintext || !written || !inner_content_type)
+        return false;
+
+    /* Record must have at least 5-byte header + 16-byte tag + 1 content type */
+    if (record_len < 5 + 16 + 1)
+        return false;
+
+    const uint8_t *header = record;
+    const uint8_t *ciphertext = record + 5;
+    size_t ciphertext_len = record_len - 5;
+    size_t actual_plaintext_len = ciphertext_len - 16;
+
+    if (plaintext_len < actual_plaintext_len)
+        return false;
+
+    /* Select keys based on phase */
+    const uint8_t *key, *iv;
+    uint64_t *seq_num;
+    if (use_handshake_keys) {
+        key = ctx->keys.server_handshake_key;
+        iv  = ctx->keys.server_handshake_iv;
+        seq_num = &ctx->server_hs_seq_num;
+    } else {
+        key = ctx->keys.server_application_key;
+        iv  = ctx->keys.server_application_iv;
+        seq_num = &ctx->server_seq_num;
+    }
+
+    /* Construct nonce = IV XOR sequence_number */
+    uint8_t nonce[12];
+    memcpy(nonce, iv, 12);
+    for (size_t i = 0; i < 8; i++)
+        nonce[12 - 8 + i] ^= (uint8_t)((*seq_num >> (56 - i * 8)) & 0xFF);
+
+    /* AAD is the 5-byte record header */
+    struct tls_aes_context aes_ctx;
+    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, 12))
+        return false;
+    if (!tls_aes_update_aad(&aes_ctx, header, 5))
+        return false;
+    if (!tls_aes_decrypt(&aes_ctx, ciphertext, actual_plaintext_len, plaintext))
+        return false;
+
+    /* Verify authentication tag */
+    uint8_t computed_tag[16];
+    if (!tls_aes_digest(&aes_ctx, computed_tag))
+        return false;
+
+    const uint8_t *received_tag = ciphertext + actual_plaintext_len;
+    uint8_t diff = 0;
+    for (size_t i = 0; i < 16; i++)
+        diff |= computed_tag[i] ^ received_tag[i];
+    if (diff != 0) {
+        tls_secure_memzero(plaintext, actual_plaintext_len);
+        return false;
+    }
+
+    (*seq_num)++;
+
+    /* Extract inner content type: last non-zero byte of decrypted payload */
+    size_t pt_end = actual_plaintext_len;
+    while (pt_end > 0 && plaintext[pt_end - 1] == 0)
+        pt_end--;
+
+    if (pt_end == 0)
+        return false; /* No content type found */
+
+    *inner_content_type = plaintext[pt_end - 1];
+    *written = pt_end - 1; /* Exclude the content type byte */
+    return true;
+}
+
+/**
+ * @brief Encrypt a TLS 1.3 record (handshake or application phase)
+ *
+ * Builds a complete TLS record with 5-byte header, encrypted payload,
+ * and authentication tag. The inner content type is appended to the
+ * plaintext before encryption.
+ *
+ * @param record     Output buffer for full TLS record
+ * @param record_len Size of output buffer
+ */
+bool tls_encrypt_record(
+    struct tls_handshake_context *ctx,
+    bool use_handshake_keys,
+    uint8_t inner_content_type,
+    const uint8_t *plaintext, size_t plaintext_len,
+    uint8_t *record, size_t record_len,
+    size_t *written)
+{
+    if (!ctx || !plaintext || !record || !written)
+        return false;
+
+    /* Need: 5 header + plaintext + 1 content_type + 16 tag */
+    size_t inner_len = plaintext_len + 1; /* plaintext + content type byte */
+    size_t total_len = 5 + inner_len + 16;
+    if (record_len < total_len)
+        return false;
+
+    /* Select keys based on phase */
+    const uint8_t *key, *iv;
+    uint64_t *seq_num;
+    if (use_handshake_keys) {
+        key = ctx->keys.client_handshake_key;
+        iv  = ctx->keys.client_handshake_iv;
+        seq_num = &ctx->client_hs_seq_num;
+    } else {
+        key = ctx->keys.client_application_key;
+        iv  = ctx->keys.client_application_iv;
+        seq_num = &ctx->client_seq_num;
+    }
+
+    /* Build record header */
+    record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA; /* 0x17 */
+    record[1] = 0x03;
+    record[2] = 0x03; /* Legacy TLS 1.2 */
+    record[3] = (uint8_t)((inner_len + 16) >> 8);
+    record[4] = (uint8_t)((inner_len + 16) & 0xFF);
+
+    /* Construct nonce */
+    uint8_t nonce[12];
+    memcpy(nonce, iv, 12);
+    for (size_t i = 0; i < 8; i++)
+        nonce[12 - 8 + i] ^= (uint8_t)((*seq_num >> (56 - i * 8)) & 0xFF);
+
+    /* Build inner plaintext: [plaintext || content_type] in a temp buffer
+     * We'll encrypt directly from plaintext, then handle the content type byte */
+    uint8_t *enc_output = record + 5;
+
+    struct tls_aes_context aes_ctx;
+    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, 12))
+        return false;
+    if (!tls_aes_update_aad(&aes_ctx, record, 5))
+        return false;
+
+    /* We need to encrypt [plaintext || content_type] as one stream.
+     * Build it in enc_output temporarily, then encrypt in-place. */
+    memcpy(enc_output, plaintext, plaintext_len);
+    enc_output[plaintext_len] = inner_content_type;
+
+    if (!tls_aes_encrypt(&aes_ctx, enc_output, inner_len, enc_output))
+        return false;
+
+    uint8_t auth_tag[16];
+    if (!tls_aes_digest(&aes_ctx, auth_tag))
+        return false;
+
+    memcpy(enc_output + inner_len, auth_tag, 16);
+
+    (*seq_num)++;
+    *written = total_len;
+    return true;
+}
+
+/**
  * @brief Send alert message
  */
 bool tls_send_alert(
@@ -1764,6 +2200,9 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 
     /* Securely zero sensitive data */
     tls_secure_memzero(ctx->psk, sizeof(ctx->psk));
+    tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
+    tls_secure_memzero(ctx->ecdhe_shared, sizeof(ctx->ecdhe_shared));
+    tls_secure_memzero(ctx->ecdhe_public, sizeof(ctx->ecdhe_public));
     tls_secure_memzero(&ctx->keys, sizeof(ctx->keys));
     tls_secure_memzero(ctx, sizeof(*ctx));
 }

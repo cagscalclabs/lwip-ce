@@ -1,9 +1,18 @@
 /**
  * @file handshake.h
- * @brief TLS 1.3 Handshake Protocol - PSK Mode
+ * @brief TLS 1.3 Handshake Protocol
  *
- * Implements TLS 1.3 handshake with Pre-Shared Key (PSK) authentication.
- * This avoids expensive ECDHE operations while maintaining security.
+ * Implements TLS 1.3 handshake with PSK and/or ECDHE (X25519) key exchange.
+ * Certificate validation uses SPKI pinning against a compiled-in truststore.
+ *
+ * Known constraints:
+ * - Only x25519 key exchange is supported. HelloRetryRequest is detected
+ *   and aborted gracefully since no alternative groups are available.
+ * - Handshake messages must fit within a single TLS record (no cross-record
+ *   reassembly). The TLS record limit is 16KB; most servers comply.
+ * - The rx ring buffer (default 8KB) limits the maximum encrypted record
+ *   size during handshake. Very large certificate chains (>8KB) may fail.
+ *   The ring size is configurable via altcp_tls_ce_config.rx_ring_size.
  */
 
 #ifndef TLS_HANDSHAKE_H
@@ -26,9 +35,14 @@ extern "C" {
 #define TLS_AES_128_GCM_SHA256  0x1301
 
 /* Extension Types */
+#define TLS_EXT_SUPPORTED_GROUPS        0x000a
+#define TLS_EXT_KEY_SHARE               0x0033
 #define TLS_EXT_SUPPORTED_VERSIONS      0x002b
 #define TLS_EXT_PSK_KEY_EXCHANGE_MODES  0x002d
 #define TLS_EXT_PRE_SHARED_KEY          0x0029
+
+/* Named Groups */
+#define TLS_NAMED_GROUP_X25519          0x001d
 
 /* PSK Key Exchange Modes */
 #define TLS_PSK_MODE_KE         0x00  /* PSK-only */
@@ -57,9 +71,10 @@ enum tls_server_handshake_type {
 };
 
 /* Content Types */
+#define TLS_CONTENT_TYPE_CHANGE_CIPHER_SPEC 0x14
+#define TLS_CONTENT_TYPE_ALERT          0x15
 #define TLS_CONTENT_TYPE_HANDSHAKE      0x16
 #define TLS_CONTENT_TYPE_APPLICATION_DATA 0x17
-#define TLS_CONTENT_TYPE_ALERT          0x15
 
 /* Alert Levels */
 #define TLS_ALERT_LEVEL_WARNING         0x01
@@ -113,6 +128,7 @@ struct tls_handshake_context {
     /* PSK Configuration */
     uint8_t psk[32];                    /* Pre-shared key */
     struct tls_psk_identity psk_identity;
+    bool psk_mode;                       /* true = PSK/PSK+ECDHE, false = pure ECDHE */
 
     /* Handshake State */
     uint8_t client_random[32];
@@ -129,18 +145,31 @@ struct tls_handshake_context {
     /* Sequence Numbers (for record layer) */
     uint64_t client_seq_num;
     uint64_t server_seq_num;
+    uint64_t client_hs_seq_num;  /* Handshake traffic sequence numbers */
+    uint64_t server_hs_seq_num;
 
     /* Connection State */
     enum {
         TLS_STATE_INIT,
         TLS_STATE_CLIENT_HELLO_SENT,
         TLS_STATE_SERVER_HELLO_RECEIVED,
+        TLS_STATE_HANDSHAKE_KEYS_DERIVED,
         TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED,
         TLS_STATE_CERTIFICATE_RECEIVED,
         TLS_STATE_CERTIFICATE_VERIFY_RECEIVED,
+        TLS_STATE_SERVER_FINISHED_RECEIVED,
         TLS_STATE_HANDSHAKE_COMPLETE,
         TLS_STATE_ERROR
     } state;
+
+    /* ECDHE (X25519) key exchange state */
+    uint8_t ecdhe_private[32];       /* Ephemeral X25519 private key */
+    uint8_t ecdhe_shared[32];        /* Computed shared secret */
+    uint8_t ecdhe_public[32];        /* Our ephemeral public key */
+    bool ecdhe_negotiated;            /* True if server selected PSK+ECDHE */
+
+    /* SNI hostname for server_name extension */
+    const char *hostname;
 
     /* Certificate validation state (SPKI pinning) */
     struct {
@@ -399,6 +428,60 @@ bool tls_decrypt_data(
     size_t ciphertext_len,
     uint8_t *plaintext,
     size_t plaintext_len,
+    size_t *written
+);
+
+/**
+ * @brief Decrypt a TLS 1.3 encrypted record
+ *
+ * Decrypts a record using handshake or application keys.
+ * Extracts the inner content type (appended after plaintext in TLS 1.3).
+ *
+ * @param ctx Handshake context
+ * @param use_handshake_keys true for handshake phase, false for application phase
+ * @param record Full TLS record (5-byte header + encrypted payload)
+ * @param record_len Length of full record
+ * @param plaintext Output buffer for decrypted data
+ * @param plaintext_len Size of output buffer
+ * @param written Number of bytes of actual content written
+ * @param inner_content_type Extracted inner content type
+ * @return true on success, false on failure
+ */
+bool tls_decrypt_record(
+    struct tls_handshake_context *ctx,
+    bool use_handshake_keys,
+    const uint8_t *record,
+    size_t record_len,
+    uint8_t *plaintext,
+    size_t plaintext_len,
+    size_t *written,
+    uint8_t *inner_content_type
+);
+
+/**
+ * @brief Encrypt data as a TLS 1.3 record
+ *
+ * Encrypts plaintext with the given inner content type, producing a complete
+ * TLS record (header + encrypted payload + auth tag).
+ *
+ * @param ctx Handshake context
+ * @param use_handshake_keys true for handshake phase, false for application phase
+ * @param inner_content_type Content type to embed (0x16 handshake, 0x17 app data)
+ * @param plaintext Input data
+ * @param plaintext_len Length of input data
+ * @param record Output buffer for complete TLS record
+ * @param record_len Size of output buffer
+ * @param written Number of bytes written (full record)
+ * @return true on success, false on failure
+ */
+bool tls_encrypt_record(
+    struct tls_handshake_context *ctx,
+    bool use_handshake_keys,
+    uint8_t inner_content_type,
+    const uint8_t *plaintext,
+    size_t plaintext_len,
+    uint8_t *record,
+    size_t record_len,
     size_t *written
 );
 

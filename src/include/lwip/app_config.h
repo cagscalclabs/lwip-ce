@@ -5,7 +5,9 @@
 #include <stdint.h>
 
 #define LWIP_CFG_APPVAR "lwIPCFG"
-#define LWIP_CFG_VERSION 1u
+#define LWIP_CFG_VERSION 2u
+
+#define LWIP_CFG_HOSTNAME_MAX 16
 
 #define LWIP_CFG_ENABLE_TLS        (1u << 0)
 #define LWIP_CFG_LOG_USB           (1u << 1)
@@ -28,6 +30,7 @@ typedef struct lwip_app_config {
     uint8_t ip_addr[4];
     uint8_t ip_gateway[4];
     uint8_t ip_netmask[4];
+    char hostname[LWIP_CFG_HOSTNAME_MAX];
 } lwip_app_config_t;
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg);

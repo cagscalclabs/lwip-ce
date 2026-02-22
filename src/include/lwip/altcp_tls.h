@@ -58,6 +58,11 @@
 #include "mbedtls/ssl.h"
 #endif
 
+/* CE TLS backend (custom TLS 1.3 implementation) */
+#if !LWIP_ALTCP_TLS_MBEDTLS
+#include "../../apps/altcp_tls/altcp_tls_ce.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -157,6 +162,10 @@ struct altcp_tls_session
 #if LWIP_ALTCP_TLS_MBEDTLS
 {
     mbedtls_ssl_session data;
+}
+#else
+{
+    u8_t dummy; /* Placeholder for CE TLS backend (no session resumption yet) */
 }
 #endif
 ;

@@ -9,8 +9,10 @@ DESCRIPTION = lwIP Networking Stack
 APP_NAME = lwIP
 APP_VERSION = 0
 
-CFLAGS = -Wall -Wextra -Oz -I src/include
-CXXFLAGS = -Wall -Wextra -Oz -I src/include
+CFLAGS = -Wall -Wextra -Oz -I src/include -DAPP_RELOC=1
+CXXFLAGS = -Wall -Wextra -Oz -I src/include -DAPP_RELOC=1
+LDFLAGS = -DAPP_RELOC=1
+
 OUTPUT_MAP = NO
 HAS_LIBC = YES
 

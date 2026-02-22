@@ -22,7 +22,11 @@ extern "C" {
 #endif
 
 #ifndef ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE
-#define ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE 4096
+#define ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE 8192
+#endif
+
+#ifndef ALTCP_TLS_CE_MAX_RX_RING_SIZE
+#define ALTCP_TLS_CE_MAX_RX_RING_SIZE 16384
 #endif
 
 /**
@@ -56,11 +60,15 @@ typedef struct altcp_tls_ce_state {
  */
 struct altcp_tls_ce_config {
     u8_t is_server;                          /* Server mode flag */
+    u8_t psk_mode;                           /* 1 = PSK/PSK+ECDHE, 0 = pure ECDHE */
     size_t rx_ring_size;                     /* TLS record ring size */
 
-    /* PSK configuration */
+    /* PSK configuration (only used when psk_mode == 1) */
     u8_t psk[32];                            /* Pre-shared key */
     struct tls_psk_identity psk_identity;    /* PSK identity */
+
+    /* SNI hostname (pointer to caller-owned string, must outlive config) */
+    const char *hostname;
 
     /* Certificate/key for RSA mode (future) */
     const u8_t *cert;
@@ -91,6 +99,17 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_client(
 struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_server(
     const u8_t psk[32],
     const struct tls_psk_identity *psk_identity
+);
+
+/**
+ * @brief Create TLS configuration for ECDHE-only client (no PSK)
+ *
+ * Used for connecting to standard HTTPS servers with certificate validation.
+ * @param hostname Server hostname for SNI (caller must keep string alive)
+ * @return Configuration handle or NULL on failure
+ */
+struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
+    const char *hostname
 );
 
 /**

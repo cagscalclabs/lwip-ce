@@ -27,6 +27,8 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     cfg->tz_offset_minutes = 0;
     cfg->dst_enabled = 0;
     cfg->log_size_bytes = 4096u;
+    strncpy(cfg->hostname, "ti84plusce", LWIP_CFG_HOSTNAME_MAX - 1);
+    cfg->hostname[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
 }
 
 bool lwip_app_config_load(lwip_app_config_t *cfg)
@@ -46,12 +48,14 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
     }
     const uint8_t *data = (const uint8_t *)var + 2;
     const lwip_app_config_t *stored = (const lwip_app_config_t *)data;
+    // Current version - load directly
     if (stored->version == LWIP_CFG_VERSION && size >= sizeof(*cfg))
     {
         memcpy(cfg, stored, sizeof(*cfg));
         return true;
     }
-    if (stored->version == LWIP_CFG_VERSION && size >= sizeof(lwip_app_config_v1_t))
+    // Migration from version 1 to version 2
+    if (stored->version == 1u && size >= sizeof(lwip_app_config_v1_t))
     {
         const lwip_app_config_v1_t *stored_v1 = (const lwip_app_config_v1_t *)data;
         lwip_app_config_defaults(cfg);
@@ -60,6 +64,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
         memcpy(cfg->ip_addr, stored_v1->ip_addr, sizeof(stored_v1->ip_addr));
         memcpy(cfg->ip_gateway, stored_v1->ip_gateway, sizeof(stored_v1->ip_gateway));
         memcpy(cfg->ip_netmask, stored_v1->ip_netmask, sizeof(stored_v1->ip_netmask));
+        // hostname gets default value from lwip_app_config_defaults()
         return true;
     }
     lwip_app_config_defaults(cfg);

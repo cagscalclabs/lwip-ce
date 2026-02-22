@@ -57,7 +57,7 @@
 
 #ifdef LWIP_DEBUG
 #define LWIP_DBG_MIN_LEVEL 0
-#define ETH_DEBUG LWIP_DBG_ON
+#define ETH_DEBUG LWIP_DBG_OFF
 #define PPP_DEBUG LWIP_DBG_OFF
 #define MEM_DEBUG LWIP_DBG_OFF
 #define MEMP_DEBUG LWIP_DBG_OFF
@@ -91,13 +91,13 @@
 
 /* ---------- Memory options ---------- */
 // Disable using pools entirely, use user malloc
-#define MEM_USE_POOLS   0
+#define MEM_USE_POOLS 0
 #define MEM_CUSTOM_ALLOCATOR 1
 #define MEMP_MEM_MALLOC 1
-#if MEM_CUSTOM_ALLOCATOR==1
-#define MEM_CUSTOM_FREE                 mem_buffer_custom_free
-#define MEM_CUSTOM_MALLOC               mem_buffer_custom_malloc
-#define MEM_CUSTOM_CALLOC               mem_buffer_custom_calloc
+#if MEM_CUSTOM_ALLOCATOR == 1
+#define MEM_CUSTOM_FREE mem_buffer_custom_free
+#define MEM_CUSTOM_MALLOC mem_buffer_custom_malloc
+#define MEM_CUSTOM_CALLOC mem_buffer_custom_calloc
 
 #endif
 
@@ -185,11 +185,8 @@ a lot of data that needs to be copied, this should be set high. */
 #define TCP_TTL 255
 
 #define LWIP_ALTCP (LWIP_TCP)
-// #define LWIP_HAVE_MBEDTLS (LWIP_TCP)
-#ifdef LWIP_HAVE_MBEDTLS
 #define LWIP_ALTCP_TLS (LWIP_TCP)
-#define LWIP_ALTCP_TLS_MBEDTLS (LWIP_TCP)
-#endif
+#define LWIP_ALTCP_TLS_MBEDTLS 0
 
 /* Controls if TCP should queue segments that arrive out of
    order. Define to 0 if your device is low on memory. */
