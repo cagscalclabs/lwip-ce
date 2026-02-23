@@ -1,14 +1,9 @@
-; Written by PT_
-; x25519 Contest Winner
-; https://github.com/PeterTillema/X25519_submission
-; https://www.cemetech.net/forum/viewtopic.php?p=314983#314983
-
 INT_SIZE = 32
 P_OFFSET = 19
 
-; Code size: 549 bytes
+; Code size: 544 bytes
 ; Relocation size: 1024 bytes
-; Data size: 288 bytes
+; Data size: 320 bytes (+ padding)
 ; Read only data size: 64 bytes
 
     assume adl=1
@@ -21,10 +16,6 @@ end namespace
     section .text
     public _tls_x25519_secret
     public _tls_x25519_publickey
-
-macro assert_same_page in1, in2
-    assert (in1 and 0xFFFF00) = (in2 and 0xFFFF00)
-end macro
 
 arg1 := 3
 arg2 := 6
@@ -67,16 +58,11 @@ _tls_x25519_secret:
 ;   arg4 = yield_fn
 ;   arg5 = yield_data
 ; Timing first attempt: 482,792,828 cc
-; Timing current:       219,637,572 cc      ; Assuming yield_fn = NULL
+; Timing current:       215,953,142 cc      ; Assuming yield_fn = NULL
 tempVariables:
-scalar:
-scalar.mainLoopIndex := 0                   ; Main loop index
-mul:
-mul.arg2 := 1
-point:
-point.buf := 4
+tempVariables.mainLoopIndex := 0                   ; Main loop index
 
-tempVariables.size := 4 + INT_SIZE
+tempVariables.size := 1
 
     push    ix
     ld      ix, -tempVariables.size
@@ -87,8 +73,16 @@ tempVariables.size := 4 + INT_SIZE
     ld      de, ti.cursorImage
     ld      bc, reloc.data.len
     ldir
+; Copy point to actual point and edit byte 31
+    ld      de, _point
+    ld      hl, (ix + sparg3 + tempVariables.size)
+    ld      c, INT_SIZE - 1
+    ldir
+    ld      a, (hl)
+    and     a, 0x7F
+    ld      (de), a
+    inc     de
 ; Copy scalar to clamped, and edit byte 0 and byte 31
-    ld      de, _clamped
     ld      hl, (ix + sparg2 + tempVariables.size)
     ld      a, (hl)
     and     a, 0xF8
@@ -112,16 +106,7 @@ tempVariables.size := 4 + INT_SIZE
     ld      c, INT_SIZE * 2 - 2 ; Clear _a and _c
     ld      hl, _a + 1
     ldir
-    ld      hl, (ix + sparg3 + tempVariables.size)    ; Decode point to local buffer
-    lea     de, ix + point.buf
-    ld      c, INT_SIZE - 1
-    ldir
-    ld      a, (hl)
-    and     a, 0x7F
-    ld      (de), a
-    inc     de
-    lea     hl, ix + point.buf
-    ld      de, _b          ; Copy decoded point to b
+    ld      hl, _point      ; Copy point to b
     ld      c, INT_SIZE
     ldir
     ld      hl, _a          ; _d = _a
@@ -141,7 +126,7 @@ mainCalculationLoop:
     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
     ;;;;;;;;;;;;;;; CHANGE THIS LOGIC TO FIT YOUR NEEDS ;;;;;;;;;;;;;;
     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-    ; A loops back from 255 to 1, so the current logic calls the yield_fn function after 128 loops (every ~2.75 seconds)
+; A loops back from 255 to 1, so the current logic calls the yield_fn function after 128 loops (every ~2.25 seconds)
     push    bc
     sla     b
     jr      nz, .noYieldFn
@@ -195,23 +180,21 @@ mainCalculationLoop:
     call    _fsubInline
 ; fsquare _d, _e
     ld      iy, _e              ; de -> _d
-    ld      (ix + mul.arg2), iy
-    call    _fmul.start
+    call    _fmul.iy
 ; fsquare _f, _a
     ld      e, _f and 0xFF
     ld      iy, _a
-    ld      (ix + mul.arg2), iy
-    call    _fmul.start
+    call    _fmul.iy
 ; fmul _a, _c, _a
     ld      iy, _c
     ld      e, _a and 0xFF
     ld      l, e
-    call    _fmul
+    call    _fmul.hl
 ; fmul _c, _b, _e
     ld      iy, _b
     ld      e, _c and 0xFF
     ld      l, _e and 0xFF
-    call    _fmul
+    call    _fmul.hl
 ; fadd _e, _a, _c
     ld      e, _e and 0xFF
     ld      l, _a and 0xFF
@@ -226,8 +209,7 @@ mainCalculationLoop:
 ; fsquare _b, _a
     ld      iy, _a
     ld      e, _b and 0xFF
-    ld      (ix + mul.arg2), iy
-    call    _fmul.start
+    call    _fmul.iy
 ; copy _d, _c
     ld      e, _c and 0xFF
     inc     hl                  ; hl -> _d
@@ -241,7 +223,7 @@ mainCalculationLoop:
     ld      iy, _c
     ld      e, _a and 0xFF
     ld      hl, _121665
-    call    _fmul
+    call    _fmul.hl
 ; fadd _a, _a, _d
     ld      e, _a and 0xFF
     ld      l, _d and 0xFF
@@ -249,22 +231,21 @@ mainCalculationLoop:
 ; fmul _c, _c, _a
     ld      iy, _c              ; de -> _c
     ld      l, _a and 0xFF
-    call    _fmul
+    call    _fmul.hl
 ; fmul _a, _d, _f
     ld      iy, _d
     ld      e, _a and 0xFF
     ld      l, _f and 0xFF
-    call    _fmul
-; fmul _d, _b, (ix + sparg3 + tempVariables.size)
+    call    _fmul.hl
+; fmul _d, _b, _point
     ld      iy, _b
     ld      e, _d and 0xFF
-    lea     hl, ix + point.buf
-    call    _fmul
+    ld      hl, _point
+    call    _fmul.hl
 ; fsquare _b, _e
     ld      iy, _e
     ld      e, _b and 0xFF
-    ld      (ix + mul.arg2), iy
-    call    _fmul.start
+    call    _fmul.iy
 ; swap _a, _b
     pop     bc
     ld      e, _a and 0xFF
@@ -280,6 +261,7 @@ mainCalculationLoop:
     add     hl, de          ; hl -> clamped pointer, decremented if the carry flag was set
     dec     b
     jq      nz, mainCalculationLoop
+
 ; Copy _c to _b
     inc     d
     ld      e, _b and 0xFF
@@ -287,33 +269,34 @@ mainCalculationLoop:
     ld      l, _c and 0xFF
     ld      c, INT_SIZE
     ldir
+
 ; Inverse _c
-    ld      (ix + scalar.mainLoopIndex), 254
+    ld      (ix + tempVariables.mainLoopIndex), 254
 .inverseLoop:
 ; fsquare _c, _c
     ld      iy, _c
-    lea     de, iy
-    ld      (ix + mul.arg2), iy
-    call    _fmul.start
-    ld      a, (ix + scalar.mainLoopIndex)
+    ld      e, _c and 0xFF
+    call    _fmul.iy
+    ld      a, (ix + tempVariables.mainLoopIndex)
     cp      a, 3
     jr      z, .continue2
     cp      a, 5
     jr      z, .continue2
 ; fmul _c, _c, _b
     ld      iy, _c
-    lea     de, iy
-    lea     hl, iy + (_b - _c)
-    call    _fmul
+    ld      e, _c and 0xFF
+    ld      l, _b and 0xFF
+    call    _fmul.hl
 .continue2:
-    dec     (ix + scalar.mainLoopIndex)
+    dec     (ix + tempVariables.mainLoopIndex)
     jr      nz, .inverseLoop
+
 ; Final multiplication, putting the result in out
 ; fmul (ix + sparg1 + tempVariables.size), _a, _c
     ld      de, (ix + sparg1 + tempVariables.size)
     ld      iy, _a
-    lea     hl, iy + (_c - _a)
-    call    _fmul
+    ld      l, _c and 0xFF
+    call    _fmul.hl
 ; Out is now in the range [0, 2^256), which is slightly more than 2p. Subtract p and swap if necessary. Repeat this step
 ; to account for the possible output in the range of [2p, 2^256).
     call    .normalizeModP
@@ -367,6 +350,7 @@ _swap:
 ;    C = swap ? 0xFF : 0
 ;   DE = a + INT_SIZE (+ INT_SIZE)
 ;   HL = b + INT_SIZE (+ INT_SIZE)
+
 .swapLoop:
 repeat 4
     ld      a, (de)         ; t = c & (a[i] ^ b[i])
@@ -406,15 +390,14 @@ _fmul:
 ;   IY = a mod 2p
 ;   HL = b mod 2p
 ; Outputs:
-;  BCU = 0
-;    B = 0
-;    C = ?
+;   BC = 0
 ;   DE = _product + INT_SIZE * 2 - 1
 ;   HL = out + INT_SIZE - 1
-
-; Copy the input variables to the temporary storage
-    ld      (ix + mul.arg2), hl
-.start:
+.iy:
+    db      0xFD            ; ld hl, * -> ld iy, *
+.hl:
+; Copy the input variable to the temporary storage
+    ld      (_fmul.mulArg2SMC), hl
     push    de
 ; Setup the product output
     ld      hl, _product
@@ -424,19 +407,27 @@ _fmul:
     ldir
 ; Also setup the other variables
     lea     hl, iy
-    ld      iyl, INT_SIZE
     ld      e, _product and 0xFF
 ; Within a loop, get a single byte from a, and multiply it with the entirety of b, adding it to the product immediately
 .mainLoop:
-    ld      a, (hl)         ; de -> output pointer, hl -> a + index, a -> a[index]
+    ld      b, (hl)         ; de -> output pointer, hl -> a + index, b -> a[index]
     inc     hl
     push    hl
-    ld      iyh, a
-    ld      hl, (ix + mul.arg2)
-    xor     a, a            ; Reset carry + carry flag
-repeat INT_SIZE
+    ld      iyh, b
+.mulArg2SMC = $+1
+    ld      hl, 0
+; First iteration
     ld      c, (hl)
+    mlt     bc
+    ld      a, (de)         ; Add c to (de)
+    add     a, c
+    ld      (de), a
+    ld      a, b
+    inc     de
     inc     hl
+; Other iterations
+repeat INT_SIZE - 1
+    ld      c, (hl)
     ld      b, iyh
     mlt     bc
     adc     a, c
@@ -449,6 +440,9 @@ repeat INT_SIZE
     ld      (de), a
     ld      a, b
     inc     de
+if % <> %%
+    inc     hl
+end if
 end repeat
 ; Add the last carry byte to the product. Since we work from low to high indexes, this last carry byte is guaranteed to
 ; not overlap with the previous product result, thus storing it directly works properly.
@@ -459,14 +453,12 @@ end repeat
     add     a, e
     ld      e, a
     pop     hl
-    dec     iyl
+    sub     a, (_product + INT_SIZE) and 0xFF
     jp      nz, .mainLoop
 
 ; For the lower 32 bytes of the product, calculate sum(38 * product[i + 32]) and add to product + 32 directly
     ex      de, hl          ; hl -> _product + INT_SIZE
     ld      de, _product
-    xor     a, a            ; Reset carry for the next calculations
-    ld      iyl, INT_SIZE / 8
 .addMul38Loop:
 repeat 8
     ld      c, (hl)
@@ -480,14 +472,17 @@ repeat 8
     ld      a, (de)         ; Restore a and add (de) to (hl)
     add     a, c
     ld      (hl), a
-    inc     hl
     inc     de
     ld      a, b
+if % <> %%
+    inc     hl
+end if
 end repeat
-    dec     iyl
+    inc     l               ; l = 0 -> stop, since then it's _product + INT_SIZE * 2 = XXXX00
     jp      nz, .addMul38Loop
+
 ; Propagate the last carry byte back to the first value and store to out directly
-    adc     a, 0
+    adc     a, l
     ld      c, a
     ld      b, 2 * P_OFFSET
     mlt     bc
@@ -520,11 +515,12 @@ _faddInline:
 ;   DE = out, a mod 2p
 ;   HL = b mod 2p
 ; Outputs:
-;  BCU = ?
+;  BCU = untouched
 ;    B = 0
 ;    C = 0
 ;   DE = out + INT_SIZE
 ;   HL = out + INT_SIZE - 1
+
     ld      b, INT_SIZE / 8
 .addLoop1:
 repeat 8
@@ -542,9 +538,9 @@ end repeat
     add     a, (hl)
     ld      (hl), a
     ld      c, b
-    ld      b, (INT_SIZE - 2) / 6
+    ld      b, (INT_SIZE - 2) / 10
 .addLoop2:
-repeat 6
+repeat 10
     inc     hl
     ld      a, (hl)
     adc     a, c
@@ -564,11 +560,12 @@ _fsubInline:
 ;   DE = out, a mod 2p
 ;   HL = b mod 2p
 ; Outputs:
-;  BCU = ?
+;  BCU = untouched
 ;    B = 0
 ;    C = 0
 ;   DE = out + INT_SIZE
 ;   HL = out + INT_SIZE - 1
+
     ld      b, INT_SIZE / 8
 .subLoop1:
 repeat 8
@@ -579,6 +576,7 @@ repeat 8
     inc     de
 end repeat
     djnz    .subLoop1
+
 ; Now out is in the range (-2^255+19, 2^255-19). If the carry flag is set, the value is "negative", but we can easily
 ; calculate a mod 2p by subtracting 38 from the entire value, such that the output is always [0, 2p).
     sbc     a, a
@@ -628,8 +626,7 @@ reloc.base := ti.cursorImage
 reloc.offset := reloc.base - reloc.data
 
     section .data
-; Align _a to 0xXXXX00
-    db      ((0xE0 - (($ and 0xFF))) and 0xFF) dup 0
+    private _point
     private _clamped
     private _a
     private _b
@@ -639,6 +636,11 @@ reloc.offset := reloc.base - reloc.data
     private _f
     private _product
 
+; Align _a to 0xXXXX00
+    db      ((0xC0 - (($ and 0xFF))) and 0xFF) dup 0
+; Duplicate of the input point, but with msb reset
+_point:
+    rb      INT_SIZE
 ; Used for scalar
 _clamped:
     rb      INT_SIZE
@@ -659,7 +661,7 @@ _product:
     rb      INT_SIZE * 2
 
 
-repeat 1, x:$-_clamped
+repeat 1, x:$-_point
     display 'Data size: ', `x, ' bytes', 10
 end repeat
 
