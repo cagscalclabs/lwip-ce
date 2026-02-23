@@ -15,7 +15,7 @@
 #include "../includes/asn1.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
-#include "../includes/x25519.h"
+#include "../contrib/x25519/src/x25519.h"
 #include <string.h>
 #include <usbdrvce.h>
 #include "../../drivers/mem.h"
