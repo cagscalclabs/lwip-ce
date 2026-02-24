@@ -319,8 +319,6 @@ tls_recv_server_hello
 tls_send_alert
 tls_send_client_hello
 tls_send_finished
-tls_asn1_decode_next
-tls_asn1_decoder_init
 tls_asn1_encode
 tls_base64_decode
 tls_base64_encode

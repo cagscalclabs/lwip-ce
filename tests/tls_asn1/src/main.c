@@ -41,21 +41,26 @@ int main(void)
     os_GetKey();
     os_ClrHome();
 
-    struct tls_asn1_decoder_context ctx;
+    struct tls_asn1_cursor cursor;
+    struct tls_asn1_tlv tlv;
     size_t olen = 0;
-    uint8_t *ptr;
-    uint8_t tag;
-    uint8_t depth;
+    const uint8_t *ptr;
     size_t len;
 
     // TEST 2: ASN.1 decode
     olen = tls_base64_decode(test1, sizeof test1, asn1_test);
     if(!olen) return 1;
 
-    if(!tls_asn1_decoder_init(&ctx, asn1_test, olen)) return 0;
+    if(!tls_asn1_cursor_init(&cursor, asn1_test, olen)) return 0;
     uint8_t count = 0;
-    while(tls_asn1_decode_next(&ctx, NULL, &tag, &ptr, &len, &depth)){
-        printf("%u:d=%u l=%u %s:%u\n", (ptr-asn1_test), depth, len, (tls_asn1_getform(tag)) ? "cons" : "prim", tls_asn1_gettag(tag));
+    while(tls_asn1_next(&cursor, &tlv)){
+        ptr = tlv.value;
+        len = tlv.len;
+        printf("%u:l=%u %s:%u\n",
+               (unsigned)(ptr - asn1_test),
+               (unsigned)len,
+               tls_asn1_tag_constructed(tlv.tag) ? "cons" : "prim",
+               tls_asn1_tag_number(tlv.tag));
         if(count++ == 5) {
             os_GetKey();
             os_ClrHome();

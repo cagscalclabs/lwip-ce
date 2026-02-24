@@ -26,11 +26,9 @@ EXTRA_ASM_SOURCES = $(CEDEV)/lib/libc/allocator_standard.c.src
 
 include app_tools/makefile
 
-
 # defining a build rule for the generation of a function table
 # to ensure all modules are built into lwip
 HEADER_DIRS := src/include/lwip/
 EXCLUDE_LIST := src/include/lwip/debug.h
 FUNCTABLE_FILE := src/functable.h
 HELPER_FILES := $(FUNCTABLE_FILE) tmp/headers.tmp
-

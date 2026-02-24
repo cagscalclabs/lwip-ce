@@ -2,6 +2,9 @@
 #ifndef tls_asn1_h
 #define tls_asn1_h
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 /** @enum ASN.1 tag types */
 enum tls_asn1_tags {
@@ -50,41 +53,12 @@ enum tls_asn1_forms {
     ASN1_CONSTRUCTED    = (1<<5)        /**< this element contains nested elements. */
 };
 
-/// @struct Can be chained to create schemas for decoding ASN.1 structures. See @b keyfiles.c.
-struct tls_asn1_schema {
-    char *name;
-    uint8_t tag;
-    uint8_t depth;
-    bool optional:1;        /**< flag indicating if item in schema is optional. */
-    bool allow_null:1;      /**< flag indicating if item in schema can be NULL. */
-    bool output:1;          /**< flag indicating if item in schema should be returned. */
-    bool mode:1;            /**< flag indicating if this tag should be parsed as MATCH or SEEK. See \p tls_asn1_parse_mode */
-    bool raw_output:1;      /**< flag indicating if raw DER bytes (including tag+length) should be returned instead of parsed content */
-};
-
-enum tls_asn1_parse_mode {
-    ASN1_MATCH = false,     /**< next decoded item returned should match schema index.*/
-    ASN1_SEEK = true        /**< skip over decoded items until next item matches schema index. */
-};
-
-/// @struct Can be chained in parallel to schema to create an output chain for decoding ANS.1 structures. See keyfiles.c
+/// @struct Generic field serialization used by higher-level parsers.
 struct tls_asn1_serialization {
-    char *name;             /**< name of the field returned. Same as \p tls_asn1_schema->name for item returned. */
+    char *name;             /**< field label supplied by caller/parser */
     uint8_t tag;            /**< tag value returned. */
     size_t len;             /**< length of item. */
     uint8_t *data;          /**< pointer to item value. */
-};
-
-
-struct _asn1_node {
-    const uint8_t *start;
-    const uint8_t *next;
-};
-#define ASN1_MAX_DEPTH  16
-/** @struct ASN.1 decoder state. */
-struct tls_asn1_decoder_context {
-    uint8_t depth;                              /**< Current location in the ASN.1 tree. */
-    struct _asn1_node node[ASN1_MAX_DEPTH];     /**< Node metadata. */
 };
 
 /** @define Returns the base type value (low 5 bits) of the tag. */
@@ -93,29 +67,6 @@ struct tls_asn1_decoder_context {
 #define tls_asn1_getclass(tag)      (((tag)>>6) & 0b11)
 /** @define Returns the form (bit 5) of the tag. */
 #define tls_asn1_getform(tag)       (((tag)>>5) & 1)
-
-/********************************************************************************
- * @brief Initializes the ASN.1 decoder.
- * @param ctx       Pointer to ASN.1 context.
- * @param data      Pointer to data to decode.
- * @param len       Length of data to decode.
- * @returns @b true if initialization succeeded, @b false if error.
- */
-bool tls_asn1_decoder_init(struct tls_asn1_decoder_context *ctx, const uint8_t *data, size_t len);
-
-/********************************************************************************
- * @brief Returns the next decodable item in the ASN.1 data.
- * @param ctx       Pointer to ASN.1 context.
- * @param tag      Pointer to a @b uint8_t to write the decoded tag to.
- * @param data      Pointer to a @b *uint8_t to write the data pointer to.
- * @param len       Pointer to a @b size_t to write the decoded length to.
- * @param depth     Pointer to a @b uint8_t to write the parser depth to.
- * @returns @b true if an ASN.1 object is returned. @b false if error or end of data.
- * @note This call handles the tree structure of ASN.1 properly. If the previous call returned a @b constructed
- * object, then the subsequent calls parse the contents of that object until the end is reached.
- */
-bool tls_asn1_decode_next(struct tls_asn1_decoder_context *ctx, const struct tls_asn1_schema *schema,
-                          uint8_t *tag, uint8_t **data, size_t *len, uint8_t *depth);
 
 /********************************************************************************
  * @brief ASN.1 encodes data.
@@ -128,5 +79,32 @@ bool tls_asn1_decode_next(struct tls_asn1_decoder_context *ctx, const struct tls
  * their constructed bits set automatically. Also, most uses of ASN.1 for TLS will be @b ASN1_UNIVERSAL .
  */
 size_t tls_asn1_encode(uint8_t tag, const uint8_t *data, size_t len, uint8_t *output);
+
+/* --------------------------------------------------------------------------
+ * DER Cursor API (new)
+ * -------------------------------------------------------------------------- */
+
+struct tls_asn1_tlv
+{
+    const uint8_t *tlv;      /* points to tag byte */
+    const uint8_t *value;    /* points to content bytes */
+    size_t len;              /* content length */
+    size_t header_len;       /* tag + length bytes */
+    uint8_t tag;             /* full tag byte */
+};
+
+struct tls_asn1_cursor
+{
+    const uint8_t *cur;
+    const uint8_t *end;
+};
+
+bool tls_asn1_cursor_init(struct tls_asn1_cursor *cursor, const uint8_t *data, size_t len);
+bool tls_asn1_next(struct tls_asn1_cursor *cursor, struct tls_asn1_tlv *out);
+bool tls_asn1_child_cursor(const struct tls_asn1_tlv *parent, struct tls_asn1_cursor *child);
+
+uint8_t tls_asn1_tag_number(uint8_t tag);
+uint8_t tls_asn1_tag_class(uint8_t tag);
+bool tls_asn1_tag_constructed(uint8_t tag);
 
 #endif

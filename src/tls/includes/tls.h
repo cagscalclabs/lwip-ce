@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "truststore.h"
 
@@ -37,5 +38,18 @@ bool tls_init(void);
  * Should be called when TLS is no longer needed.
  */
 void tls_cleanup(void);
+
+/**
+ * @brief Allocate from the shared TLS FILEIO buffer (lazy-created on first use).
+ * @param size Allocation size in bytes.
+ * @return Allocated pointer, or NULL on failure.
+ */
+void *tls_fileio_alloc(size_t size);
+
+/**
+ * @brief Free a pointer previously allocated by tls_fileio_alloc().
+ * @param ptr Pointer to free (NULL-safe).
+ */
+void tls_fileio_free(void *ptr);
 
 #endif

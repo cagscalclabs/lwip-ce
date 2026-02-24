@@ -15,6 +15,8 @@
     "hashWait|2",
     "key|enter",
     "hashWait|3",
+    "key|enter",
+    "hashWait|4",
     "key|enter"
   ],
   "hashes": {
@@ -42,6 +44,15 @@
       "size": "vram_16_size",
       "expected_CRCs": [
         "78FA562E"
+      ],
+      "timeout": 2000
+    },
+    "4": {
+      "description": "Verify constraints ok",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "456FF59D"
       ],
       "timeout": 2000
     }

@@ -15,6 +15,7 @@
 #include "../includes/asn1.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
+#include "../includes/x509.h"
 #include "../contrib/x25519/src/x25519.h"
 #include <string.h>
 #include <usbdrvce.h>
@@ -794,14 +795,15 @@ bool tls_recv_server_hello(
         case TLS_EXT_KEY_SHARE:
         {
             /* ServerHello key_share: named_group (2) + key_exchange_length (2) + key_exchange */
-            if (ext_data_len < 36)
+            if (ext_data_len < 4)
             {
                 ctx->state = TLS_STATE_ERROR;
                 return false;
             }
             uint16_t group = (data[offset] << 8) | data[offset + 1];
             uint16_t ke_len = (data[offset + 2] << 8) | data[offset + 3];
-            if (group != TLS_NAMED_GROUP_X25519 || ke_len != 32)
+            if (group != TLS_NAMED_GROUP_X25519 || ke_len != 32 ||
+                ext_data_len != (size_t)(4 + ke_len))
             {
                 ctx->state = TLS_STATE_ERROR;
                 return false;
@@ -869,18 +871,6 @@ bool tls_recv_server_hello(
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
     return true;
 }
-
-/**
- * @brief ASN.1 schema for extracting SPKI from X.509 certificate
- *
- * This minimal schema seeks directly to SubjectPublicKeyInfo for SPKI pinning.
- * We extract the raw DER bytes of SPKI for hashing.
- */
-static struct tls_asn1_schema tls_cert_spki_schema[] = {
-    /* Seek to SubjectPublicKeyInfo (raw DER for hashing) */
-    {"SubjectPublicKeyInfo", ASN1_SEQUENCE | ASN1_CONSTRUCTED, 2, false, false, true, ASN1_SEEK, true},
-    {NULL, 0, 0, false, false, false, false, false}
-};
 
 /**
  * @brief Process Certificate message (server -> client)
@@ -984,29 +974,30 @@ bool tls_recv_certificate(
         }
         size_t ext_len = ((size_t)data[offset + chain_offset] << 8) |
                          (size_t)data[offset + chain_offset + 1];
+        if (chain_offset + 2 + ext_len > cert_chain_len)
+        {
+            return false;
+        }
         chain_offset += 2 + ext_len;
 
         /* Process the first (end-entity) certificate */
         if (first_cert)
         {
             first_cert = false;
-
-            /* Initialize ASN.1 decoder for this certificate */
-            struct tls_asn1_decoder_context asn1_ctx;
-            if (!tls_asn1_decoder_init(&asn1_ctx, cert_der, cert_len))
+            struct tls_asn1_serialization cert_fields[13];
+            struct tls_x509_parse_result cert_parsed = {0};
+            bool constraints_check_pass = false;
+            if (!tls_x509_parse_certificate(cert_der, cert_len, cert_fields, &cert_parsed))
             {
                 return false;
             }
-
-            /* Extract raw SPKI DER bytes for hashing */
-            struct tls_asn1_serialization spki_raw = {0};
-
-            if (!tls_asn1_decode_next(&asn1_ctx,
-                                      &tls_cert_spki_schema[0],
-                                      &spki_raw.tag,
-                                      &spki_raw.data,
-                                      &spki_raw.len,
-                                      NULL))
+            if (!cert_parsed.extensions || !cert_parsed.extensions->data || cert_parsed.extensions->len == 0)
+            {
+                return false;
+            }
+            constraints_check_pass = tls_x509_has_valid_constraints(cert_parsed.extensions->data,
+                                                                    cert_parsed.extensions->len);
+            if (!cert_parsed.spki_raw || !cert_parsed.spki_raw->data || cert_parsed.spki_raw->len == 0)
             {
                 return false;
             }
@@ -1017,7 +1008,7 @@ bool tls_recv_certificate(
             {
                 return false;
             }
-            tls_hash_update(&hash_ctx, spki_raw.data, spki_raw.len);
+            tls_hash_update(&hash_ctx, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
             tls_hash_digest(&hash_ctx, ctx->cert_state.server_cert_spki_hash);
 
             /* Validate SPKI hash against truststore */
@@ -1057,7 +1048,7 @@ bool tls_recv_certificate(
                     /* TODO: Implement owner CN comparison if needed */
                 }
 
-                if (date_check_pass && owner_check_pass)
+                if (date_check_pass && owner_check_pass && constraints_check_pass)
                 {
                     chain_validated = true;
                 }
@@ -1066,24 +1057,17 @@ bool tls_recv_certificate(
         else
         {
             /* For intermediate/root certificates, check if their SPKI is pinned */
-            struct tls_asn1_decoder_context asn1_ctx;
-            if (tls_asn1_decoder_init(&asn1_ctx, cert_der, cert_len))
+            struct tls_asn1_serialization cert_fields[13];
+            struct tls_x509_parse_result cert_parsed = {0};
+            if (tls_x509_parse_certificate(cert_der, cert_len, cert_fields, &cert_parsed))
             {
-                struct tls_asn1_serialization spki_raw = {0};
-                /* Just need the raw SPKI for hashing */
-                struct tls_asn1_schema spki_only_schema[] = {
-                    {"SubjectPublicKeyInfo", ASN1_SEQUENCE | ASN1_CONSTRUCTED, 2, false, false, true, ASN1_SEEK, true},
-                    {NULL, 0, 0, false, false, false, false, false}
-                };
-
-                if (tls_asn1_decode_next(&asn1_ctx, &spki_only_schema[0],
-                                         &spki_raw.tag, &spki_raw.data, &spki_raw.len, NULL))
+                if (cert_parsed.spki_raw && cert_parsed.spki_raw->data && cert_parsed.spki_raw->len > 0)
                 {
                     uint8_t intermediate_hash[32];
                     struct tls_hash_context hash_ctx;
                     if (tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
                     {
-                        tls_hash_update(&hash_ctx, spki_raw.data, spki_raw.len);
+                        tls_hash_update(&hash_ctx, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
                         tls_hash_digest(&hash_ctx, intermediate_hash);
 
                         struct tls_spki_entry intermediate_entry;
@@ -1091,6 +1075,13 @@ bool tls_recv_certificate(
                         {
                             const lwip_app_config_t *app_cfg = lwip_app_config_get();
                             bool date_check_pass = true;
+                            bool constraints_check_pass = false;
+                            if (!cert_parsed.extensions || !cert_parsed.extensions->data || cert_parsed.extensions->len == 0)
+                            {
+                                continue;
+                            }
+                            constraints_check_pass = tls_x509_has_valid_constraints(cert_parsed.extensions->data,
+                                                                                    cert_parsed.extensions->len);
 
                             /* Check validity period if configured and time is available */
                             if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_DATES))
@@ -1106,7 +1097,7 @@ bool tls_recv_certificate(
                                 }
                             }
 
-                            if (date_check_pass)
+                            if (date_check_pass && constraints_check_pass)
                             {
                                 chain_validated = true;
                             }
@@ -1212,6 +1203,10 @@ bool tls_recv_encrypted_extensions(
         (void)ext_type;
         ext_offset += ext_data_len;
     }
+    if (ext_offset != ext_len)
+    {
+        return false;
+    }
 
     /* Update transcript hash with the EncryptedExtensions message */
     if (ctx->transcript_hash)
@@ -1245,6 +1240,12 @@ bool tls_recv_certificate_verify(
 {
     if (!ctx || !data || data_len < 8)
     {
+        return false;
+    }
+    if (ctx->state < TLS_STATE_CERTIFICATE_RECEIVED ||
+        !ctx->cert_state.certificate_validated)
+    {
+        ctx->state = TLS_STATE_ERROR;
         return false;
     }
 
@@ -1284,6 +1285,10 @@ bool tls_recv_certificate_verify(
 
     /* Verify signature data fits */
     if (offset + sig_len > data_len)
+    {
+        return false;
+    }
+    if (offset + sig_len != 4 + msg_len)
     {
         return false;
     }
@@ -1383,10 +1388,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         }
     }
 
-    /* Step 5: Get transcript hash (ClientHello...ServerHello)
-     * TODO: Extract from ctx->transcript_hash when implemented
-     * For now, use placeholder zeros for testing
-     */
+    /* Step 5: Get transcript hash (ClientHello...ServerHello). */
     tls_secure_memzero(transcript_hash, 32);
     if (ctx->transcript_hash)
     {
@@ -1514,10 +1516,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
-    /* Step 4: Get transcript hash (ClientHello...server Finished)
-     * TODO: Extract from ctx->transcript_hash when implemented
-     * For now, use placeholder zeros for testing
-     */
+    /* Step 4: Get transcript hash (ClientHello...server Finished). */
     tls_secure_memzero(transcript_hash, 32);
     if (ctx->transcript_hash)
     {
@@ -1713,6 +1712,10 @@ bool tls_recv_finished(
     offset += 3;
 
     if (msg_len != 32 || offset + 32 > data_len)
+    {
+        return false;
+    }
+    if (offset + 32 != data_len)
     {
         return false;
     }

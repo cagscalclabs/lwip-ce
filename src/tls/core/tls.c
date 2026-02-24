@@ -4,6 +4,7 @@
 #include "lwip/mem.h"
 #include "../includes/tls.h"
 #include "../includes/rsa.h"
+#include "../../drivers/mem.h"
 
 /**
  * TLS Memory Module
@@ -31,6 +32,7 @@
 
 /* ECC scratch buffer (reserved for future X25519 operations) */
 #define ECC_SCRATCH_SIZE 1024
+#define TLS_FILEIO_MAX_SIZE (32u * 1024u)
 
 /* Global TLS context (non-static so RSA/ECC code can access scratch buffers) */
 struct tls_context tls_ctx = {
@@ -43,6 +45,19 @@ struct tls_context tls_ctx = {
         .entry_count = 0,
         .version = 0,
         .created_timestamp = 0}};
+
+static struct mem_buffer *g_tls_fileio_buffer = NULL;
+
+static bool tls_fileio_buffer_ensure(void)
+{
+    if (g_tls_fileio_buffer != NULL)
+    {
+        return true;
+    }
+
+    g_tls_fileio_buffer = mem_buffer_create(MEM_BUFFER_FILE, 0, TLS_FILEIO_MAX_SIZE, 0, BUFFER_SECURE_MODE);
+    return g_tls_fileio_buffer != NULL;
+}
 
 bool tls_init(void)
 {
@@ -74,6 +89,12 @@ bool tls_init(void)
 
 void tls_cleanup(void)
 {
+    if (g_tls_fileio_buffer != NULL)
+    {
+        mem_buffer_destroy(g_tls_fileio_buffer);
+        g_tls_fileio_buffer = NULL;
+    }
+
     if (tls_ctx.rsa_scratch != NULL)
     {
         mem_free(tls_ctx.rsa_scratch);
@@ -92,4 +113,26 @@ void tls_cleanup(void)
     tls_ctx.truststore.entry_count = 0;
     tls_ctx.truststore.version = 0;
     tls_ctx.truststore.created_timestamp = 0;
+}
+
+void *tls_fileio_alloc(size_t size)
+{
+    if (size == 0)
+    {
+        return NULL;
+    }
+    if (!tls_fileio_buffer_ensure())
+    {
+        return NULL;
+    }
+    return mem_buffer_malloc(g_tls_fileio_buffer, size);
+}
+
+void tls_fileio_free(void *ptr)
+{
+    if (!ptr || g_tls_fileio_buffer == NULL)
+    {
+        return;
+    }
+    mem_buffer_free(g_tls_fileio_buffer, ptr);
 }

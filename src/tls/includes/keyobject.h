@@ -5,6 +5,9 @@
 #ifndef tls_keyobject_h
 #define tls_keyobject_h
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "asn1.h"
 
 enum tls_key_type_flags
@@ -183,6 +186,15 @@ struct tls_keyobject *tls_keyobject_import_public(const char *pem_data, size_t s
  * @note Data is passed by copy
  */
 struct tls_keyobject *tls_keyobject_import_certificate(const char *pem_data, size_t size);
+
+/****************************************************************************************
+ * @brief Checks X.509 CA constraints on a DER certificate.
+ * @param cert_der      Pointer to DER-encoded certificate.
+ * @param cert_len      Length of DER certificate.
+ * @returns @b true if BasicConstraints is present with cA=TRUE, and if KeyUsage is
+ * present, keyCertSign is set.
+ */
+bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len);
 
 /****************************************************************************************
  * @brief Erases a @b tls_keyobject, deallocates it, and then sets the pointer to @b NULL.
