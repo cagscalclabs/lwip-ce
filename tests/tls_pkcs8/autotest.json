@@ -1,0 +1,92 @@
+{
+  "description": "PKCS#8/SPKI key parsing and decryption tests",
+  "transfer_files": [
+    "bin/PKCS8T.8xp"
+  ],
+  "target": {
+    "name": "PKCS8T",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter",
+    "hashWait|4",
+    "key|enter",
+    "hashWait|5",
+    "key|enter",
+    "hashWait|6",
+    "key|enter",
+    "hashWait|7",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "PKCS#1 RSA private key",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "1A6EC761"
+      ],
+      "timeout": 5000
+    },
+    "2": {
+      "description": "PKCS#8 EC private key",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F5C877A4"
+      ],
+      "timeout": 5000
+    },
+    "3": {
+      "description": "PKCS#8 private key",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "9655C4CD"
+      ],
+      "timeout": 5000
+    },
+    "4": {
+      "description": "PKCS#8 encrypted private key, correct password",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "8237123B"
+      ],
+      "timeout": 10000
+    },
+    "5": {
+      "description": "PKCS#8 encrypted private key, wrong password",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "112A41BA"
+      ],
+      "timeout": 10000
+    },
+    "6": {
+      "description": "SPKI RSA public key",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "BDCCAD4A"
+      ],
+      "timeout": 2000
+    },
+    "7": {
+      "description": "SPKI EC public key",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "40A6A337"
+      ],
+      "timeout": 2000
+    }
+  }
+}

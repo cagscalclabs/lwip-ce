@@ -1,0 +1,81 @@
+{
+  "description": "X.509 certificate parsing tests",
+  "transfer_files": [
+    "bin/X509T.8xp"
+  ],
+  "target": {
+    "name": "X509T",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter",
+    "hashWait|4",
+    "key|enter",
+    "hashWait|5",
+    "key|enter",
+    "hashWait|6",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "Certificate 1 Parse Check",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "598C32C0"
+      ],
+      "timeout": 5000
+    },
+    "2": {
+      "description": "Certificate 1, CA constraints valid",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "9F59DEE1"
+      ],
+      "timeout": 5000
+    },
+    "3": {
+      "description": "Certificate 1, CA constraints fail if patched",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "915DDFDF"
+      ],
+      "timeout": 5000
+    },
+    "4": {
+      "description": "Certificate 2 Parse Check",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "5604826E"
+      ],
+      "timeout": 5000
+    },
+    "5": {
+      "description": "Certificate 2, CA constraints valid",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "2AEF68BA"
+      ],
+      "timeout": 5000
+    },
+    "6": {
+      "description": "Certificate 2, patched constraints fail if patched",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "24EB6984"
+      ],
+      "timeout": 5000
+    }
+  }
+}
