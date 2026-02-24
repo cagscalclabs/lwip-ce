@@ -324,7 +324,6 @@ _app_library_table:
     dl _tls_send_alert - app
     dl _tls_send_client_hello - app
     dl _tls_send_finished - app
-    dl _tls_asn1_encode - app
     dl _tls_base64_decode - app
     dl _tls_base64_encode - app
     dl _tls_cleanup - app
@@ -654,7 +653,6 @@ extern _tls_recv_server_hello
 extern _tls_send_alert
 extern _tls_send_client_hello
 extern _tls_send_finished
-extern _tls_asn1_encode
 extern _tls_base64_decode
 extern _tls_base64_encode
 extern _tls_cleanup

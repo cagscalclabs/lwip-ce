@@ -6,9 +6,6 @@
 #include <stdint.h>
 #include "asn1.h"
 
-struct tls_keyobject;
-struct mem_buffer;
-
 struct tls_x509_parse_result {
     struct tls_asn1_serialization *issuer_cn;
     struct tls_asn1_serialization *subject_cn;
@@ -40,7 +37,6 @@ bool tls_x509_import_and_parse_certificate(const char *pem_data, size_t size,
                                            size_t *der_written,
                                            struct tls_asn1_serialization fields[13],
                                            struct tls_x509_parse_result *out);
-void tls_x509_set_buffer(struct mem_buffer *buf);
 struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t size);
 void tls_x509_object_destroy(struct tls_x509_object *obj);
 

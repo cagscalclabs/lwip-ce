@@ -1,36 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include <string.h>
 #include "../includes/asn1.h"
-
-void rmemcpy(void *dest, void *src, size_t len);
-
-size_t tls_asn1_encode(uint8_t tag, const uint8_t *data, size_t len, uint8_t *output){
-    if((data==NULL) ||
-       (len==0) ||
-       (output==NULL)) return 0;
-    
-    // if sequence or set, constructed should be set
-    if(((tag & 0b11111) == ASN1_SEQUENCE) ||
-        ((tag & 0b11111) == ASN1_SET))
-        tag |= ASN1_CONSTRUCTED;
-    
-    
-    size_t pos = 0;
-    output[pos++] = tag;
-    if(len > (0b1111111)){
-        // generate weird length format
-        uint8_t size_len = (len > 0xffff) + (len > 0xFF) + 1;
-        output[pos++] = size_len | 0b10000000;
-        rmemcpy((uint8_t*)&output[pos], (uint8_t*)&len, size_len);
-        pos += size_len;
-    }
-    else
-        output[pos++] = len;
-    
-    memcpy(&output[pos], data, len);
-    return pos+len;
-}
 
 static bool tls_asn1_parse_len(const uint8_t *p, const uint8_t *end, size_t *len, size_t *len_len)
 {

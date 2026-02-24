@@ -6,7 +6,6 @@
 #include "keyobject.h"
 
 struct tls_keyobject;
-struct mem_buffer;
 
 typedef enum _pkcs8_error
 {
@@ -86,7 +85,6 @@ enum tls_pkcs8_algorithm
 struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, const char *password, tls_pkcs8_error_t *error);
 struct tls_keyobject *tls_pkcs8_import_private(const char *pem_data, size_t size, const char *password);
 struct tls_keyobject *tls_pkcs8_import_public(const char *pem_data, size_t size);
-void tls_pkcs8_set_buffer(struct mem_buffer *buf);
 struct tls_pkcs8_object *tls_pkcs8_object_import_private(const char *pem_data, size_t size, const char *password);
 struct tls_pkcs8_object *tls_pkcs8_object_import_public(const char *pem_data, size_t size);
 void tls_pkcs8_object_destroy(struct tls_pkcs8_object *obj);

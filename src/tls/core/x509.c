@@ -761,11 +761,6 @@ bool tls_x509_import_and_parse_certificate(const char *pem_data, size_t size,
     return tls_x509_parse_certificate(der_out, parsed_der_len, fields, out);
 }
 
-void tls_x509_set_buffer(struct mem_buffer *buf)
-{
-    (void)buf;
-}
-
 struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t size)
 {
     size_t der_cap;

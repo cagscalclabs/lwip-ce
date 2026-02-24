@@ -1,13 +1,8 @@
 #include <stdint.h>
 #include <string.h>
-#include "lwip/mem.h"
-#include "drivers/mem.h"
 
 #include "../includes/keyobject.h"
 #include "../includes/pkcs8.h"
-#include "../includes/x509.h"
-#include "../includes/bytes.h"
-#include "keyobject_internal.h"
 
 uint8_t tls_objectid_bytes[][10] = {
     {0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01},
@@ -27,34 +22,9 @@ uint8_t tls_objectid_bytes[][10] = {
     {0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02}
 };
 
-static struct mem_buffer *g_keyobject_buffer = NULL;
-
 void tls_keyobject_set_buffer(struct mem_buffer *buf)
 {
-    g_keyobject_buffer = buf;
-}
-
-void *tls_keyobject_alloc(size_t size)
-{
-    if (g_keyobject_buffer)
-    {
-        return mem_buffer_malloc(g_keyobject_buffer, size);
-    }
-    return mem_malloc(size);
-}
-
-void tls_keyobject_free(void *ptr)
-{
-    if (!ptr)
-    {
-        return;
-    }
-    if (g_keyobject_buffer)
-    {
-        mem_buffer_free(g_keyobject_buffer, ptr);
-        return;
-    }
-    mem_free(ptr);
+    (void)buf;
 }
 
 struct tls_keyobject *tls_keyobject_import_private(const char *pem_data, size_t size, const char *password)
@@ -80,6 +50,5 @@ void tls_keyobject_destroy(struct tls_keyobject *kf)
     {
         return;
     }
-    tls_secure_memzero(kf, kf->length);
-    tls_keyobject_free(kf);
+    tls_pkcs8_object_destroy((struct tls_pkcs8_object *)kf);
 }

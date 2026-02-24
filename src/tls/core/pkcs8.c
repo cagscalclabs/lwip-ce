@@ -11,7 +11,6 @@
 #include "../includes/bytes.h"
 #include "../includes/pkcs8.h"
 #include "../includes/tls.h"
-#include "keyobject_internal.h"
 
 void rmemcpy(void *dest, void *src, size_t len);
 
@@ -1032,11 +1031,6 @@ struct tls_pkcs8_object *tls_pkcs8_object_import_private(const char *pem_data, s
 struct tls_pkcs8_object *tls_pkcs8_object_import_public(const char *pem_data, size_t size)
 {
     return tls_pkcs8_import(pem_data, size, NULL, NULL);
-}
-
-void tls_pkcs8_set_buffer(struct mem_buffer *buf)
-{
-    (void)buf;
 }
 
 void tls_pkcs8_object_destroy(struct tls_pkcs8_object *obj)
