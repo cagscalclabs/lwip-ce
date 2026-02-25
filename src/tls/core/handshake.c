@@ -147,6 +147,12 @@ bool tls_process_record(struct tls_handshake_context *ctx,
                     return false;
                 }
                 break;
+            case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
+                if (!tls_recv_new_session_ticket(ctx, payload + offset, msg_end - offset))
+                {
+                    return false;
+                }
+                break;
             default:
                 /* Unknown message type - skip it */
                 break;
@@ -244,6 +250,12 @@ bool tls_process_record(struct tls_handshake_context *ctx,
                     break;
                 case TLS_HANDSHAKE_FINISHED:
                     if (!tls_recv_finished(ctx, true, dec_buf + offset, msg_end - offset)) {
+                        mem_buffer_custom_free(dec_buf);
+                        return false;
+                    }
+                    break;
+                case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
+                    if (!tls_recv_new_session_ticket(ctx, dec_buf + offset, msg_end - offset)) {
                         mem_buffer_custom_free(dec_buf);
                         return false;
                     }
@@ -531,10 +543,16 @@ bool tls_send_client_hello(
         offset += ctx->psk_identity.identity_len;
 
         /* Obfuscated ticket age (4 bytes) */
-        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 24);
-        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 16);
-        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age >> 8);
-        out[offset++] = (uint8_t)(ctx->psk_identity.obfuscated_ticket_age & 0xFF);
+        uint32_t ticket_age = ctx->psk_identity.obfuscated_ticket_age;
+        if (ctx->ticket_received_ms != 0)
+        {
+            uint32_t elapsed = sys_now() - ctx->ticket_received_ms;
+            ticket_age = ctx->ticket_age_add + elapsed;
+        }
+        out[offset++] = (uint8_t)(ticket_age >> 24);
+        out[offset++] = (uint8_t)(ticket_age >> 16);
+        out[offset++] = (uint8_t)(ticket_age >> 8);
+        out[offset++] = (uint8_t)(ticket_age & 0xFF);
 
         /* Fill in identities length */
         size_t identities_len = offset - identities_start;
@@ -1515,6 +1533,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     {
         return false;
     }
+    memcpy(ctx->keys.master_secret, master_secret, 32);
 
     /* Step 4: Get transcript hash (ClientHello...server Finished). */
     tls_secure_memzero(transcript_hash, 32);
@@ -1674,6 +1693,19 @@ bool tls_send_finished(
         transcript_hash_update(ctx->transcript_hash, out, offset);
     }
 
+    /* Client Finished completes transcript needed for resumption master secret. */
+    if (is_client && ctx->transcript_hash)
+    {
+        uint8_t transcript_hash_full[32];
+        transcript_hash_digest(ctx->transcript_hash, transcript_hash_full);
+        if (!tls_derive_secret(TLS_HASH_SHA256, ctx->keys.master_secret, 32,
+                               "res master", 10, transcript_hash_full, 32,
+                               ctx->keys.resumption_master_secret))
+        {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -1784,6 +1816,126 @@ bool tls_recv_finished(
         ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     }
 
+    return true;
+}
+
+bool tls_recv_new_session_ticket(
+    struct tls_handshake_context *ctx,
+    const uint8_t *data,
+    size_t data_len)
+{
+    size_t offset = 0;
+    size_t msg_len;
+    size_t msg_end;
+    uint32_t ticket_lifetime;
+    uint32_t ticket_age_add;
+    uint8_t nonce_len;
+    const uint8_t *nonce;
+    uint16_t ticket_len;
+    const uint8_t *ticket;
+    uint16_t ext_len;
+
+    if (!ctx || !data || data_len < 4)
+    {
+        return false;
+    }
+
+    if (data[offset++] != TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET)
+    {
+        return false;
+    }
+
+    msg_len = ((size_t)data[offset] << 16) |
+              ((size_t)data[offset + 1] << 8) |
+              (size_t)data[offset + 2];
+    offset += 3;
+
+    if (offset + msg_len > data_len)
+    {
+        return false;
+    }
+    msg_end = offset + msg_len;
+
+    if (offset + 8 > msg_end)
+    {
+        return false;
+    }
+    ticket_lifetime = ((uint32_t)data[offset] << 24) |
+                      ((uint32_t)data[offset + 1] << 16) |
+                      ((uint32_t)data[offset + 2] << 8) |
+                      (uint32_t)data[offset + 3];
+    offset += 4;
+    ticket_age_add = ((uint32_t)data[offset] << 24) |
+                     ((uint32_t)data[offset + 1] << 16) |
+                     ((uint32_t)data[offset + 2] << 8) |
+                     (uint32_t)data[offset + 3];
+    offset += 4;
+
+    if (ticket_lifetime == 0)
+    {
+        return false;
+    }
+
+    if (offset + 1 > msg_end)
+    {
+        return false;
+    }
+    nonce_len = data[offset++];
+    if (offset + nonce_len > msg_end)
+    {
+        return false;
+    }
+    nonce = data + offset;
+    offset += nonce_len;
+
+    if (offset + 2 > msg_end)
+    {
+        return false;
+    }
+    ticket_len = ((uint16_t)data[offset] << 8) | (uint16_t)data[offset + 1];
+    offset += 2;
+    if (offset + ticket_len > msg_end)
+    {
+        return false;
+    }
+    ticket = data + offset;
+    offset += ticket_len;
+
+    if (offset + 2 > msg_end)
+    {
+        return false;
+    }
+    ext_len = ((uint16_t)data[offset] << 8) | (uint16_t)data[offset + 1];
+    offset += 2;
+    if (offset + ext_len != msg_end)
+    {
+        return false;
+    }
+
+    if (ticket_len == 0 || ticket_len > TLS_PSK_IDENTITY_MAX_LEN)
+    {
+        return false;
+    }
+    if (nonce_len == 0)
+    {
+        return false;
+    }
+
+    if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
+                               ctx->keys.resumption_master_secret, 32,
+                               "resumption", 10,
+                               nonce, nonce_len,
+                               ctx->psk, 32))
+    {
+        return false;
+    }
+
+    memcpy(ctx->psk_identity.identity, ticket, ticket_len);
+    ctx->psk_identity.identity_len = ticket_len;
+    ctx->psk_identity.obfuscated_ticket_age = ticket_age_add;
+    ctx->ticket_age_add = ticket_age_add;
+    ctx->ticket_received_ms = sys_now();
+    ctx->psk_mode = true;
     return true;
 }
 

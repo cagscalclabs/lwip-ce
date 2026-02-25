@@ -165,7 +165,9 @@ struct altcp_tls_session
 }
 #else
 {
-    u8_t dummy; /* Placeholder for CE TLS backend (no session resumption yet) */
+    u8_t valid;                        /* 1 if session payload is populated */
+    u8_t psk[32];                      /* Resumption/application PSK */
+    struct tls_psk_identity identity;  /* Identity + obfuscated_ticket_age */
 }
 #endif
 ;

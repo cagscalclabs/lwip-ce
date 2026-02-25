@@ -3,6 +3,13 @@
 #include "../tls/includes/bytes.h"
 
 #define MEM_POOL_HEADER_SIZE (sizeof(uint16_t))
+#define MEM_STATIC_ALIGN 8u
+
+enum mem_init_mode
+{
+    MEM_INIT_MODE_DYNAMIC = 0,
+    MEM_INIT_MODE_STATIC = 1
+};
 
 static size_t threshold_bytes(size_t cap, uint8_t pct)
 {
@@ -13,22 +20,9 @@ static void mem_buffer_notify_pressure(struct mem_buffer *rb, size_t requested, 
 static bool mem_buffer_maybe_grow(struct mem_buffer *rb, size_t incoming_len);
 static bool mem_buffer_is_pool_type(const struct mem_buffer *rb);
 static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct);
+static void mem_global_pressure_update(void);
 
 #define MEM_SHRINK_HOLD_DEFAULT 1u
-
-static size_t align_step(size_t value, size_t step)
-{
-    if (step == 0)
-    {
-        return value;
-    }
-    size_t rem = value % step;
-    if (rem == 0)
-    {
-        return value;
-    }
-    return value + (step - rem);
-}
 
 struct mem_global_config
 {
@@ -42,6 +36,200 @@ struct mem_global_config
 static struct mem_global_config g_mem_cfg;
 static bool g_mem_cfg_ready = false;
 static enum mem_pressure_level g_global_pressure_level = MEM_PRESSURE_NONE;
+static enum mem_init_mode g_mem_mode = MEM_INIT_MODE_DYNAMIC;
+
+struct mem_static_block
+{
+    size_t size;
+    struct mem_static_block *next;
+    struct mem_static_block *prev;
+    uint8_t free;
+};
+
+static struct
+{
+    uint8_t *base;
+    size_t size;
+    struct mem_static_block *head;
+    bool ready;
+} g_mem_static;
+
+static size_t mem_static_used_bytes(void)
+{
+    if (!g_mem_static.ready)
+    {
+        return 0;
+    }
+
+    size_t free_payload = 0;
+    struct mem_static_block *blk = g_mem_static.head;
+    while (blk)
+    {
+        if (blk->free)
+        {
+            free_payload += blk->size;
+        }
+        blk = blk->next;
+    }
+
+    if (g_mem_static.size < free_payload)
+    {
+        return g_mem_static.size;
+    }
+    return g_mem_static.size - free_payload;
+}
+
+static size_t mem_static_align_up(size_t n)
+{
+    return (n + (MEM_STATIC_ALIGN - 1u)) & ~(MEM_STATIC_ALIGN - 1u);
+}
+
+static void mem_static_init(void *buffer, size_t buffer_size)
+{
+    uint8_t *base = (uint8_t *)buffer;
+    size_t aligned_addr = mem_static_align_up((size_t)base);
+    size_t delta = aligned_addr - (size_t)base;
+
+    if (buffer_size <= delta + sizeof(struct mem_static_block))
+    {
+        memset(&g_mem_static, 0, sizeof(g_mem_static));
+        return;
+    }
+
+    g_mem_static.base = (uint8_t *)aligned_addr;
+    g_mem_static.size = buffer_size - delta;
+    g_mem_static.head = (struct mem_static_block *)g_mem_static.base;
+    g_mem_static.head->size = g_mem_static.size - sizeof(struct mem_static_block);
+    g_mem_static.head->next = NULL;
+    g_mem_static.head->prev = NULL;
+    g_mem_static.head->free = 1u;
+    g_mem_static.ready = true;
+    mem_global_pressure_update();
+}
+
+static void mem_static_split_block(struct mem_static_block *blk, size_t need)
+{
+    size_t remain = blk->size - need;
+    if (remain <= sizeof(struct mem_static_block) + MEM_STATIC_ALIGN)
+    {
+        return;
+    }
+
+    struct mem_static_block *nxt =
+        (struct mem_static_block *)((uint8_t *)blk + sizeof(struct mem_static_block) + need);
+    nxt->size = remain - sizeof(struct mem_static_block);
+    nxt->free = 1u;
+    nxt->next = blk->next;
+    nxt->prev = blk;
+    if (nxt->next)
+    {
+        nxt->next->prev = nxt;
+    }
+    blk->next = nxt;
+    blk->size = need;
+}
+
+static void *mem_static_malloc(size_t size)
+{
+    if (!g_mem_static.ready || size == 0)
+    {
+        return NULL;
+    }
+
+    size_t need = mem_static_align_up(size);
+    struct mem_static_block *blk = g_mem_static.head;
+    while (blk)
+    {
+        if (blk->free && blk->size >= need)
+        {
+            mem_static_split_block(blk, need);
+            blk->free = 0u;
+            mem_global_pressure_update();
+            return (uint8_t *)blk + sizeof(struct mem_static_block);
+        }
+        blk = blk->next;
+    }
+    return NULL;
+}
+
+static void mem_static_merge_forward(struct mem_static_block *blk)
+{
+    while (blk && blk->next && blk->next->free)
+    {
+        struct mem_static_block *nxt = blk->next;
+        blk->size += sizeof(struct mem_static_block) + nxt->size;
+        blk->next = nxt->next;
+        if (blk->next)
+        {
+            blk->next->prev = blk;
+        }
+    }
+}
+
+static void mem_static_free(void *ptr)
+{
+    if (!g_mem_static.ready || !ptr)
+    {
+        return;
+    }
+
+    struct mem_static_block *blk =
+        (struct mem_static_block *)((uint8_t *)ptr - sizeof(struct mem_static_block));
+    blk->free = 1u;
+    mem_static_merge_forward(blk);
+    if (blk->prev && blk->prev->free)
+    {
+        mem_static_merge_forward(blk->prev);
+    }
+    mem_global_pressure_update();
+}
+
+static void *mem_static_realloc(void *ptr, size_t size)
+{
+    if (!ptr)
+    {
+        return mem_static_malloc(size);
+    }
+    if (size == 0)
+    {
+        mem_static_free(ptr);
+        return NULL;
+    }
+    if (!g_mem_static.ready)
+    {
+        return NULL;
+    }
+
+    size_t need = mem_static_align_up(size);
+    struct mem_static_block *blk =
+        (struct mem_static_block *)((uint8_t *)ptr - sizeof(struct mem_static_block));
+    if (blk->size >= need)
+    {
+        mem_static_split_block(blk, need);
+        mem_global_pressure_update();
+        return ptr;
+    }
+
+    if (blk->next && blk->next->free &&
+        blk->size + sizeof(struct mem_static_block) + blk->next->size >= need)
+    {
+        mem_static_merge_forward(blk);
+        mem_static_split_block(blk, need);
+        blk->free = 0u;
+        mem_global_pressure_update();
+        return ptr;
+    }
+
+    void *np = mem_static_malloc(size);
+    if (!np)
+    {
+        return NULL;
+    }
+    memcpy(np, ptr, blk->size < size ? blk->size : size);
+    mem_static_free(ptr);
+    mem_global_pressure_update();
+    return np;
+}
 
 static size_t mem_buffer_used_bytes(const struct mem_buffer *rb)
 {
@@ -62,6 +250,18 @@ static size_t mem_buffer_used_bytes(const struct mem_buffer *rb)
 
 static void mem_global_pressure_update(void)
 {
+    if (g_mem_mode == MEM_INIT_MODE_STATIC)
+    {
+        if (!g_mem_cfg_ready || !g_mem_static.ready || g_mem_static.size == 0)
+        {
+            g_global_pressure_level = MEM_PRESSURE_NONE;
+            return;
+        }
+        size_t used = mem_static_used_bytes();
+        uint8_t usage_pct = (uint8_t)((used * 100u) / g_mem_static.size);
+        g_global_pressure_level = mem_pressure_level_from_usage(usage_pct);
+        return;
+    }
     if (!g_mem_cfg_ready || g_mem_cfg.max_heap == 0)
     {
         return;
@@ -344,17 +544,51 @@ bool mem_init(size_t max_heap,
               mem_free_fn free_fn,
               mem_realloc_fn realloc_fn)
 {
+    return mem_init_dynamic(max_heap, malloc_fn, free_fn, realloc_fn);
+}
+
+bool mem_init_dynamic(size_t max_heap,
+                      mem_malloc_fn malloc_fn,
+                      mem_free_fn free_fn,
+                      mem_realloc_fn realloc_fn)
+{
     if (!malloc_fn || !free_fn)
     {
         return false;
     }
 
+    memset(&g_mem_static, 0, sizeof(g_mem_static));
     g_mem_cfg.max_heap = max_heap;
     g_mem_cfg.heap_used = 0;
     g_mem_cfg.malloc_fn = malloc_fn;
     g_mem_cfg.free_fn = free_fn;
     g_mem_cfg.realloc_fn = realloc_fn;
     g_global_pressure_level = MEM_PRESSURE_NONE;
+    g_mem_mode = MEM_INIT_MODE_DYNAMIC;
+    g_mem_cfg_ready = true;
+    return true;
+}
+
+bool mem_init_static(void *buffer, size_t buffer_size)
+{
+    if (!buffer || buffer_size < (sizeof(struct mem_static_block) + MEM_STATIC_ALIGN))
+    {
+        return false;
+    }
+
+    mem_static_init(buffer, buffer_size);
+    if (!g_mem_static.ready)
+    {
+        return false;
+    }
+
+    g_mem_cfg.max_heap = 0;
+    g_mem_cfg.heap_used = 0;
+    g_mem_cfg.malloc_fn = mem_static_malloc;
+    g_mem_cfg.free_fn = mem_static_free;
+    g_mem_cfg.realloc_fn = mem_static_realloc;
+    g_global_pressure_level = MEM_PRESSURE_NONE;
+    g_mem_mode = MEM_INIT_MODE_STATIC;
     g_mem_cfg_ready = true;
     return true;
 }
@@ -387,6 +621,11 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
     if ((initial_size == 0 && type != MEM_BUFFER_FILE) || !g_mem_cfg.malloc_fn || !g_mem_cfg.free_fn)
     {
         return NULL;
+    }
+
+    if (g_mem_mode == MEM_INIT_MODE_STATIC)
+    {
+        flags |= BUFFER_LOCK_SIZE;
     }
 
     /* BUFFER_USER_ALLOC buffers don't count toward heap */
@@ -700,6 +939,16 @@ size_t mem_buffer_drain(struct mem_buffer *rb, size_t budget)
 
 static void mem_buffer_notify_pressure(struct mem_buffer *rb, size_t requested, enum mem_pressure_level level)
 {
+    if (g_mem_mode == MEM_INIT_MODE_STATIC)
+    {
+        if (rb)
+        {
+            rb->last_pressure_level = MEM_PRESSURE_NONE;
+        }
+        (void)requested;
+        (void)level;
+        return;
+    }
     if (!rb)
     {
         return;

@@ -30,6 +30,7 @@ extern "C" {
 /* TLS 1.3 Constants */
 #define TLS_VERSION_1_3         0x0304
 #define TLS_LEGACY_VERSION      0x0303  /* TLS 1.2 for compatibility */
+#define TLS_PSK_IDENTITY_MAX_LEN 256
 
 /* Cipher Suites */
 #define TLS_AES_128_GCM_SHA256  0x1301
@@ -92,7 +93,7 @@ enum tls_server_handshake_type {
  * @brief TLS 1.3 PSK Identity
  */
 struct tls_psk_identity {
-    uint8_t identity[32];          /* PSK identity (e.g., session ticket) */
+    uint8_t identity[TLS_PSK_IDENTITY_MAX_LEN]; /* PSK identity (e.g., session ticket) */
     size_t identity_len;           /* Length of identity */
     uint32_t obfuscated_ticket_age;  /* Obfuscated age for resumption */
 };
@@ -103,6 +104,8 @@ struct tls_psk_identity {
 struct tls_traffic_keys {
     /* Key schedule secrets */
     uint8_t handshake_secret[32];
+    uint8_t master_secret[32];
+    uint8_t resumption_master_secret[32];
 
     /* Traffic secrets */
     uint8_t client_handshake_traffic_secret[32];
@@ -167,6 +170,8 @@ struct tls_handshake_context {
     uint8_t ecdhe_shared[32];        /* Computed shared secret */
     uint8_t ecdhe_public[32];        /* Our ephemeral public key */
     bool ecdhe_negotiated;            /* True if server selected PSK+ECDHE */
+    uint32_t ticket_age_add;          /* NST ticket_age_add */
+    uint32_t ticket_received_ms;      /* sys_now() when last ticket was accepted */
 
     /* SNI hostname for server_name extension */
     const char *hostname;
@@ -363,6 +368,23 @@ bool tls_send_finished(
 bool tls_recv_finished(
     struct tls_handshake_context *ctx,
     bool is_client,
+    const uint8_t *data,
+    size_t data_len
+);
+
+/**
+ * @brief Process TLS 1.3 NewSessionTicket message.
+ *
+ * Parses server's post-handshake ticket, derives a resumption PSK from
+ * resumption_master_secret, and updates ctx->psk / ctx->psk_identity.
+ *
+ * @param ctx Handshake context
+ * @param data NewSessionTicket handshake message (type + len + body)
+ * @param data_len Length of message buffer
+ * @return true on success, false on parse/derive failure
+ */
+bool tls_recv_new_session_ticket(
+    struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len
 );

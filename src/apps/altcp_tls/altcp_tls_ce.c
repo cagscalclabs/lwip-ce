@@ -15,6 +15,7 @@
 #include "lwip/altcp_tls.h"
 #include "lwip/priv/altcp_priv.h"
 #include "lwip/mem.h"
+#include <ti/vars.h>
 #include "altcp_tls_ce.h"
 #include "../../tls/includes/handshake.h"
 #include "../../drivers/mem.h"
@@ -45,6 +46,85 @@ static void tls_dbg_status(const char *msg)
 
 static enum mem_pressure_level g_tls_rx_throttle_level = MEM_PRESSURE_NONE;
 static altcp_tls_ce_state_t *g_tls_state_head = NULL;
+
+#define ALTCP_TLS_CE_PSKI_APPVAR "lwIPPSKI"
+#define ALTCP_TLS_CE_PSKI_MAGIC 0x49534B50u /* "PSKI" */
+#define ALTCP_TLS_CE_PSKI_VERSION 1u
+
+struct altcp_tls_ce_pski_blob
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t reserved;
+    uint8_t psk[32];
+    struct tls_psk_identity identity;
+};
+
+static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session)
+{
+    uint8_t handle;
+    struct altcp_tls_ce_pski_blob blob;
+
+    if (!session || !session->valid || session->identity.identity_len > sizeof(session->identity.identity))
+    {
+        return false;
+    }
+
+    memset(&blob, 0, sizeof(blob));
+    blob.magic = ALTCP_TLS_CE_PSKI_MAGIC;
+    blob.version = ALTCP_TLS_CE_PSKI_VERSION;
+    memcpy(blob.psk, session->psk, sizeof(blob.psk));
+    memcpy(&blob.identity, &session->identity, sizeof(blob.identity));
+
+    handle = ti_Open(ALTCP_TLS_CE_PSKI_APPVAR, "w");
+    if (!handle)
+    {
+        return false;
+    }
+    if (ti_Write(&blob, sizeof(blob), 1, handle) != 1)
+    {
+        ti_Close(handle);
+        return false;
+    }
+    ti_Close(handle);
+    return true;
+}
+
+static bool altcp_tls_ce_load_pski(struct altcp_tls_session *session)
+{
+    uint8_t handle;
+    struct altcp_tls_ce_pski_blob blob;
+
+    if (!session)
+    {
+        return false;
+    }
+
+    handle = ti_Open(ALTCP_TLS_CE_PSKI_APPVAR, "r");
+    if (!handle)
+    {
+        return false;
+    }
+    if (ti_Read(&blob, sizeof(blob), 1, handle) != 1)
+    {
+        ti_Close(handle);
+        return false;
+    }
+    ti_Close(handle);
+
+    if (blob.magic != ALTCP_TLS_CE_PSKI_MAGIC ||
+        blob.version != ALTCP_TLS_CE_PSKI_VERSION ||
+        blob.identity.identity_len > sizeof(blob.identity.identity))
+    {
+        return false;
+    }
+
+    memset(session, 0, sizeof(*session));
+    session->valid = 1;
+    memcpy(session->psk, blob.psk, sizeof(session->psk));
+    memcpy(&session->identity, &blob.identity, sizeof(session->identity));
+    return true;
+}
 
 static void tls_state_add(altcp_tls_ce_state_t *state)
 {
@@ -136,6 +216,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     const char *hostname)
 {
     struct altcp_tls_ce_config *conf;
+    struct altcp_tls_session resumed;
 
     conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
     if (conf == NULL) {
@@ -147,6 +228,14 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     conf->psk_mode = 0;
     conf->hostname = hostname;
     conf->rx_ring_size = ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE;
+
+    /* Opportunistically resume from persisted PSK identity state. */
+    memset(&resumed, 0, sizeof(resumed));
+    if (altcp_tls_ce_load_pski(&resumed) && resumed.valid) {
+        conf->psk_mode = 1;
+        memcpy(conf->psk, resumed.psk, sizeof(conf->psk));
+        memcpy(&conf->psk_identity, &resumed.identity, sizeof(conf->psk_identity));
+    }
 
     return conf;
 }
@@ -514,6 +603,18 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     state->flags |= ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE;
                     state->tls_ctx.state = TLS_STATE_HANDSHAKE_COMPLETE;
 
+                    /* Persist resumable PSK identity payload for future connects. */
+                    if (state->tls_ctx.psk_mode &&
+                        state->tls_ctx.psk_identity.identity_len > 0 &&
+                        state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity)) {
+                        struct altcp_tls_session session_blob;
+                        memset(&session_blob, 0, sizeof(session_blob));
+                        session_blob.valid = 1;
+                        memcpy(session_blob.psk, state->tls_ctx.psk, sizeof(session_blob.psk));
+                        memcpy(&session_blob.identity, &state->tls_ctx.psk_identity, sizeof(session_blob.identity));
+                        (void)altcp_tls_ce_save_pski(&session_blob);
+                    }
+
                     /* Notify upper layer */
                     if (conn->connected) {
                         err_t err = conn->connected(conn->arg, conn, ERR_OK);
@@ -673,6 +774,37 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 } else {
                     pbuf_cat(state->rx_app, buf);
                 }
+            }
+        } else if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE) {
+            size_t hs_off = 0;
+            while (hs_off + 4 <= dec_len) {
+                uint8_t msg_type = dec_buf[hs_off];
+                size_t msg_len = ((size_t)dec_buf[hs_off + 1] << 16) |
+                                 ((size_t)dec_buf[hs_off + 2] << 8) |
+                                 (size_t)dec_buf[hs_off + 3];
+                size_t msg_end = hs_off + 4 + msg_len;
+                if (msg_end > dec_len) {
+                    mem_free(dec_buf);
+                    altcp_abort(conn);
+                    return ERR_ABRT;
+                }
+
+                if (msg_type == TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET) {
+                    if (!tls_recv_new_session_ticket(&state->tls_ctx, dec_buf + hs_off, msg_end - hs_off)) {
+                        mem_free(dec_buf);
+                        altcp_abort(conn);
+                        return ERR_ABRT;
+                    }
+
+                    struct altcp_tls_session session_blob;
+                    memset(&session_blob, 0, sizeof(session_blob));
+                    session_blob.valid = 1;
+                    memcpy(session_blob.psk, state->tls_ctx.psk, sizeof(session_blob.psk));
+                    memcpy(&session_blob.identity, &state->tls_ctx.psk_identity, sizeof(session_blob.identity));
+                    (void)altcp_tls_ce_save_pski(&session_blob);
+                }
+
+                hs_off = msg_end;
             }
         } else if (inner_type == TLS_CONTENT_TYPE_ALERT) {
             /* Handle alert */
@@ -1350,18 +1482,55 @@ void altcp_tls_init_session(struct altcp_tls_session *dest)
 
 err_t altcp_tls_get_session(struct altcp_pcb *conn, struct altcp_tls_session *dest)
 {
-    LWIP_UNUSED_ARG(conn);
-    LWIP_UNUSED_ARG(dest);
-    /* Session resumption not yet supported on CE */
+    if (!dest) {
+        return ERR_ARG;
+    }
+
+    memset(dest, 0, sizeof(*dest));
+
+    if (conn && conn->state) {
+        altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
+        if (state->tls_ctx.psk_mode &&
+            state->tls_ctx.psk_identity.identity_len > 0 &&
+            state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity)) {
+            dest->valid = 1;
+            memcpy(dest->psk, state->tls_ctx.psk, sizeof(dest->psk));
+            memcpy(&dest->identity, &state->tls_ctx.psk_identity, sizeof(dest->identity));
+            (void)altcp_tls_ce_save_pski(dest);
+            return ERR_OK;
+        }
+    }
+
+    if (altcp_tls_ce_load_pski(dest) && dest->valid) {
+        return ERR_OK;
+    }
+
     return ERR_VAL;
 }
 
 err_t altcp_tls_set_session(struct altcp_pcb *conn, struct altcp_tls_session *from)
 {
-    LWIP_UNUSED_ARG(conn);
-    LWIP_UNUSED_ARG(from);
-    /* Session resumption not yet supported on CE */
-    return ERR_VAL;
+    if (!from || !from->valid ||
+        from->identity.identity_len == 0 ||
+        from->identity.identity_len > sizeof(from->identity.identity)) {
+        return ERR_ARG;
+    }
+
+    if (conn && conn->state) {
+        altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
+        struct altcp_tls_ce_config *conf = (struct altcp_tls_ce_config *)state->conf;
+        if (conf) {
+            conf->psk_mode = 1;
+            memcpy(conf->psk, from->psk, sizeof(conf->psk));
+            memcpy(&conf->psk_identity, &from->identity, sizeof(conf->psk_identity));
+        }
+        memcpy(state->tls_ctx.psk, from->psk, sizeof(state->tls_ctx.psk));
+        memcpy(&state->tls_ctx.psk_identity, &from->identity, sizeof(state->tls_ctx.psk_identity));
+        state->tls_ctx.psk_mode = true;
+    }
+
+    (void)altcp_tls_ce_save_pski(from);
+    return ERR_OK;
 }
 
 void altcp_tls_free_session(struct altcp_tls_session *dest)

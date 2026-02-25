@@ -121,6 +121,33 @@ bool mem_init(size_t max_heap,
               mem_malloc_fn malloc_fn,
               mem_free_fn free_fn,
               mem_realloc_fn realloc_fn);
+
+/**
+ * @brief Initialize memory system with caller-provided dynamic allocators.
+ *
+ * Equivalent to mem_init(...), but explicit naming for dynamic mode.
+ */
+bool mem_init_dynamic(size_t max_heap,
+                      mem_malloc_fn malloc_fn,
+                      mem_free_fn free_fn,
+                      mem_realloc_fn realloc_fn);
+
+/**
+ * @brief Initialize memory system in static mode from a fixed arena.
+ *
+ * The arena is internally managed by a lightweight allocator. No external
+ * malloc/free/realloc callbacks are required after this call.
+ *
+ * Static mode characteristics:
+ * - no ring/pool grow or shrink,
+ * - no pressure callbacks/levels,
+ * - FILE buffers still allocate lazily, but from the fixed arena.
+ *
+ * @param buffer Fixed backing storage.
+ * @param buffer_size Size in bytes of @p buffer.
+ * @return true on success, false on invalid arena.
+ */
+bool mem_init_static(void *buffer, size_t buffer_size);
 /**
  * @brief Create a ring/pool buffer with sizing rules and flags.
  * @param type Buffer type.

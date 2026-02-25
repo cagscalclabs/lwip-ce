@@ -10,11 +10,12 @@
 #include "tls/includes/pkcs8.h"
 #include "tls/includes/asn1.h"
 
-#define TLS_TEST_MAX_HEAP (24u * 1024u)
+#define TLS_TEST_STATIC_ARENA (32u * 1024u)
+static uint8_t tls_test_arena[TLS_TEST_STATIC_ARENA];
 
 static bool tls_test_mem_init(void)
 {
-    if (!mem_init(TLS_TEST_MAX_HEAP, malloc, free, realloc))
+    if (!mem_init_static(tls_test_arena, sizeof(tls_test_arena)))
     {
         return false;
     }
