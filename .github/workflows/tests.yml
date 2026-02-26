@@ -143,36 +143,85 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          find ${{env.LWIP_TESTS}} -name autotest.json -print0 | {
-            # Initialize variables
-            total_tests=0
-            total_passed=0
-            total_failed=0
-            start_time=$(($(date +%s%N)/1000000))
+          timing_test=""
+          declare -a regular_tests=()
 
-            while read -rd '' test; do
+          while IFS= read -r -d '' test; do
+            test_dir=$(dirname "$test")
+            if [ "$(basename "$test_dir")" = "tls_timing" ]; then
+              timing_test="$test"
+            else
+              regular_tests+=("$test")
+            fi
+          done < <(find ${{env.LWIP_TESTS}} -name autotest.json -print0)
+
+          total_tests=0
+          total_passed=0
+          total_failed=0
+          start_time=$(($(date +%s%N)/1000000))
+
+          timing_pid=""
+          timing_status_file="${{github.workspace}}/timing_status.txt"
+
+          if [ -n "$timing_test" ]; then
+            (
               status=0
               test_start=$(($(date +%s%N)/1000000))
-              test_dir=$(dirname "$test")
+              test_dir=$(dirname "$timing_test")
               make -C "$test_dir" clean
               make -C "$test_dir" all test || ((status=$?))
               test_done=$(($(date +%s%N)/1000000))
               test_duration=$((test_done - test_start))
-              (( total_tests += 1 ))
               if [ $status -eq 0 ]; then
-                (( total_passed += 1 ))
                 test_status="passed"
               else
-                (( total_failed += 1 ))
                 test_status="failed"
               fi
-              echo -e "{\"name\":\"$(basename $test_dir)\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" >> "$test_dir/result.json"
-            done
-            end_time=$(($(date +%s%N)/1000000))
-            echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" >> ${{github.workspace}}/summary.json
-            cmake -E echo "$total_tests modules tested, $total_passed passed, $total_failed failed!"
-            exit $total_failed
-          }
+              echo -e "{\"name\":\"$(basename "$test_dir")\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
+              echo "$status|$test_duration" > "$timing_status_file"
+            ) &
+            timing_pid=$!
+          fi
+
+          for test in "${regular_tests[@]}"; do
+            status=0
+            test_start=$(($(date +%s%N)/1000000))
+            test_dir=$(dirname "$test")
+            make -C "$test_dir" clean
+            make -C "$test_dir" all test || ((status=$?))
+            test_done=$(($(date +%s%N)/1000000))
+            test_duration=$((test_done - test_start))
+            (( total_tests += 1 ))
+            if [ $status -eq 0 ]; then
+              (( total_passed += 1 ))
+              test_status="passed"
+            else
+              (( total_failed += 1 ))
+              test_status="failed"
+            fi
+            echo -e "{\"name\":\"$(basename "$test_dir")\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
+          done
+
+          if [ -n "$timing_pid" ]; then
+            wait "$timing_pid" || true
+            if [ -f "$timing_status_file" ]; then
+              IFS='|' read -r status _ < "$timing_status_file"
+              rm -f "$timing_status_file"
+            else
+              status=1
+            fi
+            (( total_tests += 1 ))
+            if [ "$status" = "0" ]; then
+              (( total_passed += 1 ))
+            else
+              (( total_failed += 1 ))
+            fi
+          fi
+
+          end_time=$(($(date +%s%N)/1000000))
+          echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" >> ${{github.workspace}}/summary.json
+          cmake -E echo "$total_tests modules tested, $total_passed passed, $total_failed failed!"
+          exit $total_failed
 
       - name: Generate JSON Results
         if: always()
@@ -210,6 +259,26 @@ jobs:
           echo "| Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
           echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
           echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Timing Methodology (tls_timing)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Stability check: run repeated timing on identical input; pass requires standard deviation < 1.00% of mean." >> $GITHUB_STEP_SUMMARY
+          echo "- Differential check: compare best/worst/random/edge input classes; fail only when mean cycle delta exceeds threshold and direction is consistent in >=75% of samples." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Primitive | Differential Threshold (cycles) |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|----------------------------------:|" >> $GITHUB_STEP_SUMMARY
+          echo "| RNG | 64 |" >> $GITHUB_STEP_SUMMARY
+          echo "| BYTES | 8 |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA256 | 32 |" >> $GITHUB_STEP_SUMMARY
+          echo "| HMAC | 32 |" >> $GITHUB_STEP_SUMMARY
+          echo "| HKDF | 48 |" >> $GITHUB_STEP_SUMMARY
+          echo "| PBKDF2 | 192 |" >> $GITHUB_STEP_SUMMARY
+          echo "| AESGCM-E | 48 |" >> $GITHUB_STEP_SUMMARY
+          echo "| AESGCM-DV | 64 |" >> $GITHUB_STEP_SUMMARY
+          echo "| AESCBC-E | 48 |" >> $GITHUB_STEP_SUMMARY
+          echo "| AESCBC-D | 48 |" >> $GITHUB_STEP_SUMMARY
+          echo "| X25519 | 128 |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Add detailed test results table
