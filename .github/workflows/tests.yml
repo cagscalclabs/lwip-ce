@@ -161,6 +161,51 @@ jobs:
           echo "| Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
           echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
           echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          jq -r '.results.tests[] | .name' ${{github.workspace}}/results-core.json | while read test_name; do
+            test_dir="$LWIP_TESTS/$test_name"
+            test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
+
+            status=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .status" ${{github.workspace}}/results-core.json)
+            module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
+            module_desc=${module_desc:-"(no description)"}
+            module_desc=${module_desc//$'\n'/ }
+            module_desc=${module_desc//|/\\|}
+
+            if [ "$status" = "passed" ]; then
+              status_icon="✅ Passed"
+            else
+              status_icon="❌ Failed"
+            fi
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### $test_name" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Module | Tests | Status | Description |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| $test_name |  | $status_icon | $module_desc |" >> $GITHUB_STEP_SUMMARY
+
+            jq -r '.sequence // [] | map(select(startswith("hashWait")))[]' "$test_dir/autotest.json" 2>/dev/null | while read -r seq_entry; do
+              hash_id="${seq_entry#hashWait|}"
+              hash_desc=$(jq -r ".hashes[\"$hash_id\"].description // \"(no description)\"" "$test_dir/autotest.json" 2>/dev/null)
+              hash_desc=${hash_desc//$'\n'/ }
+              hash_desc=${hash_desc//|/\\|}
+              if [ "$status" = "passed" ]; then
+                hash_status="✅ Passed"
+              else
+                hash_status="❌ Failed"
+              fi
+              echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
+            done
+            if [ "$test_count" -eq 0 ]; then
+              echo "|  | (none) | $status_icon | (no hash tests) |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
 
       - name: Upload Core Results Logfile
         uses: actions/upload-artifact@v4
@@ -218,46 +263,6 @@ jobs:
             echo "ERROR: ROM file not created"
             exit 1
           fi
-
-      - name: Download truststore AppVar
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          repo = os.environ["GITHUB_REPOSITORY"]
-          token = os.environ["GITHUB_TOKEN"]
-          tag = "truststore-latest"
-          asset_name = "lwIPSPKI.8xv"
-          api = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
-          req = urllib.request.Request(
-              api,
-              headers={
-                  "Authorization": f"Bearer {token}",
-                  "Accept": "application/vnd.github+json",
-              },
-          )
-          with urllib.request.urlopen(req) as resp:
-              data = json.load(resp)
-          assets = data.get("assets", [])
-          asset = next((a for a in assets if a.get("name") == asset_name), None)
-          if not asset:
-              raise SystemExit(f"missing release asset {asset_name} on tag {tag}")
-          req = urllib.request.Request(
-              asset["url"],
-              headers={
-                  "Authorization": f"Bearer {token}",
-                  "Accept": "application/octet-stream",
-              },
-          )
-          out_path = os.path.join("tests", "tls_truststore", asset_name)
-          with urllib.request.urlopen(req) as resp, open(out_path, "wb") as f:
-              f.write(resp.read())
-          print(f"downloaded {asset_name} -> {out_path}")
-          PY
 
       - name: Checkout CEmu
         uses: actions/checkout@v4
