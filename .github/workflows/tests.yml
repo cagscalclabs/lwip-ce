@@ -15,7 +15,7 @@ env:
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
 jobs:
-  test_core:
+  unit_tests:
     runs-on: ubuntu-latest
     environment: test
 
@@ -217,7 +217,7 @@ jobs:
         if: always()
         run: rm -f ${{env.AUTOTESTER_ROM}}
 
-  test_timing:
+  profile_timing_consistency:
     runs-on: ubuntu-latest
     environment: test
 
