@@ -23,3 +23,6 @@ tests/**/*.pem
 
 # ignore Latex document files
 **/.tex
+
+# local documentation tooling and outputs
+tools/
