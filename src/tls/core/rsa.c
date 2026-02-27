@@ -5,11 +5,64 @@
 #include "../includes/random.h"
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
-#include "../includes/tls.h"
 #include "../includes/crypto_guard.h"
+#include "../../drivers/mem.h"
 
 #define ENCODE_START 0
 #define ENCODE_SALT (1 + ENCODE_START)
+
+#define RSA_PADDING_POOL_BLOCK_SIZE (RSA_MODULUS_MAX_SUPPORTED * 2u)
+#define RSA_PADDING_POOL_BLOCK_COUNT 2u
+#define RSA_PADDING_POOL_SIZE (RSA_PADDING_POOL_BLOCK_SIZE * RSA_PADDING_POOL_BLOCK_COUNT)
+
+static struct mem_buffer *g_rsa_padding_pool = NULL;
+
+static bool tls_rsa_padding_pool_ensure(void)
+{
+    if (g_rsa_padding_pool != NULL)
+    {
+        return true;
+    }
+
+    g_rsa_padding_pool = mem_buffer_create(MEM_BUFFER_POOL,
+                                           RSA_PADDING_POOL_SIZE,
+                                           RSA_PADDING_POOL_SIZE,
+                                           RSA_PADDING_POOL_BLOCK_SIZE,
+                                           BUFFER_SECURE_MODE | BUFFER_LOCK_SIZE);
+    return g_rsa_padding_pool != NULL;
+}
+
+static uint8_t *tls_rsa_padding_alloc(size_t needed)
+{
+    if (needed == 0 || needed > RSA_PADDING_POOL_BLOCK_SIZE)
+    {
+        return NULL;
+    }
+    if (!tls_rsa_padding_pool_ensure())
+    {
+        return NULL;
+    }
+    return (uint8_t *)mem_buffer_malloc(g_rsa_padding_pool, needed);
+}
+
+static void tls_rsa_padding_free(void *ptr)
+{
+    if (ptr == NULL || g_rsa_padding_pool == NULL)
+    {
+        return;
+    }
+    mem_buffer_free(g_rsa_padding_pool, ptr);
+}
+
+void tls_rsa_padding_cleanup(void)
+{
+    if (g_rsa_padding_pool != NULL)
+    {
+        mem_buffer_destroy(g_rsa_padding_pool);
+        g_rsa_padding_pool = NULL;
+    }
+}
+
 // CRYPTO_FN
 bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
                          size_t modulus_len, const char *auth, uint8_t hash_alg)
@@ -22,12 +75,9 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (in_len == 0))
         return false;
 
-    /* Check TLS context is initialized */
-    if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
-        return false;
-
     tls_crypto_guard_enable();
     bool ok = false;
+    uint8_t *mgf1_digest = NULL;
 
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
@@ -37,9 +87,11 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     size_t db_len = modulus_len - hash.digestlen - 1;
     size_t encode_lhash = ENCODE_SALT + hash.digestlen;
     size_t encode_ps = encode_lhash + hash.digestlen;
-    uint8_t *mgf1_digest = tls_ctx.rsa_scratch; /* Use TLS scratch buffer */
 
     if ((in_len + min_padding_len) > modulus_len)
+        goto cleanup;
+    mgf1_digest = tls_rsa_padding_alloc(db_len);
+    if (mgf1_digest == NULL)
         goto cleanup;
 
     // set first byte to 00
@@ -73,6 +125,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     // Return the static size of 256
     ok = true;
 cleanup:
+    tls_rsa_padding_free(mgf1_digest);
     tls_crypto_guard_disable();
     return ok;
 }
@@ -86,12 +139,9 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (outbuf == NULL))
         return 0;
 
-    /* Check TLS context is initialized */
-    if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
-        return 0;
-
     tls_crypto_guard_enable();
     size_t out_len = 0;
+    uint8_t *workspace = NULL;
 
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
@@ -103,9 +153,12 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     size_t encode_ps = encode_lhash + hash.digestlen;
     size_t i;
 
-    /* Layout: tmp[512] || mgf1_digest[512] */
-    uint8_t *tmp = tls_ctx.rsa_scratch;
-    uint8_t *mgf1_digest = tmp + RSA_MODULUS_MAX_SUPPORTED;
+    /* Layout: tmp[in_len] || mgf1_digest[db_len] */
+    workspace = tls_rsa_padding_alloc(in_len + db_len);
+    if (workspace == NULL)
+        goto cleanup;
+    uint8_t *tmp = workspace;
+    uint8_t *mgf1_digest = tmp + in_len;
 
     memcpy(tmp, inbuf, in_len);
 
@@ -144,6 +197,7 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
     out_len = in_len - i;
 cleanup:
+    tls_rsa_padding_free(workspace);
     tls_crypto_guard_disable();
     return out_len;
 }
@@ -213,7 +267,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
  * PSS padding structure for the given message hash. It does NOT perform
  * RSA modular exponentiation - the caller must decrypt the signature first.
  *
- * Uses internal TLS scratch buffer for temporary computations.
+ * Uses internal RSA padding pool scratch buffer for temporary computations.
  * em_bits is derived internally as (em_len * 8) - 1.
  *
  * @param encoded_msg   The decrypted signature (EM), big-endian, emLen bytes
@@ -236,12 +290,9 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     /* Derive em_bits from em_len: modBits - 1 */
     uint16_t em_bits = (uint16_t)((em_len * 8) - 1);
 
-    /* Check TLS context is initialized */
-    if (!tls_ctx.initialized || tls_ctx.rsa_scratch == NULL)
-        return false;
-
     tls_crypto_guard_enable();
     bool ok = false;
+    uint8_t *workspace = NULL;
 
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
@@ -251,8 +302,15 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
 
     size_t db_len = em_len - hash.digestlen - 1;
 
-    /* Use TLS scratch buffer: db_mask[em_len] || tmp[72] */
-    uint8_t *db_mask = tls_ctx.rsa_scratch;
+    /* Workspace layout: db_mask[em_len] || tmp[max(db_len, 8 + 2*hash_len)] */
+    size_t tmp_len = db_len;
+    size_t hprime_len = 8u + (hash.digestlen << 1);
+    if (tmp_len < hprime_len)
+        tmp_len = hprime_len;
+    workspace = tls_rsa_padding_alloc(em_len + tmp_len);
+    if (workspace == NULL)
+        goto cleanup;
+    uint8_t *db_mask = workspace;
     uint8_t *tmp = db_mask + em_len;
 
     /* Copy EM to db_mask buffer for in-place modification */
@@ -308,6 +366,7 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     /* Verify H' == H */
     ok = tls_bytes_compare(tmp, H, hash.digestlen);
 cleanup:
+    tls_rsa_padding_free(workspace);
     tls_crypto_guard_disable();
     return ok;
 }

@@ -27,7 +27,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
  * PSS padding structure for the given message hash. It does NOT perform
  * RSA modular exponentiation - the caller must decrypt the signature first.
  *
- * Uses internal TLS scratch buffer for temporary computations.
+ * Uses an internal RSA padding workspace pool for temporary computations.
  * em_bits is derived internally as (em_len * 8) - 1.
  *
  * @param encoded_msg   The decrypted signature (EM), big-endian, emLen bytes
@@ -40,5 +40,13 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
 bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
                         const uint8_t *mhash, size_t mhash_len,
                         uint8_t hash_alg);
+
+/**
+ * @brief Release internal RSA padding workspace pool (NULL-safe).
+ *
+ * Intended for subsystem cleanup paths; future RSA calls will lazy-create
+ * the workspace pool again on demand.
+ */
+void tls_rsa_padding_cleanup(void);
 
 #endif

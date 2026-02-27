@@ -10,11 +10,20 @@ ARCHIVED = NO
 DESCRIPTION = "tls timing test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes -I../../src/tls/contrib/x25519/src
-CXXFLAGS = -Wall -Wextra -Oz -I../../src/include -I../../src/tls/includes -I../../src/tls/contrib/x25519/src
-# Uncomment to enable verbose timing diagnostics in tests/tls_timing/src/main.c
- CFLAGS += -DTLS_TIMING_VERBOSE
- CXXFLAGS += -DTLS_TIMING_VERBOSE
+
+
+CFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC) -I$(X25519_DIR)
+CXXFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC) -I$(X25519_DIR)
+# Verbose diagnostics are opt-in for local runs only.
+# Enable with: make TLS_TIMING_VERBOSE=1
+TLS_TIMING_VERBOSE ?= 0
+ifeq ($(GITHUB_ACTIONS),true)
+TLS_TIMING_VERBOSE := 0
+endif
+ifeq ($(TLS_TIMING_VERBOSE),1)
+CFLAGS += -DTLS_TIMING_VERBOSE
+CXXFLAGS += -DTLS_TIMING_VERBOSE
+endif
 
 SOURCES = src/main.c
 
@@ -25,8 +34,6 @@ EXTRA_C_SOURCES = \
 	$(TLS_CORE)/hkdf.c \
 	$(TLS_CORE)/hmac.c \
 	$(TLS_CORE)/passwords.c
-
-X25519_DIR := $(PROJECT_ROOT)/src/tls/contrib/x25519/src
 
 EXTRA_ASM_SOURCES = \
 	$(TLS_CORE)/bytes.asm \

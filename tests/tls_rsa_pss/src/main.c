@@ -102,14 +102,6 @@ int main(void)
         return 1;
     }
 
-    /* Initialize TLS context */
-    if (!tls_init())
-    {
-        printf("TLS init failed\n");
-        os_GetKey();
-        return 1;
-    }
-
     /* Run tests */
     bool test1 = test_pss_verify();
 
@@ -117,9 +109,6 @@ int main(void)
     os_ClrHome();
     printf("Test 1 (Verify): %s\n", test1 ? "success" : "fail");
     os_GetKey();
-
-    /* Cleanup */
-    tls_cleanup();
 
     return test1 ? 0 : 1;
 }

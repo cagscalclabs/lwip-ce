@@ -2,29 +2,31 @@
 # Makefile Options
 # ----------------------------
 
+include ../common/makefile
+
 NAME = OAEPTEST
 ICON = icon.png
 ARCHIVED = NO
 DESCRIPTION = "RSA-OAEP Test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
-CXXFLAGS = -Wall -Wextra -Oz -I../../src -I../../src/include -I../../src/tls/includes
+CFLAGS = -Wall -Wextra -Oz -I$(PROJECT_ROOT)/src -I$(LWIP_INC) -I$(TLS_INC)
+CXXFLAGS = -Wall -Wextra -Oz -I$(PROJECT_ROOT)/src -I$(LWIP_INC) -I$(TLS_INC)
 
 
 # Test main
 SOURCES = src/main.c
 
 # Pull in required TLS core files
-EXTRA_C_SOURCES = ../../src/tls/core/rsa.c ../../src/tls/core/hash.c ../../src/tls/core/hmac.c ../../src/tls/core/tls.c ../../src/tls/core/bytes.c ../../src/core/mem.c ../../src/drivers/mem.c ../../src/core/stats.c
+EXTRA_C_SOURCES = $(TLS_CORE)/rsa.c $(TLS_CORE)/hash.c $(TLS_CORE)/hmac.c $(TLS_CORE)/bytes.c $(PROJECT_ROOT)/src/core/mem.c $(PROJECT_ROOT)/src/drivers/mem.c $(PROJECT_ROOT)/src/core/stats.c
 
 # Assembly files from TLS core
-EXTRA_ASM_SOURCES = ../../src/tls/core/sha256.asm ../../src/tls/core/bytes.asm ../../src/tls/core/share/bigint.asm ../../src/tls/core/random.asm ../../src/tls/core/share/crypto_guard.asm
+EXTRA_ASM_SOURCES = $(TLS_CORE)/sha256.asm $(TLS_CORE)/bytes.asm $(TLS_CORE)/share/bigint.asm $(TLS_CORE)/random.asm $(TLS_CORE)/share/crypto_guard.asm
 
 # ----------------------------
 
 # Add header directories
-HEADER_DIRS := ../../src/include ../../src/tls/includes src/include $(HEADER_DIRS)
+HEADER_DIRS := $(LWIP_INC) $(TLS_INC) src/include $(HEADER_DIRS)
 
 include $(shell cedev-config --makefile)
 

@@ -14,7 +14,6 @@
 /* TLS includes */
 #include "rsa.h"
 #include "hash.h"
-#include "tls.h"
 #include "lwip/mem.h"
 #include "drivers/mem.h"
 
@@ -115,14 +114,6 @@ int main(void)
         return 1;
     }
 
-    /* Initialize TLS context */
-    if (!tls_init())
-    {
-        printf("TLS init failed\n");
-        os_GetKey();
-        return 1;
-    }
-
     /* Run tests */
     bool test1 = test_oaep_encode();
     bool test2 = test_oaep_decode();
@@ -135,9 +126,5 @@ int main(void)
     printf("Test 2 (Decode): %s\n", test2 ? "success" : "fail");
     os_GetKey();
 
-    /* Cleanup */
-    tls_cleanup();
-
-    os_GetKey();
     return (test1 && test2) ? 0 : 1;
 }

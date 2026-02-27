@@ -243,6 +243,8 @@ void tls_cleanup(void)
 #if LWIP_TIMERS
     tls_rng_healthcheck_stop();
 #endif
+    tls_rsa_padding_cleanup();
+
     if (g_tls_fileio_buffer != NULL)
     {
         mem_buffer_destroy(g_tls_fileio_buffer);
