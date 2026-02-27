@@ -39,6 +39,17 @@ bool tls_init(void);
  */
 void tls_cleanup(void);
 
+/***************************************************************************
+ * @brief Runs one immediate RNG health check cycle.
+ *
+ * Executes the same lightweight sanity and recovery logic used by the
+ * periodic RNG health timer. If health checks have repeatedly failed,
+ * this may trigger a re-initialization attempt of the entropy source.
+ *
+ * @return @b true if RNG health is currently acceptable, @b false otherwise.
+ */
+bool tls_rng_healthcheck(void);
+
 /**
  * @brief Allocate from the shared TLS FILEIO buffer (lazy-created on first use).
  * @param size Allocation size in bytes.

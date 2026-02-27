@@ -2,10 +2,14 @@
 
 Manual timing-constancy smoke test for selected primitives.
 
-It compares two same-size input classes per primitive and reports:
-- `PASS` when deviation is `<0.5%`
-- `WARN` when deviation is `<1.0%`
-- `FAIL` otherwise
+Each primitive runs two checks:
+- Stability: repeated timing on identical input; pass requires `stdev/mean < 1%`.
+- Differential: compare `best`, `worst`, `random`, and `edge` input classes; fail only if:
+  - pairwise mean cycle delta exceeds that primitive's cycle threshold, and
+  - direction is consistent in >=75% of samples.
+
+`md` in test output is the raw maximum pairwise mean cycle delta observed.
+It is not 75%-filtered, so `md` can exceed a threshold while differential still passes.
 
 Current primitives:
 - `tls_random_bytes` (RNG sampling)

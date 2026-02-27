@@ -20,3 +20,6 @@ lwIPSPKI.8xv
 
 # test fixtures: keep temporary PEM material out of git
 tests/**/*.pem
+
+# ignore Latex document files
+**/.tex

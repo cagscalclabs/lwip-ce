@@ -30,7 +30,15 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb
 
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{github.workspace}}/CEdev
+          key: ${{ runner.os }}-cedev-v14.0
+
       - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
         run: |
           curl -sL github.com/CE-Programming/toolchain/releases/download/v14.0/CEdev-Linux.tar.gz | tar xz
 
@@ -73,10 +81,21 @@ jobs:
           path: ${{env.CEMU_PATH}}
           persist-credentials: false
 
+      - name: Cache CEmu Build Outputs
+        id: cemu-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{env.CEMU_PATH}}/core/CEmu
+            ${{env.CEMU_PATH}}/tests/autotester/autotester
+          key: ${{ runner.os }}-cemu-latest-stable-v1
+
       - name: Build CEmu
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
 
       - name: Install Autotester CLI
@@ -232,7 +251,15 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb
 
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{github.workspace}}/CEdev
+          key: ${{ runner.os }}-cedev-v14.0
+
       - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
         run: |
           curl -sL github.com/CE-Programming/toolchain/releases/download/v14.0/CEdev-Linux.tar.gz | tar xz
 
@@ -272,10 +299,21 @@ jobs:
           path: ${{env.CEMU_PATH}}
           persist-credentials: false
 
+      - name: Cache CEmu Build Outputs
+        id: cemu-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{env.CEMU_PATH}}/core/CEmu
+            ${{env.CEMU_PATH}}/tests/autotester/autotester
+          key: ${{ runner.os }}-cemu-latest-stable-v1
+
       - name: Build CEmu
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
 
       - name: Install Autotester CLI
