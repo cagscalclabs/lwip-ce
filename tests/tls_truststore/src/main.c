@@ -13,7 +13,6 @@
 #include <stdlib.h>
 
 #include "truststore.h"
-#include "tls.h"
 #include "x509.h"
 #include "lwip/mem.h"
 #include "drivers/mem.h"
@@ -162,13 +161,6 @@ int main(void)
         return 1;
     }
 
-    if (!tls_init())
-    {
-        draw_line("tls init failed");
-        os_GetKey();
-        return 1;
-    }
-
     {
         int archived = 0;
         var_t *truststore_var = os_GetAppVarData("lwIPSPKI", &archived);
@@ -268,6 +260,5 @@ int main(void)
     draw_line(constraints_ok ? "Test 4 (Constraints): pass" : "Test 4 (Constraints): fail");
 
     os_GetKey();
-    tls_cleanup();
     return (sig_ok && owner_ok && lookup_ok && constraints_ok) ? 0 : 1;
 }

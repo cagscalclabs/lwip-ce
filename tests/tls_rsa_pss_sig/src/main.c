@@ -15,7 +15,6 @@
 /* TLS includes */
 #include "rsa.h"
 #include "hash.h"
-#include "tls.h"
 #include "lwip/mem.h"
 #include "drivers/mem.h"
 
@@ -50,7 +49,8 @@ static bool tls_test_mem_init(void)
 
 static volatile uint8_t timing_sink = 0;
 
-struct timing_group {
+struct timing_group
+{
     uint16_t len;
     uint16_t samples;
     uint32_t mean;
@@ -697,14 +697,6 @@ int main(void)
         return 1;
     }
 
-    /* Initialize TLS context */
-    if (!tls_init())
-    {
-        printf("TLS init failed\n");
-        os_GetKey();
-        return 1;
-    }
-
     /* Run tests */
     bool test1 = test_pss_signature_verify();
 
@@ -712,9 +704,6 @@ int main(void)
     os_ClrHome();
     printf("Test 1 (Sig Verify): %s\n", test1 ? "success" : "fail");
     os_GetKey();
-
-    /* Cleanup */
-    tls_cleanup();
 
     {
         const uint16_t samples = 5;
