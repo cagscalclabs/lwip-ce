@@ -1,0 +1,18 @@
+\contentsline {section}{\numberline {0.1}Foreword}{2}{section.0.1}%
+\contentsline {section}{\numberline {0.2}Implementation Overview}{3}{section.0.2}%
+\contentsline {section}{\numberline {0.3}Entropy-Sourcing}{3}{section.0.3}%
+\contentsline {subsection}{\numberline {0.3.1}Secure RNG Construction \& Analysis}{3}{subsection.0.3.1}%
+\contentsline {subsubsection}{Rationale \& Difficulties}{3}{section*.2}%
+\contentsline {subsubsection}{Source-Selection Algorithm}{4}{section*.3}%
+\contentsline {subsubsection}{Entropy-Gathering Algorithm \& Mitigating Correlation}{4}{section*.4}%
+\contentsline {subsubsection}{Proof of Cryptographic Strength}{5}{section*.5}%
+\contentsline {subsection}{\numberline {0.3.2}Side-Channel Analysis}{8}{subsection.0.3.2}%
+\contentsline {subsubsection}{Timing Analysis Resistance}{9}{section*.8}%
+\contentsline {subsubsection}{Buffer Leak Protection}{9}{section*.9}%
+\contentsline {subsubsection}{Memory-Mapping Protection}{10}{section*.10}%
+\contentsline {subsection}{\numberline {0.3.3}Algorithmic Security}{10}{subsection.0.3.3}%
+\contentsline {subsubsection}{CPA Resistance}{10}{section*.11}%
+\contentsline {subsubsection}{CCA Resistance}{11}{section*.12}%
+\contentsline {subsection}{\numberline {0.3.4}Conclusion}{11}{subsection.0.3.4}%
+\contentsline {subsection}{\numberline {0.3.5}Other References}{13}{subsection.0.3.5}%
+\contentsline {subsection}{\numberline {0.3.6}Legal}{13}{subsection.0.3.6}%
