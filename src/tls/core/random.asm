@@ -13,9 +13,12 @@ include "share/virtuals.inc"
 public _tls_random_init_entropy
 public _tls_random
 public _tls_random_bytes
+public _tls_random_debug_source_ptr
 
 extern _tls_crypto_guard_enable
 extern _tls_crypto_guard_disable
+
+_sprng_read_addr db 0,0,0
 
 ;-------------------------------------
 ; bool tls_random_init_entropy(void);
@@ -51,7 +54,6 @@ _tls_random_init_entropy:
     inc a
     ret
 
-
 ; test byte at hl, set iy=hl if entropy is better
 .test_byte:
     push de
@@ -84,7 +86,6 @@ _tls_random_init_entropy:
     pop hl ; restore pointer to byte
     inc hl ; advance pointer
     ret
-
 
 ;--------------------------------------
 ; uint64_t tls_random(void);
@@ -144,7 +145,7 @@ _tls_random:
     pop bc, hl
 
 ; xor hash cyclically into uint64_t
-; each 4 64-bit blocks xor together
+; each 4-byte stripe xored down into one output byte (8 total bytes)
     ld hl,_sprng_sha_digest
     ld de,_sprng_rand
     ld c,8
@@ -214,6 +215,14 @@ _tls_random_bytes:
     ld hl,(ix+6) ; return pointer to dest
     ld sp,ix
     pop ix
+    ret
+
+
+; ---------------------------------------------------------
+; void* tls_random_debug_source_ptr(void);
+; Debug/test accessor for current sampler source address.
+_tls_random_debug_source_ptr:
+    ld hl,(_sprng_read_addr)
     ret
 
 

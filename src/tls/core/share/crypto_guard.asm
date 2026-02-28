@@ -14,6 +14,10 @@ public _tls_crypto_guard_disable
 
 ?stackBot		:= 0D1987Eh
 
+_crypto_guard_state_ptr   db 0,0,0
+_crypto_guard_state_start rb 16
+_crypto_guard_state_end:
+
 ; void tls_crypto_guard_enable(void)
 _tls_crypto_guard_enable:
 	; if pointer is zero check
@@ -77,4 +81,3 @@ _tls_crypto_guard_disable:
 	ret z
 	ei
 	ret
-

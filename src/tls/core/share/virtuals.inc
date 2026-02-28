@@ -18,8 +18,4 @@ virtual at $E30800
     _sprng_sha_mbuffer      rb (64*4)
     _sprng_rand             rb 8
     _sprng_hash_ctx         rb _sha256ctx_size
-    _sprng_read_addr        rb 3
-    _crypto_guard_state_ptr rb 3
-    _crypto_guard_state_start   rb 16
-    _crypto_guard_state_end     rb 0
 end virtual

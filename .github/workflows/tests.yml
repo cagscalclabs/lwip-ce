@@ -9,6 +9,8 @@ on:
 env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
   LWIP_TESTS: ${{github.workspace}}/tests
+  LWIP_UNIT_TESTS: ${{github.workspace}}/tests/unit
+  LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
   CEMU_PATH: ${{github.workspace}}/CEmu
   CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
   SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
@@ -118,9 +120,6 @@ jobs:
           while IFS= read -r -d '' test; do
             status=0
             test_dir=$(dirname "$test")
-            if [ "$(basename "$test_dir")" = "tls_timing" ]; then
-              continue
-            fi
             test_start=$(($(date +%s%N)/1000000))
             make -C "$test_dir" clean
             make -C "$test_dir" all test || ((status=$?))
@@ -134,8 +133,8 @@ jobs:
               (( total_failed += 1 ))
               test_status="failed"
             fi
-            echo -e "{\"name\":\"$(basename "$test_dir")\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
-          done < <(find ${{env.LWIP_TESTS}} -name autotest.json -print0)
+            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
+          done < <(find ${{env.LWIP_UNIT_TESTS}} -name autotest.json -print0)
 
           end_time=$(($(date +%s%N)/1000000))
           echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
@@ -148,13 +147,10 @@ jobs:
           echo -e "{\"results\":{" > ${{github.workspace}}/results-core.json
           cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-core.json
           echo -e ",\"tests\":[" >> ${{github.workspace}}/results-core.json
-          find ${{env.LWIP_TESTS}} -name result.json -print0 | {
+          find ${{env.LWIP_UNIT_TESTS}} -name result.json -print0 | {
             tmp_json=""
             while read -rd '' test; do
               test_dir=$(dirname "$test")
-              if [ "$(basename "$test_dir")" = "tls_timing" ]; then
-                continue
-              fi
               tmp_json="$tmp_json,$(cat $test_dir/result.json)"
               rm $test_dir/result.json
             done
@@ -185,11 +181,12 @@ jobs:
           echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          jq -r '.results.tests[] | .name' ${{github.workspace}}/results-core.json | while read test_name; do
-            test_dir="$LWIP_TESTS/$test_name"
+          jq -c '.results.tests[]' ${{github.workspace}}/results-core.json | while read test_obj; do
+            test_name=$(echo "$test_obj" | jq -r '.name')
+            test_dir=$(echo "$test_obj" | jq -r '.dir')
             test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
 
-            status=$(jq -r ".results.tests[] | select(.name == \"$test_name\") | .status" ${{github.workspace}}/results-core.json)
+            status=$(echo "$test_obj" | jq -r '.status')
             module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
             module_desc=${module_desc:-"(no description)"}
             module_desc=${module_desc//$'\n'/ }
@@ -333,7 +330,7 @@ jobs:
           total_failed=0
           start_time=$(($(date +%s%N)/1000000))
 
-          test_dir="${{env.LWIP_TESTS}}/tls_timing"
+          test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
           status=0
           test_start=$(($(date +%s%N)/1000000))
           make -C "$test_dir" clean
@@ -362,8 +359,8 @@ jobs:
           echo -e "{\"results\":{" > ${{github.workspace}}/results-timing.json
           cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-timing.json
           echo -e ",\"tests\":[" >> ${{github.workspace}}/results-timing.json
-          echo "$(cat ${{env.LWIP_TESTS}}/tls_timing/result.json)" >> ${{github.workspace}}/results-timing.json
-          rm ${{env.LWIP_TESTS}}/tls_timing/result.json
+          echo "$(cat ${{env.LWIP_PROF_TESTS}}/tls_timing/result.json)" >> ${{github.workspace}}/results-timing.json
+          rm ${{env.LWIP_PROF_TESTS}}/tls_timing/result.json
           echo -e "]" >> ${{github.workspace}}/results-timing.json
           echo -e "}}" >> ${{github.workspace}}/results-timing.json
           rm ${{github.workspace}}/summary.json
@@ -375,7 +372,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           test_name="tls_timing"
-          test_dir="$LWIP_TESTS/$test_name"
+          test_dir="$LWIP_PROF_TESTS/$test_name"
           status=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .status' ${{github.workspace}}/results-timing.json)
           module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
           module_desc=${module_desc:-"(no description)"}

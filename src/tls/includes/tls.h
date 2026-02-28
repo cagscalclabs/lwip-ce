@@ -63,4 +63,39 @@ void *tls_fileio_alloc(size_t size);
  */
 void tls_fileio_free(void *ptr);
 
+/***************************************************************************
+ * @brief Callback invoked when an RNG request completes.
+ *
+ * @param ok      true on success, false on failure.
+ * @param arg     Opaque caller pointer supplied to tls_request_random_bytes().
+ */
+typedef void (*tls_random_request_cb_t)(bool ok, void *arg);
+
+/***************************************************************************
+ * @brief Request random data for TLS usage.
+ *
+ * The request gathers entropy in timed chunks until @p len bytes are available.
+ * If @p blocking is true, gathering is done immediately in the caller thread.
+ * If @p blocking is false, gathering runs on lwIP timers and @p cb is invoked
+ * once complete.
+ *
+ * Only one request can be active at a time.
+ *
+ * @param out      Caller-provided destination buffer.
+ * @param len      Number of random bytes requested.
+ * @param cb       Optional completion callback.
+ * @param arg      Opaque user context passed to @p cb.
+ * @param blocking true for immediate completion path, false for async timer path.
+ * @return true if request started/completed successfully, false on failure.
+ * @note If @p blocking is true, this function may take a long time to return while gathering entropy.
+ * The caller is responsble for ensuring that @b out remains valid until the request completes, especially in the async case where @p cb may be invoked later.
+ */
+bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t cb, void *arg, bool blocking);
+
+/***************************************************************************
+ * @brief Returns whether the TLS RNG request engine currently has an active request.
+ * @return true if a request is in progress, false otherwise.
+ */
+bool tls_rng_is_busy(void);
+
 #endif

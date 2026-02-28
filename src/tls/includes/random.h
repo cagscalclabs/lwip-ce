@@ -32,5 +32,12 @@ uint64_t tls_random(void);
  */
 void* tls_random_bytes(void* buffer, size_t len);
 
+/*************************************************************************************
+ * @brief Debug/test hook: returns the current sampled entropy source address.
+ * @return Pointer used by the RNG sampler after @ref tls_random_init_entropy .
+ * @warning Intended for diagnostics/tests only.
+ */
+void* tls_random_debug_source_ptr(void);
+
 
 #endif

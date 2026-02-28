@@ -1,4 +1,5 @@
-PROJECT_ROOT := $(realpath $(CURDIR)/../..)
+COMMON_MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+PROJECT_ROOT := $(realpath $(COMMON_MAKEFILE_DIR)/../..)
 TLS_CORE := $(PROJECT_ROOT)/src/tls/core
 TLS_INC := $(PROJECT_ROOT)/src/tls/includes
 LWIP_INC := $(PROJECT_ROOT)/src/include

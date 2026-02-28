@@ -1,0 +1,48 @@
+{
+  "description": "Test TLS RNG primitive and TLS callback request flow",
+  "transfer_files": [
+    "bin/TLSRNG.8xp"
+  ],
+  "target": {
+    "name": "TLSRNG",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "Direct RNG init + tls_random_bytes returns data",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 3000
+    },
+    "2": {
+      "description": "TLS started + blocking callback request returns data",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 5000
+    },
+    "3": {
+      "description": "TLS blocking callback request returns large random buffer",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 12000
+    }
+  }
+}
