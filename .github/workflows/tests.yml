@@ -110,6 +110,14 @@ jobs:
           ls -lh ${{env.AUTOTESTER_ROM}}
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
+      - name: Download truststore AppVar
+        run: |
+          mkdir -p ${{env.LWIP_UNIT_TESTS}}/tls_truststore
+          curl -fL \
+            -o ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPSPKI.8xv \
+            https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPSPKI.8xv
+          ls -lh ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPSPKI.8xv
+
       - name: Run Core Unit Tests
         run: |
           total_tests=0
