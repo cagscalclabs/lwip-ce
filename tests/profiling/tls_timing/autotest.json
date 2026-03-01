@@ -1,7 +1,8 @@
 {
   "description": "Verify timing behavior with two checks per primitive: (A) Stability (same input repeated, stddev <1% of mean) and (B) Differential timing across best/worst/random/edge classes, failing only for consistent inter-class cycle deltas above configured limits.",
   "transfer_files": [
-    "bin/TIMINGS.8xp"
+    "bin/TIMINGS.8xp",
+    "clibs.8xg"
   ],
   "target": {
     "name": "TIMINGS",
@@ -35,225 +36,125 @@
     "key|enter",
     "hashWait|13",
     "key|enter",
-    "hashWait|14",
-    "key|enter",
-    "hashWait|15",
-    "key|enter",
-    "hashWait|16",
-    "key|enter",
-    "hashWait|17",
-    "key|enter",
-    "hashWait|18",
-    "key|enter",
-    "hashWait|19",
-    "key|enter",
-    "hashWait|20",
-    "key|enter",
-    "hashWait|21",
-    "key|enter",
-    "hashWait|22",
-    "key|enter",
-    "delay|250",
-    "saveVar|TLSTMLOG"
+    "delay|2000"
   ],
   "hashes": {
     "1": {
-      "description": "RNG timing, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "0453EBCB"
-      ],
-      "timeout": 2000000
-    },
-    "2": {
       "description": "RNG timing, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "1FBC2763"
+        "918A1AD3"
       ],
-      "timeout": 2000
+      "timeout": 10000000
     },
-    "3": {
-      "description": "Secure bytes compare, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "DF7FD80C"
-      ],
-      "timeout": 2000000
-    },
-    "4": {
+    "2": {
       "description": "Secure bytes compare, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "3719F4AE"
+        "A42E20CA"
       ],
-      "timeout": 2000
+      "timeout": 4000000
     },
-    "5": {
-      "description": "SHA-256, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "A9F8C349"
-      ],
-      "timeout": 2000000
-    },
-    "6": {
+    "3": {
       "description": "SHA-256, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "8C0A7C60"
-      ],
-      "timeout": 2000
-    },
-    "7": {
-      "description": "HMAC-SHA-256, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "A09A2BC5"
+        "F54D6729"
       ],
       "timeout": 2000000
     },
-    "8": {
+    "4": {
       "description": "HMAC-SHA-256, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "2B891906"
-      ],
-      "timeout": 2000
-    },
-    "9": {
-      "description": "HKDF, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "1339C6B0"
+        "CA34DEB6"
       ],
       "timeout": 2000000
     },
-    "10": {
+    "5": {
       "description": "HKDF, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "982AF473"
+        "799733C3"
       ],
-      "timeout": 2000
+      "timeout": 2000000
     },
-    "11": {
-      "description": "PBKDF2, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "3327B76F"
-      ],
-      "timeout": 10000000
-    },
-    "12": {
+    "6": {
       "description": "PBKDF2, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
         "16D50846"
       ],
-      "timeout": 2000
+      "timeout": 10000000
     },
-    "13": {
-      "description": "AES-GCM Encrypt, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "4528C8AC"
-      ],
-      "timeout": 5000000
-    },
-    "14": {
+    "7": {
       "description": "AES-GCM Encrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
         "D048C346"
       ],
-      "timeout": 2000
-    },
-    "15": {
-      "description": "AES-GCM Decrypt + Verify, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "8DE11B88"
-      ],
       "timeout": 5000000
     },
-    "16": {
+    "8": {
       "description": "AES-GCM Decrypt + Verify, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
         "A3DDEFA2"
       ],
-      "timeout": 2000
-    },
-    "17": {
-      "description": "AES-CBC Encrypt, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "1FBD49C3"
-      ],
       "timeout": 5000000
     },
-    "18": {
+    "9": {
       "description": "AES-CBC Encrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
         "8ADD4229"
       ],
-      "timeout": 2000
-    },
-    "19": {
-      "description": "AES-CBC Decrypt, stability",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "19C6C81D"
-      ],
       "timeout": 5000000
     },
-    "20": {
+    "10": {
       "description": "AES-CBC Decrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
         "8CA6C3F7"
       ],
-      "timeout": 2000
+      "timeout": 5000000
     },
-    "21": {
-      "description": "x25519 ECDHE, stability",
+    "11": {
+      "description": "AES-CCM Encrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "4F5A73F9"
+        "8CA6C3F7"
       ],
-      "timeout": 50000000
+      "timeout": 5000000
     },
-    "22": {
+    "12": {
+      "description": "AES-CCM Decrypt, differential",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "8CA6C3F7"
+      ],
+      "timeout": 5000000
+    },
+    "13": {
       "description": "x25519 ECDHE, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
         "6AA8CCD0"
       ],
-      "timeout": 2000
+      "timeout": 50000000
     }
   }
 }

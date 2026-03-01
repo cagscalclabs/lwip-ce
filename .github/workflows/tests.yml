@@ -345,6 +345,15 @@ jobs:
           ls -lh ${{env.AUTOTESTER_ROM}}
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
+      - name: Download CE Libraries Group (clibs.8xg)
+        run: |
+          test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
+          mkdir -p "$test_dir"
+          curl -fL \
+            -o "$test_dir/clibs.8xg" \
+            https://github.com/CE-Programming/libraries/releases/download/v14.2/clibs.8xg
+          ls -lh "$test_dir/clibs.8xg"
+
       - name: Run Timing Unit Test
         run: |
           total_tests=0

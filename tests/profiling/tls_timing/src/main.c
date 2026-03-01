@@ -684,6 +684,89 @@ static uint32_t time_aes_cbc_decrypt_case(uint8_t input_class)
     return (uint32_t)(clock() - start);
 }
 
+static uint32_t time_aes_ccm_encrypt_case(uint8_t input_class)
+{
+    static const uint8_t key[16] = {
+        0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+        0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F};
+    static const uint8_t nonce[12] = {
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+        0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B};
+    static const uint8_t aad[16] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F};
+    uint8_t pt[64];
+    uint8_t ct[64];
+    uint8_t tag[TLS_AES_AUTH_TAG_SIZE];
+    bool ok;
+    clock_t start;
+
+    fill_pattern(pt, sizeof(pt), input_class);
+
+    start = clock();
+    ok = tls_aes_ccm_encrypt(key, sizeof(key),
+                             nonce, sizeof(nonce),
+                             aad, sizeof(aad),
+                             pt, sizeof(pt),
+                             ct, tag, TLS_AES_AUTH_TAG_SIZE);
+    if (!ok)
+    {
+        timing_sink ^= 0xAC;
+        return (uint32_t)(clock() - start);
+    }
+
+    timing_sink ^= ct[0] ^ tag[0];
+    return (uint32_t)(clock() - start);
+}
+
+static uint32_t time_aes_ccm_decrypt_case(uint8_t input_class)
+{
+    static const uint8_t key[16] = {
+        0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+        0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F};
+    static const uint8_t nonce[12] = {
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+        0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B};
+    static const uint8_t aad[16] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F};
+    uint8_t pt[64];
+    uint8_t recovered[64];
+    uint8_t ct[64];
+    uint8_t tag[TLS_AES_AUTH_TAG_SIZE];
+    bool ok;
+    clock_t start;
+
+    fill_pattern(pt, sizeof(pt), input_class);
+
+    ok = tls_aes_ccm_encrypt(key, sizeof(key),
+                             nonce, sizeof(nonce),
+                             aad, sizeof(aad),
+                             pt, sizeof(pt),
+                             ct, tag, TLS_AES_AUTH_TAG_SIZE);
+    if (!ok)
+    {
+        timing_sink ^= 0xAD;
+        return 0;
+    }
+
+    start = clock();
+    ok = tls_aes_ccm_decrypt(key, sizeof(key),
+                             nonce, sizeof(nonce),
+                             aad, sizeof(aad),
+                             ct, sizeof(ct),
+                             tag, TLS_AES_AUTH_TAG_SIZE,
+                             recovered);
+    if (!ok)
+    {
+        timing_sink ^= 0xAE;
+        return (uint32_t)(clock() - start);
+    }
+
+    timing_sink ^= recovered[0];
+    return (uint32_t)(clock() - start);
+}
+
 static uint32_t time_x25519_case(uint8_t input_class)
 {
     static const uint8_t private_best[32] = {
@@ -916,6 +999,8 @@ int main(void)
     struct primitive_result r_aes_gcm_decver;
     struct primitive_result r_aes_cbc_enc;
     struct primitive_result r_aes_cbc_dec;
+    struct primitive_result r_aes_ccm_enc;
+    struct primitive_result r_aes_ccm_dec;
     struct primitive_result r_x25519;
 
     int rng_init_count = 0;
@@ -961,6 +1046,12 @@ int main(void)
 
     run_primitive("AESCBC-D", time_aes_cbc_decrypt_case, TIMING_REPS_MEDIUM, &r_aes_cbc_dec);
     show_result("AESCBC-D", &r_aes_cbc_dec);
+
+    run_primitive("AESCCM-E", time_aes_ccm_encrypt_case, TIMING_REPS_MEDIUM, &r_aes_ccm_enc);
+    show_result("AESCCM-E", &r_aes_ccm_enc);
+
+    run_primitive("AESCCM-D", time_aes_ccm_decrypt_case, TIMING_REPS_MEDIUM, &r_aes_ccm_dec);
+    show_result("AESCCM-D", &r_aes_ccm_dec);
 
     run_primitive("X25519", time_x25519_case, TIMING_REPS_SLOW, &r_x25519);
     show_result("X25519", &r_x25519);
