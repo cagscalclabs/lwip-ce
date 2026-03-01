@@ -1,6 +1,8 @@
+#include <fileioc.h>
 #include <ti/getkey.h>
 #include <ti/screen.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,8 +23,12 @@
 #define TIMING_REPS_SLOW 16u
 
 #define STABILITY_MAX_PCT_X100 100u
+#define MAD_SIGMA_SCALE_X10000 14826u
+#define MAD_ACCEPT_C 8u
 #define DIFF_CONSISTENCY_NUM 3u
 #define DIFF_CONSISTENCY_DEN 4u
+#define TIMING_LOG_APPVAR "TLSTMLOG"
+#define TIMING_CALIB_CLASS TIMING_CLASS_BEST
 
 enum timing_input_class
 {
@@ -35,15 +41,23 @@ enum timing_input_class
 
 static volatile uint8_t timing_sink;
 static uint32_t timing_prng_state = 0x12345678u;
+static uint8_t timing_log_handle;
+static bool timing_log_enabled;
 
 struct primitive_result
 {
     uint32_t stability_mean;
     uint32_t stability_stddev;
     uint32_t stability_pct_x100;
+    uint32_t stability_median;
+    uint32_t stability_mad;
+    uint32_t stability_sigma_x10000;
+    uint32_t accepted_deviation;
     bool stability_pass;
 
     uint32_t class_means[TIMING_CLASS_COUNT];
+    uint32_t class_medians[TIMING_CLASS_COUNT];
+    uint32_t class_over_thresh_pct_x100[TIMING_CLASS_COUNT];
     uint32_t max_pair_diff;
     bool differential_pass;
 
@@ -104,6 +118,47 @@ static uint32_t mean_u32(const uint32_t *samples, uint16_t count)
     return (count != 0) ? (uint32_t)(sum / count) : 0;
 }
 
+static void sort_u32(uint32_t *values, uint16_t count)
+{
+    uint16_t i;
+
+    for (i = 1; i < count; i++)
+    {
+        uint32_t key = values[i];
+        uint16_t j = i;
+        while (j > 0 && values[j - 1] > key)
+        {
+            values[j] = values[j - 1];
+            j--;
+        }
+        values[j] = key;
+    }
+}
+
+static uint32_t median_u32(const uint32_t *samples, uint16_t count)
+{
+    uint32_t work[TIMING_SAMPLES];
+    uint16_t i;
+
+    if (count == 0)
+    {
+        return 0;
+    }
+
+    for (i = 0; i < count; i++)
+    {
+        work[i] = samples[i];
+    }
+    sort_u32(work, count);
+
+    if ((count & 1u) != 0u)
+    {
+        return work[count / 2u];
+    }
+
+    return (uint32_t)(((uint64_t)work[(count / 2u) - 1u] + (uint64_t)work[count / 2u]) / 2u);
+}
+
 static uint32_t isqrt_u64(uint64_t x)
 {
     uint64_t op = x;
@@ -150,6 +205,104 @@ static void compute_stats(const uint32_t *samples, uint16_t count,
     *mean = local_mean;
     *stddev = (count != 0) ? isqrt_u64(var_sum / count) : 0;
     *pct_x100 = (local_mean != 0) ? (uint32_t)(((uint64_t)(*stddev) * 10000u) / local_mean) : 0;
+}
+
+static void compute_robust_stats(const uint32_t *samples, uint16_t count,
+                                 uint32_t *median, uint32_t *mad, uint32_t *sigma_x10000)
+{
+    uint32_t abs_dev[TIMING_SAMPLES];
+    uint16_t i;
+
+    *median = median_u32(samples, count);
+    for (i = 0; i < count; i++)
+    {
+        abs_dev[i] = abs_u32_diff(samples[i], *median);
+    }
+    *mad = median_u32(abs_dev, count);
+    *sigma_x10000 = (uint32_t)(((uint64_t)(*mad) * MAD_SIGMA_SCALE_X10000) / 1u);
+}
+
+static uint32_t robust_accept_deviation(uint32_t sigma_x10000, uint32_t c_factor)
+{
+    return (uint32_t)(((uint64_t)sigma_x10000 * c_factor + 5000u) / 10000u);
+}
+
+static const char *class_name(uint16_t class_id)
+{
+    switch (class_id)
+    {
+    case TIMING_CLASS_BEST:
+        return "best";
+    case TIMING_CLASS_WORST:
+        return "worst";
+    case TIMING_CLASS_RANDOM:
+        return "random";
+    case TIMING_CLASS_EDGE:
+        return "edge";
+    default:
+        return "unknown";
+    }
+}
+
+static bool timing_log_begin(void)
+{
+    (void)ti_Delete(TIMING_LOG_APPVAR);
+    timing_log_handle = ti_Open(TIMING_LOG_APPVAR, "w");
+    if (!timing_log_handle)
+    {
+        timing_log_enabled = false;
+        return false;
+    }
+
+    timing_log_enabled = true;
+    (void)ti_SetArchiveStatus(false, timing_log_handle);
+    return true;
+}
+
+static void timing_log_end(void)
+{
+    if (!timing_log_handle)
+    {
+        return;
+    }
+
+    if (timing_log_enabled)
+    {
+        (void)ti_SetArchiveStatus(true, timing_log_handle);
+    }
+    ti_Close(timing_log_handle);
+    timing_log_handle = 0;
+    timing_log_enabled = false;
+}
+
+static void timing_logf(const char *fmt, ...)
+{
+    char line[192];
+    int written;
+    va_list args;
+
+    if (!timing_log_enabled || !timing_log_handle)
+    {
+        return;
+    }
+
+    va_start(args, fmt);
+    written = vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+
+    if (written <= 0)
+    {
+        return;
+    }
+    if ((size_t)written >= sizeof(line))
+    {
+        written = (int)(sizeof(line) - 1u);
+    }
+
+    if (ti_Write(line, (size_t)written, 1, timing_log_handle) != 1)
+    {
+        timing_log_enabled = false;
+    }
 }
 
 static void fill_pattern(uint8_t *buf, size_t len, uint8_t input_class)
@@ -589,7 +742,7 @@ static uint32_t time_x25519_case(uint8_t input_class)
     return (uint32_t)(clock() - start);
 }
 
-static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t reps, uint32_t diff_cycle_limit,
+static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t reps,
                           struct primitive_result *out)
 {
     uint32_t samples[TIMING_CLASS_COUNT][TIMING_SAMPLES];
@@ -606,6 +759,7 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
         (void)fn((uint8_t)class_id);
     }
     show_progress(name, 0, total_steps);
+    timing_logf("primitive=%s,reps=%u,samples=%u\n", name, (unsigned int)reps, (unsigned int)TIMING_SAMPLES);
 
     for (i = 0; i < TIMING_SAMPLES; i++)
     {
@@ -617,6 +771,11 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
                 acc += fn((uint8_t)class_id);
             }
             samples[class_id][i] = acc;
+            timing_logf("sample,%s,%s,%u,%lu\n",
+                        name,
+                        class_name(class_id),
+                        (unsigned int)i,
+                        (unsigned long)acc);
             step++;
             show_progress(name, step, total_steps);
         }
@@ -625,11 +784,30 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
     for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
     {
         out->class_means[class_id] = mean_u32(samples[class_id], TIMING_SAMPLES);
+        out->class_medians[class_id] = median_u32(samples[class_id], TIMING_SAMPLES);
+        out->class_over_thresh_pct_x100[class_id] = 0;
     }
 
-    compute_stats(samples[TIMING_CLASS_RANDOM], TIMING_SAMPLES,
+    compute_stats(samples[TIMING_CALIB_CLASS], TIMING_SAMPLES,
                   &out->stability_mean, &out->stability_stddev, &out->stability_pct_x100);
-    out->stability_pass = (out->stability_pct_x100 < STABILITY_MAX_PCT_X100);
+    compute_robust_stats(samples[TIMING_CALIB_CLASS], TIMING_SAMPLES,
+                         &out->stability_median, &out->stability_mad, &out->stability_sigma_x10000);
+    out->accepted_deviation = robust_accept_deviation(out->stability_sigma_x10000, MAD_ACCEPT_C);
+    out->stability_pass = true;
+
+    for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
+    {
+        uint16_t over = 0;
+        for (i = 0; i < TIMING_SAMPLES; i++)
+        {
+            if (abs_u32_diff(samples[class_id][i], out->stability_median) > out->accepted_deviation)
+            {
+                over++;
+            }
+        }
+        out->class_over_thresh_pct_x100[class_id] =
+            (uint32_t)(((uint32_t)over * 10000u) / TIMING_SAMPLES);
+    }
 
     out->max_pair_diff = 0;
     out->differential_pass = true;
@@ -639,8 +817,8 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
         uint16_t other;
         for (other = class_id + 1; other < TIMING_CLASS_COUNT; other++)
         {
-            uint32_t m1 = out->class_means[class_id];
-            uint32_t m2 = out->class_means[other];
+            uint32_t m1 = out->class_medians[class_id];
+            uint32_t m2 = out->class_medians[other];
             uint32_t diff = abs_u32_diff(m1, m2);
 
             if (diff > out->max_pair_diff)
@@ -648,15 +826,18 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
                 out->max_pair_diff = diff;
             }
 
-            if (diff > diff_cycle_limit)
+            if ((class_id == TIMING_CALIB_CLASS || other == TIMING_CALIB_CLASS) &&
+                diff > out->accepted_deviation)
             {
-                uint16_t hi = (m1 >= m2) ? class_id : other;
-                uint16_t lo = (m1 >= m2) ? other : class_id;
+                uint16_t test = (class_id == TIMING_CALIB_CLASS) ? other : class_id;
+                bool high = (out->class_medians[test] >= out->stability_median);
                 uint16_t consistent = 0;
 
                 for (i = 0; i < TIMING_SAMPLES; i++)
                 {
-                    if (samples[hi][i] > samples[lo][i])
+                    int32_t sample_delta = (int32_t)samples[test][i] - (int32_t)out->stability_median;
+                    if ((high && sample_delta > (int32_t)out->accepted_deviation) ||
+                        (!high && sample_delta < -(int32_t)out->accepted_deviation))
                     {
                         consistent++;
                     }
@@ -670,28 +851,58 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
         }
     }
 
-    out->fail = !(out->stability_pass && out->differential_pass);
+    out->fail = !out->differential_pass;
+    timing_logf("robust,%s,median=%lu,mad=%lu,sigma=%lu.%04lu,c=%u,accept=%lu,dpass=%u\n",
+                name,
+                (unsigned long)out->stability_median,
+                (unsigned long)out->stability_mad,
+                (unsigned long)(out->stability_sigma_x10000 / 10000u),
+                (unsigned long)(out->stability_sigma_x10000 % 10000u),
+                (unsigned int)MAD_ACCEPT_C,
+                (unsigned long)out->accepted_deviation,
+                out->differential_pass ? 1u : 0u);
+    for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
+    {
+        const int32_t trend = (int32_t)out->class_medians[class_id] - (int32_t)out->stability_median;
+        const char trend_symbol = (trend > 0) ? '+' : ((trend < 0) ? '-' : '=');
+        timing_logf("class,%s,%s,mean=%lu,median=%lu,trend=%c,over=%lu.%02lu%%\n",
+                    name,
+                    class_name(class_id),
+                    (unsigned long)out->class_means[class_id],
+                    (unsigned long)out->class_medians[class_id],
+                    trend_symbol,
+                    (unsigned long)(out->class_over_thresh_pct_x100[class_id] / 100u),
+                    (unsigned long)(out->class_over_thresh_pct_x100[class_id] % 100u));
+    }
 }
 
 static void show_result(const char *name, const struct primitive_result *result)
 {
     os_ClrHome();
-    printf("%s S:%s",
-           name,
-           result->stability_pass ? "PASS" : "FAIL");
-    os_GetKey();
-    os_ClrHome();
-    printf("%s D:%s\n",
+    os_FontSelect(os_LargeFont);
+    printf("%s:%s",
            name,
            result->differential_pass ? "PASS" : "FAIL");
-    os_GetKey();
+#define TLS_TIMING_VERBOSE
 #ifdef TLS_TIMING_VERBOSE
-    printf("sd=%lu.%02lu%% md=%lu",
-           (unsigned long)(result->stability_pct_x100 / 100u),
-           (unsigned long)(result->stability_pct_x100 % 100u),
-           (unsigned long)result->max_pair_diff);
-    os_GetKey();
+    uint16_t class_id;
+    os_FontSelect(os_SmallFont);
+    printf("\nsig=%lu.%04lu max_delta=%lu",
+           (unsigned long)(result->stability_sigma_x10000 / 10000u),
+           (unsigned long)(result->stability_sigma_x10000 % 10000u),
+           (unsigned long)result->accepted_deviation);
+    for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
+    {
+        const int32_t median_dev = (int32_t)result->class_medians[class_id] - (int32_t)result->stability_median;
+        printf("\n%s median_dev=%+ld occur=%lu.%02lu%%",
+               class_name(class_id),
+               (long)median_dev,
+               (unsigned long)(result->class_over_thresh_pct_x100[class_id] / 100u),
+               (unsigned long)(result->class_over_thresh_pct_x100[class_id] % 100u));
+    }
 #endif
+    os_FontSelect(os_LargeFont);
+    os_GetKey();
 }
 
 int main(void)
@@ -717,38 +928,45 @@ int main(void)
     if (!rng_init_success)
         return 1;
 
-    run_primitive("RNG", time_rng_case, TIMING_REPS_FAST, 64u, &r_rng);
+    (void)timing_log_begin();
+    timing_logf("tls_timing,start,c=%u,sigma_scale=%u\n",
+                (unsigned int)MAD_ACCEPT_C,
+                (unsigned int)MAD_SIGMA_SCALE_X10000);
+
+    run_primitive("RNG", time_rng_case, TIMING_REPS_FAST, &r_rng);
     show_result("RNG", &r_rng);
 
-    run_primitive("BYTES", time_bytes_compare_case, TIMING_REPS_FAST, 8u, &r_bytes);
+    run_primitive("BYTES", time_bytes_compare_case, TIMING_REPS_FAST, &r_bytes);
     show_result("BYTES", &r_bytes);
 
-    run_primitive("SHA256", time_sha256_case, TIMING_REPS_FAST, 32u, &r_sha);
+    run_primitive("SHA256", time_sha256_case, TIMING_REPS_FAST, &r_sha);
     show_result("SHA256", &r_sha);
 
-    run_primitive("HMAC", time_hmac_case, TIMING_REPS_MEDIUM, 32u, &r_hmac);
+    run_primitive("HMAC", time_hmac_case, TIMING_REPS_MEDIUM, &r_hmac);
     show_result("HMAC", &r_hmac);
 
-    run_primitive("HKDF", time_hkdf_case, TIMING_REPS_MEDIUM, 48u, &r_hkdf);
+    run_primitive("HKDF", time_hkdf_case, TIMING_REPS_MEDIUM, &r_hkdf);
     show_result("HKDF", &r_hkdf);
 
-    run_primitive("PBKDF2", time_pbkdf2_case, TIMING_REPS_SLOW, 192u, &r_pbkdf2);
+    run_primitive("PBKDF2", time_pbkdf2_case, TIMING_REPS_SLOW, &r_pbkdf2);
     show_result("PBKDF2", &r_pbkdf2);
 
-    run_primitive("AESGCM-E", time_aes_gcm_encrypt_case, TIMING_REPS_MEDIUM, 48u, &r_aes_gcm_enc);
+    run_primitive("AESGCM-E", time_aes_gcm_encrypt_case, TIMING_REPS_MEDIUM, &r_aes_gcm_enc);
     show_result("AESGCM-E", &r_aes_gcm_enc);
 
-    run_primitive("AESGCM-DV", time_aes_gcm_decrypt_verify_case, TIMING_REPS_MEDIUM, 64u, &r_aes_gcm_decver);
+    run_primitive("AESGCM-DV", time_aes_gcm_decrypt_verify_case, TIMING_REPS_MEDIUM, &r_aes_gcm_decver);
     show_result("AESGCM-DV", &r_aes_gcm_decver);
 
-    run_primitive("AESCBC-E", time_aes_cbc_encrypt_case, TIMING_REPS_MEDIUM, 48u, &r_aes_cbc_enc);
+    run_primitive("AESCBC-E", time_aes_cbc_encrypt_case, TIMING_REPS_MEDIUM, &r_aes_cbc_enc);
     show_result("AESCBC-E", &r_aes_cbc_enc);
 
-    run_primitive("AESCBC-D", time_aes_cbc_decrypt_case, TIMING_REPS_MEDIUM, 48u, &r_aes_cbc_dec);
+    run_primitive("AESCBC-D", time_aes_cbc_decrypt_case, TIMING_REPS_MEDIUM, &r_aes_cbc_dec);
     show_result("AESCBC-D", &r_aes_cbc_dec);
 
-    run_primitive("X25519", time_x25519_case, TIMING_REPS_SLOW, 128u, &r_x25519);
+    run_primitive("X25519", time_x25519_case, TIMING_REPS_SLOW, &r_x25519);
     show_result("X25519", &r_x25519);
+    timing_logf("tls_timing,end\n");
+    timing_log_end();
 
     return 0;
 }

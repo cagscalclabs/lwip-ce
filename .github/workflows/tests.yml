@@ -361,6 +361,83 @@ jobs:
           cmake -E echo "timing module tested, $total_passed passed, $total_failed failed!"
           exit $total_failed
 
+      - name: Extract TLSTMLOG AppVar and Build Verbose Summary
+        if: always()
+        run: |
+          test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
+          summary_md="${{github.workspace}}/timing-verbose-summary.md"
+          appvar_out="$test_dir/TLSTMLOG.8xv"
+          bin_out="$test_dir/TLSTMLOG.bin"
+          txt_out="$test_dir/TLSTMLOG.txt"
+
+          : > "$summary_md"
+          echo "### Timing Verbose Details (from TLSTMLOG AppVar)" >> "$summary_md"
+          echo "" >> "$summary_md"
+
+          appvar_src=$(find "${{github.workspace}}" -type f \( -iname "TLSTMLOG.8xv" -o -iname "TLSTMLOG*.8xv" \) | head -n 1 || true)
+          if [ -z "$appvar_src" ]; then
+            echo "- TLSTMLOG AppVar was not found in runner workspace after autotest." >> "$summary_md"
+            echo "- If this persists, autotester may need explicit AppVar receive/export support in the test sequence." >> "$summary_md"
+            exit 0
+          fi
+
+          cp "$appvar_src" "$appvar_out"
+          convbin -i "$appvar_out" -o "$bin_out" -j 8x -k bin
+          tr -d '\000\r' < "$bin_out" > "$txt_out"
+
+          if ! grep -qE '^(robust|class),' "$txt_out"; then
+            echo "- TLSTMLOG extracted, but no parseable robust/class lines were found." >> "$summary_md"
+            echo "" >> "$summary_md"
+            echo "<details><summary>Raw TLSTMLOG text</summary>" >> "$summary_md"
+            echo "" >> "$summary_md"
+            echo '```text' >> "$summary_md"
+            cat "$txt_out" >> "$summary_md"
+            echo '```' >> "$summary_md"
+            echo "</details>" >> "$summary_md"
+            exit 0
+          fi
+
+          awk -F',' '
+            function emit_header(p, sigma, accept) {
+              print "#### " p
+              print ""
+              print "- sigma: `" sigma "`"
+              print "- max_delta (sigma*c): `" accept "`"
+              print ""
+              print "| class | median_dev (cycles) | occur |"
+              print "|---|---:|---:|"
+            }
+            $1 == "robust" {
+              prim = $2
+              sigma = ""
+              accept = ""
+              base = ""
+              for (i = 3; i <= NF; i++) {
+                split($i, kv, "=")
+                if (kv[1] == "sigma") sigma = kv[2]
+                else if (kv[1] == "accept") accept = kv[2]
+                else if (kv[1] == "median") base = kv[2]
+              }
+              base_med[prim] = base + 0
+              emit_header(prim, sigma, accept)
+              next
+            }
+            $1 == "class" {
+              prim = $2
+              cls = $3
+              med = ""
+              over = ""
+              for (i = 4; i <= NF; i++) {
+                split($i, kv, "=")
+                if (kv[1] == "median") med = kv[2]
+                else if (kv[1] == "over") over = kv[2]
+              }
+              dev = (med + 0) - base_med[prim]
+              printf("| %s | %+d | %s |\n", cls, dev, over)
+              next
+            }
+          ' "$txt_out" >> "$summary_md"
+
       - name: Generate Timing JSON Results
         if: always()
         run: |
@@ -413,30 +490,31 @@ jobs:
           done
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "### Timing Methodology (tls_timing)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Stability check: run repeated timing on identical input; pass requires standard deviation < 1.00% of mean." >> $GITHUB_STEP_SUMMARY
-          echo "- Differential check: compare best/worst/random/edge input classes; fail only when mean cycle delta exceeds threshold and direction is consistent in >=75% of samples." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Primitive | Differential Threshold (cycles) |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|----------------------------------:|" >> $GITHUB_STEP_SUMMARY
-          echo "| RNG | 64 |" >> $GITHUB_STEP_SUMMARY
-          echo "| BYTES | 8 |" >> $GITHUB_STEP_SUMMARY
-          echo "| SHA256 | 32 |" >> $GITHUB_STEP_SUMMARY
-          echo "| HMAC | 32 |" >> $GITHUB_STEP_SUMMARY
-          echo "| HKDF | 48 |" >> $GITHUB_STEP_SUMMARY
-          echo "| PBKDF2 | 192 |" >> $GITHUB_STEP_SUMMARY
-          echo "| AESGCM-E | 48 |" >> $GITHUB_STEP_SUMMARY
-          echo "| AESGCM-DV | 64 |" >> $GITHUB_STEP_SUMMARY
-          echo "| AESCBC-E | 48 |" >> $GITHUB_STEP_SUMMARY
-          echo "| AESCBC-D | 48 |" >> $GITHUB_STEP_SUMMARY
-          echo "| X25519 | 128 |" >> $GITHUB_STEP_SUMMARY
+          if [ -f "${{github.workspace}}/timing-verbose-summary.md" ]; then
+            cat "${{github.workspace}}/timing-verbose-summary.md" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Timing Verbose Details (from TLSTMLOG AppVar)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- Verbose timing summary file was not generated." >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload Timing Results Logfile
         uses: actions/upload-artifact@v4
         with:
           name: results-timing.json
           path: ${{github.workspace}}/results-timing.json
+
+      - name: Upload Timing Raw AppVar/Text
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-timing-raw-log
+          path: |
+            ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.8xv
+            ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.bin
+            ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.txt
+            ${{github.workspace}}/timing-verbose-summary.md
+          if-no-files-found: warn
 
       - name: Remove CEmu Rom
         if: always()

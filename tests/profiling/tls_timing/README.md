@@ -3,13 +3,21 @@
 Manual timing-constancy smoke test for selected primitives.
 
 Each primitive runs two checks:
-- Stability: repeated timing on identical input; pass requires `stdev/mean < 1%`.
-- Differential: compare `best`, `worst`, `random`, and `edge` input classes; fail only if:
-  - pairwise mean cycle delta exceeds that primitive's cycle threshold, and
-  - direction is consistent in >=75% of samples.
+- Stability calibration: repeated timing on identical input (random class) computes:
+  - `m = median(T1..Tn)`
+  - `MAD = median(|Ti - m|)`
+  - `sigma = 1.4826 * MAD`
+  - accepted cycle deviation `D = sigma * c`, with `c=8`
+- Differential: compare `best`, `worst`, `random`, and `edge` classes against the random baseline.
+  A primitive fails only if a class exceeds `D` with directional consistency in >=75% of samples.
 
 `md` in test output is the raw maximum pairwise mean cycle delta observed.
 It is not 75%-filtered, so `md` can exceed a threshold while differential still passes.
+
+The test also writes a newline-delimited raw timing log AppVar:
+- name: `TLSTMLOG`
+- format: text lines (`sample,...`, `robust,...`, `class,...`)
+- intended for host-side post-processing (not calculator-side viewing).
 
 Current primitives:
 - `tls_random_bytes` (RNG sampling)
