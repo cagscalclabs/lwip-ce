@@ -883,7 +883,6 @@ static void show_result(const char *name, const struct primitive_result *result)
     printf("%s:%s",
            name,
            result->differential_pass ? "PASS" : "FAIL");
-#define TLS_TIMING_VERBOSE
 #ifdef TLS_TIMING_VERBOSE
     uint16_t class_id;
     os_FontSelect(os_SmallFont);
