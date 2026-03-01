@@ -61,7 +61,7 @@ static bool is_all_zero(const uint8_t *buf, size_t len)
 static bool init_rng_with_retries(void)
 {
     int tries;
-    for (tries = 0; tries < 5; tries++)
+    for (tries = 0; tries < 10; tries++)
     {
         if (tls_random_init_entropy())
         {
