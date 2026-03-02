@@ -363,9 +363,20 @@ jobs:
 
           test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
           status=0
+          failed_hash_id=""
           test_start=$(($(date +%s%N)/1000000))
           make -C "$test_dir" clean
-          make -C "$test_dir" all test || ((status=$?))
+          make -C "$test_dir" all
+          set +e
+          make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            failed_hash_id=$(grep -Eo 'hashWait\|[0-9]+' "$test_dir/autotest.log" | tail -n1 | cut -d'|' -f2 || true)
+            if [ -z "$failed_hash_id" ]; then
+              failed_hash_id=$(grep -Eo 'num[0-9]+_dump' "$test_dir/autotest.log" | tail -n1 | sed -E 's/[^0-9]//g' || true)
+            fi
+          fi
           test_done=$(($(date +%s%N)/1000000))
           test_duration=$((test_done - test_start))
 
@@ -377,7 +388,7 @@ jobs:
             total_failed=1
             test_status="failed"
           fi
-          echo -e "{\"name\":\"tls_timing\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
+          echo -e "{\"name\":\"tls_timing\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_id\":\"$failed_hash_id\"}" > "$test_dir/result.json"
 
           end_time=$(($(date +%s%N)/1000000))
           echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
@@ -396,6 +407,9 @@ jobs:
           : > "$summary_md"
           echo "### Timing Verbose Details (from TLSTMLOG AppVar)" >> "$summary_md"
           echo "" >> "$summary_md"
+          echo "For each test, sigma = 1.4826 * MAD(case_best_samples), c = [6, 4]." >> "$summary_md"
+          echo "A pass is required for the c=6 case. c=4 case is for additional robustness." >> "$summary_md"
+          echo "max deviations is computed max(c, c * sigma)." >> "$summary_md"
 
           appvar_src=$(find "${{github.workspace}}" -type f \( -iname "TLSTMLOG.8xv" -o -iname "TLSTMLOG*.8xv" \) | head -n 1 || true)
           if [ -z "$appvar_src" ]; then
@@ -425,43 +439,94 @@ jobs:
           fi
 
           awk -F',' '
-            function emit_header(p, sigma, accept) {
-              print "#### " p
-              print ""
-              print "- sigma: `" sigma "`"
-              print "- max_delta (sigma*c): `" accept "`"
-              print ""
-              print "| class | median_dev (cycles) | occur |"
-              print "|---|---:|---:|"
+            function parse_kv(start_idx,    i) {
+              for (i = start_idx; i <= NF; i++) {
+                split($i, kv, "=")
+                k = kv[1]
+                v = kv[2]
+                if (k == "sigma") sigma_cur = v
+                else if (k == "accept") accept_cur = v
+                else if (k == "median") median_cur = v
+                else if (k == "over") over_cur = v
+                else if (k == "dpass") dpass_cur = v
+              }
+            }
+            function get_or_dash(v) { return (v == "" ? "-" : v) }
+            BEGIN {
+              n_prim = 0
             }
             $1 == "robust" {
               prim = $2
-              sigma = ""
-              accept = ""
-              base = ""
-              for (i = 3; i <= NF; i++) {
-                split($i, kv, "=")
-                if (kv[1] == "sigma") sigma = kv[2]
-                else if (kv[1] == "accept") accept = kv[2]
-                else if (kv[1] == "median") base = kv[2]
+              if (!seen[prim]) {
+                seen[prim] = 1
+                order[++n_prim] = prim
               }
-              base_med[prim] = base + 0
-              emit_header(prim, sigma, accept)
+              sigma_cur = ""; accept_cur = ""; median_cur = ""; dpass_cur = ""
+              parse_kv(3)
+              sigma[prim] = sigma_cur
+              accept6[prim] = accept_cur
+              base_med[prim] = median_cur + 0
+              dpass6[prim] = dpass_cur
+              next
+            }
+            $1 == "robust4" {
+              prim = $2
+              if (!seen[prim]) {
+                seen[prim] = 1
+                order[++n_prim] = prim
+              }
+              sigma_cur = ""; accept_cur = ""; dpass_cur = ""
+              parse_kv(3)
+              if (sigma[prim] == "") sigma[prim] = sigma_cur
+              accept4[prim] = accept_cur
+              dpass4[prim] = dpass_cur
               next
             }
             $1 == "class" {
               prim = $2
               cls = $3
-              med = ""
-              over = ""
-              for (i = 4; i <= NF; i++) {
-                split($i, kv, "=")
-                if (kv[1] == "median") med = kv[2]
-                else if (kv[1] == "over") over = kv[2]
-              }
-              dev = (med + 0) - base_med[prim]
-              printf("| %s | %+d | %s |\n", cls, dev, over)
+              median_cur = ""; over_cur = ""
+              parse_kv(4)
+              dev = (median_cur + 0) - base_med[prim]
+              med_dev[prim, cls] = dev
+              over6[prim, cls] = over_cur
               next
+            }
+            $1 == "class4" {
+              prim = $2
+              cls = $3
+              over_cur = ""
+              parse_kv(4)
+              over4[prim, cls] = over_cur
+              next
+            }
+            END {
+              classes[1] = "best"
+              classes[2] = "worst"
+              classes[3] = "random"
+              classes[4] = "edge"
+              for (pidx = 1; pidx <= n_prim; pidx++) {
+                p = order[pidx]
+                print "#### " p
+                print ""
+                printf("sigma=`%s` | max_delta(c=6)=`%s` | max_delta(c=4)=`%s` | dpass(c=6)=`%s` | dpass(c=4)=`%s`\n",
+                       get_or_dash(sigma[p]),
+                       get_or_dash(accept6[p]),
+                       get_or_dash(accept4[p]),
+                       get_or_dash(dpass6[p]),
+                       get_or_dash(dpass4[p]))
+                print ""
+                print "| class | median_dev (cycles) | occur % (c=6) | occur % (c=4) |"
+                print "|---|---:|---:|---:|"
+                for (cidx = 1; cidx <= 4; cidx++) {
+                  c = classes[cidx]
+                  devv = ((p SUBSEP c) in med_dev) ? sprintf("%+d", med_dev[p, c]) : "-"
+                  o6 = ((p SUBSEP c) in over6) ? over6[p, c] : "-"
+                  o4 = ((p SUBSEP c) in over4) ? over4[p, c] : "-"
+                  printf("| %s | %s | %s | %s |\n", c, devv, o6, o4)
+                }
+                print ""
+              }
             }
           ' "$txt_out" >> "$summary_md"
 
@@ -486,6 +551,7 @@ jobs:
           test_name="tls_timing"
           test_dir="$LWIP_PROF_TESTS/$test_name"
           status=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .status' ${{github.workspace}}/results-timing.json)
+          failed_hash_id=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .failed_hash_id // ""' ${{github.workspace}}/results-timing.json)
           module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
           module_desc=${module_desc:-"(no description)"}
           module_desc=${module_desc//$'\n'/ }
@@ -511,7 +577,17 @@ jobs:
             if [ "$status" = "passed" ]; then
               hash_status="✅ Passed"
             else
-              hash_status="❌ Failed"
+              if [[ "$failed_hash_id" =~ ^[0-9]+$ ]]; then
+                if [ "$hash_id" = "$failed_hash_id" ]; then
+                  hash_status="❌ Failed"
+                elif [ "$hash_id" -lt "$failed_hash_id" ]; then
+                  hash_status="✅ Passed"
+                else
+                  hash_status="⚪ Not reached"
+                fi
+              else
+                hash_status="❓ Unknown"
+              fi
             fi
             echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
           done
@@ -540,6 +616,7 @@ jobs:
             ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.8xv
             ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.bin
             ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.txt
+            ${{env.LWIP_PROF_TESTS}}/tls_timing/autotest.log
             ${{github.workspace}}/timing-verbose-summary.md
           if-no-files-found: warn
 

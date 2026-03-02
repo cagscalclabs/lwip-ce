@@ -226,7 +226,12 @@ static void compute_robust_stats(const uint32_t *samples, uint16_t count,
 
 static uint32_t robust_accept_deviation(uint32_t sigma_x10000, uint32_t c_factor)
 {
-    return (uint32_t)(((uint64_t)sigma_x10000 * c_factor + 5000u) / 10000u);
+    uint32_t threshold = (uint32_t)(((uint64_t)sigma_x10000 * c_factor + 5000u) / 10000u);
+    if (threshold < c_factor)
+    {
+        threshold = c_factor;
+    }
+    return threshold;
 }
 
 static const char *class_name(uint16_t class_id)

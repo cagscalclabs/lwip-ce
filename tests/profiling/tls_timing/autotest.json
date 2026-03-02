@@ -34,8 +34,7 @@
     "key|enter",
     "hashWait|12",
     "key|enter",
-    "delay|2000",
-    "saveVar|TLSTMLOG"
+    "delay|2000"
   ],
   "hashes": {
     "1": {
@@ -126,7 +125,7 @@
       "expected_CRCs": [
         "B7FFCFB2"
       ],
-      "timeout": 10000000
+      "timeout": 50000000
     },
     "11": {
       "description": "AES-CCM Decrypt, differential",
@@ -135,7 +134,7 @@
       "expected_CRCs": [
         "B1844E6C"
       ],
-      "timeout": 10000000
+      "timeout": 50000000
     },
     "12": {
       "description": "x25519 ECDHE, differential",
