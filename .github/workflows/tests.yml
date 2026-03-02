@@ -404,7 +404,11 @@ jobs:
             exit 0
           fi
 
-          cp "$appvar_src" "$appvar_out"
+          appvar_src_abs="$(readlink -f "$appvar_src")"
+          appvar_out_abs="$(readlink -f "$appvar_out" 2>/dev/null || true)"
+          if [ "$appvar_src_abs" != "$appvar_out_abs" ]; then
+            cp "$appvar_src" "$appvar_out"
+          fi
           convbin -i "$appvar_out" -o "$bin_out" -j 8x -k bin
           tr -d '\000\r' < "$bin_out" > "$txt_out"
 

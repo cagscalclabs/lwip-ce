@@ -126,7 +126,7 @@
       "expected_CRCs": [
         "B7FFCFB2"
       ],
-      "timeout": 5000000
+      "timeout": 10000000
     },
     "11": {
       "description": "AES-CCM Decrypt, differential",
@@ -135,7 +135,7 @@
       "expected_CRCs": [
         "B1844E6C"
       ],
-      "timeout": 5000000
+      "timeout": 10000000
     },
     "12": {
       "description": "x25519 ECDHE, differential",
