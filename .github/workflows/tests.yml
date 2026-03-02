@@ -505,27 +505,28 @@ jobs:
               classes[2] = "worst"
               classes[3] = "random"
               classes[4] = "edge"
+              print ""
+              print "| Unit | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Over% c6 (W/R/E) | Over% c4 (W/R/E) |"
+              print "|---|---:|---:|---:|---:|---:|"
               for (pidx = 1; pidx <= n_prim; pidx++) {
                 p = order[pidx]
-                print "#### " p
-                print ""
-                printf("sigma=`%s` | max_delta(c=6)=`%s` | max_delta(c=4)=`%s` | dpass(c=6)=`%s` | dpass(c=4)=`%s`\n",
-                       get_or_dash(sigma[p]),
-                       get_or_dash(accept6[p]),
-                       get_or_dash(accept4[p]),
-                       get_or_dash(dpass6[p]),
-                       get_or_dash(dpass4[p]))
-                print ""
-                print "| class | median_dev (cycles) | occur % (c=6) | occur % (c=4) |"
-                print "|---|---:|---:|---:|"
-                for (cidx = 1; cidx <= 4; cidx++) {
-                  c = classes[cidx]
-                  devv = ((p SUBSEP c) in med_dev) ? sprintf("%+d", med_dev[p, c]) : "-"
-                  o6 = ((p SUBSEP c) in over6) ? over6[p, c] : "-"
-                  o4 = ((p SUBSEP c) in over4) ? over4[p, c] : "-"
-                  printf("| %s | %s | %s | %s |\n", c, devv, o6, o4)
-                }
-                print ""
+                sigma_v = get_or_dash(sigma[p])
+                d6 = get_or_dash(accept6[p])
+                d4 = get_or_dash(accept4[p])
+                if (d6 != "-") d6 = d6 ".00"
+                if (d4 != "-") d4 = d4 ".00"
+                dpair = d6 "/" d4
+                md_w = ((p SUBSEP "worst") in med_dev) ? sprintf("%+.1f", med_dev[p, "worst"] + 0.0) : "-"
+                md_r = ((p SUBSEP "random") in med_dev) ? sprintf("%+.1f", med_dev[p, "random"] + 0.0) : "-"
+                md_e = ((p SUBSEP "edge") in med_dev) ? sprintf("%+.1f", med_dev[p, "edge"] + 0.0) : "-"
+                o6_w = ((p SUBSEP "worst") in over6) ? over6[p, "worst"] : "-"
+                o6_r = ((p SUBSEP "random") in over6) ? over6[p, "random"] : "-"
+                o6_e = ((p SUBSEP "edge") in over6) ? over6[p, "edge"] : "-"
+                o4_w = ((p SUBSEP "worst") in over4) ? over4[p, "worst"] : "-"
+                o4_r = ((p SUBSEP "random") in over4) ? over4[p, "random"] : "-"
+                o4_e = ((p SUBSEP "edge") in over4) ? over4[p, "edge"] : "-"
+                printf("| %s | %s | %s | %s/%s/%s | %s/%s/%s | %s/%s/%s |\n",
+                       p, sigma_v, dpair, md_w, md_r, md_e, o6_w, o6_r, o6_e, o4_w, o4_r, o4_e)
               }
             }
           ' "$txt_out" >> "$summary_md"
