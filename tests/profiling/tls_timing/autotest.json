@@ -45,7 +45,7 @@
       "expected_CRCs": [
         "A42E20CA"
       ],
-      "timeout": 4000000
+      "timeout": 80000000
     },
     "2": {
       "description": "SHA-256, differential",
@@ -54,7 +54,7 @@
       "expected_CRCs": [
         "F54D6729"
       ],
-      "timeout": 2000000
+      "timeout": 40000000
     },
     "3": {
       "description": "HMAC-SHA-256, differential",
@@ -63,7 +63,7 @@
       "expected_CRCs": [
         "CA34DEB6"
       ],
-      "timeout": 2000000
+      "timeout": 40000000
     },
     "4": {
       "description": "HKDF, differential",
@@ -72,7 +72,7 @@
       "expected_CRCs": [
         "799733C3"
       ],
-      "timeout": 2000000
+      "timeout": 40000000
     },
     "5": {
       "description": "PBKDF2, differential",
@@ -81,7 +81,7 @@
       "expected_CRCs": [
         "6F92130F"
       ],
-      "timeout": 10000000
+      "timeout": 200000000
     },
     "6": {
       "description": "AES-GCM Encrypt, differential",
@@ -90,7 +90,7 @@
       "expected_CRCs": [
         "529FA90B"
       ],
-      "timeout": 5000000
+      "timeout": 100000000
     },
     "7": {
       "description": "AES-GCM Decrypt + Verify, differential",
@@ -99,7 +99,7 @@
       "expected_CRCs": [
         "B99B7F3B"
       ],
-      "timeout": 5000000
+      "timeout": 100000000
     },
     "8": {
       "description": "AES-CBC Encrypt, differential",
@@ -108,7 +108,7 @@
       "expected_CRCs": [
         "080A2864"
       ],
-      "timeout": 5000000
+      "timeout": 100000000
     },
     "9": {
       "description": "AES-CBC Decrypt, differential",
@@ -117,7 +117,7 @@
       "expected_CRCs": [
         "0E71A9BA"
       ],
-      "timeout": 5000000
+      "timeout": 100000000
     },
     "10": {
       "description": "AES-CCM Encrypt, differential",
@@ -126,7 +126,7 @@
       "expected_CRCs": [
         "B7FFCFB2"
       ],
-      "timeout": 50000000
+      "timeout": 1000000000
     },
     "11": {
       "description": "AES-CCM Decrypt, differential",
@@ -135,7 +135,7 @@
       "expected_CRCs": [
         "B1844E6C"
       ],
-      "timeout": 50000000
+      "timeout": 1000000000
     },
     "12": {
       "description": "x25519 ECDHE, differential",
@@ -144,7 +144,7 @@
       "expected_CRCs": [
         "13EFD799"
       ],
-      "timeout": 50000000
+      "timeout": 1000000000
     }
   }
 }

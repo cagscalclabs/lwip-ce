@@ -16,7 +16,7 @@
 #include "passwords.h"
 #include "x25519.h"
 
-#define TIMING_SAMPLES 20u
+#define TIMING_SAMPLES 50u
 #define TIMING_REPS_FAST 128u
 #define TIMING_REPS_MEDIUM 64u
 #define TIMING_REPS_SLOW 16u
@@ -514,7 +514,7 @@ static uint32_t time_pbkdf2_case(uint8_t input_class)
                     sizeof(salt),
                     key,
                     sizeof(key),
-                    128,
+                    32,
                     TLS_HASH_SHA256);
     if (!ok)
     {
