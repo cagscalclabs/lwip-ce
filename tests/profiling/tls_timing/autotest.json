@@ -34,7 +34,8 @@
     "key|enter",
     "hashWait|12",
     "key|enter",
-    "delay|2000"
+    "delay|2000",
+    "saveVar|TLSTMLOG"
   ],
   "hashes": {
     "1": {
