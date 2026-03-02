@@ -14,7 +14,6 @@
 #include "hkdf.h"
 #include "hmac.h"
 #include "passwords.h"
-#include "random.h"
 #include "x25519.h"
 
 #define TIMING_SAMPLES 20u
@@ -24,7 +23,8 @@
 
 #define STABILITY_MAX_PCT_X100 100u
 #define MAD_SIGMA_SCALE_X10000 14826u
-#define MAD_ACCEPT_C 8u
+#define MAD_ACCEPT_C 6u
+#define MAD_ACCEPT_C_RIGOROUS 4u
 #define DIFF_CONSISTENCY_NUM 3u
 #define DIFF_CONSISTENCY_DEN 4u
 #define TIMING_LOG_APPVAR "TLSTMLOG"
@@ -53,11 +53,13 @@ struct primitive_result
     uint32_t stability_mad;
     uint32_t stability_sigma_x10000;
     uint32_t accepted_deviation;
+    uint32_t accepted_deviation_rigorous;
     bool stability_pass;
 
     uint32_t class_means[TIMING_CLASS_COUNT];
     uint32_t class_medians[TIMING_CLASS_COUNT];
     uint32_t class_over_thresh_pct_x100[TIMING_CLASS_COUNT];
+    uint32_t class_over_thresh_pct_x100_rigorous[TIMING_CLASS_COUNT];
     uint32_t max_pair_diff;
     bool differential_pass;
 
@@ -346,19 +348,6 @@ static void fill_pattern(uint8_t *buf, size_t len, uint8_t input_class)
         memset(buf, 0xAA, len);
         break;
     }
-}
-
-static uint32_t time_rng_case(uint8_t input_class)
-{
-    uint8_t out[64];
-    clock_t start;
-
-    (void)input_class;
-
-    start = clock();
-    tls_random_bytes(out, sizeof(out));
-    timing_sink ^= out[0];
-    return (uint32_t)(clock() - start);
 }
 
 static uint32_t time_bytes_compare_case(uint8_t input_class)
@@ -869,6 +858,7 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
         out->class_means[class_id] = mean_u32(samples[class_id], TIMING_SAMPLES);
         out->class_medians[class_id] = median_u32(samples[class_id], TIMING_SAMPLES);
         out->class_over_thresh_pct_x100[class_id] = 0;
+        out->class_over_thresh_pct_x100_rigorous[class_id] = 0;
     }
 
     compute_stats(samples[TIMING_CALIB_CLASS], TIMING_SAMPLES,
@@ -876,20 +866,29 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
     compute_robust_stats(samples[TIMING_CALIB_CLASS], TIMING_SAMPLES,
                          &out->stability_median, &out->stability_mad, &out->stability_sigma_x10000);
     out->accepted_deviation = robust_accept_deviation(out->stability_sigma_x10000, MAD_ACCEPT_C);
+    out->accepted_deviation_rigorous = robust_accept_deviation(out->stability_sigma_x10000, MAD_ACCEPT_C_RIGOROUS);
     out->stability_pass = true;
 
     for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
     {
         uint16_t over = 0;
+        uint16_t over_rigorous = 0;
         for (i = 0; i < TIMING_SAMPLES; i++)
         {
-            if (abs_u32_diff(samples[class_id][i], out->stability_median) > out->accepted_deviation)
+            uint32_t dev = abs_u32_diff(samples[class_id][i], out->stability_median);
+            if (dev > out->accepted_deviation)
             {
                 over++;
+            }
+            if (dev > out->accepted_deviation_rigorous)
+            {
+                over_rigorous++;
             }
         }
         out->class_over_thresh_pct_x100[class_id] =
             (uint32_t)(((uint32_t)over * 10000u) / TIMING_SAMPLES);
+        out->class_over_thresh_pct_x100_rigorous[class_id] =
+            (uint32_t)(((uint32_t)over_rigorous * 10000u) / TIMING_SAMPLES);
     }
 
     out->max_pair_diff = 0;
@@ -944,6 +943,15 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
                 (unsigned int)MAD_ACCEPT_C,
                 (unsigned long)out->accepted_deviation,
                 out->differential_pass ? 1u : 0u);
+    timing_logf("robust4,%s,median=%lu,mad=%lu,sigma=%lu.%04lu,c=%u,accept=%lu,dpass=%u\n",
+                name,
+                (unsigned long)out->stability_median,
+                (unsigned long)out->stability_mad,
+                (unsigned long)(out->stability_sigma_x10000 / 10000u),
+                (unsigned long)(out->stability_sigma_x10000 % 10000u),
+                (unsigned int)MAD_ACCEPT_C_RIGOROUS,
+                (unsigned long)out->accepted_deviation_rigorous,
+                out->differential_pass ? 1u : 0u);
     for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
     {
         const int32_t trend = (int32_t)out->class_medians[class_id] - (int32_t)out->stability_median;
@@ -956,6 +964,14 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
                     trend_symbol,
                     (unsigned long)(out->class_over_thresh_pct_x100[class_id] / 100u),
                     (unsigned long)(out->class_over_thresh_pct_x100[class_id] % 100u));
+        timing_logf("class4,%s,%s,mean=%lu,median=%lu,trend=%c,over=%lu.%02lu%%\n",
+                    name,
+                    class_name(class_id),
+                    (unsigned long)out->class_means[class_id],
+                    (unsigned long)out->class_medians[class_id],
+                    trend_symbol,
+                    (unsigned long)(out->class_over_thresh_pct_x100_rigorous[class_id] / 100u),
+                    (unsigned long)(out->class_over_thresh_pct_x100_rigorous[class_id] % 100u));
     }
 }
 
@@ -969,7 +985,8 @@ static void show_result(const char *name, const struct primitive_result *result)
 #ifdef TLS_TIMING_VERBOSE
     uint16_t class_id;
     os_FontSelect(os_SmallFont);
-    printf("\nsig=%lu.%04lu max_delta=%lu",
+    printf("\nc=%u sig=%lu.%04lu max_delta=%lu",
+           (unsigned int)MAD_ACCEPT_C,
            (unsigned long)(result->stability_sigma_x10000 / 10000u),
            (unsigned long)(result->stability_sigma_x10000 % 10000u),
            (unsigned long)result->accepted_deviation);
@@ -982,6 +999,27 @@ static void show_result(const char *name, const struct primitive_result *result)
                (unsigned long)(result->class_over_thresh_pct_x100[class_id] / 100u),
                (unsigned long)(result->class_over_thresh_pct_x100[class_id] % 100u));
     }
+    os_GetKey();
+    os_ClrHome();
+    os_FontSelect(os_LargeFont);
+    printf("%s:%s",
+           name,
+           result->differential_pass ? "PASS" : "FAIL");
+    os_FontSelect(os_SmallFont);
+    printf("\nc=%u sig=%lu.%04lu max_delta=%lu",
+           (unsigned int)MAD_ACCEPT_C_RIGOROUS,
+           (unsigned long)(result->stability_sigma_x10000 / 10000u),
+           (unsigned long)(result->stability_sigma_x10000 % 10000u),
+           (unsigned long)result->accepted_deviation_rigorous);
+    for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
+    {
+        const int32_t median_dev = (int32_t)result->class_medians[class_id] - (int32_t)result->stability_median;
+        printf("\n%s median_dev=%+ld occur=%lu.%02lu%%",
+               class_name(class_id),
+               (long)median_dev,
+               (unsigned long)(result->class_over_thresh_pct_x100_rigorous[class_id] / 100u),
+               (unsigned long)(result->class_over_thresh_pct_x100_rigorous[class_id] % 100u));
+    }
 #endif
     os_FontSelect(os_LargeFont);
     os_GetKey();
@@ -989,7 +1027,6 @@ static void show_result(const char *name, const struct primitive_result *result)
 
 int main(void)
 {
-    struct primitive_result r_rng;
     struct primitive_result r_bytes;
     struct primitive_result r_sha;
     struct primitive_result r_hmac;
@@ -1003,22 +1040,11 @@ int main(void)
     struct primitive_result r_aes_ccm_dec;
     struct primitive_result r_x25519;
 
-    int rng_init_count = 0;
-    bool rng_init_success = false;
-    do
-    {
-        rng_init_success = tls_random_init_entropy();
-    } while (!rng_init_success && rng_init_count++ < 5);
-    if (!rng_init_success)
-        return 1;
-
     (void)timing_log_begin();
-    timing_logf("tls_timing,start,c=%u,sigma_scale=%u\n",
+    timing_logf("tls_timing,start,c=%u,c_rig=%u,sigma_scale=%u\n",
                 (unsigned int)MAD_ACCEPT_C,
+                (unsigned int)MAD_ACCEPT_C_RIGOROUS,
                 (unsigned int)MAD_SIGMA_SCALE_X10000);
-
-    run_primitive("RNG", time_rng_case, TIMING_REPS_FAST, &r_rng);
-    show_result("RNG", &r_rng);
 
     run_primitive("BYTES", time_bytes_compare_case, TIMING_REPS_FAST, &r_bytes);
     show_result("BYTES", &r_bytes);

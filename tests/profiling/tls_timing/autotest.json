@@ -1,5 +1,5 @@
 {
-  "description": "Verify timing behavior with two checks per primitive: (A) Stability (same input repeated, stddev <1% of mean) and (B) Differential timing across best/worst/random/edge classes, failing only for consistent inter-class cycle deltas above configured limits.",
+  "description": "Verify timing behavior. Compute acceptible jitter-based cycle deviation based on MAD, a tuning factor (c), then test that no input class exceeds the acceptable deviation more than 75% of the time",
   "transfer_files": [
     "bin/TIMINGS.8xp",
     "clibs.8xg"
@@ -34,21 +34,10 @@
     "key|enter",
     "hashWait|12",
     "key|enter",
-    "hashWait|13",
-    "key|enter",
     "delay|2000"
   ],
   "hashes": {
     "1": {
-      "description": "RNG timing, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "918A1AD3"
-      ],
-      "timeout": 10000000
-    },
-    "2": {
       "description": "Secure bytes compare, differential",
       "start": "vram_start",
       "size": "vram_16_size",
@@ -57,7 +46,7 @@
       ],
       "timeout": 4000000
     },
-    "3": {
+    "2": {
       "description": "SHA-256, differential",
       "start": "vram_start",
       "size": "vram_16_size",
@@ -66,7 +55,7 @@
       ],
       "timeout": 2000000
     },
-    "4": {
+    "3": {
       "description": "HMAC-SHA-256, differential",
       "start": "vram_start",
       "size": "vram_16_size",
@@ -75,7 +64,7 @@
       ],
       "timeout": 2000000
     },
-    "5": {
+    "4": {
       "description": "HKDF, differential",
       "start": "vram_start",
       "size": "vram_16_size",
@@ -84,75 +73,75 @@
       ],
       "timeout": 2000000
     },
-    "6": {
+    "5": {
       "description": "PBKDF2, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "16D50846"
+        "6F92130F"
       ],
       "timeout": 10000000
     },
-    "7": {
+    "6": {
       "description": "AES-GCM Encrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "D048C346"
+        "529FA90B"
       ],
       "timeout": 5000000
     },
-    "8": {
+    "7": {
       "description": "AES-GCM Decrypt + Verify, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "A3DDEFA2"
+        "B99B7F3B"
       ],
       "timeout": 5000000
     },
-    "9": {
+    "8": {
       "description": "AES-CBC Encrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "8ADD4229"
+        "080A2864"
       ],
       "timeout": 5000000
     },
-    "10": {
+    "9": {
       "description": "AES-CBC Decrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "8CA6C3F7"
+        "0E71A9BA"
       ],
       "timeout": 5000000
     },
-    "11": {
+    "10": {
       "description": "AES-CCM Encrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "8CA6C3F7"
+        "B7FFCFB2"
       ],
       "timeout": 5000000
     },
-    "12": {
+    "11": {
       "description": "AES-CCM Decrypt, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "8CA6C3F7"
+        "B1844E6C"
       ],
       "timeout": 5000000
     },
-    "13": {
+    "12": {
       "description": "x25519 ECDHE, differential",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "6AA8CCD0"
+        "13EFD799"
       ],
       "timeout": 50000000
     }
