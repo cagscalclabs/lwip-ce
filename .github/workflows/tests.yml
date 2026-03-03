@@ -3,7 +3,7 @@ name: Unit Tests + Profiling
 on:
   push:
     branches: ['tls']
-    paths: ['src/tls/**', 'tests/**']
+    paths: ['src/tls/**']
   workflow_dispatch:
 
 env:
@@ -411,7 +411,13 @@ jobs:
           echo "A pass is required for the c=6 case. c=4 case is for additional robustness." >> "$summary_md"
           echo "max deviations is computed max(c, c * sigma)." >> "$summary_md"
 
-          appvar_src=$(find "${{github.workspace}}" -type f \( -iname "TLSTMLOG.8xv" -o -iname "TLSTMLOG*.8xv" \) | head -n 1 || true)
+          appvar_src=""
+          if [ -f "$appvar_out" ]; then
+            appvar_src="$appvar_out"
+          else
+            appvar_src=$(find "${{github.workspace}}" -type f \( -iname "TLSTMLOG.8xv" -o -iname "TLSTMLOG*.8xv" \) -print0 \
+              | xargs -0 ls -1t 2>/dev/null | head -n 1 || true)
+          fi
           if [ -z "$appvar_src" ]; then
             echo "- TLSTMLOG AppVar was not found in runner workspace after autotest." >> "$summary_md"
             echo "- If this persists, autotester may need explicit AppVar receive/export support in the test sequence." >> "$summary_md"
@@ -454,6 +460,17 @@ jobs:
             function get_or_dash(v) { return (v == "" ? "-" : v) }
             BEGIN {
               n_prim = 0
+              n_robust = 0
+              n_robust4 = 0
+            }
+            /^primitive=/ {
+              split($1, p, "=")
+              prim = p[2]
+              if (prim != "" && !seen[prim]) {
+                seen[prim] = 1
+                order[++n_prim] = prim
+              }
+              next
             }
             $1 == "robust" {
               prim = $2
@@ -461,6 +478,7 @@ jobs:
                 seen[prim] = 1
                 order[++n_prim] = prim
               }
+              n_robust++
               sigma_cur = ""; accept_cur = ""; median_cur = ""; dpass_cur = ""
               parse_kv(3)
               sigma[prim] = sigma_cur
@@ -475,6 +493,7 @@ jobs:
                 seen[prim] = 1
                 order[++n_prim] = prim
               }
+              n_robust4++
               sigma_cur = ""; accept_cur = ""; dpass_cur = ""
               parse_kv(3)
               if (sigma[prim] == "") sigma[prim] = sigma_cur
@@ -505,6 +524,8 @@ jobs:
               classes[2] = "worst"
               classes[3] = "random"
               classes[4] = "edge"
+              print ""
+              printf("_Parsed primitives: %d (robust=%d, robust4=%d)_\n", n_prim, n_robust, n_robust4)
               print ""
               print "| Unit | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Over% c6 (W/R/E) | Over% c4 (W/R/E) |"
               print "|---|---:|---:|---:|---:|---:|"

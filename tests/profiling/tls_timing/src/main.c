@@ -333,9 +333,11 @@ static void fill_pattern(uint8_t *buf, size_t len, uint8_t input_class)
         }
         break;
     case TIMING_CLASS_EDGE:
+    {
+        size_t boundary = len / 2u;
         for (i = 0; i < len; i++)
         {
-            if (i < (len / 2u))
+            if (i < boundary)
             {
                 buf[i] = 0x00;
             }
@@ -349,6 +351,7 @@ static void fill_pattern(uint8_t *buf, size_t len, uint8_t input_class)
             buf[len / 2u] ^= 0x7F;
         }
         break;
+    }
     default:
         memset(buf, 0xAA, len);
         break;
@@ -848,11 +851,6 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
                 acc += fn((uint8_t)class_id);
             }
             samples[class_id][i] = acc;
-            timing_logf("sample,%s,%s,%u,%lu\n",
-                        name,
-                        class_name(class_id),
-                        (unsigned int)i,
-                        (unsigned long)acc);
             step++;
             show_progress(name, step, total_steps);
         }
