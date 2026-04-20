@@ -1378,12 +1378,12 @@ cleanup:
 
 bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *tag)
 {
-    if ((ctx->mode != TLS_AES_GCM) && (ctx->mode != TLS_AES_CCM))
-        return false;
     if ((ctx == NULL) ||
         (ciphertext == NULL) ||
         (ciphertext_len == 0) ||
         (tag == NULL))
+        return false;
+    if ((ctx->mode != TLS_AES_GCM) && (ctx->mode != TLS_AES_CCM))
         return false;
     if (aad && (aad_len == 0))
         return false;

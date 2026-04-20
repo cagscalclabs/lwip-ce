@@ -62,6 +62,40 @@ static void transcript_hash_digest(struct tls_hash_context *ctx,
     tls_hash_digest(&ctx_copy, digest);
 }
 
+static size_t tls_padded_id_len(const uint8_t *id, size_t max_len)
+{
+    size_t len = 0;
+
+    if (!id)
+    {
+        return 0;
+    }
+    while (len < max_len && id[len] != 0)
+    {
+        len++;
+    }
+    return len;
+}
+
+static bool tls_subject_cn_matches_owner_id(const struct tls_asn1_serialization *subject_cn,
+                                            const uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN])
+{
+    size_t owner_len;
+
+    if (!subject_cn || !subject_cn->data || !owner_id)
+    {
+        return false;
+    }
+
+    owner_len = tls_padded_id_len(owner_id, TLS_SPKI_OWNER_ID_LEN);
+    if (owner_len == 0 || subject_cn->len != owner_len)
+    {
+        return false;
+    }
+
+    return memcmp(subject_cn->data, owner_id, owner_len) == 0;
+}
+
 /* enum tls_server_handshake_type {
  *     TLS_SERVER_HANDSHAKE_HELLO_REQUEST = 0x00,
  *     TLS_SERVER_HANDSHAKE_SERVER_HELLO = 0x02,
@@ -118,41 +152,26 @@ bool tls_process_record(struct tls_handshake_context *ctx,
             switch (msg_type)
             {
             case TLS_HANDSHAKE_SERVER_HELLO:
+                if (ctx->state != TLS_STATE_CLIENT_HELLO_SENT)
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    return false;
+                }
                 if (!tls_recv_server_hello(ctx, payload + offset, msg_end - offset))
                 {
                     return false;
                 }
                 break;
             case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
-                if (!tls_recv_encrypted_extensions(ctx, payload + offset, msg_end - offset))
-                {
-                    return false;
-                }
-                break;
             case TLS_HANDSHAKE_CERTIFICATE:
-                if (!tls_recv_certificate(ctx, payload + offset, msg_end - offset))
-                {
-                    return false;
-                }
-                break;
             case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
-                if (!tls_recv_certificate_verify(ctx, payload + offset, msg_end - offset))
-                {
-                    return false;
-                }
-                break;
             case TLS_HANDSHAKE_FINISHED:
-                if (!tls_recv_finished(ctx, true, payload + offset, msg_end - offset))
-                {
-                    return false;
-                }
-                break;
             case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
-                if (!tls_recv_new_session_ticket(ctx, payload + offset, msg_end - offset))
-                {
-                    return false;
-                }
-                break;
+                /* Post-ServerHello TLS 1.3 handshake messages must arrive via
+                 * encrypted application_data records, not plaintext handshake
+                 * records. Reject them here to preserve the record-layer boundary. */
+                ctx->state = TLS_STATE_ERROR;
+                return false;
             default:
                 /* Unknown message type - skip it */
                 break;
@@ -917,6 +936,11 @@ bool tls_recv_certificate(
     {
         return false;
     }
+    if (ctx->state != TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED)
+    {
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
 
     size_t offset = 0;
 
@@ -1056,14 +1080,8 @@ bool tls_recv_certificate(
                 /* Check owner if configured */
                 if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_OWNER))
                 {
-                    /* Owner check would compare certificate subject CN to
-                     * spki_entry.owner_id - for now, trust that SPKI match
-                     * is sufficient since we've pinned the exact public key.
-                     * Full owner validation would require extracting CN from
-                     * the certificate, which is already done in keyobject.c
-                     * but would need additional parsing here. */
-                    (void)spki_entry.owner_id;
-                    /* TODO: Implement owner CN comparison if needed */
+                    owner_check_pass = tls_subject_cn_matches_owner_id(cert_parsed.subject_cn,
+                                                                       spki_entry.owner_id);
                 }
 
                 if (date_check_pass && owner_check_pass && constraints_check_pass)
@@ -1072,62 +1090,15 @@ bool tls_recv_certificate(
                 }
             }
         }
-        else
-        {
-            /* For intermediate/root certificates, check if their SPKI is pinned */
-            struct tls_asn1_serialization cert_fields[13];
-            struct tls_x509_parse_result cert_parsed = {0};
-            if (tls_x509_parse_certificate(cert_der, cert_len, cert_fields, &cert_parsed))
-            {
-                if (cert_parsed.spki_raw && cert_parsed.spki_raw->data && cert_parsed.spki_raw->len > 0)
-                {
-                    uint8_t intermediate_hash[32];
-                    struct tls_hash_context hash_ctx;
-                    if (tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-                    {
-                        tls_hash_update(&hash_ctx, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
-                        tls_hash_digest(&hash_ctx, intermediate_hash);
-
-                        struct tls_spki_entry intermediate_entry;
-                        if (tls_truststore_lookup(intermediate_hash, &intermediate_entry))
-                        {
-                            const lwip_app_config_t *app_cfg = lwip_app_config_get();
-                            bool date_check_pass = true;
-                            bool constraints_check_pass = false;
-                            if (!cert_parsed.extensions || !cert_parsed.extensions->data || cert_parsed.extensions->len == 0)
-                            {
-                                continue;
-                            }
-                            constraints_check_pass = tls_x509_has_valid_constraints(cert_parsed.extensions->data,
-                                                                                    cert_parsed.extensions->len);
-
-                            /* Check validity period if configured and time is available */
-                            if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_DATES))
-                            {
-                                uint32_t current_time = lwip_sntp_get_unix_time();
-                                if (current_time > 0)
-                                {
-                                    if (current_time < intermediate_entry.not_before ||
-                                        current_time > intermediate_entry.not_after)
-                                    {
-                                        date_check_pass = false;
-                                    }
-                                }
-                            }
-
-                            if (date_check_pass && constraints_check_pass)
-                            {
-                                chain_validated = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /* Store validation result */
     ctx->cert_state.certificate_validated = chain_validated;
+    if (!chain_validated)
+    {
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
 
     /* Update transcript hash with the Certificate message */
     if (ctx->transcript_hash)
@@ -1247,9 +1218,11 @@ bool tls_recv_encrypted_extensions(
  * - algorithm (2 bytes): signature algorithm
  * - signature (2 byte length + signature data)
  *
- * Note: We rely on SPKI pinning for certificate validation rather than
- * full signature verification. This function parses the message structure
- * and updates the transcript hash but does not verify the signature.
+ * Note: CertificateVerify signature verification is intentionally omitted
+ * for now because the currently-available signature implementations are not
+ * fast enough for this platform. This is a short-term tradeoff, not full
+ * TLS 1.3 certificate authentication. We still require the message to be
+ * present and well-formed so the state machine does not silently skip it.
  */
 bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -1260,7 +1233,7 @@ bool tls_recv_certificate_verify(
     {
         return false;
     }
-    if (ctx->state < TLS_STATE_CERTIFICATE_RECEIVED ||
+    if (ctx->state != TLS_STATE_CERTIFICATE_RECEIVED ||
         !ctx->cert_state.certificate_validated)
     {
         ctx->state = TLS_STATE_ERROR;
@@ -1311,9 +1284,11 @@ bool tls_recv_certificate_verify(
         return false;
     }
 
-    /* Note: We do not verify the signature here.
-     * Security is provided by SPKI pinning in tls_recv_certificate().
-     * The certificate chain must contain an SPKI that matches our truststore.
+    /* Intentional short-term tradeoff:
+     * We do not verify the signature here because an acceptably fast
+     * certificate signature verification path is not available yet on this
+     * platform. SPKI pinning is therefore treated as the current trust
+     * decision, but this remains weaker than full certificate authentication.
      */
 
     /* Update transcript hash with the CertificateVerify message */
@@ -1721,6 +1696,16 @@ bool tls_recv_finished(
     if (!ctx || !data || data_len < 36)
     {
         return false;
+    }
+    if (is_client)
+    {
+        uint8_t required_state = ctx->psk_mode ? TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED
+                                               : TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
+        if (ctx->state != required_state)
+        {
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
     }
 
     uint8_t finished_key[32];

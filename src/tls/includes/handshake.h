@@ -176,10 +176,10 @@ struct tls_handshake_context {
     /* SNI hostname for server_name extension */
     const char *hostname;
 
-    /* Certificate validation state (SPKI pinning) */
+    /* Certificate validation state (current implementation: end-entity SPKI pinning) */
     struct {
         uint8_t server_cert_spki_hash[32];  /* SHA-256 of server's SPKI */
-        bool certificate_validated;          /* True if cert chain validated via SPKI pin */
+        bool certificate_validated;          /* True if end-entity certificate matched policy */
     } cert_state;
 };
 

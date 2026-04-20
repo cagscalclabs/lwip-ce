@@ -1,0 +1,7 @@
+primitive,sigma,c6,c4,max_delta_c6,max_delta_c4,pass_c6,pass_c4,median_base,median_dev_best,median_dev_worst,median_dev_random,median_dev_edge,over_best_c6_pct,over_worst_c6_pct,over_random_c6_pct,over_edge_c6_pct,over_best_c4_pct,over_worst_c4_pct,over_random_c4_pct,over_edge_c4_pct
+BYTES,17.7912,6,4,107,71,PASS,PASS,240,0,-1,-2,0,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00
+SHA256,4.4478,6,4,27,18,PASS,PASS,25206,0,0,-1,-1,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00
+HMAC,1.4826,6,4,9,6,PASS,PASS,12436,0,0,0,1,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00
+HKDF,1.4826,6,4,9,6,PASS,PASS,27420,0,1,1,1,0.00,0.00,0.00,0.00,0.00,2.00,2.00,0.00
+PBKDF2,0.0000,6,4,6,4,PASS,PASS,25373,0,0,0,0,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00
+AESGCM-E,1.4826,6,4,9,6,PASS,PASS,51202,0,-1,-1,0,0.00,0.00,0.00,0.00,0.00,0.00,0.00,2.00

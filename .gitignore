@@ -24,5 +24,14 @@ tests/**/*.pem
 # ignore Latex document files
 **/.tex
 
+# ignore documentation by default, but keep the whitepaper deliverables and datasets
+doc/*
+!doc/whitepaper/
+doc/whitepaper/*
+!doc/whitepaper/whitepaper.tex
+!doc/whitepaper/whitepaper.pdf
+!doc/whitepaper/datasets/
+!doc/whitepaper/datasets/**
+
 # local documentation tooling and outputs
 tools/

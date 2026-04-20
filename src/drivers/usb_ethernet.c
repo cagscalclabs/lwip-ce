@@ -5,6 +5,7 @@
  */
 
 #include <sys/util.h>
+#include <stddef.h>
 #include <usbdrvce.h>
 
 /**
@@ -566,6 +567,11 @@ struct ncm_ndp
 #define NCM_RX_DATAGRAMS_OVERFLOW_MUL 16 // this is here in the event that max datagrams is unsupported
 #define NCM_RX_QUEUE_LEN (NCM_RX_MAX_DATAGRAMS * NCM_RX_DATAGRAMS_OVERFLOW_MUL)
 
+static bool ncm_range_fits(size_t offset, size_t len, size_t total)
+{
+    return offset <= total && len <= (total - offset);
+}
+
 ///------------------------------------------------------------
 /// @brief control setup for @b Network_Control_Model (NCM)
 usb_error_t ncm_control_setup(eth_device_t *eth)
@@ -609,7 +615,6 @@ usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
         log_usb_transfer_status(status);
         if (eth_xmit_fatal_error(dev, rx_retries))
         {
-            pbuf_free(data);
             return USB_ERROR_FAILED;
         }
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
@@ -624,39 +629,67 @@ usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
 
         // get header and first NDP pointers
         uint8_t *ntb = (uint8_t *)recvbuf;
+        if (transferred < NCM_NTH_LEN)
+            return USB_SUCCESS;
         struct ncm_nth *nth = (struct ncm_nth *)ntb;
         if (nth->dwSignature != NCM_NTH_SIG)
             return USB_SUCCESS; // validate NTH signature field. If invalid, fail out
+        if (nth->wHeaderLength < NCM_NTH_LEN ||
+            nth->wBlockLength < NCM_NTH_LEN ||
+            nth->wBlockLength > transferred ||
+            !ncm_range_fits(nth->wNdpIndex, NCM_NDP_LEN, nth->wBlockLength))
+            return USB_SUCCESS;
 
         // start proc'ing first NDP
-        struct ncm_ndp *ndp = (struct ncm_ndp *)&ntb[nth->wNdpIndex];
+        size_t ndp_offset = nth->wNdpIndex;
+        struct ncm_ndp *ndp = (struct ncm_ndp *)&ntb[ndp_offset];
 
         // repeat while ndp->wNextNdpIndex is non-zero
         do
         {
             if (ndp->dwSignature != NCM_NDP_SIG0)
                 return USB_SUCCESS; // validate NDP signature field, if invalid, fail out
+            if (ndp->wLength < NCM_NDP_LEN ||
+                !ncm_range_fits(ndp_offset, ndp->wLength, nth->wBlockLength))
+                return USB_SUCCESS;
 
             // set datagram number to 0 and set datagram index pointer
-            uint16_t dg_num = 0;
-            struct ncm_ndp_idx *idx = (struct ncm_ndp_idx *)&ndp->wDatagramIdx;
+            size_t idx_offset = ndp_offset + offsetof(struct ncm_ndp, wDatagramIdx);
 
             // a null datagram index structure indicates end of NDP
-            do
+            while (ncm_range_fits(idx_offset, sizeof(struct ncm_ndp_idx), ndp_offset + ndp->wLength))
             {
+                struct ncm_ndp_idx *idx = (struct ncm_ndp_idx *)&ntb[idx_offset];
+                uint16_t datagram_index = idx->wDatagramIndex;
+                uint16_t datagram_len = idx->wDatagramLen;
+
+                if (datagram_index == 0 && datagram_len == 0)
+                    break;
+                if (datagram_index == 0 || datagram_len == 0)
+                    return USB_SUCCESS;
+                if (!ncm_range_fits(datagram_index, datagram_len, nth->wBlockLength))
+                    return USB_SUCCESS;
+
                 // attempt to allocate pbuf
-                if (!eth_ring_push_frame(dev, &ntb[idx[dg_num].wDatagramIndex], idx[dg_num].wDatagramLen))
+                if (!eth_ring_push_frame(dev, &ntb[datagram_index], datagram_len))
                 {
                     parse_ntb = false;
                     break;
                 }
-                dg_num++;
-            } while ((idx[dg_num].wDatagramIndex) && (idx[dg_num].wDatagramLen));
+                idx_offset += sizeof(struct ncm_ndp_idx);
+            }
+            if (parse_ntb &&
+                !ncm_range_fits(idx_offset, sizeof(struct ncm_ndp_idx), ndp_offset + ndp->wLength))
+                return USB_SUCCESS;
             // if next NDP is 0, NTB is done and so is my sanity
             if (ndp->wNextNdpIndex == 0)
                 break;
+            if (ndp->wNextNdpIndex <= ndp_offset ||
+                !ncm_range_fits(ndp->wNextNdpIndex, NCM_NDP_LEN, nth->wBlockLength))
+                return USB_SUCCESS;
             // set next NDP
-            ndp = (struct ncm_ndp *)&ntb[ndp->wNextNdpIndex];
+            ndp_offset = ndp->wNextNdpIndex;
+            ndp = (struct ncm_ndp *)&ntb[ndp_offset];
         } while (parse_ntb);
 
         LINK_STATS_INC(link.recv);

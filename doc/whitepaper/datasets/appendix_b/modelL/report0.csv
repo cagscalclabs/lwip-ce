@@ -1,0 +1,2 @@
+primitive,sigma,c6,c4,max_delta_c6,max_delta_c4,pass_c6,pass_c4,median_base,median_dev_best,median_dev_worst,median_dev_random,median_dev_edge,over_best_c6_pct,over_worst_c6_pct,over_random_c6_pct,over_edge_c6_pct,over_best_c4_pct,over_worst_c4_pct,over_random_c4_pct,over_edge_c4_pct
+BYTES,11.8608,6,4,71,47,PASS,PASS,234,0,5,5,5,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00
