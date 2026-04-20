@@ -1,5 +1,9 @@
 # random osx filesystem nonsense
 .dccache
+**/.DS_Store
+
+# local Continue agent config
+.continue/agents/new-config.yaml
 
 # VS Code and XCode workspace files/directories
 .vscode
@@ -32,6 +36,7 @@ doc/whitepaper/*
 !doc/whitepaper/whitepaper.pdf
 !doc/whitepaper/datasets/
 !doc/whitepaper/datasets/**
+doc/whitepaper/datasets/**/.DS_Store
 
 # local documentation tooling and outputs
 tools/
