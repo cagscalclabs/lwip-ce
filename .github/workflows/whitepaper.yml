@@ -20,15 +20,44 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      APT_CACHE_DIR: ${{ github.workspace }}/.cache/apt/archives
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Cache LaTeX apt packages
+        id: latex-apt-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: ${{ runner.os }}-whitepaper-apt-v1
+
+      - name: Cache LaTeX build outputs
+        id: latex-build-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            doc/whitepaper/_minted-whitepaper
+            doc/whitepaper/whitepaper.aux
+            doc/whitepaper/whitepaper.fdb_latexmk
+            doc/whitepaper/whitepaper.fls
+            doc/whitepaper/whitepaper.out
+            doc/whitepaper/whitepaper.toc
+          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('doc/whitepaper/whitepaper.tex', 'doc/whitepaper/scripts/**', 'doc/whitepaper/datasets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-whitepaper-build-
+
+      - name: Prepare apt package cache
+        run: mkdir -p "$APT_CACHE_DIR/partial"
+
       - name: Install LaTeX dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get \
+            -o Dir::Cache::archives="$APT_CACHE_DIR" \
+            install -y \
             latexmk \
             python3-pygments \
             texlive-fonts-recommended \
