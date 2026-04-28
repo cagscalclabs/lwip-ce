@@ -60,7 +60,3 @@ doc/whitepaper/datasets/**/.DS_Store
 
 # local documentation tooling and outputs
 tools/
-!tests/profiling/tls_timing/tools/
-!tests/profiling/tls_timing/tools/**
-tests/profiling/tls_timing/tools/**/__pycache__/
-tests/profiling/tls_timing/tools/**/*.py[cod]
