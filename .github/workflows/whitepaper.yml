@@ -65,6 +65,12 @@ jobs:
             texlive-pictures \
             texlive-science
 
+      - name: Normalize apt package cache permissions
+        run: |
+          sudo rm -f "$APT_CACHE_DIR/lock"
+          sudo rm -rf "$APT_CACHE_DIR/partial"
+          sudo chown -R "$USER:$USER" "$APT_CACHE_DIR"
+
       - name: Generate whitepaper data
         run: python3 scripts/generate_docs_data.py
         working-directory: doc/whitepaper
@@ -74,7 +80,7 @@ jobs:
         working-directory: doc/whitepaper
 
       - name: Publish latest whitepaper release
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
