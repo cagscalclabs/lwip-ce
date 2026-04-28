@@ -43,6 +43,7 @@ static volatile uint8_t timing_sink;
 static uint32_t timing_prng_state = 0x12345678u;
 static uint8_t timing_log_handle;
 static bool timing_log_enabled;
+static bool timing_log_error_reported;
 
 struct primitive_result
 {
@@ -258,11 +259,26 @@ static bool timing_log_begin(void)
     if (!timing_log_handle)
     {
         timing_log_enabled = false;
+        timing_log_error_reported = true;
+        os_ClrHome();
+        printf("Log open failed\n");
+        printf("%s\n", TIMING_LOG_APPVAR);
+        printf("Press any key");
+        os_GetKey();
         return false;
     }
 
     timing_log_enabled = true;
-    (void)ti_SetArchiveStatus(false, timing_log_handle);
+    timing_log_error_reported = false;
+    if (!ti_SetArchiveStatus(false, timing_log_handle))
+    {
+        timing_log_error_reported = true;
+        os_ClrHome();
+        printf("Log RAM move failed\n");
+        printf("%s\n", TIMING_LOG_APPVAR);
+        printf("Press any key");
+        os_GetKey();
+    }
     return true;
 }
 
@@ -275,9 +291,25 @@ static void timing_log_end(void)
 
     if (timing_log_enabled)
     {
-        (void)ti_SetArchiveStatus(true, timing_log_handle);
+        if (!ti_SetArchiveStatus(true, timing_log_handle) && !timing_log_error_reported)
+        {
+            timing_log_error_reported = true;
+            os_ClrHome();
+            printf("Log archive failed\n");
+            printf("%s\n", TIMING_LOG_APPVAR);
+            printf("Press any key");
+            os_GetKey();
+        }
     }
-    ti_Close(timing_log_handle);
+    if (!ti_Close(timing_log_handle) && !timing_log_error_reported)
+    {
+        timing_log_error_reported = true;
+        os_ClrHome();
+        printf("Log close failed\n");
+        printf("%s\n", TIMING_LOG_APPVAR);
+        printf("Press any key");
+        os_GetKey();
+    }
     timing_log_handle = 0;
     timing_log_enabled = false;
 }
@@ -309,6 +341,12 @@ static void timing_logf(const char *fmt, ...)
     if (ti_Write(line, (size_t)written, 1, timing_log_handle) != 1)
     {
         timing_log_enabled = false;
+        timing_log_error_reported = true;
+        os_ClrHome();
+        printf("Log write failed\n");
+        printf("%s bytes=%u\n", TIMING_LOG_APPVAR, (unsigned int)written);
+        printf("Press any key");
+        os_GetKey();
     }
 }
 
@@ -1025,6 +1063,7 @@ static void show_result(const char *name, const struct primitive_result *result)
     }
 #endif
     os_FontSelect(os_LargeFont);
+    printf("\nPress any key");
     os_GetKey();
 }
 
