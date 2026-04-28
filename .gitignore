@@ -5,6 +5,10 @@
 # local Continue agent config
 .continue/agents/new-config.yaml
 
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+
 # VS Code and XCode workspace files/directories
 .vscode
 *.xcworkspace   
@@ -25,18 +29,38 @@ lwIPSPKI.8xv
 # test fixtures: keep temporary PEM material out of git
 tests/**/*.pem
 
-# ignore Latex document files
-**/.tex
+# LaTeX build outputs
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.listing
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
 
-# ignore documentation by default, but keep the whitepaper deliverables and datasets
+# ignore documentation by default, but keep the whitepaper source, scripts, and datasets
 doc/*
 !doc/whitepaper/
 doc/whitepaper/*
 !doc/whitepaper/whitepaper.tex
-!doc/whitepaper/whitepaper.pdf
+!doc/whitepaper/scripts/
+!doc/whitepaper/scripts/**
+doc/whitepaper/scripts/**/__pycache__/
+doc/whitepaper/scripts/**/*.py[cod]
 !doc/whitepaper/datasets/
 !doc/whitepaper/datasets/**
+doc/whitepaper/generated/
+doc/whitepaper/whitepaper.pdf
 doc/whitepaper/datasets/**/.DS_Store
 
 # local documentation tooling and outputs
 tools/
+!tests/profiling/tls_timing/tools/
+!tests/profiling/tls_timing/tools/**
+tests/profiling/tls_timing/tools/**/__pycache__/
+tests/profiling/tls_timing/tools/**/*.py[cod]

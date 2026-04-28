@@ -1,0 +1,67 @@
+name: Build Whitepaper
+
+on:
+  push:
+    paths:
+      - doc/whitepaper/whitepaper.tex
+      - doc/whitepaper/scripts/**
+      - doc/whitepaper/datasets/**
+      - .github/workflows/whitepaper.yml
+  pull_request:
+    paths:
+      - doc/whitepaper/whitepaper.tex
+      - doc/whitepaper/scripts/**
+      - doc/whitepaper/datasets/**
+      - .github/workflows/whitepaper.yml
+  workflow_dispatch:
+
+jobs:
+  whitepaper:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install LaTeX dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            latexmk \
+            python3-pygments \
+            texlive-fonts-recommended \
+            texlive-latex-extra \
+            texlive-pictures \
+            texlive-science
+
+      - name: Generate whitepaper data
+        run: python3 scripts/generate_docs_data.py
+        working-directory: doc/whitepaper
+
+      - name: Build PDF
+        run: latexmk -pdf -shell-escape -interaction=nonstopmode -file-line-error whitepaper.tex
+        working-directory: doc/whitepaper
+
+      - name: Publish latest whitepaper release
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f whitepaper-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/whitepaper-latest
+
+          if gh release view whitepaper-latest >/dev/null 2>&1; then
+            gh release edit whitepaper-latest \
+              --title "whitepaper-latest" \
+              --notes "Latest generated lwIP-CE whitepaper PDF."
+          else
+            gh release create whitepaper-latest \
+              --title "whitepaper-latest" \
+              --notes "Latest generated lwIP-CE whitepaper PDF." \
+              --latest
+          fi
+
+          gh release upload whitepaper-latest doc/whitepaper/whitepaper.pdf \
+            --clobber
