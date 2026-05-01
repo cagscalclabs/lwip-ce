@@ -1,7 +1,8 @@
 --Test1--
+model: preA
 ingested files: 24
 detected groups: R0, R17
-[R0] files=12 bytes=589824 raw=/Users/acagliano/CEdev/source/lwip-ce/tests/profiling/tls_rng_entropy/tools/reports/rng_capture_R0.bin
+[R0] files=12 bytes=589824
 [R0] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 [R0] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 [R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
@@ -10,7 +11,7 @@ detected groups: R0, R17
 [R0] bit5: p1=0.886705 bias=0.386705 trans=0.200484 mono_z=593.979 runs_z=1.655
 [R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 [R0] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
-[R17] files=12 bytes=589824 raw=/Users/acagliano/CEdev/source/lwip-ce/tests/profiling/tls_rng_entropy/tools/reports/rng_capture_R17.bin
+[R17] files=12 bytes=589824
 [R17] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 [R17] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 [R17] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
@@ -21,6 +22,7 @@ detected groups: R0, R17
 [R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 
 --Test2--
+model: preA
 ingested files: 24
 detected groups: R0, R17
 [R0] files=12 bytes=589824
@@ -43,6 +45,7 @@ detected groups: R0, R17
 [R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 
 --Test3--
+model: AA
 ingested files: 24
 detected groups: R0, R17
 [R0] files=12 bytes=589824
@@ -65,8 +68,10 @@ detected groups: R0, R17
 [R17] bit7: p1=0.000007 bias=0.499993 trans=0.000014 mono_z=767.990 runs_z=102.635
 
 --Test4--
+model: AA
 ingested files: 24
 detected groups: R0, R17
+HW Revision: AA
 [R0] files=12 bytes=589824
 [R0] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 [R0] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
@@ -87,6 +92,7 @@ detected groups: R0, R17
 [R17] bit7: p1=0.500351 bias=0.000351 trans=0.499825 mono_z=0.539 runs_z=0.268
 
 --Test5--
+model: AA
 ingested files: 24
 detected groups: R0, R17
 [R0] files=12 bytes=589824
@@ -109,6 +115,7 @@ detected groups: R0, R17
 [R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 
 --Test6--
+model: AA
 ingested files: 24
 detected groups: R0, R17
 [R0] files=12 bytes=589824
@@ -131,6 +138,7 @@ detected groups: R0, R17
 [R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 
 --Test7--
+model: L
 ingested files: 24
 detected groups: R0, R17
 [R0] files=12 bytes=589824
@@ -152,6 +160,8 @@ detected groups: R0, R17
 [R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 [R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
 
+--Test8--
+model: L
 ingested files: 24
 detected groups: R0, R17
 [R0] files=12 bytes=589824

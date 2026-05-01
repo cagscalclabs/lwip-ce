@@ -1202,16 +1202,12 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	\renewcommand{\thesubsection}{\Alph{subsection}}
 	
 	\subsection{RNG Statistical Dumps}
-	This appendix includes the raw RNG dataset currently present in \texttt{datasets/appendix\_a} (relative to this \texttt{.tex} file at build time).
+	This appendix includes the RNG dataset summary generated from \texttt{datasets/appendix\_a} at build time.
 	
-	\IfFileExists{datasets/appendix_a/entropy_runs.dat}{
-		\inputminted[
-			breaklines,
-			breakanywhere,
-			fontsize=\footnotesize
-		]{text}{datasets/appendix_a/entropy_runs.dat}
+	\IfFileExists{generated/appendix_a_include.tex}{
+		\input{generated/appendix_a_include.tex}
 	}{
-		No files were found in \texttt{datasets/appendix\_a} at build time.
+		No generated Appendix A data was found at build time.
 	}
 	
 	\newpage
