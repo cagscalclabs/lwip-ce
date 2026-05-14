@@ -464,8 +464,8 @@ jobs:
               n_robust4 = 0
             }
             /^primitive=/ {
-              split($1, p, "=")
-              prim = p[2]
+              split($1, prim_parts, "=")
+              prim = prim_parts[2]
               if (prim != "" && !seen[prim]) {
                 seen[prim] = 1
                 order[++n_prim] = prim
@@ -530,24 +530,24 @@ jobs:
               print "| Unit | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Over% c6 (W/R/E) | Over% c4 (W/R/E) |"
               print "|---|---:|---:|---:|---:|---:|"
               for (pidx = 1; pidx <= n_prim; pidx++) {
-                p = order[pidx]
-                sigma_v = get_or_dash(sigma[p])
-                d6 = get_or_dash(accept6[p])
-                d4 = get_or_dash(accept4[p])
+                prim_name = order[pidx]
+                sigma_v = get_or_dash(sigma[prim_name])
+                d6 = get_or_dash(accept6[prim_name])
+                d4 = get_or_dash(accept4[prim_name])
                 if (d6 != "-") d6 = d6 ".00"
                 if (d4 != "-") d4 = d4 ".00"
                 dpair = d6 "/" d4
-                md_w = ((p SUBSEP "worst") in med_dev) ? sprintf("%+.1f", med_dev[p, "worst"] + 0.0) : "-"
-                md_r = ((p SUBSEP "random") in med_dev) ? sprintf("%+.1f", med_dev[p, "random"] + 0.0) : "-"
-                md_e = ((p SUBSEP "edge") in med_dev) ? sprintf("%+.1f", med_dev[p, "edge"] + 0.0) : "-"
-                o6_w = ((p SUBSEP "worst") in over6) ? over6[p, "worst"] : "-"
-                o6_r = ((p SUBSEP "random") in over6) ? over6[p, "random"] : "-"
-                o6_e = ((p SUBSEP "edge") in over6) ? over6[p, "edge"] : "-"
-                o4_w = ((p SUBSEP "worst") in over4) ? over4[p, "worst"] : "-"
-                o4_r = ((p SUBSEP "random") in over4) ? over4[p, "random"] : "-"
-                o4_e = ((p SUBSEP "edge") in over4) ? over4[p, "edge"] : "-"
+                md_w = ((prim_name SUBSEP "worst") in med_dev) ? sprintf("%+.1f", med_dev[prim_name, "worst"] + 0.0) : "-"
+                md_r = ((prim_name SUBSEP "random") in med_dev) ? sprintf("%+.1f", med_dev[prim_name, "random"] + 0.0) : "-"
+                md_e = ((prim_name SUBSEP "edge") in med_dev) ? sprintf("%+.1f", med_dev[prim_name, "edge"] + 0.0) : "-"
+                o6_w = ((prim_name SUBSEP "worst") in over6) ? over6[prim_name, "worst"] : "-"
+                o6_r = ((prim_name SUBSEP "random") in over6) ? over6[prim_name, "random"] : "-"
+                o6_e = ((prim_name SUBSEP "edge") in over6) ? over6[prim_name, "edge"] : "-"
+                o4_w = ((prim_name SUBSEP "worst") in over4) ? over4[prim_name, "worst"] : "-"
+                o4_r = ((prim_name SUBSEP "random") in over4) ? over4[prim_name, "random"] : "-"
+                o4_e = ((prim_name SUBSEP "edge") in over4) ? over4[prim_name, "edge"] : "-"
                 printf("| %s | %s | %s | %s/%s/%s | %s/%s/%s | %s/%s/%s |\n",
-                       p, sigma_v, dpair, md_w, md_r, md_e, o6_w, o6_r, o6_e, o4_w, o4_r, o4_e)
+                       prim_name, sigma_v, dpair, md_w, md_r, md_e, o6_w, o6_r, o6_e, o4_w, o4_r, o4_e)
               }
             }
           ' "$txt_out" >> "$summary_md"

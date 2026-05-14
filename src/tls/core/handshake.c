@@ -24,6 +24,7 @@
 #include "lwip/logging.h"
 #include "lwip/sntp_time.h"
 #include "lwip/app_config.h"
+#include "lwip/sys.h"
 
 /*
  * ============================================================================
@@ -189,9 +190,11 @@ bool tls_process_record(struct tls_handshake_context *ctx,
     case TLS_CONTENT_TYPE_ALERT:
     {
         const uint8_t *payload = data + 5;
-        if (record_len >= 2) {
+        if (record_len >= 2)
+        {
             /* payload[0] = level (1=warning, 2=fatal), payload[1] = description */
-            if (payload[0] == 2) {
+            if (payload[0] == 2)
+            {
                 ctx->state = TLS_STATE_ERROR;
             }
         }
@@ -207,7 +210,8 @@ bool tls_process_record(struct tls_handshake_context *ctx,
         /* Allocate decryption buffer on heap — records can be up to ~16KB */
         size_t dec_buf_size = record_len; /* plaintext <= ciphertext */
         uint8_t *dec_buf = (uint8_t *)mem_buffer_custom_malloc(dec_buf_size);
-        if (!dec_buf) {
+        if (!dec_buf)
+        {
             ctx->state = TLS_STATE_ERROR;
             return false;
         }
@@ -224,7 +228,8 @@ bool tls_process_record(struct tls_handshake_context *ctx,
             return false;
         }
 
-        if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE) {
+        if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE)
+        {
             /* Process decrypted handshake messages.
              *
              * LIMITATION: Each handshake message must fit entirely within a
@@ -242,7 +247,8 @@ bool tls_process_record(struct tls_handshake_context *ctx,
                                  (size_t)dec_buf[offset + 3];
                 size_t msg_end = offset + 4 + msg_len;
 
-                if (msg_end > dec_len) {
+                if (msg_end > dec_len)
+                {
                     mem_buffer_custom_free(dec_buf);
                     return false;
                 }
@@ -250,31 +256,36 @@ bool tls_process_record(struct tls_handshake_context *ctx,
                 switch (msg_type)
                 {
                 case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
-                    if (!tls_recv_encrypted_extensions(ctx, dec_buf + offset, msg_end - offset)) {
+                    if (!tls_recv_encrypted_extensions(ctx, dec_buf + offset, msg_end - offset))
+                    {
                         mem_buffer_custom_free(dec_buf);
                         return false;
                     }
                     break;
                 case TLS_HANDSHAKE_CERTIFICATE:
-                    if (!tls_recv_certificate(ctx, dec_buf + offset, msg_end - offset)) {
+                    if (!tls_recv_certificate(ctx, dec_buf + offset, msg_end - offset))
+                    {
                         mem_buffer_custom_free(dec_buf);
                         return false;
                     }
                     break;
                 case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
-                    if (!tls_recv_certificate_verify(ctx, dec_buf + offset, msg_end - offset)) {
+                    if (!tls_recv_certificate_verify(ctx, dec_buf + offset, msg_end - offset))
+                    {
                         mem_buffer_custom_free(dec_buf);
                         return false;
                     }
                     break;
                 case TLS_HANDSHAKE_FINISHED:
-                    if (!tls_recv_finished(ctx, true, dec_buf + offset, msg_end - offset)) {
+                    if (!tls_recv_finished(ctx, true, dec_buf + offset, msg_end - offset))
+                    {
                         mem_buffer_custom_free(dec_buf);
                         return false;
                     }
                     break;
                 case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
-                    if (!tls_recv_new_session_ticket(ctx, dec_buf + offset, msg_end - offset)) {
+                    if (!tls_recv_new_session_ticket(ctx, dec_buf + offset, msg_end - offset))
+                    {
                         mem_buffer_custom_free(dec_buf);
                         return false;
                     }
@@ -287,8 +298,11 @@ bool tls_process_record(struct tls_handshake_context *ctx,
             }
             mem_buffer_custom_free(dec_buf);
             return (offset == dec_len);
-        } else if (inner_type == TLS_CONTENT_TYPE_ALERT) {
-            if (dec_len >= 2 && dec_buf[0] == 2) {
+        }
+        else if (inner_type == TLS_CONTENT_TYPE_ALERT)
+        {
+            if (dec_len >= 2 && dec_buf[0] == 2)
+            {
                 ctx->state = TLS_STATE_ERROR;
             }
             mem_buffer_custom_free(dec_buf);
@@ -370,7 +384,7 @@ bool tls_handshake_init(
     }
 
     if (!tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
-                               NULL, NULL))
+                              NULL, NULL))
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
         return false;
@@ -507,7 +521,8 @@ bool tls_send_client_hello(
     out[offset++] = 0x09; /* rsa_pss_rsae_sha384 */
 
     /* Extension 5: server_name (SNI) */
-    if (ctx->hostname) {
+    if (ctx->hostname)
+    {
         size_t hostname_len = strlen(ctx->hostname);
         if (offset + 9 + hostname_len > out_len)
             return false;
@@ -528,7 +543,8 @@ bool tls_send_client_hello(
         offset += hostname_len;
     }
 
-    if (ctx->psk_mode) {
+    if (ctx->psk_mode)
+    {
         /* Extension 4: psk_key_exchange_modes */
         out[offset++] = 0x00;
         out[offset++] = 0x2d; /* Extension type */
@@ -634,7 +650,9 @@ bool tls_send_client_hello(
             return false;
         memcpy(out + offset, binder, 32);
         offset += 32;
-    } else {
+    }
+    else
+    {
         /* Pure ECDHE mode: no PSK extensions, just finalize lengths */
         size_t ext_len = offset - ext_start;
         out[ext_len_offset] = (uint8_t)(ext_len >> 8);
@@ -731,9 +749,9 @@ bool tls_recv_server_hello(
             0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11,
             0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
             0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
-            0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C
-        };
-        if (memcmp(ctx->server_random, hrr_random, 32) == 0) {
+            0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C};
+        if (memcmp(ctx->server_random, hrr_random, 32) == 0)
+        {
             /* Server requested HelloRetryRequest.
              * We only support x25519, so if the server doesn't accept it,
              * there's nothing we can do — abort gracefully. */
@@ -847,8 +865,8 @@ bool tls_recv_server_hello(
             }
             /* Compute shared secret from server's public key */
             if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
-                                    data + offset + 4,
-                                    NULL, NULL))
+                                   data + offset + 4,
+                                   NULL, NULL))
             {
                 tls_secure_memzero(ctx->ecdhe_private, 32);
                 ctx->state = TLS_STATE_ERROR;
@@ -1264,7 +1282,7 @@ bool tls_recv_certificate_verify(
     {
         return false;
     }
-    offset += 2;  /* Skip algorithm */
+    offset += 2; /* Skip algorithm */
 
     /* Parse signature length (2 bytes) */
     if (offset + 2 > data_len)
@@ -1796,7 +1814,8 @@ bool tls_recv_finished(
     }
 
     /* Step 5: Update state */
-    if (is_client) {
+    if (is_client)
+    {
         /* Client verified server's Finished */
         ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     }
@@ -2156,13 +2175,16 @@ bool tls_decrypt_record(
     /* Select keys based on phase */
     const uint8_t *key, *iv;
     uint64_t *seq_num;
-    if (use_handshake_keys) {
+    if (use_handshake_keys)
+    {
         key = ctx->keys.server_handshake_key;
-        iv  = ctx->keys.server_handshake_iv;
+        iv = ctx->keys.server_handshake_iv;
         seq_num = &ctx->server_hs_seq_num;
-    } else {
+    }
+    else
+    {
         key = ctx->keys.server_application_key;
-        iv  = ctx->keys.server_application_iv;
+        iv = ctx->keys.server_application_iv;
         seq_num = &ctx->server_seq_num;
     }
 
@@ -2190,7 +2212,8 @@ bool tls_decrypt_record(
     uint8_t diff = 0;
     for (size_t i = 0; i < 16; i++)
         diff |= computed_tag[i] ^ received_tag[i];
-    if (diff != 0) {
+    if (diff != 0)
+    {
         tls_secure_memzero(plaintext, actual_plaintext_len);
         return false;
     }
@@ -2240,13 +2263,16 @@ bool tls_encrypt_record(
     /* Select keys based on phase */
     const uint8_t *key, *iv;
     uint64_t *seq_num;
-    if (use_handshake_keys) {
+    if (use_handshake_keys)
+    {
         key = ctx->keys.client_handshake_key;
-        iv  = ctx->keys.client_handshake_iv;
+        iv = ctx->keys.client_handshake_iv;
         seq_num = &ctx->client_hs_seq_num;
-    } else {
+    }
+    else
+    {
         key = ctx->keys.client_application_key;
-        iv  = ctx->keys.client_application_iv;
+        iv = ctx->keys.client_application_iv;
         seq_num = &ctx->client_seq_num;
     }
 

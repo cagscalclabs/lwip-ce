@@ -22,6 +22,7 @@
 
 #include <string.h>
 #include <limits.h>
+#include <fileioc.h>
 
 /* Temporary debug display for on-calc TLS handshake tracing.
  * Remove once handshake is working. */
@@ -31,7 +32,8 @@
 static void tls_dbg_status(const char *msg)
 {
     /* Clear line at y=90, 320 wide, 12 tall */
-    for (int row = TLS_DBG_Y; row < TLS_DBG_Y + 12; row++) {
+    for (int row = TLS_DBG_Y; row < TLS_DBG_Y + 12; row++)
+    {
         uint16_t *ptr = TLS_DBG_VRAM + row * 320;
         for (int col = 0; col < 320; col++)
             *ptr++ = 0xFFFF;
@@ -177,7 +179,8 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_client(
     struct altcp_tls_ce_config *conf;
 
     conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
-    if (conf == NULL) {
+    if (conf == NULL)
+    {
         return NULL;
     }
 
@@ -198,7 +201,8 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_server(
     struct altcp_tls_ce_config *conf;
 
     conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
-    if (conf == NULL) {
+    if (conf == NULL)
+    {
         return NULL;
     }
 
@@ -219,7 +223,8 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     struct altcp_tls_session resumed;
 
     conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
-    if (conf == NULL) {
+    if (conf == NULL)
+    {
         return NULL;
     }
 
@@ -231,7 +236,8 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
 
     /* Opportunistically resume from persisted PSK identity state. */
     memset(&resumed, 0, sizeof(resumed));
-    if (altcp_tls_ce_load_pski(&resumed) && resumed.valid) {
+    if (altcp_tls_ce_load_pski(&resumed) && resumed.valid)
+    {
         conf->psk_mode = 1;
         memcpy(conf->psk, resumed.psk, sizeof(conf->psk));
         memcpy(&conf->psk_identity, &resumed.identity, sizeof(conf->psk_identity));
@@ -242,7 +248,8 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
 
 void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
 {
-    if (conf) {
+    if (conf)
+    {
         /* Zero sensitive data */
         memset(conf->psk, 0, 32);
         mem_free(conf);
@@ -259,18 +266,21 @@ static err_t
 altcp_tls_ce_lower_accept(void *arg, struct altcp_pcb *accepted_conn, err_t err)
 {
     struct altcp_pcb *listen_conn = (struct altcp_pcb *)arg;
-    if (listen_conn && listen_conn->state && listen_conn->accept) {
+    if (listen_conn && listen_conn->state && listen_conn->accept)
+    {
         err_t setup_err;
         altcp_tls_ce_state_t *listen_state = (altcp_tls_ce_state_t *)listen_conn->state;
 
         /* Create new altcp_pcb for accepted connection */
         struct altcp_pcb *new_conn = altcp_alloc();
-        if (new_conn == NULL) {
+        if (new_conn == NULL)
+        {
             return ERR_MEM;
         }
 
         setup_err = altcp_tls_ce_setup(listen_state->conf, new_conn, accepted_conn);
-        if (setup_err != ERR_OK) {
+        if (setup_err != ERR_OK)
+        {
             altcp_free(new_conn);
             return setup_err;
         }
@@ -290,13 +300,16 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
     struct altcp_pcb *conn = (struct altcp_pcb *)arg;
     LWIP_UNUSED_ARG(inner_conn);
 
-    if (conn && conn->state) {
+    if (conn && conn->state)
+    {
         altcp_tls_ce_state_t *state;
         LWIP_ASSERT("pcb mismatch", conn->inner_conn == inner_conn);
 
         /* Upper connected callback called after handshake completes */
-        if (err != ERR_OK) {
-            if (conn->connected) {
+        if (err != ERR_OK)
+        {
+            if (conn->connected)
+            {
                 return conn->connected(conn->arg, conn, err);
             }
         }
@@ -305,14 +318,17 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
         state->overhead_bytes_adjust = 0;
 
         /* For client: send ClientHello to initiate handshake */
-        if (!((struct altcp_tls_ce_config *)state->conf)->is_server) {
+        if (!((struct altcp_tls_ce_config *)state->conf)->is_server)
+        {
             uint8_t record[512];
             uint8_t *client_hello = record + 5; /* Leave room for record header */
             size_t client_hello_len = 0;
 
             if (!tls_send_client_hello(&state->tls_ctx, client_hello,
-                                       sizeof(record) - 5, &client_hello_len)) {
-                if (conn->err) {
+                                       sizeof(record) - 5, &client_hello_len))
+            {
+                if (conn->err)
+                {
                     conn->err(conn->arg, ERR_ABRT);
                 }
                 altcp_abort(conn);
@@ -332,8 +348,10 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
             err_t write_err = altcp_write(inner_conn, record, (u16_t)record_len, TCP_WRITE_FLAG_COPY);
             altcp_output(inner_conn);
 
-            if (write_err != ERR_OK) {
-                if (conn->err) {
+            if (write_err != ERR_OK)
+            {
+                if (conn->err)
+                {
                     conn->err(conn->arg, write_err);
                 }
                 altcp_abort(conn);
@@ -353,7 +371,8 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
 static void
 altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cnt)
 {
-    while (recvd_cnt > 0) {
+    while (recvd_cnt > 0)
+    {
         u16_t recvd_part = (u16_t)LWIP_MIN(recvd_cnt, 0xFFFF);
         altcp_recved(inner_conn, recvd_part);
         recvd_cnt -= recvd_part;
@@ -373,8 +392,10 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
     LWIP_ASSERT("no err expected", err == ERR_OK);
     LWIP_UNUSED_ARG(err);
 
-    if (!conn) {
-        if (p != NULL) {
+    if (!conn)
+    {
+        if (p != NULL)
+        {
             pbuf_free(p);
         }
         altcp_close(inner_conn);
@@ -384,8 +405,10 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
     state = (altcp_tls_ce_state_t *)conn->state;
     LWIP_ASSERT("pcb mismatch", conn->inner_conn == inner_conn);
 
-    if (!state) {
-        if (p != NULL) {
+    if (!state)
+    {
+        if (p != NULL)
+        {
             pbuf_free(p);
         }
         altcp_close(inner_conn);
@@ -393,22 +416,29 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
     }
 
     /* Handle NULL pbuf (connection closed) */
-    if (p == NULL) {
+    if (p == NULL)
+    {
         if ((state->flags & (ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE | ALTCP_TLS_CE_FLAGS_UPPER_CALLED)) ==
-            (ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE | ALTCP_TLS_CE_FLAGS_UPPER_CALLED)) {
+            (ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE | ALTCP_TLS_CE_FLAGS_UPPER_CALLED))
+        {
 
-            if ((state->rx != NULL) || (state->rx_app != NULL)) {
+            if ((state->rx != NULL) || (state->rx_app != NULL))
+            {
                 state->flags |= ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED;
                 altcp_tls_ce_handle_rx_appldata(conn, state);
                 return ERR_OK;
             }
 
             state->flags |= ALTCP_TLS_CE_FLAGS_RX_CLOSED;
-            if (conn->recv) {
+            if (conn->recv)
+            {
                 return conn->recv(conn->arg, conn, NULL, ERR_OK);
             }
-        } else {
-            if (conn->err) {
+        }
+        else
+        {
+            if (conn->err)
+            {
                 conn->err(conn->arg, ERR_ABRT);
             }
             altcp_close(conn);
@@ -416,18 +446,25 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
         return ERR_OK;
     }
 
-    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE)) {
-        if (!tls_ring_write_pbuf(state, p)) {
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
+        if (!tls_ring_write_pbuf(state, p))
+        {
             pbuf_free(p);
             altcp_abort(conn);
             return ERR_ABRT;
         }
         pbuf_free(p);
-    } else {
+    }
+    else
+    {
         /* Queue pbuf for application data processing */
-        if (state->rx == NULL) {
+        if (state->rx == NULL)
+        {
             state->rx = p;
-        } else {
+        }
+        else
+        {
             LWIP_ASSERT("rx pbuf overflow", (int)p->tot_len + (int)p->len <= 0xFFFF);
             pbuf_cat(state->rx, p);
         }
@@ -442,21 +479,27 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
 static err_t
 altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
 {
-    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE)) {
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
         /* Handle handshake phase */
         struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
 
-        if (config->is_server) {
+        if (config->is_server)
+        {
             /* Server: expect ClientHello, send ServerHello */
             /* @todo: implement server handshake processing */
             LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: server handshake not yet implemented\n"));
             altcp_abort(conn);
             return ERR_ABRT;
-        } else {
+        }
+        else
+        {
             /* Client: process complete TLS records */
-            while (mem_buffer_len(state->rx_ring) >= 5) {
+            while (mem_buffer_len(state->rx_ring) >= 5)
+            {
                 uint8_t header[5];
-                if (!mem_buffer_peek(state->rx_ring, 0, header, sizeof(header))) {
+                if (!mem_buffer_peek(state->rx_ring, 0, header, sizeof(header)))
+                {
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
@@ -464,10 +507,13 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 size_t rec_len = ((size_t)header[3] << 8) | (size_t)header[4];
                 size_t total_len = 5 + rec_len;
 
-                if (total_len > mem_buffer_capacity(state->rx_ring)) {
+                if (total_len > mem_buffer_capacity(state->rx_ring))
+                {
                     size_t buffered = mem_buffer_len(state->rx_ring);
-                    if (total_len > buffered) {
-                        if (!mem_buffer_reserve(state->rx_ring, total_len - buffered)) {
+                    if (total_len > buffered)
+                    {
+                        if (!mem_buffer_reserve(state->rx_ring, total_len - buffered))
+                        {
                             tls_dbg_status("ERR: ring full");
                             LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: TLS record exceeds ring max\n"));
                             altcp_abort(conn);
@@ -475,15 +521,18 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         }
                     }
                 }
-                if (mem_buffer_len(state->rx_ring) < total_len) {
+                if (mem_buffer_len(state->rx_ring) < total_len)
+                {
                     break;
                 }
 
                 /* Derive handshake keys exactly once, right after ServerHello,
                  * so we can decrypt the subsequent encrypted handshake records */
-                if (state->tls_ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED) {
+                if (state->tls_ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED)
+                {
                     tls_dbg_status("Deriving HS keys...");
-                    if (!tls_derive_handshake_keys(&state->tls_ctx)) {
+                    if (!tls_derive_handshake_keys(&state->tls_ctx))
+                    {
                         tls_dbg_status("ERR: HS key derivation");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
                         altcp_abort(conn);
@@ -494,17 +543,20 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                 /* Allocate temp buffer and peek complete record */
                 uint8_t *tmp = (uint8_t *)mem_malloc(total_len);
-                if (!tmp) {
+                if (!tmp)
+                {
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
-                if (!mem_buffer_peek(state->rx_ring, 0, tmp, total_len)) {
+                if (!mem_buffer_peek(state->rx_ring, 0, tmp, total_len))
+                {
                     mem_free(tmp);
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
 
-                if (!tls_process_record(&state->tls_ctx, tmp, total_len)) {
+                if (!tls_process_record(&state->tls_ctx, tmp, total_len))
+                {
                     mem_free(tmp);
                     tls_dbg_status("ERR: record processing");
                     LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: TLS record processing failed\n"));
@@ -515,7 +567,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 mem_free(tmp);
 
                 /* Show which state we reached after processing */
-                switch (state->tls_ctx.state) {
+                switch (state->tls_ctx.state)
+                {
                 case TLS_STATE_SERVER_HELLO_RECEIVED:
                     tls_dbg_status("ServerHello received");
                     break;
@@ -543,19 +596,22 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 /* Discard processed data by popping into a dummy buffer */
                 uint8_t discard_buf[64];
                 size_t remaining = total_len;
-                while (remaining > 0) {
+                while (remaining > 0)
+                {
                     size_t chunk = (remaining > sizeof(discard_buf)) ? sizeof(discard_buf) : remaining;
                     mem_buffer_pop(state->rx_ring, discard_buf, chunk);
                     remaining -= chunk;
                 }
 
                 /* Check if server Finished received — time to send client Finished */
-                if (state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED) {
+                if (state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED)
+                {
                     /* Derive application keys BEFORE client Finished, because
                      * RFC 8446 Section 7.1 uses transcript through server Finished only.
                      * tls_send_finished() will update the transcript with client Finished. */
                     tls_dbg_status("Deriving app keys...");
-                    if (!tls_derive_application_keys(&state->tls_ctx)) {
+                    if (!tls_derive_application_keys(&state->tls_ctx))
+                    {
                         tls_dbg_status("ERR: app key derivation");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: application key derivation failed\n"));
                         altcp_abort(conn);
@@ -567,7 +623,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     uint8_t finished_hs[36];
                     size_t finished_hs_len = 0;
                     if (!tls_send_finished(&state->tls_ctx, true, finished_hs,
-                                           sizeof(finished_hs), &finished_hs_len)) {
+                                           sizeof(finished_hs), &finished_hs_len))
+                    {
                         tls_dbg_status("ERR: Finished gen");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished generation failed\n"));
                         altcp_abort(conn);
@@ -581,7 +638,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                                             TLS_CONTENT_TYPE_HANDSHAKE,
                                             finished_hs, finished_hs_len,
                                             enc_finished, sizeof(enc_finished),
-                                            &enc_finished_len)) {
+                                            &enc_finished_len))
+                    {
                         tls_dbg_status("ERR: Finished encrypt");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished encryption failed\n"));
                         altcp_abort(conn);
@@ -592,7 +650,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                                                   (u16_t)enc_finished_len, TCP_WRITE_FLAG_COPY);
                     altcp_output(conn->inner_conn);
 
-                    if (write_err != ERR_OK) {
+                    if (write_err != ERR_OK)
+                    {
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
@@ -606,7 +665,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     /* Persist resumable PSK identity payload for future connects. */
                     if (state->tls_ctx.psk_mode &&
                         state->tls_ctx.psk_identity.identity_len > 0 &&
-                        state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity)) {
+                        state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity))
+                    {
                         struct altcp_tls_session session_blob;
                         memset(&session_blob, 0, sizeof(session_blob));
                         session_blob.valid = 1;
@@ -616,14 +676,17 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     }
 
                     /* Notify upper layer */
-                    if (conn->connected) {
+                    if (conn->connected)
+                    {
                         err_t err = conn->connected(conn->arg, conn, ERR_OK);
-                        if (err != ERR_OK) {
+                        if (err != ERR_OK)
+                        {
                             return err;
                         }
                     }
 
-                    if (state->rx == NULL) {
+                    if (state->rx == NULL)
+                    {
                         return ERR_OK;
                     }
                     break; /* Exit record processing loop */
@@ -649,16 +712,20 @@ altcp_tls_ce_pass_rx_data(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
     LWIP_ASSERT("state != NULL", state != NULL);
 
     buf = state->rx_app;
-    if (buf) {
+    if (buf)
+    {
         state->rx_app = NULL;
-        if (conn->recv) {
+        if (conn->recv)
+        {
             u16_t tot_len = buf->tot_len;
             state->rx_passed_unrecved += tot_len;
             state->flags |= ALTCP_TLS_CE_FLAGS_UPPER_CALLED;
 
             err = conn->recv(conn->arg, conn, buf, ERR_OK);
-            if (err != ERR_OK) {
-                if (err == ERR_ABRT) {
+            if (err != ERR_OK)
+            {
+                if (err == ERR_ABRT)
+                {
                     return ERR_ABRT;
                 }
                 /* Not received, re-queue */
@@ -666,23 +733,30 @@ altcp_tls_ce_pass_rx_data(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
                 state->rx_app = buf;
                 state->rx_passed_unrecved -= tot_len;
                 LWIP_ASSERT("state->rx_passed_unrecved >= 0", state->rx_passed_unrecved >= 0);
-                if (state->rx_passed_unrecved < 0) {
+                if (state->rx_passed_unrecved < 0)
+                {
                     state->rx_passed_unrecved = 0;
                 }
                 return err;
             }
-        } else {
+        }
+        else
+        {
             pbuf_free(buf);
         }
-    } else if ((state->flags & (ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED | ALTCP_TLS_CE_FLAGS_RX_CLOSED)) ==
-               ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED) {
+    }
+    else if ((state->flags & (ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED | ALTCP_TLS_CE_FLAGS_RX_CLOSED)) ==
+             ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED)
+    {
         state->flags |= ALTCP_TLS_CE_FLAGS_RX_CLOSED;
-        if (conn->recv) {
+        if (conn->recv)
+        {
             return conn->recv(conn->arg, conn, NULL, ERR_OK);
         }
     }
 
-    if (conn->state != state) {
+    if (conn->state != state)
+    {
         return ERR_ARG;
     }
     return ERR_OK;
@@ -699,12 +773,14 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 {
     LWIP_ASSERT("state != NULL", state != NULL);
 
-    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE)) {
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
         return ERR_VAL;
     }
 
     /* Process available TLS records */
-    while (state->rx != NULL && state->rx->tot_len >= 5) {
+    while (state->rx != NULL && state->rx->tot_len >= 5)
+    {
         /* Read the 5-byte TLS record header */
         uint8_t header[5];
         pbuf_copy_partial(state->rx, header, 5, 0);
@@ -713,13 +789,15 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         size_t total_rec_len = 5 + rec_payload_len;
 
         /* Wait for complete record */
-        if ((size_t)state->rx->tot_len < total_rec_len) {
+        if ((size_t)state->rx->tot_len < total_rec_len)
+        {
             break;
         }
 
         /* Copy full record into temp buffer */
         uint8_t *rec_buf = (uint8_t *)mem_malloc(total_rec_len);
-        if (!rec_buf) {
+        if (!rec_buf)
+        {
             return ERR_OK; /* Try again later */
         }
         pbuf_copy_partial(state->rx, rec_buf, (u16_t)total_rec_len, 0);
@@ -727,7 +805,8 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         /* Decrypt the record — allocate buffer on heap for large records */
         size_t dec_buf_size = rec_payload_len; /* plaintext <= ciphertext */
         uint8_t *dec_buf = (uint8_t *)mem_malloc(dec_buf_size);
-        if (!dec_buf) {
+        if (!dec_buf)
+        {
             mem_free(rec_buf);
             return ERR_OK; /* Try again later */
         }
@@ -737,7 +816,8 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         if (!tls_decrypt_record(&state->tls_ctx, false,
                                 rec_buf, total_rec_len,
                                 dec_buf, dec_buf_size,
-                                &dec_len, &inner_type)) {
+                                &dec_len, &inner_type))
+        {
             mem_free(dec_buf);
             mem_free(rec_buf);
             altcp_abort(conn);
@@ -750,11 +830,14 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
         state->bio_bytes_read += total_rec_len;
 
-        if (inner_type == TLS_CONTENT_TYPE_APPLICATION_DATA) {
+        if (inner_type == TLS_CONTENT_TYPE_APPLICATION_DATA)
+        {
             /* Actual application data */
-            if (dec_len > 0) {
+            if (dec_len > 0)
+            {
                 struct pbuf *buf = pbuf_alloc(PBUF_RAW, (u16_t)dec_len, PBUF_POOL);
-                if (buf == NULL) {
+                if (buf == NULL)
+                {
                     mem_free(dec_buf);
                     return ERR_OK;
                 }
@@ -769,28 +852,37 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 state->bio_bytes_appl = 0;
 
                 /* Queue decrypted data */
-                if (state->rx_app == NULL) {
+                if (state->rx_app == NULL)
+                {
                     state->rx_app = buf;
-                } else {
+                }
+                else
+                {
                     pbuf_cat(state->rx_app, buf);
                 }
             }
-        } else if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE) {
+        }
+        else if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE)
+        {
             size_t hs_off = 0;
-            while (hs_off + 4 <= dec_len) {
+            while (hs_off + 4 <= dec_len)
+            {
                 uint8_t msg_type = dec_buf[hs_off];
                 size_t msg_len = ((size_t)dec_buf[hs_off + 1] << 16) |
                                  ((size_t)dec_buf[hs_off + 2] << 8) |
                                  (size_t)dec_buf[hs_off + 3];
                 size_t msg_end = hs_off + 4 + msg_len;
-                if (msg_end > dec_len) {
+                if (msg_end > dec_len)
+                {
                     mem_free(dec_buf);
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
 
-                if (msg_type == TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET) {
-                    if (!tls_recv_new_session_ticket(&state->tls_ctx, dec_buf + hs_off, msg_end - hs_off)) {
+                if (msg_type == TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET)
+                {
+                    if (!tls_recv_new_session_ticket(&state->tls_ctx, dec_buf + hs_off, msg_end - hs_off))
+                    {
                         mem_free(dec_buf);
                         altcp_abort(conn);
                         return ERR_ABRT;
@@ -806,9 +898,12 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                 hs_off = msg_end;
             }
-        } else if (inner_type == TLS_CONTENT_TYPE_ALERT) {
+        }
+        else if (inner_type == TLS_CONTENT_TYPE_ALERT)
+        {
             /* Handle alert */
-            if (dec_len >= 2 && dec_buf[0] == 2) {
+            if (dec_len >= 2 && dec_buf[0] == 2)
+            {
                 mem_free(dec_buf);
                 altcp_abort(conn);
                 return ERR_ABRT;
@@ -821,8 +916,10 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
         /* Pass data to application */
         err_t err = altcp_tls_ce_pass_rx_data(conn, state);
-        if (err != ERR_OK) {
-            if (err == ERR_ABRT) {
+        if (err != ERR_OK)
+        {
+            if (err == ERR_ABRT)
+            {
                 return ERR_ABRT;
             }
             return ERR_OK;
@@ -841,7 +938,8 @@ altcp_tls_ce_lower_sent(void *arg, struct altcp_pcb *inner_conn, u16_t len)
     struct altcp_pcb *conn = (struct altcp_pcb *)arg;
     LWIP_UNUSED_ARG(inner_conn);
 
-    if (conn) {
+    if (conn)
+    {
         int overhead;
         u16_t app_len;
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
@@ -851,16 +949,19 @@ altcp_tls_ce_lower_sent(void *arg, struct altcp_pcb *inner_conn, u16_t len)
 
         /* Calculate TLS overhead (16-byte authentication tag per record) */
         overhead = state->overhead_bytes_adjust;
-        if ((unsigned)overhead > len) {
+        if ((unsigned)overhead > len)
+        {
             overhead = len;
         }
 
         state->overhead_bytes_adjust -= len;
         app_len = len - (u16_t)overhead;
 
-        if (app_len) {
+        if (app_len)
+        {
             state->overhead_bytes_adjust += app_len;
-            if (conn->sent) {
+            if (conn->sent)
+            {
                 return conn->sent(conn->arg, conn, app_len);
             }
         }
@@ -877,17 +978,21 @@ altcp_tls_ce_lower_poll(void *arg, struct altcp_pcb *inner_conn)
     struct altcp_pcb *conn = (struct altcp_pcb *)arg;
     LWIP_UNUSED_ARG(inner_conn);
 
-    if (conn) {
+    if (conn)
+    {
         LWIP_ASSERT("pcb mismatch", conn->inner_conn == inner_conn);
 
-        if (conn->state) {
+        if (conn->state)
+        {
             altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
-            if (altcp_tls_ce_handle_rx_appldata(conn, state) == ERR_ABRT) {
+            if (altcp_tls_ce_handle_rx_appldata(conn, state) == ERR_ABRT)
+            {
                 return ERR_ABRT;
             }
         }
 
-        if (conn->poll) {
+        if (conn->poll)
+        {
             return conn->poll(conn->arg, conn);
         }
     }
@@ -901,9 +1006,11 @@ static void
 altcp_tls_ce_lower_err(void *arg, err_t err)
 {
     struct altcp_pcb *conn = (struct altcp_pcb *)arg;
-    if (conn) {
+    if (conn)
+    {
         conn->inner_conn = NULL; /* already freed */
-        if (conn->err) {
+        if (conn->err)
+        {
             conn->err(conn->arg, err);
         }
         altcp_free(conn);
@@ -937,14 +1044,16 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)conf;
     altcp_tls_ce_state_t *state;
 
-    if (!conf) {
+    if (!conf)
+    {
         return ERR_ARG;
     }
     LWIP_ASSERT("invalid inner_conn", conn != inner_conn);
 
     /* Allocate state */
     state = (altcp_tls_ce_state_t *)mem_malloc(sizeof(altcp_tls_ce_state_t));
-    if (state == NULL) {
+    if (state == NULL)
+    {
         return ERR_MEM;
     }
 
@@ -953,11 +1062,13 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->conn = conn;
     size_t ring_size = config->rx_ring_size ? config->rx_ring_size : ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE;
     size_t ring_max_size = ALTCP_TLS_CE_MAX_RX_RING_SIZE;
-    if (ring_max_size < ring_size) {
+    if (ring_max_size < ring_size)
+    {
         ring_max_size = ring_size;
     }
     state->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ring_size, ring_max_size, 1024, 0);
-    if (state->rx_ring == NULL) {
+    if (state->rx_ring == NULL)
+    {
         mem_free(state);
         return ERR_MEM;
     }
@@ -965,14 +1076,19 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     mem_buffer_set_shrink(state->rx_ring, 40, 1024);
 
     /* Initialize TLS handshake context */
-    if (config->psk_mode) {
-        if (!tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity)) {
+    if (config->psk_mode)
+    {
+        if (!tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity))
+        {
             mem_buffer_destroy(state->rx_ring);
             mem_free(state);
             return ERR_MEM;
         }
-    } else {
-        if (!tls_handshake_init(&state->tls_ctx, NULL, NULL)) {
+    }
+    else
+    {
+        if (!tls_handshake_init(&state->tls_ctx, NULL, NULL))
+        {
             mem_buffer_destroy(state->rx_ring);
             mem_free(state);
             return ERR_MEM;
@@ -1000,13 +1116,16 @@ altcp_tls_ce_wrap(struct altcp_tls_ce_config *config, struct altcp_pcb *inner_pc
 {
     struct altcp_pcb *ret;
 
-    if (inner_pcb == NULL) {
+    if (inner_pcb == NULL)
+    {
         return NULL;
     }
 
     ret = altcp_alloc();
-    if (ret != NULL) {
-        if (altcp_tls_ce_setup(config, ret, inner_pcb) != ERR_OK) {
+    if (ret != NULL)
+    {
+        if (altcp_tls_ce_setup(config, ret, inner_pcb) != ERR_OK)
+        {
             altcp_free(ret);
             return NULL;
         }
@@ -1020,12 +1139,14 @@ altcp_tls_ce_new(struct altcp_tls_ce_config *config, u8_t ip_type)
     struct altcp_pcb *inner_pcb, *ret;
 
     inner_pcb = altcp_tcp_new_ip_type(ip_type);
-    if (inner_pcb == NULL) {
+    if (inner_pcb == NULL)
+    {
         return NULL;
     }
 
     ret = altcp_tls_ce_wrap(config, inner_pcb);
-    if (ret == NULL) {
+    if (ret == NULL)
+    {
         altcp_close(inner_pcb);
     }
     return ret;
@@ -1073,7 +1194,8 @@ void altcp_tls_ce_set_rx_throttle(enum mem_pressure_level level)
 static void
 altcp_tls_ce_set_poll(struct altcp_pcb *conn, u8_t interval)
 {
-    if (conn != NULL) {
+    if (conn != NULL)
+    {
         altcp_poll(conn->inner_conn, altcp_tls_ce_lower_poll, interval);
     }
 }
@@ -1084,21 +1206,25 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
     u16_t lower_recved;
     altcp_tls_ce_state_t *state;
 
-    if (conn == NULL) {
+    if (conn == NULL)
+    {
         return;
     }
 
     state = (altcp_tls_ce_state_t *)conn->state;
-    if (state == NULL) {
+    if (state == NULL)
+    {
         return;
     }
 
-    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE)) {
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
         return;
     }
 
     lower_recved = len;
-    if (lower_recved > state->rx_passed_unrecved) {
+    if (lower_recved > state->rx_passed_unrecved)
+    {
         lower_recved = (u16_t)state->rx_passed_unrecved;
     }
     state->rx_passed_unrecved -= lower_recved;
@@ -1155,7 +1281,8 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
 static err_t
 altcp_tls_ce_connect(struct altcp_pcb *conn, const ip_addr_t *ipaddr, u16_t port, altcp_connected_fn connected)
 {
-    if (conn == NULL) {
+    if (conn == NULL)
+    {
         return ERR_VAL;
     }
     conn->connected = connected;
@@ -1167,12 +1294,14 @@ altcp_tls_ce_listen(struct altcp_pcb *conn, u8_t backlog, err_t *err)
 {
     struct altcp_pcb *lpcb;
 
-    if (conn == NULL) {
+    if (conn == NULL)
+    {
         return NULL;
     }
 
     lpcb = altcp_listen_with_backlog_and_err(conn->inner_conn, backlog, err);
-    if (lpcb != NULL) {
+    if (lpcb != NULL)
+    {
         conn->inner_conn = lpcb;
         altcp_accept(lpcb, altcp_tls_ce_lower_accept);
         return conn;
@@ -1183,7 +1312,8 @@ altcp_tls_ce_listen(struct altcp_pcb *conn, u8_t backlog, err_t *err)
 static void
 altcp_tls_ce_abort(struct altcp_pcb *conn)
 {
-    if (conn != NULL) {
+    if (conn != NULL)
+    {
         altcp_abort(conn->inner_conn);
     }
 }
@@ -1193,19 +1323,22 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
 {
     struct altcp_pcb *inner_conn;
 
-    if (conn == NULL) {
+    if (conn == NULL)
+    {
         return ERR_VAL;
     }
 
     inner_conn = conn->inner_conn;
-    if (inner_conn) {
+    if (inner_conn)
+    {
         err_t err;
         altcp_poll_fn oldpoll = inner_conn->poll;
 
         altcp_tls_ce_remove_callbacks(conn->inner_conn);
         err = altcp_close(conn->inner_conn);
 
-        if (err != ERR_OK) {
+        if (err != ERR_OK)
+        {
             /* Not closed, restore callbacks */
             altcp_tls_ce_setup_callbacks(conn, inner_conn);
             altcp_poll(inner_conn, oldpoll, inner_conn->pollinterval);
@@ -1220,17 +1353,21 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
 static u16_t
 altcp_tls_ce_sndbuf(struct altcp_pcb *conn)
 {
-    if (conn) {
+    if (conn)
+    {
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
 
-        if (!state || !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE)) {
+        if (!state || !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+        {
             return 0;
         }
 
-        if (conn->inner_conn) {
+        if (conn->inner_conn)
+        {
             u16_t sndbuf = altcp_sndbuf(conn->inner_conn);
             /* Account for TLS record overhead: 5 header + 1 content_type + 16 tag = 22 */
-            if (sndbuf > 22) {
+            if (sndbuf > 22)
+            {
                 return sndbuf - 22;
             }
             return 0;
@@ -1247,23 +1384,27 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
 
     LWIP_UNUSED_ARG(apiflags);
 
-    if (conn == NULL) {
+    if (conn == NULL)
+    {
         return ERR_VAL;
     }
 
     state = (altcp_tls_ce_state_t *)conn->state;
-    if (state == NULL) {
+    if (state == NULL)
+    {
         return ERR_ARG;
     }
 
-    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE)) {
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
         return ERR_VAL;
     }
 
     /* Allocate ciphertext buffer: 5 header + len + 1 content_type + 16 tag */
     size_t ct_buf_size = (size_t)len + 22;
     uint8_t *ciphertext = (uint8_t *)mem_malloc(ct_buf_size);
-    if (!ciphertext) {
+    if (!ciphertext)
+    {
         return ERR_MEM;
     }
 
@@ -1271,14 +1412,16 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
     if (!tls_encrypt_record(&state->tls_ctx, false,
                             TLS_CONTENT_TYPE_APPLICATION_DATA,
                             (const uint8_t *)dataptr, len,
-                            ciphertext, ct_buf_size, &ciphertext_len)) {
+                            ciphertext, ct_buf_size, &ciphertext_len))
+    {
         mem_free(ciphertext);
         return ERR_MEM;
     }
 
     /* Send encrypted record over TCP */
     err_t err = altcp_write(conn->inner_conn, ciphertext, (u16_t)ciphertext_len, TCP_WRITE_FLAG_COPY);
-    if (err == ERR_OK) {
+    if (err == ERR_OK)
+    {
         altcp_output(conn->inner_conn);
         state->overhead_bytes_adjust -= len;
         state->overhead_bytes_adjust += ciphertext_len;
@@ -1291,12 +1434,14 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
 static u16_t
 altcp_tls_ce_mss(struct altcp_pcb *conn)
 {
-    if (conn == NULL) {
+    if (conn == NULL)
+    {
         return 0;
     }
     /* Subtract TLS record overhead: 5 header + 1 content_type + 16 tag = 22 */
     u16_t inner_mss = altcp_mss(conn->inner_conn);
-    if (inner_mss > 22) {
+    if (inner_mss > 22)
+    {
         return inner_mss - 22;
     }
     return 0;
@@ -1305,22 +1450,27 @@ altcp_tls_ce_mss(struct altcp_pcb *conn)
 static void
 altcp_tls_ce_dealloc(struct altcp_pcb *conn)
 {
-    if (conn) {
+    if (conn)
+    {
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
-        if (state) {
+        if (state)
+        {
             tls_handshake_cleanup(&state->tls_ctx);
             state->flags = 0;
 
-            if (state->rx) {
+            if (state->rx)
+            {
                 pbuf_free(state->rx);
                 state->rx = NULL;
             }
-            if (state->rx_app) {
+            if (state->rx_app)
+            {
                 pbuf_free(state->rx_app);
                 state->rx_app = NULL;
             }
 
-            if (state->rx_ring) {
+            if (state->rx_ring)
+            {
                 mem_buffer_destroy(state->rx_ring);
                 state->rx_ring = NULL;
             }
@@ -1386,9 +1536,9 @@ struct altcp_tls_config *altcp_tls_create_config_server(u8_t cert_count)
 }
 
 err_t altcp_tls_config_server_add_privkey_cert(struct altcp_tls_config *config,
-    const u8_t *privkey, size_t privkey_len,
-    const u8_t *privkey_pass, size_t privkey_pass_len,
-    const u8_t *cert, size_t cert_len)
+                                               const u8_t *privkey, size_t privkey_len,
+                                               const u8_t *privkey_pass, size_t privkey_pass_len,
+                                               const u8_t *cert, size_t cert_len)
 {
     LWIP_UNUSED_ARG(config);
     LWIP_UNUSED_ARG(privkey);
@@ -1466,7 +1616,8 @@ struct altcp_pcb *altcp_tls_wrap(struct altcp_tls_config *config, struct altcp_p
 
 void *altcp_tls_context(struct altcp_pcb *conn)
 {
-    if (conn && conn->state) {
+    if (conn && conn->state)
+    {
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
         return &state->tls_ctx;
     }
@@ -1475,24 +1626,28 @@ void *altcp_tls_context(struct altcp_pcb *conn)
 
 void altcp_tls_init_session(struct altcp_tls_session *dest)
 {
-    if (dest) {
+    if (dest)
+    {
         memset(dest, 0, sizeof(*dest));
     }
 }
 
 err_t altcp_tls_get_session(struct altcp_pcb *conn, struct altcp_tls_session *dest)
 {
-    if (!dest) {
+    if (!dest)
+    {
         return ERR_ARG;
     }
 
     memset(dest, 0, sizeof(*dest));
 
-    if (conn && conn->state) {
+    if (conn && conn->state)
+    {
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
         if (state->tls_ctx.psk_mode &&
             state->tls_ctx.psk_identity.identity_len > 0 &&
-            state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity)) {
+            state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity))
+        {
             dest->valid = 1;
             memcpy(dest->psk, state->tls_ctx.psk, sizeof(dest->psk));
             memcpy(&dest->identity, &state->tls_ctx.psk_identity, sizeof(dest->identity));
@@ -1501,7 +1656,8 @@ err_t altcp_tls_get_session(struct altcp_pcb *conn, struct altcp_tls_session *de
         }
     }
 
-    if (altcp_tls_ce_load_pski(dest) && dest->valid) {
+    if (altcp_tls_ce_load_pski(dest) && dest->valid)
+    {
         return ERR_OK;
     }
 
@@ -1512,14 +1668,17 @@ err_t altcp_tls_set_session(struct altcp_pcb *conn, struct altcp_tls_session *fr
 {
     if (!from || !from->valid ||
         from->identity.identity_len == 0 ||
-        from->identity.identity_len > sizeof(from->identity.identity)) {
+        from->identity.identity_len > sizeof(from->identity.identity))
+    {
         return ERR_ARG;
     }
 
-    if (conn && conn->state) {
+    if (conn && conn->state)
+    {
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
         struct altcp_tls_ce_config *conf = (struct altcp_tls_ce_config *)state->conf;
-        if (conf) {
+        if (conf)
+        {
             conf->psk_mode = 1;
             memcpy(conf->psk, from->psk, sizeof(conf->psk));
             memcpy(&conf->psk_identity, &from->identity, sizeof(conf->psk_identity));
