@@ -1,4 +1,4 @@
-include "virtuals.inc"
+.include "virtuals.inc"
 
 ; -----------------------------------
 ; C-callable crypto guards (ez80)
@@ -6,17 +6,26 @@ include "virtuals.inc"
 ; tls_crypto_guard_enable() -> save interrupt state, disable interrupts
 ; tls_crypto_guard_disable()  -> clear stack, restore interrupt state
 
-assume adl=1
-section .text
+.assume adl=1
+.section	.text,"ax",@progbits
 
-public _tls_crypto_guard_enable
-public _tls_crypto_guard_disable
 
-?stackBot		:= 0D1987Eh
+.globl _tls_crypto_guard_enable
+.globl _tls_crypto_guard_disable
+.type	_tls_crypto_guard_enable,@function
+.type	_tls_crypto_guard_disable,@function
 
-_crypto_guard_state_ptr   db 0,0,0
-_crypto_guard_state_start rb 16
+.equ stackBot, 0x0D1987E
+
+.section .bss._crypto_guard_state,"aw",@nobits
+_crypto_guard_state_ptr:
+	.zero	3
+_crypto_guard_state_start:
+	.zero	16
 _crypto_guard_state_end:
+
+
+.section	.text,"ax",@progbits
 
 ; void tls_crypto_guard_enable(void)
 _tls_crypto_guard_enable:
@@ -24,18 +33,18 @@ _tls_crypto_guard_enable:
 	ld hl, (_crypto_guard_state_ptr)
 	ld a, h
 	or l
-	jr nz, .has_ptr
+	jr nz, .Lhas_ptr
 ; .no_has_ptr
 	ld hl, _crypto_guard_state_start	; init pointer to start of state stack
-	jr .save_state
-.has_ptr:
+	jr .Lsave_state
+.Lhas_ptr:
 	; if pointer is at end of state stack
 	ld bc, _crypto_guard_state_end
 	or a
 	sbc hl, bc
 	ld hl, (_crypto_guard_state_ptr)
 	ret z	; do nothing
-.save_state:
+.Lsave_state:
 	ld a, i								; interrupt state into a
 	ld (hl), a
 	inc hl
@@ -81,3 +90,6 @@ _tls_crypto_guard_disable:
 	ret z
 	ei
 	ret
+
+
+.section	.note.GNU-stack,"",@progbits

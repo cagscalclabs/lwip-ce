@@ -1,37 +1,48 @@
-assume adl=1
+.assume adl=1
 
-
-section .text
-public _tls_bytes_compare
+.section	.text,"ax",@progbits
+globl _tls_bytes_compare
+.type _tls_bytes_compare,@function
 
 _tls_bytes_compare:
-	pop	iy, de, hl, bc
-	push	bc, hl, de, iy
+	pop	iy
+	pop de
+	pop hl
+	pop bc
+	push bc
+	push hl
+	push de
+	push iy
 	xor	a, a
-.loop:
+.Lloop:
 	ld	iyl, a
 	ld	a, (de)
 	inc	de
 	xor	a, (hl)
 	or	a, iyl
 	cpi
-	jq	pe, .loop
+	jp	pe, .Lloop
 	add	a, -1
 	sbc	a, a
 	inc	a
 	ret
 
 
-section .text
-public _bytelen_to_bitlen
+.section	.text,"ax",@progbits
+globl _bytelen_to_bitlen
+.type _bytelen_to_bitlen,@function
 
 _bytelen_to_bitlen:
 ; hl = size
 ; iy = dst
 ; converts a size_t to a u8[8]
 ; outputs in big endian
-	pop bc, hl, iy
-	push iy, hl, bc
+	pop bc
+	pop hl
+	pop iy
+	push iy
+	push hl
+	push bc
 	xor a, a
 	add hl, hl
 	adc a, a

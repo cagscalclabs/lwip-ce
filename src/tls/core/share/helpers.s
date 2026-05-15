@@ -1,9 +1,10 @@
 
-assume adl=1
+.assume adl=1
 
+.section	.text,"ax",@progbits
+globl _indcallhl
+.type _indcallhl,@function
 
-section .text
-public _indcallhl
 ;-------------------------
 ; call hl
 _indcallhl:
@@ -12,8 +13,9 @@ _indcallhl:
 ;  HL : Address to call
 	jp	(hl)
 
-section .text
-public _rmemcpy
+.section	.text,"ax",@progbits
+globl _rmemcpy
+.type _rmemcpy,@function
 ;-------------------------
 ; rmemcpy(void *dest, void *src, size_t len)
 _rmemcpy:
@@ -27,25 +29,30 @@ _rmemcpy:
 	ld  de, (iy + 9)
 	add hl, de
 	ld  de, (iy + 6)
-.loop:
+.Lrmemcpy_loop:
 	ldi
 	ret po
 	dec hl
 	dec hl
-	jr  .loop
+	jr  .Lrmemcpy_loop
 	
-section .text
-public _memrev
+.section	.text,"ax",@progbits
+globl _memrev
+.type _memrev,@function
 ;-------------------------
 ; memrev(void *data, size_t len)
 _memrev:
-	pop hl, de, bc
-	push bc, de, de
+	pop hl
+	pop de
+	pop bc
+	push bc
+	push de
+	push de
 	ex (sp), hl
 	add hl, bc
 	set 0, c
 	cpd
-.loop:
+.Lmemrev_loop:
 	ret po
 	ld a, (de)
 	dec bc
@@ -53,4 +60,4 @@ _memrev:
 	dec hl
 	ld (hl), a
 	dec hl
-	jr .loop
+	jr .Lmemrev_loop
