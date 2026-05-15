@@ -3,6 +3,21 @@
 #include "../includes/hash.h"
 #include "../includes/crypto_guard.h"
 
+static bool tls_sha256_init_adapter(void *ctx)
+{
+    return tls_sha256_init((struct tls_sha256_context *)ctx);
+}
+
+static void tls_sha256_update_adapter(void *ctx, const uint8_t *data, size_t len)
+{
+    tls_sha256_update((struct tls_sha256_context *)ctx, data, len);
+}
+
+static void tls_sha256_digest_adapter(void *ctx, uint8_t *digest)
+{
+    tls_sha256_digest((struct tls_sha256_context *)ctx, digest);
+}
+
 bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
 {
     if (ctx == NULL)
@@ -11,9 +26,9 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
     {
     case TLS_HASH_SHA256:
         ctx->digestlen = TLS_SHA256_DIGEST_LEN;
-        ctx->init = tls_sha256_init;
-        ctx->update = tls_sha256_update;
-        ctx->digest = tls_sha256_digest;
+        ctx->init = tls_sha256_init_adapter;
+        ctx->update = tls_sha256_update_adapter;
+        ctx->digest = tls_sha256_digest_adapter;
         break; /*
     case TLS_SHA256_HW:
         ctx->digestlen = TLS_SHA256_DIGEST_LEN;
