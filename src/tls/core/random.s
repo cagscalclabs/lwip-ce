@@ -5,39 +5,43 @@
 ; include to supported algorithms
 
 
-assume adl=1
-section .text
 
-include "share/virtuals.inc"
+.assume adl=1
+.section	.text,"ax",@progbits
 
-public _tls_random_init_entropy
-public _tls_random
-public _tls_random_bytes
-public _tls_random_debug_source_ptr
+.include "virtuals.inc"
+
+globl _tls_random_init_entropy
+globl _tls_random
+globl _tls_random_bytes
+globl _tls_random_debug_source_ptr
+.type _tls_random_init_entropy,@function
+.type _tls_random,@function
+.type _tls_random_bytes,@function
+.type _tls_random_debug_source_ptr,@function
+
 
 extern _tls_crypto_guard_enable
 extern _tls_crypto_guard_disable
-
-_sprng_read_addr db 0,0,0
 
 ;-------------------------------------
 ; bool tls_random_init_entropy(void);
 _tls_random_init_entropy:
     ld hl, $D65800
     ld iy, 0
-    lea de,iy
+    lea de,iy + 0
     ld c, l
-.loop1: ; loops 256 times
-    call .test_byte
+.Linit_loop1: ; loops 256 times
+    call .Linit_test_byte
     dec c
-    jr nz,.loop1
-.loop2: ; loops 256 times
-    call .test_byte
+    jr nz,.Linit_loop1
+.Linit_loop2: ; loops 256 times
+    call .Linit_test_byte
     dec c
-    jr nz,.loop2
-    call .test_byte ; run a total of 513 times
+    jr nz,.Linit_loop2
+    call .Linit_test_byte ; run a total of 513 times
 
-    ex hl,de
+    ex de, hl
     ld bc,256*8/3 ; change the 31 if the number of tests changes
     xor a,a
     sbc hl,bc
@@ -55,34 +59,34 @@ _tls_random_init_entropy:
     ret
 
 ; test byte at hl, set iy=hl if entropy is better
-.test_byte:
+.Linit_test_byte:
     push de
     ld de,0
     ld b,0 ; probably enough tests
-.test_byte_outer_loop:
+.Linit_test_byte_outer_loop:
 ; sample byte twice and bitwise-xor
     ld a,(hl) ; sample 1
     xor a,(hl) ; sample 2
 ; test the entropy for each of the 8 bits
-.test_byte_loop:
-    jr z,.done_test_byte_loop
+.Linit_test_byte_loop:
+    jr z,.Linit_done_test_byte_loop
     add a,a ; test next bit (starting with the high bit)
-    jr nc,.test_byte_loop ; jump if bit unset
+    jr nc,.Linit_test_byte_loop ; jump if bit unset
     inc de ; increment score
-    jr .test_byte_loop
-.done_test_byte_loop:
-    djnz .test_byte_outer_loop
+    jr .Linit_test_byte_loop
+.Linit_done_test_byte_loop:
+    djnz .Linit_test_byte_outer_loop
 
     ex (sp),hl ; save pointer to byte, restore current entropy score
     ; check if the new entropy score is higher than the current entropy score
     or a,a
     sbc hl,de ; current - new
-    jr nc,.test_byte_is_worse
+    jr nc,.Linit_test_byte_is_worse
     pop iy ; return iy = pointer to byte
     lea hl,iy+1 ; advance pointer to byte for next test
     ret
-.test_byte_is_worse:
-    ex hl,de ; de = current score
+.Linit_test_byte_is_worse:
+    ex de, hl ; de = current score
     pop hl ; restore pointer to byte
     inc hl ; advance pointer
     ret
@@ -104,7 +108,7 @@ _tls_random:
     ld hl,(_sprng_read_addr)
     ld de, _sprng_entropy_pool
     ld b, 119
-.byte_read_loop:
+.Lrandom_byte_read_loop:
     ld a, (hl)
     xor a, (hl)
     xor a, (hl)
@@ -124,7 +128,7 @@ _tls_random:
     xor a, (hl)
     ld (de), a
     inc de
-    djnz .byte_read_loop
+    djnz .Lrandom_byte_read_loop
 
 ; hash the entropy pool sha256
     ld hl, _sprng_hash_ctx
@@ -137,36 +141,39 @@ _tls_random:
     push hl
     push bc
     call _tls_sha256_update
-    pop bc, hl, hl
+    pop bc
+    pop hl
+    pop hl
     ld hl, _sprng_sha_digest
     push hl
     push bc
     call _tls_sha256_digest
-    pop bc, hl
+    pop bc
+    pop hl
 
 ; xor hash cyclically into uint64_t
 ; each 4-byte stripe xored down into one output byte (8 total bytes)
     ld hl,_sprng_sha_digest
     ld de,_sprng_rand
     ld c,8
-.outer:
+.Lrandom_outer:
     xor a,a
     ld b,4
-.inner:
+.Lrandom_inner:
     xor a,(hl)
     inc hl
-    djnz .inner
+    djnz .Lrandom_inner
     ld (de),a
     inc de
     dec c
-    jq nz,.outer
+    jp nz,.Lrandom_outer
 ; destroy sprng state
     ld hl, _sprng_entropy_pool
     ld (hl), 0
     ld de, _sprng_entropy_pool + 1
     ld bc, _sprng_rand - _sprng_entropy_pool - 1
     ldir
-.return:
+.Lrandom_return:
     call _tls_crypto_guard_disable
 ; load 64 bits from _sprng_rand into BC:UDE:UHL
     ld hl,_sprng_rand
@@ -189,29 +196,29 @@ _tls_random_bytes:
     call __frameset
     ld hl,(ix+6)
     ld (ix-3),hl ; temp pointer
-.loop:
+.Lbytes_loop:
     ld hl,(ix+9)
     add hl,bc
     or a,a
     sbc hl,bc
-    jr z,.done ; handle end of loop and when len is zero
+    jr z,.Lbytes_done ; handle end of loop and when len is zero
     call _tls_random
     ld hl,(ix+9)
     ld bc,8
     or a,a
     sbc hl,bc
     ld (ix+9),hl
-    jr nc,.not_last
+    jr nc,.Lbytes_not_last
     ld c,l ; both uh and ub are zero here, we only need the low byte
-.not_last:
+.Lbytes_not_last:
     ld hl,(ix-3)
     add hl,bc
     ld de,(ix-3)
     ld (ix-3),hl ; advance dest pointer
     ld hl,_sprng_rand
     ldir ; copy to dest
-    jr .loop
-.done:
+    jr .Lbytes_loop
+.Lbytes_done:
     ld hl,(ix+6) ; return pointer to dest
     ld sp,ix
     pop ix
@@ -230,3 +237,9 @@ extern _tls_sha256_init
 extern _tls_sha256_update
 extern _tls_sha256_digest
 extern __frameset
+
+.section .bss._sprng_read_addr,"aw",@nobits
+_sprng_read_addr:
+    .zero 3
+
+.section	.note.GNU-stack,"",@progbits

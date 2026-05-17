@@ -330,7 +330,7 @@ _powmod_exp_u24:
    djnz   .Lreduce_sub ; leaks size
    sbc   a, a
    and   a, c
-   and   a, long
+   and   a, 3
    sbc   hl, hl
    ld   l, a
    add   hl, sp
@@ -349,3 +349,6 @@ _powmod_exp_u24:
 
 ;void powmod(uint8_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
 ;_powmod_exp_u4096
+
+
+.section	.note.GNU-stack,"",@progbits

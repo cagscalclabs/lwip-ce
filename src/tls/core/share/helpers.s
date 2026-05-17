@@ -61,3 +61,5 @@ _memrev:
 	ld (hl), a
 	dec hl
 	jr .Lmemrev_loop
+
+.section	.note.GNU-stack,"",@progbits

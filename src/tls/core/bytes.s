@@ -57,3 +57,5 @@ _bytelen_to_bitlen:
 	ld (iy + 0), hl
 	ld (iy + 2), hl
 	ret
+
+.section	.note.GNU-stack,"",@progbits

@@ -3,16 +3,19 @@
 ; Author: beckadamtheinventor
 ;--------------------------------------------
 
-assume adl=1
-section .text
+.assume adl=1
+.section	.text,"ax",@progbits
 
-include "share/virtuals.inc"
+.include "virtuals.inc"
 
-public _tls_sha256_init
-public _tls_sha256_update
-public _tls_sha256_digest
+globl _tls_sha256_init
+globl _tls_sha256_update
+globl _tls_sha256_digest
+.type _tls_sha256_init,@function
+.type _tls_sha256_update,@function
+.type _tls_sha256_digest,@function
 
-_sha256_m_buffer := _sprng_sha_mbuffer
+.equ _sha256_m_buffer, _sprng_sha_mbuffer
 
 ; reverse b longs endianness from iy to hl
 _sha256_reverse_endianness:
@@ -33,18 +36,18 @@ _sha256_reverse_endianness:
  
 ; helper macro to xor [B,C] with [R1,R2] storing into [R1,R2]
 ; destroys: af
-macro _xorbc? R1,R2
+.macro _xorbc R1 R2
 	ld a,b
 	xor a,R1
 	ld R1,a
 	ld a,c
 	xor a,R2
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to xor [(HL),(HL+1)] with [R1,R2] storing into [R1,R2], advancing HL
 ; destroys: af
-macro _xorihl? R1,R2
+.macro _xorihl R1 R2
 	ld a,R1
 	xor a,(hl)
 	ld R1,a
@@ -53,156 +56,157 @@ macro _xorihl? R1,R2
 	xor a,(hl)
 	ld R2,a
 	inc hl
-end macro
+.endm
 
 ; helper macro to xor [(R3), (R3+1)] with [R1,R2] storing into [R1,R2]
 ; destroys: af
-macro _xoriix? R1,R2, R3
+.macro _xoriix R1 R2 R3
 	ld a,R1
 	xor a,(R3)
 	ld R1,a
 	ld a,R2
 	xor a,(R3+1)
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to and [(R3), (R3+1)] with [R1,R2] storing into [R1,R2]
 ; destroys: af
-macro _andiix? R1,R2, R3
+.macro _andiix R1 R2 R3
 	ld a,R1
 	and a,(R3)
 	ld R1,a
 	ld a,R2
 	and a,(R3+1)
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to or [(R3), (R3+1)] with [R1,R2] storing into [R1,R2]
 ; destroys: af
-macro _oriix? R1,R2, R3
+.macro _oriix R1 R2 R3
 	ld a,R1
 	or a,(R3)
 	ld R1,a
 	ld a,R2
 	or a,(R3+1)
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to add [(R3), (R3+1)] with [R1,R2] storing into [R1,R2]
 ; destroys: af
-macro _addiix? R1,R2, R3
+.macro _addiix R1 R2 R3
 	ld a,R1
 	add a,(R3)
 	ld R1,a
 	ld a,R2
 	adc a,(R3+1)
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to adc [(R3), (R3+1)] with [R1,R2] storing into [R1,R2]
 ; destroys: af
-macro _adciix? R1,R2, R3
+.macro _adciix R1 R2 R3
 	ld a,R1
 	adc a,(R3)
 	ld R1,a
 	ld a,R2
 	adc a,(R3+1)
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to add [(R3), (R3+1)] with [R1,R2] storing into [(R3), (R3+1)]
 ; destroys: af
-macro _addiix_store? R1,R2, R3
+.macro _addiix_store R1 R2 R3
 	ld a,R1
 	add a,(R3)
 	ld R1,a
 	ld a,R2
 	adc a,(R3+1)
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to adc [(R3), (R3+1)] with [R1,R2] storing into [(R3), (R3+1)]
 ; destroys: af
-macro _adciix_store? R1,R2, R3
+.macro _adciix_store R1 R2 R3
 	ld a,R1
 	adc a,(R3)
 	ld (R3),a
 	ld a,R2
 	adc a,(R3+1)
 	ld (R3+1),a
-end macro
+.endm
 
 ; helper macro to xor [R1,R2] with [R3,R4] storing into [R1,R2]
 ; destroys: af
-macro _xor? R1,R2,R3,R4
+.macro _xor R1 R2 R3 R4
 	ld a,R1
 	xor a,R3
 	ld R1,a
 	ld a,R2
 	xor a,R4
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to or [R1,R2] with [R3,R4] storing into [R1,R2]
 ; destroys: af
-macro _or? R1,R2,R3,R4
+.macro _or R1 R2 R3 R4
 	ld a,R1
 	or a,R3
 	ld R1,a
 	ld a,R2
 	or a,R4
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to and [R1,R2] with [R3,R4] storing into [R1,R2]
 ; destroys: af
-macro _and? R1,R2,R3,R4
+.macro _and R1 R2 R3 R4
 	ld a,R1
 	and a,R3
 	ld R1,a
 	ld a,R2
 	and a,R4
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to add [R1,R2] with [R3,R4] storing into [R1,R2]
 ; destroys: af
-macro _add? R1,R2,R3,R4
+.macro _add R1 R2 R3 R4
 	ld a,R1
 	add a,R3
 	ld R1,a
 	ld a,R2
 	adc a,R4
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to adc [R1,R2] with [R3,R4] storing into [R1,R2]
 ; destroys: af
-macro _adc? R1,R2,R3,R4
+.macro _adc R1 R2 R3 R4
 	ld a,R1
 	adc a,R3
 	ld R1,a
 	ld a,R2
 	adc a,R4
 	ld R2,a
-end macro
+.endm
 
 ; helper macro to rotate [a,uhl] left by the given amount
 ; input: c=0
 ; destroys: f
-macro _rotleft32? AMOUNT
-repeat AMOUNT
+.macro _rotleft32 AMOUNT
+.rept \AMOUNT
 	add a,a
 	adc hl,hl
 	adc a,c
-end repeat
-end macro
+.endr
+.endm
 
 
 ; initialize sha256 hash state
 ; CRYPTO_FN
 _tls_sha256_init:
-	pop iy,de
+	pop iy
+	pop de
 	push de
 	ld hl,$FF0000
 	ld bc,sha256_offset_state
@@ -226,7 +230,7 @@ _tls_sha256_update:
 	; get pointers to the things
 	ld bc, 0
 	ld c, (iy + sha256_offset_datalen) ; bc = data block offset
-	lea hl, iy       ; hl = data ptr
+	lea hl, iy + 0       ; hl = data ptr
 	add hl,bc        ; adjust data pointer by the current offset
 	ex de,hl         ; de = adjusted data ptr
 	ld a,64
@@ -235,8 +239,8 @@ _tls_sha256_update:
 	ld hl, (ix + 9)  ; hl = source data
 	push hl          ; push source data
 	ld hl, (ix + 12) ; hl = len
-	jq .loop_entry
-.loop:
+	jp .Lupdate_loop_entry
+.Lupdate_loop:
 	ex (sp),hl  ; pop source data, push len
 	ldir        ; fill rest of block
 	push hl     ; push source data
@@ -247,24 +251,24 @@ _tls_sha256_update:
 	lea iy, iy + sha256_offset_bitlen
 	call u64_addi  ; preserves iy, bc
 	lea iy, iy - sha256_offset_bitlen
-	lea de, iy  ; de = data ptr
+	lea de, iy + 0  ; de = data ptr
 	ld b,c      ; bc = 0
 	ld c, 64    ; remaining bytes in block is 64
 	pop hl      ; pop source data
 	ex (sp),hl  ; pop len, push source data
-.loop_entry:
+.Lupdate_loop_entry:
 	; subtract remaining bytes in block and check whether the block gets filled
 	xor a,a
 	sbc hl,bc
-	jq nc,.loop
+	jp nc,.Lupdate_loop
 
 	add hl,bc   ; restore len
 	ld c,l      ; bc = len
 	pop hl      ; pop source data
 	or a,c      ; check len == 0
-	jq z,.no_copy
+	jp z,.Lupdate_no_copy
 	ldir
-.no_copy:
+.Lupdate_no_copy:
 	ld a,e
 	sub a,iyl
 	ld (iy + sha256_offset_datalen), a   ;save current datalen
@@ -297,22 +301,22 @@ _tls_sha256_digest:
 	sub a,c ; c is set to datalen earlier
 	ld c,a
 	inc c   ; zeroing data + 56 is okay
-	jq nc, .pad2
-.pad1:
+	jp nc, .Ldigest_pad2
+.Ldigest_pad1:
 	add a,63-55
-	jq z, .done_pad1   ; zeroing data + 64 is not okay
+	jp z, .Ldigest_done_pad1   ; zeroing data + 64 is not okay
 	ld c,a
 	ld hl,$FF0000
 	ldir
-.done_pad1:
+.Ldigest_done_pad1:
 	call _sha256_transform
 	pop de
 	push de ; ctx
 	ld bc,56
-.pad2:
+.Ldigest_pad2:
 	ld hl,$FF0000
 	ldir
-.done_pad2:
+.Ldigest_done_pad2:
 	ld c, (ix-_sha256ctx_size + sha256_offset_datalen)
 	ld b,8
 	mlt bc ;multiply 8-bit datalen by 8-bit value 8
@@ -373,7 +377,7 @@ _sha256_transform:
 	push hl
 	pop iy
 
-._loop2:
+.Ltransform_loop2:
 ; m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
 
 ; SIG0(m[i - 15])
@@ -457,7 +461,8 @@ _sha256_transform:
 	dec sp     ; restore stack pointer for pop af
 
 ; + SIG0(m[i - 15])
-	pop af, de
+	pop af
+	pop de
 	add hl,de
 	adc a,b
 
@@ -477,9 +482,9 @@ _sha256_transform:
 
 	lea iy, iy + 4
 	dec (ix + ._i)
-	jq nz, ._loop2
+	jp nz, .Ltransform_loop2
 
-._loop3:
+.Ltransform_loop3:
 ; tmp1 = h + EP1(e) + CH(e,f,g) + k[i] + m[i];
 
 ; CH(e,f,g)
@@ -695,12 +700,12 @@ _sha256_transform:
 	ld a, (hl)
 	add a,4
 	ld (hl), a
-	jq nc,._loop3
+	jp nc,.Ltransform_loop3
 
 	ld iy, (ix + 6)
 	lea hl, iy + sha256_offset_state
 	ld b,8
-._loop4:
+.Ltransform_loop4:
 	ld de, (ix + ._state_vars)
 	ld a,  (ix + ._state_vars + 3)
 	lea ix, ix + 4
@@ -715,7 +720,7 @@ _sha256_transform:
 	ld (hl), a
 	inc hl
 
-	djnz ._loop4
+	djnz .Ltransform_loop4
 	lea ix, ix + -8*4
 
 	ld sp,ix
@@ -723,89 +728,83 @@ _sha256_transform:
 	ret
 
 _sha256_state_init:
-	dl 648807
-	db 106
-	dl 6794885
-	db -69
-	dl 7271282
-	db 60
-	dl 5240122
-	db -91
-	dl 938623
-	db 81
-	dl 354444
-	db -101
-	dl -8136277
-	db 31
-	dl -2044647
-	db 91
+	.long	1779033703
+	.long	3144134277
+	.long	1013904242
+	.long	2773480762
+	.long	1359893119
+	.long	2600822924
+	.long	528734635
+	.long	1541459225
  
  _sha256_k:
-	dd	1116352408
-	dd	1899447441
-	dd	3049323471
-	dd	3921009573
-	dd	961987163
-	dd	1508970993
-	dd	2453635748
-	dd	2870763221
-	dd	3624381080
-	dd	310598401
-	dd	607225278
-	dd	1426881987
-	dd	1925078388
-	dd	2162078206
-	dd	2614888103
-	dd	3248222580
-	dd	3835390401
-	dd	4022224774
-	dd	264347078
-	dd	604807628
-	dd	770255983
-	dd	1249150122
-	dd	1555081692
-	dd	1996064986
-	dd	2554220882
-	dd	2821834349
-	dd	2952996808
-	dd	3210313671
-	dd	3336571891
-	dd	3584528711
-	dd	113926993
-	dd	338241895
-	dd	666307205
-	dd	773529912
-	dd	1294757372
-	dd	1396182291
-	dd	1695183700
-	dd	1986661051
-	dd	2177026350
-	dd	2456956037
-	dd	2730485921
-	dd	2820302411
-	dd	3259730800
-	dd	3345764771
-	dd	3516065817
-	dd	3600352804
-	dd	4094571909
-	dd	275423344
-	dd	430227734
-	dd	506948616
-	dd	659060556
-	dd	883997877
-	dd	958139571
-	dd	1322822218
-	dd	1537002063
-	dd	1747873779
-	dd	1955562222
-	dd	2024104815
-	dd	2227730452
-	dd	2361852424
-	dd	2428436474
-	dd	2756734187
-	dd	3204031479
-	dd	3329325298
+	.long	1116352408
+	.long	1899447441
+	.long	3049323471
+	.long	3921009573
+	.long	961987163
+	.long	1508970993
+	.long	2453635748
+	.long	2870763221
+	.long	3624381080
+	.long	310598401
+	.long	607225278
+	.long	1426881987
+	.long	1925078388
+	.long	2162078206
+	.long	2614888103
+	.long	3248222580
+	.long	3835390401
+	.long	4022224774
+	.long	264347078
+	.long	604807628
+	.long	770255983
+	.long	1249150122
+	.long	1555081692
+	.long	1996064986
+	.long	2554220882
+	.long	2821834349
+	.long	2952996808
+	.long	3210313671
+	.long	3336571891
+	.long	3584528711
+	.long	113926993
+	.long	338241895
+	.long	666307205
+	.long	773529912
+	.long	1294757372
+	.long	1396182291
+	.long	1695183700
+	.long	1986661051
+	.long	2177026350
+	.long	2456956037
+	.long	2730485921
+	.long	2820302411
+	.long	3259730800
+	.long	3345764771
+	.long	3516065817
+	.long	3600352804
+	.long	4094571909
+	.long	275423344
+	.long	430227734
+	.long	506948616
+	.long	659060556
+	.long	883997877
+	.long	958139571
+	.long	1322822218
+	.long	1537002063
+	.long	1747873779
+	.long	1955562222
+	.long	2024104815
+	.long	2227730452
+	.long	2361852424
+	.long	2428436474
+	.long	2756734187
+	.long	3204031479
+	.long	3329325298
 
 extern u64_addi
 extern __frameset0
 extern __frameset
+
+.section	.note.GNU-stack,"",@progbits
