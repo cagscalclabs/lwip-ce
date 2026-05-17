@@ -439,11 +439,33 @@ Before beginning this project we needed to itemize what was available and what w
 
 		This is directly coupled to the Ethernet ingress path: RX ring buffers use drain callbacks and timer-driven budgets, while pressure callbacks adjust scheduling/throttle behavior under load. In practice, this allows the stack to keep link handling responsive while avoiding runaway allocation during bursts.
 
-		From a security perspective, buffers can be flagged with \texttt{BUFFER\_SECURE\_MODE}, enabling automatic zeroization on pop/free/release paths. This does not replace higher-layer cryptographic hygiene, but it materially reduces residual plaintext/key exposure in normal allocator lifecycles.
-		
-		
-	\newpage
-	\section{TLS Architecture and Security Model}
+			From a security perspective, buffers can be flagged with \texttt{BUFFER\_SECURE\_MODE}, enabling automatic zeroization on pop/free/release paths. This does not replace higher-layer cryptographic hygiene, but it materially reduces residual plaintext/key exposure in normal allocator lifecycles.
+			
+			\subsection{Application Callability and Function Table Export}
+			lwIP-CE is intended to operate as a resident networking component that other calculator programs can call, rather than as a program whose networking stack is statically copied into each consumer. I was intent on making this library callable in place rather than statically included because the lwIP core and TLS internals are huge (around 200KB) and on a device with just under 2MB of Flash storage, this adds up quickly. This design reduces duplicated code size, centralizes network state, and allows application programs to depend on a stable exported interface.
+			
+			The calculator environment does not provide conventional shared-library loading in the desktop sense. The TI-84+ CE toolchain provides a dispatch utility for loading on-device libraries called \texttt{LIBLOAD}. This utility normally works through:
+			\begin{itemize}
+				\item A series of C- or assembly-callable functions that perform some action and return.
+				\item An exports table listing every function that should be part of the public API.
+				\item \textbf{During linking}: exports are converted into a jump table, in export order, where each jump target is represented as an offset to the exported function.
+				\item \textbf{At program initialization}: a LibLoad bootstrap function locates the library in memory and combines the library base address with the stored offsets to produce callable entry points.
+				\item \textbf{At API call}: \verb|call my_api| targets a stub entry that dispatches to the resolved implementation address.
+			\end{itemize}
+
+
+			The issue here is that this model targets small AppVar libraries that can live in RAM for their usage cycle and is not designed to support Applications as the API source. This requires a slightly different engineering solution.
+
+			\begin{itemize}
+				\item A table of exports is linked into the application, similarly to how \texttt{LIBLOAD} handles library exports.
+				\item The export table must either live at a consistent location across builds or have its location recorded in an unused application-header field.
+				\item A small \texttt{LIBLOAD} companion library provides consumer-side stubs and a bootstrap function. The bootstrap locates the installed lwIP application, resolves the application export table, and patches or populates the local stubs so later API calls dispatch into the resident application.
+			\end{itemize}
+
+			
+			
+		\newpage
+		\section{TLS Architecture and Security Model}
 	
 	This section is not a full TLS implementation guide; it focuses only on platform-specific design choices and any standards deviations that require explicit justification.
 	
@@ -753,7 +775,7 @@ Before beginning this project we needed to itemize what was available and what w
 		For this proof section, the conservative accounting model is:
 	\begin{itemize}
 		\item only one entropy-bearing bit is credited per pool byte, and
-		\item each credited bit is conditioned by \CalibXorReads reads (1 read + 16 XOR reads).
+		\item each credited bit is conditioned by \CalibXorReads  reads (1 read + 16 XOR reads).
 	\end{itemize}
 
 		With correlation discounting, this gives:
@@ -773,7 +795,7 @@ Before beginning this project we needed to itemize what was available and what w
 		\end{minipage}\hfill
 		\begin{minipage}[t]{0.48\textwidth}
 			\vspace{0pt}
-			\textbf{Per-output (u64)}
+				\textbf{Across entropy pool}
 			\begin{align*}
 				n_{\text{eff,pool}} &= \CalibPoolBytes\cdot n_{\text{eff,byte}} = \left\lfloor\frac{\CalibXorReads\cdot\CalibPoolBytes}{k}\right\rfloor
 			\end{align*}
@@ -798,7 +820,7 @@ Before beginning this project we needed to itemize what was available and what w
 		\end{minipage}\hfill
 		\begin{minipage}[t]{0.48\textwidth}
 			\vspace{0pt}
-			\textbf{Per-output (u64)}
+				\textbf{Across entropy pool}
 			\begin{align*}
 				n_{\text{eff,pool}}&=\left\lfloor\frac{\CalibXorReads\cdot\CalibPoolBytes}{\CalibKMedian}\right\rfloor=\CalibNeffPool
 			\end{align*}
@@ -830,7 +852,7 @@ Before beginning this project we needed to itemize what was available and what w
 			\end{minipage}\hfill
 			\begin{minipage}[t]{0.48\textwidth}
 				\vspace{0pt}
-				\textbf{Per output (u64)}
+				\textbf{Across entropy pool}
 				\begin{align*}
 					p_{\oplus}&=\frac{1-(1-2p)^{n_{\text{eff,pool}}}}{2} \\
 					p_{\oplus}&=\frac{1-(1-2(\CalibPWorst))^{\CalibNeffPool}}{2} \\
@@ -860,7 +882,7 @@ Before beginning this project we needed to itemize what was available and what w
 		\end{minipage}\hfill
 		\begin{minipage}[t]{0.48\textwidth}
 			\vspace{0pt}
-			\textbf{Per output (u64)}
+			\textbf{Across entropy pool}
 			\begin{align*}
 				H_{\infty}(p)&=-\log_2\!\left(\max(p,1-p)\right) \\
 				H_{\infty}(p)&=-\log_2\!\left(\CalibPOutPool\right) \\
@@ -1140,14 +1162,25 @@ These mechanisms are implemented via the \textbf{cryptoguard} wrapper detailed i
 When evaluated in unison, these mechanisms provide best-effort memory sanitization across allocation, use, and teardown paths, reducing residual plaintext/key exposure without claiming complete protection against a local or physical adversary.
 
 	
-	\newpage
-	
-	\section{Conclusion}
-	Placeholder
-	
+		\newpage
+		
+		\section{Conclusion}
+		This work demonstrates that a modern TCP/IP stack with TLS support can be adapted to the TI-84+ CE class of hardware when the design is shaped around the platform rather than merely compressed to fit it. The resulting system combines USB CDC Ethernet transport, lwIP protocol handling, memory-pressure-aware buffering, a resident application call model, and a constrained TLS 1.3 implementation into a coherent network stack for a device with severe memory, timing, and security limitations.
+		
+		The central engineering result is not that the TI-84+ CE can be made equivalent to a desktop or server environment. It cannot. The platform lacks a hardware root of trust, secure key storage, preemptive multitasking, and the memory budget normally assumed by contemporary networking and cryptographic software. The relevant result is narrower and more useful: with explicit boundaries, conservative assumptions, and targeted validation, the platform can support interoperable secure-client workflows and provide a practical foundation for calculator-native networked applications.
+		
+		Several design choices carry that result. The USB Ethernet driver limits scope to CDC ECM/NCM behavior that can be made reliable on the device. The membuffer layer makes allocation pressure visible and gives ingress paths a way to degrade predictably. The RNG model treats the hardware entropy source as something to be measured, conditioned, and health-checked rather than assumed. The truststore design replaces desktop-scale WebPKI expectations with a signed, compact, platform-specific trust boundary. The TLS implementation and profiling suite then build on those constraints with explicit tests, timing telemetry, and failure behavior.
+		
+		At the same time, this implementation should be understood as a constrained engineering artifact, not as a certified cryptographic module. It has not undergone formal third-party audit or certification, and its security claims are bounded by the hardware profile described in this document. Local physical attackers, compromised binaries, and side-channel observation remain outside the set of problems this project can fully solve. The mitigations provided here are best-effort hardening measures, not a substitute for secure hardware.
+		
+		The practical value of lwIP-CE is therefore twofold. First, it provides a usable networking and TLS substrate for calculator programs that would otherwise have no realistic path to modern internet protocols. Second, it documents the tradeoffs required to bring such a stack to a nontraditional embedded platform. Future work should focus on external review, continued interoperability testing, broader device sampling for entropy behavior, and continued tightening of the TLS and truststore policy surface.
+		
+		Within those limits, lwIP-CE shows that secure embedded networking on deeply constrained hardware is not a matter of pretending the constraints do not exist. It is a matter of making them explicit, measuring what can be measured, and designing each layer so that the system fails visibly and predictably when those constraints are exceeded.
+		
 
 	\newpage
-	\section{Citations}\small
+	\section{Contributions, References, and AI-Assisted Tooling Disclosure}\small
+	\subsection{Contributions}
 	Special thanks to the following individuals who contributed materially to the project:
 	\begin{table}[htbp]
 		\centering
@@ -1176,6 +1209,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		}
 	\end{table}
 
+	\subsection{References}
 	\begin{table}[htbp]
 		\centering
 		\renewcommand{\arraystretch}{1.12}
@@ -1195,6 +1229,20 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		\end{tabularx}
 		}
 	\end{table}
+
+	\subsection{AI-Assisted Tooling Disclosure}
+	AI-assisted tooling was involved in limited engineering and drafting workflows. AI assistance was used for tasks such as:
+	\begin{itemize}
+		\item Code quality analysis, alongside SAST and manual review.
+		\item Initial scaffolding and review of portions of the TLS handshake control flow.
+		\item Drafting support for explanatory prose and organization.
+		\item Debugging support for selected build, test, and integration issues when manual investigation had not yet identified the cause.
+	\end{itemize}
+
+	Human review, implementation decisions, test interpretation, and final responsibility for the claims and code remain with the project author(s).
+
+	AI assistance is never treated as an authoritative source for cryptographic claims, standards compliance, or empirical results and is subject to the same rigor as any other part of this project. Technical claims in this document are supported by cited references, source inspection, tests, or measured data.
+
 	
 	\newpage
 	\section{Appendixes}
