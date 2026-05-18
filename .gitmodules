@@ -1,6 +1,3 @@
-[submodule "app_tools"]
-	path = app_tools
-	url = https://github.com/CE-Programming/app_tools.git
 [submodule "src/tls/contrib/x25519"]
 	path = src/tls/contrib/x25519
 	url = https://github.com/PeterTillema/X25519_submission.git

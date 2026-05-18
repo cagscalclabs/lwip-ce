@@ -22,7 +22,6 @@
 #include "lwip/stats.h"
 #include "lwip/snmp.h"
 #include "lwip/pbuf.h"
-#include "lwip/dhcp.h"
 #include "usb_ethernet.h" /* Communications Data Class header file */
 #include "mem.h"
 #include "lwip/netif.h"
@@ -31,7 +30,6 @@
 #include "lwip/app_config.h"
 
 #define ETH_USB_MAX_RETRIES 5
-#define ETH_START_DHCP_ON_ALL true
 #define ETH_DO_RESTART_ON_ERROR true
 static uint8_t ifnums_used = 0;
 bool eth_disabled_with_error = false;
@@ -364,8 +362,6 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                     if (notify->wValue)
                     {
                         netif_set_link_up(&dev->iface);
-                        if (ETH_START_DHCP_ON_ALL)
-                            dhcp_start(&dev->iface);
                         if (netif_default == NULL)
                         {
                             netif_set_default(&dev->iface);
@@ -471,7 +467,7 @@ usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
     else if (transferred)
     {
         rx_retries = 0;
-        bool pushed = eth_ring_push_frame(dev, recvbuf, (uint16_t)transferred);
+        eth_ring_push_frame(dev, recvbuf, (uint16_t)transferred);
         LINK_STATS_INC(link.recv);
         MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
     }
@@ -572,6 +568,23 @@ static bool ncm_range_fits(size_t offset, size_t len, size_t total)
     return offset <= total && len <= (total - offset);
 }
 
+static usb_error_t ethernet_control_setup(eth_device_t *eth)
+{
+    size_t transferred;
+    usb_control_setup_t packet_filter_request = {
+        0b00100001,
+        REQUEST_SET_ETHERNET_PACKET_FILTER,
+        0x1c,
+        0,
+        0
+    };
+
+    usb_fn.control_transfer(usb_fn.get_device_endpoint(eth->device, 0),
+                            &packet_filter_request, NULL,
+                            USB_CDC_MAX_RETRIES, &transferred);
+    return USB_SUCCESS;
+}
+
 ///------------------------------------------------------------
 /// @brief control setup for @b Network_Control_Model (NCM)
 usb_error_t ncm_control_setup(eth_device_t *eth)
@@ -582,8 +595,6 @@ usb_error_t ncm_control_setup(eth_device_t *eth)
     usb_error_t error = 0;
     usb_control_setup_t get_ntb_params = {0b10100001, REQUEST_GET_NTB_PARAMETERS, 0, 0, 0x1c};
     usb_control_setup_t ntb_config_request = {0b00100001, REQUEST_SET_NTB_INPUT_SIZE, 0, 0, ncm_device_supports(eth, CAPABLE_NTB_INPUT_SIZE_8BYTE) ? 8 : 4};
-    // usb_control_setup_t multicast_filter_request = {0b00100001, REQUEST_SET_ETHERNET_MULTICAST_FILTERS, 0, 0, 0};
-    usb_control_setup_t packet_filter_request = {0b00100001, REQUEST_SET_ETHERNET_PACKET_FILTER, 0x01, 0, 0};
     struct _ntb_config_data ntb_config_data = {NCM_RX_NTB_MAX_SIZE, NCM_RX_MAX_DATAGRAMS, 0};
 
     /* Query NTB Parameters for device (NCM devices) */
@@ -591,10 +602,6 @@ usb_error_t ncm_control_setup(eth_device_t *eth)
 
     /* Set NTB Max Input Size to 2048 (recd minimum NCM spec v 1.2) */
     error |= usb_fn.control_transfer(usb_fn.get_device_endpoint(eth->device, 0), &ntb_config_request, &ntb_config_data, USB_CDC_MAX_RETRIES, &transferred);
-
-    /* Reset packet filters */
-    if (ncm_device_supports(eth, CAPABLE_ETHERNET_PACKET_FILTER))
-        error |= usb_fn.control_transfer(usb_fn.get_device_endpoint(eth->device, 0), &packet_filter_request, NULL, USB_CDC_MAX_RETRIES, &transferred);
 
     return error;
 }
@@ -1008,6 +1015,9 @@ bool init_ethernet_usb_device(usb_device_t device)
     }
     return false;
 init_success:
+    if (ethernet_control_setup(&tmp))
+        return false;
+
     if (ncm_control_setup(&tmp))
         return false;
 
