@@ -60,3 +60,6 @@ doc/whitepaper/datasets/**/.DS_Store
 
 # local documentation tooling and outputs
 tools/
+
+# local transcription scratch (whisperx venv, audio downloads, outputs)
+.transcripts/

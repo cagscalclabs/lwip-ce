@@ -1098,7 +1098,50 @@ Before beginning this project we needed to itemize what was available and what w
 	The workflow pipeline runs these layers independently so long-running profiling does not block deterministic unit validation. Unit results provide hard regression gates; profiling results provide ongoing security/performance telemetry and flag areas requiring deeper analysis. Together, they form a practical validation model for a constrained platform: strict correctness checks where determinism is expected, and measured characterization where hardware/runtime noise is unavoidable.
 	
 	As with the rest of this document, these tests support engineering confidence and change control, but do not constitute external certification. Their purpose is to make assumptions explicit, catch regressions early, and provide reproducible evidence for design and security claims. The timing framework is intended to detect input-dependent regression and structural timing drift, not to serve as a formal leakage proof under adversarial averaging models.
-	
+
+	\subsubsection{Continuous Integration}
+	\label{ssec:ci}
+
+	Test execution is structured for reviewability rather than just pass/fail signaling. Both the deterministic unit suite and the differential timing profiler run on every push via GitHub Actions, with each workflow producing a self-contained job summary intended to be readable as an audit artifact without reference to source.
+
+	The unit-test job summary surfaces, for each unit, the RFC and section identifier the tests are derived from (recorded as part of test metadata at authoring time). On failure, the specific RFC test vector that diverged is reported rather than just the failing unit, so a reader can immediately locate the corresponding normative reference. The differential timing profiler emits a per-build chart of class-versus-calibration deviations directly into the job summary, alongside per-primitive median and exceedance-rate tables, so trend drift across builds is visible without downloading raw logs.
+
+	The latest workflow runs are accessible at \url{https://github.com/cagscalclabs/lwip-ce/actions}.
+
+	One deliberate exclusion is worth documenting: the RNG unit tests are not part of the automated CI pipeline. The CI environment executes against \texttt{CEmu}, whose SRAM emulation is deterministic and does not reproduce the physical bitline behavior the entropy source depends on. Emulated RNG output is therefore statistically meaningless for the purposes of this implementation, and incidental emulator-quirk failures during source selection would block unrelated regression gates. RNG validation is instead performed against hardware captures, following the protocol described in Section~\ref{ssec:contributing_data}.
+
+	\subsubsection{Community Data Contributions}
+	\label{ssec:contributing_data}
+
+	Two of the analyses in this document --- the empirical correlation calibration in Section~\ref{ssec:correlation_calibration} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
+
+	\paragraph{What to capture}
+	Two on-device tools produce the submission artifacts:
+	\begin{itemize}
+		\item \textbf{RNG calibration capture.} Produces a series of AppVars, half for raw source output (R0) and half for 16-XOR conditioned output (R17). The output is sharded across multiple AppVars because individual AppVar size and on-device pagination limits prevent emitting a single contiguous file. A companion Python script (in \texttt{doc/whitepaper/scripts/}) parses the submitted AppVars, treats each byte as eight independent bit streams (bit position 1 across all bytes is one stream, bit position 2 another, and so on), and performs per-stream Bernoulli analysis. This per-bit-column treatment is the empirical mirror of the proof's accounting assumption in Section~\ref{ssec:entropy} that credits at most one entropy-bearing bit per source byte.
+		\item \textbf{Differential timing capture.} Produces a structured log file using a \texttt{key=value} record format. Each unit's calibration class and per-class results are emitted with explicit denotation so the upstream analysis can locate each unit and its associated measurements by regular expression. The log can be exfiltrated via standard AppVar transfer.
+	\end{itemize}
+
+	\paragraph{Device identification}
+	Contributions are most useful when accompanied by enough device metadata to locate the submission within the broader sample population. At minimum:
+	\begin{itemize}
+		\item Hardware revision (visible on the back-label sticker or via \texttt{[mode]} $\rightarrow$ \texttt{[about]}).
+		\item Operating system version.
+		\item Boot code version, where reported by the device.
+	\end{itemize}
+	Contributors who are unsure which revision they hold are encouraged to submit anyway with whatever metadata they can identify; the project can usually disambiguate from the supplied OS and boot-code strings.
+
+	\paragraph{How to submit}
+	Submissions can be sent via either channel below:
+	\begin{itemize}
+		\item Project Discord: \url{https://discord.gg/CtEq3rXZGJ} --- a dedicated channel exists for capture submissions and questions about the protocol.
+		\item Direct email: \texttt{info@cagscalclabs.net} --- preferred when attaching large AppVar bundles.
+	\end{itemize}
+	The capture tool itself, its source, and the parsing scripts are versioned within this repository; contributors are asked to record which tool version produced their submission so the analysis pipeline can account for any schema changes between releases.
+
+	\paragraph{Privacy and licensing}
+	The project does not collect personally identifying information from contributors and does not maintain an attribution roster for submitted captures. This is a deliberate privacy-by-design choice: the community includes minors, and the analytical value of a capture is determined entirely by the device metadata accompanying it (hardware revision, OS version, boot code), not by the identity of the submitter. Captures are processed and incorporated into the published dataset under the project's existing license; once accepted, a capture is not retraceable to its submitter through any project-controlled record. Contributors who wish to be visible may of course identify themselves publicly on Discord or in GitHub discussions, but the project itself maintains no such linkage.
+
 	\subsection{Profiling and Mitigating Platform Security Limitations}
 	
 	\subsubsection{The TI-84+ CE Hardware Security Profile}

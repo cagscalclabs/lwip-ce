@@ -167,6 +167,27 @@ static bool tls_ring_write_pbuf(altcp_tls_ce_state_t *state, const struct pbuf *
     return true;
 }
 
+/* Transport write hook used by handshake.c for alerts and close_notify.
+ * The handshake context stores this as a function pointer set in
+ * altcp_tls_ce_setup, so handshake code does not depend on lwIP/altcp. */
+static bool altcp_tls_ce_transport_write(void *transport_arg,
+                                         const uint8_t *data, size_t len)
+{
+    altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)transport_arg;
+    if (!state || !state->conn || !state->conn->inner_conn || !data || len == 0)
+    {
+        return false;
+    }
+    err_t err = altcp_write(state->conn->inner_conn, data, (u16_t)len,
+                            TCP_WRITE_FLAG_COPY);
+    if (err != ERR_OK)
+    {
+        return false;
+    }
+    (void)altcp_output(state->conn->inner_conn);
+    return true;
+}
+
 /* Variable prototype for function table */
 extern const struct altcp_functions altcp_tls_ce_functions;
 
@@ -1098,6 +1119,10 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     /* Set SNI hostname if configured */
     state->tls_ctx.hostname = config->hostname;
 
+    /* Wire the transport write hook so handshake.c can emit alerts and
+     * close_notify without depending on lwIP/altcp directly. */
+    tls_set_transport(&state->tls_ctx, altcp_tls_ce_transport_write, state);
+
     altcp_tls_ce_setup_callbacks(conn, inner_conn);
     conn->inner_conn = inner_conn;
     conn->fns = &altcp_tls_ce_functions;
@@ -1326,6 +1351,18 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
     if (conn == NULL)
     {
         return ERR_VAL;
+    }
+
+    /* Best-effort: send TLS close_notify before tearing down the TCP side.
+     * If the handshake never completed, tls_send_close_notify will simply
+     * emit a plaintext alert (or skip if no transport is wired). */
+    if (conn->state)
+    {
+        altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
+        if (state && (state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+        {
+            (void)tls_send_close_notify(&state->tls_ctx);
+        }
     }
 
     inner_conn = conn->inner_conn;

@@ -1,9 +1,166 @@
 /**
  * @file handshake.c
- * @brief TLS 1.3 Handshake Protocol - PSK Mode Implementation
+ * @brief TLS 1.3 Handshake Protocol — Client implementation for eZ80
  *
- * This implements the TLS 1.3 handshake flow using Pre-Shared Keys (PSK).
- * TODOs mark functions that need implementation or optimization.
+ * ============================================================================
+ * READER'S GUIDE
+ * ============================================================================
+ *
+ * If you've never read this file before, this section is the only one you
+ * need to understand the rest. The flow chart below is what TLS 1.3 actually
+ * does on the wire; the code below this comment is just an implementation
+ * of it.
+ *
+ *
+ * 1. WHAT A TLS 1.3 HANDSHAKE LOOKS LIKE
+ * --------------------------------------
+ *
+ *   FULL HANDSHAKE (ECDHE, e.g. first visit to https://example.com)
+ *
+ *     Client                                            Server
+ *     ------                                            ------
+ *     ClientHello       ---------------->
+ *      + key_share (x25519 public key)
+ *      + supported_versions (TLS 1.3)
+ *      + server_name (SNI)
+ *
+ *                       <----------------     ServerHello
+ *                                              + key_share (server x25519 pub)
+ *                       <----------------     [now encrypted under HS keys]
+ *                                             EncryptedExtensions
+ *                                             Certificate
+ *                                             CertificateVerify   (skipped here)
+ *                                             Finished
+ *
+ *     [client derives application keys]
+ *     [encrypted under HS keys]
+ *     Finished          ---------------->
+ *
+ *     [encrypted under APP keys from here on]
+ *     ApplicationData   <--------------->     ApplicationData
+ *                       <----------------     NewSessionTicket (PSK for next time)
+ *
+ *
+ *   RESUMPTION HANDSHAKE (PSK, e.g. reconnecting with a saved ticket)
+ *
+ *     ClientHello       ---------------->
+ *      + pre_shared_key (the saved PSK identity + binder MAC)
+ *      + psk_key_exchange_modes
+ *      + (optional) key_share for PSK+(EC)DHE
+ *
+ *                       <----------------     ServerHello
+ *                                              + pre_shared_key (which one)
+ *                       <----------------     [encrypted under HS keys]
+ *                                             EncryptedExtensions
+ *                                             Finished       (no Certificate!)
+ *
+ *     [encrypted under HS keys]
+ *     Finished          ---------------->
+ *
+ *     ApplicationData   <--------------->     ApplicationData
+ *
+ *
+ * 2. THE KEY SCHEDULE (RFC 8446 §7.1)
+ * ------------------------------------
+ *
+ * Every secret below is 32 bytes (SHA-256 output size). HKDF-Extract and
+ * HKDF-Expand-Label are HMAC-SHA256-based primitives defined in §7.1.
+ *
+ *     Initial salt = 32 zero bytes
+ *     Initial IKM  = either PSK (resumption) or 32 zero bytes (full HS)
+ *
+ *     early_secret      = HKDF-Extract(salt=0, IKM=PSK or 0)
+ *     (binder_key, etc derived from early_secret if PSK in use)
+ *
+ *     handshake_secret  = HKDF-Extract(salt=Derive(early_secret,"derived"),
+ *                                      IKM=ECDHE shared or 0)
+ *
+ *       c_hs_traffic    = Derive(handshake_secret, "c hs traffic", ClientHello..ServerHello)
+ *       s_hs_traffic    = Derive(handshake_secret, "s hs traffic", ClientHello..ServerHello)
+ *
+ *     master_secret     = HKDF-Extract(salt=Derive(handshake_secret,"derived"), IKM=0)
+ *
+ *       c_ap_traffic    = Derive(master_secret, "c ap traffic", ClientHello..server Finished)
+ *       s_ap_traffic    = Derive(master_secret, "s ap traffic", ClientHello..server Finished)
+ *
+ *       resumption_master = Derive(master_secret, "res master", ClientHello..client Finished)
+ *
+ * From each traffic secret we derive a 16-byte AES-128 key and a 12-byte
+ * static IV using HKDF-Expand-Label with labels "key" and "iv".
+ *
+ *
+ * 3. THE RECORD LAYER (RFC 8446 §5)
+ * ----------------------------------
+ *
+ * Every byte on the wire after ClientHello/ServerHello is a TLS record:
+ *
+ *     +---------+--------+--------+----------------+
+ *     |  type   |  0x03  |  0x03  | length (2B BE) |   <- 5-byte header
+ *     +---------+--------+--------+----------------+
+ *     |           encrypted payload + 16B tag      |
+ *     +---------------------------------------------+
+ *
+ * Type byte is 0x17 (application_data) for *everything* encrypted — the real
+ * inner content type (handshake / alert / app data) is a single byte appended
+ * to the plaintext *before* AEAD encryption, then we strip trailing zero
+ * padding to find it on decrypt.
+ *
+ * AEAD nonce is the static IV XOR'd with the per-direction sequence counter,
+ * right-aligned to the last 8 bytes (RFC 8446 §5.3). Sequence counters are
+ * separate for handshake and application phases — they do NOT reset.
+ *
+ *
+ * 4. WHAT THIS IMPLEMENTATION SKIPS (DELIBERATELY)
+ * -------------------------------------------------
+ *
+ *   - CertificateVerify signature checking. The peer's cert chain is still
+ *     parsed and the end-entity SPKI is matched against a compiled-in
+ *     truststore (SPKI pinning). We do this because RSA/ECDSA signature
+ *     verification is too slow on an eZ80 for an interactive handshake.
+ *   - 0-RTT / early_data.
+ *   - HelloRetryRequest negotiation — we only ever offer x25519, so if the
+ *     server demands a different group we just abort.
+ *   - Server-side handshake (this is a client-only implementation; the
+ *     altcp layer has a server entry point that returns "not implemented").
+ *
+ *
+ * 5. STATE MACHINE
+ * ----------------
+ *
+ *   INIT
+ *    └─> CLIENT_HELLO_SENT
+ *         └─> SERVER_HELLO_RECEIVED
+ *              └─> HANDSHAKE_KEYS_DERIVED   (derived by altcp layer, not here)
+ *                   └─> ENCRYPTED_EXTENSIONS_RECEIVED
+ *                        ├─[ECDHE]─> CERTIFICATE_RECEIVED
+ *                        │            └─> CERTIFICATE_VERIFY_RECEIVED
+ *                        │                 └─> SERVER_FINISHED_RECEIVED
+ *                        │                      └─> HANDSHAKE_COMPLETE
+ *                        └─[PSK-only]──────────> SERVER_FINISHED_RECEIVED
+ *                                                 └─> HANDSHAKE_COMPLETE
+ *
+ *   Any parse/MAC/state error -> ERROR (terminal, connection aborted).
+ *
+ *
+ * 6. FILE LAYOUT
+ * --------------
+ *
+ *   - Transcript hash helpers (init/update/digest).
+ *   - tls_parse_handshake_header / tls_build_aead_nonce — shared utilities.
+ *   - tls_consume_handshake_buffer + tls_dispatch_inner_handshake —
+ *     cross-record reassembly and message routing.
+ *   - tls_process_record — top-level entry point for an incoming record.
+ *   - tls_handshake_init + tls_send_client_hello — outbound setup.
+ *   - tls_recv_server_hello / encrypted_extensions / certificate /
+ *     certificate_verify / finished — inbound handlers, one per message type.
+ *   - tls_derive_handshake_keys / tls_derive_application_keys — key schedule.
+ *   - tls_encrypt_data / tls_decrypt_data / tls_encrypt_record /
+ *     tls_decrypt_record — record layer crypto.
+ *   - tls_recv_new_session_ticket — post-handshake PSK update.
+ *   - tls_set_transport / tls_send_alert / tls_send_close_notify — outbound
+ *     alerts and orderly shutdown.
+ *
+ * ============================================================================
  */
 
 #include "../includes/handshake.h"
@@ -63,6 +220,289 @@ static void transcript_hash_digest(struct tls_hash_context *ctx,
     tls_hash_digest(&ctx_copy, digest);
 }
 
+/*
+ * ============================================================================
+ * Common helpers
+ * ============================================================================
+ */
+
+/**
+ * @brief Parse a TLS handshake message header at @p data and return its length.
+ *
+ * Validates the type byte, parses the 3-byte big-endian length, and confirms
+ * the payload fits within @p data_len. On success, @p out_msg_len receives the
+ * message body length (excluding the 4-byte header) and the return value is
+ * the offset of the body (always 4).
+ *
+ * @return 4 on success, 0 on type mismatch or bounds error.
+ */
+static size_t tls_parse_handshake_header(const uint8_t *data, size_t data_len,
+                                         uint8_t expected_type,
+                                         size_t *out_msg_len)
+{
+    if (!data || data_len < 4)
+    {
+        return 0;
+    }
+    if (data[0] != expected_type)
+    {
+        return 0;
+    }
+    size_t msg_len = ((size_t)data[1] << 16) |
+                     ((size_t)data[2] << 8) |
+                     (size_t)data[3];
+    if (4 + msg_len > data_len)
+    {
+        return 0;
+    }
+    if (out_msg_len)
+    {
+        *out_msg_len = msg_len;
+    }
+    return 4;
+}
+
+/* Forward decl — the dispatcher needs it; full body lives further down. */
+static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
+                                         uint8_t msg_type,
+                                         const uint8_t *msg, size_t msg_len);
+
+/**
+ * @brief Build the TLS 1.3 AEAD nonce: static IV XOR right-aligned seq number.
+ *
+ * RFC 8446 §5.3. Caller provides the 12-byte static IV (one of the four
+ * traffic IVs in tls_traffic_keys) and the per-direction sequence counter.
+ * Does not advance @p seq_num — the caller still owns it.
+ */
+static void tls_build_aead_nonce(const uint8_t iv[12], uint64_t seq_num,
+                                 uint8_t out_nonce[12])
+{
+    memcpy(out_nonce, iv, 12);
+    for (size_t i = 0; i < 8; i++)
+    {
+        out_nonce[4 + i] ^= (uint8_t)((seq_num >> (56 - i * 8)) & 0xFF);
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * Handshake message reassembly (cross-record).
+ *
+ * TLS 1.3 servers may fragment a handshake message across multiple encrypted
+ * records (RFC 8446 §5.1). When the tail of a decrypted buffer doesn't
+ * contain a full message, we copy it into ctx->hs_reasm_buf and resume on
+ * the next record. Anything beyond TLS_HS_REASSEMBLY_MAX is fatal.
+ * ------------------------------------------------------------------------ */
+
+static void tls_hs_reasm_reset(struct tls_handshake_context *ctx)
+{
+    if (ctx->hs_reasm_buf)
+    {
+        mem_buffer_custom_free(ctx->hs_reasm_buf);
+        ctx->hs_reasm_buf = NULL;
+    }
+    ctx->hs_reasm_cap = 0;
+    ctx->hs_reasm_len = 0;
+    ctx->hs_reasm_expected = 0;
+}
+
+/* Ensure the reassembly buffer has at least `need` bytes of capacity. */
+static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
+{
+    if (need > TLS_HS_REASSEMBLY_MAX)
+    {
+        return false;
+    }
+    if (ctx->hs_reasm_cap >= need)
+    {
+        return true;
+    }
+    /* Start small (128 B handles header + most short messages) and double
+     * geometrically only as bytes arrive. Capped at TLS_HS_REASSEMBLY_MAX.
+     * We never pre-allocate the full 16K — fragmentation is rare in practice. */
+    size_t new_cap = ctx->hs_reasm_cap ? ctx->hs_reasm_cap * 2 : 128;
+    while (new_cap < need)
+    {
+        new_cap *= 2;
+    }
+    if (new_cap > TLS_HS_REASSEMBLY_MAX)
+    {
+        new_cap = TLS_HS_REASSEMBLY_MAX;
+    }
+    uint8_t *nb = (uint8_t *)mem_buffer_custom_malloc(new_cap);
+    if (!nb)
+    {
+        return false;
+    }
+    if (ctx->hs_reasm_len)
+    {
+        memcpy(nb, ctx->hs_reasm_buf, ctx->hs_reasm_len);
+    }
+    if (ctx->hs_reasm_buf)
+    {
+        mem_buffer_custom_free(ctx->hs_reasm_buf);
+    }
+    ctx->hs_reasm_buf = nb;
+    ctx->hs_reasm_cap = new_cap;
+    return true;
+}
+
+/**
+ * @brief Process a buffer of decrypted handshake bytes, dispatching each
+ *        complete message and spilling the tail into reassembly storage.
+ *
+ * On entry, if hs_reasm_expected != 0 we are continuing a previously-spilled
+ * message: appended bytes are added to hs_reasm_buf and the whole message
+ * dispatched once complete.
+ *
+ * @return true on clean dispatch (possibly with partial tail spilled),
+ *         false on fatal parse/dispatch error (caller must abort).
+ */
+static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
+                                         const uint8_t *buf, size_t buf_len)
+{
+    size_t off = 0;
+
+    /* If we previously spilled a partial header (1-3 bytes) we don't yet
+     * know the full message size. Top up to 4 bytes, learn the length, and
+     * promote to a normal in-progress reassembly. */
+    if (ctx->hs_reasm_expected == 0 && ctx->hs_reasm_len > 0 &&
+        ctx->hs_reasm_len < 4)
+    {
+        size_t need = 4 - ctx->hs_reasm_len;
+        size_t take = (buf_len < need) ? buf_len : need;
+        memcpy(ctx->hs_reasm_buf + ctx->hs_reasm_len, buf, take);
+        ctx->hs_reasm_len += take;
+        off += take;
+        if (ctx->hs_reasm_len < 4)
+        {
+            return true; /* Still need more header bytes. */
+        }
+        size_t body_len = ((size_t)ctx->hs_reasm_buf[1] << 16) |
+                          ((size_t)ctx->hs_reasm_buf[2] << 8) |
+                          (size_t)ctx->hs_reasm_buf[3];
+        ctx->hs_reasm_expected = 4 + body_len;
+        if (ctx->hs_reasm_expected > TLS_HS_REASSEMBLY_MAX)
+        {
+            tls_hs_reasm_reset(ctx);
+            return false;
+        }
+    }
+
+    /* If we were mid-reassembly, top up first. */
+    if (ctx->hs_reasm_expected != 0)
+    {
+        size_t need = ctx->hs_reasm_expected - ctx->hs_reasm_len;
+        size_t take = (buf_len < need) ? buf_len : need;
+        if (!tls_hs_reasm_grow(ctx, ctx->hs_reasm_len + take))
+        {
+            tls_hs_reasm_reset(ctx);
+            return false;
+        }
+        memcpy(ctx->hs_reasm_buf + ctx->hs_reasm_len, buf, take);
+        ctx->hs_reasm_len += take;
+        off += take;
+
+        if (ctx->hs_reasm_len < ctx->hs_reasm_expected)
+        {
+            return true; /* Still incomplete; wait for more. */
+        }
+
+        /* We have a full reassembled message — dispatch it, then continue
+         * draining whatever follows in `buf`. */
+        uint8_t msg_type = ctx->hs_reasm_buf[0];
+        size_t msg_total = ctx->hs_reasm_expected;
+        bool ok = tls_dispatch_inner_handshake(ctx, msg_type,
+                                               ctx->hs_reasm_buf, msg_total);
+        tls_hs_reasm_reset(ctx);
+        if (!ok)
+        {
+            return false;
+        }
+    }
+
+    /* Drain complete messages from `buf`. */
+    while (off + 4 <= buf_len)
+    {
+        uint8_t msg_type = buf[off];
+        size_t body_len = ((size_t)buf[off + 1] << 16) |
+                          ((size_t)buf[off + 2] << 8) |
+                          (size_t)buf[off + 3];
+        size_t total = 4 + body_len;
+
+        if (total > TLS_HS_REASSEMBLY_MAX)
+        {
+            /* Honestly-formed but ludicrously large — record_overflow. */
+            return false;
+        }
+
+        if (off + total > buf_len)
+        {
+            /* Partial message — spill the remainder into reassembly. */
+            size_t have = buf_len - off;
+            if (!tls_hs_reasm_grow(ctx, total))
+            {
+                return false;
+            }
+            memcpy(ctx->hs_reasm_buf, buf + off, have);
+            ctx->hs_reasm_len = have;
+            ctx->hs_reasm_expected = total;
+            return true;
+        }
+
+        if (!tls_dispatch_inner_handshake(ctx, msg_type, buf + off, total))
+        {
+            return false;
+        }
+        off += total;
+    }
+
+    /* If we have a leftover header fragment (1-3 bytes), spill it too. */
+    if (off < buf_len)
+    {
+        size_t have = buf_len - off;
+        /* We can't know the full size yet — stash and ask grow() for at least
+         * 4 bytes so a follow-up call can read the length. */
+        if (!tls_hs_reasm_grow(ctx, 4))
+        {
+            return false;
+        }
+        memcpy(ctx->hs_reasm_buf, buf + off, have);
+        ctx->hs_reasm_len = have;
+        ctx->hs_reasm_expected = 0; /* Length not yet known. */
+    }
+
+    return true;
+}
+
+/**
+ * @brief Dispatch one complete inner handshake message (header + body).
+ *
+ * Called from tls_consume_handshake_buffer once a whole message is in hand
+ * (either contiguous in the decrypted record or freshly reassembled). The
+ * underlying per-type parser still validates its own header and length.
+ */
+static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
+                                         uint8_t msg_type,
+                                         const uint8_t *msg, size_t msg_len)
+{
+    switch (msg_type)
+    {
+    case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
+        return tls_recv_encrypted_extensions(ctx, msg, msg_len);
+    case TLS_HANDSHAKE_CERTIFICATE:
+        return tls_recv_certificate(ctx, msg, msg_len);
+    case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
+        return tls_recv_certificate_verify(ctx, msg, msg_len);
+    case TLS_HANDSHAKE_FINISHED:
+        return tls_recv_finished(ctx, true, msg, msg_len);
+    case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
+        return tls_recv_new_session_ticket(ctx, msg, msg_len);
+    default:
+        /* Unknown inner type — ignore per RFC 8446 §4 forward-compat note. */
+        return true;
+    }
+}
+
 static size_t tls_padded_id_len(const uint8_t *id, size_t max_len)
 {
     size_t len = 0;
@@ -113,6 +553,34 @@ static bool tls_subject_cn_matches_owner_id(const struct tls_asn1_serialization 
  * };
  */
 
+/**
+ * @brief Top-level entry point for one complete TLS record from the wire.
+ *
+ * The altcp layer collects a full record (5-byte header + payload) into
+ * `data` and hands it here. We branch on the outer content type:
+ *
+ *  - HANDSHAKE (0x16): plaintext handshake records. In TLS 1.3 these are
+ *    only legal for ClientHello/ServerHello — any later plaintext handshake
+ *    is rejected because all post-ServerHello handshake messages must come
+ *    in encrypted application_data records.
+ *
+ *  - CHANGE_CIPHER_SPEC (0x14): middlebox-compatibility leftover. Ignored.
+ *
+ *  - ALERT (0x15) plaintext: rare (servers should encrypt alerts post-EE)
+ *    but legal pre-keys. Fatal alerts flip the state to ERROR.
+ *
+ *  - APPLICATION_DATA (0x17): in TLS 1.3 this is the wrapper for *every*
+ *    encrypted record. We decrypt under whichever traffic keys are active
+ *    (handshake or application phase), extract the real inner content
+ *    type, and dispatch accordingly:
+ *      * inner=HANDSHAKE: feed into the reassembly-aware dispatcher.
+ *      * inner=ALERT: parse level/description; fatal => ERROR.
+ *      * inner=APPLICATION_DATA: only legal post-handshake; handled by
+ *        the altcp layer in handle_rx_appldata, not here.
+ *
+ * Returns true on successful processing (which includes "alert received,
+ * carry on"), false on fatal protocol/parse error.
+ */
 bool tls_process_record(struct tls_handshake_context *ctx,
                         const uint8_t *data,
                         size_t data_len)
@@ -230,78 +698,20 @@ bool tls_process_record(struct tls_handshake_context *ctx,
 
         if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE)
         {
-            /* Process decrypted handshake messages.
-             *
-             * LIMITATION: Each handshake message must fit entirely within a
-             * single TLS record. Cross-record handshake message fragmentation
-             * (where a message spans two encrypted records) is not supported.
-             * In practice, servers fit handshake messages within the 16KB
-             * record limit. If a message spans records, the handshake will
-             * fail at the msg_end > dec_len check below. */
-            size_t offset = 0;
-            while (offset + 4 <= dec_len)
-            {
-                uint8_t msg_type = dec_buf[offset];
-                size_t msg_len = ((size_t)dec_buf[offset + 1] << 16) |
-                                 ((size_t)dec_buf[offset + 2] << 8) |
-                                 (size_t)dec_buf[offset + 3];
-                size_t msg_end = offset + 4 + msg_len;
-
-                if (msg_end > dec_len)
-                {
-                    mem_buffer_custom_free(dec_buf);
-                    return false;
-                }
-
-                switch (msg_type)
-                {
-                case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
-                    if (!tls_recv_encrypted_extensions(ctx, dec_buf + offset, msg_end - offset))
-                    {
-                        mem_buffer_custom_free(dec_buf);
-                        return false;
-                    }
-                    break;
-                case TLS_HANDSHAKE_CERTIFICATE:
-                    if (!tls_recv_certificate(ctx, dec_buf + offset, msg_end - offset))
-                    {
-                        mem_buffer_custom_free(dec_buf);
-                        return false;
-                    }
-                    break;
-                case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
-                    if (!tls_recv_certificate_verify(ctx, dec_buf + offset, msg_end - offset))
-                    {
-                        mem_buffer_custom_free(dec_buf);
-                        return false;
-                    }
-                    break;
-                case TLS_HANDSHAKE_FINISHED:
-                    if (!tls_recv_finished(ctx, true, dec_buf + offset, msg_end - offset))
-                    {
-                        mem_buffer_custom_free(dec_buf);
-                        return false;
-                    }
-                    break;
-                case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
-                    if (!tls_recv_new_session_ticket(ctx, dec_buf + offset, msg_end - offset))
-                    {
-                        mem_buffer_custom_free(dec_buf);
-                        return false;
-                    }
-                    break;
-                default:
-                    break;
-                }
-
-                offset = msg_end;
-            }
+            /* Reassembly-aware dispatch: handles cross-record handshake
+             * message fragmentation up to TLS_HS_REASSEMBLY_MAX. */
+            bool ok = tls_consume_handshake_buffer(ctx, dec_buf, dec_len);
             mem_buffer_custom_free(dec_buf);
-            return (offset == dec_len);
+            if (!ok)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
+                return false;
+            }
+            return true;
         }
         else if (inner_type == TLS_CONTENT_TYPE_ALERT)
         {
-            if (dec_len >= 2 && dec_buf[0] == 2)
+            if (dec_len >= 2 && dec_buf[0] == TLS_ALERT_LEVEL_FATAL)
             {
                 ctx->state = TLS_STATE_ERROR;
             }
@@ -311,6 +721,7 @@ bool tls_process_record(struct tls_handshake_context *ctx,
 
         /* Application data during handshake is unexpected */
         mem_buffer_custom_free(dec_buf);
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
         return false;
     }
 
@@ -326,7 +737,26 @@ bool tls_process_record(struct tls_handshake_context *ctx,
  */
 
 /**
- * @brief Initialize TLS 1.3 PSK handshake context
+ * @brief Initialize a handshake context (resumption-aware).
+ *
+ * If `psk` + `psk_identity` are non-NULL we set up for a resumption
+ * (PSK or PSK+ECDHE) handshake. If they are NULL we set up for a pure-ECDHE
+ * full handshake against a fresh server. Either way, we always generate a
+ * fresh x25519 keypair below — the server may always select PSK+ECDHE.
+ *
+ * Concretely:
+ *   1. Zero the context (prevents accidental key reuse).
+ *   2. Stash PSK + identity (if provided) and set psk_mode accordingly.
+ *   3. Pin the cipher suite to TLS_AES_128_GCM_SHA256 — the only one we
+ *      negotiate. TLS 1.3 only defines a handful of cipher suites; this is
+ *      the universally-supported floor.
+ *   4. Generate a 32-byte client_random by reading 4×uint64 from the TI RNG.
+ *   5. Initialize the running SHA-256 transcript hash. Every handshake
+ *      message we send or receive gets fed into this hash. Key derivation
+ *      and Finished MACs all depend on its value at various snapshot points.
+ *   6. Generate a fresh ephemeral x25519 keypair for ECDHE key_share. We
+ *      include this in every ClientHello regardless of mode; the server
+ *      picks whether to use it.
  */
 bool tls_handshake_init(
     struct tls_handshake_context *ctx,
@@ -397,17 +827,49 @@ bool tls_handshake_init(
 }
 
 /**
- * @brief Generate ClientHello message
+ * @brief Build a TLS 1.3 ClientHello.
  *
- * Message structure:
- * - HandshakeType (1 byte): 0x01 (ClientHello)
- * - Length (3 bytes): Total message length
- * - ProtocolVersion (2 bytes): 0x0303 (legacy TLS 1.2)
- * - Random (32 bytes): Client random nonce
- * - SessionID (1 byte length + data): Empty for TLS 1.3
- * - CipherSuites (2 byte length + data): TLS_AES_128_GCM_SHA256
- * - CompressionMethods (1 byte length + data): null compression
- * - Extensions: supported_versions, psk_key_exchange_modes, pre_shared_key
+ * On-wire layout (lengths are *bytes*, all multi-byte fields big-endian):
+ *
+ *    +----+------------+--------+------+---------+---------+----------+----+
+ *    | 01 | length(3)  | 0303   | rand | sid(1+) | cs(2+)  | cmpr(1+) | ex |
+ *    +----+------------+--------+------+---------+---------+----------+----+
+ *      ^      ^           ^       ^       ^          ^         ^        ^
+ *      |      |           |       |       |          |         |        |
+ *      |      |           |       |       |          |         |        +-- extensions block
+ *      |      |           |       |       |          |         +-- compression_methods (always 0x00)
+ *      |      |           |       |       |          +-- cipher_suites (just 0x1301)
+ *      |      |           |       |       +-- legacy session ID (empty / 32B echo)
+ *      |      |           |       +-- 32-byte client_random
+ *      |      |           +-- legacy_version 0x0303 (TLS 1.2 — TLS 1.3 hides in extensions)
+ *      |      +-- 3-byte body length, filled in once we know it
+ *      +-- handshake type 0x01
+ *
+ * The interesting work is in the extensions block. We always emit:
+ *
+ *    supported_versions     : tells the server we speak TLS 1.3
+ *    supported_groups       : just x25519
+ *    key_share              : our ephemeral x25519 pubkey
+ *    psk_key_exchange_modes : if PSK mode, advertise psk_dhe_ke
+ *    server_name            : SNI hostname (if set)
+ *    pre_shared_key         : MUST be last — see binder comment below
+ *
+ * PSK BINDER (RFC 8446 §4.2.11.2). When pre_shared_key is present, the
+ * client MUST prove knowledge of the PSK by including a binder MAC. The
+ * binder is HMAC(finished_key, transcript_hash(ClientHello-up-to-binders)).
+ *
+ * The tricky bit: the transcript hash must cover ClientHello *up to but
+ * not including* the binders field, otherwise the binder would depend on
+ * itself. That's why this function:
+ *
+ *   1. Serializes the whole ClientHello including the pre_shared_key
+ *      extension *with the binders length and a zeroed binder placeholder*.
+ *   2. Snapshots the running transcript hash at the byte offset just
+ *      before the binders.
+ *   3. Computes the binder MAC over that snapshot.
+ *   4. Patches the binder bytes into the placeholder.
+ *   5. Finally feeds the full message (including patched binder) into the
+ *      transcript hash for subsequent key derivation.
  */
 bool tls_send_client_hello(
     struct tls_handshake_context *ctx,
@@ -678,17 +1140,32 @@ bool tls_send_client_hello(
 }
 
 /**
- * @brief Process ServerHello message
+ * @brief Parse a ServerHello and pull out everything we need to derive keys.
  *
- * Expected structure:
- * - HandshakeType (1 byte): 0x02 (ServerHello)
- * - Length (3 bytes)
- * - ProtocolVersion (2 bytes): 0x0303 (legacy)
- * - Random (32 bytes): Server random
- * - SessionID: Echo of client's (or empty)
- * - CipherSuite (2 bytes): Selected suite
- * - CompressionMethod (1 byte): 0x00
- * - Extensions: supported_versions, pre_shared_key
+ * ServerHello is the server's response to ClientHello. After parsing this
+ * message we have enough material to derive handshake traffic secrets:
+ *
+ *   - server_random (32 bytes, but watch for HelloRetryRequest sentinel —
+ *     RFC 8446 §4.1.3 reserves a specific value to signal HRR. We detect it
+ *     and abort, because we only support x25519 so there's no useful retry).
+ *   - selected cipher suite (must match what we offered).
+ *   - extensions: supported_versions (must indicate TLS 1.3 = 0x0304),
+ *     key_share (server's x25519 pubkey → we compute the ECDHE shared
+ *     secret here via x25519(our_priv, server_pub)), and optionally
+ *     pre_shared_key (which PSK identity the server chose, if any).
+ *
+ * IMPORTANT INVARIANT: this function does NOT derive the handshake keys
+ * itself — it just stashes the ECDHE shared secret and sets state to
+ * SERVER_HELLO_RECEIVED. The altcp layer notices this and calls
+ * tls_derive_handshake_keys() before processing the next (encrypted)
+ * record. The split exists so the transcript hash snapshot used in
+ * derivation includes the ServerHello bytes but nothing after.
+ *
+ * After this function returns true:
+ *   ctx->state                  = TLS_STATE_SERVER_HELLO_RECEIVED
+ *   ctx->ecdhe_shared           = X25519(our_priv, server_pub)  [if ECDHE]
+ *   ctx->ecdhe_negotiated       = true iff server selected ECDHE
+ *   ctx->transcript_hash        = SHA256(ClientHello || ServerHello)
  */
 bool tls_recv_server_hello(
     struct tls_handshake_context *ctx,
@@ -700,24 +1177,15 @@ bool tls_recv_server_hello(
         return false;
     }
 
-    size_t offset = 0;
     bool found_supported_versions = false;
     bool found_psk = false;
 
-    /* Step 1: Verify handshake type */
-    if (data[offset++] != TLS_HANDSHAKE_SERVER_HELLO)
-    {
-        ctx->state = TLS_STATE_ERROR;
-        return false;
-    }
-
-    /* Step 2: Parse length */
-    size_t msg_len = ((size_t)data[offset] << 16) |
-                     ((size_t)data[offset + 1] << 8) |
-                     (size_t)data[offset + 2];
-    offset += 3;
-
-    if (offset + msg_len > data_len)
+    /* Steps 1+2: Verify handshake type and parse length */
+    size_t msg_len = 0;
+    size_t offset = tls_parse_handshake_header(data, data_len,
+                                               TLS_HANDSHAKE_SERVER_HELLO,
+                                               &msg_len);
+    if (offset == 0)
     {
         ctx->state = TLS_STATE_ERROR;
         return false;
@@ -928,16 +1396,43 @@ bool tls_recv_server_hello(
 }
 
 /**
- * @brief Process Certificate message (server -> client)
+ * @brief Parse the server's Certificate message and authenticate via SPKI pin.
  *
- * TLS 1.3 Certificate message structure:
- * - HandshakeType (1 byte): 0x0b (Certificate)
- * - Length (3 bytes): total message length
- * - certificate_request_context (1 byte length + data)
- * - certificate_list (3 byte length):
- *   - For each certificate:
- *     - cert_data (3 byte length + DER-encoded X.509 certificate)
- *     - extensions (2 byte length + extension data)
+ * TLS 1.3 Certificate carries a chain of DER-encoded X.509 certificates,
+ * each tagged with per-cert extensions:
+ *
+ *    +-----------------+
+ *    | type=0x0b len(3)|
+ *    +-----------------+
+ *    | ctx_len(1)  ctx |   (empty for server cert)
+ *    +-----------------+
+ *    | chain_len(3)    |
+ *    +-----------------+---------+---------+
+ *    | cert_len(3) | DER cert ...| ext_len(2) | exts |   <- one CertificateEntry
+ *    +-----------------+---------+---------+
+ *    | cert_len(3) | DER cert ...| ext_len(2) | exts |   <- next entry
+ *    +---...---+
+ *
+ * In a normal TLS implementation the chain is validated up to a trusted
+ * root, then CertificateVerify proves the server controls the matching
+ * private key by signing the transcript.
+ *
+ * On this platform we do neither. Instead we use SPKI PINNING: we extract
+ * the SubjectPublicKeyInfo from the end-entity (first) certificate,
+ * SHA-256 it, and look that hash up in a compiled-in truststore. A match
+ * means "I recognize this exact public key as belonging to a server I
+ * trust" — equivalent in security to certificate pinning but cheaper and
+ * resilient to certificate rotation if the key stays the same.
+ *
+ * GUARD: this function refuses to run in PSK-only mode (psk_mode &&
+ * !ecdhe_negotiated). Per RFC 8446 §2.2 the server MUST NOT send
+ * Certificate in that case; receiving one is a protocol violation.
+ *
+ * Why SPKI pinning is the design choice: RSA-2048 verify takes >2s on an
+ * eZ80, ECDSA P-256 verify is comparably slow. CertificateVerify would be
+ * called once per handshake; the user-visible latency cost is too high for
+ * a calculator. The trade-off is that we can only connect to servers
+ * whose SPKI hash we've pre-loaded into the truststore.
  *
  * This function:
  * 1. Parses the certificate chain
@@ -959,22 +1454,20 @@ bool tls_recv_certificate(
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
-
-    size_t offset = 0;
-
-    /* Verify handshake type */
-    if (data[offset++] != TLS_HANDSHAKE_CERTIFICATE)
+    /* PSK-only mode (psk_mode && !ecdhe_negotiated) authenticates via the PSK
+     * itself; per RFC 8446 §2.2 the server MUST NOT send Certificate. Reject
+     * to keep the state machine honest. */
+    if (ctx->psk_mode && !ctx->ecdhe_negotiated)
     {
+        ctx->state = TLS_STATE_ERROR;
         return false;
     }
 
-    /* Parse message length (3 bytes, big-endian) */
-    size_t msg_len = ((size_t)data[offset] << 16) |
-                     ((size_t)data[offset + 1] << 8) |
-                     (size_t)data[offset + 2];
-    offset += 3;
-
-    if (offset + msg_len > data_len)
+    size_t msg_len = 0;
+    size_t offset = tls_parse_handshake_header(data, data_len,
+                                               TLS_HANDSHAKE_CERTIFICATE,
+                                               &msg_len);
+    if (offset == 0)
     {
         return false;
     }
@@ -1131,17 +1624,24 @@ bool tls_recv_certificate(
 }
 
 /**
- * @brief Process EncryptedExtensions message (server -> client)
+ * @brief Parse the EncryptedExtensions message.
  *
- * TLS 1.3 EncryptedExtensions message structure:
- * - HandshakeType (1 byte): 0x08 (EncryptedExtensions)
- * - Length (3 bytes): total message length
- * - extensions_length (2 bytes)
- * - extensions (variable): list of Extension structures
+ * EncryptedExtensions is the FIRST message protected under handshake keys.
+ * In TLS 1.2 the ServerHello carried extensions in cleartext; in TLS 1.3
+ * most extensions were moved here precisely so eavesdroppers can't see
+ * which servers/protocols a client supports.
  *
- * For PSK mode, this message is typically empty or contains
- * minimal extensions. We parse it for completeness and update
- * the transcript hash.
+ * In practice we don't care about any of the extensions a server might
+ * include here (ALPN, server_name confirmation, etc.) — we just need to:
+ *
+ *   1. Validate the framing (length fields nest correctly).
+ *   2. Walk past every extension to confirm it parses cleanly.
+ *   3. Feed the message bytes into the running transcript hash, because
+ *      the next message's transcript hash snapshot must include it.
+ *   4. Advance state to ENCRYPTED_EXTENSIONS_RECEIVED.
+ *
+ * If a server sends us extensions we don't understand, RFC 8446 §4 says
+ * we should ignore unknown extension types — exactly what we do.
  */
 bool tls_recv_encrypted_extensions(
     struct tls_handshake_context *ctx,
@@ -1153,21 +1653,11 @@ bool tls_recv_encrypted_extensions(
         return false;
     }
 
-    size_t offset = 0;
-
-    /* Verify handshake type */
-    if (data[offset++] != TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS)
-    {
-        return false;
-    }
-
-    /* Parse message length (3 bytes, big-endian) */
-    size_t msg_len = ((size_t)data[offset] << 16) |
-                     ((size_t)data[offset + 1] << 8) |
-                     (size_t)data[offset + 2];
-    offset += 3;
-
-    if (offset + msg_len > data_len)
+    size_t msg_len = 0;
+    size_t offset = tls_parse_handshake_header(data, data_len,
+                                               TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS,
+                                               &msg_len);
+    if (offset == 0)
     {
         return false;
     }
@@ -1228,19 +1718,29 @@ bool tls_recv_encrypted_extensions(
 }
 
 /**
- * @brief Process CertificateVerify message (server -> client)
+ * @brief Parse CertificateVerify; intentionally skip signature verification.
  *
- * TLS 1.3 CertificateVerify message structure:
- * - HandshakeType (1 byte): 0x0f (CertificateVerify)
- * - Length (3 bytes): total message length
- * - algorithm (2 bytes): signature algorithm
- * - signature (2 byte length + signature data)
+ * CertificateVerify is the server's signature over the transcript hash
+ * using the private key corresponding to the certificate it just sent.
+ * In a standard TLS 1.3 stack this is THE binding between "I trust this
+ * cert chain" and "I'm actually talking to that cert's owner."
  *
- * Note: CertificateVerify signature verification is intentionally omitted
- * for now because the currently-available signature implementations are not
- * fast enough for this platform. This is a short-term tradeoff, not full
- * TLS 1.3 certificate authentication. We still require the message to be
- * present and well-formed so the state machine does not silently skip it.
+ * We DON'T verify the signature here. See the long comment on
+ * tls_recv_certificate for the reasoning — RSA/ECDSA verify on eZ80 is
+ * too slow. Instead we trust the SPKI pin from the truststore as proof
+ * the server is who we think it is.
+ *
+ * We DO still:
+ *   - Require the message to be present and well-formed (a missing
+ *     CertificateVerify would let any attacker who got the certificate
+ *     impersonate the server).
+ *   - Require ctx->cert_state.certificate_validated to be true (which
+ *     only happens if SPKI pinning succeeded).
+ *   - Update the transcript hash so the server Finished MAC checks out.
+ *
+ * The skip is a documented trade-off, not a missing TODO. If you ever
+ * add fast signature verification, gate the actual verify here behind an
+ * "if (have_sig_verify)" so the pin check remains the floor.
  */
 bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -1258,21 +1758,11 @@ bool tls_recv_certificate_verify(
         return false;
     }
 
-    size_t offset = 0;
-
-    /* Verify handshake type */
-    if (data[offset++] != TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY)
-    {
-        return false;
-    }
-
-    /* Parse message length (3 bytes, big-endian) */
-    size_t msg_len = ((size_t)data[offset] << 16) |
-                     ((size_t)data[offset + 1] << 8) |
-                     (size_t)data[offset + 2];
-    offset += 3;
-
-    if (offset + msg_len > data_len)
+    size_t msg_len = 0;
+    size_t offset = tls_parse_handshake_header(data, data_len,
+                                               TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY,
+                                               &msg_len);
+    if (offset == 0)
     {
         return false;
     }
@@ -1322,23 +1812,39 @@ bool tls_recv_certificate_verify(
 }
 
 /**
- * @brief Derive handshake keys from PSK
+ * @brief Derive the handshake-phase traffic keys (RFC 8446 §7.1).
  *
- * TLS 1.3 Key Schedule (PSK-only mode):
+ * Called right after we receive ServerHello and before we try to decrypt
+ * the encrypted handshake messages that follow. By this point we know:
  *
- * Early Secret = HKDF-Extract(salt=0, IKM=PSK)
- * Handshake Secret = HKDF-Extract(salt=Derive-Secret(Early Secret, "derived", ""),
- *                                 IKM=0)
- * client_handshake_traffic_secret = Derive-Secret(Handshake Secret,
- *                                                  "c hs traffic",
- *                                                  ClientHello...ServerHello)
- * server_handshake_traffic_secret = Derive-Secret(Handshake Secret,
- *                                                  "s hs traffic",
- *                                                  ClientHello...ServerHello)
+ *   - psk_mode and (if PSK was selected) the PSK itself.
+ *   - ecdhe_negotiated and (if so) ecdhe_shared = X25519(my_priv, server_pub).
+ *   - transcript_hash = SHA256(ClientHello || ServerHello).
  *
- * Then derive keys and IVs from traffic secrets:
- * key = HKDF-Expand-Label(secret, "key", "", 16)
- * iv = HKDF-Expand-Label(secret, "iv", "", 12)
+ * The key schedule below is unified for all four cases (PSK-only,
+ * PSK+ECDHE, ECDHE-only, neither — though that last is illegal):
+ *
+ *   psk_ikm     = psk_mode ? PSK : 32 zero bytes
+ *   ecdhe_ikm   = ecdhe_negotiated ? ecdhe_shared : 32 zero bytes
+ *
+ *   early_secret      = HKDF-Extract(salt=0, IKM=psk_ikm)
+ *   derived1          = HKDF-Expand-Label(early_secret, "derived",
+ *                                         SHA256(""), 32)
+ *   handshake_secret  = HKDF-Extract(salt=derived1, IKM=ecdhe_ikm)
+ *
+ *   c_hs_traffic      = HKDF-Expand-Label(handshake_secret, "c hs traffic",
+ *                                         transcript_hash, 32)
+ *   s_hs_traffic      = HKDF-Expand-Label(handshake_secret, "s hs traffic",
+ *                                         transcript_hash, 32)
+ *
+ * Then from each *_hs_traffic we expand a 16-byte AES key and 12-byte IV:
+ *
+ *   key = HKDF-Expand-Label(secret, "key", "", 16)
+ *   iv  = HKDF-Expand-Label(secret, "iv",  "", 12)
+ *
+ * On exit, ctx->keys.client_handshake_{key,iv} and server_handshake_{key,iv}
+ * are ready for use by tls_encrypt_record/tls_decrypt_record in
+ * handshake-phase mode, and state advances to HANDSHAKE_KEYS_DERIVED.
  */
 bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 {
@@ -1475,16 +1981,39 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 }
 
 /**
- * @brief Derive application keys
+ * @brief Derive the application-phase traffic keys (RFC 8446 §7.1).
  *
- * Continues key schedule to derive application traffic keys:
- * Master Secret = HKDF-Extract(Handshake Secret, 0)
- * client_application_traffic_secret = Derive-Secret(Master Secret,
- *                                                    "c ap traffic",
- *                                                    ClientHello...Finished)
- * server_application_traffic_secret = Derive-Secret(Master Secret,
- *                                                    "s ap traffic",
- *                                                    ClientHello...Finished)
+ * Called by the altcp layer immediately AFTER we verify the server's
+ * Finished MAC but BEFORE we generate our own Finished. Why that ordering?
+ * Because the transcript hash used for application-key derivation is
+ * snapshotted at "everything through server Finished":
+ *
+ *   transcript_hash = SHA256(ClientHello || ... || server Finished)
+ *
+ * If we waited until after our own Finished went out, the hash would
+ * include it and the keys would be wrong by one message.
+ *
+ * Key schedule continues from handshake_secret (saved during
+ * tls_derive_handshake_keys):
+ *
+ *   derived2          = HKDF-Expand-Label(handshake_secret, "derived",
+ *                                         SHA256(""), 32)
+ *   master_secret     = HKDF-Extract(salt=derived2, IKM=0)
+ *
+ *   c_ap_traffic      = HKDF-Expand-Label(master_secret, "c ap traffic",
+ *                                         transcript_hash, 32)
+ *   s_ap_traffic      = HKDF-Expand-Label(master_secret, "s ap traffic",
+ *                                         transcript_hash, 32)
+ *
+ * Same key/IV expansion as the handshake phase. We also save master_secret
+ * for later resumption_master_secret derivation (which happens after our
+ * own Finished is sent — see tls_send_finished tail).
+ *
+ * The application sequence counters (client_seq_num / server_seq_num) are
+ * already zero from tls_handshake_init; they do NOT get reset here, and
+ * the separate handshake sequence counters keep ticking until they fall
+ * out of scope. This is exactly the "no reset on rekey" rule from
+ * RFC 8446 §5.3.
  */
 bool tls_derive_application_keys(struct tls_handshake_context *ctx)
 {
@@ -1598,10 +2127,33 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
 }
 
 /**
- * @brief Generate Finished message
+ * @brief Build the client's Finished message (proves we know the keys).
  *
- * Finished = HMAC(finished_key, transcript_hash)
- * where finished_key = HKDF-Expand-Label(traffic_secret, "finished", "", 32)
+ * Finished is a MAC over the entire handshake transcript that proves
+ * (a) we derived the same handshake_secret as the server, and (b) no
+ * man-in-the-middle has tampered with any handshake message.
+ *
+ *   finished_key = HKDF-Expand-Label(c_hs_traffic, "finished", "", 32)
+ *   verify_data  = HMAC-SHA256(finished_key, transcript_hash)
+ *
+ * The transcript hash here is computed *before* we feed this Finished
+ * message into the running transcript — so it covers everything the
+ * server has seen plus the server's own Finished, but not our reply.
+ * After we emit our Finished and feed it into the transcript, the next
+ * snapshot (used for resumption_master_secret) covers the full handshake.
+ *
+ * Wire layout of the produced message:
+ *
+ *     +----+--------+--------------------+
+ *     | 14 | 00 00 20 |  32-byte HMAC    |
+ *     +----+--------+--------------------+
+ *      ^      ^           ^
+ *      |      |           +-- verify_data
+ *      |      +-- length = 32 (3 bytes BE)
+ *      +-- handshake type 0x14 = Finished
+ *
+ * The caller (altcp layer) then wraps this in an encrypted record using
+ * tls_encrypt_record with handshake keys, and pushes it down the TCP.
  */
 bool tls_send_finished(
     struct tls_handshake_context *ctx,
@@ -1703,7 +2255,30 @@ bool tls_send_finished(
 }
 
 /**
- * @brief Verify Finished message
+ * @brief Verify the server's Finished MAC.
+ *
+ * This is the critical authentication step. Up to this point we've been
+ * trading messages with *someone* — but until we verify a HMAC over the
+ * transcript using a key only the legitimate server should know, we
+ * have no proof of who's on the other end.
+ *
+ * Compute the same MAC the server claims to have computed and compare
+ * in constant time. Mismatch ⇒ MitM, key disagreement, or bug — abort.
+ *
+ *   expected_finished_key = HKDF-Expand-Label(s_hs_traffic, "finished", "", 32)
+ *   expected_verify_data  = HMAC-SHA256(expected_finished_key, transcript_hash)
+ *
+ * The transcript hash at this point covers everything up to but not
+ * including the server's Finished message itself. After verify succeeds
+ * we feed the Finished into the transcript so subsequent derivations
+ * (resumption_master_secret, our own Finished MAC) see the full handshake.
+ *
+ * On failure we set state to ERROR; the caller (the dispatcher) then
+ * emits a fatal alert and aborts the connection.
+ *
+ * State transition: SERVER_HELLO_RECEIVED → SERVER_FINISHED_RECEIVED
+ * (for ECDHE the path is via EE → CERT → CV → here; for PSK only via EE).
+ * The required_state branch enforces that ordering.
  */
 bool tls_recv_finished(
     struct tls_handshake_context *ctx,
@@ -1731,26 +2306,13 @@ bool tls_recv_finished(
     uint8_t transcript_hash[32];
     struct tls_hmac_context hmac_ctx;
     const uint8_t *traffic_secret;
-    size_t offset = 0;
 
-    /* Step 1: Parse Finished message */
-    /* Verify handshake type */
-    if (data[offset++] != TLS_HANDSHAKE_FINISHED)
-    {
-        return false;
-    }
-
-    /* Parse length */
-    size_t msg_len = ((size_t)data[offset] << 16) |
-                     ((size_t)data[offset + 1] << 8) |
-                     (size_t)data[offset + 2];
-    offset += 3;
-
-    if (msg_len != 32 || offset + 32 > data_len)
-    {
-        return false;
-    }
-    if (offset + 32 != data_len)
+    /* Step 1: Parse Finished message header */
+    size_t msg_len = 0;
+    size_t offset = tls_parse_handshake_header(data, data_len,
+                                               TLS_HANDSHAKE_FINISHED,
+                                               &msg_len);
+    if (offset == 0 || msg_len != 32 || offset + 32 != data_len)
     {
         return false;
     }
@@ -1823,13 +2385,52 @@ bool tls_recv_finished(
     return true;
 }
 
+/**
+ * @brief Accept a NewSessionTicket and derive a fresh PSK for next time.
+ *
+ * Sent by the server some time after the handshake completes (it's an
+ * encrypted handshake message under application keys). The ticket lets
+ * us skip the expensive ECDHE+certificate dance on the next connection
+ * by resuming with a PSK instead.
+ *
+ * Wire layout (RFC 8446 §4.6.1):
+ *
+ *     +----+--------+
+ *     | 04 | len(3) |  type 0x04 = NewSessionTicket
+ *     +----+--------+
+ *     | ticket_lifetime (4) |   seconds until ticket expires
+ *     +---------------------+
+ *     | ticket_age_add  (4) |   random offset added to obfuscate age
+ *     +---------------------+
+ *     | nonce_len(1) | nonce ... |
+ *     +---------------------+
+ *     | ticket_len(2) | ticket ...|
+ *     +---------------------+
+ *     | extensions  (RFC 8446 ext block) |
+ *     +----------------------------------+
+ *
+ * What we do with it:
+ *
+ *   resumption_psk = HKDF-Expand-Label(resumption_master_secret, "resumption",
+ *                                      nonce, 32)
+ *
+ * That resumption_psk becomes the PSK we store as ctx->psk (replacing
+ * whatever PSK got us here). The opaque `ticket` field becomes the new
+ * PSK identity — when we resume, we put it in the ClientHello's
+ * pre_shared_key extension.
+ *
+ * We also record sys_now() so we can compute the obfuscated ticket age
+ * (ticket_age_add + (sys_now - received_at)) for the next ClientHello.
+ *
+ * The altcp layer is responsible for persisting (psk, identity) to flash
+ * via the appvar mechanism — see altcp_tls_ce_save_pski.
+ */
 bool tls_recv_new_session_ticket(
     struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len)
 {
-    size_t offset = 0;
-    size_t msg_len;
+    size_t msg_len = 0;
     size_t msg_end;
     uint32_t ticket_lifetime;
     uint32_t ticket_age_add;
@@ -1844,17 +2445,10 @@ bool tls_recv_new_session_ticket(
         return false;
     }
 
-    if (data[offset++] != TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET)
-    {
-        return false;
-    }
-
-    msg_len = ((size_t)data[offset] << 16) |
-              ((size_t)data[offset + 1] << 8) |
-              (size_t)data[offset + 2];
-    offset += 3;
-
-    if (offset + msg_len > data_len)
+    size_t offset = tls_parse_handshake_header(data, data_len,
+                                               TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET,
+                                               &msg_len);
+    if (offset == 0)
     {
         return false;
     }
@@ -1978,16 +2572,9 @@ bool tls_encrypt_data(
     uint8_t aad[5]; /* TLS record header for AAD */
     uint8_t auth_tag[16];
 
-    /* Step 1: Construct nonce = IV XOR sequence_number
-     * TLS 1.3 nonce is IV XOR sequence number (pad seq to 12 bytes)
-     */
-    memcpy(nonce, ctx->keys.client_application_iv, 12);
-
-    /* XOR sequence number into last 8 bytes of nonce */
-    for (size_t i = 0; i < 8; i++)
-    {
-        nonce[12 - 8 + i] ^= (uint8_t)((ctx->client_seq_num >> (56 - i * 8)) & 0xFF);
-    }
+    /* Step 1: Construct AEAD nonce (RFC 8446 §5.3) */
+    tls_build_aead_nonce(ctx->keys.client_application_iv,
+                         ctx->client_seq_num, nonce);
 
     /* Step 2: Build AAD (TLS record header)
      * In TLS 1.3, AAD is just the record header:
@@ -2072,16 +2659,9 @@ bool tls_decrypt_data(
     uint8_t computed_tag[16];
     const uint8_t *received_tag = ciphertext + actual_plaintext_len;
 
-    /* Step 1: Construct nonce = IV XOR sequence_number
-     * Same as encryption but using server IV and sequence number
-     */
-    memcpy(nonce, ctx->keys.server_application_iv, 12);
-
-    /* XOR sequence number into last 8 bytes of nonce */
-    for (size_t i = 0; i < 8; i++)
-    {
-        nonce[12 - 8 + i] ^= (uint8_t)((ctx->server_seq_num >> (56 - i * 8)) & 0xFF);
-    }
+    /* Step 1: Construct AEAD nonce (RFC 8446 §5.3) */
+    tls_build_aead_nonce(ctx->keys.server_application_iv,
+                         ctx->server_seq_num, nonce);
 
     /* Step 2: Build AAD (TLS record header) */
     aad[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
@@ -2140,15 +2720,38 @@ bool tls_decrypt_data(
 }
 
 /**
- * @brief Decrypt a TLS 1.3 record (handshake or application phase)
+ * @brief Decrypt one TLS 1.3 record and recover its inner content type.
  *
- * In TLS 1.3, encrypted records have outer content type 0x17.
- * The actual content type is appended after the plaintext inside the
- * encrypted payload: [plaintext || content_type || padding_zeros]
+ * In TLS 1.3 every encrypted record on the wire looks like:
  *
- * @param record     Full TLS record (5-byte header + encrypted payload)
- * @param record_len Length of full record
- * @param use_handshake_keys  true = handshake keys, false = application keys
+ *     +---------+-----+-----+---------+
+ *     |  0x17   | 03  | 03  | length  |    <- AAD = these 5 header bytes
+ *     +---------+-----+-----+---------+
+ *     | ciphertext (plaintext + ct + pad) | tag(16) |
+ *     +-----------------------------------+---------+
+ *
+ * The outer content_type is ALWAYS 0x17 (application_data) regardless of
+ * what's actually inside — handshake, alert, or app data. The real type
+ * lives at the end of the decrypted plaintext as a single byte, optionally
+ * followed by zero padding (length-hiding). On decrypt we strip the
+ * trailing zeros, then the last remaining byte is the inner content type.
+ *
+ * AEAD construction (AES-128-GCM):
+ *   nonce = static_iv XOR right-aligned(sequence_number)
+ *   AAD   = the 5 plaintext header bytes
+ *   tag   = computed over (AAD, ciphertext); receiver re-derives and
+ *           constant-time-compares against the tag at the end of the record.
+ *
+ * Tag mismatch ⇒ wipe the plaintext buffer and return false. The caller
+ * MUST treat this as fatal (bad_record_mac alert) — never retry, never
+ * leak partial plaintext, never increment the sequence counter.
+ *
+ * The `use_handshake_keys` flag selects between handshake-phase keys
+ * (server_handshake_key/iv + server_hs_seq_num) and application-phase
+ * keys (server_application_key/iv + server_seq_num).
+ *
+ * Note: this decrypts *server-to-client* records — the receive direction.
+ * For client-to-server we use tls_encrypt_record below.
  */
 bool tls_decrypt_record(
     struct tls_handshake_context *ctx,
@@ -2188,11 +2791,9 @@ bool tls_decrypt_record(
         seq_num = &ctx->server_seq_num;
     }
 
-    /* Construct nonce = IV XOR sequence_number */
+    /* Construct AEAD nonce (RFC 8446 §5.3) */
     uint8_t nonce[12];
-    memcpy(nonce, iv, 12);
-    for (size_t i = 0; i < 8; i++)
-        nonce[12 - 8 + i] ^= (uint8_t)((*seq_num >> (56 - i * 8)) & 0xFF);
+    tls_build_aead_nonce(iv, *seq_num, nonce);
 
     /* AAD is the 5-byte record header */
     struct tls_aes_context aes_ctx;
@@ -2234,14 +2835,33 @@ bool tls_decrypt_record(
 }
 
 /**
- * @brief Encrypt a TLS 1.3 record (handshake or application phase)
+/**
+ * @brief Build one outbound encrypted TLS 1.3 record from a plaintext blob.
  *
- * Builds a complete TLS record with 5-byte header, encrypted payload,
- * and authentication tag. The inner content type is appended to the
- * plaintext before encryption.
+ * Counterpart to tls_decrypt_record. We:
  *
- * @param record     Output buffer for full TLS record
- * @param record_len Size of output buffer
+ *   1. Write the 5-byte record header into `record`. Outer type is always
+ *      0x17 (application_data). The length field equals plaintext_len + 1
+ *      (the inner content type byte) + 16 (the AEAD tag).
+ *   2. Build the AEAD nonce from the appropriate client IV + sequence
+ *      counter (handshake or application phase, selected by the caller).
+ *   3. Initialize AES-128-GCM with the matching client key.
+ *   4. Use the 5-byte header as AAD.
+ *   5. Lay out the inner plaintext as [plaintext || inner_content_type]
+ *      directly in the output buffer (we don't add length-hiding padding —
+ *      it's optional and we don't gain anything on a calculator).
+ *   6. Encrypt in place, append the 16-byte tag, advance the seq counter,
+ *      report total bytes written.
+ *
+ * Used by:
+ *   - altcp_tls_ce_lower_recv_process for the client's Finished message
+ *     (with inner_content_type = HANDSHAKE, use_handshake_keys=true).
+ *   - altcp_tls_ce_write for every application data send
+ *     (inner_content_type = APPLICATION_DATA, use_handshake_keys=false).
+ *   - tls_send_alert for alerts during/after handshake.
+ *
+ * Output size: 5 + plaintext_len + 1 + 16 bytes. The caller must size the
+ * record buffer at least that large; we error if not.
  */
 bool tls_encrypt_record(
     struct tls_handshake_context *ctx,
@@ -2283,11 +2903,9 @@ bool tls_encrypt_record(
     record[3] = (uint8_t)((inner_len + 16) >> 8);
     record[4] = (uint8_t)((inner_len + 16) & 0xFF);
 
-    /* Construct nonce */
+    /* Construct AEAD nonce (RFC 8446 §5.3) */
     uint8_t nonce[12];
-    memcpy(nonce, iv, 12);
-    for (size_t i = 0; i < 8; i++)
-        nonce[12 - 8 + i] ^= (uint8_t)((*seq_num >> (56 - i * 8)) & 0xFF);
+    tls_build_aead_nonce(iv, *seq_num, nonce);
 
     /* Build inner plaintext: [plaintext || content_type] in a temp buffer
      * We'll encrypt directly from plaintext, then handle the content type byte */
@@ -2319,6 +2937,42 @@ bool tls_encrypt_record(
 }
 
 /**
+ * @brief Register the transport write callback used for outbound records.
+ */
+void tls_set_transport(
+    struct tls_handshake_context *ctx,
+    tls_transport_write_fn write_fn,
+    void *transport_arg)
+{
+    if (!ctx)
+    {
+        return;
+    }
+    ctx->transport_write = write_fn;
+    ctx->transport_arg = transport_arg;
+}
+
+/**
+ * @brief Decide which traffic key set (if any) currently applies for sending.
+ *
+ * Returns 0 if no keys are available (alert must go plaintext),
+ *         1 if handshake-phase client keys apply,
+ *         2 if application-phase client keys apply.
+ */
+static int tls_outbound_phase(const struct tls_handshake_context *ctx)
+{
+    if (ctx->state == TLS_STATE_HANDSHAKE_COMPLETE)
+    {
+        return 2;
+    }
+    if (ctx->state >= TLS_STATE_HANDSHAKE_KEYS_DERIVED)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * @brief Send alert message
  */
 bool tls_send_alert(
@@ -2331,17 +2985,40 @@ bool tls_send_alert(
         return false;
     }
 
-    /* TODO: Implement alert sending
-     *
-     * Alert structure:
-     * - Content type (1 byte): 0x15 (alert)
-     * - Legacy version (2 bytes): 0x0303
-     * - Length (2 bytes): 2
-     * - Level (1 byte): warning/fatal
-     * - Description (1 byte): specific alert
-     *
-     * For fatal alerts, update state to ERROR
-     */
+    bool ok = false;
+    uint8_t alert_body[2] = { level, description };
+
+    if (ctx->transport_write)
+    {
+        int phase = tls_outbound_phase(ctx);
+        if (phase == 0)
+        {
+            /* No keys yet — send a plaintext alert record (RFC 8446 §6). */
+            uint8_t record[7];
+            record[0] = TLS_CONTENT_TYPE_ALERT;
+            record[1] = 0x03;
+            record[2] = 0x03;
+            record[3] = 0x00;
+            record[4] = 0x02;
+            record[5] = level;
+            record[6] = description;
+            ok = ctx->transport_write(ctx->transport_arg, record, sizeof(record));
+        }
+        else
+        {
+            /* Encrypt under the active client traffic keys. Worst-case record
+             * is 5 header + 2 body + 1 content_type + 16 tag = 24 bytes. */
+            uint8_t record[24];
+            size_t written = 0;
+            bool use_hs_keys = (phase == 1);
+            if (tls_encrypt_record(ctx, use_hs_keys, TLS_CONTENT_TYPE_ALERT,
+                                   alert_body, sizeof(alert_body),
+                                   record, sizeof(record), &written))
+            {
+                ok = ctx->transport_write(ctx->transport_arg, record, written);
+            }
+        }
+    }
 
     if (level == TLS_ALERT_LEVEL_FATAL)
     {
@@ -2349,7 +3026,25 @@ bool tls_send_alert(
         lwip_log_event(LWIP_LOG_MODULE_TLS, LWIP_LOG_TLS_FATAL_ALERT);
     }
 
-    return false;
+    return ok;
+}
+
+/**
+ * @brief Send close_notify (warning) and remember we did so.
+ */
+bool tls_send_close_notify(struct tls_handshake_context *ctx)
+{
+    if (!ctx)
+    {
+        return false;
+    }
+    if (ctx->close_notify_sent)
+    {
+        return true;
+    }
+    bool ok = tls_send_alert(ctx, TLS_ALERT_LEVEL_WARNING, TLS_ALERT_CLOSE_NOTIFY);
+    ctx->close_notify_sent = true;
+    return ok;
 }
 
 /**
@@ -2364,6 +3059,9 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 
     /* Transcript hash uses embedded storage, no need to free */
 
+    /* Release the cross-record reassembly buffer if one is in flight. */
+    tls_hs_reasm_reset(ctx);
+
     /* Securely zero sensitive data */
     tls_secure_memzero(ctx->psk, sizeof(ctx->psk));
     tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
@@ -2375,105 +3073,23 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 
 /*
  * ============================================================================
- * TODO SUMMARY - What Needs Implementation/Optimization
+ * Outstanding work (post-refactor)
  * ============================================================================
  *
- * CRITICAL PATH (needed for PSK handshake to work):
- * --------------------------------------------------
- * 1. [HIGH] HKDF implementation (hkdf.c)
- *    - tls_hkdf_extract()
- *    - tls_hkdf_expand()
- *    - tls_hkdf_expand_label()
- *    - tls_derive_secret()
- *    Status: Partially implemented, needs testing
- *    Dependencies: HMAC (✓), SHA-256 (✓)
+ * Status: PSK resumption, ECDHE-only, and PSK+ECDHE client handshakes are all
+ * implemented and exercised. Record-layer encryption, transcript hashing,
+ * key schedule, PSK binder, NewSessionTicket-driven resumption, alerts, and
+ * close_notify are all done. CertificateVerify signature is intentionally
+ * skipped — SPKI pinning provides authentication.
  *
- * 2. [HIGH] ClientHello generation
- *    - Message formatting
- *    - Extension encoding
- *    - PSK binder calculation
- *    Status: Not started
- *    Dependencies: HKDF, HMAC, transcript hash
- *
- * 3. [HIGH] ServerHello parsing
- *    - Message parsing
- *    - Extension parsing
- *    - Validation
- *    Status: Not started
- *    Dependencies: Transcript hash
- *
- * 4. [HIGH] Key derivation wiring
- *    - tls_derive_handshake_keys()
- *    - tls_derive_application_keys()
- *    Status: Stubbed
- *    Dependencies: HKDF
- *
- * 5. [HIGH] Finished message handling
- *    - Generation
- *    - Verification
- *    Status: Stubbed
- *    Dependencies: HKDF, HMAC
- *
- * 6. [MEDIUM] Record layer encryption/decryption
- *    - AES-GCM wiring
- *    - Nonce construction
- *    - Sequence number management
- *    Status: Stubbed
- *    Dependencies: AES-GCM (✓)
- *
- * OPTIMIZATION TARGETS (for speed improvements):
- * ----------------------------------------------
- * 1. [CRITICAL] AES-GCM implementation
- *    Current: C implementation (~47KB in aes.c)
- *    Target: Assembly-optimized GCM mode
- *    Impact: HUGE - this is the bulk data encryption path
- *    Candidates for optimization:
- *    - AES rounds (table lookups vs. computation)
- *    - GHASH (GF(2^128) multiplication)
- *    - Key schedule caching
- *
- * 2. [HIGH] SHA-256 (for HKDF/HMAC)
- *    Current: Assembly implementation (sha256.asm)
- *    Status: Already optimized
- *    Impact: MEDIUM - used in key derivation and Finished messages
- *
- * 3. [MEDIUM] HMAC operations
- *    Current: C wrapper around SHA-256
- *    Target: Inline assembly for tight loops
- *    Impact: MEDIUM - used in key derivation
- *
- * 4. [LOW] Memory management
- *    - Stack usage optimization
- *    - Buffer reuse
- *    Impact: LOW - not performance critical
- *
- * PERFORMANCE ESTIMATES:
- * ---------------------
- * PSK Handshake (one-time per connection):
- * - ClientHello generation: ~10ms (mostly HMAC)
- * - Key derivation: ~50ms (multiple HKDF operations)
- * - Finished messages: ~20ms (HMAC)
- * Total handshake: ~100ms (acceptable for one-time cost)
- *
- * Application Data Encryption (per message):
- * - AES-GCM encrypt (1KB): ~5-10ms (NEEDS OPTIMIZATION)
- * - Target: <1ms for 1KB
- * - Speedup needed: 10x
- *
- * COMMUNITY HELP NEEDED:
- * ---------------------
- * 1. ez80 assembly experts:
- *    - Optimize AES-GCM (highest impact)
- *    - Review SHA-256 assembly
- *    - Optimize HMAC loops
- *
- * 2. Protocol experts:
- *    - Review TLS 1.3 compliance
- *    - Test against real servers
- *    - Security audit
- *
- * 3. Testing:
- *    - Hardware performance testing
- *    - Interoperability testing
- *    - Stress testing
+ * Remaining work, roughly ordered:
+ *   - AES-GCM speedup. Pure-C in aes.c; this is the bulk-data hot path and
+ *     dwarfs everything else on the wire. eZ80-asm GHASH/AES is the next
+ *     big win.
+ *   - Server-side handshake (currently the altcp layer returns "not
+ *     implemented"). The same key schedule code applies in reverse.
+ *   - Wider truststore + automated SPKI hash refresh tooling.
+ *   - Interop testing against major TLS 1.3 stacks (Go, BoringSSL,
+ *     mbedTLS, Rustls) — particularly the cross-record fragmentation path
+ *     which is hard to trigger without help.
  */

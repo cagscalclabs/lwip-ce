@@ -8,8 +8,8 @@
  * Known constraints:
  * - Only x25519 key exchange is supported. HelloRetryRequest is detected
  *   and aborted gracefully since no alternative groups are available.
- * - Handshake messages must fit within a single TLS record (no cross-record
- *   reassembly). The TLS record limit is 16KB; most servers comply.
+ * - Cross-record handshake message reassembly is bounded at
+ *   TLS_HS_REASSEMBLY_MAX bytes (16KB). Anything larger is fatal.
  * - The rx ring buffer (default 8KB) limits the maximum encrypted record
  *   size during handshake. Very large certificate chains (>8KB) may fail.
  *   The ring size is configurable via altcp_tls_ce_config.rx_ring_size.
@@ -85,9 +85,28 @@ enum tls_server_handshake_type {
 #define TLS_ALERT_CLOSE_NOTIFY          0x00
 #define TLS_ALERT_UNEXPECTED_MESSAGE    0x0A
 #define TLS_ALERT_BAD_RECORD_MAC        0x14
+#define TLS_ALERT_RECORD_OVERFLOW       0x16
+#define TLS_ALERT_HANDSHAKE_FAILURE     0x28
+#define TLS_ALERT_DECODE_ERROR          0x32
 #define TLS_ALERT_DECRYPT_ERROR         0x33
 #define TLS_ALERT_PROTOCOL_VERSION      0x46
 #define TLS_ALERT_INTERNAL_ERROR        0x50
+
+/* Bound on cross-record handshake message reassembly. Any handshake message
+ * larger than this is treated as fatal (record_overflow). 16KB matches the
+ * TLS 1.3 max plaintext record size and accommodates realistic cert chains. */
+#define TLS_HS_REASSEMBLY_MAX           16384
+
+/**
+ * @brief Transport write callback used by tls_send_alert / close_notify.
+ *
+ * altcp_tls_ce sets this on the context during setup so handshake.c can
+ * push encrypted records out without depending on lwIP/altcp directly.
+ * Implementations should hand the bytes to the transport and return true
+ * iff the write was accepted.
+ */
+typedef bool (*tls_transport_write_fn)(void *transport_arg,
+                                       const uint8_t *data, size_t len);
 
 /**
  * @brief TLS 1.3 PSK Identity
@@ -181,6 +200,23 @@ struct tls_handshake_context {
         uint8_t server_cert_spki_hash[32];  /* SHA-256 of server's SPKI */
         bool certificate_validated;          /* True if end-entity certificate matched policy */
     } cert_state;
+
+    /* Transport plumbing for outbound records (alerts, close_notify). Set by
+     * the altcp layer before the handshake begins. NULL means tls_send_alert
+     * just updates local state without emitting on the wire. */
+    tls_transport_write_fn transport_write;
+    void *transport_arg;
+
+    /* Cross-record handshake message reassembly buffer. Allocated on demand
+     * from the custom heap when an inner handshake message exceeds the
+     * current decrypted record; freed once the message is consumed. */
+    uint8_t *hs_reasm_buf;
+    size_t hs_reasm_cap;
+    size_t hs_reasm_len;
+    size_t hs_reasm_expected;  /* Total bytes expected (4 + body), 0 = idle */
+
+    /* True once close_notify has been sent so we don't send it twice. */
+    bool close_notify_sent;
 };
 
 /**
@@ -508,7 +544,24 @@ bool tls_encrypt_record(
 );
 
 /**
+ * @brief Register a transport write callback for outbound records.
+ *
+ * Used by the altcp_tls_ce layer to give the handshake code a way to send
+ * alerts/close_notify without including lwIP. Must be called after
+ * tls_handshake_init and before any operation that might emit a record.
+ */
+void tls_set_transport(
+    struct tls_handshake_context *ctx,
+    tls_transport_write_fn write_fn,
+    void *transport_arg
+);
+
+/**
  * @brief Send alert message
+ *
+ * Builds an alert record and, if the handshake is past key derivation,
+ * encrypts it under the current outgoing keys. Falls back to plaintext
+ * (for pre-keys errors) only when no traffic keys exist yet.
  *
  * @param ctx Handshake context
  * @param level Alert level (warning/fatal)
@@ -520,6 +573,16 @@ bool tls_send_alert(
     uint8_t level,
     uint8_t description
 );
+
+/**
+ * @brief Send a close_notify alert (warning level) and remember that we did.
+ *
+ * Idempotent: subsequent calls are no-ops. Intended to be called from the
+ * altcp close path before the TCP FIN.
+ *
+ * @return true if close_notify was sent (or already sent), false on failure.
+ */
+bool tls_send_close_notify(struct tls_handshake_context *ctx);
 
 /**
  * @brief Clean up handshake context
