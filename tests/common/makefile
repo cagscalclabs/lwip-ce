@@ -21,3 +21,14 @@ X25519_DIR_REL := ../../../src/tls/contrib/x25519/src
 # (sha256.s, random.s, share/crypto_guard.s). Absolute path is fine here
 # because -I flags don't go through the OBJDIR pattern mangling.
 TLS_ASM_INCLUDES := -I $(TLS_CORE)/share
+
+TLS_ASM_SHA256 := $(TLS_CORE_REL)/sha256.s
+TLS_ASM_BYTES := $(TLS_CORE_REL)/bytes.s
+TLS_ASM_BIGINT := $(TLS_CORE_REL)/share/bigint.s
+TLS_ASM_HELPERS := $(TLS_CORE_REL)/share/helpers.s
+TLS_ASM_RANDOM := $(TLS_CORE_REL)/random.s
+TLS_ASM_CRYPTO_GUARD := $(TLS_CORE_REL)/share/crypto_guard.s
+
+TLS_ASM_AES := $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_CRYPTO_GUARD)
+TLS_ASM_HASH := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD)
+TLS_ASM_TLS_FULL := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_HELPERS) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD)

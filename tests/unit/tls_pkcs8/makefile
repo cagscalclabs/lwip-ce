@@ -33,13 +33,7 @@ EXTRA_C_SOURCES = \
 	$(PROJECT_ROOT)/src/drivers/mem.c \
 	$(PROJECT_ROOT)/src/core/stats.c
 
-EXTRA_ASM_SOURCES = \
-	$(TLS_CORE_REL)/sha256.s \
-	$(TLS_CORE_REL)/bytes.s \
-	$(TLS_CORE_REL)/share/bigint.s \
-	$(TLS_CORE_REL)/share/helpers.s \
-	$(TLS_CORE_REL)/random.s \
-	$(TLS_CORE_REL)/share/crypto_guard.s \
+EXTRA_ASM_SOURCES = $(TLS_ASM_TLS_FULL)
 
 HEADER_DIRS := $(PROJECT_ROOT)/src $(LWIP_INC) $(TLS_INC) src/include $(HEADER_DIRS)
 

@@ -24,9 +24,7 @@ SOURCES = src/main.c
 EXTRA_C_SOURCES = $(TLS_CORE)/truststore.c $(TLS_CORE)/rsa.c $(TLS_CORE)/hash.c $(TLS_CORE)/bytes.c $(TLS_CORE)/asn1.c $(TLS_CORE)/base64.c $(TLS_CORE)/keyobject.c $(TLS_CORE)/pkcs8.c $(TLS_CORE)/x509.c $(TLS_CORE)/passwords.c $(TLS_CORE)/aes.c $(PROJECT_ROOT)/src/core/mem.c $(PROJECT_ROOT)/src/drivers/mem.c $(PROJECT_ROOT)/src/core/stats.c $(PROJECT_ROOT)/src/core/logging.c $(PROJECT_ROOT)/src/core/app_config.c
 
 # Assembly files from TLS core
-EXTRA_ASM_SOURCES = $(TLS_CORE_REL)/sha256.s $(TLS_CORE_REL)/bytes.s $(TLS_CORE_REL)/share/bigint.s $(TLS_CORE_REL)/random.s \
-	$(TLS_CORE_REL)/share/helpers.s \
-	$(TLS_CORE_REL)/share/crypto_guard.s \
+EXTRA_ASM_SOURCES = $(TLS_ASM_TLS_FULL)
 
 # ----------------------------
 

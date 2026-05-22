@@ -1060,10 +1060,14 @@ Before beginning this project we needed to itemize what was available and what w
 	
 	This project uses two complementary validation layers: deterministic unit tests and profiling-oriented measurements. Unit tests verify functional correctness, safety checks, and regression resistance for module behavior. Profiling tests characterize timing stability, performance behavior, and platform-dependent variance under controlled workloads.
 	
+	\subsubsection{Unit Tests}
 	The unit test suite is structured around explicit acceptance criteria for security-critical paths. Coverage includes truststore integrity verification, certificate-chain trust decisions, RNG initialization/request behavior, parser correctness for ASN.1/X.509/PKCS flows, and expected rejection behavior for malformed or invalid inputs. Tests are built from applicable RFC vectors where available (with RFC and section identifiers recorded in test metadata), and from implementation-directed cases where no official vectors exist. Where policy requires fail-closed behavior, tests assert rejection rather than silent degradation.
+
+	Latest unit-test workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml}.
 	
 	Profiling tests are intentionally separated from strict correctness gating. Their role is to quantify behavior, not merely assert it. In particular, timing-oriented tests evaluate differential behavior across input classes and report whether observed variance remains within calibrated bounds. Because timing consistency evidence is environment-sensitive, profiling outcomes are interpreted as indicators and trend signals rather than formal proofs.
 	
+	\subsubsection{Timing Analysis Profiler}
 	The primary profiling module, \texttt{tls\_timing}, uses robust per-primitive calibration instead of a fixed global cycle limit. For each primitive, repeated samples are collected on a calibration class (``same input'', currently the best-case class), yielding cycle samples $\{T_1,\dots,T_n\}$. The following robust statistics are then computed:
 	
 	\begin{align*}
@@ -1094,6 +1098,14 @@ Before beginning this project we needed to itemize what was available and what w
 	For each class, the reported statistics include class median deviation from the calibration median and exceedance rate (percentage of samples where $|T_i-m|>\Delta_c$). A differential failure is flagged when separation from calibration exceeds the accepted deviation with directionally consistent behavior across at least a three-quarters majority of samples.	
 	
 	Each unit is sampled $50$ times, where each sample is a composite of repeated executions selected by algorithm runtime class: fast units use $64$ repetitions, medium units use $16$, and slow units use $2$. This batching further suppresses class-independent timing jitter.
+
+	Latest timing-profiler workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml}.
+
+	\subsubsection{ACVP Validation}
+
+	Formal cryptographic certification depends not only on algorithm behavior, but also on the implementation context, build process, operating environment, and hardware security properties. Because this stack runs as calculator application code on hardware without a secure execution environment or certified key-storage boundary, it is not presented as a formally certified cryptographic module. Instead, the project demonstrates algorithmic correctness against NIST ACVP-derived vector sets. The ACVP workflow selects vectors at random from the available NIST lists on each run so regression coverage varies over time. RSA-PSS vectors are generated during the workflow with \texttt{python3-cryptography}, because the published NIST PSS vector files do not provide the hardcoded public exponent $e=65537$ used by this stack.
+
+	Latest ACVP-validation workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/acvp.yml}.
 	
 	The workflow pipeline runs these layers independently so long-running profiling does not block deterministic unit validation. Unit results provide hard regression gates; profiling results provide ongoing security/performance telemetry and flag areas requiring deeper analysis. Together, they form a practical validation model for a constrained platform: strict correctness checks where determinism is expected, and measured characterization where hardware/runtime noise is unavoidable.
 	

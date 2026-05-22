@@ -24,8 +24,7 @@ SOURCES = src/main.c
 EXTRA_C_SOURCES = $(TLS_CORE)/aes.c $(TLS_CORE)/bytes.c
 
 # Assembly files (bytelen_to_bitlen in bytes.s, gf128_mul in bigint.s for GCM)
-EXTRA_ASM_SOURCES = $(TLS_CORE_REL)/bytes.s $(TLS_CORE_REL)/share/bigint.s \
-	$(TLS_CORE_REL)/share/crypto_guard.s \
+EXTRA_ASM_SOURCES = $(TLS_ASM_AES)
 
 # ----------------------------
 
