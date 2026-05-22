@@ -63,6 +63,7 @@ struct primitive_result
     uint32_t class_over_thresh_pct_x100_rigorous[TIMING_CLASS_COUNT];
     uint32_t max_pair_diff;
     bool differential_pass;
+    bool differential_pass_rigorous;
 
     bool fail;
 };
@@ -912,28 +913,39 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
 
     for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
     {
-        uint16_t over = 0;
-        uint16_t over_rigorous = 0;
+        uint16_t over_pos = 0;
+        uint16_t over_neg = 0;
+        uint16_t over_pos_rigorous = 0;
+        uint16_t over_neg_rigorous = 0;
         for (i = 0; i < TIMING_SAMPLES; i++)
         {
-            uint32_t dev = abs_u32_diff(samples[class_id][i], out->stability_median);
-            if (dev > out->accepted_deviation)
+            int32_t sample_delta = (int32_t)samples[class_id][i] - (int32_t)out->stability_median;
+            if (sample_delta > (int32_t)out->accepted_deviation)
             {
-                over++;
+                over_pos++;
             }
-            if (dev > out->accepted_deviation_rigorous)
+            else if (sample_delta < -(int32_t)out->accepted_deviation)
             {
-                over_rigorous++;
+                over_neg++;
+            }
+            if (sample_delta > (int32_t)out->accepted_deviation_rigorous)
+            {
+                over_pos_rigorous++;
+            }
+            else if (sample_delta < -(int32_t)out->accepted_deviation_rigorous)
+            {
+                over_neg_rigorous++;
             }
         }
         out->class_over_thresh_pct_x100[class_id] =
-            (uint32_t)(((uint32_t)over * 10000u) / TIMING_SAMPLES);
+            (uint32_t)(((uint32_t)((over_pos > over_neg) ? over_pos : over_neg) * 10000u) / TIMING_SAMPLES);
         out->class_over_thresh_pct_x100_rigorous[class_id] =
-            (uint32_t)(((uint32_t)over_rigorous * 10000u) / TIMING_SAMPLES);
+            (uint32_t)(((uint32_t)((over_pos_rigorous > over_neg_rigorous) ? over_pos_rigorous : over_neg_rigorous) * 10000u) / TIMING_SAMPLES);
     }
 
     out->max_pair_diff = 0;
     out->differential_pass = true;
+    out->differential_pass_rigorous = true;
 
     for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
     {
@@ -971,6 +983,29 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
                     out->differential_pass = false;
                 }
             }
+
+            if ((class_id == TIMING_CALIB_CLASS || other == TIMING_CALIB_CLASS) &&
+                diff > out->accepted_deviation_rigorous)
+            {
+                uint16_t test = (class_id == TIMING_CALIB_CLASS) ? other : class_id;
+                bool high = (out->class_medians[test] >= out->stability_median);
+                uint16_t consistent = 0;
+
+                for (i = 0; i < TIMING_SAMPLES; i++)
+                {
+                    int32_t sample_delta = (int32_t)samples[test][i] - (int32_t)out->stability_median;
+                    if ((high && sample_delta > (int32_t)out->accepted_deviation_rigorous) ||
+                        (!high && sample_delta < -(int32_t)out->accepted_deviation_rigorous))
+                    {
+                        consistent++;
+                    }
+                }
+
+                if ((uint32_t)consistent * DIFF_CONSISTENCY_DEN >= (uint32_t)TIMING_SAMPLES * DIFF_CONSISTENCY_NUM)
+                {
+                    out->differential_pass_rigorous = false;
+                }
+            }
         }
     }
 
@@ -992,7 +1027,7 @@ static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t re
                 (unsigned long)(out->stability_sigma_x10000 % 10000u),
                 (unsigned int)MAD_ACCEPT_C_RIGOROUS,
                 (unsigned long)out->accepted_deviation_rigorous,
-                out->differential_pass ? 1u : 0u);
+                out->differential_pass_rigorous ? 1u : 0u);
     for (class_id = 0; class_id < TIMING_CLASS_COUNT; class_id++)
     {
         const int32_t trend = (int32_t)out->class_medians[class_id] - (int32_t)out->stability_median;

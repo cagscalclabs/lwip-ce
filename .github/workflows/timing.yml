@@ -183,9 +183,10 @@ jobs:
           : > "$summary_md"
           echo "### Timing Verbose Details (from TLSTMLOG AppVar)" >> "$summary_md"
           echo "" >> "$summary_md"
-          echo "For each test, sigma = 1.4826 * MAD(case_best_samples), c = [6, 4]." >> "$summary_md"
-          echo "A pass is required for the c=6 case. c=4 case is for additional robustness." >> "$summary_md"
-          echo "max deviations is computed max(c, c * sigma)." >> "$summary_md"
+              echo "For each test, sigma = 1.4826 * MAD(case_best_samples), c = [6, 4]." >> "$summary_md"
+              echo "A pass is required for the c=6 case. c=4 case is for additional robustness." >> "$summary_md"
+              echo "max deviations is computed max(c, c * sigma)." >> "$summary_md"
+              echo "Over% reports the larger one-sided exceedance rate, not the sum of over and under threshold samples." >> "$summary_md"
 
           appvar_src=""
           if [ -f "$appvar_out" ]; then
@@ -303,7 +304,7 @@ jobs:
               print ""
               printf("_Parsed primitives: %d (robust=%d, robust4=%d)_\n", n_prim, n_robust, n_robust4)
               print ""
-              print "| Unit | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Over% c6 (W/R/E) | Over% c4 (W/R/E) |"
+              print "| Unit | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Directional Over% c6 (W/R/E) | Directional Over% c4 (W/R/E) |"
               print "|---|---:|---:|---:|---:|---:|"
               for (pidx = 1; pidx <= n_prim; pidx++) {
                 prim_name = order[pidx]
