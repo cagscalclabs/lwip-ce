@@ -1,6 +1,5 @@
 ![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?cache=1)
 
-[!CAUTION]
 CI App building is currently failing due to an ongoing refactor/migration into the new binutils toolchain structure. This is expected during the transition period.
 
 ![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=tls&cache=1)
