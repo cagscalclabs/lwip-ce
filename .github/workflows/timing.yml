@@ -9,6 +9,7 @@ on:
   push:
     branches: ['tls']
     paths:
+      - '.github/workflows/timing.yml'
       - 'src/tls/**'
       - 'tests/profiling/tls_timing/**'
   workflow_dispatch:
@@ -141,7 +142,7 @@ jobs:
           failed_hash_id=""
           test_start=$(($(date +%s%N)/1000000))
           make -C "$test_dir" clean
-          make -C "$test_dir" all
+          make -C "$test_dir"
           set +e
           make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
           status=${PIPESTATUS[0]}

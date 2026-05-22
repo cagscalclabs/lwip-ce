@@ -10,6 +10,7 @@ on:
   push:
     branches: ['tls']
     paths:
+      - '.github/workflows/acvp.yml'
       - 'src/tls/**'
       - 'tests/profiling/tls_acvp/**'
   workflow_dispatch:
@@ -155,7 +156,7 @@ jobs:
           test_dir="${{env.ACVP_TEST_DIR}}"
           test_start=$(($(date +%s%N)/1000000))
           make -C "$test_dir" clean
-          make -C "$test_dir" all
+          make -C "$test_dir"
           status=0
           set +e
           make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"

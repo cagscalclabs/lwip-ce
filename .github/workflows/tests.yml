@@ -9,6 +9,7 @@ on:
   push:
     branches: ['tls']
     paths:
+      - '.github/workflows/tests.yml'
       - 'src/tls/**'
       - 'tests/unit/**'
   workflow_dispatch:
@@ -143,7 +144,10 @@ jobs:
             test_dir=$(dirname "$test")
             test_start=$(($(date +%s%N)/1000000))
             make -C "$test_dir" clean
-            make -C "$test_dir" all test || ((status=$?))
+            make -C "$test_dir" || ((status=$?))
+            if [ $status -eq 0 ]; then
+              make -C "$test_dir" test || ((status=$?))
+            fi
             test_done=$(($(date +%s%N)/1000000))
             test_duration=$((test_done - test_start))
             (( total_tests += 1 ))
