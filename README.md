@@ -1,11 +1,15 @@
 ![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?cache=1)
+
+[!CAUTION]
+CI App building is currently failing due to an ongoing refactor/migration into the new binutils toolchain structure. This is expected during the transition period.
+
+<br>
 ![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=tls&cache=1)
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=tls&cache=1)
 ![ACVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/acvp.yml/badge.svg?branch=tls&cache=1)
 ![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?cache=1)
 
- **Note**
-CI is currently failing due to an ongoing refactor/migration into the new binutils toolchain structure. This is expected during the transition period.
+
 
 
 # lwIP-CE #
