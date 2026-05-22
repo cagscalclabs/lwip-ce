@@ -1131,9 +1131,16 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
         uint8_t tbuf[AES_BLOCK_SIZE];
         uint8_t *tag = ctx->private.gcm.auth_tag;
 
-        // pad rest of ciphertext cache with 0s
-        tls_secure_memzero(tbuf, AES_BLOCK_SIZE);
-        ghash(ctx, tag, tbuf, AES_BLOCK_SIZE - ctx->private.gcm.aad_cache_len);
+        // pad rest of ciphertext cache with 0s — but ONLY if there's
+        // actually a cached partial block. Without the guard, the zero-fill
+        // ghashes a phantom full block when both AAD and CT happen to be
+        // block-aligned (or empty), corrupting the tag. Caught by the
+        // ACVP test: see whitepaper section on continuous validation.
+        if (ctx->private.gcm.aad_cache_len)
+        {
+            tls_secure_memzero(tbuf, AES_BLOCK_SIZE);
+            ghash(ctx, tag, tbuf, AES_BLOCK_SIZE - ctx->private.gcm.aad_cache_len);
+        }
         // at this point, tag should be GHASH(0-padded aad || 0-padded ciphertext)
 
         // final tag computed as GHASH( 0-padded aad || 0-padded ciphertext || u64-be-aad-len || u64-be-ciphertext-len)

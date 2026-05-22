@@ -4,6 +4,9 @@
 
 include ../../common/makefile
 
+# Add -I path so the assembler can find virtuals.inc et al.
+ASFLAGS += $(TLS_ASM_INCLUDES)
+
 NAME = TRUSTST
 ICON = icon.png
 ARCHIVED = NO
@@ -21,9 +24,9 @@ SOURCES = src/main.c
 EXTRA_C_SOURCES = $(TLS_CORE)/truststore.c $(TLS_CORE)/rsa.c $(TLS_CORE)/hash.c $(TLS_CORE)/bytes.c $(TLS_CORE)/asn1.c $(TLS_CORE)/base64.c $(TLS_CORE)/keyobject.c $(TLS_CORE)/pkcs8.c $(TLS_CORE)/x509.c $(TLS_CORE)/passwords.c $(TLS_CORE)/aes.c $(PROJECT_ROOT)/src/core/mem.c $(PROJECT_ROOT)/src/drivers/mem.c $(PROJECT_ROOT)/src/core/stats.c $(PROJECT_ROOT)/src/core/logging.c $(PROJECT_ROOT)/src/core/app_config.c
 
 # Assembly files from TLS core
-EXTRA_ASM_SOURCES = $(TLS_CORE)/sha256.asm $(TLS_CORE)/bytes.asm $(TLS_CORE)/share/bigint.asm $(TLS_CORE)/random.asm \
-	$(TLS_CORE)/share/helpers.asm \
-	$(TLS_CORE)/share/crypto_guard.asm \
+EXTRA_ASM_SOURCES = $(TLS_CORE_REL)/sha256.s $(TLS_CORE_REL)/bytes.s $(TLS_CORE_REL)/share/bigint.s $(TLS_CORE_REL)/random.s \
+	$(TLS_CORE_REL)/share/helpers.s \
+	$(TLS_CORE_REL)/share/crypto_guard.s \
 
 # ----------------------------
 

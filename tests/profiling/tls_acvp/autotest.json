@@ -1,0 +1,31 @@
+{
+  "description": "Run NIST ACVP-format test vectors against the shipping primitives. The vectors are pre-packed into ACVPIN.8xv by the workflow; the calculator-side runner dispatches each vector to the appropriate primitive (AES-128-GCM, SHA-256, HMAC-SHA-256, HKDF-SHA-256, DRBG-SHA-256) and writes responses into ACVPOUT.8xv. The host-side parser then grades responses against the pinned expected outputs.",
+  "transfer_files": [
+    "bin/ACVPTEST.8xp",
+    "vectors/ACVPIN.8xv",
+    "clibs.8xg"
+  ],
+  "target": {
+    "name": "ACVPTEST",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "delay|2000",
+    "saveVar|ACVPOUT",
+    "saveVar|ACVPRSA"
+  ],
+  "hashes": {
+    "1": {
+      "description": "ACVP runner completes (all vectors dispatched and ACVPOUT written)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "72A980D5"
+      ],
+      "timeout": 60000000
+    }
+  }
+}

@@ -4,6 +4,9 @@
 
 include ../../common/makefile
 
+# Add -I path so the assembler can find virtuals.inc et al.
+ASFLAGS += $(TLS_ASM_INCLUDES)
+
 NAME = OAEPTEST
 ICON = icon.png
 ARCHIVED = NO
@@ -21,7 +24,7 @@ SOURCES = src/main.c
 EXTRA_C_SOURCES = $(TLS_CORE)/rsa.c $(TLS_CORE)/hash.c $(TLS_CORE)/hmac.c $(TLS_CORE)/bytes.c $(PROJECT_ROOT)/src/core/mem.c $(PROJECT_ROOT)/src/drivers/mem.c $(PROJECT_ROOT)/src/core/stats.c
 
 # Assembly files from TLS core
-EXTRA_ASM_SOURCES = $(TLS_CORE)/sha256.asm $(TLS_CORE)/bytes.asm $(TLS_CORE)/share/bigint.asm $(TLS_CORE)/random.asm $(TLS_CORE)/share/crypto_guard.asm
+EXTRA_ASM_SOURCES = $(TLS_CORE_REL)/sha256.s $(TLS_CORE_REL)/bytes.s $(TLS_CORE_REL)/share/bigint.s $(TLS_CORE_REL)/random.s $(TLS_CORE_REL)/share/crypto_guard.s
 
 # ----------------------------
 

@@ -2,8 +2,9 @@
 .dccache
 **/.DS_Store
 
-# local Continue agent config
+# AI agents
 .continue/agents/new-config.yaml
+.claude
 
 # Python bytecode/cache
 __pycache__/
@@ -17,14 +18,12 @@ __pycache__/
 # build and object directories
 obj
 bin
+*.8xv
 
 # httpd server example filesystem includes
 *makefsdata.c.*
 *.fsdata
 .venv
-
-.claude
-lwIPSPKI.8xv
 
 # test fixtures: keep temporary PEM material out of git
 tests/**/*.pem
@@ -63,3 +62,11 @@ tools/
 
 # local transcription scratch (whisperx venv, audio downloads, outputs)
 .transcripts/
+
+# ACVP test scratch — cavp_fetch.py generates these on each run; none of
+# them should be committed. Keep the tools/ scripts themselves.
+tests/profiling/tls_acvp/vectors/cache/
+
+.env
+.venv
+venv

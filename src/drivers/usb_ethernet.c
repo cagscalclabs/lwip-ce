@@ -1009,6 +1009,14 @@ bool init_ethernet_usb_device(usb_device_t device)
                     }
                 }
             }
+            /* Reject malformed descriptors before advancing. bLength == 0
+             * would infinite-loop the walker; bLength overrunning the
+             * remaining buffer would walk into adjacent memory on the
+             * next iteration. Either is a fatal parse error. */
+            if (desc->bLength == 0 || parsed_len + desc->bLength > desc_len)
+            {
+                return false;
+            }
             parsed_len += desc->bLength;
             desc = (usb_descriptor_t *)(((uint8_t *)desc) + desc->bLength);
         }

@@ -6,61 +6,70 @@
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
 #include "../includes/crypto_guard.h"
-#include "../../drivers/mem.h"
 
 #define ENCODE_START 0
 #define ENCODE_SALT (1 + ENCODE_START)
 
-#define RSA_PADDING_POOL_BLOCK_SIZE (RSA_MODULUS_MAX_SUPPORTED * 2u)
-#define RSA_PADDING_POOL_BLOCK_COUNT 2u
-#define RSA_PADDING_POOL_SIZE (RSA_PADDING_POOL_BLOCK_SIZE * RSA_PADDING_POOL_BLOCK_COUNT)
-
-static struct mem_buffer *g_rsa_padding_pool = NULL;
-
-static bool tls_rsa_padding_pool_ensure(void)
+static bool rsa_buffers_overlap(const void *a, size_t a_len,
+                                const void *b, size_t b_len)
 {
-    if (g_rsa_padding_pool != NULL)
-    {
-        return true;
-    }
+    uintptr_t a_start = (uintptr_t)a;
+    uintptr_t b_start = (uintptr_t)b;
+    uintptr_t a_end = a_start + a_len;
+    uintptr_t b_end = b_start + b_len;
 
-    g_rsa_padding_pool = mem_buffer_create(MEM_BUFFER_POOL,
-                                           RSA_PADDING_POOL_SIZE,
-                                           RSA_PADDING_POOL_SIZE,
-                                           RSA_PADDING_POOL_BLOCK_SIZE,
-                                           BUFFER_SECURE_MODE | BUFFER_LOCK_SIZE);
-    return g_rsa_padding_pool != NULL;
+    return a_len != 0 && b_len != 0 && a_start < b_end && b_start < a_end;
 }
 
-static uint8_t *tls_rsa_padding_alloc(size_t needed)
+static bool rsa_mgf1_digest(const uint8_t *seed, size_t seed_len,
+                            uint32_t counter, uint8_t *digest,
+                            size_t *digest_len, uint8_t hash_alg)
 {
-    if (needed == 0 || needed > RSA_PADDING_POOL_BLOCK_SIZE)
-    {
-        return NULL;
-    }
-    if (!tls_rsa_padding_pool_ensure())
-    {
-        return NULL;
-    }
-    return (uint8_t *)mem_buffer_malloc(g_rsa_padding_pool, needed);
+    struct tls_hash_context hash;
+    uint8_t ctr[4];
+
+    if (!tls_hash_context_init(&hash, hash_alg))
+        return false;
+    if (hash.digestlen > TLS_SHA256_DIGEST_LEN)
+        return false;
+
+    ctr[0] = (uint8_t)(counter >> 24);
+    ctr[1] = (uint8_t)(counter >> 16);
+    ctr[2] = (uint8_t)(counter >> 8);
+    ctr[3] = (uint8_t)counter;
+
+    hash.update(&hash._private, seed, seed_len);
+    hash.update(&hash._private, ctr, sizeof(ctr));
+    hash.digest(&hash._private, digest);
+    *digest_len = hash.digestlen;
+    return true;
 }
 
-static void tls_rsa_padding_free(void *ptr)
+static bool rsa_mgf1_xor(uint8_t *buf, size_t len,
+                         const uint8_t *seed, size_t seed_len,
+                         uint8_t hash_alg)
 {
-    if (ptr == NULL || g_rsa_padding_pool == NULL)
+    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    size_t digest_len = 0;
+    uint32_t counter = 0;
+    size_t off = 0;
+
+    while (off < len)
     {
-        return;
+        if (!rsa_mgf1_digest(seed, seed_len, counter++, digest, &digest_len, hash_alg))
+            return false;
+        size_t chunk = len - off;
+        if (chunk > digest_len)
+            chunk = digest_len;
+        for (size_t i = 0; i < chunk; i++)
+            buf[off + i] ^= digest[i];
+        off += chunk;
     }
-    mem_buffer_free(g_rsa_padding_pool, ptr);
+    return true;
 }
 
 void tls_rsa_padding_cleanup(void)
 {
-    if (g_rsa_padding_pool != NULL)
-    {
-        mem_buffer_destroy(g_rsa_padding_pool);
-        g_rsa_padding_pool = NULL;
-    }
 }
 
 // CRYPTO_FN
@@ -77,7 +86,6 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
     tls_crypto_guard_enable();
     bool ok = false;
-    uint8_t *mgf1_digest = NULL;
 
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
@@ -90,9 +98,13 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
     if ((in_len + min_padding_len) > modulus_len)
         goto cleanup;
-    mgf1_digest = tls_rsa_padding_alloc(db_len);
-    if (mgf1_digest == NULL)
+    if (inbuf != outbuf && rsa_buffers_overlap(inbuf, in_len, outbuf, modulus_len))
         goto cleanup;
+
+    size_t msg_offset = encode_ps + ps_len + 1;
+    /* Exact in-place encode is allowed. Move the plaintext to its final
+     * OAEP location before writing the leading fields that would overwrite it. */
+    memmove(&outbuf[msg_offset], inbuf, in_len);
 
     // set first byte to 00
     outbuf[ENCODE_START] = 0x00;
@@ -106,26 +118,20 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
     memset(&outbuf[encode_ps], 0, ps_len);                  // write padding zeros
     outbuf[encode_ps + ps_len] = 0x01;                      // write 0x01
-    memcpy(&outbuf[encode_ps + ps_len + 1], inbuf, in_len); // write plaintext to end of output
 
-    // hash the salt with MGF1, return hash length of db
-    tls_mgf1(&outbuf[ENCODE_SALT], hash.digestlen, mgf1_digest, db_len, hash_alg);
+    // XOR MGF1(seed) with DB in place.
+    if (!rsa_mgf1_xor(&outbuf[encode_lhash], db_len,
+                      &outbuf[ENCODE_SALT], hash.digestlen, hash_alg))
+        goto cleanup;
 
-    // XOR hash with db
-    for (size_t i = 0; i < db_len; i++)
-        outbuf[encode_lhash + i] ^= mgf1_digest[i];
-
-    // hash db with MGF1, return hash length of RSA_SALT_SIZE
-    tls_mgf1(&outbuf[encode_lhash], db_len, mgf1_digest, hash.digestlen, hash_alg);
-
-    // XOR hash with salt
-    for (size_t i = 0; i < hash.digestlen; i++)
-        outbuf[ENCODE_SALT + i] ^= mgf1_digest[i];
+    // XOR MGF1(maskedDB) with seed in place.
+    if (!rsa_mgf1_xor(&outbuf[ENCODE_SALT], hash.digestlen,
+                      &outbuf[encode_lhash], db_len, hash_alg))
+        goto cleanup;
 
     // Return the static size of 256
     ok = true;
 cleanup:
-    tls_rsa_padding_free(mgf1_digest);
     tls_crypto_guard_disable();
     return ok;
 }
@@ -138,10 +144,11 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (inbuf == NULL) ||
         (outbuf == NULL))
         return 0;
+    if (inbuf != outbuf && rsa_buffers_overlap(inbuf, in_len, outbuf, in_len))
+        return 0;
 
     tls_crypto_guard_enable();
     size_t out_len = 0;
-    uint8_t *workspace = NULL;
 
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
@@ -149,55 +156,58 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
     size_t db_len = in_len - hash.digestlen - 1;
     uint8_t sha256_digest[TLS_SHA256_DIGEST_LEN];
-    size_t encode_lhash = ENCODE_SALT + hash.digestlen;
-    size_t encode_ps = encode_lhash + hash.digestlen;
-    size_t i;
+    uint8_t seed[TLS_SHA256_DIGEST_LEN];
+    uint8_t mgf_block[TLS_SHA256_DIGEST_LEN];
+    size_t mgf_len = 0;
+    uint32_t counter = 0;
+    size_t masked_db = ENCODE_SALT + hash.digestlen;
+    bool have_delimiter = false;
 
-    /* Layout: tmp[in_len] || mgf1_digest[db_len] */
-    workspace = tls_rsa_padding_alloc(in_len + db_len);
-    if (workspace == NULL)
+    if (hash.digestlen > sizeof(seed))
         goto cleanup;
-    uint8_t *tmp = workspace;
-    uint8_t *mgf1_digest = tmp + in_len;
+    if (inbuf[ENCODE_START] != 0)
+        goto cleanup;
 
-    memcpy(tmp, inbuf, in_len);
-
-    // Copy last 16 bytes of input buf to salt to get encoded salt
-    // memcpy(salt, &in[len-RSA_SALT_SIZE-1], RSA_SALT_SIZE);
-
-    // SHA-256 hash db
-    tls_mgf1(&tmp[encode_lhash], db_len, mgf1_digest, hash.digestlen, hash_alg);
-
-    // XOR hash with encoded salt to return salt
-    for (i = 0; i < TLS_SHA256_DIGEST_LEN; i++)
-        tmp[ENCODE_SALT + i] ^= mgf1_digest[i];
-
-    // MGF1 hash the salt
-    tls_mgf1(&tmp[ENCODE_SALT], hash.digestlen, mgf1_digest, db_len, hash_alg);
-
-    // XOR MGF1 of salt with encoded message to get decoded message
-    for (i = 0; i < db_len; i++)
-        tmp[encode_lhash + i] ^= mgf1_digest[i];
+    memcpy(seed, &inbuf[ENCODE_SALT], hash.digestlen);
+    if (!rsa_mgf1_xor(seed, hash.digestlen, &inbuf[masked_db], db_len, hash_alg))
+        goto cleanup;
 
     // verify authentication
     if (auth != NULL)
         hash.update(&hash._private, (const uint8_t *)auth, strlen(auth));
     hash.digest(&hash._private, sha256_digest);
 
-    if (!tls_bytes_compare(sha256_digest, &tmp[encode_lhash], TLS_SHA256_DIGEST_LEN))
-        goto cleanup;
+    for (size_t i = 0; i < db_len; i++)
+    {
+        if ((i % hash.digestlen) == 0)
+        {
+            if (!rsa_mgf1_digest(seed, hash.digestlen, counter++,
+                                 mgf_block, &mgf_len, hash_alg))
+                goto cleanup;
+        }
 
-    for (i = encode_ps; i < in_len; i++)
-        if (tmp[i] == 0x01)
-            break;
-    if (i == in_len)
-        goto cleanup;
-    i++;
-    memcpy(outbuf, &tmp[i], in_len - i);
+        uint8_t db = inbuf[masked_db + i] ^ mgf_block[i % hash.digestlen];
+        if (i < hash.digestlen)
+        {
+            if (db != sha256_digest[i])
+                goto cleanup;
+            continue;
+        }
+        if (!have_delimiter)
+        {
+            if (db == 0)
+                continue;
+            if (db != 0x01)
+                goto cleanup;
+            have_delimiter = true;
+            continue;
+        }
+        outbuf[out_len++] = db;
+    }
 
-    out_len = in_len - i;
+    if (!have_delimiter)
+        goto cleanup;
 cleanup:
-    tls_rsa_padding_free(workspace);
     tls_crypto_guard_disable();
     return out_len;
 }
@@ -267,7 +277,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
  * PSS padding structure for the given message hash. It does NOT perform
  * RSA modular exponentiation - the caller must decrypt the signature first.
  *
- * Uses internal RSA padding pool scratch buffer for temporary computations.
+ * Uses only fixed-size local scratch buffers.
  * em_bits is derived internally as (em_len * 8) - 1.
  *
  * @param encoded_msg   The decrypted signature (EM), big-endian, emLen bytes
@@ -292,7 +302,6 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
 
     tls_crypto_guard_enable();
     bool ok = false;
-    uint8_t *workspace = NULL;
 
     struct tls_hash_context hash;
     if (!tls_hash_context_init(&hash, hash_alg))
@@ -301,21 +310,8 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
         goto cleanup; /* enforce TLS 1.3 salt length rule */
 
     size_t db_len = em_len - hash.digestlen - 1;
-
-    /* Workspace layout: db_mask[em_len] || tmp[max(db_len, 8 + 2*hash_len)] */
-    size_t tmp_len = db_len;
-    size_t hprime_len = 8u + (hash.digestlen << 1);
-    if (tmp_len < hprime_len)
-        tmp_len = hprime_len;
-    workspace = tls_rsa_padding_alloc(em_len + tmp_len);
-    if (workspace == NULL)
+    if (db_len <= hash.digestlen)
         goto cleanup;
-    uint8_t *db_mask = workspace;
-    uint8_t *tmp = db_mask + em_len;
-
-    /* Copy EM to db_mask buffer for in-place modification */
-    uint8_t *em = db_mask; /* will hold DB after unmasking */
-    memcpy(em, encoded_msg, em_len);
 
     /* RFC 8017: Verify unused bits are zero */
     uint8_t unused = (uint8_t)(em_len * 8 - em_bits);
@@ -323,50 +319,63 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
         goto cleanup;
     uint8_t top_mask = (uint8_t)(0xFFu >> unused);
 
-    if ((em[0] & ~top_mask) != 0)
+    if ((encoded_msg[0] & ~top_mask) != 0)
         goto cleanup;
-    em[0] &= top_mask;
 
     /* Verify 0xBC trailer */
-    if (em[em_len - 1] != 0xBC)
+    if (encoded_msg[em_len - 1] != 0xBC)
         goto cleanup;
 
-    /* Extract H and DB pointers */
-    uint8_t *H = &em[em_len - 1 - hash.digestlen];
-    uint8_t *DB = em;
+    const uint8_t *H = &encoded_msg[em_len - 1 - hash.digestlen];
+    uint8_t mgf_block[TLS_SHA256_DIGEST_LEN];
+    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    uint8_t zeros[8] = {0};
+    size_t mgf_len = 0;
+    uint32_t counter = 0;
+    size_t sep_index = db_len - hash.digestlen - 1;
 
-    /* Unmask DB: maskedDB XOR MGF(H, dbLen) */
-    if (!tls_mgf1(H, hash.digestlen, tmp, db_len, hash_alg))
+    if (hash.digestlen > sizeof(mgf_block))
         goto cleanup;
+
+    hash.update(&hash._private, zeros, sizeof(zeros));
+    hash.update(&hash._private, mhash, hash.digestlen);
+
+    /* Decode DB byte-by-byte as maskedDB XOR MGF1(H). TLS 1.3 fixes
+     * salt length to hLen, so the 0x01 separator has one valid position. */
     for (size_t i = 0; i < db_len; i++)
-        DB[i] ^= tmp[i];
-    DB[0] &= top_mask;
+    {
+        if ((i % hash.digestlen) == 0)
+        {
+            if (!rsa_mgf1_digest(H, hash.digestlen, counter++,
+                                 mgf_block, &mgf_len, hash_alg))
+                goto cleanup;
+        }
 
-    /* Verify padding structure: 0x00...00 || 0x01 || salt */
-    size_t ps_end = 0;
-    while (ps_end < db_len && DB[ps_end] == 0)
-        ps_end++;
-    if (ps_end >= db_len || DB[ps_end] != 0x01)
-        goto cleanup;
-    ps_end++;
+        uint8_t db = encoded_msg[i] ^ mgf_block[i % hash.digestlen];
+        if (i == 0)
+            db &= top_mask;
 
-    /* TLS 1.3 requires salt length == hash length */
-    if (db_len - ps_end != hash.digestlen)
-        goto cleanup;
-    uint8_t *salt = &DB[ps_end];
+        if (i < sep_index)
+        {
+            if (db != 0)
+                goto cleanup;
+        }
+        else if (i == sep_index)
+        {
+            if (db != 0x01)
+                goto cleanup;
+        }
+        else
+        {
+            hash.update(&hash._private, &db, 1);
+        }
+    }
 
-    /* Compute H' = Hash(0x00*8 || mHash || salt) */
-    memset(tmp, 0, 8);
-    memcpy(&tmp[8], mhash, hash.digestlen);
-    memcpy(&tmp[8 + hash.digestlen], salt, hash.digestlen);
-
-    hash.update(&hash._private, tmp, 8 + (hash.digestlen << 1));
-    hash.digest(&hash._private, tmp); /* write H' to tmp */
+    hash.digest(&hash._private, digest);
 
     /* Verify H' == H */
-    ok = tls_bytes_compare(tmp, H, hash.digestlen);
+    ok = tls_bytes_compare(digest, H, hash.digestlen);
 cleanup:
-    tls_rsa_padding_free(workspace);
     tls_crypto_guard_disable();
     return ok;
 }
