@@ -668,8 +668,9 @@ int main(void)
 
     ti_Close(in_handle);
 
-    printf("done: %u responses\n", responses_written);
-    printf("Press any key");
+    os_ClrHome();
+    printf("ACVP runner\n");
+    printf("Done.");
     os_GetKey();
     return 0;
 }

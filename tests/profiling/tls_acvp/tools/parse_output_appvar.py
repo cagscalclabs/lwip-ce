@@ -281,9 +281,21 @@ def main() -> int:
     appvar_bytes = INPUT_APPVAR.read_bytes()
     expected_data = json.loads(EXPECTED_JSON.read_text())
     vectors_by_id = {int(v["test_id"]): v for v in expected_data["vectors"]}
+    expected_gradeable = {
+        int(v["test_id"]) for v in expected_data["vectors"] if has_expected(v)
+    }
+
+    if not vectors_by_id:
+        print("ERROR: expected.json contains no ACVP vectors", file=sys.stderr)
+        return 1
+    if not expected_gradeable:
+        print("ERROR: expected.json contains no gradeable ACVP vectors", file=sys.stderr)
+        return 1
 
     body = strip_appvar_wrapper(appvar_bytes)
     responses, warnings = parse_responses(body)
+    if not responses:
+        warnings.append("ACVPOUT contained zero responses")
 
     # Grade each response
     rows: list[dict[str, Any]] = []
@@ -294,19 +306,26 @@ def main() -> int:
     for r in responses:
         vec = vectors_by_id.get(r["test_id"])
         if not vec:
+            by_alg["?"]["fail"] += 1
             rows.append({
                 "test_id": r["test_id"],
                 "algorithm": "?",
-                "status": "orphan",
+                "status": "fail",
                 "detail": "no vector with this test_id in the JSON",
             })
             continue
 
         alg = vec["algorithm"]
         if r["status"] == 1:  # UNSUPPORTED
-            by_alg[alg]["unsupported"] += 1
-            rows.append({"test_id": r["test_id"], "algorithm": alg,
-                         "status": "unsupported", "detail": "calc returned UNSUPPORTED"})
+            if has_expected(vec):
+                by_alg[alg]["fail"] += 1
+                rows.append({"test_id": r["test_id"], "algorithm": alg,
+                             "status": "fail",
+                             "detail": "calc returned UNSUPPORTED for a gradeable vector"})
+            else:
+                by_alg[alg]["unsupported"] += 1
+                rows.append({"test_id": r["test_id"], "algorithm": alg,
+                             "status": "unsupported", "detail": "calc returned UNSUPPORTED"})
             continue
         if r["status"] == 2:  # INTERNAL_ERROR
             by_alg[alg]["fail"] += 1
@@ -314,16 +333,16 @@ def main() -> int:
                          "status": "fail", "detail": "calc returned INTERNAL_ERROR"})
             continue
         if not has_expected(vec):
-            by_alg[alg]["skip"] += 1
+            by_alg[alg]["fail"] += 1
             rows.append({"test_id": r["test_id"], "algorithm": alg,
-                         "status": "skip", "detail": "expected output is placeholder"})
+                         "status": "fail", "detail": "expected output is placeholder"})
             continue
 
         grader = GRADERS.get(alg)
         if not grader:
-            by_alg[alg]["skip"] += 1
+            by_alg[alg]["fail"] += 1
             rows.append({"test_id": r["test_id"], "algorithm": alg,
-                         "status": "skip", "detail": f"no grader for {alg}"})
+                         "status": "fail", "detail": f"no grader for {alg}"})
             continue
 
         ok, detail = grader(r["result"], vec)
@@ -411,13 +430,17 @@ def main() -> int:
             "summary": {
                 "pass": total_pass, "fail": total_fail,
                 "skip": total_skip, "unsupported": total_unsup,
+                "warnings": len(warnings),
+                "expected_vectors": len(vectors_by_id),
+                "gradeable_vectors": len(expected_gradeable),
+                "responses": len(responses),
             },
             "by_algorithm": by_alg,
             "results": rows,
             "warnings": warnings,
         }, indent=2))
 
-    return 1 if total_fail else 0
+    return 1 if failures or total_skip or total_unsup or warnings else 0
 
 
 if __name__ == "__main__":

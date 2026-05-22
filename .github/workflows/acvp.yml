@@ -154,10 +154,10 @@ jobs:
         id: run_acvp
         run: |
           test_dir="${{env.ACVP_TEST_DIR}}"
+          rm -f "$test_dir/ACVPOUT.8xv" "$test_dir/ACVPRSA.8xv" "$test_dir/autotest.log"
           test_start=$(($(date +%s%N)/1000000))
           make -C "$test_dir" clean
           make -C "$test_dir"
-          status=0
           set +e
           make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
           status=${PIPESTATUS[0]}
@@ -166,10 +166,7 @@ jobs:
           test_duration=$((test_end - test_start))
           echo "duration=$test_duration" >> "$GITHUB_OUTPUT"
           echo "autotester_status=$status" >> "$GITHUB_OUTPUT"
-          # The autotester returning non-zero (e.g. because of a CRC mismatch on
-          # the placeholder VRAM hash) is NOT a failure of the ACVP run itself
-          # — what we actually care about is whether ACVPOUT.8xv was produced
-          # and how its responses grade. So we don't `exit $status` here.
+          exit "$status"
 
       - name: Locate ACVPOUT AppVar
         id: locate_appvar
@@ -177,13 +174,7 @@ jobs:
         run: |
           test_dir="${{env.ACVP_TEST_DIR}}"
           appvar_out="$test_dir/ACVPOUT.8xv"
-          if [ -f "$appvar_out" ]; then
-            found="$appvar_out"
-          else
-            found=$(find "${{github.workspace}}" -type f \( -iname "ACVPOUT.8xv" -o -iname "ACVPOUT*.8xv" \) -print0 \
-                  | xargs -0 ls -1t 2>/dev/null | head -n 1 || true)
-          fi
-          if [ -z "$found" ]; then
+          if [ ! -s "$appvar_out" ]; then
             echo "found=" >> "$GITHUB_OUTPUT"
             echo "## ACVP Primitive Validation" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -195,17 +186,12 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
-          src_abs="$(readlink -f "$found")"
-          dst_abs="$(readlink -f "$appvar_out" 2>/dev/null || true)"
-          if [ "$src_abs" != "$dst_abs" ]; then
-            cp "$found" "$appvar_out"
-          fi
           echo "found=$appvar_out" >> "$GITHUB_OUTPUT"
           ls -lh "$appvar_out"
 
       - name: Grade Responses
         id: grade
-        if: always() && steps.locate_appvar.outputs.found != ''
+        if: success() && steps.locate_appvar.outputs.found != ''
         # parse_output_appvar.py reads ACVPOUT.8xv + vectors JSON from
         # hardcoded paths relative to itself. Only output paths are flagged.
         run: |
