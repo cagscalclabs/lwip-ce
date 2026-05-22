@@ -66,6 +66,7 @@ tools/
 # ACVP test scratch — cavp_fetch.py generates these on each run; none of
 # them should be committed. Keep the tools/ scripts themselves.
 tests/profiling/tls_acvp/vectors/cache/
+!tests/profiling/tls_acvp/tools
 
 .env
 .venv
