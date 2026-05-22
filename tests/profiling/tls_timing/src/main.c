@@ -1062,9 +1062,11 @@ static void show_result(const char *name, const struct primitive_result *result)
                (unsigned long)(result->class_over_thresh_pct_x100_rigorous[class_id] % 100u));
     }
 #endif
+#ifndef TLS_TIMING_AUTORUN
     os_FontSelect(os_LargeFont);
     printf("\nPress any key");
     os_GetKey();
+#endif
 }
 
 int main(void)
@@ -1125,6 +1127,14 @@ int main(void)
     show_result("X25519", &r_x25519);
     timing_logf("tls_timing,end\n");
     timing_log_end();
+
+#ifdef TLS_TIMING_AUTORUN
+    os_ClrHome();
+    os_FontSelect(os_LargeFont);
+    printf("TLS Timing\n");
+    printf("Done.");
+    os_GetKey();
+#endif
 
     return 0;
 }

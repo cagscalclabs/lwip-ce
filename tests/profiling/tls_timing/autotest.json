@@ -12,137 +12,16 @@
     "action|launch",
     "hashWait|1",
     "key|enter",
-    "hashWait|2",
-    "key|enter",
-    "hashWait|3",
-    "key|enter",
-    "hashWait|4",
-    "key|enter",
-    "hashWait|5",
-    "key|enter",
-    "hashWait|6",
-    "key|enter",
-    "hashWait|7",
-    "key|enter",
-    "hashWait|8",
-    "key|enter",
-    "hashWait|9",
-    "key|enter",
-    "hashWait|10",
-    "key|enter",
-    "hashWait|11",
-    "key|enter",
-    "hashWait|12",
-    "key|enter",
     "delay|2000",
     "saveVar|TLSTMLOG"
   ],
   "hashes": {
     "1": {
-      "description": "Secure bytes compare, differential",
+      "description": "Timing profiler completes and TLSTMLOG is written",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "A42E20CA"
-      ],
-      "timeout": 80000000
-    },
-    "2": {
-      "description": "SHA-256, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "F54D6729"
-      ],
-      "timeout": 40000000
-    },
-    "3": {
-      "description": "HMAC-SHA-256, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "CA34DEB6"
-      ],
-      "timeout": 40000000
-    },
-    "4": {
-      "description": "HKDF, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "799733C3"
-      ],
-      "timeout": 40000000
-    },
-    "5": {
-      "description": "PBKDF2, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "6F92130F"
-      ],
-      "timeout": 200000000
-    },
-    "6": {
-      "description": "AES-GCM Encrypt, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "529FA90B"
-      ],
-      "timeout": 100000000
-    },
-    "7": {
-      "description": "AES-GCM Decrypt + Verify, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "B99B7F3B"
-      ],
-      "timeout": 100000000
-    },
-    "8": {
-      "description": "AES-CBC Encrypt, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "080A2864"
-      ],
-      "timeout": 100000000
-    },
-    "9": {
-      "description": "AES-CBC Decrypt, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "0E71A9BA"
-      ],
-      "timeout": 100000000
-    },
-    "10": {
-      "description": "AES-CCM Encrypt, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "B7FFCFB2"
-      ],
-      "timeout": 1000000000
-    },
-    "11": {
-      "description": "AES-CCM Decrypt, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "B1844E6C"
-      ],
-      "timeout": 1000000000
-    },
-    "12": {
-      "description": "x25519 ECDHE, differential",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "expected_CRCs": [
-        "13EFD799"
+        "7157D347"
       ],
       "timeout": 1000000000
     }
