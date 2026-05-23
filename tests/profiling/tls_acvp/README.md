@@ -13,8 +13,9 @@ end-to-end on the shipping calculator binary via CEmu.
   derivation + shared secret) primitives produce correct outputs for
   inputs taken directly from NIST CAVP archives and IETF RFC test sections.
 - Random-sampled per CI run: on every push to `tls`, `tools/cavp_fetch.py`
-  randomly samples 5 vectors per CAVP-covered algorithm. The seed is
-  logged so any failing run can be reproduced (`CAVP_FETCH_SEED=<seed>`).
+  randomly samples 16 vectors per sampled/generated algorithm by default.
+  The seed is logged so any failing run can be reproduced
+  (`CAVP_FETCH_SEED=<seed>`).
 - For RSA-PSS, NIST publishes both positive (`Result = P`) and negative
   (`Result = F (...)`) vectors. The sampler guarantees at least one of
   each so a verifier that always accepts (or always rejects) is caught.
@@ -28,10 +29,10 @@ end-to-end on the shipping calculator binary via CEmu.
 | AES-128-GCM | NIST CAVP `gcmEncryptExtIV128.rsp` | Sampled per run |
 | SHA-256 | NIST CAVP `SHA256ShortMsg.rsp` | Sampled per run |
 | HMAC-SHA-256 | NIST CAVP `HMAC.rsp` (L=32, Tlen=32) | Sampled per run |
-| RSA-2048-PSS-SHA-256 verify | NIST CAVP `SigVerPSS_186-3.rsp` | Sampled per run |
+| RSA-2048-PSS-SHA-256 verify | Generated with `python3-cryptography` (e=65537) | Generated per run |
 | HKDF-SHA-256 | RFC 5869 §A.1-A.3 | Pinned (CAVP doesn't publish) |
-| X25519 publickey | RFC 7748 §6.1 | Pinned (CAVP doesn't publish) |
-| X25519 shared secret | RFC 7748 §5.2 + §6.1 | Pinned (CAVP doesn't publish) |
+| X25519 publickey | Generated with `python3-cryptography`, plus RFC 7748 §6.1 | Generated + pinned |
+| X25519 shared secret | Generated with `python3-cryptography`, plus RFC 7748 §5.2/§6.1 | Generated + pinned |
 
 **DRBG is intentionally NOT included.** NIST CAVP Hash_DRBG vectors require
 a deterministic `instantiate(entropy, nonce, personalization)` +
@@ -134,10 +135,10 @@ CAVP_FETCH_SEED=1234567890 python3 tools/cavp_fetch.py
 # ...then run the rest as above with the same vectors that failed in CI
 ```
 
-To use a larger sample (default is 5 per CAVP primitive):
+To use a larger sample (default is 16 per sampled/generated primitive):
 
 ```sh
-CAVP_FETCH_SAMPLE=20 python3 tools/cavp_fetch.py
+CAVP_FETCH_SAMPLE=50 python3 tools/cavp_fetch.py
 ```
 
 ## CI integration

@@ -17,7 +17,7 @@ CAVP archives covered:
 Not from CAVP (no compatible archive):
   RSA-2048-PSS-SHA-256    fresh-per-run keygen + sign (see notes below)
   HKDF-SHA-256            RFC 5869 §A.1-A.3 (RFC-pinned)
-  X25519                  RFC 7748 §6.1 + §5.2 (RFC-pinned)
+  X25519                  RFC 7748 §6.1 + §5.2 plus generated vectors
 
 RSA-PSS notes:
   Calc-side `tls_rsa_decrypt_signature` hardcodes e=65537 and ignores
@@ -33,7 +33,7 @@ RSA-PSS notes:
   enforces a canonical 256-byte modulus (MSB set, no leading zero).
 
 Random sampling:
-  Default 5 per primitive (override with CAVP_FETCH_SAMPLE=N).
+  Default 16 per primitive (override with CAVP_FETCH_SAMPLE=N).
   Seed defaults to int(time()) so each run is fresh; reproducible by
   setting CAVP_FETCH_SEED=<seed_from_previous_run>.
   RSA-PSS samples are forced to contain >=1 positive and >=1 negative so
@@ -72,7 +72,7 @@ ACVPIN_PATH = VECTORS_DIR / "ACVPIN.8xv"
 EXPECTED_PATH = VECTORS_DIR / "expected.json"
 APPVAR_NAME = "ACVPIN"
 
-DEFAULT_SAMPLE_SIZE = 5
+DEFAULT_SAMPLE_SIZE = 16
 
 # Algorithm IDs — must match src/main.c #defines and parse_output_appvar.py
 ALG_ID = {
@@ -94,7 +94,7 @@ TID_RANGES = {
     "HKDF-SHA-256":           4001,
     "RSA-PSS-SHA-256-VERIFY": 6001,
     "X25519-PUBLICKEY":       7001,
-    "X25519-SECRET":          7050,
+    "X25519-SECRET":          8001,
 }
 
 
@@ -425,6 +425,57 @@ def gen_rsa_pss_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any
     return out
 
 
+def gen_x25519(rng: random.Random, n_vectors: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Generate deterministic X25519 public-key and shared-secret vectors.
+
+    RFC 7748 provides only a small fixed set. These generated vectors expand
+    coverage while preserving reproducibility under CAVP_FETCH_SEED.
+    """
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import x25519
+    except ImportError as e:
+        raise SystemExit(
+            "X25519 vector generation needs python3-cryptography "
+            f"(apt install python3-cryptography). Import failed: {e}")
+
+    pub_vectors: list[dict[str, Any]] = []
+    secret_vectors: list[dict[str, Any]] = []
+
+    for i in range(n_vectors):
+        priv_bytes = rng.randbytes(32)
+        priv = x25519.X25519PrivateKey.from_private_bytes(priv_bytes)
+        pub_bytes = priv.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        pub_vectors.append({
+            "algorithm": "X25519-PUBLICKEY",
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"publickey[{i}]",
+            "priv_hex": priv_bytes.hex(),
+            "expected_pub_hex": pub_bytes.hex(),
+        })
+
+        peer_priv_bytes = rng.randbytes(32)
+        peer_priv = x25519.X25519PrivateKey.from_private_bytes(peer_priv_bytes)
+        peer_pub_bytes = peer_priv.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        shared_bytes = priv.exchange(peer_priv.public_key())
+        secret_vectors.append({
+            "algorithm": "X25519-SECRET",
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"secret[{i}]",
+            "priv_hex": priv_bytes.hex(),
+            "peer_pub_hex": peer_pub_bytes.hex(),
+            "expected_shared_hex": shared_bytes.hex(),
+        })
+
+    return pub_vectors, secret_vectors
+
+
 # ============================================================
 # Sampling
 # ============================================================
@@ -564,7 +615,7 @@ def write_8xv(body: bytes) -> None:
 # expected.json (host-side grading source)
 # ============================================================
 
-def build_expected(vectors: list[dict[str, Any]]) -> dict[str, Any]:
+def build_expected(vectors: list[dict[str, Any]], seed: int, sample_size: int) -> dict[str, Any]:
     """Produce a compact host-side grading record. The parser keys on test_id
     and looks up algorithm + expected_* fields."""
     out_vectors = []
@@ -589,6 +640,8 @@ def build_expected(vectors: list[dict[str, Any]]) -> dict[str, Any]:
             "Maps test_id -> expected outputs for parse_output_appvar.py."
         ),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "seed": seed,
+        "sample_size": sample_size,
         "vectors": out_vectors,
     }
 
@@ -656,6 +709,24 @@ def main() -> int:
         print(f"    generated tid={v['test_id']} <- {v['source_file']} "
               f"Count={v['source_count']}{verdict_note}", file=sys.stderr)
 
+    # --- Generated X25519 vectors
+    print(f"==> [X25519] generating {sample_size} public-key and {sample_size} secret vectors ...",
+          file=sys.stderr)
+    try:
+        x25519_pub_vectors, x25519_secret_vectors = gen_x25519(rng, sample_size)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"==> [X25519] FAILED: {e}", file=sys.stderr)
+        return 2
+    assign_test_ids(x25519_pub_vectors, "X25519-PUBLICKEY")
+    assign_test_ids(x25519_secret_vectors, "X25519-SECRET")
+    all_vectors.extend(x25519_pub_vectors)
+    all_vectors.extend(x25519_secret_vectors)
+    for v in x25519_pub_vectors + x25519_secret_vectors:
+        print(f"    generated tid={v['test_id']} <- {v['source_file']} "
+              f"Count={v['source_count']}", file=sys.stderr)
+
     # --- RFC-pinned (HKDF, X25519)
     print(f"==> adding {len(RFC_VECTORS)} RFC-pinned vectors (HKDF + X25519)",
           file=sys.stderr)
@@ -663,7 +734,9 @@ def main() -> int:
     for v in RFC_VECTORS:
         rfc_by_alg.setdefault(v["algorithm"], []).append(dict(v))
     for alg, lst in rfc_by_alg.items():
-        assign_test_ids(lst, alg)
+        start = TID_RANGES[alg] + sample_size
+        for i, v in enumerate(lst):
+            v["test_id"] = start + i
         all_vectors.extend(lst)
 
     # Sort for stable output
@@ -681,7 +754,7 @@ def main() -> int:
           file=sys.stderr)
 
     # --- Write expected.json
-    expected = build_expected(all_vectors)
+    expected = build_expected(all_vectors, seed, sample_size)
     EXPECTED_PATH.write_text(json.dumps(expected, indent=2) + "\n")
     print(f"==> wrote {EXPECTED_PATH} ({len(all_vectors)} vectors)",
           file=sys.stderr)

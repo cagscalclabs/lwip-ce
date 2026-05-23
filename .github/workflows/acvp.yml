@@ -2,9 +2,10 @@ name: ACVP Primitive Validation
 
 # Runs NIST CAVP test vectors against the shipping cryptographic primitives
 # on every push to `tls` that touches the relevant code, plus on manual
-# dispatch. tools/cavp_fetch.py downloads NIST CAVP archives, samples 5
-# vectors per primitive at random (per run), adds RFC-pinned HKDF + X25519
-# vectors, and emits ACVPIN.8xv + expected.json for the test run.
+# dispatch. tools/cavp_fetch.py downloads NIST CAVP archives, samples 16
+# vectors per primitive at random (per run), adds generated RSA-PSS/X25519
+# coverage plus RFC-pinned HKDF/X25519 vectors, and emits ACVPIN.8xv +
+# expected.json for the test run.
 
 on:
   push:
@@ -23,6 +24,7 @@ env:
   SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
   ACVP_TEST_DIR: ${{github.workspace}}/tests/profiling/tls_acvp
+  CAVP_FETCH_SAMPLE: 16
 
 jobs:
   acvp:
@@ -139,12 +141,15 @@ jobs:
         with:
           path: ${{env.ACVP_TEST_DIR}}/vectors/cache
           key: ${{ runner.os }}-cavp-archives-v1
+          restore-keys: |
+            ${{ runner.os }}-cavp-archives-
 
       - name: Fetch CAVP vectors and pack ACVPIN.8xv
         # cavp_fetch.py: downloads NIST CAVP zips (if not cached), parses
-        # the .rsp files, randomly samples 5 vectors per algorithm, merges
-        # in the RFC-pinned HKDF and X25519 vectors, packs ACVPIN.8xv for
-        # the calc, and writes expected.json for the grader. All in one shot.
+        # the .rsp files, randomly samples vectors per algorithm, merges in
+        # generated RSA-PSS/X25519 coverage plus RFC-pinned HKDF/X25519
+        # vectors, packs ACVPIN.8xv for the calc, and writes expected.json
+        # for the grader. All in one shot.
         run: |
           python3 "${{env.ACVP_TEST_DIR}}/tools/cavp_fetch.py"
           ls -lh "${{env.ACVP_TEST_DIR}}/vectors/ACVPIN.8xv" \
