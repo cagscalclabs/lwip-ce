@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Fetch NIST CAVP archives, sample N vectors per primitive, hardcode the
-RFC vectors for HKDF + X25519, and emit:
+"""Fetch NIST CAVP archives, sample N vectors per primitive, add generated
+vectors where CAVP coverage is unavailable, and emit:
 
   - vectors/ACVPIN.8xv     The calc-side input AppVar (binary, packed).
   - vectors/expected.json  The host-side grading source (test_id -> expected).
@@ -16,7 +16,7 @@ CAVP archives covered:
 
 Not from CAVP (no compatible archive):
   RSA-2048-PSS-SHA-256    fresh-per-run keygen + sign (see notes below)
-  HKDF-SHA-256            RFC 5869 §A.1-A.3 (RFC-pinned)
+  HKDF-SHA-256            RFC 5869 §A.1-A.3 plus generated vectors
   X25519                  RFC 7748 §6.1 + §5.2 plus generated vectors
 
 RSA-PSS notes:
@@ -425,6 +425,43 @@ def gen_rsa_pss_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any
     return out
 
 
+def gen_hkdf_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any]]:
+    """Generate deterministic HKDF-SHA-256 vectors."""
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    except ImportError as e:
+        raise SystemExit(
+            "HKDF vector generation needs python3-cryptography "
+            f"(apt install python3-cryptography). Import failed: {e}")
+
+    out: list[dict[str, Any]] = []
+    for i in range(n_vectors):
+        ikm = rng.randbytes(rng.randint(1, 96))
+        salt = rng.randbytes(rng.randint(0, 64))
+        info = rng.randbytes(rng.randint(0, 64))
+        length = rng.randint(1, 96)
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=length,
+            salt=salt if salt else None,
+            info=info,
+        )
+        okm = hkdf.derive(ikm)
+        out.append({
+            "algorithm": "HKDF-SHA-256",
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"hkdf[{i}],ikm_len={len(ikm)},salt_len={len(salt)},info_len={len(info)},l={length}",
+            "ikm_hex": ikm.hex(),
+            "salt_hex": salt.hex(),
+            "info_hex": info.hex(),
+            "l": length,
+            "expected_okm_hex": okm.hex(),
+        })
+
+    return out
+
+
 def gen_x25519(rng: random.Random, n_vectors: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Generate deterministic X25519 public-key and shared-secret vectors.
 
@@ -709,35 +746,56 @@ def main() -> int:
         print(f"    generated tid={v['test_id']} <- {v['source_file']} "
               f"Count={v['source_count']}{verdict_note}", file=sys.stderr)
 
-    # --- Generated X25519 vectors
-    print(f"==> [X25519] generating {sample_size} public-key and {sample_size} secret vectors ...",
-          file=sys.stderr)
+    # --- RFC-pinned + generated coverage for primitives without CAVP archives.
+    rfc_by_alg: dict[str, list[dict[str, Any]]] = {}
+    for v in RFC_VECTORS:
+        rfc_by_alg.setdefault(v["algorithm"], []).append(dict(v))
+
+    hkdf_needed = max(0, sample_size - len(rfc_by_alg.get("HKDF-SHA-256", [])))
+    print(f"==> [HKDF-SHA-256] adding {len(rfc_by_alg.get('HKDF-SHA-256', []))} RFC-pinned "
+          f"+ generating {hkdf_needed} vectors ...", file=sys.stderr)
     try:
-        x25519_pub_vectors, x25519_secret_vectors = gen_x25519(rng, sample_size)
+        hkdf_vectors = gen_hkdf_sha256(rng, hkdf_needed)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"==> [HKDF-SHA-256] FAILED: {e}", file=sys.stderr)
+        return 2
+    hkdf_vectors.extend(rfc_by_alg.get("HKDF-SHA-256", []))
+    assign_test_ids(hkdf_vectors, "HKDF-SHA-256")
+    all_vectors.extend(hkdf_vectors)
+    for v in hkdf_vectors:
+        source = v.get("source_file", v.get("$source", "unknown"))
+        count = v.get("source_count", "pinned")
+        print(f"    hkdf tid={v['test_id']} <- {source} Count={count}", file=sys.stderr)
+
+    x25519_pub_pinned = rfc_by_alg.get("X25519-PUBLICKEY", [])
+    x25519_secret_pinned = rfc_by_alg.get("X25519-SECRET", [])
+    x25519_pub_needed = max(0, sample_size - len(x25519_pub_pinned))
+    x25519_secret_needed = max(0, sample_size - len(x25519_secret_pinned))
+    x25519_generate_count = max(x25519_pub_needed, x25519_secret_needed)
+    print(f"==> [X25519] adding {len(x25519_pub_pinned)} public-key RFC-pinned "
+          f"+ generating {x25519_pub_needed}; adding {len(x25519_secret_pinned)} secret RFC-pinned "
+          f"+ generating {x25519_secret_needed} ...", file=sys.stderr)
+    try:
+        x25519_pub_vectors, x25519_secret_vectors = gen_x25519(rng, x25519_generate_count)
     except SystemExit:
         raise
     except Exception as e:
         print(f"==> [X25519] FAILED: {e}", file=sys.stderr)
         return 2
+    x25519_pub_vectors = x25519_pub_vectors[:x25519_pub_needed]
+    x25519_secret_vectors = x25519_secret_vectors[:x25519_secret_needed]
+    x25519_pub_vectors.extend(x25519_pub_pinned)
+    x25519_secret_vectors.extend(x25519_secret_pinned)
     assign_test_ids(x25519_pub_vectors, "X25519-PUBLICKEY")
     assign_test_ids(x25519_secret_vectors, "X25519-SECRET")
     all_vectors.extend(x25519_pub_vectors)
     all_vectors.extend(x25519_secret_vectors)
     for v in x25519_pub_vectors + x25519_secret_vectors:
-        print(f"    generated tid={v['test_id']} <- {v['source_file']} "
-              f"Count={v['source_count']}", file=sys.stderr)
-
-    # --- RFC-pinned (HKDF, X25519)
-    print(f"==> adding {len(RFC_VECTORS)} RFC-pinned vectors (HKDF + X25519)",
-          file=sys.stderr)
-    rfc_by_alg: dict[str, list[dict[str, Any]]] = {}
-    for v in RFC_VECTORS:
-        rfc_by_alg.setdefault(v["algorithm"], []).append(dict(v))
-    for alg, lst in rfc_by_alg.items():
-        start = TID_RANGES[alg] + sample_size
-        for i, v in enumerate(lst):
-            v["test_id"] = start + i
-        all_vectors.extend(lst)
+        source = v.get("source_file", v.get("$source", "unknown"))
+        count = v.get("source_count", "pinned")
+        print(f"    x25519 tid={v['test_id']} <- {source} Count={count}", file=sys.stderr)
 
     # Sort for stable output
     all_vectors.sort(key=lambda v: v["test_id"])

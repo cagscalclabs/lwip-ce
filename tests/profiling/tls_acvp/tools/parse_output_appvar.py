@@ -262,6 +262,36 @@ def has_expected(vector: dict[str, Any]) -> bool:
     return False
 
 
+def source_label(vector: dict[str, Any]) -> str:
+    source_file = str(vector.get("source_file", ""))
+    source_count = str(vector.get("source_count", ""))
+    rfc_source = str(vector.get("$source", ""))
+
+    if source_file == "generated/cavp_fetch.py":
+        if rfc_source:
+            return "RFC + python3-cryptography"
+        return "python3-cryptography"
+    if source_file:
+        label = f"NIST CAVP `{source_file}`"
+        if source_count:
+            label += f" ({source_count})"
+        return label
+    if rfc_source:
+        return f"RFC ({rfc_source})"
+    return "unknown"
+
+
+def summarize_sources(vectors: list[dict[str, Any]]) -> str:
+    labels: list[str] = []
+    for v in vectors:
+        label = source_label(v)
+        if label not in labels:
+            labels.append(label)
+    if len(labels) <= 2:
+        return "; ".join(labels)
+    return "; ".join(labels[:2]) + f"; +{len(labels) - 2} more"
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--markdown-out", help="write markdown summary to this path "
@@ -391,8 +421,8 @@ def main() -> int:
     md_lines.append("")
     md_lines.append("### Summary by Algorithm")
     md_lines.append("")
-    md_lines.append("| Algorithm | Pass | Fail | Skip (placeholder) | Unsupported |")
-    md_lines.append("|---|---:|---:|---:|---:|")
+    md_lines.append("| Algorithm | Source | Pass | Fail |")
+    md_lines.append("|---|---|---:|---:|")
     total_pass = total_fail = total_skip = total_unsup = 0
     # DRBG-SHA-256 intentionally omitted from the pinned vector set; see
     # acvp_vectors.json $comment for the reasoning. Kept in the dispatcher
@@ -401,12 +431,14 @@ def main() -> int:
     for alg in ["AES-GCM", "SHA-256", "HMAC-SHA-256", "HKDF-SHA-256",
                 "RSA-PSS-SHA-256-VERIFY", "X25519-PUBLICKEY", "X25519-SECRET"]:
         c = by_alg.get(alg, {"pass": 0, "fail": 0, "skip": 0, "unsupported": 0})
+        alg_vectors = [v for v in expected_data["vectors"] if v["algorithm"] == alg]
+        source = summarize_sources(alg_vectors).replace("|", "\\|")
         total_pass += c["pass"]
         total_fail += c["fail"]
         total_skip += c["skip"]
         total_unsup += c["unsupported"]
-        md_lines.append(f"| {alg} | {c['pass']} | {c['fail']} | {c['skip']} | {c['unsupported']} |")
-    md_lines.append(f"| **Total** | **{total_pass}** | **{total_fail}** | **{total_skip}** | **{total_unsup}** |")
+        md_lines.append(f"| {alg} | {source} | {c['pass']} | {c['fail']} |")
+    md_lines.append(f"| **Total** |  | **{total_pass}** | **{total_fail}** |")
     md_lines.append("")
 
     if warnings:
@@ -429,11 +461,13 @@ def main() -> int:
 
     md_lines.append("<details><summary>All results</summary>")
     md_lines.append("")
-    md_lines.append("| test_id | algorithm | status | detail |")
-    md_lines.append("|---:|---|---|---|")
+    md_lines.append("| test_id | algorithm | source | status | detail |")
+    md_lines.append("|---:|---|---|---|---|")
     for r in sorted(rows, key=lambda r: r["test_id"]):
         detail = r["detail"].replace("|", "\\|")
-        md_lines.append(f"| {r['test_id']} | {r['algorithm']} | {r['status']} | {detail} |")
+        vec = vectors_by_id.get(r["test_id"])
+        source = source_label(vec).replace("|", "\\|") if vec else "unknown"
+        md_lines.append(f"| {r['test_id']} | {r['algorithm']} | {source} | {r['status']} | {detail} |")
     md_lines.append("")
     md_lines.append("</details>")
 
