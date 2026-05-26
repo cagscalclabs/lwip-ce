@@ -14,8 +14,7 @@
     "hashWait|1",
     "key|enter",
     "delay|2000",
-    "saveVar|ACVPOUT",
-    "saveVar|ACVPRSA"
+    "saveVar|ACVPOUT"
   ],
   "hashes": {
     "1": {

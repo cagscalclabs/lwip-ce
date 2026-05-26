@@ -47,18 +47,6 @@
 
 #define ACVPIN_NAME "ACVPIN"
 #define ACVPOUT_NAME "ACVPOUT"
-/* Debug-only AppVar holding the decrypted EM and per-vector trace of
- * RSA-PSS verify calls. Used by tools/diag_rsa.py to localize false
- * rejections to the modexp side vs the PSS-decode side. Removed once
- * the RSA verify bug is fixed. */
-#define ACVPRSA_NAME "ACVPRSA"
-
-/* File-scope handle for the RSA debug log. Opened in main(), used by
- * run_rsa_pss_verify, closed in main(). 0 means "not open / no logging." */
-static uint8_t rsa_debug_handle = 0;
-static uint16_t current_test_id = 0;
-static uint16_t rsa_debug_count = 0;
-/* rsa_debug_record is defined below after wr_u16, since it depends on it. */
 
 #define ALG_AES_GCM                1
 #define ALG_SHA256                 2
@@ -80,34 +68,6 @@ static void wr_u16(uint8_t *p, uint16_t v)
 {
     p[0] = v & 0xFF;
     p[1] = (v >> 8) & 0xFF;
-}
-
-/* ACVPRSA debug record layout (host-side reader: tools/diag_rsa.py).
- *   magic[4]   = 'A','R','S','A'  (written when handle is opened)
- *   count(2)   = patched at close
- *   repeat:
- *     test_id  uint16 LE
- *     stage    uint8  (0 ok, 1 modexp_fail, 2 size_mismatch, 3 pss_fail)
- *     verdict  uint8  (0=reject, 1=accept)
- *     em_len   uint16 LE
- *     em       [em_len]  (decrypted EM bytes; empty if modexp didn't run)
- *
- * Used to localize false RSA-PSS rejections to either the modexp side
- * or the PSS-decode side. Remove this instrumentation once the bug is
- * fixed.
- */
-static void rsa_debug_record(uint16_t tid, uint8_t stage, uint8_t verdict,
-                             const uint8_t *em, uint16_t em_len)
-{
-    if (!rsa_debug_handle) return;
-    uint8_t hdr[6];
-    wr_u16(hdr, tid);
-    hdr[2] = stage;
-    hdr[3] = verdict;
-    wr_u16(hdr + 4, em_len);
-    ti_Write(hdr, sizeof(hdr), 1, rsa_debug_handle);
-    if (em_len) ti_Write(em, em_len, 1, rsa_debug_handle);
-    rsa_debug_count++;
 }
 
 /* ---------- Per-algorithm payload runners ---------- */
@@ -415,7 +375,6 @@ static size_t run_rsa_pss_verify(const uint8_t *in, size_t in_len, uint8_t *out,
     /* sig and modulus must be the same length for RSA */
     if (sig_len != modulus_len) {
         out[0] = 0;  /* verdict: invalid (size mismatch is a hard reject) */
-        rsa_debug_record(current_test_id, 2, 0, NULL, 0);  /* stage=size_mismatch */
         return 1;
     }
 
@@ -424,20 +383,14 @@ static size_t run_rsa_pss_verify(const uint8_t *in, size_t in_len, uint8_t *out,
      * carves ~2*modulus_len bytes of scratch off the stack internally,
      * and the eZ80 stack is tight. Moving the EM buffer off-stack also
      * rules out any caller-side stack-smash interaction with the bigint
-     * workspace.
-     *
-     * Keep stack-sensitive values out of the call path before this point:
-     * powmod_exp_u24 uses a large internal stack workspace for RSA-2048.
-     */
+     * workspace. */
     if (modulus_len > 256) {
         out[0] = 0;
-        rsa_debug_record(current_test_id, 2, 0, NULL, 0);
         return 1;
     }
     static uint8_t em_buf[256];
     if (!tls_rsa_decrypt_signature(sig, sig_len, em_buf, modulus, modulus_len)) {
         out[0] = 0;
-        rsa_debug_record(current_test_id, 1, 0, NULL, 0);  /* stage=modexp_fail */
         return 1;
     }
 
@@ -452,9 +405,6 @@ static size_t run_rsa_pss_verify(const uint8_t *in, size_t in_len, uint8_t *out,
     /* Step 3: PSS padding check */
     bool ok = tls_rsa_pss_verify(em_buf, modulus_len, mhash, 32, TLS_HASH_SHA256);
     out[0] = ok ? 1 : 0;
-    /* Log EM regardless of verdict — the host-side diagnostic compares
-     * what we decrypted against what an independent reference produces. */
-    rsa_debug_record(current_test_id, ok ? 0 : 3, out[0], em_buf, (uint16_t)modulus_len);
     return 1;
 }
 
@@ -541,22 +491,6 @@ int main(void)
     uint8_t header[6] = {'A', 'O', 'U', 'T', 0, 0};
     ti_Write(header, sizeof(header), 1, out_handle);
 
-    /* Open the RSA debug AppVar. If this fails, print a hint so the
-     * problem is visible on the calc screen instead of "ACVPRSA just
-     * never appeared." Run continues either way. */
-    (void)ti_Delete(ACVPRSA_NAME);
-    rsa_debug_handle = ti_Open(ACVPRSA_NAME, "w");
-    if (rsa_debug_handle)
-    {
-        uint8_t rsa_hdr[6] = {'A', 'R', 'S', 'A', 0, 0};
-        ti_Write(rsa_hdr, sizeof(rsa_hdr), 1, rsa_debug_handle);
-        printf("ACVPRSA log: ON\n");
-    }
-    else
-    {
-        printf("ACVPRSA log: open failed!\n");
-    }
-
     uint16_t responses_written = 0;
     /* Per-response scratch buffer: enough for the largest expected primitive
      * output. HKDF can emit up to 8160 bytes; cap response payload to keep
@@ -578,10 +512,6 @@ int main(void)
             break;
         const uint8_t *payload = in + in_off;
         in_off += payload_len;
-
-        /* Set current_test_id so the per-algorithm runner can tag
-         * debug-log entries (currently only used by run_rsa_pss_verify). */
-        current_test_id = test_id;
 
         size_t result_len = 0;
         uint8_t status = STATUS_OK;
@@ -653,18 +583,6 @@ int main(void)
 
     ti_SetArchiveStatus(true, out_handle);
     ti_Close(out_handle);
-
-    /* Finalize the RSA debug log: patch its count, archive, close. */
-    if (rsa_debug_handle)
-    {
-        ti_Seek(4, SEEK_SET, rsa_debug_handle);
-        uint8_t rsa_count_le[2];
-        wr_u16(rsa_count_le, rsa_debug_count);
-        ti_Write(rsa_count_le, 2, 1, rsa_debug_handle);
-        ti_SetArchiveStatus(true, rsa_debug_handle);
-        ti_Close(rsa_debug_handle);
-        rsa_debug_handle = 0;
-    }
 
     ti_Close(in_handle);
 

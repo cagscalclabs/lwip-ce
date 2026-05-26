@@ -42,15 +42,21 @@ bool tls_hkdf_extract(
     struct tls_hmac_context ctx;
     size_t hash_len = get_hash_length(hash_algorithm);
 
-    if (hash_len == 0 || !ikm || !prk) {
+    if (hash_len == 0 || !prk) {
         return false;
     }
 
-    /* If no salt provided, use hash_len zeros */
-    uint8_t zero_salt[32] = {0};  /* Max hash length */
+    /* If no salt or IKM provided, use hash_len zeros. Symmetric handling
+     * keeps callers from having to keep their own zero buffer just to
+     * pass it in (TLS 1.3 PSK-only-no-ECDHE needs ikm=zeros). */
+    uint8_t zeros[32] = {0};  /* Max hash length */
     if (!salt || salt_len == 0) {
-        salt = zero_salt;
+        salt = zeros;
         salt_len = hash_len;
+    }
+    if (!ikm) {
+        ikm = zeros;
+        /* ikm_len kept as-is so the caller controls how many zero bytes */
     }
 
     /* PRK = HMAC(salt, ikm) */

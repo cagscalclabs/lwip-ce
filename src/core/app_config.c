@@ -5,16 +5,6 @@
 
 #include "lwip/app_config.h"
 
-typedef struct lwip_app_config_v1 {
-    uint16_t version;
-    uint16_t max_heap_bytes;
-    uint8_t flags;
-    uint8_t reserved;
-    uint8_t ip_addr[4];
-    uint8_t ip_gateway[4];
-    uint8_t ip_netmask[4];
-} lwip_app_config_v1_t;
-
 static lwip_app_config_t g_cfg;
 static bool g_cfg_loaded = false;
 
@@ -22,7 +12,7 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->version = LWIP_CFG_VERSION;
-    cfg->max_heap_bytes = 32u * 1024u;
+    cfg->lwip_mem_cap = LWIP_CFG_MEM_CAP_DEF;
     cfg->flags = LWIP_CFG_ENABLE_TLS | LWIP_CFG_DHCP;
     cfg->tz_offset_minutes = 0;
     cfg->dst_enabled = 0;
@@ -41,30 +31,16 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
         return false;
     }
     uint16_t size = *((uint16_t *)var);
-    if (size < sizeof(lwip_app_config_v1_t))
+    if (size < sizeof(uint16_t))
     {
         lwip_app_config_defaults(cfg);
         return false;
     }
     const uint8_t *data = (const uint8_t *)var + 2;
     const lwip_app_config_t *stored = (const lwip_app_config_t *)data;
-    // Current version - load directly
     if (stored->version == LWIP_CFG_VERSION && size >= sizeof(*cfg))
     {
         memcpy(cfg, stored, sizeof(*cfg));
-        return true;
-    }
-    // Migration from version 1 to version 2
-    if (stored->version == 1u && size >= sizeof(lwip_app_config_v1_t))
-    {
-        const lwip_app_config_v1_t *stored_v1 = (const lwip_app_config_v1_t *)data;
-        lwip_app_config_defaults(cfg);
-        cfg->max_heap_bytes = stored_v1->max_heap_bytes;
-        cfg->flags = stored_v1->flags;
-        memcpy(cfg->ip_addr, stored_v1->ip_addr, sizeof(stored_v1->ip_addr));
-        memcpy(cfg->ip_gateway, stored_v1->ip_gateway, sizeof(stored_v1->ip_gateway));
-        memcpy(cfg->ip_netmask, stored_v1->ip_netmask, sizeof(stored_v1->ip_netmask));
-        // hostname gets default value from lwip_app_config_defaults()
         return true;
     }
     lwip_app_config_defaults(cfg);

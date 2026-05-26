@@ -33,7 +33,14 @@
 #define ETH_DO_RESTART_ON_ERROR true
 static uint8_t ifnums_used = 0;
 bool eth_disabled_with_error = false;
+#ifndef LWIP_LIBLOAD_BUILD
+/* In the libload build, usb_fn is a macro that aliases fn_imports_table.usb;
+ * its storage is defined by release/lwip.s with each USB slot statically
+ * initialised to the `jp <real>` stub that libload installs from usbdrvce.lib.
+ * The non-libload (single-binary) build still defines storage here, zero-
+ * initialised, and lwip_init memcpy's the configurator's vtable into it. */
 struct usb_configurator usb_fn = {0};
+#endif
 static enum mem_pressure_level g_eth_rx_throttle_level = MEM_PRESSURE_NONE;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
@@ -288,7 +295,7 @@ void eth_set_rx_drain_interval_ms(uint32_t interval_ms)
 }
 
 /// UTF-16 -> hex conversion
-uint8_t
+static uint8_t
 nibble(uint16_t c)
 {
     c -= '0';
@@ -303,7 +310,7 @@ nibble(uint16_t c)
     return 0xff;
 }
 
-bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
+static bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
 {
     if (retries == ETH_USB_MAX_RETRIES)
     {
@@ -327,7 +334,7 @@ struct eth_tx_ctx
 
 ///---------------------------------------------------
 /// @brief interrupt transfer callback function
-usb_error_t
+static usb_error_t
 interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                            usb_transfer_status_t status,
                            size_t transferred,
@@ -403,7 +410,7 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
 
 ///---------------------------------------------------
 /// @brief bulk out callback function
-usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoint,
+static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                                    usb_transfer_status_t status,
                                    __attribute__((unused)) size_t transferred,
                                    usb_transfer_data_t *data)
@@ -444,7 +451,7 @@ usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoi
 
 ///------------------------------------------------------------------------
 /// @brief linkinput callback function for @b Ethernet_Control_Model (ECM)
-usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
+static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                                  usb_transfer_status_t status,
                                  size_t transferred,
                                  usb_transfer_data_t *data)
@@ -476,7 +483,7 @@ usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
 
 ///----------------------------------------------------------------
 /// @brief linkoutput function for @b Ethernet_Control_Model (ECM)
-err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
+static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
     if (p->tot_len > ETHERNET_MTU)
@@ -587,7 +594,7 @@ static usb_error_t ethernet_control_setup(eth_device_t *eth)
 
 ///------------------------------------------------------------
 /// @brief control setup for @b Network_Control_Model (NCM)
-usb_error_t ncm_control_setup(eth_device_t *eth)
+static usb_error_t ncm_control_setup(eth_device_t *eth)
 {
     if (eth->type != USB_NCM_SUBCLASS)
         return USB_SUCCESS;
@@ -608,7 +615,7 @@ usb_error_t ncm_control_setup(eth_device_t *eth)
 
 ///------------------------------------------------------------
 /// @brief linkinput function for @b Network_Control_Model (NCM)
-usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
+static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                                  usb_transfer_status_t status,
                                  size_t transferred,
                                  usb_transfer_data_t *data)
@@ -712,7 +719,7 @@ usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint
 
 ///---------------------------------------------------------------
 /// @brief linkoutput function for @b Network_Control_Model (NCM)
-err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
+static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
     uint16_t offset_ndp = get_next_offset(NCM_NTH_LEN, dev->class.ncm.ntb_params.wNdpInAlignment, 0);
@@ -772,7 +779,7 @@ err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 
 ///----------------------------------------
 /// @brief ethernet NETIF initialization
-err_t eth_netif_init(struct netif *netif)
+static err_t eth_netif_init(struct netif *netif)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
     netif->linkoutput = dev->tx.emit;
@@ -806,7 +813,7 @@ enum _descriptor_parser_await_states
  * @return \b True if success (with NETIF initialized), \b False if not CDC-ECM/NCM or error.
  */
 #define DESCRIPTOR_MAX_LEN 256
-bool init_ethernet_usb_device(usb_device_t device)
+static bool init_ethernet_usb_device(usb_device_t device)
 {
     eth_device_t tmp = {0};
     eth_device_t *eth = NULL;

@@ -18,9 +18,29 @@
 #define LWIP_CFG_CERT_CHECK_OWNER  (1u << 6)
 #define LWIP_CFG_LOG_TLS           (1u << 7)
 
+/* Memory budgeting.  The user sets the total bytes given to the lwIP
+ * global allocator (lwip_mem_cap).  At boot:
+ *     mem_init(lwip_mem_cap, ...)
+ * Everything in free RAM above that cap stays available to the host app:
+ *     usermem_remaining = os_MemChk() - lwip_mem_cap
+ *
+ * lwIP needs a feature-dependent minimum working set:
+ *   - Without TLS: LWIP_BASE_FLOOR_BYTES
+ *   - With TLS:    LWIP_TLS_FLOOR_BYTES
+ * The configurator clamps lwip_mem_cap to that floor.
+ * The maximum is os_MemChk() at config time (leaving 0 for the host app).
+ *
+ * Step is 1 KiB; values are stored as raw byte counts.
+ */
+#define LWIP_BASE_FLOOR_BYTES       (12u * 1024u)
+#define LWIP_TLS_FLOOR_BYTES        (24u * 1024u)
+#define LWIP_MIN_FLOOR_BYTES        LWIP_TLS_FLOOR_BYTES
+#define LWIP_CFG_MEM_CAP_DEF        (32u * 1024u)
+#define LWIP_CFG_MEM_CAP_STEP       1024u
+
 typedef struct lwip_app_config {
     uint16_t version;
-    uint16_t max_heap_bytes;
+    uint16_t lwip_mem_cap;        /* Total bytes given to the lwIP allocator. */
     uint8_t flags;
     uint8_t reserved;
     int16_t tz_offset_minutes;

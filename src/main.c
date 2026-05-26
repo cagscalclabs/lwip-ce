@@ -6,6 +6,7 @@
 
 #include <ti/getcsc.h>
 #include <ti/screen.h>
+#include <ti/vars.h>
 #include <sys/rtc.h>
 #include <usbdrvce.h>
 
@@ -37,10 +38,6 @@
 #include "tls/includes/handshake.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
 
-#define LWIP_CFG_HEAP_MIN (8u * 1024u)
-#define LWIP_CFG_HEAP_MAX (48u * 1024u)
-#define LWIP_CFG_HEAP_STEP 1024u
-
 #define LWIP_CFG_TZ_MIN_MINUTES (-12 * 60)
 #define LWIP_CFG_TZ_MAX_MINUTES (14 * 60)
 #define LWIP_CFG_TZ_STEP_MINUTES 15
@@ -61,7 +58,9 @@ typedef enum
 
 typedef enum
 {
-    OPT_MAX_HEAP = 0,
+    OPT_SEP_MEMORY = 0,
+    OPT_MEM_CAP,
+    OPT_SEP_TIME,
     OPT_TZ_OFFSET,
     OPT_DST,
     OPT_SEP_LOGGING,
@@ -93,7 +92,7 @@ typedef enum
 typedef enum
 {
     EDIT_NONE = 0,
-    EDIT_HEAP,
+    EDIT_MEM_CAP,
     EDIT_TZ,
     EDIT_LOG
 } edit_mode_t;
@@ -163,9 +162,16 @@ static bool config_run_tcp_echo_test(struct config_option *opt);
 static bool config_run_tls_test(struct config_option *opt);
 static bool config_run_view_logs(struct config_option *opt);
 static bool config_show_about(struct config_option *opt);
+static size_t config_required_lwip_floor(const lwip_app_config_t *cfg);
+static uint16_t config_mem_cap_max(void);
+static bool config_clamp_mem_cap(lwip_app_config_t *cfg);
+static void ui_draw_mem_breakdown(void);
+static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len);
 
 static struct config_option config_options[] = {
-    {"Max Heap",        OPT_MAX_HEAP,     F_TYPE_INT_SLIDER,   NULL, {0}},
+    {"-- Memory --",    OPT_SEP_MEMORY,   F_TYPE_SEPARATOR,    NULL, {0}},
+    {"lwIP Heap",       OPT_MEM_CAP,      F_TYPE_INT_SLIDER,   NULL, {0}},
+    {"-- Time --",      OPT_SEP_TIME,     F_TYPE_SEPARATOR,    NULL, {0}},
     {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"-- Logging --",   OPT_SEP_LOGGING,  F_TYPE_SEPARATOR,    NULL, {0}},
@@ -231,12 +237,386 @@ static bool option_get_bool(const uint8_t value[4])
     return value[0] != 0;
 }
 
+static size_t config_required_lwip_floor(const lwip_app_config_t *cfg)
+{
+    return (cfg->flags & LWIP_CFG_ENABLE_TLS) != 0
+        ? LWIP_TLS_FLOOR_BYTES
+        : LWIP_BASE_FLOOR_BYTES;
+}
+
+/* Maximum cap = all current free RAM (user gets nothing).
+ * Capped at UINT16_MAX since lwip_mem_cap is stored as uint16_t. */
+static uint16_t config_mem_cap_max(void)
+{
+    void *free_block = NULL;
+    size_t free_ram = os_MemChk(&free_block);
+    return (free_ram > UINT16_MAX) ? UINT16_MAX : (uint16_t)free_ram;
+}
+
+static bool config_clamp_mem_cap(lwip_app_config_t *cfg)
+{
+    size_t floor = config_required_lwip_floor(cfg);
+    uint16_t cap_max = config_mem_cap_max();
+    bool changed = false;
+    if (cfg->lwip_mem_cap < (uint16_t)floor)
+    {
+        cfg->lwip_mem_cap = (uint16_t)floor;
+        changed = true;
+    }
+    if (cfg->lwip_mem_cap > cap_max)
+    {
+        cfg->lwip_mem_cap = cap_max;
+        changed = true;
+    }
+    return changed;
+}
+// ============================================================================
+// NEW CLEAN UI DESIGN - Single scrollable menu
+// ============================================================================
+
+#define VRAM_BASE ((uint16_t *)0xD40000)
+
+// Layout constants
+#define UI_HEADER_H     22
+#define UI_FOOTER_H     28
+#define UI_CONTENT_Y    (UI_HEADER_H)
+#define UI_CONTENT_H    (LCD_HEIGHT - UI_HEADER_H - UI_FOOTER_H)
+#define UI_ROW_H        16
+#define UI_VISIBLE_ROWS (UI_CONTENT_H / UI_ROW_H)
+#define UI_MARGIN       8
+#define UI_VALUE_X      180
+#define UI_FOOTER_LINE_H 12
+
+// Fill rectangle with clipping
+static void ui_fill_rect(int x, int y, int w, int h, uint16_t color)
+{
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
+    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
+    if (w <= 0 || h <= 0) return;
+
+    for (int row = y; row < y + h; row++)
+    {
+        uint16_t *ptr = VRAM_BASE + row * LCD_WIDTH + x;
+        for (int col = 0; col < w; col++)
+            *ptr++ = color;
+    }
+}
+
+// Alias for backward compatibility with test functions
+static void fill_rect(int x, int y, int w, int h, uint16_t color)
+{
+    ui_fill_rect(x, y, w, h, color);
+}
+
+// Draw horizontal line
+static void ui_hline(int x, int y, int w, uint16_t color)
+{
+    ui_fill_rect(x, y, w, 1, color);
+}
+
+// Draw box with border
+static void ui_box(int x, int y, int w, int h, uint16_t bg, uint16_t border)
+{
+    ui_fill_rect(x, y, w, h, bg);
+    ui_fill_rect(x, y, w, 2, border);           // top
+    ui_fill_rect(x, y + h - 2, w, 2, border);   // bottom
+    ui_fill_rect(x, y, 2, h, border);           // left
+    ui_fill_rect(x + w - 2, y, 2, h, border);   // right
+}
+
+// Scroll content area by shifting VRAM pixels
+// amount > 0: scroll down by N rows (content moves up, new rows appear at bottom)
+// amount < 0: scroll up by N rows (content moves down, new rows appear at top)
+static void ui_scroll_content(int amount)
+{
+    if (amount == 0) return;
+
+    int pixel_shift = (amount > 0 ? amount : -amount) * UI_ROW_H;
+    if (pixel_shift >= UI_CONTENT_H)
+    {
+        // Scrolling more than visible area, just clear
+        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
+        return;
+    }
+
+    uint16_t *vram = VRAM_BASE;
+
+    if (amount > 0)
+    {
+        // Scroll down: shift pixels up
+        uint16_t *dst = vram + UI_CONTENT_Y * LCD_WIDTH;
+        uint16_t *src = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
+        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
+        memmove(dst, src, copy_pixels * sizeof(uint16_t));
+        // Clear the newly exposed area at bottom
+        ui_fill_rect(0, UI_CONTENT_Y + UI_CONTENT_H - pixel_shift, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
+    }
+    else
+    {
+        // Scroll up: shift pixels down
+        uint16_t *dst = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
+        uint16_t *src = vram + UI_CONTENT_Y * LCD_WIDTH;
+        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
+        memmove(dst, src, copy_pixels * sizeof(uint16_t));
+        // Clear the newly exposed area at top
+        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
+    }
+}
+
+// Draw header bar
+static void ui_draw_header(const char *title)
+{
+    ui_fill_rect(0, 0, LCD_WIDTH, UI_HEADER_H, UI_COLOR_HEADER);
+    os_SetDrawFGColor(UI_COLOR_BG);
+    int tw = (int)os_FontGetWidth(title);
+    os_FontDrawTransText(title, (LCD_WIDTH - tw) / 2, 5);
+}
+
+// Draw footer with help text (supports two lines)
+static void ui_draw_footer(const char *line1, const char *line2)
+{
+    int y = LCD_HEIGHT - UI_FOOTER_H;
+    ui_fill_rect(0, y, LCD_WIDTH, UI_FOOTER_H, UI_COLOR_SEPARATOR);
+    ui_hline(0, y, LCD_WIDTH, UI_COLOR_FG);
+    os_SetDrawFGColor(UI_COLOR_FG);
+
+    // Center each line
+    if (line1)
+    {
+        int w1 = (int)os_FontGetWidth(line1);
+        os_FontDrawTransText(line1, (LCD_WIDTH - w1) / 2, y + 2);
+    }
+    if (line2)
+    {
+        int w2 = (int)os_FontGetWidth(line2);
+        os_FontDrawTransText(line2, (LCD_WIDTH - w2) / 2, y + 2 + UI_FOOTER_LINE_H);
+    }
+}
+
+// Draw a single menu row
+static void ui_draw_row(int row_y, const char *label, const char *value,
+                        bool selected, bool editing, bool is_separator)
+{
+    uint16_t bg = UI_COLOR_BG;
+    uint16_t fg = UI_COLOR_FG;
+
+    if (is_separator)
+    {
+        // Separator: centered text with lines
+        ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, UI_COLOR_BG);
+        os_SetDrawFGColor(UI_COLOR_SEPARATOR);
+        int lw = (int)os_FontGetWidth(label);
+        int lx = (LCD_WIDTH - lw) / 2;
+        ui_hline(UI_MARGIN, row_y + UI_ROW_H/2, lx - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
+        ui_hline(lx + lw + 4, row_y + UI_ROW_H/2, LCD_WIDTH - lx - lw - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
+        os_FontDrawTransText(label, lx, row_y + 2);
+        return;
+    }
+
+    if (selected)
+    {
+        bg = editing ? UI_COLOR_EDIT_BG : UI_COLOR_SELECTED;
+    }
+
+    ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, bg);
+
+    // Selection indicator
+    if (selected)
+    {
+        ui_fill_rect(2, row_y + 2, 4, UI_ROW_H - 4, UI_COLOR_ACCENT);
+    }
+
+    // Label
+    os_SetDrawFGColor(fg);
+    os_FontDrawTransText(label, UI_MARGIN + 6, row_y + 2);
+
+    // Value (right-aligned area)
+    if (value && value[0])
+    {
+        int vw = (int)os_FontGetWidth(value);
+        int vx = LCD_WIDTH - UI_MARGIN - vw;
+        if (vx < UI_VALUE_X) vx = UI_VALUE_X;
+        os_FontDrawTransText(value, vx, row_y + 2);
+    }
+}
+
+// Calculate visible row Y position
+static int ui_row_y(int visible_idx)
+{
+    return UI_CONTENT_Y + visible_idx * UI_ROW_H;
+}
+
+// Draw scrollbar if needed
+static void ui_draw_scrollbar(int scroll_pos, int total_items)
+{
+    if (total_items <= UI_VISIBLE_ROWS) return;
+
+    int sb_x = LCD_WIDTH - 6;
+    int sb_h = UI_CONTENT_H;
+    int thumb_h = (sb_h * UI_VISIBLE_ROWS) / total_items;
+    if (thumb_h < 10) thumb_h = 10;
+    int thumb_y = UI_CONTENT_Y + (scroll_pos * (sb_h - thumb_h)) / (total_items - UI_VISIBLE_ROWS);
+
+    ui_fill_rect(sb_x, UI_CONTENT_Y, 4, sb_h, UI_COLOR_SEPARATOR);
+    ui_fill_rect(sb_x, thumb_y, 4, thumb_h, UI_COLOR_FG);
+}
+
+// Draw a single option row by index (for optimized redraws)
+static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, bool editing)
+{
+    int v = idx - scroll_pos;
+    if (v < 0 || v >= UI_VISIBLE_ROWS) return;
+    if (idx < 0 || idx >= (int)CONFIG_OPTION_COUNT) return;
+
+    const struct config_option *opt = &config_options[idx];
+    char value[32] = {0};
+
+    bool is_sep = (opt->type == F_TYPE_SEPARATOR);
+    if (!is_sep)
+    {
+        format_option_value(opt, value, sizeof(value));
+    }
+
+    ui_draw_row(ui_row_y(v), opt->name, value,
+                idx == selected_idx, editing && idx == selected_idx, is_sep);
+}
+
+// Draw entire menu
+static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
+{
+    // Clear content area
+    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
+
+    // Draw visible rows
+    for (int v = 0; v < UI_VISIBLE_ROWS; v++)
+    {
+        int idx = scroll_pos + v;
+        if (idx >= (int)CONFIG_OPTION_COUNT) break;
+
+        const struct config_option *opt = &config_options[idx];
+        char value[32] = {0};
+
+        bool is_sep = (opt->type == F_TYPE_SEPARATOR);
+        if (!is_sep)
+        {
+            format_option_value(opt, value, sizeof(value));
+        }
+
+        ui_draw_row(ui_row_y(v), opt->name, value,
+                    idx == selected_idx, editing && idx == selected_idx, is_sep);
+    }
+
+    ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
+}
+
+// Draw footer based on current mode
+static void ui_draw_mode_footer(bool editing, edit_mode_t edit_mode)
+{
+    if (editing)
+    {
+        if (edit_mode == EDIT_MEM_CAP)
+        {
+            ui_draw_footer("<left/right> Adjust lwIP heap",
+                           (g_cfg.flags & LWIP_CFG_ENABLE_TLS) != 0
+                               ? "Min 24k (TLS on)"
+                               : "Min 12k (TLS off)");
+        }
+        else
+        {
+            ui_draw_footer("<left/right> Adjust value",
+                           "<enter> Confirm  <clear> Cancel");
+        }
+    }
+    else
+    {
+        ui_draw_footer("<up/down> Navigate  <enter> Select",
+                       "<2nd> Save  <clear> Exit");
+    }
+}
+
+// Full screen redraw
+static void ui_draw_full(int selected_idx, int scroll_pos, edit_mode_t edit_mode)
+{
+    bool editing = edit_mode != EDIT_NONE;
+    ui_draw_header("lwIP Configuration");
+    ui_draw_menu(selected_idx, scroll_pos, editing);
+    ui_draw_mode_footer(editing, edit_mode);
+}
+
+// Ensure selected item is visible, returns new scroll position
+static int ui_ensure_visible(int selected_idx, int scroll_pos)
+{
+    if (selected_idx < scroll_pos)
+        return selected_idx;
+    if (selected_idx >= scroll_pos + UI_VISIBLE_ROWS)
+        return selected_idx - UI_VISIBLE_ROWS + 1;
+    return scroll_pos;
+}
+
+/* Draw memory breakdown rows in the content area.
+ * Called while EDIT_MEM_CAP is active, replacing the normal menu. */
+static void ui_draw_mem_breakdown(void)
+{
+    void *free_block = NULL;
+    size_t free_ram  = os_MemChk(&free_block);
+    bool   tls_on    = (g_cfg.flags & LWIP_CFG_ENABLE_TLS) != 0;
+    size_t fixed     = LWIP_BASE_FLOOR_BYTES;
+    size_t tls_req   = tls_on ? (LWIP_TLS_FLOOR_BYTES - LWIP_BASE_FLOOR_BYTES) : 0u;
+    size_t cap       = g_cfg.lwip_mem_cap;
+    size_t overhead  = fixed + tls_req;
+    size_t pbuf_pool = (cap > overhead) ? (cap - overhead) : 0u;
+    size_t usermem   = (free_ram > cap) ? (free_ram - cap) : 0u;
+
+    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
+
+    int y = UI_CONTENT_Y + 4;
+    char buf[40];
+    os_SetDrawFGColor(UI_COLOR_FG);
+
+#define MEM_ROW(label, bytes) \
+    do { \
+        os_FontDrawTransText((label), UI_MARGIN + 6, y); \
+        snprintf(buf, sizeof(buf), "%u B", (unsigned)(bytes)); \
+        int vw = (int)os_FontGetWidth(buf); \
+        os_FontDrawTransText(buf, LCD_WIDTH - UI_MARGIN - vw, y); \
+        y += UI_ROW_H; \
+    } while (0)
+
+    MEM_ROW("Fixed structures:", fixed);
+    if (tls_on)
+        MEM_ROW("TLS (active):", tls_req);
+    MEM_ROW("Remaining pbuf pool:", pbuf_pool);
+
+    /* Divider above the slider row */
+    y += 2;
+    ui_hline(UI_MARGIN, y, LCD_WIDTH - 2 * UI_MARGIN, UI_COLOR_SEPARATOR);
+    y += 4;
+
+    /* Slider row — highlighted */
+    ui_fill_rect(0, y, LCD_WIDTH, UI_ROW_H, UI_COLOR_EDIT_BG);
+    ui_fill_rect(2, y + 2, 4, UI_ROW_H - 4, UI_COLOR_ACCENT);
+    os_SetDrawFGColor(UI_COLOR_FG);
+    os_FontDrawTransText("lwIP Heap:", UI_MARGIN + 6, y);
+    snprintf(buf, sizeof(buf), "%u B", (unsigned)cap);
+    int vw = (int)os_FontGetWidth(buf);
+    os_FontDrawTransText(buf, LCD_WIDTH - UI_MARGIN - vw, y);
+    y += UI_ROW_H + 4;
+
+    ui_hline(UI_MARGIN, y, LCD_WIDTH - 2 * UI_MARGIN, UI_COLOR_SEPARATOR);
+    y += 4;
+
+    MEM_ROW("Usermem remaining:", usermem);
+#undef MEM_ROW
+}
+
 static void option_sync_from_cfg(struct config_option *opt)
 {
     switch (opt->id)
     {
-    case OPT_MAX_HEAP:
-        option_set_u16(opt->value, g_cfg.max_heap_bytes);
+    case OPT_MEM_CAP:
+        option_set_u16(opt->value, g_cfg.lwip_mem_cap);
         break;
     case OPT_TZ_OFFSET:
         option_set_i16(opt->value, g_cfg.tz_offset_minutes);
@@ -337,7 +717,7 @@ static void format_option_value(const struct config_option *opt, char *buf, size
 {
     switch (opt->id)
     {
-    case OPT_MAX_HEAP:
+    case OPT_MEM_CAP:
         snprintf(buf, buf_len, "%uk", option_get_u16(opt->value) / 1024u);
         break;
     case OPT_LOG_SIZE:
@@ -429,7 +809,8 @@ static bool config_toggle_option(struct config_option *opt)
         return true;
     case OPT_ENABLE_TLS:
         g_cfg.flags ^= LWIP_CFG_ENABLE_TLS;
-        option_sync_from_cfg(opt);
+        config_clamp_mem_cap(&g_cfg);
+        config_sync_from_cfg();
         return true;
     case OPT_CERT_DATES:
         g_cfg.flags ^= LWIP_CFG_CERT_CHECK_DATES;
@@ -1892,279 +2273,6 @@ static bool config_run_view_logs(struct config_option *opt)
     }
 }
 
-// ============================================================================
-// NEW CLEAN UI DESIGN - Single scrollable menu
-// ============================================================================
-
-#define VRAM_BASE ((uint16_t *)0xD40000)
-
-// Layout constants
-#define UI_HEADER_H     22
-#define UI_FOOTER_H     28
-#define UI_CONTENT_Y    (UI_HEADER_H)
-#define UI_CONTENT_H    (LCD_HEIGHT - UI_HEADER_H - UI_FOOTER_H)
-#define UI_ROW_H        16
-#define UI_VISIBLE_ROWS (UI_CONTENT_H / UI_ROW_H)
-#define UI_MARGIN       8
-#define UI_VALUE_X      180
-#define UI_FOOTER_LINE_H 12
-
-// Fill rectangle with clipping
-static void ui_fill_rect(int x, int y, int w, int h, uint16_t color)
-{
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
-    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
-    if (w <= 0 || h <= 0) return;
-
-    for (int row = y; row < y + h; row++)
-    {
-        uint16_t *ptr = VRAM_BASE + row * LCD_WIDTH + x;
-        for (int col = 0; col < w; col++)
-            *ptr++ = color;
-    }
-}
-
-// Alias for backward compatibility with test functions
-static void fill_rect(int x, int y, int w, int h, uint16_t color)
-{
-    ui_fill_rect(x, y, w, h, color);
-}
-
-// Draw horizontal line
-static void ui_hline(int x, int y, int w, uint16_t color)
-{
-    ui_fill_rect(x, y, w, 1, color);
-}
-
-// Draw box with border
-static void ui_box(int x, int y, int w, int h, uint16_t bg, uint16_t border)
-{
-    ui_fill_rect(x, y, w, h, bg);
-    ui_fill_rect(x, y, w, 2, border);           // top
-    ui_fill_rect(x, y + h - 2, w, 2, border);   // bottom
-    ui_fill_rect(x, y, 2, h, border);           // left
-    ui_fill_rect(x + w - 2, y, 2, h, border);   // right
-}
-
-// Scroll content area by shifting VRAM pixels
-// amount > 0: scroll down by N rows (content moves up, new rows appear at bottom)
-// amount < 0: scroll up by N rows (content moves down, new rows appear at top)
-static void ui_scroll_content(int amount)
-{
-    if (amount == 0) return;
-
-    int pixel_shift = (amount > 0 ? amount : -amount) * UI_ROW_H;
-    if (pixel_shift >= UI_CONTENT_H)
-    {
-        // Scrolling more than visible area, just clear
-        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-        return;
-    }
-
-    uint16_t *vram = VRAM_BASE;
-
-    if (amount > 0)
-    {
-        // Scroll down: shift pixels up
-        uint16_t *dst = vram + UI_CONTENT_Y * LCD_WIDTH;
-        uint16_t *src = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
-        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
-        memmove(dst, src, copy_pixels * sizeof(uint16_t));
-        // Clear the newly exposed area at bottom
-        ui_fill_rect(0, UI_CONTENT_Y + UI_CONTENT_H - pixel_shift, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
-    }
-    else
-    {
-        // Scroll up: shift pixels down
-        uint16_t *dst = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
-        uint16_t *src = vram + UI_CONTENT_Y * LCD_WIDTH;
-        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
-        memmove(dst, src, copy_pixels * sizeof(uint16_t));
-        // Clear the newly exposed area at top
-        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
-    }
-}
-
-// Draw header bar
-static void ui_draw_header(const char *title)
-{
-    ui_fill_rect(0, 0, LCD_WIDTH, UI_HEADER_H, UI_COLOR_HEADER);
-    os_SetDrawFGColor(UI_COLOR_BG);
-    int tw = (int)os_FontGetWidth(title);
-    os_FontDrawTransText(title, (LCD_WIDTH - tw) / 2, 5);
-}
-
-// Draw footer with help text (supports two lines)
-static void ui_draw_footer(const char *line1, const char *line2)
-{
-    int y = LCD_HEIGHT - UI_FOOTER_H;
-    ui_fill_rect(0, y, LCD_WIDTH, UI_FOOTER_H, UI_COLOR_SEPARATOR);
-    ui_hline(0, y, LCD_WIDTH, UI_COLOR_FG);
-    os_SetDrawFGColor(UI_COLOR_FG);
-
-    // Center each line
-    if (line1)
-    {
-        int w1 = (int)os_FontGetWidth(line1);
-        os_FontDrawTransText(line1, (LCD_WIDTH - w1) / 2, y + 2);
-    }
-    if (line2)
-    {
-        int w2 = (int)os_FontGetWidth(line2);
-        os_FontDrawTransText(line2, (LCD_WIDTH - w2) / 2, y + 2 + UI_FOOTER_LINE_H);
-    }
-}
-
-// Draw a single menu row
-static void ui_draw_row(int row_y, const char *label, const char *value,
-                        bool selected, bool editing, bool is_separator)
-{
-    uint16_t bg = UI_COLOR_BG;
-    uint16_t fg = UI_COLOR_FG;
-
-    if (is_separator)
-    {
-        // Separator: centered text with lines
-        ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, UI_COLOR_BG);
-        os_SetDrawFGColor(UI_COLOR_SEPARATOR);
-        int lw = (int)os_FontGetWidth(label);
-        int lx = (LCD_WIDTH - lw) / 2;
-        ui_hline(UI_MARGIN, row_y + UI_ROW_H/2, lx - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
-        ui_hline(lx + lw + 4, row_y + UI_ROW_H/2, LCD_WIDTH - lx - lw - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
-        os_FontDrawTransText(label, lx, row_y + 2);
-        return;
-    }
-
-    if (selected)
-    {
-        bg = editing ? UI_COLOR_EDIT_BG : UI_COLOR_SELECTED;
-    }
-
-    ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, bg);
-
-    // Selection indicator
-    if (selected)
-    {
-        ui_fill_rect(2, row_y + 2, 4, UI_ROW_H - 4, UI_COLOR_ACCENT);
-    }
-
-    // Label
-    os_SetDrawFGColor(fg);
-    os_FontDrawTransText(label, UI_MARGIN + 6, row_y + 2);
-
-    // Value (right-aligned area)
-    if (value && value[0])
-    {
-        int vw = (int)os_FontGetWidth(value);
-        int vx = LCD_WIDTH - UI_MARGIN - vw;
-        if (vx < UI_VALUE_X) vx = UI_VALUE_X;
-        os_FontDrawTransText(value, vx, row_y + 2);
-    }
-}
-
-// Calculate visible row Y position
-static int ui_row_y(int visible_idx)
-{
-    return UI_CONTENT_Y + visible_idx * UI_ROW_H;
-}
-
-// Draw scrollbar if needed
-static void ui_draw_scrollbar(int scroll_pos, int total_items)
-{
-    if (total_items <= UI_VISIBLE_ROWS) return;
-
-    int sb_x = LCD_WIDTH - 6;
-    int sb_h = UI_CONTENT_H;
-    int thumb_h = (sb_h * UI_VISIBLE_ROWS) / total_items;
-    if (thumb_h < 10) thumb_h = 10;
-    int thumb_y = UI_CONTENT_Y + (scroll_pos * (sb_h - thumb_h)) / (total_items - UI_VISIBLE_ROWS);
-
-    ui_fill_rect(sb_x, UI_CONTENT_Y, 4, sb_h, UI_COLOR_SEPARATOR);
-    ui_fill_rect(sb_x, thumb_y, 4, thumb_h, UI_COLOR_FG);
-}
-
-// Draw a single option row by index (for optimized redraws)
-static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, bool editing)
-{
-    int v = idx - scroll_pos;
-    if (v < 0 || v >= UI_VISIBLE_ROWS) return;
-    if (idx < 0 || idx >= (int)CONFIG_OPTION_COUNT) return;
-
-    const struct config_option *opt = &config_options[idx];
-    char value[32] = {0};
-
-    bool is_sep = (opt->type == F_TYPE_SEPARATOR);
-    if (!is_sep)
-    {
-        format_option_value(opt, value, sizeof(value));
-    }
-
-    ui_draw_row(ui_row_y(v), opt->name, value,
-                idx == selected_idx, editing && idx == selected_idx, is_sep);
-}
-
-// Draw entire menu
-static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
-{
-    // Clear content area
-    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-
-    // Draw visible rows
-    for (int v = 0; v < UI_VISIBLE_ROWS; v++)
-    {
-        int idx = scroll_pos + v;
-        if (idx >= (int)CONFIG_OPTION_COUNT) break;
-
-        const struct config_option *opt = &config_options[idx];
-        char value[32] = {0};
-
-        bool is_sep = (opt->type == F_TYPE_SEPARATOR);
-        if (!is_sep)
-        {
-            format_option_value(opt, value, sizeof(value));
-        }
-
-        ui_draw_row(ui_row_y(v), opt->name, value,
-                    idx == selected_idx, editing && idx == selected_idx, is_sep);
-    }
-
-    ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
-}
-
-// Draw footer based on current mode
-static void ui_draw_mode_footer(bool editing)
-{
-    if (editing)
-    {
-        ui_draw_footer("<left/right> Adjust value",
-                       "<enter> Confirm  <clear> Cancel");
-    }
-    else
-    {
-        ui_draw_footer("<up/down> Navigate  <enter> Select",
-                       "<2nd> Save  <clear> Exit");
-    }
-}
-
-// Full screen redraw
-static void ui_draw_full(int selected_idx, int scroll_pos, bool editing)
-{
-    ui_draw_header("lwIP Configuration");
-    ui_draw_menu(selected_idx, scroll_pos, editing);
-    ui_draw_mode_footer(editing);
-}
-
-// Ensure selected item is visible, returns new scroll position
-static int ui_ensure_visible(int selected_idx, int scroll_pos)
-{
-    if (selected_idx < scroll_pos)
-        return selected_idx;
-    if (selected_idx >= scroll_pos + UI_VISIBLE_ROWS)
-        return selected_idx - UI_VISIBLE_ROWS + 1;
-    return scroll_pos;
-}
 
 static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes)
 {
@@ -2640,15 +2748,10 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
         return true;
     }
 
-    if (!mem_init(cfg->max_heap_bytes, malloc, free, realloc))
-    {
-        os_FontDrawText("mem init failed", 2, 2);
-        os_GetKey();
-        return false;
-    }
-
-    struct lwip_configurator conf = {0};
-    conf.version = LWIP_CONFIGURATOR_V1;
+    /* LWIP_CONFIGURATOR_INIT pre-fills version and malloc_conf with this
+     * translation unit's malloc/free/realloc, so lwip allocates out of
+     * this program's heap.  Only the USB vtable is caller-specific. */
+    struct lwip_configurator conf = LWIP_CONFIGURATOR_INIT;
     conf.usb_conf.reset_device = usb_ResetDevice;
     conf.usb_conf.disable_device = usb_DisableDevice;
     conf.usb_conf.ref_device = usb_RefDevice;
@@ -2669,19 +2772,19 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
     conf.usb_conf.get_endpoint_data = usb_GetEndpointData;
     conf.usb_conf.set_endpoint_flags = usb_SetEndpointFlags;
     conf.usb_conf.set_endpoint_halt = usb_SetEndpointHalt;
-    conf.malloc_conf.caller_malloc = malloc;
-    conf.malloc_conf.caller_free = free;
+    conf.usb_conf.init = usb_Init;
+    conf.usb_conf.handle_events = usb_HandleEvents;
 
     if (lwip_init(&conf) != ERR_OK)
     {
-        os_FontDrawText("lwip init failed", 2, 2);
+        os_FontDrawText("lwip/mem init failed", 2, 2);
         os_GetKey();
         return false;
     }
 
     netif_add_ext_callback(&netif_ext_cb, netif_ext_callback);
 
-    if (usb_Init(eth_usb_event_callback, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
+    if (usb_fn.init(eth_usb_event_callback, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
     {
         os_FontDrawText("usb init failed", 2, 2);
         os_GetKey();
@@ -2696,14 +2799,10 @@ int main(void)
 {
     lwip_app_config_load(&g_cfg);
 
-    if (g_cfg.max_heap_bytes < LWIP_CFG_HEAP_MIN)
-    {
-        g_cfg.max_heap_bytes = LWIP_CFG_HEAP_MIN;
-    }
-    if (g_cfg.max_heap_bytes > LWIP_CFG_HEAP_MAX)
-    {
-        g_cfg.max_heap_bytes = LWIP_CFG_HEAP_MAX;
-    }
+    /* Clamp lwip_mem_cap so it stays between the feature floor and the
+     * current free RAM.  A stored config from a time when the device had
+     * more free RAM shouldn't overflow what's actually available now. */
+    config_clamp_mem_cap(&g_cfg);
     if (g_cfg.log_size_bytes < LWIP_CFG_LOG_MIN_BYTES)
     {
         g_cfg.log_size_bytes = LWIP_CFG_LOG_MIN_BYTES;
@@ -2738,7 +2837,7 @@ int main(void)
 
         if (needs_redraw)
         {
-            ui_draw_full(selected, scroll_pos, edit_mode != EDIT_NONE);
+            ui_draw_full(selected, scroll_pos, edit_mode);
             needs_redraw = false;
         }
 
@@ -2767,30 +2866,41 @@ int main(void)
             if (key == sk_Clear || key == sk_Enter)
             {
                 int old_edit = edit_option;
+                edit_mode_t old_mode = edit_mode;
                 edit_mode = EDIT_NONE;
                 edit_option = -1;
-                // Redraw the single row exiting edit mode and update footer
-                ui_draw_single_option(old_edit, scroll_pos, selected, false);
-                ui_draw_mode_footer(false);
+                if (old_mode == EDIT_MEM_CAP)
+                {
+                    /* Breakdown panel was covering the menu — restore it */
+                    ui_draw_menu(selected, scroll_pos, false);
+                }
+                else
+                {
+                    ui_draw_single_option(old_edit, scroll_pos, selected, false);
+                }
+                ui_draw_mode_footer(false, EDIT_NONE);
                 continue;
             }
             bool value_changed = false;
-            if (key == sk_Left && edit_mode == EDIT_HEAP && edit_option >= 0)
+            if (edit_mode == EDIT_MEM_CAP && edit_option >= 0 &&
+                (key == sk_Left || key == sk_Right))
             {
                 struct config_option *opt = &config_options[edit_option];
-                if (opt->id == OPT_MAX_HEAP && g_cfg.max_heap_bytes > LWIP_CFG_HEAP_MIN)
+                /* Bounds recomputed each keystroke so the ceiling always
+                 * reflects current free RAM, not a stale snapshot. */
+                size_t   floor   = config_required_lwip_floor(&g_cfg);
+                uint16_t cap_max = config_mem_cap_max();
+                if (key == sk_Left &&
+                    g_cfg.lwip_mem_cap >= (uint16_t)floor + LWIP_CFG_MEM_CAP_STEP)
                 {
-                    g_cfg.max_heap_bytes -= LWIP_CFG_HEAP_STEP;
+                    g_cfg.lwip_mem_cap = (uint16_t)(g_cfg.lwip_mem_cap - LWIP_CFG_MEM_CAP_STEP);
                     option_sync_from_cfg(opt);
                     value_changed = true;
                 }
-            }
-            else if (key == sk_Right && edit_mode == EDIT_HEAP && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                if (opt->id == OPT_MAX_HEAP && g_cfg.max_heap_bytes + LWIP_CFG_HEAP_STEP <= LWIP_CFG_HEAP_MAX)
+                else if (key == sk_Right &&
+                         g_cfg.lwip_mem_cap + LWIP_CFG_MEM_CAP_STEP <= cap_max)
                 {
-                    g_cfg.max_heap_bytes += LWIP_CFG_HEAP_STEP;
+                    g_cfg.lwip_mem_cap = (uint16_t)(g_cfg.lwip_mem_cap + LWIP_CFG_MEM_CAP_STEP);
                     option_sync_from_cfg(opt);
                     value_changed = true;
                 }
@@ -2839,8 +2949,15 @@ int main(void)
             }
             if (value_changed)
             {
-                // Only redraw the single row being edited
-                ui_draw_single_option(selected, scroll_pos, selected, true);
+                if (edit_mode == EDIT_MEM_CAP)
+                {
+                    /* Breakdown panel replaces the menu while editing the cap */
+                    ui_draw_mem_breakdown();
+                }
+                else
+                {
+                    ui_draw_single_option(selected, scroll_pos, selected, true);
+                }
             }
             continue;
         }
@@ -2913,30 +3030,47 @@ int main(void)
             if (opt->type == F_TYPE_INT_SLIDER)
             {
                 // Enter edit mode for sliders
-                if (opt->id == OPT_MAX_HEAP)
+                switch (opt->id)
                 {
-                    edit_mode = EDIT_HEAP;
+                case OPT_MEM_CAP:
+                    edit_mode = EDIT_MEM_CAP;
                     edit_option = selected;
-                }
-                else if (opt->id == OPT_TZ_OFFSET)
-                {
+                    break;
+                case OPT_TZ_OFFSET:
                     edit_mode = EDIT_TZ;
                     edit_option = selected;
-                }
-                else if (opt->id == OPT_LOG_SIZE)
-                {
+                    break;
+                case OPT_LOG_SIZE:
                     edit_mode = EDIT_LOG;
                     edit_option = selected;
+                    break;
+                default:
+                    break;
                 }
-                // Redraw the single row entering edit mode and update footer
-                ui_draw_single_option(selected, scroll_pos, selected, true);
-                ui_draw_mode_footer(true);
+                /* Memory cap gets a full breakdown panel; other sliders just
+                 * highlight the single row as before. */
+                if (edit_mode == EDIT_MEM_CAP)
+                {
+                    ui_draw_mem_breakdown();
+                }
+                else
+                {
+                    ui_draw_single_option(selected, scroll_pos, selected, true);
+                }
+                ui_draw_mode_footer(true, edit_mode);
             }
             else if (opt->type == F_TYPE_BOOL_TOGGLE && opt->setter)
             {
                 opt->setter(opt);
-                // Only redraw the single row that toggled
-                ui_draw_single_option(selected, scroll_pos, selected, false);
+                if (opt->id == OPT_ENABLE_TLS)
+                {
+                    ui_draw_menu(selected, scroll_pos, false);
+                }
+                else
+                {
+                    // Only redraw the single row that toggled
+                    ui_draw_single_option(selected, scroll_pos, selected, false);
+                }
             }
             else if (opt->type == F_TYPE_ACTION && opt->setter)
             {

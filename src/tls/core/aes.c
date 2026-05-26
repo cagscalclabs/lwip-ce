@@ -1173,6 +1173,32 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
     return false;
 }
 
+bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t *ct, size_t ct_len)
+{
+    if (ctx == NULL || ct == NULL || ctx->mode != TLS_AES_GCM)
+        return false;
+
+    uint8_t *tag = ctx->private.gcm.auth_tag;
+
+    /* Transition: if we are still allowing AAD, we must now close the AAD section.
+     * GCM requires zero-padding the AAD hash context to the next block boundary. */
+    if (ctx->private.gcm.lock == LOCK_ALLOW_ALL)
+    {
+        if (ctx->private.gcm.aad_cache_len > 0)
+        {
+            uint8_t zero_pad[16] = {0};
+            ghash(ctx, tag, zero_pad, 16 - ctx->private.gcm.aad_cache_len);
+            ctx->private.gcm.aad_cache_len = 0; /* Reset cache for ciphertext use */
+        }
+        ctx->private.gcm.lock = LOCK_ALLOW_ENCRYPT;
+    }
+
+    /* Update the hash over the provided ciphertext bytes */
+    ghash(ctx, tag, ct, ct_len);
+    ctx->private.gcm.ct_len += ct_len;
+    return true;
+}
+
 #define AES_BLOCKSIZE 16
 // CRYPTO_FN
 bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
@@ -1242,8 +1268,8 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         }
 
         // authenticate the ciphertext
-        ghash(ctx, tag, outbuf, in_len);
-        ctx->private.gcm.ct_len += in_len;
+        if (!tls_aes_update_ciphertext(ctx, outbuf, in_len))
+            return false;
         break;
     }
     case TLS_AES_CBC:
@@ -1278,7 +1304,6 @@ cleanup:
     return ok;
 }
 
-bool decrypt_call_from_verify = false;
 // CRYPTO_FN
 bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
@@ -1291,8 +1316,6 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     int idx, blocks = in_len / AES_BLOCK_SIZE;
     bool ok = false;
 
-    if (!decrypt_call_from_verify && (outbuf == NULL))
-        return false;
     tls_crypto_guard_enable();
     if (ctx->op_assoc == AES_OP_ENCRYPT)
         goto cleanup;
@@ -1305,22 +1328,13 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     {
     case TLS_AES_GCM:
     {
-        uint8_t *tag = ctx->private.gcm.auth_tag;
-        size_t bytes_to_copy = ctx->private.gcm.last_block_len;
-        size_t bytes_offset = 0;
-        if ((ctx->private.gcm.lock == LOCK_ALLOW_ALL) &&
-            (ctx->private.gcm.aad_cache_len))
-        {
-            // pad rest of aad cache with 0's
-            tls_secure_memzero(buf_in, AES_BLOCK_SIZE);
-            ghash(ctx, tag, buf_in, AES_BLOCK_SIZE - ctx->private.gcm.aad_cache_len);
-        }
-        ghash(ctx, tag, inbuf, in_len);
-        ctx->private.gcm.ct_len += in_len;
+        if (!tls_aes_update_ciphertext(ctx, inbuf, in_len))
+            goto cleanup;
 
         if (outbuf)
         {
-            ctx->private.gcm.lock = LOCK_ALLOW_ENCRYPT;
+            size_t bytes_to_copy = ctx->private.gcm.last_block_len;
+            size_t bytes_offset = 0;
             if (bytes_to_copy % AES_BLOCK_SIZE)
             {
                 bytes_offset = AES_BLOCK_SIZE - bytes_to_copy;
@@ -1402,9 +1416,7 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
 
     if (aad != NULL)
         tls_aes_update_aad(&tmp, aad, aad_len);
-    decrypt_call_from_verify = true;
-    tls_aes_decrypt(&tmp, ciphertext, ciphertext_len, NULL);
-    decrypt_call_from_verify = false;
+    tls_aes_update_ciphertext(&tmp, ciphertext, ciphertext_len);
     tls_aes_digest(&tmp, digest);
 
     // memset(&tmp, 0, sizeof(tmp));

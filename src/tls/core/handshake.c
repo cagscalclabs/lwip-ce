@@ -114,9 +114,11 @@
  * -------------------------------------------------
  *
  *   - CertificateVerify signature checking. The peer's cert chain is still
- *     parsed and the end-entity SPKI is matched against a compiled-in
- *     truststore (SPKI pinning). We do this because RSA/ECDSA signature
- *     verification is too slow on an eZ80 for an interactive handshake.
+ *     parsed, and any CA-capable root/intermediate SPKI in that chain may be
+ *     matched against the signed truststore. This is CA/intermediate SPKI
+ *     pinning, not leaf/end-entity pinning. We do this because RSA/ECDSA
+ *     signature verification is too slow on an eZ80 for an interactive
+ *     handshake.
  *   - 0-RTT / early_data.
  *   - HelloRetryRequest negotiation — we only ever offer x25519, so if the
  *     server demands a different group we just abort.
@@ -149,16 +151,16 @@
  *   - tls_parse_handshake_header / tls_build_aead_nonce — shared utilities.
  *   - tls_consume_handshake_buffer + tls_dispatch_inner_handshake —
  *     cross-record reassembly and message routing.
- *   - tls_process_record — top-level entry point for an incoming record.
+ *   - tls_process_inner_plaintext_pbuf — post-AEAD dispatch entry called by
+ *     the altcp layer's streaming decrypter.
  *   - tls_handshake_init + tls_send_client_hello — outbound setup.
  *   - tls_recv_server_hello / encrypted_extensions / certificate /
  *     certificate_verify / finished — inbound handlers, one per message type.
  *   - tls_derive_handshake_keys / tls_derive_application_keys — key schedule.
- *   - tls_encrypt_data / tls_decrypt_data / tls_encrypt_record /
- *     tls_decrypt_record — record layer crypto.
  *   - tls_recv_new_session_ticket — post-handshake PSK update.
  *   - tls_set_transport / tls_send_alert / tls_send_close_notify — outbound
- *     alerts and orderly shutdown.
+ *     alerts and orderly shutdown. Record-layer AEAD encrypt/decrypt
+ *     lives in altcp_tls_ce.c as pbuf-walking streaming helpers.
  *
  * ============================================================================
  */
@@ -182,6 +184,7 @@
 #include "lwip/sntp_time.h"
 #include "lwip/app_config.h"
 #include "lwip/sys.h"
+#include "lwip/pbuf.h"
 
 /*
  * ============================================================================
@@ -266,6 +269,21 @@ static size_t tls_parse_handshake_header(const uint8_t *data, size_t data_len,
 static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
                                          uint8_t msg_type,
                                          const uint8_t *msg, size_t msg_len);
+static bool tls_subject_cn_matches_owner_id(const struct tls_asn1_serialization *subject_cn,
+                                            const uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN]);
+
+/* Internal handshake-message handlers. These were once exposed via
+ * handshake.h but are only invoked from the dispatcher in this file. */
+static bool tls_recv_encrypted_extensions(struct tls_handshake_context *ctx,
+                                          const uint8_t *data, size_t data_len);
+static bool tls_recv_certificate_verify(struct tls_handshake_context *ctx,
+                                        const uint8_t *data, size_t data_len);
+static bool tls_recv_finished(struct tls_handshake_context *ctx, bool is_client,
+                              const uint8_t *data, size_t data_len);
+static bool tls_recv_new_session_ticket(struct tls_handshake_context *ctx,
+                                        const uint8_t *data, size_t data_len);
+static bool tls_send_alert(struct tls_handshake_context *ctx,
+                           uint8_t level, uint8_t description);
 
 /**
  * @brief Build the TLS 1.3 AEAD nonce: static IV XOR right-aligned seq number.
@@ -303,6 +321,9 @@ static void tls_hs_reasm_reset(struct tls_handshake_context *ctx)
     ctx->hs_reasm_cap = 0;
     ctx->hs_reasm_len = 0;
     ctx->hs_reasm_expected = 0;
+    /* hs_reasm_body_fed tracks body bytes fed to the cert walker — reset
+     * it here so callers don't need a separate assignment. */
+    ctx->hs_reasm_body_fed = 0;
 }
 
 /* Ensure the reassembly buffer has at least `need` bytes of capacity. */
@@ -346,13 +367,441 @@ static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
     return true;
 }
 
+/* ------------------------------------------------------------------------
+ * Certificate-message streaming walker.
+ *
+ * The TLS 1.3 Certificate message body can be 3-16 KiB for realistic
+ * cert chains. Buffering the whole thing in hs_reasm_buf is wasteful
+ * when our per-cert work is bounded: parse one cert at a time, hash its
+ * SPKI, look it up in the truststore, drop the cert, move on. Peak alloc
+ * per cert is the cert's own size (~1-3 KiB), not the chain's total.
+ *
+ * The walker is fed body bytes by tls_consume_handshake_buffer when the
+ * in-flight message is TLS_HANDSHAKE_CERTIFICATE. It maintains its own
+ * state machine over the Certificate body framing:
+ *
+ *   opaque certificate_request_context<0..255>;
+ *   opaque cert_data<1..2^24-1>;
+ *   opaque extensions<0..2^16-1>;
+ *   CertificateEntry = {cert_data, extensions};
+ *   Certificate = {request_context, CertificateEntry list<0..2^24-1>}
+ *
+ * When CS_CERT_BODY completes, the walker invokes per-cert validation
+ * (CA-constraints gate + SPKI hash + truststore lookup + optional
+ * date/owner policy) and accumulates the result into ctx->cert_validated.
+ * The walker captures ZERO bytes between certs — once one cert is parsed
+ * and the result recorded, its buffer is freed and we move on.
+ * ------------------------------------------------------------------------ */
+
+enum tls_cert_walk_state
+{
+    CW_REQ_CTX_LEN = 0,
+    CW_REQ_CTX_BODY,
+    CW_CHAIN_LEN,
+    CW_CERT_LEN,
+    CW_CERT_BODY,
+    CW_EXT_LEN,
+    CW_EXT_BODY,
+    CW_DONE,
+    CW_ERROR
+};
+
+struct tls_cert_walker
+{
+    enum tls_cert_walk_state state;
+    /* Multi-byte length scratch (3 bytes max for chain/cert len, 2 for ext) */
+    uint8_t len_scratch[3];
+    uint8_t len_have;
+    uint8_t len_need;
+    /* Bytes left in the current variable-length field */
+    size_t field_remaining;
+    /* Bytes left in the CertificateEntry list */
+    size_t chain_remaining;
+    /* Per-cert capture buffer (sized to cert_len at CS_CERT_LEN end) */
+    uint8_t *cert_buf;
+    size_t cert_buf_cap;
+    size_t cert_buf_len;
+    /* True once any cert in the chain passed the truststore check. */
+    bool chain_validated;
+};
+
+static struct tls_cert_walker *tls_cert_walker_new(void)
+{
+    struct tls_cert_walker *w = (struct tls_cert_walker *)
+        mem_buffer_custom_malloc(sizeof(*w));
+    if (!w)
+    {
+        return NULL;
+    }
+    memset(w, 0, sizeof(*w));
+    w->state = CW_REQ_CTX_LEN;
+    w->len_need = 1;
+    return w;
+}
+
+static void tls_cert_walker_free(struct tls_cert_walker *w)
+{
+    if (!w)
+    {
+        return;
+    }
+    if (w->cert_buf)
+    {
+        mem_buffer_custom_free(w->cert_buf);
+    }
+    mem_buffer_custom_free(w);
+}
+
+/* Run per-cert validation on the just-completed cert_buf. Same logic as
+ * the per-cert loop body used by tls_recv_certificate_streamed, applied one
+ * cert at a time. Updates w->chain_validated on first matching pin. Returns false
+ * on fatal parse error (caller aborts the connection). */
+static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
+{
+    if (w->chain_validated)
+    {
+        /* Already validated by an earlier cert — keep walking the chain
+         * framing for parse-safety but skip the per-cert work. */
+        return true;
+    }
+
+    struct tls_asn1_serialization cert_fields[13];
+    struct tls_x509_parse_result cert_parsed = {0};
+    if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len,
+                                    cert_fields, &cert_parsed))
+    {
+        return false;
+    }
+    if (!cert_parsed.spki_raw || !cert_parsed.spki_raw->data ||
+        cert_parsed.spki_raw->len == 0)
+    {
+        return false;
+    }
+
+    /* CA-constraints gate: only CA-capable certs can match. */
+    if (!cert_parsed.extensions || !cert_parsed.extensions->data ||
+        cert_parsed.extensions->len == 0)
+    {
+        return true;
+    }
+    if (!tls_x509_has_valid_constraints(cert_parsed.extensions->data,
+                                        cert_parsed.extensions->len))
+    {
+        return true;
+    }
+
+    uint8_t spki_hash[32];
+    struct tls_hash_context hash_ctx;
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    {
+        return false;
+    }
+    tls_hash_update(&hash_ctx, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
+    tls_hash_digest(&hash_ctx, spki_hash);
+
+    struct tls_spki_entry spki_entry;
+    if (!tls_truststore_lookup(spki_hash, &spki_entry))
+    {
+        return true;
+    }
+
+    bool date_check_pass = true;
+    bool owner_check_pass = true;
+    const lwip_app_config_t *app_cfg = lwip_app_config_get();
+
+    if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_DATES))
+    {
+        uint32_t current_time = lwip_sntp_get_unix_time();
+        if (current_time > 0)
+        {
+            if (current_time < spki_entry.not_before ||
+                current_time > spki_entry.not_after)
+            {
+                date_check_pass = false;
+            }
+        }
+    }
+
+    if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_OWNER))
+    {
+        owner_check_pass = tls_subject_cn_matches_owner_id(
+            cert_parsed.subject_cn, spki_entry.owner_id);
+    }
+
+    if (date_check_pass && owner_check_pass)
+    {
+        w->chain_validated = true;
+    }
+    return true;
+}
+
+/* Feed body bytes into the walker. Consumes from `bytes` until either
+ * (a) the message is complete (`*consumed == len`, walker state CW_DONE)
+ * or (b) it needs more bytes (`*consumed == len`, walker state non-DONE)
+ * or (c) it errors out (returns false). */
+static bool tls_cert_walker_feed(struct tls_cert_walker *w,
+                                 const uint8_t *bytes, size_t len)
+{
+    size_t off = 0;
+
+    while (off < len && w->state != CW_DONE && w->state != CW_ERROR)
+    {
+        switch (w->state)
+        {
+        case CW_REQ_CTX_LEN:
+        case CW_CHAIN_LEN:
+        case CW_CERT_LEN:
+        case CW_EXT_LEN:
+        {
+            size_t want = w->len_need - w->len_have;
+            size_t take = (len - off < want) ? (len - off) : want;
+            memcpy(w->len_scratch + w->len_have, bytes + off, take);
+            w->len_have += (uint8_t)take;
+            off += take;
+            if (w->len_have < w->len_need)
+            {
+                return true;
+            }
+            size_t value = 0;
+            for (uint8_t i = 0; i < w->len_need; i++)
+            {
+                value = (value << 8) | w->len_scratch[i];
+            }
+            w->len_have = 0;
+
+            switch (w->state)
+            {
+            case CW_REQ_CTX_LEN:
+                w->field_remaining = value;
+                w->state = (value == 0) ? CW_CHAIN_LEN : CW_REQ_CTX_BODY;
+                if (w->state == CW_CHAIN_LEN)
+                {
+                    w->len_need = 3;
+                }
+                break;
+            case CW_CHAIN_LEN:
+                if (value == 0)
+                {
+                    w->state = CW_DONE;
+                    break;
+                }
+                w->chain_remaining = value;
+                w->state = CW_CERT_LEN;
+                w->len_need = 3;
+                break;
+            case CW_CERT_LEN:
+                /* Deduct the 3-byte length field itself from chain_remaining,
+                 * then deduct the cert body length. Both are part of the
+                 * CertificateList payload counted by chain_remaining.
+                 * Check value bounds before computing 3+value to avoid
+                 * size_t overflow on eZ80 (3-byte size_t, max 0xFFFFFF). */
+                if (value == 0 || value > TLS_HS_REASSEMBLY_MAX ||
+                    w->chain_remaining < 3 + value)
+                {
+                    w->state = CW_ERROR;
+                    return false;
+                }
+                w->chain_remaining -= 3 + value; /* length field + body */
+                w->field_remaining = value;
+                w->cert_buf = (uint8_t *)mem_buffer_custom_malloc(value);
+                if (!w->cert_buf)
+                {
+                    w->state = CW_ERROR;
+                    return false;
+                }
+                w->cert_buf_cap = value;
+                w->cert_buf_len = 0;
+                w->state = CW_CERT_BODY;
+                break;
+            case CW_EXT_LEN:
+                /* Deduct the 2-byte ext_len field itself plus the ext body.
+                 * ext_len is 2 bytes so value <= 0xFFFF; 2+value can't
+                 * overflow a 3-byte size_t, but guard defensively anyway. */
+                if (value > 0xFFFF || w->chain_remaining < 2 + value)
+                {
+                    w->state = CW_ERROR;
+                    return false;
+                }
+                w->chain_remaining -= 2 + value; /* length field + body */
+                w->field_remaining = value;
+                w->state = CW_EXT_BODY;
+                break;
+            default:
+                break;
+            }
+            break;
+        }
+
+        case CW_REQ_CTX_BODY:
+        case CW_EXT_BODY:
+        {
+            size_t take = (len - off < w->field_remaining) ? (len - off) : w->field_remaining;
+            off += take;
+            w->field_remaining -= take;
+            if (w->field_remaining == 0)
+            {
+                if (w->state == CW_REQ_CTX_BODY)
+                {
+                    w->state = CW_CHAIN_LEN;
+                    w->len_need = 3;
+                }
+                else
+                {
+                    if (w->chain_remaining == 0)
+                    {
+                        w->state = CW_DONE;
+                    }
+                    else
+                    {
+                        w->state = CW_CERT_LEN;
+                        w->len_need = 3;
+                    }
+                }
+            }
+            break;
+        }
+
+        case CW_CERT_BODY:
+        {
+            size_t take = (len - off < w->field_remaining) ? (len - off) : w->field_remaining;
+            if (w->cert_buf_len + take > w->cert_buf_cap)
+            {
+                w->state = CW_ERROR;
+                return false;
+            }
+            memcpy(w->cert_buf + w->cert_buf_len, bytes + off, take);
+            w->cert_buf_len += take;
+            off += take;
+            w->field_remaining -= take;
+            if (w->field_remaining == 0)
+            {
+                /* Cert complete — validate it, then drop the buffer
+                 * before moving on. Peak alloc never exceeds the largest
+                 * single cert. */
+                bool ok = tls_cert_walker_validate_one(w);
+                mem_buffer_custom_free(w->cert_buf);
+                w->cert_buf = NULL;
+                w->cert_buf_cap = 0;
+                w->cert_buf_len = 0;
+                if (!ok)
+                {
+                    w->state = CW_ERROR;
+                    return false;
+                }
+                w->state = CW_EXT_LEN;
+                w->len_need = 2;
+            }
+            break;
+        }
+
+        default:
+            w->state = CW_ERROR;
+            return false;
+        }
+    }
+
+    return w->state != CW_ERROR;
+}
+
+/* Forward decl: post-walk finalize for a streamed Certificate message.
+ * Called once the walker reaches CW_DONE; performs state and PSK checks,
+ * then advances the state machine (transcript already updated by walker). */
+static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
+                                          struct tls_cert_walker *w);
+
+/* Feed `take` bytes of in-flight message body. Routes Certificate bytes
+ * through the per-cert walker; everything else appends to hs_reasm_buf.
+ * Returns false on fatal error. */
+static bool tls_feed_inflight_body(struct tls_handshake_context *ctx,
+                                   uint8_t msg_type,
+                                   const uint8_t *bytes, size_t take)
+{
+    if (msg_type == TLS_HANDSHAKE_CERTIFICATE)
+    {
+        if (!ctx->cert_walker)
+        {
+            ctx->cert_walker = tls_cert_walker_new();
+            if (!ctx->cert_walker)
+            {
+                return false;
+            }
+        }
+        /* Update transcript hash incrementally as body bytes arrive, so
+         * we never need a flat copy of the whole Certificate message. */
+        if (ctx->transcript_hash)
+        {
+            transcript_hash_update(ctx->transcript_hash, bytes, take);
+        }
+        if (!tls_cert_walker_feed(ctx->cert_walker, bytes, take))
+        {
+            return false;
+        }
+        ctx->hs_reasm_body_fed += take;
+        return true;
+    }
+    /* Non-Certificate: legacy flat append into hs_reasm_buf. */
+    if (!tls_hs_reasm_grow(ctx, ctx->hs_reasm_len + take))
+    {
+        return false;
+    }
+    memcpy(ctx->hs_reasm_buf + ctx->hs_reasm_len, bytes, take);
+    ctx->hs_reasm_len += take;
+    return true;
+}
+
+/* Dispatch the completed in-flight message and reset reassembly state. */
+static bool tls_dispatch_inflight(struct tls_handshake_context *ctx)
+{
+    bool ok;
+    uint8_t msg_type = ctx->hs_reasm_buf[0];
+
+    if (msg_type == TLS_HANDSHAKE_CERTIFICATE)
+    {
+        /* cert_walker must exist: it is created lazily in tls_feed_inflight_body
+         * as soon as the first body byte arrives. A NULL walker here means the
+         * Certificate body was zero bytes — an empty chain is a protocol error. */
+        if (!ctx->cert_walker)
+        {
+            tls_hs_reasm_reset(ctx);
+            return false;
+        }
+        ok = tls_recv_certificate_streamed(ctx, ctx->cert_walker);
+        tls_cert_walker_free(ctx->cert_walker);
+        ctx->cert_walker = NULL;
+    }
+    else
+    {
+        ok = tls_dispatch_inner_handshake(ctx, msg_type,
+                                          ctx->hs_reasm_buf,
+                                          ctx->hs_reasm_expected);
+    }
+    tls_hs_reasm_reset(ctx);
+    ctx->hs_reasm_body_fed = 0;
+    return ok;
+}
+
+/* Body completion check: works for both the flat path (hs_reasm_len ==
+ * hs_reasm_expected) and the walker path (4 + hs_reasm_body_fed ==
+ * hs_reasm_expected). */
+static bool tls_inflight_message_complete(const struct tls_handshake_context *ctx)
+{
+    uint8_t msg_type = ctx->hs_reasm_buf[0];
+    if (msg_type == TLS_HANDSHAKE_CERTIFICATE)
+    {
+        return 4 + ctx->hs_reasm_body_fed >= ctx->hs_reasm_expected;
+    }
+    return ctx->hs_reasm_len >= ctx->hs_reasm_expected;
+}
+
 /**
  * @brief Process a buffer of decrypted handshake bytes, dispatching each
  *        complete message and spilling the tail into reassembly storage.
  *
  * On entry, if hs_reasm_expected != 0 we are continuing a previously-spilled
  * message: appended bytes are added to hs_reasm_buf and the whole message
- * dispatched once complete.
+ * dispatched once complete. Certificate messages bypass hs_reasm_buf and
+ * stream through ctx->cert_walker instead, so only one cert at a time is
+ * held flat regardless of chain depth.
  *
  * @return true on clean dispatch (possibly with partial tail spilled),
  *         false on fatal parse/dispatch error (caller must abort).
@@ -386,35 +835,46 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
             tls_hs_reasm_reset(ctx);
             return false;
         }
+        /* If the just-revealed message is Certificate, feed the 4-byte
+         * header through the transcript hash now — the walker won't see
+         * it (the header was already in hs_reasm_buf before we knew the
+         * type). */
+        if (ctx->hs_reasm_buf[0] == TLS_HANDSHAKE_CERTIFICATE &&
+            ctx->transcript_hash)
+        {
+            transcript_hash_update(ctx->transcript_hash, ctx->hs_reasm_buf, 4);
+        }
     }
 
     /* If we were mid-reassembly, top up first. */
     if (ctx->hs_reasm_expected != 0)
     {
-        size_t need = ctx->hs_reasm_expected - ctx->hs_reasm_len;
-        size_t take = (buf_len < need) ? buf_len : need;
-        if (!tls_hs_reasm_grow(ctx, ctx->hs_reasm_len + take))
-        {
-            tls_hs_reasm_reset(ctx);
-            return false;
-        }
-        memcpy(ctx->hs_reasm_buf + ctx->hs_reasm_len, buf, take);
-        ctx->hs_reasm_len += take;
-        off += take;
+        uint8_t msg_type = ctx->hs_reasm_buf[0];
+        size_t body_consumed = (msg_type == TLS_HANDSHAKE_CERTIFICATE)
+                                   ? ctx->hs_reasm_body_fed
+                                   : (ctx->hs_reasm_len - 4);
+        size_t need = (ctx->hs_reasm_expected - 4) - body_consumed;
+        size_t take = (buf_len - off < need) ? (buf_len - off) : need;
 
-        if (ctx->hs_reasm_len < ctx->hs_reasm_expected)
+        if (take > 0)
+        {
+            if (!tls_feed_inflight_body(ctx, msg_type, buf + off, take))
+            {
+                tls_hs_reasm_reset(ctx);
+                tls_cert_walker_free(ctx->cert_walker);
+                ctx->cert_walker = NULL;
+                ctx->hs_reasm_body_fed = 0;
+                return false;
+            }
+            off += take;
+        }
+
+        if (!tls_inflight_message_complete(ctx))
         {
             return true; /* Still incomplete; wait for more. */
         }
 
-        /* We have a full reassembled message — dispatch it, then continue
-         * draining whatever follows in `buf`. */
-        uint8_t msg_type = ctx->hs_reasm_buf[0];
-        size_t msg_total = ctx->hs_reasm_expected;
-        bool ok = tls_dispatch_inner_handshake(ctx, msg_type,
-                                               ctx->hs_reasm_buf, msg_total);
-        tls_hs_reasm_reset(ctx);
-        if (!ok)
+        if (!tls_dispatch_inflight(ctx))
         {
             return false;
         }
@@ -435,6 +895,51 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
             return false;
         }
 
+        if (msg_type == TLS_HANDSHAKE_CERTIFICATE)
+        {
+            /* Certificate: install header, transcript-update the header,
+             * route body through walker. The walker handles per-cert
+             * alloc/free; hs_reasm_buf only ever holds the 4-byte header. */
+            if (!tls_hs_reasm_grow(ctx, 4))
+            {
+                return false;
+            }
+            memcpy(ctx->hs_reasm_buf, buf + off, 4);
+            ctx->hs_reasm_len = 4;
+            ctx->hs_reasm_expected = total;
+            ctx->hs_reasm_body_fed = 0;
+            if (ctx->transcript_hash)
+            {
+                transcript_hash_update(ctx->transcript_hash, buf + off, 4);
+            }
+            off += 4;
+
+            size_t body_avail = (buf_len - off < body_len) ? (buf_len - off) : body_len;
+            if (body_avail > 0)
+            {
+                if (!tls_feed_inflight_body(ctx, msg_type, buf + off, body_avail))
+                {
+                    tls_hs_reasm_reset(ctx);
+                    tls_cert_walker_free(ctx->cert_walker);
+                    ctx->cert_walker = NULL;
+                    ctx->hs_reasm_body_fed = 0;
+                    return false;
+                }
+                off += body_avail;
+            }
+
+            if (!tls_inflight_message_complete(ctx))
+            {
+                return true; /* Body spans into a future record. */
+            }
+            if (!tls_dispatch_inflight(ctx))
+            {
+                return false;
+            }
+            continue;
+        }
+
+        /* Non-Certificate: legacy path. */
         if (off + total > buf_len)
         {
             /* Partial message — spill the remainder into reassembly. */
@@ -489,8 +994,8 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     {
     case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
         return tls_recv_encrypted_extensions(ctx, msg, msg_len);
-    case TLS_HANDSHAKE_CERTIFICATE:
-        return tls_recv_certificate(ctx, msg, msg_len);
+    /* TLS_HANDSHAKE_CERTIFICATE is handled by the streaming cert walker in
+     * tls_consume_handshake_buffer; it never reaches this dispatcher. */
     case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
         return tls_recv_certificate_verify(ctx, msg, msg_len);
     case TLS_HANDSHAKE_FINISHED:
@@ -501,6 +1006,86 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
         /* Unknown inner type — ignore per RFC 8446 §4 forward-compat note. */
         return true;
     }
+}
+
+/* Pbuf-walking inner-plaintext dispatcher. The decrypted
+ * plaintext arrives as a pbuf chain so the caller doesn't have to flatten
+ * a ~16 KiB Certificate message into a contiguous buffer just to hand it
+ * in. We walk the chain segment-by-segment and feed each segment into
+ * tls_consume_handshake_buffer, which is already slice-safe (it handles
+ * partial headers and cross-record reassembly via hs_reasm_buf). At any
+ * moment the only contiguous bytes in flight are one pbuf segment plus
+ * hs_reasm_buf, which only fills if a single handshake message spans
+ * records (the < 1% case). */
+bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
+                                      uint8_t inner_content_type,
+                                      const struct pbuf *plaintext,
+                                      size_t plaintext_len)
+{
+    if (!ctx)
+    {
+        return false;
+    }
+    if (plaintext_len != 0 && !plaintext)
+    {
+        return false;
+    }
+
+    if (inner_content_type == TLS_CONTENT_TYPE_HANDSHAKE)
+    {
+        size_t consumed = 0;
+        const struct pbuf *q = plaintext;
+
+        while (consumed < plaintext_len)
+        {
+            /* Skip zero-length segments (legal in lwIP pool chains after
+             * pbuf_realloc, and harmless to skip). */
+            while (q && q->len == 0)
+            {
+                q = q->next;
+            }
+            if (!q)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
+                return false;
+            }
+            size_t avail = (size_t)q->len;
+            size_t remaining = plaintext_len - consumed;
+            size_t chunk = (avail < remaining) ? avail : remaining;
+
+            if (!tls_consume_handshake_buffer(ctx,
+                                              (const uint8_t *)q->payload,
+                                              chunk))
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
+                return false;
+            }
+
+            consumed += chunk;
+            if (chunk == avail)
+            {
+                q = q->next;
+            }
+        }
+        return true;
+    }
+
+    if (inner_content_type == TLS_CONTENT_TYPE_ALERT)
+    {
+        if (plaintext_len >= 2)
+        {
+            uint8_t level = pbuf_get_at((struct pbuf *)plaintext, 0);
+            if (level == TLS_ALERT_LEVEL_FATAL)
+            {
+                ctx->state = TLS_STATE_ERROR;
+            }
+        }
+        return true;
+    }
+
+    /* Application data during handshake is unexpected. */
+    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
+    return false;
 }
 
 static size_t tls_padded_id_len(const uint8_t *id, size_t max_len)
@@ -553,182 +1138,6 @@ static bool tls_subject_cn_matches_owner_id(const struct tls_asn1_serialization 
  * };
  */
 
-/**
- * @brief Top-level entry point for one complete TLS record from the wire.
- *
- * The altcp layer collects a full record (5-byte header + payload) into
- * `data` and hands it here. We branch on the outer content type:
- *
- *  - HANDSHAKE (0x16): plaintext handshake records. In TLS 1.3 these are
- *    only legal for ClientHello/ServerHello — any later plaintext handshake
- *    is rejected because all post-ServerHello handshake messages must come
- *    in encrypted application_data records.
- *
- *  - CHANGE_CIPHER_SPEC (0x14): middlebox-compatibility leftover. Ignored.
- *
- *  - ALERT (0x15) plaintext: rare (servers should encrypt alerts post-EE)
- *    but legal pre-keys. Fatal alerts flip the state to ERROR.
- *
- *  - APPLICATION_DATA (0x17): in TLS 1.3 this is the wrapper for *every*
- *    encrypted record. We decrypt under whichever traffic keys are active
- *    (handshake or application phase), extract the real inner content
- *    type, and dispatch accordingly:
- *      * inner=HANDSHAKE: feed into the reassembly-aware dispatcher.
- *      * inner=ALERT: parse level/description; fatal => ERROR.
- *      * inner=APPLICATION_DATA: only legal post-handshake; handled by
- *        the altcp layer in handle_rx_appldata, not here.
- *
- * Returns true on successful processing (which includes "alert received,
- * carry on"), false on fatal protocol/parse error.
- */
-bool tls_process_record(struct tls_handshake_context *ctx,
-                        const uint8_t *data,
-                        size_t data_len)
-{
-    if (!ctx || !data || data_len < 5)
-    {
-        return false;
-    }
-
-    uint8_t content_type = data[0];
-    size_t record_len = ((size_t)data[3] << 8) | (size_t)data[4];
-
-    if (data_len != 5 + record_len)
-    {
-        return false;
-    }
-
-    switch (content_type)
-    {
-    case TLS_CONTENT_TYPE_HANDSHAKE:
-    {
-        const uint8_t *payload = data + 5;
-        size_t offset = 0;
-
-        while (offset + 4 <= record_len)
-        {
-            uint8_t msg_type = payload[offset];
-            size_t msg_len = ((size_t)payload[offset + 1] << 16) |
-                             ((size_t)payload[offset + 2] << 8) |
-                             (size_t)payload[offset + 3];
-            size_t msg_end = offset + 4 + msg_len;
-
-            if (msg_end > record_len)
-            {
-                return false;
-            }
-
-            switch (msg_type)
-            {
-            case TLS_HANDSHAKE_SERVER_HELLO:
-                if (ctx->state != TLS_STATE_CLIENT_HELLO_SENT)
-                {
-                    ctx->state = TLS_STATE_ERROR;
-                    return false;
-                }
-                if (!tls_recv_server_hello(ctx, payload + offset, msg_end - offset))
-                {
-                    return false;
-                }
-                break;
-            case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
-            case TLS_HANDSHAKE_CERTIFICATE:
-            case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
-            case TLS_HANDSHAKE_FINISHED:
-            case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
-                /* Post-ServerHello TLS 1.3 handshake messages must arrive via
-                 * encrypted application_data records, not plaintext handshake
-                 * records. Reject them here to preserve the record-layer boundary. */
-                ctx->state = TLS_STATE_ERROR;
-                return false;
-            default:
-                /* Unknown message type - skip it */
-                break;
-            }
-
-            offset = msg_end;
-        }
-
-        return (offset == record_len);
-    }
-    case TLS_CONTENT_TYPE_CHANGE_CIPHER_SPEC:
-        /* TLS 1.3 middlebox compatibility: ignore CCS records */
-        return true;
-
-    case TLS_CONTENT_TYPE_ALERT:
-    {
-        const uint8_t *payload = data + 5;
-        if (record_len >= 2)
-        {
-            /* payload[0] = level (1=warning, 2=fatal), payload[1] = description */
-            if (payload[0] == 2)
-            {
-                ctx->state = TLS_STATE_ERROR;
-            }
-        }
-        return true;
-    }
-
-    case TLS_CONTENT_TYPE_APPLICATION_DATA:
-    {
-        /* Encrypted record — decrypt and process inner content */
-        bool use_hs_keys = (ctx->state >= TLS_STATE_HANDSHAKE_KEYS_DERIVED &&
-                            ctx->state < TLS_STATE_HANDSHAKE_COMPLETE);
-
-        /* Allocate decryption buffer on heap — records can be up to ~16KB */
-        size_t dec_buf_size = record_len; /* plaintext <= ciphertext */
-        uint8_t *dec_buf = (uint8_t *)mem_buffer_custom_malloc(dec_buf_size);
-        if (!dec_buf)
-        {
-            ctx->state = TLS_STATE_ERROR;
-            return false;
-        }
-        size_t dec_len = 0;
-        uint8_t inner_type = 0;
-
-        if (!tls_decrypt_record(ctx, use_hs_keys,
-                                data, data_len,
-                                dec_buf, dec_buf_size,
-                                &dec_len, &inner_type))
-        {
-            mem_buffer_custom_free(dec_buf);
-            ctx->state = TLS_STATE_ERROR;
-            return false;
-        }
-
-        if (inner_type == TLS_CONTENT_TYPE_HANDSHAKE)
-        {
-            /* Reassembly-aware dispatch: handles cross-record handshake
-             * message fragmentation up to TLS_HS_REASSEMBLY_MAX. */
-            bool ok = tls_consume_handshake_buffer(ctx, dec_buf, dec_len);
-            mem_buffer_custom_free(dec_buf);
-            if (!ok)
-            {
-                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
-                return false;
-            }
-            return true;
-        }
-        else if (inner_type == TLS_CONTENT_TYPE_ALERT)
-        {
-            if (dec_len >= 2 && dec_buf[0] == TLS_ALERT_LEVEL_FATAL)
-            {
-                ctx->state = TLS_STATE_ERROR;
-            }
-            mem_buffer_custom_free(dec_buf);
-            return true;
-        }
-
-        /* Application data during handshake is unexpected */
-        mem_buffer_custom_free(dec_buf);
-        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
-        return false;
-    }
-
-    default:
-        return false;
-    }
-}
 
 /*
  * ============================================================================
@@ -777,6 +1186,7 @@ bool tls_handshake_init(
         memcpy(ctx->psk, psk, 32);
         memcpy(&ctx->psk_identity, psk_identity, sizeof(*psk_identity));
         ctx->psk_mode = true;
+        ctx->psk_type = TLS_PSK_TYPE_RESUMPTION;
     }
     else
     {
@@ -892,6 +1302,44 @@ bool tls_send_client_hello(
     size_t offset = 0;
     size_t msg_start = 4; /* After handshake header */
     size_t binder_offset;
+    size_t hostname_len = 0;
+    size_t sni_len = 0;
+    size_t required_len;
+    size_t required_ext_len;
+
+    if (ctx->hostname)
+    {
+        hostname_len = strlen(ctx->hostname);
+        if (hostname_len > 0xFFFFu - 5u)
+        {
+            return false;
+        }
+        sni_len = 9 + hostname_len;
+    }
+    if (ctx->psk_mode &&
+        (ctx->psk_identity.identity_len == 0 ||
+         ctx->psk_identity.identity_len > TLS_PSK_IDENTITY_MAX_LEN))
+    {
+        return false;
+    }
+
+    /* Fixed ClientHello body before extensions is 43 bytes. The constants
+     * below include the 4-byte handshake header so the unchecked serializer
+     * cannot overrun a too-small caller buffer. */
+    required_ext_len = 7 + 8 + 42 + 14 + sni_len;
+    if (ctx->psk_mode)
+    {
+        required_ext_len += 7 + 47 + ctx->psk_identity.identity_len;
+    }
+    if (required_ext_len > 0xFFFFu)
+    {
+        return false;
+    }
+    required_len = 47 + required_ext_len;
+    if (required_len > out_len || required_len - 4 > 0xFFFFFFu)
+    {
+        return false;
+    }
 
     /* Reserve space for handshake header (will fill in later) */
     if (offset + 4 > out_len)
@@ -985,7 +1433,6 @@ bool tls_send_client_hello(
     /* Extension 5: server_name (SNI) */
     if (ctx->hostname)
     {
-        size_t hostname_len = strlen(ctx->hostname);
         if (offset + 9 + hostname_len > out_len)
             return false;
         out[offset++] = 0x00;
@@ -1068,8 +1515,12 @@ bool tls_send_client_hello(
         if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret))
             return false;
 
+        const char *binder_label = (ctx->psk_type == TLS_PSK_TYPE_EXTERNAL)
+                                       ? "ext binder"
+                                       : "res binder";
         if (!tls_hkdf_expand_label(TLS_HASH_SHA256, early_secret, 32,
-                                   "res binder", 10, NULL, 0, binder_key, 32))
+                                   binder_label, 10,
+                                   NULL, 0, binder_key, 32))
             return false;
 
         if (!tls_hkdf_expand_label(TLS_HASH_SHA256, binder_key, 32,
@@ -1083,11 +1534,11 @@ bool tls_send_client_hello(
         out[2] = (uint8_t)(total_msg_len >> 8);
         out[3] = (uint8_t)(total_msg_len & 0xFF);
 
-        size_t ext_len = offset + 32 + 2 - ext_start;
+        size_t ext_len = offset + 32 - ext_start;
         out[ext_len_offset] = (uint8_t)(ext_len >> 8);
         out[ext_len_offset + 1] = (uint8_t)(ext_len & 0xFF);
 
-        size_t psk_ext_len = offset + 32 + 2 - psk_ext_start;
+        size_t psk_ext_len = offset + 32 - psk_ext_start;
         out[psk_ext_len_offset] = (uint8_t)(psk_ext_len >> 8);
         out[psk_ext_len_offset + 1] = (uint8_t)(psk_ext_len & 0xFF);
 
@@ -1348,6 +1799,12 @@ bool tls_recv_server_hello(
 
         case TLS_EXT_PRE_SHARED_KEY:
         {
+            if (!ctx->psk_mode)
+            {
+                /* Server selected a PSK identity we did not offer. */
+                ctx->state = TLS_STATE_ERROR;
+                return false;
+            }
             /* Extract selected PSK identity (2 bytes, should be 0 for first PSK) */
             if (ext_data_len != 2)
             {
@@ -1374,11 +1831,12 @@ bool tls_recv_server_hello(
     }
 
     /* Verify required extensions were present */
-    if (!found_supported_versions || (ctx->psk_mode && !found_psk))
+    if (!found_supported_versions || (!found_psk && !ctx->ecdhe_negotiated))
     {
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
+    ctx->psk_mode = found_psk;
 
     /* Step 9: Update transcript hash with ServerHello */
     if (ctx->transcript_hash)
@@ -1396,56 +1854,18 @@ bool tls_recv_server_hello(
 }
 
 /**
- * @brief Parse the server's Certificate message and authenticate via SPKI pin.
+ * @brief Finalize a streamed Certificate message.
  *
- * TLS 1.3 Certificate carries a chain of DER-encoded X.509 certificates,
- * each tagged with per-cert extensions:
- *
- *    +-----------------+
- *    | type=0x0b len(3)|
- *    +-----------------+
- *    | ctx_len(1)  ctx |   (empty for server cert)
- *    +-----------------+
- *    | chain_len(3)    |
- *    +-----------------+---------+---------+
- *    | cert_len(3) | DER cert ...| ext_len(2) | exts |   <- one CertificateEntry
- *    +-----------------+---------+---------+
- *    | cert_len(3) | DER cert ...| ext_len(2) | exts |   <- next entry
- *    +---...---+
- *
- * In a normal TLS implementation the chain is validated up to a trusted
- * root, then CertificateVerify proves the server controls the matching
- * private key by signing the transcript.
- *
- * On this platform we do neither. Instead we use SPKI PINNING: we extract
- * the SubjectPublicKeyInfo from the end-entity (first) certificate,
- * SHA-256 it, and look that hash up in a compiled-in truststore. A match
- * means "I recognize this exact public key as belonging to a server I
- * trust" — equivalent in security to certificate pinning but cheaper and
- * resilient to certificate rotation if the key stays the same.
- *
- * GUARD: this function refuses to run in PSK-only mode (psk_mode &&
- * !ecdhe_negotiated). Per RFC 8446 §2.2 the server MUST NOT send
- * Certificate in that case; receiving one is a protocol violation.
- *
- * Why SPKI pinning is the design choice: RSA-2048 verify takes >2s on an
- * eZ80, ECDSA P-256 verify is comparably slow. CertificateVerify would be
- * called once per handshake; the user-visible latency cost is too high for
- * a calculator. The trade-off is that we can only connect to servers
- * whose SPKI hash we've pre-loaded into the truststore.
- *
- * This function:
- * 1. Parses the certificate chain
- * 2. Extracts SPKI from each certificate
- * 3. Computes SHA-256 hash of SPKI
- * 4. Validates against truststore (SPKI pinning)
+ * Called by tls_consume_handshake_buffer when the cert walker reaches
+ * CW_DONE. Validates the same PSK/state gates (state,
+ * mode, chain validation) and advances the state machine. The walker
+ * has already updated the transcript hash incrementally as bytes
+ * arrived, so we don't touch it here.
  */
-bool tls_recv_certificate(
-    struct tls_handshake_context *ctx,
-    const uint8_t *data,
-    size_t data_len)
+static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
+                                          struct tls_cert_walker *w)
 {
-    if (!ctx || !data || data_len < 8)
+    if (!ctx || !w)
     {
         return false;
     }
@@ -1454,172 +1874,24 @@ bool tls_recv_certificate(
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
-    /* PSK-only mode (psk_mode && !ecdhe_negotiated) authenticates via the PSK
-     * itself; per RFC 8446 §2.2 the server MUST NOT send Certificate. Reject
-     * to keep the state machine honest. */
-    if (ctx->psk_mode && !ctx->ecdhe_negotiated)
+    /* PSK-authenticated handshakes, including PSK+DHE, MUST NOT send
+     * Certificate. The PSK is the server authentication in that mode. */
+    if (ctx->psk_mode)
     {
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
-
-    size_t msg_len = 0;
-    size_t offset = tls_parse_handshake_header(data, data_len,
-                                               TLS_HANDSHAKE_CERTIFICATE,
-                                               &msg_len);
-    if (offset == 0)
-    {
-        return false;
-    }
-
-    /* Parse certificate_request_context (should be empty for server cert) */
-    size_t context_len = data[offset++];
-    offset += context_len;
-    if (offset > data_len)
-    {
-        return false;
-    }
-
-    /* Parse certificate_list length (3 bytes) */
-    if (offset + 3 > data_len)
-    {
-        return false;
-    }
-    size_t cert_chain_len = ((size_t)data[offset] << 16) |
-                            ((size_t)data[offset + 1] << 8) |
-                            (size_t)data[offset + 2];
-    offset += 3;
-
-    if (offset + cert_chain_len > data_len)
-    {
-        return false;
-    }
-
-    /* Parse certificate chain */
-    size_t chain_offset = 0;
-    bool first_cert = true;
-    bool chain_validated = false;
-
-    while (chain_offset < cert_chain_len)
-    {
-        /* Parse certificate entry length (3 bytes) */
-        if (chain_offset + 3 > cert_chain_len)
-        {
-            return false;
-        }
-        size_t cert_len = ((size_t)data[offset + chain_offset] << 16) |
-                          ((size_t)data[offset + chain_offset + 1] << 8) |
-                          (size_t)data[offset + chain_offset + 2];
-        chain_offset += 3;
-
-        if (chain_offset + cert_len > cert_chain_len)
-        {
-            return false;
-        }
-
-        const uint8_t *cert_der = &data[offset + chain_offset];
-        chain_offset += cert_len;
-
-        /* Parse certificate extensions length (2 bytes) - TLS 1.3 specific */
-        if (chain_offset + 2 > cert_chain_len)
-        {
-            return false;
-        }
-        size_t ext_len = ((size_t)data[offset + chain_offset] << 8) |
-                         (size_t)data[offset + chain_offset + 1];
-        if (chain_offset + 2 + ext_len > cert_chain_len)
-        {
-            return false;
-        }
-        chain_offset += 2 + ext_len;
-
-        /* Process the first (end-entity) certificate */
-        if (first_cert)
-        {
-            first_cert = false;
-            struct tls_asn1_serialization cert_fields[13];
-            struct tls_x509_parse_result cert_parsed = {0};
-            bool constraints_check_pass = false;
-            if (!tls_x509_parse_certificate(cert_der, cert_len, cert_fields, &cert_parsed))
-            {
-                return false;
-            }
-            if (!cert_parsed.extensions || !cert_parsed.extensions->data || cert_parsed.extensions->len == 0)
-            {
-                return false;
-            }
-            constraints_check_pass = tls_x509_has_valid_constraints(cert_parsed.extensions->data,
-                                                                    cert_parsed.extensions->len);
-            if (!cert_parsed.spki_raw || !cert_parsed.spki_raw->data || cert_parsed.spki_raw->len == 0)
-            {
-                return false;
-            }
-
-            /* Compute SHA-256 hash of SPKI for pinning */
-            struct tls_hash_context hash_ctx;
-            if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-            {
-                return false;
-            }
-            tls_hash_update(&hash_ctx, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
-            tls_hash_digest(&hash_ctx, ctx->cert_state.server_cert_spki_hash);
-
-            /* Validate SPKI hash against truststore */
-            struct tls_spki_entry spki_entry;
-            if (tls_truststore_lookup(ctx->cert_state.server_cert_spki_hash, &spki_entry))
-            {
-                const lwip_app_config_t *app_cfg = lwip_app_config_get();
-                bool date_check_pass = true;
-                bool owner_check_pass = true;
-
-                /* Check validity period if configured and time is available */
-                if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_DATES))
-                {
-                    uint32_t current_time = lwip_sntp_get_unix_time();
-                    if (current_time > 0)
-                    {
-                        /* Verify we're within the validity window */
-                        if (current_time < spki_entry.not_before ||
-                            current_time > spki_entry.not_after)
-                        {
-                            date_check_pass = false;
-                        }
-                    }
-                    /* If time not available, skip date check */
-                }
-
-                /* Check owner if configured */
-                if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_OWNER))
-                {
-                    owner_check_pass = tls_subject_cn_matches_owner_id(cert_parsed.subject_cn,
-                                                                       spki_entry.owner_id);
-                }
-
-                if (date_check_pass && owner_check_pass && constraints_check_pass)
-                {
-                    chain_validated = true;
-                }
-            }
-        }
-    }
-
-    /* Store validation result */
-    ctx->cert_state.certificate_validated = chain_validated;
-    if (!chain_validated)
+    if (w->state != CW_DONE)
     {
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
-
-    /* Update transcript hash with the Certificate message */
-    if (ctx->transcript_hash)
+    if (!w->chain_validated)
     {
-        transcript_hash_update(ctx->transcript_hash, data, 4 + msg_len);
+        ctx->state = TLS_STATE_ERROR;
+        return false;
     }
-
-    /* Update state */
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
-
     return true;
 }
 
@@ -1643,13 +1915,18 @@ bool tls_recv_certificate(
  * If a server sends us extensions we don't understand, RFC 8446 §4 says
  * we should ignore unknown extension types — exactly what we do.
  */
-bool tls_recv_encrypted_extensions(
+static bool tls_recv_encrypted_extensions(
     struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len)
 {
     if (!ctx || !data || data_len < 6)
     {
+        return false;
+    }
+    if (ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
+    {
+        ctx->state = TLS_STATE_ERROR;
         return false;
     }
 
@@ -1725,24 +2002,25 @@ bool tls_recv_encrypted_extensions(
  * In a standard TLS 1.3 stack this is THE binding between "I trust this
  * cert chain" and "I'm actually talking to that cert's owner."
  *
- * We DON'T verify the signature here. See the long comment on
- * tls_recv_certificate for the reasoning — RSA/ECDSA verify on eZ80 is
- * too slow. Instead we trust the SPKI pin from the truststore as proof
- * the server is who we think it is.
+ * We DON'T verify the signature here. RSA-2048 verify takes >2 s on an
+ * eZ80, ECDSA P-256 is comparably slow — the user-visible latency cost is
+ * too high for a calculator. Instead we trust the SPKI pin established by
+ * the streaming cert walker (tls_recv_certificate_streamed) as proof the
+ * server's chain leads up to a CA we trust.
  *
  * We DO still:
  *   - Require the message to be present and well-formed (a missing
  *     CertificateVerify would let any attacker who got the certificate
  *     impersonate the server).
- *   - Require ctx->cert_state.certificate_validated to be true (which
- *     only happens if SPKI pinning succeeded).
+ *   - Require state == TLS_STATE_CERTIFICATE_RECEIVED, which is only
+ *     reached if SPKI pinning succeeded in tls_recv_certificate_streamed.
  *   - Update the transcript hash so the server Finished MAC checks out.
  *
  * The skip is a documented trade-off, not a missing TODO. If you ever
  * add fast signature verification, gate the actual verify here behind an
  * "if (have_sig_verify)" so the pin check remains the floor.
  */
-bool tls_recv_certificate_verify(
+static bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len)
@@ -1751,8 +2029,7 @@ bool tls_recv_certificate_verify(
     {
         return false;
     }
-    if (ctx->state != TLS_STATE_CERTIFICATE_RECEIVED ||
-        !ctx->cert_state.certificate_validated)
+    if (ctx->state != TLS_STATE_CERTIFICATE_RECEIVED)
     {
         ctx->state = TLS_STATE_ERROR;
         return false;
@@ -1843,8 +2120,8 @@ bool tls_recv_certificate_verify(
  *   iv  = HKDF-Expand-Label(secret, "iv",  "", 12)
  *
  * On exit, ctx->keys.client_handshake_{key,iv} and server_handshake_{key,iv}
- * are ready for use by tls_encrypt_record/tls_decrypt_record in
- * handshake-phase mode, and state advances to HANDSHAKE_KEYS_DERIVED.
+ * are ready for use by the altcp layer's streaming record encrypt/decrypt
+ * in handshake-phase mode, and state advances to HANDSHAKE_KEYS_DERIVED.
  */
 bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 {
@@ -1858,15 +2135,21 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     uint8_t derived_secret[32];
     uint8_t empty_hash[32];
     uint8_t transcript_hash[32];
-    uint8_t zero_ikm[32] = {0};
     struct tls_hash_context hash_ctx;
 
-    /* Step 1: Compute early_secret from PSK
-     * early_secret = HKDF-Extract(salt=0, IKM=PSK)
+    /* Step 1: Compute early_secret from selected PSK, or zeros for a
+     * full ECDHE handshake. A PSK offered but not selected has already
+     * cleared ctx->psk_mode in tls_recv_server_hello().
+     *
+     * early_secret = HKDF-Extract(salt=0, IKM=PSK or 0)
      */
-    if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret))
     {
-        return false;
+        const uint8_t *psk_ikm = ctx->psk_mode ? ctx->psk : NULL;
+        if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, psk_ikm, 32,
+                              early_secret))
+        {
+            return false;
+        }
     }
 
     /* Step 2: Compute empty hash for "derived" secret
@@ -1892,7 +2175,9 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
      * PSK-only:  handshake_secret = HKDF-Extract(salt=derived, IKM=0)
      */
     {
-        const uint8_t *ecdhe_ikm = ctx->ecdhe_negotiated ? ctx->ecdhe_shared : zero_ikm;
+        /* PSK-only path passes ikm=NULL so hkdf_extract supplies 32 zero
+         * bytes; saves a 32-byte stack buffer here. */
+        const uint8_t *ecdhe_ikm = ctx->ecdhe_negotiated ? ctx->ecdhe_shared : NULL;
         if (!tls_hkdf_extract(TLS_HASH_SHA256, derived_secret, 32,
                               ecdhe_ikm, 32, handshake_secret))
         {
@@ -2026,7 +2311,6 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     uint8_t derived_secret[32];
     uint8_t empty_hash[32];
     uint8_t transcript_hash[32];
-    uint8_t zero_ikm[32] = {0};
     struct tls_hash_context hash_ctx;
 
     /* Step 1: Compute empty hash for "derived" secret
@@ -2049,9 +2333,10 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
 
     /* Step 3: Compute master_secret
      * master_secret = HKDF-Extract(salt=derived, IKM=0)
+     * ikm=NULL tells hkdf_extract to use 32 zero bytes.
      */
     if (!tls_hkdf_extract(TLS_HASH_SHA256, derived_secret, 32,
-                          zero_ikm, 32, master_secret))
+                          NULL, 32, master_secret))
     {
         return false;
     }
@@ -2153,7 +2438,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
  *      +-- handshake type 0x14 = Finished
  *
  * The caller (altcp layer) then wraps this in an encrypted record using
- * tls_encrypt_record with handshake keys, and pushes it down the TCP.
+ * the altcp streaming encrypt with handshake keys, and pushes it down the TCP.
  */
 bool tls_send_finished(
     struct tls_handshake_context *ctx,
@@ -2280,7 +2565,7 @@ bool tls_send_finished(
  * (for ECDHE the path is via EE → CERT → CV → here; for PSK only via EE).
  * The required_state branch enforces that ordering.
  */
-bool tls_recv_finished(
+static bool tls_recv_finished(
     struct tls_handshake_context *ctx,
     bool is_client,
     const uint8_t *data,
@@ -2425,7 +2710,7 @@ bool tls_recv_finished(
  * The altcp layer is responsible for persisting (psk, identity) to flash
  * via the appvar mechanism — see altcp_tls_ce_save_pski.
  */
-bool tls_recv_new_session_ticket(
+static bool tls_recv_new_session_ticket(
     struct tls_handshake_context *ctx,
     const uint8_t *data,
     size_t data_len)
@@ -2534,405 +2819,7 @@ bool tls_recv_new_session_ticket(
     ctx->ticket_age_add = ticket_age_add;
     ctx->ticket_received_ms = sys_now();
     ctx->psk_mode = true;
-    return true;
-}
-
-/**
- * @brief Encrypt application data
- *
- * TLS 1.3 record format:
- * - ContentType (1 byte): 0x17 (application_data)
- * - LegacyVersion (2 bytes): 0x0303
- * - Length (2 bytes): ciphertext length
- * - Encrypted data: TLS13PlaintextRecord encrypted with AES-128-GCM
- *
- * AES-GCM nonce construction:
- * nonce = iv XOR sequence_number (padded to 12 bytes)
- */
-bool tls_encrypt_data(
-    struct tls_handshake_context *ctx,
-    const uint8_t *plaintext,
-    size_t plaintext_len,
-    uint8_t *ciphertext,
-    size_t ciphertext_len,
-    size_t *written)
-{
-    if (!ctx || !plaintext || !ciphertext || !written)
-    {
-        return false;
-    }
-
-    if (ciphertext_len < plaintext_len + 16)
-    { /* Need space for auth tag */
-        return false;
-    }
-
-    struct tls_aes_context aes_ctx;
-    uint8_t nonce[12];
-    uint8_t aad[5]; /* TLS record header for AAD */
-    uint8_t auth_tag[16];
-
-    /* Step 1: Construct AEAD nonce (RFC 8446 §5.3) */
-    tls_build_aead_nonce(ctx->keys.client_application_iv,
-                         ctx->client_seq_num, nonce);
-
-    /* Step 2: Build AAD (TLS record header)
-     * In TLS 1.3, AAD is just the record header:
-     * - Content type (1 byte): 0x17 (application_data)
-     * - Legacy version (2 bytes): 0x0303
-     * - Length (2 bytes): ciphertext length (plaintext + tag)
-     */
-    aad[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
-    aad[1] = 0x03; /* TLS 1.2 legacy version */
-    aad[2] = 0x03;
-    aad[3] = (uint8_t)((plaintext_len + 16) >> 8); /* Length includes tag */
-    aad[4] = (uint8_t)((plaintext_len + 16) & 0xFF);
-
-    /* Step 3: Initialize AES-GCM with key and nonce */
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM,
-                      ctx->keys.client_application_key, 16,
-                      nonce, 12))
-    {
-        return false;
-    }
-
-    /* Step 4: Add AAD */
-    if (!tls_aes_update_aad(&aes_ctx, aad, 5))
-    {
-        return false;
-    }
-
-    /* Step 5: Encrypt plaintext */
-    if (!tls_aes_encrypt(&aes_ctx, plaintext, plaintext_len, ciphertext))
-    {
-        return false;
-    }
-
-    /* Step 6: Get authentication tag */
-    if (!tls_aes_digest(&aes_ctx, auth_tag))
-    {
-        return false;
-    }
-
-    /* Step 7: Append tag to ciphertext */
-    memcpy(ciphertext + plaintext_len, auth_tag, 16);
-
-    /* Step 8: Increment sequence number */
-    ctx->client_seq_num++;
-
-    *written = plaintext_len + 16;
-    return true;
-}
-
-/**
- * @brief Decrypt application data
- */
-bool tls_decrypt_data(
-    struct tls_handshake_context *ctx,
-    const uint8_t *ciphertext,
-    size_t ciphertext_len,
-    uint8_t *plaintext,
-    size_t plaintext_len,
-    size_t *written)
-{
-    if (!ctx || !ciphertext || !plaintext || !written)
-    {
-        return false;
-    }
-
-    if (ciphertext_len < 16)
-    { /* Must have at least auth tag */
-        return false;
-    }
-
-    /* Ciphertext length minus tag is actual plaintext length */
-    size_t actual_plaintext_len = ciphertext_len - 16;
-
-    if (plaintext_len < actual_plaintext_len)
-    {
-        return false;
-    }
-
-    struct tls_aes_context aes_ctx;
-    uint8_t nonce[12];
-    uint8_t aad[5]; /* TLS record header for AAD */
-    uint8_t computed_tag[16];
-    const uint8_t *received_tag = ciphertext + actual_plaintext_len;
-
-    /* Step 1: Construct AEAD nonce (RFC 8446 §5.3) */
-    tls_build_aead_nonce(ctx->keys.server_application_iv,
-                         ctx->server_seq_num, nonce);
-
-    /* Step 2: Build AAD (TLS record header) */
-    aad[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
-    aad[1] = 0x03; /* TLS 1.2 legacy version */
-    aad[2] = 0x03;
-    aad[3] = (uint8_t)(ciphertext_len >> 8); /* Length includes tag */
-    aad[4] = (uint8_t)(ciphertext_len & 0xFF);
-
-    /* Step 3: Initialize AES-GCM with key and nonce */
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM,
-                      ctx->keys.server_application_key, 16,
-                      nonce, 12))
-    {
-        return false;
-    }
-
-    /* Step 4: Add AAD */
-    if (!tls_aes_update_aad(&aes_ctx, aad, 5))
-    {
-        return false;
-    }
-
-    /* Step 5: Decrypt ciphertext */
-    if (!tls_aes_decrypt(&aes_ctx, ciphertext, actual_plaintext_len, plaintext))
-    {
-        return false;
-    }
-
-    /* Step 6: Compute authentication tag */
-    if (!tls_aes_digest(&aes_ctx, computed_tag))
-    {
-        return false;
-    }
-
-    /* Step 7: Verify authentication tag (constant-time comparison)
-     * CRITICAL: This must be constant-time to prevent timing attacks
-     */
-    uint8_t diff = 0;
-    for (size_t i = 0; i < 16; i++)
-    {
-        diff |= computed_tag[i] ^ received_tag[i];
-    }
-
-    if (diff != 0)
-    {
-        /* Tag verification failed - possible tampering or decryption error */
-        tls_secure_memzero(plaintext, actual_plaintext_len); /* Clear plaintext */
-        return false;
-    }
-
-    /* Step 8: Increment sequence number */
-    ctx->server_seq_num++;
-
-    *written = actual_plaintext_len;
-    return true;
-}
-
-/**
- * @brief Decrypt one TLS 1.3 record and recover its inner content type.
- *
- * In TLS 1.3 every encrypted record on the wire looks like:
- *
- *     +---------+-----+-----+---------+
- *     |  0x17   | 03  | 03  | length  |    <- AAD = these 5 header bytes
- *     +---------+-----+-----+---------+
- *     | ciphertext (plaintext + ct + pad) | tag(16) |
- *     +-----------------------------------+---------+
- *
- * The outer content_type is ALWAYS 0x17 (application_data) regardless of
- * what's actually inside — handshake, alert, or app data. The real type
- * lives at the end of the decrypted plaintext as a single byte, optionally
- * followed by zero padding (length-hiding). On decrypt we strip the
- * trailing zeros, then the last remaining byte is the inner content type.
- *
- * AEAD construction (AES-128-GCM):
- *   nonce = static_iv XOR right-aligned(sequence_number)
- *   AAD   = the 5 plaintext header bytes
- *   tag   = computed over (AAD, ciphertext); receiver re-derives and
- *           constant-time-compares against the tag at the end of the record.
- *
- * Tag mismatch ⇒ wipe the plaintext buffer and return false. The caller
- * MUST treat this as fatal (bad_record_mac alert) — never retry, never
- * leak partial plaintext, never increment the sequence counter.
- *
- * The `use_handshake_keys` flag selects between handshake-phase keys
- * (server_handshake_key/iv + server_hs_seq_num) and application-phase
- * keys (server_application_key/iv + server_seq_num).
- *
- * Note: this decrypts *server-to-client* records — the receive direction.
- * For client-to-server we use tls_encrypt_record below.
- */
-bool tls_decrypt_record(
-    struct tls_handshake_context *ctx,
-    bool use_handshake_keys,
-    const uint8_t *record, size_t record_len,
-    uint8_t *plaintext, size_t plaintext_len,
-    size_t *written, uint8_t *inner_content_type)
-{
-    if (!ctx || !record || !plaintext || !written || !inner_content_type)
-        return false;
-
-    /* Record must have at least 5-byte header + 16-byte tag + 1 content type */
-    if (record_len < 5 + 16 + 1)
-        return false;
-
-    const uint8_t *header = record;
-    const uint8_t *ciphertext = record + 5;
-    size_t ciphertext_len = record_len - 5;
-    size_t actual_plaintext_len = ciphertext_len - 16;
-
-    if (plaintext_len < actual_plaintext_len)
-        return false;
-
-    /* Select keys based on phase */
-    const uint8_t *key, *iv;
-    uint64_t *seq_num;
-    if (use_handshake_keys)
-    {
-        key = ctx->keys.server_handshake_key;
-        iv = ctx->keys.server_handshake_iv;
-        seq_num = &ctx->server_hs_seq_num;
-    }
-    else
-    {
-        key = ctx->keys.server_application_key;
-        iv = ctx->keys.server_application_iv;
-        seq_num = &ctx->server_seq_num;
-    }
-
-    /* Construct AEAD nonce (RFC 8446 §5.3) */
-    uint8_t nonce[12];
-    tls_build_aead_nonce(iv, *seq_num, nonce);
-
-    /* AAD is the 5-byte record header */
-    struct tls_aes_context aes_ctx;
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, 12))
-        return false;
-    if (!tls_aes_update_aad(&aes_ctx, header, 5))
-        return false;
-    if (!tls_aes_decrypt(&aes_ctx, ciphertext, actual_plaintext_len, plaintext))
-        return false;
-
-    /* Verify authentication tag */
-    uint8_t computed_tag[16];
-    if (!tls_aes_digest(&aes_ctx, computed_tag))
-        return false;
-
-    const uint8_t *received_tag = ciphertext + actual_plaintext_len;
-    uint8_t diff = 0;
-    for (size_t i = 0; i < 16; i++)
-        diff |= computed_tag[i] ^ received_tag[i];
-    if (diff != 0)
-    {
-        tls_secure_memzero(plaintext, actual_plaintext_len);
-        return false;
-    }
-
-    (*seq_num)++;
-
-    /* Extract inner content type: last non-zero byte of decrypted payload */
-    size_t pt_end = actual_plaintext_len;
-    while (pt_end > 0 && plaintext[pt_end - 1] == 0)
-        pt_end--;
-
-    if (pt_end == 0)
-        return false; /* No content type found */
-
-    *inner_content_type = plaintext[pt_end - 1];
-    *written = pt_end - 1; /* Exclude the content type byte */
-    return true;
-}
-
-/**
-/**
- * @brief Build one outbound encrypted TLS 1.3 record from a plaintext blob.
- *
- * Counterpart to tls_decrypt_record. We:
- *
- *   1. Write the 5-byte record header into `record`. Outer type is always
- *      0x17 (application_data). The length field equals plaintext_len + 1
- *      (the inner content type byte) + 16 (the AEAD tag).
- *   2. Build the AEAD nonce from the appropriate client IV + sequence
- *      counter (handshake or application phase, selected by the caller).
- *   3. Initialize AES-128-GCM with the matching client key.
- *   4. Use the 5-byte header as AAD.
- *   5. Lay out the inner plaintext as [plaintext || inner_content_type]
- *      directly in the output buffer (we don't add length-hiding padding —
- *      it's optional and we don't gain anything on a calculator).
- *   6. Encrypt in place, append the 16-byte tag, advance the seq counter,
- *      report total bytes written.
- *
- * Used by:
- *   - altcp_tls_ce_lower_recv_process for the client's Finished message
- *     (with inner_content_type = HANDSHAKE, use_handshake_keys=true).
- *   - altcp_tls_ce_write for every application data send
- *     (inner_content_type = APPLICATION_DATA, use_handshake_keys=false).
- *   - tls_send_alert for alerts during/after handshake.
- *
- * Output size: 5 + plaintext_len + 1 + 16 bytes. The caller must size the
- * record buffer at least that large; we error if not.
- */
-bool tls_encrypt_record(
-    struct tls_handshake_context *ctx,
-    bool use_handshake_keys,
-    uint8_t inner_content_type,
-    const uint8_t *plaintext, size_t plaintext_len,
-    uint8_t *record, size_t record_len,
-    size_t *written)
-{
-    if (!ctx || !plaintext || !record || !written)
-        return false;
-
-    /* Need: 5 header + plaintext + 1 content_type + 16 tag */
-    size_t inner_len = plaintext_len + 1; /* plaintext + content type byte */
-    size_t total_len = 5 + inner_len + 16;
-    if (record_len < total_len)
-        return false;
-
-    /* Select keys based on phase */
-    const uint8_t *key, *iv;
-    uint64_t *seq_num;
-    if (use_handshake_keys)
-    {
-        key = ctx->keys.client_handshake_key;
-        iv = ctx->keys.client_handshake_iv;
-        seq_num = &ctx->client_hs_seq_num;
-    }
-    else
-    {
-        key = ctx->keys.client_application_key;
-        iv = ctx->keys.client_application_iv;
-        seq_num = &ctx->client_seq_num;
-    }
-
-    /* Build record header */
-    record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA; /* 0x17 */
-    record[1] = 0x03;
-    record[2] = 0x03; /* Legacy TLS 1.2 */
-    record[3] = (uint8_t)((inner_len + 16) >> 8);
-    record[4] = (uint8_t)((inner_len + 16) & 0xFF);
-
-    /* Construct AEAD nonce (RFC 8446 §5.3) */
-    uint8_t nonce[12];
-    tls_build_aead_nonce(iv, *seq_num, nonce);
-
-    /* Build inner plaintext: [plaintext || content_type] in a temp buffer
-     * We'll encrypt directly from plaintext, then handle the content type byte */
-    uint8_t *enc_output = record + 5;
-
-    struct tls_aes_context aes_ctx;
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, 12))
-        return false;
-    if (!tls_aes_update_aad(&aes_ctx, record, 5))
-        return false;
-
-    /* We need to encrypt [plaintext || content_type] as one stream.
-     * Build it in enc_output temporarily, then encrypt in-place. */
-    memcpy(enc_output, plaintext, plaintext_len);
-    enc_output[plaintext_len] = inner_content_type;
-
-    if (!tls_aes_encrypt(&aes_ctx, enc_output, inner_len, enc_output))
-        return false;
-
-    uint8_t auth_tag[16];
-    if (!tls_aes_digest(&aes_ctx, auth_tag))
-        return false;
-
-    memcpy(enc_output + inner_len, auth_tag, 16);
-
-    (*seq_num)++;
-    *written = total_len;
+    ctx->psk_type = TLS_PSK_TYPE_RESUMPTION;
     return true;
 }
 
@@ -2975,7 +2862,7 @@ static int tls_outbound_phase(const struct tls_handshake_context *ctx)
 /**
  * @brief Send alert message
  */
-bool tls_send_alert(
+static bool tls_send_alert(
     struct tls_handshake_context *ctx,
     uint8_t level,
     uint8_t description)
@@ -2986,7 +2873,7 @@ bool tls_send_alert(
     }
 
     bool ok = false;
-    uint8_t alert_body[2] = { level, description };
+    uint8_t alert_body[2] = {level, description};
 
     if (ctx->transport_write)
     {
@@ -3006,16 +2893,48 @@ bool tls_send_alert(
         }
         else
         {
-            /* Encrypt under the active client traffic keys. Worst-case record
-             * is 5 header + 2 body + 1 content_type + 16 tag = 24 bytes. */
-            uint8_t record[24];
-            size_t written = 0;
-            bool use_hs_keys = (phase == 1);
-            if (tls_encrypt_record(ctx, use_hs_keys, TLS_CONTENT_TYPE_ALERT,
-                                   alert_body, sizeof(alert_body),
-                                   record, sizeof(record), &written))
+            /* Encrypt under the active client traffic keys. The inner record
+             * is just 2 alert bytes + 1 inner content-type, so we inline the
+             * AEAD path rather than depending on a general encrypt helper. */
+            uint8_t record[24];          /* 5 hdr + 2 body + 1 type + 16 tag */
+            const uint8_t *key, *iv;
+            uint64_t *seq_num;
+            uint8_t nonce[12];
+            struct tls_aes_context aes_ctx;
+            uint8_t auth_tag[16];
+
+            if (phase == 1)
             {
-                ok = ctx->transport_write(ctx->transport_arg, record, written);
+                key = ctx->keys.client_handshake_key;
+                iv = ctx->keys.client_handshake_iv;
+                seq_num = &ctx->client_hs_seq_num;
+            }
+            else
+            {
+                key = ctx->keys.client_application_key;
+                iv = ctx->keys.client_application_iv;
+                seq_num = &ctx->client_seq_num;
+            }
+
+            record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
+            record[1] = 0x03;
+            record[2] = 0x03;
+            record[3] = 0x00;
+            record[4] = 3 + 16; /* 2 body + 1 type + 16 tag */
+
+            tls_build_aead_nonce(iv, *seq_num, nonce);
+            if (tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, 12) &&
+                tls_aes_update_aad(&aes_ctx, record, 5) &&
+                tls_aes_encrypt(&aes_ctx, alert_body, 2, record + 5))
+            {
+                uint8_t type_byte = TLS_CONTENT_TYPE_ALERT;
+                if (tls_aes_encrypt(&aes_ctx, &type_byte, 1, record + 7) &&
+                    tls_aes_digest(&aes_ctx, auth_tag))
+                {
+                    memcpy(record + 8, auth_tag, 16);
+                    (*seq_num)++;
+                    ok = ctx->transport_write(ctx->transport_arg, record, sizeof(record));
+                }
             }
         }
     }
@@ -3061,6 +2980,12 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 
     /* Release the cross-record reassembly buffer if one is in flight. */
     tls_hs_reasm_reset(ctx);
+
+    /* Free any in-flight Certificate walker (cert_walker plus its
+     * per-cert buffer). Safe on NULL. */
+    tls_cert_walker_free(ctx->cert_walker);
+    ctx->cert_walker = NULL;
+    ctx->hs_reasm_body_fed = 0;
 
     /* Securely zero sensitive data */
     tls_secure_memzero(ctx->psk, sizeof(ctx->psk));

@@ -21,12 +21,12 @@
 extern "C" {
 #endif
 
-#ifndef ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE
-#define ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE 8192
-#endif
-
-#ifndef ALTCP_TLS_CE_MAX_RX_RING_SIZE
-#define ALTCP_TLS_CE_MAX_RX_RING_SIZE 16384
+/* Cap on the per-record plaintext scratch buffer the TLS layer allocates
+ * during handshake-message decryption. RFC 8446 §5.1 caps TLS 1.3
+ * plaintext records at 16384 bytes; the inner parser receives at most
+ * that many bytes (plus the inner content-type byte, see the +1 sites). */
+#ifndef ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT
+#define ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT 16384
 #endif
 
 /**
@@ -39,10 +39,7 @@ typedef struct altcp_tls_ce_state {
     struct pbuf *rx;                         /* Encrypted RX data from TCP */
     struct pbuf *rx_app;                     /* Decrypted application data */
     int rx_passed_unrecved;                  /* Data passed to app but not recved */
-    int bio_bytes_read;                      /* Bytes read from TCP */
-    int bio_bytes_appl;                      /* Application data bytes */
     int overhead_bytes_adjust;               /* TLS overhead tracking */
-    struct mem_buffer *rx_ring;              /* TLS record ring buffer */
     size_t rx_throttle_pending;              /* Pending bytes to recved */
     uint8_t rx_mild_toggle;                  /* Throttle counter */
     struct altcp_tls_ce_state *next;         /* Linked list of states */
@@ -61,11 +58,11 @@ typedef struct altcp_tls_ce_state {
 struct altcp_tls_ce_config {
     u8_t is_server;                          /* Server mode flag */
     u8_t psk_mode;                           /* 1 = PSK/PSK+ECDHE, 0 = pure ECDHE */
-    size_t rx_ring_size;                     /* TLS record ring size */
 
     /* PSK configuration (only used when psk_mode == 1) */
     u8_t psk[32];                            /* Pre-shared key */
     struct tls_psk_identity psk_identity;    /* PSK identity */
+    enum tls_psk_type psk_type;              /* Resumption vs external PSK */
 
     /* SNI hostname (pointer to caller-owned string, must outlive config) */
     const char *hostname;

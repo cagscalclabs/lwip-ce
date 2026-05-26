@@ -166,6 +166,7 @@ struct altcp_tls_session
 #else
 {
     u8_t valid;                        /* 1 if session payload is populated */
+    u8_t psk_type;                     /* enum tls_psk_type */
     u8_t psk[32];                      /* Resumption/application PSK */
     struct tls_psk_identity identity;  /* Identity + obfuscated_ticket_age */
 }

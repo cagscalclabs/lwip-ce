@@ -216,8 +216,34 @@ struct usb_configurator {
     usb_endpoint_data_t* (*get_endpoint_data)(usb_endpoint_t endpoint);
     void (*set_endpoint_flags)(usb_endpoint_t endpoint, usb_endpoint_flags_t flags);
     usb_error_t (*set_endpoint_halt)(usb_endpoint_t endpoint);
+
+    // top-level USB driver entry points (formerly called directly by lwIP;
+    // now routed through the vtable so the libload build can resolve them
+    // via include_library 'usbdrvce.lib' without a special case).
+    usb_error_t (*init)(usb_event_callback_t handler, usb_callback_data_t *data,
+                        const usb_standard_descriptors_t *device_descriptors,
+                        usb_init_flags_t flags);
+    usb_error_t (*handle_events)(void);
 };
+
+#ifdef LWIP_LIBLOAD_BUILD
+/* Under libload, all imports — host CRT (malloc/free/realloc) and the
+ * USB vtable — live in a single statically-initialised table in the
+ * stub (release/lwip.s). The CRT slots are populated at load time by
+ * lwip_init_runtime(); the USB slots are populated at link time via
+ * include_library 'usbdrvce.lib'. lwIP-internal code calls usb_fn.foo()
+ * as before — the macro below aliases it into the unified table. */
+struct lwip_imports {
+    void  *(*malloc)(size_t);
+    void   (*free)(void *);
+    void  *(*realloc)(void *, size_t);
+    struct usb_configurator usb;
+};
+extern struct lwip_imports fn_imports_table;
+#define usb_fn (fn_imports_table.usb)
+#else
 extern struct usb_configurator usb_fn;
+#endif
 
 
 /// @brief Polls for the registration status of interfaces.

@@ -10,9 +10,9 @@
  *   and aborted gracefully since no alternative groups are available.
  * - Cross-record handshake message reassembly is bounded at
  *   TLS_HS_REASSEMBLY_MAX bytes (16KB). Anything larger is fatal.
- * - The rx ring buffer (default 8KB) limits the maximum encrypted record
- *   size during handshake. Very large certificate chains (>8KB) may fail.
- *   The ring size is configurable via altcp_tls_ce_config.rx_ring_size.
+ * - The ALTCP CE transport keeps encrypted input as pbufs and passes complete
+ *   records into this layer. Very large cross-record handshake messages are
+ *   bounded by TLS_HS_REASSEMBLY_MAX.
  */
 
 #ifndef TLS_HANDSHAKE_H
@@ -117,6 +117,11 @@ struct tls_psk_identity {
     uint32_t obfuscated_ticket_age;  /* Obfuscated age for resumption */
 };
 
+enum tls_psk_type {
+    TLS_PSK_TYPE_RESUMPTION = 0,  /* NewSessionTicket/resumption PSK: "res binder" */
+    TLS_PSK_TYPE_EXTERNAL = 1     /* Caller-provisioned external PSK: "ext binder" */
+};
+
 /**
  * @brief TLS 1.3 Traffic Keys
  */
@@ -151,6 +156,7 @@ struct tls_handshake_context {
     uint8_t psk[32];                    /* Pre-shared key */
     struct tls_psk_identity psk_identity;
     bool psk_mode;                       /* true = PSK/PSK+ECDHE, false = pure ECDHE */
+    enum tls_psk_type psk_type;          /* Binder label selector for offered PSK */
 
     /* Handshake State */
     uint8_t client_random[32];
@@ -195,12 +201,6 @@ struct tls_handshake_context {
     /* SNI hostname for server_name extension */
     const char *hostname;
 
-    /* Certificate validation state (current implementation: end-entity SPKI pinning) */
-    struct {
-        uint8_t server_cert_spki_hash[32];  /* SHA-256 of server's SPKI */
-        bool certificate_validated;          /* True if end-entity certificate matched policy */
-    } cert_state;
-
     /* Transport plumbing for outbound records (alerts, close_notify). Set by
      * the altcp layer before the handshake begins. NULL means tls_send_alert
      * just updates local state without emitting on the wire. */
@@ -209,11 +209,22 @@ struct tls_handshake_context {
 
     /* Cross-record handshake message reassembly buffer. Allocated on demand
      * from the custom heap when an inner handshake message exceeds the
-     * current decrypted record; freed once the message is consumed. */
+     * current decrypted record; freed once the message is consumed.
+     * Certificate messages bypass this buffer: body bytes stream through
+     * cert_walker (declared below) so only one cert at a time is held
+     * flat, regardless of chain depth. hs_reasm_buf still holds the
+     * 4-byte handshake header for the in-flight Certificate so the
+     * dispatch path can read msg_type uniformly. */
     uint8_t *hs_reasm_buf;
     size_t hs_reasm_cap;
     size_t hs_reasm_len;
     size_t hs_reasm_expected;  /* Total bytes expected (4 + body), 0 = idle */
+    size_t hs_reasm_body_fed;  /* Body bytes routed through cert_walker so far */
+
+    /* Lazy-allocated walker for in-flight Certificate message body.
+     * NULL when no Certificate is being received. Struct definition is
+     * private to handshake.c. */
+    struct tls_cert_walker *cert_walker;
 
     /* True once close_notify has been sent so we don't send it twice. */
     bool close_notify_sent;
@@ -281,58 +292,6 @@ bool tls_recv_server_hello(
 );
 
 /**
- * @brief Process Certificate message (server -> client)
- *
- * Parses the TLS 1.3 Certificate handshake message (type 0x0b).
- * This is where the peer's certificate chain can be verified.
- *
- * @param ctx Handshake context
- * @param data Certificate message data
- * @param data_len Length of Certificate message
- * @return true on success, false on failure
- */
-bool tls_recv_certificate(
-    struct tls_handshake_context *ctx,
-    const uint8_t *data,
-    size_t data_len
-);
-
-/**
- * @brief Process EncryptedExtensions message (server -> client)
- *
- * Parses the TLS 1.3 EncryptedExtensions handshake message (type 0x08).
- * This message contains extensions that are encrypted under handshake keys.
- *
- * @param ctx Handshake context
- * @param data EncryptedExtensions message data
- * @param data_len Length of EncryptedExtensions message
- * @return true on success, false on failure
- */
-bool tls_recv_encrypted_extensions(
-    struct tls_handshake_context *ctx,
-    const uint8_t *data,
-    size_t data_len
-);
-
-/**
- * @brief Process CertificateVerify message (server -> client)
- *
- * Parses the TLS 1.3 CertificateVerify message (type 0x0f) and updates
- * the transcript hash. Note: We rely on SPKI pinning for certificate
- * validation rather than verifying this signature.
- *
- * @param ctx Handshake context
- * @param data CertificateVerify message data
- * @param data_len Length of CertificateVerify message
- * @return true on success, false on parse failure
- */
-bool tls_recv_certificate_verify(
-    struct tls_handshake_context *ctx,
-    const uint8_t *data,
-    size_t data_len
-);
-
-/**
  * @brief Derive handshake keys from PSK
  *
  * Performs TLS 1.3 key schedule for PSK-only mode:
@@ -388,159 +347,24 @@ bool tls_send_finished(
 );
 
 /**
- * @brief Verify Finished message
+ * @brief Process decrypted inner plaintext from a pbuf chain.
  *
- * Verifies peer's Finished message by computing expected HMAC
- * and comparing with received value.
- *
- * @param ctx Handshake context
- * @param is_client true if verifying client Finished, false for server
- * @param data Finished message data
- * @param data_len Length of Finished message
- * @return true if valid, false if invalid
- *
- * TODO: Implement Finished message verification
- */
-bool tls_recv_finished(
-    struct tls_handshake_context *ctx,
-    bool is_client,
-    const uint8_t *data,
-    size_t data_len
-);
-
-/**
- * @brief Process TLS 1.3 NewSessionTicket message.
- *
- * Parses server's post-handshake ticket, derives a resumption PSK from
- * resumption_master_secret, and updates ctx->psk / ctx->psk_identity.
+ * Post-AEAD dispatch entry called by the altcp layer's streaming record
+ * decrypter. Walks the decrypted pbuf chain segment-by-segment and feeds
+ * each segment into the cross-record handshake-message reassembler.
  *
  * @param ctx Handshake context
- * @param data NewSessionTicket handshake message (type + len + body)
- * @param data_len Length of message buffer
- * @return true on success, false on parse/derive failure
+ * @param inner_content_type Decrypted TLSInnerPlaintext content type
+ * @param plaintext Decrypted-plaintext pbuf chain
+ * @param plaintext_len Total bytes of plaintext to walk (<= chain length)
+ * @return true on success, false on fatal protocol/parse failure
  */
-bool tls_recv_new_session_ticket(
+struct pbuf;
+bool tls_process_inner_plaintext_pbuf(
     struct tls_handshake_context *ctx,
-    const uint8_t *data,
-    size_t data_len
-);
-
-/**
- * @brief Process a full TLS record (header + payload)
- *
- * @param ctx Handshake context
- * @param data TLS record buffer
- * @param data_len Length of TLS record buffer
- * @return true on success, false on failure
- */
-bool tls_process_record(
-    struct tls_handshake_context *ctx,
-    const uint8_t *data,
-    size_t data_len
-);
-
-/**
- * @brief Encrypt application data
- *
- * Encrypts plaintext using AES-128-GCM with application traffic keys.
- * Uses TLS 1.3 record layer format with sequence numbers.
- *
- * @param ctx Handshake context
- * @param plaintext Input plaintext
- * @param plaintext_len Length of plaintext
- * @param ciphertext Output buffer for ciphertext + tag
- * @param ciphertext_len Size of output buffer (must be >= plaintext_len + 16)
- * @param written Number of bytes written
- * @return true on success, false on failure
- *
- * TODO: Wire in AES-GCM implementation
- */
-bool tls_encrypt_data(
-    struct tls_handshake_context *ctx,
-    const uint8_t *plaintext,
-    size_t plaintext_len,
-    uint8_t *ciphertext,
-    size_t ciphertext_len,
-    size_t *written
-);
-
-/**
- * @brief Decrypt application data
- *
- * Decrypts ciphertext using AES-128-GCM with application traffic keys.
- * Verifies authentication tag and sequence number.
- *
- * @param ctx Handshake context
- * @param ciphertext Input ciphertext + tag
- * @param ciphertext_len Length of ciphertext (includes 16-byte tag)
- * @param plaintext Output buffer for plaintext
- * @param plaintext_len Size of output buffer
- * @param written Number of bytes written
- * @return true on success, false on failure
- *
- * TODO: Wire in AES-GCM implementation
- */
-bool tls_decrypt_data(
-    struct tls_handshake_context *ctx,
-    const uint8_t *ciphertext,
-    size_t ciphertext_len,
-    uint8_t *plaintext,
-    size_t plaintext_len,
-    size_t *written
-);
-
-/**
- * @brief Decrypt a TLS 1.3 encrypted record
- *
- * Decrypts a record using handshake or application keys.
- * Extracts the inner content type (appended after plaintext in TLS 1.3).
- *
- * @param ctx Handshake context
- * @param use_handshake_keys true for handshake phase, false for application phase
- * @param record Full TLS record (5-byte header + encrypted payload)
- * @param record_len Length of full record
- * @param plaintext Output buffer for decrypted data
- * @param plaintext_len Size of output buffer
- * @param written Number of bytes of actual content written
- * @param inner_content_type Extracted inner content type
- * @return true on success, false on failure
- */
-bool tls_decrypt_record(
-    struct tls_handshake_context *ctx,
-    bool use_handshake_keys,
-    const uint8_t *record,
-    size_t record_len,
-    uint8_t *plaintext,
-    size_t plaintext_len,
-    size_t *written,
-    uint8_t *inner_content_type
-);
-
-/**
- * @brief Encrypt data as a TLS 1.3 record
- *
- * Encrypts plaintext with the given inner content type, producing a complete
- * TLS record (header + encrypted payload + auth tag).
- *
- * @param ctx Handshake context
- * @param use_handshake_keys true for handshake phase, false for application phase
- * @param inner_content_type Content type to embed (0x16 handshake, 0x17 app data)
- * @param plaintext Input data
- * @param plaintext_len Length of input data
- * @param record Output buffer for complete TLS record
- * @param record_len Size of output buffer
- * @param written Number of bytes written (full record)
- * @return true on success, false on failure
- */
-bool tls_encrypt_record(
-    struct tls_handshake_context *ctx,
-    bool use_handshake_keys,
     uint8_t inner_content_type,
-    const uint8_t *plaintext,
-    size_t plaintext_len,
-    uint8_t *record,
-    size_t record_len,
-    size_t *written
+    const struct pbuf *plaintext,
+    size_t plaintext_len
 );
 
 /**
@@ -554,24 +378,6 @@ void tls_set_transport(
     struct tls_handshake_context *ctx,
     tls_transport_write_fn write_fn,
     void *transport_arg
-);
-
-/**
- * @brief Send alert message
- *
- * Builds an alert record and, if the handshake is past key derivation,
- * encrypts it under the current outgoing keys. Falls back to plaintext
- * (for pre-keys errors) only when no traffic keys exist yet.
- *
- * @param ctx Handshake context
- * @param level Alert level (warning/fatal)
- * @param description Alert description
- * @return true on success, false on failure
- */
-bool tls_send_alert(
-    struct tls_handshake_context *ctx,
-    uint8_t level,
-    uint8_t description
 );
 
 /**
