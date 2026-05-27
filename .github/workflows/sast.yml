@@ -37,7 +37,8 @@ jobs:
             BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
           fi
 
-          git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- src \
+          git diff --numstat --diff-filter=ACMR "$BASE" HEAD -- src \
+            | awk '($1 != "0" || $2 != "0") {print $3}' \
             | grep -E '\.(c|h)$' \
             | sort -u > semgrep-targets.txt || true
 
