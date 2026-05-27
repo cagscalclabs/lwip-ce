@@ -1,8 +1,8 @@
 name: Unit Tests
 
 # Functional correctness for the TLS core primitives and protocol parsers.
-# Timing analysis lives in timing.yml; ACVP primitive validation lives in
-# acvp.yml. Splitting these out keeps the test/profiling/validation
+# Timing analysis lives in timing.yml; CAVP primitive validation lives in
+# cavp.yml. Splitting these out keeps the test/profiling/validation
 # concerns independently observable as separate workflow badges.
 
 on:
