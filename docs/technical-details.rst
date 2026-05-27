@@ -63,14 +63,11 @@ connections, not a general-purpose OS crypto subsystem.
    * - Trust store
      - A GitHub workflow parses system certificates, generates a curated
        truststore with abbreviated serialized metadata, signs it with the
-       maintainer RSA-2048 private key, and ships the matching public key in
-       lwIP-CE. Regenerated quarterly.
+       maintainer RSA-2048 private key, and ships the matching public key in lwIP-CE. Regenerated quarterly.
 
-       *CertificateVerify* is fixed to ``rsa_pss_rsae_sha256``. It can be
-       disabled if you trust the remote endpoint, but then you have no
-       guarantee that the peer controls the leaf certificate's private key.
+      *CertificateVerify* is fixed to ``rsa_pss_rsae_sha256``. It can be disabled if you trust the remote endpoint, but then you have no guarantee that the peer controls the leaf certificate's private key.
 
-       Certificate chain trust is SPKI-pin based in this build.
+      Certificate chain trust is SPKI-pin based in this build.
 
 For more details, proofs, and datasets, see the whitepaper below.
 

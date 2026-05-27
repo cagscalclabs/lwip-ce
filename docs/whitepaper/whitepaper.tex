@@ -271,7 +271,7 @@ fontupper=\footnotesize
 	\section{Foreword}
 	The \textbf{lwIP-CE} project is an adaptation and integration of the Lightweight IP (lwIP) stack for highly constrained embedded systems, specifically targeting the TI-84+ CE platform and similar resource-limited environments. This work represents a deliberate effort to bring modern networking capabilities—including Ethernet, IPv4/IPv6, and TLS—to hardware never originally designed for full internet participation.
 	
-	Traditional networking stacks assume megabytes of memory, preemptive multitasking, and operating systems with dynamic resource management. The TI-84+ CE provides none of these conveniences. Instead, it offers a single-threaded execution model, limited RAM, no native networking abstraction, and tight timing constraints on a 15 MHz processor. Yet despite these constraints, the goal of lwIP-CE is not merely “minimal networking,” but correct, standards-aligned, interoperable networking.
+	Traditional networking stacks assume megabytes of memory, preemptive multitasking, and operating systems with dynamic resource management. The TI-84+ CE provides none of these conveniences. Instead, it offers a single-threaded execution model, limited RAM, no native networking abstraction, and tight timing constraints on a 48 MHz processor. Yet despite these constraints, the goal of lwIP-CE is not merely “minimal networking,” but correct, standards-aligned, interoperable networking.
 	
 	This whitepaper documents the architecture, design decisions, trade-offs, and implementation details behind lwIP-CE. It covers the layering model from USB driver integration through Ethernet abstraction and into the lwIP stack, as well as the TLS implementation constraints and cryptographic considerations required on this class of device.
 	
@@ -307,7 +307,7 @@ fontupper=\footnotesize
 		
 		This implementation is designed to be RFC-compliant and is informed by FIPS-aligned design principles; however, it is not FIPS-certified, nor has it undergone formal third-party cryptographic audit beyond review within the TI-84+ CE development community. Any security assurances provided by this project should therefore be considered provisional and contextual.
 		
-		These limitations are not the result of neglect, but of constraint. The TI-84+ CE platform imposes strict trade-offs between computational performance, memory usage, and defensive hardening. Certain implementation decisions reflect careful balancing between theoretical ideal and practical feasibility on a 15 MHz, resource-limited system.
+		These limitations are not the result of neglect, but of constraint. The TI-84+ CE platform imposes strict trade-offs between computational performance, memory usage, and defensive hardening. Certain implementation decisions reflect careful balancing between theoretical ideal and practical feasibility on a 48 MHz, resource-limited system.
 		
 		That said, this document is written with full transparency. The architecture, cryptographic constructions, mitigation, and design rationale are laid out in detail. Readers are encouraged to evaluate the implementation on its merits. You may find that the conservatism expressed here exceeds what the engineering decisions ultimately warrant.
 		
