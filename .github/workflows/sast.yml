@@ -24,8 +24,34 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      # Run the "semgrep ci" command on the command line of the docker image.
-      - run: semgrep ci --include "src/drivers/**" --include "src/tls/**" --sarif > semgrep.sarif
+        with:
+          fetch-depth: 0
+      - name: Build SAST target list
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git remote add source https://github.com/lwip-tcpip/lwip.git || true
+          git fetch --no-tags source master
+
+          BASE="$(git merge-base HEAD FETCH_HEAD || true)"
+          if [ -z "$BASE" ]; then
+            BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+
+          git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- src \
+            | grep -E '\.(c|h)$' \
+            | sort -u > semgrep-targets.txt
+
+          echo "SAST baseline: $BASE"
+          echo "SAST targets:"
+          cat semgrep-targets.txt
+
+      # Scan files that are new or changed relative to upstream lwIP.
+      - run: |
+          if [ -s semgrep-targets.txt ]; then
+            semgrep ci --sarif $(cat semgrep-targets.txt) > semgrep.sarif
+          else
+            printf '{"version":"2.1.0","runs":[]}\n' > semgrep.sarif
+          fi
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
       - name: Upload Semgrep SARIF
