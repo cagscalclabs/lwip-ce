@@ -3,15 +3,15 @@ name: Build Whitepaper
 on:
   push:
     paths:
-      - doc/whitepaper/whitepaper.tex
-      - doc/whitepaper/scripts/**
-      - doc/whitepaper/datasets/**
+      - docs/whitepaper/whitepaper.tex
+      - docs/whitepaper/scripts/**
+      - docs/whitepaper/datasets/**
       - .github/workflows/whitepaper.yml
   pull_request:
     paths:
-      - doc/whitepaper/whitepaper.tex
-      - doc/whitepaper/scripts/**
-      - doc/whitepaper/datasets/**
+      - docs/whitepaper/whitepaper.tex
+      - docs/whitepaper/scripts/**
+      - docs/whitepaper/datasets/**
       - .github/workflows/whitepaper.yml
   workflow_dispatch:
 
@@ -39,13 +39,13 @@ jobs:
         uses: actions/cache@v5
         with:
           path: |
-            doc/whitepaper/_minted-whitepaper
-            doc/whitepaper/whitepaper.aux
-            doc/whitepaper/whitepaper.fdb_latexmk
-            doc/whitepaper/whitepaper.fls
-            doc/whitepaper/whitepaper.out
-            doc/whitepaper/whitepaper.toc
-          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('doc/whitepaper/whitepaper.tex', 'doc/whitepaper/scripts/**', 'doc/whitepaper/datasets/**') }}
+            docs/whitepaper/_minted-whitepaper
+            docs/whitepaper/whitepaper.aux
+            docs/whitepaper/whitepaper.fdb_latexmk
+            docs/whitepaper/whitepaper.fls
+            docs/whitepaper/whitepaper.out
+            docs/whitepaper/whitepaper.toc
+          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('docs/whitepaper/whitepaper.tex', 'docs/whitepaper/scripts/**', 'docs/whitepaper/datasets/**') }}
           restore-keys: |
             ${{ runner.os }}-whitepaper-build-
 
@@ -73,11 +73,11 @@ jobs:
 
       - name: Generate whitepaper data
         run: python3 scripts/generate_docs_data.py
-        working-directory: doc/whitepaper
+        working-directory: docs/whitepaper
 
       - name: Build PDF
         run: latexmk -pdf -shell-escape -interaction=nonstopmode -file-line-error whitepaper.tex
-        working-directory: doc/whitepaper
+        working-directory: docs/whitepaper
 
       - name: Publish latest whitepaper release
         if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/')
@@ -98,5 +98,5 @@ jobs:
               --latest
           fi
 
-          gh release upload whitepaper-latest doc/whitepaper/whitepaper.pdf \
+          gh release upload whitepaper-latest docs/whitepaper/whitepaper.pdf \
             --clobber

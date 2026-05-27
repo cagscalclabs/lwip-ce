@@ -1,3 +1,13 @@
+/**
+ * @file pkcs8.h
+ * @author Anthony Cagliano
+ * @brief Provides PKCS#8 and SEC1 parsing/serialization support.
+ * @reference: RFC 5208
+ * @reference: RFC 5958
+ * @reference: RFC 5915
+ * @reference: ITU-T X.690
+ */
+
 #ifndef TLS_PKCS8_H
 #define TLS_PKCS8_H
 

@@ -1,9 +1,3 @@
-/*
- * File: acd.h
- * Author: Jasper Verschueren <jasper.verschueren@apart-audio.com>, Dominik Spies <kontakt@dspies.de>, Anthony Cagliano, Simon Goldschmidt, Dirk Ziegelmeier, Jasper Verschueren
- * Description: ACD IPv4 Address Conflict Detection
- * Generated: 2026-05-26T14:35:11Z
- */
 /**
  * @file
  *
@@ -42,17 +36,16 @@
  * Author: Dominik Spies <kontakt@dspies.de>
  */
 
-#ifndef LWIP_PUBLIC_CORE_ACD_H
-#define LWIP_PUBLIC_CORE_ACD_H
+#ifndef LWIP_HDR_ACD_H
+#define LWIP_HDR_ACD_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
 /* don't build if not configured for use in lwipopts.h */
-#if LWIP_IPV4 && LWIP_ACD
 
-#include "lwip/netif.h"
-#include "lwip/etharp.h"
-#include "lwip/prot/acd.h"
+#include "netif.h"
+#include "etharp.h"
+#include "prot_acd.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -109,6 +102,4 @@ void acd_netif_ip_addr_changed(struct netif *netif, const ip_addr_t *old_addr,
 }
 #endif
 
-#endif /* LWIP_IPV4 && LWIP_ACD */
-
-#endif /* LWIP_PUBLIC_CORE_ACD_H */
+#endif /* LWIP_HDR_ACD_H */

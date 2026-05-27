@@ -1,9 +1,3 @@
-/*
- * File: dhcp.h
- * Author: Leon Woestenberg <leon.woestenberg@gmx.net>, Anthony Cagliano, xueyunfei, Simon Goldschmidt, Dirk Ziegelmeier, Jasper Verschueren, goldsimon, sg, stoklund, fbernon, likewise, uid67528, jani
- * Description: DHCP client API
- * Generated: 2026-05-26T14:35:12Z
- */
 /**
  * @file
  * DHCP client API
@@ -41,19 +35,15 @@
  * Author: Leon Woestenberg <leon.woestenberg@gmx.net>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_DHCP_H
-#define LWIP_PUBLIC_CORE_DHCP_H
+#ifndef LWIP_HDR_DHCP_H
+#define LWIP_HDR_DHCP_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_DHCP /* don't build if not configured for use in lwipopts.h */
+#include "netif.h"
+#include "udp.h"
 
-#include "lwip/netif.h"
-#include "lwip/udp.h"
-
-#if LWIP_DHCP_DOES_ACD_CHECK
-#include "lwip/acd.h"
-#endif /* LWIP_DHCP_DOES_ACD_CHECK */
+#define NULL ((void *)0)
 
 #ifdef __cplusplus
 extern "C" {
@@ -114,14 +104,6 @@ struct dhcp
   u32_t offered_t0_lease; /* lease period (in seconds) */
   u32_t offered_t1_renew; /* recommended renew time (usually 50% of lease period) */
   u32_t offered_t2_rebind; /* recommended rebind time (usually 87.5 of lease period)  */
-#if LWIP_DHCP_BOOTP_FILE
-  ip4_addr_t offered_si_addr;
-  char boot_file_name[DHCP_BOOT_FILE_LEN];
-#endif /* LWIP_DHCP_BOOTPFILE */
-#if LWIP_DHCP_DOES_ACD_CHECK
-  /** acd struct */
-  struct acd acd;
-#endif /* LWIP_DHCP_DOES_ACD_CHECK */
 };
 
 void dhcp_set_struct(struct netif *netif, struct dhcp *dhcp);
@@ -138,15 +120,10 @@ void dhcp_network_changed_link_up(struct netif *netif);
 
 u8_t dhcp_supplied_address(const struct netif *netif);
 
-#if LWIP_DHCP_GET_NTP_SRV
-#endif /* LWIP_DHCP_GET_NTP_SRV */
-
 #define netif_dhcp_data(netif) ((struct dhcp*)netif_get_client_data(netif, LWIP_NETIF_CLIENT_DATA_INDEX_DHCP))
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_DHCP */
-
-#endif /* LWIP_PUBLIC_CORE_DHCP_H */
+#endif /*LWIP_HDR_DHCP_H*/

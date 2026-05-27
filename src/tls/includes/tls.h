@@ -1,3 +1,9 @@
+/**
+ * @file tls.h
+ * @author Claude Code
+ * @brief TLS subsystem initialization, cleanup, and allocator bootstrap APIs.
+ */
+
 #ifndef tls_h
 #define tls_h
 

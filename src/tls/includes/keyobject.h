@@ -1,6 +1,9 @@
-/// @file keyobject.h
-/// @author ACagliano
-/// @brief Module providing import and export of keyfiles.
+/**
+ * @file keyobject.h
+ * @author Anthony Cagliano
+ * @brief Provides API for importing PKCS, SEC1 keyfiles.
+ * @license: GNU GPL v3.0
+ */
 
 #ifndef tls_keyobject_h
 #define tls_keyobject_h

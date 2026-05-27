@@ -1,14 +1,16 @@
-/*
- * File: bytes.h
- * Author: Anthony Cagliano
- * Description: Secure comparison of two buffers.
- * Generated: 2026-05-26T14:35:22Z
+/**
+ * @file bytes.h
+ * @author Anthony Cagliano
+ * @brief Secure buffer compare and secure erasure functions.
+ * @license: GNU GPL v3.0
  */
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_BYTES_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_BYTES_H
+
+#ifndef tls_bytes_h
+#define tls_bytes_h
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 /***********************************************************************
  * @brief Secure comparison of two buffers.
@@ -29,4 +31,3 @@ bool tls_bytes_compare(const void *buf1, const void *buf2, size_t len);
 void tls_secure_memzero(void *ptr, size_t len);
 
 #endif
-

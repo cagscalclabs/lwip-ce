@@ -1,11 +1,3 @@
-/*
- * File: etharp.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Jasper Verschueren, Simon Goldschmidt, goldsimon, Dirk Ziegelmeier
- * Description: Ethernet output function - handles OUTGOING ethernet level traffic,
- *              implements ARP resolving. To be used in most low-level netif
- *              implementations
- * Generated: 2026-05-26T14:35:12Z
- */
 /**
  * @file
  * Ethernet output function - handles OUTGOING ethernet level traffic, implements
@@ -47,22 +39,19 @@
  *
  */
 
-#ifndef LWIP_PUBLIC_CORE_ETHARP_H
-#define LWIP_PUBLIC_CORE_ETHARP_H
+#ifndef LWIP_HDR_NETIF_ETHARP_H
+#define LWIP_HDR_NETIF_ETHARP_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_ARP || LWIP_ETHERNET /* don't build if not configured for use in lwipopts.h */
+#include "pbuf.h"
+#include "ip4_addr.h"
+#include "netif.h"
+#include "ip4.h"
+#include "prot_ethernet.h"
 
-#include "lwip/pbuf.h"
-#include "lwip/ip4_addr.h"
-#include "lwip/netif.h"
-#include "lwip/ip4.h"
-#include "lwip/prot/ethernet.h"
-
-#if LWIP_IPV4 && LWIP_ARP /* don't build if not configured for use in lwipopts.h */
-
-#include "lwip/prot/etharp.h"
+#include "prot_etharp.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,7 +60,6 @@ extern "C" {
 /** 1 seconds period */
 #define ARP_TMR_INTERVAL 1000
 
-#if ARP_QUEUEING
 /** struct for queueing outgoing packets for unknown address
   * defined here to be accessed by memp.h
   */
@@ -79,7 +67,6 @@ struct etharp_q_entry {
   struct etharp_q_entry *next;
   struct pbuf *p;
 };
-#endif /* ARP_QUEUEING */
 
 ssize_t etharp_find_addr(struct netif *netif, const ip4_addr_t *ipaddr,
          struct eth_addr **eth_ret, const ip4_addr_t **ip_ret);
@@ -94,15 +81,8 @@ err_t etharp_request(struct netif *netif, const ip4_addr_t *ipaddr);
 #define etharp_gratuitous(netif) etharp_request((netif), netif_ip4_addr(netif))
 void etharp_cleanup_netif(struct netif *netif);
 
-#if LWIP_ACD
 err_t etharp_acd_probe(struct netif *netif, const ip4_addr_t *ipaddr);
 err_t etharp_acd_announce(struct netif *netif, const ip4_addr_t *ipaddr);
-#endif /* LWIP_ACD */
-
-#if ETHARP_SUPPORT_STATIC_ENTRIES
-err_t etharp_add_static_entry(const ip4_addr_t *ipaddr, struct eth_addr *ethaddr);
-err_t etharp_remove_static_entry(const ip4_addr_t *ipaddr);
-#endif /* ETHARP_SUPPORT_STATIC_ENTRIES */
 
 void etharp_input(struct pbuf *p, struct netif *netif);
 
@@ -110,7 +90,4 @@ void etharp_input(struct pbuf *p, struct netif *netif);
 }
 #endif
 
-#endif /* LWIP_IPV4 && LWIP_ARP */
-#endif /* LWIP_ARP || LWIP_ETHERNET */
-
-#endif /* LWIP_PUBLIC_CORE_ETHARP_H */
+#endif /* LWIP_HDR_NETIF_ETHARP_H */

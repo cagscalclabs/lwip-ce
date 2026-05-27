@@ -1,19 +1,12 @@
-/*
- * File: keyobject.h
- * Author: Anthony Cagliano
- * Description: Module providing import and export of keyfiles. #ifndef tls_keyobject_h
- *              #define tls_keyobject_h #include <stdbool.h> #include <stddef.h>
- *              #include <stdint.h> #include "asn1.h" enum tls_key_type_flags {
- *              TLS_KEY_PUBLIC = 0, /**< Indicates the @b tls_keyobject describes a
- *              public key.
- * Generated: 2026-05-26T14:35:23Z
+/**
+ * @file keyobject.h
+ * @author Anthony Cagliano
+ * @brief Provides API for importing PKCS, SEC1 keyfiles.
+ * @license: GNU GPL v3.0
  */
-/// @file keyobject.h
-/// @author ACagliano
-/// @brief Module providing import and export of keyfiles.
 
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_KEYOBJECT_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_KEYOBJECT_H
+#ifndef tls_keyobject_h
+#define tls_keyobject_h
 
 #include <stdbool.h>
 #include <stddef.h>

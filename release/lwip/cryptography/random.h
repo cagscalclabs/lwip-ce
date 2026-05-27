@@ -1,22 +1,21 @@
-/*
- * File: random.h
- * Author: Anthony Cagliano, Adam Beckingham
- * Description: Module providing a TRNG for use with TLS and other secure applications
- *              /// @warning Use this module for ALL applications requiring security.
- *              The toolchain @b rand functions are /// suitable for generic use but are
- *              **not cryptographically secure**. #ifndef tls_random_h #define
- *              tls_random_h #include <stdbool.h> #include <stdint.h> #include
- *              <stddef.h>
- * Generated: 2026-05-26T14:35:24Z
- */
-/// @file random.h
-/// @author ACagliano & Adam Beckingham
-/// @brief Module providing a TRNG for use with TLS and other secure applications
-/// @warning Use this module for ALL applications requiring security. The toolchain @b rand functions are
-///     suitable for generic use but are **not cryptographically secure**.
 
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_RANDOM_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_RANDOM_H
+/**
+ * @file random.h
+ * @author Anthony Cagliano
+ * @author Adam Beckingham
+ * @author Codex 5.5 (DRBG async call-path assistance)
+ * @brief Module providing a TRNG for use with TLS and other secure applications.
+ * @reference: NIST SP 800-90B
+ * @reference: NIST SP 800-90A
+ * @reference: RFC 4086
+ *
+ * @warning Use this module for all applications requiring cryptographic
+ * randomness. The toolchain @b rand() functions are not suitable for
+ * cryptographic or security-sensitive purposes.
+ */
+
+#ifndef tls_random_h
+#define tls_random_h
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -42,7 +41,7 @@ uint64_t tls_random(void);
  * @param len    Length of buffer to fill.
  * @returns Pointer to random buffer. Should be equal to @p buffer .
  */
-void* tls_random_bytes(void* buffer, size_t len);
+void *tls_random_bytes(void *buffer, size_t len);
 
 /***************************************************************************
  * @brief Runs one immediate RNG health check cycle.

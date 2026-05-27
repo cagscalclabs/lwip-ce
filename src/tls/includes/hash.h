@@ -1,3 +1,9 @@
+/**
+ * @file hash.h
+ * @author Anthony Cagliano
+ * @author Adam Beckingham
+ * @brief SHA-256 (and perhaps eventually SHA-384) implementation
+ */
 //
 //  hashes.h
 //
@@ -12,16 +18,18 @@
 #include <stdint.h>
 
 /** @def Defines digest length of SHA-256. */
-#define TLS_SHA256_DIGEST_LEN   32
+#define TLS_SHA256_DIGEST_LEN 32
 
 /** @enum Implemented hash algorithms. */
-enum _hash_algorithms {
+enum _hash_algorithms
+{
     TLS_HASH_SHA256,
-  //  TLS_HASH_SHA256HW
+    //  TLS_HASH_SHA256HW
 };
 
 /** @struct Defines context structure for SHA-256. */
-struct tls_sha256_context {
+struct tls_sha256_context
+{
     uint8_t data[64];
     uint8_t datalen;
     uint64_t bitlen;
@@ -41,12 +49,14 @@ void tls_sha256hw_digest(struct tls_sha256_context *ctx, uint8_t *digest);
  */
 
 /** @struct Defines generic hash context. */
-struct tls_hash_context {
+struct tls_hash_context
+{
     uint8_t digestlen;
     bool (*init)(void *ctx);
     void (*update)(void *ctx, const uint8_t *data, size_t len);
     void (*digest)(void *ctx, uint8_t *digest);
-    union {
+    union
+    {
         struct tls_sha256_context sha256;
     } _private;
 };
@@ -84,7 +94,6 @@ void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *digest);
  * @param outlen        Length of digest to return.
  * @param hash_alg      One of \p _hash_algorithms .
  */
-bool tls_mgf1(const uint8_t* data, size_t datalen, uint8_t* outbuf, size_t outlen, uint8_t hash_alg);
-
+bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outlen, uint8_t hash_alg);
 
 #endif

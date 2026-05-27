@@ -1,9 +1,3 @@
-/*
- * File: ip4.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Dirk Ziegelmeier, goldsimon, sg, chrysn, Simon Goldschmidt
- * Description: IPv4 API
- * Generated: 2026-05-26T14:35:14Z
- */
 /**
  * @file
  * IPv4 API
@@ -40,19 +34,28 @@
  * Author: Adam Dunkels <adam@sics.se>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_IP4_H
-#define LWIP_PUBLIC_CORE_IP4_H
+#ifndef LWIP_HDR_IP4_H
+#define LWIP_HDR_IP4_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_IPV4
+#include "def.h"
+#include "pbuf.h"
+#include "ip4_addr.h"
+#include "err.h"
+#include "netif.h"
+#include "prot_ip4.h"
 
-#include "lwip/def.h"
-#include "lwip/pbuf.h"
-#include "lwip/ip4_addr.h"
-#include "lwip/err.h"
-#include "lwip/netif.h"
-#include "lwip/prot/ip4.h"
+#define IP_DEBUG LWIP_DBG_OFF
+#define LWIP_IGMP LWIP_IPV4
+#define LWIP_IPV4 1
+#define LWIP_MULTICAST_TX_OPTIONS ((LWIP_IGMP || LWIP_IPV6_MLD) && (LWIP_UDP || LWIP_RAW))
+#define NULL ((void *)0)
+#define LWIP_DBG_OFF 0x00U
+#define LWIP_IPV6_MLD LWIP_IPV6
+#define LWIP_RAW 1
+#define LWIP_UDP 1
+#define LWIP_IPV6 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -109,7 +112,5 @@ void ip4_debug_print(struct pbuf *p);
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* LWIP_IPV4 */
 
 #endif /* LWIP_HDR_IP_H */

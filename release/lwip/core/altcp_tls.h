@@ -1,10 +1,3 @@
-/*
- * File: altcp_tls.h
- * Author: Simon Goldschmidt <goldsimon@gmx.de>, Anthony Cagliano, David Girault, Dirk Ziegelmeier, Freddie Chopin, Simon Goldschmidt, goldsimon
- * Description: Application layered TCP/TLS connection API (to be used from TCPIP
- *              thread)
- * Generated: 2026-05-26T14:35:11Z
- */
 /**
  * @file
  * Application layered TCP/TLS connection API (to be used from TCPIP thread)
@@ -47,28 +40,28 @@
  * Author: Simon Goldschmidt <goldsimon@gmx.de>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_ALTCP_TLS_H
-#define LWIP_PUBLIC_CORE_ALTCP_TLS_H
+#ifndef LWIP_HDR_ALTCP_TLS_H
+#define LWIP_HDR_ALTCP_TLS_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
 #if LWIP_ALTCP /* don't build if not configured for use in lwipopts.h */
 
 #if LWIP_ALTCP_TLS
 
-#include "lwip/altcp.h"
+#include "altcp.h"
 
 /* check if mbedtls port is enabled */
-#include "lwip/apps/altcp_tls_mbedtls_opts.h"
+#include "altcp_tls_mbedtls_opts.h"
 /* allow session structure to be fully defined when using mbedtls port */
-#if LWIP_ALTCP_TLS_MBEDTLS
-#include "mbedtls/ssl.h"
-#endif
 
 /* CE TLS backend (custom TLS 1.3 implementation) */
-#if !LWIP_ALTCP_TLS_MBEDTLS
 #include "../../apps/altcp_tls/altcp_tls_ce.h"
-#endif
+#include <stddef.h>
+
+#define LWIP_ALTCP (LWIP_TCP)
+#define LWIP_ALTCP_TLS (LWIP_TCP)
+#define LWIP_TCP 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -149,18 +142,12 @@ struct altcp_pcb *altcp_tls_alloc(void *arg, u8_t ip_type);
  * ALTCP_TLS session handle, content depends on port (e.g. mbedtls)
  */
 struct altcp_tls_session
-#if LWIP_ALTCP_TLS_MBEDTLS
-{
-    mbedtls_ssl_session data;
-}
-#else
 {
     u8_t valid;                        /* 1 if session payload is populated */
     u8_t psk_type;                     /* enum tls_psk_type */
     u8_t psk[32];                      /* Resumption/application PSK */
     struct tls_psk_identity identity;  /* Identity + obfuscated_ticket_age */
 }
-#endif
 ;
 
 #ifdef __cplusplus
@@ -169,4 +156,4 @@ struct altcp_tls_session
 
 #endif /* LWIP_ALTCP_TLS */
 #endif /* LWIP_ALTCP */
-#endif /* LWIP_PUBLIC_CORE_ALTCP_TLS_H */
+#endif /* LWIP_HDR_ALTCP_TLS_H */

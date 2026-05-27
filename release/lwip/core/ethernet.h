@@ -1,10 +1,3 @@
-/*
- * File: ethernet.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Dirk Ziegelmeier, sg
- * Description: Ethernet input function - handles INCOMING ethernet level traffic To be
- *              used in most low-level netif implementations
- * Generated: 2026-05-26T14:35:17Z
- */
 /**
  * @file
  * Ethernet input function - handles INCOMING ethernet level traffic
@@ -45,20 +38,18 @@
  *
  */
 
-#ifndef LWIP_PUBLIC_CORE_ETHERNET_H
-#define LWIP_PUBLIC_CORE_ETHERNET_H
+#ifndef LWIP_HDR_NETIF_ETHERNET_H
+#define LWIP_HDR_NETIF_ETHERNET_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#include "lwip/pbuf.h"
-#include "lwip/netif.h"
-#include "lwip/prot/ethernet.h"
+#include "pbuf.h"
+#include "netif.h"
+#include "prot_ethernet.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#if LWIP_ARP || LWIP_ETHERNET
 
 /** Define this to 1 and define LWIP_ARP_FILTER_NETIF_FN(pbuf, netif, type)
  * to a filter function that returns the correct netif when using multiple
@@ -75,10 +66,8 @@ err_t ethernet_output(struct netif* netif, struct pbuf* p, const struct eth_addr
 
 extern const struct eth_addr ethbroadcast, ethzero;
 
-#endif /* LWIP_ARP || LWIP_ETHERNET */
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CORE_ETHERNET_H */
+#endif /* LWIP_HDR_NETIF_ETHERNET_H */

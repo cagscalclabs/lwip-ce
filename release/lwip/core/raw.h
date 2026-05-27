@@ -1,9 +1,3 @@
-/*
- * File: raw.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Freddie Chopin, Simon Goldschmidt, goldsimon, Dirk Ziegelmeier, David van Moolenbroek, sg, chrysn, Grant Erickson, fbernon, likewise
- * Description: raw API (to be used from TCPIP thread)<br> See also @ref raw_raw
- * Generated: 2026-05-26T14:35:16Z
- */
 /**
  * @file
  * raw API (to be used from TCPIP thread)<br>
@@ -41,18 +35,24 @@
  * Author: Adam Dunkels <adam@sics.se>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_RAW_H
-#define LWIP_PUBLIC_CORE_RAW_H
+#ifndef LWIP_HDR_RAW_H
+#define LWIP_HDR_RAW_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_RAW /* don't build if not configured for use in lwipopts.h */
+#include "pbuf.h"
+#include "def.h"
+#include "ip.h"
+#include "ip_addr.h"
+#include "ip6_addr.h"
 
-#include "lwip/pbuf.h"
-#include "lwip/def.h"
-#include "lwip/ip.h"
-#include "lwip/ip_addr.h"
-#include "lwip/ip6_addr.h"
+#define LWIP_MULTICAST_TX_OPTIONS ((LWIP_IGMP || LWIP_IPV6_MLD) && (LWIP_UDP || LWIP_RAW))
+#define LWIP_IGMP LWIP_IPV4
+#define LWIP_IPV6_MLD LWIP_IPV6
+#define LWIP_RAW 1
+#define LWIP_UDP 1
+#define LWIP_IPV4 1
+#define LWIP_IPV6 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -98,11 +98,9 @@ struct raw_pcb {
   raw_recv_fn recv;
   /* user-supplied argument for the recv callback */
   void *recv_arg;
-#if LWIP_IPV6
   /* fields for handling checksum computations as per RFC3542. */
   u16_t chksum_offset;
   u8_t  chksum_reqd;
-#endif
 };
 
 /* The following functions is the application layer interface to the
@@ -144,6 +142,4 @@ void             raw_recv       (struct raw_pcb *pcb, raw_recv_fn recv, void *re
 }
 #endif
 
-#endif /* LWIP_RAW */
-
-#endif /* LWIP_PUBLIC_CORE_RAW_H */
+#endif /* LWIP_HDR_RAW_H */

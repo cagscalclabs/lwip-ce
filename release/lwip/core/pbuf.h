@@ -1,9 +1,3 @@
-/*
- * File: pbuf.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Erik Ekman, Dirk Ziegelmeier, goldsimon, David van Moolenbroek, sg, Sylvain Rochet, Simon Goldschmidt, fbernon, marcbou, jifl, likewise, jani
- * Description: pbuf API
- * Generated: 2026-05-26T14:35:16Z
- */
 /**
  * @file
  * pbuf API
@@ -41,11 +35,25 @@
  *
  */
 
-#ifndef LWIP_PUBLIC_CORE_PBUF_H
-#define LWIP_PUBLIC_CORE_PBUF_H
+#ifndef LWIP_HDR_PBUF_H
+#define LWIP_HDR_PBUF_H
 
-#include "lwip/opt.h"
-#include "lwip/err.h"
+#include "arch.h"
+#include "err.h"
+#include <stddef.h>
+
+#define IP_FRAG 1
+#define LWIP_IPV6 1
+#define LWIP_IPV6_FRAG 1
+#define LWIP_NETIF_TX_SINGLE_PBUF 0
+#define LWIP_PBUF_CUSTOM_DATA
+#define LWIP_PBUF_REF_T u8_t
+#define LWIP_TCP 1
+#define NO_SYS 1
+#define PBUF_LINK_ENCAPSULATION_HLEN 0
+#define PBUF_LINK_HLEN (14 + ETH_PAD_SIZE)
+#define TCP_QUEUE_OOSEQ 1
+#define ETH_PAD_SIZE 0
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,11 +90,7 @@ extern "C" {
    (TCP vs. UDP, IPv4 vs. IPv6: UDP/IPv4 packets may waste up to 28 bytes) */
 
 #define PBUF_TRANSPORT_HLEN 20
-#if LWIP_IPV6
 #define PBUF_IP_HLEN        40
-#else
-#define PBUF_IP_HLEN        20
-#endif
 
 /**
  * @ingroup pbuf
@@ -116,7 +120,6 @@ typedef enum {
    * in the most common case - ethernet-layer netif driver. */
   PBUF_RAW = 0
 } pbuf_layer;
-
 
 /* Base flags for pbuf_type definitions: */
 
@@ -173,7 +176,6 @@ typedef enum {
   PBUF_POOL = (PBUF_ALLOC_FLAG_RX | PBUF_TYPE_FLAG_STRUCT_DATA_CONTIGUOUS | PBUF_TYPE_ALLOC_SRC_MASK_STD_MEMP_PBUF_POOL)
 } pbuf_type;
 
-
 /** indicates this packet's data should be immediately passed to the application */
 #define PBUF_FLAG_PUSH      0x01U
 /** indicates this is a custom pbuf: pbuf_free calls pbuf_custom->custom_free_function()
@@ -229,7 +231,6 @@ struct pbuf {
   /** In case the user needs to store data custom data on a pbuf */
   LWIP_PBUF_CUSTOM_DATA
 };
-
 
 /** Helper struct for const-correctness only.
  * The only meaning of this one is to provide a const payload pointer
@@ -310,13 +311,6 @@ err_t pbuf_take_at(struct pbuf *buf, const void *dataptr, u16_t len, u16_t offse
 struct pbuf *pbuf_skip(struct pbuf* in, u16_t in_offset, u16_t* out_offset);
 struct pbuf *pbuf_coalesce(struct pbuf *p, pbuf_layer layer);
 struct pbuf *pbuf_clone(pbuf_layer l, pbuf_type type, struct pbuf *p);
-#if LWIP_CHECKSUM_ON_COPY
-err_t pbuf_fill_chksum(struct pbuf *p, u16_t start_offset, const void *dataptr,
-                       u16_t len, u16_t *chksum);
-#endif /* LWIP_CHECKSUM_ON_COPY */
-#if LWIP_TCP && TCP_QUEUE_OOSEQ && LWIP_WND_SCALE
-void pbuf_split_64k(struct pbuf *p, struct pbuf **rest);
-#endif /* LWIP_TCP && TCP_QUEUE_OOSEQ && LWIP_WND_SCALE */
 
 u8_t pbuf_get_at(const struct pbuf* p, u16_t offset);
 int pbuf_try_get_at(const struct pbuf* p, u16_t offset);
@@ -329,4 +323,4 @@ u16_t pbuf_strstr(const struct pbuf* p, const char* substr);
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CORE_PBUF_H */
+#endif /* LWIP_HDR_PBUF_H */

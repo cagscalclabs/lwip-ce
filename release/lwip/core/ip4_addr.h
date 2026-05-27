@@ -1,9 +1,3 @@
-/*
- * File: ip4_addr.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Erik Ekman, Simon Goldschmidt, Dirk Ziegelmeier, goldsimon, sg, chrysn
- * Description: IPv4 address API
- * Generated: 2026-05-26T14:35:14Z
- */
 /**
  * @file
  * IPv4 address API
@@ -40,13 +34,16 @@
  * Author: Adam Dunkels <adam@sics.se>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_IP4_ADDR_H
-#define LWIP_PUBLIC_CORE_IP4_ADDR_H
+#ifndef LWIP_HDR_IP4_ADDR_H
+#define LWIP_HDR_IP4_ADDR_H
 
-#include "lwip/opt.h"
-#include "lwip/def.h"
+#include "arch.h"
+#include "def.h"
 
-#if LWIP_IPV4
+#define NULL ((void *)0)
+#define U16_F PRIu16
+#define PRIu16 __UINT16_FMTu__
+#define __UINT16_FMTu__ "hu"
 
 #ifdef __cplusplus
 extern "C" {
@@ -225,7 +222,5 @@ char *ip4addr_ntoa_r(const ip4_addr_t *addr, char *buf, int buflen);
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* LWIP_IPV4 */
 
 #endif /* LWIP_HDR_IP_ADDR_H */

@@ -1,9 +1,3 @@
-/*
- * File: icmp6.h
- * Author: Ivan Delamer <delamer@inicotech.com>, Anthony Cagliano, Jisu Kim, David van Moolenbroek, Dirk Ziegelmeier, goldsimon
- * Description: IPv6 version of ICMP, as per RFC 4443.
- * Generated: 2026-05-26T14:35:13Z
- */
 /**
  * @file
  *
@@ -44,20 +38,18 @@
  * Please coordinate changes and requests with Ivan Delamer
  * <delamer@inicotech.com>
  */
-#ifndef LWIP_PUBLIC_CORE_ICMP6_H
-#define LWIP_PUBLIC_CORE_ICMP6_H
+#ifndef LWIP_HDR_ICMP6_H
+#define LWIP_HDR_ICMP6_H
 
-#include "lwip/opt.h"
-#include "lwip/pbuf.h"
-#include "lwip/ip6_addr.h"
-#include "lwip/netif.h"
-#include "lwip/prot/icmp6.h"
+#include "arch.h"
+#include "pbuf.h"
+#include "ip6_addr.h"
+#include "netif.h"
+#include "prot_icmp6.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#if LWIP_ICMP6 && LWIP_IPV6 /* don't build if not configured for use in lwipopts.h */
 
 void icmp6_input(struct pbuf *p, struct netif *inp);
 void icmp6_dest_unreach(struct pbuf *p, enum icmp6_dur_code c);
@@ -67,12 +59,8 @@ void icmp6_time_exceeded_with_addrs(struct pbuf *p, enum icmp6_te_code c,
     const ip6_addr_t *src_addr, const ip6_addr_t *dest_addr);
 void icmp6_param_problem(struct pbuf *p, enum icmp6_pp_code c, const void *pointer);
 
-#endif /* LWIP_ICMP6 && LWIP_IPV6 */
-
-
 #ifdef __cplusplus
 }
 #endif
 
-
-#endif /* LWIP_PUBLIC_CORE_ICMP6_H */
+#endif /* LWIP_HDR_ICMP6_H */

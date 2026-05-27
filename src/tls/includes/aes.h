@@ -1,3 +1,10 @@
+/**
+ * @file aes.h
+ * @author Anthony Cagliano
+ * @brief AES-GCM, AES-CCM, AES-CBC implementation
+ * @license: GNU GPL v3.0
+ * @source: https://github.com/B-Con/crypto-algorithms/
+ */
 
 #ifndef tls_aes_h
 #define tls_aes_h

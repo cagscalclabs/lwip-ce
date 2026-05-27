@@ -1,21 +1,20 @@
-/*
- * File: x509.h
- * Author: Anthony Cagliano
- * Description: X.509 certificate parser. Walks the DER encoding to extract subject
- *              names, validity windows, and the SubjectPublicKeyInfo block used for
- *              SPKI pinning. Does not perform full chain validation — see truststore.h
- *              for the security model.
- * Generated: 2026-05-26T14:35:24Z
+/**
+ * @file x509.h
+ * @author Anthony Cagliano
+ * @brief X.509 certificate parsing implementation
+ * @reference: RFC 5280
  */
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_X509_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_X509_H
+
+#ifndef TLS_X509_H
+#define TLS_X509_H
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "asn1.h"
 
-struct tls_x509_parse_result {
+struct tls_x509_parse_result
+{
     struct tls_asn1_serialization *issuer_cn;
     struct tls_asn1_serialization *subject_cn;
     struct tls_asn1_serialization *valid_before;

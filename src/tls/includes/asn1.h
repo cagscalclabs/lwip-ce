@@ -1,3 +1,10 @@
+/**
+ * @file asn1.h
+ * @author Anthony Cagliano
+ * @brief DER/ASN.1 implementation
+ * @license: GNU GPL v3.0
+ * @reference: ITU-T X.690 (DER Encoding Rules)
+ */
 
 #ifndef tls_asn1_h
 #define tls_asn1_h

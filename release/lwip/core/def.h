@@ -1,9 +1,3 @@
-/*
- * File: def.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Simon Goldschmidt, Jasper Verschueren, Dirk Ziegelmeier, goldsimon, sg, fbernon, likewise, jani
- * Description: various utility macros
- * Generated: 2026-05-26T14:35:12Z
- */
 /**
  * @file
  * various utility macros
@@ -51,18 +45,15 @@
  * - PERF_STOP(x): stop measuring something, and record the result.
  */
 
-#ifndef LWIP_PUBLIC_CORE_DEF_H
-#define LWIP_PUBLIC_CORE_DEF_H
+#ifndef LWIP_HDR_DEF_H
+#define LWIP_HDR_DEF_H
 
 /* arch.h might define NULL already */
-#include "lwip/arch.h"
-#include "lwip/opt.h"
-#if LWIP_PERF
-#include "arch/perf.h"
-#else /* LWIP_PERF */
+#include "arch.h"
+#include "arch.h"
+#include <stddef.h>
 #define PERF_START    /* null definition */
 #define PERF_STOP(x)  /* null definition */
-#endif /* LWIP_PERF */
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,24 +71,6 @@ extern "C" {
                                ((u32_t)((c) & 0xff) << 8)  | \
                                 (u32_t)((d) & 0xff))
 
-#ifndef NULL
-#ifdef __cplusplus
-#define NULL 0
-#else
-#define NULL ((void *)0)
-#endif
-#endif
-
-#if BYTE_ORDER == BIG_ENDIAN
-#define lwip_htons(x) ((u16_t)(x))
-#define lwip_ntohs(x) ((u16_t)(x))
-#define lwip_htonl(x) ((u32_t)(x))
-#define lwip_ntohl(x) ((u32_t)(x))
-#define PP_HTONS(x)   ((u16_t)(x))
-#define PP_NTOHS(x)   ((u16_t)(x))
-#define PP_HTONL(x)   ((u32_t)(x))
-#define PP_NTOHL(x)   ((u32_t)(x))
-#else /* BYTE_ORDER != BIG_ENDIAN */
 #ifndef lwip_htons
 u16_t lwip_htons(u16_t x);
 #endif
@@ -118,7 +91,6 @@ u32_t lwip_htonl(u32_t x);
                      (((x) & (u32_t)0x00ff0000UL) >>  8) | \
                      (((x) & (u32_t)0xff000000UL) >> 24))
 #define PP_NTOHL(x) PP_HTONL(x)
-#endif /* BYTE_ORDER == BIG_ENDIAN */
 
 /* Provide usual function names as macros for users, but this can be turned off */
 #ifndef LWIP_DONT_PROVIDE_BYTEORDER_FUNCTIONS
@@ -169,4 +141,4 @@ int lwip_memcmp_consttime(const void* s1, const void* s2, size_t len);
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CORE_DEF_H */
+#endif /* LWIP_HDR_DEF_H */

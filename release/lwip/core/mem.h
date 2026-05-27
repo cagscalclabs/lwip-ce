@@ -1,9 +1,3 @@
-/*
- * File: mem.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Faidon Liambotis, Dirk Ziegelmeier, goldsimon, Axel Lin, sg, Simon Goldschmidt, kieranm, jifl, jgrubb, fbernon, marcbou, christiaans, curtmcd, likewise, jani
- * Description: Heap API
- * Generated: 2026-05-26T14:35:15Z
- */
 /**
  * @file
  * Heap API
@@ -40,41 +34,25 @@
  * Author: Adam Dunkels <adam@sics.se>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_MEM_H
-#define LWIP_PUBLIC_CORE_MEM_H
+#ifndef LWIP_HDR_MEM_H
+#define LWIP_HDR_MEM_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-#if MEM_CUSTOM_ALLOCATOR
+#include "arch.h"
+#include <stddef.h>
 
-#include "lwip/arch.h"
+#define SZT_F PRIuPTR
+#define PRIuPTR __UINTPTR_FMTu__
+#define __UINTPTR_FMTu__ "lu"
 
     typedef size_t mem_size_t;
 #define MEM_SIZE_F SZT_F
-
-#elif MEM_USE_POOLS
-
-typedef u16_t mem_size_t;
-#define MEM_SIZE_F U16_F
-
-#else
-
-/* MEM_SIZE would have to be aligned, but using 64000 here instead of
- * 65535 leaves some room for alignment...
- */
-#if MEM_SIZE > 64000L
-typedef u32_t mem_size_t;
-#define MEM_SIZE_F U32_F
-#else
-typedef u16_t mem_size_t;
-#define MEM_SIZE_F U16_F
-#endif /* MEM_SIZE > 64000 */
-#endif
 
     /* void  mem_init(void); */
     void *mem_trim(void *mem, mem_size_t size);
@@ -86,4 +64,4 @@ typedef u16_t mem_size_t;
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CORE_MEM_H */
+#endif /* LWIP_HDR_MEM_H */

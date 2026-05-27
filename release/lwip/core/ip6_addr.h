@@ -1,9 +1,3 @@
-/*
- * File: ip6_addr.h
- * Author: Ivan Delamer <delamer@inicotech.com>, Anthony Cagliano, Erik Ekman, Simon Goldschmidt, Dirk Ziegelmeier, David van Moolenbroek, goldsimon, sg, Ivan Delamer
- * Description: IPv6 addresses.
- * Generated: 2026-05-26T14:35:14Z
- */
 /**
  * @file
  *
@@ -45,20 +39,25 @@
  * Please coordinate changes and requests with Ivan Delamer
  * <delamer@inicotech.com>
  */
-#ifndef LWIP_PUBLIC_CORE_IP6_ADDR_H
-#define LWIP_PUBLIC_CORE_IP6_ADDR_H
+#ifndef LWIP_HDR_IP6_ADDR_H
+#define LWIP_HDR_IP6_ADDR_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 #include "def.h"
 
-#if LWIP_IPV6  /* don't build if not configured for use in lwipopts.h */
+#include "ip6_zone.h"
 
-#include "lwip/ip6_zone.h"
+#define LWIP_IPV6_SCOPES (LWIP_IPV6 && !LWIP_SINGLE_NETIF)
+#define NULL ((void *)0)
+#define X16_F PRIx16
+#define LWIP_IPV6 1
+#define LWIP_SINGLE_NETIF 0
+#define PRIx16 __UINT16_FMTx__
+#define __UINT16_FMTx__ "hx"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 
 /** This is the aligned version of ip6_addr_t,
     used as local variable, on the stack, etc. */
@@ -150,7 +149,6 @@ typedef struct ip6_addr ip6_addr_t;
                                         (dest)->addr[2] = (src) == NULL ? 0 : lwip_htonl((src)->addr[2]); \
                                         (dest)->addr[3] = (src) == NULL ? 0 : lwip_htonl((src)->addr[3]); \
                                         ip6_addr_set_zone((dest), (src) == NULL ? IP6_NO_ZONE : ip6_addr_zone(src));}while(0)
-
 
 /** @deprecated Renamed to @ref ip6_addr_net_zoneless_eq */
 #define ip6_addr_netcmp_zoneless(addr1, addr2) ip6_addr_net_zoneless_eq(addr1, addr2)
@@ -329,12 +327,10 @@ typedef struct ip6_addr ip6_addr_t;
 #define ip6_addr_isdeprecated(addr_state) (addr_state == IP6_ADDR_DEPRECATED)
 #define ip6_addr_isduplicated(addr_state) (addr_state == IP6_ADDR_DUPLICATED)
 
-#if LWIP_IPV6_ADDRESS_LIFETIMES
 #define IP6_ADDR_LIFE_STATIC   (0)
 #define IP6_ADDR_LIFE_INFINITE (0xffffffffUL)
 #define ip6_addr_life_isstatic(addr_life) ((addr_life) == IP6_ADDR_LIFE_STATIC)
 #define ip6_addr_life_isinfinite(addr_life) ((addr_life) == IP6_ADDR_LIFE_INFINITE)
-#endif /* LWIP_IPV6_ADDRESS_LIFETIMES */
 
 #define ip6_addr_debug_print_parts(debug, a, b, c, d, e, f, g, h) \
   LWIP_DEBUGF(debug, ("%" X16_F ":%" X16_F ":%" X16_F ":%" X16_F ":%" X16_F ":%" X16_F ":%" X16_F ":%" X16_F, \
@@ -367,12 +363,8 @@ int ip6addr_aton(const char *cp, ip6_addr_t *addr);
 char *ip6addr_ntoa(const ip6_addr_t *addr);
 char *ip6addr_ntoa_r(const ip6_addr_t *addr, char *buf, int buflen);
 
-
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_IPV6 */
-
-#endif /* LWIP_PUBLIC_CORE_IP6_ADDR_H */
+#endif /* LWIP_HDR_IP6_ADDR_H */

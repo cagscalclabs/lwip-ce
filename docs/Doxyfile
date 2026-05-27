@@ -1,0 +1,38 @@
+PROJECT_NAME           = "lwIP-CE"
+PROJECT_BRIEF          = "TI-84 Plus CE focused lwIP fork"
+OUTPUT_DIRECTORY       = _doxygen
+
+INPUT                  = ../release/lwip
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h
+
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = NO
+
+JAVADOC_AUTOBRIEF      = YES
+MULTILINE_CPP_IS_BRIEF = YES
+ALIASES               += license="\\par License"
+ALIASES               += reference="\\par Reference"
+ALIASES               += source="\\par Source"
+
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+SKIP_FUNCTION_MACROS   = YES
+
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+
+STRIP_FROM_PATH        = ../release/lwip
+FULL_PATH_NAMES        = YES

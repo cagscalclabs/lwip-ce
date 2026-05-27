@@ -1,9 +1,3 @@
-/*
- * File: init.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Simon Goldschmidt, Dirk Ziegelmeier, goldsimon, sg, Sylvain Rochet, kieranm, fbernon
- * Description: lwIP initialization API
- * Generated: 2026-05-26T14:35:13Z
- */
 /**
  * @file
  * lwIP initialization API
@@ -40,13 +34,15 @@
  * Author: Adam Dunkels <adam@sics.se>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_INIT_H
-#define LWIP_PUBLIC_CORE_INIT_H
+#ifndef LWIP_HDR_INIT_H
+#define LWIP_HDR_INIT_H
 
-#include "lwip/opt.h"
-#include "lwip/err.h"
-#include "drivers/usb_ethernet.h"
+#include "arch.h"
+#include "err.h"
+#include "usb_ethernet.h"
 #include <stdlib.h>  /* malloc, free, realloc — needed by LWIP_CONFIGURATOR_INIT */
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -136,9 +132,8 @@ struct lwip_configurator {
 /* Modules initialization */
 err_t lwip_init(struct lwip_configurator *conf);
 
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CORE_INIT_H */
+#endif /* LWIP_HDR_INIT_H */

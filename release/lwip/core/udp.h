@@ -1,9 +1,3 @@
-/*
- * File: udp.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Freddie Chopin, Simon Goldschmidt, goldsimon, Dirk Ziegelmeier, David van Moolenbroek, sg, Stian Skjelstad, Joel Cunningham, chrysn, fbernon, christiaans, likewise, jani, marcbou
- * Description: UDP API (to be used from TCPIP thread)<br> See also @ref udp_raw
- * Generated: 2026-05-26T14:35:17Z
- */
 /**
  * @file
  * UDP API (to be used from TCPIP thread)<br>
@@ -41,19 +35,27 @@
  * Author: Adam Dunkels <adam@sics.se>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_UDP_H
-#define LWIP_PUBLIC_CORE_UDP_H
+#ifndef LWIP_HDR_UDP_H
+#define LWIP_HDR_UDP_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_UDP /* don't build if not configured for use in lwipopts.h */
+#include "pbuf.h"
+#include "netif.h"
+#include "ip_addr.h"
+#include "ip.h"
+#include "ip6_addr.h"
+#include "prot_udp.h"
 
-#include "lwip/pbuf.h"
-#include "lwip/netif.h"
-#include "lwip/ip_addr.h"
-#include "lwip/ip.h"
-#include "lwip/ip6_addr.h"
-#include "lwip/prot/udp.h"
+#define LWIP_MULTICAST_TX_OPTIONS ((LWIP_IGMP || LWIP_IPV6_MLD) && (LWIP_UDP || LWIP_RAW))
+#define UDP_DEBUG LWIP_DBG_OFF
+#define LWIP_IGMP LWIP_IPV4
+#define LWIP_IPV6_MLD LWIP_IPV6
+#define LWIP_RAW 1
+#define LWIP_UDP 1
+#define LWIP_DBG_OFF 0x00U
+#define LWIP_IPV4 1
+#define LWIP_IPV6 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,20 +99,16 @@ struct udp_pcb {
   u16_t local_port, remote_port;
 
 #if LWIP_MULTICAST_TX_OPTIONS
-#if LWIP_IPV4
   /** outgoing network interface for multicast packets, by IPv4 address (if not 'any') */
   ip4_addr_t mcast_ip4;
-#endif /* LWIP_IPV4 */
   /** outgoing network interface for multicast packets, by interface index (if nonzero) */
   u8_t mcast_ifindex;
   /** TTL for outgoing multicast packets */
   u8_t mcast_ttl;
 #endif /* LWIP_MULTICAST_TX_OPTIONS */
 
-#if LWIP_UDPLITE
   /** used for UDP_LITE only */
   u16_t chksum_len_rx, chksum_len_tx;
-#endif /* LWIP_UDPLITE */
 
   /** receive callback function */
   udp_recv_fn recv;
@@ -143,21 +141,6 @@ err_t            udp_sendto     (struct udp_pcb *pcb, struct pbuf *p,
                                  const ip_addr_t *dst_ip, u16_t dst_port);
 err_t            udp_send       (struct udp_pcb *pcb, struct pbuf *p);
 
-#if LWIP_CHECKSUM_ON_COPY && CHECKSUM_GEN_UDP
-err_t            udp_sendto_if_chksum(struct udp_pcb *pcb, struct pbuf *p,
-                                 const ip_addr_t *dst_ip, u16_t dst_port,
-                                 struct netif *netif, u8_t have_chksum,
-                                 u16_t chksum);
-err_t            udp_sendto_chksum(struct udp_pcb *pcb, struct pbuf *p,
-                                 const ip_addr_t *dst_ip, u16_t dst_port,
-                                 u8_t have_chksum, u16_t chksum);
-err_t            udp_send_chksum(struct udp_pcb *pcb, struct pbuf *p,
-                                 u8_t have_chksum, u16_t chksum);
-err_t            udp_sendto_if_src_chksum(struct udp_pcb *pcb, struct pbuf *p,
-                                 const ip_addr_t *dst_ip, u16_t dst_port, struct netif *netif,
-                                 u8_t have_chksum, u16_t chksum, const ip_addr_t *src_ip);
-#endif /* LWIP_CHECKSUM_ON_COPY && CHECKSUM_GEN_UDP */
-
 #define          udp_flags(pcb) ((pcb)->flags)
 #define          udp_setflags(pcb, f)  ((pcb)->flags = (f))
 
@@ -172,10 +155,8 @@ void             udp_input      (struct pbuf *p, struct netif *inp);
 #define udp_new_ip6() udp_new_ip_type(IPADDR_TYPE_V6)
 
 #if LWIP_MULTICAST_TX_OPTIONS
-#if LWIP_IPV4
 #define udp_set_multicast_netif_addr(pcb, ip4addr) ip4_addr_copy((pcb)->mcast_ip4, *(ip4addr))
 #define udp_get_multicast_netif_addr(pcb)          (&(pcb)->mcast_ip4)
-#endif /* LWIP_IPV4 */
 #define udp_set_multicast_netif_index(pcb, idx)    ((pcb)->mcast_ifindex = (idx))
 #define udp_get_multicast_netif_index(pcb)         ((pcb)->mcast_ifindex)
 #define udp_set_multicast_ttl(pcb, value)          ((pcb)->mcast_ttl = (value))
@@ -194,6 +175,4 @@ void udp_netif_ip_addr_changed(const ip_addr_t* old_addr, const ip_addr_t* new_a
 }
 #endif
 
-#endif /* LWIP_UDP */
-
-#endif /* LWIP_PUBLIC_CORE_UDP_H */
+#endif /* LWIP_HDR_UDP_H */

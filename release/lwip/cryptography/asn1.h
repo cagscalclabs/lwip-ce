@@ -1,14 +1,13 @@
-/*
- * File: asn1.h
- * Author: Anthony Cagliano
- * Description: One parsed DER TLV item. This describes a single ASN.1 element in Tag-
- *              Length-Value form. Pointers reference the original input buffer; no
- *              copies are made.
- * Generated: 2026-05-26T14:35:21Z
+/**
+ * @file asn1.h
+ * @author Anthony Cagliano
+ * @brief DER/ASN.1 implementation
+ * @license: GNU GPL v3.0
+ * @reference: ITU-T X.690 (DER Encoding Rules)
  */
 
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_ASN1_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_ASN1_H
+#ifndef tls_asn1_h
+#define tls_asn1_h
 
 #include <stdbool.h>
 #include <stddef.h>

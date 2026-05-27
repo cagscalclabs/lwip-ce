@@ -1,3 +1,10 @@
+/**
+ * @file x509.h
+ * @author Anthony Cagliano
+ * @brief X.509 certificate parsing implementation
+ * @reference: RFC 5280
+ */
+
 #ifndef TLS_X509_H
 #define TLS_X509_H
 
@@ -6,7 +13,8 @@
 #include <stdint.h>
 #include "asn1.h"
 
-struct tls_x509_parse_result {
+struct tls_x509_parse_result
+{
     struct tls_asn1_serialization *issuer_cn;
     struct tls_asn1_serialization *subject_cn;
     struct tls_asn1_serialization *valid_before;

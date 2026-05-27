@@ -1,11 +1,5 @@
-/*
- * File: sntp_time.h
- * Author: Anthony Cagliano
- * Description: Get current Unix timestamp from RTC
- * Generated: 2026-05-26T14:35:16Z
- */
-#ifndef LWIP_PUBLIC_CORE_SNTP_TIME_H
-#define LWIP_PUBLIC_CORE_SNTP_TIME_H
+#ifndef LWIP_SNTP_TIME_H
+#define LWIP_SNTP_TIME_H
 
 #include <stdbool.h>
 #include <stdint.h>

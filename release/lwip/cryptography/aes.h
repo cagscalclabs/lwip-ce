@@ -1,15 +1,17 @@
-/*
- * File: aes.h
- * Author: Anthony Cagliano
- * Description: Initializes an AES context.
- * Generated: 2026-05-26T14:35:21Z
+/**
+ * @file aes.h
+ * @author Anthony Cagliano
+ * @brief AES-GCM, AES-CCM, AES-CBC implementation
+ * @license: GNU GPL v3.0
+ * @source: https://github.com/B-Con/crypto-algorithms/
  */
 
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_AES_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_AES_H
+#ifndef tls_aes_h
+#define tls_aes_h
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 enum tls_aes_modes
 {

@@ -1,13 +1,25 @@
-/*
- * File: truststore.h
- * Author: Anthony Cagliano
- * Description: Initializes the trust store, checks for the SPKI appvar, RSA-decrypts
- *              the signature, verifies the signature, sets a flag for session if looks
- *              good.
- * Generated: 2026-05-26T14:35:24Z
+/**
+ * @file truststore.h
+ * @author Anthony Cagliano
+ * @brief Provides API for initializing and checking trust store for pins.
+ * @reference: RFC 5280
+ *
+ * @note Custom PKI architecture engineered for constrained
+ * runtime and storage environments.
+ *
+ * @warning This implementation currently validates that a
+ * certificate chain terminates in a pinned root certificate,
+ * but does not (yet) perform full cryptographic verification
+ * of all intermediate certificate signatures.
+ *
+ * Security therefore depends on the assumption that an
+ * attacker cannot construct an alternate certificate chain
+ * terminating in a trusted pinned root without possession
+ * of the corresponding signing authority.
  */
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_TRUSTSTORE_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_TRUSTSTORE_H
+
+#ifndef TLS_TRUSTSTORE_H
+#define TLS_TRUSTSTORE_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -17,7 +29,8 @@
 #define TLS_SPKI_ISSUER_LEN 32
 #define TLS_SPKI_HASH_MAX_LEN 32
 
-typedef enum {
+typedef enum
+{
     TLS_STORE_OK = 0,
     TLS_STORE_NOT_FOUND,
     TLS_STORE_SIZE_INVALID,
@@ -77,4 +90,4 @@ tls_truststore_status_t tls_truststore_init(void);
  */
 bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result);
 
-#endif /* LWIP_PUBLIC_CRYPTOGRAPHY_TRUSTSTORE_H */
+#endif /* TLS_TRUSTSTORE_H */

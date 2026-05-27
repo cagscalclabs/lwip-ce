@@ -1,20 +1,3 @@
-/*
- * File: conn.h
- * Author: Unknown
- * Description: App-facing connection API. Hides the altcp / altcp_tls_ce / raw tcp /
- *              udp factoring behind a single connection handle and a fixed verb set.
- *              Intended for application code that just wants to open a socket-like
- *              endpoint, attach callbacks, and send/recv bytes. The TLS and altcp
- *              layers are still directly usable for anyone who needs them — this is an
- *              additive convenience layer. Lifecycle: lwip_start() — once at startup
- *              lwip_poll_network_events() — in the app's main loop, every iteration
- *              lwip_conn_create() — per connection lwip_conn_set_*() — register any
- *              callbacks before connect lwip_conn_connect() — host (IPv4 string or DNS
- *              name) + port lwip_conn_write() / recv — once connected (recv is
- *              callback-driven) lwip_conn_shutdown() / close — orderly or hard teardown
- *              lwip_conn_destroy() — free the handle
- * Generated: 2026-05-26T14:35:11Z
- */
 /**
  * @file lwIP.h
  * @brief App-facing connection API.
@@ -36,13 +19,12 @@
  *   lwip_conn_destroy()          — free the handle
  */
 
-#ifndef LWIP_PUBLIC_CONN_H
-#define LWIP_PUBLIC_CONN_H
+#ifndef LWIP_HDR_LWIP_APP_H
+#define LWIP_HDR_LWIP_APP_H
 
-#include "lwip/opt.h"
-#include "lwip/err.h"
-#include "lwip/ip_addr.h"
-#include "lwip/pbuf.h"
+#include "core/err.h"
+#include "core/ip_addr.h"
+#include "core/pbuf.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -243,4 +225,4 @@ void lwip_conn_set_closed(struct lwip_conn *conn, lwip_conn_closed_cb cb);
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CONN_H */
+#endif /* LWIP_HDR_LWIP_APP_H */

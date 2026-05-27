@@ -1,9 +1,3 @@
-/*
- * File: cryptography.h
- * Author: Anthony Cagliano, Adam Beckingham
- * Description: Aggregate include for cryptography public APIs.
- * Generated: 2026-05-26T14:35:27Z
- */
 #ifndef LWIP_PUBLIC_CRYPTOGRAPHY_H
 #define LWIP_PUBLIC_CRYPTOGRAPHY_H
 

@@ -1,9 +1,3 @@
-/*
- * File: timeouts.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Gang Zhuo, Dirk Ziegelmeier, goldsimon, Ari Suutari, sg
- * Description: Timer implementations
- * Generated: 2026-05-26T14:35:16Z
- */
 /**
  * @file
  * Timer implementations
@@ -41,25 +35,21 @@
  *         Simon Goldschmidt
  *
  */
-#ifndef LWIP_PUBLIC_CORE_TIMEOUTS_H
-#define LWIP_PUBLIC_CORE_TIMEOUTS_H
+#ifndef LWIP_HDR_TIMEOUTS_H
+#define LWIP_HDR_TIMEOUTS_H
 
-#include "lwip/opt.h"
-#include "lwip/err.h"
-#if !NO_SYS
-#include "lwip/sys.h"
-#endif
+#include "arch.h"
+#include "err.h"
+
+#define SYS_DEBUG LWIP_DBG_OFF
+#define LWIP_DBG_OFF 0x00U
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #ifndef LWIP_DEBUG_TIMERNAMES
-#ifdef LWIP_DEBUG
 #define LWIP_DEBUG_TIMERNAMES SYS_DEBUG
-#else /* LWIP_DEBUG */
-#define LWIP_DEBUG_TIMERNAMES 0
-#endif /* LWIP_DEBUG*/
 #endif
 
 /** Returned by sys_timeouts_sleeptime() to indicate there is no timer, so we
@@ -87,8 +77,6 @@ extern const struct lwip_cyclic_timer lwip_cyclic_timers[];
 /** Array size of lwip_cyclic_timers[] */
 extern const int lwip_num_cyclic_timers;
 
-#if LWIP_TIMERS
-
 /** Function prototype for a timeout callback function. Register such a function
  * using sys_timeout().
  *
@@ -115,15 +103,8 @@ void sys_timeout(u32_t msecs, sys_timeout_handler handler, void *arg);
 
 void sys_untimeout(sys_timeout_handler handler, void *arg);
 
-#if LWIP_TESTMODE
-struct sys_timeo** sys_timeouts_get_next_timeout(void);
-void lwip_cyclic_timer(void *arg);
-#endif
-
-#endif /* LWIP_TIMERS */
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CORE_TIMEOUTS_H */
+#endif /* LWIP_HDR_TIMEOUTS_H */

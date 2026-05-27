@@ -1,3 +1,11 @@
+/**
+ * @file rsa.h
+ * @author jacobly (modexp)
+ * @author Anthony Cagliano
+ * @brief Provides RSA implementation for between 1024 and 2048 bit keys,
+ * including encryption and signature verification.
+ * @reference: RFC 8017
+ */
 
 #ifndef tls_rsa_h
 #define tls_rsa_h

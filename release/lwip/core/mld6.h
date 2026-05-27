@@ -1,10 +1,3 @@
-/*
- * File: mld6.h
- * Author: Ivan Delamer <delamer@inicotech.com>, Anthony Cagliano, Dirk Ziegelmeier, goldsimon, Erik Ekman, sg
- * Description: Multicast listener discovery for IPv6. Aims to be compliant with RFC
- *              2710. No support for MLDv2.
- * Generated: 2026-05-26T14:35:15Z
- */
 /**
  * @file
  *
@@ -47,15 +40,13 @@
  * <delamer@inicotech.com>
  */
 
-#ifndef LWIP_PUBLIC_CORE_MLD6_H
-#define LWIP_PUBLIC_CORE_MLD6_H
+#ifndef LWIP_HDR_MLD6_H
+#define LWIP_HDR_MLD6_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_IPV6_MLD && LWIP_IPV6  /* don't build if not configured for use in lwipopts.h */
-
-#include "lwip/pbuf.h"
-#include "lwip/netif.h"
+#include "pbuf.h"
+#include "netif.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -100,6 +91,4 @@ err_t  mld6_leavegroup_netif(struct netif *netif, const ip6_addr_t *groupaddr);
 }
 #endif
 
-#endif /* LWIP_IPV6_MLD && LWIP_IPV6 */
-
-#endif /* LWIP_PUBLIC_CORE_MLD6_H */
+#endif /* LWIP_HDR_MLD6_H */

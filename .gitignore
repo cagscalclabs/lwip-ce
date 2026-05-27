@@ -42,20 +42,18 @@ tests/**/*.pem
 *.synctex.gz
 *.toc
 
-# ignore documentation by default, but keep the whitepaper source, scripts, and datasets
-doc/*
-!doc/whitepaper/
-doc/whitepaper/*
-!doc/whitepaper/whitepaper.tex
-!doc/whitepaper/scripts/
-!doc/whitepaper/scripts/**
-doc/whitepaper/scripts/**/__pycache__/
-doc/whitepaper/scripts/**/*.py[cod]
-!doc/whitepaper/datasets/
-!doc/whitepaper/datasets/**
-doc/whitepaper/generated/
-doc/whitepaper/whitepaper.pdf
-doc/whitepaper/datasets/**/.DS_Store
+# upstream/vendor documentation scratch
+doc/
+
+# generated whitepaper outputs
+docs/_build/
+docs/_doxygen/
+docs/.python/
+docs/_static/whitepaper.pdf
+docs/whitepaper/_minted-whitepaper/
+docs/whitepaper/generated/
+docs/whitepaper/whitepaper.pdf
+docs/whitepaper/datasets/**/.DS_Store
 
 # local documentation tooling and outputs
 tools/
@@ -70,6 +68,8 @@ tests/profiling/tls_acvp/vectors/cache/
 
 .env
 .venv
+.docs-python/
+.venv-docs/
 venv
 
 tools/.docstring_cache

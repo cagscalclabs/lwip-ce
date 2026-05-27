@@ -1,19 +1,30 @@
+/**
+ * @file hmac.h
+ * @author Anthony Cagliano
+ * @brief HMAC-SHA-256 implementation.
+ * @license: GNU GPL v3.0
+ * @reference: RFC 2104
+ * @reference: RFC 4231
+ */
+
 #ifndef tls_hmac_h
 #define tls_hmac_h
 
 #include "hash.h"
 
 /** @struct Defines HMAC context. */
-struct tls_hmac_context {
+struct tls_hmac_context
+{
     uint8_t digestlen;
     void (*update)(struct tls_hmac_context *ctx, const uint8_t *data, size_t len);
     void (*digest)(struct tls_hmac_context *ctx, uint8_t *digest);
     bool (*_init)(void *ctx);
     void (*_update)(void *ctx, const uint8_t *data, size_t len);
     void (*_final)(void *ctx, uint8_t *digest);
-    uint8_t ipad[64];       /**< holds the key xored with a magic value to be hashed with the inner digest */
-    uint8_t opad[64];       /**< holds the key xored with a magic value to be hashed with the outer digest */
-    union {
+    uint8_t ipad[64]; /**< holds the key xored with a magic value to be hashed with the inner digest */
+    uint8_t opad[64]; /**< holds the key xored with a magic value to be hashed with the outer digest */
+    union
+    {
         struct tls_sha256_context sha256;
     } _private;
 };
@@ -27,7 +38,7 @@ struct tls_hmac_context {
  * @returns @b true if success, @b false if error.
  */
 bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
-                           const uint8_t* key, size_t keylen);
+                           const uint8_t *key, size_t keylen);
 
 /***************************************************************************
  * @brief Updates an HMAC context for data.

@@ -1,70 +1,20 @@
-/*
- * File: usb_ethernet.h
- * Author: Anthony Cagliano
- * Description: Callback function to be passed to @b usb_Init to enable Ethernet driver
- *              for lwIP usb_error_t eth_usb_event_callback(usb_event_t event, void
- *              *event_data, usb_callback_data_t *callback_data); void
- *              eth_set_rx_throttle(enum mem_pressure_level level); void
- *              eth_set_rx_drain_interval_ms(uint32_t interval_ms); struct
- *              usb_configurator { // device interfacing usb_error_t
- *              (*reset_device)(usb_device_t device); usb_error_t
- *              (*disable_device)(usb_device_t device); usb_device_t
- *              (*ref_device)(usb_device_t device); usb_device_t
- *              (*unref_device)(usb_device_t device); void
- *              (*set_device_data)(usb_device_t device, usb_device_data_t *data);
- *              usb_device_data_t* (*get_device_data)(usb_device_t device); usb_role_t
- *              (*get_role)(void); usb_device_flags_t (*get_device_flags)(usb_device_t
- *              device); usb_error_t (*schedule_transfer)(usb_endpoint_t endpoint, void
- *              *buffer, size_t length, usb_transfer_callback_t handler,
- *              usb_transfer_data_t *data); usb_error_t
- *              (*control_transfer)(usb_endpoint_t device, const usb_control_setup_t
- *              *setup, void *buffer, unsigned retries, size_t *transferred); //
- *              descriptor interfacing size_t (*get_config_descriptor_len)(usb_device_t
- *              device, uint8_t index); usb_error_t (*get_descriptor)(usb_device_t
- *              device, usb_descriptor_type_t type, uint8_t index, void *descriptor,
- *              size_t length, size_t *transferred); usb_error_t
- *              (*get_string_descriptor)(usb_device_t device, uint8_t index, uint16_t
- *              langid, usb_string_descriptor_t *descriptor, size_t length, size_t
- *              *transferred); // configuration/interface interfacing usb_error_t
- *              (*set_configuration)(usb_device_t device, const
- *              usb_configuration_descriptor_t *descriptor, size_t length); usb_error_t
- *              (*set_interface)(usb_device_t device, const usb_interface_descriptor_t
- *              *descriptor, size_t length); // endpoint interfacing usb_endpoint_t
- *              (*get_device_endpoint)(usb_device_t device, uint8_t address); void
- *              (*set_endpoint_data)(usb_endpoint_t endpoint, usb_endpoint_data_t
- *              *data); usb_endpoint_data_t* (*get_endpoint_data)(usb_endpoint_t
- *              endpoint); void (*set_endpoint_flags)(usb_endpoint_t endpoint,
- *              usb_endpoint_flags_t flags); usb_error_t
- *              (*set_endpoint_halt)(usb_endpoint_t endpoint); // top-level USB driver
- *              entry points (formerly called directly by lwIP; // now routed through
- *              the vtable so the libload build can resolve them // via include_library
- *              'usbdrvce.lib' without a special case). usb_error_t
- *              (*init)(usb_event_callback_t handler, usb_callback_data_t *data, const
- *              usb_standard_descriptors_t *device_descriptors, usb_init_flags_t flags);
- *              usb_error_t (*handle_events)(void); }; #ifdef LWIP_LIBLOAD_BUILD Under
- *              libload, all imports — host CRT (malloc/free/realloc) and the USB vtable
- *              — live in a single statically-initialised table in the stub
- *              (release/lwip.s). The CRT slots are populated at load time by
- *              lwip_init_runtime(); the USB slots are populated at link time via
- *              include_library 'usbdrvce.lib'. lwIP-internal code calls usb_fn.foo() as
- *              before — the macro below aliases it into the unified table.
- * Generated: 2026-05-26T14:35:17Z
- */
 /****************************************************************************
  * Header File for Communications Data Class (CDC)
  * for USB-Ethernet devices
  * Includes definitions for CDC-ECM and CDC-NCM
  */
 
-#ifndef LWIP_PUBLIC_CORE_USB_ETHERNET_H
-#define LWIP_PUBLIC_CORE_USB_ETHERNET_H
+#ifndef cdc_h
+#define cdc_h
 
 #include <stdint.h>
 #include <usbdrvce.h>
-#include "mem.h"
+#include "drivers_mem.h"
 
-#include "lwip/err.h"
-#include "lwip/netif.h"
+#include "err.h"
+#include "netif.h"
+#include <stdbool.h>
+#include <stddef.h>
 
 #define USB_CDC_MAX_RETRIES 3
 
@@ -230,7 +180,6 @@ usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_call
 void eth_set_rx_throttle(enum mem_pressure_level level);
 void eth_set_rx_drain_interval_ms(uint32_t interval_ms);
 
-
 struct usb_configurator {
     // device interfacing
     usb_error_t (*reset_device)(usb_device_t device);
@@ -296,7 +245,6 @@ extern struct lwip_imports fn_imports_table;
 #else
 extern struct usb_configurator usb_fn;
 #endif
-
 
 /// @brief Polls for the registration status of interfaces.
 /// @return A bitmap indicating what NETIFs are registered (netif->num)

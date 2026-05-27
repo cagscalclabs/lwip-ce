@@ -1,11 +1,3 @@
-/*
- * File: nd6.h
- * Author: Ivan Delamer <delamer@inicotech.com>, Anthony Cagliano, Simon Goldschmidt, David van Moolenbroek, sg, Dirk Ziegelmeier, goldsimon, Jan Breuer, Ivan Delamer
- * Description: Neighbor discovery and stateless address autoconfiguration for IPv6.
- *              Aims to be compliant with RFC 4861 (Neighbor discovery) and RFC 4862
- *              (Address autoconfiguration).
- * Generated: 2026-05-26T14:35:15Z
- */
 /**
  * @file
  *
@@ -49,15 +41,13 @@
  * <delamer@inicotech.com>
  */
 
-#ifndef LWIP_PUBLIC_CORE_ND6_H
-#define LWIP_PUBLIC_CORE_ND6_H
+#ifndef LWIP_HDR_ND6_H
+#define LWIP_HDR_ND6_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_IPV6  /* don't build if not configured for use in lwipopts.h */
-
-#include "lwip/ip6_addr.h"
-#include "lwip/err.h"
+#include "ip6_addr.h"
+#include "err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -79,19 +69,13 @@ void nd6_clear_destination_cache(void);
 struct netif *nd6_find_route(const ip6_addr_t *ip6addr);
 err_t nd6_get_next_hop_addr_or_queue(struct netif *netif, struct pbuf *q, const ip6_addr_t *ip6addr, const u8_t **hwaddrp);
 u16_t nd6_get_destination_mtu(const ip6_addr_t *ip6addr, struct netif *netif);
-#if LWIP_ND6_TCP_REACHABILITY_HINTS
 void nd6_reachability_hint(const ip6_addr_t *ip6addr);
-#endif /* LWIP_ND6_TCP_REACHABILITY_HINTS */
 void nd6_cleanup_netif(struct netif *netif);
-#if LWIP_IPV6_MLD
 void nd6_adjust_mld_membership(struct netif *netif, s8_t addr_idx, u8_t new_state);
-#endif /* LWIP_IPV6_MLD */
 void nd6_restart_netif(struct netif *netif);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_IPV6 */
-
-#endif /* LWIP_PUBLIC_CORE_ND6_H */
+#endif /* LWIP_HDR_ND6_H */

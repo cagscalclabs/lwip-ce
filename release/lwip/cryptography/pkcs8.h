@@ -1,17 +1,20 @@
-/*
- * File: pkcs8.h
- * Author: Anthony Cagliano
- * Description: PKCS#8 private-key parser (RFC 5208 + RFC 5958). Decodes the DER
- *              container that holds a private key plus its algorithm identifier;
- *              handles both encrypted and unencrypted variants.
- * Generated: 2026-05-26T14:35:23Z
+/**
+ * @file pkcs8.h
+ * @author Anthony Cagliano
+ * @brief Provides PKCS#8 and SEC1 parsing/serialization support.
+ * @reference: RFC 5208
+ * @reference: RFC 5958
+ * @reference: RFC 5915
+ * @reference: ITU-T X.690
  */
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_PKCS8_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_PKCS8_H
+
+#ifndef TLS_PKCS8_H
+#define TLS_PKCS8_H
 
 #include <stddef.h>
 #include "asn1.h"
 #include "keyobject.h"
+#include <stdint.h>
 
 struct tls_keyobject;
 

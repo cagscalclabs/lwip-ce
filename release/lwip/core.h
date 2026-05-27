@@ -1,9 +1,3 @@
-/*
- * File: core.h
- * Author: Jasper Verschueren <jasper.verschueren@apart-audio.com>, Dominik Spies <kontakt@dspies.de>, Anthony Cagliano, Simon Goldschmidt, Dirk Ziegelmeier, Jasper Verschueren, Simon Goldschmidt <goldsimon@gmx.de>, Erik Ekman, Freddie Chopin, David Girault, goldsimon, sg, Sylvain Rochet, Adam Dunkels <adam@sics.se>, fbernon, likewise, jani, Leon Woestenberg <leon.woestenberg@gmx.net>, xueyunfei, stoklund, uid67528, Jim Pettinato, Thomas Mueller, Ivan Delamer <delamer@inicotech.com>, Jisu Kim, David van Moolenbroek, Joel Cunningham, chrysn, kieranm, Jani Monoses <jani@iv.ro>, Ivan Delamer, Axel Lin, Faidon Liambotis, jifl, jgrubb, marcbou, christiaans, curtmcd, Ajay Bhargav, Jan Breuer, Nick Ballhorn-Wagner, Dirk Zigelmeier, davidhaas, Grant Erickson, Gang Zhuo, Ari Suutari, Jakub Schmidtke, Our Air Quality, idelamer, kleshov, proff_fs, cborrelli, Stian Skjelstad
- * Description: Aggregate include for core public APIs.
- * Generated: 2026-05-26T14:35:21Z
- */
 #ifndef LWIP_PUBLIC_CORE_H
 #define LWIP_PUBLIC_CORE_H
 

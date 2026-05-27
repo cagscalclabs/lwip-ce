@@ -1,9 +1,3 @@
-/*
- * File: altcp.h
- * Author: Simon Goldschmidt <goldsimon@gmx.de>, Anthony Cagliano, Erik Ekman, Freddie Chopin, David Girault, Simon Goldschmidt, Dirk Ziegelmeier, goldsimon
- * Description: Application layered TCP connection API (to be used from TCPIP thread)
- * Generated: 2026-05-26T14:35:11Z
- */
 /**
  * @file
  * Application layered TCP connection API (to be used from TCPIP thread)
@@ -43,17 +37,22 @@
  * Author: Simon Goldschmidt <goldsimon@gmx.de>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_ALTCP_H
-#define LWIP_PUBLIC_CORE_ALTCP_H
+#ifndef LWIP_HDR_ALTCP_H
+#define LWIP_HDR_ALTCP_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
 #if LWIP_ALTCP /* don't build if not configured for use in lwipopts.h */
 
-#include "lwip/tcpbase.h"
-#include "lwip/err.h"
-#include "lwip/pbuf.h"
-#include "lwip/ip_addr.h"
+#include "tcpbase.h"
+#include "err.h"
+#include "pbuf.h"
+#include "ip_addr.h"
+
+#define LWIP_ALTCP (LWIP_TCP)
+#define NULL ((void *)0)
+#define TCP_DEFAULT_LISTEN_BACKLOG 0xff
+#define LWIP_TCP 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -136,14 +135,7 @@ err_t altcp_get_tcp_addrinfo(struct altcp_pcb *conn, int local, ip_addr_t *addr,
 ip_addr_t *altcp_get_ip(struct altcp_pcb *conn, int local);
 u16_t altcp_get_port(struct altcp_pcb *conn, int local);
 
-#if LWIP_TCP_KEEPALIVE
-void  altcp_keepalive_disable(struct altcp_pcb *conn);
-void  altcp_keepalive_enable(struct altcp_pcb *conn, u32_t idle, u32_t intvl, u32_t count);
-#endif
-
-#ifdef LWIP_DEBUG
 enum tcp_state altcp_dbg_get_tcp_state(struct altcp_pcb *conn);
-#endif
 
 #ifdef __cplusplus
 }
@@ -153,7 +145,7 @@ enum tcp_state altcp_dbg_get_tcp_state(struct altcp_pcb *conn);
 
 /* ALTCP disabled, define everything to link against tcp callback API (e.g. to get a small non-ssl httpd) */
 
-#include "lwip/tcp.h"
+#include "tcp.h"
 
 #define altcp_accept_fn tcp_accept_fn
 #define altcp_connected_fn tcp_connected_fn
@@ -204,10 +196,8 @@ enum tcp_state altcp_dbg_get_tcp_state(struct altcp_pcb *conn);
 #define altcp_get_tcp_addrinfo tcp_get_tcp_addrinfo
 #define altcp_get_ip(pcb, local) ((local) ? (&(pcb)->local_ip) : (&(pcb)->remote_ip))
 
-#ifdef LWIP_DEBUG
 #define altcp_dbg_get_tcp_state tcp_dbg_get_tcp_state
-#endif
 
 #endif /* LWIP_ALTCP */
 
-#endif /* LWIP_PUBLIC_CORE_ALTCP_H */
+#endif /* LWIP_HDR_ALTCP_H */

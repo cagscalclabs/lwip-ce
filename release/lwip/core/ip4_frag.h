@@ -1,9 +1,3 @@
-/*
- * File: ip4_frag.h
- * Author: Jani Monoses <jani@iv.ro>, Anthony Cagliano, sg, Dirk Ziegelmeier
- * Description: IP fragmentation/reassembly
- * Generated: 2026-05-26T14:35:14Z
- */
 /**
  * @file
  * IP fragmentation/reassembly
@@ -41,23 +35,20 @@
  *
  */
 
-#ifndef LWIP_PUBLIC_CORE_IP4_FRAG_H
-#define LWIP_PUBLIC_CORE_IP4_FRAG_H
+#ifndef LWIP_HDR_IP4_FRAG_H
+#define LWIP_HDR_IP4_FRAG_H
 
-#include "lwip/opt.h"
-#include "lwip/err.h"
-#include "lwip/pbuf.h"
-#include "lwip/netif.h"
-#include "lwip/ip_addr.h"
-#include "lwip/ip.h"
-
-#if LWIP_IPV4
+#include "arch.h"
+#include "err.h"
+#include "pbuf.h"
+#include "netif.h"
+#include "ip_addr.h"
+#include "ip.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if IP_REASSEMBLY
 /* The IP reassembly timer interval in milliseconds. */
 #define IP_TMR_INTERVAL 1000
 
@@ -74,10 +65,7 @@ struct ip_reassdata {
 };
 
 struct pbuf * ip4_reass(struct pbuf *p);
-#endif /* IP_REASSEMBLY */
 
-#if IP_FRAG
-#if !LWIP_NETIF_TX_SINGLE_PBUF
 #ifndef LWIP_PBUF_CUSTOM_REF_DEFINED
 #define LWIP_PBUF_CUSTOM_REF_DEFINED
 /** A custom pbuf that holds a reference to another pbuf, which is freed
@@ -90,15 +78,11 @@ struct pbuf_custom_ref {
   struct pbuf *original;
 };
 #endif /* LWIP_PBUF_CUSTOM_REF_DEFINED */
-#endif /* !LWIP_NETIF_TX_SINGLE_PBUF */
 
 err_t ip4_frag(struct pbuf *p, struct netif *netif, const ip4_addr_t *dest);
-#endif /* IP_FRAG */
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_IPV4 */
-
-#endif /* LWIP_PUBLIC_CORE_IP4_FRAG_H */
+#endif /* LWIP_HDR_IP4_FRAG_H */

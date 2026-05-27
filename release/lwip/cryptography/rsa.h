@@ -1,17 +1,17 @@
-/*
- * File: rsa.h
- * Author: Anthony Cagliano
- * Description: Verify RSA-PSS padding on an already-decrypted signature. This function
- *              verifies that the encoded message (EM) matches the expected PSS padding
- *              structure for the given message hash. It does NOT perform RSA modular
- *              exponentiation - the caller must decrypt the signature first. Uses only
- *              fixed-size local scratch buffers. em_bits is derived internally as
- *              (em_len * 8) - 1.
- * Generated: 2026-05-26T14:35:24Z
+/**
+ * @file rsa.h
+ * @author jacobly (modexp)
+ * @author Anthony Cagliano
+ * @brief Provides RSA implementation for between 1024 and 2048 bit keys,
+ * including encryption and signature verification.
+ * @reference: RFC 8017
  */
 
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_RSA_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_RSA_H
+#ifndef tls_rsa_h
+#define tls_rsa_h
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 /* powmod_exp_u24 takes a uint8_t for modulus size, with 0 encoding 256.
  * Anything larger than 256 bytes (2048 bits) is unrepresentable. */

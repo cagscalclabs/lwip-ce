@@ -1,9 +1,3 @@
-/*
- * File: autoip.h
- * Author: Dominik Spies <kontakt@dspies.de>, Anthony Cagliano, Simon Goldschmidt, Jasper Verschueren, Dirk Ziegelmeier, goldsimon, sg, Sylvain Rochet
- * Description: AutoIP Automatic LinkLocal IP Configuration
- * Generated: 2026-05-26T14:35:12Z
- */
 /**
  * @file
  *
@@ -44,17 +38,22 @@
  *
  */
 
-#ifndef LWIP_PUBLIC_CORE_AUTOIP_H
-#define LWIP_PUBLIC_CORE_AUTOIP_H
+#ifndef LWIP_HDR_AUTOIP_H
+#define LWIP_HDR_AUTOIP_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
 #if LWIP_IPV4 && LWIP_AUTOIP /* don't build if not configured for use in lwipopts.h */
 
-#include "lwip/netif.h"
+#include "netif.h"
 /* #include "lwip/udp.h" */
-#include "lwip/etharp.h"
-#include "lwip/acd.h"
+#include "etharp.h"
+#include "acd.h"
+
+#define LWIP_AUTOIP (LWIP_DHCP)
+#define LWIP_IPV4 1
+#define LWIP_DHCP LWIP_UDP
+#define LWIP_UDP 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,7 +71,6 @@ struct autoip
   /** acd struct */
   struct acd acd;
 };
-
 
 void autoip_set_struct(struct netif *netif, struct autoip *autoip);
 void autoip_remove_struct(struct netif *netif);
@@ -93,4 +91,4 @@ u8_t autoip_accept_packet(struct netif *netif, const ip4_addr_t *addr);
 
 #endif /* LWIP_IPV4 && LWIP_AUTOIP */
 
-#endif /* LWIP_PUBLIC_CORE_AUTOIP_H */
+#endif /* LWIP_HDR_AUTOIP_H */

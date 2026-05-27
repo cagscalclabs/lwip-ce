@@ -1,9 +1,3 @@
-/*
- * File: icmp.h
- * Author: Adam Dunkels <adam@sics.se>, Anthony Cagliano, Dirk Ziegelmeier, sg, goldsimon, Simon Goldschmidt
- * Description: ICMP API
- * Generated: 2026-05-26T14:35:13Z
- */
 /**
  * @file
  * ICMP API
@@ -40,18 +34,16 @@
  * Author: Adam Dunkels <adam@sics.se>
  *
  */
-#ifndef LWIP_PUBLIC_CORE_ICMP_H
-#define LWIP_PUBLIC_CORE_ICMP_H
+#ifndef LWIP_HDR_ICMP_H
+#define LWIP_HDR_ICMP_H
 
-#include "lwip/opt.h"
-#include "lwip/pbuf.h"
-#include "lwip/ip_addr.h"
-#include "lwip/netif.h"
-#include "lwip/prot/icmp.h"
+#include "arch.h"
+#include "pbuf.h"
+#include "ip_addr.h"
+#include "netif.h"
+#include "prot_icmp.h"
 
-#if LWIP_IPV6 && LWIP_ICMP6
-#include "lwip/icmp6.h"
-#endif
+#include "icmp6.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,36 +73,16 @@ enum icmp_te_type {
   ICMP_TE_FRAG = 1
 };
 
-#if LWIP_IPV4 && LWIP_ICMP /* don't build if not configured for use in lwipopts.h */
-
 void icmp_input(struct pbuf *p, struct netif *inp);
 void icmp_dest_unreach(struct pbuf *p, enum icmp_dur_type t);
 void icmp_time_exceeded(struct pbuf *p, enum icmp_te_type t);
 
-#endif /* LWIP_IPV4 && LWIP_ICMP */
-
-#if LWIP_IPV4 && LWIP_IPV6
-#if LWIP_ICMP && LWIP_ICMP6
 #define icmp_port_unreach(isipv6, pbuf) ((isipv6) ? \
                                          icmp6_dest_unreach(pbuf, ICMP6_DUR_PORT) : \
                                          icmp_dest_unreach(pbuf, ICMP_DUR_PORT))
-#elif LWIP_ICMP
-#define icmp_port_unreach(isipv6, pbuf) do{ if(!(isipv6)) { icmp_dest_unreach(pbuf, ICMP_DUR_PORT);}}while(0)
-#elif LWIP_ICMP6
-#define icmp_port_unreach(isipv6, pbuf) do{ if(isipv6) { icmp6_dest_unreach(pbuf, ICMP6_DUR_PORT);}}while(0)
-#else
-#define icmp_port_unreach(isipv6, pbuf)
-#endif
-#elif LWIP_IPV6 && LWIP_ICMP6
-#define icmp_port_unreach(isipv6, pbuf) icmp6_dest_unreach(pbuf, ICMP6_DUR_PORT)
-#elif LWIP_IPV4 && LWIP_ICMP
-#define icmp_port_unreach(isipv6, pbuf) icmp_dest_unreach(pbuf, ICMP_DUR_PORT)
-#else /* (LWIP_IPV6 && LWIP_ICMP6) || (LWIP_IPV4 && LWIP_ICMP) */
-#define icmp_port_unreach(isipv6, pbuf)
-#endif /* (LWIP_IPV6 && LWIP_ICMP6) || (LWIP_IPV4 && LWIP_ICMP) LWIP_IPV4*/
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_PUBLIC_CORE_ICMP_H */
+#endif /* LWIP_HDR_ICMP_H */

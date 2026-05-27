@@ -1,9 +1,3 @@
-/*
- * File: ip6.h
- * Author: Ivan Delamer <delamer@inicotech.com>, Anthony Cagliano, goldsimon, Dirk Ziegelmeier, sg
- * Description: IPv6 layer.
- * Generated: 2026-05-26T14:35:14Z
- */
 /**
  * @file
  *
@@ -44,20 +38,22 @@
  * Please coordinate changes and requests with Ivan Delamer
  * <delamer@inicotech.com>
  */
-#ifndef LWIP_PUBLIC_CORE_IP6_H
-#define LWIP_PUBLIC_CORE_IP6_H
+#ifndef LWIP_HDR_IP6_H
+#define LWIP_HDR_IP6_H
 
-#include "lwip/opt.h"
+#include "arch.h"
 
-#if LWIP_IPV6  /* don't build if not configured for use in lwipopts.h */
+#include "ip6_addr.h"
+#include "prot_ip6.h"
+#include "def.h"
+#include "pbuf.h"
+#include "netif.h"
 
-#include "lwip/ip6_addr.h"
-#include "lwip/prot/ip6.h"
-#include "lwip/def.h"
-#include "lwip/pbuf.h"
-#include "lwip/netif.h"
+#include "err.h"
 
-#include "lwip/err.h"
+#define IP6_DEBUG LWIP_DBG_OFF
+#define NULL ((void *)0)
+#define LWIP_DBG_OFF 0x00U
 
 #ifdef __cplusplus
 extern "C" {
@@ -76,9 +72,7 @@ err_t         ip6_output_if_src(struct pbuf *p, const ip6_addr_t *src, const ip6
 err_t         ip6_output_hinted(struct pbuf *p, const ip6_addr_t *src, const ip6_addr_t *dest,
                                 u8_t hl, u8_t tc, u8_t nexth, struct netif_hint *netif_hint);
 #endif /* LWIP_NETIF_USE_HINTS */
-#if LWIP_IPV6_MLD
 err_t         ip6_options_add_hbh_ra(struct pbuf * p, u8_t nexth, u8_t value);
-#endif /* LWIP_IPV6_MLD */
 
 #define ip6_netif_get_local_ip(netif, dest) (((netif) != NULL) ? \
   ip6_select_source_address(netif, dest) : NULL)
@@ -89,11 +83,8 @@ void ip6_debug_print(struct pbuf *p);
 #define ip6_debug_print(p)
 #endif /* IP6_DEBUG */
 
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* LWIP_IPV6 */
-
-#endif /* LWIP_PUBLIC_CORE_IP6_H */
+#endif /* LWIP_HDR_IP6_H */

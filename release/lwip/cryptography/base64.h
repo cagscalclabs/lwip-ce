@@ -1,18 +1,17 @@
-/*
- * File: base64.h
- * Author: Anthony Cagliano
- * Description: Module providing a Base64 encoder and decoder. #ifndef tls_base64_t
- *              #define tls_base64_t #include <stdint.h>
- * Generated: 2026-05-26T14:35:22Z
+/**
+ * @file base64.h
+ * @author Anthony Cagliano
+ * @brief Base64 encode/decode implementation.
+ * @license: GNU GPL v3.0
+ * @reference: RFC 4648
+ * @reference: https://github.com/openssl/openssl
  */
-/// @file base64.h
-/// @author ACagliano
-/// @brief Module providing a Base64 encoder and decoder.
 
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_BASE64_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_BASE64_H
+#ifndef tls_base64_t
+#define tls_base64_t
 
 #include <stdint.h>
+#include <stddef.h>
 
 /***********************************************************************
  * @brief Encodes octets into sextets.

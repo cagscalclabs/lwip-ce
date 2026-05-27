@@ -1,9 +1,3 @@
-/*
- * File: igmp.h
- * Author: Anthony Cagliano, Dirk Ziegelmeier, goldsimon, sg, Erik Ekman
- * Description: IGMP API
- * Generated: 2026-05-26T14:35:13Z
- */
 /**
  * @file
  * IGMP API
@@ -43,15 +37,13 @@
  * source code.
 */
 
-#ifndef LWIP_PUBLIC_CORE_IGMP_H
-#define LWIP_PUBLIC_CORE_IGMP_H
+#ifndef LWIP_HDR_IGMP_H
+#define LWIP_HDR_IGMP_H
 
-#include "lwip/opt.h"
-#include "lwip/ip_addr.h"
-#include "lwip/netif.h"
-#include "lwip/pbuf.h"
-
-#if LWIP_IPV4 && LWIP_IGMP /* don't build if not configured for use in lwipopts.h */
+#include "arch.h"
+#include "ip_addr.h"
+#include "netif.h"
+#include "pbuf.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -113,6 +105,4 @@ err_t  igmp_leavegroup_netif(struct netif *netif, const ip4_addr_t *groupaddr);
 }
 #endif
 
-#endif /* LWIP_IPV4 && LWIP_IGMP */
-
-#endif /* LWIP_PUBLIC_CORE_IGMP_H */
+#endif /* LWIP_HDR_IGMP_H */

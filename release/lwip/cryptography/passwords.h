@@ -1,12 +1,18 @@
-/*
- * File: passwords.h
- * Author: Anthony Cagliano
- * Description: Create a secure key from a password.
- * Generated: 2026-05-26T14:35:23Z
+/**
+ * @file passwords.h
+ * @author Anthony Cagliano
+ * @brief Provides PBKDF2 implementation.
+ *
+ * @license: GNU GPL v3.0
+ * @reference: RFC 8018
+ * @reference: RFC 6070
  */
 
-#ifndef LWIP_PUBLIC_CRYPTOGRAPHY_PASSWORDS_H
-#define LWIP_PUBLIC_CRYPTOGRAPHY_PASSWORDS_H
+#ifndef tls_passwords_h
+#define tls_passwords_h
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 /*********************************************************************
  * @brief Create a secure key from a password.
@@ -19,8 +25,8 @@
  * @param rounds        HMAC rounds per hash output block.
  * @param algorithm     The HMAC algorithm to use.
  */
-bool tls_pbkdf2(const char* password, size_t passlen,
-                const uint8_t* salt, size_t saltlen,
+bool tls_pbkdf2(const char *password, size_t passlen,
+                const uint8_t *salt, size_t saltlen,
                 uint8_t *key, size_t keylen,
                 size_t rounds, uint8_t algorithm);
 
