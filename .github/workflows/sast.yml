@@ -39,7 +39,7 @@ jobs:
 
           git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- src \
             | grep -E '\.(c|h)$' \
-            | sort -u > semgrep-targets.txt
+            | sort -u > semgrep-targets.txt || true
 
           echo "SAST baseline: $BASE"
           echo "SAST targets:"
@@ -48,7 +48,11 @@ jobs:
       # Scan files that are new or changed relative to upstream lwIP.
       - run: |
           if [ -s semgrep-targets.txt ]; then
-            semgrep ci --sarif $(cat semgrep-targets.txt) > semgrep.sarif
+            set --
+            while IFS= read -r target; do
+              set -- "$@" --include "$target"
+            done < semgrep-targets.txt
+            semgrep ci --sarif "$@" > semgrep.sarif
           else
             printf '{"version":"2.1.0","runs":[]}\n' > semgrep.sarif
           fi
