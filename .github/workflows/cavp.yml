@@ -2,7 +2,7 @@ name: CAVP Primitive Validation
 
 # Runs NIST CAVP test vectors against the shipping cryptographic primitives
 # on every push to `tls` that touches the relevant code, plus on manual
-# dispatch. tools/cavp_fetch.py downloads NIST CAVP archives, samples 16
+# dispatch. tests/common/scripts/cavp_fetch.py downloads NIST CAVP archives, samples 16
 # vectors per primitive at random (per run), adds generated RSA-PSS/X25519
 # coverage plus RFC-pinned HKDF/X25519 vectors, and emits CAVPIN.8xv +
 # expected.json for the test run.
@@ -13,6 +13,8 @@ on:
     paths:
       - '.github/workflows/cavp.yml'
       - 'src/tls/**'
+      - 'tests/common/scripts/cavp_fetch.py'
+      - 'tests/common/scripts/parse_cavp_output_appvar.py'
       - 'tests/profiling/tls_cavp/**'
   workflow_dispatch:
 
@@ -151,7 +153,7 @@ jobs:
         # vectors, packs CAVPIN.8xv for the calc, and writes expected.json
         # for the grader. All in one shot.
         run: |
-          python3 "${{env.CAVP_TEST_DIR}}/tools/cavp_fetch.py"
+          python3 "${{github.workspace}}/tests/common/scripts/cavp_fetch.py"
           ls -lh "${{env.CAVP_TEST_DIR}}/vectors/CAVPIN.8xv" \
                  "${{env.CAVP_TEST_DIR}}/vectors/expected.json"
 
@@ -200,14 +202,14 @@ jobs:
       - name: Grade Responses
         id: grade
         if: always() && steps.locate_appvar.outputs.found != ''
-        # parse_output_appvar.py reads CAVPOUT.8xv + vectors JSON from
-        # hardcoded paths relative to itself. Only output paths are flagged.
+        # parse_cavp_output_appvar.py reads CAVPOUT.8xv + vectors JSON from
+        # CAVP_TEST_DIR. Only output paths are flagged.
         run: |
           test_dir="${{env.CAVP_TEST_DIR}}"
           summary_md="${{github.workspace}}/cavp-summary.md"
           results_json="${{github.workspace}}/cavp-results.json"
           set +e
-          python3 "$test_dir/tools/parse_output_appvar.py" \
+          python3 "${{github.workspace}}/tests/common/scripts/parse_cavp_output_appvar.py" \
             --markdown-out "$summary_md" \
             --json-out "$results_json"
           grade_status=$?

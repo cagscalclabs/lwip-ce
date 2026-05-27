@@ -845,7 +845,13 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
         {
             pbuf_free(p);
         }
-        altcp_close(inner_conn);
+        /* Our wrapper is gone (or never wired); fall back to abort if
+         * the orderly close can't go out. Returning ERR_CLSD without a
+         * working close path would leave the pcb dangling. */
+        if (altcp_close(inner_conn) != ERR_OK)
+        {
+            altcp_abort(inner_conn);
+        }
         return ERR_CLSD;
     }
 
@@ -858,7 +864,10 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
         {
             pbuf_free(p);
         }
-        altcp_close(inner_conn);
+        if (altcp_close(inner_conn) != ERR_OK)
+        {
+            altcp_abort(inner_conn);
+        }
         return ERR_CLSD;
     }
 
@@ -884,11 +893,18 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
         }
         else
         {
+            /* Peer closed mid-handshake (or pre-upper-recv-attach).
+             * The app saw ERR_ABRT; tear the wrapper down. Fall back to
+             * abort if orderly close can't be enqueued, so we never
+             * leak the wrapper pcb. */
             if (conn->err)
             {
                 conn->err(conn->arg, ERR_ABRT);
             }
-            altcp_close(conn);
+            if (altcp_close(conn) != ERR_OK)
+            {
+                altcp_abort(conn);
+            }
         }
         return ERR_OK;
     }
@@ -1504,20 +1520,38 @@ altcp_tls_ce_lower_poll(void *arg, struct altcp_pcb *inner_conn)
 
 /**
  * @brief Error callback from lower connection (TCP)
+ *
+ * Snapshot the app's err callback + arg locally, detach the TLS state
+ * BEFORE invoking the app cb, then altcp_free the wrapper. This way the
+ * app's err cb can't reach into TLS state that altcp_free's dealloc is
+ * about to release — a guard that matters most when the app logs or
+ * inspects the conn during teardown.
  */
 static void
 altcp_tls_ce_lower_err(void *arg, err_t err)
 {
     struct altcp_pcb *conn = (struct altcp_pcb *)arg;
-    if (conn)
+    if (!conn)
     {
-        conn->inner_conn = NULL; /* already freed */
-        if (conn->err)
-        {
-            conn->err(conn->arg, err);
-        }
-        altcp_free(conn);
+        return;
     }
+    /* Snapshot before any state mutation so the app callback gets the
+     * same arg/fn it registered, regardless of what we do next. */
+    altcp_err_fn app_err = conn->err;
+    void *app_arg = conn->arg;
+
+    conn->inner_conn = NULL;   /* lower freed us before raising err */
+    conn->err = NULL;
+    conn->recv = NULL;
+    conn->sent = NULL;
+    conn->poll = NULL;
+    conn->connected = NULL;
+
+    if (app_err)
+    {
+        app_err(app_arg, err);
+    }
+    altcp_free(conn);
 }
 
 /* ========== Setup Functions ========== */
@@ -1820,15 +1854,18 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
         return ERR_VAL;
     }
 
-    /* Best-effort: send TLS close_notify before tearing down the TCP side.
-     * If the handshake never completed, tls_send_close_notify will simply
-     * emit a plaintext alert (or skip if no transport is wired). */
-    if (conn->state)
+    /* Best-effort: send TLS close_notify before tearing down the TCP
+     * side. Tracked via CLOSE_NOTIFY_SENT so a retried close (when the
+     * TCP-level close hits ERR_MEM and the caller retries) doesn't
+     * re-emit the alert — the peer has already seen one. */
+    altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
+    if (state &&
+        (state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
+        !(state->flags & ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT))
     {
-        altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
-        if (state && (state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+        if (tls_send_close_notify(&state->tls_ctx))
         {
-            (void)tls_send_close_notify(&state->tls_ctx);
+            state->flags |= ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT;
         }
     }
 
@@ -1843,7 +1880,10 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
 
         if (err != ERR_OK)
         {
-            /* Not closed, restore callbacks */
+            /* Not closed; restore callbacks so the lower layer can
+             * keep delivering events. The CLOSE_NOTIFY_SENT flag stays
+             * set — the alert is on the wire even though the TCP-side
+             * close didn't go through. */
             altcp_tls_ce_setup_callbacks(conn, inner_conn);
             altcp_poll(inner_conn, oldpoll, inner_conn->pollinterval);
             return err;

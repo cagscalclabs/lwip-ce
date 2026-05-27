@@ -5,7 +5,7 @@ REPO_ROOT = ROOT.parent
 
 project = "lwIP-CE"
 author = "Anthony Cagliano"
-copyright = "2026, Anthony Cagliano"
+copyright = "2026, CagsCalcLabs"
 
 extensions = [
     "breathe",

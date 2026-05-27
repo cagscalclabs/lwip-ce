@@ -29,7 +29,9 @@
  *                       <----------------     [now encrypted under HS keys]
  *                                             EncryptedExtensions
  *                                             Certificate
- *                                             CertificateVerify   (skipped here)
+ *                                             CertificateVerify   (RSA-PSS verify
+ *                                                                  gated by
+ *                                                                  LWIP_CFG_TLS_VERIFY_CERTVERIFY)
  *                                             Finished
  *
  *     [client derives application keys]
@@ -113,12 +115,14 @@
  * 4. WHAT THIS IMPLEMENTATION SKIPS (DELIBERATELY)
  * -------------------------------------------------
  *
- *   - CertificateVerify signature checking. The peer's cert chain is still
- *     parsed, and any CA-capable root/intermediate SPKI in that chain may be
- *     matched against the signed truststore. This is CA/intermediate SPKI
- *     pinning, not leaf/end-entity pinning. We do this because RSA/ECDSA
- *     signature verification is too slow on an eZ80 for an interactive
- *     handshake.
+ *   - CertificateVerify signature checking is gated by
+ *     LWIP_CFG_TLS_VERIFY_CERTVERIFY. With the bit set (the default), the
+ *     leaf cert's SPKI is captured during chain walking and an RSA-PSS
+ *     (rsa_pss_rsae_sha256) verify runs over the RFC 8446 §4.4.3 signed
+ *     content. With the bit clear, only SPKI pinning of the chain is
+ *     enforced — useful when the absolute-fastest handshake matters and
+ *     the truststore is trusted to fully anchor the connection. The cert
+ *     chain itself is always parsed and pinned regardless of the bit.
  *   - 0-RTT / early_data.
  *   - HelloRetryRequest negotiation — we only ever offer x25519, so if the
  *     server demands a different group we just abort.
@@ -172,6 +176,8 @@
 #include "../includes/random.h"
 #include "../includes/hkdf.h"
 #include "../includes/asn1.h"
+#include "../includes/rsa.h"
+#include "../includes/keyobject.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
 #include "../includes/x509.h"
@@ -423,9 +429,16 @@ struct tls_cert_walker
     size_t cert_buf_len;
     /* True once any cert in the chain passed the truststore check. */
     bool chain_validated;
+    /* Index of the cert currently in cert_buf within the chain — 0 means
+     * leaf. Used by tls_cert_walker_validate_one to know when to capture
+     * the leaf SPKI into ctx->leaf_spki. */
+    uint16_t cert_index;
+    /* Owning handshake context, so per-cert callbacks can reach back for
+     * leaf SPKI capture etc. Set by the caller via tls_cert_walker_new. */
+    struct tls_handshake_context *ctx;
 };
 
-static struct tls_cert_walker *tls_cert_walker_new(void)
+static struct tls_cert_walker *tls_cert_walker_new(struct tls_handshake_context *ctx)
 {
     struct tls_cert_walker *w = (struct tls_cert_walker *)
         mem_buffer_custom_malloc(sizeof(*w));
@@ -436,6 +449,7 @@ static struct tls_cert_walker *tls_cert_walker_new(void)
     memset(w, 0, sizeof(*w));
     w->state = CW_REQ_CTX_LEN;
     w->len_need = 1;
+    w->ctx = ctx;
     return w;
 }
 
@@ -458,13 +472,6 @@ static void tls_cert_walker_free(struct tls_cert_walker *w)
  * on fatal parse error (caller aborts the connection). */
 static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 {
-    if (w->chain_validated)
-    {
-        /* Already validated by an earlier cert — keep walking the chain
-         * framing for parse-safety but skip the per-cert work. */
-        return true;
-    }
-
     struct tls_asn1_serialization cert_fields[13];
     struct tls_x509_parse_result cert_parsed = {0};
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len,
@@ -476,6 +483,30 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         cert_parsed.spki_raw->len == 0)
     {
         return false;
+    }
+
+    /* Capture the leaf SPKI before any "already-validated, skip the
+     * rest" short-circuit fires. The CertificateVerify path needs it
+     * regardless of whether some other cert in the chain already
+     * matched a pin. */
+    if (w->cert_index == 0 && w->ctx && !w->ctx->leaf_spki)
+    {
+        uint8_t *copy = (uint8_t *)mem_buffer_custom_malloc(cert_parsed.spki_raw->len);
+        if (copy)
+        {
+            memcpy(copy, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
+            w->ctx->leaf_spki = copy;
+            w->ctx->leaf_spki_len = cert_parsed.spki_raw->len;
+        }
+        /* Allocation failure is non-fatal here: CertificateVerify will
+         * surface its own ERR if the user requested it. */
+    }
+
+    if (w->chain_validated)
+    {
+        /* Already validated by an earlier cert — keep walking the chain
+         * framing for parse-safety but skip the per-cert work. */
+        return true;
     }
 
     /* CA-constraints gate: only CA-capable certs can match. */
@@ -505,11 +536,16 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         return true;
     }
 
+    /* Once we have a SPKI-pin hit, the implicit contract is: "we trust
+     * this pinned cert for this purpose, during this window." So both
+     * the date-validity gate (against SNTP time, when available) and
+     * the owner-id (subject CN) gate run unconditionally. They used to
+     * be controlled by individual app_config bits; the bits were
+     * removed because there's no compelling reason to ever skip them
+     * once we have a pin. */
     bool date_check_pass = true;
     bool owner_check_pass = true;
-    const lwip_app_config_t *app_cfg = lwip_app_config_get();
 
-    if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_DATES))
     {
         uint32_t current_time = lwip_sntp_get_unix_time();
         if (current_time > 0)
@@ -522,16 +558,20 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         }
     }
 
-    if (app_cfg && (app_cfg->flags & LWIP_CFG_CERT_CHECK_OWNER))
-    {
-        owner_check_pass = tls_subject_cn_matches_owner_id(
-            cert_parsed.subject_cn, spki_entry.owner_id);
-    }
+    owner_check_pass = tls_subject_cn_matches_owner_id(
+        cert_parsed.subject_cn, spki_entry.owner_id);
 
     if (date_check_pass && owner_check_pass)
     {
         w->chain_validated = true;
     }
+
+    /* TODO(full-chain): when LWIP_CFG_FULL_CHAIN_VERIFY is set, this
+     * is where each non-leaf cert would be signature-verified against
+     * the next cert's SPKI (cert N signed-by cert N+1). The SPKI-pin
+     * path above remains the trust floor — we accept the chain when
+     * SOME cert pins, regardless of full-chain mode — but full mode
+     * adds the constraint that every link in the chain be valid. */
     return true;
 }
 
@@ -677,7 +717,9 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
             {
                 /* Cert complete — validate it, then drop the buffer
                  * before moving on. Peak alloc never exceeds the largest
-                 * single cert. */
+                 * single cert. cert_index is incremented after the
+                 * validate call so the leaf (index 0) keeps that value
+                 * while validate_one captures its SPKI. */
                 bool ok = tls_cert_walker_validate_one(w);
                 mem_buffer_custom_free(w->cert_buf);
                 w->cert_buf = NULL;
@@ -688,6 +730,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                     w->state = CW_ERROR;
                     return false;
                 }
+                if (w->cert_index < UINT16_MAX) w->cert_index++;
                 w->state = CW_EXT_LEN;
                 w->len_need = 2;
             }
@@ -720,7 +763,7 @@ static bool tls_feed_inflight_body(struct tls_handshake_context *ctx,
     {
         if (!ctx->cert_walker)
         {
-            ctx->cert_walker = tls_cert_walker_new();
+            ctx->cert_walker = tls_cert_walker_new(ctx);
             if (!ctx->cert_walker)
             {
                 return false;
@@ -1994,31 +2037,219 @@ static bool tls_recv_encrypted_extensions(
     return true;
 }
 
+/* TLS 1.3 signature_algorithms code points (RFC 8446 §4.2.3). */
+#define TLS_SIG_RSA_PSS_RSAE_SHA256 0x0804
+#define TLS_SIG_RSA_PSS_RSAE_SHA384 0x0805
+#define TLS_SIG_RSA_PSS_RSAE_SHA512 0x0806
+
+/* Extract the raw modulus bytes from a DER-encoded SubjectPublicKeyInfo
+ * for an rsaEncryption key. On success, *mod_out points into the SPKI
+ * buffer at the first non-zero modulus byte and *mod_len_out is the
+ * stripped length (matching the RSA modulus size in bytes; 256 for
+ * RSA-2048). Returns false for non-RSA SPKIs or malformed input. */
+static bool tls_spki_extract_rsa_modulus(const uint8_t *spki, size_t spki_len,
+                                         const uint8_t **mod_out,
+                                         size_t *mod_len_out)
+{
+    struct tls_asn1_cursor c;
+    struct tls_asn1_tlv spki_seq;
+    struct tls_asn1_cursor spki_body;
+    struct tls_asn1_tlv alg_seq;
+    struct tls_asn1_tlv spk_bits;
+    struct tls_asn1_cursor alg_body;
+    struct tls_asn1_tlv alg_oid;
+    struct tls_asn1_cursor rsa_body;
+    struct tls_asn1_tlv rsa_seq;
+    struct tls_asn1_cursor rsa_fields;
+    struct tls_asn1_tlv modulus;
+
+    if (!spki || spki_len == 0 || !mod_out || !mod_len_out)
+    {
+        return false;
+    }
+
+    /* SubjectPublicKeyInfo ::= SEQUENCE { AlgorithmIdentifier, BIT STRING } */
+    if (!tls_asn1_cursor_init(&c, spki, spki_len) ||
+        !tls_asn1_next(&c, &spki_seq) ||
+        tls_asn1_tag_number(spki_seq.tag) != ASN1_SEQUENCE ||
+        !tls_asn1_tag_constructed(spki_seq.tag))
+    {
+        return false;
+    }
+    if (!tls_asn1_child_cursor(&spki_seq, &spki_body) ||
+        !tls_asn1_next(&spki_body, &alg_seq) ||
+        !tls_asn1_next(&spki_body, &spk_bits))
+    {
+        return false;
+    }
+    if (tls_asn1_tag_number(spk_bits.tag) != ASN1_BITSTRING || spk_bits.len < 2)
+    {
+        return false;
+    }
+
+    /* AlgorithmIdentifier { OID rsaEncryption, NULL } */
+    if (!tls_asn1_child_cursor(&alg_seq, &alg_body) ||
+        !tls_asn1_next(&alg_body, &alg_oid) ||
+        tls_asn1_tag_number(alg_oid.tag) != ASN1_OBJECTID)
+    {
+        return false;
+    }
+    if (alg_oid.len != 9 ||
+        memcmp(alg_oid.value, tls_objectid_bytes[TLS_OID_RSA_ENCRYPTION], 9) != 0)
+    {
+        return false;
+    }
+
+    /* BIT STRING content: first byte is the unused-bits count (must be 0
+     * for a DER-encoded RSAPublicKey), followed by RSAPublicKey DER. */
+    if (spk_bits.value[0] != 0)
+    {
+        return false;
+    }
+    if (!tls_asn1_cursor_init(&rsa_body, spk_bits.value + 1, spk_bits.len - 1) ||
+        !tls_asn1_next(&rsa_body, &rsa_seq) ||
+        tls_asn1_tag_number(rsa_seq.tag) != ASN1_SEQUENCE ||
+        !tls_asn1_tag_constructed(rsa_seq.tag))
+    {
+        return false;
+    }
+    if (!tls_asn1_child_cursor(&rsa_seq, &rsa_fields) ||
+        !tls_asn1_next(&rsa_fields, &modulus) ||
+        tls_asn1_tag_number(modulus.tag) != ASN1_INTEGER ||
+        modulus.len == 0)
+    {
+        return false;
+    }
+
+    /* ASN.1 INTEGER is signed big-endian — RSA moduli always have the high
+     * bit set so DER prepends a 0x00 sign byte. Strip it (and any further
+     * leading zeros, just in case) so we hand powmod the raw N. */
+    const uint8_t *p = modulus.value;
+    size_t n = modulus.len;
+    while (n > 0 && *p == 0)
+    {
+        p++;
+        n--;
+    }
+    if (n < RSA_MODULUS_MIN_SUPPORTED || n > RSA_MODULUS_MAX_SUPPORTED)
+    {
+        return false;
+    }
+    /* powmod requires odd modulus; RSA N is always odd. Belt-and-suspenders. */
+    if ((p[n - 1] & 1) == 0)
+    {
+        return false;
+    }
+    *mod_out = p;
+    *mod_len_out = n;
+    return true;
+}
+
+/* Verify a TLS 1.3 server CertificateVerify signature against the leaf
+ * cert's SPKI. Implements the construction from RFC 8446 §4.4.3:
+ *
+ *     digest = SHA256(64 spaces || "TLS 1.3, server CertificateVerify" ||
+ *                     0x00 || Transcript-Hash(ClientHello..Certificate))
+ *
+ * then RSA-decrypts the signature using the leaf modulus and runs the
+ * PSS padding check against `digest`. Only rsa_pss_rsae_sha256 is wired
+ * up — the rest of the PSS variants would need SHA-384/SHA-512, which
+ * are not in the hash framework. Returns true iff the signature checks
+ * out. */
+static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
+                                          const uint8_t *sig, size_t sig_len)
+{
+    static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
+    uint8_t spaces[64];
+    uint8_t zero = 0;
+    uint8_t transcript[32];
+    uint8_t message_hash[32];
+    struct tls_hash_context hash_ctx;
+    const uint8_t *modulus;
+    size_t modulus_len;
+    uint8_t *em = NULL;
+    bool ok = false;
+
+    if (!ctx || !ctx->leaf_spki || ctx->leaf_spki_len == 0 ||
+        !sig || sig_len == 0)
+    {
+        return false;
+    }
+
+    if (!tls_spki_extract_rsa_modulus(ctx->leaf_spki, ctx->leaf_spki_len,
+                                      &modulus, &modulus_len))
+    {
+        return false;
+    }
+    /* TLS 1.3 PSS uses salt length == hash length, so the signature must
+     * exactly match the modulus size in bytes. */
+    if (sig_len != modulus_len)
+    {
+        return false;
+    }
+
+    /* Build the signed-content digest. */
+    if (!ctx->transcript_hash)
+    {
+        return false;
+    }
+    transcript_hash_digest(ctx->transcript_hash, transcript);
+
+    memset(spaces, 0x20, sizeof(spaces));
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    {
+        return false;
+    }
+    tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(&hash_ctx, &zero, 1);
+    tls_hash_update(&hash_ctx, transcript, sizeof(transcript));
+    tls_hash_digest(&hash_ctx, message_hash);
+
+    /* RSA decrypt the signature, then run the PSS padding check. */
+    em = (uint8_t *)mem_buffer_custom_malloc(modulus_len);
+    if (!em)
+    {
+        return false;
+    }
+    if (!tls_rsa_decrypt_signature(sig, sig_len, em, modulus, modulus_len))
+    {
+        goto cleanup;
+    }
+    if (!tls_rsa_pss_verify(em, modulus_len, message_hash, sizeof(message_hash),
+                            TLS_HASH_SHA256))
+    {
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    if (em)
+    {
+        tls_secure_memzero(em, modulus_len);
+        mem_buffer_custom_free(em);
+    }
+    return ok;
+}
+
 /**
- * @brief Parse CertificateVerify; intentionally skip signature verification.
+ * @brief Parse and (optionally) verify the server's CertificateVerify.
  *
- * CertificateVerify is the server's signature over the transcript hash
- * using the private key corresponding to the certificate it just sent.
- * In a standard TLS 1.3 stack this is THE binding between "I trust this
- * cert chain" and "I'm actually talking to that cert's owner."
+ * CertificateVerify is the server's signature over the handshake
+ * transcript using the private key corresponding to the leaf cert it
+ * just sent. It's the live proof-of-possession that binds "I trust this
+ * cert chain" to "I'm actually talking to that cert's owner."
  *
- * We DON'T verify the signature here. RSA-2048 verify takes >2 s on an
- * eZ80, ECDSA P-256 is comparably slow — the user-visible latency cost is
- * too high for a calculator. Instead we trust the SPKI pin established by
- * the streaming cert walker (tls_recv_certificate_streamed) as proof the
- * server's chain leads up to a CA we trust.
- *
- * We DO still:
- *   - Require the message to be present and well-formed (a missing
- *     CertificateVerify would let any attacker who got the certificate
- *     impersonate the server).
- *   - Require state == TLS_STATE_CERTIFICATE_RECEIVED, which is only
- *     reached if SPKI pinning succeeded in tls_recv_certificate_streamed.
- *   - Update the transcript hash so the server Finished MAC checks out.
- *
- * The skip is a documented trade-off, not a missing TODO. If you ever
- * add fast signature verification, gate the actual verify here behind an
- * "if (have_sig_verify)" so the pin check remains the floor.
+ * Behavior is gated by LWIP_CFG_TLS_VERIFY_CERTVERIFY:
+ *   - clear (legacy fast-path): we still require the message to be
+ *     well-formed and update the transcript hash, but we do not verify
+ *     the signature. SPKI pinning is the only trust anchor.
+ *   - set (default in app_config defaults): we RSA-decrypt the
+ *     signature against the leaf SPKI captured during cert walking and
+ *     run PSS padding verification. Only rsa_pss_rsae_sha256 is wired
+ *     up — the rest of the PSS variants would need SHA-384/SHA-512,
+ *     which are not in the hash framework. ECDSA / rsa_pkcs1_* are
+ *     rejected in CertificateVerify per RFC 8446 §4.4.3.
  */
 static bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -2044,45 +2275,77 @@ static bool tls_recv_certificate_verify(
         return false;
     }
 
-    /* Parse signature algorithm (2 bytes) - we don't verify but need to parse */
+    /* Signature algorithm (2 bytes). */
     if (offset + 2 > data_len)
     {
         return false;
     }
-    offset += 2; /* Skip algorithm */
+    uint16_t sig_alg = ((uint16_t)data[offset] << 8) | (uint16_t)data[offset + 1];
+    offset += 2;
 
-    /* Parse signature length (2 bytes) */
+    /* Signature length (2 bytes) and bounds. */
     if (offset + 2 > data_len)
     {
         return false;
     }
     size_t sig_len = ((size_t)data[offset] << 8) | (size_t)data[offset + 1];
     offset += 2;
-
-    /* Verify signature data fits */
-    if (offset + sig_len > data_len)
-    {
-        return false;
-    }
-    if (offset + sig_len != 4 + msg_len)
+    if (offset + sig_len > data_len || offset + sig_len != 4 + msg_len)
     {
         return false;
     }
 
-    /* Intentional short-term tradeoff:
-     * We do not verify the signature here because an acceptably fast
-     * certificate signature verification path is not available yet on this
-     * platform. SPKI pinning is therefore treated as the current trust
-     * decision, but this remains weaker than full certificate authentication.
-     */
+    const lwip_app_config_t *app_cfg = lwip_app_config_get();
+    if (app_cfg && (app_cfg->flags & LWIP_CFG_TLS_VERIFY_CERTVERIFY))
+    {
+        if (!ctx->leaf_spki || ctx->leaf_spki_len == 0)
+        {
+            /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
+             * Treat as a hard fail when the operator explicitly asked
+             * for CertVerify enforcement. */
+            lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
 
-    /* Update transcript hash with the CertificateVerify message */
+        bool sig_ok = false;
+        switch (sig_alg)
+        {
+        case TLS_SIG_RSA_PSS_RSAE_SHA256:
+            sig_ok = tls_certverify_rsa_pss_sha256(ctx,
+                                                   data + offset, sig_len);
+            break;
+        case TLS_SIG_RSA_PSS_RSAE_SHA384:
+        case TLS_SIG_RSA_PSS_RSAE_SHA512:
+            /* Hash framework is SHA-256-only on this device. The server
+             * had rsa_pss_rsae_sha256 in our ClientHello offer; selecting
+             * a wider hash is non-compliant. Fail closed. */
+            sig_ok = false;
+            break;
+        default:
+            /* ECDSA isn't supported, and RSA-PKCS1 is illegal in
+             * CertificateVerify per RFC 8446 §4.4.3. */
+            sig_ok = false;
+            break;
+        }
+
+        if (!sig_ok)
+        {
+            lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
+    }
+
+    /* Update transcript hash with the CertificateVerify message. Must
+     * happen AFTER verify (the digest fed to PSS covers the transcript
+     * through Certificate only). */
     if (ctx->transcript_hash)
     {
         transcript_hash_update(ctx->transcript_hash, data, 4 + msg_len);
     }
 
-    /* Update state */
     ctx->state = TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
 
     return true;
@@ -2942,7 +3205,7 @@ static bool tls_send_alert(
     if (level == TLS_ALERT_LEVEL_FATAL)
     {
         ctx->state = TLS_STATE_ERROR;
-        lwip_log_event(LWIP_LOG_MODULE_TLS, LWIP_LOG_TLS_FATAL_ALERT);
+        lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_FATAL_ALERT);
     }
 
     return ok;
@@ -2986,6 +3249,15 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     tls_cert_walker_free(ctx->cert_walker);
     ctx->cert_walker = NULL;
     ctx->hs_reasm_body_fed = 0;
+
+    /* Release captured leaf SPKI (allocated during cert walking,
+     * consumed by tls_recv_certificate_verify). */
+    if (ctx->leaf_spki)
+    {
+        mem_buffer_custom_free(ctx->leaf_spki);
+        ctx->leaf_spki = NULL;
+        ctx->leaf_spki_len = 0;
+    }
 
     /* Securely zero sensitive data */
     tls_secure_memzero(ctx->psk, sizeof(ctx->psk));

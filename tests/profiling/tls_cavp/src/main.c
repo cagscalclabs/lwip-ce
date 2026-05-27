@@ -5,9 +5,9 @@
  * Reads CAVPIN.8xv (input vectors), dispatches each vector to the
  * appropriate primitive, and writes responses to CAVPOUT.8xv. Does NOT
  * grade itself; expected outputs live host-side in vectors/expected.json
- * and are compared by tools/parse_output_appvar.py.
+ * and are compared by tests/common/scripts/parse_cavp_output_appvar.py.
  *
- * AppVar wire format (host-readable, see tools/cavp_fetch.py):
+ * AppVar wire format (host-readable, see tests/common/scripts/cavp_fetch.py):
  *
  *   CAVPIN.8xv:
  *     magic[4]      = 'A','I','N','1'

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -9,8 +10,12 @@ import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_INPUT_DIR = SCRIPT_DIR / "dumps"
-DEFAULT_REPORT_DIR = SCRIPT_DIR / "reports"
+TESTS_DIR = SCRIPT_DIR.parents[1]
+TEST_DIR = Path(
+    os.environ.get("TLS_RNG_ENTROPY_TEST_DIR", TESTS_DIR / "profiling" / "tls_rng_entropy")
+).resolve()
+DEFAULT_INPUT_DIR = TEST_DIR / "captures"
+DEFAULT_REPORT_DIR = TEST_DIR / "reports"
 GROUP_RE = re.compile(r"^R(0|17)(\d{2})\.8xv$", re.IGNORECASE)
 TEST_SECTION_RE = re.compile(r"^--Test(\d+)--\s*$")
 

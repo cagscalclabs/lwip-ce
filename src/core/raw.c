@@ -581,6 +581,15 @@ raw_remove(struct raw_pcb *pcb)
   memp_free(MEMP_RAW_PCB, pcb);
 }
 
+void
+raw_remove_all_pcbs(void)
+{
+  while (raw_pcbs != NULL) {
+    raw_recv(raw_pcbs, NULL, NULL);
+    raw_remove(raw_pcbs);
+  }
+}
+
 /**
  * @ingroup raw_raw
  * Create a RAW PCB.

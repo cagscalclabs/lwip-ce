@@ -9,6 +9,7 @@
 #include <ti/vars.h>
 #include <sys/rtc.h>
 #include <usbdrvce.h>
+#include <fileioc.h>
 
 #include "lwip/init.h"
 #include "lwip/timeouts.h"
@@ -16,6 +17,7 @@
 #include "lwip/netif.h"
 #include "lwip/mem.h"
 #include "lwip/dhcp.h"
+#include "lwip/prot/dhcp.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/ip4.h"
 #include "lwip/ip_addr.h"
@@ -29,6 +31,7 @@
 #include "lwip/inet_chksum.h"
 #include "lwip/tcp.h"
 #include "lwip/logging.h"
+#include "lwip/teardown.h"
 
 #include "lwip/altcp.h"
 #include "lwip/altcp_tls.h"
@@ -60,23 +63,24 @@ typedef enum
 {
     OPT_SEP_MEMORY = 0,
     OPT_MEM_CAP,
-    OPT_SEP_TIME,
+    OPT_SEP_SERVICES,
+    OPT_AUTO_NTP,
+    OPT_DNS,
+    OPT_IP_MODE,
+    OPT_EDIT_IP,
+    OPT_HOSTNAME,
     OPT_TZ_OFFSET,
     OPT_DST,
+    OPT_SEP_SECURITY,
+    OPT_TLS_CHAIN_MODE,
+    OPT_TLS_VERIFY_CERTVERIFY,
     OPT_SEP_LOGGING,
+    OPT_LOG_ENABLED,
+    OPT_LOG_LEVEL,
     OPT_LOG_USB,
     OPT_LOG_TLS,
     OPT_LOG_SIZE,
     OPT_VIEW_LOGS,
-    OPT_SEP_NETWORK,
-    OPT_AUTO_NTP,
-    OPT_IP_MODE,
-    OPT_EDIT_IP,
-    OPT_HOSTNAME,
-    OPT_SEP_SECURITY,
-    OPT_ENABLE_TLS,
-    OPT_CERT_DATES,
-    OPT_CERT_OWNER,
     OPT_SEP_TESTS,
     OPT_NTP_TEST,
     OPT_HTTP_TEST,
@@ -84,8 +88,6 @@ typedef enum
     OPT_PING_TEST,
     OPT_TCP_ECHO_TEST,
     OPT_TLS_TEST,
-    OPT_SEP_ABOUT,
-    OPT_ABOUT,
     OPT_COUNT
 } config_option_id;
 
@@ -161,33 +163,46 @@ static bool config_run_ping_test(struct config_option *opt);
 static bool config_run_tcp_echo_test(struct config_option *opt);
 static bool config_run_tls_test(struct config_option *opt);
 static bool config_run_view_logs(struct config_option *opt);
-static bool config_show_about(struct config_option *opt);
 static size_t config_required_lwip_floor(const lwip_app_config_t *cfg);
 static uint16_t config_mem_cap_max(void);
 static bool config_clamp_mem_cap(lwip_app_config_t *cfg);
 static void ui_draw_mem_breakdown(void);
 static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len);
 
+#if LWIP_DHCP
+static bool dhcp_client_running(const struct netif *netif)
+{
+    struct dhcp *dhcp = netif ? netif_dhcp_data(netif) : NULL;
+    return dhcp && dhcp->state != DHCP_STATE_OFF;
+}
+#endif
+
 static struct config_option config_options[] = {
     {"-- Memory --",    OPT_SEP_MEMORY,   F_TYPE_SEPARATOR,    NULL, {0}},
     {"lwIP Heap",       OPT_MEM_CAP,      F_TYPE_INT_SLIDER,   NULL, {0}},
-    {"-- Time --",      OPT_SEP_TIME,     F_TYPE_SEPARATOR,    NULL, {0}},
+    {"-- Services --",  OPT_SEP_SERVICES, F_TYPE_SEPARATOR,    NULL, {0}},
+    {"DHCP",            OPT_IP_MODE,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"DNS",             OPT_DNS,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"NTP",             OPT_AUTO_NTP,     F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"IP Config",       OPT_EDIT_IP,      F_TYPE_ACTION,       config_edit_ip, {0}},
+    {"Hostname",        OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
     {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"-- Security --",  OPT_SEP_SECURITY, F_TYPE_SEPARATOR,    NULL, {0}},
+    /* Chain mode toggle. OFF = SPKI-pin (fast). ON = full-chain verify
+     * (every cert in the chain signature-verified against the next). */
+    {"Full Chain Verify", OPT_TLS_CHAIN_MODE,        F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
+    /* CertificateVerify signature gate. Independent of chain mode.
+     * Default ON; clear it to drop ~seconds off handshake at the cost
+     * of skipping leaf-key proof-of-possession. */
+    {"Verify CertVerify", OPT_TLS_VERIFY_CERTVERIFY, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
     {"-- Logging --",   OPT_SEP_LOGGING,  F_TYPE_SEPARATOR,    NULL, {0}},
+    {"Logging",         OPT_LOG_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Log Level",       OPT_LOG_LEVEL,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"Log USB Errors",  OPT_LOG_USB,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"Log TLS Errors",  OPT_LOG_TLS,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"Log Size",        OPT_LOG_SIZE,     F_TYPE_INT_SLIDER,   NULL, {0}},
     {"View Log",        OPT_VIEW_LOGS,    F_TYPE_ACTION,       config_run_view_logs, {0}},
-    {"-- Network --",   OPT_SEP_NETWORK,  F_TYPE_SEPARATOR,    NULL, {0}},
-    {"Auto NTP",        OPT_AUTO_NTP,     F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"DHCP",            OPT_IP_MODE,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"IP Config",       OPT_EDIT_IP,      F_TYPE_ACTION,       config_edit_ip, {0}},
-    {"Hostname",        OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
-    {"-- Security --",  OPT_SEP_SECURITY, F_TYPE_SEPARATOR,    NULL, {0}},
-    {"TLS",             OPT_ENABLE_TLS,   F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Cert Lifespan",   OPT_CERT_DATES,   F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Cert Owner",      OPT_CERT_OWNER,   F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
     {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
     {"HTTP Test",       OPT_HTTP_TEST,    F_TYPE_ACTION,       config_run_http_test, {0}},
@@ -195,8 +210,6 @@ static struct config_option config_options[] = {
     {"Ping Test",       OPT_PING_TEST,    F_TYPE_ACTION,       config_run_ping_test, {0}},
     {"TCP Echo",        OPT_TCP_ECHO_TEST,F_TYPE_ACTION,       config_run_tcp_echo_test, {0}},
     {"TLS Test",        OPT_TLS_TEST,     F_TYPE_ACTION,       config_run_tls_test, {0}},
-    {"-- Info --",      OPT_SEP_ABOUT,    F_TYPE_SEPARATOR,    NULL, {0}},
-    {"About",           OPT_ABOUT,        F_TYPE_ACTION,       config_show_about, {0}},
 };
 
 #define CONFIG_OPTION_COUNT (sizeof(config_options) / sizeof(config_options[0]))
@@ -237,11 +250,23 @@ static bool option_get_bool(const uint8_t value[4])
     return value[0] != 0;
 }
 
+static void option_set_u8(uint8_t value[4], uint8_t v)
+{
+    value[0] = v;
+    value[1] = 0;
+    value[2] = 0;
+    value[3] = 0;
+}
+
+static uint8_t option_get_u8(const uint8_t value[4])
+{
+    return value[0];
+}
+
 static size_t config_required_lwip_floor(const lwip_app_config_t *cfg)
 {
-    return (cfg->flags & LWIP_CFG_ENABLE_TLS) != 0
-        ? LWIP_TLS_FLOOR_BYTES
-        : LWIP_BASE_FLOOR_BYTES;
+    (void)cfg;
+    return LWIP_TLS_FLOOR_BYTES;
 }
 
 /* Maximum cap = all current free RAM (user gets nothing).
@@ -519,9 +544,7 @@ static void ui_draw_mode_footer(bool editing, edit_mode_t edit_mode)
         if (edit_mode == EDIT_MEM_CAP)
         {
             ui_draw_footer("<left/right> Adjust lwIP heap",
-                           (g_cfg.flags & LWIP_CFG_ENABLE_TLS) != 0
-                               ? "Min 24k (TLS on)"
-                               : "Min 12k (TLS off)");
+                           "Min 24k (TLS ready)");
         }
         else
         {
@@ -561,12 +584,9 @@ static void ui_draw_mem_breakdown(void)
 {
     void *free_block = NULL;
     size_t free_ram  = os_MemChk(&free_block);
-    bool   tls_on    = (g_cfg.flags & LWIP_CFG_ENABLE_TLS) != 0;
-    size_t fixed     = LWIP_BASE_FLOOR_BYTES;
-    size_t tls_req   = tls_on ? (LWIP_TLS_FLOOR_BYTES - LWIP_BASE_FLOOR_BYTES) : 0u;
+    size_t fixed     = LWIP_TLS_FLOOR_BYTES;
     size_t cap       = g_cfg.lwip_mem_cap;
-    size_t overhead  = fixed + tls_req;
-    size_t pbuf_pool = (cap > overhead) ? (cap - overhead) : 0u;
+    size_t pbuf_pool = (cap > fixed) ? (cap - fixed) : 0u;
     size_t usermem   = (free_ram > cap) ? (free_ram - cap) : 0u;
 
     ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
@@ -584,9 +604,7 @@ static void ui_draw_mem_breakdown(void)
         y += UI_ROW_H; \
     } while (0)
 
-    MEM_ROW("Fixed structures:", fixed);
-    if (tls_on)
-        MEM_ROW("TLS (active):", tls_req);
+    MEM_ROW("TLS-capable floor:", fixed);
     MEM_ROW("Remaining pbuf pool:", pbuf_pool);
 
     /* Divider above the slider row */
@@ -624,6 +642,12 @@ static void option_sync_from_cfg(struct config_option *opt)
     case OPT_DST:
         option_set_bool(opt->value, g_cfg.dst_enabled != 0);
         break;
+    case OPT_LOG_ENABLED:
+        option_set_bool(opt->value, g_cfg.log_enabled != 0);
+        break;
+    case OPT_LOG_LEVEL:
+        option_set_u8(opt->value, g_cfg.log_min_level);
+        break;
     case OPT_LOG_USB:
         option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_LOG_USB) != 0);
         break;
@@ -636,17 +660,17 @@ static void option_sync_from_cfg(struct config_option *opt)
     case OPT_AUTO_NTP:
         option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_AUTO_NTP) != 0);
         break;
+    case OPT_DNS:
+        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_DNS) != 0);
+        break;
     case OPT_IP_MODE:
         option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_DHCP) != 0);
         break;
-    case OPT_ENABLE_TLS:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_ENABLE_TLS) != 0);
+    case OPT_TLS_CHAIN_MODE:
+        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_FULL_CHAIN_VERIFY) != 0);
         break;
-    case OPT_CERT_DATES:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_CERT_CHECK_DATES) != 0);
-        break;
-    case OPT_CERT_OWNER:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_CERT_CHECK_OWNER) != 0);
+    case OPT_TLS_VERIFY_CERTVERIFY:
+        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_TLS_VERIFY_CERTVERIFY) != 0);
         break;
     default:
         // Action/separator types, no sync needed
@@ -657,15 +681,20 @@ static void option_sync_from_cfg(struct config_option *opt)
 static void apply_logging_config(void)
 {
     uint8_t mask = 0;
-    if ((g_cfg.flags & LWIP_CFG_LOG_USB) != 0)
+    if (g_cfg.log_enabled != 0)
     {
-        mask |= LWIP_LOG_MODULE_USB;
-    }
-    if ((g_cfg.flags & LWIP_CFG_LOG_TLS) != 0)
-    {
-        mask |= LWIP_LOG_MODULE_TLS;
+        mask |= LWIP_LOG_TYPE_LWIP;
+        if ((g_cfg.flags & LWIP_CFG_LOG_USB) != 0)
+        {
+            mask |= LWIP_LOG_TYPE_USB;
+        }
+        if ((g_cfg.flags & LWIP_CFG_LOG_TLS) != 0)
+        {
+            mask |= LWIP_LOG_TYPE_TLS;
+        }
     }
     lwip_log_set_enabled(mask);
+    lwip_log_set_min_level(g_cfg.log_min_level);
     lwip_log_set_max_bytes(g_cfg.log_size_bytes);
 }
 
@@ -713,6 +742,23 @@ static int find_next_selectable(int current, int dir)
     return current;
 }
 
+static const char *log_level_name(uint8_t level)
+{
+    switch (level)
+    {
+    case LWIP_LOG_LEVEL_INFO:
+        return "Info";
+    case LWIP_LOG_LEVEL_WARN:
+        return "Warn";
+    case LWIP_LOG_LEVEL_ERROR:
+        return "Error";
+    case LWIP_LOG_LEVEL_FATAL:
+        return "Fatal";
+    default:
+        return "Error";
+    }
+}
+
 static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len)
 {
     switch (opt->id)
@@ -735,17 +781,26 @@ static void format_option_value(const struct config_option *opt, char *buf, size
         break;
     }
         break;
+    case OPT_LOG_LEVEL:
+        snprintf(buf, buf_len, "%s", log_level_name(option_get_u8(opt->value)));
+        break;
     case OPT_TZ_OFFSET:
         format_tz_offset(buf, buf_len, option_get_i16(opt->value));
         break;
     case OPT_DST:
     case OPT_AUTO_NTP:
+    case OPT_DNS:
+    case OPT_LOG_ENABLED:
     case OPT_LOG_USB:
     case OPT_LOG_TLS:
-    case OPT_ENABLE_TLS:
-    case OPT_CERT_DATES:
-    case OPT_CERT_OWNER:
+    case OPT_TLS_VERIFY_CERTVERIFY:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
+        break;
+    case OPT_TLS_CHAIN_MODE:
+        /* Show "Full" or "Pin" so the menu reads as a mode-picker
+         * rather than a yes/no toggle. */
+        snprintf(buf, buf_len, "%s",
+                 option_get_bool(opt->value) ? "Full" : "Pin");
         break;
     case OPT_NTP_TEST:
     case OPT_HTTP_TEST:
@@ -754,7 +809,6 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_TCP_ECHO_TEST:
     case OPT_TLS_TEST:
     case OPT_VIEW_LOGS:
-    case OPT_ABOUT:
         snprintf(buf, buf_len, ">");
         break;
     case OPT_IP_MODE:
@@ -789,6 +843,11 @@ static bool config_toggle_option(struct config_option *opt)
         g_cfg.dst_enabled = (uint8_t)!g_cfg.dst_enabled;
         option_sync_from_cfg(opt);
         return true;
+    case OPT_LOG_ENABLED:
+        g_cfg.log_enabled = (uint8_t)!g_cfg.log_enabled;
+        option_sync_from_cfg(opt);
+        apply_logging_config();
+        return true;
     case OPT_LOG_USB:
         g_cfg.flags ^= LWIP_CFG_LOG_USB;
         option_sync_from_cfg(opt);
@@ -803,21 +862,20 @@ static bool config_toggle_option(struct config_option *opt)
         g_cfg.flags ^= LWIP_CFG_AUTO_NTP;
         option_sync_from_cfg(opt);
         return true;
+    case OPT_DNS:
+        g_cfg.flags ^= LWIP_CFG_DNS;
+        option_sync_from_cfg(opt);
+        return true;
     case OPT_IP_MODE:
         g_cfg.flags ^= LWIP_CFG_DHCP;
         option_sync_from_cfg(opt);
         return true;
-    case OPT_ENABLE_TLS:
-        g_cfg.flags ^= LWIP_CFG_ENABLE_TLS;
-        config_clamp_mem_cap(&g_cfg);
-        config_sync_from_cfg();
-        return true;
-    case OPT_CERT_DATES:
-        g_cfg.flags ^= LWIP_CFG_CERT_CHECK_DATES;
+    case OPT_TLS_CHAIN_MODE:
+        g_cfg.flags ^= LWIP_CFG_FULL_CHAIN_VERIFY;
         option_sync_from_cfg(opt);
         return true;
-    case OPT_CERT_OWNER:
-        g_cfg.flags ^= LWIP_CFG_CERT_CHECK_OWNER;
+    case OPT_TLS_VERIFY_CERTVERIFY:
+        g_cfg.flags ^= LWIP_CFG_TLS_VERIFY_CERTVERIFY;
         option_sync_from_cfg(opt);
         return true;
     default:
@@ -836,43 +894,6 @@ static bool config_edit_hostname(struct config_option *opt)
 {
     (void)opt;
     edit_hostname_config(&g_cfg);
-    return true;
-}
-
-static bool config_show_about(struct config_option *opt)
-{
-    (void)opt;
-
-    boot_ClearVRAM();
-    os_FontSelect(os_SmallFont);
-
-    ui_draw_header("About lwIP-CE");
-
-    int y = 26;
-    int line_h = 13;
-
-    os_SetDrawFGColor(UI_COLOR_FG);
-    os_FontDrawTransText("Lightweight IP stack for embedded systems", 10, y);
-
-    y += line_h + 2;
-    os_SetDrawFGColor(UI_COLOR_ACCENT);
-    os_FontDrawTransText("github.com/lwip-tcpip/lwip", 10, y);
-
-    y += line_h + 6;
-    os_SetDrawFGColor(UI_COLOR_FG);
-    os_FontDrawTransText("CE port: commandblockguy", 10, y);
-
-    y += line_h;
-    os_FontDrawTransText("USB Ethernet: acagliano", 10, y);
-
-    y += line_h + 4;
-    os_FontDrawTransText("TLS: acagliano, beckadamtheinventor,", 10, y);
-    y += line_h;
-    os_FontDrawTransText("     jacobly, calc84maniac", 10, y);
-
-    ui_draw_footer("<clear> Back", NULL);
-
-    while (os_GetCSC() != sk_Clear) { }
     return true;
 }
 
@@ -2162,39 +2183,6 @@ static bool config_run_tls_test(struct config_option *opt)
     return true;
 }
 
-static const char *log_code_label(uint8_t module, uint8_t code)
-{
-    if (module == LWIP_LOG_MODULE_USB)
-    {
-        switch (code)
-        {
-        case LWIP_LOG_USB_ENDPOINT_STALL:
-            return "STALL";
-        case LWIP_LOG_USB_ENDPOINT_NO_DEVICE:
-            return "UNPLUG";
-        case LWIP_LOG_USB_ENDPOINT_ERROR:
-            return "ERROR";
-        case LWIP_LOG_USB_FATAL_RETRY:
-            return "FATAL";
-        default:
-            return "USB?";
-        }
-    }
-    if (module == LWIP_LOG_MODULE_TLS)
-    {
-        switch (code)
-        {
-        case LWIP_LOG_TLS_FATAL_ALERT:
-            return "FATAL";
-        case LWIP_LOG_TLS_TRUSTSTORE_FAIL:
-            return "TSTR";
-        default:
-            return "TLS?";
-        }
-    }
-    return "UNK";
-}
-
 static bool config_run_view_logs(struct config_option *opt)
 {
     (void)opt;
@@ -2228,13 +2216,22 @@ static bool config_run_view_logs(struct config_option *opt)
                 {
                     break;
                 }
-                char line[40];
-                char module_char = (entry.module == LWIP_LOG_MODULE_USB) ? 'U' :
-                                   (entry.module == LWIP_LOG_MODULE_TLS) ? 'T' : '?';
-                const char *label = log_code_label(entry.module, entry.code);
-                snprintf(line, sizeof(line), "%02u/%02u %02u:%02u:%02u %c %s",
+                char line[48];
+                const struct lwip_log_descriptor *desc =
+                    lwip_log_describe(entry.type, entry.reason);
+                if (entry.line != 0)
+                {
+                    snprintf(line, sizeof(line), "%02u/%02u %02u:%02u:%02u %s %s:%u %s",
+                             entry.month, entry.day, entry.hour, entry.minute, entry.second,
+                             desc->level_label, desc->type_label, (unsigned)entry.line,
+                             desc->reason_label);
+                }
+                else
+                {
+                    snprintf(line, sizeof(line), "%02u/%02u %02u:%02u:%02u %s %s %s",
                          entry.month, entry.day, entry.hour, entry.minute, entry.second,
-                         module_char, label);
+                         desc->level_label, desc->type_label, desc->reason_label);
+                }
                 os_FontDrawText(line, 10, 50 + (int)i * 15);
             }
             os_FontDrawText("Up/Down scroll", 10, 180);
@@ -2663,11 +2660,15 @@ static void apply_network_config(const lwip_app_config_t *cfg)
 
     if (cfg->flags & LWIP_CFG_DHCP)
     {
-        if (netif_default && !dhcp_started)
+        if (netif_default && !dhcp_client_running(netif_default))
         {
             dhcp_start(netif_default);
             dhcp_started = true;
             manual_ip_applied = false;
+        }
+        else if (netif_default)
+        {
+            dhcp_started = true;
         }
     }
     else
@@ -2702,6 +2703,11 @@ static void apply_network_config(const lwip_app_config_t *cfg)
     {
         sntp_stop();
         sntp_started = false;
+    }
+
+    if (cfg->flags & LWIP_CFG_DNS)
+    {
+        dns_init();
     }
 
     if ((cfg->flags & LWIP_CFG_TEST_HTTP) != 0)
@@ -2741,8 +2747,54 @@ static void apply_network_config(const lwip_app_config_t *cfg)
     }
 }
 
+static void cleanup_lwip_stack(void)
+{
+    if (!lwip_started)
+    {
+        return;
+    }
+
+    lwip_teardown_abort_pcbs();
+
+    if (sntp_started)
+    {
+        sntp_stop();
+        sntp_started = false;
+    }
+
+    if (netif_default)
+    {
+#if LWIP_DHCP
+        if (dhcp_client_running(netif_default))
+        {
+            dhcp_release_and_stop(netif_default);
+        }
+#endif
+        netif_set_down(netif_default);
+    }
+
+    usb_Cleanup();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    ti_CloseAll();
+#pragma GCC diagnostic pop
+    lwip_started = false;
+    dhcp_started = false;
+    manual_ip_applied = false;
+    httpd_running = false;
+}
+
+static void lwip_fatal_cleanup(uint8_t type, uint8_t reason)
+{
+    (void)type;
+    (void)reason;
+    cleanup_lwip_stack();
+}
+
 static bool start_lwip_stack(const lwip_app_config_t *cfg)
 {
+    (void)cfg;
+
     if (lwip_started)
     {
         return true;
@@ -2797,6 +2849,9 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
 
 int main(void)
 {
+    atexit(cleanup_lwip_stack);
+    lwip_log_set_fatal_handler(lwip_fatal_cleanup);
+
     lwip_app_config_load(&g_cfg);
 
     /* Clamp lwip_mem_cap so it stays between the feature floor and the
@@ -2810,6 +2865,15 @@ int main(void)
     if (g_cfg.log_size_bytes > LWIP_CFG_LOG_MAX_BYTES)
     {
         g_cfg.log_size_bytes = LWIP_CFG_LOG_MAX_BYTES;
+    }
+    if (g_cfg.log_min_level < LWIP_LOG_LEVEL_INFO ||
+        g_cfg.log_min_level > LWIP_LOG_LEVEL_FATAL)
+    {
+        g_cfg.log_min_level = LWIP_CFG_LOG_LEVEL_DEF;
+    }
+    if (g_cfg.log_enabled > 1u)
+    {
+        g_cfg.log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
     }
     g_cfg.log_size_bytes = (uint16_t)(g_cfg.log_size_bytes -
         (g_cfg.log_size_bytes % LWIP_CFG_LOG_STEP_BYTES));
@@ -2925,6 +2989,13 @@ int main(void)
                     apply_logging_config();
                     value_changed = true;
                 }
+                else if (opt->id == OPT_LOG_LEVEL && g_cfg.log_min_level > LWIP_LOG_LEVEL_INFO)
+                {
+                    g_cfg.log_min_level--;
+                    option_sync_from_cfg(opt);
+                    apply_logging_config();
+                    value_changed = true;
+                }
             }
             else if (key == sk_Right && edit_mode == EDIT_TZ && edit_option >= 0)
             {
@@ -2942,6 +3013,13 @@ int main(void)
                 if (opt->id == OPT_LOG_SIZE && g_cfg.log_size_bytes + LWIP_CFG_LOG_STEP_BYTES <= LWIP_CFG_LOG_MAX_BYTES)
                 {
                     g_cfg.log_size_bytes = (uint16_t)(g_cfg.log_size_bytes + LWIP_CFG_LOG_STEP_BYTES);
+                    option_sync_from_cfg(opt);
+                    apply_logging_config();
+                    value_changed = true;
+                }
+                else if (opt->id == OPT_LOG_LEVEL && g_cfg.log_min_level < LWIP_LOG_LEVEL_FATAL)
+                {
+                    g_cfg.log_min_level++;
                     option_sync_from_cfg(opt);
                     apply_logging_config();
                     value_changed = true;
@@ -3041,6 +3119,7 @@ int main(void)
                     edit_option = selected;
                     break;
                 case OPT_LOG_SIZE:
+                case OPT_LOG_LEVEL:
                     edit_mode = EDIT_LOG;
                     edit_option = selected;
                     break;
@@ -3062,15 +3141,8 @@ int main(void)
             else if (opt->type == F_TYPE_BOOL_TOGGLE && opt->setter)
             {
                 opt->setter(opt);
-                if (opt->id == OPT_ENABLE_TLS)
-                {
-                    ui_draw_menu(selected, scroll_pos, false);
-                }
-                else
-                {
-                    // Only redraw the single row that toggled
-                    ui_draw_single_option(selected, scroll_pos, selected, false);
-                }
+                // Only redraw the single row that toggled.
+                ui_draw_single_option(selected, scroll_pos, selected, false);
             }
             else if (opt->type == F_TYPE_ACTION && opt->setter)
             {
@@ -3089,10 +3161,7 @@ int main(void)
         // Left/Right for slider quick adjust in edit mode is handled above
     }
 
-    if (lwip_started)
-    {
-        usb_Cleanup();
-    }
+    cleanup_lwip_stack();
 
     lwip_app_config_save(&g_cfg);
 

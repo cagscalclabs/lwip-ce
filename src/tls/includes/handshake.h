@@ -240,6 +240,16 @@ extern "C"
 
         /* True once close_notify has been sent so we don't send it twice. */
         bool close_notify_sent;
+
+        /* Leaf cert SPKI (SubjectPublicKeyInfo) captured during
+         * Certificate-receive. Used by tls_recv_certificate_verify to
+         * RSA-verify the CertificateVerify signature against the leaf's
+         * public key, which is the live proof-of-possession that pins
+         * the server to its leaf private key. Heap-allocated on first
+         * cert, freed in tls_handshake_cleanup. NULL if the chain was
+         * empty or the leaf had no extractable SPKI. */
+        uint8_t *leaf_spki;
+        size_t leaf_spki_len;
     };
 
     /**

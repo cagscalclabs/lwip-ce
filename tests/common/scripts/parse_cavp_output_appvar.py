@@ -4,9 +4,9 @@
 Three places must agree on the AppVar name "CAVPOUT": this script,
 autotest.json's saveVar sequence entry, and src/main.c's CAVPOUT_NAME.
 
-Reads (hardcoded paths):
-  - ../CAVPOUT.8xv          : binary AppVar produced by the calc-side runner
-  - ../vectors/expected.json : per-run grading source produced by cavp_fetch.py
+Reads:
+  - CAVPOUT.8xv              : binary AppVar produced by the calc-side runner
+  - vectors/expected.json    : per-run grading source produced by cavp_fetch.py
 
 Emits:
   - A markdown table to stdout (or to a file via --markdown-out)
@@ -19,7 +19,7 @@ status=UNSUPPORTED for (e.g. DRBG until standalone API is wired) are
 reported as UNSUPPORTED.
 
 Usage:
-    parse_output_appvar.py [--markdown-out path] [--json-out path]
+    parse_cavp_output_appvar.py [--markdown-out path] [--json-out path]
 """
 
 from __future__ import annotations
@@ -32,11 +32,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-# ---- Hardcoded paths ----
 # Three places must agree on these names. The calc-side runner (src/main.c)
 # writes CAVPOUT; cavp_fetch.py writes expected.json. Both are inputs here.
 SCRIPT_DIR = Path(__file__).resolve().parent
-TEST_DIR = SCRIPT_DIR.parent
+TESTS_DIR = SCRIPT_DIR.parents[1]
+TEST_DIR = Path(os.environ.get("CAVP_TEST_DIR", TESTS_DIR / "profiling" / "tls_cavp")).resolve()
 INPUT_APPVAR = TEST_DIR / "CAVPOUT.8xv"
 EXPECTED_JSON = TEST_DIR / "vectors" / "expected.json"
 APPVAR_NAME = "CAVPOUT"

@@ -34,5 +34,18 @@ Current primitives:
 
 Run:
 ```sh
-make -C tests/tls_timing clean all
+make -C tests/profiling/tls_timing clean all
+```
+
+Host-side timing captures should live under:
+
+- input AppVars: `tests/profiling/tls_timing/captures`
+- parsed reports: `tests/profiling/tls_timing/reports`
+
+To convert a captured `TLSTMLOG.8xv` into CSV:
+
+```sh
+python3 tests/common/scripts/parse_timing_appvar.py \
+  tests/profiling/tls_timing/captures/TLSTMLOG.8xv \
+  -o tests/profiling/tls_timing/reports/TLSTMLOG.csv
 ```

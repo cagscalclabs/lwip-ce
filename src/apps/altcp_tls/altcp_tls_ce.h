@@ -51,6 +51,10 @@ typedef struct altcp_tls_ce_state {
 #define ALTCP_TLS_CE_FLAGS_UPPER_CALLED      0x02
 #define ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED   0x04
 #define ALTCP_TLS_CE_FLAGS_RX_CLOSED         0x08
+/* close_notify has been emitted to the peer. Set the moment we hand it
+ * off; a retried close() (because the TCP-level close came back ERR_MEM)
+ * skips re-sending the alert. The peer has already seen it. */
+#define ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT 0x10
 
 /**
  * @brief TLS configuration for CE implementation

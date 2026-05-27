@@ -28,11 +28,12 @@
 #include "lwip/timeouts.h"
 #include "lwip/logging.h"
 #include "lwip/app_config.h"
+#include "lwip/teardown.h"
+#include "lwip/dispatch.h"
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
 static uint8_t ifnums_used = 0;
-bool eth_disabled_with_error = false;
 #ifndef LWIP_LIBLOAD_BUILD
 /* In the libload build, usb_fn is a macro that aliases fn_imports_table.usb;
  * its storage is defined by release/lwip.s with each USB slot statically
@@ -47,50 +48,44 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 {
     if (status & USB_TRANSFER_NO_DEVICE)
     {
-        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_ENDPOINT_NO_DEVICE);
+        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_ENDPOINT_NO_DEVICE);
     }
     if (status & USB_TRANSFER_STALLED)
     {
-        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_ENDPOINT_STALL);
+        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_ENDPOINT_STALL);
     }
     if (status & (USB_TRANSFER_ERROR | USB_TRANSFER_HOST_ERROR | USB_TRANSFER_BUS_ERROR |
                   USB_TRANSFER_OVERFLOW | USB_TRANSFER_FAILED))
     {
-        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_ENDPOINT_ERROR);
+        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_ENDPOINT_ERROR);
     }
 }
-static bool g_eth_rx_drain_scheduled = false;
-static bool g_eth_rx_sched_scheduled = false;
-
+/* Cadence base values. These are *millisecond* cadences; the actual
+ * dispatch happens through lwip/dispatch.h, which quantizes to master
+ * ticks. Under memory pressure the scheduler period is slowed down via
+ * lwip_dispatch_set_period — see eth_set_rx_throttle. */
 #define ETH_RX_RING_INIT_SIZE 512u
 #define ETH_RX_RING_MAX_SIZE 2048u
 #define ETH_RX_RING_STEP_SIZE 512u
 #define ETH_RX_DRAIN_INTERVAL_MS 10u
 #define ETH_RX_SCHED_INTERVAL_MS 20u
 #define ETH_RX_DRAIN_MAX_NONE 8u
-#define ETH_RX_DRAIN_MAX_MILD 4u
-#define ETH_RX_DRAIN_MAX_HIGH 2u
-#define ETH_RX_DRAIN_MAX_CRITICAL 1u
-static uint32_t g_eth_rx_drain_interval_ms = ETH_RX_DRAIN_INTERVAL_MS;
-static uint32_t g_eth_rx_sched_interval_ms = ETH_RX_SCHED_INTERVAL_MS;
 
+/* How much to slow the RX scheduler under memory pressure. The drain
+ * dispatcher stays at base cadence because we want to keep emptying the
+ * ring whatever happens; what we throttle is how often we *queue new
+ * receives* on the USB side. */
 static uint32_t eth_rx_schedule_interval_ms(void)
 {
     uint32_t base = ETH_RX_SCHED_INTERVAL_MS;
     switch (g_eth_rx_throttle_level)
     {
-    case MEM_PRESSURE_NONE:
-        return base;
-    case MEM_PRESSURE_MILD:
-        return base * 2u;
-    case MEM_PRESSURE_HIGH:
-        return base * 4u;
-    case MEM_PRESSURE_SEVERE:
-        return base * 8u;
-    case MEM_PRESSURE_CRITICAL:
-        return base * 8u;
-    default:
-        return base * 2u;
+    case MEM_PRESSURE_NONE:    return base;
+    case MEM_PRESSURE_MILD:    return base * 2u;
+    case MEM_PRESSURE_HIGH:    return base * 4u;
+    case MEM_PRESSURE_SEVERE:  return base * 8u;
+    case MEM_PRESSURE_CRITICAL:return base * 8u;
+    default:                   return base * 2u;
     }
 }
 
@@ -144,16 +139,16 @@ static void eth_schedule_rx_for_netifs(void)
     }
 }
 
-static void eth_rx_schedule_timer(void *arg)
+/* Dispatcher entry: re-arm RX transfers for every eth netif that
+ * doesn't already have one in flight. Under MEM_PRESSURE_CRITICAL we
+ * skip — see eth_set_rx_throttle for the rationale. */
+static void eth_rx_schedule_dispatch(void)
 {
-    LWIP_UNUSED_ARG(arg);
     if (g_eth_rx_throttle_level == MEM_PRESSURE_CRITICAL)
     {
-        g_eth_rx_sched_scheduled = false;
         return;
     }
     eth_schedule_rx_for_netifs();
-    sys_timeout(g_eth_rx_sched_interval_ms, eth_rx_schedule_timer, NULL);
 }
 
 static bool eth_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len)
@@ -231,9 +226,11 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
     return drained;
 }
 
-static void eth_rx_drain_timer(void *arg)
+/* Dispatcher entry: drain queued RX frames into lwIP's input path. The
+ * per-tick budget shrinks under memory pressure (see eth_drain_budget)
+ * so we don't push more pbufs than the pool can handle. */
+static void eth_rx_drain_dispatch(void)
 {
-    LWIP_UNUSED_ARG(arg);
     struct netif *netif = NULL;
     size_t budget = eth_drain_budget();
     NETIF_FOREACH(netif)
@@ -258,7 +255,6 @@ static void eth_rx_drain_timer(void *arg)
         }
         budget -= drained;
     }
-    sys_timeout(g_eth_rx_drain_interval_ms, eth_rx_drain_timer, NULL);
 }
 
 
@@ -269,20 +265,23 @@ static void eth_rx_ring_pressure_cb(struct mem_buffer *mb, size_t requested, enu
     eth_set_rx_throttle(level);
 }
 
+/* Slow / stop the RX-schedule dispatcher under memory pressure by
+ * bumping its period in master ticks. The drain dispatcher is *not*
+ * slowed — we always want to keep emptying any frames already in the
+ * ring. Under CRITICAL we set period to 0 (disabled) so we stop queuing
+ * new USB receives entirely; the per-callback re-arms still happen
+ * inside ecm/ncm_receive_callback if/when packets clear. */
 void eth_set_rx_throttle(enum mem_pressure_level level)
 {
     g_eth_rx_throttle_level = level;
-    g_eth_rx_sched_interval_ms = eth_rx_schedule_interval_ms();
-    if (g_eth_rx_throttle_level == MEM_PRESSURE_CRITICAL)
+    if (level == MEM_PRESSURE_CRITICAL)
     {
-        g_eth_rx_sched_scheduled = false;
+        lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE, 0);
         return;
     }
-    if (!g_eth_rx_sched_scheduled)
-    {
-        sys_timeout(g_eth_rx_sched_interval_ms, eth_rx_schedule_timer, NULL);
-        g_eth_rx_sched_scheduled = true;
-    }
+    uint32_t ms = eth_rx_schedule_interval_ms();
+    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
+                             lwip_dispatch_period_from_ms(ms));
 }
 
 void eth_set_rx_drain_interval_ms(uint32_t interval_ms)
@@ -291,7 +290,36 @@ void eth_set_rx_drain_interval_ms(uint32_t interval_ms)
     {
         interval_ms = ETH_RX_DRAIN_INTERVAL_MS;
     }
-    g_eth_rx_drain_interval_ms = interval_ms;
+    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_DRAIN,
+                             lwip_dispatch_period_from_ms(interval_ms));
+}
+
+void eth_halt_all_endpoints(void)
+{
+    struct netif *netif = NULL;
+    NETIF_FOREACH(netif)
+    {
+        if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
+        {
+            continue;
+        }
+        eth_device_t *dev = (eth_device_t *)netif->state;
+        if (dev->rx.endpoint)
+        {
+            usb_fn.set_endpoint_flags(dev->rx.endpoint, USB_MANUAL_TERMINATE);
+            usb_fn.set_endpoint_halt(dev->rx.endpoint);
+        }
+        if (dev->tx.endpoint)
+        {
+            usb_fn.set_endpoint_flags(dev->tx.endpoint, USB_MANUAL_TERMINATE);
+            usb_fn.set_endpoint_halt(dev->tx.endpoint);
+        }
+        if (dev->interrupt.endpoint)
+        {
+            usb_fn.set_endpoint_flags(dev->interrupt.endpoint, USB_MANUAL_TERMINATE);
+            usb_fn.set_endpoint_halt(dev->interrupt.endpoint);
+        }
+    }
 }
 
 /// UTF-16 -> hex conversion
@@ -310,17 +338,28 @@ nibble(uint16_t c)
     return 0xff;
 }
 
+/* Mark a USB endpoint as having exhausted its retry budget. Brings the
+ * netif down (link + admin) so consumers can react via the link
+ * callback before USB tears the device down asynchronously, then
+ * disables the device. The per-device disabled_with_error flag is what
+ * the disconnect handler later consults to decide between "reset and
+ * resume" and "drop the netif entirely." */
 static bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
 {
     if (retries == ETH_USB_MAX_RETRIES)
     {
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
-                    ("int: endpoint failure, giving up"));
-        lwip_log_event(LWIP_LOG_MODULE_USB, LWIP_LOG_USB_FATAL_RETRY);
-        // if it fails repeatedly, free the pbuf, disable the device,
-        // and set driver error state
+                    ("eth: endpoint failure, giving up"));
+        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_FATAL_RETRY);
+        /* Surface the failure to lwIP first. Apps with a registered
+         * netif link callback will see the down transition before the
+         * device disappears, and any PCBs bound to this netif can be
+         * torn down via the link callback's own walk (see
+         * eth_netif_link_callback in this file). */
+        netif_set_link_down(&dev->iface);
+        netif_set_down(&dev->iface);
+        dev->disabled_with_error = true;
         usb_fn.disable_device(dev->device);
-        eth_disabled_with_error = true;
         return true;
     }
     return false;
@@ -342,17 +381,17 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
 {
     eth_device_t *dev = (eth_device_t *)data;
     uint8_t *ibuf = dev->interrupt.buf;
-    static uint8_t int_retries = 0;
     if (status)
     {
         log_usb_transfer_status(status);
-        // much like RX, we will retry a INT USB_CDC_MAX_RETRIES times
-        if (eth_xmit_fatal_error(dev, int_retries))
+        /* Per-device retry counter (not function-static). With multiple
+         * USB-ethernet adapters, a function-static would interleave
+         * across devices and trip a fatal threshold on the wrong one. */
+        if (eth_xmit_fatal_error(dev, dev->int_retries))
             return USB_ERROR_FAILED;
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
-                    ("int: endpoint failure, retry=%u", int_retries));
-        // increment TX retry counter and queue the transfer again
-        int_retries++;
+                    ("int: endpoint failure, retry=%u", dev->int_retries));
+        dev->int_retries++;
     }
     else if ((status == USB_TRANSFER_COMPLETED) && transferred)
     {
@@ -379,12 +418,17 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                         netif_set_link_down(&dev->iface);
                         if (netif_default == &dev->iface)
                         {
-                            /* Find another connected netif to promote as default */
+                            /* Promote only a candidate that is BOTH admin-up
+                             * (netif_is_up) AND link-up (netif_is_link_up).
+                             * Promoting an admin-down netif as default would
+                             * black-hole outbound traffic. */
                             struct netif *candidate = netif_list;
                             struct netif *new_default = NULL;
                             while (candidate)
                             {
-                                if (candidate != &dev->iface && netif_is_link_up(candidate))
+                                if (candidate != &dev->iface &&
+                                    netif_is_up(candidate) &&
+                                    netif_is_link_up(candidate))
                                 {
                                     new_default = candidate;
                                     break;
@@ -402,7 +446,7 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
             }
             bytes_parsed += sizeof(usb_control_setup_t) + notify->wLength;
         } while (bytes_parsed < transferred);
-        int_retries = 0;
+        dev->int_retries = 0;
     }
     usb_fn.schedule_transfer(dev->interrupt.endpoint, dev->interrupt.buf, INTERRUPT_RX_MAX, interrupt_receive_callback, data);
     return USB_SUCCESS;
@@ -419,28 +463,37 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
     struct eth_tx_ctx *ctx = (struct eth_tx_ctx *)data;
     eth_device_t *dev = ctx->dev;
     struct pbuf *tbuf = ctx->p;
-    static uint8_t tx_retries = 0;
     if (status)
     {
         log_usb_transfer_status(status);
-        // much like RX, we will retry a TX USB_CDC_MAX_RETRIES times
-        if (eth_xmit_fatal_error(dev, tx_retries))
+        if (eth_xmit_fatal_error(dev, dev->tx_retries))
         {
             pbuf_free(tbuf);
             free(ctx);
-            tx_retries = 0;  // Reset retry counter on fatal error
+            dev->tx_retries = 0;
             return USB_ERROR_FAILED;
         }
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
-                    ("tx: endpoint failure, retry=%u", tx_retries));
-        // increment TX retry counter and queue the transfer again
-        tx_retries++;
-        usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len, bulk_transmit_callback, ctx);
+                    ("tx: endpoint failure, retry=%u", dev->tx_retries));
+        dev->tx_retries++;
+        /* Same pbuf, same ctx — re-arm the OUT transfer. On schedule
+         * failure the ctx + pbuf would leak; we treat a hard schedule
+         * failure as another fatal endpoint failure so the per-device
+         * counter eventually exhausts and we tear down cleanly. */
+        if (usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload,
+                                     tbuf->tot_len, bulk_transmit_callback,
+                                     ctx) != USB_SUCCESS)
+        {
+            pbuf_free(tbuf);
+            free(ctx);
+            (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
+            return USB_ERROR_FAILED;
+        }
         return USB_SUCCESS;
     }
 
-    // Successful transmission - reset retry counter
-    tx_retries = 0;
+    /* Successful transmission - reset retry counter */
+    dev->tx_retries = 0;
 
     if (tbuf)
         pbuf_free(tbuf);
@@ -458,22 +511,31 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
 {
     eth_device_t *dev = (eth_device_t *)data;
     uint8_t *recvbuf = dev->rx.buf;
-    static uint8_t rx_retries = 0;
     dev->rx_transfer_active = false;
     if (status)
     {
         log_usb_transfer_status(status);
-        if (eth_xmit_fatal_error(dev, rx_retries))
+        if (eth_xmit_fatal_error(dev, dev->rx_retries))
             return USB_ERROR_FAILED;
 
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
-                    ("ecm_rx: endpoint failure, retry=%u", rx_retries));
-        rx_retries++;
+                    ("ecm_rx: endpoint failure, retry=%u", dev->rx_retries));
+        dev->rx_retries++;
+        /* Re-arm immediately on transient errors so the next packet
+         * doesn't wait for the dispatcher's RX-schedule slot to come
+         * around. The dispatcher remains the safety net if this
+         * synchronous re-arm fails. */
+        if (usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
+                                     ETHERNET_MTU, ecm_receive_callback,
+                                     dev) == USB_SUCCESS)
+        {
+            dev->rx_transfer_active = true;
+        }
         return USB_SUCCESS;
     }
     else if (transferred)
     {
-        rx_retries = 0;
+        dev->rx_retries = 0;
         eth_ring_push_frame(dev, recvbuf, (uint16_t)transferred);
         LINK_STATS_INC(link.recv);
         MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
@@ -622,23 +684,31 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
 {
     eth_device_t *dev = (eth_device_t *)data;
     uint8_t *recvbuf = dev->rx.buf;
-    static uint8_t rx_retries = 0;
     dev->rx_transfer_active = false;
     if (status)
     {
         log_usb_transfer_status(status);
-        if (eth_xmit_fatal_error(dev, rx_retries))
+        if (eth_xmit_fatal_error(dev, dev->rx_retries))
         {
             return USB_ERROR_FAILED;
         }
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
-                    ("ncm_rx: endpoint failure, retry=%u", rx_retries));
-        rx_retries++;
+                    ("ncm_rx: endpoint failure, retry=%u", dev->rx_retries));
+        dev->rx_retries++;
+        /* See ecm_receive_callback: synchronous re-arm beats waiting
+         * for the dispatcher to come around. */
+        if (usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
+                                     NCM_RX_NTB_MAX_SIZE,
+                                     ncm_receive_callback,
+                                     dev) == USB_SUCCESS)
+        {
+            dev->rx_transfer_active = true;
+        }
         return USB_SUCCESS;
     }
     if (transferred)
     {
-        rx_retries = 0;
+        dev->rx_retries = 0;
         bool parse_ntb = true;
 
         // get header and first NDP pointers
@@ -777,6 +847,40 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     return ERR_OK;
 }
 
+/* netif link callback: lwIP invokes this whenever netif_set_link_up /
+ * netif_set_link_down toggles. On the down edge we walk the stack's
+ * PCB lists and abort any that were bound to this netif so the
+ * application's err callbacks fire promptly. Connections that were
+ * unbound (using netif_default implicitly) are left alone — they'll
+ * fail their next operation on their own and may legitimately want to
+ * survive a default-netif switch. */
+static void eth_link_callback(struct netif *netif)
+{
+    if (!netif)
+    {
+        return;
+    }
+    if (!netif_is_link_up(netif))
+    {
+        lwip_teardown_abort_pcbs_on_netif(netif);
+    }
+}
+
+/* netif status callback: same idea, on the admin-down edge. Together
+ * with the link callback this gives apps a single point of truth for
+ * "the interface I was using just went away — abandon ship." */
+static void eth_status_callback(struct netif *netif)
+{
+    if (!netif)
+    {
+        return;
+    }
+    if (!netif_is_up(netif))
+    {
+        lwip_teardown_abort_pcbs_on_netif(netif);
+    }
+}
+
 ///----------------------------------------
 /// @brief ethernet NETIF initialization
 static err_t eth_netif_init(struct netif *netif)
@@ -791,8 +895,8 @@ static err_t eth_netif_init(struct netif *netif)
     MIB2_INIT_NETIF(netif, snmp_ifType_ethernet_csmacd, 100000000);
     memcpy(netif->hwaddr, dev->hwaddr, NETIF_MAX_HWADDR_LEN);
     netif->hwaddr_len = NETIF_MAX_HWADDR_LEN;
-    // netif_set_link_callback(netif, eth_link_callback);
-    // netif_set_status_callback(netif, eth_status_callback);
+    netif_set_link_callback(netif, eth_link_callback);
+    netif_set_status_callback(netif, eth_status_callback);
     return ERR_OK;
 }
 
@@ -1142,17 +1246,20 @@ init_success:
         mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
         mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
     }
-    if (!g_eth_rx_drain_scheduled)
+    /* Wire RX dispatchers into the master tick (idempotent — attach is
+     * safe to repeat across multiple device-init calls). The drain
+     * dispatcher runs every ETH_RX_DRAIN_INTERVAL_MS; the schedule
+     * dispatcher's period tracks memory pressure. */
+    lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_DRAIN, eth_rx_drain_dispatch);
+    lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_SCHEDULE, eth_rx_schedule_dispatch);
+    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_DRAIN,
+                             lwip_dispatch_period_from_ms(ETH_RX_DRAIN_INTERVAL_MS));
+    if (g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL)
     {
-        sys_timeout(g_eth_rx_drain_interval_ms, eth_rx_drain_timer, NULL);
-        g_eth_rx_drain_scheduled = true;
+        lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
+                                 lwip_dispatch_period_from_ms(eth_rx_schedule_interval_ms()));
     }
-    if (!g_eth_rx_sched_scheduled && g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL)
-    {
-        g_eth_rx_sched_interval_ms = eth_rx_schedule_interval_ms();
-        sys_timeout(g_eth_rx_sched_interval_ms, eth_rx_schedule_timer, NULL);
-        g_eth_rx_sched_scheduled = true;
-    }
+    lwip_dispatch_start();
 
     netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
     // enqueue callbacks for receiving interrupt and RX transfers from this device.
@@ -1218,12 +1325,19 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
                 usb_fn.set_endpoint_halt(eth_device->interrupt.endpoint);
             }
         }
-        if (eth_disabled_with_error && ETH_DO_RESTART_ON_ERROR)
+        /* If THIS device was the one that tripped the fatal-retry path,
+         * try to reset it back online. Other devices that just happen
+         * to disconnect at the same time keep their normal teardown
+         * path. */
+        if (eth_device && eth_device->disabled_with_error && ETH_DO_RESTART_ON_ERROR)
         {
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
                         ("device ptr=%p: disabled with error, resetting!", usb_device));
+            eth_device->disabled_with_error = false;
+            eth_device->rx_retries = 0;
+            eth_device->tx_retries = 0;
+            eth_device->int_retries = 0;
             usb_fn.reset_device(usb_device);
-            eth_disabled_with_error = false;
             break;
         }
         if (eth_device)

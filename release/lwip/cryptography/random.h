@@ -5,9 +5,11 @@
  * @author Adam Beckingham
  * @author Codex 5.5 (DRBG async call-path assistance)
  * @brief Module providing a TRNG for use with TLS and other secure applications.
- * @reference: NIST SP 800-90B
- * @reference: NIST SP 800-90A
- * @reference: RFC 4086
+ *
+ * @par References
+ * - NIST SP 800-90B
+ * - NIST SP 800-90A
+ * - RFC 4086
  *
  * @warning Use this module for all applications requiring cryptographic
  * randomness. The toolchain @b rand() functions are not suitable for

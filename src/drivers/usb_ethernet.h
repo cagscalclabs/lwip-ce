@@ -146,6 +146,14 @@ typedef struct _eth_device_t
     uint8_t type;
     uint8_t hwaddr[6];
     bool rx_transfer_active;
+    /* Per-device retry counters and "fatal" flag. Previously these were
+     * function-static globals, which interleaved across multiple devices
+     * and could trip device A's fatal threshold from device B's
+     * transient errors. */
+    uint8_t rx_retries;
+    uint8_t tx_retries;
+    uint8_t int_retries;
+    bool disabled_with_error;
     struct mem_buffer *rx_ring;
     struct
     {
@@ -177,6 +185,13 @@ extern eth_device_t eth;
 usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_callback_data_t *callback_data);
 void eth_set_rx_throttle(enum mem_pressure_level level);
 void eth_set_rx_drain_interval_ms(uint32_t interval_ms);
+
+/** @brief Halt every USB endpoint backing every active ethernet netif.
+ *  Used during stack shutdown to quiesce the device-side transport
+ *  before lwIP tears down its PCBs. After this call the USB driver
+ *  will reject further schedule_transfer requests for these
+ *  endpoints, ensuring no in-flight frames arrive mid-teardown. */
+void eth_halt_all_endpoints(void);
 
 
 struct usb_configurator {
@@ -224,6 +239,7 @@ struct usb_configurator {
                         const usb_standard_descriptors_t *device_descriptors,
                         usb_init_flags_t flags);
     usb_error_t (*handle_events)(void);
+    void (*cleanup)(void);
 };
 
 #ifdef LWIP_LIBLOAD_BUILD

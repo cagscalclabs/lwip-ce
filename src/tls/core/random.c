@@ -4,6 +4,7 @@
 #include <string.h>
 #include "lwip/opt.h"
 #include "lwip/timeouts.h"
+#include "lwip/dispatch.h"
 #include "../includes/random.h"
 #include "../includes/hash.h"
 #include "../../drivers/mem.h"
@@ -410,14 +411,18 @@ static bool tls_rng_healthcheck_run_once(void)
 }
 
 #if LWIP_TIMERS
-static void tls_rng_request_timer(void *arg)
+/* Dispatcher entry: drive the RNG entropy pump. The dispatcher is
+ * self-throttling — when there's no request in flight AND the DRBG is
+ * seeded with full entropy, we set our period to 0 (disable) so we
+ * don't waste cycles. tls_request_random_bytes() re-arms us when a new
+ * request comes in. */
+static void tls_rng_request_dispatch(void)
 {
     bool done = false;
     bool gather_ok;
     tls_random_request_cb_t cb;
     void *cb_arg;
 
-    (void)arg;
     if (g_tls_rng_request_active)
     {
         done = tls_rng_request_try_complete();
@@ -445,27 +450,40 @@ static void tls_rng_request_timer(void *arg)
 
     if ((g_tls_rng_request_active) || (g_tls_rng_request_q_head != NULL) || (!g_tls_drbg_seeded) || (g_tls_drbg_entropy_budget < TLS_DRBG_ENTROPY_BUDGET_MAX))
     {
-        sys_timeout(TLS_RNG_REQUEST_INTERVAL_MS, tls_rng_request_timer, NULL);
+        /* Stay armed at the request cadence — there's still work. */
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
+                                 lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
         g_tls_rng_entropy_timer_running = true;
     }
     else
     {
+        /* Idle: disable until the next request brings us back online. */
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST, 0);
         g_tls_rng_entropy_timer_running = false;
     }
 }
 
-static void tls_rng_healthcheck_timer(void *arg)
+static void tls_rng_healthcheck_dispatch(void)
 {
-    (void)arg;
-
     if (!g_tls_rng_health_timer_running)
     {
         return;
     }
-
     (void)tls_rng_healthcheck_run_once();
+}
 
-    sys_timeout(TLS_RNG_HEALTHCHECK_INTERVAL_MS, tls_rng_healthcheck_timer, NULL);
+/* Attach the RNG dispatchers exactly once. Repeat starts/stops only
+ * toggle periods. */
+static void tls_rng_ensure_attached(void)
+{
+    static bool attached = false;
+    if (attached)
+    {
+        return;
+    }
+    lwip_dispatch_attach(LWIP_DISPATCH_TLS_RNG_REQUEST, tls_rng_request_dispatch);
+    lwip_dispatch_attach(LWIP_DISPATCH_TLS_RNG_HEALTHCHECK, tls_rng_healthcheck_dispatch);
+    attached = true;
 }
 
 static void tls_rng_healthcheck_start(void)
@@ -484,12 +502,17 @@ static void tls_rng_healthcheck_start(void)
     memset(g_tls_drbg_state, 0, sizeof(g_tls_drbg_state));
     memset(g_tls_drbg_seed_material, 0, sizeof(g_tls_drbg_seed_material));
     g_tls_rng_health_timer_running = true;
+
+    tls_rng_ensure_attached();
+    lwip_dispatch_start();
     if (!g_tls_rng_entropy_timer_running)
     {
         g_tls_rng_entropy_timer_running = true;
-        sys_timeout(TLS_RNG_REQUEST_INTERVAL_MS, tls_rng_request_timer, NULL);
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
+                                 lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
     }
-    sys_timeout(TLS_RNG_HEALTHCHECK_INTERVAL_MS, tls_rng_healthcheck_timer, NULL);
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_HEALTHCHECK,
+                             lwip_dispatch_period_from_ms(TLS_RNG_HEALTHCHECK_INTERVAL_MS));
 }
 
 static void tls_rng_healthcheck_stop(void)
@@ -509,8 +532,8 @@ static void tls_rng_healthcheck_stop(void)
     g_tls_drbg_counter = 1;
     memset(g_tls_drbg_state, 0, sizeof(g_tls_drbg_state));
     memset(g_tls_drbg_seed_material, 0, sizeof(g_tls_drbg_seed_material));
-    sys_untimeout(tls_rng_healthcheck_timer, NULL);
-    sys_untimeout(tls_rng_request_timer, NULL);
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_HEALTHCHECK, 0);
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST, 0);
 }
 #endif
 
@@ -593,7 +616,10 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
     if (!g_tls_rng_entropy_timer_running)
     {
         g_tls_rng_entropy_timer_running = true;
-        sys_timeout(TLS_RNG_REQUEST_INTERVAL_MS, tls_rng_request_timer, NULL);
+        tls_rng_ensure_attached();
+        lwip_dispatch_start();
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
+                                 lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
     }
     return true;
 #else

@@ -11,6 +11,7 @@ on:
     paths:
       - '.github/workflows/timing.yml'
       - 'src/tls/**'
+      - 'tests/common/scripts/parse_timing_appvar.py'
       - 'tests/profiling/tls_timing/**'
   workflow_dispatch:
 

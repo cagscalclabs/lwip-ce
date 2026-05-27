@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include <fileioc.h>
@@ -6,7 +7,107 @@
 #include "lwip/logging.h"
 
 static uint8_t g_log_enabled_mask = 0;
+static uint8_t g_log_min_level = LWIP_LOG_LEVEL_ERROR;
 static uint16_t g_log_max_bytes = 4096u;
+static lwip_log_fatal_handler_t g_log_fatal_handler = NULL;
+static bool g_log_in_fatal = false;
+
+static const struct lwip_log_descriptor g_log_descriptors[] = {
+    {
+        LWIP_LOG_LEVEL_WARN,
+        LWIP_LOG_TYPE_USB,
+        LWIP_LOG_USB_ENDPOINT_STALL,
+        "W",
+        "USB",
+        "STALL",
+    },
+    {
+        LWIP_LOG_LEVEL_ERROR,
+        LWIP_LOG_TYPE_USB,
+        LWIP_LOG_USB_ENDPOINT_NO_DEVICE,
+        "E",
+        "USB",
+        "UNPLUG",
+    },
+    {
+        LWIP_LOG_LEVEL_ERROR,
+        LWIP_LOG_TYPE_USB,
+        LWIP_LOG_USB_ENDPOINT_ERROR,
+        "E",
+        "USB",
+        "EPERR",
+    },
+    {
+        LWIP_LOG_LEVEL_FATAL,
+        LWIP_LOG_TYPE_USB,
+        LWIP_LOG_USB_FATAL_RETRY,
+        "F",
+        "USB",
+        "RETRY",
+    },
+    {
+        LWIP_LOG_LEVEL_FATAL,
+        LWIP_LOG_TYPE_TLS,
+        LWIP_LOG_TLS_FATAL_ALERT,
+        "F",
+        "TLS",
+        "ALERT",
+    },
+    {
+        LWIP_LOG_LEVEL_ERROR,
+        LWIP_LOG_TYPE_TLS,
+        LWIP_LOG_TLS_TRUSTSTORE_FAIL,
+        "E",
+        "TLS",
+        "TSTORE",
+    },
+    {
+        LWIP_LOG_LEVEL_ERROR,
+        LWIP_LOG_TYPE_TLS,
+        LWIP_LOG_TLS_CERTVERIFY_FAIL,
+        "E",
+        "TLS",
+        "CVFY",
+    },
+    {
+        LWIP_LOG_LEVEL_FATAL,
+        LWIP_LOG_TYPE_LWIP,
+        LWIP_LOG_LWIP_ASSERT,
+        "F",
+        "LWIP",
+        "ASSERT",
+    },
+    {
+        LWIP_LOG_LEVEL_ERROR,
+        LWIP_LOG_TYPE_LWIP,
+        LWIP_LOG_LWIP_ERROR,
+        "E",
+        "LWIP",
+        "ERROR",
+    },
+};
+
+static const struct lwip_log_descriptor g_unknown_log_descriptor = {
+    LWIP_LOG_LEVEL_ERROR,
+    0u,
+    0u,
+    "E",
+    "UNK",
+    "UNKNOWN",
+};
+
+const struct lwip_log_descriptor *lwip_log_describe(uint8_t type, uint8_t reason)
+{
+    for (uint8_t i = 0; i < (uint8_t)(sizeof(g_log_descriptors) / sizeof(g_log_descriptors[0])); i++)
+    {
+        if (g_log_descriptors[i].type == type &&
+            g_log_descriptors[i].reason == reason)
+        {
+            return &g_log_descriptors[i];
+        }
+    }
+    return &g_unknown_log_descriptor;
+}
 
 static uint16_t lwip_log_calc_max_entries(uint16_t max_bytes)
 {
@@ -47,9 +148,23 @@ static bool lwip_log_write_header(uint8_t handle, const struct lwip_log_header *
     return true;
 }
 
-void lwip_log_set_enabled(uint8_t module_mask)
+void lwip_log_set_enabled(uint8_t type_mask)
 {
-    g_log_enabled_mask = module_mask;
+    g_log_enabled_mask = type_mask;
+}
+
+void lwip_log_set_min_level(uint8_t min_level)
+{
+    if (min_level < LWIP_LOG_LEVEL_INFO || min_level > LWIP_LOG_LEVEL_FATAL)
+    {
+        min_level = LWIP_LOG_LEVEL_ERROR;
+    }
+    g_log_min_level = min_level;
+}
+
+void lwip_log_set_fatal_handler(lwip_log_fatal_handler_t handler)
+{
+    g_log_fatal_handler = handler;
 }
 
 void lwip_log_set_max_bytes(uint16_t max_bytes)
@@ -57,9 +172,15 @@ void lwip_log_set_max_bytes(uint16_t max_bytes)
     g_log_max_bytes = max_bytes;
 }
 
-void lwip_log_event(uint8_t module, uint8_t code)
+static void lwip_log_write_event(uint8_t type, uint8_t reason, uint16_t line, bool force)
 {
-    if ((g_log_enabled_mask & module) == 0)
+    const struct lwip_log_descriptor *desc = lwip_log_describe(type, reason);
+
+    if (!force && (g_log_enabled_mask & type) == 0)
+    {
+        return;
+    }
+    if (!force && desc->level < g_log_min_level)
     {
         return;
     }
@@ -121,7 +242,7 @@ void lwip_log_event(uint8_t module, uint8_t code)
 
     uint8_t day = 0;
     uint8_t month = 0;
-    uint8_t year = 0;
+    uint16_t year = 0;
     uint8_t hour = 0;
     uint8_t minute = 0;
     uint8_t second = 0;
@@ -130,14 +251,16 @@ void lwip_log_event(uint8_t module, uint8_t code)
     boot_GetTime(&second, &minute, &hour);
 
     struct lwip_log_entry entry;
-    entry.year = year;
+    entry.year = (uint8_t)(year % 100u);
     entry.month = month;
     entry.day = day;
     entry.hour = hour;
     entry.minute = minute;
     entry.second = second;
-    entry.module = module;
-    entry.code = code;
+    entry.level = desc->level;
+    entry.type = type;
+    entry.reason = reason;
+    entry.line = line;
 
     uint16_t entry_offset = (uint16_t)sizeof(struct lwip_log_header) +
                             (uint16_t)(header.write_index * sizeof(struct lwip_log_entry));
@@ -156,6 +279,36 @@ void lwip_log_event(uint8_t module, uint8_t code)
 
     lwip_log_write_header(handle, &header);
     ti_Close(handle);
+}
+
+void lwip_log_event(uint8_t type, uint8_t reason)
+{
+    lwip_log_write_event(type, reason, 0u, false);
+}
+
+void lwip_log_event_at(uint8_t type, uint8_t reason, uint16_t line)
+{
+    lwip_log_write_event(type, reason, line, false);
+}
+
+void lwip_log_fatal(uint8_t type, uint8_t reason)
+{
+    lwip_log_fatal_at(type, reason, 0u);
+}
+
+void lwip_log_fatal_at(uint8_t type, uint8_t reason, uint16_t line)
+{
+    if (g_log_in_fatal)
+    {
+        exit(1);
+    }
+    g_log_in_fatal = true;
+    lwip_log_write_event(type, reason, line, true);
+    if (g_log_fatal_handler)
+    {
+        g_log_fatal_handler(type, reason);
+    }
+    exit(1);
 }
 
 bool lwip_log_read_header(struct lwip_log_header *out_header)

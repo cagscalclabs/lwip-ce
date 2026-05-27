@@ -25,13 +25,13 @@ With 1 MiB total bytes, each bit-column has 1,048,576 samples.
 
 Default layout:
 
-- input scan dir: `tests/tls_rng_entropy/tools/dumps/appvars`
-- report dir: `tests/tls_rng_entropy/tools/reports`
+- input scan dir: `tests/profiling/tls_rng_entropy/captures`
+- report dir: `tests/profiling/tls_rng_entropy/reports`
 
 Use:
 
 ```bash
-python3 tests/tls_rng_entropy/tools/analyze_entropy_bits.py
+python3 tests/common/scripts/analyze_entropy_bits.py
 ```
 
 The script will:
@@ -45,24 +45,24 @@ The script will:
 
 Outputs by default:
 
-- `tests/tls_rng_entropy/tools/reports/rng_capture_R0.bin`
-- `tests/tls_rng_entropy/tools/reports/rng_capture_R4.bin`
-- `tests/tls_rng_entropy/tools/reports/rng_capture_R8.bin`
-- `tests/tls_rng_entropy/tools/reports/entropy_bit_report_R0.json`
-- `tests/tls_rng_entropy/tools/reports/entropy_bit_report_R4.json`
-- `tests/tls_rng_entropy/tools/reports/entropy_bit_report_R8.json`
-- `tests/tls_rng_entropy/tools/reports/entropy_group_summary.json`
-- `tests/tls_rng_entropy/tools/reports/entropy_group_summary.csv`
+- `tests/profiling/tls_rng_entropy/reports/rng_capture_R0.bin`
+- `tests/profiling/tls_rng_entropy/reports/rng_capture_R4.bin`
+- `tests/profiling/tls_rng_entropy/reports/rng_capture_R8.bin`
+- `tests/profiling/tls_rng_entropy/reports/entropy_bit_report_R0.json`
+- `tests/profiling/tls_rng_entropy/reports/entropy_bit_report_R4.json`
+- `tests/profiling/tls_rng_entropy/reports/entropy_bit_report_R8.json`
+- `tests/profiling/tls_rng_entropy/reports/entropy_group_summary.json`
+- `tests/profiling/tls_rng_entropy/reports/entropy_group_summary.csv`
 
 ## Mode-to-mode comparison
 
 After generating three reports, compare them side-by-side:
 
 ```bash
-python3 tests/tls_rng_entropy/tools/compare_modes.py \
-  tests/tls_rng_entropy/tools/reports/entropy_bit_report_R0.json \
-  tests/tls_rng_entropy/tools/reports/entropy_bit_report_R4.json \
-  tests/tls_rng_entropy/tools/reports/entropy_bit_report_R8.json
+python3 tests/common/scripts/compare_entropy_modes.py \
+  tests/profiling/tls_rng_entropy/reports/entropy_bit_report_R0.json \
+  tests/profiling/tls_rng_entropy/reports/entropy_bit_report_R4.json \
+  tests/profiling/tls_rng_entropy/reports/entropy_bit_report_R8.json
 ```
 
 ## Notes

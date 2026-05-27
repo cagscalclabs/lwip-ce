@@ -357,9 +357,7 @@ lwip_init(struct lwip_configurator *conf)
      * the device actually has available right now. */
     {
         const lwip_app_config_t *cfg = lwip_app_config_get();
-        size_t floor = (cfg->flags & LWIP_CFG_ENABLE_TLS)
-                       ? LWIP_TLS_FLOOR_BYTES
-                       : LWIP_BASE_FLOOR_BYTES;
+        size_t floor = LWIP_TLS_FLOOR_BYTES;
         size_t cap = cfg->lwip_mem_cap;
         if (cap < floor) cap = floor;
         void *free_block = NULL;

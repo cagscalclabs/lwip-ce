@@ -5,8 +5,7 @@
 
 #include "ti/getkey.h"
 #include "lwip/sntp_time.h"
-#define LWIP_DEBUG 0
-#define LWIP_NOASSERT 1
+/* Keep LWIP_DEBUG undefined so LWIP_DEBUGF call sites compile away. */
 
 #define LWIP_IPV4 1
 #define LWIP_IPV6 1
