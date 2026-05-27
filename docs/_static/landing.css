@@ -161,6 +161,33 @@
   width: 100%;
 }
 
+/* The RTD theme defaults are a little too optimistic for long links, paths,
+ * and C identifiers. Let docs tables wrap instead of forcing page overflow. */
+.wy-table-responsive {
+  overflow-x: auto;
+}
+
+.rst-content table.docutils,
+.rst-content table.docutils th,
+.rst-content table.docutils td,
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.rst-content table.docutils {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.rst-content table.docutils code,
+.rst-content table.docutils .pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 860px) {
   .lwip-hero,
   .lwip-grid,

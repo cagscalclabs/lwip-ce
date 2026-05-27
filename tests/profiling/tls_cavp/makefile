@@ -7,10 +7,10 @@ include ../../common/makefile
 # Add -I path so the assembler can find virtuals.inc et al.
 ASFLAGS += $(TLS_ASM_INCLUDES)
 
-NAME = ACVPTEST
+NAME = CAVPTEST
 ICON = icon.png
 ARCHIVED = NO
-DESCRIPTION = "NIST ACVP-format primitive validation"
+DESCRIPTION = "NIST CAVP-format primitive validation"
 COMPRESSED = NO
 
 CFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC) -I$(X25519_DIR)

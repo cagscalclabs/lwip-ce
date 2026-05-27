@@ -1,19 +1,19 @@
-name: ACVP Primitive Validation
+name: CAVP Primitive Validation
 
 # Runs NIST CAVP test vectors against the shipping cryptographic primitives
 # on every push to `tls` that touches the relevant code, plus on manual
 # dispatch. tools/cavp_fetch.py downloads NIST CAVP archives, samples 16
 # vectors per primitive at random (per run), adds generated RSA-PSS/X25519
-# coverage plus RFC-pinned HKDF/X25519 vectors, and emits ACVPIN.8xv +
+# coverage plus RFC-pinned HKDF/X25519 vectors, and emits CAVPIN.8xv +
 # expected.json for the test run.
 
 on:
   push:
     branches: ['tls']
     paths:
-      - '.github/workflows/acvp.yml'
+      - '.github/workflows/cavp.yml'
       - 'src/tls/**'
-      - 'tests/profiling/tls_acvp/**'
+      - 'tests/profiling/tls_cavp/**'
   workflow_dispatch:
 
 env:
@@ -23,11 +23,11 @@ env:
   CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
   SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
-  ACVP_TEST_DIR: ${{github.workspace}}/tests/profiling/tls_acvp
+  CAVP_TEST_DIR: ${{github.workspace}}/tests/profiling/tls_cavp
   CAVP_FETCH_SAMPLE: 16
 
 jobs:
-  acvp:
+  cavp:
     runs-on: ubuntu-latest
     environment: test
 
@@ -114,7 +114,7 @@ jobs:
 
       - name: Verify saveVar Support In Autotester
         run: |
-          # saveVar is required to pull ACVPOUT.8xv off the emulator after the run
+          # saveVar is required to pull CAVPOUT.8xv off the emulator after the run
           strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar" || {
             echo "ERROR: Installed autotester does not include saveVar support."
             exit 1
@@ -127,11 +127,11 @@ jobs:
 
       - name: Download CE Libraries Group (clibs.8xg)
         run: |
-          mkdir -p "${{env.ACVP_TEST_DIR}}"
+          mkdir -p "${{env.CAVP_TEST_DIR}}"
           curl -fL \
-            -o "${{env.ACVP_TEST_DIR}}/clibs.8xg" \
+            -o "${{env.CAVP_TEST_DIR}}/clibs.8xg" \
             https://github.com/CE-Programming/libraries/releases/download/v14.2/clibs.8xg
-          ls -lh "${{env.ACVP_TEST_DIR}}/clibs.8xg"
+          ls -lh "${{env.CAVP_TEST_DIR}}/clibs.8xg"
 
       - name: Cache CAVP vector archives
         # NIST CAVP zips are bandwidth-friendly to cache (a few MB each) and
@@ -139,27 +139,27 @@ jobs:
         # actual vectors are re-sampled randomly inside cavp_fetch.py.
         uses: actions/cache@v5
         with:
-          path: ${{env.ACVP_TEST_DIR}}/vectors/cache
+          path: ${{env.CAVP_TEST_DIR}}/vectors/cache
           key: ${{ runner.os }}-cavp-archives-v1
           restore-keys: |
             ${{ runner.os }}-cavp-archives-
 
-      - name: Fetch CAVP vectors and pack ACVPIN.8xv
+      - name: Fetch CAVP vectors and pack CAVPIN.8xv
         # cavp_fetch.py: downloads NIST CAVP zips (if not cached), parses
         # the .rsp files, randomly samples vectors per algorithm, merges in
         # generated RSA-PSS/X25519 coverage plus RFC-pinned HKDF/X25519
-        # vectors, packs ACVPIN.8xv for the calc, and writes expected.json
+        # vectors, packs CAVPIN.8xv for the calc, and writes expected.json
         # for the grader. All in one shot.
         run: |
-          python3 "${{env.ACVP_TEST_DIR}}/tools/cavp_fetch.py"
-          ls -lh "${{env.ACVP_TEST_DIR}}/vectors/ACVPIN.8xv" \
-                 "${{env.ACVP_TEST_DIR}}/vectors/expected.json"
+          python3 "${{env.CAVP_TEST_DIR}}/tools/cavp_fetch.py"
+          ls -lh "${{env.CAVP_TEST_DIR}}/vectors/CAVPIN.8xv" \
+                 "${{env.CAVP_TEST_DIR}}/vectors/expected.json"
 
-      - name: Run ACVP Test
-        id: run_acvp
+      - name: Run CAVP Test
+        id: run_cavp
         run: |
-          test_dir="${{env.ACVP_TEST_DIR}}"
-          rm -f "$test_dir/ACVPOUT.8xv" "$test_dir/ACVPRSA.8xv" "$test_dir/autotest.log"
+          test_dir="${{env.CAVP_TEST_DIR}}"
+          rm -f "$test_dir/CAVPOUT.8xv" "$test_dir/CAVPRSA.8xv" "$test_dir/autotest.log"
           test_start=$(($(date +%s%N)/1000000))
           make -C "$test_dir" clean
           make -C "$test_dir"
@@ -173,17 +173,17 @@ jobs:
           echo "autotester_status=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
 
-      - name: Locate ACVPOUT AppVar
+      - name: Locate CAVPOUT AppVar
         id: locate_appvar
         if: always()
         run: |
-          test_dir="${{env.ACVP_TEST_DIR}}"
-          appvar_out="$test_dir/ACVPOUT.8xv"
+          test_dir="${{env.CAVP_TEST_DIR}}"
+          appvar_out="$test_dir/CAVPOUT.8xv"
           if [ ! -s "$appvar_out" ]; then
             echo "found=" >> "$GITHUB_OUTPUT"
-            echo "## ACVP Primitive Validation" >> $GITHUB_STEP_SUMMARY
+            echo "## CAVP Primitive Validation" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **ACVPOUT.8xv was not produced.** The calc-side runner either crashed or saveVar didn't trigger." >> $GITHUB_STEP_SUMMARY
+            echo "❌ **CAVPOUT.8xv was not produced.** The calc-side runner either crashed or saveVar didn't trigger." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Autotester log tail:" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
@@ -197,12 +197,12 @@ jobs:
       - name: Grade Responses
         id: grade
         if: success() && steps.locate_appvar.outputs.found != ''
-        # parse_output_appvar.py reads ACVPOUT.8xv + vectors JSON from
+        # parse_output_appvar.py reads CAVPOUT.8xv + vectors JSON from
         # hardcoded paths relative to itself. Only output paths are flagged.
         run: |
-          test_dir="${{env.ACVP_TEST_DIR}}"
-          summary_md="${{github.workspace}}/acvp-summary.md"
-          results_json="${{github.workspace}}/acvp-results.json"
+          test_dir="${{env.CAVP_TEST_DIR}}"
+          summary_md="${{github.workspace}}/cavp-summary.md"
+          results_json="${{github.workspace}}/cavp-results.json"
           set +e
           python3 "$test_dir/tools/parse_output_appvar.py" \
             --markdown-out "$summary_md" \
@@ -213,18 +213,18 @@ jobs:
           cat "$summary_md" >> $GITHUB_STEP_SUMMARY
           exit $grade_status
 
-      - name: Upload ACVP Raw Artifacts
+      - name: Upload CAVP Raw Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tls-acvp-raw
+          name: tls-cavp-raw
           path: |
-            ${{env.ACVP_TEST_DIR}}/ACVPOUT.8xv
-            ${{env.ACVP_TEST_DIR}}/vectors/ACVPIN.8xv
-            ${{env.ACVP_TEST_DIR}}/vectors/expected.json
-            ${{env.ACVP_TEST_DIR}}/autotest.log
-            ${{github.workspace}}/acvp-summary.md
-            ${{github.workspace}}/acvp-results.json
+            ${{env.CAVP_TEST_DIR}}/CAVPOUT.8xv
+            ${{env.CAVP_TEST_DIR}}/vectors/CAVPIN.8xv
+            ${{env.CAVP_TEST_DIR}}/vectors/expected.json
+            ${{env.CAVP_TEST_DIR}}/autotest.log
+            ${{github.workspace}}/cavp-summary.md
+            ${{github.workspace}}/cavp-results.json
           if-no-files-found: warn
 
       - name: Remove CEmu Rom

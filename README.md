@@ -4,7 +4,7 @@ CI App building is currently failing due to an ongoing refactor/migration into t
 
 ![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=tls&cache=1)
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=tls&cache=1)
-![ACVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/acvp.yml/badge.svg?branch=tls&cache=1)
+![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=tls&cache=1)
 ![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?cache=1)
 
 

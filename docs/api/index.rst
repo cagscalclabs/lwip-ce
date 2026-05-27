@@ -1,5 +1,5 @@
-Available CE API
-================
+Usable API
+==========
 
 lwIP-CE is forked from lwIP, but it is not a full desktop-style lwIP port. A lot
 of upstream surface area is either removed or intentionally not exposed because
@@ -24,8 +24,7 @@ The headers below are the curated API that exists for this implementation.
      - Algorithmically-secure primitives that can be used outside the network
        stack.
 
-For stack usage, start with :doc:`../getting-started`. For the app-facing
-connection wrapper, see :doc:`../connection-api`.
+For stack usage and a full connection stub, start with :doc:`../getting-started`.
 
 .. toctree::
    :hidden:

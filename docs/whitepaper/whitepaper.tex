@@ -1186,18 +1186,18 @@ Before beginning this project we needed to itemize what was available and what w
 
 	Latest timing-profiler workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml}.
 
-	\subsubsection{ACVP Validation}
+	\subsubsection{CAVP Validation}
 
 	Formal cryptographic certification depends not only on algorithm behavior, but also on implementation context, build process, operating environment, and hardware security properties. Because this stack runs as calculator application code on hardware without a secure execution environment or certified key-storage boundary, it is not presented as a formally certified cryptographic module.
 
 	
-	Instead, the project demonstrates algorithmic correctness against NIST CAVP-published response files and compatible generated reference vectors. The ACVP workflow downloads the relevant NIST \texttt{.rsp} vector archives for supported primitives and selects 16 random samples per primitive on each run. For primitives without compatible CAVP response files, vectors are generated during the workflow with \texttt{python3-cryptography} using the relevant RFC-defined algorithm parameters. If NIST resources are unavailable, the workflow uses the cached CAVP archives from a previous successful run; if neither the source archive nor cache is available, validation fails closed.
+	Instead, the project demonstrates algorithmic correctness against NIST CAVP-published response files and compatible generated reference vectors. The CAVP workflow downloads the relevant NIST \texttt{.rsp} vector archives for supported primitives and selects 16 random samples per primitive on each run. For primitives without compatible CAVP response files, vectors are generated during the workflow with \texttt{python3-cryptography} using the relevant RFC-defined algorithm parameters. If NIST resources are unavailable, the workflow uses the cached CAVP archives from a previous successful run; if neither the source archive nor cache is available, validation fails closed.
 
-	The selected samples are packaged into the \texttt{ACVPIN} AppVar and transferred to the emulator, where the calculator-side runner dispatches each vector to the corresponding implementation. Results are written into \texttt{ACVPOUT}, transferred back to the runner, and parsed against the expected outputs produced from the NIST or \texttt{python3-cryptography} reference material. This provides randomized regression coverage and evidence of ACVP-style algorithmic correctness, without representing a formal ACVP protocol session or certification.
+	The selected samples are packaged into the \texttt{CAVPIN} AppVar and transferred to the emulator, where the calculator-side runner dispatches each vector to the corresponding implementation. Results are written into \texttt{CAVPOUT}, transferred back to the runner, and parsed against the expected outputs produced from the NIST or \texttt{python3-cryptography} reference material. This provides randomized regression coverage and evidence from CAVP-derived vector checks, without representing a formal CAVP submission or certification.
 
 	\paragraph{Exclusions}: RSA-PSS vectors are generated with \texttt{python3-cryptography} because this implementation fixes $e=65537$, while the available NIST PSS response files do not provide a compatible fixed-exponent set. X25519 vectors are also generated with \texttt{python3-cryptography}, supplemented by RFC 7748 vectors, because CAVP does not publish X25519 coverage for this use case.
 
-	Latest ACVP-validation workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/acvp.yml}.
+	Latest CAVP-validation workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml}.
 	
 \begin{center}
 \rule{0.7\linewidth}{0.2pt}

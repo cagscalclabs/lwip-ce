@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Parse ACVPOUT.8xv (calc-side responses) and grade against expected outputs.
+"""Parse CAVPOUT.8xv (calc-side responses) and grade against expected outputs.
 
-Three places must agree on the AppVar name "ACVPOUT": this script,
-autotest.json's saveVar sequence entry, and src/main.c's ACVPOUT_NAME.
+Three places must agree on the AppVar name "CAVPOUT": this script,
+autotest.json's saveVar sequence entry, and src/main.c's CAVPOUT_NAME.
 
 Reads (hardcoded paths):
-  - ../ACVPOUT.8xv          : binary AppVar produced by the calc-side runner
+  - ../CAVPOUT.8xv          : binary AppVar produced by the calc-side runner
   - ../vectors/expected.json : per-run grading source produced by cavp_fetch.py
 
 Emits:
@@ -34,12 +34,12 @@ from typing import Any
 
 # ---- Hardcoded paths ----
 # Three places must agree on these names. The calc-side runner (src/main.c)
-# writes ACVPOUT; cavp_fetch.py writes expected.json. Both are inputs here.
+# writes CAVPOUT; cavp_fetch.py writes expected.json. Both are inputs here.
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEST_DIR = SCRIPT_DIR.parent
-INPUT_APPVAR = TEST_DIR / "ACVPOUT.8xv"
+INPUT_APPVAR = TEST_DIR / "CAVPOUT.8xv"
 EXPECTED_JSON = TEST_DIR / "vectors" / "expected.json"
-APPVAR_NAME = "ACVPOUT"
+APPVAR_NAME = "CAVPOUT"
 
 # Must match src/main.c
 ALG_NAMES = {
@@ -91,7 +91,7 @@ def strip_appvar_wrapper(appvar: bytes) -> bytes:
 
 
 def parse_responses(body: bytes) -> tuple[list[dict[str, Any]], list[str]]:
-    """Parse the ACVPOUT body into a list of {test_id, status, result_bytes}."""
+    """Parse the CAVPOUT body into a list of {test_id, status, result_bytes}."""
     warnings: list[str] = []
     if len(body) < 6:
         raise ValueError(f"response body too short: {len(body)} bytes")
@@ -316,16 +316,16 @@ def main() -> int:
     }
 
     if not vectors_by_id:
-        print("ERROR: expected.json contains no ACVP vectors", file=sys.stderr)
+        print("ERROR: expected.json contains no CAVP vectors", file=sys.stderr)
         return 1
     if not expected_gradeable:
-        print("ERROR: expected.json contains no gradeable ACVP vectors", file=sys.stderr)
+        print("ERROR: expected.json contains no gradeable CAVP vectors", file=sys.stderr)
         return 1
 
     body = strip_appvar_wrapper(appvar_bytes)
     responses, warnings = parse_responses(body)
     if not responses:
-        warnings.append("ACVPOUT contained zero responses")
+        warnings.append("CAVPOUT contained zero responses")
 
     # Grade each response
     rows: list[dict[str, Any]] = []
@@ -395,16 +395,16 @@ def main() -> int:
 
     # Build markdown
     md_lines: list[str] = []
-    md_lines.append("## ACVP Primitive Validation")
+    md_lines.append("## CAVP Primitive Validation")
     md_lines.append("")
-    md_lines.append("This workflow is not a formal NIST ACVP protocol session and does not")
-    md_lines.append("claim CAVP/ACVP certification. Instead, it performs a local")
-    md_lines.append("implementation check against externally defined expected outputs.")
+    md_lines.append("This workflow is not a formal NIST CAVP submission and does not")
+    md_lines.append("claim CAVP certification. Instead, it performs a local implementation")
+    md_lines.append("check against externally defined expected outputs.")
     md_lines.append("")
     md_lines.append("For CAVP-covered primitives, the workflow downloads the published NIST")
     md_lines.append("`.rsp` vector archives, randomly selects the configured sample count")
-    md_lines.append("from each primitive, packs those inputs into `ACVPIN.8xv`, runs the")
-    md_lines.append("calculator implementation in CEmu, and validates `ACVPOUT.8xv` against")
+    md_lines.append("from each primitive, packs those inputs into `CAVPIN.8xv`, runs the")
+    md_lines.append("calculator implementation in CEmu, and validates `CAVPOUT.8xv` against")
     md_lines.append("the NIST expected outputs. For primitives without compatible `.rsp`")
     md_lines.append("coverage, vectors are generated with `python3-cryptography` using the")
     md_lines.append("same RFC-required algorithms and parameters, then graded against that")
@@ -424,10 +424,9 @@ def main() -> int:
     md_lines.append("| Algorithm | Source | Pass | Fail |")
     md_lines.append("|---|---|---:|---:|")
     total_pass = total_fail = total_skip = total_unsup = 0
-    # DRBG-SHA-256 intentionally omitted from the pinned vector set; see
-    # acvp_vectors.json $comment for the reasoning. Kept in the dispatcher
-    # in src/main.c as a stub so the wiring is ready when a standalone
-    # DRBG API lands.
+    # DRBG-SHA-256 intentionally omitted from the pinned vector set. It is
+    # kept in the dispatcher as a stub so the wiring is ready when a
+    # standalone DRBG API lands.
     for alg in ["AES-GCM", "SHA-256", "HMAC-SHA-256", "HKDF-SHA-256",
                 "RSA-PSS-SHA-256-VERIFY", "X25519-PUBLICKEY", "X25519-SECRET"]:
         c = by_alg.get(alg, {"pass": 0, "fail": 0, "skip": 0, "unsupported": 0})

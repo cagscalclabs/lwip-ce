@@ -31,6 +31,169 @@ connection API:
 ``lwip_poll_network_events()`` must run from the main loop. There is no OS
 thread sitting behind the stack doing this for you.
 
+Use the Conn API
+----------------
+
+``conn.h`` is an app-facing wrapper for programs that do not want to wire raw
+TCP, UDP, ALTCP, and TLS callbacks by hand.
+
+``lwip_conn_connect()`` starts the connection attempt. It does not mean the
+connection is ready. Watch ``conn.status`` or use ``lwip_conn_set_connected()``.
+
+``lwip_conn_create()`` accepts these transport selectors:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Protocol
+     - Meaning
+   * - ``LWIP_PROTO_TCP``
+     - Raw TCP via lwIP ``tcp_*``.
+   * - ``LWIP_PROTO_UDP``
+     - UDP via lwIP ``udp_*``.
+   * - ``LWIP_PROTO_ALTCP``
+     - ALTCP using the default TCP allocator.
+   * - ``LWIP_PROTO_ALTCP_TLS``
+     - ALTCP wrapped in the CE TLS client path.
+
+The service flags are netif-level startup requests:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Flag
+     - Meaning
+   * - ``LWIP_CONN_SVC_DHCP``
+     - Start DHCP on the resident interface.
+   * - ``LWIP_CONN_SVC_SNTP``
+     - Start SNTP for time sync.
+   * - ``LWIP_CONN_SVC_DNS``
+     - Make DNS name resolution available for ``lwip_conn_connect()``.
+
+These flags do not create private services per connection. They make sure the
+resident interface has the requested service running.
+
+Once a service is already up on an interface, later connections do not need to
+request it again. Passing ``0`` for ``flags`` is safe when you are reusing the
+same interface and you do not need ``lwip_conn_create()`` to start anything new.
+For example, one setup connection can request DHCP and DNS, and later
+connections on that same interface can pass ``0`` without disabling those
+services. The flags are startup requests, not per-connection ownership or
+teardown controls.
+
+Receive callbacks get a ``struct pbuf *``. The app owns that pbuf and must free
+it when done. For TCP, the app must also call ``lwip_conn_recved()`` after it
+has consumed or queued the bytes. Without that call, the TCP receive window
+does not advance.
+
+Use ``lwip_conn_shutdown()`` for TCP-style half-close behavior. Use
+``lwip_conn_close()`` for hard teardown. Use ``lwip_conn_destroy()`` when the
+handle is no longer needed.
+
+This is a stubbed full connection shape. The callbacks are intentionally small;
+real applications should move parsing, state transitions, and retry decisions
+into their own code.
+
+.. code-block:: c
+
+   #include <lwip/conn.h>
+   #include <lwip/core/pbuf.h>
+   #include <stdbool.h>
+   #include <stdint.h>
+
+   static bool done;
+
+   static void on_connected(void *arg, struct lwip_conn *conn)
+   {
+       (void)arg;
+
+       static const uint8_t request[] =
+           "GET / HTTP/1.0\r\n"
+           "Host: example.com\r\n"
+           "\r\n";
+
+       if (lwip_conn_write(conn, request, sizeof(request) - 1) != LWIP_OK) {
+           done = true;
+       }
+   }
+
+   static void on_recv(void *arg, struct lwip_conn *conn, struct pbuf *p)
+   {
+       (void)arg;
+
+       if (!p) {
+           done = true;
+           return;
+       }
+
+       uint16_t consumed = p->tot_len;
+
+       for (struct pbuf *q = p; q != NULL; q = q->next) {
+           const uint8_t *bytes = (const uint8_t *)q->payload;
+           uint16_t len = q->len;
+
+           /* Parse, copy, or display bytes here. */
+           (void)bytes;
+           (void)len;
+       }
+
+       lwip_conn_recved(conn, consumed);
+       pbuf_free(p);
+   }
+
+   static void on_error(void *arg, struct lwip_conn *conn, lwip_error_t err)
+   {
+       (void)arg;
+       (void)conn;
+       (void)err;
+       done = true;
+   }
+
+   static void on_closed(void *arg, struct lwip_conn *conn)
+   {
+       (void)arg;
+       (void)conn;
+       done = true;
+   }
+
+   int main(void)
+   {
+       struct lwip_conn conn;
+
+       if (!lwip_start()) {
+           return 1;
+       }
+
+       if (lwip_conn_create(&conn, NULL, LWIP_PROTO_TCP,
+                            LWIP_CONN_SVC_DHCP | LWIP_CONN_SVC_DNS) != LWIP_OK) {
+           return 1;
+       }
+
+       lwip_conn_set_connected(&conn, on_connected);
+       lwip_conn_set_recv(&conn, on_recv);
+       lwip_conn_set_err(&conn, on_error);
+       lwip_conn_set_closed(&conn, on_closed);
+
+       if (lwip_conn_connect(&conn, "example.com", 80) != LWIP_OK) {
+           lwip_conn_destroy(&conn);
+           return 1;
+       }
+
+       while (!done &&
+              conn.status != LWIP_STATUS_CLOSED &&
+              conn.status != LWIP_STATUS_ERROR) {
+           lwip_poll_network_events();
+           /* UI, keys, timers, and app work go here. */
+       }
+
+       int rc = conn.status == LWIP_STATUS_ERROR ? 1 : 0;
+       lwip_conn_close(&conn);
+       lwip_conn_destroy(&conn);
+       return rc;
+   }
+
 Choose an API Layer
 -------------------
 

@@ -2,10 +2,10 @@ Credits & References
 ====================
 
 lwIP-CE is a fork, a port, and a pile of platform-specific glue. This page keeps
-the people, upstream projects, and standards links in one place.
+the people, reference implementations, and standards links in one place.
 
-Contributors
-------------
+lwIP-CE Contributors
+--------------------
 
 .. list-table::
    :header-rows: 1
@@ -30,8 +30,27 @@ Contributors
    * - Testing
      - Alessio
 
-Upstream Projects
------------------
+Upstream lwIP
+-------------
+
+lwIP-CE is forked from lwIP. The upstream project remains the best reference
+for general lwIP behavior and raw API concepts that still apply here.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Link
+     - Use
+   * - `lwIP GitHub mirror <https://github.com/lwip-tcpip/lwip>`_
+     - Convenient source browser for upstream lwIP.
+   * - `lwIP documentation <https://www.nongnu.org/lwip/2_1_x/>`_
+     - Upstream API and architecture reference.
+   * - `lwIP Savannah project <https://savannah.nongnu.org/projects/lwip/>`_
+     - Upstream project home.
+
+Reference Implementations
+-------------------------
 
 .. list-table::
    :header-rows: 1
@@ -39,10 +58,6 @@ Upstream Projects
 
    * - Project
      - Why it matters here
-   * - `lwIP <https://savannah.nongnu.org/projects/lwip/>`_
-     - Upstream TCP/IP stack lineage and implementation baseline.
-   * - `lwIP 2.1.x docs <https://www.nongnu.org/lwip/2_1_x/>`_
-     - Upstream reference docs for lwIP concepts that still apply.
    * - `B-Con crypto-algorithms <https://github.com/B-Con/crypto-algorithms/>`_
      - Reference implementation lineage for AES block/key-schedule routines and
        SHA-256 core hashing primitives.
@@ -51,8 +66,8 @@ Upstream Projects
    * - `OpenSSL <https://github.com/openssl/openssl>`_
      - Reference material for Base64 behavior and compatibility.
 
-RFCs
-----
+RFCs And Standards
+------------------
 
 .. list-table::
    :header-rows: 1
@@ -88,16 +103,6 @@ RFCs
      - PBKDF2 and password-based cryptography.
    * - `RFC 8446 <https://datatracker.ietf.org/doc/html/rfc8446>`_
      - TLS 1.3.
-
-NIST And Standards Publications
--------------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 70
-
-   * - Reference
-     - Topic
    * - `FIPS 197 <https://csrc.nist.gov/pubs/fips/197/final>`_
      - AES.
    * - `FIPS 180-4 <https://csrc.nist.gov/pubs/fips/180-4/upd1/final>`_
@@ -114,8 +119,6 @@ NIST And Standards Publications
      - Entropy sources for random bit generation.
    * - `NIST SP 800-90 series <https://csrc.nist.gov/projects/random-bit-generation/sp-800-90>`_
      - Random bit generation guidance and updates.
-   * - `NIST ACVP <https://pages.nist.gov/ACVP/>`_
-     - Algorithm validation protocol reference material.
    * - `NIST CAVP <https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program>`_
      - Algorithm validation program and published vector material.
    * - `ITU-T X.690 <https://www.itu.int/rec/T-REC-X.690>`_

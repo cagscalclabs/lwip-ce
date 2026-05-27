@@ -4,8 +4,6 @@
    :hidden:
 
    getting-started
-   connection-api
-   whitepaper
-   upstream-lwip
    api/index
+   technical-details
    credits

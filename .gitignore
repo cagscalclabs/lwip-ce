@@ -61,10 +61,10 @@ tools/
 # local transcription scratch (whisperx venv, audio downloads, outputs)
 .transcripts/
 
-# ACVP test scratch — cavp_fetch.py generates these on each run; none of
+# CAVP test scratch - cavp_fetch.py generates these on each run; none of
 # them should be committed. Keep the tools/ scripts themselves.
-tests/profiling/tls_acvp/vectors/cache/
-!tests/profiling/tls_acvp/tools
+tests/profiling/tls_*/vectors/cache/
+!tests/profiling/tls_*/tools
 
 .env
 .venv

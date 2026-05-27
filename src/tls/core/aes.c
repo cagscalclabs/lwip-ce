@@ -1135,7 +1135,7 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
         // actually a cached partial block. Without the guard, the zero-fill
         // ghashes a phantom full block when both AAD and CT happen to be
         // block-aligned (or empty), corrupting the tag. Caught by the
-        // ACVP test: see whitepaper section on continuous validation.
+        // CAVP test: see whitepaper section on continuous validation.
         if (ctx->private.gcm.aad_cache_len)
         {
             tls_secure_memzero(tbuf, AES_BLOCK_SIZE);

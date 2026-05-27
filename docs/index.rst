@@ -13,10 +13,8 @@ lwIP-CE Documentation
        </p>
        <div class="lwip-actions">
          <a class="lwip-button lwip-button-primary" href="getting-started.html">Getting Started</a>
-         <a class="lwip-button lwip-button-primary" href="api/index.html">Available API</a>
-         <a class="lwip-button" href="connection-api.html">Connection API</a>
-         <a class="lwip-button" href="whitepaper.html">Whitepaper</a>
-         <a class="lwip-button" href="upstream-lwip.html">Upstream lwIP Docs</a>
+         <a class="lwip-button lwip-button-primary" href="api/index.html">Usable API</a>
+         <a class="lwip-button" href="technical-details.html">Technical Details</a>
          <a class="lwip-button" href="credits.html">Credits &amp; References</a>
        </div>
      </div>

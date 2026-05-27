@@ -1,15 +1,15 @@
 /**
  * @file main.c
- * @brief NIST ACVP-format primitive validation runner (calculator side).
+ * @brief NIST CAVP-format primitive validation runner (calculator side).
  *
- * Reads ACVPIN.8xv (input vectors), dispatches each vector to the
- * appropriate primitive, and writes responses to ACVPOUT.8xv. Does NOT
- * grade itself; expected outputs live host-side in vectors/acvp_vectors.json
+ * Reads CAVPIN.8xv (input vectors), dispatches each vector to the
+ * appropriate primitive, and writes responses to CAVPOUT.8xv. Does NOT
+ * grade itself; expected outputs live host-side in vectors/expected.json
  * and are compared by tools/parse_output_appvar.py.
  *
- * AppVar wire format (host-readable, see tools/gen_input_appvar.py):
+ * AppVar wire format (host-readable, see tools/cavp_fetch.py):
  *
- *   ACVPIN.8xv:
+ *   CAVPIN.8xv:
  *     magic[4]      = 'A','I','N','1'
  *     vector_count  uint16  little-endian
  *     repeat vector_count:
@@ -18,7 +18,7 @@
  *       payload_len   uint16  little-endian
  *       payload[payload_len]  algorithm-specific TLV (see runners below)
  *
- *   ACVPOUT.8xv:
+ *   CAVPOUT.8xv:
  *     magic[4]      = 'A','O','U','T'
  *     response_count uint16 little-endian
  *     repeat response_count:
@@ -45,8 +45,8 @@
 #include "../../../../src/tls/includes/rsa.h"
 #include "../../../../src/tls/contrib/x25519/src/x25519.h"
 
-#define ACVPIN_NAME "ACVPIN"
-#define ACVPOUT_NAME "ACVPOUT"
+#define CAVPIN_NAME "CAVPIN"
+#define CAVPOUT_NAME "CAVPOUT"
 
 #define ALG_AES_GCM                1
 #define ALG_SHA256                 2
@@ -437,12 +437,12 @@ static size_t run_x25519_secret(const uint8_t *in, size_t in_len, uint8_t *out, 
 int main(void)
 {
     os_ClrHome();
-    printf("ACVP runner\n");
+    printf("CAVP runner\n");
 
-    uint8_t in_handle = ti_Open(ACVPIN_NAME, "r");
+    uint8_t in_handle = ti_Open(CAVPIN_NAME, "r");
     if (!in_handle)
     {
-        printf("ERROR: no %s\n", ACVPIN_NAME);
+        printf("ERROR: no %s\n", CAVPIN_NAME);
         printf("Press any key");
         os_GetKey();
         return 1;
@@ -456,7 +456,7 @@ int main(void)
     if (!in || in_size < 6)
     {
         ti_Close(in_handle);
-        printf("ERROR: bad %s (size=%u)\n", ACVPIN_NAME, (unsigned)in_size);
+        printf("ERROR: bad %s (size=%u)\n", CAVPIN_NAME, (unsigned)in_size);
         printf("Press any key");
         os_GetKey();
         return 1;
@@ -476,12 +476,12 @@ int main(void)
     size_t in_off = 6;
 
     /* Open output AppVar */
-    (void)ti_Delete(ACVPOUT_NAME);
-    uint8_t out_handle = ti_Open(ACVPOUT_NAME, "w");
+    (void)ti_Delete(CAVPOUT_NAME);
+    uint8_t out_handle = ti_Open(CAVPOUT_NAME, "w");
     if (!out_handle)
     {
         ti_Close(in_handle);
-        printf("ERROR: open %s\n", ACVPOUT_NAME);
+        printf("ERROR: open %s\n", CAVPOUT_NAME);
         printf("Press any key");
         os_GetKey();
         return 1;
@@ -587,7 +587,7 @@ int main(void)
     ti_Close(in_handle);
 
     os_ClrHome();
-    printf("ACVP runner\n");
+    printf("CAVP runner\n");
     printf("Done.");
     os_GetKey();
     return 0;
