@@ -1,8 +1,8 @@
 HOMEBREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 export DYLD_LIBRARY_PATH := $(HOMEBREW_PREFIX)/opt/expat/lib:$(DYLD_LIBRARY_PATH)
 
-SPHINXBUILD ?= $(HOMEBREW_PREFIX)/bin/sphinx-build
-DOXYGEN ?= $(shell command -v doxygen 2>/dev/null || brew --prefix doxygen 2>/dev/null)/bin/doxygen
+SPHINXBUILD ?= $(shell command -v sphinx-build 2>/dev/null || echo $(HOMEBREW_PREFIX)/bin/sphinx-build)
+DOXYGEN ?= $(shell command -v doxygen 2>/dev/null || echo $(HOMEBREW_PREFIX)/opt/doxygen/bin/doxygen)
 SOURCEDIR = .
 BUILDDIR = _build
 WHITEPAPER_STATIC = _static/whitepaper.pdf
