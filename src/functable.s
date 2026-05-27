@@ -19,6 +19,7 @@
 .extern _lwip_conn_recved
 .extern _lwip_conn_shutdown
 .extern _lwip_conn_close
+.extern _lwip_conn_abort
 .extern _lwip_conn_set_arg
 .extern _lwip_conn_set_connected
 .extern _lwip_conn_set_recv
@@ -397,6 +398,7 @@ _fn_exports_table:
     d24 _lwip_conn_recved - app
     d24 _lwip_conn_shutdown - app
     d24 _lwip_conn_close - app
+    d24 _lwip_conn_abort - app
     d24 _lwip_conn_set_arg - app
     d24 _lwip_conn_set_connected - app
     d24 _lwip_conn_set_recv - app

@@ -1,7 +1,7 @@
 ; ===============================================================
 ; File:        lwip.s
 ; Author:      Anthony Cagliano
-; Generated:   2026-05-26 (by `make dylib`)
+; Generated:   2026-05-27 (by `make dylib`)
 ;
 ; LIBLOAD custom dispatcher for loading lwIP from an app.
 ;
@@ -56,6 +56,7 @@ _fn_imports_table:
 	export lwip_conn_recved
 	export lwip_conn_shutdown
 	export lwip_conn_close
+	export lwip_conn_abort
 	export lwip_conn_set_arg
 	export lwip_conn_set_connected
 	export lwip_conn_set_recv
@@ -434,6 +435,7 @@ lwip_conn_write:
 lwip_conn_recved:
 lwip_conn_shutdown:
 lwip_conn_close:
+lwip_conn_abort:
 lwip_conn_set_arg:
 lwip_conn_set_connected:
 lwip_conn_set_recv:

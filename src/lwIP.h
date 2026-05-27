@@ -15,7 +15,8 @@
  *   lwip_conn_set_*()            — register any callbacks before connect
  *   lwip_conn_connect()          — host (IPv4 string or DNS name) + port
  *   lwip_conn_write() / recv     — once connected (recv is callback-driven)
- *   lwip_conn_shutdown() / close — orderly or hard teardown
+ *   lwip_conn_shutdown() / close — graceful half-close or orderly teardown
+ *   lwip_conn_abort()            — immediate forced teardown
  *   lwip_conn_destroy()          — free the handle
  */
 
@@ -120,6 +121,7 @@ struct lwip_conn
     /* Internal — written by the implementation only. */
     uint8_t              protocol;       /**< lwip_protocol_t */
     uint8_t              flags;          /**< service flags actually applied */
+    uint8_t              aborting;       /**< abort issued from callback */
     uint16_t             remote_port;
     ip_addr_t            remote_ip;
     struct netif        *netif;          /**< resident interface */
@@ -201,11 +203,21 @@ lwip_error_t lwip_conn_recved(struct lwip_conn *conn, size_t len);
  *  may still receive data until the peer closes. */
 lwip_error_t lwip_conn_shutdown(struct lwip_conn *conn);
 
-/** Hard close. For TCP/altcp/altcp_tls this attempts an orderly close
- *  but falls back to abort on failure. For UDP this removes the pcb.
- *  After this returns, no callbacks will fire and the handle is in
- *  CLOSED state. */
+/** Orderly close. For TCP/altcp/altcp_tls this asks the lower layer to
+ *  close cleanly. If lwIP cannot close immediately (for example because
+ *  memory is unavailable for a FIN), the pcb is left intact and the error
+ *  is returned so the app can retry or call lwip_conn_abort().
+ *
+ *  For UDP this removes the pcb. On success, no callbacks will fire and
+ *  the handle is in CLOSED state. */
 lwip_error_t lwip_conn_close(struct lwip_conn *conn);
+
+/** Immediate forced teardown. This detaches the wrapper callbacks first so
+ *  lwIP stops delivering receive traffic to this connection, then aborts
+ *  TCP/altcp/altcp_tls without attempting an orderly close. For UDP this
+ *  removes the pcb. After this returns, no callbacks will fire and the
+ *  handle is in CLOSED state. */
+lwip_error_t lwip_conn_abort(struct lwip_conn *conn);
 
 /* ------------------------------------------------------------------
  * Callback setters — register before lwip_conn_connect.

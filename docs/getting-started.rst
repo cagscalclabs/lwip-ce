@@ -89,8 +89,10 @@ has consumed or queued the bytes. Without that call, the TCP receive window
 does not advance.
 
 Use ``lwip_conn_shutdown()`` for TCP-style half-close behavior. Use
-``lwip_conn_close()`` for hard teardown. Use ``lwip_conn_destroy()`` when the
-handle is no longer needed.
+``lwip_conn_close()`` for orderly full close. Use ``lwip_conn_abort()`` when
+the connection has to be torn down immediately and lwIP should stop delivering
+traffic for that PCB. Use ``lwip_conn_destroy()`` when the handle is no longer
+needed.
 
 This is a stubbed full connection shape. The callbacks are intentionally small;
 real applications should move parsing, state transitions, and retry decisions
@@ -104,6 +106,13 @@ into their own code.
    #include <stdint.h>
 
    static bool done;
+   static bool want_close;
+
+   static bool response_complete(void)
+   {
+       /* Replace with application-specific response framing. */
+       return false;
+   }
 
    static void on_connected(void *arg, struct lwip_conn *conn)
    {
@@ -141,6 +150,10 @@ into their own code.
 
        lwip_conn_recved(conn, consumed);
        pbuf_free(p);
+
+       if (response_complete()) {
+           want_close = true;
+       }
    }
 
    static void on_error(void *arg, struct lwip_conn *conn, lwip_error_t err)
@@ -181,15 +194,26 @@ into their own code.
            return 1;
        }
 
-       while (!done &&
-              conn.status != LWIP_STATUS_CLOSED &&
-              conn.status != LWIP_STATUS_ERROR) {
+       while (!done) {
            lwip_poll_network_events();
+
+           if (want_close && conn.status == LWIP_STATUS_CONNECTED) {
+               lwip_conn_shutdown(&conn);
+               want_close = false;
+           }
+
+           if (conn.status == LWIP_STATUS_CLOSED ||
+               conn.status == LWIP_STATUS_ERROR) {
+               done = true;
+           }
+
            /* UI, keys, timers, and app work go here. */
        }
 
        int rc = conn.status == LWIP_STATUS_ERROR ? 1 : 0;
-       lwip_conn_close(&conn);
+       if (conn.status != LWIP_STATUS_CLOSED) {
+           lwip_conn_close(&conn);
+       }
        lwip_conn_destroy(&conn);
        return rc;
    }

@@ -195,6 +195,7 @@ static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
     {
         /* App owns both the pbuf lifetime and the ack — see lwip_conn_recved. */
         c->on_recv(c->user_arg, c, p);
+        if (c->aborting) return ERR_ABRT;
     }
     else
     {
@@ -211,6 +212,7 @@ static err_t conn_altcp_sent_cb(void *arg, struct altcp_pcb *pcb, u16_t len)
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
     if (c && c->on_sent) c->on_sent(c->user_arg, c, (uint16_t)len);
+    if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
 }
 
@@ -219,6 +221,7 @@ static err_t conn_altcp_poll_cb(void *arg, struct altcp_pcb *pcb)
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
     if (c && c->on_poll) c->on_poll(c->user_arg, c);
+    if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
 }
 
@@ -247,6 +250,7 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
     }
     c->status = LWIP_STATUS_CONNECTED;
     if (c->on_connected) c->on_connected(c->user_arg, c);
+    if (c->aborting) return ERR_ABRT;
     return ERR_OK;
 }
 
@@ -294,6 +298,7 @@ static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
     {
         /* App owns both the pbuf lifetime and the ack — see lwip_conn_recved. */
         c->on_recv(c->user_arg, c, p);
+        if (c->aborting) return ERR_ABRT;
     }
     else
     {
@@ -308,6 +313,7 @@ static err_t conn_tcp_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len)
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
     if (c && c->on_sent) c->on_sent(c->user_arg, c, (uint16_t)len);
+    if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
 }
 
@@ -316,6 +322,7 @@ static err_t conn_tcp_poll_cb(void *arg, struct tcp_pcb *pcb)
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
     if (c && c->on_poll) c->on_poll(c->user_arg, c);
+    if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
 }
 
@@ -343,6 +350,7 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
     }
     c->status = LWIP_STATUS_CONNECTED;
     if (c->on_connected) c->on_connected(c->user_arg, c);
+    if (c->aborting) return ERR_ABRT;
     return ERR_OK;
 }
 #endif /* LWIP_TCP */
@@ -729,16 +737,17 @@ lwip_error_t lwip_conn_shutdown(struct lwip_conn *conn)
 lwip_error_t lwip_conn_close(struct lwip_conn *conn)
 {
     if (!conn) return LWIP_ERR_ARG;
-    lwip_error_t rc = LWIP_OK;
     switch ((lwip_protocol_t)conn->protocol)
     {
 #if LWIP_TCP
     case LWIP_PROTO_TCP:
         if (conn->pcb.tcp)
         {
-            if (tcp_close(conn->pcb.tcp) != ERR_OK)
+            err_t e = tcp_close(conn->pcb.tcp);
+            if (e != ERR_OK)
             {
-                tcp_abort(conn->pcb.tcp);
+                conn->last_error = lwip_err_translate(e);
+                return conn->last_error;
             }
             conn->pcb.tcp = NULL;
         }
@@ -755,19 +764,70 @@ lwip_error_t lwip_conn_close(struct lwip_conn *conn)
     case LWIP_PROTO_ALTCP_TLS:
         if (conn->pcb.altcp)
         {
-            if (altcp_close(conn->pcb.altcp) != ERR_OK)
+            err_t e = altcp_close(conn->pcb.altcp);
+            if (e != ERR_OK)
             {
-                altcp_abort(conn->pcb.altcp);
+                conn->last_error = lwip_err_translate(e);
+                return conn->last_error;
             }
             conn->pcb.altcp = NULL;
         }
         break;
     default:
-        rc = LWIP_ERR_PROTO;
-        break;
+        return LWIP_ERR_PROTO;
     }
     conn->status = LWIP_STATUS_CLOSED;
-    return rc;
+    return LWIP_OK;
+}
+
+lwip_error_t lwip_conn_abort(struct lwip_conn *conn)
+{
+    if (!conn) return LWIP_ERR_ARG;
+    switch ((lwip_protocol_t)conn->protocol)
+    {
+#if LWIP_TCP
+    case LWIP_PROTO_TCP:
+        if (conn->pcb.tcp)
+        {
+            struct tcp_pcb *pcb = conn->pcb.tcp;
+            conn->pcb.tcp = NULL;
+            conn->aborting = 1;
+            tcp_arg(pcb, NULL);
+            tcp_recv(pcb, NULL);
+            tcp_sent(pcb, NULL);
+            tcp_err(pcb, NULL);
+            tcp_poll(pcb, NULL, pcb->pollinterval);
+            tcp_abort(pcb);
+        }
+        break;
+#endif
+    case LWIP_PROTO_UDP:
+        if (conn->pcb.udp)
+        {
+            udp_remove(conn->pcb.udp);
+            conn->pcb.udp = NULL;
+        }
+        break;
+    case LWIP_PROTO_ALTCP:
+    case LWIP_PROTO_ALTCP_TLS:
+        if (conn->pcb.altcp)
+        {
+            struct altcp_pcb *pcb = conn->pcb.altcp;
+            conn->pcb.altcp = NULL;
+            conn->aborting = 1;
+            altcp_arg(pcb, NULL);
+            altcp_recv(pcb, NULL);
+            altcp_sent(pcb, NULL);
+            altcp_err(pcb, NULL);
+            altcp_poll(pcb, NULL, pcb->pollinterval);
+            altcp_abort(pcb);
+        }
+        break;
+    default:
+        return LWIP_ERR_PROTO;
+    }
+    conn->status = LWIP_STATUS_CLOSED;
+    return LWIP_OK;
 }
 
 /* ============================================================
