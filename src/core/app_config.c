@@ -10,6 +10,10 @@ static bool g_cfg_loaded = false;
 
 static void lwip_app_config_normalize(lwip_app_config_t *cfg)
 {
+    /* Full-chain validation is not implemented yet. Keep the persisted
+     * control bit reserved, but force runtime policy to SPKI-pin mode. */
+    cfg->flags &= (uint8_t)~LWIP_CFG_FULL_CHAIN_VERIFY;
+
     if (cfg->log_min_level < LWIP_LOG_LEVEL_INFO ||
         cfg->log_min_level > LWIP_LOG_LEVEL_FATAL)
     {
@@ -32,7 +36,8 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
      * on. Combined this gives the standard "pin chain + prove leaf
      * private-key ownership" behavior. Apps that need the
      * absolute-fastest handshake can drop VERIFY_CERTVERIFY; apps that
-     * need strict chain validation can set FULL_CHAIN_VERIFY. */
+     * need strict chain validation can use FULL_CHAIN_VERIFY once that
+     * path is implemented. */
     cfg->flags = LWIP_CFG_DHCP | LWIP_CFG_DNS | LWIP_CFG_TLS_VERIFY_CERTVERIFY;
     cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
     cfg->tz_offset_minutes = 0;

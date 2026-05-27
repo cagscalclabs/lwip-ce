@@ -21,9 +21,9 @@
  *                 SPKI matches the truststore validates the chain.
  *                 Dates and owner-id checks run automatically when a
  *                 pin matches.
- *   bit set    → full-chain verify. Every cert is signature-verified
- *                 against the next cert in the chain; the chain must
- *                 ultimately anchor at a truststore root.
+ *   bit set    → reserved for full-chain verify. This is currently
+ *                 normalized back to SPKI-pin mode until cert-chain
+ *                 signature verification is implemented.
  *   In both modes, the live CertificateVerify message can be verified
  *   against the leaf SPKI — see LWIP_CFG_TLS_VERIFY_CERTVERIFY. */
 #define LWIP_CFG_FULL_CHAIN_VERIFY    (1u << 5)

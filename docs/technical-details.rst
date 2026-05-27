@@ -15,11 +15,9 @@ resident stack policy in one place:
 - Allocator max heap
 - Global service-up flags: DHCP, DNS, and NTP
 - Hostname, static IPv4 settings, timezone, and DST
-- Certificate verification mode
+- Certificate/Full-chain verification mode
 - USB/TLS logging and max log size
 - Network service tests: HTTP server, NTP, DNS, ping, TCP echo, and TLS
-
-*Certificate verification is currently fixed to CA pinning. lwIP-CE checks whether a non-leaf certificate in the presented chain matches an SPKI hash in the derived trust store. This does not verify the peer controls the private key for the leaf it is presenting. This is weaker than full WebPKI TLS and is an interim tradeoff because at this point we do not have a fast enough SignatureVerify algorithm. (I'd welcome a contributed RSA, ed25519, or P-256 algorithm in eZ80 that runs in a few seconds -- contact me if interested).*
 
 Allocator System
 ----------------
@@ -34,10 +32,11 @@ lwIP-CE uses a custom allocator system that can operate in two modes:
 Ethernet Driver
 ---------------
 
-The Ethernet path is USB-backed and tuned for the CE event loop. RX work is
-drained explicitly, TX is staged through the driver, and recovery paths are
-designed around endpoint/device state rather than threads. Applications still
-need to pump network events; there is no background kernel doing it.
+The Ethernet driver is an abstraction layer on top of `USBDRVCE <https://ce-programming.github.io/toolchain/libraries/usbdrvce.html>`_, the TI-84+ CE USB driver provided as part of the CE toolchain.
+
+The Ethernet driver supports USB-CDC-ECM and USB-CDC-NCM devices; in practice, ECM is common on 10/100 adapters, while NCM is common on gigabit-class adapters. It should also support hubs with a USB port that use one of those protocols, and an Ethernet adapter connected via a hub. Wi-Fi is possible only through an external Ethernet-to-Wi-Fi bridge (typically a USB Ethernet adapter connected to an Ethernet WiFi adapter). The adapter must handle association, WPA/WPA2, SSID selection, and key storage itself, typically through WPS or its own setup flow. lwIP-CE sees that device as Ethernet; it does not implement native Wi-Fi management.
+
+The driver is event-loop driven. Applications must continue pumping the stack for RX, TX, timers, and device recovery to make progress.
 
 TLS Stack
 ---------
@@ -66,6 +65,12 @@ connections, not a general-purpose OS crypto subsystem.
        truststore with abbreviated serialized metadata, signs it with the
        maintainer RSA-2048 private key, and ships the matching public key in
        lwIP-CE. Regenerated quarterly.
+
+       *CertificateVerify* is fixed to ``rsa_pss_rsae_sha256``. It can be
+       disabled if you trust the remote endpoint, but then you have no
+       guarantee that the peer controls the leaf certificate's private key.
+
+       Certificate chain trust is SPKI-pin based in this build.
 
 For more details, proofs, and datasets, see the whitepaper below.
 

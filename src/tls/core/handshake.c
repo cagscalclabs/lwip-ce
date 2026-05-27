@@ -1461,17 +1461,11 @@ bool tls_send_client_hello(
     out[offset++] = 0x00;
     out[offset++] = 0x0d; /* Extension type: signature_algorithms */
     out[offset++] = 0x00;
-    out[offset++] = 0x0a; /* Extension length: 10 */
+    out[offset++] = 0x04; /* Extension length: 4 */
     out[offset++] = 0x00;
-    out[offset++] = 0x08; /* Signature algorithms list length: 8 */
-    out[offset++] = 0x04;
-    out[offset++] = 0x03; /* ecdsa_secp256r1_sha256 */
+    out[offset++] = 0x02; /* Signature algorithms list length: 2 */
     out[offset++] = 0x08;
     out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
-    out[offset++] = 0x04;
-    out[offset++] = 0x01; /* rsa_pkcs1_sha256 */
-    out[offset++] = 0x08;
-    out[offset++] = 0x09; /* rsa_pss_rsae_sha384 */
 
     /* Extension 5: server_name (SNI) */
     if (ctx->hostname)

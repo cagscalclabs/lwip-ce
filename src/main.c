@@ -189,8 +189,8 @@ static struct config_option config_options[] = {
     {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"-- Security --",  OPT_SEP_SECURITY, F_TYPE_SEPARATOR,    NULL, {0}},
-    /* Chain mode toggle. OFF = SPKI-pin (fast). ON = full-chain verify
-     * (every cert in the chain signature-verified against the next). */
+    /* Chain mode placeholder. Full-chain validation is not implemented
+     * yet, so this remains visible but forced to SPKI-pin mode. */
     {"Full Chain Verify", OPT_TLS_CHAIN_MODE,        F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
     /* CertificateVerify signature gate. Independent of chain mode.
      * Default ON; clear it to drop ~seconds off handshake at the cost
@@ -871,7 +871,7 @@ static bool config_toggle_option(struct config_option *opt)
         option_sync_from_cfg(opt);
         return true;
     case OPT_TLS_CHAIN_MODE:
-        g_cfg.flags ^= LWIP_CFG_FULL_CHAIN_VERIFY;
+        g_cfg.flags &= (uint8_t)~LWIP_CFG_FULL_CHAIN_VERIFY;
         option_sync_from_cfg(opt);
         return true;
     case OPT_TLS_VERIFY_CERTVERIFY:
