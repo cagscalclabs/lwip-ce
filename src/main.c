@@ -73,7 +73,6 @@ typedef enum
     OPT_DST,
     OPT_SEP_SECURITY,
     OPT_TLS_CHAIN_MODE,
-    OPT_TLS_VERIFY_CERTVERIFY,
     OPT_SEP_LOGGING,
     OPT_LOG_ENABLED,
     OPT_LOG_LEVEL,
@@ -192,10 +191,6 @@ static struct config_option config_options[] = {
     /* Chain mode placeholder. Full-chain validation is not implemented
      * yet, so this remains visible but forced to SPKI-pin mode. */
     {"Full Chain Verify", OPT_TLS_CHAIN_MODE,        F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    /* CertificateVerify signature gate. Independent of chain mode.
-     * Default ON; clear it to drop ~seconds off handshake at the cost
-     * of skipping leaf-key proof-of-possession. */
-    {"Verify CertVerify", OPT_TLS_VERIFY_CERTVERIFY, F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
     {"-- Logging --",   OPT_SEP_LOGGING,  F_TYPE_SEPARATOR,    NULL, {0}},
     {"Logging",         OPT_LOG_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"Log Level",       OPT_LOG_LEVEL,    F_TYPE_INT_SLIDER,   NULL, {0}},
@@ -669,9 +664,6 @@ static void option_sync_from_cfg(struct config_option *opt)
     case OPT_TLS_CHAIN_MODE:
         option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_FULL_CHAIN_VERIFY) != 0);
         break;
-    case OPT_TLS_VERIFY_CERTVERIFY:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_TLS_VERIFY_CERTVERIFY) != 0);
-        break;
     default:
         // Action/separator types, no sync needed
         break;
@@ -793,7 +785,6 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_LOG_ENABLED:
     case OPT_LOG_USB:
     case OPT_LOG_TLS:
-    case OPT_TLS_VERIFY_CERTVERIFY:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
     case OPT_TLS_CHAIN_MODE:
@@ -872,10 +863,6 @@ static bool config_toggle_option(struct config_option *opt)
         return true;
     case OPT_TLS_CHAIN_MODE:
         g_cfg.flags &= (uint8_t)~LWIP_CFG_FULL_CHAIN_VERIFY;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_TLS_VERIFY_CERTVERIFY:
-        g_cfg.flags ^= LWIP_CFG_TLS_VERIFY_CERTVERIFY;
         option_sync_from_cfg(opt);
         return true;
     default:

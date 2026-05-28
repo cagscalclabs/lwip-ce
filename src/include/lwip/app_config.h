@@ -24,14 +24,9 @@
  *   bit set    → reserved for full-chain verify. This is currently
  *                 normalized back to SPKI-pin mode until cert-chain
  *                 signature verification is implemented.
- *   In both modes, the live CertificateVerify message can be verified
- *   against the leaf SPKI — see LWIP_CFG_TLS_VERIFY_CERTVERIFY. */
+ * Independent of this bit, the live CertificateVerify message is
+ * always RSA-PSS verified against the leaf SPKI. */
 #define LWIP_CFG_FULL_CHAIN_VERIFY    (1u << 5)
-/* When set, the TLS layer performs an RSA-PSS/PKCS1 verify on the
- * CertificateVerify message using the leaf cert's SPKI. Costs ~seconds
- * on eZ80 (one RSA-2048 verify); apps that want the absolute-fastest
- * handshake can leave this clear and rely on SPKI pinning alone. */
-#define LWIP_CFG_TLS_VERIFY_CERTVERIFY (1u << 6)
 #define LWIP_CFG_LOG_TLS              (1u << 7)
 
 /* Memory budgeting.  The user sets the total bytes given to the lwIP

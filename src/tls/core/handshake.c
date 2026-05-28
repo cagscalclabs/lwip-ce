@@ -29,9 +29,9 @@
  *                       <----------------     [now encrypted under HS keys]
  *                                             EncryptedExtensions
  *                                             Certificate
- *                                             CertificateVerify   (RSA-PSS verify
- *                                                                  gated by
- *                                                                  LWIP_CFG_TLS_VERIFY_CERTVERIFY)
+ *                                             CertificateVerify   (RSA-PSS-SHA256
+ *                                                                  verified against
+ *                                                                  leaf SPKI)
  *                                             Finished
  *
  *     [client derives application keys]
@@ -115,14 +115,11 @@
  * 4. WHAT THIS IMPLEMENTATION SKIPS (DELIBERATELY)
  * -------------------------------------------------
  *
- *   - CertificateVerify signature checking is gated by
- *     LWIP_CFG_TLS_VERIFY_CERTVERIFY. With the bit set (the default), the
- *     leaf cert's SPKI is captured during chain walking and an RSA-PSS
- *     (rsa_pss_rsae_sha256) verify runs over the RFC 8446 §4.4.3 signed
- *     content. With the bit clear, only SPKI pinning of the chain is
- *     enforced — useful when the absolute-fastest handshake matters and
- *     the truststore is trusted to fully anchor the connection. The cert
- *     chain itself is always parsed and pinned regardless of the bit.
+ *   - Signature algorithms other than rsa_pss_rsae_sha256 in
+ *     CertificateVerify. The leaf SPKI must be an RSA key with modulus
+ *     between 1024 and 2048 bits; ECDSA and the wider RSA-PSS hashes are
+ *     rejected. CertificateVerify itself is always required and verified
+ *     against the chain's leaf SPKI.
  *   - 0-RTT / early_data.
  *   - HelloRetryRequest negotiation — we only ever offer x25519, so if the
  *     server demands a different group we just abort.
@@ -2227,23 +2224,18 @@ cleanup:
 }
 
 /**
- * @brief Parse and (optionally) verify the server's CertificateVerify.
+ * @brief Parse and verify the server's CertificateVerify.
  *
  * CertificateVerify is the server's signature over the handshake
  * transcript using the private key corresponding to the leaf cert it
  * just sent. It's the live proof-of-possession that binds "I trust this
  * cert chain" to "I'm actually talking to that cert's owner."
  *
- * Behavior is gated by LWIP_CFG_TLS_VERIFY_CERTVERIFY:
- *   - clear (legacy fast-path): we still require the message to be
- *     well-formed and update the transcript hash, but we do not verify
- *     the signature. SPKI pinning is the only trust anchor.
- *   - set (default in app_config defaults): we RSA-decrypt the
- *     signature against the leaf SPKI captured during cert walking and
- *     run PSS padding verification. Only rsa_pss_rsae_sha256 is wired
- *     up — the rest of the PSS variants would need SHA-384/SHA-512,
- *     which are not in the hash framework. ECDSA / rsa_pkcs1_* are
- *     rejected in CertificateVerify per RFC 8446 §4.4.3.
+ * We RSA-decrypt the signature against the leaf SPKI captured during
+ * cert walking and run PSS padding verification. Only rsa_pss_rsae_sha256
+ * is wired up — the rest of the PSS variants would need SHA-384/SHA-512,
+ * which are not in the hash framework. ECDSA / rsa_pkcs1_* are rejected
+ * in CertificateVerify per RFC 8446 §4.4.3.
  */
 static bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -2289,47 +2281,41 @@ static bool tls_recv_certificate_verify(
         return false;
     }
 
-    const lwip_app_config_t *app_cfg = lwip_app_config_get();
-    if (app_cfg && (app_cfg->flags & LWIP_CFG_TLS_VERIFY_CERTVERIFY))
+    if (!ctx->leaf_spki || ctx->leaf_spki_len == 0)
     {
-        if (!ctx->leaf_spki || ctx->leaf_spki_len == 0)
-        {
-            /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
-             * Treat as a hard fail when the operator explicitly asked
-             * for CertVerify enforcement. */
-            lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
-            ctx->state = TLS_STATE_ERROR;
-            return false;
-        }
+        /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
+         * CertificateVerify without a leaf is unverifiable; fail closed. */
+        lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
 
-        bool sig_ok = false;
-        switch (sig_alg)
-        {
-        case TLS_SIG_RSA_PSS_RSAE_SHA256:
-            sig_ok = tls_certverify_rsa_pss_sha256(ctx,
-                                                   data + offset, sig_len);
-            break;
-        case TLS_SIG_RSA_PSS_RSAE_SHA384:
-        case TLS_SIG_RSA_PSS_RSAE_SHA512:
-            /* Hash framework is SHA-256-only on this device. The server
-             * had rsa_pss_rsae_sha256 in our ClientHello offer; selecting
-             * a wider hash is non-compliant. Fail closed. */
-            sig_ok = false;
-            break;
-        default:
-            /* ECDSA isn't supported, and RSA-PKCS1 is illegal in
-             * CertificateVerify per RFC 8446 §4.4.3. */
-            sig_ok = false;
-            break;
-        }
+    bool sig_ok = false;
+    switch (sig_alg)
+    {
+    case TLS_SIG_RSA_PSS_RSAE_SHA256:
+        sig_ok = tls_certverify_rsa_pss_sha256(ctx, data + offset, sig_len);
+        break;
+    case TLS_SIG_RSA_PSS_RSAE_SHA384:
+    case TLS_SIG_RSA_PSS_RSAE_SHA512:
+        /* Hash framework is SHA-256-only on this device. The server had
+         * rsa_pss_rsae_sha256 in our ClientHello offer; selecting a wider
+         * hash is non-compliant. Fail closed. */
+        sig_ok = false;
+        break;
+    default:
+        /* ECDSA isn't supported, and RSA-PKCS1 is illegal in
+         * CertificateVerify per RFC 8446 §4.4.3. */
+        sig_ok = false;
+        break;
+    }
 
-        if (!sig_ok)
-        {
-            lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
-            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
-            ctx->state = TLS_STATE_ERROR;
-            return false;
-        }
+    if (!sig_ok)
+    {
+        lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
+        ctx->state = TLS_STATE_ERROR;
+        return false;
     }
 
     /* Update transcript hash with the CertificateVerify message. Must

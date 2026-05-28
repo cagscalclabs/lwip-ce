@@ -65,9 +65,22 @@ connections, not a general-purpose OS crypto subsystem.
        truststore with abbreviated serialized metadata, signs it with the
        maintainer RSA-2048 private key, and ships the matching public key in lwIP-CE. Regenerated quarterly.
 
-       *CertificateVerify* is fixed to ``rsa_pss_rsae_sha256``. It can be disabled if you trust the remote endpoint, but then you have no guarantee that the peer controls the leaf certificate's private key.
+   * - CertificateVerify/Certificate
+     - *CertificateVerify* is mandatory and is verified against the leaf
+       certificate's ``SubjectPublicKeyInfo``. The server must select
+       ``rsa_pss_rsae_sha256`` and the leaf must be RSA with a modulus
+       between 1024 and 2048 bits, inclusive. Any other signature scheme
+       (including ``ecdsa_secp256r1_sha256``, the wider RSA-PSS hashes,
+       or non-RSA leaf keys) causes a fatal ``decrypt_error`` alert and
+       the connection is aborted. ``ecdsa_secp256r1_sha256`` support is
+       on the roadmap.
 
-       Certificate chain trust is SPKI-pin based in this build.
+       Certificate chain trust is SPKI-pin based. We don't walk the full
+       chain and verify every link's signature due to the computational
+       overhead of running RSA or P-256 multiple times on an eZ80.
+       Instead, if the leaf passes CertificateVerify *and* any CA-capable
+       cert in the chain (BasicConstraints ``cA=TRUE``) matches a SPKI
+       hash in the bundled truststore, the chain is accepted.
 
 For more details, proofs, and datasets, see the whitepaper below.
 

@@ -32,13 +32,11 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     cfg->version = LWIP_CFG_VERSION;
     cfg->lwip_mem_cap = LWIP_CFG_MEM_CAP_DEF;
     /* Default flags: DHCP + DNS on, SPKI-pin chain mode
-     * (FULL_CHAIN_VERIFY clear), CertificateVerify signature checking
-     * on. Combined this gives the standard "pin chain + prove leaf
-     * private-key ownership" behavior. Apps that need the
-     * absolute-fastest handshake can drop VERIFY_CERTVERIFY; apps that
-     * need strict chain validation can use FULL_CHAIN_VERIFY once that
-     * path is implemented. */
-    cfg->flags = LWIP_CFG_DHCP | LWIP_CFG_DNS | LWIP_CFG_TLS_VERIFY_CERTVERIFY;
+     * (FULL_CHAIN_VERIFY clear). CertificateVerify signature checking
+     * always runs; it is not user-toggleable. Apps that need strict
+     * chain validation can use FULL_CHAIN_VERIFY once that path is
+     * implemented. */
+    cfg->flags = LWIP_CFG_DHCP | LWIP_CFG_DNS;
     cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
     cfg->tz_offset_minutes = 0;
     cfg->dst_enabled = 0;
