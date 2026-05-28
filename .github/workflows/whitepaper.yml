@@ -15,11 +15,12 @@ on:
       - .github/workflows/whitepaper.yml
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   whitepaper:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     env:
       APT_CACHE_DIR: ${{ github.workspace }}/.cache/apt/archives
 

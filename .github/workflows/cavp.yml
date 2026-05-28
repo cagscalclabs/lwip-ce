@@ -18,6 +18,9 @@ on:
       - 'tests/profiling/tls_cavp/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
   LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling

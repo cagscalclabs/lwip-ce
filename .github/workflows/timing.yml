@@ -15,6 +15,9 @@ on:
       - 'tests/profiling/tls_timing/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
   LWIP_TESTS: ${{github.workspace}}/tests
