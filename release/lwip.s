@@ -1,7 +1,7 @@
 ; ===============================================================
 ; File:        lwip.s
 ; Author:      Anthony Cagliano
-; Generated:   2026-05-27 (by `make dylib`)
+; Generated:   2026-05-29 (by `make dylib`)
 ;
 ; LIBLOAD custom dispatcher for loading lwIP from an app.
 ;
@@ -46,6 +46,7 @@ _fn_imports_table:
 	dl usb_SetEndpointHalt
 	dl usb_Init
 	dl usb_HandleEvents
+	dl usb_Cleanup
 
 	export lwip_start
 	export lwip_poll_network_events
@@ -164,7 +165,6 @@ _fn_imports_table:
 	export altcp_get_tcp_addrinfo
 	export altcp_get_ip
 	export altcp_get_port
-	export altcp_dbg_get_tcp_state
 	export altcp_tls_create_config_server
 	export altcp_tls_config_server_add_privkey_cert
 	export altcp_tls_create_config_server_privkey_cert
@@ -422,386 +422,8 @@ _fn_imports_table:
 	export eth_set_rx_drain_interval_ms
 	export eth_get_interfaces
 	export eth_usb_event_callback
-
-; Dummy bodies for every exported symbol. The labels exist solely
-; so the library macro can emit each export's slot; libload patches
-; the real addresses in when an app dispatches through this stub.
-lwip_start:
-lwip_poll_network_events:
-lwip_conn_create:
-lwip_conn_destroy:
-lwip_conn_connect:
-lwip_conn_write:
-lwip_conn_recved:
-lwip_conn_shutdown:
-lwip_conn_close:
-lwip_conn_abort:
-lwip_conn_set_arg:
-lwip_conn_set_connected:
-lwip_conn_set_recv:
-lwip_conn_set_sent:
-lwip_conn_set_err:
-lwip_conn_set_poll:
-lwip_conn_set_closed:
-tls_aes_init:
-tls_aes_ccm_init:
-tls_aes_ccm_encrypt:
-tls_aes_ccm_decrypt:
-tls_aes_update_aad:
-tls_aes_encrypt:
-tls_aes_update_ciphertext:
-tls_aes_digest:
-tls_aes_decrypt:
-tls_aes_verify:
-tls_asn1_cursor_init:
-tls_asn1_next:
-tls_asn1_child_cursor:
-tls_asn1_tag_number:
-tls_asn1_tag_class:
-tls_asn1_tag_constructed:
-tls_base64_encode:
-tls_base64_decode:
-tls_bytes_compare:
-tls_secure_memzero:
-tls_sha256_init:
-tls_sha256_update:
-tls_sha256_digest:
-tls_hash_context_init:
-tls_hash_update:
-tls_hash_digest:
-tls_mgf1:
-tls_hkdf_extract:
-tls_hkdf_expand:
-tls_hkdf_expand_label:
-tls_derive_secret:
-tls_hmac_context_init:
-tls_hmac_update:
-tls_hmac_digest:
-tls_keyobject_import_private:
-tls_keyobject_import_public:
-tls_keyobject_import_certificate:
-tls_x509_has_required_ca_constraints:
-tls_keyobject_destroy:
-tls_pbkdf2:
-tls_pkcs8_strerror:
-tls_pkcs8_import:
-tls_pkcs8_import_private:
-tls_pkcs8_import_public:
-tls_pkcs8_object_import_private:
-tls_pkcs8_object_import_public:
-tls_pkcs8_object_destroy:
-tls_random_init_entropy:
-tls_random:
-tls_random_bytes:
-tls_rng_healthcheck:
-tls_request_random_bytes:
-tls_rng_is_busy:
-tls_rsa_encode_oaep:
-tls_rsa_decode_oaep:
-tls_rsa_encrypt:
-tls_rsa_decrypt_signature:
-tls_rsa_pss_verify:
-tls_truststore_init:
-tls_truststore_lookup:
-tls_x509_has_valid_constraints:
-tls_x509_parse_certificate:
-tls_x509_import_and_parse_certificate:
-tls_x509_import_certificate:
-tls_x509_object_destroy:
-acd_add:
-acd_remove:
-acd_start:
-acd_stop:
-acd_arp_reply:
-acd_network_changed_link_down:
-acd_netif_ip_addr_changed:
-altcp_new:
-altcp_new_ip6:
-altcp_new_ip_type:
-altcp_arg:
-altcp_accept:
-altcp_recv:
-altcp_sent:
-altcp_poll:
-altcp_err:
-altcp_recved:
-altcp_bind:
-altcp_connect:
-altcp_listen_with_backlog_and_err:
-altcp_abort:
-altcp_close:
-altcp_shutdown:
-altcp_write:
-altcp_output:
-altcp_mss:
-altcp_sndbuf:
-altcp_sndqueuelen:
-altcp_nagle_disable:
-altcp_nagle_enable:
-altcp_nagle_disabled:
-altcp_setprio:
-altcp_get_tcp_addrinfo:
-altcp_get_ip:
-altcp_get_port:
-altcp_dbg_get_tcp_state:
-altcp_tls_create_config_server:
-altcp_tls_config_server_add_privkey_cert:
-altcp_tls_create_config_server_privkey_cert:
-altcp_tls_create_config_client:
-altcp_tls_create_config_client_2wayauth:
-altcp_tls_configure_alpn_protocols:
-altcp_tls_free_config:
-altcp_tls_wrap:
-altcp_tls_new:
-altcp_tls_alloc:
-autoip_set_struct:
-autoip_remove_struct:
-autoip_start:
-autoip_stop:
-autoip_network_changed_link_up:
-autoip_network_changed_link_down:
-autoip_supplied_address:
-autoip_accept_packet:
-lwip_htons:
-lwip_htonl:
-lwip_itoa:
-lwip_strnicmp:
-lwip_stricmp:
-lwip_strnstr:
-lwip_strnistr:
-lwip_memcmp_consttime:
-dhcp_set_struct:
-dhcp_cleanup:
-dhcp_start:
-dhcp_renew:
-dhcp_release:
-dhcp_stop:
-dhcp_release_and_stop:
-dhcp_inform:
-dhcp_network_changed_link_up:
-dhcp_supplied_address:
-dns_setserver:
-dns_getserver:
-dns_gethostbyname:
-dns_gethostbyname_addrtype:
-etharp_find_addr:
-etharp_get_entry:
-etharp_output:
-etharp_query:
-etharp_request:
-etharp_cleanup_netif:
-etharp_acd_probe:
-etharp_acd_announce:
-etharp_input:
-icmp_input:
-icmp_dest_unreach:
-icmp_time_exceeded:
-icmp6_input:
-icmp6_dest_unreach:
-icmp6_packet_too_big:
-icmp6_time_exceeded:
-icmp6_time_exceeded_with_addrs:
-icmp6_param_problem:
-igmp_start:
-igmp_stop:
-igmp_report_groups:
-igmp_lookfor_group:
-igmp_input:
-igmp_joingroup:
-igmp_joingroup_netif:
-igmp_leavegroup:
-igmp_leavegroup_netif:
-inet_chksum:
-inet_chksum_pbuf:
-inet_chksum_pseudo:
-inet_chksum_pseudo_partial:
-ip6_chksum_pseudo:
-ip6_chksum_pseudo_partial:
-ip_chksum_pseudo:
-ip_chksum_pseudo_partial:
-lwip_init:
-ip_input:
-ip4_route:
-ip4_input:
-ip4_output:
-ip4_output_if:
-ip4_output_if_src:
-ip4_output_if_opt:
-ip4_output_if_opt_src:
-ip4_set_default_multicast_netif:
-ip4_addr_isbroadcast_u32:
-ip4_addr_netmask_valid:
-ipaddr_addr:
-ip4addr_aton:
-ip4addr_ntoa:
-ip4addr_ntoa_r:
-ip4_reass:
-ip4_frag:
-ip6_route:
-ip6_select_source_address:
-ip6_input:
-ip6_output:
-ip6_output_if:
-ip6_output_if_src:
-ip6_options_add_hbh_ra:
-ip6addr_aton:
-ip6addr_ntoa:
-ip6addr_ntoa_r:
-ip6_reass:
-ip6_frag:
-ipaddr_ntoa:
-ipaddr_ntoa_r:
-ipaddr_aton:
-mem_trim:
-mem_malloc:
-mem_calloc:
-mem_free:
-memp_malloc:
-memp_free:
-mld6_stop:
-mld6_report_groups:
-mld6_lookfor_group:
-mld6_input:
-mld6_joingroup:
-mld6_joingroup_netif:
-mld6_leavegroup:
-mld6_leavegroup_netif:
-nd6_input:
-nd6_clear_destination_cache:
-nd6_find_route:
-nd6_get_next_hop_addr_or_queue:
-nd6_get_destination_mtu:
-nd6_reachability_hint:
-nd6_cleanup_netif:
-nd6_adjust_mld_membership:
-nd6_restart_netif:
-netif_alloc_client_data_id:
-netif_add_noaddr:
-netif_add:
-netif_set_addr:
-netif_remove:
-netif_find:
-netif_set_default:
-netif_set_ipaddr:
-netif_set_netmask:
-netif_set_gw:
-netif_set_up:
-netif_set_down:
-netif_set_status_callback:
-netif_set_remove_callback:
-netif_set_link_up:
-netif_set_link_down:
-netif_set_link_callback:
-netif_loop_output:
-netif_poll:
-netif_poll_all:
-netif_input:
-netif_ip6_addr_set:
-netif_ip6_addr_set_parts:
-netif_ip6_addr_set_state:
-netif_get_ip6_addr_match:
-netif_create_ip6_linklocal_address:
-netif_add_ip6_address:
-netif_name_to_index:
-netif_index_to_name:
-netif_get_by_index:
-netif_add_ext_callback:
-netif_remove_ext_callback:
-pbuf_free_ooseq:
-pbuf_alloc:
-pbuf_alloc_reference:
-pbuf_alloced_custom:
-pbuf_realloc:
-pbuf_header:
-pbuf_header_force:
-pbuf_add_header:
-pbuf_add_header_force:
-pbuf_remove_header:
-pbuf_free_header:
-pbuf_ref:
-pbuf_free:
-pbuf_clen:
-pbuf_cat:
-pbuf_chain:
-pbuf_dechain:
-pbuf_copy:
-pbuf_copy_partial_pbuf:
-pbuf_copy_partial:
-pbuf_get_contiguous:
-pbuf_take:
-pbuf_take_at:
-pbuf_skip:
-pbuf_coalesce:
-pbuf_clone:
-pbuf_get_at:
-pbuf_try_get_at:
-pbuf_put_at:
-pbuf_memcmp:
-pbuf_memfind:
-pbuf_strstr:
-raw_new:
-raw_new_ip_type:
-raw_remove:
-raw_bind:
-raw_bind_netif:
-raw_connect:
-raw_disconnect:
-raw_sendto:
-raw_sendto_if_src:
-raw_send:
-raw_recv:
-lwip_sntp_set_timezone_offset:
-lwip_sntp_set_dst_enabled:
-lwip_sntp_set_time:
-lwip_sntp_reset_flag:
-lwip_sntp_time_was_set:
-lwip_sntp_get_unix_time:
-sys_timeout:
-sys_untimeout:
-tcp_new:
-tcp_new_ip_type:
-tcp_arg:
-tcp_recv:
-tcp_sent:
-tcp_err:
-tcp_accept:
-tcp_poll:
-tcp_backlog_delayed:
-tcp_backlog_accepted:
-tcp_recved:
-tcp_bind:
-tcp_bind_netif:
-tcp_connect:
-tcp_listen_with_backlog_and_err:
-tcp_listen_with_backlog:
-tcp_abort:
-tcp_close:
-tcp_shutdown:
-tcp_write:
-tcp_setprio:
-tcp_output:
-tcp_tcp_get_tcp_addrinfo:
-udp_new:
-udp_new_ip_type:
-udp_remove:
-udp_bind:
-udp_bind_netif:
-udp_connect:
-udp_disconnect:
-udp_recv:
-udp_sendto_if:
-udp_sendto_if_src:
-udp_sendto:
-udp_send:
-udp_input:
-udp_netif_ip_addr_changed:
-ethernet_input:
-ethernet_output:
-eth_set_rx_throttle:
-eth_set_rx_drain_interval_ms:
-eth_get_interfaces:
-eth_usb_event_callback:
-	ret
+	export tls_x25519_publickey
+	export tls_x25519_secret
 
 ; ----------------------------------------------
 ; lwIP LIBLOAD runtime patch
@@ -819,8 +441,9 @@ eth_usb_event_callback:
 ;      at link time by the generated `dl usb_Foo` block above —
 ;      libload patches the jp stubs at load time, so reading
 ;      fn_imports_table.usb.foo already dispatches correctly.
-;   2. TODO: Call memory initialization for bss and data of lwIP.
-;   3. TODO: Anything else required before lwIP-internal code can run.
+;   2. Locate the consumer app's export table and verify its magic.
+;   3. TODO: Call memory initialization for bss and data of lwIP.
+;   4. TODO: Anything else required before lwIP-internal code can run.
 ;
 ; eZ80 calling convention (cedev), after __frameset0 :
 ;   (ix + 0)  saved old IX
@@ -828,9 +451,35 @@ eth_usb_event_callback:
 ;   (ix + 6)  arg1: malloc ptr
 ;   (ix + 9)  arg2: free ptr
 ;   (ix + 12) arg3: realloc ptr
+;
+; Build-emitted symbol (written into release/lwip.s by the map-scrape
+; step; see the build sequence):
+;   __lwip_fn_table_off  : d24 offset of _fn_exports_table from the app
+;                          image base (== link-time addr, LOAD_ADDR = 0).
+;
 
-	extern __frameset0
+; lwIP is a flash APPLICATION, so it is located via the flash-app
+; routines (FindApp / FindAppStart), not the VAT appvar lookup
+; (ChkFindSym) that crt0's libload path uses for the LWIP lib appvar.
+	.equ ti.FindApp, 0x0210FC
+	.equ ti.FindAppStart, 0x021100
+	.equ ti.Mov9ToOP1, 0x020320
+	.equ ti.OP1, 0xD005F8
+
+	extern __lwip_fn_table_off
 	export lwip_init_runtime_opaque
+
+; Consumer app name in Mov9ToOP1 form: a type byte followed by a 9-byte
+; name field (NUL-padded). Mov9ToOP1 copies the 9 name bytes from
+; __lwip_app_name into OP1+1; the type byte at __lwip_app_name - 1 lands
+; in OP1+0. For a flash app the OS uses the AppObj type 0x24.
+__lwip_app_name_type:
+	db 0x24				; OS_TYPE app (flash application)
+__lwip_app_name:
+	db "lwIP", 0, 0, 0, 0, 0		; 9 bytes total
+
+; 6-byte table magic, ascending memory order: 'L','W','I','P','T','B'.
+; Must match the db sequence emitted at _fn_exports_table by functable.py.
 
 lwip_init_runtime_opaque:
 	call ti._frameset0
@@ -847,5 +496,59 @@ lwip_init_runtime_opaque:
 	ld hl, (ix + 12)
 	ld (_fn_imports_table + 6), hl
 
+	; Set OP1 = type byte + 9-byte name via Mov9ToOP1, then the type byte.
+	ld hl, __lwip_app_name
+	call ti.FindAppStart
+	jr c, .L.table_fail
+
+	; hl = app start address (assumed == __app_base).
+	ld de, (__lwip_fn_table_off)
+	add hl, de			; HL -> _fn_exports_table (pending ABI confirm)
+
+	; Verify the 6 magic bytes: 'L','W','I','P','T','B'.
+	ld a, (hl)
+	cp a, 'L'
+	jr nz, .L.table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'W'
+	jr nz, .L.table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'I'
+	jr nz, .L.table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'P'
+	jr nz, .L.table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'T'
+	jr nz, .L.table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'B'
+	jr nz, .L.table_fail
+	inc hl
+
+	; Magic OK — table located and build-matched.
+	push hl
+		ld hl, (hl)
+		push hl
+		pop bc		; size to bc
+	pop hl			; get proc location back
+	inc hl 			; hl now at start of function table
+	ld de, <ptr_to_libload_lookup_table>
+
+
+
+	pop ix
+	ret
+
+.L.table_fail:
+	; Mismatched/stale app paired with this lib, or app not installed.
+	; TODO(toolchain): decide the failure surface — return an error code to
+	; the caller (changes the init ABI to return a status), or abort like
+	; crt0's .L.notfound (ClrScrn/PutS/GetKey). Skeleton just returns for now.
 	pop ix
 	ret

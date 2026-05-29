@@ -2,9 +2,9 @@
 # Makefile Options
 # ----------------------------
 
-NAME = DEMO
+NAME = lwIP
 ICON = icon.png
-DESCRIPTION = "CE Toolchain Demo"
+DESCRIPTION = "lwIP-CE Network Stack"
 COMPRESSED = NO
 ARCHIVED = NO
 
@@ -13,9 +13,16 @@ CXXFLAGS = -Wall -Wextra -Oz -I src/include
 ASFLAGS = -I src/tls/core -I src/tls/core/share
 EXTRA_LDFLAGS += -T src/tls/core/x25519_reloc.ld
 
+# Use a project-local copy of the application linker script (a verbatim
+# copy of the toolchain's meta/linker_script_app.ld plus a __app_base
+# anchor at the image start). Set before the toolchain include so its
+# `LINKER_SCRIPT ?=` default does not win.
+LINKER_SCRIPT = $(CURDIR)/linker_script_lwip.ld
+
 LTO = NO
 
 APPLICATION = YES
+APPLICATION_DESCRIPTION = "lwIP-CE Network Stack"
 
 # ----------------------------
 

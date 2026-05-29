@@ -4,11 +4,30 @@
 ; Symbols are grouped by defining source file. libload resolves
 ; by name (not slot index), so reordering across regenerations is
 ; safe — apps must be relinked, but no silent ABI break.
+;
+; Layout:
+;   db  'L','W','I','P','T','B'   6-byte magic (ascending memory order)
+;   d24 <entry count>
+;   d24 <offset>  ... one per exported symbol
+;
+; The libload bootstrap is emitted with the build-resolved address of
+; _fn_exports_table; at load it checks the 6 magic bytes there and
+; errors out on mismatch (stale/mismatched app paired with the lib).
+;
+; Each entry is the symbol's offset from the first byte of the app
+; image (__app_base). Applications link at LOAD_ADDR = 0x000000, so a
+; symbol's link-time address already IS its offset from the app base;
+; we emit the bare symbol and the linker's relocation resolves it to
+; that offset. A runtime reader recovers the real address as
+; (relocated app base + offset).
+;
+; NB: we cannot write `symbol - __app_base` here — the assembler can't
+; reduce a difference of two link-time-external symbols. With base 0
+; the subtraction is a no-op anyway, so the bare symbol is correct.
 
 .assume adl=1
 .section .rodata
 .globl _fn_exports_table
-.equ app, 0
 
 .extern _lwip_start
 .extern _lwip_poll_network_events
@@ -127,7 +146,6 @@
 .extern _altcp_get_tcp_addrinfo
 .extern _altcp_get_ip
 .extern _altcp_get_port
-.extern _altcp_dbg_get_tcp_state
 .extern _altcp_tls_create_config_server
 .extern _altcp_tls_config_server_add_privkey_cert
 .extern _altcp_tls_create_config_server_privkey_cert
@@ -385,498 +403,505 @@
 .extern _eth_set_rx_drain_interval_ms
 .extern _eth_get_interfaces
 .extern _eth_usb_event_callback
+.extern _tls_x25519_publickey
+.extern _tls_x25519_secret
 
 _fn_exports_table:
+    db 'L','W','I','P','T','B'    ; magic
+    d24 376    ; entry count
 
 ; --- src/lwIP.c ---
-    d24 _lwip_start - app
-    d24 _lwip_poll_network_events - app
-    d24 _lwip_conn_create - app
-    d24 _lwip_conn_destroy - app
-    d24 _lwip_conn_connect - app
-    d24 _lwip_conn_write - app
-    d24 _lwip_conn_recved - app
-    d24 _lwip_conn_shutdown - app
-    d24 _lwip_conn_close - app
-    d24 _lwip_conn_abort - app
-    d24 _lwip_conn_set_arg - app
-    d24 _lwip_conn_set_connected - app
-    d24 _lwip_conn_set_recv - app
-    d24 _lwip_conn_set_sent - app
-    d24 _lwip_conn_set_err - app
-    d24 _lwip_conn_set_poll - app
-    d24 _lwip_conn_set_closed - app
+    d24 _lwip_start
+    d24 _lwip_poll_network_events
+    d24 _lwip_conn_create
+    d24 _lwip_conn_destroy
+    d24 _lwip_conn_connect
+    d24 _lwip_conn_write
+    d24 _lwip_conn_recved
+    d24 _lwip_conn_shutdown
+    d24 _lwip_conn_close
+    d24 _lwip_conn_abort
+    d24 _lwip_conn_set_arg
+    d24 _lwip_conn_set_connected
+    d24 _lwip_conn_set_recv
+    d24 _lwip_conn_set_sent
+    d24 _lwip_conn_set_err
+    d24 _lwip_conn_set_poll
+    d24 _lwip_conn_set_closed
 
 ; --- src/tls/core/aes.c ---
-    d24 _tls_aes_init - app
-    d24 _tls_aes_ccm_init - app
-    d24 _tls_aes_ccm_encrypt - app
-    d24 _tls_aes_ccm_decrypt - app
-    d24 _tls_aes_update_aad - app
-    d24 _tls_aes_encrypt - app
-    d24 _tls_aes_update_ciphertext - app
-    d24 _tls_aes_digest - app
-    d24 _tls_aes_decrypt - app
-    d24 _tls_aes_verify - app
+    d24 _tls_aes_init
+    d24 _tls_aes_ccm_init
+    d24 _tls_aes_ccm_encrypt
+    d24 _tls_aes_ccm_decrypt
+    d24 _tls_aes_update_aad
+    d24 _tls_aes_encrypt
+    d24 _tls_aes_update_ciphertext
+    d24 _tls_aes_digest
+    d24 _tls_aes_decrypt
+    d24 _tls_aes_verify
 
 ; --- src/tls/core/asn1.c ---
-    d24 _tls_asn1_cursor_init - app
-    d24 _tls_asn1_next - app
-    d24 _tls_asn1_child_cursor - app
-    d24 _tls_asn1_tag_number - app
-    d24 _tls_asn1_tag_class - app
-    d24 _tls_asn1_tag_constructed - app
+    d24 _tls_asn1_cursor_init
+    d24 _tls_asn1_next
+    d24 _tls_asn1_child_cursor
+    d24 _tls_asn1_tag_number
+    d24 _tls_asn1_tag_class
+    d24 _tls_asn1_tag_constructed
 
 ; --- src/tls/core/base64.c ---
-    d24 _tls_base64_encode - app
-    d24 _tls_base64_decode - app
+    d24 _tls_base64_encode
+    d24 _tls_base64_decode
 
 ; --- src/tls/core/bytes.s ---
-    d24 _tls_bytes_compare - app
+    d24 _tls_bytes_compare
 
 ; --- src/tls/core/bytes.c ---
-    d24 _tls_secure_memzero - app
+    d24 _tls_secure_memzero
 
 ; --- src/tls/core/sha256.s ---
-    d24 _tls_sha256_init - app
-    d24 _tls_sha256_update - app
-    d24 _tls_sha256_digest - app
+    d24 _tls_sha256_init
+    d24 _tls_sha256_update
+    d24 _tls_sha256_digest
 
 ; --- src/tls/core/hash.c ---
-    d24 _tls_hash_context_init - app
-    d24 _tls_hash_update - app
-    d24 _tls_hash_digest - app
-    d24 _tls_mgf1 - app
+    d24 _tls_hash_context_init
+    d24 _tls_hash_update
+    d24 _tls_hash_digest
+    d24 _tls_mgf1
 
 ; --- src/tls/core/hkdf.c ---
-    d24 _tls_hkdf_extract - app
-    d24 _tls_hkdf_expand - app
-    d24 _tls_hkdf_expand_label - app
-    d24 _tls_derive_secret - app
+    d24 _tls_hkdf_extract
+    d24 _tls_hkdf_expand
+    d24 _tls_hkdf_expand_label
+    d24 _tls_derive_secret
 
 ; --- src/tls/core/hmac.c ---
-    d24 _tls_hmac_context_init - app
-    d24 _tls_hmac_update - app
-    d24 _tls_hmac_digest - app
+    d24 _tls_hmac_context_init
+    d24 _tls_hmac_update
+    d24 _tls_hmac_digest
 
 ; --- src/tls/core/keyobject.c ---
-    d24 _tls_keyobject_import_private - app
-    d24 _tls_keyobject_import_public - app
-    d24 _tls_keyobject_import_certificate - app
+    d24 _tls_keyobject_import_private
+    d24 _tls_keyobject_import_public
+    d24 _tls_keyobject_import_certificate
 
 ; --- src/tls/core/x509.c ---
-    d24 _tls_x509_has_required_ca_constraints - app
+    d24 _tls_x509_has_required_ca_constraints
 
 ; --- src/tls/core/keyobject.c ---
-    d24 _tls_keyobject_destroy - app
+    d24 _tls_keyobject_destroy
 
 ; --- src/tls/core/passwords.c ---
-    d24 _tls_pbkdf2 - app
+    d24 _tls_pbkdf2
 
 ; --- src/tls/core/pkcs8.c ---
-    d24 _tls_pkcs8_strerror - app
-    d24 _tls_pkcs8_import - app
-    d24 _tls_pkcs8_import_private - app
-    d24 _tls_pkcs8_import_public - app
-    d24 _tls_pkcs8_object_import_private - app
-    d24 _tls_pkcs8_object_import_public - app
-    d24 _tls_pkcs8_object_destroy - app
+    d24 _tls_pkcs8_strerror
+    d24 _tls_pkcs8_import
+    d24 _tls_pkcs8_import_private
+    d24 _tls_pkcs8_import_public
+    d24 _tls_pkcs8_object_import_private
+    d24 _tls_pkcs8_object_import_public
+    d24 _tls_pkcs8_object_destroy
 
 ; --- src/tls/core/random.s ---
-    d24 _tls_random_init_entropy - app
-    d24 _tls_random - app
-    d24 _tls_random_bytes - app
+    d24 _tls_random_init_entropy
+    d24 _tls_random
+    d24 _tls_random_bytes
 
 ; --- src/tls/core/random.c ---
-    d24 _tls_rng_healthcheck - app
-    d24 _tls_request_random_bytes - app
-    d24 _tls_rng_is_busy - app
+    d24 _tls_rng_healthcheck
+    d24 _tls_request_random_bytes
+    d24 _tls_rng_is_busy
 
 ; --- src/tls/core/rsa.c ---
-    d24 _tls_rsa_encode_oaep - app
-    d24 _tls_rsa_decode_oaep - app
-    d24 _tls_rsa_encrypt - app
-    d24 _tls_rsa_decrypt_signature - app
-    d24 _tls_rsa_pss_verify - app
+    d24 _tls_rsa_encode_oaep
+    d24 _tls_rsa_decode_oaep
+    d24 _tls_rsa_encrypt
+    d24 _tls_rsa_decrypt_signature
+    d24 _tls_rsa_pss_verify
 
 ; --- src/tls/core/truststore.c ---
-    d24 _tls_truststore_init - app
-    d24 _tls_truststore_lookup - app
+    d24 _tls_truststore_init
+    d24 _tls_truststore_lookup
 
 ; --- src/tls/core/x509.c ---
-    d24 _tls_x509_has_valid_constraints - app
-    d24 _tls_x509_parse_certificate - app
-    d24 _tls_x509_import_and_parse_certificate - app
-    d24 _tls_x509_import_certificate - app
-    d24 _tls_x509_object_destroy - app
+    d24 _tls_x509_has_valid_constraints
+    d24 _tls_x509_parse_certificate
+    d24 _tls_x509_import_and_parse_certificate
+    d24 _tls_x509_import_certificate
+    d24 _tls_x509_object_destroy
 
 ; --- src/core/ipv4/acd.c ---
-    d24 _acd_add - app
-    d24 _acd_remove - app
-    d24 _acd_start - app
-    d24 _acd_stop - app
-    d24 _acd_arp_reply - app
-    d24 _acd_network_changed_link_down - app
-    d24 _acd_netif_ip_addr_changed - app
+    d24 _acd_add
+    d24 _acd_remove
+    d24 _acd_start
+    d24 _acd_stop
+    d24 _acd_arp_reply
+    d24 _acd_network_changed_link_down
+    d24 _acd_netif_ip_addr_changed
 
 ; --- src/core/altcp.c ---
-    d24 _altcp_new - app
-    d24 _altcp_new_ip6 - app
-    d24 _altcp_new_ip_type - app
-    d24 _altcp_arg - app
-    d24 _altcp_accept - app
-    d24 _altcp_recv - app
-    d24 _altcp_sent - app
-    d24 _altcp_poll - app
-    d24 _altcp_err - app
-    d24 _altcp_recved - app
-    d24 _altcp_bind - app
-    d24 _altcp_connect - app
-    d24 _altcp_listen_with_backlog_and_err - app
-    d24 _altcp_abort - app
-    d24 _altcp_close - app
-    d24 _altcp_shutdown - app
-    d24 _altcp_write - app
-    d24 _altcp_output - app
-    d24 _altcp_mss - app
-    d24 _altcp_sndbuf - app
-    d24 _altcp_sndqueuelen - app
-    d24 _altcp_nagle_disable - app
-    d24 _altcp_nagle_enable - app
-    d24 _altcp_nagle_disabled - app
-    d24 _altcp_setprio - app
-    d24 _altcp_get_tcp_addrinfo - app
-    d24 _altcp_get_ip - app
-    d24 _altcp_get_port - app
-    d24 _altcp_dbg_get_tcp_state - app
+    d24 _altcp_new
+    d24 _altcp_new_ip6
+    d24 _altcp_new_ip_type
+    d24 _altcp_arg
+    d24 _altcp_accept
+    d24 _altcp_recv
+    d24 _altcp_sent
+    d24 _altcp_poll
+    d24 _altcp_err
+    d24 _altcp_recved
+    d24 _altcp_bind
+    d24 _altcp_connect
+    d24 _altcp_listen_with_backlog_and_err
+    d24 _altcp_abort
+    d24 _altcp_close
+    d24 _altcp_shutdown
+    d24 _altcp_write
+    d24 _altcp_output
+    d24 _altcp_mss
+    d24 _altcp_sndbuf
+    d24 _altcp_sndqueuelen
+    d24 _altcp_nagle_disable
+    d24 _altcp_nagle_enable
+    d24 _altcp_nagle_disabled
+    d24 _altcp_setprio
+    d24 _altcp_get_tcp_addrinfo
+    d24 _altcp_get_ip
+    d24 _altcp_get_port
 
 ; --- src/apps/altcp_tls/altcp_tls_ce.c ---
-    d24 _altcp_tls_create_config_server - app
-    d24 _altcp_tls_config_server_add_privkey_cert - app
-    d24 _altcp_tls_create_config_server_privkey_cert - app
-    d24 _altcp_tls_create_config_client - app
-    d24 _altcp_tls_create_config_client_2wayauth - app
-    d24 _altcp_tls_configure_alpn_protocols - app
-    d24 _altcp_tls_free_config - app
-    d24 _altcp_tls_wrap - app
+    d24 _altcp_tls_create_config_server
+    d24 _altcp_tls_config_server_add_privkey_cert
+    d24 _altcp_tls_create_config_server_privkey_cert
+    d24 _altcp_tls_create_config_client
+    d24 _altcp_tls_create_config_client_2wayauth
+    d24 _altcp_tls_configure_alpn_protocols
+    d24 _altcp_tls_free_config
+    d24 _altcp_tls_wrap
 
 ; --- src/core/altcp_alloc.c ---
-    d24 _altcp_tls_new - app
-    d24 _altcp_tls_alloc - app
+    d24 _altcp_tls_new
+    d24 _altcp_tls_alloc
 
 ; --- src/core/ipv4/autoip.c ---
-    d24 _autoip_set_struct - app
-    d24 _autoip_remove_struct - app
-    d24 _autoip_start - app
-    d24 _autoip_stop - app
-    d24 _autoip_network_changed_link_up - app
-    d24 _autoip_network_changed_link_down - app
-    d24 _autoip_supplied_address - app
-    d24 _autoip_accept_packet - app
+    d24 _autoip_set_struct
+    d24 _autoip_remove_struct
+    d24 _autoip_start
+    d24 _autoip_stop
+    d24 _autoip_network_changed_link_up
+    d24 _autoip_network_changed_link_down
+    d24 _autoip_supplied_address
+    d24 _autoip_accept_packet
 
 ; --- src/core/def.c ---
-    d24 _lwip_htons - app
-    d24 _lwip_htonl - app
-    d24 _lwip_itoa - app
-    d24 _lwip_strnicmp - app
-    d24 _lwip_stricmp - app
-    d24 _lwip_strnstr - app
-    d24 _lwip_strnistr - app
-    d24 _lwip_memcmp_consttime - app
+    d24 _lwip_htons
+    d24 _lwip_htonl
+    d24 _lwip_itoa
+    d24 _lwip_strnicmp
+    d24 _lwip_stricmp
+    d24 _lwip_strnstr
+    d24 _lwip_strnistr
+    d24 _lwip_memcmp_consttime
 
 ; --- src/core/ipv4/dhcp.c ---
-    d24 _dhcp_set_struct - app
-    d24 _dhcp_cleanup - app
-    d24 _dhcp_start - app
-    d24 _dhcp_renew - app
-    d24 _dhcp_release - app
-    d24 _dhcp_stop - app
-    d24 _dhcp_release_and_stop - app
-    d24 _dhcp_inform - app
-    d24 _dhcp_network_changed_link_up - app
-    d24 _dhcp_supplied_address - app
+    d24 _dhcp_set_struct
+    d24 _dhcp_cleanup
+    d24 _dhcp_start
+    d24 _dhcp_renew
+    d24 _dhcp_release
+    d24 _dhcp_stop
+    d24 _dhcp_release_and_stop
+    d24 _dhcp_inform
+    d24 _dhcp_network_changed_link_up
+    d24 _dhcp_supplied_address
 
 ; --- src/core/dns.c ---
-    d24 _dns_setserver - app
-    d24 _dns_getserver - app
-    d24 _dns_gethostbyname - app
-    d24 _dns_gethostbyname_addrtype - app
+    d24 _dns_setserver
+    d24 _dns_getserver
+    d24 _dns_gethostbyname
+    d24 _dns_gethostbyname_addrtype
 
 ; --- src/core/ipv4/etharp.c ---
-    d24 _etharp_find_addr - app
-    d24 _etharp_get_entry - app
-    d24 _etharp_output - app
-    d24 _etharp_query - app
-    d24 _etharp_request - app
-    d24 _etharp_cleanup_netif - app
-    d24 _etharp_acd_probe - app
-    d24 _etharp_acd_announce - app
-    d24 _etharp_input - app
+    d24 _etharp_find_addr
+    d24 _etharp_get_entry
+    d24 _etharp_output
+    d24 _etharp_query
+    d24 _etharp_request
+    d24 _etharp_cleanup_netif
+    d24 _etharp_acd_probe
+    d24 _etharp_acd_announce
+    d24 _etharp_input
 
 ; --- src/core/ipv4/icmp.c ---
-    d24 _icmp_input - app
-    d24 _icmp_dest_unreach - app
-    d24 _icmp_time_exceeded - app
+    d24 _icmp_input
+    d24 _icmp_dest_unreach
+    d24 _icmp_time_exceeded
 
 ; --- src/core/ipv6/icmp6.c ---
-    d24 _icmp6_input - app
-    d24 _icmp6_dest_unreach - app
-    d24 _icmp6_packet_too_big - app
-    d24 _icmp6_time_exceeded - app
-    d24 _icmp6_time_exceeded_with_addrs - app
-    d24 _icmp6_param_problem - app
+    d24 _icmp6_input
+    d24 _icmp6_dest_unreach
+    d24 _icmp6_packet_too_big
+    d24 _icmp6_time_exceeded
+    d24 _icmp6_time_exceeded_with_addrs
+    d24 _icmp6_param_problem
 
 ; --- src/core/ipv4/igmp.c ---
-    d24 _igmp_start - app
-    d24 _igmp_stop - app
-    d24 _igmp_report_groups - app
-    d24 _igmp_lookfor_group - app
-    d24 _igmp_input - app
-    d24 _igmp_joingroup - app
-    d24 _igmp_joingroup_netif - app
-    d24 _igmp_leavegroup - app
-    d24 _igmp_leavegroup_netif - app
+    d24 _igmp_start
+    d24 _igmp_stop
+    d24 _igmp_report_groups
+    d24 _igmp_lookfor_group
+    d24 _igmp_input
+    d24 _igmp_joingroup
+    d24 _igmp_joingroup_netif
+    d24 _igmp_leavegroup
+    d24 _igmp_leavegroup_netif
 
 ; --- src/core/inet_chksum.c ---
-    d24 _inet_chksum - app
-    d24 _inet_chksum_pbuf - app
-    d24 _inet_chksum_pseudo - app
-    d24 _inet_chksum_pseudo_partial - app
-    d24 _ip6_chksum_pseudo - app
-    d24 _ip6_chksum_pseudo_partial - app
-    d24 _ip_chksum_pseudo - app
-    d24 _ip_chksum_pseudo_partial - app
+    d24 _inet_chksum
+    d24 _inet_chksum_pbuf
+    d24 _inet_chksum_pseudo
+    d24 _inet_chksum_pseudo_partial
+    d24 _ip6_chksum_pseudo
+    d24 _ip6_chksum_pseudo_partial
+    d24 _ip_chksum_pseudo
+    d24 _ip_chksum_pseudo_partial
 
 ; --- src/core/init.c ---
-    d24 _lwip_init - app
+    d24 _lwip_init
 
 ; --- src/core/ip.c ---
-    d24 _ip_input - app
+    d24 _ip_input
 
 ; --- src/core/ipv4/ip4.c ---
-    d24 _ip4_route - app
-    d24 _ip4_input - app
-    d24 _ip4_output - app
-    d24 _ip4_output_if - app
-    d24 _ip4_output_if_src - app
-    d24 _ip4_output_if_opt - app
-    d24 _ip4_output_if_opt_src - app
-    d24 _ip4_set_default_multicast_netif - app
+    d24 _ip4_route
+    d24 _ip4_input
+    d24 _ip4_output
+    d24 _ip4_output_if
+    d24 _ip4_output_if_src
+    d24 _ip4_output_if_opt
+    d24 _ip4_output_if_opt_src
+    d24 _ip4_set_default_multicast_netif
 
 ; --- src/core/ipv4/ip4_addr.c ---
-    d24 _ip4_addr_isbroadcast_u32 - app
-    d24 _ip4_addr_netmask_valid - app
-    d24 _ipaddr_addr - app
-    d24 _ip4addr_aton - app
-    d24 _ip4addr_ntoa - app
-    d24 _ip4addr_ntoa_r - app
+    d24 _ip4_addr_isbroadcast_u32
+    d24 _ip4_addr_netmask_valid
+    d24 _ipaddr_addr
+    d24 _ip4addr_aton
+    d24 _ip4addr_ntoa
+    d24 _ip4addr_ntoa_r
 
 ; --- src/core/ipv4/ip4_frag.c ---
-    d24 _ip4_reass - app
-    d24 _ip4_frag - app
+    d24 _ip4_reass
+    d24 _ip4_frag
 
 ; --- src/core/ipv6/ip6.c ---
-    d24 _ip6_route - app
-    d24 _ip6_select_source_address - app
-    d24 _ip6_input - app
-    d24 _ip6_output - app
-    d24 _ip6_output_if - app
-    d24 _ip6_output_if_src - app
-    d24 _ip6_options_add_hbh_ra - app
+    d24 _ip6_route
+    d24 _ip6_select_source_address
+    d24 _ip6_input
+    d24 _ip6_output
+    d24 _ip6_output_if
+    d24 _ip6_output_if_src
+    d24 _ip6_options_add_hbh_ra
 
 ; --- src/core/ipv6/ip6_addr.c ---
-    d24 _ip6addr_aton - app
-    d24 _ip6addr_ntoa - app
-    d24 _ip6addr_ntoa_r - app
+    d24 _ip6addr_aton
+    d24 _ip6addr_ntoa
+    d24 _ip6addr_ntoa_r
 
 ; --- src/core/ipv6/ip6_frag.c ---
-    d24 _ip6_reass - app
-    d24 _ip6_frag - app
+    d24 _ip6_reass
+    d24 _ip6_frag
 
 ; --- src/core/ip.c ---
-    d24 _ipaddr_ntoa - app
-    d24 _ipaddr_ntoa_r - app
-    d24 _ipaddr_aton - app
+    d24 _ipaddr_ntoa
+    d24 _ipaddr_ntoa_r
+    d24 _ipaddr_aton
 
 ; --- src/core/mem.c ---
-    d24 _mem_trim - app
-    d24 _mem_malloc - app
-    d24 _mem_calloc - app
-    d24 _mem_free - app
+    d24 _mem_trim
+    d24 _mem_malloc
+    d24 _mem_calloc
+    d24 _mem_free
 
 ; --- src/core/memp.c ---
-    d24 _memp_malloc - app
-    d24 _memp_free - app
+    d24 _memp_malloc
+    d24 _memp_free
 
 ; --- src/core/ipv6/mld6.c ---
-    d24 _mld6_stop - app
-    d24 _mld6_report_groups - app
-    d24 _mld6_lookfor_group - app
-    d24 _mld6_input - app
-    d24 _mld6_joingroup - app
-    d24 _mld6_joingroup_netif - app
-    d24 _mld6_leavegroup - app
-    d24 _mld6_leavegroup_netif - app
+    d24 _mld6_stop
+    d24 _mld6_report_groups
+    d24 _mld6_lookfor_group
+    d24 _mld6_input
+    d24 _mld6_joingroup
+    d24 _mld6_joingroup_netif
+    d24 _mld6_leavegroup
+    d24 _mld6_leavegroup_netif
 
 ; --- src/core/ipv6/nd6.c ---
-    d24 _nd6_input - app
-    d24 _nd6_clear_destination_cache - app
-    d24 _nd6_find_route - app
-    d24 _nd6_get_next_hop_addr_or_queue - app
-    d24 _nd6_get_destination_mtu - app
-    d24 _nd6_reachability_hint - app
-    d24 _nd6_cleanup_netif - app
-    d24 _nd6_adjust_mld_membership - app
-    d24 _nd6_restart_netif - app
+    d24 _nd6_input
+    d24 _nd6_clear_destination_cache
+    d24 _nd6_find_route
+    d24 _nd6_get_next_hop_addr_or_queue
+    d24 _nd6_get_destination_mtu
+    d24 _nd6_reachability_hint
+    d24 _nd6_cleanup_netif
+    d24 _nd6_adjust_mld_membership
+    d24 _nd6_restart_netif
 
 ; --- src/core/netif.c ---
-    d24 _netif_alloc_client_data_id - app
-    d24 _netif_add_noaddr - app
-    d24 _netif_add - app
-    d24 _netif_set_addr - app
-    d24 _netif_remove - app
-    d24 _netif_find - app
-    d24 _netif_set_default - app
-    d24 _netif_set_ipaddr - app
-    d24 _netif_set_netmask - app
-    d24 _netif_set_gw - app
-    d24 _netif_set_up - app
-    d24 _netif_set_down - app
-    d24 _netif_set_status_callback - app
-    d24 _netif_set_remove_callback - app
-    d24 _netif_set_link_up - app
-    d24 _netif_set_link_down - app
-    d24 _netif_set_link_callback - app
-    d24 _netif_loop_output - app
-    d24 _netif_poll - app
-    d24 _netif_poll_all - app
-    d24 _netif_input - app
-    d24 _netif_ip6_addr_set - app
-    d24 _netif_ip6_addr_set_parts - app
-    d24 _netif_ip6_addr_set_state - app
-    d24 _netif_get_ip6_addr_match - app
-    d24 _netif_create_ip6_linklocal_address - app
-    d24 _netif_add_ip6_address - app
-    d24 _netif_name_to_index - app
-    d24 _netif_index_to_name - app
-    d24 _netif_get_by_index - app
-    d24 _netif_add_ext_callback - app
-    d24 _netif_remove_ext_callback - app
+    d24 _netif_alloc_client_data_id
+    d24 _netif_add_noaddr
+    d24 _netif_add
+    d24 _netif_set_addr
+    d24 _netif_remove
+    d24 _netif_find
+    d24 _netif_set_default
+    d24 _netif_set_ipaddr
+    d24 _netif_set_netmask
+    d24 _netif_set_gw
+    d24 _netif_set_up
+    d24 _netif_set_down
+    d24 _netif_set_status_callback
+    d24 _netif_set_remove_callback
+    d24 _netif_set_link_up
+    d24 _netif_set_link_down
+    d24 _netif_set_link_callback
+    d24 _netif_loop_output
+    d24 _netif_poll
+    d24 _netif_poll_all
+    d24 _netif_input
+    d24 _netif_ip6_addr_set
+    d24 _netif_ip6_addr_set_parts
+    d24 _netif_ip6_addr_set_state
+    d24 _netif_get_ip6_addr_match
+    d24 _netif_create_ip6_linklocal_address
+    d24 _netif_add_ip6_address
+    d24 _netif_name_to_index
+    d24 _netif_index_to_name
+    d24 _netif_get_by_index
+    d24 _netif_add_ext_callback
+    d24 _netif_remove_ext_callback
 
 ; --- src/core/pbuf.c ---
-    d24 _pbuf_free_ooseq - app
-    d24 _pbuf_alloc - app
-    d24 _pbuf_alloc_reference - app
-    d24 _pbuf_alloced_custom - app
-    d24 _pbuf_realloc - app
-    d24 _pbuf_header - app
-    d24 _pbuf_header_force - app
-    d24 _pbuf_add_header - app
-    d24 _pbuf_add_header_force - app
-    d24 _pbuf_remove_header - app
-    d24 _pbuf_free_header - app
-    d24 _pbuf_ref - app
-    d24 _pbuf_free - app
-    d24 _pbuf_clen - app
-    d24 _pbuf_cat - app
-    d24 _pbuf_chain - app
-    d24 _pbuf_dechain - app
-    d24 _pbuf_copy - app
-    d24 _pbuf_copy_partial_pbuf - app
-    d24 _pbuf_copy_partial - app
-    d24 _pbuf_get_contiguous - app
-    d24 _pbuf_take - app
-    d24 _pbuf_take_at - app
-    d24 _pbuf_skip - app
-    d24 _pbuf_coalesce - app
-    d24 _pbuf_clone - app
-    d24 _pbuf_get_at - app
-    d24 _pbuf_try_get_at - app
-    d24 _pbuf_put_at - app
-    d24 _pbuf_memcmp - app
-    d24 _pbuf_memfind - app
-    d24 _pbuf_strstr - app
+    d24 _pbuf_free_ooseq
+    d24 _pbuf_alloc
+    d24 _pbuf_alloc_reference
+    d24 _pbuf_alloced_custom
+    d24 _pbuf_realloc
+    d24 _pbuf_header
+    d24 _pbuf_header_force
+    d24 _pbuf_add_header
+    d24 _pbuf_add_header_force
+    d24 _pbuf_remove_header
+    d24 _pbuf_free_header
+    d24 _pbuf_ref
+    d24 _pbuf_free
+    d24 _pbuf_clen
+    d24 _pbuf_cat
+    d24 _pbuf_chain
+    d24 _pbuf_dechain
+    d24 _pbuf_copy
+    d24 _pbuf_copy_partial_pbuf
+    d24 _pbuf_copy_partial
+    d24 _pbuf_get_contiguous
+    d24 _pbuf_take
+    d24 _pbuf_take_at
+    d24 _pbuf_skip
+    d24 _pbuf_coalesce
+    d24 _pbuf_clone
+    d24 _pbuf_get_at
+    d24 _pbuf_try_get_at
+    d24 _pbuf_put_at
+    d24 _pbuf_memcmp
+    d24 _pbuf_memfind
+    d24 _pbuf_strstr
 
 ; --- src/core/raw.c ---
-    d24 _raw_new - app
-    d24 _raw_new_ip_type - app
-    d24 _raw_remove - app
-    d24 _raw_bind - app
-    d24 _raw_bind_netif - app
-    d24 _raw_connect - app
-    d24 _raw_disconnect - app
-    d24 _raw_sendto - app
-    d24 _raw_sendto_if_src - app
-    d24 _raw_send - app
-    d24 _raw_recv - app
+    d24 _raw_new
+    d24 _raw_new_ip_type
+    d24 _raw_remove
+    d24 _raw_bind
+    d24 _raw_bind_netif
+    d24 _raw_connect
+    d24 _raw_disconnect
+    d24 _raw_sendto
+    d24 _raw_sendto_if_src
+    d24 _raw_send
+    d24 _raw_recv
 
 ; --- src/core/sntp_time.c ---
-    d24 _lwip_sntp_set_timezone_offset - app
-    d24 _lwip_sntp_set_dst_enabled - app
-    d24 _lwip_sntp_set_time - app
-    d24 _lwip_sntp_reset_flag - app
-    d24 _lwip_sntp_time_was_set - app
-    d24 _lwip_sntp_get_unix_time - app
+    d24 _lwip_sntp_set_timezone_offset
+    d24 _lwip_sntp_set_dst_enabled
+    d24 _lwip_sntp_set_time
+    d24 _lwip_sntp_reset_flag
+    d24 _lwip_sntp_time_was_set
+    d24 _lwip_sntp_get_unix_time
 
 ; --- src/core/timeouts.c ---
-    d24 _sys_timeout - app
-    d24 _sys_untimeout - app
+    d24 _sys_timeout
+    d24 _sys_untimeout
 
 ; --- src/core/tcp.c ---
-    d24 _tcp_new - app
-    d24 _tcp_new_ip_type - app
-    d24 _tcp_arg - app
-    d24 _tcp_recv - app
-    d24 _tcp_sent - app
-    d24 _tcp_err - app
-    d24 _tcp_accept - app
-    d24 _tcp_poll - app
-    d24 _tcp_backlog_delayed - app
-    d24 _tcp_backlog_accepted - app
-    d24 _tcp_recved - app
-    d24 _tcp_bind - app
-    d24 _tcp_bind_netif - app
-    d24 _tcp_connect - app
-    d24 _tcp_listen_with_backlog_and_err - app
-    d24 _tcp_listen_with_backlog - app
-    d24 _tcp_abort - app
-    d24 _tcp_close - app
-    d24 _tcp_shutdown - app
+    d24 _tcp_new
+    d24 _tcp_new_ip_type
+    d24 _tcp_arg
+    d24 _tcp_recv
+    d24 _tcp_sent
+    d24 _tcp_err
+    d24 _tcp_accept
+    d24 _tcp_poll
+    d24 _tcp_backlog_delayed
+    d24 _tcp_backlog_accepted
+    d24 _tcp_recved
+    d24 _tcp_bind
+    d24 _tcp_bind_netif
+    d24 _tcp_connect
+    d24 _tcp_listen_with_backlog_and_err
+    d24 _tcp_listen_with_backlog
+    d24 _tcp_abort
+    d24 _tcp_close
+    d24 _tcp_shutdown
 
 ; --- src/core/tcp_out.c ---
-    d24 _tcp_write - app
+    d24 _tcp_write
 
 ; --- src/core/tcp.c ---
-    d24 _tcp_setprio - app
+    d24 _tcp_setprio
 
 ; --- src/core/tcp_out.c ---
-    d24 _tcp_output - app
+    d24 _tcp_output
 
 ; --- src/core/tcp.c ---
-    d24 _tcp_tcp_get_tcp_addrinfo - app
+    d24 _tcp_tcp_get_tcp_addrinfo
 
 ; --- src/core/udp.c ---
-    d24 _udp_new - app
-    d24 _udp_new_ip_type - app
-    d24 _udp_remove - app
-    d24 _udp_bind - app
-    d24 _udp_bind_netif - app
-    d24 _udp_connect - app
-    d24 _udp_disconnect - app
-    d24 _udp_recv - app
-    d24 _udp_sendto_if - app
-    d24 _udp_sendto_if_src - app
-    d24 _udp_sendto - app
-    d24 _udp_send - app
-    d24 _udp_input - app
-    d24 _udp_netif_ip_addr_changed - app
+    d24 _udp_new
+    d24 _udp_new_ip_type
+    d24 _udp_remove
+    d24 _udp_bind
+    d24 _udp_bind_netif
+    d24 _udp_connect
+    d24 _udp_disconnect
+    d24 _udp_recv
+    d24 _udp_sendto_if
+    d24 _udp_sendto_if_src
+    d24 _udp_sendto
+    d24 _udp_send
+    d24 _udp_input
+    d24 _udp_netif_ip_addr_changed
 
 ; --- src/netif/ethernet.c ---
-    d24 _ethernet_input - app
-    d24 _ethernet_output - app
+    d24 _ethernet_input
+    d24 _ethernet_output
 
 ; --- src/drivers/usb_ethernet.c ---
-    d24 _eth_set_rx_throttle - app
-    d24 _eth_set_rx_drain_interval_ms - app
-    d24 _eth_get_interfaces - app
-    d24 _eth_usb_event_callback - app
+    d24 _eth_set_rx_throttle
+    d24 _eth_set_rx_drain_interval_ms
+    d24 _eth_get_interfaces
+    d24 _eth_usb_event_callback
+
+; --- src/tls/contrib/x25519/src/x25519.s ---
+    d24 _tls_x25519_publickey
+    d24 _tls_x25519_secret
