@@ -265,10 +265,12 @@ static void eth_rx_ring_pressure_cb(struct mem_buffer *mb, size_t requested, enu
  * bumping its period in master ticks. The drain dispatcher is *not*
  * slowed — we always want to keep emptying any frames already in the
  * ring. Under CRITICAL we set period to 0 (disabled) so we stop queuing
- * new USB receives entirely; the per-callback re-arms still happen
- * inside ecm/ncm_receive_callback if/when packets clear. */
+ * new USB receives entirely; once pressure clears, the next call here
+ * resumes the dispatcher AND kicks a one-shot re-arm so RX doesn't sit
+ * idle waiting for the dispatcher's next tick. */
 void eth_set_rx_throttle(enum mem_pressure_level level)
 {
+    enum mem_pressure_level previous = g_eth_rx_throttle_level;
     g_eth_rx_throttle_level = level;
     if (level == MEM_PRESSURE_CRITICAL)
     {
@@ -278,6 +280,14 @@ void eth_set_rx_throttle(enum mem_pressure_level level)
     uint32_t ms = eth_rx_schedule_interval_ms();
     lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
                              lwip_dispatch_period_from_ms(ms));
+    /* Recovering from CRITICAL: any in-flight RX that completed while
+     * the dispatcher was off would have set rx_transfer_active = false
+     * and never re-armed. Kick the scheduler immediately so RX resumes
+     * within one tick instead of one dispatcher period. */
+    if (previous == MEM_PRESSURE_CRITICAL)
+    {
+        eth_schedule_rx_for_netifs();
+    }
 }
 
 void eth_set_rx_drain_interval_ms(uint32_t interval_ms)
@@ -792,8 +802,14 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     if (p->tot_len > ETHERNET_MTU)
         return ERR_MEM;
 
+    /* Size the NTB to the actual datagram, not the MTU. A 40-byte TCP ACK
+     * was previously allocated and transmitted as a 1578-byte buffer; on
+     * a sustained download the ACK rate is high enough that this burned
+     * both pbuf memory and USB TX bandwidth, causing stalls. */
+    uint16_t ntb_len = NCM_HBUF_SIZE + p->tot_len;
+
     // allocate TX packet buffer
-    struct pbuf *obuf = pbuf_alloc(PBUF_RAW, ETHERNET_MTU + NCM_HBUF_SIZE, PBUF_RAM);
+    struct pbuf *obuf = pbuf_alloc(PBUF_RAW, ntb_len, PBUF_RAM);
     if (obuf == NULL)
         return ERR_MEM;
     struct eth_tx_ctx *ctx = malloc(sizeof(*ctx));
@@ -803,7 +819,7 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
         return ERR_MEM;
     }
 
-    memset(obuf->payload, 0, ETHERNET_MTU + NCM_HBUF_SIZE);
+    memset(obuf->payload, 0, ntb_len);
 
     // declare NTH, NDP, and NDP_IDX structures
     uint8_t hdr_buf[NCM_HBUF_SIZE] = {0};
@@ -814,7 +830,7 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     nth->dwSignature = NCM_NTH_SIG;
     nth->wHeaderLength = NCM_NTH_LEN;
     nth->wSequence = dev->class.ncm.sequence++;
-    nth->wBlockLength = NCM_HBUF_SIZE + ETHERNET_MTU;
+    nth->wBlockLength = ntb_len;
     nth->wNdpIndex = offset_ndp;
 
     ndp->dwSignature = NCM_NDP_SIG0;
