@@ -34,14 +34,10 @@
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
 static uint8_t ifnums_used = 0;
-#ifndef LWIP_LIBLOAD_BUILD
-/* In the libload build, usb_fn is a macro that aliases fn_imports_table.usb;
- * its storage is defined by release/lwip.s with each USB slot statically
- * initialised to the `jp <real>` stub that libload installs from usbdrvce.lib.
- * The non-libload (single-binary) build still defines storage here, zero-
- * initialised, and lwip_init memcpy's the configurator's vtable into it. */
-struct usb_configurator usb_fn = {0};
-#endif
+/* Backing storage for the unified imports table. The libload bootstrap
+ * (release/lwip.asm) populates this at load by calling
+ * lwip_init_runtime_internal with its own libload-side copy. */
+struct lwip_imports fn_imports_table = {0};
 static enum mem_pressure_level g_eth_rx_throttle_level = MEM_PRESSURE_NONE;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)

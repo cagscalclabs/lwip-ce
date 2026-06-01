@@ -30,6 +30,7 @@
 .globl _fn_exports_table
 
 .extern _lwip_start
+.extern _lwip_init_runtime_internal
 .extern _lwip_poll_network_events
 .extern _lwip_conn_create
 .extern _lwip_conn_destroy
@@ -408,10 +409,15 @@
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 376    ; entry count
+    d24 377    ; entry count
 
 ; --- src/lwIP.c ---
     d24 _lwip_start
+
+; --- src/core/lwip_runtime.c ---
+    d24 _lwip_init_runtime_internal
+
+; --- src/lwIP.c ---
     d24 _lwip_poll_network_events
     d24 _lwip_conn_create
     d24 _lwip_conn_destroy

@@ -19,6 +19,21 @@ EXTRA_LDFLAGS += -T src/tls/core/x25519_reloc.ld
 # `LINKER_SCRIPT ?=` default does not win.
 LINKER_SCRIPT = $(CURDIR)/linker_script_lwip.ld
 
+# Memory layout contract:
+#
+#   lwIP app (this build):
+#     BSSHEAP_LOW  = 0xD052C6   (toolchain default for flash apps)
+#     BSSHEAP_HIGH = BSSHEAP_LOW + 6 KiB = 0xD06AC6
+#     The 6 KiB window holds the app's own .bss and .data at runtime.
+#
+#   Consumer apps using lwIP:
+#     BSSHEAP_LOW  >= 0xD06AC6  (= this build's BSSHEAP_HIGH)
+#     so the consumer's BSS starts above lwIP-app's reserved window.
+#
+# Override BSSHEAP_HIGH before the toolchain include so its `?=` default
+# does not win.
+BSSHEAP_HIGH = 0xD06AC6
+
 LTO = NO
 
 APPLICATION = YES

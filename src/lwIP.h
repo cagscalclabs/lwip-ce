@@ -160,6 +160,13 @@ struct lwip_conn
  *  directly instead. */
 bool lwip_start(void);
 
+/** App-side init invoked by lwip_init_runtime_opaque after the export
+ *  trampolines are patched. Zeroes lwIP's BSS, copies its .data from LMA
+ *  to VMA, and copies the libload-side imports table into the app's
+ *  fn_imports_table so app code can dispatch through usb_fn / the host
+ *  CRT pointers. Consumers do not call this directly. */
+void lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
+
 /** Pump network events. Calls usb_HandleEvents() and sys_check_timeouts().
  *  The app should call this every iteration of its main loop. */
 void lwip_poll_network_events(void);

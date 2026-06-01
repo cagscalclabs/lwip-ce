@@ -40,9 +40,6 @@
 #include "arch.h"
 #include "err.h"
 #include "usb_ethernet.h"
-#include <stdlib.h>  /* malloc, free, realloc — needed by LWIP_CONFIGURATOR_INIT */
-#include <stddef.h>
-#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -95,42 +92,12 @@ extern "C" {
  * @}
  */
 
-struct lwip_configurator {
-    uint24_t version;
-    struct usb_configurator usb_conf;
-    struct {
-        void* (*caller_malloc)(size_t);
-        void  (*caller_free)(void*);
-        void* (*caller_realloc)(void*, size_t);
-    } malloc_conf;
-};
-#define LWIP_CONFIGURATOR_V1 sizeof(struct lwip_configurator)
-
-/**
- * Designated initializer for lwip_configurator.
- *
- * The shipped lwip header defines this macro so that when the *caller*
- * includes it and writes:
- *
- *   static struct lwip_configurator conf = LWIP_CONFIGURATOR_INIT;
- *
- * the struct is built into the caller's translation unit, which means
- * malloc/free/realloc resolve to the *caller's* CRT — not lwip-ce's.
- * This keeps all lwip heap traffic inside the caller's allocator and
- * avoids any cross-program heap conflict.
- *
- * After this, the caller only needs to fill in the usb_conf fields
- * before calling lwip_init().
- */
-#define LWIP_CONFIGURATOR_INIT \
-    { \
-        .version        = LWIP_CONFIGURATOR_V1, \
-        .usb_conf       = {0}, \
-        .malloc_conf    = { malloc, free, realloc } \
-    }
-
-/* Modules initialization */
-err_t lwip_init(struct lwip_configurator *conf);
+/* Modules initialization. malloc/free/realloc and the USB vtable come
+ * from fn_imports_table, populated by the libload bootstrap before this
+ * runs. Callers who want static memory should call mem_init_static()
+ * before lwip_init() — the dynamic-heap init below is skipped when the
+ * memory subsystem is already ready. */
+err_t lwip_init(void);
 
 #ifdef __cplusplus
 }

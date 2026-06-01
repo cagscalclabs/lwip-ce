@@ -15,5 +15,6 @@
 #include "cryptography/rsa.h"
 #include "cryptography/truststore.h"
 #include "cryptography/x509.h"
+#include "cryptography/x25519.h"
 
 #endif /* LWIP_PUBLIC_CRYPTOGRAPHY_H */

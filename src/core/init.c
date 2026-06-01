@@ -345,16 +345,14 @@ PACK_STRUCT_END
  * Use this in NO_SYS mode. Use tcpip_init() otherwise.
  */
 err_t
-lwip_init(struct lwip_configurator *conf)
+lwip_init(void)
 {
-    if(conf==NULL) return ERR_ARG;
     lwip_app_config_refresh();
 
-    /* Initialize the memory subsystem from the stored app config.
-     * lwip_app_config_refresh() has already loaded and clamped the
-     * stored lwip_mem_cap against the feature floor.  We re-clamp
-     * against current free RAM here so a stale cap never exceeds what
-     * the device actually has available right now. */
+    /* Initialize the dynamic memory subsystem from the stored app config,
+     * unless the caller already set up static memory via mem_init_static().
+     * CRTs come from fn_imports_table (populated by the libload bootstrap). */
+    if (!mem_is_ready())
     {
         const lwip_app_config_t *cfg = lwip_app_config_get();
         size_t floor = LWIP_TLS_FLOOR_BYTES;
@@ -363,10 +361,6 @@ lwip_init(struct lwip_configurator *conf)
         void *free_block = NULL;
         size_t free_ram = os_MemChk(&free_block);
         if (cap > free_ram) cap = free_ram;
-#ifdef LWIP_LIBLOAD_BUILD
-        /* Under libload, the CRT pointers live in fn_imports_table (slots
-         * 0/1/2). lwip_init_runtime() populated them before lwip_init was
-         * called, so the configurator's malloc_conf field is ignored. */
         if (!mem_init(cap,
                       fn_imports_table.malloc,
                       fn_imports_table.free,
@@ -374,22 +368,7 @@ lwip_init(struct lwip_configurator *conf)
         {
             return ERR_MEM;
         }
-#else
-        if (!mem_init(cap,
-                      conf->malloc_conf.caller_malloc,
-                      conf->malloc_conf.caller_free,
-                      conf->malloc_conf.caller_realloc))
-        {
-            return ERR_MEM;
-        }
-#endif
     }
-
-#ifndef LWIP_LIBLOAD_BUILD
-    /* Under libload, usb_fn aliases fn_imports_table.usb which is statically
-     * populated by include_library 'usbdrvce.lib' — no copy needed. */
-    memcpy(&usb_fn, &conf->usb_conf, sizeof(struct usb_configurator));
-#endif
     {
         const struct mem_buffer_pool_cfg pools[] = {
             {LWIP_MEMPOOL_SMALL_BLOCK, LWIP_MEMPOOL_SMALL_COUNT, 0, 0},

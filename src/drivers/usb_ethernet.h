@@ -242,13 +242,9 @@ struct usb_configurator {
     void (*cleanup)(void);
 };
 
-#ifdef LWIP_LIBLOAD_BUILD
-/* Under libload, all imports — host CRT (malloc/free/realloc) and the
- * USB vtable — live in a single statically-initialised table in the
- * stub (release/lwip.s). The CRT slots are populated at load time by
- * lwip_init_runtime(); the USB slots are populated at link time via
- * include_library 'usbdrvce.lib'. lwIP-internal code calls usb_fn.foo()
- * as before — the macro below aliases it into the unified table. */
+/* Host CRT + USB vtable lwIP's code dispatches through. The lwIP app
+ * holds the backing storage; the libload bootstrap copies its own
+ * libload-side table into fn_imports_table during init. */
 struct lwip_imports {
     void  *(*malloc)(size_t);
     void   (*free)(void *);
@@ -257,9 +253,6 @@ struct lwip_imports {
 };
 extern struct lwip_imports fn_imports_table;
 #define usb_fn (fn_imports_table.usb)
-#else
-extern struct usb_configurator usb_fn;
-#endif
 
 
 /// @brief Polls for the registration status of interfaces.

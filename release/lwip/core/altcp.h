@@ -135,7 +135,9 @@ err_t altcp_get_tcp_addrinfo(struct altcp_pcb *conn, int local, ip_addr_t *addr,
 ip_addr_t *altcp_get_ip(struct altcp_pcb *conn, int local);
 u16_t altcp_get_port(struct altcp_pcb *conn, int local);
 
+#ifdef LWIP_DEBUG
 enum tcp_state altcp_dbg_get_tcp_state(struct altcp_pcb *conn);
+#endif
 
 #ifdef __cplusplus
 }
@@ -196,7 +198,9 @@ enum tcp_state altcp_dbg_get_tcp_state(struct altcp_pcb *conn);
 #define altcp_get_tcp_addrinfo tcp_get_tcp_addrinfo
 #define altcp_get_ip(pcb, local) ((local) ? (&(pcb)->local_ip) : (&(pcb)->remote_ip))
 
+#ifdef LWIP_DEBUG
 #define altcp_dbg_get_tcp_state tcp_dbg_get_tcp_state
+#endif
 
 #endif /* LWIP_ALTCP */
 

@@ -70,13 +70,18 @@ typedef enum
  *  peer close). Single value, no callback registration required. */
 typedef enum
 {
-    LWIP_STATUS_INIT = 0,    /**< created but not connecting yet */
-    LWIP_STATUS_RESOLVING,   /**< DNS lookup in flight */
-    LWIP_STATUS_CONNECTING,  /**< TCP / TLS handshake in flight */
-    LWIP_STATUS_CONNECTED,   /**< ready for write/recv */
-    LWIP_STATUS_CLOSING,     /**< local shutdown / close issued, awaiting peer */
-    LWIP_STATUS_CLOSED,      /**< peer closed cleanly, or both sides done */
-    LWIP_STATUS_ERROR,       /**< fatal error; check last_error */
+    LWIP_STATUS_INIT = 0,            /**< created but not connecting yet */
+    LWIP_STATUS_WAITING_SERVICES,    /**< connect deferred: netif not yet up
+                                          OR requested service (DHCP/DNS) not
+                                          yet ready. transitions automatically
+                                          to RESOLVING/CONNECTING when ready,
+                                          or to ERROR on timeout. */
+    LWIP_STATUS_RESOLVING,           /**< DNS lookup in flight */
+    LWIP_STATUS_CONNECTING,          /**< TCP / TLS handshake in flight */
+    LWIP_STATUS_CONNECTED,           /**< ready for write/recv */
+    LWIP_STATUS_CLOSING,             /**< local shutdown / close issued */
+    LWIP_STATUS_CLOSED,              /**< peer closed cleanly */
+    LWIP_STATUS_ERROR,               /**< fatal error; check last_error */
 } lwip_status_t;
 
 /** Service-up flags for lwip_conn_create. These are *netif-level* — they
@@ -98,6 +103,11 @@ typedef void (*lwip_conn_err_cb)(void *arg, struct lwip_conn *conn,
                                  lwip_error_t err);
 typedef void (*lwip_conn_poll_cb)(void *arg, struct lwip_conn *conn);
 typedef void (*lwip_conn_closed_cb)(void *arg, struct lwip_conn *conn);
+
+/** Maximum time (ms) lwip_conn_connect will wait in
+ *  LWIP_STATUS_WAITING_SERVICES before giving up with LWIP_ERR_NETIF.
+ *  Covers worst-case DHCP-on-cold-boot latency on a slow link. */
+#define LWIP_CONN_SERVICES_TIMEOUT_MS  30000u
 
 /** Connection state. Transparent on purpose — apps may inspect `status`
  *  and `last_error` directly. All other fields are managed by the
@@ -130,6 +140,13 @@ struct lwip_conn
         struct altcp_pcb         *altcp;
     } pcb;
     struct altcp_tls_ce_config  *tls_conf;  /**< owned by conn, only for ALTCP_TLS */
+
+    /* Deferred-connect state for LWIP_STATUS_WAITING_SERVICES. Set by
+     * lwip_conn_connect when the netif/services aren't ready yet;
+     * cleared once the deferred connect fires (or times out). */
+    const char          *pending_host;       /**< borrowed pointer; caller must keep alive */
+    uint32_t             services_deadline;  /**< sys_now() in ms; 0 = unused */
+    struct lwip_conn    *services_next;      /**< intrusive list of waiters */
 };
 
 /** Boot the network stack. Loads the persisted lwip_app_config appvar,
@@ -141,6 +158,13 @@ struct lwip_conn
  *  configurator. Apps that need custom usb hooks should call lwip_init()
  *  directly instead. */
 bool lwip_start(void);
+
+/** App-side init invoked by lwip_init_runtime_opaque after the export
+ *  trampolines are patched. Zeroes lwIP's BSS, copies its .data from LMA
+ *  to VMA, and copies the libload-side imports table into the app's
+ *  fn_imports_table so app code can dispatch through usb_fn / the host
+ *  CRT pointers. Consumers do not call this directly. */
+void lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
 
 /** Pump network events. Calls usb_HandleEvents() and sys_check_timeouts().
  *  The app should call this every iteration of its main loop. */

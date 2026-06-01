@@ -36,6 +36,8 @@ outside the network stack.
      - RSA support for 1024-bit through 2048-bit keys.
    * - :doc:`truststore.h <cryptography/truststore>`
      - Certificate pin trust store checks.
+   * - :doc:`x25519.h <cryptography/x25519>`
+     - X25519 elliptic-curve scalar multiplication.
    * - :doc:`x509.h <cryptography/x509>`
      - X.509 certificate parsing.
 
@@ -55,4 +57,5 @@ outside the network stack.
    cryptography/random
    cryptography/rsa
    cryptography/truststore
+   cryptography/x25519
    cryptography/x509

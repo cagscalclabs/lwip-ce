@@ -148,6 +148,14 @@ typedef struct _eth_device_t
     uint8_t type;
     uint8_t hwaddr[6];
     bool rx_transfer_active;
+    /* Per-device retry counters and "fatal" flag. Previously these were
+     * function-static globals, which interleaved across multiple devices
+     * and could trip device A's fatal threshold from device B's
+     * transient errors. */
+    uint8_t rx_retries;
+    uint8_t tx_retries;
+    uint8_t int_retries;
+    bool disabled_with_error;
     struct mem_buffer *rx_ring;
     struct
     {
@@ -225,15 +233,12 @@ struct usb_configurator {
                         const usb_standard_descriptors_t *device_descriptors,
                         usb_init_flags_t flags);
     usb_error_t (*handle_events)(void);
+    void (*cleanup)(void);
 };
 
-#ifdef LWIP_LIBLOAD_BUILD
-/* Under libload, all imports — host CRT (malloc/free/realloc) and the
- * USB vtable — live in a single statically-initialised table in the
- * stub (release/lwip.s). The CRT slots are populated at load time by
- * lwip_init_runtime(); the USB slots are populated at link time via
- * include_library 'usbdrvce.lib'. lwIP-internal code calls usb_fn.foo()
- * as before — the macro below aliases it into the unified table. */
+/* Host CRT + USB vtable lwIP's code dispatches through. The lwIP app
+ * holds the backing storage; the libload bootstrap copies its own
+ * libload-side table into fn_imports_table during init. */
 struct lwip_imports {
     void  *(*malloc)(size_t);
     void   (*free)(void *);
@@ -242,9 +247,6 @@ struct lwip_imports {
 };
 extern struct lwip_imports fn_imports_table;
 #define usb_fn (fn_imports_table.usb)
-#else
-extern struct usb_configurator usb_fn;
-#endif
 
 /// @brief Polls for the registration status of interfaces.
 /// @return A bitmap indicating what NETIFs are registered (netif->num)

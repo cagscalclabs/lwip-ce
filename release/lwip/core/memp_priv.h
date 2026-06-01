@@ -47,6 +47,9 @@ extern "C" {
 #include "mem.h"
 #include "mem_priv.h"
 
+#define LWIP_STATS_DISPLAY 0
+#define MEMP_OVERFLOW_CHECK 0
+
 /* No sanity checks
  * We don't need to preserve the struct memp while not allocated, so we
  * can save a little space and set MEMP_SIZE to 0.
@@ -56,15 +59,21 @@ extern "C" {
 
 /** Memory pool descriptor */
 struct memp_desc {
+#if defined(LWIP_DEBUG) || MEMP_OVERFLOW_CHECK || LWIP_STATS_DISPLAY
   /** Textual description */
   const char *desc;
+#endif /* LWIP_DEBUG || MEMP_OVERFLOW_CHECK || LWIP_STATS_DISPLAY */
 
   /** Element size */
   u16_t size;
 
 };
 
+#if defined(LWIP_DEBUG) || MEMP_OVERFLOW_CHECK || LWIP_STATS_DISPLAY
 #define DECLARE_LWIP_MEMPOOL_DESC(desc) (desc),
+#else
+#define DECLARE_LWIP_MEMPOOL_DESC(desc)
+#endif
 
 #define LWIP_MEMPOOL_DECLARE_STATS_INSTANCE(name)
 #define LWIP_MEMPOOL_DECLARE_STATS_REFERENCE(name)

@@ -49,7 +49,11 @@ extern "C" {
 #endif
 
 #ifndef LWIP_DEBUG_TIMERNAMES
+#ifdef LWIP_DEBUG
 #define LWIP_DEBUG_TIMERNAMES SYS_DEBUG
+#else /* LWIP_DEBUG */
+#define LWIP_DEBUG_TIMERNAMES 0
+#endif /* LWIP_DEBUG*/
 #endif
 
 /** Returned by sys_timeouts_sleeptime() to indicate there is no timer, so we

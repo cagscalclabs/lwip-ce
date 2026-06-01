@@ -2787,34 +2787,7 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
         return true;
     }
 
-    /* LWIP_CONFIGURATOR_INIT pre-fills version and malloc_conf with this
-     * translation unit's malloc/free/realloc, so lwip allocates out of
-     * this program's heap.  Only the USB vtable is caller-specific. */
-    struct lwip_configurator conf = LWIP_CONFIGURATOR_INIT;
-    conf.usb_conf.reset_device = usb_ResetDevice;
-    conf.usb_conf.disable_device = usb_DisableDevice;
-    conf.usb_conf.ref_device = usb_RefDevice;
-    conf.usb_conf.unref_device = usb_UnrefDevice;
-    conf.usb_conf.set_device_data = usb_SetDeviceData;
-    conf.usb_conf.get_device_data = usb_GetDeviceData;
-    conf.usb_conf.get_role = usb_GetRole;
-    conf.usb_conf.get_device_flags = usb_GetDeviceFlags;
-    conf.usb_conf.schedule_transfer = usb_ScheduleTransfer;
-    conf.usb_conf.control_transfer = usb_ControlTransfer;
-    conf.usb_conf.get_config_descriptor_len = usb_GetConfigurationDescriptorTotalLength;
-    conf.usb_conf.get_descriptor = usb_GetDescriptor;
-    conf.usb_conf.get_string_descriptor = usb_GetStringDescriptor;
-    conf.usb_conf.set_configuration = usb_SetConfiguration;
-    conf.usb_conf.set_interface = usb_SetInterface;
-    conf.usb_conf.get_device_endpoint = usb_GetDeviceEndpoint;
-    conf.usb_conf.set_endpoint_data = usb_SetEndpointData;
-    conf.usb_conf.get_endpoint_data = usb_GetEndpointData;
-    conf.usb_conf.set_endpoint_flags = usb_SetEndpointFlags;
-    conf.usb_conf.set_endpoint_halt = usb_SetEndpointHalt;
-    conf.usb_conf.init = usb_Init;
-    conf.usb_conf.handle_events = usb_HandleEvents;
-
-    if (lwip_init(&conf) != ERR_OK)
+    if (lwip_init() != ERR_OK)
     {
         os_FontDrawText("lwip/mem init failed", 2, 2);
         os_GetKey();

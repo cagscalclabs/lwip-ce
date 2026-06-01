@@ -3,6 +3,7 @@
  * @author Anthony Cagliano
  * @author Adam Beckingham
  * @brief SHA-256 (and perhaps eventually SHA-384) implementation
+ *
  */
 //
 //  hashes.h
