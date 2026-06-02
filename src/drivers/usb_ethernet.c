@@ -546,6 +546,19 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
         LINK_STATS_INC(link.recv);
         MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
     }
+    /* Belt-and-suspenders re-arm. The dispatcher is the primary RX
+     * continuity mechanism, but it can be disabled (CRITICAL pressure)
+     * or arrive late. Self-re-arming on every successful receive turns
+     * the dispatcher into a safety net rather than the sole path.
+     * Skipped under CRITICAL so we honor backpressure. */
+    if (g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL &&
+        !dev->rx_transfer_active &&
+        usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
+                                 ETHERNET_MTU, ecm_receive_callback,
+                                 dev) == USB_SUCCESS)
+    {
+        dev->rx_transfer_active = true;
+    }
     return USB_SUCCESS;
 }
 
@@ -717,18 +730,22 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
         dev->rx_retries = 0;
         bool parse_ntb = true;
 
+        /* Bail-out branches below jump to rx_rearm rather than returning
+         * directly. A malformed NTB used to leave RX un-rearmed until
+         * the next dispatcher tick — fine under normal pressure, but a
+         * permanent stall if the dispatcher was throttled. */
         // get header and first NDP pointers
         uint8_t *ntb = (uint8_t *)recvbuf;
         if (transferred < NCM_NTH_LEN)
-            return USB_SUCCESS;
+            goto rx_rearm;
         struct ncm_nth *nth = (struct ncm_nth *)ntb;
         if (nth->dwSignature != NCM_NTH_SIG)
-            return USB_SUCCESS; // validate NTH signature field. If invalid, fail out
+            goto rx_rearm; // validate NTH signature field. If invalid, fail out
         if (nth->wHeaderLength < NCM_NTH_LEN ||
             nth->wBlockLength < NCM_NTH_LEN ||
             nth->wBlockLength > transferred ||
             !ncm_range_fits(nth->wNdpIndex, NCM_NDP_LEN, nth->wBlockLength))
-            return USB_SUCCESS;
+            goto rx_rearm;
 
         // start proc'ing first NDP
         size_t ndp_offset = nth->wNdpIndex;
@@ -738,10 +755,10 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
         do
         {
             if (ndp->dwSignature != NCM_NDP_SIG0)
-                return USB_SUCCESS; // validate NDP signature field, if invalid, fail out
+                goto rx_rearm; // validate NDP signature field, if invalid, fail out
             if (ndp->wLength < NCM_NDP_LEN ||
                 !ncm_range_fits(ndp_offset, ndp->wLength, nth->wBlockLength))
-                return USB_SUCCESS;
+                goto rx_rearm;
 
             // set datagram number to 0 and set datagram index pointer
             size_t idx_offset = ndp_offset + offsetof(struct ncm_ndp, wDatagramIdx);
@@ -756,9 +773,9 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                 if (datagram_index == 0 && datagram_len == 0)
                     break;
                 if (datagram_index == 0 || datagram_len == 0)
-                    return USB_SUCCESS;
+                    goto rx_rearm;
                 if (!ncm_range_fits(datagram_index, datagram_len, nth->wBlockLength))
-                    return USB_SUCCESS;
+                    goto rx_rearm;
 
                 // attempt to allocate pbuf
                 if (!eth_ring_push_frame(dev, &ntb[datagram_index], datagram_len))
@@ -770,13 +787,13 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
             }
             if (parse_ntb &&
                 !ncm_range_fits(idx_offset, sizeof(struct ncm_ndp_idx), ndp_offset + ndp->wLength))
-                return USB_SUCCESS;
+                goto rx_rearm;
             // if next NDP is 0, NTB is done and so is my sanity
             if (ndp->wNextNdpIndex == 0)
                 break;
             if (ndp->wNextNdpIndex <= ndp_offset ||
                 !ncm_range_fits(ndp->wNextNdpIndex, NCM_NDP_LEN, nth->wBlockLength))
-                return USB_SUCCESS;
+                goto rx_rearm;
             // set next NDP
             ndp_offset = ndp->wNextNdpIndex;
             ndp = (struct ncm_ndp *)&ntb[ndp_offset];
@@ -784,6 +801,21 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
 
         LINK_STATS_INC(link.recv);
         MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
+    }
+rx_rearm:
+    /* Belt-and-suspenders re-arm. The dispatcher is the primary RX
+     * continuity mechanism, but it can be disabled (CRITICAL pressure)
+     * or arrive late. Self-re-arming on every successful or bailed-out
+     * receive turns the dispatcher into a safety net. Skipped under
+     * CRITICAL so we honor backpressure. */
+    if (g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL &&
+        !dev->rx_transfer_active &&
+        usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
+                                 NCM_RX_NTB_MAX_SIZE,
+                                 ncm_receive_callback,
+                                 dev) == USB_SUCCESS)
+    {
+        dev->rx_transfer_active = true;
     }
     return USB_SUCCESS;
 }
