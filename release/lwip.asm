@@ -1,4 +1,4 @@
-; lwip.asm — libload library stub for lwIP. Generated 2026-06-01.
+; lwip.asm — libload library stub for lwIP. Generated 2026-06-02.
 ; Author: Anthony Cagliano
 ; Do not edit by hand. Sources: tools/functable.py,
 ; tools/lwip_init_runtime.asm.
@@ -413,8 +413,6 @@ _fn_imports_table_end:
 	export udp_netif_ip_addr_changed
 	export ethernet_input
 	export ethernet_output
-	export eth_set_rx_throttle
-	export eth_set_rx_drain_interval_ms
 	export eth_get_interfaces
 	export eth_usb_event_callback
 	export tls_x25519_publickey
@@ -792,8 +790,6 @@ udp_input:	jp 0
 udp_netif_ip_addr_changed:	jp 0
 ethernet_input:	jp 0
 ethernet_output:	jp 0
-eth_set_rx_throttle:	jp 0
-eth_set_rx_drain_interval_ms:	jp 0
 eth_get_interfaces:	jp 0
 eth_usb_event_callback:	jp 0
 tls_x25519_publickey:	jp 0

@@ -183,8 +183,6 @@ extern eth_device_t eth;
 
 /// @brief Callback function to be passed to @b usb_Init to enable Ethernet driver for lwIP
 usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_callback_data_t *callback_data);
-void eth_set_rx_throttle(enum mem_pressure_level level);
-void eth_set_rx_drain_interval_ms(uint32_t interval_ms);
 
 /** @brief Halt every USB endpoint backing every active ethernet netif.
  *  Used during stack shutdown to quiesce the device-side transport
@@ -261,5 +259,13 @@ extern struct lwip_imports fn_imports_table;
 /// @note The ifnum assignment system seeks to the next free ifnum.
 /// @note Up to 8 simultaneous interfaces allowed. Any more causes device init to fail.
 uint8_t eth_get_interfaces(void);
+
+#ifdef LWIP_ETHERNET_TEST_HOOKS
+bool eth_test_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len);
+size_t eth_test_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget);
+void eth_test_schedule_rx_for_netifs(void);
+usb_error_t eth_test_ecm_receive(eth_device_t *dev, const uint8_t *frame, size_t len);
+usb_error_t eth_test_ncm_receive(eth_device_t *dev, const uint8_t *ntb, size_t len);
+#endif
 
 #endif

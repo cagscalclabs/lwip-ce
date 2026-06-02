@@ -11,9 +11,9 @@
  * This module collapses every lwIP-CE owned periodic into a single
  * master tick (LWIP_DISPATCH_TICK_MS, the GCD of all sub-cadences).
  * Each sub-dispatcher has its own period_ticks counter; on rollover
- * the dispatcher fires. period_ticks is mutable at runtime so memory
- * pressure / RX throttling can slow individual sub-dispatchers without
- * affecting the others.
+ * the dispatcher fires. Ethernet RX uses a fixed cadence; memory
+ * pressure is expressed through TCP receive-window release timing
+ * instead of slowing ingress.
  *
  * lwIP's own cyclic timers (TCP, ARP, DHCP, etc.) are NOT routed
  * through this dispatcher. They keep using sys_timeout/cyclic_timer
@@ -42,6 +42,7 @@ typedef enum {
     LWIP_DISPATCH_ETH_RX_SCHEDULE,
     LWIP_DISPATCH_TLS_RNG_REQUEST,
     LWIP_DISPATCH_TLS_RNG_HEALTHCHECK,
+    LWIP_DISPATCH_TLS_RX_RECVD,      /**< TLS receive-window release */
     LWIP_DISPATCH_CONN_SERVICES,    /**< lwip_conn waiting-for-services poll */
     LWIP_DISPATCH_COUNT
 } lwip_dispatch_id_t;

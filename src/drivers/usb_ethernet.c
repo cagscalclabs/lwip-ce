@@ -38,7 +38,6 @@ static uint8_t ifnums_used = 0;
  * (release/lwip.asm) populates this at load by calling
  * lwip_init_runtime_internal with its own libload-side copy. */
 struct lwip_imports fn_imports_table = {0};
-static enum mem_pressure_level g_eth_rx_throttle_level = MEM_PRESSURE_NONE;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
 {
@@ -56,64 +55,17 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
         lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_ENDPOINT_ERROR);
     }
 }
-/* Cadence base values. These are *millisecond* cadences; the actual
- * dispatch happens through lwip/dispatch.h, which quantizes to master
- * ticks. Under memory pressure the scheduler period is slowed down via
- * lwip_dispatch_set_period — see eth_set_rx_throttle. */
+/* RX cadence (milliseconds). The dispatch layer quantizes these to
+ * master ticks. There is no longer any pressure-driven slowdown — TCP's
+ * own backpressure (window updates via tcp_recved) is the right way for
+ * an overloaded receiver to ask the remote to slow down. Slowing our
+ * own ingress just caused frame loss when the ring filled. */
 #define ETH_RX_RING_INIT_SIZE 512u
 #define ETH_RX_RING_MAX_SIZE 2048u
 #define ETH_RX_RING_STEP_SIZE 512u
 #define ETH_RX_DRAIN_INTERVAL_MS 10u
 #define ETH_RX_SCHED_INTERVAL_MS 20u
-#define ETH_RX_DRAIN_MAX_NONE 8u
-
-/* How much to slow the RX scheduler under memory pressure. The drain
- * dispatcher stays at base cadence because we want to keep emptying the
- * ring whatever happens; what we throttle is how often we *queue new
- * receives* on the USB side. */
-static uint32_t eth_rx_schedule_interval_ms(void)
-{
-    uint32_t base = ETH_RX_SCHED_INTERVAL_MS;
-    switch (g_eth_rx_throttle_level)
-    {
-    case MEM_PRESSURE_NONE:    return base;
-    case MEM_PRESSURE_MILD:    return base * 2u;
-    case MEM_PRESSURE_HIGH:    return base * 4u;
-    case MEM_PRESSURE_SEVERE:  return base * 8u;
-    case MEM_PRESSURE_CRITICAL:return base * 8u;
-    default:                   return base * 2u;
-    }
-}
-
-static uint16_t eth_drain_budget(void)
-{
-    enum mem_pressure_level level = mem_get_global_pressure_level();
-    uint16_t budget = ETH_RX_DRAIN_MAX_NONE;
-    switch (level)
-    {
-    case MEM_PRESSURE_NONE:
-        return budget;
-    case MEM_PRESSURE_MILD:
-        budget = ETH_RX_DRAIN_MAX_NONE / 2u;
-        break;
-    case MEM_PRESSURE_HIGH:
-        budget = ETH_RX_DRAIN_MAX_NONE / 4u;
-        break;
-    case MEM_PRESSURE_SEVERE:
-        budget = ETH_RX_DRAIN_MAX_NONE / 8u;
-        break;
-    case MEM_PRESSURE_CRITICAL:
-        return 0;
-    default:
-        budget = ETH_RX_DRAIN_MAX_NONE / 2u;
-        break;
-    }
-    if (budget == 0)
-    {
-        budget = 1;
-    }
-    return budget;
-}
+#define ETH_RX_DRAIN_BUDGET 8u
 
 static void eth_schedule_rx_for_netifs(void)
 {
@@ -130,20 +82,17 @@ static void eth_schedule_rx_for_netifs(void)
             continue;
         }
         size_t len = (dev->type == USB_NCM_SUBCLASS) ? NCM_RX_NTB_MAX_SIZE : ETHERNET_MTU;
-        usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, len, dev->rx.callback, dev);
-        dev->rx_transfer_active = true;
+        if (usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, len, dev->rx.callback, dev) == USB_SUCCESS)
+        {
+            dev->rx_transfer_active = true;
+        }
     }
 }
 
 /* Dispatcher entry: re-arm RX transfers for every eth netif that
- * doesn't already have one in flight. Under MEM_PRESSURE_CRITICAL we
- * skip — see eth_set_rx_throttle for the rationale. */
+ * doesn't already have one in flight. */
 static void eth_rx_schedule_dispatch(void)
 {
-    if (g_eth_rx_throttle_level == MEM_PRESSURE_CRITICAL)
-    {
-        return;
-    }
     eth_schedule_rx_for_netifs();
 }
 
@@ -222,13 +171,11 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
     return drained;
 }
 
-/* Dispatcher entry: drain queued RX frames into lwIP's input path. The
- * per-tick budget shrinks under memory pressure (see eth_drain_budget)
- * so we don't push more pbufs than the pool can handle. */
+/* Dispatcher entry: drain queued RX frames into lwIP's input path. */
 static void eth_rx_drain_dispatch(void)
 {
     struct netif *netif = NULL;
-    size_t budget = eth_drain_budget();
+    size_t budget = ETH_RX_DRAIN_BUDGET;
     NETIF_FOREACH(netif)
     {
         if (budget == 0)
@@ -251,53 +198,6 @@ static void eth_rx_drain_dispatch(void)
         }
         budget -= drained;
     }
-}
-
-
-static void eth_rx_ring_pressure_cb(struct mem_buffer *mb, size_t requested, enum mem_pressure_level level)
-{
-    (void)mb;
-    (void)requested;
-    eth_set_rx_throttle(level);
-}
-
-/* Slow / stop the RX-schedule dispatcher under memory pressure by
- * bumping its period in master ticks. The drain dispatcher is *not*
- * slowed — we always want to keep emptying any frames already in the
- * ring. Under CRITICAL we set period to 0 (disabled) so we stop queuing
- * new USB receives entirely; once pressure clears, the next call here
- * resumes the dispatcher AND kicks a one-shot re-arm so RX doesn't sit
- * idle waiting for the dispatcher's next tick. */
-void eth_set_rx_throttle(enum mem_pressure_level level)
-{
-    enum mem_pressure_level previous = g_eth_rx_throttle_level;
-    g_eth_rx_throttle_level = level;
-    if (level == MEM_PRESSURE_CRITICAL)
-    {
-        lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE, 0);
-        return;
-    }
-    uint32_t ms = eth_rx_schedule_interval_ms();
-    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
-                             lwip_dispatch_period_from_ms(ms));
-    /* Recovering from CRITICAL: any in-flight RX that completed while
-     * the dispatcher was off would have set rx_transfer_active = false
-     * and never re-armed. Kick the scheduler immediately so RX resumes
-     * within one tick instead of one dispatcher period. */
-    if (previous == MEM_PRESSURE_CRITICAL)
-    {
-        eth_schedule_rx_for_netifs();
-    }
-}
-
-void eth_set_rx_drain_interval_ms(uint32_t interval_ms)
-{
-    if (interval_ms == 0)
-    {
-        interval_ms = ETH_RX_DRAIN_INTERVAL_MS;
-    }
-    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_DRAIN,
-                             lwip_dispatch_period_from_ms(interval_ms));
 }
 
 void eth_halt_all_endpoints(void)
@@ -405,7 +305,15 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
         size_t bytes_parsed = 0;
         do
         {
+            if (transferred - bytes_parsed < sizeof(usb_control_setup_t))
+            {
+                break;
+            }
             notify = (usb_control_setup_t *)&ibuf[bytes_parsed];
+            if ((size_t)notify->wLength > transferred - bytes_parsed - sizeof(usb_control_setup_t))
+            {
+                break;
+            }
             if (notify->bmRequestType == 0b10100001)
             {
                 switch (notify->bRequest)
@@ -454,7 +362,13 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
         } while (bytes_parsed < transferred);
         dev->int_retries = 0;
     }
-    usb_fn.schedule_transfer(dev->interrupt.endpoint, dev->interrupt.buf, INTERRUPT_RX_MAX, interrupt_receive_callback, data);
+    if (usb_fn.schedule_transfer(dev->interrupt.endpoint, dev->interrupt.buf,
+                                 INTERRUPT_RX_MAX, interrupt_receive_callback,
+                                 data) != USB_SUCCESS)
+    {
+        (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
+        return USB_ERROR_FAILED;
+    }
     return USB_SUCCESS;
 }
 
@@ -542,17 +456,19 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
     else if (transferred)
     {
         dev->rx_retries = 0;
-        eth_ring_push_frame(dev, recvbuf, (uint16_t)transferred);
-        LINK_STATS_INC(link.recv);
-        MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
+        if (eth_ring_push_frame(dev, recvbuf, (uint16_t)transferred))
+        {
+            LINK_STATS_INC(link.recv);
+            MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
+        }
+        else
+        {
+            LINK_STATS_INC(link.drop);
+        }
     }
-    /* Belt-and-suspenders re-arm. The dispatcher is the primary RX
-     * continuity mechanism, but it can be disabled (CRITICAL pressure)
-     * or arrive late. Self-re-arming on every successful receive turns
-     * the dispatcher into a safety net rather than the sole path.
-     * Skipped under CRITICAL so we honor backpressure. */
-    if (g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL &&
-        !dev->rx_transfer_active &&
+    /* Self-re-arm on every successful receive so the dispatcher is a
+     * safety net rather than the sole continuity path. */
+    if (!dev->rx_transfer_active &&
         usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
                                  ETHERNET_MTU, ecm_receive_callback,
                                  dev) == USB_SUCCESS)
@@ -589,7 +505,14 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     }
     ctx->dev = dev;
     ctx->p = tbuf;
-    usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len, bulk_transmit_callback, ctx);
+    if (usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len,
+                                 bulk_transmit_callback, ctx) != USB_SUCCESS)
+    {
+        pbuf_free(tbuf);
+        free(ctx);
+        (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
+        return ERR_IF;
+    }
     return ERR_OK;
 }
 
@@ -780,6 +703,7 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                 // attempt to allocate pbuf
                 if (!eth_ring_push_frame(dev, &ntb[datagram_index], datagram_len))
                 {
+                    LINK_STATS_INC(link.drop);
                     parse_ntb = false;
                     break;
                 }
@@ -803,13 +727,9 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
         MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
     }
 rx_rearm:
-    /* Belt-and-suspenders re-arm. The dispatcher is the primary RX
-     * continuity mechanism, but it can be disabled (CRITICAL pressure)
-     * or arrive late. Self-re-arming on every successful or bailed-out
-     * receive turns the dispatcher into a safety net. Skipped under
-     * CRITICAL so we honor backpressure. */
-    if (g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL &&
-        !dev->rx_transfer_active &&
+    /* Self-re-arm on every successful or bailed-out receive so the
+     * dispatcher is a safety net rather than the sole continuity path. */
+    if (!dev->rx_transfer_active &&
         usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
                                  NCM_RX_NTB_MAX_SIZE,
                                  ncm_receive_callback,
@@ -887,7 +807,14 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     // printf("sent packet %u at time %lu\n", sequence, sys_now());
     ctx->dev = dev;
     ctx->p = obuf;
-    usb_fn.schedule_transfer(dev->tx.endpoint, obuf->payload, obuf->tot_len, bulk_transmit_callback, ctx);
+    if (usb_fn.schedule_transfer(dev->tx.endpoint, obuf->payload, obuf->tot_len,
+                                 bulk_transmit_callback, ctx) != USB_SUCCESS)
+    {
+        pbuf_free(obuf);
+        free(ctx);
+        (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
+        return ERR_IF;
+    }
     return ERR_OK;
 }
 
@@ -1286,28 +1213,29 @@ init_success:
             return false;
         }
         mem_buffer_set_drain(eth->rx_ring, eth_rx_ring_drain, &eth->iface);
-        mem_buffer_set_pressure_cb(eth->rx_ring, eth_rx_ring_pressure_cb);
         mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
         mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
     }
     /* Wire RX dispatchers into the master tick (idempotent — attach is
-     * safe to repeat across multiple device-init calls). The drain
-     * dispatcher runs every ETH_RX_DRAIN_INTERVAL_MS; the schedule
-     * dispatcher's period tracks memory pressure. */
+     * safe to repeat across multiple device-init calls). Both run at
+     * fixed cadence; TCP-level backpressure handles slowdown. */
     lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_DRAIN, eth_rx_drain_dispatch);
     lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_SCHEDULE, eth_rx_schedule_dispatch);
     lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_DRAIN,
                              lwip_dispatch_period_from_ms(ETH_RX_DRAIN_INTERVAL_MS));
-    if (g_eth_rx_throttle_level != MEM_PRESSURE_CRITICAL)
-    {
-        lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
-                                 lwip_dispatch_period_from_ms(eth_rx_schedule_interval_ms()));
-    }
+    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
+                             lwip_dispatch_period_from_ms(ETH_RX_SCHED_INTERVAL_MS));
     lwip_dispatch_start();
 
     netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
     // enqueue callbacks for receiving interrupt and RX transfers from this device.
-    usb_fn.schedule_transfer(eth->interrupt.endpoint, eth->interrupt.buf, INTERRUPT_RX_MAX, interrupt_receive_callback, eth);
+    if (usb_fn.schedule_transfer(eth->interrupt.endpoint, eth->interrupt.buf,
+                                 INTERRUPT_RX_MAX, interrupt_receive_callback,
+                                 eth) != USB_SUCCESS)
+    {
+        (void)eth_xmit_fatal_error(eth, ETH_USB_MAX_RETRIES);
+        return false;
+    }
     return true;
 }
 
@@ -1414,3 +1342,40 @@ uint8_t eth_get_interfaces(void)
 {
     return ifnums_used;
 }
+
+#ifdef LWIP_ETHERNET_TEST_HOOKS
+bool eth_test_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len)
+{
+    return eth_ring_push_frame(dev, data, len);
+}
+
+size_t eth_test_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget)
+{
+    return eth_rx_ring_drain(rb, user, budget);
+}
+
+void eth_test_schedule_rx_for_netifs(void)
+{
+    eth_schedule_rx_for_netifs();
+}
+
+usb_error_t eth_test_ecm_receive(eth_device_t *dev, const uint8_t *frame, size_t len)
+{
+    if (!dev || !frame || len > sizeof(dev->rx.buf))
+    {
+        return USB_ERROR_FAILED;
+    }
+    memcpy(dev->rx.buf, frame, len);
+    return ecm_receive_callback(dev->rx.endpoint, USB_TRANSFER_COMPLETED, len, dev);
+}
+
+usb_error_t eth_test_ncm_receive(eth_device_t *dev, const uint8_t *ntb, size_t len)
+{
+    if (!dev || !ntb || len > sizeof(dev->rx.buf))
+    {
+        return USB_ERROR_FAILED;
+    }
+    memcpy(dev->rx.buf, ntb, len);
+    return ncm_receive_callback(dev->rx.endpoint, USB_TRANSFER_COMPLETED, len, dev);
+}
+#endif

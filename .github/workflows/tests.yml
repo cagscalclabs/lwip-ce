@@ -1,16 +1,16 @@
 name: Unit Tests
 
-# Functional correctness for the TLS core primitives and protocol parsers.
-# Timing analysis lives in timing.yml; CAVP primitive validation lives in
-# cavp.yml. Splitting these out keeps the test/profiling/validation
-# concerns independently observable as separate workflow badges.
+# Functional correctness for lwIP-CE unit modules. Timing analysis lives
+# in timing.yml; CAVP primitive validation lives in cavp.yml. Splitting
+# these out keeps the test/profiling/validation concerns independently
+# observable as separate workflow badges.
 
 on:
   push:
     branches: ['tls']
     paths:
       - '.github/workflows/tests.yml'
-      - 'src/tls/**'
+      - 'src/**'
       - 'tests/unit/**'
   workflow_dispatch:
 

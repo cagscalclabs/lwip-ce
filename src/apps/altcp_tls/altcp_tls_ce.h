@@ -41,7 +41,6 @@ typedef struct altcp_tls_ce_state {
     int rx_passed_unrecved;                  /* Data passed to app but not recved */
     int overhead_bytes_adjust;               /* TLS overhead tracking */
     size_t rx_throttle_pending;              /* Pending bytes to recved */
-    uint8_t rx_mild_toggle;                  /* Throttle counter */
     struct altcp_tls_ce_state *next;         /* Linked list of states */
     u8_t flags;                              /* State flags */
 } altcp_tls_ce_state_t;

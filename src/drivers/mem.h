@@ -24,6 +24,8 @@ enum mem_pressure_level
 
 /* Pressure change callback - called when buffer pressure level changes (including relief). */
 typedef void (*mem_pressure_cb)(struct mem_buffer *mb, size_t requested, enum mem_pressure_level level);
+/* Effective lwIP pressure callback. Receives the max of global heap and lwIP pool pressure. */
+typedef void (*mem_global_pressure_cb)(enum mem_pressure_level level);
 /* Drain callback for ring buffers: consume up to budget items and return count drained. */
 typedef size_t (*mem_drain_fn)(struct mem_buffer *mb, void *user, size_t budget);
 
@@ -258,6 +260,16 @@ bool mem_is_ready(void);
  * @return Current global pressure level.
  */
 enum mem_pressure_level mem_get_global_pressure_level(void);
+/**
+ * @brief Register an observer for effective lwIP memory pressure.
+ *
+ * The reported level is the maximum of the global allocator pressure
+ * and every lwIP allocation pool. This is intended for transport-level
+ * backpressure such as delaying tcp_recved window updates.
+ *
+ * @param cb Callback to receive pressure changes, or NULL to clear.
+ */
+void mem_set_global_pressure_cb(mem_global_pressure_cb cb);
 /**
  * @brief Get current ring length (bytes).
  * @param mb Ring buffer.

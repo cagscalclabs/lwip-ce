@@ -1,0 +1,25 @@
+{
+    "description": "Ethernet RX ring, drain, NCM parse, and USB re-arm unit tests",
+    "transfer_files": [
+        "bin/ETHRX.8xp"
+    ],
+    "target": {
+        "name": "ETHRX",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1"
+    ],
+    "hashes": {
+        "1": {
+            "description": "Ethernet RX unit tests complete",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        }
+    }
+}

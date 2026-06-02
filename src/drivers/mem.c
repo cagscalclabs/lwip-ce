@@ -21,6 +21,7 @@ static bool mem_buffer_maybe_grow(struct mem_buffer *rb, size_t incoming_len);
 static bool mem_buffer_is_pool_type(const struct mem_buffer *rb);
 static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct);
 static void mem_global_pressure_update(void);
+static void mem_effective_pressure_update(void);
 
 #define MEM_SHRINK_HOLD_DEFAULT 1u
 
@@ -36,7 +37,13 @@ struct mem_global_config
 static struct mem_global_config g_mem_cfg;
 static bool g_mem_cfg_ready = false;
 static enum mem_pressure_level g_global_pressure_level = MEM_PRESSURE_NONE;
+static enum mem_pressure_level g_effective_pressure_level = MEM_PRESSURE_NONE;
+static mem_global_pressure_cb g_global_pressure_cb = NULL;
 static enum mem_init_mode g_mem_mode = MEM_INIT_MODE_DYNAMIC;
+
+#define MEM_LWIP_MAX_POOLS 6
+static struct mem_buffer *g_lwip_pools[MEM_LWIP_MAX_POOLS];
+static size_t g_lwip_pool_count = 0;
 
 struct mem_static_block
 {
@@ -248,6 +255,46 @@ static size_t mem_buffer_used_bytes(const struct mem_buffer *rb)
     return rb->u.ring.len;
 }
 
+static enum mem_pressure_level mem_pressure_base(enum mem_pressure_level level)
+{
+    return (enum mem_pressure_level)((unsigned)level & ~MEM_PRESSURE_GLOBAL);
+}
+
+static enum mem_pressure_level mem_pressure_max(enum mem_pressure_level a,
+                                                enum mem_pressure_level b)
+{
+    enum mem_pressure_level base_a = mem_pressure_base(a);
+    enum mem_pressure_level base_b = mem_pressure_base(b);
+    return (base_b > base_a) ? base_b : base_a;
+}
+
+static enum mem_pressure_level mem_effective_pressure_compute(void)
+{
+    enum mem_pressure_level level = mem_pressure_base(g_global_pressure_level);
+    for (size_t i = 0; i < g_lwip_pool_count; i++)
+    {
+        if (g_lwip_pools[i])
+        {
+            level = mem_pressure_max(level, g_lwip_pools[i]->last_pressure_level);
+        }
+    }
+    return level;
+}
+
+static void mem_effective_pressure_update(void)
+{
+    enum mem_pressure_level level = mem_effective_pressure_compute();
+    if (level == g_effective_pressure_level)
+    {
+        return;
+    }
+    g_effective_pressure_level = level;
+    if (g_global_pressure_cb)
+    {
+        g_global_pressure_cb(level);
+    }
+}
+
 static void mem_global_pressure_update(void)
 {
     if (g_mem_mode == MEM_INIT_MODE_STATIC)
@@ -255,19 +302,24 @@ static void mem_global_pressure_update(void)
         if (!g_mem_cfg_ready || !g_mem_static.ready || g_mem_static.size == 0)
         {
             g_global_pressure_level = MEM_PRESSURE_NONE;
+            mem_effective_pressure_update();
             return;
         }
         size_t used = mem_static_used_bytes();
         uint8_t usage_pct = (uint8_t)((used * 100u) / g_mem_static.size);
         g_global_pressure_level = mem_pressure_level_from_usage(usage_pct);
+        mem_effective_pressure_update();
         return;
     }
     if (!g_mem_cfg_ready || g_mem_cfg.max_heap == 0)
     {
+        g_global_pressure_level = MEM_PRESSURE_NONE;
+        mem_effective_pressure_update();
         return;
     }
     uint8_t usage_pct = (uint8_t)((g_mem_cfg.heap_used * 100u) / g_mem_cfg.max_heap);
     g_global_pressure_level = mem_pressure_level_from_usage(usage_pct);
+    mem_effective_pressure_update();
 }
 
 static bool mem_buffer_charge(size_t bytes)
@@ -417,10 +469,6 @@ static bool mem_buffer_resize(struct mem_buffer *rb, size_t new_cap)
 }
 
 static struct mem_buffer *g_lwip_heap = NULL;
-#define MEM_LWIP_MAX_POOLS 6
-static struct mem_buffer *g_lwip_pools[MEM_LWIP_MAX_POOLS];
-static size_t g_lwip_pool_count = 0;
-
 static uint8_t mem_buffer_usage_pct(const struct mem_buffer *rb, size_t used_bytes)
 {
     if (!rb)
@@ -564,8 +612,11 @@ bool mem_init_dynamic(size_t max_heap,
     g_mem_cfg.free_fn = free_fn;
     g_mem_cfg.realloc_fn = realloc_fn;
     g_global_pressure_level = MEM_PRESSURE_NONE;
+    memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
+    g_lwip_pool_count = 0;
     g_mem_mode = MEM_INIT_MODE_DYNAMIC;
     g_mem_cfg_ready = true;
+    mem_effective_pressure_update();
     return true;
 }
 
@@ -588,8 +639,11 @@ bool mem_init_static(void *buffer, size_t buffer_size)
     g_mem_cfg.free_fn = mem_static_free;
     g_mem_cfg.realloc_fn = mem_static_realloc;
     g_global_pressure_level = MEM_PRESSURE_NONE;
+    memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
+    g_lwip_pool_count = 0;
     g_mem_mode = MEM_INIT_MODE_STATIC;
     g_mem_cfg_ready = true;
+    mem_effective_pressure_update();
     return true;
 }
 
@@ -605,6 +659,15 @@ enum mem_pressure_level mem_get_global_pressure_level(void)
         return MEM_PRESSURE_NONE;
     }
     return g_global_pressure_level;
+}
+
+void mem_set_global_pressure_cb(mem_global_pressure_cb cb)
+{
+    g_global_pressure_cb = cb;
+    if (g_global_pressure_cb)
+    {
+        g_global_pressure_cb(g_effective_pressure_level);
+    }
 }
 
 
@@ -959,6 +1022,10 @@ static void mem_buffer_notify_pressure(struct mem_buffer *rb, size_t requested, 
     if (level != old_level && rb->pressure_cb)
     {
         rb->pressure_cb(rb, requested, level);
+    }
+    if (level != old_level && mem_buffer_is_lwip_pool(rb))
+    {
+        mem_effective_pressure_update();
     }
 }
 
@@ -1588,6 +1655,7 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
         pool_count = MEM_LWIP_MAX_POOLS;
     }
 
+    memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
     g_lwip_pool_count = 0;
     for (size_t i = 0; i < pool_count; i++)
     {
@@ -1611,6 +1679,7 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
     }
 
     mem_buffer_sort_pools();
+    mem_effective_pressure_update();
     return true;
 }
 

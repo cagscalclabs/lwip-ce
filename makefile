@@ -43,6 +43,16 @@ APPLICATION_DESCRIPTION = "lwIP-CE Network Stack"
 
 include $(shell cedev-config --makefile)
 
+# The vendored x25519 submodule ships a standalone test harness at
+# src/tls/contrib/x25519/src/main.c whose `int main()` collides with
+# the project's own src/main.c. The toolchain's rwildcard pulls every
+# *.c under src/, so filter that one out and rebuild LINK_CSOURCES /
+# OBJECTS as simply-expanded values so downstream rules can't re-expand
+# the original recursive recipe. Keeps the submodule pristine.
+CSOURCES := $(filter-out src/tls/contrib/x25519/src/main.c,$(CSOURCES))
+LINK_CSOURCES := $(call UPDIR_ADD,$(CSOURCES:%.$(C_EXTENSION)=$(OBJDIR)/%.$(C_EXTENSION).o))
+OBJECTS := $(LINK_CSOURCES) $(LINK_CPPSOURCES) $(LINK_ASMSOURCES) $(LINK_PREASMSOURCES)
+
 # Regenerate src/functable.s from the actual set of public symbols
 # emitted by every library .c file, then mirror the public header tree
 # to release/lwip/ (conn.h + cryptography.h + internal/*.h). Run after

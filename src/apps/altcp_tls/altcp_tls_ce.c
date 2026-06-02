@@ -13,6 +13,7 @@
 #include "lwip/altcp.h"
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
+#include "lwip/dispatch.h"
 #include "lwip/priv/altcp_priv.h"
 #include "lwip/mem.h"
 #include <ti/vars.h>
@@ -50,6 +51,19 @@ static void tls_dbg_status(const char *msg)
 
 static enum mem_pressure_level g_tls_rx_throttle_level = MEM_PRESSURE_NONE;
 static altcp_tls_ce_state_t *g_tls_state_head = NULL;
+static bool g_tls_rx_release_attached = false;
+
+static void altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cnt);
+
+#define ALTCP_TLS_CE_RX_RELEASE_MILD_MS     50u
+#define ALTCP_TLS_CE_RX_RELEASE_HIGH_MS     100u
+#define ALTCP_TLS_CE_RX_RELEASE_SEVERE_MS   250u
+#define ALTCP_TLS_CE_RX_RELEASE_CRITICAL_MS 500u
+
+#define ALTCP_TLS_CE_RX_RELEASE_MILD_BYTES     2048u
+#define ALTCP_TLS_CE_RX_RELEASE_HIGH_BYTES     1024u
+#define ALTCP_TLS_CE_RX_RELEASE_SEVERE_BYTES   512u
+#define ALTCP_TLS_CE_RX_RELEASE_CRITICAL_BYTES 128u
 
 #define ALTCP_TLS_CE_PSKI_APPVAR "lwIPPSKI"
 #define ALTCP_TLS_CE_PSKI_MAGIC 0x49534B50u /* "PSKI" */
@@ -185,12 +199,133 @@ static void tls_state_remove(altcp_tls_ce_state_t *state)
     }
 }
 
+static uint32_t altcp_tls_ce_rx_release_interval_ms(enum mem_pressure_level level)
+{
+    switch (level)
+    {
+    case MEM_PRESSURE_MILD:
+        return ALTCP_TLS_CE_RX_RELEASE_MILD_MS;
+    case MEM_PRESSURE_HIGH:
+        return ALTCP_TLS_CE_RX_RELEASE_HIGH_MS;
+    case MEM_PRESSURE_SEVERE:
+        return ALTCP_TLS_CE_RX_RELEASE_SEVERE_MS;
+    case MEM_PRESSURE_CRITICAL:
+        return ALTCP_TLS_CE_RX_RELEASE_CRITICAL_MS;
+    case MEM_PRESSURE_NONE:
+    default:
+        return 0;
+    }
+}
+
+static size_t altcp_tls_ce_rx_release_budget(enum mem_pressure_level level)
+{
+    switch (level)
+    {
+    case MEM_PRESSURE_MILD:
+        return ALTCP_TLS_CE_RX_RELEASE_MILD_BYTES;
+    case MEM_PRESSURE_HIGH:
+        return ALTCP_TLS_CE_RX_RELEASE_HIGH_BYTES;
+    case MEM_PRESSURE_SEVERE:
+        return ALTCP_TLS_CE_RX_RELEASE_SEVERE_BYTES;
+    case MEM_PRESSURE_CRITICAL:
+        return ALTCP_TLS_CE_RX_RELEASE_CRITICAL_BYTES;
+    case MEM_PRESSURE_NONE:
+    default:
+        return (size_t)-1;
+    }
+}
+
+static bool altcp_tls_ce_has_pending_recved(void)
+{
+    altcp_tls_ce_state_t *state = g_tls_state_head;
+    while (state)
+    {
+        if (state->rx_throttle_pending > 0 && state->conn && state->conn->inner_conn)
+        {
+            return true;
+        }
+        state = state->next;
+    }
+    return false;
+}
+
+static void altcp_tls_ce_release_pending(altcp_tls_ce_state_t *state, size_t budget)
+{
+    if (!state || !state->conn || !state->conn->inner_conn)
+    {
+        return;
+    }
+
+    while (state->rx_throttle_pending > 0 && budget > 0)
+    {
+        size_t chunk = state->rx_throttle_pending;
+        if (chunk > budget)
+        {
+            chunk = budget;
+        }
+        if (chunk > (size_t)INT_MAX)
+        {
+            chunk = (size_t)INT_MAX;
+        }
+        if (chunk == 0)
+        {
+            break;
+        }
+        altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)chunk);
+        state->rx_throttle_pending -= chunk;
+        budget -= chunk;
+    }
+}
+
+static void altcp_tls_ce_rx_release_dispatch(void)
+{
+    size_t budget = altcp_tls_ce_rx_release_budget(g_tls_rx_throttle_level);
+    altcp_tls_ce_state_t *state = g_tls_state_head;
+    while (state)
+    {
+        altcp_tls_ce_release_pending(state, budget);
+        state = state->next;
+    }
+
+    if (!altcp_tls_ce_has_pending_recved())
+    {
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
+    }
+}
+
+static void altcp_tls_ce_rx_release_arm(void)
+{
+    uint32_t interval_ms;
+
+    if (!g_tls_rx_release_attached)
+    {
+        lwip_dispatch_attach(LWIP_DISPATCH_TLS_RX_RECVD, altcp_tls_ce_rx_release_dispatch);
+        g_tls_rx_release_attached = true;
+    }
+
+    if (!altcp_tls_ce_has_pending_recved())
+    {
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
+        return;
+    }
+
+    interval_ms = altcp_tls_ce_rx_release_interval_ms(g_tls_rx_throttle_level);
+    if (interval_ms == 0)
+    {
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
+        return;
+    }
+
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD,
+                             lwip_dispatch_period_from_ms(interval_ms));
+    lwip_dispatch_start();
+}
+
 /* Forward declarations */
 static err_t altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p, err_t err);
 static err_t altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_conn);
 static err_t altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
 static err_t altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
-static void altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cnt);
 
 static void altcp_tls_ce_build_aead_nonce(const uint8_t iv[12], uint64_t seq_num,
                                           uint8_t out_nonce[12])
@@ -1629,8 +1764,8 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     conn->fns = &altcp_tls_ce_functions;
     conn->state = state;
     state->rx_throttle_pending = 0;
-    state->rx_mild_toggle = 0;
     tls_state_add(state);
+    mem_set_global_pressure_cb(altcp_tls_ce_set_rx_throttle);
 
     return ERR_OK;
 }
@@ -1694,26 +1829,14 @@ void altcp_tls_ce_set_rx_throttle(enum mem_pressure_level level)
         altcp_tls_ce_state_t *state = g_tls_state_head;
         while (state)
         {
-            size_t pending = state->rx_throttle_pending;
-            while (pending > 0 && state->conn && state->conn->inner_conn)
-            {
-                int chunk = (pending > (size_t)INT_MAX) ? INT_MAX : (int)pending;
-                altcp_tls_ce_lower_recved(state->conn->inner_conn, chunk);
-                pending -= (size_t)chunk;
-            }
-            state->rx_throttle_pending = 0;
-            state->rx_mild_toggle = 0;
+            altcp_tls_ce_release_pending(state, (size_t)-1);
             state = state->next;
         }
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
     }
     else
     {
-        altcp_tls_ce_state_t *state = g_tls_state_head;
-        while (state)
-        {
-            state->rx_mild_toggle = 0;
-            state = state->next;
-        }
+        altcp_tls_ce_rx_release_arm();
     }
 }
 
@@ -1755,53 +1878,19 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
     }
     state->rx_passed_unrecved -= lower_recved;
 
-    uint8_t throttle_div = 1u;
-    switch (g_tls_rx_throttle_level)
+    if (lower_recved == 0)
     {
-    case MEM_PRESSURE_NONE:
-        throttle_div = 1u;
-        break;
-    case MEM_PRESSURE_MILD:
-        throttle_div = 2u;
-        break;
-    case MEM_PRESSURE_HIGH:
-        throttle_div = 4u;
-        break;
-    case MEM_PRESSURE_SEVERE:
-        throttle_div = 8u;
-        break;
-    case MEM_PRESSURE_CRITICAL:
-        throttle_div = 0u;
-        break;
-    default:
-        throttle_div = 2u;
-        break;
-    }
-
-    if (throttle_div == 0u)
-    {
-        state->rx_throttle_pending += lower_recved;
-        return;
-    }
-    if (throttle_div > 1u)
-    {
-        state->rx_throttle_pending += lower_recved;
-        state->rx_mild_toggle = (uint8_t)((state->rx_mild_toggle + 1u) % throttle_div);
-        if (state->rx_mild_toggle != 0u)
-        {
-            return;
-        }
-        if (state->rx_throttle_pending > 0 && conn->inner_conn)
-        {
-            size_t pending = state->rx_throttle_pending;
-            int chunk = (pending > (size_t)INT_MAX) ? INT_MAX : (int)pending;
-            altcp_tls_ce_lower_recved(conn->inner_conn, chunk);
-            state->rx_throttle_pending -= (size_t)chunk;
-        }
         return;
     }
 
-    altcp_recved(conn->inner_conn, lower_recved);
+    if (g_tls_rx_throttle_level == MEM_PRESSURE_NONE)
+    {
+        altcp_tls_ce_lower_recved(conn->inner_conn, lower_recved);
+        return;
+    }
+
+    state->rx_throttle_pending += lower_recved;
+    altcp_tls_ce_rx_release_arm();
 }
 
 static err_t

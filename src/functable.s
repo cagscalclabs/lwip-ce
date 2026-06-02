@@ -400,8 +400,6 @@
 .extern _udp_netif_ip_addr_changed
 .extern _ethernet_input
 .extern _ethernet_output
-.extern _eth_set_rx_throttle
-.extern _eth_set_rx_drain_interval_ms
 .extern _eth_get_interfaces
 .extern _eth_usb_event_callback
 .extern _tls_x25519_publickey
@@ -409,7 +407,7 @@
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 377    ; entry count
+    d24 375    ; entry count
 
 ; --- src/lwIP.c ---
     d24 _lwip_start
@@ -903,8 +901,6 @@ _fn_exports_table:
     d24 _ethernet_output
 
 ; --- src/drivers/usb_ethernet.c ---
-    d24 _eth_set_rx_throttle
-    d24 _eth_set_rx_drain_interval_ms
     d24 _eth_get_interfaces
     d24 _eth_usb_event_callback
 

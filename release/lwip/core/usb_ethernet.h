@@ -185,8 +185,6 @@ extern eth_device_t eth;
 
 /// @brief Callback function to be passed to @b usb_Init to enable Ethernet driver for lwIP
 usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_callback_data_t *callback_data);
-void eth_set_rx_throttle(enum mem_pressure_level level);
-void eth_set_rx_drain_interval_ms(uint32_t interval_ms);
 
 struct usb_configurator {
     // device interfacing
