@@ -9,7 +9,7 @@ ASFLAGS += $(TLS_ASM_INCLUDES)
 
 # x25519 hot loop is relocated to ti.cursorImage at runtime; the
 # linker script defines _x25519_reloc_load_start / _x25519_reloc_len.
-EXTRA_LDFLAGS += -T $(TLS_CORE_REL)/x25519_reloc.ld
+EXTRA_LDFLAGS += -T $(COMMON_MAKEFILE_DIR)x25519_reloc.ld
 
 NAME = X25519
 ARCHIVED = NO

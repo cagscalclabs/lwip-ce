@@ -47,6 +47,7 @@
 .extern _lwip_conn_set_err
 .extern _lwip_conn_set_poll
 .extern _lwip_conn_set_closed
+.extern _lwip_conn_set_callbacks
 .extern _tls_aes_init
 .extern _tls_aes_ccm_init
 .extern _tls_aes_ccm_encrypt
@@ -401,13 +402,14 @@
 .extern _ethernet_input
 .extern _ethernet_output
 .extern _eth_get_interfaces
+.extern _netif_is_link_error
 .extern _eth_usb_event_callback
 .extern _tls_x25519_publickey
 .extern _tls_x25519_secret
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 375    ; entry count
+    d24 377    ; entry count
 
 ; --- src/lwIP.c ---
     d24 _lwip_start
@@ -432,6 +434,7 @@ _fn_exports_table:
     d24 _lwip_conn_set_err
     d24 _lwip_conn_set_poll
     d24 _lwip_conn_set_closed
+    d24 _lwip_conn_set_callbacks
 
 ; --- src/tls/core/aes.c ---
     d24 _tls_aes_init
@@ -902,6 +905,7 @@ _fn_exports_table:
 
 ; --- src/drivers/usb_ethernet.c ---
     d24 _eth_get_interfaces
+    d24 _netif_is_link_error
     d24 _eth_usb_event_callback
 
 ; --- src/tls/contrib/x25519/src/x25519.s ---

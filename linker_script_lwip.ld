@@ -80,6 +80,19 @@ SECTIONS
     } >bss :NONE
     ___bss_len = ___bss_high - ___bss_low;
 
+    /* X25519 scratch variables. Uninitialized (NOLOAD) bss, page-aligned
+     * so the hot loop can address them by patching only the low byte of
+     * each address (R_Z80_BYTE0 relocations against a fixed page). Kept in
+     * the bss region; must be placed before the dot jumps to BSSHEAP_HIGH
+     * below. See src/tls/contrib/x25519/src/x25519.s. */
+    .x25519_data (NOLOAD) :
+    {
+        . = ALIGN(0x100) + 0xC0;
+        KEEP(*(.x25519.data))
+        KEEP(*(.x25519.data.*))
+        _x25519_data_end = .;
+    } >bss
+
     ASSERT(. <= BSSHEAP_HIGH, "Error: BSS exceed BSSHEAP_HIGH limit")
 
     ___heap_low = .;
@@ -92,6 +105,47 @@ SECTIONS
      * step greps this symbol from bin/lwIP.map and injects it as
      * `__lwip_fn_table_off` into the bootstrap source. */
     PROVIDE(__lwip_fn_table_off = _fn_exports_table - __app_base);
+
+    /* Safe-RAM scratch overlay (0xE30800, ti.cursorImage).
+     *
+     * Two consumers share this address window, never live at the same
+     * instant — it is deliberately reused as quick scratch:
+     *   - .x25519.reloc : the X25519 hot loop, copied here at the start of
+     *     each call (it has a load image in prgm) and run at this VMA.
+     *   - .saferam.rng  : the RNG entropy/SHA scratch. No load image — it
+     *     is written in place; this member only reserves the VMA span so
+     *     the linker knows the window size and flags a collision if either
+     *     consumer outgrows it.
+     *
+     * OVERLAY assigns both members the same VMA (0xE30800) and distinct
+     * LMAs. ld auto-creates __load_start_<sec>/__load_stop_<sec>; the
+     * PROVIDE aliases below keep the existing asm symbol names working so
+     * x25519.s and the RNG code need no edits beyond sourcing the base. */
+    OVERLAY 0xE30800 : AT ( LOADADDR(.data) + SIZEOF(.data) )
+    {
+        .x25519.reloc
+        {
+            _x25519_reloc_run_start = .;
+            KEEP(*(.x25519.reloc))
+            KEEP(*(.x25519.reloc.*))
+            _x25519_reloc_run_end = .;
+        }
+        .saferam.rng
+        {
+            _sprng_entropy_pool = .;
+            . = . + 520;   /* total RNG scratch: see virtuals.inc */
+        }
+    }
+
+    /* Back-compat aliases for the X25519 copy loop in x25519.s. */
+    _x25519_reloc_load_start = LOADADDR(.x25519.reloc);
+    _x25519_reloc_len        = SIZEOF(.x25519.reloc);
+
+    /* Guard: neither consumer may outgrow the shared window. */
+    ASSERT(SIZEOF(.x25519.reloc) <= 0x800,
+           "Error: .x25519.reloc exceeds safe-RAM overlay window")
+    ASSERT(SIZEOF(.saferam.rng) <= 0x800,
+           "Error: .saferam.rng exceeds safe-RAM overlay window")
 
         /* Debug info (kept out of loadable memory) */
     .debug_info 0 : { KEEP(*(.debug_info .debug_info.*)) }

@@ -11,12 +11,14 @@ ARCHIVED = NO
 CFLAGS = -Wall -Wextra -Oz -I src/include
 CXXFLAGS = -Wall -Wextra -Oz -I src/include
 ASFLAGS = -I src/tls/core -I src/tls/core/share
-EXTRA_LDFLAGS += -T src/tls/core/x25519_reloc.ld
 
 # Use a project-local copy of the application linker script (a verbatim
 # copy of the toolchain's meta/linker_script_app.ld plus a __app_base
-# anchor at the image start). Set before the toolchain include so its
-# `LINKER_SCRIPT ?=` default does not win.
+# anchor at the image start, and the folded-in X25519 relocation
+# sections — formerly a separate supplementary -T linker script, now
+# only used by the standalone tests as tests/common/x25519_reloc.ld).
+# Set before the toolchain include so its `LINKER_SCRIPT ?=` default
+# does not win.
 LINKER_SCRIPT = $(CURDIR)/linker_script_lwip.ld
 
 # Memory layout contract:

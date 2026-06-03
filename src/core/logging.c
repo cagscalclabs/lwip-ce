@@ -46,6 +46,22 @@ static const struct lwip_log_descriptor g_log_descriptors[] = {
         "RETRY",
     },
     {
+        LWIP_LOG_LEVEL_ERROR,
+        LWIP_LOG_TYPE_USB,
+        LWIP_LOG_USB_RX_DRAIN_SHORT,
+        "E",
+        "USB",
+        "RXSHORT",
+    },
+    {
+        LWIP_LOG_LEVEL_FATAL,
+        LWIP_LOG_TYPE_USB,
+        LWIP_LOG_USB_RX_DRAIN_FATAL,
+        "F",
+        "USB",
+        "RXFATAL",
+    },
+    {
         LWIP_LOG_LEVEL_FATAL,
         LWIP_LOG_TYPE_TLS,
         LWIP_LOG_TLS_FATAL_ALERT,

@@ -155,6 +155,10 @@ typedef struct _eth_device_t
     uint8_t rx_retries;
     uint8_t tx_retries;
     uint8_t int_retries;
+    /* Consecutive RX-drain invariant failures (pbuf chain too small for a
+     * queued frame). Reset to 0 on any clean drain pass; when it reaches
+     * ETH_RX_DRAIN_MAX_ERRORS the netif is aborted. See eth_rx_ring_drain. */
+    uint8_t rx_drain_errors;
     bool disabled_with_error;
     struct mem_buffer *rx_ring;
     struct
@@ -234,17 +238,11 @@ struct usb_configurator {
     void (*cleanup)(void);
 };
 
-/* Host CRT + USB vtable lwIP's code dispatches through. The lwIP app
- * holds the backing storage; the libload bootstrap copies its own
- * libload-side table into fn_imports_table during init. */
-struct lwip_imports {
-    void  *(*malloc)(size_t);
-    void   (*free)(void *);
-    void  *(*realloc)(void *, size_t);
-    struct usb_configurator usb;
-};
-extern struct lwip_imports fn_imports_table;
-#define usb_fn (fn_imports_table.usb)
+/* The unified imports table (struct lwip_imports, fn_imports_table, and
+ * the usb_fn dispatch macro) lives in lwip-imports.h. It is not included
+ * here to avoid a circular dependency: lwip-imports.h embeds
+ * struct usb_configurator and so includes this header. Files that need
+ * usb_fn / fn_imports_table should include "lwip-imports.h" directly. */
 
 /// @brief Polls for the registration status of interfaces.
 /// @return A bitmap indicating what NETIFs are registered (netif->num)
@@ -252,5 +250,23 @@ extern struct lwip_imports fn_imports_table;
 /// @note The ifnum assignment system seeks to the next free ifnum.
 /// @note Up to 8 simultaneous interfaces allowed. Any more causes device init to fail.
 uint8_t eth_get_interfaces(void);
+
+/// @brief Reports whether an ethernet netif has been brought down by an
+///        unrecoverable link/device error (endpoint retry exhaustion or
+///        RX-drain invariant failure).
+/// @param netif The interface to query. May be NULL or a non-ethernet
+///        netif, in which case the result is false.
+/// @return true if the interface was aborted with an error and disabled;
+///         false otherwise (including healthy, or simply down via the
+///         normal admin path).
+bool netif_is_link_error(const struct netif *netif);
+
+#ifdef LWIP_ETHERNET_TEST_HOOKS
+bool eth_test_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len);
+size_t eth_test_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget);
+void eth_test_schedule_rx_for_netifs(void);
+usb_error_t eth_test_ecm_receive(eth_device_t *dev, const uint8_t *frame, size_t len);
+usb_error_t eth_test_ncm_receive(eth_device_t *dev, const uint8_t *ntb, size_t len);
+#endif
 
 #endif

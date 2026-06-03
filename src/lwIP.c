@@ -38,6 +38,7 @@
 #include "lwip/apps/sntp.h"
 #include "lwip/sntp_time.h"
 #include "drivers/usb_ethernet.h"
+#include "lwip-imports.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
 
 #include <usbdrvce.h>
@@ -1190,4 +1191,19 @@ void lwip_conn_set_poll(struct lwip_conn *conn, lwip_conn_poll_cb cb,
 void lwip_conn_set_closed(struct lwip_conn *conn, lwip_conn_closed_cb cb)
 {
     if (conn) conn->on_closed = cb;
+}
+
+void lwip_conn_set_callbacks(struct lwip_conn *conn,
+                             const lwip_conn_callbacks_t *cbs)
+{
+    if (!conn || !cbs) return;
+    /* Delegate to the individual setters so the poll re-arm side effect
+     * (altcp_poll / tcp_poll) stays in one place. */
+    lwip_conn_set_arg(conn, cbs->arg);
+    lwip_conn_set_connected(conn, cbs->connected);
+    lwip_conn_set_recv(conn, cbs->recv);
+    lwip_conn_set_sent(conn, cbs->sent);
+    lwip_conn_set_err(conn, cbs->err);
+    lwip_conn_set_poll(conn, cbs->poll, cbs->poll_interval_ticks);
+    lwip_conn_set_closed(conn, cbs->closed);
 }

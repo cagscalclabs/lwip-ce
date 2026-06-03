@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "usb_ethernet.h"
+#include "lwip-imports.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 

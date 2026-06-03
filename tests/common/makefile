@@ -5,6 +5,13 @@ TLS_INC := $(PROJECT_ROOT)/src/tls/includes
 LWIP_INC := $(PROJECT_ROOT)/src/include
 X25519_DIR := $(PROJECT_ROOT)/src/tls/contrib/x25519/src
 
+# Provide a default address for _sprng_entropy_pool (the RNG safe-RAM
+# scratch base). The real app defines this via the safe-RAM OVERLAY in
+# linker_script_lwip.ld; standalone test programs that assemble random.s /
+# sha256.s (which include virtuals.inc's `extern _sprng_entropy_pool`)
+# would otherwise fail to link. PROVIDE yields to any real definition.
+EXTRA_LDFLAGS += -T $(COMMON_MAKEFILE_DIR)saferam_defaults.ld
+
 # CEdev toolchain v15 NOTE:
 #   The cedev makefile's ASM build rules ($(OBJDIR)/%.s.o pattern) mangle
 #   absolute source paths into nonsense like 'obj//abs/path/file.s.o' which

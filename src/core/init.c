@@ -41,6 +41,7 @@
 #include <ti/vars.h>  /* os_MemChk */
 
 #include "../drivers/usb_ethernet.h"
+#include "../lwip-imports.h"
 #include "lwip/init.h"
 #include "lwip/stats.h"
 #include "lwip/sys.h"

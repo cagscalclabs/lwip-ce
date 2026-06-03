@@ -23,6 +23,7 @@
 #include "lwip/snmp.h"
 #include "lwip/pbuf.h"
 #include "usb_ethernet.h" /* Communications Data Class header file */
+#include "lwip-imports.h" /* fn_imports_table / usb_fn dispatch table */
 #include "mem.h"
 #include "lwip/netif.h"
 #include "lwip/timeouts.h"
@@ -34,10 +35,6 @@
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
 static uint8_t ifnums_used = 0;
-/* Backing storage for the unified imports table. The libload bootstrap
- * (release/lwip.asm) populates this at load by calling
- * lwip_init_runtime_internal with its own libload-side copy. */
-struct lwip_imports fn_imports_table = {0};
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
 {
@@ -66,6 +63,17 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 #define ETH_RX_DRAIN_INTERVAL_MS 10u
 #define ETH_RX_SCHED_INTERVAL_MS 20u
 #define ETH_RX_DRAIN_BUDGET 8u
+/* Consecutive RX-drain invariant failures tolerated before the netif is
+ * aborted. A drain-short failure means pbuf_alloc returned a chain too
+ * small for a queued frame — an allocator/pool invariant violation that
+ * should never happen. We drop the offending frame and resync the ring
+ * (one frame lost, stream survives); if it recurs across this many
+ * distinct frames the situation is systemic and we give up on the netif. */
+#define ETH_RX_DRAIN_MAX_ERRORS 5u
+
+/* Defined below; forward-declared so eth_rx_ring_drain can abort the
+ * netif on repeated drain-short failures. */
+static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason);
 
 static void eth_schedule_rx_for_netifs(void)
 {
@@ -122,10 +130,11 @@ static bool eth_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t
 static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget)
 {
     struct netif *netif = (struct netif *)user;
-    if (!rb || !netif)
+    if (!rb || !netif || !netif->state)
     {
         return 0;
     }
+    eth_device_t *dev = (eth_device_t *)netif->state;
     size_t drained = 0;
     while (budget > 0 && mem_buffer_len(rb) >= 2)
     {
@@ -158,13 +167,44 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
         }
         if (remaining != 0)
         {
+            /* Invariant violation: pbuf_alloc reported success but the
+             * chain couldn't hold all `len` bytes. This should never
+             * happen (see eth_rx_ring_drain notes / pbuf_alloc contract).
+             * Fail closed but keep the stack alive: record the event for
+             * diagnosis, then drop this frame and resync the ring past it
+             * so the *next* frame's length header stays aligned — the
+             * 2-byte header and `len - remaining` payload bytes were
+             * already popped, so we discard the rest of the payload here.
+             * Deliberately NOT LWIP_ASSERT: in this port that halts the
+             * program (lwip_log_fatal_at), which would defeat the
+             * recover-and-continue behavior below. */
+            lwip_log_event_at(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_RX_DRAIN_SHORT,
+                              __LINE__);
+            uint8_t skip[64];
+            while (remaining > 0)
+            {
+                size_t n = remaining < sizeof(skip) ? remaining : sizeof(skip);
+                if (mem_buffer_pop(rb, skip, n) != n)
+                {
+                    break;
+                }
+                remaining -= n;
+            }
             pbuf_free(p);
+            LINK_STATS_INC(link.drop);
+            if (++dev->rx_drain_errors >= ETH_RX_DRAIN_MAX_ERRORS)
+            {
+                eth_abort_netif(dev, LWIP_LOG_USB_RX_DRAIN_FATAL);
+            }
             break;
         }
         if (netif->input(p, netif) != ERR_OK)
         {
             pbuf_free(p);
         }
+        /* A frame made it through cleanly: the drain-short condition (if
+         * any) was transient, so clear the consecutive-error counter. */
+        dev->rx_drain_errors = 0;
         budget--;
         drained++;
     }
@@ -244,28 +284,36 @@ nibble(uint16_t c)
     return 0xff;
 }
 
-/* Mark a USB endpoint as having exhausted its retry budget. Brings the
- * netif down (link + admin) so consumers can react via the link
- * callback before USB tears the device down asynchronously, then
- * disables the device. The per-device disabled_with_error flag is what
- * the disconnect handler later consults to decide between "reset and
- * resume" and "drop the netif entirely." */
+/* Abort a netif that has hit an unrecoverable fault. Brings the netif
+ * down (link + admin) so consumers can react via the link callback
+ * before USB tears the device down asynchronously, then disables the
+ * device. The per-device disabled_with_error flag is what the disconnect
+ * handler later consults to decide between "reset and resume" and "drop
+ * the netif entirely." Logs the caller-supplied fatal reason so the
+ * appvar log distinguishes endpoint-retry exhaustion from RX-drain
+ * failure. */
+static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason)
+{
+    LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
+                ("eth: fatal fault, giving up on netif"));
+    lwip_log_event(LWIP_LOG_TYPE_USB, log_reason);
+    /* Surface the failure to lwIP first. Apps with a registered netif
+     * link callback will see the down transition before the device
+     * disappears, and any PCBs bound to this netif can be torn down via
+     * the link callback's own walk (see eth_netif_link_callback in this
+     * file). */
+    netif_set_link_down(&dev->iface);
+    netif_set_down(&dev->iface);
+    dev->disabled_with_error = true;
+    usb_fn.disable_device(dev->device);
+}
+
+/* Mark a USB endpoint as having exhausted its retry budget. */
 static bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
 {
     if (retries == ETH_USB_MAX_RETRIES)
     {
-        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
-                    ("eth: endpoint failure, giving up"));
-        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_FATAL_RETRY);
-        /* Surface the failure to lwIP first. Apps with a registered
-         * netif link callback will see the down transition before the
-         * device disappears, and any PCBs bound to this netif can be
-         * torn down via the link callback's own walk (see
-         * eth_netif_link_callback in this file). */
-        netif_set_link_down(&dev->iface);
-        netif_set_down(&dev->iface);
-        dev->disabled_with_error = true;
-        usb_fn.disable_device(dev->device);
+        eth_abort_netif(dev, LWIP_LOG_USB_FATAL_RETRY);
         return true;
     }
     return false;
@@ -1341,6 +1389,16 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
 uint8_t eth_get_interfaces(void)
 {
     return ifnums_used;
+}
+
+bool netif_is_link_error(const struct netif *netif)
+{
+    if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
+    {
+        return false;
+    }
+    const eth_device_t *dev = (const eth_device_t *)netif->state;
+    return dev->disabled_with_error;
 }
 
 #ifdef LWIP_ETHERNET_TEST_HOOKS

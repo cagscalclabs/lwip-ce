@@ -38,6 +38,7 @@
 
 #include "drivers/mem.h"
 #include "drivers/usb_ethernet.h"
+#include "lwip-imports.h"
 #include "tls/includes/handshake.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
 

@@ -104,6 +104,23 @@ typedef void (*lwip_conn_err_cb)(void *arg, struct lwip_conn *conn,
 typedef void (*lwip_conn_poll_cb)(void *arg, struct lwip_conn *conn);
 typedef void (*lwip_conn_closed_cb)(void *arg, struct lwip_conn *conn);
 
+/** Bundle of all per-connection callbacks, for setting them in one call
+ *  via lwip_conn_set_callbacks(). Any field may be NULL to clear that
+ *  callback. Zero-initialize (e.g. `lwip_conn_callbacks_t cbs = {0};`)
+ *  then fill the ones you want — this is equivalent to calling each
+ *  lwip_conn_set_* helper individually. */
+typedef struct
+{
+    void                  *arg;          /**< user_arg passed to every callback */
+    lwip_conn_connected_cb connected;
+    lwip_conn_recv_cb      recv;
+    lwip_conn_sent_cb      sent;
+    lwip_conn_err_cb       err;
+    lwip_conn_poll_cb      poll;
+    uint8_t                poll_interval_ticks; /**< poll period in 0.5s ticks; 0 ⇒ default (4) */
+    lwip_conn_closed_cb    closed;
+} lwip_conn_callbacks_t;
+
 /** Maximum time (ms) lwip_conn_connect will wait in
  *  LWIP_STATUS_WAITING_SERVICES before giving up with LWIP_ERR_NETIF.
  *  Covers worst-case DHCP-on-cold-boot latency on a slow link. */
@@ -256,6 +273,12 @@ void lwip_conn_set_sent(struct lwip_conn *conn, lwip_conn_sent_cb cb);
 void lwip_conn_set_err(struct lwip_conn *conn, lwip_conn_err_cb cb);
 void lwip_conn_set_poll(struct lwip_conn *conn, lwip_conn_poll_cb cb, uint8_t interval_ticks);
 void lwip_conn_set_closed(struct lwip_conn *conn, lwip_conn_closed_cb cb);
+
+/** Set every per-connection callback at once. Equivalent to calling each
+ *  lwip_conn_set_* helper in turn (including the poll re-arm); fields left
+ *  NULL clear the corresponding callback. Call before lwip_conn_connect. */
+void lwip_conn_set_callbacks(struct lwip_conn *conn,
+                             const lwip_conn_callbacks_t *cbs);
 
 #ifdef __cplusplus
 }

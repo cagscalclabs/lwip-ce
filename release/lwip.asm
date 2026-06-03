@@ -1,4 +1,4 @@
-; lwip.asm — libload library stub for lwIP. Generated 2026-06-02.
+; lwip.asm — libload library stub for lwIP. Generated 2026-06-03.
 ; Author: Anthony Cagliano
 ; Do not edit by hand. Sources: tools/functable.py,
 ; tools/lwip_init_runtime.asm.
@@ -60,6 +60,7 @@ _fn_imports_table_end:
 	export lwip_conn_set_err
 	export lwip_conn_set_poll
 	export lwip_conn_set_closed
+	export lwip_conn_set_callbacks
 	export tls_aes_init
 	export tls_aes_ccm_init
 	export tls_aes_ccm_encrypt
@@ -414,6 +415,7 @@ _fn_imports_table_end:
 	export ethernet_input
 	export ethernet_output
 	export eth_get_interfaces
+	export netif_is_link_error
 	export eth_usb_event_callback
 	export tls_x25519_publickey
 	export tls_x25519_secret
@@ -437,6 +439,7 @@ lwip_conn_set_sent:	jp 0
 lwip_conn_set_err:	jp 0
 lwip_conn_set_poll:	jp 0
 lwip_conn_set_closed:	jp 0
+lwip_conn_set_callbacks:	jp 0
 tls_aes_init:	jp 0
 tls_aes_ccm_init:	jp 0
 tls_aes_ccm_encrypt:	jp 0
@@ -791,6 +794,7 @@ udp_netif_ip_addr_changed:	jp 0
 ethernet_input:	jp 0
 ethernet_output:	jp 0
 eth_get_interfaces:	jp 0
+netif_is_link_error:	jp 0
 eth_usb_event_callback:	jp 0
 tls_x25519_publickey:	jp 0
 tls_x25519_secret:	jp 0

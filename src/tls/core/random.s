@@ -171,7 +171,7 @@ _tls_random:
     ld hl, _sprng_entropy_pool
     ld (hl), 0
     ld de, _sprng_entropy_pool + 1
-    ld bc, _sprng_rand - _sprng_entropy_pool - 1
+    ld bc, _sprng_rand.offset - 1
     ldir
 .Lrandom_return:
     call _tls_crypto_guard_disable

@@ -33,6 +33,13 @@ void lwip_log_event(uint8_t type, uint8_t reason)
     (void)reason;
 }
 
+void lwip_log_event_at(uint8_t type, uint8_t reason, uint16_t line)
+{
+    (void)type;
+    (void)reason;
+    (void)line;
+}
+
 void lwip_teardown_abort_pcbs_on_netif(const struct netif *netif)
 {
     (void)netif;

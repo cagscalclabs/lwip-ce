@@ -546,8 +546,17 @@ Before beginning this project we needed to itemize what was available and what w
 				\item A small \texttt{LIBLOAD} companion library provides consumer-side stubs and a bootstrap function. The bootstrap locates the installed lwIP application, resolves the application export table, and patches or populates the local stubs so later API calls dispatch into the resident application.
 			\end{itemize}
 
-			
-			
+		\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
+		The project is backed by a deterministic unit test suite that spans the full stack---transport and allocator layers as well as the security-critical cryptographic and parser paths. Tests run on \texttt{CEmu} and are structured around explicit acceptance criteria; where policy requires fail-closed behavior, tests assert rejection rather than silent degradation. (TLS-specific timing and CAVP profiling are treated separately; see Section~\ref{ssec:profiling}.)
+
+		At the transport and allocator level, the Ethernet RX driver is exercised against the real \texttt{usb\_ethernet.c} implementation: ECM frame reception into the RX ring and its drain into lwIP, drain-budget enforcement and backpressure when \texttt{pbuf} allocation fails, NCM NTB parsing across multiple datagrams, and correct USB transfer re-arm state when a transfer fails to schedule. The \texttt{membuffer} allocator is tested across all three buffer classes (ring, pool, file), asserting growth, shrink-hysteresis behavior, max-size rejection, and---under \texttt{BUFFER\_SECURE\_MODE}---automatic zeroization on pop, free, release, and destroy. These tests reach into allocator and driver internal state directly, so a regression in buffering or zeroization is caught rather than masked by surface-level success.
+
+		On the security-critical side, coverage includes truststore integrity verification, certificate-chain trust decisions, RNG initialization/request behavior, parser correctness for ASN.1/X.509/PKCS flows, and expected rejection behavior for malformed or invalid inputs. Tests are built from applicable RFC vectors where available (with RFC and section identifiers recorded in test metadata), and from implementation-directed cases where no official vectors exist.
+
+		Latest unit-test workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml}.
+
+
+
 		\newpage
 		\section{TLS Architecture and Security Model}
 	
@@ -1133,15 +1142,10 @@ Before beginning this project we needed to itemize what was available and what w
 	\end{enumerate}
 
 	
-	\subsection{Unit Tests and Profiling}
-	
-	This project uses two complementary validation layers: deterministic unit tests and profiling-oriented measurements. Unit tests verify functional correctness, safety checks, and regression resistance for module behavior. Profiling tests characterize timing stability, performance behavior, and platform-dependent variance under controlled workloads.
-	
-	\subsubsection{Unit Tests}
-	The unit test suite is structured around explicit acceptance criteria for security-critical paths. Coverage includes truststore integrity verification, certificate-chain trust decisions, RNG initialization/request behavior, parser correctness for ASN.1/X.509/PKCS flows, and expected rejection behavior for malformed or invalid inputs. Tests are built from applicable RFC vectors where available (with RFC and section identifiers recorded in test metadata), and from implementation-directed cases where no official vectors exist. Where policy requires fail-closed behavior, tests assert rejection rather than silent degradation.
+	\subsection{Profiling}\label{ssec:profiling}
 
-	Latest unit-test workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml}.
-	
+	Alongside the stack-wide unit tests described in Section~\ref{ssec:profiling_unit_tests_ref}, this section covers the TLS-specific, profiling-oriented validation layer. Where unit tests verify functional correctness, safety checks, and regression resistance for module behavior, profiling tests characterize timing stability, performance behavior, and platform-dependent variance under controlled workloads.
+
 	Profiling tests are intentionally separated from strict correctness gating. Their role is to quantify behavior, not merely assert it. In particular, timing-oriented tests evaluate differential behavior across input classes and report whether observed variance remains within calibrated bounds. Because timing consistency evidence is environment-sensitive, profiling outcomes are interpreted as indicators and trend signals rather than formal proofs.
 	
 	\subsubsection{Timing Analysis Profiler}

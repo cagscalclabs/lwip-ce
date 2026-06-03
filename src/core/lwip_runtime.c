@@ -12,6 +12,7 @@
 
 #include "lwIP.h"
 #include "drivers/usb_ethernet.h"
+#include "lwip-imports.h"
 
 /* Linker-script-provided bounds (see linker_script_lwip.ld). */
 extern uint8_t ___bss_low[];
