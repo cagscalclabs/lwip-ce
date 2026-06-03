@@ -215,19 +215,38 @@ static bool test_schedule_failure_does_not_mark_active(void)
     return ok;
 }
 
+static bool show_result(bool ok)
+{
+    printf(ok ? "success" : "failed");
+    os_GetKey();
+    os_ClrHome();
+    return ok;
+}
+
 int main(void)
 {
+    bool ready;
+
     os_ClrHome();
     fn_imports_table.usb.schedule_transfer = fake_schedule_transfer;
     fn_imports_table.usb.disable_device = fake_disable_device;
 
-    bool ok = mem_init_dynamic(8192, malloc, free, realloc);
-    ok = ok && test_ecm_ring_and_drain();
-    ok = ok && test_budget_and_pbuf_failure();
-    ok = ok && test_ncm_parse();
-    ok = ok && test_schedule_failure_does_not_mark_active();
-
-    printf(ok ? "success" : "failed");
-    os_GetKey();
-    return ok ? 0 : 1;
+    ready = mem_init_dynamic(8192, malloc, free, realloc);
+    if (!show_result(ready && test_ecm_ring_and_drain()))
+    {
+        return 1;
+    }
+    if (!show_result(test_budget_and_pbuf_failure()))
+    {
+        return 1;
+    }
+    if (!show_result(test_ncm_parse()))
+    {
+        return 1;
+    }
+    if (!show_result(test_schedule_failure_does_not_mark_active()))
+    {
+        return 1;
+    }
+    return 0;
 }

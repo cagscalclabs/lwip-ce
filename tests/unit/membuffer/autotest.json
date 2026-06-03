@@ -1,10 +1,10 @@
 {
-    "description": "Ethernet RX ring, drain, NCM parse, and USB re-arm unit tests",
+    "description": "Secure membuffer growth, shrink hysteresis, and zeroing tests",
     "transfer_files": [
-        "bin/ETHRX.8xp"
+        "bin/MEMBUF.8xp"
     ],
     "target": {
-        "name": "ETHRX",
+        "name": "MEMBUF",
         "isASM": true
     },
     "sequence": [
@@ -15,13 +15,11 @@
         "key|enter",
         "hashWait|3",
         "key|enter",
-        "hashWait|4",
-        "key|enter",
         "key|enter"
     ],
     "hashes": {
         "1": {
-            "description": "Ethernet RX ECM receive, ring buffering, and drain",
+            "description": "MEM_BUFFER_RING secure pop zeroing, growth, and shrink hysteresis",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -30,7 +28,7 @@
             "timeout": 1000
         },
         "2": {
-            "description": "Ethernet RX drain budget and pbuf allocation failure handling",
+            "description": "MEM_BUFFER_POOL secure free zeroing, growth, and shrink hysteresis",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
@@ -39,16 +37,7 @@
             "timeout": 1000
         },
         "3": {
-            "description": "Ethernet RX NCM NTB parse and multi-frame drain",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "4": {
-            "description": "Ethernet RX transfer schedule failure and re-arm state",
+            "description": "MEM_BUFFER_FILE secure free, release zeroing, and max-size rejection",
             "start": "vram_start",
             "size": "vram_16_size",
             "expected_CRCs": [
