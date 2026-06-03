@@ -75,12 +75,20 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
  * netif on repeated drain-short failures. */
 static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason);
 
+/* True if netif is one of our ethernet interfaces (named "en*") with a
+ * backing eth_device_t. Centralizes the guard used by every netif walk
+ * and the public netif_is_link_error accessor. */
+static inline bool eth_is_eth_netif(const struct netif *netif)
+{
+    return netif && netif->name[0] == 'e' && netif->name[1] == 'n' && netif->state;
+}
+
 static void eth_schedule_rx_for_netifs(void)
 {
     struct netif *netif = NULL;
     NETIF_FOREACH(netif)
     {
-        if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
+        if (!eth_is_eth_netif(netif))
         {
             continue;
         }
@@ -222,7 +230,7 @@ static void eth_rx_drain_dispatch(void)
         {
             break;
         }
-        if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
+        if (!eth_is_eth_netif(netif))
         {
             continue;
         }
@@ -245,7 +253,7 @@ void eth_halt_all_endpoints(void)
     struct netif *netif = NULL;
     NETIF_FOREACH(netif)
     {
-        if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
+        if (!eth_is_eth_netif(netif))
         {
             continue;
         }
@@ -1393,7 +1401,7 @@ uint8_t eth_get_interfaces(void)
 
 bool netif_is_link_error(const struct netif *netif)
 {
-    if (!netif || netif->name[0] != 'e' || netif->name[1] != 'n' || !netif->state)
+    if (!eth_is_eth_netif(netif))
     {
         return false;
     }
