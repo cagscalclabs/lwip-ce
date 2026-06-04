@@ -84,6 +84,56 @@ After ``lwip_init_runtime`` returns successfully, the stack is fully wired: the
 consumer's malloc is in place, USB is reachable, and every API call lands in the
 resident app.
 
+The whole sequence, end to end:
+
+.. code-block:: text
+
+   STAGE 1  (ordinary LIBLOAD)
+   +-------------------------------------------------------------+
+   | LIBLOAD loads the companion library                         |
+   | USB vtable filled via include_library 'usbdrvce';           |
+   | lwIP trampolines present but NOT yet patched                |
+   +-------------------------------------------------------------+
+                              |
+                              v
+   STAGE 2  (lwIP-CE custom setup -- triggered by the consumer)
+   +-------------------------------------------------------------+
+   | consumer calls lwip_init_runtime(malloc, free, realloc)     |
+   | -> host CRT pointers written into the imports table         |
+   +-------------------------------------------------------------+
+                              |
+                              v
+   +-------------------------------------------------------------+
+   | bootstrap locates the resident app by name -> base address  |
+   | + __lwip_fn_table_off  ->  app's export table               |
+   +-------------------------------------------------------------+
+                              |
+                              v
+   +-------------------------------------------------------------+
+   | verify "LWIPTB" magic                                       |
+   | mismatch => fail closed (stale / incompatible app)          |
+   +-------------------------------------------------------------+
+                              |
+                              v
+   +-------------------------------------------------------------+
+   | patch each trampoline -> (app base + offset)                |
+   | after this loop, every lwip_* call dispatches into the app  |
+   +-------------------------------------------------------------+
+                              |
+                              v
+   +-------------------------------------------------------------+
+   | call lwip_init_runtime_internal  (now reachable!)           |
+   | app zeroes .bss, copies .data from Flash,                   |
+   | copies imports table into its reserved storage              |
+   +-------------------------------------------------------------+
+                              |
+                              v
+                     stack ready to use
+
+The ordering is the subtle part: ``lwip_init_runtime_internal`` is itself an
+exported call, so it can only run *after* the trampolines are patched. The
+bootstrap reaches into the app to finish setting up the app.
+
 Memory layout: the BSSHEAP contract
 -----------------------------------
 
@@ -105,6 +155,23 @@ window. In other words, link with:
 If you leave ``BSSHEAP_LOW`` at the default, your program's BSS and lwIP-CE's
 will overlap, and things will corrupt in confusing ways. Bumping it 6 KiB higher
 is the whole fix.
+
+Pictured (addresses increase upward):
+
+.. code-block:: text
+
+   CORRECT: BSSHEAP_LOW raised            WRONG: BSSHEAP_LOW left at default
+
+              +----------------------+
+   0xD06AC6 ->|  consumer BSS / heap |               +----------------------+
+              |  (starts here)       |               |  lwIP app window AND |
+              +----------------------+    0xD052C6 ->|  consumer BSS BOTH   |
+              |  lwIP app            |               |  claim this region   |
+              |  .bss + .data (6KiB) |               +----------------------+
+   0xD052C6 ->|                      |                   overlap => both
+              +----------------------+                   regions corrupt
+
+   consumer sets BSSHEAP_LOW >= 0xD06AC6   consumer left it at 0xD052C6
 
 Why it is done this way
 -----------------------

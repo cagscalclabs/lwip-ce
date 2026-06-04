@@ -8,12 +8,6 @@ SECTIONS
 {
     . = LOAD_ADDR;
 
-    /* First byte of the app image. The export table stores each entry as
-     * (symbol - __app_base) so a runtime reader can recover the real
-     * address with (relocated app base + offset). With LOAD_ADDR = 0 for
-     * applications, this equals each symbol's link-time offset. */
-    PROVIDE(__app_base = ADDR(.header));
-
     .header :
     {
         KEEP (*(.header))
@@ -103,8 +97,10 @@ SECTIONS
      * (release/lwip.s, built separately) needs the runtime offset from
      * the app's loaded base to _fn_exports_table. The phase-2 build
      * step greps this symbol from bin/lwIP.map and injects it as
-     * `__lwip_fn_table_off` into the bootstrap source. */
-    PROVIDE(__lwip_fn_table_off = _fn_exports_table - __app_base);
+     * `__lwip_fn_table_off` into the bootstrap source. Applications link
+     * at LOAD_ADDR = 0, so a symbol's link-time address already is its
+     * offset from the app base — no base subtraction needed. */
+    PROVIDE(__lwip_fn_table_off = _fn_exports_table);
 
     /* Safe-RAM scratch overlay (0xE30800, ti.cursorImage).
      *
