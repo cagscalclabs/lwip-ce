@@ -5,5 +5,6 @@
 
    getting-started
    api/index
+   libload-environment
    technical-details
    credits

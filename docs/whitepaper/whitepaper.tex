@@ -546,6 +546,21 @@ Before beginning this project we needed to itemize what was available and what w
 				\item A small \texttt{LIBLOAD} companion library provides consumer-side stubs and a bootstrap function. The bootstrap locates the installed lwIP application, resolves the application export table, and patches or populates the local stubs so later API calls dispatch into the resident application.
 			\end{itemize}
 
+			\subsubsection{Initialization Handshake}
+			Bringing the stack up happens in two stages: the ordinary \texttt{LIBLOAD} initialization, followed by lwIP-CE's own runtime setup. In the first stage, when the consumer program loads, \texttt{LIBLOAD} initializes the companion library as it would any other. Because that library pulls in \texttt{usbdrvce} via \texttt{include\_library}, the USB driver function pointers in its imports table are populated at this point. The lwIP export trampolines exist but are not yet patched.
+
+			The second stage is triggered explicitly by the consumer calling \texttt{lwip\_init\_runtime(malloc, free, realloc)}. This routine performs the custom work that adapts the library model to an Application source:
+			\begin{enumerate}
+				\item The three host C-runtime pointers are stored into the imports table; lwIP-CE ships no libc of its own and dispatches allocation through the caller's.
+				\item The bootstrap locates the resident lwIP application by name to obtain its base address, then adds the build-time-recorded offset to reach the application's export table.
+				\item A six-byte magic marker at the head of the export table is verified, guarding against a stale or layout-mismatched application paired with the companion library.
+				\item Each consumer-side trampoline is patched to \texttt{(application base + stored offset)}. After this loop every exported call dispatches into the resident application.
+				\item With the trampolines live, the bootstrap calls \texttt{lwip\_init\_runtime\_internal} \emph{through} the newly patched table. The application then performs the startup steps that the C runtime would normally perform at launch but which do not occur here (the application is not run as the active program): it zero-initializes its \texttt{.bss}, copies its \texttt{.data} from the Flash image into RAM, and copies the imports table into its own reserved storage so internal code can dispatch through the host CRT and USB pointers.
+			\end{enumerate}
+
+			\subsubsection{Runtime Memory Contract}
+			Because the application's \texttt{.bss} and \texttt{.data} are initialized at runtime rather than at launch, they require a fixed RAM home that does not collide with the consumer program's own variables. lwIP-CE reserves a 6\,KiB window beginning at the toolchain's default \texttt{BSSHEAP\_LOW} (\texttt{0xD052C6}) and ending at \texttt{0xD06AC6}; this holds the application's runtime \texttt{.bss} and \texttt{.data} (approximately 5.3\,KiB in the current build, with headroom). Consumer programs must therefore raise their own \texttt{BSSHEAP\_LOW} to at least \texttt{0xD06AC6} so that their BSS begins above the reserved window. Leaving it at the default overlaps the two regions and corrupts both. This is the one explicit obligation the resident-application model places on callers, and it is satisfied by a single link-time definition.
+
 		\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
 		The project is backed by a deterministic unit test suite that spans the full stack---transport and allocator layers as well as the security-critical cryptographic and parser paths. Tests run on \texttt{CEmu} and are structured around explicit acceptance criteria; where policy requires fail-closed behavior, tests assert rejection rather than silent degradation. (TLS-specific timing and CAVP profiling are treated separately; see Section~\ref{ssec:profiling}.)
 
