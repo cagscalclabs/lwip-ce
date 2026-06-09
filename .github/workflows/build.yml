@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make tar wget curl qt5-qmake qtbase5-dev xvfb python3
+          sudo apt-get install -y make tar wget curl unzip libxml2-utils qt5-qmake qtbase5-dev xvfb python3
 
       - name: Cache CEdev Toolchain
         id: cedev-cache
@@ -75,6 +75,14 @@ jobs:
           path: ${{ env.TOOLCHAIN_SRC }}/tools/convbin
           submodules: recursive
           persist-credentials: false
+
+      - name: Build toolchain fasmg support
+        run: |
+          make -C "${{ env.TOOLCHAIN_SRC }}/tools/fasmg"
+          cd "${{ env.TOOLCHAIN_SRC }}/tools/fasmg/fasmg-ez80"
+          ./bin/install_fasmg
+          cmake -E copy bin/fasmg "${{ env.CEDEV_BIN }}/fasmg"
+          "${{ env.CEDEV_BIN }}/fasmg" /dev/null /dev/null
 
       - name: Build fixed convbin from source
         run: |
@@ -153,9 +161,8 @@ jobs:
       - name: make libload lib
         id: make_libload
         run: |
-          chmod +x "${{ env.TOOLCHAIN_SRC }}/fasmg/fasmg"
           make -C "${{ env.TOOLCHAIN_SRC }}/src/lwip" \
-            FASMG="${{ env.TOOLCHAIN_SRC }}/fasmg/fasmg -i ${{ env.TOOLCHAIN_SRC }}/src/include/"
+            FASMG="${{ env.CEDEV_BIN }}/fasmg -i ${{ env.TOOLCHAIN_SRC }}/src/include/"
           cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.8xv" "${{ github.workspace }}/release/lwip.8xv"
           cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ github.workspace }}/release/lwip.lib"
           cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ github.workspace }}/CEdev/lib/libload/lwip.lib"
