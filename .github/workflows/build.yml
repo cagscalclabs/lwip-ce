@@ -1,59 +1,186 @@
-name: Build lwIP-CE Project
+name: Build Latest lwIP Dylib
 
 on:
   push:
-    branches:
-      - master
+    branches: ['main']
     paths:
-      - src/*
+      - '.github/workflows/build.yml'
+      - 'makefile'
+      - 'linker_script_lwip.ld'
+      - 'src/**'
+      - 'tools/**'
+      - 'release/makefile'
+      - 'tests/profiling/dylib_functionality/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+env:
+  AUTOTESTER_ROM: ${{ github.workspace }}/CE.rom
+  CEMU_PATH: ${{ github.workspace }}/CEmu
+  CEMU_ROM_PATH: ${{ secrets.CL_SECRETS_URL }}/CE.rom
+  SECRETS_TOKEN: ${{ secrets.CL_SECRETS_TOKEN }}
+  CEDEV_BIN: ${{ github.workspace }}/CEdev/bin
+  TOOLCHAIN_SRC: ${{ github.workspace }}/toolchain
+  DYLIB_TEST_DIR: ${{ github.workspace }}/tests/profiling/dylib_functionality
 
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'cpp' ]
+jobs:
+  dylib_latest:
+    runs-on: ubuntu-latest
+    environment: test
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@main
-
-      - name: Fetch submodules
-        run: git submodule update --init --recursive
-
-      - name: Get repository information
-        uses: actions/github-script@v6
+      - name: Checkout lwIP-CE
+        uses: actions/checkout@v4
         with:
-          script: |
-            const repo = context.payload.repository.full_name;
-            console.log(`The repository is ${repo}`);
+          submodules: true
+
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y make tar
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make tar wget curl qt5-qmake qtbase5-dev xvfb python3
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/CEdev
+          key: ${{ runner.os }}-cedev-v15.0
 
       - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
         run: |
           curl -sL github.com/CE-Programming/toolchain/releases/download/v15.0/CEdev-Linux.tar.gz | tar xz
 
       - name: Add CEdev to PATH
         run: |
-          echo "CEdev/bin" >> $GITHUB_PATH
-          echo $GITHUB_PATH
+          echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
 
-      - name: Make GFX
-        run: make gfx
-
-        # build program
-      - name: Make Build
-        run: make
-
-      - name: Upload bin directory
-        uses: actions/upload-artifact@v3
+      - name: Checkout CEdev toolchain source
+        uses: actions/checkout@v4
         with:
-          name: lwipce-demo
-          path: bin/
+          repository: CE-Programming/toolchain
+          ref: master
+          path: ${{ env.TOOLCHAIN_SRC }}
+          persist-credentials: false
+
+      - name: Download CEmu Rom
+        run: |
+          HTTP_CODE=$(curl -A "github/workflows" \
+            -H "Authorization: Bearer ${{ env.SECRETS_TOKEN }}" \
+            -w "%{http_code}" \
+            -o "${{ env.AUTOTESTER_ROM }}" \
+            -SL "${{ env.CEMU_ROM_PATH }}" \
+            --retry 3 \
+            --retry-delay 2)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: ROM download failed with HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+          test -s "${{ env.AUTOTESTER_ROM }}"
+
+      - name: Checkout CEmu
+        uses: actions/checkout@v4
+        with:
+          repository: CE-Programming/CEmu
+          ref: master
+          path: ${{ env.CEMU_PATH }}
+          persist-credentials: false
+
+      - name: Cache CEmu Build Outputs
+        id: cemu-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.CEMU_PATH }}/core/CEmu
+            ${{ env.CEMU_PATH }}/tests/autotester/autotester
+          key: ${{ runner.os }}-cemu-master-v3
+
+      - name: Build CEmu
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        run: make -j4 -C "${{ env.CEMU_PATH }}/core"
+
+      - name: Build Autotester CLI
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        run: make -j4 -C "${{ env.CEMU_PATH }}/tests/autotester"
+
+      - name: Install Autotester CLI
+        run: cmake -E copy "${{ env.CEMU_PATH }}/tests/autotester/autotester" "${{ env.CEDEV_BIN }}/cemu-autotester"
+
+      - name: Verify Autotester Setup
+        run: |
+          xvfb-run -a "${{ env.CEDEV_BIN }}/cemu-autotester" --help || true
+
+      - name: Download CE Libraries Group
+        run: |
+          curl -fL \
+            -o "${{ env.DYLIB_TEST_DIR }}/clibs.8xg" \
+            https://github.com/CE-Programming/libraries/releases/download/v14.2/clibs.8xg
+
+      - name: make dylib
+        id: make_dylib
+        run: make dylib
+
+      - name: Copy release into toolchain source
+        run: |
+          rm -rf "${{ env.TOOLCHAIN_SRC }}/src/lwip"
+          mkdir -p "${{ env.TOOLCHAIN_SRC }}/src/lwip"
+          cp -R "${{ github.workspace }}/release/." "${{ env.TOOLCHAIN_SRC }}/src/lwip/"
+          cp "${{ github.workspace }}/release/makefile" "${{ env.TOOLCHAIN_SRC }}/src/lwip/makefile"
+          cp "${{ github.workspace }}/CEdev/lib/libload/usbdrvce.lib" "${{ env.TOOLCHAIN_SRC }}/src/include/usbdrvce.lib"
+
+      - name: make libload lib
+        id: make_libload
+        run: |
+          chmod +x "${{ env.TOOLCHAIN_SRC }}/fasmg/fasmg"
+          make -C "${{ env.TOOLCHAIN_SRC }}/src/lwip" \
+            FASMG="${{ env.TOOLCHAIN_SRC }}/fasmg/fasmg -i ${{ env.TOOLCHAIN_SRC }}/src/include/"
+          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.8xv" "${{ github.workspace }}/release/lwip.8xv"
+          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ github.workspace }}/release/lwip.lib"
+          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ github.workspace }}/CEdev/lib/libload/lwip.lib"
+          mkdir -p "${{ github.workspace }}/CEdev/include/lwip"
+          cp -R "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip/." "${{ github.workspace }}/CEdev/include/lwip/"
+
+      - name: Generate dylib autotest
+        run: |
+          python3 "${{ env.DYLIB_TEST_DIR }}/tools/generate_autotest.py" \
+            --test-dir "${{ env.DYLIB_TEST_DIR }}" \
+            --release-dir "${{ github.workspace }}/release" \
+            --clibs "${{ env.DYLIB_TEST_DIR }}/clibs.8xg" \
+            --out "${{ env.DYLIB_TEST_DIR }}/autotest.json"
+
+      - name: run dylib function test
+        id: run_dylib_function_test
+        run: |
+          make -C "${{ env.DYLIB_TEST_DIR }}" clean
+          make -C "${{ env.DYLIB_TEST_DIR }}"
+          xvfb-run -a "${{ env.CEDEV_BIN }}/cemu-autotester" "${{ env.DYLIB_TEST_DIR }}/autotest.json"
+
+      - name: upload release
+        id: upload_release
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/release/
+          if-no-files-found: error
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          {
+            echo "## lwIP Latest Dylib"
+            echo
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| make dylib | ${{ steps.make_dylib.outcome }} |"
+            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
+            echo "| run dylib function test | ${{ steps.run_dylib_function_test.outcome }} |"
+            echo "| upload release | ${{ steps.upload_release.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove CEmu Rom
+        if: always()
+        run: rm -f "${{ env.AUTOTESTER_ROM }}"
