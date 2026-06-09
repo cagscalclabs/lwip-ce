@@ -33,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make tar curl unzip python3
+          sudo apt-get install -y make tar curl unzip libxml2-utils python3
 
       - name: Cache CEdev Toolchain
         id: cedev-cache
