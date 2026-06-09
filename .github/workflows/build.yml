@@ -67,6 +67,15 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: Checkout fixed convbin branch
+        uses: actions/checkout@v4
+        with:
+          repository: mateoconlechuga/convbin
+          ref: R_Z80_BYTE012
+          path: ${{ env.TOOLCHAIN_SRC }}/tools/convbin
+          submodules: recursive
+          persist-credentials: false
+
       - name: Build fixed convbin from source
         run: |
           test -f "${{ env.TOOLCHAIN_SRC }}/tools/convbin/Makefile"
