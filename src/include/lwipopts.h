@@ -32,6 +32,9 @@
 #endif
 
 #define LWIP_DNS LWIP_UDP
+#define DNS_TABLE_SIZE 2
+#define DNS_MAX_NAME_LENGTH 128
+#define DNS_MAX_SERVERS 1
 #define LWIP_MDNS_RESPONDER LWIP_UDP
 #define LWIP_DHCP_GET_NTP_SRV 1
 #define SNTP_GET_SERVERS_FROM_DHCP 1
@@ -239,6 +242,10 @@ a lot of data that needs to be copied, this should be set high. */
 #define MEMP_NUM_REASSDATA IP_REASS_MAX_PBUFS
 #define IP_FRAG 1
 #define IPV6_FRAG_COPYHEADER 1
+#define LWIP_ND6_NUM_NEIGHBORS 4
+#define LWIP_ND6_NUM_DESTINATIONS 2
+#define LWIP_ND6_NUM_PREFIXES 2
+#define LWIP_ND6_NUM_ROUTERS 1
 
 /* ---------- ICMP options ---------- */
 #define ICMP_TTL 255

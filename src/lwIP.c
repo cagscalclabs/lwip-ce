@@ -43,7 +43,6 @@
 
 #include <usbdrvce.h>
 #include <fileioc.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* ============================================================
@@ -51,7 +50,6 @@
  * ============================================================ */
 
 static bool g_lwip_started = false;
-static bool g_lwip_cleanup_registered = false;
 static lwip_app_config_t g_lwip_cfg;
 
 static void lwip_stack_cleanup(void);
@@ -65,11 +63,6 @@ bool lwip_start(void)
     }
 
     lwip_app_config_load(&g_lwip_cfg);
-    if (!g_lwip_cleanup_registered)
-    {
-        atexit(lwip_stack_cleanup);
-        g_lwip_cleanup_registered = true;
-    }
     lwip_log_set_fatal_handler(lwip_fatal_cleanup);
 
     if (lwip_init() != ERR_OK)
@@ -90,6 +83,11 @@ bool lwip_start(void)
 
     g_lwip_started = true;
     return true;
+}
+
+void lwip_stop(void)
+{
+    lwip_stack_cleanup();
 }
 
 void lwip_poll_network_events(void)

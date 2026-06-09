@@ -423,6 +423,7 @@ _fn_imports_table_end:
 	export eth_usb_event_callback
 	export tls_x25519_publickey
 	export tls_x25519_secret
+	export lwip_stop
 
 _lwip_jp_table_start:
 lwip_start:	jp 0
@@ -802,6 +803,7 @@ netif_is_link_error:	jp 0
 eth_usb_event_callback:	jp 0
 tls_x25519_publickey:	jp 0
 tls_x25519_secret:	jp 0
+lwip_stop:	jp 0
 _lwip_jp_table_end:
 
 ; lwip_init_runtime_opaque(malloc, free, realloc)
@@ -813,10 +815,7 @@ _lwip_jp_table_end:
 ; The phase-2 build greps it from bin/lwIP.map and substitutes the literal
 ; below before fasmg runs.
 
-; ti.* OS entry points (ti.FindAppStart, ti._frameset0, ...) are provided
-; by ti84pceg.inc, which library.inc includes for the libload lib build —
-; so they must NOT be redefined here or fasmg reports a symbol conflict.
-__lwip_fn_table_off  := 0x040F02
+__lwip_fn_table_off  := 0x03DDC8
 
 	export lwip_init_runtime_opaque
 

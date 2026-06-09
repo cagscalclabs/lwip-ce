@@ -18,6 +18,7 @@
  *   lwip_conn_shutdown() / close — graceful half-close or orderly teardown
  *   lwip_conn_abort()            — immediate forced teardown
  *   lwip_conn_destroy()          — free the handle
+ *   lwip_stop()                  — before app exit when done with networking
  */
 
 #ifndef LWIP_HDR_LWIP_APP_H
@@ -176,6 +177,10 @@ struct lwip_conn
  *  configurator. Apps that need custom usb hooks should call lwip_init()
  *  directly instead. */
 bool lwip_start(void);
+
+/** Tear down the network stack started by lwip_start(). Safe to call when the
+ *  stack is not running. */
+void lwip_stop(void);
 
 /** App-side init invoked by lwip_init_runtime_opaque after the export
  *  trampolines are patched. Zeroes lwIP's BSS, copies its .data from LMA

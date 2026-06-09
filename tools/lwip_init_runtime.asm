@@ -7,9 +7,6 @@
 ; The phase-2 build greps it from bin/lwIP.map and substitutes the literal
 ; below before fasmg runs.
 
-; ti.* OS entry points (ti.FindAppStart, ti._frameset0, ...) are provided
-; by ti84pceg.inc, which library.inc includes for the libload lib build —
-; so they must NOT be redefined here or fasmg reports a symbol conflict.
 __lwip_fn_table_off  := 0x000000
 
 	export lwip_init_runtime_opaque

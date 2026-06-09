@@ -50,6 +50,10 @@
 #define LWIP_CFG_LOG_MAX_BYTES 16384u
 #define LWIP_CFG_LOG_STEP_BYTES 512u
 
+#ifndef LWIP_APP_ENABLE_SERVICE_EXAMPLES
+#define LWIP_APP_ENABLE_SERVICE_EXAMPLES 0
+#endif
+
 typedef enum
 {
     F_TYPE_BOOL_TOGGLE,
@@ -81,6 +85,7 @@ typedef enum
     OPT_LOG_TLS,
     OPT_LOG_SIZE,
     OPT_VIEW_LOGS,
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     OPT_SEP_TESTS,
     OPT_NTP_TEST,
     OPT_HTTP_TEST,
@@ -88,6 +93,7 @@ typedef enum
     OPT_PING_TEST,
     OPT_TCP_ECHO_TEST,
     OPT_TLS_TEST,
+#endif
     OPT_COUNT
 } config_option_id;
 
@@ -112,12 +118,14 @@ struct config_option
 };
 
 static bool run_main = true;
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static bool dhcp_started = false;
 static bool httpd_running = false;
 static bool sntp_started = false;
 static bool manual_ip_applied = false;
 static bool lwip_started = false;
 static volatile bool netif_unavailable = false;
+#endif
 
 static lwip_app_config_t g_cfg;
 
@@ -147,8 +155,10 @@ static void delay_ms(unsigned int ms)
 static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes);
 static void edit_ip_config(lwip_app_config_t *cfg);
 static void edit_hostname_config(lwip_app_config_t *cfg);
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static bool start_lwip_stack(const lwip_app_config_t *cfg);
 static void apply_network_config(const lwip_app_config_t *cfg);
+#endif
 static void fill_rect(int x, int y, int w, int h, uint16_t color);
 static void ui_draw_header(const char *title);
 static void ui_draw_footer(const char *line1, const char *line2);
@@ -156,12 +166,14 @@ static void ui_draw_footer(const char *line1, const char *line2);
 static bool config_toggle_option(struct config_option *opt);
 static bool config_edit_ip(struct config_option *opt);
 static bool config_edit_hostname(struct config_option *opt);
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static bool config_run_ntp_test(struct config_option *opt);
 static bool config_run_http_test(struct config_option *opt);
 static bool config_run_dns_test(struct config_option *opt);
 static bool config_run_ping_test(struct config_option *opt);
 static bool config_run_tcp_echo_test(struct config_option *opt);
 static bool config_run_tls_test(struct config_option *opt);
+#endif
 static bool config_run_view_logs(struct config_option *opt);
 static size_t config_required_lwip_floor(const lwip_app_config_t *cfg);
 static uint16_t config_mem_cap_max(void);
@@ -169,7 +181,7 @@ static bool config_clamp_mem_cap(lwip_app_config_t *cfg);
 static void ui_draw_mem_breakdown(void);
 static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len);
 
-#if LWIP_DHCP
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES && LWIP_DHCP
 static bool dhcp_client_running(const struct netif *netif)
 {
     struct dhcp *dhcp = netif ? netif_dhcp_data(netif) : NULL;
@@ -199,6 +211,7 @@ static struct config_option config_options[] = {
     {"Log TLS Errors",  OPT_LOG_TLS,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"Log Size",        OPT_LOG_SIZE,     F_TYPE_INT_SLIDER,   NULL, {0}},
     {"View Log",        OPT_VIEW_LOGS,    F_TYPE_ACTION,       config_run_view_logs, {0}},
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
     {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
     {"HTTP Test",       OPT_HTTP_TEST,    F_TYPE_ACTION,       config_run_http_test, {0}},
@@ -206,6 +219,7 @@ static struct config_option config_options[] = {
     {"Ping Test",       OPT_PING_TEST,    F_TYPE_ACTION,       config_run_ping_test, {0}},
     {"TCP Echo",        OPT_TCP_ECHO_TEST,F_TYPE_ACTION,       config_run_tcp_echo_test, {0}},
     {"TLS Test",        OPT_TLS_TEST,     F_TYPE_ACTION,       config_run_tls_test, {0}},
+#endif
 };
 
 #define CONFIG_OPTION_COUNT (sizeof(config_options) / sizeof(config_options[0]))
@@ -794,12 +808,14 @@ static void format_option_value(const struct config_option *opt, char *buf, size
         snprintf(buf, buf_len, "%s",
                  option_get_bool(opt->value) ? "Full" : "Pin");
         break;
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     case OPT_NTP_TEST:
     case OPT_HTTP_TEST:
     case OPT_DNS_TEST:
     case OPT_PING_TEST:
     case OPT_TCP_ECHO_TEST:
     case OPT_TLS_TEST:
+#endif
     case OPT_VIEW_LOGS:
         snprintf(buf, buf_len, ">");
         break;
@@ -885,6 +901,7 @@ static bool config_edit_hostname(struct config_option *opt)
     return true;
 }
 
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 // Common test network state - callbacks set these
 static volatile bool test_link_up = false;
 static volatile bool test_has_ip = false;
@@ -2170,6 +2187,7 @@ static bool config_run_tls_test(struct config_option *opt)
     cleanup_test_screen();
     return true;
 }
+#endif
 
 static bool config_run_view_logs(struct config_option *opt)
 {
@@ -2641,6 +2659,7 @@ static void edit_ip_config(lwip_app_config_t *cfg)
     }
 }
 
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static void apply_network_config(const lwip_app_config_t *cfg)
 {
     lwip_sntp_set_timezone_offset((int32_t)cfg->tz_offset_minutes * 60);
@@ -2807,11 +2826,14 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
     lwip_started = true;
     return true;
 }
+#endif
 
 int main(void)
 {
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     atexit(cleanup_lwip_stack);
     lwip_log_set_fatal_handler(lwip_fatal_cleanup);
+#endif
 
     lwip_app_config_load(&g_cfg);
 
@@ -2853,12 +2875,14 @@ int main(void)
 
     while (run_main)
     {
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
         if (lwip_started)
         {
             apply_network_config(&g_cfg);
             usb_HandleEvents();
             sys_check_timeouts();
         }
+#endif
 
         if (needs_redraw)
         {
@@ -3122,7 +3146,9 @@ int main(void)
         // Left/Right for slider quick adjust in edit mode is handled above
     }
 
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     cleanup_lwip_stack();
+#endif
 
     lwip_app_config_save(&g_cfg);
 
