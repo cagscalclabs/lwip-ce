@@ -131,7 +131,7 @@ jobs:
 
       - name: make dylib
         id: make_dylib
-        run: make dylib
+        run: make dylib LINKER_SCRIPT="${{ github.workspace }}/linker_script_lwip.ld"
 
       - name: Copy release into toolchain source
         run: |
