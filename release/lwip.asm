@@ -3,12 +3,12 @@
 ; Do not edit by hand. Sources: tools/functable.py,
 ; tools/lwip_init_runtime.asm.
 
-include 'library.inc'
-include 'include_library.inc'
+include '../include/library.inc'
+include '../include/include_library.inc'
 
 library LWIP, 0
 
-	include_library 'usbdrvce.lib'
+	include_library '../usbdrvce/usbdrvce.asm'
 
 ; _fn_imports_table is a plain in-library label, not exported: it is
 ; referenced only by the bootstrap below (intra-file) and reached at

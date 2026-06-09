@@ -153,21 +153,19 @@ jobs:
       - name: Copy release into toolchain source
         run: |
           rm -rf "${{ env.TOOLCHAIN_SRC }}/src/lwip"
-          mkdir -p "${{ env.TOOLCHAIN_SRC }}/src/lwip"
-          cp -R "${{ github.workspace }}/release/." "${{ env.TOOLCHAIN_SRC }}/src/lwip/"
-          cp "${{ github.workspace }}/release/makefile" "${{ env.TOOLCHAIN_SRC }}/src/lwip/makefile"
-          cp "${{ github.workspace }}/CEdev/lib/libload/usbdrvce.lib" "${{ env.TOOLCHAIN_SRC }}/src/include/usbdrvce.lib"
+          cp -R "${{ github.workspace }}/release" "${{ env.TOOLCHAIN_SRC }}/src/lwip"
 
       - name: make libload lib
         id: make_libload
         run: |
           make -C "${{ env.TOOLCHAIN_SRC }}/src/lwip" \
-            FASMG="${{ env.CEDEV_BIN }}/fasmg -i ${{ env.TOOLCHAIN_SRC }}/src/include/"
+            FASMG="${{ env.CEDEV_BIN }}/fasmg"
           cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.8xv" "${{ github.workspace }}/release/lwip.8xv"
           cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ github.workspace }}/release/lwip.lib"
-          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ github.workspace }}/CEdev/lib/libload/lwip.lib"
-          mkdir -p "${{ github.workspace }}/CEdev/include/lwip"
-          cp -R "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip/." "${{ github.workspace }}/CEdev/include/lwip/"
+          mkdir -p "${{ env.CEDEV }}/lib/libload" "${{ env.CEDEV }}/include"
+          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ env.CEDEV }}/lib/libload/lwip.lib"
+          rm -rf "${{ env.CEDEV }}/include/lwip"
+          cp -R "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip" "${{ env.CEDEV }}/include/lwip"
 
       - name: Generate dylib autotest
         run: |

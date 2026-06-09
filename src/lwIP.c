@@ -77,7 +77,7 @@ bool lwip_start(void)
         return false;
     }
     /* USB init via usb_fn so the libload build resolves through
-     * include_library 'usbdrvce.lib' without a special case. If this
+     * include_library '../usbdrvce/usbdrvce.asm' without a special case. If this
      * fails we must roll back lwip_init's side effects — leaving
      * timeouts / netifs alive after lwip_start returned false would
      * let the next start attempt see a half-initialized stack. */

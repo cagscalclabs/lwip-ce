@@ -63,7 +63,7 @@ LIBLOAD_VERSION = 0
 # in the EXACT order the struct's fields appear in src/drivers/usb_ethernet.h.
 # The libload build statically initialises fn_imports_table.usb from this
 # list; each `dl usb_Foo` slot resolves to the address of usbdrvce's jp
-# stub (installed by `include_library 'usbdrvce.lib'`). The order must
+# stub (installed by `include_library '../usbdrvce/usbdrvce.asm'`). The order must
 # match `struct usb_configurator` field order or every call site
 # dispatches to the wrong function — change both together or not at all.
 USB_VTABLE_IMPORTS = [
@@ -525,7 +525,7 @@ def render_libload_stub(entries: list[str], fn_table_off: int | None = None) -> 
       1. Declare the lwIP library identity (`library LWIP, 0`).
 
       2. Import the usbdrvce symbols that lwIP's internal code calls
-         (via `include_library 'usbdrvce.lib'`). At load time, libload
+         (via `include_library '../usbdrvce/usbdrvce.asm'`). At load time, libload
          resolves each imported symbol to a `jp <real_addr>` stub inside
          this library's image; references to e.g. `usb_ResetDevice` from
          within the stub resolve to the address of that jp.
@@ -559,12 +559,12 @@ def render_libload_stub(entries: list[str], fn_table_off: int | None = None) -> 
         "; Do not edit by hand. Sources: tools/functable.py,",
         "; tools/lwip_init_runtime.asm.",
         "",
-        "include 'library.inc'",
-        "include 'include_library.inc'",
+        "include '../include/library.inc'",
+        "include '../include/include_library.inc'",
         "",
         f"library {LIBLOAD_NAME}, {LIBLOAD_VERSION}",
         "",
-        "\tinclude_library 'usbdrvce.lib'",
+        "\tinclude_library '../usbdrvce/usbdrvce.asm'",
         "",
         "; _fn_imports_table is a plain in-library label, not exported: it is",
         "; referenced only by the bootstrap below (intra-file) and reached at",

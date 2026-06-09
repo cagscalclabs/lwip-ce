@@ -230,7 +230,7 @@ struct usb_configurator {
 
     // top-level USB driver entry points (formerly called directly by lwIP;
     // now routed through the vtable so the libload build can resolve them
-    // via include_library 'usbdrvce.lib' without a special case).
+    // via include_library '../usbdrvce/usbdrvce.asm' without a special case).
     usb_error_t (*init)(usb_event_callback_t handler, usb_callback_data_t *data,
                         const usb_standard_descriptors_t *device_descriptors,
                         usb_init_flags_t flags);
