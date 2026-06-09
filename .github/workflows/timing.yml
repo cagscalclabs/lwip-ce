@@ -7,7 +7,6 @@ name: Timing Profiling
 
 on:
   push:
-    branches: ['tls']
     paths:
       - '.github/workflows/timing.yml'
       - 'src/tls/**'

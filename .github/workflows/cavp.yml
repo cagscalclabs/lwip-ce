@@ -9,7 +9,6 @@ name: CAVP Primitive Validation
 
 on:
   push:
-    branches: ['tls']
     paths:
       - '.github/workflows/cavp.yml'
       - 'src/tls/**'

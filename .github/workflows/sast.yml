@@ -2,12 +2,10 @@ name: SAST
 
 on:
   push:
-    branches: [ master, tls ]
     paths:
       - 'src/**'
       - '.github/workflows/sast.yml'
   pull_request:
-    branches: [ master, tls ]
     paths:
       - 'src/**'
       - '.github/workflows/sast.yml'

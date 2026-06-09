@@ -2,9 +2,6 @@ name: Build Docs
 
 on:
   push:
-    branches:
-      - master
-      - tls
     paths:
       - docs/**
       - release/lwip/**

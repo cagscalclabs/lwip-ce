@@ -1,7 +1,7 @@
 ### Main CI
 
 ![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?cache=1)
-![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=tls&cache=1)
+![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?cache=1)
 
 *CI App building is currently failing due to an ongoing refactor/migration into the new binutils toolchain structure. This is expected during the transition period.*
 
@@ -11,8 +11,8 @@
 
 ### TLS Validation
 
-![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=tls&cache=1)
-![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=tls&cache=1)
+![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?cache=1)
+![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?cache=1)
 
 
 
