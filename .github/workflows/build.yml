@@ -21,6 +21,7 @@ env:
   CEMU_PATH: ${{ github.workspace }}/CEmu
   CEMU_ROM_PATH: ${{ secrets.CL_SECRETS_URL }}/CE.rom
   SECRETS_TOKEN: ${{ secrets.CL_SECRETS_TOKEN }}
+  CEDEV: ${{ github.workspace }}/CEdev
   CEDEV_BIN: ${{ github.workspace }}/CEdev/bin
   TOOLCHAIN_SRC: ${{ github.workspace }}/toolchain
   DYLIB_TEST_DIR: ${{ github.workspace }}/tests/profiling/dylib_functionality
@@ -120,7 +121,7 @@ jobs:
 
       - name: Verify Autotester Setup
         run: |
-          xvfb-run -a "${{ env.CEDEV_BIN }}/cemu-autotester" --help || true
+          test -x "${{ env.CEDEV_BIN }}/cemu-autotester"
 
       - name: Download CE Libraries Group
         run: |
