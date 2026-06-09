@@ -63,11 +63,13 @@ jobs:
           repository: CE-Programming/toolchain
           ref: master
           path: ${{ env.TOOLCHAIN_SRC }}
+          submodules: recursive
           persist-credentials: false
 
       - name: Build fixed convbin from source
         run: |
-          make -C "${{ env.TOOLCHAIN_SRC }}/tools/convbin" clean
+          test -f "${{ env.TOOLCHAIN_SRC }}/tools/convbin/Makefile"
+          make -C "${{ env.TOOLCHAIN_SRC }}/tools/convbin" clean || true
           make -C "${{ env.TOOLCHAIN_SRC }}/tools/convbin" -j"$(nproc)"
           cmake -E copy "${{ env.TOOLCHAIN_SRC }}/tools/convbin/bin/convbin" "${{ env.CEDEV_BIN }}/convbin"
           "${{ env.CEDEV_BIN }}/convbin" --version || true
