@@ -588,7 +588,7 @@ Before beginning this project we needed to itemize what was available and what w
 			\end{figure}
 
 			\subsubsection{Runtime Memory Contract}
-			Because the application's \texttt{.bss} and \texttt{.data} are initialized at runtime rather than at launch, they require a fixed RAM home that does not collide with the consumer program's own variables. lwIP-CE reserves a 6\,KiB window from the toolchain's default \texttt{BSSHEAP\_LOW} (\texttt{0xD052C6}) up to \texttt{0xD06AC6}, holding the application's runtime \texttt{.bss} and \texttt{.data} (about 5.3\,KiB in the current build, with headroom). This places exactly one obligation on consumers, satisfied by a single link-time definition: raise their own \texttt{BSSHEAP\_LOW} to at least \texttt{0xD06AC6} so their BSS begins above the reserved window (Figure~\ref{fig:bssheap_contract}). Leaving it at the default overlaps the two regions and corrupts both.
+			Because the application's \texttt{.bss} and \texttt{.data} are initialized at runtime rather than at launch, they require a fixed RAM home that does not collide with the consumer program's own variables. lwIP-CE reserves an 8\,KiB window from the toolchain's default \texttt{BSSHEAP\_LOW} (\texttt{0xD052C6}) up to \texttt{0xD072C6}, holding the application's runtime \texttt{.bss} and \texttt{.data} (about 6.6\,KiB in the current build, with the remainder as headroom for API growth). This places exactly one obligation on consumers, satisfied by a single link-time definition: raise their own \texttt{BSSHEAP\_LOW} to at least \texttt{0xD072C6} so their BSS begins above the reserved window (Figure~\ref{fig:bssheap_contract}). Leaving it at the default overlaps the two regions and corrupts both.
 
 			\begin{figure}[H]
 				\centering
@@ -605,10 +605,10 @@ Before beginning this project we needed to itemize what was available and what w
 					% addresses increase upward; two independent stacks, well separated
 					% ---- LEFT: correct layout ----
 					\node[hdr, text width=3.4cm] at (0,3.55) {Correct:\\\texttt{BSSHEAP\_LOW} raised};
-					\node[lwip] (L1) at (0,1.0) {lwIP app\\ \texttt{.bss} + \texttt{.data}\\ (6\,KiB)};
+					\node[lwip] (L1) at (0,1.0) {lwIP app\\ \texttt{.bss} + \texttt{.data}\\ (8\,KiB)};
 					\node[cons, above=1pt of L1] (L2) {consumer\\ BSS / heap};
 					\node[addr] at (-1.95,0.45) {0xD052C6};
-					\node[addr] at (-1.95,1.57) {0xD06AC6};
+					\node[addr] at (-1.95,1.57) {0xD072C6};
 					\node[note] at (1.85,1.57) {$\leftarrow$ consumer \texttt{BSSHEAP\_LOW} $\geq$ here};
 					\node[note] at (1.85,0.45) {$\leftarrow$ default \texttt{BSSHEAP\_LOW}};
 
@@ -618,7 +618,7 @@ Before beginning this project we needed to itemize what was available and what w
 					\node[addr] at (6.55,0.3) {0xD052C6};
 					\node[note, text width=2.6cm] at (10.35,1.0) {overlap $\Rightarrow$ both corrupt};
 				\end{tikzpicture}
-				\caption{\footnotesize dylib-mode RAM contract (addresses increase upward). lwIP-CE owns the 6\,KiB window \texttt{0xD052C6}--\texttt{0xD06AC6} for its runtime-initialized \texttt{.bss}/\texttt{.data}. Consumers must set \texttt{BSSHEAP\_LOW}~$\geq$~\texttt{0xD06AC6} (left); leaving it at the toolchain default puts the consumer's BSS on top of lwIP's window and corrupts both (right).}
+				\caption{\footnotesize dylib-mode RAM contract (addresses increase upward). lwIP-CE owns the 8\,KiB window \texttt{0xD052C6}--\texttt{0xD072C6} for its runtime-initialized \texttt{.bss}/\texttt{.data}. Consumers must set \texttt{BSSHEAP\_LOW}~$\geq$~\texttt{0xD072C6} (left); leaving it at the toolchain default puts the consumer's BSS on top of lwIP's window and corrupts both (right).}
 				\label{fig:bssheap_contract}
 			\end{figure}
 
@@ -1101,7 +1101,7 @@ Before beginning this project we needed to itemize what was available and what w
 	\begin{itemize}
 		\item Registers a request for random bytes, a buffer to return those bytes into, and a callback to run when the request completes.
 		\item If \texttt{blocking=true}, execution halts until enough entropy is returned to fill the request.
-		\item If \texttt{blocking=false}, execution returns to the caller immediately; the callback function fires when the request is fullfilled.
+		\item If \texttt{blocking=false}, execution returns to the caller immediately; the callback function fires when the request is fulfilled.
 	\end{itemize}
 	
 		While being used within TLS, entropy is returned through a SHA-256 DRBG serviced by a 50\,ms request timer. On each timer cycle, the RNG path behaves as follows:

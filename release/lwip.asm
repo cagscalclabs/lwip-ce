@@ -1,4 +1,4 @@
-; lwip.asm — libload library stub for lwIP. Generated 2026-06-03.
+; lwip.asm — libload library stub for lwIP. Generated 2026-06-09.
 ; Author: Anthony Cagliano
 ; Do not edit by hand. Sources: tools/functable.py,
 ; tools/lwip_init_runtime.asm.
@@ -10,7 +10,11 @@ library LWIP, 0
 
 	include_library 'usbdrvce.lib'
 
-	public _fn_imports_table
+; _fn_imports_table is a plain in-library label, not exported: it is
+; referenced only by the bootstrap below (intra-file) and reached at
+; runtime by the C app via its baked address. fasmg's libload
+; library.inc provides no 'public' directive (only 'export'), so
+; declaring it public is an illegal instruction here.
 _fn_imports_table:
 	; host CRT (populated at load time by lwip_init_runtime)
 	dl 0
@@ -809,8 +813,10 @@ _lwip_jp_table_end:
 ; The phase-2 build greps it from bin/lwIP.map and substitutes the literal
 ; below before fasmg runs.
 
-ti.FindAppStart      := 0x021100
-__lwip_fn_table_off  := 0x000000
+; ti.* OS entry points (ti.FindAppStart, ti._frameset0, ...) are provided
+; by ti84pceg.inc, which library.inc includes for the libload lib build —
+; so they must NOT be redefined here or fasmg reports a symbol conflict.
+__lwip_fn_table_off  := 0x040F02
 
 	export lwip_init_runtime_opaque
 
@@ -840,20 +846,41 @@ lwip_init_runtime_opaque:
 	pop de
 
 	; Magic: 'L','W','I','P','T','B'
-	ld a, (hl) : cp a, 'L' : jr nz, .table_fail : inc hl
-	ld a, (hl) : cp a, 'W' : jr nz, .table_fail : inc hl
-	ld a, (hl) : cp a, 'I' : jr nz, .table_fail : inc hl
-	ld a, (hl) : cp a, 'P' : jr nz, .table_fail : inc hl
-	ld a, (hl) : cp a, 'T' : jr nz, .table_fail : inc hl
-	ld a, (hl) : cp a, 'B' : jr nz, .table_fail : inc hl
+	ld a, (hl)
+	cp a, 'L'
+	jr nz, .table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'W'
+	jr nz, .table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'I'
+	jr nz, .table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'P'
+	jr nz, .table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'T'
+	jr nz, .table_fail
+	inc hl
+	ld a, (hl)
+	cp a, 'B'
+	jr nz, .table_fail
+	inc hl
 
 	ld bc, (hl)				; count
-	inc hl : inc hl : inc hl		; HL -> first entry
+	inc hl					; HL -> first entry
+	inc hl
+	inc hl
 
 	push ix
 	ld ix, _lwip_jp_table_start + 1		; first trampoline operand
 .patch_loop:
-	ld a, b : or a, c
+	ld a, b
+	or a, c
 	jr z, .patch_done
 
 	push hl
@@ -862,7 +889,9 @@ lwip_init_runtime_opaque:
 	ld (ix + 0), hl				; patch trampoline operand
 	pop hl
 
-	inc hl : inc hl : inc hl		; entry stride 3
+	inc hl					; entry stride 3
+	inc hl
+	inc hl
 	lea ix, ix + 4				; jp stride 4
 	dec bc
 	jr .patch_loop

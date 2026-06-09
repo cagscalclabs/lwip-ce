@@ -139,21 +139,21 @@ Memory layout: the BSSHEAP contract
 
 Because the lwIP app's ``.bss`` and ``.data`` get initialized at runtime (Stage
 2 above), they need a fixed home in RAM that does not collide with the consumer
-program's own variables. lwIP-CE reserves a **6 KiB window** starting at the
+program's own variables. lwIP-CE reserves an **8 KiB window** starting at the
 toolchain's default ``BSSHEAP_LOW`` (``0xD052C6``), running up to
-``0xD06AC6``. That window holds the app's runtime ``.bss`` + ``.data`` (about
-5.3 KiB in practice, with a little headroom).
+``0xD072C6``. That window holds the app's runtime ``.bss`` + ``.data`` (about
+6.6 KiB in practice, with the rest as headroom for API growth).
 
 The practical consequence for **consumer programs**: you must move your own
-``BSSHEAP_LOW`` up by 6 KiB so your variables start *above* lwIP-CE's reserved
+``BSSHEAP_LOW`` up by 8 KiB so your variables start *above* lwIP-CE's reserved
 window. In other words, link with:
 
 .. code-block:: text
 
-   BSSHEAP_LOW >= 0xD06AC6
+   BSSHEAP_LOW >= 0xD072C6
 
 If you leave ``BSSHEAP_LOW`` at the default, your program's BSS and lwIP-CE's
-will overlap, and things will corrupt in confusing ways. Bumping it 6 KiB higher
+will overlap, and things will corrupt in confusing ways. Bumping it 8 KiB higher
 is the whole fix.
 
 Pictured (addresses increase upward):
@@ -163,15 +163,15 @@ Pictured (addresses increase upward):
    CORRECT: BSSHEAP_LOW raised            WRONG: BSSHEAP_LOW left at default
 
               +----------------------+
-   0xD06AC6 ->|  consumer BSS / heap |               +----------------------+
+   0xD072C6 ->|  consumer BSS / heap |               +----------------------+
               |  (starts here)       |               |  lwIP app window AND |
               +----------------------+    0xD052C6 ->|  consumer BSS BOTH   |
               |  lwIP app            |               |  claim this region   |
-              |  .bss + .data (6KiB) |               +----------------------+
+              |  .bss + .data (8KiB) |               +----------------------+
    0xD052C6 ->|                      |                   overlap => both
               +----------------------+                   regions corrupt
 
-   consumer sets BSSHEAP_LOW >= 0xD06AC6   consumer left it at 0xD052C6
+   consumer sets BSSHEAP_LOW >= 0xD072C6   consumer left it at 0xD052C6
 
 Why it is done this way
 -----------------------

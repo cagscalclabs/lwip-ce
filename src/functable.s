@@ -26,7 +26,16 @@
 ; the subtraction is a no-op anyway, so the bare symbol is correct.
 
 .assume adl=1
-.section .rodata
+; Dedicated, RETAIN-flagged section. Nothing in the app references
+; _fn_exports_table (it is consumed only by the external libload
+; bootstrap at runtime), so it must survive --gc-sections. The app
+; is built in two link stages: a relocatable `ld -i --gc-sections`
+; merge (no linker script, so a script KEEP cannot help here),
+; followed by the final scripted link. The SHF_GNU_RETAIN flag (R)
+; pins the section through GC at BOTH stages, independent of any
+; linker script. linker_script_lwip.ld also KEEP(*(.fn_exports)) as
+; belt-and-suspenders for the final stage.
+.section .fn_exports,"aR",@progbits
 .globl _fn_exports_table
 
 .extern _lwip_start

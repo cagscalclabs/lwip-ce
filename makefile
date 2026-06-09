@@ -25,16 +25,17 @@ LINKER_SCRIPT = $(CURDIR)/linker_script_lwip.ld
 #
 #   lwIP app (this build):
 #     BSSHEAP_LOW  = 0xD052C6   (toolchain default for flash apps)
-#     BSSHEAP_HIGH = BSSHEAP_LOW + 6 KiB = 0xD06AC6
-#     The 6 KiB window holds the app's own .bss and .data at runtime.
+#     BSSHEAP_HIGH = BSSHEAP_LOW + 8 KiB = 0xD072C6
+#     The 8 KiB window holds the app's own .bss and .data at runtime
+#     (~6.6 KiB used, the remainder is headroom for API growth).
 #
 #   Consumer apps using lwIP:
-#     BSSHEAP_LOW  >= 0xD06AC6  (= this build's BSSHEAP_HIGH)
+#     BSSHEAP_LOW  >= 0xD072C6  (= this build's BSSHEAP_HIGH)
 #     so the consumer's BSS starts above lwIP-app's reserved window.
 #
 # Override BSSHEAP_HIGH before the toolchain include so its `?=` default
 # does not win.
-BSSHEAP_HIGH = 0xD06AC6
+BSSHEAP_HIGH = 0xD072C6
 
 LTO = NO
 
@@ -79,6 +80,58 @@ HEADER_PYTHON ?= /opt/homebrew/bin/python3.11
 functable:
 	python3 $(CURDIR)/tools/functable.py
 	$(HEADER_PYTHON) $(CURDIR)/tools/header_dump.py
+
+# Full dylib build: produce the lwIP flash app, the libload stub
+# (release/lwip.asm) with the export-table offset baked in, and a
+# transferable installer (the .8ek can't be sent to a calc directly —
+# unsigned flash apps can't be sideloaded — so it is split into AppVars
+# that the app_tools installer reconstitutes and flashes on-device).
+#
+# AppVar split parameters. APPVAR_PREFIX + the decimal index must fit in
+# 8 chars (TI var-name limit); APPVAR_SPLIT_SIZE is the per-AppVar payload
+# and MUST match between the convbin split and the installer build, or the
+# installer's size check rejects the AppVars.
+DYLIB_APPVAR_PREFIX = LWIP
+DYLIB_APPVAR_SPLIT_SIZE = 65200
+APP_TOOLS_INSTALLER = $(CURDIR)/tools/app_tools/installer
+#
+# Ordering matters. functable.py generates BOTH src/functable.s (the
+# in-app export table) and release/lwip.asm (the libload stub whose
+# bootstrap needs __lwip_fn_table_off = offset of _fn_exports_table). The
+# offset is only known after the app is linked and its map exists, but the
+# app build consumes src/functable.s — so we run functable twice:
+#
+#   1. --append: (re)generate the table append-only (slot-stable ABI) and
+#      a provisional stub (offset 0x000000).
+#   2. make build: build the app, producing bin/$(NAME).8ek + .map.
+#   3. --append --map: re-emit ONLY the stub with the real offset parsed
+#      from the map. src/functable.s is byte-identical to pass 1, so the
+#      app does not need a rebuild.
+#   4. split the .8ek into AppVars and build the installer program; move
+#      the installer + AppVars into release/.
+#   5. build the libload library (.8xv) from release/lwip.asm.
+#
+# Step 5 currently assumes the toolchain-source layout (release/makefile
+# includes ../common.mk and uses fasmg); it is attempted but not allowed
+# to fail the whole target, since the release-layout wiring is handled
+# separately.
+.PHONY: dylib
+dylib:
+	python3 $(CURDIR)/tools/functable.py --append
+	$(MAKE) build
+	python3 $(CURDIR)/tools/functable.py --append --map bin/$(NAME).map
+	@echo "==> splitting $(NAME).8ek into installer AppVars ($(DYLIB_APPVAR_PREFIX)*, $(DYLIB_APPVAR_SPLIT_SIZE)B each)"
+	$(Q)$(CONVBIN) --iformat 8ek --input bin/$(NAME).8ek \
+		--oformat 8xv-split --maxvarsize $(DYLIB_APPVAR_SPLIT_SIZE) \
+		--name $(DYLIB_APPVAR_PREFIX) --output release/$(DYLIB_APPVAR_PREFIX).8xv
+	@echo "==> building app_tools installer (APPVAR_PREFIX=$(DYLIB_APPVAR_PREFIX), APPVAR_SPLIT_SIZE=$(DYLIB_APPVAR_SPLIT_SIZE))"
+	$(Q)$(MAKE) -C $(APP_TOOLS_INSTALLER) \
+		APPVAR_PREFIX="$(DYLIB_APPVAR_PREFIX)" \
+		APPVAR_SPLIT_SIZE=$(DYLIB_APPVAR_SPLIT_SIZE)
+	$(Q)cp $(APP_TOOLS_INSTALLER)/bin/INSTALL.8xp release/$(NAME)INST.8xp
+	@echo "==> dylib installer ready in release/: $(NAME)INST.8xp + $(DYLIB_APPVAR_PREFIX)*.8xv"
+	@echo "==> building libload stub (release/lwip.asm -> lwip.8xv)"
+	@$(MAKE) -C release all || echo "==> NOTE: release lib build skipped/failed (expected outside toolchain-source layout); release/lwip.asm is generated with the offset baked in."
 
 # Print section sizes and the contract a libload consumer needs to honor
 # when reserving RAM for lwIP's .data + .bss. Run after a build.

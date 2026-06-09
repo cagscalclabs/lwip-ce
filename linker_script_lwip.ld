@@ -33,6 +33,12 @@ SECTIONS
 
     .rodata :
     {
+        /* The libload export table (src/functable.s) lives in its own
+         * .fn_exports section and is referenced only by the external
+         * libload bootstrap at runtime, so KEEP it from --gc-sections;
+         * its "LWIPTB" magic is the signal the bootstrap locates via
+         * __lwip_fn_table_off. */
+        KEEP(*(.fn_exports))
         *(.rodata .rodata.* .gnu.linkonce.r.*)
     } >prgm
 
@@ -73,6 +79,20 @@ SECTIONS
         ___bss_high = .;
     } >bss :NONE
     ___bss_len = ___bss_high - ___bss_low;
+
+    /* C-visible aliases for the .bss/.data bounds. crt0 (assembly) reads
+     * the three-underscore symbols directly, but lwip_init_runtime_internal
+     * is C: the compiler prepends a leading underscore, so its `extern
+     * ___bss_low` resolves to the object symbol ____bss_low (four). Provide
+     * those four-underscore names as aliases. This only matters because the
+     * function is now retained (the export table references it); when the
+     * table was being garbage-collected, lwip_init_runtime_internal and its
+     * undefined references were stripped and the mismatch stayed hidden. */
+    PROVIDE(____bss_low  = ___bss_low);
+    PROVIDE(____bss_len  = ___bss_len);
+    PROVIDE(____data_vma = ___data_vma);
+    PROVIDE(____data_lma = ___data_lma);
+    PROVIDE(____data_len = ___data_len);
 
     /* X25519 scratch variables. Uninitialized (NOLOAD) bss, page-aligned
      * so the hot loop can address them by patching only the low byte of
