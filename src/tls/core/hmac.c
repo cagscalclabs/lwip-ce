@@ -3,6 +3,21 @@
 #include "../includes/hash.h"
 #include "../includes/hmac.h"
 
+static bool tls_hmac_sha256_init_adapter(void *ctx)
+{
+    return tls_sha256_init((struct tls_sha256_context *)ctx);
+}
+
+static void tls_hmac_sha256_update_adapter(void *ctx, const uint8_t *data, size_t len)
+{
+    tls_sha256_update((struct tls_sha256_context *)ctx, data, len);
+}
+
+static void tls_hmac_sha256_digest_adapter(void *ctx, uint8_t *digest)
+{
+    tls_sha256_digest((struct tls_sha256_context *)ctx, digest);
+}
+
 bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, const uint8_t* key, size_t keylen){
     
     if((ctx==NULL)||
@@ -32,9 +47,9 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, cons
             ctx->digestlen = TLS_SHA256_DIGEST_LEN;
             ctx->update = tls_hmac_update;
             ctx->digest = tls_hmac_digest;
-            ctx->_init = tls_sha256_init;
-            ctx->_update = tls_sha256_update;
-            ctx->_final = tls_sha256_digest;
+            ctx->_init = tls_hmac_sha256_init_adapter;
+            ctx->_update = tls_hmac_sha256_update_adapter;
+            ctx->_final = tls_hmac_sha256_digest_adapter;
             break;
        /* case TLS_SHA256_HW:
             ctx->digestlen = TLS_SHA256_DIGEST_LEN;

@@ -38,6 +38,7 @@
 #define LWIP_HDR_DEBUG_H
 
 #include "lwip/arch.h"
+#include "lwip/logging.h"
 #include "lwip/opt.h"
 
 /**
@@ -114,17 +115,14 @@
 
 #ifndef LWIP_NOASSERT
 #define LWIP_ASSERT(message, assertion) do { if (!(assertion)) { \
-  LWIP_PLATFORM_ASSERT(message); }} while(0)
+  lwip_log_fatal_at(LWIP_LOG_TYPE_LWIP, LWIP_LOG_LWIP_ASSERT, (uint16_t)__LINE__); }} while(0)
 #else  /* LWIP_NOASSERT */
 #define LWIP_ASSERT(message, assertion)
 #endif /* LWIP_NOASSERT */
 
 #ifndef LWIP_ERROR
-#ifdef LWIP_DEBUG
-#define LWIP_PLATFORM_ERROR(message) LWIP_PLATFORM_DIAG((message))
-#else
-#define LWIP_PLATFORM_ERROR(message)
-#endif
+#define LWIP_PLATFORM_ERROR(message) \
+  lwip_log_event_at(LWIP_LOG_TYPE_LWIP, LWIP_LOG_LWIP_ERROR, (uint16_t)__LINE__)
 
 /* if "expression" isn't true, then print "message" and execute "handler" expression */
 #define LWIP_ERROR(message, expression, handler) do { if (!(expression)) { \

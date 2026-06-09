@@ -92,19 +92,12 @@ extern "C" {
  * @}
  */
 
-struct lwip_configurator {
-    uint24_t version;
-    struct usb_configurator usb_conf;
-    struct {
-        void* (*caller_malloc)(size_t);
-        void (*caller_free)(void*);
-    } malloc_conf;
-};
-#define LWIP_CONFIGURATOR_V1 sizeof(struct lwip_configurator)
-
-/* Modules initialization */
-err_t lwip_init(struct lwip_configurator *conf);
-void lwip_init_runtime(void);
+/* Modules initialization. malloc/free/realloc and the USB vtable come
+ * from fn_imports_table, populated by the libload bootstrap before this
+ * runs. Callers who want static memory should call mem_init_static()
+ * before lwip_init() — the dynamic-heap init below is skipped when the
+ * memory subsystem is already ready. */
+err_t lwip_init(void);
 
 
 #ifdef __cplusplus

@@ -1,56 +1,353 @@
 #include "mem.h"
 #include <string.h>
+#include "../tls/includes/bytes.h"
 
 #define MEM_POOL_HEADER_SIZE (sizeof(uint16_t))
+#define MEM_STATIC_ALIGN 8u
+
+enum mem_init_mode
+{
+    MEM_INIT_MODE_DYNAMIC = 0,
+    MEM_INIT_MODE_STATIC = 1
+};
 
 static size_t threshold_bytes(size_t cap, uint8_t pct)
 {
     return (cap * (size_t)pct) / 100u;
 }
 
-static void mem_buffer_notify_lowmem(struct mem_buffer *rb, size_t requested, enum mem_pressure_level level);
+static void mem_buffer_notify_pressure(struct mem_buffer *rb, size_t requested, enum mem_pressure_level level);
 static bool mem_buffer_maybe_grow(struct mem_buffer *rb, size_t incoming_len);
+static bool mem_buffer_is_pool_type(const struct mem_buffer *rb);
+static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct);
+static void mem_global_pressure_update(void);
+static void mem_effective_pressure_update(void);
 
 #define MEM_SHRINK_HOLD_DEFAULT 1u
 
-static size_t align_step(size_t value, size_t step)
+struct mem_global_config
 {
-    if (step == 0)
+    size_t max_heap;
+    size_t heap_used;
+    mem_malloc_fn malloc_fn;
+    mem_free_fn free_fn;
+    mem_realloc_fn realloc_fn;
+};
+
+static struct mem_global_config g_mem_cfg;
+static bool g_mem_cfg_ready = false;
+static enum mem_pressure_level g_global_pressure_level = MEM_PRESSURE_NONE;
+static enum mem_pressure_level g_effective_pressure_level = MEM_PRESSURE_NONE;
+static mem_global_pressure_cb g_global_pressure_cb = NULL;
+static enum mem_init_mode g_mem_mode = MEM_INIT_MODE_DYNAMIC;
+
+#define MEM_LWIP_MAX_POOLS 6
+static struct mem_buffer *g_lwip_pools[MEM_LWIP_MAX_POOLS];
+static size_t g_lwip_pool_count = 0;
+
+struct mem_static_block
+{
+    size_t size;
+    struct mem_static_block *next;
+    struct mem_static_block *prev;
+    uint8_t free;
+};
+
+static struct
+{
+    uint8_t *base;
+    size_t size;
+    struct mem_static_block *head;
+    bool ready;
+} g_mem_static;
+
+static size_t mem_static_used_bytes(void)
+{
+    if (!g_mem_static.ready)
     {
-        return value;
+        return 0;
     }
-    size_t rem = value % step;
-    if (rem == 0)
+
+    size_t free_payload = 0;
+    struct mem_static_block *blk = g_mem_static.head;
+    while (blk)
     {
-        return value;
+        if (blk->free)
+        {
+            free_payload += blk->size;
+        }
+        blk = blk->next;
     }
-    return value + (step - rem);
+
+    if (g_mem_static.size < free_payload)
+    {
+        return g_mem_static.size;
+    }
+    return g_mem_static.size - free_payload;
 }
 
-static bool mem_buffer_charge(struct mem_buffer_config *cfg, size_t bytes)
+static size_t mem_static_align_up(size_t n)
 {
-    if (cfg->max_heap == 0)
+    return (n + (MEM_STATIC_ALIGN - 1u)) & ~(MEM_STATIC_ALIGN - 1u);
+}
+
+static void mem_static_init(void *buffer, size_t buffer_size)
+{
+    uint8_t *base = (uint8_t *)buffer;
+    size_t aligned_addr = mem_static_align_up((size_t)base);
+    size_t delta = aligned_addr - (size_t)base;
+
+    if (buffer_size <= delta + sizeof(struct mem_static_block))
+    {
+        memset(&g_mem_static, 0, sizeof(g_mem_static));
+        return;
+    }
+
+    g_mem_static.base = (uint8_t *)aligned_addr;
+    g_mem_static.size = buffer_size - delta;
+    g_mem_static.head = (struct mem_static_block *)g_mem_static.base;
+    g_mem_static.head->size = g_mem_static.size - sizeof(struct mem_static_block);
+    g_mem_static.head->next = NULL;
+    g_mem_static.head->prev = NULL;
+    g_mem_static.head->free = 1u;
+    g_mem_static.ready = true;
+    mem_global_pressure_update();
+}
+
+static void mem_static_split_block(struct mem_static_block *blk, size_t need)
+{
+    size_t remain = blk->size - need;
+    if (remain <= sizeof(struct mem_static_block) + MEM_STATIC_ALIGN)
+    {
+        return;
+    }
+
+    struct mem_static_block *nxt =
+        (struct mem_static_block *)((uint8_t *)blk + sizeof(struct mem_static_block) + need);
+    nxt->size = remain - sizeof(struct mem_static_block);
+    nxt->free = 1u;
+    nxt->next = blk->next;
+    nxt->prev = blk;
+    if (nxt->next)
+    {
+        nxt->next->prev = nxt;
+    }
+    blk->next = nxt;
+    blk->size = need;
+}
+
+static void *mem_static_malloc(size_t size)
+{
+    if (!g_mem_static.ready || size == 0)
+    {
+        return NULL;
+    }
+
+    size_t need = mem_static_align_up(size);
+    struct mem_static_block *blk = g_mem_static.head;
+    while (blk)
+    {
+        if (blk->free && blk->size >= need)
+        {
+            mem_static_split_block(blk, need);
+            blk->free = 0u;
+            mem_global_pressure_update();
+            return (uint8_t *)blk + sizeof(struct mem_static_block);
+        }
+        blk = blk->next;
+    }
+    return NULL;
+}
+
+static void mem_static_merge_forward(struct mem_static_block *blk)
+{
+    while (blk && blk->next && blk->next->free)
+    {
+        struct mem_static_block *nxt = blk->next;
+        blk->size += sizeof(struct mem_static_block) + nxt->size;
+        blk->next = nxt->next;
+        if (blk->next)
+        {
+            blk->next->prev = blk;
+        }
+    }
+}
+
+static void mem_static_free(void *ptr)
+{
+    if (!g_mem_static.ready || !ptr)
+    {
+        return;
+    }
+
+    struct mem_static_block *blk =
+        (struct mem_static_block *)((uint8_t *)ptr - sizeof(struct mem_static_block));
+    blk->free = 1u;
+    mem_static_merge_forward(blk);
+    if (blk->prev && blk->prev->free)
+    {
+        mem_static_merge_forward(blk->prev);
+    }
+    mem_global_pressure_update();
+}
+
+static void *mem_static_realloc(void *ptr, size_t size)
+{
+    if (!ptr)
+    {
+        return mem_static_malloc(size);
+    }
+    if (size == 0)
+    {
+        mem_static_free(ptr);
+        return NULL;
+    }
+    if (!g_mem_static.ready)
+    {
+        return NULL;
+    }
+
+    size_t need = mem_static_align_up(size);
+    struct mem_static_block *blk =
+        (struct mem_static_block *)((uint8_t *)ptr - sizeof(struct mem_static_block));
+    if (blk->size >= need)
+    {
+        mem_static_split_block(blk, need);
+        mem_global_pressure_update();
+        return ptr;
+    }
+
+    if (blk->next && blk->next->free &&
+        blk->size + sizeof(struct mem_static_block) + blk->next->size >= need)
+    {
+        mem_static_merge_forward(blk);
+        mem_static_split_block(blk, need);
+        blk->free = 0u;
+        mem_global_pressure_update();
+        return ptr;
+    }
+
+    void *np = mem_static_malloc(size);
+    if (!np)
+    {
+        return NULL;
+    }
+    memcpy(np, ptr, blk->size < size ? blk->size : size);
+    mem_static_free(ptr);
+    mem_global_pressure_update();
+    return np;
+}
+
+static size_t mem_buffer_used_bytes(const struct mem_buffer *rb)
+{
+    if (!rb)
+    {
+        return 0;
+    }
+    if (mem_buffer_is_pool_type(rb))
+    {
+        return rb->u.pool.pool_used_blocks * rb->u.pool.pool_block_size;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        return rb->u.file.used_bytes;
+    }
+    return rb->u.ring.len;
+}
+
+static enum mem_pressure_level mem_pressure_base(enum mem_pressure_level level)
+{
+    return (enum mem_pressure_level)((unsigned)level & ~MEM_PRESSURE_GLOBAL);
+}
+
+static enum mem_pressure_level mem_pressure_max(enum mem_pressure_level a,
+                                                enum mem_pressure_level b)
+{
+    enum mem_pressure_level base_a = mem_pressure_base(a);
+    enum mem_pressure_level base_b = mem_pressure_base(b);
+    return (base_b > base_a) ? base_b : base_a;
+}
+
+static enum mem_pressure_level mem_effective_pressure_compute(void)
+{
+    enum mem_pressure_level level = mem_pressure_base(g_global_pressure_level);
+    for (size_t i = 0; i < g_lwip_pool_count; i++)
+    {
+        if (g_lwip_pools[i])
+        {
+            level = mem_pressure_max(level, g_lwip_pools[i]->last_pressure_level);
+        }
+    }
+    return level;
+}
+
+static void mem_effective_pressure_update(void)
+{
+    enum mem_pressure_level level = mem_effective_pressure_compute();
+    if (level == g_effective_pressure_level)
+    {
+        return;
+    }
+    g_effective_pressure_level = level;
+    if (g_global_pressure_cb)
+    {
+        g_global_pressure_cb(level);
+    }
+}
+
+static void mem_global_pressure_update(void)
+{
+    if (g_mem_mode == MEM_INIT_MODE_STATIC)
+    {
+        if (!g_mem_cfg_ready || !g_mem_static.ready || g_mem_static.size == 0)
+        {
+            g_global_pressure_level = MEM_PRESSURE_NONE;
+            mem_effective_pressure_update();
+            return;
+        }
+        size_t used = mem_static_used_bytes();
+        uint8_t usage_pct = (uint8_t)((used * 100u) / g_mem_static.size);
+        g_global_pressure_level = mem_pressure_level_from_usage(usage_pct);
+        mem_effective_pressure_update();
+        return;
+    }
+    if (!g_mem_cfg_ready || g_mem_cfg.max_heap == 0)
+    {
+        g_global_pressure_level = MEM_PRESSURE_NONE;
+        mem_effective_pressure_update();
+        return;
+    }
+    uint8_t usage_pct = (uint8_t)((g_mem_cfg.heap_used * 100u) / g_mem_cfg.max_heap);
+    g_global_pressure_level = mem_pressure_level_from_usage(usage_pct);
+    mem_effective_pressure_update();
+}
+
+static bool mem_buffer_charge(size_t bytes)
+{
+    if (g_mem_cfg.max_heap == 0)
     {
         return true;
     }
-    if (cfg->heap_used + bytes > cfg->max_heap)
+    if (g_mem_cfg.heap_used + bytes > g_mem_cfg.max_heap)
     {
         return false;
     }
-    cfg->heap_used += bytes;
+    g_mem_cfg.heap_used += bytes;
+    mem_global_pressure_update();
     return true;
 }
 
-static void mem_buffer_release(struct mem_buffer_config *cfg, size_t bytes)
+static void mem_buffer_release(size_t bytes)
 {
-    if (cfg->heap_used >= bytes)
+    if (g_mem_cfg.heap_used >= bytes)
     {
-        cfg->heap_used -= bytes;
+        g_mem_cfg.heap_used -= bytes;
     }
     else
     {
-        cfg->heap_used = 0;
+        g_mem_cfg.heap_used = 0;
     }
+    mem_global_pressure_update();
 }
 
 static uint16_t mem_buffer_hold_for_stage(uint16_t base, uint8_t stage)
@@ -68,9 +365,11 @@ static uint16_t mem_buffer_hold_for_stage(uint16_t base, uint8_t stage)
 
 static bool mem_buffer_resize(struct mem_buffer *rb, size_t new_cap)
 {
-    if (new_cap < rb->u.ring.len || new_cap == rb->cap)
+    /* For ring buffers, check len; for pools, just check cap */
+    size_t current_len = (rb->type == MEM_BUFFER_RING) ? rb->u.ring.len : 0;
+    if (new_cap < current_len || new_cap == rb->current_size)
     {
-        return (new_cap == rb->cap);
+        return (new_cap == rb->current_size);
     }
 
     if ((rb->flags & BUFFER_LOCK_SIZE) != 0)
@@ -78,139 +377,148 @@ static bool mem_buffer_resize(struct mem_buffer *rb, size_t new_cap)
         return false;
     }
 
-    if (rb->max_cap != SIZE_MAX && new_cap > rb->max_cap)
+    if (new_cap < rb->initial_size)
     {
         return false;
     }
 
-    size_t old_cap = rb->cap;
+    if (rb->max_size != SIZE_MAX && new_cap > rb->max_size)
+    {
+        return false;
+    }
+
+    bool skip_heap_accounting = (rb->flags & BUFFER_USER_ALLOC) != 0;
+    size_t old_cap = rb->current_size;
     size_t grow = (new_cap > old_cap) ? (new_cap - old_cap) : 0;
     size_t shrink = (old_cap > new_cap) ? (old_cap - new_cap) : 0;
-    if (grow > 0 && !mem_buffer_charge(rb->cfg, grow))
+    if (grow > 0 && !skip_heap_accounting && !mem_buffer_charge(grow))
     {
+        mem_buffer_notify_pressure(rb, new_cap, MEM_PRESSURE_CRITICAL);
         return false;
     }
 
     uint8_t *new_buf = NULL;
-    if (rb->cfg->realloc_fn && rb->u.ring.head == 0 && rb->u.ring.len <= old_cap)
+    size_t current_head = (rb->type == MEM_BUFFER_RING) ? rb->u.ring.head : 0;
+    if (g_mem_cfg.realloc_fn && current_head == 0 && current_len <= old_cap)
     {
         if ((rb->flags & BUFFER_SECURE_MODE) != 0 && shrink > 0)
         {
-            memset(rb->buf + new_cap, 0, shrink);
+            tls_secure_memzero(rb->buf + new_cap, shrink);
         }
-        new_buf = (uint8_t *)rb->cfg->realloc_fn(rb->buf, new_cap);
+        new_buf = (uint8_t *)g_mem_cfg.realloc_fn(rb->buf, new_cap);
         if (!new_buf)
         {
-            mem_buffer_notify_lowmem(rb, new_cap, MEM_PRESSURE_CRITICAL);
-            if (grow > 0)
+            mem_buffer_notify_pressure(rb, new_cap, MEM_PRESSURE_CRITICAL);
+            if (grow > 0 && !skip_heap_accounting)
             {
-                mem_buffer_release(rb->cfg, grow);
+                mem_buffer_release(grow);
             }
             return false;
         }
     }
     else
     {
-        new_buf = (uint8_t *)rb->cfg->malloc_fn(new_cap);
+        new_buf = (uint8_t *)g_mem_cfg.malloc_fn(new_cap);
         if (!new_buf)
         {
-            if (grow > 0)
+            if (grow > 0 && !skip_heap_accounting)
             {
-                mem_buffer_release(rb->cfg, grow);
+                mem_buffer_release(grow);
             }
+            mem_buffer_notify_pressure(rb, new_cap, MEM_PRESSURE_CRITICAL);
             return false;
         }
 
-        if (rb->u.ring.len > 0)
+        if (rb->type == MEM_BUFFER_RING && current_len > 0)
         {
-            size_t first = rb->cap - rb->u.ring.head;
-            if (first > rb->u.ring.len)
+            size_t first = rb->current_size - rb->u.ring.head;
+            if (first > current_len)
             {
-                first = rb->u.ring.len;
+                first = current_len;
             }
             memcpy(new_buf, rb->buf + rb->u.ring.head, first);
-            memcpy(new_buf + first, rb->buf, rb->u.ring.len - first);
+            memcpy(new_buf + first, rb->buf, current_len - first);
+        }
+        else if (mem_buffer_is_pool_type(rb))
+        {
+            /* For pools, copy entire buffer content */
+            memcpy(new_buf, rb->buf, (old_cap < new_cap) ? old_cap : new_cap);
         }
 
         if ((rb->flags & BUFFER_SECURE_MODE) != 0)
         {
-            memset(rb->buf, 0, rb->cap);
+            tls_secure_memzero(rb->buf, rb->current_size);
         }
-        rb->cfg->free_fn(rb->buf);
+        g_mem_cfg.free_fn(rb->buf);
     }
 
     rb->buf = new_buf;
-    rb->cap = new_cap;
-    rb->u.ring.head = 0;
+    rb->current_size = new_cap;
+    if (rb->type == MEM_BUFFER_RING)
+    {
+        rb->u.ring.head = 0;
+    }
     rb->shrink_hits = 0;
     rb->shrink_stage = 0;
     rb->shrink_hold_next = rb->shrink_hold_base;
-    if (shrink > 0)
+    if (shrink > 0 && !skip_heap_accounting)
     {
-        mem_buffer_release(rb->cfg, shrink);
+        mem_buffer_release(shrink);
     }
     return true;
 }
 
-static struct mem_buffer_config g_mem_cfg;
-static bool g_mem_cfg_ready = false;
 static struct mem_buffer *g_lwip_heap = NULL;
-#define MEM_LWIP_MAX_POOLS 6
-static struct mem_buffer *g_lwip_pools[MEM_LWIP_MAX_POOLS];
-static size_t g_lwip_pool_count = 0;
-static struct mem_pressure_hooks g_pressure_hooks;
-static bool g_pressure_global_active = false;
-static bool g_pressure_eth_active = false;
-static bool g_pressure_tls_active = false;
-static enum mem_pressure_level g_pressure_global_level = MEM_PRESSURE_NONE;
-static enum mem_pressure_level g_pressure_eth_level = MEM_PRESSURE_NONE;
-static enum mem_pressure_level g_pressure_tls_level = MEM_PRESSURE_NONE;
-static enum mem_pressure_level g_pressure_eth_effective = MEM_PRESSURE_NONE;
-static enum mem_pressure_level g_pressure_tls_effective = MEM_PRESSURE_NONE;
-static uint8_t g_pressure_clear_pct = 50;
-
 static uint8_t mem_buffer_usage_pct(const struct mem_buffer *rb, size_t used_bytes)
 {
-    if (!rb || rb->cap == 0)
+    if (!rb)
     {
         return 0;
     }
-    size_t limit = rb->cap;
-    if (rb->max_cap != SIZE_MAX && rb->max_cap > 0)
+    size_t limit = rb->max_size;
+    if (limit == 0 || limit == SIZE_MAX)
     {
-        limit = rb->max_cap;
-        if (limit < rb->cap)
-        {
-            limit = rb->cap;
-        }
+        limit = rb->current_size;
+    }
+    if (limit == 0)
+    {
+        return 0;
+    }
+    if (limit < rb->current_size)
+    {
+        limit = rb->current_size;
     }
     if (used_bytes > limit)
     {
         used_bytes = limit;
     }
     uint8_t buf_pct = (uint8_t)((used_bytes * 100u) / limit);
-
-    uint8_t heap_pct = 0;
-    if (rb->cfg && rb->cfg->max_heap > 0)
-    {
-        size_t heap_used = rb->cfg->heap_used;
-        if (heap_used > rb->cfg->max_heap)
-        {
-            heap_used = rb->cfg->max_heap;
-        }
-        heap_pct = (uint8_t)((heap_used * 100u) / rb->cfg->max_heap);
-    }
-
-    return (heap_pct > buf_pct) ? heap_pct : buf_pct;
+    return buf_pct;
 }
+
+enum {
+    MEM_PRESSURE_MILD_PCT = 70,
+    MEM_PRESSURE_HIGH_PCT = 85,
+    MEM_PRESSURE_SEVERE_PCT = 90,
+    MEM_PRESSURE_CRITICAL_PCT = 95,
+    MEM_PRESSURE_RELIEF_MARGIN = 10
+};
 
 static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct)
 {
-    if (usage_pct >= 85)
+    if (usage_pct > MEM_PRESSURE_CRITICAL_PCT)
+    {
+        return MEM_PRESSURE_CRITICAL;
+    }
+    if (usage_pct > MEM_PRESSURE_SEVERE_PCT)
+    {
+        return MEM_PRESSURE_SEVERE;
+    }
+    if (usage_pct > MEM_PRESSURE_HIGH_PCT)
     {
         return MEM_PRESSURE_HIGH;
     }
-    if (usage_pct >= 70)
+    if (usage_pct > MEM_PRESSURE_MILD_PCT)
     {
         return MEM_PRESSURE_MILD;
     }
@@ -220,192 +528,62 @@ static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct)
 static enum mem_pressure_level mem_pressure_level_relief(enum mem_pressure_level current, uint8_t usage_pct)
 {
     enum mem_pressure_level level = mem_pressure_level_from_usage(usage_pct);
-    if (current == MEM_PRESSURE_CRITICAL && level < MEM_PRESSURE_HIGH)
+    if (current == MEM_PRESSURE_CRITICAL)
     {
+        if (usage_pct < (MEM_PRESSURE_CRITICAL_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_SEVERE;
+        }
+        return MEM_PRESSURE_CRITICAL;
+    }
+    if (current == MEM_PRESSURE_SEVERE)
+    {
+        if (usage_pct < (MEM_PRESSURE_SEVERE_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_HIGH;
+        }
+        return MEM_PRESSURE_SEVERE;
+    }
+    if (current == MEM_PRESSURE_HIGH)
+    {
+        if (usage_pct < (MEM_PRESSURE_HIGH_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_MILD;
+        }
         return MEM_PRESSURE_HIGH;
     }
-    if (current == MEM_PRESSURE_HIGH && level < MEM_PRESSURE_MILD)
+    if (current == MEM_PRESSURE_MILD)
     {
+        if (usage_pct < (MEM_PRESSURE_MILD_PCT - MEM_PRESSURE_RELIEF_MARGIN))
+        {
+            return MEM_PRESSURE_NONE;
+        }
         return MEM_PRESSURE_MILD;
     }
     return level;
 }
 
-static void mem_pressure_update_effective(void)
-{
-    enum mem_pressure_level eth_effective = g_pressure_global_active ? g_pressure_global_level : g_pressure_eth_level;
-    if (g_pressure_eth_active && g_pressure_eth_level > eth_effective)
-    {
-        eth_effective = g_pressure_eth_level;
-    }
-    if (eth_effective != g_pressure_eth_effective)
-    {
-        if (g_pressure_hooks.eth_rx_throttle)
-        {
-            g_pressure_hooks.eth_rx_throttle(eth_effective);
-        }
-        g_pressure_eth_effective = eth_effective;
-    }
 
-    enum mem_pressure_level tls_effective = g_pressure_global_active ? g_pressure_global_level : g_pressure_tls_level;
-    if (g_pressure_tls_active && g_pressure_tls_level > tls_effective)
-    {
-        tls_effective = g_pressure_tls_level;
-    }
-    if (tls_effective != g_pressure_tls_effective)
-    {
-        if (g_pressure_hooks.tls_rx_throttle)
-        {
-            g_pressure_hooks.tls_rx_throttle(tls_effective);
-        }
-        g_pressure_tls_effective = tls_effective;
-    }
+static bool mem_buffer_is_pool_type(const struct mem_buffer *rb)
+{
+    return rb && (rb->type == MEM_BUFFER_POOL);
 }
 
-static bool mem_pressure_pools_below_clear(void)
-{
-    for (size_t i = 0; i < g_lwip_pool_count; i++)
-    {
-        size_t used_bytes = g_lwip_pools[i]->u.pool.pool_used_blocks * g_lwip_pools[i]->u.pool.pool_block_size;
-        if (mem_buffer_usage_pct(g_lwip_pools[i], used_bytes) > g_pressure_clear_pct)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-static enum mem_pressure_level mem_pressure_pools_level(void)
-{
-    enum mem_pressure_level level = MEM_PRESSURE_NONE;
-    bool any_over_clear = false;
-    for (size_t i = 0; i < g_lwip_pool_count; i++)
-    {
-        size_t used_bytes = g_lwip_pools[i]->u.pool.pool_used_blocks * g_lwip_pools[i]->u.pool.pool_block_size;
-        uint8_t usage = mem_buffer_usage_pct(g_lwip_pools[i], used_bytes);
-        if (usage > g_pressure_clear_pct)
-        {
-            any_over_clear = true;
-        }
-        enum mem_pressure_level candidate = mem_pressure_level_relief(g_lwip_pools[i]->last_pressure_level, usage);
-        if (candidate > level)
-        {
-            level = candidate;
-        }
-    }
-    if (level == MEM_PRESSURE_NONE && any_over_clear)
-    {
-        level = MEM_PRESSURE_MILD;
-    }
-    return level;
-}
-
-static void mem_pressure_mark(struct mem_buffer *rb, enum mem_pressure_level level)
+static void mem_pressure_maybe_clear(struct mem_buffer *rb)
 {
     if (!rb)
     {
         return;
     }
-    if (level == MEM_PRESSURE_NONE)
-    {
-        return;
-    }
-    switch (rb->owner)
-    {
-        case MEM_BUF_OWNER_LWIP_POOL:
-            g_pressure_global_active = true;
-            if (level > g_pressure_global_level)
-            {
-                g_pressure_global_level = level;
-            }
-            break;
-        case MEM_BUF_OWNER_ETH_RX:
-            g_pressure_eth_active = true;
-            if (level > g_pressure_eth_level)
-            {
-                g_pressure_eth_level = level;
-            }
-            break;
-        case MEM_BUF_OWNER_TLS_RX:
-            g_pressure_tls_active = true;
-            if (level > g_pressure_tls_level)
-            {
-                g_pressure_tls_level = level;
-            }
-            break;
-        default:
-            break;
-    }
-    mem_pressure_update_effective();
-}
-
-static void mem_pressure_maybe_clear(struct mem_buffer *rb)
-{
-    if (!rb || g_pressure_clear_pct > 100)
-    {
-        return;
-    }
-    size_t used_bytes = (rb->flags & BUFFER_MALLOC_TYPE) != 0 ?
-        (rb->u.pool.pool_used_blocks * rb->u.pool.pool_block_size) :
-        rb->u.ring.len;
+    size_t used_bytes = mem_buffer_used_bytes(rb);
     uint8_t usage_pct = mem_buffer_usage_pct(rb, used_bytes);
-    enum mem_pressure_level level = mem_pressure_level_relief(rb->last_pressure_level, usage_pct);
-    rb->last_pressure_level = level;
-    switch (rb->owner)
+    enum mem_pressure_level old_level = rb->last_pressure_level;
+    enum mem_pressure_level level = mem_pressure_level_relief(old_level, usage_pct);
+
+    /* Notify per-buffer callbacks when pressure level changes (including relief) */
+    if (level != old_level)
     {
-        case MEM_BUF_OWNER_LWIP_POOL:
-            if (g_pressure_global_active && mem_pressure_pools_below_clear())
-            {
-                g_pressure_global_active = false;
-                g_pressure_global_level = MEM_PRESSURE_NONE;
-                mem_pressure_update_effective();
-            }
-            else
-            {
-                enum mem_pressure_level pool_level = mem_pressure_pools_level();
-                if (pool_level == MEM_PRESSURE_NONE)
-                {
-                    g_pressure_global_active = false;
-                    g_pressure_global_level = MEM_PRESSURE_NONE;
-                }
-                else
-                {
-                    g_pressure_global_active = true;
-                    g_pressure_global_level = pool_level;
-                }
-                mem_pressure_update_effective();
-            }
-            break;
-        case MEM_BUF_OWNER_ETH_RX:
-            if (level == MEM_PRESSURE_NONE)
-            {
-                g_pressure_eth_active = false;
-                g_pressure_eth_level = MEM_PRESSURE_NONE;
-                mem_pressure_update_effective();
-            }
-            else
-            {
-                g_pressure_eth_active = true;
-                g_pressure_eth_level = level;
-                mem_pressure_update_effective();
-            }
-            break;
-        case MEM_BUF_OWNER_TLS_RX:
-            if (level == MEM_PRESSURE_NONE)
-            {
-                g_pressure_tls_active = false;
-                g_pressure_tls_level = MEM_PRESSURE_NONE;
-                mem_pressure_update_effective();
-            }
-            else
-            {
-                g_pressure_tls_active = true;
-                g_pressure_tls_level = level;
-                mem_pressure_update_effective();
-            }
-            break;
-        default:
-            break;
+        mem_buffer_notify_pressure(rb, used_bytes, level);
     }
 }
 
@@ -414,198 +592,237 @@ bool mem_init(size_t max_heap,
               mem_free_fn free_fn,
               mem_realloc_fn realloc_fn)
 {
+    return mem_init_dynamic(max_heap, malloc_fn, free_fn, realloc_fn);
+}
+
+bool mem_init_dynamic(size_t max_heap,
+                      mem_malloc_fn malloc_fn,
+                      mem_free_fn free_fn,
+                      mem_realloc_fn realloc_fn)
+{
     if (!malloc_fn || !free_fn)
     {
         return false;
     }
 
+    memset(&g_mem_static, 0, sizeof(g_mem_static));
     g_mem_cfg.max_heap = max_heap;
     g_mem_cfg.heap_used = 0;
-    g_mem_cfg.step = 0;
-    g_mem_cfg.grow_threshold_pct = 0;
-    g_mem_cfg.shrink_threshold_pct = 0;
-    g_mem_cfg.shrink_hold_count = MEM_SHRINK_HOLD_DEFAULT;
     g_mem_cfg.malloc_fn = malloc_fn;
     g_mem_cfg.free_fn = free_fn;
     g_mem_cfg.realloc_fn = realloc_fn;
-    g_mem_cfg.internal_low_mem_cb = NULL;
+    g_global_pressure_level = MEM_PRESSURE_NONE;
+    memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
+    g_lwip_pool_count = 0;
+    g_mem_mode = MEM_INIT_MODE_DYNAMIC;
     g_mem_cfg_ready = true;
+    mem_effective_pressure_update();
     return true;
 }
 
-void mem_set_internal_lowmem_cb(mem_low_mem_cb low_mem_cb)
+bool mem_init_static(void *buffer, size_t buffer_size)
 {
-    g_mem_cfg.internal_low_mem_cb = low_mem_cb;
-}
-
-void mem_register_pressure_hook_eth_rx(void (*hook)(enum mem_pressure_level level))
-{
-    g_pressure_hooks.eth_rx_throttle = hook;
-    mem_pressure_update_effective();
-}
-
-void mem_register_pressure_hook_tls_rx(void (*hook)(enum mem_pressure_level level))
-{
-    g_pressure_hooks.tls_rx_throttle = hook;
-    mem_pressure_update_effective();
-}
-
-void mem_set_pressure_clear_pct(uint8_t pct)
-{
-    if (pct <= 100)
+    if (!buffer || buffer_size < (sizeof(struct mem_static_block) + MEM_STATIC_ALIGN))
     {
-        g_pressure_clear_pct = pct;
+        return false;
+    }
+
+    mem_static_init(buffer, buffer_size);
+    if (!g_mem_static.ready)
+    {
+        return false;
+    }
+
+    g_mem_cfg.max_heap = 0;
+    g_mem_cfg.heap_used = 0;
+    g_mem_cfg.malloc_fn = mem_static_malloc;
+    g_mem_cfg.free_fn = mem_static_free;
+    g_mem_cfg.realloc_fn = mem_static_realloc;
+    g_global_pressure_level = MEM_PRESSURE_NONE;
+    memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
+    g_lwip_pool_count = 0;
+    g_mem_mode = MEM_INIT_MODE_STATIC;
+    g_mem_cfg_ready = true;
+    mem_effective_pressure_update();
+    return true;
+}
+
+bool mem_is_ready(void)
+{
+    return g_mem_cfg_ready;
+}
+
+enum mem_pressure_level mem_get_global_pressure_level(void)
+{
+    if (!g_mem_cfg_ready)
+    {
+        return MEM_PRESSURE_NONE;
+    }
+    return g_global_pressure_level;
+}
+
+void mem_set_global_pressure_cb(mem_global_pressure_cb cb)
+{
+    g_global_pressure_cb = cb;
+    if (g_global_pressure_cb)
+    {
+        g_global_pressure_cb(g_effective_pressure_level);
     }
 }
 
-struct mem_buffer *mem_buffer_create(size_t initial_cap,
-                                     size_t max_cap,
-                                     size_t lock_size,
-                                     uint8_t flags,
-                                     mem_low_mem_cb low_mem_cb)
+
+struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
+                                     size_t initial_size,
+                                     size_t max_size,
+                                     size_t step_size,
+                                     uint8_t flags)
 {
-    struct mem_buffer_config *cfg = &g_mem_cfg;
     if (!g_mem_cfg_ready)
     {
         return NULL;
     }
-    if (!cfg || initial_cap == 0 || !cfg->malloc_fn || !cfg->free_fn)
+    if ((initial_size == 0 && type != MEM_BUFFER_FILE) || !g_mem_cfg.malloc_fn || !g_mem_cfg.free_fn)
     {
         return NULL;
     }
 
-    if (!mem_buffer_charge(cfg, sizeof(struct mem_buffer) + initial_cap))
+    if (g_mem_mode == MEM_INIT_MODE_STATIC)
     {
-        return NULL;
+        flags |= BUFFER_LOCK_SIZE;
     }
 
-    struct mem_buffer *rb = (struct mem_buffer *)cfg->malloc_fn(sizeof(struct mem_buffer));
+    /* BUFFER_USER_ALLOC buffers don't count toward heap */
+    bool skip_heap_accounting = (flags & BUFFER_USER_ALLOC) != 0;
+    if (type == MEM_BUFFER_FILE)
+    {
+        skip_heap_accounting = true;
+    }
+    if (!skip_heap_accounting)
+    {
+        if (!mem_buffer_charge(sizeof(struct mem_buffer) + initial_size))
+        {
+            return NULL;
+        }
+    }
+
+    struct mem_buffer *rb = (struct mem_buffer *)g_mem_cfg.malloc_fn(sizeof(struct mem_buffer));
     if (!rb)
     {
-        mem_buffer_release(cfg, sizeof(struct mem_buffer) + initial_cap);
+        if (!skip_heap_accounting)
+        {
+            mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+        }
         return NULL;
     }
 
-    rb->buf = (uint8_t *)cfg->malloc_fn(initial_cap);
-    if (!rb->buf)
+    rb->buf = NULL;
+    if (type != MEM_BUFFER_FILE)
     {
-        cfg->free_fn(rb);
-        mem_buffer_release(cfg, sizeof(struct mem_buffer) + initial_cap);
-        return NULL;
+        rb->buf = (uint8_t *)g_mem_cfg.malloc_fn(initial_size);
+        if (!rb->buf)
+        {
+            g_mem_cfg.free_fn(rb);
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+            }
+            return NULL;
+        }
     }
 
-    rb->cfg = cfg;
+    rb->type = type;
     rb->flags = flags;
-    rb->u.ring.lock_size = lock_size;
-    rb->cap = ((flags & BUFFER_LOCK_SIZE) != 0 && lock_size > 0) ? lock_size : initial_cap;
-    rb->max_cap = (max_cap == (size_t)-1) ? SIZE_MAX : max_cap;
-    if (rb->max_cap != SIZE_MAX && rb->max_cap < rb->cap)
+    rb->initial_size = initial_size;
+    rb->current_size = (type == MEM_BUFFER_FILE) ? 0 : initial_size;
+    rb->max_size = (max_size == 0 || max_size == (size_t)-1) ? SIZE_MAX : max_size;
+    if (rb->max_size != SIZE_MAX && rb->max_size < rb->current_size)
     {
-        rb->max_cap = rb->cap;
+        rb->max_size = rb->current_size;
     }
-    rb->u.ring.len = 0;
-    rb->u.ring.head = 0;
-    rb->shrink_hits = 0;
-    rb->u.pool.pool_block_size = 0;
-    rb->u.pool.pool_block_count = 0;
-    rb->u.pool.pool_used_blocks = 0;
-    rb->u.pool.pool_bitmap = NULL;
-    rb->u.pool.pool_bitmap_bytes = 0;
-    rb->owner = MEM_BUF_OWNER_UNKNOWN;
     rb->last_pressure_level = MEM_PRESSURE_NONE;
-    rb->step = cfg->step;
-    rb->grow_threshold_pct = cfg->grow_threshold_pct;
-    rb->shrink_threshold_pct = cfg->shrink_threshold_pct;
-    rb->shrink_hold_count = cfg->shrink_hold_count;
-    rb->shrink_hold_base = cfg->shrink_hold_count;
-    rb->shrink_hold_next = cfg->shrink_hold_count;
+    rb->step = step_size;
+    rb->grow_threshold_pct = 100;
+    rb->shrink_threshold_pct = 0;
+    rb->shrink_hold_count = MEM_SHRINK_HOLD_DEFAULT;
+    rb->shrink_hold_base = MEM_SHRINK_HOLD_DEFAULT;
+    rb->shrink_hold_next = MEM_SHRINK_HOLD_DEFAULT;
     rb->shrink_stage = 0;
-    rb->low_mem_cb = low_mem_cb;
-    rb->drain_fn = NULL;
-    rb->drain_fn_data = NULL;
+    rb->shrink_hits = 0;
+    rb->pressure_cb = NULL;
 
-    if ((flags & BUFFER_LOCK_SIZE) != 0 && rb->cap != initial_cap)
+    /* Initialize type-specific fields */
+    if (type == MEM_BUFFER_RING)
     {
-        if (rb->cap > initial_cap)
-        {
-            size_t grow = rb->cap - initial_cap;
-            if (!mem_buffer_charge(cfg, grow))
-            {
-                cfg->free_fn(rb->buf);
-                cfg->free_fn(rb);
-                mem_buffer_release(cfg, sizeof(struct mem_buffer) + initial_cap);
-                return NULL;
-            }
-            uint8_t *new_buf = NULL;
-            if (cfg->realloc_fn)
-            {
-                new_buf = (uint8_t *)cfg->realloc_fn(rb->buf, rb->cap);
-            }
-            else
-            {
-                new_buf = (uint8_t *)cfg->malloc_fn(rb->cap);
-                if (new_buf)
-                {
-                    memcpy(new_buf, rb->buf, rb->u.ring.len);
-                    cfg->free_fn(rb->buf);
-                }
-            }
-            if (!new_buf)
-            {
-                mem_buffer_release(cfg, grow);
-                cfg->free_fn(rb->buf);
-                cfg->free_fn(rb);
-                mem_buffer_release(cfg, sizeof(struct mem_buffer) + initial_cap);
-                return NULL;
-            }
-            rb->buf = new_buf;
-        }
-        else if (rb->cap < initial_cap)
-        {
-            size_t shrink = initial_cap - rb->cap;
-            uint8_t *new_buf = NULL;
-            if (cfg->realloc_fn)
-            {
-                new_buf = (uint8_t *)cfg->realloc_fn(rb->buf, rb->cap);
-            }
-            else
-            {
-                new_buf = (uint8_t *)cfg->malloc_fn(rb->cap);
-                if (new_buf)
-                {
-                    memcpy(new_buf, rb->buf, rb->u.ring.len);
-                    cfg->free_fn(rb->buf);
-                }
-            }
-            if (new_buf)
-            {
-                rb->buf = new_buf;
-                mem_buffer_release(cfg, shrink);
-            }
-        }
+        rb->u.ring.len = 0;
+        rb->u.ring.head = 0;
+        rb->u.ring.drain_fn = NULL;
+        rb->u.ring.drain_fn_data = NULL;
     }
-
-    if ((flags & BUFFER_MALLOC_TYPE) != 0)
+    else if (type == MEM_BUFFER_FILE)
     {
-        size_t block_size = lock_size ? lock_size : rb->step;
-        if (block_size == 0 || rb->cap < block_size)
+        rb->u.file.used_bytes = 0;
+        rb->u.file.max_slots = MEM_FILE_MAX_SLOTS;
+        rb->u.file.slots = (struct mem_file_slot *)g_mem_cfg.malloc_fn(sizeof(struct mem_file_slot) * MEM_FILE_MAX_SLOTS);
+        if (!rb->u.file.slots)
         {
-            mem_buffer_destroy(rb);
+            g_mem_cfg.free_fn(rb);
+            if (rb->buf)
+            {
+                g_mem_cfg.free_fn(rb->buf);
+            }
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+            }
+            return NULL;
+        }
+        memset(rb->u.file.slots, 0, sizeof(struct mem_file_slot) * MEM_FILE_MAX_SLOTS);
+    }
+    else
+    {
+        /* Pool type */
+        size_t block_size = step_size;
+        if (block_size == 0)
+        {
+            block_size = 256u;
+        }
+        if (rb->current_size < block_size)
+        {
+            g_mem_cfg.free_fn(rb->buf);
+            g_mem_cfg.free_fn(rb);
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+            }
             return NULL;
         }
         rb->u.pool.pool_block_size = block_size;
-        rb->u.pool.pool_block_count = rb->cap / block_size;
+        rb->u.pool.pool_block_count = rb->current_size / block_size;
+        rb->u.pool.pool_used_blocks = 0;
         rb->u.pool.pool_bitmap_bytes = (rb->u.pool.pool_block_count + 7u) / 8u;
-        if (!mem_buffer_charge(cfg, rb->u.pool.pool_bitmap_bytes))
+        if (!skip_heap_accounting)
         {
-            mem_buffer_destroy(rb);
-            return NULL;
+            if (!mem_buffer_charge(rb->u.pool.pool_bitmap_bytes))
+            {
+                g_mem_cfg.free_fn(rb->buf);
+                g_mem_cfg.free_fn(rb);
+                mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+                return NULL;
+            }
         }
-        rb->u.pool.pool_bitmap = (uint8_t *)cfg->malloc_fn(rb->u.pool.pool_bitmap_bytes);
+        rb->u.pool.pool_bitmap = (uint8_t *)g_mem_cfg.malloc_fn(rb->u.pool.pool_bitmap_bytes);
         if (!rb->u.pool.pool_bitmap)
         {
-            mem_buffer_release(cfg, rb->u.pool.pool_bitmap_bytes);
-            mem_buffer_destroy(rb);
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(rb->u.pool.pool_bitmap_bytes);
+            }
+            g_mem_cfg.free_fn(rb->buf);
+            g_mem_cfg.free_fn(rb);
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
+            }
             return NULL;
         }
         memset(rb->u.pool.pool_bitmap, 0, rb->u.pool.pool_bitmap_bytes);
@@ -613,56 +830,123 @@ struct mem_buffer *mem_buffer_create(size_t initial_cap,
     return rb;
 }
 
+void mem_buffer_set_pressure_cb(struct mem_buffer *mb, mem_pressure_cb cb)
+{
+    if (mb)
+    {
+        mb->pressure_cb = cb;
+    }
+}
+
 void mem_buffer_destroy(struct mem_buffer *rb)
 {
-    if (!rb || !rb->cfg)
+    if (!rb)
     {
         return;
     }
+    bool skip_heap_accounting = (rb->flags & BUFFER_USER_ALLOC) != 0;
 
-    struct mem_buffer_config *cfg = rb->cfg;
     if (rb->buf)
     {
         if ((rb->flags & BUFFER_SECURE_MODE) != 0)
         {
-            memset(rb->buf, 0, rb->cap);
+            tls_secure_memzero(rb->buf, rb->current_size);
         }
-        cfg->free_fn(rb->buf);
-        mem_buffer_release(cfg, rb->cap);
+        g_mem_cfg.free_fn(rb->buf);
+        if (!skip_heap_accounting)
+        {
+            mem_buffer_release(rb->current_size);
+        }
         rb->buf = NULL;
     }
-    if (rb->u.pool.pool_bitmap)
+    if (rb->type == MEM_BUFFER_FILE && rb->u.file.slots)
+    {
+        for (size_t i = 0; i < rb->u.file.max_slots; i++)
+        {
+            if (rb->u.file.slots[i].ptr)
+            {
+                if ((rb->flags & BUFFER_SECURE_MODE) != 0)
+                {
+                    tls_secure_memzero(rb->u.file.slots[i].ptr, rb->u.file.slots[i].size);
+                }
+                g_mem_cfg.free_fn(rb->u.file.slots[i].ptr);
+                rb->u.file.slots[i].ptr = NULL;
+                rb->u.file.slots[i].size = 0;
+            }
+        }
+        g_mem_cfg.free_fn(rb->u.file.slots);
+        rb->u.file.slots = NULL;
+    }
+    if (mem_buffer_is_pool_type(rb) && rb->u.pool.pool_bitmap)
     {
         if ((rb->flags & BUFFER_SECURE_MODE) != 0)
         {
-            memset(rb->u.pool.pool_bitmap, 0, rb->u.pool.pool_bitmap_bytes);
+            tls_secure_memzero(rb->u.pool.pool_bitmap, rb->u.pool.pool_bitmap_bytes);
         }
-        cfg->free_fn(rb->u.pool.pool_bitmap);
-        mem_buffer_release(cfg, rb->u.pool.pool_bitmap_bytes);
+        g_mem_cfg.free_fn(rb->u.pool.pool_bitmap);
+        if (!skip_heap_accounting)
+        {
+            mem_buffer_release(rb->u.pool.pool_bitmap_bytes);
+        }
         rb->u.pool.pool_bitmap = NULL;
         rb->u.pool.pool_bitmap_bytes = 0;
     }
-    cfg->free_fn(rb);
-    mem_buffer_release(cfg, sizeof(struct mem_buffer));
+    g_mem_cfg.free_fn(rb);
+    if (!skip_heap_accounting)
+    {
+        mem_buffer_release(sizeof(struct mem_buffer));
+    }
 }
 
 size_t mem_buffer_len(const struct mem_buffer *rb)
 {
-    return rb ? rb->u.ring.len : 0;
+    if (!rb)
+    {
+        return 0;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        return rb->u.file.used_bytes;
+    }
+    return rb->u.ring.len;
 }
 
 size_t mem_buffer_capacity(const struct mem_buffer *rb)
 {
-    return rb ? rb->cap : 0;
+    if (!rb)
+    {
+        return 0;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        return rb->max_size;
+    }
+    return rb->current_size;
 }
 
 size_t mem_buffer_space(const struct mem_buffer *rb)
 {
-    if (!rb || rb->cap < rb->u.ring.len)
+    if (!rb)
     {
         return 0;
     }
-    return rb->cap - rb->u.ring.len;
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        if (rb->max_size == SIZE_MAX)
+        {
+            return SIZE_MAX;
+        }
+        if (rb->max_size < rb->u.file.used_bytes)
+        {
+            return 0;
+        }
+        return rb->max_size - rb->u.file.used_bytes;
+    }
+    if (rb->current_size < rb->u.ring.len)
+    {
+        return 0;
+    }
+    return rb->current_size - rb->u.ring.len;
 }
 
 bool mem_buffer_peek(const struct mem_buffer *rb, size_t offset, uint8_t *out, size_t len)
@@ -672,8 +956,8 @@ bool mem_buffer_peek(const struct mem_buffer *rb, size_t offset, uint8_t *out, s
         return false;
     }
 
-    size_t pos = (rb->u.ring.head + offset) % rb->cap;
-    size_t first = rb->cap - pos;
+    size_t pos = (rb->u.ring.head + offset) % rb->current_size;
+    size_t first = rb->current_size - pos;
     if (first > len)
     {
         first = len;
@@ -689,50 +973,59 @@ bool mem_buffer_reserve(struct mem_buffer *rb, size_t len)
     {
         return false;
     }
-    if ((rb->flags & BUFFER_MALLOC_TYPE) != 0)
+    if (rb->type != MEM_BUFFER_RING)
     {
         return false;
     }
     return mem_buffer_maybe_grow(rb, len);
 }
 
-void mem_buffer_set_owner(struct mem_buffer *rb, enum mem_buffer_owner owner)
+bool mem_buffer_set_drain(struct mem_buffer *rb, mem_drain_fn drain_fn, void *drain_fn_data)
 {
-    if (rb)
+    if (rb && rb->type == MEM_BUFFER_RING)
     {
-        rb->owner = owner;
+        rb->u.ring.drain_fn = drain_fn;
+        rb->u.ring.drain_fn_data = drain_fn_data;
+        return true;
     }
+    return false;
 }
 
-enum mem_buffer_owner mem_buffer_get_owner(const struct mem_buffer *rb)
+size_t mem_buffer_drain(struct mem_buffer *rb, size_t budget)
 {
-    return rb ? rb->owner : MEM_BUF_OWNER_UNKNOWN;
-}
-
-void mem_buffer_set_drain(struct mem_buffer *rb, mem_drain_fn drain_fn, void *drain_fn_data)
-{
-    if (rb)
+    if (!rb || rb->type != MEM_BUFFER_RING || !rb->u.ring.drain_fn || budget == 0)
     {
-        rb->drain_fn = drain_fn;
-        rb->drain_fn_data = drain_fn_data;
+        return 0;
     }
+    return rb->u.ring.drain_fn(rb, rb->u.ring.drain_fn_data, budget);
 }
 
-static void mem_buffer_notify_lowmem(struct mem_buffer *rb, size_t requested, enum mem_pressure_level level)
+static void mem_buffer_notify_pressure(struct mem_buffer *rb, size_t requested, enum mem_pressure_level level)
 {
+    if (g_mem_mode == MEM_INIT_MODE_STATIC)
+    {
+        if (rb)
+        {
+            rb->last_pressure_level = MEM_PRESSURE_NONE;
+        }
+        (void)requested;
+        (void)level;
+        return;
+    }
     if (!rb)
     {
         return;
     }
-    mem_pressure_mark(rb, level);
+    enum mem_pressure_level old_level = rb->last_pressure_level;
     rb->last_pressure_level = level;
-    if (rb->cfg && rb->cfg->internal_low_mem_cb)
+    /* Only notify on level changes */
+    if (level != old_level && rb->pressure_cb)
     {
-        rb->cfg->internal_low_mem_cb(rb, requested, level);
+        rb->pressure_cb(rb, requested, level);
     }
-    if (rb->low_mem_cb)
+    if (level != old_level && mem_buffer_is_lwip_pool(rb))
     {
-        rb->low_mem_cb(rb, requested, level);
+        mem_effective_pressure_update();
     }
 }
 
@@ -745,13 +1038,13 @@ static bool mem_buffer_maybe_grow(struct mem_buffer *rb, size_t incoming_len)
         enum mem_pressure_level level = mem_pressure_level_from_usage(usage_pct);
         if (level != MEM_PRESSURE_NONE && level != rb->last_pressure_level)
         {
-            mem_buffer_notify_lowmem(rb, needed, level);
+            mem_buffer_notify_pressure(rb, needed, level);
         }
-        if (needed > rb->cap)
+        if (needed > rb->current_size)
         {
-            mem_buffer_notify_lowmem(rb, needed, MEM_PRESSURE_CRITICAL);
+            mem_buffer_notify_pressure(rb, needed, MEM_PRESSURE_CRITICAL);
         }
-        return needed <= rb->cap;
+        return needed <= rb->current_size;
     }
 
     size_t needed = rb->u.ring.len + incoming_len;
@@ -759,40 +1052,42 @@ static bool mem_buffer_maybe_grow(struct mem_buffer *rb, size_t incoming_len)
     enum mem_pressure_level level = mem_pressure_level_from_usage(usage_pct);
     if (level != MEM_PRESSURE_NONE && level != rb->last_pressure_level)
     {
-        mem_buffer_notify_lowmem(rb, needed, level);
+        mem_buffer_notify_pressure(rb, needed, level);
     }
-    size_t grow_threshold = threshold_bytes(rb->cap, rb->grow_threshold_pct);
-    if (needed <= rb->cap && needed < grow_threshold)
+    size_t grow_threshold = threshold_bytes(rb->current_size, rb->grow_threshold_pct);
+    if (needed <= rb->current_size && needed < grow_threshold)
     {
         return true;
     }
 
-    size_t target = rb->cap;
-    if (needed > target)
+    /* Grow by step * N where N is minimum steps to fit needed + 1 step headroom */
+    size_t step = rb->step ? rb->step : 256u;
+    size_t target;
+    if (needed <= rb->current_size)
     {
-        target = needed;
+        /* Proactive grow at threshold - add one step */
+        target = rb->current_size + step;
     }
-    target = align_step(target, rb->step);
-    if (target <= rb->cap)
+    else
     {
-        target = rb->cap + rb->step;
+        /* Must grow to fit: calculate steps needed for data + 1 step headroom */
+        size_t shortfall = needed - rb->current_size;
+        size_t steps_needed = (shortfall + step - 1) / step; /* ceil division */
+        steps_needed += 1; /* +1 for headroom */
+        target = rb->current_size + (steps_needed * step);
     }
-    if (target < needed)
+    if (rb->max_size != SIZE_MAX && target > rb->max_size)
     {
-        target = needed;
-    }
-    if (rb->max_cap != SIZE_MAX && target > rb->max_cap)
-    {
-        target = rb->max_cap;
+        target = rb->max_size;
         if (target < needed)
         {
-            mem_buffer_notify_lowmem(rb, needed, MEM_PRESSURE_CRITICAL);
+            mem_buffer_notify_pressure(rb, needed, MEM_PRESSURE_CRITICAL);
             return false;
         }
     }
     if (!mem_buffer_resize(rb, target))
     {
-        mem_buffer_notify_lowmem(rb, needed, MEM_PRESSURE_CRITICAL);
+        mem_buffer_notify_pressure(rb, needed, MEM_PRESSURE_CRITICAL);
         return false;
     }
     return true;
@@ -805,7 +1100,7 @@ static void mem_buffer_maybe_shrink(struct mem_buffer *rb, bool wrapped)
         return;
     }
 
-    if (rb->step == 0 || rb->cap <= rb->step)
+    if (rb->step == 0 || rb->current_size <= rb->step)
     {
         return;
     }
@@ -815,7 +1110,7 @@ static void mem_buffer_maybe_shrink(struct mem_buffer *rb, bool wrapped)
         return;
     }
 
-    size_t shrink_threshold = threshold_bytes(rb->cap, rb->shrink_threshold_pct);
+    size_t shrink_threshold = threshold_bytes(rb->current_size, rb->shrink_threshold_pct);
     if (rb->u.ring.len > shrink_threshold)
     {
         rb->shrink_hits = 0;
@@ -835,10 +1130,14 @@ static void mem_buffer_maybe_shrink(struct mem_buffer *rb, bool wrapped)
         return;
     }
 
-    size_t target = rb->cap - rb->step;
+    size_t target = rb->current_size - rb->step;
     if (target < rb->u.ring.len)
     {
         target = rb->u.ring.len;
+    }
+    if (target < rb->initial_size)
+    {
+        target = rb->initial_size;
     }
     mem_buffer_resize(rb, target);
     rb->shrink_hits = 0;
@@ -856,7 +1155,7 @@ bool mem_buffer_push(struct mem_buffer *rb, const uint8_t *data, size_t len)
         return false;
     }
 
-    if ((rb->flags & BUFFER_MALLOC_TYPE) != 0)
+    if (rb->type != MEM_BUFFER_RING)
     {
         return false;
     }
@@ -866,8 +1165,8 @@ bool mem_buffer_push(struct mem_buffer *rb, const uint8_t *data, size_t len)
         return false;
     }
 
-    size_t tail = (rb->u.ring.head + rb->u.ring.len) % rb->cap;
-    size_t first = rb->cap - tail;
+    size_t tail = (rb->u.ring.head + rb->u.ring.len) % rb->current_size;
+    size_t first = rb->current_size - tail;
     if (first > len)
     {
         first = len;
@@ -885,12 +1184,12 @@ size_t mem_buffer_pop(struct mem_buffer *rb, uint8_t *out, size_t len)
         return 0;
     }
 
-    if ((rb->flags & BUFFER_MALLOC_TYPE) != 0)
+    if (rb->type != MEM_BUFFER_RING)
     {
         return 0;
     }
 
-    size_t first = rb->cap - rb->u.ring.head;
+    size_t first = rb->current_size - rb->u.ring.head;
     if (first > len)
     {
         first = len;
@@ -900,14 +1199,14 @@ size_t mem_buffer_pop(struct mem_buffer *rb, uint8_t *out, size_t len)
 
     if ((rb->flags & BUFFER_SECURE_MODE) != 0)
     {
-        memset(rb->buf + rb->u.ring.head, 0, first);
-        memset(rb->buf, 0, len - first);
+        tls_secure_memzero(rb->buf + rb->u.ring.head, first);
+        tls_secure_memzero(rb->buf, len - first);
     }
 
     size_t old_head = rb->u.ring.head;
-    rb->u.ring.head = (rb->u.ring.head + len) % rb->cap;
+    rb->u.ring.head = (rb->u.ring.head + len) % rb->current_size;
     rb->u.ring.len -= len;
-    bool wrapped = (old_head + len) >= rb->cap;
+    bool wrapped = (old_head + len) >= rb->current_size;
     mem_buffer_maybe_shrink(rb, wrapped);
     mem_pressure_maybe_clear(rb);
     return len;
@@ -915,12 +1214,142 @@ size_t mem_buffer_pop(struct mem_buffer *rb, uint8_t *out, size_t len)
 
 void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
 {
-    if (!rb || (rb->flags & BUFFER_MALLOC_TYPE) == 0 || size == 0)
+    if (!rb || size == 0)
+    {
+        return NULL;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        if (rb->max_size != SIZE_MAX && rb->u.file.used_bytes + size > rb->max_size)
+        {
+            return NULL;
+        }
+        for (size_t i = 0; i < rb->u.file.max_slots; i++)
+        {
+            if (!rb->u.file.slots[i].ptr)
+            {
+                uint8_t *ptr = (uint8_t *)g_mem_cfg.malloc_fn(size);
+                if (!ptr)
+                {
+                    return NULL;
+                }
+                rb->u.file.slots[i].ptr = ptr;
+                rb->u.file.slots[i].size = size;
+                rb->u.file.used_bytes += size;
+                return ptr;
+            }
+        }
+        return NULL;
+    }
+    if (!mem_buffer_is_pool_type(rb))
     {
         return NULL;
     }
 
     size_t needed = size + MEM_POOL_HEADER_SIZE;
+    if (rb->u.pool.pool_block_size == 0)
+    {
+        return NULL;
+    }
+
+    if (needed > rb->current_size && (rb->flags & BUFFER_LOCK_SIZE) == 0)
+    {
+        bool skip_heap_accounting = (rb->flags & BUFFER_USER_ALLOC) != 0;
+        size_t step = rb->step ? rb->step : 256u;
+        /* Grow by step * N where N is minimum steps to fit needed + 1 step headroom */
+        size_t shortfall = needed - rb->current_size;
+        size_t steps_needed = (shortfall + step - 1) / step; /* ceil division */
+        steps_needed += 1; /* +1 for headroom */
+        size_t desired = rb->current_size + (steps_needed * step);
+        if (rb->max_size != SIZE_MAX && desired > rb->max_size)
+        {
+            desired = rb->max_size;
+        }
+        if (desired < needed || desired <= rb->current_size)
+        {
+            mem_buffer_notify_pressure(rb, needed, MEM_PRESSURE_CRITICAL);
+            return NULL;
+        }
+
+        size_t grow = desired - rb->current_size;
+        if (!skip_heap_accounting && !mem_buffer_charge(grow))
+        {
+            mem_buffer_notify_pressure(rb, desired, MEM_PRESSURE_CRITICAL);
+            return NULL;
+        }
+        size_t old_cap = rb->current_size;
+        size_t old_blocks = rb->u.pool.pool_block_count;
+        size_t old_bitmap_bytes = rb->u.pool.pool_bitmap_bytes;
+
+        if (!mem_buffer_resize(rb, desired))
+        {
+            if (!skip_heap_accounting)
+            {
+                mem_buffer_release(grow);
+            }
+            mem_buffer_notify_pressure(rb, desired, MEM_PRESSURE_CRITICAL);
+            return NULL;
+        }
+
+        size_t new_block_count = rb->current_size / rb->u.pool.pool_block_size;
+        size_t new_bitmap_bytes = (new_block_count + 7u) / 8u;
+        if (new_bitmap_bytes > rb->u.pool.pool_bitmap_bytes)
+        {
+            size_t bitmap_grow = new_bitmap_bytes - rb->u.pool.pool_bitmap_bytes;
+            if (!skip_heap_accounting && !mem_buffer_charge(bitmap_grow))
+            {
+                mem_buffer_resize(rb, old_cap);
+                if (!skip_heap_accounting)
+                {
+                    mem_buffer_release(grow);
+                }
+                mem_buffer_notify_pressure(rb, desired, MEM_PRESSURE_CRITICAL);
+                return NULL;
+            }
+            uint8_t *new_bitmap = NULL;
+            if (g_mem_cfg.realloc_fn)
+            {
+                new_bitmap = (uint8_t *)g_mem_cfg.realloc_fn(rb->u.pool.pool_bitmap, new_bitmap_bytes);
+            }
+            else
+            {
+                new_bitmap = (uint8_t *)g_mem_cfg.malloc_fn(new_bitmap_bytes);
+                if (new_bitmap)
+                {
+                    memcpy(new_bitmap, rb->u.pool.pool_bitmap, rb->u.pool.pool_bitmap_bytes);
+                    g_mem_cfg.free_fn(rb->u.pool.pool_bitmap);
+                }
+            }
+            if (!new_bitmap)
+            {
+                if (!skip_heap_accounting)
+                {
+                    mem_buffer_release(bitmap_grow);
+                }
+                mem_buffer_resize(rb, old_cap);
+                if (!skip_heap_accounting)
+                {
+                    mem_buffer_release(grow);
+                }
+                mem_buffer_notify_pressure(rb, desired, MEM_PRESSURE_CRITICAL);
+                return NULL;
+            }
+            memset(new_bitmap + old_bitmap_bytes, 0, new_bitmap_bytes - old_bitmap_bytes);
+            rb->u.pool.pool_bitmap = new_bitmap;
+            rb->u.pool.pool_bitmap_bytes = new_bitmap_bytes;
+        }
+
+        rb->u.pool.pool_block_count = new_block_count;
+        if (rb->u.pool.pool_used_blocks > new_block_count)
+        {
+            rb->u.pool.pool_used_blocks = new_block_count;
+        }
+        if (old_blocks != new_block_count)
+        {
+            mem_pressure_maybe_clear(rb);
+        }
+    }
+
     size_t blocks_needed = (needed + rb->u.pool.pool_block_size - 1) / rb->u.pool.pool_block_size;
     if (blocks_needed == 0 || blocks_needed > rb->u.pool.pool_block_count)
     {
@@ -967,13 +1396,43 @@ void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
 
 void mem_buffer_free(struct mem_buffer *rb, void *ptr)
 {
-    if (!rb || (rb->flags & BUFFER_MALLOC_TYPE) == 0 || !ptr)
+    if (!rb || !ptr)
+    {
+        return;
+    }
+    if (rb->type == MEM_BUFFER_FILE)
+    {
+        for (size_t i = 0; i < rb->u.file.max_slots; i++)
+        {
+            if (rb->u.file.slots[i].ptr == ptr)
+            {
+                if ((rb->flags & BUFFER_SECURE_MODE) != 0)
+                {
+                    tls_secure_memzero(rb->u.file.slots[i].ptr, rb->u.file.slots[i].size);
+                }
+                g_mem_cfg.free_fn(rb->u.file.slots[i].ptr);
+                if (rb->u.file.used_bytes >= rb->u.file.slots[i].size)
+                {
+                    rb->u.file.used_bytes -= rb->u.file.slots[i].size;
+                }
+                else
+                {
+                    rb->u.file.used_bytes = 0;
+                }
+                rb->u.file.slots[i].ptr = NULL;
+                rb->u.file.slots[i].size = 0;
+                return;
+            }
+        }
+        return;
+    }
+    if (!mem_buffer_is_pool_type(rb))
     {
         return;
     }
 
     uint8_t *base = (uint8_t *)ptr - MEM_POOL_HEADER_SIZE;
-    if (base < rb->buf || base >= (rb->buf + rb->cap))
+    if (base < rb->buf || base >= (rb->buf + rb->current_size))
     {
         return;
     }
@@ -991,7 +1450,7 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
 
     if ((rb->flags & BUFFER_SECURE_MODE) != 0)
     {
-        memset(base, 0, blocks * rb->u.pool.pool_block_size);
+        tls_secure_memzero(base, blocks * rb->u.pool.pool_block_size);
     }
 
     for (size_t j = 0; j < blocks; j++)
@@ -1017,7 +1476,7 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
     }
 
     size_t used_bytes = rb->u.pool.pool_used_blocks * rb->u.pool.pool_block_size;
-    size_t shrink_threshold = threshold_bytes(rb->cap, rb->shrink_threshold_pct);
+    size_t shrink_threshold = threshold_bytes(rb->current_size, rb->shrink_threshold_pct);
     if (used_bytes > shrink_threshold)
     {
         rb->shrink_hits = 0;
@@ -1077,11 +1536,15 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
         return;
     }
 
-    size_t new_cap = rb->cap - step;
+    size_t new_cap = rb->current_size - step;
     if (new_cap < rb->u.pool.pool_block_size)
     {
         mem_pressure_maybe_clear(rb);
         return;
+    }
+    if (new_cap < rb->initial_size)
+    {
+        new_cap = rb->initial_size;
     }
 
     if (!mem_buffer_resize(rb, new_cap))
@@ -1125,33 +1588,32 @@ void mem_buffer_set_shrink(struct mem_buffer *mb, uint8_t threshold_pct, size_t 
     mb->shrink_hits = 0;
 }
 
-void mem_buffer_set_max_size(struct mem_buffer *mb, size_t max_cap)
+void mem_buffer_set_max_size(struct mem_buffer *mb, size_t max_size)
 {
     if (!mb)
     {
         return;
     }
-    if (max_cap == (size_t)-1)
+    if (max_size == (size_t)-1)
     {
-        mb->max_cap = SIZE_MAX;
+        mb->max_size = SIZE_MAX;
         return;
     }
-    if (max_cap < mb->cap)
+    if (max_size < mb->current_size)
     {
-        mb->max_cap = mb->cap;
+        mb->max_size = mb->current_size;
         return;
     }
-    mb->max_cap = max_cap;
+    mb->max_size = max_size;
 }
 
 bool mem_buffer_set_lwip_heap(struct mem_buffer *mb)
 {
-    if (!mb || (mb->flags & BUFFER_MALLOC_TYPE) == 0)
+    if (!mb || !mem_buffer_is_pool_type(mb))
     {
         return false;
     }
     g_lwip_heap = mb;
-    mem_buffer_set_owner(mb, MEM_BUF_OWNER_LWIP_POOL);
     return true;
 }
 
@@ -1193,6 +1655,7 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
         pool_count = MEM_LWIP_MAX_POOLS;
     }
 
+    memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
     g_lwip_pool_count = 0;
     for (size_t i = 0; i < pool_count; i++)
     {
@@ -1202,13 +1665,10 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
             continue;
         }
         size_t initial_cap = cfg->block_size * cfg->block_count;
-        size_t max_cap = cfg->max_cap ? cfg->max_cap : initial_cap;
-        uint8_t flags = (uint8_t)(cfg->flags | BUFFER_MALLOC_TYPE);
-        struct mem_buffer *mb = mem_buffer_create(initial_cap, max_cap, cfg->block_size, flags, cfg->low_mem_cb);
+        size_t max_cap = cfg->max_size ? cfg->max_size : initial_cap;
+        struct mem_buffer *mb = mem_buffer_create(MEM_BUFFER_POOL, initial_cap, max_cap, cfg->block_size, cfg->flags);
         if (mb)
         {
-            enum mem_buffer_owner owner = cfg->owner ? cfg->owner : MEM_BUF_OWNER_LWIP_POOL;
-            mem_buffer_set_owner(mb, owner);
             g_lwip_pools[g_lwip_pool_count++] = mb;
         }
     }
@@ -1219,6 +1679,7 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
     }
 
     mem_buffer_sort_pools();
+    mem_effective_pressure_update();
     return true;
 }
 
@@ -1272,7 +1733,7 @@ void *mem_buffer_custom_malloc(size_t size)
                 enum mem_pressure_level level = mem_pressure_level_from_usage(usage_pct);
                 if (level != MEM_PRESSURE_NONE && level != g_lwip_pools[i]->last_pressure_level)
                 {
-                    mem_buffer_notify_lowmem(g_lwip_pools[i], needed, level);
+                    mem_buffer_notify_pressure(g_lwip_pools[i], needed, level);
                 }
                 void *ptr = mem_buffer_malloc(g_lwip_pools[i], size);
                 if (ptr)
@@ -1284,7 +1745,7 @@ void *mem_buffer_custom_malloc(size_t size)
 
         if (tried_large)
         {
-            mem_buffer_notify_lowmem(preferred, needed, MEM_PRESSURE_CRITICAL);
+            mem_buffer_notify_pressure(preferred, needed, MEM_PRESSURE_CRITICAL);
         }
 
         for (size_t i = 0; i < g_lwip_pool_count; i++)
@@ -1331,7 +1792,7 @@ void mem_buffer_custom_free(void *ptr)
                 continue;
             }
             uint8_t *start = mb->buf;
-            uint8_t *end = mb->buf + mb->cap;
+            uint8_t *end = mb->buf + mb->current_size;
             if ((uint8_t *)ptr > start && (uint8_t *)ptr < end)
             {
                 mem_buffer_free(mb, ptr);

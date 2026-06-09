@@ -1,3 +1,10 @@
+/**
+ * @file bytes.h
+ * @author Anthony Cagliano
+ * @brief Secure buffer compare and secure erasure functions.
+ * @license: GNU GPL v3.0
+ */
+
 #ifndef tls_bytes_h
 #define tls_bytes_h
 
@@ -23,4 +30,3 @@ bool tls_bytes_compare(const void *buf1, const void *buf2, size_t len);
 void tls_secure_memzero(void *ptr, size_t len);
 
 #endif
-

@@ -1,6 +1,11 @@
-/// @file base64.h
-/// @author ACagliano
-/// @brief Module providing a Base64 encoder and decoder.
+/**
+ * @file base64.h
+ * @author Anthony Cagliano
+ * @brief Base64 encode/decode implementation.
+ * @license: GNU GPL v3.0
+ * @reference: RFC 4648
+ * @reference: https://github.com/openssl/openssl
+ */
 
 #ifndef tls_base64_t
 #define tls_base64_t

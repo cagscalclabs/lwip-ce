@@ -1,0 +1,103 @@
+name: Build Whitepaper
+
+on:
+  push:
+    paths:
+      - docs/whitepaper/whitepaper.tex
+      - docs/whitepaper/scripts/**
+      - docs/whitepaper/datasets/**
+      - .github/workflows/whitepaper.yml
+  pull_request:
+    paths:
+      - docs/whitepaper/whitepaper.tex
+      - docs/whitepaper/scripts/**
+      - docs/whitepaper/datasets/**
+      - .github/workflows/whitepaper.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  whitepaper:
+    runs-on: ubuntu-latest
+    env:
+      APT_CACHE_DIR: ${{ github.workspace }}/.cache/apt/archives
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache LaTeX apt packages
+        id: latex-apt-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: ${{ runner.os }}-whitepaper-apt-v1
+
+      - name: Cache LaTeX build outputs
+        id: latex-build-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            docs/whitepaper/_minted-whitepaper
+            docs/whitepaper/whitepaper.aux
+            docs/whitepaper/whitepaper.fdb_latexmk
+            docs/whitepaper/whitepaper.fls
+            docs/whitepaper/whitepaper.out
+            docs/whitepaper/whitepaper.toc
+          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('docs/whitepaper/whitepaper.tex', 'docs/whitepaper/scripts/**', 'docs/whitepaper/datasets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-whitepaper-build-
+
+      - name: Prepare apt package cache
+        run: mkdir -p "$APT_CACHE_DIR/partial"
+
+      - name: Install LaTeX dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get \
+            -o Dir::Cache::archives="$APT_CACHE_DIR" \
+            install -y \
+            latexmk \
+            python3-pygments \
+            texlive-fonts-recommended \
+            texlive-latex-extra \
+            texlive-pictures \
+            texlive-science
+
+      - name: Normalize apt package cache permissions
+        run: |
+          sudo rm -f "$APT_CACHE_DIR/lock"
+          sudo rm -rf "$APT_CACHE_DIR/partial"
+          sudo chown -R "$USER:$USER" "$APT_CACHE_DIR"
+
+      - name: Generate whitepaper data
+        run: python3 scripts/generate_docs_data.py
+        working-directory: docs/whitepaper
+
+      - name: Build PDF
+        run: latexmk -pdf -shell-escape -interaction=nonstopmode -file-line-error whitepaper.tex
+        working-directory: docs/whitepaper
+
+      - name: Publish latest whitepaper release
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f whitepaper-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/whitepaper-latest
+
+          if gh release view whitepaper-latest >/dev/null 2>&1; then
+            gh release edit whitepaper-latest \
+              --title "whitepaper-latest" \
+              --notes "Latest generated lwIP-CE whitepaper PDF."
+          else
+            gh release create whitepaper-latest \
+              --title "whitepaper-latest" \
+              --notes "Latest generated lwIP-CE whitepaper PDF." \
+              --latest
+          fi
+
+          gh release upload whitepaper-latest docs/whitepaper/whitepaper.pdf \
+            --clobber

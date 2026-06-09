@@ -5,11 +5,12 @@ on:
   schedule:
     - cron: "0 0 1 */3 *"
 
+permissions:
+  contents: write
+
 jobs:
   truststore:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@main
@@ -19,7 +20,7 @@ jobs:
 
       - name: Download and extract CEdev
         run: |
-          curl -sL github.com/CE-Programming/toolchain/releases/download/v14.0/CEdev-Linux.tar.gz | tar xz
+          curl -sL github.com/CE-Programming/toolchain/releases/download/v15.0/CEdev-Linux.tar.gz | tar xz
 
       - name: Add CEdev to PATH
         run: |
@@ -29,13 +30,14 @@ jobs:
         env:
           TRUSTSTORE_SIGNER: ${{ secrets.TRUSTSTORE_SIGNER }}
         run: |
-          printf '%s' "$TRUSTSTORE_SIGNER" > truststore_signer.pem
-          chmod 600 truststore_signer.pem
-          if [ ! -s truststore_signer.pem ]; then
+          SIGNER_KEY="${RUNNER_TEMP}/truststore_signer.pem"
+          printf '%s' "$TRUSTSTORE_SIGNER" > "$SIGNER_KEY"
+          chmod 600 "$SIGNER_KEY"
+          if [ ! -s "$SIGNER_KEY" ]; then
             echo "TRUSTSTORE_SIGNER is empty or unavailable."
             exit 1
           fi
-          openssl pkey -in truststore_signer.pem -noout >/dev/null
+          openssl pkey -in "$SIGNER_KEY" -noout >/dev/null
 
       - name: Generate truststore binary
         run: |
@@ -191,7 +193,7 @@ jobs:
                   "-sigopt",
                   "rsa_mgf1_md:sha256",
                   "-sign",
-                  "truststore_signer.pem",
+                  os.path.join(os.environ["RUNNER_TEMP"], "truststore_signer.pem"),
                   "-out",
                   sig_path,
                   data_path,
@@ -241,12 +243,14 @@ jobs:
 
       - name: Verify truststore signature
         run: |
-          openssl pkey -in truststore_signer.pem -pubout -out truststore_pub.pem
+          SIGNER_KEY="${RUNNER_TEMP}/truststore_signer.pem"
+          PUB_KEY="${RUNNER_TEMP}/truststore_pub.pem"
+          openssl pkey -in "$SIGNER_KEY" -pubout -out "$PUB_KEY"
           openssl dgst -sha256 \
             -sigopt rsa_padding_mode:pss \
             -sigopt rsa_pss_saltlen:-1 \
             -sigopt rsa_mgf1_md:sha256 \
-            -verify truststore_pub.pem \
+            -verify "$PUB_KEY" \
             -signature truststore_out/lwIPSPKI.sig \
             truststore_out/lwIPSPKI.data >/dev/null
 
@@ -256,3 +260,21 @@ jobs:
           tag_name: truststore-latest
           name: truststore-latest
           files: truststore_out/lwIPSPKI.8xv
+          body: |
+            This release contains the latest generated truststore AppVar for TI-84+ CE.
+
+            The truststore is generated from the CA certificates available on the runner environment at the time of generation. It includes metadata such as certificate owner, issuer, validity period, and a hash of the public key.
+
+            The AppVar can be downloaded and used in CE projects to provide a set of trusted CA certificates for TLS connections.
+
+      - name: Cleanup signing keys
+        if: always()
+        run: |
+          SIGNER_KEY="${RUNNER_TEMP}/truststore_signer.pem"
+          PUB_KEY="${RUNNER_TEMP}/truststore_pub.pem"
+          if command -v shred >/dev/null 2>&1; then
+            shred -u "$SIGNER_KEY" "$PUB_KEY" 2>/dev/null || true
+          fi
+          rm -f "$SIGNER_KEY" "$PUB_KEY"
+
+           

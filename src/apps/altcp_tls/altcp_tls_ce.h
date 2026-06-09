@@ -21,8 +21,12 @@
 extern "C" {
 #endif
 
-#ifndef ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE
-#define ALTCP_TLS_CE_DEFAULT_RX_RING_SIZE 4096
+/* Cap on the per-record plaintext scratch buffer the TLS layer allocates
+ * during handshake-message decryption. RFC 8446 §5.1 caps TLS 1.3
+ * plaintext records at 16384 bytes; the inner parser receives at most
+ * that many bytes (plus the inner content-type byte, see the +1 sites). */
+#ifndef ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT
+#define ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT 16384
 #endif
 
 /**
@@ -35,15 +39,8 @@ typedef struct altcp_tls_ce_state {
     struct pbuf *rx;                         /* Encrypted RX data from TCP */
     struct pbuf *rx_app;                     /* Decrypted application data */
     int rx_passed_unrecved;                  /* Data passed to app but not recved */
-    int bio_bytes_read;                      /* Bytes read from TCP */
-    int bio_bytes_appl;                      /* Application data bytes */
     int overhead_bytes_adjust;               /* TLS overhead tracking */
-    size_t rx_ring_head;                     /* TLS record ring head */
-    size_t rx_ring_len;                      /* TLS record ring length */
-    size_t rx_ring_size;                     /* TLS record ring size */
-    uint8_t *rx_ring;                        /* TLS record ring buffer */
     size_t rx_throttle_pending;              /* Pending bytes to recved */
-    uint8_t rx_mild_toggle;                  /* Mild pressure toggle */
     struct altcp_tls_ce_state *next;         /* Linked list of states */
     u8_t flags;                              /* State flags */
 } altcp_tls_ce_state_t;
@@ -53,17 +50,25 @@ typedef struct altcp_tls_ce_state {
 #define ALTCP_TLS_CE_FLAGS_UPPER_CALLED      0x02
 #define ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED   0x04
 #define ALTCP_TLS_CE_FLAGS_RX_CLOSED         0x08
+/* close_notify has been emitted to the peer. Set the moment we hand it
+ * off; a retried close() (because the TCP-level close came back ERR_MEM)
+ * skips re-sending the alert. The peer has already seen it. */
+#define ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT 0x10
 
 /**
  * @brief TLS configuration for CE implementation
  */
 struct altcp_tls_ce_config {
     u8_t is_server;                          /* Server mode flag */
-    size_t rx_ring_size;                     /* TLS record ring size */
+    u8_t psk_mode;                           /* 1 = PSK/PSK+ECDHE, 0 = pure ECDHE */
 
-    /* PSK configuration */
+    /* PSK configuration (only used when psk_mode == 1) */
     u8_t psk[32];                            /* Pre-shared key */
     struct tls_psk_identity psk_identity;    /* PSK identity */
+    enum tls_psk_type psk_type;              /* Resumption vs external PSK */
+
+    /* SNI hostname (pointer to caller-owned string, must outlive config) */
+    const char *hostname;
 
     /* Certificate/key for RSA mode (future) */
     const u8_t *cert;
@@ -94,6 +99,17 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_client(
 struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_server(
     const u8_t psk[32],
     const struct tls_psk_identity *psk_identity
+);
+
+/**
+ * @brief Create TLS configuration for ECDHE-only client (no PSK)
+ *
+ * Used for connecting to standard HTTPS servers with certificate validation.
+ * @param hostname Server hostname for SNI (caller must keep string alive)
+ * @return Configuration handle or NULL on failure
+ */
+struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
+    const char *hostname
 );
 
 /**

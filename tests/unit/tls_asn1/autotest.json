@@ -1,0 +1,38 @@
+{
+    "transfer_files":
+    [
+        "bin/DEMO.8xp"
+    ],
+    "target":
+    {
+        "name": "DEMO",
+        "isASM": true
+    },
+    "sequence":
+    [
+        "action|launch",
+        "hashWait|1",
+        "key|enter",
+        "hashWait|2",
+        "key|enter"
+    ],
+    "hashes":
+    {
+        "1":
+        {
+            "description": "ASN.1 cursor simple parse",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "FEB0071F" ],
+            "timeout": 2000
+        },
+        "2":
+        {
+            "description": "ASN.1 cursor large DER dump",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [ "393016F1" ],
+            "timeout": 2000
+        }
+    }
+}

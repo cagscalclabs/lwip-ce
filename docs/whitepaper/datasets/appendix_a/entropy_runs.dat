@@ -1,0 +1,184 @@
+--Test1--
+model: preA
+ingested files: 24
+detected groups: R0, R17
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit5: p1=0.886705 bias=0.386705 trans=0.200484 mono_z=593.979 runs_z=1.655
+[R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit5: p1=0.487362 bias=0.012638 trans=0.499055 mono_z=19.411 runs_z=0.961
+[R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+
+--Test2--
+model: preA
+ingested files: 24
+detected groups: R0, R17
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit5: p1=0.893451 bias=0.393451 trans=0.189684 mono_z=604.341 runs_z=2.851
+[R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit5: p1=0.491013 bias=0.008987 trans=0.500186 mono_z=13.805 runs_z=0.535
+[R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+
+--Test3--
+model: AA
+ingested files: 24
+detected groups: R0, R17
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit1: p1=0.000176 bias=0.499824 trans=0.000353 mono_z=767.729 runs_z=3.838
+[R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit5: p1=0.536931 bias=0.036931 trans=0.494896 mono_z=56.727 runs_z=3.669
+[R0] bit6: p1=0.005086 bias=0.494914 trans=0.010098 mono_z=760.188 runs_z=1.606
+[R0] bit7: p1=0.000002 bias=0.499998 trans=0.000003 mono_z=767.997 runs_z=543.061
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit1: p1=0.005142 bias=0.494858 trans=0.010240 mono_z=760.102 runs_z=0.788
+[R17] bit2: p1=0.000002 bias=0.499998 trans=0.000003 mono_z=767.997 runs_z=543.061
+[R17] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit5: p1=0.499688 bias=0.000312 trans=0.499691 mono_z=0.479 runs_z=0.474
+[R17] bit6: p1=0.093097 bias=0.406903 trans=0.167932 mono_z=625.003 runs_z=4.217
+[R17] bit7: p1=0.000007 bias=0.499993 trans=0.000014 mono_z=767.990 runs_z=102.635
+
+--Test4--
+model: AA
+ingested files: 24
+detected groups: R0, R17
+HW Revision: AA
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit2: p1=0.586134 bias=0.086134 trans=0.481665 mono_z=132.302 runs_z=5.534
+[R0] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit5: p1=1.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit7: p1=0.565055 bias=0.065055 trans=0.490818 mono_z=99.924 runs_z=1.119
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit2: p1=0.499669 bias=0.000331 trans=0.499930 mono_z=0.508 runs_z=0.106
+[R17] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit5: p1=0.000015 bias=0.499985 trans=0.000031 mono_z=767.977 runs_z=43.916
+[R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit7: p1=0.500351 bias=0.000351 trans=0.499825 mono_z=0.539 runs_z=0.268
+
+--Test5--
+model: AA
+ingested files: 24
+detected groups: R0, R17
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit5: p1=0.885206 bias=0.385206 trans=0.203000 mono_z=591.677 runs_z=0.872
+[R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit3: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit5: p1=0.492698 bias=0.007302 trans=0.500245 mono_z=11.216 runs_z=0.542
+[R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+
+--Test6--
+model: AA
+ingested files: 24
+detected groups: R0, R17
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.106038 bias=0.393962 trans=0.187883 mono_z=605.125 runs_z=6.901
+[R0] bit1: p1=0.066079 bias=0.433921 trans=0.122691 mono_z=666.503 runs_z=4.559
+[R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit3: p1=0.845847 bias=0.345847 trans=0.259868 mono_z=531.221 runs_z=2.681
+[R0] bit4: p1=0.001855 bias=0.498145 trans=0.003699 mono_z=765.151 runs_z=0.331
+[R0] bit5: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.492747 bias=0.007253 trans=0.500048 mono_z=11.141 runs_z=0.237
+[R17] bit1: p1=0.460654 bias=0.039346 trans=0.495745 mono_z=60.435 runs_z=1.789
+[R17] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit3: p1=0.499464 bias=0.000536 trans=0.499228 mono_z=0.823 runs_z=1.184
+[R17] bit4: p1=0.026599 bias=0.473401 trans=0.051649 mono_z=727.143 runs_z=1.970
+[R17] bit5: p1=0.000002 bias=0.499998 trans=0.000003 mono_z=767.997 runs_z=543.061
+[R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+
+--Test7--
+model: L
+ingested files: 24
+detected groups: R0, R17
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.990560 bias=0.490560 trans=0.018704 mono_z=753.500 runs_z=0.148
+[R0] bit1: p1=1.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit3: p1=0.039225 bias=0.460775 trans=0.075256 mono_z=707.750 runs_z=1.174
+[R0] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit5: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.132863 bias=0.367137 trans=0.225513 mono_z=563.922 runs_z=16.354
+[R17] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit3: p1=0.394289 bias=0.105711 trans=0.474919 mono_z=162.372 runs_z=4.391
+[R17] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit5: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+
+--Test8--
+model: L
+ingested files: 24
+detected groups: R0, R17
+[R0] files=12 bytes=589824
+[R0] bit0: p1=0.991036 bias=0.491036 trans=0.017710 mono_z=754.232 runs_z=2.361
+[R0] bit1: p1=1.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit3: p1=0.045573 bias=0.454427 trans=0.086945 mono_z=698.000 runs_z=0.404
+[R0] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit5: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R0] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] files=12 bytes=589824
+[R17] bit0: p1=0.134450 bias=0.365550 trans=0.227862 mono_z=561.484 runs_z=16.116
+[R17] bit1: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit2: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit3: p1=0.414079 bias=0.085921 trans=0.483376 mono_z=131.974 runs_z=2.942
+[R17] bit4: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit5: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit6: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf
+[R17] bit7: p1=0.000000 bias=0.500000 trans=0.000000 mono_z=768.000 runs_z=inf

@@ -1,0 +1,49 @@
+{
+    "description": "Secure membuffer growth, shrink hysteresis, and zeroing tests",
+    "transfer_files": [
+        "bin/MEMBUF.8xp"
+    ],
+    "target": {
+        "name": "MEMBUF",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1",
+        "key|enter",
+        "hashWait|2",
+        "key|enter",
+        "hashWait|3",
+        "key|enter",
+        "key|enter"
+    ],
+    "hashes": {
+        "1": {
+            "description": "MEM_BUFFER_RING secure pop zeroing, growth, and shrink hysteresis",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "2": {
+            "description": "MEM_BUFFER_POOL secure free zeroing, growth, and shrink hysteresis",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "3": {
+            "description": "MEM_BUFFER_FILE secure free, release zeroing, and max-size rejection",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        }
+    }
+}

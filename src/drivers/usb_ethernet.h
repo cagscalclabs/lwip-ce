@@ -146,6 +146,18 @@ typedef struct _eth_device_t
     uint8_t type;
     uint8_t hwaddr[6];
     bool rx_transfer_active;
+    /* Per-device retry counters and "fatal" flag. Previously these were
+     * function-static globals, which interleaved across multiple devices
+     * and could trip device A's fatal threshold from device B's
+     * transient errors. */
+    uint8_t rx_retries;
+    uint8_t tx_retries;
+    uint8_t int_retries;
+    /* Consecutive RX-drain invariant failures (pbuf chain too small for a
+     * queued frame). Reset to 0 on any clean drain pass; when it reaches
+     * ETH_RX_DRAIN_MAX_ERRORS the netif is aborted. See eth_rx_ring_drain. */
+    uint8_t rx_drain_errors;
+    bool disabled_with_error;
     struct mem_buffer *rx_ring;
     struct
     {
@@ -175,8 +187,13 @@ extern eth_device_t eth;
 
 /// @brief Callback function to be passed to @b usb_Init to enable Ethernet driver for lwIP
 usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_callback_data_t *callback_data);
-void eth_set_rx_throttle(enum mem_pressure_level level);
-void eth_set_rx_drain_interval_ms(uint32_t interval_ms);
+
+/** @brief Halt every USB endpoint backing every active ethernet netif.
+ *  Used during stack shutdown to quiesce the device-side transport
+ *  before lwIP tears down its PCBs. After this call the USB driver
+ *  will reject further schedule_transfer requests for these
+ *  endpoints, ensuring no in-flight frames arrive mid-teardown. */
+void eth_halt_all_endpoints(void);
 
 
 struct usb_configurator {
@@ -215,9 +232,23 @@ struct usb_configurator {
     void (*set_endpoint_data)(usb_endpoint_t endpoint, usb_endpoint_data_t *data);
     usb_endpoint_data_t* (*get_endpoint_data)(usb_endpoint_t endpoint);
     void (*set_endpoint_flags)(usb_endpoint_t endpoint, usb_endpoint_flags_t flags);
-};
-extern struct usb_configurator usb_fn;
+    usb_error_t (*set_endpoint_halt)(usb_endpoint_t endpoint);
 
+    // top-level USB driver entry points (formerly called directly by lwIP;
+    // now routed through the vtable so the libload build can resolve them
+    // via include_library 'usbdrvce.lib' without a special case).
+    usb_error_t (*init)(usb_event_callback_t handler, usb_callback_data_t *data,
+                        const usb_standard_descriptors_t *device_descriptors,
+                        usb_init_flags_t flags);
+    usb_error_t (*handle_events)(void);
+    void (*cleanup)(void);
+};
+
+/* The unified imports table (struct lwip_imports, fn_imports_table, and
+ * the usb_fn dispatch macro) lives in lwip-imports.h. It is not included
+ * here to avoid a circular dependency: lwip-imports.h embeds
+ * struct usb_configurator and so includes this header. Files that need
+ * usb_fn / fn_imports_table should include "lwip-imports.h" directly. */
 
 /// @brief Polls for the registration status of interfaces.
 /// @return A bitmap indicating what NETIFs are registered (netif->num)
@@ -225,5 +256,23 @@ extern struct usb_configurator usb_fn;
 /// @note The ifnum assignment system seeks to the next free ifnum.
 /// @note Up to 8 simultaneous interfaces allowed. Any more causes device init to fail.
 uint8_t eth_get_interfaces(void);
+
+/// @brief Reports whether an ethernet netif has been brought down by an
+///        unrecoverable link/device error (endpoint retry exhaustion or
+///        RX-drain invariant failure).
+/// @param netif The interface to query. May be NULL or a non-ethernet
+///        netif, in which case the result is false.
+/// @return true if the interface was aborted with an error and disabled;
+///         false otherwise (including healthy, or simply down via the
+///         normal admin path).
+bool netif_is_link_error(const struct netif *netif);
+
+#ifdef LWIP_ETHERNET_TEST_HOOKS
+bool eth_test_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len);
+size_t eth_test_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget);
+void eth_test_schedule_rx_for_netifs(void);
+usb_error_t eth_test_ecm_receive(eth_device_t *dev, const uint8_t *frame, size_t len);
+usb_error_t eth_test_ncm_receive(eth_device_t *dev, const uint8_t *ntb, size_t len);
+#endif
 
 #endif

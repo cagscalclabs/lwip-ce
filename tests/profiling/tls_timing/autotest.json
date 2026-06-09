@@ -1,0 +1,29 @@
+{
+  "description": "Verify timing behavior. Compute acceptible jitter-based cycle deviation based on MAD, a tuning factor (c), then test that no input class exceeds the acceptable deviation more than 75% of the time",
+  "transfer_files": [
+    "bin/TIMINGS.8xp",
+    "clibs.8xg"
+  ],
+  "target": {
+    "name": "TIMINGS",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "delay|2000",
+    "saveVar|TLSTMLOG"
+  ],
+  "hashes": {
+    "1": {
+      "description": "Timing profiler completes and TLSTMLOG is written",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "7157D347"
+      ],
+      "timeout": 1000000000
+    }
+  }
+}

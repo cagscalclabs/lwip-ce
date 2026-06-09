@@ -1,0 +1,60 @@
+{
+    "description": "Ethernet RX ring, drain, NCM parse, and USB re-arm unit tests",
+    "transfer_files": [
+        "bin/ETHRX.8xp"
+    ],
+    "target": {
+        "name": "ETHRX",
+        "isASM": true
+    },
+    "sequence": [
+        "action|launch",
+        "hashWait|1",
+        "key|enter",
+        "hashWait|2",
+        "key|enter",
+        "hashWait|3",
+        "key|enter",
+        "hashWait|4",
+        "key|enter",
+        "key|enter"
+    ],
+    "hashes": {
+        "1": {
+            "description": "Ethernet RX ECM receive, ring buffering, and drain",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "2": {
+            "description": "Ethernet RX drain budget and pbuf allocation failure handling",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "3": {
+            "description": "Ethernet RX NCM NTB parse and multi-frame drain",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        },
+        "4": {
+            "description": "Ethernet RX transfer schedule failure and re-arm state",
+            "start": "vram_start",
+            "size": "vram_16_size",
+            "expected_CRCs": [
+                "D1F2869F"
+            ],
+            "timeout": 1000
+        }
+    }
+}

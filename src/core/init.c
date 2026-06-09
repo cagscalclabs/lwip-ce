@@ -38,7 +38,10 @@
 #include "lwip/opt.h"
 #include "lwip/err.h"
 
+#include <ti/vars.h>  /* os_MemChk */
+
 #include "../drivers/usb_ethernet.h"
+#include "../lwip-imports.h"
 #include "lwip/init.h"
 #include "lwip/stats.h"
 #include "lwip/sys.h"
@@ -343,23 +346,41 @@ PACK_STRUCT_END
  * Use this in NO_SYS mode. Use tcpip_init() otherwise.
  */
 err_t
-lwip_init(struct lwip_configurator *conf)
+lwip_init(void)
 {
-    if(conf==NULL) return ERR_ARG;
     lwip_app_config_refresh();
-    memcpy(&usb_fn, &conf->usb_conf, sizeof(struct usb_configurator));
+
+    /* Initialize the dynamic memory subsystem from the stored app config,
+     * unless the caller already set up static memory via mem_init_static().
+     * CRTs come from fn_imports_table (populated by the libload bootstrap). */
+    if (!mem_is_ready())
+    {
+        const lwip_app_config_t *cfg = lwip_app_config_get();
+        size_t floor = LWIP_TLS_FLOOR_BYTES;
+        size_t cap = cfg->lwip_mem_cap;
+        if (cap < floor) cap = floor;
+        void *free_block = NULL;
+        size_t free_ram = os_MemChk(&free_block);
+        if (cap > free_ram) cap = free_ram;
+        if (!mem_init(cap,
+                      fn_imports_table.malloc,
+                      fn_imports_table.free,
+                      fn_imports_table.realloc))
+        {
+            return ERR_MEM;
+        }
+    }
     {
         const struct mem_buffer_pool_cfg pools[] = {
-            {LWIP_MEMPOOL_SMALL_BLOCK, LWIP_MEMPOOL_SMALL_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL},
-            {LWIP_MEMPOOL_MEDIUM_BLOCK, LWIP_MEMPOOL_MEDIUM_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL},
-            {LWIP_MEMPOOL_LARGE_BLOCK, LWIP_MEMPOOL_LARGE_COUNT, 0, 0, NULL, MEM_BUF_OWNER_LWIP_POOL}
+            {LWIP_MEMPOOL_SMALL_BLOCK, LWIP_MEMPOOL_SMALL_COUNT, 0, 0},
+            {LWIP_MEMPOOL_MEDIUM_BLOCK, LWIP_MEMPOOL_MEDIUM_COUNT, 0, 0},
+            {LWIP_MEMPOOL_LARGE_BLOCK, LWIP_MEMPOOL_LARGE_COUNT, 0, 0}
         };
         mem_buffer_lwip_init_pools(
             pools,
             sizeof(pools) / sizeof(pools[0])
         );
     }
-    mem_set_pressure_clear_pct(LWIP_MEM_PRESSURE_CLEAR_PCT);
 #ifndef LWIP_SKIP_CONST_CHECK
   int a = 0;
   LWIP_UNUSED_ARG(a);

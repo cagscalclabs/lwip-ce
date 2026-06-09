@@ -1,0 +1,240 @@
+name: CAVP Primitive Validation
+
+# Runs NIST CAVP test vectors against the shipping cryptographic primitives
+# on every push to `tls` that touches the relevant code, plus on manual
+# dispatch. tests/common/scripts/cavp_fetch.py downloads NIST CAVP archives, samples 16
+# vectors per primitive at random (per run), adds generated RSA-PSS/X25519
+# coverage plus RFC-pinned HKDF/X25519 vectors, and emits CAVPIN.8xv +
+# expected.json for the test run.
+
+on:
+  push:
+    branches: ['tls']
+    paths:
+      - '.github/workflows/cavp.yml'
+      - 'src/tls/**'
+      - 'tests/common/scripts/cavp_fetch.py'
+      - 'tests/common/scripts/parse_cavp_output_appvar.py'
+      - 'tests/profiling/tls_cavp/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
+  LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
+  CEMU_PATH: ${{github.workspace}}/CEmu
+  CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
+  SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
+  CEDEV_BIN: ${{github.workspace}}/CEdev/bin
+  CAVP_TEST_DIR: ${{github.workspace}}/tests/profiling/tls_cavp
+  CAVP_FETCH_SAMPLE: 16
+
+jobs:
+  cavp:
+    runs-on: ubuntu-latest
+    environment: test
+
+    steps:
+      - name: Checkout TLS branch
+        uses: actions/checkout@v4
+        with:
+          ref: 'tls'
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && \
+          sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb \
+                                  python3 python3-cryptography
+          # cavp_fetch.py uses stdlib for CAVP-sourced primitives (AES-GCM,
+          # SHA-256, HMAC). RSA-PSS vectors are generated fresh per run via
+          # python3-cryptography (e=65537 keygen + PSS signing) since CAVP's
+          # SigVerPSS_186-3.rsp ships every vector with a random e and the
+          # project's verifier hardcodes e=65537.
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{github.workspace}}/CEdev
+          key: ${{ runner.os }}-cedev-v15.0
+
+      - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL github.com/CE-Programming/toolchain/releases/download/v15.0/CEdev-Linux.tar.gz | tar xz
+
+      - name: Add CEdev to PATH
+        run: |
+          echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
+
+      - name: Download CEmu Rom
+        run: |
+          HTTP_CODE=$(curl -A "github/workflows" \
+            -H "Authorization: Bearer ${{ env.SECRETS_TOKEN }}" \
+            -w "%{http_code}" \
+            -o ${{ env.AUTOTESTER_ROM }} \
+            -SL ${{env.CEMU_ROM_PATH}} \
+            --retry 3 \
+            --retry-delay 2)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: ROM download failed with HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+          if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
+            echo "ERROR: ROM file not created"
+            exit 1
+          fi
+
+      - name: Checkout CEmu
+        uses: actions/checkout@v4
+        with:
+          repository: CE-Programming/CEmu
+          ref: master
+          path: ${{env.CEMU_PATH}}
+          persist-credentials: false
+
+      - name: Cache CEmu Build Outputs
+        id: cemu-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{env.CEMU_PATH}}/core/CEmu
+            ${{env.CEMU_PATH}}/tests/autotester/autotester
+          key: ${{ runner.os }}-cemu-master-v3
+
+      - name: Build CEmu
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        run: make -j4 -C ${{env.CEMU_PATH}}/core
+
+      - name: Build Autotester CLI
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
+
+      - name: Install Autotester CLI
+        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
+
+      - name: Verify saveVar Support In Autotester
+        run: |
+          # saveVar is required to pull CAVPOUT.8xv off the emulator after the run
+          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar" || {
+            echo "ERROR: Installed autotester does not include saveVar support."
+            exit 1
+          }
+
+      - name: Verify Autotester Setup
+        run: |
+          ls -lh ${{env.AUTOTESTER_ROM}}
+          xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
+
+      - name: Download CE Libraries Group (clibs.8xg)
+        run: |
+          mkdir -p "${{env.CAVP_TEST_DIR}}"
+          curl -fL \
+            -o "${{env.CAVP_TEST_DIR}}/clibs.8xg" \
+            https://github.com/CE-Programming/libraries/releases/download/v14.2/clibs.8xg
+          ls -lh "${{env.CAVP_TEST_DIR}}/clibs.8xg"
+
+      - name: Cache CAVP vector archives
+        # NIST CAVP zips are bandwidth-friendly to cache (a few MB each) and
+        # version-stable; refreshing them isn't valuable per-CI-run. The
+        # actual vectors are re-sampled randomly inside cavp_fetch.py.
+        uses: actions/cache@v5
+        with:
+          path: ${{env.CAVP_TEST_DIR}}/vectors/cache
+          key: ${{ runner.os }}-cavp-archives-v1
+          restore-keys: |
+            ${{ runner.os }}-cavp-archives-
+
+      - name: Fetch CAVP vectors and pack CAVPIN.8xv
+        # cavp_fetch.py: downloads NIST CAVP zips (if not cached), parses
+        # the .rsp files, randomly samples vectors per algorithm, merges in
+        # generated RSA-PSS/X25519 coverage plus RFC-pinned HKDF/X25519
+        # vectors, packs CAVPIN.8xv for the calc, and writes expected.json
+        # for the grader. All in one shot.
+        run: |
+          python3 "${{github.workspace}}/tests/common/scripts/cavp_fetch.py"
+          ls -lh "${{env.CAVP_TEST_DIR}}/vectors/CAVPIN.8xv" \
+                 "${{env.CAVP_TEST_DIR}}/vectors/expected.json"
+
+      - name: Run CAVP Test
+        id: run_cavp
+        run: |
+          test_dir="${{env.CAVP_TEST_DIR}}"
+          rm -f "$test_dir/CAVPOUT.8xv" "$test_dir/CAVPRSA.8xv" "$test_dir/autotest.log"
+          test_start=$(($(date +%s%N)/1000000))
+          make -C "$test_dir" clean
+          make -C "$test_dir"
+          set +e
+          make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          test_end=$(($(date +%s%N)/1000000))
+          test_duration=$((test_end - test_start))
+          echo "duration=$test_duration" >> "$GITHUB_OUTPUT"
+          echo "autotester_status=$status" >> "$GITHUB_OUTPUT"
+          # The VRAM hash is only a coarse completion check. saveVar + the
+          # parser below are authoritative for CAVP correctness, so continue
+          # whenever the emulator run reached the saveVar step.
+          exit 0
+
+      - name: Locate CAVPOUT AppVar
+        id: locate_appvar
+        if: always()
+        run: |
+          test_dir="${{env.CAVP_TEST_DIR}}"
+          appvar_out="$test_dir/CAVPOUT.8xv"
+          if [ ! -s "$appvar_out" ]; then
+            echo "found=" >> "$GITHUB_OUTPUT"
+            echo "## CAVP Primitive Validation" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **CAVPOUT.8xv was not produced.** The calc-side runner either crashed or saveVar didn't trigger." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Autotester log tail:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -50 "$test_dir/autotest.log" >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          echo "found=$appvar_out" >> "$GITHUB_OUTPUT"
+          ls -lh "$appvar_out"
+
+      - name: Grade Responses
+        id: grade
+        if: always() && steps.locate_appvar.outputs.found != ''
+        # parse_cavp_output_appvar.py reads CAVPOUT.8xv + vectors JSON from
+        # CAVP_TEST_DIR. Only output paths are flagged.
+        run: |
+          test_dir="${{env.CAVP_TEST_DIR}}"
+          summary_md="${{github.workspace}}/cavp-summary.md"
+          results_json="${{github.workspace}}/cavp-results.json"
+          set +e
+          python3 "${{github.workspace}}/tests/common/scripts/parse_cavp_output_appvar.py" \
+            --markdown-out "$summary_md" \
+            --json-out "$results_json"
+          grade_status=$?
+          set -e
+          echo "grade_status=$grade_status" >> "$GITHUB_OUTPUT"
+          cat "$summary_md" >> $GITHUB_STEP_SUMMARY
+          exit $grade_status
+
+      - name: Upload CAVP Raw Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-cavp-raw
+          path: |
+            ${{env.CAVP_TEST_DIR}}/CAVPOUT.8xv
+            ${{env.CAVP_TEST_DIR}}/vectors/CAVPIN.8xv
+            ${{env.CAVP_TEST_DIR}}/vectors/expected.json
+            ${{env.CAVP_TEST_DIR}}/autotest.log
+            ${{github.workspace}}/cavp-summary.md
+            ${{github.workspace}}/cavp-results.json
+          if-no-files-found: warn
+
+      - name: Remove CEmu Rom
+        if: always()
+        run: rm -f ${{env.AUTOTESTER_ROM}}

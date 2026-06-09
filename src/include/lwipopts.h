@@ -5,8 +5,7 @@
 
 #include "ti/getkey.h"
 #include "lwip/sntp_time.h"
-#define LWIP_DEBUG 0
-#define LWIP_NOASSERT 1
+/* Keep LWIP_DEBUG undefined so LWIP_DEBUGF call sites compile away. */
 
 #define LWIP_IPV4 1
 #define LWIP_IPV6 1
@@ -37,8 +36,6 @@
 #define LWIP_DHCP_GET_NTP_SRV 1
 #define SNTP_GET_SERVERS_FROM_DHCP 1
 
-#define SNTP_SET_SYSTEM_TIME(sec) lwip_sntp_set_time((uint32_t)(sec))
-
 #define LWIP_NUM_NETIF_CLIENT_DATA (LWIP_MDNS_RESPONDER)
 
 #define LWIP_HAVE_LOOPIF 1
@@ -59,7 +56,7 @@
 
 #ifdef LWIP_DEBUG
 #define LWIP_DBG_MIN_LEVEL 0
-#define ETH_DEBUG LWIP_DBG_ON
+#define ETH_DEBUG LWIP_DBG_OFF
 #define PPP_DEBUG LWIP_DBG_OFF
 #define MEM_DEBUG LWIP_DBG_OFF
 #define MEMP_DEBUG LWIP_DBG_OFF
@@ -93,13 +90,13 @@
 
 /* ---------- Memory options ---------- */
 // Disable using pools entirely, use user malloc
-#define MEM_USE_POOLS   0
+#define MEM_USE_POOLS 0
 #define MEM_CUSTOM_ALLOCATOR 1
 #define MEMP_MEM_MALLOC 1
-#if MEM_CUSTOM_ALLOCATOR==1
-#define MEM_CUSTOM_FREE                 mem_buffer_custom_free
-#define MEM_CUSTOM_MALLOC               mem_buffer_custom_malloc
-#define MEM_CUSTOM_CALLOC               mem_buffer_custom_calloc
+#if MEM_CUSTOM_ALLOCATOR == 1
+#define MEM_CUSTOM_FREE mem_buffer_custom_free
+#define MEM_CUSTOM_MALLOC mem_buffer_custom_malloc
+#define MEM_CUSTOM_CALLOC mem_buffer_custom_calloc
 
 #endif
 
@@ -172,7 +169,7 @@ a lot of data that needs to be copied, this should be set high. */
 #define LWIP_MEMBUF_SHRINK_THRESHOLD 30
 #define LWIP_MEMBUF_SHRINK_HOLD 1
 #ifndef LWIP_MEM_PRESSURE_CLEAR_PCT
-#define LWIP_MEM_PRESSURE_CLEAR_PCT 70
+#define LWIP_MEM_PRESSURE_CLEAR_PCT 65
 #endif
 
 /** SYS_LIGHTWEIGHT_PROT
@@ -187,11 +184,8 @@ a lot of data that needs to be copied, this should be set high. */
 #define TCP_TTL 255
 
 #define LWIP_ALTCP (LWIP_TCP)
-// #define LWIP_HAVE_MBEDTLS (LWIP_TCP)
-#ifdef LWIP_HAVE_MBEDTLS
 #define LWIP_ALTCP_TLS (LWIP_TCP)
-#define LWIP_ALTCP_TLS_MBEDTLS (LWIP_TCP)
-#endif
+#define LWIP_ALTCP_TLS_MBEDTLS 0
 
 /* Controls if TCP should queue segments that arrive out of
    order. Define to 0 if your device is low on memory. */
@@ -323,5 +317,11 @@ a lot of data that needs to be copied, this should be set high. */
 /* miscellanous */
 #define HTTPD_SERVER_PORT 80
 #define LWIP_RAND rand
+
+/* ---------- SNTP options ---------- */
+/* Set the system time when SNTP receives a response */
+/* Use the wrapper function that applies timezone and DST offsets */
+extern void lwip_sntp_set_time(uint32_t seconds);
+#define SNTP_SET_SYSTEM_TIME(sec) lwip_sntp_set_time((uint32_t)(sec))
 
 #endif // LWIP_LWIPOPTS_H

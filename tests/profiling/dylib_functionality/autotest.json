@@ -1,0 +1,26 @@
+{
+  "description": "Install the generated lwIP dylib release and smoke-test libload calls",
+  "transfer_files": [
+    "bin/DYLBFUNC.8xp"
+  ],
+  "target": {
+    "name": "DYLBFUNC",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "dylib installer, runtime bootstrap, SHA-256, HMAC-SHA-256, and mem_malloc/mem_free succeeded",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000000000
+    }
+  }
+}

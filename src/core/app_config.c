@@ -5,27 +5,45 @@
 
 #include "lwip/app_config.h"
 
-typedef struct lwip_app_config_v1 {
-    uint16_t version;
-    uint16_t max_heap_bytes;
-    uint8_t flags;
-    uint8_t reserved;
-    uint8_t ip_addr[4];
-    uint8_t ip_gateway[4];
-    uint8_t ip_netmask[4];
-} lwip_app_config_v1_t;
-
 static lwip_app_config_t g_cfg;
 static bool g_cfg_loaded = false;
+
+static void lwip_app_config_normalize(lwip_app_config_t *cfg)
+{
+    /* Full-chain validation is not implemented yet. Keep the persisted
+     * control bit reserved, but force runtime policy to SPKI-pin mode. */
+    cfg->flags &= (uint8_t)~LWIP_CFG_FULL_CHAIN_VERIFY;
+
+    if (cfg->log_min_level < LWIP_LOG_LEVEL_INFO ||
+        cfg->log_min_level > LWIP_LOG_LEVEL_FATAL)
+    {
+        cfg->log_min_level = LWIP_CFG_LOG_LEVEL_DEF;
+        cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
+    }
+    if (cfg->log_enabled > 1u)
+    {
+        cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
+    }
+}
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->version = LWIP_CFG_VERSION;
-    cfg->max_heap_bytes = 32u * 1024u;
-    cfg->flags = LWIP_CFG_ENABLE_TLS | LWIP_CFG_DHCP;
+    cfg->lwip_mem_cap = LWIP_CFG_MEM_CAP_DEF;
+    /* Default flags: DHCP + DNS on, SPKI-pin chain mode
+     * (FULL_CHAIN_VERIFY clear). CertificateVerify signature checking
+     * always runs; it is not user-toggleable. Apps that need strict
+     * chain validation can use FULL_CHAIN_VERIFY once that path is
+     * implemented. */
+    cfg->flags = LWIP_CFG_DHCP | LWIP_CFG_DNS;
+    cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
     cfg->tz_offset_minutes = 0;
     cfg->dst_enabled = 0;
+    cfg->log_min_level = LWIP_CFG_LOG_LEVEL_DEF;
+    cfg->log_size_bytes = 4096u;
+    strncpy(cfg->hostname, "ti84plusce", LWIP_CFG_HOSTNAME_MAX - 1);
+    cfg->hostname[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
 }
 
 bool lwip_app_config_load(lwip_app_config_t *cfg)
@@ -38,7 +56,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
         return false;
     }
     uint16_t size = *((uint16_t *)var);
-    if (size < sizeof(lwip_app_config_v1_t))
+    if (size < sizeof(uint16_t))
     {
         lwip_app_config_defaults(cfg);
         return false;
@@ -48,17 +66,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
     if (stored->version == LWIP_CFG_VERSION && size >= sizeof(*cfg))
     {
         memcpy(cfg, stored, sizeof(*cfg));
-        return true;
-    }
-    if (stored->version == 1u && size >= sizeof(lwip_app_config_v1_t))
-    {
-        const lwip_app_config_v1_t *stored_v1 = (const lwip_app_config_v1_t *)data;
-        lwip_app_config_defaults(cfg);
-        cfg->max_heap_bytes = stored_v1->max_heap_bytes;
-        cfg->flags = stored_v1->flags;
-        memcpy(cfg->ip_addr, stored_v1->ip_addr, sizeof(stored_v1->ip_addr));
-        memcpy(cfg->ip_gateway, stored_v1->ip_gateway, sizeof(stored_v1->ip_gateway));
-        memcpy(cfg->ip_netmask, stored_v1->ip_netmask, sizeof(stored_v1->ip_netmask));
+        lwip_app_config_normalize(cfg);
         return true;
     }
     lwip_app_config_defaults(cfg);

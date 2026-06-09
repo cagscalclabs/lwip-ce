@@ -1,0 +1,33 @@
+/**
+ * @file bytes.h
+ * @author Anthony Cagliano
+ * @brief Secure buffer compare and secure erasure functions.
+ * @license: GNU GPL v3.0
+ */
+
+#ifndef tls_bytes_h
+#define tls_bytes_h
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+
+/***********************************************************************
+ * @brief Secure comparison of two buffers.
+ * @param buf1      Pointer to first buffer to compare.
+ * @param buf2      Pointer to second buffer to compare.
+ * @param len       Number of bytes to compare.
+ */
+bool tls_bytes_compare(const void *buf1, const void *buf2, size_t len);
+
+/***********************************************************************
+ * @brief Secure memory zeroing that cannot be optimized away.
+ * @param ptr       Pointer to buffer to zero.
+ * @param len       Number of bytes to zero.
+ *
+ * Uses volatile to prevent compiler from optimizing away the zeroing,
+ * which is critical for clearing sensitive data like cryptographic keys.
+ */
+void tls_secure_memzero(void *ptr, size_t len);
+
+#endif

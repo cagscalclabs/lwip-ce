@@ -1,3 +1,12 @@
+/**
+ * @file passwords.h
+ * @author Anthony Cagliano
+ * @brief Provides PBKDF2 implementation.
+ *
+ * @license: GNU GPL v3.0
+ * @reference: RFC 8018
+ * @reference: RFC 6070
+ */
 
 #ifndef tls_passwords_h
 #define tls_passwords_h
@@ -13,8 +22,8 @@
  * @param rounds        HMAC rounds per hash output block.
  * @param algorithm     The HMAC algorithm to use.
  */
-bool tls_pbkdf2(const char* password, size_t passlen,
-                const uint8_t* salt, size_t saltlen,
+bool tls_pbkdf2(const char *password, size_t passlen,
+                const uint8_t *salt, size_t saltlen,
                 uint8_t *key, size_t keylen,
                 size_t rounds, uint8_t algorithm);
 

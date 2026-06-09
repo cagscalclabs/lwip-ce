@@ -1,10 +1,16 @@
-/// @file keyobject.h
-/// @author ACagliano
-/// @brief Module providing import and export of keyfiles.
+/**
+ * @file keyobject.h
+ * @author Anthony Cagliano
+ * @brief Provides API for importing PKCS, SEC1 keyfiles.
+ * @license: GNU GPL v3.0
+ */
 
 #ifndef tls_keyobject_h
 #define tls_keyobject_h
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "asn1.h"
 
 enum tls_key_type_flags
@@ -40,6 +46,8 @@ enum tls_objectids
 
 /// @brief Array of bytearrays describing <b>OBJECT IDENTIFIERS</b> supported by this library.
 extern uint8_t tls_objectid_bytes[][10];
+
+struct mem_buffer;
 
 #define TLS_PRIVKEY_RSA_FIELDS 8
 #define TLS_PRIVKEY_EC_FIELDS 3
@@ -140,6 +148,12 @@ struct tls_keyobject
     uint8_t data[];
 };
 
+/**
+ * @brief Sets the memory buffer used for keyobject allocations.
+ * @param buf Optional buffer for keyobject allocations (pass NULL to use mem_malloc/free).
+ */
+void tls_keyobject_set_buffer(struct mem_buffer *buf);
+
 /****************************************************************************************
  * @brief Parses a PKCS#1, SEC1, or PKCS#8 private key and returns a structure populated with key metadata.
  * @param pem_data      Pointer to data to decode.
@@ -175,6 +189,15 @@ struct tls_keyobject *tls_keyobject_import_public(const char *pem_data, size_t s
  * @note Data is passed by copy
  */
 struct tls_keyobject *tls_keyobject_import_certificate(const char *pem_data, size_t size);
+
+/****************************************************************************************
+ * @brief Checks X.509 CA constraints on a DER certificate.
+ * @param cert_der      Pointer to DER-encoded certificate.
+ * @param cert_len      Length of DER certificate.
+ * @returns @b true if BasicConstraints is present with cA=TRUE, and if KeyUsage is
+ * present, keyCertSign is set.
+ */
+bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len);
 
 /****************************************************************************************
  * @brief Erases a @b tls_keyobject, deallocates it, and then sets the pointer to @b NULL.

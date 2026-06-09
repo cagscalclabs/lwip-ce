@@ -1,41 +1,59 @@
 name: Unit Tests
 
+# Functional correctness for lwIP-CE unit modules. Timing analysis lives
+# in timing.yml; CAVP primitive validation lives in cavp.yml. Splitting
+# these out keeps the test/profiling/validation concerns independently
+# observable as separate workflow badges.
+
 on:
   push:
     branches: ['tls']
-    paths: ['src/tls/**', 'tests/**']
+    paths:
+      - '.github/workflows/tests.yml'
+      - 'src/**'
+      - 'tests/unit/**'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
   LWIP_TESTS: ${{github.workspace}}/tests
+  LWIP_UNIT_TESTS: ${{github.workspace}}/tests/unit
   CEMU_PATH: ${{github.workspace}}/CEmu
-  HOST_DOMAIN: "https://cagstech.com"
+  CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
+  SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
 jobs:
-  test:
+  unit_tests:
     runs-on: ubuntu-latest
     environment: test
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'cpp' ]
-        
+
     steps:
       - name: Checkout TLS branch
         uses: actions/checkout@v4
         with:
           ref: 'tls'
+          submodules: true
 
       - name: Install dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y make tar wget cmake ninja-build qtbase5-dev qtdeclarative5-dev libqt5svg5-dev
+          sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{github.workspace}}/CEdev
+          key: ${{ runner.os }}-cedev-v15.0
 
       - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
         run: |
-          curl -sL github.com/CE-Programming/toolchain/releases/download/v14.0/CEdev-Linux.tar.gz | tar xz
-          
+          curl -sL github.com/CE-Programming/toolchain/releases/download/v15.0/CEdev-Linux.tar.gz | tar xz
+
       - name: Add CEdev to PATH
         run: |
           echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
@@ -43,96 +61,202 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          curl -A "github/workflows" -H "Authorization: Bearer ${{ secrets.CEMU_ACCESS }}" -sL ${{ secrets.CEMU_PATH }} -o ${{ env.AUTOTESTER_ROM }}
+          HTTP_CODE=$(curl -A "github/workflows" \
+            -H "Authorization: Bearer ${{ env.SECRETS_TOKEN }}" \
+            -w "%{http_code}" \
+            -o ${{ env.AUTOTESTER_ROM }} \
+            -SL ${{env.CEMU_ROM_PATH}} \
+            --retry 3 \
+            --retry-delay 2)
+
+          echo "HTTP response code: ${HTTP_CODE}"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Download failed with HTTP code ${HTTP_CODE}"
+            ls -lh ${{ env.AUTOTESTER_ROM }} || echo "No file created"
+            exit 1
+          fi
+
+          if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
+            echo "ERROR: ROM file not created"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s "${{ env.AUTOTESTER_ROM }}" 2>/dev/null || stat -f%z "${{ env.AUTOTESTER_ROM }}")
+          echo "Downloaded ROM size: ${FILE_SIZE} bytes"
 
       - name: Checkout CEmu
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: CE-Programming/CEmu
           ref: master
           path: ${{env.CEMU_PATH}}
           persist-credentials: false
 
+      - name: Cache CEmu Build Outputs
+        id: cemu-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{env.CEMU_PATH}}/core/CEmu
+            ${{env.CEMU_PATH}}/tests/autotester/autotester
+          key: ${{ runner.os }}-cemu-master-v3
+
       - name: Build CEmu
-        working-directory: ${{env.CEMU_PATH}}/gui/qt
-        run: |
-          # Configure CEmu using Linux preset
-          cmake -G Ninja --preset Linux-x64 -DDEPS_RELEASE_ONLY=ON
-          # Build CEmu
-          cmake --build --preset Linux-x64-Release
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
-        working-directory: ${{env.CEMU_PATH}}/tests/autotester
-        run: |
-          cmake -B build -G Ninja
-          cmake --build build
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
 
       - name: Install Autotester CLI
-        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/build/autotester ${{env.CEDEV_BIN}}/cemu-autotester
+        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
 
-      - name: Run Unit Tests
+      - name: Verify saveVar Support In Autotester
         run: |
-          find ${{env.LWIP_TESTS}} -name autotest.json -print0 | {
-            # Initialize variables
-            total_tests=0
-            total_passed=0
-            total_failed=0
-            start_time=$(($(date +%s%N)/1000000))
-
-            while read -rd '' test; do
-              status=0
-              test_start=$(($(date +%s%N)/1000000))
-              test_dir=$(dirname "$test")
-              make -C "$test_dir" clean
-              make -C "$test_dir" all test || ((status=$?))
-              test_done=$(($(date +%s%N)/1000000))
-              test_duration=$((test_done - test_start))
-              (( total_tests += 1 ))
-              if [ $status -eq 0 ]; then
-                (( total_passed += 1 ))
-                test_status="passed"
-              else
-                (( total_failed += 1 ))
-                test_status="failed"
-              fi
-              echo -e "{\"name\":\"$(basename $test_dir)\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" >> "$test_dir/result.json"
-            done
-            end_time=$(($(date +%s%N)/1000000))
-            echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" >> ${{github.workspace}}/summary.json
-            cmake -E echo "$total_tests modules tested, $total_passed passed, $total_failed failed!"
-            exit $total_failed
+          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar" || {
+            echo "ERROR: Installed autotester does not include saveVar support."
+            exit 1
           }
 
-      - name: Generate JSON Results
+      - name: Verify Autotester Setup
+        run: |
+          echo "Testing autotester with xvfb..."
+          echo "ROM path: ${{env.AUTOTESTER_ROM}}"
+          ls -lh ${{env.AUTOTESTER_ROM}}
+          xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
+
+      - name: Download truststore AppVar
+        run: |
+          mkdir -p ${{env.LWIP_UNIT_TESTS}}/tls_truststore
+          curl -fL \
+            -o ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPSPKI.8xv \
+            https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPSPKI.8xv
+          ls -lh ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPSPKI.8xv
+
+      - name: Run Core Unit Tests
+        run: |
+          total_tests=0
+          total_passed=0
+          total_failed=0
+          start_time=$(($(date +%s%N)/1000000))
+
+          while IFS= read -r -d '' test; do
+            status=0
+            test_dir=$(dirname "$test")
+            test_start=$(($(date +%s%N)/1000000))
+            make -C "$test_dir" clean
+            make -C "$test_dir" || ((status=$?))
+            if [ $status -eq 0 ]; then
+              make -C "$test_dir" test || ((status=$?))
+            fi
+            test_done=$(($(date +%s%N)/1000000))
+            test_duration=$((test_done - test_start))
+            (( total_tests += 1 ))
+            if [ $status -eq 0 ]; then
+              (( total_passed += 1 ))
+              test_status="passed"
+            else
+              (( total_failed += 1 ))
+              test_status="failed"
+            fi
+            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
+          done < <(find ${{env.LWIP_UNIT_TESTS}} -name autotest.json -print0)
+
+          end_time=$(($(date +%s%N)/1000000))
+          echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
+          cmake -E echo "$total_tests core modules tested, $total_passed passed, $total_failed failed!"
+          exit $total_failed
+
+      - name: Generate Core JSON Results
         if: always()
         run: |
-          echo -e "{\"results\":{" > ${{github.workspace}}/results.json
-          cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results.json
-          echo -e ",\"tests\":[" >> ${{github.workspace}}/results.json
-          find ${{env.LWIP_TESTS}} -name result.json -print0 | {
+          echo -e "{\"results\":{" > ${{github.workspace}}/results-core.json
+          cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-core.json
+          echo -e ",\"tests\":[" >> ${{github.workspace}}/results-core.json
+          find ${{env.LWIP_UNIT_TESTS}} -name result.json -print0 | {
             tmp_json=""
             while read -rd '' test; do
               test_dir=$(dirname "$test")
-              tmp_json="$tmp_json,$(cat $test_dir/result.json)" 
+              tmp_json="$tmp_json,$(cat $test_dir/result.json)"
               rm $test_dir/result.json
             done
             tmp_json="${tmp_json:1}"
-            echo $tmp_json >> ${{github.workspace}}/results.json
+            echo $tmp_json >> ${{github.workspace}}/results-core.json
           }
-          echo -e "]" >> ${{github.workspace}}/results.json
-          echo -e "}}" >> ${{github.workspace}}/results.json
+          echo -e "]" >> ${{github.workspace}}/results-core.json
+          echo -e "}}" >> ${{github.workspace}}/results-core.json
           rm ${{github.workspace}}/summary.json
 
-      - name: Publish CTRF Detailed Test Summary Results
-        run: npx github-actions-ctrf tests ${{github.workspace}}/results.json
+      - name: Publish Core Test Summary
         if: always()
+        run: |
+          echo "## Core Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload Results Logfile
+          total=$(jq -r '.results.summary.tests' ${{github.workspace}}/results-core.json)
+          passed=$(jq -r '.results.summary.passed' ${{github.workspace}}/results-core.json)
+          failed=$(jq -r '.results.summary.failed' ${{github.workspace}}/results-core.json)
+
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          jq -c '.results.tests[]' ${{github.workspace}}/results-core.json | while read test_obj; do
+            test_name=$(echo "$test_obj" | jq -r '.name')
+            test_dir=$(echo "$test_obj" | jq -r '.dir')
+            test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
+
+            status=$(echo "$test_obj" | jq -r '.status')
+            module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
+            module_desc=${module_desc:-"(no description)"}
+            module_desc=${module_desc//$'\n'/ }
+            module_desc=${module_desc//|/\\|}
+
+            if [ "$status" = "passed" ]; then
+              status_icon="✅ Passed"
+            else
+              status_icon="❌ Failed"
+            fi
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### $test_name" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Module | Tests | Status | Description |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| $test_name |  | $status_icon | $module_desc |" >> $GITHUB_STEP_SUMMARY
+
+            jq -r '.sequence // [] | map(select(startswith("hashWait")))[]' "$test_dir/autotest.json" 2>/dev/null | while read -r seq_entry; do
+              hash_id="${seq_entry#hashWait|}"
+              hash_desc=$(jq -r ".hashes[\"$hash_id\"].description // \"(no description)\"" "$test_dir/autotest.json" 2>/dev/null)
+              hash_desc=${hash_desc//$'\n'/ }
+              hash_desc=${hash_desc//|/\\|}
+              if [ "$status" = "passed" ]; then
+                hash_status="✅ Passed"
+              else
+                hash_status="❌ Failed"
+              fi
+              echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
+            done
+            if [ "$test_count" -eq 0 ]; then
+              echo "|  | (none) | $status_icon | (no hash tests) |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Upload Core Results Logfile
         uses: actions/upload-artifact@v4
         with:
-          name: results.json
-          path: ${{github.workspace}}/results.json
-          
+          name: results-core.json
+          path: ${{github.workspace}}/results-core.json
+
       - name: Remove CEmu Rom
         if: always()
-        run: rm ${{env.AUTOTESTER_ROM}}
+        run: rm -f ${{env.AUTOTESTER_ROM}}

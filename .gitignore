@@ -1,5 +1,14 @@
 # random osx filesystem nonsense
 .dccache
+**/.DS_Store
+
+# AI agents
+.continue/agents/new-config.yaml
+.claude
+
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
 
 # VS Code and XCode workspace files/directories
 .vscode
@@ -9,11 +18,65 @@
 # build and object directories
 obj
 bin
+*.8xv
+
+# generated dylib installer artifacts (produced by `make dylib`)
+release/*INST.8xp
+release/*.8ek
 
 # httpd server example filesystem includes
 *makefsdata.c.*
 *.fsdata
 .venv
 
-.claude
-lwIPSPKI.8xv
+# test fixtures: keep temporary PEM material out of git
+tests/**/*.pem
+
+# LaTeX build outputs
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.listing
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# upstream/vendor documentation scratch
+doc/
+
+# generated whitepaper outputs
+docs/_build/
+docs/_doxygen/
+docs/.python/
+docs/_static/whitepaper.pdf
+docs/whitepaper/_minted-whitepaper/
+docs/whitepaper/generated/
+docs/whitepaper/whitepaper.pdf
+docs/whitepaper/datasets/**/.DS_Store
+
+# tools/ holds build-critical tooling (functable.py, public_api_manifest.csv,
+# lwip_init_runtime.asm, header_dump.py, etc.) and IS tracked. Only genuine
+# scratch/caches under it are ignored (see tools/.docstring_cache below;
+# __pycache__/ is covered globally above).
+
+# local transcription scratch (whisperx venv, audio downloads, outputs)
+.transcripts/
+
+# Profiling test scratch. Shared scripts live in tests/common/scripts/.
+tests/profiling/tls_*/vectors/cache/
+tests/profiling/tls_*/captures/
+tests/profiling/tls_*/reports/
+
+.env
+.venv
+.docs-python/
+.venv-docs/
+venv
+
+tools/.docstring_cache
+tmp/
