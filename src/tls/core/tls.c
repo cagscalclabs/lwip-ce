@@ -7,6 +7,19 @@
 #include "../includes/random.h"
 #include "../../drivers/mem.h"
 
+/* Temporary tls_init step tracing — prints a tag to the home screen and
+ * waits for a key, so on hardware the last tag before a crash localizes
+ * which init step faults. Set TLS_INIT_TRACE 0 to disable. */
+#define TLS_INIT_TRACE 0
+#if TLS_INIT_TRACE
+#include <ti/screen.h>
+#include <ti/getkey.h>
+#define TLS_INIT_TRACE_STEP(msg) do { os_ClrHome(); os_PutStrFull("tls_init: " msg); \
+                                      os_PutStrFull(" [key]"); os_GetKey(); } while (0)
+#else
+#define TLS_INIT_TRACE_STEP(msg) ((void)0)
+#endif
+
 /**
  * TLS Memory Module
  *
@@ -62,12 +75,14 @@ static bool tls_fileio_buffer_ensure(void)
 
 bool tls_init(void)
 {
+    TLS_INIT_TRACE_STEP("A enter");
     /* Check if already initialized */
     if (tls_ctx.initialized)
     {
         return true;
     }
 
+    TLS_INIT_TRACE_STEP("B rsa scratch");
     /* Allocate RSA scratch buffer via unified allocator backend */
     tls_ctx.rsa_scratch = (uint8_t *)mem_buffer_custom_malloc(RSA_SCRATCH_SIZE);
     if (tls_ctx.rsa_scratch == NULL)
@@ -76,6 +91,7 @@ bool tls_init(void)
         return false;
     }
 
+    TLS_INIT_TRACE_STEP("C ecc scratch");
     /* Allocate ECC scratch buffer (reserved for future use) via unified allocator */
     tls_ctx.ecc_scratch = (uint8_t *)mem_buffer_custom_malloc(ECC_SCRATCH_SIZE);
     if (tls_ctx.ecc_scratch == NULL)
@@ -85,7 +101,20 @@ bool tls_init(void)
     }
 
     tls_ctx.initialized = true;
+    TLS_INIT_TRACE_STEP("D rng start");
     tls_rng_start();
+
+    /* Load and verify the SPKI trust store now that the RSA scratch exists
+     * (tls_truststore_init verifies the store's own RSA-PSS signature, so
+     * it must run after the scratch allocation above). A missing or invalid
+     * store is NOT a bring-up failure: crypto context is up either way, and
+     * certificate verification fail-closes later (tls_truststore_lookup
+     * returns false unless the store validated). We record the status so
+     * the handshake can surface it. */
+    TLS_INIT_TRACE_STEP("E truststore");
+    tls_ctx.truststore.status = tls_truststore_init();
+
+    TLS_INIT_TRACE_STEP("F done");
     return true;
 }
 

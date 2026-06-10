@@ -45,8 +45,22 @@
 #include "tls/includes/tls.h"
 
 #include <usbdrvce.h>
-#include <fileioc.h>
 #include <string.h>
+
+/* Temporary teardown tracing — prints each phase tag to the home screen
+ * and waits for a keypress, so on real hardware the last tag visible when
+ * it crashes localizes the failing teardown phase. Set LWIP_STOP_TRACE 0
+ * to disable. (dbgout-based tracing was CEmu-only and invisible on a
+ * physical calculator.) */
+#define LWIP_STOP_TRACE 0
+#if LWIP_STOP_TRACE
+#include <ti/screen.h>
+#include <ti/getkey.h>
+#define STOP_TRACE(msg) do { os_ClrHome(); os_PutStrFull("stop: " msg); \
+                             os_PutStrFull(" [key]"); os_GetKey(); } while (0)
+#else
+#define STOP_TRACE(msg) ((void)0)
+#endif
 
 /* ============================================================
  * Init / poll
@@ -425,6 +439,8 @@ static void lwip_stack_cleanup(void)
         return;
     }
 
+    STOP_TRACE("P0 enter");
+
     /* Reject new API work and make re-entry a no-op while this blocking
      * teardown pumps USB/timeouts to finish orderly TCP/TLS closes. */
     g_lwip_started = false;
@@ -432,10 +448,13 @@ static void lwip_stack_cleanup(void)
     g_requested_service_flags = 0;
     services_list_cancel_all(LWIP_ERR_CLOSED);
 
+    STOP_TRACE("P1 closeTCP+FIN");
     conn_registry_close_tcp_like();
     lwip_teardown_begin_tcp_close();
+    STOP_TRACE("P2 awaitTCP");
     if (!lwip_stop_wait_for_tcp(LWIP_STOP_TCP_CLOSE_TIMEOUT_MS))
     {
+        STOP_TRACE("P2b abortTCP");
         conn_registry_abort_tcp_like();
         lwip_teardown_abort_tcp_pcbs();
     }
@@ -459,10 +478,12 @@ static void lwip_stack_cleanup(void)
 #endif
     }
 
+    STOP_TRACE("P3 rmNonTCP");
     lwip_stop_pump_for(LWIP_STOP_SERVICE_SETTLE_MS);
     conn_registry_close_udp();
     lwip_teardown_remove_non_tcp_pcbs();
     conn_registry_mark_closed(LWIP_ERR_CLOSED);
+    STOP_TRACE("P4 dispatchStop");
     lwip_dispatch_stop();
 
     /* At this point the wire-side close is done: FINs have been sent and
@@ -470,18 +491,25 @@ static void lwip_stack_cleanup(void)
      * stack holds no live PCBs. eth_prepare_shutdown marks the driver
      * shutting-down so any callback that still fires during USB
      * cancellation below bails out instead of touching stack state. */
+    STOP_TRACE("P5 ethPrepare");
     eth_prepare_shutdown();
 
+    STOP_TRACE("P6 netifsDown");
     NETIF_FOREACH(n)
     {
         netif_set_link_down(n);
         netif_set_down(n);
     }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    ti_CloseAll();
-#pragma GCC diagnostic pop
+    /* NOTE: we deliberately do NOT call ti_CloseAll() here. That
+     * deprecated bcall closes EVERY open fileioc handle system-wide —
+     * including handles owned by the consumer program or the OS, since
+     * the resident lwIP app is called from a running program rather than
+     * being the active program. Closing handles we don't own corrupted
+     * the OS file state and crashed on exit. The app's own fileioc use
+     * (logging.c, app_config.c) already pairs every ti_Open with a
+     * ti_Close in the same scope and keeps no long-lived handles, so
+     * there is nothing for the teardown to mop up. */
 
     /* Quiesce USB FIRST, before freeing any resource a transfer callback
      * could reference. usb_Cleanup cancels every in-flight transfer
@@ -491,6 +519,7 @@ static void lwip_stack_cleanup(void)
      * stall endpoints (usb_SetEndpointHalt) — that would leave the
      * controller in a halted condition the OS must clear. After this
      * returns, no driver callback can ever fire again. */
+    STOP_TRACE("P8 usbCleanup");
     usb_fn.cleanup();
 
     /* USB is now silent, so the teardown below is race-free: nothing can
@@ -499,9 +528,12 @@ static void lwip_stack_cleanup(void)
      *   2. remaining membuffers (TLS file-IO buffer, lwIP pools)
      * Each owner frees-and-NULLs its buffer so a stray future reference
      * sees NULL rather than a dangling pointer. */
+    STOP_TRACE("P9 ethFinish");
     eth_finish_shutdown();
+    STOP_TRACE("P10 memRelease");
     lwip_membuffers_release();
 
+    STOP_TRACE("P11 complete");
     g_lwip_stopping = false;
 }
 
@@ -1078,6 +1110,18 @@ lwip_error_t lwip_conn_create(struct lwip_conn *conn,
         if (!conn->pcb.altcp) goto fail_mem;
         break;
     case LWIP_PROTO_ALTCP_TLS:
+        /* Bring the TLS stack up lazily on the first TLS connection: alloc
+         * the RSA/ECC scratch, start the RNG, and load the SPKI trust
+         * store. tls_init() gates on tls_ctx.initialized, so this is
+         * re-call-safe and a no-op for subsequent TLS connections. Without
+         * this the handshake dereferenced NULL scratch / an unstarted RNG
+         * and crashed before sending ClientHello. */
+        if (!tls_ctx.initialized && !tls_init())
+        {
+            conn->status = LWIP_STATUS_ERROR;
+            conn->last_error = LWIP_ERR_MEM;
+            return LWIP_ERR_MEM;
+        }
         /* TLS config is built in lwip_conn_connect once we know the host
          * (needed for SNI). The pcb is allocated then too. */
         conn->tls_conf = NULL;

@@ -6,6 +6,18 @@
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
 
+/* Temporary sub-step tracing for tls_truststore_init (key-gated). Set
+ * TS_TRACE_ON 0 to disable. */
+#define TS_TRACE_ON 0
+#if TS_TRACE_ON
+#include <ti/screen.h>
+#include <ti/getkey.h>
+#define TS_TRACE(msg) do { os_ClrHome(); os_PutStrFull("tstore: " msg); \
+                           os_PutStrFull(" [key]"); os_GetKey(); } while (0)
+#else
+#define TS_TRACE(msg) ((void)0)
+#endif
+
 /*
  * Truststore appvar format:
  * +---------------------+
@@ -67,6 +79,13 @@ tls_truststore_status_t tls_truststore_init(void)
     uint8_t tstore_hash[TLS_SHA256_DIGEST_LEN];
     struct tls_hash_context hash_ctx;
 
+    /* Clear the session-valid flag up front so it is only ever true after
+     * a fresh successful validation below. Without this, a stale `true`
+     * from a previous lwip session could survive a stop/restart and let
+     * certificate lookups trust an unvalidated store (fail-OPEN). */
+    truststore_valid_for_session = false;
+
+    TS_TRACE("E0 enter");
     // If hash init fails, error out early
     if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
         return TLS_STORE_HASH_FAIL;
@@ -76,6 +95,7 @@ tls_truststore_status_t tls_truststore_init(void)
     truststore_var = os_GetAppVarData(truststore_name, NULL);
     if (!truststore_var)
         return TLS_STORE_NOT_FOUND;
+    TS_TRACE("E0b appvar found");
 
     // Get length of store, spki db len, and sig ptr
     uint16_t truststore_size = *((uint16_t *)truststore_var);
@@ -88,17 +108,23 @@ tls_truststore_status_t tls_truststore_init(void)
     uint8_t *spki_db_start = spki_header + TLS_SPKI_HEADER_LEN;
     uint16_t spki_store_len = truststore_size - TLS_SPKI_HEADER_LEN;
 
+    TS_TRACE("E1 hash hdr");
     // Hash header fields (version + timestamp + entry_count) and entries
     tls_hash_update(&hash_ctx, &header->version,
                     sizeof(header->version) + sizeof(header->created_timestamp) + sizeof(header->entry_count));
+    TS_TRACE("E2 hash db");
     tls_hash_update(&hash_ctx, spki_db_start, spki_store_len);
+    TS_TRACE("E3 digest");
     tls_hash_digest(&hash_ctx, tstore_hash);
 
+    TS_TRACE("E4 rsa decrypt");
     // Decrypt the SPKI store signature
     if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
         return TLS_STORE_SIG_INVALID;
+    TS_TRACE("E5 pss verify");
     // Verify the signature
     bool verified = tls_rsa_pss_verify(d_sig, sizeof(trust_store_pubkey), tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
+    TS_TRACE("E6 verify done");
     if (verified)
         truststore_valid_for_session = true;
     return verified ? TLS_STORE_OK : TLS_STORE_SIG_INVALID;

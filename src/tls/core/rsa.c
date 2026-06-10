@@ -7,6 +7,17 @@
 #include "../includes/rsa.h"
 #include "../includes/crypto_guard.h"
 
+/* Temporary RSA decrypt tracing (key-gated). Set RSA_TRACE_ON 0 to disable. */
+#define RSA_TRACE_ON 1
+#if RSA_TRACE_ON
+#include <ti/screen.h>
+#include <ti/getkey.h>
+#define RSA_TRACE(msg) do { os_ClrHome(); os_PutStrFull(msg); \
+                            os_PutStrFull(" [key]"); os_GetKey(); } while (0)
+#else
+#define RSA_TRACE(msg) ((void)0)
+#endif
+
 #define ENCODE_START 0
 #define ENCODE_SALT (1 + ENCODE_START)
 
@@ -260,13 +271,18 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
         (!(pubkey[keylen - 1] & 1)))
         return false;
 
+    RSA_TRACE("decsig: pre-guard");
     tls_crypto_guard_enable();
     bool ok = false;
 
     memcpy(outbuf, signature, keylen);
+    tls_crypto_guard_disable();
+    RSA_TRACE("decsig: pre-powmod");
+    tls_crypto_guard_enable();
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
     ok = true;
     tls_crypto_guard_disable();
+    RSA_TRACE("decsig: post-powmod");
     return ok;
 }
 

@@ -93,6 +93,12 @@ jobs:
           LWIP_SKIP_DEP_CHECKOUT: '1'
           APP_TOOLS_DIR: ${{ github.workspace }}/submodules/app_tools
           TOOLCHAIN_DIR: ${{ env.TOOLCHAIN_SRC }}
+          # The workflow-level TOOLCHAIN_SRC points at the toolchain repo ROOT
+          # (where tools/fasmg, tools/convbin live). build-release-dylib.sh,
+          # however, expects TOOLCHAIN_SRC to be the src/ subdir (it checks for
+          # common.mk, include/, usbdrvce/). Override it here to the src dir so
+          # the inherited workflow-level value does not break the script.
+          TOOLCHAIN_SRC: ${{ env.TOOLCHAIN_SRC }}/src
           CEDEV: ${{ env.CEDEV }}
           FASMG: fasmg
           CONVBIN: ${{ env.CEDEV_BIN }}/convbin

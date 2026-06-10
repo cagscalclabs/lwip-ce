@@ -159,17 +159,32 @@ SECTIONS
             _sprng_entropy_pool = .;
             . = . + 520;   /* total RNG scratch: see virtuals.inc */
         }
+        .powmod.reloc
+        {
+            _powmod_reloc_run_start = .;
+            KEEP(*(.powmod.reloc))
+            KEEP(*(.powmod.reloc.*))
+            _powmod_reloc_run_end = .;
+        }
     }
 
     /* Back-compat aliases for the X25519 copy loop in x25519.s. */
     _x25519_reloc_load_start = LOADADDR(.x25519.reloc);
     _x25519_reloc_len        = SIZEOF(.x25519.reloc);
 
-    /* Guard: neither consumer may outgrow the shared window. */
+    /* Copy-loop symbols for the powmod trampoline in bigint.s (RSA modexp
+     * relocated to writable RAM because it self-modifies). Shares the
+     * 0xE30800 overlay VMA with X25519/RNG — sequential, never co-resident. */
+    _powmod_reloc_load_start = LOADADDR(.powmod.reloc);
+    _powmod_reloc_len        = SIZEOF(.powmod.reloc);
+
+    /* Guard: no consumer may outgrow the shared window. */
     ASSERT(SIZEOF(.x25519.reloc) <= 0x800,
            "Error: .x25519.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.saferam.rng) <= 0x800,
            "Error: .saferam.rng exceeds safe-RAM overlay window")
+    ASSERT(SIZEOF(.powmod.reloc) <= 0x800,
+           "Error: .powmod.reloc exceeds safe-RAM overlay window")
 
         /* Debug info (kept out of loadable memory) */
     .debug_info 0 : { KEEP(*(.debug_info .debug_info.*)) }

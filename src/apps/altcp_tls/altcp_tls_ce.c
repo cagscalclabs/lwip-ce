@@ -28,8 +28,12 @@
 #include <fileioc.h>
 
 /* Temporary debug display for on-calc TLS handshake tracing.
- * Remove once handshake is working. */
+ * Remove once handshake is working. Set TLS_DBG_STEP 1 to pause (wait for
+ * a key) after each status line, so on a physical calculator the last
+ * message visible before a crash localizes the failing handshake step. */
 #include <ti/screen.h>
+#include <ti/getkey.h>
+#define TLS_DBG_STEP 1
 #define TLS_DBG_Y 90
 #define TLS_DBG_VRAM ((uint16_t *)0xD40000)
 static void tls_dbg_status(const char *msg)
@@ -42,6 +46,10 @@ static void tls_dbg_status(const char *msg)
             *ptr++ = 0xFFFF;
     }
     os_FontDrawText(msg, 10, TLS_DBG_Y);
+#if TLS_DBG_STEP
+    os_FontDrawText(" [key]", 10, TLS_DBG_Y + 14);
+    os_GetKey();
+#endif
 }
 
 /* Debug flag for TLS CE layer */
@@ -1061,6 +1069,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 {
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
     {
+        tls_dbg_status("RX: server data in HS");
         /* Handle handshake phase */
         struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
 
