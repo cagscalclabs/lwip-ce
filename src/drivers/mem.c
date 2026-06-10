@@ -1683,6 +1683,24 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
     return true;
 }
 
+void mem_buffer_lwip_release_pools(void)
+{
+    /* Destroy every registered lwIP pool and clear the registry. Called
+     * during stack teardown, after USB is quiesced, so nothing can be
+     * allocating from these pools as they go away. Each slot is NULLed as
+     * it is destroyed. */
+    for (size_t i = 0; i < g_lwip_pool_count; i++)
+    {
+        if (g_lwip_pools[i])
+        {
+            mem_buffer_destroy(g_lwip_pools[i]);
+            g_lwip_pools[i] = NULL;
+        }
+    }
+    g_lwip_pool_count = 0;
+    mem_effective_pressure_update();
+}
+
 bool mem_buffer_is_lwip_pool(const struct mem_buffer *mb)
 {
     if (!mb)

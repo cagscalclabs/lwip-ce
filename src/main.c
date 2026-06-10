@@ -2818,6 +2818,8 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
         return true;
     }
 
+    eth_reset_shutdown();
+
     if (lwip_init() != ERR_OK)
     {
         os_FontDrawText("lwip/mem init failed", 2, 2);

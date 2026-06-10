@@ -208,6 +208,9 @@ void eth_prepare_shutdown(void);
  */
 void eth_finish_shutdown(void);
 
+/** @brief Leave intentional shutdown mode before a new usb_Init attempt. */
+void eth_reset_shutdown(void);
+
 
 struct usb_configurator {
     // device interfacing

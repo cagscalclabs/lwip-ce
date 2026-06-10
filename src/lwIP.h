@@ -184,6 +184,7 @@ struct lwip_conn
     const char          *pending_host;       /**< borrowed pointer; caller must keep alive */
     uint32_t             services_deadline;  /**< sys_now() in ms; 0 = unused */
     struct lwip_conn    *services_next;      /**< intrusive list of waiters */
+    struct lwip_conn    *registry_next;      /**< intrusive list of live handles */
 };
 
 /** Boot the network stack. Loads the persisted lwip_app_config appvar,

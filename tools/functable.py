@@ -184,6 +184,13 @@ EXCLUDE_SYMBOLS = {
     "_tls_fileio_alloc",
     "_tls_fileio_free",
 
+    # Ethernet shutdown helpers — cross-TU between the resident app and
+    # driver, but not app-facing libload API.
+    "_eth_halt_all_endpoints",
+    "_eth_prepare_shutdown",
+    "_eth_finish_shutdown",
+    "_eth_reset_shutdown",
+
     # Session-resumption helpers — resumption is automatic and host-keyed,
     # apps shouldn't manage sessions manually.
     "_altcp_tls_get_session",

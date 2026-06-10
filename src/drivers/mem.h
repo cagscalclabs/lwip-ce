@@ -311,6 +311,13 @@ bool mem_buffer_set_lwip_heap(struct mem_buffer *mb);
 bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
                                 size_t pool_count);
 /**
+ * @brief Destroy all registered lwIP pools and clear the registry.
+ * @note Teardown counterpart to mem_buffer_lwip_init_pools. Call only
+ *       after USB/transport is quiesced so nothing is mid-allocation.
+ *       Each pool is destroyed and its slot NULLed.
+ */
+void mem_buffer_lwip_release_pools(void);
+/**
  * @brief Check if a buffer is an lwIP pool.
  * @param mb Buffer.
  * @return true if lwIP pool, false otherwise.

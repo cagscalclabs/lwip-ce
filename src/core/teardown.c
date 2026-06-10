@@ -45,7 +45,73 @@ static void lwip_teardown_detach_listener(struct tcp_pcb_listen *pcb)
 #endif
 }
 
-void lwip_teardown_abort_pcbs(void)
+static bool lwip_teardown_tcp_state_closeable(enum tcp_state state)
+{
+    switch (state)
+    {
+    case CLOSED:
+    case LISTEN:
+    case SYN_SENT:
+    case SYN_RCVD:
+    case ESTABLISHED:
+    case CLOSE_WAIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void lwip_teardown_begin_tcp_close(void)
+{
+#if LWIP_TCP
+    struct tcp_pcb_listen *lpcb = tcp_listen_pcbs.listen_pcbs;
+    while (lpcb)
+    {
+        struct tcp_pcb_listen *next = lpcb->next;
+        lwip_teardown_detach_listener(lpcb);
+        (void)tcp_close((struct tcp_pcb *)lpcb);
+        lpcb = next;
+    }
+
+    struct tcp_pcb *pcb = tcp_bound_pcbs;
+    while (pcb)
+    {
+        struct tcp_pcb *next = pcb->next;
+        lwip_teardown_detach_tcp(pcb);
+        if (tcp_close(pcb) != ERR_OK)
+        {
+            tcp_abort(pcb);
+        }
+        pcb = next;
+    }
+
+    pcb = tcp_active_pcbs;
+    while (pcb)
+    {
+        struct tcp_pcb *next = pcb->next;
+        if (lwip_teardown_tcp_state_closeable(pcb->state))
+        {
+            lwip_teardown_detach_tcp(pcb);
+            if (tcp_close(pcb) != ERR_OK)
+            {
+                tcp_abort(pcb);
+            }
+        }
+        pcb = next;
+    }
+#endif
+}
+
+bool lwip_teardown_tcp_pcbs_pending(void)
+{
+#if LWIP_TCP
+    return tcp_listen_pcbs.listen_pcbs || tcp_bound_pcbs || tcp_active_pcbs;
+#else
+    return false;
+#endif
+}
+
+void lwip_teardown_abort_tcp_pcbs(void)
 {
 #if LWIP_TCP
     while (tcp_active_pcbs)
@@ -74,7 +140,20 @@ void lwip_teardown_abort_pcbs(void)
         tcp_close((struct tcp_pcb *)pcb);
     }
 #endif
+}
 
+void lwip_teardown_abort_time_wait_pcbs(void)
+{
+#if LWIP_TCP
+    while (tcp_tw_pcbs)
+    {
+        tcp_abort(tcp_tw_pcbs);
+    }
+#endif
+}
+
+void lwip_teardown_remove_non_tcp_pcbs(void)
+{
 #if LWIP_UDP
     while (udp_pcbs)
     {
@@ -87,6 +166,13 @@ void lwip_teardown_abort_pcbs(void)
 #if LWIP_RAW
     raw_remove_all_pcbs();
 #endif
+}
+
+void lwip_teardown_abort_pcbs(void)
+{
+    lwip_teardown_abort_tcp_pcbs();
+    lwip_teardown_abort_time_wait_pcbs();
+    lwip_teardown_remove_non_tcp_pcbs();
 }
 
 

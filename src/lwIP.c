@@ -42,6 +42,7 @@
 #include "drivers/usb_ethernet.h"
 #include "lwip-imports.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
+#include "tls/includes/tls.h"
 
 #include <usbdrvce.h>
 #include <fileioc.h>
@@ -52,14 +53,27 @@
  * ============================================================ */
 
 static bool g_lwip_started = false;
+static bool g_lwip_stopping = false;
 static lwip_app_config_t g_lwip_cfg;
 static uint8_t g_requested_service_flags = 0;
 static uint8_t g_lwip_start_error = 0;
+static struct lwip_conn *g_conn_registry = NULL;
 
 static void lwip_stack_cleanup(void);
 static void lwip_fatal_cleanup(uint8_t type, uint8_t reason);
 static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags);
 static struct netif *find_external_netif(void);
+static void lwip_conn_detach_pcb_callbacks(struct lwip_conn *conn);
+static void services_list_remove(struct lwip_conn *c);
+static void services_list_cancel_all(lwip_error_t err);
+
+#ifndef LWIP_STOP_SERVICE_SETTLE_MS
+#define LWIP_STOP_SERVICE_SETTLE_MS 250u
+#endif
+
+#ifndef LWIP_STOP_TCP_CLOSE_TIMEOUT_MS
+#define LWIP_STOP_TCP_CLOSE_TIMEOUT_MS LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT
+#endif
 
 bool lwip_start(void)
 {
@@ -69,8 +83,10 @@ bool lwip_start(void)
     }
 
     g_lwip_start_error = 0;
+    g_lwip_stopping = false;
     lwip_app_config_load(&g_lwip_cfg);
     lwip_log_set_fatal_handler(lwip_fatal_cleanup);
+    eth_reset_shutdown();
 
     if (lwip_init() != ERR_OK)
     {
@@ -106,6 +122,10 @@ void lwip_stop(void)
 
 void lwip_poll_network_events(void)
 {
+    if (!g_lwip_started && !g_lwip_stopping)
+    {
+        return;
+    }
     usb_fn.handle_events();
     sys_check_timeouts();
     if (g_requested_service_flags)
@@ -167,6 +187,146 @@ static struct netif *find_external_netif(void)
     }
 
     return NULL;
+}
+
+static void conn_registry_add(struct lwip_conn *conn)
+{
+    if (!conn) return;
+    for (struct lwip_conn *cur = g_conn_registry; cur; cur = cur->registry_next)
+    {
+        if (cur == conn) return;
+    }
+    conn->registry_next = g_conn_registry;
+    g_conn_registry = conn;
+}
+
+static void conn_registry_remove(struct lwip_conn *conn)
+{
+    if (!conn) return;
+    struct lwip_conn **slot = &g_conn_registry;
+    while (*slot)
+    {
+        if (*slot == conn)
+        {
+            *slot = conn->registry_next;
+            conn->registry_next = NULL;
+            return;
+        }
+        slot = &(*slot)->registry_next;
+    }
+}
+
+static bool conn_registry_is_tcp_like(const struct lwip_conn *conn)
+{
+    if (!conn) return false;
+    switch ((lwip_protocol_t)conn->protocol)
+    {
+#if LWIP_TCP
+    case LWIP_PROTO_TCP:
+        return true;
+#endif
+    case LWIP_PROTO_ALTCP:
+    case LWIP_PROTO_ALTCP_TLS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void conn_registry_close_tcp_like(void)
+{
+    struct lwip_conn *conn = g_conn_registry;
+    while (conn)
+    {
+        struct lwip_conn *next = conn->registry_next;
+        if (conn_registry_is_tcp_like(conn))
+        {
+            services_list_remove(conn);
+            (void)lwip_conn_close(conn);
+            if (conn->status != LWIP_STATUS_CLOSED)
+            {
+                conn->status = LWIP_STATUS_CLOSING;
+            }
+        }
+        conn = next;
+    }
+}
+
+static void conn_registry_abort_tcp_like(void)
+{
+    struct lwip_conn *conn = g_conn_registry;
+    while (conn)
+    {
+        struct lwip_conn *next = conn->registry_next;
+        if (conn_registry_is_tcp_like(conn))
+        {
+            (void)lwip_conn_abort(conn);
+        }
+        conn = next;
+    }
+}
+
+static void conn_registry_close_udp(void)
+{
+    struct lwip_conn *conn = g_conn_registry;
+    while (conn)
+    {
+        struct lwip_conn *next = conn->registry_next;
+        if ((lwip_protocol_t)conn->protocol == LWIP_PROTO_UDP)
+        {
+            services_list_remove(conn);
+            (void)lwip_conn_close(conn);
+        }
+        conn = next;
+    }
+}
+
+static void conn_registry_mark_closed(lwip_error_t err)
+{
+    while (g_conn_registry)
+    {
+        struct lwip_conn *conn = g_conn_registry;
+        conn_registry_remove(conn);
+        services_list_remove(conn);
+        lwip_conn_detach_pcb_callbacks(conn);
+        conn->pcb.tcp = NULL;
+        if (conn->tls_conf)
+        {
+            altcp_tls_ce_free_config(conn->tls_conf);
+            conn->tls_conf = NULL;
+        }
+        conn->status = LWIP_STATUS_CLOSED;
+        conn->last_error = err;
+    }
+}
+
+static void lwip_stop_pump_once(void)
+{
+    usb_fn.handle_events();
+    sys_check_timeouts();
+}
+
+static void lwip_stop_pump_for(uint32_t duration_ms)
+{
+    uint32_t deadline = sys_now() + duration_ms;
+    do
+    {
+        lwip_stop_pump_once();
+    } while ((int32_t)(sys_now() - deadline) < 0);
+}
+
+static bool lwip_stop_wait_for_tcp(uint32_t timeout_ms)
+{
+    uint32_t deadline = sys_now() + timeout_ms;
+    while (lwip_teardown_tcp_pcbs_pending())
+    {
+        if ((int32_t)(sys_now() - deadline) >= 0)
+        {
+            return false;
+        }
+        lwip_stop_pump_once();
+    }
+    return true;
 }
 
 /* Resolve the conn's resident netif: caller-supplied, else the external
@@ -242,31 +402,52 @@ bool lwip_default_netif_info(lwip_netif_info_t *info)
     return true;
 }
 
+/* Explicit membuffer sweep, run during teardown AFTER USB is quiesced
+ * (usb_Cleanup) so nothing can be mid-allocation. The driver RX rings are
+ * freed by eth_finish_shutdown; this releases the remaining membuffers:
+ *   - the TLS file-IO buffer (and other TLS-owned state) via tls_cleanup,
+ *     which frees-and-NULLs g_tls_fileio_buffer.
+ *   - every registered lwIP pool via mem_buffer_lwip_release_pools.
+ * Each owner NULLs its buffer pointer as it frees it, so any later stray
+ * reference sees NULL rather than a dangling pointer. */
+static void lwip_membuffers_release(void)
+{
+#if LWIP_ALTCP_TLS
+    tls_cleanup();
+#endif
+    mem_buffer_lwip_release_pools();
+}
+
 static void lwip_stack_cleanup(void)
 {
-    if (!g_lwip_started)
+    if (!g_lwip_started && !g_lwip_stopping)
     {
         return;
     }
-    /* Mark down first so re-entry (fatal handler firing during atexit,
-     * or vice versa) is a no-op. */
-    g_lwip_started = false;
-    g_requested_service_flags = 0;
 
-    /* Stop the lwIP-CE master dispatcher first so no further RX-drain
-     * or RNG ticks fire against a stack we're tearing down. lwIP's own
-     * cyclic timers stay running until their owning services are stopped
-     * below. */
-    lwip_dispatch_stop();
-    eth_prepare_shutdown();
+    /* Reject new API work and make re-entry a no-op while this blocking
+     * teardown pumps USB/timeouts to finish orderly TCP/TLS closes. */
+    g_lwip_started = false;
+    g_lwip_stopping = true;
+    g_requested_service_flags = 0;
+    services_list_cancel_all(LWIP_ERR_CLOSED);
+
+    conn_registry_close_tcp_like();
+    lwip_teardown_begin_tcp_close();
+    if (!lwip_stop_wait_for_tcp(LWIP_STOP_TCP_CLOSE_TIMEOUT_MS))
+    {
+        conn_registry_abort_tcp_like();
+        lwip_teardown_abort_tcp_pcbs();
+    }
+    lwip_teardown_abort_time_wait_pcbs();
 
 #if LWIP_SNTP
     sntp_stop();
 #endif
 
     /* Walk every netif, not just netif_default. Stop netif-owned services
-     * before the global PCB sweep; DHCP/SNTP own UDP PCBs, so aborting all
-     * PCBs first can leave their stop paths touching already-freed PCBs. */
+     * before the non-TCP PCB sweep; DHCP/SNTP own UDP PCBs, so removing all
+     * UDP first can leave their stop paths touching already-freed PCBs. */
     struct netif *n = NULL;
     NETIF_FOREACH(n)
     {
@@ -278,7 +459,18 @@ static void lwip_stack_cleanup(void)
 #endif
     }
 
-    lwip_teardown_abort_pcbs();
+    lwip_stop_pump_for(LWIP_STOP_SERVICE_SETTLE_MS);
+    conn_registry_close_udp();
+    lwip_teardown_remove_non_tcp_pcbs();
+    conn_registry_mark_closed(LWIP_ERR_CLOSED);
+    lwip_dispatch_stop();
+
+    /* At this point the wire-side close is done: FINs have been sent and
+     * awaited (or aborted on timeout), the dispatcher is stopped, and the
+     * stack holds no live PCBs. eth_prepare_shutdown marks the driver
+     * shutting-down so any callback that still fires during USB
+     * cancellation below bails out instead of touching stack state. */
+    eth_prepare_shutdown();
 
     NETIF_FOREACH(n)
     {
@@ -290,8 +482,27 @@ static void lwip_stack_cleanup(void)
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     ti_CloseAll();
 #pragma GCC diagnostic pop
-    eth_finish_shutdown();
+
+    /* Quiesce USB FIRST, before freeing any resource a transfer callback
+     * could reference. usb_Cleanup cancels every in-flight transfer
+     * (firing the rx/tx/interrupt callbacks, which early-return on the
+     * shutting-down flag) and disables the devices, handing the USB
+     * hardware back to the OS in a clean state. We deliberately do NOT
+     * stall endpoints (usb_SetEndpointHalt) — that would leave the
+     * controller in a halted condition the OS must clear. After this
+     * returns, no driver callback can ever fire again. */
     usb_fn.cleanup();
+
+    /* USB is now silent, so the teardown below is race-free: nothing can
+     * call back into a resource as we free it. Release low -> high:
+     *   1. driver RX rings + remove netifs (eth_finish_shutdown)
+     *   2. remaining membuffers (TLS file-IO buffer, lwIP pools)
+     * Each owner frees-and-NULLs its buffer so a stray future reference
+     * sees NULL rather than a dangling pointer. */
+    eth_finish_shutdown();
+    lwip_membuffers_release();
+
+    g_lwip_stopping = false;
 }
 
 static void lwip_fatal_cleanup(uint8_t type, uint8_t reason)
@@ -469,6 +680,20 @@ static void services_list_remove(struct lwip_conn *c)
     }
 }
 
+static void services_list_cancel_all(lwip_error_t err)
+{
+    while (g_services_waiters)
+    {
+        struct lwip_conn *conn = g_services_waiters;
+        services_list_remove(conn);
+        conn->pending_host = NULL;
+        conn->services_deadline = 0;
+        conn->status = LWIP_STATUS_CLOSED;
+        conn->last_error = err;
+    }
+    lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES, 0);
+}
+
 /* Forward decls so the services dispatcher can drive a connect. */
 static lwip_error_t lwip_conn_connect_now(struct lwip_conn *conn,
                                           const char *host, uint16_t port);
@@ -573,6 +798,12 @@ static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
         if (p) pbuf_free(p);
         return ERR_OK;
     }
+    if (g_lwip_stopping)
+    {
+        if (p) pbuf_free(p);
+        else c->status = LWIP_STATUS_CLOSED;
+        return ERR_OK;
+    }
     if (err != ERR_OK)
     {
         c->status = LWIP_STATUS_ERROR;
@@ -605,8 +836,9 @@ static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
 
 static err_t conn_altcp_sent_cb(void *arg, struct altcp_pcb *pcb, u16_t len)
 {
-    (void)pcb;
+    (void)pcb; (void)len;
     struct lwip_conn *c = (struct lwip_conn *)arg;
+    if (g_lwip_stopping) return ERR_OK;
     if (c && c->on_sent) c->on_sent(c->user_arg, c, (uint16_t)len);
     if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
@@ -616,6 +848,7 @@ static err_t conn_altcp_poll_cb(void *arg, struct altcp_pcb *pcb)
 {
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
+    if (g_lwip_stopping) return ERR_OK;
     if (c && c->on_poll) c->on_poll(c->user_arg, c);
     if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
@@ -629,6 +862,7 @@ static void conn_altcp_err_cb(void *arg, err_t err)
     c->last_error = lwip_err_translate(err);
     /* lower layer freed the pcb */
     c->pcb.altcp = NULL;
+    if (g_lwip_stopping) return;
     if (c->on_err) c->on_err(c->user_arg, c, c->last_error);
 }
 
@@ -637,6 +871,7 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
     if (!c) return ERR_OK;
+    if (g_lwip_stopping) return ERR_OK;
     if (err != ERR_OK)
     {
         c->status = LWIP_STATUS_ERROR;
@@ -661,6 +896,11 @@ static void conn_udp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         if (p) pbuf_free(p);
         return;
     }
+    if (g_lwip_stopping)
+    {
+        if (p) pbuf_free(p);
+        return;
+    }
     if (c->on_recv) c->on_recv(c->user_arg, c, p);
     else            pbuf_free(p);
 }
@@ -674,6 +914,12 @@ static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
     struct lwip_conn *c = (struct lwip_conn *)arg;
     if (!c) {
         if (p) pbuf_free(p);
+        return ERR_OK;
+    }
+    if (g_lwip_stopping)
+    {
+        if (p) pbuf_free(p);
+        else c->status = LWIP_STATUS_CLOSED;
         return ERR_OK;
     }
     if (err != ERR_OK)
@@ -706,8 +952,9 @@ static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
 
 static err_t conn_tcp_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len)
 {
-    (void)pcb;
+    (void)pcb; (void)len;
     struct lwip_conn *c = (struct lwip_conn *)arg;
+    if (g_lwip_stopping) return ERR_OK;
     if (c && c->on_sent) c->on_sent(c->user_arg, c, (uint16_t)len);
     if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
@@ -717,6 +964,7 @@ static err_t conn_tcp_poll_cb(void *arg, struct tcp_pcb *pcb)
 {
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
+    if (g_lwip_stopping) return ERR_OK;
     if (c && c->on_poll) c->on_poll(c->user_arg, c);
     if (c && c->aborting) return ERR_ABRT;
     return ERR_OK;
@@ -729,6 +977,7 @@ static void conn_tcp_err_cb(void *arg, err_t err)
     c->status = LWIP_STATUS_ERROR;
     c->last_error = lwip_err_translate(err);
     c->pcb.tcp = NULL;
+    if (g_lwip_stopping) return;
     if (c->on_err) c->on_err(c->user_arg, c, c->last_error);
 }
 
@@ -737,6 +986,7 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
     (void)pcb;
     struct lwip_conn *c = (struct lwip_conn *)arg;
     if (!c) return ERR_OK;
+    if (g_lwip_stopping) return ERR_OK;
     if (err != ERR_OK)
     {
         c->status = LWIP_STATUS_ERROR;
@@ -802,7 +1052,7 @@ lwip_error_t lwip_conn_create(struct lwip_conn *conn,
                               uint8_t flags)
 {
     if (!conn) return LWIP_ERR_ARG;
-    if (!g_lwip_started) return LWIP_ERR_STATE;
+    if (!g_lwip_started || g_lwip_stopping) return LWIP_ERR_STATE;
 
     memset(conn, 0, sizeof(*conn));
     conn->status   = LWIP_STATUS_INIT;
@@ -838,6 +1088,7 @@ lwip_error_t lwip_conn_create(struct lwip_conn *conn,
     }
 
     rebind_pcb_callbacks(conn);
+    conn_registry_add(conn);
     return LWIP_OK;
 
 fail_mem:
@@ -892,6 +1143,7 @@ static void lwip_conn_detach_pcb_callbacks(struct lwip_conn *conn)
 lwip_error_t lwip_conn_destroy(struct lwip_conn *conn)
 {
     if (!conn) return LWIP_ERR_ARG;
+    conn_registry_remove(conn);
     /* Drop from the services waiter list if we were parked. Safe no-op
      * for conns that never entered WAITING_SERVICES. */
     services_list_remove(conn);
@@ -1292,7 +1544,10 @@ lwip_error_t lwip_conn_close(struct lwip_conn *conn)
                 /* Close didn't go through (typically ERR_MEM for FIN
                  * enqueue). Re-arm the callbacks so the app continues
                  * to see events, and return the error for retry. */
-                rebind_pcb_callbacks(conn);
+                if (!g_lwip_stopping)
+                {
+                    rebind_pcb_callbacks(conn);
+                }
                 conn->last_error = lwip_err_translate(e);
                 return conn->last_error;
             }
@@ -1314,23 +1569,33 @@ lwip_error_t lwip_conn_close(struct lwip_conn *conn)
             err_t e = altcp_close(conn->pcb.altcp);
             if (e != ERR_OK)
             {
-                rebind_pcb_callbacks(conn);
+                if (!g_lwip_stopping)
+                {
+                    rebind_pcb_callbacks(conn);
+                }
                 conn->last_error = lwip_err_translate(e);
                 return conn->last_error;
             }
             conn->pcb.altcp = NULL;
+        }
+        if (conn->tls_conf)
+        {
+            altcp_tls_ce_free_config(conn->tls_conf);
+            conn->tls_conf = NULL;
         }
         break;
     default:
         return LWIP_ERR_PROTO;
     }
     conn->status = LWIP_STATUS_CLOSED;
+    conn_registry_remove(conn);
     return LWIP_OK;
 }
 
 lwip_error_t lwip_conn_abort(struct lwip_conn *conn)
 {
     if (!conn) return LWIP_ERR_ARG;
+    conn_registry_remove(conn);
     services_list_remove(conn);
     switch ((lwip_protocol_t)conn->protocol)
     {
@@ -1370,6 +1635,11 @@ lwip_error_t lwip_conn_abort(struct lwip_conn *conn)
             altcp_err(pcb, NULL);
             altcp_poll(pcb, NULL, pcb->pollinterval);
             altcp_abort(pcb);
+        }
+        if (conn->tls_conf)
+        {
+            altcp_tls_ce_free_config(conn->tls_conf);
+            conn->tls_conf = NULL;
         }
         break;
     default:

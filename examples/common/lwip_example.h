@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <time.h>
 
+#include <debug.h>
 #include <ti/getcsc.h>
 #include <ti/getkey.h>
 #include <ti/screen.h>
@@ -83,7 +84,9 @@ static void lwip_example_stack_stop(void)
     if (lwip_example_stack_running)
     {
         lwip_example_stack_running = false;
+        dbg_sprintf(dbgout, "[exit] calling lwip_stop()\n");
         lwip_stop();
+        dbg_sprintf(dbgout, "[exit] lwip_stop() returned OK\n");
     }
 }
 

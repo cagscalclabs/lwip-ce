@@ -326,6 +326,10 @@ void eth_finish_shutdown(void)
         }
         netif = next;
     }
+}
+
+void eth_reset_shutdown(void)
+{
     eth_driver_shutting_down = false;
 }
 
@@ -983,6 +987,10 @@ static void eth_link_callback(struct netif *netif)
     {
         return;
     }
+    if (eth_is_shutting_down((eth_device_t *)netif->state))
+    {
+        return;
+    }
     if (!netif_is_link_up(netif))
     {
         lwip_teardown_abort_pcbs_on_netif(netif);
@@ -995,6 +1003,10 @@ static void eth_link_callback(struct netif *netif)
 static void eth_status_callback(struct netif *netif)
 {
     if (!netif)
+    {
+        return;
+    }
+    if (eth_is_shutting_down((eth_device_t *)netif->state))
     {
         return;
     }
