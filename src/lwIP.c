@@ -77,6 +77,8 @@ static void lwip_stack_cleanup(void);
 static void lwip_fatal_cleanup(uint8_t type, uint8_t reason);
 static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags);
 static struct netif *find_external_netif(void);
+static bool netif_has_usable_ipv4(const struct netif *n);
+static bool netif_has_usable_gateway(const struct netif *n);
 static void lwip_conn_detach_pcb_callbacks(struct lwip_conn *conn);
 static void services_list_remove(struct lwip_conn *c);
 static void services_list_cancel_all(lwip_error_t err);
@@ -575,6 +577,18 @@ static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags)
 
     if (svc_flags & LWIP_CONN_SVC_SNTP)
     {
+        if (!netif_is_up(n) || !netif_is_link_up(n) ||
+            !netif_has_usable_ipv4(n))
+        {
+            return LWIP_OK;
+        }
+#if LWIP_DHCP
+        if ((svc_flags & LWIP_CONN_SVC_DHCP) &&
+            (!dhcp_client_running(n) || !netif_has_usable_gateway(n)))
+        {
+            return LWIP_OK;
+        }
+#endif
         if (!sntp_enabled())
         {
             sntp_servermode_dhcp(1);

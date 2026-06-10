@@ -1,25 +1,23 @@
 name: Build Latest lwIP Dylib
 
 on:
-  push:
-    branches: ['master']
-    paths:
-      - '.github/workflows/build.yml'
-      - '.gitmodules'
-      - 'build-release-dylib.sh'
-      - 'makefile'
-      - 'linker_script_lwip.ld'
-      - 'src/**'
-      - 'build-tools/**'
+  schedule:
+    # 03:00 UTC is roughly 11 PM US Eastern during daylight time.
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: lwip-nightly-release
+  cancel-in-progress: false
 
 env:
   CEDEV: ${{ github.workspace }}/CEdev
   CEDEV_BIN: ${{ github.workspace }}/CEdev/bin
   TOOLCHAIN_SRC: ${{ github.workspace }}/toolchain
+  NIGHTLY_TAG: nightly
 
 jobs:
   dylib_latest:
@@ -29,7 +27,35 @@ jobs:
       - name: Checkout lwIP-CE
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: true
+
+      - name: Prepare nightly release notes
+        id: release_notes
+        run: |
+          git fetch --force --tags origin
+          NOTES_FILE="$RUNNER_TEMP/nightly-release-notes.md"
+          {
+            echo "Automated nightly lwIP-CE dylib build."
+            echo
+            echo "Commit: \`$GITHUB_SHA\`"
+            echo
+            echo "Changes since previous nightly release:"
+            echo
+            if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
+              if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
+                git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
+                echo
+              else
+                echo "- No commits since the previous nightly release."
+              fi
+            else
+              echo "- No previous nightly release tag found; listing recent history."
+              git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+              echo
+            fi
+          } > "$NOTES_FILE"
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -136,6 +162,39 @@ jobs:
           path: ${{ github.workspace }}/build/
           if-no-files-found: error
 
+      - name: package nightly release asset
+        id: package_release
+        if: success()
+        run: |
+          ASSET="$RUNNER_TEMP/lwip-latest.tar.gz"
+          tar -czf "$ASSET" -C "${{ github.workspace }}/build" .
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: publish nightly release
+        id: publish_release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f "$NIGHTLY_TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$NIGHTLY_TAG"
+
+          if gh release view "$NIGHTLY_TAG" >/dev/null 2>&1; then
+            gh release edit "$NIGHTLY_TAG" \
+              --title "$NIGHTLY_TAG" \
+              --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
+              --prerelease
+          else
+            gh release create "$NIGHTLY_TAG" \
+              --title "$NIGHTLY_TAG" \
+              --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
+              --prerelease
+          fi
+
+          gh release upload "$NIGHTLY_TAG" \
+            "${{ steps.package_release.outputs.asset }}" \
+            --clobber
+
       - name: Publish job summary
         if: always()
         run: |
@@ -147,4 +206,5 @@ jobs:
             echo "| make dylib | ${{ steps.make_dylib.outcome }} |"
             echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
             echo "| upload action artifact | ${{ steps.upload_action_artifact.outcome }} |"
+            echo "| publish nightly release | ${{ steps.publish_release.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
