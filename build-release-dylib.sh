@@ -202,6 +202,8 @@ checkout_dependencies
 apply_app_tools_patch
 
 CEDEV_DIR="$(resolve_cedev)"
+export CEDEV="$CEDEV_DIR"
+export PATH="$CEDEV_DIR/bin:$PATH"
 CONVBIN_PATH="$(resolve_tool CONVBIN "$CEDEV_DIR/bin/convbin" convbin)"
 FASMG_PATH="$(resolve_fasmg)"
 HEADER_PYTHON_PATH="$(resolve_header_python)"

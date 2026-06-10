@@ -69,21 +69,20 @@ _tls_crypto_guard_disable:
 	jr z, .Lrestore_interrupts
 	jr c, .Lrestore_interrupts
 
-	; set from stackBot + 4 to ix - 1 to 0
-	scf
-	sbc hl, hl
-	add hl, sp
-	dec hl
-	ex de, hl
-	ld hl, -(stackBot + 3)
-	add hl, de
-	push hl
-	pop bc
-	scf
-	sbc hl, hl
-	add hl, sp
-	ld (hl), 0
-	lddr
+		; Seed the byte below the guard's own return address, then lddr that
+		; zero downward. Do not write to (sp): in ADL mode that is the low byte
+		; of tls_crypto_guard_disable's return address.
+		push hl
+		pop bc
+		scf
+		sbc hl, hl
+		add hl, sp
+		dec hl
+		ld (hl), 0
+		push hl
+		pop de
+		dec de
+		lddr
 
 	; restore interrupts
 .Lrestore_interrupts:

@@ -88,6 +88,7 @@ DOCSTRING_CACHE_DIR = REPO_ROOT / "tools" / ".docstring_cache"
 DOCSTRING_PROMPT_VERSION = 1
 DOCSTRING_STATE_FILE = DOCSTRING_CACHE_DIR / "release_tree_state.json"
 RELEASE_SOURCE_MAP_FILE = DOCSTRING_CACHE_DIR / "release_header_sources.json"
+CEDEV_INCLUDE = Path(os.environ.get("CEDEV", os.path.expanduser("~/CEdev"))) / "include"
 
 # Headers we explicitly don't mirror. opt.h is a giant macro file with
 # no decls; the cmake-template variants are build-system inputs, not
@@ -133,7 +134,7 @@ CFLAGS = [
     "-DNDEBUG=1",
     "-I", str(SRC_DIR / "include"),
     "-I", str(SRC_DIR),
-    "-isystem", "/Users/acagliano/CEdev/include",
+    "-isystem", str(CEDEV_INCLUDE),
     "-include", str(PRELUDE_PATH),
     "-Wno-everything",
 ]
@@ -2043,11 +2044,10 @@ def test_build_generated_headers() -> bool:
         return True
 
     # Toolchain-provided headers referenced from generated files (usbdrvce.h,
-    # tice.h, etc.) live under ~/CEdev/include. Add it as a system include
-    # path so external includes resolve when we syntax-check.
-    cedev_include = Path(os.environ.get("CEDEV", os.path.expanduser("~/CEdev"))) / "include"
-    if not cedev_include.is_dir():
-        print(f"  warning: {cedev_include} missing; skipped release header syntax test",
+    # tice.h, etc.) live under $CEDEV/include. Add it as a system include path
+    # so external includes resolve when we syntax-check.
+    if not CEDEV_INCLUDE.is_dir():
+        print(f"  warning: {CEDEV_INCLUDE} missing; skipped release header syntax test",
               file=sys.stderr)
         return True
 
@@ -2070,7 +2070,7 @@ def test_build_generated_headers() -> bool:
                 "-Wno-unused-function",
                 "-Wno-unused-parameter",
                 "-Wno-implicit-function-declaration",
-                "-isystem", str(cedev_include),
+                "-isystem", str(CEDEV_INCLUDE),
                 "-x", "c",
                 "-",
             ],

@@ -162,15 +162,14 @@ _powmod_exp_u24_impl:
    .equ   Lmod,  Lexp  + 3
    .equ   Lacc,  -3
    .equ   Ltmp,  Lacc  - 3
-   .equ   Lend,  Ltmp  - 1
    ld   c, (ix + Lsize)
    dec   c
    ld   hl, __tls_scratch_end - 1
-   ld (ix + Lacc), hl
+   push hl
    or a, a
    sbc   hl, bc
-   ld (ix + Ltmp), hl
-   lea hl, ix + Lend
+   push hl
+   lea hl, ix + Ltmp
    ld sp, hl
    ld   hl, (ix + Lmod)
    add   hl, bc
