@@ -64,8 +64,8 @@ OBJECTS := $(LINK_CSOURCES) $(LINK_CPPSOURCES) $(LINK_ASMSOURCES) $(LINK_PREASMS
 # Regenerate src/functable.s from the actual set of public symbols
 # emitted by every library .c file, then mirror the public header tree
 # to $(LWIP_RELEASE_DIR)/lwip/ (conn.h + cryptography.h + internal/*.h).
-# Run after adding/removing any public API. See tools/functable.py for
-# the export scanner and tools/header_dump.py for the header generator.
+# Run after adding/removing any public API. See build-tools/functable.py for
+# the export scanner and build-tools/header_dump.py for the header generator.
 #
 # header_dump.py uses libclang, which on this dev machine only loads
 # cleanly from the Homebrew python3.11 binary against the Xcode CLT's
@@ -84,8 +84,8 @@ LWIP_RELEASE_DIR ?= $(CURDIR)/build
 
 .PHONY: functable
 functable:
-	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" python3 $(CURDIR)/tools/functable.py
-	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" $(HEADER_PYTHON) $(CURDIR)/tools/header_dump.py
+	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" python3 $(CURDIR)/build-tools/functable.py
+	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" $(HEADER_PYTHON) $(CURDIR)/build-tools/header_dump.py
 
 # Full dylib release build. The script owns dependency checkout, generated
 # package staging under submodules/toolchain/src/lwip, libload make/install,
@@ -104,7 +104,7 @@ dylib:
 sizes:
 	@if [ ! -f bin/$(NAME).map ]; then echo "Run 'make' first to produce bin/$(NAME).map"; exit 1; fi
 	@printf '\nlwIP-CE memory footprint (from bin/$(NAME).map):\n\n'
-	@MAPFILE=bin/$(NAME).map python3 tools/print_sizes.py
+	@MAPFILE=bin/$(NAME).map python3 build-tools/print_sizes.py
 	@printf '\n  Consumer link contract:\n'
 	@printf '    --defsym BSSHEAP_LOW=<base>\n'
 	@printf '    --defsym BSSHEAP_HIGH=<base + reserve + heap_shared_with_lwip>\n\n'

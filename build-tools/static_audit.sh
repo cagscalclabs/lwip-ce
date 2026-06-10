@@ -1,8 +1,8 @@
 #!/bin/bash
-# tools/static_audit.sh — list non-static functions in a .c that are
+# build-tools/static_audit.sh — list non-static functions in a .c that are
 # never referenced from any other TU.
 #
-# Usage: tools/static_audit.sh src/tls/core/aes.c
+# Usage: build-tools/static_audit.sh src/tls/core/aes.c
 #
 # Each candidate is a function defined in the file with no `static`
 # qualifier that no other .c/.h grep can find. Mark them `static` in

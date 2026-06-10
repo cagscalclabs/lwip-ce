@@ -13,7 +13,7 @@ Default layout:
 
 Pruning strategy:
 
-  1. tools/public_api_manifest.csv is the manual allowlist. Its category
+  1. build-tools/public_api_manifest.csv is the manual allowlist. Its category
      column chooses conn/core/cryptography output placement.
   2. The libload export table (src/functable.s) is the build-filtered
      surface: manifest functions that were visible at compile time.
@@ -28,7 +28,7 @@ and see exactly the surface they can link against via libload.
 
 Run from repo root:
 
-    python3 tools/header_dump.py
+    python3 build-tools/header_dump.py
 
 A build must have been run first so obj/src/**/*.o exists; otherwise
 the script can't tell which functions are actually defined.
@@ -78,17 +78,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "src"
 OBJ_DIR = REPO_ROOT / "obj" / "src"
 FUNCTABLE_S = SRC_DIR / "functable.s"
-PUBLIC_API_MANIFEST = REPO_ROOT / "tools" / "public_api_manifest.csv"
+PUBLIC_API_MANIFEST = REPO_ROOT / "build-tools" / "public_api_manifest.csv"
 CONN_SRC = SRC_DIR / "lwIP.h"
 TLS_INCLUDES = SRC_DIR / "tls" / "includes"
 
 OUT_DIR = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build")) / "lwip"
 OUT_CONN = OUT_DIR / "conn.h"
-DOCSTRING_CACHE_DIR = REPO_ROOT / "tools" / ".docstring_cache"
+DOCSTRING_CACHE_DIR = REPO_ROOT / "build-tools" / ".docstring_cache"
 DOCSTRING_PROMPT_VERSION = 1
 DOCSTRING_STATE_FILE = DOCSTRING_CACHE_DIR / "release_tree_state.json"
 RELEASE_SOURCE_MAP_FILE = DOCSTRING_CACHE_DIR / "release_header_sources.json"
 CEDEV_INCLUDE = Path(os.environ.get("CEDEV", os.path.expanduser("~/CEdev"))) / "include"
+UNIFDEF_MISSING_WARNED = False
 
 # Headers we explicitly don't mirror. opt.h is a giant macro file with
 # no decls; the cmake-template variants are build-system inputs, not
@@ -317,7 +318,7 @@ def source_dependency_closure(initial_headers: list[Path]) -> list[Path]:
         TLS_INCLUDES.resolve(),
         # Contrib x25519 ships tls_x25519_publickey/_secret as public API;
         # its header lives outside src/tls/includes but is part of the
-        # exported surface (see tools/public_api_manifest.csv).
+        # exported surface (see build-tools/public_api_manifest.csv).
         (SRC_DIR / "tls" / "contrib" / "x25519" / "src").resolve(),
     ]
 
@@ -558,7 +559,14 @@ def build_macro_file() -> Path | None:
 
 def prune_inactive_conditionals(text: str, macro_file: Path | None,
                                 source: Path | None = None) -> str:
-    if macro_file is None or not shutil.which("unifdef"):
+    global UNIFDEF_MISSING_WARNED
+    if macro_file is None:
+        return text
+    if not shutil.which("unifdef"):
+        if not UNIFDEF_MISSING_WARNED:
+            print("  warning: unifdef not found; generated headers keep source #if branches",
+                  file=sys.stderr)
+            UNIFDEF_MISSING_WARNED = True
         return text
     # unifdef parses // comments as line-terminated; if the input lacks a
     # final newline, it can mis-report "EOF in comment" at the end of a

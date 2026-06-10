@@ -62,9 +62,9 @@ docs/whitepaper/generated/
 docs/whitepaper/whitepaper.pdf
 docs/whitepaper/datasets/**/.DS_Store
 
-# tools/ holds build-critical tooling (functable.py, public_api_manifest.csv,
+# build-tools/ holds build-critical tooling (functable.py, public_api_manifest.csv,
 # lwip_init_runtime.asm, header_dump.py, etc.) and IS tracked. Only genuine
-# scratch/caches under it are ignored (see tools/.docstring_cache below;
+# scratch/caches under it are ignored (see build-tools/.docstring_cache below;
 # __pycache__/ is covered globally above).
 
 # local transcription scratch (whisperx venv, audio downloads, outputs)
@@ -81,5 +81,5 @@ tests/profiling/tls_*/reports/
 .venv-docs/
 venv
 
-tools/.docstring_cache
+build-tools/.docstring_cache
 tmp/

@@ -10,7 +10,7 @@ on:
       - 'makefile'
       - 'linker_script_lwip.ld'
       - 'src/**'
-      - 'tools/**'
+      - 'build-tools/**'
   workflow_dispatch:
 
 permissions:
@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make tar curl unzip libxml2-utils python3 python3-clang libclang-dev
+          sudo apt-get install -y make tar curl unzip libxml2-utils unifdef python3 python3-clang libclang-dev
 
       - name: Cache CEdev Toolchain
         id: cedev-cache
