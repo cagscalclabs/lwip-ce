@@ -189,6 +189,21 @@
 #include "lwip/sys.h"
 #include "lwip/pbuf.h"
 
+/* Temporary post-truststore handshake step tracing (key-gated). Visible on
+ * real hardware via os_PutStrFull. Set HS_TRACE_ON 0 to disable. Each marker
+ * clears the screen, prints msg, waits for a key — so the LAST screen shown
+ * before a crash names the step that faulted. REMOVE once the handshake is
+ * stable. */
+#define HS_TRACE_ON 1
+#if HS_TRACE_ON
+#include <ti/screen.h>
+#include <ti/getkey.h>
+#define HS_TRACE(msg) do { os_ClrHome(); os_PutStrFull("hs: " msg); \
+                           os_PutStrFull(" [key]"); os_GetKey(); } while (0)
+#else
+#define HS_TRACE(msg) ((void)0)
+#endif
+
 /*
  * ============================================================================
  * Transcript Hash Management
@@ -2197,28 +2212,33 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     tls_hash_update(&hash_ctx, transcript, sizeof(transcript));
     tls_hash_digest(&hash_ctx, message_hash);
 
-    /* RSA decrypt the signature, then run the PSS padding check. */
-    em = (uint8_t *)mem_buffer_custom_malloc(modulus_len);
-    if (!em)
+    /* RSA decrypt the signature, then run the PSS padding check. Keep the
+     * encoded-message buffer in the fixed RSA transient region instead of
+     * allocating a mem_buffer block from inside the handshake callback path.
+     * powmod has its own non-overlapping __tls_scratch arena. */
+    if (modulus_len > RSA_TRANSIENT_SIZE)
     {
         return false;
     }
+    em = __rsa_transient;
+    HS_TRACE("cv: pre rsa decrypt");
     if (!tls_rsa_decrypt_signature(sig, sig_len, em, modulus, modulus_len))
     {
         goto cleanup;
     }
+    HS_TRACE("cv: pre pss verify");
     if (!tls_rsa_pss_verify(em, modulus_len, message_hash, sizeof(message_hash),
                             TLS_HASH_SHA256))
     {
         goto cleanup;
     }
+    HS_TRACE("cv: verify OK");
     ok = true;
 
 cleanup:
     if (em)
     {
         tls_secure_memzero(em, modulus_len);
-        mem_buffer_custom_free(em);
     }
     return ok;
 }
@@ -2291,6 +2311,7 @@ static bool tls_recv_certificate_verify(
     }
 
     bool sig_ok = false;
+    HS_TRACE("cverify: dispatch");
     switch (sig_alg)
     {
     case TLS_SIG_RSA_PSS_RSAE_SHA256:
@@ -2318,6 +2339,7 @@ static bool tls_recv_certificate_verify(
         return false;
     }
 
+    HS_TRACE("cverify: sig OK, xscript");
     /* Update transcript hash with the CertificateVerify message. Must
      * happen AFTER verify (the digest fed to PSS covers the transcript
      * through Certificate only). */
@@ -2326,6 +2348,7 @@ static bool tls_recv_certificate_verify(
         transcript_hash_update(ctx->transcript_hash, data, 4 + msg_len);
     }
 
+    HS_TRACE("cverify: done, state set");
     ctx->state = TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
 
     return true;

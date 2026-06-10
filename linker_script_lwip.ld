@@ -132,19 +132,30 @@ SECTIONS
 
     /* Safe-RAM scratch overlay (0xE30800, ti.cursorImage).
      *
-     * Two consumers share this address window, never live at the same
+     * Three consumers share this address window, never live at the same
      * instant — it is deliberately reused as quick scratch:
      *   - .x25519.reloc : the X25519 hot loop, copied here at the start of
      *     each call (it has a load image in prgm) and run at this VMA.
+     *   - .powmod.reloc : the RSA modexp hot loop, same deal (load image in
+     *     prgm, copied + run here; relocated because it self-modifies).
      *   - .saferam.rng  : the RNG entropy/SHA scratch. No load image — it
      *     is written in place; this member only reserves the VMA span so
      *     the linker knows the window size and flags a collision if either
      *     consumer outgrows it.
      *
-     * OVERLAY assigns both members the same VMA (0xE30800) and distinct
-     * LMAs. ld auto-creates __load_start_<sec>/__load_stop_<sec>; the
-     * PROVIDE aliases below keep the existing asm symbol names working so
-     * x25519.s and the RNG code need no edits beyond sourcing the base. */
+     * MEMBER ORDER MATTERS. OVERLAY gives every member the same VMA but
+     * CONSECUTIVE load addresses, advancing the LMA by each member's size —
+     * including the nobits .saferam.rng (520B), which emits NO bytes into the
+     * program file. So any LOADABLE member placed AFTER a nobits member gets
+     * a LOADADDR pointing past a hole the file doesn't contain, and its copy
+     * loop (ldir) reads garbage. Keep both loadable members (.x25519.reloc,
+     * .powmod.reloc) adjacent and FIRST; put the nobits .saferam.rng LAST so
+     * no load image is displaced by the gap. (This is why X25519 worked and
+     * powmod, formerly third, crashed before its first instruction.)
+     *
+     * ld auto-creates __load_start_<sec>/__load_stop_<sec>; the alias defs
+     * below keep the existing asm symbol names working so x25519.s, bigint.s
+     * and the RNG code need no edits beyond sourcing the base. */
     OVERLAY 0xE30800 : AT ( LOADADDR(.data) + SIZEOF(.data) )
     {
         .x25519.reloc
@@ -154,17 +165,17 @@ SECTIONS
             KEEP(*(.x25519.reloc.*))
             _x25519_reloc_run_end = .;
         }
-        .saferam.rng
-        {
-            _sprng_entropy_pool = .;
-            . = . + 520;   /* total RNG scratch: see virtuals.inc */
-        }
         .powmod.reloc
         {
             _powmod_reloc_run_start = .;
             KEEP(*(.powmod.reloc))
             KEEP(*(.powmod.reloc.*))
             _powmod_reloc_run_end = .;
+        }
+        .saferam.rng
+        {
+            _sprng_entropy_pool = .;
+            . = . + 520;   /* total RNG scratch: see virtuals.inc */
         }
     }
 
@@ -179,11 +190,11 @@ SECTIONS
     _powmod_reloc_len        = SIZEOF(.powmod.reloc);
 
     /* Guard: no consumer may outgrow the shared window. */
-    ASSERT(SIZEOF(.x25519.reloc) <= 0x800,
+    ASSERT(SIZEOF(.x25519.reloc) <= 0x400,
            "Error: .x25519.reloc exceeds safe-RAM overlay window")
-    ASSERT(SIZEOF(.saferam.rng) <= 0x800,
+    ASSERT(SIZEOF(.saferam.rng) <= 0x400,
            "Error: .saferam.rng exceeds safe-RAM overlay window")
-    ASSERT(SIZEOF(.powmod.reloc) <= 0x800,
+    ASSERT(SIZEOF(.powmod.reloc) <= 0x400,
            "Error: .powmod.reloc exceeds safe-RAM overlay window")
 
         /* Debug info (kept out of loadable memory) */

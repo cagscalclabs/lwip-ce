@@ -5,8 +5,8 @@
 PROJECT_ROOT := ../../..
 LWIP_RELEASE_DIR ?= $(PROJECT_ROOT)/build
 
-NAME = DYLBFUNC
-DESCRIPTION = "lwIP dylib smoke"
+NAME = DYLRSA
+DESCRIPTION = "lwIP dylib RSA probe"
 ARCHIVED = NO
 COMPRESSED = NO
 LTO = NO
@@ -14,7 +14,9 @@ LTO = NO
 # lwIP reserves 0xD052C6..0xD072C6 for the resident app's runtime BSS/data.
 BSSHEAP_LOW = 0xD072C6
 
-CFLAGS = -Wall -Wextra -Oz \
+# Keep the caller program easy to debug in CEmu. The resident lwIP app still
+# needs bin/lwIP.map for addresses inside the dylib body.
+CFLAGS = -Wall -Wextra -O0 -g \
 	-I$(LWIP_RELEASE_DIR)
 CXXFLAGS = $(CFLAGS)
 

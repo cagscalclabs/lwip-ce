@@ -146,6 +146,11 @@ extern __tls_scratch_end
 
 _powmod_reloc_run_start:
 _powmod_exp_u24_impl:
+   ; DEBUG: poke VRAM to prove we reached the relocated body at 0xE30800.
+   ; `a` is not an input arg (args are stack-passed) and the stack must not be
+   ; disturbed before `add ix,sp`, so clobber only `a` here — no push/pop.
+   ld   a, 0xE0
+   ld   (0xD40000), a
    push   ix
    ld   ix, 0
    lea   bc, ix + 0
@@ -245,6 +250,10 @@ _powmod_exp_u24_impl:
    call   .Lmul_alt
    ld   sp, ix
    pop   ix
+   ; DEBUG: poke VRAM to prove we reached the return (math completed, frame
+   ; torn down). `a` is dead here (return value is in the output buffer).
+   ld   a, 0x1F
+   ld   (0xD40002), a
    ret
    ; vi(acc) = vi(acc) * vi(hl) % vi(mod)
    ; assumes bc = 0

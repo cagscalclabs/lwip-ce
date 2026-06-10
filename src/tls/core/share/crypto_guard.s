@@ -55,6 +55,20 @@ _tls_crypto_guard_enable:
 ; void tls_crypto_guard_disable(void)
 _tls_crypto_guard_disable:
 ; _erase_stack:
+	; Only scrub if the current SP is above the scrub floor. The resident
+	; app's TLS callback path can be much deeper than standalone crypto tests;
+	; if SP has already moved below stackBot, the old length calculation wraps
+	; and lddr wipes unrelated memory.
+	or a, a
+	sbc hl, hl
+	add hl, sp
+	dec hl
+	ld de, stackBot + 4
+	or a, a
+	sbc hl, de
+	jr z, .Lrestore_interrupts
+	jr c, .Lrestore_interrupts
+
 	; set from stackBot + 4 to ix - 1 to 0
 	scf
 	sbc hl, hl
@@ -72,6 +86,7 @@ _tls_crypto_guard_disable:
 	lddr
 
 	; restore interrupts
+.Lrestore_interrupts:
 	; do we have the pointer
 	ld hl, (_crypto_guard_state_ptr)
 	ld a, h
