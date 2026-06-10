@@ -75,7 +75,10 @@ uint8_t trust_store_pubkey[] = {
 tls_truststore_status_t tls_truststore_init(void)
 {
     var_t *truststore_var;
-    uint8_t d_sig[TRUSTSTORE_SIG_LEN];
+    /* Decrypted-signature output uses the shared static RSA scratch region
+     * (.bss) instead of a 256-byte stack local, to keep the deep
+     * truststore->rsa->powmod call chain off the eZ80 stack. */
+    uint8_t *d_sig = __rsa_transient;
     uint8_t tstore_hash[TLS_SHA256_DIGEST_LEN];
     struct tls_hash_context hash_ctx;
 

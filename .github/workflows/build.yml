@@ -87,6 +87,20 @@ jobs:
           cmake -E copy "${{ env.TOOLCHAIN_SRC }}/tools/convbin/bin/convbin" "${{ env.CEDEV_BIN }}/convbin"
           "${{ env.CEDEV_BIN }}/convbin" --version || true
 
+      # TEMPORARY: the v15.0 release CEdev/meta/makefile.mk hard-assigns
+      # LINKER_SCRIPT with `=`/`:=`, so our makefile's
+      # `LINKER_SCRIPT = linker_script_lwip.ld` cannot win and the app links
+      # against the stock script (missing our overlay/PROVIDE symbols ->
+      # undefined references). master already fixed this to `?=`. Patch the
+      # release meta in place to `?=` so our assignment takes effect.
+      # REMOVE this step once a CEdev release ships the `?=` fix.
+      - name: Patch CEdev meta LINKER_SCRIPT to ?= (temporary)
+        run: |
+          META="${{ env.CEDEV }}/meta/makefile.mk"
+          echo "before:"; grep -nE 'LINKER_SCRIPT[[:space:]]*[:?]?=' "$META" || true
+          sed -i -E 's/^([[:space:]]*LINKER_SCRIPT[[:space:]]*):?=([^=])/\1?=\2/' "$META"
+          echo "after:";  grep -nE 'LINKER_SCRIPT[[:space:]]*[:?]?=' "$META" || true
+
       - name: make dylib
         id: make_dylib
         env:

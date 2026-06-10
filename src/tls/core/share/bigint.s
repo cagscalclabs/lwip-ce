@@ -126,6 +126,12 @@ globl _powmod_exp_u24
 ; The safe-RAM window is shared (sequentially, never co-resident) with X25519
 ; and the RNG scratch — see linker_script_lwip.ld.
 ;void powmod_exp_u24(uint8_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
+
+; __tls_scratch / __tls_scratch_end are defined in share/memory.s (assembled
+; as its own translation unit). Reference them as externals here — do NOT
+; .include memory.s, or its .space reservations get defined twice (here and
+; in memory.s.o) and the link fails with "multiple definition".
+
 _powmod_exp_u24:
    ld   hl, _powmod_reloc_load_start
    ld   de, _powmod_reloc_run_start
@@ -134,6 +140,10 @@ _powmod_exp_u24:
    jp   _powmod_reloc_run_start
 
 .section	.powmod.reloc,"ax",@progbits
+
+extern __tls_scratch
+extern __tls_scratch_end
+
 _powmod_reloc_run_start:
 _powmod_exp_u24_impl:
    push   ix
@@ -150,19 +160,13 @@ _powmod_exp_u24_impl:
    .equ   Lend,  Ltmp  - 1
    ld   c, (ix + Lsize)
    dec   c
-   ; Scratch buffers (Lacc, Ltmp) sourced from a static .bss reservation
-   ; instead of being carved off the stack. The original code did
-   ; `ld sp, hl` to grow the stack by ~2*size bytes, which overflowed in the
-   ; resident-app dylib's deep call chain. We reproduce the EXACT same two
-   ; pointer values the original computed, just based at _powmod_scratch_end
-   ; instead of the live stack pointer, and we do NOT move sp.
-   ;   original: Lacc = base-7, Ltmp = base-6-size   (base = entry sp)
-   ;   here:     base = _powmod_scratch_end (top of the .bss reservation)
-   ld   hl, _powmod_scratch_end - 7
-   push   hl                        ; ix+Lacc = base-7
-   or   a, a                        ; clear carry for the borrow-free subtract
-   sbc   hl, bc                     ; hl -= (size-1)
-   push   hl                        ; ix+Ltmp = base-7-(size-1) = base-6-size
+   ld   hl, __tls_scratch_end - 1
+   ld (ix + Lacc), hl
+   or a, a
+   sbc   hl, bc
+   ld (ix + Ltmp), hl
+   lea hl, ix + Lend
+   ld sp, hl
    ld   hl, (ix + Lmod)
    add   hl, bc
    ld   (ix + Lmod), hl
@@ -369,17 +373,6 @@ _powmod_exp_u24_impl:
    lddr ; leaks size, assuming that base and stack are in normal ram
    ret
 _powmod_reloc_run_end:
-
-; Static scratch for powmod's two `size`-byte working buffers (Lacc, Ltmp),
-; addressed downward from _powmod_scratch_end. Sized for the max supported
-; modulus (RSA-2048 = 256 bytes => 2*256 + a few bytes of pointer slack).
-; This replaces ~512 bytes of stack growth that overflowed in the dylib's
-; deep call chain. Lives in .bss (RAM), referenced by absolute address from
-; the relocated code at 0xE30800.
-.section	.bss._powmod_scratch,"aw",@nobits
-_powmod_scratch:
-   .space   520
-_powmod_scratch_end:
 
 .section	.text,"ax",@progbits
 

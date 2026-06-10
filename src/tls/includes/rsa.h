@@ -10,10 +10,20 @@
 #ifndef tls_rsa_h
 #define tls_rsa_h
 
+#include <stdint.h>
+
 /* powmod_exp_u24 takes a uint8_t for modulus size, with 0 encoding 256.
  * Anything larger than 256 bytes (2048 bits) is unrepresentable. */
 #define RSA_MODULUS_MAX_SUPPORTED (2048 >> 3)
 #define RSA_MODULUS_MIN_SUPPORTED (1024 >> 3)
+
+/* Static .bss scratch for RSA OAEP/PSS encoded-message work (e.g. the
+ * decrypted-signature buffer). Replaces a 256-byte stack local in the deep
+ * crypto call chain. Defined in src/tls/core/share/memory.s. Pure scratch:
+ * its contents do not persist across calls and callers must not assume any
+ * particular initial value. Sized for the max supported modulus (RSA-2048). */
+#define RSA_TRANSIENT_SIZE RSA_MODULUS_MAX_SUPPORTED
+extern uint8_t __rsa_transient[RSA_TRANSIENT_SIZE];
 
 #define RSA_PUBLIC_EXP 65537
 

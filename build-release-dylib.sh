@@ -223,16 +223,8 @@ log "generating export table and libload stub"
 LWIP_RELEASE_DIR="$STAGE_DIR" python3 "$ROOT_DIR/tools/functable.py" --append
 
 log "building lwIP-CE app"
-# Diagnostic: surface the linker-script resolution + the exact link command.
-# The undefined-reference failures (for symbols defined ONLY in
-# linker_script_lwip.ld) imply the app link is not using our script in CI;
-# print what make actually resolves so the CI log shows it. Remove once the
-# CI link is confirmed to use linker_script_lwip.ld.
-CEDEV="$CEDEV_DIR" make -C "$ROOT_DIR" --no-print-directory \
-    -p 2>/dev/null | grep -E "^(LINKER_SCRIPT|CURDIR|CEDEV_TOOLCHAIN) " || true
-log "  (cedev-config --makefile -> $(cedev-config --makefile 2>/dev/null || echo MISSING))"
 CEDEV="$CEDEV_DIR" LIBLOAD_LIBS="$(root_libload_libs_without_lwip)" \
-    make -C "$ROOT_DIR" "$ROOT_MAKE_TARGET" V=1
+    make -C "$ROOT_DIR" "$ROOT_MAKE_TARGET"
 
 log "generating curated headers"
 LWIP_RELEASE_DIR="$STAGE_DIR" "$HEADER_PYTHON_PATH" "$ROOT_DIR/tools/header_dump.py"
