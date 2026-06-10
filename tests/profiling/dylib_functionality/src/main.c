@@ -8,30 +8,22 @@
 #include <ti/screen.h>
 #include <ti/getkey.h>
 #include <ti/getcsc.h>
-#include <ti/vars.h>
 
+#include <lwip/core.h>
 #include <lwip/conn.h>
-#include <lwip/core/init.h>
-#include <lwip/core/mem.h>
 #include <lwip/cryptography/hash.h>
 #include <lwip/cryptography/hmac.h>
 
-#include "../../../../tools/app_tools/installer/src/app.h"
-#include "../../../../tools/app_tools/installer/src/flash.h"
-#include "../../../../tools/app_tools/installer/src/ports.h"
+void *os_FindAppStart(const char *name);
 
-bool lwip_init_runtime_opaque(void *malloc_fn, void *free_fn, void *realloc_fn);
-
-#define main lwip_installer_main
-#define static
-#include "../../../../tools/app_tools/installer/src/main.c"
-#undef static
-#undef main
-
-static void show_result(bool ok)
+static void show_result(const char *line1, const char *line2)
 {
     os_ClrHome();
-    printf(ok ? "success" : "failed");
+    printf("%s", line1);
+    if (line2)
+    {
+        printf("\n%s", line2);
+    }
     os_GetKey();
 }
 
@@ -109,32 +101,46 @@ static bool test_memory(void)
 int main(void)
 {
     bool ok = false;
-    int install_status;
+
+    if (!os_FindAppStart("lwIP"))
+    {
+        show_result("failed", "app missing");
+        return 1;
+    }
 
     os_ClrHome();
-    printf("installing");
+    printf("runtime");
 
-    install_status = install();
-    if (install_status != SUCCESS &&
-        install_status != ALREADY_INSTALLED)
+    if (!lwip_init_runtime())
     {
-        show_result(false);
+        switch (lwip_runtime_last_error())
+        {
+        case 1:
+            show_result("failed", "runtime app");
+            break;
+        case 2:
+            show_result("failed", "runtime table");
+            break;
+        case 3:
+            show_result("failed", "runtime count");
+            break;
+        default:
+            show_result("failed", "runtime init");
+            break;
+        }
         return 1;
     }
 
-    if (!lwip_init_runtime_opaque(malloc, free, realloc))
-    {
-        show_result(false);
-        return 1;
-    }
+    os_ClrHome();
+    printf("lwip init");
 
     if (lwip_init() != ERR_OK)
     {
-        show_result(false);
+        show_result("failed", "lwip init");
         return 1;
     }
 
     ok = test_sha256() && test_hmac() && test_memory();
-    show_result(ok);
+    show_result(ok ? "success" : "failed", ok ? NULL : "smoke test");
     return ok ? 0 : 1;
 }

@@ -36,9 +36,9 @@ What lwIP-CE adds on top
 Two pieces make an Application usable as a LIBLOAD-style API source:
 
 - The lwIP app links its own **export table** into the Flash image (the same
-  idea as a library's export table). Its location is recorded so the bootstrap
-  can find it later -- a byte offset from the app's base address, baked in at
-  build time.
+  idea as a library's export table). The linker pins it at a fixed early
+  offset from the app's linked image base, and the bootstrap computes that
+  linked image base from the installed app metadata at runtime.
 - A small **companion library** (the LIBLOAD stub the consumer actually links
   against) provides the consumer-side trampolines plus a bootstrap function. The
   bootstrap locates the installed lwIP app, reads its export table, and patches
@@ -67,11 +67,13 @@ This is where the custom logic runs:
    caller's.
 #. The bootstrap locates the resident lwIP application by name and finds its
    base address.
-#. It adds the baked-in offset to reach the app's export table, then checks a
-   6-byte magic marker (``"LWIPTB"``) to make sure it found a real, compatible
-   table and not a stale or mismatched build.
+#. It reads the installed app metadata to compute the linked image base, adds
+   the fixed dylib descriptor offset, then checks a 6-byte magic marker
+   (``"LWIPTB"``) and the export count to make sure it found a real,
+   compatible table and not a stale or mismatched build.
 #. It walks the export table and patches every consumer-side trampoline:
-   ``app base + offset``. After this loop, all ``lwip_*`` calls are live and
+   each table entry has already been relocated by the installer to a real
+   in-app Flash address. After this loop, all ``lwip_*`` calls are live and
    dispatch into the app.
 #. Finally -- now that the trampolines work -- it calls into the app one more
    time, to ``lwip_init_runtime_internal``. The app does the startup work that
@@ -104,19 +106,19 @@ The whole sequence, end to end:
                               |
                               v
    +-------------------------------------------------------------+
-   | bootstrap locates the resident app by name -> base address  |
-   | + __lwip_fn_table_off  ->  app's export table               |
+   | bootstrap locates resident app and computes linked image    |
+   | base from app metadata; + fixed descriptor offset -> table  |
    +-------------------------------------------------------------+
                               |
                               v
    +-------------------------------------------------------------+
-   | verify "LWIPTB" magic                                       |
+   | verify "LWIPTB" magic and export count                      |
    | mismatch => fail closed (stale / incompatible app)          |
    +-------------------------------------------------------------+
                               |
                               v
    +-------------------------------------------------------------+
-   | patch each trampoline -> (app base + offset)                |
+   | patch each trampoline -> relocated in-app address           |
    | after this loop, every lwip_* call dispatches into the app  |
    +-------------------------------------------------------------+
                               |

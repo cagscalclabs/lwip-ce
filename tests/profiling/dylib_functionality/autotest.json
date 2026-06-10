@@ -1,5 +1,5 @@
 {
-  "description": "Install the generated lwIP dylib release and smoke-test libload calls",
+  "description": "Smoke-test lwIP dylib calls against a user-installed lwIP app",
   "transfer_files": [
     "bin/DYLBFUNC.8xp"
   ],
@@ -14,7 +14,7 @@
   ],
   "hashes": {
     "1": {
-      "description": "dylib installer, runtime bootstrap, SHA-256, HMAC-SHA-256, and mem_malloc/mem_free succeeded",
+      "description": "runtime bootstrap, SHA-256, HMAC-SHA-256, and mem_malloc/mem_free succeeded",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [

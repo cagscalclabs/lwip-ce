@@ -43,14 +43,20 @@ PUBLIC_API_MANIFEST = REPO_ROOT / "tools" / "public_api_manifest.csv"
 
 # The libload library stub. Emitted alongside src/functable.s so the
 # two stay in lockstep — both files list the public API in the same order.
-RELEASE_DIR = REPO_ROOT / "release"
+RELEASE_DIR = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build"))
 LIBLOAD_STUB_ASM = RELEASE_DIR / "lwip.asm"
 
 # Hand-written bootstrap appended verbatim to the bottom of the
 # generated lwip.s. This is the part of the stub that humans edit;
 # the generator owns everything above it. Living separately means
-# regenerating release/lwip.asm never clobbers the bootstrap body.
+# regenerating lwip.asm never clobbers the bootstrap body.
 INIT_RUNTIME_ASM = Path(__file__).resolve().parent / "lwip_init_runtime.asm"
+
+# Fixed offset, from the linked app image base, to the lwIP export descriptor.
+# linker_script_lwip.ld reserves this slot and asserts _fn_exports_table lands
+# here. The runtime bootstrap computes the linked app image base from installed
+# app metadata, then adds this offset.
+DYLIB_DESCRIPTOR_OFF = 0x40
 
 # Libload identity. The library name MUST match the on-calc appvar name
 # (uppercase). The version is LOCKED at 0 and must not be bumped by the
@@ -342,25 +348,6 @@ def load_existing_entries(path: Path) -> list[str]:
     return entries
 
 
-def parse_fn_table_off(map_path: Path) -> int:
-    """Parse the byte offset of _fn_exports_table from the app's link map.
-
-    Applications link at base 0, so the symbol's link-time address is its
-    offset from the app base (== __lwip_fn_table_off). The map line looks
-    like:  `                0x00040f02                _fn_exports_table`
-    """
-    if not map_path.exists():
-        raise FileNotFoundError(f"map file not found: {map_path}")
-    pat = re.compile(r"^\s*0x([0-9A-Fa-f]+)\s+_fn_exports_table\s*$")
-    for line in map_path.read_text().splitlines():
-        m = pat.match(line)
-        if m:
-            return int(m.group(1), 16)
-    raise ValueError(
-        f"_fn_exports_table not found with an address in {map_path}. "
-        f"Was the app built (and is the export table retained)?")
-
-
 def load_public_api_manifest(path: Path) -> list[dict[str, str]]:
     """Read the manually-curated public API allowlist.
 
@@ -459,22 +446,17 @@ def render_functable(entries: list[str], origins: dict[str, str]) -> str:
         "; Layout:",
         ";   db  'L','W','I','P','T','B'   6-byte magic (ascending memory order)",
         ";   d24 <entry count>",
-        ";   d24 <offset>  ... one per exported symbol",
+        ";   d24 <relocated address>  ... one per exported symbol",
         ";",
-        "; The libload bootstrap is emitted with the build-resolved address of",
-        "; _fn_exports_table; at load it checks the 6 magic bytes there and",
-        "; errors out on mismatch (stale/mismatched app paired with the lib).",
+        f"; The linker script pins this section at linked-image offset 0x{DYLIB_DESCRIPTOR_OFF:02X}.",
+        "; At load, the libload bootstrap computes the installed linked-image",
+        "; base from app metadata, adds the fixed offset, then checks the magic",
+        "; and entry count to reject stale/mismatched app+lib pairs.",
         ";",
-        "; Each entry is the symbol's offset from the first byte of the app",
-        "; image (__app_base). Applications link at LOAD_ADDR = 0x000000, so a",
-        "; symbol's link-time address already IS its offset from the app base;",
-        "; we emit the bare symbol and the linker's relocation resolves it to",
-        "; that offset. A runtime reader recovers the real address as",
-        "; (relocated app base + offset).",
-        ";",
-        "; NB: we cannot write `symbol - __app_base` here — the assembler can't",
-        "; reduce a difference of two link-time-external symbols. With base 0",
-        "; the subtraction is a no-op anyway, so the bare symbol is correct.",
+        "; Each d24 entry is a normal relocatable symbol reference. convbin",
+        "; records it in the app relocation table, and the installer patches it",
+        "; to the real installed flash address. The libload bootstrap therefore",
+        "; copies entries directly into its trampolines; it does not add a base.",
         "",
         ".assume adl=1",
         "; Dedicated, RETAIN-flagged section. Nothing in the app references",
@@ -511,14 +493,13 @@ def render_functable(entries: list[str], origins: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def render_libload_stub(entries: list[str], fn_table_off: int | None = None) -> str:
-    """Render release/lwip.asm — the libload library stub.
+def render_libload_stub(entries: list[str]) -> str:
+    """Render lwip.asm — the libload library stub.
 
-    fn_table_off, when provided, is the byte offset from the app base to
-    _fn_exports_table (parsed from the app's bin/lwIP.map). It is
-    substituted into the bootstrap's `__lwip_fn_table_off := 0x000000`
-    placeholder so the runtime can locate the export table. When None,
-    the placeholder is left at 0x000000 (provisional stub).
+    The app linker script pins _fn_exports_table at DYLIB_DESCRIPTOR_OFF from
+    the linked image base. The bootstrap computes that linked image base from
+    installed app metadata at runtime, then validates the table magic/count and
+    patches every trampoline with the installer-relocated in-flash addresses.
 
     The stub has three roles:
 
@@ -604,18 +585,24 @@ def render_libload_stub(entries: list[str], fn_table_off: int | None = None) -> 
     # never clobbers the bootstrap body.
     if INIT_RUNTIME_ASM.is_file():
         bootstrap = INIT_RUNTIME_ASM.read_text().rstrip("\n")
-        if fn_table_off is not None:
-            # Substitute the real export-table offset (from the app map)
-            # into the `__lwip_fn_table_off := 0x000000` placeholder.
-            new_bootstrap, n = re.subn(
+        substitutions = [
+            (
                 r"(__lwip_fn_table_off\s*:=\s*)0x[0-9A-Fa-f]+",
-                rf"\g<1>0x{fn_table_off:06X}",
-                bootstrap,
-            )
+                rf"\g<1>0x{DYLIB_DESCRIPTOR_OFF:06X}",
+                "__lwip_fn_table_off",
+            ),
+            (
+                r"(__lwip_expected_export_count\s*:=\s*)0x[0-9A-Fa-f]+",
+                rf"\g<1>0x{len(entries):06X}",
+                "__lwip_expected_export_count",
+            ),
+        ]
+        for pattern, replacement, label in substitutions:
+            new_bootstrap, n = re.subn(pattern, replacement, bootstrap)
             if n != 1:
-                print(f"  warning: expected exactly one __lwip_fn_table_off "
-                      f"placeholder in {INIT_RUNTIME_ASM.name}, found {n}; "
-                      f"offset not substituted", file=sys.stderr)
+                print(f"  warning: expected exactly one {label} placeholder "
+                      f"in {INIT_RUNTIME_ASM.name}, found {n}; value not "
+                      f"substituted", file=sys.stderr)
             else:
                 bootstrap = new_bootstrap
         lines.append(bootstrap)
@@ -642,16 +629,13 @@ def main() -> int:
              "drops. Default (no flag) is a full regenerate.")
     ap.add_argument(
         "--map", dest="map_path", metavar="lwIP.map", default=None,
-        help="Path to the app link map. When given, parse _fn_exports_table's "
-             "offset and substitute it into release/lwip.asm's "
-             "__lwip_fn_table_off placeholder.")
+        help="Deprecated compatibility option; runtime offsets are now fixed "
+             "by linker_script_lwip.ld and app metadata.")
     args = ap.parse_args()
 
-    fn_table_off: int | None = None
     if args.map_path:
-        fn_table_off = parse_fn_table_off(Path(args.map_path))
-        print(f"==> __lwip_fn_table_off = 0x{fn_table_off:06X} "
-              f"(from {args.map_path})", file=sys.stderr)
+        print("==> --map ignored: dylib runtime uses fixed descriptor offset "
+              "and app metadata", file=sys.stderr)
 
     if not CC.exists():
         print(f"ERROR: ez80-clang not found at {CC} (set CEDEV env var)",
@@ -749,10 +733,9 @@ def main() -> int:
           file=sys.stderr)
 
     RELEASE_DIR.mkdir(exist_ok=True)
-    LIBLOAD_STUB_ASM.write_text(render_libload_stub(new_entries, fn_table_off))
-    off_note = (f", __lwip_fn_table_off=0x{fn_table_off:06X}"
-                if fn_table_off is not None else
-                ", __lwip_fn_table_off=PROVISIONAL (no --map)")
+    LIBLOAD_STUB_ASM.write_text(render_libload_stub(new_entries))
+    off_note = (f", __lwip_fn_table_off=0x{DYLIB_DESCRIPTOR_OFF:06X}, "
+                f"expected_exports={len(new_entries)}")
     print(f"==> wrote {LIBLOAD_STUB_ASM} ({len(new_entries)} exports, "
           f"library {LIBLOAD_NAME} v{LIBLOAD_VERSION}{off_note})",
           file=sys.stderr)

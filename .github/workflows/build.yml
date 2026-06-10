@@ -5,11 +5,12 @@ on:
     branches: ['master']
     paths:
       - '.github/workflows/build.yml'
+      - '.gitmodules'
+      - 'build-release-dylib.sh'
       - 'makefile'
       - 'linker_script_lwip.ld'
       - 'src/**'
       - 'tools/**'
-      - 'release/makefile'
   workflow_dispatch:
 
 permissions:
@@ -33,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make tar curl unzip libxml2-utils python3
+          sudo apt-get install -y make tar curl unzip libxml2-utils python3 python3-clang libclang-dev
 
       - name: Cache CEdev Toolchain
         id: cedev-cache
@@ -88,24 +89,23 @@ jobs:
 
       - name: make dylib
         id: make_dylib
-        run: make dylib LINKER_SCRIPT="${{ github.workspace }}/linker_script_lwip.ld"
+        env:
+          LWIP_SKIP_DEP_CHECKOUT: '1'
+          APP_TOOLS_DIR: ${{ github.workspace }}/submodules/app_tools
+          TOOLCHAIN_DIR: ${{ env.TOOLCHAIN_SRC }}
+          CEDEV: ${{ env.CEDEV }}
+          FASMG: fasmg
+          CONVBIN: ${{ env.CEDEV_BIN }}/convbin
+          HEADER_PYTHON: python3
+        run: ./build-release-dylib.sh
 
-      - name: Copy release into toolchain source
-        run: |
-          rm -rf "${{ env.TOOLCHAIN_SRC }}/src/lwip"
-          cp -R "${{ github.workspace }}/release" "${{ env.TOOLCHAIN_SRC }}/src/lwip"
-
-      - name: make libload lib
+      - name: verify libload lib
         id: make_libload
         run: |
-          make -C "${{ env.TOOLCHAIN_SRC }}/src/lwip" \
-            FASMG=fasmg
-          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.8xv" "${{ github.workspace }}/release/lwip.8xv"
-          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ github.workspace }}/release/lwip.lib"
-          mkdir -p "${{ env.CEDEV }}/lib/libload" "${{ env.CEDEV }}/include"
-          cp "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip.lib" "${{ env.CEDEV }}/lib/libload/lwip.lib"
-          rm -rf "${{ env.CEDEV }}/include/lwip"
-          cp -R "${{ env.TOOLCHAIN_SRC }}/src/lwip/lwip" "${{ env.CEDEV }}/include/lwip"
+          test -f "${{ github.workspace }}/build/lwip.8xv"
+          test -f "${{ github.workspace }}/build/lwip.lib"
+          test -f "${{ env.CEDEV }}/lib/libload/lwip.lib"
+          test -d "${{ env.CEDEV }}/include/lwip"
 
       - name: upload action artifact
         id: upload_action_artifact
@@ -113,7 +113,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lwip-latest
-          path: ${{ github.workspace }}/release/
+          path: ${{ github.workspace }}/build/
           if-no-files-found: error
 
       - name: Publish job summary

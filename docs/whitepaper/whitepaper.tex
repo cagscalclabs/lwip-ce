@@ -546,7 +546,7 @@ Before beginning this project we needed to itemize what was available and what w
 				\item A small \texttt{LIBLOAD} companion library provides consumer-side stubs and a bootstrap function. The bootstrap locates the installed lwIP application, resolves the application export table, and patches or populates the local stubs so later API calls dispatch into the resident application.
 			\end{itemize}
 
-			Concretely, the implementation realizes this with three cooperating pieces. The lwIP application links an \emph{export table} into its own image: a six-byte magic marker (\texttt{"LWIPTB"}) followed by one entry per public symbol, each stored as that symbol's offset from the application base. Because applications link at a base of zero, an entry's link-time address \emph{is} its offset, so no base subtraction is needed at generation time. The table's position is not guessed at runtime; a build step records the byte offset to it (\texttt{\_\_lwip\_fn\_table\_off}) and bakes that constant into the companion library. The \emph{companion library} is an ordinary \texttt{LIBLOAD} library the consumer links against; it carries one jump-table trampoline per exported lwIP function plus an imports table (host CRT slots and the USB vtable). At runtime, a \emph{bootstrap} routine ties the two together.
+			Concretely, the implementation realizes this with three cooperating pieces. The lwIP application links an \emph{export table} into its own image at a fixed early descriptor offset: a six-byte magic marker (\texttt{"LWIPTB"}) followed by one entry per public symbol. Each entry is emitted as a normal relocatable symbol reference, so the installer patches it to the real installed Flash address when it fixes the app. The \emph{companion library} is an ordinary \texttt{LIBLOAD} library the consumer links against; it carries one jump-table trampoline per exported lwIP function plus an imports table (host CRT slots and the USB vtable). At runtime, a \emph{bootstrap} routine ties the two together by computing the app's linked-image base from installed app metadata, adding the fixed descriptor offset, validating the table, and copying the relocated addresses into the trampolines.
 
 			\subsubsection{Initialization Handshake}
 			Bringing the stack up happens in two stages: the ordinary \texttt{LIBLOAD} initialization of the companion library, followed by lwIP-CE's own runtime setup, triggered explicitly when the consumer calls \texttt{lwip\_init\_runtime(malloc, free, realloc)}. Figure~\ref{fig:libload_bootstrap} traces the full sequence. The key ordering constraint is that the application's own initialization (\texttt{lwip\_init\_runtime\_internal}) is itself an exported call, so it can only run \emph{after} the trampolines have been patched --- the bootstrap reaches into the app to finish setting up the app.
@@ -567,10 +567,10 @@ Before beginning this project we needed to itemize what was available and what w
 					\node[lib, below=of load] (call) {\textbf{Stage 2 --- consumer calls} \texttt{lwip\_init\_runtime(malloc, free, realloc)}\\
 						host CRT pointers written into the imports table};
 					\node[lib, below=of call] (find) {\textbf{Bootstrap locates the resident application}\\
-						by name $\rightarrow$ base address; \texttt{+ \_\_lwip\_fn\_table\_off} $\rightarrow$ export table};
+						by name $\rightarrow$ app base; metadata $\rightarrow$ linked image base; fixed offset $\rightarrow$ export table};
 					\node[lib, below=of find] (verify) {\textbf{Verify} \texttt{"LWIPTB"} \textbf{magic}\\
-						mismatch $\Rightarrow$ fail closed (stale/incompatible app)};
-					\node[lib, below=of verify] (patch) {\textbf{Patch each trampoline} $\rightarrow$ \texttt{(app base + offset)}\\
+						count/magic mismatch $\Rightarrow$ fail closed (stale/incompatible app)};
+					\node[lib, below=of verify] (patch) {\textbf{Patch each trampoline} $\rightarrow$ relocated in-app address\\
 						after this loop, every \texttt{lwip\_*} call dispatches into the app};
 					\node[app, below=of patch] (internal) {\textbf{Call} \texttt{lwip\_init\_runtime\_internal} \textbf{(now live)}\\
 						app zeroes \texttt{.bss}, copies \texttt{.data} from Flash, copies imports table into its reserved storage};

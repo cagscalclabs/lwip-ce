@@ -2,9 +2,9 @@
 """Generate the public-include tree consumed by apps linking against
 libload-shipped lwIP.
 
-Layout:
+Default layout:
 
-    release/lwip/
+    build/lwip/
         conn.h                   — pruned copy of src/lwIP.h (conn API)
         core.h                   — aggregate include for core/*.h
         core/<name>.h            — non-crypto source headers with public API
@@ -46,17 +46,32 @@ import json
 import os
 import platform
 import tempfile
+import glob
 from pathlib import Path
 
 import clang.cindex as C       # type: ignore
 
 # ---------------------------------------------------------------------
-# libclang setup. The Python `clang` bindings need an explicit path to
-# libclang.dylib on macOS — neither auto-discovery nor pip install
-# work in this dev environment.
+# libclang setup. The Python `clang` bindings often need an explicit
+# library path. Prefer LIBCLANG_PATH, then known local paths, and finally
+# let clang.cindex try its own discovery.
 # ---------------------------------------------------------------------
-C.Config.set_library_file(
-    "/Library/Developer/CommandLineTools/usr/lib/libclang.dylib")
+_libclang_candidates: list[str] = []
+if os.environ.get("LIBCLANG_PATH"):
+    _libclang_candidates.append(os.environ["LIBCLANG_PATH"])
+_libclang_candidates.extend([
+    "/Library/Developer/CommandLineTools/usr/lib/libclang.dylib",
+    "/usr/lib/llvm-18/lib/libclang.so",
+    "/usr/lib/llvm-17/lib/libclang.so",
+    "/usr/lib/llvm-16/lib/libclang.so",
+    "/usr/lib/llvm-15/lib/libclang.so",
+    "/usr/lib/llvm-14/lib/libclang.so",
+])
+_libclang_candidates.extend(sorted(glob.glob("/usr/lib/llvm-*/lib/libclang.so"), reverse=True))
+for _candidate in _libclang_candidates:
+    if _candidate and Path(_candidate).exists():
+        C.Config.set_library_file(_candidate)
+        break
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -67,7 +82,7 @@ PUBLIC_API_MANIFEST = REPO_ROOT / "tools" / "public_api_manifest.csv"
 CONN_SRC = SRC_DIR / "lwIP.h"
 TLS_INCLUDES = SRC_DIR / "tls" / "includes"
 
-OUT_DIR = REPO_ROOT / "release" / "lwip"
+OUT_DIR = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build")) / "lwip"
 OUT_CONN = OUT_DIR / "conn.h"
 DOCSTRING_CACHE_DIR = REPO_ROOT / "tools" / ".docstring_cache"
 DOCSTRING_PROMPT_VERSION = 1
@@ -383,7 +398,7 @@ def load_exports() -> set[str]:
 
 def load_public_api_manifest() -> list[dict[str, str]]:
     """Read the curated API manifest. The category column controls where
-    release headers are emitted under release/lwip/."""
+    generated release headers are emitted."""
     if not PUBLIC_API_MANIFEST.is_file():
         print(f"ERROR: public API manifest not found at {PUBLIC_API_MANIFEST}",
               file=sys.stderr)
@@ -1796,7 +1811,7 @@ def header_banner(group: str, out_name: str, header: Path) -> str:
 
 
 def grouped_header_name(source_header: Path, group_headers: list[Path]) -> str:
-    """Return the filename to use under release/lwip/<group>/.
+    """Return the filename to use under generated lwip/<group>/.
     If a group has basename clashes, prefix with the source parent."""
     basename = source_header.name
     if sum(1 for hp in group_headers if hp.name == basename) == 1:
@@ -1812,8 +1827,32 @@ def write_group_index(group: str, names: list[str], source_headers: list[Path]) 
         f"#define {guard}",
         "",
     ]
+    if group == "core":
+        lines.extend([
+            "#include <stdbool.h>",
+            "#include <stdint.h>",
+            "#include <stdlib.h>",
+            "",
+        ])
     for name in names:
         lines.append(f'#include "{group}/{name}"')
+    if group == "core":
+        lines.extend([
+            "",
+            "#ifdef __cplusplus",
+            'extern "C" {',
+            "#endif",
+            "",
+            "bool lwip_init_runtime_opaque(void *malloc_fn, void *free_fn, void *realloc_fn);",
+            "uint8_t lwip_runtime_last_error(void);",
+            "",
+            "#define lwip_init_runtime() \\",
+            "    lwip_init_runtime_opaque(malloc, free, realloc)",
+            "",
+            "#ifdef __cplusplus",
+            "}",
+            "#endif",
+        ])
     lines.extend(["", f"#endif /* {guard} */", ""])
     out_path.write_text("\n".join(lines))
 
@@ -1822,10 +1861,10 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
     """Emit release headers from the manifest allowlist.
 
     Layout is intentionally small:
-      - release/lwip/conn.h is the pruned src/lwIP.h convenience API.
-      - release/lwip/cryptography/*.h contains TLS/crypto headers.
-      - release/lwip/core/*.h contains every other lwIP/public header.
-    Aggregate release/lwip/cryptography.h and release/lwip/core.h include
+      - lwip/conn.h is the pruned src/lwIP.h convenience API.
+      - lwip/cryptography/*.h contains TLS/crypto headers.
+      - lwip/core/*.h contains every other lwIP/public header.
+    Aggregate lwip/cryptography.h and lwip/core.h include
     their corresponding subheaders.
     """
     by_group_source: dict[str, dict[str, list[str]]] = {}
@@ -2007,6 +2046,10 @@ def test_build_generated_headers() -> bool:
     # tice.h, etc.) live under ~/CEdev/include. Add it as a system include
     # path so external includes resolve when we syntax-check.
     cedev_include = Path(os.environ.get("CEDEV", os.path.expanduser("~/CEdev"))) / "include"
+    if not cedev_include.is_dir():
+        print(f"  warning: {cedev_include} missing; skipped release header syntax test",
+              file=sys.stderr)
+        return True
 
     public_headers = {OUT_CONN, OUT_DIR / "core.h", OUT_DIR / "cryptography.h"}
     for aggregate in [OUT_DIR / "core.h", OUT_DIR / "cryptography.h"]:

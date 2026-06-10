@@ -251,7 +251,7 @@ The public release layout is:
      - Umbrella include for crypto headers.
    * - ``lwip/cryptography/*.h``
      - Public cryptographic primitives.
-   * - ``lwip.s``
+   * - ``lwip.asm``
      - Release export/extern assembly surface for the dynamic library.
 
 The calculator is not a desktop lwIP target. There is no BSD sockets layer, no

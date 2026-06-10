@@ -158,6 +158,7 @@ typedef struct _eth_device_t
      * ETH_RX_DRAIN_MAX_ERRORS the netif is aborted. See eth_rx_ring_drain. */
     uint8_t rx_drain_errors;
     bool disabled_with_error;
+    bool shutting_down;
     struct mem_buffer *rx_ring;
     struct
     {
@@ -194,6 +195,18 @@ usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_call
  *  will reject further schedule_transfer requests for these
  *  endpoints, ensuring no in-flight frames arrive mid-teardown. */
 void eth_halt_all_endpoints(void);
+
+/** @brief Enter intentional stack shutdown mode.
+ *  Transfer callbacks stop re-arming endpoints and suppress endpoint
+ *  errors caused by USB cleanup/disconnect sequencing.
+ */
+void eth_prepare_shutdown(void);
+
+/** @brief Finalize intentional shutdown immediately before usb_Cleanup.
+ *  Driver objects remain allocated until process/runtime reset so late USB
+ *  callbacks still have valid inert callback data to inspect.
+ */
+void eth_finish_shutdown(void);
 
 
 struct usb_configurator {

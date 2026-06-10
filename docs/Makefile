@@ -7,14 +7,19 @@ SOURCEDIR = .
 BUILDDIR = _build
 WHITEPAPER_STATIC = _static/whitepaper.pdf
 WHITEPAPER_RELEASE_URL ?= https://github.com/cagscalclabs/lwip-ce/releases/download/whitepaper-latest/whitepaper.pdf
+LWIP_RELEASE_DIR ?= ../build
+HEADER_PYTHON ?= python3
 
-.PHONY: html doxygen whitepaper-pdf clean
+.PHONY: html doxygen release-headers whitepaper-pdf clean
 
 html: doxygen whitepaper-pdf
 	$(SPHINXBUILD) -b html "$(SOURCEDIR)" "$(BUILDDIR)/html"
 
-doxygen:
+doxygen: release-headers
 	$(DOXYGEN) Doxyfile
+
+release-headers:
+	cd .. && LWIP_RELEASE_DIR="$(abspath $(LWIP_RELEASE_DIR))" $(HEADER_PYTHON) tools/header_dump.py
 
 whitepaper-pdf:
 	@mkdir -p "_static"
@@ -22,4 +27,4 @@ whitepaper-pdf:
 	@echo "downloaded $(WHITEPAPER_RELEASE_URL) -> $(WHITEPAPER_STATIC)"
 
 clean:
-	rm -rf "$(BUILDDIR)" "_doxygen" "$(WHITEPAPER_STATIC)"
+	rm -rf "$(BUILDDIR)" "_doxygen" "$(WHITEPAPER_STATIC)" "$(LWIP_RELEASE_DIR)"

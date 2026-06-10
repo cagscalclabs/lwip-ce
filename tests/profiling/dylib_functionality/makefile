@@ -3,7 +3,7 @@
 # ----------------------------
 
 PROJECT_ROOT := ../../..
-INSTALLER_SRC := $(PROJECT_ROOT)/tools/app_tools/installer/src
+LWIP_RELEASE_DIR ?= $(PROJECT_ROOT)/build
 
 NAME = DYLBFUNC
 DESCRIPTION = "lwIP dylib smoke"
@@ -15,15 +15,10 @@ LTO = NO
 BSSHEAP_LOW = 0xD072C6
 
 CFLAGS = -Wall -Wextra -Oz \
-	-DAPPVAR_PREFIX=\"LWIP\" \
-	-DAPPVAR_SPLIT_SIZE=65200 \
-	-I$(INSTALLER_SRC)
+	-I$(LWIP_RELEASE_DIR)
 CXXFLAGS = $(CFLAGS)
 
-EXTRA_ASM_SOURCES = \
-	../../../tools/app_tools/installer/src/app.s \
-	../../../tools/app_tools/installer/src/flash.s \
-	../../../tools/app_tools/installer/src/ports.s
+EXTRA_LIBLOAD_LIBS = $(LWIP_RELEASE_DIR)/lwip.lib
 
 # ----------------------------
 

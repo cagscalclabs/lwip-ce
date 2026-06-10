@@ -15,6 +15,26 @@ SECTIONS
         KEEP (*(.header.icon))
     } >prgm
 
+    /* Fixed dylib descriptor ABI:
+     *
+     * The installed flash app has a CE application container before the
+     * linker image. The libload bootstrap computes that linked-image base
+     * from app metadata at runtime, then adds this fixed offset to reach the
+     * export table. Keep the table early and fail the build if the app header
+     * ever grows into this reserved slot.
+     */
+    PROVIDE(__lwip_dylib_descriptor_off = 0x40);
+    ASSERT(. <= LOAD_ADDR + __lwip_dylib_descriptor_off,
+           "Error: lwIP app header exceeds fixed dylib descriptor offset")
+
+    .lwip_dylib LOAD_ADDR + __lwip_dylib_descriptor_off :
+    {
+        KEEP(*(.fn_exports))
+    } >prgm
+
+    ASSERT(_fn_exports_table == LOAD_ADDR + __lwip_dylib_descriptor_off,
+           "Error: lwIP export table is not at fixed dylib descriptor offset")
+
     .init :
     {
         *(.init)
@@ -33,12 +53,6 @@ SECTIONS
 
     .rodata :
     {
-        /* The libload export table (src/functable.s) lives in its own
-         * .fn_exports section and is referenced only by the external
-         * libload bootstrap at runtime, so KEEP it from --gc-sections;
-         * its "LWIPTB" magic is the signal the bootstrap locates via
-         * __lwip_fn_table_off. */
-        KEEP(*(.fn_exports))
         *(.rodata .rodata.* .gnu.linkonce.r.*)
     } >prgm
 
@@ -113,13 +127,7 @@ SECTIONS
     . = BSSHEAP_HIGH;
     ___heap_high = .;
 
-    /* Phase-2 build hand-off: the libload library bootstrap
-     * (release/lwip.s, built separately) needs the runtime offset from
-     * the app's loaded base to _fn_exports_table. The phase-2 build
-     * step greps this symbol from bin/lwIP.map and injects it as
-     * `__lwip_fn_table_off` into the bootstrap source. Applications link
-     * at LOAD_ADDR = 0, so a symbol's link-time address already is its
-     * offset from the app base — no base subtraction needed. */
+    /* Map/debug alias for the fixed export-table ABI. */
     PROVIDE(__lwip_fn_table_off = _fn_exports_table);
 
     /* Safe-RAM scratch overlay (0xE30800, ti.cursorImage).

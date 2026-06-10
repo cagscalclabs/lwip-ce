@@ -19,10 +19,13 @@ __pycache__/
 obj
 bin
 *.8xv
+release/
+build/
+submodules/toolchain/
 
-# generated dylib installer artifacts (produced by `make dylib`)
-release/*INST.8xp
-release/*.8ek
+# generated dylib installer artifacts
+*INST.8xp
+*.8ek
 
 # httpd server example filesystem includes
 *makefsdata.c.*

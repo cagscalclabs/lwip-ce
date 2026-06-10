@@ -35,6 +35,7 @@
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
 static uint8_t ifnums_used = 0;
+static bool eth_driver_shutting_down = false;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
 {
@@ -74,6 +75,8 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 /* Defined below; forward-declared so eth_rx_ring_drain can abort the
  * netif on repeated drain-short failures. */
 static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason);
+static bool eth_netif_is_default_candidate(const struct netif *netif);
+static void eth_promote_default_if_needed(struct netif *netif);
 
 /* True if netif is one of our ethernet interfaces (named "en*") with a
  * backing eth_device_t. Centralizes the guard used by every netif walk
@@ -81,6 +84,11 @@ static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason);
 static inline bool eth_is_eth_netif(const struct netif *netif)
 {
     return netif && netif->name[0] == 'e' && netif->name[1] == 'n' && netif->state;
+}
+
+static inline bool eth_is_shutting_down(const eth_device_t *dev)
+{
+    return eth_driver_shutting_down || (dev && dev->shutting_down);
 }
 
 static void eth_schedule_rx_for_netifs(void)
@@ -93,7 +101,7 @@ static void eth_schedule_rx_for_netifs(void)
             continue;
         }
         eth_device_t *dev = (eth_device_t *)netif->state;
-        if (!dev->rx.callback || dev->rx_transfer_active)
+        if (eth_is_shutting_down(dev) || !dev->rx.callback || dev->rx_transfer_active)
         {
             continue;
         }
@@ -276,6 +284,51 @@ void eth_halt_all_endpoints(void)
     }
 }
 
+void eth_prepare_shutdown(void)
+{
+    struct netif *netif = NULL;
+    eth_driver_shutting_down = true;
+    NETIF_FOREACH(netif)
+    {
+        if (!eth_is_eth_netif(netif))
+        {
+            continue;
+        }
+        eth_device_t *dev = (eth_device_t *)netif->state;
+        dev->shutting_down = true;
+        dev->rx_transfer_active = false;
+        dev->rx_retries = 0;
+        dev->tx_retries = 0;
+        dev->int_retries = 0;
+    }
+}
+
+void eth_finish_shutdown(void)
+{
+    struct netif *netif = netif_list;
+    while (netif)
+    {
+        struct netif *next = netif->next;
+        if (!eth_is_eth_netif(netif))
+        {
+            netif = next;
+            continue;
+        }
+        eth_device_t *dev = (eth_device_t *)netif->state;
+        dev->shutting_down = true;
+        dev->rx_transfer_active = false;
+        usb_fn.set_device_data(dev->device, NULL);
+        netif_remove(netif);
+        if (dev->rx_ring)
+        {
+            mem_buffer_destroy(dev->rx_ring);
+            dev->rx_ring = NULL;
+        }
+        netif = next;
+    }
+    eth_driver_shutting_down = false;
+}
+
 /// UTF-16 -> hex conversion
 static uint8_t
 nibble(uint16_t c)
@@ -302,6 +355,11 @@ nibble(uint16_t c)
  * failure. */
 static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason)
 {
+    if (!dev || eth_is_shutting_down(dev))
+    {
+        return;
+    }
+
     LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
                 ("eth: fatal fault, giving up on netif"));
     lwip_log_event(LWIP_LOG_TYPE_USB, log_reason);
@@ -342,6 +400,11 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                            usb_transfer_data_t *data)
 {
     eth_device_t *dev = (eth_device_t *)data;
+    if (!dev || eth_is_shutting_down(dev))
+    {
+        return USB_SUCCESS;
+    }
+
     uint8_t *ibuf = dev->interrupt.buf;
     if (status)
     {
@@ -378,10 +441,7 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                     if (notify->wValue)
                     {
                         netif_set_link_up(&dev->iface);
-                        if (netif_default == NULL)
-                        {
-                            netif_set_default(&dev->iface);
-                        }
+                        eth_promote_default_if_needed(&dev->iface);
                     }
                     else
                     {
@@ -397,8 +457,7 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                             while (candidate)
                             {
                                 if (candidate != &dev->iface &&
-                                    netif_is_up(candidate) &&
-                                    netif_is_link_up(candidate))
+                                    eth_netif_is_default_candidate(candidate))
                                 {
                                     new_default = candidate;
                                     break;
@@ -418,7 +477,8 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
         } while (bytes_parsed < transferred);
         dev->int_retries = 0;
     }
-    if (usb_fn.schedule_transfer(dev->interrupt.endpoint, dev->interrupt.buf,
+    if (!eth_is_shutting_down(dev) &&
+        usb_fn.schedule_transfer(dev->interrupt.endpoint, dev->interrupt.buf,
                                  INTERRUPT_RX_MAX, interrupt_receive_callback,
                                  data) != USB_SUCCESS)
     {
@@ -437,8 +497,20 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
 {
     // Handle completion or error of the transfer, if needed
     struct eth_tx_ctx *ctx = (struct eth_tx_ctx *)data;
+    if (!ctx)
+    {
+        return USB_ERROR_FAILED;
+    }
     eth_device_t *dev = ctx->dev;
     struct pbuf *tbuf = ctx->p;
+    if (eth_is_shutting_down(dev))
+    {
+        if (tbuf)
+            pbuf_free(tbuf);
+        free(ctx);
+        return USB_SUCCESS;
+    }
+
     if (status)
     {
         log_usb_transfer_status(status);
@@ -486,8 +558,17 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                                  usb_transfer_data_t *data)
 {
     eth_device_t *dev = (eth_device_t *)data;
-    uint8_t *recvbuf = dev->rx.buf;
+    if (!dev)
+    {
+        return USB_ERROR_FAILED;
+    }
     dev->rx_transfer_active = false;
+    if (eth_is_shutting_down(dev))
+    {
+        return USB_SUCCESS;
+    }
+
+    uint8_t *recvbuf = dev->rx.buf;
     if (status)
     {
         log_usb_transfer_status(status);
@@ -524,7 +605,8 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
     }
     /* Self-re-arm on every successful receive so the dispatcher is a
      * safety net rather than the sole continuity path. */
-    if (!dev->rx_transfer_active &&
+    if (!eth_is_shutting_down(dev) &&
+        !dev->rx_transfer_active &&
         usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
                                  ETHERNET_MTU, ecm_receive_callback,
                                  dev) == USB_SUCCESS)
@@ -539,6 +621,8 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
 static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
+    if (eth_is_shutting_down(dev))
+        return ERR_IF;
     if (p->tot_len > ETHERNET_MTU)
         return ERR_MEM;
     struct pbuf *tbuf = pbuf_alloc(PBUF_RAW, p->tot_len, PBUF_RAM);
@@ -681,8 +765,17 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                                  usb_transfer_data_t *data)
 {
     eth_device_t *dev = (eth_device_t *)data;
-    uint8_t *recvbuf = dev->rx.buf;
+    if (!dev)
+    {
+        return USB_ERROR_FAILED;
+    }
     dev->rx_transfer_active = false;
+    if (eth_is_shutting_down(dev))
+    {
+        return USB_SUCCESS;
+    }
+
+    uint8_t *recvbuf = dev->rx.buf;
     if (status)
     {
         log_usb_transfer_status(status);
@@ -785,7 +878,8 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
 rx_rearm:
     /* Self-re-arm on every successful or bailed-out receive so the
      * dispatcher is a safety net rather than the sole continuity path. */
-    if (!dev->rx_transfer_active &&
+    if (!eth_is_shutting_down(dev) &&
+        !dev->rx_transfer_active &&
         usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
                                  NCM_RX_NTB_MAX_SIZE,
                                  ncm_receive_callback,
@@ -806,6 +900,8 @@ rx_rearm:
 static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
+    if (eth_is_shutting_down(dev))
+        return ERR_IF;
     uint16_t offset_ndp = get_next_offset(NCM_NTH_LEN, dev->class.ncm.ntb_params.wNdpInAlignment, 0);
     if (p->tot_len > ETHERNET_MTU)
         return ERR_MEM;
@@ -908,6 +1004,33 @@ static void eth_status_callback(struct netif *netif)
     }
 }
 
+static bool eth_netif_is_external(const struct netif *netif)
+{
+    return netif && ((netif->flags & NETIF_FLAG_ETHERNET) != 0);
+}
+
+static bool eth_netif_is_default_candidate(const struct netif *netif)
+{
+    return eth_netif_is_external(netif) &&
+           netif_is_up(netif) &&
+           netif_is_link_up(netif);
+}
+
+static void eth_promote_default_if_needed(struct netif *netif)
+{
+    if (!eth_netif_is_default_candidate(netif))
+    {
+        return;
+    }
+
+    if (!eth_netif_is_external(netif_default) ||
+        !netif_is_up(netif_default) ||
+        !netif_is_link_up(netif_default))
+    {
+        netif_set_default(netif);
+    }
+}
+
 ///----------------------------------------
 /// @brief ethernet NETIF initialization
 static err_t eth_netif_init(struct netif *netif)
@@ -946,6 +1069,11 @@ enum _descriptor_parser_await_states
 #define DESCRIPTOR_MAX_LEN 256
 static bool init_ethernet_usb_device(usb_device_t device)
 {
+    if (eth_driver_shutting_down)
+    {
+        return false;
+    }
+
     eth_device_t tmp = {0};
     eth_device_t *eth = NULL;
     size_t xferd, parsed_len, desc_len;
@@ -1218,10 +1346,6 @@ init_success:
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                     ("RESUME, netif=%c%c%u <- device=%p", eth->iface.name[0], eth->iface.name[1], eth->iface.num, device));
         eth_netif_init(&eth->iface);
-        if (netif_default == NULL)
-        {
-            netif_set_default(&eth->iface);
-        }
     }
     else
     {
@@ -1237,10 +1361,6 @@ init_success:
                         ("ERROR, ? netif= <- device=%p, netif add failed", device));
             free(eth);
             return false;
-        }
-        if (netif_default == NULL)
-        {
-            netif_set_default(iface);
         }
         // fetch next available device number to use
         // set pointer to eth_device_t as associated data for usb device too
@@ -1284,6 +1404,7 @@ init_success:
     lwip_dispatch_start();
 
     netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
+    eth_promote_default_if_needed(&eth->iface);
     // enqueue callbacks for receiving interrupt and RX transfers from this device.
     if (usb_fn.schedule_transfer(eth->interrupt.endpoint, eth->interrupt.buf,
                                  INTERRUPT_RX_MAX, interrupt_receive_callback,
@@ -1304,10 +1425,18 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
     switch (event)
     {
     case USB_DEVICE_CONNECTED_EVENT:
+        if (eth_driver_shutting_down)
+        {
+            break;
+        }
         if (!(usb_fn.get_role() & USB_ROLE_DEVICE))
             usb_fn.reset_device(usb_device);
         break;
     case USB_DEVICE_ENABLED_EVENT:
+        if (eth_driver_shutting_down)
+        {
+            break;
+        }
         if (usb_fn.get_device_flags(usb_device) & USB_IS_HUB)
         {
             // add handling for hubs
@@ -1335,8 +1464,15 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         eth_device_t *eth_device = (eth_device_t *)usb_fn.get_device_data(usb_device);
         if (eth_device)
         {
+            bool shutting_down = eth_driver_shutting_down || eth_device->shutting_down;
+            eth_device->shutting_down = shutting_down;
+            eth_device->rx_transfer_active = false;
             netif_set_link_down(&eth_device->iface);
             netif_set_down(&eth_device->iface);
+            if (shutting_down)
+            {
+                break;
+            }
             if (eth_device->rx.endpoint)
             {
                 usb_fn.set_endpoint_flags(eth_device->rx.endpoint, USB_MANUAL_TERMINATE);

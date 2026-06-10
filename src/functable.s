@@ -8,22 +8,17 @@
 ; Layout:
 ;   db  'L','W','I','P','T','B'   6-byte magic (ascending memory order)
 ;   d24 <entry count>
-;   d24 <offset>  ... one per exported symbol
+;   d24 <relocated address>  ... one per exported symbol
 ;
-; The libload bootstrap is emitted with the build-resolved address of
-; _fn_exports_table; at load it checks the 6 magic bytes there and
-; errors out on mismatch (stale/mismatched app paired with the lib).
+; The linker script pins this section at linked-image offset 0x40.
+; At load, the libload bootstrap computes the installed linked-image
+; base from app metadata, adds the fixed offset, then checks the magic
+; and entry count to reject stale/mismatched app+lib pairs.
 ;
-; Each entry is the symbol's offset from the first byte of the app
-; image (__app_base). Applications link at LOAD_ADDR = 0x000000, so a
-; symbol's link-time address already IS its offset from the app base;
-; we emit the bare symbol and the linker's relocation resolves it to
-; that offset. A runtime reader recovers the real address as
-; (relocated app base + offset).
-;
-; NB: we cannot write `symbol - __app_base` here — the assembler can't
-; reduce a difference of two link-time-external symbols. With base 0
-; the subtraction is a no-op anyway, so the bare symbol is correct.
+; Each d24 entry is a normal relocatable symbol reference. convbin
+; records it in the app relocation table, and the installer patches it
+; to the real installed flash address. The libload bootstrap therefore
+; copies entries directly into its trampolines; it does not add a base.
 
 .assume adl=1
 ; Dedicated, RETAIN-flagged section. Nothing in the app references
@@ -39,8 +34,11 @@
 .globl _fn_exports_table
 
 .extern _lwip_start
+.extern _lwip_start_last_error
+.extern _lwip_stop
 .extern _lwip_init_runtime_internal
 .extern _lwip_poll_network_events
+.extern _lwip_default_netif_info
 .extern _lwip_conn_create
 .extern _lwip_conn_destroy
 .extern _lwip_conn_connect
@@ -415,20 +413,22 @@
 .extern _eth_usb_event_callback
 .extern _tls_x25519_publickey
 .extern _tls_x25519_secret
-.extern _lwip_stop
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 378    ; entry count
+    d24 380    ; entry count
 
 ; --- src/lwIP.c ---
     d24 _lwip_start
+    d24 _lwip_start_last_error
+    d24 _lwip_stop
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
 
 ; --- src/lwIP.c ---
     d24 _lwip_poll_network_events
+    d24 _lwip_default_netif_info
     d24 _lwip_conn_create
     d24 _lwip_conn_destroy
     d24 _lwip_conn_connect
@@ -921,6 +921,3 @@ _fn_exports_table:
 ; --- src/tls/contrib/x25519/src/x25519.s ---
     d24 _tls_x25519_publickey
     d24 _tls_x25519_secret
-
-; --- src/lwIP.c ---
-    d24 _lwip_stop

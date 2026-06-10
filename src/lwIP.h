@@ -73,11 +73,12 @@ typedef enum
 typedef enum
 {
     LWIP_STATUS_INIT = 0,            /**< created but not connecting yet */
-    LWIP_STATUS_WAITING_SERVICES,    /**< connect deferred: netif not yet up
-                                          OR requested service (DHCP/DNS) not
-                                          yet ready. transitions automatically
-                                          to RESOLVING/CONNECTING when ready,
-                                          or to ERROR on timeout. */
+    LWIP_STATUS_WAITING_SERVICES,    /**< connect deferred: netif not yet
+                                          enumerated, link not up, or requested
+                                          service (DHCP/DNS) not yet ready.
+                                          transitions automatically to
+                                          RESOLVING/CONNECTING when ready, or
+                                          to ERROR on timeout. */
     LWIP_STATUS_RESOLVING,           /**< DNS lookup in flight */
     LWIP_STATUS_CONNECTING,          /**< TCP / TLS handshake in flight */
     LWIP_STATUS_CONNECTED,           /**< ready for write/recv */
@@ -88,11 +89,28 @@ typedef enum
 
 /** Service-up flags for lwip_conn_create. These are *netif-level* — they
  *  request that the given service be running on the resident interface,
- *  not that this connection uses them privately. Repeat calls with the
- *  same flag are no-ops. */
+ *  not that this connection uses them privately. lwip_conn_create records
+ *  them for polling; lwip_conn_connect also applies them idempotently while
+ *  waiting for the network to become usable. */
 #define LWIP_CONN_SVC_DHCP        (1u << 0)  /**< DHCP on resident netif */
 #define LWIP_CONN_SVC_SNTP        (1u << 1)  /**< SNTP started against DHCP/server */
 #define LWIP_CONN_SVC_DNS         (1u << 2)  /**< DNS resolver initialized */
+
+/** Snapshot of the default lwIP netif. IPv4 octets are stored in display
+ *  order: index 0 is the dotted-quad's first octet. */
+typedef struct
+{
+    bool    has_netif;
+    bool    up;
+    bool    link_up;
+    bool    dhcp_running;
+    uint8_t dhcp_state;
+    bool    has_ipv4;
+    bool    has_ipv4_gateway;
+    uint8_t ipv4_addr[4];
+    uint8_t ipv4_netmask[4];
+    uint8_t ipv4_gateway[4];
+} lwip_netif_info_t;
 
 /** Per-connection application callbacks. All optional; set via the
  *  lwip_conn_set_* helpers below before lwip_conn_connect. */
@@ -125,7 +143,7 @@ typedef struct
 
 /** Maximum time (ms) lwip_conn_connect will wait in
  *  LWIP_STATUS_WAITING_SERVICES before giving up with LWIP_ERR_NETIF.
- *  Covers worst-case DHCP-on-cold-boot latency on a slow link. */
+ *  Covers USB enumeration, link-up, and DHCP-on-cold-boot latency. */
 #define LWIP_CONN_SERVICES_TIMEOUT_MS  30000u
 
 /** Connection state. Transparent on purpose — apps may inspect `status`
@@ -161,7 +179,7 @@ struct lwip_conn
     struct altcp_tls_ce_config  *tls_conf;  /**< owned by conn, only for ALTCP_TLS */
 
     /* Deferred-connect state for LWIP_STATUS_WAITING_SERVICES. Set by
-     * lwip_conn_connect when the netif/services aren't ready yet;
+     * lwip_conn_connect when the netif/link/IP/services aren't ready yet;
      * cleared once the deferred connect fires (or times out). */
     const char          *pending_host;       /**< borrowed pointer; caller must keep alive */
     uint32_t             services_deadline;  /**< sys_now() in ms; 0 = unused */
@@ -178,6 +196,10 @@ struct lwip_conn
  *  directly instead. */
 bool lwip_start(void);
 
+/** Reason for the last lwip_start() failure.
+ *  0 = none, 1 = lwip_init/memory init, 2 = USB driver init. */
+uint8_t lwip_start_last_error(void);
+
 /** Tear down the network stack started by lwip_start(). Safe to call when the
  *  stack is not running. */
 void lwip_stop(void);
@@ -193,14 +215,21 @@ void lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
  *  The app should call this every iteration of its main loop. */
 void lwip_poll_network_events(void);
 
+/** Fill `info` with the current default netif state. Returns true if a
+ *  default netif exists. The function is safe to poll immediately after
+ *  lwip_start(); USB enumeration, link-up, and DHCP can all complete later. */
+bool lwip_default_netif_info(lwip_netif_info_t *info);
+
 /** Initialize a connection handle.
  *
  *  @param conn      Caller-allocated handle. Zeroed by this call.
  *  @param netif     Resident interface. NULL means "use netif_default".
+ *                   If no default netif exists yet, create still succeeds;
+ *                   lwip_conn_connect queues until USB/link/DHCP are ready.
  *  @param protocol  Transport selector (see lwip_protocol_t).
  *  @param flags     Service-up flags (LWIP_CONN_SVC_*). Each enabled flag
  *                   asks the implementation to start that service on the
- *                   resident netif if it isn't already running. */
+ *                   resident netif as soon as the netif exists and is up. */
 lwip_error_t lwip_conn_create(struct lwip_conn *conn,
                               struct netif *netif,
                               lwip_protocol_t protocol,

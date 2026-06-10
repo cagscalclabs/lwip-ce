@@ -32,6 +32,7 @@
 #include "lwip/tcp.h"
 #include "lwip/logging.h"
 #include "lwip/teardown.h"
+#include "lwip/dispatch.h"
 
 #include "lwip/altcp.h"
 #include "lwip/altcp_tls.h"
@@ -2760,8 +2761,10 @@ static void cleanup_lwip_stack(void)
     {
         return;
     }
+    lwip_started = false;
 
-    lwip_teardown_abort_pcbs();
+    lwip_dispatch_stop();
+    eth_prepare_shutdown();
 
     if (sntp_started)
     {
@@ -2769,26 +2772,34 @@ static void cleanup_lwip_stack(void)
         sntp_started = false;
     }
 
-    if (netif_default)
+    struct netif *n = NULL;
+    NETIF_FOREACH(n)
     {
 #if LWIP_DHCP
-        if (dhcp_client_running(netif_default))
+        if (dhcp_client_running(n))
         {
-            dhcp_release_and_stop(netif_default);
+            dhcp_release_and_stop(n);
         }
 #endif
-        netif_set_down(netif_default);
     }
 
-    usb_Cleanup();
+    lwip_teardown_abort_pcbs();
+
+    NETIF_FOREACH(n)
+    {
+        netif_set_link_down(n);
+        netif_set_down(n);
+    }
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     ti_CloseAll();
 #pragma GCC diagnostic pop
-    lwip_started = false;
     dhcp_started = false;
     manual_ip_applied = false;
     httpd_running = false;
+    eth_finish_shutdown();
+    usb_Cleanup();
 }
 
 static void lwip_fatal_cleanup(uint8_t type, uint8_t reason)

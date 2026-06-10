@@ -1,8 +1,10 @@
 symbol,category,source_header
 lwip_start,conn,src/lwIP.h
+lwip_start_last_error,conn,src/lwIP.h
 lwip_stop,conn,src/lwIP.h
 lwip_init_runtime_internal,conn,src/lwIP.h
 lwip_poll_network_events,conn,src/lwIP.h
+lwip_default_netif_info,conn,src/lwIP.h
 lwip_conn_create,conn,src/lwIP.h
 lwip_conn_destroy,conn,src/lwIP.h
 lwip_conn_connect,conn,src/lwIP.h

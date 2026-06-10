@@ -3,19 +3,32 @@
 ;   FindAppStart, verifies the export-table magic, and patches each in-lib
 ;   trampoline (jp 0) to point at its real in-app function address.
 ;
-; __lwip_fn_table_off is the byte offset from app base to _fn_exports_table.
-; The phase-2 build greps it from bin/lwIP.map and substitutes the literal
-; below before fasmg runs.
+; FindAppStart returns the CE app container base, not the linked image base.
+; The linked image base is computed from the installed app metadata, matching
+; the installer relocation logic. __lwip_fn_table_off is a fixed ABI offset
+; from that linked image base to _fn_exports_table.
 
-__lwip_fn_table_off  := 0x000000
+__lwip_fn_table_off := 0x000040
+__lwip_expected_export_count := 0x000000
 
 	export lwip_init_runtime_opaque
+	export lwip_runtime_last_error
 
 __lwip_app_name:
 	db "lwIP", 0
 
+__lwip_runtime_error:
+	db 0
+
+lwip_runtime_last_error:
+	ld a, (__lwip_runtime_error)
+	ret
+
 lwip_init_runtime_opaque:
 	call ti._frameset0
+
+	xor a, a
+	ld (__lwip_runtime_error), a
 
 	ld hl, (ix + 6)
 	ld (_fn_imports_table + 0), hl		; malloc
@@ -26,10 +39,22 @@ lwip_init_runtime_opaque:
 
 	ld hl, __lwip_app_name
 	call ti.FindAppStart			; HL <- app base, carry on not-found
-	jr c, .table_fail
+	jr c, .app_missing
 
+	; CE app metadata at app_base + 0x112 stores the offset to the linked
+	; image after the relocation table. The linked image starts 0x100 bytes
+	; after the CE app header, so:
+	;   linked_base = app_base + 0x100 + d24(app_base + 0x112)
 	push hl
-	pop de					; DE = app base, held through the loop
+	ld de, $112
+	add hl, de
+	ld hl, (hl)
+	ld de, $100
+	add hl, de
+	pop de
+	add hl, de
+	push hl
+	pop de					; DE = linked image base
 
 	push de
 	ld de, __lwip_fn_table_off
@@ -66,6 +91,12 @@ lwip_init_runtime_opaque:
 	inc hl					; HL -> first entry
 	inc hl
 	inc hl
+	push hl
+	ld hl, __lwip_expected_export_count
+	or a, a
+	sbc hl, bc
+	pop hl
+	jr nz, .count_fail
 
 	push ix
 	ld ix, _lwip_jp_table_start + 1		; first trampoline operand
@@ -75,8 +106,7 @@ lwip_init_runtime_opaque:
 	jr z, .patch_done
 
 	push hl
-	ld hl, (hl)				; entry: offset from app base
-	add hl, de				; -> real in-app address
+	ld hl, (hl)				; entry: installer-relocated app address
 	ld (ix + 0), hl				; patch trampoline operand
 	pop hl
 
@@ -104,8 +134,18 @@ lwip_init_runtime_opaque:
 	ld a, 1
 	ret
 
+.app_missing:
+	ld a, 1
+	jr .fail
+
 .table_fail:
-	; TODO: decide failure surface (return status vs abort with message).
+	ld a, 2
+	jr .fail
+
+.count_fail:
+	ld a, 3
+.fail:
+	ld (__lwip_runtime_error), a
 	pop ix
 	ld a, 0
 	ret

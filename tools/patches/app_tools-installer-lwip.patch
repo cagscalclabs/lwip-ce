@@ -1,0 +1,69 @@
+diff --git a/installer/src/main.c b/installer/src/main.c
+index 184d3f5..6aaefab 100644
+--- a/installer/src/main.c
++++ b/installer/src/main.c
+@@ -25,9 +25,11 @@ enum
+ 
+ struct appvar
+ {
++    char name[10];
+     uint8_t *data;
+     uint24_t size;
+     uintptr_t app_offset;
++    bool deleted;
+ };
+ 
+ static struct appvar appvars[MAX_APPVARS];
+@@ -61,9 +63,10 @@ static bool check_variable_overlaps(const uint8_t *app_start)
+         {
+             char appvar_name[10];
+ 
+-            sprintf(name, APPVAR_PREFIX "%u", i);
++            sprintf(appvar_name, APPVAR_PREFIX "%u", i);
+ 
+-            if (strncmp(name, appvar_name, length) == 0)
++            if (strlen(appvar_name) == length &&
++                strncmp(name, appvar_name, length) == 0)
+             {
+                 const uint24_t addr = (uintptr_t)app_start + (APPVAR_SPLIT_SIZE * i);
+ 
+@@ -123,10 +126,13 @@ static int install(void)
+             {
+                 d += 10 + namelen;
+             }
+-        
++
++            strncpy(appvar->name, name, sizeof appvar->name);
++            appvar->name[sizeof appvar->name - 1] = '\0';
+             appvar->size = *(uint16_t*)d;
+             appvar->data = d + 2;
+             appvar->app_offset = app_size;
++            appvar->deleted = false;
+ 
+             /* first appvar contains app name */
+             if (i == 0)
+@@ -221,6 +227,11 @@ static int install(void)
+             written = dst_start;
+             if (dst_start == seg_start)
+             {
++                if (!appvar->deleted)
++                {
++                    delete_var(appvar->name, OS_TYPE_APPVAR);
++                    appvar->deleted = true;
++                }
+                 appvar--;
+             }
+         }
+@@ -279,11 +290,10 @@ int main(int argc, char **argv)
+             os_PutStrFull(app_name);
+             os_NewLine();
+             os_NewLine();
+-            os_PutStrFull("Delete installer files?");
++            os_PutStrFull("Delete installer?");
+             if (confirm_delete_vars())
+             {
+                 delete_var(argv[0], OS_TYPE_PROT_PRGM);
+-                delete_vars();
+             }
+             return SUCCESS;
+             break;
