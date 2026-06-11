@@ -166,7 +166,7 @@ _powmod_exp_u24_impl:
    dec   c
    ld   hl, __tls_scratch_end - 1
    push hl
-   or a, a
+   scf
    sbc   hl, bc
    push hl
    lea hl, ix + Ltmp

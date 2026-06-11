@@ -143,19 +143,7 @@ SECTIONS
      *     the linker knows the window size and flags a collision if either
      *     consumer outgrows it.
      *
-     * MEMBER ORDER MATTERS. OVERLAY gives every member the same VMA but
-     * CONSECUTIVE load addresses, advancing the LMA by each member's size —
-     * including the nobits .saferam.rng (520B), which emits NO bytes into the
-     * program file. So any LOADABLE member placed AFTER a nobits member gets
-     * a LOADADDR pointing past a hole the file doesn't contain, and its copy
-     * loop (ldir) reads garbage. Keep both loadable members (.x25519.reloc,
-     * .powmod.reloc) adjacent and FIRST; put the nobits .saferam.rng LAST so
-     * no load image is displaced by the gap. (This is why X25519 worked and
-     * powmod, formerly third, crashed before its first instruction.)
-     *
-     * ld auto-creates __load_start_<sec>/__load_stop_<sec>; the alias defs
-     * below keep the existing asm symbol names working so x25519.s, bigint.s
-     * and the RNG code need no edits beyond sourcing the base. */
+    */
     OVERLAY 0xE30800 : AT ( LOADADDR(.data) + SIZEOF(.data) )
     {
         .x25519.reloc
