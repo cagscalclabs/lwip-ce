@@ -75,28 +75,53 @@ static void altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cn
 
 #define ALTCP_TLS_CE_PSKI_APPVAR "lwIPPSKI"
 #define ALTCP_TLS_CE_PSKI_MAGIC 0x49534B50u /* "PSKI" */
-#define ALTCP_TLS_CE_PSKI_VERSION 2u
+#define ALTCP_TLS_CE_PSKI_VERSION 0u
 #define ALTCP_TLS_CE_PSKI_HOSTNAME_MAX 64
+#define ALTCP_TLS_CE_PSKI_MAX_ENTRIES 4u
 
-/* Persisted TLS PSK identity record. Bound to a hostname so a saved
- * session is only ever offered back to the server it came from. Older
- * v1 blobs lack the hostname field; load_pski treats them as a no-match
- * (an opportunistic resumption that fails just falls back to ECDHE). */
-struct altcp_tls_ce_pski_blob
+struct altcp_tls_ce_pski_header
 {
     uint32_t magic;
     uint16_t version;
+    uint16_t count;
+};
+
+/* Persisted TLS PSK identity entry. Bound to a hostname so a saved session
+ * is only ever offered back to the server it came from. */
+struct altcp_tls_ce_pski_entry
+{
     uint16_t psk_type;
     uint8_t psk[32];
     char hostname[ALTCP_TLS_CE_PSKI_HOSTNAME_MAX];  /* NUL-terminated */
     struct tls_psk_identity identity;
 };
 
+struct altcp_tls_ce_pski_store
+{
+    struct altcp_tls_ce_pski_header header;
+    struct altcp_tls_ce_pski_entry entries[ALTCP_TLS_CE_PSKI_MAX_ENTRIES];
+};
+
+static struct altcp_tls_ce_pski_store g_pski_store;
+
+static bool altcp_tls_ce_pski_entry_matches(const struct altcp_tls_ce_pski_entry *entry,
+                                            const char *hostname)
+{
+    return entry &&
+           entry->identity.identity_len <= sizeof(entry->identity.identity) &&
+           memchr(entry->hostname, '\0', sizeof(entry->hostname)) &&
+           strcmp(entry->hostname, hostname) == 0;
+}
+
 static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session,
                                    const char *hostname)
 {
     uint8_t handle;
-    struct altcp_tls_ce_pski_blob blob;
+    var_t *pski_var;
+    struct altcp_tls_ce_pski_store *store = &g_pski_store;
+    uint16_t count;
+    uint16_t slot;
+    uint16_t i;
 
     if (!session || !session->valid || !hostname ||
         session->identity.identity_len > sizeof(session->identity.identity))
@@ -104,27 +129,63 @@ static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session,
         return false;
     }
     size_t host_len = strlen(hostname);
-    if (host_len == 0 || host_len >= sizeof(blob.hostname))
+    if (host_len == 0 || host_len >= ALTCP_TLS_CE_PSKI_HOSTNAME_MAX)
     {
         /* Hostnames that don't fit can't be safely resumed; skip persistence
          * rather than truncating (truncation could match the wrong host). */
         return false;
     }
 
-    memset(&blob, 0, sizeof(blob));
-    blob.magic = ALTCP_TLS_CE_PSKI_MAGIC;
-    blob.version = ALTCP_TLS_CE_PSKI_VERSION;
-    blob.psk_type = session->psk_type;
-    memcpy(blob.psk, session->psk, sizeof(blob.psk));
-    memcpy(blob.hostname, hostname, host_len + 1);  /* +1 for NUL */
-    memcpy(&blob.identity, &session->identity, sizeof(blob.identity));
+    memset(store, 0, sizeof(*store));
+    pski_var = os_GetAppVarData(ALTCP_TLS_CE_PSKI_APPVAR, NULL);
+    if (pski_var && *((uint16_t *)pski_var) == sizeof(*store))
+    {
+        memcpy(store, (const uint8_t *)pski_var + 2, sizeof(*store));
+    }
+
+    if (store->header.magic != ALTCP_TLS_CE_PSKI_MAGIC ||
+        store->header.version != ALTCP_TLS_CE_PSKI_VERSION ||
+        store->header.count > ALTCP_TLS_CE_PSKI_MAX_ENTRIES)
+    {
+        memset(store, 0, sizeof(*store));
+        store->header.magic = ALTCP_TLS_CE_PSKI_MAGIC;
+        store->header.version = ALTCP_TLS_CE_PSKI_VERSION;
+    }
+
+    count = store->header.count;
+    slot = count;
+    for (i = 0; i < count; i++)
+    {
+        if (altcp_tls_ce_pski_entry_matches(&store->entries[i], hostname))
+        {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == count)
+    {
+        if (count >= ALTCP_TLS_CE_PSKI_MAX_ENTRIES)
+        {
+            slot = 0;
+        }
+        else
+        {
+            store->header.count = count + 1;
+        }
+    }
+
+    memset(&store->entries[slot], 0, sizeof(store->entries[slot]));
+    store->entries[slot].psk_type = session->psk_type;
+    memcpy(store->entries[slot].psk, session->psk, sizeof(store->entries[slot].psk));
+    memcpy(store->entries[slot].hostname, hostname, host_len + 1);  /* +1 for NUL */
+    memcpy(&store->entries[slot].identity, &session->identity, sizeof(store->entries[slot].identity));
 
     handle = ti_Open(ALTCP_TLS_CE_PSKI_APPVAR, "w");
     if (!handle)
     {
         return false;
     }
-    if (ti_Write(&blob, sizeof(blob), 1, handle) != 1)
+    if (ti_Write(store, sizeof(*store), 1, handle) != 1)
     {
         ti_Close(handle);
         return false;
@@ -133,57 +194,63 @@ static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session,
     return true;
 }
 
-/* Load a saved PSK identity only if it was issued for `hostname`. Older
- * v1 blobs (no hostname field) fail this check by version mismatch and
- * are silently ignored; the caller falls back to a fresh ECDHE handshake
- * and may write a fresh v2 blob via NewSessionTicket. */
+/* Load a saved PSK identity only if it was issued for `hostname`.
+ * Read the appvar in place instead of copying the whole PSKI store onto
+ * the eZ80 stack. */
 static bool altcp_tls_ce_load_pski(struct altcp_tls_session *session,
                                    const char *hostname)
 {
-    uint8_t handle;
-    struct altcp_tls_ce_pski_blob blob;
+    var_t *pski_var;
+    const struct altcp_tls_ce_pski_store *store;
+    const struct altcp_tls_ce_pski_entry *entry;
+    uint16_t pski_size;
+    uint16_t i;
 
     if (!session || !hostname)
     {
         return false;
     }
 
-    handle = ti_Open(ALTCP_TLS_CE_PSKI_APPVAR, "r");
-    if (!handle)
+    pski_var = os_GetAppVarData(ALTCP_TLS_CE_PSKI_APPVAR, NULL);
+    if (!pski_var)
     {
         return false;
     }
-    if (ti_Read(&blob, sizeof(blob), 1, handle) != 1)
+    pski_size = *((uint16_t *)pski_var);
+    if (pski_size != sizeof(*store))
     {
-        ti_Close(handle);
         return false;
     }
-    ti_Close(handle);
+    store = (const struct altcp_tls_ce_pski_store *)((const uint8_t *)pski_var + 2);
 
-    if (blob.magic != ALTCP_TLS_CE_PSKI_MAGIC ||
-        blob.version != ALTCP_TLS_CE_PSKI_VERSION ||
-        blob.identity.identity_len > sizeof(blob.identity.identity))
-    {
-        return false;
-    }
-    /* Hostname match is mandatory. Force NUL-termination in case the
-     * stored field was tampered with. */
-    blob.hostname[sizeof(blob.hostname) - 1] = '\0';
-    if (strcmp(blob.hostname, hostname) != 0)
+    if (store->header.magic != ALTCP_TLS_CE_PSKI_MAGIC ||
+        store->header.version != ALTCP_TLS_CE_PSKI_VERSION ||
+        store->header.count > ALTCP_TLS_CE_PSKI_MAX_ENTRIES)
     {
         return false;
     }
 
-    memset(session, 0, sizeof(*session));
-    session->valid = 1;
-    session->psk_type = (uint8_t)blob.psk_type;
-    if (session->psk_type != TLS_PSK_TYPE_EXTERNAL)
+    for (i = 0; i < store->header.count; i++)
     {
-        session->psk_type = TLS_PSK_TYPE_RESUMPTION;
+        entry = &store->entries[i];
+        if (!altcp_tls_ce_pski_entry_matches(entry, hostname))
+        {
+            continue;
+        }
+
+        memset(session, 0, sizeof(*session));
+        session->valid = 1;
+        session->psk_type = (uint8_t)entry->psk_type;
+        if (session->psk_type != TLS_PSK_TYPE_EXTERNAL)
+        {
+            session->psk_type = TLS_PSK_TYPE_RESUMPTION;
+        }
+        memcpy(session->psk, entry->psk, sizeof(session->psk));
+        memcpy(&session->identity, &entry->identity, sizeof(session->identity));
+        return true;
     }
-    memcpy(session->psk, blob.psk, sizeof(session->psk));
-    memcpy(&session->identity, &blob.identity, sizeof(session->identity));
-    return true;
+
+    return false;
 }
 
 static void tls_state_add(altcp_tls_ce_state_t *state)

@@ -1381,7 +1381,7 @@ bool tls_send_client_hello(
     /* Fixed ClientHello body before extensions is 43 bytes. The constants
      * below include the 4-byte handshake header so the unchecked serializer
      * cannot overrun a too-small caller buffer. */
-    required_ext_len = 7 + 8 + 42 + 14 + sni_len;
+    required_ext_len = 7 + 8 + 42 + 8 + 18 + sni_len;
     if (ctx->psk_mode)
     {
         required_ext_len += 7 + 47 + ctx->psk_identity.identity_len;
@@ -1479,7 +1479,29 @@ bool tls_send_client_hello(
     out[offset++] = 0x08;
     out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
 
-    /* Extension 5: server_name (SNI) */
+    /* Extension 5: signature_algorithms_cert.
+     * Keep CertificateVerify constrained by signature_algorithms above, but
+     * allow common RSA certificate-chain signatures. */
+    out[offset++] = 0x00;
+    out[offset++] = 0x32; /* Extension type: signature_algorithms_cert */
+    out[offset++] = 0x00;
+    out[offset++] = 0x0e; /* Extension length: 14 */
+    out[offset++] = 0x00;
+    out[offset++] = 0x0c; /* Signature algorithms list length: 12 */
+    out[offset++] = 0x04;
+    out[offset++] = 0x01; /* rsa_pkcs1_sha256 */
+    out[offset++] = 0x05;
+    out[offset++] = 0x01; /* rsa_pkcs1_sha384 */
+    out[offset++] = 0x06;
+    out[offset++] = 0x01; /* rsa_pkcs1_sha512 */
+    out[offset++] = 0x08;
+    out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
+    out[offset++] = 0x08;
+    out[offset++] = 0x05; /* rsa_pss_rsae_sha384 */
+    out[offset++] = 0x08;
+    out[offset++] = 0x06; /* rsa_pss_rsae_sha512 */
+
+    /* Extension 6: server_name (SNI) */
     if (ctx->hostname)
     {
         if (offset + 9 + hostname_len > out_len)
