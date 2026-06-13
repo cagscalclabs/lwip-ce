@@ -79,6 +79,8 @@ static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags);
 static struct netif *find_external_netif(void);
 static bool netif_has_usable_ipv4(const struct netif *n);
 static bool netif_has_usable_gateway(const struct netif *n);
+static bool host_requires_dns(const char *host);
+static bool dns_has_configured_server(void);
 static void lwip_conn_detach_pcb_callbacks(struct lwip_conn *conn);
 static void services_list_remove(struct lwip_conn *c);
 static void services_list_cancel_all(lwip_error_t err);
@@ -596,6 +598,8 @@ static bool lwip_conn_services_timed_out(uint32_t now, uint32_t deadline)
 static void lwip_conn_fail(struct lwip_conn *conn, lwip_error_t err)
 {
     if (!conn) return;
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                    (int)err, 0);
     conn->pending_host = NULL;
     conn->services_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
@@ -625,6 +629,42 @@ static bool netif_has_usable_gateway(const struct netif *n)
 #endif
 }
 
+static bool host_requires_dns(const char *host)
+{
+    ip_addr_t parsed;
+
+    if (!host || !*host)
+    {
+        return false;
+    }
+    if (ip4addr_aton(host, ip_2_ip4(&parsed)))
+    {
+        return false;
+    }
+#if LWIP_IPV6
+    if (ip6addr_aton(host, ip_2_ip6(&parsed)))
+    {
+        return false;
+    }
+#endif
+    return true;
+}
+
+static bool dns_has_configured_server(void)
+{
+#if LWIP_DNS
+    for (uint8_t i = 0; i < DNS_MAX_SERVERS; i++)
+    {
+        const ip_addr_t *server = dns_getserver(i);
+        if (server && !ip_addr_isany(server))
+        {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
 /* Are the requested netif-level services ready for a connect? This also
  * resolves a lazily-created NULL conn->netif to netif_default once USB
  * enumeration creates it, and starts requested netif services the first
@@ -635,7 +675,8 @@ static bool netif_has_usable_gateway(const struct netif *n)
  * attempting transport connect; public destinations otherwise commonly
  * fail immediately with ERR_RTE even though DHCP is still converging. */
 static lwip_conn_services_state_t services_check(struct lwip_conn *conn,
-                                                 lwip_error_t *err_out)
+                                                 lwip_error_t *err_out,
+                                                 const char *host)
 {
     lwip_error_t svc_err;
 
@@ -645,7 +686,11 @@ static lwip_conn_services_state_t services_check(struct lwip_conn *conn,
     {
         conn->netif = resolve_netif(NULL);
     }
-    if (!conn->netif) return LWIP_CONN_SERVICES_WAIT;
+    if (!conn->netif)
+    {
+        if (err_out) *err_out = LWIP_ERR_NETIF;
+        return LWIP_CONN_SERVICES_WAIT;
+    }
 
     svc_err = apply_service_flags(conn->netif, conn->flags);
     if (svc_err != LWIP_OK)
@@ -654,9 +699,21 @@ static lwip_conn_services_state_t services_check(struct lwip_conn *conn,
         return LWIP_CONN_SERVICES_FAILED;
     }
 
-    if (!netif_is_up(conn->netif)) return LWIP_CONN_SERVICES_WAIT;
-    if (!netif_is_link_up(conn->netif)) return LWIP_CONN_SERVICES_WAIT;
-    if (!netif_has_usable_ipv4(conn->netif)) return LWIP_CONN_SERVICES_WAIT;
+    if (!netif_is_up(conn->netif))
+    {
+        if (err_out) *err_out = LWIP_ERR_NETIF;
+        return LWIP_CONN_SERVICES_WAIT;
+    }
+    if (!netif_is_link_up(conn->netif))
+    {
+        if (err_out) *err_out = LWIP_ERR_NETIF;
+        return LWIP_CONN_SERVICES_WAIT;
+    }
+    if (!netif_has_usable_ipv4(conn->netif))
+    {
+        if (err_out) *err_out = LWIP_ERR_NETIF;
+        return LWIP_CONN_SERVICES_WAIT;
+    }
 
     if (netif_default != conn->netif)
     {
@@ -666,8 +723,24 @@ static lwip_conn_services_state_t services_check(struct lwip_conn *conn,
 #if LWIP_DHCP
     if (conn->flags & LWIP_CONN_SVC_DHCP)
     {
-        if (!dhcp_client_running(conn->netif)) return LWIP_CONN_SERVICES_WAIT;
-        if (!netif_has_usable_gateway(conn->netif)) return LWIP_CONN_SERVICES_WAIT;
+        if (!dhcp_client_running(conn->netif))
+        {
+            if (err_out) *err_out = LWIP_ERR_NETIF;
+            return LWIP_CONN_SERVICES_WAIT;
+        }
+        if (!netif_has_usable_gateway(conn->netif))
+        {
+            if (err_out) *err_out = LWIP_ERR_NETIF;
+            return LWIP_CONN_SERVICES_WAIT;
+        }
+    }
+#endif
+#if LWIP_DNS
+    if ((conn->flags & LWIP_CONN_SVC_DNS) && host_requires_dns(host) &&
+        !dns_has_configured_server())
+    {
+        if (err_out) *err_out = LWIP_ERR_DNS;
+        return LWIP_CONN_SERVICES_WAIT;
     }
 #endif
     return LWIP_CONN_SERVICES_READY;
@@ -737,6 +810,14 @@ static lwip_error_t lwip_conn_wait_for_services(struct lwip_conn *conn,
     conn->last_error = LWIP_OK;
     conn->services_deadline = deadline;
     services_list_add(conn);
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_WAIT, 0, 0);
+#if LWIP_DNS
+    if ((conn->flags & LWIP_CONN_SVC_DNS) && host_requires_dns(host) &&
+        !dns_has_configured_server())
+    {
+        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_DNS_WAIT, 0, 0);
+    }
+#endif
     services_arm();
     return LWIP_OK;
 }
@@ -756,7 +837,8 @@ static void services_dispatch(void)
     {
         struct lwip_conn *next = c->services_next;
         lwip_error_t svc_err = LWIP_OK;
-        lwip_conn_services_state_t svc_state = services_check(c, &svc_err);
+        lwip_conn_services_state_t svc_state = services_check(c, &svc_err,
+                                                              c->pending_host);
         if (svc_state == LWIP_CONN_SERVICES_READY)
         {
             const char *host = c->pending_host;
@@ -770,6 +852,8 @@ static void services_dispatch(void)
             if (err == LWIP_ERR_NETIF &&
                 !lwip_conn_services_timed_out(now, deadline))
             {
+                lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_RETRY,
+                                (int)LWIP_ERR_NETIF, 0);
                 (void)lwip_conn_wait_for_services(c, host, port, deadline);
             }
             else if (err != LWIP_OK && c->on_err)
@@ -784,8 +868,11 @@ static void services_dispatch(void)
         }
         else if (lwip_conn_services_timed_out(now, c->services_deadline))
         {
+            lwip_error_t timeout_err = svc_err ? svc_err : LWIP_ERR_NETIF;
             services_list_remove(c);
-            lwip_conn_fail(c, LWIP_ERR_NETIF);
+            lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SERVICES_TIMEOUT,
+                            (int)timeout_err, 0);
+            lwip_conn_fail(c, timeout_err);
         }
         c = next;
     }
@@ -887,6 +974,8 @@ static void conn_altcp_err_cb(void *arg, err_t err)
     if (!c) return;
     c->status = LWIP_STATUS_ERROR;
     c->last_error = lwip_err_translate(err);
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                    (int)c->last_error, 0);
     /* lower layer freed the pcb */
     c->pcb.altcp = NULL;
     if (g_lwip_stopping) return;
@@ -903,10 +992,13 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
     {
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
+        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                        (int)c->last_error, 0);
         if (c->on_err) c->on_err(c->user_arg, c, c->last_error);
         return ERR_OK;
     }
     c->status = LWIP_STATUS_CONNECTED;
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_ESTABLISHED, 0, 0);
     if (c->on_connected) c->on_connected(c->user_arg, c);
     if (c->aborting) return ERR_ABRT;
     return ERR_OK;
@@ -1003,6 +1095,8 @@ static void conn_tcp_err_cb(void *arg, err_t err)
     if (!c) return;
     c->status = LWIP_STATUS_ERROR;
     c->last_error = lwip_err_translate(err);
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                    (int)c->last_error, 0);
     c->pcb.tcp = NULL;
     if (g_lwip_stopping) return;
     if (c->on_err) c->on_err(c->user_arg, c, c->last_error);
@@ -1018,10 +1112,13 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
     {
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
+        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                        (int)c->last_error, 0);
         if (c->on_err) c->on_err(c->user_arg, c, c->last_error);
         return ERR_OK;
     }
     c->status = LWIP_STATUS_CONNECTED;
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_ESTABLISHED, 0, 0);
     if (c->on_connected) c->on_connected(c->user_arg, c);
     if (c->aborting) return ERR_ABRT;
     return ERR_OK;
@@ -1231,6 +1328,8 @@ lwip_error_t lwip_conn_destroy(struct lwip_conn *conn)
  * lwip_err_t so the caller can roll status/error back on failure. */
 static err_t start_transport_connect(struct lwip_conn *c)
 {
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_ATTEMPT, 0, 0);
+
     switch ((lwip_protocol_t)c->protocol)
     {
 #if LWIP_TCP
@@ -1252,8 +1351,19 @@ static err_t start_transport_connect(struct lwip_conn *c)
     }
     case LWIP_PROTO_ALTCP:
     case LWIP_PROTO_ALTCP_TLS:
+    {
+        struct altcp_pcb *leaf = c->pcb.altcp;
+        while (leaf && leaf->inner_conn)
+        {
+            leaf = leaf->inner_conn;
+        }
+        if (leaf && leaf->state && c->netif)
+        {
+            tcp_bind_netif((struct tcp_pcb *)leaf->state, c->netif);
+        }
         return altcp_connect(c->pcb.altcp, &c->remote_ip, c->remote_port,
                              conn_altcp_connected_cb);
+    }
     default:
         return ERR_VAL;
     }
@@ -1272,6 +1382,8 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
         c->services_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = LWIP_ERR_DNS;
+        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                        (int)c->last_error, 0);
         if (c->on_err) c->on_err(c->user_arg, c, LWIP_ERR_DNS);
         return;
     }
@@ -1297,6 +1409,8 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
         c->services_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = mapped;
+        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                        (int)c->last_error, 0);
         if (c->on_err) c->on_err(c->user_arg, c, c->last_error);
         return;
     }
@@ -1349,6 +1463,8 @@ static lwip_error_t lwip_conn_connect_now(struct lwip_conn *conn,
         {
             conn->status = LWIP_STATUS_ERROR;
             conn->last_error = lwip_err_translate(err);
+            lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                            (int)conn->last_error, 0);
             return conn->last_error;
         }
         conn->pending_host = NULL;
@@ -1365,6 +1481,8 @@ static lwip_error_t lwip_conn_connect_now(struct lwip_conn *conn,
         {
             conn->status = LWIP_STATUS_ERROR;
             conn->last_error = lwip_err_translate(err);
+            lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                            (int)conn->last_error, 0);
             return conn->last_error;
         }
         conn->pending_host = NULL;
@@ -1396,12 +1514,16 @@ static lwip_error_t lwip_conn_connect_now(struct lwip_conn *conn,
     conn->services_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                    (int)conn->last_error, 0);
     return LWIP_ERR_DNS;
 #else
     conn->pending_host = NULL;
     conn->services_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
+    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                    (int)conn->last_error, 0);
     return LWIP_ERR_DNS;
 #endif
 }
@@ -1422,7 +1544,7 @@ lwip_error_t lwip_conn_connect(struct lwip_conn *conn,
 
     lwip_error_t svc_err = LWIP_OK;
     uint32_t deadline = sys_now() + LWIP_CONN_SERVICES_TIMEOUT_MS;
-    lwip_conn_services_state_t svc_state = services_check(conn, &svc_err);
+    lwip_conn_services_state_t svc_state = services_check(conn, &svc_err, host);
 
     /* Fast path: services already up — drive the connect synchronously.
      * If routing still says "not yet" (ERR_RTE/ERR_IF), fall back into
@@ -1439,6 +1561,8 @@ lwip_error_t lwip_conn_connect(struct lwip_conn *conn,
     {
         conn->status = LWIP_STATUS_ERROR;
         conn->last_error = svc_err ? svc_err : LWIP_ERR_NETIF;
+        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_CONN_FAILED,
+                        (int)conn->last_error, 0);
         return conn->last_error;
     }
 

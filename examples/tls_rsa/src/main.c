@@ -32,8 +32,11 @@ struct tls_state
 static void on_connected(void *arg, struct lwip_conn *conn)
 {
     struct tls_state *state = (struct tls_state *)arg;
-    lwip_error_t err = lwip_conn_write(conn, (const uint8_t *)http_request,
-                                       sizeof http_request - 1);
+    lwip_error_t err;
+
+    lwip_example_line("conn established");
+    err = lwip_conn_write(conn, (const uint8_t *)http_request,
+                          sizeof http_request - 1);
     if (err != LWIP_OK)
     {
         state->err = err;
@@ -73,6 +76,7 @@ static void on_err(void *arg, struct lwip_conn *conn, lwip_error_t err)
 {
     struct tls_state *state = (struct tls_state *)arg;
     (void)conn;
+    lwip_example_linef("conn failed e%u", (unsigned)err);
     state->err = err;
     state->done = true;
 }
@@ -96,7 +100,7 @@ int main(void)
         return 1;
     }
 
-    lwip_example_show("TLS RSA", "creating");
+    lwip_example_dbg_console_begin("TLS RSA");
     err = lwip_conn_create(&conn, NULL, LWIP_PROTO_ALTCP_TLS,
                            LWIP_CONN_SVC_DHCP | LWIP_CONN_SVC_DNS);
     if (err != LWIP_OK)
@@ -105,6 +109,7 @@ int main(void)
         lwip_conn_destroy(&conn);
         return lwip_example_finish(1);
     }
+    lwip_example_line("tls initialize ok");
 
     lwip_conn_set_arg(&conn, &state);
     lwip_conn_set_connected(&conn, on_connected);
@@ -116,14 +121,16 @@ int main(void)
      * (verbose) also traces the record/decrypt path, which localizes where
      * the Certificate handling stalls. Drop to LWIP_DBG_DEPTH_MILESTONE for a
      * clean high-level progress view. The console shares the home-screen text
-     * surface with lwip_example_show(), so print the header here. */
-    lwip_example_dbg_console_begin("TLS RSA");
+     * surface with lwip_example_show(). */
     lwip_set_debug(lwip_example_dbg_console_cb, LWIP_DBG_INFO,
                    LWIP_DBG_DEPTH_VERBOSE);
 
+    lwip_example_linef("attempting conn to:");
+    lwip_example_linef("%s:%u", TLS_HOST, (unsigned)TLS_PORT);
     err = lwip_conn_connect(&conn, TLS_HOST, TLS_PORT);
     if (err != LWIP_OK)
     {
+        lwip_example_linef("conn failed e%u", (unsigned)err);
         lwip_example_show_conn_error("TLS connect", &conn, err);
         lwip_conn_destroy(&conn);
         return lwip_example_finish(1);

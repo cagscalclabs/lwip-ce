@@ -1230,8 +1230,6 @@ bool tls_handshake_init(
     /* Clear context */
     tls_secure_memzero(ctx, sizeof(*ctx));
 
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_HANDSHAKE_BEGIN, 0);
-
     /* Copy PSK and identity (NULL = pure ECDHE mode, PSK stays zeroed) */
     if (psk && psk_identity)
     {
@@ -1278,7 +1276,6 @@ bool tls_handshake_init(
     if (!tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
                               NULL, NULL))
     {
-        tls_handshake_debug(ctx, LWIP_DBG_TLS_HANDSHAKE_BEGIN, 1);
         tls_secure_memzero(ctx->ecdhe_private, 32);
         return false;
     }

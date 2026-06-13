@@ -128,6 +128,13 @@ const char *lwip_debug_state_name(uint16_t module_state)
     {
     case LWIP_DBG_LWIP_ASSERT:             return "assert";
     case LWIP_DBG_LWIP_ERROR:              return "error";
+    case LWIP_DBG_LWIP_CONN_WAIT:          return "conn_wait";
+    case LWIP_DBG_LWIP_CONN_RETRY:         return "conn_retry";
+    case LWIP_DBG_LWIP_CONN_ATTEMPT:       return "conn_attempt";
+    case LWIP_DBG_LWIP_CONN_ESTABLISHED:   return "conn_established";
+    case LWIP_DBG_LWIP_CONN_FAILED:        return "conn_failed";
+    case LWIP_DBG_LWIP_DNS_WAIT:           return "dns_wait";
+    case LWIP_DBG_LWIP_SERVICES_TIMEOUT:   return "services_timeout";
 
     case LWIP_DBG_USB_ENDPOINT_STALL:      return "ep_stall";
     case LWIP_DBG_USB_ENDPOINT_NO_DEVICE:  return "ep_no_device";

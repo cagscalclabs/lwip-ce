@@ -31,7 +31,7 @@
 #define LWIP_EXAMPLE_LCD_W   320
 #define LWIP_EXAMPLE_STATS_X 188
 #define LWIP_EXAMPLE_STATS_LINES 3
-#define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 4
+#define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 6
 
 static uint8_t lwip_example_row = LWIP_EXAMPLE_TOP;
 static uint8_t lwip_example_stats_loop_count = 0;

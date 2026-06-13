@@ -1266,9 +1266,9 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                  * so we can decrypt the subsequent encrypted handshake records */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED)
                 {
-                    tls_vdbg(LWIP_DBG_TLS_DERIVE_HS_KEYS_V, 0);
                     if (!tls_derive_handshake_keys(&state->tls_ctx))
                     {
+                        tls_vdbg(LWIP_DBG_TLS_DERIVE_HS_KEYS_V, -1);
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
@@ -1295,7 +1295,6 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     /* Streaming decrypt: verifies the tag against the full
                      * ciphertext first, then decrypts in 2KB strides while
                      * releasing the corresponding bytes from state->rx. */
-                    tls_vdbg(LWIP_DBG_TLS_DECRYPT, 0);
                     dec_err = altcp_tls_ce_decrypt_record_stream(state, conn,
                                                                  true, total_len,
                                                                  &dec_pbuf, &dec_len,
@@ -1315,8 +1314,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
+                    tls_vdbg(LWIP_DBG_TLS_DECRYPT, 0);
 
-                    tls_vdbg(LWIP_DBG_TLS_PROCESS_INNER, 0);
                     if (!tls_process_inner_plaintext_pbuf(&state->tls_ctx, inner_type,
                                                           dec_pbuf, dec_len))
                     {
@@ -1326,6 +1325,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
+                    tls_vdbg(LWIP_DBG_TLS_PROCESS_INNER, 0);
                     tls_dbg_status("rx: inner ok");
 
                     pbuf_free(dec_pbuf);
