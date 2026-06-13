@@ -372,9 +372,8 @@ lwip_init(void)
     }
     {
         const struct mem_buffer_pool_cfg pools[] = {
-            {LWIP_MEMPOOL_SMALL_BLOCK, LWIP_MEMPOOL_SMALL_COUNT, 0, 0},
-            {LWIP_MEMPOOL_MEDIUM_BLOCK, LWIP_MEMPOOL_MEDIUM_COUNT, 0, 0},
-            {LWIP_MEMPOOL_LARGE_BLOCK, LWIP_MEMPOOL_LARGE_COUNT, 0, 0}
+            {LWIP_MEMPOOL_PBUF_BLOCK, LWIP_MEMPOOL_PBUF_COUNT, 0,
+             BUFFER_LWIP_PBUF_POOL}
         };
         mem_buffer_lwip_init_pools(
             pools,

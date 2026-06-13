@@ -45,6 +45,7 @@ int main(void)
         }
 
         lwip_poll_network_events();
+        lwip_example_mem_stats_tick();
 
         if (lwip_sntp_time_was_set())
         {

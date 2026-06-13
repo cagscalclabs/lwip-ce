@@ -29,11 +29,12 @@
 #define LWIP_CFG_FULL_CHAIN_VERIFY    (1u << 5)
 #define LWIP_CFG_LOG_TLS              (1u << 7)
 
-/* Memory budgeting.  The user sets the total bytes given to the lwIP
- * global allocator (lwip_mem_cap).  At boot:
- *     mem_init(lwip_mem_cap, ...)
- * Everything in free RAM above that cap stays available to the host app:
- *     usermem_remaining = os_MemChk() - lwip_mem_cap
+/* Memory budgeting.  The user sets the total bytes visible to lwIP
+ * accounting (lwip_mem_cap).  At boot the allocator splits that budget
+ * into a fixed pbuf pool (LWIP_PBUF_POOL_BYTES) and a tracked non-pool
+ * heap.  Callers that need protected heap while lwIP is running can reserve
+ * it with mem_request/mem_resize/mem_release; those reservations reduce the
+ * non-pool heap available to lwIP.
  *
  * lwIP-CE always ships with TLS available. The configurator clamps
  * lwip_mem_cap to the TLS-capable floor.
@@ -43,7 +44,7 @@
  */
 #define LWIP_TLS_FLOOR_BYTES        (24u * 1024u)
 #define LWIP_MIN_FLOOR_BYTES        LWIP_TLS_FLOOR_BYTES
-#define LWIP_CFG_MEM_CAP_DEF        (32u * 1024u)
+#define LWIP_CFG_MEM_CAP_DEF        (50u * 1024u)
 #define LWIP_CFG_MEM_CAP_STEP       1024u
 /* Vestigial log-config fields. The appvar-backed log system was replaced by
  * the unified debug callback (lwip_set_debug); these fields are retained only

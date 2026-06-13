@@ -38,8 +38,11 @@ lwip_init_runtime_opaque:
 	ld (_fn_imports_table + 6), hl		; realloc
 
 	ld hl, __lwip_app_name
-	call ti.FindAppStart			; HL <- app base, carry on not-found
-	jr c, .app_missing
+	call ti.FindAppStart	; HL <- app base, carry on not-found
+	jp c, .app_missing
+	ld a, h
+	or a, l
+	jp z, .app_missing
 
 	; CE app metadata at app_base + 0x112 stores the offset to the linked
 	; image after the relocation table. The linked image starts 0x100 bytes

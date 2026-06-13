@@ -28,8 +28,13 @@
 #define LWIP_EXAMPLE_TOP     30   /* first line y (px), below the status row */
 #define LWIP_EXAMPLE_BOTTOM  228  /* last usable y (px); LCD is 240 tall      */
 #define LWIP_EXAMPLE_LEFT    2    /* left margin (px)                         */
+#define LWIP_EXAMPLE_LCD_W   320
+#define LWIP_EXAMPLE_STATS_X 188
+#define LWIP_EXAMPLE_STATS_LINES 3
+#define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 4
 
 static uint8_t lwip_example_row = LWIP_EXAMPLE_TOP;
+static uint8_t lwip_example_stats_loop_count = 0;
 
 static uint8_t lwip_example_line_h(void)
 {
@@ -51,7 +56,9 @@ static void lwip_example_clear(void)
 static void lwip_example_line(const char *text)
 {
     uint8_t h = lwip_example_line_h();
-    if ((unsigned)lwip_example_row + h > LWIP_EXAMPLE_BOTTOM)
+    uint8_t text_bottom = (uint8_t)(LWIP_EXAMPLE_BOTTOM -
+                                    (h * LWIP_EXAMPLE_STATS_LINES));
+    if ((unsigned)lwip_example_row + h > text_bottom)
     {
         lwip_example_clear();
         h = lwip_example_line_h();
@@ -67,6 +74,80 @@ static void lwip_example_line(const char *text)
         snprintf(_lebuf, sizeof(_lebuf), __VA_ARGS__);     \
         lwip_example_line(_lebuf);                         \
     } while (0)
+
+static unsigned lwip_example_pct(size_t used, size_t total)
+{
+    if (total == 0)
+    {
+        return 0;
+    }
+    if (used > total)
+    {
+        used = total;
+    }
+    return (unsigned)((used * 100u) / total);
+}
+
+static void lwip_example_format_k(char *buf, size_t buf_len, size_t bytes)
+{
+    unsigned whole = (unsigned)(bytes / 1024u);
+    unsigned tenth = (unsigned)(((bytes % 1024u) * 10u) / 1024u);
+    snprintf(buf, buf_len, "%u.%uK", whole, tenth);
+}
+
+static void lwip_example_stats_line(uint8_t y, const char *text)
+{
+    int width;
+    os_FontSelect(os_SmallFont);
+    os_FontDrawText("                      ", LWIP_EXAMPLE_STATS_X, y);
+    width = (int)os_FontGetWidth(text);
+    os_FontDrawText(text, LWIP_EXAMPLE_LCD_W - 2 - width, y);
+}
+
+static void lwip_example_draw_mem_stats(void)
+{
+    struct mem_accounting_stats stats;
+    char used[12];
+    char total[12];
+    char line[32];
+    uint8_t h;
+    uint8_t y;
+
+    if (!mem_get_stats(&stats))
+    {
+        return;
+    }
+
+    h = lwip_example_line_h();
+    y = (uint8_t)(LWIP_EXAMPLE_BOTTOM - (h * LWIP_EXAMPLE_STATS_LINES));
+
+    lwip_example_format_k(used, sizeof(used), stats.heap_used);
+    lwip_example_format_k(total, sizeof(total), stats.heap_limit);
+    snprintf(line, sizeof(line), "H%s/%s  %u%%", used, total,
+             lwip_example_pct(stats.heap_used, stats.heap_limit));
+    lwip_example_stats_line(y, line);
+
+    y = (uint8_t)(y + h);
+    lwip_example_format_k(used, sizeof(used), stats.pbuf_pool_used);
+    lwip_example_format_k(total, sizeof(total), stats.pbuf_pool_size);
+    snprintf(line, sizeof(line), "P%s/%s  %u%%", used, total,
+             lwip_example_pct(stats.pbuf_pool_used, stats.pbuf_pool_size));
+    lwip_example_stats_line(y, line);
+
+    y = (uint8_t)(y + h);
+    lwip_example_format_k(used, sizeof(used), stats.user_reserved);
+    snprintf(line, sizeof(line), "U%s", used);
+    lwip_example_stats_line(y, line);
+}
+
+static void lwip_example_mem_stats_tick(void)
+{
+    if (++lwip_example_stats_loop_count >= LWIP_EXAMPLE_STATS_LOOP_INTERVAL)
+    {
+        lwip_example_stats_loop_count = 0;
+        lwip_example_draw_mem_stats();
+    }
+}
 
 static void lwip_example_wait_key(void)
 {
@@ -89,6 +170,7 @@ static void lwip_example_show(const char *line1, const char *line2)
 static void lwip_example_show_and_wait(const char *line1, const char *line2)
 {
     lwip_example_show(line1, line2);
+    lwip_example_draw_mem_stats();
     lwip_example_wait_key();
 }
 
@@ -121,6 +203,7 @@ static void lwip_example_dbg_console_begin(const char *title)
     {
         lwip_example_line(title);
     }
+    lwip_example_draw_mem_stats();
 }
 
 /* lwip_debug_fn: draw one event line. */
@@ -144,6 +227,7 @@ static void lwip_example_dbg_console_cb(const struct lwip_debug_info *info)
                            lwip_debug_state_name(info->module_state),
                            info->errnum);
     }
+    lwip_example_draw_mem_stats();
 }
 
 static void lwip_example_show_conn_error(const char *label,
@@ -174,6 +258,7 @@ static void lwip_example_show_conn_error(const char *label,
     {
         lwip_example_line("no netif");
     }
+    lwip_example_draw_mem_stats();
     lwip_example_wait_key();
 }
 
@@ -235,6 +320,7 @@ static bool lwip_example_stack_start(void)
     }
 
     lwip_example_stack_running = true;
+    lwip_example_draw_mem_stats();
     return true;
 }
 

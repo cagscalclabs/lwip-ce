@@ -37,6 +37,10 @@
 #ifndef LWIP_HDR_MEM_H
 #define LWIP_HDR_MEM_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #include "lwip/opt.h"
 
 #ifdef __cplusplus
@@ -70,11 +74,46 @@ typedef u16_t mem_size_t;
 #endif /* MEM_SIZE > 64000 */
 #endif
 
+#ifndef LWIP_MEM_ACCOUNTING_TYPES_DEFINED
+#define LWIP_MEM_ACCOUNTING_TYPES_DEFINED
+    enum mem_pressure_level
+    {
+        MEM_PRESSURE_NONE = 0,
+        MEM_PRESSURE_MILD,
+        MEM_PRESSURE_HIGH,
+        MEM_PRESSURE_SEVERE,
+        MEM_PRESSURE_CRITICAL,
+        MEM_PRESSURE_GLOBAL = 0x800000u
+    };
+
+#endif
+
+#ifndef LWIP_MEM_ACCOUNTING_STATS_DEFINED
+#define LWIP_MEM_ACCOUNTING_STATS_DEFINED
+    struct mem_accounting_stats
+    {
+        size_t total_heap;
+        size_t pbuf_pool_size;
+        size_t pbuf_pool_used;
+        size_t heap_limit;
+        size_t heap_used;
+        size_t heap_free;
+        size_t user_reserved;
+        enum mem_pressure_level pbuf_pressure;
+        enum mem_pressure_level heap_pressure;
+        enum mem_pressure_level effective_pressure;
+    };
+#endif
+
     /* void  mem_init(void); */
     void *mem_trim(void *mem, mem_size_t size);
     void *mem_malloc(mem_size_t size);
     void *mem_calloc(mem_size_t count, mem_size_t size);
     void mem_free(void *mem);
+    bool mem_get_stats(struct mem_accounting_stats *stats);
+    void *mem_request(size_t size);
+    void *mem_resize(void *ptr, size_t size);
+    void mem_release(void *ptr);
 
     /* Custom mem allocation for lwIP (provided by drivers/mem.c) */
     void *mem_buffer_custom_malloc(size_t size);

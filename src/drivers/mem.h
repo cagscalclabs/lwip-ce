@@ -12,6 +12,8 @@ typedef void *(*mem_malloc_fn)(size_t size);
 typedef void (*mem_free_fn)(void *ptr);
 typedef void *(*mem_realloc_fn)(void *ptr, size_t size);
 /* Pressure tiers reported to throttling and user callbacks. */
+#ifndef LWIP_MEM_ACCOUNTING_TYPES_DEFINED
+#define LWIP_MEM_ACCOUNTING_TYPES_DEFINED
 enum mem_pressure_level
 {
     MEM_PRESSURE_NONE = 0,
@@ -21,6 +23,7 @@ enum mem_pressure_level
     MEM_PRESSURE_CRITICAL,
     MEM_PRESSURE_GLOBAL = 0x800000u
 };
+#endif
 
 /* Pressure change callback - called when buffer pressure level changes (including relief). */
 typedef void (*mem_pressure_cb)(struct mem_buffer *mb, size_t requested, enum mem_pressure_level level);
@@ -98,7 +101,8 @@ enum mem_buffer_flags
 {
     BUFFER_SECURE_MODE = 1u << 0, /* Auto-erase used/freed/released memory */
     BUFFER_LOCK_SIZE = 1u << 1,   /* Prohibit grow/shrink, lock to initial size */
-    BUFFER_USER_ALLOC = 1u << 2   /* User buffer, doesn't count toward lwIP heap */
+    BUFFER_USER_ALLOC = 1u << 2,  /* User buffer, doesn't count toward lwIP heap */
+    BUFFER_LWIP_PBUF_POOL = 1u << 3 /* Fixed lwIP pbuf pool, tracked separately */
 };
 
 /* Pool config for lwIP custom allocator. */
@@ -109,6 +113,23 @@ struct mem_buffer_pool_cfg
     size_t max_size;
     uint8_t flags;
 };
+
+#ifndef LWIP_MEM_ACCOUNTING_STATS_DEFINED
+#define LWIP_MEM_ACCOUNTING_STATS_DEFINED
+struct mem_accounting_stats
+{
+    size_t total_heap;
+    size_t pbuf_pool_size;
+    size_t pbuf_pool_used;
+    size_t heap_limit;
+    size_t heap_used;
+    size_t heap_free;
+    size_t user_reserved;
+    enum mem_pressure_level pbuf_pressure;
+    enum mem_pressure_level heap_pressure;
+    enum mem_pressure_level effective_pressure;
+};
+#endif
 
 /* Public API (exposed). */
 /**
@@ -261,6 +282,13 @@ bool mem_is_ready(void);
  */
 enum mem_pressure_level mem_get_global_pressure_level(void);
 /**
+ * @brief Get current allocator accounting split into pbuf pool, non-pool heap,
+ *        and user-reserved heap.
+ * @param stats Destination stats struct.
+ * @return true if stats were filled, false if allocator is not ready.
+ */
+bool mem_get_stats(struct mem_accounting_stats *stats);
+/**
  * @brief Register an observer for effective lwIP memory pressure.
  *
  * The reported level is the maximum of the global allocator pressure
@@ -341,6 +369,26 @@ void mem_buffer_custom_free(void *ptr);
  * @return Pointer to allocation or NULL on failure.
  */
 void *mem_buffer_custom_calloc(size_t count, size_t size);
+/**
+ * @brief Allocate a pbuf-pool-backed lwIP memp element.
+ * @param size Raw memp allocation size.
+ * @return Pointer to allocation or NULL.
+ */
+void *mem_buffer_custom_malloc_pbuf(size_t size);
+/**
+ * @brief Free a pbuf-pool-backed lwIP memp element.
+ * @param ptr Pointer returned by mem_buffer_custom_malloc_pbuf.
+ */
+void mem_buffer_custom_free_pbuf(void *ptr);
+/**
+ * @brief Reserve caller-owned memory through lwIP accounting.
+ *
+ * The returned block is not part of the pbuf pool and reduces the heap
+ * available to lwIP non-pool allocations until released.
+ */
+void *mem_request(size_t size);
+void *mem_resize(void *ptr, size_t size);
+void mem_release(void *ptr);
 
 /*
  * Memory Management & Pressure Overview:

@@ -124,6 +124,7 @@ int main(void)
             break;
         }
         lwip_poll_network_events();
+        lwip_example_mem_stats_tick();
     }
 
     if (!state.ok)

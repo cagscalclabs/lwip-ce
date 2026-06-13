@@ -581,7 +581,8 @@ static void ui_draw_mem_breakdown(void)
     size_t free_ram  = os_MemChk(&free_block);
     size_t fixed     = LWIP_TLS_FLOOR_BYTES;
     size_t cap       = g_cfg.lwip_mem_cap;
-    size_t pbuf_pool = (cap > fixed) ? (cap - fixed) : 0u;
+    size_t pbuf_pool = LWIP_PBUF_POOL_BYTES;
+    size_t heap_budget = (cap > pbuf_pool) ? (cap - pbuf_pool) : 0u;
     size_t usermem   = (free_ram > cap) ? (free_ram - cap) : 0u;
 
     ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
@@ -600,7 +601,8 @@ static void ui_draw_mem_breakdown(void)
     } while (0)
 
     MEM_ROW("TLS-capable floor:", fixed);
-    MEM_ROW("Remaining pbuf pool:", pbuf_pool);
+    MEM_ROW("pbuf pool:", pbuf_pool);
+    MEM_ROW("Non-pool heap:", heap_budget);
 
     /* Divider above the slider row */
     y += 2;

@@ -614,7 +614,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
             goto fail;
         }
 
-        out_seg = pbuf_alloc(PBUF_RAW, (u16_t)take, PBUF_POOL);
+        out_seg = pbuf_alloc(PBUF_RAW, (u16_t)take, PBUF_RAM);
         if (!out_seg)
         {
             goto fail;
@@ -777,18 +777,45 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     return true;
 }
 
+static struct pbuf *altcp_tls_ce_copy_rx_to_ram(struct pbuf *p)
+{
+    struct pbuf *copy;
+    u16_t len;
+
+    if (!p)
+    {
+        return NULL;
+    }
+
+    len = p->tot_len;
+    copy = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
+    if (!copy)
+    {
+        return p;
+    }
+    if (pbuf_copy_partial(p, copy->payload, len, 0) != len)
+    {
+        pbuf_free(copy);
+        return p;
+    }
+
+    pbuf_free(p);
+    return copy;
+}
+
 static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
 {
     u16_t added = (p != NULL) ? p->tot_len : 0;
+    struct pbuf *queued = altcp_tls_ce_copy_rx_to_ram(p);
 
     if (state->rx == NULL)
     {
-        state->rx = p;
+        state->rx = queued;
     }
     else
     {
-        LWIP_ASSERT("rx pbuf overflow", (int)state->rx->tot_len + (int)p->tot_len <= 0xFFFF);
-        pbuf_cat(state->rx, p);
+        LWIP_ASSERT("rx pbuf overflow", (int)state->rx->tot_len + (int)queued->tot_len <= 0xFFFF);
+        pbuf_cat(state->rx, queued);
     }
 
     /* During the handshake there is no application backpressure: the bytes
@@ -1167,10 +1194,10 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
         return ERR_OK;
     }
 
-    /* Single ingress path: the pbuf goes onto state->rx regardless of
-     * handshake/app-data phase. The record processor downstream walks
-     * the chain in place; nothing copies the encrypted bytes into a
-     * separate ring. */
+    /* Single ingress path: copy encrypted TCP pbufs into non-pool RAM, then
+     * release the ingress pbuf immediately. The record processor downstream
+     * still walks state->rx as a pbuf chain, but the network pbuf pool is
+     * available again for future RX bursts. */
     altcp_tls_ce_queue_rx(state, p);
 
     return altcp_tls_ce_lower_recv_process(conn, state);

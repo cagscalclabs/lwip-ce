@@ -270,6 +270,10 @@
 .extern _mem_malloc
 .extern _mem_calloc
 .extern _mem_free
+.extern _mem_get_stats
+.extern _mem_request
+.extern _mem_resize
+.extern _mem_release
 .extern _memp_malloc
 .extern _memp_free
 .extern _mld6_stop
@@ -419,7 +423,7 @@
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 383    ; entry count
+    d24 387    ; entry count
 
 ; --- src/lwIP.c ---
     d24 _lwip_start
@@ -751,6 +755,12 @@ _fn_exports_table:
     d24 _mem_malloc
     d24 _mem_calloc
     d24 _mem_free
+
+; --- src/drivers/mem.c ---
+    d24 _mem_get_stats
+    d24 _mem_request
+    d24 _mem_resize
+    d24 _mem_release
 
 ; --- src/core/memp.c ---
     d24 _memp_malloc

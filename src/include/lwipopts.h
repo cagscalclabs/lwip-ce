@@ -105,7 +105,8 @@
 
 #endif
 
-#define MAX_HEAP_USAGE 24576
+#define MAX_HEAP_USAGE (50u * 1024u)
+#define LWIP_PBUF_POOL_BYTES (10u * 1024u)
 
 /* MEM_ALIGNMENT: should be set to the alignment of the CPU for which
    lwIP is compiled. 4 byte alignment -> define MEM_ALIGNMENT to 4, 2
@@ -116,7 +117,7 @@
 
 /* MEM_SIZE: the size of the heap memory. If the application will send
 a lot of data that needs to be copied, this should be set high. */
-#define MEM_SIZE (MAX_HEAP_USAGE / 2)
+#define MEM_SIZE (MAX_HEAP_USAGE - LWIP_PBUF_POOL_BYTES)
 
 /* MEMP_NUM_PBUF: the number of memp struct pbufs. If the application
    sends a lot of data out of ROM (or other static memory), this
@@ -159,7 +160,7 @@ a lot of data that needs to be copied, this should be set high. */
 #define PBUF_POOL_BUFSIZE 256
 
 /* PBUF_POOL_SIZE: the number of buffers in the pbuf pool. */
-#define PBUF_POOL_SIZE ((MAX_HEAP_USAGE / 2) / PBUF_POOL_BUFSIZE)
+#define PBUF_POOL_SIZE (LWIP_PBUF_POOL_BYTES / PBUF_POOL_BUFSIZE)
 
 /* ---------- Custom mem_buffer pool sizing ---------- */
 #define LWIP_MEMPOOL_SMALL_BLOCK 64
@@ -167,7 +168,9 @@ a lot of data that needs to be copied, this should be set high. */
 #define LWIP_MEMPOOL_MEDIUM_BLOCK PBUF_POOL_BUFSIZE
 #define LWIP_MEMPOOL_MEDIUM_COUNT PBUF_POOL_SIZE
 #define LWIP_MEMPOOL_LARGE_BLOCK 512
-#define LWIP_MEMPOOL_LARGE_COUNT 8
+#define LWIP_MEMPOOL_LARGE_COUNT (LWIP_PBUF_POOL_BYTES / LWIP_MEMPOOL_LARGE_BLOCK)
+#define LWIP_MEMPOOL_PBUF_BLOCK 320
+#define LWIP_MEMPOOL_PBUF_COUNT (LWIP_PBUF_POOL_BYTES / LWIP_MEMPOOL_PBUF_BLOCK)
 #define LWIP_MEMBUF_GROW_STEP 256
 #define LWIP_MEMBUF_SHRINK_STEP 256
 #define LWIP_MEMBUF_GROW_THRESHOLD 85

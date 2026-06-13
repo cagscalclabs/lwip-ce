@@ -74,6 +74,7 @@
 #include "lwip/priv/nd6_priv.h"
 #include "lwip/ip6_frag.h"
 #include "lwip/mld6.h"
+#include "drivers/mem.h"
 
 #define LWIP_MEMPOOL(name,num,size,desc) LWIP_MEMPOOL_DECLARE(name,num,size,desc)
 #include "lwip/priv/memp_std.h"
@@ -251,7 +252,11 @@ do_memp_malloc_pool_fn(const struct memp_desc *desc, const char *file, const int
   SYS_ARCH_DECL_PROTECT(old_level);
 
 #if MEMP_MEM_MALLOC
-  memp = (struct memp *)mem_malloc(MEMP_SIZE + MEMP_ALIGN_SIZE(desc->size));
+  if (desc == &memp_PBUF_POOL) {
+    memp = (struct memp *)mem_buffer_custom_malloc_pbuf(MEMP_SIZE + MEMP_ALIGN_SIZE(desc->size));
+  } else {
+    memp = (struct memp *)mem_malloc(MEMP_SIZE + MEMP_ALIGN_SIZE(desc->size));
+  }
   SYS_ARCH_PROTECT(old_level);
 #else /* MEMP_MEM_MALLOC */
   SYS_ARCH_PROTECT(old_level);
@@ -378,9 +383,12 @@ do_memp_free_pool(const struct memp_desc *desc, void *mem)
 #endif
 
 #if MEMP_MEM_MALLOC
-  LWIP_UNUSED_ARG(desc);
   SYS_ARCH_UNPROTECT(old_level);
-  mem_free(memp);
+  if (desc == &memp_PBUF_POOL) {
+    mem_buffer_custom_free_pbuf(memp);
+  } else {
+    mem_free(memp);
+  }
 #else /* MEMP_MEM_MALLOC */
   memp->next = *desc->tab;
   *desc->tab = memp;

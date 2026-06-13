@@ -4,6 +4,8 @@
 
 #define MEM_POOL_HEADER_SIZE (sizeof(uint16_t))
 #define MEM_STATIC_ALIGN 8u
+#define MEM_DIRECT_MAGIC 0x4D42u
+#define MEM_DIRECT_FLAG_USER 0x0001u
 
 enum mem_init_mode
 {
@@ -29,9 +31,17 @@ struct mem_global_config
 {
     size_t max_heap;
     size_t heap_used;
+    size_t user_reserved;
     mem_malloc_fn malloc_fn;
     mem_free_fn free_fn;
     mem_realloc_fn realloc_fn;
+};
+
+struct mem_direct_header
+{
+    uint16_t magic;
+    uint16_t flags;
+    size_t size;
 };
 
 static struct mem_global_config g_mem_cfg;
@@ -44,6 +54,7 @@ static enum mem_init_mode g_mem_mode = MEM_INIT_MODE_DYNAMIC;
 #define MEM_LWIP_MAX_POOLS 6
 static struct mem_buffer *g_lwip_pools[MEM_LWIP_MAX_POOLS];
 static size_t g_lwip_pool_count = 0;
+static struct mem_buffer *g_lwip_pbuf_pool = NULL;
 
 struct mem_static_block
 {
@@ -84,6 +95,37 @@ static size_t mem_static_used_bytes(void)
         return g_mem_static.size;
     }
     return g_mem_static.size - free_payload;
+}
+
+static size_t mem_pbuf_pool_size(void)
+{
+    return g_lwip_pbuf_pool ? g_lwip_pbuf_pool->current_size : 0;
+}
+
+static size_t mem_pbuf_pool_used(void)
+{
+    if (!g_lwip_pbuf_pool)
+    {
+        return 0;
+    }
+    return g_lwip_pbuf_pool->u.pool.pool_used_blocks *
+           g_lwip_pbuf_pool->u.pool.pool_block_size;
+}
+
+static size_t mem_nonpool_limit(void)
+{
+    if (!g_mem_cfg_ready || g_mem_cfg.max_heap == 0 ||
+        g_mem_cfg.max_heap == SIZE_MAX)
+    {
+        return SIZE_MAX;
+    }
+
+    size_t reserved = mem_pbuf_pool_size() + g_mem_cfg.user_reserved;
+    if (reserved >= g_mem_cfg.max_heap)
+    {
+        return 0;
+    }
+    return g_mem_cfg.max_heap - reserved;
 }
 
 static size_t mem_static_align_up(size_t n)
@@ -271,12 +313,9 @@ static enum mem_pressure_level mem_pressure_max(enum mem_pressure_level a,
 static enum mem_pressure_level mem_effective_pressure_compute(void)
 {
     enum mem_pressure_level level = mem_pressure_base(g_global_pressure_level);
-    for (size_t i = 0; i < g_lwip_pool_count; i++)
+    if (g_lwip_pbuf_pool)
     {
-        if (g_lwip_pools[i])
-        {
-            level = mem_pressure_max(level, g_lwip_pools[i]->last_pressure_level);
-        }
+        level = mem_pressure_max(level, g_lwip_pbuf_pool->last_pressure_level);
     }
     return level;
 }
@@ -317,18 +356,26 @@ static void mem_global_pressure_update(void)
         mem_effective_pressure_update();
         return;
     }
-    uint8_t usage_pct = (uint8_t)((g_mem_cfg.heap_used * 100u) / g_mem_cfg.max_heap);
+    size_t limit = mem_nonpool_limit();
+    if (limit == 0 || limit == SIZE_MAX)
+    {
+        g_global_pressure_level = MEM_PRESSURE_NONE;
+        mem_effective_pressure_update();
+        return;
+    }
+    uint8_t usage_pct = (uint8_t)((g_mem_cfg.heap_used * 100u) / limit);
     g_global_pressure_level = mem_pressure_level_from_usage(usage_pct);
     mem_effective_pressure_update();
 }
 
 static bool mem_buffer_charge(size_t bytes)
 {
-    if (g_mem_cfg.max_heap == 0)
+    size_t limit = mem_nonpool_limit();
+    if (limit == SIZE_MAX)
     {
         return true;
     }
-    if (g_mem_cfg.heap_used + bytes > g_mem_cfg.max_heap)
+    if (bytes > limit || g_mem_cfg.heap_used > limit - bytes)
     {
         return false;
     }
@@ -387,7 +434,8 @@ static bool mem_buffer_resize(struct mem_buffer *rb, size_t new_cap)
         return false;
     }
 
-    bool skip_heap_accounting = (rb->flags & BUFFER_USER_ALLOC) != 0;
+    bool skip_heap_accounting =
+        (rb->flags & (BUFFER_USER_ALLOC | BUFFER_LWIP_PBUF_POOL)) != 0;
     size_t old_cap = rb->current_size;
     size_t grow = (new_cap > old_cap) ? (new_cap - old_cap) : 0;
     size_t shrink = (old_cap > new_cap) ? (old_cap - new_cap) : 0;
@@ -608,12 +656,14 @@ bool mem_init_dynamic(size_t max_heap,
     memset(&g_mem_static, 0, sizeof(g_mem_static));
     g_mem_cfg.max_heap = max_heap;
     g_mem_cfg.heap_used = 0;
+    g_mem_cfg.user_reserved = 0;
     g_mem_cfg.malloc_fn = malloc_fn;
     g_mem_cfg.free_fn = free_fn;
     g_mem_cfg.realloc_fn = realloc_fn;
     g_global_pressure_level = MEM_PRESSURE_NONE;
     memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
     g_lwip_pool_count = 0;
+    g_lwip_pbuf_pool = NULL;
     g_mem_mode = MEM_INIT_MODE_DYNAMIC;
     g_mem_cfg_ready = true;
     mem_effective_pressure_update();
@@ -635,12 +685,14 @@ bool mem_init_static(void *buffer, size_t buffer_size)
 
     g_mem_cfg.max_heap = 0;
     g_mem_cfg.heap_used = 0;
+    g_mem_cfg.user_reserved = 0;
     g_mem_cfg.malloc_fn = mem_static_malloc;
     g_mem_cfg.free_fn = mem_static_free;
     g_mem_cfg.realloc_fn = mem_static_realloc;
     g_global_pressure_level = MEM_PRESSURE_NONE;
     memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
     g_lwip_pool_count = 0;
+    g_lwip_pbuf_pool = NULL;
     g_mem_mode = MEM_INIT_MODE_STATIC;
     g_mem_cfg_ready = true;
     mem_effective_pressure_update();
@@ -659,6 +711,35 @@ enum mem_pressure_level mem_get_global_pressure_level(void)
         return MEM_PRESSURE_NONE;
     }
     return g_global_pressure_level;
+}
+
+bool mem_get_stats(struct mem_accounting_stats *stats)
+{
+    if (!stats || !g_mem_cfg_ready)
+    {
+        return false;
+    }
+
+    memset(stats, 0, sizeof(*stats));
+    stats->total_heap = (g_mem_mode == MEM_INIT_MODE_STATIC) ?
+        g_mem_static.size : g_mem_cfg.max_heap;
+    stats->pbuf_pool_size = mem_pbuf_pool_size();
+    stats->pbuf_pool_used = mem_pbuf_pool_used();
+    stats->heap_limit = mem_nonpool_limit();
+    if (stats->heap_limit == SIZE_MAX)
+    {
+        stats->heap_limit = 0;
+    }
+    stats->heap_used = (g_mem_mode == MEM_INIT_MODE_STATIC) ?
+        mem_static_used_bytes() : g_mem_cfg.heap_used;
+    stats->heap_free = (stats->heap_limit > stats->heap_used) ?
+        (stats->heap_limit - stats->heap_used) : 0;
+    stats->user_reserved = g_mem_cfg.user_reserved;
+    stats->pbuf_pressure = g_lwip_pbuf_pool ?
+        g_lwip_pbuf_pool->last_pressure_level : MEM_PRESSURE_NONE;
+    stats->heap_pressure = g_global_pressure_level;
+    stats->effective_pressure = g_effective_pressure_level;
+    return true;
 }
 
 void mem_set_global_pressure_cb(mem_global_pressure_cb cb)
@@ -692,7 +773,8 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
     }
 
     /* BUFFER_USER_ALLOC buffers don't count toward heap */
-    bool skip_heap_accounting = (flags & BUFFER_USER_ALLOC) != 0;
+    bool skip_heap_accounting =
+        (flags & (BUFFER_USER_ALLOC | BUFFER_LWIP_PBUF_POOL)) != 0;
     if (type == MEM_BUFFER_FILE)
     {
         skip_heap_accounting = true;
@@ -844,7 +926,8 @@ void mem_buffer_destroy(struct mem_buffer *rb)
     {
         return;
     }
-    bool skip_heap_accounting = (rb->flags & BUFFER_USER_ALLOC) != 0;
+    bool skip_heap_accounting =
+        (rb->flags & (BUFFER_USER_ALLOC | BUFFER_LWIP_PBUF_POOL)) != 0;
 
     if (rb->buf)
     {
@@ -1254,7 +1337,8 @@ void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
 
     if (needed > rb->current_size && (rb->flags & BUFFER_LOCK_SIZE) == 0)
     {
-        bool skip_heap_accounting = (rb->flags & BUFFER_USER_ALLOC) != 0;
+        bool skip_heap_accounting =
+            (rb->flags & (BUFFER_USER_ALLOC | BUFFER_LWIP_PBUF_POOL)) != 0;
         size_t step = rb->step ? rb->step : 256u;
         /* Grow by step * N where N is minimum steps to fit needed + 1 step headroom */
         size_t shortfall = needed - rb->current_size;
@@ -1657,6 +1741,7 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
 
     memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
     g_lwip_pool_count = 0;
+    g_lwip_pbuf_pool = NULL;
     for (size_t i = 0; i < pool_count; i++)
     {
         const struct mem_buffer_pool_cfg *cfg = &pools[i];
@@ -1664,11 +1749,22 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
         {
             continue;
         }
+        if ((cfg->flags & BUFFER_LWIP_PBUF_POOL) == 0)
+        {
+            continue;
+        }
         size_t initial_cap = cfg->block_size * cfg->block_count;
-        size_t max_cap = cfg->max_size ? cfg->max_size : initial_cap;
-        struct mem_buffer *mb = mem_buffer_create(MEM_BUFFER_POOL, initial_cap, max_cap, cfg->block_size, cfg->flags);
+        if (g_mem_cfg.max_heap != 0 && g_mem_cfg.max_heap != SIZE_MAX &&
+            initial_cap + g_mem_cfg.user_reserved > g_mem_cfg.max_heap)
+        {
+            continue;
+        }
+        size_t max_cap = initial_cap;
+        uint8_t flags = cfg->flags | BUFFER_LOCK_SIZE | BUFFER_LWIP_PBUF_POOL;
+        struct mem_buffer *mb = mem_buffer_create(MEM_BUFFER_POOL, initial_cap, max_cap, cfg->block_size, flags);
         if (mb)
         {
+            g_lwip_pbuf_pool = mb;
             g_lwip_pools[g_lwip_pool_count++] = mb;
         }
     }
@@ -1698,6 +1794,7 @@ void mem_buffer_lwip_release_pools(void)
         }
     }
     g_lwip_pool_count = 0;
+    g_lwip_pbuf_pool = NULL;
     mem_effective_pressure_update();
 }
 
@@ -1717,80 +1814,218 @@ bool mem_buffer_is_lwip_pool(const struct mem_buffer *mb)
     return false;
 }
 
-void *mem_buffer_custom_malloc(size_t size)
+static bool mem_user_charge(size_t bytes)
 {
-    if (g_lwip_pool_count > 0)
+    if (mem_nonpool_limit() == SIZE_MAX)
     {
-        if (size > (SIZE_MAX - MEM_POOL_HEADER_SIZE))
+        g_mem_cfg.user_reserved += bytes;
+        mem_global_pressure_update();
+        return true;
+    }
+
+    size_t pbuf_reserved = mem_pbuf_pool_size();
+    if (g_mem_cfg.max_heap <= pbuf_reserved)
+    {
+        return false;
+    }
+    size_t limit = g_mem_cfg.max_heap - pbuf_reserved;
+    if (g_mem_cfg.heap_used > limit || bytes > limit - g_mem_cfg.heap_used)
+    {
+        return false;
+    }
+    size_t free_for_user = limit - g_mem_cfg.heap_used;
+    if (g_mem_cfg.user_reserved > free_for_user ||
+        bytes > free_for_user - g_mem_cfg.user_reserved)
+    {
+        return false;
+    }
+    g_mem_cfg.user_reserved += bytes;
+    mem_global_pressure_update();
+    return true;
+}
+
+static void mem_user_release(size_t bytes)
+{
+    if (g_mem_cfg.user_reserved >= bytes)
+    {
+        g_mem_cfg.user_reserved -= bytes;
+    }
+    else
+    {
+        g_mem_cfg.user_reserved = 0;
+    }
+    mem_global_pressure_update();
+}
+
+static void *mem_direct_alloc(size_t size, uint16_t flags)
+{
+    if (!g_mem_cfg_ready || !g_mem_cfg.malloc_fn || size == 0)
+    {
+        return NULL;
+    }
+    if (size > SIZE_MAX - sizeof(struct mem_direct_header))
+    {
+        return NULL;
+    }
+    size_t raw_size = size + sizeof(struct mem_direct_header);
+    bool user = (flags & MEM_DIRECT_FLAG_USER) != 0;
+    if (user)
+    {
+        if (!mem_user_charge(raw_size))
         {
             return NULL;
         }
-        size_t needed = size + MEM_POOL_HEADER_SIZE;
-        struct mem_buffer *preferred = NULL;
-        bool tried_large = false;
-        for (size_t i = 0; i < g_lwip_pool_count; i++)
-        {
-            if (!g_lwip_pools[i])
-            {
-                continue;
-            }
-            size_t max_bytes = g_lwip_pools[i]->u.pool.pool_block_size * g_lwip_pools[i]->u.pool.pool_block_count;
-            if (needed > max_bytes)
-            {
-                continue;
-            }
-            if (g_lwip_pools[i]->u.pool.pool_block_size >= needed)
-            {
-                tried_large = true;
-                if (!preferred)
-                {
-                    preferred = g_lwip_pools[i];
-                }
-                size_t used_bytes = g_lwip_pools[i]->u.pool.pool_used_blocks * g_lwip_pools[i]->u.pool.pool_block_size;
-                uint8_t usage_pct = mem_buffer_usage_pct(g_lwip_pools[i], used_bytes);
-                enum mem_pressure_level level = mem_pressure_level_from_usage(usage_pct);
-                if (level != MEM_PRESSURE_NONE && level != g_lwip_pools[i]->last_pressure_level)
-                {
-                    mem_buffer_notify_pressure(g_lwip_pools[i], needed, level);
-                }
-                void *ptr = mem_buffer_malloc(g_lwip_pools[i], size);
-                if (ptr)
-                {
-                    return ptr;
-                }
-            }
-        }
-
-        if (tried_large)
-        {
-            mem_buffer_notify_pressure(preferred, needed, MEM_PRESSURE_CRITICAL);
-        }
-
-        for (size_t i = 0; i < g_lwip_pool_count; i++)
-        {
-            if (!g_lwip_pools[i])
-            {
-                continue;
-            }
-            size_t max_bytes = g_lwip_pools[i]->u.pool.pool_block_size * g_lwip_pools[i]->u.pool.pool_block_count;
-            if (needed > max_bytes || g_lwip_pools[i]->u.pool.pool_block_size >= needed)
-            {
-                continue;
-            }
-            void *ptr = mem_buffer_malloc(g_lwip_pools[i], size);
-            if (ptr)
-            {
-                return ptr;
-            }
-        }
-        return NULL;
     }
-
-    if (!g_lwip_heap)
+    else if (!mem_buffer_charge(raw_size))
     {
         return NULL;
     }
-    return mem_buffer_malloc(g_lwip_heap, size);
+
+    struct mem_direct_header *hdr =
+        (struct mem_direct_header *)g_mem_cfg.malloc_fn(raw_size);
+    if (!hdr)
+    {
+        if (user)
+        {
+            mem_user_release(raw_size);
+        }
+        else
+        {
+            mem_buffer_release(raw_size);
+        }
+        return NULL;
+    }
+    hdr->magic = MEM_DIRECT_MAGIC;
+    hdr->flags = flags;
+    hdr->size = raw_size;
+    return (void *)(hdr + 1);
+}
+
+static struct mem_direct_header *mem_direct_header_from_ptr(void *ptr)
+{
+    if (!ptr)
+    {
+        return NULL;
+    }
+    struct mem_direct_header *hdr = ((struct mem_direct_header *)ptr) - 1;
+    if (hdr->magic != MEM_DIRECT_MAGIC)
+    {
+        return NULL;
+    }
+    return hdr;
+}
+
+static void mem_direct_free(void *ptr)
+{
+    struct mem_direct_header *hdr = mem_direct_header_from_ptr(ptr);
+    if (!hdr)
+    {
+        return;
+    }
+    size_t raw_size = hdr->size;
+    bool user = (hdr->flags & MEM_DIRECT_FLAG_USER) != 0;
+    hdr->magic = 0;
+    g_mem_cfg.free_fn(hdr);
+    if (user)
+    {
+        mem_user_release(raw_size);
+    }
+    else
+    {
+        mem_buffer_release(raw_size);
+    }
+}
+
+static void *mem_direct_resize(void *ptr, size_t size, uint16_t flags)
+{
+    if (!ptr)
+    {
+        return mem_direct_alloc(size, flags);
+    }
+    if (size == 0)
+    {
+        mem_direct_free(ptr);
+        return NULL;
+    }
+
+    struct mem_direct_header *hdr = mem_direct_header_from_ptr(ptr);
+    if (!hdr || size > SIZE_MAX - sizeof(struct mem_direct_header))
+    {
+        return NULL;
+    }
+    size_t old_raw = hdr->size;
+    size_t new_raw = size + sizeof(struct mem_direct_header);
+    bool user = (hdr->flags & MEM_DIRECT_FLAG_USER) != 0;
+
+    if (new_raw > old_raw)
+    {
+        size_t grow = new_raw - old_raw;
+        if (user)
+        {
+            if (!mem_user_charge(grow))
+            {
+                return NULL;
+            }
+        }
+        else if (!mem_buffer_charge(grow))
+        {
+            return NULL;
+        }
+    }
+
+    struct mem_direct_header *new_hdr = NULL;
+    if (g_mem_cfg.realloc_fn)
+    {
+        new_hdr = (struct mem_direct_header *)g_mem_cfg.realloc_fn(hdr, new_raw);
+    }
+    else
+    {
+        new_hdr = (struct mem_direct_header *)g_mem_cfg.malloc_fn(new_raw);
+        if (new_hdr)
+        {
+            size_t copy = old_raw < new_raw ? old_raw : new_raw;
+            memcpy(new_hdr, hdr, copy);
+            g_mem_cfg.free_fn(hdr);
+        }
+    }
+    if (!new_hdr)
+    {
+        if (new_raw > old_raw)
+        {
+            size_t grow = new_raw - old_raw;
+            if (user)
+            {
+                mem_user_release(grow);
+            }
+            else
+            {
+                mem_buffer_release(grow);
+            }
+        }
+        return NULL;
+    }
+
+    new_hdr->magic = MEM_DIRECT_MAGIC;
+    new_hdr->flags = flags;
+    new_hdr->size = new_raw;
+    if (old_raw > new_raw)
+    {
+        size_t shrink = old_raw - new_raw;
+        if (user)
+        {
+            mem_user_release(shrink);
+        }
+        else
+        {
+            mem_buffer_release(shrink);
+        }
+    }
+    return (void *)(new_hdr + 1);
+}
+
+void *mem_buffer_custom_malloc(size_t size)
+{
+    return mem_direct_alloc(size, 0);
 }
 
 void mem_buffer_custom_free(void *ptr)
@@ -1800,29 +2035,64 @@ void mem_buffer_custom_free(void *ptr)
         return;
     }
 
-    if (g_lwip_pool_count > 0)
+    if (g_lwip_pbuf_pool && g_lwip_pbuf_pool->buf)
     {
-        for (size_t i = 0; i < g_lwip_pool_count; i++)
+        uint8_t *start = g_lwip_pbuf_pool->buf;
+        uint8_t *end = g_lwip_pbuf_pool->buf + g_lwip_pbuf_pool->current_size;
+        if ((uint8_t *)ptr > start && (uint8_t *)ptr < end)
         {
-            struct mem_buffer *mb = g_lwip_pools[i];
-            if (!mb || !mb->buf)
-            {
-                continue;
-            }
-            uint8_t *start = mb->buf;
-            uint8_t *end = mb->buf + mb->current_size;
-            if ((uint8_t *)ptr > start && (uint8_t *)ptr < end)
-            {
-                mem_buffer_free(mb, ptr);
-                return;
-            }
+            mem_buffer_free(g_lwip_pbuf_pool, ptr);
+            return;
         }
     }
 
-    if (g_lwip_heap)
+    mem_direct_free(ptr);
+}
+
+void *mem_buffer_custom_malloc_pbuf(size_t size)
+{
+    if (!g_lwip_pbuf_pool)
     {
-        mem_buffer_free(g_lwip_heap, ptr);
+        return NULL;
     }
+    void *ptr = mem_buffer_malloc(g_lwip_pbuf_pool, size);
+    if (!ptr)
+    {
+        mem_buffer_notify_pressure(g_lwip_pbuf_pool, size, MEM_PRESSURE_CRITICAL);
+        return NULL;
+    }
+    size_t used = mem_pbuf_pool_used();
+    uint8_t usage_pct = mem_buffer_usage_pct(g_lwip_pbuf_pool, used);
+    enum mem_pressure_level level = mem_pressure_level_from_usage(usage_pct);
+    if (level != g_lwip_pbuf_pool->last_pressure_level)
+    {
+        mem_buffer_notify_pressure(g_lwip_pbuf_pool, used, level);
+    }
+    return ptr;
+}
+
+void mem_buffer_custom_free_pbuf(void *ptr)
+{
+    if (!g_lwip_pbuf_pool || !ptr)
+    {
+        return;
+    }
+    mem_buffer_free(g_lwip_pbuf_pool, ptr);
+}
+
+void *mem_request(size_t size)
+{
+    return mem_direct_alloc(size, MEM_DIRECT_FLAG_USER);
+}
+
+void *mem_resize(void *ptr, size_t size)
+{
+    return mem_direct_resize(ptr, size, MEM_DIRECT_FLAG_USER);
+}
+
+void mem_release(void *ptr)
+{
+    mem_direct_free(ptr);
 }
 
 void *mem_buffer_custom_calloc(size_t count, size_t size)

@@ -237,6 +237,10 @@ mem_trim,memory,src/include/lwip/mem.h
 mem_malloc,memory,src/include/lwip/mem.h
 mem_calloc,memory,src/include/lwip/mem.h
 mem_free,memory,src/include/lwip/mem.h
+mem_get_stats,memory,src/include/lwip/mem.h
+mem_request,memory,src/include/lwip/mem.h
+mem_resize,memory,src/include/lwip/mem.h
+mem_release,memory,src/include/lwip/mem.h
 memp_malloc,memp,src/include/lwip/memp.h
 memp_free,memp,src/include/lwip/memp.h
 mld6_stop,mld6,src/include/lwip/mld6.h
