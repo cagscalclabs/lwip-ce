@@ -28,6 +28,7 @@
 #include "lwip/err.h"
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
+#include "lwip/logging.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -87,11 +88,9 @@ typedef enum
     LWIP_STATUS_ERROR,               /**< fatal error; check last_error */
 } lwip_status_t;
 
-/** Service-up flags for lwip_conn_create. These are *netif-level* — they
- *  request that the given service be running on the resident interface,
- *  not that this connection uses them privately. lwip_conn_create records
- *  them for polling; lwip_conn_connect also applies them idempotently while
- *  waiting for the network to become usable. */
+/** Service wait flags for lwip_conn_create. These are *netif-level* — they
+ *  request that this connection wait until the service is usable on the
+ *  resident interface, not that this connection owns it privately. */
 #define LWIP_CONN_SVC_DHCP        (1u << 0)  /**< DHCP on resident netif */
 #define LWIP_CONN_SVC_SNTP        (1u << 1)  /**< SNTP started against DHCP/server */
 #define LWIP_CONN_SVC_DNS         (1u << 2)  /**< DNS resolver initialized */
@@ -228,9 +227,7 @@ bool lwip_default_netif_info(lwip_netif_info_t *info);
  *                   If no default netif exists yet, create still succeeds;
  *                   lwip_conn_connect queues until USB/link/DHCP are ready.
  *  @param protocol  Transport selector (see lwip_protocol_t).
- *  @param flags     Service-up flags (LWIP_CONN_SVC_*). Each enabled flag
- *                   asks the implementation to start that service on the
- *                   resident netif as soon as the netif exists and is up. */
+ *  @param flags     Service wait flags (LWIP_CONN_SVC_*). */
 lwip_error_t lwip_conn_create(struct lwip_conn *conn,
                               struct netif *netif,
                               lwip_protocol_t protocol,

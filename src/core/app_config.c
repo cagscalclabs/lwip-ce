@@ -14,8 +14,8 @@ static void lwip_app_config_normalize(lwip_app_config_t *cfg)
      * control bit reserved, but force runtime policy to SPKI-pin mode. */
     cfg->flags &= (uint8_t)~LWIP_CFG_FULL_CHAIN_VERIFY;
 
-    if (cfg->log_min_level < LWIP_LOG_LEVEL_INFO ||
-        cfg->log_min_level > LWIP_LOG_LEVEL_FATAL)
+    if (cfg->log_min_level < LWIP_CFG_LOG_LEVEL_MIN ||
+        cfg->log_min_level > LWIP_CFG_LOG_LEVEL_MAX)
     {
         cfg->log_min_level = LWIP_CFG_LOG_LEVEL_DEF;
         cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;

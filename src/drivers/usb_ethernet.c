@@ -22,6 +22,8 @@
 #include "lwip/stats.h"
 #include "lwip/snmp.h"
 #include "lwip/pbuf.h"
+#include "lwip/dhcp.h"
+#include "lwip/prot/dhcp.h"
 #include "usb_ethernet.h" /* Communications Data Class header file */
 #include "lwip-imports.h" /* fn_imports_table / usb_fn dispatch table */
 #include "mem.h"
@@ -41,16 +43,19 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 {
     if (status & USB_TRANSFER_NO_DEVICE)
     {
-        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_ENDPOINT_NO_DEVICE);
+        lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_ENDPOINT_NO_DEVICE,
+                        (int)status, 0);
     }
     if (status & USB_TRANSFER_STALLED)
     {
-        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_ENDPOINT_STALL);
+        lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_ENDPOINT_STALL,
+                        (int)status, 0);
     }
     if (status & (USB_TRANSFER_ERROR | USB_TRANSFER_HOST_ERROR | USB_TRANSFER_BUS_ERROR |
                   USB_TRANSFER_OVERFLOW | USB_TRANSFER_FAILED))
     {
-        lwip_log_event(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_ENDPOINT_ERROR);
+        lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_ENDPOINT_ERROR,
+                        (int)status, 0);
     }
 }
 /* RX cadence (milliseconds). The dispatch layer quantizes these to
@@ -74,9 +79,10 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 
 /* Defined below; forward-declared so eth_rx_ring_drain can abort the
  * netif on repeated drain-short failures. */
-static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason);
+static void eth_abort_netif(eth_device_t *dev, uint16_t log_state);
 static bool eth_netif_is_default_candidate(const struct netif *netif);
 static void eth_promote_default_if_needed(struct netif *netif);
+static void eth_arm_dhcp_once(eth_device_t *dev);
 
 /* True if netif is one of our ethernet interfaces (named "en*") with a
  * backing eth_device_t. Centralizes the guard used by every netif walk
@@ -194,8 +200,8 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
              * Deliberately NOT LWIP_ASSERT: in this port that halts the
              * program (lwip_log_fatal_at), which would defeat the
              * recover-and-continue behavior below. */
-            lwip_log_event_at(LWIP_LOG_TYPE_USB, LWIP_LOG_USB_RX_DRAIN_SHORT,
-                              __LINE__);
+            lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_RX_DRAIN_SHORT,
+                            -1, __LINE__);
             uint8_t skip[64];
             while (remaining > 0)
             {
@@ -210,7 +216,7 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
             LINK_STATS_INC(link.drop);
             if (++dev->rx_drain_errors >= ETH_RX_DRAIN_MAX_ERRORS)
             {
-                eth_abort_netif(dev, LWIP_LOG_USB_RX_DRAIN_FATAL);
+                eth_abort_netif(dev, LWIP_DBG_USB_RX_DRAIN_FATAL);
             }
             break;
         }
@@ -318,6 +324,10 @@ void eth_finish_shutdown(void)
         dev->shutting_down = true;
         dev->rx_transfer_active = false;
         usb_fn.set_device_data(dev->device, NULL);
+        if (netif->num < 8)
+        {
+            ifnums_used &= ~(1 << netif->num);
+        }
         netif_remove(netif);
         if (dev->rx_ring)
         {
@@ -357,7 +367,7 @@ nibble(uint16_t c)
  * the netif entirely." Logs the caller-supplied fatal reason so the
  * appvar log distinguishes endpoint-retry exhaustion from RX-drain
  * failure. */
-static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason)
+static void eth_abort_netif(eth_device_t *dev, uint16_t log_state)
 {
     if (!dev || eth_is_shutting_down(dev))
     {
@@ -366,7 +376,7 @@ static void eth_abort_netif(eth_device_t *dev, uint8_t log_reason)
 
     LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
                 ("eth: fatal fault, giving up on netif"));
-    lwip_log_event(LWIP_LOG_TYPE_USB, log_reason);
+    lwip_debug_emit(LWIP_DBG_MOD_USB, log_state, -1, 0);
     /* Surface the failure to lwIP first. Apps with a registered netif
      * link callback will see the down transition before the device
      * disappears, and any PCBs bound to this netif can be torn down via
@@ -383,7 +393,7 @@ static bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
 {
     if (retries == ETH_USB_MAX_RETRIES)
     {
-        eth_abort_netif(dev, LWIP_LOG_USB_FATAL_RETRY);
+        eth_abort_netif(dev, LWIP_DBG_USB_FATAL_RETRY);
         return true;
     }
     return false;
@@ -446,6 +456,7 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                     {
                         netif_set_link_up(&dev->iface);
                         eth_promote_default_if_needed(&dev->iface);
+                        eth_arm_dhcp_once(dev);
                     }
                     else
                     {
@@ -1041,6 +1052,46 @@ static void eth_promote_default_if_needed(struct netif *netif)
     {
         netif_set_default(netif);
     }
+}
+
+#if LWIP_DHCP
+static bool eth_dhcp_client_running(const struct netif *netif)
+{
+    struct dhcp *dhcp = netif ? netif_dhcp_data(netif) : NULL;
+    return dhcp && dhcp->state != DHCP_STATE_OFF;
+}
+#endif
+
+static void eth_arm_dhcp_once(eth_device_t *dev)
+{
+#if LWIP_DHCP
+    if (!dev || dev->dhcp_auto_started)
+    {
+        return;
+    }
+
+    struct netif *netif = &dev->iface;
+    if (!eth_netif_is_external(netif) ||
+        !netif_is_up(netif) ||
+        !netif_is_link_up(netif))
+    {
+        return;
+    }
+
+    dev->dhcp_auto_started = true;
+    if (!eth_dhcp_client_running(netif))
+    {
+        err_t err = dhcp_start(netif);
+        if (err != ERR_OK)
+        {
+            LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
+                        ("dhcp_start failed on %c%c%u: %d",
+                         netif->name[0], netif->name[1], netif->num, err));
+        }
+    }
+#else
+    (void)dev;
+#endif
 }
 
 ///----------------------------------------

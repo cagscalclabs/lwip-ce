@@ -189,20 +189,15 @@
 #include "lwip/sys.h"
 #include "lwip/pbuf.h"
 
-/* Temporary post-truststore handshake step tracing (key-gated). Visible on
- * real hardware via os_PutStrFull. Set HS_TRACE_ON 0 to disable. Each marker
- * clears the screen, prints msg, waits for a key — so the LAST screen shown
- * before a crash names the step that faulted. REMOVE once the handshake is
- * stable. */
-#define HS_TRACE_ON 1
-#if HS_TRACE_ON
-#include <ti/screen.h>
-#include <ti/getkey.h>
-#define HS_TRACE(msg) do { os_ClrHome(); os_PutStrFull("hs: " msg); \
-                           os_PutStrFull(" [key]"); os_GetKey(); } while (0)
-#else
-#define HS_TRACE(msg) ((void)0)
-#endif
+/* Emit a handshake debug event through the unified stack-wide debug sink
+ * (lwip_set_debug). The ctx argument is kept for call-site readability but is
+ * no longer used to carry a per-connection callback. */
+static inline void tls_handshake_debug(struct tls_handshake_context *ctx,
+                                       lwip_debug_state_t state, int errnum)
+{
+    (void)ctx;
+    lwip_debug_emit(LWIP_DBG_MOD_TLS, state, errnum, 0);
+}
 
 /*
  * ============================================================================
@@ -1235,6 +1230,8 @@ bool tls_handshake_init(
     /* Clear context */
     tls_secure_memzero(ctx, sizeof(*ctx));
 
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_HANDSHAKE_BEGIN, 0);
+
     /* Copy PSK and identity (NULL = pure ECDHE mode, PSK stays zeroed) */
     if (psk && psk_identity)
     {
@@ -1281,6 +1278,7 @@ bool tls_handshake_init(
     if (!tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
                               NULL, NULL))
     {
+        tls_handshake_debug(ctx, LWIP_DBG_TLS_HANDSHAKE_BEGIN, 1);
         tls_secure_memzero(ctx->ecdhe_private, 32);
         return false;
     }
@@ -1658,6 +1656,7 @@ bool tls_send_client_hello(
     }
 
     ctx->state = TLS_STATE_CLIENT_HELLO_SENT;
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_CLIENT_HELLO, 0);
     return true;
 }
 
@@ -1858,6 +1857,7 @@ bool tls_recv_server_hello(
                                    data + offset + 4,
                                    NULL, NULL))
             {
+                tls_handshake_debug(ctx, LWIP_DBG_TLS_KEY_EXCHANGE, 1);
                 tls_secure_memzero(ctx->ecdhe_private, 32);
                 ctx->state = TLS_STATE_ERROR;
                 return false;
@@ -1865,6 +1865,7 @@ bool tls_recv_server_hello(
             /* Securely erase private key immediately */
             tls_secure_memzero(ctx->ecdhe_private, 32);
             ctx->ecdhe_negotiated = true;
+            tls_handshake_debug(ctx, LWIP_DBG_TLS_KEY_EXCHANGE, 0);
             break;
         }
 
@@ -1921,6 +1922,7 @@ bool tls_recv_server_hello(
      * cert_msg + 4 (handshake header) + 1 (context len) + 3 (cert_list_len).
      */
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_SERVER_HELLO, 0);
     return true;
 }
 
@@ -1963,6 +1965,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
         return false;
     }
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_CERTIFICATE, 0);
     return true;
 }
 
@@ -2061,6 +2064,7 @@ static bool tls_recv_encrypted_extensions(
 
     /* Update state */
     ctx->state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_ENCRYPTED_EXT, 0);
 
     return true;
 }
@@ -2243,18 +2247,15 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
         return false;
     }
     em = __rsa_transient;
-    HS_TRACE("cv: pre rsa decrypt");
     if (!tls_rsa_decrypt_signature(sig, sig_len, em, modulus, modulus_len))
     {
         goto cleanup;
     }
-    HS_TRACE("cv: pre pss verify");
     if (!tls_rsa_pss_verify(em, modulus_len, message_hash, sizeof(message_hash),
                             TLS_HASH_SHA256))
     {
         goto cleanup;
     }
-    HS_TRACE("cv: verify OK");
     ok = true;
 
 cleanup:
@@ -2327,13 +2328,12 @@ static bool tls_recv_certificate_verify(
     {
         /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
          * CertificateVerify without a leaf is unverifiable; fail closed. */
-        lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
+        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERTVERIFY_FAIL, -1, 0);
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
 
     bool sig_ok = false;
-    HS_TRACE("cverify: dispatch");
     switch (sig_alg)
     {
     case TLS_SIG_RSA_PSS_RSAE_SHA256:
@@ -2355,13 +2355,12 @@ static bool tls_recv_certificate_verify(
 
     if (!sig_ok)
     {
-        lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_CERTVERIFY_FAIL);
+        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERTVERIFY_FAIL, -1, 0);
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
 
-    HS_TRACE("cverify: sig OK, xscript");
     /* Update transcript hash with the CertificateVerify message. Must
      * happen AFTER verify (the digest fed to PSS covers the transcript
      * through Certificate only). */
@@ -2370,8 +2369,8 @@ static bool tls_recv_certificate_verify(
         transcript_hash_update(ctx->transcript_hash, data, 4 + msg_len);
     }
 
-    HS_TRACE("cverify: done, state set");
     ctx->state = TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_CERTIFICATE_VERIFY, 0);
 
     return true;
 }
@@ -2549,6 +2548,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 
     /* Advance state so this function is not called again */
     ctx->state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_DERIVE_HS_KEYS, 0);
 
     return true;
 }
@@ -2696,6 +2696,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
+    tls_handshake_debug(ctx, LWIP_DBG_TLS_DERIVE_APP_KEYS, 0);
     return true;
 }
 
@@ -2953,6 +2954,7 @@ static bool tls_recv_finished(
     {
         /* Client verified server's Finished */
         ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+        tls_handshake_debug(ctx, LWIP_DBG_TLS_FINISHED, 0);
     }
 
     return true;
@@ -3230,7 +3232,7 @@ static bool tls_send_alert(
     if (level == TLS_ALERT_LEVEL_FATAL)
     {
         ctx->state = TLS_STATE_ERROR;
-        lwip_log_event(LWIP_LOG_TYPE_TLS, LWIP_LOG_TLS_FATAL_ALERT);
+        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_FATAL_ALERT, -1, 0);
     }
 
     return ok;

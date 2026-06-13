@@ -27,6 +27,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "hash.h"
+#include "lwip/logging.h"
 
 #ifdef __cplusplus
 extern "C"

@@ -12,6 +12,7 @@
 #include <stddef.h>
 
 #include "truststore.h"
+#include "lwip/logging.h"
 
 struct tls_context
 {

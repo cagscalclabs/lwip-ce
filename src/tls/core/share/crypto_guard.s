@@ -98,6 +98,5 @@ _tls_crypto_guard_disable:
     ret nc
     ei
     ret
- 
- 
+
 .section    .note.GNU-stack,"",@progbits

@@ -7,18 +7,12 @@
 #include "../includes/random.h"
 #include "../../drivers/mem.h"
 
-/* Temporary tls_init step tracing — prints a tag to the home screen and
- * waits for a key, so on hardware the last tag before a crash localizes
- * which init step faults. Set TLS_INIT_TRACE 0 to disable. */
-#define TLS_INIT_TRACE 0
-#if TLS_INIT_TRACE
-#include <ti/screen.h>
-#include <ti/getkey.h>
-#define TLS_INIT_TRACE_STEP(msg) do { os_ClrHome(); os_PutStrFull("tls_init: " msg); \
-                                      os_PutStrFull(" [key]"); os_GetKey(); } while (0)
-#else
-#define TLS_INIT_TRACE_STEP(msg) ((void)0)
-#endif
+/* Init-phase debug events route through the unified stack-wide debug sink
+ * (lwip_set_debug). The library does no I/O — the callback decides. */
+static inline void tls_init_debug(lwip_debug_state_t state, int errnum)
+{
+    lwip_debug_emit(LWIP_DBG_MOD_TLS, state, errnum, 0);
+}
 
 /**
  * TLS Memory Module
@@ -75,33 +69,33 @@ static bool tls_fileio_buffer_ensure(void)
 
 bool tls_init(void)
 {
-    TLS_INIT_TRACE_STEP("A enter");
+    tls_init_debug(LWIP_DBG_TLS_INIT_START, 0);
     /* Check if already initialized */
     if (tls_ctx.initialized)
     {
+        tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
         return true;
     }
 
-    TLS_INIT_TRACE_STEP("B rsa scratch");
     /* Allocate RSA scratch buffer via unified allocator backend */
     tls_ctx.rsa_scratch = (uint8_t *)mem_buffer_custom_malloc(RSA_SCRATCH_SIZE);
     if (tls_ctx.rsa_scratch == NULL)
     {
+        tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 1 /* ENOMEM-ish */);
         tls_cleanup(); /* Clean up any partial allocations */
         return false;
     }
 
-    TLS_INIT_TRACE_STEP("C ecc scratch");
     /* Allocate ECC scratch buffer (reserved for future use) via unified allocator */
     tls_ctx.ecc_scratch = (uint8_t *)mem_buffer_custom_malloc(ECC_SCRATCH_SIZE);
     if (tls_ctx.ecc_scratch == NULL)
     {
+        tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 2);
         tls_cleanup(); /* Clean up any partial allocations */
         return false;
     }
 
     tls_ctx.initialized = true;
-    TLS_INIT_TRACE_STEP("D rng start");
     tls_rng_start();
 
     /* Load and verify the SPKI trust store now that the RSA scratch exists
@@ -111,10 +105,13 @@ bool tls_init(void)
      * certificate verification fail-closes later (tls_truststore_lookup
      * returns false unless the store validated). We record the status so
      * the handshake can surface it. */
-    TLS_INIT_TRACE_STEP("E truststore");
+    tls_init_debug(LWIP_DBG_TLS_TRUSTSTORE_INIT, 0);
     tls_ctx.truststore.status = tls_truststore_init();
+    /* TLS_STORE_OK (0) means the store's own signature verified; any other
+     * status code is surfaced as the errnum. */
+    tls_init_debug(LWIP_DBG_TLS_TRUSTSTORE_VERIFIED, (int)tls_ctx.truststore.status);
 
-    TLS_INIT_TRACE_STEP("F done");
+    tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
     return true;
 }
 

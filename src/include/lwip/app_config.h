@@ -45,8 +45,13 @@
 #define LWIP_MIN_FLOOR_BYTES        LWIP_TLS_FLOOR_BYTES
 #define LWIP_CFG_MEM_CAP_DEF        (32u * 1024u)
 #define LWIP_CFG_MEM_CAP_STEP       1024u
+/* Vestigial log-config fields. The appvar-backed log system was replaced by
+ * the unified debug callback (lwip_set_debug); these fields are retained only
+ * to keep the persisted config layout stable and are no longer consulted. */
 #define LWIP_CFG_LOG_ENABLED_DEF    1u
-#define LWIP_CFG_LOG_LEVEL_DEF      LWIP_LOG_LEVEL_ERROR
+#define LWIP_CFG_LOG_LEVEL_DEF      3u   /* was LWIP_LOG_LEVEL_ERROR */
+#define LWIP_CFG_LOG_LEVEL_MIN      1u
+#define LWIP_CFG_LOG_LEVEL_MAX      4u
 
 typedef struct lwip_app_config {
     uint16_t version;

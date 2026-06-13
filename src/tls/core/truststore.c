@@ -7,7 +7,8 @@
 #include "../includes/bytes.h"
 
 /* Temporary sub-step tracing for tls_truststore_init (key-gated). Set
- * TS_TRACE_ON 0 to disable. */
+ * TS_TRACE_ON 1 to re-enable. Superseded by the TLS debug callback
+ * (tls_debug.h), which emits TRUSTSTORE_INIT / TRUSTSTORE_VERIFIED. */
 #define TS_TRACE_ON 0
 #if TS_TRACE_ON
 #include <ti/screen.h>

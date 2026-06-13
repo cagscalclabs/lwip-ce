@@ -149,6 +149,11 @@ SECTIONS
         .x25519.reloc
         {
             _x25519_reloc_run_start = .;
+            /* Relocatable load-image pointer — same fix as .powmod.reloc below:
+             * `. + (LOADADDR - ADDR)` is a prgm-section-relative symbol the
+             * installer patches, vs a bare LOADADDR() (absolute, never patched
+             * → x25519.s copy loop would ldir from the link-time LMA garbage). */
+            _x25519_reloc_load_start = . + (LOADADDR(.x25519.reloc) - ADDR(.x25519.reloc));
             KEEP(*(.x25519.reloc))
             KEEP(*(.x25519.reloc.*))
             _x25519_reloc_run_end = .;
@@ -156,6 +161,14 @@ SECTIONS
         .powmod.reloc
         {
             _powmod_reloc_run_start = .;
+            /* Relocatable load-image pointer. Anchoring (LOADADDR - ADDR) to a
+             * section-relative `.` (the .data trick) makes this a prgm-section-
+             * relative symbol that convbin records and the installer PATCHES to
+             * the real installed flash base. A bare `LOADADDR(.powmod.reloc)`
+             * outside any section is an ABSOLUTE symbol (no reloc record), so
+             * the trampoline's ldir reads the link-time LMA (~0x04127A, garbage
+             * in low/OS flash) instead of base+offset — the powmod crash. */
+            _powmod_reloc_load_start = . + (LOADADDR(.powmod.reloc) - ADDR(.powmod.reloc));
             KEEP(*(.powmod.reloc))
             KEEP(*(.powmod.reloc.*))
             _powmod_reloc_run_end = .;
@@ -167,14 +180,17 @@ SECTIONS
         }
     }
 
-    /* Back-compat aliases for the X25519 copy loop in x25519.s. */
-    _x25519_reloc_load_start = LOADADDR(.x25519.reloc);
+    /* Back-compat aliases for the X25519 copy loop in x25519.s.
+     * NOTE: _x25519_reloc_load_start is defined INSIDE the .x25519.reloc block
+     * above (not here) so it is a relocatable/patched symbol, not an absolute
+     * LOADADDR. See the comment there. */
     _x25519_reloc_len        = SIZEOF(.x25519.reloc);
 
     /* Copy-loop symbols for the powmod trampoline in bigint.s (RSA modexp
      * relocated to writable RAM because it self-modifies). Shares the
-     * 0xE30800 overlay VMA with X25519/RNG — sequential, never co-resident. */
-    _powmod_reloc_load_start = LOADADDR(.powmod.reloc);
+     * 0xE30800 overlay VMA with X25519/RNG — sequential, never co-resident.
+     * NOTE: _powmod_reloc_load_start is defined INSIDE the .powmod.reloc block
+     * above (not here), for the same reason. */
     _powmod_reloc_len        = SIZEOF(.powmod.reloc);
 
     /* Guard: no consumer may outgrow the shared window. */

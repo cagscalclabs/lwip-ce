@@ -1,392 +1,170 @@
 #include <stdlib.h>
-#include <string.h>
-
-#include <fileioc.h>
-#include <sys/rtc.h>
 
 #include "lwip/logging.h"
 
-static uint8_t g_log_enabled_mask = 0;
-static uint8_t g_log_min_level = LWIP_LOG_LEVEL_ERROR;
-static uint16_t g_log_max_bytes = 4096u;
-static lwip_log_fatal_handler_t g_log_fatal_handler = NULL;
-static bool g_log_in_fatal = false;
+/* Unified debug sink. A single callback, shared by the whole stack. No file
+ * I/O: persistence/console/log is entirely the caller's choice inside its
+ * callback. See lwip/logging.h. */
 
-static const struct lwip_log_descriptor g_log_descriptors[] = {
-    {
-        LWIP_LOG_LEVEL_WARN,
-        LWIP_LOG_TYPE_USB,
-        LWIP_LOG_USB_ENDPOINT_STALL,
-        "W",
-        "USB",
-        "STALL",
-    },
-    {
-        LWIP_LOG_LEVEL_ERROR,
-        LWIP_LOG_TYPE_USB,
-        LWIP_LOG_USB_ENDPOINT_NO_DEVICE,
-        "E",
-        "USB",
-        "UNPLUG",
-    },
-    {
-        LWIP_LOG_LEVEL_ERROR,
-        LWIP_LOG_TYPE_USB,
-        LWIP_LOG_USB_ENDPOINT_ERROR,
-        "E",
-        "USB",
-        "EPERR",
-    },
-    {
-        LWIP_LOG_LEVEL_FATAL,
-        LWIP_LOG_TYPE_USB,
-        LWIP_LOG_USB_FATAL_RETRY,
-        "F",
-        "USB",
-        "RETRY",
-    },
-    {
-        LWIP_LOG_LEVEL_ERROR,
-        LWIP_LOG_TYPE_USB,
-        LWIP_LOG_USB_RX_DRAIN_SHORT,
-        "E",
-        "USB",
-        "RXSHORT",
-    },
-    {
-        LWIP_LOG_LEVEL_FATAL,
-        LWIP_LOG_TYPE_USB,
-        LWIP_LOG_USB_RX_DRAIN_FATAL,
-        "F",
-        "USB",
-        "RXFATAL",
-    },
-    {
-        LWIP_LOG_LEVEL_FATAL,
-        LWIP_LOG_TYPE_TLS,
-        LWIP_LOG_TLS_FATAL_ALERT,
-        "F",
-        "TLS",
-        "ALERT",
-    },
-    {
-        LWIP_LOG_LEVEL_ERROR,
-        LWIP_LOG_TYPE_TLS,
-        LWIP_LOG_TLS_TRUSTSTORE_FAIL,
-        "E",
-        "TLS",
-        "TSTORE",
-    },
-    {
-        LWIP_LOG_LEVEL_ERROR,
-        LWIP_LOG_TYPE_TLS,
-        LWIP_LOG_TLS_CERTVERIFY_FAIL,
-        "E",
-        "TLS",
-        "CVFY",
-    },
-    {
-        LWIP_LOG_LEVEL_FATAL,
-        LWIP_LOG_TYPE_LWIP,
-        LWIP_LOG_LWIP_ASSERT,
-        "F",
-        "LWIP",
-        "ASSERT",
-    },
-    {
-        LWIP_LOG_LEVEL_ERROR,
-        LWIP_LOG_TYPE_LWIP,
-        LWIP_LOG_LWIP_ERROR,
-        "E",
-        "LWIP",
-        "ERROR",
-    },
-};
+static lwip_debug_fn g_debug_fn = NULL;
+static uint8_t g_debug_mode = LWIP_DBG_INFO;
+static uint8_t g_debug_depth = LWIP_DBG_DEPTH_MILESTONE;
+static bool g_in_fatal = false;
+static void (*g_fatal_cleanup)(void) = NULL;
 
-static const struct lwip_log_descriptor g_unknown_log_descriptor = {
-    LWIP_LOG_LEVEL_ERROR,
-    0u,
-    0u,
-    "E",
-    "UNK",
-    "UNKNOWN",
-};
-
-const struct lwip_log_descriptor *lwip_log_describe(uint8_t type, uint8_t reason)
+void lwip_debug_set_fatal_cleanup(void (*cleanup)(void))
 {
-    for (uint8_t i = 0; i < (uint8_t)(sizeof(g_log_descriptors) / sizeof(g_log_descriptors[0])); i++)
+    g_fatal_cleanup = cleanup;
+}
+
+void lwip_set_debug(lwip_debug_fn debug_fn, uint8_t debug_mode,
+                    uint8_t debug_depth)
+{
+    g_debug_fn = debug_fn;
+    /* Default to delivering everything if no usable mode bit is set. */
+    if ((debug_mode & (LWIP_DBG_INFO | LWIP_DBG_ERROR)) == 0)
     {
-        if (g_log_descriptors[i].type == type &&
-            g_log_descriptors[i].reason == reason)
-        {
-            return &g_log_descriptors[i];
-        }
+        debug_mode = LWIP_DBG_INFO;
     }
-    return &g_unknown_log_descriptor;
+    g_debug_mode = debug_mode;
+    g_debug_depth = debug_depth;
 }
 
-static uint16_t lwip_log_calc_max_entries(uint16_t max_bytes)
+void lwip_debug_emit_at(uint16_t module, uint16_t module_state, int errnum,
+                        uint16_t line, uint8_t depth)
 {
-    uint16_t header_size = (uint16_t)sizeof(struct lwip_log_header);
-    uint16_t entry_size = (uint16_t)sizeof(struct lwip_log_entry);
-    if (max_bytes <= header_size + entry_size)
-    {
-        return 0;
-    }
-    return (uint16_t)((max_bytes - header_size) / entry_size);
-}
-
-static void lwip_log_init_header(struct lwip_log_header *header, uint16_t max_bytes)
-{
-    memset(header, 0, sizeof(*header));
-    memcpy(header->magic, LWIP_LOG_MAGIC, LWIP_LOG_MAGIC_LEN);
-    header->version = LWIP_LOG_VERSION;
-    header->max_bytes = max_bytes;
-    header->entry_size = (uint16_t)sizeof(struct lwip_log_entry);
-    header->max_entries = lwip_log_calc_max_entries(max_bytes);
-    header->write_index = 0;
-    header->count = 0;
-}
-
-static bool lwip_log_write_header(uint8_t handle, const struct lwip_log_header *header)
-{
-    if (!handle || !header)
-    {
-        return false;
-    }
-    ti_SetArchiveStatus(false, handle);
-    ti_Rewind(handle);
-    if (ti_Write(header, sizeof(*header), 1, handle) != 1)
-    {
-        return false;
-    }
-    ti_SetArchiveStatus(true, handle);
-    return true;
-}
-
-void lwip_log_set_enabled(uint8_t type_mask)
-{
-    g_log_enabled_mask = type_mask;
-}
-
-void lwip_log_set_min_level(uint8_t min_level)
-{
-    if (min_level < LWIP_LOG_LEVEL_INFO || min_level > LWIP_LOG_LEVEL_FATAL)
-    {
-        min_level = LWIP_LOG_LEVEL_ERROR;
-    }
-    g_log_min_level = min_level;
-}
-
-void lwip_log_set_fatal_handler(lwip_log_fatal_handler_t handler)
-{
-    g_log_fatal_handler = handler;
-}
-
-void lwip_log_set_max_bytes(uint16_t max_bytes)
-{
-    g_log_max_bytes = max_bytes;
-}
-
-static void lwip_log_write_event(uint8_t type, uint8_t reason, uint16_t line, bool force)
-{
-    const struct lwip_log_descriptor *desc = lwip_log_describe(type, reason);
-
-    if (!force && (g_log_enabled_mask & type) == 0)
+    if (!g_debug_fn)
     {
         return;
     }
-    if (!force && desc->level < g_log_min_level)
+    /* LWIP_DBG_INFO delivers everything; LWIP_DBG_ERROR delivers only events
+     * with a non-zero errnum. (Both set behaves like INFO.) */
+    if (!(g_debug_mode & LWIP_DBG_INFO) && errnum == 0)
+    {
+        return;
+    }
+    /* Drop emits deeper than the configured verbosity — but errors always
+     * surface, no matter how deep they were raised. */
+    if (depth > g_debug_depth && errnum == 0)
     {
         return;
     }
 
-    uint16_t max_bytes = g_log_max_bytes;
-    if (max_bytes < sizeof(struct lwip_log_header) + sizeof(struct lwip_log_entry))
-    {
-        return;
-    }
-
-    uint8_t handle = ti_Open(LWIP_LOG_APPVAR, "r+");
-    if (!handle)
-    {
-        handle = ti_Open(LWIP_LOG_APPVAR, "w");
-    }
-    if (!handle)
-    {
-        return;
-    }
-
-    struct lwip_log_header header;
-    bool valid_header = false;
-    uint16_t size = ti_GetSize(handle);
-    if (size == max_bytes)
-    {
-        ti_Rewind(handle);
-        if (ti_Read(&header, sizeof(header), 1, handle) == 1)
-        {
-            if (memcmp(header.magic, LWIP_LOG_MAGIC, LWIP_LOG_MAGIC_LEN) == 0 &&
-                header.version == LWIP_LOG_VERSION &&
-                header.entry_size == sizeof(struct lwip_log_entry) &&
-                header.max_bytes == max_bytes &&
-                header.max_entries == lwip_log_calc_max_entries(max_bytes))
-            {
-                valid_header = true;
-            }
-        }
-    }
-
-    if (!valid_header)
-    {
-        if (size != max_bytes)
-        {
-            ti_Resize(max_bytes, handle);
-        }
-        lwip_log_init_header(&header, max_bytes);
-        if (!lwip_log_write_header(handle, &header))
-        {
-            ti_Close(handle);
-            return;
-        }
-    }
-
-    if (header.max_entries == 0)
-    {
-        ti_Close(handle);
-        return;
-    }
-
-    uint8_t day = 0;
-    uint8_t month = 0;
-    uint16_t year = 0;
-    uint8_t hour = 0;
-    uint8_t minute = 0;
-    uint8_t second = 0;
-
-    boot_GetDate(&day, &month, &year);
-    boot_GetTime(&second, &minute, &hour);
-
-    struct lwip_log_entry entry;
-    entry.year = (uint8_t)(year % 100u);
-    entry.month = month;
-    entry.day = day;
-    entry.hour = hour;
-    entry.minute = minute;
-    entry.second = second;
-    entry.level = desc->level;
-    entry.type = type;
-    entry.reason = reason;
-    entry.line = line;
-
-    uint16_t entry_offset = (uint16_t)sizeof(struct lwip_log_header) +
-                            (uint16_t)(header.write_index * sizeof(struct lwip_log_entry));
-    ti_Seek(entry_offset, SEEK_SET, handle);
-    ti_Write(&entry, sizeof(entry), 1, handle);
-
-    header.write_index++;
-    if (header.write_index >= header.max_entries)
-    {
-        header.write_index = 0;
-    }
-    if (header.count < header.max_entries)
-    {
-        header.count++;
-    }
-
-    lwip_log_write_header(handle, &header);
-    ti_Close(handle);
+    struct lwip_debug_info info;
+    info.module = module;
+    info.module_state = module_state;
+    info.errnum = errnum;
+    info.line = line;
+    info.depth = depth;
+    g_debug_fn(&info);
 }
 
-void lwip_log_event(uint8_t type, uint8_t reason)
+void lwip_debug_emit(uint16_t module, uint16_t module_state, int errnum,
+                     uint16_t line)
 {
-    lwip_log_write_event(type, reason, 0u, false);
+    lwip_debug_emit_at(module, module_state, errnum, line,
+                       LWIP_DBG_DEPTH_MILESTONE);
 }
 
-void lwip_log_event_at(uint8_t type, uint8_t reason, uint16_t line)
+void lwip_debug_fatal(uint16_t module, uint16_t module_state, int errnum,
+                      uint16_t line)
 {
-    lwip_log_write_event(type, reason, line, false);
-}
-
-void lwip_log_fatal(uint8_t type, uint8_t reason)
-{
-    lwip_log_fatal_at(type, reason, 0u);
-}
-
-void lwip_log_fatal_at(uint8_t type, uint8_t reason, uint16_t line)
-{
-    if (g_log_in_fatal)
+    /* Guard against re-entrancy if the callback itself trips a fatal. */
+    if (g_in_fatal)
     {
         exit(1);
     }
-    g_log_in_fatal = true;
-    lwip_log_write_event(type, reason, line, true);
-    if (g_log_fatal_handler)
+    g_in_fatal = true;
+    /* A fatal is always an error; force a non-zero errnum so it is delivered
+     * even in LWIP_DBG_ERROR mode. */
+    if (errnum == 0)
     {
-        g_log_fatal_handler(type, reason);
+        errnum = -1;
+    }
+    if (g_debug_fn)
+    {
+        struct lwip_debug_info info;
+        info.module = module;
+        info.module_state = module_state;
+        info.errnum = errnum;
+        info.line = line;
+        info.depth = LWIP_DBG_DEPTH_MILESTONE;
+        g_debug_fn(&info);
+    }
+    if (g_fatal_cleanup)
+    {
+        g_fatal_cleanup();
     }
     exit(1);
 }
 
-bool lwip_log_read_header(struct lwip_log_header *out_header)
+/* Compatibility entry points for the lwIP core macros (debug.h). */
+void lwip_log_event_at(uint16_t module, uint16_t module_state, uint16_t line)
 {
-    if (!out_header)
-    {
-        return false;
-    }
-
-    uint8_t handle = ti_Open(LWIP_LOG_APPVAR, "r");
-    if (!handle)
-    {
-        return false;
-    }
-
-    uint16_t size = ti_GetSize(handle);
-    if (size < sizeof(*out_header))
-    {
-        ti_Close(handle);
-        return false;
-    }
-
-    if (ti_Read(out_header, sizeof(*out_header), 1, handle) != 1)
-    {
-        ti_Close(handle);
-        return false;
-    }
-    ti_Close(handle);
-
-    if (memcmp(out_header->magic, LWIP_LOG_MAGIC, LWIP_LOG_MAGIC_LEN) != 0 ||
-        out_header->version != LWIP_LOG_VERSION ||
-        out_header->entry_size != sizeof(struct lwip_log_entry) ||
-        out_header->max_entries == 0 ||
-        out_header->max_bytes < sizeof(*out_header))
-    {
-        return false;
-    }
-
-    return true;
+    lwip_debug_emit(module, module_state, -1, line);
 }
 
-bool lwip_log_read_entry_at(const struct lwip_log_header *header, uint16_t offset,
-                            struct lwip_log_entry *out_entry)
+void lwip_log_fatal_at(uint16_t module, uint16_t module_state, uint16_t line)
 {
-    if (!header || !out_entry || offset >= header->count || header->max_entries == 0)
+    lwip_debug_fatal(module, module_state, -1, line);
+}
+
+const char *lwip_debug_module_name(uint16_t module)
+{
+    switch (module)
     {
-        return false;
+    case LWIP_DBG_MOD_LWIP: return "lwip";
+    case LWIP_DBG_MOD_USB:  return "usb";
+    case LWIP_DBG_MOD_TCP:  return "tcp";
+    case LWIP_DBG_MOD_UDP:  return "udp";
+    case LWIP_DBG_MOD_TLS:  return "tls";
+    default:                return "?";
     }
+}
 
-    uint16_t idx = header->write_index + header->max_entries - 1 - offset;
-    idx %= header->max_entries;
-
-    uint8_t handle = ti_Open(LWIP_LOG_APPVAR, "r");
-    if (!handle)
+const char *lwip_debug_state_name(uint16_t module_state)
+{
+    switch (module_state)
     {
-        return false;
-    }
+    case LWIP_DBG_LWIP_ASSERT:             return "assert";
+    case LWIP_DBG_LWIP_ERROR:              return "error";
 
-    uint16_t entry_offset = (uint16_t)sizeof(struct lwip_log_header) +
-                            (uint16_t)(idx * sizeof(struct lwip_log_entry));
-    ti_Seek(entry_offset, SEEK_SET, handle);
-    bool ok = (ti_Read(out_entry, sizeof(*out_entry), 1, handle) == 1);
-    ti_Close(handle);
-    return ok;
+    case LWIP_DBG_USB_ENDPOINT_STALL:      return "ep_stall";
+    case LWIP_DBG_USB_ENDPOINT_NO_DEVICE:  return "ep_no_device";
+    case LWIP_DBG_USB_ENDPOINT_ERROR:      return "ep_error";
+    case LWIP_DBG_USB_FATAL_RETRY:         return "fatal_retry";
+    case LWIP_DBG_USB_RX_DRAIN_SHORT:      return "rx_drain_short";
+    case LWIP_DBG_USB_RX_DRAIN_FATAL:      return "rx_drain_fatal";
+
+    case LWIP_DBG_TLS_INIT_START:          return "tls_init started";
+    case LWIP_DBG_TLS_TRUSTSTORE_INIT:     return "tls_truststore init";
+    case LWIP_DBG_TLS_TRUSTSTORE_VERIFIED: return "tls_truststore verified";
+    case LWIP_DBG_TLS_INIT_DONE:           return "tls_init done";
+
+    case LWIP_DBG_TLS_HANDSHAKE_BEGIN:     return "handshake_begin";
+    case LWIP_DBG_TLS_CLIENT_HELLO:        return "client_hello";
+    case LWIP_DBG_TLS_SERVER_HELLO:        return "server_hello";
+    case LWIP_DBG_TLS_KEY_EXCHANGE:        return "key_exchange";
+    case LWIP_DBG_TLS_DERIVE_HS_KEYS:      return "derive_hs_keys";
+    case LWIP_DBG_TLS_ENCRYPTED_EXT:       return "encrypted_extensions";
+    case LWIP_DBG_TLS_CERTIFICATE:         return "certificate";
+    case LWIP_DBG_TLS_CERTIFICATE_VERIFY:  return "certificate_verify";
+    case LWIP_DBG_TLS_DERIVE_APP_KEYS:     return "derive_app_keys";
+    case LWIP_DBG_TLS_FINISHED:            return "finished";
+    case LWIP_DBG_TLS_HANDSHAKE_END:       return "handshake_end";
+
+    case LWIP_DBG_TLS_FATAL_ALERT:         return "fatal_alert";
+    case LWIP_DBG_TLS_TRUSTSTORE_FAIL:     return "truststore_fail";
+    case LWIP_DBG_TLS_CERTVERIFY_FAIL:     return "certverify_fail";
+
+    case LWIP_DBG_TLS_REC_RX:              return "rec_rx";
+    case LWIP_DBG_TLS_REC_PARTIAL:         return "rec_partial";
+    case LWIP_DBG_TLS_DERIVE_HS_KEYS_V:    return "derive_hs_keys";
+    case LWIP_DBG_TLS_DECRYPT:             return "decrypt";
+    case LWIP_DBG_TLS_DECRYPT_NOMEM:       return "decrypt_nomem";
+    case LWIP_DBG_TLS_PROCESS_INNER:       return "process_inner";
+    case LWIP_DBG_TLS_CERT_WALK:           return "cert_walk";
+
+    default:                               return "?";
+    }
 }

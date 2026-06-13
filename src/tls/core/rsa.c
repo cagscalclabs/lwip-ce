@@ -7,8 +7,9 @@
 #include "../includes/rsa.h"
 #include "../includes/crypto_guard.h"
 
-/* Temporary RSA decrypt tracing (key-gated). Set RSA_TRACE_ON 0 to disable. */
-#define RSA_TRACE_ON 1
+/* Temporary RSA decrypt tracing (key-gated). Set RSA_TRACE_ON 1 to
+ * re-enable. Superseded by the TLS debug callback (tls_debug.h). */
+#define RSA_TRACE_ON 0
 #if RSA_TRACE_ON
 #include <ti/screen.h>
 #include <ti/getkey.h>

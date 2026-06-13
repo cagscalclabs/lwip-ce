@@ -54,6 +54,9 @@
 .extern _lwip_conn_set_err
 .extern _lwip_conn_set_poll
 .extern _lwip_conn_set_closed
+.extern _lwip_set_debug
+.extern _lwip_debug_module_name
+.extern _lwip_debug_state_name
 .extern _lwip_conn_set_callbacks
 .extern _tls_aes_init
 .extern _tls_aes_ccm_init
@@ -416,7 +419,7 @@
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 380    ; entry count
+    d24 383    ; entry count
 
 ; --- src/lwIP.c ---
     d24 _lwip_start
@@ -444,6 +447,13 @@ _fn_exports_table:
     d24 _lwip_conn_set_err
     d24 _lwip_conn_set_poll
     d24 _lwip_conn_set_closed
+
+; --- src/core/logging.c ---
+    d24 _lwip_set_debug
+    d24 _lwip_debug_module_name
+    d24 _lwip_debug_state_name
+
+; --- src/lwIP.c ---
     d24 _lwip_conn_set_callbacks
 
 ; --- src/tls/core/aes.c ---

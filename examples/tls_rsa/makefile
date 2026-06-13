@@ -2,7 +2,7 @@
 # Makefile Options
 # ----------------------------
 
-PROJECT_ROOT := ../../..
+PROJECT_ROOT := ../..
 RELEASE_ROOT ?= $(if $(wildcard ../../lwip),../..,$(PROJECT_ROOT)/build)
 
 NAME = LWTLSRSA

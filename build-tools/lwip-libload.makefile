@@ -14,7 +14,33 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-include $(CURDIR)/../common.mk
+COMMON_MK := $(CURDIR)/../common.mk
+
+ifneq ($(wildcard $(COMMON_MK)),)
+include $(COMMON_MK)
+INSTALL_PREREQS := all
+else
+V ?= 0
+ifeq ($(V),0)
+Q = @
+else
+Q =
+endif
+
+DESTDIR ?= $(if $(CEDEV),$(CEDEV),$(HOME)/CEdev)
+PREFIX ?=
+INSTALL_DIR := $(patsubst %/,%,$(DESTDIR))/$(PREFIX)
+INSTALL_LIB := $(INSTALL_DIR)/lib/libload
+INSTALL_H := $(INSTALL_DIR)/include
+
+FASMG ?= fasmg
+MKDIR ?= mkdir -p "$1"
+REMOVE ?= rm -f $1
+RMDIR ?= rm -rf "$1"
+COPY ?= cp "$1" "$2"
+COPYDIR ?= cp -R "$1" "$2"
+INSTALL_PREREQS := lwip.lib lwip.8xv
+endif
 
 LIB_SRC := lwip.asm
 LIB_LIB := lwip.lib
@@ -23,13 +49,18 @@ LIB_H_DIR := lwip
 
 all: $(LIB_8XV)
 
+ifneq ($(wildcard $(COMMON_MK)),)
 $(LIB_8XV): $(LIB_SRC)
 	$(Q)$(FASMG) $< $@
+else
+$(LIB_LIB) $(LIB_8XV):
+	$(Q)test -f $@ || { echo "missing $@; rerun build-release-dylib.sh"; exit 1; }
+endif
 
 clean:
 	$(Q)$(call REMOVE,$(LIB_LIB) $(LIB_8XV))
 
-install: all
+install: $(INSTALL_PREREQS)
 	$(Q)$(call MKDIR,$(INSTALL_LIB))
 	$(Q)$(call MKDIR,$(INSTALL_H))
 	$(Q)$(call COPY,$(LIB_LIB),$(INSTALL_LIB))

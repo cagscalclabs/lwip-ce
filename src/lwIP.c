@@ -74,7 +74,7 @@ static uint8_t g_lwip_start_error = 0;
 static struct lwip_conn *g_conn_registry = NULL;
 
 static void lwip_stack_cleanup(void);
-static void lwip_fatal_cleanup(uint8_t type, uint8_t reason);
+static void lwip_fatal_cleanup(void);
 static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags);
 static struct netif *find_external_netif(void);
 static bool netif_has_usable_ipv4(const struct netif *n);
@@ -101,7 +101,7 @@ bool lwip_start(void)
     g_lwip_start_error = 0;
     g_lwip_stopping = false;
     lwip_app_config_load(&g_lwip_cfg);
-    lwip_log_set_fatal_handler(lwip_fatal_cleanup);
+    lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
     eth_reset_shutdown();
 
     if (lwip_init() != ERR_OK)
@@ -354,9 +354,8 @@ static struct netif *resolve_netif(struct netif *requested)
     return requested ? requested : find_external_netif();
 }
 
-/* Apply service-up flags on the resident netif. Idempotent — already-up
- * services are left alone. DHCP cannot be started until the netif is
- * administratively up; callers retry this from the services waiter. */
+/* Track DHCP state for waiters. DHCP is armed by external netifs on link-up,
+ * not by connection creation/connect; conns only wait for it when requested. */
 #if LWIP_DHCP
 static bool dhcp_client_running(const struct netif *n)
 {
@@ -539,32 +538,14 @@ static void lwip_stack_cleanup(void)
     g_lwip_stopping = false;
 }
 
-static void lwip_fatal_cleanup(uint8_t type, uint8_t reason)
+static void lwip_fatal_cleanup(void)
 {
-    (void)type;
-    (void)reason;
     lwip_stack_cleanup();
 }
 
 static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags)
 {
     if (!n) return LWIP_OK;
-
-#if LWIP_DHCP
-    if ((svc_flags & LWIP_CONN_SVC_DHCP) && !dhcp_client_running(n))
-    {
-        err_t err;
-        if (!netif_is_up(n))
-        {
-            return LWIP_OK;
-        }
-        err = dhcp_start(n);
-        if (err != ERR_OK)
-        {
-            return lwip_err_translate(err);
-        }
-    }
-#endif
 
 #if LWIP_DNS
     if (svc_flags & LWIP_CONN_SVC_DNS)

@@ -1269,7 +1269,7 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
 
         // authenticate the ciphertext
         if (!tls_aes_update_ciphertext(ctx, outbuf, in_len))
-            return false;
+            goto cleanup;
         break;
     }
     case TLS_AES_CBC:

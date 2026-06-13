@@ -27,29 +27,18 @@
 #include <limits.h>
 #include <fileioc.h>
 
-/* Temporary debug display for on-calc TLS handshake tracing.
- * Remove once handshake is working. Set TLS_DBG_STEP 1 to pause (wait for
- * a key) after each status line, so on a physical calculator the last
- * message visible before a crash localizes the failing handshake step. */
-#include <ti/screen.h>
-#include <ti/getkey.h>
-#define TLS_DBG_STEP 1
-#define TLS_DBG_Y 90
-#define TLS_DBG_VRAM ((uint16_t *)0xD40000)
-static void tls_dbg_status(const char *msg)
+/* Legacy per-step screen tracing is gone — TLS now emits structured debug
+ * events through the unified stack-wide debug sink (lwip_set_debug; see
+ * lwip/logging.h, handshake.c). This stub keeps the remaining call sites
+ * harmless; it does nothing. */
+static inline void tls_dbg_status(const char *msg) { (void)msg; }
+
+/* Verbose (depth-1) record/decrypt-path trace. Surfaces only when the app
+ * sets a debug depth >= LWIP_DBG_DEPTH_VERBOSE; errors pass at any depth. */
+static inline void tls_vdbg(lwip_debug_state_t state, int errnum)
 {
-    /* Clear line at y=90, 320 wide, 12 tall */
-    for (int row = TLS_DBG_Y; row < TLS_DBG_Y + 12; row++)
-    {
-        uint16_t *ptr = TLS_DBG_VRAM + row * 320;
-        for (int col = 0; col < 320; col++)
-            *ptr++ = 0xFFFF;
-    }
-    os_FontDrawText(msg, 10, TLS_DBG_Y);
-#if TLS_DBG_STEP
-    os_FontDrawText(" [key]", 10, TLS_DBG_Y + 14);
-    os_GetKey();
-#endif
+    lwip_debug_emit_at(LWIP_DBG_MOD_TLS, state, errnum, 0,
+                       LWIP_DBG_DEPTH_VERBOSE);
 }
 
 /* Debug flag for TLS CE layer */
@@ -62,6 +51,7 @@ static altcp_tls_ce_state_t *g_tls_state_head = NULL;
 static bool g_tls_rx_release_attached = false;
 
 static void altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cnt);
+static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n);
 
 #define ALTCP_TLS_CE_RX_RELEASE_MILD_MS     50u
 #define ALTCP_TLS_CE_RX_RELEASE_HIGH_MS     100u
@@ -601,9 +591,11 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         return ERR_MEM;
     }
 
-    /* Release the 5-byte header from the input pbuf and ack it. */
-    state->rx = pbuf_free_header(state->rx, (u16_t)sizeof(header));
-    altcp_tls_ce_lower_recved(conn->inner_conn, (int)sizeof(header));
+    /* Release the 5-byte header from the input pbuf. altcp_tls_ce_consume_recved
+     * acks to the lower TCP only the bytes not already pre-acked at queue time,
+     * so handshake bytes (pre-acked) aren't double-acked while app-data bytes
+     * still get their drain-driven ack. */
+    altcp_tls_ce_consume_recved(state, sizeof(header));
 
     /* Pass 2: chunked decrypt-and-accumulate, releasing input as we go. */
     processed = 0;
@@ -643,14 +635,12 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
             out_tail = out_seg;
         }
 
-        state->rx = pbuf_free_header(state->rx, (u16_t)take);
-        altcp_tls_ce_lower_recved(conn->inner_conn, (int)take);
+        altcp_tls_ce_consume_recved(state, take);
         processed += take;
     }
 
     /* Release the trailing 16-byte tag from the input. */
-    state->rx = pbuf_free_header(state->rx, TLS_AES_AUTH_TAG_SIZE);
-    altcp_tls_ce_lower_recved(conn->inner_conn, (int)TLS_AES_AUTH_TAG_SIZE);
+    altcp_tls_ce_consume_recved(state, TLS_AES_AUTH_TAG_SIZE);
 
     tls_secure_memzero(scratch, ALTCP_TLS_CE_STREAM_CHUNK);
     mem_buffer_custom_free(scratch);
@@ -789,6 +779,8 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
 
 static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
 {
+    u16_t added = (p != NULL) ? p->tot_len : 0;
+
     if (state->rx == NULL)
     {
         state->rx = p;
@@ -797,6 +789,53 @@ static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
     {
         LWIP_ASSERT("rx pbuf overflow", (int)state->rx->tot_len + (int)p->tot_len <= 0xFFFF);
         pbuf_cat(state->rx, p);
+    }
+
+    /* During the handshake there is no application backpressure: the bytes
+     * are now safely held in our own state->rx buffer, so ack them to the
+     * lower TCP immediately to keep the receive window open. Without this a
+     * handshake record larger than the window (e.g. the server Certificate,
+     * which spans several segments) can never fully arrive — the window fills
+     * with un-acked partial-record bytes and the server stalls (observed as
+     * tls:rec_partial looping forever).
+     *
+     * We track how many front-of-rx bytes have been acked here in
+     * rx_acked_len; the consume path (altcp_tls_ce_consume_recved) then only
+     * acks the bytes it releases that this counter did NOT already cover, so
+     * no byte is ever acked twice — even for a pbuf that straddles the
+     * handshake -> app-data transition. The post-handshake app-data path does
+     * not pre-ack (it relies on drain-driven recved), so the consume path
+     * acks those bytes normally. */
+    if (added != 0 && !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
+        state->conn != NULL && state->conn->inner_conn != NULL)
+    {
+        altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)added);
+        state->rx_acked_len += added;
+    }
+}
+
+/* Release `n` bytes from the front of state->rx and ack to the lower TCP only
+ * the portion not already pre-acked at queue time (tracked by rx_acked_len).
+ * This keeps every received byte acked exactly once across the handshake ->
+ * app-data boundary. */
+static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n)
+{
+    size_t to_ack;
+
+    state->rx = pbuf_free_header(state->rx, (u16_t)n);
+
+    if (state->rx_acked_len >= n)
+    {
+        /* Entire span was already acked at queue time. */
+        state->rx_acked_len -= n;
+        return;
+    }
+
+    to_ack = n - state->rx_acked_len;   /* bytes not yet acked */
+    state->rx_acked_len = 0;
+    if (to_ack != 0 && state->conn != NULL && state->conn->inner_conn != NULL)
+    {
+        altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)to_ack);
     }
 }
 
@@ -876,6 +915,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     struct altcp_tls_ce_config *conf;
     struct altcp_tls_session resumed;
 
+    tls_dbg_status("config: ecdhe enter");
     conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
     if (conf == NULL)
     {
@@ -892,14 +932,17 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
      * connect to. Cross-host PSK reuse is a protocol violation; a
      * mismatch silently falls back to a fresh ECDHE handshake. */
     memset(&resumed, 0, sizeof(resumed));
+    tls_dbg_status("config: pski lookup");
     if (hostname && altcp_tls_ce_load_pski(&resumed, hostname) && resumed.valid)
     {
         conf->psk_mode = 1;
         conf->psk_type = resumed.psk_type;
         memcpy(conf->psk, resumed.psk, sizeof(conf->psk));
         memcpy(&conf->psk_identity, &resumed.identity, sizeof(conf->psk_identity));
+        tls_dbg_status("config: resume found");
     }
 
+    tls_dbg_status("config: done");
     return conf;
 }
 
@@ -973,6 +1016,7 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
 
         state = (altcp_tls_ce_state_t *)conn->state;
         state->overhead_bytes_adjust = 0;
+        tls_dbg_status("lower: connected");
 
         /* For client: send ClientHello to initiate handshake */
         if (!((struct altcp_tls_ce_config *)state->conf)->is_server)
@@ -981,9 +1025,11 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
             uint8_t *client_hello = record + 5; /* Leave room for record header */
             size_t client_hello_len = 0;
 
+            tls_dbg_status("clienthello: gen");
             if (!tls_send_client_hello(&state->tls_ctx, client_hello,
                                        sizeof(record) - 5, &client_hello_len))
             {
+                tls_dbg_status("clienthello: gen fail");
                 if (conn->err)
                 {
                     conn->err(conn->arg, ERR_ABRT);
@@ -1002,11 +1048,13 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
             size_t record_len = 5 + client_hello_len;
 
             /* Send ClientHello record over TCP */
+            tls_dbg_status("clienthello: write");
             err_t write_err = altcp_write(inner_conn, record, (u16_t)record_len, TCP_WRITE_FLAG_COPY);
             altcp_output(inner_conn);
 
             if (write_err != ERR_OK)
             {
+                tls_dbg_status("clienthello: write fail");
                 if (conn->err)
                 {
                     conn->err(conn->arg, write_err);
@@ -1016,7 +1064,7 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
             }
 
             state->tls_ctx.state = TLS_STATE_CLIENT_HELLO_SENT;
-            tls_dbg_status("ClientHello sent");
+            tls_dbg_status("clienthello: sent");
         }
 
         return altcp_tls_ce_lower_recv_process(conn, state);
@@ -1136,7 +1184,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 {
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
     {
-        tls_dbg_status("RX: server data in HS");
+        tls_dbg_status("rx: handshake path");
         /* Handle handshake phase */
         struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
 
@@ -1173,6 +1221,17 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 }
                 if ((size_t)state->rx->tot_len < total_len)
                 {
+                    /* Record split across TCP segments — wait for the rest.
+                     * Large messages (Certificate) commonly land here. We emit
+                     * the full record size (rec_rx errnum = total_len) so the
+                     * needed buffer size is known, plus the bytes still MISSING
+                     * (rec_partial errnum = total_len - have), which should
+                     * shrink toward 0 each segment. If `missing` plateaus above
+                     * 0, state->rx can't grow to hold the whole record (pbuf
+                     * pool / heap ceiling) — that's the real cap to raise. */
+                    tls_vdbg(LWIP_DBG_TLS_REC_RX, (int)total_len);
+                    tls_vdbg(LWIP_DBG_TLS_REC_PARTIAL,
+                             (int)(total_len - (size_t)state->rx->tot_len));
                     break;
                 }
 
@@ -1180,19 +1239,18 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                  * so we can decrypt the subsequent encrypted handshake records */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED)
                 {
-                    tls_dbg_status("Deriving HS keys...");
+                    tls_vdbg(LWIP_DBG_TLS_DERIVE_HS_KEYS_V, 0);
                     if (!tls_derive_handshake_keys(&state->tls_ctx))
                     {
-                        tls_dbg_status("ERR: HS key derivation");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
-                    tls_dbg_status("HS keys derived OK");
                 }
 
                 if (header[0] == TLS_CONTENT_TYPE_APPLICATION_DATA)
                 {
+                    tls_vdbg(LWIP_DBG_TLS_REC_RX, 0);
                     bool use_hs_keys = (state->tls_ctx.state >= TLS_STATE_HANDSHAKE_KEYS_DERIVED &&
                                         state->tls_ctx.state < TLS_STATE_HANDSHAKE_COMPLETE);
                     struct pbuf *dec_pbuf = NULL;
@@ -1202,6 +1260,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                     if (!use_hs_keys)
                     {
+                        tls_vdbg(LWIP_DBG_TLS_REC_RX, -1);
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
@@ -1209,30 +1268,38 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     /* Streaming decrypt: verifies the tag against the full
                      * ciphertext first, then decrypts in 2KB strides while
                      * releasing the corresponding bytes from state->rx. */
+                    tls_vdbg(LWIP_DBG_TLS_DECRYPT, 0);
                     dec_err = altcp_tls_ce_decrypt_record_stream(state, conn,
                                                                  true, total_len,
                                                                  &dec_pbuf, &dec_len,
                                                                  &inner_type);
                     if (dec_err == ERR_MEM)
                     {
+                        /* Scratch alloc deferred — the record stays in
+                         * state->rx and we retry on the next recv. Surface as
+                         * an error (non-zero) so it shows even at depth 0:
+                         * a persistent ERR_MEM here stalls the handshake. */
+                        tls_vdbg(LWIP_DBG_TLS_DECRYPT_NOMEM, (int)total_len);
                         return ERR_OK;
                     }
                     if (dec_err != ERR_OK)
                     {
-                        tls_dbg_status("ERR: record decrypt");
+                        tls_vdbg(LWIP_DBG_TLS_DECRYPT, (int)dec_err);
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
 
+                    tls_vdbg(LWIP_DBG_TLS_PROCESS_INNER, 0);
                     if (!tls_process_inner_plaintext_pbuf(&state->tls_ctx, inner_type,
                                                           dec_pbuf, dec_len))
                     {
                         pbuf_free(dec_pbuf);
-                        tls_dbg_status("ERR: record processing");
+                        tls_vdbg(LWIP_DBG_TLS_PROCESS_INNER, -1);
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: TLS record processing failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
+                    tls_dbg_status("rx: inner ok");
 
                     pbuf_free(dec_pbuf);
                     goto record_processed;
@@ -1247,9 +1314,11 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     {
                         return ERR_OK;
                     }
+                    tls_dbg_status("rx: plaintext rec");
                     if (pbuf_copy_partial(state->rx, tmp, (u16_t)total_len, 0) != total_len)
                     {
                         mem_free(tmp);
+                        tls_dbg_status("rx: copy fail");
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
@@ -1273,14 +1342,17 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                             }
                             if (msg_type == TLS_HANDSHAKE_SERVER_HELLO)
                             {
+                                tls_dbg_status("serverhello: parse");
                                 if (state->tls_ctx.state != TLS_STATE_CLIENT_HELLO_SENT ||
                                     !tls_recv_server_hello(&state->tls_ctx,
                                                            payload + off,
                                                            msg_end - off))
                                 {
+                                    tls_dbg_status("serverhello: fail");
                                     plaintext_ok = false;
                                     break;
                                 }
+                                tls_dbg_status("serverhello: ok");
                             }
                             else
                             {
@@ -1308,67 +1380,42 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     mem_free(tmp);
                     if (!plaintext_ok)
                     {
-                        tls_dbg_status("ERR: record processing");
+                        tls_dbg_status("rx: plaintext fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: TLS record processing failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
                 }
 
-                state->rx = pbuf_free_header(state->rx, (u16_t)total_len);
-                altcp_tls_ce_lower_recved(conn->inner_conn, (int)total_len);
+                /* Release the consumed record; consume_recved acks only the
+                 * bytes not already pre-acked at queue time. */
+                altcp_tls_ce_consume_recved(state, total_len);
 
 record_processed:
-                /* Show which state we reached after processing */
-                switch (state->tls_ctx.state)
-                {
-                case TLS_STATE_SERVER_HELLO_RECEIVED:
-                    tls_dbg_status("ServerHello received");
-                    break;
-                case TLS_STATE_HANDSHAKE_KEYS_DERIVED:
-                    tls_dbg_status("HS keys derived");
-                    break;
-                case TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED:
-                    tls_dbg_status("EncryptedExts received");
-                    break;
-                case TLS_STATE_CERTIFICATE_RECEIVED:
-                    tls_dbg_status("Certificate received");
-                    break;
-                case TLS_STATE_CERTIFICATE_VERIFY_RECEIVED:
-                    tls_dbg_status("CertVerify received");
-                    break;
-                case TLS_STATE_SERVER_FINISHED_RECEIVED:
-                    tls_dbg_status("Server Finished received");
-                    break;
-                case TLS_STATE_ERROR:
-                    tls_dbg_status("ERR: TLS state error");
-                    break;
-                default:
-                    break;
-                }
                 /* Check if server Finished received — time to send client Finished */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED)
                 {
                     /* Derive application keys BEFORE client Finished, because
                      * RFC 8446 Section 7.1 uses transcript through server Finished only.
                      * tls_send_finished() will update the transcript with client Finished. */
-                    tls_dbg_status("Deriving app keys...");
+                    tls_dbg_status("keys: derive app");
                     if (!tls_derive_application_keys(&state->tls_ctx))
                     {
-                        tls_dbg_status("ERR: app key derivation");
+                        tls_dbg_status("keys: derive app fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: application key derivation failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
-                    tls_dbg_status("App keys OK, sending Fin");
+                    tls_dbg_status("keys: derive app ok");
 
                     /* Generate client Finished message (plaintext handshake) */
                     uint8_t finished_hs[36];
                     size_t finished_hs_len = 0;
+                    tls_dbg_status("clientfin: gen");
                     if (!tls_send_finished(&state->tls_ctx, true, finished_hs,
                                            sizeof(finished_hs), &finished_hs_len))
                     {
-                        tls_dbg_status("ERR: Finished gen");
+                        tls_dbg_status("clientfin: gen fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished generation failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
@@ -1377,13 +1424,14 @@ record_processed:
                     /* Encrypt the Finished as a TLS 1.3 record */
                     uint8_t enc_finished[128];
                     size_t enc_finished_len = 0;
+                    tls_dbg_status("clientfin: encrypt");
                     if (!altcp_tls_ce_encrypt_record_stream(&state->tls_ctx, true,
                                                             TLS_CONTENT_TYPE_HANDSHAKE,
                                                             finished_hs, finished_hs_len,
                                                             enc_finished, sizeof(enc_finished),
                                                             &enc_finished_len))
                     {
-                        tls_dbg_status("ERR: Finished encrypt");
+                        tls_dbg_status("clientfin: enc fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished encryption failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
@@ -1395,15 +1443,16 @@ record_processed:
 
                     if (write_err != ERR_OK)
                     {
+                        tls_dbg_status("clientfin: write fail");
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
-
-                    tls_dbg_status("Finished sent, HS done!");
+                    tls_dbg_status("clientfin: sent");
 
                     /* Handshake complete */
                     state->flags |= ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE;
                     state->tls_ctx.state = TLS_STATE_HANDSHAKE_COMPLETE;
+                    lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_HANDSHAKE_END, 0, 0);
 
                     /* Persist existing resumption PSK identity payload for future connects.
                      * Fresh tickets are handled below by NewSessionTicket. */
@@ -1525,6 +1574,7 @@ static err_t
 altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
 {
     LWIP_ASSERT("state != NULL", state != NULL);
+    tls_dbg_status("rx: appdata path");
 
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
     {
@@ -1799,9 +1849,11 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     LWIP_ASSERT("invalid inner_conn", conn != inner_conn);
 
     /* Allocate state */
+    tls_dbg_status("setup: alloc state");
     state = (altcp_tls_ce_state_t *)mem_malloc(sizeof(altcp_tls_ce_state_t));
     if (state == NULL)
     {
+        tls_dbg_status("setup: alloc fail");
         return ERR_MEM;
     }
 
@@ -1812,8 +1864,10 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     /* Initialize TLS handshake context */
     if (config->psk_mode)
     {
+        tls_dbg_status("setup: hs init psk");
         if (!tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity))
         {
+            tls_dbg_status("setup: hs init fail");
             mem_free(state);
             return ERR_MEM;
         }
@@ -1821,8 +1875,10 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     }
     else
     {
+        tls_dbg_status("setup: hs init full");
         if (!tls_handshake_init(&state->tls_ctx, NULL, NULL))
         {
+            tls_dbg_status("setup: hs init fail");
             mem_free(state);
             return ERR_MEM;
         }
@@ -1833,6 +1889,7 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
 
     /* Wire the transport write hook so handshake.c can emit alerts and
      * close_notify without depending on lwIP/altcp directly. */
+    tls_dbg_status("setup: transport");
     tls_set_transport(&state->tls_ctx, altcp_tls_ce_transport_write, state);
 
     altcp_tls_ce_setup_callbacks(conn, inner_conn);
@@ -1842,6 +1899,7 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->rx_throttle_pending = 0;
     tls_state_add(state);
     mem_set_global_pressure_cb(altcp_tls_ce_set_rx_throttle);
+    tls_dbg_status("setup: done");
 
     return ERR_OK;
 }
@@ -2172,6 +2230,7 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
                 pbuf_free(state->rx);
                 state->rx = NULL;
             }
+            state->rx_acked_len = 0;
             if (state->rx_app)
             {
                 pbuf_free(state->rx_app);

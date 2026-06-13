@@ -60,8 +60,9 @@ int main(void)
         return lwip_example_finish(1);
     }
 
-    os_ClrHome();
-    printf("NTP OK\nUnix: %lu", (unsigned long)unix_time);
+    lwip_example_clear();
+    lwip_example_line("NTP OK");
+    lwip_example_linef("Unix: %lu", (unsigned long)unix_time);
     lwip_example_wait_key();
 
     lwip_conn_destroy(&conn);

@@ -1907,6 +1907,9 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
                 (SRC_DIR / "include" / "lwip" / "err.h").resolve(): "core/err.h",
                 (SRC_DIR / "include" / "lwip" / "ip_addr.h").resolve(): "core/ip_addr.h",
                 (SRC_DIR / "include" / "lwip" / "pbuf.h").resolve(): "core/pbuf.h",
+                # The conn header pulls in the unified debug types (lwip_debug_*,
+                # lwip_set_debug). logging.h is emitted into the core group.
+                (SRC_DIR / "include" / "lwip" / "logging.h").resolve(): "core/logging.h",
             }
             body, emitted_functions = pruned_copy_header_body(
                 CONN_SRC,

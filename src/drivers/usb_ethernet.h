@@ -159,6 +159,7 @@ typedef struct _eth_device_t
     uint8_t rx_drain_errors;
     bool disabled_with_error;
     bool shutting_down;
+    bool dhcp_auto_started;
     struct mem_buffer *rx_ring;
     struct
     {

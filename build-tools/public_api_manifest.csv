@@ -20,6 +20,9 @@ lwip_conn_set_sent,conn,src/lwIP.h
 lwip_conn_set_err,conn,src/lwIP.h
 lwip_conn_set_poll,conn,src/lwIP.h
 lwip_conn_set_closed,conn,src/lwIP.h
+lwip_set_debug,core,src/include/lwip/logging.h
+lwip_debug_module_name,core,src/include/lwip/logging.h
+lwip_debug_state_name,core,src/include/lwip/logging.h
 lwip_conn_set_callbacks,conn,src/lwIP.h
 tls_aes_init,cryptography,src/tls/includes/aes.h
 tls_aes_ccm_init,cryptography,src/tls/includes/aes.h

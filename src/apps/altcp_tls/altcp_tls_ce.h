@@ -37,6 +37,9 @@ typedef struct altcp_tls_ce_state {
     struct tls_handshake_context tls_ctx;    /* TLS 1.3 handshake context */
     struct altcp_pcb *conn;                  /* Owning altcp pcb */
     struct pbuf *rx;                         /* Encrypted RX data from TCP */
+    size_t rx_acked_len;                     /* Bytes at the front of rx already
+                                              * acked to the lower TCP (so the
+                                              * consume path never re-acks them) */
     struct pbuf *rx_app;                     /* Decrypted application data */
     int rx_passed_unrecved;                  /* Data passed to app but not recved */
     int overhead_bytes_adjust;               /* TLS overhead tracking */

@@ -216,6 +216,25 @@ a lot of data that needs to be copied, this should be set high. */
 /* TCP receive window. */
 #define TCP_WND (16 * TCP_MSS)
 
+/* Window-update threshold: how much freed receive window must accumulate
+ * before lwIP proactively advertises it to the peer.
+ *
+ * The lwIP default is min(TCP_WND/4, TCP_MSS*4) = 2048 here. That batching
+ * deadlocks the TLS handshake on a large record (e.g. the server
+ * Certificate): once we have all but the final tail of the record buffered,
+ * the still-unadvertised window is the record's last few hundred bytes —
+ * BELOW 2048 — so lwIP withholds the window update, the server never learns
+ * it may send the tail, and the record never completes (observed: rec_partial
+ * stuck ~435 bytes short, looping forever).
+ *
+ * The altcp_tls layer acks every received segment immediately (it buffers in
+ * its own state->rx), so we want every freed byte advertised promptly. A
+ * threshold of TCP_MSS would STILL strand a sub-MSS tail (the 435-byte case),
+ * so set it to 1: advertise any freed window. The extra window-update
+ * segments are negligible on this low-throughput handshake/HTTP path and
+ * guarantee no record tail can ever be stranded below the threshold. */
+#define TCP_WND_UPDATE_THRESHOLD 1
+
 /* TCP Maximum Segment Lifetime in milliseconds.
    TIME_WAIT lasts 2*MSL. Default is 60000 (60s), set to 15000 for 30s TIME_WAIT. */
 #define TCP_MSL 15000UL

@@ -79,13 +79,6 @@ typedef enum
     OPT_DST,
     OPT_SEP_SECURITY,
     OPT_TLS_CHAIN_MODE,
-    OPT_SEP_LOGGING,
-    OPT_LOG_ENABLED,
-    OPT_LOG_LEVEL,
-    OPT_LOG_USB,
-    OPT_LOG_TLS,
-    OPT_LOG_SIZE,
-    OPT_VIEW_LOGS,
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     OPT_SEP_TESTS,
     OPT_NTP_TEST,
@@ -102,8 +95,7 @@ typedef enum
 {
     EDIT_NONE = 0,
     EDIT_MEM_CAP,
-    EDIT_TZ,
-    EDIT_LOG
+    EDIT_TZ
 } edit_mode_t;
 
 struct config_option;
@@ -175,7 +167,6 @@ static bool config_run_ping_test(struct config_option *opt);
 static bool config_run_tcp_echo_test(struct config_option *opt);
 static bool config_run_tls_test(struct config_option *opt);
 #endif
-static bool config_run_view_logs(struct config_option *opt);
 static size_t config_required_lwip_floor(const lwip_app_config_t *cfg);
 static uint16_t config_mem_cap_max(void);
 static bool config_clamp_mem_cap(lwip_app_config_t *cfg);
@@ -205,13 +196,6 @@ static struct config_option config_options[] = {
     /* Chain mode placeholder. Full-chain validation is not implemented
      * yet, so this remains visible but forced to SPKI-pin mode. */
     {"Full Chain Verify", OPT_TLS_CHAIN_MODE,        F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"-- Logging --",   OPT_SEP_LOGGING,  F_TYPE_SEPARATOR,    NULL, {0}},
-    {"Logging",         OPT_LOG_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Log Level",       OPT_LOG_LEVEL,    F_TYPE_INT_SLIDER,   NULL, {0}},
-    {"Log USB Errors",  OPT_LOG_USB,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Log TLS Errors",  OPT_LOG_TLS,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Log Size",        OPT_LOG_SIZE,     F_TYPE_INT_SLIDER,   NULL, {0}},
-    {"View Log",        OPT_VIEW_LOGS,    F_TYPE_ACTION,       config_run_view_logs, {0}},
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
     {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
@@ -653,21 +637,6 @@ static void option_sync_from_cfg(struct config_option *opt)
     case OPT_DST:
         option_set_bool(opt->value, g_cfg.dst_enabled != 0);
         break;
-    case OPT_LOG_ENABLED:
-        option_set_bool(opt->value, g_cfg.log_enabled != 0);
-        break;
-    case OPT_LOG_LEVEL:
-        option_set_u8(opt->value, g_cfg.log_min_level);
-        break;
-    case OPT_LOG_USB:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_LOG_USB) != 0);
-        break;
-    case OPT_LOG_TLS:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_LOG_TLS) != 0);
-        break;
-    case OPT_LOG_SIZE:
-        option_set_u16(opt->value, g_cfg.log_size_bytes);
-        break;
     case OPT_AUTO_NTP:
         option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_AUTO_NTP) != 0);
         break;
@@ -688,22 +657,9 @@ static void option_sync_from_cfg(struct config_option *opt)
 
 static void apply_logging_config(void)
 {
-    uint8_t mask = 0;
-    if (g_cfg.log_enabled != 0)
-    {
-        mask |= LWIP_LOG_TYPE_LWIP;
-        if ((g_cfg.flags & LWIP_CFG_LOG_USB) != 0)
-        {
-            mask |= LWIP_LOG_TYPE_USB;
-        }
-        if ((g_cfg.flags & LWIP_CFG_LOG_TLS) != 0)
-        {
-            mask |= LWIP_LOG_TYPE_TLS;
-        }
-    }
-    lwip_log_set_enabled(mask);
-    lwip_log_set_min_level(g_cfg.log_min_level);
-    lwip_log_set_max_bytes(g_cfg.log_size_bytes);
+    /* The appvar-backed log system was replaced by the unified debug callback
+     * (lwip_set_debug). The persisted log_* config fields are retained for
+     * layout stability but no longer drive any runtime logging here. */
 }
 
 static void config_sync_from_cfg(void)
@@ -750,23 +706,6 @@ static int find_next_selectable(int current, int dir)
     return current;
 }
 
-static const char *log_level_name(uint8_t level)
-{
-    switch (level)
-    {
-    case LWIP_LOG_LEVEL_INFO:
-        return "Info";
-    case LWIP_LOG_LEVEL_WARN:
-        return "Warn";
-    case LWIP_LOG_LEVEL_ERROR:
-        return "Error";
-    case LWIP_LOG_LEVEL_FATAL:
-        return "Fatal";
-    default:
-        return "Error";
-    }
-}
-
 static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len)
 {
     switch (opt->id)
@@ -774,33 +713,12 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_MEM_CAP:
         snprintf(buf, buf_len, "%uk", option_get_u16(opt->value) / 1024u);
         break;
-    case OPT_LOG_SIZE:
-    {
-        uint16_t bytes = option_get_u16(opt->value);
-        uint16_t kb = (uint16_t)(bytes / 1024u);
-        if ((bytes % 1024u) == 0)
-        {
-            snprintf(buf, buf_len, "%uk", kb);
-        }
-        else
-        {
-            snprintf(buf, buf_len, "%u.5k", kb);
-        }
-        break;
-    }
-        break;
-    case OPT_LOG_LEVEL:
-        snprintf(buf, buf_len, "%s", log_level_name(option_get_u8(opt->value)));
-        break;
     case OPT_TZ_OFFSET:
         format_tz_offset(buf, buf_len, option_get_i16(opt->value));
         break;
     case OPT_DST:
     case OPT_AUTO_NTP:
     case OPT_DNS:
-    case OPT_LOG_ENABLED:
-    case OPT_LOG_USB:
-    case OPT_LOG_TLS:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
     case OPT_TLS_CHAIN_MODE:
@@ -816,10 +734,9 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_PING_TEST:
     case OPT_TCP_ECHO_TEST:
     case OPT_TLS_TEST:
-#endif
-    case OPT_VIEW_LOGS:
         snprintf(buf, buf_len, ">");
         break;
+#endif
     case OPT_IP_MODE:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
@@ -851,21 +768,6 @@ static bool config_toggle_option(struct config_option *opt)
     case OPT_DST:
         g_cfg.dst_enabled = (uint8_t)!g_cfg.dst_enabled;
         option_sync_from_cfg(opt);
-        return true;
-    case OPT_LOG_ENABLED:
-        g_cfg.log_enabled = (uint8_t)!g_cfg.log_enabled;
-        option_sync_from_cfg(opt);
-        apply_logging_config();
-        return true;
-    case OPT_LOG_USB:
-        g_cfg.flags ^= LWIP_CFG_LOG_USB;
-        option_sync_from_cfg(opt);
-        apply_logging_config();
-        return true;
-    case OPT_LOG_TLS:
-        g_cfg.flags ^= LWIP_CFG_LOG_TLS;
-        option_sync_from_cfg(opt);
-        apply_logging_config();
         return true;
     case OPT_AUTO_NTP:
         g_cfg.flags ^= LWIP_CFG_AUTO_NTP;
@@ -2190,94 +2092,6 @@ static bool config_run_tls_test(struct config_option *opt)
 }
 #endif
 
-static bool config_run_view_logs(struct config_option *opt)
-{
-    (void)opt;
-
-    struct lwip_log_header header;
-    bool has_log = lwip_log_read_header(&header);
-    uint16_t offset = 0;
-    const uint16_t lines = 8;
-
-    while (1)
-    {
-        fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-        os_SetDrawFGColor(COLOR_BLACK);
-        os_FontDrawText("Log Viewer", 10, 10);
-
-        if (!has_log || header.count == 0)
-        {
-            os_FontDrawText("No log entries", 10, 40);
-            os_FontDrawText("Press Clear to exit", 10, 180);
-        }
-        else
-        {
-            char count_buf[32];
-            snprintf(count_buf, sizeof(count_buf), "Entries: %u", (unsigned)header.count);
-            os_FontDrawText(count_buf, 10, 30);
-
-            for (uint16_t i = 0; i < lines; i++)
-            {
-                struct lwip_log_entry entry;
-                if (!lwip_log_read_entry_at(&header, offset + i, &entry))
-                {
-                    break;
-                }
-                char line[48];
-                const struct lwip_log_descriptor *desc =
-                    lwip_log_describe(entry.type, entry.reason);
-                if (entry.line != 0)
-                {
-                    snprintf(line, sizeof(line), "%02u/%02u %02u:%02u:%02u %s %s:%u %s",
-                             entry.month, entry.day, entry.hour, entry.minute, entry.second,
-                             desc->level_label, desc->type_label, (unsigned)entry.line,
-                             desc->reason_label);
-                }
-                else
-                {
-                    snprintf(line, sizeof(line), "%02u/%02u %02u:%02u:%02u %s %s %s",
-                         entry.month, entry.day, entry.hour, entry.minute, entry.second,
-                         desc->level_label, desc->type_label, desc->reason_label);
-                }
-                os_FontDrawText(line, 10, 50 + (int)i * 15);
-            }
-            os_FontDrawText("Up/Down scroll", 10, 180);
-            os_FontDrawText("Clear to exit", 10, 195);
-        }
-
-        while (os_GetCSC())
-            ;
-
-        while (1)
-        {
-            usb_HandleEvents();
-            sys_check_timeouts();
-
-            uint8_t key = os_GetCSC();
-            if (key == sk_Clear)
-            {
-                fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-                return true;
-            }
-            if (has_log && header.count > lines)
-            {
-                if (key == sk_Up && offset > 0)
-                {
-                    offset--;
-                    break;
-                }
-                if (key == sk_Down && (offset + lines) < header.count)
-                {
-                    offset++;
-                    break;
-                }
-            }
-            delay_ms(10);
-        }
-    }
-}
-
-
 static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes)
 {
     char sign = '+';
@@ -2802,10 +2616,8 @@ static void cleanup_lwip_stack(void)
     usb_Cleanup();
 }
 
-static void lwip_fatal_cleanup(uint8_t type, uint8_t reason)
+static void lwip_fatal_cleanup(void)
 {
-    (void)type;
-    (void)reason;
     cleanup_lwip_stack();
 }
 
@@ -2845,7 +2657,7 @@ int main(void)
 {
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     atexit(cleanup_lwip_stack);
-    lwip_log_set_fatal_handler(lwip_fatal_cleanup);
+    lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
 #endif
 
     lwip_app_config_load(&g_cfg);
@@ -2854,25 +2666,6 @@ int main(void)
      * current free RAM.  A stored config from a time when the device had
      * more free RAM shouldn't overflow what's actually available now. */
     config_clamp_mem_cap(&g_cfg);
-    if (g_cfg.log_size_bytes < LWIP_CFG_LOG_MIN_BYTES)
-    {
-        g_cfg.log_size_bytes = LWIP_CFG_LOG_MIN_BYTES;
-    }
-    if (g_cfg.log_size_bytes > LWIP_CFG_LOG_MAX_BYTES)
-    {
-        g_cfg.log_size_bytes = LWIP_CFG_LOG_MAX_BYTES;
-    }
-    if (g_cfg.log_min_level < LWIP_LOG_LEVEL_INFO ||
-        g_cfg.log_min_level > LWIP_LOG_LEVEL_FATAL)
-    {
-        g_cfg.log_min_level = LWIP_CFG_LOG_LEVEL_DEF;
-    }
-    if (g_cfg.log_enabled > 1u)
-    {
-        g_cfg.log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
-    }
-    g_cfg.log_size_bytes = (uint16_t)(g_cfg.log_size_bytes -
-        (g_cfg.log_size_bytes % LWIP_CFG_LOG_STEP_BYTES));
     config_sync_from_cfg();
 
     // Clear screen and set up font
@@ -2977,24 +2770,6 @@ int main(void)
                     value_changed = true;
                 }
             }
-            else if (key == sk_Left && edit_mode == EDIT_LOG && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                if (opt->id == OPT_LOG_SIZE && g_cfg.log_size_bytes > LWIP_CFG_LOG_MIN_BYTES)
-                {
-                    g_cfg.log_size_bytes = (uint16_t)(g_cfg.log_size_bytes - LWIP_CFG_LOG_STEP_BYTES);
-                    option_sync_from_cfg(opt);
-                    apply_logging_config();
-                    value_changed = true;
-                }
-                else if (opt->id == OPT_LOG_LEVEL && g_cfg.log_min_level > LWIP_LOG_LEVEL_INFO)
-                {
-                    g_cfg.log_min_level--;
-                    option_sync_from_cfg(opt);
-                    apply_logging_config();
-                    value_changed = true;
-                }
-            }
             else if (key == sk_Right && edit_mode == EDIT_TZ && edit_option >= 0)
             {
                 struct config_option *opt = &config_options[edit_option];
@@ -3002,24 +2777,6 @@ int main(void)
                 {
                     g_cfg.tz_offset_minutes = (int16_t)(g_cfg.tz_offset_minutes + LWIP_CFG_TZ_STEP_MINUTES);
                     option_sync_from_cfg(opt);
-                    value_changed = true;
-                }
-            }
-            else if (key == sk_Right && edit_mode == EDIT_LOG && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                if (opt->id == OPT_LOG_SIZE && g_cfg.log_size_bytes + LWIP_CFG_LOG_STEP_BYTES <= LWIP_CFG_LOG_MAX_BYTES)
-                {
-                    g_cfg.log_size_bytes = (uint16_t)(g_cfg.log_size_bytes + LWIP_CFG_LOG_STEP_BYTES);
-                    option_sync_from_cfg(opt);
-                    apply_logging_config();
-                    value_changed = true;
-                }
-                else if (opt->id == OPT_LOG_LEVEL && g_cfg.log_min_level < LWIP_LOG_LEVEL_FATAL)
-                {
-                    g_cfg.log_min_level++;
-                    option_sync_from_cfg(opt);
-                    apply_logging_config();
                     value_changed = true;
                 }
             }
@@ -3114,11 +2871,6 @@ int main(void)
                     break;
                 case OPT_TZ_OFFSET:
                     edit_mode = EDIT_TZ;
-                    edit_option = selected;
-                    break;
-                case OPT_LOG_SIZE:
-                case OPT_LOG_LEVEL:
-                    edit_mode = EDIT_LOG;
                     edit_option = selected;
                     break;
                 default:

@@ -112,7 +112,15 @@ int main(void)
     lwip_conn_set_err(&conn, on_err);
     lwip_conn_set_closed(&conn, on_closed);
 
-    lwip_example_show("TLS RSA", "connecting");
+    /* Route TLS (and all) debug events to the on-screen console. Depth 1
+     * (verbose) also traces the record/decrypt path, which localizes where
+     * the Certificate handling stalls. Drop to LWIP_DBG_DEPTH_MILESTONE for a
+     * clean high-level progress view. The console shares the home-screen text
+     * surface with lwip_example_show(), so print the header here. */
+    lwip_example_dbg_console_begin("TLS RSA");
+    lwip_set_debug(lwip_example_dbg_console_cb, LWIP_DBG_INFO,
+                   LWIP_DBG_DEPTH_VERBOSE);
+
     err = lwip_conn_connect(&conn, TLS_HOST, TLS_PORT);
     if (err != LWIP_OK)
     {
