@@ -95,6 +95,18 @@ typedef enum
 #define LWIP_CONN_SVC_SNTP        (1u << 1)  /**< SNTP started against DHCP/server */
 #define LWIP_CONN_SVC_DNS         (1u << 2)  /**< DNS resolver initialized */
 
+typedef enum
+{
+    LWIP_NETIF_SERVICE_UP = 0,
+    LWIP_NETIF_SERVICE_FAILED,
+    LWIP_NETIF_SERVICE_TIMEOUT,
+} lwip_netif_service_status_t;
+
+typedef void (*lwip_netif_service_cb)(struct netif *netif,
+                                      void *arg,
+                                      uint8_t service_id,
+                                      lwip_netif_service_status_t status);
+
 /** Snapshot of the default lwIP netif. IPv4 octets are stored in display
  *  order: index 0 is the dotted-quad's first octet. */
 typedef struct
@@ -219,6 +231,26 @@ void lwip_poll_network_events(void);
  *  default netif exists. The function is safe to poll immediately after
  *  lwip_start(); USB enumeration, link-up, and DHCP can all complete later. */
 bool lwip_default_netif_info(lwip_netif_info_t *info);
+
+/** Request netif-level services without allocating a connection.
+ *
+ *  This is useful for apps that need the stack online before they create
+ *  transport PCBs. Flags use LWIP_CONN_SVC_* and are applied immediately if
+ *  the external netif already exists; otherwise lwip_poll_network_events()
+ *  applies them once USB/link enumeration creates the netif. */
+lwip_error_t lwip_request_services(uint8_t flags);
+
+/** Request netif-level services and get per-service completion callbacks.
+ *
+ *  `netif == NULL` means the external Ethernet netif once it exists. The
+ *  callback fires once per requested LWIP_CONN_SVC_* bit with service_id set
+ *  to that bit and status set to UP, FAILED, or TIMEOUT. If `cb` is NULL, this
+ *  behaves like lwip_request_services().
+ */
+lwip_error_t lwip_netif_request_services(struct netif *netif,
+                                         uint8_t flags,
+                                         lwip_netif_service_cb cb,
+                                         void *cb_data);
 
 /** Initialize a connection handle.
  *

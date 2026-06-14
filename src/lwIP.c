@@ -85,6 +85,8 @@ static bool dns_has_configured_server(void);
 static void lwip_conn_detach_pcb_callbacks(struct lwip_conn *conn);
 static void services_list_remove(struct lwip_conn *c);
 static void services_list_cancel_all(lwip_error_t err);
+static void netif_service_requests_cancel_all(lwip_netif_service_status_t status);
+static void services_arm(void);
 
 #ifndef LWIP_STOP_SERVICE_SETTLE_MS
 #define LWIP_STOP_SERVICE_SETTLE_MS 250u
@@ -96,6 +98,10 @@ static void services_list_cancel_all(lwip_error_t err);
 
 #ifndef LWIP_CONN_CLOSE_TIMEOUT_MS
 #define LWIP_CONN_CLOSE_TIMEOUT_MS 3000u
+#endif
+
+#ifndef LWIP_NETIF_SERVICE_REQUEST_MAX
+#define LWIP_NETIF_SERVICE_REQUEST_MAX 4u
 #endif
 
 bool lwip_start(void)
@@ -505,6 +511,7 @@ static void lwip_stack_cleanup(void)
     g_lwip_stopping = true;
     g_requested_service_flags = 0;
     services_list_cancel_all(LWIP_ERR_CLOSED);
+    netif_service_requests_cancel_all(LWIP_NETIF_SERVICE_FAILED);
 
     STOP_TRACE("P1 closeTCP+FIN");
     conn_registry_close_tcp_like();
@@ -651,6 +658,11 @@ static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags)
     return LWIP_OK;
 }
 
+lwip_error_t lwip_request_services(uint8_t flags)
+{
+    return lwip_netif_request_services(NULL, flags, NULL, NULL);
+}
+
 typedef enum
 {
     LWIP_CONN_SERVICES_WAIT = 0,
@@ -731,6 +743,247 @@ static bool dns_has_configured_server(void)
     }
 #endif
     return false;
+}
+
+typedef struct
+{
+    bool active;
+    struct netif *netif;
+    uint8_t pending_flags;
+    uint32_t deadline;
+    lwip_netif_service_cb cb;
+    void *cb_data;
+} lwip_netif_service_request_t;
+
+static lwip_netif_service_request_t
+    g_netif_service_requests[LWIP_NETIF_SERVICE_REQUEST_MAX];
+
+static bool netif_service_base_ready(const struct netif *netif)
+{
+    return netif &&
+           netif_is_up(netif) &&
+           netif_is_link_up(netif);
+}
+
+static bool netif_service_ready(struct netif *netif, uint8_t service_id)
+{
+    if (!netif_service_base_ready(netif))
+    {
+        return false;
+    }
+
+    switch (service_id)
+    {
+    case LWIP_CONN_SVC_DHCP:
+#if LWIP_DHCP
+        return dhcp_client_running(netif) &&
+               dhcp_supplied_address(netif) &&
+               netif_has_usable_ipv4(netif);
+#else
+        return netif_has_usable_ipv4(netif);
+#endif
+    case LWIP_CONN_SVC_DNS:
+#if LWIP_DNS
+        return netif_has_usable_ipv4(netif) && dns_has_configured_server();
+#else
+        return true;
+#endif
+    case LWIP_CONN_SVC_SNTP:
+#if LWIP_SNTP
+        return netif_has_usable_ipv4(netif) && sntp_enabled() != 0;
+#else
+        return true;
+#endif
+    default:
+        return false;
+    }
+}
+
+static void netif_service_emit(lwip_netif_service_request_t *req,
+                               struct netif *netif,
+                               uint8_t service_id,
+                               lwip_netif_service_status_t status)
+{
+    if (req && req->cb)
+    {
+        req->cb(netif, req->cb_data, service_id, status);
+    }
+}
+
+static bool netif_service_requests_active(void)
+{
+    for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
+    {
+        if (g_netif_service_requests[i].active)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void netif_service_requests_cancel_all(lwip_netif_service_status_t status)
+{
+    (void)status;
+    for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
+    {
+        lwip_netif_service_request_t *req = &g_netif_service_requests[i];
+        if (!req->active)
+        {
+            continue;
+        }
+
+        req->active = false;
+        req->pending_flags = 0;
+        req->netif = NULL;
+        req->cb = NULL;
+        req->cb_data = NULL;
+    }
+}
+
+static void netif_services_dispatch(uint32_t now)
+{
+    for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
+    {
+        lwip_netif_service_request_t *req = &g_netif_service_requests[i];
+        if (!req->active)
+        {
+            continue;
+        }
+
+        struct netif *netif = req->netif ? req->netif : find_external_netif();
+        uint8_t pending = req->pending_flags;
+        lwip_error_t svc_err = apply_service_flags(netif, pending);
+        bool timed_out = lwip_conn_services_timed_out(now, req->deadline);
+
+        if (svc_err != LWIP_OK)
+        {
+            req->active = false;
+            req->pending_flags = 0;
+            if (pending & LWIP_CONN_SVC_DHCP)
+            {
+                netif_service_emit(req, netif, LWIP_CONN_SVC_DHCP,
+                                   LWIP_NETIF_SERVICE_FAILED);
+            }
+            if (pending & LWIP_CONN_SVC_DNS)
+            {
+                netif_service_emit(req, netif, LWIP_CONN_SVC_DNS,
+                                   LWIP_NETIF_SERVICE_FAILED);
+            }
+            if (pending & LWIP_CONN_SVC_SNTP)
+            {
+                netif_service_emit(req, netif, LWIP_CONN_SVC_SNTP,
+                                   LWIP_NETIF_SERVICE_FAILED);
+            }
+            continue;
+        }
+
+        if (pending & LWIP_CONN_SVC_DHCP)
+        {
+            if (netif_service_ready(netif, LWIP_CONN_SVC_DHCP))
+            {
+                req->pending_flags &= (uint8_t)~LWIP_CONN_SVC_DHCP;
+                netif_service_emit(req, netif, LWIP_CONN_SVC_DHCP,
+                                   LWIP_NETIF_SERVICE_UP);
+            }
+            else if (timed_out)
+            {
+                req->pending_flags &= (uint8_t)~LWIP_CONN_SVC_DHCP;
+                netif_service_emit(req, netif, LWIP_CONN_SVC_DHCP,
+                                   LWIP_NETIF_SERVICE_TIMEOUT);
+            }
+        }
+        if (pending & LWIP_CONN_SVC_DNS)
+        {
+            if (netif_service_ready(netif, LWIP_CONN_SVC_DNS))
+            {
+                req->pending_flags &= (uint8_t)~LWIP_CONN_SVC_DNS;
+                netif_service_emit(req, netif, LWIP_CONN_SVC_DNS,
+                                   LWIP_NETIF_SERVICE_UP);
+            }
+            else if (timed_out)
+            {
+                req->pending_flags &= (uint8_t)~LWIP_CONN_SVC_DNS;
+                netif_service_emit(req, netif, LWIP_CONN_SVC_DNS,
+                                   LWIP_NETIF_SERVICE_TIMEOUT);
+            }
+        }
+        if (pending & LWIP_CONN_SVC_SNTP)
+        {
+            if (netif_service_ready(netif, LWIP_CONN_SVC_SNTP))
+            {
+                req->pending_flags &= (uint8_t)~LWIP_CONN_SVC_SNTP;
+                netif_service_emit(req, netif, LWIP_CONN_SVC_SNTP,
+                                   LWIP_NETIF_SERVICE_UP);
+            }
+            else if (timed_out)
+            {
+                req->pending_flags &= (uint8_t)~LWIP_CONN_SVC_SNTP;
+                netif_service_emit(req, netif, LWIP_CONN_SVC_SNTP,
+                                   LWIP_NETIF_SERVICE_TIMEOUT);
+            }
+        }
+
+        if (req->pending_flags == 0)
+        {
+            req->active = false;
+        }
+    }
+}
+
+lwip_error_t lwip_netif_request_services(struct netif *netif,
+                                         uint8_t flags,
+                                         lwip_netif_service_cb cb,
+                                         void *cb_data)
+{
+    flags &= (LWIP_CONN_SVC_DHCP | LWIP_CONN_SVC_DNS | LWIP_CONN_SVC_SNTP);
+    if (!flags)
+    {
+        return LWIP_ERR_ARG;
+    }
+    if (!g_lwip_started || g_lwip_stopping)
+    {
+        return LWIP_ERR_STATE;
+    }
+
+    g_requested_service_flags |= flags;
+    lwip_error_t err = apply_service_flags(netif ? netif : find_external_netif(),
+                                           flags);
+    if (err != LWIP_OK || !cb)
+    {
+        return err;
+    }
+
+    for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
+    {
+        lwip_netif_service_request_t *req = &g_netif_service_requests[i];
+        if (req->active && req->netif == netif && req->cb == cb &&
+            req->cb_data == cb_data)
+        {
+            req->pending_flags |= flags;
+            req->deadline = sys_now() + LWIP_CONN_SERVICES_TIMEOUT_MS;
+            services_arm();
+            return LWIP_OK;
+        }
+    }
+
+    for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
+    {
+        lwip_netif_service_request_t *req = &g_netif_service_requests[i];
+        if (!req->active)
+        {
+            req->active = true;
+            req->netif = netif;
+            req->pending_flags = flags;
+            req->deadline = sys_now() + LWIP_CONN_SERVICES_TIMEOUT_MS;
+            req->cb = cb;
+            req->cb_data = cb_data;
+            services_arm();
+            return LWIP_OK;
+        }
+    }
+
+    return LWIP_ERR_MEM;
 }
 
 /* Are the requested netif-level services ready for a connect? This also
@@ -897,7 +1150,7 @@ static lwip_error_t lwip_conn_wait_for_services(struct lwip_conn *conn,
 
 static void services_dispatch(void)
 {
-    if (!g_services_waiters)
+    if (!g_services_waiters && !netif_service_requests_active())
     {
         /* Nothing to do — disable ourselves until something gets added. */
         lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES, 0);
@@ -905,6 +1158,8 @@ static void services_dispatch(void)
     }
 
     uint32_t now = sys_now();
+    netif_services_dispatch(now);
+
     struct lwip_conn *c = g_services_waiters;
     while (c)
     {
@@ -950,7 +1205,7 @@ static void services_dispatch(void)
         c = next;
     }
 
-    if (!g_services_waiters)
+    if (!g_services_waiters && !netif_service_requests_active())
     {
         lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES, 0);
     }

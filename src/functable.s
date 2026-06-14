@@ -420,10 +420,12 @@
 .extern _eth_usb_event_callback
 .extern _tls_x25519_publickey
 .extern _tls_x25519_secret
+.extern _lwip_request_services
+.extern _lwip_netif_request_services
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 387    ; entry count
+    d24 389    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -939,3 +941,7 @@ _fn_exports_table:
 ; --- src/tls/contrib/x25519/src/x25519.s ---
     d24 _tls_x25519_publickey
     d24 _tls_x25519_secret
+
+; --- src/lwIP.c ---
+    d24 _lwip_request_services
+    d24 _lwip_netif_request_services

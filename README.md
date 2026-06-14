@@ -14,6 +14,8 @@
 
 *SAST uses `git diff` against upstream lwIP to filter out untouched upstream code and scans only targets unique to this repository. For upstream issues, file an issue with [nonGNU](https://savannah.nongnu.org/bugs/?group=lwip).*
 
+*DAST uses a locally-run workflow. There is currently no way to run automated network probes as the emulator doesn't support Ethernet devices. To complete DAST, we run a helper program on calculator which provides the DAST target while a script runs locally, trying various checks against the target. Results are output to a JSON file which is then parsed by this workflow.*
+
 <hr>
 
 **Cryptography Quality Checks**

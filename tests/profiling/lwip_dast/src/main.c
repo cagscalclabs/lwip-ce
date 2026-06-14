@@ -32,6 +32,7 @@
 /* Bounded recv buffer shared by the UDP/TCP listeners. Deliberately small so
  * oversized probes exercise the bounded-copy path rather than an overrun. */
 #define DAST_RECV_CAP 128
+#define DAST_TCP_ACTIVE_MAX 4
 
 static volatile uint16_t dast_events;     /* packets/segments seen this test */
 static volatile uint16_t dast_accepts;    /* TCP accepts this test */
@@ -40,6 +41,17 @@ static char dast_recv_buf[DAST_RECV_CAP];
 
 static struct udp_pcb *dast_udp;
 static struct tcp_pcb *dast_tcp_listen;
+static struct tcp_pcb *dast_tcp_active[DAST_TCP_ACTIVE_MAX];
+
+enum
+{
+    DAST_SERVICE_PENDING = 0,
+    DAST_SERVICE_UP,
+    DAST_SERVICE_FAILED,
+    DAST_SERVICE_TIMEOUT,
+};
+
+static volatile uint8_t dast_dhcp_service_state;
 
 /* 0.0.0.0 = bind to any address. Built locally because the dylib's
  * ip_addr_any global is not exported through libload. */
@@ -95,6 +107,37 @@ static void dast_udp_close(void)
 
 /* ---- TCP listener ------------------------------------------------------- */
 
+static bool dast_tcp_track(struct tcp_pcb *pcb)
+{
+    for (uint8_t i = 0; i < DAST_TCP_ACTIVE_MAX; i++)
+    {
+        if (!dast_tcp_active[i])
+        {
+            dast_tcp_active[i] = pcb;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void dast_tcp_untrack(struct tcp_pcb *pcb)
+{
+    for (uint8_t i = 0; i < DAST_TCP_ACTIVE_MAX; i++)
+    {
+        if (dast_tcp_active[i] == pcb)
+        {
+            dast_tcp_active[i] = NULL;
+            return;
+        }
+    }
+}
+
+static void dast_tcp_err(void *arg, err_t err)
+{
+    (void)err;
+    dast_tcp_untrack((struct tcp_pcb *)arg);
+}
+
 static err_t dast_tcp_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
                            err_t err)
 {
@@ -107,6 +150,10 @@ static err_t dast_tcp_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
     if (!p)
     {
         /* Remote closed. */
+        dast_tcp_untrack(tpcb);
+        tcp_arg(tpcb, NULL);
+        tcp_recv(tpcb, NULL);
+        tcp_err(tpcb, NULL);
         tcp_close(tpcb);
         return ERR_OK;
     }
@@ -127,7 +174,14 @@ static err_t dast_tcp_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
     if (err != ERR_OK || !newpcb)
         return ERR_VAL;
     dast_accepts++;
+    if (!dast_tcp_track(newpcb))
+    {
+        tcp_abort(newpcb);
+        return ERR_ABRT;
+    }
+    tcp_arg(newpcb, newpcb);
     tcp_recv(newpcb, dast_tcp_recv);
+    tcp_err(newpcb, dast_tcp_err);
     return ERR_OK;
 }
 
@@ -156,8 +210,28 @@ static void dast_tcp_close(void)
 {
     if (dast_tcp_listen)
     {
-        tcp_close(dast_tcp_listen);
+        struct tcp_pcb *pcb = dast_tcp_listen;
         dast_tcp_listen = NULL;
+        tcp_accept(pcb, NULL);
+        if (tcp_close(pcb) != ERR_OK)
+        {
+            tcp_abort(pcb);
+        }
+    }
+    for (uint8_t i = 0; i < DAST_TCP_ACTIVE_MAX; i++)
+    {
+        struct tcp_pcb *pcb = dast_tcp_active[i];
+        if (!pcb)
+        {
+            continue;
+        }
+        dast_tcp_active[i] = NULL;
+        tcp_arg(pcb, NULL);
+        tcp_recv(pcb, NULL);
+        tcp_sent(pcb, NULL);
+        tcp_err(pcb, NULL);
+        tcp_poll(pcb, NULL, pcb->pollinterval);
+        tcp_abort(pcb);
     }
 }
 
@@ -194,6 +268,12 @@ static void dast_leave_state(const dast_test_t *t)
     default:
         break;
     }
+}
+
+static void dast_close_all(void)
+{
+    dast_udp_close();
+    dast_tcp_close();
 }
 
 static const char *dast_state_name(dast_state_t s)
@@ -344,32 +424,79 @@ static bool dast_netif_changed(const lwip_netif_info_t *a,
                   sizeof(a->ipv4_gateway)) != 0;
 }
 
+static void dast_service_cb(struct netif *netif, void *arg,
+                            uint8_t service_id,
+                            lwip_netif_service_status_t status)
+{
+    volatile uint8_t *state = (volatile uint8_t *)arg;
+
+    (void)netif;
+    if (!state || service_id != LWIP_CONN_SVC_DHCP)
+    {
+        return;
+    }
+
+    switch (status)
+    {
+    case LWIP_NETIF_SERVICE_UP:
+        *state = DAST_SERVICE_UP;
+        break;
+    case LWIP_NETIF_SERVICE_TIMEOUT:
+        *state = DAST_SERVICE_TIMEOUT;
+        break;
+    case LWIP_NETIF_SERVICE_FAILED:
+    default:
+        *state = DAST_SERVICE_FAILED;
+        break;
+    }
+}
+
+static const char *dast_service_status(lwip_error_t err)
+{
+    if (err != LWIP_OK)
+    {
+        return "DHCP request failed";
+    }
+
+    switch (dast_dhcp_service_state)
+    {
+    case DAST_SERVICE_UP:
+        return "DHCP up";
+    case DAST_SERVICE_FAILED:
+        return "DHCP failed";
+    case DAST_SERVICE_TIMEOUT:
+        return "DHCP timeout";
+    case DAST_SERVICE_PENDING:
+    default:
+        return "DHCP requested";
+    }
+}
+
 static bool dast_wait_for_network(lwip_netif_info_t *info)
 {
-    struct lwip_conn svc = {0};
-    bool svc_live = false;
     const char *svc_status = NULL;
     uint8_t status_ticks = 0;
+    uint8_t last_svc_state;
     lwip_netif_info_t last_info = {0};
+    lwip_error_t svc_err;
 
-    if (lwip_conn_create(&svc, NULL, LWIP_PROTO_UDP, LWIP_CONN_SVC_DHCP) == LWIP_OK)
-    {
-        svc_live = true;
-        svc_status = "DHCP requested";
-    }
-    else
-    {
-        svc_status = "DHCP request failed";
-    }
+    dast_dhcp_service_state = DAST_SERVICE_PENDING;
+    svc_err = lwip_netif_request_services(NULL, LWIP_CONN_SVC_DHCP,
+                                          dast_service_cb,
+                                          (void *)&dast_dhcp_service_state);
+    svc_status = dast_service_status(svc_err);
+    last_svc_state = dast_dhcp_service_state;
 
     memset(info, 0, sizeof(*info));
     (void)lwip_default_netif_info(info);
     dast_draw_start(info, svc_status);
+    lwip_example_draw_mem_stats();
     last_info = *info;
 
     while (!dast_network_ready(info))
     {
         lwip_poll_network_events();
+        lwip_example_mem_stats_tick();
 
         if (++status_ticks >= 32)
         {
@@ -378,29 +505,26 @@ static bool dast_wait_for_network(lwip_netif_info_t *info)
             memset(info, 0, sizeof(*info));
             (void)lwip_default_netif_info(info);
             next = *info;
-            if (dast_netif_changed(&last_info, &next))
+            svc_status = dast_service_status(svc_err);
+            if (dast_netif_changed(&last_info, &next) ||
+                last_svc_state != dast_dhcp_service_state)
             {
                 dast_update_start_status(info, svc_status);
                 last_info = next;
+                last_svc_state = dast_dhcp_service_state;
             }
         }
 
         uint8_t key = os_GetCSC();
         if (key == sk_Clear)
         {
-            if (svc_live)
-            {
-                lwip_conn_destroy(&svc);
-            }
+            dast_close_all();
             return false;
         }
     }
 
-    if (svc_live)
-    {
-        lwip_conn_destroy(&svc);
-    }
     dast_draw_start(info, NULL);
+    lwip_example_draw_mem_stats();
     return true;
 }
 
@@ -409,12 +533,14 @@ static bool dast_run_test(int idx, const dast_test_t *t)
 {
     bool open_ok = dast_enter_state(t);
     dast_draw_test(idx, t, open_ok);
+    lwip_example_draw_mem_stats();
 
     uint16_t last_drawn = 0xFFFF;
     bool keep_going = true;
     while (true)
     {
         lwip_poll_network_events();
+        lwip_example_mem_stats_tick();
 
         if (dast_events != last_drawn)
         {
@@ -445,6 +571,7 @@ int main(void)
     lwip_netif_info_t info = {0};
     if (!dast_wait_for_network(&info))
     {
+        dast_close_all();
         return lwip_example_finish(0);
     }
 
@@ -452,11 +579,15 @@ int main(void)
     while (true)
     {
         lwip_poll_network_events();
+        lwip_example_mem_stats_tick();
         uint8_t key = os_GetCSC();
         if (key == sk_Enter)
             break;
         if (key == sk_Clear)
+        {
+            dast_close_all();
             return lwip_example_finish(0);
+        }
     }
 
     for (int i = 0; i < DAST_TEST_COUNT; i++)
@@ -466,5 +597,6 @@ int main(void)
     }
 
     lwip_example_show_and_wait("DAST complete", "see host report");
+    dast_close_all();
     return lwip_example_finish(0);
 }
