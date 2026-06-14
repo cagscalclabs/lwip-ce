@@ -94,7 +94,54 @@ static inline bool eth_is_eth_netif(const struct netif *netif)
 
 static inline bool eth_is_shutting_down(const eth_device_t *dev)
 {
-    return eth_driver_shutting_down || (dev && dev->shutting_down);
+    return eth_driver_shutting_down || (dev && (dev->shutting_down || dev->dead));
+}
+
+/* Bump the in-flight transfer count when a schedule_transfer succeeds. */
+static inline void eth_transfer_began(eth_device_t *dev)
+{
+    if (dev && dev->pending_transfers != 0xFFFFu)
+    {
+        dev->pending_transfers++;
+    }
+}
+
+/* Drop the in-flight transfer count at the top of a completion callback. */
+static inline void eth_transfer_ended(eth_device_t *dev)
+{
+    if (dev && dev->pending_transfers != 0)
+    {
+        dev->pending_transfers--;
+    }
+}
+
+/* Reap any dead devices whose in-flight transfers have fully drained. Called
+ * from the RX dispatch tick (a safe, non-callback context). Walks the netif
+ * list; a dead device has already been netif_remove()'d, so we instead reap
+ * from a small intrusive list of dead-pending devices. */
+static eth_device_t *g_dead_devices = NULL; /* singly-linked via ->dead_next */
+
+static void eth_reap_dead_devices(void)
+{
+    eth_device_t **pp = &g_dead_devices;
+    while (*pp)
+    {
+        eth_device_t *dev = *pp;
+        if (dev->pending_transfers == 0)
+        {
+            *pp = dev->dead_next;
+            if (dev->rx_ring)
+            {
+                mem_buffer_destroy(dev->rx_ring);
+                dev->rx_ring = NULL;
+            }
+            free(dev);
+        }
+        else
+        {
+            pp = &dev->dead_next;
+        }
+    }
 }
 
 static void eth_schedule_rx_for_netifs(void)
@@ -115,15 +162,18 @@ static void eth_schedule_rx_for_netifs(void)
         if (usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, len, dev->rx.callback, dev) == USB_SUCCESS)
         {
             dev->rx_transfer_active = true;
+            eth_transfer_began(dev);
         }
     }
 }
 
 /* Dispatcher entry: re-arm RX transfers for every eth netif that
- * doesn't already have one in flight. */
+ * doesn't already have one in flight, then reap any unplugged devices whose
+ * in-flight transfers have drained (safe, non-callback context). */
 static void eth_rx_schedule_dispatch(void)
 {
     eth_schedule_rx_for_netifs();
+    eth_reap_dead_devices();
 }
 
 static bool eth_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len)
@@ -414,6 +464,10 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                            usb_transfer_data_t *data)
 {
     eth_device_t *dev = (eth_device_t *)data;
+    /* This transfer just completed; drop the in-flight count BEFORE any early
+     * return so a dead device can still be reaped (count must reach 0). The
+     * count invariant guarantees dev is not yet freed here. */
+    eth_transfer_ended(dev);
     if (!dev || eth_is_shutting_down(dev))
     {
         return USB_SUCCESS;
@@ -492,13 +546,16 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
         } while (bytes_parsed < transferred);
         dev->int_retries = 0;
     }
-    if (!eth_is_shutting_down(dev) &&
-        usb_fn.schedule_transfer(dev->interrupt.endpoint, dev->interrupt.buf,
-                                 INTERRUPT_RX_MAX, interrupt_receive_callback,
-                                 data) != USB_SUCCESS)
+    if (!eth_is_shutting_down(dev))
     {
-        (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
-        return USB_ERROR_FAILED;
+        if (usb_fn.schedule_transfer(dev->interrupt.endpoint, dev->interrupt.buf,
+                                     INTERRUPT_RX_MAX, interrupt_receive_callback,
+                                     data) != USB_SUCCESS)
+        {
+            (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
+            return USB_ERROR_FAILED;
+        }
+        eth_transfer_began(dev);
     }
     return USB_SUCCESS;
 }
@@ -518,6 +575,9 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
     }
     eth_device_t *dev = ctx->dev;
     struct pbuf *tbuf = ctx->p;
+    /* TX transfer completed — drop the in-flight count before any early return
+     * so a dead device can be reaped. */
+    eth_transfer_ended(dev);
     if (eth_is_shutting_down(dev))
     {
         if (tbuf)
@@ -552,6 +612,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
             (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
             return USB_ERROR_FAILED;
         }
+        eth_transfer_began(dev);
         return USB_SUCCESS;
     }
 
@@ -577,6 +638,7 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
     {
         return USB_ERROR_FAILED;
     }
+    eth_transfer_ended(dev);
     dev->rx_transfer_active = false;
     if (eth_is_shutting_down(dev))
     {
@@ -602,6 +664,7 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                                      dev) == USB_SUCCESS)
         {
             dev->rx_transfer_active = true;
+            eth_transfer_began(dev);
         }
         return USB_SUCCESS;
     }
@@ -627,6 +690,7 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                                  dev) == USB_SUCCESS)
     {
         dev->rx_transfer_active = true;
+        eth_transfer_began(dev);
     }
     return USB_SUCCESS;
 }
@@ -668,6 +732,7 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
         return ERR_IF;
     }
+    eth_transfer_began(dev);
     return ERR_OK;
 }
 
@@ -784,6 +849,7 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
     {
         return USB_ERROR_FAILED;
     }
+    eth_transfer_ended(dev);
     dev->rx_transfer_active = false;
     if (eth_is_shutting_down(dev))
     {
@@ -809,6 +875,7 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                                      dev) == USB_SUCCESS)
         {
             dev->rx_transfer_active = true;
+            eth_transfer_began(dev);
         }
         return USB_SUCCESS;
     }
@@ -901,6 +968,7 @@ rx_rearm:
                                  dev) == USB_SUCCESS)
     {
         dev->rx_transfer_active = true;
+        eth_transfer_began(dev);
     }
     return USB_SUCCESS;
 }
@@ -982,6 +1050,7 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
         return ERR_IF;
     }
+    eth_transfer_began(dev);
     return ERR_OK;
 }
 
@@ -1476,6 +1545,7 @@ init_success:
         (void)eth_xmit_fatal_error(eth, ETH_USB_MAX_RETRIES);
         return false;
     }
+    eth_transfer_began(eth);
     return true;
 }
 
@@ -1527,9 +1597,23 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         eth_device_t *eth_device = (eth_device_t *)usb_fn.get_device_data(usb_device);
         if (eth_device)
         {
+            /* Mark the device dead BEFORE any teardown. eth_is_shutting_down()
+             * now reports true, so every USB transfer callback and netif op
+             * fast-returns and stops touching this device. The struct is NOT
+             * freed here — it is reaped later by the RX dispatch tick once its
+             * in-flight transfers drain (see eth_reap_dead_devices), which
+             * closes the use-after-free window where a halted transfer's
+             * completion callback fires after free. */
+            eth_device->dead = true;
             bool shutting_down = eth_driver_shutting_down || eth_device->shutting_down;
             eth_device->shutting_down = shutting_down;
             eth_device->rx_transfer_active = false;
+            /* Abort any TCP/TLS pcbs bound to this netif explicitly. The link/
+             * status netif callbacks normally do this, but they now fast-return
+             * on `dead`; this is a safe lwIP-side cleanup that does not touch the
+             * USB device, so the unplugged interface's connections still tear
+             * down instead of dangling. */
+            lwip_teardown_abort_pcbs_on_netif(&eth_device->iface);
             netif_set_link_down(&eth_device->iface);
             netif_set_down(&eth_device->iface);
             if (shutting_down)
@@ -1571,14 +1655,27 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         {
             ifnums_used &= ~(1 << eth_device->iface.num);
             netif_remove(&eth_device->iface);
-            if (eth_device->rx_ring)
+            /* Unbind from the USB device so no later event re-finds this
+             * (about-to-be-reaped) struct, then defer the free: enqueue on the
+             * dead list. The RX dispatch tick frees it (and its rx_ring) once
+             * pending_transfers reaches 0. Freeing synchronously here would
+             * race a halted transfer's completion callback (use-after-free). */
+            usb_fn.set_device_data(usb_device, NULL);
+            if (eth_device->pending_transfers == 0)
             {
-                mem_buffer_destroy(eth_device->rx_ring);
-                eth_device->rx_ring = NULL;
+                /* No in-flight transfers — safe to free immediately. */
+                if (eth_device->rx_ring)
+                {
+                    mem_buffer_destroy(eth_device->rx_ring);
+                    eth_device->rx_ring = NULL;
+                }
+                free(eth_device);
             }
-            free(eth_device);
-            eth_device = NULL;
-            usb_fn.set_device_data(usb_device, eth_device);
+            else
+            {
+                eth_device->dead_next = g_dead_devices;
+                g_dead_devices = eth_device;
+            }
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
                         ("device ptr=%p: disconnected", usb_device));
         }

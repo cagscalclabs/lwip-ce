@@ -160,6 +160,20 @@ typedef struct _eth_device_t
     bool disabled_with_error;
     bool shutting_down;
     bool dhcp_auto_started;
+    /* Device unplugged / disconnected. Set FIRST in the disconnect handler,
+     * before any teardown, so every callback and netif op fast-returns and
+     * stops touching the (soon-to-be-freed) device. The struct is NOT freed
+     * synchronously on disconnect — it is reaped later by the RX dispatch tick
+     * once `pending_transfers` has drained, closing the use-after-free window
+     * where a halted in-flight USB transfer callback fires after free. */
+    bool dead;
+    /* Count of USB transfers currently in flight for this device (incremented
+     * when schedule_transfer succeeds, decremented at the top of the matching
+     * completion callback). A dead device is only freed when this reaches 0. */
+    uint16_t pending_transfers;
+    /* Intrusive link for the dead-device reap list (see eth_reap_dead_devices).
+     * Only valid while `dead`. */
+    struct _eth_device_t *dead_next;
     struct mem_buffer *rx_ring;
     struct
     {

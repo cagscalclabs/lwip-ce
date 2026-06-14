@@ -251,8 +251,12 @@ a lot of data that needs to be copied, this should be set high. */
 /* Maximum number of retransmissions of data segments. */
 #define TCP_MAXRTX 6
 
-/* Maximum number of retransmissions of SYN segments. */
-#define TCP_SYNMAXRTX 2
+/* Maximum number of retransmissions of SYN segments. lwIP's default is 6; the
+ * previous value of 2 gave up on the TCP handshake after only two SYN retries,
+ * which on a slow/laggy link (or when the poll cadence delays SYN-ACK
+ * processing) aborted the connection prematurely with ERR_ABRT (surfaced as a
+ * "connect" failure right around handshake start). */
+#define TCP_SYNMAXRTX 6
 
 /* ---------- ARP options ---------- */
 #define LWIP_ARP 1

@@ -119,13 +119,14 @@ int main(void)
     lwip_conn_set_err(&conn, on_err);
     lwip_conn_set_closed(&conn, on_closed);
 
-    /* Route TLS (and all) debug events to the on-screen console. Depth 1
-     * (verbose) also traces the record/decrypt path, which localizes where
-     * the Certificate handling stalls. Drop to LWIP_DBG_DEPTH_MILESTONE for a
-     * clean high-level progress view. The console shares the home-screen text
-     * surface with lwip_example_show(). */
+    /* Route TLS (and all) debug events to the on-screen console at MILESTONE
+     * depth: exactly one progress line per handshake phase (client_hello,
+     * server_hello, ... finished, handshake_end) plus lwip/conn lifecycle
+     * lines, and any errors. The verbose per-record/per-chunk traces are
+     * filtered out. The console shares the home-screen text surface with
+     * lwip_example_show(). */
     lwip_set_debug(lwip_example_dbg_console_cb, LWIP_DBG_INFO,
-                   LWIP_DBG_DEPTH_VERBOSE);
+                   LWIP_DBG_DEPTH_MILESTONE);
 
     lwip_example_linef("attempting conn to:");
     lwip_example_linef("%s:%u", TLS_HOST, (unsigned)TLS_PORT);
@@ -156,7 +157,10 @@ int main(void)
         return lwip_example_finish(1);
     }
 
-    lwip_example_show_and_wait("TLS OK", state.rx);
+    lwip_example_show("TLS OK", NULL);
+    lwip_example_lines_crlf(state.rx, state.rx_len);
+    lwip_example_draw_mem_stats();
+    lwip_example_wait_key();
     lwip_conn_destroy(&conn);
     return lwip_example_finish(0);
 }

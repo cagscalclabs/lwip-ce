@@ -46,6 +46,13 @@ typedef struct altcp_tls_ce_state {
     size_t rx_throttle_pending;              /* Pending bytes to recved */
     struct altcp_tls_ce_state *next;         /* Linked list of states */
     u8_t flags;                              /* State flags */
+    /* Pending ClientHello record awaiting a free lower send buffer. Generated
+     * once (transcript hash is updated at generation, so it must NOT be
+     * regenerated on retry); the write is retried on each recv/poll tick until
+     * the lower TCP accepts it, then this buffer is freed. NULL when none
+     * pending. See altcp_tls_ce_send_client_hello. */
+    uint8_t *pending_chello;
+    uint16_t pending_chello_len;
 } altcp_tls_ce_state_t;
 
 /* State flags */

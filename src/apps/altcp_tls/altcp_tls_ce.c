@@ -1054,55 +1054,13 @@ altcp_tls_ce_lower_connected(void *arg, struct altcp_pcb *inner_conn, err_t err)
         state->overhead_bytes_adjust = 0;
         tls_dbg_status("lower: connected");
 
-        /* For client: send ClientHello to initiate handshake */
-        if (!((struct altcp_tls_ce_config *)state->conf)->is_server)
-        {
-            uint8_t record[512];
-            uint8_t *client_hello = record + 5; /* Leave room for record header */
-            size_t client_hello_len = 0;
-
-            tls_dbg_status("clienthello: gen");
-            if (!tls_send_client_hello(&state->tls_ctx, client_hello,
-                                       sizeof(record) - 5, &client_hello_len))
-            {
-                tls_dbg_status("clienthello: gen fail");
-                if (conn->err)
-                {
-                    conn->err(conn->arg, ERR_ABRT);
-                }
-                altcp_abort(conn);
-                return ERR_ABRT;
-            }
-
-            /* Wrap in TLS record header */
-            record[0] = TLS_CONTENT_TYPE_HANDSHAKE; /* 0x16 */
-            record[1] = 0x03;
-            record[2] = 0x01; /* TLS 1.0 for ClientHello record */
-            record[3] = (uint8_t)(client_hello_len >> 8);
-            record[4] = (uint8_t)(client_hello_len & 0xFF);
-
-            size_t record_len = 5 + client_hello_len;
-
-            /* Send ClientHello record over TCP */
-            tls_dbg_status("clienthello: write");
-            err_t write_err = altcp_write(inner_conn, record, (u16_t)record_len, TCP_WRITE_FLAG_COPY);
-            altcp_output(inner_conn);
-
-            if (write_err != ERR_OK)
-            {
-                tls_dbg_status("clienthello: write fail");
-                if (conn->err)
-                {
-                    conn->err(conn->arg, write_err);
-                }
-                altcp_abort(conn);
-                return ERR_ABRT;
-            }
-
-            state->tls_ctx.state = TLS_STATE_CLIENT_HELLO_SENT;
-            tls_dbg_status("clienthello: sent");
-        }
-
+        /* Do NOT write the ClientHello directly from this connected callback.
+         * The lower TCP pcb can be in a transient state here where altcp_write
+         * returns ERR_MEM (send buffer not yet ready) — treating that as fatal
+         * aborted the handshake intermittently right after connect. Instead
+         * drive the handshake through lower_recv_process, which sends (and, on
+         * ERR_MEM, retries) the ClientHello as a normal, non-fatal state step.
+         * This keeps handshake sequencing entirely inside altcp_tls_ce. */
         return altcp_tls_ce_lower_recv_process(conn, state);
     }
     return ERR_VAL;
@@ -1212,6 +1170,104 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
     return altcp_tls_ce_lower_recv_process(conn, state);
 }
 
+/*
+ * Send the ClientHello if the client handshake hasn't started yet. Driven from
+ * lower_recv_process (which runs on the connected callback, every recv, and the
+ * poll tick), so a transient ERR_MEM is simply retried on the next tick rather
+ * than aborting the connection.
+ *
+ * Returns:
+ *   ERR_OK   — ClientHello already sent, or just sent successfully.
+ *   ERR_MEM  — lower send buffer not ready; caller should leave the handshake
+ *              pending and retry on the next tick (NOT fatal).
+ *   ERR_ABRT — fatal (generation failed, or a non-MEM write error); caller
+ *              has already aborted the connection.
+ */
+static err_t
+altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
+{
+    err_t write_err;
+
+    if (state->tls_ctx.state >= TLS_STATE_CLIENT_HELLO_SENT)
+    {
+        return ERR_OK; /* already sent */
+    }
+
+    /* Generate the ClientHello exactly once. tls_send_client_hello folds it
+     * into the transcript hash as a side effect, so it must never be called
+     * twice for one connection — we cache the built record and only retry the
+     * write below. */
+    if (state->pending_chello == NULL)
+    {
+        uint8_t record[512];
+        size_t client_hello_len = 0;
+
+        tls_dbg_status("clienthello: gen");
+        if (!tls_send_client_hello(&state->tls_ctx, record + 5,
+                                   sizeof(record) - 5, &client_hello_len))
+        {
+            tls_dbg_status("clienthello: gen fail");
+            if (conn->err)
+            {
+                conn->err(conn->arg, ERR_ABRT);
+            }
+            altcp_abort(conn);
+            return ERR_ABRT;
+        }
+
+        /* TLS record header (0x16 = handshake, version 0x0301). */
+        record[0] = TLS_CONTENT_TYPE_HANDSHAKE;
+        record[1] = 0x03;
+        record[2] = 0x01;
+        record[3] = (uint8_t)(client_hello_len >> 8);
+        record[4] = (uint8_t)(client_hello_len & 0xFF);
+
+        state->pending_chello_len = (uint16_t)(5 + client_hello_len);
+        state->pending_chello = (uint8_t *)mem_malloc(state->pending_chello_len);
+        if (state->pending_chello == NULL)
+        {
+            /* Out of memory for the cached record — but the transcript already
+             * includes this ClientHello, so we can't cleanly regenerate. Fail
+             * the connection rather than desync. */
+            if (conn->err)
+            {
+                conn->err(conn->arg, ERR_ABRT);
+            }
+            altcp_abort(conn);
+            return ERR_ABRT;
+        }
+        memcpy(state->pending_chello, record, state->pending_chello_len);
+    }
+
+    tls_dbg_status("clienthello: write");
+    write_err = altcp_write(conn->inner_conn, state->pending_chello,
+                            state->pending_chello_len, TCP_WRITE_FLAG_COPY);
+    if (write_err == ERR_MEM)
+    {
+        /* Lower send buffer not ready yet (common right at connect). Keep the
+         * cached record and retry on the next recv/poll tick — non-fatal. */
+        return ERR_MEM;
+    }
+    if (write_err != ERR_OK)
+    {
+        tls_dbg_status("clienthello: write fail");
+        if (conn->err)
+        {
+            conn->err(conn->arg, write_err);
+        }
+        altcp_abort(conn);
+        return ERR_ABRT;
+    }
+
+    altcp_output(conn->inner_conn);
+    mem_free(state->pending_chello);
+    state->pending_chello = NULL;
+    state->pending_chello_len = 0;
+    state->tls_ctx.state = TLS_STATE_CLIENT_HELLO_SENT;
+    tls_dbg_status("clienthello: sent");
+    return ERR_OK;
+}
+
 /**
  * @brief Process received data (handshake or application data)
  */
@@ -1234,6 +1290,20 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         }
         else
         {
+            /* Kick off (or retry) the ClientHello. This runs from the connected
+             * callback, every recv, and the poll tick; an ERR_MEM means the
+             * lower send buffer isn't ready yet, so we leave the handshake
+             * pending and try again next tick instead of aborting. */
+            err_t ch_err = altcp_tls_ce_send_client_hello(conn, state);
+            if (ch_err == ERR_ABRT)
+            {
+                return ERR_ABRT; /* helper already aborted */
+            }
+            if (ch_err == ERR_MEM)
+            {
+                return ERR_OK; /* not sent yet; wait for the next tick */
+            }
+
             /* Client: process complete TLS records. Each iteration peeks the
              * 5-byte header, waits for the whole record to arrive, then hands
              * off to the streaming decrypter (encrypted records) or the
@@ -2061,6 +2131,18 @@ altcp_tls_ce_connect(struct altcp_pcb *conn, const ip_addr_t *ipaddr, u16_t port
         return ERR_VAL;
     }
     conn->connected = connected;
+
+    /* Register a handshake-liveness poll on the inner TCP pcb. Without it, the
+     * only thing that drives altcp_tls_ce_lower_recv_process is inbound data —
+     * but if the ClientHello write returns ERR_MEM (send buffer briefly full at
+     * connect), it's deferred and retried from lower_recv_process, and no data
+     * will arrive until the ClientHello actually goes out. That circular wait
+     * would stall the handshake until the app timeout. The poll (every ~500ms,
+     * tcp coarse-timer units) breaks the deadlock by retrying the deferred
+     * ClientHello. altcp_tls_ce_lower_poll also forwards to any app-set poll, so
+     * a later altcp_tls_ce_set_poll() composes cleanly. */
+    altcp_poll(conn->inner_conn, altcp_tls_ce_lower_poll, 1);
+
     return altcp_connect(conn->inner_conn, ipaddr, port, altcp_tls_ce_lower_connected);
 }
 
@@ -2261,6 +2343,12 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
             {
                 pbuf_free(state->rx_app);
                 state->rx_app = NULL;
+            }
+            if (state->pending_chello)
+            {
+                mem_free(state->pending_chello);
+                state->pending_chello = NULL;
+                state->pending_chello_len = 0;
             }
 
             tls_state_remove(state);

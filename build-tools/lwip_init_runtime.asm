@@ -12,23 +12,17 @@ __lwip_fn_table_off := 0x000040
 __lwip_expected_export_count := 0x000000
 
 	export lwip_init_runtime_opaque
-	export lwip_runtime_last_error
 
 __lwip_app_name:
 	db "lwIP", 0
 
-__lwip_runtime_error:
-	db 0
-
-lwip_runtime_last_error:
-	ld a, (__lwip_runtime_error)
-	ret
-
+; uint8_t lwip_init_runtime_opaque(malloc, free, realloc)
+;   Returns the status code directly in A:
+;     0 = success
+;     1 = app not found
+;     2 = export-table error (bad magic or count mismatch)
 lwip_init_runtime_opaque:
 	call ti._frameset0
-
-	xor a, a
-	ld (__lwip_runtime_error), a
 
 	ld hl, (ix + 6)
 	ld (_fn_imports_table + 0), hl		; malloc
@@ -40,9 +34,6 @@ lwip_init_runtime_opaque:
 	ld hl, __lwip_app_name
 	call ti.FindAppStart	; HL <- app base, carry on not-found
 	jp c, .app_missing
-	ld a, h
-	or a, l
-	jp z, .app_missing
 
 	; CE app metadata at app_base + 0x112 stores the offset to the linked
 	; image after the relocation table. The linked image starts 0x100 bytes
@@ -99,7 +90,7 @@ lwip_init_runtime_opaque:
 	or a, a
 	sbc hl, bc
 	pop hl
-	jr nz, .count_fail
+	jr nz, .table_fail
 
 	push ix
 	ld ix, _lwip_jp_table_start + 1		; first trampoline operand
@@ -134,21 +125,15 @@ lwip_init_runtime_opaque:
 	pop hl
 
 	pop ix
-	ld a, 1
+	ld a, 0
 	ret
 
 .app_missing:
 	ld a, 1
 	jr .fail
-
 .table_fail:
 	ld a, 2
 	jr .fail
-
-.count_fail:
-	ld a, 3
 .fail:
-	ld (__lwip_runtime_error), a
 	pop ix
-	ld a, 0
 	ret

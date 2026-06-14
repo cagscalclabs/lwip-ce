@@ -25,13 +25,13 @@
  * top when we run off the bottom.
  * -------------------------------------------------------------------- */
 
-#define LWIP_EXAMPLE_TOP     30   /* first line y (px), below the status row */
-#define LWIP_EXAMPLE_BOTTOM  228  /* last usable y (px); LCD is 240 tall      */
-#define LWIP_EXAMPLE_LEFT    2    /* left margin (px)                         */
-#define LWIP_EXAMPLE_LCD_W   320
+#define LWIP_EXAMPLE_TOP 30     /* first line y (px), below the status row */
+#define LWIP_EXAMPLE_BOTTOM 228 /* last usable y (px); LCD is 240 tall      */
+#define LWIP_EXAMPLE_LEFT 2     /* left margin (px)                         */
+#define LWIP_EXAMPLE_LCD_W 320
 #define LWIP_EXAMPLE_STATS_X 188
 #define LWIP_EXAMPLE_STATS_LINES 3
-#define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 6
+#define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 12
 
 static uint8_t lwip_example_row = LWIP_EXAMPLE_TOP;
 static uint8_t lwip_example_stats_loop_count = 0;
@@ -69,10 +69,12 @@ static void lwip_example_line(const char *text)
 }
 
 /* printf-style small-font line. */
-#define lwip_example_linef(...) do {                       \
-        char _lebuf[64];                                   \
-        snprintf(_lebuf, sizeof(_lebuf), __VA_ARGS__);     \
-        lwip_example_line(_lebuf);                         \
+#define lwip_example_linef(...)                        \
+    do                                                 \
+    {                                                  \
+        char _lebuf[64];                               \
+        snprintf(_lebuf, sizeof(_lebuf), __VA_ARGS__); \
+        lwip_example_line(_lebuf);                     \
     } while (0)
 
 static unsigned lwip_example_pct(size_t used, size_t total)
@@ -172,6 +174,47 @@ static void lwip_example_show_and_wait(const char *line1, const char *line2)
     lwip_example_show(line1, line2);
     lwip_example_draw_mem_stats();
     lwip_example_wait_key();
+}
+
+/* Print a (possibly multi-line) text buffer, breaking on CRLF / LF so HTTP
+ * header lines land on their own rows instead of rendering the \r\n bytes as
+ * stray glyphs. \r is swallowed; \n ends a line; any other non-printable byte
+ * becomes '.'. Each output line is length-bounded to the small-font surface. */
+static void lwip_example_lines_crlf(const char *text, size_t len)
+{
+    char line[44];
+    size_t col = 0;
+    size_t i;
+
+    if (!text)
+    {
+        return;
+    }
+    for (i = 0; i < len; i++)
+    {
+        char c = text[i];
+
+        if (c == '\r')
+        {
+            continue; /* part of CRLF; the \n ends the line */
+        }
+        if (c == '\n' || col + 1 >= sizeof(line))
+        {
+            line[col] = '\0';
+            lwip_example_line(line);
+            col = 0;
+            if (c == '\n')
+            {
+                continue;
+            }
+        }
+        line[col++] = (c >= 32 && c <= 126) ? c : '.';
+    }
+    if (col > 0)
+    {
+        line[col] = '\0';
+        lwip_example_line(line);
+    }
 }
 
 static void lwip_example_line_ipv4(const char *prefix, const uint8_t ip[4])
@@ -280,18 +323,16 @@ static bool lwip_example_stack_start(void)
 {
     lwip_example_show("lwIP runtime", NULL);
 
-    if (!lwip_init_runtime())
+    uint8_t rt = lwip_init_runtime(); /* 0 = success */
+    if (rt != 0)
     {
-        switch (lwip_runtime_last_error())
+        switch (rt)
         {
         case 1:
             lwip_example_show_and_wait("lwIP failed", "app missing");
             break;
         case 2:
-            lwip_example_show_and_wait("lwIP failed", "runtime table");
-            break;
-        case 3:
-            lwip_example_show_and_wait("lwIP failed", "runtime count");
+            lwip_example_show_and_wait("lwIP failed", "export error");
             break;
         default:
             lwip_example_show_and_wait("lwIP failed", "runtime init");
