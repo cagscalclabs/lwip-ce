@@ -115,7 +115,7 @@ jobs:
 
       # TEMPORARY: the v15.0 release CEdev/meta/makefile.mk hard-assigns
       # LINKER_SCRIPT with `=`/`:=`, so our makefile's
-      # `LINKER_SCRIPT = linker_script_lwip.ld` cannot win and the app links
+      # `LINKER_SCRIPT = build-tools/meta/linker_script_lwip.ld` cannot win and the app links
       # against the stock script (missing our overlay/PROVIDE symbols ->
       # undefined references). master already fixed this to `?=`. Patch the
       # release meta in place to `?=` so our assignment takes effect.
@@ -134,7 +134,7 @@ jobs:
           APP_TOOLS_DIR: ${{ github.workspace }}/submodules/app_tools
           TOOLCHAIN_DIR: ${{ env.TOOLCHAIN_SRC }}
           # The workflow-level TOOLCHAIN_SRC points at the toolchain repo ROOT
-          # (where tools/fasmg, tools/convbin live). build-release-dylib.sh,
+          # (where tools/fasmg, tools/convbin live). build-tools/build-release-dylib.sh,
           # however, expects TOOLCHAIN_SRC to be the src/ subdir (it checks for
           # common.mk, include/, usbdrvce/). Override it here to the src dir so
           # the inherited workflow-level value does not break the script.
@@ -143,7 +143,7 @@ jobs:
           FASMG: fasmg
           CONVBIN: ${{ env.CEDEV_BIN }}/convbin
           HEADER_PYTHON: python3
-        run: ./build-release-dylib.sh
+        run: ./build-tools/build-release-dylib.sh
 
       - name: verify libload lib
         id: make_libload

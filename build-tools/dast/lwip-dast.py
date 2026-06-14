@@ -16,9 +16,9 @@ override you hand-edit into tests/dast.json are carried over across runs,
 keyed by test id.
 
 Usage:
-    sudo ./build-tools/lwip-dast.sh --ip 192.168.1.42
-    python3 build-tools/lwip-dast.py --gen-header   # regen calc-side C list
-    python3 build-tools/lwip-dast.py --ip ... --self-test  # no scapy, dry run
+    sudo ./build-tools/dast/lwip-dast.sh --ip 192.168.1.42
+    python3 build-tools/dast/lwip-dast.py --gen-header   # regen calc-side C list
+    python3 build-tools/dast/lwip-dast.py --ip ... --self-test  # no scapy, dry run
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "tests" / "profiling" / "lwip_dast" / "dast_tests.json"
 REPORT = REPO_ROOT / "tests" / "dast.json"
 GEN_HEADER = REPO_ROOT / "tests" / "profiling" / "lwip_dast" / "src" / "dast_tests.h"
@@ -76,7 +76,7 @@ def gen_header() -> None:
     lines = [
         "/* AUTO-GENERATED from tests/profiling/lwip_dast/dast_tests.json.",
         " * Do not edit by hand; run:",
-        " *     python3 build-tools/lwip-dast.py --gen-header",
+        " *     python3 build-tools/dast/lwip-dast.py --gen-header",
         " * Keeps the calc-side harness in lockstep with the probe runner. */",
         "#ifndef LWIP_DAST_TESTS_H",
         "#define LWIP_DAST_TESTS_H",

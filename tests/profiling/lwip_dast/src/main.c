@@ -1,6 +1,6 @@
 /* lwIP-CE DAST calc-side harness.
  *
- * Pairs with build-tools/lwip-dast.py. Walks the shared test list
+ * Pairs with build-tools/dast/lwip-dast.py. Walks the shared test list
  * (dast_tests.h, generated from tests/profiling/lwip_dast/dast_tests.json),
  * placing the stack into each test's listener state so the off-calc probe
  * runner can poke a meaningful surface:
@@ -239,6 +239,104 @@ static void dast_draw_counter(const dast_test_t *t)
     lwip_example_stats_line(lwip_example_line_h() * 7, line);
 }
 
+static bool dast_network_ready(const lwip_netif_info_t *info)
+{
+    return info && info->has_netif && info->up && info->link_up &&
+           info->has_ipv4 && info->has_ipv4_gateway;
+}
+
+static void dast_draw_start(const lwip_netif_info_t *info,
+                            const char *svc_status)
+{
+    lwip_example_clear();
+    lwip_example_line("lwIP DAST harness");
+
+    if (!info || !info->has_netif)
+    {
+        lwip_example_line("IP: waiting for netif");
+        lwip_example_line("u:0 l:0 dh:0");
+    }
+    else if (info->has_ipv4)
+    {
+        lwip_example_linef("IP: %u.%u.%u.%u",
+                           info->ipv4_addr[0], info->ipv4_addr[1],
+                           info->ipv4_addr[2], info->ipv4_addr[3]);
+        lwip_example_linef("GW: %u.%u.%u.%u",
+                           info->ipv4_gateway[0], info->ipv4_gateway[1],
+                           info->ipv4_gateway[2], info->ipv4_gateway[3]);
+    }
+    else
+    {
+        lwip_example_line("IP: waiting for DHCP");
+        lwip_example_linef("u:%u l:%u dh:%u",
+                           (unsigned)info->up,
+                           (unsigned)info->link_up,
+                           (unsigned)info->dhcp_state);
+    }
+
+    if (svc_status && svc_status[0])
+    {
+        lwip_example_line(svc_status);
+    }
+    lwip_example_line("");
+    lwip_example_linef("%d tests. Run host:", DAST_TEST_COUNT);
+    lwip_example_line("lwip-dast.sh --ip <above>");
+    lwip_example_line("[enter] begin  [clear] quit");
+}
+
+static bool dast_wait_for_network(lwip_netif_info_t *info)
+{
+    struct lwip_conn svc = {0};
+    bool svc_live = false;
+    const char *svc_status = NULL;
+    uint8_t redraw_ticks = 0;
+
+    if (lwip_conn_create(&svc, NULL, LWIP_PROTO_UDP, LWIP_CONN_SVC_DHCP) == LWIP_OK)
+    {
+        lwip_error_t err = lwip_conn_connect(&svc, "0.0.0.0", 9);
+        svc_live = true;
+        svc_status = (err == LWIP_OK) ? "DHCP requested" : "DHCP wait failed";
+    }
+    else
+    {
+        svc_status = "DHCP request failed";
+    }
+
+    memset(info, 0, sizeof(*info));
+    (void)lwip_default_netif_info(info);
+    dast_draw_start(info, svc_status);
+
+    while (!dast_network_ready(info))
+    {
+        lwip_poll_network_events();
+
+        if (++redraw_ticks >= 16)
+        {
+            redraw_ticks = 0;
+            memset(info, 0, sizeof(*info));
+            (void)lwip_default_netif_info(info);
+            dast_draw_start(info, svc_status);
+        }
+
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            if (svc_live)
+            {
+                lwip_conn_destroy(&svc);
+            }
+            return false;
+        }
+    }
+
+    if (svc_live)
+    {
+        lwip_conn_destroy(&svc);
+    }
+    dast_draw_start(info, NULL);
+    return true;
+}
+
 /* Pump the stack until the operator advances. Returns false on [clear]. */
 static bool dast_run_test(int idx, const dast_test_t *t)
 {
@@ -278,35 +376,15 @@ int main(void)
 
     /* Show the calc's address so the operator can pass it to --ip. */
     lwip_netif_info_t info = {0};
-    lwip_example_clear();
-    lwip_example_line("lwIP DAST harness");
-    if (lwip_default_netif_info(&info) && info.has_ipv4)
-        lwip_example_linef("IP: %u.%u.%u.%u",
-                           info.ipv4_addr[0], info.ipv4_addr[1],
-                           info.ipv4_addr[2], info.ipv4_addr[3]);
-    else
-        lwip_example_line("IP: (waiting for DHCP)");
-    lwip_example_line("");
-    lwip_example_linef("%d tests. Run host:", DAST_TEST_COUNT);
-    lwip_example_line("lwip-dast.sh --ip <above>");
-    lwip_example_line("[enter] begin  [clear] quit");
+    if (!dast_wait_for_network(&info))
+    {
+        return lwip_example_finish(0);
+    }
 
-    /* Wait for begin while still pumping so DHCP can finish. */
+    /* Wait for begin while still pumping the stack. */
     while (true)
     {
         lwip_poll_network_events();
-        if (!info.has_ipv4 && lwip_default_netif_info(&info) && info.has_ipv4)
-        {
-            lwip_example_stats_line(lwip_example_line_h(), "");
-            lwip_example_show("lwIP DAST harness", NULL);
-            lwip_example_linef("IP: %u.%u.%u.%u",
-                               info.ipv4_addr[0], info.ipv4_addr[1],
-                               info.ipv4_addr[2], info.ipv4_addr[3]);
-            lwip_example_line("");
-            lwip_example_linef("%d tests. Run host:", DAST_TEST_COUNT);
-            lwip_example_line("lwip-dast.sh --ip <above>");
-            lwip_example_line("[enter] begin  [clear] quit");
-        }
         uint8_t key = os_GetCSC();
         if (key == sk_Enter)
             break;

@@ -56,7 +56,7 @@ $(LIB_8XV): $(LIB_SRC)
 	$(Q)$(FASMG) $< $@
 else
 $(LIB_LIB) $(LIB_8XV):
-	$(Q)test -f $@ || { echo "missing $@; rerun build-release-dylib.sh"; exit 1; }
+	$(Q)test -f $@ || { echo "missing $@; rerun build-tools/build-release-dylib.sh"; exit 1; }
 endif
 
 clean:

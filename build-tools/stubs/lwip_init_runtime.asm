@@ -3,12 +3,12 @@
 ;   the export-table magic, and patches each in-lib trampoline (jp 0) to point
 ;   at its real in-app function address.
 ;
-; App presence is checked first with _find_lwip_app (a flash app-table walk;
-; see build-tools/find_app.c) because the OS FindAppStart is not safe to call
-; when the app is absent. Only once present do we call FindAppStart for the CE
-; app container base. The linked image base is then computed from the installed
-; app metadata, matching the installer relocation logic. __lwip_fn_table_off is
-; a fixed ABI offset from that linked image base to _fn_exports_table.
+; App presence is checked first with the self-contained _find_lwip_app flash
+; app-table walk below because the OS FindAppStart is not safe to call when
+; the app is absent. Only once present do we call FindAppStart for the CE app
+; container base. The linked image base is then computed from the installed app
+; metadata, matching the installer relocation logic. __lwip_fn_table_off is a
+; fixed ABI offset from that linked image base to _fn_exports_table.
 
 __lwip_fn_table_off := 0x000040
 __lwip_expected_export_count := 0x000000
@@ -151,13 +151,8 @@ lwip_init_runtime_opaque:
 ; _find_lwip_app — bool find_lwip_app(void)
 ;   Walks the CE flash app table to answer "is the lwIP app installed?" safely
 ;   (the OS FindAppStart is not safe to call when the app is absent).
-;   Returns A = 0 if not found, A = 0xFF if found.
-;
-; AUTO-GENERATED from build-tools/find_app.c via:
-;   ez80-clang -S -Oz find_app.c
-; then HAND-CONVERTED from GAS to fasmg syntax below. Self-contained: no
-; external calls (no strlen/strncmp/__ineg). Regenerate + re-convert only if
-; find_app.c changes. Raw GAS reference is kept in the comment block beneath.
+;   Returns A = 0 if not found, A = 1 if found.
+;   Self-contained: no external calls, no CRT helpers, no generated source.
 ; ============================================================================
 
 

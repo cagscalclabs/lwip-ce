@@ -4,8 +4,8 @@
 Used by .github/workflows/dast.yml (writes to $GITHUB_STEP_SUMMARY) and
 runnable locally:
 
-    python3 build-tools/dast_report.py            # print summary, exit nonzero on fail
-    python3 build-tools/dast_report.py --summary $GITHUB_STEP_SUMMARY
+    python3 build-tools/dast/dast_report.py            # print summary, exit nonzero on fail
+    python3 build-tools/dast/dast_report.py --summary $GITHUB_STEP_SUMMARY
 
 Exit code: 0 if no test graded "fail", 1 otherwise (or if the report is
 missing/unreadable).
@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORT = REPO_ROOT / "tests" / "dast.json"
 
 GRADE_ICON = {"ok": "✅", "fail": "❌", "skip": "⏭️"}
@@ -82,7 +82,7 @@ def main() -> int:
     path = Path(args.report)
     if not path.is_file():
         msg = (f"## lwIP-CE DAST Report\n\n"
-               f"❌ **{path} not found.** Run `build-tools/lwip-dast.sh "
+               f"❌ **{path} not found.** Run `build-tools/dast/lwip-dast.sh "
                f"--ip <calc>` against a live calc to produce it.\n")
         emit(msg, args.summary)
         print(f"ERROR: {path} not found", file=sys.stderr)

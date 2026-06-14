@@ -4,10 +4,10 @@ libload-shipped lwIP.
 
 Default layout:
 
-    build/
+        build/
         lwip.h                   — preferred surface: the conn API (pruned
                                    src/lwIP.h) inlined at the top, then an
-                                   aggregate include of lwip/core/*.h
+                                   aggregate include of the core headers
         cryptography.h           — aggregate include for lwip/cryptography/*.h
         lwip/
         core/<name>.h            — non-crypto source headers with public API
@@ -15,7 +15,7 @@ Default layout:
 
 Pruning strategy:
 
-  1. build-tools/public_api_manifest.csv is the manual allowlist. Its category
+  1. build-tools/meta/public_api_manifest.csv is the manual allowlist. Its category
      column chooses conn/core/cryptography output placement.
   2. The libload export table (src/functable.s) is the build-filtered
      surface: manifest functions that were visible at compile time.
@@ -30,7 +30,7 @@ and see exactly the surface they can link against via libload.
 
 Run from repo root:
 
-    python3 build-tools/header_dump.py
+    python3 build-tools/scripts/header_dump.py
 
 A build must have been run first so obj/src/**/*.o exists; otherwise
 the script can't tell which functions are actually defined.
@@ -76,11 +76,12 @@ for _candidate in _libclang_candidates:
         break
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BUILD_TOOLS_DIR = REPO_ROOT / "build-tools"
 SRC_DIR = REPO_ROOT / "src"
 OBJ_DIR = REPO_ROOT / "obj" / "src"
 FUNCTABLE_S = SRC_DIR / "functable.s"
-PUBLIC_API_MANIFEST = REPO_ROOT / "build-tools" / "public_api_manifest.csv"
+PUBLIC_API_MANIFEST = BUILD_TOOLS_DIR / "meta" / "public_api_manifest.csv"
 CONN_SRC = SRC_DIR / "lwIP.h"
 TLS_INCLUDES = SRC_DIR / "tls" / "includes"
 
@@ -90,10 +91,10 @@ OUT_CORE_INDEX = OUT_ROOT / "lwip.h"
 OUT_CRYPTO_INDEX = OUT_ROOT / "cryptography.h"
 
 # The conn convenience API is inlined directly at the TOP of lwip.h so it is
-# the visibly-preferred surface (not buried among lwip/core/*.h). This holds
+# the visibly-preferred surface (not buried among the core headers). This holds
 # its pruned body between emit time and umbrella assembly.
 _CONN_BODY: str = ""
-DOCSTRING_CACHE_DIR = REPO_ROOT / "build-tools" / ".docstring_cache"
+DOCSTRING_CACHE_DIR = BUILD_TOOLS_DIR / ".docstring_cache"
 DOCSTRING_PROMPT_VERSION = 1
 DOCSTRING_STATE_FILE = DOCSTRING_CACHE_DIR / "release_tree_state.json"
 RELEASE_SOURCE_MAP_FILE = DOCSTRING_CACHE_DIR / "release_header_sources.json"
@@ -335,7 +336,7 @@ def source_dependency_closure(initial_headers: list[Path]) -> list[Path]:
         TLS_INCLUDES.resolve(),
         # Contrib x25519 ships tls_x25519_publickey/_secret as public API;
         # its header lives outside src/tls/includes but is part of the
-        # exported surface (see build-tools/public_api_manifest.csv).
+        # exported surface (see build-tools/meta/public_api_manifest.csv).
         (SRC_DIR / "tls" / "contrib" / "x25519" / "src").resolve(),
     ]
 
@@ -1871,7 +1872,7 @@ def write_group_index(group: str, names: list[str], source_headers: list[Path]) 
             " * lwIP-CE connection API — the preferred high-level surface.",
             " * Inlined here (rather than a buried subheader) because this is",
             " * the API most apps should use: lwip_conn_create / _connect /",
-            " * _write / _recv / _close. The lwip/core/*.h includes above expose",
+            " * _write / _recv / _close. The core includes above expose",
             " * the lower-level lwIP primitives for advanced use.",
             " * ================================================================ */",
             "",
@@ -1907,7 +1908,7 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
 
     Layout is intentionally small:
       - lwip.h leads with the pruned src/lwIP.h conn API (inlined), then
-        includes lwip/core/*.h (every other lwIP/public header).
+        includes every other lwIP/public core header.
       - cryptography.h includes lwip/cryptography/*.h (TLS/crypto headers).
     """
     by_group_source: dict[str, dict[str, list[str]]] = {}

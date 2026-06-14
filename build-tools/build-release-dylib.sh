@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$BUILD_TOOLS_DIR/.." && pwd)"
 
 DEPS_DIR="${LWIP_DEPS_DIR:-$ROOT_DIR/submodules}"
 APP_TOOLS_DIR="${APP_TOOLS_DIR:-$DEPS_DIR/app_tools}"
@@ -14,7 +15,7 @@ APP_TOOLS_REPO="${APP_TOOLS_REPO:-https://github.com/CE-Programming/app_tools.gi
 APP_TOOLS_REF="${APP_TOOLS_REF:-master}"
 TOOLCHAIN_REPO="${TOOLCHAIN_REPO:-https://github.com/CE-Programming/toolchain.git}"
 TOOLCHAIN_REF="${TOOLCHAIN_REF:-master}"
-APP_TOOLS_PATCH="$ROOT_DIR/build-tools/patches/app_tools-installer-lwip.patch"
+APP_TOOLS_PATCH="$BUILD_TOOLS_DIR/patches/app_tools-installer-lwip.patch"
 
 DYLIB_APPVAR_PREFIX="${DYLIB_APPVAR_PREFIX:-LWIP}"
 DYLIB_APPVAR_SPLIT_SIZE="${DYLIB_APPVAR_SPLIT_SIZE:-65200}"
@@ -219,17 +220,17 @@ stage_ignore_in_toolchain
 log "creating staged toolchain package at $STAGE_DIR"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
-cp "$ROOT_DIR/build-tools/lwip-libload.makefile" "$STAGE_DIR/makefile"
+cp "$BUILD_TOOLS_DIR/meta/lwip-libload.makefile" "$STAGE_DIR/makefile"
 
 log "generating export table and libload stub"
-LWIP_RELEASE_DIR="$STAGE_DIR" python3 "$ROOT_DIR/build-tools/functable.py" --append
+LWIP_RELEASE_DIR="$STAGE_DIR" python3 "$BUILD_TOOLS_DIR/scripts/functable.py" --append
 
 log "building lwIP-CE app"
 CEDEV="$CEDEV_DIR" LIBLOAD_LIBS="$(root_libload_libs_without_lwip)" \
     make -C "$ROOT_DIR" "$ROOT_MAKE_TARGET"
 
 log "generating curated headers"
-LWIP_RELEASE_DIR="$STAGE_DIR" "$HEADER_PYTHON_PATH" "$ROOT_DIR/build-tools/header_dump.py"
+LWIP_RELEASE_DIR="$STAGE_DIR" "$HEADER_PYTHON_PATH" "$BUILD_TOOLS_DIR/scripts/header_dump.py"
 
 log "splitting app into installer AppVars"
 "$CONVBIN_PATH" --iformat 8ek --input "$ROOT_DIR/bin/lwIP.8ek" \

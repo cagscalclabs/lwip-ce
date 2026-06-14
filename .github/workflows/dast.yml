@@ -4,7 +4,7 @@ name: DAST
 # summary and fails the run if any probe was graded "fail".
 #
 # The report itself is produced OUT OF BAND, by an operator running
-# build-tools/lwip-dast.sh --ip <calc> against a calc on a live network
+# build-tools/dast/lwip-dast.sh --ip <calc> against a calc on a live network
 # (the calc runs the paired harness in tests/profiling/lwip_dast). Crash vs
 # abort is a human judgement, so generation can't run in CI — this workflow
 # is the gate/visibility layer over whatever report was committed.
@@ -13,12 +13,12 @@ on:
   push:
     paths:
       - 'tests/dast.json'
-      - 'build-tools/dast_report.py'
+      - 'build-tools/dast/dast_report.py'
       - '.github/workflows/dast.yml'
   pull_request:
     paths:
       - 'tests/dast.json'
-      - 'build-tools/dast_report.py'
+      - 'build-tools/dast/dast_report.py'
       - '.github/workflows/dast.yml'
   workflow_dispatch:
 
@@ -41,4 +41,4 @@ jobs:
 
       - name: Render report to job summary and gate on failures
         run: |
-          python3 build-tools/dast_report.py --summary "$GITHUB_STEP_SUMMARY"
+          python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"

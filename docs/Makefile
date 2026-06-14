@@ -19,7 +19,7 @@ doxygen: release-headers
 	$(DOXYGEN) Doxyfile
 
 release-headers:
-	cd .. && LWIP_RELEASE_DIR="$(abspath $(LWIP_RELEASE_DIR))" $(HEADER_PYTHON) build-tools/header_dump.py
+	cd .. && LWIP_RELEASE_DIR="$(abspath $(LWIP_RELEASE_DIR))" $(HEADER_PYTHON) build-tools/scripts/header_dump.py
 
 whitepaper-pdf:
 	@mkdir -p "_static"

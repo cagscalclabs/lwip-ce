@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # lwIP-CE DAST harness launcher.
 #
-#   ./build-tools/lwip-dast.sh --ip 192.168.1.42 [--iface en0] [--settle 1.0]
+#   ./build-tools/dast/lwip-dast.sh --ip 192.168.1.42 [--iface en0] [--settle 1.0]
 #
 # Sends malformed/overflow/flood probes (scapy) at a calc running the
 # paired calc-side harness in tests/profiling/lwip_dast, prompts the
 # operator for what the calc did, grades each test, and writes
-# tests/dast.json. See build-tools/lwip-dast.py for details.
+# tests/dast.json. See build-tools/dast/lwip-dast.py for details.
 #
 # Raw packet crafting needs root / CAP_NET_RAW; the script re-execs under
 # sudo if not already privileged (override with DAST_NO_SUDO=1).
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNNER="$ROOT_DIR/build-tools/lwip-dast.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+RUNNER="$SCRIPT_DIR/lwip-dast.py"
 PYTHON="${DAST_PYTHON:-python3}"
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }

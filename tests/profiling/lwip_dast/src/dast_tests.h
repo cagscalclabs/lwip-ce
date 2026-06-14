@@ -1,6 +1,6 @@
 /* AUTO-GENERATED from tests/profiling/lwip_dast/dast_tests.json.
  * Do not edit by hand; run:
- *     python3 build-tools/lwip-dast.py --gen-header
+ *     python3 build-tools/dast/lwip-dast.py --gen-header
  * Keeps the calc-side harness in lockstep with the probe runner. */
 #ifndef LWIP_DAST_TESTS_H
 #define LWIP_DAST_TESTS_H
