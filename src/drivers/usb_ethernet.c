@@ -121,6 +121,20 @@ static inline void eth_transfer_ended(eth_device_t *dev)
  * from a small intrusive list of dead-pending devices. */
 static eth_device_t *g_dead_devices = NULL; /* singly-linked via ->dead_next */
 
+static void eth_free_device_storage(eth_device_t *dev)
+{
+    if (!dev)
+    {
+        return;
+    }
+    if (dev->rx_ring)
+    {
+        mem_buffer_destroy(dev->rx_ring);
+        dev->rx_ring = NULL;
+    }
+    free(dev);
+}
+
 static void eth_reap_dead_devices(void)
 {
     eth_device_t **pp = &g_dead_devices;
@@ -130,12 +144,7 @@ static void eth_reap_dead_devices(void)
         if (dev->pending_transfers == 0)
         {
             *pp = dev->dead_next;
-            if (dev->rx_ring)
-            {
-                mem_buffer_destroy(dev->rx_ring);
-                dev->rx_ring = NULL;
-            }
-            free(dev);
+            eth_free_device_storage(dev);
         }
         else
         {
@@ -384,7 +393,19 @@ void eth_finish_shutdown(void)
             mem_buffer_destroy(dev->rx_ring);
             dev->rx_ring = NULL;
         }
+        free(dev);
         netif = next;
+    }
+
+    /* The dispatcher normally reaps disconnected devices once transfer
+     * callbacks drain. During lwip_stop the dispatcher is stopped before USB
+     * cleanup; after usb_Cleanup returns no callbacks can fire, so force-free
+     * anything still sitting on the dead list. */
+    while (g_dead_devices)
+    {
+        eth_device_t *dev = g_dead_devices;
+        g_dead_devices = dev->dead_next;
+        eth_free_device_storage(dev);
     }
 }
 
@@ -1067,11 +1088,17 @@ static void eth_link_callback(struct netif *netif)
     {
         return;
     }
-    if (eth_is_shutting_down((eth_device_t *)netif->state))
+    eth_device_t *dev = (eth_device_t *)netif->state;
+    if (eth_is_shutting_down(dev))
     {
         return;
     }
-    if (!netif_is_link_up(netif))
+    if (netif_is_link_up(netif))
+    {
+        eth_promote_default_if_needed(netif);
+        eth_arm_dhcp_once(dev);
+    }
+    else
     {
         lwip_teardown_abort_pcbs_on_netif(netif);
     }
@@ -1086,11 +1113,17 @@ static void eth_status_callback(struct netif *netif)
     {
         return;
     }
-    if (eth_is_shutting_down((eth_device_t *)netif->state))
+    eth_device_t *dev = (eth_device_t *)netif->state;
+    if (eth_is_shutting_down(dev))
     {
         return;
     }
-    if (!netif_is_up(netif))
+    if (netif_is_up(netif))
+    {
+        eth_promote_default_if_needed(netif);
+        eth_arm_dhcp_once(dev);
+    }
+    else
     {
         lwip_teardown_abort_pcbs_on_netif(netif);
     }
@@ -1147,7 +1180,6 @@ static void eth_arm_dhcp_once(eth_device_t *dev)
         return;
     }
 
-    dev->dhcp_auto_started = true;
     if (!eth_dhcp_client_running(netif))
     {
         err_t err = dhcp_start(netif);
@@ -1156,8 +1188,10 @@ static void eth_arm_dhcp_once(eth_device_t *dev)
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
                         ("dhcp_start failed on %c%c%u: %d",
                          netif->name[0], netif->name[1], netif->num, err));
+            return;
         }
     }
+    dev->dhcp_auto_started = true;
 #else
     (void)dev;
 #endif

@@ -75,6 +75,7 @@ static struct lwip_conn *g_conn_registry = NULL;
 
 static void lwip_stack_cleanup(void);
 static void lwip_fatal_cleanup(void);
+static void lwip_membuffers_release(void);
 static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags);
 static struct netif *find_external_netif(void);
 static bool netif_has_usable_ipv4(const struct netif *n);
@@ -109,6 +110,7 @@ bool lwip_start(void)
     if (lwip_init() != ERR_OK)
     {
         g_lwip_start_error = 1;
+        lwip_membuffers_release();
         return false;
     }
     /* USB init via usb_fn so the libload build resolves through
@@ -549,6 +551,19 @@ static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags)
 {
     if (!n) return LWIP_OK;
 
+#if LWIP_DHCP
+    if ((svc_flags & LWIP_CONN_SVC_DHCP) &&
+        netif_is_up(n) && netif_is_link_up(n) &&
+        !dhcp_client_running(n))
+    {
+        err_t err = dhcp_start(n);
+        if (err != ERR_OK)
+        {
+            return lwip_err_translate(err);
+        }
+    }
+#endif
+
 #if LWIP_DNS
     if (svc_flags & LWIP_CONN_SVC_DNS)
     {
@@ -724,6 +739,11 @@ static lwip_conn_services_state_t services_check(struct lwip_conn *conn,
     if (conn->flags & LWIP_CONN_SVC_DHCP)
     {
         if (!dhcp_client_running(conn->netif))
+        {
+            if (err_out) *err_out = LWIP_ERR_NETIF;
+            return LWIP_CONN_SERVICES_WAIT;
+        }
+        if (!dhcp_supplied_address(conn->netif))
         {
             if (err_out) *err_out = LWIP_ERR_NETIF;
             return LWIP_CONN_SERVICES_WAIT;

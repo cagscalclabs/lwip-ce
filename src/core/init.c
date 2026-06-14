@@ -361,6 +361,10 @@ lwip_init(void)
         if (cap < floor) cap = floor;
         void *free_block = NULL;
         size_t free_ram = os_MemChk(&free_block);
+        if (free_ram < floor)
+        {
+            return ERR_MEM;
+        }
         if (cap > free_ram) cap = free_ram;
         if (!mem_init(cap,
                       fn_imports_table.malloc,
@@ -375,10 +379,14 @@ lwip_init(void)
             {LWIP_MEMPOOL_PBUF_BLOCK, LWIP_MEMPOOL_PBUF_COUNT, 0,
              BUFFER_LWIP_PBUF_POOL}
         };
-        mem_buffer_lwip_init_pools(
+        if (!mem_buffer_lwip_init_pools(
             pools,
             sizeof(pools) / sizeof(pools[0])
-        );
+        ))
+        {
+            mem_buffer_lwip_release_pools();
+            return ERR_MEM;
+        }
     }
 #ifndef LWIP_SKIP_CONST_CHECK
   int a = 0;

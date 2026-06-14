@@ -1734,14 +1734,16 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
         return false;
     }
 
+    /* Re-initialization can happen after a failed stack start or a manual
+     * lwip_init retry. Release any previous pools before clearing the registry;
+     * otherwise the old pbuf pool becomes unreachable and permanently leaks. */
+    mem_buffer_lwip_release_pools();
+
     if (pool_count > MEM_LWIP_MAX_POOLS)
     {
         pool_count = MEM_LWIP_MAX_POOLS;
     }
 
-    memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
-    g_lwip_pool_count = 0;
-    g_lwip_pbuf_pool = NULL;
     for (size_t i = 0; i < pool_count; i++)
     {
         const struct mem_buffer_pool_cfg *cfg = &pools[i];
