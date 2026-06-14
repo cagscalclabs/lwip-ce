@@ -173,6 +173,7 @@ static void inject_key(uint16_t key) {
  * Clears any stale OS key/scancode state first (e.g. after a prior csc) and
  * gives the OS ample time to consume each token so a second launch in a
  * session is reliable. */
+static void do_screenshot(const char *path);
 static void launch_program(const char *name, bool is_asm) {
     /* Drain stale key state: clear the kbd "key ready" + scancode-ready flags
      * so the first injected key is not dropped. (CE_kbdFlags 0xD00080 bit3,
@@ -181,6 +182,14 @@ static void launch_program(const char *name, bool is_asm) {
     mem_poke_byte(0xD00080, mem_peek_byte(0xD00080) & ~(1 << 3));
     run_until_trap(500);
 
+    /* Two CLEARs: a prior launch leaves its "Asm(prgmNAME" command line in the
+     * home-screen edit buffer. One CLEAR wipes the line content; a second
+     * CLEAR (harmless on an already-empty line) guarantees we start typing on a
+     * fresh entry line, so the new name isn't appended to the stale one and
+     * mis-parsed into a RAM-clearing bad command. Required for reliable
+     * second-and-later launches in a single session. */
+    inject_key(CE_KEY_CLEAR);
+    run_until_trap(500);
     inject_key(CE_KEY_CLEAR);
     run_until_trap(500);
     if (is_asm) inject_key(CE_KEY_ASM);

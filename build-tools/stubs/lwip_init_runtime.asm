@@ -40,13 +40,19 @@ lwip_init_runtime_opaque:
 	;or a
 	;jp z, .app_missing
 
-	cp a, ti.AppObj
-	ld hl, __lwip_app_name
 	push hl
-	call ti.FindAppStart
+	ld hl, -1
+	ld (hl), 2
 	pop hl
-	jp c, .app_missing
+	; ld a, ti.AppObj
+	ld hl, __lwip_app_name
+	call ti.FindAppStart
+	jr nc, .app_found
+	pop ix
+	ld a, 1
+	ret
 
+.app_found:
 	; CE app metadata at app_base + 0x112 stores the offset to the linked
 	; image after the relocation table. The linked image starts 0x100 bytes
 	; after the CE app header, so:
@@ -140,9 +146,6 @@ lwip_init_runtime_opaque:
 	ld a, 0
 	ret
 
-.app_missing:
-	ld a, 1
-	jr .fail
 .table_fail:
 	ld a, 2
 	jr .fail
