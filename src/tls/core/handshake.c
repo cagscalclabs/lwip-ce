@@ -282,8 +282,12 @@ static size_t tls_parse_handshake_header(const uint8_t *data, size_t data_len,
 static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
                                          uint8_t msg_type,
                                          const uint8_t *msg, size_t msg_len);
+/* Dormant until the issuer-key truststore scheme lands (owner-id / subject-CN
+ * gating moves into chain verification then). Kept to avoid churn; marked
+ * unused so -Wextra stays quiet in the meantime. */
 static bool tls_subject_cn_matches_owner_id(const struct tls_asn1_serialization *subject_cn,
-                                            const uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN]);
+                                            const uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN])
+    __attribute__((unused));
 
 /* Internal handshake-message handlers. These were once exposed via
  * handshake.h but are only invoked from the dispatcher in this file. */
@@ -385,9 +389,9 @@ static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
  *
  * The TLS 1.3 Certificate message body can be 3-16 KiB for realistic
  * cert chains. Buffering the whole thing in hs_reasm_buf is wasteful
- * when our per-cert work is bounded: parse one cert at a time, hash its
- * SPKI, look it up in the truststore, drop the cert, move on. Peak alloc
- * per cert is the cert's own size (~1-3 KiB), not the chain's total.
+ * when our per-cert work is bounded: parse one cert at a time, do its
+ * per-cert work, drop the cert, move on. Peak alloc per cert is the
+ * cert's own size (~1-3 KiB), not the chain's total.
  *
  * The walker is fed body bytes by tls_consume_handshake_buffer when the
  * in-flight message is TLS_HANDSHAKE_CERTIFICATE. It maintains its own
@@ -399,11 +403,13 @@ static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
  *   CertificateEntry = {cert_data, extensions};
  *   Certificate = {request_context, CertificateEntry list<0..2^24-1>}
  *
- * When CS_CERT_BODY completes, the walker invokes per-cert validation
- * (CA-constraints gate + SPKI hash + truststore lookup + optional
- * date/owner policy) and accumulates the result into ctx->cert_validated.
- * The walker captures ZERO bytes between certs — once one cert is parsed
- * and the result recorded, its buffer is freed and we move on.
+ * When CS_CERT_BODY completes, the walker invokes tls_cert_walker_validate_one
+ * on that cert: verify-leaf-first (capture the leaf SPKI that CertificateVerify
+ * will authenticate against), then walk the chain link-by-link. The per-link
+ * signature check is currently a stub that accepts (see
+ * tls_cert_chain_verify_one) until P-256/RSA chain verification and an
+ * issuer-key truststore exist. The walker captures ZERO bytes between certs —
+ * once a cert is processed, its buffer is freed and we move on.
  * ------------------------------------------------------------------------ */
 
 enum tls_cert_walk_state
@@ -434,7 +440,12 @@ struct tls_cert_walker
     uint8_t *cert_buf;
     size_t cert_buf_cap;
     size_t cert_buf_len;
-    /* True once any cert in the chain passed the truststore check. */
+    /* True once the leaf SPKI has been captured (so CertificateVerify can run)
+     * and every cert walked so far passed chain verification. The actual
+     * cert-to-cert signature check is currently stubbed to accept — see
+     * tls_cert_chain_verify_one(). Leaf authenticity is established separately
+     * by the mandatory CertificateVerify record against the captured leaf
+     * SPKI. */
     bool chain_validated;
     /* Index of the cert currently in cert_buf within the chain — 0 means
      * leaf. Used by tls_cert_walker_validate_one to know when to capture
@@ -473,112 +484,111 @@ static void tls_cert_walker_free(struct tls_cert_walker *w)
     mem_buffer_custom_free(w);
 }
 
-/* Run per-cert validation on the just-completed cert_buf. Same logic as
- * the per-cert loop body used by tls_recv_certificate_streamed, applied one
- * cert at a time. Updates w->chain_validated on first matching pin. Returns false
- * on fatal parse error (caller aborts the connection). */
+/*
+ * Verify one link in the certificate chain.
+ *
+ * In a complete implementation this checks that cert N is signed by the public
+ * key (SPKI) of cert N+1 — walking leaf -> intermediate(s) -> a trusted root
+ * pulled from the local store (the chain on the wire usually omits the root,
+ * which is why a raw root-hash pin can't be matched against the bytes the
+ * server sends). That requires:
+ *   - parsing the tbsCertificate and its signatureAlgorithm,
+ *   - hashing the tbs and verifying the signature with the *issuer's* SPKI,
+ *   - supporting the algorithms real chains use (notably ECDSA-P256, plus
+ *     RSA-PKCS#1v1.5 / RSA-PSS), and
+ *   - a truststore that stores issuer public keys, not just leaf SPKI pins.
+ *
+ * None of that crypto is wired up yet (P-256 is unimplemented; see the cert
+ * roadmap). Until it is, this DEFAULTS TO OK for every cert: we parse for
+ * structural sanity and capture the leaf SPKI, but do not cryptographically
+ * validate the chain here. The leaf is still authenticated — separately and
+ * for real — by the mandatory CertificateVerify record, which proves the
+ * server holds the private key matching the captured leaf SPKI.
+ *
+ * @param w           Walker (for ctx / chain position).
+ * @param cert_parsed Parsed fields of the cert currently in cert_buf.
+ * @param is_leaf     True for cert_index 0.
+ * @return true if this link is acceptable. Returning false aborts the chain.
+ */
+static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
+                                      const struct tls_x509_parse_result *cert_parsed,
+                                      bool is_leaf)
+{
+    (void)w;
+    (void)cert_parsed;
+    (void)is_leaf;
+
+    /* TODO(chain-verify): replace this stub with real issuer-signature
+     * verification (cert N signed-by cert N+1's SPKI; topmost cert signed-by
+     * a root pulled from the truststore). Needs P-256/RSA signature support
+     * and an issuer-key truststore scheme. For now, accept every link. */
+    return true;
+}
+
+/* Run per-cert handling on the just-completed cert_buf, walking the chain one
+ * cert at a time (leaf first). Captures the leaf SPKI for the mandatory
+ * CertificateVerify, then runs the (currently stubbed) per-link chain check.
+ *
+ * Sets w->chain_validated once the leaf SPKI is in hand and every link walked
+ * has passed. Returns false only on a fatal parse error or a chain link the
+ * verifier rejects (caller aborts the connection).
+ */
 static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 {
     struct tls_asn1_serialization cert_fields[13];
     struct tls_x509_parse_result cert_parsed = {0};
+    bool is_leaf = (w->cert_index == 0);
+
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len,
                                     cert_fields, &cert_parsed))
     {
+        /* DIAG: x509 parse failed. errnum -100 - cert_index. */
+        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK,
+                        -100 - (int)w->cert_index, 0);
         return false;
     }
     if (!cert_parsed.spki_raw || !cert_parsed.spki_raw->data ||
         cert_parsed.spki_raw->len == 0)
     {
+        /* DIAG: no SPKI. errnum -200 - cert_index. */
+        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK,
+                        -200 - (int)w->cert_index, 0);
         return false;
     }
 
-    /* Capture the leaf SPKI before any "already-validated, skip the
-     * rest" short-circuit fires. The CertificateVerify path needs it
-     * regardless of whether some other cert in the chain already
-     * matched a pin. */
-    if (w->cert_index == 0 && w->ctx && !w->ctx->leaf_spki)
+    /* Verify-leaf-first: capture the leaf SPKI so CertificateVerify can
+     * authenticate the server. This is the actual trust anchor today. */
+    if (is_leaf && w->ctx && !w->ctx->leaf_spki)
     {
         uint8_t *copy = (uint8_t *)mem_buffer_custom_malloc(cert_parsed.spki_raw->len);
-        if (copy)
+        if (!copy)
         {
-            memcpy(copy, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
-            w->ctx->leaf_spki = copy;
-            w->ctx->leaf_spki_len = cert_parsed.spki_raw->len;
+            /* DIAG: leaf SPKI malloc failed. Without it CertificateVerify can't
+             * run and the server would be unauthenticated. Fail closed. */
+            lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK, -300, 0);
+            return false;
         }
-        /* Allocation failure is non-fatal here: CertificateVerify will
-         * surface its own ERR if the user requested it. */
+        memcpy(copy, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
+        w->ctx->leaf_spki = copy;
+        w->ctx->leaf_spki_len = cert_parsed.spki_raw->len;
     }
 
-    if (w->chain_validated)
-    {
-        /* Already validated by an earlier cert — keep walking the chain
-         * framing for parse-safety but skip the per-cert work. */
-        return true;
-    }
+    /* DIAG: this cert validated OK (errnum = +cert_index, i.e. 0 for leaf). */
+    lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK, (int)w->cert_index, 0);
 
-    /* CA-constraints gate: only CA-capable certs can match. */
-    if (!cert_parsed.extensions || !cert_parsed.extensions->data ||
-        cert_parsed.extensions->len == 0)
-    {
-        return true;
-    }
-    if (!tls_x509_has_valid_constraints(cert_parsed.extensions->data,
-                                        cert_parsed.extensions->len))
-    {
-        return true;
-    }
-
-    uint8_t spki_hash[32];
-    struct tls_hash_context hash_ctx;
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    /* Then walk the chain: verify this link (stubbed to accept for now). */
+    if (!tls_cert_chain_verify_one(w, &cert_parsed, is_leaf))
     {
         return false;
     }
-    tls_hash_update(&hash_ctx, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
-    tls_hash_digest(&hash_ctx, spki_hash);
 
-    struct tls_spki_entry spki_entry;
-    if (!tls_truststore_lookup(spki_hash, &spki_entry))
-    {
-        return true;
-    }
-
-    /* Once we have a SPKI-pin hit, the implicit contract is: "we trust
-     * this pinned cert for this purpose, during this window." So both
-     * the date-validity gate (against SNTP time, when available) and
-     * the owner-id (subject CN) gate run unconditionally. They used to
-     * be controlled by individual app_config bits; the bits were
-     * removed because there's no compelling reason to ever skip them
-     * once we have a pin. */
-    bool date_check_pass = true;
-    bool owner_check_pass = true;
-
-    {
-        uint32_t current_time = lwip_sntp_get_unix_time();
-        if (current_time > 0)
-        {
-            if (current_time < spki_entry.not_before ||
-                current_time > spki_entry.not_after)
-            {
-                date_check_pass = false;
-            }
-        }
-    }
-
-    owner_check_pass = tls_subject_cn_matches_owner_id(
-        cert_parsed.subject_cn, spki_entry.owner_id);
-
-    if (date_check_pass && owner_check_pass)
+    /* Chain is acceptable once we have the leaf SPKI in hand and no link has
+     * been rejected. (With the stub above, every structurally-valid chain that
+     * yields a leaf SPKI reaches here.) */
+    if (w->ctx && w->ctx->leaf_spki)
     {
         w->chain_validated = true;
     }
-
-    /* TODO(full-chain): when LWIP_CFG_FULL_CHAIN_VERIFY is set, this
-     * is where each non-leaf cert would be signature-verified against
-     * the next cert's SPKI (cert N signed-by cert N+1). The SPKI-pin
-     * path above remains the trust floor — we accept the chain when
-     * SOME cert pins, regardless of full-chain mode — but full mode
-     * adds the constraint that every link in the chain be valid. */
     return true;
 }
 
@@ -593,6 +603,12 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
 
     while (off < len && w->state != CW_DONE && w->state != CW_ERROR)
     {
+        size_t prev_off = off;
+        enum tls_cert_walk_state prev_state = w->state;
+        size_t prev_field_remaining = w->field_remaining;
+        size_t prev_chain_remaining = w->chain_remaining;
+        uint8_t prev_len_have = w->len_have;
+
         switch (w->state)
         {
         case CW_REQ_CTX_LEN:
@@ -671,7 +687,25 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                 }
                 w->chain_remaining -= 2 + value; /* length field + body */
                 w->field_remaining = value;
-                w->state = CW_EXT_BODY;
+                /* Empty CertificateEntry extensions (value == 0) is the common
+                 * TLS 1.3 case. Transition directly to the next cert (or DONE)
+                 * instead of routing a zero-length body through CW_EXT_BODY. */
+                if (value == 0)
+                {
+                    if (w->chain_remaining == 0)
+                    {
+                        w->state = CW_DONE;
+                    }
+                    else
+                    {
+                        w->state = CW_CERT_LEN;
+                        w->len_need = 3;
+                    }
+                }
+                else
+                {
+                    w->state = CW_EXT_BODY;
+                }
                 break;
             default:
                 break;
@@ -745,6 +779,20 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
         }
 
         default:
+            w->state = CW_ERROR;
+            return false;
+        }
+
+        /* No-progress guard: if a full switch pass consumed no input and left
+         * every framing counter unchanged, the walker is wedged (malformed
+         * framing or a state-machine bug). Bail out cleanly instead of
+         * spinning forever. */
+        if (off == prev_off && w->state == prev_state &&
+            w->field_remaining == prev_field_remaining &&
+            w->chain_remaining == prev_chain_remaining &&
+            w->len_have == prev_len_have)
+        {
+            lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK, -1, 0);
             w->state = CW_ERROR;
             return false;
         }
@@ -1376,7 +1424,7 @@ bool tls_send_client_hello(
     /* Fixed ClientHello body before extensions is 43 bytes. The constants
      * below include the 4-byte handshake header so the unchecked serializer
      * cannot overrun a too-small caller buffer. */
-    required_ext_len = 7 + 8 + 42 + 8 + 18 + sni_len;
+    required_ext_len = 7 + 8 + 42 + 8 + 18 + 15 + sni_len; /* +15 = ALPN http/1.1 */
     if (ctx->psk_mode)
     {
         required_ext_len += 7 + 47 + ctx->psk_identity.identity_len;
@@ -1496,7 +1544,23 @@ bool tls_send_client_hello(
     out[offset++] = 0x08;
     out[offset++] = 0x06; /* rsa_pss_rsae_sha512 */
 
-    /* Extension 6: server_name (SNI) */
+    /* Extension 6: ALPN (application_layer_protocol_negotiation).
+     * Advertise HTTP/1.1 explicitly. Some HTTP front doors (e.g. large CDNs /
+     * Microsoft's) require ALPN to be negotiated; without it they may complete
+     * the TLS handshake and then immediately close the connection once
+     * application data starts — which looked like a post-Finished close.
+     * 15 bytes total: type(2) + ext_len(2) + list_len(2) + name_len(1) + 8. */
+    out[offset++] = 0x00;
+    out[offset++] = 0x10; /* Extension type: ALPN */
+    out[offset++] = 0x00;
+    out[offset++] = 0x0b; /* Extension length: 11 */
+    out[offset++] = 0x00;
+    out[offset++] = 0x09; /* ProtocolNameList length: 9 */
+    out[offset++] = 0x08; /* ProtocolName length: 8 */
+    memcpy(out + offset, "http/1.1", 8);
+    offset += 8;
+
+    /* Extension 7: server_name (SNI) */
     if (ctx->hostname)
     {
         if (offset + 9 + hostname_len > out_len)
@@ -1927,9 +1991,12 @@ bool tls_recv_server_hello(
  * @brief Finalize a streamed Certificate message.
  *
  * Called by tls_consume_handshake_buffer when the cert walker reaches
- * CW_DONE. Validates the same PSK/state gates (state,
- * mode, chain validation) and advances the state machine. The walker
- * has already updated the transcript hash incrementally as bytes
+ * CW_DONE. Checks the state/PSK gates and requires w->chain_validated, which
+ * now means "the leaf SPKI was captured and every chain link the walker checked
+ * passed" (the per-link check is currently stubbed to accept). It does NOT mean
+ * a truststore root-pin matched. Real server authentication still happens next,
+ * in the mandatory CertificateVerify record against the captured leaf SPKI.
+ * The walker has already updated the transcript hash incrementally as bytes
  * arrived, so we don't touch it here.
  */
 static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,

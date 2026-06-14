@@ -1249,16 +1249,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 if ((size_t)state->rx->tot_len < total_len)
                 {
                     /* Record split across TCP segments — wait for the rest.
-                     * Large messages (Certificate) commonly land here. We emit
-                     * the full record size (rec_rx errnum = total_len) so the
-                     * needed buffer size is known, plus the bytes still MISSING
-                     * (rec_partial errnum = total_len - have), which should
-                     * shrink toward 0 each segment. If `missing` plateaus above
-                     * 0, state->rx can't grow to hold the whole record (pbuf
-                     * pool / heap ceiling) — that's the real cap to raise. */
-                    tls_vdbg(LWIP_DBG_TLS_REC_RX, (int)total_len);
-                    tls_vdbg(LWIP_DBG_TLS_REC_PARTIAL,
-                             (int)(total_len - (size_t)state->rx->tot_len));
+                     * Large messages (Certificate) commonly land here. */
                     break;
                 }
 
@@ -1277,7 +1268,6 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                 if (header[0] == TLS_CONTENT_TYPE_APPLICATION_DATA)
                 {
-                    tls_vdbg(LWIP_DBG_TLS_REC_RX, 0);
                     bool use_hs_keys = (state->tls_ctx.state >= TLS_STATE_HANDSHAKE_KEYS_DERIVED &&
                                         state->tls_ctx.state < TLS_STATE_HANDSHAKE_COMPLETE);
                     struct pbuf *dec_pbuf = NULL;

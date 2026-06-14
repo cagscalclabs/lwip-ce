@@ -1200,6 +1200,78 @@ bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t *ct, s
 }
 
 #define AES_BLOCKSIZE 16
+
+/*
+ * GCM CTR keystream XOR — the shared core of both streaming encrypt and
+ * decrypt. GCM encryption and decryption apply the *same* CTR keystream to the
+ * data (only the GHASH-vs-ciphertext ordering differs between the two), so this
+ * single routine handles both directions correctly across an arbitrary number
+ * of chunked calls.
+ *
+ * Streaming-state contract (struct _gcm_private):
+ *   - ctx->iv holds the counter block for the NEXT fresh keystream block to
+ *     generate (init leaves it at J0+1; we advance it as blocks are produced).
+ *   - last_block holds the most recently generated keystream block.
+ *   - last_block_len is how many bytes of last_block have ALREADY been consumed
+ *     (0..15). 0 means "no partial block pending — generate a fresh block for
+ *     the next byte". It never holds 16; a fully consumed block wraps to 0.
+ *
+ * This replaces the previous last_block/bytes_offset continuation, which had an
+ * off-by-one block loop (idx <= blocks), incoherent counter advance across
+ * chunk boundaries, and a size_t underflow in the per-iteration length — all of
+ * which desynced the keystream on the first non-block-aligned chunk (observed
+ * as a freeze right after the multi-chunk Certificate record was "decrypted"
+ * into garbage).
+ */
+static void gcm_ctr_xor(struct tls_aes_context *ctx,
+                        const uint8_t *in, uint8_t *out, size_t len)
+{
+    uint8_t *ks = ctx->private.gcm.last_block;
+    size_t consumed = ctx->private.gcm.last_block_len;
+    size_t i = 0;
+
+    /* 1. Drain any leftover keystream from a previously partial block. */
+    if (consumed != 0)
+    {
+        while (i < len && consumed < AES_BLOCK_SIZE)
+        {
+            out[i] = in[i] ^ ks[consumed];
+            i++;
+            consumed++;
+        }
+        if (consumed == AES_BLOCK_SIZE)
+        {
+            consumed = 0; /* block fully spent */
+        }
+        ctx->private.gcm.last_block_len = (uint8_t)consumed;
+        if (consumed != 0)
+        {
+            /* Ran out of input mid-block; leftover keystream stays cached. */
+            return;
+        }
+    }
+
+    /* 2. Generate fresh keystream blocks for the remaining input. */
+    while (i < len)
+    {
+        size_t take = MIN((size_t)AES_BLOCK_SIZE, len - i);
+
+        aes_encrypt_block(ctx->iv, ks, ctx);
+        increment_iv(ctx->iv, AES_GCM_NONCE_LEN, AES_GCM_CTR_LEN);
+
+        for (size_t j = 0; j < take; j++)
+        {
+            out[i + j] = in[i + j] ^ ks[j];
+        }
+        i += take;
+
+        /* If this block was only partially used, remember how much so the next
+         * chunk continues from the right keystream offset. */
+        ctx->private.gcm.last_block_len =
+            (take == AES_BLOCK_SIZE) ? 0 : (uint8_t)take;
+    }
+}
+
 // CRYPTO_FN
 bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
@@ -1225,49 +1297,22 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     {
     case TLS_AES_GCM:
     {
-
         uint8_t *tag = ctx->private.gcm.auth_tag;
 
-        blocks = (in_len / AES_BLOCK_SIZE);
-
-        size_t bytes_to_copy = ctx->private.gcm.last_block_len;
-        size_t bytes_offset = 0;
+        /* Close the AAD section on first encrypt: zero-pad the cached partial
+         * AAD block up to the GHASH boundary before any ciphertext is hashed. */
         if ((ctx->private.gcm.lock == LOCK_ALLOW_ALL) &&
             (ctx->private.gcm.aad_cache_len))
         {
-            // pad rest of aad cache with 0's
             tls_secure_memzero(buf, AES_BLOCK_SIZE);
             ghash(ctx, tag, buf, AES_BLOCK_SIZE - ctx->private.gcm.aad_cache_len);
         }
         ctx->private.gcm.lock = LOCK_ALLOW_ENCRYPT;
-        // xor last bytes of encryption buf w/ new plaintext for new ciphertext
-        if (bytes_to_copy % AES_BLOCK_SIZE)
-        {
-            bytes_offset = AES_BLOCK_SIZE - bytes_to_copy;
-            memcpy(outbuf, inbuf, bytes_offset);
-            xor_buf(&ctx->private.gcm.last_block[bytes_to_copy], outbuf, bytes_offset);
-            blocks = ((in_len - bytes_offset) / AES_BLOCK_SIZE);
-        }
 
-        // encrypt remaining plaintext
-        for (idx = 0; idx <= blocks; idx++)
-        {
-            bytes_to_copy = MIN(AES_BLOCK_SIZE, in_len - bytes_offset - (idx * AES_BLOCK_SIZE));
-            // bytes_to_pad = AES_BLOCK_SIZE-bytes_to_copy;
-            memcpy(&outbuf[idx * AES_BLOCK_SIZE + bytes_offset], &inbuf[idx * AES_BLOCK_SIZE + bytes_offset], bytes_to_copy);
-            // memset(&buf[bytes_to_copy], 0, bytes_to_pad);
-            // if bytes_to_copy is less than blocksize, do nothing, since msg is truncated anyway
-            aes_encrypt_block(iv, buf, ctx);
-            xor_buf(buf, &outbuf[idx * AES_BLOCK_SIZE + bytes_offset], bytes_to_copy);
-            increment_iv(iv, AES_GCM_NONCE_LEN, AES_GCM_CTR_LEN); // increment iv for continued use
-            if (idx == blocks)
-            {
-                memcpy(ctx->private.gcm.last_block, buf, AES_BLOCK_SIZE);
-                ctx->private.gcm.last_block_len = bytes_to_copy;
-            }
-        }
+        /* CTR-encrypt this chunk (correctly continues a partial keystream block
+         * left over from a previous chunk), then GHASH the produced ciphertext. */
+        gcm_ctr_xor(ctx, inbuf, outbuf, in_len);
 
-        // authenticate the ciphertext
         if (!tls_aes_update_ciphertext(ctx, outbuf, in_len))
             goto cleanup;
         break;
@@ -1328,37 +1373,15 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     {
     case TLS_AES_GCM:
     {
+        /* GHASH is computed over the ciphertext (the input), so hash first... */
         if (!tls_aes_update_ciphertext(ctx, inbuf, in_len))
             goto cleanup;
 
+        /* ...then CTR-decrypt into outbuf. Same keystream as encrypt; the helper
+         * continues a partial keystream block left over from a previous chunk. */
         if (outbuf)
         {
-            size_t bytes_to_copy = ctx->private.gcm.last_block_len;
-            size_t bytes_offset = 0;
-            if (bytes_to_copy % AES_BLOCK_SIZE)
-            {
-                bytes_offset = AES_BLOCK_SIZE - bytes_to_copy;
-                memcpy(outbuf, inbuf, bytes_offset);
-                xor_buf(&ctx->private.gcm.last_block[bytes_to_copy], outbuf, bytes_offset);
-                blocks = ((in_len - bytes_offset) / AES_BLOCK_SIZE);
-            }
-
-            // encrypt remaining plaintext
-            for (idx = 0; idx <= blocks; idx++)
-            {
-                bytes_to_copy = MIN(AES_BLOCK_SIZE, in_len - bytes_offset - (idx * AES_BLOCK_SIZE));
-                // bytes_to_pad = AES_BLOCK_SIZE-bytes_to_copy;
-                memcpy(&outbuf[idx * AES_BLOCK_SIZE + bytes_offset], &inbuf[idx * AES_BLOCK_SIZE + bytes_offset], bytes_to_copy);
-                // memset(&buf[bytes_to_copy], 0, bytes_to_pad);        // if bytes_to_copy is less than blocksize, do nothing, since msg is truncated anyway
-                aes_encrypt_block(iv, buf_in, ctx);
-                xor_buf(buf_in, &outbuf[idx * AES_BLOCK_SIZE + bytes_offset], bytes_to_copy);
-                increment_iv(iv, AES_GCM_NONCE_LEN, AES_GCM_CTR_LEN); // increment iv for continued use
-                if (idx == blocks)
-                {
-                    memcpy(ctx->private.gcm.last_block, buf_in, AES_BLOCK_SIZE);
-                    ctx->private.gcm.last_block_len = bytes_to_copy;
-                }
-            }
+            gcm_ctr_xor(ctx, inbuf, outbuf, in_len);
         }
         break;
     }

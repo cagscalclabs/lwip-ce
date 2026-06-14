@@ -15,8 +15,10 @@
 #define TLS_TIMEOUT_SECONDS 75
 
 static const char http_request[] =
-    "GET / HTTP/1.1\r\n"
+    "HEAD / HTTP/1.1\r\n"
     "Host: " TLS_HOST "\r\n"
+    "User-Agent: lwip-ce/0\r\n"
+    "Accept: */*\r\n"
     "Connection: close\r\n"
     "\r\n";
 
