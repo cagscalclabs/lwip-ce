@@ -226,6 +226,21 @@ static void dast_draw_test(int idx, const dast_test_t *t, bool open_ok)
     lwip_example_line("[enter] next  [clear] quit");
 }
 
+static uint8_t dast_line_y(uint8_t row)
+{
+    return (uint8_t)(LWIP_EXAMPLE_TOP + (row * lwip_example_line_h()));
+}
+
+static void dast_status_line(uint8_t row, const char *text)
+{
+    uint8_t y = dast_line_y(row);
+
+    os_FontSelect(os_SmallFont);
+    os_FontDrawText("                                                ",
+                    LWIP_EXAMPLE_LEFT, y);
+    os_FontDrawText(text ? text : "", LWIP_EXAMPLE_LEFT, y);
+}
+
 static void dast_draw_counter(const dast_test_t *t)
 {
     char line[40];
@@ -236,52 +251,97 @@ static void dast_draw_counter(const dast_test_t *t)
     else
         snprintf(line, sizeof(line), "evt:%u len:%u",
                  (unsigned)dast_events, (unsigned)dast_last_len);
-    lwip_example_stats_line(lwip_example_line_h() * 7, line);
+    dast_status_line(7, line);
 }
 
 static bool dast_network_ready(const lwip_netif_info_t *info)
 {
     return info && info->has_netif && info->up && info->link_up &&
-           info->has_ipv4 && info->has_ipv4_gateway;
+           info->has_ipv4;
+}
+
+static void dast_draw_start_frame(void)
+{
+    lwip_example_clear();
+    lwip_example_line("lwIP DAST harness");
+    lwip_example_line("");
+    lwip_example_line("");
+    lwip_example_line("");
+    lwip_example_line("");
+    lwip_example_linef("%d tests. Run host:", DAST_TEST_COUNT);
+    lwip_example_line("lwip-dast.sh --ip <above>");
+    lwip_example_line("[enter] begin  [clear] quit");
+}
+
+static void dast_update_start_status(const lwip_netif_info_t *info,
+                                     const char *svc_status)
+{
+    char line[44];
+
+    if (!info || !info->has_netif)
+    {
+        dast_status_line(1, "IP: waiting for netif");
+        dast_status_line(2, "u:0 l:0 ip:0 gw:0");
+        dast_status_line(3, "dh:0 st:0");
+    }
+    else if (info->has_ipv4)
+    {
+        snprintf(line, sizeof(line), "IP:%u.%u.%u.%u",
+                 info->ipv4_addr[0], info->ipv4_addr[1],
+                 info->ipv4_addr[2], info->ipv4_addr[3]);
+        dast_status_line(1, line);
+
+        snprintf(line, sizeof(line), "GW:%u.%u.%u.%u",
+                 info->ipv4_gateway[0], info->ipv4_gateway[1],
+                 info->ipv4_gateway[2], info->ipv4_gateway[3]);
+        dast_status_line(2, line);
+
+        snprintf(line, sizeof(line), "u:%u l:%u dh:%u st:%u",
+                 (unsigned)info->up,
+                 (unsigned)info->link_up,
+                 (unsigned)info->dhcp_running,
+                 (unsigned)info->dhcp_state);
+        dast_status_line(3, line);
+    }
+    else
+    {
+        dast_status_line(1, "IP: waiting for DHCP");
+        snprintf(line, sizeof(line), "u:%u l:%u ip:%u gw:%u",
+                 (unsigned)info->up,
+                 (unsigned)info->link_up,
+                 (unsigned)info->has_ipv4,
+                 (unsigned)info->has_ipv4_gateway);
+        dast_status_line(2, line);
+        snprintf(line, sizeof(line), "dh:%u st:%u",
+                 (unsigned)info->dhcp_running,
+                 (unsigned)info->dhcp_state);
+        dast_status_line(3, line);
+    }
+
+    dast_status_line(4, svc_status ? svc_status : "");
 }
 
 static void dast_draw_start(const lwip_netif_info_t *info,
                             const char *svc_status)
 {
-    lwip_example_clear();
-    lwip_example_line("lwIP DAST harness");
+    dast_draw_start_frame();
+    dast_update_start_status(info, svc_status);
+}
 
-    if (!info || !info->has_netif)
-    {
-        lwip_example_line("IP: waiting for netif");
-        lwip_example_line("u:0 l:0 dh:0");
-    }
-    else if (info->has_ipv4)
-    {
-        lwip_example_linef("IP: %u.%u.%u.%u",
-                           info->ipv4_addr[0], info->ipv4_addr[1],
-                           info->ipv4_addr[2], info->ipv4_addr[3]);
-        lwip_example_linef("GW: %u.%u.%u.%u",
-                           info->ipv4_gateway[0], info->ipv4_gateway[1],
-                           info->ipv4_gateway[2], info->ipv4_gateway[3]);
-    }
-    else
-    {
-        lwip_example_line("IP: waiting for DHCP");
-        lwip_example_linef("u:%u l:%u dh:%u",
-                           (unsigned)info->up,
-                           (unsigned)info->link_up,
-                           (unsigned)info->dhcp_state);
-    }
-
-    if (svc_status && svc_status[0])
-    {
-        lwip_example_line(svc_status);
-    }
-    lwip_example_line("");
-    lwip_example_linef("%d tests. Run host:", DAST_TEST_COUNT);
-    lwip_example_line("lwip-dast.sh --ip <above>");
-    lwip_example_line("[enter] begin  [clear] quit");
+static bool dast_netif_changed(const lwip_netif_info_t *a,
+                               const lwip_netif_info_t *b)
+{
+    return !a || !b ||
+           a->has_netif != b->has_netif ||
+           a->up != b->up ||
+           a->link_up != b->link_up ||
+           a->dhcp_running != b->dhcp_running ||
+           a->dhcp_state != b->dhcp_state ||
+           a->has_ipv4 != b->has_ipv4 ||
+           a->has_ipv4_gateway != b->has_ipv4_gateway ||
+           memcmp(a->ipv4_addr, b->ipv4_addr, sizeof(a->ipv4_addr)) != 0 ||
+           memcmp(a->ipv4_gateway, b->ipv4_gateway,
+                  sizeof(a->ipv4_gateway)) != 0;
 }
 
 static bool dast_wait_for_network(lwip_netif_info_t *info)
@@ -289,13 +349,13 @@ static bool dast_wait_for_network(lwip_netif_info_t *info)
     struct lwip_conn svc = {0};
     bool svc_live = false;
     const char *svc_status = NULL;
-    uint8_t redraw_ticks = 0;
+    uint8_t status_ticks = 0;
+    lwip_netif_info_t last_info = {0};
 
     if (lwip_conn_create(&svc, NULL, LWIP_PROTO_UDP, LWIP_CONN_SVC_DHCP) == LWIP_OK)
     {
-        lwip_error_t err = lwip_conn_connect(&svc, "0.0.0.0", 9);
         svc_live = true;
-        svc_status = (err == LWIP_OK) ? "DHCP requested" : "DHCP wait failed";
+        svc_status = "DHCP requested";
     }
     else
     {
@@ -305,17 +365,24 @@ static bool dast_wait_for_network(lwip_netif_info_t *info)
     memset(info, 0, sizeof(*info));
     (void)lwip_default_netif_info(info);
     dast_draw_start(info, svc_status);
+    last_info = *info;
 
     while (!dast_network_ready(info))
     {
         lwip_poll_network_events();
 
-        if (++redraw_ticks >= 16)
+        if (++status_ticks >= 32)
         {
-            redraw_ticks = 0;
+            lwip_netif_info_t next = {0};
+            status_ticks = 0;
             memset(info, 0, sizeof(*info));
             (void)lwip_default_netif_info(info);
-            dast_draw_start(info, svc_status);
+            next = *info;
+            if (dast_netif_changed(&last_info, &next))
+            {
+                dast_update_start_status(info, svc_status);
+                last_info = next;
+            }
         }
 
         uint8_t key = os_GetCSC();
