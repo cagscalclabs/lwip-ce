@@ -2038,7 +2038,7 @@ altcp_tls_ce_new(struct altcp_tls_ce_config *config, u8_t ip_type)
     ret = altcp_tls_ce_wrap(config, inner_pcb);
     if (ret == NULL)
     {
-        altcp_close(inner_pcb);
+        altcp_abort(inner_pcb);
     }
     return ret;
 }

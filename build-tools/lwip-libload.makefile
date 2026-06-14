@@ -46,6 +46,8 @@ LIB_SRC := lwip.asm
 LIB_LIB := lwip.lib
 LIB_8XV := lwip.8xv
 LIB_H_DIR := lwip
+LIB_CORE_H := lwip.h
+LIB_CRYPTO_H := cryptography.h
 
 all: $(LIB_8XV)
 
@@ -66,5 +68,7 @@ install: $(INSTALL_PREREQS)
 	$(Q)$(call COPY,$(LIB_LIB),$(INSTALL_LIB))
 	$(Q)$(call RMDIR,$(INSTALL_H)/$(LIB_H_DIR))
 	$(Q)$(call COPYDIR,$(LIB_H_DIR),$(INSTALL_H))
+	$(Q)$(call COPY,$(LIB_CORE_H),$(INSTALL_H))
+	$(Q)$(call COPY,$(LIB_CRYPTO_H),$(INSTALL_H))
 
 .PHONY: all clean install

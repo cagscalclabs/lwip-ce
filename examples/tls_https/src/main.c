@@ -5,8 +5,7 @@
 #include <string.h>
 #include <time.h>
 
-#include <lwip/core.h>
-#include <lwip/conn.h>
+#include <lwip.h>
 
 #include "common/lwip_example.h"
 
@@ -102,12 +101,12 @@ int main(void)
         return 1;
     }
 
-    lwip_example_dbg_console_begin("TLS RSA");
+    lwip_example_dbg_console_begin("TLS HTTPS");
     err = lwip_conn_create(&conn, NULL, LWIP_PROTO_ALTCP_TLS,
                            LWIP_CONN_SVC_DHCP | LWIP_CONN_SVC_DNS);
     if (err != LWIP_OK)
     {
-        lwip_example_show_conn_error("TLS create", &conn, err);
+        lwip_example_show_conn_error("HTTPS create", &conn, err);
         lwip_conn_destroy(&conn);
         return lwip_example_finish(1);
     }
@@ -134,7 +133,7 @@ int main(void)
     if (err != LWIP_OK)
     {
         lwip_example_linef("conn failed e%u", (unsigned)err);
-        lwip_example_show_conn_error("TLS connect", &conn, err);
+        lwip_example_show_conn_error("HTTPS connect", &conn, err);
         lwip_conn_destroy(&conn);
         return lwip_example_finish(1);
     }
@@ -152,12 +151,12 @@ int main(void)
 
     if (!state.ok)
     {
-        lwip_example_show_conn_error("TLS failed", &conn, state.err);
+        lwip_example_show_conn_error("HTTPS failed", &conn, state.err);
         lwip_conn_destroy(&conn);
         return lwip_example_finish(1);
     }
 
-    lwip_example_show("TLS OK", NULL);
+    lwip_example_show("HTTPS OK", NULL);
     lwip_example_lines_crlf(state.rx, state.rx_len);
     lwip_example_draw_mem_stats();
     lwip_example_wait_key();

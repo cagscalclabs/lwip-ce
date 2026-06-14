@@ -5,8 +5,7 @@
 #include <string.h>
 #include <time.h>
 
-#include <lwip/core.h>
-#include <lwip/conn.h>
+#include <lwip.h>
 
 #include "common/lwip_example.h"
 

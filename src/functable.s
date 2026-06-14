@@ -33,10 +33,10 @@
 .section .fn_exports,"aR",@progbits
 .globl _fn_exports_table
 
+.extern _lwip_init_runtime_internal
 .extern _lwip_start
 .extern _lwip_start_last_error
 .extern _lwip_stop
-.extern _lwip_init_runtime_internal
 .extern _lwip_poll_network_events
 .extern _lwip_default_netif_info
 .extern _lwip_conn_create
@@ -425,15 +425,13 @@ _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
     d24 387    ; entry count
 
-; --- src/lwIP.c ---
-    d24 _lwip_start
-    d24 _lwip_start_last_error
-    d24 _lwip_stop
-
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
 
 ; --- src/lwIP.c ---
+    d24 _lwip_start
+    d24 _lwip_start_last_error
+    d24 _lwip_stop
     d24 _lwip_poll_network_events
     d24 _lwip_default_netif_info
     d24 _lwip_conn_create

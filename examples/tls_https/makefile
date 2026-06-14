@@ -5,10 +5,10 @@
 PROJECT_ROOT := ../..
 RELEASE_ROOT ?= $(if $(wildcard ../../lwip),../..,$(PROJECT_ROOT)/build)
 
-NAME = LWNTP
-DESCRIPTION = "lwIP NTP Time Example"
+NAME = LWHTTPS
+DESCRIPTION = "lwIP TLS HTTPS Example"
 COMPRESSED = NO
-ARCHIVED = YES
+ARCHIVED = NO
 BSSHEAP_LOW = 0xD072C6
 
 CFLAGS = -Wall -Wextra -Oz -I$(RELEASE_ROOT) -I..

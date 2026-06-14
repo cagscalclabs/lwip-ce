@@ -255,5 +255,11 @@ log "copying completed release package to $RELEASE_DIR"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 cp -R "$STAGE_DIR"/. "$RELEASE_DIR"/
+mkdir -p "$RELEASE_DIR/appinst"
+shopt -s nullglob
+for artifact in "$RELEASE_DIR"/"$DYLIB_APPVAR_PREFIX".*.8xv "$RELEASE_DIR"/lwIPINST.8xp; do
+    mv "$artifact" "$RELEASE_DIR/appinst"/
+done
+shopt -u nullglob
 
 log "release dylib package ready"

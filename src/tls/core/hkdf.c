@@ -8,7 +8,16 @@
 #include "../includes/hkdf.h"
 #include "../includes/hmac.h"
 #include "../includes/hash.h"
+#include "../includes/bytes.h"
 #include <string.h>
+
+#define TLS_HKDF_LABEL_SCRATCH_SIZE 520u
+
+/* Shared BSS crypto scratch from share/memory.s. This is not persistent and
+ * must not be used concurrently with powmod. HKDF key derivation and RSA
+ * modexp are not live at the same time in the TLS flow, so using it here keeps
+ * the 512-byte HkdfLabel builder off the eZ80 stack. */
+extern uint8_t __tls_scratch[TLS_HKDF_LABEL_SCRATCH_SIZE];
 
 /**
  * @brief Get hash output length for algorithm
@@ -178,11 +187,13 @@ bool tls_hkdf_expand_label(
     uint8_t *out,
     size_t out_len
 ) {
-    uint8_t hkdf_label[512];  /* Buffer for HkdfLabel structure */
+    uint8_t *hkdf_label = __tls_scratch;  /* shared HkdfLabel builder */
     size_t offset = 0;
     const char *tls13_prefix = "tls13 ";
     size_t prefix_len = 6;
     size_t full_label_len = prefix_len + label_len;
+    size_t needed;
+    bool ok;
 
     if (!secret || !label || !out) {
         return false;
@@ -195,6 +206,11 @@ bool tls_hkdf_expand_label(
 
     /* Check context length: 0..255 bytes */
     if (context_len > 255) {
+        return false;
+    }
+
+    needed = 2u + 1u + full_label_len + 1u + context_len;
+    if (needed > TLS_HKDF_LABEL_SCRATCH_SIZE) {
         return false;
     }
 
@@ -225,7 +241,7 @@ bool tls_hkdf_expand_label(
     }
 
     /* Call HKDF-Expand with constructed HkdfLabel as info */
-    return tls_hkdf_expand(
+    ok = tls_hkdf_expand(
         hash_algorithm,
         secret,
         secret_len,
@@ -234,6 +250,8 @@ bool tls_hkdf_expand_label(
         out,
         out_len
     );
+    tls_secure_memzero(hkdf_label, offset);
+    return ok;
 }
 
 /**

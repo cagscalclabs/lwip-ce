@@ -30,22 +30,27 @@ void lwip_set_debug(lwip_debug_fn debug_fn, uint8_t debug_mode,
     g_debug_depth = debug_depth;
 }
 
-void lwip_debug_emit_at(uint16_t module, uint16_t module_state, int errnum,
-                        uint16_t line, uint8_t depth)
+void lwip_debug_emit_sev(uint16_t module, uint16_t module_state, int errnum,
+                         uint16_t line, uint8_t depth, uint8_t severity)
 {
     if (!g_debug_fn)
     {
         return;
     }
+    /* ALERT and ERROR are never informational, even when errnum is 0 — they
+     * must always surface (delivered in LWIP_DBG_ERROR mode and ignoring the
+     * depth gate, just like a non-zero errnum). */
+    bool is_problem = (errnum != 0) || (severity >= LWIP_DBG_SEV_ALERT);
+
     /* LWIP_DBG_INFO delivers everything; LWIP_DBG_ERROR delivers only events
-     * with a non-zero errnum. (Both set behaves like INFO.) */
-    if (!(g_debug_mode & LWIP_DBG_INFO) && errnum == 0)
+     * that signal a problem. (Both set behaves like INFO.) */
+    if (!(g_debug_mode & LWIP_DBG_INFO) && !is_problem)
     {
         return;
     }
-    /* Drop emits deeper than the configured verbosity — but errors always
+    /* Drop emits deeper than the configured verbosity — but problems always
      * surface, no matter how deep they were raised. */
-    if (depth > g_debug_depth && errnum == 0)
+    if (depth > g_debug_depth && !is_problem)
     {
         return;
     }
@@ -56,7 +61,17 @@ void lwip_debug_emit_at(uint16_t module, uint16_t module_state, int errnum,
     info.errnum = errnum;
     info.line = line;
     info.depth = depth;
+    info.severity = severity;
     g_debug_fn(&info);
+}
+
+void lwip_debug_emit_at(uint16_t module, uint16_t module_state, int errnum,
+                        uint16_t line, uint8_t depth)
+{
+    /* Infer severity from errnum for the legacy entry point: non-zero errnum
+     * is an ERROR, zero is INFO. Callers wanting ALERT use lwip_debug_alert. */
+    uint8_t severity = (errnum != 0) ? LWIP_DBG_SEV_ERROR : LWIP_DBG_SEV_INFO;
+    lwip_debug_emit_sev(module, module_state, errnum, line, depth, severity);
 }
 
 void lwip_debug_emit(uint16_t module, uint16_t module_state, int errnum,
@@ -64,6 +79,26 @@ void lwip_debug_emit(uint16_t module, uint16_t module_state, int errnum,
 {
     lwip_debug_emit_at(module, module_state, errnum, line,
                        LWIP_DBG_DEPTH_MILESTONE);
+}
+
+void lwip_debug_alert(uint16_t module, uint16_t module_state, int errnum,
+                      uint16_t line)
+{
+    lwip_debug_emit_sev(module, module_state, errnum, line,
+                        LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ALERT);
+}
+
+void lwip_debug_error(uint16_t module, uint16_t module_state, int errnum,
+                      uint16_t line)
+{
+    /* An ERROR always carries a non-zero errnum so LWIP_DBG_ERROR-mode sinks
+     * that key off errnum still see it. */
+    if (errnum == 0)
+    {
+        errnum = -1;
+    }
+    lwip_debug_emit_sev(module, module_state, errnum, line,
+                        LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
 }
 
 void lwip_debug_fatal(uint16_t module, uint16_t module_state, int errnum,
@@ -89,6 +124,7 @@ void lwip_debug_fatal(uint16_t module, uint16_t module_state, int errnum,
         info.errnum = errnum;
         info.line = line;
         info.depth = LWIP_DBG_DEPTH_MILESTONE;
+        info.severity = LWIP_DBG_SEV_ERROR;
         g_debug_fn(&info);
     }
     if (g_fatal_cleanup)
@@ -163,6 +199,8 @@ const char *lwip_debug_state_name(uint16_t module_state)
     case LWIP_DBG_TLS_FATAL_ALERT:         return "fatal_alert";
     case LWIP_DBG_TLS_TRUSTSTORE_FAIL:     return "truststore_fail";
     case LWIP_DBG_TLS_CERTVERIFY_FAIL:     return "certverify_fail";
+    case LWIP_DBG_TLS_CHAIN_VERIFY_FAIL:   return "chain_verify_fail";
+    case LWIP_DBG_TLS_CERT_UNSUPPORTED:    return "cert_unsupported";
 
     case LWIP_DBG_TLS_REC_RX:              return "rec_rx";
     case LWIP_DBG_TLS_REC_PARTIAL:         return "rec_partial";

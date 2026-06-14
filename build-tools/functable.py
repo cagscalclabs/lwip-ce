@@ -41,6 +41,15 @@ SRC_DIR = REPO_ROOT / "src"
 FUNCTABLE_ASM = SRC_DIR / "functable.s"
 PUBLIC_API_MANIFEST = REPO_ROOT / "build-tools" / "public_api_manifest.csv"
 
+# Symbols that MUST be exported via libload even though they are not in the
+# public API manifest (so no header prototype is emitted for them). The
+# consumer-side init stub (lwip_init_runtime.asm) calls these by name through
+# the trampoline table. Force-kept here so a full `make functable` regenerate
+# can't silently drop them and break the ABI.
+STUB_REQUIRED_EXPORTS = {
+    "_lwip_init_runtime_internal",
+}
+
 # The libload library stub. Emitted alongside src/functable.s so the
 # two stay in lockstep — both files list the public API in the same order.
 RELEASE_DIR = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build"))
@@ -684,8 +693,16 @@ def main() -> int:
 
     manifest = load_public_api_manifest(PUBLIC_API_MANIFEST)
     manifest_entries = [f"_{row['symbol']}" for row in manifest]
-    visible_entries = [sym for sym in manifest_entries if sym in symbol_origins]
+    # Force-include stub-required exports (not manifest-listed, so they get no
+    # header prototype) ahead of the manifest symbols, but only if the build
+    # actually defines them.
+    forced = [s for s in sorted(STUB_REQUIRED_EXPORTS)
+              if s in symbol_origins and s not in manifest_entries]
+    all_entries = forced + manifest_entries
+    visible_entries = [sym for sym in all_entries if sym in symbol_origins]
     missing = [sym for sym in manifest_entries if sym not in symbol_origins]
+    missing += [s for s in sorted(STUB_REQUIRED_EXPORTS)
+                if s not in symbol_origins]
 
     existing = load_existing_entries(FUNCTABLE_ASM)
 

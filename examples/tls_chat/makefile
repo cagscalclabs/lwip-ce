@@ -5,14 +5,16 @@
 PROJECT_ROOT := ../..
 RELEASE_ROOT ?= $(if $(wildcard ../../lwip),../..,$(PROJECT_ROOT)/build)
 
-NAME = LWTLSRSA
-DESCRIPTION = "lwIP TLS RSA Example"
+NAME = LWTLCHAT
+DESCRIPTION = "lwIP TLS Chat Example"
 COMPRESSED = NO
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 
-CFLAGS = -Wall -Wextra -Oz -I$(RELEASE_ROOT) -I..
-CXXFLAGS = -Wall -Wextra -Oz -I$(RELEASE_ROOT) -I..
+SERVER_IP ?= 192.168.2.14
+
+CFLAGS = -Wall -Wextra -Oz -I$(RELEASE_ROOT) -I.. -DCHAT_HOST=\"$(SERVER_IP)\"
+CXXFLAGS = -Wall -Wextra -Oz -I$(RELEASE_ROOT) -I.. -DCHAT_HOST=\"$(SERVER_IP)\"
 
 # ----------------------------
 

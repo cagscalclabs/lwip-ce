@@ -1,0 +1,190 @@
+{
+  "_comment": [
+    "Single source of truth for the lwIP-CE DAST harness.",
+    "BOTH sides consume this in the SAME ORDER and must stay in lockstep:",
+    "  - the calc-side program (tests/profiling/lwip_dast) walks `state` per test",
+    "  - build-tools/lwip-dast.py sends `probe` and grades the result",
+    "Regenerate the calc-side C header after editing:",
+    "  python3 build-tools/lwip-dast.py --gen-header",
+    "",
+    "Fields:",
+    "  id        stable slug (used to carry over manual notes/grade overrides)",
+    "  name      human label shown on calc + in report",
+    "  state     calc-side listener the calc enters for this test:",
+    "              idle      stack handles it passively (ARP/ICMP/IP/closed-port)",
+    "              udp_recv  bound UDP PCB looping in its recv callback",
+    "              tcp_listen tcp_listen PCB accepting + reading",
+    "              raw_recv  raw ICMP/IP PCB",
+    "  port      L4 port the calc listens on for this test (0 if N/A)",
+    "  probe     scapy probe key dispatched by lwip-dast.py",
+    "  intent    what weakness the probe exercises",
+    "  expect    the DESIRED calc behavior (graded against the operator's report)",
+    "              alive          stack keeps running (drop/ignore is fine)",
+    "              reply          a protocol reply is expected (baseline liveness)",
+    "              abort_alive    a connection/exchange aborts but stack survives",
+    "              rst            a TCP RST is the correct response",
+    "  ok_responses   operator-reported outcomes that count as a PASS for this test"
+  ],
+  "tests": [
+    {
+      "id": "icmp-echo-baseline",
+      "name": "ICMP echo baseline",
+      "state": "idle",
+      "port": 0,
+      "probe": "icmp_echo_normal",
+      "intent": "Liveness baseline: a well-formed ping must be answered.",
+      "expect": "reply",
+      "ok_responses": ["REPLY", "ALIVE"]
+    },
+    {
+      "id": "arp-malformed",
+      "name": "Malformed ARP",
+      "state": "idle",
+      "port": 0,
+      "probe": "arp_malformed",
+      "intent": "Bogus hlen/plen and truncated ARP must not corrupt the ARP cache or crash.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT"]
+    },
+    {
+      "id": "arp-flood",
+      "name": "ARP request flood",
+      "state": "idle",
+      "port": 0,
+      "probe": "arp_flood",
+      "intent": "Rapid gratuitous/who-has flood: bounded ARP table, no OOM crash.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE"]
+    },
+    {
+      "id": "icmp-oversize",
+      "name": "Oversized ICMP echo (ping-of-death)",
+      "state": "idle",
+      "port": 0,
+      "probe": "icmp_oversize",
+      "intent": "Reassembled echo > 65535 / very large payload must not overflow buffers.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT", "REPLY"]
+    },
+    {
+      "id": "icmp-malformed",
+      "name": "Malformed ICMP",
+      "state": "idle",
+      "port": 0,
+      "probe": "icmp_malformed",
+      "intent": "Bad ICMP checksum / truncated header must be dropped, not parsed.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT"]
+    },
+    {
+      "id": "ip-bad-checksum",
+      "name": "IP bad header checksum",
+      "state": "idle",
+      "port": 0,
+      "probe": "ip_bad_checksum",
+      "intent": "Corrupt IPv4 header checksum must cause a silent drop.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE"]
+    },
+    {
+      "id": "ip-frag-overlap",
+      "name": "Overlapping IP fragments",
+      "state": "idle",
+      "port": 0,
+      "probe": "ip_frag_overlap",
+      "intent": "Teardrop-style overlapping fragments must not mis-reassemble or crash.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT"]
+    },
+    {
+      "id": "ip-frag-bomb",
+      "name": "Incomplete fragment bomb",
+      "state": "idle",
+      "port": 0,
+      "probe": "ip_frag_bomb",
+      "intent": "Many never-completed fragments must be reaped (bounded reassembly memory).",
+      "expect": "alive",
+      "ok_responses": ["ALIVE"]
+    },
+    {
+      "id": "udp-recv-baseline",
+      "name": "UDP recv baseline",
+      "state": "udp_recv",
+      "port": 9999,
+      "probe": "udp_normal",
+      "intent": "A well-formed datagram reaches the recv callback and is handled.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ACCEPT", "REPLY"]
+    },
+    {
+      "id": "udp-oversize",
+      "name": "Oversized fragmented UDP",
+      "state": "udp_recv",
+      "port": 9999,
+      "probe": "udp_oversize",
+      "intent": "Large fragmented UDP payload must not overflow the recv path.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT", "ACCEPT"]
+    },
+    {
+      "id": "udp-malformed-len",
+      "name": "UDP bad length/checksum",
+      "state": "udp_recv",
+      "port": 9999,
+      "probe": "udp_malformed",
+      "intent": "UDP length field longer than the packet / bad checksum must be dropped.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT"]
+    },
+    {
+      "id": "tcp-syn-closed",
+      "name": "SYN to closed port",
+      "state": "idle",
+      "port": 0,
+      "probe": "tcp_syn_closed",
+      "intent": "SYN to an unbound port must elicit a RST, not a hang or crash.",
+      "expect": "rst",
+      "ok_responses": ["RST", "ALIVE"]
+    },
+    {
+      "id": "tcp-listen-baseline",
+      "name": "TCP listen baseline",
+      "state": "tcp_listen",
+      "port": 9998,
+      "probe": "tcp_connect_data",
+      "intent": "A normal connect + data exchange must be accepted and read.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ACCEPT", "REPLY"]
+    },
+    {
+      "id": "tcp-malformed-flags",
+      "name": "Malformed TCP flags",
+      "state": "tcp_listen",
+      "port": 9998,
+      "probe": "tcp_flag_storm",
+      "intent": "NULL / FIN / XMAS / SYN+FIN flag combos must be dropped or RST, not crash.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "RST", "ABORT"]
+    },
+    {
+      "id": "tcp-tiny-window",
+      "name": "Tiny/zero window + overlap",
+      "state": "tcp_listen",
+      "port": 9998,
+      "probe": "tcp_tiny_window",
+      "intent": "Zero-window probes and overlapping segments must not desync or overrun.",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT"]
+    },
+    {
+      "id": "tcp-data-overflow",
+      "name": "Oversized TCP data burst",
+      "state": "tcp_listen",
+      "port": 9998,
+      "probe": "tcp_data_overflow",
+      "intent": "A data burst far larger than the app recv buffer must be bounded (no overflow).",
+      "expect": "alive",
+      "ok_responses": ["ALIVE", "ABORT", "ACCEPT"]
+    }
+  ]
+}

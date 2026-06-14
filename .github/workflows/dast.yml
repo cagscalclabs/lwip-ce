@@ -1,0 +1,44 @@
+name: DAST
+
+# Renders the committed lwIP-CE DAST report (tests/dast.json) into the job
+# summary and fails the run if any probe was graded "fail".
+#
+# The report itself is produced OUT OF BAND, by an operator running
+# build-tools/lwip-dast.sh --ip <calc> against a calc on a live network
+# (the calc runs the paired harness in tests/profiling/lwip_dast). Crash vs
+# abort is a human judgement, so generation can't run in CI — this workflow
+# is the gate/visibility layer over whatever report was committed.
+
+on:
+  push:
+    paths:
+      - 'tests/dast.json'
+      - 'build-tools/dast_report.py'
+      - '.github/workflows/dast.yml'
+  pull_request:
+    paths:
+      - 'tests/dast.json'
+      - 'build-tools/dast_report.py'
+      - '.github/workflows/dast.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dast_report:
+    name: DAST report + gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Render report to job summary and gate on failures
+        run: |
+          python3 build-tools/dast_report.py --summary "$GITHUB_STEP_SUMMARY"

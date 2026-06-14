@@ -111,6 +111,102 @@ bool lwip_teardown_tcp_pcbs_pending(void)
 #endif
 }
 
+bool lwip_teardown_tcp_pcb_pending(const struct tcp_pcb *target)
+{
+#if LWIP_TCP
+    struct tcp_pcb_listen *lpcb = tcp_listen_pcbs.listen_pcbs;
+    while (lpcb)
+    {
+        if ((const struct tcp_pcb *)lpcb == target)
+        {
+            return true;
+        }
+        lpcb = lpcb->next;
+    }
+
+    struct tcp_pcb *pcb = tcp_bound_pcbs;
+    while (pcb)
+    {
+        if (pcb == target)
+        {
+            return true;
+        }
+        pcb = pcb->next;
+    }
+
+    pcb = tcp_active_pcbs;
+    while (pcb)
+    {
+        if (pcb == target)
+        {
+            return true;
+        }
+        pcb = pcb->next;
+    }
+#else
+    (void)target;
+#endif
+    return false;
+}
+
+void lwip_teardown_abort_tcp_pcb(struct tcp_pcb *target)
+{
+#if LWIP_TCP
+    struct tcp_pcb *pcb = tcp_active_pcbs;
+    while (pcb)
+    {
+        struct tcp_pcb *next = pcb->next;
+        if (pcb == target)
+        {
+            lwip_teardown_detach_tcp(pcb);
+            tcp_abort(pcb);
+            return;
+        }
+        pcb = next;
+    }
+
+    pcb = tcp_tw_pcbs;
+    while (pcb)
+    {
+        struct tcp_pcb *next = pcb->next;
+        if (pcb == target)
+        {
+            tcp_abort(pcb);
+            return;
+        }
+        pcb = next;
+    }
+
+    pcb = tcp_bound_pcbs;
+    while (pcb)
+    {
+        struct tcp_pcb *next = pcb->next;
+        if (pcb == target)
+        {
+            lwip_teardown_detach_tcp(pcb);
+            tcp_abort(pcb);
+            return;
+        }
+        pcb = next;
+    }
+
+    struct tcp_pcb_listen *lpcb = tcp_listen_pcbs.listen_pcbs;
+    while (lpcb)
+    {
+        struct tcp_pcb_listen *next = lpcb->next;
+        if ((struct tcp_pcb *)lpcb == target)
+        {
+            lwip_teardown_detach_listener(lpcb);
+            (void)tcp_close((struct tcp_pcb *)lpcb);
+            return;
+        }
+        lpcb = next;
+    }
+#else
+    (void)target;
+#endif
+}
+
 void lwip_teardown_abort_tcp_pcbs(void)
 {
 #if LWIP_TCP

@@ -135,6 +135,49 @@ static void eth_free_device_storage(eth_device_t *dev)
     free(dev);
 }
 
+static void eth_cleanup_failed_init(usb_device_t device,
+                                    eth_device_t *dev,
+                                    bool new_eth,
+                                    bool netif_registered,
+                                    bool device_data_set,
+                                    bool rx_ring_created)
+{
+    if (!dev)
+    {
+        return;
+    }
+
+    dev->shutting_down = true;
+    dev->rx_transfer_active = false;
+
+    if (device_data_set)
+    {
+        usb_fn.set_device_data(device, NULL);
+    }
+
+    if (new_eth)
+    {
+        if (netif_registered)
+        {
+            if (netif_is_up(&dev->iface))
+            {
+                netif_set_down(&dev->iface);
+            }
+            if (dev->iface.num < 8)
+            {
+                ifnums_used &= ~(1 << dev->iface.num);
+            }
+            netif_remove(&dev->iface);
+        }
+        eth_free_device_storage(dev);
+    }
+    else if (rx_ring_created && dev->rx_ring)
+    {
+        mem_buffer_destroy(dev->rx_ring);
+        dev->rx_ring = NULL;
+    }
+}
+
 static void eth_reap_dead_devices(void)
 {
     eth_device_t **pp = &g_dead_devices;
@@ -1481,6 +1524,10 @@ init_success:
     tmp.tx.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.out);
     tmp.interrupt.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.interrupt);
     // allocate eth_device_t => contains type, usb device, metadata, and INT/RX buffers
+    bool new_eth = false;
+    bool netif_registered = false;
+    bool device_data_set = false;
+    bool rx_ring_created = false;
 
     // better ifnum assignment
     uint8_t ifnum_assigned;
@@ -1518,6 +1565,7 @@ init_success:
         // ## ELSE CONFIG NEW NETIF ##
         if ((eth = malloc(sizeof(eth_device_t))) == NULL)
             return false;
+        new_eth = true;
         memcpy(eth, &tmp, sizeof(eth_device_t));
         struct netif *iface = &eth->iface;
         // add to lwIP list of active netifs (save pointer to eth_device_t too)
@@ -1528,9 +1576,11 @@ init_success:
             free(eth);
             return false;
         }
+        netif_registered = true;
         // fetch next available device number to use
         // set pointer to eth_device_t as associated data for usb device too
         usb_fn.set_device_data(device, eth);
+        device_data_set = true;
 
         iface->name[0] = 'e';
         iface->name[1] = 'n';
@@ -1552,8 +1602,11 @@ init_success:
         eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE, ETH_RX_RING_MAX_SIZE, ETH_RX_RING_STEP_SIZE, 0);
         if (!eth->rx_ring)
         {
+            eth_cleanup_failed_init(device, eth, new_eth, netif_registered,
+                                    device_data_set, rx_ring_created);
             return false;
         }
+        rx_ring_created = true;
         mem_buffer_set_drain(eth->rx_ring, eth_rx_ring_drain, &eth->iface);
         mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
         mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
@@ -1577,6 +1630,8 @@ init_success:
                                  eth) != USB_SUCCESS)
     {
         (void)eth_xmit_fatal_error(eth, ETH_USB_MAX_RETRIES);
+        eth_cleanup_failed_init(device, eth, new_eth, netif_registered,
+                                device_data_set, rx_ring_created);
         return false;
     }
     eth_transfer_began(eth);

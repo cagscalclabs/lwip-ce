@@ -94,6 +94,10 @@ static void services_list_cancel_all(lwip_error_t err);
 #define LWIP_STOP_TCP_CLOSE_TIMEOUT_MS LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT
 #endif
 
+#ifndef LWIP_CONN_CLOSE_TIMEOUT_MS
+#define LWIP_CONN_CLOSE_TIMEOUT_MS 3000u
+#endif
+
 bool lwip_start(void)
 {
     if (g_lwip_started)
@@ -347,6 +351,55 @@ static bool lwip_stop_wait_for_tcp(uint32_t timeout_ms)
         lwip_stop_pump_once();
     }
     return true;
+}
+
+static bool lwip_wait_for_tcp_pcb_close(struct tcp_pcb *pcb, uint32_t timeout_ms)
+{
+    uint32_t deadline;
+
+    if (!pcb)
+    {
+        return true;
+    }
+
+    deadline = sys_now() + timeout_ms;
+    while (lwip_teardown_tcp_pcb_pending(pcb))
+    {
+        if ((int32_t)(sys_now() - deadline) >= 0)
+        {
+            return false;
+        }
+        lwip_stop_pump_once();
+    }
+    return true;
+}
+
+static struct tcp_pcb *lwip_conn_leaf_tcp_pcb(struct lwip_conn *conn)
+{
+    if (!conn)
+    {
+        return NULL;
+    }
+
+    switch ((lwip_protocol_t)conn->protocol)
+    {
+#if LWIP_TCP
+    case LWIP_PROTO_TCP:
+        return conn->pcb.tcp;
+#endif
+    case LWIP_PROTO_ALTCP:
+    case LWIP_PROTO_ALTCP_TLS:
+    {
+        struct altcp_pcb *leaf = conn->pcb.altcp;
+        while (leaf && leaf->inner_conn)
+        {
+            leaf = leaf->inner_conn;
+        }
+        return leaf ? (struct tcp_pcb *)leaf->state : NULL;
+    }
+    default:
+        return NULL;
+    }
 }
 
 /* Resolve the conn's resident netif: caller-supplied, else the external
@@ -1709,7 +1762,13 @@ lwip_error_t lwip_conn_shutdown(struct lwip_conn *conn)
 
 lwip_error_t lwip_conn_close(struct lwip_conn *conn)
 {
+    struct tcp_pcb *closing_tcp;
+    bool wait_for_tcp;
+
     if (!conn) return LWIP_ERR_ARG;
+    closing_tcp = lwip_conn_leaf_tcp_pcb(conn);
+    wait_for_tcp = closing_tcp && !g_lwip_stopping;
+
     /* Detach BEFORE attempting close so a deferred FIN ACK/err cb
      * doesn't reach into a half-torn-down conn. If close() then fails
      * we re-bind the callbacks below so the app keeps getting events
@@ -1772,6 +1831,13 @@ lwip_error_t lwip_conn_close(struct lwip_conn *conn)
     }
     conn->status = LWIP_STATUS_CLOSED;
     conn_registry_remove(conn);
+    if (wait_for_tcp &&
+        !lwip_wait_for_tcp_pcb_close(closing_tcp, LWIP_CONN_CLOSE_TIMEOUT_MS))
+    {
+        lwip_teardown_abort_tcp_pcb(closing_tcp);
+        conn->last_error = LWIP_ERR_CLOSED;
+        return LWIP_ERR_CLOSED;
+    }
     return LWIP_OK;
 }
 

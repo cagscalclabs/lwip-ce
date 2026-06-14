@@ -9,9 +9,11 @@
 ; Both regions are pure scratch: nothing here persists across calls, and the
 ; two are used by routines that are never live at the same instant.
 ;
-;   __tls_scratch    520 B  -- powmod_exp_u24 inner working buffers
+;   __tls_scratch    520 B  -- shared crypto working area:
+;                              - powmod_exp_u24 inner working buffers
 ;                              (Lacc + Ltmp for an RSA-2048 modulus, formerly
-;                              carved off the stack via `ld sp`).
+;                              carved off the stack via `ld sp`);
+;                              - HKDF-Expand-Label's HkdfLabel buffer.
 ;   __rsa_transient  256 B  -- RSA OAEP/PSS encoded-message buffer (e.g. the
 ;                              decrypted-signature output `d_sig`), formerly a
 ;                              256-byte stack local in the C callers.
@@ -20,6 +22,9 @@
 ; underscore to C identifiers, so the C name `__rsa_transient` resolves to the
 ; asm symbol `___rsa_transient`. Declare it in C as:
 ;     extern uint8_t __rsa_transient[256];
+;
+; Same ABI rule for `__tls_scratch`: C references `___tls_scratch`, while asm
+; users keep using `__tls_scratch` directly.
 ; ---------------------------------------------------------------------------
 
 .equ	__tls_scratch.size,    520
@@ -30,10 +35,14 @@
 ; and walks downward.
 globl	__tls_scratch
 globl	__tls_scratch_end
+globl	___tls_scratch
+globl	___tls_scratch_end
 .section	.bss.__tls_scratch,"aw",@nobits
 __tls_scratch:
+___tls_scratch:
 	.space	__tls_scratch.size
 __tls_scratch_end:
+___tls_scratch_end:
 
 ; RSA OAEP/PSS encoded-message scratch -- shared between asm and C.
 ; `___rsa_transient` is the C-visible symbol for `__rsa_transient` in C.

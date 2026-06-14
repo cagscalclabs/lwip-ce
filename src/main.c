@@ -67,18 +67,10 @@ typedef enum
 
 typedef enum
 {
-    OPT_SEP_MEMORY = 0,
-    OPT_MEM_CAP,
-    OPT_SEP_SERVICES,
-    OPT_AUTO_NTP,
-    OPT_DNS,
-    OPT_IP_MODE,
-    OPT_EDIT_IP,
+    OPT_EDIT_IP = 0,
     OPT_HOSTNAME,
     OPT_TZ_OFFSET,
     OPT_DST,
-    OPT_SEP_SECURITY,
-    OPT_TLS_CHAIN_MODE,
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     OPT_SEP_TESTS,
     OPT_NTP_TEST,
@@ -94,7 +86,6 @@ typedef enum
 typedef enum
 {
     EDIT_NONE = 0,
-    EDIT_MEM_CAP,
     EDIT_TZ
 } edit_mode_t;
 
@@ -167,10 +158,6 @@ static bool config_run_ping_test(struct config_option *opt);
 static bool config_run_tcp_echo_test(struct config_option *opt);
 static bool config_run_tls_test(struct config_option *opt);
 #endif
-static size_t config_required_lwip_floor(const lwip_app_config_t *cfg);
-static uint16_t config_mem_cap_max(void);
-static bool config_clamp_mem_cap(lwip_app_config_t *cfg);
-static void ui_draw_mem_breakdown(void);
 static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len);
 
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES && LWIP_DHCP
@@ -182,20 +169,10 @@ static bool dhcp_client_running(const struct netif *netif)
 #endif
 
 static struct config_option config_options[] = {
-    {"-- Memory --",    OPT_SEP_MEMORY,   F_TYPE_SEPARATOR,    NULL, {0}},
-    {"lwIP Heap",       OPT_MEM_CAP,      F_TYPE_INT_SLIDER,   NULL, {0}},
-    {"-- Services --",  OPT_SEP_SERVICES, F_TYPE_SEPARATOR,    NULL, {0}},
-    {"DHCP",            OPT_IP_MODE,      F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"DNS",             OPT_DNS,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"NTP",             OPT_AUTO_NTP,     F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"IP Config",       OPT_EDIT_IP,      F_TYPE_ACTION,       config_edit_ip, {0}},
     {"Hostname",        OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
     {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"-- Security --",  OPT_SEP_SECURITY, F_TYPE_SEPARATOR,    NULL, {0}},
-    /* Chain mode placeholder. Full-chain validation is not implemented
-     * yet, so this remains visible but forced to SPKI-pin mode. */
-    {"Full Chain Verify", OPT_TLS_CHAIN_MODE,        F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
     {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
@@ -245,51 +222,6 @@ static bool option_get_bool(const uint8_t value[4])
     return value[0] != 0;
 }
 
-static void option_set_u8(uint8_t value[4], uint8_t v)
-{
-    value[0] = v;
-    value[1] = 0;
-    value[2] = 0;
-    value[3] = 0;
-}
-
-static uint8_t option_get_u8(const uint8_t value[4])
-{
-    return value[0];
-}
-
-static size_t config_required_lwip_floor(const lwip_app_config_t *cfg)
-{
-    (void)cfg;
-    return LWIP_TLS_FLOOR_BYTES;
-}
-
-/* Maximum cap = all current free RAM (user gets nothing).
- * Capped at UINT16_MAX since lwip_mem_cap is stored as uint16_t. */
-static uint16_t config_mem_cap_max(void)
-{
-    void *free_block = NULL;
-    size_t free_ram = os_MemChk(&free_block);
-    return (free_ram > UINT16_MAX) ? UINT16_MAX : (uint16_t)free_ram;
-}
-
-static bool config_clamp_mem_cap(lwip_app_config_t *cfg)
-{
-    size_t floor = config_required_lwip_floor(cfg);
-    uint16_t cap_max = config_mem_cap_max();
-    bool changed = false;
-    if (cfg->lwip_mem_cap < (uint16_t)floor)
-    {
-        cfg->lwip_mem_cap = (uint16_t)floor;
-        changed = true;
-    }
-    if (cfg->lwip_mem_cap > cap_max)
-    {
-        cfg->lwip_mem_cap = cap_max;
-        changed = true;
-    }
-    return changed;
-}
 // ============================================================================
 // NEW CLEAN UI DESIGN - Single scrollable menu
 // ============================================================================
@@ -536,16 +468,9 @@ static void ui_draw_mode_footer(bool editing, edit_mode_t edit_mode)
 {
     if (editing)
     {
-        if (edit_mode == EDIT_MEM_CAP)
-        {
-            ui_draw_footer("<left/right> Adjust lwIP heap",
-                           "Min 24k (TLS ready)");
-        }
-        else
-        {
-            ui_draw_footer("<left/right> Adjust value",
-                           "<enter> Confirm  <clear> Cancel");
-        }
+        (void)edit_mode;
+        ui_draw_footer("<left/right> Adjust value",
+                       "<enter> Confirm  <clear> Cancel");
     }
     else
     {
@@ -573,83 +498,15 @@ static int ui_ensure_visible(int selected_idx, int scroll_pos)
     return scroll_pos;
 }
 
-/* Draw memory breakdown rows in the content area.
- * Called while EDIT_MEM_CAP is active, replacing the normal menu. */
-static void ui_draw_mem_breakdown(void)
-{
-    void *free_block = NULL;
-    size_t free_ram  = os_MemChk(&free_block);
-    size_t fixed     = LWIP_TLS_FLOOR_BYTES;
-    size_t cap       = g_cfg.lwip_mem_cap;
-    size_t pbuf_pool = LWIP_PBUF_POOL_BYTES;
-    size_t heap_budget = (cap > pbuf_pool) ? (cap - pbuf_pool) : 0u;
-    size_t usermem   = (free_ram > cap) ? (free_ram - cap) : 0u;
-
-    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-
-    int y = UI_CONTENT_Y + 4;
-    char buf[40];
-    os_SetDrawFGColor(UI_COLOR_FG);
-
-#define MEM_ROW(label, bytes) \
-    do { \
-        os_FontDrawTransText((label), UI_MARGIN + 6, y); \
-        snprintf(buf, sizeof(buf), "%u B", (unsigned)(bytes)); \
-        int vw = (int)os_FontGetWidth(buf); \
-        os_FontDrawTransText(buf, LCD_WIDTH - UI_MARGIN - vw, y); \
-        y += UI_ROW_H; \
-    } while (0)
-
-    MEM_ROW("TLS-capable floor:", fixed);
-    MEM_ROW("pbuf pool:", pbuf_pool);
-    MEM_ROW("Non-pool heap:", heap_budget);
-
-    /* Divider above the slider row */
-    y += 2;
-    ui_hline(UI_MARGIN, y, LCD_WIDTH - 2 * UI_MARGIN, UI_COLOR_SEPARATOR);
-    y += 4;
-
-    /* Slider row — highlighted */
-    ui_fill_rect(0, y, LCD_WIDTH, UI_ROW_H, UI_COLOR_EDIT_BG);
-    ui_fill_rect(2, y + 2, 4, UI_ROW_H - 4, UI_COLOR_ACCENT);
-    os_SetDrawFGColor(UI_COLOR_FG);
-    os_FontDrawTransText("lwIP Heap:", UI_MARGIN + 6, y);
-    snprintf(buf, sizeof(buf), "%u B", (unsigned)cap);
-    int vw = (int)os_FontGetWidth(buf);
-    os_FontDrawTransText(buf, LCD_WIDTH - UI_MARGIN - vw, y);
-    y += UI_ROW_H + 4;
-
-    ui_hline(UI_MARGIN, y, LCD_WIDTH - 2 * UI_MARGIN, UI_COLOR_SEPARATOR);
-    y += 4;
-
-    MEM_ROW("Usermem remaining:", usermem);
-#undef MEM_ROW
-}
-
 static void option_sync_from_cfg(struct config_option *opt)
 {
     switch (opt->id)
     {
-    case OPT_MEM_CAP:
-        option_set_u16(opt->value, g_cfg.lwip_mem_cap);
-        break;
     case OPT_TZ_OFFSET:
         option_set_i16(opt->value, g_cfg.tz_offset_minutes);
         break;
     case OPT_DST:
         option_set_bool(opt->value, g_cfg.dst_enabled != 0);
-        break;
-    case OPT_AUTO_NTP:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_AUTO_NTP) != 0);
-        break;
-    case OPT_DNS:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_DNS) != 0);
-        break;
-    case OPT_IP_MODE:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_DHCP) != 0);
-        break;
-    case OPT_TLS_CHAIN_MODE:
-        option_set_bool(opt->value, (g_cfg.flags & LWIP_CFG_FULL_CHAIN_VERIFY) != 0);
         break;
     default:
         // Action/separator types, no sync needed
@@ -712,22 +569,11 @@ static void format_option_value(const struct config_option *opt, char *buf, size
 {
     switch (opt->id)
     {
-    case OPT_MEM_CAP:
-        snprintf(buf, buf_len, "%uk", option_get_u16(opt->value) / 1024u);
-        break;
     case OPT_TZ_OFFSET:
         format_tz_offset(buf, buf_len, option_get_i16(opt->value));
         break;
     case OPT_DST:
-    case OPT_AUTO_NTP:
-    case OPT_DNS:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
-        break;
-    case OPT_TLS_CHAIN_MODE:
-        /* Show "Full" or "Pin" so the menu reads as a mode-picker
-         * rather than a yes/no toggle. */
-        snprintf(buf, buf_len, "%s",
-                 option_get_bool(opt->value) ? "Full" : "Pin");
         break;
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     case OPT_NTP_TEST:
@@ -739,20 +585,10 @@ static void format_option_value(const struct config_option *opt, char *buf, size
         snprintf(buf, buf_len, ">");
         break;
 #endif
-    case OPT_IP_MODE:
-        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
-        break;
     case OPT_EDIT_IP:
-        if (g_cfg.flags & LWIP_CFG_DHCP)
-        {
-            snprintf(buf, buf_len, "(DHCP)");
-        }
-        else
-        {
-            snprintf(buf, buf_len, "%u.%u.%u.%u",
-                     g_cfg.ip_addr[0], g_cfg.ip_addr[1],
-                     g_cfg.ip_addr[2], g_cfg.ip_addr[3]);
-        }
+        snprintf(buf, buf_len, "%u.%u.%u.%u",
+                 g_cfg.ip_addr[0], g_cfg.ip_addr[1],
+                 g_cfg.ip_addr[2], g_cfg.ip_addr[3]);
         break;
     case OPT_HOSTNAME:
         snprintf(buf, buf_len, "%s", g_cfg.hostname);
@@ -769,22 +605,6 @@ static bool config_toggle_option(struct config_option *opt)
     {
     case OPT_DST:
         g_cfg.dst_enabled = (uint8_t)!g_cfg.dst_enabled;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_AUTO_NTP:
-        g_cfg.flags ^= LWIP_CFG_AUTO_NTP;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_DNS:
-        g_cfg.flags ^= LWIP_CFG_DNS;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_IP_MODE:
-        g_cfg.flags ^= LWIP_CFG_DHCP;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_TLS_CHAIN_MODE:
-        g_cfg.flags &= (uint8_t)~LWIP_CFG_FULL_CHAIN_VERIFY;
         option_sync_from_cfg(opt);
         return true;
     default:
@@ -2427,7 +2247,7 @@ static void edit_ip_config(lwip_app_config_t *cfg)
         ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
     }
     ui_draw_footer("<arrows> Navigate  <enter> Edit",
-                   "<clear> Done");
+                   "<clear> Done  DHCP default");
 
     while (1)
     {
@@ -2456,7 +2276,7 @@ static void edit_ip_config(lwip_app_config_t *cfg)
                     ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
                 }
                 ui_draw_footer("<arrows> Navigate  <enter> Edit",
-                               "<clear> Done");
+                               "<clear> Done  DHCP default");
             }
             continue;
         }
@@ -2477,13 +2297,25 @@ static void edit_ip_config(lwip_app_config_t *cfg)
 }
 
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
+/* A non-zero configured IP means the user wants a static address;
+ * an all-zero IP means use DHCP (the default). */
+static bool config_uses_static_ip(const lwip_app_config_t *cfg)
+{
+    return (cfg->ip_addr[0] | cfg->ip_addr[1] |
+            cfg->ip_addr[2] | cfg->ip_addr[3]) != 0;
+}
+
 static void apply_network_config(const lwip_app_config_t *cfg)
 {
     lwip_sntp_set_timezone_offset((int32_t)cfg->tz_offset_minutes * 60);
     lwip_sntp_set_dst_enabled(cfg->dst_enabled != 0);
 
-    if (cfg->flags & LWIP_CFG_DHCP)
+    bool static_ip = config_uses_static_ip(cfg);
+
+    if (!static_ip)
     {
+        /* DHCP is the default. It also supplies DNS servers, so there is
+         * nothing extra to start for name resolution. */
         if (netif_default && !dhcp_client_running(netif_default))
         {
             dhcp_start(netif_default);
@@ -2506,46 +2338,24 @@ static void apply_network_config(const lwip_app_config_t *cfg)
             netif_set_addr(netif_default, &ip, &mask, &gw);
             manual_ip_applied = true;
             dhcp_started = false;
+            /* DHCP would have populated DNS servers for us; with a static
+             * address bring DNS up explicitly. */
+            dns_init();
         }
-    }
-
-    if (cfg->flags & LWIP_CFG_AUTO_NTP)
-    {
-        if (netif_default && !sntp_started)
-        {
-            sntp_servermode_dhcp(1);
-            const ip_addr_t *server = sntp_getserver(0);
-            if (server && !ip_addr_isany(server))
-            {
-                sntp_setoperatingmode(SNTP_OPMODE_POLL);
-                sntp_init();
-                sntp_started = true;
-            }
-        }
-    }
-    else if (sntp_started)
-    {
-        sntp_stop();
-        sntp_started = false;
-    }
-
-    if (cfg->flags & LWIP_CFG_DNS)
-    {
-        dns_init();
     }
 
     if ((cfg->flags & LWIP_CFG_TEST_HTTP) != 0)
     {
         if (netif_default && !httpd_running)
         {
-            bool has_ip = false;
-            if ((cfg->flags & LWIP_CFG_DHCP) != 0)
+            bool has_ip;
+            if (static_ip)
             {
-                has_ip = dhcp_supplied_address(netif_default);
+                has_ip = !ip4_addr_isany(netif_ip4_addr(netif_default));
             }
             else
             {
-                has_ip = !ip4_addr_isany(netif_ip4_addr(netif_default));
+                has_ip = dhcp_supplied_address(netif_default);
             }
             if (has_ip)
             {
@@ -2663,11 +2473,6 @@ int main(void)
 #endif
 
     lwip_app_config_load(&g_cfg);
-
-    /* Clamp lwip_mem_cap so it stays between the feature floor and the
-     * current free RAM.  A stored config from a time when the device had
-     * more free RAM shouldn't overflow what's actually available now. */
-    config_clamp_mem_cap(&g_cfg);
     config_sync_from_cfg();
 
     // Clear screen and set up font
@@ -2723,46 +2528,14 @@ int main(void)
             if (key == sk_Clear || key == sk_Enter)
             {
                 int old_edit = edit_option;
-                edit_mode_t old_mode = edit_mode;
                 edit_mode = EDIT_NONE;
                 edit_option = -1;
-                if (old_mode == EDIT_MEM_CAP)
-                {
-                    /* Breakdown panel was covering the menu — restore it */
-                    ui_draw_menu(selected, scroll_pos, false);
-                }
-                else
-                {
-                    ui_draw_single_option(old_edit, scroll_pos, selected, false);
-                }
+                ui_draw_single_option(old_edit, scroll_pos, selected, false);
                 ui_draw_mode_footer(false, EDIT_NONE);
                 continue;
             }
             bool value_changed = false;
-            if (edit_mode == EDIT_MEM_CAP && edit_option >= 0 &&
-                (key == sk_Left || key == sk_Right))
-            {
-                struct config_option *opt = &config_options[edit_option];
-                /* Bounds recomputed each keystroke so the ceiling always
-                 * reflects current free RAM, not a stale snapshot. */
-                size_t   floor   = config_required_lwip_floor(&g_cfg);
-                uint16_t cap_max = config_mem_cap_max();
-                if (key == sk_Left &&
-                    g_cfg.lwip_mem_cap >= (uint16_t)floor + LWIP_CFG_MEM_CAP_STEP)
-                {
-                    g_cfg.lwip_mem_cap = (uint16_t)(g_cfg.lwip_mem_cap - LWIP_CFG_MEM_CAP_STEP);
-                    option_sync_from_cfg(opt);
-                    value_changed = true;
-                }
-                else if (key == sk_Right &&
-                         g_cfg.lwip_mem_cap + LWIP_CFG_MEM_CAP_STEP <= cap_max)
-                {
-                    g_cfg.lwip_mem_cap = (uint16_t)(g_cfg.lwip_mem_cap + LWIP_CFG_MEM_CAP_STEP);
-                    option_sync_from_cfg(opt);
-                    value_changed = true;
-                }
-            }
-            else if (key == sk_Left && edit_mode == EDIT_TZ && edit_option >= 0)
+            if (key == sk_Left && edit_mode == EDIT_TZ && edit_option >= 0)
             {
                 struct config_option *opt = &config_options[edit_option];
                 if (opt->id == OPT_TZ_OFFSET && g_cfg.tz_offset_minutes > LWIP_CFG_TZ_MIN_MINUTES)
@@ -2784,15 +2557,7 @@ int main(void)
             }
             if (value_changed)
             {
-                if (edit_mode == EDIT_MEM_CAP)
-                {
-                    /* Breakdown panel replaces the menu while editing the cap */
-                    ui_draw_mem_breakdown();
-                }
-                else
-                {
-                    ui_draw_single_option(selected, scroll_pos, selected, true);
-                }
+                ui_draw_single_option(selected, scroll_pos, selected, true);
             }
             continue;
         }
@@ -2865,29 +2630,12 @@ int main(void)
             if (opt->type == F_TYPE_INT_SLIDER)
             {
                 // Enter edit mode for sliders
-                switch (opt->id)
+                if (opt->id == OPT_TZ_OFFSET)
                 {
-                case OPT_MEM_CAP:
-                    edit_mode = EDIT_MEM_CAP;
-                    edit_option = selected;
-                    break;
-                case OPT_TZ_OFFSET:
                     edit_mode = EDIT_TZ;
                     edit_option = selected;
-                    break;
-                default:
-                    break;
                 }
-                /* Memory cap gets a full breakdown panel; other sliders just
-                 * highlight the single row as before. */
-                if (edit_mode == EDIT_MEM_CAP)
-                {
-                    ui_draw_mem_breakdown();
-                }
-                else
-                {
-                    ui_draw_single_option(selected, scroll_pos, selected, true);
-                }
+                ui_draw_single_option(selected, scroll_pos, selected, true);
                 ui_draw_mode_footer(true, edit_mode);
             }
             else if (opt->type == F_TYPE_BOOL_TOGGLE && opt->setter)
@@ -2898,11 +2646,6 @@ int main(void)
             }
             else if (opt->type == F_TYPE_ACTION && opt->setter)
             {
-                // Skip IP config if DHCP is on
-                if (opt->id == OPT_EDIT_IP && (g_cfg.flags & LWIP_CFG_DHCP))
-                {
-                    continue;
-                }
                 opt->setter(opt);
                 // Action dialogs clear screen, redraw everything
                 needs_redraw = true;

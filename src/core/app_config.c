@@ -10,9 +10,15 @@ static bool g_cfg_loaded = false;
 
 static void lwip_app_config_normalize(lwip_app_config_t *cfg)
 {
-    /* Full-chain validation is not implemented yet. Keep the persisted
-     * control bit reserved, but force runtime policy to SPKI-pin mode. */
-    cfg->flags &= (uint8_t)~LWIP_CFG_FULL_CHAIN_VERIFY;
+    /* These persisted bits were formerly wizard-controlled services or
+     * security/logging toggles. The stack now owns service startup and TLS
+     * policy, so old appvars must not re-enable them. */
+    cfg->flags &= (uint8_t)~(LWIP_CFG_DNS |
+                            LWIP_CFG_LOG_USB |
+                            LWIP_CFG_AUTO_NTP |
+                            LWIP_CFG_DHCP |
+                            LWIP_CFG_FULL_CHAIN_VERIFY |
+                            LWIP_CFG_LOG_TLS);
 
     if (cfg->log_min_level < LWIP_CFG_LOG_LEVEL_MIN ||
         cfg->log_min_level > LWIP_CFG_LOG_LEVEL_MAX)
@@ -31,12 +37,7 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
     cfg->version = LWIP_CFG_VERSION;
     cfg->lwip_mem_cap = LWIP_CFG_MEM_CAP_DEF;
-    /* Default flags: DHCP + DNS on, SPKI-pin chain mode
-     * (FULL_CHAIN_VERIFY clear). CertificateVerify signature checking
-     * always runs; it is not user-toggleable. Apps that need strict
-     * chain validation can use FULL_CHAIN_VERIFY once that path is
-     * implemented. */
-    cfg->flags = LWIP_CFG_DHCP | LWIP_CFG_DNS;
+    cfg->flags = 0;
     cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
     cfg->tz_offset_minutes = 0;
     cfg->dst_enabled = 0;

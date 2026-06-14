@@ -83,6 +83,8 @@ typedef enum lwip_debug_state
     LWIP_DBG_TLS_FATAL_ALERT = 0x340,
     LWIP_DBG_TLS_TRUSTSTORE_FAIL,
     LWIP_DBG_TLS_CERTVERIFY_FAIL,
+    LWIP_DBG_TLS_CHAIN_VERIFY_FAIL,    /* a chain link's signature did not verify */
+    LWIP_DBG_TLS_CERT_UNSUPPORTED,     /* cert sig type not RSA-2048: accepted, alerted */
 
     /* ---- TLS verbose record/decrypt path (0x360..), depth 1 ---- */
     LWIP_DBG_TLS_REC_RX = 0x360,        /* encrypted record seen            */
@@ -95,11 +97,46 @@ typedef enum lwip_debug_state
 } lwip_debug_state_t;
 
 /**
+ * Severity of an event. Orthogonal to `depth` (which is a verbosity axis):
+ * depth says how much detail an emit carries, severity says how bad it is.
+ *
+ *   INFO   — normal progress / informational milestone (errnum == 0).
+ *   ALERT  — problematic but acceptable: the stack noticed something wrong
+ *            yet chose to proceed (e.g. an unsupported-but-tolerated cert).
+ *   ERROR  — something went wrong; the operation is failing or aborting.
+ *
+ * A fatal event (lwip_debug_fatal) is delivered as ERROR.
+ */
+enum lwip_debug_severity
+{
+    LWIP_DBG_SEV_INFO  = 0, /* normal progress / informational     */
+    LWIP_DBG_SEV_ALERT = 1, /* problematic but proceeding anyway   */
+    LWIP_DBG_SEV_ERROR = 2  /* something went wrong                */
+};
+
+/**
+ * Module-specific error codes carried in lwip_debug_info.errnum. The errnum
+ * space is per-module; read it together with `module`. 0 always means "ok".
+ */
+enum lwip_debug_tls_errnum
+{
+    /* A certificate in the chain is signed with an algorithm we don't verify
+     * (not RSA-2048). The cert is accepted anyway (ALERT severity), but the
+     * chain link is left cryptographically unchecked. */
+    LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED = 1,
+    /* An RSA-2048 chain link's issuer signature failed to verify. Fatal
+     * (ERROR severity); the handshake is aborted. */
+    LWIP_DBG_TLS_ERR_CHAIN_VERIFY = 2
+};
+
+/**
  * One debug event handed to the callback.
  *  - module:        which component raised it (lwip_debug_module_t)
  *  - module_state:  identifier of where in the code (lwip_debug_state_t)
  *  - errnum:        0 = ok / informational; non-zero = an error code
  *  - line:          __LINE__ at the emit site (0 if not applicable)
+ *  - depth:         verbosity depth of this emit (lwip_debug_depth)
+ *  - severity:      how bad the event is (lwip_debug_severity)
  */
 struct lwip_debug_info
 {
@@ -108,6 +145,7 @@ struct lwip_debug_info
     int      errnum;        /* 0 = ok, else error  */
     uint16_t line;
     uint8_t  depth;         /* verbosity depth of this emit (lwip_debug_depth) */
+    uint8_t  severity;      /* lwip_debug_severity */
 };
 
 /** Debug delivery mode (bit flags). */
@@ -173,6 +211,30 @@ void lwip_debug_emit_at(uint16_t module, uint16_t module_state, int errnum,
 /** Emit at milestone depth (depth 0). Convenience wrapper. */
 void lwip_debug_emit(uint16_t module, uint16_t module_state, int errnum,
                      uint16_t line);
+
+/**
+ * Emit a debug event carrying an explicit severity (lwip_debug_severity).
+ * Like lwip_debug_emit_at, plus a severity tag. ALERT/ERROR emits are always
+ * delivered regardless of the configured depth (like errors). Use
+ * lwip_debug_alert / lwip_debug_error for the common cases.
+ */
+void lwip_debug_emit_sev(uint16_t module, uint16_t module_state, int errnum,
+                         uint16_t line, uint8_t depth, uint8_t severity);
+
+/**
+ * Emit an ALERT: something problematic but acceptable — the stack noticed a
+ * problem yet is proceeding. Always delivered. Milestone depth.
+ */
+void lwip_debug_alert(uint16_t module, uint16_t module_state, int errnum,
+                      uint16_t line);
+
+/**
+ * Emit an ERROR: something went wrong (operation failing/aborting, but not a
+ * fatal abort of the whole program — for that use lwip_debug_fatal). Always
+ * delivered. Milestone depth. Forces a non-zero errnum if 0 is passed.
+ */
+void lwip_debug_error(uint16_t module, uint16_t module_state, int errnum,
+                      uint16_t line);
 
 /**
  * Emit a fatal event then terminate the program (does not return). The

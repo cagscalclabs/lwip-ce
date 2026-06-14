@@ -4,11 +4,13 @@ libload-shipped lwIP.
 
 Default layout:
 
-    build/lwip/
-        conn.h                   — pruned copy of src/lwIP.h (conn API)
-        core.h                   — aggregate include for core/*.h
+    build/
+        lwip.h                   — preferred surface: the conn API (pruned
+                                   src/lwIP.h) inlined at the top, then an
+                                   aggregate include of lwip/core/*.h
+        cryptography.h           — aggregate include for lwip/cryptography/*.h
+        lwip/
         core/<name>.h            — non-crypto source headers with public API
-        cryptography.h           — aggregate include for cryptography/*.h
         cryptography/<name>.h    — TLS/crypto source headers with public API
 
 Pruning strategy:
@@ -23,7 +25,7 @@ Pruning strategy:
      Macros, types, structs, inline helpers, extern data: untouched.
 
 That makes the output tree usable directly — apps include
-<lwip/conn.h> / <lwip/core.h> / <lwip/cryptography.h>
+<lwip.h> / <cryptography.h>
 and see exactly the surface they can link against via libload.
 
 Run from repo root:
@@ -82,8 +84,15 @@ PUBLIC_API_MANIFEST = REPO_ROOT / "build-tools" / "public_api_manifest.csv"
 CONN_SRC = SRC_DIR / "lwIP.h"
 TLS_INCLUDES = SRC_DIR / "tls" / "includes"
 
-OUT_DIR = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build")) / "lwip"
-OUT_CONN = OUT_DIR / "conn.h"
+OUT_ROOT = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build"))
+OUT_DIR = OUT_ROOT / "lwip"
+OUT_CORE_INDEX = OUT_ROOT / "lwip.h"
+OUT_CRYPTO_INDEX = OUT_ROOT / "cryptography.h"
+
+# The conn convenience API is inlined directly at the TOP of lwip.h so it is
+# the visibly-preferred surface (not buried among lwip/core/*.h). This holds
+# its pruned body between emit time and umbrella assembly.
+_CONN_BODY: str = ""
 DOCSTRING_CACHE_DIR = REPO_ROOT / "build-tools" / ".docstring_cache"
 DOCSTRING_PROMPT_VERSION = 1
 DOCSTRING_STATE_FILE = DOCSTRING_CACHE_DIR / "release_tree_state.json"
@@ -98,6 +107,14 @@ SKIP_HEADERS = {
     "src/include/lwip/opt.h",
     "src/include/lwip/init.h.cmake.in",
     "src/tls/includes/handshake.h",
+}
+
+# X-macro / list headers that are emitted to disk so transitive includes
+# resolve, but must NOT be listed in the umbrella lwip.h/cryptography.h:
+# they are deliberately included multiple times and are not standalone
+# compilable (e.g. memp_std.h's bare LWIP_MEMPOOL(...) entries).
+UMBRELLA_EXCLUDE_BASENAMES = {
+    "memp_std.h",
 }
 
 SOURCE_DECL_OWNER_HEADERS = {
@@ -1660,10 +1677,12 @@ def declared_functions_in_text(header_text: str) -> dict[str, tuple[int, int]]:
 
 def release_tree_digest() -> str:
     digest = hashlib.sha256()
-    for path in sorted(OUT_DIR.rglob("*")):
+    paths = [OUT_CORE_INDEX, OUT_CRYPTO_INDEX]
+    paths.extend(sorted(OUT_DIR.rglob("*")))
+    for path in paths:
         if not path.is_file():
             continue
-        rel = path.relative_to(OUT_DIR).as_posix()
+        rel = path.relative_to(OUT_ROOT).as_posix()
         digest.update(rel.encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
@@ -1732,7 +1751,7 @@ def maybe_rewrite_docstrings(header: Path, body: str, exports: set[str]) -> str:
 def derive_guard(out_path: Path) -> str:
     """LWIP_PUBLIC_<relpath>_H, deterministic from the output location.
     Ensures no clashes with the original header guards."""
-    rel = out_path.relative_to(OUT_DIR).as_posix()
+    rel = out_path.relative_to(OUT_ROOT).as_posix()
     base = re.sub(r"[^A-Za-z0-9]", "_", rel.upper())
     if not base.endswith("_H"):
         base += "_H"
@@ -1829,7 +1848,7 @@ def grouped_header_name(source_header: Path, group_headers: list[Path]) -> str:
 
 
 def write_group_index(group: str, names: list[str], source_headers: list[Path]) -> None:
-    out_path = OUT_DIR / f"{group}.h"
+    out_path = OUT_CORE_INDEX if group == "core" else OUT_CRYPTO_INDEX
     guard = derive_guard(out_path)
     lines = [
         f"#ifndef {guard}",
@@ -1844,7 +1863,20 @@ def write_group_index(group: str, names: list[str], source_headers: list[Path]) 
             "",
         ])
     for name in names:
-        lines.append(f'#include "{group}/{name}"')
+        lines.append(f'#include "lwip/{group}/{name}"')
+    if group == "core" and _CONN_BODY:
+        lines.extend([
+            "",
+            "/* ================================================================",
+            " * lwIP-CE connection API — the preferred high-level surface.",
+            " * Inlined here (rather than a buried subheader) because this is",
+            " * the API most apps should use: lwip_conn_create / _connect /",
+            " * _write / _recv / _close. The lwip/core/*.h includes above expose",
+            " * the lower-level lwIP primitives for advanced use.",
+            " * ================================================================ */",
+            "",
+            _CONN_BODY.rstrip(),
+        ])
     if group == "core":
         lines.extend([
             "",
@@ -1874,11 +1906,9 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
     """Emit release headers from the manifest allowlist.
 
     Layout is intentionally small:
-      - lwip/conn.h is the pruned src/lwIP.h convenience API.
-      - lwip/cryptography/*.h contains TLS/crypto headers.
-      - lwip/core/*.h contains every other lwIP/public header.
-    Aggregate lwip/cryptography.h and lwip/core.h include
-    their corresponding subheaders.
+      - lwip.h leads with the pruned src/lwIP.h conn API (inlined), then
+        includes lwip/core/*.h (every other lwIP/public header).
+      - cryptography.h includes lwip/cryptography/*.h (TLS/crypto headers).
     """
     by_group_source: dict[str, dict[str, list[str]]] = {}
     missing_symbols: list[str] = []
@@ -1903,17 +1933,19 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
     macro_file = build_macro_file()
     macro_defs = parse_build_macro_definitions(macro_file)
 
+    global _CONN_BODY
     if "conn" in by_group_source:
         source_map = by_group_source.pop("conn")
         symbols = set(source_map.get(CONN_SRC.relative_to(REPO_ROOT).as_posix(), []))
         if symbols:
+            # Inlined into lwip.h at OUT_ROOT, so cross-references resolve as
+            # lwip/core/<name> (the conn API pulls in err/ip_addr/pbuf and the
+            # unified debug types from logging.h, all emitted into core).
             conn_source_to_output = {
-                (SRC_DIR / "include" / "lwip" / "err.h").resolve(): "core/err.h",
-                (SRC_DIR / "include" / "lwip" / "ip_addr.h").resolve(): "core/ip_addr.h",
-                (SRC_DIR / "include" / "lwip" / "pbuf.h").resolve(): "core/pbuf.h",
-                # The conn header pulls in the unified debug types (lwip_debug_*,
-                # lwip_set_debug). logging.h is emitted into the core group.
-                (SRC_DIR / "include" / "lwip" / "logging.h").resolve(): "core/logging.h",
+                (SRC_DIR / "include" / "lwip" / "err.h").resolve(): "lwip/core/err.h",
+                (SRC_DIR / "include" / "lwip" / "ip_addr.h").resolve(): "lwip/core/ip_addr.h",
+                (SRC_DIR / "include" / "lwip" / "pbuf.h").resolve(): "lwip/core/pbuf.h",
+                (SRC_DIR / "include" / "lwip" / "logging.h").resolve(): "lwip/core/logging.h",
             }
             body, emitted_functions = pruned_copy_header_body(
                 CONN_SRC,
@@ -1922,14 +1954,10 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
                 macro_file,
                 macro_defs,
             )
-            OUT_CONN.parent.mkdir(parents=True, exist_ok=True)
-            OUT_CONN.write_text(body)
-            release_source_map[OUT_CONN.relative_to(OUT_DIR).as_posix()] = (
-                CONN_SRC.relative_to(REPO_ROOT).as_posix()
-            )
+            _CONN_BODY = body
             header_count += 1
             function_count += emitted_functions
-            print("  conn.h", file=sys.stderr)
+            print("  conn API (inlined into lwip.h)", file=sys.stderr)
 
     for group in sorted(by_group_source):
         source_map = by_group_source[group]
@@ -1995,11 +2023,15 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(body)
             release_source_map[out_path.relative_to(OUT_DIR).as_posix()] = rel
+            index_names.append(out_name)
             if emitted_functions > 0:
-                index_names.append(out_name)
                 function_count += emitted_functions
             header_count += 1
 
+        index_names = sorted({
+            path.name for path in group_dir.glob("*.h")
+            if path.name not in UMBRELLA_EXCLUDE_BASENAMES
+        })
         write_group_index(group, index_names, [])
         print(f"  {group}/ {len(index_names)} headers", file=sys.stderr)
 
@@ -2035,8 +2067,6 @@ def apply_ai_docstrings_to_release(manifest: list[dict[str, str]], exports: set[
 
     rewritten = 0
     for path in sorted(OUT_DIR.rglob("*.h")):
-        if path.name in {"core.h", "cryptography.h"}:
-            continue
         text = path.read_text()
         source_rel = release_source_map.get(path.relative_to(OUT_DIR).as_posix())
         if not source_rel:
@@ -2066,8 +2096,8 @@ def test_build_generated_headers() -> bool:
               file=sys.stderr)
         return True
 
-    public_headers = {OUT_CONN, OUT_DIR / "core.h", OUT_DIR / "cryptography.h"}
-    for aggregate in [OUT_DIR / "core.h", OUT_DIR / "cryptography.h"]:
+    public_headers = {OUT_CORE_INDEX, OUT_CRYPTO_INDEX}
+    for aggregate in [OUT_CORE_INDEX, OUT_CRYPTO_INDEX]:
         if not aggregate.is_file():
             continue
         for match in re.finditer(r'^\s*#\s*include\s+"([^"]+)"', aggregate.read_text(), re.MULTILINE):
@@ -2075,7 +2105,11 @@ def test_build_generated_headers() -> bool:
 
     failures: list[tuple[Path, str]] = []
     for header in sorted(path for path in public_headers if path.is_file()):
-        include = header.relative_to(REPO_ROOT).as_posix()
+        # The aggregate umbrellas pull in their subheaders via
+        # `#include "lwip/<group>/..."`, which resolves relative to OUT_ROOT.
+        # Use an absolute include path and -I OUT_ROOT so the syntax test
+        # works regardless of where the release tree is staged.
+        include = str(header)
         res = subprocess.run(
             [
                 compiler,
@@ -2086,12 +2120,13 @@ def test_build_generated_headers() -> bool:
                 "-Wno-unused-parameter",
                 "-Wno-implicit-function-declaration",
                 "-isystem", str(CEDEV_INCLUDE),
+                "-I", str(OUT_ROOT),
                 "-x", "c",
                 "-",
             ],
             capture_output=True,
             text=True,
-            cwd=str(REPO_ROOT),
+            cwd=str(OUT_ROOT),
             input=(
                 "typedef unsigned int uint24_t;\n"
                 "typedef int int24_t;\n"
@@ -2105,7 +2140,11 @@ def test_build_generated_headers() -> bool:
     if failures:
         print("ERROR: generated release headers failed syntax test:", file=sys.stderr)
         for header, stderr in failures[:10]:
-            print(f"  {header.relative_to(REPO_ROOT)}", file=sys.stderr)
+            try:
+                label = header.relative_to(OUT_ROOT).as_posix()
+            except ValueError:
+                label = str(header)
+            print(f"  {label}", file=sys.stderr)
             for line in stderr.splitlines()[:8]:
                 print(f"    {line}", file=sys.stderr)
         if len(failures) > 10:
@@ -2137,9 +2176,16 @@ def main() -> int:
 
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
+    for aggregate in (OUT_CORE_INDEX, OUT_CRYPTO_INDEX):
+        if aggregate.exists():
+            aggregate.unlink()
     OUT_DIR.mkdir(parents=True)
 
-    print(f"==> writing {OUT_DIR.relative_to(REPO_ROOT)}/", file=sys.stderr)
+    try:
+        out_label = OUT_ROOT.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        out_label = str(OUT_ROOT)
+    print(f"==> writing {out_label}/", file=sys.stderr)
     n_headers, n_functions = emit_category_headers(manifest, exports)
     apply_ai_docstrings_to_release(manifest, exports)
     if not test_build_generated_headers():

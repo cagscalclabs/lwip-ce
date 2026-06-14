@@ -277,9 +277,13 @@ lwip_error_t lwip_conn_recved(struct lwip_conn *conn, size_t len);
 lwip_error_t lwip_conn_shutdown(struct lwip_conn *conn);
 
 /** Orderly close. For TCP/altcp/altcp_tls this asks the lower layer to
- *  close cleanly. If lwIP cannot close immediately (for example because
- *  memory is unavailable for a FIN), the pcb is left intact and the error
- *  is returned so the app can retry or call lwip_conn_abort().
+ *  close cleanly, then pumps the stack for a bounded interval until that
+ *  TCP PCB leaves the active close lists. If lwIP cannot enqueue the close
+ *  immediately (for example because memory is unavailable for a FIN), the
+ *  pcb is left intact and the error is returned so the app can retry or
+ *  call lwip_conn_abort(). If the close was enqueued but does not drain
+ *  before the timeout, the remaining TCP PCB is aborted and LWIP_ERR_CLOSED
+ *  is returned.
  *
  *  For UDP this removes the pcb. On success, no callbacks will fire and
  *  the handle is in CLOSED state. */

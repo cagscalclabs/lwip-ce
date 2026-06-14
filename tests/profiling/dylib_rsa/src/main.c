@@ -8,9 +8,8 @@
 #include <ti/getkey.h>
 #include <ti/screen.h>
 
-#include <lwip/core.h>
-#include <lwip/cryptography/hash.h>
-#include <lwip/cryptography/rsa.h>
+#include <lwip.h>
+#include <cryptography.h>
 
 void *os_FindAppStart(const char *name);
 
