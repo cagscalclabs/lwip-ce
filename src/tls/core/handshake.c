@@ -542,17 +542,11 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len,
                                     cert_fields, &cert_parsed))
     {
-        /* DIAG: x509 parse failed. errnum -100 - cert_index. */
-        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK,
-                        -100 - (int)w->cert_index, 0);
         return false;
     }
     if (!cert_parsed.spki_raw || !cert_parsed.spki_raw->data ||
         cert_parsed.spki_raw->len == 0)
     {
-        /* DIAG: no SPKI. errnum -200 - cert_index. */
-        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK,
-                        -200 - (int)w->cert_index, 0);
         return false;
     }
 
@@ -563,18 +557,14 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         uint8_t *copy = (uint8_t *)mem_buffer_custom_malloc(cert_parsed.spki_raw->len);
         if (!copy)
         {
-            /* DIAG: leaf SPKI malloc failed. Without it CertificateVerify can't
-             * run and the server would be unauthenticated. Fail closed. */
-            lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK, -300, 0);
+            /* Without the leaf SPKI, CertificateVerify can't run and the
+             * server would be unauthenticated. Fail closed. */
             return false;
         }
         memcpy(copy, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
         w->ctx->leaf_spki = copy;
         w->ctx->leaf_spki_len = cert_parsed.spki_raw->len;
     }
-
-    /* DIAG: this cert validated OK (errnum = +cert_index, i.e. 0 for leaf). */
-    lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK, (int)w->cert_index, 0);
 
     /* Then walk the chain: verify this link (stubbed to accept for now). */
     if (!tls_cert_chain_verify_one(w, &cert_parsed, is_leaf))

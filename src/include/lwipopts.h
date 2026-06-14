@@ -106,7 +106,13 @@
 #endif
 
 #define MAX_HEAP_USAGE (50u * 1024u)
-#define LWIP_PBUF_POOL_BYTES (10u * 1024u)
+/* Pbuf pool budget. With MEMP_MEM_MALLOC + the custom allocator, pool counts
+ * are a soft budget routed through the heap, and in practice the pool stays
+ * largely empty under our RX-copy-then-release flow (encrypted segments are
+ * copied into non-pool RAM and the network pbuf released immediately). 8K
+ * leaves headroom and returns the difference to MEM_SIZE (the general heap)
+ * below. */
+#define LWIP_PBUF_POOL_BYTES (8u * 1024u)
 
 /* MEM_ALIGNMENT: should be set to the alignment of the CPU for which
    lwIP is compiled. 4 byte alignment -> define MEM_ALIGNMENT to 4, 2

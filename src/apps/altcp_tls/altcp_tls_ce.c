@@ -25,7 +25,6 @@
 
 #include <string.h>
 #include <limits.h>
-#include <fileioc.h>
 
 /* Legacy per-step screen tracing is gone — TLS now emits structured debug
  * events through the unified stack-wide debug sink (lwip_set_debug; see
@@ -94,6 +93,13 @@ struct altcp_tls_ce_pski_store
 
 static struct altcp_tls_ce_pski_store g_pski_store;
 
+/* os_CreateAppVar takes a uint16_t size; the whole multi-entry store must fit.
+ * (Currently ~1.5 KB for 4 entries — far under 64 KiB, but guard the bound so a
+ * future bump to MAX_ENTRIES / TLS_PSK_IDENTITY_MAX_LEN can't silently truncate
+ * the persisted store.) */
+_Static_assert(sizeof(struct altcp_tls_ce_pski_store) <= 0xFFFFu,
+               "PSKI store too large for a single appvar (os_CreateAppVar size is uint16_t)");
+
 static bool altcp_tls_ce_pski_entry_matches(const struct altcp_tls_ce_pski_entry *entry,
                                             const char *hostname)
 {
@@ -106,7 +112,6 @@ static bool altcp_tls_ce_pski_entry_matches(const struct altcp_tls_ce_pski_entry
 static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session,
                                    const char *hostname)
 {
-    uint8_t handle;
     var_t *pski_var;
     struct altcp_tls_ce_pski_store *store = &g_pski_store;
     uint16_t count;
@@ -170,17 +175,21 @@ static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session,
     memcpy(store->entries[slot].hostname, hostname, host_len + 1);  /* +1 for NUL */
     memcpy(&store->entries[slot].identity, &session->identity, sizeof(store->entries[slot].identity));
 
-    handle = ti_Open(ALTCP_TLS_CE_PSKI_APPVAR, "w");
-    if (!handle)
+    /* Persist via TI-OS ROM appvar calls (os_*), NOT fileioc (ti_Open/Write).
+     * fileioc is itself a libload library; its symbols are not resolved inside
+     * this dynamically-loaded lwIP library, so calling ti_Open here jumps to an
+     * unresolved trampoline and crashes. os_CreateAppVar / os_GetAppVarData are
+     * TI-OS ROM calls (fixed addresses) and need no library — the same family
+     * the load path already uses. os_CreateAppVar makes a var_t whose 2-byte
+     * size header equals sizeof(*store) and whose data[] is the payload, which
+     * is exactly the layout altcp_tls_ce_load_pski reads back. */
+    os_DelAppVar(ALTCP_TLS_CE_PSKI_APPVAR); /* replace any existing copy */
+    pski_var = os_CreateAppVar(ALTCP_TLS_CE_PSKI_APPVAR, (uint16_t)sizeof(*store));
+    if (!pski_var)
     {
         return false;
     }
-    if (ti_Write(store, sizeof(*store), 1, handle) != 1)
-    {
-        ti_Close(handle);
-        return false;
-    }
-    ti_Close(handle);
+    memcpy(pski_var->data, store, sizeof(*store));
     return true;
 }
 
