@@ -18,13 +18,16 @@ under ``lwip/core/`` and ``lwip/cryptography/``.
    * - Header group
      - Purpose
    * - :doc:`lwip.h <lwip>`
-     - Root-level stack and socket API for applications that want a simpler
+     - Root-level stack globbing header file and socket API for
+       applications that want a simpler
        path than working directly at PCB level.
-   * - :doc:`core/ <core>`
+   * - :doc:`cryptography.h <lwip>`
+     - Root-level cryptography globbing header file.
+   * - :doc:`lwip/core/ <core>`
      - Lower-level ``lwip/core/*.h`` includes, curated and modified to match
        what is actually available in this implementation.
-   * - :doc:`cryptography.h and lwip/cryptography/ <cryptography>`
-     - Root-level crypto umbrella and lower-level primitives that can be used
+   * - :doc:`lwip/cryptography/ <cryptography>`
+     - Lower-level primitives that can be used
        outside the network stack.
 
 For stack usage and a full socket example, start with :doc:`../getting-started`.
