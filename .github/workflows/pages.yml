@@ -43,7 +43,7 @@ jobs:
       - name: Install Doxygen
         run: |
           sudo apt-get update
-          sudo apt-get install -y doxygen graphviz clang libclang-dev
+          sudo apt-get install -y doxygen graphviz clang-18 libclang-18-dev
 
       - name: Install docs dependencies
         run: python -m pip install -r docs/requirements.txt

@@ -1804,26 +1804,18 @@ bool tls_send_client_hello(
     out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
 
     /* Extension 5: signature_algorithms_cert.
-     * Keep CertificateVerify constrained by signature_algorithms above, but
-     * allow common RSA certificate-chain signatures. */
+     * Only advertise algorithms we actually verify: PKCS#1-v1.5-SHA256 for
+     * chain links and PSS-SHA256 for CertificateVerify. */
     out[offset++] = 0x00;
     out[offset++] = 0x32; /* Extension type: signature_algorithms_cert */
     out[offset++] = 0x00;
-    out[offset++] = 0x0e; /* Extension length: 14 */
+    out[offset++] = 0x06; /* Extension length: 6 */
     out[offset++] = 0x00;
-    out[offset++] = 0x0c; /* Signature algorithms list length: 12 */
+    out[offset++] = 0x04; /* Signature algorithms list length: 4 */
     out[offset++] = 0x04;
     out[offset++] = 0x01; /* rsa_pkcs1_sha256 */
-    out[offset++] = 0x05;
-    out[offset++] = 0x01; /* rsa_pkcs1_sha384 */
-    out[offset++] = 0x06;
-    out[offset++] = 0x01; /* rsa_pkcs1_sha512 */
     out[offset++] = 0x08;
     out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
-    out[offset++] = 0x08;
-    out[offset++] = 0x05; /* rsa_pss_rsae_sha384 */
-    out[offset++] = 0x08;
-    out[offset++] = 0x06; /* rsa_pss_rsae_sha512 */
 
     /* Extension 6: ALPN (application_layer_protocol_negotiation).
      * Advertise HTTP/1.1 explicitly. Some HTTP front doors (e.g. large CDNs /
@@ -2416,8 +2408,6 @@ static bool tls_recv_encrypted_extensions(
 
 /* TLS 1.3 signature_algorithms code points (RFC 8446 §4.2.3). */
 #define TLS_SIG_RSA_PSS_RSAE_SHA256 0x0804
-#define TLS_SIG_RSA_PSS_RSAE_SHA384 0x0805
-#define TLS_SIG_RSA_PSS_RSAE_SHA512 0x0806
 
 /* Extract the raw modulus bytes from a DER-encoded SubjectPublicKeyInfo
  * for an rsaEncryption key. On success, *mod_out points into the SPKI
@@ -2684,16 +2674,9 @@ static bool tls_recv_certificate_verify(
     case TLS_SIG_RSA_PSS_RSAE_SHA256:
         sig_ok = tls_certverify_rsa_pss_sha256(ctx, data + offset, sig_len);
         break;
-    case TLS_SIG_RSA_PSS_RSAE_SHA384:
-    case TLS_SIG_RSA_PSS_RSAE_SHA512:
-        /* Hash framework is SHA-256-only on this device. The server had
-         * rsa_pss_rsae_sha256 in our ClientHello offer; selecting a wider
-         * hash is non-compliant. Fail closed. */
-        sig_ok = false;
-        break;
     default:
-        /* ECDSA isn't supported, and RSA-PKCS1 is illegal in
-         * CertificateVerify per RFC 8446 §4.4.3. */
+        /* Only rsa_pss_rsae_sha256 is advertised and supported; any other
+         * algorithm selected by the server fails closed. */
         sig_ok = false;
         break;
     }
