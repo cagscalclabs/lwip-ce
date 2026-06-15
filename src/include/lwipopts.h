@@ -40,6 +40,7 @@
 #define SNTP_GET_SERVERS_FROM_DHCP 1
 #define SNTP_SERVER_DNS LWIP_DNS
 #define SNTP_SERVER_ADDRESS "pool.ntp.org"
+#define SNTP_STARTUP_DELAY 0
 
 #define LWIP_NUM_NETIF_CLIENT_DATA (LWIP_MDNS_RESPONDER)
 
@@ -272,8 +273,9 @@ a lot of data that needs to be copied, this should be set high. */
 /* IP reassembly and segmentation.These are orthogonal even
  * if they both deal with IP fragments */
 #define IP_REASSEMBLY 1
-#define IP_REASS_MAX_PBUFS (10 * ((1500 + PBUF_POOL_BUFSIZE - 1) / PBUF_POOL_BUFSIZE))
+#define IP_REASS_MAX_PBUFS (PBUF_POOL_SIZE / 2)
 #define MEMP_NUM_REASSDATA IP_REASS_MAX_PBUFS
+#define IP_REASS_MAXAGE 6
 #define IP_FRAG 1
 #define IPV6_FRAG_COPYHEADER 1
 #define LWIP_ND6_NUM_NEIGHBORS 4

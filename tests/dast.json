@@ -1,0 +1,173 @@
+{
+  "tool": "lwip-dast",
+  "generated": "2026-06-15T21:32:12+00:00",
+  "target_ip": "192.168.2.56",
+  "summary": {
+    "total": 16,
+    "ok": 16,
+    "fail": 0,
+    "skip": 0
+  },
+  "results": [
+    {
+      "id": "icmp-echo-baseline",
+      "name": "ICMP echo baseline",
+      "command": "probe=icmp_echo_normal target=192.168.2.56",
+      "intent": "Liveness baseline: a well-formed ping must be answered.",
+      "expect": "reply",
+      "response": "REPLY",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "arp-malformed",
+      "name": "Malformed ARP",
+      "command": "probe=arp_malformed target=192.168.2.56",
+      "intent": "Bogus hlen/plen and truncated ARP must not corrupt the ARP cache or crash.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "arp-flood",
+      "name": "ARP request flood",
+      "command": "probe=arp_flood target=192.168.2.56",
+      "intent": "Rapid gratuitous/who-has flood: bounded ARP table, no OOM crash.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "icmp-oversize",
+      "name": "Oversized ICMP echo (fragmented)",
+      "command": "probe=icmp_oversize target=192.168.2.56",
+      "intent": "Multi-fragment ICMP (3KB, 2-3 fragments) must reassemble or drop cleanly without crashing.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "icmp-malformed",
+      "name": "Malformed ICMP",
+      "command": "probe=icmp_malformed target=192.168.2.56",
+      "intent": "Bad ICMP checksum / truncated header must be dropped, not parsed.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "ip-bad-checksum",
+      "name": "IP bad header checksum",
+      "command": "probe=ip_bad_checksum target=192.168.2.56",
+      "intent": "Corrupt IPv4 header checksum must cause a silent drop.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "ip-frag-overlap",
+      "name": "Overlapping IP fragments",
+      "command": "probe=ip_frag_overlap target=192.168.2.56",
+      "intent": "Teardrop-style overlapping fragments must not mis-reassemble or crash.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "ip-frag-bomb",
+      "name": "Incomplete fragment bomb",
+      "command": "probe=ip_frag_bomb target=192.168.2.56",
+      "intent": "Many never-completed fragments must be reaped (bounded reassembly memory).",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "udp-recv-baseline",
+      "name": "UDP recv baseline",
+      "command": "probe=udp_normal target=192.168.2.56:9999",
+      "intent": "A well-formed datagram reaches the recv callback and is handled.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "udp-oversize",
+      "name": "Oversized fragmented UDP",
+      "command": "probe=udp_oversize target=192.168.2.56:9999",
+      "intent": "Large fragmented UDP payload must not overflow the recv path.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "udp-malformed-len",
+      "name": "UDP bad length/checksum",
+      "command": "probe=udp_malformed target=192.168.2.56:9999",
+      "intent": "UDP length field longer than the packet / bad checksum must be dropped.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "tcp-syn-closed",
+      "name": "SYN to closed port",
+      "command": "probe=tcp_syn_closed target=192.168.2.56",
+      "intent": "SYN to an unbound port must elicit a RST, not a hang or crash.",
+      "expect": "rst",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "tcp-listen-baseline",
+      "name": "TCP listen baseline",
+      "command": "probe=tcp_connect_data target=192.168.2.56:9998",
+      "intent": "A normal connect + data exchange must be accepted and read.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "tcp-malformed-flags",
+      "name": "Malformed TCP flags",
+      "command": "probe=tcp_flag_storm target=192.168.2.56:9998",
+      "intent": "NULL / FIN / XMAS / SYN+FIN flag combos must be dropped or RST, not crash.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "tcp-tiny-window",
+      "name": "Tiny/zero window + overlap",
+      "command": "probe=tcp_tiny_window target=192.168.2.56:9998",
+      "intent": "Zero-window probes and overlapping segments must not desync or overrun.",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    },
+    {
+      "id": "tcp-data-overflow",
+      "name": "Oversized TCP data burst",
+      "command": "probe=tcp_data_overflow target=192.168.2.56:9998",
+      "intent": "A data burst far larger than the app recv buffer must be bounded (no overflow).",
+      "expect": "alive",
+      "response": "ALIVE",
+      "ping_alive": true,
+      "grade": "ok"
+    }
+  ]
+}

@@ -1,9 +1,9 @@
 /* lwIP-CE DAST calc-side harness.
  *
- * Pairs with build-tools/dast/lwip-dast.py. Walks the shared test list
- * (dast_tests.h, generated from tests/profiling/lwip_dast/dast_tests.json),
- * placing the stack into each test's listener state so the off-calc probe
- * runner can poke a meaningful surface:
+ * Pairs with build-tools/dast/lwip-dast.py. The script drives the calc
+ * over a UDP control channel (port 9997) — no manual keypress needed to
+ * advance tests. The calc opens the appropriate listener for each test,
+ * waits for probe traffic, then waits for the script to send NEXT/DONE.
  *
  *   DAST_STATE_IDLE        nothing app-side; ARP/ICMP/IP/closed-port handled
  *                          passively by the stack.
@@ -13,10 +13,10 @@
  *                          (recv copy is bounded — overflow attempts must not
  *                          overrun this fixed buffer).
  *
- * For each test the screen shows the id/name/intent and a live event counter
- * that updates as probe packets arrive. The operator runs the matching probe
- * on the host, watches what the calc does, then presses [enter] to advance
- * (or [clear] to quit). The host script prompts for the observed outcome.
+ * Control protocol (UDP port 9997):
+ *   Script → calc  "NEXT"  advance to the next test
+ *   Script → calc  "DONE"  all tests complete, calc exits cleanly
+ *   Script → calc  "ABRT"  abort run, calc exits
  */
 
 #include <stdbool.h>
@@ -29,37 +29,77 @@
 #include "common/lwip_example.h"
 #include "dast_tests.h"
 
-/* Bounded recv buffer shared by the UDP/TCP listeners. Deliberately small so
- * oversized probes exercise the bounded-copy path rather than an overrun. */
-#define DAST_RECV_CAP 128
-#define DAST_TCP_ACTIVE_MAX 4
+#define DAST_RECV_CAP      128
+#define DAST_TCP_ACTIVE_MAX  4
+#define DAST_CTRL_PORT      9997
 
-static volatile uint16_t dast_events;     /* packets/segments seen this test */
-static volatile uint16_t dast_accepts;    /* TCP accepts this test */
-static volatile uint16_t dast_last_len;   /* length of last payload handled */
+static volatile uint16_t dast_events;
+static volatile uint16_t dast_accepts;
+static volatile uint16_t dast_last_len;
 static char dast_recv_buf[DAST_RECV_CAP];
 
 static struct udp_pcb *dast_udp;
 static struct tcp_pcb *dast_tcp_listen;
 static struct tcp_pcb *dast_tcp_active[DAST_TCP_ACTIVE_MAX];
 
-enum
-{
-    DAST_SERVICE_PENDING = 0,
-    DAST_SERVICE_UP,
-    DAST_SERVICE_FAILED,
-    DAST_SERVICE_TIMEOUT,
-};
+/* Control channel state — set by the control PCB recv callback. */
+#define DAST_CTRL_NONE  0
+#define DAST_CTRL_NEXT  1
+#define DAST_CTRL_DONE  2
+#define DAST_CTRL_ABRT  3
+static volatile uint8_t dast_ctrl_signal = DAST_CTRL_NONE;
+static struct udp_pcb *dast_ctrl_pcb = NULL;
 
-static volatile uint8_t dast_dhcp_service_state;
-
-/* 0.0.0.0 = bind to any address. Built locally because the dylib's
- * ip_addr_any global is not exported through libload. */
 static ip_addr_t dast_ip_any(void)
 {
     ip_addr_t any;
     IP_ADDR4(&any, 0, 0, 0, 0);
     return any;
+}
+
+/* ---- Control channel ---------------------------------------------------- */
+
+static void dast_ctrl_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+                           const ip_addr_t *addr, u16_t port)
+{
+    (void)arg; (void)pcb; (void)addr; (void)port;
+    if (!p)
+        return;
+    char buf[8] = {0};
+    pbuf_copy_partial(p, buf, sizeof(buf) - 1, 0);
+    pbuf_free(p);
+
+    if (strncmp(buf, "NEXT", 4) == 0)
+        dast_ctrl_signal = DAST_CTRL_NEXT;
+    else if (strncmp(buf, "DONE", 4) == 0)
+        dast_ctrl_signal = DAST_CTRL_DONE;
+    else if (strncmp(buf, "ABRT", 4) == 0)
+        dast_ctrl_signal = DAST_CTRL_ABRT;
+}
+
+static bool dast_ctrl_open(void)
+{
+    ip_addr_t any = dast_ip_any();
+    dast_ctrl_pcb = udp_new();
+    if (!dast_ctrl_pcb)
+        return false;
+    if (udp_bind(dast_ctrl_pcb, &any, DAST_CTRL_PORT) != ERR_OK)
+    {
+        udp_remove(dast_ctrl_pcb);
+        dast_ctrl_pcb = NULL;
+        return false;
+    }
+    udp_recv(dast_ctrl_pcb, dast_ctrl_recv, NULL);
+    return true;
+}
+
+static void dast_ctrl_close(void)
+{
+    if (dast_ctrl_pcb)
+    {
+        udp_remove(dast_ctrl_pcb);
+        dast_ctrl_pcb = NULL;
+    }
 }
 
 /* ---- UDP listener ------------------------------------------------------- */
@@ -149,7 +189,6 @@ static err_t dast_tcp_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
     }
     if (!p)
     {
-        /* Remote closed. */
         dast_tcp_untrack(tpcb);
         tcp_arg(tpcb, NULL);
         tcp_recv(tpcb, NULL);
@@ -214,17 +253,13 @@ static void dast_tcp_close(void)
         dast_tcp_listen = NULL;
         tcp_accept(pcb, NULL);
         if (tcp_close(pcb) != ERR_OK)
-        {
             tcp_abort(pcb);
-        }
     }
     for (uint8_t i = 0; i < DAST_TCP_ACTIVE_MAX; i++)
     {
         struct tcp_pcb *pcb = dast_tcp_active[i];
         if (!pcb)
-        {
             continue;
-        }
         dast_tcp_active[i] = NULL;
         tcp_arg(pcb, NULL);
         tcp_recv(pcb, NULL);
@@ -249,7 +284,7 @@ static bool dast_enter_state(const dast_test_t *t)
     case DAST_STATE_TCP_LISTEN:
         return dast_tcp_open(t->port);
     case DAST_STATE_IDLE:
-    case DAST_STATE_RAW_RECV:   /* RAW reserved; idle handling suffices today */
+    case DAST_STATE_RAW_RECV:
     default:
         return true;
     }
@@ -274,7 +309,10 @@ static void dast_close_all(void)
 {
     dast_udp_close();
     dast_tcp_close();
+    dast_ctrl_close();
 }
+
+/* ---- display ------------------------------------------------------------ */
 
 static const char *dast_state_name(dast_state_t s)
 {
@@ -287,8 +325,6 @@ static const char *dast_state_name(dast_state_t s)
     default:                    return "idle";
     }
 }
-
-/* ---- per-test screen + pump loop ---------------------------------------- */
 
 static void dast_draw_test(int idx, const dast_test_t *t, bool open_ok)
 {
@@ -303,7 +339,7 @@ static void dast_draw_test(int idx, const dast_test_t *t, bool open_ok)
         lwip_example_line("!! listener open FAILED");
     lwip_example_line(t->intent);
     lwip_example_line("");
-    lwip_example_line("[enter] next  [clear] quit");
+    lwip_example_line("waiting for probe...");
 }
 
 static uint8_t dast_line_y(uint8_t row)
@@ -314,7 +350,6 @@ static uint8_t dast_line_y(uint8_t row)
 static void dast_status_line(uint8_t row, const char *text)
 {
     uint8_t y = dast_line_y(row);
-
     os_FontSelect(os_SmallFont);
     os_FontDrawText("                                                ",
                     LWIP_EXAMPLE_LEFT, y);
@@ -340,158 +375,43 @@ static bool dast_network_ready(const lwip_netif_info_t *info)
            info->has_ipv4;
 }
 
-static void dast_draw_start_frame(void)
-{
-    lwip_example_clear();
-    lwip_example_line("lwIP DAST harness");
-    lwip_example_line("");
-    lwip_example_line("");
-    lwip_example_line("");
-    lwip_example_line("");
-    lwip_example_linef("%d tests. Run host:", DAST_TEST_COUNT);
-    lwip_example_line("lwip-dast.sh --ip <above>");
-    lwip_example_line("[enter] begin  [clear] quit");
-}
-
-static void dast_update_start_status(const lwip_netif_info_t *info,
-                                     const char *svc_status)
+static void dast_draw_start(const lwip_netif_info_t *info)
 {
     char line[44];
 
-    if (!info || !info->has_netif)
+    lwip_example_clear();
+    lwip_example_line("lwIP DAST harness");
+
+    if (!info || !info->has_netif || !info->has_ipv4)
     {
-        dast_status_line(1, "IP: waiting for netif");
-        dast_status_line(2, "u:0 l:0 ip:0 gw:0");
-        dast_status_line(3, "dh:0 st:0");
+        lwip_example_line("waiting for IP...");
     }
-    else if (info->has_ipv4)
+    else
     {
         snprintf(line, sizeof(line), "IP:%u.%u.%u.%u",
                  info->ipv4_addr[0], info->ipv4_addr[1],
                  info->ipv4_addr[2], info->ipv4_addr[3]);
-        dast_status_line(1, line);
-
+        lwip_example_line(line);
         snprintf(line, sizeof(line), "GW:%u.%u.%u.%u",
                  info->ipv4_gateway[0], info->ipv4_gateway[1],
                  info->ipv4_gateway[2], info->ipv4_gateway[3]);
-        dast_status_line(2, line);
-
-        snprintf(line, sizeof(line), "u:%u l:%u dh:%u st:%u",
-                 (unsigned)info->up,
-                 (unsigned)info->link_up,
-                 (unsigned)info->dhcp_running,
-                 (unsigned)info->dhcp_state);
-        dast_status_line(3, line);
-    }
-    else
-    {
-        dast_status_line(1, "IP: waiting for DHCP");
-        snprintf(line, sizeof(line), "u:%u l:%u ip:%u gw:%u",
-                 (unsigned)info->up,
-                 (unsigned)info->link_up,
-                 (unsigned)info->has_ipv4,
-                 (unsigned)info->has_ipv4_gateway);
-        dast_status_line(2, line);
-        snprintf(line, sizeof(line), "dh:%u st:%u",
-                 (unsigned)info->dhcp_running,
-                 (unsigned)info->dhcp_state);
-        dast_status_line(3, line);
+        lwip_example_line(line);
     }
 
-    dast_status_line(4, svc_status ? svc_status : "");
-}
-
-static void dast_draw_start(const lwip_netif_info_t *info,
-                            const char *svc_status)
-{
-    dast_draw_start_frame();
-    dast_update_start_status(info, svc_status);
-}
-
-static bool dast_netif_changed(const lwip_netif_info_t *a,
-                               const lwip_netif_info_t *b)
-{
-    return !a || !b ||
-           a->has_netif != b->has_netif ||
-           a->up != b->up ||
-           a->link_up != b->link_up ||
-           a->dhcp_running != b->dhcp_running ||
-           a->dhcp_state != b->dhcp_state ||
-           a->has_ipv4 != b->has_ipv4 ||
-           a->has_ipv4_gateway != b->has_ipv4_gateway ||
-           memcmp(a->ipv4_addr, b->ipv4_addr, sizeof(a->ipv4_addr)) != 0 ||
-           memcmp(a->ipv4_gateway, b->ipv4_gateway,
-                  sizeof(a->ipv4_gateway)) != 0;
-}
-
-static void dast_service_cb(struct netif *netif, void *arg,
-                            uint8_t service_id,
-                            lwip_netif_service_status_t status)
-{
-    volatile uint8_t *state = (volatile uint8_t *)arg;
-
-    (void)netif;
-    if (!state || service_id != LWIP_SOCKET_SVC_DHCP)
-    {
-        return;
-    }
-
-    switch (status)
-    {
-    case LWIP_NETIF_SERVICE_UP:
-        *state = DAST_SERVICE_UP;
-        break;
-    case LWIP_NETIF_SERVICE_TIMEOUT:
-        *state = DAST_SERVICE_TIMEOUT;
-        break;
-    case LWIP_NETIF_SERVICE_FAILED:
-    default:
-        *state = DAST_SERVICE_FAILED;
-        break;
-    }
-}
-
-static const char *dast_service_status(lwip_error_t err)
-{
-    if (err != LWIP_OK)
-    {
-        return "DHCP request failed";
-    }
-
-    switch (dast_dhcp_service_state)
-    {
-    case DAST_SERVICE_UP:
-        return "DHCP up";
-    case DAST_SERVICE_FAILED:
-        return "DHCP failed";
-    case DAST_SERVICE_TIMEOUT:
-        return "DHCP timeout";
-    case DAST_SERVICE_PENDING:
-    default:
-        return "DHCP requested";
-    }
+    lwip_example_line("");
+    lwip_example_linef("%d tests. ctrl port: %u", DAST_TEST_COUNT, DAST_CTRL_PORT);
+    lwip_example_line("run: lwip-dast.sh --ip <above>");
+    lwip_example_line("[clear] quit");
 }
 
 static bool dast_wait_for_network(lwip_netif_info_t *info)
 {
-    const char *svc_status = NULL;
     uint8_t status_ticks = 0;
-    uint8_t last_svc_state;
-    lwip_netif_info_t last_info = {0};
-    lwip_error_t svc_err;
-
-    dast_dhcp_service_state = DAST_SERVICE_PENDING;
-    svc_err = lwip_netif_request_services(NULL, LWIP_SOCKET_SVC_DHCP,
-                                          dast_service_cb,
-                                          (void *)&dast_dhcp_service_state);
-    svc_status = dast_service_status(svc_err);
-    last_svc_state = dast_dhcp_service_state;
 
     memset(info, 0, sizeof(*info));
     (void)lwip_default_netif_info(info);
-    dast_draw_start(info, svc_status);
+    dast_draw_start(info);
     lwip_example_draw_mem_stats();
-    last_info = *info;
 
     while (!dast_network_ready(info))
     {
@@ -502,16 +422,12 @@ static bool dast_wait_for_network(lwip_netif_info_t *info)
         {
             lwip_netif_info_t next = {0};
             status_ticks = 0;
-            memset(info, 0, sizeof(*info));
-            (void)lwip_default_netif_info(info);
-            next = *info;
-            svc_status = dast_service_status(svc_err);
-            if (dast_netif_changed(&last_info, &next) ||
-                last_svc_state != dast_dhcp_service_state)
+            (void)lwip_default_netif_info(&next);
+            if (memcmp(info, &next, sizeof(*info)) != 0)
             {
-                dast_update_start_status(info, svc_status);
-                last_info = next;
-                last_svc_state = dast_dhcp_service_state;
+                *info = next;
+                dast_draw_start(info);
+                lwip_example_draw_mem_stats();
             }
         }
 
@@ -523,21 +439,23 @@ static bool dast_wait_for_network(lwip_netif_info_t *info)
         }
     }
 
-    dast_draw_start(info, NULL);
+    dast_draw_start(info);
     lwip_example_draw_mem_stats();
     return true;
 }
 
-/* Pump the stack until the operator advances. Returns false on [clear]. */
-static bool dast_run_test(int idx, const dast_test_t *t)
+/* Pump the stack until the script sends NEXT (or DONE/ABRT).
+ * Returns DAST_CTRL_NEXT, DAST_CTRL_DONE, or DAST_CTRL_ABRT. */
+static uint8_t dast_run_test(int idx, const dast_test_t *t)
 {
     bool open_ok = dast_enter_state(t);
     dast_draw_test(idx, t, open_ok);
     lwip_example_draw_mem_stats();
 
     uint16_t last_drawn = 0xFFFF;
-    bool keep_going = true;
-    while (true)
+    dast_ctrl_signal = DAST_CTRL_NONE;
+
+    while (dast_ctrl_signal == DAST_CTRL_NONE)
     {
         lwip_poll_network_events();
         lwip_example_mem_stats_tick();
@@ -548,18 +466,16 @@ static bool dast_run_test(int idx, const dast_test_t *t)
             last_drawn = dast_events;
         }
 
-        uint8_t key = os_GetCSC();
-        if (key == sk_Enter)
-            break;
-        if (key == sk_Clear)
+        /* Still allow [clear] on the calc as an emergency abort. */
+        if (os_GetCSC() == sk_Clear)
         {
-            keep_going = false;
-            break;
+            dast_leave_state(t);
+            return DAST_CTRL_ABRT;
         }
     }
 
     dast_leave_state(t);
-    return keep_going;
+    return dast_ctrl_signal;
 }
 
 int main(void)
@@ -567,7 +483,6 @@ int main(void)
     if (!lwip_example_stack_start())
         return 1;
 
-    /* Show the calc's address so the operator can pass it to --ip. */
     lwip_netif_info_t info = {0};
     if (!dast_wait_for_network(&info))
     {
@@ -575,24 +490,38 @@ int main(void)
         return lwip_example_finish(0);
     }
 
-    /* Wait for begin while still pumping the stack. */
-    while (true)
+    if (!dast_ctrl_open())
+    {
+        lwip_example_show_and_wait("DAST failed", "ctrl port open");
+        return lwip_example_finish(1);
+    }
+
+    /* Show IP and wait for the script to send the first NEXT. */
+    dast_draw_start(&info);
+    lwip_example_draw_mem_stats();
+
+    /* Pump until script sends NEXT to kick off test 1, or [clear] to abort. */
+    dast_ctrl_signal = DAST_CTRL_NONE;
+    while (dast_ctrl_signal == DAST_CTRL_NONE)
     {
         lwip_poll_network_events();
         lwip_example_mem_stats_tick();
-        uint8_t key = os_GetCSC();
-        if (key == sk_Enter)
-            break;
-        if (key == sk_Clear)
+        if (os_GetCSC() == sk_Clear)
         {
             dast_close_all();
             return lwip_example_finish(0);
         }
     }
+    if (dast_ctrl_signal != DAST_CTRL_NEXT)
+    {
+        dast_close_all();
+        return lwip_example_finish(0);
+    }
 
     for (int i = 0; i < DAST_TEST_COUNT; i++)
     {
-        if (!dast_run_test(i, &dast_tests[i]))
+        uint8_t sig = dast_run_test(i, &dast_tests[i]);
+        if (sig == DAST_CTRL_ABRT || sig == DAST_CTRL_DONE)
             break;
     }
 

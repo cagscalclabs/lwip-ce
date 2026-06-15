@@ -1047,13 +1047,26 @@ static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags)
     if (svc_flags & LWIP_SOCKET_SVC_SNTP)
     {
         if (!netif_is_up(n) || !netif_is_link_up(n) ||
-            !netif_has_usable_ipv4(n))
+            !netif_has_usable_ipv4(n) ||
+            !netif_has_usable_gateway(n))
         {
             return LWIP_OK;
+        }
+        if (netif_is_external_network(n) && netif_default != n)
+        {
+            netif_set_default(n);
         }
 #if LWIP_DHCP
         if ((svc_flags & LWIP_SOCKET_SVC_DHCP) &&
             (!dhcp_client_running(n) || !netif_has_usable_gateway(n)))
+        {
+            return LWIP_OK;
+        }
+#endif
+#if LWIP_DNS
+        /* Wait for DNS to be configured (populated by DHCP) before starting
+         * SNTP — otherwise the pool.ntp.org hostname lookup fails silently. */
+        if (!dns_has_configured_server())
         {
             return LWIP_OK;
         }
@@ -1305,7 +1318,9 @@ static bool netif_service_ready(struct netif *netif, uint8_t service_id)
 #endif
     case LWIP_SOCKET_SVC_SNTP:
 #if LWIP_SNTP
-        return netif_has_usable_ipv4(netif) && sntp_enabled() != 0;
+        return netif_has_usable_ipv4(netif) &&
+               netif_has_usable_gateway(netif) &&
+               sntp_enabled() != 0;
 #else
         return true;
 #endif

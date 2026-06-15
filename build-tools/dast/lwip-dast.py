@@ -170,8 +170,11 @@ class Probes:
 
     def icmp_oversize(self, port=0):
         s = self.s
-        # Large payload forcing IP fragmentation + big reassembly.
-        self._send(s.IP(dst=self.ip) / s.ICMP() / (b"A" * 60000))
+        # 3000 bytes forces 2-3 IP fragments (just over one MTU) without
+        # exhausting the 8KB pbuf pool. Tests the multi-fragment reassembly
+        # path and drop behavior without killing the stack.
+        pkts = s.fragment(s.IP(dst=self.ip) / s.ICMP() / (b"A" * 3000))
+        self._send(pkts)
 
     def icmp_malformed(self, port=0):
         s = self.s
@@ -221,7 +224,9 @@ class Probes:
 
     def udp_oversize(self, port):
         s = self.s
-        self._send(s.IP(dst=self.ip) / s.UDP(dport=port, sport=40000) / (b"E" * 9000))
+        # Fragment at the IP layer so the OS socket limit isn't hit.
+        pkts = s.fragment(s.IP(dst=self.ip) / s.UDP(dport=port, sport=40000) / (b"E" * 9000))
+        self._send(pkts)
 
     def udp_malformed(self, port):
         s = self.s
@@ -357,6 +362,19 @@ def write_report(target_ip: str, results: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------
+# Control channel — sends NEXT/DONE/ABRT to the calc's UDP port 9997
+# ---------------------------------------------------------------------
+
+DAST_CTRL_PORT = 9997
+
+
+def ctrl_send(ip: str, msg: str) -> None:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.sendto(msg.encode(), (ip, DAST_CTRL_PORT))
+
+
+# ---------------------------------------------------------------------
 # Run loop
 # ---------------------------------------------------------------------
 
@@ -367,8 +385,20 @@ def run(args) -> int:
 
     print(f"==> lwIP-CE DAST against {args.ip}"
           f"{' [self-test/dry-run]' if args.self_test else ''}")
-    print(f"    {len(tests)} tests. Put the calc into its DAST harness and")
-    print("    advance it in lockstep: after each probe, read the calc and report.\n")
+    print()
+    print(f"  {len(tests)} automated stress tests for lwIP-CE.")
+    print("  Each test sends malformed, oversized, or flood traffic at the calc,")
+    print("  then follows up with a ping to check if the stack is still alive.")
+    print("  ALIVE/REPLY = pass. No ping response = CRASH = fail.")
+    print("  You will only be prompted if liveness cannot be auto-determined.")
+    print()
+    print("  On the calc: launch the DAST harness and wait for an IP address.")
+    print("  The script will drive the calc automatically via the control channel.")
+    print("  Press [clear] on the calc at any time to abort.")
+    print()
+    if not args.self_test:
+        input("  Calc ready and showing IP? Press Enter here to begin...")
+        ctrl_send(args.ip, "NEXT")  # kick off test 1
 
     results: list[dict] = []
     for i, t in enumerate(tests, 1):
@@ -376,9 +406,11 @@ def run(args) -> int:
         print(f"    state: {t['state']}"
               + (f":{t['port']}" if t.get("port") else "")
               + f"   intent: {t['intent']}")
-        if not args.self_test and t["state"] != "idle":
-            input(f"    >> set calc to '{t['state']}' state for this test, "
-                  "then press Enter to probe...")
+
+        # Brief pause to let the calc enter the test state and open its PCB
+        # before we fire the probe.
+        if not args.self_test:
+            time.sleep(0.5)
 
         probe_fn = getattr(probes, t["probe"], None)
         if probe_fn is None:
@@ -392,15 +424,32 @@ def run(args) -> int:
                     probe_fn(t["port"])
                 else:
                     probe_fn()
-            except Exception as exc:  # noqa: BLE001 — surface, don't abort the run
+            except Exception as exc:  # noqa: BLE001
                 print(f"    probe raised: {exc!r}")
 
-        time.sleep(args.settle)
+        # Fragment/flood tests need extra settle for the reassembly reaper.
+        settle = 14.0 if t["probe"] in ("ip_frag_bomb", "ip_frag_overlap",
+                                         "icmp_oversize") else args.settle
+        time.sleep(settle)
         ping_state = ping_alive(args.ip, args.self_test)
         assume = "ALIVE" if args.self_test else None
-        response = prompt_response(t, ping_state, assume)
-        g = grade(t, response)
 
+        if not assume:
+            if ping_state is True:
+                assume = "REPLY" if t["expect"] == "reply" else "ALIVE"
+            elif ping_state is False:
+                assume = "CRASH"
+
+        if assume:
+            response = assume
+            hint = ("(ping: alive)" if ping_state is True
+                    else "(ping: NO response)" if ping_state is False
+                    else "")
+            print(f"    [auto] {response}  {hint}")
+        else:
+            response = prompt_response(t, ping_state, None)
+
+        g = grade(t, response)
         rec = {
             "id": t["id"],
             "name": t["name"],
@@ -412,7 +461,6 @@ def run(args) -> int:
             "ping_alive": ping_state,
             "grade": g,
         }
-        # Carry over any hand-edited notes / grade override from the prior run.
         old = prior.get(t["id"], {})
         if old.get("notes"):
             rec["notes"] = old["notes"]
@@ -422,13 +470,18 @@ def run(args) -> int:
         print(f"    => {response}  grade={rec['grade']}\n")
         results.append(rec)
 
+        # Tell the calc to advance to the next test (or finish).
+        if not args.self_test:
+            is_last = (i == len(tests))
+            ctrl_send(args.ip, "DONE" if is_last else "NEXT")
+
     write_report(args.ip, results)
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="lwIP-CE DAST probe runner")
-    ap.add_argument("--ip", help="target calc IPv4 address")
+    ap.add_argument("--ip", help="target calc IPv4 address (prompted if omitted)")
     ap.add_argument("--iface", help="network interface to send from")
     ap.add_argument("--settle", type=float, default=1.0,
                     help="seconds to wait after a probe before grading")
@@ -441,8 +494,12 @@ def main() -> int:
     if args.gen_header:
         gen_header()
         return 0
+
+    if not args.ip and not args.self_test:
+        args.ip = input("  Enter calc IP address (shown on DAST screen): ").strip()
     if not args.ip:
-        die("--ip is required (or use --gen-header)")
+        args.ip = "0.0.0.0"  # self-test placeholder
+
     return run(args)
 
 

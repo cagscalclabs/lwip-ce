@@ -34,6 +34,7 @@
 
 static uint8_t lwip_example_row = LWIP_EXAMPLE_TOP;
 static uint8_t lwip_example_stats_loop_count = 0;
+static bool lwip_example_stack_running = false;
 
 static uint8_t lwip_example_line_h(void)
 {
@@ -193,7 +194,10 @@ static void lwip_example_show(const char *line1, const char *line2)
 static void lwip_example_show_and_wait(const char *line1, const char *line2)
 {
     lwip_example_show(line1, line2);
-    lwip_example_draw_mem_stats();
+    if (lwip_example_stack_running)
+    {
+        lwip_example_draw_mem_stats();
+    }
     lwip_example_wait_key();
 }
 
@@ -830,8 +834,6 @@ static void lwip_example_show_socket_error(const char *label,
 static uint32_t lwip_example_now_ms(void);
 static bool lwip_example_timed_out(uint32_t start, uint16_t seconds);
 static bool lwip_example_cancelled(void);
-
-static bool lwip_example_stack_running = false;
 
 static void lwip_example_stack_stop(void)
 {

@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "lwip/opt.h"
+#include "lwip/pbuf.h"
 #include "../includes/tls.h"
 #include "../includes/rsa.h"
 #include "../includes/random.h"
@@ -101,4 +102,61 @@ void tls_fileio_free(void *ptr)
     mem_stats_tls_direct_release(hdr->size, hdr->size);
     tls_secure_memzero(hdr, sizeof(tls_alloc_hdr_t) + hdr->size);
     mem_buffer_custom_free(hdr);
+}
+
+/* -----------------------------------------------------------------------
+ * TLS RX custom pbuf
+ *
+ * All decrypted TLS record buffers (decrypt output, RX copies in the
+ * altcp_tls_ce layer) are allocated through tls_rx_pbuf_alloc instead of
+ * pbuf_alloc(PBUF_RAW, len, PBUF_RAM).  Each allocation is a single heap
+ * block containing:
+ *
+ *   [ tls_rx_pbuf_hdr_t (struct pbuf_custom + size field) ]
+ *   [ payload bytes     (len bytes)                       ]
+ *
+ * Because the pbuf type is PBUF_CUSTOM, lwIP's pbuf_free calls
+ * tls_rx_pbuf_free_fn automatically when the reference count reaches 0 —
+ * from ANY call site, without changes to existing pbuf_free callers.
+ * The free function wipes key material and releases the exact byte count
+ * from the T: accounting (mem_stats_tls_direct_release).
+ *
+ * T: therefore reflects every byte of decrypted TLS data that is currently
+ * live: being decrypted, sitting in the receive queue, or in transit to the
+ * app.  The stat drops to zero once the app has consumed all pending data.
+ * ----------------------------------------------------------------------- */
+typedef struct
+{
+    struct pbuf_custom pc; /* MUST be first — pbuf_free casts pbuf* to this */
+    uint32_t payload_len;  /* payload bytes, for stats release */
+} tls_rx_pbuf_hdr_t;
+
+static void tls_rx_pbuf_free_fn(struct pbuf *p)
+{
+    tls_rx_pbuf_hdr_t *hdr = (tls_rx_pbuf_hdr_t *)p;
+    uint32_t len = hdr->payload_len;
+    tls_secure_memzero(hdr, sizeof(*hdr) + len);
+    mem_stats_tls_direct_release(len, len);
+    mem_buffer_custom_free(hdr);
+}
+
+struct pbuf *tls_rx_pbuf_alloc(uint16_t len)
+{
+    if (len == 0)
+    {
+        return NULL;
+    }
+    tls_rx_pbuf_hdr_t *hdr =
+        (tls_rx_pbuf_hdr_t *)mem_buffer_custom_malloc(sizeof(*hdr) + len);
+    if (!hdr)
+    {
+        return NULL;
+    }
+    hdr->payload_len = len;
+    hdr->pc.custom_free_function = tls_rx_pbuf_free_fn;
+    mem_stats_tls_direct_add(len, len);
+    return pbuf_alloced_custom(PBUF_RAW, len, PBUF_RAM,
+                               &hdr->pc,
+                               (uint8_t *)(hdr + 1),
+                               len);
 }

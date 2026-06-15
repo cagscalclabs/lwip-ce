@@ -229,9 +229,6 @@ log "building lwIP-CE app"
 CEDEV="$CEDEV_DIR" LIBLOAD_LIBS="$(root_libload_libs_without_lwip)" \
     make -C "$ROOT_DIR" "$ROOT_MAKE_TARGET"
 
-log "generating curated headers"
-LWIP_RELEASE_DIR="$STAGE_DIR" "$HEADER_PYTHON_PATH" "$BUILD_TOOLS_DIR/scripts/header_dump.py"
-
 log "splitting app into installer AppVars"
 "$CONVBIN_PATH" --iformat 8ek --input "$ROOT_DIR/bin/lwIP.8ek" \
     --oformat 8xv-split --maxvarsize "$DYLIB_APPVAR_SPLIT_SIZE" \
@@ -246,12 +243,6 @@ cp "$APP_TOOLS_INSTALLER/bin/INSTALL.8xp" "$STAGE_DIR/lwIPINST.8xp"
 log "building libload stub in toolchain source layout"
 make -C "$STAGE_DIR" FASMG="$FASMG_PATH"
 
-log "installing lwip.lib and headers into $CEDEV_DIR/$DYLIB_INSTALL_PREFIX"
-make -C "$STAGE_DIR" install \
-    FASMG="$FASMG_PATH" \
-    DESTDIR="$CEDEV_DIR" \
-    PREFIX="$DYLIB_INSTALL_PREFIX"
-
 log "copying completed release package to $RELEASE_DIR"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
@@ -262,5 +253,16 @@ for artifact in "$RELEASE_DIR"/"$DYLIB_APPVAR_PREFIX".*.8xv "$RELEASE_DIR"/lwIPI
     mv "$artifact" "$RELEASE_DIR/appinst"/
 done
 shopt -u nullglob
+
+log "generating curated headers"
+mkdir -p "$CEDEV_DIR/include"
+LWIP_RELEASE_DIR="$RELEASE_DIR" "$HEADER_PYTHON_PATH" "$BUILD_TOOLS_DIR/scripts/header_dump.py"
+cp -R "$RELEASE_DIR/lwip" "$CEDEV_DIR/include/"
+cp "$RELEASE_DIR/lwip.h" "$CEDEV_DIR/include/"
+cp "$RELEASE_DIR/cryptography.h" "$CEDEV_DIR/include/"
+
+log "installing lwip.lib into $CEDEV_DIR"
+mkdir -p "$CEDEV_DIR/lib/libload"
+cp "$STAGE_DIR/lwip.lib" "$CEDEV_DIR/lib/libload/"
 
 log "release dylib package ready"

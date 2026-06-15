@@ -13,6 +13,7 @@
 
 #include "truststore.h"
 #include "lwip/logging.h"
+#include "lwip/pbuf.h"
 
 struct tls_context
 {
@@ -21,6 +22,17 @@ struct tls_context
 };
 
 extern struct tls_context tls_ctx;
+
+/**
+ * Allocate a TLS-owned PBUF_CUSTOM pbuf of `len` payload bytes.
+ *
+ * Use in place of pbuf_alloc(PBUF_RAW, len, PBUF_RAM) for all TLS
+ * decrypted-record output buffers.  When pbuf_free reduces the reference
+ * count to zero at ANY call site, the custom free function automatically
+ * releases the bytes from the T: memory accounting and securely wipes the
+ * payload — no changes to existing pbuf_free callers required.
+ */
+struct pbuf *tls_rx_pbuf_alloc(uint16_t len);
 
 /** Initialize the TLS subsystem (starts RNG). Call before any TLS operations. */
 bool tls_init(void);

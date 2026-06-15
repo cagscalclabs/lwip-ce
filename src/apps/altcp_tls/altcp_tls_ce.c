@@ -21,6 +21,7 @@
 #include "../../tls/includes/aes.h"
 #include "../../tls/includes/bytes.h"
 #include "../../tls/includes/handshake.h"
+#include "../../tls/includes/tls.h"
 #include "../../drivers/mem.h"
 
 #include <string.h>
@@ -600,6 +601,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     {
         return ERR_MEM;
     }
+    mem_stats_tls_direct_add(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
 
     /* Release the 5-byte header from the input pbuf. altcp_tls_ce_consume_recved
      * acks to the lower TCP only the bytes not already pre-acked at queue time,
@@ -654,6 +656,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     altcp_tls_ce_consume_recved(state, TLS_AES_AUTH_TAG_SIZE);
 
     tls_secure_memzero(scratch, ALTCP_TLS_CE_STREAM_CHUNK);
+    mem_stats_tls_direct_release(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
     mem_buffer_custom_free(scratch);
     scratch = NULL;
 
@@ -683,6 +686,7 @@ fail:
     if (scratch)
     {
         tls_secure_memzero(scratch, ALTCP_TLS_CE_STREAM_CHUNK);
+        mem_stats_tls_direct_release(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
         mem_buffer_custom_free(scratch);
     }
     if (out_head)
@@ -1241,6 +1245,7 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
             altcp_abort(conn);
             return ERR_ABRT;
         }
+        mem_stats_tls_direct_add(state->pending_chello_len, state->pending_chello_len);
         memcpy(state->pending_chello, record, state->pending_chello_len);
     }
 
@@ -1265,6 +1270,7 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
     }
 
     altcp_output(conn->inner_conn);
+    mem_stats_tls_direct_release(state->pending_chello_len, state->pending_chello_len);
     mem_free(state->pending_chello);
     state->pending_chello = NULL;
     state->pending_chello_len = 0;
@@ -1415,9 +1421,11 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     {
                         return ERR_OK;
                     }
+                    mem_stats_tls_direct_add(total_len, total_len);
                     tls_dbg_status("rx: plaintext rec");
                     if (pbuf_copy_partial(state->rx, tmp, (u16_t)total_len, 0) != total_len)
                     {
+                        mem_stats_tls_direct_release(total_len, total_len);
                         mem_free(tmp);
                         tls_dbg_status("rx: copy fail");
                         altcp_abort(conn);
@@ -1478,6 +1486,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     }
                     /* CCS (0x14) is silently ignored for middlebox compatibility. */
 
+                    mem_stats_tls_direct_release(total_len, total_len);
                     mem_free(tmp);
                     if (!plaintext_ok)
                     {
@@ -1970,6 +1979,7 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
         if (!tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity))
         {
             tls_dbg_status("setup: hs init fail");
+            mem_stats_tls_direct_release(sizeof(*state), sizeof(*state));
             mem_free(state);
             return ERR_MEM;
         }
@@ -1981,6 +1991,7 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
         if (!tls_handshake_init(&state->tls_ctx, NULL, NULL))
         {
             tls_dbg_status("setup: hs init fail");
+            mem_stats_tls_direct_release(sizeof(*state), sizeof(*state));
             mem_free(state);
             return ERR_MEM;
         }
@@ -2357,6 +2368,7 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
             if (state->pending_chello)
             {
                 tls_secure_memzero(state->pending_chello, state->pending_chello_len);
+                mem_stats_tls_direct_release(state->pending_chello_len, state->pending_chello_len);
                 mem_free(state->pending_chello);
                 state->pending_chello = NULL;
                 state->pending_chello_len = 0;

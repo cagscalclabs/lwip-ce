@@ -39,13 +39,11 @@ lwip_init_runtime_opaque:
 	or a
 	jp z, .app_missing
 
-	push hl
-	ld hl, -1
-	ld (hl), 2
-	pop hl
-
+	push iy
+	ld iy, ti.flags
 	ld hl, __lwip_app_name
 	call ti.FindAppStart
+	pop iy
 	jr nc, .app_found
 .app_missing:
 	pop ix

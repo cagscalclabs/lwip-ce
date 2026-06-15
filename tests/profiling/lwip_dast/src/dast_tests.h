@@ -28,7 +28,7 @@ static const dast_test_t dast_tests[DAST_TEST_COUNT] = {
     { "icmp-echo-baseline", "ICMP echo baseline", DAST_STATE_IDLE, 0, "Liveness baseline: a well-formed ping must be answered." },
     { "arp-malformed", "Malformed ARP", DAST_STATE_IDLE, 0, "Bogus hlen/plen and truncated ARP must not corrupt the ARP cache or crash." },
     { "arp-flood", "ARP request flood", DAST_STATE_IDLE, 0, "Rapid gratuitous/who-has flood: bounded ARP table, no OOM crash." },
-    { "icmp-oversize", "Oversized ICMP echo (ping-of-death)", DAST_STATE_IDLE, 0, "Reassembled echo > 65535 / very large payload must not overflow buffers." },
+    { "icmp-oversize", "Oversized ICMP echo (fragmented)", DAST_STATE_IDLE, 0, "Multi-fragment ICMP (3KB, 2-3 fragments) must reassemble or drop cleanly without crashing." },
     { "icmp-malformed", "Malformed ICMP", DAST_STATE_IDLE, 0, "Bad ICMP checksum / truncated header must be dropped, not parsed." },
     { "ip-bad-checksum", "IP bad header checksum", DAST_STATE_IDLE, 0, "Corrupt IPv4 header checksum must cause a silent drop." },
     { "ip-frag-overlap", "Overlapping IP fragments", DAST_STATE_IDLE, 0, "Teardrop-style overlapping fragments must not mis-reassemble or crash." },

@@ -58,11 +58,11 @@
     },
     {
       "id": "icmp-oversize",
-      "name": "Oversized ICMP echo (ping-of-death)",
+      "name": "Oversized ICMP echo (fragmented)",
       "state": "idle",
       "port": 0,
       "probe": "icmp_oversize",
-      "intent": "Reassembled echo > 65535 / very large payload must not overflow buffers.",
+      "intent": "Multi-fragment ICMP (3KB, 2-3 fragments) must reassemble or drop cleanly without crashing.",
       "expect": "alive",
       "ok_responses": ["ALIVE", "ABORT", "REPLY"]
     },

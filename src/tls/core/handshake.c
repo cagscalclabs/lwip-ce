@@ -335,6 +335,7 @@ static void tls_hs_reasm_reset(struct tls_handshake_context *ctx)
 {
     if (ctx->hs_reasm_buf)
     {
+        mem_stats_tls_direct_release(ctx->hs_reasm_cap, ctx->hs_reasm_cap);
         mem_buffer_custom_free(ctx->hs_reasm_buf);
         ctx->hs_reasm_buf = NULL;
     }
@@ -380,8 +381,10 @@ static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
     }
     if (ctx->hs_reasm_buf)
     {
+        mem_stats_tls_direct_release(ctx->hs_reasm_cap, ctx->hs_reasm_cap);
         mem_buffer_custom_free(ctx->hs_reasm_buf);
     }
+    mem_stats_tls_direct_add(new_cap, new_cap);
     ctx->hs_reasm_buf = nb;
     ctx->hs_reasm_cap = new_cap;
     return true;
@@ -483,6 +486,7 @@ static struct tls_cert_walker *tls_cert_walker_new(struct tls_handshake_context 
     {
         return NULL;
     }
+    mem_stats_tls_direct_add(sizeof(*w), sizeof(*w));
     memset(w, 0, sizeof(*w));
     w->state = CW_REQ_CTX_LEN;
     w->len_need = 1;
@@ -498,12 +502,15 @@ static void tls_cert_walker_free(struct tls_cert_walker *w)
     }
     if (w->cert_buf)
     {
+        mem_stats_tls_direct_release(w->cert_buf_cap, w->cert_buf_cap);
         mem_buffer_custom_free(w->cert_buf);
     }
     if (w->pending_sig)
     {
+        mem_stats_tls_direct_release(w->pending_sig_len, w->pending_sig_len);
         mem_buffer_custom_free(w->pending_sig);
     }
+    mem_stats_tls_direct_release(sizeof(*w), sizeof(*w));
     mem_buffer_custom_free(w);
 }
 
@@ -743,6 +750,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         /* Stash consumed. */
         if (w->pending_sig)
         {
+            mem_stats_tls_direct_release(w->pending_sig_len, w->pending_sig_len);
             mem_buffer_custom_free(w->pending_sig);
             w->pending_sig = NULL;
         }
@@ -791,6 +799,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         {
             return false;
         }
+        mem_stats_tls_direct_add(sig_len, sig_len);
         memcpy(w->pending_sig, sig, sig_len);
         w->pending_sig_len = sig_len;
         w->pending_is_rsa_sha256 = is_rsa_sha256;
@@ -837,6 +846,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
              * server would be unauthenticated. Fail closed. */
             return false;
         }
+        mem_stats_tls_direct_add(cert_parsed.spki_raw->len, cert_parsed.spki_raw->len);
         memcpy(copy, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
         w->ctx->leaf_spki = copy;
         w->ctx->leaf_spki_len = cert_parsed.spki_raw->len;
@@ -941,6 +951,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                     w->state = CW_ERROR;
                     return false;
                 }
+                mem_stats_tls_direct_add(value, value);
                 w->cert_buf_cap = value;
                 w->cert_buf_len = 0;
                 w->state = CW_CERT_BODY;
@@ -1031,6 +1042,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                  * validate call so the leaf (index 0) keeps that value
                  * while validate_one captures its SPKI. */
                 bool ok = tls_cert_walker_validate_one(w);
+                mem_stats_tls_direct_release(w->cert_buf_cap, w->cert_buf_cap);
                 mem_buffer_custom_free(w->cert_buf);
                 w->cert_buf = NULL;
                 w->cert_buf_cap = 0;
@@ -3619,6 +3631,7 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
      * consumed by tls_recv_certificate_verify). */
     if (ctx->leaf_spki)
     {
+        mem_stats_tls_direct_release(ctx->leaf_spki_len, ctx->leaf_spki_len);
         mem_buffer_custom_free(ctx->leaf_spki);
         ctx->leaf_spki = NULL;
         ctx->leaf_spki_len = 0;

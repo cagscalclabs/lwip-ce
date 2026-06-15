@@ -9,12 +9,26 @@
 
 #define NTP_TIMEOUT_SECONDS 60
 
+/* CEmu debugger trap: write 2 to 0xFFFFFF to break into the debugger. */
+#define CEMU_BREAK() do { *(volatile uint8_t *)0xFFFFFF = 2; } while (0)
+
+static volatile bool g_sntp_ready = false;
+
+static void ntp_service_cb(struct netif *n, void *arg, uint8_t svc,
+                            lwip_netif_service_status_t st)
+{
+    (void)n; (void)arg; (void)svc;
+    if (st == LWIP_NETIF_SERVICE_UP)
+        g_sntp_ready = true;
+}
+
 int main(void)
 {
-    struct lwip_socket sock = {0};
     uint32_t unix_time;
     uint32_t start;
     lwip_error_t err;
+
+    CEMU_BREAK();
 
     if (!lwip_example_stack_start())
     {
@@ -23,20 +37,26 @@ int main(void)
 
     lwip_sntp_reset_flag();
 
-    err = lwip_socket_create(&sock, LWIP_SOCKET_UDP, LWIP_NETIF_EXT,
-                             NULL, 30000);
+    lwip_example_show("NTP", "starting");
+    err = lwip_netif_request_services(NULL,
+                                      LWIP_SOCKET_SVC_DNS | LWIP_SOCKET_SVC_SNTP,
+                                      ntp_service_cb, NULL);
     if (err != LWIP_OK)
     {
-        lwip_example_show_socket_error("NTP create", &sock, err);
-        lwip_socket_destroy(&sock);
+        lwip_example_clear();
+        lwip_example_linef("NTP svc err:%u", (unsigned)err);
+        lwip_example_wait_key();
         return lwip_example_finish(1);
     }
-    err = lwip_request_services(LWIP_SOCKET_SVC_SNTP);
-    if (err != LWIP_OK)
+
+    /* Wait for the service tick to confirm SNTP is up before polling for time. */
+    lwip_example_show("NTP", "waiting for svc");
+    while (!g_sntp_ready)
     {
-        lwip_example_show_socket_error("NTP service", &sock, err);
-        lwip_socket_destroy(&sock);
-        return lwip_example_finish(1);
+        if (lwip_example_cancelled())
+            return lwip_example_finish(0);
+        lwip_poll_network_events();
+        lwip_example_mem_stats_tick();
     }
 
     lwip_example_show("NTP", "waiting");
@@ -62,8 +82,9 @@ int main(void)
 
     if (!unix_time)
     {
-        lwip_example_show_socket_error("NTP timeout", &sock, sock.last_error);
-        lwip_socket_destroy(&sock);
+        lwip_example_clear();
+        lwip_example_line("NTP timeout");
+        lwip_example_wait_key();
         return lwip_example_finish(1);
     }
 
@@ -72,6 +93,5 @@ int main(void)
     lwip_example_linef("Unix: %lu", (unsigned long)unix_time);
     lwip_example_wait_key();
 
-    lwip_socket_destroy(&sock);
     return lwip_example_finish(0);
 }
