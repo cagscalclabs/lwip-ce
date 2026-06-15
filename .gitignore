@@ -83,3 +83,5 @@ venv
 
 build-tools/.docstring_cache
 tmp/
+
+*.zip
