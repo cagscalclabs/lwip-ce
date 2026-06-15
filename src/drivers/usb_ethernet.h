@@ -157,6 +157,10 @@ typedef struct _eth_device_t
      * queued frame). Reset to 0 on any clean drain pass; when it reaches
      * ETH_RX_DRAIN_MAX_ERRORS the netif is aborted. See eth_rx_ring_drain. */
     uint8_t rx_drain_errors;
+    /* True while an overflow-ring drain timer (eth_rx_ring_drain_timer) is
+     * pending. Keeps eth_rx_ring_arm_drain idempotent so we never stack
+     * multiple sys_timeouts. Cleared when the timer fires or on teardown. */
+    bool rx_drain_timer_armed;
     bool disabled_with_error;
     bool shutting_down;
     bool dhcp_auto_started;
@@ -280,6 +284,13 @@ struct usb_configurator {
  * here to avoid a circular dependency: lwip-imports.h embeds
  * struct usb_configurator and so includes this header. Files that need
  * usb_fn / fn_imports_table should include "lwip-imports.h" directly. */
+
+/// @brief Timestamp (sys_now() ms) of the last frame received from the wire.
+/// @return ms value, or 0 if no frame has ever been received. Used by the
+///         connection layer as an inactivity watchdog: a connect/handshake is
+///         only timed out when this stops advancing (the line went quiet),
+///         never while inbound packets keep arriving.
+uint32_t eth_last_rx_activity_ms(void);
 
 /// @brief Polls for the registration status of interfaces.
 /// @return A bitmap indicating what NETIFs are registered (netif->num)

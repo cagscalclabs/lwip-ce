@@ -70,6 +70,7 @@ struct mem_buffer
     uint8_t shrink_stage;
     uint16_t shrink_hits;
     mem_pressure_cb pressure_cb;
+    struct mem_buffer *stats_next;
     union
     {
         struct
@@ -102,7 +103,10 @@ enum mem_buffer_flags
     BUFFER_SECURE_MODE = 1u << 0, /* Auto-erase used/freed/released memory */
     BUFFER_LOCK_SIZE = 1u << 1,   /* Prohibit grow/shrink, lock to initial size */
     BUFFER_USER_ALLOC = 1u << 2,  /* User buffer, doesn't count toward lwIP heap */
-    BUFFER_LWIP_PBUF_POOL = 1u << 3 /* Fixed lwIP pbuf pool, tracked separately */
+    BUFFER_LWIP_PBUF_POOL = 1u << 3, /* Fixed lwIP pbuf pool, tracked separately */
+    BUFFER_RX_RING = 1u << 4,     /* Driver RX overflow ring */
+    BUFFER_SOCKET_RING = 1u << 5,   /* App-facing lwip_socket RX ring */
+    BUFFER_TLS_ALLOC = 1u << 6    /* TLS-owned scratch/file buffers */
 };
 
 /* Pool config for lwIP custom allocator. */
@@ -125,6 +129,12 @@ struct mem_accounting_stats
     size_t heap_used;
     size_t heap_free;
     size_t user_reserved;
+    size_t tls_used;
+    size_t tls_limit;
+    size_t rx_ring_used;
+    size_t rx_ring_size;
+    size_t socket_ring_used;
+    size_t socket_ring_size;
     enum mem_pressure_level pbuf_pressure;
     enum mem_pressure_level heap_pressure;
     enum mem_pressure_level effective_pressure;
@@ -369,6 +379,8 @@ void mem_buffer_custom_free(void *ptr);
  * @return Pointer to allocation or NULL on failure.
  */
 void *mem_buffer_custom_calloc(size_t count, size_t size);
+void mem_stats_tls_direct_add(size_t used, size_t limit);
+void mem_stats_tls_direct_release(size_t used, size_t limit);
 /**
  * @brief Allocate a pbuf-pool-backed lwIP memp element.
  * @param size Raw memp allocation size.

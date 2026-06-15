@@ -55,6 +55,9 @@ static enum mem_init_mode g_mem_mode = MEM_INIT_MODE_DYNAMIC;
 static struct mem_buffer *g_lwip_pools[MEM_LWIP_MAX_POOLS];
 static size_t g_lwip_pool_count = 0;
 static struct mem_buffer *g_lwip_pbuf_pool = NULL;
+static struct mem_buffer *g_mem_buffer_stats_head = NULL;
+static size_t g_mem_tls_direct_used = 0;
+static size_t g_mem_tls_direct_limit = 0;
 
 struct mem_static_block
 {
@@ -110,6 +113,35 @@ static size_t mem_pbuf_pool_used(void)
     }
     return g_lwip_pbuf_pool->u.pool.pool_used_blocks *
            g_lwip_pbuf_pool->u.pool.pool_block_size;
+}
+
+static void mem_buffer_stats_register(struct mem_buffer *rb)
+{
+    if (!rb)
+    {
+        return;
+    }
+    rb->stats_next = g_mem_buffer_stats_head;
+    g_mem_buffer_stats_head = rb;
+}
+
+static void mem_buffer_stats_unregister(struct mem_buffer *rb)
+{
+    if (!rb)
+    {
+        return;
+    }
+    struct mem_buffer **slot = &g_mem_buffer_stats_head;
+    while (*slot)
+    {
+        if (*slot == rb)
+        {
+            *slot = rb->stats_next;
+            rb->stats_next = NULL;
+            return;
+        }
+        slot = &(*slot)->stats_next;
+    }
 }
 
 static size_t mem_nonpool_limit(void)
@@ -664,6 +696,9 @@ bool mem_init_dynamic(size_t max_heap,
     memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
     g_lwip_pool_count = 0;
     g_lwip_pbuf_pool = NULL;
+    g_mem_buffer_stats_head = NULL;
+    g_mem_tls_direct_used = 0;
+    g_mem_tls_direct_limit = 0;
     g_mem_mode = MEM_INIT_MODE_DYNAMIC;
     g_mem_cfg_ready = true;
     mem_effective_pressure_update();
@@ -693,6 +728,9 @@ bool mem_init_static(void *buffer, size_t buffer_size)
     memset(g_lwip_pools, 0, sizeof(g_lwip_pools));
     g_lwip_pool_count = 0;
     g_lwip_pbuf_pool = NULL;
+    g_mem_buffer_stats_head = NULL;
+    g_mem_tls_direct_used = 0;
+    g_mem_tls_direct_limit = 0;
     g_mem_mode = MEM_INIT_MODE_STATIC;
     g_mem_cfg_ready = true;
     mem_effective_pressure_update();
@@ -735,11 +773,51 @@ bool mem_get_stats(struct mem_accounting_stats *stats)
     stats->heap_free = (stats->heap_limit > stats->heap_used) ?
         (stats->heap_limit - stats->heap_used) : 0;
     stats->user_reserved = g_mem_cfg.user_reserved;
+    stats->tls_used = g_mem_tls_direct_used;
+    stats->tls_limit = g_mem_tls_direct_limit;
+    for (struct mem_buffer *rb = g_mem_buffer_stats_head; rb; rb = rb->stats_next)
+    {
+        size_t used = mem_buffer_used_bytes(rb);
+        size_t size = rb->current_size;
+        if (rb->type == MEM_BUFFER_FILE)
+        {
+            size = (rb->max_size == SIZE_MAX) ? rb->current_size : rb->max_size;
+        }
+        if (rb->flags & BUFFER_RX_RING)
+        {
+            stats->rx_ring_used += used;
+            stats->rx_ring_size += size;
+        }
+        if (rb->flags & BUFFER_SOCKET_RING)
+        {
+            stats->socket_ring_used += used;
+            stats->socket_ring_size += size;
+        }
+        if (rb->flags & BUFFER_TLS_ALLOC)
+        {
+            stats->tls_used += used;
+            stats->tls_limit += size;
+        }
+    }
     stats->pbuf_pressure = g_lwip_pbuf_pool ?
         g_lwip_pbuf_pool->last_pressure_level : MEM_PRESSURE_NONE;
     stats->heap_pressure = g_global_pressure_level;
     stats->effective_pressure = g_effective_pressure_level;
     return true;
+}
+
+void mem_stats_tls_direct_add(size_t used, size_t limit)
+{
+    g_mem_tls_direct_used += used;
+    g_mem_tls_direct_limit += limit;
+}
+
+void mem_stats_tls_direct_release(size_t used, size_t limit)
+{
+    g_mem_tls_direct_used = (g_mem_tls_direct_used >= used) ?
+        (g_mem_tls_direct_used - used) : 0;
+    g_mem_tls_direct_limit = (g_mem_tls_direct_limit >= limit) ?
+        (g_mem_tls_direct_limit - limit) : 0;
 }
 
 void mem_set_global_pressure_cb(mem_global_pressure_cb cb)
@@ -831,6 +909,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
     rb->shrink_stage = 0;
     rb->shrink_hits = 0;
     rb->pressure_cb = NULL;
+    rb->stats_next = NULL;
 
     /* Initialize type-specific fields */
     if (type == MEM_BUFFER_RING)
@@ -909,6 +988,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         }
         memset(rb->u.pool.pool_bitmap, 0, rb->u.pool.pool_bitmap_bytes);
     }
+    mem_buffer_stats_register(rb);
     return rb;
 }
 
@@ -926,6 +1006,7 @@ void mem_buffer_destroy(struct mem_buffer *rb)
     {
         return;
     }
+    mem_buffer_stats_unregister(rb);
     bool skip_heap_accounting =
         (rb->flags & (BUFFER_USER_ALLOC | BUFFER_LWIP_PBUF_POOL)) != 0;
 

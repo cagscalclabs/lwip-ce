@@ -431,7 +431,7 @@ static void dast_service_cb(struct netif *netif, void *arg,
     volatile uint8_t *state = (volatile uint8_t *)arg;
 
     (void)netif;
-    if (!state || service_id != LWIP_CONN_SVC_DHCP)
+    if (!state || service_id != LWIP_SOCKET_SVC_DHCP)
     {
         return;
     }
@@ -481,7 +481,7 @@ static bool dast_wait_for_network(lwip_netif_info_t *info)
     lwip_error_t svc_err;
 
     dast_dhcp_service_state = DAST_SERVICE_PENDING;
-    svc_err = lwip_netif_request_services(NULL, LWIP_CONN_SVC_DHCP,
+    svc_err = lwip_netif_request_services(NULL, LWIP_SOCKET_SVC_DHCP,
                                           dast_service_cb,
                                           (void *)&dast_dhcp_service_state);
     svc_status = dast_service_status(svc_err);

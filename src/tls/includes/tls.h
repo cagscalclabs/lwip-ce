@@ -16,26 +16,13 @@
 
 struct tls_context
 {
-    uint8_t *rsa_scratch;
-    uint8_t *ecc_scratch;
     bool initialized;
-    struct tls_truststore_state truststore;
+    struct tls_truststore_state truststore; /* status field retained for future use */
 };
 
 extern struct tls_context tls_ctx;
 
-/**
- * @brief Initialize the TLS subsystem.
- *
- * Allocates memory for cryptographic operations including:
- * - RSA scratch buffers (for OAEP and PSS operations)
- * - ECC scratch buffers (for ECDH operations)
- *
- * This function must be called before any TLS operations.
- * Uses lwIP's memory allocator for controlled allocation.
- *
- * @return true on success, false on memory allocation failure
- */
+/** Initialize the TLS subsystem (starts RNG). Call before any TLS operations. */
 bool tls_init(void);
 
 /**

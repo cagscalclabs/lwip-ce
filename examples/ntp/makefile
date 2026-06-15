@@ -4,6 +4,8 @@
 
 PROJECT_ROOT := ../..
 RELEASE_ROOT ?= $(if $(wildcard ../../lwip),../..,$(PROJECT_ROOT)/build)
+CEDEV_TOOLCHAIN ?= $(shell cedev-config --prefix)
+LIBLOAD_LIBS := $(filter-out %/lwip.lib,$(wildcard $(CEDEV_TOOLCHAIN)/lib/libload/*.lib)) $(RELEASE_ROOT)/lwip.lib
 
 NAME = LWNTP
 DESCRIPTION = "lwIP NTP Time Example"

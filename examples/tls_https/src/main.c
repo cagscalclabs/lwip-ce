@@ -3,7 +3,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 #include <lwip.h>
 
@@ -23,77 +22,57 @@ static const char http_request[] =
 
 struct tls_state
 {
-    bool done;
-    bool ok;
+    bool         ok;
     lwip_error_t err;
-    char rx[128];
-    size_t rx_len;
+    char         rx[128];
+    size_t       rx_len;
 };
 
-static void on_connected(void *arg, struct lwip_conn *conn)
+static void on_event(struct lwip_socket *sock,
+                     lwip_socket_event_type_t type,
+                     const void *ev_data,
+                     void *arg)
 {
     struct tls_state *state = (struct tls_state *)arg;
-    lwip_error_t err;
 
-    lwip_example_line("conn established");
-    err = lwip_conn_write(conn, (const uint8_t *)http_request,
-                          sizeof http_request - 1);
-    if (err != LWIP_OK)
+    if (type == LWIP_SOCKET_EV_STATE_CHANGE)
     {
-        state->err = err;
-        state->done = true;
-    }
-}
-
-static void on_recv(void *arg, struct lwip_conn *conn, struct pbuf *p)
-{
-    struct tls_state *state = (struct tls_state *)arg;
-    size_t space;
-    uint16_t copied;
-
-    if (!p)
-    {
-        state->done = true;
+        const lwip_socket_state_data_t *st =
+            (const lwip_socket_state_data_t *)ev_data;
+        if (st && st->current == LWIP_STATUS_CONNECTED)
+        {
+            lwip_example_line("conn established");
+            lwip_error_t err = lwip_socket_write(
+                sock, (const uint8_t *)http_request, sizeof http_request - 1);
+            if (err != LWIP_OK)
+            {
+                state->err = err;
+                lwip_socket_abort(sock);
+            }
+        }
         return;
     }
 
-    space = sizeof state->rx - state->rx_len - 1;
-    copied = pbuf_copy_partial(p, state->rx + state->rx_len,
-                               (uint16_t)space, 0);
-    state->rx_len += copied;
-    state->rx[state->rx_len] = '\0';
-
-    lwip_conn_recved(conn, p->tot_len);
-    pbuf_free(p);
-
-    if (strstr(state->rx, "HTTP/"))
+    if (type == LWIP_SOCKET_EV_ERROR)
     {
-        state->ok = true;
-        state->done = true;
+        const lwip_socket_error_data_t *err =
+            (const lwip_socket_error_data_t *)ev_data;
+        state->err = err ? err->err : sock->last_error;
+        if (err)
+        {
+            lwip_example_linef("fail c%u o%u r%d e%u",
+                               (unsigned)err->component,
+                               (unsigned)err->operation,
+                               err->raw_error,
+                               (unsigned)err->err);
+        }
     }
-}
-
-static void on_err(void *arg, struct lwip_conn *conn, lwip_error_t err)
-{
-    struct tls_state *state = (struct tls_state *)arg;
-    (void)conn;
-    lwip_example_linef("conn failed e%u", (unsigned)err);
-    state->err = err;
-    state->done = true;
-}
-
-static void on_closed(void *arg, struct lwip_conn *conn)
-{
-    struct tls_state *state = (struct tls_state *)arg;
-    (void)conn;
-    state->done = true;
 }
 
 int main(void)
 {
-    struct lwip_conn conn = {0};
-    struct tls_state state = {0};
-    clock_t start;
+    struct lwip_socket sock  = {0};
+    struct tls_state   state = {0};
     lwip_error_t err;
 
     if (!lwip_example_stack_start())
@@ -102,57 +81,69 @@ int main(void)
     }
 
     lwip_example_dbg_console_begin("TLS HTTPS");
-    err = lwip_conn_create(&conn, NULL, LWIP_PROTO_ALTCP_TLS,
-                           LWIP_CONN_SVC_DHCP | LWIP_CONN_SVC_DNS);
+
+    err = lwip_socket_create(&sock, LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT,
+                             NULL, 60000);
     if (err != LWIP_OK)
     {
-        lwip_example_show_conn_error("HTTPS create", &conn, err);
-        lwip_conn_destroy(&conn);
+        lwip_example_show_socket_error("HTTPS create", &sock, err);
+        lwip_socket_destroy(&sock);
         return lwip_example_finish(1);
     }
     lwip_example_line("tls initialize ok");
 
-    lwip_conn_set_arg(&conn, &state);
-    lwip_conn_set_connected(&conn, on_connected);
-    lwip_conn_set_recv(&conn, on_recv);
-    lwip_conn_set_err(&conn, on_err);
-    lwip_conn_set_closed(&conn, on_closed);
+    lwip_socket_on_event(&sock, LWIP_SOCKET_EVENTF_ALL, on_event, &state);
 
-    /* Route TLS (and all) debug events to the on-screen console at MILESTONE
-     * depth: exactly one progress line per handshake phase (client_hello,
-     * server_hello, ... finished, handshake_end) plus lwip/conn lifecycle
-     * lines, and any errors. The verbose per-record/per-chunk traces are
-     * filtered out. The console shares the home-screen text surface with
-     * lwip_example_show(). */
+    lwip_example_linef("connecting to %s:%u", TLS_HOST, (unsigned)TLS_PORT);
+    err = lwip_socket_connect(&sock, TLS_HOST, TLS_PORT);
+    /* Enable milestone debug output after connect is initiated so debug
+     * events don't fire re-entrantly during socket setup. */
     lwip_set_debug(lwip_example_dbg_console_cb, LWIP_DBG_INFO,
                    LWIP_DBG_DEPTH_MILESTONE);
-
-    lwip_example_linef("attempting conn to:");
-    lwip_example_linef("%s:%u", TLS_HOST, (unsigned)TLS_PORT);
-    err = lwip_conn_connect(&conn, TLS_HOST, TLS_PORT);
     if (err != LWIP_OK)
     {
-        lwip_example_linef("conn failed e%u", (unsigned)err);
-        lwip_example_show_conn_error("HTTPS connect", &conn, err);
-        lwip_conn_destroy(&conn);
+        lwip_example_show_socket_error("HTTPS connect", &sock, err);
+        lwip_socket_destroy(&sock);
         return lwip_example_finish(1);
     }
 
-    start = clock();
-    while (!state.done && !lwip_example_timed_out(start, TLS_TIMEOUT_SECONDS))
+    uint32_t start = lwip_example_now_ms();
+    while (lwip_socket_is_active(&sock) &&
+           !lwip_example_timed_out(start, TLS_TIMEOUT_SECONDS) &&
+           !lwip_example_cancelled())
     {
-        if (lwip_example_cancelled())
-        {
-            break;
-        }
         lwip_poll_network_events();
+
+        size_t space = sizeof(state.rx) - state.rx_len - 1;
+        if (space)
+        {
+            size_t got = lwip_socket_read(
+                &sock,
+                (uint8_t *)state.rx + state.rx_len,
+                space);
+            if (got)
+            {
+                state.rx_len += got;
+                state.rx[state.rx_len] = '\0';
+                if (strstr(state.rx, "HTTP/"))
+                {
+                    state.ok = true;
+                    lwip_socket_close(&sock);
+                }
+            }
+        }
+
         lwip_example_mem_stats_tick();
     }
 
     if (!state.ok)
     {
-        lwip_example_show_conn_error("HTTPS failed", &conn, state.err);
-        lwip_conn_destroy(&conn);
+        if (state.err == LWIP_OK)
+        {
+            state.err = LWIP_ERR_CONNECT;
+        }
+        lwip_example_show_socket_error("HTTPS failed", &sock, state.err);
+        lwip_socket_destroy(&sock);
         return lwip_example_finish(1);
     }
 
@@ -160,6 +151,6 @@ int main(void)
     lwip_example_lines_crlf(state.rx, state.rx_len);
     lwip_example_draw_mem_stats();
     lwip_example_wait_key();
-    lwip_conn_destroy(&conn);
+    lwip_socket_destroy(&sock);
     return lwip_example_finish(0);
 }

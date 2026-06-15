@@ -164,11 +164,11 @@ const char *lwip_debug_state_name(uint16_t module_state)
     {
     case LWIP_DBG_LWIP_ASSERT:             return "assert";
     case LWIP_DBG_LWIP_ERROR:              return "error";
-    case LWIP_DBG_LWIP_CONN_WAIT:          return "conn_wait";
-    case LWIP_DBG_LWIP_CONN_RETRY:         return "conn_retry";
-    case LWIP_DBG_LWIP_CONN_ATTEMPT:       return "conn_attempt";
-    case LWIP_DBG_LWIP_CONN_ESTABLISHED:   return "conn_established";
-    case LWIP_DBG_LWIP_CONN_FAILED:        return "conn_failed";
+    case LWIP_DBG_LWIP_SOCKET_WAIT:        return "socket_wait";
+    case LWIP_DBG_LWIP_SOCKET_RETRY:       return "socket_retry";
+    case LWIP_DBG_LWIP_SOCKET_ATTEMPT:     return "socket_attempt";
+    case LWIP_DBG_LWIP_SOCKET_ESTABLISHED: return "socket_established";
+    case LWIP_DBG_LWIP_SOCKET_FAILED:      return "socket_failed";
     case LWIP_DBG_LWIP_DNS_WAIT:           return "dns_wait";
     case LWIP_DBG_LWIP_SERVICES_TIMEOUT:   return "services_timeout";
 

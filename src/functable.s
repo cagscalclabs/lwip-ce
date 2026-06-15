@@ -38,26 +38,28 @@
 .extern _lwip_start_last_error
 .extern _lwip_stop
 .extern _lwip_poll_network_events
+.extern _lwip_now_ms
 .extern _lwip_default_netif_info
-.extern _lwip_conn_create
-.extern _lwip_conn_destroy
-.extern _lwip_conn_connect
-.extern _lwip_conn_write
-.extern _lwip_conn_recved
-.extern _lwip_conn_shutdown
-.extern _lwip_conn_close
-.extern _lwip_conn_abort
-.extern _lwip_conn_set_arg
-.extern _lwip_conn_set_connected
-.extern _lwip_conn_set_recv
-.extern _lwip_conn_set_sent
-.extern _lwip_conn_set_err
-.extern _lwip_conn_set_poll
-.extern _lwip_conn_set_closed
+.extern _lwip_request_services
+.extern _lwip_netif_request_services
+.extern _lwip_socket_create
+.extern _lwip_socket_create_ex
+.extern _lwip_socket_destroy
+.extern _lwip_socket_connect
+.extern _lwip_socket_write
+.extern _lwip_socket_available
+.extern _lwip_socket_read
+.extern _lwip_socket_status
+.extern _lwip_socket_shutdown
+.extern _lwip_socket_close
+.extern _lwip_socket_abort
+.extern _lwip_socket_on_event
+.extern _lwip_socket_is_active
+.extern _lwip_socket_set_rx_limits
+.extern _lwip_socket_set_connect_timeout
 .extern _lwip_set_debug
 .extern _lwip_debug_module_name
 .extern _lwip_debug_state_name
-.extern _lwip_conn_set_callbacks
 .extern _tls_aes_init
 .extern _tls_aes_ccm_init
 .extern _tls_aes_ccm_encrypt
@@ -420,8 +422,6 @@
 .extern _eth_usb_event_callback
 .extern _tls_x25519_publickey
 .extern _tls_x25519_secret
-.extern _lwip_request_services
-.extern _lwip_netif_request_services
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
@@ -435,30 +435,30 @@ _fn_exports_table:
     d24 _lwip_start_last_error
     d24 _lwip_stop
     d24 _lwip_poll_network_events
+    d24 _lwip_now_ms
     d24 _lwip_default_netif_info
-    d24 _lwip_conn_create
-    d24 _lwip_conn_destroy
-    d24 _lwip_conn_connect
-    d24 _lwip_conn_write
-    d24 _lwip_conn_recved
-    d24 _lwip_conn_shutdown
-    d24 _lwip_conn_close
-    d24 _lwip_conn_abort
-    d24 _lwip_conn_set_arg
-    d24 _lwip_conn_set_connected
-    d24 _lwip_conn_set_recv
-    d24 _lwip_conn_set_sent
-    d24 _lwip_conn_set_err
-    d24 _lwip_conn_set_poll
-    d24 _lwip_conn_set_closed
+    d24 _lwip_request_services
+    d24 _lwip_netif_request_services
+    d24 _lwip_socket_create
+    d24 _lwip_socket_create_ex
+    d24 _lwip_socket_destroy
+    d24 _lwip_socket_connect
+    d24 _lwip_socket_write
+    d24 _lwip_socket_available
+    d24 _lwip_socket_read
+    d24 _lwip_socket_status
+    d24 _lwip_socket_shutdown
+    d24 _lwip_socket_close
+    d24 _lwip_socket_abort
+    d24 _lwip_socket_on_event
+    d24 _lwip_socket_is_active
+    d24 _lwip_socket_set_rx_limits
+    d24 _lwip_socket_set_connect_timeout
 
 ; --- src/core/logging.c ---
     d24 _lwip_set_debug
     d24 _lwip_debug_module_name
     d24 _lwip_debug_state_name
-
-; --- src/lwIP.c ---
-    d24 _lwip_conn_set_callbacks
 
 ; --- src/tls/core/aes.c ---
     d24 _tls_aes_init
@@ -941,7 +941,3 @@ _fn_exports_table:
 ; --- src/tls/contrib/x25519/src/x25519.s ---
     d24 _tls_x25519_publickey
     d24 _tls_x25519_secret
-
-; --- src/lwIP.c ---
-    d24 _lwip_request_services
-    d24 _lwip_netif_request_services

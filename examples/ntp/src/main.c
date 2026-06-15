@@ -11,9 +11,9 @@
 
 int main(void)
 {
-    struct lwip_conn conn = {0};
+    struct lwip_socket sock = {0};
     uint32_t unix_time;
-    clock_t start;
+    uint32_t start;
     lwip_error_t err;
 
     if (!lwip_example_stack_start())
@@ -23,17 +23,24 @@ int main(void)
 
     lwip_sntp_reset_flag();
 
-    err = lwip_conn_create(&conn, NULL, LWIP_PROTO_UDP,
-                           LWIP_CONN_SVC_DHCP | LWIP_CONN_SVC_SNTP);
+    err = lwip_socket_create(&sock, LWIP_SOCKET_UDP, LWIP_NETIF_EXT,
+                             NULL, 30000);
     if (err != LWIP_OK)
     {
-        lwip_example_show_conn_error("NTP create", &conn, err);
-        lwip_conn_destroy(&conn);
+        lwip_example_show_socket_error("NTP create", &sock, err);
+        lwip_socket_destroy(&sock);
+        return lwip_example_finish(1);
+    }
+    err = lwip_request_services(LWIP_SOCKET_SVC_SNTP);
+    if (err != LWIP_OK)
+    {
+        lwip_example_show_socket_error("NTP service", &sock, err);
+        lwip_socket_destroy(&sock);
         return lwip_example_finish(1);
     }
 
     lwip_example_show("NTP", "waiting");
-    start = clock();
+    start = lwip_example_now_ms();
     unix_time = 0;
 
     while (!lwip_example_timed_out(start, NTP_TIMEOUT_SECONDS))
@@ -55,8 +62,8 @@ int main(void)
 
     if (!unix_time)
     {
-        lwip_example_show_conn_error("NTP timeout", &conn, conn.last_error);
-        lwip_conn_destroy(&conn);
+        lwip_example_show_socket_error("NTP timeout", &sock, sock.last_error);
+        lwip_socket_destroy(&sock);
         return lwip_example_finish(1);
     }
 
@@ -65,6 +72,6 @@ int main(void)
     lwip_example_linef("Unix: %lu", (unsigned long)unix_time);
     lwip_example_wait_key();
 
-    lwip_conn_destroy(&conn);
+    lwip_socket_destroy(&sock);
     return lwip_example_finish(0);
 }

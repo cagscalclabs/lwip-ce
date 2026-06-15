@@ -1,6 +1,6 @@
 ### lwIP TLS Chat Example
 
-Connects to `SERVER_IP:4243` with `LWIP_PROTO_ALTCP_TLS` and opens a small-font chat console. Set the server IP at build time:
+Connects to `SERVER_IP:4243` with `LWIP_SOCKET_ALTCP_TLS` and opens a small-font chat console. Set the server IP at build time:
 
 ```sh
 make -C examples/tls_chat SERVER_IP=192.168.2.1

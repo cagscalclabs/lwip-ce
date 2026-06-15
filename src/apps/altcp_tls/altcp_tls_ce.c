@@ -52,14 +52,14 @@ static bool g_tls_rx_release_attached = false;
 static void altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cnt);
 static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n);
 
-#define ALTCP_TLS_CE_RX_RELEASE_MILD_MS     50u
-#define ALTCP_TLS_CE_RX_RELEASE_HIGH_MS     100u
-#define ALTCP_TLS_CE_RX_RELEASE_SEVERE_MS   250u
+#define ALTCP_TLS_CE_RX_RELEASE_MILD_MS 50u
+#define ALTCP_TLS_CE_RX_RELEASE_HIGH_MS 100u
+#define ALTCP_TLS_CE_RX_RELEASE_SEVERE_MS 250u
 #define ALTCP_TLS_CE_RX_RELEASE_CRITICAL_MS 500u
 
-#define ALTCP_TLS_CE_RX_RELEASE_MILD_BYTES     2048u
-#define ALTCP_TLS_CE_RX_RELEASE_HIGH_BYTES     1024u
-#define ALTCP_TLS_CE_RX_RELEASE_SEVERE_BYTES   512u
+#define ALTCP_TLS_CE_RX_RELEASE_MILD_BYTES 2048u
+#define ALTCP_TLS_CE_RX_RELEASE_HIGH_BYTES 1024u
+#define ALTCP_TLS_CE_RX_RELEASE_SEVERE_BYTES 512u
 #define ALTCP_TLS_CE_RX_RELEASE_CRITICAL_BYTES 128u
 
 #define ALTCP_TLS_CE_PSKI_APPVAR "lwIPPSKI"
@@ -81,7 +81,7 @@ struct altcp_tls_ce_pski_entry
 {
     uint16_t psk_type;
     uint8_t psk[32];
-    char hostname[ALTCP_TLS_CE_PSKI_HOSTNAME_MAX];  /* NUL-terminated */
+    char hostname[ALTCP_TLS_CE_PSKI_HOSTNAME_MAX]; /* NUL-terminated */
     struct tls_psk_identity identity;
 };
 
@@ -172,7 +172,7 @@ static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session,
     memset(&store->entries[slot], 0, sizeof(store->entries[slot]));
     store->entries[slot].psk_type = session->psk_type;
     memcpy(store->entries[slot].psk, session->psk, sizeof(store->entries[slot].psk));
-    memcpy(store->entries[slot].hostname, hostname, host_len + 1);  /* +1 for NUL */
+    memcpy(store->entries[slot].hostname, hostname, host_len + 1); /* +1 for NUL */
     memcpy(&store->entries[slot].identity, &session->identity, sizeof(store->entries[slot].identity));
 
     /* Persist via TI-OS ROM appvar calls (os_*), NOT fileioc (ti_Open/Write).
@@ -510,6 +510,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     size_t ciphertext_len;
     size_t actual_plaintext_len;
     size_t processed;
+    err_t status = ERR_OK;
     uint8_t *scratch = NULL;
     uint8_t diff = 0;
 
@@ -626,6 +627,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         out_seg = pbuf_alloc(PBUF_RAW, (u16_t)take, PBUF_RAM);
         if (!out_seg)
         {
+            status = ERR_MEM;
             goto fail;
         }
         if (pbuf_take(out_seg, scratch, (u16_t)take) != ERR_OK)
@@ -687,7 +689,7 @@ fail:
     {
         pbuf_free(out_head);
     }
-    return ERR_VAL;
+    return (status != ERR_OK) ? status : ERR_VAL;
 }
 
 /* Streaming TLS 1.3 record encrypt. Walks `plaintext` in chunked strides,
@@ -867,7 +869,7 @@ static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n)
         return;
     }
 
-    to_ack = n - state->rx_acked_len;   /* bytes not yet acked */
+    to_ack = n - state->rx_acked_len; /* bytes not yet acked */
     state->rx_acked_len = 0;
     if (to_ack != 0 && state->conn != NULL && state->conn->inner_conn != NULL)
     {
@@ -912,6 +914,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_client(
     {
         return NULL;
     }
+    mem_stats_tls_direct_add(sizeof(*conf), sizeof(*conf));
 
     memset(conf, 0, sizeof(struct altcp_tls_ce_config));
     conf->is_server = 0;
@@ -934,6 +937,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_server(
     {
         return NULL;
     }
+    mem_stats_tls_direct_add(sizeof(*conf), sizeof(*conf));
 
     memset(conf, 0, sizeof(struct altcp_tls_ce_config));
     conf->is_server = 1;
@@ -957,6 +961,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     {
         return NULL;
     }
+    mem_stats_tls_direct_add(sizeof(*conf), sizeof(*conf));
 
     memset(conf, 0, sizeof(struct altcp_tls_ce_config));
     conf->is_server = 0;
@@ -986,8 +991,8 @@ void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
 {
     if (conf)
     {
-        /* Zero sensitive data */
         memset(conf->psk, 0, 32);
+        mem_stats_tls_direct_release(sizeof(*conf), sizeof(*conf));
         mem_free(conf);
     }
 }
@@ -1487,7 +1492,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                  * bytes not already pre-acked at queue time. */
                 altcp_tls_ce_consume_recved(state, total_len);
 
-record_processed:
+            record_processed:
                 /* Check if server Finished received — time to send client Finished */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED)
                 {
@@ -1897,7 +1902,7 @@ altcp_tls_ce_lower_err(void *arg, err_t err)
     altcp_err_fn app_err = conn->err;
     void *app_arg = conn->arg;
 
-    conn->inner_conn = NULL;   /* lower freed us before raising err */
+    conn->inner_conn = NULL; /* lower freed us before raising err */
     conn->err = NULL;
     conn->recv = NULL;
     conn->sent = NULL;
@@ -1952,6 +1957,7 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
         tls_dbg_status("setup: alloc fail");
         return ERR_MEM;
     }
+    mem_stats_tls_direct_add(sizeof(*state), sizeof(*state));
 
     memset(state, 0, sizeof(altcp_tls_ce_state_t));
     state->conf = conf;
@@ -2142,6 +2148,7 @@ altcp_tls_ce_connect(struct altcp_pcb *conn, const ip_addr_t *ipaddr, u16_t port
      * ClientHello. altcp_tls_ce_lower_poll also forwards to any app-set poll, so
      * a later altcp_tls_ce_set_poll() composes cleanly. */
     altcp_poll(conn->inner_conn, altcp_tls_ce_lower_poll, 1);
+    /* We use a shorter interval (if supported by port) to retry ClientHello fast */
 
     return altcp_connect(conn->inner_conn, ipaddr, port, altcp_tls_ce_lower_connected);
 }
@@ -2282,6 +2289,7 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
     {
         return ERR_MEM;
     }
+    mem_stats_tls_direct_add(ct_buf_size, ct_buf_size);
 
     /* Encrypt data as a TLS record (includes 5-byte header + ciphertext + tag) */
     if (!altcp_tls_ce_encrypt_record_stream(&state->tls_ctx, false,
@@ -2289,6 +2297,7 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
                                             (const uint8_t *)dataptr, len,
                                             ciphertext, ct_buf_size, &ciphertext_len))
     {
+        mem_stats_tls_direct_release(ct_buf_size, ct_buf_size);
         mem_free(ciphertext);
         return ERR_MEM;
     }
@@ -2302,6 +2311,7 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
         state->overhead_bytes_adjust += ciphertext_len;
     }
 
+    mem_stats_tls_direct_release(ct_buf_size, ct_buf_size);
     mem_free(ciphertext);
     return err;
 }
@@ -2346,6 +2356,7 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
             }
             if (state->pending_chello)
             {
+                tls_secure_memzero(state->pending_chello, state->pending_chello_len);
                 mem_free(state->pending_chello);
                 state->pending_chello = NULL;
                 state->pending_chello_len = 0;
@@ -2353,6 +2364,7 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
 
             tls_state_remove(state);
             state->conn = NULL;
+            mem_stats_tls_direct_release(sizeof(*state), sizeof(*state));
             mem_free(state);
             conn->state = NULL;
         }

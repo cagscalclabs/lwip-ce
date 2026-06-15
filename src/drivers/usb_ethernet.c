@@ -28,6 +28,7 @@
 #include "lwip-imports.h" /* fn_imports_table / usb_fn dispatch table */
 #include "mem.h"
 #include "lwip/netif.h"
+#include "lwip/sys.h"
 #include "lwip/timeouts.h"
 #include "lwip/logging.h"
 #include "lwip/app_config.h"
@@ -83,6 +84,10 @@ static void eth_abort_netif(eth_device_t *dev, uint16_t log_state);
 static bool eth_netif_is_default_candidate(const struct netif *netif);
 static void eth_promote_default_if_needed(struct netif *netif);
 static void eth_arm_dhcp_once(eth_device_t *dev);
+/* Overflow-ring drain timer + its arm helper (defined with the RX path).
+ * Declared here so eth_free_device_storage can sys_untimeout it on teardown. */
+static void eth_rx_ring_drain_timer(void *arg);
+static void eth_rx_ring_arm_drain(eth_device_t *dev);
 
 /* True if netif is one of our ethernet interfaces (named "en*") with a
  * backing eth_device_t. Centralizes the guard used by every netif walk
@@ -127,6 +132,10 @@ static void eth_free_device_storage(eth_device_t *dev)
     {
         return;
     }
+    /* Cancel any pending overflow-drain timer before the device memory goes
+     * away, so a queued sys_timeout can't fire against a freed dev. */
+    sys_untimeout(eth_rx_ring_drain_timer, dev);
+    dev->rx_drain_timer_armed = false;
     if (dev->rx_ring)
     {
         mem_buffer_destroy(dev->rx_ring);
@@ -206,7 +215,13 @@ static void eth_schedule_rx_for_netifs(void)
             continue;
         }
         eth_device_t *dev = (eth_device_t *)netif->state;
-        if (eth_is_shutting_down(dev) || !dev->rx.callback || dev->rx_transfer_active)
+        /* Gate bulk RX on link-up: issuing a bulk-IN before the device's
+         * link is up can error (vs. NAK-pending) and, via the rx_retries
+         * fatal threshold, disable RX before the link ever comes up. The
+         * interrupt endpoint (armed at init) carries the link-up notify; we
+         * only start listening for data frames once link is up. */
+        if (eth_is_shutting_down(dev) || !dev->rx.callback ||
+            dev->rx_transfer_active || !netif_is_link_up(netif))
         {
             continue;
         }
@@ -228,6 +243,61 @@ static void eth_rx_schedule_dispatch(void)
     eth_reap_dead_devices();
 }
 
+/* Hand one raw ethernet frame straight to lwIP: allocate a pooled pbuf, copy
+ * the frame in, and run netif->input. Returns false only if no pbuf could be
+ * allocated (the pbuf pool is full) — the caller then queues the frame in the
+ * overflow ring instead. A pbuf the input path rejects is freed here.
+ *
+ * RX completion callbacks run from usb_HandleEvents(), which is driven
+ * synchronously from the app's poll loop (lwip_poll_network_events) — never
+ * from an interrupt — so calling netif->input() directly from this context is
+ * safe and is the same context the old ring-drain dispatcher used. */
+static bool eth_input_frame(struct netif *netif, const uint8_t *data, uint16_t len)
+{
+    struct pbuf *p;
+    size_t remaining;
+
+    if (!netif || !data || len == 0)
+    {
+        return false;
+    }
+
+    p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
+    if (!p)
+    {
+        return false; /* pool exhausted — caller falls back to the ring */
+    }
+
+    remaining = len;
+    for (struct pbuf *q = p; q != NULL && remaining > 0; q = q->next)
+    {
+        size_t chunk = q->len;
+        if (chunk > remaining)
+        {
+            chunk = remaining;
+        }
+        memcpy(q->payload, data + (len - remaining), chunk);
+        remaining -= chunk;
+    }
+    if (remaining != 0)
+    {
+        /* pbuf_alloc reported success but the chain couldn't hold len bytes.
+         * Should never happen; drop rather than deliver a truncated frame. */
+        pbuf_free(p);
+        LINK_STATS_INC(link.drop);
+        return true; /* "handled" — do NOT ring-queue a frame we can't hold */
+    }
+
+    if (netif->input(p, netif) != ERR_OK)
+    {
+        pbuf_free(p);
+    }
+    return true;
+}
+
+/* Append one frame to the overflow ring (length-prefixed). Only used when the
+ * pbuf pool is full or the ring already holds earlier frames (strict ordering:
+ * a new frame must not jump ahead of queued ones). */
 static bool eth_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t len)
 {
     if (!dev || !dev->rx_ring || !data || len == 0)
@@ -249,6 +319,68 @@ static bool eth_ring_push_frame(eth_device_t *dev, const uint8_t *data, uint16_t
         return false;
     }
     return true;
+}
+
+/* Timestamp (sys_now ms) of the last frame we received from the wire. Updated
+ * on every inbound frame — even one we end up dropping — because the signal we
+ * want is "the network is responding," not "we successfully buffered it." The
+ * connection layer uses this as an inactivity watchdog: a connect/handshake is
+ * only timed out when the LINE has gone quiet, never while packets are still
+ * flowing (so a slow-but-progressing TLS handshake is never killed). TX is
+ * deliberately NOT counted here — our own DHCP/SYN retransmits into a dead
+ * network must not look like activity, or a dead line would never time out. */
+static volatile uint32_t g_eth_last_rx_activity_ms = 0;
+
+uint32_t eth_last_rx_activity_ms(void)
+{
+    return g_eth_last_rx_activity_ms;
+}
+
+/* Primary RX entry: deliver a received frame to lwIP.
+ *
+ * Fast path (the overwhelming common case): the overflow ring is empty and the
+ * pbuf pool has room, so the frame goes straight into netif->input — no ring,
+ * no dispatcher hop, delivered in the same poll iteration it arrived.
+ *
+ * Overflow path: if the ring already holds frames (we must preserve arrival
+ * order) OR the pbuf pool is momentarily full, the frame is queued in the
+ * growable overflow ring and a drain timer is armed to retry delivery once the
+ * pool frees up. The ring shrinks back (with hysteresis) as it empties. A frame
+ * that fits neither pool nor ring is dropped (TCP/IP will retransmit). */
+static void eth_rx_deliver(eth_device_t *dev, const uint8_t *data, uint16_t len)
+{
+    struct netif *netif;
+
+    if (!dev || !data || len == 0)
+    {
+        return;
+    }
+    /* Line activity: stamp before any pool/ring decision (see note above). */
+    g_eth_last_rx_activity_ms = sys_now();
+    netif = &dev->iface;
+
+    /* Strict ordering: only deliver directly when nothing is queued ahead. */
+    if (!dev->rx_ring || mem_buffer_len(dev->rx_ring) == 0)
+    {
+        if (eth_input_frame(netif, data, len))
+        {
+            LINK_STATS_INC(link.recv);
+            MIB2_STATS_NETIF_ADD(netif, ifinoctets, len);
+            return;
+        }
+        /* Pool full: fall through and queue in the ring. */
+    }
+
+    if (dev->rx_ring && eth_ring_push_frame(dev, data, len))
+    {
+        LINK_STATS_INC(link.recv);
+        MIB2_STATS_NETIF_ADD(netif, ifinoctets, len);
+        eth_rx_ring_arm_drain(dev);
+        return;
+    }
+
+    /* Neither pool nor ring could take it. Drop; the peer will retransmit. */
+    LINK_STATS_INC(link.drop);
 }
 
 static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget)
@@ -335,33 +467,45 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
     return drained;
 }
 
-/* Dispatcher entry: drain queued RX frames into lwIP's input path. */
-static void eth_rx_drain_dispatch(void)
+/* Overflow-recovery timer.
+ *
+ * Unlike the old always-on RX-drain dispatcher, this fires ONLY while the
+ * overflow ring has frames waiting, and it re-arms ITSELF only if frames
+ * remain after a drain pass. When the ring empties it stops — there is no
+ * perpetual self-re-arming chain that can wedge the whole stack if one tick
+ * fails. The common RX path never touches this; it exists purely to retry
+ * delivery of frames that were ring-queued because the pbuf pool was full. */
+static void eth_rx_ring_drain_timer(void *arg)
 {
-    struct netif *netif = NULL;
-    size_t budget = ETH_RX_DRAIN_BUDGET;
-    NETIF_FOREACH(netif)
+    eth_device_t *dev = (eth_device_t *)arg;
+
+    if (!dev || eth_is_shutting_down(dev) || !dev->rx_ring)
     {
-        if (budget == 0)
-        {
-            break;
-        }
-        if (!eth_is_eth_netif(netif))
-        {
-            continue;
-        }
-        eth_device_t *dev = (eth_device_t *)netif->state;
-        if (!dev->rx_ring || !dev->rx_ring->u.ring.drain_fn)
-        {
-            continue;
-        }
-        size_t drained = dev->rx_ring->u.ring.drain_fn(dev->rx_ring, dev->rx_ring->u.ring.drain_fn_data, budget);
-        if (drained > budget)
-        {
-            drained = budget;
-        }
-        budget -= drained;
+        return;
     }
+
+    dev->rx_drain_timer_armed = false;
+
+    (void)eth_rx_ring_drain(dev->rx_ring, &dev->iface, ETH_RX_DRAIN_BUDGET);
+
+    /* Still backlogged? Try again shortly. The pbuf pool needs time to free
+     * up (application consuming, TCP acking), so a short retry interval lets
+     * the ring drain as room appears without busy-spinning. */
+    if (mem_buffer_len(dev->rx_ring) >= 2)
+    {
+        eth_rx_ring_arm_drain(dev);
+    }
+}
+
+/* Arm the overflow drain timer if it is not already pending. Idempotent. */
+static void eth_rx_ring_arm_drain(eth_device_t *dev)
+{
+    if (!dev || dev->rx_drain_timer_armed || eth_is_shutting_down(dev))
+    {
+        return;
+    }
+    dev->rx_drain_timer_armed = true;
+    sys_timeout(ETH_RX_DRAIN_INTERVAL_MS, eth_rx_ring_drain_timer, dev);
 }
 
 void eth_halt_all_endpoints(void)
@@ -431,12 +575,8 @@ void eth_finish_shutdown(void)
             ifnums_used &= ~(1 << netif->num);
         }
         netif_remove(netif);
-        if (dev->rx_ring)
-        {
-            mem_buffer_destroy(dev->rx_ring);
-            dev->rx_ring = NULL;
-        }
-        free(dev);
+        /* Cancels any pending drain timer, destroys the ring, frees dev. */
+        eth_free_device_storage(dev);
         netif = next;
     }
 
@@ -572,9 +712,9 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
                 case NOTIFY_NETWORK_CONNECTION:
                     if (notify->wValue)
                     {
+                        /* netif_set_link_up triggers eth_link_callback, which
+                         * handles promotion and DHCP starting. */
                         netif_set_link_up(&dev->iface);
-                        eth_promote_default_if_needed(&dev->iface);
-                        eth_arm_dhcp_once(dev);
                     }
                     else
                     {
@@ -627,9 +767,9 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
 ///---------------------------------------------------
 /// @brief bulk out callback function
 static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoint,
-                                   usb_transfer_status_t status,
-                                   __attribute__((unused)) size_t transferred,
-                                   usb_transfer_data_t *data)
+                                          usb_transfer_status_t status,
+                                          __attribute__((unused)) size_t transferred,
+                                          usb_transfer_data_t *data)
 {
     // Handle completion or error of the transfer, if needed
     struct eth_tx_ctx *ctx = (struct eth_tx_ctx *)data;
@@ -693,9 +833,9 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
 ///------------------------------------------------------------------------
 /// @brief linkinput callback function for @b Ethernet_Control_Model (ECM)
 static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
-                                 usb_transfer_status_t status,
-                                 size_t transferred,
-                                 usb_transfer_data_t *data)
+                                        usb_transfer_status_t status,
+                                        size_t transferred,
+                                        usb_transfer_data_t *data)
 {
     eth_device_t *dev = (eth_device_t *)data;
     if (!dev)
@@ -735,15 +875,7 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
     else if (transferred)
     {
         dev->rx_retries = 0;
-        if (eth_ring_push_frame(dev, recvbuf, (uint16_t)transferred))
-        {
-            LINK_STATS_INC(link.recv);
-            MIB2_STATS_NETIF_ADD(&dev->iface, ifinoctets, transferred);
-        }
-        else
-        {
-            LINK_STATS_INC(link.drop);
-        }
+        eth_rx_deliver(dev, recvbuf, (uint16_t)transferred);
     }
     /* Self-re-arm on every successful receive so the dispatcher is a
      * safety net rather than the sole continuity path. */
@@ -871,8 +1003,7 @@ static usb_error_t ethernet_control_setup(eth_device_t *eth)
         REQUEST_SET_ETHERNET_PACKET_FILTER,
         0x1c,
         0,
-        0
-    };
+        0};
 
     usb_fn.control_transfer(usb_fn.get_device_endpoint(eth->device, 0),
                             &packet_filter_request, NULL,
@@ -904,9 +1035,9 @@ static usb_error_t ncm_control_setup(eth_device_t *eth)
 ///------------------------------------------------------------
 /// @brief linkinput function for @b Network_Control_Model (NCM)
 static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
-                                 usb_transfer_status_t status,
-                                 size_t transferred,
-                                 usb_transfer_data_t *data)
+                                        usb_transfer_status_t status,
+                                        size_t transferred,
+                                        usb_transfer_data_t *data)
 {
     eth_device_t *dev = (eth_device_t *)data;
     if (!dev)
@@ -995,13 +1126,8 @@ static usb_error_t ncm_receive_callback(__attribute__((unused)) usb_endpoint_t e
                 if (!ncm_range_fits(datagram_index, datagram_len, nth->wBlockLength))
                     goto rx_rearm;
 
-                // attempt to allocate pbuf
-                if (!eth_ring_push_frame(dev, &ntb[datagram_index], datagram_len))
-                {
-                    LINK_STATS_INC(link.drop);
-                    parse_ntb = false;
-                    break;
-                }
+                // deliver this datagram (direct to lwIP, or ring on overflow)
+                eth_rx_deliver(dev, &ntb[datagram_index], datagram_len);
                 idx_offset += sizeof(struct ncm_ndp_idx);
             }
             if (parse_ntb &&
@@ -1047,7 +1173,7 @@ rx_rearm:
 static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
-    if (eth_is_shutting_down(dev))
+    if (eth_is_shutting_down(dev) || dev->dead)
         return ERR_IF;
     uint16_t offset_ndp = get_next_offset(NCM_NTH_LEN, dev->class.ncm.ntb_params.wNdpInAlignment, 0);
     if (p->tot_len > ETHERNET_MTU)
@@ -1138,6 +1264,11 @@ static void eth_link_callback(struct netif *netif)
     }
     if (netif_is_link_up(netif))
     {
+        /* Start listening for data frames the moment the link is up, and do
+         * it BEFORE kicking DHCP so we can't miss the OFFER that answers the
+         * DISCOVER we're about to send. (The safety-net dispatcher also arms
+         * RX, but only on its next tick.) */
+        eth_schedule_rx_for_netifs();
         eth_promote_default_if_needed(netif);
         eth_arm_dhcp_once(dev);
     }
@@ -1179,9 +1310,14 @@ static bool eth_netif_is_external(const struct netif *netif)
 
 static bool eth_netif_is_default_candidate(const struct netif *netif)
 {
-    return eth_netif_is_external(netif) &&
-           netif_is_up(netif) &&
-           netif_is_link_up(netif);
+    if (!eth_netif_is_external(netif) || !netif_is_up(netif) || !netif_is_link_up(netif))
+    {
+        return false;
+    }
+
+    /* Do not promote as a default gateway until we actually have an IP.
+     * This prevents ERR_RTE races in the high-level connection API. */
+    return !ip4_addr_isany_val(*netif_ip4_addr(netif));
 }
 
 static void eth_promote_default_if_needed(struct netif *netif)
@@ -1591,7 +1727,7 @@ init_success:
         netif_create_ip6_linklocal_address(iface, 1);
         iface->ip6_autoconfig_enabled = 1;
 
-        ifnums_used |= 1 << ifnum_assigned;  // set flag marking the ifnum used
+        ifnums_used |= 1 << ifnum_assigned;                         // set flag marking the ifnum used
         netif_set_hostname(iface, lwip_app_config_get()->hostname); // set hostname from config
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                     ("NEW, netif=%c%c%u <- device=%p", iface->name[0], iface->name[1], iface->num, device));
@@ -1599,7 +1735,10 @@ init_success:
 
     if (!eth->rx_ring)
     {
-        eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE, ETH_RX_RING_MAX_SIZE, ETH_RX_RING_STEP_SIZE, 0);
+        eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE,
+                                         ETH_RX_RING_MAX_SIZE,
+                                         ETH_RX_RING_STEP_SIZE,
+                                         BUFFER_RX_RING);
         if (!eth->rx_ring)
         {
             eth_cleanup_failed_init(device, eth, new_eth, netif_registered,
@@ -1611,19 +1750,23 @@ init_success:
         mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
         mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
     }
-    /* Wire RX dispatchers into the master tick (idempotent — attach is
-     * safe to repeat across multiple device-init calls). Both run at
-     * fixed cadence; TCP-level backpressure handles slowdown. */
-    lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_DRAIN, eth_rx_drain_dispatch);
+    /* Wire the RX-schedule dispatcher into the master tick (idempotent —
+     * attach is safe to repeat across multiple device-init calls). It re-arms
+     * RX transfers that didn't self-re-arm and reaps unplugged devices.
+     *
+     * There is deliberately no RX-DRAIN dispatcher: received frames are now
+     * delivered straight into lwIP from the RX completion (eth_rx_deliver),
+     * and the overflow ring — used only when the pbuf pool is momentarily
+     * full — is drained by a self-limiting sys_timeout (eth_rx_ring_drain_timer)
+     * that runs only while the ring is non-empty. This removes the always-on
+     * drain hop whose self-re-arming chain could wedge RX delivery if a tick
+     * ever failed to re-arm. */
     lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_SCHEDULE, eth_rx_schedule_dispatch);
-    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_DRAIN,
-                             lwip_dispatch_period_from_ms(ETH_RX_DRAIN_INTERVAL_MS));
     lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
                              lwip_dispatch_period_from_ms(ETH_RX_SCHED_INTERVAL_MS));
     lwip_dispatch_start();
 
     netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
-    eth_promote_default_if_needed(&eth->iface);
     // enqueue callbacks for receiving interrupt and RX transfers from this device.
     if (usb_fn.schedule_transfer(eth->interrupt.endpoint, eth->interrupt.buf,
                                  INTERRUPT_RX_MAX, interrupt_receive_callback,
@@ -1709,20 +1852,30 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
             {
                 break;
             }
-            if (eth_device->rx.endpoint)
+            /* Only HALT/terminate endpoints when the device is still present
+             * (DISABLED). On a true DISCONNECT the hardware is gone and
+             * usbdrvce has already invalidated these endpoints — issuing a
+             * SET_FEATURE(HALT) control transfer to a vanished device is at
+             * best a no-op and at worst touches dead controller state. The
+             * `dead` flag already stops every callback re-arming, and the
+             * disconnect itself terminates the in-flight transfers. */
+            if (event != USB_DEVICE_DISCONNECTED_EVENT)
             {
-                usb_fn.set_endpoint_flags(eth_device->rx.endpoint, USB_MANUAL_TERMINATE);
-                usb_fn.set_endpoint_halt(eth_device->rx.endpoint);
-            }
-            if (eth_device->tx.endpoint)
-            {
-                usb_fn.set_endpoint_flags(eth_device->tx.endpoint, USB_MANUAL_TERMINATE);
-                usb_fn.set_endpoint_halt(eth_device->tx.endpoint);
-            }
-            if (eth_device->interrupt.endpoint)
-            {
-                usb_fn.set_endpoint_flags(eth_device->interrupt.endpoint, USB_MANUAL_TERMINATE);
-                usb_fn.set_endpoint_halt(eth_device->interrupt.endpoint);
+                if (eth_device->rx.endpoint)
+                {
+                    usb_fn.set_endpoint_flags(eth_device->rx.endpoint, USB_MANUAL_TERMINATE);
+                    usb_fn.set_endpoint_halt(eth_device->rx.endpoint);
+                }
+                if (eth_device->tx.endpoint)
+                {
+                    usb_fn.set_endpoint_flags(eth_device->tx.endpoint, USB_MANUAL_TERMINATE);
+                    usb_fn.set_endpoint_halt(eth_device->tx.endpoint);
+                }
+                if (eth_device->interrupt.endpoint)
+                {
+                    usb_fn.set_endpoint_flags(eth_device->interrupt.endpoint, USB_MANUAL_TERMINATE);
+                    usb_fn.set_endpoint_halt(eth_device->interrupt.endpoint);
+                }
             }
         }
         /* If THIS device was the one that tripped the fatal-retry path,
@@ -1752,13 +1905,11 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
             usb_fn.set_device_data(usb_device, NULL);
             if (eth_device->pending_transfers == 0)
             {
-                /* No in-flight transfers — safe to free immediately. */
-                if (eth_device->rx_ring)
-                {
-                    mem_buffer_destroy(eth_device->rx_ring);
-                    eth_device->rx_ring = NULL;
-                }
-                free(eth_device);
+                /* No in-flight transfers — safe to free immediately. Use
+                 * eth_free_device_storage (NOT a bare free) so the pending
+                 * overflow-drain sys_timeout is cancelled first; otherwise it
+                 * fires later against this freed dev (use-after-free). */
+                eth_free_device_storage(eth_device);
             }
             else
             {

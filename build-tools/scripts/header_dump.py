@@ -5,7 +5,7 @@ libload-shipped lwIP.
 Default layout:
 
         build/
-        lwip.h                   — preferred surface: the conn API (pruned
+        lwip.h                   — preferred surface: the socket API (pruned
                                    src/lwIP.h) inlined at the top, then an
                                    aggregate include of the core headers
         cryptography.h           — aggregate include for lwip/cryptography/*.h
@@ -16,7 +16,7 @@ Default layout:
 Pruning strategy:
 
   1. build-tools/meta/public_api_manifest.csv is the manual allowlist. Its category
-     column chooses conn/core/cryptography output placement.
+     column chooses socket/core/cryptography output placement.
   2. The libload export table (src/functable.s) is the build-filtered
      surface: manifest functions that were visible at compile time.
   3. For each manifest source header, libclang identifies FunctionDecls.
@@ -90,7 +90,7 @@ OUT_DIR = OUT_ROOT / "lwip"
 OUT_CORE_INDEX = OUT_ROOT / "lwip.h"
 OUT_CRYPTO_INDEX = OUT_ROOT / "cryptography.h"
 
-# The conn convenience API is inlined directly at the TOP of lwip.h so it is
+# The socket convenience API is inlined directly at the TOP of lwip.h so it is
 # the visibly-preferred surface (not buried among the core headers). This holds
 # its pruned body between emit time and umbrella assembly.
 _CONN_BODY: str = ""
@@ -1293,7 +1293,7 @@ def synthetic_header_body(
     dependency_scan: list[str] = []
 
     for line in public_macro_lines_before_functions(header, tu):
-        if group == "conn" and not line.startswith("#define LWIP_CONN_"):
+        if group == "socket" and not line.startswith("#define LWIP_SOCKET_"):
             continue
         add_decl_once(dependency_texts, seen_deps, line, line)
 
@@ -1469,7 +1469,7 @@ def synthetic_header_body(
 
     if support_only:
         dependency_texts = dependency_texts + source_decl_texts
-    elif group == "conn":
+    elif group == "socket":
         dependency_texts = order_dependency_decls(dependency_texts) + source_decl_texts
     else:
         dependency_texts = order_dependency_decls(dependency_texts + source_decl_texts)
@@ -1828,8 +1828,8 @@ def write_with_guard(path: Path, body: str, banner: str = "") -> None:
 # ---------------------------------------------------------------------
 
 def output_group_for(row: dict[str, str]) -> str:
-    if row["category"] == "conn":
-        return "conn"
+    if row["category"] == "socket":
+        return "socket"
     if row["category"] == "cryptography":
         return "cryptography"
     return "core"
@@ -1869,10 +1869,10 @@ def write_group_index(group: str, names: list[str], source_headers: list[Path]) 
         lines.extend([
             "",
             "/* ================================================================",
-            " * lwIP-CE connection API — the preferred high-level surface.",
+            " * lwIP-CE socket API — the preferred high-level surface.",
             " * Inlined here (rather than a buried subheader) because this is",
-            " * the API most apps should use: lwip_conn_create / _connect /",
-            " * _write / _recv / _close. The core includes above expose",
+            " * the API most apps should use: lwip_socket_create / _connect /",
+            " * _write / _read / _close. The core includes above expose",
             " * the lower-level lwIP primitives for advanced use.",
             " * ================================================================ */",
             "",
@@ -1907,7 +1907,7 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
     """Emit release headers from the manifest allowlist.
 
     Layout is intentionally small:
-      - lwip.h leads with the pruned src/lwIP.h conn API (inlined), then
+      - lwip.h leads with the pruned src/lwIP.h socket API (inlined), then
         includes every other lwIP/public core header.
       - cryptography.h includes lwip/cryptography/*.h (TLS/crypto headers).
     """
@@ -1935,12 +1935,12 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
     macro_defs = parse_build_macro_definitions(macro_file)
 
     global _CONN_BODY
-    if "conn" in by_group_source:
-        source_map = by_group_source.pop("conn")
+    if "socket" in by_group_source:
+        source_map = by_group_source.pop("socket")
         symbols = set(source_map.get(CONN_SRC.relative_to(REPO_ROOT).as_posix(), []))
         if symbols:
             # Inlined into lwip.h at OUT_ROOT, so cross-references resolve as
-            # lwip/core/<name> (the conn API pulls in err/ip_addr/pbuf and the
+            # lwip/core/<name> (the socket API pulls in err/ip_addr/pbuf and the
             # unified debug types from logging.h, all emitted into core).
             conn_source_to_output = {
                 (SRC_DIR / "include" / "lwip" / "err.h").resolve(): "lwip/core/err.h",
@@ -1958,7 +1958,7 @@ def emit_category_headers(manifest: list[dict[str, str]], exports: set[str]) -> 
             _CONN_BODY = body
             header_count += 1
             function_count += emitted_functions
-            print("  conn API (inlined into lwip.h)", file=sys.stderr)
+            print("  socket API (inlined into lwip.h)", file=sys.stderr)
 
     for group in sorted(by_group_source):
         source_map = by_group_source[group]

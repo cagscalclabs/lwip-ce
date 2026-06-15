@@ -10,6 +10,6 @@
 
 int main(void)
 {
-    return lwip_chat_run(LWIP_PROTO_TCP, "== TCP Chat ==",
+    return lwip_chat_run(LWIP_SOCKET_TCP, "== TCP Chat ==",
                          CHAT_HOST, CHAT_PORT, false);
 }

@@ -28,6 +28,15 @@ lwIP-CE uses a custom allocator system that can operate in two modes:
 
 - Static: *Requires manual* ``mem_init_static`` *followed by* ``lwip_init`` *instead of* ``lwip_start``. You give lwIP-CE a pointer and a size, and it treats that region as its heap.
 
+The allocator also exposes live accounting. ``mem_get_stats`` fills a
+``struct mem_accounting_stats`` with the heap limit, heap used/free, the pbuf
+pool size and usage, the user-reserved total, and per-pool plus effective
+memory-pressure levels. Applications can poll this each event-loop tick to
+render a live memory readout (the examples and test harnesses stream it to the
+LCD). ``mem_set_global_pressure_cb`` registers an observer that fires when the
+effective pressure level changes, for transport-level backpressure (for
+example, delaying ``tcp_recved`` window updates under load).
+
 
 Ethernet Driver
 ---------------
@@ -42,7 +51,7 @@ TLS Stack
 ---------
 
 The TLS stack is intentionally narrow: enough to make real secure client
-connections, not a general-purpose OS crypto subsystem.
+sockets, not a general-purpose OS crypto subsystem.
 
 .. list-table::
    :header-rows: 1
@@ -72,17 +81,68 @@ connections, not a general-purpose OS crypto subsystem.
        between 1024 and 2048 bits, inclusive. Any other signature scheme
        (including ``ecdsa_secp256r1_sha256``, the wider RSA-PSS hashes,
        or non-RSA leaf keys) causes a fatal ``decrypt_error`` alert and
-       the connection is aborted. ``ecdsa_secp256r1_sha256`` support is
+       the socket is aborted. ``ecdsa_secp256r1_sha256`` support is
        on the roadmap.
 
-       Certificate chain trust is SPKI-pin based. We don't walk the full
-       chain and verify every link's signature due to the computational
-       overhead of running RSA or P-256 multiple times on an eZ80.
-       Instead, if the leaf passes CertificateVerify *and* any CA-capable
-       cert in the chain (BasicConstraints ``cA=TRUE``) matches a SPKI
-       hash in the bundled truststore, the chain is accepted.
+       Certificate chain trust is **adjacent-link signature verification**.
+       SPKI pinning is no longer the chain-trust mechanism. As the
+       ``Certificate`` message streams in, each link is checked against the
+       next cert's public key (cert *N* is signed by cert *N+1*):
+
+       - An ``RSA-2048`` link signed with ``sha256WithRSAEncryption`` is
+         verified for real (PKCS#1 v1.5, SHA-256). A bad signature is fatal:
+         the handshake aborts.
+       - Any other signature type (``ecdsa_secp256r1_sha256``, wider RSA-PSS
+         hashes, non-RSA issuer keys) is **not** verified; the link is
+         accepted and the stack raises an ``ALERT``-severity debug event
+         (``unsupported cert type, proceeding``) so the application can see
+         the link went unchecked.
+       - The topmost cert has no issuer in the chain and is left unverified
+         (adjacent-links only; no truststore-root anchoring at this link).
+
+       This is an **interim** model: it lets the calculator complete a
+       handshake without running RSA/P-256 across an entire desktop-class
+       chain, while still cryptographically checking the RSA links it can
+       afford. As additional signature algorithms land (``ecdsa_secp256r1_sha256``
+       is next), the ALERT-but-accept fallback will shrink. The leaf is still
+       independently authenticated by the mandatory ``CertificateVerify``
+       above.
 
 For more details, proofs, and datasets, see the whitepaper below.
+
+Application Interfaces
+----------------------
+
+Network services and sockets
+   Applications request netif-level services and drive sockets through a
+   small C API rather than touching raw lwIP PCBs directly. ``lwip_request_services``
+   (and the per-netif ``lwip_netif_request_services``) start DHCP, the DNS
+   resolver, and SNTP on demand using ``LWIP_SOCKET_SVC_*`` flags; the per-netif
+   form takes a status callback that fires once per requested service with a
+   ``lwip_netif_service_status_t`` (up / timeout / failed), so an application
+   can react to "DHCP is up" without polling. ``lwip_default_netif_info`` fills a
+   ``lwip_netif_info_t`` snapshot (link/admin state, DHCP state, assigned IPv4
+   address, gateway) for status displays.
+
+Unified debug logging
+   Diagnostics across the whole stack go through a single callback registered
+   with ``lwip_set_debug(fn, mode, depth)``, replacing the former per-module
+   debug hooks. Each event arrives as a ``struct lwip_debug_info`` carrying the
+   emitting ``module``, the ``module_state`` (where in the code it fired),
+   an ``errnum`` (0 = ok), the source ``line``, a verbosity ``depth``
+   (``MILESTONE`` vs ``VERBOSE``), and a ``severity``:
+
+   - ``INFO`` — normal progress / informational milestone.
+   - ``ALERT`` — the stack noticed something wrong but chose to proceed (for
+     example, an unsupported-but-tolerated certificate link).
+   - ``ERROR`` — an operation is failing or aborting (always delivered,
+     regardless of the configured depth).
+
+   The callback's ``mode`` selects whether every emit is delivered
+   (``LWIP_DBG_INFO``) or only error emits (``LWIP_DBG_ERROR``), and ``depth``
+   gates verbosity. This gives an application one place to surface a clean
+   high-level progress view or a deep trace, with the ALERT level making
+   "proceeded despite a problem" distinguishable from a hard error.
 
 CI And Test Harnesses
 ---------------------

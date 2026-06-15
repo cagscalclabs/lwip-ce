@@ -33,21 +33,21 @@ lwip_init_runtime_opaque:
 	ld hl, (ix + 12)
 	ld (_fn_imports_table + 6), hl		; realloc
 
-
-	;push iy
-	;call _find_lwip_app
-	;pop iy
-	;or a
-	;jp z, .app_missing
+	push iy
+	call _find_lwip_app
+	pop iy
+	or a
+	jp z, .app_missing
 
 	push hl
 	ld hl, -1
 	ld (hl), 2
 	pop hl
-	; ld a, ti.AppObj
+
 	ld hl, __lwip_app_name
 	call ti.FindAppStart
 	jr nc, .app_found
+.app_missing:
 	pop ix
 	ld a, 1
 	ret

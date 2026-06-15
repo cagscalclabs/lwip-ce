@@ -38,12 +38,17 @@ extern "C" {
  *  enable bit. Add new entries here and in the dispatcher table in
  *  dispatch.c. */
 typedef enum {
+    /* Reserved/unused: RX frames are now delivered directly to lwIP from the
+     * USB RX completion (see eth_rx_deliver in usb_ethernet.c), and the
+     * overflow ring is drained by a self-limiting sys_timeout rather than a
+     * per-tick dispatcher. Slot kept (not removed) to avoid renumbering the
+     * dispatcher table; it stays inert because nothing attaches to it. */
     LWIP_DISPATCH_ETH_RX_DRAIN = 0,
     LWIP_DISPATCH_ETH_RX_SCHEDULE,
     LWIP_DISPATCH_TLS_RNG_REQUEST,
     LWIP_DISPATCH_TLS_RNG_HEALTHCHECK,
     LWIP_DISPATCH_TLS_RX_RECVD,      /**< TLS receive-window release */
-    LWIP_DISPATCH_CONN_SERVICES,    /**< lwip_conn waiting-for-services poll */
+    LWIP_DISPATCH_CONN_SERVICES,    /**< lwip_socket waiting-for-services poll */
     LWIP_DISPATCH_COUNT
 } lwip_dispatch_id_t;
 

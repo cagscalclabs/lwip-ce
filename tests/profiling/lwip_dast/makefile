@@ -5,6 +5,8 @@
 PROJECT_ROOT := ../../..
 RELEASE_ROOT ?= $(if $(wildcard $(PROJECT_ROOT)/lwip),$(PROJECT_ROOT),$(PROJECT_ROOT)/build)
 EXAMPLES_ROOT := $(PROJECT_ROOT)/examples
+CEDEV_TOOLCHAIN ?= $(shell cedev-config --prefix)
+LIBLOAD_LIBS := $(filter-out %/lwip.lib,$(wildcard $(CEDEV_TOOLCHAIN)/lib/libload/*.lib)) $(RELEASE_ROOT)/lwip.lib
 
 NAME = LWDAST
 DESCRIPTION = "lwIP DAST harness"

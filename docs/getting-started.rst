@@ -8,12 +8,12 @@ this build can actually provide, then filtered through the public API manifest.
 Start the Stack
 ---------------
 
-Most applications should include ``lwip/conn.h`` and use the app-facing
-connection API:
+Most applications should include ``lwip.h`` and use the app-facing
+socket API:
 
 .. code-block:: c
 
-   #include <lwip/conn.h>
+   #include <lwip.h>
 
    int main(void)
    {
@@ -31,16 +31,29 @@ connection API:
 ``lwip_poll_network_events()`` must run from the main loop. There is no OS
 thread sitting behind the stack doing this for you.
 
-Use the Conn API
-----------------
+Use the Socket API
+------------------
 
-``conn.h`` is an app-facing wrapper for programs that do not want to wire raw
+``lwip.h`` is an app-facing wrapper for programs that do not want to wire raw
 TCP, UDP, ALTCP, and TLS callbacks by hand.
 
-``lwip_conn_connect()`` starts the connection attempt. It does not mean the
-connection is ready. Watch ``conn.status`` or use ``lwip_conn_set_connected()``.
+``lwip_socket_connect()`` starts the socket attempt. It does not mean the
+socket is ready. Watch ``socket.status`` or subscribe to
+``LWIP_SOCKET_EVENTF_STATE_CHANGE`` with ``lwip_socket_on_event()``.
 
-``lwip_conn_create()`` accepts these transport selectors:
+``lwip_socket_create()`` accepts a transport selector, a netif selector, an
+optional static IPv4 configuration, and a timeout:
+
+.. code-block:: c
+
+   lwip_socket_create(&socket, LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, 30000);
+
+``NULL`` address info means DHCP mode. ``LWIP_NETIF_EXT`` rejects loopback and
+waits for USB Ethernet, link-up, DHCP address, and gateway. A non-NULL
+``lwip_socket_addrinfo_t`` applies static ``ip/netmask/gateway`` instead of
+starting DHCP.
+
+Transport selectors:
 
 .. list-table::
    :header-rows: 1
@@ -48,16 +61,17 @@ connection is ready. Watch ``conn.status`` or use ``lwip_conn_set_connected()``.
 
    * - Protocol
      - Meaning
-   * - ``LWIP_PROTO_TCP``
+   * - ``LWIP_SOCKET_TCP``
      - Raw TCP via lwIP ``tcp_*``.
-   * - ``LWIP_PROTO_UDP``
+   * - ``LWIP_SOCKET_UDP``
      - UDP via lwIP ``udp_*``.
-   * - ``LWIP_PROTO_ALTCP``
+   * - ``LWIP_SOCKET_ALTCP``
      - ALTCP using the default TCP allocator.
-   * - ``LWIP_PROTO_ALTCP_TLS``
+   * - ``LWIP_SOCKET_ALTCP_TLS``
      - ALTCP wrapped in the CE TLS client path.
 
-The service flags are netif-level startup requests:
+The service flags are netif-level startup requests for code that needs a
+service without creating a socket:
 
 .. list-table::
    :header-rows: 1
@@ -65,48 +79,42 @@ The service flags are netif-level startup requests:
 
    * - Flag
      - Meaning
-   * - ``LWIP_CONN_SVC_DHCP``
+   * - ``LWIP_SOCKET_SVC_DHCP``
      - Start DHCP on the resident interface.
-   * - ``LWIP_CONN_SVC_SNTP``
+   * - ``LWIP_SOCKET_SVC_SNTP``
      - Start SNTP for time sync.
-   * - ``LWIP_CONN_SVC_DNS``
-     - Make DNS name resolution available for ``lwip_conn_connect()``.
+   * - ``LWIP_SOCKET_SVC_DNS``
+     - Make DNS name resolution available for ``lwip_socket_connect()``.
 
-These flags do not create private services per connection. They make sure the
-resident interface has the requested service running.
+These flags do not create private services per socket. ``lwip_socket_create()``
+handles DHCP/DNS automatically in DHCP mode; apps can use
+``lwip_request_services()`` for optional services such as SNTP.
 
-Once a service is already up on an interface, later connections do not need to
-request it again. Passing ``0`` for ``flags`` is safe when you are reusing the
-same interface and you do not need ``lwip_conn_create()`` to start anything new.
-For example, one setup connection can request DHCP and DNS, and later
-connections on that same interface can pass ``0`` without disabling those
-services. The flags are startup requests, not per-connection ownership or
-teardown controls.
+Received app bytes are copied into the socket RX ring and acknowledged to lwIP
+immediately. The app drains them with ``lwip_socket_read()``. There is no pbuf
+ownership or ``recved`` call in the socket API.
 
-Receive callbacks get a ``struct pbuf *``. The app owns that pbuf and must free
-it when done. For TCP, the app must also call ``lwip_conn_recved()`` after it
-has consumed or queued the bytes. Without that call, the TCP receive window
-does not advance.
-
-Use ``lwip_conn_shutdown()`` for TCP-style half-close behavior. Use
-``lwip_conn_close()`` for orderly full close. Use ``lwip_conn_abort()`` when
-the connection has to be torn down immediately and lwIP should stop delivering
-traffic for that PCB. Use ``lwip_conn_destroy()`` when the handle is no longer
+Use ``lwip_socket_shutdown()`` for TCP-style half-close behavior. Use
+``lwip_socket_close()`` for orderly full close. Use ``lwip_socket_abort()`` when
+the socket has to be torn down immediately and lwIP should stop delivering
+traffic for that PCB. Use ``lwip_socket_destroy()`` when the handle is no longer
 needed.
 
-This is a stubbed full connection shape. The callbacks are intentionally small;
+This is a stubbed full socket shape. The callbacks are intentionally small;
 real applications should move parsing, state transitions, and retry decisions
 into their own code.
 
 .. code-block:: c
 
-   #include <lwip/conn.h>
-   #include <lwip/core/pbuf.h>
+   #include <lwip.h>
    #include <stdbool.h>
    #include <stdint.h>
+   #include <string.h>
 
    static bool done;
    static bool want_close;
+   static char response[128];
+   static size_t response_len;
 
    static bool response_complete(void)
    {
@@ -114,121 +122,96 @@ into their own code.
        return false;
    }
 
-   static void on_connected(void *arg, struct lwip_conn *conn)
+   static void on_event(void *arg, struct lwip_socket *socket,
+                        lwip_socket_event_type_t type,
+                        const void *data)
    {
        (void)arg;
+       (void)data;
 
-       static const uint8_t request[] =
-           "GET / HTTP/1.0\r\n"
-           "Host: example.com\r\n"
-           "\r\n";
-
-       if (lwip_conn_write(conn, request, sizeof(request) - 1) != LWIP_OK) {
+       if (type == LWIP_SOCKET_EVENT_STATE_CHANGE &&
+           lwip_socket_status(socket) == LWIP_STATUS_CONNECTED) {
+           static const uint8_t request[] =
+               "GET / HTTP/1.0\r\n"
+               "Host: example.com\r\n"
+               "\r\n";
+           if (lwip_socket_write(socket, request, sizeof(request) - 1) != LWIP_OK) {
+               done = true;
+           }
+       } else if (type == LWIP_SOCKET_EVENT_IO) {
+           size_t space = sizeof(response) - response_len - 1;
+           response_len += lwip_socket_read(socket,
+                                            (uint8_t *)response + response_len,
+                                            space);
+           response[response_len] = '\0';
+           if (response_complete()) {
+               want_close = true;
+           }
+       } else if (type == LWIP_SOCKET_EVENT_ERROR ||
+                  (type == LWIP_SOCKET_EVENT_STATE_CHANGE &&
+                   lwip_socket_status(socket) == LWIP_STATUS_CLOSED)) {
            done = true;
        }
-   }
-
-   static void on_recv(void *arg, struct lwip_conn *conn, struct pbuf *p)
-   {
-       (void)arg;
-
-       if (!p) {
-           done = true;
-           return;
-       }
-
-       uint16_t consumed = p->tot_len;
-
-       for (struct pbuf *q = p; q != NULL; q = q->next) {
-           const uint8_t *bytes = (const uint8_t *)q->payload;
-           uint16_t len = q->len;
-
-           /* Parse, copy, or display bytes here. */
-           (void)bytes;
-           (void)len;
-       }
-
-       lwip_conn_recved(conn, consumed);
-       pbuf_free(p);
-
-       if (response_complete()) {
-           want_close = true;
-       }
-   }
-
-   static void on_error(void *arg, struct lwip_conn *conn, lwip_error_t err)
-   {
-       (void)arg;
-       (void)conn;
-       (void)err;
-       done = true;
-   }
-
-   static void on_closed(void *arg, struct lwip_conn *conn)
-   {
-       (void)arg;
-       (void)conn;
-       done = true;
    }
 
    int main(void)
    {
-       struct lwip_conn conn;
+       struct lwip_socket socket;
 
        if (!lwip_start()) {
            return 1;
        }
 
-       if (lwip_conn_create(&conn, NULL, LWIP_PROTO_TCP,
-                            LWIP_CONN_SVC_DHCP | LWIP_CONN_SVC_DNS) != LWIP_OK) {
+       if (lwip_socket_create(&socket, LWIP_SOCKET_TCP, LWIP_NETIF_EXT,
+                              NULL, 30000) != LWIP_OK) {
            return 1;
        }
 
-       lwip_conn_set_connected(&conn, on_connected);
-       lwip_conn_set_recv(&conn, on_recv);
-       lwip_conn_set_err(&conn, on_error);
-       lwip_conn_set_closed(&conn, on_closed);
+       lwip_socket_on_event(&socket,
+                            LWIP_SOCKET_EVENTF_STATE_CHANGE |
+                            LWIP_SOCKET_EVENTF_IO,
+                            on_event);
 
-       if (lwip_conn_connect(&conn, "example.com", 80) != LWIP_OK) {
-           lwip_conn_destroy(&conn);
+       if (lwip_socket_connect(&socket, "example.com", 80) != LWIP_OK) {
+           lwip_socket_destroy(&socket);
            return 1;
        }
 
        while (!done) {
            lwip_poll_network_events();
 
-           if (want_close && conn.status == LWIP_STATUS_CONNECTED) {
-               lwip_conn_shutdown(&conn);
+           if (want_close && socket.status == LWIP_STATUS_CONNECTED) {
+               lwip_socket_shutdown(&socket);
                want_close = false;
            }
 
-           if (conn.status == LWIP_STATUS_CLOSED ||
-               conn.status == LWIP_STATUS_ERROR) {
+           if (socket.status == LWIP_STATUS_CLOSED ||
+               socket.status == LWIP_STATUS_ERROR) {
                done = true;
            }
 
            /* UI, keys, timers, and app work go here. */
        }
 
-       int rc = conn.status == LWIP_STATUS_ERROR ? 1 : 0;
-       if (conn.status != LWIP_STATUS_CLOSED) {
-           lwip_conn_close(&conn);
+       int rc = socket.status == LWIP_STATUS_ERROR ? 1 : 0;
+       if (socket.status != LWIP_STATUS_CLOSED) {
+           lwip_socket_close(&socket);
        }
-       lwip_conn_destroy(&conn);
+       lwip_socket_destroy(&socket);
        return rc;
    }
 
 Choose an API Layer
 -------------------
 
-Use ``conn.h`` when the program wants a small socket-ish wrapper around TCP,
+Use ``lwip.h`` when the program wants a small socket-ish wrapper around TCP,
 UDP, ALTCP, or TLS.
 
 Use ``core/`` when the program needs raw lwIP control at PCB level. This is the
 closer match for upstream lwIP examples.
 
 Use ``cryptography/`` when the program wants the TLS project's crypto
-primitives directly, without opening a network connection.
+primitives directly, without opening a network socket.
 
 Release Layout
 --------------
@@ -241,14 +224,14 @@ The public release layout is:
 
    * - Path
      - Purpose
-   * - ``lwip/conn.h``
-     - App-facing connection wrapper.
-   * - ``lwip/core.h``
+   * - ``lwip.h``
+     - App-facing socket wrapper and curated core surface.
+   * - ``cryptography.h``
+     - Umbrella include for crypto headers.
+   * - ``lwip/core/``
      - Umbrella include for curated core headers.
    * - ``lwip/core/*.h``
      - Curated lwIP core headers for this implementation.
-   * - ``lwip/cryptography.h``
-     - Umbrella include for crypto headers.
    * - ``lwip/cryptography/*.h``
      - Public cryptographic primitives.
    * - ``lwip.asm``

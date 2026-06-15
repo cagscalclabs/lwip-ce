@@ -29,7 +29,7 @@
 #define LWIP_EXAMPLE_LEFT 2     /* left margin (px)                         */
 #define LWIP_EXAMPLE_LCD_W 320
 #define LWIP_EXAMPLE_STATS_X 188
-#define LWIP_EXAMPLE_STATS_LINES 3
+#define LWIP_EXAMPLE_STATS_LINES 5
 #define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 12
 
 static uint8_t lwip_example_row = LWIP_EXAMPLE_TOP;
@@ -113,6 +113,7 @@ static void lwip_example_draw_mem_stats(void)
     char line[32];
     uint8_t h;
     uint8_t y;
+    size_t user_limit;
 
     if (!mem_get_stats(&stats))
     {
@@ -122,22 +123,43 @@ static void lwip_example_draw_mem_stats(void)
     h = lwip_example_line_h();
     y = (uint8_t)(LWIP_EXAMPLE_BOTTOM - (h * LWIP_EXAMPLE_STATS_LINES));
 
-    lwip_example_format_k(used, sizeof(used), stats.heap_used);
-    lwip_example_format_k(total, sizeof(total), stats.heap_limit);
-    snprintf(line, sizeof(line), "H%s/%s  %u%%", used, total,
-             lwip_example_pct(stats.heap_used, stats.heap_limit));
-    lwip_example_stats_line(y, line);
-
-    y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.pbuf_pool_used);
     lwip_example_format_k(total, sizeof(total), stats.pbuf_pool_size);
-    snprintf(line, sizeof(line), "P%s/%s  %u%%", used, total,
+    snprintf(line, sizeof(line), "P:%s/%s %u%%", used, total,
              lwip_example_pct(stats.pbuf_pool_used, stats.pbuf_pool_size));
     lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
+    lwip_example_format_k(used, sizeof(used), stats.tls_used);
+    lwip_example_format_k(total, sizeof(total), stats.tls_limit);
+    snprintf(line, sizeof(line), "T:%s/%s %u%%", used, total,
+             lwip_example_pct(stats.tls_used, stats.tls_limit));
+    lwip_example_stats_line(y, line);
+
+    y = (uint8_t)(y + h);
+    lwip_example_format_k(used, sizeof(used), stats.rx_ring_used);
+    lwip_example_format_k(total, sizeof(total), stats.rx_ring_size);
+    snprintf(line, sizeof(line), "R:%s/%s %u%%", used, total,
+             lwip_example_pct(stats.rx_ring_used, stats.rx_ring_size));
+    lwip_example_stats_line(y, line);
+
+    y = (uint8_t)(y + h);
+    user_limit = 0;
+    if (stats.total_heap > stats.pbuf_pool_size + stats.heap_used)
+    {
+        user_limit = stats.total_heap - stats.pbuf_pool_size - stats.heap_used;
+    }
     lwip_example_format_k(used, sizeof(used), stats.user_reserved);
-    snprintf(line, sizeof(line), "U%s", used);
+    lwip_example_format_k(total, sizeof(total), user_limit);
+    snprintf(line, sizeof(line), "U:%s/%s %u%%", used, total,
+             lwip_example_pct(stats.user_reserved, user_limit));
+    lwip_example_stats_line(y, line);
+
+    y = (uint8_t)(y + h);
+    lwip_example_format_k(used, sizeof(used), stats.socket_ring_used);
+    lwip_example_format_k(total, sizeof(total), stats.socket_ring_size);
+    snprintf(line, sizeof(line), "C:%s/%s %u%%", used, total,
+             lwip_example_pct(stats.socket_ring_used, stats.socket_ring_size));
     lwip_example_stats_line(y, line);
 }
 
@@ -685,6 +707,23 @@ static void lwip_example_line_ipv4(const char *prefix, const uint8_t ip[4])
                        (unsigned)ip[2], (unsigned)ip[3]);
 }
 
+static const char *lwip_example_socket_status_name(lwip_status_t status)
+{
+    switch (status)
+    {
+    case LWIP_STATUS_INIT:             return "init";
+    case LWIP_STATUS_WAITING_SERVICES: return "waiting";
+    case LWIP_STATUS_RESOLVING:        return "resolving";
+    case LWIP_STATUS_CONNECTING:       return "connecting";
+    case LWIP_STATUS_CONNECTED:        return "connected";
+    case LWIP_STATUS_CLOSING:          return "closing";
+    case LWIP_STATUS_CLOSED:           return "closed";
+    case LWIP_STATUS_RESET:            return "reset";
+    case LWIP_STATUS_ERROR:            return "error";
+    default:                           return "unknown";
+    }
+}
+
 /* ----------------------------------------------------------------------
  * Debug console
  *
@@ -756,8 +795,8 @@ static void lwip_example_dbg_console_cb(const struct lwip_debug_info *info)
     lwip_example_draw_mem_stats();
 }
 
-static void lwip_example_show_conn_error(const char *label,
-                                         const struct lwip_conn *conn,
+static void lwip_example_show_socket_error(const char *label,
+                                         const struct lwip_socket *sock,
                                          lwip_error_t err)
 {
     lwip_netif_info_t info = {0};
@@ -765,9 +804,9 @@ static void lwip_example_show_conn_error(const char *label,
     lwip_example_clear();
     lwip_example_line(label);
     lwip_example_linef("st:%u err:%u",
-                       conn ? (unsigned)conn->status : 0u,
+                       sock ? (unsigned)sock->status : 0u,
                        err ? (unsigned)err
-                           : (conn ? (unsigned)conn->last_error : 0u));
+                           : (sock ? (unsigned)sock->last_error : 0u));
     if (lwip_default_netif_info(&info))
     {
         lwip_example_linef("u:%u l:%u dh:%u",
@@ -788,7 +827,8 @@ static void lwip_example_show_conn_error(const char *label,
     lwip_example_wait_key();
 }
 
-static bool lwip_example_timed_out(clock_t start, uint16_t seconds);
+static uint32_t lwip_example_now_ms(void);
+static bool lwip_example_timed_out(uint32_t start, uint16_t seconds);
 static bool lwip_example_cancelled(void);
 
 static bool lwip_example_stack_running = false;
@@ -854,9 +894,15 @@ static int lwip_example_finish(int code)
     return code;
 }
 
-static bool lwip_example_timed_out(clock_t start, uint16_t seconds)
+static uint32_t lwip_example_now_ms(void)
 {
-    return (clock_t)(clock() - start) >= (clock_t)seconds * CLOCKS_PER_SEC;
+    return lwip_now_ms();
+}
+
+static bool lwip_example_timed_out(uint32_t start, uint16_t seconds)
+{
+    return (uint32_t)(lwip_example_now_ms() - start) >=
+        (uint32_t)seconds * 1000u;
 }
 
 static bool lwip_example_cancelled(void)

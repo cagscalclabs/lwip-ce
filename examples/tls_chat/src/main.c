@@ -10,6 +10,6 @@
 
 int main(void)
 {
-    return lwip_chat_run(LWIP_PROTO_ALTCP_TLS, "== TLS Chat ==",
+    return lwip_chat_run(LWIP_SOCKET_ALTCP_TLS, "== TLS Chat ==",
                          CHAT_HOST, CHAT_PORT, true);
 }

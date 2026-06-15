@@ -51,10 +51,19 @@ STUB_REQUIRED_EXPORTS = {
     "_lwip_init_runtime_internal",
 }
 
+# Symbols implemented by the libload stub itself, not by the app export table.
+# These must appear in lwip.lib so consuming apps can link against them, but
+# they must not be added to src/functable.s because they are not app-resident
+# functions.
+STUB_ONLY_LIBLOAD_EXPORTS = [
+    "_lwip_init_runtime_opaque",
+]
+
 # The libload library stub. Emitted alongside src/functable.s so the
 # two stay in lockstep — both files list the public API in the same order.
 RELEASE_DIR = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build"))
 LIBLOAD_STUB_ASM = RELEASE_DIR / "lwip.asm"
+LIBLOAD_STUB_LIB = RELEASE_DIR / "lwip.lib"
 
 # Hand-written bootstrap appended verbatim to the bottom of the
 # generated lwip.s. This is the part of the stub that humans edit;
@@ -634,6 +643,24 @@ def render_libload_stub(entries: list[str]) -> str:
     return "\n".join(lines)
 
 
+def render_libload_import_lib(entries: list[str]) -> str:
+    """Render libload's text import-library sidecar.
+
+    fasmg normally emits this while assembling lwip.asm, but generating it from
+    the same ordered export list keeps local example builds from accidentally
+    linking against an older installed lwip.lib when fasmg is unavailable.
+    """
+    lines = [
+        f"\tlibrary\t{LIBLOAD_NAME}, {LIBLOAD_VERSION}",
+        "",
+    ]
+    for sym in [*entries, *STUB_ONLY_LIBLOAD_EXPORTS]:
+        name = sym[1:] if sym.startswith("_") else sym
+        lines.append(f"\texport\t{name}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser(
@@ -759,10 +786,13 @@ def main() -> int:
 
     RELEASE_DIR.mkdir(exist_ok=True)
     LIBLOAD_STUB_ASM.write_text(render_libload_stub(new_entries))
+    LIBLOAD_STUB_LIB.write_text(render_libload_import_lib(new_entries))
     off_note = (f", __lwip_fn_table_off=0x{DYLIB_DESCRIPTOR_OFF:06X}, "
                 f"expected_exports={len(new_entries)}")
     print(f"==> wrote {LIBLOAD_STUB_ASM} ({len(new_entries)} exports, "
           f"library {LIBLOAD_NAME} v{LIBLOAD_VERSION}{off_note})",
+          file=sys.stderr)
+    print(f"==> wrote {LIBLOAD_STUB_LIB} ({len(new_entries)} exports)",
           file=sys.stderr)
     return 0
 
