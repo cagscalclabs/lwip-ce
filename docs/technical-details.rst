@@ -12,30 +12,26 @@ Configuration Wizard
 lwIP-CE has a configuration wizard that opens when you run the app. It keeps the
 resident stack policy in one place:
 
-- Allocator max heap
-- Global service-up flags: DHCP, DNS, and NTP
 - Hostname, static IPv4 settings, timezone, and DST
-- Certificate/Full-chain verification mode
-- USB/TLS logging and max log size
-- Network service tests: HTTP server, NTP, DNS, ping, TCP echo, and TLS
 
 Allocator System
 ----------------
 
 lwIP-CE uses a custom allocator system that can operate in two modes:
 
-- Dynamic: *Default* lwIP-CE ingests malloc, free, and realloc. Only what is needed is absorbed. This can be more memory-efficient but also suffers the malloc overhead. Max heap is tunable via lwIP-CE configuration wizard.
+- Dynamic: *Default* lwIP-CE ingests malloc, free, and realloc. Only what is needed is absorbed. The stack manages its own pbuf pool, TLS scratch, RX rings, socket rings, and user-reserved regions; heap sizing is no longer a wizard-level policy knob.
 
 - Static: *Requires manual* ``mem_init_static`` *followed by* ``lwip_init`` *instead of* ``lwip_start``. You give lwIP-CE a pointer and a size, and it treats that region as its heap.
 
 The allocator also exposes live accounting. ``mem_get_stats`` fills a
-``struct mem_accounting_stats`` with the heap limit, heap used/free, the pbuf
-pool size and usage, the user-reserved total, and per-pool plus effective
-memory-pressure levels. Applications can poll this each event-loop tick to
-render a live memory readout (the examples and test harnesses stream it to the
-LCD). ``mem_set_global_pressure_cb`` registers an observer that fires when the
-effective pressure level changes, for transport-level backpressure (for
-example, delaying ``tcp_recved`` window updates under load).
+``struct mem_accounting_stats`` with total heap, pbuf pool size/usage,
+non-pool heap used/free, user-reserved bytes, TLS usage, RX ring usage, socket
+ring usage, and pbuf/heap/effective pressure levels. Applications can poll this
+each event-loop tick to render a live memory readout (the examples and test
+harnesses stream it to the LCD). ``mem_set_global_pressure_cb`` registers an
+observer that fires when the effective pressure level changes, for
+transport-level backpressure (for example, delaying ``tcp_recved`` window
+updates under load).
 
 
 Ethernet Driver
@@ -69,44 +65,28 @@ sockets, not a general-purpose OS crypto subsystem.
        Current dataset: correlation factor about ``1.1``; XOR conditioning
        depth ``17``; effective conditioning about ``16``; ``P(+)`` about
        ``0.5``; estimated min-entropy about ``1``.
-   * - Trust store
-     - A GitHub workflow parses system certificates, generates a curated
-       truststore with abbreviated serialized metadata, signs it with the
-       maintainer RSA-2048 private key, and ships the matching public key in lwIP-CE. Regenerated quarterly.
+   * - TLS trust store
+     - Prior SPKI pinning model abandoned, new trust model WIP due to device
+       storage constraints.
+   * - Certificate chain
+     - The stack walks the server's certificate chain and verifies the
+       signatures it can currently support. RSA links are checked
+       cryptographically. Unsupported signature algorithms, including P-256
+       ECDSA, raise an ``ALERT``-severity debug warning and are allowed to
+       pass for now so the stack remains usable before P-256 verification
+       lands.
 
-   * - CertificateVerify/Certificate
-     - *CertificateVerify* is mandatory and is verified against the leaf
-       certificate's ``SubjectPublicKeyInfo``. The server must select
-       ``rsa_pss_rsae_sha256`` and the leaf must be RSA with a modulus
-       between 1024 and 2048 bits, inclusive. Any other signature scheme
-       (including ``ecdsa_secp256r1_sha256``, the wider RSA-PSS hashes,
-       or non-RSA leaf keys) causes a fatal ``decrypt_error`` alert and
-       the socket is aborted. ``ecdsa_secp256r1_sha256`` support is
-       on the roadmap.
+       There is no final root-of-trust anchor in this release. That mechanism
+       is being redesigned, so the final intermediate or topmost certificate in
+       the received chain dangles after adjacent-link checks. A later release
+       will close this gap and remove the unsupported-algorithm fallback as the
+       missing verification code lands.
 
-       Certificate chain trust is **adjacent-link signature verification**.
-       SPKI pinning is no longer the chain-trust mechanism. As the
-       ``Certificate`` message streams in, each link is checked against the
-       next cert's public key (cert *N* is signed by cert *N+1*):
-
-       - An ``RSA-2048`` link signed with ``sha256WithRSAEncryption`` is
-         verified for real (PKCS#1 v1.5, SHA-256). A bad signature is fatal:
-         the handshake aborts.
-       - Any other signature type (``ecdsa_secp256r1_sha256``, wider RSA-PSS
-         hashes, non-RSA issuer keys) is **not** verified; the link is
-         accepted and the stack raises an ``ALERT``-severity debug event
-         (``unsupported cert type, proceeding``) so the application can see
-         the link went unchecked.
-       - The topmost cert has no issuer in the chain and is left unverified
-         (adjacent-links only; no truststore-root anchoring at this link).
-
-       This is an **interim** model: it lets the calculator complete a
-       handshake without running RSA/P-256 across an entire desktop-class
-       chain, while still cryptographically checking the RSA links it can
-       afford. As additional signature algorithms land (``ecdsa_secp256r1_sha256``
-       is next), the ALERT-but-accept fallback will shrink. The leaf is still
-       independently authenticated by the mandatory ``CertificateVerify``
-       above.
+   * - CertificateVerify
+     - ``CertificateVerify`` is mandatory. For the current RSA path, the
+       signature is verified against the leaf certificate's public key, proving
+       possession of the leaf private key. This complements the best-effort
+       chain walk above, but it is not a root-of-trust anchor by itself.
 
 For more details, proofs, and datasets, see the whitepaper below.
 
@@ -170,6 +150,12 @@ nothing about the calculator binary.
        bit streams off-device. Entropy tests are not useful in the emulated CI
        pipeline because SRAM emulation is deterministic, so those captures are
        run on hardware and analyzed in the whitepaper instead.
+   * - DAST hardware-in-the-loop
+     - Runs the calculator-side ``tests/profiling/lwip_dast`` harness on real
+       hardware because CEmu does not emulate Ethernet devices. The host-side
+       ``build-tools/dast/lwip-dast.sh`` runner probes the calculator over the
+       live network, advances the harness through UDP, TCP, raw/IP, and control
+       states, writes ``tests/dast.json``, and CI gates the committed report.
    * - Doxygen/Sphinx docs build
      - Builds the generated API reference and the project docs with the same
        release headers users will see.

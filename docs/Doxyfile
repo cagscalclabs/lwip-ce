@@ -2,7 +2,7 @@ PROJECT_NAME           = "lwIP-CE"
 PROJECT_BRIEF          = "TI-84 Plus CE focused lwIP fork"
 OUTPUT_DIRECTORY       = _doxygen
 
-INPUT                  = ../build/lwip
+INPUT                  = ../build/lwip ../build/lwip.h ../build/cryptography.h
 RECURSIVE              = YES
 FILE_PATTERNS          = *.h
 
@@ -34,5 +34,5 @@ WARN_IF_UNDOCUMENTED   = NO
 WARN_IF_DOC_ERROR      = YES
 WARN_NO_PARAMDOC       = NO
 
-STRIP_FROM_PATH        = ../build/lwip
+STRIP_FROM_PATH        = ../build
 FULL_PATH_NAMES        = YES

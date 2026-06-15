@@ -204,14 +204,16 @@ into their own code.
 Choose an API Layer
 -------------------
 
-Use ``lwip.h`` when the program wants a small socket-ish wrapper around TCP,
-UDP, ALTCP, or TLS.
+Use ``lwip.h`` when the program wants the app-facing stack and socket API. It
+is a root-level umbrella header in the release and includes the curated
+``lwip/core/*.h`` surface.
 
-Use ``core/`` when the program needs raw lwIP control at PCB level. This is the
-closer match for upstream lwIP examples.
+Use ``lwip/core/*.h`` when the program needs lower-level lwIP control at PCB or
+netif level. This is the closer match for upstream lwIP examples.
 
-Use ``cryptography/`` when the program wants the TLS project's crypto
-primitives directly, without opening a network socket.
+Use ``cryptography.h`` when the program wants the TLS project's crypto
+primitives directly, without opening a network socket. It is a root-level
+umbrella header over ``lwip/cryptography/*.h``.
 
 Release Layout
 --------------
@@ -225,15 +227,14 @@ The public release layout is:
    * - Path
      - Purpose
    * - ``lwip.h``
-     - App-facing socket wrapper and curated core surface.
+     - Root-level umbrella for the app-facing socket API and curated
+       ``lwip/core/*.h`` headers.
    * - ``cryptography.h``
-     - Umbrella include for crypto headers.
-   * - ``lwip/core/``
-     - Umbrella include for curated core headers.
+     - Root-level umbrella for ``lwip/cryptography/*.h``.
    * - ``lwip/core/*.h``
-     - Curated lwIP core headers for this implementation.
+     - Lower-level curated lwIP core, netif, socket, service, and PCB headers.
    * - ``lwip/cryptography/*.h``
-     - Public cryptographic primitives.
+     - Lower-level public cryptographic primitive and TLS helper headers.
    * - ``lwip.asm``
      - Release export/extern assembly surface for the dynamic library.
 

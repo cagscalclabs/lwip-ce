@@ -1,8 +1,9 @@
-cryptography/
-=============
+cryptography.h and lwip/cryptography/
+=====================================
 
-``cryptography/`` contains algorithmically-secure primitives that can be used
-outside the network stack.
+``cryptography.h`` is the root-level umbrella for the lower-level
+``lwip/cryptography/*.h`` headers. These headers expose algorithmically-secure
+primitives that can be used outside the network stack.
 
 .. list-table::
    :header-rows: 1
@@ -35,7 +36,7 @@ outside the network stack.
    * - :doc:`rsa.h <cryptography/rsa>`
      - RSA support for 1024-bit through 2048-bit keys.
    * - :doc:`truststore.h <cryptography/truststore>`
-     - Certificate pin trust store checks.
+     - Certificate metadata and chain-verification helpers used by TLS.
    * - :doc:`x25519.h <cryptography/x25519>`
      - X25519 elliptic-curve scalar multiplication.
    * - :doc:`x509.h <cryptography/x509>`
