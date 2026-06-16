@@ -27,16 +27,10 @@ const lwip_app_config_t *lwip_app_config_get(void)
     return &g_cfg;
 }
 
-void lwip_log_event(uint8_t type, uint8_t reason)
+void lwip_log_event_at(uint16_t module, uint16_t module_state, uint16_t line)
 {
-    (void)type;
-    (void)reason;
-}
-
-void lwip_log_event_at(uint8_t type, uint8_t reason, uint16_t line)
-{
-    (void)type;
-    (void)reason;
+    (void)module;
+    (void)module_state;
     (void)line;
 }
 

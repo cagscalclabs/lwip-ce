@@ -31,10 +31,9 @@ jobs:
     environment: test
 
     steps:
-      - name: Checkout TLS branch
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
-          ref: 'tls'
           submodules: true
 
       - name: Install dependencies
