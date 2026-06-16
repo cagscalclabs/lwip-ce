@@ -11,21 +11,26 @@ permissions:
 env:
   # Registry of allowed signature algorithms for the truststore.
   # Each entry must have:
-  #   serialized_id: integer written into tls_truststore_entry.alg_id (matches tls_cert_sig_alg_t)
-  #   oid:           ASN.1 dotted OID string for this algorithm
-  #   display_name:  shown in the job summary
+  #   serialized_id:  integer written into tls_truststore_entry.alg_id (matches tls_cert_sig_alg_t)
+  #   oid:            ASN.1 dotted OID string for this algorithm
+  #   display_name:   shown in the job summary
+  #   openssl_names:  the "Signature Algorithm" text name(s) OpenSSL prints
+  #                   for this OID in `openssl x509 -noout -text` output
   # To add a new algorithm: add an entry here AND add the matching enum value to
   # tls_cert_sig_alg_t in src/tls/includes/truststore.h.
   TRUSTSTORE_ALLOWED_ALGS: |
     - serialized_id: 0
       oid: "1.2.840.113549.1.1.10"
       display_name: "RSA-PSS-SHA256"
+      openssl_names: ["rsassaPss"]
     - serialized_id: 1
       oid: "1.2.840.113549.1.1.11"
       display_name: "RSA-PKCS1-SHA256"
+      openssl_names: ["sha256WithRSAEncryption"]
     - serialized_id: 2
       oid: "1.2.840.10045.4.3.2"
       display_name: "ECDSA-SHA256"
+      openssl_names: ["ecdsa-with-SHA256"]
 
 jobs:
   truststore:
@@ -74,11 +79,15 @@ jobs:
           # Parse the allowed algorithm registry from the environment.
           # Each entry: {serialized_id, oid, display_name}
           _alg_registry = yaml.safe_load(os.environ["TRUSTSTORE_ALLOWED_ALGS"])
-          # oid -> serialized_id
-          OID_TO_SERIALIZED_ID = {e["oid"]: e["serialized_id"] for e in _alg_registry}
           # serialized_id -> display_name
           ID_TO_DISPLAY = {e["serialized_id"]: e["display_name"] for e in _alg_registry}
-          ALLOWED_IDS = set(OID_TO_SERIALIZED_ID.values())
+          # OpenSSL "Signature Algorithm" text name -> serialized_id
+          NAME_TO_SERIALIZED_ID = {
+              name: e["serialized_id"]
+              for e in _alg_registry
+              for name in e.get("openssl_names", [])
+          }
+          ALLOWED_IDS = {e["serialized_id"] for e in _alg_registry}
 
           TLS_CERT_SIG_UNKNOWN = 0xFF
 
@@ -147,37 +156,22 @@ jobs:
                   pass
               return b"\x00" * SKI_LEN
 
-          def get_sig_alg_oid(path):
-              """Return the dotted OID string for the algorithm used to sign this cert."""
+          def get_sig_alg_name(path):
+              """Return the raw 'Signature Algorithm' text name OpenSSL printed for this cert."""
               out = run_cmd([
                   "openssl", "x509", "-in", path, "-noout", "-text",
               ]).decode("utf-8", "ignore")
               for line in out.splitlines():
                   line = line.strip()
-                  if "Signature Algorithm" in line:
-                      # OpenSSL prints either a name ("sha256WithRSAEncryption") or
-                      # a dotted OID ("1.2.840.113549.1.1.11") after the colon.
-                      # Ask OpenSSL to resolve names to OIDs explicitly.
-                      alg_str = line.split(":", 1)[-1].strip()
-                      try:
-                          oid = run_cmd(["openssl", "asn1parse", "-genstr",
-                                         f"OID:{alg_str}"]).decode("utf-8", "ignore")
-                          m = re.search(r":([\d.]+)$", oid.strip())
-                          if m:
-                              return m.group(1)
-                      except Exception:
-                          pass
-                      # Fall back: if it already looks like a dotted OID, use it directly
-                      if re.match(r"^[\d.]+$", alg_str):
-                          return alg_str
-                      return None
+                  if line.startswith("Signature Algorithm"):
+                      return line.split(":", 1)[-1].strip()
               return None
 
           def get_sig_alg(path):
               """Return the serialized_id for this cert's sig alg, or TLS_CERT_SIG_UNKNOWN."""
-              oid = get_sig_alg_oid(path)
-              if oid and oid in OID_TO_SERIALIZED_ID:
-                  return OID_TO_SERIALIZED_ID[oid]
+              name = get_sig_alg_name(path)
+              if name and name in NAME_TO_SERIALIZED_ID:
+                  return NAME_TO_SERIALIZED_ID[name]
               return TLS_CERT_SIG_UNKNOWN
 
           def extract_rsa_pubkey(path):
