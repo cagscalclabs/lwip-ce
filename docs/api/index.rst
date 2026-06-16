@@ -21,7 +21,7 @@ under ``lwip/core/`` and ``lwip/cryptography/``.
      - Root-level stack globbing header file and socket API for
        applications that want a simpler
        path than working directly at PCB level.
-   * - :doc:`cryptography.h <lwip>`
+   * - :doc:`cryptography.h <cryptography>`
      - Root-level cryptography globbing header file.
    * - :doc:`lwip/core/ <core>`
      - Lower-level ``lwip/core/*.h`` includes, curated and modified to match

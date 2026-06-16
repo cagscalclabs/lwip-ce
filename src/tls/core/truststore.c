@@ -52,7 +52,7 @@
 char *truststore_name = "lwIPSPKI";
 bool truststore_valid_for_session = false;
 
-#define TLS_TRUSTSTORE_VERSION 0
+#define TLS_TRUSTSTORE_VERSION 1
 
 uint8_t trust_store_pubkey[] = {
     0xA1, 0xD3, 0x45, 0x9D, 0xC3, 0xD2, 0x1D, 0x6A, 0x9B, 0xA1, 0xD2, 0xCD, 0xEB, 0x4A, 0x10, 0xD0,
@@ -128,26 +128,20 @@ tls_truststore_status_t tls_truststore_init(void)
     TS_TRACE("E5 pss verify");
     // Verify the signature
     bool verified = tls_rsa_pss_verify(d_sig, sizeof(trust_store_pubkey), tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
+    tls_secure_memzero(d_sig, TRUSTSTORE_SIG_LEN);
     TS_TRACE("E6 verify done");
     if (verified)
         truststore_valid_for_session = true;
     return verified ? TLS_STORE_OK : TLS_STORE_SIG_INVALID;
 }
 
-bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result)
+static bool tls_truststore_open_db(uint8_t **db_out, uint16_t *db_len_out,
+                                    struct tls_truststore_header **header_out)
 {
-    if (recvd_hash == NULL)
-        return false;
-    if (!truststore_valid_for_session)
-        return false;
-
-    // Attempt to load the trust store.
-    // Return with error if not found.
     var_t *truststore_var = os_GetAppVarData(truststore_name, NULL);
     if (!truststore_var)
         return false;
 
-    // set up lookup pointers and size words
     uint16_t truststore_size = *((uint16_t *)truststore_var);
     if (truststore_size < TLS_SPKI_HEADER_LEN)
         return false;
@@ -156,26 +150,76 @@ bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result)
         (struct tls_truststore_header *)((uint8_t *)truststore_var + 2);
     if (header->version != TLS_TRUSTSTORE_VERSION)
         return false;
-    uint8_t *spki_db_start = (uint8_t *)header + TLS_SPKI_HEADER_LEN;
-    uint16_t spki_db_len = truststore_size - TLS_SPKI_HEADER_LEN;
 
-    // the db length not being a multiple of struct size at this point
-    // means something is wrong
-    if (spki_db_len % sizeof(struct tls_spki_entry))
+    *header_out  = header;
+    *db_out      = (uint8_t *)header + TLS_SPKI_HEADER_LEN;
+    *db_len_out  = truststore_size - TLS_SPKI_HEADER_LEN;
+    return true;
+}
+
+bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **result)
+{
+    if (ski == NULL || !truststore_valid_for_session)
         return false;
-    uint16_t spki_count = spki_db_len / sizeof(struct tls_spki_entry);
-    if (header->entry_count != spki_count)
+
+    uint8_t *db;
+    uint16_t db_len;
+    struct tls_truststore_header *header;
+    if (!tls_truststore_open_db(&db, &db_len, &header))
         return false;
-    for (uint16_t i = 0; i < spki_count; i++)
+
+    uint16_t count = 0, offset = 0;
+    while (offset + sizeof(struct tls_truststore_entry) <= db_len)
     {
-        struct tls_spki_entry *entry = &((struct tls_spki_entry *)spki_db_start)[i];
-        if (tls_bytes_compare(recvd_hash, entry->hash, TLS_SHA256_DIGEST_LEN))
+        struct tls_truststore_entry *entry =
+            (struct tls_truststore_entry *)(db + offset);
+        if (entry->len < sizeof(struct tls_truststore_entry) ||
+            offset + entry->len > db_len)
+            break;
+        if (tls_bytes_compare(ski, entry->ski, TLS_SPKI_SKI_LEN))
         {
-            // if match
-            if (result)
-                memcpy(result, entry, sizeof(*result));
+            if (result) *result = entry;
             return true;
         }
+        if (++count > header->entry_count) break;
+        offset += (uint16_t)entry->len;
+    }
+    return false;
+}
+
+bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
+                                      struct tls_truststore_entry **result)
+{
+    if (subject == NULL || subject_len == 0 || subject_len > TLS_SPKI_SUBJECT_LEN ||
+        !truststore_valid_for_session)
+        return false;
+
+    uint8_t *db;
+    uint16_t db_len;
+    struct tls_truststore_header *header;
+    if (!tls_truststore_open_db(&db, &db_len, &header))
+        return false;
+
+    uint16_t count = 0, offset = 0;
+    while (offset + sizeof(struct tls_truststore_entry) <= db_len)
+    {
+        struct tls_truststore_entry *entry =
+            (struct tls_truststore_entry *)(db + offset);
+        if (entry->len < sizeof(struct tls_truststore_entry) ||
+            offset + entry->len > db_len)
+            break;
+        /* Match: subject bytes compare equal, rest of entry->subject is zero-padding */
+        size_t entry_subj_len = 0;
+        while (entry_subj_len < TLS_SPKI_SUBJECT_LEN && entry->subject[entry_subj_len])
+            entry_subj_len++;
+        if (entry_subj_len == subject_len &&
+            memcmp(subject, entry->subject, subject_len) == 0)
+        {
+            if (result) *result = entry;
+            return true;
+        }
+        if (++count > header->entry_count) break;
+        offset += (uint16_t)entry->len;
     }
     return false;
 }

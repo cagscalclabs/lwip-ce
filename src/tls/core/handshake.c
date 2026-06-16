@@ -282,13 +282,6 @@ static size_t tls_parse_handshake_header(const uint8_t *data, size_t data_len,
 static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
                                          uint8_t msg_type,
                                          const uint8_t *msg, size_t msg_len);
-/* Dormant until the issuer-key truststore scheme lands (owner-id / subject-CN
- * gating moves into chain verification then). Kept to avoid churn; marked
- * unused so -Wextra stays quiet in the meantime. */
-static bool tls_subject_cn_matches_owner_id(const struct tls_asn1_serialization *subject_cn,
-                                            const uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN])
-    __attribute__((unused));
-
 /* Internal handshake-message handlers. These were once exposed via
  * handshake.h but are only invoked from the dispatcher in this file. */
 static bool tls_recv_encrypted_extensions(struct tls_handshake_context *ctx,
@@ -476,6 +469,12 @@ struct tls_cert_walker
     uint8_t pending_tbs_digest[32];/* SHA-256(tbsCertificate) of prior cert    */
     uint8_t *pending_sig;          /* signatureValue of prior cert (heap copy) */
     size_t pending_sig_len;
+
+    /* Issuer CN of the last (topmost) cert walked, for truststore root lookup.
+     * Overwritten on each cert; after CW_DONE it holds the topmost cert's
+     * issuer_cn bytes (the root CA subject we should find in the truststore). */
+    uint8_t topmost_issuer_cn[TLS_SPKI_SUBJECT_LEN];
+    uint8_t topmost_issuer_cn_len;
 };
 
 static struct tls_cert_walker *tls_cert_walker_new(struct tls_handshake_context *ctx)
@@ -850,6 +849,21 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         memcpy(copy, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
         w->ctx->leaf_spki = copy;
         w->ctx->leaf_spki_len = cert_parsed.spki_raw->len;
+    }
+
+    /* Capture this cert's issuer CN on every cert — after the loop, the last
+     * cert processed is the topmost, so w->topmost_issuer_cn will hold its
+     * issuer (the root CA we look up in the truststore). */
+    if (cert_parsed.issuer_cn && cert_parsed.issuer_cn->data &&
+        cert_parsed.issuer_cn->len > 0)
+    {
+        uint8_t copy_len = (cert_parsed.issuer_cn->len < TLS_SPKI_SUBJECT_LEN)
+                           ? (uint8_t)cert_parsed.issuer_cn->len
+                           : TLS_SPKI_SUBJECT_LEN;
+        memcpy(w->topmost_issuer_cn, cert_parsed.issuer_cn->data, copy_len);
+        memset(w->topmost_issuer_cn + copy_len, 0,
+               TLS_SPKI_SUBJECT_LEN - copy_len);
+        w->topmost_issuer_cn_len = copy_len;
     }
 
     /* Then walk the chain: verify the previously-stashed link against this
@@ -1465,40 +1479,6 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
     /* Application data during handshake is unexpected. */
     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
     return false;
-}
-
-static size_t tls_padded_id_len(const uint8_t *id, size_t max_len)
-{
-    size_t len = 0;
-
-    if (!id)
-    {
-        return 0;
-    }
-    while (len < max_len && id[len] != 0)
-    {
-        len++;
-    }
-    return len;
-}
-
-static bool tls_subject_cn_matches_owner_id(const struct tls_asn1_serialization *subject_cn,
-                                            const uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN])
-{
-    size_t owner_len;
-
-    if (!subject_cn || !subject_cn->data || !owner_id)
-    {
-        return false;
-    }
-
-    owner_len = tls_padded_id_len(owner_id, TLS_SPKI_OWNER_ID_LEN);
-    if (owner_len == 0 || subject_cn->len != owner_len)
-    {
-        return false;
-    }
-
-    return memcmp(subject_cn->data, owner_id, owner_len) == 0;
 }
 
 /* enum tls_server_handshake_type {
@@ -2301,6 +2281,98 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
+
+    /* Root cert truststore validation: look up the topmost cert's issuer
+     * (the root CA) in the truststore by subject name. */
+    if (w->topmost_issuer_cn_len > 0)
+    {
+        struct tls_truststore_entry *root_entry = NULL;
+        if (tls_truststore_lookup_by_subject(w->topmost_issuer_cn,
+                                             w->topmost_issuer_cn_len,
+                                             &root_entry) && root_entry)
+        {
+            tls_cert_sig_alg_t alg = (tls_cert_sig_alg_t)root_entry->alg_id;
+            bool root_rsa = (alg == TLS_CERT_SIG_RSA_PSS_SHA256 ||
+                             alg == TLS_CERT_SIG_RSA_PKCS1_SHA256 ||
+                             alg == TLS_CERT_SIG_RSA_PKCS1_SHA384);
+            if (root_rsa)
+            {
+                /* Extract stored exp (uint24_t LE) and modulus from key[]. */
+                size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
+                if (key_len >= 3 + RSA_MODULUS_MIN_SUPPORTED &&
+                    w->pending_link && w->pending_sig)
+                {
+                    uint24_t exp = (uint24_t)root_entry->key[0]
+                                 | ((uint24_t)root_entry->key[1] << 8)
+                                 | ((uint24_t)root_entry->key[2] << 16);
+                    const uint8_t *mod     = root_entry->key + 3;
+                    size_t         mod_len = key_len - 3;
+                    bool verified = false;
+
+                    if (mod_len >= RSA_MODULUS_MIN_SUPPORTED &&
+                        mod_len <= RSA_MODULUS_MAX_SUPPORTED)
+                    {
+                        if (alg == TLS_CERT_SIG_RSA_PSS_SHA256)
+                        {
+                            uint8_t *dsig = __rsa_transient;
+                            if (tls_rsa_decrypt_signature_exp(w->pending_sig,
+                                                              w->pending_sig_len,
+                                                              dsig, exp, mod, mod_len))
+                            {
+                                verified = tls_rsa_pss_verify(dsig, mod_len,
+                                               w->pending_tbs_digest,
+                                               TLS_SHA256_DIGEST_LEN,
+                                               TLS_HASH_SHA256);
+                                tls_secure_memzero(dsig, mod_len);
+                            }
+                        }
+                        else
+                        {
+                            /* PKCS#1 v1.5: tls_rsa_pkcs1_v15_sha256_verify
+                             * uses the hardcoded public exponent 65537.
+                             * Virtually all CA roots use e=65537; if the stored
+                             * exp differs we fall through to the accept path. */
+                            if (exp == 65537)
+                            {
+                                verified = tls_rsa_pkcs1_v15_sha256_verify(
+                                               w->pending_sig,
+                                               w->pending_sig_len,
+                                               w->pending_tbs_digest,
+                                               mod, mod_len);
+                            }
+                            else
+                            {
+                                /* Non-standard exponent: unsupported, warn+accept. */
+                                lwip_debug_alert(LWIP_DBG_MOD_TLS,
+                                                 LWIP_DBG_TLS_CERT_UNSUPPORTED,
+                                                 LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED, 0);
+                                verified = true;
+                            }
+                        }
+                    }
+
+                    if (!verified)
+                    {
+                        lwip_debug_error(LWIP_DBG_MOD_TLS,
+                                         LWIP_DBG_TLS_CHAIN_VERIFY_FAIL,
+                                         LWIP_DBG_TLS_ERR_CHAIN_VERIFY, 0);
+                        ctx->state = TLS_STATE_ERROR;
+                        return false;
+                    }
+                }
+            }
+            else
+            {
+                /* Root alg not yet supported (e.g. ECDSA). Warn and accept. */
+                lwip_debug_alert(LWIP_DBG_MOD_TLS,
+                                 LWIP_DBG_TLS_CERT_UNSUPPORTED,
+                                 LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED, 0);
+            }
+        }
+        /* No truststore entry found: no root anchor available. Proceed without
+         * root pinning (consistent with prior behaviour when truststore absent). */
+    }
+
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
     tls_handshake_debug(ctx, LWIP_DBG_TLS_CERTIFICATE, 0);
     return true;

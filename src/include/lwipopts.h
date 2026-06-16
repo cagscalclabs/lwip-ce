@@ -106,6 +106,8 @@
 
 #endif
 
+/* Compile-time sizing estimate only — not an actual runtime cap.
+ * The real limit is determined by os_MemChk at lwip_init time. */
 #define MAX_HEAP_USAGE (50u * 1024u)
 /* Pbuf pool budget. With MEMP_MEM_MALLOC + the custom allocator, pool counts
  * are a soft budget routed through the heap, and in practice the pool stays

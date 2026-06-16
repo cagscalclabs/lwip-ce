@@ -43,7 +43,6 @@ jobs:
         run: |
           python3 - <<'PY'
           import calendar
-          import hashlib
           import os
           import re
           import struct
@@ -52,17 +51,24 @@ jobs:
           from datetime import datetime
           from glob import glob
 
-          OWNER_LEN = 32
-          ISSUER_LEN = 32
-          HASH_LEN = 32
+          # lwIP-internal sig alg codes (must match tls_cert_sig_alg_t in truststore.h)
+          TLS_CERT_SIG_RSA_PSS_SHA256   = 0
+          TLS_CERT_SIG_RSA_PKCS1_SHA256 = 1
+          TLS_CERT_SIG_RSA_PKCS1_SHA384 = 2
+          TLS_CERT_SIG_ECDSA_SHA256     = 3
+          TLS_CERT_SIG_UNKNOWN          = 0xFF
+
+          SUBJECT_LEN  = 32
+          SKI_LEN      = 32
+          RSA_MOD_MAX  = 256
+          EC_POINT_LEN = 32
+          # Fixed-size prefix before key[]: len(4) + subject(32) + ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) = 77
+          ENTRY_FIXED_PREFIX = 4 + SUBJECT_LEN + SKI_LEN + 4 + 4 + 1
 
           def run_cmd(args, input_bytes=None):
               result = subprocess.run(
-                  args,
-                  input=input_bytes,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE,
-                  check=False,
+                  args, input=input_bytes,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
               )
               if result.returncode != 0:
                   raise RuntimeError(
@@ -71,79 +77,146 @@ jobs:
               return result.stdout
 
           def extract_cn(name_line):
-              match = re.search(r"CN=([^,]+)", name_line)
+              match = re.search(r"CN=([^,/]+)", name_line)
               if match:
                   return match.group(1).strip()
               return name_line.strip()
 
-          def normalize_name(name, length):
-              data = name.encode("ascii", "replace")[:length]
+          def pad_field(data, length):
+              data = data[:length]
               return data + b"\x00" * (length - len(data))
 
-          def parse_openssl_metadata(path):
-              meta = run_cmd(
-                  [
-                      "openssl",
-                      "x509",
-                      "-in",
-                      path,
-                      "-noout",
-                      "-subject",
-                      "-issuer",
-                      "-dates",
-                      "-nameopt",
-                      "RFC2253",
-                  ]
-              ).decode("utf-8", "ignore")
-
-              subject = issuer = None
-              not_before = not_after = None
+          def parse_subject_and_dates(path):
+              meta = run_cmd([
+                  "openssl", "x509", "-in", path, "-noout",
+                  "-subject", "-dates", "-nameopt", "RFC2253",
+              ]).decode("utf-8", "ignore")
+              subject_cn = not_before = not_after = None
               for line in meta.splitlines():
                   if line.startswith("subject="):
-                      subject = line.split("subject=", 1)[1]
-                  elif line.startswith("issuer="):
-                      issuer = line.split("issuer=", 1)[1]
+                      subject_cn = extract_cn(line.split("subject=", 1)[1])
                   elif line.startswith("notBefore="):
                       not_before = line.split("notBefore=", 1)[1]
                   elif line.startswith("notAfter="):
                       not_after = line.split("notAfter=", 1)[1]
-
-              if not (subject and issuer and not_before and not_after):
+              if not (subject_cn and not_before and not_after):
                   raise RuntimeError("missing metadata")
-
-              subject_cn = extract_cn(subject)
-              issuer_cn = extract_cn(issuer)
-
               def parse_date(value):
                   value = " ".join(value.split())
                   dt = datetime.strptime(value, "%b %d %H:%M:%S %Y %Z")
                   return calendar.timegm(dt.timetuple())
+              return subject_cn, parse_date(not_before), parse_date(not_after)
 
-              return subject_cn, issuer_cn, parse_date(not_before), parse_date(not_after)
+          def extract_ski(path):
+              """Extract SubjectKeyIdentifier extension bytes (raw hex)."""
+              out = run_cmd([
+                  "openssl", "x509", "-in", path, "-noout", "-ext", "subjectKeyIdentifier",
+              ]).decode("utf-8", "ignore")
+              for line in out.splitlines():
+                  line = line.strip()
+                  # OpenSSL prints it as colon-separated hex: AA:BB:CC:...
+                  if re.match(r"^([0-9A-Fa-f]{2}:)+[0-9A-Fa-f]{2}$", line):
+                      raw = bytes.fromhex(line.replace(":", ""))
+                      return pad_field(raw, SKI_LEN)
+              raise RuntimeError("no SKI extension")
 
-          def compute_spki_hash(path):
+          def get_sig_alg(path):
+              """Return the lwIP sig alg code for the algorithm used to sign this cert."""
+              out = run_cmd([
+                  "openssl", "x509", "-in", path, "-noout", "-text",
+              ]).decode("utf-8", "ignore")
+              for line in out.splitlines():
+                  line = line.strip()
+                  if "Signature Algorithm" in line:
+                      alg = line.split(":", 1)[-1].strip().lower()
+                      if "ecdsa" in alg and "256" in alg:
+                          return TLS_CERT_SIG_ECDSA_SHA256
+                      if "rsassa-pss" in alg or "rsa-pss" in alg:
+                          return TLS_CERT_SIG_RSA_PSS_SHA256
+                      if "sha384withrsa" in alg or "sha384withrsa" in alg.replace("-", ""):
+                          return TLS_CERT_SIG_RSA_PKCS1_SHA384
+                      if "sha256withrsa" in alg or "sha256withrsa" in alg.replace("-", ""):
+                          return TLS_CERT_SIG_RSA_PKCS1_SHA256
+                      return TLS_CERT_SIG_UNKNOWN
+              return TLS_CERT_SIG_UNKNOWN
+
+          def extract_rsa_pubkey(path):
+              """Return (exp_bytes_le_3, mod_bytes_be_256) for an RSA public key."""
+              import base64
+              pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
+              # Parse modulus and exponent via openssl rsa -pubin -text
+              text = run_cmd([
+                  "openssl", "rsa", "-pubin", "-text", "-noout",
+              ], pubkey_pem).decode("utf-8", "ignore")
+              mod_hex = []
+              in_mod = False
+              exp_val = None
+              for line in text.splitlines():
+                  line = line.strip()
+                  if line.startswith("Modulus:"):
+                      in_mod = True
+                      continue
+                  if in_mod:
+                      if line.startswith("Exponent:"):
+                          in_mod = False
+                          m = re.search(r"Exponent:\s*(\d+)", line)
+                          if m:
+                              exp_val = int(m.group(1))
+                          continue
+                      mod_hex.extend(line.replace(":", "").split())
+              mod_bytes = bytes.fromhex("".join(mod_hex).lstrip("00"))
+              mod_padded = pad_field(mod_bytes[::-1], RSA_MOD_MAX)[::-1]  # big-endian, zero-padded left
+              mod_padded = b"\x00" * (RSA_MOD_MAX - len(mod_bytes)) + mod_bytes
+              exp_val = exp_val or 65537
+              exp_le = struct.pack("<I", exp_val)[:3]  # uint24_t little-endian
+              return exp_le, mod_padded
+
+          def extract_ec_pubkey(path):
+              """Return 32-byte x-coordinate of the EC public key (P-256)."""
               pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
               pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
-              return hashlib.sha256(pubkey_der).digest()
+              # DER SubjectPublicKeyInfo for P-256: last 65 bytes are 04 || x(32) || y(32)
+              # The BIT STRING payload starts with a 0x00 unused-bits byte then 04 x y
+              if len(pubkey_der) >= 67:
+                  point = pubkey_der[-65:]
+                  if point[0] == 0x04:
+                      return point[1:33]  # x-coordinate
+              raise RuntimeError("unexpected EC pubkey format")
 
           def build_entries(cert_paths):
               entries = {}
               for path in cert_paths:
                   try:
-                      subject_cn, issuer_cn, not_before, not_after = parse_openssl_metadata(path)
-                      spki_hash = compute_spki_hash(path)
+                      subject_cn, not_before, not_after = parse_subject_and_dates(path)
+                      ski     = extract_ski(path)
+                      sig_alg = get_sig_alg(path)
+
+                      pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
+                      key_type_out = run_cmd([
+                          "openssl", "pkey", "-pubin", "-text", "-noout",
+                      ], pubkey_pem).decode("utf-8", "ignore")
+                      is_rsa = "RSA" in key_type_out.upper() or "rsaEncryption" in key_type_out
+
+                      if is_rsa:
+                          exp_le, mod_be = extract_rsa_pubkey(path)
+                          key_bytes = exp_le + mod_be
+                      else:
+                          point = extract_ec_pubkey(path)
+                          key_bytes = point
+
                   except Exception:
                       continue
 
-                  entries[spki_hash] = (
-                      normalize_name(subject_cn, OWNER_LEN),
-                      normalize_name(issuer_cn, ISSUER_LEN),
+                  entries[bytes(ski)] = (
+                      pad_field(subject_cn.encode("ascii", "replace"), SUBJECT_LEN),
+                      ski,
                       not_before,
                       not_after,
-                      spki_hash,
+                      sig_alg,
+                      key_bytes,
                   )
 
-              return [entries[key] for key in sorted(entries.keys())]
+              return [entries[k] for k in sorted(entries.keys())]
 
           cert_globs = [
               "/etc/ssl/certs/*.pem",
@@ -160,45 +233,39 @@ jobs:
 
           created_ts = int(time.time())
           entry_count = len(entries)
-          version = 0
+          version = 1
           header_fields = struct.pack("<H", version) + struct.pack("<IH", created_ts, entry_count)
 
           entry_bytes = bytearray()
-          for owner_id, issuer_id, not_before, not_after, spki_hash in entries:
-              entry_bytes.extend(owner_id)
-              entry_bytes.extend(issuer_id)
-              entry_bytes.extend(struct.pack("<I", not_before))
-              entry_bytes.extend(struct.pack("<I", not_after))
-              entry_bytes.extend(spki_hash)
+          for subject, ski, not_before, not_after, sig_alg, key_bytes in entries:
+              entry_len = ENTRY_FIXED_PREFIX + len(key_bytes)
+              entry_bytes.extend(struct.pack("<I", entry_len))     # len (uint32_t)
+              entry_bytes.extend(subject)                          # subject[32]
+              entry_bytes.extend(ski)                              # ski[32]
+              entry_bytes.extend(struct.pack("<I", not_before))    # expiry_start (uint32_t)
+              entry_bytes.extend(struct.pack("<I", not_after))     # expiry_end (uint32_t)
+              entry_bytes.extend(struct.pack("B", sig_alg))        # alg_id (uint8_t)
+              entry_bytes.extend(key_bytes)                        # key[]
 
           os.makedirs("truststore_out", exist_ok=True)
-          data_path = os.path.join("truststore_out", "lwIPSPKI.data")
-          sig_path = os.path.join("truststore_out", "lwIPSPKI.sig")
-          bin_path = os.path.join("truststore_out", "lwIPSPKI.bin")
+          data_path    = os.path.join("truststore_out", "lwIPSPKI.data")
+          sig_path     = os.path.join("truststore_out", "lwIPSPKI.sig")
+          bin_path     = os.path.join("truststore_out", "lwIPSPKI.bin")
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
 
           with open(data_path, "wb") as f:
               f.write(header_fields)
               f.write(entry_bytes)
 
-          run_cmd(
-              [
-                  "openssl",
-                  "dgst",
-                  "-sha256",
-                  "-sigopt",
-                  "rsa_padding_mode:pss",
-                  "-sigopt",
-                  "rsa_pss_saltlen:-1",
-                  "-sigopt",
-                  "rsa_mgf1_md:sha256",
-                  "-sign",
-                  os.path.join(os.environ["RUNNER_TEMP"], "truststore_signer.pem"),
-                  "-out",
-                  sig_path,
-                  data_path,
-              ]
-          )
+          run_cmd([
+              "openssl", "dgst", "-sha256",
+              "-sigopt", "rsa_padding_mode:pss",
+              "-sigopt", "rsa_pss_saltlen:-1",
+              "-sigopt", "rsa_mgf1_md:sha256",
+              "-sign", os.path.join(os.environ["RUNNER_TEMP"], "truststore_signer.pem"),
+              "-out", sig_path,
+              data_path,
+          ])
 
           with open(bin_path, "wb") as f:
               f.write(open(sig_path, "rb").read())
@@ -209,32 +276,21 @@ jobs:
           print(f"bin={bin_path}")
 
           if summary_path:
+              SIG_NAMES = {
+                  0: "RSA-PSS-SHA256", 1: "RSA-PKCS1-SHA256",
+                  2: "RSA-PKCS1-SHA384", 3: "ECDSA-SHA256", 0xFF: "unknown",
+              }
               with open(summary_path, "a", encoding="utf-8") as summary:
-                  summary.write("## Truststore Entries\n\n")
-                  ca_entries = []
-                  custom_entries = []
-                  for owner_id, issuer_id, not_before, not_after, _spki_hash in entries:
-                      owner = owner_id.split(b"\x00", 1)[0].decode("ascii", "ignore")
-                      issuer = issuer_id.split(b"\x00", 1)[0].decode("ascii", "ignore")
+                  summary.write("## Truststore Entries (v1)\n\n")
+                  summary.write("Subject | SKI (hex) | Not Before | Not After | Sig Alg\n")
+                  summary.write("--- | --- | --- | --- | ---\n")
+                  for subject, ski, not_before, not_after, sig_alg, _key in entries:
+                      subj = subject.split(b"\x00", 1)[0].decode("ascii", "ignore")
+                      ski_hex = ski.hex()[:16] + "..."
+                      alg_name = SIG_NAMES.get(sig_alg, f"0x{sig_alg:02x}")
                       nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
                       na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
-                      if owner == issuer:
-                          ca_entries.append((owner, nb, na))
-                      else:
-                          custom_entries.append((owner, issuer, nb, na))
-
-                  summary.write("### CA entries\n\n")
-                  summary.write("CA Name | Not Before | Not After\n")
-                  summary.write("--- | --- | ---\n")
-                  for owner, nb, na in ca_entries:
-                      summary.write(f"{owner} | {nb} | {na}\n")
-
-                  if custom_entries:
-                      summary.write("\n### Custom entries\n\n")
-                      summary.write("Owner | Issuer | Not Before | Not After\n")
-                      summary.write("--- | --- | --- | ---\n")
-                      for owner, issuer, nb, na in custom_entries:
-                          summary.write(f"{owner} | {issuer} | {nb} | {na}\n")
+                      summary.write(f"{subj} | {ski_hex} | {nb} | {na} | {alg_name}\n")
           PY
 
       - name: Build AppVar

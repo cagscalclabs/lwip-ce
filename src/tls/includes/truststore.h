@@ -25,9 +25,19 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#define TLS_SPKI_OWNER_ID_LEN 32
-#define TLS_SPKI_ISSUER_LEN 32
-#define TLS_SPKI_HASH_MAX_LEN 32
+#define TLS_SPKI_SUBJECT_LEN  32
+#define TLS_SPKI_SKI_LEN      32
+
+/* Serialized signature algorithm IDs used in tls_truststore_entry.alg_id.
+ * These are lwIP-internal codes, NOT ASN.1/DER OIDs. */
+typedef enum
+{
+    TLS_CERT_SIG_RSA_PSS_SHA256       = 0, /* rsaEncryption + id-RSASSA-PSS / SHA-256 */
+    TLS_CERT_SIG_RSA_PKCS1_SHA256     = 1, /* sha256WithRSAEncryption (PKCS#1 v1.5)   */
+    TLS_CERT_SIG_RSA_PKCS1_SHA384     = 2, /* sha384WithRSAEncryption (PKCS#1 v1.5)   */
+    TLS_CERT_SIG_ECDSA_SHA256         = 3, /* ecdsa-with-SHA256 (P-256)               */
+    TLS_CERT_SIG_UNKNOWN              = 0xFF
+} tls_cert_sig_alg_t;
 
 typedef enum
 {
@@ -57,13 +67,20 @@ struct tls_truststore_header
 };
 #define TLS_SPKI_HEADER_LEN sizeof(struct tls_truststore_header)
 
-struct tls_spki_entry
+/* Variable-length per-entry record. The key[] FAM holds the raw public key
+ * bytes whose format depends on alg_id:
+ *   RSA: uint8_t exp[3] (little-endian uint24) || uint8_t mod[key_len - 3]
+ *   EC:  uint8_t point[key_len]  (x-coordinate, big-endian)
+ * len covers the entire struct including the key[] bytes. */
+struct tls_truststore_entry
 {
-    uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN]; /* CN or identifier (null-terminated, padded) */
-    uint8_t issuer_id[TLS_SPKI_ISSUER_LEN];  /* Issuer CN (null-terminated, padded) */
-    uint32_t not_before;                     /* Unix timestamp */
-    uint32_t not_after;                      /* Unix timestamp */
-    uint8_t hash[TLS_SPKI_HASH_MAX_LEN];     /* SPKI hash (SHA-256)*/
+    uint32_t len;                            /* total byte size of this entry */
+    uint8_t  subject[TLS_SPKI_SUBJECT_LEN]; /* Subject CN, null-terminated, padded */
+    uint8_t  ski[TLS_SPKI_SKI_LEN];         /* Subject Key Identifier, padded to 32 B */
+    uint32_t expiry_start;                  /* notBefore Unix timestamp (uint32_t) */
+    uint32_t expiry_end;                    /* notAfter  Unix timestamp (uint32_t) */
+    uint8_t  alg_id;                        /* tls_cert_sig_alg_t */
+    uint8_t  key[];                         /* variable-length public key bytes */
 };
 
 /******************
@@ -75,19 +92,22 @@ struct tls_spki_entry
 tls_truststore_status_t tls_truststore_init(void);
 
 /********************
- * @brief Attempts to find an SPKI hash in the trust store.
- * @param recvd_hash    Computed hash of the SPKI field of the current certificate.
- * @param result        A tls_spki_entry struct to write the owner metadata to. NULL if you don't care.
- * @returns [bool] True if match found, false if otherwise.
- * @note So that we don't spend 12 hours on calculator doing a
- * complete full-chain validation on every TLS connection, we're
- * using pinned SPKI hashes to avoid full-chain validation on every
- * TLS connection. Callers decide how a truststore match is applied.
- * The current SPKI trust store will be generated every so often and
- * made available as an AppVar named 'lwIPSPKI'. The AppVar will be
- * signed with the repo owner's secret key and the public key will be
- * distributed in this application.
+ * @brief Attempts to find a certificate by Subject Key Identifier in the trust store.
+ * @param ski       32-byte SKI value from the certificate's SubjectKeyIdentifier extension.
+ * @param result    Out-pointer set to the in-place entry on match. May be NULL.
+ * @returns [bool] True if match found, false otherwise.
  */
-bool tls_truststore_lookup(uint8_t *recvd_hash, struct tls_spki_entry *result);
+bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **result);
+
+/********************
+ * @brief Attempts to find a truststore entry whose subject[] matches the given
+ *        name (issuer CN of the topmost cert in the chain).
+ * @param subject   Name bytes (up to TLS_SPKI_SUBJECT_LEN), null-padded.
+ * @param subject_len  Meaningful bytes in subject (0 < subject_len <= TLS_SPKI_SUBJECT_LEN).
+ * @param result    Out-pointer set to the in-place entry on match. May be NULL.
+ * @returns [bool] True if match found, false otherwise.
+ */
+bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
+                                      struct tls_truststore_entry **result);
 
 #endif /* TLS_TRUSTSTORE_H */

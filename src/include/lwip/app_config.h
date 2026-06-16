@@ -28,7 +28,7 @@
  * keep the persisted config layout stable. */
 #define LWIP_TLS_FLOOR_BYTES        (24u * 1024u)
 #define LWIP_MIN_FLOOR_BYTES        LWIP_TLS_FLOOR_BYTES
-#define LWIP_CFG_MEM_CAP_DEF        (50u * 1024u)
+#define LWIP_CFG_MEM_CAP_DEF        (0xFFFFu)   /* uncapped: os_MemChk provides the real limit at init */
 #define LWIP_CFG_MEM_CAP_STEP       1024u
 /* Vestigial log-config fields. The appvar-backed log system was replaced by
  * the unified debug callback (lwip_set_debug); these fields are retained only

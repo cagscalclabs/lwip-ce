@@ -25,11 +25,11 @@
  * -------------------------------------------------------------------- */
 
 #define LWIP_EXAMPLE_TOP 30     /* first line y (px), below the status row */
-#define LWIP_EXAMPLE_BOTTOM 228 /* last usable y (px); LCD is 240 tall      */
+#define LWIP_EXAMPLE_BOTTOM 240 /* last usable y (px); full LCD height      */
 #define LWIP_EXAMPLE_LEFT 2     /* left margin (px)                         */
 #define LWIP_EXAMPLE_LCD_W 320
 #define LWIP_EXAMPLE_STATS_X 188
-#define LWIP_EXAMPLE_STATS_LINES 5
+#define LWIP_EXAMPLE_STATS_LINES 6
 #define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 12
 
 static uint8_t lwip_example_row = LWIP_EXAMPLE_TOP;
@@ -56,9 +56,7 @@ static void lwip_example_clear(void)
 static void lwip_example_line(const char *text)
 {
     uint8_t h = lwip_example_line_h();
-    uint8_t text_bottom = (uint8_t)(LWIP_EXAMPLE_BOTTOM -
-                                    (h * LWIP_EXAMPLE_STATS_LINES));
-    if ((unsigned)lwip_example_row + h > text_bottom)
+    if ((unsigned)lwip_example_row + h > LWIP_EXAMPLE_BOTTOM)
     {
         lwip_example_clear();
         h = lwip_example_line_h();
@@ -108,13 +106,15 @@ static void lwip_example_stats_line(uint8_t y, const char *text)
 
 static void lwip_example_draw_mem_stats(void)
 {
+    if (!lwip_example_stats_visible)
+        return;
     struct mem_accounting_stats stats;
     char used[12];
     char total[12];
     char line[32];
     uint8_t h;
     uint8_t y;
-    size_t user_limit;
+    size_t h_limit;
 
     if (!mem_get_stats(&stats))
     {
@@ -138,22 +138,18 @@ static void lwip_example_draw_mem_stats(void)
     lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
+    h_limit = stats.heap_limit;
+    lwip_example_format_k(used, sizeof(used), stats.heap_used);
+    lwip_example_format_k(total, sizeof(total), h_limit);
+    snprintf(line, sizeof(line), "H:%s/%s %u%%", used, total,
+             lwip_example_pct(stats.heap_used, h_limit));
+    lwip_example_stats_line(y, line);
+
+    y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.rx_ring_used);
     lwip_example_format_k(total, sizeof(total), stats.rx_ring_size);
     snprintf(line, sizeof(line), "R:%s/%s %u%%", used, total,
              lwip_example_pct(stats.rx_ring_used, stats.rx_ring_size));
-    lwip_example_stats_line(y, line);
-
-    y = (uint8_t)(y + h);
-    user_limit = 0;
-    if (stats.total_heap > stats.pbuf_pool_size + stats.heap_used)
-    {
-        user_limit = stats.total_heap - stats.pbuf_pool_size - stats.heap_used;
-    }
-    lwip_example_format_k(used, sizeof(used), stats.user_reserved);
-    lwip_example_format_k(total, sizeof(total), user_limit);
-    snprintf(line, sizeof(line), "U:%s/%s %u%%", used, total,
-             lwip_example_pct(stats.user_reserved, user_limit));
     lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
@@ -162,10 +158,41 @@ static void lwip_example_draw_mem_stats(void)
     snprintf(line, sizeof(line), "C:%s/%s %u%%", used, total,
              lwip_example_pct(stats.socket_ring_used, stats.socket_ring_size));
     lwip_example_stats_line(y, line);
+
+    y = (uint8_t)(y + h);
+    lwip_example_format_k(used, sizeof(used), stats.user_reserved);
+    snprintf(line, sizeof(line), "U:%s", used);
+    lwip_example_stats_line(y, line);
 }
+
+static bool lwip_example_stats_visible = false;
 
 static void lwip_example_mem_stats_tick(void)
 {
+    if (os_GetCSC() == sk_Stat)
+    {
+        lwip_example_stats_visible = !lwip_example_stats_visible;
+        if (!lwip_example_stats_visible)
+        {
+            /* Erase the stats area by blanking those rows */
+            uint8_t h = lwip_example_line_h();
+            uint8_t y = (uint8_t)(LWIP_EXAMPLE_BOTTOM - (h * LWIP_EXAMPLE_STATS_LINES));
+            uint8_t i;
+            os_FontSelect(os_SmallFont);
+            for (i = 0; i < LWIP_EXAMPLE_STATS_LINES; i++)
+            {
+                os_FontDrawText("                                        ", LWIP_EXAMPLE_STATS_X, y);
+                y = (uint8_t)(y + h);
+            }
+        }
+        else
+        {
+            lwip_example_draw_mem_stats();
+        }
+        return;
+    }
+    if (!lwip_example_stats_visible)
+        return;
     if (++lwip_example_stats_loop_count >= LWIP_EXAMPLE_STATS_LOOP_INTERVAL)
     {
         lwip_example_stats_loop_count = 0;
@@ -272,6 +299,7 @@ struct lwip_example_chat
     uint8_t last_key;
     uint8_t input_len;
     uint8_t input_mode;
+    uint8_t rendered_line_count; /* line_count at last full render, for detecting shifts */
 };
 
 static void lwip_example_chat_append_line(struct lwip_example_chat *chat,
@@ -471,11 +499,30 @@ static uint8_t lwip_example_chat_draw_wrapped(uint8_t y,
     return y;
 }
 
+/* Returns the y coordinate where the input prompt begins, given the current
+ * chat state. Used by both full render and input-only partial redraw. */
+static uint8_t lwip_example_chat_input_y(const struct lwip_example_chat *chat,
+                                          uint8_t h)
+{
+    uint8_t y = (uint8_t)(LWIP_EXAMPLE_TOP + h); /* below title */
+    uint8_t rows_total = (uint8_t)((LWIP_EXAMPLE_BOTTOM > y)
+                                       ? ((LWIP_EXAMPLE_BOTTOM - y) / h)
+                                       : 0);
+    uint8_t input_rows = lwip_example_chat_input_rows(chat);
+    uint8_t transcript_rows = rows_total > input_rows ? rows_total - input_rows : 0;
+    uint8_t start = (chat->line_count > transcript_rows)
+                        ? (uint8_t)(chat->line_count - transcript_rows)
+                        : 0;
+    uint8_t i;
+    for (i = start; i < chat->line_count; i++)
+        y = (uint8_t)(y + h);
+    return y;
+}
+
 static void lwip_example_chat_render(struct lwip_example_chat *chat)
 {
     uint8_t h;
     uint8_t y;
-    uint8_t stats_y;
     uint8_t rows_total;
     uint8_t input_rows;
     uint8_t transcript_rows;
@@ -484,29 +531,25 @@ static void lwip_example_chat_render(struct lwip_example_chat *chat)
     char prompt[4];
 
     if (!chat)
-    {
         return;
-    }
 
     lwip_example_clear();
     os_FontSelect(os_SmallFont);
     h = lwip_example_line_h();
     y = LWIP_EXAMPLE_TOP;
-    stats_y = (uint8_t)(LWIP_EXAMPLE_BOTTOM -
-                        (h * LWIP_EXAMPLE_STATS_LINES));
 
     os_FontDrawText(chat->title, LWIP_EXAMPLE_LEFT, y);
     y = (uint8_t)(y + h);
 
-    rows_total = (uint8_t)((stats_y > y) ? ((stats_y - y) / h) : 0);
+    rows_total = (uint8_t)((LWIP_EXAMPLE_BOTTOM > y)
+                               ? ((LWIP_EXAMPLE_BOTTOM - y) / h)
+                               : 0);
     input_rows = lwip_example_chat_input_rows(chat);
     transcript_rows = rows_total > input_rows ? rows_total - input_rows : 0;
     if (chat->line_count > transcript_rows)
-    {
         start = (uint8_t)(chat->line_count - transcript_rows);
-    }
 
-    for (i = start; i < chat->line_count && y + h <= stats_y; i++)
+    for (i = start; i < chat->line_count && y + h <= LWIP_EXAMPLE_BOTTOM; i++)
     {
         os_FontDrawText(chat->lines[i], LWIP_EXAMPLE_LEFT, y);
         y = (uint8_t)(y + h);
@@ -514,22 +557,61 @@ static void lwip_example_chat_render(struct lwip_example_chat *chat)
 
     switch ((lwip_example_chat_input_mode_t)chat->input_mode)
     {
-    case LWIP_EXAMPLE_CHAT_MODE_UPPER:
-        prompt[0] = 'A';
-        break;
-    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC:
-        prompt[0] = '0';
-        break;
+    case LWIP_EXAMPLE_CHAT_MODE_UPPER: prompt[0] = 'A'; break;
+    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC: prompt[0] = '0'; break;
     case LWIP_EXAMPLE_CHAT_MODE_LOWER:
-    default:
-        prompt[0] = 'a';
-        break;
+    default: prompt[0] = 'a'; break;
     }
     prompt[1] = ' ';
     prompt[2] = '\0';
-    (void)lwip_example_chat_draw_wrapped(y, prompt,
-                                         chat->input, chat->input_len);
+    (void)lwip_example_chat_draw_wrapped(y, prompt, chat->input, chat->input_len);
+    chat->rendered_line_count = chat->line_count;
     lwip_example_draw_mem_stats();
+}
+
+/* Partial redraw: erase and redraw only the input prompt row(s).
+ * Used when the user types or backspaces — the transcript hasn't changed. */
+static void lwip_example_chat_render_input(struct lwip_example_chat *chat)
+{
+    uint8_t h;
+    uint8_t y;
+    uint8_t input_rows_old;
+    uint8_t i;
+    char prompt[4];
+
+    if (!chat)
+        return;
+
+    /* If the transcript shifted since last full render, we need a full redraw. */
+    if (chat->line_count != chat->rendered_line_count)
+    {
+        lwip_example_chat_render(chat);
+        return;
+    }
+
+    os_FontSelect(os_SmallFont);
+    h = lwip_example_line_h();
+    y = lwip_example_chat_input_y(chat, h);
+
+    /* Erase enough rows to cover the old input (max input_rows). */
+    input_rows_old = lwip_example_chat_input_rows(chat);
+    for (i = 0; i < input_rows_old + 1u && (unsigned)(y + i * h) < LWIP_EXAMPLE_BOTTOM; i++)
+    {
+        os_FontDrawText(
+            "                                          ",
+            LWIP_EXAMPLE_LEFT, (uint8_t)(y + i * h));
+    }
+
+    switch ((lwip_example_chat_input_mode_t)chat->input_mode)
+    {
+    case LWIP_EXAMPLE_CHAT_MODE_UPPER: prompt[0] = 'A'; break;
+    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC: prompt[0] = '0'; break;
+    case LWIP_EXAMPLE_CHAT_MODE_LOWER:
+    default: prompt[0] = 'a'; break;
+    }
+    prompt[1] = ' ';
+    prompt[2] = '\0';
+    (void)lwip_example_chat_draw_wrapped(y, prompt, chat->input, chat->input_len);
 }
 
 static void lwip_example_chat_begin(struct lwip_example_chat *chat,
@@ -648,7 +730,7 @@ static bool lwip_example_chat_poll_input(struct lwip_example_chat *chat,
     if (key == sk_Alpha)
     {
         chat->input_mode = (uint8_t)((chat->input_mode + 1u) % 3u);
-        lwip_example_chat_render(chat);
+        lwip_example_chat_render_input(chat);
         return false;
     }
     if (key == sk_Del || key == sk_Left ||
@@ -657,7 +739,7 @@ static bool lwip_example_chat_poll_input(struct lwip_example_chat *chat,
         if (chat->input_len > 0)
         {
             chat->input[--chat->input_len] = '\0';
-            lwip_example_chat_render(chat);
+            lwip_example_chat_render_input(chat);
         }
         return false;
     }
@@ -678,7 +760,7 @@ static bool lwip_example_chat_poll_input(struct lwip_example_chat *chat,
         snprintf(out, out_len, "%s", chat->input);
         chat->input[0] = '\0';
         chat->input_len = 0;
-        lwip_example_chat_render(chat);
+        lwip_example_chat_render_input(chat);
         return true;
     }
 
@@ -699,7 +781,7 @@ static bool lwip_example_chat_poll_input(struct lwip_example_chat *chat,
     {
         chat->input[chat->input_len++] = c;
         chat->input[chat->input_len] = '\0';
-        lwip_example_chat_render(chat);
+        lwip_example_chat_render_input(chat);
     }
     return false;
 }

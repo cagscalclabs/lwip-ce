@@ -443,87 +443,206 @@ Before beginning this project we needed to itemize what was available and what w
 
 			\subsection{Operational Memory Characteristics}
 
-			The lwIP-CE stack's memory footprint is composed of fixed-size BSS structures (memp pools, USB driver state) and dynamically-sized buffers that grow with traffic and connection count. The \textit{Idle} column shows what is allocated at rest --- the default sizes of all buffers and pools that exist persistently regardless of activity. The \textit{Peak} column shows the largest each component grows to under load. All figures assume the eZ80 ABI (3-byte pointers) and the default sizing constants in \texttt{lwipopts.h}; constants in parentheses are the configuration knobs that govern each row.
+			The lwIP-CE stack initializes by consuming only the needed resources:
+			\begin{itemize}
+				\item Approximately 8,192 bytes of static memory for: ARP tables, DNS resolver state, dispatch/timer states, RNG state, and more. During build of lwIP we force this data to live in the first 8 KB of the BSS and we force consumers to link their $BSSHEAP_LOW$ above that region for memory safety.
+				\item The 8,192-byte fixed-size pbuf pool.
+				\item The 512-byte growable Ethernet RX ring buffer.
+			\end{itemize}
+			
+			At perfectly idle, this is all the stack consumes. The remainder of the available heap is free for consumption by the stack as pressure grows, up until the calculator runs out of memory. An API for users for reserve memory is available, which lets the caller own a slice of heap that lwIP can never try to grow into.
 
 			\refstepcounter{table}\label{tab:lwip-memory}
-			\textbf{Table \thetable: Memory footprint of the full lwIP-CE stack, grouped by allocation lifetime.}
+			\textbf{Table \thetable: Memory footprint of the full lwIP-CE stack.}
+
+			%% Outer table: Component | Description / nested data table
+			%% Inner tables are unruled tabular with cols: Acc. Idle Typical Max Buffer
+			\providecommand{\meminner}[1]{%
+				\begin{tabular}[t]{@{}
+					>{\small\centering\arraybackslash}p{0.04\textwidth}
+					>{\small\raggedleft\arraybackslash}p{0.10\textwidth}
+					>{\small\raggedleft\arraybackslash}p{0.10\textwidth}
+					>{\small\raggedleft\arraybackslash}p{0.10\textwidth}
+					>{\small\raggedright\arraybackslash}p{0.30\textwidth}@{}}
+				\textbf{Acc.} & \textbf{Idle} & \textbf{Typical} & \textbf{Max} & \textbf{Buffer} \\[2pt]
+				#1
+				\end{tabular}%
+			}
 
 			\begingroup
-			\setlength{\tabcolsep}{3pt}
+			\setlength{\tabcolsep}{4pt}
 			\setlength{\LTleft}{0pt}
 			\setlength{\LTright}{0pt}
-				\begin{longtable}{>{\raggedright\arraybackslash}p{0.24\textwidth}p{0.10\textwidth}p{0.18\textwidth}p{0.38\textwidth}}
-					\toprule
-					\textbf{Component} & \textbf{Idle} & \textbf{Peak} & \textbf{Notes} \\
-					\midrule
-				\endfirsthead
-					\toprule
-					\textbf{Component} & \textbf{Idle} & \textbf{Peak} & \textbf{Notes} \\
-					\midrule
-				\endhead
-					\bottomrule
-				\endfoot
-						\multicolumn{4}{p{0.90\textwidth}}{\textit{Fixed state structures --- always allocated, never grow}} \\
-					\midrule
-					TCP PCB pool                   & ${\sim}3{,}520$ & ${\sim}3{,}520$ & \texttt{MEMP\_NUM\_TCP\_PCB} (16) $\times$ ${\sim}220\,\text{B}$ \\
-					TCP segment pool               & ${\sim}960$ & ${\sim}960$ & \texttt{MEMP\_NUM\_TCP\_SEG} (32) $\times$ ${\sim}30\,\text{B}$ \\
-					TCP listen-PCB pool            & ${\sim}280$ & ${\sim}280$ & \texttt{MEMP\_NUM\_TCP\_PCB\_LISTEN} (4) $\times$ ${\sim}70\,\text{B}$ \\
-					ALTCP PCB pool                 & ${\sim}560$ & ${\sim}560$ & \texttt{MEMP\_NUM\_ALTCP\_PCB} (16) $\times$ ${\sim}35\,\text{B}$ \\
-					UDP PCB pool                   & ${\sim}220$ & ${\sim}220$ & \texttt{MEMP\_NUM\_UDP\_PCB} (4) $\times$ ${\sim}55\,\text{B}$ \\
-					sys\_timeout pool              & ${\sim}384$ & ${\sim}384$ & \texttt{MEMP\_NUM\_SYS\_TIMEOUT} (32) $\times$ ${\sim}12\,\text{B}$ \\
-					ARP table                      & ${\sim}300$ & ${\sim}300$ & \texttt{ARP\_TABLE\_SIZE} (10) \\
-					USB-Ethernet driver state      & ${\sim}2{,}200$ & ${\sim}2{,}200$ & MAC config, descriptor scratch, NCM buffers \\
-					DRBG / RNG state               & ${\sim}80$ & ${\sim}80$ & DRBG context + RNG queue heads \\
-					\midrule
-						\multicolumn{4}{p{0.90\textwidth}}{\textit{Pools and buffers with idle minimums --- grow on demand, shrink back}} \\
-					\midrule
-					USB-Ethernet RX ring           & $512$ & $2{,}048$ & \texttt{ETH\_RX\_RING\_\{INIT,MAX\}\_SIZE} \\
-					Pbuf pool (demand-driven)      & ${\sim}0$ & up to cap & Allocated through custom allocator (\texttt{MEMP\_MEM\_MALLOC}); pays for in-flight TCP data, including encrypted TLS records retained until processed \\
-					lwIP MEM heap (demand-driven)  & ${\sim}0$ & up to cap & Backs outbound TCP segments, retransmit queue, transient lwIP scratch \\
-					\midrule
-						\multicolumn{4}{p{0.90\textwidth}}{\textit{TLS-specific --- only allocated when the TLS stack is in use}} \\
-					\midrule
-					TLS handshake context          & ${\sim}880$ & ${\sim}880$ & Per connection; lifetime = TLS connection \\
-					altcp\_tls\_ce state           & ${\sim}150$ & ${\sim}150$ & Per connection; lifetime = TLS connection; owns queued encrypted pbuf chain \\
-					Decrypted TLS record scratch   & $0$ & ${\sim}16{,}384$ & Per connection; transient; used only after a complete encrypted record is present \\
-					Handshake reassembly buffer    & $0$ & up to ${\sim}4{,}096$ & Per connection; transient; allocated only for non-Certificate handshake messages fragmented across TLS records (\texttt{EncryptedExtensions}, \texttt{Finished}, \texttt{NewSessionTicket}) \\
-					Certificate streaming walker   & $0$ & ${\sim}1{,}024$--$5{,}120$ & Per connection; transient; one cert's DER allocated at a time, freed after its chain-link check; replaces full-chain buffering for \texttt{Certificate} messages \\
-					RSA padding pool               & $0$ & $1{,}024$ & Shared across all TLS connections; lazy, allocated on first RSA op \\
-					\midrule
-					\textbf{Stack baseline (no TLS conn)}  & \textbf{${\sim}9\,\text{KiB}$}  & \textbf{${\sim}10.5\,\text{KiB}$} & Fixed structures + USB ring at peak \\
-					\textbf{Per-TLS-conn delta}            & \textbf{${\sim}1\,\text{KiB}$}  & \textbf{${\sim}18\,\text{KiB}$} typical / \textbf{${\sim}23\,\text{KiB}$} fragmented & TLS section, per active connection, excluding encrypted pbuf payloads \\
-					\textbf{Total (1 TLS conn active)}     & \textbf{${\sim}11\,\text{KiB}$} & \textbf{${\sim}29\,\text{KiB}$} typical / \textbf{${\sim}34\,\text{KiB}$} fragmented & Plus whatever the demand-driven pools claim from the cap \\
+			\begin{longtable}{>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.76\textwidth}}
+				\toprule
+				\textbf{Component} & \textbf{Description / Allocations} \\
+				\midrule
+			\endfirsthead
+				\toprule
+				\textbf{Component} & \textbf{Description / Allocations} \\
+				\midrule
+			\endhead
+				\bottomrule
+			\endfoot
+
+			%% ── Accounting key ─────────────────────────────────────────────────
+			Accounting key
+				& \textbf{P} = packet buffer pool \quad
+				  \textbf{H} = transient heap \quad
+				  \textbf{R} = Ethernet RX ring \quad
+				  \textbf{T} = TLS \quad
+				  \textbf{U} = user reservation (see \S\ref{ssec:mem_accounting}) \quad
+				  \textbf{C} = socket RX ring \\
+			\midrule
+
+			%% ── BSS link-time ──────────────────────────────────────────────────
+			Link-time BSS reservation
+				& Fixed at build; present from power-on; protected by \texttt{BSSHEAP\_LOW} \\
+			\midrule
+			&
+			\meminner{%
+				n/a & ${\sim}400\,\text{B}$   & ${\sim}400\,\text{B}$   & ${\sim}400\,\text{B}$   & \texttt{arp\_table} \\
+				n/a & ${\sim}1{,}200\,\text{B}$ & ${\sim}1{,}200\,\text{B}$ & ${\sim}1{,}200\,\text{B}$ & \texttt{dns\_table} / \texttt{dns\_servers} / \texttt{dns\_pcbs} \\
+				n/a & ${\sim}150\,\text{B}$   & ${\sim}150\,\text{B}$   & ${\sim}150\,\text{B}$   & \texttt{g\_dispatchers} \\
+				n/a & ${\sim}100\,\text{B}$   & ${\sim}100\,\text{B}$   & ${\sim}100\,\text{B}$   & \texttt{g\_tls\_drbg\_state} / \texttt{g\_tls\_drbg\_seed\_material} \\
+				n/a & $520\,\text{B}$         & $520\,\text{B}$         & $520\,\text{B}$         & \texttt{\_\_tls\_scratch} \\
+				n/a & $256\,\text{B}$         & $256\,\text{B}$         & $256\,\text{B}$         & \texttt{\_\_rsa\_transient} \\
+				n/a & ${\sim}80\,\text{B}$    & ${\sim}80\,\text{B}$    & ${\sim}80\,\text{B}$    & \texttt{g\_mem\_cfg} \\
+				n/a & $<10\,\text{B}$         & $<10\,\text{B}$         & $<10\,\text{B}$         & \texttt{ifnums\_used} / \texttt{eth\_driver\_shutting\_down} / \texttt{g\_eth\_last\_rx\_activity\_ms} \\[4pt]
+			\textbf{Total} & ${\sim}2{,}716\,\text{B}$ & ${\sim}2{,}716\,\text{B}$ & ${\sim}2{,}716\,\text{B}$ & \textit{fixed at link time} \\
+			} \\
+			\midrule
+
+			%% ── @lwip_init ─────────────────────────────────────────────────────
+			\texttt{lwip\_init()}
+				& Heap allocations made during stack initialisation; permanent for the lifetime of the stack \\
+			\midrule
+			&
+			\meminner{%
+				P & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & \texttt{pbuf\_pool} \\
+				H & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & \texttt{sys\_timeo} (${\times}7$) / \texttt{dns\_pcb} / DRBG heap \\[4pt]
+			\textbf{Total} & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & \textit{permanent} \\
+			} \\
+			\midrule
+
+			%% ── @eth_connect ───────────────────────────────────────────────────
+			\texttt{eth\_device\_init()}
+				& Allocated on USB device connect; freed after unplug once all in-flight transfers complete \\
+			\midrule
+			&
+			\meminner{%
+				H & $0$ & ${\sim}2{,}200\,\text{B}$ & ${\sim}2{,}200\,\text{B}$ & \texttt{eth\_device\_t} \\
+				R & $0$ & $512\,\text{B}$           & $2{,}048\,\text{B}$       & RX overflow ring \\[4pt]
+			\textbf{Total} & $0$ & ${\sim}2{,}712\,\text{B}$ & ${\sim}4{,}248\,\text{B}$ & \textit{on USB connect} \\
+			} \\
+			\midrule
+
+			%% ── TCP connection ─────────────────────────────────────────────────
+			TCP connection
+				& Per open TCP connection; costs are additive \\
+			\midrule
+			&
+			\meminner{%
+				H & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & \texttt{tcp\_pcb} \\
+				H & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & \texttt{dhcp} \\
+			} \\
+			\midrule
+
+			%% ── altcp connection ───────────────────────────────────────────────
+			altcp connection
+				& Thin altcp shim; sits above a TCP PCB \\
+			\midrule
+			&
+			\meminner{%
+				H & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \texttt{altcp\_pcb} \\
+			} \\
+			\midrule
+
+			%% ── altcp TLS connection ───────────────────────────────────────────
+			altcp TLS connection
+				& Per open TLS connection; transient buffers exist only during handshake or active record processing \\
+			\midrule
+			&
+			\meminner{%
+				T & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & \texttt{altcp\_tls\_ce\_state\_t} \\
+				T & $0$                       & ${\sim}220\,\text{B}$      & ${\leq}16\,\text{KiB}$    & decrypted record pbuf \\
+				T & $0$                       & ${\sim}220\,\text{B}$      & $16\,\text{KiB}$          & \texttt{hs\_reassembly\_buf} \\
+				T & $0$                       & ${\sim}1$--$5\,\text{KiB}$ & $5\,\text{KiB}$           & cert walker DER buf \\
+			} \\
+			\midrule
+
+			%% ── UDP connection ─────────────────────────────────────────────────
+			UDP connection
+				& Per open UDP endpoint \\
+			\midrule
+			&
+			\meminner{%
+				H & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \texttt{udp\_pcb} \\
+			} \\
+			\midrule
+
+			%% ── RAW connection ─────────────────────────────────────────────────
+			RAW connection
+				& Per open raw IP endpoint \\
+			\midrule
+			&
+			\meminner{%
+				H & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \texttt{raw\_pcb} \\
+			} \\
+			\midrule
+
+			%% ── Outbound TCP segments ──────────────────────────────────────────
+			Outbound TCP segments
+				& Segment copies queued for retransmission; cleared on ACK \\
+			\midrule
+			&
+			\meminner{%
+				H & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & TCP send queue (\texttt{TCP\_SND\_BUF}) \\
+			} \\
+			\midrule
+
+			%% ── lwip_socket RX ring ─────────────────────────────────────────────
+			\texttt{lwip\_socket} RX ring
+				& Per open socket; elastic ring buffer for application-consumed RX data; grows on pressure, shrinks on drain \\
+			\midrule
+			&
+			\meminner{%
+				C & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \texttt{lwip\_socket.rx\_ring} (\texttt{LWIP\_SOCKET\_RX\_RING\_MAX\_SIZE}) \\
+			} \\
+
 			\end{longtable}
 			\endgroup
 
-			TLS receive processing is intentionally pbuf-backed. Encrypted TCP input is kept as an ordered pbuf chain owned by the connection; the stack waits until a complete TLS record is available, then decrypts that record directly from the pbuf chain. Application-data records decrypt into the final plaintext pbuf handed upward, while handshake records decrypt into one transient plaintext buffer so the existing handshake parser and cross-record reassembly logic can remain centralized. The encrypted pbuf bytes are freed and acknowledged to TCP only after the record has been authenticated and processed.
+			Two constraints govern all downstream processing of that plaintext buffer:
 
-			A single-TLS-connection deployment now peaks at roughly $29\,\text{KiB}$ for a typical single-record handshake Certificate path --- the $10.5\,\text{KiB}$ baseline plus about $1\,\text{KiB}$ of per-connection TLS state, one decrypted record scratch buffer, and the shared RSA padding pool. A deliberately fragmented Certificate message raises this toward $34\,\text{KiB}$, because the decrypted record scratch and the per-cert walker buffer may coexist briefly; the walker allocates at most one cert's DER at a time ($1$--$5\,\text{KiB}$ typical) and frees it immediately after its chain-link check, so the old full-chain buffering peak of ${\sim}16\,\text{KiB}$ is eliminated. Non-Certificate handshake messages that span TLS records still use flat reassembly, but those messages are small (at most a few KiB for \texttt{NewSessionTicket}), keeping fragmented overhead well below the former ceiling. Demand-driven lwIP work (outbound TCP segments, queued encrypted pbufs) adds whatever the application's workload calls for, bounded by the global allocator cap. For multi-connection deployments, add roughly $1\,\text{KiB}$ per additional idle TLS connection and budget the transient decrypted-record/reassembly cost per concurrent handshake.
+			\begin{itemize}
+				\item \textbf{Single-copy rule.} At any point during handshake processing, each byte of handshake data exists in at most one heap buffer. For \texttt{Certificate} messages this means the cert walker's per-cert DER buffer is populated by consuming bytes from the decrypted record pbuf in-place; there is never a full copy of the certificate message sitting alongside the record scratch. For other cross-record handshake messages the reassembly buffer accumulates bytes that have already been consumed (and freed) from the record pbuf, so again at most one copy exists.
+				\item \textbf{Chunk-copy rule.} Neither the cert walker nor the reassembly path reads the entire plaintext into a second large allocation before processing. The cert walker is fed segment-by-segment from the pbuf chain, accumulating only the bytes of the current certificate's DER. The reassembly buffer grows incrementally as each decrypted record segment is appended, freeing the record pbuf promptly after its bytes are copied in.
+			\end{itemize}
+
+			A single-TLS-connection deployment peaks at roughly $29\,\text{KiB}$ for a typical single-record Certificate path --- the $10.5\,\text{KiB}$ baseline, about $1\,\text{KiB}$ of per-connection TLS state, one decrypted record pbuf (up to ${\sim}16\,\text{KiB}$), and the shared RSA padding pool. Because the cert walker holds only one cert's DER ($1$--$5\,\text{KiB}$ typical) and frees it before the next is fetched, the old full-chain buffering peak of ${\sim}16\,\text{KiB}$ is eliminated. A fragmented Certificate message raises peak usage toward $34\,\text{KiB}$, since the record pbuf and the current cert's DER buffer briefly coexist during chain verification; the walker allocation is bounded by one cert's size and is freed the moment verification completes. Non-Certificate handshake messages that span TLS records use flat reassembly, but those messages are small (at most a few KiB for \texttt{NewSessionTicket}), keeping fragmented overhead well below the former ceiling. Demand-driven lwIP work (outbound TCP segments, queued encrypted pbufs) adds whatever the application's workload calls for, bounded by the global allocator cap. For multi-connection deployments, add roughly $1\,\text{KiB}$ per additional idle TLS connection and budget the transient record-pbuf and reassembly cost per concurrent handshake.
 
 			Memory pressure is observed by the global \texttt{membuffer} accountant. Under \texttt{MILD} or \texttt{HIGH} pressure, propagation of \texttt{altcp\_recved} to TCP is divided down, slowing wire-side ingestion; under \texttt{CRITICAL} pressure it is suppressed entirely. New TLS connections opened during pressure thus run, but degrade in throughput rather than fail outright.
 
-			\subsubsection{User-Tunable Memory Budget}
+			\subsubsection{Memory Ownership and the User Reservation API}%
+			\label{ssec:mem_accounting}
 
-			On the TI-84+ CE the application shares roughly $60\,\text{KiB}$ of working RAM with the network stack, so the per-buffer defaults above leave little headroom for the host application. Rather than expose a fistful of per-buffer ceilings, the configurator exposes a single knob: \texttt{lwip\_mem\_cap}, the total number of bytes given to the lwIP global allocator. At boot this value is passed directly to \texttt{mem\_init}:
-			\[
-				\texttt{mem\_init}(\texttt{lwip\_mem\_cap}, \ldots)
-			\]
-			All lwIP-side allocations --- pbufs, MEM heap, TLS scratch buffers, USB driver buffers --- charge against this single budget. The RAM above the cap remains untouched by lwIP, available to the host application:
-			\[
-				\text{usermem\_remaining} = \text{free\_ram} - \texttt{lwip\_mem\_cap}
-			\]
+			By default, lwIP-CE is allowed to use all available free RAM. It rarely needs all of it --- most of the heap sits idle between bursts of traffic. The idea is that your application should be able to take what it needs without fighting the stack for space.
 
-			The configurator presents an interactive breakdown while the knob is being adjusted:
+			To do that, call \texttt{mem\_reserve} with however many bytes your app needs. lwIP will treat that region as off-limits and will not grow into it. You can adjust the reservation at any time with \texttt{mem\_resize}, and release it entirely with \texttt{mem\_release} when you're done.
+
+			The stack tracks memory in six buckets, visible on the example HUD:
+
 			\begin{itemize}
-				\item \textbf{Fixed structures} --- the always-resident pool and state overhead (${\sim}9\,\text{KiB}$ baseline).
-				\item \textbf{TLS (if active)} --- the minimum working set for one TLS connection (${\sim}15\,\text{KiB}$, only shown when TLS is enabled).
-				\item \textbf{Remaining pbuf pool} --- cap minus the above fixed overhead; this is the headroom available for dynamic pbuf and heap growth.
-				\item \textbf{Usermem remaining} --- free RAM above the cap, left for the host application.
+				\item \textbf{P} --- the pbuf pool; fixed at $8\,\text{KiB}$ for in-flight frame data.
+				\item \textbf{T} --- TLS scratch and session buffers.
+				\item \textbf{H} --- everything else the stack allocates: protocol control blocks, driver state, RNG, outbound segments, DNS scratch, etc. If an allocation doesn't belong to another bucket, it lands here.
+				\item \textbf{R} --- the USB RX ring.
+				\item \textbf{C} --- per-connection application RX rings.
+				\item \textbf{U} --- your reservation. This shows how many bytes you've claimed via \texttt{mem\_reserve}. When non-zero, H's available ceiling shrinks by this amount.
 			\end{itemize}
 
-			The configurator enforces a minimum: \texttt{lwip\_mem\_cap} cannot be set below \texttt{LWIP\_MIN\_FLOOR\_BYTES} ($24\,\text{KiB}$ when TLS is enabled, $12\,\text{KiB}$ otherwise). This floor reflects the minimum working set required for one ordinary TLS connection through handshake. A stored configuration that exceeds current free RAM (e.g.\ because the user installed more apps since last save) is clamped down at boot before \texttt{mem\_init} is called.
-
-			This design trades the precision of per-buffer ceilings for a single, intuitive knob whose semantics match what the stack actually receives. Buffers grow into the available cap as traffic demands and shrink back when it quiets, so an idle TLS session leaves nearly all of the cap available for other lwIP work; only during peak load (a Certificate message, a burst of records) does lwIP approach its allocator ceiling.
+			The HUD updates on a short polling interval so you can watch allocations rise and fall in real time. If H is climbing unexpectedly, that's your signal that something is holding onto heap longer than it should.
 
 			\subsection{Application Callability}
 			lwIP-CE is intended to operate as a resident networking component that other calculator programs can call, rather than as a program whose networking stack is statically copied into each consumer. I was intent on making this library callable in place rather than statically included because the lwIP core and TLS internals are huge (around 200KB) and on a device with just under 2MB of Flash storage, this adds up quickly. This design reduces duplicated code size, centralizes network state, and allows application programs to depend on a stable exported interface.

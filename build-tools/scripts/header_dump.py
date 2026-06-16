@@ -1900,6 +1900,8 @@ def write_group_index(group: str, names: list[str], source_headers: list[Path]) 
             "#endif",
         ])
     lines.extend(["", f"#endif /* {guard} */", ""])
+    if out_path == OUT_CORE_INDEX:
+        return  # lwip.h is maintained by hand; never overwrite it
     out_path.write_text("\n".join(lines))
 
 
@@ -2177,7 +2179,7 @@ def main() -> int:
 
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
-    for aggregate in (OUT_CORE_INDEX, OUT_CRYPTO_INDEX):
+    for aggregate in (OUT_CRYPTO_INDEX,):  # OUT_CORE_INDEX (lwip.h) is hand-maintained
         if aggregate.exists():
             aggregate.unlink()
     OUT_DIR.mkdir(parents=True)

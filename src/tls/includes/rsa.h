@@ -44,6 +44,13 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
                                const uint8_t *pubkey,
                                size_t keylen);
 
+bool tls_rsa_decrypt_signature_exp(const uint8_t *signature,
+                                   size_t signature_len,
+                                   uint8_t *outbuf,
+                                   uint24_t exp,
+                                   const uint8_t *pubkey,
+                                   size_t keylen);
+
 /**
  * @brief Verify RSA-PSS padding on an already-decrypted signature.
  *
@@ -64,13 +71,5 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
 bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
                         const uint8_t *mhash, size_t mhash_len,
                         uint8_t hash_alg);
-
-/**
- * @brief Compatibility cleanup hook.
- *
- * RSA padding primitives no longer allocate private workspace, so this is
- * currently a NULL-safe no-op kept for existing subsystem cleanup paths.
- */
-void tls_rsa_padding_cleanup(void);
 
 #endif

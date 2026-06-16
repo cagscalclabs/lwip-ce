@@ -7,6 +7,7 @@
 #include "../includes/rsa.h"
 #include "../includes/random.h"
 #include "../includes/bytes.h"
+#include "../includes/truststore.h"
 #include "../../drivers/mem.h"
 
 /* Init-phase debug events route through the unified stack-wide debug sink
@@ -36,6 +37,7 @@ bool tls_init(void)
 
     tls_ctx.initialized = true;
     tls_rng_start();
+    tls_truststore_init();
 
     tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
     return true;
@@ -44,7 +46,6 @@ bool tls_init(void)
 void tls_cleanup(void)
 {
     tls_rng_cleanup();
-    tls_rsa_padding_cleanup();
 
     tls_ctx.initialized = false;
     tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;

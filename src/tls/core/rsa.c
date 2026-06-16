@@ -7,6 +7,9 @@
 #include "../includes/rsa.h"
 #include "../includes/crypto_guard.h"
 
+#define TLS_SCRATCH_SIZE 520u
+extern uint8_t __tls_scratch[TLS_SCRATCH_SIZE];
+
 /* Temporary RSA decrypt tracing (key-gated). Set RSA_TRACE_ON 1 to
  * re-enable. Superseded by the TLS debug callback (tls_debug.h). */
 #define RSA_TRACE_ON 0
@@ -78,10 +81,6 @@ static bool rsa_mgf1_xor(uint8_t *buf, size_t len,
         off += chunk;
     }
     return true;
-}
-
-void tls_rsa_padding_cleanup(void)
-{
 }
 
 // CRYPTO_FN
@@ -250,6 +249,7 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     if (!tls_rsa_encode_oaep(inbuf, in_len, &outbuf[spos], keylen - spos, NULL, hash_alg))
         goto cleanup;
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
+    tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
     ok = true;
 cleanup:
     tls_crypto_guard_disable();
@@ -281,9 +281,40 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
     RSA_TRACE("decsig: pre-powmod");
     tls_crypto_guard_enable();
     powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
+    tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
     ok = true;
     tls_crypto_guard_disable();
     RSA_TRACE("decsig: post-powmod");
+    return ok;
+}
+
+bool tls_rsa_decrypt_signature_exp(const uint8_t *signature,
+                                   size_t signature_len,
+                                   uint8_t *outbuf,
+                                   uint24_t exp,
+                                   const uint8_t *pubkey,
+                                   size_t keylen)
+{
+    if ((signature == NULL) ||
+        (pubkey == NULL) ||
+        (outbuf == NULL) ||
+        (signature_len == 0) ||
+        (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
+        (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
+        (!(pubkey[keylen - 1] & 1)) ||
+        (exp == 0))
+        return false;
+
+    tls_crypto_guard_enable();
+    bool ok = false;
+
+    memcpy(outbuf, signature, keylen);
+    tls_crypto_guard_disable();
+    tls_crypto_guard_enable();
+    powmod_exp_u24((uint8_t)keylen, outbuf, exp, pubkey);
+    tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
+    ok = true;
+    tls_crypto_guard_disable();
     return ok;
 }
 

@@ -20,6 +20,11 @@ static void lwip_app_config_normalize(lwip_app_config_t *cfg)
                             LWIP_CFG_FULL_CHAIN_VERIFY |
                             LWIP_CFG_LOG_TLS);
 
+    /* lwip_mem_cap is a legacy wizard field; the real cap comes from
+     * os_MemChk at init time. Reset any stale stored value so old appvars
+     * don't silently cap the heap below what the device actually has free. */
+    cfg->lwip_mem_cap = LWIP_CFG_MEM_CAP_DEF;
+
     if (cfg->log_min_level < LWIP_CFG_LOG_LEVEL_MIN ||
         cfg->log_min_level > LWIP_CFG_LOG_LEVEL_MAX)
     {

@@ -244,8 +244,17 @@ log "building libload stub in toolchain source layout"
 make -C "$STAGE_DIR" FASMG="$FASMG_PATH"
 
 log "copying completed release package to $RELEASE_DIR"
+_saved_lwip_h=""
+if [[ -f "$RELEASE_DIR/lwip.h" ]]; then
+    _saved_lwip_h="$(mktemp)"
+    cp "$RELEASE_DIR/lwip.h" "$_saved_lwip_h"
+fi
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
+if [[ -n "$_saved_lwip_h" ]]; then
+    cp "$_saved_lwip_h" "$RELEASE_DIR/lwip.h"
+    rm -f "$_saved_lwip_h"
+fi
 cp -R "$STAGE_DIR"/. "$RELEASE_DIR"/
 mkdir -p "$RELEASE_DIR/appinst"
 shopt -s nullglob
@@ -258,7 +267,7 @@ log "generating curated headers"
 mkdir -p "$CEDEV_DIR/include"
 LWIP_RELEASE_DIR="$RELEASE_DIR" "$HEADER_PYTHON_PATH" "$BUILD_TOOLS_DIR/scripts/header_dump.py"
 cp -R "$RELEASE_DIR/lwip" "$CEDEV_DIR/include/"
-cp "$RELEASE_DIR/lwip.h" "$CEDEV_DIR/include/"
+[[ -f "$RELEASE_DIR/lwip.h" ]] && cp "$RELEASE_DIR/lwip.h" "$CEDEV_DIR/include/"
 cp "$RELEASE_DIR/cryptography.h" "$CEDEV_DIR/include/"
 
 log "installing lwip.lib into $CEDEV_DIR"
