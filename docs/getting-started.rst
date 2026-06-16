@@ -1,9 +1,9 @@
 Getting Started
 ===============
 
-lwIP-CE ships as a curated release surface for calculator applications. The
-release headers are not a dump of upstream lwIP. They are generated from what
-this build can actually provide, then filtered through the public API manifest.
+lwIP-CE ships as a clean release surface for calculator applications. The
+release headers are not a dump of upstream lwIP; they are filtered down to what
+actually ships in this port, sorted into core and crypto.
 
 Install lwIP-CE
 ---------------
