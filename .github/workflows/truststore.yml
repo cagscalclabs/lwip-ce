@@ -9,28 +9,34 @@ permissions:
   contents: write
 
 env:
-  # Registry of allowed signature algorithms for the truststore.
+  # Registry of key types this truststore generator accepts for root certs.
+  # Roots are gated on their PUBLIC KEY (type/size), not their own
+  # self-signature algorithm: a root's self-signature is never
+  # cryptographically verified (see tls_cert_walker), so excluding e.g. a
+  # SHA-1-self-signed root with a perfectly good RSA-2048 key would just
+  # throw away a valid, widely-trusted root for no security benefit.
+  #
   # Each entry must have:
   #   serialized_id:  integer written into tls_truststore_entry.alg_id (matches tls_cert_sig_alg_t)
-  #   oid:            ASN.1 dotted OID string for this algorithm
+  #   key_type:       "rsa" or "ec" -- which root public key type maps to this id
+  #   oid:            ASN.1 dotted OID, for documentation/reference only
   #   display_name:   shown in the job summary
-  #   openssl_names:  the "Signature Algorithm" text name(s) OpenSSL prints
-  #                   for this OID in `openssl x509 -noout -text` output
-  # To add a new algorithm: add an entry here AND add the matching enum value to
+  # To add a new key type: add an entry here AND add the matching enum value to
   # tls_cert_sig_alg_t in src/tls/includes/truststore.h.
+  #
+  # Note: RSA-PSS-SHA256 (id 0) has no generator entry below -- there is no
+  # reliable signal in a root cert to tell PSS apart from PKCS1 v1.5, so all
+  # RSA roots are classified as RSA-PKCS1-SHA256 (id 1), matching the
+  # overwhelmingly common case in practice.
   TRUSTSTORE_ALLOWED_ALGS: |
-    - serialized_id: 0
-      oid: "1.2.840.113549.1.1.10"
-      display_name: "RSA-PSS-SHA256"
-      openssl_names: ["rsassaPss"]
     - serialized_id: 1
+      key_type: "rsa"
       oid: "1.2.840.113549.1.1.11"
       display_name: "RSA-PKCS1-SHA256"
-      openssl_names: ["sha256WithRSAEncryption"]
     - serialized_id: 2
+      key_type: "ec"
       oid: "1.2.840.10045.4.3.2"
       display_name: "ECDSA-SHA256"
-      openssl_names: ["ecdsa-with-SHA256"]
 
 jobs:
   truststore:
@@ -76,20 +82,16 @@ jobs:
           from datetime import datetime
           from glob import glob
 
-          # Parse the allowed algorithm registry from the environment.
-          # Each entry: {serialized_id, oid, display_name}
+          # Registry maps each *key type* this truststore can hold to the
+          # tls_cert_sig_alg_t id stored in tls_truststore_entry.alg_id. This
+          # gates entries by the root's key (RSA modulus size / EC curve), not
+          # by the root's own self-signature algorithm -- root self-signatures
+          # are never cryptographically verified (see tls_cert_walker), so an
+          # old root that self-signed with SHA-1 but holds a perfectly good
+          # RSA-2048 key is still admitted.
           _alg_registry = yaml.safe_load(os.environ["TRUSTSTORE_ALLOWED_ALGS"])
-          # serialized_id -> display_name
+          KEY_TYPE_TO_SERIALIZED_ID = {e["key_type"]: e["serialized_id"] for e in _alg_registry}
           ID_TO_DISPLAY = {e["serialized_id"]: e["display_name"] for e in _alg_registry}
-          # OpenSSL "Signature Algorithm" text name -> serialized_id
-          NAME_TO_SERIALIZED_ID = {
-              name: e["serialized_id"]
-              for e in _alg_registry
-              for name in e.get("openssl_names", [])
-          }
-          ALLOWED_IDS = {e["serialized_id"] for e in _alg_registry}
-
-          TLS_CERT_SIG_UNKNOWN = 0xFF
 
           SUBJECT_LEN  = 32
           SKI_LEN      = 32
@@ -156,24 +158,6 @@ jobs:
                   pass
               return b"\x00" * SKI_LEN
 
-          def get_sig_alg_name(path):
-              """Return the raw 'Signature Algorithm' text name OpenSSL printed for this cert."""
-              out = run_cmd([
-                  "openssl", "x509", "-in", path, "-noout", "-text",
-              ]).decode("utf-8", "ignore")
-              for line in out.splitlines():
-                  line = line.strip()
-                  if line.startswith("Signature Algorithm"):
-                      return line.split(":", 1)[-1].strip()
-              return None
-
-          def get_sig_alg(path):
-              """Return the serialized_id for this cert's sig alg, or TLS_CERT_SIG_UNKNOWN."""
-              name = get_sig_alg_name(path)
-              if name and name in NAME_TO_SERIALIZED_ID:
-                  return NAME_TO_SERIALIZED_ID[name]
-              return TLS_CERT_SIG_UNKNOWN
-
           def extract_rsa_pubkey(path):
               """Return (exp_bytes_le_3, mod_bytes_be) for an RSA public key.
               Raises RuntimeError if modulus > RSA_MOD_MAX bytes (e.g. 4096-bit)."""
@@ -219,16 +203,11 @@ jobs:
 
           def build_entries(cert_paths):
               entries = {}
+              exclusions = []  # (path, reason)
               for path in cert_paths:
                   try:
                       subject_cn, not_before, not_after = parse_subject_and_dates(path)
                       ski     = extract_ski(path)
-                      sig_alg = get_sig_alg(path)
-
-                      if sig_alg not in ALLOWED_IDS:
-                          alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
-                          print(f"  skip {path}: sig alg {alg_name} not in allowed list", flush=True)
-                          continue
 
                       pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
                       pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
@@ -241,6 +220,11 @@ jobs:
                       else:
                           raise RuntimeError("unknown public key algorithm OID")
 
+                      key_type = "rsa" if is_rsa else "ec"
+                      if key_type not in KEY_TYPE_TO_SERIALIZED_ID:
+                          raise RuntimeError(f"key type {key_type} not in allowed list")
+                      sig_alg = KEY_TYPE_TO_SERIALIZED_ID[key_type]
+
                       if is_rsa:
                           exp_le, mod_be = extract_rsa_pubkey(path)
                           key_bytes = exp_le + mod_be
@@ -250,6 +234,7 @@ jobs:
 
                   except Exception as e:
                       print(f"  skip {path}: {e}", flush=True)
+                      exclusions.append((path, str(e)))
                       continue
 
                   entries[bytes(ski)] = (
@@ -261,7 +246,7 @@ jobs:
                       key_bytes,
                   )
 
-              return [entries[k] for k in sorted(entries.keys())]
+              return [entries[k] for k in sorted(entries.keys())], exclusions
 
           cert_globs = [
               "/etc/ssl/certs/*.pem",
@@ -274,7 +259,7 @@ jobs:
           for pattern in cert_globs:
               cert_paths.extend(glob(pattern))
           cert_paths = sorted(set(cert_paths))
-          entries = build_entries(cert_paths)
+          entries, exclusions = build_entries(cert_paths)
 
           created_ts = int(time.time())
           entry_count = len(entries)
@@ -322,8 +307,20 @@ jobs:
 
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as summary:
-                  summary.write("## Truststore Entries (v1)\n\n")
-                  summary.write("Subject | SKI (hex) | Not Before | Not After | Sig Alg\n")
+                  summary.write(f"## Truststore Build Summary (v1)\n\n")
+                  summary.write(f"{len(entries)} accepted, {len(exclusions)} excluded\n\n")
+
+                  summary.write("### Allowed key types\n\n")
+                  summary.write("<sub>\n\n")
+                  summary.write("Key type | OID | Display name\n")
+                  summary.write("--- | --- | ---\n")
+                  for e in _alg_registry:
+                      summary.write(f"{e['key_type']} | {e['oid']} | {e['display_name']}\n")
+                  summary.write("\n</sub>\n\n")
+
+                  summary.write("### Accepted roots\n\n")
+                  summary.write("<sub>\n\n")
+                  summary.write("Subject | SKI (hex) | Not Before | Not After | Key type\n")
                   summary.write("--- | --- | --- | --- | ---\n")
                   for subject, ski, not_before, not_after, sig_alg, _key in entries:
                       subj = subject.split(b"\x00", 1)[0].decode("ascii", "ignore")
@@ -332,6 +329,16 @@ jobs:
                       nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
                       na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
                       summary.write(f"{subj} | {ski_hex} | {nb} | {na} | {alg_name}\n")
+                  summary.write("\n</sub>\n\n")
+
+                  summary.write("### Excluded certs\n\n")
+                  summary.write("<sub>\n\n")
+                  summary.write("File | Reason\n")
+                  summary.write("--- | ---\n")
+                  for path, reason in exclusions:
+                      fname = os.path.basename(path)
+                      summary.write(f"{fname} | {reason}\n")
+                  summary.write("\n</sub>\n\n")
           PY
 
       - name: Build AppVar
