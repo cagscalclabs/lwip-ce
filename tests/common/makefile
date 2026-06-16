@@ -12,6 +12,14 @@ X25519_DIR := $(PROJECT_ROOT)/src/tls/contrib/x25519/src
 # would otherwise fail to link. PROVIDE yields to any real definition.
 EXTRA_LDFLAGS += -T $(COMMON_MAKEFILE_DIR)saferam_defaults.ld
 
+# CEdev auto-links every .lib in $(CEDEV)/lib/libload/ by default
+# (LIBLOAD_LIBS ?= $(wildcard .../lib/libload/*.lib)). The installed
+# lwip.lib exports symbols with the same names these white-box tests
+# statically compile from src/tls/core/*.c (e.g. tls_sha256_init), so
+# auto-linking it causes "multiple definition" errors at link time. These
+# tests must not link against the resident lwip.lib at all.
+LIBLOAD_LIBS :=
+
 # CEdev toolchain v15 NOTE:
 #   The cedev makefile's ASM build rules ($(OBJDIR)/%.s.o pattern) mangle
 #   absolute source paths into nonsense like 'obj//abs/path/file.s.o' which
@@ -35,7 +43,10 @@ TLS_ASM_BIGINT := $(TLS_CORE_REL)/share/bigint.s
 TLS_ASM_HELPERS := $(TLS_CORE_REL)/share/helpers.s
 TLS_ASM_RANDOM := $(TLS_CORE_REL)/random.s
 TLS_ASM_CRYPTO_GUARD := $(TLS_CORE_REL)/share/crypto_guard.s
+# __tls_scratch / __rsa_transient definitions (bigint.s's powmod path
+# references these via `extern`). Must be assembled wherever TLS_ASM_BIGINT is.
+TLS_ASM_MEMORY := $(TLS_CORE_REL)/share/memory.s
 
-TLS_ASM_AES := $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_CRYPTO_GUARD)
-TLS_ASM_HASH := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD)
-TLS_ASM_TLS_FULL := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_HELPERS) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD)
+TLS_ASM_AES := $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
+TLS_ASM_HASH := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
+TLS_ASM_TLS_FULL := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_HELPERS) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)

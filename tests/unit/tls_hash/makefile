@@ -15,6 +15,7 @@ COMPRESSED = NO
 
 CFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC)
 CXXFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC)
+LTO = NO
 
 
 # Test main
