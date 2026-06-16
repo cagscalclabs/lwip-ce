@@ -201,6 +201,7 @@ const char *lwip_debug_state_name(uint16_t module_state)
     case LWIP_DBG_TLS_CERTVERIFY_FAIL:     return "certverify_fail";
     case LWIP_DBG_TLS_CHAIN_VERIFY_FAIL:   return "chain_verify_fail";
     case LWIP_DBG_TLS_CERT_UNSUPPORTED:    return "cert_unsupported";
+    case LWIP_DBG_TLS_ROOT_NOT_IN_STORE:   return "root_not_in_store";
 
     case LWIP_DBG_TLS_REC_RX:              return "rec_rx";
     case LWIP_DBG_TLS_REC_PARTIAL:         return "rec_partial";

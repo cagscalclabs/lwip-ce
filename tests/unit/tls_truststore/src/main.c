@@ -122,16 +122,16 @@ static bool tls_patch_basic_constraints_ca_false(uint8_t *der, size_t der_len)
     return false;
 }
 
-static const struct tls_spki_entry *tls_truststore_first_entry(void)
+static const struct tls_truststore_entry *tls_truststore_first_entry(void)
 {
-    var_t *truststore_var = os_GetAppVarData("lwIPSPKI", NULL);
+    var_t *truststore_var = os_GetAppVarData("lwIPCERT", NULL);
     if (!truststore_var)
     {
         return NULL;
     }
 
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TLS_SPKI_HEADER_LEN)
+    if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
     {
         return NULL;
     }
@@ -144,8 +144,8 @@ static const struct tls_spki_entry *tls_truststore_first_entry(void)
         return NULL;
     }
 
-    const uint8_t *spki_db_start = (const uint8_t *)header + TLS_SPKI_HEADER_LEN;
-    return (const struct tls_spki_entry *)spki_db_start;
+    const uint8_t *db_start = (const uint8_t *)header + TLS_TRUSTSTORE_HEADER_LEN;
+    return (const struct tls_truststore_entry *)db_start;
 }
 
 int main(void)
@@ -163,7 +163,7 @@ int main(void)
 
     {
         int archived = 0;
-        var_t *truststore_var = os_GetAppVarData("lwIPSPKI", &archived);
+        var_t *truststore_var = os_GetAppVarData("lwIPCERT", &archived);
         if (!truststore_var)
         {
             draw_line("appvar missing");
@@ -172,7 +172,7 @@ int main(void)
         }
         uint16_t truststore_size = *((uint16_t *)truststore_var);
         (void)archived;
-        if (truststore_size < TLS_SPKI_HEADER_LEN)
+        if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
         {
             draw_line("appvar size bad");
             os_GetKey();
@@ -203,33 +203,22 @@ int main(void)
     }
     os_GetKey();
 
-    const struct tls_spki_entry *entry = tls_truststore_first_entry();
-    bool owner_ok = false;
-    if (entry)
-    {
-        const char expected[] = "COMODO Certification Authority";
-        size_t expected_len = sizeof(expected) - 1;
-        size_t owner_len = strnlen((const char *)entry->owner_id, TLS_SPKI_OWNER_ID_LEN);
-        owner_ok = (owner_len == expected_len) &&
-                   (memcmp(entry->owner_id, expected, expected_len) == 0);
-    }
+    const struct tls_truststore_entry *entry = tls_truststore_first_entry();
+    bool owner_ok = (entry != NULL) && (entry->subject[0] != '\0');
     draw_line(owner_ok ? "Test 2 (First entry): pass" : "Test 2 (First entry): fail");
     os_GetKey();
 
     bool lookup_ok = false;
     if (entry)
     {
-        struct tls_spki_entry found = {0};
-        if (tls_truststore_lookup((uint8_t *)entry->hash, &found))
+        struct tls_truststore_entry *found = NULL;
+        if (tls_truststore_lookup(entry->ski, &found) && found)
         {
-            const char expected[] = "COMODO Certification Authority";
-            size_t expected_len = sizeof(expected) - 1;
-            size_t owner_len = strnlen((const char *)found.owner_id, TLS_SPKI_OWNER_ID_LEN);
-            lookup_ok = (owner_len == expected_len) &&
-                        (memcmp(found.owner_id, expected, expected_len) == 0);
+            lookup_ok = (memcmp(found->subject, entry->subject,
+                                TLS_TRUSTSTORE_SUBJECT_LEN) == 0);
         }
     }
-    draw_line(lookup_ok ? "Test 3 (Hash lookup): pass" : "Test 3 (Hash lookup): fail");
+    draw_line(lookup_ok ? "Test 3 (SKI lookup): pass" : "Test 3 (SKI lookup): fail");
     os_GetKey();
     bool constraints_ok = false;
     {

@@ -5,7 +5,7 @@
 
 #include <lwip.h>
 
-#include "common/lwip_example.h"
+#include "../../common/lwip_example.h"
 
 #define NTP_TIMEOUT_SECONDS 60
 

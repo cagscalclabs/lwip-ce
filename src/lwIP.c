@@ -173,6 +173,18 @@ bool lwip_start(void)
         lwip_membuffers_release();
         return false;
     }
+    /* Bring up the TLS stack (RNG, RSA/ECC scratch, SPKI trust store) here
+     * rather than lazily on the first TLS socket: it's fixed one-time setup
+     * with no dependency on connection state, so doing it at lwip_start
+     * keeps tls_init() out of the connect/socket-create path entirely.
+     * Gated on the wizard's "Enable TLS" setting -- skip it entirely when
+     * TLS is disabled. */
+    if (g_lwip_cfg.tls_enabled && !tls_init())
+    {
+        g_lwip_start_error = 1;
+        lwip_membuffers_release();
+        return false;
+    }
     /* USB init via usb_fn so the libload build resolves through
      * include_library '../usbdrvce/usbdrvce.asm' without a special case. If this
      * fails we must roll back lwip_init's side effects — leaving
@@ -900,7 +912,8 @@ bool lwip_default_netif_info(lwip_netif_info_t *info)
 static void lwip_membuffers_release(void)
 {
 #if LWIP_ALTCP_TLS
-    tls_cleanup();
+    if (g_lwip_cfg.tls_enabled)
+        tls_cleanup();
 #endif
     mem_buffer_lwip_release_pools();
 }
@@ -2351,13 +2364,12 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
             goto fail_mem;
         break;
     case LWIP_SOCKET_ALTCP_TLS:
-        /* Bring the TLS stack up lazily on the first TLS socket: alloc
-         * the RSA/ECC scratch, start the RNG, and load the SPKI trust
-         * store. tls_init() gates on tls_ctx.initialized, so this is
-         * re-call-safe and a no-op for subsequent TLS sockets. Without
-         * this the handshake dereferenced NULL scratch / an unstarted RNG
-         * and crashed before sending ClientHello. */
-        if (!tls_ctx.initialized && !tls_init())
+        /* tls_init() now runs eagerly in lwip_start(); this is a defensive
+         * fallback only (tls_init() gates on tls_ctx.initialized, so it's
+         * re-call-safe and a no-op if already initialized there). Refuse
+         * outright if the wizard has TLS disabled. */
+        if (!g_lwip_cfg.tls_enabled ||
+            (!tls_ctx.initialized && !tls_init()))
         {
             lwip_socket_rx_ring_destroy(conn);
             conn->status = LWIP_STATUS_ERROR;

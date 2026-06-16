@@ -104,6 +104,8 @@ static void lwip_example_stats_line(uint8_t y, const char *text)
     os_FontDrawText(text, LWIP_EXAMPLE_LCD_W - 2 - width, y);
 }
 
+static bool lwip_example_stats_visible = false;
+
 static void lwip_example_draw_mem_stats(void)
 {
     if (!lwip_example_stats_visible)
@@ -164,8 +166,6 @@ static void lwip_example_draw_mem_stats(void)
     snprintf(line, sizeof(line), "U:%s", used);
     lwip_example_stats_line(y, line);
 }
-
-static bool lwip_example_stats_visible = false;
 
 static void lwip_example_mem_stats_tick(void)
 {

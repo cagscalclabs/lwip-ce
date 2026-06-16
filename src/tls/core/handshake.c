@@ -473,7 +473,7 @@ struct tls_cert_walker
     /* Issuer CN of the last (topmost) cert walked, for truststore root lookup.
      * Overwritten on each cert; after CW_DONE it holds the topmost cert's
      * issuer_cn bytes (the root CA subject we should find in the truststore). */
-    uint8_t topmost_issuer_cn[TLS_SPKI_SUBJECT_LEN];
+    uint8_t topmost_issuer_cn[TLS_TRUSTSTORE_SUBJECT_LEN];
     uint8_t topmost_issuer_cn_len;
 };
 
@@ -857,12 +857,12 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     if (cert_parsed.issuer_cn && cert_parsed.issuer_cn->data &&
         cert_parsed.issuer_cn->len > 0)
     {
-        uint8_t copy_len = (cert_parsed.issuer_cn->len < TLS_SPKI_SUBJECT_LEN)
+        uint8_t copy_len = (cert_parsed.issuer_cn->len < TLS_TRUSTSTORE_SUBJECT_LEN)
                            ? (uint8_t)cert_parsed.issuer_cn->len
-                           : TLS_SPKI_SUBJECT_LEN;
+                           : TLS_TRUSTSTORE_SUBJECT_LEN;
         memcpy(w->topmost_issuer_cn, cert_parsed.issuer_cn->data, copy_len);
         memset(w->topmost_issuer_cn + copy_len, 0,
-               TLS_SPKI_SUBJECT_LEN - copy_len);
+               TLS_TRUSTSTORE_SUBJECT_LEN - copy_len);
         w->topmost_issuer_cn_len = copy_len;
     }
 
@@ -2368,8 +2368,15 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                                  LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED, 0);
             }
         }
-        /* No truststore entry found: no root anchor available. Proceed without
-         * root pinning (consistent with prior behaviour when truststore absent). */
+        else
+        {
+            /* No truststore entry found: no root anchor available. Proceed
+             * without root pinning (consistent with prior behaviour when
+             * truststore absent), but tell the caller. */
+            lwip_debug_alert(LWIP_DBG_MOD_TLS,
+                             LWIP_DBG_TLS_ROOT_NOT_IN_STORE,
+                             LWIP_DBG_TLS_ERR_ROOT_NOT_IN_STORE, 0);
+        }
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
@@ -3708,8 +3715,12 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
  * Status: PSK resumption, ECDHE-only, and PSK+ECDHE client handshakes are all
  * implemented and exercised. Record-layer encryption, transcript hashing,
  * key schedule, PSK binder, NewSessionTicket-driven resumption, alerts, and
- * close_notify are all done. CertificateVerify signature is intentionally
- * skipped — SPKI pinning provides authentication.
+ * close_notify are all done. CertificateVerify is mandatory and always
+ * verified (RSA-PSS-SHA256 against the captured leaf SPKI). Adjacent chain
+ * links are verified for RSA-2048+SHA256; the topmost cert's issuer is
+ * additionally checked against the truststore by subject-name lookup when
+ * present, but the chain is accepted without that final root anchor if the
+ * issuer isn't found (see truststore.h).
  *
  * Remaining work, roughly ordered:
  *   - AES-GCM speedup. Pure-C in aes.c; this is the bulk-data hot path and
@@ -3717,7 +3728,8 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
  *     big win.
  *   - Server-side handshake (currently the altcp layer returns "not
  *     implemented"). The same key schedule code applies in reverse.
- *   - Wider truststore + automated SPKI hash refresh tooling.
+ *   - Wider truststore coverage (RSA-4096, EC roots) + automated refresh
+ *     tooling.
  *   - Interop testing against major TLS 1.3 stacks (Go, BoringSSL,
  *     mbedTLS, Rustls) — particularly the cross-record fragmentation path
  *     which is hard to trigger without help.

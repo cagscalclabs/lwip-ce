@@ -71,6 +71,7 @@ typedef enum
     OPT_HOSTNAME,
     OPT_TZ_OFFSET,
     OPT_DST,
+    OPT_TLS_ENABLED,
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     OPT_SEP_TESTS,
     OPT_NTP_TEST,
@@ -173,6 +174,7 @@ static struct config_option config_options[] = {
     {"Hostname",        OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
     {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Enable TLS",      OPT_TLS_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
     {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
@@ -233,11 +235,26 @@ static bool option_get_bool(const uint8_t value[4])
 #define UI_FOOTER_H     28
 #define UI_CONTENT_Y    (UI_HEADER_H)
 #define UI_CONTENT_H    (LCD_HEIGHT - UI_HEADER_H - UI_FOOTER_H)
+/* Row line spacing. Font height is 8px; rowN_texty_start = rowN_y + 1,
+ * rowN_boxy_start = rowN_y, box height = 10 -- exactly UI_ROW_H, so a row's
+ * box/text never overlaps the next row's background fill. */
 #define UI_ROW_H        16
+#define UI_ROW_TEXT_OFF  2
 #define UI_VISIBLE_ROWS (UI_CONTENT_H / UI_ROW_H)
 #define UI_MARGIN       8
 #define UI_VALUE_X      180
 #define UI_FOOTER_LINE_H 12
+
+// Yes/No box widget geometry (used for F_TYPE_BOOL_TOGGLE rows)
+#define UI_YESNO_BOX_W   28
+#define UI_YESNO_BOX_H   UI_ROW_H
+#define UI_YESNO_GAP     4
+#define UI_COLOR_CURSOR  0x4208  // Dark grey cursor box (hovered, not yet applied)
+
+// Tracks which side (false=No, true=Yes) the L/R cursor is hovering on the
+// currently selected F_TYPE_BOOL_TOGGLE row. Reset to the row's active value
+// whenever selection moves onto it.
+static bool g_yesno_cursor = false;
 
 // Fill rectangle with clipping
 static void ui_fill_rect(int x, int y, int w, int h, uint16_t color)
@@ -347,9 +364,60 @@ static void ui_draw_footer(const char *line1, const char *line2)
     }
 }
 
+// Draw the Yes/No box pair for a F_TYPE_BOOL_TOGGLE row.
+//   active_value : the option's current applied value (true = Yes active)
+//   row_selected : whether this row is the selected row (cursor is shown
+//                  only on the selected row; other rows just show the
+//                  active box, no cursor)
+//   cursor_yes   : when row_selected, which side the cursor is currently on
+static void ui_draw_yesno_box(int row_y, bool active_value, bool row_selected,
+                              bool cursor_yes)
+{
+    int text_y = row_y + UI_ROW_TEXT_OFF;
+    int box_y = row_y;
+    int box_h = UI_YESNO_BOX_H;
+    int no_x  = LCD_WIDTH - UI_MARGIN - UI_YESNO_BOX_W;
+    int yes_x = no_x - UI_YESNO_GAP - UI_YESNO_BOX_W;
+
+    static const char *label_yes = "Yes";
+    static const char *label_no  = "No";
+
+    for (int side = 0; side < 2; side++)
+    {
+        bool is_yes = (side == 1);
+        int bx = is_yes ? yes_x : no_x;
+        bool is_active = (active_value == is_yes);
+        bool is_cursor = row_selected && (cursor_yes == is_yes);
+
+        uint16_t box_bg, box_fg;
+        if (is_active)
+        {
+            box_bg = UI_COLOR_FG;   // black box
+            box_fg = UI_COLOR_BG;   // white text
+        }
+        else if (is_cursor)
+        {
+            box_bg = UI_COLOR_CURSOR; // dark grey box
+            box_fg = UI_COLOR_BG;     // white text
+        }
+        else
+        {
+            box_bg = UI_COLOR_BG;
+            box_fg = UI_COLOR_FG;
+        }
+
+        ui_fill_rect(bx, box_y, UI_YESNO_BOX_W, box_h, box_bg);
+        const char *label = is_yes ? label_yes : label_no;
+        int lw = (int)os_FontGetWidth(label);
+        os_SetDrawFGColor(box_fg);
+        os_FontDrawTransText(label, bx + (UI_YESNO_BOX_W - lw) / 2, text_y);
+    }
+}
+
 // Draw a single menu row
 static void ui_draw_row(int row_y, const char *label, const char *value,
-                        bool selected, bool editing, bool is_separator)
+                        bool selected, bool editing, bool is_separator,
+                        f_type type, bool bool_value)
 {
     uint16_t bg = UI_COLOR_BG;
     uint16_t fg = UI_COLOR_FG;
@@ -363,7 +431,7 @@ static void ui_draw_row(int row_y, const char *label, const char *value,
         int lx = (LCD_WIDTH - lw) / 2;
         ui_hline(UI_MARGIN, row_y + UI_ROW_H/2, lx - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
         ui_hline(lx + lw + 4, row_y + UI_ROW_H/2, LCD_WIDTH - lx - lw - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
-        os_FontDrawTransText(label, lx, row_y + 2);
+        os_FontDrawTransText(label, lx, row_y + UI_ROW_TEXT_OFF);
         return;
     }
 
@@ -377,12 +445,18 @@ static void ui_draw_row(int row_y, const char *label, const char *value,
     // Selection indicator
     if (selected)
     {
-        ui_fill_rect(2, row_y + 2, 4, UI_ROW_H - 4, UI_COLOR_ACCENT);
+        ui_fill_rect(2, row_y, 4, UI_ROW_H, UI_COLOR_ACCENT);
     }
 
     // Label
     os_SetDrawFGColor(fg);
-    os_FontDrawTransText(label, UI_MARGIN + 6, row_y + 2);
+    os_FontDrawTransText(label, UI_MARGIN + 6, row_y + UI_ROW_TEXT_OFF);
+
+    if (type == F_TYPE_BOOL_TOGGLE)
+    {
+        ui_draw_yesno_box(row_y, bool_value, selected, selected ? g_yesno_cursor : bool_value);
+        return;
+    }
 
     // Value (right-aligned area)
     if (value && value[0])
@@ -390,7 +464,7 @@ static void ui_draw_row(int row_y, const char *label, const char *value,
         int vw = (int)os_FontGetWidth(value);
         int vx = LCD_WIDTH - UI_MARGIN - vw;
         if (vx < UI_VALUE_X) vx = UI_VALUE_X;
-        os_FontDrawTransText(value, vx, row_y + 2);
+        os_FontDrawTransText(value, vx, row_y + UI_ROW_TEXT_OFF);
     }
 }
 
@@ -432,7 +506,8 @@ static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, boo
     }
 
     ui_draw_row(ui_row_y(v), opt->name, value,
-                idx == selected_idx, editing && idx == selected_idx, is_sep);
+                idx == selected_idx, editing && idx == selected_idx, is_sep,
+                opt->type, option_get_bool(opt->value));
 }
 
 // Draw entire menu
@@ -457,7 +532,8 @@ static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
         }
 
         ui_draw_row(ui_row_y(v), opt->name, value,
-                    idx == selected_idx, editing && idx == selected_idx, is_sep);
+                    idx == selected_idx, editing && idx == selected_idx, is_sep,
+                    opt->type, option_get_bool(opt->value));
     }
 
     ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
@@ -507,6 +583,9 @@ static void option_sync_from_cfg(struct config_option *opt)
         break;
     case OPT_DST:
         option_set_bool(opt->value, g_cfg.dst_enabled != 0);
+        break;
+    case OPT_TLS_ENABLED:
+        option_set_bool(opt->value, g_cfg.tls_enabled != 0);
         break;
     default:
         // Action/separator types, no sync needed
@@ -575,6 +654,9 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_DST:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
+    case OPT_TLS_ENABLED:
+        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "Yes" : "No");
+        break;
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     case OPT_NTP_TEST:
     case OPT_HTTP_TEST:
@@ -605,6 +687,10 @@ static bool config_toggle_option(struct config_option *opt)
     {
     case OPT_DST:
         g_cfg.dst_enabled = (uint8_t)!g_cfg.dst_enabled;
+        option_sync_from_cfg(opt);
+        return true;
+    case OPT_TLS_ENABLED:
+        g_cfg.tls_enabled = (uint8_t)!g_cfg.tls_enabled;
         option_sync_from_cfg(opt);
         return true;
     default:
@@ -2562,6 +2648,19 @@ int main(void)
             continue;
         }
 
+        // Left/Right - move the Yes/No cursor on a bool-toggle row
+        if ((key == sk_Left || key == sk_Right) && selected >= 0 &&
+            config_options[selected].type == F_TYPE_BOOL_TOGGLE)
+        {
+            bool new_cursor = (key == sk_Right);
+            if (new_cursor != g_yesno_cursor)
+            {
+                g_yesno_cursor = new_cursor;
+                ui_draw_single_option(selected, scroll_pos, selected, false);
+            }
+            continue;
+        }
+
         // Navigation - Up/Down
         if (key == sk_Up || key == sk_Down)
         {
@@ -2572,6 +2671,10 @@ int main(void)
                 int old_sel = selected;
                 int old_scroll = scroll_pos;
                 selected = new_sel;
+                if (config_options[selected].type == F_TYPE_BOOL_TOGGLE)
+                {
+                    g_yesno_cursor = option_get_bool(config_options[selected].value);
+                }
                 scroll_pos = ui_ensure_visible(selected, scroll_pos);
                 if (scroll_pos != old_scroll)
                 {
@@ -2640,7 +2743,11 @@ int main(void)
             }
             else if (opt->type == F_TYPE_BOOL_TOGGLE && opt->setter)
             {
-                opt->setter(opt);
+                // Commit the cursor-hovered side as the new active value.
+                if (g_yesno_cursor != option_get_bool(opt->value))
+                {
+                    opt->setter(opt);
+                }
                 // Only redraw the single row that toggled.
                 ui_draw_single_option(selected, scroll_pos, selected, false);
             }

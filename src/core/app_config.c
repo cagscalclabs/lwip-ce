@@ -35,6 +35,10 @@ static void lwip_app_config_normalize(lwip_app_config_t *cfg)
     {
         cfg->log_enabled = LWIP_CFG_LOG_ENABLED_DEF;
     }
+    if (cfg->tls_enabled > 1u)
+    {
+        cfg->tls_enabled = 1;
+    }
 }
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg)
@@ -50,6 +54,7 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     cfg->log_size_bytes = 4096u;
     strncpy(cfg->hostname, "ti84plusce", LWIP_CFG_HOSTNAME_MAX - 1);
     cfg->hostname[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
+    cfg->tls_enabled = 1;
 }
 
 bool lwip_app_config_load(lwip_app_config_t *cfg)

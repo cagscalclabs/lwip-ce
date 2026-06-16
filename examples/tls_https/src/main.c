@@ -6,9 +6,9 @@
 
 #include <lwip.h>
 
-#include "common/lwip_example.h"
+#include "../../common/lwip_example.h"
 
-#define TLS_HOST "www.microsoft.com"
+#define TLS_HOST "tls13.akamai.io"
 #define TLS_PORT 443
 #define TLS_TIMEOUT_SECONDS 75
 

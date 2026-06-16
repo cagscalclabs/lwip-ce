@@ -5,6 +5,7 @@
 #include "../includes/rsa.h"
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
+#include "lwip/logging.h"
 
 /* Temporary sub-step tracing for tls_truststore_init (key-gated). Set
  * TS_TRACE_ON 1 to re-enable. Superseded by the TLS debug callback
@@ -24,32 +25,34 @@
  * +---------------------+
  * | Header (264B)       |  <- tls_truststore_header (sig, version, timestamp, count)
  * +---------------------+
- * | SPKI entries...     |  <- Array of tls_spki_entry structs
+ * | Entries...           |  <- Array of variable-length tls_truststore_entry records
  * +---------------------+
  *
  * struct tls_truststore_header {
  *    uint8_t sig[256];            // RSA-2048 signature over header fields + entries
  *    uint16_t version;            // Truststore format version
  *    uint32_t created_timestamp;  // Unix timestamp
- *    uint16_t entry_count;        // Number of SPKI entries
+ *    uint16_t entry_count;        // Number of entries
  * };
  *
- * struct tls_spki_entry {
- *    uint8_t owner_id[TLS_SPKI_OWNER_ID_LEN];  // 32 bytes
- *    uint8_t issuer_id[TLS_SPKI_ISSUER_LEN];   // 32 bytes
- *    uint32_t not_before;                      // Unix timestamp
- *    uint32_t not_after;                       // Unix timestamp
- *    uint8_t hash[TLS_SPKI_HASH_MAX_LEN];       // 32 bytes
- * };
+ * struct tls_truststore_entry (see truststore.h):
+ *    uint32_t len;                       // total byte size of this entry
+ *    uint8_t  subject[TLS_TRUSTSTORE_SUBJECT_LEN]; // Subject CN, null-padded
+ *    uint8_t  ski[TLS_TRUSTSTORE_SKI_LEN];         // Subject Key Identifier
+ *    uint32_t expiry_start;              // notBefore Unix timestamp
+ *    uint32_t expiry_end;                // notAfter  Unix timestamp
+ *    uint8_t  alg_id;                    // tls_cert_sig_alg_t
+ *    uint8_t  key[];                     // raw public key bytes (RSA exp+mod, or EC point)
  *
- * Backup pins for cert rotation: use multiple entries with same owner_id.
- * Verification matches if ANY entry has correct hash.
+ * Root anchoring: a chain's topmost cert is checked against this store by
+ * subject-name lookup (tls_truststore_lookup_by_subject) of its issuer. If
+ * absent, root anchoring is skipped for that chain (see truststore.h).
  *
  * [TODO] Age warning: if (now - created_timestamp) > TLS_TRUSTSTORE_AGE_WARN_DAYS,
  * library will print a warning suggesting truststore update.
  */
 
-char *truststore_name = "lwIPSPKI";
+char *truststore_name = "lwIPCERT";
 bool truststore_valid_for_session = false;
 
 #define TLS_TRUSTSTORE_VERSION 1
@@ -92,46 +95,80 @@ tls_truststore_status_t tls_truststore_init(void)
     TS_TRACE("E0 enter");
     // If hash init fails, error out early
     if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    {
+        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
+                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
+                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
         return TLS_STORE_HASH_FAIL;
+    }
 
     // Attempt to load the trust store.
     // Return with error if not found.
     truststore_var = os_GetAppVarData(truststore_name, NULL);
     if (!truststore_var)
+    {
+        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
+                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
+                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ALERT);
         return TLS_STORE_NOT_FOUND;
+    }
     TS_TRACE("E0b appvar found");
 
-    // Get length of store, spki db len, and sig ptr
+    // Get length of store, entry-db len, and sig ptr
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TLS_SPKI_HEADER_LEN)
+    if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
+    {
+        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
+                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
+                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
         return TLS_STORE_SIZE_INVALID;
-    uint8_t *spki_header = (uint8_t *)truststore_var + 2;
-    struct tls_truststore_header *header = (struct tls_truststore_header *)spki_header;
+    }
+    uint8_t *store_header_bytes = (uint8_t *)truststore_var + 2;
+    struct tls_truststore_header *header = (struct tls_truststore_header *)store_header_bytes;
     if (header->version != TLS_TRUSTSTORE_VERSION)
+    {
+        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
+                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
+                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
         return TLS_STORE_VERSION_MISMATCH;
-    uint8_t *spki_db_start = spki_header + TLS_SPKI_HEADER_LEN;
-    uint16_t spki_store_len = truststore_size - TLS_SPKI_HEADER_LEN;
+    }
+    uint8_t *store_db_start = store_header_bytes + TLS_TRUSTSTORE_HEADER_LEN;
+    uint16_t store_db_len = truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
 
     TS_TRACE("E1 hash hdr");
     // Hash header fields (version + timestamp + entry_count) and entries
     tls_hash_update(&hash_ctx, &header->version,
                     sizeof(header->version) + sizeof(header->created_timestamp) + sizeof(header->entry_count));
     TS_TRACE("E2 hash db");
-    tls_hash_update(&hash_ctx, spki_db_start, spki_store_len);
+    tls_hash_update(&hash_ctx, store_db_start, store_db_len);
     TS_TRACE("E3 digest");
     tls_hash_digest(&hash_ctx, tstore_hash);
 
     TS_TRACE("E4 rsa decrypt");
-    // Decrypt the SPKI store signature
+    // Decrypt the truststore signature
     if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
+    {
+        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
+                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
+                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
         return TLS_STORE_SIG_INVALID;
+    }
     TS_TRACE("E5 pss verify");
     // Verify the signature
     bool verified = tls_rsa_pss_verify(d_sig, sizeof(trust_store_pubkey), tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
     tls_secure_memzero(d_sig, TRUSTSTORE_SIG_LEN);
     TS_TRACE("E6 verify done");
     if (verified)
+    {
         truststore_valid_for_session = true;
+        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_VERIFIED, 0, __LINE__);
+    }
+    else
+    {
+        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
+                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
+                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
+    }
     return verified ? TLS_STORE_OK : TLS_STORE_SIG_INVALID;
 }
 
@@ -143,7 +180,7 @@ static bool tls_truststore_open_db(uint8_t **db_out, uint16_t *db_len_out,
         return false;
 
     uint16_t truststore_size = *((uint16_t *)truststore_var);
-    if (truststore_size < TLS_SPKI_HEADER_LEN)
+    if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
         return false;
 
     struct tls_truststore_header *header =
@@ -152,8 +189,8 @@ static bool tls_truststore_open_db(uint8_t **db_out, uint16_t *db_len_out,
         return false;
 
     *header_out  = header;
-    *db_out      = (uint8_t *)header + TLS_SPKI_HEADER_LEN;
-    *db_len_out  = truststore_size - TLS_SPKI_HEADER_LEN;
+    *db_out      = (uint8_t *)header + TLS_TRUSTSTORE_HEADER_LEN;
+    *db_len_out  = truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
     return true;
 }
 
@@ -176,7 +213,7 @@ bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **res
         if (entry->len < sizeof(struct tls_truststore_entry) ||
             offset + entry->len > db_len)
             break;
-        if (tls_bytes_compare(ski, entry->ski, TLS_SPKI_SKI_LEN))
+        if (tls_bytes_compare(ski, entry->ski, TLS_TRUSTSTORE_SKI_LEN))
         {
             if (result) *result = entry;
             return true;
@@ -190,7 +227,7 @@ bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **res
 bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
                                       struct tls_truststore_entry **result)
 {
-    if (subject == NULL || subject_len == 0 || subject_len > TLS_SPKI_SUBJECT_LEN ||
+    if (subject == NULL || subject_len == 0 || subject_len > TLS_TRUSTSTORE_SUBJECT_LEN ||
         !truststore_valid_for_session)
         return false;
 
@@ -210,7 +247,7 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
             break;
         /* Match: subject bytes compare equal, rest of entry->subject is zero-padding */
         size_t entry_subj_len = 0;
-        while (entry_subj_len < TLS_SPKI_SUBJECT_LEN && entry->subject[entry_subj_len])
+        while (entry_subj_len < TLS_TRUSTSTORE_SUBJECT_LEN && entry->subject[entry_subj_len])
             entry_subj_len++;
         if (entry_subj_len == subject_len &&
             memcmp(subject, entry->subject, subject_len) == 0)

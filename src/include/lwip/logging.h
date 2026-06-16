@@ -85,6 +85,7 @@ typedef enum lwip_debug_state
     LWIP_DBG_TLS_CERTVERIFY_FAIL,
     LWIP_DBG_TLS_CHAIN_VERIFY_FAIL,    /* a chain link's signature did not verify */
     LWIP_DBG_TLS_CERT_UNSUPPORTED,     /* cert sig type not RSA-2048: accepted, alerted */
+    LWIP_DBG_TLS_ROOT_NOT_IN_STORE,    /* topmost cert's issuer not found in truststore: accepted, alerted */
 
     /* ---- TLS verbose record/decrypt path (0x360..), depth 1 ---- */
     LWIP_DBG_TLS_REC_RX = 0x360,        /* encrypted record seen            */
@@ -126,7 +127,14 @@ enum lwip_debug_tls_errnum
     LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED = 1,
     /* An RSA-2048 chain link's issuer signature failed to verify. Fatal
      * (ERROR severity); the handshake is aborted. */
-    LWIP_DBG_TLS_ERR_CHAIN_VERIFY = 2
+    LWIP_DBG_TLS_ERR_CHAIN_VERIFY = 2,
+    /* tls_truststore_init() failed. errnum carries the tls_truststore_status_t
+     * value (NOT_FOUND/SIZE_INVALID/VERSION_MISMATCH/HASH_FAIL/SIG_INVALID). */
+    LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT = 3,
+    /* The topmost chain cert's issuer was not found in the truststore, so the
+     * final root-anchored link was not verified. The cert is accepted anyway
+     * (ALERT severity); only the leaf<->intermediate link(s) were checked. */
+    LWIP_DBG_TLS_ERR_ROOT_NOT_IN_STORE = 4
 };
 
 /**

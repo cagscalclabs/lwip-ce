@@ -6,7 +6,7 @@
 
 #include <lwip.h>
 
-#include "common/lwip_example.h"
+#include "../../common/lwip_example.h"
 
 #define ECHO_HOST "45.79.112.203"
 #define ECHO_PORT 4242

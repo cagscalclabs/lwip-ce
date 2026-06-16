@@ -130,9 +130,9 @@ jobs:
         run: |
           mkdir -p ${{env.LWIP_UNIT_TESTS}}/tls_truststore
           curl -fL \
-            -o ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPSPKI.8xv \
-            https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPSPKI.8xv
-          ls -lh ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPSPKI.8xv
+            -o ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPCERT.8xv \
+            https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
+          ls -lh ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPCERT.8xv
 
       - name: Run Core Unit Tests
         run: |

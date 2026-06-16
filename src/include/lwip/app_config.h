@@ -51,6 +51,7 @@ typedef struct lwip_app_config {
     uint8_t ip_gateway[4];
     uint8_t ip_netmask[4];
     char hostname[LWIP_CFG_HOSTNAME_MAX];
+    uint8_t tls_enabled;
 } lwip_app_config_t;
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg);

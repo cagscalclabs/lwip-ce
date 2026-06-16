@@ -326,7 +326,7 @@ jobs:
                 o4_w = ((prim_name SUBSEP "worst") in over4) ? over4[prim_name, "worst"] : "-"
                 o4_r = ((prim_name SUBSEP "random") in over4) ? over4[prim_name, "random"] : "-"
                 o4_e = ((prim_name SUBSEP "edge") in over4) ? over4[prim_name, "edge"] : "-"
-                printf("| %s | %s | %s | %s/%s/%s | %s/%s/%s | %s/%s/%s |\n",
+                printf("| <sub>%s</sub> | <sub>%s</sub> | <sub>%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> |\n",
                        prim_name, sigma_v, dpair, md_w, md_r, md_e, o6_w, o6_r, o6_e, o4_w, o4_r, o4_e)
               }
             }
