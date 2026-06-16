@@ -108,17 +108,20 @@ jobs:
               return subject_cn, parse_date(not_before), parse_date(not_after)
 
           def extract_ski(path):
-              """Extract SubjectKeyIdentifier extension bytes (raw hex)."""
-              out = run_cmd([
-                  "openssl", "x509", "-in", path, "-noout", "-ext", "subjectKeyIdentifier",
-              ]).decode("utf-8", "ignore")
-              for line in out.splitlines():
-                  line = line.strip()
-                  # OpenSSL prints it as colon-separated hex: AA:BB:CC:...
-                  if re.match(r"^([0-9A-Fa-f]{2}:)+[0-9A-Fa-f]{2}$", line):
-                      raw = bytes.fromhex(line.replace(":", ""))
-                      return pad_field(raw, SKI_LEN)
-              raise RuntimeError("no SKI extension")
+              """Extract SubjectKeyIdentifier extension bytes (raw hex).
+              Returns a zero-padded SKI_LEN buffer; zeros if extension absent."""
+              try:
+                  out = run_cmd([
+                      "openssl", "x509", "-in", path, "-noout", "-ext", "subjectKeyIdentifier",
+                  ]).decode("utf-8", "ignore")
+                  for line in out.splitlines():
+                      line = line.strip()
+                      if re.match(r"^([0-9A-Fa-f]{2}:)+[0-9A-Fa-f]{2}$", line):
+                          raw = bytes.fromhex(line.replace(":", ""))
+                          return pad_field(raw, SKI_LEN)
+              except Exception:
+                  pass
+              return b"\x00" * SKI_LEN
 
           def get_sig_alg(path):
               """Return the lwIP sig alg code for the algorithm used to sign this cert."""
@@ -204,7 +207,8 @@ jobs:
                           point = extract_ec_pubkey(path)
                           key_bytes = point
 
-                  except Exception:
+                  except Exception as e:
+                      print(f"  skip {path}: {e}", flush=True)
                       continue
 
                   entries[bytes(ski)] = (
