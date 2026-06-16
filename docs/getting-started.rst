@@ -16,8 +16,8 @@ lwIP-CE comes packaged with a number of files and directories:
    ├── lwip.h                    # app-facing socket API umbrella header
    ├── cryptography.h            # crypto/TLS primitives umbrella header
    ├── lwip.asm                  # libload export/extern surface
-   ├── lwip.lib                  # libload import library
-   ├── lwip.8xv                  # unsplit library binary (pre-appinst split)
+   ├── lwip.lib                  # libload symbols for lwIP
+   ├── lwip.8xv                  # lwIP LibLoad stub
    ├── lwip/
    │   ├── core/                 # lower-level lwIP core, netif, socket, PCB headers
    │   │   ├── altcp.h
