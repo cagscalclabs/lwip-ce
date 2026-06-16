@@ -8,15 +8,20 @@ this build can actually provide, then filtered through the public API manifest.
 Start the Stack
 ---------------
 
-Most applications should include ``lwip.h`` and use the app-facing
-socket API:
+Most applications should include ``lwip_init_runtime.h`` and ``lwip.h`` and
+use the app-facing socket API:
 
 .. code-block:: c
 
+   #include <lwip_init_runtime.h>
    #include <lwip.h>
 
    int main(void)
    {
+       if (lwip_init_runtime() != 0) {
+           return 1;
+       }
+
        if (!lwip_start()) {
            return 1;
        }
@@ -26,6 +31,12 @@ socket API:
            /* app work */
        }
    }
+
+``lwip_init_runtime()`` **must be the first lwIP call** in your program. It
+locates the lwIP flash app, verifies its export table, and patches the libload
+trampolines so that every other entry point becomes reachable. It returns
+``0`` on success, ``1`` if the app is not found, or ``2`` on an export table
+error. Nothing else will work if this step is skipped or called out of order.
 
 ``lwip_start()`` initializes the resident network stack and USB Ethernet path.
 ``lwip_poll_network_events()`` must run from the main loop. There is no OS
@@ -106,6 +117,7 @@ into their own code.
 
 .. code-block:: c
 
+   #include <lwip_init_runtime.h>
    #include <lwip.h>
    #include <stdbool.h>
    #include <stdint.h>
@@ -157,6 +169,10 @@ into their own code.
    int main(void)
    {
        struct lwip_socket socket;
+
+       if (lwip_init_runtime() != 0) {
+           return 1;
+       }
 
        if (!lwip_start()) {
            return 1;

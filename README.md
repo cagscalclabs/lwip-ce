@@ -55,23 +55,31 @@ Programs using lwIP as a dynamic library need to follow a specific initializatio
 1. **Include the Necessary Headers**: The following headers are needed for things to work at all.
 
         #include <usbdrvce.h>                   // USB driver
+        #include "lwip_init_runtime.h"          // libload bootstrap (must come first)
         #include "drivers/usb-ethernet.h"       // CDC-Ethernet driver (ECM/NCM)
         #include "lwip/init.h"                  // lwIP initialization
         // If you use any other modules in your program
         // you'll need to include those headers too.
-    
-2. **Initialize the lwIP Memory System**: This is something you cannot skip. lwIP uses the project's custom allocator and memory pressure system. Initialize it before calling `lwip_init()` so the core pools can be created.
+
+2. **Bootstrap the libload runtime**: This **must** be the very first lwIP call you make. It locates the lwIP flash app, verifies its export table, and patches the libload trampolines so that every other lwIP entry point becomes reachable. Nothing else will work if you skip this or call it out of order.
+
+        uint8_t rt = lwip_init_runtime();
+        // 0 = success, 1 = app not found, 2 = export table error
+        if (rt != 0)
+            goto exit;      // whatever your exit w/ error method is
+
+3. **Initialize the lwIP Memory System**: This is something you cannot skip. lwIP uses the project's custom allocator and memory pressure system. Initialize it before calling `lwip_init()` so the core pools can be created.
 
         #define LWIP_MAX_HEAP   (1024 * 32)
         if (!mem_init(LWIP_MAX_HEAP, malloc, free, realloc))
             goto exit;      // whatever your exit w/ error method is
 
-3. **Initialize the lwIP Stack**: Fire up the IP stack after memory init.
+4. **Initialize the lwIP Stack**: Fire up the IP stack after memory init.
 
         if(lwip_init() != ERR_OK)
             goto exit;      // whatever your exit w/ error method is
         
-4. **Initialize the CDC-Ethernet Driver**: `eth_handle_usb_event` is the entry point to the data-link layer driver for Ethernet provided in this library. Initialize the calculator's USB hardware, passing that function as a callback as shown below.
+5. **Initialize the CDC-Ethernet Driver**: `eth_handle_usb_event` is the entry point to the data-link layer driver for Ethernet provided in this library. Initialize the calculator's USB hardware, passing that function as a callback as shown below.
 
         if (usb_Init(eth_handle_usb_event, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
             goto exit;      // whatever your exit w/ error method is      
