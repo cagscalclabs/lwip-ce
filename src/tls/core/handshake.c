@@ -2293,8 +2293,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
         {
             tls_cert_sig_alg_t alg = (tls_cert_sig_alg_t)root_entry->alg_id;
             bool root_rsa = (alg == TLS_CERT_SIG_RSA_PSS_SHA256 ||
-                             alg == TLS_CERT_SIG_RSA_PKCS1_SHA256 ||
-                             alg == TLS_CERT_SIG_RSA_PKCS1_SHA384);
+                             alg == TLS_CERT_SIG_RSA_PKCS1_SHA256);
             if (root_rsa)
             {
                 /* Extract stored exp (uint24_t LE) and modulus from key[]. */

@@ -34,8 +34,7 @@ typedef enum
 {
     TLS_CERT_SIG_RSA_PSS_SHA256       = 0, /* rsaEncryption + id-RSASSA-PSS / SHA-256 */
     TLS_CERT_SIG_RSA_PKCS1_SHA256     = 1, /* sha256WithRSAEncryption (PKCS#1 v1.5)   */
-    TLS_CERT_SIG_RSA_PKCS1_SHA384     = 2, /* sha384WithRSAEncryption (PKCS#1 v1.5)   */
-    TLS_CERT_SIG_ECDSA_SHA256         = 3, /* ecdsa-with-SHA256 (P-256)               */
+    TLS_CERT_SIG_ECDSA_SHA256         = 2, /* ecdsa-with-SHA256 (P-256)               */
     TLS_CERT_SIG_UNKNOWN              = 0xFF
 } tls_cert_sig_alg_t;
 

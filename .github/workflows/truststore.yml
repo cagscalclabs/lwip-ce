@@ -8,6 +8,25 @@ on:
 permissions:
   contents: write
 
+env:
+  # Registry of allowed signature algorithms for the truststore.
+  # Each entry must have:
+  #   serialized_id: integer written into tls_truststore_entry.alg_id (matches tls_cert_sig_alg_t)
+  #   oid:           ASN.1 dotted OID string for this algorithm
+  #   display_name:  shown in the job summary
+  # To add a new algorithm: add an entry here AND add the matching enum value to
+  # tls_cert_sig_alg_t in src/tls/includes/truststore.h.
+  TRUSTSTORE_ALLOWED_ALGS: |
+    - serialized_id: 0
+      oid: "1.2.840.113549.1.1.10"
+      display_name: "RSA-PSS-SHA256"
+    - serialized_id: 1
+      oid: "1.2.840.113549.1.1.11"
+      display_name: "RSA-PKCS1-SHA256"
+    - serialized_id: 2
+      oid: "1.2.840.10045.4.3.2"
+      display_name: "ECDSA-SHA256"
+
 jobs:
   truststore:
     runs-on: ubuntu-latest
@@ -16,7 +35,7 @@ jobs:
         uses: actions/checkout@main
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y make tar openssl
+        run: sudo apt-get update && sudo apt-get install -y make tar openssl python3-yaml
 
       - name: Download and extract CEdev
         run: |
@@ -48,15 +67,20 @@ jobs:
           import struct
           import subprocess
           import time
+          import yaml
           from datetime import datetime
           from glob import glob
 
-          # lwIP-internal sig alg codes (must match tls_cert_sig_alg_t in truststore.h)
-          TLS_CERT_SIG_RSA_PSS_SHA256   = 0
-          TLS_CERT_SIG_RSA_PKCS1_SHA256 = 1
-          TLS_CERT_SIG_RSA_PKCS1_SHA384 = 2
-          TLS_CERT_SIG_ECDSA_SHA256     = 3
-          TLS_CERT_SIG_UNKNOWN          = 0xFF
+          # Parse the allowed algorithm registry from the environment.
+          # Each entry: {serialized_id, oid, display_name}
+          _alg_registry = yaml.safe_load(os.environ["TRUSTSTORE_ALLOWED_ALGS"])
+          # oid -> serialized_id
+          OID_TO_SERIALIZED_ID = {e["oid"]: e["serialized_id"] for e in _alg_registry}
+          # serialized_id -> display_name
+          ID_TO_DISPLAY = {e["serialized_id"]: e["display_name"] for e in _alg_registry}
+          ALLOWED_IDS = set(OID_TO_SERIALIZED_ID.values())
+
+          TLS_CERT_SIG_UNKNOWN = 0xFF
 
           SUBJECT_LEN  = 32
           SKI_LEN      = 32
@@ -123,24 +147,37 @@ jobs:
                   pass
               return b"\x00" * SKI_LEN
 
-          def get_sig_alg(path):
-              """Return the lwIP sig alg code for the algorithm used to sign this cert."""
+          def get_sig_alg_oid(path):
+              """Return the dotted OID string for the algorithm used to sign this cert."""
               out = run_cmd([
                   "openssl", "x509", "-in", path, "-noout", "-text",
               ]).decode("utf-8", "ignore")
               for line in out.splitlines():
                   line = line.strip()
                   if "Signature Algorithm" in line:
-                      alg = line.split(":", 1)[-1].strip().lower()
-                      if "ecdsa" in alg and "256" in alg:
-                          return TLS_CERT_SIG_ECDSA_SHA256
-                      if "rsassa-pss" in alg or "rsa-pss" in alg:
-                          return TLS_CERT_SIG_RSA_PSS_SHA256
-                      if "sha384withrsa" in alg or "sha384withrsa" in alg.replace("-", ""):
-                          return TLS_CERT_SIG_RSA_PKCS1_SHA384
-                      if "sha256withrsa" in alg or "sha256withrsa" in alg.replace("-", ""):
-                          return TLS_CERT_SIG_RSA_PKCS1_SHA256
-                      return TLS_CERT_SIG_UNKNOWN
+                      # OpenSSL prints either a name ("sha256WithRSAEncryption") or
+                      # a dotted OID ("1.2.840.113549.1.1.11") after the colon.
+                      # Ask OpenSSL to resolve names to OIDs explicitly.
+                      alg_str = line.split(":", 1)[-1].strip()
+                      try:
+                          oid = run_cmd(["openssl", "asn1parse", "-genstr",
+                                         f"OID:{alg_str}"]).decode("utf-8", "ignore")
+                          m = re.search(r":([\d.]+)$", oid.strip())
+                          if m:
+                              return m.group(1)
+                      except Exception:
+                          pass
+                      # Fall back: if it already looks like a dotted OID, use it directly
+                      if re.match(r"^[\d.]+$", alg_str):
+                          return alg_str
+                      return None
+              return None
+
+          def get_sig_alg(path):
+              """Return the serialized_id for this cert's sig alg, or TLS_CERT_SIG_UNKNOWN."""
+              oid = get_sig_alg_oid(path)
+              if oid and oid in OID_TO_SERIALIZED_ID:
+                  return OID_TO_SERIALIZED_ID[oid]
               return TLS_CERT_SIG_UNKNOWN
 
           def extract_rsa_pubkey(path):
@@ -175,17 +212,16 @@ jobs:
               return exp_le, mod_padded
 
           def extract_ec_pubkey(path):
-              """Return 32-byte x-coordinate of the EC public key (P-256).
-              For non-P256 curves the point size differs; skip those."""
+              """Return 32-byte x-coordinate of a P-256 public key.
+              Raises RuntimeError for non-P256 curves (e.g. P-384)."""
               pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
               pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
-              # SubjectPublicKeyInfo BIT STRING payload: 0x00 (unused bits) + point
               # Uncompressed P-256 point: 0x04 + x(32) + y(32) = 65 bytes
-              # Search for 0x04 marker preceded by 0x00 unused-bits byte
+              # Preceded by 0x00 unused-bits byte in the BIT STRING
               for i in range(len(pubkey_der) - 65, -1, -1):
                   if pubkey_der[i] == 0x00 and pubkey_der[i+1] == 0x04 and (len(pubkey_der) - i - 1) == 65:
                       return bytes(pubkey_der[i+2:i+34])  # x-coordinate
-              raise RuntimeError(f"unexpected EC pubkey format (DER len={len(pubkey_der)})")
+              raise RuntimeError("not a P-256 key, skipping")
 
           def build_entries(cert_paths):
               entries = {}
@@ -194,6 +230,11 @@ jobs:
                       subject_cn, not_before, not_after = parse_subject_and_dates(path)
                       ski     = extract_ski(path)
                       sig_alg = get_sig_alg(path)
+
+                      if sig_alg not in ALLOWED_IDS:
+                          alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
+                          print(f"  skip {path}: sig alg {alg_name} not in allowed list", flush=True)
+                          continue
 
                       pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
                       pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
@@ -286,10 +327,6 @@ jobs:
           print(f"bin={bin_path}")
 
           if summary_path:
-              SIG_NAMES = {
-                  0: "RSA-PSS-SHA256", 1: "RSA-PKCS1-SHA256",
-                  2: "RSA-PKCS1-SHA384", 3: "ECDSA-SHA256", 0xFF: "unknown",
-              }
               with open(summary_path, "a", encoding="utf-8") as summary:
                   summary.write("## Truststore Entries (v1)\n\n")
                   summary.write("Subject | SKI (hex) | Not Before | Not After | Sig Alg\n")
@@ -297,7 +334,7 @@ jobs:
                   for subject, ski, not_before, not_after, sig_alg, _key in entries:
                       subj = subject.split(b"\x00", 1)[0].decode("ascii", "ignore")
                       ski_hex = ski.hex()[:16] + "..."
-                      alg_name = SIG_NAMES.get(sig_alg, f"0x{sig_alg:02x}")
+                      alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
                       nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
                       na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
                       summary.write(f"{subj} | {ski_hex} | {nb} | {na} | {alg_name}\n")
