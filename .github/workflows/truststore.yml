@@ -196,10 +196,15 @@ jobs:
                       sig_alg = get_sig_alg(path)
 
                       pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
-                      key_type_out = run_cmd([
-                          "openssl", "pkey", "-pubin", "-text", "-noout",
-                      ], pubkey_pem).decode("utf-8", "ignore")
-                      is_rsa = "RSA" in key_type_out.upper() or "rsaEncryption" in key_type_out
+                      pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
+                      OID_RSA = bytes([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01])
+                      OID_EC  = bytes([0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01])
+                      if OID_RSA in pubkey_der:
+                          is_rsa = True
+                      elif OID_EC in pubkey_der:
+                          is_rsa = False
+                      else:
+                          raise RuntimeError("unknown public key algorithm OID")
 
                       if is_rsa:
                           exp_le, mod_be = extract_rsa_pubkey(path)
