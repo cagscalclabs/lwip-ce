@@ -144,10 +144,9 @@ jobs:
               return TLS_CERT_SIG_UNKNOWN
 
           def extract_rsa_pubkey(path):
-              """Return (exp_bytes_le_3, mod_bytes_be_256) for an RSA public key."""
-              import base64
+              """Return (exp_bytes_le_3, mod_bytes_be) for an RSA public key.
+              Raises RuntimeError if modulus > RSA_MOD_MAX bytes (e.g. 4096-bit)."""
               pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
-              # Parse modulus and exponent via openssl rsa -pubin -text
               text = run_cmd([
                   "openssl", "rsa", "-pubin", "-text", "-noout",
               ], pubkey_pem).decode("utf-8", "ignore")
@@ -168,23 +167,25 @@ jobs:
                           continue
                       mod_hex.extend(line.replace(":", "").split())
               mod_bytes = bytes.fromhex("".join(mod_hex).lstrip("00"))
-              mod_padded = pad_field(mod_bytes[::-1], RSA_MOD_MAX)[::-1]  # big-endian, zero-padded left
+              if len(mod_bytes) > RSA_MOD_MAX:
+                  raise RuntimeError(f"RSA modulus too large ({len(mod_bytes)}B > {RSA_MOD_MAX}B), skipping")
               mod_padded = b"\x00" * (RSA_MOD_MAX - len(mod_bytes)) + mod_bytes
               exp_val = exp_val or 65537
               exp_le = struct.pack("<I", exp_val)[:3]  # uint24_t little-endian
               return exp_le, mod_padded
 
           def extract_ec_pubkey(path):
-              """Return 32-byte x-coordinate of the EC public key (P-256)."""
+              """Return 32-byte x-coordinate of the EC public key (P-256).
+              For non-P256 curves the point size differs; skip those."""
               pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
               pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
-              # DER SubjectPublicKeyInfo for P-256: last 65 bytes are 04 || x(32) || y(32)
-              # The BIT STRING payload starts with a 0x00 unused-bits byte then 04 x y
-              if len(pubkey_der) >= 67:
-                  point = pubkey_der[-65:]
-                  if point[0] == 0x04:
-                      return point[1:33]  # x-coordinate
-              raise RuntimeError("unexpected EC pubkey format")
+              # SubjectPublicKeyInfo BIT STRING payload: 0x00 (unused bits) + point
+              # Uncompressed P-256 point: 0x04 + x(32) + y(32) = 65 bytes
+              # Search for 0x04 marker preceded by 0x00 unused-bits byte
+              for i in range(len(pubkey_der) - 65, -1, -1):
+                  if pubkey_der[i] == 0x00 and pubkey_der[i+1] == 0x04 and (len(pubkey_der) - i - 1) == 65:
+                      return bytes(pubkey_der[i+2:i+34])  # x-coordinate
+              raise RuntimeError(f"unexpected EC pubkey format (DER len={len(pubkey_der)})")
 
           def build_entries(cert_paths):
               entries = {}
