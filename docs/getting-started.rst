@@ -5,6 +5,54 @@ lwIP-CE ships as a curated release surface for calculator applications. The
 release headers are not a dump of upstream lwIP. They are generated from what
 this build can actually provide, then filtered through the public API manifest.
 
+Install lwIP-CE
+---------------
+
+lwIP-CE comes packaged with a number of files and directories:
+
+.. code-block:: text
+
+   release/
+   ├── lwip.h                    # app-facing socket API umbrella header
+   ├── cryptography.h            # crypto/TLS primitives umbrella header
+   ├── lwip.asm                  # libload export/extern surface
+   ├── lwip.lib                  # libload import library
+   ├── lwip.8xv                  # unsplit library binary (pre-appinst split)
+   ├── lwip/
+   │   ├── core/                 # lower-level lwIP core, netif, socket, PCB headers
+   │   │   ├── altcp.h
+   │   │   ├── altcp_tls.h
+   │   │   ├── dns.h
+   │   │   ├── ip4.h
+   │   │   ├── netif.h
+   │   │   ├── pbuf.h
+   │   │   └── ...
+   │   └── cryptography/         # lower-level crypto/TLS helper headers
+   │       ├── aes.h
+   │       ├── hash.h
+   │       ├── hkdf.h
+   │       ├── rsa.h
+   │       ├── truststore.h
+   │       ├── x509.h
+   │       └── ...
+   └── appinst/
+       ├── lwIPINST.8xp          # installer program (run once on-calc)
+       └── LWIP.0.8xv ... LWIP.N.8xv  # split dynamic-library AppVars
+
+Copy ``lwip.h``, ``cryptography.h``, and the ``lwip/`` header tree into ``$CDEV/include``, and ``lwip.lib`` into ``$CEDEV/lib/libload``. ``appinst/`` contains the actual lwIP-CE core, split into multiple appvars and the installer program. Send the entire contents of that directory and ``lwip.8xv`` to your TI-84+ CE and then run ``lwIPINST.8xp (prgmINSTALL)``. This will install lwIP as a TI Flash Application.
+
+.. note::
+
+    The app installer cannot overwrite an Application that already exists. When updating this library you will need to delete the Application and then possibly ``GarbageCollect`` on your device before trying to install a new version.
+
+You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class). Some Ethernet-to-WiFi adapters work as well, provided they speak CDC Ethernet on the USB side. This means your connection will be:
+
+.. code-block:: text
+
+    Calculator => USB Ethernet adapter => router
+    Calculator => USB Ethernet adapter => Ethernet to Wifi adapter
+
+
 Start the Stack
 ---------------
 
@@ -41,6 +89,33 @@ error. Nothing else will work if this step is skipped or called out of order.
 ``lwip_start()`` initializes the resident network stack and USB Ethernet path.
 ``lwip_poll_network_events()`` must run from the main loop. There is no OS
 thread sitting behind the stack doing this for you.
+
+Reserve Memory Before Opening Sockets
+--------------------------------------
+
+The calculator's heap is shared between your app, lwIP's internal pools, and
+anything else running. Before creating sockets, decide what your app needs to
+hold for its own buffers and reserve it explicitly with ``mem_request()``,
+``mem_resize()``, and ``mem_release()`` from ``lwip/core/mem.h``:
+
+.. code-block:: c
+
+   uint8_t *http_buf = mem_request(4096);
+   if (!http_buf) {
+       return 1; /* not enough heap left to proceed */
+   }
+
+   /* ... use http_buf for the lifetime of the app ... */
+
+   mem_release(http_buf);
+
+These calls route through the same accounting lwIP uses for its own pools, so
+a reservation here is reflected in ``mem_get_stats()`` and counts against the
+heap limit passed to ``mem_init``. Reserving up front, before sockets and
+their pbufs start competing for the same heap, means you find out about a
+too-small heap immediately instead of mid-handshake when a pbuf or TLS
+scratch allocation silently fails. ``mem_resize()`` lets you grow or shrink a
+reservation later without an extra free/request pair.
 
 Use the Socket API
 ------------------

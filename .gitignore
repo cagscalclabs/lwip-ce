@@ -85,3 +85,4 @@ build-tools/.docstring_cache
 tmp/
 
 *.zip
+CLAUDE.md

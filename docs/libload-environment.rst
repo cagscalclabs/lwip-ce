@@ -30,75 +30,51 @@ This works great for small libraries that live in RAM as AppVars. The catch:
 LIBLOAD assumes the *library* is the thing being loaded. lwIP-CE is an
 **Application** sitting in Flash, not a RAM AppVar, so it needs a bit more.
 
-What lwIP-CE adds on top
-------------------------
+How lwIP Works with LibLoad
+----------------------------
 
-Two pieces make an Application usable as a LIBLOAD-style API source:
+A few working pieces make an Application usable as a LIBLOAD-style API source:
 
-- The lwIP app links its own **export table** into the Flash image (the same
-  idea as a library's export table). The linker pins it at a fixed early
-  offset from the app's linked image base, and the bootstrap computes that
-  linked image base from the installed app metadata at runtime.
-- A small **companion library** (the LIBLOAD stub the consumer actually links
-  against) provides the consumer-side trampolines plus a bootstrap function. The
-  bootstrap locates the installed lwIP app, reads its export table, and patches
-  the local trampolines to point into the resident app.
+- The resident app (lwIP) links its own **export table** which is an exhaustive list of absolute
+  addresses to all its publicly exported symbols into the Flash image at a fixed offset from ``app_base``.
+- The resident app also reserves a slice of static memory at ``BSSHEAP_LOW`` just large enough to
+  hold everything it requires (measured from the link output of the size of the BSS and data sections).
+- The reserved BSS also holds an uninitialized **import table** which is an exhaustive list of the
+  runtime addresses of any caller-owned functions: malloc implementation, and other LibLoad library imports.
+- A small **companion library** linked as a LibLoad library provides a double-indirection of absolute
+  jumps. The first layer is the ordinary LIBLOAD exports, relocated directly into the calling program — patching those in place would be awkward. The second layer adds a level of indirection at a fixed, known runtime address, which the companion can safely rewrite.
+- The companion library provides ``lwip_init_runtime`` (and the underlying
+  ``lwip_init_runtime_opaque``, which takes the import pointers explicitly --
+  ``lwip_init_runtime`` is a thin wrapper that fills those in for the common
+  case). Bootstrapping happens in three steps:
+
+  1. Import ``malloc``, ``free``, ``realloc``, and any other LibLoad-imported
+     function lwIP needs, and write them into an *import table*.
+  2. Locate the lwIP Application, failing if it isn't installed. If found,
+     jump to the fixed offset where the jump table lives and check for a
+     *magic header*; a missing header or a size mismatch against what the
+     companion expects is also a failure.
+  3. Once both checks pass, copy the *export table* into the second-layer
+     LibLoad jump table in ``lwip.8xv``.
+  4. Once the *export table* is patched, ``lwip_init_runtime_internal`` is called
+     which takes a pointer to the *import table* and the size of table. This function
+     first initializes the ``.bss`` and ``.data`` sections of the Application's runtime
+     and then copies the provided *import table* into its own BSS before returning control
+     to the caller.
 
 So the consumer links against the tiny stub; the stub, once bootstrapped, routes
-every ``lwip_*`` call into the real app in Flash.
-
-The init handshake
-------------------
-
-Bringing the stack up happens in two stages -- the normal LIBLOAD part, then
-lwIP-CE's own part.
-
-**Stage 1 -- LIBLOAD does its usual thing.** When the consumer program loads,
-LIBLOAD initializes the companion library exactly like any other library. The
-library also pulls in ``usbdrvce`` via ``include_library``, so its imports table
-gets the USB driver function pointers filled in at this point. The lwIP export
-trampolines exist but are not yet patched -- calling one now would go nowhere.
-
-**Stage 2 -- the consumer calls** ``lwip_init_runtime(malloc, free, realloc)``.
-This is where the custom logic runs:
-
-#. The three C-runtime pointers (``malloc``, ``free``, ``realloc``) are stored
-   into the imports table. lwIP-CE has no libc of its own; it borrows the
-   caller's.
-#. The bootstrap locates the resident lwIP application by name and finds its
-   base address.
-#. It reads the installed app metadata to compute the linked image base, adds
-   the fixed dylib descriptor offset, then checks a 6-byte magic marker
-   (``"LWIPTB"``) and the export count to make sure it found a real,
-   compatible table and not a stale or mismatched build.
-#. It walks the export table and patches every consumer-side trampoline:
-   each table entry has already been relocated by the installer to a real
-   in-app Flash address. After this loop, all ``lwip_*`` calls are live and
-   dispatch into the app.
-#. Finally -- now that the trampolines work -- it calls into the app one more
-   time, to ``lwip_init_runtime_internal``. The app does the startup work that
-   normally happens automatically but doesn't here (because the app was never
-   "launched" in the usual sense): it zeroes its ``.bss``, copies its ``.data``
-   from Flash into RAM, and copies the imports table (CRT + USB pointers) into
-   its own reserved storage so its internal code can dispatch through them.
-
-After ``lwip_init_runtime`` returns successfully, the stack is fully wired: the
-consumer's malloc is in place, USB is reachable, and every API call lands in the
-resident app.
+every call into the real app in Flash.
 
 The whole sequence, end to end:
 
 .. code-block:: text
 
-   STAGE 1  (ordinary LIBLOAD)
    +-------------------------------------------------------------+
    | LIBLOAD loads the companion library                         |
    | USB vtable filled via include_library 'usbdrvce';           |
-   | lwIP trampolines present but NOT yet patched                |
    +-------------------------------------------------------------+
                               |
                               v
-   STAGE 2  (lwIP-CE custom setup -- triggered by the consumer)
    +-------------------------------------------------------------+
    | consumer calls lwip_init_runtime(malloc, free, realloc)     |
    | -> host CRT pointers written into the imports table         |
@@ -107,19 +83,20 @@ The whole sequence, end to end:
                               v
    +-------------------------------------------------------------+
    | bootstrap locates resident app and computes linked image    |
-   | base from app metadata; + fixed descriptor offset -> table  |
+   | app not found -> fail closed                                |
+   | base from app metadata; + fixed  offset -> export table     |
    +-------------------------------------------------------------+
                               |
                               v
    +-------------------------------------------------------------+
    | verify "LWIPTB" magic and export count                      |
-   | mismatch => fail closed (stale / incompatible app)          |
+   | mismatch -> fail closed (stale / incompatible app)          |
    +-------------------------------------------------------------+
                               |
                               v
    +-------------------------------------------------------------+
    | patch each trampoline -> relocated in-app address           |
-   | after this loop, every lwip_* call dispatches into the app  |
+   | after this loop, every call dispatches into the app         |
    +-------------------------------------------------------------+
                               |
                               v
@@ -155,31 +132,13 @@ window. In other words, link with:
    BSSHEAP_LOW >= 0xD072C6
 
 If you leave ``BSSHEAP_LOW`` at the default, your program's BSS and lwIP-CE's
-will overlap, and things will corrupt in confusing ways. Bumping it 8 KiB higher
-is the whole fix.
-
-Pictured (addresses increase upward):
-
-.. code-block:: text
-
-   CORRECT: BSSHEAP_LOW raised            WRONG: BSSHEAP_LOW left at default
-
-              +----------------------+
-   0xD072C6 ->|  consumer BSS / heap |               +----------------------+
-              |  (starts here)       |               |  lwIP app window AND |
-              +----------------------+    0xD052C6 ->|  consumer BSS BOTH   |
-              |  lwIP app            |               |  claim this region   |
-              |  .bss + .data (8KiB) |               +----------------------+
-   0xD052C6 ->|                      |                   overlap => both
-              +----------------------+                   regions corrupt
-
-   consumer sets BSSHEAP_LOW >= 0xD072C6   consumer left it at 0xD052C6
+will overlap, and you will have very bad things happen.
 
 Why it is done this way
 -----------------------
 
 It would be simpler to statically link lwIP into each program -- no bootstrap, no
-trampolines, no memory contract. But "simpler" here means paying ~200 KB of
+trampolines, no memory contract. But "simpler" here means paying ~350 KB of
 Flash per program that wants networking, on a device that does not have that to
 spare. The resident-app model trades a one-time init dance for a single shared
 copy, stable state across callers, and a public interface that does not balloon

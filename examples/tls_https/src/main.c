@@ -15,7 +15,7 @@
 static const char http_request[] =
     "HEAD / HTTP/1.1\r\n"
     "Host: " TLS_HOST "\r\n"
-    "User-Agent: lwip-ce/0\r\n"
+    "User-Agent: lwip-ce/1.0 (TI-84+CE)\r\n"
     "Accept: */*\r\n"
     "Connection: close\r\n"
     "\r\n";

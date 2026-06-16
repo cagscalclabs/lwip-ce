@@ -12,7 +12,17 @@ Configuration Wizard
 lwIP-CE has a configuration wizard that opens when you run the app. It keeps the
 resident stack policy in one place:
 
-- Hostname, static IPv4 settings, timezone, and DST
+- Hostname
+- Static IPv4 settings
+- Timezone, DST settings
+- TLS enabled/disabled
+
+The options present end-users with a modest level of control over how the stack behaves
+on their device. Particularly with TLS. While this TLS implementation is decently-engineered
+not everyone will feel comfortable connecting to secure services from an insecure device.
+With TLS flagged off in the App settings, attempts by programs to use TLS will fail-closed
+immediately unconditionally, giving end users the final authority.
+
 
 Allocator System
 ----------------
@@ -66,21 +76,27 @@ sockets, not a general-purpose OS crypto subsystem.
        depth ``17``; effective conditioning about ``16``; ``P(+)`` about
        ``0.5``; estimated min-entropy about ``1``.
    * - TLS trust store
-     - Prior SPKI pinning model abandoned, new trust model WIP due to device
-       storage constraints.
+     - A curated trust store derived from CA material staged on a common Linux
+       box, shipped as a signed AppVar and verified with RSA-PSS-SHA256 against
+       an embedded public key at ``tls_truststore_init``. Entries are looked up
+       by subject name to anchor the topmost certificate in a received chain
+       (see Certificate chain below).
    * - Certificate chain
-     - The stack walks the server's certificate chain and verifies the
-       signatures it can currently support. RSA links are checked
-       cryptographically. Unsupported signature algorithms, including P-256
-       ECDSA, raise an ``ALERT``-severity debug warning and are allowed to
-       pass for now so the stack remains usable before P-256 verification
-       lands.
+     - The stack walks the server's certificate chain link by link. Each link
+       is checked against the next certificate's public key with RSA PKCS#1
+       v1.5 / sha256WithRSAEncryption; a bad signature on an RSA-SHA256 link is
+       an ``ERROR`` and aborts the handshake. Unsupported signature algorithms
+       on a link, including P-256 ECDSA, raise ``ALERT("unsupported signature algorithm")``
+       and are allowed to pass so the stack remains usable before P-256 verification lands.
 
-       There is no final root-of-trust anchor in this release. That mechanism
-       is being redesigned, so the final intermediate or topmost certificate in
-       the received chain dangles after adjacent-link checks. A later release
-       will close this gap and remove the unsupported-algorithm fallback as the
-       missing verification code lands.
+       Once the adjacent-link walk finishes, the topmost certificate's issuer
+       is looked up in the trust store by subject name. If found and the
+       stored key is RSA (PSS or PKCS#1-SHA256), the topmost certificate's
+       signature is verified against it for real -- a bad signature here is
+       also an ``ERROR`` and aborts. If the root entry isn't RSA, or isn't in
+       the trust store at all, that raises ``ALERT("CA not in root")`` and the 
+       chain is accepted. **This is a temporary behavior and will normalize 
+       to fail-closed once P-256 (and possibly RSA-4096) is implemented.**
 
    * - CertificateVerify
      - ``CertificateVerify`` is mandatory. For the current RSA path, the
