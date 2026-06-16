@@ -2,7 +2,7 @@
   "description": "Truststore signature verification and first-entry owner check",
   "transfer_files": [
     "bin/TRUSTST.8xp",
-    "lwIPSPKI.8xv"
+    "lwIPCERT.8xv"
   ],
   "target": {
     "name": "TRUSTST",
