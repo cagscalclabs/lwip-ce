@@ -305,21 +305,25 @@ jobs:
           print(f"entries={entry_count}")
           print(f"bin={bin_path}")
 
+          def sub(text):
+              """Wrap cell contents (not the whole table) in <sub> for compact
+              table rows -- wrapping an entire table breaks GitHub's row
+              height calc and causes overlapping text."""
+              return f"<sub>{text}</sub>"
+
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as summary:
                   summary.write(f"## Truststore Build Summary (v1)\n\n")
                   summary.write(f"{len(entries)} accepted, {len(exclusions)} excluded\n\n")
 
                   summary.write("### Allowed key types\n\n")
-                  summary.write("<sub>\n\n")
                   summary.write("Key type | OID | Display name\n")
                   summary.write("--- | --- | ---\n")
                   for e in _alg_registry:
-                      summary.write(f"{e['key_type']} | {e['oid']} | {e['display_name']}\n")
-                  summary.write("\n</sub>\n\n")
+                      summary.write(f"{sub(e['key_type'])} | {sub(e['oid'])} | {sub(e['display_name'])}\n")
+                  summary.write("\n")
 
                   summary.write("### Accepted roots\n\n")
-                  summary.write("<sub>\n\n")
                   summary.write("Subject | SKI (hex) | Not Before | Not After | Key type\n")
                   summary.write("--- | --- | --- | --- | ---\n")
                   for subject, ski, not_before, not_after, sig_alg, _key in entries:
@@ -328,17 +332,16 @@ jobs:
                       alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
                       nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
                       na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
-                      summary.write(f"{subj} | {ski_hex} | {nb} | {na} | {alg_name}\n")
-                  summary.write("\n</sub>\n\n")
+                      summary.write(f"{sub(subj)} | {sub(ski_hex)} | {sub(nb)} | {sub(na)} | {sub(alg_name)}\n")
+                  summary.write("\n")
 
                   summary.write("### Excluded certs\n\n")
-                  summary.write("<sub>\n\n")
                   summary.write("File | Reason\n")
                   summary.write("--- | ---\n")
                   for path, reason in exclusions:
                       fname = os.path.basename(path)
-                      summary.write(f"{fname} | {reason}\n")
-                  summary.write("\n</sub>\n\n")
+                      summary.write(f"{sub(fname)} | {sub(reason)}\n")
+                  summary.write("\n")
           PY
 
       - name: Build AppVar
