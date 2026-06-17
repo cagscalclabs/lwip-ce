@@ -1900,8 +1900,6 @@ def write_group_index(group: str, names: list[str], source_headers: list[Path]) 
             "#endif",
         ])
     lines.extend(["", f"#endif /* {guard} */", ""])
-    if out_path == OUT_CORE_INDEX:
-        return  # lwip.h is maintained by hand; never overwrite it
     out_path.write_text("\n".join(lines))
 
 
