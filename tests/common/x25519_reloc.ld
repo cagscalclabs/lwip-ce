@@ -1,6 +1,6 @@
 SECTIONS
 {
-    .x25519_data :
+    .x25519_data : AT(LOADADDR(.powmod.reloc) + SIZEOF(.powmod.reloc))
     {
         . = ALIGN(0x100) + 0xC0;
         KEEP(*(.x25519.data))
@@ -8,7 +8,9 @@ SECTIONS
         _x25519_data_end = .;
     } >prgm
 
-    .x25519_reloc 0xE30800 : AT(_x25519_data_end)
+    _x25519_data_load_end = LOADADDR(.x25519_data) + SIZEOF(.x25519_data);
+
+    .x25519_reloc 0xE30800 : AT(_x25519_data_load_end)
     {
         _x25519_reloc_run_start = .;
         KEEP(*(.x25519.reloc))

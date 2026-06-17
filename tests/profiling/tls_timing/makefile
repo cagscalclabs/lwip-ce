@@ -17,6 +17,9 @@ ARCHIVED = NO
 DESCRIPTION = "tls timing test"
 COMPRESSED = NO
 
+CEDEV_TOOLCHAIN ?= $(shell cedev-config --prefix)
+LIBLOAD_LIBS := $(CEDEV_TOOLCHAIN)/lib/libload/fileioc.lib
+
 
 
 CFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC) -I$(X25519_DIR)
@@ -50,6 +53,7 @@ EXTRA_ASM_SOURCES = \
 	$(TLS_CORE_REL)/sha256.s \
 	$(TLS_CORE_REL)/share/bigint.s \
 	$(TLS_CORE_REL)/share/crypto_guard.s \
+	$(TLS_CORE_REL)/share/memory.s \
 	$(X25519_DIR_REL)/x25519.s
 
 HEADER_DIRS := $(PROJECT_ROOT)/src/include $(TLS_INC) $(X25519_DIR) $(HEADER_DIRS)

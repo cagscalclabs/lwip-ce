@@ -13,6 +13,9 @@ ARCHIVED = NO
 DESCRIPTION = "NIST CAVP-format primitive validation"
 COMPRESSED = NO
 
+CEDEV_TOOLCHAIN ?= $(shell cedev-config --prefix)
+LIBLOAD_LIBS := $(CEDEV_TOOLCHAIN)/lib/libload/fileioc.lib
+
 CFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC) -I$(X25519_DIR)
 CXXFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC) -I$(X25519_DIR)
 
@@ -38,6 +41,7 @@ EXTRA_ASM_SOURCES = \
 	$(TLS_CORE_REL)/sha256.s \
 	$(TLS_CORE_REL)/share/bigint.s \
 	$(TLS_CORE_REL)/share/crypto_guard.s \
+	$(TLS_CORE_REL)/share/memory.s \
 	$(X25519_DIR_REL)/x25519.s
 
 # x25519 hot loop is relocated to ti.cursorImage at runtime; the linker
