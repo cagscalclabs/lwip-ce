@@ -1901,9 +1901,16 @@ bool tls_send_client_hello(
         const char *binder_label = (ctx->psk_type == TLS_PSK_TYPE_EXTERNAL)
                                        ? "ext binder"
                                        : "res binder";
+        /* RFC 8446 derives binder_key with Derive-Secret(..., ""),
+         * so the HKDF context is Transcript-Hash(empty), not a zero-length
+         * context field. */
+        if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+            return false;
+        tls_hash_digest(&hash_ctx, partial_hash);
+
         if (!tls_hkdf_expand_label(TLS_HASH_SHA256, early_secret, 32,
                                    binder_label, 10,
-                                   NULL, 0, binder_key, 32))
+                                   partial_hash, 32, binder_key, 32))
             return false;
 
         if (!tls_hkdf_expand_label(TLS_HASH_SHA256, binder_key, 32,
@@ -1929,10 +1936,14 @@ bool tls_send_client_hello(
         out[binders_len_offset] = (uint8_t)(binders_len >> 8);
         out[binders_len_offset + 1] = (uint8_t)(binders_len & 0xFF);
 
-        /* Compute transcript hash of ClientHello truncated before binders */
+        /* Compute transcript hash of ClientHello truncated before binders.
+         * RFC 8446 4.2.11.2: Truncate removes the entire OfferedPsks.binders
+         * field, i.e. the 2-byte binders-vector length AND the 1-byte
+         * PskBinderEntry length, not just the 32-byte HMAC value — so the
+         * cut point is binder_offset itself, not binder_offset + 3. */
         if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
             return false;
-        tls_hash_update(&hash_ctx, out, binder_offset + 3);
+        tls_hash_update(&hash_ctx, out, binder_offset);
         tls_hash_digest(&hash_ctx, partial_hash);
 
         /* Compute binder = HMAC(finished_key, partial_hash) */
@@ -3519,6 +3530,7 @@ static bool tls_recv_new_session_ticket(
     ctx->psk_identity.obfuscated_ticket_age = ticket_age_add;
     ctx->ticket_age_add = ticket_age_add;
     ctx->ticket_received_ms = sys_now();
+    ctx->ticket_lifetime = ticket_lifetime;
     ctx->psk_mode = true;
     ctx->psk_type = TLS_PSK_TYPE_RESUMPTION;
     return true;

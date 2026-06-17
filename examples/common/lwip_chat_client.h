@@ -10,11 +10,25 @@
 
 #include <lwip.h>
 
-#include "common/lwip_example.h"
+#include "lwip_example.h"
 
-#ifndef CHAT_CONNECT_TIMEOUT_SECONDS
-#define CHAT_CONNECT_TIMEOUT_SECONDS 60
-#endif
+enum input_mode
+{
+    MODE_LOWER,
+    MODE_UPPER,
+    MODE_NUM
+};
+
+char key_to_char(uint8_t key, uint8_t mode)
+{
+    // starting at 0x0A
+    const char ascii_mapping[3][38] = {
+        "\"wrmh\0\0\0\0vqlg\0\0:zupkfc\0 ytojeb\0\0xsnida",
+        "\"WRMH\0\0\0\0VQLG\0\0:ZUPKFC\0 YTOJEB\0\0XSNIDA",
+        ("+-*/^\0\0?369)\0\0\0.258(\0\0\0"
+         "0147,")};
+    return ascii_mapping[mode][key - 0x0A];
+}
 
 struct lwip_chat_state
 {
@@ -162,7 +176,6 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
 {
     static struct lwip_socket sock;
     struct lwip_chat_state *state = NULL;
-    uint32_t start;
     lwip_error_t err;
     bool socket_created = false;
     int result = 1;
@@ -232,11 +245,10 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
         goto cleanup;
     }
 
-    start = lwip_example_now_ms();
     while (!state->done)
     {
         char outbound[LWIP_EXAMPLE_CHAT_INPUT + 2];
-        bool cancel = false;
+        uint8_t key;
 
         if (!state->connected && lwip_example_cancelled())
         {
@@ -245,7 +257,11 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
         }
 
         lwip_poll_network_events();
-        lwip_example_mem_stats_tick();
+
+        /* Scan the keypad once per iteration -- os_GetCSC() reports a press
+         * exactly once, so multiple independent callers each calling it
+         * would race for the same event and silently drop it. */
+        key = os_GetCSC();
 
         /* Drain inbound data each iteration — callbacks own lifecycle,
          * the loop owns data. */
@@ -254,39 +270,73 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
             lwip_chat_on_readable(state, &sock);
         }
 
-        if (!state->connected &&
-            lwip_example_timed_out(start, CHAT_CONNECT_TIMEOUT_SECONDS))
+        if (key == sk_Stat)
         {
-            state->err = LWIP_ERR_CONNECT;
-            lwip_chat_append_system(state, "connect timeout");
-            state->done = true;
+            lwip_example_stats_toggle();
+        }
+        if (key == sk_Clear)
+            state->exiting = true;
+
+        lwip_example_draw_mem_stats();
+
+        if (state->exiting)
+            break;
+
+        if (!state->connected)
+            continue;
+
+        switch (key)
+        {
+        case sk_Alpha:
+            state->chat.input_mode = (uint8_t)((state->chat.input_mode + 1u) % 3u);
+            lwip_example_chat_render_input(&state->chat);
+            break;
+        case sk_Del:
+            if (state->chat.input_len)
+            {
+                state->chat.input[--state->chat.input_len] = '\0';
+                lwip_example_chat_render_input(&state->chat);
+            }
+            break;
+        case sk_Enter:
+            if (state->chat.input_len)
+            {
+                snprintf(outbound, sizeof(outbound) - 1, "%s", state->chat.input);
+                state->chat.input[0] = '\0';
+                state->chat.input_len = 0;
+                lwip_example_chat_render_input(&state->chat);
+
+                {
+                    size_t len = strlen(outbound);
+                    outbound[len++] = '\n';
+                    outbound[len] = '\0';
+                    err = lwip_socket_write(&sock, (const uint8_t *)outbound, len);
+                    if (err != LWIP_OK)
+                    {
+                        char line[32];
+                        state->err = err;
+                        snprintf(line, sizeof(line), "send error e%u", (unsigned)err);
+                        lwip_chat_append_system(state, line);
+                        state->done = true;
+                    }
+                }
+            }
+            break;
+        default:
+            if (key < 0x0A || key > 0x2F)
+                break;
+            char c = key_to_char(key, state->chat.input_mode);
+            if (c && state->chat.input_len + 1 < sizeof(state->chat.input))
+            {
+                state->chat.input[state->chat.input_len++] = c;
+                state->chat.input[state->chat.input_len] = '\0';
+                lwip_example_chat_render_input(&state->chat);
+            }
             break;
         }
 
-        if (!state->connected)
+        if (state->exiting)
         {
-            continue;
-        }
-
-        if (lwip_example_chat_poll_input(&state->chat, outbound,
-                                         sizeof(outbound) - 1, &cancel))
-        {
-            size_t len = strlen(outbound);
-            outbound[len++] = '\n';
-            outbound[len] = '\0';
-            err = lwip_socket_write(&sock, (const uint8_t *)outbound, len);
-            if (err != LWIP_OK)
-            {
-                char line[32];
-                state->err = err;
-                snprintf(line, sizeof(line), "send error e%u", (unsigned)err);
-                lwip_chat_append_system(state, line);
-                state->done = true;
-            }
-        }
-        if (cancel)
-        {
-            state->exiting = true;
             break;
         }
     }

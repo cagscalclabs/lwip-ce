@@ -134,7 +134,12 @@ enum lwip_debug_tls_errnum
     /* The topmost chain cert's issuer was not found in the truststore, so the
      * final root-anchored link was not verified. The cert is accepted anyway
      * (ALERT severity); only the leaf<->intermediate link(s) were checked. */
-    LWIP_DBG_TLS_ERR_ROOT_NOT_IN_STORE = 4
+    LWIP_DBG_TLS_ERR_ROOT_NOT_IN_STORE = 4,
+    /* The peer sent a fatal TLS alert. errnum carries the alert description
+     * byte (RFC 8446 §B.2, e.g. 51 = decrypt_error, 47 = illegal_parameter,
+     * 40 = handshake_failure), offset by +1000 to keep it visibly distinct
+     * from the other small errnum values above. */
+    LWIP_DBG_TLS_ERR_FATAL_ALERT_BASE = 1000
 };
 
 /**

@@ -12,8 +12,29 @@
 #include <stddef.h>
 
 #include "truststore.h"
+#include "handshake.h"
 #include "lwip/logging.h"
 #include "lwip/pbuf.h"
+
+/* In-memory PSK/session-ticket cache. TLS-global (not per-connection):
+ * entries are written here the instant a NewSessionTicket is parsed, read
+ * back at connect time by hostname, and the whole table is loaded from /
+ * saved to a single appvar at tls_init()/tls_cleanup() only. There is no
+ * per-ticket disk I/O. Capacity is small and fixed; eviction is LRU-ish
+ * (oldest received_at) once full. */
+#define TLS_PSK_CACHE_MAX_ENTRIES 8u
+#define TLS_PSK_CACHE_HOSTNAME_MAX 64u
+
+struct tls_psk_cache_entry
+{
+    bool in_use;
+    char hostname[TLS_PSK_CACHE_HOSTNAME_MAX]; /* NUL-terminated */
+    uint8_t psk_type;                          /* enum tls_psk_type */
+    uint8_t psk[32];
+    struct tls_psk_identity identity;
+    uint32_t received_at;   /* rtc_Time() seconds when the ticket was accepted */
+    uint32_t ticket_lifetime; /* NST ticket_lifetime, seconds */
+};
 
 struct tls_context
 {
@@ -22,6 +43,22 @@ struct tls_context
 };
 
 extern struct tls_context tls_ctx;
+
+/**
+ * Store/refresh a PSK identity for `hostname` in the in-memory cache.
+ * Finds an existing entry for the same hostname, or allocates a free slot,
+ * or evicts the oldest entry if the cache is full. No disk I/O.
+ */
+void tls_psk_cache_put(const char *hostname, uint8_t psk_type,
+                       const uint8_t *psk, const struct tls_psk_identity *identity,
+                       uint32_t ticket_lifetime);
+
+/**
+ * Look up a non-expired PSK identity cached for `hostname`.
+ * @return true and fills psk_type/psk/identity on a live hit, false otherwise.
+ */
+bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
+                       uint8_t *psk, struct tls_psk_identity *identity);
 
 /**
  * Allocate a TLS-owned PBUF_CUSTOM pbuf of `len` payload bytes.

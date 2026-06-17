@@ -1,6 +1,6 @@
 #include <lwip.h>
 
-#include "common/lwip_chat_client.h"
+#include "../../common/lwip_chat_client.h"
 
 #ifndef CHAT_HOST
 #define CHAT_HOST "192.168.2.1"

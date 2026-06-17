@@ -264,6 +264,13 @@ def install_tls_exception_logger(loop: asyncio.AbstractEventLoop) -> None:
             )
             return
 
+        if isinstance(exc, (ConnectionResetError, TimeoutError, OSError)):
+            print(
+                f"[tls] pre-handshake disconnect peer={peer}: {message}: {exc}",
+                file=sys.stderr,
+            )
+            return
+
         if previous is not None:
             previous(loop, context)
         else:
@@ -348,6 +355,7 @@ async def run(args: argparse.Namespace) -> None:
             host=args.host,
             port=args.tls_port,
             ssl=tls_ctx,
+            ssl_handshake_timeout=args.handshake_timeout,
             limit=args.max_line + 2,
         )
 
@@ -390,6 +398,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-line", type=int, default=512)
     parser.add_argument("--idle-timeout", type=float, default=30.0)
     parser.add_argument("--close-timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--handshake-timeout",
+        type=float,
+        default=15.0,
+        help="seconds to wait for a TLS handshake to complete before dropping the client",
+    )
     parser.add_argument(
         "--tls13-only",
         action="store_true",

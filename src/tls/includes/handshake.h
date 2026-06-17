@@ -210,6 +210,7 @@ extern "C"
         bool ecdhe_negotiated;       /* True if server selected PSK+ECDHE */
         uint32_t ticket_age_add;     /* NST ticket_age_add */
         uint32_t ticket_received_ms; /* sys_now() when last ticket was accepted */
+        uint32_t ticket_lifetime;    /* NST ticket_lifetime, seconds (RFC 8446 4.6.1) */
 
         /* SNI hostname for server_name extension */
         const char *hostname;

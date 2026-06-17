@@ -1,6 +1,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
+#include <sys/rtc.h>
+#include <ti/vars.h>
 #include "lwip/opt.h"
 #include "lwip/pbuf.h"
 #include "../includes/tls.h"
@@ -26,6 +29,268 @@ struct tls_context tls_ctx = {
         .version = 0,
         .created_timestamp = 0}};
 
+/* -----------------------------------------------------------------------
+ * PSK / session-ticket cache (TLS-global, in-memory)
+ *
+ * Tickets are written here the moment a NewSessionTicket is parsed
+ * (tls_psk_cache_put) and read back by hostname at connect time
+ * (tls_psk_cache_get). The table itself is heap-allocated lazily (on first
+ * tls_init()) under TLS memory accounting, and is the only thing persisted
+ * to flash: loaded once at tls_init(), saved once at tls_cleanup(). There
+ * is no per-ticket disk I/O.
+ *
+ * Expiry uses rtc_Time() (free-running hardware seconds counter that
+ * survives a stack restart) rather than sys_now(), which resets to 0 on
+ * every restart and therefore can't be compared against a timestamp saved
+ * in a previous run.
+ * ----------------------------------------------------------------------- */
+#define TLS_PSK_CACHE_APPVAR "lwIPPSKC"
+#define TLS_PSK_CACHE_MAGIC 0x434B5350u /* "PSKC" */
+#define TLS_PSK_CACHE_VERSION 1u
+
+struct tls_psk_cache_store_header
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t count;
+};
+
+static struct tls_psk_cache_entry *g_psk_cache = NULL;
+
+static bool tls_psk_cache_entry_expired(const struct tls_psk_cache_entry *e, uint32_t now)
+{
+    uint32_t age = now - e->received_at; /* unsigned wraparound is fine here */
+    return age >= e->ticket_lifetime;
+}
+
+static void tls_psk_cache_alloc(void)
+{
+    if (g_psk_cache)
+    {
+        return;
+    }
+    size_t bytes = sizeof(struct tls_psk_cache_entry) * TLS_PSK_CACHE_MAX_ENTRIES;
+    g_psk_cache = (struct tls_psk_cache_entry *)mem_buffer_custom_malloc(bytes);
+    if (!g_psk_cache)
+    {
+        return;
+    }
+    memset(g_psk_cache, 0, bytes);
+    mem_stats_tls_direct_add(bytes, bytes);
+}
+
+static void tls_psk_cache_free(void)
+{
+    if (!g_psk_cache)
+    {
+        return;
+    }
+    size_t bytes = sizeof(struct tls_psk_cache_entry) * TLS_PSK_CACHE_MAX_ENTRIES;
+    tls_secure_memzero(g_psk_cache, bytes);
+    mem_stats_tls_direct_release(bytes, bytes);
+    mem_buffer_custom_free(g_psk_cache);
+    g_psk_cache = NULL;
+}
+
+void tls_psk_cache_put(const char *hostname, uint8_t psk_type,
+                       const uint8_t *psk, const struct tls_psk_identity *identity,
+                       uint32_t ticket_lifetime)
+{
+    size_t host_len;
+    int slot = -1;
+    int oldest = -1;
+
+    if (!g_psk_cache || !hostname || !psk || !identity)
+    {
+        return;
+    }
+    host_len = strlen(hostname);
+    if (host_len == 0 || host_len >= TLS_PSK_CACHE_HOSTNAME_MAX ||
+        identity->identity_len > sizeof(identity->identity))
+    {
+        return;
+    }
+
+    for (unsigned i = 0; i < TLS_PSK_CACHE_MAX_ENTRIES; i++)
+    {
+        struct tls_psk_cache_entry *e = &g_psk_cache[i];
+        if (e->in_use && strcmp(e->hostname, hostname) == 0)
+        {
+            slot = (int)i;
+            break;
+        }
+        if (!e->in_use)
+        {
+            if (slot < 0)
+            {
+                slot = (int)i;
+            }
+        }
+        else if (oldest < 0 || e->received_at < g_psk_cache[oldest].received_at)
+        {
+            oldest = (int)i;
+        }
+    }
+    if (slot < 0)
+    {
+        slot = oldest; /* cache full of distinct hosts: evict the oldest */
+    }
+    if (slot < 0)
+    {
+        return;
+    }
+
+    struct tls_psk_cache_entry *e = &g_psk_cache[slot];
+    memset(e, 0, sizeof(*e));
+    e->in_use = true;
+    memcpy(e->hostname, hostname, host_len + 1);
+    e->psk_type = psk_type;
+    memcpy(e->psk, psk, sizeof(e->psk));
+    memcpy(&e->identity, identity, sizeof(e->identity));
+    e->received_at = rtc_Time();
+    e->ticket_lifetime = ticket_lifetime;
+}
+
+bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
+                       uint8_t *psk, struct tls_psk_identity *identity)
+{
+    if (!g_psk_cache || !hostname)
+    {
+        return false;
+    }
+    uint32_t now = rtc_Time();
+    for (unsigned i = 0; i < TLS_PSK_CACHE_MAX_ENTRIES; i++)
+    {
+        struct tls_psk_cache_entry *e = &g_psk_cache[i];
+        if (!e->in_use || strcmp(e->hostname, hostname) != 0)
+        {
+            continue;
+        }
+        if (tls_psk_cache_entry_expired(e, now))
+        {
+            e->in_use = false;
+            return false;
+        }
+        if (psk_type)
+        {
+            *psk_type = e->psk_type;
+        }
+        if (psk)
+        {
+            memcpy(psk, e->psk, 32);
+        }
+        if (identity)
+        {
+            memcpy(identity, &e->identity, sizeof(*identity));
+            /* The fresh tls_handshake_context this identity is about to seed
+             * starts with ticket_received_ms == 0, so handshake.c's "elapsed
+             * since received" math (handshake.c:1874) is skipped and it would
+             * otherwise send the stale obfuscated_ticket_age verbatim — wrong
+             * by however long the ticket has sat in the cache (or survived a
+             * stack restart). Fold that real elapsed time in now, using the
+             * RTC-measured age (seconds, survives restart) converted to ms,
+             * so the ClientHello carries a correct age regardless of when it
+             * is actually sent. */
+            uint32_t elapsed_ms = (now - e->received_at) * 1000u;
+            identity->obfuscated_ticket_age += elapsed_ms;
+        }
+        return true;
+    }
+    return false;
+}
+
+/* Load the persisted cache from flash into g_psk_cache, dropping any entry
+ * that has already expired (judged against the live RTC, so expiry survives
+ * a stack restart). Called once from tls_init(). */
+static void tls_psk_cache_load(void)
+{
+    var_t *var;
+    const uint8_t *data;
+    uint16_t size;
+    struct tls_psk_cache_store_header hdr;
+    uint32_t now;
+
+    if (!g_psk_cache)
+    {
+        return;
+    }
+    var = os_GetAppVarData(TLS_PSK_CACHE_APPVAR, NULL);
+    if (!var)
+    {
+        return;
+    }
+    size = *((uint16_t *)var);
+    data = (const uint8_t *)var + 2;
+    if (size < sizeof(hdr))
+    {
+        return;
+    }
+    memcpy(&hdr, data, sizeof(hdr));
+    if (hdr.magic != TLS_PSK_CACHE_MAGIC || hdr.version != TLS_PSK_CACHE_VERSION ||
+        hdr.count > TLS_PSK_CACHE_MAX_ENTRIES)
+    {
+        return;
+    }
+    if (size != sizeof(hdr) + hdr.count * sizeof(struct tls_psk_cache_entry))
+    {
+        return;
+    }
+
+    now = rtc_Time();
+    const uint8_t *entry_data = data + sizeof(hdr);
+    unsigned out = 0;
+    for (uint16_t i = 0; i < hdr.count && out < TLS_PSK_CACHE_MAX_ENTRIES; i++)
+    {
+        struct tls_psk_cache_entry e;
+        memcpy(&e, entry_data + (size_t)i * sizeof(e), sizeof(e));
+        if (!e.in_use || tls_psk_cache_entry_expired(&e, now))
+        {
+            continue;
+        }
+        g_psk_cache[out++] = e;
+    }
+}
+
+/* Serialize the live cache back to flash in one write. Called once from
+ * tls_cleanup(). Expired entries are dropped rather than persisted. */
+static void tls_psk_cache_save(void)
+{
+    if (!g_psk_cache)
+    {
+        return;
+    }
+
+    struct tls_psk_cache_entry live[TLS_PSK_CACHE_MAX_ENTRIES];
+    uint32_t now = rtc_Time();
+    uint16_t count = 0;
+    for (unsigned i = 0; i < TLS_PSK_CACHE_MAX_ENTRIES; i++)
+    {
+        if (g_psk_cache[i].in_use && !tls_psk_cache_entry_expired(&g_psk_cache[i], now))
+        {
+            live[count++] = g_psk_cache[i];
+        }
+    }
+
+    struct tls_psk_cache_store_header hdr = {
+        .magic = TLS_PSK_CACHE_MAGIC,
+        .version = TLS_PSK_CACHE_VERSION,
+        .count = count};
+    size_t total = sizeof(hdr) + (size_t)count * sizeof(struct tls_psk_cache_entry);
+
+    os_DelAppVar(TLS_PSK_CACHE_APPVAR);
+    if (count == 0)
+    {
+        return; /* nothing live to persist; leave no stale appvar behind */
+    }
+    var_t *var = os_CreateAppVar(TLS_PSK_CACHE_APPVAR, (uint16_t)total);
+    if (!var)
+    {
+        return;
+    }
+    memcpy(var->data, &hdr, sizeof(hdr));
+    memcpy(var->data + sizeof(hdr), live, count * sizeof(struct tls_psk_cache_entry));
+}
+
 bool tls_init(void)
 {
     tls_init_debug(LWIP_DBG_TLS_INIT_START, 0);
@@ -38,6 +303,8 @@ bool tls_init(void)
     tls_ctx.initialized = true;
     tls_rng_start();
     tls_truststore_init();
+    tls_psk_cache_alloc();
+    tls_psk_cache_load();
 
     tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
     return true;
@@ -45,6 +312,8 @@ bool tls_init(void)
 
 void tls_cleanup(void)
 {
+    tls_psk_cache_save();
+    tls_psk_cache_free();
     tls_rng_cleanup();
 
     tls_ctx.initialized = false;

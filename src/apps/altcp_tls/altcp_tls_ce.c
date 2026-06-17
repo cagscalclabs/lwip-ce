@@ -16,7 +16,6 @@
 #include "lwip/dispatch.h"
 #include "lwip/priv/altcp_priv.h"
 #include "lwip/mem.h"
-#include <ti/vars.h>
 #include "altcp_tls_ce.h"
 #include "../../tls/includes/aes.h"
 #include "../../tls/includes/bytes.h"
@@ -62,196 +61,6 @@ static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n);
 #define ALTCP_TLS_CE_RX_RELEASE_HIGH_BYTES 1024u
 #define ALTCP_TLS_CE_RX_RELEASE_SEVERE_BYTES 512u
 #define ALTCP_TLS_CE_RX_RELEASE_CRITICAL_BYTES 128u
-
-#define ALTCP_TLS_CE_PSKI_APPVAR "lwIPPSKI"
-#define ALTCP_TLS_CE_PSKI_MAGIC 0x49534B50u /* "PSKI" */
-#define ALTCP_TLS_CE_PSKI_VERSION 0u
-#define ALTCP_TLS_CE_PSKI_HOSTNAME_MAX 64
-#define ALTCP_TLS_CE_PSKI_MAX_ENTRIES 4u
-
-struct altcp_tls_ce_pski_header
-{
-    uint32_t magic;
-    uint16_t version;
-    uint16_t count;
-};
-
-/* Persisted TLS PSK identity entry. Bound to a hostname so a saved session
- * is only ever offered back to the server it came from. */
-struct altcp_tls_ce_pski_entry
-{
-    uint16_t psk_type;
-    uint8_t psk[32];
-    char hostname[ALTCP_TLS_CE_PSKI_HOSTNAME_MAX]; /* NUL-terminated */
-    struct tls_psk_identity identity;
-};
-
-struct altcp_tls_ce_pski_store
-{
-    struct altcp_tls_ce_pski_header header;
-    struct altcp_tls_ce_pski_entry entries[ALTCP_TLS_CE_PSKI_MAX_ENTRIES];
-};
-
-static struct altcp_tls_ce_pski_store g_pski_store;
-
-/* os_CreateAppVar takes a uint16_t size; the whole multi-entry store must fit.
- * (Currently ~1.5 KB for 4 entries — far under 64 KiB, but guard the bound so a
- * future bump to MAX_ENTRIES / TLS_PSK_IDENTITY_MAX_LEN can't silently truncate
- * the persisted store.) */
-_Static_assert(sizeof(struct altcp_tls_ce_pski_store) <= 0xFFFFu,
-               "PSKI store too large for a single appvar (os_CreateAppVar size is uint16_t)");
-
-static bool altcp_tls_ce_pski_entry_matches(const struct altcp_tls_ce_pski_entry *entry,
-                                            const char *hostname)
-{
-    return entry &&
-           entry->identity.identity_len <= sizeof(entry->identity.identity) &&
-           memchr(entry->hostname, '\0', sizeof(entry->hostname)) &&
-           strcmp(entry->hostname, hostname) == 0;
-}
-
-static bool altcp_tls_ce_save_pski(const struct altcp_tls_session *session,
-                                   const char *hostname)
-{
-    var_t *pski_var;
-    struct altcp_tls_ce_pski_store *store = &g_pski_store;
-    uint16_t count;
-    uint16_t slot;
-    uint16_t i;
-
-    if (!session || !session->valid || !hostname ||
-        session->identity.identity_len > sizeof(session->identity.identity))
-    {
-        return false;
-    }
-    size_t host_len = strlen(hostname);
-    if (host_len == 0 || host_len >= ALTCP_TLS_CE_PSKI_HOSTNAME_MAX)
-    {
-        /* Hostnames that don't fit can't be safely resumed; skip persistence
-         * rather than truncating (truncation could match the wrong host). */
-        return false;
-    }
-
-    memset(store, 0, sizeof(*store));
-    pski_var = os_GetAppVarData(ALTCP_TLS_CE_PSKI_APPVAR, NULL);
-    if (pski_var && *((uint16_t *)pski_var) == sizeof(*store))
-    {
-        memcpy(store, (const uint8_t *)pski_var + 2, sizeof(*store));
-    }
-
-    if (store->header.magic != ALTCP_TLS_CE_PSKI_MAGIC ||
-        store->header.version != ALTCP_TLS_CE_PSKI_VERSION ||
-        store->header.count > ALTCP_TLS_CE_PSKI_MAX_ENTRIES)
-    {
-        memset(store, 0, sizeof(*store));
-        store->header.magic = ALTCP_TLS_CE_PSKI_MAGIC;
-        store->header.version = ALTCP_TLS_CE_PSKI_VERSION;
-    }
-
-    count = store->header.count;
-    slot = count;
-    for (i = 0; i < count; i++)
-    {
-        if (altcp_tls_ce_pski_entry_matches(&store->entries[i], hostname))
-        {
-            slot = i;
-            break;
-        }
-    }
-    if (slot == count)
-    {
-        if (count >= ALTCP_TLS_CE_PSKI_MAX_ENTRIES)
-        {
-            slot = 0;
-        }
-        else
-        {
-            store->header.count = count + 1;
-        }
-    }
-
-    memset(&store->entries[slot], 0, sizeof(store->entries[slot]));
-    store->entries[slot].psk_type = session->psk_type;
-    memcpy(store->entries[slot].psk, session->psk, sizeof(store->entries[slot].psk));
-    memcpy(store->entries[slot].hostname, hostname, host_len + 1); /* +1 for NUL */
-    memcpy(&store->entries[slot].identity, &session->identity, sizeof(store->entries[slot].identity));
-
-    /* Persist via TI-OS ROM appvar calls (os_*), NOT fileioc (ti_Open/Write).
-     * fileioc is itself a libload library; its symbols are not resolved inside
-     * this dynamically-loaded lwIP library, so calling ti_Open here jumps to an
-     * unresolved trampoline and crashes. os_CreateAppVar / os_GetAppVarData are
-     * TI-OS ROM calls (fixed addresses) and need no library — the same family
-     * the load path already uses. os_CreateAppVar makes a var_t whose 2-byte
-     * size header equals sizeof(*store) and whose data[] is the payload, which
-     * is exactly the layout altcp_tls_ce_load_pski reads back. */
-    os_DelAppVar(ALTCP_TLS_CE_PSKI_APPVAR); /* replace any existing copy */
-    pski_var = os_CreateAppVar(ALTCP_TLS_CE_PSKI_APPVAR, (uint16_t)sizeof(*store));
-    if (!pski_var)
-    {
-        return false;
-    }
-    memcpy(pski_var->data, store, sizeof(*store));
-    return true;
-}
-
-/* Load a saved PSK identity only if it was issued for `hostname`.
- * Read the appvar in place instead of copying the whole PSKI store onto
- * the eZ80 stack. */
-static bool altcp_tls_ce_load_pski(struct altcp_tls_session *session,
-                                   const char *hostname)
-{
-    var_t *pski_var;
-    const struct altcp_tls_ce_pski_store *store;
-    const struct altcp_tls_ce_pski_entry *entry;
-    uint16_t pski_size;
-    uint16_t i;
-
-    if (!session || !hostname)
-    {
-        return false;
-    }
-
-    pski_var = os_GetAppVarData(ALTCP_TLS_CE_PSKI_APPVAR, NULL);
-    if (!pski_var)
-    {
-        return false;
-    }
-    pski_size = *((uint16_t *)pski_var);
-    if (pski_size != sizeof(*store))
-    {
-        return false;
-    }
-    store = (const struct altcp_tls_ce_pski_store *)((const uint8_t *)pski_var + 2);
-
-    if (store->header.magic != ALTCP_TLS_CE_PSKI_MAGIC ||
-        store->header.version != ALTCP_TLS_CE_PSKI_VERSION ||
-        store->header.count > ALTCP_TLS_CE_PSKI_MAX_ENTRIES)
-    {
-        return false;
-    }
-
-    for (i = 0; i < store->header.count; i++)
-    {
-        entry = &store->entries[i];
-        if (!altcp_tls_ce_pski_entry_matches(entry, hostname))
-        {
-            continue;
-        }
-
-        memset(session, 0, sizeof(*session));
-        session->valid = 1;
-        session->psk_type = (uint8_t)entry->psk_type;
-        if (session->psk_type != TLS_PSK_TYPE_EXTERNAL)
-        {
-            session->psk_type = TLS_PSK_TYPE_RESUMPTION;
-        }
-        memcpy(session->psk, entry->psk, sizeof(session->psk));
-        memcpy(&session->identity, &entry->identity, sizeof(session->identity));
-        return true;
-    }
-
-    return false;
-}
 
 static void tls_state_add(altcp_tls_ce_state_t *state)
 {
@@ -957,7 +766,9 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     const char *hostname)
 {
     struct altcp_tls_ce_config *conf;
-    struct altcp_tls_session resumed;
+    uint8_t resumed_psk_type;
+    uint8_t resumed_psk[32];
+    struct tls_psk_identity resumed_identity;
 
     tls_dbg_status("config: ecdhe enter");
     conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
@@ -972,18 +783,17 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     conf->psk_mode = 0;
     conf->hostname = hostname;
 
-    /* Opportunistically resume from persisted PSK identity state, but
-     * only if the saved blob's hostname matches the one we're about to
-     * connect to. Cross-host PSK reuse is a protocol violation; a
-     * mismatch silently falls back to a fresh ECDHE handshake. */
-    memset(&resumed, 0, sizeof(resumed));
+    /* Opportunistically resume from the in-memory PSK cache, but only if a
+     * live (non-expired) entry exists for this exact hostname. Cross-host
+     * PSK reuse is a protocol violation; a miss silently falls back to a
+     * fresh ECDHE handshake. */
     tls_dbg_status("config: pski lookup");
-    if (hostname && altcp_tls_ce_load_pski(&resumed, hostname) && resumed.valid)
+    if (hostname && tls_psk_cache_get(hostname, &resumed_psk_type, resumed_psk, &resumed_identity))
     {
         conf->psk_mode = 1;
-        conf->psk_type = resumed.psk_type;
-        memcpy(conf->psk, resumed.psk, sizeof(conf->psk));
-        memcpy(&conf->psk_identity, &resumed.identity, sizeof(conf->psk_identity));
+        conf->psk_type = resumed_psk_type;
+        memcpy(conf->psk, resumed_psk, sizeof(conf->psk));
+        memcpy(&conf->psk_identity, &resumed_identity, sizeof(conf->psk_identity));
         tls_dbg_status("config: resume found");
     }
 
@@ -1481,7 +1291,14 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     {
                         if (rec_len >= 2 && tmp[5] == TLS_ALERT_LEVEL_FATAL)
                         {
+                            uint8_t alert_desc = (rec_len >= 3) ? tmp[6] : 0xFFu;
+                            lwip_debug_emit_sev(LWIP_DBG_MOD_TLS,
+                                                LWIP_DBG_TLS_FATAL_ALERT,
+                                                (int)LWIP_DBG_TLS_ERR_FATAL_ALERT_BASE + alert_desc,
+                                                __LINE__, LWIP_DBG_DEPTH_MILESTONE,
+                                                LWIP_DBG_SEV_ERROR);
                             state->tls_ctx.state = TLS_STATE_ERROR;
+                            plaintext_ok = false;
                         }
                     }
                     /* CCS (0x14) is silently ignored for middlebox compatibility. */
@@ -1564,22 +1381,21 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     state->tls_ctx.state = TLS_STATE_HANDSHAKE_COMPLETE;
                     lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_HANDSHAKE_END, 0, 0);
 
-                    /* Persist existing resumption PSK identity payload for future connects.
-                     * Fresh tickets are handled below by NewSessionTicket. */
+                    /* Cache an existing resumption PSK identity in memory for future
+                     * connects. Fresh tickets are handled below by NewSessionTicket. */
                     if (state->tls_ctx.psk_mode &&
                         state->tls_ctx.psk_type == TLS_PSK_TYPE_RESUMPTION &&
                         state->tls_ctx.psk_identity.identity_len > 0 &&
-                        state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity))
+                        state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity) &&
+                        state->tls_ctx.ticket_lifetime > 0)
                     {
-                        struct altcp_tls_session session_blob;
                         struct altcp_tls_ce_config *cfg = (struct altcp_tls_ce_config *)state->conf;
-                        memset(&session_blob, 0, sizeof(session_blob));
-                        session_blob.valid = 1;
-                        session_blob.psk_type = state->tls_ctx.psk_type;
-                        memcpy(session_blob.psk, state->tls_ctx.psk, sizeof(session_blob.psk));
-                        memcpy(&session_blob.identity, &state->tls_ctx.psk_identity, sizeof(session_blob.identity));
-                        (void)altcp_tls_ce_save_pski(&session_blob,
-                                                     cfg ? cfg->hostname : NULL);
+                        if (cfg && cfg->hostname)
+                        {
+                            tls_psk_cache_put(cfg->hostname, state->tls_ctx.psk_type,
+                                              state->tls_ctx.psk, &state->tls_ctx.psk_identity,
+                                              state->tls_ctx.ticket_lifetime);
+                        }
                     }
 
                     /* Notify upper layer */
@@ -1768,22 +1584,22 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     altcp_abort(conn);
                     return ERR_ABRT;
                 }
-                /* Side-effect: NewSessionTicket may have updated the PSK store;
-                 * persist any fresh resumption identity that landed in ctx. */
+                /* Side-effect: NewSessionTicket may have updated ctx's PSK fields;
+                 * cache the fresh resumption identity in memory. No disk I/O here —
+                 * the in-memory cache is flushed to flash once at tls_cleanup(). */
                 if (state->tls_ctx.psk_mode &&
                     state->tls_ctx.psk_type == TLS_PSK_TYPE_RESUMPTION &&
                     state->tls_ctx.psk_identity.identity_len > 0 &&
-                    state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity))
+                    state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity) &&
+                    state->tls_ctx.ticket_lifetime > 0)
                 {
-                    struct altcp_tls_session session_blob;
                     struct altcp_tls_ce_config *cfg = (struct altcp_tls_ce_config *)state->conf;
-                    memset(&session_blob, 0, sizeof(session_blob));
-                    session_blob.valid = 1;
-                    session_blob.psk_type = TLS_PSK_TYPE_RESUMPTION;
-                    memcpy(session_blob.psk, state->tls_ctx.psk, sizeof(session_blob.psk));
-                    memcpy(&session_blob.identity, &state->tls_ctx.psk_identity, sizeof(session_blob.identity));
-                    (void)altcp_tls_ce_save_pski(&session_blob,
-                                                 cfg ? cfg->hostname : NULL);
+                    if (cfg && cfg->hostname)
+                    {
+                        tls_psk_cache_put(cfg->hostname, TLS_PSK_TYPE_RESUMPTION,
+                                          state->tls_ctx.psk, &state->tls_ctx.psk_identity,
+                                          state->tls_ctx.ticket_lifetime);
+                    }
                 }
             }
             pbuf_free(dec_pbuf);
@@ -1792,6 +1608,12 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         {
             if (dec_len >= 2 && pbuf_get_at(dec_pbuf, 0) == TLS_ALERT_LEVEL_FATAL)
             {
+                uint8_t alert_desc = pbuf_get_at(dec_pbuf, 1);
+                lwip_debug_emit_sev(LWIP_DBG_MOD_TLS,
+                                    LWIP_DBG_TLS_FATAL_ALERT,
+                                    (int)LWIP_DBG_TLS_ERR_FATAL_ALERT_BASE + alert_desc,
+                                    __LINE__, LWIP_DBG_DEPTH_MILESTONE,
+                                    LWIP_DBG_SEV_ERROR);
                 pbuf_free(dec_pbuf);
                 altcp_abort(conn);
                 return ERR_ABRT;
@@ -2553,7 +2375,11 @@ err_t altcp_tls_get_session(struct altcp_pcb *conn, struct altcp_tls_session *de
             dest->psk_type = state->tls_ctx.psk_type;
             memcpy(dest->psk, state->tls_ctx.psk, sizeof(dest->psk));
             memcpy(&dest->identity, &state->tls_ctx.psk_identity, sizeof(dest->identity));
-            (void)altcp_tls_ce_save_pski(dest, cfg ? cfg->hostname : NULL);
+            if (cfg && cfg->hostname && state->tls_ctx.ticket_lifetime > 0)
+            {
+                tls_psk_cache_put(cfg->hostname, dest->psk_type, dest->psk,
+                                  &dest->identity, state->tls_ctx.ticket_lifetime);
+            }
             return ERR_OK;
         }
     }
@@ -2583,6 +2409,7 @@ err_t altcp_tls_set_session(struct altcp_pcb *conn, struct altcp_tls_session *fr
     }
 
     const char *hostname = NULL;
+    uint32_t ticket_lifetime = 0;
     if (conn && conn->state)
     {
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
@@ -2599,14 +2426,16 @@ err_t altcp_tls_set_session(struct altcp_pcb *conn, struct altcp_tls_session *fr
         memcpy(&state->tls_ctx.psk_identity, &from->identity, sizeof(state->tls_ctx.psk_identity));
         state->tls_ctx.psk_mode = true;
         state->tls_ctx.psk_type = psk_type;
+        ticket_lifetime = state->tls_ctx.ticket_lifetime;
     }
 
     from->psk_type = psk_type;
-    /* Persist only if we have a hostname to bind the session to; without
-     * one we can't safely cache (cross-host PSK reuse is a protocol bug). */
-    if (hostname)
+    /* Cache only if we have a hostname to bind the session to (without one
+     * we can't safely reuse it — cross-host PSK reuse is a protocol bug) and
+     * a known ticket lifetime to judge expiry by. */
+    if (hostname && ticket_lifetime > 0)
     {
-        (void)altcp_tls_ce_save_pski(from, hostname);
+        tls_psk_cache_put(hostname, psk_type, from->psk, &from->identity, ticket_lifetime);
     }
     return ERR_OK;
 }

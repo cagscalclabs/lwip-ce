@@ -44,11 +44,14 @@ static uint8_t lwip_example_line_h(void)
     return h ? h : 8;
 }
 
+static void lwip_example_stats_invalidate(void);
+
 /* Clear the screen and reset the cursor to the top. */
 static void lwip_example_clear(void)
 {
     os_ClrLCDFull();
     lwip_example_row = LWIP_EXAMPLE_TOP;
+    lwip_example_stats_invalidate();
 }
 
 /* Draw one small-font line at the current row and advance. Wraps to the top
@@ -95,11 +98,45 @@ static void lwip_example_format_k(char *buf, size_t buf_len, size_t bytes)
     snprintf(buf, buf_len, "%u.%uK", whole, tenth);
 }
 
-static void lwip_example_stats_line(uint8_t y, const char *text)
+static void lwip_example_stats_erase_row(uint8_t y)
+{
+    /* Stats text is right-aligned to LWIP_EXAMPLE_LCD_W, so the erase must
+     * span the full row from LWIP_EXAMPLE_STATS_X to the screen edge.
+     * Measure actual blank width and pad with extra copies if needed --
+     * a fixed-count space string can fall short depending on font metrics. */
+    static const char blank[] = "                                        ";
+    int needed = LWIP_EXAMPLE_LCD_W - LWIP_EXAMPLE_STATS_X;
+    int got = (int)os_FontGetWidth(blank);
+
+    os_FontDrawText(blank, LWIP_EXAMPLE_STATS_X, y);
+    if (got > 0 && got < needed)
+    {
+        os_FontDrawText(blank, (uint16_t)(LWIP_EXAMPLE_STATS_X + got), y);
+    }
+}
+
+static char lwip_example_stats_last[LWIP_EXAMPLE_STATS_LINES][32];
+
+/* Forces the next lwip_example_draw_mem_stats() call to repaint every row,
+ * even if values are unchanged. Needed whenever something else may have
+ * erased the stats area underneath the cache (e.g. a full screen clear). */
+static void lwip_example_stats_invalidate(void)
+{
+    memset(lwip_example_stats_last, 0, sizeof(lwip_example_stats_last));
+}
+
+static void lwip_example_stats_line(uint8_t row, uint8_t y, const char *text)
 {
     int width;
+
+    if (strcmp(lwip_example_stats_last[row], text) == 0)
+    {
+        return;
+    }
+    snprintf(lwip_example_stats_last[row], sizeof(lwip_example_stats_last[row]), "%s", text);
+
     os_FontSelect(os_SmallFont);
-    os_FontDrawText("                      ", LWIP_EXAMPLE_STATS_X, y);
+    lwip_example_stats_erase_row(y);
     width = (int)os_FontGetWidth(text);
     os_FontDrawText(text, LWIP_EXAMPLE_LCD_W - 2 - width, y);
 }
@@ -130,14 +167,14 @@ static void lwip_example_draw_mem_stats(void)
     lwip_example_format_k(total, sizeof(total), stats.pbuf_pool_size);
     snprintf(line, sizeof(line), "P:%s/%s %u%%", used, total,
              lwip_example_pct(stats.pbuf_pool_used, stats.pbuf_pool_size));
-    lwip_example_stats_line(y, line);
+    lwip_example_stats_line(0, y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.tls_used);
     lwip_example_format_k(total, sizeof(total), stats.tls_limit);
     snprintf(line, sizeof(line), "T:%s/%s %u%%", used, total,
              lwip_example_pct(stats.tls_used, stats.tls_limit));
-    lwip_example_stats_line(y, line);
+    lwip_example_stats_line(1, y, line);
 
     y = (uint8_t)(y + h);
     h_limit = stats.heap_limit;
@@ -145,52 +182,54 @@ static void lwip_example_draw_mem_stats(void)
     lwip_example_format_k(total, sizeof(total), h_limit);
     snprintf(line, sizeof(line), "H:%s/%s %u%%", used, total,
              lwip_example_pct(stats.heap_used, h_limit));
-    lwip_example_stats_line(y, line);
+    lwip_example_stats_line(2, y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.rx_ring_used);
     lwip_example_format_k(total, sizeof(total), stats.rx_ring_size);
     snprintf(line, sizeof(line), "R:%s/%s %u%%", used, total,
              lwip_example_pct(stats.rx_ring_used, stats.rx_ring_size));
-    lwip_example_stats_line(y, line);
+    lwip_example_stats_line(3, y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.socket_ring_used);
     lwip_example_format_k(total, sizeof(total), stats.socket_ring_size);
     snprintf(line, sizeof(line), "C:%s/%s %u%%", used, total,
              lwip_example_pct(stats.socket_ring_used, stats.socket_ring_size));
-    lwip_example_stats_line(y, line);
+    lwip_example_stats_line(4, y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.user_reserved);
     snprintf(line, sizeof(line), "U:%s", used);
-    lwip_example_stats_line(y, line);
+    lwip_example_stats_line(5, y, line);
 }
 
-static void lwip_example_mem_stats_tick(void)
+static void lwip_example_stats_toggle(void)
 {
-    if (os_GetCSC() == sk_Stat)
+    lwip_example_stats_visible = !lwip_example_stats_visible;
+    if (!lwip_example_stats_visible)
     {
-        lwip_example_stats_visible = !lwip_example_stats_visible;
-        if (!lwip_example_stats_visible)
+        /* Erase the stats area by blanking those rows */
+        uint8_t h = lwip_example_line_h();
+        uint8_t y = (uint8_t)(LWIP_EXAMPLE_BOTTOM - (h * LWIP_EXAMPLE_STATS_LINES));
+        uint8_t i;
+        os_FontSelect(os_SmallFont);
+        for (i = 0; i < LWIP_EXAMPLE_STATS_LINES; i++)
         {
-            /* Erase the stats area by blanking those rows */
-            uint8_t h = lwip_example_line_h();
-            uint8_t y = (uint8_t)(LWIP_EXAMPLE_BOTTOM - (h * LWIP_EXAMPLE_STATS_LINES));
-            uint8_t i;
-            os_FontSelect(os_SmallFont);
-            for (i = 0; i < LWIP_EXAMPLE_STATS_LINES; i++)
-            {
-                os_FontDrawText("                                        ", LWIP_EXAMPLE_STATS_X, y);
-                y = (uint8_t)(y + h);
-            }
+            lwip_example_stats_erase_row(y);
+            y = (uint8_t)(y + h);
         }
-        else
-        {
-            lwip_example_draw_mem_stats();
-        }
-        return;
+        lwip_example_stats_invalidate();
     }
+    else
+    {
+        lwip_example_stats_invalidate();
+        lwip_example_draw_mem_stats();
+    }
+}
+
+static void lwip_example_stats_redraw_tick(void)
+{
     if (!lwip_example_stats_visible)
         return;
     if (++lwip_example_stats_loop_count >= LWIP_EXAMPLE_STATS_LOOP_INTERVAL)
@@ -198,6 +237,16 @@ static void lwip_example_mem_stats_tick(void)
         lwip_example_stats_loop_count = 0;
         lwip_example_draw_mem_stats();
     }
+}
+
+static void lwip_example_mem_stats_tick(void)
+{
+    if (os_GetCSC() == sk_Stat)
+    {
+        lwip_example_stats_toggle();
+        return;
+    }
+    lwip_example_stats_redraw_tick();
 }
 
 static void lwip_example_wait_key(void)
@@ -296,10 +345,10 @@ struct lwip_example_chat
     char lines[LWIP_EXAMPLE_CHAT_LINES][LWIP_EXAMPLE_CHAT_COLS + 1];
     char input[LWIP_EXAMPLE_CHAT_INPUT];
     uint8_t line_count;
-    uint8_t last_key;
     uint8_t input_len;
     uint8_t input_mode;
     uint8_t rendered_line_count; /* line_count at last full render, for detecting shifts */
+    uint8_t rendered_start;      /* first visible transcript line index at last render */
 };
 
 static void lwip_example_chat_append_line(struct lwip_example_chat *chat,
@@ -519,7 +568,8 @@ static uint8_t lwip_example_chat_input_y(const struct lwip_example_chat *chat,
     return y;
 }
 
-static void lwip_example_chat_render(struct lwip_example_chat *chat)
+/* Full redraw: clears the screen and repaints title, transcript, input. */
+static void lwip_example_chat_render_full(struct lwip_example_chat *chat)
 {
     uint8_t h;
     uint8_t y;
@@ -529,9 +579,6 @@ static void lwip_example_chat_render(struct lwip_example_chat *chat)
     uint8_t start = 0;
     uint8_t i;
     char prompt[4];
-
-    if (!chat)
-        return;
 
     lwip_example_clear();
     os_FontSelect(os_SmallFont);
@@ -566,6 +613,79 @@ static void lwip_example_chat_render(struct lwip_example_chat *chat)
     prompt[2] = '\0';
     (void)lwip_example_chat_draw_wrapped(y, prompt, chat->input, chat->input_len);
     chat->rendered_line_count = chat->line_count;
+    chat->rendered_start = start;
+    lwip_example_draw_mem_stats();
+}
+
+/* Render the transcript + input. If new lines were appended without the
+ * visible window's top line changing (no scroll needed), only the new
+ * lines are drawn at the next free row instead of clearing the screen. */
+static void lwip_example_chat_render(struct lwip_example_chat *chat)
+{
+    uint8_t h;
+    uint8_t y;
+    uint8_t rows_total;
+    uint8_t input_rows;
+    uint8_t transcript_rows;
+    uint8_t start = 0;
+    uint8_t i;
+    char prompt[4];
+
+    if (!chat)
+        return;
+
+    h = lwip_example_line_h();
+    y = (uint8_t)(LWIP_EXAMPLE_TOP + h);
+    rows_total = (uint8_t)((LWIP_EXAMPLE_BOTTOM > y)
+                               ? ((LWIP_EXAMPLE_BOTTOM - y) / h)
+                               : 0);
+    input_rows = lwip_example_chat_input_rows(chat);
+    transcript_rows = rows_total > input_rows ? rows_total - input_rows : 0;
+    if (chat->line_count > transcript_rows)
+        start = (uint8_t)(chat->line_count - transcript_rows);
+
+    /* Need a full redraw if this isn't the first render, the window's top
+     * line shifted (scroll), or the transcript shrank (shouldn't happen,
+     * but be safe). Otherwise just paint the newly appended lines. */
+    if (chat->rendered_line_count == 0 && chat->line_count == 0)
+    {
+        lwip_example_chat_render_full(chat);
+        return;
+    }
+    if (start != chat->rendered_start || chat->line_count < chat->rendered_line_count)
+    {
+        lwip_example_chat_render_full(chat);
+        return;
+    }
+
+    os_FontSelect(os_SmallFont);
+    for (i = chat->rendered_line_count; i < chat->line_count; i++)
+    {
+        y = (uint8_t)(LWIP_EXAMPLE_TOP + h + h * (i - start));
+        if (y + h > LWIP_EXAMPLE_BOTTOM)
+        {
+            /* Didn't fit -- our incremental window math is out of sync
+             * with what's actually on screen. Fall back to a full redraw
+             * instead of marking unrendered lines as rendered. */
+            lwip_example_chat_render_full(chat);
+            return;
+        }
+        os_FontDrawText(chat->lines[i], LWIP_EXAMPLE_LEFT, y);
+    }
+    y = (uint8_t)(LWIP_EXAMPLE_TOP + h + h * (chat->line_count - start));
+
+    switch ((lwip_example_chat_input_mode_t)chat->input_mode)
+    {
+    case LWIP_EXAMPLE_CHAT_MODE_UPPER: prompt[0] = 'A'; break;
+    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC: prompt[0] = '0'; break;
+    case LWIP_EXAMPLE_CHAT_MODE_LOWER:
+    default: prompt[0] = 'a'; break;
+    }
+    prompt[1] = ' ';
+    prompt[2] = '\0';
+    (void)lwip_example_chat_draw_wrapped(y, prompt, chat->input, chat->input_len);
+    chat->rendered_line_count = chat->line_count;
+    chat->rendered_start = start;
     lwip_example_draw_mem_stats();
 }
 
@@ -624,166 +744,6 @@ static void lwip_example_chat_begin(struct lwip_example_chat *chat,
     memset(chat, 0, sizeof(*chat));
     snprintf(chat->title, sizeof(chat->title), "%s", title ? title : "== Chat ==");
     lwip_example_chat_render(chat);
-}
-
-static char lwip_example_chat_key_alpha(uint8_t key)
-{
-    switch (key)
-    {
-    case sk_Math: return 'A';
-    case sk_Apps: return 'B';
-    case sk_Prgm: return 'C';
-    case sk_Recip: return 'D';
-    case sk_Sin: return 'E';
-    case sk_Cos: return 'F';
-    case sk_Tan: return 'G';
-    case sk_Power: return 'H';
-    case sk_Square: return 'I';
-    case sk_Comma: return 'J';
-    case sk_LParen: return 'K';
-    case sk_RParen: return 'L';
-    case sk_Div: return 'M';
-    case sk_Log: return 'N';
-    case sk_7: return 'O';
-    case sk_8: return 'P';
-    case sk_9: return 'Q';
-    case sk_Mul: return 'R';
-    case sk_Ln: return 'S';
-    case sk_4: return 'T';
-    case sk_5: return 'U';
-    case sk_6: return 'V';
-    case sk_Sub: return 'W';
-    case sk_Store: return 'X';
-    case sk_1: return 'Y';
-    case sk_2: return 'Z';
-    case sk_0: return ' ';
-    case sk_DecPnt: return '.';
-    default: return 0;
-    }
-}
-
-static char lwip_example_chat_key_lower(uint8_t key)
-{
-    char c = lwip_example_chat_key_alpha(key);
-    if (c >= 'A' && c <= 'Z')
-    {
-        c = (char)(c + ('a' - 'A'));
-    }
-    return c;
-}
-
-static char lwip_example_chat_key_normal(uint8_t key)
-{
-    switch (key)
-    {
-    case sk_0: return '0';
-    case sk_1: return '1';
-    case sk_2: return '2';
-    case sk_3: return '3';
-    case sk_4: return '4';
-    case sk_5: return '5';
-    case sk_6: return '6';
-    case sk_7: return '7';
-    case sk_8: return '8';
-    case sk_9: return '9';
-    case sk_DecPnt: return '.';
-    case sk_Sub: return '-';
-    case sk_Add: return '+';
-    case sk_Div: return '/';
-    case sk_Mul: return '*';
-    case sk_Comma: return ',';
-    case sk_LParen: return '(';
-    case sk_RParen: return ')';
-    default: return 0;
-    }
-}
-
-static bool lwip_example_chat_poll_input(struct lwip_example_chat *chat,
-                                         char *out,
-                                         size_t out_len,
-                                         bool *cancel)
-{
-    uint8_t key;
-    char c;
-
-    if (cancel)
-    {
-        *cancel = false;
-    }
-    if (!chat || !out || out_len == 0)
-    {
-        return false;
-    }
-
-    key = os_GetCSC();
-    if (key == 0)
-    {
-        chat->last_key = 0;
-        return false;
-    }
-    if (key == chat->last_key)
-    {
-        return false;
-    }
-    chat->last_key = key;
-
-    if (key == sk_Alpha)
-    {
-        chat->input_mode = (uint8_t)((chat->input_mode + 1u) % 3u);
-        lwip_example_chat_render_input(chat);
-        return false;
-    }
-    if (key == sk_Del || key == sk_Left ||
-        (key == sk_Clear && chat->input_len > 0))
-    {
-        if (chat->input_len > 0)
-        {
-            chat->input[--chat->input_len] = '\0';
-            lwip_example_chat_render_input(chat);
-        }
-        return false;
-    }
-    if (key == sk_Clear)
-    {
-        if (cancel)
-        {
-            *cancel = true;
-        }
-        return false;
-    }
-    if (key == sk_Enter)
-    {
-        if (chat->input_len == 0)
-        {
-            return false;
-        }
-        snprintf(out, out_len, "%s", chat->input);
-        chat->input[0] = '\0';
-        chat->input_len = 0;
-        lwip_example_chat_render_input(chat);
-        return true;
-    }
-
-    switch ((lwip_example_chat_input_mode_t)chat->input_mode)
-    {
-    case LWIP_EXAMPLE_CHAT_MODE_UPPER:
-        c = lwip_example_chat_key_alpha(key);
-        break;
-    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC:
-        c = lwip_example_chat_key_normal(key);
-        break;
-    case LWIP_EXAMPLE_CHAT_MODE_LOWER:
-    default:
-        c = lwip_example_chat_key_lower(key);
-        break;
-    }
-    if (c && chat->input_len + 1 < sizeof(chat->input))
-    {
-        chat->input[chat->input_len++] = c;
-        chat->input[chat->input_len] = '\0';
-        lwip_example_chat_render_input(chat);
-    }
-    return false;
 }
 
 static void lwip_example_line_ipv4(const char *prefix, const uint8_t ip[4])

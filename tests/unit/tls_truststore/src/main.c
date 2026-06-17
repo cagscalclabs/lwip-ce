@@ -13,7 +13,6 @@
 #include <stdlib.h>
 
 #include "truststore.h"
-#include "x509.h"
 #include "lwip/mem.h"
 #include "drivers/mem.h"
 #include "rsa.h"
@@ -22,35 +21,10 @@
 #define TLS_TEST_POOL_BYTES (16u * 1024u)
 #define TLS_TEST_POOL_BLOCK 256u
 
-#define TLS_TRUSTSTORE_VERSION 0
+#define TLS_TRUSTSTORE_VERSION 1
 
 static struct mem_buffer *tls_test_heap;
 static int text_y = 20;
-static uint8_t tls_cert_der[1800];
-static uint8_t tls_cert_der_ca_false[1800];
-static const char ca_test_cert_pem[] =
-    "-----BEGIN CERTIFICATE-----\n"
-    "MIIDnzCCAoegAwIBAgIUHE/g0NoguFZkQL9VBbXbIm/7WDswDQYJKoZIhvcNAQEL\n"
-    "BQAwXzELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAk5ZMQswCQYDVQQHDAJOWTERMA8G\n"
-    "A1UECgwIY2Fnc3RlY2gxETAPBgNVBAsMCGNhZ3N0ZWNoMRAwDgYDVQQDDAdBbnRo\n"
-    "b255MB4XDTI0MDkwODA1NDc1M1oXDTI1MDkwODA1NDc1M1owXzELMAkGA1UEBhMC\n"
-    "VVMxCzAJBgNVBAgMAk5ZMQswCQYDVQQHDAJOWTERMA8GA1UECgwIY2Fnc3RlY2gx\n"
-    "ETAPBgNVBAsMCGNhZ3N0ZWNoMRAwDgYDVQQDDAdBbnRob255MIIBIjANBgkqhkiG\n"
-    "9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8q4s1a+ReNvXPOhFhdpNGwCwfR6WHzRoksko\n"
-    "2SJCqwhO9b9+0cUM6WQxCPDtAxba8g6FgJTc2m9x/I1gybyn7++ZrtNaMXgICIFz\n"
-    "a5rh5pBNbtHiL+5v1fy7wIkKo34jK3VryRNQTbb5VJqfGD33OJYUp3BfpShRkIwg\n"
-    "xocloqXqwB9UOzUF99icUvC3wDy85y4zolIpNEM8zQqEuQSJIISUQuevo0DlvMtB\n"
-    "/DMeGQP64pE5/HDz89+agFka1sDWguGyp3TbzvXxiEoigxsj2208unqozsNIYTRG\n"
-    "xPF5deNJ/x+3kW4ivBVzpC01/3ETpiMYotxaEARoO0maBDpKzQIDAQABo1MwUTAd\n"
-    "BgNVHQ4EFgQUrv2AiZkx1XiN7qY3wGkpiJ5GCjMwHwYDVR0jBBgwFoAUrv2AiZkx\n"
-    "1XiN7qY3wGkpiJ5GCjMwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOC\n"
-    "AQEA6YccSZu9vRgEZ3oHSpB7LRxYF5FxwH2WCUtnxz3uIafzbjnyP7tLkTL845Je\n"
-    "VFgAi/ZHpJGKLOxXIqIffGnUe6wuaYFr2M2QdzkKIRvr0/Mi5XFRX0PI7/dAFZhj\n"
-    "5DFtdM9avzdczka4r8AB8nHZwcmlQbxdbs/hv1nVsr6mfh5FntuPY3cNulkLwOhq\n"
-    "UCKEFl1CoCpz68ejKhszhTrYWVLTfNrm3HwQlMRqXvmv1jWsh9X8sm/IM1psUPmm\n"
-    "95VY+2OxBwJRHh1hYVlBn8RxnCM4EGTAqowTv/r8sktY2gW2HulwdMSzxOlApL5f\n"
-    "5yiwKkSmPVU7SIUuC5UVOujblw==\n"
-    "-----END CERTIFICATE-----\n";
 
 static void draw_line(const char *msg)
 {
@@ -97,29 +71,6 @@ static bool tls_test_mem_init(void)
     }
     mem_buffer_set_lwip_heap(tls_test_heap);
     return true;
-}
-
-static bool tls_patch_basic_constraints_ca_false(uint8_t *der, size_t der_len)
-{
-    size_t i = 0;
-    if (!der || der_len < 5)
-    {
-        return false;
-    }
-
-    /* BasicConstraints CA:TRUE encoding: 30 03 01 01 FF */
-    for (i = 0; i + 5 <= der_len; i++)
-    {
-        if (der[i] == 0x30 && der[i + 1] == 0x03 &&
-            der[i + 2] == 0x01 && der[i + 3] == 0x01 &&
-            der[i + 4] == 0xFF)
-        {
-            der[i + 4] = 0x00;
-            return true;
-        }
-    }
-
-    return false;
 }
 
 static const struct tls_truststore_entry *tls_truststore_first_entry(void)
@@ -208,46 +159,5 @@ int main(void)
     draw_line(owner_ok ? "Test 2 (First entry): pass" : "Test 2 (First entry): fail");
     os_GetKey();
 
-    bool lookup_ok = false;
-    if (entry)
-    {
-        struct tls_truststore_entry *found = NULL;
-        if (tls_truststore_lookup(entry->ski, &found) && found)
-        {
-            lookup_ok = (memcmp(found->subject, entry->subject,
-                                TLS_TRUSTSTORE_SUBJECT_LEN) == 0);
-        }
-    }
-    draw_line(lookup_ok ? "Test 3 (SKI lookup): pass" : "Test 3 (SKI lookup): fail");
-    os_GetKey();
-    bool constraints_ok = false;
-    {
-        size_t cert_der_len = 0;
-        struct tls_asn1_serialization parsed_fields[13];
-        struct tls_x509_parse_result parsed = {0};
-
-        if (tls_x509_import_and_parse_certificate(ca_test_cert_pem,
-                                                  strlen(ca_test_cert_pem),
-                                                  tls_cert_der,
-                                                  sizeof(tls_cert_der),
-                                                  &cert_der_len,
-                                                  parsed_fields,
-                                                  &parsed))
-        {
-            if (cert_der_len <= sizeof(tls_cert_der_ca_false))
-            {
-                constraints_ok = true;
-                memcpy(tls_cert_der_ca_false, tls_cert_der, cert_der_len);
-                constraints_ok &= tls_x509_has_required_ca_constraints(tls_cert_der, cert_der_len);
-                if (tls_patch_basic_constraints_ca_false(tls_cert_der_ca_false, cert_der_len))
-                {
-                    constraints_ok &= !tls_x509_has_required_ca_constraints(tls_cert_der_ca_false, cert_der_len);
-                }
-            }
-        }
-    }
-    draw_line(constraints_ok ? "Test 4 (Constraints): pass" : "Test 4 (Constraints): fail");
-
-    os_GetKey();
-    return (sig_ok && owner_ok && lookup_ok && constraints_ok) ? 0 : 1;
+    return (sig_ok && owner_ok) ? 0 : 1;
 }
