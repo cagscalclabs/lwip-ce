@@ -100,6 +100,12 @@ dylib:
 # The total reserve = ___data_len + ___bss_len. Consumers link with:
 #   --defsym BSSHEAP_LOW=<base>
 #   --defsym BSSHEAP_HIGH=<base + reserve + heap_shared_with_lwip>
+.PHONY: release
+release:
+	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
+	rm -f lwip.zip
+	zip -r lwip.zip build/
+
 .PHONY: sizes
 sizes:
 	@if [ ! -f bin/$(NAME).map ]; then echo "Run 'make' first to produce bin/$(NAME).map"; exit 1; fi

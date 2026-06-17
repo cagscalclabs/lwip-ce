@@ -39,7 +39,6 @@ jobs:
       - name: Checkout TLS branch
         uses: actions/checkout@v4
         with:
-          ref: 'tls'
           submodules: true
 
       - name: Install dependencies

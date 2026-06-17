@@ -244,18 +244,13 @@ log "building libload stub in toolchain source layout"
 make -C "$STAGE_DIR" FASMG="$FASMG_PATH"
 
 log "copying completed release package to $RELEASE_DIR"
-_saved_lwip_h=""
-if [[ -f "$RELEASE_DIR/lwip.h" ]]; then
-    _saved_lwip_h="$(mktemp)"
-    cp "$RELEASE_DIR/lwip.h" "$_saved_lwip_h"
-fi
-rm -rf "$RELEASE_DIR"
+# Overlay the freshly staged package onto RELEASE_DIR rather than wiping it
+# first — RELEASE_DIR may hold other release-only content (e.g. bundled
+# examples/) that this script doesn't produce and shouldn't delete.
+# --checksum skips any file whose content is byte-identical to what's
+# already there, so an unchanged rebuild doesn't touch mtimes/zip diffs.
 mkdir -p "$RELEASE_DIR"
-if [[ -n "$_saved_lwip_h" ]]; then
-    cp "$_saved_lwip_h" "$RELEASE_DIR/lwip.h"
-    rm -f "$_saved_lwip_h"
-fi
-cp -R "$STAGE_DIR"/. "$RELEASE_DIR"/
+rsync -a --checksum "$STAGE_DIR"/ "$RELEASE_DIR"/
 mkdir -p "$RELEASE_DIR/appinst"
 shopt -s nullglob
 for artifact in "$RELEASE_DIR"/"$DYLIB_APPVAR_PREFIX".*.8xv "$RELEASE_DIR"/lwIPINST.8xp; do
@@ -266,12 +261,12 @@ shopt -u nullglob
 log "generating curated headers"
 mkdir -p "$CEDEV_DIR/include"
 LWIP_RELEASE_DIR="$RELEASE_DIR" "$HEADER_PYTHON_PATH" "$BUILD_TOOLS_DIR/scripts/header_dump.py"
-cp -R "$RELEASE_DIR/lwip" "$CEDEV_DIR/include/"
-[[ -f "$RELEASE_DIR/lwip.h" ]] && cp "$RELEASE_DIR/lwip.h" "$CEDEV_DIR/include/"
-cp "$RELEASE_DIR/cryptography.h" "$CEDEV_DIR/include/"
+rsync -a --checksum "$RELEASE_DIR/lwip/" "$CEDEV_DIR/include/lwip/"
+[[ -f "$RELEASE_DIR/lwip.h" ]] && rsync -a --checksum "$RELEASE_DIR/lwip.h" "$CEDEV_DIR/include/lwip.h"
+rsync -a --checksum "$RELEASE_DIR/cryptography.h" "$CEDEV_DIR/include/cryptography.h"
 
 log "installing lwip.lib into $CEDEV_DIR"
 mkdir -p "$CEDEV_DIR/lib/libload"
-cp "$STAGE_DIR/lwip.lib" "$CEDEV_DIR/lib/libload/"
+rsync -a --checksum "$STAGE_DIR/lwip.lib" "$CEDEV_DIR/lib/libload/lwip.lib"
 
 log "release dylib package ready"
