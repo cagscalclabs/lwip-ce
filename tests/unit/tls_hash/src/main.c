@@ -6,7 +6,8 @@
 #include <time.h>
 #include <debug.h>
 
-#include "hash.h"
+#include <lwip/cryptography/hash.h>
+#include <lwip.h>
 
 /*
  * NIST FIPS 180-4 SHA-256 Test Vectors
@@ -38,6 +39,8 @@ const uint8_t expected3[] = {
 /* Main function, called first */
 int main(void)
 {
+    if (!lwip_start()) return 1;
+
     /* Clear the homescreen */
     os_ClrHome();
     uint8_t digest[TLS_SHA256_DIGEST_LEN];

@@ -5,21 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "tls/includes/x509.h"
-#include "lwip/mem.h"
-#include "drivers/mem.h"
-
-#define TLS_TEST_STATIC_ARENA (32u * 1024u)
-static uint8_t tls_test_arena[TLS_TEST_STATIC_ARENA];
-
-static bool tls_test_mem_init(void)
-{
-    if (!mem_init_static(tls_test_arena, sizeof(tls_test_arena)))
-    {
-        return false;
-    }
-    return true;
-}
+#include <lwip/cryptography/x509.h>
+#include <lwip/cryptography/keyobject.h>
+#include <lwip.h>
 
 static void draw_line(const char *msg, int *y)
 {
@@ -254,9 +242,11 @@ int main(void)
     bool ok = true;
     bool pass = false;
 
+    if (!lwip_start()) return 1;
+
     os_ClrHome();
     os_FontSelect(os_SmallFont);
-    if (!tls_test_mem_init())
+    if (lwip_init() != ERR_OK)
     {
         int y = 30;
         draw_line("mem init failed", &y);

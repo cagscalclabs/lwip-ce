@@ -2292,8 +2292,25 @@ struct altcp_tls_config *altcp_tls_create_config_client(const u8_t *cert, size_t
 {
     LWIP_UNUSED_ARG(cert);
     LWIP_UNUSED_ARG(cert_len);
-    /* Certificate-based client config not supported; use PSK via altcp_tls_ce API */
-    return NULL;
+    /* CE supports ECDHE client mode, but not caller-supplied CA material on
+     * this generic lwIP entry point. Host-aware callers should use
+     * altcp_tls_ce_create_config_client_ecdhe(hostname) directly so SNI and
+     * PSK resumption can bind to the target host. */
+    return (struct altcp_tls_config *)altcp_tls_ce_create_config_client_ecdhe(NULL);
+}
+
+struct altcp_tls_config *altcp_tls_create_config_psk_client(
+    const u8_t psk[32],
+    const struct tls_psk_identity *psk_identity)
+{
+    return (struct altcp_tls_config *)altcp_tls_ce_create_config_psk_client(psk, psk_identity);
+}
+
+struct altcp_tls_config *altcp_tls_create_config_psk_server(
+    const u8_t psk[32],
+    const struct tls_psk_identity *psk_identity)
+{
+    return (struct altcp_tls_config *)altcp_tls_ce_create_config_psk_server(psk, psk_identity);
 }
 
 struct altcp_tls_config *altcp_tls_create_config_client_2wayauth(

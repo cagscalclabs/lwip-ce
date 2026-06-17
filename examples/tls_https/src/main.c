@@ -112,7 +112,7 @@ int main(void)
            !lwip_example_timed_out(start, TLS_TIMEOUT_SECONDS) &&
            !lwip_example_cancelled())
     {
-        lwip_poll_network_events();
+        lwip_service_events();
 
         size_t space = sizeof(state.rx) - state.rx_len - 1;
         if (space)

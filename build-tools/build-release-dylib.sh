@@ -223,7 +223,7 @@ mkdir -p "$STAGE_DIR"
 cp "$BUILD_TOOLS_DIR/meta/lwip-libload.makefile" "$STAGE_DIR/makefile"
 
 log "generating export table and libload stub"
-LWIP_RELEASE_DIR="$STAGE_DIR" python3 "$BUILD_TOOLS_DIR/scripts/functable.py" --append
+LWIP_RELEASE_DIR="$STAGE_DIR" python3 "$BUILD_TOOLS_DIR/scripts/parse_manifest.py" --append --functable
 
 log "building lwIP-CE app"
 CEDEV="$CEDEV_DIR" LIBLOAD_LIBS="$(root_libload_libs_without_lwip)" \
@@ -260,7 +260,8 @@ shopt -u nullglob
 
 log "generating curated headers"
 mkdir -p "$CEDEV_DIR/include"
-LWIP_RELEASE_DIR="$RELEASE_DIR" "$HEADER_PYTHON_PATH" "$BUILD_TOOLS_DIR/scripts/header_dump.py"
+LWIP_RELEASE_DIR="$RELEASE_DIR" HEADER_PYTHON="$HEADER_PYTHON_PATH" \
+    python3 "$BUILD_TOOLS_DIR/scripts/parse_manifest.py" --headers
 rsync -a --checksum "$RELEASE_DIR/lwip/" "$CEDEV_DIR/include/lwip/"
 [[ -f "$RELEASE_DIR/lwip.h" ]] && rsync -a --checksum "$RELEASE_DIR/lwip.h" "$CEDEV_DIR/include/lwip.h"
 rsync -a --checksum "$RELEASE_DIR/cryptography.h" "$CEDEV_DIR/include/cryptography.h"

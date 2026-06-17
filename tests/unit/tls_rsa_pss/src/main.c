@@ -12,37 +12,9 @@
 #include <stdlib.h>
 
 /* TLS includes */
-#include "rsa.h"
-#include "hash.h"
-#include "tls.h"
-#include "lwip/mem.h"
-#include "drivers/mem.h"
-
-#define TLS_TEST_MAX_HEAP (20u * 1024u)
-#define TLS_TEST_POOL_BYTES (16u * 1024u)
-#define TLS_TEST_POOL_BLOCK 256u
-
-static struct mem_buffer *tls_test_heap;
-
-static bool tls_test_mem_init(void)
-{
-    if (!mem_init(TLS_TEST_MAX_HEAP, malloc, free, realloc))
-    {
-        return false;
-    }
-    tls_test_heap = mem_buffer_create(
-        MEM_BUFFER_POOL,
-        TLS_TEST_POOL_BYTES,
-        TLS_TEST_POOL_BYTES,
-        TLS_TEST_POOL_BLOCK,
-        0);
-    if (!tls_test_heap)
-    {
-        return false;
-    }
-    mem_buffer_set_lwip_heap(tls_test_heap);
-    return true;
-}
+#include <lwip.h>
+#include <lwip/cryptography/rsa.h>
+#include <lwip/cryptography/hash.h>
 
 /**
  * Test 1: RSA-PSS Verify
@@ -92,10 +64,12 @@ static bool test_pss_verify(void)
 
 int main(void)
 {
+    if (!lwip_start()) return 1;
+
     os_ClrHome();
 
-    /* Initialize lwIP memory */
-    if (!tls_test_mem_init())
+    /* Bring up lwIP network-support data (truststore, PSK cache) */
+    if (!lwip_network_up())
     {
         printf("mem init failed\n");
         os_GetKey();

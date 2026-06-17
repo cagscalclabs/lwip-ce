@@ -10,7 +10,8 @@
 #include <ti/screen.h>
 #include <ti/getkey.h>
 
-#include "x25519.h"
+#include <lwip/cryptography/x25519.h>
+#include <lwip.h>
 
 /* Test 1: RFC 7748 Section 6.1 - Alice private * Bob public */
 static bool test_vector_1(void)
@@ -157,6 +158,8 @@ int main(void)
     bool t4;
     bool t5;
     bool t6;
+
+    if (!lwip_start()) return 1;
 
     os_ClrHome();
     t1 = test_vector_1();

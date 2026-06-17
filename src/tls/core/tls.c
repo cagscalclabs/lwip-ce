@@ -302,11 +302,22 @@ bool tls_init(void)
 
     tls_ctx.initialized = true;
     tls_rng_start();
+
+    tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
+    return true;
+}
+
+bool tls_network_up(void)
+{
+    if (tls_ctx.network_up)
+    {
+        return true;
+    }
+
+    tls_ctx.network_up = true;
     tls_truststore_init();
     tls_psk_cache_alloc();
     tls_psk_cache_load();
-
-    tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
     return true;
 }
 
@@ -317,6 +328,7 @@ void tls_cleanup(void)
     tls_rng_cleanup();
 
     tls_ctx.initialized = false;
+    tls_ctx.network_up = false;
     tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
     tls_ctx.truststore.size = 0;
     tls_ctx.truststore.entry_count = 0;

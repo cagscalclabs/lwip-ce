@@ -1,80 +1,115 @@
 {
-    "transfer_files": [
-        "bin/DEMO.8xp"
-    ],
-    "target": {
-        "name": "DEMO",
-        "isASM": true
+  "transfer_files": [
+    "bin/XBASE64.8xp",
+    "../common/lwIPCERT.8xv",
+    "../common/lwIPINST.8xp",
+    "../common/lwIP.0.8xv",
+    "../common/lwIP.1.8xv",
+    "../common/lwIP.2.8xv",
+    "../common/lwIP.3.8xv",
+    "../common/lwIP.4.8xv",
+    "../common/lwIP.5.8xv",
+    "../common/lwip.8xv"
+  ],
+  "target": {
+    "name": "XBASE64",
+    "isASM": true
+  },
+  "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|7",
+    "key|left",
+    "key|enter",
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter",
+    "hashWait|4",
+    "key|enter",
+    "hashWait|5",
+    "key|enter",
+    "hashWait|6",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "Encode('f'), RFC 4648, Section 10, Vector 2",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
     },
-    "sequence": [
-        "action|launch",
-        "hashWait|1",
-        "key|enter",
-        "hashWait|2",
-        "key|enter",
-        "hashWait|3",
-        "key|enter",
-        "hashWait|4",
-        "key|enter",
-        "hashWait|5",
-        "key|enter",
-        "hashWait|6",
-        "key|enter"
-    ],
-    "hashes": {
-        "1": {
-            "description": "Encode('f'), RFC 4648, Section 10, Vector 2",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "2": {
-            "description": "Encode('foo'), RFC 4648, Section 10, Vector 4",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "3": {
-            "description": "Encode('foobar'), RFC 4648, Section 10, Vector 7",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "4": {
-            "description": "Decode('Zg=='), RFC 4648, Section 10, Vector 2",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "5": {
-            "description": "Decode('Zm9v'), RFC 4648, Section 10, Vector 4",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "6": {
-            "description": "Decode('Zm9vYmFy'), RFC 4648, Section 10, Vector 7",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        }
+    "2": {
+      "description": "Encode('foo'), RFC 4648, Section 10, Vector 4",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "3": {
+      "description": "Encode('foobar'), RFC 4648, Section 10, Vector 7",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "4": {
+      "description": "Decode('Zg=='), RFC 4648, Section 10, Vector 2",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "5": {
+      "description": "Decode('Zm9v'), RFC 4648, Section 10, Vector 4",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "6": {
+      "description": "Decode('Zm9vYmFy'), RFC 4648, Section 10, Vector 7",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "7": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
     }
+  }
 }

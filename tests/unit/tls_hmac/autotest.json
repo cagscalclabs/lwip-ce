@@ -1,49 +1,84 @@
 {
-    "description": "Test TLS_HMAC primitive",
-    "transfer_files": [
-        "bin/DEMO.8xp"
-    ],
-    "target": {
-        "name": "DEMO",
-        "isASM": true
+  "description": "Test TLS_HMAC primitive",
+  "transfer_files": [
+    "bin/XHMAC.8xp",
+    "../common/lwIPCERT.8xv",
+    "../common/lwIPINST.8xp",
+    "../common/lwIP.0.8xv",
+    "../common/lwIP.1.8xv",
+    "../common/lwIP.2.8xv",
+    "../common/lwIP.3.8xv",
+    "../common/lwIP.4.8xv",
+    "../common/lwIP.5.8xv",
+    "../common/lwip.8xv"
+  ],
+  "target": {
+    "name": "XHMAC",
+    "isASM": true
+  },
+  "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|4",
+    "key|left",
+    "key|enter",
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 1",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
     },
-    "sequence": [
-        "action|launch",
-        "hashWait|1",
-        "key|enter",
-        "hashWait|2",
-        "key|enter",
-        "hashWait|3",
-        "key|enter",
-        "key|enter"
-    ],
-    "hashes": {
-        "1": {
-            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 1",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "2": {
-            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 2",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        },
-        "3": {
-            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 3",
-            "start": "vram_start",
-            "size": "vram_16_size",
-            "expected_CRCs": [
-                "D1F2869F"
-            ],
-            "timeout": 1000
-        }
+    "2": {
+      "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 2",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "3": {
+      "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 3",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "4": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
     }
+  }
 }

@@ -100,7 +100,7 @@ int main(void)
            !lwip_example_timed_out(start, ECHO_TIMEOUT_SECONDS) &&
            !lwip_example_cancelled())
     {
-        lwip_poll_network_events();
+        lwip_service_events();
 
         size_t avail = lwip_socket_available(&sock);
         if (avail && state.rx_len < sizeof(state.rx) - 1)

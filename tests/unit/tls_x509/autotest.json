@@ -1,13 +1,39 @@
 {
   "description": "X.509 certificate parsing tests",
   "transfer_files": [
-    "bin/X509T.8xp"
+    "bin/X509T.8xp",
+    "../common/lwIPCERT.8xv",
+    "../common/lwIPINST.8xp",
+    "../common/lwIP.0.8xv",
+    "../common/lwIP.1.8xv",
+    "../common/lwIP.2.8xv",
+    "../common/lwIP.3.8xv",
+    "../common/lwIP.4.8xv",
+    "../common/lwIP.5.8xv",
+    "../common/lwip.8xv"
   ],
   "target": {
     "name": "X509T",
     "isASM": true
   },
   "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|7",
+    "key|left",
+    "key|enter",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -76,6 +102,15 @@
         "24EB6984"
       ],
       "timeout": 5000
+    },
+    "7": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
     }
   }
 }

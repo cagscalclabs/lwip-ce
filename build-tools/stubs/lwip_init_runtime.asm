@@ -13,19 +13,60 @@
 __lwip_fn_table_off := 0x000040
 __lwip_expected_export_count := 0x000000
 
-	export lwip_init_runtime_opaque
+	export lwip_start_with_crt
+	export lwip_get_start_errstring
+	export lwip_is_newer
 
 __lwip_app_name:
 	db "lwIP", 0
+__lwip_error_lut:
+	dl __err_library_not_found_str
+	dl __err_library_invalid_str
+	dl __err_library_too_old_str
+	dl __err_lwip_init_failed_str
+__err_library_not_found_str:
+	db "library missing",0
+__err_library_invalid_str:
+	db "library format",0
+__err_library_too_old_str:
+	db "install newer library",0
+__err_lwip_init_failed_str:
+	db "runtime-int failed",0
 
-; uint8_t lwip_init_runtime_opaque(malloc, free, realloc)
-;   Returns the status code directly in A:
-;     0 = success
-;     1 = app not found
-;     2 = export-table error (bad magic or count mismatch)
-lwip_init_runtime_opaque:
+	__lwip_errno		db		0
+	__lwip_is_newer		db		0
+	__lwip_max_errno	equ		3
+
+lwip_is_newer:
+	ld a, (__lwip_is_newer)
+	ret
+
+; char *lwip_get_start_errstring(void);
+;   Reports the reason for the last lwip_start_with_crt() failure 
+lwip_get_start_errstring:
+	ld a, (__lwip_errno)
+	or a
+	jr z, .invalid_errno		; exit if a == 0
+	dec a						; 0 == ERR_OK, so get dec 1
+	cp a, __lwip_max_errno
+	jr nc, .invalid_errno		; exit if a > __lwip_error_ct
+	ld l, a						; index into l
+	ld h, 3						; 3 into h
+	mlt hl						; hl = h * l (index * 3, LUT entry stride)
+	ld de, __lwip_error_lut
+	add hl, de					; hl = lut base + (index * 3)
+	ld hl, (hl)					; address at hl into hl
+	ret							; return hl pointing to err string
+.invalid_errno:
+	ld	hl, 0
+	ret							; return hl = NULL
+
+
+; uint8_t lwip_start_with_crt(malloc, free, realloc)
+;	returns true or false, errno internal
+;	call lwip_get_start_errno and/or lwip_is_newer if you care
+lwip_start_with_crt:
 	call ti._frameset0
-
 	ld hl, (ix + 6)
 	ld (_fn_imports_table + 0), hl		; malloc
 	ld hl, (ix + 9)
@@ -34,21 +75,11 @@ lwip_init_runtime_opaque:
 	ld (_fn_imports_table + 6), hl		; realloc
 
 	push iy
-	call _find_lwip_app
-	pop iy
-	or a
-	jp z, .app_missing
-
-	push iy
 	ld iy, ti.flags
 	ld hl, __lwip_app_name
 	call ti.FindAppStart
 	pop iy
-	jr nc, .app_found
-.app_missing:
-	pop ix
-	ld a, 1
-	ret
+	jp c, .app_missing
 
 .app_found:
 	; CE app metadata at app_base + 0x112 stores the offset to the linked
@@ -101,13 +132,25 @@ lwip_init_runtime_opaque:
 	inc hl					; HL -> first entry
 	inc hl
 	inc hl
+
+	; Append-mode slot ABI guarantees existing entries never move or get
+	; renumbered across builds — only new ones are added at the end. So an
+	; app with FEWER exports than expected is missing slots we need (fail),
+	; but an app with MORE exports than expected just has trailing slots we
+	; don't know about yet (harmless — clamp bc so the patch loop only
+	; walks/patches the entries this consumer was actually built against).
 	push hl
 	ld hl, __lwip_expected_export_count
 	or a, a
 	sbc hl, bc
 	pop hl
-	jr nz, .table_fail
+	jr z, .count_match			; equal: nothing to clamp
+	jr c, .lib_too_old			; expected > actual: app too old, fail
+	ld bc, __lwip_expected_export_count	; expected < actual: clamp
+	ld a, 1
+	ld (__lwip_is_newer), a
 
+.count_match:
 	push ix
 	ld ix, _lwip_jp_table_start + 1		; first trampoline operand
 .patch_loop:
@@ -129,9 +172,10 @@ lwip_init_runtime_opaque:
 .patch_done:
 	pop ix
 
-	; Trampolines are live — call into the app to do BSS/.data init and
-	; copy our imports table into its reserved fn_imports_table.
-	;   void lwip_init_runtime_internal(const void *src, size_t len);
+	; Trampolines are live — call into the app to do BSS/.data init, copy
+	; our imports table into its reserved fn_imports_table, and bring up
+	; the no-network stack (memory/timers/RNG).
+	;   bool lwip_init_runtime_internal(const void *src, size_t len);
 	ld hl, _fn_imports_table_end - _fn_imports_table
 	push hl					; arg2: len
 	ld hl, _fn_imports_table
@@ -141,73 +185,24 @@ lwip_init_runtime_opaque:
 	pop hl
 
 	pop ix
-	ld a, 0
+	or a
+	jr z, .stack_init_failed
+	ld a, 1
 	ret
 
+.stack_init_failed:
+	ld a, 4
+	jr .exit_fail
+.lib_too_old:
+	ld a, 3
+	jr .exit_fail
 .table_fail:
 	ld a, 2
-	jr .fail
-.fail:
-	pop ix
-	ret
-
-
-; ============================================================================
-; _find_lwip_app — bool find_lwip_app(void)
-;   Walks the CE flash app table to answer "is the lwIP app installed?" safely
-;   (the OS FindAppStart is not safe to call when the app is absent).
-;   Returns A = 0 if not found, A = 1 if found.
-;   Self-contained: no external calls, no CRT helpers, no generated source.
-; ============================================================================
-
-
-_find_lwip_app:
-	ld iy, 0x3B0000		; app rg start
-.lookup_loop:
-	ld de, -3
-	add iy, de
-	ld de, (iy)
-	push de
-	pop hl
-	ld bc, -1
-	or a, a
-	sbc hl, bc
-	jq z, .not_found
-	lea hl, iy + 0
-	or a, a
-	sbc hl, de
-	push hl
-	pop iy
-	ld bc, 259
-	add hl, bc
-
- 	ld	a, (hl)
- 	cp	a, 'l'
- 	jr	nz, .lookup_loop
-
- 	inc hl
- 	ld	a, (hl)
- 	cp	a, 'w'
- 	jr	nz, .lookup_loop
-
- 	inc hl
- 	ld	a, (hl)
- 	cp	a, "I"               ; 'I'
- 	jr	nz, .lookup_loop
-
- 	inc hl
- 	ld	a, (hl)
- 	cp	a, "P"                ; 'P'
- 	jr	nz, .lookup_loop
-
- 	inc hl
- 	ld	a, (hl)
- 	or	a, a                 ; '\0' terminator ?
- 	jr	nz, .lookup_loop
-	jr .found
-.not_found:
-	ld a, 0
- 	ret
-.found:
+	jr .exit_fail
+.app_missing:
 	ld a, 1
+.exit_fail:
+	ld (__lwip_errno), a
+	pop ix				; undo ti._frameset0's push ix
+	xor a
 	ret

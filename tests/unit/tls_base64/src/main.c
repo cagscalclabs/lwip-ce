@@ -4,7 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "base64.h"
+#include <lwip/cryptography/base64.h>
+#include <lwip.h>
 
 /*
  * RFC 4648 Base64 Test Vectors
@@ -38,6 +39,8 @@ static void show_result(bool ok)
 /* Main function, called first */
 int main(void)
 {
+    if (!lwip_start()) return 1;
+
     os_ClrHome();
 
     char buf[50];

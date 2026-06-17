@@ -5,15 +5,15 @@ on:
     paths:
       - docs/**
       - src/**
-      - tools/header_dump.py
-      - tools/public_api_manifest.csv
+      - build-tools/scripts/header_dump.py
+      - build-tools/meta/public_api_manifest.csv
       - .github/workflows/pages.yml
   pull_request:
     paths:
       - docs/**
       - src/**
-      - tools/header_dump.py
-      - tools/public_api_manifest.csv
+      - build-tools/scripts/header_dump.py
+      - build-tools/meta/public_api_manifest.csv
       - .github/workflows/pages.yml
   workflow_dispatch:
 

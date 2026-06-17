@@ -1,34 +1,22 @@
 # ----------------------------
 # Makefile Options
 # ----------------------------
+# Dyload variant: links against the resident lwip.lib (installed into
+# $(CEDEV)/lib/libload/ by build.yml's nightly dylib build) instead of
+# statically compiling TLS core sources from src/.
 
-include ../../common/makefile
-
-# Add -I path so the assembler can find virtuals.inc et al.
-ASFLAGS += $(TLS_ASM_INCLUDES)
-
-NAME = DEMO
+NAME = XAES
 ICON = icon.png
 ARCHIVED = NO
+BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "tls_aes test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC)
-CXXFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC)
+CFLAGS = -Wall -Wextra -Oz
+CXXFLAGS = -Wall -Wextra -Oz
 
-
-# Test main
 SOURCES = src/main.c
 
-# Pull in required TLS core files
-EXTRA_C_SOURCES = $(TLS_CORE)/aes.c $(TLS_CORE)/bytes.c
-
-# Assembly files (bytelen_to_bitlen in bytes.s, gf128_mul in bigint.s for GCM)
-EXTRA_ASM_SOURCES = $(TLS_ASM_AES)
-
 # ----------------------------
-
-# Add header directories
-HEADER_DIRS := $(LWIP_INC) $(TLS_INC) src/include $(HEADER_DIRS)
 
 include $(shell cedev-config --makefile)

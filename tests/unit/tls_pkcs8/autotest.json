@@ -1,13 +1,39 @@
 {
   "description": "PKCS#8/SPKI key parsing and decryption tests",
   "transfer_files": [
-    "bin/PKCS8T.8xp"
+    "bin/XPKCS8T.8xp",
+    "../common/lwIPCERT.8xv",
+    "../common/lwIPINST.8xp",
+    "../common/lwIP.0.8xv",
+    "../common/lwIP.1.8xv",
+    "../common/lwIP.2.8xv",
+    "../common/lwIP.3.8xv",
+    "../common/lwIP.4.8xv",
+    "../common/lwIP.5.8xv",
+    "../common/lwip.8xv"
   ],
   "target": {
-    "name": "PKCS8T",
+    "name": "XPKCS8T",
     "isASM": true
   },
   "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|8",
+    "key|left",
+    "key|enter",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -87,6 +113,15 @@
         "40A6A337"
       ],
       "timeout": 2000
+    },
+    "8": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
     }
   }
 }

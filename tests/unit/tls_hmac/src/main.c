@@ -5,7 +5,8 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "hmac.h"
+#include <lwip/cryptography/hmac.h>
+#include <lwip.h>
 
 /*
  * RFC 4231 HMAC-SHA-256 Test Vectors
@@ -125,6 +126,8 @@ static uint32_t time_hmac(const uint8_t *data, size_t len)
 /* Main function, called first */
 int main(void)
 {
+    if (!lwip_start()) return 1;
+
     os_ClrHome();
     uint8_t digest[TLS_SHA256_DIGEST_LEN];
     struct tls_hmac_context ctx;

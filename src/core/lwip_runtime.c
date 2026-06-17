@@ -21,7 +21,11 @@ extern uint8_t ___data_vma[];
 extern uint8_t ___data_lma[];
 extern uint8_t ___data_len[];
 
-void lwip_init_runtime_internal(const void *imports_src, size_t imports_len)
+/* Internal — defined in lwIP.c, deliberately not declared in the public
+ * block of lwIP.h. Brings up stack memory/timers/RNG (no network). */
+extern bool lwip_stack_init(void);
+
+bool lwip_init_runtime_internal(const void *imports_src, size_t imports_len)
 {
     size_t i;
     size_t bss_len = (size_t)(uintptr_t)___bss_len;
@@ -44,10 +48,12 @@ void lwip_init_runtime_internal(const void *imports_src, size_t imports_len)
      * sizes won't match and we refuse to copy a misaligned blob. */
     if (imports_len != copy_len)
     {
-        return;
+        return false;
     }
     for (i = 0; i < copy_len; i++)
     {
         dst[i] = src[i];
     }
+
+    return lwip_stack_init();
 }

@@ -5,8 +5,9 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "hash.h"
-#include "passwords.h"
+#include <lwip/cryptography/hash.h>
+#include <lwip/cryptography/passwords.h>
+#include <lwip.h>
 
 /*
  * PBKDF2-HMAC-SHA256 Test Vectors
@@ -107,6 +108,8 @@ static uint32_t time_pbkdf2(const uint8_t *password, size_t pass_len,
 /* Main function, called first */
 int main(void)
 {
+    if (!lwip_start()) return 1;
+
     os_ClrHome();
     uint8_t key[32];
 

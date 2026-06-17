@@ -249,7 +249,7 @@ static void eth_rx_schedule_dispatch(void)
  * overflow ring instead. A pbuf the input path rejects is freed here.
  *
  * RX completion callbacks run from usb_HandleEvents(), which is driven
- * synchronously from the app's poll loop (lwip_poll_network_events) — never
+ * synchronously from the app's poll loop (lwip_service_events) — never
  * from an interrupt — so calling netif->input() directly from this context is
  * safe and is the same context the old ring-drain dispatcher used. */
 static bool eth_input_frame(struct netif *netif, const uint8_t *data, uint16_t len)

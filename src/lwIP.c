@@ -73,6 +73,7 @@
  * Init / poll
  * ============================================================ */
 
+static bool g_lwip_stack_started = false;
 static bool g_lwip_started = false;
 static bool g_lwip_stopping = false;
 static lwip_app_config_t g_lwip_cfg;
@@ -102,6 +103,9 @@ typedef enum
 } conn_pending_event_t;
 
 static void lwip_stack_cleanup(void);
+bool lwip_stack_init(void); /* not static: called from lwip_init_runtime_internal
+                              * (core/lwip_runtime.c) at libload bootstrap time.
+                              * Internal — not in the public manifest/header. */
 static void lwip_fatal_cleanup(void);
 static void lwip_membuffers_release(void);
 static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags);
@@ -154,9 +158,13 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
 
 #define SOCKET_EVT_BIT(e) ((uint16_t)(1u << (uint8_t)(e)))
 
-bool lwip_start(void)
+/* No-network bootstrap: stack memory, timers, and (RNG-only) TLS init.
+ * Touches nothing USB/netif-related — see lwip_network_up() for that.
+ * Dispatched once from lwip_start_with_crt() (the libload bootstrap), but
+ * kept callable standalone too (e.g. re-init after lwip_stop()). */
+bool lwip_stack_init(void)
 {
-    if (g_lwip_started)
+    if (g_lwip_stack_started)
     {
         return true;
     }
@@ -173,10 +181,10 @@ bool lwip_start(void)
         lwip_membuffers_release();
         return false;
     }
-    /* Bring up the TLS stack (RNG, RSA/ECC scratch, SPKI trust store) here
-     * rather than lazily on the first TLS socket: it's fixed one-time setup
-     * with no dependency on connection state, so doing it at lwip_start
-     * keeps tls_init() out of the connect/socket-create path entirely.
+    /* RNG-only TLS bootstrap here rather than lazily on the first TLS
+     * socket: it's fixed one-time setup with no dependency on connection
+     * state. Truststore/PSK cache (which DO assume the network is about
+     * to be used) are deferred to tls_network_up() in lwip_network_up().
      * Gated on the wizard's "Enable TLS" setting -- skip it entirely when
      * TLS is disabled. */
     if (g_lwip_cfg.tls_enabled && !tls_init())
@@ -185,10 +193,34 @@ bool lwip_start(void)
         lwip_membuffers_release();
         return false;
     }
+
+    g_lwip_stack_started = true;
+    return true;
+}
+
+bool lwip_network_up(void)
+{
+    if (g_lwip_started)
+    {
+        return true;
+    }
+
+    if (!lwip_stack_init())
+    {
+        return false;
+    }
+
+    if (g_lwip_cfg.tls_enabled && !tls_network_up())
+    {
+        g_lwip_start_error = 1;
+        lwip_membuffers_release();
+        return false;
+    }
+
     /* USB init via usb_fn so the libload build resolves through
      * include_library '../usbdrvce/usbdrvce.asm' without a special case. If this
      * fails we must roll back lwip_init's side effects — leaving
-     * timeouts / netifs alive after lwip_start returned false would
+     * timeouts / netifs alive after lwip_network_up returned false would
      * let the next start attempt see a half-initialized stack. */
     if (usb_fn.init(eth_usb_event_callback, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
     {
@@ -212,7 +244,7 @@ void lwip_stop(void)
     lwip_stack_cleanup();
 }
 
-void lwip_poll_network_events(void)
+void lwip_service_events(void)
 {
     if (!g_lwip_started && !g_lwip_stopping)
     {
@@ -1023,6 +1055,7 @@ static void lwip_stack_cleanup(void)
 
     STOP_TRACE("P10 complete");
     g_lwip_stopping = false;
+    g_lwip_stack_started = false;
 }
 
 static void lwip_fatal_cleanup(void)

@@ -55,7 +55,7 @@ int main(void)
     {
         if (lwip_example_cancelled())
             return lwip_example_finish(0);
-        lwip_poll_network_events();
+        lwip_service_events();
         lwip_example_mem_stats_tick();
     }
 
@@ -70,7 +70,7 @@ int main(void)
             break;
         }
 
-        lwip_poll_network_events();
+        lwip_service_events();
         lwip_example_mem_stats_tick();
 
         if (lwip_sntp_time_was_set())

@@ -256,7 +256,7 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
             break;
         }
 
-        lwip_poll_network_events();
+        lwip_service_events();
 
         /* Scan the keypad once per iteration -- os_GetCSC() reports a press
          * exactly once, so multiple independent callers each calling it

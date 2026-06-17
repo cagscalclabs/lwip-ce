@@ -61,13 +61,12 @@ CSOURCES := $(filter-out src/tls/contrib/x25519/src/main.c,$(CSOURCES))
 LINK_CSOURCES := $(call UPDIR_ADD,$(CSOURCES:%.$(C_EXTENSION)=$(OBJDIR)/%.$(C_EXTENSION).o))
 OBJECTS := $(LINK_CSOURCES) $(LINK_CPPSOURCES) $(LINK_ASMSOURCES) $(LINK_PREASMSOURCES)
 
-# Regenerate src/functable.s from the actual set of public symbols
-# emitted by every library .c file, then mirror the public header tree
-# to $(LWIP_RELEASE_DIR)/lwip/ (conn.h + cryptography.h + internal/*.h).
-# Run after adding/removing any public API. See build-tools/scripts/functable.py
-# for the export scanner and build-tools/scripts/header_dump.py for the header generator.
+# Regenerate src/functable.s and the curated release header tree from
+# build-tools/meta/public_api_manifest.csv. Run after adding/removing any
+# public API. parse_manifest.py is the single implementation entry point for
+# both the export table and the release header tree.
 #
-# header_dump.py uses libclang, which on this dev machine only loads
+# Header generation uses libclang, which on this dev machine only loads
 # cleanly from the Homebrew python3.11 binary against the Xcode CLT's
 # libclang.dylib — pip-install of the bindings is unavailable. Override
 # with `make functable HEADER_PYTHON=/path/to/python3` if you have a
@@ -84,8 +83,7 @@ LWIP_RELEASE_DIR ?= $(CURDIR)/build
 
 .PHONY: functable
 functable:
-	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" python3 $(CURDIR)/build-tools/scripts/functable.py
-	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" $(HEADER_PYTHON) $(CURDIR)/build-tools/scripts/header_dump.py
+	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" HEADER_PYTHON="$(HEADER_PYTHON)" python3 $(CURDIR)/build-tools/scripts/parse_manifest.py
 
 # Full dylib release build. The script owns dependency checkout, generated
 # package staging under submodules/toolchain/src/lwip, libload make/install,

@@ -6,8 +6,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "asn1.h"
-#include "base64.h"
+#include <lwip/cryptography/asn1.h>
+#include <lwip/cryptography/base64.h>
+#include <lwip.h>
 
 /* A 4096-bit RSA private key encoded as base64 DER (payload only). */
 static const uint8_t test1_b64[] =
@@ -102,6 +103,8 @@ int main(void)
 {
     int y = 30;
     bool pass;
+
+    if (!lwip_start()) return 1;
 
     os_ClrHome();
     os_FontSelect(os_SmallFont);

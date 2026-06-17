@@ -12,8 +12,9 @@
 #include <time.h>
 
 /* TLS includes */
-#include "hkdf.h"
-#include "hash.h"
+#include <lwip/cryptography/hkdf.h>
+#include <lwip/cryptography/hash.h>
+#include <lwip.h>
 
 static volatile uint8_t timing_sink = 0;
 
@@ -309,6 +310,8 @@ static bool test_hkdf_expand_label(void) {
 }
 
 int main(void) {
+    if (!lwip_start()) return 1;
+
     os_ClrHome();
 
     /* Run all tests */

@@ -1,30 +1,22 @@
 # ----------------------------
 # Makefile Options
 # ----------------------------
-
-include ../../common/makefile
+# Dyload variant: links against the resident lwip.lib. Allocator is
+# bootstrapped via the real public lwip_init(), not a hand-rolled
+# mem_init_static() arena.
 
 NAME = X509T
 ICON = icon.png
 ARCHIVED = NO
+BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "tls_x509 parser test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I$(PROJECT_ROOT)/src -I$(LWIP_INC) -I$(TLS_INC)
-CXXFLAGS = -Wall -Wextra -Oz -I$(PROJECT_ROOT)/src -I$(LWIP_INC) -I$(TLS_INC)
+CFLAGS = -Wall -Wextra -Oz
+CXXFLAGS = -Wall -Wextra -Oz
+
+SOURCES = src/main.c
 
 # ----------------------------
-
-EXTRA_C_SOURCES = \
-	$(TLS_CORE)/tls.c \
-	$(TLS_CORE)/x509.c \
-	$(TLS_CORE)/asn1.c \
-	$(TLS_CORE)/base64.c \
-	$(TLS_CORE)/bytes.c \
-	$(PROJECT_ROOT)/src/core/mem.c \
-	$(PROJECT_ROOT)/src/drivers/mem.c \
-	$(PROJECT_ROOT)/src/core/stats.c
-
-HEADER_DIRS := $(PROJECT_ROOT)/src $(LWIP_INC) $(TLS_INC) src/include $(HEADER_DIRS)
 
 include $(shell cedev-config --makefile)

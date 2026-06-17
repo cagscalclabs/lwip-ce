@@ -4,7 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "aes.h"
+#include <lwip/cryptography/aes.h>
+#include <lwip.h>
 
 /*
  * AES-128-GCM Test Case 4 (with AAD)
@@ -98,6 +99,8 @@ int main(void)
     uint8_t tag[TLS_AES_AUTH_TAG_SIZE];
     bool status = true;
     bool ok;
+
+    if (!lwip_start()) return 1;
 
     os_ClrHome();
 

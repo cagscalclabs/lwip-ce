@@ -12,18 +12,11 @@
 #include <ti/vars.h>
 #include <stdlib.h>
 
-#include "truststore.h"
-#include "lwip/mem.h"
-#include "drivers/mem.h"
-#include "rsa.h"
-
-#define TLS_TEST_MAX_HEAP (20u * 1024u)
-#define TLS_TEST_POOL_BYTES (16u * 1024u)
-#define TLS_TEST_POOL_BLOCK 256u
+#include <lwip/cryptography/truststore.h>
+#include <lwip.h>
 
 #define TLS_TRUSTSTORE_VERSION 1
 
-static struct mem_buffer *tls_test_heap;
 static int text_y = 20;
 
 static void draw_line(const char *msg)
@@ -51,26 +44,6 @@ static const char *truststore_status_str(tls_truststore_status_t status)
     default:
         return "unknown";
     }
-}
-
-static bool tls_test_mem_init(void)
-{
-    if (!mem_init(TLS_TEST_MAX_HEAP, malloc, free, realloc))
-    {
-        return false;
-    }
-    tls_test_heap = mem_buffer_create(
-        MEM_BUFFER_POOL,
-        TLS_TEST_POOL_BYTES,
-        TLS_TEST_POOL_BYTES,
-        TLS_TEST_POOL_BLOCK,
-        0);
-    if (!tls_test_heap)
-    {
-        return false;
-    }
-    mem_buffer_set_lwip_heap(tls_test_heap);
-    return true;
 }
 
 static const struct tls_truststore_entry *tls_truststore_first_entry(void)
@@ -105,7 +78,9 @@ int main(void)
     os_FontSelect(os_SmallFont);
     text_y = 30;
 
-    if (!tls_test_mem_init())
+    if (!lwip_start()) return 1;
+
+    if (!lwip_network_up())
     {
         draw_line("mem init failed");
         os_GetKey();

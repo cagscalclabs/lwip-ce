@@ -890,27 +890,26 @@ static bool lwip_example_stack_start(void)
 {
     lwip_example_show("lwIP runtime", NULL);
 
-    uint8_t rt = lwip_init_runtime(); /* 0 = success */
-    if (rt != 0)
+    if (!lwip_start()) /* bootstrap + stack init (no network yet) */
     {
-        switch (rt)
-        {
-        case 1:
-            lwip_example_show_and_wait("lwIP failed", "app missing");
-            break;
-        case 2:
-            lwip_example_show_and_wait("lwIP failed", "export error");
-            break;
-        default:
-            lwip_example_show_and_wait("lwIP failed", "runtime init");
-            break;
-        }
+        lwip_example_show_and_wait("lwIP failed", lwip_get_start_errstring());
         return false;
     }
 
-    lwip_example_show("lwIP start", NULL);
+    /* Exercise lwip_get_start_errstring()/lwip_is_newer() on the success
+     * path too, not just on failure: errstring should read back NULL (no
+     * error recorded) and is_newer reports whether this resident app has
+     * more exports than the build expected. */
+    {
+        const char *errstr = lwip_get_start_errstring();
+        lwip_example_show(lwip_is_newer() ? "app newer than lib" : "app matches lib",
+                           errstr ? errstr : "errstr: NULL (ok)");
+        os_GetKey();
+    }
 
-    if (!lwip_start())
+    lwip_example_show("lwIP network up", NULL);
+
+    if (!lwip_network_up())
     {
         switch (lwip_start_last_error())
         {

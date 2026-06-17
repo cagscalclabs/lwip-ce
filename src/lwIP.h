@@ -9,8 +9,11 @@
  * usable for anyone who needs them — this is an additive convenience layer.
  *
  * Lifecycle:
- *   lwip_start()                — once at startup
- *   lwip_poll_network_events()  — every main-loop iteration (drives callbacks)
+ *   lwip_start()                — once at load time (libload bootstrap +
+ *                                  stack memory/timers/RNG; no network yet)
+ *   lwip_network_up()           — bring up USB/netif + TLS truststore/PSK
+ *                                  cache; call once before networking
+ *   lwip_service_events()  — every main-loop iteration (drives callbacks)
  *   lwip_socket_create()        — allocate handle, bind netif, kick DHCP
  *   lwip_socket_on_event()      — register single event callback + arg
  *   lwip_socket_connect()       — initiate connect; completion fires STATE_CHANGE
@@ -22,7 +25,7 @@
  *
  * Typical main loop:
  *   while (lwip_socket_is_active(&sock) && !done) {
- *       lwip_poll_network_events();
+ *       lwip_service_events();
  *       size_t n = lwip_socket_available(&sock);
  *       if (n) lwip_socket_read(&sock, buf, n);
  *   }
@@ -299,11 +302,16 @@ struct lwip_socket
 
 /* ------------------------------------------------------------------ */
 
-bool     lwip_start(void);
 uint8_t  lwip_start_last_error(void);
 void     lwip_stop(void);
-void     lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
-void     lwip_poll_network_events(void);
+bool     lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
+
+/* Bring the network up: USB/netif init plus TLS connection-support data
+ * (truststore, PSK cache). Requires the stack to already be initialized,
+ * which lwip_start_with_crt() (aliased to lwip_start() for the caller's
+ * own CRT) does automatically at load time. */
+bool     lwip_network_up(void);
+void     lwip_service_events(void);
 uint32_t lwip_now_ms(void);
 bool     lwip_default_netif_info(lwip_netif_info_t *info);
 

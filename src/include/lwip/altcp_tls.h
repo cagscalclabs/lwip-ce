@@ -99,6 +99,22 @@ struct altcp_tls_config *altcp_tls_create_config_server_privkey_cert(const u8_t 
  */
 struct altcp_tls_config *altcp_tls_create_config_client(const u8_t *cert, size_t cert_len);
 
+#if !LWIP_ALTCP_TLS_MBEDTLS
+/** @ingroup altcp_tls
+ * Create an ALTCP_TLS client configuration handle using a TLS 1.3 external PSK.
+ */
+struct altcp_tls_config *altcp_tls_create_config_psk_client(
+    const u8_t psk[32],
+    const struct tls_psk_identity *psk_identity);
+
+/** @ingroup altcp_tls
+ * Create an ALTCP_TLS server configuration handle using a TLS 1.3 external PSK.
+ */
+struct altcp_tls_config *altcp_tls_create_config_psk_server(
+    const u8_t psk[32],
+    const struct tls_psk_identity *psk_identity);
+#endif
+
 /** @ingroup altcp_tls
  * Create an ALTCP_TLS client configuration handle with two-way server/client authentication
  */

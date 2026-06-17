@@ -415,7 +415,7 @@ static bool dast_wait_for_network(lwip_netif_info_t *info)
 
     while (!dast_network_ready(info))
     {
-        lwip_poll_network_events();
+        lwip_service_events();
         lwip_example_mem_stats_tick();
 
         if (++status_ticks >= 32)
@@ -457,7 +457,7 @@ static uint8_t dast_run_test(int idx, const dast_test_t *t)
 
     while (dast_ctrl_signal == DAST_CTRL_NONE)
     {
-        lwip_poll_network_events();
+        lwip_service_events();
         lwip_example_mem_stats_tick();
 
         if (dast_events != last_drawn)
@@ -504,7 +504,7 @@ int main(void)
     dast_ctrl_signal = DAST_CTRL_NONE;
     while (dast_ctrl_signal == DAST_CTRL_NONE)
     {
-        lwip_poll_network_events();
+        lwip_service_events();
         lwip_example_mem_stats_tick();
         if (os_GetCSC() == sk_Clear)
         {

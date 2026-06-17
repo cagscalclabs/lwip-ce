@@ -1,34 +1,20 @@
 # ----------------------------
 # Makefile Options
 # ----------------------------
+# Dyload variant: links against the resident lwip.lib.
 
-include ../../common/makefile
-
-# Add -I path so the assembler can find virtuals.inc et al.
-ASFLAGS += $(TLS_ASM_INCLUDES)
-
-NAME = DEMO
+NAME = XPBKDF2
 ICON = icon.png
 ARCHIVED = NO
+BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "tls_pbkdf2 test"
 COMPRESSED = NO
 
-CFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC)
-CXXFLAGS = -Wall -Wextra -Oz -I$(LWIP_INC) -I$(TLS_INC)
+CFLAGS = -Wall -Wextra -Oz
+CXXFLAGS = -Wall -Wextra -Oz
 
-
-# Test main
 SOURCES = src/main.c
 
-# Pull in required TLS core files
-EXTRA_C_SOURCES = $(TLS_CORE)/passwords.c $(TLS_CORE)/hash.c $(TLS_CORE)/hmac.c
-
-# Assembly files from TLS core
-EXTRA_ASM_SOURCES = $(TLS_ASM_HASH)
-
 # ----------------------------
-
-# Add header directories
-HEADER_DIRS := $(LWIP_INC) $(TLS_INC) src/include $(HEADER_DIRS)
 
 include $(shell cedev-config --makefile)
