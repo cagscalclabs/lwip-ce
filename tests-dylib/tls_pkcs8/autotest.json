@@ -2,6 +2,7 @@
   "description": "PKCS#8/SPKI key parsing and decryption tests",
   "transfer_files": [
     "bin/XPKCS8T.8xp",
+    "../common/clibs.8xg",
     "../common/lwIPCERT.8xv",
     "../common/lwIPINST.8xp",
     "../common/lwIP.0.8xv",

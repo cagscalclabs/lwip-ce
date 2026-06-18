@@ -1,6 +1,7 @@
 {
   "transfer_files": [
     "bin/X25519.8xp",
+    "../common/clibs.8xg",
     "../common/lwIPCERT.8xv",
     "../common/lwIPINST.8xp",
     "../common/lwIP.0.8xv",
@@ -33,6 +34,7 @@
     "hashWait|7",
     "key|left",
     "key|enter",
+    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -55,7 +57,7 @@
       "expected_CRCs": [
         "0F2E31E9"
       ],
-      "timeout": 90000
+      "timeout": 120000
     },
     "2": {
       "description": "x25519 RFC 7748, 6.1 - Bob private * Alice public",

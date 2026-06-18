@@ -26,6 +26,7 @@ submodules/toolchain/
 # generated dylib installer artifacts
 *INST.8xp
 *.8ek
+tests-dylib/common/
 
 # httpd server example filesystem includes
 *makefsdata.c.*

@@ -2,6 +2,7 @@
   "description": "Tests OAEP primitive standalone",
   "transfer_files": [
     "bin/XOAEP.8xp",
+    "../common/clibs.8xg",
     "../common/lwIPCERT.8xv",
     "../common/lwIPINST.8xp",
     "../common/lwIP.0.8xv",
