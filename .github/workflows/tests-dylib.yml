@@ -149,13 +149,32 @@ jobs:
           ls -lh ${{env.AUTOTESTER_ROM}}
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
-      - name: Download truststore AppVar
+      - name: Prepare shared dyload test files
         run: |
-          mkdir -p ${{env.LWIP_DYLIB_TESTS}}/tls_truststore
+          mkdir -p ${{env.LWIP_DYLIB_TESTS}}/common
+          cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_DYLIB_TESTS}}/common/
+          cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_DYLIB_TESTS}}/common/
+          for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
+            name="$(basename "$appvar")"
+            cp "$appvar" "${{env.LWIP_DYLIB_TESTS}}/common/${name/LWIP/lwIP}"
+          done
           curl -fL \
-            -o ${{env.LWIP_DYLIB_TESTS}}/tls_truststore/lwIPCERT.8xv \
+            -o ${{env.LWIP_DYLIB_TESTS}}/common/lwIPCERT.8xv \
             https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
-          ls -lh ${{env.LWIP_DYLIB_TESTS}}/tls_truststore/lwIPCERT.8xv
+          curl -fL \
+            -o ${{env.LWIP_DYLIB_TESTS}}/common/clibs.8xg \
+            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/clibs.8xg
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIPCERT.8xv
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIPINST.8xp
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwip.8xv
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIP.0.8xv
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIP.1.8xv
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIP.2.8xv
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIP.3.8xv
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIP.4.8xv
+          test -f ${{env.LWIP_DYLIB_TESTS}}/common/lwIP.5.8xv
+          ls -lh ${{env.LWIP_DYLIB_TESTS}}/common
 
       - name: Run Dyload Unit Tests
         run: |

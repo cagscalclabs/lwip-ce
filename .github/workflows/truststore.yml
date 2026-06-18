@@ -281,6 +281,7 @@ jobs:
           data_path    = os.path.join("truststore_out", "lwIPCERT.data")
           sig_path     = os.path.join("truststore_out", "lwIPCERT.sig")
           bin_path     = os.path.join("truststore_out", "lwIPCERT.bin")
+          notes_path   = os.path.join("truststore_out", "release-notes.md")
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
 
           with open(data_path, "wb") as f:
@@ -304,6 +305,15 @@ jobs:
 
           print(f"entries={entry_count}")
           print(f"bin={bin_path}")
+
+          with open(notes_path, "w", encoding="utf-8") as notes:
+              notes.write("This release includes the following CA roots:\n\n")
+              for subject, _ski, not_before, not_after, sig_alg, _key in entries:
+                  subj = subject.split(b"\x00", 1)[0].decode("ascii", "ignore")
+                  alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
+                  nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
+                  na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
+                  notes.write(f"- {subj} ({alg_name}, valid {nb} to {na})\n")
 
           def sub(text):
               """Wrap cell contents (not the whole table) in <sub> for compact
@@ -367,12 +377,7 @@ jobs:
           tag_name: truststore-latest
           name: truststore-latest
           files: truststore_out/lwIPCERT.8xv
-          body: |
-            This release contains the latest generated truststore AppVar for TI-84+ CE.
-
-            The truststore is generated from the CA certificates available on the runner environment at the time of generation. It includes metadata such as certificate owner, issuer, validity period, and a hash of the public key.
-
-            The AppVar can be downloaded and used in CE projects to provide a set of trusted CA certificates for TLS connections.
+          body_path: truststore_out/release-notes.md
 
       - name: Cleanup signing keys
         if: always()
