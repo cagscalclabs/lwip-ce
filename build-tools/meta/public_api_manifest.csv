@@ -22,9 +22,10 @@ func,lwip_socket_on_event,socket,src/lwIP.h,lwip.h
 func,lwip_socket_is_active,socket,src/lwIP.h,lwip.h
 func,lwip_socket_set_rx_limits,socket,src/lwIP.h,lwip.h
 func,lwip_socket_set_connect_timeout,socket,src/lwIP.h,lwip.h
-func,lwip_set_debug,core,src/include/lwip/logging.h,lwip/core/logging.h
+func,lwip_set_event_cb,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_module_name,core,src/include/lwip/logging.h,lwip/core/logging.h
-func,lwip_debug_state_name,core,src/include/lwip/logging.h,lwip/core/logging.h
+func,lwip_debug_file_name,core,src/include/lwip/logging.h,lwip/core/logging.h
+func,lwip_debug_state_change_name,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,tls_aes_init,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_ccm_init,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_ccm_encrypt,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
@@ -487,8 +488,8 @@ struct,ip6_addr,core,src/include/lwip/ip6_addr.h,lwip/core/ip6_addr.h
 typedef,ip6_addr_t,core,src/include/lwip/ip6_addr.h,lwip/core/ip6_addr.h
 struct,ip_addr,core,src/include/lwip/ip_addr.h,lwip/core/ip_addr.h
 typedef,ip_addr_t,core,src/include/lwip/ip_addr.h,lwip/core/ip_addr.h
-struct,lwip_debug_info,core,src/include/lwip/logging.h,lwip/core/logging.h
-typedef,lwip_debug_fn,core,src/include/lwip/logging.h,lwip/core/logging.h
+struct,lwip_event,core,src/include/lwip/logging.h,lwip/core/logging.h
+typedef,lwip_event_fn,core,src/include/lwip/logging.h,lwip/core/logging.h
 enum,mem_pressure_level,core,src/include/lwip/mem.h,lwip/core/mem.h
 struct,mem_accounting_stats,core,src/include/lwip/mem.h,lwip/core/mem.h
 typedef,mem_size_t,core,src/include/lwip/mem.h,lwip/core/mem.h

@@ -692,7 +692,7 @@ int main(void)
         group.len = (uint16_t)sizeof(test_rsa_sig_2048);
         group.samples = samples;
         compute_stats(ticks, samples, &group);
-        printf("timing len=%u dev=%u.%02u%%",
+        printf("timing len=%u dev=%lu.%02lu%%",
                group.len,
                group.pct_x100 / 100,
                group.pct_x100 % 100);

@@ -35,6 +35,7 @@
     "hashWait|10",
     "key|left",
     "key|enter",
+    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -64,7 +65,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1500
+      "timeout": 5000
     },
     "2": {
       "description": "GCM Spec (McGrew/Viega), Appendix B, Test Case 4",

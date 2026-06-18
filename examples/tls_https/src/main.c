@@ -96,10 +96,9 @@ int main(void)
 
     lwip_example_linef("connecting to %s:%u", TLS_HOST, (unsigned)TLS_PORT);
     err = lwip_socket_connect(&sock, TLS_HOST, TLS_PORT);
-    /* Enable milestone debug output after connect is initiated so debug
-     * events don't fire re-entrantly during socket setup. */
-    lwip_set_debug(lwip_example_dbg_console_cb, LWIP_DBG_INFO,
-                   LWIP_DBG_DEPTH_MILESTONE);
+    /* Enable debug output after connect is initiated so events don't fire
+     * re-entrantly during socket setup. */
+    lwip_set_event_cb(lwip_example_dbg_console_cb);
     if (err != LWIP_OK)
     {
         lwip_example_show_socket_error("HTTPS connect", &sock, err);

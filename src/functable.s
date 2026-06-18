@@ -35,6 +35,7 @@
 
 .extern _lwip_init_runtime_internal
 .extern _lwip_start_last_error
+.extern _lwip_network_up
 .extern _lwip_stop
 .extern _lwip_service_events
 .extern _lwip_now_ms
@@ -56,9 +57,10 @@
 .extern _lwip_socket_is_active
 .extern _lwip_socket_set_rx_limits
 .extern _lwip_socket_set_connect_timeout
-.extern _lwip_set_debug
+.extern _lwip_set_event_cb
 .extern _lwip_debug_module_name
-.extern _lwip_debug_state_name
+.extern _lwip_debug_file_name
+.extern _lwip_debug_state_change_name
 .extern _tls_aes_init
 .extern _tls_aes_ccm_init
 .extern _tls_aes_ccm_encrypt
@@ -425,17 +427,17 @@
 .extern _eth_usb_event_callback
 .extern _tls_x25519_publickey
 .extern _tls_x25519_secret
-.extern _lwip_network_up
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 393    ; entry count
+    d24 394    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
 
 ; --- src/lwIP.c ---
     d24 _lwip_start_last_error
+    d24 _lwip_network_up
     d24 _lwip_stop
     d24 _lwip_service_events
     d24 _lwip_now_ms
@@ -459,9 +461,10 @@ _fn_exports_table:
     d24 _lwip_socket_set_connect_timeout
 
 ; --- src/core/logging.c ---
-    d24 _lwip_set_debug
+    d24 _lwip_set_event_cb
     d24 _lwip_debug_module_name
-    d24 _lwip_debug_state_name
+    d24 _lwip_debug_file_name
+    d24 _lwip_debug_state_change_name
 
 ; --- src/tls/core/aes.c ---
     d24 _tls_aes_init
@@ -948,6 +951,3 @@ _fn_exports_table:
 ; --- src/tls/contrib/x25519/src/x25519.s ---
     d24 _tls_x25519_publickey
     d24 _tls_x25519_secret
-
-; --- src/lwIP.c ---
-    d24 _lwip_network_up

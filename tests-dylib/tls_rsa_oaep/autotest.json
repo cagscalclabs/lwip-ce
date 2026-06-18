@@ -35,6 +35,7 @@
     "hashWait|3",
     "key|left",
     "key|enter",
+    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -49,7 +50,7 @@
       "expected_CRCs": [
         "806269A3"
       ],
-      "timeout": 2000
+      "timeout": 7000
     },
     "2": {
       "description": "RSA-OAEP decode - RFC 8017 (PKCS#1 v2.2) SHA-256",

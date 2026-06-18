@@ -33,7 +33,7 @@
  * into a single visible update.
  * -------------------------------------------------------------------- */
 
-#define LWIP_EXAMPLE_TOP 30     /* first line y (px), below the status row */
+#define LWIP_EXAMPLE_TOP 4      /* first line y (px), below the status row */
 #define LWIP_EXAMPLE_BOTTOM 240 /* last usable y (px); full LCD height      */
 #define LWIP_EXAMPLE_LEFT 2     /* left margin (px)                         */
 #define LWIP_EXAMPLE_LCD_W 320
@@ -423,7 +423,7 @@ static void lwip_example_lines_crlf(const char *text, size_t len)
  * -------------------------------------------------------------------- */
 
 #define LWIP_EXAMPLE_CHAT_COLS 42
-#define LWIP_EXAMPLE_CHAT_LINES 26
+#define LWIP_EXAMPLE_CHAT_LINES 27
 #define LWIP_EXAMPLE_CHAT_INPUT 88
 #define LWIP_EXAMPLE_CHAT_INPUT_ROWS 3
 
@@ -433,6 +433,21 @@ typedef enum
     LWIP_EXAMPLE_CHAT_MODE_UPPER,
     LWIP_EXAMPLE_CHAT_MODE_NUMERIC,
 } lwip_example_chat_input_mode_t;
+
+static char key_to_char(uint8_t key, uint8_t mode)
+{
+    static const char ascii_mapping[3][38] = {
+        "\"wrmh\0\0?\0vqlg\0\0.zupkfc\0 ytojeb\0\0xsnida",
+        "\"WRMH\0\0?\0VQLG\0\0:ZUPKFC\0 YTOJEB\0\0XSNIDA",
+        ("+-*/^\0\0?369)\0\0\0.258(\0\0\0"
+         "0147,")};
+
+    if (mode > LWIP_EXAMPLE_CHAT_MODE_NUMERIC || key < 0x0A || key > 0x2F)
+    {
+        return '\0';
+    }
+    return ascii_mapping[mode][key - 0x0A];
+}
 
 /* Message class -> color tag, applied to a whole logical message (and thus
  * to every wrapped row it produces). */
@@ -477,9 +492,26 @@ struct lwip_example_chat
     char input[LWIP_EXAMPLE_CHAT_INPUT];
     uint8_t input_len;
     uint8_t input_mode;
+    bool input_upper_once;
     uint8_t rendered_input_y;
     uint8_t rendered_input_rows;
 };
+
+static char lwip_example_chat_prompt_char(const struct lwip_example_chat *chat)
+{
+    if (chat && chat->input_upper_once)
+    {
+        return 'A';
+    }
+    switch (chat ? (lwip_example_chat_input_mode_t)chat->input_mode
+                 : LWIP_EXAMPLE_CHAT_MODE_LOWER)
+    {
+    case LWIP_EXAMPLE_CHAT_MODE_UPPER: return 'A';
+    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC: return '0';
+    case LWIP_EXAMPLE_CHAT_MODE_LOWER:
+    default: return 'a';
+    }
+}
 
 static void lwip_example_chat_invalidate(struct lwip_example_chat *chat)
 {
@@ -793,13 +825,7 @@ static void lwip_example_chat_render_full(struct lwip_example_chat *chat)
                                         true);
     y = (uint8_t)(transcript_top + transcript_rows * h);
 
-    switch ((lwip_example_chat_input_mode_t)chat->input_mode)
-    {
-    case LWIP_EXAMPLE_CHAT_MODE_UPPER: prompt[0] = 'A'; break;
-    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC: prompt[0] = '0'; break;
-    case LWIP_EXAMPLE_CHAT_MODE_LOWER:
-    default: prompt[0] = 'a'; break;
-    }
+    prompt[0] = lwip_example_chat_prompt_char(chat);
     prompt[1] = ' ';
     prompt[2] = '\0';
     gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
@@ -886,13 +912,7 @@ static void lwip_example_chat_render_input(struct lwip_example_chat *chat)
         lwip_example_chat_erase_row((uint8_t)(chat->rendered_input_y + i * h));
     }
 
-    switch ((lwip_example_chat_input_mode_t)chat->input_mode)
-    {
-    case LWIP_EXAMPLE_CHAT_MODE_UPPER: prompt[0] = 'A'; break;
-    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC: prompt[0] = '0'; break;
-    case LWIP_EXAMPLE_CHAT_MODE_LOWER:
-    default: prompt[0] = 'a'; break;
-    }
+    prompt[0] = lwip_example_chat_prompt_char(chat);
     prompt[1] = ' ';
     prompt[2] = '\0';
     gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
@@ -940,15 +960,14 @@ static const char *lwip_example_socket_status_name(lwip_status_t status)
 /* ----------------------------------------------------------------------
  * Debug console
  *
- * A reusable sink for the unified lwIP debug callback (lwip_debug_fn). It
+ * A reusable sink for the unified lwIP event callback (lwip_event_fn). It
  * draws on the same text surface as the rest of these helpers, so it stays
- * visually consistent. Begin with the example-name header; each debug
- * event then prints one "module:state ok|errno" line beneath it.
+ * visually consistent. Begin with the example-name header; each event then
+ * prints one line beneath it, shaped by its kind.
  *
  * Usage:
  *   lwip_example_dbg_console_begin("TLS RSA");
- *   lwip_set_debug(lwip_example_dbg_console_cb, LWIP_DBG_INFO,
- *                  LWIP_DBG_DEPTH_MILESTONE);
+ *   lwip_set_event_cb(lwip_example_dbg_console_cb);
  * -------------------------------------------------------------------- */
 
 /* Clear the screen and draw the example-name header. */
@@ -962,49 +981,62 @@ static void lwip_example_dbg_console_begin(const char *title)
     lwip_example_draw_mem_stats();
 }
 
-/* lwip_debug_fn: draw one event line. Severity is shown as a short tag so an
- * ALERT (problematic but proceeding) is distinguishable from a plain ERROR. */
-static void lwip_example_dbg_console_cb(const struct lwip_debug_info *info)
+/* lwip_event_fn: draw one event line, shaped by its kind. */
+static void lwip_example_dbg_console_cb(const struct lwip_event *ev)
 {
-    if (!info)
+    if (!ev)
     {
         return;
     }
 
-#ifdef LWIP_DBG_SEV_ALERT
-    switch (info->severity)
+    switch (ev->kind)
     {
-    case LWIP_DBG_SEV_ALERT:
-        lwip_example_linef("!%s:%s a%d",
-                           lwip_debug_module_name(info->module),
-                           lwip_debug_state_name(info->module_state),
-                           info->errnum);
+    case LWIP_EV_INFO:
+        lwip_example_linef("%s: %s",
+                           lwip_debug_module_name(ev->module),
+                           ev->data.msg ? ev->data.msg : "");
         break;
-    case LWIP_DBG_SEV_ERROR:
-        lwip_example_linef("X%s:%s e%d",
-                           lwip_debug_module_name(info->module),
-                           lwip_debug_state_name(info->module_state),
-                           info->errnum);
+    case LWIP_EV_DEBUG:
+        lwip_example_linef("%s %s:%u",
+                           lwip_debug_module_name(ev->module),
+                           lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
+                           LWIP_EVENT_CODE_LINE(ev->data.code.loc));
         break;
-    default: /* LWIP_DBG_SEV_INFO */
-#endif
-        if (info->errnum == 0)
-        {
-            lwip_example_linef("%s:%s ok",
-                               lwip_debug_module_name(info->module),
-                               lwip_debug_state_name(info->module_state));
-        }
-        else
-        {
-            lwip_example_linef("%s:%s e%d",
-                               lwip_debug_module_name(info->module),
-                               lwip_debug_state_name(info->module_state),
-                               info->errnum);
-        }
-#ifdef LWIP_DBG_SEV_ALERT
+    case LWIP_EV_WARN:
+        lwip_example_linef("!%s %s:%u x%u",
+                           lwip_debug_module_name(ev->module),
+                           lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
+                           LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                           ev->data.code.extra);
+        break;
+    case LWIP_EV_ERROR:
+        lwip_example_linef("X%s %s:%u x%u",
+                           lwip_debug_module_name(ev->module),
+                           lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
+                           LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                           ev->data.code.extra);
+        break;
+    case LWIP_EV_STATE_CHG:
+        lwip_example_linef("%s -> %s",
+                           lwip_debug_module_name(ev->module),
+                           lwip_debug_state_change_name(ev->data.state.change_event));
+        break;
+    case LWIP_EV_IO_FILE:
+        lwip_example_linef("%s io:%s %s %u",
+                           lwip_debug_module_name(ev->module),
+                           ev->data.file.name ? ev->data.file.name : "?",
+                           ev->data.file.dir == LWIP_IO_WRITE ? "w" : "r",
+                           (unsigned)ev->data.file.bytes);
+        break;
+    case LWIP_EV_IO_ETH:
+        lwip_example_linef("%s io:eth %s %u",
+                           lwip_debug_module_name(ev->module),
+                           ev->data.eth.dir == LWIP_IO_TX ? "tx" : "rx",
+                           (unsigned)ev->data.eth.bytes);
+        break;
+    default:
         break;
     }
-#endif
     lwip_example_draw_mem_stats();
 }
 

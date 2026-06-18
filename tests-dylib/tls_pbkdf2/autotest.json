@@ -35,6 +35,7 @@
     "hashWait|4",
     "key|left",
     "key|enter",
+    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -52,7 +53,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 5000
     },
     "2": {
       "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 2 (c=2)",

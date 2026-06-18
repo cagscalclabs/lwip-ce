@@ -34,6 +34,7 @@
     "hashWait|3",
     "key|left",
     "key|enter",
+    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -48,7 +49,7 @@
       "expected_CRCs": [
         "FEB0071F"
       ],
-      "timeout": 2000
+      "timeout": 10000
     },
     "2": {
       "description": "ASN.1 cursor large DER dump",

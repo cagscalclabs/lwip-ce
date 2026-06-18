@@ -12,24 +12,6 @@
 
 #include "lwip_example.h"
 
-enum input_mode
-{
-    MODE_LOWER,
-    MODE_UPPER,
-    MODE_NUM
-};
-
-char key_to_char(uint8_t key, uint8_t mode)
-{
-    // starting at 0x0A
-    const char ascii_mapping[3][38] = {
-        "\"wrmh\0\0\0\0vqlg\0\0:zupkfc\0 ytojeb\0\0xsnida",
-        "\"WRMH\0\0\0\0VQLG\0\0:ZUPKFC\0 YTOJEB\0\0XSNIDA",
-        ("+-*/^\0\0?369)\0\0\0.258(\0\0\0"
-         "0147,")};
-    return ascii_mapping[mode][key - 0x0A];
-}
-
 struct lwip_chat_state
 {
     struct lwip_example_chat chat;
@@ -48,49 +30,63 @@ static void lwip_chat_append_system(struct lwip_chat_state *state,
     lwip_example_chat_render(&state->chat);
 }
 
-static void lwip_chat_debug_cb(const struct lwip_debug_info *info)
+static void lwip_chat_debug_cb(const struct lwip_event *ev)
 {
     struct lwip_chat_state *state = lwip_chat_debug_state;
     char line[48];
 
-    if (!info || !state)
+    if (!ev || !state)
     {
         return;
     }
 
-#ifdef LWIP_DBG_SEV_ALERT
-    if (info->severity == LWIP_DBG_SEV_ALERT)
+    switch (ev->kind)
     {
-        snprintf(line, sizeof(line), "!%s:%s a%d",
-                 lwip_debug_module_name(info->module),
-                 lwip_debug_state_name(info->module_state),
-                 info->errnum);
-        lwip_chat_append_system(state, line);
+    case LWIP_EV_INFO:
+        snprintf(line, sizeof(line), "%s: %s",
+                 lwip_debug_module_name(ev->module),
+                 ev->data.msg ? ev->data.msg : "");
+        break;
+    case LWIP_EV_DEBUG:
+        snprintf(line, sizeof(line), "%s %s:%u",
+                 lwip_debug_module_name(ev->module),
+                 lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
+                 LWIP_EVENT_CODE_LINE(ev->data.code.loc));
+        break;
+    case LWIP_EV_WARN:
+        snprintf(line, sizeof(line), "!%s %s:%u x%u",
+                 lwip_debug_module_name(ev->module),
+                 lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
+                 LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                 ev->data.code.extra);
+        break;
+    case LWIP_EV_ERROR:
+        snprintf(line, sizeof(line), "X%s %s:%u x%u",
+                 lwip_debug_module_name(ev->module),
+                 lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
+                 LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                 ev->data.code.extra);
+        break;
+    case LWIP_EV_STATE_CHG:
+        snprintf(line, sizeof(line), "%s -> %s",
+                 lwip_debug_module_name(ev->module),
+                 lwip_debug_state_change_name(ev->data.state.change_event));
+        break;
+    case LWIP_EV_IO_FILE:
+        snprintf(line, sizeof(line), "%s io:%s %s %u",
+                 lwip_debug_module_name(ev->module),
+                 ev->data.file.name ? ev->data.file.name : "?",
+                 ev->data.file.dir == LWIP_IO_WRITE ? "w" : "r",
+                 (unsigned)ev->data.file.bytes);
+        break;
+    case LWIP_EV_IO_ETH:
+        snprintf(line, sizeof(line), "%s io:eth %s %u",
+                 lwip_debug_module_name(ev->module),
+                 ev->data.eth.dir == LWIP_IO_TX ? "tx" : "rx",
+                 (unsigned)ev->data.eth.bytes);
+        break;
+    default:
         return;
-    }
-    if (info->severity == LWIP_DBG_SEV_ERROR)
-    {
-        snprintf(line, sizeof(line), "X%s:%s e%d",
-                 lwip_debug_module_name(info->module),
-                 lwip_debug_state_name(info->module_state),
-                 info->errnum);
-        lwip_chat_append_system(state, line);
-        return;
-    }
-#endif
-
-    if (info->errnum == 0)
-    {
-        snprintf(line, sizeof(line), "%s:%s ok",
-                 lwip_debug_module_name(info->module),
-                 lwip_debug_state_name(info->module_state));
-    }
-    else
-    {
-        snprintf(line, sizeof(line), "%s:%s e%d",
-                 lwip_debug_module_name(info->module),
-                 lwip_debug_state_name(info->module_state),
-                 info->errnum);
     }
     lwip_chat_append_system(state, line);
 }
@@ -219,8 +215,7 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
     if (debug)
     {
         lwip_chat_debug_state = state;
-        lwip_set_debug(lwip_chat_debug_cb, LWIP_DBG_INFO,
-                       LWIP_DBG_DEPTH_VERBOSE);
+        lwip_set_event_cb(lwip_chat_debug_cb);
     }
 
     err = lwip_socket_create(&sock, protocol, LWIP_NETIF_EXT, NULL, 30000);
@@ -283,6 +278,11 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
         {
         case sk_Alpha:
             state->chat.input_mode = (uint8_t)((state->chat.input_mode + 1u) % 3u);
+            state->chat.input_upper_once = false;
+            lwip_example_chat_render_input(&state->chat);
+            break;
+        case sk_GraphVar:
+            state->chat.input_upper_once = true;
             lwip_example_chat_render_input(&state->chat);
             break;
         case sk_Del:
@@ -319,7 +319,14 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
         default:
             if (key < 0x0A || key > 0x2F)
                 break;
-            char c = key_to_char(key, state->chat.input_mode);
+            uint8_t input_mode = state->chat.input_upper_once
+                ? (uint8_t)LWIP_EXAMPLE_CHAT_MODE_UPPER
+                : state->chat.input_mode;
+            char c = key_to_char(key, input_mode);
+            if (c)
+            {
+                state->chat.input_upper_once = false;
+            }
             if (c && state->chat.input_len + 1 < sizeof(state->chat.input))
             {
                 state->chat.input[state->chat.input_len++] = c;
@@ -346,7 +353,7 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
 cleanup:
     if (debug)
     {
-        lwip_set_debug(NULL, LWIP_DBG_INFO, LWIP_DBG_DEPTH_MILESTONE);
+        lwip_set_event_cb(NULL);
         lwip_chat_debug_state = NULL;
     }
     if (state && state->exiting && socket_created)

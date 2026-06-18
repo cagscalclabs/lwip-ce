@@ -85,23 +85,6 @@ struct irc_saved_config
     char channel[IRC_CHANNEL_MAX];
 };
 
-static char irc_key_to_char(uint8_t key, uint8_t mode)
-{
-    static const char ascii_mapping[3][38] = {
-        "\"wrmh\0\0\0\0vqlg\0\0:zupkfc\0 ytojeb\0\0xsnida",
-        "\"WRMH\0\0\0\0VQLG\0\0:ZUPKFC\0 YTOJEB\0\0XSNIDA",
-        "+-*/^\0\0?369)\0\0\0.258(\0\0\0010147,"
-    };
-    char c;
-
-    if (key < 0x0A || key > 0x2F)
-    {
-        return '\0';
-    }
-    c = ascii_mapping[mode][key - 0x0A];
-    return c == '\001' ? '0' : c;
-}
-
 static const char *irc_input_mode_name(uint8_t mode)
 {
     switch ((enum irc_input_mode)mode)
@@ -122,6 +105,7 @@ static void irc_set_defaults(struct irc_state *state)
     snprintf(state->nick, sizeof(state->nick), "%s", IRC_NICK);
     state->use_tls = false;
     state->chat.input_mode = IRC_INPUT_LOWER;
+    state->chat.input_upper_once = false;
     state->setup_field = IRC_SETUP_SERVER;
 }
 
@@ -252,7 +236,7 @@ static void irc_setup_render(const struct irc_state *state)
         state->setup_field == IRC_SETUP_TLS ? "> tls:" : "  tls:";
 
     lwip_example_clear();
-    lwip_example_line("== IRC setup ==");
+    lwip_example_line("===== IRC setup =====");
     lwip_example_line(server_cursor);
     lwip_example_line(state->server);
     lwip_example_line(nick_cursor);
@@ -379,6 +363,12 @@ static bool irc_setup_run(struct irc_state *state)
         {
             state->chat.input_mode =
                 (uint8_t)((state->chat.input_mode + 1u) % 3u);
+            state->chat.input_upper_once = false;
+            redraw = true;
+        }
+        else if (key == sk_GraphVar)
+        {
+            state->chat.input_upper_once = true;
             redraw = true;
         }
         else if (key == sk_Left || key == sk_Right)
@@ -449,7 +439,14 @@ static bool irc_setup_run(struct irc_state *state)
         }
         else
         {
-            char c = irc_key_to_char(key, state->chat.input_mode);
+            uint8_t input_mode = state->chat.input_upper_once
+                                     ? (uint8_t)LWIP_EXAMPLE_CHAT_MODE_UPPER
+                                     : state->chat.input_mode;
+            char c = key_to_char(key, input_mode);
+            if (c)
+            {
+                state->chat.input_upper_once = false;
+            }
             redraw = irc_setup_append_char(state, c) || redraw;
         }
 
@@ -774,7 +771,7 @@ static void irc_send_input(struct irc_state *state, struct lwip_socket *sock)
         if (err == LWIP_OK)
         {
             snprintf(state->chat.title, sizeof(state->chat.title),
-                     "== IRC %.15s ==", state->channel);
+                     "===== IRC %.15s =====", state->channel);
             snprintf(msg, sizeof(msg), "joining %.24s", state->channel);
             irc_append_system(state, msg);
         }
@@ -821,7 +818,7 @@ static void irc_session_reset(struct irc_state *state)
     state->err = LWIP_OK;
     state->line_len = 0;
     state->line[0] = '\0';
-    snprintf(title, sizeof(title), "== IRC %.15s ==", state->channel);
+    snprintf(title, sizeof(title), "===== IRC %.15s =====", state->channel);
     lwip_example_chat_begin(&state->chat, title);
     state->chat.input_mode = input_mode;
 }
@@ -921,6 +918,11 @@ static void irc_session_run(struct irc_state *state)
         case sk_Alpha:
             state->chat.input_mode =
                 (uint8_t)((state->chat.input_mode + 1u) % 3u);
+            state->chat.input_upper_once = false;
+            lwip_example_chat_render_input(&state->chat);
+            break;
+        case sk_GraphVar:
+            state->chat.input_upper_once = true;
             lwip_example_chat_render_input(&state->chat);
             break;
         case sk_Del:
@@ -935,7 +937,14 @@ static void irc_session_run(struct irc_state *state)
             break;
         default:
             {
-                char c = irc_key_to_char(key, state->chat.input_mode);
+                uint8_t input_mode = state->chat.input_upper_once
+                                         ? (uint8_t)LWIP_EXAMPLE_CHAT_MODE_UPPER
+                                         : state->chat.input_mode;
+                char c = key_to_char(key, input_mode);
+                if (c)
+                {
+                    state->chat.input_upper_once = false;
+                }
                 if (c &&
                     state->chat.input_len + 1 < sizeof(state->chat.input))
                 {
