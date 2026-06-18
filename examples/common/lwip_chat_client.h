@@ -250,12 +250,6 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
         char outbound[LWIP_EXAMPLE_CHAT_INPUT + 2];
         uint8_t key;
 
-        if (!state->connected && lwip_example_cancelled())
-        {
-            state->exiting = true;
-            break;
-        }
-
         lwip_service_events();
 
         /* Scan the keypad once per iteration -- os_GetCSC() reports a press
@@ -270,14 +264,13 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
             lwip_chat_on_readable(state, &sock);
         }
 
-        if (key == sk_Stat)
-        {
-            lwip_example_stats_toggle();
-        }
-        if (key == sk_Clear)
+        if (lwip_example_cancelled(key))
             state->exiting = true;
 
-        lwip_example_draw_mem_stats();
+        if (lwip_example_mem_stats_tick(key))
+        {
+            lwip_example_chat_render(&state->chat);
+        }
 
         if (state->exiting)
             break;

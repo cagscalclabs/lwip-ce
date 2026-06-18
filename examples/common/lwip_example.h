@@ -10,18 +10,27 @@
 
 #include <ti/getcsc.h>
 #include <ti/getkey.h>
-#include <ti/screen.h>
+#include <graphx.h>
 
 #include <lwip.h>
 
 /* ----------------------------------------------------------------------
- * Small-font text surface
+ * graphx text surface
  *
- * All example output uses the OS small font (os_FontSelect(os_SmallFont) +
- * os_FontDrawText) drawn straight to the LCD — no graphx, no large/home-screen
- * font. The OS font routines don't track a cursor, so we keep our own row
- * position and advance it by the font height per line, wrapping back to the
- * top when we run off the bottom.
+ * All example output draws into the graphx back buffer (gfx_SetDrawBuffer())
+ * with the library's built-in 8x8 font, instead of the OS small font drawn
+ * straight to the LCD. This gives every drawing call a real, clipped
+ * rectangle-fill primitive for erasing (gfx_FillRectangle) instead of the
+ * old approach of overdrawing with a blank text string and hoping its pixel
+ * width covered whatever it was replacing.
+ *
+ * The back buffer is only made visible on screen by a periodic blit, driven
+ * by a self-rearming sys_timeout (the only timer primitive exposed to dylib
+ * consumers per the public API manifest -- no internal lwIP-CE dispatcher
+ * access here). This decouples "when example code draws" from "when the
+ * screen updates": app code can draw as often as it wants without tearing
+ * or visible flicker, and a burst of redraws between two ticks collapses
+ * into a single visible update.
  * -------------------------------------------------------------------- */
 
 #define LWIP_EXAMPLE_TOP 30     /* first line y (px), below the status row */
@@ -31,31 +40,100 @@
 #define LWIP_EXAMPLE_STATS_X 188
 #define LWIP_EXAMPLE_STATS_LINES 6
 #define LWIP_EXAMPLE_STATS_LOOP_INTERVAL 12
+#define LWIP_EXAMPLE_BLIT_INTERVAL_MS 15u
+
+#define LWIP_EXAMPLE_COLOR_BG     0xFF /* gfx_white */
+#define LWIP_EXAMPLE_COLOR_FG     0x00 /* gfx_black */
+#define LWIP_EXAMPLE_COLOR_SYSTEM 0x10 /* gfx_blue:   "* " system lines */
+#define LWIP_EXAMPLE_COLOR_SENT   0x03 /* gfx_green:  "> " our own messages */
+#define LWIP_EXAMPLE_COLOR_RECV   0x00 /* gfx_black:  "< " remote messages */
+#define LWIP_EXAMPLE_COLOR_ERROR  0xE0 /* gfx_red:    errors/alerts */
 
 static uint8_t lwip_example_row = LWIP_EXAMPLE_TOP;
 static uint8_t lwip_example_stats_loop_count = 0;
 static bool lwip_example_stack_running = false;
+static bool lwip_example_gfx_running = false;
+static bool lwip_example_blit_armed = false;
+
+static void lwip_example_present(void);
+
+static void lwip_example_blit_tick(void *arg)
+{
+    (void)arg;
+    if (!lwip_example_gfx_running || !lwip_example_blit_armed)
+    {
+        return;
+    }
+    gfx_BlitBuffer();
+    sys_timeout(LWIP_EXAMPLE_BLIT_INTERVAL_MS, lwip_example_blit_tick, NULL);
+}
+
+/* Brings up graphx and points it at the back buffer. Safe to call before
+ * lwip_start() -- it touches no lwIP state. */
+static void lwip_example_gfx_start(void)
+{
+    if (lwip_example_gfx_running)
+    {
+        return;
+    }
+    gfx_Begin();
+    gfx_SetDefaultPalette(gfx_8bpp);
+    gfx_SetDrawBuffer();
+    gfx_FillScreen(LWIP_EXAMPLE_COLOR_BG);
+    gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
+    gfx_SetTextBGColor(LWIP_EXAMPLE_COLOR_BG);
+    gfx_SetTextTransparentColor(LWIP_EXAMPLE_COLOR_BG);
+    gfx_BlitBuffer();
+    lwip_example_gfx_running = true;
+}
+
+/* Arms the periodic blit. Must only be called after lwip_start() has run --
+ * sys_timeout() writes into lwIP's timeout list, which sys_timeouts_init()
+ * (called from inside lwip_start()) hasn't set up yet otherwise. Calling
+ * this too early crashes instantly on hardware. */
+static void lwip_example_gfx_blit_start(void)
+{
+    if (!lwip_example_gfx_running || lwip_example_blit_armed)
+    {
+        return;
+    }
+    lwip_example_blit_armed = true;
+    sys_timeout(LWIP_EXAMPLE_BLIT_INTERVAL_MS, lwip_example_blit_tick, NULL);
+}
+
+static void lwip_example_gfx_stop(void)
+{
+    if (!lwip_example_gfx_running)
+    {
+        return;
+    }
+    if (lwip_example_blit_armed)
+    {
+        sys_untimeout(lwip_example_blit_tick, NULL);
+        lwip_example_blit_armed = false;
+    }
+    lwip_example_gfx_running = false;
+    gfx_End();
+}
 
 static uint8_t lwip_example_line_h(void)
 {
-    uint8_t h;
-    os_FontSelect(os_SmallFont);
-    h = (uint8_t)os_FontGetHeight();
-    return h ? h : 8;
+    return 8;
 }
 
 static void lwip_example_stats_invalidate(void);
 
-/* Clear the screen and reset the cursor to the top. */
+/* Clear the back buffer and reset the cursor to the top. */
 static void lwip_example_clear(void)
 {
-    os_ClrLCDFull();
+    gfx_SetColor(LWIP_EXAMPLE_COLOR_BG);
+    gfx_FillScreen(LWIP_EXAMPLE_COLOR_BG);
     lwip_example_row = LWIP_EXAMPLE_TOP;
     lwip_example_stats_invalidate();
 }
 
-/* Draw one small-font line at the current row and advance. Wraps to the top
- * (clearing) when the next line would run off the bottom. */
+/* Draw one line at the current row and advance. Wraps to the top (clearing)
+ * when the next line would run off the bottom. */
 static void lwip_example_line(const char *text)
 {
     uint8_t h = lwip_example_line_h();
@@ -64,12 +142,12 @@ static void lwip_example_line(const char *text)
         lwip_example_clear();
         h = lwip_example_line_h();
     }
-    os_FontSelect(os_SmallFont);
-    os_FontDrawText(text ? text : "", LWIP_EXAMPLE_LEFT, lwip_example_row);
+    gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
+    gfx_PrintStringXY(text ? text : "", LWIP_EXAMPLE_LEFT, lwip_example_row);
     lwip_example_row = (uint8_t)(lwip_example_row + h);
 }
 
-/* printf-style small-font line. */
+/* printf-style line. */
 #define lwip_example_linef(...)                        \
     do                                                 \
     {                                                  \
@@ -101,44 +179,26 @@ static void lwip_example_format_k(char *buf, size_t buf_len, size_t bytes)
 static void lwip_example_stats_erase_row(uint8_t y)
 {
     /* Stats text is right-aligned to LWIP_EXAMPLE_LCD_W, so the erase must
-     * span the full row from LWIP_EXAMPLE_STATS_X to the screen edge.
-     * Measure actual blank width and pad with extra copies if needed --
-     * a fixed-count space string can fall short depending on font metrics. */
-    static const char blank[] = "                                        ";
-    int needed = LWIP_EXAMPLE_LCD_W - LWIP_EXAMPLE_STATS_X;
-    int got = (int)os_FontGetWidth(blank);
-
-    os_FontDrawText(blank, LWIP_EXAMPLE_STATS_X, y);
-    if (got > 0 && got < needed)
-    {
-        os_FontDrawText(blank, (uint16_t)(LWIP_EXAMPLE_STATS_X + got), y);
-    }
+     * span the full row from LWIP_EXAMPLE_STATS_X to the screen edge. A
+     * real rect fill, so there's no font-metric guessing about coverage. */
+    gfx_SetColor(LWIP_EXAMPLE_COLOR_BG);
+    gfx_FillRectangle(LWIP_EXAMPLE_STATS_X, y,
+                      LWIP_EXAMPLE_LCD_W - LWIP_EXAMPLE_STATS_X,
+                      lwip_example_line_h());
 }
 
-static char lwip_example_stats_last[LWIP_EXAMPLE_STATS_LINES][32];
-
-/* Forces the next lwip_example_draw_mem_stats() call to repaint every row,
- * even if values are unchanged. Needed whenever something else may have
- * erased the stats area underneath the cache (e.g. a full screen clear). */
 static void lwip_example_stats_invalidate(void)
 {
-    memset(lwip_example_stats_last, 0, sizeof(lwip_example_stats_last));
 }
 
-static void lwip_example_stats_line(uint8_t row, uint8_t y, const char *text)
+static void lwip_example_stats_line(uint8_t y, const char *text)
 {
     int width;
 
-    if (strcmp(lwip_example_stats_last[row], text) == 0)
-    {
-        return;
-    }
-    snprintf(lwip_example_stats_last[row], sizeof(lwip_example_stats_last[row]), "%s", text);
-
-    os_FontSelect(os_SmallFont);
     lwip_example_stats_erase_row(y);
-    width = (int)os_FontGetWidth(text);
-    os_FontDrawText(text, LWIP_EXAMPLE_LCD_W - 2 - width, y);
+    width = (int)gfx_GetStringWidth(text);
+    gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
+    gfx_PrintStringXY(text, LWIP_EXAMPLE_LCD_W - 2 - width, y);
 }
 
 static bool lwip_example_stats_visible = false;
@@ -167,14 +227,14 @@ static void lwip_example_draw_mem_stats(void)
     lwip_example_format_k(total, sizeof(total), stats.pbuf_pool_size);
     snprintf(line, sizeof(line), "P:%s/%s %u%%", used, total,
              lwip_example_pct(stats.pbuf_pool_used, stats.pbuf_pool_size));
-    lwip_example_stats_line(0, y, line);
+    lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.tls_used);
     lwip_example_format_k(total, sizeof(total), stats.tls_limit);
     snprintf(line, sizeof(line), "T:%s/%s %u%%", used, total,
              lwip_example_pct(stats.tls_used, stats.tls_limit));
-    lwip_example_stats_line(1, y, line);
+    lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
     h_limit = stats.heap_limit;
@@ -182,29 +242,29 @@ static void lwip_example_draw_mem_stats(void)
     lwip_example_format_k(total, sizeof(total), h_limit);
     snprintf(line, sizeof(line), "H:%s/%s %u%%", used, total,
              lwip_example_pct(stats.heap_used, h_limit));
-    lwip_example_stats_line(2, y, line);
+    lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.rx_ring_used);
     lwip_example_format_k(total, sizeof(total), stats.rx_ring_size);
     snprintf(line, sizeof(line), "R:%s/%s %u%%", used, total,
              lwip_example_pct(stats.rx_ring_used, stats.rx_ring_size));
-    lwip_example_stats_line(3, y, line);
+    lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.socket_ring_used);
     lwip_example_format_k(total, sizeof(total), stats.socket_ring_size);
     snprintf(line, sizeof(line), "C:%s/%s %u%%", used, total,
              lwip_example_pct(stats.socket_ring_used, stats.socket_ring_size));
-    lwip_example_stats_line(4, y, line);
+    lwip_example_stats_line(y, line);
 
     y = (uint8_t)(y + h);
     lwip_example_format_k(used, sizeof(used), stats.user_reserved);
     snprintf(line, sizeof(line), "U:%s", used);
-    lwip_example_stats_line(5, y, line);
+    lwip_example_stats_line(y, line);
 }
 
-static void lwip_example_stats_toggle(void)
+static bool lwip_example_stats_toggle(void)
 {
     lwip_example_stats_visible = !lwip_example_stats_visible;
     if (!lwip_example_stats_visible)
@@ -213,18 +273,21 @@ static void lwip_example_stats_toggle(void)
         uint8_t h = lwip_example_line_h();
         uint8_t y = (uint8_t)(LWIP_EXAMPLE_BOTTOM - (h * LWIP_EXAMPLE_STATS_LINES));
         uint8_t i;
-        os_FontSelect(os_SmallFont);
         for (i = 0; i < LWIP_EXAMPLE_STATS_LINES; i++)
         {
             lwip_example_stats_erase_row(y);
             y = (uint8_t)(y + h);
         }
         lwip_example_stats_invalidate();
+        lwip_example_present();
+        return true;
     }
     else
     {
         lwip_example_stats_invalidate();
         lwip_example_draw_mem_stats();
+        lwip_example_present();
+        return false;
     }
 }
 
@@ -236,23 +299,39 @@ static void lwip_example_stats_redraw_tick(void)
     {
         lwip_example_stats_loop_count = 0;
         lwip_example_draw_mem_stats();
+        lwip_example_present();
     }
 }
 
-static void lwip_example_mem_stats_tick(void)
+static bool lwip_example_mem_stats_tick(uint8_t key)
 {
-    if (os_GetCSC() == sk_Stat)
+    if (key == sk_Stat)
     {
-        lwip_example_stats_toggle();
-        return;
+        return lwip_example_stats_toggle();
     }
     lwip_example_stats_redraw_tick();
+    return false;
+}
+
+/* Make whatever's been drawn into the back buffer actually visible right
+ * now. The periodic blit timer (armed once lwip_start() has initialized
+ * lwIP's timeout list -- see lwip_example_gfx_blit_start()) covers steady
+ * -state rendering, but anything drawn before that point, or right before
+ * a blocking os_GetKey() wait, needs an immediate manual blit or the user
+ * never sees it. */
+static void lwip_example_present(void)
+{
+    if (lwip_example_gfx_running)
+    {
+        gfx_BlitBuffer();
+    }
 }
 
 static void lwip_example_wait_key(void)
 {
     lwip_example_line("");
     lwip_example_line("Press any key");
+    lwip_example_present();
     os_GetKey();
 }
 
@@ -265,6 +344,7 @@ static void lwip_example_show(const char *line1, const char *line2)
     {
         lwip_example_line(line2);
     }
+    lwip_example_present();
 }
 
 static void lwip_example_show_and_wait(const char *line1, const char *line2)
@@ -280,7 +360,7 @@ static void lwip_example_show_and_wait(const char *line1, const char *line2)
 /* Print a (possibly multi-line) text buffer, breaking on CRLF / LF so HTTP
  * header lines land on their own rows instead of rendering the \r\n bytes as
  * stray glyphs. \r is swallowed; \n ends a line; any other non-printable byte
- * becomes '.'. Each output line is length-bounded to the small-font surface. */
+ * becomes '.'. Each output line is length-bounded to the text surface. */
 static void lwip_example_lines_crlf(const char *text, size_t len)
 {
     char line[44];
@@ -321,16 +401,31 @@ static void lwip_example_lines_crlf(const char *text, size_t len)
 /* ----------------------------------------------------------------------
  * Chat console
  *
- * Nonblocking, redraw-based chat surface for live examples. The transcript
- * stores already-wrapped small-font lines. The input line is rendered after
- * the transcript on every redraw, so inbound text arriving while the user is
- * typing pushes the prompt downward/scrolls older lines instead of overwriting
- * or splitting the input mid-word.
+ * Nonblocking, incrementally-redrawn chat surface for live examples.
+ *
+ * The transcript is a ring buffer of already-wrapped display rows (not a
+ * raw character stream): appending a message wraps it into 1+ fixed-width
+ * rows and pushes each onto the ring head, evicting from the tail once full.
+ * This makes appends O(wrapped rows) instead of O(buffer size), and means a
+ * redraw never has to re-wrap the whole transcript from scratch. Each ring
+ * row also carries a color tag (system/sent/received/error) set at append
+ * time, so e.g. "* connected" and "< someone: hi" render in different colors
+ * without any extra bookkeeping at render time.
+ *
+ * The input area is pinned to the bottom of the screen and grows upward:
+ * the transcript/input boundary only moves (and forces a one-time full
+ * repaint of the rows above it) when the input's wrapped row count changes.
+ * Otherwise, only the on-screen rows whose backing content actually changed
+ * since the last render get redrawn (mirroring the per-row diff cache the
+ * stats panel already uses) -- no full-screen clear per message. That full
+ * clear is reserved for chat_begin()'s first paint and for input-height
+ * transitions, both rare compared to message volume.
  * -------------------------------------------------------------------- */
 
 #define LWIP_EXAMPLE_CHAT_COLS 42
-#define LWIP_EXAMPLE_CHAT_LINES 20
+#define LWIP_EXAMPLE_CHAT_LINES 26
 #define LWIP_EXAMPLE_CHAT_INPUT 88
+#define LWIP_EXAMPLE_CHAT_INPUT_ROWS 3
 
 typedef enum
 {
@@ -339,71 +434,93 @@ typedef enum
     LWIP_EXAMPLE_CHAT_MODE_NUMERIC,
 } lwip_example_chat_input_mode_t;
 
+/* Message class -> color tag, applied to a whole logical message (and thus
+ * to every wrapped row it produces). */
+typedef enum
+{
+    LWIP_EXAMPLE_CHAT_CLASS_RECV = 0, /* "< " remote messages, default color */
+    LWIP_EXAMPLE_CHAT_CLASS_SYSTEM,   /* "* " connection/status lines */
+    LWIP_EXAMPLE_CHAT_CLASS_SENT,     /* "> " our own messages */
+    LWIP_EXAMPLE_CHAT_CLASS_ERROR,    /* failures/alerts */
+} lwip_example_chat_class_t;
+
+static uint8_t lwip_example_chat_class_color(lwip_example_chat_class_t cls)
+{
+    switch (cls)
+    {
+    case LWIP_EXAMPLE_CHAT_CLASS_SYSTEM: return LWIP_EXAMPLE_COLOR_SYSTEM;
+    case LWIP_EXAMPLE_CHAT_CLASS_SENT:   return LWIP_EXAMPLE_COLOR_SENT;
+    case LWIP_EXAMPLE_CHAT_CLASS_ERROR:  return LWIP_EXAMPLE_COLOR_ERROR;
+    case LWIP_EXAMPLE_CHAT_CLASS_RECV:
+    default:                            return LWIP_EXAMPLE_COLOR_RECV;
+    }
+}
+
 struct lwip_example_chat
 {
     char title[24];
-    char lines[LWIP_EXAMPLE_CHAT_LINES][LWIP_EXAMPLE_CHAT_COLS + 1];
+
+    /* Transcript ring: row [head] is the most recently pushed line; rows
+     * wrap backward from there. `count` saturates at LWIP_EXAMPLE_CHAT_LINES. */
+    char ring[LWIP_EXAMPLE_CHAT_LINES][LWIP_EXAMPLE_CHAT_COLS + 1];
+    uint8_t ring_color[LWIP_EXAMPLE_CHAT_LINES];
+    uint8_t ring_head;
+    uint8_t ring_count;
+
+    /* What's currently painted on screen, indexed top-to-bottom by visible
+     * transcript row. Compared against the ring each render to skip rows
+     * that haven't changed. shown_valid tracks how many of these are
+     * actually populated (vs. blank/never-drawn). */
+    char shown[LWIP_EXAMPLE_CHAT_LINES][LWIP_EXAMPLE_CHAT_COLS + 1];
+    uint8_t shown_valid;
+
     char input[LWIP_EXAMPLE_CHAT_INPUT];
-    uint8_t line_count;
     uint8_t input_len;
     uint8_t input_mode;
-    uint8_t rendered_line_count; /* line_count at last full render, for detecting shifts */
-    uint8_t rendered_start;      /* first visible transcript line index at last render */
+    uint8_t rendered_input_y;
+    uint8_t rendered_input_rows;
 };
 
-static void lwip_example_chat_append_line(struct lwip_example_chat *chat,
-                                          const char *line)
+/* Push one already-bounded display row onto the transcript ring head. */
+static void lwip_example_chat_ring_push(struct lwip_example_chat *chat,
+                                        const char *line, uint8_t color)
 {
-    if (!chat)
+    chat->ring_head = (uint8_t)((chat->ring_head + 1u) % LWIP_EXAMPLE_CHAT_LINES);
+    snprintf(chat->ring[chat->ring_head], LWIP_EXAMPLE_CHAT_COLS + 1, "%s",
+             line ? line : "");
+    chat->ring_color[chat->ring_head] = color;
+    if (chat->ring_count < LWIP_EXAMPLE_CHAT_LINES)
     {
-        return;
+        chat->ring_count++;
     }
-    if (chat->line_count >= LWIP_EXAMPLE_CHAT_LINES)
-    {
-        memmove(chat->lines[0], chat->lines[1],
-                (LWIP_EXAMPLE_CHAT_LINES - 1) * sizeof chat->lines[0]);
-        chat->line_count = LWIP_EXAMPLE_CHAT_LINES - 1;
-    }
-    snprintf(chat->lines[chat->line_count], sizeof chat->lines[0],
-             "%s", line ? line : "");
-    chat->line_count++;
 }
 
-static void lwip_example_chat_append_segment(struct lwip_example_chat *chat,
-                                             const char *first_prefix,
-                                             const char *cont_prefix,
-                                             const char *text,
-                                             size_t len)
+/* Wrap one logical message (prefix + text, no embedded newlines) into
+ * LWIP_EXAMPLE_CHAT_COLS-wide rows and push each onto the ring, breaking on
+ * the last space when a row would otherwise split a word. */
+static void lwip_example_chat_ring_push_wrapped(struct lwip_example_chat *chat,
+                                                 const char *prefix,
+                                                 const char *text,
+                                                 size_t len,
+                                                 uint8_t color)
 {
     bool first = true;
 
-    if (!chat || !text)
+    while (len > 0 || first)
     {
-        return;
-    }
-
-    while (len > 0)
-    {
-        const char *prefix = first ? (first_prefix ? first_prefix : "")
-                                  : (cont_prefix ? cont_prefix : "");
-        size_t prefix_len = strlen(prefix);
-        size_t avail = (prefix_len < LWIP_EXAMPLE_CHAT_COLS)
-                           ? LWIP_EXAMPLE_CHAT_COLS - prefix_len
-                           : 0;
-        size_t take = len;
-        size_t i;
         char line[LWIP_EXAMPLE_CHAT_COLS + 1];
+        const char *p = first ? (prefix ? prefix : "") : "";
+        size_t prefix_len = strlen(p);
+        size_t avail = prefix_len < LWIP_EXAMPLE_CHAT_COLS
+                           ? LWIP_EXAMPLE_CHAT_COLS - prefix_len
+                           : LWIP_EXAMPLE_CHAT_COLS;
+        size_t take = len > avail ? avail : len;
+        size_t line_len;
+        size_t i;
 
-        if (avail == 0)
-        {
-            avail = LWIP_EXAMPLE_CHAT_COLS;
-            prefix = "";
-            prefix_len = 0;
-        }
-        if (take > avail)
+        if (take < len)
         {
             size_t last_space = 0;
-            take = avail;
             for (i = 0; i < take; i++)
             {
                 if (text[i] == ' ')
@@ -416,19 +533,21 @@ static void lwip_example_chat_append_segment(struct lwip_example_chat *chat,
                 take = last_space;
             }
         }
-        if (take == 0)
+        snprintf(line, sizeof(line), "%s", p);
+        line_len = strlen(line);
+        for (i = 0; i < take && line_len + 1 < sizeof(line); i++)
         {
-            take = len < avail ? len : avail;
-            if (take == 0)
-            {
-                break;
-            }
+            char c = text ? text[i] : '\0';
+            line[line_len++] = (c >= 32 && c <= 126) ? c : '.';
         }
+        line[line_len] = '\0';
+        lwip_example_chat_ring_push(chat, line, color);
 
-        snprintf(line, sizeof(line), "%s%.*s",
-                 prefix, (int)take, text);
-        lwip_example_chat_append_line(chat, line);
-
+        first = false;
+        if (take >= len)
+        {
+            break;
+        }
         text += take;
         len -= take;
         while (len > 0 && *text == ' ')
@@ -436,17 +555,23 @@ static void lwip_example_chat_append_segment(struct lwip_example_chat *chat,
             text++;
             len--;
         }
-        first = false;
     }
 }
 
-static void lwip_example_chat_append(struct lwip_example_chat *chat,
-                                     const char *prefix,
-                                     const char *text,
-                                     size_t len)
+/* Append one message to the transcript: split on CRLF/LF into logical
+ * lines, wrap each into rows, push onto the ring. Only the first line gets
+ * `prefix` (e.g. "< ", "* ", "> "); continuation lines after an embedded
+ * newline start fresh at column 0. `cls` selects the color for every row
+ * this message produces. */
+static void lwip_example_chat_append_class(struct lwip_example_chat *chat,
+                                           const char *prefix,
+                                           const char *text,
+                                           size_t len,
+                                           lwip_example_chat_class_t cls)
 {
     size_t start = 0;
-    bool first_line = true;
+    bool first = true;
+    uint8_t color = lwip_example_chat_class_color(cls);
 
     if (!chat || !text)
     {
@@ -456,24 +581,13 @@ static void lwip_example_chat_append(struct lwip_example_chat *chat,
     while (start <= len)
     {
         size_t end = start;
+
         while (end < len && text[end] != '\r' && text[end] != '\n')
         {
             end++;
         }
-        if (end > start)
-        {
-            lwip_example_chat_append_segment(
-                chat,
-                first_line ? prefix : NULL,
-                prefix && first_line ? "    " : NULL,
-                text + start,
-                end - start);
-        }
-        else if (first_line && prefix)
-        {
-            lwip_example_chat_append_line(chat, prefix);
-        }
-        first_line = false;
+        lwip_example_chat_ring_push_wrapped(chat, first ? prefix : NULL,
+                                            text + start, end - start, color);
         if (end >= len)
         {
             break;
@@ -483,7 +597,19 @@ static void lwip_example_chat_append(struct lwip_example_chat *chat,
         {
             start++;
         }
+        first = false;
     }
+}
+
+/* Back-compat default: recv-colored append, for callers that don't care
+ * about message classification (e.g. raw passthrough chat clients). */
+static void lwip_example_chat_append(struct lwip_example_chat *chat,
+                                     const char *prefix,
+                                     const char *text,
+                                     size_t len)
+{
+    lwip_example_chat_append_class(chat, prefix, text, len,
+                                   LWIP_EXAMPLE_CHAT_CLASS_RECV);
 }
 
 static uint8_t lwip_example_chat_input_rows(const struct lwip_example_chat *chat)
@@ -491,7 +617,15 @@ static uint8_t lwip_example_chat_input_rows(const struct lwip_example_chat *chat
     size_t len = 2u + (chat ? chat->input_len : 0u);
     uint8_t rows = (uint8_t)((len + LWIP_EXAMPLE_CHAT_COLS - 1u) /
                              LWIP_EXAMPLE_CHAT_COLS);
-    return rows ? rows : 1;
+    if (rows == 0)
+    {
+        rows = 1;
+    }
+    if (rows > LWIP_EXAMPLE_CHAT_INPUT_ROWS)
+    {
+        rows = LWIP_EXAMPLE_CHAT_INPUT_ROWS;
+    }
+    return rows;
 }
 
 static uint8_t lwip_example_chat_draw_wrapped(uint8_t y,
@@ -530,7 +664,7 @@ static uint8_t lwip_example_chat_draw_wrapped(uint8_t y,
         }
         snprintf(line, sizeof(line), "%s%.*s", p, (int)take,
                  text ? text : "");
-        os_FontDrawText(line, LWIP_EXAMPLE_LEFT, y);
+        gfx_PrintStringXY(line, LWIP_EXAMPLE_LEFT, y);
         y = (uint8_t)(y + h);
         first = false;
         if (take >= len)
@@ -548,27 +682,70 @@ static uint8_t lwip_example_chat_draw_wrapped(uint8_t y,
     return y;
 }
 
-/* Returns the y coordinate where the input prompt begins, given the current
- * chat state. Used by both full render and input-only partial redraw. */
-static uint8_t lwip_example_chat_input_y(const struct lwip_example_chat *chat,
-                                          uint8_t h)
+/* Blank one row in place with a real rectangle fill -- no font-metric
+ * guessing about coverage width. */
+static void lwip_example_chat_erase_row(uint8_t y)
 {
-    uint8_t y = (uint8_t)(LWIP_EXAMPLE_TOP + h); /* below title */
-    uint8_t rows_total = (uint8_t)((LWIP_EXAMPLE_BOTTOM > y)
-                                       ? ((LWIP_EXAMPLE_BOTTOM - y) / h)
-                                       : 0);
-    uint8_t input_rows = lwip_example_chat_input_rows(chat);
-    uint8_t transcript_rows = rows_total > input_rows ? rows_total - input_rows : 0;
-    uint8_t start = (chat->line_count > transcript_rows)
-                        ? (uint8_t)(chat->line_count - transcript_rows)
-                        : 0;
-    uint8_t i;
-    for (i = start; i < chat->line_count; i++)
-        y = (uint8_t)(y + h);
-    return y;
+    gfx_SetColor(LWIP_EXAMPLE_COLOR_BG);
+    gfx_FillRectangle(LWIP_EXAMPLE_LEFT, y,
+                      LWIP_EXAMPLE_LCD_W - LWIP_EXAMPLE_LEFT,
+                      lwip_example_line_h());
 }
 
-/* Full redraw: clears the screen and repaints title, transcript, input. */
+/* Repaint only the transcript rows whose ring content differs from what's
+ * currently shown on screen. `top_y`/`transcript_rows` describe the
+ * transcript's current screen region; `force` repaints every row (used
+ * after a full clear or when the region itself moved). */
+static void lwip_example_chat_render_transcript(struct lwip_example_chat *chat,
+                                                 uint8_t top_y,
+                                                 uint8_t transcript_rows,
+                                                 bool force)
+{
+    uint8_t h = lwip_example_line_h();
+    uint8_t visible = chat->ring_count < transcript_rows
+                          ? chat->ring_count : transcript_rows;
+    uint8_t blank_rows = (uint8_t)(transcript_rows - visible);
+    uint8_t i;
+
+    /* Oldest-shown row first, newest last -- matches ring order read
+     * backward from head. */
+    for (i = 0; i < visible; i++)
+    {
+        uint8_t ring_idx = (uint8_t)((chat->ring_head + LWIP_EXAMPLE_CHAT_LINES
+                                       - (visible - 1u - i)) % LWIP_EXAMPLE_CHAT_LINES);
+        uint8_t row = (uint8_t)(blank_rows + i);
+        uint8_t y = (uint8_t)(top_y + row * h);
+        const char *line = chat->ring[ring_idx];
+
+        if (!force && row < chat->shown_valid &&
+            strcmp(chat->shown[row], line) == 0)
+        {
+            continue;
+        }
+        lwip_example_chat_erase_row(y);
+        gfx_SetTextFGColor(chat->ring_color[ring_idx]);
+        gfx_PrintStringXY(line, LWIP_EXAMPLE_LEFT, y);
+        snprintf(chat->shown[row], sizeof chat->shown[row], "%s", line);
+    }
+
+    for (i = 0; i < blank_rows; i++)
+    {
+        uint8_t y = (uint8_t)(top_y + i * h);
+        if (!force && i < chat->shown_valid && chat->shown[i][0] == '\0')
+        {
+            continue;
+        }
+        lwip_example_chat_erase_row(y);
+        chat->shown[i][0] = '\0';
+    }
+
+    chat->shown_valid = transcript_rows;
+}
+
+/* Full redraw: clears the screen and repaints title, transcript, input.
+ * Only needed for the first paint and when the input/transcript boundary
+ * moves -- normal message traffic goes through chat_render(), which only
+ * touches transcript rows that actually changed. */
 static void lwip_example_chat_render_full(struct lwip_example_chat *chat)
 {
     uint8_t h;
@@ -576,16 +753,18 @@ static void lwip_example_chat_render_full(struct lwip_example_chat *chat)
     uint8_t rows_total;
     uint8_t input_rows;
     uint8_t transcript_rows;
-    uint8_t start = 0;
-    uint8_t i;
+    uint8_t transcript_top;
     char prompt[4];
 
+    if (!chat)
+        return;
+
     lwip_example_clear();
-    os_FontSelect(os_SmallFont);
     h = lwip_example_line_h();
     y = LWIP_EXAMPLE_TOP;
 
-    os_FontDrawText(chat->title, LWIP_EXAMPLE_LEFT, y);
+    gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
+    gfx_PrintStringXY(chat->title, LWIP_EXAMPLE_LEFT, y);
     y = (uint8_t)(y + h);
 
     rows_total = (uint8_t)((LWIP_EXAMPLE_BOTTOM > y)
@@ -593,14 +772,16 @@ static void lwip_example_chat_render_full(struct lwip_example_chat *chat)
                                : 0);
     input_rows = lwip_example_chat_input_rows(chat);
     transcript_rows = rows_total > input_rows ? rows_total - input_rows : 0;
-    if (chat->line_count > transcript_rows)
-        start = (uint8_t)(chat->line_count - transcript_rows);
-
-    for (i = start; i < chat->line_count && y + h <= LWIP_EXAMPLE_BOTTOM; i++)
+    if (transcript_rows > LWIP_EXAMPLE_CHAT_LINES)
     {
-        os_FontDrawText(chat->lines[i], LWIP_EXAMPLE_LEFT, y);
-        y = (uint8_t)(y + h);
+        transcript_rows = LWIP_EXAMPLE_CHAT_LINES;
     }
+    transcript_top = y;
+
+    chat->shown_valid = 0;
+    lwip_example_chat_render_transcript(chat, transcript_top, transcript_rows,
+                                        true);
+    y = (uint8_t)(transcript_top + transcript_rows * h);
 
     switch ((lwip_example_chat_input_mode_t)chat->input_mode)
     {
@@ -611,15 +792,21 @@ static void lwip_example_chat_render_full(struct lwip_example_chat *chat)
     }
     prompt[1] = ' ';
     prompt[2] = '\0';
+    gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
     (void)lwip_example_chat_draw_wrapped(y, prompt, chat->input, chat->input_len);
-    chat->rendered_line_count = chat->line_count;
-    chat->rendered_start = start;
+    chat->rendered_input_y = y;
+    chat->rendered_input_rows = input_rows;
     lwip_example_draw_mem_stats();
+    lwip_example_present();
 }
 
-/* Render the transcript + input. If new lines were appended without the
- * visible window's top line changing (no scroll needed), only the new
- * lines are drawn at the next free row instead of clearing the screen. */
+/* Render the transcript + input. Cheap path: if the input's row count
+ * hasn't changed since the last render, the transcript/input boundary is
+ * stable, so only repaint transcript rows whose ring content actually
+ * changed (no full-screen clear, no full repaint). Falls back to a full
+ * redraw on the first render or whenever the boundary moves. */
+static void lwip_example_chat_render_input(struct lwip_example_chat *chat);
+
 static void lwip_example_chat_render(struct lwip_example_chat *chat)
 {
     uint8_t h;
@@ -627,12 +814,16 @@ static void lwip_example_chat_render(struct lwip_example_chat *chat)
     uint8_t rows_total;
     uint8_t input_rows;
     uint8_t transcript_rows;
-    uint8_t start = 0;
-    uint8_t i;
-    char prompt[4];
+    uint8_t transcript_top;
 
     if (!chat)
         return;
+
+    if (chat->rendered_input_rows == 0)
+    {
+        lwip_example_chat_render_full(chat);
+        return;
+    }
 
     h = lwip_example_line_h();
     y = (uint8_t)(LWIP_EXAMPLE_TOP + h);
@@ -640,86 +831,49 @@ static void lwip_example_chat_render(struct lwip_example_chat *chat)
                                ? ((LWIP_EXAMPLE_BOTTOM - y) / h)
                                : 0);
     input_rows = lwip_example_chat_input_rows(chat);
+    if (input_rows != chat->rendered_input_rows)
+    {
+        lwip_example_chat_render_full(chat);
+        return;
+    }
+
     transcript_rows = rows_total > input_rows ? rows_total - input_rows : 0;
-    if (chat->line_count > transcript_rows)
-        start = (uint8_t)(chat->line_count - transcript_rows);
-
-    /* Need a full redraw if this isn't the first render, the window's top
-     * line shifted (scroll), or the transcript shrank (shouldn't happen,
-     * but be safe). Otherwise just paint the newly appended lines. */
-    if (chat->rendered_line_count == 0 && chat->line_count == 0)
+    if (transcript_rows > LWIP_EXAMPLE_CHAT_LINES)
     {
-        lwip_example_chat_render_full(chat);
-        return;
+        transcript_rows = LWIP_EXAMPLE_CHAT_LINES;
     }
-    if (start != chat->rendered_start || chat->line_count < chat->rendered_line_count)
-    {
-        lwip_example_chat_render_full(chat);
-        return;
-    }
-
-    os_FontSelect(os_SmallFont);
-    for (i = chat->rendered_line_count; i < chat->line_count; i++)
-    {
-        y = (uint8_t)(LWIP_EXAMPLE_TOP + h + h * (i - start));
-        if (y + h > LWIP_EXAMPLE_BOTTOM)
-        {
-            /* Didn't fit -- our incremental window math is out of sync
-             * with what's actually on screen. Fall back to a full redraw
-             * instead of marking unrendered lines as rendered. */
-            lwip_example_chat_render_full(chat);
-            return;
-        }
-        os_FontDrawText(chat->lines[i], LWIP_EXAMPLE_LEFT, y);
-    }
-    y = (uint8_t)(LWIP_EXAMPLE_TOP + h + h * (chat->line_count - start));
-
-    switch ((lwip_example_chat_input_mode_t)chat->input_mode)
-    {
-    case LWIP_EXAMPLE_CHAT_MODE_UPPER: prompt[0] = 'A'; break;
-    case LWIP_EXAMPLE_CHAT_MODE_NUMERIC: prompt[0] = '0'; break;
-    case LWIP_EXAMPLE_CHAT_MODE_LOWER:
-    default: prompt[0] = 'a'; break;
-    }
-    prompt[1] = ' ';
-    prompt[2] = '\0';
-    (void)lwip_example_chat_draw_wrapped(y, prompt, chat->input, chat->input_len);
-    chat->rendered_line_count = chat->line_count;
-    chat->rendered_start = start;
+    transcript_top = y;
+    lwip_example_chat_render_transcript(chat, transcript_top, transcript_rows,
+                                        false);
+    lwip_example_chat_render_input(chat);
     lwip_example_draw_mem_stats();
+    lwip_example_present();
 }
 
-/* Partial redraw: erase and redraw only the input prompt row(s).
- * Used when the user types or backspaces — the transcript hasn't changed. */
+/* Redraw only the prompt rows while typing (or once the input is sent and
+ * cleared). If the input wraps to a different row count, the transcript
+ * reservation changes, so fall back to full redraw. */
 static void lwip_example_chat_render_input(struct lwip_example_chat *chat)
 {
     uint8_t h;
-    uint8_t y;
-    uint8_t input_rows_old;
+    uint8_t rows;
     uint8_t i;
     char prompt[4];
 
     if (!chat)
         return;
 
-    /* If the transcript shifted since last full render, we need a full redraw. */
-    if (chat->line_count != chat->rendered_line_count)
+    rows = lwip_example_chat_input_rows(chat);
+    if (rows != chat->rendered_input_rows)
     {
-        lwip_example_chat_render(chat);
+        lwip_example_chat_render_full(chat);
         return;
     }
 
-    os_FontSelect(os_SmallFont);
     h = lwip_example_line_h();
-    y = lwip_example_chat_input_y(chat, h);
-
-    /* Erase enough rows to cover the old input (max input_rows). */
-    input_rows_old = lwip_example_chat_input_rows(chat);
-    for (i = 0; i < input_rows_old + 1u && (unsigned)(y + i * h) < LWIP_EXAMPLE_BOTTOM; i++)
+    for (i = 0; i < rows && (unsigned)(chat->rendered_input_y + i * h) < LWIP_EXAMPLE_BOTTOM; i++)
     {
-        os_FontDrawText(
-            "                                          ",
-            LWIP_EXAMPLE_LEFT, (uint8_t)(y + i * h));
+        lwip_example_chat_erase_row((uint8_t)(chat->rendered_input_y + i * h));
     }
 
     switch ((lwip_example_chat_input_mode_t)chat->input_mode)
@@ -731,7 +885,10 @@ static void lwip_example_chat_render_input(struct lwip_example_chat *chat)
     }
     prompt[1] = ' ';
     prompt[2] = '\0';
-    (void)lwip_example_chat_draw_wrapped(y, prompt, chat->input, chat->input_len);
+    gfx_SetTextFGColor(LWIP_EXAMPLE_COLOR_FG);
+    (void)lwip_example_chat_draw_wrapped(chat->rendered_input_y, prompt,
+                                         chat->input, chat->input_len);
+    lwip_example_present();
 }
 
 static void lwip_example_chat_begin(struct lwip_example_chat *chat,
@@ -774,9 +931,9 @@ static const char *lwip_example_socket_status_name(lwip_status_t status)
  * Debug console
  *
  * A reusable sink for the unified lwIP debug callback (lwip_debug_fn). It
- * draws on the same small-font surface as the rest of these helpers, so it
- * stays visually consistent. Begin with the example-name header; each debug
- * event then prints one "module:state ok|errno" small-font line beneath it.
+ * draws on the same text surface as the rest of these helpers, so it stays
+ * visually consistent. Begin with the example-name header; each debug
+ * event then prints one "module:state ok|errno" line beneath it.
  *
  * Usage:
  *   lwip_example_dbg_console_begin("TLS RSA");
@@ -875,7 +1032,7 @@ static void lwip_example_show_socket_error(const char *label,
 
 static uint32_t lwip_example_now_ms(void);
 static bool lwip_example_timed_out(uint32_t start, uint16_t seconds);
-static bool lwip_example_cancelled(void);
+static bool lwip_example_cancelled(uint8_t key);
 
 static void lwip_example_stack_stop(void)
 {
@@ -884,10 +1041,12 @@ static void lwip_example_stack_stop(void)
         lwip_example_stack_running = false;
         lwip_stop();
     }
+    lwip_example_gfx_stop();
 }
 
 static bool lwip_example_stack_start(void)
 {
+    lwip_example_gfx_start();
     lwip_example_show("lwIP runtime", NULL);
 
     if (!lwip_start()) /* bootstrap + stack init (no network yet) */
@@ -895,17 +1054,7 @@ static bool lwip_example_stack_start(void)
         lwip_example_show_and_wait("lwIP failed", lwip_get_start_errstring());
         return false;
     }
-
-    /* Exercise lwip_get_start_errstring()/lwip_is_newer() on the success
-     * path too, not just on failure: errstring should read back NULL (no
-     * error recorded) and is_newer reports whether this resident app has
-     * more exports than the build expected. */
-    {
-        const char *errstr = lwip_get_start_errstring();
-        lwip_example_show(lwip_is_newer() ? "app newer than lib" : "app matches lib",
-                           errstr ? errstr : "errstr: NULL (ok)");
-        os_GetKey();
-    }
+    lwip_example_gfx_blit_start();
 
     lwip_example_show("lwIP network up", NULL);
 
@@ -948,9 +1097,9 @@ static bool lwip_example_timed_out(uint32_t start, uint16_t seconds)
         (uint32_t)seconds * 1000u;
 }
 
-static bool lwip_example_cancelled(void)
+static bool lwip_example_cancelled(uint8_t key)
 {
-    return os_GetCSC() == sk_Clear;
+    return key == sk_Clear;
 }
 
 #endif /* LWIP_EXAMPLE_H */

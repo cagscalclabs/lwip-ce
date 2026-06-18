@@ -53,10 +53,13 @@ int main(void)
     lwip_example_show("NTP", "waiting for svc");
     while (!g_sntp_ready)
     {
-        if (lwip_example_cancelled())
-            return lwip_example_finish(0);
+        uint8_t key;
+
         lwip_service_events();
-        lwip_example_mem_stats_tick();
+        key = os_GetCSC();
+        if (lwip_example_cancelled(key))
+            return lwip_example_finish(0);
+        lwip_example_mem_stats_tick(key);
     }
 
     lwip_example_show("NTP", "waiting");
@@ -65,13 +68,15 @@ int main(void)
 
     while (!lwip_example_timed_out(start, NTP_TIMEOUT_SECONDS))
     {
-        if (lwip_example_cancelled())
+        uint8_t key;
+
+        lwip_service_events();
+        key = os_GetCSC();
+        if (lwip_example_cancelled(key))
         {
             break;
         }
-
-        lwip_service_events();
-        lwip_example_mem_stats_tick();
+        lwip_example_mem_stats_tick(key);
 
         if (lwip_sntp_time_was_set())
         {

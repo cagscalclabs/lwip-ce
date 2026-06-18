@@ -108,11 +108,16 @@ int main(void)
     }
 
     uint32_t start = lwip_example_now_ms();
+    bool cancelled = false;
     while (lwip_socket_is_active(&sock) &&
            !lwip_example_timed_out(start, TLS_TIMEOUT_SECONDS) &&
-           !lwip_example_cancelled())
+           !cancelled)
     {
+        uint8_t key;
+
         lwip_service_events();
+        key = os_GetCSC();
+        cancelled = lwip_example_cancelled(key);
 
         size_t space = sizeof(state.rx) - state.rx_len - 1;
         if (space)
@@ -133,7 +138,7 @@ int main(void)
             }
         }
 
-        lwip_example_mem_stats_tick();
+        lwip_example_mem_stats_tick(key);
     }
 
     if (!state.ok)
