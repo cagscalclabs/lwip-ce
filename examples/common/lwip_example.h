@@ -481,6 +481,16 @@ struct lwip_example_chat
     uint8_t rendered_input_rows;
 };
 
+static void lwip_example_chat_invalidate(struct lwip_example_chat *chat)
+{
+    if (!chat)
+    {
+        return;
+    }
+    chat->shown_valid = 0;
+    chat->rendered_input_rows = 0;
+}
+
 /* Push one already-bounded display row onto the transcript ring head. */
 static void lwip_example_chat_ring_push(struct lwip_example_chat *chat,
                                         const char *line, uint8_t color)

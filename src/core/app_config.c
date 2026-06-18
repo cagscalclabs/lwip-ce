@@ -1,12 +1,14 @@
 #include <string.h>
 
 #include <ti/vars.h>
-#include <fileioc.h>
 
 #include "lwip/app_config.h"
 
 static lwip_app_config_t g_cfg;
 static bool g_cfg_loaded = false;
+
+void lwip_app_config_delete_var(const char *name, uint8_t type);
+void lwip_app_config_arc_unarc_var(const char *name, uint8_t type);
 
 static void lwip_app_config_normalize(lwip_app_config_t *cfg)
 {
@@ -86,15 +88,21 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
 
 bool lwip_app_config_save(const lwip_app_config_t *cfg)
 {
-    uint8_t handle = ti_Open(LWIP_CFG_APPVAR, "w");
-    if (!handle)
+    var_t *var;
+
+    if (!cfg)
     {
         return false;
     }
-    ti_SetArchiveStatus(false, handle);
-    ti_Write(cfg, sizeof(*cfg), 1, handle);
-    ti_SetArchiveStatus(true, handle);
-    ti_Close(handle);
+
+    lwip_app_config_delete_var(LWIP_CFG_APPVAR, OS_TYPE_APPVAR);
+    var = os_CreateAppVar(LWIP_CFG_APPVAR, (uint16_t)sizeof(*cfg));
+    if (!var)
+    {
+        return false;
+    }
+    memcpy(var->data, cfg, sizeof(*cfg));
+    lwip_app_config_arc_unarc_var(LWIP_CFG_APPVAR, OS_TYPE_APPVAR);
     return true;
 }
 

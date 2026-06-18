@@ -9,7 +9,6 @@
 #include <ti/vars.h>
 #include <sys/rtc.h>
 #include <usbdrvce.h>
-#include <fileioc.h>
 
 #include "lwip/init.h"
 #include "lwip/timeouts.h"
@@ -245,17 +244,6 @@ static bool option_get_bool(const uint8_t value[4])
 #define UI_VALUE_X      180
 #define UI_FOOTER_LINE_H 12
 
-// Yes/No box widget geometry (used for F_TYPE_BOOL_TOGGLE rows)
-#define UI_YESNO_BOX_W   28
-#define UI_YESNO_BOX_H   UI_ROW_H
-#define UI_YESNO_GAP     4
-#define UI_COLOR_CURSOR  0x4208  // Dark grey cursor box (hovered, not yet applied)
-
-// Tracks which side (false=No, true=Yes) the L/R cursor is hovering on the
-// currently selected F_TYPE_BOOL_TOGGLE row. Reset to the row's active value
-// whenever selection moves onto it.
-static bool g_yesno_cursor = false;
-
 // Fill rectangle with clipping
 static void ui_fill_rect(int x, int y, int w, int h, uint16_t color)
 {
@@ -364,60 +352,10 @@ static void ui_draw_footer(const char *line1, const char *line2)
     }
 }
 
-// Draw the Yes/No box pair for a F_TYPE_BOOL_TOGGLE row.
-//   active_value : the option's current applied value (true = Yes active)
-//   row_selected : whether this row is the selected row (cursor is shown
-//                  only on the selected row; other rows just show the
-//                  active box, no cursor)
-//   cursor_yes   : when row_selected, which side the cursor is currently on
-static void ui_draw_yesno_box(int row_y, bool active_value, bool row_selected,
-                              bool cursor_yes)
-{
-    int text_y = row_y + UI_ROW_TEXT_OFF;
-    int box_y = row_y;
-    int box_h = UI_YESNO_BOX_H;
-    int no_x  = LCD_WIDTH - UI_MARGIN - UI_YESNO_BOX_W;
-    int yes_x = no_x - UI_YESNO_GAP - UI_YESNO_BOX_W;
-
-    static const char *label_yes = "Yes";
-    static const char *label_no  = "No";
-
-    for (int side = 0; side < 2; side++)
-    {
-        bool is_yes = (side == 1);
-        int bx = is_yes ? yes_x : no_x;
-        bool is_active = (active_value == is_yes);
-        bool is_cursor = row_selected && (cursor_yes == is_yes);
-
-        uint16_t box_bg, box_fg;
-        if (is_active)
-        {
-            box_bg = UI_COLOR_FG;   // black box
-            box_fg = UI_COLOR_BG;   // white text
-        }
-        else if (is_cursor)
-        {
-            box_bg = UI_COLOR_CURSOR; // dark grey box
-            box_fg = UI_COLOR_BG;     // white text
-        }
-        else
-        {
-            box_bg = UI_COLOR_BG;
-            box_fg = UI_COLOR_FG;
-        }
-
-        ui_fill_rect(bx, box_y, UI_YESNO_BOX_W, box_h, box_bg);
-        const char *label = is_yes ? label_yes : label_no;
-        int lw = (int)os_FontGetWidth(label);
-        os_SetDrawFGColor(box_fg);
-        os_FontDrawTransText(label, bx + (UI_YESNO_BOX_W - lw) / 2, text_y);
-    }
-}
-
 // Draw a single menu row
 static void ui_draw_row(int row_y, const char *label, const char *value,
                         bool selected, bool editing, bool is_separator,
-                        f_type type, bool bool_value)
+                        f_type type)
 {
     uint16_t bg = UI_COLOR_BG;
     uint16_t fg = UI_COLOR_FG;
@@ -442,21 +380,11 @@ static void ui_draw_row(int row_y, const char *label, const char *value,
 
     ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, bg);
 
-    // Selection indicator
-    if (selected)
-    {
-        ui_fill_rect(2, row_y, 4, UI_ROW_H, UI_COLOR_ACCENT);
-    }
-
     // Label
     os_SetDrawFGColor(fg);
     os_FontDrawTransText(label, UI_MARGIN + 6, row_y + UI_ROW_TEXT_OFF);
 
-    if (type == F_TYPE_BOOL_TOGGLE)
-    {
-        ui_draw_yesno_box(row_y, bool_value, selected, selected ? g_yesno_cursor : bool_value);
-        return;
-    }
+    (void)type;
 
     // Value (right-aligned area)
     if (value && value[0])
@@ -507,7 +435,7 @@ static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, boo
 
     ui_draw_row(ui_row_y(v), opt->name, value,
                 idx == selected_idx, editing && idx == selected_idx, is_sep,
-                opt->type, option_get_bool(opt->value));
+                opt->type);
 }
 
 // Draw entire menu
@@ -533,7 +461,7 @@ static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
 
         ui_draw_row(ui_row_y(v), opt->name, value,
                     idx == selected_idx, editing && idx == selected_idx, is_sep,
-                    opt->type, option_get_bool(opt->value));
+                    opt->type);
     }
 
     ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
@@ -550,7 +478,7 @@ static void ui_draw_mode_footer(bool editing, edit_mode_t edit_mode)
     }
     else
     {
-        ui_draw_footer("<up/down> Navigate  <enter> Select",
+        ui_draw_footer("<up/down> Nav  <left/right> Toggle",
                        "<2nd> Save  <clear> Exit");
     }
 }
@@ -655,7 +583,7 @@ static void format_option_value(const struct config_option *opt, char *buf, size
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
     case OPT_TLS_ENABLED:
-        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "Yes" : "No");
+        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     case OPT_NTP_TEST:
@@ -2503,10 +2431,6 @@ static void cleanup_lwip_stack(void)
         netif_set_down(n);
     }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    ti_CloseAll();
-#pragma GCC diagnostic pop
     dhcp_started = false;
     manual_ip_applied = false;
     httpd_running = false;
@@ -2648,14 +2572,15 @@ int main(void)
             continue;
         }
 
-        // Left/Right - move the Yes/No cursor on a bool-toggle row
+        // Left/Right - directly set a bool-toggle row
         if ((key == sk_Left || key == sk_Right) && selected >= 0 &&
             config_options[selected].type == F_TYPE_BOOL_TOGGLE)
         {
-            bool new_cursor = (key == sk_Right);
-            if (new_cursor != g_yesno_cursor)
+            struct config_option *opt = &config_options[selected];
+            bool new_value = (key == sk_Right);
+            if (new_value != option_get_bool(opt->value) && opt->setter)
             {
-                g_yesno_cursor = new_cursor;
+                opt->setter(opt);
                 ui_draw_single_option(selected, scroll_pos, selected, false);
             }
             continue;
@@ -2671,10 +2596,6 @@ int main(void)
                 int old_sel = selected;
                 int old_scroll = scroll_pos;
                 selected = new_sel;
-                if (config_options[selected].type == F_TYPE_BOOL_TOGGLE)
-                {
-                    g_yesno_cursor = option_get_bool(config_options[selected].value);
-                }
                 scroll_pos = ui_ensure_visible(selected, scroll_pos);
                 if (scroll_pos != old_scroll)
                 {
@@ -2743,12 +2664,7 @@ int main(void)
             }
             else if (opt->type == F_TYPE_BOOL_TOGGLE && opt->setter)
             {
-                // Commit the cursor-hovered side as the new active value.
-                if (g_yesno_cursor != option_get_bool(opt->value))
-                {
-                    opt->setter(opt);
-                }
-                // Only redraw the single row that toggled.
+                opt->setter(opt);
                 ui_draw_single_option(selected, scroll_pos, selected, false);
             }
             else if (opt->type == F_TYPE_ACTION && opt->setter)

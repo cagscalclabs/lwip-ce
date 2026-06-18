@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <fileioc.h>
 #include <lwip.h>
 
 #include "../../common/lwip_example.h"
@@ -15,6 +16,10 @@
 
 #ifndef IRC_PORT
 #define IRC_PORT 6667
+#endif
+
+#ifndef IRC_TLS_PORT
+#define IRC_TLS_PORT 6697
 #endif
 
 #ifndef IRC_CHANNEL
@@ -28,8 +33,10 @@
 #define IRC_CONNECT_TIMEOUT_MS 45000u
 #define IRC_RX_TMP 96
 #define IRC_LINE_MAX 512
-#define IRC_SERVER_MAX 64
-#define IRC_CHANNEL_MAX 32
+#define IRC_SERVER_MAX 128
+#define IRC_CHANNEL_MAX 64
+#define IRC_CONFIG_APPVAR "IRCCFG"
+#define IRC_CONFIG_VERSION 1u
 
 enum irc_input_mode
 {
@@ -54,6 +61,7 @@ struct irc_state
     char server[IRC_SERVER_MAX];
     char channel[IRC_CHANNEL_MAX];
     char nick[16];
+    bool use_tls;
     char line[IRC_LINE_MAX];
     size_t line_len;
     uint8_t setup_field;
@@ -62,7 +70,19 @@ struct irc_state
 enum irc_setup_field
 {
     IRC_SETUP_SERVER,
-    IRC_SETUP_CHANNEL
+    IRC_SETUP_NICK,
+    IRC_SETUP_CHANNEL,
+    IRC_SETUP_TLS
+};
+
+struct irc_saved_config
+{
+    char magic[4];
+    uint8_t version;
+    uint8_t use_tls;
+    char server[IRC_SERVER_MAX];
+    char nick[16];
+    char channel[IRC_CHANNEL_MAX];
 };
 
 static char irc_key_to_char(uint8_t key, uint8_t mode)
@@ -93,12 +113,94 @@ static const char *irc_input_mode_name(uint8_t mode)
     }
 }
 
+static void irc_normalize_channel(char *channel, size_t channel_len);
+
 static void irc_set_defaults(struct irc_state *state)
 {
     snprintf(state->server, sizeof(state->server), "%s", IRC_HOST);
     snprintf(state->channel, sizeof(state->channel), "%s", IRC_CHANNEL);
+    snprintf(state->nick, sizeof(state->nick), "%s", IRC_NICK);
+    state->use_tls = false;
     state->chat.input_mode = IRC_INPUT_LOWER;
     state->setup_field = IRC_SETUP_SERVER;
+}
+
+static bool irc_config_load(struct irc_state *state)
+{
+    struct irc_saved_config cfg;
+    uint8_t handle;
+
+    handle = ti_Open(IRC_CONFIG_APPVAR, "r");
+    if (!handle)
+    {
+        return false;
+    }
+    if (ti_Read(&cfg, sizeof(cfg), 1, handle) != 1)
+    {
+        ti_Close(handle);
+        return false;
+    }
+    ti_Close(handle);
+
+    if (memcmp(cfg.magic, "IRCC", sizeof(cfg.magic)) != 0 ||
+        cfg.version != IRC_CONFIG_VERSION)
+    {
+        return false;
+    }
+
+    snprintf(state->server, sizeof(state->server), "%s", cfg.server);
+    snprintf(state->nick, sizeof(state->nick), "%s", cfg.nick);
+    snprintf(state->channel, sizeof(state->channel), "%s", cfg.channel);
+    state->use_tls = cfg.use_tls ? true : false;
+    if (!state->server[0])
+    {
+        snprintf(state->server, sizeof(state->server), "%s", IRC_HOST);
+    }
+    if (!state->nick[0])
+    {
+        snprintf(state->nick, sizeof(state->nick), "%s", IRC_NICK);
+    }
+    irc_normalize_channel(state->channel, sizeof(state->channel));
+    return true;
+}
+
+static bool irc_config_save(const struct irc_state *state)
+{
+    struct irc_saved_config cfg;
+    uint8_t handle;
+
+    memset(&cfg, 0, sizeof(cfg));
+    memcpy(cfg.magic, "IRCC", sizeof(cfg.magic));
+    cfg.version = IRC_CONFIG_VERSION;
+    cfg.use_tls = state->use_tls ? 1u : 0u;
+    snprintf(cfg.server, sizeof(cfg.server), "%s", state->server);
+    snprintf(cfg.nick, sizeof(cfg.nick), "%s", state->nick);
+    snprintf(cfg.channel, sizeof(cfg.channel), "%s", state->channel);
+
+    handle = ti_Open(IRC_CONFIG_APPVAR, "w");
+    if (!handle)
+    {
+        return false;
+    }
+    ti_SetArchiveStatus(false, handle);
+    if (ti_Write(&cfg, sizeof(cfg), 1, handle) != 1)
+    {
+        ti_Close(handle);
+        return false;
+    }
+    ti_SetArchiveStatus(true, handle);
+    ti_Close(handle);
+    return true;
+}
+
+static void irc_setup_next_field(struct irc_state *state)
+{
+    state->setup_field = (uint8_t)((state->setup_field + 1u) % 4u);
+}
+
+static void irc_setup_prev_field(struct irc_state *state)
+{
+    state->setup_field = (uint8_t)((state->setup_field + 3u) % 4u);
 }
 
 static void irc_normalize_channel(char *channel, size_t channel_len)
@@ -128,22 +230,40 @@ static void irc_normalize_channel(char *channel, size_t channel_len)
     channel[0] = '#';
 }
 
+static lwip_socket_type_t irc_socket_type(const struct irc_state *state)
+{
+    return state->use_tls ? LWIP_SOCKET_ALTCP_TLS : LWIP_SOCKET_TCP;
+}
+
+static uint16_t irc_port(const struct irc_state *state)
+{
+    return state->use_tls ? (uint16_t)IRC_TLS_PORT : (uint16_t)IRC_PORT;
+}
+
 static void irc_setup_render(const struct irc_state *state)
 {
     const char *server_cursor =
         state->setup_field == IRC_SETUP_SERVER ? "> server:" : "  server:";
+    const char *nick_cursor =
+        state->setup_field == IRC_SETUP_NICK ? "> nick:" : "  nick:";
     const char *channel_cursor =
         state->setup_field == IRC_SETUP_CHANNEL ? "> channel:" : "  channel:";
+    const char *tls_cursor =
+        state->setup_field == IRC_SETUP_TLS ? "> tls:" : "  tls:";
 
     lwip_example_clear();
     lwip_example_line("== IRC setup ==");
     lwip_example_line(server_cursor);
     lwip_example_line(state->server);
+    lwip_example_line(nick_cursor);
+    lwip_example_line(state->nick);
     lwip_example_line(channel_cursor);
     lwip_example_line(state->channel);
+    lwip_example_linef("%s %s", tls_cursor, state->use_tls ? "yes" : "no");
     lwip_example_line("");
     lwip_example_linef("mode %s", irc_input_mode_name(state->chat.input_mode));
     lwip_example_line("Enter next/start");
+    lwip_example_line("Left/right tls");
     lwip_example_line("Clear exits");
     lwip_example_draw_mem_stats();
     lwip_example_present();
@@ -151,6 +271,11 @@ static void irc_setup_render(const struct irc_state *state)
 
 static char *irc_setup_active_text(struct irc_state *state, size_t *cap)
 {
+    if (state->setup_field == IRC_SETUP_NICK)
+    {
+        *cap = sizeof(state->nick);
+        return state->nick;
+    }
     if (state->setup_field == IRC_SETUP_CHANNEL)
     {
         *cap = sizeof(state->channel);
@@ -166,13 +291,21 @@ static bool irc_setup_append_char(struct irc_state *state, char c)
     size_t cap;
     size_t len;
 
+    if (state->setup_field == IRC_SETUP_TLS)
+    {
+        return false;
+    }
     if (!c)
+    {
+        return false;
+    }
+    if (c == ' ')
     {
         return false;
     }
     if (state->setup_field == IRC_SETUP_CHANNEL)
     {
-        if (c == ' ' || c == '/')
+        if (c == '/')
         {
             return false;
         }
@@ -199,6 +332,10 @@ static bool irc_setup_backspace(struct irc_state *state)
     size_t cap;
     size_t len;
 
+    if (state->setup_field == IRC_SETUP_TLS)
+    {
+        return false;
+    }
     text = irc_setup_active_text(state, &cap);
     (void)cap;
     len = strlen(text);
@@ -226,6 +363,7 @@ static bool irc_setup_run(struct irc_state *state)
         key = os_GetCSC();
         if (lwip_example_mem_stats_tick(key))
         {
+            lwip_example_chat_invalidate(&state->chat);
             redraw = true;
         }
 
@@ -243,11 +381,22 @@ static bool irc_setup_run(struct irc_state *state)
                 (uint8_t)((state->chat.input_mode + 1u) % 3u);
             redraw = true;
         }
-        else if (key == sk_Up || key == sk_Down)
+        else if (key == sk_Left || key == sk_Right)
         {
-            state->setup_field =
-                state->setup_field == IRC_SETUP_SERVER
-                    ? IRC_SETUP_CHANNEL : IRC_SETUP_SERVER;
+            if (state->setup_field == IRC_SETUP_TLS)
+            {
+                state->use_tls = !state->use_tls;
+                redraw = true;
+            }
+        }
+        else if (key == sk_Up)
+        {
+            irc_setup_prev_field(state);
+            redraw = true;
+        }
+        else if (key == sk_Down)
+        {
+            irc_setup_next_field(state);
             redraw = true;
         }
         else if (key == sk_Del)
@@ -263,11 +412,37 @@ static bool irc_setup_run(struct irc_state *state)
                     snprintf(state->server, sizeof(state->server), "%s",
                              IRC_HOST);
                 }
-                state->setup_field = IRC_SETUP_CHANNEL;
+                irc_setup_next_field(state);
+                redraw = true;
+            }
+            else if (state->setup_field == IRC_SETUP_NICK)
+            {
+                if (!state->nick[0])
+                {
+                    snprintf(state->nick, sizeof(state->nick), "%s",
+                             IRC_NICK);
+                }
+                irc_setup_next_field(state);
+                redraw = true;
+            }
+            else if (state->setup_field == IRC_SETUP_CHANNEL)
+            {
+                irc_normalize_channel(state->channel, sizeof(state->channel));
+                irc_setup_next_field(state);
                 redraw = true;
             }
             else
             {
+                if (!state->server[0])
+                {
+                    snprintf(state->server, sizeof(state->server), "%s",
+                             IRC_HOST);
+                }
+                if (!state->nick[0])
+                {
+                    snprintf(state->nick, sizeof(state->nick), "%s",
+                             IRC_NICK);
+                }
                 irc_normalize_channel(state->channel, sizeof(state->channel));
                 return true;
             }
@@ -331,13 +506,6 @@ static lwip_error_t irc_writef(struct lwip_socket *sock,
         n = (int)sizeof(buf) - 1;
     }
     return lwip_socket_write(sock, (const uint8_t *)buf, (size_t)n);
-}
-
-static void irc_make_nick(char *out, size_t out_len)
-{
-    uint32_t now = lwip_example_now_ms();
-
-    snprintf(out, out_len, "%.8s%02u", IRC_NICK, (unsigned)(now % 100u));
 }
 
 static void irc_register(struct irc_state *state, struct lwip_socket *sock)
@@ -590,6 +758,7 @@ static void irc_send_input(struct irc_state *state, struct lwip_socket *sock)
         if (err == LWIP_OK)
         {
             char msg[40];
+            snprintf(state->nick, sizeof(state->nick), "%s", nick);
             snprintf(msg, sizeof(msg), "nick requested %.20s", nick);
             irc_append_system(state, msg);
         }
@@ -636,62 +805,77 @@ static void irc_send_input(struct irc_state *state, struct lwip_socket *sock)
     }
 }
 
-int main(void)
+static void irc_session_reset(struct irc_state *state)
+{
+    uint8_t input_mode = state->chat.input_mode;
+    char title[24];
+
+    state->connected = false;
+    state->registered = false;
+    state->joined = false;
+    state->exiting = false;
+    state->done = false;
+    state->done_reason = 0;
+    state->redraw = false;
+    state->last_status = 0xffu;
+    state->err = LWIP_OK;
+    state->line_len = 0;
+    state->line[0] = '\0';
+    snprintf(title, sizeof(title), "== IRC %.15s ==", state->channel);
+    lwip_example_chat_begin(&state->chat, title);
+    state->chat.input_mode = input_mode;
+}
+
+static void irc_session_close(struct irc_state *state, struct lwip_socket *sock)
+{
+    uint32_t start;
+
+    if (state->connected)
+    {
+        (void)irc_writef(sock, "QUIT :leaving\r\n");
+    }
+    (void)lwip_socket_close(sock);
+    start = lwip_example_now_ms();
+    while ((sock->status == LWIP_STATUS_CONNECTED ||
+            sock->status == LWIP_STATUS_CLOSING) &&
+           (uint32_t)(lwip_example_now_ms() - start) < 500u)
+    {
+        lwip_service_events();
+    }
+    lwip_socket_destroy(sock);
+}
+
+static void irc_session_run(struct irc_state *state)
 {
     static struct lwip_socket sock;
-    struct irc_state *state;
     lwip_error_t err;
-    int result = 1;
-    uint8_t s_err = 0;
+    char connect_line[48];
 
     memset(&sock, 0, sizeof(sock));
+    irc_session_reset(state);
 
-    if (!lwip_example_stack_start())
-    {
-        s_err = 1;
-        lwip_example_show_and_wait("Stack failed to start", NULL);
-        return 1;
-    }
-
-    state = (struct irc_state *)mem_request(sizeof(struct irc_state));
-    if (!state)
-    {
-        lwip_example_show_and_wait("IRC mem", "failed");
-        return lwip_example_finish(1);
-    }
-    memset(state, 0, sizeof(struct irc_state));
-    state->last_status = 0xffu;
-    state->msg_buf = (char *)mem_request(IRC_LINE_MAX + 24u);
-    if (!state->msg_buf)
-    {
-        lwip_example_show_and_wait("IRC msg mem", "failed");
-        mem_release(state);
-        return lwip_example_finish(1);
-    }
-    irc_make_nick(state->nick, sizeof(state->nick));
-
-    lwip_example_chat_begin(&state->chat, "== IRC #cemetech ==");
-
-    err = lwip_socket_create(&sock, LWIP_SOCKET_TCP, LWIP_NETIF_EXT,
+    err = lwip_socket_create(&sock, irc_socket_type(state), LWIP_NETIF_EXT,
                              NULL, IRC_CONNECT_TIMEOUT_MS);
     if (err != LWIP_OK)
     {
-        s_err = 1;
         lwip_example_show_socket_error("IRC create", &sock, err);
-        goto cleanup;
+        return;
     }
 
     lwip_socket_on_event(&sock, LWIP_SOCKET_EVENTF_ALL,
                          irc_on_event, state);
 
     lwip_example_chat_append(&state->chat, "* ", "connecting", 10);
-    lwip_example_chat_append(&state->chat, "  ", IRC_HOST, strlen(IRC_HOST));
+    snprintf(connect_line, sizeof(connect_line), "%s:%u %s",
+             state->server, (unsigned)irc_port(state),
+             state->use_tls ? "tls" : "tcp");
+    lwip_example_chat_append(&state->chat, "  ", connect_line,
+                             strlen(connect_line));
     lwip_example_chat_render(&state->chat);
 
-    err = lwip_socket_connect(&sock, IRC_HOST, IRC_PORT);
+    err = lwip_socket_connect(&sock, state->server, irc_port(state));
     if (err != LWIP_OK)
     {
-        s_err = 1;
         lwip_example_show_socket_error("IRC connect", &sock, err);
         goto cleanup;
     }
@@ -717,6 +901,7 @@ int main(void)
         }
         if (lwip_example_mem_stats_tick(key))
         {
+            lwip_example_chat_invalidate(&state->chat);
             state->redraw = true;
         }
 
@@ -770,8 +955,6 @@ int main(void)
         lwip_example_draw_mem_stats();
     }
 
-    result = state->err == LWIP_OK ? 0 : 1;
-
 cleanup:
     if (state && state->done && !state->exiting)
     {
@@ -780,25 +963,51 @@ cleanup:
         lwip_example_show_and_wait("IRC disconnected", reason);
         lwip_example_show_socket_error("IRC disconnected", &sock, state->err);
     }
-    if (s_err)
+    if (state->exiting)
     {
-        result = 1;
+        irc_session_close(state, &sock);
     }
-    if (state)
+    else
     {
+        lwip_socket_destroy(&sock);
+    }
+}
 
-        if (state->exiting)
-        {
-            (void)irc_writef(&sock, "QUIT :leaving\r\n");
-              (void)lwip_socket_close(&sock);
-        }
-        lwip_socket_destroy(&sock);
-        mem_release(state->msg_buf);
-        mem_release(state);
-    }
-   else
+int main(void)
+{
+    struct irc_state *state;
+    int result = 0;
+
+    if (!lwip_example_stack_start())
     {
-        lwip_socket_destroy(&sock);
+        lwip_example_show_and_wait("Stack failed to start", NULL);
+        return 1;
     }
+
+    state = (struct irc_state *)mem_request(sizeof(struct irc_state));
+    if (!state)
+    {
+        lwip_example_show_and_wait("IRC mem", "failed");
+        return lwip_example_finish(1);
+    }
+    memset(state, 0, sizeof(struct irc_state));
+    state->msg_buf = (char *)mem_request(IRC_LINE_MAX + 24u);
+    if (!state->msg_buf)
+    {
+        lwip_example_show_and_wait("IRC msg mem", "failed");
+        mem_release(state);
+        return lwip_example_finish(1);
+    }
+    irc_set_defaults(state);
+    (void)irc_config_load(state);
+
+    while (irc_setup_run(state))
+    {
+        irc_session_run(state);
+    }
+
+    (void)irc_config_save(state);
+    mem_release(state->msg_buf);
+    mem_release(state);
     return lwip_example_finish(result);
 }

@@ -162,9 +162,11 @@ void tls_keyobject_set_buffer(struct mem_buffer *buf);
  * @returns A pointer to a @b tls_keyobject structure or @b NULL on error.
  * @note Data is passed by copy, which means that you can pass a pointer to data that is anywhere. Ex:
  * @code
- * uint8_t fp;
- * if((fp = ti_Open("MyKey", "r"))){
- *      struct tls_keyobject *kf = tls_keyobject_import_private(ti_GetDataPtr(fp), ti_GetSize(fp));
+ * var_t *var = os_GetAppVarData("MyKey", NULL);
+ * if(var){
+ *      uint16_t size = *((uint16_t *)var);
+ *      const char *data = (const char *)var + 2;
+ *      struct tls_keyobject *kf = tls_keyobject_import_private(data, size, NULL);
  *      if(!kf)     // do some error handling
  *      // do something with kf
  * }

@@ -1,0 +1,83 @@
+{
+  "description": "Test TLS_HASH primitive",
+  "transfer_files": [
+    "bin/XHASH.8xp",
+    "../common/lwIPCERT.8xv",
+    "../common/lwIPINST.8xp",
+    "../common/lwIP.0.8xv",
+    "../common/lwIP.1.8xv",
+    "../common/lwIP.2.8xv",
+    "../common/lwIP.3.8xv",
+    "../common/lwIP.4.8xv",
+    "../common/lwIP.5.8xv",
+    "../common/lwip.8xv"
+  ],
+  "target": {
+    "name": "XHASH",
+    "isASM": true
+  },
+  "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|4",
+    "key|left",
+    "key|enter",
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "SHA-256 short message 'abc' - NIST FIPS 180-4, Example 1",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "2": {
+      "description": "SHA-256 empty message - NIST FIPS 180-4, Empty String",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "3": {
+      "description": "SHA-256 two-block message - NIST FIPS 180-4, Example 2",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1000
+    },
+    "4": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
+    }
+  }
+}

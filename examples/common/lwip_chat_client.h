@@ -269,6 +269,7 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
 
         if (lwip_example_mem_stats_tick(key))
         {
+            lwip_example_chat_invalidate(&state->chat);
             lwip_example_chat_render(&state->chat);
         }
 

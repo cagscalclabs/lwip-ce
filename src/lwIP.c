@@ -1035,15 +1035,9 @@ static void lwip_stack_cleanup(void)
         netif_set_down(n);
     }
 
-    /* NOTE: we deliberately do NOT call ti_CloseAll() here. That
-     * deprecated bcall closes EVERY open fileioc handle system-wide —
-     * including handles owned by the consumer program or the OS, since
-     * the resident lwIP app is called from a running program rather than
-     * being the active program. Closing handles we don't own corrupted
-     * the OS file state and crashed on exit. The app's own fileioc use
-     * (logging.c, app_config.c) already pairs every ti_Open with a
-     * ti_Close in the same scope and keeps no long-lived handles, so
-     * there is nothing for the teardown to mop up. */
+    /* Do not close OS/file state owned by the consumer program. The
+     * resident lwIP app runs inside that program's process context, so
+     * teardown must only release lwIP-owned resources. */
 
     /* Release low -> high: driver RX rings + netifs (eth_finish_shutdown),
      * then remaining membuffers (TLS file-IO buffer, lwIP pools). Each owner
