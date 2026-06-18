@@ -34,6 +34,7 @@
     "hashWait|2",
     "key|left",
     "key|enter",
+    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
