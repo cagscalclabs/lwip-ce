@@ -983,7 +983,6 @@ int main(void)
         lwip_example_show_and_wait("Stack failed to start", NULL);
         return 1;
     }
-
     state = (struct irc_state *)mem_request(sizeof(struct irc_state));
     if (!state)
     {

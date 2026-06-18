@@ -78,11 +78,11 @@ static uint32_t time_pss_verify(void)
 {
     const uint8_t msg[] = "hello world";
     uint8_t mhash[TLS_SHA256_DIGEST_LEN];
-    uint8_t decoded_sig[sizeof(test_rsa_pubkey_2048)];
+    uint8_t *decoded_sig = malloc(sizeof(test_rsa_pubkey_2048));
     struct tls_hash_context hash_ctx;
     clock_t start = clock();
 
-    bool ok = tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256);
+    bool ok = decoded_sig != NULL && tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256);
     if (ok)
     {
         tls_hash_update(&hash_ctx, msg, sizeof(msg) - 1);
@@ -97,11 +97,15 @@ static uint32_t time_pss_verify(void)
     if (ok)
     {
         ok = tls_rsa_pss_verify(
-            decoded_sig, sizeof(decoded_sig),
+            decoded_sig, sizeof(test_rsa_pubkey_2048),
             mhash, sizeof(mhash),
             TLS_HASH_SHA256);
     }
-    timing_sink ^= decoded_sig[0];
+    if (decoded_sig)
+    {
+        timing_sink ^= decoded_sig[0];
+        free(decoded_sig);
+    }
     if (!ok)
         timing_sink ^= 0xFF;
     return (uint32_t)(clock() - start);
@@ -636,11 +640,13 @@ static bool test_pss_signature_verify(void)
 {
     const uint8_t msg[] = "hello world";
     uint8_t mhash[TLS_SHA256_DIGEST_LEN];
-    uint8_t decoded_sig[sizeof(test_rsa_pubkey_2048)];
+    uint8_t *decoded_sig = malloc(sizeof(test_rsa_pubkey_2048));
     struct tls_hash_context hash_ctx;
+    bool ok = false;
 
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    if (!decoded_sig || !tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
     {
+        free(decoded_sig);
         return false;
     }
 
@@ -650,12 +656,17 @@ static bool test_pss_signature_verify(void)
     if (!tls_rsa_decrypt_signature(
             test_rsa_sig_2048, sizeof(test_rsa_sig_2048),
             decoded_sig, test_rsa_pubkey_2048, sizeof(test_rsa_pubkey_2048)))
+    {
+        free(decoded_sig);
         return false;
+    }
 
-    return tls_rsa_pss_verify(
-        decoded_sig, sizeof(decoded_sig),
+    ok = tls_rsa_pss_verify(
+        decoded_sig, sizeof(test_rsa_pubkey_2048),
         mhash, sizeof(mhash),
         TLS_HASH_SHA256);
+    free(decoded_sig);
+    return ok;
 }
 
 int main(void)
@@ -663,14 +674,6 @@ int main(void)
     if (!lwip_start()) return 1;
 
     os_ClrHome();
-
-    /* Initialize lwIP memory */
-    if (lwip_init() != ERR_OK)
-    {
-        printf("mem init failed\n");
-        os_GetKey();
-        return 1;
-    }
 
     /* Run tests */
     bool test1 = test_pss_signature_verify();

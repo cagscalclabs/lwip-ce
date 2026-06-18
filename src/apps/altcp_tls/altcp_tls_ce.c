@@ -23,22 +23,18 @@
 #include "../../tls/includes/tls.h"
 #include "../../drivers/mem.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_ALTCP_TLS_CE
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 #include <string.h>
 #include <limits.h>
 
-/* Legacy per-step screen tracing is gone — TLS now emits structured debug
- * events through the unified stack-wide debug sink (lwip_set_debug; see
+/* Legacy per-step screen tracing is gone — TLS now emits structured events
+ * through the unified stack-wide event sink (lwip_set_event_cb; see
  * lwip/logging.h, handshake.c). This stub keeps the remaining call sites
  * harmless; it does nothing. */
 static inline void tls_dbg_status(const char *msg) { (void)msg; }
-
-/* Verbose (depth-1) record/decrypt-path trace. Surfaces only when the app
- * sets a debug depth >= LWIP_DBG_DEPTH_VERBOSE; errors pass at any depth. */
-static inline void tls_vdbg(lwip_debug_state_t state, int errnum)
-{
-    lwip_debug_emit_at(LWIP_DBG_MOD_TLS, state, errnum, 0,
-                       LWIP_DBG_DEPTH_VERBOSE);
-}
 
 /* Debug flag for TLS CE layer */
 #ifndef ALTCP_TLS_CE_DEBUG
@@ -1159,7 +1155,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 {
                     if (!tls_derive_handshake_keys(&state->tls_ctx))
                     {
-                        tls_vdbg(LWIP_DBG_TLS_DERIVE_HS_KEYS_V, -1);
+                        ERROR();
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
@@ -1177,7 +1173,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                     if (!use_hs_keys)
                     {
-                        tls_vdbg(LWIP_DBG_TLS_REC_RX, -1);
+                        ERROR();
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
@@ -1192,30 +1188,30 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     if (dec_err == ERR_MEM)
                     {
                         /* Scratch alloc deferred — the record stays in
-                         * state->rx and we retry on the next recv. Surface as
-                         * an error (non-zero) so it shows even at depth 0:
-                         * a persistent ERR_MEM here stalls the handshake. */
-                        tls_vdbg(LWIP_DBG_TLS_DECRYPT_NOMEM, (int)total_len);
+                         * state->rx and we retry on the next recv. A
+                         * persistent ERR_MEM here stalls the handshake, so
+                         * surface it as a WARN carrying the pending length. */
+                        WARN_CODE(total_len > 0xFFFF ? 0xFFFF : total_len);
                         return ERR_OK;
                     }
                     if (dec_err != ERR_OK)
                     {
-                        tls_vdbg(LWIP_DBG_TLS_DECRYPT, (int)dec_err);
+                        ERROR_CODE(-dec_err);
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
-                    tls_vdbg(LWIP_DBG_TLS_DECRYPT, 0);
+                    DEBUG();
 
                     if (!tls_process_inner_plaintext_pbuf(&state->tls_ctx, inner_type,
                                                           dec_pbuf, dec_len))
                     {
                         pbuf_free(dec_pbuf);
-                        tls_vdbg(LWIP_DBG_TLS_PROCESS_INNER, -1);
+                        ERROR();
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: TLS record processing failed\n"));
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
-                    tls_vdbg(LWIP_DBG_TLS_PROCESS_INNER, 0);
+                    DEBUG();
                     tls_dbg_status("rx: inner ok");
 
                     pbuf_free(dec_pbuf);
@@ -1292,11 +1288,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         if (rec_len >= 2 && tmp[5] == TLS_ALERT_LEVEL_FATAL)
                         {
                             uint8_t alert_desc = (rec_len >= 3) ? tmp[6] : 0xFFu;
-                            lwip_debug_emit_sev(LWIP_DBG_MOD_TLS,
-                                                LWIP_DBG_TLS_FATAL_ALERT,
-                                                (int)LWIP_DBG_TLS_ERR_FATAL_ALERT_BASE + alert_desc,
-                                                __LINE__, LWIP_DBG_DEPTH_MILESTONE,
-                                                LWIP_DBG_SEV_ERROR);
+                            ERROR_CODE(alert_desc);
                             state->tls_ctx.state = TLS_STATE_ERROR;
                             plaintext_ok = false;
                         }
@@ -1379,7 +1371,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     /* Handshake complete */
                     state->flags |= ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE;
                     state->tls_ctx.state = TLS_STATE_HANDSHAKE_COMPLETE;
-                    lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_HANDSHAKE_END, 0, 0);
+                    STATE_CHG(conn, LWIP_STATE_TLS_HANDSHAKE_DONE);
 
                     /* Cache an existing resumption PSK identity in memory for future
                      * connects. Fresh tickets are handled below by NewSessionTicket. */
@@ -1609,11 +1601,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             if (dec_len >= 2 && pbuf_get_at(dec_pbuf, 0) == TLS_ALERT_LEVEL_FATAL)
             {
                 uint8_t alert_desc = pbuf_get_at(dec_pbuf, 1);
-                lwip_debug_emit_sev(LWIP_DBG_MOD_TLS,
-                                    LWIP_DBG_TLS_FATAL_ALERT,
-                                    (int)LWIP_DBG_TLS_ERR_FATAL_ALERT_BASE + alert_desc,
-                                    __LINE__, LWIP_DBG_DEPTH_MILESTONE,
-                                    LWIP_DBG_SEV_ERROR);
+                ERROR_CODE(alert_desc);
                 pbuf_free(dec_pbuf);
                 altcp_abort(conn);
                 return ERR_ABRT;

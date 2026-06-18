@@ -30,10 +30,13 @@
 #include "lwip/netif.h"
 #include "lwip/sys.h"
 #include "lwip/timeouts.h"
-#include "lwip/logging.h"
 #include "lwip/app_config.h"
 #include "lwip/teardown.h"
 #include "lwip/dispatch.h"
+
+#define LWIP_DBG_FILE_ID LWIP_FILE_USB_ETHERNET
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_USB
+#include "lwip/logging.h"
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
@@ -44,19 +47,16 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 {
     if (status & USB_TRANSFER_NO_DEVICE)
     {
-        lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_ENDPOINT_NO_DEVICE,
-                        (int)status, 0);
+        WARN_CODE(status);
     }
     if (status & USB_TRANSFER_STALLED)
     {
-        lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_ENDPOINT_STALL,
-                        (int)status, 0);
+        WARN_CODE(status);
     }
     if (status & (USB_TRANSFER_ERROR | USB_TRANSFER_HOST_ERROR | USB_TRANSFER_BUS_ERROR |
                   USB_TRANSFER_OVERFLOW | USB_TRANSFER_FAILED))
     {
-        lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_ENDPOINT_ERROR,
-                        (int)status, 0);
+        ERROR_CODE(status);
     }
 }
 /* RX cadence (milliseconds). The dispatch layer quantizes these to
@@ -80,7 +80,7 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 
 /* Defined below; forward-declared so eth_rx_ring_drain can abort the
  * netif on repeated drain-short failures. */
-static void eth_abort_netif(eth_device_t *dev, uint16_t log_state);
+static void eth_abort_netif(eth_device_t *dev);
 static bool eth_netif_is_default_candidate(const struct netif *netif);
 static void eth_promote_default_if_needed(struct netif *netif);
 static void eth_arm_dhcp_once(eth_device_t *dev);
@@ -434,8 +434,7 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
              * Deliberately NOT LWIP_ASSERT: in this port that halts the
              * program (lwip_log_fatal_at), which would defeat the
              * recover-and-continue behavior below. */
-            lwip_debug_emit(LWIP_DBG_MOD_USB, LWIP_DBG_USB_RX_DRAIN_SHORT,
-                            -1, __LINE__);
+            WARN_CODE(remaining > 0xFFFF ? 0xFFFF : remaining);
             uint8_t skip[64];
             while (remaining > 0)
             {
@@ -450,7 +449,8 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
             LINK_STATS_INC(link.drop);
             if (++dev->rx_drain_errors >= ETH_RX_DRAIN_MAX_ERRORS)
             {
-                eth_abort_netif(dev, LWIP_DBG_USB_RX_DRAIN_FATAL);
+                ERROR_CODE(dev->rx_drain_errors);
+                eth_abort_netif(dev);
             }
             break;
         }
@@ -618,10 +618,9 @@ nibble(uint16_t c)
  * before USB tears the device down asynchronously, then disables the
  * device. The per-device disabled_with_error flag is what the disconnect
  * handler later consults to decide between "reset and resume" and "drop
- * the netif entirely." Logs the caller-supplied fatal reason so the
- * appvar log distinguishes endpoint-retry exhaustion from RX-drain
- * failure. */
-static void eth_abort_netif(eth_device_t *dev, uint16_t log_state)
+ * the netif entirely." Callers emit ERROR() themselves before calling this,
+ * so the event's file:line still distinguishes the fatal reason. */
+static void eth_abort_netif(eth_device_t *dev)
 {
     if (!dev || eth_is_shutting_down(dev))
     {
@@ -630,7 +629,6 @@ static void eth_abort_netif(eth_device_t *dev, uint16_t log_state)
 
     LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
                 ("eth: fatal fault, giving up on netif"));
-    lwip_debug_emit(LWIP_DBG_MOD_USB, log_state, -1, 0);
     /* Surface the failure to lwIP first. Apps with a registered netif
      * link callback will see the down transition before the device
      * disappears, and any PCBs bound to this netif can be torn down via
@@ -647,7 +645,8 @@ static bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
 {
     if (retries == ETH_USB_MAX_RETRIES)
     {
-        eth_abort_netif(dev, LWIP_DBG_USB_FATAL_RETRY);
+        ERROR_CODE(retries);
+        eth_abort_netif(dev);
         return true;
     }
     return false;

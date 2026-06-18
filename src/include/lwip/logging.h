@@ -9,272 +9,266 @@ extern "C" {
 #endif
 
 /**
- * Unified lwIP debug/event system.
+ * Unified lwIP event system.
  *
- * Every module (USB, TLS, TCP, UDP, the lwIP core) routes notable events —
- * progress milestones, errors, and fatal asserts — through a single debug
- * callback. The library performs no I/O of its own: it does NOT write a log
- * file. If the caller wants a log, persistence, or an on-screen console, it
- * does that inside its callback.
+ * Every module (USB, TLS, the custom allocator, the lwIP-CE glue layer)
+ * routes notable events through a single callback. The library performs no
+ * I/O of its own. If the caller wants a log, persistence, or an on-screen
+ * console, it does that inside its callback.
  *
- * Set the callback once with lwip_set_debug(); it is shared by the whole
+ * Each .c file that emits events defines, once near the top, which file and
+ * module it is:
+ *
+ *   #define LWIP_DBG_FILE_ID  LWIP_FILE_TRUSTSTORE
+ *   #define LWIP_DBG_MODULE   LWIP_DBG_MOD_TLS
+ *   #include "lwip/logging.h"
+ *
+ * Then, at any fallible call site:
+ *
+ *   if (status != OK) { ERROR(); ...handle... }
+ *   if (degraded)      { WARN(); }
+ *   DEBUG();                          // fires only when the {file,line} changes
+ *   ERROR_CODE(status);               // ERROR + a caller-supplied uint16_t
+ *   WARN_CODE(bitmask);
+ *   INFO("sent ClientHello");         // milestone, payload is the string itself
+ *   STATE_CHG(conn, LWIP_STATE_CONN_ESTABLISHED);
+ *   IO_FILE(LWIP_IO_READ, "lwIPTS", n);
+ *   IO_ETH(LWIP_IO_RX, n);
+ *
+ * Set the callback once with lwip_set_event_cb(); it is shared by the whole
  * stack. Pass NULL to disable.
  */
 
-/** Which component emitted an event (lwip_debug_info.module). */
+/** Which component emitted an event. */
 typedef enum lwip_debug_module
 {
     LWIP_DBG_MOD_NONE = 0,
-    LWIP_DBG_MOD_LWIP,   /* lwIP core (assert/error, dispatch, netif) */
+    LWIP_DBG_MOD_LWIP,   /* lwIP-CE glue (conn/socket layer, dispatch, netif) */
     LWIP_DBG_MOD_USB,    /* USB ethernet driver                       */
-    LWIP_DBG_MOD_TCP,
-    LWIP_DBG_MOD_UDP,
-    LWIP_DBG_MOD_TLS     /* TLS handshake / record layer              */
+    LWIP_DBG_MOD_MEM,    /* custom allocator                          */
+    LWIP_DBG_MOD_TLS     /* TLS handshake / record layer / crypto     */
 } lwip_debug_module_t;
 
 /**
- * Where in the code the event was raised (lwip_debug_info.module_state). The
- * value space is shared across modules; read it together with `module`.
- * Grouped in blocks per module so ranges stay readable.
+ * File registry. One entry per .c file that emits events. Assigned by hand;
+ * stable across builds. 0 is reserved/invalid. Fits in the top byte of an
+ * event code (file_id << 24 | line).
  */
-typedef enum lwip_debug_state
+typedef enum lwip_debug_file_id
 {
-    LWIP_DBG_STATE_NONE = 0,
+    LWIP_FILE_NONE = 0,
 
-    /* ---- lwIP core (0x100..) ---- */
-    LWIP_DBG_LWIP_ASSERT = 0x100,
-    LWIP_DBG_LWIP_ERROR,
-    LWIP_DBG_LWIP_SOCKET_WAIT,
-    LWIP_DBG_LWIP_SOCKET_RETRY,
-    LWIP_DBG_LWIP_SOCKET_ATTEMPT,
-    LWIP_DBG_LWIP_SOCKET_ESTABLISHED,
-    LWIP_DBG_LWIP_SOCKET_FAILED,
-    LWIP_DBG_LWIP_DNS_WAIT,
-    LWIP_DBG_LWIP_SERVICES_TIMEOUT,
+    /* ---- TLS core / crypto ---- */
+    LWIP_FILE_TLS,                  /* tls/core/tls.c            */
+    LWIP_FILE_HANDSHAKE,            /* tls/core/handshake.c      */
+    LWIP_FILE_TRUSTSTORE,           /* tls/core/truststore.c     */
+    LWIP_FILE_AES,                  /* tls/core/aes.c            */
+    LWIP_FILE_ASN1,                 /* tls/core/asn1.c           */
+    LWIP_FILE_BASE64,               /* tls/core/base64.c         */
+    LWIP_FILE_HASH,                 /* tls/core/hash.c           */
+    LWIP_FILE_HKDF,                 /* tls/core/hkdf.c           */
+    LWIP_FILE_HMAC,                 /* tls/core/hmac.c           */
+    LWIP_FILE_KEYOBJECT,            /* tls/core/keyobject.c      */
+    LWIP_FILE_PASSWORDS,            /* tls/core/passwords.c      */
+    LWIP_FILE_PKCS8,                /* tls/core/pkcs8.c          */
+    LWIP_FILE_RANDOM,                /* tls/core/random.c         */
+    LWIP_FILE_RSA,                  /* tls/core/rsa.c            */
+    LWIP_FILE_X509,                 /* tls/core/x509.c           */
 
-    /* ---- USB (0x200..) ---- */
-    LWIP_DBG_USB_ENDPOINT_STALL = 0x200,
-    LWIP_DBG_USB_ENDPOINT_NO_DEVICE,
-    LWIP_DBG_USB_ENDPOINT_ERROR,
-    LWIP_DBG_USB_FATAL_RETRY,
-    LWIP_DBG_USB_RX_DRAIN_SHORT,
-    LWIP_DBG_USB_RX_DRAIN_FATAL,
+    /* ---- altcp / TLS integration ---- */
+    LWIP_FILE_ALTCP_TLS_CE,         /* apps/altcp_tls/altcp_tls_ce.c         */
+    LWIP_FILE_ALTCP_TLS_CE_EXAMPLE, /* apps/altcp_tls/altcp_tls_ce_example.c */
 
-    /* ---- TLS init / trust store (0x300..) ---- */
-    LWIP_DBG_TLS_INIT_START = 0x300,
-    LWIP_DBG_TLS_TRUSTSTORE_INIT,
-    LWIP_DBG_TLS_TRUSTSTORE_VERIFIED,
-    LWIP_DBG_TLS_INIT_DONE,
+    /* ---- USB driver ---- */
+    LWIP_FILE_USB_ETHERNET,         /* drivers/usb_ethernet.c    */
 
-    /* ---- TLS handshake steps (0x320..) ---- */
-    LWIP_DBG_TLS_HANDSHAKE_BEGIN = 0x320,
-    LWIP_DBG_TLS_CLIENT_HELLO,
-    LWIP_DBG_TLS_SERVER_HELLO,
-    LWIP_DBG_TLS_KEY_EXCHANGE,
-    LWIP_DBG_TLS_DERIVE_HS_KEYS,
-    LWIP_DBG_TLS_ENCRYPTED_EXT,
-    LWIP_DBG_TLS_CERTIFICATE,
-    LWIP_DBG_TLS_CERTIFICATE_VERIFY,
-    LWIP_DBG_TLS_DERIVE_APP_KEYS,
-    LWIP_DBG_TLS_FINISHED,
-    LWIP_DBG_TLS_HANDSHAKE_END,
+    /* ---- custom allocator ---- */
+    LWIP_FILE_MEM,                  /* drivers/mem.c             */
 
-    /* ---- TLS errors (0x340..) ---- */
-    LWIP_DBG_TLS_FATAL_ALERT = 0x340,
-    LWIP_DBG_TLS_TRUSTSTORE_FAIL,
-    LWIP_DBG_TLS_CERTVERIFY_FAIL,
-    LWIP_DBG_TLS_CHAIN_VERIFY_FAIL,    /* a chain link's signature did not verify */
-    LWIP_DBG_TLS_CERT_UNSUPPORTED,     /* cert sig type not RSA-2048: accepted, alerted */
-    LWIP_DBG_TLS_ROOT_NOT_IN_STORE,    /* topmost cert's issuer not found in truststore: accepted, alerted */
+    /* ---- lwIP-CE glue ---- */
+    LWIP_FILE_LWIP_CE,              /* lwIP.c                    */
+    LWIP_FILE_APP_CONFIG,           /* core/app_config.c         */
+    LWIP_FILE_LWIP_RUNTIME,         /* core/lwip_runtime.c       */
+    LWIP_FILE_DISPATCH,             /* core/dispatch.c           */
+    LWIP_FILE_TEARDOWN,             /* core/teardown.c           */
+    LWIP_FILE_LOGGING,              /* core/logging.c            */
+    LWIP_FILE_MAIN,                 /* main.c (config app)       */
 
-    /* ---- TLS verbose record/decrypt path (0x360..), depth 1 ---- */
-    LWIP_DBG_TLS_REC_RX = 0x360,        /* encrypted record seen            */
-    LWIP_DBG_TLS_REC_PARTIAL,           /* record split across TCP segments */
-    LWIP_DBG_TLS_DERIVE_HS_KEYS_V,      /* deriving handshake keys          */
-    LWIP_DBG_TLS_DECRYPT,               /* decrypting a record              */
-    LWIP_DBG_TLS_DECRYPT_NOMEM,         /* decrypt scratch alloc deferred   */
-    LWIP_DBG_TLS_PROCESS_INNER,         /* feeding plaintext to handshake   */
-    LWIP_DBG_TLS_CERT_WALK              /* cert walker processing a chunk   */
-} lwip_debug_state_t;
+    LWIP_FILE_MAX
+} lwip_debug_file_id_t;
+
+/** Kind of event (lwip_event.kind). */
+typedef enum lwip_event_kind
+{
+    LWIP_EV_INFO = 0,     /* milestone; data.msg is a literal string         */
+    LWIP_EV_DEBUG,        /* trace point; data.code, deduped by {file,line}  */
+    LWIP_EV_WARN,         /* tolerated problem; data.code                   */
+    LWIP_EV_ERROR,        /* hard failure; data.code                        */
+    LWIP_EV_STATE_CHG,    /* meaningful state transition; data.state         */
+    LWIP_EV_IO_FILE,      /* appvar/flash read or write; data.file           */
+    LWIP_EV_IO_ETH        /* network bytes rx/tx; data.eth                   */
+} lwip_event_kind_t;
+
+/** I/O direction for IO_FILE. */
+enum lwip_io_file_dir { LWIP_IO_READ = 0, LWIP_IO_WRITE = 1 };
+
+/** I/O direction for IO_ETH. */
+enum lwip_io_eth_dir { LWIP_IO_RX = 0, LWIP_IO_TX = 1 };
 
 /**
- * Severity of an event. Orthogonal to `depth` (which is a verbosity axis):
- * depth says how much detail an emit carries, severity says how bad it is.
- *
- *   INFO   — normal progress / informational milestone (errnum == 0).
- *   ALERT  — problematic but acceptable: the stack noticed something wrong
- *            yet chose to proceed (e.g. an unsupported-but-tolerated cert).
- *   ERROR  — something went wrong; the operation is failing or aborting.
- *
- * A fatal event (lwip_debug_fatal) is delivered as ERROR.
+ * Meaningful state transitions worth surfacing on their own, independent of
+ * the object whose state changed (lwip_event.data.state.owner identifies
+ * which object). Kept small and curated on purpose — not a code per struct
+ * field, just the handful of transitions a console/UI actually cares about.
  */
-enum lwip_debug_severity
+typedef enum lwip_state_change
 {
-    LWIP_DBG_SEV_INFO  = 0, /* normal progress / informational     */
-    LWIP_DBG_SEV_ALERT = 1, /* problematic but proceeding anyway   */
-    LWIP_DBG_SEV_ERROR = 2  /* something went wrong                */
-};
+    LWIP_STATE_NONE = 0,
+
+    LWIP_STATE_LINK_UP,
+    LWIP_STATE_LINK_DOWN,
+    LWIP_STATE_IP_ACQUIRED,
+    LWIP_STATE_IP_LOST,
+
+    LWIP_STATE_CONN_CONNECTING,
+    LWIP_STATE_CONN_ESTABLISHED,
+    LWIP_STATE_CONN_CLOSED,
+    LWIP_STATE_CONN_FAILED,
+
+    LWIP_STATE_TLS_HANDSHAKE_BEGIN,
+    LWIP_STATE_TLS_HANDSHAKE_DONE,
+    LWIP_STATE_TLS_HANDSHAKE_FAILED
+} lwip_state_change_t;
 
 /**
- * Module-specific error codes carried in lwip_debug_info.errnum. The errnum
- * space is per-module; read it together with `module`. 0 always means "ok".
+ * A code identifying exactly where an ERROR/WARN/DEBUG event was raised:
+ * file_id in the top byte, source line in the low 24 bits. Use
+ * LWIP_EVENT_CODE_FILE/LINE to decode.
  */
-enum lwip_debug_tls_errnum
+#define LWIP_EVENT_CODE(file_id, line) \
+    (((uint32_t)(file_id) << 24) | ((uint32_t)(line) & 0x00FFFFFFu))
+#define LWIP_EVENT_CODE_FILE(code) ((uint8_t)((code) >> 24))
+#define LWIP_EVENT_CODE_LINE(code) ((uint32_t)(code) & 0x00FFFFFFu)
+
+/** One event handed to the callback. */
+struct lwip_event
 {
-    /* A certificate in the chain is signed with an algorithm we don't verify
-     * (not RSA-2048). The cert is accepted anyway (ALERT severity), but the
-     * chain link is left cryptographically unchecked. */
-    LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED = 1,
-    /* An RSA-2048 chain link's issuer signature failed to verify. Fatal
-     * (ERROR severity); the handshake is aborted. */
-    LWIP_DBG_TLS_ERR_CHAIN_VERIFY = 2,
-    /* tls_truststore_init() failed. errnum carries the tls_truststore_status_t
-     * value (NOT_FOUND/SIZE_INVALID/VERSION_MISMATCH/HASH_FAIL/SIG_INVALID). */
-    LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT = 3,
-    /* The topmost chain cert's issuer was not found in the truststore, so the
-     * final root-anchored link was not verified. The cert is accepted anyway
-     * (ALERT severity); only the leaf<->intermediate link(s) were checked. */
-    LWIP_DBG_TLS_ERR_ROOT_NOT_IN_STORE = 4,
-    /* The peer sent a fatal TLS alert. errnum carries the alert description
-     * byte (RFC 8446 §B.2, e.g. 51 = decrypt_error, 47 = illegal_parameter,
-     * 40 = handshake_failure), offset by +1000 to keep it visibly distinct
-     * from the other small errnum values above. */
-    LWIP_DBG_TLS_ERR_FATAL_ALERT_BASE = 1000
+    uint8_t module;  /* lwip_debug_module_t */
+    uint8_t kind;    /* lwip_event_kind_t   */
+    union
+    {
+        const char *msg;        /* INFO: literal message               */
+        struct
+        {
+            uint32_t loc;        /* LWIP_EVENT_CODE(file_id, line)      */
+            uint16_t extra;      /* 0 for bare ERROR()/WARN()/DEBUG()    */
+        } code;                  /* DEBUG / WARN / ERROR                 */
+        struct
+        {
+            void    *owner;       /* object whose state changed          */
+            uint16_t change_event; /* lwip_state_change_t                */
+        } state;                 /* STATE_CHG                            */
+        struct
+        {
+            uint8_t     dir;      /* lwip_io_file_dir                    */
+            const char *name;     /* appvar name                         */
+            uint32_t    bytes;
+        } file;                  /* IO_FILE                              */
+        struct
+        {
+            uint8_t  dir;         /* lwip_io_eth_dir                     */
+            uint32_t bytes;
+        } eth;                   /* IO_ETH                               */
+    } data;
 };
+
+/** The shared event callback. */
+typedef void (*lwip_event_fn)(const struct lwip_event *ev);
 
 /**
- * One debug event handed to the callback.
- *  - module:        which component raised it (lwip_debug_module_t)
- *  - module_state:  identifier of where in the code (lwip_debug_state_t)
- *  - errnum:        0 = ok / informational; non-zero = an error code
- *  - line:          __LINE__ at the emit site (0 if not applicable)
- *  - depth:         verbosity depth of this emit (lwip_debug_depth)
- *  - severity:      how bad the event is (lwip_debug_severity)
+ * Install the stack-wide event callback. NULL disables. There is no mode or
+ * depth filter any more — every emitted event reaches the callback (DEBUG is
+ * already self-throttling: it only fires when the {file,line} it's raised at
+ * changes from the previous DEBUG emit).
  */
-struct lwip_debug_info
-{
-    uint16_t module;        /* lwip_debug_module_t */
-    uint16_t module_state;  /* lwip_debug_state_t  */
-    int      errnum;        /* 0 = ok, else error  */
-    uint16_t line;
-    uint8_t  depth;         /* verbosity depth of this emit (lwip_debug_depth) */
-    uint8_t  severity;      /* lwip_debug_severity */
-};
+void lwip_set_event_cb(lwip_event_fn event_fn);
 
-/** Debug delivery mode (bit flags). */
-enum lwip_debug_mode
-{
-    LWIP_DBG_INFO  = 1u, /* deliver every emit (informational + errors) */
-    LWIP_DBG_ERROR = 2u  /* deliver only emits with errnum != 0         */
-};
-
-/**
- * Verbosity depth. Each emit is tagged with the depth at which it becomes
- * relevant; the callback only receives emits whose depth <= the configured
- * depth (errors are always delivered regardless of depth).
- *
- *   depth 0  — milestones only: per-step state progress + success/error.
- *              Right for a simple "what's happening" display.
- *   depth 1+ — verbose: additional in-flight detail within a step
- *              (fn entry, intermediate actions, ...). Use for deep tracing.
- *
- * A module may define finer sub-states/error numbers and emit them at higher
- * depths; depth 0 stays a clean high-level progress view.
- */
-enum lwip_debug_depth
-{
-    LWIP_DBG_DEPTH_MILESTONE = 0, /* state progress + success/error */
-    LWIP_DBG_DEPTH_VERBOSE   = 1  /* in-flight detail within a step */
-};
-
-/** The shared debug callback. */
-typedef void (*lwip_debug_fn)(const struct lwip_debug_info *info);
-
-/**
- * Install the stack-wide debug callback.
- *
- * @param debug_fn    Callback invoked for matching events (NULL disables).
- * @param debug_mode  Bit-OR of LWIP_DBG_INFO / LWIP_DBG_ERROR. LWIP_DBG_INFO
- *                    delivers all events; LWIP_DBG_ERROR delivers only events
- *                    whose errnum != 0. Passing both is equivalent to
- *                    LWIP_DBG_INFO.
- * @param debug_depth Maximum verbosity depth to deliver (see
- *                    lwip_debug_depth). 0 = milestones only; higher = more
- *                    verbose. Emits above this depth are dropped, except
- *                    error emits, which are always delivered.
- */
-void lwip_set_debug(lwip_debug_fn debug_fn, uint8_t debug_mode,
-                    uint8_t debug_depth);
-
-/** Human-readable label for a module (e.g. "TLS"). */
+/** Human-readable label for a module (e.g. "tls"). */
 const char *lwip_debug_module_name(uint16_t module);
 
-/** Human-readable label for a module_state (e.g. "certificate"). */
-const char *lwip_debug_state_name(uint16_t module_state);
+/** Human-readable label for a file_id (e.g. "truststore.c"). */
+const char *lwip_debug_file_name(uint8_t file_id);
 
-/**
- * Emit a debug event at a given verbosity depth. Internal entry point used by
- * every module. Delivered to the callback subject to the configured mode and
- * depth (an error — errnum != 0 — is always delivered regardless of depth).
- * `errnum` of 0 is informational.
- */
-void lwip_debug_emit_at(uint16_t module, uint16_t module_state, int errnum,
-                        uint16_t line, uint8_t depth);
-
-/** Emit at milestone depth (depth 0). Convenience wrapper. */
-void lwip_debug_emit(uint16_t module, uint16_t module_state, int errnum,
-                     uint16_t line);
-
-/**
- * Emit a debug event carrying an explicit severity (lwip_debug_severity).
- * Like lwip_debug_emit_at, plus a severity tag. ALERT/ERROR emits are always
- * delivered regardless of the configured depth (like errors). Use
- * lwip_debug_alert / lwip_debug_error for the common cases.
- */
-void lwip_debug_emit_sev(uint16_t module, uint16_t module_state, int errnum,
-                         uint16_t line, uint8_t depth, uint8_t severity);
-
-/**
- * Emit an ALERT: something problematic but acceptable — the stack noticed a
- * problem yet is proceeding. Always delivered. Milestone depth.
- */
-void lwip_debug_alert(uint16_t module, uint16_t module_state, int errnum,
-                      uint16_t line);
-
-/**
- * Emit an ERROR: something went wrong (operation failing/aborting, but not a
- * fatal abort of the whole program — for that use lwip_debug_fatal). Always
- * delivered. Milestone depth. Forces a non-zero errnum if 0 is passed.
- */
-void lwip_debug_error(uint16_t module, uint16_t module_state, int errnum,
-                      uint16_t line);
-
-/**
- * Emit a fatal event then terminate the program (does not return). The
- * callback (if any) is invoked first so the caller can record/flush.
- */
-void lwip_debug_fatal(uint16_t module, uint16_t module_state, int errnum,
-                      uint16_t line) __attribute__((noreturn));
-
-/**
- * Register an internal cleanup routine run on a fatal event, after the debug
- * callback and before exit(). Used by the stack to tear down resources on an
- * assert/fatal. NULL clears it. Not part of the app-facing debug API.
- */
-void lwip_debug_set_fatal_cleanup(void (*cleanup)(void));
+/** Human-readable label for a state_change (e.g. "conn_established"). */
+const char *lwip_debug_state_change_name(uint16_t change_event);
 
 /* ----------------------------------------------------------------------
- * Compatibility shim for the lwIP core macros in debug.h, which expand to
- * lwip_log_*_at(LWIP_LOG_TYPE_LWIP, LWIP_LOG_LWIP_*, __LINE__). Mapped onto
- * the unified module/module_state space so those macros need no edits.
+ * Internal emit entry points. Use the ERROR()/WARN()/DEBUG()/... macros
+ * below instead of calling these directly.
+ * -------------------------------------------------------------------- */
+void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra);
+void lwip_event_emit_info(uint8_t module, const char *msg);
+void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event);
+void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes);
+void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes);
+
+/* ----------------------------------------------------------------------
+ * Call-site macros. Each .c file using these must first define:
+ *   #define LWIP_DBG_FILE_ID  <one of lwip_debug_file_id_t>
+ *   #define LWIP_DBG_MODULE   <one of lwip_debug_module_t>
+ * -------------------------------------------------------------------- */
+#define ERROR() \
+    lwip_event_emit_code(LWIP_DBG_MODULE, LWIP_EV_ERROR, \
+                         LWIP_EVENT_CODE(LWIP_DBG_FILE_ID, __LINE__), 0)
+
+#define ERROR_CODE(extra) \
+    lwip_event_emit_code(LWIP_DBG_MODULE, LWIP_EV_ERROR, \
+                         LWIP_EVENT_CODE(LWIP_DBG_FILE_ID, __LINE__), (uint16_t)(extra))
+
+#define WARN() \
+    lwip_event_emit_code(LWIP_DBG_MODULE, LWIP_EV_WARN, \
+                         LWIP_EVENT_CODE(LWIP_DBG_FILE_ID, __LINE__), 0)
+
+#define WARN_CODE(extra) \
+    lwip_event_emit_code(LWIP_DBG_MODULE, LWIP_EV_WARN, \
+                         LWIP_EVENT_CODE(LWIP_DBG_FILE_ID, __LINE__), (uint16_t)(extra))
+
+#define DEBUG() \
+    lwip_event_emit_code(LWIP_DBG_MODULE, LWIP_EV_DEBUG, \
+                         LWIP_EVENT_CODE(LWIP_DBG_FILE_ID, __LINE__), 0)
+
+#define INFO(str) \
+    lwip_event_emit_info(LWIP_DBG_MODULE, (str))
+
+#define STATE_CHG(owner, change_event) \
+    lwip_event_emit_state(LWIP_DBG_MODULE, (void *)(owner), (uint16_t)(change_event))
+
+#define IO_FILE(dir, name, bytes) \
+    lwip_event_emit_io_file(LWIP_DBG_MODULE, (uint8_t)(dir), (name), (uint32_t)(bytes))
+
+#define IO_ETH(dir, bytes) \
+    lwip_event_emit_io_eth(LWIP_DBG_MODULE, (uint8_t)(dir), (uint32_t)(bytes))
+
+/* ----------------------------------------------------------------------
+ * Compatibility shim for the lwIP core LWIP_ASSERT/LWIP_ERROR macros in
+ * debug.h, which have no file_id of their own. Routed onto the new event
+ * system as ERROR-kind events with LWIP_FILE_NONE; the line number is still
+ * exact. Used by vendored upstream code (mem.c, altcp_tls_mbedtls*.c) and by
+ * altcp_tls_ce.c.
  * -------------------------------------------------------------------- */
 #define LWIP_LOG_TYPE_LWIP   LWIP_DBG_MOD_LWIP
-#define LWIP_LOG_LWIP_ASSERT LWIP_DBG_LWIP_ASSERT
-#define LWIP_LOG_LWIP_ERROR  LWIP_DBG_LWIP_ERROR
+#define LWIP_LOG_LWIP_ASSERT 1
+#define LWIP_LOG_LWIP_ERROR  2
 
 void lwip_log_event_at(uint16_t module, uint16_t module_state, uint16_t line);
 void lwip_log_fatal_at(uint16_t module, uint16_t module_state, uint16_t line)
     __attribute__((noreturn));
+
+/**
+ * Register a cleanup routine run on a fatal LWIP_ASSERT, after the event
+ * callback and before exit(). NULL clears it.
+ */
+void lwip_debug_set_fatal_cleanup(void (*cleanup)(void));
 
 #ifdef __cplusplus
 }

@@ -2,13 +2,12 @@
 
 #include "lwip/logging.h"
 
-/* Unified debug sink. A single callback, shared by the whole stack. No file
+/* Unified event sink. A single callback, shared by the whole stack. No file
  * I/O: persistence/console/log is entirely the caller's choice inside its
  * callback. See lwip/logging.h. */
 
-static lwip_debug_fn g_debug_fn = NULL;
-static uint8_t g_debug_mode = LWIP_DBG_INFO;
-static uint8_t g_debug_depth = LWIP_DBG_DEPTH_MILESTONE;
+static lwip_event_fn g_event_fn = NULL;
+static uint32_t g_last_debug_loc = 0xFFFFFFFFu; /* no event has this value */
 static bool g_in_fatal = false;
 static void (*g_fatal_cleanup)(void) = NULL;
 
@@ -17,132 +16,115 @@ void lwip_debug_set_fatal_cleanup(void (*cleanup)(void))
     g_fatal_cleanup = cleanup;
 }
 
-void lwip_set_debug(lwip_debug_fn debug_fn, uint8_t debug_mode,
-                    uint8_t debug_depth)
+void lwip_set_event_cb(lwip_event_fn event_fn)
 {
-    g_debug_fn = debug_fn;
-    /* Default to delivering everything if no usable mode bit is set. */
-    if ((debug_mode & (LWIP_DBG_INFO | LWIP_DBG_ERROR)) == 0)
-    {
-        debug_mode = LWIP_DBG_INFO;
-    }
-    g_debug_mode = debug_mode;
-    g_debug_depth = debug_depth;
+    g_event_fn = event_fn;
+    g_last_debug_loc = 0xFFFFFFFFu;
 }
 
-void lwip_debug_emit_sev(uint16_t module, uint16_t module_state, int errnum,
-                         uint16_t line, uint8_t depth, uint8_t severity)
+void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra)
 {
-    if (!g_debug_fn)
+    if (!g_event_fn)
     {
         return;
     }
-    /* ALERT and ERROR are never informational, even when errnum is 0 — they
-     * must always surface (delivered in LWIP_DBG_ERROR mode and ignoring the
-     * depth gate, just like a non-zero errnum). */
-    bool is_problem = (errnum != 0) || (severity >= LWIP_DBG_SEV_ALERT);
+    if (kind == LWIP_EV_DEBUG)
+    {
+        /* DEBUG only fires when the call site changes from the last one. */
+        if (loc == g_last_debug_loc)
+        {
+            return;
+        }
+        g_last_debug_loc = loc;
+    }
 
-    /* LWIP_DBG_INFO delivers everything; LWIP_DBG_ERROR delivers only events
-     * that signal a problem. (Both set behaves like INFO.) */
-    if (!(g_debug_mode & LWIP_DBG_INFO) && !is_problem)
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = kind;
+    ev.data.code.loc = loc;
+    ev.data.code.extra = extra;
+    g_event_fn(&ev);
+}
+
+void lwip_event_emit_info(uint8_t module, const char *msg)
+{
+    if (!g_event_fn)
     {
         return;
     }
-    /* Drop emits deeper than the configured verbosity — but problems always
-     * surface, no matter how deep they were raised. */
-    if (depth > g_debug_depth && !is_problem)
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = LWIP_EV_INFO;
+    ev.data.msg = msg;
+    g_event_fn(&ev);
+}
+
+void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event)
+{
+    if (!g_event_fn)
     {
         return;
     }
-
-    struct lwip_debug_info info;
-    info.module = module;
-    info.module_state = module_state;
-    info.errnum = errnum;
-    info.line = line;
-    info.depth = depth;
-    info.severity = severity;
-    g_debug_fn(&info);
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = LWIP_EV_STATE_CHG;
+    ev.data.state.owner = owner;
+    ev.data.state.change_event = change_event;
+    g_event_fn(&ev);
 }
 
-void lwip_debug_emit_at(uint16_t module, uint16_t module_state, int errnum,
-                        uint16_t line, uint8_t depth)
+void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes)
 {
-    /* Infer severity from errnum for the legacy entry point: non-zero errnum
-     * is an ERROR, zero is INFO. Callers wanting ALERT use lwip_debug_alert. */
-    uint8_t severity = (errnum != 0) ? LWIP_DBG_SEV_ERROR : LWIP_DBG_SEV_INFO;
-    lwip_debug_emit_sev(module, module_state, errnum, line, depth, severity);
-}
-
-void lwip_debug_emit(uint16_t module, uint16_t module_state, int errnum,
-                     uint16_t line)
-{
-    lwip_debug_emit_at(module, module_state, errnum, line,
-                       LWIP_DBG_DEPTH_MILESTONE);
-}
-
-void lwip_debug_alert(uint16_t module, uint16_t module_state, int errnum,
-                      uint16_t line)
-{
-    lwip_debug_emit_sev(module, module_state, errnum, line,
-                        LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ALERT);
-}
-
-void lwip_debug_error(uint16_t module, uint16_t module_state, int errnum,
-                      uint16_t line)
-{
-    /* An ERROR always carries a non-zero errnum so LWIP_DBG_ERROR-mode sinks
-     * that key off errnum still see it. */
-    if (errnum == 0)
+    if (!g_event_fn)
     {
-        errnum = -1;
+        return;
     }
-    lwip_debug_emit_sev(module, module_state, errnum, line,
-                        LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = LWIP_EV_IO_FILE;
+    ev.data.file.dir = dir;
+    ev.data.file.name = name;
+    ev.data.file.bytes = bytes;
+    g_event_fn(&ev);
 }
 
-void lwip_debug_fatal(uint16_t module, uint16_t module_state, int errnum,
-                      uint16_t line)
+void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes)
 {
-    /* Guard against re-entrancy if the callback itself trips a fatal. */
+    if (!g_event_fn)
+    {
+        return;
+    }
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = LWIP_EV_IO_ETH;
+    ev.data.eth.dir = dir;
+    ev.data.eth.bytes = bytes;
+    g_event_fn(&ev);
+}
+
+/* Compatibility entry points for the lwIP core LWIP_ASSERT/LWIP_ERROR macros
+ * (debug.h), which have no file_id of their own: routed as ERROR events with
+ * LWIP_FILE_NONE, exact line preserved. */
+void lwip_log_event_at(uint16_t module, uint16_t module_state, uint16_t line)
+{
+    (void)module_state;
+    lwip_event_emit_code((uint8_t)module, LWIP_EV_ERROR,
+                         LWIP_EVENT_CODE(LWIP_FILE_NONE, line), 0);
+}
+
+void lwip_log_fatal_at(uint16_t module, uint16_t module_state, uint16_t line)
+{
     if (g_in_fatal)
     {
         exit(1);
     }
     g_in_fatal = true;
-    /* A fatal is always an error; force a non-zero errnum so it is delivered
-     * even in LWIP_DBG_ERROR mode. */
-    if (errnum == 0)
-    {
-        errnum = -1;
-    }
-    if (g_debug_fn)
-    {
-        struct lwip_debug_info info;
-        info.module = module;
-        info.module_state = module_state;
-        info.errnum = errnum;
-        info.line = line;
-        info.depth = LWIP_DBG_DEPTH_MILESTONE;
-        info.severity = LWIP_DBG_SEV_ERROR;
-        g_debug_fn(&info);
-    }
+    lwip_log_event_at(module, module_state, line);
     if (g_fatal_cleanup)
     {
         g_fatal_cleanup();
     }
     exit(1);
-}
-
-/* Compatibility entry points for the lwIP core macros (debug.h). */
-void lwip_log_event_at(uint16_t module, uint16_t module_state, uint16_t line)
-{
-    lwip_debug_emit(module, module_state, -1, line);
-}
-
-void lwip_log_fatal_at(uint16_t module, uint16_t module_state, uint16_t line)
-{
-    lwip_debug_fatal(module, module_state, -1, line);
 }
 
 const char *lwip_debug_module_name(uint16_t module)
@@ -151,66 +133,61 @@ const char *lwip_debug_module_name(uint16_t module)
     {
     case LWIP_DBG_MOD_LWIP: return "lwip";
     case LWIP_DBG_MOD_USB:  return "usb";
-    case LWIP_DBG_MOD_TCP:  return "tcp";
-    case LWIP_DBG_MOD_UDP:  return "udp";
+    case LWIP_DBG_MOD_MEM:  return "mem";
     case LWIP_DBG_MOD_TLS:  return "tls";
     default:                return "?";
     }
 }
 
-const char *lwip_debug_state_name(uint16_t module_state)
+const char *lwip_debug_file_name(uint8_t file_id)
 {
-    switch (module_state)
+    switch (file_id)
     {
-    case LWIP_DBG_LWIP_ASSERT:             return "assert";
-    case LWIP_DBG_LWIP_ERROR:              return "error";
-    case LWIP_DBG_LWIP_SOCKET_WAIT:        return "socket_wait";
-    case LWIP_DBG_LWIP_SOCKET_RETRY:       return "socket_retry";
-    case LWIP_DBG_LWIP_SOCKET_ATTEMPT:     return "socket_attempt";
-    case LWIP_DBG_LWIP_SOCKET_ESTABLISHED: return "socket_established";
-    case LWIP_DBG_LWIP_SOCKET_FAILED:      return "socket_failed";
-    case LWIP_DBG_LWIP_DNS_WAIT:           return "dns_wait";
-    case LWIP_DBG_LWIP_SERVICES_TIMEOUT:   return "services_timeout";
+    case LWIP_FILE_TLS:                  return "tls.c";
+    case LWIP_FILE_HANDSHAKE:            return "handshake.c";
+    case LWIP_FILE_TRUSTSTORE:           return "truststore.c";
+    case LWIP_FILE_AES:                  return "aes.c";
+    case LWIP_FILE_ASN1:                 return "asn1.c";
+    case LWIP_FILE_BASE64:               return "base64.c";
+    case LWIP_FILE_HASH:                 return "hash.c";
+    case LWIP_FILE_HKDF:                 return "hkdf.c";
+    case LWIP_FILE_HMAC:                 return "hmac.c";
+    case LWIP_FILE_KEYOBJECT:            return "keyobject.c";
+    case LWIP_FILE_PASSWORDS:            return "passwords.c";
+    case LWIP_FILE_PKCS8:                return "pkcs8.c";
+    case LWIP_FILE_RANDOM:               return "random.c";
+    case LWIP_FILE_RSA:                  return "rsa.c";
+    case LWIP_FILE_X509:                 return "x509.c";
+    case LWIP_FILE_ALTCP_TLS_CE:         return "altcp_tls_ce.c";
+    case LWIP_FILE_ALTCP_TLS_CE_EXAMPLE: return "altcp_tls_ce_example.c";
+    case LWIP_FILE_USB_ETHERNET:         return "usb_ethernet.c";
+    case LWIP_FILE_MEM:                  return "mem.c";
+    case LWIP_FILE_LWIP_CE:              return "lwIP.c";
+    case LWIP_FILE_APP_CONFIG:           return "app_config.c";
+    case LWIP_FILE_LWIP_RUNTIME:         return "lwip_runtime.c";
+    case LWIP_FILE_DISPATCH:             return "dispatch.c";
+    case LWIP_FILE_TEARDOWN:             return "teardown.c";
+    case LWIP_FILE_LOGGING:              return "logging.c";
+    case LWIP_FILE_MAIN:                 return "main.c";
+    default:                             return "?";
+    }
+}
 
-    case LWIP_DBG_USB_ENDPOINT_STALL:      return "ep_stall";
-    case LWIP_DBG_USB_ENDPOINT_NO_DEVICE:  return "ep_no_device";
-    case LWIP_DBG_USB_ENDPOINT_ERROR:      return "ep_error";
-    case LWIP_DBG_USB_FATAL_RETRY:         return "fatal_retry";
-    case LWIP_DBG_USB_RX_DRAIN_SHORT:      return "rx_drain_short";
-    case LWIP_DBG_USB_RX_DRAIN_FATAL:      return "rx_drain_fatal";
-
-    case LWIP_DBG_TLS_INIT_START:          return "tls_init started";
-    case LWIP_DBG_TLS_TRUSTSTORE_INIT:     return "tls_truststore init";
-    case LWIP_DBG_TLS_TRUSTSTORE_VERIFIED: return "tls_truststore verified";
-    case LWIP_DBG_TLS_INIT_DONE:           return "tls_init done";
-
-    case LWIP_DBG_TLS_HANDSHAKE_BEGIN:     return "handshake_begin";
-    case LWIP_DBG_TLS_CLIENT_HELLO:        return "client_hello";
-    case LWIP_DBG_TLS_SERVER_HELLO:        return "server_hello";
-    case LWIP_DBG_TLS_KEY_EXCHANGE:        return "key_exchange";
-    case LWIP_DBG_TLS_DERIVE_HS_KEYS:      return "derive_hs_keys";
-    case LWIP_DBG_TLS_ENCRYPTED_EXT:       return "encrypted_extensions";
-    case LWIP_DBG_TLS_CERTIFICATE:         return "certificate";
-    case LWIP_DBG_TLS_CERTIFICATE_VERIFY:  return "certificate_verify";
-    case LWIP_DBG_TLS_DERIVE_APP_KEYS:     return "derive_app_keys";
-    case LWIP_DBG_TLS_FINISHED:            return "finished";
-    case LWIP_DBG_TLS_HANDSHAKE_END:       return "handshake_end";
-
-    case LWIP_DBG_TLS_FATAL_ALERT:         return "fatal_alert";
-    case LWIP_DBG_TLS_TRUSTSTORE_FAIL:     return "truststore_fail";
-    case LWIP_DBG_TLS_CERTVERIFY_FAIL:     return "certverify_fail";
-    case LWIP_DBG_TLS_CHAIN_VERIFY_FAIL:   return "chain_verify_fail";
-    case LWIP_DBG_TLS_CERT_UNSUPPORTED:    return "cert_unsupported";
-    case LWIP_DBG_TLS_ROOT_NOT_IN_STORE:   return "root_not_in_store";
-
-    case LWIP_DBG_TLS_REC_RX:              return "rec_rx";
-    case LWIP_DBG_TLS_REC_PARTIAL:         return "rec_partial";
-    case LWIP_DBG_TLS_DERIVE_HS_KEYS_V:    return "derive_hs_keys";
-    case LWIP_DBG_TLS_DECRYPT:             return "decrypt";
-    case LWIP_DBG_TLS_DECRYPT_NOMEM:       return "decrypt_nomem";
-    case LWIP_DBG_TLS_PROCESS_INNER:       return "process_inner";
-    case LWIP_DBG_TLS_CERT_WALK:           return "cert_walk";
-
+const char *lwip_debug_state_change_name(uint16_t change_event)
+{
+    switch (change_event)
+    {
+    case LWIP_STATE_LINK_UP:               return "link_up";
+    case LWIP_STATE_LINK_DOWN:             return "link_down";
+    case LWIP_STATE_IP_ACQUIRED:           return "ip_acquired";
+    case LWIP_STATE_IP_LOST:               return "ip_lost";
+    case LWIP_STATE_CONN_CONNECTING:       return "conn_connecting";
+    case LWIP_STATE_CONN_ESTABLISHED:      return "conn_established";
+    case LWIP_STATE_CONN_CLOSED:           return "conn_closed";
+    case LWIP_STATE_CONN_FAILED:           return "conn_failed";
+    case LWIP_STATE_TLS_HANDSHAKE_BEGIN:   return "tls_handshake_begin";
+    case LWIP_STATE_TLS_HANDSHAKE_DONE:    return "tls_handshake_done";
+    case LWIP_STATE_TLS_HANDSHAKE_FAILED:  return "tls_handshake_failed";
     default:                               return "?";
     }
 }

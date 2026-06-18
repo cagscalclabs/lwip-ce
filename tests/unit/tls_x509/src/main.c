@@ -246,14 +246,6 @@ int main(void)
 
     os_ClrHome();
     os_FontSelect(os_SmallFont);
-    if (lwip_init() != ERR_OK)
-    {
-        int y = 30;
-        draw_line("mem init failed", &y);
-        os_GetKey();
-        return 1;
-    }
-
     obj1 = tls_x509_import_certificate(cert_pem, strlen(cert_pem));
     obj2 = tls_x509_import_certificate(cert2_pem, strlen(cert2_pem));
 

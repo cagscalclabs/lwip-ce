@@ -38,6 +38,9 @@
 #include "lwip/dispatch.h"
 #include "lwip/sys.h"
 #include "lwip/apps/sntp.h"
+
+#define LWIP_DBG_FILE_ID LWIP_FILE_LWIP_CE
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_LWIP
 #include "lwip/sntp_time.h"
 #include "drivers/usb_ethernet.h"
 #include "drivers/mem.h"
@@ -1245,8 +1248,7 @@ static void lwip_socket_fail(struct lwip_socket *conn, lwip_error_t err)
 {
     if (!conn)
         return;
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                    (int)err, 0);
+    ERROR_CODE(err);
     lwip_socket_set_pending_host(conn, NULL);
     conn->services_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
@@ -1738,12 +1740,12 @@ static lwip_error_t lwip_socket_wait_for_services(struct lwip_socket *conn,
     conn->services_deadline = deadline;
     services_list_add(conn);
     conn_event_enqueue(conn, CONN_PENDING_WAITING, LWIP_OK);
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_WAIT, 0, 0);
+    DEBUG();
 #if LWIP_DNS
     if ((conn->flags & LWIP_SOCKET_SVC_DNS) && host_requires_dns(host) &&
         !dns_has_configured_server())
     {
-        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_DNS_WAIT, 0, 0);
+        DEBUG();
     }
 #endif
     services_arm();
@@ -1784,8 +1786,7 @@ static void services_dispatch(void)
 
             if (err == LWIP_ERR_NETIF)
             {
-                lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_RETRY,
-                                (int)LWIP_ERR_NETIF, 0);
+                WARN_CODE(LWIP_ERR_NETIF);
                 /* Transient routing (ERR_RTE/IF) — re-park and let the
                  * inactivity watchdog, not a fixed deadline, decide when to
                  * give up. Preserves the existing pending_host. */
@@ -1901,8 +1902,7 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
     }
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_CONNECT;
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SERVICES_TIMEOUT,
-                    (int)LWIP_ERR_CONNECT, 0);
+    ERROR_CODE(LWIP_ERR_CONNECT);
     conn_error_enqueue(conn, conn_transport_component(conn),
                        LWIP_SOCKET_ERR_OP_CONNECT, (int)ERR_TIMEOUT,
                        LWIP_ERR_CONNECT);
@@ -2054,8 +2054,7 @@ static void conn_altcp_err_cb(void *arg, err_t err)
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
     }
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                    (int)c->last_error, 0);
+    ERROR_CODE(c->last_error);
     c->pcb.altcp = NULL; /* lower layer freed the pcb */
     if (g_lwip_stopping)
         return;
@@ -2082,15 +2081,14 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
     {
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
-        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                        (int)c->last_error, 0);
+        ERROR_CODE(c->last_error);
         conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_ALTCP,
                            LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                            c->last_error);
         return ERR_OK;
     }
     c->status = LWIP_STATUS_CONNECTED;
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_ESTABLISHED, 0, 0);
+    STATE_CHG(c, LWIP_STATE_CONN_ESTABLISHED);
     conn_event_enqueue(c, CONN_PENDING_CONNECTED, LWIP_OK);
     if (c->aborting)
         return ERR_ABRT;
@@ -2229,8 +2227,7 @@ static void conn_tcp_err_cb(void *arg, err_t err)
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
     }
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                    (int)c->last_error, 0);
+    ERROR_CODE(c->last_error);
     c->pcb.tcp = NULL;
     if (g_lwip_stopping)
         return;
@@ -2253,15 +2250,14 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
     {
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
-        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                        (int)c->last_error, 0);
+        ERROR_CODE(c->last_error);
         conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_TCP,
                            LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                            c->last_error);
         return ERR_OK;
     }
     c->status = LWIP_STATUS_CONNECTED;
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_ESTABLISHED, 0, 0);
+    STATE_CHG(c, LWIP_STATE_CONN_ESTABLISHED);
     conn_event_enqueue(c, CONN_PENDING_CONNECTED, LWIP_OK);
     if (c->aborting)
         return ERR_ABRT;
@@ -2527,7 +2523,7 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
  * lwip_err_t so the caller can roll status/error back on failure. */
 static err_t start_transport_connect(struct lwip_socket *c)
 {
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_ATTEMPT, 0, 0);
+    STATE_CHG(c, LWIP_STATE_CONN_CONNECTING);
 
     switch ((lwip_socket_type_t)c->protocol)
     {
@@ -2587,8 +2583,7 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
         c->services_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = LWIP_ERR_DNS;
-        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                        (int)c->last_error, 0);
+        ERROR_CODE(c->last_error);
         conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_DNS,
                            LWIP_SOCKET_ERR_OP_DNS_LOOKUP, (int)ERR_VAL,
                            LWIP_ERR_DNS);
@@ -2617,8 +2612,7 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
         c->services_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = mapped;
-        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                        (int)c->last_error, 0);
+        ERROR_CODE(c->last_error);
         conn_error_enqueue(c, conn_transport_component(c),
                            LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                            c->last_error);
@@ -2680,8 +2674,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         {
             conn->status = LWIP_STATUS_ERROR;
             conn->last_error = lwip_err_translate(err);
-            lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                            (int)conn->last_error, 0);
+            ERROR_CODE(conn->last_error);
             conn_error_enqueue(conn, conn_transport_component(conn),
                                LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                                conn->last_error);
@@ -2702,8 +2695,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         {
             conn->status = LWIP_STATUS_ERROR;
             conn->last_error = lwip_err_translate(err);
-            lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                            (int)conn->last_error, 0);
+            ERROR_CODE(conn->last_error);
             conn_error_enqueue(conn, conn_transport_component(conn),
                                LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                                conn->last_error);
@@ -2742,8 +2734,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     conn->services_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                    (int)conn->last_error, 0);
+    ERROR_CODE(conn->last_error);
     conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_DNS,
                        LWIP_SOCKET_ERR_OP_DNS_LOOKUP, (int)derr,
                        LWIP_ERR_DNS);
@@ -2753,8 +2744,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     conn->services_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
-    lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                    (int)conn->last_error, 0);
+    ERROR_CODE(conn->last_error);
     conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_DNS,
                        LWIP_SOCKET_ERR_OP_DNS_LOOKUP, (int)ERR_VAL,
                        LWIP_ERR_DNS);
@@ -2795,8 +2785,7 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
     {
         conn->status = LWIP_STATUS_ERROR;
         conn->last_error = svc_err ? svc_err : LWIP_ERR_NETIF;
-        lwip_debug_emit(LWIP_DBG_MOD_LWIP, LWIP_DBG_LWIP_SOCKET_FAILED,
-                        (int)conn->last_error, 0);
+        ERROR_CODE(conn->last_error);
         conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_SERVICES,
                            LWIP_SOCKET_ERR_OP_SERVICE_WAIT,
                            (int)conn->last_error, conn->last_error);

@@ -81,14 +81,6 @@ int main(void)
 
     if (!lwip_start()) return 1;
 
-    /* Initialize lwIP memory */
-    if (lwip_init() != ERR_OK)
-    {
-        printf("mem init failed\n");
-        os_GetKey();
-        return 1;
-    }
-
     /* Run tests */
     bool test1 = test_oaep_encode();
     bool test2 = test_oaep_decode();

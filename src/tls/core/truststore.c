@@ -5,6 +5,9 @@
 #include "../includes/rsa.h"
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
+
+#define LWIP_DBG_FILE_ID LWIP_FILE_TRUSTSTORE
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
 
 /* Temporary sub-step tracing for tls_truststore_init (key-gated). Set
@@ -96,9 +99,7 @@ tls_truststore_status_t tls_truststore_init(void)
     // If hash init fails, error out early
     if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
     {
-        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
-                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
-                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
+        ERROR_CODE(TLS_STORE_HASH_FAIL);
         return TLS_STORE_HASH_FAIL;
     }
 
@@ -107,9 +108,7 @@ tls_truststore_status_t tls_truststore_init(void)
     truststore_var = os_GetAppVarData(truststore_name, NULL);
     if (!truststore_var)
     {
-        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
-                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
-                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ALERT);
+        WARN_CODE(TLS_STORE_NOT_FOUND);
         return TLS_STORE_NOT_FOUND;
     }
     TS_TRACE("E0b appvar found");
@@ -118,18 +117,14 @@ tls_truststore_status_t tls_truststore_init(void)
     uint16_t truststore_size = *((uint16_t *)truststore_var);
     if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
     {
-        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
-                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
-                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
+        ERROR_CODE(TLS_STORE_SIZE_INVALID);
         return TLS_STORE_SIZE_INVALID;
     }
     uint8_t *store_header_bytes = (uint8_t *)truststore_var + 2;
     struct tls_truststore_header *header = (struct tls_truststore_header *)store_header_bytes;
     if (header->version != TLS_TRUSTSTORE_VERSION)
     {
-        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
-                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
-                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
+        ERROR_CODE(TLS_STORE_VERSION_MISMATCH);
         return TLS_STORE_VERSION_MISMATCH;
     }
     uint8_t *store_db_start = store_header_bytes + TLS_TRUSTSTORE_HEADER_LEN;
@@ -148,9 +143,7 @@ tls_truststore_status_t tls_truststore_init(void)
     // Decrypt the truststore signature
     if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
     {
-        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
-                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
-                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
+        ERROR_CODE(TLS_STORE_SIG_INVALID);
         return TLS_STORE_SIG_INVALID;
     }
     TS_TRACE("E5 pss verify");
@@ -161,13 +154,11 @@ tls_truststore_status_t tls_truststore_init(void)
     if (verified)
     {
         truststore_valid_for_session = true;
-        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_VERIFIED, 0, __LINE__);
+        INFO("truststore verified");
     }
     else
     {
-        lwip_debug_emit_sev(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_TRUSTSTORE_FAIL,
-                            LWIP_DBG_TLS_ERR_TRUSTSTORE_INIT, __LINE__,
-                            LWIP_DBG_DEPTH_MILESTONE, LWIP_DBG_SEV_ERROR);
+        ERROR_CODE(TLS_STORE_SIG_INVALID);
     }
     return verified ? TLS_STORE_OK : TLS_STORE_SIG_INVALID;
 }

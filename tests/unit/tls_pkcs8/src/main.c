@@ -252,13 +252,6 @@ int main(void)
 
     if (!lwip_start()) return 1;
 
-    if (lwip_init() != ERR_OK)
-    {
-        draw_line("mem init failed", &y);
-        os_GetKey();
-        return 1;
-    }
-
     case_ok = check_private_case("PKCS#1 RSA private", (const char *)test1, NULL, TLS_KEY_RSA, &err, &y);
     if (!case_ok)
     {

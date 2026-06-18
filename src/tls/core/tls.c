@@ -13,12 +13,9 @@
 #include "../includes/truststore.h"
 #include "../../drivers/mem.h"
 
-/* Init-phase debug events route through the unified stack-wide debug sink
- * (lwip_set_debug). The library does no I/O — the callback decides. */
-static inline void tls_init_debug(lwip_debug_state_t state, int errnum)
-{
-    lwip_debug_emit(LWIP_DBG_MOD_TLS, state, errnum, 0);
-}
+#define LWIP_DBG_FILE_ID LWIP_FILE_TLS
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
 
 struct tls_context tls_ctx = {
     .initialized = false,
@@ -293,17 +290,17 @@ static void tls_psk_cache_save(void)
 
 bool tls_init(void)
 {
-    tls_init_debug(LWIP_DBG_TLS_INIT_START, 0);
+    INFO("tls_init started");
     if (tls_ctx.initialized)
     {
-        tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
+        INFO("tls_init done");
         return true;
     }
 
     tls_ctx.initialized = true;
     tls_rng_start();
 
-    tls_init_debug(LWIP_DBG_TLS_INIT_DONE, 0);
+    INFO("tls_init done");
     return true;
 }
 

@@ -68,14 +68,6 @@ int main(void)
 
     os_ClrHome();
 
-    /* Bring up lwIP network-support data (truststore, PSK cache) */
-    if (!lwip_network_up())
-    {
-        printf("mem init failed\n");
-        os_GetKey();
-        return 1;
-    }
-
     /* Run tests */
     bool test1 = test_pss_verify();
 

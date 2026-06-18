@@ -183,21 +183,14 @@
 #include <usbdrvce.h>
 #include "../../drivers/mem.h"
 #include "lwip/timeouts.h"
-#include "lwip/logging.h"
 #include "lwip/sntp_time.h"
 #include "lwip/app_config.h"
 #include "lwip/sys.h"
 #include "lwip/pbuf.h"
 
-/* Emit a handshake debug event through the unified stack-wide debug sink
- * (lwip_set_debug). The ctx argument is kept for call-site readability but is
- * no longer used to carry a per-connection callback. */
-static inline void tls_handshake_debug(struct tls_handshake_context *ctx,
-                                       lwip_debug_state_t state, int errnum)
-{
-    (void)ctx;
-    lwip_debug_emit(LWIP_DBG_MOD_TLS, state, errnum, 0);
-}
+#define LWIP_DBG_FILE_ID LWIP_FILE_HANDSHAKE
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
 
 /*
  * ============================================================================
@@ -722,18 +715,14 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
                 {
                     /* RSA-2048 link that genuinely failed to verify: the chain
                      * is broken or tampered. ERROR + abort. */
-                    lwip_debug_error(LWIP_DBG_MOD_TLS,
-                                     LWIP_DBG_TLS_CHAIN_VERIFY_FAIL,
-                                     LWIP_DBG_TLS_ERR_CHAIN_VERIFY, 0);
+                    ERROR();
                     return false;
                 }
             }
             else
             {
                 /* Issuer isn't an RSA-2048 key we can use: unsupported. */
-                lwip_debug_alert(LWIP_DBG_MOD_TLS,
-                                 LWIP_DBG_TLS_CERT_UNSUPPORTED,
-                                 LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED, 0);
+                WARN();
                 verified_or_accepted = true;
             }
         }
@@ -741,8 +730,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         {
             /* Pending cert's signature wasn't RSA-SHA256 (e.g. ECDSA): we
              * don't verify it. Proceed, but tell the caller. */
-            lwip_debug_alert(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_UNSUPPORTED,
-                             LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED, 0);
+            WARN();
             verified_or_accepted = true;
         }
 
@@ -1087,7 +1075,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
             w->chain_remaining == prev_chain_remaining &&
             w->len_have == prev_len_have)
         {
-            lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERT_WALK, -1, 0);
+            ERROR();
             w->state = CW_ERROR;
             return false;
         }
@@ -1981,7 +1969,7 @@ bool tls_send_client_hello(
     }
 
     ctx->state = TLS_STATE_CLIENT_HELLO_SENT;
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_CLIENT_HELLO, 0);
+    DEBUG();
     return true;
 }
 
@@ -2182,7 +2170,7 @@ bool tls_recv_server_hello(
                                    data + offset + 4,
                                    NULL, NULL))
             {
-                tls_handshake_debug(ctx, LWIP_DBG_TLS_KEY_EXCHANGE, 1);
+                ERROR();
                 tls_secure_memzero(ctx->ecdhe_private, 32);
                 ctx->state = TLS_STATE_ERROR;
                 return false;
@@ -2190,7 +2178,7 @@ bool tls_recv_server_hello(
             /* Securely erase private key immediately */
             tls_secure_memzero(ctx->ecdhe_private, 32);
             ctx->ecdhe_negotiated = true;
-            tls_handshake_debug(ctx, LWIP_DBG_TLS_KEY_EXCHANGE, 0);
+            DEBUG();
             break;
         }
 
@@ -2247,7 +2235,7 @@ bool tls_recv_server_hello(
      * cert_msg + 4 (handshake header) + 1 (context len) + 3 (cert_list_len).
      */
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_SERVER_HELLO, 0);
+    DEBUG();
     return true;
 }
 
@@ -2353,9 +2341,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                             else
                             {
                                 /* Non-standard exponent: unsupported, warn+accept. */
-                                lwip_debug_alert(LWIP_DBG_MOD_TLS,
-                                                 LWIP_DBG_TLS_CERT_UNSUPPORTED,
-                                                 LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED, 0);
+                                WARN();
                                 verified = true;
                             }
                         }
@@ -2363,9 +2349,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
 
                     if (!verified)
                     {
-                        lwip_debug_error(LWIP_DBG_MOD_TLS,
-                                         LWIP_DBG_TLS_CHAIN_VERIFY_FAIL,
-                                         LWIP_DBG_TLS_ERR_CHAIN_VERIFY, 0);
+                        ERROR();
                         ctx->state = TLS_STATE_ERROR;
                         return false;
                     }
@@ -2374,9 +2358,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
             else
             {
                 /* Root alg not yet supported (e.g. ECDSA). Warn and accept. */
-                lwip_debug_alert(LWIP_DBG_MOD_TLS,
-                                 LWIP_DBG_TLS_CERT_UNSUPPORTED,
-                                 LWIP_DBG_TLS_ERR_CERT_UNSUPPORTED, 0);
+                WARN();
             }
         }
         else
@@ -2384,14 +2366,12 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
             /* No truststore entry found: no root anchor available. Proceed
              * without root pinning (consistent with prior behaviour when
              * truststore absent), but tell the caller. */
-            lwip_debug_alert(LWIP_DBG_MOD_TLS,
-                             LWIP_DBG_TLS_ROOT_NOT_IN_STORE,
-                             LWIP_DBG_TLS_ERR_ROOT_NOT_IN_STORE, 0);
+            WARN();
         }
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_CERTIFICATE, 0);
+    DEBUG();
     return true;
 }
 
@@ -2490,7 +2470,7 @@ static bool tls_recv_encrypted_extensions(
 
     /* Update state */
     ctx->state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_ENCRYPTED_EXT, 0);
+    DEBUG();
 
     return true;
 }
@@ -2752,7 +2732,7 @@ static bool tls_recv_certificate_verify(
     {
         /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
          * CertificateVerify without a leaf is unverifiable; fail closed. */
-        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERTVERIFY_FAIL, -1, 0);
+        ERROR();
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
@@ -2772,7 +2752,7 @@ static bool tls_recv_certificate_verify(
 
     if (!sig_ok)
     {
-        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_CERTVERIFY_FAIL, -1, 0);
+        ERROR();
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
         ctx->state = TLS_STATE_ERROR;
         return false;
@@ -2787,7 +2767,7 @@ static bool tls_recv_certificate_verify(
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_CERTIFICATE_VERIFY, 0);
+    DEBUG();
 
     return true;
 }
@@ -2965,7 +2945,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 
     /* Advance state so this function is not called again */
     ctx->state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_DERIVE_HS_KEYS, 0);
+    DEBUG();
 
     return true;
 }
@@ -3113,7 +3093,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
-    tls_handshake_debug(ctx, LWIP_DBG_TLS_DERIVE_APP_KEYS, 0);
+    DEBUG();
     return true;
 }
 
@@ -3371,7 +3351,7 @@ static bool tls_recv_finished(
     {
         /* Client verified server's Finished */
         ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
-        tls_handshake_debug(ctx, LWIP_DBG_TLS_FINISHED, 0);
+        DEBUG();
     }
 
     return true;
@@ -3655,7 +3635,7 @@ static bool tls_send_alert(
     if (level == TLS_ALERT_LEVEL_FATAL)
     {
         ctx->state = TLS_STATE_ERROR;
-        lwip_debug_emit(LWIP_DBG_MOD_TLS, LWIP_DBG_TLS_FATAL_ALERT, -1, 0);
+        ERROR();
     }
 
     return ok;
