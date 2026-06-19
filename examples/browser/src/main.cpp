@@ -18,6 +18,7 @@ extern "C"
 #define class usb_class
 #endif
 #include <lwip.h>
+#include <lwip/core/logging.h>
 #ifdef __cplusplus
 #undef class
 }
@@ -32,7 +33,7 @@ extern "C"
 #define BROWSER_URL_MAX 128
 #define BROWSER_HOST_MAX 96
 #define BROWSER_PATH_MAX 160
-#define BROWSER_BODY_MAX 256
+#define BROWSER_BODY_MAX 512
 #define BROWSER_RX_CHUNK 192
 #define BROWSER_REQ_MAX 384
 #define BROWSER_HISTORY_DEPTH 4
@@ -175,6 +176,8 @@ struct browser_render_object
     uint16_t tag_id;
     browser_object_kind_t object_kind;
     browser_element_type_t element_type;
+    bool closing;
+    bool self_closing;
     browser_content_type_t content_type;
     uint32_t content_offset;
     uint16_t content_len;
@@ -576,7 +579,7 @@ public:
         network_started_ = true;
         flags_ = 0;
         state_ = nullptr;
-        service_requested_mask_ = LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS;
+        service_requested_mask_ = 0;
         service_up_mask_ = 0;
         service_failed_ = false;
         service_timed_out_ = false;
@@ -585,13 +588,7 @@ public:
         connect_watch_active_ = false;
         interpreter_watch_active_ = false;
         reset_page_objects();
-        if (lwip_netif_request_services(nullptr, service_requested_mask_,
-                                        netif_service_callback, this) !=
-            LWIP_OK)
-        {
-            flags_ |= BROWSER_FLAG_ERROR;
-        }
-        schedule_network_watch();
+        flags_ |= BROWSER_FLAG_READY;
 
         if (!payload_in.init(BROWSER_PAYLOAD_RING_MIN,
                              BROWSER_PAYLOAD_RING_MIN,
@@ -669,6 +666,16 @@ public:
     bool emit_object(struct browser_state *state,
                      const struct browser_element *element);
     void reset_page_objects(void);
+    uint16_t render_object_count(void) const { return object_count_; }
+    bool render_object_at(uint16_t index,
+                          struct browser_render_object *object) const
+    {
+        return read_render_object(index, object);
+    }
+    bool raw_content_at(uint16_t offset, void *dst, size_t len) const
+    {
+        return raw_content.read_at(offset, dst, len);
+    }
     uint16_t append_class_name(const char *data, size_t len);
     uint16_t append_id_name(const char *data, size_t len);
 
@@ -728,6 +735,9 @@ private:
     }
 
     uint16_t append_raw_content(const char *data, size_t len);
+    uint16_t find_name(const BrowserRingBuffer &names,
+                       const char *data,
+                       size_t len) const;
     bool read_render_object(uint16_t index,
                             struct browser_render_object *object) const;
     bool write_render_object(uint16_t index,
@@ -899,6 +909,10 @@ static void browser_lwip_event_cb(const struct lwip_event *ev)
 static void browser_set_body(struct browser_state *state, const char *text)
 {
     browser_document_release(state);
+    if (state->browser)
+    {
+        state->browser->reset_page_objects();
+    }
     state->page_dirty = false;
     state->body_len = strlen(text);
     if (state->body_len >= sizeof(state->body))
@@ -908,6 +922,100 @@ static void browser_set_body(struct browser_state *state, const char *text)
     memcpy(state->body, text, state->body_len);
     state->body[state->body_len] = '\0';
     browser_parse_html(state);
+}
+
+static void browser_trace_append(char *buf, size_t buf_len, size_t *used)
+{
+    const struct lwip_traceback_entry *trace;
+    uint8_t count = 0;
+
+    if (!buf || !used || *used >= buf_len)
+    {
+        return;
+    }
+
+    trace = lwip_get_traceback(&count);
+    for (uint8_t i = 0; i < count && i < 16u; i++)
+    {
+        const struct lwip_traceback_entry *entry = &trace[i];
+        size_t remaining = buf_len - *used;
+        int n;
+
+        if (remaining <= 1u)
+        {
+            break;
+        }
+
+        if (entry->file)
+        {
+            n = snprintf(buf + *used, remaining,
+                         "\n%u %s %s:%u x%u",
+                         (unsigned)i,
+                         lwip_debug_module_name(entry->module),
+                         lwip_debug_file_name(entry->file),
+                         (unsigned)entry->line,
+                         (unsigned)entry->extra);
+        }
+        else
+        {
+            n = snprintf(buf + *used, remaining,
+                         "\n%u sock c%u o%u r%d e%u s%u",
+                         (unsigned)i,
+                         (unsigned)entry->component,
+                         (unsigned)entry->operation,
+                         entry->raw_error,
+                         (unsigned)entry->mapped_error,
+                         (unsigned)entry->status);
+        }
+
+        if (n < 0)
+        {
+            break;
+        }
+        if ((size_t)n >= remaining)
+        {
+            *used = buf_len - 1u;
+            buf[*used] = '\0';
+            break;
+        }
+        *used += (size_t)n;
+    }
+}
+
+static void browser_set_fetch_error_body(struct browser_state *state,
+                                         const struct browser_fetch_state *fetch)
+{
+    char msg[BROWSER_BODY_MAX];
+    int n;
+    size_t used;
+
+    if (!state || !fetch)
+    {
+        return;
+    }
+
+    n = snprintf(msg, sizeof(msg), "Fetch e%u c%u o%u r%d",
+                 (unsigned)fetch->err,
+                 (unsigned)fetch->err_component,
+                 (unsigned)fetch->err_operation,
+                 fetch->raw_error);
+    if (n < 0)
+    {
+        msg[0] = '\0';
+        used = 0;
+    }
+    else if ((size_t)n >= sizeof(msg))
+    {
+        used = sizeof(msg) - 1u;
+        msg[used] = '\0';
+    }
+    else
+    {
+        used = (size_t)n;
+    }
+
+    browser_trace_append(msg, sizeof(msg), &used);
+    browser_set_body(state, msg);
 }
 
 static void browser_normalize_url(char *url, size_t url_len)
@@ -1305,116 +1413,6 @@ static void browser_document_release(struct browser_state *state)
     state->page_dirty = true;
 }
 
-static bool browser_document_reserve(struct browser_state *state,
-                                     uint16_t needed)
-{
-    uint16_t next_capacity;
-    void *next;
-
-    if (needed <= state->document_capacity)
-    {
-        return true;
-    }
-    next_capacity = state->document_capacity;
-    while (next_capacity < needed)
-    {
-        next_capacity = (uint16_t)(next_capacity + BROWSER_DOCUMENT_GROW);
-    }
-
-    if (state->document)
-    {
-        next = mem_resize(state->document,
-                          sizeof(*state->document) * next_capacity);
-    }
-    else
-    {
-        next = mem_request(sizeof(*state->document) * next_capacity);
-    }
-    if (!next)
-    {
-        state->document_alloc_failed = true;
-        return false;
-    }
-    state->document = (struct browser_element *)next;
-    state->document_capacity = next_capacity;
-    return true;
-}
-
-static bool browser_document_append(struct browser_state *state,
-                                    const struct browser_element *element)
-{
-    struct browser_element *dst;
-
-    if (element->object_kind != BROWSER_OBJECT_ELEMENT)
-    {
-        return true;
-    }
-
-    if (element->type == BROWSER_ELEMENT_BREAK && state->document_count)
-    {
-        struct browser_element *last =
-            &state->document[state->document_count - 1u];
-        if (last->type == BROWSER_ELEMENT_BREAK)
-        {
-            if (last->count < UINT16_MAX)
-            {
-                last->count++;
-            }
-            return true;
-        }
-    }
-
-    if (element->type == BROWSER_ELEMENT_TEXT && state->document_count)
-    {
-        struct browser_element *last =
-            &state->document[state->document_count - 1u];
-        size_t last_len = strlen(last->text);
-        size_t elem_len = strlen(element->text);
-
-        if (last->type == BROWSER_ELEMENT_TEXT &&
-            last->style.text_style == element->style.text_style &&
-            last_len + elem_len <= BROWSER_ELEMENT_TEXT_MAX)
-        {
-            memcpy(last->text + last_len, element->text, elem_len + 1u);
-            if (last->count < UINT16_MAX)
-            {
-                last->count++;
-            }
-            state->page_dirty = true;
-            return true;
-        }
-    }
-
-    if (!browser_document_reserve(state,
-                                  (uint16_t)(state->document_count + 1u)))
-    {
-        return false;
-    }
-    dst = &state->document[state->document_count++];
-    *dst = *element;
-    if (!dst->count)
-    {
-        dst->count = 1;
-    }
-    state->page_dirty = true;
-    return true;
-}
-
-static bool browser_document_append_break(struct browser_state *state)
-{
-    struct browser_element element;
-
-    memset(&element, 0, sizeof(element));
-    element.object_kind = BROWSER_OBJECT_ELEMENT;
-    element.count = 1;
-    element.type = BROWSER_ELEMENT_BREAK;
-    element.styled = true;
-    element.style.display = BROWSER_DISPLAY_BLOCK;
-    element.style.text_style = BROWSER_STYLE_NORMAL;
-    element.style.color = browser_style_color(BROWSER_STYLE_NORMAL);
-    return browser_document_append(state, &element);
-}
-
 static uint8_t browser_element_index(const struct browser_state *state,
                                      uint8_t offset)
 {
@@ -1429,11 +1427,6 @@ static bool browser_element_emit(struct browser_state *state,
 {
     struct browser_element *dst;
     uint8_t idx;
-
-    if (state->browser)
-    {
-        (void)state->browser->emit_object(state, src);
-    }
 
     if (state->element_count == BROWSER_ELEMENT_RING)
     {
@@ -1762,6 +1755,11 @@ static bool browser_tag_is_media(const char *tag)
                                sizeof(media_tags) / sizeof(media_tags[0]));
 }
 
+static bool browser_tag_id_is_media(uint16_t tag_id)
+{
+    return tag_id == BROWSER_HTML_IMG;
+}
+
 static bool browser_tag_is_heading(const char *tag)
 {
     return tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6' && tag[2] == '\0';
@@ -1870,24 +1868,13 @@ static void browser_renderer_step(struct browser_state *state, uint8_t budget)
         {
             return;
         }
-        if (element->object_kind == BROWSER_OBJECT_STYLE)
+        if (state->browser)
         {
-            ok = true;
-        }
-        else if (element->type == BROWSER_ELEMENT_TAG)
-        {
-            if (browser_tag_is_media(element->tag) && !element->closing)
+            ok = state->browser->emit_object(state, element);
+            if (ok)
             {
-                ok = true;
+                state->page_dirty = true;
             }
-            else if (element->style.display == BROWSER_DISPLAY_BLOCK)
-            {
-                ok = browser_document_append_break(state);
-            }
-        }
-        else
-        {
-            ok = browser_document_append(state, element);
         }
         if (!ok && !state->document_alloc_failed)
         {
@@ -2876,10 +2863,124 @@ static void browser_layout_tag(struct browser_state *state,
     }
 }
 
+static void browser_layout_object_tag(struct browser_state *state,
+                                      struct browser_layout *layout,
+                                      const struct browser_render_object *object)
+{
+    browser_display_t display = object->style.display;
+
+    if (display == BROWSER_DISPLAY_NONE)
+    {
+        return;
+    }
+    if (object->tag_id == BROWSER_HTML_BR)
+    {
+        browser_layout_newline(layout);
+        return;
+    }
+    if (object->content_type == BROWSER_CONTENT_UNSUPPORTED ||
+        browser_tag_id_is_media(object->tag_id))
+    {
+        (void)state;
+        return;
+    }
+    if (display == BROWSER_DISPLAY_BLOCK)
+    {
+        if (object->closing || object->self_closing)
+        {
+            browser_layout_newline(layout);
+        }
+        else if (layout->col)
+        {
+            browser_layout_newline(layout);
+        }
+    }
+}
+
+static void browser_layout_object_text(struct browser_state *state,
+                                       struct browser_layout *layout,
+                                       const struct browser_render_object *object)
+{
+    char buf[BROWSER_ELEMENT_TEXT_MAX + 1];
+    uint32_t offset = object->content_offset;
+    uint16_t remaining = object->content_len;
+    browser_style_t old_style = layout->style;
+
+    if (!state->browser || object->content_type != BROWSER_CONTENT_STRING ||
+        object->content_offset > UINT16_MAX)
+    {
+        return;
+    }
+
+    layout->style = object->style.text_style;
+    while (remaining)
+    {
+        size_t chunk = remaining;
+        if (chunk > BROWSER_ELEMENT_TEXT_MAX)
+        {
+            chunk = BROWSER_ELEMENT_TEXT_MAX;
+        }
+        if (!state->browser->raw_content_at((uint16_t)offset, buf, chunk))
+        {
+            break;
+        }
+        buf[chunk] = '\0';
+        browser_layout_text(state, layout, buf);
+        offset += (uint32_t)chunk;
+        remaining = (uint16_t)(remaining - chunk);
+    }
+    layout->style = old_style;
+}
+
+static bool browser_layout_render_objects(struct browser_state *state,
+                                          struct browser_layout *layout)
+{
+    uint16_t count;
+
+    if (!state->browser)
+    {
+        return false;
+    }
+    count = state->browser->render_object_count();
+    if (!count)
+    {
+        return false;
+    }
+
+    for (uint16_t i = 0; i < count; i++)
+    {
+        struct browser_render_object object;
+
+        if (!state->browser->render_object_at(i, &object))
+        {
+            return true;
+        }
+        if (object.object_kind == BROWSER_OBJECT_STYLE)
+        {
+            continue;
+        }
+        if (object.element_type == BROWSER_ELEMENT_TEXT)
+        {
+            browser_layout_object_text(state, layout, &object);
+        }
+        else if (object.element_type == BROWSER_ELEMENT_BREAK)
+        {
+            browser_layout_newline(layout);
+        }
+        else if (object.element_type == BROWSER_ELEMENT_TAG)
+        {
+            browser_layout_object_tag(state, layout, &object);
+        }
+    }
+
+    return true;
+}
+
 static void browser_layout_document(struct browser_state *state)
 {
     struct browser_layout layout = {0};
     uint16_t i;
+    bool rendered_objects;
 
     if (!state->page_dirty)
     {
@@ -2891,7 +2992,8 @@ static void browser_layout_document(struct browser_state *state)
     }
 
     layout.style = BROWSER_STYLE_NORMAL;
-    for (i = 0; i < state->document_count; i++)
+    rendered_objects = browser_layout_render_objects(state, &layout);
+    for (i = 0; !rendered_objects && i < state->document_count; i++)
     {
         const struct browser_element *element = &state->document[i];
 
@@ -3492,6 +3594,55 @@ uint16_t Browser::append_raw_content(const char *data, size_t len)
     return offset;
 }
 
+uint16_t Browser::find_name(const BrowserRingBuffer &names,
+                            const char *data,
+                            size_t len) const
+{
+    size_t offset = 0;
+    size_t used = names.size();
+
+    if (!data || len > UINT16_MAX)
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+
+    while (offset < used)
+    {
+        size_t name_len = 0;
+        bool match = true;
+        char c = '\0';
+
+        while (offset + name_len < used)
+        {
+            if (!names.read_at(offset + name_len, &c, 1u))
+            {
+                return BROWSER_OBJECT_NULL;
+            }
+            if (c == '\0')
+            {
+                break;
+            }
+            if (name_len >= len || c != data[name_len])
+            {
+                match = false;
+            }
+            name_len++;
+        }
+
+        if (offset + name_len >= used)
+        {
+            return BROWSER_OBJECT_NULL;
+        }
+        if (match && name_len == len)
+        {
+            return (uint16_t)offset;
+        }
+        offset += name_len + 1u;
+    }
+
+    return BROWSER_OBJECT_NULL;
+}
+
 uint16_t Browser::append_class_name(const char *data, size_t len)
 {
     uint16_t offset;
@@ -3501,6 +3652,11 @@ uint16_t Browser::append_class_name(const char *data, size_t len)
         class_names.size() + len + 1u > UINT16_MAX)
     {
         return BROWSER_OBJECT_NULL;
+    }
+    offset = find_name(class_names, data, len);
+    if (offset != BROWSER_OBJECT_NULL)
+    {
+        return offset;
     }
     offset = (uint16_t)class_names.size();
     if (!class_names.push(data, len) || !class_names.push(&nul, 1u))
@@ -3519,6 +3675,11 @@ uint16_t Browser::append_id_name(const char *data, size_t len)
         id_names.size() + len + 1u > UINT16_MAX)
     {
         return BROWSER_OBJECT_NULL;
+    }
+    offset = find_name(id_names, data, len);
+    if (offset != BROWSER_OBJECT_NULL)
+    {
+        return offset;
     }
     offset = (uint16_t)id_names.size();
     if (!id_names.push(data, len) || !id_names.push(&nul, 1u))
@@ -3589,12 +3750,8 @@ bool Browser::emit_object(struct browser_state *state,
     {
         return false;
     }
-    if (element->type == BROWSER_ELEMENT_TAG && element->closing)
+    if (element->type == BROWSER_ELEMENT_TAG && browser_tag_is_media(element->tag))
     {
-        if (dom_depth_)
-        {
-            dom_depth_--;
-        }
         return true;
     }
 
@@ -3609,6 +3766,8 @@ bool Browser::emit_object(struct browser_state *state,
         : BROWSER_HTML_UNKNOWN;
     object.object_kind = element->object_kind;
     object.element_type = element->type;
+    object.closing = element->closing;
+    object.self_closing = element->self_closing;
     object.content_type = BROWSER_CONTENT_NONE;
     object.content_offset = BROWSER_OBJECT_NULL;
     object.content_len = 0;
@@ -3639,7 +3798,7 @@ bool Browser::emit_object(struct browser_state *state,
         return false;
     }
 
-    if (parent != BROWSER_OBJECT_NULL)
+    if (parent != BROWSER_OBJECT_NULL && !element->closing)
     {
         struct browser_render_object parent_object;
         if (read_render_object(parent, &parent_object))
@@ -3663,7 +3822,14 @@ bool Browser::emit_object(struct browser_state *state,
         }
     }
 
-    if (element->type == BROWSER_ELEMENT_TAG && !element->self_closing &&
+    if (element->type == BROWSER_ELEMENT_TAG && element->closing)
+    {
+        if (dom_depth_)
+        {
+            dom_depth_--;
+        }
+    }
+    else if (element->type == BROWSER_ELEMENT_TAG && !element->self_closing &&
         !browser_tag_is_media(element->tag) && dom_depth_ < BROWSER_DOM_STACK_MAX)
     {
         dom_stack_[dom_depth_++] = index;
@@ -3738,6 +3904,14 @@ static void browser_fetch_step(struct browser_state *state)
     {
         return;
     }
+    if (fetch->active && !fetch->sent && state->sock &&
+        (fetch->connected ||
+         lwip_socket_status(state->sock) == LWIP_STATUS_CONNECTED))
+    {
+        fetch->connected = true;
+        fetch->send_pending = true;
+        browser_fetch_send_request(state->sock, fetch);
+    }
     if (fetch->active && fetch->readable)
     {
         browser_fetch_drain(state->sock, fetch);
@@ -3773,6 +3947,8 @@ static void browser_on_event(struct lwip_socket *sock,
             if (st->current == LWIP_STATUS_CONNECTED)
             {
                 fetch->connected = true;
+                fetch->send_pending = true;
+                browser_fetch_send_request(sock, fetch);
             }
             else if (st->current == LWIP_STATUS_CLOSED ||
                      st->current == LWIP_STATUS_RESET ||
@@ -3814,11 +3990,11 @@ static void browser_on_event(struct lwip_socket *sock,
         }
         else
         {
-        fetch->err = sock->last_error;
+            fetch->err = sock->last_error;
+        }
+        fetch->done = true;
+        fetch->settle_ticks = BROWSER_CLOSE_DRAIN_TICKS;
     }
-    fetch->done = true;
-    fetch->settle_ticks = BROWSER_CLOSE_DRAIN_TICKS;
-}
 }
 
 static void browser_fetch_cleanup(struct browser_state *state)
@@ -3845,6 +4021,10 @@ static void browser_fetch_cleanup(struct browser_state *state)
 static void browser_transient_clear(struct browser_state *state)
 {
     browser_document_release(state);
+    if (state->browser)
+    {
+        state->browser->reset_page_objects();
+    }
     browser_page_reset(state);
     state->body_len = 0;
     state->body[0] = '\0';
@@ -4014,12 +4194,10 @@ static bool browser_fetch_finish(struct browser_state *state)
 
     if (fetch->err != LWIP_OK)
     {
-        char msg[56];
-        snprintf(msg, sizeof(msg), "Fetch e%u c%u o%u r%d",
-                 (unsigned)fetch->err,
-                 (unsigned)fetch->err_component,
-                 (unsigned)fetch->err_operation,
-                 fetch->raw_error);
+        char msg[BROWSER_BODY_MAX];
+
+        browser_set_fetch_error_body(state, fetch);
+        snprintf(msg, sizeof(msg), "%s", state->body);
         browser_fetch_cleanup(state);
         browser_set_body(state, msg);
         return true;
@@ -4375,11 +4553,16 @@ int main(void)
             redraw = true;
         }
         {
-            uint16_t objects_before = state->document_count;
+            uint16_t objects_before = state->browser
+                ? state->browser->render_object_count()
+                : state->document_count;
             bool dirty_before = state->page_dirty;
             browser_fetch_step(state);
+            uint16_t objects_after = state->browser
+                ? state->browser->render_object_count()
+                : state->document_count;
             if (dirty_before || state->page_dirty || state->event_dirty ||
-                objects_before != state->document_count)
+                objects_before != objects_after)
             {
                 redraw = true;
                 state->event_dirty = false;

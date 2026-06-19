@@ -2,7 +2,7 @@
 # Makefile Options
 # ----------------------------
 
-NAME = LWBRWS
+NAME = CEBROWSE
 DESCRIPTION = "lwIP Raw Browser Example"
 COMPRESSED = NO
 ARCHIVED = YES

@@ -437,6 +437,9 @@ static void conn_error_enqueue(struct lwip_socket *conn,
     conn->pending_error_component = (uint16_t)component;
     conn->pending_error_operation = (uint16_t)operation;
     conn->pending_raw_error = raw_error;
+    lwip_traceback_push_socket((uint16_t)component, (uint16_t)operation,
+                               raw_error, (uint16_t)err,
+                               (uint16_t)conn->status);
     conn_event_enqueue(conn, CONN_PENDING_ERROR, err);
 }
 

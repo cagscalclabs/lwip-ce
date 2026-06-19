@@ -60,6 +60,7 @@ extern "C"
 #define TLS_HANDSHAKE_CLIENT_HELLO 0x01
 #define TLS_HANDSHAKE_SERVER_HELLO 0x02
 #define TLS_HANDSHAKE_CERTIFICATE 0x0b
+#define TLS_HANDSHAKE_CERTIFICATE_REQUEST 0x0d
 #define TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS 0x08
 #define TLS_HANDSHAKE_FINISHED 0x14
     /* Server-side handshake message types across TLS versions */
@@ -208,6 +209,7 @@ extern "C"
         uint8_t ecdhe_shared[32];    /* Computed shared secret */
         uint8_t ecdhe_public[32];    /* Our ephemeral public key */
         bool ecdhe_negotiated;       /* True if server selected PSK+ECDHE */
+        bool client_certificate_requested; /* True if server sent TLS 1.3 CertificateRequest */
         uint32_t ticket_age_add;     /* NST ticket_age_add */
         uint32_t ticket_received_ms; /* sys_now() when last ticket was accepted */
         uint32_t ticket_lifetime;    /* NST ticket_lifetime, seconds (RFC 8446 4.6.1) */
@@ -362,6 +364,25 @@ extern "C"
     bool tls_send_finished(
         struct tls_handshake_context *ctx,
         bool is_client,
+        uint8_t *out,
+        size_t out_len,
+        size_t *written);
+
+    /**
+     * @brief Generate an empty TLS 1.3 client Certificate message.
+     *
+     * Used when a server sent CertificateRequest but the client has no
+     * configured client identity. TLS 1.3 clients reply with an empty
+     * Certificate message, then send Finished.
+     *
+     * @param ctx Handshake context
+     * @param out Output buffer for Certificate message
+     * @param out_len Size of output buffer
+     * @param written Number of bytes written
+     * @return true on success, false on failure
+     */
+    bool tls_send_empty_certificate(
+        struct tls_handshake_context *ctx,
         uint8_t *out,
         size_t out_len,
         size_t *written);

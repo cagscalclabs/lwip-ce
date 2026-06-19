@@ -58,6 +58,7 @@
 .extern _lwip_socket_set_rx_limits
 .extern _lwip_socket_set_connect_timeout
 .extern _lwip_set_event_cb
+.extern _lwip_get_traceback
 .extern _lwip_debug_module_name
 .extern _lwip_debug_file_name
 .extern _lwip_debug_state_change_name
@@ -430,7 +431,7 @@
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 394    ; entry count
+    d24 395    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -462,6 +463,7 @@ _fn_exports_table:
 
 ; --- src/core/logging.c ---
     d24 _lwip_set_event_cb
+    d24 _lwip_get_traceback
     d24 _lwip_debug_module_name
     d24 _lwip_debug_file_name
     d24 _lwip_debug_state_change_name

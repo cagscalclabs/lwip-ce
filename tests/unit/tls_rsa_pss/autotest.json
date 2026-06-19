@@ -42,11 +42,11 @@
   ],
   "hashes": {
     "1": {
-      "description": "RSA-PSS verify - RFC 8017 (PKCS#1 v2.2) SHA-256, OpenSSL-generated",
+      "description": "RSA-PSS verify - RFC 8017 plus TLS 1.3 CertificateVerify-shaped input",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "A2D7C0AB"
+        "FFAF89BA"
       ],
       "timeout": 10000
     },

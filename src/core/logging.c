@@ -6,10 +6,48 @@
  * I/O: persistence/console/log is entirely the caller's choice inside its
  * callback. See lwip/logging.h. */
 
+#define LWIP_TRACEBACK_DEPTH 16u
+
 static lwip_event_fn g_event_fn = NULL;
 static uint32_t g_last_debug_loc = 0xFFFFFFFFu; /* no event has this value */
 static bool g_in_fatal = false;
 static void (*g_fatal_cleanup)(void) = NULL;
+static struct lwip_traceback_entry g_traceback[LWIP_TRACEBACK_DEPTH];
+static struct lwip_traceback_entry g_traceback_ordered[LWIP_TRACEBACK_DEPTH];
+static uint8_t g_traceback_next = 0;
+static uint8_t g_traceback_count = 0;
+
+static void lwip_traceback_push(const struct lwip_traceback_entry *entry)
+{
+    if (!entry)
+    {
+        return;
+    }
+    g_traceback[g_traceback_next] = *entry;
+    g_traceback_next = (uint8_t)((g_traceback_next + 1u) % LWIP_TRACEBACK_DEPTH);
+    if (g_traceback_count < LWIP_TRACEBACK_DEPTH)
+    {
+        g_traceback_count++;
+    }
+}
+
+static void lwip_traceback_push_code(uint8_t module, uint8_t kind,
+                                     uint32_t loc, uint16_t extra)
+{
+    struct lwip_traceback_entry entry;
+
+    entry.module = module;
+    entry.kind = kind;
+    entry.file = LWIP_EVENT_CODE_FILE(loc);
+    entry.line = LWIP_EVENT_CODE_LINE(loc);
+    entry.extra = extra;
+    entry.component = 0;
+    entry.operation = 0;
+    entry.raw_error = 0;
+    entry.mapped_error = 0;
+    entry.status = 0;
+    lwip_traceback_push(&entry);
+}
 
 void lwip_debug_set_fatal_cleanup(void (*cleanup)(void))
 {
@@ -22,12 +60,23 @@ void lwip_set_event_cb(lwip_event_fn event_fn)
     g_last_debug_loc = 0xFFFFFFFFu;
 }
 
+const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count)
+{
+    for (uint8_t i = 0; i < g_traceback_count; i++)
+    {
+        uint8_t idx = (uint8_t)((g_traceback_next + LWIP_TRACEBACK_DEPTH - 1u - i) %
+                                LWIP_TRACEBACK_DEPTH);
+        g_traceback_ordered[i] = g_traceback[idx];
+    }
+    if (count)
+    {
+        *count = g_traceback_count;
+    }
+    return g_traceback_ordered;
+}
+
 void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra)
 {
-    if (!g_event_fn)
-    {
-        return;
-    }
     if (kind == LWIP_EV_DEBUG)
     {
         /* DEBUG only fires when the call site changes from the last one. */
@@ -38,12 +87,41 @@ void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t e
         g_last_debug_loc = loc;
     }
 
+    if (kind == LWIP_EV_WARN || kind == LWIP_EV_ERROR)
+    {
+        lwip_traceback_push_code(module, kind, loc, extra);
+    }
+
+    if (!g_event_fn)
+    {
+        return;
+    }
+
     struct lwip_event ev;
     ev.module = module;
     ev.kind = kind;
     ev.data.code.loc = loc;
     ev.data.code.extra = extra;
     g_event_fn(&ev);
+}
+
+void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
+                                int raw_error, uint16_t mapped_error,
+                                uint16_t status)
+{
+    struct lwip_traceback_entry entry;
+
+    entry.module = LWIP_DBG_MOD_LWIP;
+    entry.kind = LWIP_EV_ERROR;
+    entry.file = LWIP_FILE_NONE;
+    entry.line = 0;
+    entry.extra = 0;
+    entry.component = component;
+    entry.operation = operation;
+    entry.raw_error = raw_error;
+    entry.mapped_error = mapped_error;
+    entry.status = status;
+    lwip_traceback_push(&entry);
 }
 
 void lwip_event_emit_info(uint8_t module, const char *msg)

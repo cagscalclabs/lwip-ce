@@ -279,6 +279,8 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
  * handshake.h but are only invoked from the dispatcher in this file. */
 static bool tls_recv_encrypted_extensions(struct tls_handshake_context *ctx,
                                           const uint8_t *data, size_t data_len);
+static bool tls_recv_certificate_request(struct tls_handshake_context *ctx,
+                                         const uint8_t *data, size_t data_len);
 static bool tls_recv_certificate_verify(struct tls_handshake_context *ctx,
                                         const uint8_t *data, size_t data_len);
 static bool tls_recv_finished(struct tls_handshake_context *ctx, bool is_client,
@@ -287,9 +289,10 @@ static bool tls_recv_new_session_ticket(struct tls_handshake_context *ctx,
                                         const uint8_t *data, size_t data_len);
 static bool tls_send_alert(struct tls_handshake_context *ctx,
                            uint8_t level, uint8_t description);
-static bool tls_spki_extract_rsa_modulus(const uint8_t *spki, size_t spki_len,
-                                         const uint8_t **mod_out,
-                                         size_t *mod_len_out);
+static bool tls_spki_extract_rsa_public_key(const uint8_t *spki, size_t spki_len,
+                                            const uint8_t **mod_out,
+                                            size_t *mod_len_out,
+                                            uint24_t *exp_out);
 
 /**
  * @brief Build the TLS 1.3 AEAD nonce: static IV XOR right-aligned seq number.
@@ -515,15 +518,16 @@ static const uint8_t tls_pkcs1_sha256_digestinfo_prefix[] = {
     0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20};
 
 /* Verify an RSASSA-PKCS1-v1.5 signature over a precomputed SHA-256 digest,
- * given the issuer's raw RSA modulus. Decrypts the signature (public exponent
- * 65537), then checks the EMSA-PKCS1-v1.5 encoding:
+ * given the issuer's raw RSA public key. Decrypts the signature, then checks
+ * the EMSA-PKCS1-v1.5 encoding:
  *   EM = 0x00 || 0x01 || 0xFF...0xFF || 0x00 || DigestInfo(SHA-256, digest)
  * Returns true iff the encoding is well-formed and the embedded digest equals
  * `digest`. CA signatures on RSA-2048 chain links are PKCS#1 v1.5, not PSS. */
 static bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t sig_len,
                                             const uint8_t digest[32],
                                             const uint8_t *modulus,
-                                            size_t modulus_len)
+                                            size_t modulus_len,
+                                            uint24_t exponent)
 {
     uint8_t *em;
     size_t pos;
@@ -541,7 +545,8 @@ static bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t sig_len,
     }
 
     em = __rsa_transient;
-    if (!tls_rsa_decrypt_signature(sig, sig_len, em, modulus, modulus_len))
+    if (!tls_rsa_decrypt_signature_exp(sig, sig_len, em,
+                                       exponent, modulus, modulus_len))
     {
         goto cleanup;
     }
@@ -695,19 +700,22 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         {
             const uint8_t *modulus;
             size_t modulus_len;
+            uint24_t exponent;
 
             /* Issuer key is this cert's SPKI. Only RSA issuers can have signed
              * an RSA-SHA256 link; a non-RSA issuer SPKI means we can't verify
              * it here — treat as unsupported (ALERT + accept). */
             if (cert_parsed->spki_raw && cert_parsed->spki_raw->data &&
-                tls_spki_extract_rsa_modulus(cert_parsed->spki_raw->data,
-                                             cert_parsed->spki_raw->len,
-                                             &modulus, &modulus_len))
+                tls_spki_extract_rsa_public_key(cert_parsed->spki_raw->data,
+                                                cert_parsed->spki_raw->len,
+                                                &modulus, &modulus_len,
+                                                &exponent))
             {
                 if (tls_rsa_pkcs1_v15_sha256_verify(w->pending_sig,
                                                     w->pending_sig_len,
                                                     w->pending_tbs_digest,
-                                                    modulus, modulus_len))
+                                                    modulus, modulus_len,
+                                                    exponent))
                 {
                     verified_or_accepted = true;
                 }
@@ -1377,6 +1385,9 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
         INFO("hs: encrypted extensions");
         return tls_recv_encrypted_extensions(ctx, msg, msg_len);
+    case TLS_HANDSHAKE_CERTIFICATE_REQUEST:
+        INFO("hs: certificate request");
+        return tls_recv_certificate_request(ctx, msg, msg_len);
     /* TLS_HANDSHAKE_CERTIFICATE is handled by the streaming cert walker in
      * tls_consume_handshake_buffer; it never reaches this dispatcher. */
     case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
@@ -2333,24 +2344,11 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                         }
                         else
                         {
-                            /* PKCS#1 v1.5: tls_rsa_pkcs1_v15_sha256_verify
-                             * uses the hardcoded public exponent 65537.
-                             * Virtually all CA roots use e=65537; if the stored
-                             * exp differs we fall through to the accept path. */
-                            if (exp == 65537)
-                            {
-                                verified = tls_rsa_pkcs1_v15_sha256_verify(
-                                               w->pending_sig,
-                                               w->pending_sig_len,
-                                               w->pending_tbs_digest,
-                                               mod, mod_len);
-                            }
-                            else
-                            {
-                                /* Non-standard exponent: unsupported, warn+accept. */
-                                WARN();
-                                verified = true;
-                            }
+                            verified = tls_rsa_pkcs1_v15_sha256_verify(
+                                           w->pending_sig,
+                                           w->pending_sig_len,
+                                           w->pending_tbs_digest,
+                                           mod, mod_len, exp);
                         }
                     }
 
@@ -2482,17 +2480,110 @@ static bool tls_recv_encrypted_extensions(
     return true;
 }
 
+/**
+ * @brief Parse a TLS 1.3 server CertificateRequest.
+ *
+ * This message is optional client-auth negotiation. Even when the client has
+ * no certificate to present, the message still participates in the transcript
+ * hash used by the server's CertificateVerify signature and Finished MAC. So
+ * we validate the nested length fields, remember that the server asked, and
+ * feed the exact handshake bytes into the transcript.
+ */
+static bool tls_recv_certificate_request(
+    struct tls_handshake_context *ctx,
+    const uint8_t *data,
+    size_t data_len)
+{
+    size_t msg_len = 0;
+    size_t offset;
+    size_t msg_end;
+    uint8_t request_context_len;
+    size_t ext_len;
+    size_t ext_offset = 0;
+
+    if (!ctx || !data || data_len < 7)
+    {
+        return false;
+    }
+    if (ctx->state != TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED)
+    {
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
+
+    offset = tls_parse_handshake_header(data, data_len,
+                                        TLS_HANDSHAKE_CERTIFICATE_REQUEST,
+                                        &msg_len);
+    if (offset == 0)
+    {
+        return false;
+    }
+    msg_end = offset + msg_len;
+
+    if (offset + 1 > msg_end)
+    {
+        return false;
+    }
+    request_context_len = data[offset++];
+    if (offset + request_context_len > msg_end)
+    {
+        return false;
+    }
+    offset += request_context_len;
+
+    if (offset + 2 > msg_end)
+    {
+        return false;
+    }
+    ext_len = ((size_t)data[offset] << 8) | (size_t)data[offset + 1];
+    offset += 2;
+    if (offset + ext_len != msg_end)
+    {
+        return false;
+    }
+
+    while (ext_offset + 4 <= ext_len)
+    {
+        uint16_t ext_data_len;
+
+        ext_offset += 2; /* Extension type. */
+        ext_data_len = ((uint16_t)data[offset + ext_offset] << 8) |
+                       (uint16_t)data[offset + ext_offset + 1];
+        ext_offset += 2;
+
+        if (ext_offset + ext_data_len > ext_len)
+        {
+            return false;
+        }
+        ext_offset += ext_data_len;
+    }
+    if (ext_offset != ext_len)
+    {
+        return false;
+    }
+
+    if (ctx->transcript_hash)
+    {
+        transcript_hash_update(ctx->transcript_hash, data, 4 + msg_len);
+    }
+    ctx->client_certificate_requested = true;
+    DEBUG();
+    return true;
+}
+
 /* TLS 1.3 signature_algorithms code points (RFC 8446 §4.2.3). */
 #define TLS_SIG_RSA_PSS_RSAE_SHA256 0x0804
 
-/* Extract the raw modulus bytes from a DER-encoded SubjectPublicKeyInfo
- * for an rsaEncryption key. On success, *mod_out points into the SPKI
+/* Extract the raw modulus bytes and public exponent from a DER-encoded
+ * SubjectPublicKeyInfo for an rsaEncryption key. On success, *mod_out points into the SPKI
  * buffer at the first non-zero modulus byte and *mod_len_out is the
  * stripped length (matching the RSA modulus size in bytes; 256 for
- * RSA-2048). Returns false for non-RSA SPKIs or malformed input. */
-static bool tls_spki_extract_rsa_modulus(const uint8_t *spki, size_t spki_len,
-                                         const uint8_t **mod_out,
-                                         size_t *mod_len_out)
+ * RSA-2048). Returns false for non-RSA SPKIs, malformed input, or exponents
+ * too large for powmod_exp_u24. */
+static bool tls_spki_extract_rsa_public_key(const uint8_t *spki, size_t spki_len,
+                                            const uint8_t **mod_out,
+                                            size_t *mod_len_out,
+                                            uint24_t *exp_out)
 {
     struct tls_asn1_cursor c;
     struct tls_asn1_tlv spki_seq;
@@ -2505,8 +2596,9 @@ static bool tls_spki_extract_rsa_modulus(const uint8_t *spki, size_t spki_len,
     struct tls_asn1_tlv rsa_seq;
     struct tls_asn1_cursor rsa_fields;
     struct tls_asn1_tlv modulus;
+    struct tls_asn1_tlv exponent;
 
-    if (!spki || spki_len == 0 || !mod_out || !mod_len_out)
+    if (!spki || spki_len == 0 || !mod_out || !mod_len_out || !exp_out)
     {
         return false;
     }
@@ -2559,7 +2651,10 @@ static bool tls_spki_extract_rsa_modulus(const uint8_t *spki, size_t spki_len,
     if (!tls_asn1_child_cursor(&rsa_seq, &rsa_fields) ||
         !tls_asn1_next(&rsa_fields, &modulus) ||
         tls_asn1_tag_number(modulus.tag) != ASN1_INTEGER ||
-        modulus.len == 0)
+        modulus.len == 0 ||
+        !tls_asn1_next(&rsa_fields, &exponent) ||
+        tls_asn1_tag_number(exponent.tag) != ASN1_INTEGER ||
+        exponent.len == 0)
     {
         return false;
     }
@@ -2583,8 +2678,34 @@ static bool tls_spki_extract_rsa_modulus(const uint8_t *spki, size_t spki_len,
     {
         return false;
     }
+
+    const uint8_t *e = exponent.value;
+    size_t e_len = exponent.len;
+    while (e_len > 0 && *e == 0)
+    {
+        e++;
+        e_len--;
+    }
+    if (e_len == 0 || e_len > 3)
+    {
+        /* powmod_exp_u24 is the current implementation boundary. */
+        ERROR();
+        return false;
+    }
+    uint24_t exp = 0;
+    for (size_t i = 0; i < e_len; i++)
+    {
+        exp = (uint24_t)((exp << 8) | e[i]);
+    }
+    if (exp < 3 || (exp & 1) == 0)
+    {
+        ERROR();
+        return false;
+    }
+
     *mod_out = p;
     *mod_len_out = n;
+    *exp_out = exp;
     return true;
 }
 
@@ -2610,6 +2731,7 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     struct tls_hash_context hash_ctx;
     const uint8_t *modulus;
     size_t modulus_len;
+    uint24_t exponent;
     uint8_t *em = NULL;
     bool ok = false;
 
@@ -2619,8 +2741,8 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
         return false;
     }
 
-    if (!tls_spki_extract_rsa_modulus(ctx->leaf_spki, ctx->leaf_spki_len,
-                                      &modulus, &modulus_len))
+    if (!tls_spki_extract_rsa_public_key(ctx->leaf_spki, ctx->leaf_spki_len,
+                                         &modulus, &modulus_len, &exponent))
     {
         return false;
     }
@@ -2658,7 +2780,8 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
         return false;
     }
     em = __rsa_transient;
-    if (!tls_rsa_decrypt_signature(sig, sig_len, em, modulus, modulus_len))
+    if (!tls_rsa_decrypt_signature_exp(sig, sig_len, em,
+                                       exponent, modulus, modulus_len))
     {
         goto cleanup;
     }
@@ -3231,6 +3354,63 @@ bool tls_send_finished(
         }
     }
 
+    return true;
+}
+
+/**
+ * @brief Build an empty client Certificate message.
+ *
+ * TLS 1.3 says that when the server requests a client certificate and the
+ * client has none, the client sends an empty Certificate message. The message
+ * must be transcript-hashed before client Finished, because Finished covers
+ * the complete client-auth response.
+ *
+ * Wire layout:
+ *
+ *     +----+--------+----+----------+
+ *     | 0b | 00 00 04 | 00 | 00 00 00 |
+ *     +----+--------+----+----------+
+ *      type   length   request_context  certificate_list length
+ */
+bool tls_send_empty_certificate(
+    struct tls_handshake_context *ctx,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written)
+{
+    size_t offset = 0;
+
+    if (!ctx || !out || !written)
+    {
+        return false;
+    }
+    if (!ctx->client_certificate_requested ||
+        ctx->state != TLS_STATE_SERVER_FINISHED_RECEIVED)
+    {
+        return false;
+    }
+    if (out_len < 8)
+    {
+        return false;
+    }
+
+    out[offset++] = TLS_HANDSHAKE_CERTIFICATE;
+    out[offset++] = 0x00;
+    out[offset++] = 0x00;
+    out[offset++] = 0x04;
+    out[offset++] = 0x00; /* certificate_request_context length */
+    out[offset++] = 0x00;
+    out[offset++] = 0x00;
+    out[offset++] = 0x00; /* certificate_list length */
+
+    *written = offset;
+
+    if (ctx->transcript_hash)
+    {
+        transcript_hash_update(ctx->transcript_hash, out, offset);
+    }
+
+    DEBUG();
     return true;
 }
 

@@ -23,6 +23,7 @@ func,lwip_socket_is_active,socket,src/lwIP.h,lwip.h
 func,lwip_socket_set_rx_limits,socket,src/lwIP.h,lwip.h
 func,lwip_socket_set_connect_timeout,socket,src/lwIP.h,lwip.h
 func,lwip_set_event_cb,core,src/include/lwip/logging.h,lwip/core/logging.h
+func,lwip_get_traceback,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_module_name,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_file_name,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_state_change_name,core,src/include/lwip/logging.h,lwip/core/logging.h

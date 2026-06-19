@@ -406,8 +406,9 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
 
     /* Release the 5-byte header from the input pbuf. altcp_tls_ce_consume_recved
      * acks to the lower TCP only the bytes not already pre-acked at queue time,
-     * so handshake bytes (pre-acked) aren't double-acked while app-data bytes
-     * still get their drain-driven ack. */
+     * so handshake bytes (pre-acked) aren't double-acked. Post-handshake
+     * app-data bytes are not pre-acked here; they are acked exactly once when
+     * the decrypter consumes the encrypted record from state->rx. */
     altcp_tls_ce_consume_recved(state, sizeof(header));
 
     /* Pass 2: chunked decrypt-and-accumulate, releasing input as we go. */
@@ -647,8 +648,7 @@ static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
      * acks the bytes it releases that this counter did NOT already cover, so
      * no byte is ever acked twice — even for a pbuf that straddles the
      * handshake -> app-data transition. The post-handshake app-data path does
-     * not pre-ack (it relies on drain-driven recved), so the consume path
-     * acks those bytes normally. */
+     * not pre-ack; the consume path acks those encrypted bytes normally. */
     if (added != 0 && !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
         state->conn != NULL && state->conn->inner_conn != NULL)
     {
@@ -1324,6 +1324,47 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     }
                     tls_dbg_status("keys: derive app ok");
 
+                    if (state->tls_ctx.client_certificate_requested)
+                    {
+                        uint8_t cert_hs[8];
+                        size_t cert_hs_len = 0;
+                        uint8_t enc_cert[64];
+                        size_t enc_cert_len = 0;
+
+                        tls_dbg_status("clientcert: empty gen");
+                        if (!tls_send_empty_certificate(&state->tls_ctx, cert_hs,
+                                                        sizeof(cert_hs), &cert_hs_len))
+                        {
+                            tls_dbg_status("clientcert: gen fail");
+                            altcp_abort(conn);
+                            return ERR_ABRT;
+                        }
+
+                        tls_dbg_status("clientcert: encrypt");
+                        if (!altcp_tls_ce_encrypt_record_stream(&state->tls_ctx, true,
+                                                                TLS_CONTENT_TYPE_HANDSHAKE,
+                                                                cert_hs, cert_hs_len,
+                                                                enc_cert, sizeof(enc_cert),
+                                                                &enc_cert_len))
+                        {
+                            tls_dbg_status("clientcert: enc fail");
+                            altcp_abort(conn);
+                            return ERR_ABRT;
+                        }
+
+                        err_t cert_write_err = altcp_write(conn->inner_conn, enc_cert,
+                                                           (u16_t)enc_cert_len, TCP_WRITE_FLAG_COPY);
+                        altcp_output(conn->inner_conn);
+
+                        if (cert_write_err != ERR_OK)
+                        {
+                            tls_dbg_status("clientcert: write fail");
+                            altcp_abort(conn);
+                            return ERR_ABRT;
+                        }
+                        tls_dbg_status("clientcert: sent empty");
+                    }
+
                     /* Generate client Finished message (plaintext handshake) */
                     uint8_t finished_hs[36];
                     size_t finished_hs_len = 0;
@@ -1910,7 +1951,6 @@ altcp_tls_ce_set_poll(struct altcp_pcb *conn, u8_t interval)
 static void
 altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
 {
-    u16_t lower_recved;
     altcp_tls_ce_state_t *state;
 
     if (conn == NULL)
@@ -1929,26 +1969,22 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
         return;
     }
 
-    lower_recved = len;
-    if (lower_recved > state->rx_passed_unrecved)
+    if (len > state->rx_passed_unrecved)
     {
-        lower_recved = (u16_t)state->rx_passed_unrecved;
+        len = (u16_t)state->rx_passed_unrecved;
     }
-    state->rx_passed_unrecved -= lower_recved;
 
-    if (lower_recved == 0)
+    if (len == 0)
     {
         return;
     }
 
-    if (g_tls_rx_throttle_level == MEM_PRESSURE_NONE)
-    {
-        altcp_tls_ce_lower_recved(conn->inner_conn, lower_recved);
-        return;
-    }
-
-    state->rx_throttle_pending += lower_recved;
-    altcp_tls_ce_rx_release_arm();
+    /* TLS record bytes are released to the lower TCP layer as the decrypter
+     * removes them from state->rx. Upper-layer recved() is therefore only an
+     * accounting signal for plaintext already handed upward; forwarding this
+     * plaintext length to TCP would double-credit the receive window and can
+     * destabilize long-lived TLS streams. */
+    state->rx_passed_unrecved -= len;
 }
 
 static err_t
