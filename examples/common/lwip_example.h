@@ -436,7 +436,7 @@ typedef enum
 
 static char key_to_char(uint8_t key, uint8_t mode)
 {
-    static const char ascii_mapping[3][38] = {
+    static const char ascii_mapping[3][39] = {
         "\"wrmh\0\0?\0vqlg\0\0.zupkfc\0 ytojeb\0\0xsnida",
         "\"WRMH\0\0?\0VQLG\0\0:ZUPKFC\0 YTOJEB\0\0XSNIDA",
         ("+-*/^\0\0?369)\0\0\0.258(\0\0\0"
@@ -628,7 +628,7 @@ static void lwip_example_chat_append_class(struct lwip_example_chat *chat,
         {
             end++;
         }
-        lwip_example_chat_ring_push_wrapped(chat, first ? prefix : NULL,
+        lwip_example_chat_ring_push_wrapped(chat, first ? prefix : (const char *)NULL,
                                             text + start, end - start, color);
         if (end >= len)
         {
@@ -1102,16 +1102,20 @@ static void lwip_example_stack_stop(void)
 static bool lwip_example_stack_start(void)
 {
     lwip_example_gfx_start();
-    lwip_example_show("lwIP runtime", NULL);
+    lwip_example_show("lwIP runtime", (const char *)NULL);
 
+#ifdef __cplusplus
+    if (!lwip_start_with_crt((void *)malloc, (void *)free, (void *)realloc))
+#else
     if (!lwip_start()) /* bootstrap + stack init (no network yet) */
+#endif
     {
         lwip_example_show_and_wait("lwIP failed", lwip_get_start_errstring());
         return false;
     }
     lwip_example_gfx_blit_start();
 
-    lwip_example_show("lwIP network up", NULL);
+    lwip_example_show("lwIP network up", (const char *)NULL);
 
     if (!lwip_network_up())
     {

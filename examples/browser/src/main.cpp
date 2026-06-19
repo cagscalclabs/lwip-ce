@@ -5,7 +5,23 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef __cplusplus
+extern "C"
+{
+    void *malloc(size_t size);
+    void free(void *ptr);
+    void *realloc(void *ptr, size_t size);
+}
+#define _EZCXX_STDLIB_H
+extern "C"
+{
+#define class usb_class
+#endif
 #include <lwip.h>
+#ifdef __cplusplus
+#undef class
+}
+#endif
 
 #include "../../common/lwip_example.h"
 
@@ -32,9 +48,20 @@
 #define BROWSER_VISIBLE_ROWS ((LWIP_EXAMPLE_BOTTOM - BROWSER_BODY_Y) / BROWSER_LINE_H)
 #define BROWSER_ROW_RING_ROWS BROWSER_VISIBLE_ROWS
 #define BROWSER_ROW_STORE_MAX_BYTES 16384u
+#define BROWSER_PAYLOAD_RING_MIN 1024u
+#define BROWSER_RAW_CONTENT_MIN 1024u
+#define BROWSER_NAME_RING_MIN 512u
+#define BROWSER_RENDER_OBJECT_SLOTS 16u
+#define BROWSER_OBJECT_NULL 0xFFFFu
+#define BROWSER_DOM_STACK_MAX 16u
 #define BROWSER_DOCUMENT_GROW 16
 #define BROWSER_SOCKET_RX_MAX 8192
 #define BROWSER_SOCKET_TIMEOUT_MS 60000u
+#define BROWSER_NETWORK_WATCH_MS 1000u
+#define BROWSER_CONNECT_WATCH_MS 1000u
+#define BROWSER_CONNECT_WATCH_MAX_TICKS \
+    ((BROWSER_SOCKET_TIMEOUT_MS + BROWSER_CONNECT_WATCH_MS - 1u) / \
+     BROWSER_CONNECT_WATCH_MS)
 #define BROWSER_CLOSE_DRAIN_TICKS 20
 #define BROWSER_COLOR_URL_TEXT 0xFC
 #define BROWSER_COLOR_LINK 0x03
@@ -73,6 +100,38 @@ typedef enum
 
 typedef enum
 {
+    BROWSER_FLAG_READY = 1u << 0,
+    BROWSER_FLAG_CONNECTED = 1u << 1,
+    BROWSER_FLAG_ERROR = 1u << 2,
+    BROWSER_FLAG_HAS_HTTP_RAW = 1u << 3
+} browser_flags_t;
+
+typedef enum
+{
+    BROWSER_HTML_UNKNOWN = 0,
+    BROWSER_HTML_A,
+    BROWSER_HTML_BODY,
+    BROWSER_HTML_BR,
+    BROWSER_HTML_DIV,
+    BROWSER_HTML_HEAD,
+    BROWSER_HTML_HTML,
+    BROWSER_HTML_IMG,
+    BROWSER_HTML_P,
+    BROWSER_HTML_SCRIPT,
+    BROWSER_HTML_STYLE,
+    BROWSER_HTML_TITLE
+} browser_html_tag_t;
+
+typedef enum
+{
+    BROWSER_CONTENT_NONE = 0,
+    BROWSER_CONTENT_STRING,
+    BROWSER_CONTENT_IMAGE,
+    BROWSER_CONTENT_UNSUPPORTED
+} browser_content_type_t;
+
+typedef enum
+{
     BROWSER_CHUNK_SIZE = 0,
     BROWSER_CHUNK_DATA,
     BROWSER_CHUNK_DATA_CR,
@@ -99,8 +158,28 @@ struct browser_element
     bool styled;
     bool closing;
     bool self_closing;
+    uint16_t class_name;
+    uint16_t id_name;
     char tag[12];
     char text[BROWSER_ELEMENT_TEXT_MAX + 1];
+    struct browser_style_metadata style;
+};
+
+struct browser_render_object
+{
+    uint16_t id;
+    uint16_t parent;
+    uint16_t first_child;
+    uint16_t next_sibling;
+    uint16_t last_child;
+    uint16_t tag_id;
+    browser_object_kind_t object_kind;
+    browser_element_type_t element_type;
+    browser_content_type_t content_type;
+    uint32_t content_offset;
+    uint16_t content_len;
+    uint16_t class_name;
+    uint16_t id_name;
     struct browser_style_metadata style;
 };
 
@@ -151,8 +230,18 @@ struct browser_stream_state
     bool tag_closing;
     bool tag_self_closing;
     bool tag_name_done;
+    bool attr_want_value;
+    bool attr_in_value;
+    char attr_quote;
+    uint8_t attr_target;
     char tag[12];
     uint8_t tag_len;
+    char attr_name[8];
+    uint8_t attr_name_len;
+    char attr_value[32];
+    uint8_t attr_value_len;
+    uint16_t tag_class_name;
+    uint16_t tag_id_name;
     bool in_entity;
     char entity[9];
     uint8_t entity_len;
@@ -189,6 +278,521 @@ struct browser_fetch_state
     struct browser_request req;
 };
 
+static void browser_set_body(struct browser_state *state, const char *text);
+static void browser_fetch_cleanup(struct browser_state *state);
+static bool browser_fetch_connect_socket(struct browser_state *state);
+static void browser_fetch_send_request(struct lwip_socket *sock,
+                                       struct browser_fetch_state *fetch);
+static void browser_interpreter_body_byte(struct browser_state *state, char c);
+
+class BrowserRingBuffer
+{
+public:
+    bool init(size_t initial_size, size_t quantum, size_t min_size)
+    {
+        release();
+        quantum_ = quantum ? quantum : 1u;
+        min_size_ = min_size ? min_size : quantum_;
+        if (initial_size < min_size_)
+        {
+            initial_size = min_size_;
+        }
+        initial_size = round_up(initial_size);
+        data_ = (uint8_t *)mem_request(initial_size);
+        if (!data_)
+        {
+            return false;
+        }
+        capacity_ = initial_size;
+        head_ = 0;
+        size_ = 0;
+        return true;
+    }
+
+    void release(void)
+    {
+        if (data_)
+        {
+            mem_release(data_);
+        }
+        data_ = nullptr;
+        capacity_ = 0;
+        min_size_ = 0;
+        quantum_ = 0;
+        head_ = 0;
+        size_ = 0;
+    }
+
+    void clear(void)
+    {
+        head_ = 0;
+        size_ = 0;
+    }
+
+    bool push(const void *src, size_t len)
+    {
+        const uint8_t *bytes = (const uint8_t *)src;
+        size_t tail;
+        size_t first;
+
+        if (!len)
+        {
+            return true;
+        }
+        if (!bytes || !reserve(size_ + len))
+        {
+            return false;
+        }
+
+        tail = (head_ + size_) % capacity_;
+        first = capacity_ - tail;
+        if (first > len)
+        {
+            first = len;
+        }
+        memcpy(data_ + tail, bytes, first);
+        if (len > first)
+        {
+            memcpy(data_, bytes + first, len - first);
+        }
+        size_ += len;
+        return true;
+    }
+
+    size_t pop(void *dst, size_t len)
+    {
+        uint8_t *bytes = (uint8_t *)dst;
+        size_t first;
+
+        if (len > size_)
+        {
+            len = size_;
+        }
+        if (!len)
+        {
+            return 0;
+        }
+
+        first = capacity_ - head_;
+        if (first > len)
+        {
+            first = len;
+        }
+        if (bytes)
+        {
+            memcpy(bytes, data_ + head_, first);
+            if (len > first)
+            {
+                memcpy(bytes + first, data_, len - first);
+            }
+        }
+        head_ = (head_ + len) % capacity_;
+        size_ -= len;
+        if (!size_)
+        {
+            head_ = 0;
+        }
+        return len;
+    }
+
+    bool reserve(size_t needed)
+    {
+        size_t next_capacity;
+
+        if (needed <= capacity_)
+        {
+            return true;
+        }
+        next_capacity = round_up(needed);
+        return resize(next_capacity);
+    }
+
+    bool shrink_to_fit(void)
+    {
+        size_t target = round_up(size_);
+
+        if (target < min_size_)
+        {
+            target = min_size_;
+        }
+        if (target >= capacity_)
+        {
+            return true;
+        }
+        return resize(target);
+    }
+
+    size_t size(void) const { return size_; }
+    size_t capacity(void) const { return capacity_; }
+    size_t available(void) const { return capacity_ - size_; }
+
+    bool write_at(size_t offset, const void *src, size_t len)
+    {
+        const uint8_t *bytes = (const uint8_t *)src;
+        size_t i;
+
+        if (!bytes || offset + len > size_ || !data_)
+        {
+            return false;
+        }
+        for (i = 0; i < len; i++)
+        {
+            data_[(head_ + offset + i) % capacity_] = bytes[i];
+        }
+        return true;
+    }
+
+    bool read_at(size_t offset, void *dst, size_t len) const
+    {
+        uint8_t *bytes = (uint8_t *)dst;
+        size_t i;
+
+        if (!bytes || offset + len > size_ || !data_)
+        {
+            return false;
+        }
+        for (i = 0; i < len; i++)
+        {
+            bytes[i] = data_[(head_ + offset + i) % capacity_];
+        }
+        return true;
+    }
+
+private:
+    size_t round_up(size_t value) const
+    {
+        size_t quantum = quantum_ ? quantum_ : 1u;
+        size_t rem;
+
+        if (value < min_size_)
+        {
+            value = min_size_;
+        }
+        rem = value % quantum;
+        if (rem)
+        {
+            value += quantum - rem;
+        }
+        return value;
+    }
+
+    bool linearize(void)
+    {
+        uint8_t *scratch;
+        size_t i;
+
+        if (!head_ || !size_)
+        {
+            head_ = 0;
+            return true;
+        }
+
+        scratch = (uint8_t *)mem_request(size_);
+        if (!scratch)
+        {
+            return false;
+        }
+        for (i = 0; i < size_; i++)
+        {
+            scratch[i] = data_[(head_ + i) % capacity_];
+        }
+        memcpy(data_, scratch, size_);
+        mem_release(scratch);
+        head_ = 0;
+        return true;
+    }
+
+    bool resize(size_t next_capacity)
+    {
+        void *next;
+
+        if (!data_)
+        {
+            return false;
+        }
+        if (next_capacity < size_)
+        {
+            return false;
+        }
+        if (!linearize())
+        {
+            return false;
+        }
+        next = mem_resize(data_, next_capacity);
+        if (!next)
+        {
+            return false;
+        }
+        data_ = (uint8_t *)next;
+        capacity_ = next_capacity;
+        return true;
+    }
+
+    uint8_t *data_;
+    size_t capacity_;
+    size_t min_size_;
+    size_t quantum_;
+    size_t head_;
+    size_t size_;
+};
+
+class Browser;
+
+class Interpreter
+{
+public:
+    void init(Browser *browser) { browser_ = browser; }
+    void run(struct browser_state *state);
+
+private:
+    Browser *browser_;
+};
+
+class Styler
+{
+public:
+    void init(Browser *browser) { browser_ = browser; }
+
+private:
+    Browser *browser_;
+};
+
+class Browser
+{
+public:
+    bool init(void)
+    {
+        const size_t render_quantum =
+            sizeof(struct browser_render_object) * BROWSER_RENDER_OBJECT_SLOTS;
+
+        if (initialized_)
+        {
+            release();
+        }
+        if (!start_network())
+        {
+            return false;
+        }
+        network_started_ = true;
+        flags_ = 0;
+        state_ = nullptr;
+        service_requested_mask_ = LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS;
+        service_up_mask_ = 0;
+        service_failed_ = false;
+        service_timed_out_ = false;
+        connect_watch_ticks_ = 0;
+        network_watch_active_ = false;
+        connect_watch_active_ = false;
+        interpreter_watch_active_ = false;
+        reset_page_objects();
+        if (lwip_netif_request_services(nullptr, service_requested_mask_,
+                                        netif_service_callback, this) !=
+            LWIP_OK)
+        {
+            flags_ |= BROWSER_FLAG_ERROR;
+        }
+        schedule_network_watch();
+
+        if (!payload_in.init(BROWSER_PAYLOAD_RING_MIN,
+                             BROWSER_PAYLOAD_RING_MIN,
+                             BROWSER_PAYLOAD_RING_MIN))
+        {
+            release();
+            return false;
+        }
+        if (!render_object.init(render_quantum,
+                                render_quantum,
+                                render_quantum))
+        {
+            release();
+            return false;
+        }
+        if (!raw_content.init(BROWSER_RAW_CONTENT_MIN,
+                              BROWSER_RAW_CONTENT_MIN,
+                              BROWSER_RAW_CONTENT_MIN))
+        {
+            release();
+            return false;
+        }
+        if (!class_names.init(BROWSER_NAME_RING_MIN,
+                              BROWSER_NAME_RING_MIN,
+                              BROWSER_NAME_RING_MIN))
+        {
+            release();
+            return false;
+        }
+        if (!id_names.init(BROWSER_NAME_RING_MIN,
+                           BROWSER_NAME_RING_MIN,
+                           BROWSER_NAME_RING_MIN))
+        {
+            release();
+            return false;
+        }
+
+        interpreter.init(this);
+        styler.init(this);
+        initialized_ = true;
+        return true;
+    }
+
+    void release(void)
+    {
+        sys_untimeout(network_watch_timeout, this);
+        sys_untimeout(connect_watch_timeout, this);
+        sys_untimeout(interpreter_timeout, this);
+        network_watch_active_ = false;
+        connect_watch_active_ = false;
+        interpreter_watch_active_ = false;
+        id_names.release();
+        class_names.release();
+        raw_content.release();
+        render_object.release();
+        payload_in.release();
+        state_ = nullptr;
+        initialized_ = false;
+        if (network_started_)
+        {
+            network_started_ = false;
+            lwip_stop();
+        }
+        lwip_example_gfx_stop();
+    }
+
+    void attach_state(struct browser_state *state) { state_ = state; }
+    bool connect(struct browser_state *state);
+    bool close(struct browser_state *state);
+    bool fetch(struct browser_state *state);
+    bool receive_http_payload(struct browser_state *state,
+                              const char *data,
+                              size_t len);
+    void interpret(struct browser_state *state);
+    bool emit_object(struct browser_state *state,
+                     const struct browser_element *element);
+    void reset_page_objects(void);
+    uint16_t append_class_name(const char *data, size_t len);
+    uint16_t append_id_name(const char *data, size_t len);
+
+    bool ready(void) const { return (flags_ & BROWSER_FLAG_READY) != 0; }
+    bool connected(void) const
+    {
+        return (flags_ & BROWSER_FLAG_CONNECTED) != 0;
+    }
+    bool error(void) const { return (flags_ & BROWSER_FLAG_ERROR) != 0; }
+
+    BrowserRingBuffer render_object;
+    BrowserRingBuffer payload_in;
+    BrowserRingBuffer raw_content;
+    BrowserRingBuffer class_names;
+    BrowserRingBuffer id_names;
+    Interpreter interpreter;
+    Styler styler;
+
+private:
+    static void netif_service_callback(struct netif *netif,
+                                       void *arg,
+                                       uint8_t service_id,
+                                       lwip_netif_service_status_t status);
+    static void network_watch_timeout(void *arg);
+    static void connect_watch_timeout(void *arg);
+    static void interpreter_timeout(void *arg);
+
+    void schedule_network_watch(void)
+    {
+        if (!network_watch_active_)
+        {
+            network_watch_active_ = true;
+            sys_timeout(BROWSER_NETWORK_WATCH_MS,
+                        network_watch_timeout, this);
+        }
+    }
+
+    void schedule_connect_watch(void)
+    {
+        if (!connect_watch_active_)
+        {
+            connect_watch_active_ = true;
+            sys_timeout(BROWSER_CONNECT_WATCH_MS,
+                        connect_watch_timeout, this);
+        }
+    }
+
+    void network_watch_step(void);
+    void connect_watch_step(void);
+    void schedule_interpreter(void)
+    {
+        if (!interpreter_watch_active_)
+        {
+            interpreter_watch_active_ = true;
+            sys_timeout(1u, interpreter_timeout, this);
+        }
+    }
+
+    uint16_t append_raw_content(const char *data, size_t len);
+    bool read_render_object(uint16_t index,
+                            struct browser_render_object *object) const;
+    bool write_render_object(uint16_t index,
+                             const struct browser_render_object *object);
+    uint16_t append_render_object(const struct browser_render_object *object);
+    uint16_t tag_id_for_name(const char *tag) const;
+
+    bool start_network(void)
+    {
+        lwip_example_gfx_start();
+        lwip_example_show("lwIP runtime", (const char *)nullptr);
+
+        if (!lwip_start_with_crt((void *)malloc,
+                                 (void *)free,
+                                 (void *)realloc))
+        {
+            lwip_example_show_and_wait("lwIP failed",
+                                       lwip_get_start_errstring());
+            lwip_example_gfx_stop();
+            return false;
+        }
+        lwip_example_gfx_blit_start();
+
+        lwip_example_show("lwIP network up", (const char *)nullptr);
+        if (!lwip_network_up())
+        {
+            switch (lwip_start_last_error())
+            {
+            case 1:
+                lwip_example_show_and_wait("lwIP failed", "start init");
+                break;
+            case 2:
+                lwip_example_show_and_wait("lwIP failed", "start usb");
+                break;
+            default:
+                lwip_example_show_and_wait("lwIP failed", "start");
+                break;
+            }
+            lwip_stop();
+            lwip_example_gfx_stop();
+            return false;
+        }
+
+        lwip_example_draw_mem_stats();
+        return true;
+    }
+
+    bool initialized_;
+    bool network_started_;
+    uint8_t flags_;
+    uint8_t service_requested_mask_;
+    uint8_t service_up_mask_;
+    bool service_failed_;
+    bool service_timed_out_;
+    bool network_watch_active_;
+    bool connect_watch_active_;
+    bool interpreter_watch_active_;
+    uint16_t connect_watch_ticks_;
+    uint16_t next_object_id_;
+    uint16_t object_count_;
+    uint16_t dom_stack_[BROWSER_DOM_STACK_MAX];
+    uint8_t dom_depth_;
+    struct browser_state *state_;
+};
+
 struct browser_state
 {
     char url[BROWSER_URL_MAX];
@@ -207,6 +811,7 @@ struct browser_state
     char request[BROWSER_REQ_MAX];
     char rx_chunk[BROWSER_RX_CHUNK];
     struct lwip_socket *sock;
+    Browser *browser;
     struct browser_fetch_state fetch;
     struct browser_request socket_req;
     bool socket_valid;
@@ -238,6 +843,12 @@ static void browser_stream_flush_text(struct browser_state *state);
 static void browser_stream_flush_style_text(struct browser_state *state);
 static bool browser_fetch_start(struct browser_state *state);
 static void browser_document_release(struct browser_state *state);
+static void browser_on_event(struct lwip_socket *sock,
+                             lwip_socket_event_type_t type,
+                             const void *ev_data,
+                             void *arg);
+static bool browser_tag_is_media(const char *tag);
+static void browser_stream_attr_reset(struct browser_stream_state *stream);
 
 static bool browser_starts_with(const char *text, const char *prefix)
 {
@@ -346,7 +957,7 @@ static bool browser_parse_url(const char *url, struct browser_request *req)
 {
     const char *p = url;
     const char *path;
-    const char *colon = NULL;
+    const char *colon = nullptr;
     size_t authority_len;
     size_t host_len;
     size_t i;
@@ -559,7 +1170,7 @@ static struct browser_render_row *browser_page_row(struct browser_state *state,
 
     if (!page->rows || row >= page->row_count)
     {
-        return NULL;
+        return nullptr;
     }
     return &page->rows[row];
 }
@@ -572,7 +1183,7 @@ static struct browser_render_row *browser_page_append_row(
 
     if (!browser_page_alloc(state))
     {
-        return NULL;
+        return nullptr;
     }
 
     if (page->row_count == page->row_capacity)
@@ -586,7 +1197,7 @@ static struct browser_render_row *browser_page_append_row(
             page->row_count == page->row_capacity)
         {
             page->alloc_failed = true;
-            return NULL;
+            return nullptr;
         }
     }
 
@@ -687,7 +1298,7 @@ static void browser_document_release(struct browser_state *state)
     {
         mem_release(state->document);
     }
-    state->document = NULL;
+    state->document = nullptr;
     state->document_count = 0;
     state->document_capacity = 0;
     state->document_alloc_failed = false;
@@ -819,6 +1430,11 @@ static bool browser_element_emit(struct browser_state *state,
     struct browser_element *dst;
     uint8_t idx;
 
+    if (state->browser)
+    {
+        (void)state->browser->emit_object(state, src);
+    }
+
     if (state->element_count == BROWSER_ELEMENT_RING)
     {
         browser_styler_step(state, BROWSER_ELEMENT_RING);
@@ -856,6 +1472,8 @@ static bool browser_element_emit_text(struct browser_state *state,
     element.object_kind = BROWSER_OBJECT_ELEMENT;
     element.count = 1;
     element.type = BROWSER_ELEMENT_TEXT;
+    element.class_name = BROWSER_OBJECT_NULL;
+    element.id_name = BROWSER_OBJECT_NULL;
     if (len > BROWSER_ELEMENT_TEXT_MAX)
     {
         len = BROWSER_ELEMENT_TEXT_MAX;
@@ -865,10 +1483,12 @@ static bool browser_element_emit_text(struct browser_state *state,
     return browser_element_emit(state, &element);
 }
 
-static bool browser_element_emit_tag(struct browser_state *state,
-                                     const char *tag,
-                                     bool closing,
-                                     bool self_closing)
+static bool browser_element_emit_tag_with_names(struct browser_state *state,
+                                                const char *tag,
+                                                bool closing,
+                                                bool self_closing,
+                                                uint16_t class_name,
+                                                uint16_t id_name)
 {
     struct browser_element element;
 
@@ -878,6 +1498,8 @@ static bool browser_element_emit_tag(struct browser_state *state,
     element.type = BROWSER_ELEMENT_TAG;
     element.closing = closing;
     element.self_closing = self_closing;
+    element.class_name = class_name;
+    element.id_name = id_name;
     browser_copy(element.tag, sizeof(element.tag), tag);
     return browser_element_emit(state, &element);
 }
@@ -890,6 +1512,8 @@ static bool browser_element_emit_break(struct browser_state *state)
     element.object_kind = BROWSER_OBJECT_ELEMENT;
     element.count = 1;
     element.type = BROWSER_ELEMENT_BREAK;
+    element.class_name = BROWSER_OBJECT_NULL;
+    element.id_name = BROWSER_OBJECT_NULL;
     return browser_element_emit(state, &element);
 }
 
@@ -903,6 +1527,8 @@ static bool browser_element_emit_style_tag(struct browser_state *state,
     element.count = 1;
     element.type = BROWSER_ELEMENT_TAG;
     element.closing = closing;
+    element.class_name = BROWSER_OBJECT_NULL;
+    element.id_name = BROWSER_OBJECT_NULL;
     browser_copy(element.tag, sizeof(element.tag), "style");
     return browser_element_emit(state, &element);
 }
@@ -921,6 +1547,8 @@ static bool browser_element_emit_style_text(struct browser_state *state,
     element.object_kind = BROWSER_OBJECT_STYLE;
     element.count = 1;
     element.type = BROWSER_ELEMENT_TEXT;
+    element.class_name = BROWSER_OBJECT_NULL;
+    element.id_name = BROWSER_OBJECT_NULL;
     if (len > BROWSER_ELEMENT_TEXT_MAX)
     {
         len = BROWSER_ELEMENT_TEXT_MAX;
@@ -1432,6 +2060,10 @@ static void browser_parse_html(struct browser_state *state)
 static void browser_stream_reset(struct browser_state *state)
 {
     memset(&state->stream, 0, sizeof(state->stream));
+    if (state->browser)
+    {
+        state->browser->reset_page_objects();
+    }
     memset(state->elements, 0, sizeof(state->elements));
     state->element_head = 0;
     state->element_count = 0;
@@ -1443,6 +2075,10 @@ static void browser_stream_reset(struct browser_state *state)
 
 static void browser_stream_finish(struct browser_state *state)
 {
+    if (state->browser)
+    {
+        state->browser->interpret(state);
+    }
     browser_stream_flush_text(state);
     state->interpreter_working = false;
 }
@@ -1566,9 +2202,10 @@ static void browser_stream_finish_tag(struct browser_state *state)
         {
             stream->parse.skip = false;
             stream->parse.skip_tag[0] = '\0';
-            (void)browser_element_emit_tag(state, stream->tag,
-                                           stream->tag_closing,
-                                           stream->tag_self_closing);
+            (void)browser_element_emit_tag_with_names(
+                state, stream->tag, stream->tag_closing,
+                stream->tag_self_closing, stream->tag_class_name,
+                stream->tag_id_name);
         }
         else if (strcmp(stream->tag, "style") == 0)
         {
@@ -1614,9 +2251,10 @@ static void browser_stream_finish_tag(struct browser_state *state)
         }
         else
         {
-            (void)browser_element_emit_tag(state, stream->tag,
-                                           stream->tag_closing,
-                                           stream->tag_self_closing);
+            (void)browser_element_emit_tag_with_names(
+                state, stream->tag, stream->tag_closing,
+                stream->tag_self_closing, stream->tag_class_name,
+                stream->tag_id_name);
         }
     }
     stream->in_tag = false;
@@ -1625,6 +2263,9 @@ static void browser_stream_finish_tag(struct browser_state *state)
     stream->tag_self_closing = false;
     stream->tag_name_done = false;
     stream->tag_len = 0;
+    stream->tag_class_name = BROWSER_OBJECT_NULL;
+    stream->tag_id_name = BROWSER_OBJECT_NULL;
+    browser_stream_attr_reset(stream);
 }
 
 static void browser_stream_flush_text(struct browser_state *state)
@@ -1746,16 +2387,124 @@ static int8_t browser_hex_value(char c)
     return -1;
 }
 
-static void browser_stream_body_byte(struct browser_state *state, char c)
+static void browser_stream_attr_reset(struct browser_stream_state *stream)
+{
+    stream->attr_want_value = false;
+    stream->attr_in_value = false;
+    stream->attr_quote = '\0';
+    stream->attr_target = 0;
+    stream->attr_name_len = 0;
+    stream->attr_name[0] = '\0';
+    stream->attr_value_len = 0;
+    stream->attr_value[0] = '\0';
+}
+
+static void browser_stream_attr_commit(struct browser_state *state)
 {
     struct browser_stream_state *stream = &state->stream;
 
-    stream->body_seen = true;
-    stream->body_bytes++;
+    if (!stream->attr_target || !stream->attr_value_len || !state->browser)
+    {
+        browser_stream_attr_reset(stream);
+        return;
+    }
+
+    if (stream->attr_target == 1)
+    {
+        stream->tag_id_name =
+            state->browser->append_id_name(stream->attr_value,
+                                           stream->attr_value_len);
+    }
+    else if (stream->attr_target == 2)
+    {
+        stream->tag_class_name =
+            state->browser->append_class_name(stream->attr_value,
+                                              stream->attr_value_len);
+    }
+    browser_stream_attr_reset(stream);
+}
+
+static void browser_stream_tag_attr_char(struct browser_state *state, char c)
+{
+    struct browser_stream_state *stream = &state->stream;
+
+    if (stream->attr_in_value)
+    {
+        if ((stream->attr_quote && c == stream->attr_quote) ||
+            (!stream->attr_quote && isspace((unsigned char)c)))
+        {
+            browser_stream_attr_commit(state);
+            return;
+        }
+        if (stream->attr_value_len + 1u < sizeof(stream->attr_value))
+        {
+            stream->attr_value[stream->attr_value_len++] = c;
+            stream->attr_value[stream->attr_value_len] = '\0';
+        }
+        return;
+    }
+
+    if (stream->attr_want_value)
+    {
+        if (isspace((unsigned char)c))
+        {
+            return;
+        }
+        if (c == '"' || c == '\'')
+        {
+            stream->attr_quote = c;
+            stream->attr_in_value = true;
+            return;
+        }
+        stream->attr_quote = '\0';
+        stream->attr_in_value = true;
+        browser_stream_tag_attr_char(state, c);
+        return;
+    }
+
+    if (isspace((unsigned char)c) || c == '/')
+    {
+        browser_stream_attr_reset(stream);
+        return;
+    }
+    if (c == '=')
+    {
+        stream->attr_name[stream->attr_name_len] = '\0';
+        if (strcmp(stream->attr_name, "id") == 0)
+        {
+            stream->attr_target = 1;
+        }
+        else if (strcmp(stream->attr_name, "class") == 0)
+        {
+            stream->attr_target = 2;
+        }
+        else
+        {
+            stream->attr_target = 0;
+        }
+        stream->attr_want_value = true;
+        return;
+    }
+    if (isalnum((unsigned char)c) || c == '-')
+    {
+        if (stream->attr_name_len + 1u < sizeof(stream->attr_name))
+        {
+            stream->attr_name[stream->attr_name_len++] =
+                (char)tolower((unsigned char)c);
+            stream->attr_name[stream->attr_name_len] = '\0';
+        }
+    }
+}
+
+static void browser_interpreter_body_byte(struct browser_state *state, char c)
+{
+    struct browser_stream_state *stream = &state->stream;
+
     if (stream->in_tag)
     {
         if (c == '>')
         {
+            browser_stream_attr_commit(state);
             browser_stream_finish_tag(state);
             goto maybe_done;
         }
@@ -1796,6 +2545,10 @@ static void browser_stream_body_byte(struct browser_state *state, char c)
                 stream->tag_name_done = true;
             }
         }
+        else
+        {
+            browser_stream_tag_attr_char(state, c);
+        }
         goto maybe_done;
     }
 
@@ -1809,11 +2562,29 @@ static void browser_stream_body_byte(struct browser_state *state, char c)
         stream->tag_name_done = false;
         stream->tag_len = 0;
         stream->tag[0] = '\0';
+        stream->tag_class_name = BROWSER_OBJECT_NULL;
+        stream->tag_id_name = BROWSER_OBJECT_NULL;
+        browser_stream_attr_reset(stream);
         goto maybe_done;
     }
     browser_stream_text_char(state, c);
 
 maybe_done:
+    return;
+}
+
+static void browser_stream_body_byte(struct browser_state *state, char c)
+{
+    struct browser_stream_state *stream = &state->stream;
+
+    stream->body_seen = true;
+    stream->body_bytes++;
+    if (state->browser &&
+        !state->browser->receive_http_payload(state, &c, 1u))
+    {
+        state->document_alloc_failed = true;
+    }
+
     if (!stream->chunked &&
         stream->content_length_seen &&
         stream->body_bytes >= stream->content_length)
@@ -2002,7 +2773,7 @@ static struct browser_render_row *browser_layout_row(
     {
         if (!browser_page_append_row(state))
         {
-            return NULL;
+            return nullptr;
         }
     }
     return &page->rows[layout->row];
@@ -2427,6 +3198,537 @@ static void browser_fetch_send_request(struct lwip_socket *sock,
     fetch->done = true;
 }
 
+static bool browser_fetch_connect_socket(struct browser_state *state)
+{
+    lwip_error_t err;
+
+    if (!state->sock)
+    {
+        browser_set_body(state, "Socket unavailable");
+        return false;
+    }
+    memset(state->sock, 0, sizeof(*state->sock));
+    err = lwip_socket_create_ex(state->sock,
+                                state->fetch.req.tls
+                                    ? LWIP_SOCKET_ALTCP_TLS
+                                    : LWIP_SOCKET_TCP,
+                                LWIP_NETIF_EXT, nullptr,
+                                BROWSER_SOCKET_TIMEOUT_MS,
+                                BROWSER_SOCKET_RX_MAX);
+    if (err != LWIP_OK)
+    {
+        browser_set_body(state, "Socket create failed");
+        browser_fetch_cleanup(state);
+        return false;
+    }
+
+    lwip_socket_on_event(state->sock, LWIP_SOCKET_EVENTF_ALL,
+                         browser_on_event, &state->fetch);
+
+    state->socket_valid = true;
+    state->socket_req = state->fetch.req;
+    browser_stream_reset(state);
+
+    err = lwip_socket_connect(state->sock,
+                              state->fetch.req.host,
+                              state->fetch.req.port);
+    if (err != LWIP_OK)
+    {
+        char msg[56];
+        snprintf(msg, sizeof(msg), "Connect err %u st %s",
+                 (unsigned)err,
+                 lwip_example_socket_status_name(
+                     lwip_socket_status(state->sock)));
+        browser_set_body(state, msg);
+        browser_fetch_cleanup(state);
+        return false;
+    }
+
+    return true;
+}
+
+void Browser::netif_service_callback(struct netif *netif,
+                                     void *arg,
+                                     uint8_t service_id,
+                                     lwip_netif_service_status_t status)
+{
+    Browser *browser = (Browser *)arg;
+
+    (void)netif;
+    if (!browser)
+    {
+        return;
+    }
+    if (status == LWIP_NETIF_SERVICE_UP)
+    {
+        browser->service_up_mask_ |= service_id;
+    }
+    else if (status == LWIP_NETIF_SERVICE_TIMEOUT)
+    {
+        browser->service_timed_out_ = true;
+    }
+    else
+    {
+        browser->service_failed_ = true;
+    }
+}
+
+void Browser::network_watch_timeout(void *arg)
+{
+    Browser *browser = (Browser *)arg;
+
+    if (!browser)
+    {
+        return;
+    }
+    browser->network_watch_active_ = false;
+    browser->network_watch_step();
+}
+
+void Browser::connect_watch_timeout(void *arg)
+{
+    Browser *browser = (Browser *)arg;
+
+    if (!browser)
+    {
+        return;
+    }
+    browser->connect_watch_active_ = false;
+    browser->connect_watch_step();
+}
+
+void Browser::network_watch_step(void)
+{
+    if (flags_ & BROWSER_FLAG_ERROR)
+    {
+        return;
+    }
+
+    if (service_failed_ || service_timed_out_)
+    {
+        flags_ |= BROWSER_FLAG_ERROR;
+        if (state_ && state_->fetch.active && !state_->socket_valid)
+        {
+            state_->fetch.err = LWIP_ERR_NETIF;
+            state_->fetch.err_component = LWIP_SOCKET_ERR_COMP_NETIF;
+            state_->fetch.err_operation = LWIP_SOCKET_ERR_OP_SERVICE_WAIT;
+            state_->fetch.raw_error = service_timed_out_ ? -1 : 0;
+            state_->fetch.done = true;
+        }
+        return;
+    }
+
+    if ((service_up_mask_ & service_requested_mask_) == service_requested_mask_)
+    {
+        flags_ |= BROWSER_FLAG_READY;
+        if (state_ && state_->fetch.active && !state_->socket_valid)
+        {
+            (void)connect(state_);
+        }
+        return;
+    }
+
+    schedule_network_watch();
+}
+
+void Browser::connect_watch_step(void)
+{
+    lwip_status_t status;
+
+    if (!state_ || !state_->fetch.active || !state_->sock)
+    {
+        return;
+    }
+
+    status = lwip_socket_status(state_->sock);
+    if (state_->fetch.connected || status == LWIP_STATUS_CONNECTED)
+    {
+        flags_ |= BROWSER_FLAG_CONNECTED;
+        state_->fetch.connected = true;
+        (void)fetch(state_);
+        return;
+    }
+
+    if (status == LWIP_STATUS_CLOSED ||
+        status == LWIP_STATUS_RESET ||
+        status == LWIP_STATUS_ERROR ||
+        state_->fetch.done ||
+        state_->fetch.err != LWIP_OK)
+    {
+        flags_ |= BROWSER_FLAG_ERROR;
+        return;
+    }
+
+    connect_watch_ticks_++;
+    if (connect_watch_ticks_ >= BROWSER_CONNECT_WATCH_MAX_TICKS)
+    {
+        flags_ |= BROWSER_FLAG_ERROR;
+        state_->fetch.err = LWIP_ERR_CONNECT;
+        state_->fetch.err_component = LWIP_SOCKET_ERR_COMP_SOCKET;
+        state_->fetch.err_operation = LWIP_SOCKET_ERR_OP_CONNECT;
+        state_->fetch.raw_error = -1;
+        state_->fetch.done = true;
+        return;
+    }
+
+    schedule_connect_watch();
+}
+
+bool Browser::connect(struct browser_state *state)
+{
+    state_ = state;
+    flags_ &= (uint8_t)~BROWSER_FLAG_CONNECTED;
+    if (!service_failed_ && !service_timed_out_)
+    {
+        flags_ &= (uint8_t)~BROWSER_FLAG_ERROR;
+    }
+
+    if (!state)
+    {
+        flags_ |= BROWSER_FLAG_ERROR;
+        return false;
+    }
+    if (flags_ & BROWSER_FLAG_ERROR)
+    {
+        state->fetch.err = LWIP_ERR_NETIF;
+        state->fetch.err_component = LWIP_SOCKET_ERR_COMP_NETIF;
+        state->fetch.err_operation = LWIP_SOCKET_ERR_OP_SERVICE_WAIT;
+        state->fetch.done = true;
+        return false;
+    }
+    if (!(flags_ & BROWSER_FLAG_READY))
+    {
+        browser_set_body(state, "Waiting for network");
+        schedule_network_watch();
+        return true;
+    }
+    connect_watch_ticks_ = 0;
+    if (!browser_fetch_connect_socket(state))
+    {
+        flags_ |= BROWSER_FLAG_ERROR;
+        return false;
+    }
+    schedule_connect_watch();
+    return true;
+}
+
+bool Browser::close(struct browser_state *state)
+{
+    lwip_status_t status;
+    lwip_error_t err;
+
+    flags_ &= (uint8_t)~BROWSER_FLAG_CONNECTED;
+    sys_untimeout(connect_watch_timeout, this);
+    connect_watch_active_ = false;
+
+    if (!state || !state->socket_valid || !state->sock)
+    {
+        return true;
+    }
+
+    status = lwip_socket_status(state->sock);
+    if (status == LWIP_STATUS_CONNECTED || status == LWIP_STATUS_CLOSING)
+    {
+        err = lwip_socket_close(state->sock);
+        if (err == LWIP_OK || err == LWIP_ERR_CLOSED)
+        {
+            return true;
+        }
+        if (err == LWIP_ERR_MEM || err == LWIP_ERR_STATE)
+        {
+            return false;
+        }
+        browser_fetch_cleanup(state);
+        return true;
+    }
+
+    return true;
+}
+
+bool Browser::fetch(struct browser_state *state)
+{
+    if (!state || !state->sock || !state->fetch.active ||
+        !state->fetch.connected || state->fetch.sent)
+    {
+        return false;
+    }
+    state->fetch.send_pending = true;
+    browser_fetch_send_request(state->sock, &state->fetch);
+    return state->fetch.sent;
+}
+
+uint16_t Browser::tag_id_for_name(const char *tag) const
+{
+    if (!tag || !tag[0]) return BROWSER_HTML_UNKNOWN;
+    if (strcmp(tag, "a") == 0) return BROWSER_HTML_A;
+    if (strcmp(tag, "body") == 0) return BROWSER_HTML_BODY;
+    if (strcmp(tag, "br") == 0) return BROWSER_HTML_BR;
+    if (strcmp(tag, "div") == 0) return BROWSER_HTML_DIV;
+    if (strcmp(tag, "head") == 0) return BROWSER_HTML_HEAD;
+    if (strcmp(tag, "html") == 0) return BROWSER_HTML_HTML;
+    if (strcmp(tag, "img") == 0) return BROWSER_HTML_IMG;
+    if (strcmp(tag, "p") == 0) return BROWSER_HTML_P;
+    if (strcmp(tag, "script") == 0) return BROWSER_HTML_SCRIPT;
+    if (strcmp(tag, "style") == 0) return BROWSER_HTML_STYLE;
+    if (strcmp(tag, "title") == 0) return BROWSER_HTML_TITLE;
+    return BROWSER_HTML_UNKNOWN;
+}
+
+uint16_t Browser::append_raw_content(const char *data, size_t len)
+{
+    uint16_t offset;
+    char nul = '\0';
+
+    if (!data || raw_content.size() > UINT16_MAX ||
+        raw_content.size() + len + 1u > UINT16_MAX)
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    offset = (uint16_t)raw_content.size();
+    if (!raw_content.push(data, len) || !raw_content.push(&nul, 1u))
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    return offset;
+}
+
+uint16_t Browser::append_class_name(const char *data, size_t len)
+{
+    uint16_t offset;
+    char nul = '\0';
+
+    if (!data || class_names.size() > UINT16_MAX ||
+        class_names.size() + len + 1u > UINT16_MAX)
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    offset = (uint16_t)class_names.size();
+    if (!class_names.push(data, len) || !class_names.push(&nul, 1u))
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    return offset;
+}
+
+uint16_t Browser::append_id_name(const char *data, size_t len)
+{
+    uint16_t offset;
+    char nul = '\0';
+
+    if (!data || id_names.size() > UINT16_MAX ||
+        id_names.size() + len + 1u > UINT16_MAX)
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    offset = (uint16_t)id_names.size();
+    if (!id_names.push(data, len) || !id_names.push(&nul, 1u))
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    return offset;
+}
+
+bool Browser::read_render_object(uint16_t index,
+                                 struct browser_render_object *object) const
+{
+    return index < object_count_ &&
+        render_object.read_at((size_t)index * sizeof(*object),
+                              object, sizeof(*object));
+}
+
+bool Browser::write_render_object(
+    uint16_t index,
+    const struct browser_render_object *object)
+{
+    return index < object_count_ &&
+        render_object.write_at((size_t)index * sizeof(*object),
+                               object, sizeof(*object));
+}
+
+uint16_t Browser::append_render_object(
+    const struct browser_render_object *object)
+{
+    if (!object || object_count_ == BROWSER_OBJECT_NULL)
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    if (!render_object.push(object, sizeof(*object)))
+    {
+        return BROWSER_OBJECT_NULL;
+    }
+    return object_count_++;
+}
+
+void Browser::reset_page_objects(void)
+{
+    payload_in.clear();
+    render_object.clear();
+    raw_content.clear();
+    class_names.clear();
+    id_names.clear();
+    object_count_ = 0;
+    next_object_id_ = 1;
+    dom_depth_ = 0;
+    for (uint8_t i = 0; i < BROWSER_DOM_STACK_MAX; i++)
+    {
+        dom_stack_[i] = BROWSER_OBJECT_NULL;
+    }
+    flags_ &= (uint8_t)~BROWSER_FLAG_HAS_HTTP_RAW;
+}
+
+bool Browser::emit_object(struct browser_state *state,
+                          const struct browser_element *element)
+{
+    struct browser_render_object object;
+    uint16_t index;
+    uint16_t parent = dom_depth_ ? dom_stack_[dom_depth_ - 1u]
+                                 : BROWSER_OBJECT_NULL;
+
+    (void)state;
+    if (!element)
+    {
+        return false;
+    }
+    if (element->type == BROWSER_ELEMENT_TAG && element->closing)
+    {
+        if (dom_depth_)
+        {
+            dom_depth_--;
+        }
+        return true;
+    }
+
+    memset(&object, 0, sizeof(object));
+    object.id = next_object_id_++;
+    object.parent = parent;
+    object.first_child = BROWSER_OBJECT_NULL;
+    object.next_sibling = BROWSER_OBJECT_NULL;
+    object.last_child = BROWSER_OBJECT_NULL;
+    object.tag_id = element->type == BROWSER_ELEMENT_TAG
+        ? tag_id_for_name(element->tag)
+        : BROWSER_HTML_UNKNOWN;
+    object.object_kind = element->object_kind;
+    object.element_type = element->type;
+    object.content_type = BROWSER_CONTENT_NONE;
+    object.content_offset = BROWSER_OBJECT_NULL;
+    object.content_len = 0;
+    object.class_name = element->class_name;
+    object.id_name = element->id_name;
+    object.style = element->style;
+
+    if (element->type == BROWSER_ELEMENT_TEXT)
+    {
+        size_t len = strlen(element->text);
+        uint16_t offset = append_raw_content(element->text, len);
+        if (offset == BROWSER_OBJECT_NULL)
+        {
+            return false;
+        }
+        object.content_type = BROWSER_CONTENT_STRING;
+        object.content_offset = offset;
+        object.content_len = (uint16_t)len;
+    }
+    else if (browser_tag_is_media(element->tag))
+    {
+        object.content_type = BROWSER_CONTENT_UNSUPPORTED;
+    }
+
+    index = append_render_object(&object);
+    if (index == BROWSER_OBJECT_NULL)
+    {
+        return false;
+    }
+
+    if (parent != BROWSER_OBJECT_NULL)
+    {
+        struct browser_render_object parent_object;
+        if (read_render_object(parent, &parent_object))
+        {
+            if (parent_object.first_child == BROWSER_OBJECT_NULL)
+            {
+                parent_object.first_child = index;
+            }
+            else if (parent_object.last_child != BROWSER_OBJECT_NULL)
+            {
+                struct browser_render_object sibling;
+                if (read_render_object(parent_object.last_child, &sibling))
+                {
+                    sibling.next_sibling = index;
+                    (void)write_render_object(parent_object.last_child,
+                                              &sibling);
+                }
+            }
+            parent_object.last_child = index;
+            (void)write_render_object(parent, &parent_object);
+        }
+    }
+
+    if (element->type == BROWSER_ELEMENT_TAG && !element->self_closing &&
+        !browser_tag_is_media(element->tag) && dom_depth_ < BROWSER_DOM_STACK_MAX)
+    {
+        dom_stack_[dom_depth_++] = index;
+    }
+
+    return true;
+}
+
+bool Browser::receive_http_payload(struct browser_state *state,
+                                   const char *data,
+                                   size_t len)
+{
+    (void)state;
+    if (!payload_in.push(data, len))
+    {
+        flags_ |= BROWSER_FLAG_ERROR;
+        return false;
+    }
+    flags_ |= BROWSER_FLAG_HAS_HTTP_RAW;
+    schedule_interpreter();
+    return true;
+}
+
+void Interpreter::run(struct browser_state *state)
+{
+    char c;
+
+    if (!browser_ || !state)
+    {
+        return;
+    }
+    while (browser_->payload_in.pop(&c, 1u) == 1u)
+    {
+        browser_interpreter_body_byte(state, c);
+    }
+}
+
+void Browser::interpret(struct browser_state *state)
+{
+    interpreter.run(state);
+    if (!payload_in.size())
+    {
+        flags_ &= (uint8_t)~BROWSER_FLAG_HAS_HTTP_RAW;
+    }
+}
+
+void Browser::interpreter_timeout(void *arg)
+{
+    Browser *browser = (Browser *)arg;
+
+    if (!browser)
+    {
+        return;
+    }
+    browser->interpreter_watch_active_ = false;
+    if (browser->state_ && (browser->flags_ & BROWSER_FLAG_HAS_HTTP_RAW))
+    {
+        browser->interpret(browser->state_);
+        if (browser->payload_in.size())
+        {
+            browser->schedule_interpreter();
+        }
+    }
+}
+
 static void browser_fetch_step(struct browser_state *state)
 {
     struct browser_fetch_state *fetch = &state->fetch;
@@ -2442,7 +3744,10 @@ static void browser_fetch_step(struct browser_state *state)
     }
     if (fetch->active && fetch->send_pending)
     {
-        browser_fetch_send_request(state->sock, fetch);
+        if (state->browser)
+        {
+            state->browser->fetch(state);
+        }
     }
     if (state->interpreter_working || state->element_count)
     {
@@ -2468,7 +3773,6 @@ static void browser_on_event(struct lwip_socket *sock,
             if (st->current == LWIP_STATUS_CONNECTED)
             {
                 fetch->connected = true;
-                fetch->send_pending = true;
             }
             else if (st->current == LWIP_STATUS_CLOSED ||
                      st->current == LWIP_STATUS_RESET ||
@@ -2492,7 +3796,7 @@ static void browser_on_event(struct lwip_socket *sock,
         }
         if (io && (io->flags & (LWIP_SOCKET_IO_WRITABLE | LWIP_SOCKET_IO_POLL)))
         {
-            fetch->send_pending = fetch->connected && !fetch->sent;
+            fetch->send_pending = fetch->send_pending && !fetch->sent;
         }
         return;
     }
@@ -2584,21 +3888,11 @@ static void browser_socket_close_for_navigation(struct browser_state *state,
         return;
     }
 
-    if (state->sock &&
-        (lwip_socket_status(state->sock) == LWIP_STATUS_CONNECTED ||
-         lwip_socket_status(state->sock) == LWIP_STATUS_CLOSING))
+    if (state->browser && state->browser->close(state))
     {
-        lwip_error_t err = lwip_socket_close(state->sock);
-        if (err == LWIP_OK || err == LWIP_ERR_CLOSED)
-        {
-            state->close_pending = false;
-        }
-        else if (err != LWIP_ERR_MEM && err != LWIP_ERR_STATE)
-        {
-            browser_fetch_cleanup(state);
-        }
+        state->close_pending = false;
     }
-    else
+    else if (!state->browser)
     {
         state->close_pending = false;
     }
@@ -2643,12 +3937,11 @@ static bool browser_navigation_step(struct browser_state *state)
             (status == LWIP_STATUS_CONNECTED ||
              status == LWIP_STATUS_CLOSING))
         {
-            lwip_error_t err = lwip_socket_close(state->sock);
-            if (err == LWIP_OK || err == LWIP_ERR_CLOSED)
+            if (state->browser && state->browser->close(state))
             {
                 state->close_pending = false;
             }
-            else if (err != LWIP_ERR_MEM && err != LWIP_ERR_STATE)
+            else if (!state->browser)
             {
                 state->close_pending = false;
             }
@@ -2769,7 +4062,6 @@ static bool browser_fetch_start(struct browser_state *state)
 {
     struct browser_request req;
     char host_header[BROWSER_HOST_MAX + 8];
-    lwip_error_t err;
     bool reuse_socket;
 
     if (state->fetch.active)
@@ -2824,53 +4116,16 @@ static bool browser_fetch_start(struct browser_state *state)
     if (reuse_socket)
     {
         state->fetch.connected = true;
-        state->fetch.send_pending = true;
         state->fetch.last_status = LWIP_STATUS_CONNECTED;
         browser_stream_reset(state);
+        if (state->browser)
+        {
+            (void)state->browser->fetch(state);
+        }
         return true;
     }
 
-    if (!state->sock)
-    {
-        browser_set_body(state, "Socket unavailable");
-        return false;
-    }
-    memset(state->sock, 0, sizeof(*state->sock));
-    err = lwip_socket_create_ex(state->sock,
-                                req.tls ? LWIP_SOCKET_ALTCP_TLS
-                                        : LWIP_SOCKET_TCP,
-                                LWIP_NETIF_EXT, NULL,
-                                BROWSER_SOCKET_TIMEOUT_MS,
-                                BROWSER_SOCKET_RX_MAX);
-    if (err != LWIP_OK)
-    {
-        browser_set_body(state, "Socket create failed");
-        browser_fetch_cleanup(state);
-        return false;
-    }
-
-    lwip_socket_on_event(state->sock, LWIP_SOCKET_EVENTF_ALL,
-                         browser_on_event, &state->fetch);
-
-    state->socket_valid = true;
-    state->socket_req = req;
-    browser_stream_reset(state);
-
-    err = lwip_socket_connect(state->sock,
-                              state->fetch.req.host,
-                              state->fetch.req.port);
-    if (err != LWIP_OK)
-    {
-        char msg[56];
-        snprintf(msg, sizeof(msg), "Connect err %u st %s",
-                 (unsigned)err,
-                 lwip_example_socket_status_name(lwip_socket_status(state->sock)));
-        browser_set_body(state, msg);
-        browser_fetch_cleanup(state);
-        return false;
-    }
-
-    return true;
+    return state->browser ? state->browser->connect(state) : false;
 }
 
 static uint8_t browser_max_horizontal_scroll(const struct browser_state *state);
@@ -3048,13 +4303,36 @@ static void browser_reload(struct browser_state *state)
     browser_goto_internal(state, state->url, false);
 }
 
+static void browser_state_release(struct browser_state *state)
+{
+    if (!state)
+    {
+        return;
+    }
+    if (state->fetch.active || state->socket_valid)
+    {
+        browser_fetch_cleanup(state);
+    }
+    browser_event_state = nullptr;
+    lwip_set_event_cb(nullptr);
+    browser_document_release(state);
+    browser_page_release(state);
+    if (state->browser)
+    {
+        state->browser->release();
+        state->browser = nullptr;
+    }
+    mem_release(state);
+}
+
 int main(void)
 {
+    static Browser browser;
     static struct lwip_socket sock;
     struct browser_state *state;
     bool redraw = true;
 
-    if (!lwip_example_stack_start())
+    if (!browser.init())
     {
         return 1;
     }
@@ -3063,9 +4341,12 @@ int main(void)
     if (!state)
     {
         lwip_example_show_and_wait("browser mem", "failed");
-        return lwip_example_finish(1);
+        browser.release();
+        return 1;
     }
     memset(state, 0, sizeof(*state));
+    state->browser = &browser;
+    browser.attach_state(state);
     state->sock = &sock;
     memset(state->sock, 0, sizeof(*state->sock));
     browser_copy(state->url, sizeof(state->url), BROWSER_URL);
@@ -3162,16 +4443,8 @@ int main(void)
             switch (key)
             {
             case sk_Clear:
-                if (state->fetch.active || state->socket_valid)
-                {
-                    browser_fetch_cleanup(state);
-                }
-                browser_event_state = NULL;
-                lwip_set_event_cb(NULL);
-                browser_document_release(state);
-                browser_page_release(state);
-                mem_release(state);
-                return lwip_example_finish(0);
+                browser_state_release(state);
+                return 0;
             case sk_Yequ:
                 if (browser_history_back(state))
                 {
