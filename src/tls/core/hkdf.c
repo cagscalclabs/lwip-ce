@@ -11,6 +11,10 @@
 #include "../includes/bytes.h"
 #include <string.h>
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_HKDF
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 #define TLS_HKDF_LABEL_SCRATCH_SIZE 520u
 
 /* Shared BSS crypto scratch from share/memory.s. This is not persistent and
@@ -52,6 +56,7 @@ bool tls_hkdf_extract(
     size_t hash_len = get_hash_length(hash_algorithm);
 
     if (hash_len == 0 || !prk) {
+        ERROR();
         return false;
     }
 
@@ -70,6 +75,7 @@ bool tls_hkdf_extract(
 
     /* PRK = HMAC(salt, ikm) */
     if (!tls_hmac_context_init(&ctx, hash_algorithm, salt, salt_len)) {
+        ERROR();
         return false;
     }
 
@@ -113,11 +119,13 @@ bool tls_hkdf_expand(
     size_t offset = 0;
 
     if (hash_len == 0 || !prk || !okm) {
+        ERROR();
         return false;
     }
 
     /* Check okm_len is not too large: max = 255 * HashLen */
     if (okm_len > 255 * hash_len) {
+        ERROR();
         return false;
     }
 
@@ -130,6 +138,7 @@ bool tls_hkdf_expand(
 
         /* Initialize HMAC with PRK */
         if (!tls_hmac_context_init(&ctx, hash_algorithm, prk, prk_len)) {
+            ERROR();
             return false;
         }
 
@@ -196,21 +205,25 @@ bool tls_hkdf_expand_label(
     bool ok;
 
     if (!secret || !label || !out) {
+        ERROR();
         return false;
     }
 
     /* Check label length: "tls13 " + label must be 7..255 bytes */
     if (full_label_len < 7 || full_label_len > 255) {
+        ERROR_CODE(full_label_len > 0xFFFF ? 0xFFFF : full_label_len);
         return false;
     }
 
     /* Check context length: 0..255 bytes */
     if (context_len > 255) {
+        ERROR_CODE(context_len > 0xFFFF ? 0xFFFF : context_len);
         return false;
     }
 
     needed = 2u + 1u + full_label_len + 1u + context_len;
     if (needed > TLS_HKDF_LABEL_SCRATCH_SIZE) {
+        ERROR_CODE(needed > 0xFFFF ? 0xFFFF : needed);
         return false;
     }
 
@@ -275,6 +288,7 @@ bool tls_derive_secret(
     size_t hash_len = get_hash_length(hash_algorithm);
 
     if (hash_len == 0 || transcript_hash_len != hash_len) {
+        ERROR();
         return false;
     }
 

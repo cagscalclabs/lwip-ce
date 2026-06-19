@@ -4,7 +4,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
-#include <debug.h>
 
 #include <lwip/cryptography/hash.h>
 #include <lwip.h>
@@ -35,11 +34,27 @@ const uint8_t expected3[] = {
     0xa3,0x3c,0xe4,0x59,0x64,0xff,0x21,0x67,0xf6,0xec,0xed,0xd4,0x19,0xdb,0x06,0xc1
 };
 
+static bool show_start_failure(void)
+{
+    char *err = lwip_get_start_errstring();
+
+    os_ClrHome();
+    printf("start failed");
+    os_NewLine();
+    printf("%s", err ? err : "unknown");
+    if (err && strcmp(err, "runtime-int failed") == 0)
+    {
+        os_NewLine();
+        printf("detail %u", (unsigned)lwip_start_last_error());
+    }
+    os_GetKey();
+    return false;
+}
 
 /* Main function, called first */
 int main(void)
 {
-    if (!lwip_start()) return 1;
+    if (!lwip_start() && !show_start_failure()) return 1;
 
     /* Clear the homescreen */
     os_ClrHome();
@@ -48,7 +63,7 @@ int main(void)
     
     // test 1
     if(!tls_hash_context_init(&ctx, TLS_HASH_SHA256)) return 1;
-    tls_hash_update(&ctx, test1, strlen(test1));
+    tls_hash_update(&ctx, (const uint8_t *)test1, strlen(test1));
     tls_hash_digest(&ctx, digest);
     if(memcmp(digest, expected1, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
@@ -58,7 +73,7 @@ int main(void)
     
     // test 2
     tls_hash_context_init(&ctx, TLS_HASH_SHA256);
-    ctx.update(&ctx._private, test2, strlen(test2));
+    ctx.update(&ctx._private, (const uint8_t *)test2, strlen(test2));
     ctx.digest(&ctx._private, digest);
     if(memcmp(digest, expected2, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
@@ -68,7 +83,7 @@ int main(void)
     
     // test 3
     tls_hash_context_init(&ctx, TLS_HASH_SHA256);
-    ctx.update(&ctx._private, test3, strlen(test3));
+    ctx.update(&ctx._private, (const uint8_t *)test3, strlen(test3));
     ctx.digest(&ctx._private, digest);
     if(memcmp(digest, expected3, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");

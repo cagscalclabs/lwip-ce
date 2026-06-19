@@ -818,6 +818,7 @@ static lwip_error_t lwip_socket_rx_ring_create(struct lwip_socket *conn)
                                       BUFFER_SOCKET_RING);
     if (!conn->rx_ring)
     {
+        ERROR_CODE(init > 0xFFFF ? 0xFFFF : init);
         conn->last_error = LWIP_ERR_MEM;
         return LWIP_ERR_MEM;
     }
@@ -2364,6 +2365,7 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
 
     if (lwip_socket_rx_ring_create(conn) != LWIP_OK)
     {
+        ERROR();
         return LWIP_ERR_MEM;
     }
 
@@ -2417,6 +2419,7 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
     return LWIP_OK;
 
 fail_mem:
+    ERROR();
     lwip_socket_rx_ring_destroy(conn);
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_MEM;
@@ -2840,6 +2843,7 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
         if (e != ERR_OK)
         {
             lwip_error_t mapped = lwip_err_translate(e);
+            ERROR_CODE(-e);
             conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_TCP,
                                LWIP_SOCKET_ERR_OP_WRITE, (int)e, mapped);
             return mapped;

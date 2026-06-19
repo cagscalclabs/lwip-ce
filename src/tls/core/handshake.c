@@ -1636,6 +1636,7 @@ bool tls_send_client_hello(
 {
     if (!ctx || !out || !written)
     {
+        ERROR();
         return false;
     }
 
@@ -1685,6 +1686,7 @@ bool tls_send_client_hello(
     required_len = 47 + required_ext_len;
     if (required_len > out_len || required_len - 4 > 0xFFFFFFu)
     {
+        ERROR_CODE(required_len > 0xFFFF ? 0xFFFF : required_len);
         return false;
     }
 
@@ -2811,6 +2813,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 {
     if (!ctx || ctx->state != TLS_STATE_SERVER_HELLO_RECEIVED)
     {
+        ERROR();
         return false;
     }
 
@@ -2989,6 +2992,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
 {
     if (!ctx)
     {
+        ERROR();
         return false;
     }
 
@@ -3268,6 +3272,7 @@ static bool tls_recv_finished(
         if (ctx->state != required_state)
         {
             ctx->state = TLS_STATE_ERROR;
+            ERROR();
             return false;
         }
     }
@@ -3337,6 +3342,7 @@ static bool tls_recv_finished(
 
     if (diff != 0)
     {
+        ERROR();
         return false;
     }
 

@@ -7,6 +7,10 @@
 #include "../includes/rsa.h"
 #include "../includes/crypto_guard.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_RSA
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 #define TLS_SCRATCH_SIZE 520u
 extern uint8_t __tls_scratch[TLS_SCRATCH_SIZE];
 
@@ -93,7 +97,10 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (inbuf == NULL) ||
         (outbuf == NULL) ||
         (in_len == 0))
+    {
+        ERROR();
         return false;
+    }
 
     tls_crypto_guard_enable();
     bool ok = false;
@@ -237,7 +244,10 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
         (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(pubkey[keylen - 1] & 1)))
+    {
+        ERROR();
         return false;
+    }
 
     tls_crypto_guard_enable();
     bool ok = false;
@@ -270,7 +280,10 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
         (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
         (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(pubkey[keylen - 1] & 1)))
+    {
+        ERROR();
         return false;
+    }
 
     RSA_TRACE("decsig: pre-guard");
     tls_crypto_guard_enable();
@@ -303,7 +316,10 @@ bool tls_rsa_decrypt_signature_exp(const uint8_t *signature,
         (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(pubkey[keylen - 1] & 1)) ||
         (exp == 0))
+    {
+        ERROR();
         return false;
+    }
 
     tls_crypto_guard_enable();
     bool ok = false;
@@ -423,6 +439,10 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
 
     /* Verify H' == H */
     ok = tls_bytes_compare(digest, H, hash.digestlen);
+    if (!ok)
+    {
+        ERROR();
+    }
 cleanup:
     tls_crypto_guard_disable();
     return ok;

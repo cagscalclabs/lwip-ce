@@ -9,6 +9,10 @@
 #include "../includes/x509.h"
 #include "../includes/tls.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_X509
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 static void *tls_x509_alloc(size_t size)
 {
     return tls_fileio_alloc(size);
@@ -436,6 +440,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
 
     if (!cert_der || cert_len == 0 || !fields || !out)
     {
+        ERROR();
         return false;
     }
 
@@ -745,6 +750,7 @@ bool tls_x509_import_and_parse_certificate(const char *pem_data, size_t size,
 
     if (!pem_data || size == 0 || !der_out || !der_written || !fields || !out)
     {
+        ERROR();
         return false;
     }
 
@@ -754,6 +760,7 @@ bool tls_x509_import_and_parse_certificate(const char *pem_data, size_t size,
                                          der_out_len,
                                          &parsed_der_len))
     {
+        ERROR();
         return false;
     }
 
@@ -769,6 +776,7 @@ struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t
 
     if (!pem_data || size == 0)
     {
+        ERROR();
         return NULL;
     }
 
@@ -779,6 +787,7 @@ struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t
     obj = (struct tls_x509_object *)tls_x509_alloc(total_len);
     if (!obj)
     {
+        ERROR();
         return NULL;
     }
     memset(obj, 0, total_len);
@@ -791,6 +800,7 @@ struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t
                                                obj->fields,
                                                &obj->parsed))
     {
+        ERROR();
         tls_secure_memzero(obj, total_len);
         tls_x509_free(obj);
         return NULL;

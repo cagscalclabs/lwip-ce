@@ -1000,21 +1000,21 @@ static void lwip_example_dbg_console_cb(const struct lwip_event *ev)
         lwip_example_linef("%s %s:%u",
                            lwip_debug_module_name(ev->module),
                            lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                           LWIP_EVENT_CODE_LINE(ev->data.code.loc));
+                           (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc));
         break;
     case LWIP_EV_WARN:
         lwip_example_linef("!%s %s:%u x%u",
                            lwip_debug_module_name(ev->module),
                            lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                           LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                           ev->data.code.extra);
+                           (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                           (unsigned)ev->data.code.extra);
         break;
     case LWIP_EV_ERROR:
         lwip_example_linef("X%s %s:%u x%u",
                            lwip_debug_module_name(ev->module),
                            lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                           LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                           ev->data.code.extra);
+                           (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                           (unsigned)ev->data.code.extra);
         break;
     case LWIP_EV_STATE_CHG:
         lwip_example_linef("%s -> %s",
@@ -1038,6 +1038,19 @@ static void lwip_example_dbg_console_cb(const struct lwip_event *ev)
         break;
     }
     lwip_example_draw_mem_stats();
+}
+
+/* lwip_event_fn: same rendering as lwip_example_dbg_console_cb, but only
+ * for WARN/ERROR events — everything else (INFO/DEBUG/STATE_CHG/IO_*) is
+ * dropped. For apps (like the browser) that own the full screen and have
+ * no dedicated console area, so routine traffic doesn't clobber the UI. */
+static void lwip_example_dbg_console_cb_errors_only(const struct lwip_event *ev)
+{
+    if (!ev || (ev->kind != LWIP_EV_WARN && ev->kind != LWIP_EV_ERROR))
+    {
+        return;
+    }
+    lwip_example_dbg_console_cb(ev);
 }
 
 static void lwip_example_show_socket_error(const char *label,

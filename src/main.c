@@ -523,8 +523,8 @@ static void option_sync_from_cfg(struct config_option *opt)
 
 static void apply_logging_config(void)
 {
-    /* The appvar-backed log system was replaced by the unified debug callback
-     * (lwip_set_debug). The persisted log_* config fields are retained for
+    /* The appvar-backed log system was replaced by the unified event callback
+     * (lwip_set_event_cb). The persisted log_* config fields are retained for
      * layout stability but no longer drive any runtime logging here. */
 }
 

@@ -12,6 +12,10 @@
 #include "../includes/pkcs8.h"
 #include "../includes/tls.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_PKCS8
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 void rmemcpy(void *dest, void *src, size_t len);
 
 /*
@@ -884,6 +888,7 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
     const uint8_t *parse_der = NULL;
     size_t parse_der_len = 0;
     size_t i;
+    tls_pkcs8_error_t local_error = TLS_PKCS8_ERR_NONE;
 
     if (error)
     {
@@ -892,10 +897,12 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
 
     if (!pem_data || size == 0)
     {
+        local_error = TLS_PKCS8_ERR_INVALID_ARG;
         if (error)
         {
-            *error = TLS_PKCS8_ERR_INVALID_ARG;
+            *error = local_error;
         }
+        ERROR_CODE(local_error);
         return NULL;
     }
 
@@ -909,10 +916,12 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
     }
     if (!meta)
     {
+        local_error = TLS_PKCS8_ERR_PEM_DECODE_FAIL;
         if (error)
         {
-            *error = TLS_PKCS8_ERR_PEM_DECODE_FAIL;
+            *error = local_error;
         }
+        ERROR_CODE(local_error);
         return NULL;
     }
 
@@ -926,9 +935,10 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
 
     if (!kf)
     {
+        local_error = TLS_PKCS8_ERR_ALLOC_FAIL;
         if (error)
         {
-            *error = TLS_PKCS8_ERR_ALLOC_FAIL;
+            *error = local_error;
         }
         goto error;
     }
@@ -941,9 +951,10 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
 
     if (!tls_pkcs8_pem_decode(pem_data, size, meta->pem_banner, kf->data, der_cap, &der_len))
     {
+        local_error = TLS_PKCS8_ERR_PEM_DECODE_FAIL;
         if (error)
         {
-            *error = TLS_PKCS8_ERR_PEM_DECODE_FAIL;
+            *error = local_error;
         }
         goto error;
     }
@@ -952,14 +963,16 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
     {
         if (!password)
         {
+            local_error = TLS_PKCS8_ERR_PASSWORD_REQUIRED;
             if (error)
             {
-                *error = TLS_PKCS8_ERR_PASSWORD_REQUIRED;
+                *error = local_error;
             }
             goto error;
         }
         if (!tls_pkcs8_decrypt_private(kf, der_len, password, &parse_der, &parse_der_len, error))
         {
+            local_error = error ? *error : TLS_PKCS8_ERR_DECRYPT_FAIL;
             goto error;
         }
     }
@@ -971,9 +984,17 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
 
     if (!meta->parse_func(kf, parse_der, parse_der_len, error))
     {
-        if (meta->type == TLS_PKCS8_ENCRYPTED_PRIVATE && error)
+        if (meta->type == TLS_PKCS8_ENCRYPTED_PRIVATE)
         {
-            *error = TLS_PKCS8_ERR_DECRYPT_FAIL;
+            local_error = TLS_PKCS8_ERR_DECRYPT_FAIL;
+            if (error)
+            {
+                *error = local_error;
+            }
+        }
+        else
+        {
+            local_error = error ? *error : TLS_PKCS8_ERR_NONE;
         }
         goto error;
     }
@@ -985,6 +1006,7 @@ struct tls_pkcs8_object *tls_pkcs8_import(const char *pem_data, size_t size, con
     return kf;
 
 error:
+    ERROR_CODE(local_error);
     if (kf)
     {
         tls_secure_memzero(kf, total_len);

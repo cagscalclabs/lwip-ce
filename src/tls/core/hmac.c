@@ -3,6 +3,10 @@
 #include "../includes/hash.h"
 #include "../includes/hmac.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_HMAC
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 static bool tls_hmac_sha256_init_adapter(void *ctx)
 {
     return tls_sha256_init((struct tls_sha256_context *)ctx);
@@ -22,7 +26,7 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, cons
     
     if((ctx==NULL)||
        (key==NULL)||
-       (keylen==0)) return false;
+       (keylen==0)) { ERROR(); return false; }
     struct tls_hash_context htmp;
     uint8_t sum[64] = {0};
     
@@ -58,6 +62,7 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, cons
             ctx->digest = tls_sha256hw_digest;
             break; */
         default:
+            ERROR_CODE(algorithm);
             return false;
     }
     ctx->_init(&ctx->_private);

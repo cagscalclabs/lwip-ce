@@ -4,6 +4,10 @@
 #include "../includes/hmac.h"
 #include "../includes/passwords.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_PASSWORDS
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 #define MIN(x, y)   ((x) < (y)) ? (x) : (y)
 #define HASH_BLOCK_OUT_MAX  32
 
@@ -18,7 +22,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
        (passlen==0) ||
        (saltlen==0) ||
        (keylen==0) ||
-       (rounds==0)) return false;
+       (rounds==0)) { ERROR(); return false; }
        
     uint8_t hash_buffer[HASH_BLOCK_OUT_MAX],
             hash_composite[HASH_BLOCK_OUT_MAX];
@@ -29,7 +33,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     
     //HASH = sha256
     // DK = T(i) for i in 0 => (keylen/HASH), concat
-    if(!tls_hmac_context_init(&initial, algorithm, password, passlen)) return false;
+    if(!tls_hmac_context_init(&initial, algorithm, password, passlen)) { ERROR(); return false; }
     
     size_t hash_len = initial.digestlen;
     

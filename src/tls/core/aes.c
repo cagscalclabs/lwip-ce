@@ -6,6 +6,10 @@
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_AES
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 #define MIN(x, y) ((x) < (y)) ? (x) : (y)
 #define KE_ROTWORD(x) (((x) << 8) | ((x) >> 24))
 
@@ -988,14 +992,20 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
     if ((ctx == NULL) ||
         (key == NULL) ||
         (iv == NULL))
+    {
+        ERROR();
         return false;
+    }
     int Nb = 4, Nr, Nk, idx;
     uint32_t temp, Rcon[] = {0x01000000, 0x02000000, 0x04000000, 0x08000000, 0x10000000, 0x20000000,
                              0x40000000, 0x80000000, 0x1b000000, 0x36000000, 0x6c000000, 0xd8000000,
                              0xab000000, 0x4d000000, 0x9a000000};
 
     if (iv_len > AES_BLOCK_SIZE)
+    {
+        ERROR();
         return false;
+    }
     tls_secure_memzero(ctx, sizeof(struct tls_aes_context));
     key_len <<= 3;
     switch (key_len)
@@ -1013,6 +1023,7 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         Nk = 8;
         break;
     default:
+        ERROR_CODE(key_len);
         return false;
     }
 
@@ -1053,6 +1064,7 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         // i don't think anything needs setup here
         break;
     default:
+        ERROR_CODE(mode);
         return false;
     }
     ctx->mode = mode;
@@ -1443,9 +1455,14 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
     tls_aes_digest(&tmp, digest);
 
     // memset(&tmp, 0, sizeof(tmp));
-    if (ctx->mode == TLS_AES_CCM)
-        return tls_bytes_compare(tag, digest, ctx->private.ccm.tag_len);
-    return tls_bytes_compare(tag, digest, AES_BLOCK_SIZE);
+    bool tag_ok = (ctx->mode == TLS_AES_CCM)
+        ? tls_bytes_compare(tag, digest, ctx->private.ccm.tag_len)
+        : tls_bytes_compare(tag, digest, AES_BLOCK_SIZE);
+    if (!tag_ok)
+    {
+        ERROR();
+    }
+    return tag_ok;
 }
 
 bool tls_aes_ccm_encrypt(const uint8_t *key, size_t key_len,
@@ -1506,8 +1523,12 @@ bool tls_aes_ccm_decrypt(const uint8_t *key, size_t key_len,
     if (!tls_aes_digest(&ctx, digest))
         return false;
     ok = tls_bytes_compare(tag, digest, tag_len);
-    if (!ok && (plaintext != ciphertext))
-        tls_secure_memzero(plaintext, ct_len);
+    if (!ok)
+    {
+        ERROR();
+        if (plaintext != ciphertext)
+            tls_secure_memzero(plaintext, ct_len);
+    }
     tls_secure_memzero(digest, sizeof digest);
     return ok;
 }

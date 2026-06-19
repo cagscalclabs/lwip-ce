@@ -3,6 +3,10 @@
 #include "../includes/hash.h"
 #include "../includes/crypto_guard.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_HASH
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 static bool tls_sha256_init_adapter(void *ctx)
 {
     return tls_sha256_init((struct tls_sha256_context *)ctx);
@@ -21,7 +25,10 @@ static void tls_sha256_digest_adapter(void *ctx, uint8_t *digest)
 bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
 {
     if (ctx == NULL)
+    {
+        ERROR();
         return false;
+    }
     switch (algorithm)
     {
     case TLS_HASH_SHA256:
@@ -37,6 +44,7 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
         ctx->digest = tls_sha256hw_digest;
         break;      */
     default:
+        ERROR_CODE(algorithm);
         return false;
     }
     return ctx->init(&ctx->_private);

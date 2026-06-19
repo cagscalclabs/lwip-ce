@@ -11,6 +11,10 @@
 
 #include <stddef.h>
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_DISPATCH
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_LWIP
+#include "lwip/logging.h"
+
 /* Per-dispatcher mutable state. The fn pointer is registered lazily by
  * the owning module (eth driver, RNG, etc.) via the public attach API
  * below; until attached, the dispatcher slot is inert even if its
@@ -34,6 +38,7 @@ void lwip_dispatch_attach(lwip_dispatch_id_t id, lwip_dispatch_fn fn);
 void lwip_dispatch_attach(lwip_dispatch_id_t id, lwip_dispatch_fn fn)
 {
     if ((unsigned)id >= LWIP_DISPATCH_COUNT) {
+        ERROR_CODE(id);
         return;
     }
     g_dispatchers[id].fn = fn;
@@ -43,6 +48,7 @@ void lwip_dispatch_attach(lwip_dispatch_id_t id, lwip_dispatch_fn fn)
 void lwip_dispatch_set_period(lwip_dispatch_id_t id, uint16_t period_ticks)
 {
     if ((unsigned)id >= LWIP_DISPATCH_COUNT) {
+        ERROR_CODE(id);
         return;
     }
     g_dispatchers[id].period = period_ticks;
@@ -56,6 +62,7 @@ void lwip_dispatch_set_period(lwip_dispatch_id_t id, uint16_t period_ticks)
 uint16_t lwip_dispatch_get_period(lwip_dispatch_id_t id)
 {
     if ((unsigned)id >= LWIP_DISPATCH_COUNT) {
+        ERROR_CODE(id);
         return 0;
     }
     return g_dispatchers[id].period;

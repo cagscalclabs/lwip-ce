@@ -51,21 +51,21 @@ static void lwip_chat_debug_cb(const struct lwip_event *ev)
         snprintf(line, sizeof(line), "%s %s:%u",
                  lwip_debug_module_name(ev->module),
                  lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                 LWIP_EVENT_CODE_LINE(ev->data.code.loc));
+                 (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc));
         break;
     case LWIP_EV_WARN:
         snprintf(line, sizeof(line), "!%s %s:%u x%u",
                  lwip_debug_module_name(ev->module),
                  lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                 LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                 ev->data.code.extra);
+                 (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                 (unsigned)ev->data.code.extra);
         break;
     case LWIP_EV_ERROR:
         snprintf(line, sizeof(line), "X%s %s:%u x%u",
                  lwip_debug_module_name(ev->module),
                  lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                 LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                 ev->data.code.extra);
+                 (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
+                 (unsigned)ev->data.code.extra);
         break;
     case LWIP_EV_STATE_CHG:
         snprintf(line, sizeof(line), "%s -> %s",

@@ -4,6 +4,10 @@
 
 #include "lwip/app_config.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_APP_CONFIG
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_LWIP
+#include "lwip/logging.h"
+
 static lwip_app_config_t g_cfg;
 static bool g_cfg_loaded = false;
 
@@ -65,15 +69,18 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
     var_t *var = os_GetAppVarData(LWIP_CFG_APPVAR, &archived);
     if (!var)
     {
+        WARN();
         lwip_app_config_defaults(cfg);
         return false;
     }
     uint16_t size = *((uint16_t *)var);
     if (size < sizeof(uint16_t))
     {
+        ERROR_CODE(size);
         lwip_app_config_defaults(cfg);
         return false;
     }
+    IO_FILE(LWIP_IO_READ, LWIP_CFG_APPVAR, size);
     const uint8_t *data = (const uint8_t *)var + 2;
     const lwip_app_config_t *stored = (const lwip_app_config_t *)data;
     if (stored->version == LWIP_CFG_VERSION && size >= sizeof(*cfg))
@@ -82,6 +89,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
         lwip_app_config_normalize(cfg);
         return true;
     }
+    WARN_CODE(stored->version);
     lwip_app_config_defaults(cfg);
     return false;
 }
@@ -92,6 +100,7 @@ bool lwip_app_config_save(const lwip_app_config_t *cfg)
 
     if (!cfg)
     {
+        ERROR();
         return false;
     }
 
@@ -99,10 +108,12 @@ bool lwip_app_config_save(const lwip_app_config_t *cfg)
     var = os_CreateAppVar(LWIP_CFG_APPVAR, (uint16_t)sizeof(*cfg));
     if (!var)
     {
+        ERROR();
         return false;
     }
     memcpy(var->data, cfg, sizeof(*cfg));
     lwip_app_config_arc_unarc_var(LWIP_CFG_APPVAR, OS_TYPE_APPVAR);
+    IO_FILE(LWIP_IO_WRITE, LWIP_CFG_APPVAR, sizeof(*cfg));
     return true;
 }
 

@@ -9,6 +9,10 @@
 #include "../includes/hash.h"
 #include "../../drivers/mem.h"
 
+#define LWIP_DBG_FILE_ID LWIP_FILE_RANDOM
+#define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
+#include "lwip/logging.h"
+
 #define TLS_RNG_HEALTHCHECK_INTERVAL_MS 30000u
 #define TLS_RNG_HEALTHCHECK_FAIL_THRESHOLD 3u
 #define TLS_RNG_HEALTHCHECK_SAMPLE_BYTES 32u
@@ -77,6 +81,7 @@ static bool tls_rng_request_q_push(uint8_t *out, size_t len, tls_random_request_
     node = (struct tls_rng_request_ctx *)mem_buffer_custom_malloc(sizeof(struct tls_rng_request_ctx));
     if (node == NULL)
     {
+        ERROR();
         return false;
     }
 
@@ -178,6 +183,7 @@ static bool tls_drbg_instantiate_from_seed_material(void)
     }
     if (!tls_sha256_buf(g_tls_drbg_seed_material, TLS_DRBG_STATE_BYTES, g_tls_drbg_state))
     {
+        ERROR();
         return false;
     }
     g_tls_drbg_seeded = true;
@@ -194,6 +200,7 @@ static bool tls_drbg_reseed_with_entropy(const uint8_t entropy[TLS_DRBG_ENTROPY_
 
     if (!g_tls_drbg_seeded)
     {
+        ERROR();
         return false;
     }
 
@@ -203,6 +210,7 @@ static bool tls_drbg_reseed_with_entropy(const uint8_t entropy[TLS_DRBG_ENTROPY_
     memcpy(material + TLS_DRBG_STATE_BYTES + TLS_DRBG_ENTROPY_STEP_BYTES, ctr_be, sizeof(ctr_be));
     if (!tls_sha256_buf(material, sizeof(material), g_tls_drbg_state))
     {
+        ERROR();
         return false;
     }
     g_tls_drbg_counter++;
@@ -230,6 +238,7 @@ static bool tls_drbg_generate_bytes(uint8_t *out, size_t len)
         memcpy(material + TLS_DRBG_STATE_BYTES, ctr_be, sizeof(ctr_be));
         if (!tls_sha256_buf(material, sizeof(material), block))
         {
+            ERROR();
             return false;
         }
 
@@ -241,6 +250,7 @@ static bool tls_drbg_generate_bytes(uint8_t *out, size_t len)
         update_mat[TLS_DRBG_STATE_BYTES + sizeof(block)] = 0xA5;
         if (!tls_sha256_buf(update_mat, sizeof(update_mat), g_tls_drbg_state))
         {
+            ERROR();
             return false;
         }
 
@@ -348,6 +358,7 @@ static bool tls_rng_healthcheck_sample_ok(void)
     if (g_tls_rng_prev_sample_valid &&
         memcmp(sample, g_tls_rng_prev_sample, sizeof(sample)) == 0)
     {
+        WARN();
         return false;
     }
 
@@ -370,10 +381,12 @@ static bool tls_rng_healthcheck_sample_ok(void)
 
     if ((ones < TLS_RNG_HEALTHCHECK_MIN_ONES) || (ones > TLS_RNG_HEALTHCHECK_MAX_ONES))
     {
+        WARN_CODE(ones);
         return false;
     }
     if (max_equal_run > TLS_RNG_HEALTHCHECK_MAX_EQUAL_RUN)
     {
+        WARN_CODE(max_equal_run);
         return false;
     }
 
@@ -392,6 +405,10 @@ static bool tls_rng_healthcheck_run_once(void)
             g_tls_rng_health_failures = 0;
             g_tls_rng_prev_sample_valid = false;
         }
+        else
+        {
+            ERROR();
+        }
         return g_tls_rng_health_ready;
     }
 
@@ -404,6 +421,7 @@ static bool tls_rng_healthcheck_run_once(void)
     g_tls_rng_health_failures++;
     if (g_tls_rng_health_failures >= TLS_RNG_HEALTHCHECK_FAIL_THRESHOLD)
     {
+        ERROR();
         g_tls_rng_health_ready = tls_random_init_entropy();
         g_tls_rng_health_failures = g_tls_rng_health_ready ? 0 : TLS_RNG_HEALTHCHECK_FAIL_THRESHOLD;
     }
@@ -578,6 +596,7 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
                 retries++;
                 if (retries >= TLS_RNG_REQUEST_BLOCKING_MAX_RETRIES)
                 {
+                    ERROR_CODE(retries);
                     if (cb != NULL)
                     {
                         cb(false, arg);
@@ -610,6 +629,7 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
     }
     else if (!tls_rng_request_q_push(out, len, cb, arg))
     {
+        ERROR();
         return false;
     }
 
