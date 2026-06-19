@@ -844,10 +844,12 @@ static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
     }
     if (lwip_socket_rx_ring_create(conn) != LWIP_OK)
     {
+        ERROR();
         return false;
     }
     if (!mem_buffer_reserve(conn->rx_ring, p->tot_len))
     {
+        ERROR_CODE(p->tot_len);
         conn->last_error = LWIP_ERR_MEM;
         return false;
     }
@@ -862,6 +864,7 @@ static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
                              (const uint8_t *)q->payload,
                              q->len))
         {
+            ERROR_CODE(q->len);
             conn->last_error = LWIP_ERR_MEM;
             return false;
         }
@@ -2725,8 +2728,17 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
                                    conn_dns_found_cb, conn);
     if (derr == ERR_OK)
     {
-        /* Cached hit — drive the next stage synchronously. */
+        /* Cached hit — drive the next stage synchronously. conn_dns_found_cb
+         * may itself fail (e.g. tcp_connect() returning ERR_MEM) and set
+         * conn->status/last_error accordingly; surface that instead of
+         * blindly reporting success. WAITING_SERVICES is the one non-error,
+         * non-connected outcome (conn_dns_found_cb parked us on the
+         * services waiter after an ERR_NETIF) — also fine to report OK. */
         conn_dns_found_cb(host, &conn->remote_ip, conn);
+        if (conn->status == LWIP_STATUS_ERROR)
+        {
+            return conn->last_error;
+        }
         return LWIP_OK;
     }
     if (derr == ERR_INPROGRESS)
@@ -2843,6 +2855,10 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
         if (e != ERR_OK)
         {
             lwip_error_t mapped = lwip_err_translate(e);
+            if (mapped == LWIP_ERR_MEM)
+            {
+                return mapped;
+            }
             ERROR_CODE(-e);
             conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_TCP,
                                LWIP_SOCKET_ERR_OP_WRITE, (int)e, mapped);
@@ -2885,6 +2901,10 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
         if (e != ERR_OK)
         {
             lwip_error_t mapped = lwip_err_translate(e);
+            if (mapped == LWIP_ERR_MEM)
+            {
+                return mapped;
+            }
             conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_ALTCP,
                                LWIP_SOCKET_ERR_OP_WRITE, (int)e, mapped);
             return mapped;

@@ -1099,6 +1099,7 @@ static bool tls_feed_inflight_body(struct tls_handshake_context *ctx,
 {
     if (msg_type == TLS_HANDSHAKE_CERTIFICATE)
     {
+        INFO("hs: certificate");
         if (!ctx->cert_walker)
         {
             ctx->cert_walker = tls_cert_walker_new(ctx);
@@ -1374,14 +1375,18 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     switch (msg_type)
     {
     case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
+        INFO("hs: encrypted extensions");
         return tls_recv_encrypted_extensions(ctx, msg, msg_len);
     /* TLS_HANDSHAKE_CERTIFICATE is handled by the streaming cert walker in
      * tls_consume_handshake_buffer; it never reaches this dispatcher. */
     case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
+        INFO("hs: cert verify");
         return tls_recv_certificate_verify(ctx, msg, msg_len);
     case TLS_HANDSHAKE_FINISHED:
+        INFO("hs: server finished");
         return tls_recv_finished(ctx, true, msg, msg_len);
     case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
+        INFO("hs: new ticket");
         return tls_recv_new_session_ticket(ctx, msg, msg_len);
     default:
         /* Unknown inner type — ignore per RFC 8446 §4 forward-compat note. */

@@ -30,11 +30,7 @@
 #include <string.h>
 #include <limits.h>
 
-/* Legacy per-step screen tracing is gone — TLS now emits structured events
- * through the unified stack-wide event sink (lwip_set_event_cb; see
- * lwip/logging.h, handshake.c). This stub keeps the remaining call sites
- * harmless; it does nothing. */
-static inline void tls_dbg_status(const char *msg) { (void)msg; }
+static inline void tls_dbg_status(const char *msg) { INFO(msg); }
 
 /* Debug flag for TLS CE layer */
 #ifndef ALTCP_TLS_CE_DEBUG
@@ -960,6 +956,7 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
         }
         else
         {
+            tls_dbg_status("lower: closed hs");
             /* Peer closed mid-handshake (or pre-upper-recv-attach).
              * The app saw ERR_ABRT; tear the wrapper down. Fall back to
              * abort if orderly close can't be enqueued, so we never
@@ -1393,11 +1390,15 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     /* Notify upper layer */
                     if (conn->connected)
                     {
+                        tls_dbg_status("upper: connected cb");
                         err_t err = conn->connected(conn->arg, conn, ERR_OK);
                         if (err != ERR_OK)
                         {
+                            tls_dbg_status("upper: connected fail");
                             return err;
                         }
+                        tls_dbg_status("upper: connected ok");
+                        state->flags |= ALTCP_TLS_CE_FLAGS_UPPER_CALLED;
                     }
 
                     if (state->rx == NULL)

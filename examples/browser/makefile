@@ -2,16 +2,17 @@
 # Makefile Options
 # ----------------------------
 
-NAME = LWTCCHAT
-DESCRIPTION = "lwIP TCP Chat Example"
+NAME = LWBRWS
+DESCRIPTION = "lwIP Raw Browser Example"
 COMPRESSED = NO
 ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 
-SERVER_IP ?= 192.168.2.14
+BROWSER_URL ?= http://example.com/
 
-CFLAGS = -Wall -Wextra -Oz -DCHAT_HOST=\"$(SERVER_IP)\"
-CXXFLAGS = -Wall -Wextra -Oz -DCHAT_HOST=\"$(SERVER_IP)\"
+CFLAGS = -Wall -Wextra -Oz \
+    -DBROWSER_URL=\"$(BROWSER_URL)\"
+CXXFLAGS = $(CFLAGS)
 
 # ----------------------------
 
