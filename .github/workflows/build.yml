@@ -30,33 +30,6 @@ jobs:
           fetch-depth: 0
           submodules: true
 
-      - name: Prepare nightly release notes
-        id: release_notes
-        run: |
-          git fetch --force --tags origin
-          NOTES_FILE="$RUNNER_TEMP/nightly-release-notes.md"
-          {
-            echo "Automated nightly lwIP-CE dylib build."
-            echo
-            echo "Commit: \`$GITHUB_SHA\`"
-            echo
-            echo "Changes since previous nightly release:"
-            echo
-            if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
-              if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
-                git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
-                echo
-              else
-                echo "- No commits since the previous nightly release."
-              fi
-            else
-              echo "- No previous nightly release tag found; listing recent history."
-              git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
-              echo
-            fi
-          } > "$NOTES_FILE"
-          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
-
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -162,6 +135,83 @@ jobs:
           path: ${{ github.workspace }}/build/
           if-no-files-found: error
 
+      - name: Publish job summary
+        if: always()
+        run: |
+          {
+            echo "## lwIP Latest Dylib"
+            echo
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| make dylib | ${{ steps.make_dylib.outcome }} |"
+            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
+            echo "| upload action artifact | ${{ steps.upload_action_artifact.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    outputs:
+      build_success: ${{ steps.upload_action_artifact.outcome == 'success' }}
+
+  dylib_unit_tests:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/tests.yml
+    with:
+      artifact_name: lwip-latest
+    secrets: inherit
+
+  cavp_validation:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/cavp.yml
+    with:
+      artifact_name: lwip-latest
+    secrets: inherit
+
+  publish:
+    needs: [dylib_latest, dylib_unit_tests, cavp_validation]
+    if: needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout lwIP-CE
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Download in-run build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/build
+
+      - name: Prepare nightly release notes
+        id: release_notes
+        run: |
+          git fetch --force --tags origin
+          NOTES_FILE="$RUNNER_TEMP/nightly-release-notes.md"
+          {
+            echo "Automated nightly lwIP-CE dylib build."
+            echo
+            echo "Commit: \`$GITHUB_SHA\`"
+            echo
+            echo "Changes since previous nightly release:"
+            echo
+            if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
+              if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
+                git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
+                echo
+              else
+                echo "- No commits since the previous nightly release."
+              fi
+            else
+              echo "- No previous nightly release tag found; listing recent history."
+              git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+              echo
+            fi
+          } > "$NOTES_FILE"
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
       - name: package nightly release asset
         id: package_release
         if: success()
@@ -199,12 +249,12 @@ jobs:
         if: always()
         run: |
           {
-            echo "## lwIP Latest Dylib"
+            echo "## lwIP Nightly Release"
             echo
             echo "| Step | Status |"
             echo "|------|--------|"
-            echo "| make dylib | ${{ steps.make_dylib.outcome }} |"
-            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
-            echo "| upload action artifact | ${{ steps.upload_action_artifact.outcome }} |"
+            echo "| unit tests | ${{ needs.dylib_unit_tests.result }} |"
+            echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
+            echo "| package nightly release asset | ${{ steps.package_release.outcome }} |"
             echo "| publish nightly release | ${{ steps.publish_release.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"

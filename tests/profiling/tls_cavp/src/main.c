@@ -38,12 +38,13 @@
 #include <fileioc.h>
 #include <ti/getkey.h>
 
-#include "../../../../src/tls/includes/aes.h"
-#include "../../../../src/tls/includes/hash.h"
-#include "../../../../src/tls/includes/hmac.h"
-#include "../../../../src/tls/includes/hkdf.h"
-#include "../../../../src/tls/includes/rsa.h"
-#include "../../../../src/tls/contrib/x25519/src/x25519.h"
+#include <lwip/cryptography/aes.h>
+#include <lwip/cryptography/hash.h>
+#include <lwip/cryptography/hmac.h>
+#include <lwip/cryptography/hkdf.h>
+#include <lwip/cryptography/rsa.h>
+#include <lwip/cryptography/x25519.h>
+#include <lwip.h>
 
 #define CAVPIN_NAME "CAVPIN"
 #define CAVPOUT_NAME "CAVPOUT"
@@ -438,6 +439,14 @@ int main(void)
 {
     os_ClrHome();
     printf("CAVP runner\n");
+
+    if (!lwip_start())
+    {
+        printf("ERROR: lwip_start failed\n");
+        printf("Press any key");
+        os_GetKey();
+        return 1;
+    }
 
     uint8_t in_handle = ti_Open(CAVPIN_NAME, "r");
     if (!in_handle)
