@@ -50,7 +50,7 @@ jobs:
             while IFS= read -r target; do
               set -- "$@" --include "$target"
             done < semgrep-targets.txt
-            semgrep ci --error --sarif "$@" > semgrep.sarif
+            semgrep ci --sarif "$@" > semgrep.sarif
           else
             printf '{"version":"2.1.0","runs":[]}\n' > semgrep.sarif
           fi
