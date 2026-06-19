@@ -11,12 +11,6 @@ name: Timing Profiling
 # gate the nightly release; see build.yml's dast/timing jobs).
 
 on:
-  push:
-    paths:
-      - '.github/workflows/timing.yml'
-      - 'src/tls/**'
-      - 'tests/common/scripts/parse_timing_appvar.py'
-      - 'tests/profiling/tls_timing/**'
   workflow_dispatch:
   workflow_call:
     inputs:
