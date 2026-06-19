@@ -10,6 +10,7 @@ on:
       - 'src/**'
       - '.github/workflows/sast.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -57,7 +58,7 @@ jobs:
             while IFS= read -r target; do
               set -- "$@" --include "$target"
             done < semgrep-targets.txt
-            semgrep ci --sarif "$@" > semgrep.sarif
+            semgrep ci --error --sarif "$@" > semgrep.sarif
           else
             printf '{"version":"2.1.0","runs":[]}\n' > semgrep.sarif
           fi

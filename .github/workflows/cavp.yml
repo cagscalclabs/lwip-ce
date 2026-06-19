@@ -10,13 +10,6 @@ name: CAVP Primitive Validation
 # HKDF/X25519 vectors, and emits CAVPIN.8xv + expected.json for the test run.
 
 on:
-  push:
-    paths:
-      - '.github/workflows/cavp.yml'
-      - 'src/tls/**'
-      - 'tests/common/scripts/cavp_fetch.py'
-      - 'tests/common/scripts/parse_cavp_output_appvar.py'
-      - 'tests/profiling/tls_cavp/**'
   workflow_dispatch:
   workflow_call:
     inputs:
