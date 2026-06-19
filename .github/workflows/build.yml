@@ -5,15 +5,17 @@ on:
     # 03:00 UTC is roughly 11 PM US Eastern during daylight time.
     - cron: '0 3 * * *'
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: write
   security-events: write
   actions: read
+  pull-requests: write
 
 concurrency:
-  group: lwip-nightly-release
-  cancel-in-progress: false
+  group: lwip-nightly-release-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CEDEV: ${{ github.workspace }}/CEdev
@@ -198,8 +200,10 @@ jobs:
     # constant-time check on a shared CI runner, where scheduling jitter
     # and container noise can flip a result without a real regression.
     # Both jobs still run here for visibility in the summary below, and
-    # always() lets publish proceed regardless of their outcome.
-    if: always() && needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
+    # always() lets publish proceed regardless of their outcome. Never runs
+    # on pull_request -- nightly tagging/release only happens off schedule
+    # or manual dispatch on the base repo.
+    if: always() && github.event_name != 'pull_request' && needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
@@ -291,3 +295,29 @@ jobs:
             echo "| package nightly release asset | ${{ steps.package_release.outcome }} |"
             echo "| publish nightly release | ${{ steps.publish_release.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  notify_pr_on_failure:
+    needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast, timing]
+    if: always() && github.event_name == 'pull_request' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comment on PR with failure summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "@${{ github.event.pull_request.user.login }} CI failed on this PR (commit \`${{ github.event.pull_request.head.sha }}\`):"
+            echo
+            echo "| Job | Result |"
+            echo "|-----|--------|"
+            echo "| build | ${{ needs.dylib_latest.result }} |"
+            echo "| unit tests | ${{ needs.dylib_unit_tests.result }} |"
+            echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
+            echo "| sast | ${{ needs.sast.result }} |"
+            echo "| dast | ${{ needs.dast.result }} |"
+            echo "| timing | ${{ needs.timing.result }} |"
+            echo
+            echo "[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
