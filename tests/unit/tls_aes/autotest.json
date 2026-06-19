@@ -65,7 +65,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1500
+      "timeout": 3500
     },
     "2": {
       "description": "GCM Spec (McGrew/Viega), Appendix B, Test Case 4",

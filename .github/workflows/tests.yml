@@ -201,12 +201,22 @@ jobs:
           while IFS= read -r -d '' test; do
             status=0
             test_dir=$(dirname "$test")
+            failed_hash_ids=""
             test_start=$(($(date +%s%N)/1000000))
             make -C "$test_dir" clean
             make -C "$test_dir" || ((status=$?))
             if [ $status -eq 0 ]; then
+              set +e
               AUTOTESTER_LIBS_DIR="${{github.workspace}}/release/appinst" \
-                make -C "$test_dir" test || ((status=$?))
+                make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
+              status=${PIPESTATUS[0]}
+              set -e
+              if [ "$status" -ne 0 ]; then
+                # Autotester reports each mismatched hash on its own line, e.g.:
+                #   [Test failed!] Hash #1 ("...") did not match the expected CRC ...
+                # Collect every failed hash id (a run can fail more than one).
+                failed_hash_ids=$(grep -Eo 'Hash #[0-9]+' "$test_dir/autotest.log" | grep -Eo '[0-9]+' | sort -nu | paste -sd, - || true)
+              fi
             fi
             test_done=$(($(date +%s%N)/1000000))
             test_duration=$((test_done - test_start))
@@ -218,7 +228,7 @@ jobs:
               (( total_failed += 1 ))
               test_status="failed"
             fi
-            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
+            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"$failed_hash_ids\"}" > "$test_dir/result.json"
           done < <(find ${{env.LWIP_DYLIB_TESTS}} -name autotest.json -print0)
 
           end_time=$(($(date +%s%N)/1000000))
@@ -272,6 +282,7 @@ jobs:
             test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
 
             status=$(echo "$test_obj" | jq -r '.status')
+            failed_hash_ids=$(echo "$test_obj" | jq -r '.failed_hash_ids // ""')
             module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
             module_desc=${module_desc:-"(no description)"}
             module_desc=${module_desc//$'\n'/ }
@@ -297,8 +308,10 @@ jobs:
               hash_desc=${hash_desc//|/\\|}
               if [ "$status" = "passed" ]; then
                 hash_status="✅ Passed"
-              else
+              elif [[ ",$failed_hash_ids," == *",$hash_id,"* ]]; then
                 hash_status="❌ Failed"
+              else
+                hash_status="✅ Passed"
               fi
               echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
             done

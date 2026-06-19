@@ -181,14 +181,24 @@ jobs:
     uses: ./.github/workflows/dast.yml
     secrets: inherit
 
+  timing:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/timing.yml
+    with:
+      artifact_name: lwip-latest
+    secrets: inherit
+
   publish:
-    needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
-    # dast is intentionally excluded from this gate: tests/dast.json is a
-    # manually-produced, operator-graded report (see dast.yml), not a
-    # fresh-per-run signal. Gating nightly publish on it would block
-    # releases on human availability rather than code correctness. The
-    # dast job still runs here for visibility in the summary below, and
-    # always() lets publish proceed regardless of its outcome.
+    needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast, timing]
+    # dast and timing are intentionally excluded from this gate. dast.json
+    # is a manually-produced, operator-graded report (see dast.yml), not a
+    # fresh-per-run signal -- gating on it blocks releases on human
+    # availability rather than code correctness. timing is a statistical
+    # constant-time check on a shared CI runner, where scheduling jitter
+    # and container noise can flip a result without a real regression.
+    # Both jobs still run here for visibility in the summary below, and
+    # always() lets publish proceed regardless of their outcome.
     if: always() && needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
     runs-on: ubuntu-latest
 
@@ -277,6 +287,7 @@ jobs:
             echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
             echo "| sast | ${{ needs.sast.result }} |"
             echo "| dast (informational) | ${{ needs.dast.result }} |"
+            echo "| timing (informational) | ${{ needs.timing.result }} |"
             echo "| package nightly release asset | ${{ steps.package_release.outcome }} |"
             echo "| publish nightly release | ${{ steps.publish_release.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"

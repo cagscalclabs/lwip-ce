@@ -1,14 +1,41 @@
 {
   "description": "Verify timing behavior. Compute acceptible jitter-based cycle deviation based on MAD, a tuning factor (c), then test that no input class exceeds the acceptable deviation more than 75% of the time",
   "transfer_files": [
-    "bin/TIMINGS.8xp",
-    "clibs.8xg"
+    "bin/XTIMING.8xp",
+      "../../common/clibs.8xg",
+    "../../common/lwIPCERT.8xv",
+    "../../common/lwIPINST.8xp",
+    "../../common/lwIP.0.8xv",
+    "../../common/lwIP.1.8xv",
+    "../../common/lwIP.2.8xv",
+    "../../common/lwIP.3.8xv",
+    "../../common/lwIP.4.8xv",
+    "../../common/lwIP.5.8xv",
+    "../../common/lwip.8xv"
   ],
   "target": {
-    "name": "TIMINGS",
+    "name": "XTIMING",
     "isASM": true
   },
   "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|2",
+    "key|left",
+    "key|enter",
+    "delay|1000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -24,6 +51,15 @@
         "7157D347"
       ],
       "timeout": 1000000000
+    },
+      "2": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
     }
   }
 }

@@ -1,9 +1,14 @@
 name: Timing Profiling
 
 # Differential timing analysis of the TLS primitives via the tls_timing
-# profiler. Split out from the unit-test workflow so that timing variance
-# and primitive correctness fail independently (and surface as independent
-# README badges).
+# profiler. Dyload variant: links tests/profiling/tls_timing against the
+# curated, manifest-gated lwip.lib produced by build.yml -- the same
+# artifact a real consumer app would dyload. Split out from the unit-test
+# workflow so that timing variance and primitive correctness fail
+# independently. Triggers on push to relevant paths, manual dispatch, and
+# as a workflow_call target from build.yml (informational only there --
+# timing measurements on a shared CI runner are noisy, so this does not
+# gate the nightly release; see build.yml's dast/timing jobs).
 
 on:
   push:
@@ -13,17 +18,24 @@ on:
       - 'tests/common/scripts/parse_timing_appvar.py'
       - 'tests/profiling/tls_timing/**'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: "Name of an in-run build artifact (e.g. lwip-latest) to download instead of fetching the published nightly release."
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
-  LWIP_TESTS: ${{github.workspace}}/tests
   LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
+  LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
   CEMU_PATH: ${{github.workspace}}/CEmu
   CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
   SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
+  CEDEV: ${{github.workspace}}/CEdev
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
 jobs:
@@ -56,7 +68,38 @@ jobs:
       - name: Add CEdev to PATH
         run: |
           echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
-          echo $GITHUB_PATH
+
+      - name: Download in-run build artifact
+        if: inputs.artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{github.workspace}}/release
+
+      - name: Download nightly lwIP dylib build
+        if: inputs.artifact_name == ''
+        run: |
+          mkdir -p "${{github.workspace}}/release"
+          curl -fL \
+            -o "${{github.workspace}}/lwip-latest.tar.gz" \
+            https://github.com/${{ github.repository }}/releases/download/nightly/lwip-latest.tar.gz
+          tar xzf "${{github.workspace}}/lwip-latest.tar.gz" -C "${{github.workspace}}/release"
+
+      - name: Verify build artifact contents
+        run: |
+          test -f "${{github.workspace}}/release/appinst/lwIPINST.8xp"
+          test -n "$(find "${{github.workspace}}/release/appinst" -name 'LWIP.*.8xv' -print -quit)"
+          ls -lh "${{github.workspace}}/release"
+
+      - name: Install lwip.lib + headers into CEdev
+        run: |
+          mkdir -p "${{env.CEDEV}}/lib/libload" "${{env.CEDEV}}/include"
+          cp "${{github.workspace}}/release/lwip.lib" "${{env.CEDEV}}/lib/libload/lwip.lib"
+          cp "${{github.workspace}}/release/lwip.h" "${{env.CEDEV}}/include/lwip.h"
+          cp -r "${{github.workspace}}/release/lwip" "${{env.CEDEV}}/include/lwip"
+          test -f "${{env.CEDEV}}/lib/libload/lwip.lib"
+          test -f "${{env.CEDEV}}/include/lwip.h"
+          test -d "${{env.CEDEV}}/include/lwip"
 
       - name: Download CEmu Rom
         run: |
@@ -123,14 +166,32 @@ jobs:
           ls -lh ${{env.AUTOTESTER_ROM}}
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
-      - name: Download CE Libraries Group (clibs.8xg)
+      - name: Prepare shared dyload test files
         run: |
-          test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
-          mkdir -p "$test_dir"
+          mkdir -p ${{env.LWIP_TESTS_COMMON}}
+          cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
+          cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_TESTS_COMMON}}/
+          for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
+            name="$(basename "$appvar")"
+            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/${name/LWIP/lwIP}"
+          done
           curl -fL \
-            -o "$test_dir/clibs.8xg" \
-            https://github.com/CE-Programming/libraries/releases/download/v14.2/clibs.8xg
-          ls -lh "$test_dir/clibs.8xg"
+            -o ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv \
+            https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
+          curl -fL \
+            -o ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
+            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          test -f ${{env.LWIP_TESTS_COMMON}}/clibs.8xg
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.0.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.1.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.2.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.3.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.4.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.5.8xv
+          ls -lh ${{env.LWIP_TESTS_COMMON}}
 
       - name: Run Timing Unit Test
         run: |
@@ -141,7 +202,7 @@ jobs:
 
           test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
           status=0
-          failed_hash_id=""
+          failed_hash_ids=""
           test_start=$(($(date +%s%N)/1000000))
           make -C "$test_dir" clean
           make -C "$test_dir"
@@ -150,10 +211,10 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
-            failed_hash_id=$(grep -Eo 'hashWait\|[0-9]+' "$test_dir/autotest.log" | tail -n1 | cut -d'|' -f2 || true)
-            if [ -z "$failed_hash_id" ]; then
-              failed_hash_id=$(grep -Eo 'num[0-9]+_dump' "$test_dir/autotest.log" | tail -n1 | sed -E 's/[^0-9]//g' || true)
-            fi
+            # Autotester reports each mismatched hash on its own line, e.g.:
+            #   [Test failed!] Hash #1 ("...") did not match the expected CRC ...
+            # Collect every failed hash id (a run can fail more than one).
+            failed_hash_ids=$(grep -Eo 'Hash #[0-9]+' "$test_dir/autotest.log" | grep -Eo '[0-9]+' | sort -nu | paste -sd, - || true)
           fi
           test_done=$(($(date +%s%N)/1000000))
           test_duration=$((test_done - test_start))
@@ -166,7 +227,7 @@ jobs:
             total_failed=1
             test_status="failed"
           fi
-          echo -e "{\"name\":\"tls_timing\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_id\":\"$failed_hash_id\"}" > "$test_dir/result.json"
+          echo -e "{\"name\":\"tls_timing\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"$failed_hash_ids\"}" > "$test_dir/result.json"
 
           end_time=$(($(date +%s%N)/1000000))
           echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
@@ -352,7 +413,7 @@ jobs:
           test_name="tls_timing"
           test_dir="$LWIP_PROF_TESTS/$test_name"
           status=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .status' ${{github.workspace}}/results-timing.json)
-          failed_hash_id=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .failed_hash_id // ""' ${{github.workspace}}/results-timing.json)
+          failed_hash_ids=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .failed_hash_ids // ""' ${{github.workspace}}/results-timing.json)
           module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
           module_desc=${module_desc:-"(no description)"}
           module_desc=${module_desc//$'\n'/ }
@@ -377,18 +438,10 @@ jobs:
             hash_desc=${hash_desc//|/\\|}
             if [ "$status" = "passed" ]; then
               hash_status="✅ Passed"
+            elif [[ ",$failed_hash_ids," == *",$hash_id,"* ]]; then
+              hash_status="❌ Failed"
             else
-              if [[ "$failed_hash_id" =~ ^[0-9]+$ ]]; then
-                if [ "$hash_id" = "$failed_hash_id" ]; then
-                  hash_status="❌ Failed"
-                elif [ "$hash_id" -lt "$failed_hash_id" ]; then
-                  hash_status="✅ Passed"
-                else
-                  hash_status="⚪ Not reached"
-                fi
-              else
-                hash_status="❓ Unknown"
-              fi
+              hash_status="✅ Passed"
             fi
             echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
           done

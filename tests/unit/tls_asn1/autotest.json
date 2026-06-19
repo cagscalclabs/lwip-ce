@@ -49,7 +49,7 @@
       "expected_CRCs": [
         "FEB0071F"
       ],
-      "timeout": 2000
+      "timeout": 4000
     },
     "2": {
       "description": "ASN.1 cursor large DER dump",

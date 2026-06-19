@@ -8,13 +8,14 @@
 #include <string.h>
 #include <time.h>
 
-#include "aes.h"
-#include "bytes.h"
-#include "hash.h"
-#include "hkdf.h"
-#include "hmac.h"
-#include "passwords.h"
-#include "x25519.h"
+#include <lwip/cryptography/aes.h>
+#include <lwip/cryptography/bytes.h>
+#include <lwip/cryptography/hash.h>
+#include <lwip/cryptography/hkdf.h>
+#include <lwip/cryptography/hmac.h>
+#include <lwip/cryptography/passwords.h>
+#include <lwip/cryptography/x25519.h>
+#include <lwip.h>
 
 #define TIMING_SAMPLES 50u
 #define TIMING_REPS_FAST 64u
@@ -1118,6 +1119,15 @@ int main(void)
     struct primitive_result r_aes_ccm_enc;
     struct primitive_result r_aes_ccm_dec;
     struct primitive_result r_x25519;
+
+    if (!lwip_start())
+    {
+        os_ClrHome();
+        printf("ERROR: lwip_start failed\n");
+        printf("Press any key");
+        os_GetKey();
+        return 1;
+    }
 
     (void)timing_log_begin();
     timing_logf("tls_timing,start,c=%u,c_rig=%u,sigma_scale=%u\n",
