@@ -3,14 +3,19 @@ name: Timing Profiling
 # Differential timing analysis of the TLS primitives via the tls_timing
 # profiler. Dyload variant: links tests/profiling/tls_timing against the
 # curated, manifest-gated lwip.lib produced by build.yml -- the same
-# artifact a real consumer app would dyload. Split out from the unit-test
-# workflow so that timing variance and primitive correctness fail
-# independently. Triggers on push to relevant paths, manual dispatch, and
-# as a workflow_call target from build.yml (informational only there --
-# timing measurements on a shared CI runner are noisy, so this does not
-# gate the nightly release; see build.yml's dast/timing jobs).
+# artifact a real consumer app would dyload. Runs entirely on its own
+# schedule, independent of build.yml: timing measurements on a shared CI
+# runner are noisy (scheduling jitter, container noise can flip a result
+# without a real regression), so coupling it to every build/PR would make
+# it a source of flaky gating rather than a trend signal. Without an
+# artifact_name input (the schedule/dispatch case), it profiles the most
+# recently published nightly release dylib.
 
 on:
+  schedule:
+    # 04:00 UTC, one hour after build.yml's nightly dylib build, so this
+    # always profiles a fresh nightly release artifact.
+    - cron: '0 4 * * *'
   workflow_dispatch:
   workflow_call:
     inputs:
