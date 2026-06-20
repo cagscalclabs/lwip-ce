@@ -4,6 +4,7 @@
  * Includes Callbacks, USB Event handlers, and netif initialization
  */
 
+#include <string.h>
 #include <sys/util.h>
 #include <stddef.h>
 #include <usbdrvce.h>
@@ -1418,18 +1419,51 @@ static bool init_ethernet_usb_device(usb_device_t device)
         return false;
     }
 
-    eth_device_t tmp = {0};
-    eth_device_t *eth = NULL;
-    size_t xferd, parsed_len, desc_len;
-    usb_error_t err;
-    tmp.device = device;
-
     if (ifnums_used == 0b11111111)
     {
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_WARNING,
                     ("WARNING, device=%p, if_slots full", device));
         return false;
     }
+
+    /* No "resume into an existing live device" path: a disconnect is always
+     * a full teardown (see USB_DEVICE_DISCONNECTED_EVENT/DISABLED_EVENT
+     * below), and a later ENABLED_EVENT for what is logically the same
+     * adapter is treated as a brand-new device, same as a typical USB host
+     * stack (e.g. Linux's disconnect()/probe() pair never rehydrates old
+     * driver state). If usb_fn.get_device_data(device) somehow still
+     * returns a stale pointer (a prior init's struct, not yet reaped),
+     * discard it rather than reuse it -- eth below is always a fresh
+     * allocation, written directly during the parse below. There is no
+     * separate scratch struct: a previous version of this function staged
+     * parsed fields in a local `tmp` before copying into eth, partly to
+     * avoid touching a live device mid-parse (no longer a concern, given
+     * the above) and partly because making that scratch struct `static`
+     * was empirically confirmed (twice, independently) to break real-
+     * hardware device init for unknown reasons -- seeAdded note in project
+     * memory: usb-ethernet-tmp-bss-bug. Removing tmp entirely sidesteps
+     * that mystery rather than relying on it staying a stack automatic. */
+    eth_device_t *stale = (eth_device_t *)usb_fn.get_device_data(device);
+    if (stale)
+    {
+        usb_fn.set_device_data(device, NULL);
+        eth_free_device_storage(stale);
+    }
+
+    eth_device_t *eth = malloc(sizeof(eth_device_t));
+    if (!eth)
+    {
+        return false;
+    }
+    memset(eth, 0, sizeof(eth_device_t));
+    eth->device = device;
+
+    bool netif_registered = false;
+    bool device_data_set = false;
+    bool rx_ring_created = false;
+
+    size_t xferd, parsed_len, desc_len;
+    usb_error_t err;
 
     struct
     {
@@ -1454,11 +1488,11 @@ static bool init_ethernet_usb_device(usb_device_t device)
     } descriptor;
     err = usb_fn.get_descriptor(device, USB_DEVICE_DESCRIPTOR, 0, &descriptor.dev, sizeof(usb_device_descriptor_t), &xferd);
     if (err || (xferd != sizeof(usb_device_descriptor_t)))
-        return false;
+        goto fail;
 
     // check for main DeviceClass being type 0x00 - composite/if-specific
     if (descriptor.dev.bDeviceClass != USB_INTERFACE_SPECIFIC_CLASS)
-        return false;
+        goto fail;
 
     // parse both configs for the correct one
     uint8_t num_configs = descriptor.dev.bNumConfigurations;
@@ -1548,9 +1582,9 @@ static bool init_ethernet_usb_device(usb_device_t device)
                             // use this to set configuration
                             configdata.addr = &descriptor.conf;
                             configdata.len = desc_len;
-                            tmp.type = iface->bInterfaceSubClass;
+                            eth->type = iface->bInterfaceSubClass;
                             if (usb_fn.set_configuration(device, configdata.addr, configdata.len))
-                                return false;
+                                goto fail;
                             parse_state |= PARSE_HAS_CONTROL_IF;
                         }
                     }
@@ -1577,11 +1611,11 @@ static bool init_ethernet_usb_device(usb_device_t device)
                             (!usb_fn.get_string_descriptor(device, ethdesc->iMacAddress, 0, macaddr, DESCRIPTOR_MAX_LEN, &xferd_tmp)))
                         {
                             for (uint24_t i = 0; i < NETIF_MAX_HWADDR_LEN; i++)
-                                tmp.hwaddr[i] = (nibble(macaddr->bString[2 * i]) << 4) | nibble(macaddr->bString[2 * i + 1]);
+                                eth->hwaddr[i] = (nibble(macaddr->bString[2 * i]) << 4) | nibble(macaddr->bString[2 * i + 1]);
 
                             parse_state |= PARSE_HAS_MAC_ADDR;
                         }
-                        else if (!usb_fn.control_transfer(usb_fn.get_device_endpoint(device, 0), &get_mac_addr, &tmp.hwaddr[0], ETH_USB_MAX_RETRIES, &xferd_tmp))
+                        else if (!usb_fn.control_transfer(usb_fn.get_device_endpoint(device, 0), &get_mac_addr, &eth->hwaddr[0], ETH_USB_MAX_RETRIES, &xferd_tmp))
                         {
                             parse_state |= PARSE_HAS_MAC_ADDR;
                         }
@@ -1592,10 +1626,10 @@ static bool init_ethernet_usb_device(usb_device_t device)
                             uint24_t rmac[2];
                             rmac[0] = (uint24_t)(random() & RMAC_RANDOM_MAX);
                             rmac[1] = (uint24_t)(random() & RMAC_RANDOM_MAX);
-                            memcpy(&tmp.hwaddr[0], rmac, 6);
-                            tmp.hwaddr[0] &= 0xFE;
-                            tmp.hwaddr[0] |= 0x02;
-                            if (!usb_fn.control_transfer(usb_fn.get_device_endpoint(device, 0), &set_mac_addr, &tmp.hwaddr[0], ETH_USB_MAX_RETRIES, &xferd_tmp))
+                            memcpy(&eth->hwaddr[0], rmac, 6);
+                            eth->hwaddr[0] &= 0xFE;
+                            eth->hwaddr[0] |= 0x02;
+                            if (!usb_fn.control_transfer(usb_fn.get_device_endpoint(device, 0), &set_mac_addr, &eth->hwaddr[0], ETH_USB_MAX_RETRIES, &xferd_tmp))
                             {
                                 parse_state |= PARSE_HAS_MAC_ADDR;
                             }
@@ -1613,7 +1647,7 @@ static bool init_ethernet_usb_device(usb_device_t device)
                     case USB_NCM_FUNCTIONAL_DESCRIPTOR:
                     {
                         usb_ncm_functional_descriptor_t *ncm = (usb_ncm_functional_descriptor_t *)cs;
-                        tmp.class.ncm.bm_capabilities = ncm->bmNetworkCapabilities;
+                        eth->class.ncm.bm_capabilities = ncm->bmNetworkCapabilities;
                     }
                     break;
                     }
@@ -1625,44 +1659,39 @@ static bool init_ethernet_usb_device(usb_device_t device)
              * next iteration. Either is a fatal parse error. */
             if (desc->bLength == 0 || parsed_len + desc->bLength > desc_len)
             {
-                return false;
+                goto fail;
             }
             parsed_len += desc->bLength;
             desc = (usb_descriptor_t *)(((uint8_t *)desc) + desc->bLength);
         }
     }
-    return false;
+    goto fail;
 init_success:
-    if (ethernet_control_setup(&tmp))
-        return false;
+    if (ethernet_control_setup(eth))
+        goto fail;
 
-    if (ncm_control_setup(&tmp))
-        return false;
+    if (ncm_control_setup(eth))
+        goto fail;
 
-    tmp.rx.callback = (tmp.type == USB_NCM_SUBCLASS)   ? ncm_receive_callback
-                      : (tmp.type == USB_ECM_SUBCLASS) ? ecm_receive_callback
-                                                       : NULL;
+    eth->rx.callback = (eth->type == USB_NCM_SUBCLASS)   ? ncm_receive_callback
+                       : (eth->type == USB_ECM_SUBCLASS) ? ecm_receive_callback
+                                                          : NULL;
 
-    tmp.tx.emit = (tmp.type == USB_NCM_SUBCLASS)   ? ncm_bulk_transmit
-                  : (tmp.type == USB_ECM_SUBCLASS) ? ecm_bulk_transmit
-                                                   : NULL;
+    eth->tx.emit = (eth->type == USB_NCM_SUBCLASS)   ? ncm_bulk_transmit
+                   : (eth->type == USB_ECM_SUBCLASS) ? ecm_bulk_transmit
+                                                      : NULL;
 
-    if ((tmp.tx.emit == NULL) || (tmp.rx.callback == NULL))
-        return false;
+    if ((eth->tx.emit == NULL) || (eth->rx.callback == NULL))
+        goto fail;
 
     // switch to alternate interface
     if (usb_fn.set_interface(device, if_bulk.addr, if_bulk.len))
-        return false;
+        goto fail;
 
     // set endpoint data
-    tmp.rx.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.in);
-    tmp.tx.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.out);
-    tmp.interrupt.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.interrupt);
-    // allocate eth_device_t => contains type, usb device, metadata, and INT/RX buffers
-    bool new_eth = false;
-    bool netif_registered = false;
-    bool device_data_set = false;
-    bool rx_ring_created = false;
+    eth->rx.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.in);
+    eth->tx.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.out);
+    eth->interrupt.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.interrupt);
 
     // better ifnum assignment
     uint8_t ifnum_assigned;
@@ -1678,38 +1707,18 @@ init_success:
         // this is a bug because code earlier should detect this condition
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
                     ("ERROR: Interface assign err. This is a bug. File an issue on https://github.com/cagstech/lwip-ce with the following:\nusb_ethernet.c:731 ifs_used=%u, if_assign=%u", ifnums_used, ifnum_assigned));
-        return false;
+        goto fail;
     }
 #endif
 
-    if (usb_fn.get_device_data(device))
     {
-        // ## IF DEVICE ALREADY USED FOR NETIF ##
-        // reuse existing eth_device_t address
-        eth = (eth_device_t *)usb_fn.get_device_data(device);
-        struct mem_buffer *saved_rx_ring = eth->rx_ring;
-        // copy new usb config without destroying netif config
-        memcpy(eth, &tmp, sizeof(eth_device_t) - sizeof(struct netif));
-        eth->rx_ring = saved_rx_ring;
-        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
-                    ("RESUME, netif=%c%c%u <- device=%p", eth->iface.name[0], eth->iface.name[1], eth->iface.num, device));
-        eth_netif_init(&eth->iface);
-    }
-    else
-    {
-        // ## ELSE CONFIG NEW NETIF ##
-        if ((eth = malloc(sizeof(eth_device_t))) == NULL)
-            return false;
-        new_eth = true;
-        memcpy(eth, &tmp, sizeof(eth_device_t));
         struct netif *iface = &eth->iface;
         // add to lwIP list of active netifs (save pointer to eth_device_t too)
         if (netif_add_noaddr(iface, eth, eth_netif_init, netif_input) == NULL)
         {
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
                         ("ERROR, ? netif= <- device=%p, netif add failed", device));
-            free(eth);
-            return false;
+            goto fail;
         }
         netif_registered = true;
         // fetch next available device number to use
@@ -1732,23 +1741,19 @@ init_success:
                     ("NEW, netif=%c%c%u <- device=%p", iface->name[0], iface->name[1], iface->num, device));
     }
 
+    eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE,
+                                     ETH_RX_RING_MAX_SIZE,
+                                     ETH_RX_RING_STEP_SIZE,
+                                     BUFFER_RX_RING);
     if (!eth->rx_ring)
     {
-        eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE,
-                                         ETH_RX_RING_MAX_SIZE,
-                                         ETH_RX_RING_STEP_SIZE,
-                                         BUFFER_RX_RING);
-        if (!eth->rx_ring)
-        {
-            eth_cleanup_failed_init(device, eth, new_eth, netif_registered,
-                                    device_data_set, rx_ring_created);
-            return false;
-        }
-        rx_ring_created = true;
-        mem_buffer_set_drain(eth->rx_ring, eth_rx_ring_drain, &eth->iface);
-        mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
-        mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
+        goto fail;
     }
+    rx_ring_created = true;
+    mem_buffer_set_drain(eth->rx_ring, eth_rx_ring_drain, &eth->iface);
+    mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
+    mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
+
     /* Wire the RX-schedule dispatcher into the master tick (idempotent —
      * attach is safe to repeat across multiple device-init calls). It re-arms
      * RX transfers that didn't self-re-arm and reaps unplugged devices.
@@ -1772,12 +1777,20 @@ init_success:
                                  eth) != USB_SUCCESS)
     {
         (void)eth_xmit_fatal_error(eth, ETH_USB_MAX_RETRIES);
-        eth_cleanup_failed_init(device, eth, new_eth, netif_registered,
-                                device_data_set, rx_ring_created);
-        return false;
+        goto fail;
     }
     eth_transfer_began(eth);
     return true;
+
+fail:
+    /* eth is always a fresh allocation here (no resume path -- see the
+     * comment at function entry), so new_eth is always true: a failure at
+     * any point, from the very first descriptor fetch through the final
+     * schedule_transfer, fully tears down whatever partial state was
+     * built. */
+    eth_cleanup_failed_init(device, eth, true, netif_registered,
+                            device_data_set, rx_ring_created);
+    return false;
 }
 
 usb_error_t

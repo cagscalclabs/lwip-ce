@@ -13,7 +13,7 @@ IRC_PORT ?= 6667
 IRC_TLS_PORT ?= 6697
 IRC_CHANNEL ?= \#cemetech
 IRC_NICK ?= LWIPCE
-IRC_DEBUG ?= 1
+IRC_DEBUG ?= 0
 
 CFLAGS = -Wall -Wextra -Oz \
     -DIRC_HOST=\"$(IRC_HOST)\" \
