@@ -1178,11 +1178,11 @@ int main(void)
     timing_logf("tls_timing,end\n");
     timing_log_end();
 
-#ifdef TLS_TIMING_AUTORUN
     os_ClrHome();
     os_FontSelect(os_LargeFont);
     printf("TLS Timing\n");
     printf("Done.");
+#ifndef TLS_TIMING_AUTORUN
     os_GetKey();
 #endif
 
