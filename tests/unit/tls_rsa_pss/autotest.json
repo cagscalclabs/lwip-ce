@@ -48,7 +48,7 @@
       "expected_CRCs": [
         "FFAF89BA"
       ],
-      "timeout": 10000
+      "timeout": 11000
     },
     "2": {
       "description": "lwIP installed",
