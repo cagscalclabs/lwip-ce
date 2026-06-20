@@ -183,6 +183,54 @@ jobs:
     uses: ./.github/workflows/dast.yml
     secrets: inherit
 
+  update_badges:
+    # GitHub's native badge.svg for a reusable workflow (cavp.yml, tests.yml,
+    # sast.yml, dast.yml) only reflects runs triggered DIRECTLY on that
+    # workflow file -- a workflow_call invocation from build.yml (which is
+    # how these always run in practice) never appears in the callee's own
+    # run history, so badge.svg silently goes stale relative to what
+    # actually happened. Work around this by writing a shields.io
+    # "endpoint" JSON per check (https://shields.io/badges/endpoint-badge)
+    # reflecting this run's real per-job result, and publishing it to an
+    # orphan `badges` branch the README badges read via raw.githubusercontent.com.
+    needs: [dylib_unit_tests, cavp_validation, sast, dast]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Write badge JSON
+        run: |
+          mkdir -p badges
+          write_badge() {
+            local file="$1" label="$2" result="$3"
+            local message color
+            case "$result" in
+              success)  message="passing"; color="brightgreen" ;;
+              failure)  message="failing"; color="red" ;;
+              cancelled) message="cancelled"; color="lightgrey" ;;
+              skipped)  message="skipped"; color="lightgrey" ;;
+              *)        message="unknown"; color="lightgrey" ;;
+            esac
+            cat > "badges/$file" <<EOF
+          {"schemaVersion":1,"label":"$label","message":"$message","color":"$color"}
+          EOF
+          }
+          write_badge "unit-tests.json" "unit tests" "${{ needs.dylib_unit_tests.result }}"
+          write_badge "cavp.json" "cavp" "${{ needs.cavp_validation.result }}"
+          write_badge "sast.json" "sast" "${{ needs.sast.result }}"
+          write_badge "dast.json" "dast" "${{ needs.dast.result }}"
+
+      - name: Publish badge JSON to badges branch
+        run: |
+          cd badges
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -q -B badges
+          git add .
+          git commit -q -m "Update badges for ${{ github.sha }}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" badges:badges
+
   publish:
     needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
     # dast is intentionally excluded from this gate. dast.json is a

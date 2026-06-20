@@ -3,25 +3,27 @@
 **Main CI**
 
 ![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=master&cache=1)
-![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=master&cache=1)
+![Unit Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/unit-tests.json)
 
 <hr>
 
 **Code Quality**
 
-![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?branch=master&cache=1)
-![DAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/dast.yml/badge.svg?branch=master&cache=1)
+![SAST](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/sast.json)
+![DAST](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/dast.json)
 
 *SAST uses `git diff` against upstream lwIP to filter out untouched upstream code and scans only targets unique to this repository. For upstream issues, file an issue with [nonGNU](https://savannah.nongnu.org/bugs/?group=lwip).*
 
 *DAST uses a locally-run hardware-in-the-loop workflow because the current emulator does not support Ethernet devices. A helper program runs on the calculator and exposes the DAST target while a local script attaches to it, performs network probes, advances the calculator-side test state, and writes results to JSON. This workflow then parses the JSON report and updates the test state accordingly.*
+
+*Unit Tests, SAST, and DAST badges are sourced from a custom `badges` branch updated by `build.yml`, since these workflows only ever run as `workflow_call` targets and GitHub's native badge.svg cannot see those runs (see build.yml's `update_badges` job).*
 
 <hr>
 
 **Cryptography Quality Checks**
 
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
-![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
+![CAVP Primitive Validation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/cavp.json)
 
 <hr>
 
