@@ -21,11 +21,12 @@ extern "C" {
 #endif
 
 /** Locate the lwIP flash app, verify its export table magic, patch the
- *  libload trampolines, and run the app-side init. Returns a status code
- *  directly:
+ *  shared app/stub export prefix, and run the app-side init. Export count
+ *  differences are tolerated; trailing newer exports remain unavailable to
+ *  that app/stub pairing. Returns a status code directly:
  *    0 = success
  *    1 = app not found
- *    2 = export-table error (bad magic or export count mismatch) */
+ *    2 = export-table error (bad magic or missing descriptor) */
 uint8_t lwip_init_runtime_opaque(void *malloc_fn, void *free_fn, void *realloc_fn);
 
 #define lwip_init_runtime() \

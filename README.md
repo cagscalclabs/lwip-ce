@@ -5,6 +5,8 @@
 ![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=master&cache=1)
 ![Unit Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/unit-tests.json)
 
+*The same workflow that generates the nightly release also runs the CI tests, however running this in this way causes the default GitHub badges to never update. To work around this, we export a badge for each test result to img.shield.io, hence the different aesthetic. You can still audit last run output and results from the actions tab.*
+
 <hr>
 
 **Code Quality**

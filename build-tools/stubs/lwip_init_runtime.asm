@@ -1,7 +1,7 @@
 ; lwip_init_runtime_opaque(malloc, free, realloc)
 ;   Stores the three CRTs in _fn_imports_table, locates the lwIP app, verifies
-;   the export-table magic, and patches each in-lib trampoline (jp 0) to point
-;   at its real in-app function address.
+;   the export-table magic, and patches the shared prefix of the in-lib
+;   trampolines (jp 0) to point at their real in-app function addresses.
 ;
 ; App presence is checked first with the self-contained _find_lwip_app flash
 ; app-table walk below because the OS FindAppStart is not safe to call when
@@ -35,7 +35,7 @@ __err_lwip_init_failed_str:
 
 	__lwip_errno		db		0
 	__lwip_is_newer		db		0
-	__lwip_max_errno	equ		3
+	__lwip_max_errno	equ		4
 
 lwip_is_newer:
 	ld a, (__lwip_is_newer)
@@ -67,6 +67,8 @@ lwip_get_start_errstring:
 ;	call lwip_get_start_errno and/or lwip_is_newer if you care
 lwip_start_with_crt:
 	call ti._frameset0
+	xor a
+	ld (__lwip_is_newer), a
 	ld hl, (ix + 6)
 	ld (_fn_imports_table + 0), hl		; malloc
 	ld hl, (ix + 9)
@@ -134,23 +136,21 @@ lwip_start_with_crt:
 	inc hl
 
 	; Append-mode slot ABI guarantees existing entries never move or get
-	; renumbered across builds — only new ones are added at the end. So an
-	; app with FEWER exports than expected is missing slots we need (fail),
-	; but an app with MORE exports than expected just has trailing slots we
-	; don't know about yet (harmless — clamp bc so the patch loop only
-	; walks/patches the entries this consumer was actually built against).
+	; renumbered across builds — only new ones are added at the end. Patch
+	; the shared prefix, i.e. min(app_count, stub_count). Missing trailing
+	; exports remain unavailable to this pairing instead of aborting startup.
 	push hl
 	ld hl, __lwip_expected_export_count
 	or a, a
-	sbc hl, bc
+	sbc hl, bc				; expected - actual
 	pop hl
-	jr z, .count_match			; equal: nothing to clamp
-	jr c, .lib_too_old			; expected > actual: app too old, fail
-	ld bc, __lwip_expected_export_count	; expected < actual: clamp
+	jr z, .count_ready			; equal: copy all
+	jr nc, .count_ready			; expected > actual: bc already actual
+	ld bc, __lwip_expected_export_count	; expected < actual: clamp to expected
 	ld a, 1
 	ld (__lwip_is_newer), a
 
-.count_match:
+.count_ready:
 	push ix
 	ld ix, _lwip_jp_table_start + 1		; first trampoline operand
 .patch_loop:

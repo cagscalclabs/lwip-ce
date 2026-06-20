@@ -52,10 +52,12 @@ A few working pieces make an Application usable as a LIBLOAD-style API source:
      function lwIP needs, and write them into an *import table*.
   2. Locate the lwIP Application, failing if it isn't installed. If found,
      jump to the fixed offset where the jump table lives and check for a
-     *magic header*; a missing header or a size mismatch against what the
-     companion expects is also a failure.
-  3. Once both checks pass, copy the *export table* into the second-layer
-     LibLoad jump table in ``lwip.8xv``.
+     *magic header*; a missing header is a failure.
+  3. Once the magic check passes, copy the shared prefix of the resident
+     app's *export table* and the companion library's expected export count
+     into the second-layer LibLoad jump table in ``lwip.8xv``. Count
+     differences are tolerated: trailing newer exports simply remain
+     unavailable to that app/stub pairing.
   4. Once the *export table* is patched, ``lwip_init_runtime_internal`` is called
      which takes a pointer to the *import table* and the size of table. This function
      first initializes the ``.bss`` and ``.data`` sections of the Application's runtime
@@ -89,14 +91,14 @@ The whole sequence, end to end:
                               |
                               v
    +-------------------------------------------------------------+
-   | verify "LWIPTB" magic and export count                      |
-   | mismatch -> fail closed (stale / incompatible app)          |
+   | verify "LWIPTB" magic                                      |
+   | missing/invalid descriptor -> fail closed                   |
    +-------------------------------------------------------------+
                               |
                               v
    +-------------------------------------------------------------+
-   | patch each trampoline -> relocated in-app address           |
-   | after this loop, every call dispatches into the app         |
+   | patch shared export prefix -> relocated in-app address      |
+   | trailing newer exports remain unavailable to this pairing   |
    +-------------------------------------------------------------+
                               |
                               v

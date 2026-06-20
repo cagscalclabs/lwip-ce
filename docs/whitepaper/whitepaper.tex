@@ -317,6 +317,24 @@ fontupper=\footnotesize
 		These limitations are not the result of neglect, but of constraint. The TI-84+ CE platform imposes strict trade-offs between computational performance, memory usage, and defensive hardening. Certain implementation decisions reflect careful balancing between theoretical ideal and practical feasibility on a 48 MHz, resource-limited system.
 		
 		That said, this document is written with full transparency. The architecture, cryptographic constructions, mitigation, and design rationale are laid out in detail. Readers are encouraged to evaluate the implementation on its merits. You may find that the conservatism expressed here exceeds what the engineering decisions ultimately warrant.
+
+		\paragraph{Stack TLDR}
+		The stack work in this section is scoped to a resident networking application, a small callable companion library, and the memory/driver contracts needed to make that model reliable on the TI-84+ CE. It is not trying to recreate a desktop shared-library loader or a protected operating-system networking service.
+
+		\begin{center}
+		\footnotesize
+		\rowcolors{2}{ltgray}{white}
+		\begin{tabularx}{0.94\textwidth}{@{}p{0.25\textwidth}X@{}}
+			\toprule
+			\rowcolor{gray!18}
+			\textbf{Status} & \textbf{Scope} \\
+			\midrule
+			Supported now & USB CDC Ethernet transport, lwIP protocol dispatch, resident-app callability, fixed memory reservation, explicit event/error reporting, and a bounded traceback buffer. \\
+			Planned & Post-v1.0 append-only export growth with normalized ABI expectations and continued tightening of consumer compatibility checks. \\
+			Out of scope & Process isolation, secure local storage, preemptive scheduling, protected memory, and general-purpose dynamic loading beyond the lwIP companion-library model. \\
+			\bottomrule
+		\end{tabularx}
+		\end{center}
 		
 		\subsection{Adapting lwIP to the TI-84+ CE}
 		The initial porting effort was undertaken by Cemetech user \textit{commandblockguy}, who prepared lwIP for the TI-84+ CE environment by isolating and conditionally excluding features incompatible with the calculator’s execution model. This included removing OS-dependent functionality, threading assumptions, and unsupported memory abstractions, while preserving protocol correctness.
@@ -640,6 +658,9 @@ Before beginning this project we needed to itemize what was available and what w
 
 			Concretely, the implementation realizes this with three cooperating pieces. The lwIP application links an \emph{export table} into its own image at a fixed early descriptor offset: a six-byte magic marker (\texttt{"LWIPTB"}) followed by one entry per public symbol. Each entry is emitted as a normal relocatable symbol reference, so the installer patches it to the real installed Flash address when it fixes the app. The \emph{companion library} is an ordinary \texttt{LIBLOAD} library the consumer links against; it carries one jump-table trampoline per exported lwIP function plus an imports table (host CRT slots and the USB vtable). At runtime, a \emph{bootstrap} routine ties the two together by computing the app's linked-image base from installed app metadata, adding the fixed descriptor offset, validating the table, and copying the relocated addresses into the trampolines.
 
+			\paragraph{Export ABI Compatibility}
+			Before the formal v1.0 release, release-candidate builds should be treated as a matched pair: the resident application and \texttt{lwip.8xv} companion library are expected to be updated together. After v1.0, the public export table is intended to be append-only: existing slots keep their meaning, and new exports are added at the end. The \texttt{"LWIPTB"} magic remains the fail-closed format check. The export count is a compatibility boundary, not an all-or-nothing equality check: the bootstrap copies the smaller of the resident application's export count and the companion library's expected count. If the resident app has more entries than the companion knows about, the older companion simply cannot surface the newer exports. If the companion was built expecting more entries than the installed app provides, only the shared prefix is patched; calls that require trailing, newer exports remain unavailable until the resident app is upgraded. This gives forward-compatible startup for unchanged APIs while making backward compatibility for newly added APIs explicitly conditional on updating the resident app.
+
 			\subsubsection{Initialization Handshake}
 			Bringing the stack up happens in two stages: the ordinary \texttt{LIBLOAD} initialization of the companion library, followed by lwIP-CE's own runtime setup, triggered explicitly when the consumer calls \texttt{lwip\_start\_with\_crt(malloc, free, realloc)} --- aliased to \texttt{lwip\_start()} for the common case. Figure~\ref{fig:libload_bootstrap} traces the full sequence. The key ordering constraint is that the application's own initialization (\texttt{lwip\_init\_runtime\_internal}) is itself an exported call, so it can only run \emph{after} the trampolines have been patched --- the bootstrap reaches into the app to finish setting up the app.
 
@@ -661,9 +682,9 @@ Before beginning this project we needed to itemize what was available and what w
 					\node[lib, below=of call] (find) {\textbf{Bootstrap locates the resident application}\\
 						by name $\rightarrow$ app base; metadata $\rightarrow$ linked image base; fixed offset $\rightarrow$ export table};
 					\node[lib, below=of find] (verify) {\textbf{Verify} \texttt{"LWIPTB"} \textbf{magic}\\
-						count/magic mismatch $\Rightarrow$ fail closed (stale/incompatible app)};
-					\node[lib, below=of verify] (patch) {\textbf{Patch each trampoline} $\rightarrow$ relocated in-app address\\
-						after this loop, every \texttt{lwip\_*} call dispatches into the app};
+						missing/invalid descriptor $\Rightarrow$ fail closed};
+					\node[lib, below=of verify] (patch) {\textbf{Patch shared export prefix} $\rightarrow$ relocated in-app address\\
+						trailing newer exports remain unavailable to this pairing};
 					\node[app, below=of patch] (internal) {\textbf{Call} \texttt{lwip\_init\_runtime\_internal} \textbf{(now live)}\\
 						app zeroes \texttt{.bss}, copies \texttt{.data} from Flash, copies imports table into its reserved storage};
 					\node[app, below=of internal] (ready) {\textbf{Stack ready} --- consumer's allocator, USB, and every API call wired to the resident app};
@@ -789,6 +810,24 @@ for (uint8_t i = 0; i < count; i++) {
 		\section{TLS Architecture and Security Model}
 	
 	This section is not a full TLS implementation guide; it focuses only on platform-specific design choices and any standards deviations that require explicit justification.
+
+	\paragraph{TLS TLDR}
+	The TLS implementation is a constrained TLS~1.3 client designed for remote-network security on calculator hardware. It supports the handshake and certificate paths needed for current RSA-based interoperability, while deliberately leaving heavier or identity-bearing features out until their implementation can be tested and bounded.
+
+	\begin{center}
+	\footnotesize
+	\rowcolors{2}{ltgray}{white}
+	\begin{tabularx}{0.94\textwidth}{@{}p{0.25\textwidth}X@{}}
+		\toprule
+		\rowcolor{gray!18}
+		\textbf{Status} & \textbf{TLS Scope} \\
+		\midrule
+		Supported now & TLS~1.3 client handshakes, RSA-PSS/SHA-256 \texttt{CertificateVerify} for 1024--2048 bit RSA leaf keys, streaming certificate-chain parsing, RSA/SHA-256 adjacent-link checks where supported, empty client-certificate response handling, signed compact truststore loading, and application-visible warnings when trust anchoring is incomplete. \\
+		Planned & ECDSA-P-256 verification, RSA keys up to 4096 bits where performance permits, wider RSA-PSS hash variants, and non-fatal truststore age warnings once a reliable time source is available. \\
+		Out of scope & Client-certificate identity support, local physical compromise resistance, secure key storage, hardware-backed trust, RSA-PKCS1 \texttt{CertificateVerify} signatures forbidden by TLS~1.3, and full desktop WebPKI behavior. \\
+		\bottomrule
+	\end{tabularx}
+	\end{center}
 	
 	\subsection{Threat Model}
 	
@@ -1452,6 +1491,44 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		Several design choices carry that result. The USB Ethernet driver limits scope to CDC ECM/NCM behavior that can be made reliable on the device. The membuffer layer makes allocation pressure visible and gives ingress paths a way to degrade predictably. The RNG model treats the hardware entropy source as something to be measured, conditioned, and health-checked rather than assumed. The truststore design replaces desktop-scale WebPKI expectations with a signed, compact, platform-specific trust boundary. The TLS implementation and profiling suite then build on those constraints with explicit tests, timing telemetry, and failure behavior.
 
 		The four self-audit workflows described in this document --- deterministic unit testing, CAVP-vector validation, differential timing analysis, and static analysis (SAST) --- are not isolated test jobs but a single, deliberately layered \emph{pre-audit validation pipeline}. Unit testing establishes functional correctness and fail-closed behavior against RFC- and CAVP-derived vectors; CAVP validation independently confirms that the shipping on-device binary computes standard algorithm outputs correctly, end to end; differential timing analysis characterizes the constant-time properties that functional tests cannot see; and SAST (Semgrep) statically scans the project's own additions against upstream lwIP for unsafe patterns, so review attention is focused on changed code rather than the inherited base. Each runs on every push and emits a self-contained, source-independent job summary. Collectively they are intended to do the preparatory work a formal third-party audit would otherwise start from scratch: they make the project's correctness, timing, and code-quality claims continuously reproducible, machine-checked, and legible to an external reviewer, so that an audit can begin from evidence rather than assertion. That this depth of standing validation is achievable on a calculator is itself part of the result.
+
+		\newpage
+		\subsection{Known Limitations and Roadmap}
+		The table below consolidates the main edges called out across the document. It is intended to separate current support, planned compatibility work, and features that are deliberately outside this implementation's security claim.
+
+		\begingroup
+		\footnotesize
+		\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.22\textwidth}>{\raggedright\arraybackslash}p{0.17\textwidth}>{\raggedright\arraybackslash}p{0.55\textwidth}@{}}
+			\toprule
+			\textbf{Area} & \textbf{Status} & \textbf{Boundary} \\
+			\midrule
+			\endhead
+			TLS \texttt{CertificateVerify} & Supported now & \texttt{rsa\_pss\_rsae\_sha256} with 1024--2048 bit RSA leaf keys. \\
+			& Planned & ECDSA-P-256, RSA keys up to 4096 bits where timing and memory permit, and wider RSA-PSS hash variants. \\
+			& Out of scope & RSA-PKCS1 \texttt{CertificateVerify}, which TLS~1.3 forbids. \\
+			\addlinespace
+			Certificate-chain verification & Supported now & Streaming chain parsing; RSA/SHA-256 adjacent-link verification where supported; fatal failure for verifiable links that do not check out. \\
+			& Planned & Broader issuer-key and signature-algorithm coverage. \\
+			& Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
+			\addlinespace
+			Client authentication & Supported now & \texttt{CertificateRequest} is parsed, included in the transcript, and answered with an empty client certificate list. \\
+			& Planned & None currently committed. \\
+			& Out of scope & Client-certificate identity support and private-key signing on device. \\
+			\addlinespace
+			Truststore policy & Supported now & Signed compact AppVar truststore, schema-version checks, and graceful degradation when trust anchoring is unavailable. \\
+			& Planned & Warning-only truststore age checks once reliable time exists. \\
+			& Out of scope & Treating AppVars or local storage as tamper-resistant. \\
+			\addlinespace
+			Runtime ABI & Supported now & Magic-checked resident export table; the bootstrap patches the shared prefix of app/stub exports. \\
+			& Planned & Append-only export growth after v1.0 with stable existing slot meanings. \\
+			& Out of scope & Backward compatibility for calls to exports that do not exist in the installed resident app. \\
+			\addlinespace
+			Hardware security & Supported now & Best-effort memory clearing, bounded diagnostics, RNG health checks, and remote-network threat modeling. \\
+			& Planned & Continued timing/profiling coverage and wider sample collection. \\
+			& Out of scope & Secure boot, protected memory, secure key storage, and resistance to determined physical compromise. \\
+			\bottomrule
+		\end{longtable}
+		\endgroup
 		
 		At the same time, this implementation should be understood as a constrained engineering artifact, not as a certified cryptographic module. It has not undergone formal third-party audit or certification, and its security claims are bounded by the hardware profile described in this document. Local physical attackers, compromised binaries, and side-channel observation remain outside the set of problems this project can fully solve. The mitigations provided here are best-effort hardening measures, not a substitute for secure hardware.
 		
