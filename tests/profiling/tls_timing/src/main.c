@@ -1182,9 +1182,7 @@ int main(void)
     os_FontSelect(os_LargeFont);
     printf("TLS Timing\n");
     printf("Done.");
-#ifndef TLS_TIMING_AUTORUN
     os_GetKey();
-#endif
 
     return 0;
 }
