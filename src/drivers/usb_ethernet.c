@@ -1816,7 +1816,10 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         }
         if (usb_fn.get_device_flags(usb_device) & USB_IS_HUB)
         {
-            // add handling for hubs
+            /* Configure the hub -- this powers its downstream ports so
+             * attached devices enumerate on their own, with independent
+             * ENABLED_EVENTs, regardless of what else the user has plugged
+             * into the hub. */
             union
             {
                 uint8_t bytes[DESCRIPTOR_MAX_LEN];   // allocate 256 bytes for descriptors
@@ -1830,8 +1833,14 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
             usb_fn.set_configuration(usb_device, &descriptor.conf, desc_len);
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                         ("NEW device=%p, type=hub", usb_device));
-            break;
         }
+        /* Whether this device (hub or not) also exposes a CDC-ECM/NCM
+         * interface -- a combo hub+ethernet device exposes both. Checked
+         * unconditionally and inline: init_ethernet_usb_device() walks every
+         * interface looking for one and safely returns false if this is
+         * just a plain hub with no ethernet function of its own. No longer
+         * a stack-depth concern -- this function now allocates eth directly
+         * instead of staging a ~2.4KB tmp struct first. */
         if (init_ethernet_usb_device(usb_device))
             break;
         break;

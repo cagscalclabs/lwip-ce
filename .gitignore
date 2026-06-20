@@ -86,7 +86,7 @@ tmp/
 
 *.zip
 CLAUDE.md
-services-releases
+service-releases
 
 tests/common/*.8xp
 tests/common/*.8xv
