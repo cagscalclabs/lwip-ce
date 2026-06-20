@@ -190,8 +190,18 @@ def build_entropy_runs_appendix(dat_path: Path, source_rel: str) -> str:
     for block in blocks:
         grouped.setdefault(model_label(block), []).append(block)
 
+    best_pairs = [p for p in (choose_best_pair(b) for b in blocks) if p is not None]
+    best_pair_keys = {(p.test_label, p.bit) for p in best_pairs}
+
     out: List[str] = []
-    out.append("Only bits presenting with some statistical randomness are shown below. Bits showing p values of 0 or 1 are filtered for brevity. Values of \\(k<1\\) indicate observed decorrelation at least as strong as the independent-sample floor; downstream bounds cap these cases at \\(k=1\\).")
+    out.append("Only bits presenting with some statistical randomness are shown below. Bits showing p values of 0 or 1 are filtered for brevity. Values of \\(k_{\\text{eff}}<1\\) indicate observed decorrelation at least as strong as the independent-sample floor; downstream bounds cap these cases at \\(k_{\\text{eff}}=1\\).")
+    out.append("")
+    out.append(
+        "Rows highlighted in orange are the single least-biased bit per test run (the R17 \\(p_1\\) closest to "
+        "\\(0.5\\)) --- these are the exact rows used as the one-bit-per-run sample in "
+        "Section~\\ref{ssec:correlation_calibration}'s working-value computation; every other row is shown for "
+        "context but is not part of that computation."
+    )
     out.append("")
     out.append(f"\\textbf{{Source File:}} \\texttt{{{tex_escape(source_rel)}}}")
 
@@ -199,6 +209,9 @@ def build_entropy_runs_appendix(dat_path: Path, source_rel: str) -> str:
         out.append("")
         out.append("No parseable entropy test blocks were found.")
         return "\n".join(out) + "\n"
+
+    all_k_values: List[float] = []
+    best_pair_k_values: List[float] = []
 
     for model in sorted(grouped.keys(), key=model_sort_key):
         rows: List[str] = []
@@ -214,8 +227,13 @@ def build_entropy_runs_appendix(dat_path: Path, source_rel: str) -> str:
                 assert r17 is not None
                 k = k_inversion_raw(n=17.0, p_in=r0.p1, p_out=r17.p1)
                 k_values.append(k)
+                test_label = f"test{block.index}"
+                is_best = (test_label, bit) in best_pair_keys
+                if is_best:
+                    best_pair_k_values.append(k_inversion(n=17.0, p_in=r0.p1, p_out=r17.p1))
+                row_prefix = "\\rowcolor{orange!20}" if is_best else ""
                 rows.append(
-                    f"test{block.index} & {bit} & "
+                    f"{row_prefix}{test_label} & {bit} & "
                     f"{tex_table_cell(fmt_p1(r0))} & {tex_table_cell(fmt_bias(r0))} & {tex_table_cell(fmt_transition(r0))} & "
                     f"{tex_table_cell(fmt_p1(r17))} & {tex_table_cell(fmt_bias(r17))} & {tex_table_cell(fmt_transition(r17))} & "
                     f"{fmt_k_estimate(k)} \\\\"
@@ -227,23 +245,56 @@ def build_entropy_runs_appendix(dat_path: Path, source_rel: str) -> str:
             out.append("No non-zero bit rows were present for this model group.")
             continue
 
+        all_k_values.extend(k_values)
+
         out.append("{\\scriptsize")
         out.append("\\setlength{\\LTleft}{0pt}")
         out.append("\\setlength{\\LTright}{0pt}")
-        out.append("\\begin{longtable}{@{\\extracolsep{\\fill}}r r r r r r r r r@{}}")
+        out.append("\\begin{longtable}{@{}*{9}{r}@{}}")
         out.append("\\toprule")
-        out.append("\\textbf{Run} & \\textbf{Bit} & \\textbf{R0 p1} & \\textbf{R0 bias} & \\textbf{R0 trans} & \\textbf{R17 p1} & \\textbf{R17 bias} & \\textbf{R17 trans} & \\textbf{k} \\\\")
+        out.append("\\textbf{Run} & \\textbf{Bit} & \\textbf{R0 p1} & \\textbf{R0 bias} & \\textbf{R0 trans} & \\textbf{R17 p1} & \\textbf{R17 bias} & \\textbf{R17 trans} & \\textbf{$k_{\\text{eff}}$} \\\\")
         out.append("\\midrule")
         out.append("\\endfirsthead")
         out.append("\\toprule")
-        out.append("\\textbf{Run} & \\textbf{Bit} & \\textbf{R0 p1} & \\textbf{R0 bias} & \\textbf{R0 trans} & \\textbf{R17 p1} & \\textbf{R17 bias} & \\textbf{R17 trans} & \\textbf{k} \\\\")
+        out.append("\\textbf{Run} & \\textbf{Bit} & \\textbf{R0 p1} & \\textbf{R0 bias} & \\textbf{R0 trans} & \\textbf{R17 p1} & \\textbf{R17 bias} & \\textbf{R17 trans} & \\textbf{$k_{\\text{eff}}$} \\\\")
         out.append("\\midrule")
         out.append("\\endhead")
         out.extend(rows)
         out.append("\\midrule")
-        out.append(f"\\multicolumn{{8}}{{r}}{{\\textbf{{k(median)}}}} & \\textbf{{{fmt_k_estimate(statistics.median(k_values))}}} \\\\")
+        out.append(f"\\multicolumn{{8}}{{r}}{{\\textbf{{$k_{{\\text{{eff}}}}$(median)}}}} & \\textbf{{{fmt_k_estimate(statistics.median(k_values))}}} \\\\")
         out.append("\\bottomrule")
         out.append("\\end{longtable}")
+        out.append("}")
+
+    if all_k_values:
+        capped = [max(k, 1.0) for k in all_k_values]
+        combined_median = statistics.median(capped)
+        out.append("")
+        out.append("\\subsection*{All Models Combined}")
+        out.append(
+            "The row below is the median \\(k_{\\text{eff}}\\) across every displayed bit row above, all models pooled, "
+            "with \\(k_{\\text{eff}}<1\\) entries capped at the floor of \\(1\\) before taking the median (per the capping rule "
+            "stated above). It is reported here for completeness and is \\emph{not} the same figure as the "
+            "Section~\\ref{ssec:correlation_calibration} working value \\(k_{\\text{eff,median}}\\): that figure is "
+            "computed over one representative (highest-signal) bit per test run rather than every signal-bearing "
+            "bit shown per run in this appendix, so the two need not match."
+        )
+        out.append("")
+        out.append("{\\scriptsize")
+        out.append("\\begin{tabular}{@{}lr@{}}")
+        out.append("\\toprule")
+        out.append("\\textbf{Combined $k_{\\text{eff}}$(median), all models, all displayed rows} & \\textbf{Value} \\\\")
+        out.append("\\midrule")
+        out.append(f"$n={len(all_k_values)}$ bit rows & {fmt_k_estimate(combined_median)} \\\\")
+        if best_pair_k_values:
+            best_pair_median = statistics.median(best_pair_k_values)
+            out.append("\\midrule")
+            out.append(
+                f"\\rowcolor{{orange!20}}$n={len(best_pair_k_values)}$, 1 bit per run, least bias (= "
+                f"Section~\\ref{{ssec:correlation_calibration}} working value) & \\textbf{{{fmt_k_estimate(best_pair_median)}}} \\\\"
+            )
+        out.append("\\bottomrule")
+        out.append("\\end{tabular}")
         out.append("}")
 
     return "\n".join(out) + "\n"

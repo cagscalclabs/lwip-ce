@@ -635,7 +635,7 @@ Before beginning this project we needed to itemize what was available and what w
 
 			In practice, a single TLS connection peaks around $29\,\text{KiB}$ for the common single-record Certificate path and around $34\,\text{KiB}$ when Certificate data is fragmented across records. The difference comes from transient coexistence between the decrypted record pbuf, the handshake reassembly path, and the current certificate DER buffer. Full-chain buffering is avoided: the cert walker holds at most one certificate's DER at a time and frees it after verification. Multi-connection deployments add roughly $1\,\text{KiB}$ per idle TLS connection, plus transient record/reassembly cost for each concurrent handshake.
 
-			\subsection{Application Callability}
+			\subsection{Application Callability}\label{ssec:application_callability}
 			lwIP-CE is intended to operate as a resident networking component that other calculator programs can call, rather than as a program whose networking stack is statically copied into each consumer. I was intent on making this library callable in place rather than statically included because the lwIP core and TLS internals are huge (around 200KB) and on a device with just under 2MB of Flash storage, this adds up quickly. This design reduces duplicated code size, centralizes network state, and allows application programs to depend on a stable exported interface.
 			
 			The calculator environment does not provide conventional shared-library loading in the desktop sense. The TI-84+ CE toolchain provides a dispatch utility for loading on-device libraries called \texttt{LIBLOAD}. This utility normally works through:
@@ -932,7 +932,7 @@ for (uint8_t i = 0; i < count; i++) {
 	\begin{itemize}
 		\item Read from the entropy tap into a 119-byte entropy pool.
 		\item XOR multiple reads, $n$, into a single composite byte per byte of the entropy pool.
-		\item $n$ began as a data-justified heuristic estimate by Zeroko, $k$ was later computed over observable datasets (see Section~\ref{ssec:correlation_calibration}, “Calibrating for Correlation”).
+		\item $n$ began as a data-justified heuristic estimate by Zeroko, $k_{\text{eff}}$ was later computed over observable datasets (see Section~\ref{ssec:correlation_calibration}, “Calibrating for Correlation”).
 		\item Hash the entropy pool to soften entropy distribution.
 		\item Compress digest in blocks to output size.
 	\end{itemize}
@@ -940,9 +940,9 @@ for (uint8_t i = 0; i < count; i++) {
 		The following \textbf{derived assumptions} apply:
 		\begin{itemize}
 			\item Entropy is credited only to the selected source bit; all other bits in each raw byte are treated as zero-entropy in the bound.
-			\item XOR conditioning is modeled with effective samples, not independence: \(n_{\mathrm{eff}}=\lfloor n/k \rfloor\).
+			\item XOR conditioning is modeled with effective samples, not independence: \(n_{\mathrm{eff}}=\lfloor n/k_{\text{eff}} \rfloor\). Here \(k_{\text{eff}}\) is a correlation factor empirically fit from observed \(p_{\mathrm{in}}\)/\(p_{\mathrm{out}}\) pairs at the fixed conditioning depth \(n=17\) (see Section~\ref{ssec:correlation_calibration}).
 			\item Conditioning and hashing do not create entropy; they only redistribute/extract available source entropy.
-			\item Per-byte min-entropy after conditioning is bounded by \(H_\infty(p_{\mathrm{out}})\), with \(p_{\mathrm{out}}\) derived from the calibrated \(p_{\mathrm{in}}\), \(n\), and \(k\).
+			\item Per-byte min-entropy after conditioning is bounded by \(H_\infty(p_{\mathrm{out}})\), with \(p_{\mathrm{out}}\) derived from the calibrated \(p_{\mathrm{in}}\), \(n\), and \(k_{\text{eff}}\).
 			\item Pool-level entropy is bounded as \(m_{\mathrm{eff}} \cdot H_\infty\), where \(m_{\mathrm{eff}}\) uses the same correlation discount model.
 			\item Runtime health checks are assumed to detect gross source failure, but short-window entropy collapse between checks remains a residual risk.
 		\end{itemize}
@@ -990,7 +990,7 @@ for (uint8_t i = 0; i < count; i++) {
 	
 	\subsubsection{Calibrating for Correlation}
 	\label{ssec:correlation_calibration}
-	This subsection estimates the correlation factor $k$ and the resulting $n_{\text{eff,byte}}$ used by the effective-sample model. We collected 1,179,648 bytes ($\approx$1.2 MB) of source output per device, split evenly across two conditioning modes: no whitening (R0) and 16 XORs (R17). The capture size, though small relative to what some might ask for, was intentionally capped for platform constraints:
+	This subsection estimates the correlation factor $k_{\text{eff}}$ and the resulting $n_{\text{eff,byte}}$ used by the effective-sample model. We collected 1,179,648 bytes ($\approx$1.2 MB) of source output per device, split evenly across two conditioning modes: no whitening (R0) and 16 XORs (R17). The capture size, though small relative to what some might ask for, was intentionally capped for platform constraints:
 	\begin{itemize}
 		\item Total calculator storage (RAM + Archive) is roughly 2 MB.
 		\item Archive space is partially consumed by resident applications and system artifacts.
@@ -1049,7 +1049,7 @@ for (uint8_t i = 0; i < count; i++) {
 	\[
 	k_{\text{eff}}(n)=\min\!\left(\CalibXorReads,\ \max\!\left(1,\ \frac{n\,\ln\!\left|1-2p_{\text{in}}\right|}{\ln\!\left|1-2p_{\text{out}}\right|}\right)\right),\qquad n=\CalibXorReads
 	\]
-		For implementation-level bounds in this section, $k$ is hard-capped at 17 (the total reads in the 1-read + 16-XOR path) to avoid divergence in the inversion as $p\to0.5$.
+		For implementation-level bounds in this section, $k_{\text{eff}}$ is hard-capped at 17 (the total reads in the 1-read + 16-XOR path) to avoid divergence in the inversion as $p\to0.5$.
 	
 	Across all \CalibTotalCount $(p_{\text{in}},p_{\text{out}})$ pairs from the dataset (using R0 as $p_{\text{in}}$ and R17 as $p_{\text{out}}$), the raw inversion values are:
 	\begin{figure}[H]
@@ -1079,8 +1079,8 @@ for (uint8_t i = 0; i < count; i++) {
 				\rowcolor{gray!18}
 				Metric & Value \\
 				\midrule
-				Median $k$ & \CalibKMedian \\
-				Mean $k$ & \CalibKMean \\
+				Median $k_{\text{eff}}$ & \CalibKMedian \\
+				Mean $k_{\text{eff}}$ & \CalibKMean \\
 				$\sigma$ (pop.) & \CalibKSigma \\
 				Q1 & \CalibKQOne \\
 				Q3 & \CalibKQThree \\
@@ -1106,7 +1106,7 @@ for (uint8_t i = 0; i < count; i++) {
 		\end{minipage}
 	\end{figure}
 
-		From these traces, we take $k\in[\CalibRangeLow,\,\CalibRangeHigh]$ as a defensible empirical range and carry forward $k_{median}=\CalibKMedian$ as the central working value.
+		From these traces, we take $k_{\text{eff}}\in[\CalibRangeLow,\,\CalibRangeHigh]$ as a defensible empirical range and carry forward $k_{\text{eff,median}}=\CalibKMedian$ as the central working value.
 
 		For this proof section, the conservative accounting model is:
 	\begin{itemize}
@@ -1126,20 +1126,20 @@ for (uint8_t i = 0; i < count; i++) {
 			\vspace{0pt}
 			\textbf{Per-bit (conditioning depth)}
 			\begin{align*}
-				n_{\text{eff,byte}} &= \left\lfloor\frac{\CalibXorReads}{k}\right\rfloor
+				n_{\text{eff,byte}} &= \left\lfloor\frac{\CalibXorReads}{k_{\text{eff}}}\right\rfloor
 			\end{align*}
 		\end{minipage}\hfill
 		\begin{minipage}[t]{0.48\textwidth}
 			\vspace{0pt}
 				\textbf{Across entropy pool}
 			\begin{align*}
-				n_{\text{eff,pool}} &= \CalibPoolBytes\cdot n_{\text{eff,byte}} = \left\lfloor\frac{\CalibXorReads\cdot\CalibPoolBytes}{k}\right\rfloor
+				n_{\text{eff,pool}} &= \CalibPoolBytes\cdot n_{\text{eff,byte}} = \left\lfloor\frac{\CalibXorReads\cdot\CalibPoolBytes}{k_{\text{eff}}}\right\rfloor
 			\end{align*}
 		\end{minipage}
 	\end{center}
 	\vspace{-0.35em}
 	\endgroup
-	For $k=\CalibKMedian$:
+	For $k_{\text{eff}}=\CalibKMedian$:
 	\begingroup
 	\setlength{\abovedisplayskip}{4pt}
 	\setlength{\abovedisplayshortskip}{4pt}
@@ -1236,7 +1236,7 @@ for (uint8_t i = 0; i < count; i++) {
 	This is an ultra-conservative reading of the generator, and normal operation is expected to outperform these selected bounds for three reasons:
 	\begin{itemize}
 		\item The chosen $p$ interval is a worst-case admissible bound. In observed runs, source selection consistently finds at least one bit with lower bias than that bound.
-		\item The selected $k$ is the median of empirical estimates; those estimates include upward excursions driven by inversion instability as $p$ approaches $0.5$ (i.e., as $\lim_{p\to0.5}\ln|1-2p|\to-\infty$ in the denominator-sensitive regime).
+		\item The selected $k_{\text{eff}}$ is the median of empirical estimates; those estimates include upward excursions driven by inversion instability as $p$ approaches $0.5$ (i.e., as $\lim_{p\to0.5}\ln|1-2p|\to-\infty$ in the denominator-sensitive regime).
 		\item The proof assigns entropy to only one live bit per source byte. In practice, additional bits may contribute entropy and are also subjected to the same XOR conditioning.
 	\end{itemize}
 	
@@ -1503,29 +1503,23 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 			\textbf{Area} & \textbf{Status} & \textbf{Boundary} \\
 			\midrule
 			\endhead
-			TLS \texttt{CertificateVerify} & Supported now & \texttt{rsa\_pss\_rsae\_sha256} with 1024--2048 bit RSA leaf keys. \\
-			TLS \texttt{CertificateVerify} & Planned & ECDSA-P-256, RSA keys up to 4096 bits where timing and memory permit, and wider RSA-PSS hash variants. \\
-			TLS \texttt{CertificateVerify} & Out of scope & RSA-PKCS1 \texttt{CertificateVerify}, which TLS~1.3 forbids. \\
+			TLS \texttt{CertificateVerify} & Complete & \texttt{rsa\_pss\_rsae\_sha256} with 1024--2048 bit RSA leaf keys.\\
+			 & Planned & ECDSA-P-256, RSA keys up to 4096 bits. \\
+			TLS Certificate & Supported now & RSA/SHA-256 adjacent-link verification, fail-closed. \\
+			 & Planned & Broader issuer-key and signature-algorithm coverage. \\
+			 & Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
 			\addlinespace
-			Certificate-chain verification & Supported now & Streaming chain parsing; RSA/SHA-256 adjacent-link verification where supported; fatal failure for verifiable links that do not check out. \\
-			Certificate-chain verification & Planned & Broader issuer-key and signature-algorithm coverage. \\
-			Certificate-chain verification & Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
+			TLS CertificateRequest & Skip & \texttt{CertificateRequest} is parsed, included in the transcript, and answered with an empty client certificate list. \\
 			\addlinespace
-			Client authentication & Supported now & \texttt{CertificateRequest} is parsed, included in the transcript, and answered with an empty client certificate list. \\
-			Client authentication & Planned & None currently committed. \\
-			Client authentication & Out of scope & Client-certificate identity support and private-key signing on device. \\
+			Trust Store Schema & Complete & Signed compact AppVar truststore, derived from curated WebPKI root certificates. \\
+			Trust Store Policy & Fail-Closed & Algorithm supported but does not verify. \\
+			 & Warn-Proceed & Algorithm unsupported/signer not in store (temporary) \\
 			\addlinespace
-			Truststore policy & Supported now & Signed compact AppVar truststore, schema-version checks, and graceful degradation when trust anchoring is unavailable. \\
-			Truststore policy & Planned & Warning-only truststore age checks once reliable time exists. \\
-			Truststore policy & Out of scope & Treating AppVars or local storage as tamper-resistant. \\
-			\addlinespace
-			Runtime ABI & Supported now & Magic-checked resident export table; the bootstrap patches the shared prefix of app/stub exports. \\
-			Runtime ABI & Planned & Append-only export growth after v1.0 with stable existing slot meanings. \\
-			Runtime ABI & Out of scope & Backward compatibility for calls to exports that do not exist in the installed resident app. \\
-			\addlinespace
-			Hardware security & Supported now & Best-effort memory clearing, bounded diagnostics, RNG health checks, and remote-network threat modeling. \\
-			Hardware security & Planned & Continued timing/profiling coverage and wider sample collection. \\
-			Hardware security & Out of scope & Secure boot, protected memory, secure key storage, and resistance to determined physical compromise. \\
+			State Compromise & Complete & tls\_secure\_memzero \\
+			 & Complete & BUFFER\_MODE\_SECURE (membuffer) \\
+			 & Complete & \texttt{di} before crypto, \texttt{ei} when done \\
+			CI & Complete/Planned & Continued timing/profiling coverage and wider sample collection. \\
+			Hardware Security & Out of scope & The calculator has no secure runtime environment. \\
 			\bottomrule
 		\end{longtable}
 		\endgroup
@@ -1621,7 +1615,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		\item \textbf{Differential timing capture.} Produces a structured log file using a \texttt{key=value} record format. Each unit's calibration class and per-class results are emitted with explicit denotation so the upstream analysis can locate each unit and its associated measurements by regular expression. The log can be exfiltrated via standard AppVar transfer.
 	\end{itemize}
 
-	\paragraph{Device identification}
+	\paragraph{Device identification}\label{par:device_id}
 	Contributions are most useful when accompanied by enough device metadata to locate the submission within the broader sample population. At minimum:
 	\begin{itemize}
 		\item Hardware revision (visible on the back-label sticker or via \texttt{[mode]} $\rightarrow$ \texttt{[about]}).
@@ -1629,6 +1623,17 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		\item Boot code version, where reported by the device.
 	\end{itemize}
 	Contributors who are unsure which revision they hold are encouraged to submit anyway with whatever metadata they can identify; the project can usually disambiguate from the supplied OS and boot-code strings.
+
+	\paragraph{Issue tracebacks}\label{par:issue_tracebacks}
+	The known and outstanding issues tracked in Appendix~\ref{ssec:known_issues} (notably \texttt{st closed sent 0}/\texttt{st closed sent 1}) are presently blocked on field reproduction data rather than RNG or timing coverage, and benefit from the same submission channels. A useful traceback report includes:
+	\begin{itemize}
+		\item \textbf{Traceback output.} The v1.0-rc4 traceback system's captured output at the point of failure (see Section~\ref{ssec:engineering_notes}), including the state string (e.g.\ \texttt{st closed sent 0}) and any preceding trace lines, not just the final line.
+		\item \textbf{Peer/server identity.} The hostname or service the connection was made to, and, if known, the TLS server implementation (e.g.\ nginx, a specific embedded TLS stack) --- the suspected cause is a missing or misinterpreted record type from certain peers.
+		\item \textbf{Reproducibility.} Whether the failure is consistent against that peer or intermittent, and approximately how far into the post-handshake exchange it occurs.
+		\item \textbf{Build/version.} The lwIP-CE library version and, where applicable, the calling application's version, since trampoline and record-handling behavior can shift between revisions.
+		\item \textbf{Device metadata.} The same hardware revision, OS version, and boot code requested under \nameref{par:device_id} above, in case the failure correlates with a hardware or firmware class.
+	\end{itemize}
+	As with calibration captures, tracebacks carry no submitter-identifying metadata by default and are evaluated purely on their technical content.
 
 	\paragraph{How to submit}
 	Submissions can be sent via either channel below:
@@ -1645,7 +1650,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	\subsection{RNG Statistical Dumps}
 	This appendix includes the RNG dataset summary generated from \texttt{datasets/appendix\_a} at build time.
 
-	\paragraph{Reading these tables}: each row is one source bit on one run, shown before and after conditioning. The \textbf{R0} columns describe the raw entropy source and the \textbf{R17} columns the conditioned output; \texttt{p1} is the probability of a one (ideal $0.5$), \texttt{bias} is the distance from that ideal (ideal $0$), and \texttt{trans} is the transition rate (ideal $0.5$). A healthy result is one where conditioning \emph{moves a biased raw bit toward ideal}: R0 columns may be far off (a raw bit can sit near \texttt{p1}~$=0$ or $1$), but the corresponding R17 \texttt{p1} should land near $0.5$ with \texttt{bias} near $0$. The final column, \(k\), is the conditioning amplification factor for that bit; the per-model \textbf{k(median)} at the foot of each table summarizes how much headroom the conditioning step buys across bits. In short: do not expect the raw source to look random --- expect the \emph{conditioned} output to, and expect \(k\) to reflect a comfortable margin rather than bits that only barely clear the floor.
+	\paragraph{Reading these tables}: each row is one source bit on one run, shown before and after conditioning. The \textbf{R0} columns describe the raw entropy source and the \textbf{R17} columns the conditioned output; \texttt{p1} is the probability of a one (ideal $0.5$), \texttt{bias} is the distance from that ideal (ideal $0$), and \texttt{trans} is the transition rate (ideal $0.5$). A healthy result is one where conditioning \emph{moves a biased raw bit toward ideal}: R0 columns may be far off (a raw bit can sit near \texttt{p1}~$=0$ or $1$), but the corresponding R17 \texttt{p1} should land near $0.5$ with \texttt{bias} near $0$. The final column, \(k_{\text{eff}}\), is the conditioning amplification factor for that bit; the per-model \textbf{$k_{\text{eff}}$(median)} at the foot of each table summarizes how much headroom the conditioning step buys across bits. In short: do not expect the raw source to look random --- expect the \emph{conditioned} output to, and expect \(k_{\text{eff}}\) to reflect a comfortable margin rather than bits that only barely clear the floor.
 	
 	\IfFileExists{generated/appendix_a_include.tex}{
 		\input{generated/appendix_a_include.tex}
@@ -1662,10 +1667,68 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 
 	\paragraph{What ``good'' looks like}: a passing unit shows a small \textbf{Avg $\sigma$} (low intrinsic jitter in the calibration class), \textbf{MedDev (W/R/E)} values close to zero for all three input classes --- worst-case (W), random (R), and edge (E) --- meaning no class runs systematically faster or slower than the others, and \textbf{Over\%} entries at or near $0\%$, indicating that few or no samples exceeded the cycle-deviation threshold. The \textbf{Avg $\Delta$ (c6/c4)} column reports the calibrated standard/strict thresholds themselves and is contextual rather than pass/fail. A failing unit is the inverse: a non-trivial MedDev that points the same direction across most samples, paired with a high Over\%, which is the signature of input-dependent timing the profiler is built to surface.
 
+	\paragraph{A note on per-model sample size}: each table's footer reports how many source files were parsed for that model, and this varies considerably by revision (the project's own bench coverage is uneven across hardware classes). A model represented by only one or two captures gives a single run's jitter outsized weight in \textbf{Avg $\sigma$} and \textbf{Avg $\Delta$}, so an isolated high reading on a thinly-sampled model --- as opposed to a reading that recurs across multiple runs or models --- is more plausibly a small-sample artifact than a genuine platform-specific timing characteristic, and should be read with that caveat rather than as a confirmed anomaly.
+
 	\IfFileExists{generated/appendix_b_model_summary.tex}{
 		\input{generated/appendix_b_model_summary.tex}
 	}{
 		No generated Appendix B model summary was found at build time.
 	}
-	
-\end{document} 
+
+	\newpage
+	\subsection{Engineering Notes}\label{ssec:engineering_notes}
+
+	This appendix documents security- or correctness-relevant bugs found and fixed in the TLS/runtime core since the v1.0-rc1 milestone, each surfaced through hardware-in-the-loop testing (the DAST harness; see Section~\ref{ssec:profiling}), the unit test suite, targeted manual code audit, or AI code review. Each is included for transparency about what \emph{wasn't} caught by static testing alone, and how it was actually found.
+
+	\renewcommand{\arraystretch}{1.3}
+	\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}@{}}
+		\toprule
+		\textbf{Bug} & \textbf{Symptom / Presentation} & \textbf{Tracing Method} & \textbf{Resolution} \\
+		\midrule
+		\endhead
+		Post-handshake \texttt{close\_notify} and \texttt{KeyUpdate} silently dropped
+		&
+		A TLS connection would complete its handshake successfully and then simply stall with \texttt{st closed sent 0} or \texttt{st closed sent 1}.
+		&
+		Code audit (partially AI-assisted) of the post-handshake record-handling paths in \texttt{handshake.c} and \texttt{altcp\_tls\_ce.c}, combined with the addition of the v1.0-rc4 \texttt{traceback system}.
+		&
+		Added explicit handling for both previously-omitted message types. Issue still persists in some cases, cause unknown, waiting wider-berth of tracebacks from in-production use.\\
+		\addlinespace
+		RSA signature length unchecked before \texttt{memcpy} into a fixed-size modexp buffer
+		&
+		Found accidentally. DAST suite erroneously presented START and NEXT, causing the calc-side to be running one test ahead, and thus reporting CRASH/STALL for Test 20, when the client had ended the test. While on a rabbit-hole fixing a test that was actually not failing, identified edge where \texttt{rsa\_pss\_verify} didn't confirm signature length and keylen were the same.
+		&
+		Traced via the DAST report's \texttt{ping\_alive: false} result for that test.
+		&
+		Added an explicit \texttt{signature\_len~==~keylen} check (signatures must be exactly one modulus-width block per RFC~8017) to both \texttt{tls\_rsa\_decrypt\_signature()} and \texttt{tls\_rsa\_decrypt\_signature\_exp()} in \texttt{rsa.c}. \\
+		\addlinespace
+		Unpatched libload trampolines defaulted to \texttt{jp~0}
+		&
+		Not yet observed as a field failure --- found by inspection while reviewing the libload version-skew path. An application linking against a newer companion library than the installed lwIP application has exported entries beyond what the installed app's table provides; those trampoline slots are deliberately left unpatched (see the append-only export ABI in Section~\ref{ssec:application_callability}). Calling one would jump to address \texttt{0}.
+		&
+		Manual review of \texttt{lwip\_init\_runtime.asm}'s patch loop and the trampoline-generation step in \texttt{build-release-dylib.sh}/\texttt{parse\_manifest.py}, asking what happens to a slot that the loop's \texttt{min(app\_count, stub\_count)} bound never reaches.
+		&
+		Trampolines now default to \texttt{jp lwip\_function\_jp\_unset} instead of \texttt{jp~0}; the handler sets a dedicated ``function unsupported, version'' errno and zeroes every register a return value could plausibly occupy ( \texttt{a}, \texttt{hl}, \texttt{de}, \texttt{bc}) before returning. \\
+	\end{longtable}
+
+	\subsection{Known and Outstanding Issues}\label{ssec:known_issues}
+
+	This table tracks issues that are known, suspected, or under active investigation but not yet resolved as of this revision. Unlike the fixes in Section~\ref{ssec:engineering_notes}, these are not closed -- they are listed here for transparency and to give downstream consumers visibility into open risk before it's fixed. Where an entry's Notes column requests tracebacks, see \nameref{par:issue_tracebacks} (Section~\ref{ssec:contributing_data}) for what information makes a report actionable.
+
+	\renewcommand{\arraystretch}{1.3}
+	\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.14\textwidth}>{\raggedright\arraybackslash}p{0.33\textwidth}@{}}
+		\toprule
+		\textbf{Issue} & \textbf{Symptom / Presentation} & \textbf{Status} & \textbf{Notes} \\
+		\midrule
+		\endhead
+		\texttt{st closed sent 0} and \texttt{st closed sent 1}
+		&
+		A very strange failure that presents on some TLS connections that should fit the calculator's specs. Cause unknown.
+		&
+		Known issue, under investigation.
+		&
+		Seems to occur at the end of the handshake, when the client seems to expect some data. Could be a missing Record type, close from the peer. If you experience this issue, please submit \texttt{tracebacks}. \\
+		\addlinespace
+	\end{longtable}
+
+\end{document}
