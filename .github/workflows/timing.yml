@@ -225,7 +225,7 @@ jobs:
             # -s (screenshots: dump a raw RGBA frame of the screen at every
             # hash check) so a failure leaves behind enough evidence to tell
             # a hung/wrong screen apart from a real timing regression.
-            ( cd "$test_dir" && "${{env.CEDEV_BIN}}/cemu-autotester" -d -s autotest.json ) 2>&1 | tee "$test_dir/autotest.log"
+            ( cd "$test_dir" && "${{env.CEDEV_BIN}}/cemu-autotester" -d -s "$test_dir/autotest.json" ) 2>&1 | tee "$test_dir/autotest.log"
             status=${PIPESTATUS[0]}
             set -e
             attempt_done=$(($(date +%s%N)/1000000))
