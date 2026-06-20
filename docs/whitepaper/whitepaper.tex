@@ -405,16 +405,7 @@ Before beginning this project we needed to itemize what was available and what w
 		\end{itemize}
 		Other CDC notifications (for example \texttt{NetworkSpeedChange}) are either non-actionable for this target or already covered at lower driver layers.
 
-		RX ingress is decoupled from callback latency via scheduled bulk reads and a ring-buffer drain timer, so frame ingestion remains bounded under memory pressure.
-
-		Operational workflow, condensed:
-		\begin{enumerate}
-			\item USB connect/enable events trigger CDC descriptor discovery and configuration.
-			\item Endpoints and MAC identity are resolved; ECM or NCM callbacks are bound.
-			\item Interrupt callback tracks \texttt{NetworkConnection} and updates link status.
-			\item RX scheduling/draining timers move bulk data into lwIP while honoring memory-throttle policy.
-			\item Disconnect/disable transitions force link-down and cleanup/reset of endpoint state.
-		\end{enumerate}
+		After setup, RX ingress is decoupled from callback latency via scheduled bulk reads and a ring-buffer drain timer, so frame ingestion remains bounded under memory pressure. Disconnect or disable transitions force link-down and clean up endpoint state before the next device-enable cycle.
 		
 		The driver also defines a fatal-error state entered on non-recoverable endpoint stall. In that state, the device is reset, which:
 		\begin{itemize}
@@ -427,7 +418,7 @@ Before beginning this project we needed to itemize what was available and what w
 		
 	
 		\subsection{Membuffer "driver"}
-		In addition to the USB driver, a dedicated \texttt{membuffer} allocator layer was implemented to keep memory behavior predictable across lwIP, USB RX/TX staging, and TLS components. On this platform, allocator stability is a correctness property: when memory pressure spikes, transport behavior and security-sensitive state handling must degrade in a controlled way rather than fail unpredictably. The subsystem can run in \textbf{dynamic mode} (wrapping toolchain \texttt{malloc}/\texttt{free}/\texttt{realloc} with explicit heap accounting and pressure reporting) or \textbf{static mode} (a caller-provided arena with fixed bounds and no external allocator dependency after initialization).
+		In addition to the USB driver, lwIP-CE includes a dedicated \texttt{membuffer} layer to make allocation pressure visible and predictable across lwIP, USB RX/TX staging, socket queues, file-backed data, and TLS scratch space. On this platform, allocator stability is a correctness property: when memory pressure spikes, ingress paths must throttle and security-sensitive buffers must be cleaned up deliberately. The subsystem supports \textbf{dynamic mode}, which wraps toolchain allocation with accounting and pressure reporting, and \textbf{static mode}, which uses a caller-provided arena with fixed bounds after initialization.
 
 		Every buffer is one of three classes, chosen for the shape of its workload:
 		\begin{itemize}
@@ -436,13 +427,13 @@ Before beginning this project we needed to itemize what was available and what w
 			\item \texttt{MEM\_BUFFER\_FILE}: a slot-based allocator for lazy file I/O, always running with \texttt{BUFFER\_SECURE\_MODE} enabled.
 		\end{itemize}
 
-		Within the dynamic path, each buffer tracks its own usage and resizes independently. Growth is proactive: once occupancy crosses a configurable \texttt{grow\_threshold\_pct}, the buffer reallocates upward by a fixed \texttt{step} immediately, bounded by a per-buffer \texttt{max\_size} (excluding the heap, which is capable of consuming all of \texttt{freeMem}, but almost never does). Shrinking is deliberately more conservative and uses true hysteresis rather than a mirrored threshold. A buffer only becomes shrink-eligible once occupancy drops to or below \texttt{shrink\_threshold\_pct}, and any check above that threshold immediately resets eligibility to zero. Once eligible, the buffer must remain below threshold for a holding period (\texttt{shrink\_hold\_count} consecutive low-usage checks) before it actually shrinks by one \texttt{step}; each successive shrink doubles the holding period required for the next one (\texttt{base} $\ll$ \texttt{stage}, capped at $\texttt{base} \ll 15$), so a buffer that keeps shrinking demands longer and longer quiet periods before shrinking again, and any renewed pressure resets the stage counter to zero. \texttt{BUFFER\_LOCK\_SIZE} disables growth and shrinking entirely, pinning a buffer at its initial size.
+		In dynamic mode, each buffer tracks its own usage and resizes independently. Growth is proactive once occupancy crosses \texttt{grow\_threshold\_pct}; shrinking uses hysteresis, requiring \texttt{shrink\_hold\_count} consecutive low-usage checks before releasing one \texttt{step}, with longer hold periods after repeated shrinks. Any renewed pressure resets shrink eligibility, and \texttt{BUFFER\_LOCK\_SIZE} pins a buffer at its initial size.
 
-		Each buffer also derives its own pressure level from current usage versus capacity, tiered \texttt{NONE} $\rightarrow$ \texttt{MILD} ($>$70\%) $\rightarrow$ \texttt{HIGH} ($>$85\%) $\rightarrow$ \texttt{SEVERE} ($>$90\%) $\rightarrow$ \texttt{CRITICAL} ($>$95\% or unable to grow further), and invokes a per-buffer callback whenever that level changes in either direction. A separate global pressure level is derived from total heap usage and is layered onto buffer-level notifications via a \texttt{MEM\_PRESSURE\_GLOBAL} flag, letting unrelated modules coordinate throttling off a single signal; buffers flagged \texttt{BUFFER\_USER\_ALLOC} (caller-owned memory carved out of the heap, not the stack's own traffic) are excluded from this global accounting. This pressure model is what couples directly to the Ethernet ingress path: RX ring buffers use drain callbacks and timer-driven budgets, while pressure callbacks adjust scheduling and throttle behavior under load, keeping link handling responsive without runaway allocation during bursts.
+		Pressure is reported both per-buffer and globally. Buffer pressure is tiered \texttt{NONE} $\rightarrow$ \texttt{MILD} ($>$70\%) $\rightarrow$ \texttt{HIGH} ($>$85\%) $\rightarrow$ \texttt{SEVERE} ($>$90\%) $\rightarrow$ \texttt{CRITICAL} ($>$95\% or unable to grow further), with callbacks fired when the level changes. Global pressure is derived from total stack heap usage and layered onto notifications via \texttt{MEM\_PRESSURE\_GLOBAL}; caller-owned reservations flagged \texttt{BUFFER\_USER\_ALLOC} are excluded. The Ethernet ingress path uses this model directly: RX rings drain under timer budgets, while pressure callbacks adjust scheduling and throttling during bursts.
 
-		From a security perspective, any buffer can be flagged with \texttt{BUFFER\_SECURE\_MODE} (always on for \texttt{MEM\_BUFFER\_FILE}), enabling automatic zeroization on pop, free, release, and destroy. This does not replace higher-layer cryptographic hygiene, but it materially reduces residual plaintext/key exposure in normal allocator lifecycles.
+		Applications can reserve their own headroom with \texttt{mem\_reserve}, resize it with \texttt{mem\_resize}, and release it with \texttt{mem\_release}. The stack accounts memory in six visible buckets: \textbf{P} (fixed $8\,\text{KiB}$ pbuf pool), \textbf{T} (TLS scratch/session buffers), \textbf{H} (protocol control blocks, driver state, RNG, DNS, outbound segments, and other stack heap), \textbf{R} (USB RX ring), \textbf{C} (per-connection application RX rings), and \textbf{U} (caller reservation). A climbing \textbf{H} bucket is therefore a signal that stack-owned heap is being retained longer than expected.\label{ssec:mem_accounting}
 
-		By default, lwIP-CE is allowed to use all available free RAM, growing and shrinking buffers as traffic demands; most of the heap sits idle between bursts. An application that needs to guarantee its own headroom can call \texttt{mem\_reserve} with however many bytes it needs, which the allocator treats as permanently off-limits and will not grow into. The reservation can be adjusted at any time with \texttt{mem\_resize} and released entirely with \texttt{mem\_release}. The stack tracks memory in six buckets, visible on the example HUD: \textbf{P} (the fixed $8\,\text{KiB}$ pbuf pool), \textbf{T} (TLS scratch and session buffers), \textbf{H} (everything else the stack allocates --- protocol control blocks, driver state, RNG, outbound segments, DNS scratch), \textbf{R} (the USB RX ring), \textbf{C} (per-connection application RX rings), and \textbf{U} (the caller's reservation via \texttt{mem\_reserve}, which shrinks H's available ceiling by however many bytes are claimed). The HUD updates on a short polling interval, so a climbing H bucket is a real-time signal that something is holding onto heap longer than it should.\label{ssec:mem_accounting}
+		From a security perspective, any buffer can be flagged with \texttt{BUFFER\_SECURE\_MODE} (always on for \texttt{MEM\_BUFFER\_FILE}), enabling automatic zeroization on pop, free, release, and destroy. This does not replace higher-layer cryptographic hygiene, but it reduces residual plaintext/key exposure in normal allocator lifecycles.
 
 		Two further constraints govern, specifically, how decrypted TLS handshake plaintext moves through the allocator --- a narrower scope than general allocator usage, since the fixed pbuf pool and most other consumers are not held to these rules:
 
@@ -453,14 +444,14 @@ Before beginning this project we needed to itemize what was available and what w
 
 			\subsection{Stack Memory Requirements}
 
-			The lwIP-CE stack initializes by consuming only the needed resources:
+			The lwIP-CE stack has a small fixed baseline and then grows buffers only as traffic requires. At initialization it consumes:
 			\begin{itemize}
 				\item Approximately 8,192 bytes of static memory for: ARP tables, DNS resolver state, dispatch/timer states, RNG state, and more. During build of lwIP we force this data to live in the first 8 KB of the BSS and we force consumers to link their $BSSHEAP_LOW$ above that region for memory safety.
 				\item The 8,192-byte fixed-size pbuf pool.
 				\item The 512-byte growable Ethernet RX ring buffer.
 			\end{itemize}
 			
-			At perfectly idle, this is all the stack consumes. The remainder of the available heap is free for consumption by the stack as pressure grows, up until the calculator runs out of memory. An API for users for reserve memory is available, which lets the caller own a slice of heap that lwIP can never try to grow into.
+			Everything beyond that baseline is demand-driven and bounded either by per-buffer limits, the global heap ceiling, or the caller's reservation from Section~\ref{ssec:mem_accounting}.
 
 			\refstepcounter{table}\label{tab:lwip-memory}
 			\textbf{Table \thetable: Memory footprint of the full lwIP-CE stack.}
@@ -524,7 +515,7 @@ Before beginning this project we needed to itemize what was available and what w
 			\midrule
 
 			%% ── @lwip_start
-			─────────────────────────────────────────────────────
+			%% @lwip_start allocations
 			\texttt{lwip\_start()}
 				& Heap allocations made during stack initialization; permanent for the lifetime of the stack \\
 			\midrule
@@ -624,7 +615,7 @@ Before beginning this project we needed to itemize what was available and what w
 			\end{longtable}
 			\endgroup
 
-			A single-TLS-connection deployment peaks at roughly $29\,\text{KiB}$ for a typical single-record Certificate path --- the $10.5\,\text{KiB}$ baseline, about $1\,\text{KiB}$ of per-connection TLS state, one decrypted record pbuf (up to ${\sim}16\,\text{KiB}$), and the shared RSA padding pool. Because the cert walker holds only one cert's DER ($1$--$5\,\text{KiB}$ typical) and frees it before the next is fetched, the old full-chain buffering peak of ${\sim}16\,\text{KiB}$ is eliminated. A fragmented Certificate message raises peak usage toward $34\,\text{KiB}$, since the record pbuf and the current cert's DER buffer briefly coexist during chain verification; the walker allocation is bounded by one cert's size and is freed the moment verification completes. Non-Certificate handshake messages that span TLS records use flat reassembly, but those messages are small (at most a few KiB for \texttt{NewSessionTicket}), keeping fragmented overhead well below the former ceiling. Demand-driven lwIP work (outbound TCP segments, queued encrypted pbufs) adds whatever the application's workload calls for, bounded by the global allocator cap. For multi-connection deployments, add roughly $1\,\text{KiB}$ per additional idle TLS connection and budget the transient record-pbuf and reassembly cost per concurrent handshake.
+			In practice, a single TLS connection peaks around $29\,\text{KiB}$ for the common single-record Certificate path and around $34\,\text{KiB}$ when Certificate data is fragmented across records. The difference comes from transient coexistence between the decrypted record pbuf, the handshake reassembly path, and the current certificate DER buffer. Full-chain buffering is avoided: the cert walker holds at most one certificate's DER at a time and frees it after verification. Multi-connection deployments add roughly $1\,\text{KiB}$ per idle TLS connection, plus transient record/reassembly cost for each concurrent handshake.
 
 			\subsection{Application Callability}
 			lwIP-CE is intended to operate as a resident networking component that other calculator programs can call, rather than as a program whose networking stack is statically copied into each consumer. I was intent on making this library callable in place rather than statically included because the lwIP core and TLS internals are huge (around 200KB) and on a device with just under 2MB of Flash storage, this adds up quickly. This design reduces duplicated code size, centralizes network state, and allows application programs to depend on a stable exported interface.
@@ -724,13 +715,42 @@ Before beginning this project we needed to itemize what was available and what w
 			\end{figure}
 
 		\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
-		The project is backed by a deterministic unit test suite covering the security-critical cryptographic and parser paths. Tests run on \texttt{cemu-autotester}, a JSON-workflow based tool that executes a program and waits for certain conditions to be true. and are structured around explicit acceptance criteria; where policy requires fail-closed behavior, tests assert rejection rather than silent degradation. (TLS-specific timing and CAVP profiling are treated separately; see Section~\ref{ssec:profiling}.)
+		The project is backed by a deterministic unit test suite for security-critical cryptographic and parser paths. Tests run under \texttt{CEmu}, driven by \texttt{cemu-autotester}, which replays fixed calculator input sequences and asserts on CRC hashes of expected screen states. Tests are written against explicit acceptance criteria; where policy requires fail-closed behavior, the expected result is rejection rather than silent degradation.
 
-		The suite is dyload-driven: each test links against the curated, manifest-gated \texttt{lwip.lib} produced by the nightly release build, the same artifact a consumer application loads at runtime, rather than compiling TLS core sources directly from \texttt{src/}. This exercises the actual released ABI surface---a curation drop or manifest omission shows up as a build or link failure in the test itself---and bootstraps the allocator and stack state through the real public \texttt{lwip\_start()} entry point rather than a hand-rolled, test-only initialization path.
+		The suite is dyload-driven: each test links against the curated, manifest-gated \texttt{lwip.lib} produced by the release build, the same artifact a consumer application loads at runtime. This exercises the released ABI surface and the public \texttt{lwip\_start()} initialization path instead of compiling TLS sources directly from \texttt{src/} or using test-only bootstrap code. A missing export, manifest omission, or ABI mismatch therefore fails the test at build or link time before runtime behavior is considered.
 
-		Coverage includes truststore integrity verification, certificate-chain trust decisions, parser correctness for ASN.1/X.509/PKCS flows, and expected rejection behavior for malformed or invalid inputs; the cryptographic primitives underneath them (hashing, HMAC, HKDF, PBKDF2, AES, RSA-OAEP/PSS, X25519, Base64) are each covered by a dedicated unit. RNG behavior is deliberately excluded from this suite and validated separately against hardware captures, as described below. Tests are built from applicable RFC vectors where available (with RFC and section identifiers recorded in test metadata), and from implementation-directed cases where no official vectors exist. Network-facing behavior of the Ethernet/USB transport---ARP, ICMP, and TCP/UDP handling against live probe traffic---is exercised separately by the DAST harness described in Section~\ref{ssec:profiling}; there is currently no dedicated unit-level harness for the Ethernet RX driver or the \texttt{membuffer} allocator in isolation.
+		Unit coverage includes truststore integrity verification, certificate-chain trust decisions, ASN.1/X.509/PKCS parser behavior, malformed-input rejection, and dedicated primitive tests for hashing, HMAC, HKDF, PBKDF2, AES, RSA-OAEP/PSS, X25519, and Base64. Tests use RFC vectors where available, with RFC and section identifiers recorded in metadata, and implementation-directed cases where no official vector set exists.
 
-		Latest unit-test workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml}.
+		\texttt{build.yml} orchestrates the validation pipeline by building the dylib once, then fanning out to independent checks:
+		\begin{figure}[H]
+			\centering
+			\scriptsize
+			\rowcolors{2}{ltgray}{white}
+			\begin{tabularx}{0.94\textwidth}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				Workflow & Purpose & Reviewer signal \\
+				\midrule
+				\texttt{tests.yml} & Deterministic CEmu unit tests for parser, trust, and primitive behavior. & Hard regression gate; failures name the unit and vector/case. \\
+				\texttt{cavp.yml} & On-device validation against CAVP-derived and compatible generated vectors. & Confirms the shipping eZ80 binary computes expected primitive outputs. \\
+				\texttt{timing.yml} & Differential timing profiler for supported cryptographic units. & Telemetry gate; red rows or elevated exceedance rates flag investigation. \\
+				\texttt{sast.yml} & Semgrep scan over project-owned changes relative to upstream lwIP. & Static review surface focused on added or modified code. \\
+				\texttt{dast.yml} & Network-facing ARP, ICMP, TCP, and UDP probes against the emulated stack. & Integration coverage for transport behavior outside unit scope. \\
+				\bottomrule
+			\end{tabularx}
+		\end{figure}
+
+		These checks are separated so deterministic correctness gates are not conflated with profiling or integration telemetry. Unit and CAVP failures are treated as hard correctness failures; timing results are evidence of drift or input-dependent behavior, not a formal leakage proof under adversarial averaging models. The nightly \texttt{publish} job is gated on the validation set, so release artifacts are not produced from a failed run.
+
+		Each workflow writes a self-contained job summary intended to be usable as an audit artifact without cloning the repository. Unit summaries list the governing RFC section and failing vector where applicable; CAVP summaries report per-primitive pass counts and mismatches; timing summaries include deviation charts and median/exceedance tables; SAST summaries list scoped findings. Current runs are available from the repository Actions page: \url{https://github.com/cagscalclabs/lwip-ce/actions}.
+
+		\begin{figure}[H]
+			\centering
+			\includegraphics[width=0.62\linewidth]{ci_pipeline_graph.jpg}
+			\caption{\footnotesize GitHub Actions visualization of a \texttt{build.yml} run: \texttt{dylib\_latest} builds once, then fans out to the unit, CAVP, and timing workflows alongside SAST/DAST, all gating \texttt{publish}.}
+		\end{figure}
+
+		One deliberate exclusion is worth documenting: RNG validation is not part of the emulator unit suite. \texttt{CEmu}'s SRAM behavior is deterministic and does not reproduce the physical bitline noise used by the entropy source, so emulator RNG output is not meaningful evidence for this implementation. RNG behavior is instead validated against hardware captures, following the protocol in Section~\ref{ssec:contributing_data}. There is also no dedicated unit-level harness for the Ethernet RX driver or the \texttt{membuffer} allocator in isolation; network-facing behavior is covered by DAST, while allocator behavior is exercised through stack integration paths.
 
 		\subsection{Unified Event System and Diagnostic Traceback}
 
@@ -754,6 +774,13 @@ for (uint8_t i = 0; i < count; i++) {
 }
 		\end{verbatim}
 
+		\begin{wrapfigure}{r}{0.42\linewidth}
+			\centering
+			\includegraphics[width=\linewidth]{traceback_demo.jpg}
+			\caption{\footnotesize On-device traceback output from the browser example after a TLS fetch failure. The socket-level error appears first, followed by the stack frames that led to it.}
+			\label{fig:traceback_demo}
+		\end{wrapfigure}
+
 		Two kinds of entry can appear in the buffer. A \emph{code} entry (an ordinary \texttt{WARN}/\texttt{ERROR} raised from inside the stack) carries \texttt{module}, \texttt{kind}, \texttt{file}, \texttt{line}, and an optional caller-supplied \texttt{extra} code identifying the exact source location and circumstance. A \emph{socket} entry, pushed by the higher-level socket wrapper API when it maps an internal failure into something the application sees, instead carries \texttt{component} and \texttt{operation} (which socket subsystem and call were involved), \texttt{raw\_error} (the underlying \texttt{err\_t} or module-specific code), \texttt{mapped\_error}, and \texttt{status}---\texttt{file}/\texttt{line} are zero on these, since the causal call site is expected to already be present as a preceding code entry in the same trace. In both cases the entry is small and fixed-size, so the whole buffer costs a bounded, constant amount of memory regardless of how chatty a given failure was.
 
 		The result is that a socket-level failure---a connection that times out, a write that fails, a handshake that aborts---is no longer just a single opaque status code at the top of the call stack. The application can walk backward through exactly the chain of WARN/ERROR events that led to it, down to the file and line where the underlying condition was first detected, without needing to have instrumented anything in advance or reproduced the failure under a debugger.
@@ -765,9 +792,7 @@ for (uint8_t i = 0; i < count; i++) {
 	
 	\subsection{Threat Model}
 	
-	Before discussing specific cryptographic constructions and implementation details, it is important to define the threat model under which the lwIP-CE TLS implementation operates. The TI-84+ CE platform was not designed as a secure computing environment, and the security guarantees of this system must therefore be understood within the constraints of the hardware.
-	
-	This implementation is designed primarily to defend against remote network adversaries while operating on commodity calculator hardware.
+	lwIP-CE's TLS security claims are network-level claims made on top of commodity calculator hardware. The implementation is designed primarily to defend against remote network adversaries; it does not turn the TI-84+ CE into a trusted execution environment.
 	
 	\paragraph{Remote Adversaries}
 	
@@ -780,35 +805,25 @@ for (uint8_t i = 0; i < count; i++) {
 		\item Malformed or adversarial network inputs intended to trigger parser or protocol failures.
 	\end{itemize}
 	
-	The TLS implementation aims to provide confidentiality, integrity, and endpoint authentication against such adversaries, subject to the correctness of the cryptographic primitives and the trust model described in this document.
+	Against this class of attacker, the implementation aims to provide confidentiality, integrity, endpoint authentication, robust parser behavior, and fail-closed handling for malformed protocol inputs, subject to the trust model and algorithm support described in this document.
 	
-	\paragraph{Local Adversaries}
+	\paragraph{Local and Physical Adversaries}
 	
-	A secondary threat model considers attackers with logical access to the device filesystem or software environment. Such attackers may be able to:
+	Local attackers are treated as a bounded-resistance case, not as a fully defended case. A user or tool with access to calculator storage or execution state may be able to:
 	
 	\begin{itemize}
 		\item Replace application binaries or calculator variables (AppVars).
 		\item Modify truststore data or configuration files.
 		\item Inspect non-protected memory contents.
-	\end{itemize}
-	
-	Because the platform provides no secure storage primitives or protected execution environment, the system cannot fully defend against a determined local adversary with the ability to modify device storage or execute arbitrary code.
-	
-	\paragraph{Physical Adversaries}
-	
-	The TI-84+ CE provides no hardware root-of-trust, secure enclave, or tamper-resistant memory. An attacker with physical possession of the device may be able to:
-	
-	\begin{itemize}
-		\item Extract memory contents through debugging interfaces or external tools.
+		\item Patch binaries or firmware outside the normal execution environment.
 		\item Observe power, electromagnetic, or timing side channels during cryptographic operations.
-		\item Modify stored data or firmware outside the normal execution environment.
 	\end{itemize}
 	
-	Protection against physical attacks and advanced side-channel analysis is therefore outside the scope of this implementation.
+	The platform provides no secure storage primitive, protected execution environment, hardware root of trust, secure enclave, or tamper-resistant memory. Accordingly, protection against determined local compromise, physical device compromise, malicious firmware, and advanced side-channel analysis is outside the scope of this implementation. The memory-clearing and guarded-execution mitigations described later reduce residual exposure during normal operation but are not a substitute for secure hardware.
 	
 	\paragraph{Security Goals}
 	
-	Within the above constraints, the lwIP-CE TLS implementation aims to provide:
+	Within those boundaries, lwIP-CE aims to provide:
 	
 	\begin{itemize}
 		\item Standards-compliant TLS 1.3 handshakes.
@@ -816,19 +831,6 @@ for (uint8_t i = 0; i < count; i++) {
 		\item Robust parsing and rejection of malformed protocol inputs.
 		\item Controlled handling of memory and sensitive state where feasible on the platform.
 	\end{itemize}
-	
-	\paragraph{Out-of-Scope Protections}
-	
-	The system does not attempt to provide:
-	
-	\begin{itemize}
-		\item Hardware-backed key protection.
-		\item Resistance to physical device compromise.
-		\item Protection against malicious firmware or operating system modification.
-		\item Strong resistance to advanced side-channel attacks.
-	\end{itemize}
-	
-	Accordingly, the security properties described in this document should be interpreted as network-level protections operating on top of a fundamentally non-secure hardware platform.
 	
 	\subsection{HWRNG Design and Entropy Model}
 	\label{sec:entropy}
@@ -1204,17 +1206,9 @@ for (uint8_t i = 0; i < count; i++) {
 	\paragraph{Encapsulation}
 	\label{ssec:encapsulation}
 	
-	The generator can be invoked via simple means by simply using the \texttt{tls\_random()} function, or for filling buffers, \texttt{tls\_random\_bytes()}. This allows a user to quickly generate cryptographically suitable randomness without needing to initialize the entire TLS stack. However, this places responsibility for ensuring the continued robustness of the entropy tap on the user, and a function is exposed for this very purpose: \texttt{tls\_rng\_healthcheck()}.
+	The raw generator can be used directly through \texttt{tls\_random()} or \texttt{tls\_random\_bytes()}, without initializing the full TLS stack. Those calls use the tap-selection and conditioning model described above, but bypass the TLS DRBG service layer. Direct callers therefore own the source-health policy at the point of use; \texttt{tls\_rng\_healthcheck()} is exposed for that purpose.
 	
-	In this mode, entropy output is not pathed through a DRBG, but is instead the direct result of:
-	\begin{itemize}
-		\item Reading from the entropy tap to a 119-byte entropy pool, with each byte-read being a composite of 17 XOR operations, totaling to 2023 reads for one gathering step.
-		\item Running SHA256 over the entropy pool.
-		\item XOR compression of the resulting digest into a u64
-	\end{itemize}
-	This mode relies on the assumption that the tap is stable and that since the user owns the call-stack, they are responsible for ensuring this at the time they read entropy.
-	
-	Things get a bit more hands-off when the TLS stack is operational given that the stack will occasionally request random bytes invisibly. \texttt{Tls\_init()} enables two timers, one for generator seeding and one for source health checking. Entropy can provided asynchronously by means of a callback-style \textit{entropy request}  (\texttt{tls\_request\_random\_bytes()}). 
+	When the TLS stack is operational, it requests random bytes internally. \texttt{Tls\_init()} enables two timers, one for generator seeding and one for source health checking. Entropy can be provided asynchronously by means of a callback-style \textit{entropy request} (\texttt{tls\_request\_random\_bytes()}).
 		\inputminted[
 			breaklines,
 			breakanywhere,
@@ -1394,105 +1388,29 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	
 	Instead, the project demonstrates algorithmic correctness against NIST CAVP-published response files and compatible generated reference vectors. The CAVP workflow downloads the relevant NIST \texttt{.rsp} vector archives for supported primitives and selects 16 random samples per primitive on each run. For primitives without compatible CAVP response files, vectors are generated during the workflow with \texttt{python3-cryptography} using the relevant RFC-defined algorithm parameters. If NIST resources are unavailable, the workflow uses the cached CAVP archives from a previous successful run; if neither the source archive nor cache is available, validation fails closed.
 
-	The selected samples are packaged into the \texttt{CAVPIN} AppVar and transferred to the emulator, where the calculator-side runner dispatches each vector to the corresponding implementation. Results are written into \texttt{CAVPOUT}, transferred back to the runner, and parsed against the expected outputs produced from the NIST or \texttt{python3-cryptography} reference material. This provides randomized regression coverage and evidence from CAVP-derived vector checks, without representing a formal CAVP submission or certification.
-
 	\paragraph{Round-trip pipeline}: The reason for the AppVar hand-off is that the implementation under test only exists on the calculator --- the same eZ80 binary that ships, not a host re-build --- so the vectors have to travel to the device and the answers have to travel back. The pipeline has four stages. \emph{(1) Serialization}: the host harness encodes the selected vectors (inputs, keys, IVs, and the metadata identifying which primitive and operation each belongs to) into the \texttt{CAVPIN} AppVar, a flat binary layout the on-device runner can walk without a parser. \emph{(2) On-device execution}: \texttt{CAVPIN} is loaded onto the emulator, the runner reads each record, calls the real lwIP-CE implementation, and appends the computed output to the \texttt{CAVPOUT} AppVar --- the device never sees the expected answers, so it cannot accidentally echo them. \emph{(3) Exfiltration}: \texttt{CAVPOUT} is pulled back off the emulator to the host. \emph{(4) Comparison}: the host parses \texttt{CAVPOUT} and checks each computed value against the reference output it withheld in stage~1, byte-for-byte. A mismatch on any sample fails the run and names the offending primitive and vector index, so a regression points at a specific algorithm rather than a vague ``CAVP failed.'' Keeping the reference answers exclusively on the host side is deliberate: it ensures the device is genuinely computing the result, not transporting it.
 
 	\paragraph{Exclusions}: RSA-PSS vectors are generated with \texttt{python3-cryptography} because this implementation fixes $e=65537$, while the available NIST PSS response files do not provide a compatible fixed-exponent set. X25519 vectors are also generated with \texttt{python3-cryptography}, supplemented by RFC 7748 vectors, because CAVP does not publish X25519 coverage for this use case.
 
 	Latest CAVP-validation workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml}.
-	
-\begin{center}
-\rule{0.7\linewidth}{0.2pt}
-\end{center}
-
-	The workflow pipeline runs these layers independently so long-running profiling does not block deterministic unit validation. Unit results provide hard regression gates; profiling results provide ongoing security/performance telemetry and flag areas requiring deeper analysis. Together, they form a practical validation model for a constrained platform: strict correctness checks where determinism is expected, and measured characterization where hardware/runtime noise is unavoidable.
-	
-	As with the rest of this document, these tests support engineering confidence and change control, but do not constitute external certification. Their purpose is to make assumptions explicit, catch regressions early, and provide reproducible evidence for design and security claims. The timing framework is intended to detect input-dependent regression and structural timing drift, not to serve as a formal leakage proof under adversarial averaging models.
-
-	\subsubsection{Continuous Integration}
-	\label{ssec:ci}
-
-	Test execution is structured for reviewability rather than just pass/fail signaling. \texttt{build.yml} is the orchestrator: it builds the dylib once, then fans out to four self-audit workflows as parallel \texttt{workflow\_call} jobs --- the deterministic unit suite (\texttt{tests.yml}), CAVP-vector validation (\texttt{cavp.yml}), the differential timing profiler (\texttt{timing.yml}), and static analysis (\texttt{sast.yml}), alongside the DAST harness (\texttt{dast.yml}) --- each producing a self-contained job summary intended to be readable as an audit artifact without reference to source. The nightly \texttt{publish} job is itself gated on every one of these checks passing, so a release is never cut from a build that failed validation.
-
-	The unit-test job summary surfaces, for each unit, the RFC and section identifier the tests are derived from (recorded as part of test metadata at authoring time). On failure, the specific RFC test vector that diverged is reported rather than just the failing unit, so a reader can immediately locate the corresponding normative reference. The differential timing profiler emits a per-build chart of class-versus-calibration deviations directly into the job summary, alongside per-primitive median and exceedance-rate tables, so trend drift across builds is visible without downloading raw logs.
-
-	\paragraph{How to read a run (for external reviewers)}: open the Actions tab at the link below and select a commit; the four self-audit workflows appear as separate checks. A green run means every gate passed for that commit; the substance is in each workflow's \emph{job summary}, which is written to be read on its own without cloning the repository. For \textbf{unit tests}, the summary lists each unit with its governing RFC/section, and on failure names the exact diverging vector --- so a reviewer confirms not just \emph{that} a primitive passed but \emph{against which normative reference}. For \textbf{CAVP}, the summary reports per-primitive pass counts over the randomly sampled vectors, with any mismatch identified by primitive and vector index. For \textbf{timing}, the summary embeds the per-primitive deviation chart and the median/exceedance tables; a reviewer looks for all-green rows and near-zero median deviation, and treats any red row or elevated exceedance rate as a flagged item rather than an automatic failure (timing evidence is interpreted as a trend signal, per the profiling discussion above). For \textbf{SAST}, the summary lists Semgrep findings scoped to code the project added or changed relative to upstream lwIP, so review effort lands on new surface rather than the inherited base. Because every summary is self-contained and regenerated on each push, a reviewer can audit the current state of any claim in this document directly from the latest run, without trusting a cached artifact or re-deriving it locally.
-
-	The latest workflow runs are accessible at \url{https://github.com/cagscalclabs/lwip-ce/actions}.
-
-	\begin{figure}[H]
-		\centering
-		\includegraphics[width=0.62\linewidth]{ci_pipeline_graph.jpg}
-		\caption{\footnotesize GitHub Actions visualization of a \texttt{build.yml} run: \texttt{dylib\_latest} builds once, then fans out to the unit, CAVP, and timing workflows alongside SAST/DAST, all gating \texttt{publish}.}
-	\end{figure}
-
-	One deliberate exclusion is worth documenting: the RNG unit tests are not part of the automated CI pipeline. The CI environment executes against \texttt{CEmu}, whose SRAM emulation is deterministic and does not reproduce the physical bitline behavior the entropy source depends on. Emulated RNG output is therefore statistically meaningless for the purposes of this implementation, and incidental emulator-quirk failures during source selection would block unrelated regression gates. RNG validation is instead performed against hardware captures, following the protocol described in Section~\ref{ssec:contributing_data}.
-
-	\subsubsection{Community Data Contributions}
-	\label{ssec:contributing_data}
-
-	Two of the analyses in this document --- the empirical correlation calibration in Section~\ref{ssec:correlation_calibration} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
-
-	\paragraph{What to capture}
-	Two on-device tools produce the submission artifacts:
-	\begin{itemize}
-		\item \textbf{RNG calibration capture.} Produces a series of AppVars, half for raw source output (R0) and half for 16-XOR conditioned output (R17). The output is sharded across multiple AppVars because individual AppVar size and on-device pagination limits prevent emitting a single contiguous file. A companion Python script (in \texttt{docs/whitepaper/scripts/}) parses the submitted AppVars, treats each byte as eight independent bit streams (bit position 1 across all bytes is one stream, bit position 2 another, and so on), and performs per-stream Bernoulli analysis. This per-bit-column treatment is the empirical mirror of the proof's accounting assumption in Section~\ref{ssec:entropy} that credits at most one entropy-bearing bit per source byte.
-		\item \textbf{Differential timing capture.} Produces a structured log file using a \texttt{key=value} record format. Each unit's calibration class and per-class results are emitted with explicit denotation so the upstream analysis can locate each unit and its associated measurements by regular expression. The log can be exfiltrated via standard AppVar transfer.
-	\end{itemize}
-
-	\paragraph{Device identification}
-	Contributions are most useful when accompanied by enough device metadata to locate the submission within the broader sample population. At minimum:
-	\begin{itemize}
-		\item Hardware revision (visible on the back-label sticker or via \texttt{[mode]} $\rightarrow$ \texttt{[about]}).
-		\item Operating system version.
-		\item Boot code version, where reported by the device.
-	\end{itemize}
-	Contributors who are unsure which revision they hold are encouraged to submit anyway with whatever metadata they can identify; the project can usually disambiguate from the supplied OS and boot-code strings.
-
-	\paragraph{How to submit}
-	Submissions can be sent via either channel below:
-	\begin{itemize}
-		\item Project Discord: \url{https://discord.gg/CtEq3rXZGJ} --- a dedicated channel exists for capture submissions and questions about the protocol.
-		\item Direct email: \texttt{info@cagscalclabs.net} --- preferred when attaching large AppVar bundles.
-	\end{itemize}
-	The capture tool itself, its source, and the parsing scripts are versioned within this repository; contributors are asked to record which tool version produced their submission so the analysis pipeline can account for any schema changes between releases.
-
-	\paragraph{Privacy and licensing}
-	The project does not collect personally identifying information from contributors and does not maintain an attribution roster for submitted captures. This is a deliberate privacy-by-design choice: the community includes minors, and the analytical value of a capture is determined entirely by the device metadata accompanying it (hardware revision, OS version, boot code), not by the identity of the submitter. Captures are processed and incorporated into the published dataset under the project's existing license; once accepted, a capture is not retraceable to its submitter through any project-controlled record. Contributors who wish to be visible may of course identify themselves publicly on Discord or in GitHub discussions, but the project itself maintains no such linkage.
 
 	\subsection{Profiling and Mitigating Platform Security Limitations}
 	
 	\subsubsection{The TI-84+ CE Hardware Security Profile}
-	The TI-84+ CE hardware security profile is sufficiently limited that, while drafting this section, I considered leaving it blank; doing so would not materially change the conclusion.
-	
-	The TI-84+ CE provides no meaningful hardware root-of-trust, no secure enclave, and no robust anti-tamper boundary. Accordingly, all software security claims in this document are explicitly bounded by that platform reality. 
+	The threat model above treats local and physical attackers as out of scope because the TI-84+ CE lacks the hardware primitives normally used to defend against them. This section identifies the platform limits that shape that decision and the narrow mitigations implemented anyway.
 	
 	\textbf{Profile Characteristics}
 	\begin{itemize}
 		\item The platform is built around a Zilog eZ80-class CPU (24-bit addressing mode, 48\,MHz class operation), optimized for calculator workloads rather than secure key custody or trusted execution.\footnote{\url{https://ce-programming.github.io/toolchain/static/hardware.html}}
-		\item The platform does not expose a hardware secure enclave, TPM-equivalent, or other dedicated primitive for sealing long-term private key material in user-space workflows.
-		\item Memory and storage interfaces are not designed as tamper-resistant boundaries against a local adversary with physical control of the device and transfer path.
-		\item Security-sensitive software therefore operates as a best-effort hardening layer over commodity calculator hardware, not as a hardware-backed trust anchor.
+		\item There is no hardware secure enclave, TPM-equivalent, MMU-backed isolation boundary, or dedicated primitive for sealing long-term private key material in user-space workflows.
+		\item Memory and storage interfaces are observable and modifiable by a sufficiently privileged local tool or a user with physical control of the device and transfer path.
 		\item Runtime checks that depend on wall-clock time (for example certificate validity windows or truststore age warnings) are only as reliable as the device clock state or external synchronization path.
 	\end{itemize}
 	
-	From this profile, the implementation \textbf{cannot fully defend against}:
-	\begin{itemize}
-		\item Physical side-channel leakage (power/EM/thermal) from the device during cryptographic operation.
-		\item Local code-execution adversaries that patch binaries, bypass integrity checks, or tamper with persistent containers (for example AppVars).
-		\item Offline extraction or modification of unsealed keying material and trust artifacts when the device/storage path is under attacker control.
-	\end{itemize}
-	
-From this profile, the implementation \textbf{can partially mitigate}:
-\begin{itemize}
-	\item Host-assisted memory observation during active cryptographic transforms (for example side-loading plus memory mapping).
-	\item Leakage of secrets or intermediate plaintext $\leftrightarrow$ ciphertext transform state in stack and allocated buffers, through explicit zeroization and guarded handling.
-\end{itemize}
-These mechanisms are implemented via the \textbf{cryptoguard} wrapper detailed in the next section.
+	Software cannot close those gaps, but it can reduce avoidable exposure. lwIP-CE therefore focuses its local hardening on two practical targets: limiting host-assisted observation during active cryptographic transforms and reducing residual plaintext/key material left in stack or heap buffers after use. These mechanisms are implemented through the \textbf{cryptoguard} wrapper and explicit zeroization paths described below.
 	
 	\subsubsection{Cryptoguard Wrapper}
-	In an effort to provide modest defense against host-assisted memory observation and leakage of secrets/plaintext, we implemented a \texttt{cryptoguard} module. This module provides wrapper functions around security-sensitive contexts. The module:
+	The \texttt{cryptoguard} module wraps security-sensitive routines with two best-effort protections:
 	\begin{itemize}
 		\item Saves the current interrupt state, then disables system interrupts. This reduces the opportunity for host-assisted observation during sensitive operations, since USB activity handling depends on interrupt-driven processing. On exit, the prior interrupt state is restored.
 		\item Clears stack memory from the current stack location up to the configured stack top before returning to the caller. This reduces residual exposure of stack-allocated buffers and intermediate values after sensitive routines complete.
@@ -1614,6 +1532,39 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	\setcounter{subsection}{0}
 	\renewcommand{\thesubsection}{\Alph{subsection}}
 	
+	\subsection{Community Data Contributions}
+	\label{ssec:contributing_data}
+
+	Two of the analyses in this document --- the empirical correlation calibration in Section~\ref{ssec:correlation_calibration} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
+
+	\paragraph{What to capture}
+	Two on-device tools produce the submission artifacts:
+	\begin{itemize}
+		\item \textbf{RNG calibration capture.} Produces a series of AppVars, half for raw source output (R0) and half for 16-XOR conditioned output (R17). The output is sharded across multiple AppVars because individual AppVar size and on-device pagination limits prevent emitting a single contiguous file. A companion Python script (in \texttt{docs/whitepaper/scripts/}) parses the submitted AppVars, treats each byte as eight independent bit streams (bit position 1 across all bytes is one stream, bit position 2 another, and so on), and performs per-stream Bernoulli analysis. This per-bit-column treatment is the empirical mirror of the proof's accounting assumption in Section~\ref{ssec:entropy} that credits at most one entropy-bearing bit per source byte.
+		\item \textbf{Differential timing capture.} Produces a structured log file using a \texttt{key=value} record format. Each unit's calibration class and per-class results are emitted with explicit denotation so the upstream analysis can locate each unit and its associated measurements by regular expression. The log can be exfiltrated via standard AppVar transfer.
+	\end{itemize}
+
+	\paragraph{Device identification}
+	Contributions are most useful when accompanied by enough device metadata to locate the submission within the broader sample population. At minimum:
+	\begin{itemize}
+		\item Hardware revision (visible on the back-label sticker or via \texttt{[mode]} $\rightarrow$ \texttt{[about]}).
+		\item Operating system version.
+		\item Boot code version, where reported by the device.
+	\end{itemize}
+	Contributors who are unsure which revision they hold are encouraged to submit anyway with whatever metadata they can identify; the project can usually disambiguate from the supplied OS and boot-code strings.
+
+	\paragraph{How to submit}
+	Submissions can be sent via either channel below:
+	\begin{itemize}
+		\item Project Discord: \url{https://discord.gg/CtEq3rXZGJ} --- a dedicated channel exists for capture submissions and questions about the protocol.
+		\item Direct email: \texttt{info@cagscalclabs.net} --- preferred when attaching large AppVar bundles.
+	\end{itemize}
+	The capture tool itself, its source, and the parsing scripts are versioned within this repository; contributors are asked to record which tool version produced their submission so the analysis pipeline can account for any schema changes between releases.
+
+	\paragraph{Privacy and licensing}
+	The project does not collect personally identifying information from contributors and does not maintain an attribution roster for submitted captures. This is a deliberate privacy-by-design choice: the community includes minors, and the analytical value of a capture is determined entirely by the device metadata accompanying it (hardware revision, OS version, boot code), not by the identity of the submitter. Captures are processed and incorporated into the published dataset under the project's existing license; once accepted, a capture is not retraceable to its submitter through any project-controlled record. Contributors who wish to be visible may identify themselves publicly on Discord or in GitHub discussions, but the project itself maintains no such linkage.
+
+	\newpage
 	\subsection{RNG Statistical Dumps}
 	This appendix includes the RNG dataset summary generated from \texttt{datasets/appendix\_a} at build time.
 
