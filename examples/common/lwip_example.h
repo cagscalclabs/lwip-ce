@@ -147,6 +147,110 @@ static void lwip_example_line(const char *text)
     lwip_example_row = (uint8_t)(lwip_example_row + h);
 }
 
+/* Draw text that may be wider than the screen, wrapping at word boundaries
+ * onto as many additional lines (each at +line_h()) as needed -- nothing is
+ * truncated. Falls back to a hard character break only if a single word
+ * alone is wider than the available width. Each wrapped row goes through
+ * lwip_example_line()'s own bottom-of-screen wraparound. */
+static void lwip_example_line_wrapped(const char *text)
+{
+    if (!text || !*text)
+    {
+        lwip_example_line("");
+        return;
+    }
+
+    const unsigned max_w = LWIP_EXAMPLE_LCD_W - (unsigned)LWIP_EXAMPLE_LEFT;
+    char row[64];
+    size_t row_len = 0;
+    const char *p = text;
+
+    row[0] = '\0';
+
+    while (*p)
+    {
+        size_t word_len = 0;
+        while (p[word_len] && p[word_len] != ' ')
+        {
+            word_len++;
+        }
+        if (word_len == 0)
+        {
+            /* Leading/repeated space -- skip it. */
+            p++;
+            continue;
+        }
+        if (word_len >= sizeof(row))
+        {
+            word_len = sizeof(row) - 1;
+        }
+
+        char candidate[64];
+        if (row_len == 0)
+        {
+            memcpy(candidate, p, word_len);
+            candidate[word_len] = '\0';
+        }
+        else
+        {
+            snprintf(candidate, sizeof(candidate), "%s %.*s",
+                     row, (int)word_len, p);
+        }
+
+        if (gfx_GetStringWidth(candidate) <= max_w)
+        {
+            strncpy(row, candidate, sizeof(row) - 1);
+            row[sizeof(row) - 1] = '\0';
+            row_len = strlen(row);
+        }
+        else if (row_len > 0)
+        {
+            /* Word doesn't fit alongside what's already on this row --
+             * flush the row as-is and retry the same word on a fresh one. */
+            lwip_example_line(row);
+            row[0] = '\0';
+            row_len = 0;
+            continue;
+        }
+        else
+        {
+            /* A single word alone is wider than the screen -- hard-break
+             * it character by character so we always make forward progress. */
+            size_t fit = 0;
+            char one[2] = {0, 0};
+            unsigned w = 0;
+            while (fit < word_len)
+            {
+                one[0] = p[fit];
+                w += gfx_GetCharWidth(p[fit]);
+                if (w > max_w)
+                {
+                    break;
+                }
+                fit++;
+            }
+            if (fit == 0)
+            {
+                fit = 1; /* always consume at least one char */
+            }
+            memcpy(row, p, fit);
+            row[fit] = '\0';
+            lwip_example_line(row);
+            row[0] = '\0';
+            row_len = 0;
+            p += fit;
+            continue;
+        }
+
+        p += word_len;
+    }
+
+    if (row_len > 0)
+    {
+        lwip_example_line(row);
+    }
+}
+
 /* printf-style line. */
 #define lwip_example_linef(...)                        \
     do                                                 \

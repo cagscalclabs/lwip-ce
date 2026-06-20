@@ -14,6 +14,7 @@
     "              idle      stack handles it passively (ARP/ICMP/IP/closed-port)",
     "              udp_recv  bound UDP PCB looping in its recv callback",
     "              tcp_listen tcp_listen PCB accepting + reading",
+    "              tls_client active TLS client that connects to the host runner",
     "              raw_recv  raw ICMP/IP PCB",
     "  port      L4 port the calc listens on for this test (0 if N/A)",
     "  probe     scapy probe key dispatched by lwip-dast.py",
@@ -185,6 +186,46 @@
       "intent": "A data burst far larger than the app recv buffer must be bounded (no overflow).",
       "expect": "alive",
       "ok_responses": ["ALIVE", "ABORT", "ACCEPT"]
+    },
+    {
+      "id": "tls-clean-echo",
+      "name": "TLS clean echo",
+      "state": "tls_client",
+      "port": 9443,
+      "probe": "tls_echo_clean",
+      "intent": "TLS 1.3 baseline: complete handshake, receive encrypted payload, echo it back.",
+      "expect": "reply",
+      "ok_responses": ["REPLY"]
+    },
+    {
+      "id": "tls-psk-resume-echo",
+      "name": "TLS PSK resume echo",
+      "state": "tls_client",
+      "port": 9443,
+      "probe": "tls_echo_resume",
+      "intent": "Second connection should resume by TLS 1.3 PSK/session ticket, then echo encrypted data.",
+      "expect": "reply",
+      "ok_responses": ["REPLY"]
+    },
+    {
+      "id": "tls-missing-record",
+      "name": "TLS missing record",
+      "state": "tls_client",
+      "port": 9443,
+      "probe": "tls_missing_record",
+      "intent": "Server accepts TCP and drops the handshake before any TLS record; calc must fail closed and stay alive.",
+      "expect": "abort_alive",
+      "ok_responses": ["ABORT", "ALIVE"]
+    },
+    {
+      "id": "tls-unsupported-certverify",
+      "name": "TLS unsupported certverify",
+      "state": "tls_client",
+      "port": 9443,
+      "probe": "tls_unsupported_certverify",
+      "intent": "Server presents an ECDSA TLS 1.3 identity; calc must reject unsupported CertificateVerify behavior and stay alive.",
+      "expect": "abort_alive",
+      "ok_responses": ["ABORT", "ALIVE"]
     }
   ]
 }

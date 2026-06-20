@@ -11,7 +11,7 @@ LIBLOAD_LIBS := $(filter-out %/lwip.lib,$(wildcard $(CEDEV_TOOLCHAIN)/lib/libloa
 NAME = LWDAST
 DESCRIPTION = "lwIP DAST harness"
 COMPRESSED = NO
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 
 # -I$(RELEASE_ROOT)   <lwip.h> + lwip/core/*, links libload lwip.lib

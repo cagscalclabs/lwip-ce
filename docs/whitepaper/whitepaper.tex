@@ -1504,28 +1504,28 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 			\midrule
 			\endhead
 			TLS \texttt{CertificateVerify} & Supported now & \texttt{rsa\_pss\_rsae\_sha256} with 1024--2048 bit RSA leaf keys. \\
-			& Planned & ECDSA-P-256, RSA keys up to 4096 bits where timing and memory permit, and wider RSA-PSS hash variants. \\
-			& Out of scope & RSA-PKCS1 \texttt{CertificateVerify}, which TLS~1.3 forbids. \\
+			TLS \texttt{CertificateVerify} & Planned & ECDSA-P-256, RSA keys up to 4096 bits where timing and memory permit, and wider RSA-PSS hash variants. \\
+			TLS \texttt{CertificateVerify} & Out of scope & RSA-PKCS1 \texttt{CertificateVerify}, which TLS~1.3 forbids. \\
 			\addlinespace
 			Certificate-chain verification & Supported now & Streaming chain parsing; RSA/SHA-256 adjacent-link verification where supported; fatal failure for verifiable links that do not check out. \\
-			& Planned & Broader issuer-key and signature-algorithm coverage. \\
-			& Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
+			Certificate-chain verification & Planned & Broader issuer-key and signature-algorithm coverage. \\
+			Certificate-chain verification & Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
 			\addlinespace
 			Client authentication & Supported now & \texttt{CertificateRequest} is parsed, included in the transcript, and answered with an empty client certificate list. \\
-			& Planned & None currently committed. \\
-			& Out of scope & Client-certificate identity support and private-key signing on device. \\
+			Client authentication & Planned & None currently committed. \\
+			Client authentication & Out of scope & Client-certificate identity support and private-key signing on device. \\
 			\addlinespace
 			Truststore policy & Supported now & Signed compact AppVar truststore, schema-version checks, and graceful degradation when trust anchoring is unavailable. \\
-			& Planned & Warning-only truststore age checks once reliable time exists. \\
-			& Out of scope & Treating AppVars or local storage as tamper-resistant. \\
+			Truststore policy & Planned & Warning-only truststore age checks once reliable time exists. \\
+			Truststore policy & Out of scope & Treating AppVars or local storage as tamper-resistant. \\
 			\addlinespace
 			Runtime ABI & Supported now & Magic-checked resident export table; the bootstrap patches the shared prefix of app/stub exports. \\
-			& Planned & Append-only export growth after v1.0 with stable existing slot meanings. \\
-			& Out of scope & Backward compatibility for calls to exports that do not exist in the installed resident app. \\
+			Runtime ABI & Planned & Append-only export growth after v1.0 with stable existing slot meanings. \\
+			Runtime ABI & Out of scope & Backward compatibility for calls to exports that do not exist in the installed resident app. \\
 			\addlinespace
 			Hardware security & Supported now & Best-effort memory clearing, bounded diagnostics, RNG health checks, and remote-network threat modeling. \\
-			& Planned & Continued timing/profiling coverage and wider sample collection. \\
-			& Out of scope & Secure boot, protected memory, secure key storage, and resistance to determined physical compromise. \\
+			Hardware security & Planned & Continued timing/profiling coverage and wider sample collection. \\
+			Hardware security & Out of scope & Secure boot, protected memory, secure key storage, and resistance to determined physical compromise. \\
 			\bottomrule
 		\end{longtable}
 		\endgroup

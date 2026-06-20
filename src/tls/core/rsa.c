@@ -277,6 +277,13 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
         (pubkey == NULL) ||
         (outbuf == NULL) ||
         (signature_len == 0) ||
+        /* An RSA signature is always exactly one modulus-width block (RFC
+         * 8017). A caller can hand us a signature stashed from a chain link
+         * whose actual algorithm wasn't verified to be RSA at this modulus
+         * size (e.g. an ECDSA signature paired against an RSA truststore
+         * root by a subject-name collision) -- without this check the
+         * memcpy below reads past the end of a shorter signature buffer. */
+        (signature_len != keylen) ||
         (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
         (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(pubkey[keylen - 1] & 1)))
@@ -312,6 +319,14 @@ bool tls_rsa_decrypt_signature_exp(const uint8_t *signature,
         (pubkey == NULL) ||
         (outbuf == NULL) ||
         (signature_len == 0) ||
+        /* See tls_rsa_decrypt_signature's matching check: an RSA signature
+         * must be exactly one modulus-width block. Without this, a
+         * wrong-sized signature (e.g. an ECDSA sig stashed from a chain
+         * link verified against an RSA truststore root by a subject-name
+         * collision) causes the memcpy below to read past its buffer and
+         * powmod a garbage-padded value -- slow (full modexp on garbage)
+         * and a heap out-of-bounds read. */
+        (signature_len != keylen) ||
         (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
         (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(pubkey[keylen - 1] & 1)) ||

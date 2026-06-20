@@ -11,6 +11,7 @@ typedef enum {
     DAST_STATE_IDLE = 0,
     DAST_STATE_UDP_RECV,
     DAST_STATE_TCP_LISTEN,
+    DAST_STATE_TLS_CLIENT,
     DAST_STATE_RAW_RECV
 } dast_state_t;
 
@@ -22,7 +23,7 @@ typedef struct {
     const char  *intent;
 } dast_test_t;
 
-#define DAST_TEST_COUNT 16
+#define DAST_TEST_COUNT 20
 
 static const dast_test_t dast_tests[DAST_TEST_COUNT] = {
     { "icmp-echo-baseline", "ICMP echo baseline", DAST_STATE_IDLE, 0, "Liveness baseline: a well-formed ping must be answered." },
@@ -41,6 +42,10 @@ static const dast_test_t dast_tests[DAST_TEST_COUNT] = {
     { "tcp-malformed-flags", "Malformed TCP flags", DAST_STATE_TCP_LISTEN, 9998, "NULL / FIN / XMAS / SYN+FIN flag combos must be dropped or RST, not crash." },
     { "tcp-tiny-window", "Tiny/zero window + overlap", DAST_STATE_TCP_LISTEN, 9998, "Zero-window probes and overlapping segments must not desync or overrun." },
     { "tcp-data-overflow", "Oversized TCP data burst", DAST_STATE_TCP_LISTEN, 9998, "A data burst far larger than the app recv buffer must be bounded (no overflow)." },
+    { "tls-clean-echo", "TLS clean echo", DAST_STATE_TLS_CLIENT, 9443, "TLS 1.3 baseline: complete handshake, receive encrypted payload, echo it back." },
+    { "tls-psk-resume-echo", "TLS PSK resume echo", DAST_STATE_TLS_CLIENT, 9443, "Second connection should resume by TLS 1.3 PSK/session ticket, then echo encrypted data." },
+    { "tls-missing-record", "TLS missing record", DAST_STATE_TLS_CLIENT, 9443, "Server accepts TCP and drops the handshake before any TLS record; calc must fail closed and stay alive." },
+    { "tls-unsupported-certverify", "TLS unsupported certverify", DAST_STATE_TLS_CLIENT, 9443, "Server presents an ECDSA TLS 1.3 identity; calc must reject unsupported CertificateVerify behavior and stay alive." },
 };
 
 #endif /* LWIP_DAST_TESTS_H */

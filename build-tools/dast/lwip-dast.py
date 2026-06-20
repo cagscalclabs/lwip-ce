@@ -4,16 +4,15 @@
 Pairs with the calc-side harness in tests/profiling/lwip_dast. The two
 sides walk tests/profiling/lwip_dast/dast_tests.json in the SAME ORDER:
 
-  - the calc enters the per-test `state` (idle / udp_recv / tcp_listen)
-  - this script sends the `probe` (scapy) at the calc
-  - the operator reads what the calc did off its screen and reports it
+  - this script prepares any host-side fixture needed by the test
+  - the calc enters the per-test `state`
+    (idle / udp_recv / tcp_listen / tls_client)
+  - this script sends the `probe` at the calc, or services a TLS fixture
   - this script grades the report against the test's `ok_responses`
   - results are written to tests/dast.json
 
-Crash-vs-abort can only be judged by a human watching the calc, so the
-operator is prompted after each probe. Manual `notes` and any `grade`
-override you hand-edit into tests/dast.json are carried over across runs,
-keyed by test id.
+Manual `notes` and any `grade` override you hand-edit into tests/dast.json
+are carried over across runs, keyed by test id.
 
 Usage:
     sudo ./build-tools/dast/lwip-dast.sh --ip 192.168.1.42
@@ -26,7 +25,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
+import ssl
+import subprocess
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,6 +71,7 @@ STATE_ENUM = {
     "idle": "DAST_STATE_IDLE",
     "udp_recv": "DAST_STATE_UDP_RECV",
     "tcp_listen": "DAST_STATE_TCP_LISTEN",
+    "tls_client": "DAST_STATE_TLS_CLIENT",
     "raw_recv": "DAST_STATE_RAW_RECV",
 }
 
@@ -87,6 +92,7 @@ def gen_header() -> None:
         "    DAST_STATE_IDLE = 0,",
         "    DAST_STATE_UDP_RECV,",
         "    DAST_STATE_TCP_LISTEN,",
+        "    DAST_STATE_TLS_CLIENT,",
         "    DAST_STATE_RAW_RECV",
         "} dast_state_t;",
         "",
@@ -277,6 +283,195 @@ class Probes:
 
 
 # ---------------------------------------------------------------------
+# TLS fixtures
+# ---------------------------------------------------------------------
+
+TLS_PROBES = {
+    "tls_echo_clean",
+    "tls_echo_resume",
+    "tls_missing_record",
+    "tls_unsupported_certverify",
+}
+
+TLS_ECHO_TIMEOUT = 45.0
+TLS_TEST_CERT_DIR = Path(tempfile.gettempdir()) / "lwip-ce-dast-tls"
+
+
+def ensure_test_cert(kind: str) -> tuple[Path, Path]:
+    TLS_TEST_CERT_DIR.mkdir(parents=True, exist_ok=True)
+    cert = TLS_TEST_CERT_DIR / f"{kind}.crt"
+    key = TLS_TEST_CERT_DIR / f"{kind}.key"
+    if cert.is_file() and key.is_file():
+        return cert, key
+
+    import shutil
+    openssl = shutil.which("openssl")
+    if not openssl:
+        die("openssl is required to generate DAST TLS test certificates")
+
+    if kind == "rsa":
+        cmd = [
+            openssl, "req", "-x509", "-newkey", "rsa:2048",
+            "-sha256", "-nodes", "-days", "1",
+            "-subj", "/CN=lwip-dast-rsa",
+            "-keyout", str(key), "-out", str(cert),
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    elif kind == "ecdsa":
+        subprocess.run(
+            [openssl, "ecparam", "-name", "prime256v1", "-genkey",
+             "-noout", "-out", str(key)],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            [openssl, "req", "-new", "-x509", "-sha256", "-days", "1",
+             "-subj", "/CN=lwip-dast-ecdsa",
+             "-key", str(key), "-out", str(cert)],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        die(f"unknown TLS cert kind {kind!r}")
+    return cert, key
+
+
+def make_tls_context(kind: str) -> ssl.SSLContext:
+    cert, key = ensure_test_cert(kind)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    try:
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_3
+    except ValueError:
+        die("this Python ssl backend cannot serve TLS 1.3; set "
+            "DAST_PYTHON to an OpenSSL-backed Python, e.g. "
+            "/opt/homebrew/bin/python3.11")
+    try:
+        ctx.set_ciphersuites("TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384")
+    except AttributeError:
+        pass
+    try:
+        ctx.session_id_ctx = b"lwip-dast"
+    except AttributeError:
+        pass
+    ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+    return ctx
+
+
+class TlsProbeServer:
+    def __init__(self, *, bind: str, port: int, probe: str, context: ssl.SSLContext | None):
+        self.bind = bind
+        self.port = port
+        self.probe = probe
+        self.context = context
+        self.payload = f"lwip-dast:{probe}".encode()
+        self.ready = threading.Event()
+        self.done = threading.Event()
+        self.ok = False
+        self.response = "HANG"
+        self.detail = ""
+        self.session_reused = False
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+        if not self.ready.wait(5.0):
+            raise RuntimeError("TLS server did not start listening")
+        if self.detail.startswith("listen failed"):
+            raise RuntimeError(self.detail)
+
+    def wait(self, timeout: float) -> bool:
+        return self.done.wait(timeout)
+
+    def _run(self) -> None:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                srv.bind((self.bind, self.port))
+                srv.listen(1)
+                srv.settimeout(20.0)
+                self.ready.set()
+                conn, peer = srv.accept()
+                with conn:
+                    conn.settimeout(20.0)
+                    if self.probe == "tls_missing_record":
+                        self._missing_record(conn, peer)
+                    else:
+                        self._tls_echo(conn, peer)
+        except Exception as exc:  # noqa: BLE001
+            if not self.ready.is_set():
+                self.detail = f"listen failed: {type(exc).__name__}: {exc}"
+                self.response = "HANG"
+            elif self.probe.startswith("tls_") and self.probe not in (
+                    "tls_echo_clean", "tls_echo_resume"):
+                self.detail = f"{type(exc).__name__}: {exc}"
+                self.response = "ABORT"
+            else:
+                self.detail = f"{type(exc).__name__}: {exc}"
+                self.response = "HANG"
+        finally:
+            self.ready.set()
+            self.done.set()
+
+    def _missing_record(self, conn: socket.socket, peer) -> None:
+        self.detail = f"accepted {peer}, closed before server TLS record"
+        try:
+            conn.recv(512)
+        except OSError:
+            pass
+        self.ok = True
+        self.response = "ABORT"
+
+    def _tls_echo(self, conn: socket.socket, peer) -> None:
+        if self.context is None:
+            raise RuntimeError("missing TLS context")
+        with self.context.wrap_socket(conn, server_side=True) as tls:
+            tls.settimeout(20.0)
+            reused = getattr(tls, "session_reused", False)
+            self.session_reused = bool(reused)
+            if self.probe == "tls_echo_resume" and not self.session_reused:
+                self.detail = f"{peer} completed TLS but did not resume"
+                self.response = "ABORT"
+                return
+            tls.sendall(self.payload)
+            echoed = b""
+            while len(echoed) < len(self.payload):
+                chunk = tls.recv(len(self.payload) - len(echoed))
+                if not chunk:
+                    break
+                echoed += chunk
+            self.ok = echoed == self.payload
+            self.response = "REPLY" if self.ok else "ABORT"
+            self.detail = (f"{peer} echoed {len(echoed)} bytes"
+                           f"{' with PSK resume' if self.session_reused else ''}")
+
+
+class TlsFixtures:
+    def __init__(self, bind: str, dry: bool):
+        self.bind = bind
+        self.dry = dry
+        self._rsa_context: ssl.SSLContext | None = None
+        self._ecdsa_context: ssl.SSLContext | None = None
+
+    def _context(self, probe: str) -> ssl.SSLContext | None:
+        if probe == "tls_missing_record":
+            return None
+        if probe == "tls_unsupported_certverify":
+            if self._ecdsa_context is None:
+                self._ecdsa_context = make_tls_context("ecdsa")
+            return self._ecdsa_context
+        if self._rsa_context is None:
+            self._rsa_context = make_tls_context("rsa")
+        return self._rsa_context
+
+    def start(self, probe: str, port: int) -> TlsProbeServer | None:
+        if self.dry:
+            print(f"    [dry-run] would start TLS fixture {probe} on :{port}")
+            return None
+        server = TlsProbeServer(bind=self.bind, port=port, probe=probe,
+                                context=self._context(probe))
+        server.start()
+        return server
+
+
+# ---------------------------------------------------------------------
 # Liveness + operator prompt + grading
 # ---------------------------------------------------------------------
 
@@ -362,16 +557,57 @@ def write_report(target_ip: str, results: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------
-# Control channel — sends NEXT/DONE/ABRT to the calc's UDP port 9997
+# Control channel — sends START/NEXT/DONE/ABRT to the calc's UDP port
+# 9997 and, for START/NEXT, waits for a READY reply on the same port
+# before returning. The calc replies to whatever peer address sent it
+# the last control message, on the calc's own listening port (9997) --
+# not back to the sender's ephemeral source port -- so the host must
+# itself be bound to 9997 to receive it.
 # ---------------------------------------------------------------------
 
 DAST_CTRL_PORT = 9997
+DAST_CTRL_READY_TIMEOUT = 10.0  # seconds to wait for READY after START/NEXT
 
 
 def ctrl_send(ip: str, msg: str) -> None:
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.sendto(msg.encode(), (ip, DAST_CTRL_PORT))
+
+
+def ctrl_send_and_wait_ready(ip: str, msg: str,
+                             timeout: float = DAST_CTRL_READY_TIMEOUT) -> bool:
+    """Send a control message and block until the calc replies READY.
+
+    Returns True on READY, False on timeout (caller decides whether that's
+    fatal). Binds to DAST_CTRL_PORT locally so the calc's reply -- sent
+    back to that same port on this host -- actually reaches us.
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", DAST_CTRL_PORT))
+        s.settimeout(timeout)
+        print(f"    [ctrl] sending {msg!r} to {ip}:{DAST_CTRL_PORT} "
+              f"(bound locally on {DAST_CTRL_PORT})")
+        s.sendto(msg.encode(), (ip, DAST_CTRL_PORT))
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print(f"    [ctrl] timed out waiting for READY ({timeout:.0f}s)")
+                return False
+            s.settimeout(remaining)
+            try:
+                data, peer = s.recvfrom(64)
+            except socket.timeout:
+                print(f"    [ctrl] timed out waiting for READY ({timeout:.0f}s)")
+                return False
+            print(f"    [ctrl] got {data!r} from {peer}")
+            if data.strip() == b"READY":
+                return True
+            # Anything else (e.g. a stray NEXT echo) — keep waiting for READY
+            # until the deadline.
 
 
 # ---------------------------------------------------------------------
@@ -382,6 +618,7 @@ def run(args) -> int:
     tests = load_manifest()
     prior = load_prior()
     probes = Probes(args.ip, args.iface, dry=args.self_test)
+    tls_fixtures = TlsFixtures(args.tls_bind, dry=args.self_test)
 
     print(f"==> lwIP-CE DAST against {args.ip}"
           f"{' [self-test/dry-run]' if args.self_test else ''}")
@@ -397,8 +634,15 @@ def run(args) -> int:
     print("  Press [clear] on the calc at any time to abort.")
     print()
     if not args.self_test:
-        input("  Calc ready and showing IP? Press Enter here to begin...")
-        ctrl_send(args.ip, "NEXT")  # kick off test 1
+        input("  Is the calc currently running the DAST client and on the screen "
+              "that prints the IP address? If not, please run LWDAST and ensure "
+              "that it is. Then press Enter")
+        print("  Sending START...")
+        if not ctrl_send_and_wait_ready(args.ip, "START"):
+            die("calc did not reply READY to START "
+                f"(waited {DAST_CTRL_READY_TIMEOUT:.0f}s) -- is it on the IP "
+                "screen and reachable?")
+        print("  Calc READY, starting tests.")
 
     results: list[dict] = []
     for i, t in enumerate(tests, 1):
@@ -407,47 +651,85 @@ def run(args) -> int:
               + (f":{t['port']}" if t.get("port") else "")
               + f"   intent: {t['intent']}")
 
-        # Brief pause to let the calc enter the test state and open its PCB
-        # before we fire the probe.
-        if not args.self_test:
-            time.sleep(0.5)
-
         probe_fn = getattr(probes, t["probe"], None)
-        if probe_fn is None:
+        is_tls = t["probe"] in TLS_PROBES
+        tls_server = None
+        if is_tls:
+            print(f"    probe: {t['probe']}")
+            tls_server = tls_fixtures.start(t["probe"], int(t["port"]))
+        elif probe_fn is None:
             die(f"test {t['id']}: no probe method {t['probe']!r}")
-        print(f"    probe: {t['probe']}")
-        if args.self_test:
-            print(f"    [dry-run] would dispatch {t['probe']}")
-        else:
-            try:
-                if t.get("port"):
-                    probe_fn(t["port"])
+
+        if not args.self_test:
+            # START already advanced the calc into test 1 and got its READY
+            # (see the START handshake above) -- sending NEXT here too would
+            # double-advance it into test 2 before the host ever probes test
+            # 1, putting the calc permanently one test ahead of the host for
+            # the rest of the run. Only tests 2+ need an explicit NEXT to
+            # leave the previous test and enter this one.
+            if i > 1:
+                if not ctrl_send_and_wait_ready(args.ip, "NEXT"):
+                    die(f"test {t['id']}: calc did not reply READY to NEXT "
+                        f"(waited {DAST_CTRL_READY_TIMEOUT:.0f}s) -- it may "
+                        "have crashed or hung; see partial results")
+
+        if is_tls:
+            if args.self_test:
+                response = ("REPLY" if t["probe"] in
+                            ("tls_echo_clean", "tls_echo_resume") else "ABORT")
+                ping_state = None
+                print(f"    [dry-run] would wait for TLS fixture completion")
+            else:
+                assert tls_server is not None
+                if not tls_server.wait(TLS_ECHO_TIMEOUT):
+                    response = "HANG"
+                    print("    TLS fixture timed out")
                 else:
-                    probe_fn()
-            except Exception as exc:  # noqa: BLE001
-                print(f"    probe raised: {exc!r}")
-
-        # Fragment/flood tests need extra settle for the reassembly reaper.
-        settle = 14.0 if t["probe"] in ("ip_frag_bomb", "ip_frag_overlap",
-                                         "icmp_oversize") else args.settle
-        time.sleep(settle)
-        ping_state = ping_alive(args.ip, args.self_test)
-        assume = "ALIVE" if args.self_test else None
-
-        if not assume:
-            if ping_state is True:
-                assume = "REPLY" if t["expect"] == "reply" else "ALIVE"
-            elif ping_state is False:
-                assume = "CRASH"
-
-        if assume:
-            response = assume
+                    response = tls_server.response
+                    print(f"    TLS fixture: {tls_server.detail}")
+                ping_state = ping_alive(args.ip, args.self_test)
+                if ping_state is False and response in ("ABORT", "ALIVE"):
+                    response = "CRASH"
             hint = ("(ping: alive)" if ping_state is True
                     else "(ping: NO response)" if ping_state is False
                     else "")
             print(f"    [auto] {response}  {hint}")
         else:
-            response = prompt_response(t, ping_state, None)
+            # No fixed settle needed before dispatching the probe -- the
+            # READY reply already confirms the calc's listener is open.
+            print(f"    probe: {t['probe']}")
+            if args.self_test:
+                print(f"    [dry-run] would dispatch {t['probe']}")
+            else:
+                try:
+                    if t.get("port"):
+                        probe_fn(t["port"])
+                    else:
+                        probe_fn()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"    probe raised: {exc!r}")
+
+            # Fragment/flood tests need extra settle for the reassembly reaper.
+            settle = 14.0 if t["probe"] in ("ip_frag_bomb", "ip_frag_overlap",
+                                             "icmp_oversize") else args.settle
+            time.sleep(settle)
+            ping_state = ping_alive(args.ip, args.self_test)
+            assume = "ALIVE" if args.self_test else None
+
+            if not assume:
+                if ping_state is True:
+                    assume = "REPLY" if t["expect"] == "reply" else "ALIVE"
+                elif ping_state is False:
+                    assume = "CRASH"
+
+            if assume:
+                response = assume
+                hint = ("(ping: alive)" if ping_state is True
+                        else "(ping: NO response)" if ping_state is False
+                        else "")
+                print(f"    [auto] {response}  {hint}")
+            else:
+                response = prompt_response(t, ping_state, None)
 
         g = grade(t, response)
         rec = {
@@ -470,12 +752,17 @@ def run(args) -> int:
         print(f"    => {response}  grade={rec['grade']}\n")
         results.append(rec)
 
-        # Tell the calc to advance to the next test (or finish).
+        # Tell the calc to finish. Non-final tests are advanced by the next
+        # iteration's NEXT, after any host-side fixture has been prepared.
         if not args.self_test:
             is_last = (i == len(tests))
-            ctrl_send(args.ip, "DONE" if is_last else "NEXT")
+            if is_last:
+                ctrl_send(args.ip, "DONE")
 
-    write_report(args.ip, results)
+    if args.self_test:
+        print("\n[dry-run] report not written")
+    else:
+        write_report(args.ip, results)
     return 0
 
 
@@ -485,6 +772,8 @@ def main() -> int:
     ap.add_argument("--iface", help="network interface to send from")
     ap.add_argument("--settle", type=float, default=1.0,
                     help="seconds to wait after a probe before grading")
+    ap.add_argument("--tls-bind", default="0.0.0.0",
+                    help="local address for host-side TLS fixtures")
     ap.add_argument("--gen-header", action="store_true",
                     help="regenerate the calc-side C test list and exit")
     ap.add_argument("--self-test", action="store_true",
