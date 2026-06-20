@@ -206,46 +206,16 @@ jobs:
           make -C "$test_dir" clean
           make -C "$test_dir"
 
-          # CEmu's emulated entropy tap occasionally fails tls_init()'s RNG
-          # health check on a cold/fresh CI container, which makes
-          # lwip_start() bail out and the app paint an error screen almost
-          # immediately -- a fast, spurious failure unrelated to timing
-          # behavior. A genuine timing regression runs the full suite before
-          # failing, so only retry attempts that failed fast (within
-          # RETRY_FAST_FAIL_SECS); a slow failure is treated as real and not
-          # retried.
-          RETRY_MAX_ATTEMPTS=5
-          RETRY_FAST_FAIL_SECS=300
-          attempt=1
-          while :; do
-            attempt_start=$(($(date +%s%N)/1000000))
-            set +e
-            # Invoke the autotester directly (instead of `make test`) with
-            # -d (debug: dump raw VRAM bytes on a hash mismatch) and
-            # -s (screenshots: dump a raw RGBA frame of the screen at every
-            # hash check) so a failure leaves behind enough evidence to tell
-            # a hung/wrong screen apart from a real timing regression.
-            ( cd "$test_dir" && "${{env.CEDEV_BIN}}/cemu-autotester" -d -s "$test_dir/autotest.json" ) 2>&1 | tee "$test_dir/autotest.log"
-            status=${PIPESTATUS[0]}
-            set -e
-            attempt_done=$(($(date +%s%N)/1000000))
-            attempt_duration_secs=$(( (attempt_done - attempt_start) / 1000 ))
-
-            if [ "$status" -eq 0 ]; then
-              break
-            fi
-            if [ "$attempt" -ge "$RETRY_MAX_ATTEMPTS" ]; then
-              echo "Timing test failed on attempt $attempt/$RETRY_MAX_ATTEMPTS (after ${attempt_duration_secs}s); out of retries."
-              break
-            fi
-            if [ "$attempt_duration_secs" -ge "$RETRY_FAST_FAIL_SECS" ]; then
-              echo "Timing test failed on attempt $attempt after ${attempt_duration_secs}s (>= ${RETRY_FAST_FAIL_SECS}s); treating as a real failure, not retrying."
-              break
-            fi
-
-            echo "Timing test failed fast on attempt $attempt/$RETRY_MAX_ATTEMPTS (after ${attempt_duration_secs}s) -- likely a CEmu RNG/entropy hiccup, retrying."
-            attempt=$((attempt + 1))
-          done
+          set +e
+          # Invoke the autotester directly (instead of `make test`) with
+          # -d (debug: dump raw VRAM bytes on a hash mismatch) and
+          # -s (screenshots: dump a raw RGBA frame of the screen at every
+          # hash check) so a failure leaves behind evidence of what was
+          # actually on screen. Screenshots/dumps are only uploaded as
+          # artifacts when the test fails (see the upload step below).
+          ( cd "$test_dir" && "${{env.CEDEV_BIN}}/cemu-autotester" -d -s "$test_dir/autotest.json" ) 2>&1 | tee "$test_dir/autotest.log"
+          status=${PIPESTATUS[0]}
+          set -e
 
           if [ "$status" -ne 0 ]; then
             # Autotester reports each mismatched hash on its own line, e.g.:
@@ -512,7 +482,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Autotester Screenshots/Dumps
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: tls-timing-screenshots
