@@ -332,3 +332,26 @@ The public release layout is:
 The calculator is not a desktop lwIP target. There is no BSD sockets layer, no
 filesystem-backed resolver state, no preemptive multitasking, and no async
 runtime. Keep application loops explicit and keep ownership of buffers obvious.
+
+
+Having Trouble
+---------------
+
+Having a weird issue you can't fix? Random timeouts, connection failures, socket errors? Because lwIP is callback buried inside of callbacks, with no way to surface what actually failed you usually only are aware of *socket_failed* or *write_error* or whatever the upper-level failure is, but not actually where it happened. You could spend days trying to guess and test what is actually broken. As of *1.0-rc4*, that is no longer an issue. lwIP provides a **traceback system** for debugging assistance.
+
+.. code ::
+
+    const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count);
+
+This allows you to get a pointer to an ordered buffer containing the entire error/alert chain when you need it. The You can then walk the response like so:
+
+.. code ::
+
+    uint8_t count;
+    const struct lwip_traceback_entry *entries = lwip_get_traceback(&count);
+    // ^ entries points to the most recent error
+
+    for (uint8_t i = 0; i < count; i++) {
+        const struct lwip_traceback_entry *e = &entries[i];
+        printf("file_id: %u, line: %lu, errno=%u", e->file, e->line, e->raw_error);
+    }

@@ -182,6 +182,29 @@ struct lwip_event
     } data;
 };
 
+/** One captured traceback entry, newest-first from lwip_get_traceback().
+ *
+ * For WARN/ERROR entries, module/kind/file/line/extra identify the emitting
+ * call site. DEBUG events stay callback-only and do not occupy traceback
+ * slots. For socket-wrapper error entries, component/operation, raw_error,
+ * mapped_error, and status carry the same fields exposed through
+ * lwip_socket_error_data_t; file/line are zero because the causal call site is
+ * expected to be one of the preceding code entries.
+ */
+struct lwip_traceback_entry
+{
+    uint8_t  module;       /* lwip_debug_module_t */
+    uint8_t  kind;         /* lwip_event_kind_t */
+    uint8_t  file;         /* lwip_debug_file_id_t */
+    uint32_t line;         /* source line, or 0 for socket entries */
+    uint16_t extra;        /* ERROR_CODE/WARN_CODE extra */
+    uint16_t component;    /* lwip_socket_error_component_t, or 0 */
+    uint16_t operation;    /* lwip_socket_error_operation_t, or 0 */
+    int      raw_error;    /* raw err_t/module code, or 0 */
+    uint16_t mapped_error; /* lwip_error_t, or 0 */
+    uint16_t status;       /* lwip_status_t, or 0 */
+};
+
 /** The shared event callback. */
 typedef void (*lwip_event_fn)(const struct lwip_event *ev);
 
@@ -192,6 +215,11 @@ typedef void (*lwip_event_fn)(const struct lwip_event *ev);
  * changes from the previous DEBUG emit).
  */
 void lwip_set_event_cb(lwip_event_fn event_fn);
+
+/** Return recent WARN/ERROR/socket-error trace entries, newest first.
+ *  The returned pointer is owned by lwIP and remains valid until the next call
+ *  to lwip_get_traceback() or until another trace entry is pushed. */
+const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count);
 
 /** Human-readable label for a module (e.g. "tls"). */
 const char *lwip_debug_module_name(uint16_t module);
@@ -211,6 +239,9 @@ void lwip_event_emit_info(uint8_t module, const char *msg);
 void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event);
 void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes);
 void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes);
+void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
+                                int raw_error, uint16_t mapped_error,
+                                uint16_t status);
 
 /* ----------------------------------------------------------------------
  * Call-site macros. Each .c file using these must first define:

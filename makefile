@@ -104,6 +104,13 @@ release:
 	rm -f lwip.zip
 	zip -r lwip.zip build/
 
+.PHONY: services
+services:
+
+	rm -f lwip.zip
+	zip -r lwip.zip build/
+
+
 .PHONY: sizes
 sizes:
 	@if [ ! -f bin/$(NAME).map ]; then echo "Run 'make' first to produce bin/$(NAME).map"; exit 1; fi

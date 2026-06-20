@@ -2,15 +2,16 @@
   "description": "RSA-PSS signature verification using a known signature and public key",
   "transfer_files": [
     "bin/XPSSSIG.8xp",
-    "../common/lwIPCERT.8xv",
-    "../common/lwIPINST.8xp",
-    "../common/lwIP.0.8xv",
-    "../common/lwIP.1.8xv",
-    "../common/lwIP.2.8xv",
-    "../common/lwIP.3.8xv",
-    "../common/lwIP.4.8xv",
-    "../common/lwIP.5.8xv",
-    "../common/lwip.8xv"
+     "../../common/clibs.8xg",
+    "../../common/lwIPCERT.8xv",
+    "../../common/lwIPINST.8xp",
+    "../../common/lwIP.0.8xv",
+    "../../common/lwIP.1.8xv",
+    "../../common/lwIP.2.8xv",
+    "../../common/lwIP.3.8xv",
+    "../../common/lwIP.4.8xv",
+    "../../common/lwIP.5.8xv",
+    "../../common/lwip.8xv"
   ],
   "target": {
     "name": "XPSSSIG",
@@ -34,6 +35,7 @@
     "hashWait|2",
     "key|left",
     "key|enter",
+    "delay|1000",
     "action|launch",
     "hashWait|1",
     "key|enter",

@@ -1,21 +1,22 @@
 name: CAVP Primitive Validation
 
-# Runs NIST CAVP test vectors against the shipping cryptographic primitives
-# on every push to `tls` that touches the relevant code, plus on manual
-# dispatch. tests/common/scripts/cavp_fetch.py downloads NIST CAVP archives, samples 16
-# vectors per primitive at random (per run), adds generated RSA-PSS/X25519
-# coverage plus RFC-pinned HKDF/X25519 vectors, and emits CAVPIN.8xv +
-# expected.json for the test run.
+# Runs NIST CAVP test vectors against the shipping cryptographic primitives.
+# Dyload variant: links tests/profiling/tls_cavp against the curated,
+# manifest-gated lwip.lib produced by build.yml. Triggers on push to
+# relevant paths, manual dispatch, and as a workflow_call target from
+# build.yml (gating the nightly release). tests/common/scripts/cavp_fetch.py
+# downloads NIST CAVP archives, samples 16 vectors per primitive at random
+# (per run), adds generated RSA-PSS/X25519 coverage plus RFC-pinned
+# HKDF/X25519 vectors, and emits CAVPIN.8xv + expected.json for the test run.
 
 on:
-  push:
-    paths:
-      - '.github/workflows/cavp.yml'
-      - 'src/tls/**'
-      - 'tests/common/scripts/cavp_fetch.py'
-      - 'tests/common/scripts/parse_cavp_output_appvar.py'
-      - 'tests/profiling/tls_cavp/**'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: "Name of an in-run build artifact (e.g. lwip-latest) to download instead of fetching the published nightly release."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -23,9 +24,11 @@ permissions:
 env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
   LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
+  LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
   CEMU_PATH: ${{github.workspace}}/CEmu
   CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
   SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
+  CEDEV: ${{github.workspace}}/CEdev
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
   CAVP_TEST_DIR: ${{github.workspace}}/tests/profiling/tls_cavp
   CAVP_FETCH_SAMPLE: 16
@@ -67,6 +70,38 @@ jobs:
       - name: Add CEdev to PATH
         run: |
           echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
+
+      - name: Download in-run build artifact
+        if: inputs.artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{github.workspace}}/release
+
+      - name: Download nightly lwIP dylib build
+        if: inputs.artifact_name == ''
+        run: |
+          mkdir -p "${{github.workspace}}/release"
+          curl -fL \
+            -o "${{github.workspace}}/lwip-latest.tar.gz" \
+            https://github.com/${{ github.repository }}/releases/download/nightly/lwip-latest.tar.gz
+          tar xzf "${{github.workspace}}/lwip-latest.tar.gz" -C "${{github.workspace}}/release"
+
+      - name: Verify build artifact contents
+        run: |
+          test -f "${{github.workspace}}/release/appinst/lwIPINST.8xp"
+          test -n "$(find "${{github.workspace}}/release/appinst" -name 'LWIP.*.8xv' -print -quit)"
+          ls -lh "${{github.workspace}}/release"
+
+      - name: Install lwip.lib + headers into CEdev
+        run: |
+          mkdir -p "${{env.CEDEV}}/lib/libload" "${{env.CEDEV}}/include"
+          cp "${{github.workspace}}/release/lwip.lib" "${{env.CEDEV}}/lib/libload/lwip.lib"
+          cp "${{github.workspace}}/release/lwip.h" "${{env.CEDEV}}/include/lwip.h"
+          cp -r "${{github.workspace}}/release/lwip" "${{env.CEDEV}}/include/lwip"
+          test -f "${{env.CEDEV}}/lib/libload/lwip.lib"
+          test -f "${{env.CEDEV}}/include/lwip.h"
+          test -d "${{env.CEDEV}}/include/lwip"
 
       - name: Download CEmu Rom
         run: |
@@ -128,13 +163,32 @@ jobs:
           ls -lh ${{env.AUTOTESTER_ROM}}
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
-      - name: Download CE Libraries Group (clibs.8xg)
+      - name: Prepare shared dyload test files
         run: |
-          mkdir -p "${{env.CAVP_TEST_DIR}}"
+          mkdir -p ${{env.LWIP_TESTS_COMMON}}
+          cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
+          cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_TESTS_COMMON}}/
+          for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
+            name="$(basename "$appvar")"
+            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/${name/LWIP/lwIP}"
+          done
           curl -fL \
-            -o "${{env.CAVP_TEST_DIR}}/clibs.8xg" \
-            https://github.com/CE-Programming/libraries/releases/download/v14.2/clibs.8xg
-          ls -lh "${{env.CAVP_TEST_DIR}}/clibs.8xg"
+            -o ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv \
+            https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
+          curl -fL \
+            -o ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
+            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          test -f ${{env.LWIP_TESTS_COMMON}}/clibs.8xg
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.0.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.1.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.2.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.3.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.4.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.5.8xv
+          ls -lh ${{env.LWIP_TESTS_COMMON}}
 
       - name: Cache CAVP vector archives
         # NIST CAVP zips are bandwidth-friendly to cache (a few MB each) and

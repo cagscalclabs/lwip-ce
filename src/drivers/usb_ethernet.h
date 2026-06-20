@@ -203,7 +203,6 @@ typedef struct _eth_device_t
     } class;
     struct netif iface;
 } eth_device_t;
-extern eth_device_t eth;
 
 /// @brief Callback function to be passed to @b usb_Init to enable Ethernet driver for lwIP
 usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_callback_data_t *callback_data);

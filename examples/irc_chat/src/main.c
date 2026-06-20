@@ -7,6 +7,7 @@
 
 #include <fileioc.h>
 #include <lwip.h>
+#include <lwip/core/logging.h>
 
 #include "../../common/lwip_example.h"
 
@@ -30,6 +31,10 @@
 #define IRC_NICK "acags"
 #endif
 
+#ifndef IRC_DEBUG
+#define IRC_DEBUG 1
+#endif
+
 #define IRC_CONNECT_TIMEOUT_MS 45000u
 #define IRC_RX_TMP 96
 #define IRC_LINE_MAX 512
@@ -37,6 +42,10 @@
 #define IRC_CHANNEL_MAX 64
 #define IRC_CONFIG_APPVAR "IRCCFG"
 #define IRC_CONFIG_VERSION 1u
+
+#if IRC_DEBUG
+static struct irc_state *irc_debug_state;
+#endif
 
 enum irc_input_mode
 {
@@ -52,11 +61,27 @@ struct irc_state
     bool registered;
     bool joined;
     bool exiting;
+    bool quit_sent;
     bool done;
     uint8_t done_reason;
     bool redraw;
     uint8_t last_status;
     lwip_error_t err;
+#if IRC_DEBUG
+    uint16_t err_component;
+    uint16_t err_operation;
+    int err_raw;
+    lwip_status_t err_status;
+    uint8_t last_debug_kind;
+    uint8_t last_debug_module;
+    uint8_t last_debug_file;
+    uint32_t last_debug_line;
+    uint16_t last_debug_extra;
+    uint8_t last_tls_kind;
+    uint8_t last_tls_file;
+    uint32_t last_tls_line;
+    uint16_t last_tls_extra;
+#endif
     char *msg_buf;
     char server[IRC_SERVER_MAX];
     char channel[IRC_CHANNEL_MAX];
@@ -505,6 +530,30 @@ static lwip_error_t irc_writef(struct lwip_socket *sock,
     return lwip_socket_write(sock, (const uint8_t *)buf, (size_t)n);
 }
 
+static const char *irc_command_arg(const char *input, const char *cmd)
+{
+    size_t cmd_len;
+
+    if (!input || !cmd)
+    {
+        return NULL;
+    }
+    cmd_len = strlen(cmd);
+    if (strncmp(input, cmd, cmd_len) != 0)
+    {
+        return NULL;
+    }
+    if (input[cmd_len] == '\0')
+    {
+        return "";
+    }
+    if (input[cmd_len] == ' ')
+    {
+        return input + cmd_len + 1;
+    }
+    return NULL;
+}
+
 static void irc_register(struct irc_state *state, struct lwip_socket *sock)
 {
     lwip_error_t err;
@@ -728,6 +777,22 @@ static void irc_on_event(struct lwip_socket *sock,
     {
         const lwip_socket_error_data_t *err =
             (const lwip_socket_error_data_t *)ev_data;
+#if IRC_DEBUG
+        if (err)
+        {
+            state->err_component = err->component;
+            state->err_operation = err->operation;
+            state->err_raw = err->raw_error;
+            state->err_status = err->status;
+            lwip_example_linef("sock err c%u o%u r%d e%u s%u",
+                               (unsigned)err->component,
+                               (unsigned)err->operation,
+                               err->raw_error,
+                               (unsigned)err->err,
+                               (unsigned)err->status);
+            lwip_example_draw_mem_stats();
+        }
+#endif
         state->err = err ? err->err : sock->last_error;
         state->connected = false;
         state->done = true;
@@ -738,13 +803,36 @@ static void irc_on_event(struct lwip_socket *sock,
 static void irc_send_input(struct irc_state *state, struct lwip_socket *sock)
 {
     lwip_error_t err;
+    const char *quit_msg;
 
     if (!state->chat.input_len)
     {
         return;
     }
 
-    if (strncmp(state->chat.input, "/raw ", 5) == 0)
+    quit_msg = irc_command_arg(state->chat.input, "/quit");
+    if (!quit_msg)
+    {
+        quit_msg = irc_command_arg(state->chat.input, "/leave");
+    }
+
+    if (quit_msg)
+    {
+        if (!quit_msg[0])
+        {
+            quit_msg = "leaving";
+        }
+        err = irc_writef(sock, "QUIT :%s\r\n", quit_msg);
+        if (err == LWIP_OK)
+        {
+            state->quit_sent = true;
+            state->exiting = true;
+            state->done = true;
+            state->done_reason = 6; /* user quit command */
+            irc_append_system(state, "quitting");
+        }
+    }
+    else if (strncmp(state->chat.input, "/raw ", 5) == 0)
     {
         err = irc_writef(sock, "%s\r\n", state->chat.input + 5);
     }
@@ -811,11 +899,27 @@ static void irc_session_reset(struct irc_state *state)
     state->registered = false;
     state->joined = false;
     state->exiting = false;
+    state->quit_sent = false;
     state->done = false;
     state->done_reason = 0;
     state->redraw = false;
     state->last_status = 0xffu;
     state->err = LWIP_OK;
+#if IRC_DEBUG
+    state->err_component = 0;
+    state->err_operation = 0;
+    state->err_raw = 0;
+    state->err_status = LWIP_STATUS_INIT;
+    state->last_debug_kind = 0;
+    state->last_debug_module = 0;
+    state->last_debug_file = 0;
+    state->last_debug_line = 0;
+    state->last_debug_extra = 0;
+    state->last_tls_kind = 0;
+    state->last_tls_file = 0;
+    state->last_tls_line = 0;
+    state->last_tls_extra = 0;
+#endif
     state->line_len = 0;
     state->line[0] = '\0';
     snprintf(title, sizeof(title), "===== IRC %.15s =====", state->channel);
@@ -823,13 +927,78 @@ static void irc_session_reset(struct irc_state *state)
     state->chat.input_mode = input_mode;
 }
 
+#if IRC_DEBUG
+static void irc_debug_cb(const struct lwip_event *ev)
+{
+    lwip_example_dbg_console_cb(ev);
+    if (!ev || !irc_debug_state)
+    {
+        return;
+    }
+    if (ev->kind == LWIP_EV_DEBUG ||
+        ev->kind == LWIP_EV_WARN ||
+        ev->kind == LWIP_EV_ERROR)
+    {
+        irc_debug_state->last_debug_kind = ev->kind;
+        irc_debug_state->last_debug_module = ev->module;
+        irc_debug_state->last_debug_file =
+            LWIP_EVENT_CODE_FILE(ev->data.code.loc);
+        irc_debug_state->last_debug_line =
+            LWIP_EVENT_CODE_LINE(ev->data.code.loc);
+        irc_debug_state->last_debug_extra = ev->data.code.extra;
+        if (ev->module == LWIP_DBG_MOD_TLS)
+        {
+            irc_debug_state->last_tls_kind = ev->kind;
+            irc_debug_state->last_tls_file =
+                LWIP_EVENT_CODE_FILE(ev->data.code.loc);
+            irc_debug_state->last_tls_line =
+                LWIP_EVENT_CODE_LINE(ev->data.code.loc);
+            irc_debug_state->last_tls_extra = ev->data.code.extra;
+        }
+    }
+}
+
+static void irc_show_traceback(void)
+{
+    const struct lwip_traceback_entry *trace;
+    uint8_t count = 0;
+
+    trace = lwip_get_traceback(&count);
+    for (uint8_t i = 0; i < count && i < 16u; i++)
+    {
+        const struct lwip_traceback_entry *entry = &trace[i];
+
+        if (entry->file)
+        {
+            lwip_example_linef("%u %s %s:%u x%u",
+                               (unsigned)i,
+                               lwip_debug_module_name(entry->module),
+                               lwip_debug_file_name(entry->file),
+                               (unsigned)entry->line,
+                               (unsigned)entry->extra);
+        }
+        else
+        {
+            lwip_example_linef("%u sock c%u o%u r%d e%u s%u",
+                               (unsigned)i,
+                               (unsigned)entry->component,
+                               (unsigned)entry->operation,
+                               entry->raw_error,
+                               (unsigned)entry->mapped_error,
+                               (unsigned)entry->status);
+        }
+    }
+}
+#endif
+
 static void irc_session_close(struct irc_state *state, struct lwip_socket *sock)
 {
     uint32_t start;
 
-    if (state->connected)
+    if (state->connected && !state->quit_sent)
     {
         (void)irc_writef(sock, "QUIT :leaving\r\n");
+        state->quit_sent = true;
     }
     (void)lwip_socket_close(sock);
     start = lwip_example_now_ms();
@@ -870,7 +1039,18 @@ static void irc_session_run(struct irc_state *state)
                              strlen(connect_line));
     lwip_example_chat_render(&state->chat);
 
+#if IRC_DEBUG
+    lwip_example_dbg_console_begin("IRC debug");
+    lwip_example_linef("connecting %s:%u %s",
+                       state->server, (unsigned)irc_port(state),
+                       state->use_tls ? "tls" : "tcp");
+#endif
+
     err = lwip_socket_connect(&sock, state->server, irc_port(state));
+#if IRC_DEBUG
+    irc_debug_state = state;
+    lwip_set_event_cb(irc_debug_cb);
+#endif
     if (err != LWIP_OK)
     {
         lwip_example_show_socket_error("IRC connect", &sock, err);
@@ -967,10 +1147,26 @@ static void irc_session_run(struct irc_state *state)
 cleanup:
     if (state && state->done && !state->exiting)
     {
+#if IRC_DEBUG
+        lwip_example_clear();
+        lwip_example_line("IRC disconnected");
+        lwip_example_linef("reason %u err %u",
+                           (unsigned)state->done_reason,
+                           (unsigned)state->err);
+        lwip_example_linef("sock c%u o%u raw%d st%u",
+                           (unsigned)state->err_component,
+                           (unsigned)state->err_operation,
+                           state->err_raw,
+                           (unsigned)state->err_status);
+        irc_show_traceback();
+        lwip_example_draw_mem_stats();
+        lwip_example_wait_key();
+#else
         char reason[24];
         snprintf(reason, sizeof(reason), "reason %u", (unsigned)state->done_reason);
         lwip_example_show_and_wait("IRC disconnected", reason);
         lwip_example_show_socket_error("IRC disconnected", &sock, state->err);
+#endif
     }
     if (state->exiting)
     {
@@ -980,6 +1176,10 @@ cleanup:
     {
         lwip_socket_destroy(&sock);
     }
+#if IRC_DEBUG
+    lwip_set_event_cb(NULL);
+    irc_debug_state = NULL;
+#endif
 }
 
 int main(void)

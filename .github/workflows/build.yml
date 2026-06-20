@@ -5,13 +5,17 @@ on:
     # 03:00 UTC is roughly 11 PM US Eastern during daylight time.
     - cron: '0 3 * * *'
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: write
+  security-events: write
+  actions: read
+  pull-requests: write
 
 concurrency:
-  group: lwip-nightly-release
-  cancel-in-progress: false
+  group: lwip-nightly-release-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CEDEV: ${{ github.workspace }}/CEdev
@@ -29,33 +33,6 @@ jobs:
         with:
           fetch-depth: 0
           submodules: true
-
-      - name: Prepare nightly release notes
-        id: release_notes
-        run: |
-          git fetch --force --tags origin
-          NOTES_FILE="$RUNNER_TEMP/nightly-release-notes.md"
-          {
-            echo "Automated nightly lwIP-CE dylib build."
-            echo
-            echo "Commit: \`$GITHUB_SHA\`"
-            echo
-            echo "Changes since previous nightly release:"
-            echo
-            if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
-              if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
-                git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
-                echo
-              else
-                echo "- No commits since the previous nightly release."
-              fi
-            else
-              echo "- No previous nightly release tag found; listing recent history."
-              git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
-              echo
-            fi
-          } > "$NOTES_FILE"
-          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -162,6 +139,113 @@ jobs:
           path: ${{ github.workspace }}/build/
           if-no-files-found: error
 
+      - name: Publish job summary
+        if: always()
+        run: |
+          {
+            echo "## lwIP Latest Dylib"
+            echo
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| make dylib | ${{ steps.make_dylib.outcome }} |"
+            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
+            echo "| upload action artifact | ${{ steps.upload_action_artifact.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    outputs:
+      build_success: ${{ steps.upload_action_artifact.outcome == 'success' }}
+
+  dylib_unit_tests:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/tests.yml
+    with:
+      artifact_name: lwip-latest
+    secrets: inherit
+
+  cavp_validation:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/cavp.yml
+    with:
+      artifact_name: lwip-latest
+    secrets: inherit
+
+  sast:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/sast.yml
+    secrets: inherit
+
+  dast:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/dast.yml
+    secrets: inherit
+
+  timing:
+    needs: dylib_latest
+    if: needs.dylib_latest.outputs.build_success == 'true'
+    uses: ./.github/workflows/timing.yml
+    with:
+      artifact_name: lwip-latest
+    secrets: inherit
+
+  publish:
+    needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast, timing]
+    # dast and timing are intentionally excluded from this gate. dast.json
+    # is a manually-produced, operator-graded report (see dast.yml), not a
+    # fresh-per-run signal -- gating on it blocks releases on human
+    # availability rather than code correctness. timing is a statistical
+    # constant-time check on a shared CI runner, where scheduling jitter
+    # and container noise can flip a result without a real regression.
+    # Both jobs still run here for visibility in the summary below, and
+    # always() lets publish proceed regardless of their outcome. Never runs
+    # on pull_request -- nightly tagging/release only happens off schedule
+    # or manual dispatch on the base repo.
+    if: always() && github.event_name != 'pull_request' && needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout lwIP-CE
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Download in-run build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/build
+
+      - name: Prepare nightly release notes
+        id: release_notes
+        run: |
+          git fetch --force --tags origin
+          NOTES_FILE="$RUNNER_TEMP/nightly-release-notes.md"
+          {
+            echo "Automated nightly lwIP-CE dylib build."
+            echo
+            echo "Commit: \`$GITHUB_SHA\`"
+            echo
+            echo "Changes since previous nightly release:"
+            echo
+            if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
+              if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
+                git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
+                echo
+              else
+                echo "- No commits since the previous nightly release."
+              fi
+            else
+              echo "- No previous nightly release tag found; listing recent history."
+              git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+              echo
+            fi
+          } > "$NOTES_FILE"
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
       - name: package nightly release asset
         id: package_release
         if: success()
@@ -199,12 +283,41 @@ jobs:
         if: always()
         run: |
           {
-            echo "## lwIP Latest Dylib"
+            echo "## lwIP Nightly Release"
             echo
             echo "| Step | Status |"
             echo "|------|--------|"
-            echo "| make dylib | ${{ steps.make_dylib.outcome }} |"
-            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
-            echo "| upload action artifact | ${{ steps.upload_action_artifact.outcome }} |"
+            echo "| unit tests | ${{ needs.dylib_unit_tests.result }} |"
+            echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
+            echo "| sast | ${{ needs.sast.result }} |"
+            echo "| dast (informational) | ${{ needs.dast.result }} |"
+            echo "| timing (informational) | ${{ needs.timing.result }} |"
+            echo "| package nightly release asset | ${{ steps.package_release.outcome }} |"
             echo "| publish nightly release | ${{ steps.publish_release.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  notify_pr_on_failure:
+    needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast, timing]
+    if: always() && github.event_name == 'pull_request' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comment on PR with failure summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "@${{ github.event.pull_request.user.login }} CI failed on this PR (commit \`${{ github.event.pull_request.head.sha }}\`):"
+            echo
+            echo "| Job | Result |"
+            echo "|-----|--------|"
+            echo "| build | ${{ needs.dylib_latest.result }} |"
+            echo "| unit tests | ${{ needs.dylib_unit_tests.result }} |"
+            echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
+            echo "| sast | ${{ needs.sast.result }} |"
+            echo "| dast | ${{ needs.dast.result }} |"
+            echo "| timing | ${{ needs.timing.result }} |"
+            echo
+            echo "[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md

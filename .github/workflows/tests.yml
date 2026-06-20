@@ -1,29 +1,41 @@
 name: Unit Tests
 
-# Functional correctness for lwIP-CE unit modules. Timing analysis lives
-# in timing.yml; CAVP primitive validation lives in cavp.yml. Splitting
-# these out keeps the test/profiling/validation concerns independently
-# observable as separate workflow badges.
+# Dyload-based functional correctness for lwIP-CE unit modules under
+# tests/unit/. These tests link against the curated, manifest-gated
+# lwip.lib produced nightly by build.yml -- the same artifact a real
+# consumer app would dyload. This catches curation drops / ABI
+# mismatches / missing manifest entries that a white-box build can't see.
 
 on:
+  workflow_run:
+    workflows: ["Build Latest lwIP Dylib"]
+    types: [completed]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: "Name of an in-run build artifact (e.g. lwip-latest) to download instead of fetching the published nightly release."
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 env:
   AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
-  LWIP_TESTS: ${{github.workspace}}/tests
-  LWIP_UNIT_TESTS: ${{github.workspace}}/tests/unit
+  LWIP_DYLIB_TESTS: ${{github.workspace}}/tests/unit
+  LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
   CEMU_PATH: ${{github.workspace}}/CEmu
   CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
   SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
+  CEDEV: ${{github.workspace}}/CEdev
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
 jobs:
-  unit_tests:
+  dylib_unit_tests:
     runs-on: ubuntu-latest
     environment: test
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call' || github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Checkout Repo
@@ -51,6 +63,38 @@ jobs:
         run: |
           echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
           echo $GITHUB_PATH
+
+      - name: Download in-run build artifact
+        if: inputs.artifact_name != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{github.workspace}}/release
+
+      - name: Download nightly lwIP dylib build
+        if: inputs.artifact_name == ''
+        run: |
+          mkdir -p "${{github.workspace}}/release"
+          curl -fL \
+            -o "${{github.workspace}}/lwip-latest.tar.gz" \
+            https://github.com/${{ github.repository }}/releases/download/nightly/lwip-latest.tar.gz
+          tar xzf "${{github.workspace}}/lwip-latest.tar.gz" -C "${{github.workspace}}/release"
+
+      - name: Verify build artifact contents
+        run: |
+          test -f "${{github.workspace}}/release/appinst/lwIPINST.8xp"
+          test -n "$(find "${{github.workspace}}/release/appinst" -name 'LWIP.*.8xv' -print -quit)"
+          ls -lh "${{github.workspace}}/release"
+
+      - name: Install lwip.lib + headers into CEdev
+        run: |
+          mkdir -p "${{env.CEDEV}}/lib/libload" "${{env.CEDEV}}/include"
+          cp "${{github.workspace}}/release/lwip.lib" "${{env.CEDEV}}/lib/libload/lwip.lib"
+          cp "${{github.workspace}}/release/lwip.h" "${{env.CEDEV}}/include/lwip.h"
+          cp -r "${{github.workspace}}/release/lwip" "${{env.CEDEV}}/include/lwip"
+          test -f "${{env.CEDEV}}/lib/libload/lwip.lib"
+          test -f "${{env.CEDEV}}/include/lwip.h"
+          test -d "${{env.CEDEV}}/include/lwip"
 
       - name: Download CEmu Rom
         run: |
@@ -120,15 +164,34 @@ jobs:
           ls -lh ${{env.AUTOTESTER_ROM}}
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
-      - name: Download truststore AppVar
+      - name: Prepare shared dyload test files
         run: |
-          mkdir -p ${{env.LWIP_UNIT_TESTS}}/tls_truststore
+          mkdir -p ${{env.LWIP_TESTS_COMMON}}
+          cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
+          cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_TESTS_COMMON}}/
+          for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
+            name="$(basename "$appvar")"
+            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/${name/LWIP/lwIP}"
+          done
           curl -fL \
-            -o ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPCERT.8xv \
+            -o ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv \
             https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
-          ls -lh ${{env.LWIP_UNIT_TESTS}}/tls_truststore/lwIPCERT.8xv
+          curl -fL \
+            -o ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
+            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          test -f ${{env.LWIP_TESTS_COMMON}}/clibs.8xg
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.0.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.1.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.2.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.3.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.4.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.5.8xv
+          ls -lh ${{env.LWIP_TESTS_COMMON}}
 
-      - name: Run Core Unit Tests
+      - name: Run Dyload Unit Tests
         run: |
           total_tests=0
           total_passed=0
@@ -138,11 +201,22 @@ jobs:
           while IFS= read -r -d '' test; do
             status=0
             test_dir=$(dirname "$test")
+            failed_hash_ids=""
             test_start=$(($(date +%s%N)/1000000))
             make -C "$test_dir" clean
             make -C "$test_dir" || ((status=$?))
             if [ $status -eq 0 ]; then
-              make -C "$test_dir" test || ((status=$?))
+              set +e
+              AUTOTESTER_LIBS_DIR="${{github.workspace}}/release/appinst" \
+                make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
+              status=${PIPESTATUS[0]}
+              set -e
+              if [ "$status" -ne 0 ]; then
+                # Autotester reports each mismatched hash on its own line, e.g.:
+                #   [Test failed!] Hash #1 ("...") did not match the expected CRC ...
+                # Collect every failed hash id (a run can fail more than one).
+                failed_hash_ids=$(grep -Eo 'Hash #[0-9]+' "$test_dir/autotest.log" | grep -Eo '[0-9]+' | sort -nu | paste -sd, - || true)
+              fi
             fi
             test_done=$(($(date +%s%N)/1000000))
             test_duration=$((test_done - test_start))
@@ -154,21 +228,21 @@ jobs:
               (( total_failed += 1 ))
               test_status="failed"
             fi
-            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\"}" > "$test_dir/result.json"
-          done < <(find ${{env.LWIP_UNIT_TESTS}} -name autotest.json -print0)
+            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"$failed_hash_ids\"}" > "$test_dir/result.json"
+          done < <(find ${{env.LWIP_DYLIB_TESTS}} -name autotest.json -print0)
 
           end_time=$(($(date +%s%N)/1000000))
           echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
-          cmake -E echo "$total_tests core modules tested, $total_passed passed, $total_failed failed!"
+          cmake -E echo "$total_tests dyload modules tested, $total_passed passed, $total_failed failed!"
           exit $total_failed
 
-      - name: Generate Core JSON Results
+      - name: Generate Dyload JSON Results
         if: always()
         run: |
-          echo -e "{\"results\":{" > ${{github.workspace}}/results-core.json
-          cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-core.json
-          echo -e ",\"tests\":[" >> ${{github.workspace}}/results-core.json
-          find ${{env.LWIP_UNIT_TESTS}} -name result.json -print0 | {
+          echo -e "{\"results\":{" > ${{github.workspace}}/results-dylib.json
+          cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-dylib.json
+          echo -e ",\"tests\":[" >> ${{github.workspace}}/results-dylib.json
+          find ${{env.LWIP_DYLIB_TESTS}} -name result.json -print0 | {
             tmp_json=""
             while read -rd '' test; do
               test_dir=$(dirname "$test")
@@ -176,21 +250,21 @@ jobs:
               rm $test_dir/result.json
             done
             tmp_json="${tmp_json:1}"
-            echo $tmp_json >> ${{github.workspace}}/results-core.json
+            echo $tmp_json >> ${{github.workspace}}/results-dylib.json
           }
-          echo -e "]" >> ${{github.workspace}}/results-core.json
-          echo -e "}}" >> ${{github.workspace}}/results-core.json
+          echo -e "]" >> ${{github.workspace}}/results-dylib.json
+          echo -e "}}" >> ${{github.workspace}}/results-dylib.json
           rm ${{github.workspace}}/summary.json
 
-      - name: Publish Core Test Summary
+      - name: Publish Dyload Test Summary
         if: always()
         run: |
-          echo "## Core Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## Dyload Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          total=$(jq -r '.results.summary.tests' ${{github.workspace}}/results-core.json)
-          passed=$(jq -r '.results.summary.passed' ${{github.workspace}}/results-core.json)
-          failed=$(jq -r '.results.summary.failed' ${{github.workspace}}/results-core.json)
+          total=$(jq -r '.results.summary.tests' ${{github.workspace}}/results-dylib.json)
+          passed=$(jq -r '.results.summary.passed' ${{github.workspace}}/results-dylib.json)
+          failed=$(jq -r '.results.summary.failed' ${{github.workspace}}/results-dylib.json)
 
           echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -202,12 +276,13 @@ jobs:
           echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          jq -c '.results.tests[]' ${{github.workspace}}/results-core.json | while read test_obj; do
+          jq -c '.results.tests[]' ${{github.workspace}}/results-dylib.json | while read test_obj; do
             test_name=$(echo "$test_obj" | jq -r '.name')
             test_dir=$(echo "$test_obj" | jq -r '.dir')
             test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
 
             status=$(echo "$test_obj" | jq -r '.status')
+            failed_hash_ids=$(echo "$test_obj" | jq -r '.failed_hash_ids // ""')
             module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
             module_desc=${module_desc:-"(no description)"}
             module_desc=${module_desc//$'\n'/ }
@@ -233,8 +308,10 @@ jobs:
               hash_desc=${hash_desc//|/\\|}
               if [ "$status" = "passed" ]; then
                 hash_status="✅ Passed"
-              else
+              elif [[ ",$failed_hash_ids," == *",$hash_id,"* ]]; then
                 hash_status="❌ Failed"
+              else
+                hash_status="✅ Passed"
               fi
               echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
             done
@@ -244,11 +321,11 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
           done
 
-      - name: Upload Core Results Logfile
+      - name: Upload Dyload Results Logfile
         uses: actions/upload-artifact@v4
         with:
-          name: results-core.json
-          path: ${{github.workspace}}/results-core.json
+          name: results-dylib.json
+          path: ${{github.workspace}}/results-dylib.json
 
       - name: Remove CEmu Rom
         if: always()

@@ -10,17 +10,8 @@ name: DAST
 # is the gate/visibility layer over whatever report was committed.
 
 on:
-  push:
-    paths:
-      - 'tests/dast.json'
-      - 'build-tools/dast/dast_report.py'
-      - '.github/workflows/dast.yml'
-  pull_request:
-    paths:
-      - 'tests/dast.json'
-      - 'build-tools/dast/dast_report.py'
-      - '.github/workflows/dast.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

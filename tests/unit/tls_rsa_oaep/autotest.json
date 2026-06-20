@@ -2,15 +2,16 @@
   "description": "Tests OAEP primitive standalone",
   "transfer_files": [
     "bin/XOAEP.8xp",
-    "../common/lwIPCERT.8xv",
-    "../common/lwIPINST.8xp",
-    "../common/lwIP.0.8xv",
-    "../common/lwIP.1.8xv",
-    "../common/lwIP.2.8xv",
-    "../common/lwIP.3.8xv",
-    "../common/lwIP.4.8xv",
-    "../common/lwIP.5.8xv",
-    "../common/lwip.8xv"
+     "../../common/clibs.8xg",
+    "../../common/lwIPCERT.8xv",
+    "../../common/lwIPINST.8xp",
+    "../../common/lwIP.0.8xv",
+    "../../common/lwIP.1.8xv",
+    "../../common/lwIP.2.8xv",
+    "../../common/lwIP.3.8xv",
+    "../../common/lwIP.4.8xv",
+    "../../common/lwIP.5.8xv",
+    "../../common/lwip.8xv"
   ],
   "target": {
     "name": "XOAEP",
@@ -34,6 +35,7 @@
     "hashWait|3",
     "key|left",
     "key|enter",
+    "delay|1000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -48,7 +50,7 @@
       "expected_CRCs": [
         "806269A3"
       ],
-      "timeout": 2000
+      "timeout": 4000
     },
     "2": {
       "description": "RSA-OAEP decode - RFC 8017 (PKCS#1 v2.2) SHA-256",

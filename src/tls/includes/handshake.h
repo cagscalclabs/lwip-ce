@@ -60,8 +60,10 @@ extern "C"
 #define TLS_HANDSHAKE_CLIENT_HELLO 0x01
 #define TLS_HANDSHAKE_SERVER_HELLO 0x02
 #define TLS_HANDSHAKE_CERTIFICATE 0x0b
+#define TLS_HANDSHAKE_CERTIFICATE_REQUEST 0x0d
 #define TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS 0x08
 #define TLS_HANDSHAKE_FINISHED 0x14
+#define TLS_HANDSHAKE_KEY_UPDATE 0x18
     /* Server-side handshake message types across TLS versions */
     enum tls_server_handshake_type
     {
@@ -208,6 +210,7 @@ extern "C"
         uint8_t ecdhe_shared[32];    /* Computed shared secret */
         uint8_t ecdhe_public[32];    /* Our ephemeral public key */
         bool ecdhe_negotiated;       /* True if server selected PSK+ECDHE */
+        bool client_certificate_requested; /* True if server sent TLS 1.3 CertificateRequest */
         uint32_t ticket_age_add;     /* NST ticket_age_add */
         uint32_t ticket_received_ms; /* sys_now() when last ticket was accepted */
         uint32_t ticket_lifetime;    /* NST ticket_lifetime, seconds (RFC 8446 4.6.1) */
@@ -242,6 +245,13 @@ extern "C"
 
         /* True once close_notify has been sent so we don't send it twice. */
         bool close_notify_sent;
+
+        /* True once a close_notify alert has been received from the peer
+         * (RFC 8446 6.1). The altcp layer checks this to delivery an EOF to
+         * the application the same way it would for a TCP FIN, instead of
+         * silently discarding the alert and leaving the application hanging
+         * on a read that never completes. */
+        bool peer_close_notify_received;
 
         /* Leaf cert SPKI (SubjectPublicKeyInfo) captured during
          * Certificate-receive. Used by tls_recv_certificate_verify to
@@ -362,6 +372,25 @@ extern "C"
     bool tls_send_finished(
         struct tls_handshake_context *ctx,
         bool is_client,
+        uint8_t *out,
+        size_t out_len,
+        size_t *written);
+
+    /**
+     * @brief Generate an empty TLS 1.3 client Certificate message.
+     *
+     * Used when a server sent CertificateRequest but the client has no
+     * configured client identity. TLS 1.3 clients reply with an empty
+     * Certificate message, then send Finished.
+     *
+     * @param ctx Handshake context
+     * @param out Output buffer for Certificate message
+     * @param out_len Size of output buffer
+     * @param written Number of bytes written
+     * @return true on success, false on failure
+     */
+    bool tls_send_empty_certificate(
+        struct tls_handshake_context *ctx,
         uint8_t *out,
         size_t out_len,
         size_t *written);

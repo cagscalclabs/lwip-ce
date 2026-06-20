@@ -2,15 +2,15 @@
 
 **Main CI**
 
-![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?cache=1)
-![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?cache=1)
+![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=master&cache=1)
+![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=master&cache=1)
 
 <hr>
 
 **Code Quality**
 
-![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?cache=1)
-![DAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/dast.yml/badge.svg?cache=1)
+![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?branch=master&cache=1)
+![DAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/dast.yml/badge.svg?branch=master&cache=1)
 
 *SAST uses `git diff` against upstream lwIP to filter out untouched upstream code and scans only targets unique to this repository. For upstream issues, file an issue with [nonGNU](https://savannah.nongnu.org/bugs/?group=lwip).*
 
@@ -20,8 +20,8 @@
 
 **Cryptography Quality Checks**
 
-![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?cache=1)
-![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?cache=1)
+![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
+![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
 
 <hr>
 

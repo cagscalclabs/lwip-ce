@@ -26,7 +26,6 @@ submodules/toolchain/
 # generated dylib installer artifacts
 *INST.8xp
 *.8ek
-tests-dylib/common/
 
 # httpd server example filesystem includes
 *makefsdata.c.*
@@ -87,4 +86,8 @@ tmp/
 
 *.zip
 CLAUDE.md
-services-releases
+service-releases
+
+tests/common/*.8xp
+tests/common/*.8xv
+tests/common/*.8xg

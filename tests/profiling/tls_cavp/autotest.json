@@ -1,15 +1,42 @@
 {
   "description": "Run NIST CAVP-format test vectors against the shipping primitives. The vectors are pre-packed into CAVPIN.8xv by the workflow; the calculator-side runner dispatches each vector to the appropriate primitive (AES-128-GCM, SHA-256, HMAC-SHA-256, HKDF-SHA-256, DRBG-SHA-256) and writes responses into CAVPOUT.8xv. The host-side parser then grades responses against the pinned expected outputs.",
   "transfer_files": [
-    "bin/CAVPTEST.8xp",
+    "bin/XCAVP.8xp",
     "vectors/CAVPIN.8xv",
-    "clibs.8xg"
+    "../../common/clibs.8xg",
+    "../../common/lwIPCERT.8xv",
+    "../../common/lwIPINST.8xp",
+    "../../common/lwIP.0.8xv",
+    "../../common/lwIP.1.8xv",
+    "../../common/lwIP.2.8xv",
+    "../../common/lwIP.3.8xv",
+    "../../common/lwIP.4.8xv",
+    "../../common/lwIP.5.8xv",
+    "../../common/lwip.8xv"
   ],
   "target": {
-    "name": "CAVPTEST",
+    "name": "XCAVP",
     "isASM": true
   },
   "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|2",
+    "key|left",
+    "key|enter",
+    "delay|1000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -25,6 +52,15 @@
         "13764DFC"
       ],
       "timeout": 60000000
+    },
+      "2": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
     }
   }
 }
