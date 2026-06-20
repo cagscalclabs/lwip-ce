@@ -48,7 +48,7 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "00000000"
+        "A2D7C0AB"
       ],
       "timeout": 11000
     },
@@ -57,7 +57,7 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "A2D7C0AB"
+        "C81B8110"
       ],
       "timeout": 10000
     },
@@ -66,7 +66,7 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "C81B8110"
+        "F7C03D8D"
       ],
       "timeout": 100000
     }
