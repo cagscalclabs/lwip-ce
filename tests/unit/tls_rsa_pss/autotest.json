@@ -32,30 +32,41 @@
     "key|1",
     "key|enter",
     "key|enter",
-    "hashWait|2",
+    "hashWait|3",
     "key|left",
     "key|enter",
     "delay|1000",
     "action|launch",
     "hashWait|1",
+    "key|enter",
+    "hashWait|2",
     "key|enter"
   ],
   "hashes": {
     "1": {
-      "description": "RSA-PSS verify - RFC 8017 plus TLS 1.3 CertificateVerify-shaped input",
+      "description": "RSA-PSS verify - RFC 8017 against an OpenSSL-generated fixture",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "FFAF89BA"
+        "00000000"
       ],
       "timeout": 11000
     },
     "2": {
+      "description": "RSA-PSS verify - synthetic TLS 1.3 CertificateVerify-shaped fixture (EMSA-PSS-ENCODE, fixed salt, 2048-bit modulus)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "A2D7C0AB"
+      ],
+      "timeout": 10000
+    },
+    "3": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "F7C03D8D"
+        "C81B8110"
       ],
       "timeout": 100000
     }

@@ -143,13 +143,16 @@ int main(void)
 
     os_ClrHome();
 
-    /* Run tests */
+    /* Test 1: RFC 8017 PSS verify against an OpenSSL-generated fixture. */
     bool test1 = test_pss_verify();
-    bool test2 = test_certverify_pss_verify();
-
-    /* Output results */
     os_ClrHome();
     printf("Test 1 (Verify): %s\n", test1 ? "success" : "fail");
+    os_GetKey();
+
+    /* Test 2: synthetic TLS 1.3 CertificateVerify-shaped fixture (see
+     * test_certverify_pss_verify for how it was generated). */
+    bool test2 = test_certverify_pss_verify();
+    os_ClrHome();
     printf("Test 2 (CertV): %s\n", test2 ? "success" : "fail");
     os_GetKey();
 

@@ -32,7 +32,7 @@
 \usepackage{multicol}
 \usepackage{placeins}
 \usepackage{enumitem}
-\graphicspath{./}
+\graphicspath{{./}{images/}}
 \usepackage{url}
 \usepackage{fancyhdr,color,soul}
 \usepackage{tikz}
@@ -724,7 +724,7 @@ Before beginning this project we needed to itemize what was available and what w
 			\end{figure}
 
 		\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
-		The project is backed by a deterministic unit test suite covering the security-critical cryptographic and parser paths. Tests run on \texttt{CEmu} and are structured around explicit acceptance criteria; where policy requires fail-closed behavior, tests assert rejection rather than silent degradation. (TLS-specific timing and CAVP profiling are treated separately; see Section~\ref{ssec:profiling}.)
+		The project is backed by a deterministic unit test suite covering the security-critical cryptographic and parser paths. Tests run on \texttt{cemu-autotester}, a JSON-workflow based tool that executes a program and waits for certain conditions to be true. and are structured around explicit acceptance criteria; where policy requires fail-closed behavior, tests assert rejection rather than silent degradation. (TLS-specific timing and CAVP profiling are treated separately; see Section~\ref{ssec:profiling}.)
 
 		The suite is dyload-driven: each test links against the curated, manifest-gated \texttt{lwip.lib} produced by the nightly release build, the same artifact a consumer application loads at runtime, rather than compiling TLS core sources directly from \texttt{src/}. This exercises the actual released ABI surface---a curation drop or manifest omission shows up as a build or link failure in the test itself---and bootstraps the allocator and stack state through the real public \texttt{lwip\_start()} entry point rather than a hand-rolled, test-only initialization path.
 
@@ -1413,13 +1413,19 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	\subsubsection{Continuous Integration}
 	\label{ssec:ci}
 
-	Test execution is structured for reviewability rather than just pass/fail signaling. Four self-audit workflows run on every push via GitHub Actions --- the deterministic unit suite (\texttt{tests.yml}), CAVP-vector validation (\texttt{cavp.yml}), the differential timing profiler (\texttt{timing.yml}), and static analysis (\texttt{sast.yml}) --- each producing a self-contained job summary intended to be readable as an audit artifact without reference to source. (A fifth workflow, \texttt{build.yml}, simply confirms the project compiles, and is not part of the validation set.)
+	Test execution is structured for reviewability rather than just pass/fail signaling. \texttt{build.yml} is the orchestrator: it builds the dylib once, then fans out to four self-audit workflows as parallel \texttt{workflow\_call} jobs --- the deterministic unit suite (\texttt{tests.yml}), CAVP-vector validation (\texttt{cavp.yml}), the differential timing profiler (\texttt{timing.yml}), and static analysis (\texttt{sast.yml}), alongside the DAST harness (\texttt{dast.yml}) --- each producing a self-contained job summary intended to be readable as an audit artifact without reference to source. The nightly \texttt{publish} job is itself gated on every one of these checks passing, so a release is never cut from a build that failed validation.
 
 	The unit-test job summary surfaces, for each unit, the RFC and section identifier the tests are derived from (recorded as part of test metadata at authoring time). On failure, the specific RFC test vector that diverged is reported rather than just the failing unit, so a reader can immediately locate the corresponding normative reference. The differential timing profiler emits a per-build chart of class-versus-calibration deviations directly into the job summary, alongside per-primitive median and exceedance-rate tables, so trend drift across builds is visible without downloading raw logs.
 
 	\paragraph{How to read a run (for external reviewers)}: open the Actions tab at the link below and select a commit; the four self-audit workflows appear as separate checks. A green run means every gate passed for that commit; the substance is in each workflow's \emph{job summary}, which is written to be read on its own without cloning the repository. For \textbf{unit tests}, the summary lists each unit with its governing RFC/section, and on failure names the exact diverging vector --- so a reviewer confirms not just \emph{that} a primitive passed but \emph{against which normative reference}. For \textbf{CAVP}, the summary reports per-primitive pass counts over the randomly sampled vectors, with any mismatch identified by primitive and vector index. For \textbf{timing}, the summary embeds the per-primitive deviation chart and the median/exceedance tables; a reviewer looks for all-green rows and near-zero median deviation, and treats any red row or elevated exceedance rate as a flagged item rather than an automatic failure (timing evidence is interpreted as a trend signal, per the profiling discussion above). For \textbf{SAST}, the summary lists Semgrep findings scoped to code the project added or changed relative to upstream lwIP, so review effort lands on new surface rather than the inherited base. Because every summary is self-contained and regenerated on each push, a reviewer can audit the current state of any claim in this document directly from the latest run, without trusting a cached artifact or re-deriving it locally.
 
 	The latest workflow runs are accessible at \url{https://github.com/cagscalclabs/lwip-ce/actions}.
+
+	\begin{figure}[H]
+		\centering
+		\includegraphics[width=0.62\linewidth]{ci_pipeline_graph.jpg}
+		\caption{\footnotesize GitHub Actions visualization of a \texttt{build.yml} run: \texttt{dylib\_latest} builds once, then fans out to the unit, CAVP, and timing workflows alongside SAST/DAST, all gating \texttt{publish}.}
+	\end{figure}
 
 	One deliberate exclusion is worth documenting: the RNG unit tests are not part of the automated CI pipeline. The CI environment executes against \texttt{CEmu}, whose SRAM emulation is deterministic and does not reproduce the physical bitline behavior the entropy source depends on. Emulated RNG output is therefore statistically meaningless for the purposes of this implementation, and incidental emulator-quirk failures during source selection would block unrelated regression gates. RNG validation is instead performed against hardware captures, following the protocol described in Section~\ref{ssec:contributing_data}.
 
