@@ -63,6 +63,7 @@ extern "C"
 #define TLS_HANDSHAKE_CERTIFICATE_REQUEST 0x0d
 #define TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS 0x08
 #define TLS_HANDSHAKE_FINISHED 0x14
+#define TLS_HANDSHAKE_KEY_UPDATE 0x18
     /* Server-side handshake message types across TLS versions */
     enum tls_server_handshake_type
     {
@@ -244,6 +245,13 @@ extern "C"
 
         /* True once close_notify has been sent so we don't send it twice. */
         bool close_notify_sent;
+
+        /* True once a close_notify alert has been received from the peer
+         * (RFC 8446 6.1). The altcp layer checks this to delivery an EOF to
+         * the application the same way it would for a TCP FIN, instead of
+         * silently discarding the alert and leaving the application hanging
+         * on a read that never completes. */
+        bool peer_close_notify_received;
 
         /* Leaf cert SPKI (SubjectPublicKeyInfo) captured during
          * Certificate-receive. Used by tls_recv_certificate_verify to

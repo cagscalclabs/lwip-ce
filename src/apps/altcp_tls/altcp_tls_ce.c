@@ -1648,6 +1648,22 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 altcp_abort(conn);
                 return ERR_ABRT;
             }
+            else if (dec_len >= 2 && pbuf_get_at(dec_pbuf, 0) == TLS_ALERT_LEVEL_WARNING &&
+                     pbuf_get_at(dec_pbuf, 1) == TLS_ALERT_CLOSE_NOTIFY)
+            {
+                /* RFC 8446 §6.1: a close_notify is the peer's orderly
+                 * shutdown signal and must be surfaced as EOF to the
+                 * application, the same way a TCP FIN is. Without this,
+                 * the alert was previously just discarded and the
+                 * application's recv callback would never fire — it would
+                 * sit waiting on a FIN that may arrive late or not at all.
+                 * Queueing through RX_CLOSE_QUEUED (rather than delivering
+                 * EOF immediately) ensures any application data already
+                 * pending in state->rx_app is drained first, same as the
+                 * TCP-FIN path below. */
+                state->tls_ctx.peer_close_notify_received = true;
+                state->flags |= ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED;
+            }
             pbuf_free(dec_pbuf);
         }
         else

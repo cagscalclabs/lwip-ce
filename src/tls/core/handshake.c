@@ -287,6 +287,8 @@ static bool tls_recv_finished(struct tls_handshake_context *ctx, bool is_client,
                               const uint8_t *data, size_t data_len);
 static bool tls_recv_new_session_ticket(struct tls_handshake_context *ctx,
                                         const uint8_t *data, size_t data_len);
+static bool tls_recv_key_update(struct tls_handshake_context *ctx,
+                                const uint8_t *data, size_t data_len);
 static bool tls_send_alert(struct tls_handshake_context *ctx,
                            uint8_t level, uint8_t description);
 static bool tls_spki_extract_rsa_public_key(const uint8_t *spki, size_t spki_len,
@@ -1399,6 +1401,9 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
         INFO("hs: new ticket");
         return tls_recv_new_session_ticket(ctx, msg, msg_len);
+    case TLS_HANDSHAKE_KEY_UPDATE:
+        INFO("hs: key update");
+        return tls_recv_key_update(ctx, msg, msg_len);
     default:
         /* Unknown inner type — ignore per RFC 8446 §4 forward-compat note. */
         return true;
@@ -1472,9 +1477,22 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
         if (plaintext_len >= 2)
         {
             uint8_t level = pbuf_get_at((struct pbuf *)plaintext, 0);
+            uint8_t desc = pbuf_get_at((struct pbuf *)plaintext, 1);
             if (level == TLS_ALERT_LEVEL_FATAL)
             {
                 ctx->state = TLS_STATE_ERROR;
+            }
+            else if (level == TLS_ALERT_LEVEL_WARNING && desc == TLS_ALERT_CLOSE_NOTIFY)
+            {
+                /* Peer is walking away mid-handshake (RFC 8446 §6.1: any data
+                 * received after a closure alert is to be ignored). There is
+                 * no app data to deliver an EOF for yet, so the correct
+                 * outcome is a clean failure now rather than silently
+                 * returning true and leaving the handshake stalled forever
+                 * waiting on a Finished that will never arrive. */
+                ctx->peer_close_notify_received = true;
+                ctx->state = TLS_STATE_ERROR;
+                return false;
             }
         }
         return true;
@@ -3704,6 +3722,85 @@ static bool tls_recv_new_session_ticket(
     ctx->ticket_lifetime = ticket_lifetime;
     ctx->psk_mode = true;
     ctx->psk_type = TLS_PSK_TYPE_RESUMPTION;
+    return true;
+}
+
+/**
+ * @brief Process a post-handshake KeyUpdate from the server (RFC 8446 §4.6.3).
+ *
+ * Wire layout: a single request_update byte (0 = update_not_requested,
+ * 1 = update_requested) inside the standard 4-byte handshake header.
+ *
+ * Ratchets the server's application traffic secret forward one step:
+ *
+ *   server_application_traffic_secret_N+1 =
+ *       HKDF-Expand-Label(server_application_traffic_secret_N,
+ *                          "traffic upd", "", 32)
+ *
+ * then re-derives the server application key/IV from the new secret and
+ * resets server_seq_num to 0 (a fresh secret means a fresh nonce space,
+ * per §7.2 / §5.3). The client's own write-side keys are untouched; if the
+ * server requested a reciprocal update we ratchet our own write secret the
+ * same way and must emit a non-requesting KeyUpdate of our own before our
+ * next application record, but since this implementation does not yet emit
+ * post-handshake records of its own outside of alerts, an unanswered
+ * update_requested is logged and otherwise treated like an ordinary update;
+ * we do not yet send a reciprocal KeyUpdate.
+ */
+static bool tls_recv_key_update(
+    struct tls_handshake_context *ctx,
+    const uint8_t *data,
+    size_t data_len)
+{
+    size_t msg_len = 0;
+
+    if (!ctx || !data || data_len < 5)
+    {
+        return false;
+    }
+
+    size_t offset = tls_parse_handshake_header(data, data_len,
+                                               TLS_HANDSHAKE_KEY_UPDATE,
+                                               &msg_len);
+    if (offset == 0 || msg_len != 1)
+    {
+        return false;
+    }
+
+    uint8_t request_update = data[offset];
+    if (request_update != 0 && request_update != 1)
+    {
+        return false;
+    }
+
+    uint8_t next_secret[32];
+    if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
+                               ctx->keys.server_application_traffic_secret, 32,
+                               "traffic upd", 11, NULL, 0,
+                               next_secret, 32))
+    {
+        return false;
+    }
+    memcpy(ctx->keys.server_application_traffic_secret, next_secret, 32);
+    tls_secure_memzero(next_secret, 32);
+
+    if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
+                               ctx->keys.server_application_traffic_secret, 32,
+                               "key", 3, NULL, 0,
+                               ctx->keys.server_application_key, 16))
+    {
+        return false;
+    }
+    if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
+                               ctx->keys.server_application_traffic_secret, 32,
+                               "iv", 2, NULL, 0,
+                               ctx->keys.server_application_iv, 12))
+    {
+        return false;
+    }
+    ctx->server_seq_num = 0;
+
+    INFO("hs: server key update applied");
     return true;
 }
 

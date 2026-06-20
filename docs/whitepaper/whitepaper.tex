@@ -37,6 +37,13 @@
 \usepackage{fancyhdr,color,soul}
 \usepackage{tikz}
 \usepackage{textgreek}
+% textgreek hardcodes \fontfamily{cmr} for its LGR-encoded glyphs, but no
+% Greek variant of Computer Modern Roman itself exists (LGRcmr.fd is not
+% shipped by any CTAN package) -- this caused "No file LGRcmr.fd." /
+% "This NFSS system isn't set up properly" at \begin{document}, regardless
+% of whether Greek text is actually used, since textgreek initializes the
+% LGR/cmr default at load time. Substitute cm-lgc's LGR-capable family.
+\DeclareFontFamilySubstitution{LGR}{cmr}{fcm}
 \usepackage{float}
 \usepackage{soul}
 \usepackage{array}
@@ -269,7 +276,7 @@ fontupper=\footnotesize
 	
 	\newpage
 	\section{Foreword}
-	The \textbf{lwIP-CE} project is an adaptation and integration of the Lightweight IP (lwIP) stack for highly constrained embedded systems, specifically targeting the TI-84+ CE platform and similar resource-limited environments. This work represents a deliberate effort to bring modern networking capabilities—including Ethernet, IPv4/IPv6, and TLS—to hardware never originally designed for full internet participation.
+	The \textbf{lwIP-CE} project is an adaptation and integration of the Lightweight IP (lwIP) stack for highly constrained embedded systems, specifically targeting the TI-84+ CE platform. This work represents a deliberate effort to bring modern networking capabilities—including Ethernet, IPv4/IPv6, and TLS—to hardware never originally designed for full internet participation.
 	
 	Traditional networking stacks assume megabytes of memory, preemptive multitasking, and operating systems with dynamic resource management. The TI-84+ CE provides none of these conveniences. Instead, it offers a single-threaded execution model, limited RAM, no native networking abstraction, and tight timing constraints on a 48 MHz processor. Yet despite these constraints, the goal of lwIP-CE is not merely “minimal networking,” but correct, standards-aligned, interoperable networking.
 	
@@ -314,7 +321,7 @@ fontupper=\footnotesize
 		\subsection{Adapting lwIP to the TI-84+ CE}
 		The initial porting effort was undertaken by Cemetech user \textit{commandblockguy}, who prepared lwIP for the TI-84+ CE environment by isolating and conditionally excluding features incompatible with the calculator’s execution model. This included removing OS-dependent functionality, threading assumptions, and unsupported memory abstractions, while preserving protocol correctness.
 		
-		A more substantial challenge arose from the calculator’s atypical integer model. The eZ80 CPU operates in a 24-bit address and data environment, and under the CE toolchain, the fundamental C types differ from conventional 32-bit architectures. In particular:
+		A more substantial challenge arose from the calculator’s atypical integer model. The eZ80 CPU operates in a 24-bit address and data environment, and under the CE toolchain, the fundamental C types differ from conventional 32- or 64-bit architectures. In particular:
 		\begin{itemize}
 		\item \texttt{short} is 16 bits
 		\item \texttt{int} is 24 bits
@@ -420,28 +427,31 @@ Before beginning this project we needed to itemize what was available and what w
 		
 	
 		\subsection{Membuffer "driver"}
-		In addition to the USB driver, a dedicated \texttt{membuffer} allocator layer was implemented to keep memory behavior predictable across lwIP, USB RX/TX staging, and TLS components. On this platform, allocator stability is a correctness property: when memory pressure spikes, transport behavior and security-sensitive state handling must degrade in a controlled way rather than fail unpredictably.
+		In addition to the USB driver, a dedicated \texttt{membuffer} allocator layer was implemented to keep memory behavior predictable across lwIP, USB RX/TX staging, and TLS components. On this platform, allocator stability is a correctness property: when memory pressure spikes, transport behavior and security-sensitive state handling must degrade in a controlled way rather than fail unpredictably. The subsystem can run in \textbf{dynamic mode} (wrapping toolchain \texttt{malloc}/\texttt{free}/\texttt{realloc} with explicit heap accounting and pressure reporting) or \textbf{static mode} (a caller-provided arena with fixed bounds and no external allocator dependency after initialization).
 
-		The subsystem supports two initialization modes:
+		Every buffer is one of three classes, chosen for the shape of its workload:
 		\begin{itemize}
-		 \item \textbf{Dynamic mode}: wraps toolchain \texttt{malloc}/\texttt{free}/\texttt{realloc} with explicit heap accounting and pressure reporting.
-		\item \textbf{Static mode}: uses a caller-provided arena with fixed bounds and no external allocator dependency after initialization.
+			\item \texttt{MEM\_BUFFER\_RING}: a FIFO streaming buffer, used by asynchronous ingress paths such as USB RX and per-socket application RX queues.
+			\item \texttt{MEM\_BUFFER\_POOL}: a block allocator for frequent, uniformly-sized alloc/free traffic.
+			\item \texttt{MEM\_BUFFER\_FILE}: a slot-based allocator for lazy file I/O, always running with \texttt{BUFFER\_SECURE\_MODE} enabled.
 		\end{itemize}
 
-		Within either mode, \texttt{membuffer} provides three buffer classes tuned to workload shape:
+		Within the dynamic path, each buffer tracks its own usage and resizes independently. Growth is proactive: once occupancy crosses a configurable \texttt{grow\_threshold\_pct}, the buffer reallocates upward by a fixed \texttt{step} immediately, bounded by a per-buffer \texttt{max\_size} (excluding the heap, which is capable of consuming all of \texttt{freeMem}, but almost never does). Shrinking is deliberately more conservative and uses true hysteresis rather than a mirrored threshold. A buffer only becomes shrink-eligible once occupancy drops to or below \texttt{shrink\_threshold\_pct}, and any check above that threshold immediately resets eligibility to zero. Once eligible, the buffer must remain below threshold for a holding period (\texttt{shrink\_hold\_count} consecutive low-usage checks) before it actually shrinks by one \texttt{step}; each successive shrink doubles the holding period required for the next one (\texttt{base} $\ll$ \texttt{stage}, capped at $\texttt{base} \ll 15$), so a buffer that keeps shrinking demands longer and longer quiet periods before shrinking again, and any renewed pressure resets the stage counter to zero. \texttt{BUFFER\_LOCK\_SIZE} disables growth and shrinking entirely, pinning a buffer at its initial size.
+
+		Each buffer also derives its own pressure level from current usage versus capacity, tiered \texttt{NONE} $\rightarrow$ \texttt{MILD} ($>$70\%) $\rightarrow$ \texttt{HIGH} ($>$85\%) $\rightarrow$ \texttt{SEVERE} ($>$90\%) $\rightarrow$ \texttt{CRITICAL} ($>$95\% or unable to grow further), and invokes a per-buffer callback whenever that level changes in either direction. A separate global pressure level is derived from total heap usage and is layered onto buffer-level notifications via a \texttt{MEM\_PRESSURE\_GLOBAL} flag, letting unrelated modules coordinate throttling off a single signal; buffers flagged \texttt{BUFFER\_USER\_ALLOC} (caller-owned memory carved out of the heap, not the stack's own traffic) are excluded from this global accounting. This pressure model is what couples directly to the Ethernet ingress path: RX ring buffers use drain callbacks and timer-driven budgets, while pressure callbacks adjust scheduling and throttle behavior under load, keeping link handling responsive without runaway allocation during bursts.
+
+		From a security perspective, any buffer can be flagged with \texttt{BUFFER\_SECURE\_MODE} (always on for \texttt{MEM\_BUFFER\_FILE}), enabling automatic zeroization on pop, free, release, and destroy. This does not replace higher-layer cryptographic hygiene, but it materially reduces residual plaintext/key exposure in normal allocator lifecycles.
+
+		By default, lwIP-CE is allowed to use all available free RAM, growing and shrinking buffers as traffic demands; most of the heap sits idle between bursts. An application that needs to guarantee its own headroom can call \texttt{mem\_reserve} with however many bytes it needs, which the allocator treats as permanently off-limits and will not grow into. The reservation can be adjusted at any time with \texttt{mem\_resize} and released entirely with \texttt{mem\_release}. The stack tracks memory in six buckets, visible on the example HUD: \textbf{P} (the fixed $8\,\text{KiB}$ pbuf pool), \textbf{T} (TLS scratch and session buffers), \textbf{H} (everything else the stack allocates --- protocol control blocks, driver state, RNG, outbound segments, DNS scratch), \textbf{R} (the USB RX ring), \textbf{C} (per-connection application RX rings), and \textbf{U} (the caller's reservation via \texttt{mem\_reserve}, which shrinks H's available ceiling by however many bytes are claimed). The HUD updates on a short polling interval, so a climbing H bucket is a real-time signal that something is holding onto heap longer than it should.\label{ssec:mem_accounting}
+
+		Two further constraints govern, specifically, how decrypted TLS handshake plaintext moves through the allocator --- a narrower scope than general allocator usage, since the fixed pbuf pool and most other consumers are not held to these rules:
+
 		\begin{itemize}
-			\item \texttt{MEM\_BUFFER\_RING}: FIFO streaming buffers (used by asynchronous ingress paths such as USB RX).
-			\item \texttt{MEM\_BUFFER\_POOL}: block-style allocations for frequent alloc/free traffic.
-			\item \texttt{MEM\_BUFFER\_FILE}: slot-based, lazy file I/O allocation.
+			\item \textbf{Single-copy rule.} At any point during handshake processing, each byte of handshake data exists in at most one heap buffer. For \texttt{Certificate} messages this means the cert walker's per-cert DER buffer is populated by consuming bytes from the decrypted record pbuf in-place; there is never a full copy of the certificate message sitting alongside the record scratch. For other cross-record handshake messages the reassembly buffer accumulates bytes that have already been consumed (and freed) from the record pbuf, so again at most one copy exists.
+			\item \textbf{Chunk-copy rule.} Neither the cert walker nor the reassembly path reads the entire plaintext into a second large allocation before processing. The cert walker is fed segment-by-segment from the pbuf chain, accumulating only the bytes of the current certificate's DER. The reassembly buffer grows incrementally as each decrypted record segment is appended, freeing the record pbuf promptly after its bytes are copied in.
 		\end{itemize}
 
-		The dynamic path includes pressure-aware sizing controls (grow/shrink thresholds, step sizing, hold logic, and per-buffer max caps) plus pressure callbacks. Pressure levels are tiered (\texttt{NONE} $\rightarrow$ \texttt{MILD} $\rightarrow$ \texttt{HIGH} $\rightarrow$ \texttt{SEVERE} $\rightarrow$ \texttt{CRITICAL}), with optional global pressure signaling to coordinate cross-module throttling.
-
-		This is directly coupled to the Ethernet ingress path: RX ring buffers use drain callbacks and timer-driven budgets, while pressure callbacks adjust scheduling/throttle behavior under load. In practice, this allows the stack to keep link handling responsive while avoiding runaway allocation during bursts.
-
-			From a security perspective, buffers can be flagged with \texttt{BUFFER\_SECURE\_MODE}, enabling automatic zeroization on pop/free/release paths. This does not replace higher-layer cryptographic hygiene, but it materially reduces residual plaintext/key exposure in normal allocator lifecycles.
-
-			\subsection{Operational Memory Characteristics}
+			\subsection{Stack Memory Requirements}
 
 			The lwIP-CE stack initializes by consuming only the needed resources:
 			\begin{itemize}
@@ -513,9 +523,10 @@ Before beginning this project we needed to itemize what was available and what w
 			} \\
 			\midrule
 
-			%% ── @lwip_init ─────────────────────────────────────────────────────
-			\texttt{lwip\_init()}
-				& Heap allocations made during stack initialisation; permanent for the lifetime of the stack \\
+			%% ── @lwip_start
+			─────────────────────────────────────────────────────
+			\texttt{lwip\_start()}
+				& Heap allocations made during stack initialization; permanent for the lifetime of the stack \\
 			\midrule
 			&
 			\meminner{%
@@ -613,36 +624,7 @@ Before beginning this project we needed to itemize what was available and what w
 			\end{longtable}
 			\endgroup
 
-			Two constraints govern all downstream processing of that plaintext buffer:
-
-			\begin{itemize}
-				\item \textbf{Single-copy rule.} At any point during handshake processing, each byte of handshake data exists in at most one heap buffer. For \texttt{Certificate} messages this means the cert walker's per-cert DER buffer is populated by consuming bytes from the decrypted record pbuf in-place; there is never a full copy of the certificate message sitting alongside the record scratch. For other cross-record handshake messages the reassembly buffer accumulates bytes that have already been consumed (and freed) from the record pbuf, so again at most one copy exists.
-				\item \textbf{Chunk-copy rule.} Neither the cert walker nor the reassembly path reads the entire plaintext into a second large allocation before processing. The cert walker is fed segment-by-segment from the pbuf chain, accumulating only the bytes of the current certificate's DER. The reassembly buffer grows incrementally as each decrypted record segment is appended, freeing the record pbuf promptly after its bytes are copied in.
-			\end{itemize}
-
 			A single-TLS-connection deployment peaks at roughly $29\,\text{KiB}$ for a typical single-record Certificate path --- the $10.5\,\text{KiB}$ baseline, about $1\,\text{KiB}$ of per-connection TLS state, one decrypted record pbuf (up to ${\sim}16\,\text{KiB}$), and the shared RSA padding pool. Because the cert walker holds only one cert's DER ($1$--$5\,\text{KiB}$ typical) and frees it before the next is fetched, the old full-chain buffering peak of ${\sim}16\,\text{KiB}$ is eliminated. A fragmented Certificate message raises peak usage toward $34\,\text{KiB}$, since the record pbuf and the current cert's DER buffer briefly coexist during chain verification; the walker allocation is bounded by one cert's size and is freed the moment verification completes. Non-Certificate handshake messages that span TLS records use flat reassembly, but those messages are small (at most a few KiB for \texttt{NewSessionTicket}), keeping fragmented overhead well below the former ceiling. Demand-driven lwIP work (outbound TCP segments, queued encrypted pbufs) adds whatever the application's workload calls for, bounded by the global allocator cap. For multi-connection deployments, add roughly $1\,\text{KiB}$ per additional idle TLS connection and budget the transient record-pbuf and reassembly cost per concurrent handshake.
-
-			Memory pressure is observed by the global \texttt{membuffer} accountant. Under \texttt{MILD} or \texttt{HIGH} pressure, propagation of \texttt{altcp\_recved} to TCP is divided down, slowing wire-side ingestion; under \texttt{CRITICAL} pressure it is suppressed entirely. New TLS connections opened during pressure thus run, but degrade in throughput rather than fail outright.
-
-			\subsubsection{Memory Ownership and the User Reservation API}%
-			\label{ssec:mem_accounting}
-
-			By default, lwIP-CE is allowed to use all available free RAM. It rarely needs all of it --- most of the heap sits idle between bursts of traffic. The idea is that your application should be able to take what it needs without fighting the stack for space.
-
-			To do that, call \texttt{mem\_reserve} with however many bytes your app needs. lwIP will treat that region as off-limits and will not grow into it. You can adjust the reservation at any time with \texttt{mem\_resize}, and release it entirely with \texttt{mem\_release} when you're done.
-
-			The stack tracks memory in six buckets, visible on the example HUD:
-
-			\begin{itemize}
-				\item \textbf{P} --- the pbuf pool; fixed at $8\,\text{KiB}$ for in-flight frame data.
-				\item \textbf{T} --- TLS scratch and session buffers.
-				\item \textbf{H} --- everything else the stack allocates: protocol control blocks, driver state, RNG, outbound segments, DNS scratch, etc. If an allocation doesn't belong to another bucket, it lands here.
-				\item \textbf{R} --- the USB RX ring.
-				\item \textbf{C} --- per-connection application RX rings.
-				\item \textbf{U} --- your reservation. This shows how many bytes you've claimed via \texttt{mem\_reserve}. When non-zero, H's available ceiling shrinks by this amount.
-			\end{itemize}
-
-			The HUD updates on a short polling interval so you can watch allocations rise and fall in real time. If H is climbing unexpectedly, that's your signal that something is holding onto heap longer than it should.
 
 			\subsection{Application Callability}
 			lwIP-CE is intended to operate as a resident networking component that other calculator programs can call, rather than as a program whose networking stack is statically copied into each consumer. I was intent on making this library callable in place rather than statically included because the lwIP core and TLS internals are huge (around 200KB) and on a device with just under 2MB of Flash storage, this adds up quickly. This design reduces duplicated code size, centralizes network state, and allows application programs to depend on a stable exported interface.
@@ -668,7 +650,7 @@ Before beginning this project we needed to itemize what was available and what w
 			Concretely, the implementation realizes this with three cooperating pieces. The lwIP application links an \emph{export table} into its own image at a fixed early descriptor offset: a six-byte magic marker (\texttt{"LWIPTB"}) followed by one entry per public symbol. Each entry is emitted as a normal relocatable symbol reference, so the installer patches it to the real installed Flash address when it fixes the app. The \emph{companion library} is an ordinary \texttt{LIBLOAD} library the consumer links against; it carries one jump-table trampoline per exported lwIP function plus an imports table (host CRT slots and the USB vtable). At runtime, a \emph{bootstrap} routine ties the two together by computing the app's linked-image base from installed app metadata, adding the fixed descriptor offset, validating the table, and copying the relocated addresses into the trampolines.
 
 			\subsubsection{Initialization Handshake}
-			Bringing the stack up happens in two stages: the ordinary \texttt{LIBLOAD} initialization of the companion library, followed by lwIP-CE's own runtime setup, triggered explicitly when the consumer calls \texttt{lwip\_init\_runtime(malloc, free, realloc)}. Figure~\ref{fig:libload_bootstrap} traces the full sequence. The key ordering constraint is that the application's own initialization (\texttt{lwip\_init\_runtime\_internal}) is itself an exported call, so it can only run \emph{after} the trampolines have been patched --- the bootstrap reaches into the app to finish setting up the app.
+			Bringing the stack up happens in two stages: the ordinary \texttt{LIBLOAD} initialization of the companion library, followed by lwIP-CE's own runtime setup, triggered explicitly when the consumer calls \texttt{lwip\_start\_with\_crt(malloc, free, realloc)} --- aliased to \texttt{lwip\_start()} for the common case. Figure~\ref{fig:libload_bootstrap} traces the full sequence. The key ordering constraint is that the application's own initialization (\texttt{lwip\_init\_runtime\_internal}) is itself an exported call, so it can only run \emph{after} the trampolines have been patched --- the bootstrap reaches into the app to finish setting up the app.
 
 			\begin{figure}[H]
 				\centering
@@ -683,7 +665,7 @@ Before beginning this project we needed to itemize what was available and what w
 				]
 					\node[lib] (load) {\textbf{Stage 1 --- LIBLOAD loads the companion library}\\
 						USB vtable filled via \texttt{include\_library 'usbdrvce'}; lwIP trampolines present but unpatched};
-					\node[lib, below=of load] (call) {\textbf{Stage 2 --- consumer calls} \texttt{lwip\_init\_runtime(malloc, free, realloc)}\\
+					\node[lib, below=of load] (call) {\textbf{Stage 2 --- consumer calls} \texttt{lwip\_start\_with\_crt(malloc, free, realloc)}\\
 						host CRT pointers written into the imports table};
 					\node[lib, below=of call] (find) {\textbf{Bootstrap locates the resident application}\\
 						by name $\rightarrow$ app base; metadata $\rightarrow$ linked image base; fixed offset $\rightarrow$ export table};
@@ -702,7 +684,7 @@ Before beginning this project we needed to itemize what was available and what w
 					\draw[flow] (patch) -- (internal);
 					\draw[flow] (internal) -- (ready);
 				\end{tikzpicture}
-				\caption{\footnotesize LIBLOAD dispatch and bootstrap flow. Stage~1 is ordinary \texttt{LIBLOAD} library init (blue); Stage~2 is lwIP-CE's custom runtime setup, triggered by \texttt{lwip\_init\_runtime}, ending with the app's own initialization (green). The three host C-runtime pointers are stored before the app is located; the app's \texttt{.bss}/\texttt{.data} init and imports-table copy run last, through the now-patched table.}
+				\caption{\footnotesize LIBLOAD dispatch and bootstrap flow. Stage~1 is ordinary \texttt{LIBLOAD} library init (blue); Stage~2 is lwIP-CE's custom runtime setup, triggered by \texttt{lwip\_start\_with\_crt} (aliased to \texttt{lwip\_start}), ending with the app's own initialization (green). The three host C-runtime pointers are stored before the app is located; the app's \texttt{.bss}/\texttt{.data} init and imports-table copy run last, through the now-patched table.}
 				\label{fig:libload_bootstrap}
 			\end{figure}
 
@@ -742,15 +724,39 @@ Before beginning this project we needed to itemize what was available and what w
 			\end{figure}
 
 		\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
-		The project is backed by a deterministic unit test suite that spans the full stack---transport and allocator layers as well as the security-critical cryptographic and parser paths. Tests run on \texttt{CEmu} and are structured around explicit acceptance criteria; where policy requires fail-closed behavior, tests assert rejection rather than silent degradation. (TLS-specific timing and CAVP profiling are treated separately; see Section~\ref{ssec:profiling}.)
+		The project is backed by a deterministic unit test suite covering the security-critical cryptographic and parser paths. Tests run on \texttt{CEmu} and are structured around explicit acceptance criteria; where policy requires fail-closed behavior, tests assert rejection rather than silent degradation. (TLS-specific timing and CAVP profiling are treated separately; see Section~\ref{ssec:profiling}.)
 
-		At the transport and allocator level, the Ethernet RX driver is exercised against the real \texttt{usb\_ethernet.c} implementation: ECM frame reception into the RX ring and its drain into lwIP, drain-budget enforcement and backpressure when \texttt{pbuf} allocation fails, NCM NTB parsing across multiple datagrams, and correct USB transfer re-arm state when a transfer fails to schedule. The \texttt{membuffer} allocator is tested across all three buffer classes (ring, pool, file), asserting growth, shrink-hysteresis behavior, max-size rejection, and---under \texttt{BUFFER\_SECURE\_MODE}---automatic zeroization on pop, free, release, and destroy. These tests reach into allocator and driver internal state directly, so a regression in buffering or zeroization is caught rather than masked by surface-level success.
+		The suite is dyload-driven: each test links against the curated, manifest-gated \texttt{lwip.lib} produced by the nightly release build, the same artifact a consumer application loads at runtime, rather than compiling TLS core sources directly from \texttt{src/}. This exercises the actual released ABI surface---a curation drop or manifest omission shows up as a build or link failure in the test itself---and bootstraps the allocator and stack state through the real public \texttt{lwip\_start()} entry point rather than a hand-rolled, test-only initialization path.
 
-		On the security-critical side, coverage includes truststore integrity verification, certificate-chain trust decisions, RNG initialization/request behavior, parser correctness for ASN.1/X.509/PKCS flows, and expected rejection behavior for malformed or invalid inputs. Tests are built from applicable RFC vectors where available (with RFC and section identifiers recorded in test metadata), and from implementation-directed cases where no official vectors exist.
+		Coverage includes truststore integrity verification, certificate-chain trust decisions, parser correctness for ASN.1/X.509/PKCS flows, and expected rejection behavior for malformed or invalid inputs; the cryptographic primitives underneath them (hashing, HMAC, HKDF, PBKDF2, AES, RSA-OAEP/PSS, X25519, Base64) are each covered by a dedicated unit. RNG behavior is deliberately excluded from this suite and validated separately against hardware captures, as described below. Tests are built from applicable RFC vectors where available (with RFC and section identifiers recorded in test metadata), and from implementation-directed cases where no official vectors exist. Network-facing behavior of the Ethernet/USB transport---ARP, ICMP, and TCP/UDP handling against live probe traffic---is exercised separately by the DAST harness described in Section~\ref{ssec:profiling}; there is currently no dedicated unit-level harness for the Ethernet RX driver or the \texttt{membuffer} allocator in isolation.
 
 		Latest unit-test workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml}.
 
+		\subsection{Unified Event System and Diagnostic Traceback}
 
+		Every module that can fail---USB, the custom allocator, TLS handshake/record processing, and the lwIP-CE glue layer itself---routes notable events through a single shared callback rather than each maintaining its own ad-hoc logging. The library performs no I/O of its own; if the caller wants a console, a persisted log, or an on-screen HUD, that happens inside the callback it registers with \texttt{lwip\_set\_event\_cb}. Each event carries a \texttt{module} (which subsystem) and a \texttt{kind}: \texttt{INFO} milestones, \texttt{DEBUG} trace points (self-throttling---a given \{file, line\} only re-fires once it stops repeating), \texttt{WARN} for tolerated problems, \texttt{ERROR} for hard failures, \texttt{STATE\_CHG} for transitions worth surfacing on their own (link up/down, IP acquired/lost, connection established/closed/failed, TLS handshake begin/done/failed), and \texttt{IO\_FILE}/\texttt{IO\_ETH} for AppVar and network byte-level traffic.
+
+		On a single-threaded, callback-buried system like this one, the practical debugging problem is rarely ``something failed''---the application layer already gets that much from a socket error or a closed connection. The problem is finding \emph{where}, several callback frames removed from the code that can act on it, without re-running the failure under a debugger that may not even be attachable (most field failures happen on hardware, not in an emulator). To address this, every \texttt{WARN} and \texttt{ERROR} event additionally pushes a compact entry into a 16-deep ring buffer, independent of whether a callback is even registered. The application can pull this buffer at the moment it actually needs it---typically right after a socket operation reports failure---rather than having had to be watching every event live as it happened.
+
+		\begin{verbatim}
+const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count);
+		\end{verbatim}
+
+		Calling this returns a pointer to an internally-owned array (valid until the next call, or until another entry is pushed) ordered newest-first, along with how many entries it holds. A typical consumer walks it immediately after observing a failure:
+
+		\begin{verbatim}
+uint8_t count;
+const struct lwip_traceback_entry *entries = lwip_get_traceback(&count);
+for (uint8_t i = 0; i < count; i++) {
+    const struct lwip_traceback_entry *e = &entries[i];
+    printf("file=%s line=%lu err=%d\n",
+           lwip_debug_file_name(e->file), e->line, e->raw_error);
+}
+		\end{verbatim}
+
+		Two kinds of entry can appear in the buffer. A \emph{code} entry (an ordinary \texttt{WARN}/\texttt{ERROR} raised from inside the stack) carries \texttt{module}, \texttt{kind}, \texttt{file}, \texttt{line}, and an optional caller-supplied \texttt{extra} code identifying the exact source location and circumstance. A \emph{socket} entry, pushed by the higher-level socket wrapper API when it maps an internal failure into something the application sees, instead carries \texttt{component} and \texttt{operation} (which socket subsystem and call were involved), \texttt{raw\_error} (the underlying \texttt{err\_t} or module-specific code), \texttt{mapped\_error}, and \texttt{status}---\texttt{file}/\texttt{line} are zero on these, since the causal call site is expected to already be present as a preceding code entry in the same trace. In both cases the entry is small and fixed-size, so the whole buffer costs a bounded, constant amount of memory regardless of how chatty a given failure was.
+
+		The result is that a socket-level failure---a connection that times out, a write that fails, a handshake that aborts---is no longer just a single opaque status code at the top of the call stack. The application can walk backward through exactly the chain of WARN/ERROR events that led to it, down to the file and line where the underlying condition was first detected, without needing to have instrumented anything in advance or reproduced the failure under a debugger.
 
 		\newpage
 		\section{TLS Architecture and Security Model}
@@ -1256,22 +1262,24 @@ Before beginning this project we needed to itemize what was available and what w
 	\end{itemize}
 	We needed a trust model that remained defensible for the intended use case while still allowing the calculator to complete a handshake without experiencing a nuclear meltdown in its CPU. The model combines two independent checks: \emph{adjacent-link} chain signature verification across the presented \texttt{Certificate} message, and the mandatory TLS 1.3 \texttt{CertificateVerify} check for live proof-of-possession of the leaf key. This approach is intentionally narrower than a full desktop-class WebPKI verifier: the tradeoff is reduced processing and memory pressure in exchange for an explicit, bounded trust boundary.
 
-	\paragraph{A note on the earlier SPKI-pinning model}
-	Earlier revisions expressed chain trust as signed \texttt{SubjectPublicKeyInfo} (SPKI) pins: the chain was accepted if a CA-capable certificate in it matched a pinned digest in a shipped truststore. That mechanism has been \emph{replaced} by the adjacent-link verification described below. A signed truststore is still generated and shipped (its format and lifecycle are detailed in the next section) and remains the foundation for a future issuer-key/root-anchoring scheme, but it is no longer the gate for chain acceptance in this release.
-
 	\paragraph{CertificateVerify}
 	Chain verification establishes that the certificates link together cryptographically, but it does not on its own prove that the entity we are speaking with controls the leaf private key. A network attacker holding only the leaf certificate---which is public---would otherwise pass a structural check. TLS 1.3's \texttt{CertificateVerify} message closes that gap: the server signs a digest of the handshake transcript with its leaf private key. We require this message and verify it on every full handshake.
 
-	The implementation is restricted to \texttt{rsa\_pss\_rsae\_sha256} with a leaf RSA modulus between 1024 and 2048 bits. Servers selecting \texttt{ecdsa\_secp256r1\_sha256}, the wider RSA-PSS hash variants, or RSA-PKCS1 (which RFC~8446 §4.4.3 forbids in \texttt{CertificateVerify} regardless) are rejected with a fatal \texttt{decrypt\_error} alert. Support for \texttt{ecdsa\_secp256r1\_sha256} is planned.
+	The implementation is restricted to \texttt{rsa\_pss\_rsae\_sha256} with a leaf RSA modulus between 1024 and 2048 bits. Servers selecting \texttt{ecdsa\_secp256r1\_sha256}, the wider RSA-PSS hash variants, or RSA-PKCS1 (which RFC~8446 §4.4.3 forbids in \texttt{CertificateVerify} regardless) are rejected with a fatal \texttt{decrypt\_error} alert. Support for \texttt{ecdsa\_secp256r1\_sha256} and RSA keys up to 4096 bits is planned.
+
+	\paragraph{CertificateRequest}
+	A server may ask the client to authenticate with its own certificate. Client certificates are currently out of scope for this implementation, but the request still has to be handled correctly: \texttt{CertificateRequest} participates in the handshake transcript that both sides' \texttt{Finished} MACs are computed over, so it cannot simply be ignored. The handshake parser validates the message's nested request-context and extension-list lengths, feeds the exact bytes into the transcript hash, and records that the server asked (\texttt{client\_certificate\_requested}). Rather than aborting or omitting the response, the client replies with an empty \texttt{Certificate} message (a zero-length certificate list, per RFC~8446 §4.4.2) and no \texttt{CertificateVerify}, which is the standard, spec-compliant way to decline client authentication while keeping the transcript---and therefore the handshake---valid.
 
 	\paragraph{Certificate Chain Parsing and Adjacent-Link Verification}
 	When operating as a client, the implementation streams the TLS \texttt{Certificate} message one certificate at a time rather than buffering the whole chain, and verifies each \emph{link} against the next certificate's public key. Because certificate $N$ is signed by certificate $N{+}1$, and $N{+}1$ has not yet arrived when $N$ finishes parsing, the walker defers: it holds $N$'s signature material until $N{+}1$ arrives, then verifies the pending link with $N{+}1$'s key.
 	\begin{itemize}
 		\item An \texttt{RSA-2048} link signed with \texttt{sha256WithRSAEncryption} is verified for real (PKCS\#1~v1.5, SHA-256). A signature that fails to verify is fatal: the handshake is aborted (an \texttt{ERROR}-severity diagnostic is emitted).
-		\item Any other signature type---\texttt{ecdsa\_secp256r1\_sha256}, wider RSA-PSS hashes, or a non-RSA issuer key the link cannot be checked against---is \emph{not} verified. The link is accepted and the stack raises an \texttt{ALERT}-severity diagnostic (``unsupported cert type, proceeding'') so the application can observe that the link went cryptographically unchecked.
-		\item The topmost certificate has no issuer within the presented chain and is left unverified; this release does not anchor the top link to a truststore root.
+		\item Any other signature type---\texttt{ecdsa\_secp256r1\_sha256}, wider RSA-PSS hashes, or a non-RSA issuer key the link cannot be checked against---is \emph{not} verified. The link is accepted and the stack raises an \texttt{ALERT(unsupported algorithm, PASS)} so the application can observe that the link went cryptographically unchecked.
+		\item The topmost certificate has no issuer within the presented chain, so its issuer is looked up in the on-device truststore by subject name. If found and RSA (PKCS\#1~v1.5 or PSS, SHA-256), the root link is verified for real with the same fatal-on-failure treatment as an adjacent in-chain link. If the issuer is absent from the truststore, or uses a signature type not yet supported (e.g. ECDSA), the chain is accepted with \texttt{ALERT(root not in store, PASS)}.
 	\end{itemize}
-	The handshake therefore completes when every RSA-2048 link it could verify did verify, no verifiable link failed, and the leaf's \texttt{CertificateVerify} signature checks out. This is an interim posture: the \texttt{ALERT}-but-accept fallback for unsupported signature algorithms exists only until those algorithms are implemented (\texttt{ecdsa\_secp256r1\_sha256} first) and a truststore-anchored root check is added for the top of the chain. The on-device truststore format is specified in the next section.
+	The \texttt{WARN-PROCEED} is an interim posture only intended until gaps in our signature algorithm support are closed.
+	
+	The handshake therefore completes when every RSA link it could verify---including the root anchoring check---did verify, no verifiable link failed, and the leaf's \texttt{CertificateVerify} signature checks out. The on-device truststore format is specified in the next section.
 
 	\subsection{Trust Store Generation and Specification}
 
@@ -1282,13 +1290,14 @@ Before beginning this project we needed to itemize what was available and what w
 	The workflow:
 	\begin{enumerate}
 		\item Scans common CA-certificate locations on the runner (for example \texttt{/etc/ssl/certs}) and collects parseable trust anchors.
-		\item Extracts the following metadata from each certificate:
+		\item Extracts the following from each certificate, skipping any whose key the device-side verifier cannot handle (RSA moduli above the supported size, or non-P-256 EC keys):
 		\begin{itemize}
-			\item The \texttt{SubjectPublicKeyInfo} field
-			\item The issuer and owner IDs
+			\item The subject common name (CN) and the \texttt{SubjectKeyIdentifier} extension, used at lookup time to anchor a chain's topmost certificate to its issuer by subject-name match
 			\item The expiry timestamps (not-before, not-after)
+			\item The signature algorithm class (RSA-PSS/SHA-256, RSA-PKCS\#1~v1.5/SHA-256, or ECDSA-P-256/SHA-256), recorded as a compact internal code rather than an ASN.1 OID
+			\item The raw public key material used by the root-anchoring RSA verification described above
 		\end{itemize}
-		\item Serializes a binary truststore with the following layout:
+		\item Serializes a binary truststore with the following layout. Per-entry records are variable-length (the trailing key field's size depends on the key type), so each is length-prefixed rather than fixed-size:
 		\begin{figure}[H]
 			\centering
 			\scriptsize
@@ -1298,34 +1307,35 @@ Before beginning this project we needed to itemize what was available and what w
 				\rowcolor{gray!18}
 				Field & Size & Notes \\
 				\midrule
-				Signature Field & 256 bytes & File signature / authenticity block \\
+				Signature Field & 256 bytes & RSA-2048 PSS-SHA-256 signature over the header fields below plus all entries \\
 				Store Version & 2 bytes & Truststore schema version \\
 				Created Timestamp & 4 bytes & Build timestamp \\
-				Cert Entry Count & 2 bytes & Number of certificate records \\
+				Entry Count & 2 bytes & Number of certificate records \\
 				\rowcolor{gray!22}
-				\multicolumn{3}{@{}l@{}}{\textbf{Per-certificate record (repeated \texttt{Cert Entry Count} times)}} \\
-				Owner Id & 32 bytes & Truncated if source identifier exceeds 32 bytes \\
-				Issuer Id & 32 bytes & Truncated if source identifier exceeds 32 bytes \\
+				\multicolumn{3}{@{}l@{}}{\textbf{Per-certificate record (repeated \texttt{Entry Count} times, variable length)}} \\
+				Entry Length & 4 bytes & Total byte size of this record, including the key field \\
+				Subject & 32 bytes & Subject CN, null-terminated and padded \\
+				Subject Key Identifier & 32 bytes & SKI extension bytes, padded \\
 				Not-Before & 4 bytes & Validity start timestamp \\
 				Not-After & 4 bytes & Validity end timestamp \\
-				SHA-256 SPKI & 32 bytes & Digest of SubjectPublicKeyInfo \\
-				EOF & -- & End of file \\
+				Algorithm Id & 1 byte & RSA-PSS, RSA-PKCS\#1~v1.5, or ECDSA-P-256 \\
+				Key & variable & Raw public key: RSA exponent+modulus, or an EC point \\
 				\bottomrule
 			\end{tabularx}
 		\end{figure}
 		\item Signs the truststore bytes from \texttt{Store Version} through \texttt{EOF} using RSA-2048 PSS-SHA-256 and writes the signature into \texttt{Signature Field}.
 		\item Stores the signing key in GitHub Secrets, materializes it only in runner temp storage for signing/verification, then deletes it (including \texttt{shred} cleanup).
 		\item Converts the binary store to TI AppVar format (\texttt{.8xv}) via \texttt{convbin}.
-		\item Publishes the resulting AppVar as the \texttt{truststore-latest} release artifact.
+		\item Publishes the resulting AppVar, named \texttt{lwIPCERT.8xv} on-device, under the \texttt{truststore-latest} release tag.
 		\item Links validation at runtime by shipping the corresponding public verification key within lwIP's truststore module.
 	\end{enumerate}
 	
-	Truststore age is currently a soft-fail signal, not an enforced rejection condition. A stale store can trigger warning behavior, but does not by itself block use of an otherwise valid signed truststore. Age checks are meaningful only when time is sane, which requires either (1) a valid local clock state, or (2) a functioning NTP path.
+A truststore age check (warning only, not a rejection condition, comparing \texttt{created\_timestamp} against a threshold once time can be trusted via a valid local clock or NTP) is planned but not yet implemented; the on-device truststore currently carries no age-based behavior at all.
 	
 	Algorithm agility is version-gated. The current format uses RSA-2048 PSS-SHA-256 for truststore signatures; future signature-scheme migrations are expected to ship behind an explicit format/version transition plus corresponding verifier update.
 
 	\paragraph{Runtime Initialization}
-	When the TLS module initializes, it also initializes the truststore, which performs (1) signature verification of the truststore against the embedded public verification key, and (2) schema/version compatibility checks against the version expected by lwIP. If truststore initialization fails, TLS client connections are refused.
+	When the network layer comes up, it also initializes the truststore, which performs (1) signature verification of the truststore against the embedded public verification key, and (2) schema/version compatibility checks against the version expected by lwIP. Truststore initialization failure does not block TLS connections outright: it degrades gracefully to the same posture as an absent truststore, leaving root anchoring unavailable for that session (the adjacent-link and \texttt{CertificateVerify} checks described above are unaffected and still run). A chain whose topmost issuer would otherwise have been anchored is instead accepted with an \texttt{ALERT}-severity diagnostic, the same fallback used for any issuer absent from a valid store.
 
 	\paragraph{Compromise and Revocation}
 	If the truststore signing key is suspected or confirmed compromised, the incident response is:
@@ -1373,7 +1383,7 @@ Before beginning this project we needed to itemize what was available and what w
 	
 	For each class, the reported statistics include class median deviation from the calibration median and exceedance rate (percentage of samples where $|T_i-m|>\Delta_c$). A differential failure is flagged when separation from calibration exceeds the accepted deviation with directionally consistent behavior across at least a three-quarters majority of samples.	
 	
-	Each unit is sampled $50$ times, where each sample is a composite of repeated executions selected by algorithm runtime class: fast units use $64$ repetitions, medium units use $16$, and slow units use $2$. This batching further suppresses class-independent timing jitter.
+	Each unit is sampled $32$ times, where each sample is a composite of repeated executions selected by algorithm runtime class: fast units use $4$ repetitions, medium units use $2$, and slow units use $1$. This batching further suppresses class-independent timing jitter.
 
 	Latest timing-profiler workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml}.
 
