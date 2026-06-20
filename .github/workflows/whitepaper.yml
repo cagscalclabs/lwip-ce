@@ -62,6 +62,7 @@ jobs:
             latexmk \
             python3-pygments \
             texlive-fonts-recommended \
+            texlive-fonts-extra \
             texlive-latex-extra \
             texlive-pictures \
             texlive-science
