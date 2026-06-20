@@ -302,6 +302,8 @@ jobs:
                 else if (k == "median") median_cur = v
                 else if (k == "over") over_cur = v
                 else if (k == "dpass") dpass_cur = v
+                else if (k == "reps") reps_cur = v
+                else if (k == "samples") samples_cur = v
               }
             }
             function get_or_dash(v) { return (v == "" ? "-" : v) }
@@ -316,6 +318,12 @@ jobs:
               if (prim != "" && !seen[prim]) {
                 seen[prim] = 1
                 order[++n_prim] = prim
+              }
+              reps_cur = ""; samples_cur = ""
+              parse_kv(2)
+              if (prim != "") {
+                if (reps_cur != "") reps[prim] = reps_cur
+                if (samples_cur != "") samples[prim] = samples_cur
               }
               next
             }
@@ -374,10 +382,13 @@ jobs:
               print ""
               printf("_Parsed primitives: %d (robust=%d, robust4=%d)_\n", n_prim, n_robust, n_robust4)
               print ""
-              print "| Unit | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Directional Over% c6 (W/R/E) | Directional Over% c4 (W/R/E) |"
-              print "|---|---:|---:|---:|---:|---:|"
+              print "| Unit | Reps × Samples | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Directional Over% c6 (W/R/E) | Directional Over% c4 (W/R/E) |"
+              print "|---|---:|---:|---:|---:|---:|---:|"
               for (pidx = 1; pidx <= n_prim; pidx++) {
                 prim_name = order[pidx]
+                reps_v = get_or_dash(reps[prim_name])
+                samples_v = get_or_dash(samples[prim_name])
+                n_pair = (reps_v == "-" || samples_v == "-") ? "-" : (reps_v " × " samples_v)
                 sigma_v = get_or_dash(sigma[prim_name])
                 d6 = get_or_dash(accept6[prim_name])
                 d4 = get_or_dash(accept4[prim_name])
@@ -393,8 +404,8 @@ jobs:
                 o4_w = ((prim_name SUBSEP "worst") in over4) ? over4[prim_name, "worst"] : "-"
                 o4_r = ((prim_name SUBSEP "random") in over4) ? over4[prim_name, "random"] : "-"
                 o4_e = ((prim_name SUBSEP "edge") in over4) ? over4[prim_name, "edge"] : "-"
-                printf("| <sub>%s</sub> | <sub>%s</sub> | <sub>%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> |\n",
-                       prim_name, sigma_v, dpair, md_w, md_r, md_e, o6_w, o6_r, o6_e, o4_w, o4_r, o4_e)
+                printf("| <sub>%s</sub> | <sub>%s</sub> | <sub>%s</sub> | <sub>%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> |\n",
+                       prim_name, n_pair, sigma_v, dpair, md_w, md_r, md_e, o6_w, o6_r, o6_e, o4_w, o4_r, o4_e)
               }
             }
           ' "$txt_out" >> "$summary_md"
