@@ -611,9 +611,16 @@ def run_functable(argv: list[str] | None = None) -> int:
         lines.append("_fn_imports_table_end:")
         lines.append("")
         # `export foo` records the offset to foo's body; lwIP's real bodies live
-        # in the flash app, so each export here points at a tiny `jp 0` stub
+        # in the flash app, so each export here points at a tiny `jp` stub
         # that lwip_init_runtime patches with the real in-app address. Order
         # must match _fn_exports_table so slot N matches entry N.
+        #
+        # Default target is lwip_function_jp_unset, not a bare jp 0: a slot
+        # beyond min(app_count, stub_count) (the libload/app version-skew
+        # case -- see lwip_init_runtime.asm's patch loop) is intentionally
+        # left unpatched, and a caller that still invokes it should get a
+        # safe "function unsupported, version" errno instead of jumping to
+        # address 0.
         for sym in entries:
             # functable entries are mangled (_foo); fasmg `export` takes the
             # unprefixed name.
@@ -623,7 +630,7 @@ def run_functable(argv: list[str] | None = None) -> int:
         lines.append("_lwip_jp_table_start:")
         for sym in entries:
             name = sym[1:] if sym.startswith("_") else sym
-            lines.append(f"{name}:\tjp 0")
+            lines.append(f"{name}:\tjp lwip_function_jp_unset")
         lines.append("_lwip_jp_table_end:")
         lines.append("")
 

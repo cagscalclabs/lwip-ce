@@ -24,6 +24,7 @@ __lwip_error_lut:
 	dl __err_library_invalid_str
 	dl __err_library_too_old_str
 	dl __err_lwip_init_failed_str
+	dl __err_lwip_function_unset_str
 __err_library_not_found_str:
 	db "library missing",0
 __err_library_invalid_str:
@@ -32,10 +33,11 @@ __err_library_too_old_str:
 	db "install newer library",0
 __err_lwip_init_failed_str:
 	db "runtime-int failed",0
-
+__err_lwip_function_unset_str:
+	db "function unsupported, version",0
 	__lwip_errno		db		0
 	__lwip_is_newer		db		0
-	__lwip_max_errno	equ		4
+	__lwip_max_errno	equ		5
 
 lwip_is_newer:
 	ld a, (__lwip_is_newer)
@@ -205,4 +207,14 @@ lwip_start_with_crt:
 	ld (__lwip_errno), a
 	pop ix				; undo ti._frameset0's push ix
 	xor a
+	ret
+
+lwip_function_jp_unset:
+; destroys all registers
+	ld a, 5
+	ld (__lwip_errno), a
+	ld a, 0
+	ld hl, 0
+	ld de, 0
+	ld bc, 0
 	ret
