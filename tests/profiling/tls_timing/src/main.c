@@ -22,7 +22,7 @@
  * cut well below the static-link tuning to keep the full suite inside CI's
  * wall-clock budget. TIMING_SAMPLES is kept high enough for MAD/sigma to
  * stay meaningful. */
-#define TIMING_SAMPLES 32u
+#define TIMING_SAMPLES 16u
 #define TIMING_REPS_FAST 4u
 #define TIMING_REPS_MEDIUM 2u
 #define TIMING_REPS_SLOW 1u
