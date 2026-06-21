@@ -82,8 +82,7 @@ socket API:
 ``lwip_start_with_crt(malloc, free, realloc)`` (or simply ``lwip_start()``) **must be the first lwIP call** in your program. It
 locates the lwIP flash app, verifies its export table, and patches the libload
 trampolines so that every other entry point becomes reachable. It returns
-``0`` on success, ``1`` if the app is not found, or ``2`` on an export table
-error. Nothing else will work if this step is skipped or called out of order.
+``true`` on success and ``false`` on failure, with ``lwip_get_start_errstring()`` returning a string-ified error message indicating what failed. Nothing else will work if this step is skipped or called out of order. In the event you forget ``lwip_start()``, rather than crashing, the exports will simply resolve to no-ops that clear all registers and ``lwip_get_start_errstring()`` will return: "function unsupported, version". The same thing happens if there is a version mismatch between the libload stub and the resident library. If the libload stub expects more functions than exist, the remaining functions remain resolved to the same no-op. If the libload stub expects less functions than the resident has, only the count the stub can absorb are patched. In this way, things remain stable even if the stub and resident app version desync.
 
 ``lwip_start()`` initializes the resident network stack and USB Ethernet path.
 ``lwip_poll_network_events()`` must run from the main loop. There is no OS
