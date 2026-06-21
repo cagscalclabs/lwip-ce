@@ -45,7 +45,7 @@ Copy ``lwip.h``, ``cryptography.h``, and the ``lwip/`` header tree into ``$CDEV/
 
     The app installer cannot overwrite an Application that already exists. When updating this library you will need to delete the Application and then possibly ``GarbageCollect`` on your device before trying to install a new version.
 
-You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class). Some Ethernet-to-WiFi adapters work as well, provided they speak CDC Ethernet on the USB side. This means your connection will be:
+You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class). Some Ethernet-to-WiFi adapters work as well, provided they speak CDC Ethernet on the USB side and support Wi-Fi Protected Setup (WPS) (because implementing WPA is not really feasible with how crazy Wi-Fi drivers can be). This means your connection will be:
 
 .. code-block:: text
 
@@ -56,12 +56,11 @@ You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class). Some E
 Start the Stack
 ---------------
 
-Most applications should include ``lwip_init_runtime.h`` and ``lwip.h`` and
-use the app-facing socket API:
+Most applications should include ``lwip.h`` and use the app-facing
+socket API:
 
 .. code-block:: c
 
-   #include <lwip_init_runtime.h>
    #include <lwip.h>
 
    int main(void)
