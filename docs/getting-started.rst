@@ -79,7 +79,7 @@ socket API:
        }
    }
 
-``lwip_init_runtime()`` **must be the first lwIP call** in your program. It
+``lwip_start_with_crt(malloc, free, realloc)`` (or simply ``lwip_start()``) **must be the first lwIP call** in your program. It
 locates the lwIP flash app, verifies its export table, and patches the libload
 trampolines so that every other entry point becomes reachable. It returns
 ``0`` on success, ``1`` if the app is not found, or ``2`` on an export table
