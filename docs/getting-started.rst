@@ -65,11 +65,12 @@ socket API:
 
    int main(void)
    {
-       if (lwip_init_runtime() != 0) {
+       if (lwip_start() != 0) {
            return 1;
        }
 
-       if (!lwip_start()) {
+       // if you want networking
+       if (!lwip_network_up()) {
            return 1;
        }
 
@@ -84,7 +85,8 @@ locates the lwIP flash app, verifies its export table, and patches the libload
 trampolines so that every other entry point becomes reachable. It returns
 ``true`` on success and ``false`` on failure, with ``lwip_get_start_errstring()`` returning a string-ified error message indicating what failed. Nothing else will work if this step is skipped or called out of order. In the event you forget ``lwip_start()``, rather than crashing, the exports will simply resolve to no-ops that clear all registers and ``lwip_get_start_errstring()`` will return: "function unsupported, version". The same thing happens if there is a version mismatch between the libload stub and the resident library. If the libload stub expects more functions than exist, the remaining functions remain resolved to the same no-op. If the libload stub expects less functions than the resident has, only the count the stub can absorb are patched. In this way, things remain stable even if the stub and resident app version desync.
 
-``lwip_start()`` initializes the resident network stack and USB Ethernet path.
+``lwip_start()`` initializes the lwIP environment - bss/data segments, imports and exports, async API (``sys_timeouts``) and the memory system (``membuffer``). You are at liberty to use the stack's internals without bringing up networking, but if you want networking, you would next call ``lwip_network_up``. This brings up the USB Ethernet driver and calls ``lwip_init`` (the internal stack-up op).
+
 ``lwip_poll_network_events()`` must run from the main loop. There is no OS
 thread sitting behind the stack doing this for you.
 
@@ -114,6 +116,8 @@ their pbufs start competing for the same heap, means you find out about a
 too-small heap immediately instead of mid-handshake when a pbuf or TLS
 scratch allocation silently fails. ``mem_resize()`` lets you grow or shrink a
 reservation later without an extra free/request pair.
+
+You are not forced to use ``mem_request/resize/release``, but it is recommended as it gives the stack better visibility into how much memory it actually has left (not what it thinks it has) which influences its memory-pressure behavior.
 
 Use the Socket API
 ------------------
@@ -190,7 +194,6 @@ into their own code.
 
 .. code-block:: c
 
-   #include <lwip_init_runtime.h>
    #include <lwip.h>
    #include <stdbool.h>
    #include <stdint.h>
@@ -243,11 +246,10 @@ into their own code.
    {
        struct lwip_socket socket;
 
-       if (lwip_init_runtime() != 0) {
+       if (!lwip_start()) {
            return 1;
        }
-
-       if (!lwip_start()) {
+       if (!lwip_network_up()) {
            return 1;
        }
 
@@ -302,7 +304,7 @@ netif level. This is the closer match for upstream lwIP examples.
 
 Use ``cryptography.h`` when the program wants the TLS project's crypto
 primitives directly, without opening a network socket. It is a root-level
-umbrella header over ``lwip/cryptography/*.h``.
+umbrella header over ``lwip/cryptography/*.h``. Programs still need to call ``lwip_start()`` even if they just want to use cryptography.
 
 Release Layout
 --------------
