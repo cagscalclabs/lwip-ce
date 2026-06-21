@@ -1,42 +1,24 @@
-# Changelog
+## Changes - RC2
 
-Bug reports and fixes against lwIP-CE, newest first.
+- Completely removes the old SPKI pinning trust store, now implements a curated trust store derived from Certificate material in /etc/certs: Subject, SKI, expiry, key algorithm, and public key.
+- Due to, at present, limited coverage for existing certificate chain signature algorithms (only RSA-2048), unsupported algorithm during verification throw ALERT("unsupported algorithm - pass") and proceed anyway. This is temporary behavior and will become fail closed once P-256 and/or larger RSA is added.
+- Due to, at present, limited coverage for signature algorithms (only RSA-2048), our trust store includes only 46 roots out of ~150. At present, if a chain ends in a root we do not have, ALERT("root not in store") is thrown and the handshake proceeds. Again, this is temporary until P-256 and/or larger RSA is added.
+- A transcript hashing bug in PSK session resumption was fixed.
+Users can now disable TLS completely through the app config wizard, for any uncomfortable with connecting to secure stuff with their calculator.
 
-Format per entry:
+## Changes - RC3
 
-```
-## Bug #<n> — <YYYY-MM-DD>
-**Reported by:** <name / channel>
-**Issue:** <one-paragraph description of the symptom and where it surfaces>
-**Fix:** <one-paragraph description of what changed and why it resolves the symptom>
-**Fixed in:** <commit hash>
-```
+- Stack initialization is now a bit different. Instead of `lwip_init_runtime` and then `lwip_start`, it's now just `lwip_start`. This dynamically-links into the APP, inits its runtime, syncs the imports table, then starts the non-network components of the stack (mainly timers and memory subsystem). Initializing the network requires a call to `lwip_network_up`. This allows people to use the stack for a memory system or for its async-API without using the network.
+- A new "network-applications" release tag is created. I'll place services into this release that work with lwip. So far, an IRC client is there. (yes, Codex had a heavy hand in that--I just wanted something to test with quickly, and it turned out to work nicely).
 
----
+## Changes - RC4
 
-## Bug #1 — 2026-06-01
-**Reported by:** TIny_Hacker via Codex (triage for lwftp-ce FTP-download stalls)
+- TLS now resolves a bug where the connection state would break when the server would send CertificateRequest. I forgot this step existed, so obviously on skip the transcript hash would become invalid.
+- Adds an error traceback system.
 
-**Issue:** Sustained TCP downloads stalled for 15–30 seconds at a time and
-sometimes hung permanently. 
+## Changes - v1.0-stable
 
-**Suspected Cause:** Two contributing defects in the NCM ethernet
-driver: (a) every outbound frame allocated and transmitted `ETHERNET_MTU +
-NCM_HBUF_SIZE` (~1578 B) regardless of payload size, so 40-byte TCP ACKs
-on a download burned ~15× the necessary memory and USB bandwidth; (b) the
-RX callback re-armed only on transient errors, leaving RX continuity
-entirely to the master-tick dispatcher. When `MEM_PRESSURE_CRITICAL`
-disabled the dispatcher and an in-flight RX completed, no path re-armed
-the next receive; recovery from CRITICAL did not kick a one-shot
-re-schedule, so RX could stay idle indefinitely.
-
-**Fix:** (a) `ncm_bulk_transmit` now sizes the NTB to `NCM_HBUF_SIZE +
-p->tot_len` for the alloc, the on-wire `wBlockLength`, and the
-`schedule_transfer` length. (b) `eth_set_rx_throttle` kicks a one-shot
-`eth_schedule_rx_for_netifs()` when transitioning out of CRITICAL.
-`ecm_receive_callback` and `ncm_receive_callback` also self-re-arm at
-their exit points (success and malformed-frame bail-outs) when pressure
-is non-CRITICAL, making the dispatcher a safety net rather than the sole
-RX-continuity mechanism.
-
-**Fixed in:** 365c6343e
+- Post TLS handshake bug with close notify and KeyUpdate silently dropped is now resolved.
+- An additional size-guard for signature_len == key_len on rsa_pss is now included.
+- Uninitialized function jumps in lwip.8xv now initialize to a defined no-op in the lib that sets an error state, instead of remaining jp $0, and possibly faulting.
+- DAST testing now expands to exercise: (1) proper TLS ECDHE connect, (2) TLS PSK connect, (3) TLS invalid transcript (missing Record), (4) TLS CertificateVerify bad signature.
