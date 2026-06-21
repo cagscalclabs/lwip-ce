@@ -56,6 +56,19 @@ You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class). Some E
 Start the Stack
 ---------------
 
+.. attention::
+
+    **STOP**. Before you do anything else!! If you are building a 
+    project for use with lwIP, **immediately** go into your makefile 
+    and add the following line:
+
+    .. code-block:: make
+
+        BSSHEAP_LOW >= 0xD072C6
+
+    If you do not do this, lwIP and your program will likely corrupt
+    each other's heap reservations.
+
 Most applications should include ``lwip.h`` and use the app-facing
 socket API:
 
