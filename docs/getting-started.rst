@@ -56,13 +56,13 @@ You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class). Some E
 Start the Stack
 ---------------
 
-.. attention::
+.. danger::
 
-    **STOP**. Before you do anything else!! If you are building a 
-    project for use with lwIP, **immediately** go into your makefile 
+    **STOP**. Before you do anything else!! If you are building a
+    project for use with lwIP, **immediately** go into your makefile
     and add the following line:
 
-    .. code-block:: make
+    .. code-block:: text
 
         BSSHEAP_LOW >= 0xD072C6
 
