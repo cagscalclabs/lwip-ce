@@ -72,21 +72,16 @@ bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
  */
 struct pbuf *tls_rx_pbuf_alloc(uint16_t len);
 
-/** Initialize the TLS subsystem (starts RNG only). No network/connection
- *  support data (truststore, PSK cache) is touched here — see
- *  tls_network_up(). Call before any TLS operations. */
+/** Initialize the TLS subsystem: starts the RNG, then brings up the cert
+ *  truststore and the PSK/session-ticket resumption cache. Internal —
+ *  dispatched from lwip_network_up(), not part of the public surface.
+ *  Call before any TLS operations. */
 bool tls_init(void);
-
-/** Bring up TLS connection-support data that depends on the network being
- *  available: the cert truststore and the PSK/session-ticket resumption
- *  cache. Internal — dispatched from lwip_network_up(), not part of the
- *  public surface. */
-bool tls_network_up(void);
 
 /**
  * @brief Clean up the TLS subsystem and free all allocated memory.
  *
- * Releases all memory allocated by tls_init() and tls_network_up().
+ * Releases all memory allocated by tls_init().
  * Should be called when TLS is no longer needed.
  */
 void tls_cleanup(void);

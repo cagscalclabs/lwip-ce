@@ -300,21 +300,12 @@ bool tls_init(void)
     tls_ctx.initialized = true;
     tls_rng_start();
 
-    INFO("tls_init done");
-    return true;
-}
-
-bool tls_network_up(void)
-{
-    if (tls_ctx.network_up)
-    {
-        return true;
-    }
-
     tls_ctx.network_up = true;
     tls_truststore_init();
     tls_psk_cache_alloc();
     tls_psk_cache_load();
+
+    INFO("tls_init done");
     return true;
 }
 

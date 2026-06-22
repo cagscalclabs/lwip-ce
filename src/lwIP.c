@@ -161,10 +161,14 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
 
 #define SOCKET_EVT_BIT(e) ((uint16_t)(1u << (uint8_t)(e)))
 
-/* No-network bootstrap: stack memory, timers, and (RNG-only) TLS init.
- * Touches nothing USB/netif-related — see lwip_network_up() for that.
+/* Makes lwIP's exported functions callable: loads app config and installs
+ * the fatal-cleanup hook. Does NOT bring up stack memory, timers, pools,
+ * TLS/RNG, or USB/netif — none of that runs until lwip_network_up().
  * Dispatched once from lwip_start_with_crt() (the libload bootstrap), but
- * kept callable standalone too (e.g. re-init after lwip_stop()). */
+ * kept callable standalone too (e.g. re-init after lwip_stop()). Crypto
+ * primitives that need fresh entropy require lwip_network_up() to have
+ * run; a caller that wants the RNG without full networking can call
+ * tls_random_init_entropy() directly instead of going through here. */
 bool lwip_stack_init(void)
 {
     if (g_lwip_stack_started)
@@ -177,25 +181,6 @@ bool lwip_stack_init(void)
     lwip_app_config_load(&g_lwip_cfg);
     lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
     eth_reset_shutdown();
-
-    if (lwip_init() != ERR_OK)
-    {
-        g_lwip_start_error = 1;
-        lwip_membuffers_release();
-        return false;
-    }
-    /* RNG-only TLS bootstrap here rather than lazily on the first TLS
-     * socket: it's fixed one-time setup with no dependency on connection
-     * state. Truststore/PSK cache (which DO assume the network is about
-     * to be used) are deferred to tls_network_up() in lwip_network_up().
-     * Gated on the wizard's "Enable TLS" setting -- skip it entirely when
-     * TLS is disabled. */
-    if (g_lwip_cfg.tls_enabled && !tls_init())
-    {
-        g_lwip_start_error = 1;
-        lwip_membuffers_release();
-        return false;
-    }
 
     g_lwip_stack_started = true;
     return true;
@@ -213,7 +198,19 @@ bool lwip_network_up(void)
         return false;
     }
 
-    if (g_lwip_cfg.tls_enabled && !tls_network_up())
+    if (lwip_init() != ERR_OK)
+    {
+        g_lwip_start_error = 1;
+        lwip_membuffers_release();
+        return false;
+    }
+
+    /* tls_init() now does the RNG bootstrap AND brings up truststore/PSK
+     * cache in one call -- both depend on lwip_init()'s timer subsystem
+     * (sys_timeout) being live, which is why this can't run any earlier
+     * than here. Gated on the wizard's "Enable TLS" setting -- skip it
+     * entirely when TLS is disabled. */
+    if (g_lwip_cfg.tls_enabled && !tls_init())
     {
         g_lwip_start_error = 1;
         lwip_membuffers_release();
@@ -2395,10 +2392,10 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
             goto fail_mem;
         break;
     case LWIP_SOCKET_ALTCP_TLS:
-        /* tls_init() now runs eagerly in lwip_start(); this is a defensive
-         * fallback only (tls_init() gates on tls_ctx.initialized, so it's
-         * re-call-safe and a no-op if already initialized there). Refuse
-         * outright if the wizard has TLS disabled. */
+        /* tls_init() now runs eagerly in lwip_network_up(); this is a
+         * defensive fallback only (tls_init() gates on tls_ctx.initialized,
+         * so it's re-call-safe and a no-op if already initialized there).
+         * Refuse outright if the wizard has TLS disabled. */
         if (!g_lwip_cfg.tls_enabled ||
             (!tls_ctx.initialized && !tls_init()))
         {

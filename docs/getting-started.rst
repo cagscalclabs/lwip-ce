@@ -39,7 +39,7 @@ lwIP-CE comes packaged with a number of files and directories:
        ├── lwIPINST.8xp          # installer program (run once on-calc)
        └── LWIP.0.8xv ... LWIP.N.8xv  # split dynamic-library AppVars
 
-Copy ``lwip.h``, ``cryptography.h``, and the ``lwip/`` header tree into ``$CDEV/include``, and ``lwip.lib`` into ``$CEDEV/lib/libload``. ``appinst/`` contains the actual lwIP-CE core, split into multiple appvars and the installer program. Send the entire contents of that directory and ``lwip.8xv`` to your TI-84+ CE and then run ``lwIPINST.8xp (prgmINSTALL)``. This will install lwIP as a TI Flash Application.
+Copy ``lwip.h``, ``cryptography.h``, and the ``lwip/`` header tree into ``$CEDEV/include``, and ``lwip.lib`` into ``$CEDEV/lib/libload``. ``appinst/`` contains the actual lwIP-CE core, split into multiple appvars and the installer program. Send the entire contents of that directory and ``lwip.8xv`` to your TI-84+ CE and then run ``lwIPINST.8xp (prgmINSTALL)``. This will install lwIP as a TI Flash Application.
 
 .. note::
 
@@ -50,7 +50,7 @@ You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class). Some E
 .. code-block:: text
 
     Calculator => USB Ethernet adapter => router
-    Calculator => USB Ethernet adapter => Ethernet to Wifi adapter
+    Calculator => USB Ethernet adapter => Ethernet to Wi-Fi adapter
 
 
 Start the Stack
@@ -66,8 +66,9 @@ Start the Stack
 
         BSSHEAP_LOW >= 0xD072C6
 
-    If you do not do this, lwIP and your program will likely corrupt
-    each other's heap reservations.
+    If you do not do this, lwIP and your program will unwittingly overlap
+    their heap allocations and cause each other to fail in ways that
+    we cannot predict.
 
 Most applications should include ``lwip.h`` and use the app-facing
 socket API:
@@ -93,9 +94,7 @@ socket API:
        }
    }
 
-``lwip_start_with_crt(malloc, free, realloc)`` (or simply ``lwip_start()``) **must be the first lwIP call** in your program. It
-locates the lwIP flash app, verifies its export table, and patches the libload
-trampolines so that every other entry point becomes reachable. It returns
+``lwip_start()`` (or ``lwip_start_with_crt(malloc, free, realloc)`` if you need to provide explicit CRT allocator hooks) **must be the first lwIP call** in your program. In most applications, use ``lwip_start()``; use ``lwip_start_with_crt(...)`` only when your runtime requires passing custom ``malloc``/``free``/``realloc`` function pointers. It returns
 ``true`` on success and ``false`` on failure, with ``lwip_get_start_errstring()`` returning a string-ified error message indicating what failed. Nothing else will work if this step is skipped or called out of order. In the event you forget ``lwip_start()``, rather than crashing, the exports will simply resolve to no-ops that clear all registers and ``lwip_get_start_errstring()`` will return: "function unsupported, version". The same thing happens if there is a version mismatch between the libload stub and the resident library. If the libload stub expects more functions than exist, the remaining functions remain resolved to the same no-op. If the libload stub expects less functions than the resident has, only the count the stub can absorb are patched. In this way, things remain stable even if the stub and resident app version desync.
 
 ``lwip_start()`` initializes the lwIP environment - bss/data segments, imports and exports, async API (``sys_timeouts``) and the memory system (``membuffer``). You are at liberty to use the stack's internals without bringing up networking, but if you want networking, you would next call ``lwip_network_up``. This brings up the USB Ethernet driver and calls ``lwip_init`` (the internal stack-up op).
@@ -356,7 +355,7 @@ Having a weird issue you can't fix? Random timeouts, connection failures, socket
 
     const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count);
 
-This allows you to get a pointer to an ordered buffer containing the entire error/alert chain when you need it. The You can then walk the response like so:
+This allows you to get a pointer to an ordered buffer containing the entire error/alert chain when you need it. You can then walk the response like so:
 
 .. code ::
 

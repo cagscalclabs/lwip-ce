@@ -22,7 +22,9 @@ extern uint8_t ___data_lma[];
 extern uint8_t ___data_len[];
 
 /* Internal — defined in lwIP.c, deliberately not declared in the public
- * block of lwIP.h. Brings up stack memory/timers/RNG (no network). */
+ * block of lwIP.h. Loads app config and makes exported functions callable;
+ * does not bring up stack memory, timers, RNG, or networking — see
+ * lwip_network_up() for that. */
 extern bool lwip_stack_init(void);
 
 bool lwip_init_runtime_internal(const void *imports_src, size_t imports_len)
