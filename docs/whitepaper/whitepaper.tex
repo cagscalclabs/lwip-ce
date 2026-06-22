@@ -1764,7 +1764,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		&
 		Not yet observed as a field failure --- found by inspection while reviewing the libload version-skew path. An application linking against a newer companion library than the installed lwIP application has exported entries beyond what the installed app's table provides; those trampoline slots are deliberately left unpatched (see the append-only export ABI in Section~\ref{ssec:application_callability}). Calling one would jump to address \texttt{0}.
 		&
-		Manual review of \texttt{lwip\_init\_runtime.asm}'s patch loop and the trampoline-generation step in \texttt{build-release-dylib.sh}/\texttt{parse\_manifest.py}, asking what happens to a slot that the loop's \texttt{min(app\_count, stub\_count)} bound never reaches.
+		Manual review of \texttt{lwip\_init\_runtime.asm}'s patch loop and the trampoline-generation step in \texttt{build-release-dylib.sh}\allowbreak{}/\allowbreak\texttt{parse\_manifest.py}, asking what happens to a slot that the loop's \texttt{min(app\_count, stub\_count)} bound never reaches.
 		&
 		Trampolines now default to \texttt{jp lwip\_function\_jp\_unset} instead of \texttt{jp~0}; the handler sets a dedicated ``function unsupported, version'' errno and zeroes every register a return value could plausibly occupy ( \texttt{a}, \texttt{hl}, \texttt{de}, \texttt{bc}) before returning. \\
 	\end{longtable}
