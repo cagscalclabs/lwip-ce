@@ -27,6 +27,8 @@
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 ![CAVP Primitive Validation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/cavp.json)
 
+*Timing analysis samples*
+
 <hr>
 
 
