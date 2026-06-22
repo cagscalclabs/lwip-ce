@@ -464,7 +464,7 @@ Before beginning this project we needed to itemize what was available and what w
 
 			The lwIP-CE stack has a small fixed baseline and then grows buffers only as traffic requires. At initialization it consumes:
 			\begin{itemize}
-				\item Approximately 8,192 bytes of static memory for: ARP tables, DNS resolver state, dispatch/timer states, RNG state, and more. During build of lwIP we force this data to live in the first 8 KB of the BSS and we force consumers to link their $BSSHEAP_LOW$ above that region for memory safety.
+				\item Approximately 8,192 bytes of static memory for: ARP tables, DNS resolver state, dispatch/timer states, RNG state, and more. During build of lwIP we force this data to live in the first 8 KB of the BSS and we force consumers to link their $BSSHEAP\_LOW$ above that region for memory safety.
 				\item The 8,192-byte fixed-size pbuf pool.
 				\item The 512-byte growable Ethernet RX ring buffer.
 			\end{itemize}
@@ -474,164 +474,128 @@ Before beginning this project we needed to itemize what was available and what w
 			\refstepcounter{table}\label{tab:lwip-memory}
 			\textbf{Table \thetable: Memory footprint of the full lwIP-CE stack.}
 
-			%% Outer table: Component | Description / nested data table
-			%% Inner tables are unruled tabular with cols: Acc. Idle Typical Max Buffer
-			\providecommand{\meminner}[1]{%
-				\begin{tabular}[t]{@{}
-					>{\small\centering\arraybackslash}p{0.04\textwidth}
-					>{\small\raggedleft\arraybackslash}p{0.10\textwidth}
-					>{\small\raggedleft\arraybackslash}p{0.10\textwidth}
-					>{\small\raggedleft\arraybackslash}p{0.10\textwidth}
-					>{\small\raggedright\arraybackslash}p{0.30\textwidth}@{}}
+			%% Standalone unruled tabulars. meminnerbss: Acc. Usage Buffer (3 col).
+			%% meminner: Acc. Idle Typical Max Buffer (5 col).
+			%% Page-breaking versions: longtable, opened/closed explicitly at
+			%% each call site (a longtable's row content can't be passed
+			%% through a macro argument -- it has to sit directly in the
+			%% document body for LaTeX's page-breaking to see it).
+			\newenvironment{meminner}{%
+				\begin{longtable}{@{}
+					>{\small\centering\arraybackslash}p{0.062\textwidth}
+					>{\small\raggedleft\arraybackslash}p{0.156\textwidth}
+					>{\small\raggedleft\arraybackslash}p{0.156\textwidth}
+					>{\small\raggedleft\arraybackslash}p{0.156\textwidth}
+					>{\small\raggedright\arraybackslash}p{0.469\textwidth}@{}}
+				\toprule
 				\textbf{Acc.} & \textbf{Idle} & \textbf{Typical} & \textbf{Max} & \textbf{Buffer} \\[2pt]
-				#1
-				\end{tabular}%
+				\midrule
+				\endfirsthead
+				\toprule
+				\textbf{Acc.} & \textbf{Idle} & \textbf{Typical} & \textbf{Max} & \textbf{Buffer} \\[2pt]
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+			}{%
+				\end{longtable}%
+			}
+			\newenvironment{meminnerbss}{%
+				\begin{longtable}{@{}
+					>{\small\centering\arraybackslash}p{0.1\textwidth}
+					>{\small\raggedleft\arraybackslash}p{0.1\textwidth}
+					>{\small\raggedright\arraybackslash}p{0.8\textwidth}@{}}
+				\toprule
+				\textbf{Acc.} & \textbf{Usage} & \textbf{Buffer} \\[2pt]
+				\midrule
+				\endfirsthead
+				\toprule
+				\textbf{Acc.} & \textbf{Usage} & \textbf{Buffer} \\[2pt]
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+			}{%
+				\end{longtable}%
 			}
 
-			\begingroup
-			\setlength{\tabcolsep}{4pt}
-			\setlength{\LTleft}{0pt}
-			\setlength{\LTright}{0pt}
-			\begin{longtable}{>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.76\textwidth}}
-				\toprule
-				\textbf{Component} & \textbf{Description / Allocations} \\
-				\midrule
-			\endfirsthead
-				\toprule
-				\textbf{Component} & \textbf{Description / Allocations} \\
-				\midrule
-			\endhead
-				\bottomrule
-			\endfoot
+			\begin{meminnerbss}
+				.bss & $520\,\text{B}$ & \texttt{\_\_tls\_scratch} \\
+				.bss & $704\,\text{B}$ & \texttt{g\_traceback} / \texttt{g\_traceback\_ordered} \\
+				.bss & $320\,\text{B}$ & \texttt{dns\_table} \\
+				.bss & $256\,\text{B}$ & \texttt{\_\_rsa\_transient} \\
+				.bss & $218\,\text{B}$ & \texttt{loop\_netif} \\
+				.bss & $200\,\text{B}$ & \texttt{arp\_table} \\
+				.bss & $140\,\text{B}$ & \texttt{neighbor\_cache} \\
+				.bss & $84\,\text{B}$  & \texttt{destination\_cache} \\
+				.bss & $78\,\text{B}$  & \texttt{fn\_imports\_table} \\
+				.bss & $60\,\text{B}$  & \texttt{g\_netif\_service\_requests} \\
+				.bss & $96\,\text{B}$  & \texttt{g\_dispatchers} / \texttt{prefix\_list} \\
+				.bss & $42\,\text{B}$  & \texttt{g\_lwip\_cfg} \\
+				.bss & $80\,\text{B}$  & \texttt{dhcp\_rx\_options\_val} / \texttt{ip6addr\_ntoa.str} \\
+				.bss & $128\,\text{B}$ & \texttt{nd6\_ra\_buffer} / \texttt{g\_tls\_rng\_prev\_sample} / \texttt{g\_tls\_drbg\_state} / \texttt{g\_tls\_drbg\_seed\_material} \\
+				.bss & $75\,\text{B}$  & \texttt{sntp\_servers} / \texttt{dns\_servers} / \texttt{g\_lwip\_pools} / \texttt{multicast\_address} \\
+				.bss & $46\,\text{B}$  & \texttt{dns\_requests} / \texttt{ip4addr\_ntoa.str} / \texttt{lwip\_socket\_error\_data} \\
+				.bss & $20\,\text{B}$  & \texttt{dhcp\_rx\_options\_given} / \texttt{g\_mem\_static} \\
+				.bss & $282\,\text{B}$ & other small globals (118 symbols $<$8\,B each: PCB list heads, flags, counters) \\
+				.bss & ${\sim}179\,\text{B}$ & alignment padding between symbols \\[4pt]
+			\multicolumn{1}{l}{\textbf{Subtotal}} & $3{,}528\,\text{B}$ & \textit{\texttt{.bss}, fixed at link time (\texttt{\_\_bss\_len})} \\[6pt]
+				.data & $256\,\text{B}$ & \texttt{trust\_store\_pubkey} \\
+				.data & $130\,\text{B}$ & \texttt{tls\_objectid\_bytes} \\
+				.data & $80\,\text{B}$  & \texttt{config\_options} \\
+				.data & $65\,\text{B}$  & \texttt{b64\_charset} \\
+				.data & $18\,\text{B}$  & \texttt{tls\_pkcs8\_str\_error\_arr} \\
+				.data & $16\,\text{B}$  & \texttt{tls\_ctx} \\
+				.data & $8\,\text{B}$   & \texttt{g\_tls\_drbg\_counter} \\
+				.data & $16\,\text{B}$  & \texttt{reachable\_time} / \texttt{retrans\_timer} / \texttt{g\_last\_debug\_loc} / \texttt{tcp\_next\_iss.iss} \\
+				.data & $10\,\text{B}$  & \texttt{truststore\_name} / \texttt{heap\_ptr} / \texttt{tcp\_port} / \texttt{udp\_port} \\
+				.data & ${\sim}17\,\text{B}$ & alignment padding between symbols \\[4pt]
+			\multicolumn{1}{l}{\textbf{Subtotal}} & $616\,\text{B}$ & \textit{\texttt{.data}, fixed at link time (\texttt{\_\_data\_len})} \\[6pt]
+			\textbf{Total} & $4{,}144\,\text{B}$ & \textit{\texttt{.bss}+\texttt{.data} ($\approx4.05\,\text{KiB}$) of the 8\,KiB reserved window, leaving headroom for API growth} \\
+			\end{meminnerbss}
 
-			%% ── Accounting key ─────────────────────────────────────────────────
-			Accounting key
-				& \textbf{P} = packet buffer pool \quad
-				  \textbf{H} = transient heap \quad
-				  \textbf{R} = Ethernet RX ring \quad
-				  \textbf{T} = TLS \quad
-				  \textbf{U} = user reservation (see \S\ref{ssec:mem_accounting}) \quad
-				  \textbf{C} = socket RX ring \\
-			\midrule
-
-			%% ── BSS link-time ──────────────────────────────────────────────────
-			Link-time BSS reservation
-				& Fixed at build; present from power-on; protected by \texttt{BSSHEAP\_LOW} \\
-			\midrule
-			&
-			\meminner{%
-				n/a & ${\sim}400\,\text{B}$   & ${\sim}400\,\text{B}$   & ${\sim}400\,\text{B}$   & \texttt{arp\_table} \\
-				n/a & ${\sim}1{,}200\,\text{B}$ & ${\sim}1{,}200\,\text{B}$ & ${\sim}1{,}200\,\text{B}$ & \texttt{dns\_table} / \texttt{dns\_servers} / \texttt{dns\_pcbs} \\
-				n/a & ${\sim}150\,\text{B}$   & ${\sim}150\,\text{B}$   & ${\sim}150\,\text{B}$   & \texttt{g\_dispatchers} \\
-				n/a & ${\sim}100\,\text{B}$   & ${\sim}100\,\text{B}$   & ${\sim}100\,\text{B}$   & \texttt{g\_tls\_drbg\_state} / \texttt{g\_tls\_drbg\_seed\_material} \\
-				n/a & $520\,\text{B}$         & $520\,\text{B}$         & $520\,\text{B}$         & \texttt{\_\_tls\_scratch} \\
-				n/a & $256\,\text{B}$         & $256\,\text{B}$         & $256\,\text{B}$         & \texttt{\_\_rsa\_transient} \\
-				n/a & ${\sim}80\,\text{B}$    & ${\sim}80\,\text{B}$    & ${\sim}80\,\text{B}$    & \texttt{g\_mem\_cfg} \\
-				n/a & $<10\,\text{B}$         & $<10\,\text{B}$         & $<10\,\text{B}$         & \texttt{ifnums\_used} / \texttt{eth\_driver\_shutting\_down} / \texttt{g\_eth\_last\_rx\_activity\_ms} \\[4pt]
-			\textbf{Total} & ${\sim}2{,}716\,\text{B}$ & ${\sim}2{,}716\,\text{B}$ & ${\sim}2{,}716\,\text{B}$ & \textit{fixed at link time} \\
-			} \\
-			\midrule
-
-			%% ── @lwip_start
-			%% @lwip_start allocations
-			\texttt{lwip\_start()}
-				& Heap allocations made during stack initialization; permanent for the lifetime of the stack \\
-			\midrule
-			&
-			\meminner{%
+			\begin{meminner}
 				P & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & \texttt{pbuf\_pool} \\
 				H & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & \texttt{sys\_timeo} (${\times}7$) / \texttt{dns\_pcb} / DRBG heap \\[4pt]
-			\textbf{Total} & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & \textit{permanent} \\
-			} \\
-			\midrule
-
-			%% ── @eth_connect ───────────────────────────────────────────────────
-			\texttt{eth\_device\_init()}
-				& Allocated on USB device connect; freed after unplug once all in-flight transfers complete \\
-			\midrule
-			&
-			\meminner{%
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & \textit{\texttt{lwip\_start()}, stack up, idle} \\[6pt]
 				H & $0$ & ${\sim}2{,}200\,\text{B}$ & ${\sim}2{,}200\,\text{B}$ & \texttt{eth\_device\_t} \\
 				R & $0$ & $512\,\text{B}$           & $2{,}048\,\text{B}$       & RX overflow ring \\[4pt]
-			\textbf{Total} & $0$ & ${\sim}2{,}712\,\text{B}$ & ${\sim}4{,}248\,\text{B}$ & \textit{on USB connect} \\
-			} \\
-			\midrule
-
-			%% ── TCP connection ─────────────────────────────────────────────────
-			TCP connection
-				& Per open TCP connection; costs are additive \\
-			\midrule
-			&
-			\meminner{%
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & $0$ & ${\sim}2{,}712\,\text{B}$ & ${\sim}4{,}248\,\text{B}$ & \textit{\texttt{eth\_device\_init()}, per device} \\[6pt]
 				H & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & \texttt{tcp\_pcb} \\
-				H & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & \texttt{dhcp} \\
-			} \\
-			\midrule
-
-			%% ── altcp connection ───────────────────────────────────────────────
-			altcp connection
-				& Thin altcp shim; sits above a TCP PCB \\
-			\midrule
-			&
-			\meminner{%
-				H & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \texttt{altcp\_pcb} \\
-			} \\
-			\midrule
-
-			%% ── altcp TLS connection ───────────────────────────────────────────
-			altcp TLS connection
-				& Per open TLS connection; transient buffers exist only during handshake or active record processing \\
-			\midrule
-			&
-			\meminner{%
+				H & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & \texttt{dhcp} \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & \textit{TCP connection, additive per connection} \\[6pt]
+				H & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \texttt{altcp\_pcb} \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \textit{altcp connection, sits above a TCP PCB} \\[6pt]
 				T & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & \texttt{altcp\_tls\_ce\_state\_t} \\
 				T & $0$                       & ${\sim}220\,\text{B}$      & ${\leq}16\,\text{KiB}$    & decrypted record pbuf \\
 				T & $0$                       & ${\sim}220\,\text{B}$      & $16\,\text{KiB}$          & \texttt{hs\_reassembly\_buf} \\
-				T & $0$                       & ${\sim}1$--$5\,\text{KiB}$ & $5\,\text{KiB}$           & cert walker DER buf \\
-			} \\
-			\midrule
+				T & $0$                       & ${\sim}1$--$5\,\text{KiB}$ & $5\,\text{KiB}$           & cert walker DER buf \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}1{,}110\,\text{B}$ & see below & ${\sim}34\,\text{KiB}$ & \textit{altcp TLS connection; buffers are not simultaneous, see peak figures below} \\[6pt]
+				H & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \texttt{udp\_pcb} \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \textit{UDP connection, per endpoint} \\[6pt]
+				H & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \texttt{raw\_pcb} \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \textit{RAW connection, per endpoint} \\[6pt]
+				H & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & TCP send queue (\texttt{TCP\_SND\_BUF}) \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & \textit{outbound TCP segments, cleared on ACK} \\[6pt]
+				C & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \texttt{lwip\_socket.rx\_ring} (\texttt{LWIP\_SOCKET\_RX\_RING\_MAX\_SIZE}) \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \textit{\texttt{lwip\_socket} RX ring, per open socket} \\
+			\end{meminner}
 
-			%% ── UDP connection ─────────────────────────────────────────────────
-			UDP connection
-				& Per open UDP endpoint \\
-			\midrule
-			&
-			\meminner{%
-				H & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \texttt{udp\_pcb} \\
-			} \\
-			\midrule
-
-			%% ── RAW connection ─────────────────────────────────────────────────
-			RAW connection
-				& Per open raw IP endpoint \\
-			\midrule
-			&
-			\meminner{%
-				H & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \texttt{raw\_pcb} \\
-			} \\
-			\midrule
-
-			%% ── Outbound TCP segments ──────────────────────────────────────────
-			Outbound TCP segments
-				& Segment copies queued for retransmission; cleared on ACK \\
-			\midrule
-			&
-			\meminner{%
-				H & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & TCP send queue (\texttt{TCP\_SND\_BUF}) \\
-			} \\
-			\midrule
-
-			%% ── lwip_socket RX ring ─────────────────────────────────────────────
-			\texttt{lwip\_socket} RX ring
-				& Per open socket; elastic ring buffer for application-consumed RX data; grows on pressure, shrinks on drain \\
-			\midrule
-			&
-			\meminner{%
-				C & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \texttt{lwip\_socket.rx\_ring} (\texttt{LWIP\_SOCKET\_RX\_RING\_MAX\_SIZE}) \\
-			} \\
-
-			\end{longtable}
-			\endgroup
+			\textbf{Accounting key:} \textbf{P} = packet buffer pool \quad
+				\textbf{H} = transient heap \quad
+				\textbf{R} = Ethernet RX ring \quad
+				\textbf{T} = TLS \quad
+				\textbf{U} = user reservation (see \S\ref{ssec:mem_accounting}) \quad
+				\textbf{C} = socket RX ring
 
 			In practice, a single TLS connection peaks around $29\,\text{KiB}$ for the common single-record Certificate path and around $34\,\text{KiB}$ when Certificate data is fragmented across records. The difference comes from transient coexistence between the decrypted record pbuf, the handshake reassembly path, and the current certificate DER buffer. Full-chain buffering is avoided: the cert walker holds at most one certificate's DER at a time and frees it after verification. Multi-connection deployments add roughly $1\,\text{KiB}$ per idle TLS connection, plus transient record/reassembly cost for each concurrent handshake.
 
