@@ -382,6 +382,405 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
     return true;
 }
 
+static uint8_t tls_x509_ascii_lower(uint8_t c)
+{
+    return (c >= 'A' && c <= 'Z') ? (uint8_t)(c + ('a' - 'A')) : c;
+}
+
+/* ASCII case-insensitive exact compare. DNS names are ASCII-only, so no
+ * locale-aware folding is needed or wanted here. */
+static bool tls_x509_name_eq_ci(const uint8_t *a, size_t a_len, const uint8_t *b, size_t b_len)
+{
+    size_t i;
+    if (a_len != b_len)
+    {
+        return false;
+    }
+    for (i = 0; i < a_len; i++)
+    {
+        if (tls_x509_ascii_lower(a[i]) != tls_x509_ascii_lower(b[i]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Match hostname against a single SAN dNSName/CN pattern, with a single
+ * leading-label wildcard: "*.example.com" matches "foo.example.com" but
+ * not "example.com" or "foo.bar.example.com". A wildcard label must be
+ * exactly "*" (no partial-label wildcards like "f*.example.com") and may
+ * only appear as the leftmost label, matching CA/Browser Forum baseline
+ * requirements rather than the more permissive (and more dangerous) RFC
+ * 6125 grammar. */
+static bool tls_x509_pattern_matches_host(const uint8_t *pattern, size_t pattern_len,
+                                          const char *hostname, size_t hostname_len)
+{
+    const uint8_t *p_dot;
+    size_t p_first_label_len;
+    const char *h_dot;
+    size_t h_first_label_len;
+
+    if (pattern_len == hostname_len &&
+        tls_x509_name_eq_ci(pattern, pattern_len, (const uint8_t *)hostname, hostname_len))
+    {
+        return true;
+    }
+
+    if (pattern_len < 3 || pattern[0] != '*' || pattern[1] != '.')
+    {
+        return false;
+    }
+
+    /* Reject "*.foo" matching a bare second-level host with no further
+     * labels (e.g. "*.com" must not match "com"), and require the
+     * wildcard's suffix to actually appear in the hostname. */
+    p_dot = (const uint8_t *)memchr(pattern, '.', pattern_len);
+    p_first_label_len = (size_t)(p_dot - pattern); /* always 1, the '*' */
+    (void)p_first_label_len;
+
+    h_dot = (const char *)memchr(hostname, '.', hostname_len);
+    if (!h_dot)
+    {
+        /* Hostname has no dot at all -- can't match a "*.suffix" pattern,
+         * and prevents "*.com"-style patterns from matching a single
+         * label such as "com". */
+        return false;
+    }
+    h_first_label_len = (size_t)(h_dot - hostname);
+    if (h_first_label_len == 0)
+    {
+        return false;
+    }
+
+    {
+        size_t pattern_suffix_len = pattern_len - 1; /* drop leading '*', keep '.' */
+        const uint8_t *pattern_suffix = pattern + 1;
+        size_t hostname_suffix_len = hostname_len - h_first_label_len;
+        const char *hostname_suffix = hostname + h_first_label_len;
+
+        return tls_x509_name_eq_ci(pattern_suffix, pattern_suffix_len,
+                                   (const uint8_t *)hostname_suffix, hostname_suffix_len);
+    }
+}
+
+/* OID 2.5.29.17 subjectAltName. GeneralName ::= CHOICE, dNSName is
+ * [2] IMPLICIT IA5String (context-specific, primitive, tag number 2). */
+static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
+                                     const char *hostname, size_t hostname_len,
+                                     bool *san_present)
+{
+    static const uint8_t oid_subject_alt_name[] = {0x55, 0x1D, 0x11};
+    struct tls_asn1_cursor ext_cursor;
+    struct tls_asn1_cursor ext_list_cursor;
+    struct tls_asn1_tlv ext_tlv;
+
+    *san_present = false;
+
+    if (!ext_data || ext_len == 0)
+    {
+        return false;
+    }
+    if (!tls_asn1_cursor_init(&ext_cursor, ext_data, ext_len))
+    {
+        return false;
+    }
+
+    /* Same wrapper-vs-direct handling as tls_x509_parse_constraints_from_extensions. */
+    ext_list_cursor = ext_cursor;
+    if (tls_asn1_next(&ext_cursor, &ext_tlv))
+    {
+        if ((ext_tlv.header_len + ext_tlv.len) == ext_len &&
+            tls_asn1_tag_constructed(ext_tlv.tag) &&
+            tls_asn1_tag_number(ext_tlv.tag) == ASN1_SEQUENCE)
+        {
+            if (!tls_asn1_child_cursor(&ext_tlv, &ext_list_cursor))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            ext_list_cursor = ext_cursor;
+            ext_list_cursor.cur = ext_data;
+        }
+    }
+    else
+    {
+        return false;
+    }
+
+    while (tls_asn1_next(&ext_list_cursor, &ext_tlv))
+    {
+        struct tls_asn1_cursor ext_item_cursor;
+        struct tls_asn1_tlv oid_tlv;
+        struct tls_asn1_tlv maybe_critical_tlv;
+        struct tls_asn1_tlv value_tlv;
+
+        if (tls_asn1_tag_number(ext_tlv.tag) != ASN1_SEQUENCE || !tls_asn1_tag_constructed(ext_tlv.tag))
+        {
+            return false;
+        }
+        if (!tls_asn1_child_cursor(&ext_tlv, &ext_item_cursor))
+        {
+            return false;
+        }
+        if (!tls_asn1_next(&ext_item_cursor, &oid_tlv))
+        {
+            return false;
+        }
+        if (tls_asn1_tag_number(oid_tlv.tag) != ASN1_OBJECTID)
+        {
+            return false;
+        }
+
+        if (!tls_asn1_next(&ext_item_cursor, &maybe_critical_tlv))
+        {
+            return false;
+        }
+        if (tls_asn1_tag_number(maybe_critical_tlv.tag) == ASN1_BOOLEAN)
+        {
+            if (!tls_asn1_next(&ext_item_cursor, &value_tlv))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            value_tlv = maybe_critical_tlv;
+        }
+
+        if (tls_asn1_tag_number(value_tlv.tag) != ASN1_OCTETSTRING)
+        {
+            return false;
+        }
+
+        if (oid_tlv.len == sizeof(oid_subject_alt_name) &&
+            memcmp(oid_tlv.value, oid_subject_alt_name, sizeof(oid_subject_alt_name)) == 0)
+        {
+            struct tls_asn1_cursor san_cursor;
+            struct tls_asn1_tlv san_item;
+            bool matched = false;
+
+            *san_present = true;
+
+            if (!tls_asn1_cursor_init(&san_cursor, value_tlv.value, value_tlv.len))
+            {
+                return false;
+            }
+
+            /* subjectAltName ::= SEQUENCE OF GeneralName -- the OCTET STRING
+             * payload IS the SEQUENCE; walk its children directly. */
+            {
+                struct tls_asn1_tlv san_seq;
+                struct tls_asn1_cursor san_seq_cursor;
+                if (!tls_asn1_next(&san_cursor, &san_seq) ||
+                    tls_asn1_tag_number(san_seq.tag) != ASN1_SEQUENCE ||
+                    !tls_asn1_tag_constructed(san_seq.tag))
+                {
+                    return false;
+                }
+                if (!tls_asn1_child_cursor(&san_seq, &san_seq_cursor))
+                {
+                    return false;
+                }
+                san_cursor = san_seq_cursor;
+            }
+
+            while (tls_asn1_next(&san_cursor, &san_item))
+            {
+                /* dNSName: context class, primitive, tag number 2 -- raw
+                 * tag byte 0x82 ((2<<6) CONTEXTSPEC | (0<<5) PRIMITIVE | 2). */
+                if (san_item.tag != (uint8_t)(ASN1_CONTEXTSPEC | ASN1_PRIMITIVE | 2u))
+                {
+                    continue;
+                }
+                if (tls_x509_pattern_matches_host(san_item.value, san_item.len,
+                                                  hostname, hostname_len))
+                {
+                    matched = true;
+                }
+            }
+
+            if (matched)
+            {
+                return true;
+            }
+            /* Found the extension but no dNSName entry matched -- keep
+             * scanning in case the extension is (invalidly) repeated, but
+             * do not fall through to CN: presence of SAN means CN is not
+             * consulted, per RFC 6125 ss 6.4.4. */
+        }
+    }
+
+    return false;
+}
+
+bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
+                               const struct tls_asn1_serialization *subject_cn,
+                               const char *hostname)
+{
+    bool san_present = false;
+    size_t hostname_len;
+
+    if (!hostname)
+    {
+        return false;
+    }
+    hostname_len = strlen(hostname);
+    if (hostname_len == 0)
+    {
+        return false;
+    }
+
+    if (tls_x509_san_dns_matches(ext_data, ext_len, hostname, hostname_len, &san_present))
+    {
+        return true;
+    }
+    if (san_present)
+    {
+        /* SAN extension was present but none of its dNSName entries
+         * matched -- do not fall back to CN. */
+        return false;
+    }
+
+    /* No SAN extension at all: legacy fallback to subject CN. */
+    if (!subject_cn || !subject_cn->data || subject_cn->len == 0)
+    {
+        return false;
+    }
+    return tls_x509_pattern_matches_host(subject_cn->data, subject_cn->len, hostname, hostname_len);
+}
+
+static bool tls_x509_digit_pair(const uint8_t *p, uint32_t *out)
+{
+    if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9')
+    {
+        return false;
+    }
+    *out = (uint32_t)((p[0] - '0') * 10 + (p[1] - '0'));
+    return true;
+}
+
+/* Days from civil 1970-01-01 to the given y/m/d (proleptic Gregorian).
+ * Standard "days from civil" algorithm (Howard Hinnant), avoids any
+ * libc calendar dependency. y is the full year (e.g. 2026), m is 1-12. */
+static int32_t tls_x509_days_from_civil(int32_t y, uint32_t m, uint32_t d)
+{
+    int32_t era;
+    uint32_t yoe;
+    uint32_t doy;
+    uint32_t doe;
+
+    y -= (m <= 2) ? 1 : 0;
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = (uint32_t)(y - era * 400);
+    doy = (153u * (m + (m > 2 ? -3 : 9)) + 2u) / 5u + d - 1u;
+    doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    return era * 146097 + (int32_t)doe - 719468;
+}
+
+bool tls_x509_time_to_unix(const struct tls_asn1_serialization *tlv, uint32_t *out_secs)
+{
+    uint8_t tag_num;
+    const uint8_t *v;
+    size_t len;
+    uint32_t year, month, day, hour, minute, second;
+    int32_t days;
+    int64_t secs64;
+
+    if (!tlv || !tlv->data || !out_secs)
+    {
+        return false;
+    }
+    tag_num = tls_asn1_tag_number(tlv->tag);
+    v = tlv->data;
+    len = tlv->len;
+
+    if (tag_num == ASN1_UTCTIME)
+    {
+        /* YYMMDDHHMMSSZ -- exactly 13 bytes. DER requires seconds and 'Z'. */
+        uint32_t yy;
+        if (len != 13 || v[12] != 'Z')
+        {
+            return false;
+        }
+        if (!tls_x509_digit_pair(v, &yy) ||
+            !tls_x509_digit_pair(v + 2, &month) ||
+            !tls_x509_digit_pair(v + 4, &day) ||
+            !tls_x509_digit_pair(v + 6, &hour) ||
+            !tls_x509_digit_pair(v + 8, &minute) ||
+            !tls_x509_digit_pair(v + 10, &second))
+        {
+            return false;
+        }
+        /* RFC 5280 4.1.2.5.1 pivot: 50-99 => 19xx, 00-49 => 20xx. */
+        year = (yy >= 50) ? (1900u + yy) : (2000u + yy);
+    }
+    else if (tag_num == ASN1_GENERALIZEDTIME)
+    {
+        /* YYYYMMDDHHMMSSZ -- exactly 15 bytes. */
+        uint32_t y_hi, y_lo;
+        if (len != 15 || v[14] != 'Z')
+        {
+            return false;
+        }
+        if (!tls_x509_digit_pair(v, &y_hi) ||
+            !tls_x509_digit_pair(v + 2, &y_lo) ||
+            !tls_x509_digit_pair(v + 4, &month) ||
+            !tls_x509_digit_pair(v + 6, &day) ||
+            !tls_x509_digit_pair(v + 8, &hour) ||
+            !tls_x509_digit_pair(v + 10, &minute) ||
+            !tls_x509_digit_pair(v + 12, &second))
+        {
+            return false;
+        }
+        year = y_hi * 100u + y_lo;
+    }
+    else
+    {
+        return false;
+    }
+
+    if (month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour > 23 || minute > 59 || second > 60 /* allow leap second */)
+    {
+        return false;
+    }
+
+    days = tls_x509_days_from_civil((int32_t)year, month, day);
+    secs64 = (int64_t)days * 86400 + (int64_t)hour * 3600 + (int64_t)minute * 60 + (int64_t)second;
+    if (secs64 < 0 || secs64 > (int64_t)UINT32_MAX)
+    {
+        /* Out of uint32_t Unix-seconds range (pre-1970 or post-2106) --
+         * cleanly fail closed rather than silently truncating/wrapping. */
+        return false;
+    }
+
+    *out_secs = (uint32_t)secs64;
+    return true;
+}
+
+bool tls_x509_time_in_validity(const struct tls_asn1_serialization *valid_before,
+                               const struct tls_asn1_serialization *valid_after,
+                               uint32_t now_secs)
+{
+    uint32_t not_before_secs;
+    uint32_t not_after_secs;
+
+    if (!tls_x509_time_to_unix(valid_before, &not_before_secs) ||
+        !tls_x509_time_to_unix(valid_after, &not_after_secs))
+    {
+        return false;
+    }
+    if (not_before_secs > not_after_secs)
+    {
+        /* Malformed/inverted validity window. */
+        return false;
+    }
+    return now_secs >= not_before_secs && now_secs <= not_after_secs;
+}
+
 bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len)
 {
     bool basic_constraints_present = false;

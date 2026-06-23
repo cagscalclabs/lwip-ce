@@ -429,10 +429,13 @@
 .extern _eth_usb_event_callback
 .extern _tls_x25519_publickey
 .extern _tls_x25519_secret
+.extern _tls_x509_hostname_matches
+.extern _tls_x509_time_to_unix
+.extern _tls_x509_time_in_validity
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 395    ; entry count
+    d24 398    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -954,3 +957,8 @@ _fn_exports_table:
 ; --- src/tls/contrib/x25519/src/x25519.s ---
     d24 _tls_x25519_publickey
     d24 _tls_x25519_secret
+
+; --- src/tls/core/x509.c ---
+    d24 _tls_x509_hostname_matches
+    d24 _tls_x509_time_to_unix
+    d24 _tls_x509_time_in_validity

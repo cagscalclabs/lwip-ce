@@ -539,7 +539,7 @@ Before beginning this project we needed to itemize what was available and what w
 				.bss & $20\,\text{B}$  & \texttt{dhcp\_rx\_options\_given} / \texttt{g\_mem\_static} \\
 				.bss & $282\,\text{B}$ & other small globals (118 symbols $<$8\,B each: PCB list heads, flags, counters) \\
 				.bss & ${\sim}179\,\text{B}$ & alignment padding between symbols \\[4pt]
-			\multicolumn{1}{l}{\textbf{Subtotal}} & $3{,}528\,\text{B}$ & \textit{\texttt{.bss}, fixed at link time (\texttt{\_\_bss\_len})} \\[6pt]
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $3{,}528\,\text{B}$ & \textit{\texttt{.bss}, fixed at link time (\texttt{\_\_bss\_len})} \\[6pt]
 				.data & $256\,\text{B}$ & \texttt{trust\_store\_pubkey} \\
 				.data & $130\,\text{B}$ & \texttt{tls\_objectid\_bytes} \\
 				.data & $80\,\text{B}$  & \texttt{config\_options} \\
@@ -550,7 +550,7 @@ Before beginning this project we needed to itemize what was available and what w
 				.data & $16\,\text{B}$  & \texttt{reachable\_time} / \texttt{retrans\_timer} / \texttt{g\_last\_debug\_loc} / \texttt{tcp\_next\_iss.iss} \\
 				.data & $10\,\text{B}$  & \texttt{truststore\_name} / \texttt{heap\_ptr} / \texttt{tcp\_port} / \texttt{udp\_port} \\
 				.data & ${\sim}17\,\text{B}$ & alignment padding between symbols \\[4pt]
-			\multicolumn{1}{l}{\textbf{Subtotal}} & $616\,\text{B}$ & \textit{\texttt{.data}, fixed at link time (\texttt{\_\_data\_len})} \\[6pt]
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $616\,\text{B}$ & \textit{\texttt{.data}, fixed at link time (\texttt{\_\_data\_len})} \\[6pt]
 			\textbf{Total} & $4{,}144\,\text{B}$ & \textit{\texttt{.bss}+\texttt{.data} ($\approx4.05\,\text{KiB}$) of the 8\,KiB reserved window, leaving headroom for API growth} \\
 			\end{meminnerbss}
 
@@ -558,44 +558,48 @@ Before beginning this project we needed to itemize what was available and what w
 				P & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & \texttt{pbuf\_pool} \\
 				H & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & \texttt{sys\_timeo} (${\times}7$) / \texttt{dns\_pcb} / DRBG heap \\[4pt]
 				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & \textit{\texttt{lwip\_start()}, stack up, idle} \\[6pt]
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & \textit{\texttt{lwip\_start()}, stack up, idle} \\[6pt]
 				H & $0$ & ${\sim}2{,}200\,\text{B}$ & ${\sim}2{,}200\,\text{B}$ & \texttt{eth\_device\_t} \\
 				R & $0$ & $512\,\text{B}$           & $2{,}048\,\text{B}$       & RX overflow ring \\[4pt]
 				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & $0$ & ${\sim}2{,}712\,\text{B}$ & ${\sim}4{,}248\,\text{B}$ & \textit{\texttt{eth\_device\_init()}, per device} \\[6pt]
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $0$ & ${\sim}2{,}712\,\text{B}$ & ${\sim}4{,}248\,\text{B}$ & \textit{\texttt{eth\_device\_init()}, per device} \\[6pt]
+			H & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \texttt{raw\_pcb} \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \textit{RAW connection, per endpoint} \\[6pt]
+				H & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \texttt{udp\_pcb} \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \textit{UDP connection, per endpoint} \\[6pt]
 				H & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & \texttt{tcp\_pcb} \\
 				H & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & \texttt{dhcp} \\[4pt]
 				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & \textit{TCP connection, additive per connection} \\[6pt]
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & \textit{TCP connection, additive per connection} \\[6pt]
+			H & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & TCP send queue (\texttt{TCP\_SND\_BUF}) \\[4pt]
+				\rowcolor{gray!18}
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & \textit{outbound TCP segments, cleared on ACK} \\[6pt]
 				H & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \texttt{altcp\_pcb} \\[4pt]
 				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \textit{altcp connection, sits above a TCP PCB} \\[6pt]
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \textit{altcp connection, sits above a TCP PCB} \\[6pt]
 				T & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & \texttt{altcp\_tls\_ce\_state\_t} \\
 				T & $0$                       & ${\sim}220\,\text{B}$      & ${\leq}16\,\text{KiB}$    & decrypted record pbuf \\
 				T & $0$                       & ${\sim}220\,\text{B}$      & $16\,\text{KiB}$          & \texttt{hs\_reassembly\_buf} \\
 				T & $0$                       & ${\sim}1$--$5\,\text{KiB}$ & $5\,\text{KiB}$           & cert walker DER buf \\[4pt]
 				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}1{,}110\,\text{B}$ & see below & ${\sim}34\,\text{KiB}$ & \textit{altcp TLS connection; buffers are not simultaneous, see peak figures below} \\[6pt]
-				H & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \texttt{udp\_pcb} \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \textit{UDP connection, per endpoint} \\[6pt]
-				H & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \texttt{raw\_pcb} \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \textit{RAW connection, per endpoint} \\[6pt]
-				H & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & TCP send queue (\texttt{TCP\_SND\_BUF}) \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & \textit{outbound TCP segments, cleared on ACK} \\[6pt]
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}1{,}110\,\text{B}$ & see below & ${\sim}34\,\text{KiB}$ & \textit{altcp TLS connection; buffers are not simultaneous, see peak figures below} \\[6pt]
+			
+				
 				C & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \texttt{lwip\_socket.rx\_ring} (\texttt{LWIP\_SOCKET\_RX\_RING\_MAX\_SIZE}) \\[4pt]
 				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \textit{\texttt{lwip\_socket} RX ring, per open socket} \\
+			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \textit{\texttt{lwip\_socket} RX ring, per open socket} \\
 			\end{meminner}
 
 			\textbf{Accounting key:} \textbf{P} = packet buffer pool \quad
-				\textbf{H} = transient heap \quad
-				\textbf{R} = Ethernet RX ring \quad
-				\textbf{T} = TLS \quad
-				\textbf{U} = user reservation (see \S\ref{ssec:mem_accounting}) \quad
+				\textbf{H} = transient heap \quad\newline
+				\textbf{R} = Ethernet RX ring \quad\newline
+				\textbf{T} = TLS \quad\newline
+				\textbf{U} = user reservation (see \S\ref{ssec:mem_accounting}) \quad\newline
 				\textbf{C} = socket RX ring
+
+			\noindent\rule{\linewidth}{0.4pt}
 
 			In practice, a single TLS connection peaks around $29\,\text{KiB}$ for the common single-record Certificate path and around $34\,\text{KiB}$ when Certificate data is fragmented across records. The difference comes from transient coexistence between the decrypted record pbuf, the handshake reassembly path, and the current certificate DER buffer. Full-chain buffering is avoided: the cert walker holds at most one certificate's DER at a time and frees it after verification. Multi-connection deployments add roughly $1\,\text{KiB}$ per idle TLS connection, plus transient record/reassembly cost for each concurrent handshake.
 
@@ -786,8 +790,8 @@ for (uint8_t i = 0; i < count; i++) {
 		\rowcolor{gray!18}
 		\textbf{Status} & \textbf{TLS Scope} \\
 		\midrule
-		Supported now & TLS~1.3 client handshakes, RSA-PSS/SHA-256 \texttt{CertificateVerify} for 1024--2048 bit RSA leaf keys, streaming certificate-chain parsing, RSA/SHA-256 adjacent-link checks where supported, empty client-certificate response handling, signed compact truststore loading, and application-visible warnings when trust anchoring is incomplete. \\
-		Planned & ECDSA-P-256 verification, RSA keys up to 4096 bits where performance permits, wider RSA-PSS hash variants, and non-fatal truststore age warnings once a reliable time source is available. \\
+		Supported now & TLS~1.3 client handshakes, RSA-PSS/SHA-256 \texttt{CertificateVerify} for 1024--2048 bit RSA leaf keys, streaming certificate-chain parsing, RSA/SHA-256 adjacent-link checks where supported, leaf hostname/SAN matching with wildcard support, fatal validity-period enforcement on every certificate in the chain, empty client-certificate response handling, signed compact truststore loading, and application-visible warnings when trust anchoring is incomplete. \\
+		Planned & ECDSA-P-256 verification, RSA keys up to 4096 bits where performance permits, and wider RSA-PSS hash variants. \\
 		Out of scope & Client-certificate identity support, local physical compromise resistance, secure key storage, hardware-backed trust, RSA-PKCS1 \texttt{CertificateVerify} signatures forbidden by TLS~1.3, and full desktop WebPKI behavior. \\
 		\bottomrule
 	\end{tabularx}
@@ -1333,8 +1337,16 @@ for (uint8_t i = 0; i < count; i++) {
 		\item The topmost certificate has no issuer within the presented chain, so its issuer is looked up in the on-device truststore by subject name. If found and RSA (PKCS\#1~v1.5 or PSS, SHA-256), the root link is verified for real with the same fatal-on-failure treatment as an adjacent in-chain link. If the issuer is absent from the truststore, or uses a signature type not yet supported (e.g. ECDSA), the chain is accepted with \texttt{ALERT(root not in store, PASS)}.
 	\end{itemize}
 	The \texttt{WARN-PROCEED} is an interim posture only intended until gaps in our signature algorithm support are closed.
-	
-	The handshake therefore completes when every RSA link it could verify---including the root anchoring check---did verify, no verifiable link failed, and the leaf's \texttt{CertificateVerify} signature checks out. The on-device truststore format is specified in the next section.
+
+	\paragraph{Hostname and Validity-Period Checks}
+	Chain-link signatures and \texttt{CertificateVerify} together establish that the presented chain is internally consistent and that the peer holds the leaf private key --- but neither one proves the leaf certificate was actually issued for the host the client meant to connect to, nor that it is currently within its issuer-stated validity period. Both gaps are closed as part of the same per-certificate pass that runs the adjacent-link check above, fail-closed on either:
+	\begin{itemize}
+		\item \textbf{Hostname/SAN matching} (leaf only): the leaf certificate's \texttt{subjectAltName} extension is walked for \texttt{dNSName} entries and compared against the hostname supplied in the client's own SNI \texttt{ClientHello} extension, including a single leading-label wildcard (\texttt{*.example.com} matches \texttt{foo.example.com} but not \texttt{example.com} itself or a deeper sub-label). If the leaf has no \texttt{subjectAltName} extension at all, the check falls back to the subject CommonName, per RFC~6125 \S6.4.4; if a \texttt{subjectAltName} is present, the CommonName is never consulted, even if none of its \texttt{dNSName} entries match. A leaf that doesn't match the connection hostname aborts the handshake before \texttt{CertificateVerify} is even reached.
+		\item \textbf{Validity-period enforcement} (every certificate in the chain): each certificate's \texttt{notBefore}/\texttt{notAfter} fields are parsed (UTCTime and GeneralizedTime are both supported) and checked against the device's current time. An expired or not-yet-valid certificate anywhere in the chain --- leaf, intermediate, or the truststore-anchored root --- aborts the handshake, not just the leaf.
+	\end{itemize}
+	The device has no guaranteed accurate clock source independent of the network it's trying to secure: the on-device RTC is reset to an arbitrary value by a RAM clear and is not otherwise synchronized until an application performs SNTP. To keep validity-period enforcement meaningful even before SNTP has ever run, the RTC is clamped forward at stack-init time to a fixed, manually-updated ``minimum plausible clock'' floor (a recent library release date) whenever it reads earlier than that floor. This rules out the degenerate case where every certificate in the world appears valid because the device's clock reads 1970, without requiring a working network path before TLS can be used at all. It is a plausibility floor, not an accuracy guarantee --- a clock that has drifted forward of the floor is not corrected by this mechanism, only one that has fallen behind it.
+
+	The handshake therefore completes when every RSA link it could verify---including the root anchoring check---did verify, no verifiable link failed, every certificate's validity period covers the current device time, the leaf certificate matches the connection hostname, and the leaf's \texttt{CertificateVerify} signature checks out. The on-device truststore format is specified in the next section.
 
 	\subsection{Trust Store Generation and Specification}
 
@@ -1527,7 +1539,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 			\endhead
 			TLS \texttt{CertificateVerify} & Complete & \texttt{rsa\_pss\_rsae\_sha256} with 1024--2048 bit RSA leaf keys.\\
 			 & Planned & ECDSA-P-256, RSA keys up to 4096 bits. \\
-			TLS Certificate & Supported now & RSA/SHA-256 adjacent-link verification, fail-closed. \\
+			TLS Certificate & Supported now & RSA/SHA-256 adjacent-link verification; leaf hostname/SAN matching (wildcard-capable, CN fallback); fatal validity-period (\texttt{notBefore}/\texttt{notAfter}) enforcement on every chain certificate; all fail-closed. \\
 			 & Planned & Broader issuer-key and signature-algorithm coverage. \\
 			 & Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
 			\addlinespace

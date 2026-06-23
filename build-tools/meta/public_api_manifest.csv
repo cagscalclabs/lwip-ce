@@ -666,3 +666,6 @@ struct,tls_truststore_entry,cryptography,src/tls/includes/truststore.h,lwip/cryp
 typedef,tls_truststore_status_t,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
 struct,tls_x509_object,cryptography,src/tls/includes/x509.h,lwip/cryptography/x509.h
 struct,tls_x509_parse_result,cryptography,src/tls/includes/x509.h,lwip/cryptography/x509.h
+func,tls_x509_hostname_matches,cryptography,src/tls/includes/x509.h,lwip/cryptography/x509.h
+func,tls_x509_time_to_unix,cryptography,src/tls/includes/x509.h,lwip/cryptography/x509.h
+func,tls_x509_time_in_validity,cryptography,src/tls/includes/x509.h,lwip/cryptography/x509.h

@@ -76,6 +76,17 @@
  * Init / poll
  * ============================================================ */
 
+/* Minimum-plausible-clock floor: if the RTC reads earlier than this at
+ * startup (e.g. reset to 0/1970 by a RAM clear, or never set), it's clamped
+ * forward to this value so timestamp-based checks elsewhere -- certificate
+ * expiry (tls_x509_time_in_validity), PSK ticket aging -- aren't silently
+ * defeated by an implausible clock before SNTP has a chance to run. This is
+ * NOT a substitute for SNTP: it only rules out "clock reads before this
+ * library was released," not "clock is accurate." Bump this manually each
+ * release; do not try to keep it in sync with the actual build date
+ * automatically. Currently: 2026-06-21T00:00:00Z. */
+#define LWIP_MIN_PLAUSIBLE_CLOCK_UNIX 1782000000u
+
 static bool g_lwip_stack_started = false;
 static bool g_lwip_started = false;
 static bool g_lwip_stopping = false;
@@ -161,14 +172,14 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
 
 #define SOCKET_EVT_BIT(e) ((uint16_t)(1u << (uint8_t)(e)))
 
-/* Makes lwIP's exported functions callable: loads app config and installs
- * the fatal-cleanup hook. Does NOT bring up stack memory, timers, pools,
- * TLS/RNG, or USB/netif — none of that runs until lwip_network_up().
+/* No-network bootstrap: stack memory, timers, and (RNG-only) TLS init.
+ * Touches nothing USB/netif-related — see lwip_network_up() for that.
  * Dispatched once from lwip_start_with_crt() (the libload bootstrap), but
- * kept callable standalone too (e.g. re-init after lwip_stop()). Crypto
- * primitives that need fresh entropy require lwip_network_up() to have
- * run; a caller that wants the RNG without full networking can call
- * tls_random_init_entropy() directly instead of going through here. */
+ * kept callable standalone too (e.g. re-init after lwip_stop()). This is
+ * also the entry point every unit test relies on to make crypto/memory
+ * primitives usable via lwip_start() alone, without bringing up
+ * networking -- do not move lwip_init()/tls_init() out of here again
+ * without updating every test under tests/unit/ first. */
 bool lwip_stack_init(void)
 {
     if (g_lwip_stack_started)
@@ -181,6 +192,26 @@ bool lwip_stack_init(void)
     lwip_app_config_load(&g_lwip_cfg);
     lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
     eth_reset_shutdown();
+    lwip_sntp_clamp_rtc_floor(LWIP_MIN_PLAUSIBLE_CLOCK_UNIX);
+
+    if (lwip_init() != ERR_OK)
+    {
+        g_lwip_start_error = 1;
+        lwip_membuffers_release();
+        return false;
+    }
+    /* tls_init() brings up the RNG, the cert truststore, and the PSK/
+     * session-ticket cache in one call -- fixed one-time setup, run here
+     * rather than lazily on the first TLS socket so lwip_start() alone is
+     * sufficient for crypto-only callers (every unit test under
+     * tests/unit/ relies on this). Gated on the wizard's "Enable TLS"
+     * setting -- skip it entirely when TLS is disabled. */
+    if (g_lwip_cfg.tls_enabled && !tls_init())
+    {
+        g_lwip_start_error = 1;
+        lwip_membuffers_release();
+        return false;
+    }
 
     g_lwip_stack_started = true;
     return true;
@@ -195,25 +226,6 @@ bool lwip_network_up(void)
 
     if (!lwip_stack_init())
     {
-        return false;
-    }
-
-    if (lwip_init() != ERR_OK)
-    {
-        g_lwip_start_error = 1;
-        lwip_membuffers_release();
-        return false;
-    }
-
-    /* tls_init() now does the RNG bootstrap AND brings up truststore/PSK
-     * cache in one call -- both depend on lwip_init()'s timer subsystem
-     * (sys_timeout) being live, which is why this can't run any earlier
-     * than here. Gated on the wizard's "Enable TLS" setting -- skip it
-     * entirely when TLS is disabled. */
-    if (g_lwip_cfg.tls_enabled && !tls_init())
-    {
-        g_lwip_start_error = 1;
-        lwip_membuffers_release();
         return false;
     }
 

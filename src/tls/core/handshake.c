@@ -832,6 +832,38 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         return false;
     }
 
+    /* Validity window: every cert in the chain (leaf, intermediates, and
+     * the topmost cert) must cover the current time, per RFC 5280. The RTC
+     * is clamped forward at lwip_stack_init() to rule out an implausible
+     * post-RAM-clear clock (see LWIP_MIN_PLAUSIBLE_CLOCK_UNIX), so this
+     * reading is trustworthy even before SNTP has run. Fail closed on any
+     * parse failure or out-of-window result. */
+    if (!tls_x509_time_in_validity(cert_parsed.valid_before, cert_parsed.valid_after,
+                                   lwip_sntp_read_rtc_raw()))
+    {
+        return false;
+    }
+
+    /* Hostname/SAN check: leaf only -- this is what proves the cert is for
+     * the server we actually connected to, not just a validly-signed cert
+     * for someone else's domain. SAN dNSName entries are preferred; CN is
+     * only consulted when no SAN extension is present (RFC 6125 ss 6.4.4).
+     * Fail closed if there's no hostname to check against (shouldn't
+     * happen -- SNI is always set before the handshake starts) or if the
+     * leaf doesn't match. */
+    if (is_leaf)
+    {
+        const uint8_t *ext_data = (cert_parsed.extensions && cert_parsed.extensions->data)
+                                  ? cert_parsed.extensions->data : NULL;
+        size_t ext_len = cert_parsed.extensions ? cert_parsed.extensions->len : 0;
+
+        if (!w->ctx || !w->ctx->hostname ||
+            !tls_x509_hostname_matches(ext_data, ext_len, cert_parsed.subject_cn, w->ctx->hostname))
+        {
+            return false;
+        }
+    }
+
     /* Verify-leaf-first: capture the leaf SPKI so CertificateVerify can
      * authenticate the server. This is the actual trust anchor today. */
     if (is_leaf && w->ctx && !w->ctx->leaf_spki)

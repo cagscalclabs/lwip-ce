@@ -10,16 +10,12 @@
  *
  * Lifecycle:
  *   lwip_start()                — once at load time (libload bootstrap +
- *                                  app config; makes exported functions
- *                                  callable, but no stack memory/timers/RNG
- *                                  or networking yet)
- *   lwip_network_up()           — bring up stack memory/timers/pools, TLS
- *                                  (RNG + truststore/PSK cache), and
- *                                  USB/netif; call once before networking.
- *                                  Crypto needing fresh entropy requires
- *                                  this to have run; for the RNG without
- *                                  full networking, call
- *                                  tls_random_init_entropy() directly.
+ *                                  stack memory/timers/RNG; no network yet).
+ *                                  Sufficient on its own for crypto/memory
+ *                                  primitives (every unit test under
+ *                                  tests/unit/ relies on this).
+ *   lwip_network_up()           — bring up USB/netif + TLS truststore/PSK
+ *                                  cache; call once before networking
  *   lwip_service_events()  — every main-loop iteration (drives callbacks)
  *   lwip_socket_create()        — allocate handle, bind netif, kick DHCP
  *   lwip_socket_on_event()      — register single event callback + arg
@@ -313,12 +309,10 @@ uint8_t  lwip_start_last_error(void);
 void     lwip_stop(void);
 bool     lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
 
-/* Bring the network up: stack memory/timers/pools (lwip_init()), TLS (RNG
- * bootstrap, truststore, PSK cache), and USB/netif init, in that order.
- * Requires lwip_start() to have run first (lwip_start_with_crt(), aliased
- * to lwip_start() for the caller's own CRT, does this automatically at
- * load time) — lwip_network_up() only assumes app config/exported
- * functions are in place, not that the stack itself is live yet. */
+/* Bring the network up: USB/netif init plus TLS connection-support data
+ * (truststore, PSK cache). Requires the stack to already be initialized,
+ * which lwip_start_with_crt() (aliased to lwip_start() for the caller's
+ * own CRT) does automatically at load time. */
 bool     lwip_network_up(void);
 void     lwip_service_events(void);
 uint32_t lwip_now_ms(void);
