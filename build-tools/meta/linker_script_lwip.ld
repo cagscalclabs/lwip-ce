@@ -158,6 +158,30 @@ SECTIONS
             KEEP(*(.x25519.reloc.*))
             _x25519_reloc_run_end = .;
         }
+        .aes.encrypt.reloc
+        {
+            _aes_encrypt_reloc_run_start = .;
+            /* Relocatable load-image pointer — same fix as .powmod.reloc below:
+             * `. + (LOADADDR - ADDR)` is a prgm-section-relative symbol the
+             * installer patches, vs a bare LOADADDR() (absolute, never patched
+             * → aes.s copy loop would ldir from the link-time LMA garbage). */
+            _aes_encrypt_reloc_load_start = . + (LOADADDR(.aes.encrypt.reloc) - ADDR(.aes.encrypt.reloc));
+            KEEP(*(.aes.encrypt.reloc))
+            KEEP(*(.aes.encrypt.reloc.*))
+            _aes_encrypt_reloc_run_end = .;
+        }
+        .aes.decrypt.reloc
+        {
+            _aes_decrypt_reloc_run_start = .;
+            /* Relocatable load-image pointer — same fix as .powmod.reloc below:
+             * `. + (LOADADDR - ADDR)` is a prgm-section-relative symbol the
+             * installer patches, vs a bare LOADADDR() (absolute, never patched
+             * → aes.s copy loop would ldir from the link-time LMA garbage). */
+            _aes_decrypt_reloc_load_start = . + (LOADADDR(.aes.decrypt.reloc) - ADDR(.aes.decrypt.reloc));
+            KEEP(*(.aes.decrypt.reloc))
+            KEEP(*(.aes.decrypt.reloc.*))
+            _aes_decrypt_reloc_run_end = .;
+        }
         .powmod.reloc
         {
             _powmod_reloc_run_start = .;
@@ -186,6 +210,10 @@ SECTIONS
      * LOADADDR. See the comment there. */
     _x25519_reloc_len        = SIZEOF(.x25519.reloc);
 
+    /* Back-compat aliases for the AES copy loop in aes.s. */
+    _aes_encrypt_reloc_len   = SIZEOF(.aes.encrypt.reloc);
+    _aes_decrypt_reloc_len   = SIZEOF(.aes.decrypt.reloc);
+
     /* Copy-loop symbols for the powmod trampoline in bigint.s (RSA modexp
      * relocated to writable RAM because it self-modifies). Shares the
      * 0xE30800 overlay VMA with X25519/RNG — sequential, never co-resident.
@@ -196,6 +224,10 @@ SECTIONS
     /* Guard: no consumer may outgrow the shared window. */
     ASSERT(SIZEOF(.x25519.reloc) <= 0x400,
            "Error: .x25519.reloc exceeds safe-RAM overlay window")
+    ASSERT(SIZEOF(.aes.encrypt.reloc) <= 0x400,
+           "Error: .aes.encrypt.reloc exceeds safe-RAM overlay window")
+    ASSERT(SIZEOF(.aes.decrypt.reloc) <= 0x400,
+           "Error: .aes.decrypt.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.saferam.rng) <= 0x400,
            "Error: .saferam.rng exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.powmod.reloc) <= 0x400,

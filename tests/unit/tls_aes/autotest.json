@@ -32,7 +32,7 @@
     "key|1",
     "key|enter",
     "key|enter",
-    "hashWait|10",
+    "hashWait|14",
     "key|left",
     "key|enter",
     "delay|1000",
@@ -54,6 +54,14 @@
     "hashWait|8",
     "key|enter",
     "hashWait|9",
+    "key|enter",
+    "hashWait|10",
+    "key|enter",
+    "hashWait|11",
+    "key|enter",
+    "hashWait|12",
+    "key|enter",
+    "hashWait|13",
     "key|enter",
     "key|enter"
   ],
@@ -86,7 +94,7 @@
       "timeout": 1500
     },
     "4": {
-      "description": "NIST SP 800-38A, Appendix F.2.1, CBC-AES128.Decrypt",
+      "description": "NIST SP 800-38A, Appendix F.2.2, CBC-AES128.Decrypt",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
@@ -140,6 +148,42 @@
       "timeout": 1500
     },
     "10": {
+      "description": "NIST SP 800-38A, Appendix F.2.3, CBC-AES192.Encrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "11": {
+      "description": "NIST SP 800-38A, Appendix F.2.4, CBC-AES192.Decrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "12": {
+      "description": "NIST SP 800-38A, Appendix F.2.5, CBC-AES256.Encrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "13": {
+      "description": "NIST SP 800-38A, Appendix F.2.6, CBC-AES256.Decrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "14": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

@@ -27,6 +27,30 @@ _tls_bytes_compare:
 	inc	a
 	ret
 
+.section	.text,"ax",@progbits
+globl _tls_secure_memzero
+.type _tls_secure_memzero,@function
+
+_tls_secure_memzero:
+	pop	hl
+	pop	de
+	pop	bc
+	push	bc
+	push	de
+	push	hl
+	scf
+	sbc	hl, hl
+	xor	a, a
+	adc	hl, bc
+	ret	nc
+	ld	(de), a
+	ret	z
+	inc	de
+	sbc	hl, hl
+	add	hl, de
+	dec	bc
+	ldir
+	ret
 
 .section	.text,"ax",@progbits
 globl _bytelen_to_bitlen
