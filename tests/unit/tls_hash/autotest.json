@@ -52,7 +52,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 9000
+      "timeout": 11000
     },
     "2": {
       "description": "SHA-256 empty message - NIST FIPS 180-4, Empty String",

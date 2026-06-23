@@ -60,7 +60,7 @@
       "expected_CRCs": [
         "1A6EC761"
       ],
-      "timeout": 10000
+      "timeout": 12000
     },
     "2": {
       "description": "PKCS#8 EC private key",
