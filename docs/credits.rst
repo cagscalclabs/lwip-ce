@@ -15,8 +15,10 @@ lwIP-CE Contributors
      - Credit
    * - Lead development
      - Anthony Cagliano
-   * - C to eZ80 work
+   * - SHA-256 to eZ80 work
      - Adam Beckingham
+   * - AES to eZ80 work
+     - calc84maniac
    * - Entropy analysis
      - Zeroko
    * - ``modexp_2048``
