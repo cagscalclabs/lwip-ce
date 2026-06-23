@@ -24,6 +24,7 @@
 \restoreparindent
 \usepackage[hang,flushmargin,bottom]{footmisc}
 \usepackage{longtable}
+\usepackage{xltabular}
 \usepackage{booktabs}
 
 \usepackage{parskip,caption,gensymb}
@@ -70,6 +71,20 @@
 
 \usepackage{xcolor}
 \usepackage[fontsize=12pt]{fontsize}
+% report.cls's \@makeschapterhead (used by \tableofcontents for the
+% "Contents" heading, via \chapter*) is a hardcoded \def, not built on
+% \@startsection -- titlesec's \titlespacing has no effect on it. Redefine
+% it directly to shrink the large fixed vertical gap above the heading.
+\makeatletter
+\def\@makeschapterhead#1{%
+  \vspace*{10\p@}%
+  {\parindent \z@ \raggedright
+    \normalfont
+    \interlinepenalty\@M
+    \Huge \bfseries  #1\par\nobreak
+    \vskip 20\p@
+  }}
+\makeatother
 \emergencystretch=2em
 \setlist[itemize]{nosep,topsep=0pt,partopsep=0pt,parsep=0pt,itemsep=0pt}
 \setlist[enumerate]{nosep,topsep=0pt,partopsep=0pt,parsep=0pt,itemsep=0pt}
@@ -272,8 +287,14 @@ fontupper=\footnotesize
 	\end{titlepage}
 	\setcounter{secnumdepth}{2}
 	\setcounter{tocdepth}{2}
-	\tableofcontents	
-	
+	% Tighten just the TOC's line spacing so the appendix entries (which
+	% otherwise spill 3 lines onto a second page) fit on one page.
+	\begingroup
+	\renewcommand{\baselinestretch}{0.92}\selectfont
+	\setlength{\parskip}{0pt}
+	\tableofcontents
+	\endgroup
+
 	\newpage
 	\section{Foreword}
 	The \textbf{lwIP-CE} project is an adaptation and integration of the Lightweight IP (lwIP) stack for highly constrained embedded systems, specifically targeting the TI-84+ CE platform. This work represents a deliberate effort to bring modern networking capabilities—including Ethernet, IPv4/IPv6, and TLS—to hardware never originally designed for full internet participation.
@@ -354,40 +375,41 @@ fontupper=\footnotesize
 
 Before beginning this project we needed to itemize what was available and what was needed. The chart below shows the TCP/IP and OSI layer, and what components are assigned to that layer.
 
-\begin{table}[h]
-	\centering
-	\begin{tabularx}{\textwidth}{C C l X}
+\begin{xltabular}{\textwidth}{C C l X}
+	\caption{Relationship between the lwIP-CE networking architecture, the TCP/IP model, and the OSI model.} \\
+	\toprule
+		\textbf{TCP/IP Layer} & \textbf{OSI Layer} & \textbf{Component} & \textbf{Function} \\
+		\midrule
+		\endfirsthead
 		\toprule
 		\textbf{TCP/IP Layer} & \textbf{OSI Layer} & \textbf{Component} & \textbf{Function} \\
 		\midrule
-		
+		\endhead
+		\bottomrule
+		\endfoot
+
 		1 $\leftrightarrow$ 2 & 1--2 & USBDRVCE &
 		Hardware transport interface for USB host communication. Handles device
 		enumeration, endpoint transfers, and interrupt-driven USB activity used
 		by Ethernet adapters. \\
-		
+
 		2 & 2 & CDC ECM / NCM Ethernet &
 		Ethernet data link layer provided by USB CDC-class adapters. Responsible
 		for Ethernet frame encapsulation, MAC addressing, and link state
 		notifications. \\
-		
+
 		3 $\leftrightarrow$ 4 & 3--4 & lwIP &
 		Core networking stack implementing IP, ARP, ICMP, IPv6, TCP, and UDP.
 		Provides packet routing, protocol handling, and socket-style networking
 		interfaces. \\
-		
+
 		5 & 5--7 & ALTCP, TLS, Application &
 		High-level abstractions exposed to calculator programs. ALTCP provides a
 		transport wrapper allowing optional TLS integration, while TLS provides
 		confidentiality, integrity, and endpoint authentication for application
 		data. \\
-		
-		\bottomrule
-		
-	\end{tabularx}
-	
-	\caption{Relationship between the lwIP-CE networking architecture, the TCP/IP model, and the OSI model.}
-\end{table}
+
+\end{xltabular}
 		
 		
 		\subsection{USB CDC-Class Ethernet driver}
@@ -592,7 +614,7 @@ Before beginning this project we needed to itemize what was available and what w
 			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \textit{\texttt{lwip\_socket} RX ring, per open socket} \\
 			\end{meminner}
 
-			\textbf{Accounting key:} \textbf{P} = packet buffer pool \quad
+			\textbf{Accounting key:}\\ \textbf{P} = packet buffer pool \quad\newline
 				\textbf{H} = transient heap \quad\newline
 				\textbf{R} = Ethernet RX ring \quad\newline
 				\textbf{T} = TLS \quad\newline

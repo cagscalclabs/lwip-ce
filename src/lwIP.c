@@ -2404,10 +2404,11 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
             goto fail_mem;
         break;
     case LWIP_SOCKET_ALTCP_TLS:
-        /* tls_init() now runs eagerly in lwip_network_up(); this is a
-         * defensive fallback only (tls_init() gates on tls_ctx.initialized,
-         * so it's re-call-safe and a no-op if already initialized there).
-         * Refuse outright if the wizard has TLS disabled. */
+        /* tls_init() now runs eagerly in lwip_stack_init() (called from
+         * lwip_start()); this is a defensive fallback only (tls_init()
+         * gates on tls_ctx.initialized, so it's re-call-safe and a no-op
+         * if already initialized there). Refuse outright if the wizard
+         * has TLS disabled. */
         if (!g_lwip_cfg.tls_enabled ||
             (!tls_ctx.initialized && !tls_init()))
         {
