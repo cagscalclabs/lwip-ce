@@ -51,6 +51,32 @@ uint8_t cbc_ciphertext[] = {
     0x3f, 0xf1, 0xca, 0xa1, 0x68, 0x1f, 0xac, 0x09, 0x12, 0x0e, 0xca, 0x30, 0x75, 0x86, 0xe1, 0xa7};
 
 /*
+ * NIST SP 800-38A AES-192-CBC Test Vector
+ * Source: SP 800-38A, Appendix F.2.3 (CBC-AES192.Encrypt)
+ */
+uint8_t cbc192_key[] = {
+    0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90, 0x79, 0xe5,
+    0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b};
+uint8_t cbc192_ciphertext[] = {
+    0x4f, 0x02, 0x1d, 0xb2, 0x43, 0xbc, 0x63, 0x3d, 0x71, 0x78, 0x18, 0x3a, 0x9f, 0xa0, 0x71, 0xe8,
+    0xb4, 0xd9, 0xad, 0xa9, 0xad, 0x7d, 0xed, 0xf4, 0xe5, 0xe7, 0x38, 0x76, 0x3f, 0x69, 0x14, 0x5a,
+    0x57, 0x1b, 0x24, 0x20, 0x12, 0xfb, 0x7a, 0xe0, 0x7f, 0xa9, 0xba, 0xac, 0x3d, 0xf1, 0x02, 0xe0,
+    0x08, 0xb0, 0xe2, 0x79, 0x88, 0x59, 0x88, 0x81, 0xd9, 0x20, 0xa9, 0xe6, 0x4f, 0x56, 0x15, 0xcd};
+
+/*
+ * NIST SP 800-38A AES-256-CBC Test Vector
+ * Source: SP 800-38A, Appendix F.2.5 (CBC-AES256.Encrypt)
+ */
+uint8_t cbc256_key[] = {
+    0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+    0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4};
+uint8_t cbc256_ciphertext[] = {
+    0xf5, 0x8c, 0x4c, 0x04, 0xd6, 0xe5, 0xf1, 0xba, 0x77, 0x9e, 0xab, 0xfb, 0x5f, 0x7b, 0xfb, 0xd6,
+    0x9c, 0xfc, 0x4e, 0x96, 0x7e, 0xdb, 0x80, 0x8d, 0x67, 0x9f, 0x77, 0x7b, 0xc6, 0x70, 0x2c, 0x7d,
+    0x39, 0xf2, 0x33, 0x69, 0xa9, 0xd9, 0xba, 0xcf, 0xa5, 0x30, 0xe2, 0x63, 0x04, 0x23, 0x14, 0x61,
+    0xb2, 0xeb, 0x05, 0xe2, 0xc3, 0x9b, 0xe9, 0xfc, 0xda, 0x6c, 0x19, 0x07, 0x8c, 0x6a, 0x9d, 0x1b};
+
+/*
  * AES-CCM Packet Vectors #1 and #2
  * Source: RFC 3610, Section 8 (Test Vectors)
  * https://www.rfc-editor.org/rfc/rfc3610
@@ -133,7 +159,7 @@ int main(void)
     ok = status && (memcmp(tbuf, cbc_ciphertext, sizeof cbc_ciphertext) == 0);
     show_result(ok);
 
-    // Test 4: AES-CBC decrypt (NIST SP 800-38A F.2.1)
+    // Test 4: AES-CBC decrypt (NIST SP 800-38A F.2.2)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc_key, sizeof cbc_key, cbc_iv, sizeof cbc_iv);
@@ -209,6 +235,38 @@ int main(void)
     for (size_t i = 0; i < sizeof ccm_plaintext_2; i++)
         status &= (tbuf[i] == 0);
     show_result(status);
+
+    // Test 10: AES192-CBC encrypt (NIST SP 800-38A F.2.3)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc192_key, sizeof cbc192_key, cbc_iv, sizeof cbc_iv);
+    status &= tls_aes_encrypt(&ctx, cbc_plaintext, sizeof cbc_plaintext, tbuf);
+    ok = status && (memcmp(tbuf, cbc192_ciphertext, sizeof cbc192_ciphertext) == 0);
+    show_result(ok);
+
+    // Test 11: AES192-CBC decrypt (NIST SP 800-38A F.2.4)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc192_key, sizeof cbc192_key, cbc_iv, sizeof cbc_iv);
+    status &= tls_aes_decrypt(&ctx, cbc192_ciphertext, sizeof cbc192_ciphertext, tbuf);
+    ok = status && (memcmp(tbuf, cbc_plaintext, sizeof cbc_plaintext) == 0);
+    show_result(ok);
+
+    // Test 12: AES256-CBC encrypt (NIST SP 800-38A F.2.5)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc256_key, sizeof cbc256_key, cbc_iv, sizeof cbc_iv);
+    status &= tls_aes_encrypt(&ctx, cbc_plaintext, sizeof cbc_plaintext, tbuf);
+    ok = status && (memcmp(tbuf, cbc256_ciphertext, sizeof cbc256_ciphertext) == 0);
+    show_result(ok);
+
+    // Test 13: AES256-CBC decrypt (NIST SP 800-38A F.2.6)
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc256_key, sizeof cbc256_key, cbc_iv, sizeof cbc_iv);
+    status &= tls_aes_decrypt(&ctx, cbc256_ciphertext, sizeof cbc256_ciphertext, tbuf);
+    ok = status && (memcmp(tbuf, cbc_plaintext, sizeof cbc_plaintext) == 0);
+    show_result(ok);
 
     return 0;
 }
