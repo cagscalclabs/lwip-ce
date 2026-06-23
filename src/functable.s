@@ -498,8 +498,6 @@ _fn_exports_table:
 
 ; --- src/tls/core/bytes.s ---
     d24 _tls_bytes_compare
-
-; --- src/tls/core/bytes.c ---
     d24 _tls_secure_memzero
 
 ; --- src/tls/core/sha256.s ---

@@ -58,7 +58,7 @@ struct tls_aes_context
 {
     uint8_t mode;
     uint24_t keysize;
-    uint32_t round_keys[60];
+    uint8_t round_keys[15 * 16];
     uint8_t iv[16];
     uint8_t op_assoc; /**< sets to either encrypt or decrypt based on first operation done on context. */
     union
