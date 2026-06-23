@@ -182,6 +182,14 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
  * without updating every test under tests/unit/ first. */
 bool lwip_stack_init(void)
 {
+    /* Runs on every call, even when the stack is already up: g_lwip_stack_started
+     * is a flash-resident static that outlives any single program's lifetime
+     * (nothing calls lwip_stop() on normal exit), so this is the only
+     * reliably-repeated hook available to keep correcting an implausible
+     * clock across separate program launches. Cheap and idempotent --
+     * lwip_sntp_clamp_rtc_floor() no-ops once the RTC is past the floor. */
+    lwip_sntp_clamp_rtc_floor(LWIP_MIN_PLAUSIBLE_CLOCK_UNIX);
+
     if (g_lwip_stack_started)
     {
         return true;
@@ -192,7 +200,6 @@ bool lwip_stack_init(void)
     lwip_app_config_load(&g_lwip_cfg);
     lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
     eth_reset_shutdown();
-    lwip_sntp_clamp_rtc_floor(LWIP_MIN_PLAUSIBLE_CLOCK_UNIX);
 
     if (lwip_init() != ERR_OK)
     {

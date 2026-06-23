@@ -35,14 +35,17 @@ bool lwip_sntp_time_was_set(void)
     return g_sntp_time_set;
 }
 
-/* Shared Unix-seconds -> RTC component conversion. tz_adjusted controls
- * whether g_tz_offset_seconds/DST are applied first (lwip_sntp_set_time()
- * wants the RTC to read local time; the raw floor-clamp path wants the RTC
- * written directly in UTC since lwip_sntp_read_rtc_raw() reads it back
- * un-adjusted). */
+/* Shared Unix-seconds -> RTC component conversion. boot_SetDate()'s year
+ * parameter is a real, full-width year (e.g. 2026), NOT a 2-digit
+ * 0-99-offset-from-2000 value as earlier code here assumed -- confirmed
+ * against a real device's post-RAM-clear reading (raw year=2014, not 14).
+ * tz_adjusted controls whether g_tz_offset_seconds/DST are applied first
+ * (lwip_sntp_set_time() wants the RTC to read local time; the raw
+ * floor-clamp path wants the RTC written directly in UTC since
+ * lwip_sntp_read_rtc_raw() reads it back un-adjusted). */
 static void unix_seconds_to_rtc_fields(uint32_t adj_seconds,
                                        uint8_t *secs, uint8_t *minutes, uint8_t *hours,
-                                       uint8_t *day, uint8_t *month, uint16_t *year_2digit)
+                                       uint8_t *day, uint8_t *month, uint16_t *year)
 {
     static const uint8_t days_in_month[] = {
         31u, 28u, 31u, 30u, 31u, 30u, 31u, 31u, 30u, 31u, 30u, 31u
@@ -50,23 +53,22 @@ static void unix_seconds_to_rtc_fields(uint32_t adj_seconds,
 
     uint32_t days = adj_seconds / 86400u;
     uint32_t rem = adj_seconds % 86400u;
-    uint16_t year;
 
     *hours = (uint8_t)(rem / 3600u);
     rem %= 3600u;
     *minutes = (uint8_t)(rem / 60u);
     *secs = (uint8_t)(rem % 60u);
 
-    year = 1970u;
+    *year = 1970u;
     while (1)
     {
-        uint16_t year_days = is_leap_year(year) ? 366u : 365u;
+        uint16_t year_days = is_leap_year(*year) ? 366u : 365u;
         if (days < year_days)
         {
             break;
         }
         days -= year_days;
-        year++;
+        (*year)++;
     }
 
     *month = 1u;
@@ -74,7 +76,7 @@ static void unix_seconds_to_rtc_fields(uint32_t adj_seconds,
     for (uint8_t i = 0; i < 12u; i++)
     {
         uint8_t dim = days_in_month[i];
-        if ((i == 1u) && is_leap_year(year))
+        if ((i == 1u) && is_leap_year(*year))
         {
             dim = 29u;
         }
@@ -86,20 +88,13 @@ static void unix_seconds_to_rtc_fields(uint32_t adj_seconds,
         }
         days -= dim;
     }
-
-    /* TI-84 CE RTC uses 2-digit years (0-99 representing 2000-2099) */
-    *year_2digit = (year >= 2000u) ? (year - 2000u) : year;
-    if (*year_2digit > 99u)
-    {
-        *year_2digit = 99u; /* cap at 2099 */
-    }
 }
 
 void lwip_sntp_set_time(uint32_t seconds)
 {
     int64_t adjusted = (int64_t)seconds + (int64_t)g_tz_offset_seconds;
     uint8_t secs, minutes, hours, day, month;
-    uint16_t year_2digit;
+    uint16_t year;
 
     if (g_dst_enabled)
     {
@@ -110,26 +105,26 @@ void lwip_sntp_set_time(uint32_t seconds)
         adjusted = 0;
     }
 
-    unix_seconds_to_rtc_fields((uint32_t)adjusted, &secs, &minutes, &hours, &day, &month, &year_2digit);
+    unix_seconds_to_rtc_fields((uint32_t)adjusted, &secs, &minutes, &hours, &day, &month, &year);
 
     while (rtc_IsBusy()) {}
     boot_SetTime(secs, minutes, hours);
     while (rtc_IsBusy()) {}
-    boot_SetDate(day, month, year_2digit);
+    boot_SetDate(day, month, year);
 
     // Signal that time has been set (after all RTC operations complete)
     g_sntp_time_set = true;
 }
 
 /* Inverse of unix_seconds_to_rtc_fields(): RTC component reading -> Unix
- * seconds (no timezone/DST adjustment applied here -- caller's choice). */
+ * seconds (no timezone/DST adjustment applied here -- caller's choice).
+ * year is the real, full-width year read back from boot_GetDate(). */
 static uint32_t rtc_fields_to_unix_seconds(uint8_t sec, uint8_t min, uint8_t hr,
-                                           uint8_t day, uint8_t month, uint8_t year_2digit)
+                                           uint8_t day, uint8_t month, uint16_t year)
 {
     static const uint16_t days_before_month[] = {
         0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
     };
-    uint16_t year = (uint16_t)year_2digit + 2000u;
     uint32_t days = 0;
 
     for (uint16_t y = 1970u; y < year; y++)
@@ -154,7 +149,8 @@ static uint32_t rtc_fields_to_unix_seconds(uint8_t sec, uint8_t min, uint8_t hr,
 uint32_t lwip_sntp_get_unix_time(void)
 {
     uint8_t sec, min, hr;
-    uint8_t day, month, year_2digit;
+    uint8_t day, month;
+    uint16_t year;
     uint32_t timestamp;
     int64_t utc;
 
@@ -166,9 +162,9 @@ uint32_t lwip_sntp_get_unix_time(void)
 
     while (rtc_IsBusy()) {}
     boot_GetTime(&sec, &min, &hr);
-    boot_GetDate(&day, &month, &year_2digit);
+    boot_GetDate(&day, &month, &year);
 
-    timestamp = rtc_fields_to_unix_seconds(sec, min, hr, day, month, year_2digit);
+    timestamp = rtc_fields_to_unix_seconds(sec, min, hr, day, month, year);
 
     /* Subtract timezone and DST adjustments to get UTC */
     utc = (int64_t)timestamp - (int64_t)g_tz_offset_seconds;
@@ -187,19 +183,20 @@ uint32_t lwip_sntp_get_unix_time(void)
 uint32_t lwip_sntp_read_rtc_raw(void)
 {
     uint8_t sec, min, hr;
-    uint8_t day, month, year_2digit;
+    uint8_t day, month;
+    uint16_t year;
 
     while (rtc_IsBusy()) {}
     boot_GetTime(&sec, &min, &hr);
-    boot_GetDate(&day, &month, &year_2digit);
+    boot_GetDate(&day, &month, &year);
 
-    return rtc_fields_to_unix_seconds(sec, min, hr, day, month, year_2digit);
+    return rtc_fields_to_unix_seconds(sec, min, hr, day, month, year);
 }
 
 void lwip_sntp_clamp_rtc_floor(uint32_t floor_unix_seconds)
 {
     uint8_t secs, minutes, hours, day, month;
-    uint16_t year_2digit;
+    uint16_t year;
 
     if (lwip_sntp_read_rtc_raw() >= floor_unix_seconds)
     {
@@ -209,10 +206,10 @@ void lwip_sntp_clamp_rtc_floor(uint32_t floor_unix_seconds)
         return;
     }
 
-    unix_seconds_to_rtc_fields(floor_unix_seconds, &secs, &minutes, &hours, &day, &month, &year_2digit);
+    unix_seconds_to_rtc_fields(floor_unix_seconds, &secs, &minutes, &hours, &day, &month, &year);
 
     while (rtc_IsBusy()) {}
     boot_SetTime(secs, minutes, hours);
     while (rtc_IsBusy()) {}
-    boot_SetDate(day, month, year_2digit);
+    boot_SetDate(day, month, year);
 }
