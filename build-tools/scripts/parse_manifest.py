@@ -143,6 +143,7 @@ def run_functable(argv: list[str] | None = None) -> int:
         SRC_DIR / "drivers",
         SRC_DIR / "tls" / "core",
         SRC_DIR / "apps",
+        SRC_DIR / "parsers",
     ]
 
     # Specific .c files at src/ root that *are* part of the library (vs
@@ -962,6 +963,7 @@ def run_headers(argv: list[str] | None = None) -> int:
     OUT_DIR = OUT_ROOT / "lwip"
     OUT_CORE_INDEX = OUT_ROOT / "lwip.h"
     OUT_CRYPTO_INDEX = OUT_ROOT / "cryptography.h"
+    OUT_PARSERS_INDEX = OUT_ROOT / "parsers.h"
 
     # The socket convenience API is inlined directly at the TOP of lwip.h so it is
     # the visibly-preferred surface (not buried among the core headers). This holds
@@ -1227,6 +1229,7 @@ def run_headers(argv: list[str] | None = None) -> int:
             # its header lives outside src/tls/includes but is part of the
             # exported surface (see build-tools/meta/public_api_manifest.csv).
             (SRC_DIR / "tls" / "contrib" / "x25519" / "src").resolve(),
+            (SRC_DIR / "parsers").resolve(),
         ]
 
         def allowed(path: Path) -> bool:
@@ -2039,7 +2042,7 @@ def run_headers(argv: list[str] | None = None) -> int:
         header_rel = header.relative_to(REPO_ROOT).as_posix()
         if cur.spelling in FORCE_SOURCE_DECLS_BY_HEADER.get(header_rel, set()):
             return cursor_in_file(cur, header)
-        if group == "cryptography":
+        if group in ("cryptography", "parsers"):
             return cursor_in_file(cur, header)
         if group == "core" and header_rel in SOURCE_DECL_OWNER_HEADERS:
             return cursor_in_file(cur, header)
@@ -2211,7 +2214,7 @@ def run_headers(argv: list[str] | None = None) -> int:
         header_rel = header.relative_to(REPO_ROOT).as_posix()
         if (
             support_only or
-            group == "cryptography" or
+            group in ("cryptography", "parsers") or
             header_rel in SOURCE_DECL_OWNER_HEADERS or
             header_rel in FORCE_SOURCE_DECLS_BY_HEADER or
             header == CONN_SRC
@@ -2589,7 +2592,7 @@ def run_headers(argv: list[str] | None = None) -> int:
 
     def release_tree_digest() -> str:
         digest = hashlib.sha256()
-        paths = [OUT_CORE_INDEX, OUT_CRYPTO_INDEX]
+        paths = [OUT_CORE_INDEX, OUT_CRYPTO_INDEX, OUT_PARSERS_INDEX]
         paths.extend(sorted(OUT_DIR.rglob("*")))
         for path in paths:
             if not path.is_file():
@@ -2743,6 +2746,8 @@ def run_headers(argv: list[str] | None = None) -> int:
             return "socket"
         if row["category"] == "cryptography":
             return "cryptography"
+        if row["category"] == "parsers":
+            return "parsers"
         return "core"
 
 
@@ -2760,7 +2765,12 @@ def run_headers(argv: list[str] | None = None) -> int:
 
 
     def write_group_index(group: str, names: list[str], source_headers: list[Path]) -> None:
-        out_path = OUT_CORE_INDEX if group == "core" else OUT_CRYPTO_INDEX
+        if group == "core":
+            out_path = OUT_CORE_INDEX
+        elif group == "parsers":
+            out_path = OUT_PARSERS_INDEX
+        else:
+            out_path = OUT_CRYPTO_INDEX
         guard = derive_guard(out_path)
         lines = [
             f"#ifndef {guard}",
@@ -3013,8 +3023,8 @@ def run_headers(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return True
 
-        public_headers = {OUT_CORE_INDEX, OUT_CRYPTO_INDEX}
-        for aggregate in [OUT_CORE_INDEX, OUT_CRYPTO_INDEX]:
+        public_headers = {OUT_CORE_INDEX, OUT_CRYPTO_INDEX, OUT_PARSERS_INDEX}
+        for aggregate in [OUT_CORE_INDEX, OUT_CRYPTO_INDEX, OUT_PARSERS_INDEX]:
             if not aggregate.is_file():
                 continue
             for match in re.finditer(r'^\s*#\s*include\s+"([^"]+)"', aggregate.read_text(), re.MULTILINE):
@@ -3093,7 +3103,7 @@ def run_headers(argv: list[str] | None = None) -> int:
 
         if OUT_DIR.exists():
             shutil.rmtree(OUT_DIR)
-        for aggregate in (OUT_CRYPTO_INDEX,):  # OUT_CORE_INDEX (lwip.h) is hand-maintained
+        for aggregate in (OUT_CRYPTO_INDEX, OUT_PARSERS_INDEX):  # OUT_CORE_INDEX (lwip.h) is hand-maintained
             if aggregate.exists():
                 aggregate.unlink()
         OUT_DIR.mkdir(parents=True)
