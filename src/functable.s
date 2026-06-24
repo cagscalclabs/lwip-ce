@@ -432,10 +432,29 @@
 .extern _tls_x509_hostname_matches
 .extern _tls_x509_time_to_unix
 .extern _tls_x509_time_in_validity
+.extern _json_init
+.extern _json_next
+.extern _json_slice_copy
+.extern _json_get_key_value
+.extern _json_get_string
+.extern _json_get_number
+.extern _xml_init
+.extern _xml_next
+.extern _xml_skip
+.extern _xml_slice_copy
+.extern _xml_decode_entity
+.extern _xml_get_attr
+.extern _xml_get_inner_text
+.extern _xml_list_attrs
+.extern _url_encode
+.extern _url_encode_n
+.extern _url_decode
+.extern _url_build_query
+.extern _json_enter
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 398    ; entry count
+    d24 417    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -960,3 +979,30 @@ _fn_exports_table:
     d24 _tls_x509_hostname_matches
     d24 _tls_x509_time_to_unix
     d24 _tls_x509_time_in_validity
+
+; --- src/parsers/json.c ---
+    d24 _json_init
+    d24 _json_next
+    d24 _json_slice_copy
+    d24 _json_get_key_value
+    d24 _json_get_string
+    d24 _json_get_number
+
+; --- src/parsers/xml.c ---
+    d24 _xml_init
+    d24 _xml_next
+    d24 _xml_skip
+    d24 _xml_slice_copy
+    d24 _xml_decode_entity
+    d24 _xml_get_attr
+    d24 _xml_get_inner_text
+    d24 _xml_list_attrs
+
+; --- src/parsers/url.c ---
+    d24 _url_encode
+    d24 _url_encode_n
+    d24 _url_decode
+    d24 _url_build_query
+
+; --- src/parsers/json.c ---
+    d24 _json_enter

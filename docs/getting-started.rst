@@ -27,14 +27,18 @@ lwIP-CE comes packaged with a number of files and directories:
    │   │   ├── netif.h
    │   │   ├── pbuf.h
    │   │   └── ...
-   │   └── cryptography/         # lower-level crypto/TLS helper headers
-   │       ├── aes.h
-   │       ├── hash.h
-   │       ├── hkdf.h
-   │       ├── rsa.h
-   │       ├── truststore.h
-   │       ├── x509.h
-   │       └── ...
+   │   ├── cryptography/         # lower-level crypto/TLS helper headers
+   │   │   ├── aes.h
+   │   │   ├── hash.h
+   │   │   ├── hkdf.h
+   │   │   ├── rsa.h
+   │   │   ├── truststore.h
+   │   │   ├── x509.h
+   │   │   └── ...
+   │   └── parsers/              # zero-copy response parsers
+   │       ├── json.h
+   │       ├── xml.h
+   │       └── url.h
    └── appinst/
        ├── lwIPINST.8xp          # installer program (run once on-calc)
        └── LWIP.0.8xv ... LWIP.N.8xv  # split dynamic-library AppVars
@@ -318,6 +322,98 @@ Use ``cryptography.h`` when the program wants the TLS project's crypto
 primitives directly, without opening a network socket. It is a root-level
 umbrella header over ``lwip/cryptography/*.h``. Programs still need to call ``lwip_start()`` even if they just want to use cryptography.
 
+Use ``parsers.h`` when the program needs to parse JSON, XML, or URL-encoded
+response bodies. It is a root-level umbrella over ``lwip/parsers/*.h``. The
+parsers operate on any contiguous buffer and do not require the network stack
+to be running.
+
+Parse Responses
+---------------
+
+``parsers.h`` is an umbrella over ``lwip/parsers/*.h`` — zero-copy,
+cursor-based parsers for JSON, XML, and URL encoding. No heap allocation is
+needed; all parsers work on a caller-supplied buffer and return slices
+(pointer + length) directly into that buffer.
+
+**JSON** follows the same cursor model as the ASN.1 parser. ``json_next()``
+advances a cursor and returns one token. Objects and arrays are returned as a
+single token whose ``value`` span covers the interior content; the parent
+cursor has already advanced past the closing brace or bracket. Descend with
+``json_enter()``; skip by simply not calling it.
+
+.. code-block:: c
+
+   #include <parsers.h>
+
+   static const char body[] =
+       "{\"token_type\":\"Bearer\",\"expires_in\":3600}";
+
+   json_parser_t root, obj;
+   json_token_t tok;
+   char type_buf[32];
+   long expires;
+
+   json_init(&root, body, sizeof(body) - 1);
+   if (json_next(&root, &tok) == JSON_OK && tok.type == JSON_TOK_OBJECT) {
+       json_enter(&obj, &tok);
+       json_get_string(&obj, "token_type", type_buf, sizeof(type_buf));
+       json_get_number(&obj, "expires_in", &expires);
+   }
+
+To walk an array and descend only into elements you care about:
+
+.. code-block:: c
+
+   json_parser_t root, arr, item;
+   json_token_t tok;
+
+   json_init(&root, buf, len);
+   json_next(&root, &tok);           /* JSON_TOK_ARRAY */
+   json_enter(&arr, &tok);
+
+   while (json_next(&arr, &tok) == JSON_OK) {
+       if (tok.type != JSON_TOK_OBJECT) continue;
+       json_enter(&item, &tok);      /* descend into this element */
+       /* ... search item with json_get_string / json_get_key_value ... */
+       /* previous elements are already past in &arr — no skip needed */
+   }
+
+**XML** is SAX-style. ``xml_next()`` returns one event at a time
+(``XML_EVT_ELEMENT_START``, ``XML_EVT_ELEMENT_END``, ``XML_EVT_TEXT``).
+Comments and processing instructions are skipped automatically. Call
+``xml_skip()`` after an ``ELEMENT_START`` event to consume that element and
+all its children without descending.
+
+.. code-block:: c
+
+   xml_parser_t p;
+   xml_event_t evt;
+   char title[64], id_buf[8];
+
+   xml_init(&p, buf, len);
+   while (xml_next(&p, &evt) == XML_OK) {
+       if (evt.type != XML_EVT_ELEMENT_START) continue;
+       if (evt.name.len == 4 && memcmp(evt.name.str, "item", 4) == 0) {
+           xml_get_attr(&evt, "id", id_buf, sizeof(id_buf));
+           /* descend to find <title> child */
+       } else if (evt.type == XML_EVT_ELEMENT_START
+                  && evt.name.len == 5 && memcmp(evt.name.str, "title", 5) == 0) {
+           xml_get_inner_text(&p, title, sizeof(title));
+       }
+   }
+
+**URL encoding** provides percent-encoding per RFC 3986 and a
+``url_build_query()`` helper for constructing ``application/x-www-form-urlencoded``
+bodies:
+
+.. code-block:: c
+
+   char query[256];
+   const char *keys[]   = {"grant_type", "client_id"};
+   const char *values[] = {"client_credentials", "myapp"};
+   url_build_query(query, sizeof(query), keys, values, 2);
+   /* query == "grant_type=client_credentials&client_id=myapp" */
+
 Release Layout
 --------------
 
@@ -334,10 +430,14 @@ The public release layout is:
        ``lwip/core/*.h`` headers.
    * - ``cryptography.h``
      - Root-level umbrella for ``lwip/cryptography/*.h``.
+   * - ``parsers.h``
+     - Root-level umbrella for ``lwip/parsers/*.h``.
    * - ``lwip/core/*.h``
      - Lower-level curated lwIP core, netif, socket, service, and PCB headers.
    * - ``lwip/cryptography/*.h``
      - Lower-level public cryptographic primitive and TLS helper headers.
+   * - ``lwip/parsers/*.h``
+     - JSON, XML, and URL-encoding parsers.
    * - ``lwip.asm``
      - Release export/extern assembly surface for the dynamic library.
 
