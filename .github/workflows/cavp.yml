@@ -36,7 +36,6 @@ env:
 jobs:
   cavp:
     runs-on: ubuntu-latest
-    environment: test
 
     steps:
       - name: Checkout TLS branch

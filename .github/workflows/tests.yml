@@ -31,7 +31,6 @@ env:
 jobs:
   dylib_unit_tests:
     runs-on: ubuntu-latest
-    environment: test
 
     steps:
       - name: Checkout Repo

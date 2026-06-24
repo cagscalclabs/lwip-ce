@@ -40,7 +40,6 @@ env:
 jobs:
   profile_timing_consistency:
     runs-on: ubuntu-latest
-    environment: test
 
     steps:
       - name: Checkout TLS branch
