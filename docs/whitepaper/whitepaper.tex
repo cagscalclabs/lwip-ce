@@ -861,7 +861,7 @@ for (uint8_t i = 0; i < count; i++) {
 		\item Controlled handling of memory and sensitive state where feasible on the platform.
 	\end{itemize}
 	
-	\subsection{HWRNG Design and Entropy Model}
+	\subsection{HWRNG Design and Entropy Model}\label{ssec:hwrng_design}
 	\label{sec:entropy}
 	\label{ssec:entropy}
 	
@@ -1786,5 +1786,109 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		Seems to occur at the end of the handshake, when the client seems to expect some data. Could be a missing Record type, close from the peer. If you experience this issue, please submit \texttt{tracebacks}. \\
 		\addlinespace
 	\end{longtable}
+
+	\newpage
+	\subsection{Cryptographic Primitive Security Properties}\label{ssec:crypto_properties}
+
+	Per-primitive security property matrix. \textbf{\checkmark} = confirmed. \textbf{\texttimes} = not present or not verified. \textbf{?} = unknown / unverified. Current profiling has identified timing variation only over public quantities; no private-key or session-secret material is intentionally used in timing-dependent paths.
+
+	\begin{description}[leftmargin=0pt,labelwidth=\widthof{\textbf{Cache Safe: }},align=left,nosep]
+		\item[\textbf{CT:}] Verified constant-time (within acceptable margin of jitter) for the core primitive.
+		\item[\textbf{Zeroed:}] All scratch buffers, allocations, and stack memory purged upon release.
+		\item[\textbf{IRQ-Gated:}] Function runs with system interrupts disabled to inhibit side-loading via USB.
+		\item[\textbf{CT Tag Cmp:}] Authentication tag or MAC comparison performed without early exit.
+		\item[\textbf{Cache Safe:}] Flash cache timing analysis. Applies to Rev~M or later hardware, which introduced a flash read cache.
+	\end{description}
+
+	\vspace{0.5em}
+
+	\newcommand{\yes}{\checkmark}
+	\newcommand{\no}{\texttimes}
+	\newcommand{\unk}{?}
+
+	\renewcommand{\arraystretch}{1.4}
+	\begin{xltabular}{\textwidth}{@{}>{\bfseries\footnotesize\raggedright\arraybackslash}p{0.13\textwidth}
+		>{\centering\footnotesize\arraybackslash}p{0.09\textwidth}
+		>{\centering\footnotesize\arraybackslash}p{0.09\textwidth}
+		>{\centering\footnotesize\arraybackslash}p{0.09\textwidth}
+		>{\centering\footnotesize\arraybackslash}p{0.09\textwidth}
+		>{\centering\footnotesize\arraybackslash}p{0.09\textwidth}
+		>{\footnotesize\raggedright\arraybackslash}p{0.15\textwidth}
+		>{\footnotesize\raggedright\arraybackslash}p{0.15\textwidth}@{}}
+		\toprule
+		\textbf{Primitive}
+			& \textbf{CT}
+			& \textbf{Zeroed}
+			& \textbf{IRQ-Gated}
+			& \textbf{CT Tag Cmp}
+			& \textbf{Cache Safe}
+			& \textbf{Leaks}
+			& \textbf{Notes} \\
+		\midrule
+		\endfirsthead
+
+		RSA / powmod
+			& \unk
+			& \yes
+			& \yes
+			& \yes
+			& \yes
+			& Modulus size; public exponent (both public data)
+			& \\
+		\addlinespace
+
+		AES-GCM / CCM
+			& \yes
+			& \yes
+			& \yes
+			& \yes
+			& \yes
+			& None identified
+			& CT claim eZ80-specific (no data cache) \\
+		\addlinespace
+
+		X25519
+			& \yes
+			& \yes
+			& \yes
+			& N/A
+			& \yes
+			& None identified
+			& \\
+		\addlinespace
+
+		SHA-256 / HMAC
+			& \yes
+			& \yes
+			& \yes
+			& \yes
+			& \yes
+			& Input block size
+			& Finished MAC uses manual CT accumulator \\
+		\addlinespace
+
+		HKDF / PBKDF2
+			& \yes
+			& \yes
+			& \yes
+			& N/A
+			& \yes
+			& None identified
+			& Delegates security properties to SHA-256 HMAC \\
+		\addlinespace
+
+		RNG / DRBG
+			& N/A
+			& \yes
+			& \yes
+			& N/A
+			& \yes
+			& None identified
+			& Entropy $\approx$1~bit/byte (heuristic; see \S\ref{ssec:hwrng_design}). Bespoke SHA-256 DRBG, not SP~800-90A \\
+		\addlinespace
+
+		\bottomrule
+	\end{xltabular}
+
 
 \end{document}
