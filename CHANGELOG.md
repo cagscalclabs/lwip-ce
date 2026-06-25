@@ -23,4 +23,9 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - Uninitialized function jumps in lwip.8xv now initialize to a defined no-op in the lib that sets an error state, instead of remaining jp $0, and possibly faulting.
 - DAST testing now expands to exercise: (1) proper TLS ECDHE connect, (2) TLS PSK connect, (3) TLS invalid transcript (missing Record), (4) TLS CertificateVerify bad signature.
 
-## current
+## v1.1-stable
+
+- Implement Certificate expiry checks, hostname checks, SNI checks.
+- Implement RTC auto-set to first build time/date.
+- calc84maniac's AES eZ80 rewrite/optmization (PR #49)
+- Adding parsers for XML, JSON, and urlencode/decode.
