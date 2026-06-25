@@ -861,7 +861,7 @@ for (uint8_t i = 0; i < count; i++) {
 		\item Controlled handling of memory and sensitive state where feasible on the platform.
 	\end{itemize}
 	
-	\subsection{HWRNG Design and Entropy Model}
+	\subsection{HWRNG Design and Entropy Model}\label{ssec:hwrng_design}
 	\label{sec:entropy}
 	\label{ssec:entropy}
 	
@@ -1786,5 +1786,110 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		Seems to occur at the end of the handshake, when the client seems to expect some data. Could be a missing Record type, close from the peer. If you experience this issue, please submit \texttt{tracebacks}. \\
 		\addlinespace
 	\end{longtable}
+
+	\newpage
+	\subsection{Cryptographic Primitive Security Properties}\label{ssec:crypto_properties}
+
+	Per-primitive security properties. All timing leaks noted below are over \textbf{public} quantities (modulus size and public exponent appear in the certificate). No private-key or session-secret material appears in any timing-dependent path. The eZ80 has no data cache, so cache-timing attacks do not apply.
+
+	\renewcommand{\arraystretch}{1.4}
+	\begin{xltabular}{\textwidth}{@{}>{\bfseries\raggedright\arraybackslash}p{0.15\textwidth}>{\raggedright\arraybackslash}p{0.38\textwidth}>{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
+		\toprule
+		\textbf{Primitive} & \textbf{Resistant To} & \textbf{Leaks / Not Verified CT} \\
+		\midrule
+		\endhead
+
+		RSA / powmod
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Interrupt-based timing measurement (crypto-guard: interrupts off for full modexp, stack scrubbed on exit)
+			\item Scratch exposure (zeroized after every use)
+			\item PSS tag oracle (constant-time \texttt{tls\_bytes\_compare})
+		\end{itemize}
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Loop counts leak modulus byte-length (\texttt{; leaks size} at every inner loop in \texttt{bigint.s})
+			\item Square-and-multiply branches leak exponent bits (\texttt{; leaks exp} at conditional multiply/normalize) --- exponent is the \emph{public} RSA exponent
+			\item PKCS\#1~v1.5 DigestInfo comparison via \texttt{memcmp} (non-CT; input is public reconstructed data)
+		\end{itemize}
+		\\
+		\addlinespace
+
+		AES-GCM / CCM
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Tag oracle (constant-time \texttt{tls\_bytes\_compare}; CCM plaintext zeroized on mismatch)
+			\item Nonce/keystream reuse (direction lock on context)
+			\item Flash read-cache timing (cipher code and S-box tables relocated to safe-RAM)
+		\end{itemize}
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Table-based S-box lookups: \textbf{not verified constant-time}; no CT claim exists in source
+		\end{itemize}
+		\\
+		\addlinespace
+
+		X25519
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Scalar-bit timing (fixed 255-iteration Montgomery ladder, no early exit on bit value)
+			\item Conditional-swap timing (branch-free XOR-mask \texttt{\_BigIntSwap}; source-documented CT)
+			\item Inversion timing (fixed 254-step exponentiation chain)
+			\item Final reduction timing (constant-time conditional subtract + \texttt{\_BigIntSwap})
+		\end{itemize}
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item None identified. Only primitive with an explicit, verifiable CT claim in source.
+		\end{itemize}
+		\\
+		\addlinespace
+
+		SHA-256 / HMAC / HKDF
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Finished MAC forgery (manual CT accumulator: \texttt{diff |= got[i] \textasciicircum exp[i]} over all 32 bytes)
+			\item Interrupt-based timing measurement (crypto-guard on hash operations)
+		\end{itemize}
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item None identified; timing varies only with input length, which is public in all uses
+		\end{itemize}
+		\\
+		\addlinespace
+
+		RNG / DRBG
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Weak source (fail-closed entropy gate; source rejected below heuristic threshold)
+			\item Output outrunning reseeding (entropy budget counter)
+			\item Biased / stuck output (continuous monobit, max-run, repeated-block health checks; three failures force re-init)
+		\end{itemize}
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Entropy estimate ($\approx$1~bit/byte) is a heuristic from Section~\ref{ssec:hwrng_design}, not a certified SP~800-90B measurement
+			\item DRBG is a bespoke SHA-256 construction, not SP~800-90A HMAC-DRBG or Hash-DRBG
+		\end{itemize}
+		\\
+		\addlinespace
+
+		Certificate Chain
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Impersonation via forged RSA-2048/SHA-256 chain link (signature genuinely verified; failure fatal)
+			\item Impersonation via wrong root (RSA truststore anchor verified; failure fatal)
+			\item Hostname misdirection (SAN/CN match fail-closed per RFC~6125)
+			\item Expired / not-yet-valid certificates (validity window fail-closed per-cert)
+			\item Leaf key substitution (CertificateVerify RSA-PSS-SHA256 mandatory; all other algorithms fatal)
+		\end{itemize}
+		&
+		\begin{itemize}[leftmargin=*,nosep]
+			\item Chains using ECDSA or non-RSA-SHA256 links: \textbf{unverified} --- ALERT + accept (interim posture)
+			\item Missing or unsupported truststore root: ALERT + accept
+			\item No P-256 / ECDSA verification anywhere in the implementation
+		\end{itemize}
+		\\
+
+		\bottomrule
+	\end{xltabular}
 
 \end{document}
