@@ -1,0 +1,7 @@
+lwIP-CE HTTP server
+-------------------
+Platform : TI-84 Plus CE (eZ80F91, 48 MHz)
+Stack    : lwIP 2.2.0 + lwIP-CE TLS 1.3 layer
+Served   : via USB CDC-ECM ethernet adapter
+
+This plain-text file is loaded from a TI AppVar (LWHTTPD) at runtime.

@@ -2464,10 +2464,15 @@ static void lwip_socket_detach_pcb_callbacks(struct lwip_socket *conn)
         if (conn->pcb.tcp)
         {
             tcp_arg(conn->pcb.tcp, NULL);
-            tcp_recv(conn->pcb.tcp, NULL);
-            tcp_sent(conn->pcb.tcp, NULL);
-            tcp_err(conn->pcb.tcp, NULL);
-            tcp_poll(conn->pcb.tcp, NULL, conn->pcb.tcp->pollinterval);
+            if (!conn->is_listen)
+            {
+                /* tcp_recv/sent/err/poll are only valid on connected PCBs,
+                 * not on the listen PCB produced by tcp_listen(). */
+                tcp_recv(conn->pcb.tcp, NULL);
+                tcp_sent(conn->pcb.tcp, NULL);
+                tcp_err(conn->pcb.tcp, NULL);
+                tcp_poll(conn->pcb.tcp, NULL, conn->pcb.tcp->pollinterval);
+            }
         }
         break;
 #endif
@@ -2501,6 +2506,20 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
     /* Drop from the services waiter list if we were parked. Safe no-op
      * for conns that never entered WAITING_SERVICES. */
     services_list_remove(conn);
+    /* Drain any queued-but-not-yet-accepted peer sockets on a listener. */
+    while (conn->accept_queue)
+    {
+        struct lwip_socket *q = conn->accept_queue;
+        conn->accept_queue = q->services_next;
+        conn_registry_remove(q);
+        if (q->pcb.tcp)
+        {
+            tcp_arg(q->pcb.tcp, NULL);
+            tcp_abort(q->pcb.tcp);
+        }
+        lwip_socket_rx_ring_destroy(q);
+        mem_free(q);
+    }
     lwip_socket_set_pending_host(conn, NULL);
     /* Destruction is not graceful close. lwip_socket_close() owns orderly
      * FIN shutdown; destroy must leave no live pcb that can outlast this
@@ -2513,7 +2532,10 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
     case LWIP_SOCKET_TCP:
         if (conn->pcb.tcp)
         {
-            tcp_abort(conn->pcb.tcp);
+            if (conn->is_listen)
+                tcp_close(conn->pcb.tcp);  /* listen PCB — tcp_abort is invalid */
+            else
+                tcp_abort(conn->pcb.tcp);
         }
         break;
 #endif
@@ -2837,6 +2859,106 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
      * the conn leaves WAITING_SERVICES. Callers passing string
      * literals are safe. */
     return lwip_socket_wait_for_services(conn, host, port, deadline);
+}
+
+/* ============================================================
+ * Server: listen / accept
+ * ============================================================ */
+
+/* Internal tcp_accept callback: allocate a peer socket, wire its rx ring and
+ * callbacks, set it CONNECTED, and enqueue it on the listener's accept_queue.
+ * The peer socket is heap-allocated here; ownership transfers to the app when
+ * it calls lwip_socket_accept(). */
+static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+    struct lwip_socket *listener = (struct lwip_socket *)arg;
+
+    if (err != ERR_OK || !newpcb || !listener)
+        return ERR_VAL;
+
+    struct lwip_socket *peer = mem_malloc(sizeof(*peer));
+    if (!peer)
+    {
+        tcp_abort(newpcb);
+        return ERR_ABRT;
+    }
+    memset(peer, 0, sizeof(*peer));
+    peer->status   = LWIP_STATUS_CONNECTED;
+    peer->protocol = LWIP_SOCKET_TCP;
+    peer->pcb.tcp  = newpcb;
+    peer->netif    = listener->netif;
+    peer->rx_ring_init = LWIP_SOCKET_RX_RING_INIT_SIZE;
+    peer->rx_ring_max  = LWIP_SOCKET_RX_RING_MAX_SIZE;
+
+    if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
+    {
+        mem_free(peer);
+        tcp_abort(newpcb);
+        return ERR_ABRT;
+    }
+
+    rebind_pcb_callbacks(peer);
+    conn_registry_add(peer);
+    tcp_setprio(newpcb, TCP_PRIO_MIN);
+
+    /* Append to listener's accept queue (FIFO). */
+    struct lwip_socket **tail = &listener->accept_queue;
+    while (*tail)
+        tail = &(*tail)->services_next;
+    *tail = peer;
+    peer->services_next = NULL;
+
+    return ERR_OK;
+}
+
+lwip_error_t lwip_socket_listen(struct lwip_socket *conn, uint16_t port)
+{
+    if (!conn)
+        return LWIP_ERR_ARG;
+    if ((lwip_socket_type_t)conn->protocol != LWIP_SOCKET_TCP)
+        return LWIP_ERR_PROTO;
+    if (conn->status != LWIP_STATUS_INIT || !conn->pcb.tcp)
+        return LWIP_ERR_STATE;
+
+    if (tcp_bind(conn->pcb.tcp, NULL, port) != ERR_OK)
+        return LWIP_ERR_CONNECT;
+
+    struct tcp_pcb *lpcb = tcp_listen(conn->pcb.tcp);
+    if (!lpcb)
+        return LWIP_ERR_MEM;
+
+    conn->pcb.tcp  = lpcb;
+    conn->status   = LWIP_STATUS_CONNECTED; /* reuse CONNECTED to mean "active" */
+    conn->is_listen = true;
+    tcp_arg(lpcb, conn);
+    tcp_accept(lpcb, socket_tcp_accept_cb);
+    return LWIP_OK;
+}
+
+lwip_error_t lwip_socket_accept(struct lwip_socket *listener,
+                                struct lwip_socket *peer)
+{
+    if (!listener || !peer)
+        return LWIP_ERR_ARG;
+    if (!listener->accept_queue)
+        return LWIP_ERR_STATE;
+
+    struct lwip_socket *src = listener->accept_queue;
+    listener->accept_queue = src->services_next;
+    src->services_next = NULL;
+
+    /* Transfer the fully-initialised peer socket into caller's storage. */
+    memcpy(peer, src, sizeof(*peer));
+    /* Fix up registry and ring: the registry still points to src's address;
+     * remove the heap copy and re-add under the caller's address. */
+    conn_registry_remove(src);
+    mem_free(src);
+    conn_registry_add(peer);
+    /* Redirect the pcb's arg to the new address. */
+    if (peer->pcb.tcp)
+        tcp_arg(peer->pcb.tcp, peer);
+
+    return LWIP_OK;
 }
 
 /* ============================================================

@@ -451,10 +451,12 @@
 .extern _url_decode
 .extern _url_build_query
 .extern _json_enter
+.extern _lwip_socket_listen
+.extern _lwip_socket_accept
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 417    ; entry count
+    d24 419    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -1006,3 +1008,7 @@ _fn_exports_table:
 
 ; --- src/parsers/json.c ---
     d24 _json_enter
+
+; --- src/lwIP.c ---
+    d24 _lwip_socket_listen
+    d24 _lwip_socket_accept

@@ -701,3 +701,5 @@ func,url_encode,parsers,src/parsers/url.h,lwip/parsers/url.h
 func,url_encode_n,parsers,src/parsers/url.h,lwip/parsers/url.h
 func,url_decode,parsers,src/parsers/url.h,lwip/parsers/url.h
 func,url_build_query,parsers,src/parsers/url.h,lwip/parsers/url.h
+func,lwip_socket_listen,socket,src/lwIP.h,lwip.h
+func,lwip_socket_accept,socket,src/lwIP.h,lwip.h

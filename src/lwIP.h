@@ -301,6 +301,12 @@ struct lwip_socket
 
     struct lwip_socket *services_next;
     struct lwip_socket *registry_next;
+
+    /* Server-side: singly-linked queue of accepted peer sockets (listen socket
+     * only).  Each entry was heap-allocated by the internal accept callback and
+     * is transferred to the caller via lwip_socket_accept(). */
+    struct lwip_socket *accept_queue;
+    bool                is_listen; /**< pcb.tcp is a listen PCB (tcp_listen was called) */
 };
 
 /* ------------------------------------------------------------------ */
@@ -354,6 +360,29 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *socket);
 lwip_error_t lwip_socket_connect(struct lwip_socket *socket,
                                  const char *host,
                                  uint16_t port);
+
+/** Bind a TCP socket to a local port and begin listening for connections.
+ *  Only valid on a LWIP_SOCKET_TCP socket in LWIP_STATUS_INIT state.
+ *  After this call the socket is a passive listener; do not call
+ *  lwip_socket_connect() on it.  Accepted peers arrive via lwip_socket_accept().
+ *
+ *  @param socket  Caller-created TCP socket handle.
+ *  @param port    Local port number (host byte order).
+ *  @returns LWIP_OK on success, LWIP_ERR_STATE / LWIP_ERR_PROTO / LWIP_ERR_MEM
+ *           on failure. */
+lwip_error_t lwip_socket_listen(struct lwip_socket *socket, uint16_t port);
+
+/** Dequeue one accepted peer socket from a listening socket.
+ *  Non-blocking: returns LWIP_ERR_STATE if no peer is ready yet.
+ *  On success *peer is a fully-initialised socket in LWIP_STATUS_CONNECTED
+ *  state; the caller owns it and must call lwip_socket_destroy() when done.
+ *
+ *  @param socket  Listening socket (must have called lwip_socket_listen()).
+ *  @param peer    Caller-allocated socket handle to receive the peer.
+ *  @returns LWIP_OK on success, LWIP_ERR_STATE if queue is empty,
+ *           LWIP_ERR_ARG on bad arguments. */
+lwip_error_t lwip_socket_accept(struct lwip_socket *socket,
+                                struct lwip_socket *peer);
 
 /** Register the single event callback.
  *

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API Reference · lwIP-CE</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>lwIP-CE</h1>
+    <p class="subtitle"><a href="/">← Home</a></p>
+  </header>
+
+  <main>
+    <section>
+      <h2>lwip_socket API</h2>
+      <p>
+        High-level connection API.  Create a socket, register an event callback,
+        call <code>lwip_socket_connect()</code>, then pump <code>lwip_service_events()</code>
+        in a loop.  Read data with <code>lwip_socket_read()</code>.
+      </p>
+    </section>
+
+    <section>
+      <h2>TLS</h2>
+      <p>
+        Pass <code>LWIP_SOCKET_ALTCP_TLS</code> to <code>lwip_socket_create()</code>.
+        TLS 1.3 is negotiated automatically.  Certificate chain verification and
+        session ticket resumption are built in.
+      </p>
+    </section>
+
+    <section>
+      <h2>Parsers</h2>
+      <p>
+        Cursor-based parsers for JSON, XML, and URL encoding are available in
+        <code>&lt;lwip/parsers/json.h&gt;</code>, <code>xml.h</code>, and <code>url.h</code>.
+        No heap allocation; no DOM tree.
+      </p>
+    </section>
+
+    <section>
+      <h2>Documentation</h2>
+      <p>
+        Full API docs and the security whitepaper are available at
+        <a href="https://cagstech.github.io/lwip-ce">cagstech.github.io/lwip-ce</a>.
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 CagsCalcLabs</p>
+  </footer>
+</body>
+</html>
