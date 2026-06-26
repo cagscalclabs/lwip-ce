@@ -93,7 +93,7 @@ socket API:
        }
 
        while (1) {
-           lwip_poll_network_events();
+           lwip_service_events();
            /* app work */
        }
    }
@@ -103,7 +103,7 @@ socket API:
 
 ``lwip_start()`` initializes the lwIP environment - bss/data segments, imports and exports, async API (``sys_timeouts``) and the memory system (``membuffer``). You are at liberty to use the stack's internals without bringing up networking, but if you want networking, you would next call ``lwip_network_up``. This brings up the USB Ethernet driver and calls ``lwip_init`` (the internal stack-up op).
 
-``lwip_poll_network_events()`` must run from the main loop. There is no OS
+``lwip_service_events()`` must run from the main loop. There is no OS
 thread sitting behind the stack doing this for you.
 
 Reserve Memory Before Opening Sockets
@@ -233,7 +233,7 @@ into their own code.
        (void)arg;
        (void)data;
 
-       if (type == LWIP_SOCKET_EVENT_STATE_CHANGE &&
+       if (type == LWIP_SOCKET_EV_STATE_CHANGE &&
            lwip_socket_status(socket) == LWIP_STATUS_CONNECTED) {
            static const uint8_t request[] =
                "GET / HTTP/1.0\r\n"
@@ -242,7 +242,7 @@ into their own code.
            if (lwip_socket_write(socket, request, sizeof(request) - 1) != LWIP_OK) {
                done = true;
            }
-       } else if (type == LWIP_SOCKET_EVENT_IO) {
+       } else if (type == LWIP_SOCKET_EV_IO) {
            size_t space = sizeof(response) - response_len - 1;
            response_len += lwip_socket_read(socket,
                                             (uint8_t *)response + response_len,
@@ -251,8 +251,8 @@ into their own code.
            if (response_complete()) {
                want_close = true;
            }
-       } else if (type == LWIP_SOCKET_EVENT_ERROR ||
-                  (type == LWIP_SOCKET_EVENT_STATE_CHANGE &&
+       } else if (type == LWIP_SOCKET_EV_ERROR ||
+                  (type == LWIP_SOCKET_EV_STATE_CHANGE &&
                    lwip_socket_status(socket) == LWIP_STATUS_CLOSED)) {
            done = true;
        }
@@ -285,7 +285,7 @@ into their own code.
        }
 
        while (!done) {
-           lwip_poll_network_events();
+           lwip_service_events();
 
            if (want_close && socket.status == LWIP_STATUS_CONNECTED) {
                lwip_socket_shutdown(&socket);
@@ -307,6 +307,125 @@ into their own code.
        lwip_socket_destroy(&socket);
        return rc;
    }
+
+Server Sockets
+--------------
+
+``lwip_socket_listen()`` and ``lwip_socket_accept()`` extend the socket API to
+cover TCP servers. A server socket never calls ``lwip_socket_connect()``; it
+binds to a port and queues incoming connections for the application to dequeue
+one at a time.
+
+**Lifecycle:**
+
+.. code-block:: text
+
+   lwip_request_services(LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS)
+   lwip_socket_create()     — allocate the listen socket
+   /* poll lwip_default_netif_info() until has_ipv4 */
+   lwip_socket_listen()     — bind to port, enter listen state
+   /* in the main loop: */
+   lwip_socket_accept()     — dequeue one accepted peer (non-blocking)
+   lwip_socket_read/write() — serve the peer
+   lwip_socket_close()      — orderly close after response
+   lwip_socket_destroy()    — release the peer handle
+   /* repeat accept/serve; on exit: */
+   lwip_socket_destroy()    — release the listen socket
+
+``lwip_request_services()`` must be called before the main loop to start DHCP.
+``lwip_socket_create()`` alone does not trigger DHCP — the async retry path
+only runs for sockets that call ``lwip_socket_connect()``.
+
+``lwip_socket_listen()`` is only valid on a ``LWIP_SOCKET_TCP`` socket in
+``LWIP_STATUS_INIT`` state. After this call the socket becomes a passive
+listener; do not call ``lwip_socket_connect()`` on it.
+
+``lwip_socket_accept()`` is non-blocking. It returns ``LWIP_OK`` and fills the
+caller-supplied ``peer`` handle when a connection is queued, or
+``LWIP_ERR_STATE`` when the queue is empty. The returned peer is in
+``LWIP_STATUS_CONNECTED`` state; the caller owns it and must call
+``lwip_socket_destroy()`` when done.
+
+.. code-block:: c
+
+   #include <lwip.h>
+   #include <stdbool.h>
+   #include <stdint.h>
+   #include <string.h>
+
+   #define PORT       80
+   #define BUF_MAX    512
+
+   int main(void)
+   {
+       if (!lwip_start())
+           return 1;
+       if (!lwip_network_up())
+           return 1;
+
+       /* Start DHCP independently of the listen socket. */
+       lwip_request_services(LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS);
+
+       struct lwip_socket server;
+       if (lwip_socket_create(&server, LWIP_SOCKET_TCP,
+                              LWIP_NETIF_EXT, NULL, 0) != LWIP_OK)
+           return 1;
+
+       /* Wait for a DHCP address before listening. */
+       lwip_netif_info_t info = {0};
+       do {
+           lwip_service_events();
+           lwip_default_netif_info(&info);
+       } while (!info.has_ipv4);
+
+       if (lwip_socket_listen(&server, PORT) != LWIP_OK) {
+           lwip_socket_destroy(&server);
+           return 1;
+       }
+
+       static char req[BUF_MAX];
+       bool running = true;
+       while (running) {
+           lwip_service_events();
+
+           struct lwip_socket peer;
+           if (lwip_socket_accept(&server, &peer) == LWIP_OK) {
+               /* Drain the request (simplified — real code should buffer
+                * until \r\n\r\n is seen across multiple ticks). */
+               size_t n = lwip_socket_available(&peer);
+               if (n) {
+                   n = lwip_socket_read(&peer, (uint8_t *)req,
+                                        n < BUF_MAX - 1 ? n : BUF_MAX - 1);
+                   req[n] = '\0';
+               }
+
+               static const uint8_t resp[] =
+                   "HTTP/1.1 200 OK\r\n"
+                   "Content-Type: text/plain\r\n"
+                   "Content-Length: 5\r\n"
+                   "Connection: close\r\n"
+                   "\r\n"
+                   "hello";
+               lwip_socket_write(&peer, resp, sizeof(resp) - 1);
+               lwip_socket_close(&peer);
+
+               /* Drive the peer to CLOSED before destroying. */
+               while (lwip_socket_is_active(&peer))
+                   lwip_service_events();
+               lwip_socket_destroy(&peer);
+           }
+       }
+
+       lwip_socket_destroy(&server);
+       return 0;
+   }
+
+.. note::
+
+   For a production server, accumulate bytes from ``lwip_socket_read()`` across
+   multiple ticks until the full HTTP header block (``\\r\\n\\r\\n``) is present
+   before dispatching. See ``examples/httpd/`` for a complete multi-connection
+   HTTP/1.1 server with keep-alive, idle timeouts, and concurrent peer handling.
 
 Choose an API Layer
 -------------------
