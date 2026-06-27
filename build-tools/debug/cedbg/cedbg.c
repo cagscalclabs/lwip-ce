@@ -316,6 +316,12 @@ int main(int argc, char **argv) {
     bool dbg_inited = false;
     char line[512];
     while (fgets(line, sizeof line, script)) {
+        /* discard lines that exceed buffer capacity to prevent partial-line processing */
+        if (!strchr(line, '\n') && !feof(script)) {
+            int c;
+            while ((c = fgetc(script)) != '\n' && c != EOF);
+            continue;
+        }
         /* strip comments and trailing newline */
         char *hash = strchr(line, '#'); if (hash) *hash = 0;
         char *tok = strtok(line, " \t\r\n");
