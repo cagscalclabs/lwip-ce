@@ -107,29 +107,13 @@ json_err_t json_next(json_parser_t *p, json_token_t *tok);
  */
 bool json_slice_copy(char *dst, size_t dst_len, const json_slice_t *s);
 
-/**
- * Convenience wrapper for copying a token's value slice.
- */
-static inline bool json_token_copy(char *dst, size_t dst_len,
-                                   const json_token_t *tok)
-{
-    if (tok == NULL)
-        return false;
-    return json_slice_copy(dst, dst_len, &tok->value);
-}
+#define json_token_copy(dst, dst_len, tok) \
+    ((tok) != NULL && json_slice_copy((dst), (dst_len), &(tok)->value))
 
-/**
- * Compare a token's value slice with a NUL-terminated string.
- */
-static inline bool json_token_equals(const json_token_t *tok, const char *str)
-{
-    size_t len;
-
-    if (tok == NULL || str == NULL || tok->value.str == NULL)
-        return false;
-    len = strlen(str);
-    return tok->value.len == len && memcmp(tok->value.str, str, len) == 0;
-}
+#define json_token_equals(tok, expected) \
+    ((tok) != NULL && (expected) != NULL && (tok)->value.str != NULL && \
+     (tok)->value.len == strlen(expected) && \
+     memcmp((tok)->value.str, (expected), (tok)->value.len) == 0)
 
 /**
  * Retrieve a key-value pair from the current object cursor.

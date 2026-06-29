@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "../../../../src/parsers/xml.h"
+#include <lwip/parsers/xml.h>
 #include <lwip.h>
 
 #define RING_SIZE 512u
