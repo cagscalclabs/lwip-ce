@@ -104,12 +104,6 @@ release:
 	rm -f lwip.zip
 	zip -r lwip.zip build/
 
-.PHONY: services
-services:
-
-	rm -f lwip.zip
-	zip -r lwip.zip build/
-
 
 .PHONY: sizes
 sizes:
