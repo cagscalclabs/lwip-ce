@@ -433,30 +433,32 @@
 .extern _tls_x509_time_to_unix
 .extern _tls_x509_time_in_validity
 .extern _json_init
+.extern _json_enter
 .extern _json_next
 .extern _json_slice_copy
 .extern _json_get_key_value
 .extern _json_get_string
 .extern _json_get_number
 .extern _xml_init
+.extern _xml_finish
+.extern _xml_take
 .extern _xml_next
-.extern _xml_skip
-.extern _xml_slice_copy
-.extern _xml_decode_entity
 .extern _xml_get_attr
+.extern _xml_skip
 .extern _xml_get_inner_text
 .extern _xml_list_attrs
+.extern _xml_slice_copy
+.extern _xml_decode_entity
 .extern _url_encode
 .extern _url_encode_n
 .extern _url_decode
 .extern _url_build_query
-.extern _json_enter
 .extern _lwip_socket_listen
 .extern _lwip_socket_accept
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 419    ; entry count
+    d24 421    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -984,6 +986,7 @@ _fn_exports_table:
 
 ; --- src/parsers/json.c ---
     d24 _json_init
+    d24 _json_enter
     d24 _json_next
     d24 _json_slice_copy
     d24 _json_get_key_value
@@ -992,22 +995,21 @@ _fn_exports_table:
 
 ; --- src/parsers/xml.c ---
     d24 _xml_init
+    d24 _xml_finish
+    d24 _xml_take
     d24 _xml_next
-    d24 _xml_skip
-    d24 _xml_slice_copy
-    d24 _xml_decode_entity
     d24 _xml_get_attr
+    d24 _xml_skip
     d24 _xml_get_inner_text
     d24 _xml_list_attrs
+    d24 _xml_slice_copy
+    d24 _xml_decode_entity
 
 ; --- src/parsers/url.c ---
     d24 _url_encode
     d24 _url_encode_n
     d24 _url_decode
     d24 _url_build_query
-
-; --- src/parsers/json.c ---
-    d24 _json_enter
 
 ; --- src/lwIP.c ---
     d24 _lwip_socket_listen

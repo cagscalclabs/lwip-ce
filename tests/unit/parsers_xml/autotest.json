@@ -1,5 +1,5 @@
 {
-  "description": "XML SAX parser: element/attribute/skip/entity correctness",
+  "description": "XML/HTML ring-buffered parser: element/attribute/entity/streaming/lax correctness",
   "transfer_files": [
     "bin/XXML.8xp",
     "../../common/clibs.8xg",
@@ -32,7 +32,7 @@
     "key|1",
     "key|enter",
     "key|enter",
-    "hashWait|7",
+    "hashWait|14",
     "key|left",
     "key|enter",
     "delay|1000",
@@ -48,52 +48,123 @@
     "hashWait|5",
     "key|enter",
     "hashWait|6",
-    "key|enter"
+    "key|enter",
+    "hashWait|7",
+    "key|enter",
+    "hashWait|8",
+    "key|enter",
+    "hashWait|9",
+    "key|enter",
+    "hashWait|10",
+    "key|enter",
+    "hashWait|11",
+    "key|enter",
+    "hashWait|12",
+    "key|enter",
+    "hashWait|13",
+    "key|enter",
+    "hashWait|15"
   ],
   "hashes": {
     "1": {
-      "description": "Simple element with text content",
+      "description": "Pull walk: PI and comment skipped, structure correct",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 10000
     },
     "2": {
-      "description": "Element with attributes",
+      "description": "xml_get_attr: quoted attribute extraction",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
     "3": {
-      "description": "Nested elements",
+      "description": "Text content between tags",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
     "4": {
-      "description": "Comment and PI skipped silently",
+      "description": "Entity decoded in text stream (&amp; -> &)",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
     "5": {
-      "description": "xml_skip over subtree",
+      "description": "xml_decode_entity: built-in XML/HTML entities",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
     "6": {
-      "description": "xml_slice_copy and xml_decode_entity (&amp;)",
+      "description": "XML streaming: 7-byte chunks, NEED_MORE retry",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
     "7": {
+      "description": "Lax HTML: void elements, boolean attrs, text extraction",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "8": {
+      "description": "Second item attributes reachable after walk",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "9": {
+      "description": "HTML case folding: uppercase tags lowercased",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "10": {
+      "description": "HTML unquoted attribute values",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "11": {
+      "description": "HTML &nbsp; decoded as space",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "12": {
+      "description": "HTML nested inline tags: strong/em START+END and text",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "13": {
+      "description": "HTML link href attribute extraction",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "15": {
+      "description": "HTML lax streaming: chunked h1 text + a tag",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 1000
+    },
+    "14": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

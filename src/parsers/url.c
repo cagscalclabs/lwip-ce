@@ -26,13 +26,17 @@ static const char hex_chars[] = "0123456789ABCDEF";
 size_t url_encode_n(char *dst, size_t dst_len, const char *src, size_t src_len)
 {
     size_t out = 0;
+
+    if (dst == NULL || src == NULL || dst_len == 0)
+        return URL_ERR;
+
     for (size_t i = 0; i < src_len; i++) {
         unsigned char c = (unsigned char)src[i];
         if (is_unreserved(c)) {
-            if (out + 2 > dst_len) return (size_t)-1;
+            if (out + 2u > dst_len) return URL_ERR;
             dst[out++] = (char)c;
         } else {
-            if (out + 4 > dst_len) return (size_t)-1;
+            if (out + 4u > dst_len) return URL_ERR;
             dst[out++] = '%';
             dst[out++] = hex_chars[(c >> 4) & 0xF];
             dst[out++] = hex_chars[c & 0xF];
@@ -44,6 +48,8 @@ size_t url_encode_n(char *dst, size_t dst_len, const char *src, size_t src_len)
 
 size_t url_encode(char *dst, size_t dst_len, const char *src)
 {
+    if (src == NULL)
+        return URL_ERR;
     return url_encode_n(dst, dst_len, src, strlen(src));
 }
 
@@ -51,15 +57,20 @@ size_t url_decode(char *dst, size_t dst_len, const char *src)
 {
     size_t out = 0;
     size_t i = 0;
-    size_t src_len = strlen(src);
+    size_t src_len;
+
+    if (dst == NULL || src == NULL || dst_len == 0)
+        return URL_ERR;
+
+    src_len = strlen(src);
     while (i < src_len) {
-        if (out + 2 > dst_len) return (size_t)-1;
+        if (out + 2u > dst_len) return URL_ERR;
         unsigned char c = (unsigned char)src[i];
         if (c == '%') {
-            if (i + 2 >= src_len) return (size_t)-1;
+            if (i + 2u >= src_len) return URL_ERR;
             int hi = hex_digit((unsigned char)src[i+1]);
             int lo = hex_digit((unsigned char)src[i+2]);
-            if (hi < 0 || lo < 0) return (size_t)-1;
+            if (hi < 0 || lo < 0) return URL_ERR;
             dst[out++] = (char)((hi << 4) | lo);
             i += 3;
         } else {
@@ -77,18 +88,25 @@ size_t url_build_query(char *dst, size_t dst_len,
                        size_t count)
 {
     size_t out = 0;
+
+    if (dst == NULL || keys == NULL || values == NULL || dst_len == 0)
+        return URL_ERR;
+
     for (size_t i = 0; i < count; i++) {
+        const char *key = keys[i] ? keys[i] : "";
+        const char *value = values[i] ? values[i] : "";
+
         if (i > 0) {
-            if (out + 2 > dst_len) return (size_t)-1;
+            if (out + 2u > dst_len) return URL_ERR;
             dst[out++] = '&';
         }
-        size_t n = url_encode(dst + out, dst_len - out, keys[i]);
-        if (n == (size_t)-1) return (size_t)-1;
+        size_t n = url_encode(dst + out, dst_len - out, key);
+        if (n == URL_ERR) return URL_ERR;
         out += n;
-        if (out + 2 > dst_len) return (size_t)-1;
+        if (out + 2u > dst_len) return URL_ERR;
         dst[out++] = '=';
-        n = url_encode(dst + out, dst_len - out, values[i]);
-        if (n == (size_t)-1) return (size_t)-1;
+        n = url_encode(dst + out, dst_len - out, value);
+        if (n == URL_ERR) return URL_ERR;
         out += n;
     }
     dst[out] = '\0';

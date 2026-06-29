@@ -50,7 +50,14 @@ static json_err_t parse_string(json_parser_t *p, json_slice_t *out)
     size_t start = p->pos;
     while (p->pos < p->len) {
         char c = p->buf[p->pos];
-        if (c == '\\') { p->pos += 2; continue; }
+        if ((unsigned char)c < 0x20u)
+            return JSON_ERR_INVALID;
+        if (c == '\\') {
+            if (p->pos + 1u >= p->len)
+                return JSON_ERR_TRUNCATED;
+            p->pos += 2;
+            continue;
+        }
         if (c == '"') {
             out->str = p->buf + start;
             out->len = p->pos - start;
@@ -73,15 +80,50 @@ static json_err_t parse_literal(json_parser_t *p, const char *lit, size_t lit_le
 static json_err_t parse_number(json_parser_t *p, json_slice_t *out)
 {
     size_t start = p->pos;
-    while (p->pos < p->len) {
-        char c = p->buf[p->pos];
-        if ((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E'
-                || c == '+' || c == '-')
+
+    if (p->pos < p->len && p->buf[p->pos] == '-')
+        p->pos++;
+
+    if (p->pos >= p->len)
+        return JSON_ERR_TRUNCATED;
+
+    if (p->buf[p->pos] == '0') {
+        p->pos++;
+    } else if (p->buf[p->pos] >= '1' && p->buf[p->pos] <= '9') {
+        do {
             p->pos++;
-        else
-            break;
+        } while (p->pos < p->len &&
+                 p->buf[p->pos] >= '0' && p->buf[p->pos] <= '9');
+    } else {
+        return JSON_ERR_INVALID;
     }
-    if (p->pos == start) return JSON_ERR_INVALID;
+
+    if (p->pos < p->len && p->buf[p->pos] == '.') {
+        p->pos++;
+        if (p->pos >= p->len ||
+            p->buf[p->pos] < '0' || p->buf[p->pos] > '9')
+            return JSON_ERR_INVALID;
+        do {
+            p->pos++;
+        } while (p->pos < p->len &&
+                 p->buf[p->pos] >= '0' && p->buf[p->pos] <= '9');
+    }
+
+    if (p->pos < p->len &&
+        (p->buf[p->pos] == 'e' || p->buf[p->pos] == 'E')) {
+        p->pos++;
+        if (p->pos < p->len &&
+            (p->buf[p->pos] == '+' || p->buf[p->pos] == '-'))
+            p->pos++;
+        if (p->pos >= p->len ||
+            p->buf[p->pos] < '0' || p->buf[p->pos] > '9')
+            return JSON_ERR_INVALID;
+        do {
+            p->pos++;
+        } while (p->pos < p->len &&
+                 p->buf[p->pos] >= '0' && p->buf[p->pos] <= '9');
+    }
+
     out->str = p->buf + start;
     out->len = p->pos - start;
     return JSON_OK;
@@ -185,7 +227,6 @@ json_err_t json_next(json_parser_t *p, json_token_t *tok)
         return JSON_OK;
     }
     if (c == '-' || (c >= '0' && c <= '9')) {
-        if (c == '-') p->pos++;
         json_err_t err = parse_number(p, &tok->value);
         if (err != JSON_OK) return err;
         tok->type       = JSON_TOK_NUMBER;
@@ -198,6 +239,7 @@ json_err_t json_next(json_parser_t *p, json_token_t *tok)
 
 bool json_slice_copy(char *dst, size_t dst_len, const json_slice_t *s)
 {
+    if (s == NULL || s->str == NULL) return false;
     if (s->len + 1 > dst_len) return false;
     memcpy(dst, s->str, s->len);
     dst[s->len] = '\0';
@@ -241,11 +283,14 @@ json_err_t json_get_string(json_parser_t *p, const char *key, char *dst, size_t 
 json_err_t json_get_number(json_parser_t *p, const char *key, long *out)
 {
     json_token_t k, v;
+    char *end;
     json_err_t err = json_get_key_value(p, key, &k, &v);
     if (err != JSON_OK) return err;
     if (v.type != JSON_TOK_NUMBER) return JSON_ERR_INVALID;
     char buf[24];
     if (!json_slice_copy(buf, sizeof(buf), &v.value)) return JSON_ERR_INVALID;
-    *out = strtol(buf, NULL, 10);
+    *out = strtol(buf, &end, 10);
+    if (*end != '\0')
+        return JSON_ERR_INVALID;
     return JSON_OK;
 }

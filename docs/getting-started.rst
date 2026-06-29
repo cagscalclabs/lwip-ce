@@ -449,10 +449,11 @@ to be running.
 Parse Responses
 ---------------
 
-``parsers.h`` is an umbrella over ``lwip/parsers/*.h`` — zero-copy,
-cursor-based parsers for JSON, XML, and URL encoding. No heap allocation is
-needed; all parsers work on a caller-supplied buffer and return slices
-(pointer + length) directly into that buffer.
+``parsers.h`` is an umbrella over ``lwip/parsers/*.h``. The parsers avoid heap
+allocation and use caller-supplied buffers. JSON is cursor-based over a
+complete response body, XML is streaming/event-based over a caller-owned ring
+buffer, and URL helpers write encoded/decoded data into caller-owned output
+buffers.
 
 **JSON** follows the same cursor model as the ASN.1 parser. ``json_next()``
 advances a cursor and returns one token. Objects and arrays are returned as a
@@ -497,27 +498,32 @@ To walk an array and descend only into elements you care about:
        /* previous elements are already past in &arr — no skip needed */
    }
 
-**XML** is SAX-style. ``xml_next()`` returns one event at a time
-(``XML_EVT_ELEMENT_START``, ``XML_EVT_ELEMENT_END``, ``XML_EVT_TEXT``).
-Comments and processing instructions are skipped automatically. Call
-``xml_skip()`` after an ``ELEMENT_START`` event to consume that element and
-all its children without descending.
+**XML** is streaming and SAX-style. Feed bytes with ``xml_take()``, call
+``xml_finish()`` after the final byte, then pull events with ``xml_next()``.
+Comments and processing instructions are skipped automatically. Event names,
+text, and attributes are copied into ``xml_event_t`` so callers do not need to
+hold on to the original input buffer. ``XML_FLAG_LAX`` enables HTML-tolerant
+behavior such as lowercase tag names, unquoted attributes, boolean attributes,
+and auto-ended void elements.
 
 .. code-block:: c
 
-   xml_parser_t p;
+   xml_ctx_t x;
    xml_event_t evt;
+   char ring[512];
    char title[64], id_buf[8];
 
-   xml_init(&p, buf, len);
-   while (xml_next(&p, &evt) == XML_OK) {
+   xml_init(&x, ring, sizeof(ring), 0);
+   xml_take(&x, buf, len);
+   xml_finish(&x);
+
+   while (xml_next(&x, &evt) == XML_OK) {
        if (evt.type != XML_EVT_ELEMENT_START) continue;
-       if (evt.name.len == 4 && memcmp(evt.name.str, "item", 4) == 0) {
+       if (strcmp(evt.name, "item") == 0) {
            xml_get_attr(&evt, "id", id_buf, sizeof(id_buf));
            /* descend to find <title> child */
-       } else if (evt.type == XML_EVT_ELEMENT_START
-                  && evt.name.len == 5 && memcmp(evt.name.str, "title", 5) == 0) {
-           xml_get_inner_text(&p, title, sizeof(title));
+       } else if (strcmp(evt.name, "title") == 0) {
+           xml_get_inner_text(&x, title, sizeof(title));
        }
    }
 

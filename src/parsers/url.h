@@ -22,6 +22,8 @@
 extern "C" {
 #endif
 
+#define URL_ERR ((size_t)-1)
+
 /**
  * Percent-encode src into dst.
  * Unreserved characters (A-Z a-z 0-9 - _ . ~) are passed through.
@@ -31,7 +33,7 @@ extern "C" {
  * @param dst_len  size of dst (including NUL terminator)
  * @param src      input string (NUL-terminated)
  * @return number of bytes written to dst (excluding NUL), or
- *         (size_t)-1 if dst is too small.
+ *         URL_ERR if dst is too small.
  */
 size_t url_encode(char *dst, size_t dst_len, const char *src);
 
@@ -48,7 +50,7 @@ size_t url_encode_n(char *dst, size_t dst_len, const char *src, size_t src_len);
  * @param dst_len  size of dst (including NUL terminator)
  * @param src      input string (NUL-terminated)
  * @return number of bytes written to dst (excluding NUL), or
- *         (size_t)-1 if dst is too small or input is malformed.
+ *         URL_ERR if dst is too small or input is malformed.
  */
 size_t url_decode(char *dst, size_t dst_len, const char *src);
 
@@ -62,7 +64,7 @@ size_t url_decode(char *dst, size_t dst_len, const char *src);
  * @param keys     NULL-terminated array of key strings
  * @param values   NULL-terminated array of value strings (parallel to keys)
  * @param count    number of pairs
- * @return number of bytes written (excluding NUL), or (size_t)-1 if too small.
+ * @return number of bytes written (excluding NUL), or URL_ERR if too small.
  */
 size_t url_build_query(char *dst, size_t dst_len,
                        const char * const *keys,

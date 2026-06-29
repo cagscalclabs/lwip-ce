@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include <lwip/parsers/json.h>
+#include "../../../../src/parsers/json.h"
 #include <lwip.h>
 
 /* Real-world OAuth 2.0 token response payload */
@@ -44,6 +44,7 @@ static bool test_pull_walk(void)
 
     /* access_token */
     if (json_next(&obj, &tok) != JSON_OK || tok.type != JSON_TOK_KEY) return false;
+    if (!json_token_equals(&tok, "access_token")) return false;
     if (json_next(&obj, &tok) != JSON_OK || tok.type != JSON_TOK_STRING) return false;
     /* token_type */
     if (json_next(&obj, &tok) != JSON_OK || tok.type != JSON_TOK_KEY) return false;
@@ -138,8 +139,9 @@ static bool test_iterate_pairs(void)
     json_enter(&obj, &tok);
     for (int i = 0; i < 3; i++) {
         if (json_get_key_value(&obj, NULL, &key, &value) != JSON_OK) return false;
-        if (!json_slice_copy(keybuf, sizeof(keybuf), &key.value)) return false;
-        if (!json_slice_copy(valbuf, sizeof(valbuf), &value.value)) return false;
+        if (!json_token_copy(keybuf, sizeof(keybuf), &key)) return false;
+        if (!json_token_copy(valbuf, sizeof(valbuf), &value)) return false;
+        if (!json_token_equals(&key, exp_keys[i])) return false;
         if (strcmp(keybuf, exp_keys[i]) != 0) return false;
         if (strcmp(valbuf, exp_vals[i]) != 0) return false;
     }

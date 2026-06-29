@@ -398,6 +398,29 @@
 	export	tls_x509_hostname_matches
 	export	tls_x509_time_to_unix
 	export	tls_x509_time_in_validity
+	export	json_init
+	export	json_enter
+	export	json_next
+	export	json_slice_copy
+	export	json_get_key_value
+	export	json_get_string
+	export	json_get_number
+	export	xml_init
+	export	xml_finish
+	export	xml_take
+	export	xml_next
+	export	xml_get_attr
+	export	xml_skip
+	export	xml_get_inner_text
+	export	xml_list_attrs
+	export	xml_slice_copy
+	export	xml_decode_entity
+	export	url_encode
+	export	url_encode_n
+	export	url_decode
+	export	url_build_query
+	export	lwip_socket_listen
+	export	lwip_socket_accept
 	export	lwip_start_with_crt
 	export	lwip_get_start_errstring
 	export	lwip_is_newer
