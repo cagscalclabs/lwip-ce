@@ -101,6 +101,7 @@ dylib:
 .PHONY: release
 release:
 	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
+	cp CHANGELOG.md build/CHANGELOG.md
 	rm -f lwip.zip
 	zip -r lwip.zip build/
 
