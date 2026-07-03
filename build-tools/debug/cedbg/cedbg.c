@@ -296,8 +296,8 @@ static uint32_t hx(const char *s) { return (uint32_t)strtoul(s, NULL, 16); }
 /* Grab the remainder of the line as a single argument (filenames may contain
  * spaces). Trims leading blanks and a trailing newline. Returns NULL if empty.
  * Operates on the strtok save-pointer region, so call right after the verb. */
-static char *rest_of_line(void) {
-    char *p = strtok(NULL, "\r\n");
+static char *rest_of_line(char **saveptr) {
+    char *p = strtok_r(NULL, "\r\n", saveptr);
     if (!p) return NULL;
     while (*p == ' ' || *p == '\t') p++;
     return *p ? p : NULL;
@@ -318,13 +318,14 @@ int main(int argc, char **argv) {
     while (fgets(line, sizeof line, script)) {
         /* strip comments and trailing newline */
         char *hash = strchr(line, '#'); if (hash) *hash = 0;
-        char *tok = strtok(line, " \t\r\n");
+        char *saveptr;
+        char *tok = strtok_r(line, " \t\r\n", &saveptr);
         if (!tok) continue;
 
         if (!strcmp(tok, "help")) { usage_help(); }
         else if (!strcmp(tok, "quit") || !strcmp(tok, "exit")) { break; }
         else if (!strcmp(tok, "loadrom")) {
-            char *p = rest_of_line();
+            char *p = rest_of_line(&saveptr);
             if (!p) { printf("usage: loadrom <path>\n"); continue; }
             /* debug_init() MUST run before emu_load(): the CPU executes
              * instructions during boot and debug_inst_start() dereferences
@@ -347,8 +348,8 @@ int main(int argc, char **argv) {
             }
         }
         else if (!strcmp(tok, "send")) {
-            char *p = strtok(NULL, " \t\r\n");
-            char *loc = strtok(NULL, " \t\r\n");
+            char *p = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *loc = strtok_r(NULL, " \t\r\n", &saveptr);
             int location = (loc && !strcmp(loc, "arch")) ? LINK_ARCH : LINK_RAM;
             if (!p) { printf("usage: send <file> [ram|arch]\n"); continue; }
             int rc = emu_send_variable(p, location);
@@ -360,21 +361,21 @@ int main(int argc, char **argv) {
                    rc == LINK_WARN ? "warn" : "err");
         }
         else if (!strcmp(tok, "break")) {
-            char *a = strtok(NULL, " \t\r\n");
+            char *a = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!a) { printf("usage: break <hexaddr>\n"); continue; }
             debug_watch(hx(a), DBG_MASK_EXEC, true);
             printf("break @ %06X\n", hx(a));
         }
         else if (!strcmp(tok, "unbreak")) {
-            char *a = strtok(NULL, " \t\r\n");
+            char *a = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!a) { printf("usage: unbreak <hexaddr>\n"); continue; }
             debug_watch(hx(a), DBG_MASK_EXEC, false);
             printf("unbreak @ %06X\n", hx(a));
         }
         else if (!strcmp(tok, "watch")) {
-            char *kind = strtok(NULL, " \t\r\n");
-            char *a = strtok(NULL, " \t\r\n");
-            char *l = strtok(NULL, " \t\r\n");
+            char *kind = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *a = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *l = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!kind || !a || !l) { printf("usage: watch r|w|rw <addr> <len>\n"); continue; }
             int mask = 0;
             if (strchr(kind, 'r')) mask |= DBG_MASK_READ;
@@ -384,13 +385,13 @@ int main(int argc, char **argv) {
             printf("watch %s @ %06X len %u\n", kind, base, len);
         }
         else if (!strcmp(tok, "unwatch")) {
-            char *a = strtok(NULL, " \t\r\n");
+            char *a = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!a) { printf("usage: unwatch <hexaddr>\n"); continue; }
             debug_watch(hx(a), DBG_MASK_RW, false);
             printf("unwatch @ %06X\n", hx(a));
         }
         else if (!strcmp(tok, "run")) {
-            char *n = strtok(NULL, " \t\r\n");
+            char *n = strtok_r(NULL, " \t\r\n", &saveptr);
             uint64_t ticks = n ? strtoull(n, NULL, 10) : 5000;
             run_until_trap(ticks);
             report_trap();
@@ -398,7 +399,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(tok, "runrt")) {
             /* real-time-paced run for <seconds> (needed for physical USB
              * passthrough so libusb transfers complete in step). */
-            char *n = strtok(NULL, " \t\r\n");
+            char *n = strtok_r(NULL, " \t\r\n", &saveptr);
             unsigned secs = n ? (unsigned)strtoul(n, NULL, 10) : 10;
             run_realtime((uint64_t)secs * 1000);   /* rate 1000 -> 1000 ticks/s */
             report_trap();
@@ -416,12 +417,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(tok, "find")) {
             /* find <start> <end> <hexbytes...> -- scan memory for a byte pattern
              * via mem_peek_byte (no side effects). Prints matching addresses. */
-            char *s = strtok(NULL, " \t\r\n");
-            char *e = strtok(NULL, " \t\r\n");
+            char *s = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *e = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!s || !e) { printf("usage: find <start> <end> <b0> <b1>..\n"); continue; }
             uint8_t pat[32]; int plen = 0;
             char *bp;
-            while (plen < 32 && (bp = strtok(NULL, " \t\r\n")))
+            while (plen < 32 && (bp = strtok_r(NULL, " \t\r\n", &saveptr)))
                 pat[plen++] = (uint8_t)hx(bp);
             if (!plen) { printf("need >=1 pattern byte\n"); continue; }
             uint32_t a0 = hx(s), a1 = hx(e), hits = 0;
@@ -453,8 +454,8 @@ int main(int argc, char **argv) {
              *   usbplug ecm
              *   usbplug physical 0BDA:8153   (real host device via libusb)
              *   usbplug msd <image>          */
-            char *dev = strtok(NULL, " \t\r\n");
-            char *arg = strtok(NULL, " \t\r\n");
+            char *dev = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *arg = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!dev) { printf("usage: usbplug <ecm|physical|msd> [arg]\n"); continue; }
             const char *argv[2]; int argc = 1;
             argv[0] = dev;
@@ -473,7 +474,7 @@ int main(int argc, char **argv) {
              * calc to receive on the ECM bulk IN endpoint. */
             static uint8_t fr[1600];
             int n = 0; char *bp;
-            while (n < (int)sizeof fr && (bp = strtok(NULL, " \t\r\n")))
+            while (n < (int)sizeof fr && (bp = strtok_r(NULL, " \t\r\n", &saveptr)))
                 fr[n++] = (uint8_t)hx(bp);
             if (n == 0) { printf("usage: ecminject <b0> <b1> ..\n"); continue; }
             bool ok = ecm_inject_frame(fr, (uint16_t)n);
@@ -481,25 +482,25 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(tok, "regs")) { print_regs(); }
         else if (!strcmp(tok, "peek")) {
-            char *a = strtok(NULL, " \t\r\n");
-            char *l = strtok(NULL, " \t\r\n");
+            char *a = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *l = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!a) { printf("usage: peek <hexaddr> <len>\n"); continue; }
             do_peek(hx(a), l ? hx(l) : 16);
         }
         else if (!strcmp(tok, "poke")) {
-            char *a = strtok(NULL, " \t\r\n");
-            char *v = strtok(NULL, " \t\r\n");
+            char *a = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *v = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!a || !v) { printf("usage: poke <hexaddr> <hexbyte>\n"); continue; }
             mem_poke_byte(hx(a), (uint8_t)hx(v));
             printf("poke %06X = %02X\n", hx(a), (uint8_t)hx(v));
         }
         else if (!strcmp(tok, "shot")) {
-            char *p = strtok(NULL, " \t\r\n");
+            char *p = strtok_r(NULL, " \t\r\n", &saveptr);
             do_screenshot(p ? p : "screenshot.ppm");
         }
         else if (!strcmp(tok, "key")) {
-            char *r = strtok(NULL, " \t\r\n");
-            char *c = strtok(NULL, " \t\r\n");
+            char *r = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *c = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!r || !c) { printf("usage: key <row> <col>\n"); continue; }
             unsigned row = (unsigned)atoi(r), col = (unsigned)atoi(c);
             emu_keypad_event(row, col, true);
@@ -510,7 +511,7 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(tok, "keytok")) {
             /* inject an OS key token (hex), e.g. enter=5 clear=9 prgm=DA */
-            char *k = strtok(NULL, " \t\r\n");
+            char *k = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!k) { printf("usage: keytok <hextoken>\n"); continue; }
             inject_key((uint16_t)hx(k));
             printf("keytok %s\n", k);
@@ -519,7 +520,7 @@ int main(int argc, char **argv) {
             /* inject a raw scan code (hex) into the os_GetCSC buffer; this is
              * what ASM programs (installer, DYLRSA) poll. enter=09 clear=0F
              * 2nd=36 left=02 right=03 up=04 down=01 (sk_* codes). */
-            char *k = strtok(NULL, " \t\r\n");
+            char *k = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!k) { printf("usage: csc <hexscancode>\n"); continue; }
             for (int tries = 0; tries < 50; tries++) {
                 if (sendCSC((uint8_t)hx(k))) break;
@@ -530,8 +531,8 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(tok, "launch")) {
             /* launch <NAME> [asm]  -- types NAME after prgm and presses enter */
-            char *name = strtok(NULL, " \t\r\n");
-            char *mode = strtok(NULL, " \t\r\n");
+            char *name = strtok_r(NULL, " \t\r\n", &saveptr);
+            char *mode = strtok_r(NULL, " \t\r\n", &saveptr);
             if (!name) { printf("usage: launch <NAME> [asm]\n"); continue; }
             bool is_asm = (mode && !strcmp(mode, "asm"));
             launch_program(name, is_asm);
