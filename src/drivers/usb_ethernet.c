@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <sys/util.h>
+#include <sys/power.h>
 #include <stddef.h>
 #include <usbdrvce.h>
 
@@ -1833,6 +1834,32 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
             usb_fn.set_configuration(usb_device, &descriptor.conf, desc_len);
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                         ("NEW device=%p, type=hub", usb_device));
+
+            /* Query the hub's USB device status (GET_STATUS, §9.4.5).
+             * Bit 0 = self-powered: hub has its own supply and is not drawing
+             * bus power from the calculator. Emit a power event so the caller
+             * can see whether the hub is truly taking over power delivery. */
+            {
+                static const usb_control_setup_t get_status_setup = {
+                    .bmRequestType = USB_DEVICE_TO_HOST | USB_STANDARD_REQUEST |
+                                     USB_RECIPIENT_DEVICE,
+                    .bRequest      = USB_GET_STATUS_REQUEST,
+                    .wValue        = 0,
+                    .wIndex        = 0,
+                    .wLength       = 2
+                };
+                uint16_t hub_status = 0;
+                size_t xferd = 0;
+                usb_endpoint_t ep0 = usb_fn.get_device_endpoint(usb_device, 0);
+                if (ep0 &&
+                    usb_fn.control_transfer(ep0, &get_status_setup, &hub_status,
+                                            USB_CDC_MAX_RETRIES, &xferd) == USB_SUCCESS &&
+                    xferd == 2 &&
+                    (hub_status & USB_DEVICE_SELF_POWERED_STATUS))
+                {
+                    POWER_EVENT(LWIP_POWER_DEVICE_SELF_POWERED, boot_BatteryCharging());
+                }
+            }
         }
         /* Whether this device (hub or not) also exposes a CDC-ECM/NCM
          * interface -- a combo hub+ethernet device exposes both. Checked
@@ -1942,6 +1969,16 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         }
     }
     break;
+    case USB_HUB_LOCAL_POWER_GOOD_EVENT:
+        /* Hub switched to its own power supply — no longer drawing bus power
+         * from the calculator. Battery may now charge if a supply is present. */
+        POWER_EVENT(LWIP_POWER_HUB_GOOD, boot_BatteryCharging());
+        break;
+    case USB_HUB_LOCAL_POWER_LOST_EVENT:
+        /* Hub lost its own power supply — now drawing bus power from the
+         * calculator. This is the drain scenario we want to track. */
+        POWER_EVENT(LWIP_POWER_HUB_LOST, boot_BatteryCharging());
+        break;
     case USB_HOST_PORT_CONNECT_STATUS_CHANGE_INTERRUPT:
         return USB_ERROR_NO_DEVICE;
         break;

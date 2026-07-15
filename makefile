@@ -101,13 +101,14 @@ dylib:
 .PHONY: release
 release:
 	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
+	cp README.md build/README.md
 	cp CHANGELOG.md build/CHANGELOG.md
 	rm -f lwip.zip
 	zip -r lwip.zip build/
 
 
 .PHONY: sizes
-sizes:
+sizes:linker_script_app
 	@if [ ! -f bin/$(NAME).map ]; then echo "Run 'make' first to produce bin/$(NAME).map"; exit 1; fi
 	@printf '\nlwIP-CE memory footprint (from bin/$(NAME).map):\n\n'
 	@MAPFILE=bin/$(NAME).map python3 build-tools/scripts/print_sizes.py

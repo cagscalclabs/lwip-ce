@@ -6,6 +6,8 @@
 #include <string.h>
 
 #include <fileioc.h>
+#include <graphx.h>
+#include <sys/power.h>
 #include <lwip.h>
 #include <lwip/core/logging.h>
 
@@ -43,9 +45,10 @@
 #define IRC_CONFIG_APPVAR "IRCCFG"
 #define IRC_CONFIG_VERSION 1u
 
-#if IRC_DEBUG
 static struct irc_state *irc_debug_state;
-#endif
+
+static void irc_append_system(struct irc_state *state, const char *msg);
+static void irc_power_icons_redraw(struct irc_state *state);
 
 enum irc_input_mode
 {
@@ -82,6 +85,11 @@ struct irc_state
     uint32_t last_tls_line;
     uint16_t last_tls_extra;
 #endif
+    /* Power state icons: updated on LWIP_EV_POWER events. */
+    bool power_self_powered; /* USB adapter/hub reported self-powered         */
+    bool power_hub_good;     /* Hub has own supply (not draining calculator)  */
+    bool power_charging;     /* boot_BatteryCharging() was non-zero           */
+    bool power_icons_drawn;  /* icons are currently painted on screen         */
     char *msg_buf;
     char server[IRC_SERVER_MAX];
     char channel[IRC_CHANNEL_MAX];
@@ -481,6 +489,89 @@ static bool irc_setup_run(struct irc_state *state)
             redraw = false;
         }
     }
+}
+
+/* Power icons: 8x8 sprites blitted to the top-right corner of the screen.
+ * Pixel values are gfx 8bpp default palette indices.
+ * 0xFF = background (transparent key)
+ * 0xE3 = yellow (bolt)
+ * 0x03 = green  (USB)  */
+#define _T 0xFF
+#define _B 0xE3
+#define _U 0x03
+
+#define IRC_ICON_W          8
+#define IRC_ICON_H          8
+#define IRC_ICON_Y          0
+#define IRC_ICON_CHARGING_X 310
+#define IRC_ICON_USB_X      300
+
+/* gfx_sprite_t: { width, height, pixels[] } */
+static const struct { uint8_t w, h; uint8_t px[IRC_ICON_W * IRC_ICON_H]; }
+irc_sprite_bolt = { IRC_ICON_W, IRC_ICON_H, {
+    _T, _T, _T, _B, _B, _B, _T, _T,
+    _T, _T, _B, _B, _B, _T, _T, _T,
+    _T, _B, _B, _B, _T, _T, _T, _T,
+    _B, _B, _B, _B, _B, _B, _T, _T,
+    _T, _T, _B, _B, _B, _B, _B, _B,
+    _T, _T, _T, _T, _B, _B, _B, _T,
+    _T, _T, _T, _B, _B, _B, _T, _T,
+    _T, _T, _B, _B, _B, _T, _T, _T,
+}};
+
+static const struct { uint8_t w, h; uint8_t px[IRC_ICON_W * IRC_ICON_H]; }
+irc_sprite_usb = { IRC_ICON_W, IRC_ICON_H, {
+    _T, _U, _T, _T, _T, _U, _T, _T,
+    _T, _U, _T, _T, _T, _U, _T, _T,
+    _T, _T, _T, _U, _T, _T, _T, _T,
+    _U, _U, _U, _U, _U, _U, _U, _T,
+    _T, _T, _T, _U, _T, _T, _T, _T,
+    _T, _T, _T, _U, _T, _T, _T, _T,
+    _T, _T, _U, _U, _U, _T, _T, _T,
+    _T, _T, _T, _T, _T, _T, _T, _T,
+}};
+
+#undef _T
+#undef _B
+#undef _U
+
+static void irc_power_icons_redraw(struct irc_state *state)
+{
+    state->power_charging = boot_BatteryCharging() != 0;
+
+    gfx_SetTransparentColor(0xFF);
+    gfx_FillRectangle(IRC_ICON_USB_X, IRC_ICON_Y, IRC_ICON_W * 2 + 2, IRC_ICON_H);
+
+    if (state->power_charging)
+    {
+        gfx_TransparentSprite((gfx_sprite_t *)&irc_sprite_bolt,
+                              IRC_ICON_CHARGING_X, IRC_ICON_Y);
+    }
+
+    if (state->power_self_powered || state->power_hub_good)
+    {
+        gfx_TransparentSprite((gfx_sprite_t *)&irc_sprite_usb,
+                              IRC_ICON_USB_X, IRC_ICON_Y);
+    }
+
+    state->power_icons_drawn = true;
+    lwip_example_present();
+}
+
+#define IRC_POWER_POLL_MS 3000u
+
+static void irc_power_poll_tick(void *arg)
+{
+    struct irc_state *state = (struct irc_state *)arg;
+    bool charging = boot_BatteryCharging() != 0;
+    if (charging != state->power_charging)
+    {
+        state->power_charging = charging;
+#if !IRC_DEBUG
+        state->redraw = true;
+#endif
+    }
+    sys_timeout(IRC_POWER_POLL_MS, irc_power_poll_tick, state);
 }
 
 static void irc_append_system(struct irc_state *state, const char *msg)
@@ -927,14 +1018,61 @@ static void irc_session_reset(struct irc_state *state)
     state->chat.input_mode = input_mode;
 }
 
+static void irc_handle_power_event(struct irc_state *state,
+                                   const struct lwip_event *ev)
+{
+    const char *msg = NULL;
+    bool charging = ev->data.power.charging != 0;
+
+    switch ((lwip_power_event_t)ev->data.power.subtype)
+    {
+    case LWIP_POWER_DEVICE_SELF_POWERED:
+        state->power_self_powered = true;
+        state->power_charging = charging;
+        msg = charging ? "usb: self-pwr, charging" : "usb: self-pwr, not chg";
+        break;
+    case LWIP_POWER_HUB_GOOD:
+        state->power_hub_good = true;
+        state->power_charging = charging;
+        msg = charging ? "hub: pwr good, charging" : "hub: pwr good";
+        break;
+    case LWIP_POWER_HUB_LOST:
+        state->power_hub_good = false;
+        state->power_charging = charging;
+        msg = "hub: pwr lost, bus draw!";
+        break;
+    case LWIP_POWER_CALC_CHARGING:
+        state->power_charging = true;
+        msg = "calc: charging";
+        break;
+    case LWIP_POWER_BATT_LOW:
+        state->power_charging = false;
+        msg = "calc: battery low!";
+        break;
+    default:
+        break;
+    }
+
+    if (msg)
+    {
+        irc_append_system(state, msg);
+    }
+    irc_power_icons_redraw(state);
+}
+
 #if IRC_DEBUG
 static void irc_debug_cb(const struct lwip_event *ev)
 {
-    lwip_example_dbg_console_cb(ev);
     if (!ev || !irc_debug_state)
     {
         return;
     }
+    if (ev->kind == LWIP_EV_POWER)
+    {
+        irc_handle_power_event(irc_debug_state, ev);
+        return;
+    }
+    lwip_example_dbg_console_cb(ev);
     if (ev->kind == LWIP_EV_DEBUG ||
         ev->kind == LWIP_EV_WARN ||
         ev->kind == LWIP_EV_ERROR)
@@ -989,6 +1127,16 @@ static void irc_show_traceback(void)
         }
     }
 }
+#else
+/* Non-debug build: install a minimal callback just for power events. */
+static void irc_event_cb(const struct lwip_event *ev)
+{
+    if (!ev || !irc_debug_state || ev->kind != LWIP_EV_POWER)
+    {
+        return;
+    }
+    irc_handle_power_event(irc_debug_state, ev);
+}
 #endif
 
 static void irc_session_close(struct irc_state *state, struct lwip_socket *sock)
@@ -1038,6 +1186,9 @@ static void irc_session_run(struct irc_state *state)
     lwip_example_chat_append(&state->chat, "  ", connect_line,
                              strlen(connect_line));
     lwip_example_chat_render(&state->chat);
+#if !IRC_DEBUG
+    irc_power_icons_redraw(state);
+#endif
 
 #if IRC_DEBUG
     lwip_example_dbg_console_begin("IRC debug");
@@ -1047,10 +1198,6 @@ static void irc_session_run(struct irc_state *state)
 #endif
 
     err = lwip_socket_connect(&sock, state->server, irc_port(state));
-#if IRC_DEBUG
-    irc_debug_state = state;
-    lwip_set_event_cb(irc_debug_cb);
-#endif
     if (err != LWIP_OK)
     {
         lwip_example_show_socket_error("IRC connect", &sock, err);
@@ -1086,6 +1233,9 @@ static void irc_session_run(struct irc_state *state)
         {
             lwip_example_chat_render(&state->chat);
             state->redraw = false;
+#if !IRC_DEBUG
+            irc_power_icons_redraw(state);
+#endif
         }
 
         if (!state->connected)
@@ -1140,6 +1290,9 @@ static void irc_session_run(struct irc_state *state)
         {
             lwip_example_chat_render(&state->chat);
             state->redraw = false;
+#if !IRC_DEBUG
+            irc_power_icons_redraw(state);
+#endif
         }
         lwip_example_draw_mem_stats();
     }
@@ -1176,10 +1329,6 @@ cleanup:
     {
         lwip_socket_destroy(&sock);
     }
-#if IRC_DEBUG
-    lwip_set_event_cb(NULL);
-    irc_debug_state = NULL;
-#endif
 }
 
 int main(void)
@@ -1187,11 +1336,22 @@ int main(void)
     struct irc_state *state;
     int result = 0;
 
-    if (!lwip_example_stack_start())
+    /* Start the stack, then install the power callback, then bring the
+     * network up. Power events fire during lwip_network_up() (USB
+     * enumeration), so the callback must be live before that call.
+     * lwip_example_stack_start() combines both steps, so we open-code the
+     * sequence here to insert the callback in between. */
+    lwip_example_gfx_start();
+    lwip_example_show("lwIP runtime", NULL);
+    if (!lwip_start())
     {
-        lwip_example_show_and_wait("Stack failed to start", NULL);
+        lwip_example_show_and_wait("lwIP failed", lwip_get_start_errstring());
+        lwip_example_gfx_stop();
         return 1;
     }
+    lwip_example_gfx_blit_start();
+    lwip_example_stack_running = true;
+
     state = (struct irc_state *)mem_request(sizeof(struct irc_state));
     if (!state)
     {
@@ -1209,12 +1369,42 @@ int main(void)
     irc_set_defaults(state);
     (void)irc_config_load(state);
 
+    /* Install power callback before network up so USB enumeration events
+     * (which fire inside lwip_network_up) are captured. */
+    irc_debug_state = state;
+#if IRC_DEBUG
+    lwip_set_event_cb(irc_debug_cb);
+#else
+    lwip_set_event_cb(irc_event_cb);
+#endif
+
+    lwip_example_show("lwIP network up", NULL);
+    if (!lwip_network_up())
+    {
+        switch (lwip_start_last_error())
+        {
+        case 1: lwip_example_show_and_wait("lwIP failed", "start init"); break;
+        case 2: lwip_example_show_and_wait("lwIP failed", "start usb");  break;
+        default: lwip_example_show_and_wait("lwIP failed", "start");     break;
+        }
+        lwip_set_event_cb(NULL);
+        irc_debug_state = NULL;
+        mem_release(state->msg_buf);
+        mem_release(state);
+        return lwip_example_finish(1);
+    }
+    lwip_example_draw_mem_stats();
+    sys_timeout(IRC_POWER_POLL_MS, irc_power_poll_tick, state);
+
     while (irc_setup_run(state))
     {
         irc_session_run(state);
     }
 
+    sys_untimeout(irc_power_poll_tick, state);
     (void)irc_config_save(state);
+    lwip_set_event_cb(NULL);
+    irc_debug_state = NULL;
     mem_release(state->msg_buf);
     mem_release(state);
     return lwip_example_finish(result);

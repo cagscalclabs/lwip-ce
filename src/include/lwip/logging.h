@@ -106,8 +106,31 @@ typedef enum lwip_event_kind
     LWIP_EV_ERROR,        /* hard failure; data.code                        */
     LWIP_EV_STATE_CHG,    /* meaningful state transition; data.state         */
     LWIP_EV_IO_FILE,      /* appvar/flash read or write; data.file           */
-    LWIP_EV_IO_ETH        /* network bytes rx/tx; data.eth                   */
+    LWIP_EV_IO_ETH,       /* network bytes rx/tx; data.eth                   */
+    LWIP_EV_POWER         /* USB/calc power state change; data.power         */
 } lwip_event_kind_t;
+
+/**
+ * Power event subtypes for LWIP_EV_POWER events (lwip_event.data.power.subtype).
+ *
+ *   LWIP_POWER_DEVICE_SELF_POWERED  -- a USB device reported self-powered status
+ *                                       (not drawing bus power from the calc).
+ *   LWIP_POWER_HUB_GOOD             -- a USB hub switched to its own power supply
+ *                                       (USB_HUB_LOCAL_POWER_GOOD_EVENT).
+ *   LWIP_POWER_HUB_LOST             -- a USB hub lost its own power supply and
+ *                                       started drawing bus power from the calc
+ *                                       (USB_HUB_LOCAL_POWER_LOST_EVENT).
+ *   LWIP_POWER_CALC_CHARGING        -- calc battery is charging (USB supply present).
+ *   LWIP_POWER_BATT_LOW             -- calc battery level is low.
+ */
+typedef enum lwip_power_event
+{
+    LWIP_POWER_DEVICE_SELF_POWERED = 0,
+    LWIP_POWER_HUB_GOOD,
+    LWIP_POWER_HUB_LOST,
+    LWIP_POWER_CALC_CHARGING,
+    LWIP_POWER_BATT_LOW
+} lwip_power_event_t;
 
 /** I/O direction for IO_FILE. */
 enum lwip_io_file_dir { LWIP_IO_READ = 0, LWIP_IO_WRITE = 1 };
@@ -179,6 +202,11 @@ struct lwip_event
             uint8_t  dir;         /* lwip_io_eth_dir                     */
             uint32_t bytes;
         } eth;                   /* IO_ETH                               */
+        struct
+        {
+            uint8_t subtype;      /* lwip_power_event_t                  */
+            uint8_t charging;     /* boot_BatteryCharging() != 0         */
+        } power;                 /* POWER                                */
     } data;
 };
 
@@ -239,6 +267,7 @@ void lwip_event_emit_info(uint8_t module, const char *msg);
 void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event);
 void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes);
 void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes);
+void lwip_event_emit_power(uint8_t module, uint8_t subtype, uint8_t charging);
 void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
                                 int raw_error, uint16_t mapped_error,
                                 uint16_t status);
@@ -279,6 +308,9 @@ void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
 
 #define IO_ETH(dir, bytes) \
     lwip_event_emit_io_eth(LWIP_DBG_MODULE, (uint8_t)(dir), (uint32_t)(bytes))
+
+#define POWER_EVENT(subtype, charging) \
+    lwip_event_emit_power(LWIP_DBG_MODULE, (uint8_t)(subtype), (uint8_t)(charging))
 
 /* ----------------------------------------------------------------------
  * Compatibility shim for the lwIP core LWIP_ASSERT/LWIP_ERROR macros in

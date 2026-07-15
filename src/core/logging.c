@@ -180,6 +180,20 @@ void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes)
     g_event_fn(&ev);
 }
 
+void lwip_event_emit_power(uint8_t module, uint8_t subtype, uint8_t charging)
+{
+    if (!g_event_fn)
+    {
+        return;
+    }
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = LWIP_EV_POWER;
+    ev.data.power.subtype = subtype;
+    ev.data.power.charging = charging;
+    g_event_fn(&ev);
+}
+
 /* Compatibility entry points for the lwIP core LWIP_ASSERT/LWIP_ERROR macros
  * (debug.h), which have no file_id of their own: routed as ERROR events with
  * LWIP_FILE_NONE, exact line preserved. */
