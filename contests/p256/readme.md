@@ -84,21 +84,11 @@ Submissions that exceed the budget score 0 (not negative) on speed.
 
 ### Timing consistency penalty (side-channel metric)
 
-> **−1 point** per 1% CV, per operation, **capped at −5 points per operation** (−20 total).
-
-Specifically:
-
-```
-for each operation O in {PublicKey, Secret, Sign, Verify}:
-    cv_O = std_dev(cycles_O) / mean(cycles_O) * 100   (percent)
-    penalty += min(5, floor(cv_O))
-
-total_penalty = sum of penalty across all four operations
-```
+> **−1 point** per 1% CV, per operation, **capped at −5 points total**.
 
 A constant-time implementation has CV ≈ 0% and scores 0 penalty. An implementation whose runtime varies with secret key or input data will accumulate penalty — this is intentional. **The penalty exists to discourage timing side channels.**
 
-The cap means a maximally variable implementation loses at most 20 points, keeping the contest competitive even for non-constant-time submissions.
+The cap means a maximally variable implementation loses at most 5 points, keeping the contest competitive even for non-constant-time submissions.
 
 ### Final score
 
@@ -106,7 +96,6 @@ The cap means a maximally variable implementation loses at most 20 points, keepi
 score = speed_score - total_penalty
 ```
 
-The maximum possible penalty is 20 points (5 per operation). Scores below zero are not possible — speed score is floored at 0 and penalty is capped at 20.
 
 ---
 
@@ -116,5 +105,5 @@ The maximum possible penalty is 20 points (5 per operation). Scores below zero a
 - Public keys use **uncompressed point encoding**: `0x04 ∥ X ∥ Y` (65 bytes).
 - Signatures are raw `r ∥ s` (64 bytes), not DER-encoded.
 - The `tls_p256_sign` deterministic-k tests require RFC 6979 k derivation. If you use a random k, the exact-(r,s) tests will fail and your submission will be disqualified.
-- Stack is extremely limited on the eZ80. Prefer heap allocation for large intermediate values.
+- Stack is extremely limited on the eZ80. Prefer heap allocation for large intermediate values. We can reserve BSS within the lwIP build, so you can use a buffer allocated there for scratch.
 - You may link against the lwIP-CE dylib for SHA-256 (`tls_sha256_*`, `tls_hash_context_init`). No other cryptographic primitives are provided.
