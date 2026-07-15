@@ -1,20 +1,50 @@
-# powmod Contest
+# RSA-4096 / powmod Contest
 
-Implement a **modular exponentiation** routine for the TI-84 Plus CE in eZ80 assembly (or C) that can handle moduli up to 4096 bits.
+Extend the existing lwIP-CE RSA implementation to support moduli up to **4096 bits**, while leaking only public information — matching the side-channel properties of the current algorithm.
 
-You must implement the single function declared in `src/powmod.h`:
+The full contest directions and scoring rules are at:
+**https://github.com/cagscalclabs/lwip-ce/blob/master/contests/rsa4096/readme.md**
+
+---
+
+## API
+
+The existing `powmod_exp_u24` uses a `uint8_t` for modulus length (0 = 256), which caps at 2048 bits. Your implementation must lift that cap. The modulus length parameter becomes `uint16_t`.
+
+You may choose **either** of the following signatures — entrant's discretion:
+
+### Form 1 — fixed u24 exponent (matches current API style)
 
 ```c
 void powmod(
-    uint8_t       *result,
-    const uint8_t *base,
-    const uint8_t *exp,
-    const uint8_t *mod,
-    uint16_t       n_len
+    uint8_t        *result,
+    const uint24_t  exp,
+    const uint8_t  *base,
+    const uint8_t  *mod,
+    uint16_t        modulus_len
 );
 ```
 
-All operands are big-endian byte arrays of exactly `n_len` bytes (1–512). The modulus must be odd and greater than 1. The test harness in `src/main.c` must not be modified.
+Most public exponents are 65537 or smaller, so a 24-bit exponent covers the common RSA encrypt and verify cases.
+
+### Form 2 — variable-length exponent buffer
+
+```c
+void powmod(
+    uint8_t        *result,
+    const uint8_t  *exp,
+    uint16_t        exp_len,
+    const uint8_t  *base,
+    const uint8_t  *mod,
+    uint16_t        modulus_len
+);
+```
+
+A variable-length exponent supports full-width private exponents, which means your implementation also covers RSA decrypt and sign operations.
+
+> **Bonus: +4 points** if you implement Form 2 and it passes the full-width exponent test vectors. This effectively gives you RSA decrypt and signing for free — though without prime generation, private key creation remains out of scope.
+
+The test harness in `src/main.c` must not be modified. The harness calls `powmod()` with the signature matching whichever form you declare in `src/powmod.h`.
 
 ---
 
@@ -111,7 +141,8 @@ The maximum penalty is 5 points. Scores below zero are not possible — speed sc
 
 ## Notes
 
-- All operands are **big-endian** and exactly `n_len` bytes wide (zero-padded at the front if the value is smaller).
+- All operands are **big-endian** and exactly `modulus_len` bytes wide (zero-padded at the front if the value is smaller).
 - The modulus is always **odd** in all test vectors. Montgomery multiplication is the recommended approach.
 - Stack is extremely limited on the eZ80. Use heap allocation for intermediate working buffers — do not put 512-byte arrays on the stack.
 - The harness reports `max % delta` (largest deviation from the mean across 16 samples) as a quick on-device proxy for variance. Judges use this figure directly to compute the CV penalty.
+- The Form 2 bonus is awarded only if all full-width exponent vectors pass. Passing only the 24-bit exponent vectors with Form 2 does not qualify.
