@@ -2961,18 +2961,15 @@ int main(void)
 
     if (all) {
         srand((unsigned int)clock());
-        op_timing_t t256, t1024, t2048, t4096;
+        op_timing_t t2048, t3072, t4096;
         printf("Timing (n=%d samples each)\n", TIMING_SAMPLES);
         printf("%-10s %10s  %s\n", "Mod bits", "Avg cyc", "Max delta%%");
 
-        t256  = time_at_size(32);
-        printf("%-10s %10lu  %lu%%\n", "256",  (unsigned long)t256.avg,  (unsigned long)t256.max_delta_pct);
-
-        t1024 = time_at_size(128);
-        printf("%-10s %10lu  %lu%%\n", "1024", (unsigned long)t1024.avg, (unsigned long)t1024.max_delta_pct);
-
         t2048 = time_at_size(256);
         printf("%-10s %10lu  %lu%%\n", "2048", (unsigned long)t2048.avg, (unsigned long)t2048.max_delta_pct);
+
+        t3072 = time_at_size(384);
+        printf("%-10s %10lu  %lu%%\n", "3072", (unsigned long)t3072.avg, (unsigned long)t3072.max_delta_pct);
 
         t4096 = time_at_size(512);
         printf("%-10s %10lu  %lu%%\n", "4096", (unsigned long)t4096.avg, (unsigned long)t4096.max_delta_pct);

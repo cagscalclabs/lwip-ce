@@ -40,9 +40,11 @@ Randomly generated `(base, exp, mod, expected)` tuples verified against Python's
 |---|---|---|
 | 2 | 256-bit | 24-bit / full |
 | 2 | 512-bit | 24-bit / full |
-| 3 | 1024-bit | 24-bit / full×2 |
-| 3 | 2048-bit | 24-bit / full×2 |
-| 6 | 4096-bit | 24-bit×2 / full×4 |
+| 3 | 1024-bit | 24-bit / full / full |
+| 3 | 2048-bit | 24-bit / full / full |
+| 6 | 4096-bit | 24-bit / 24-bit / full / full / full / full |
+
+The smaller sizes exist to verify correctness at reduced widths. **Timing is only measured at 2048, 3072, and 4096 bits.**
 
 All expected values were produced offline by Python's arbitrary-precision `pow()` and are embedded in the harness.
 
@@ -56,7 +58,7 @@ To qualify for scoring, your submission **must pass all 21 vectors**. A single w
 
 ## Scoring
 
-The harness measures timing at four modulus sizes (256, 1024, 2048, 4096 bits), each with 16 random samples. It reports average cycle count and max % deviation from the mean per size.
+The harness measures timing at three modulus sizes (2048, 3072, 4096 bits), each with 16 random samples. It reports average cycle count and max % deviation from the mean per size.
 
 **The speed score is based solely on the 4096-bit timing.** Smaller sizes are reported for information only.
 
@@ -112,4 +114,4 @@ The maximum penalty is 5 points. Scores below zero are not possible — speed sc
 - All operands are **big-endian** and exactly `n_len` bytes wide (zero-padded at the front if the value is smaller).
 - The modulus is always **odd** in all test vectors. Montgomery multiplication is the recommended approach.
 - Stack is extremely limited on the eZ80. Use heap allocation for intermediate working buffers — do not put 512-byte arrays on the stack.
-- The harness uses `max % delta` (not standard deviation) as a quick proxy for variance on-device. The judges compute true CV from 16 independent harness runs for the final penalty score.
+- The harness reports `max % delta` (largest deviation from the mean across 16 samples) as a quick on-device proxy for variance. Judges use this figure directly to compute the CV penalty.
