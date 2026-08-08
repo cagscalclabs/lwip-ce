@@ -32,8 +32,6 @@ env:
   LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
   LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
   CEMU_PATH: ${{github.workspace}}/CEmu
-  CEMU_ROM_PATH: ${{secrets.CL_SECRETS_URL}}/CE.rom
-  SECRETS_TOKEN: ${{secrets.CL_SECRETS_TOKEN}}
   CEDEV: ${{github.workspace}}/CEdev
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
@@ -101,21 +99,18 @@ jobs:
 
       - name: Download CEmu Rom
         run: |
-          HTTP_CODE=$(curl -A "github/workflows" \
-            -H "Authorization: Bearer ${{ env.SECRETS_TOKEN }}" \
-            -w "%{http_code}" \
-            -o ${{ env.AUTOTESTER_ROM }} \
-            -SL ${{env.CEMU_ROM_PATH}} \
+          curl -fSL \
             --retry 3 \
-            --retry-delay 2)
+            --retry-delay 2 \
+            -o "${{github.workspace}}/CE.rom.enc" \
+            https://cagscalclabs.net/restricted/CE.rom.enc
 
-          echo "HTTP response code: ${HTTP_CODE}"
+          gpg --batch --yes \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "${{ env.AUTOTESTER_ROM }}" \
+            --decrypt "${{github.workspace}}/CE.rom.enc"
 
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "ERROR: Download failed with HTTP code ${HTTP_CODE}"
-            ls -lh ${{ env.AUTOTESTER_ROM }} || echo "No file created"
-            exit 1
-          fi
+          shred -u "${{github.workspace}}/CE.rom.enc"
 
           if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
             echo "ERROR: ROM file not created"
@@ -503,4 +498,4 @@ jobs:
 
       - name: Remove CEmu Rom
         if: always()
-        run: rm -f ${{env.AUTOTESTER_ROM}}
+        run: shred -u "${{env.AUTOTESTER_ROM}}" 2>/dev/null || true
