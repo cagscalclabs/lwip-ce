@@ -10,6 +10,7 @@
 #include <sys/power.h>
 #include <lwip.h>
 #include <lwip/core/logging.h>
+#include <lwip/core/pcap.h>
 
 #include "../../common/lwip_example.h"
 
@@ -70,6 +71,9 @@ struct irc_state
     bool redraw;
     uint8_t last_status;
     lwip_error_t err;
+    /* Services tracking */
+    bool services_failed;
+    bool pcap_enabled;
 #if IRC_DEBUG
     uint16_t err_component;
     uint16_t err_operation;
@@ -257,31 +261,47 @@ static uint16_t irc_port(const struct irc_state *state)
     return state->use_tls ? (uint16_t)IRC_TLS_PORT : (uint16_t)IRC_PORT;
 }
 
+static void irc_setup_render_field(bool active, const char *label,
+                                   const char *value, const char *hint)
+{
+    if (active)
+    {
+        lwip_example_linef("> %s  (%s)", label, hint);
+        lwip_example_line_wrapped(value);
+        lwip_example_line("  ^");
+    }
+    else
+    {
+        lwip_example_linef("  %s", label);
+        lwip_example_line_wrapped(value);
+    }
+    lwip_example_line("");
+}
+
 static void irc_setup_render(const struct irc_state *state)
 {
-    const char *server_cursor =
-        state->setup_field == IRC_SETUP_SERVER ? "> server:" : "  server:";
-    const char *nick_cursor =
-        state->setup_field == IRC_SETUP_NICK ? "> nick:" : "  nick:";
-    const char *channel_cursor =
-        state->setup_field == IRC_SETUP_CHANNEL ? "> channel:" : "  channel:";
-    const char *tls_cursor =
-        state->setup_field == IRC_SETUP_TLS ? "> tls:" : "  tls:";
+    const char *mode = irc_input_mode_name(state->chat.input_mode);
 
     lwip_example_clear();
     lwip_example_line("===== IRC setup =====");
-    lwip_example_line(server_cursor);
-    lwip_example_line(state->server);
-    lwip_example_line(nick_cursor);
-    lwip_example_line(state->nick);
-    lwip_example_line(channel_cursor);
-    lwip_example_line(state->channel);
-    lwip_example_linef("%s %s", tls_cursor, state->use_tls ? "yes" : "no");
     lwip_example_line("");
-    lwip_example_linef("mode %s", irc_input_mode_name(state->chat.input_mode));
-    lwip_example_line("Enter next/start");
-    lwip_example_line("Left/right tls");
-    lwip_example_line("Clear exits");
+
+    irc_setup_render_field(state->setup_field == IRC_SETUP_SERVER,
+                           "server:", state->server, mode);
+    irc_setup_render_field(state->setup_field == IRC_SETUP_NICK,
+                           "nick:", state->nick, mode);
+    irc_setup_render_field(state->setup_field == IRC_SETUP_CHANNEL,
+                           "channel:", state->channel, mode);
+
+    /* TLS field: value on same line, no text input */
+    if (state->setup_field == IRC_SETUP_TLS)
+        lwip_example_linef("> tls: %s  (left/right)",
+                           state->use_tls ? "yes" : "no");
+    else
+        lwip_example_linef("  tls: %s", state->use_tls ? "yes" : "no");
+
+    lwip_example_line("");
+    lwip_example_line("Enter: next/start  Clear: exit");
     lwip_example_draw_mem_stats();
     lwip_example_present();
 }
@@ -578,6 +598,69 @@ static void irc_append_system(struct irc_state *state, const char *msg)
 {
     lwip_example_chat_append(&state->chat, "* ", msg, strlen(msg));
     state->redraw = true;
+}
+
+static void irc_service_cb(struct netif *netif,
+                           const lwip_netif_service_event_t *ev,
+                           void *arg)
+{
+    struct irc_state *state = (struct irc_state *)arg;
+    char msg[40];
+    const char *svc_name;
+    const char *svc_status;
+
+    (void)netif;
+    if (!ev || !state)
+        return;
+
+    switch (ev->service_id)
+    {
+    case LWIP_SOCKET_SVC_DHCP: svc_name = "dhcp"; break;
+    case LWIP_SOCKET_SVC_DNS:  svc_name = "dns";  break;
+    case LWIP_SOCKET_SVC_SNTP: svc_name = "sntp"; break;
+    default:                   svc_name = "svc";  break;
+    }
+
+    switch (ev->status)
+    {
+    case LWIP_NETIF_SERVICE_UP:      svc_status = "up";      break;
+    case LWIP_NETIF_SERVICE_FAILED:  svc_status = "failed";  state->services_failed = true; break;
+    case LWIP_NETIF_SERVICE_TIMEOUT: svc_status = "timeout"; break;
+    default:                         svc_status = "?";       break;
+    }
+
+    snprintf(msg, sizeof(msg), "%s %s (ready: %02x)", svc_name, svc_status,
+             (unsigned)ev->ready_bitmap);
+    irc_append_system(state, msg);
+}
+
+static void irc_pcap_toggle(struct irc_state *state, struct lwip_socket *sock)
+{
+    struct netif *netif = sock->netif;
+
+    if (!netif)
+    {
+        irc_append_system(state, "pcap: no netif");
+        return;
+    }
+    if (state->pcap_enabled)
+    {
+        pcap_disable_on_netif(netif);
+        state->pcap_enabled = false;
+        irc_append_system(state, "pcap off");
+    }
+    else
+    {
+        if (pcap_enable_on_netif(netif))
+        {
+            state->pcap_enabled = true;
+            irc_append_system(state, "pcap on");
+        }
+        else
+        {
+            irc_append_system(state, "pcap enable failed");
+        }
+    }
 }
 
 static void irc_note_status(struct irc_state *state, const struct lwip_socket *sock)
@@ -996,6 +1079,8 @@ static void irc_session_reset(struct irc_state *state)
     state->redraw = false;
     state->last_status = 0xffu;
     state->err = LWIP_OK;
+    state->services_failed = false;
+    state->pcap_enabled = false;
 #if IRC_DEBUG
     state->err_component = 0;
     state->err_operation = 0;
@@ -1179,6 +1264,55 @@ static void irc_session_run(struct irc_state *state)
     lwip_socket_on_event(&sock, LWIP_SOCKET_EVENTF_ALL,
                          irc_on_event, state);
 
+    /* Request DHCP, DNS, and SNTP on the bound netif.  The service callback
+     * fires per-service and appends a system message so the user can see
+     * progress.  30 s timeout matches the connect watchdog. */
+    err = lwip_netif_request_services(sock.netif,
+                                      LWIP_SOCKET_SVC_DHCP |
+                                      LWIP_SOCKET_SVC_DNS  |
+                                      LWIP_SOCKET_SVC_SNTP,
+                                      IRC_CONNECT_TIMEOUT_MS,
+                                      irc_service_cb, state);
+    if (err != LWIP_OK)
+    {
+        lwip_example_show_socket_error("IRC services", &sock, err);
+        lwip_socket_destroy(&sock);
+        return;
+    }
+
+    irc_append_system(state, "waiting for services");
+    lwip_example_chat_render(&state->chat);
+
+    /* Gate: wait until DHCP + DNS are up before connecting.  SNTP is
+     * best-effort — we don't require it to proceed.  Bail on Clear or
+     * service hard-failure. */
+    while (!lwip_are_services_ready(sock.netif,
+                                    LWIP_SOCKET_SVC_DHCP |
+                                    LWIP_SOCKET_SVC_DNS))
+    {
+        uint8_t key;
+
+        lwip_service_events();
+        key = os_GetCSC();
+
+        if (lwip_example_cancelled(key))
+        {
+            lwip_socket_destroy(&sock);
+            return;
+        }
+        if (state->services_failed)
+        {
+            lwip_example_show_and_wait("IRC services", "failed");
+            lwip_socket_destroy(&sock);
+            return;
+        }
+        if (state->redraw)
+        {
+            lwip_example_chat_render(&state->chat);
+            state->redraw = false;
+        }
+    }
+
     lwip_example_chat_append(&state->chat, "* ", "connecting", 10);
     snprintf(connect_line, sizeof(connect_line), "%s:%u %s",
              state->server, (unsigned)irc_port(state),
@@ -1222,6 +1356,10 @@ static void irc_session_run(struct irc_state *state)
         {
             state->exiting = true;
             break;
+        }
+        if (key == sk_Store)
+        {
+            irc_pcap_toggle(state, &sock);
         }
         if (lwip_example_mem_stats_tick(key))
         {
@@ -1298,6 +1436,11 @@ static void irc_session_run(struct irc_state *state)
     }
 
 cleanup:
+    if (state->pcap_enabled && sock.netif)
+    {
+        pcap_disable_on_netif(sock.netif);
+        state->pcap_enabled = false;
+    }
     if (state && state->done && !state->exiting)
     {
 #if IRC_DEBUG

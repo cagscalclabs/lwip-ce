@@ -27,6 +27,7 @@
 #include "lwip/dhcp.h"
 #include "lwip/prot/dhcp.h"
 #include "usb_ethernet.h" /* Communications Data Class header file */
+#include "pcap.h"
 #include "lwip-imports.h" /* fn_imports_table / usb_fn dispatch table */
 #include "mem.h"
 #include "lwip/netif.h"
@@ -289,6 +290,10 @@ static bool eth_input_frame(struct netif *netif, const uint8_t *data, uint16_t l
         LINK_STATS_INC(link.drop);
         return true; /* "handled" — do NOT ring-queue a frame we can't hold */
     }
+
+    eth_device_t *dev = (eth_device_t *)netif->state;
+    if (dev->pcap_enabled)
+        pcap_write(netif, PCAP_DIR_RX, data, len);
 
     if (netif->input(p, netif) != ERR_OK)
     {
@@ -921,6 +926,8 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     }
     ctx->dev = dev;
     ctx->p = tbuf;
+    if (dev->pcap_enabled)
+        pcap_write(netif, PCAP_DIR_TX, tbuf->payload, tbuf->tot_len);
     if (usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len,
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)
     {
@@ -1233,6 +1240,13 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     // printf("sent packet %u at time %lu\n", sequence, sys_now());
     ctx->dev = dev;
     ctx->p = obuf;
+    if (dev->pcap_enabled)
+    {
+        uint8_t frame_buf[ETHERNET_MTU];
+        uint16_t frame_len = (uint16_t)pbuf_copy_partial(p, frame_buf, sizeof(frame_buf), 0);
+        if (frame_len > 0)
+            pcap_write(netif, PCAP_DIR_TX, frame_buf, frame_len);
+    }
     if (usb_fn.schedule_transfer(dev->tx.endpoint, obuf->payload, obuf->tot_len,
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)
     {

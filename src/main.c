@@ -38,6 +38,7 @@
 
 #include "drivers/mem.h"
 #include "drivers/usb_ethernet.h"
+#include "drivers/pcap.h"
 #include "lwip-imports.h"
 #include "tls/includes/handshake.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
@@ -71,6 +72,7 @@ typedef enum
     OPT_TZ_OFFSET,
     OPT_DST,
     OPT_TLS_ENABLED,
+    OPT_VIEW_PCAP,
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     OPT_SEP_TESTS,
     OPT_NTP_TEST,
@@ -150,6 +152,7 @@ static void ui_draw_footer(const char *line1, const char *line2);
 static bool config_toggle_option(struct config_option *opt);
 static bool config_edit_ip(struct config_option *opt);
 static bool config_edit_hostname(struct config_option *opt);
+static bool config_run_pcap_viewer(struct config_option *opt);
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static bool config_run_ntp_test(struct config_option *opt);
 static bool config_run_http_test(struct config_option *opt);
@@ -174,6 +177,7 @@ static struct config_option config_options[] = {
     {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"Enable TLS",      OPT_TLS_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"View pcap file",  OPT_VIEW_PCAP,    F_TYPE_ACTION,       config_run_pcap_viewer, {0}},
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
     {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
@@ -539,7 +543,12 @@ static void config_sync_from_cfg(void)
 
 static bool option_is_selectable(const struct config_option *opt)
 {
-    return opt->type != F_TYPE_LABEL && opt->type != F_TYPE_SEPARATOR;
+    if (opt->type == F_TYPE_LABEL || opt->type == F_TYPE_SEPARATOR)
+        return false;
+    /* Hide pcap viewer if no capture file exists yet. */
+    if (opt->id == OPT_VIEW_PCAP && !os_GetAppVarData("lwIPPCAP", NULL))
+        return false;
+    return true;
 }
 
 static int find_first_selectable(void)
@@ -640,6 +649,40 @@ static bool config_edit_hostname(struct config_option *opt)
     return true;
 }
 
+// Common cleanup for all tests - waits for Clear key and clears screen
+static void cleanup_test_screen(void)
+{
+    os_FontDrawText("Press Clear to exit", 10, 180);
+
+    // Clear any pending keys
+    while (os_GetCSC())
+        ;
+
+    // Wait for Clear key
+    while (1)
+    {
+        usb_HandleEvents();
+        sys_check_timeouts();
+
+        uint8_t key = os_GetCSC();
+        if (key == sk_Clear)
+        {
+            break;
+        }
+        delay_ms(10);
+    }
+
+    // Clear screen before returning to wizard
+    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+}
+
+static void cleanup_test_screen_fast(void)
+{
+    while (os_GetCSC())
+        ;
+    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+}
+
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 // Common test network state - callbacks set these
 static volatile bool test_link_up = false;
@@ -717,40 +760,6 @@ static void test_status_callback(struct netif *netif)
     {
         test_has_ip = true;
     }
-}
-
-// Common cleanup for all tests - waits for Clear key and clears screen
-static void cleanup_test_screen(void)
-{
-    os_FontDrawText("Press Clear to exit", 10, 180);
-
-    // Clear any pending keys
-    while (os_GetCSC())
-        ;
-
-    // Wait for Clear key
-    while (1)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            break;
-        }
-        delay_ms(10);
-    }
-
-    // Clear screen before returning to wizard
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-}
-
-static void cleanup_test_screen_fast(void)
-{
-    while (os_GetCSC())
-        ;
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
 }
 
 static bool test_network_available(void)
@@ -937,6 +946,168 @@ static bool setup_test_network(const char *test_name)
     return true;
 }
 
+#endif /* LWIP_APP_ENABLE_SERVICE_EXAMPLES */
+
+/* -------------------------------------------------------------------------
+ * pcap viewer
+ * ------------------------------------------------------------------------- */
+
+#define PCAP_MAX_LIST  128
+#define PCAP_HEX_COLS  16
+
+static void pcap_draw_detail(const char *title, const struct pcap *hdr,
+                             const uint8_t *data, int scroll)
+{
+    int total_rows = ((int)hdr->len + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
+    int visible = UI_CONTENT_H / UI_ROW_H;
+
+    ui_draw_header(title);
+    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
+    os_SetDrawFGColor(UI_COLOR_FG);
+    for (int v = 0; v < visible; v++)
+    {
+        int row = scroll + v;
+        if (row >= total_rows) break;
+        int y = ui_row_y(v);
+        int off = row * PCAP_HEX_COLS;
+        int n = (int)hdr->len - off;
+        if (n > PCAP_HEX_COLS) n = PCAP_HEX_COLS;
+        char buf[64];
+        int pos = snprintf(buf, sizeof(buf), "%04X ", off);
+        for (int i = 0; i < n && pos < (int)sizeof(buf) - 3; i++)
+            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%02X ", data[off + i]);
+        os_FontDrawTransText(buf, UI_MARGIN, y + UI_ROW_TEXT_OFF);
+    }
+    ui_draw_scrollbar(scroll, total_rows);
+    ui_draw_footer("<up/dn> Scroll", "<clear> Back");
+}
+
+static void pcap_viewer_detail(const struct pcap *hdr, const uint8_t *data)
+{
+    int total_rows = ((int)hdr->len + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
+    int visible = UI_CONTENT_H / UI_ROW_H;
+    int scroll = 0;
+
+    char title[28];
+    snprintf(title, sizeof(title), "%c%c%u %s %u B",
+             hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
+             hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
+             hdr->len);
+
+    pcap_draw_detail(title, hdr, data, scroll);
+    while (os_GetCSC()) ;
+    while (1)
+    {
+        uint8_t key = os_GetCSC();
+        if (!key) continue;
+        if (key == sk_Clear) break;
+        if (key == sk_Up && scroll > 0)
+            { scroll--; pcap_draw_detail(title, hdr, data, scroll); }
+        if (key == sk_Down && scroll < total_rows - visible)
+            { scroll++; pcap_draw_detail(title, hdr, data, scroll); }
+    }
+}
+
+static void pcap_draw_list(const size_t *offsets, int count, int selected, int scroll)
+{
+    int visible = UI_CONTENT_H / UI_ROW_H;
+
+    ui_draw_header("pcap viewer");
+    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
+    os_SetDrawFGColor(UI_COLOR_FG);
+
+    var_t *var = os_GetAppVarData("lwIPPCAP", NULL);
+    if (!var) return;
+    uint8_t *base = (uint8_t *)var->data;
+
+    for (int v = 0; v < visible; v++)
+    {
+        int idx = scroll + v;
+        if (idx >= count) break;
+        const struct pcap *hdr = (const struct pcap *)(base + offsets[idx]);
+        int y = ui_row_y(v);
+        ui_fill_rect(0, y, LCD_WIDTH, UI_ROW_H,
+                     idx == selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
+        os_SetDrawFGColor(UI_COLOR_FG);
+        char row[40];
+        snprintf(row, sizeof(row), "#%-3d %c%c%u %-2s %u B",
+                 idx + 1,
+                 hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
+                 hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
+                 hdr->len);
+        os_FontDrawTransText(row, UI_MARGIN, y + UI_ROW_TEXT_OFF);
+    }
+    ui_draw_scrollbar(scroll, count);
+    ui_draw_footer("<up/dn> Select  <enter> View", "<clear> Back");
+}
+
+static bool config_run_pcap_viewer(struct config_option *opt)
+{
+    (void)opt;
+
+    static size_t offsets[PCAP_MAX_LIST];
+    int count = 0;
+
+    {
+        struct pcap_reader_ctx ctx;
+        struct pcap *hdr;
+        const uint8_t *fdata;
+        pcap_init_reader_ctx(&ctx);
+        while (count < PCAP_MAX_LIST && pcap_read_next(&ctx, &hdr, &fdata))
+            offsets[count++] = ctx.offset - sizeof(struct pcap) - hdr->len;
+    }
+
+    if (count == 0)
+    {
+        fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+        os_FontDrawText("No packets captured.", 10, 40);
+        cleanup_test_screen();
+        return true;
+    }
+
+    int selected = 0;
+    int scroll = 0;
+    int visible = UI_CONTENT_H / UI_ROW_H;
+
+    while (os_GetCSC()) ;
+    pcap_draw_list(offsets, count, selected, scroll);
+
+    while (1)
+    {
+        uint8_t key = os_GetCSC();
+        if (!key) continue;
+        if (key == sk_Clear) break;
+        if (key == sk_Up && selected > 0)
+        {
+            selected--;
+            if (selected < scroll) scroll = selected;
+            pcap_draw_list(offsets, count, selected, scroll);
+        }
+        else if (key == sk_Down && selected < count - 1)
+        {
+            selected++;
+            if (selected >= scroll + visible) scroll = selected - visible + 1;
+            pcap_draw_list(offsets, count, selected, scroll);
+        }
+        else if (key == sk_Enter)
+        {
+            var_t *var = os_GetAppVarData("lwIPPCAP", NULL);
+            if (var)
+            {
+                uint8_t *base = (uint8_t *)var->data;
+                const struct pcap *hdr = (const struct pcap *)(base + offsets[selected]);
+                const uint8_t *fdata = (const uint8_t *)hdr + sizeof(struct pcap);
+                pcap_viewer_detail(hdr, fdata);
+                pcap_draw_list(offsets, count, selected, scroll);
+            }
+        }
+    }
+
+    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+    return true;
+}
+
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static bool config_run_ntp_test(struct config_option *opt)
 {
     (void)opt;

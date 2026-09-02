@@ -455,10 +455,17 @@
 .extern _url_build_query
 .extern _lwip_socket_listen
 .extern _lwip_socket_accept
+.extern _lwip_are_services_ready
+.extern _pcap_enable_on_netif
+.extern _pcap_disable_on_netif
+.extern _pcap_init_reader_ctx
+.extern _pcap_set_filter_netif
+.extern _pcap_set_filter_name_num
+.extern _pcap_read_next
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 421    ; entry count
+    d24 428    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -1014,3 +1021,12 @@ _fn_exports_table:
 ; --- src/lwIP.c ---
     d24 _lwip_socket_listen
     d24 _lwip_socket_accept
+    d24 _lwip_are_services_ready
+
+; --- src/drivers/pcap.c ---
+    d24 _pcap_enable_on_netif
+    d24 _pcap_disable_on_netif
+    d24 _pcap_init_reader_ctx
+    d24 _pcap_set_filter_netif
+    d24 _pcap_set_filter_name_num
+    d24 _pcap_read_next

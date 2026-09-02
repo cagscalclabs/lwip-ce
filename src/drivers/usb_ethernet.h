@@ -164,6 +164,7 @@ typedef struct _eth_device_t
     bool disabled_with_error;
     bool shutting_down;
     bool dhcp_auto_started;
+    bool pcap_enabled;
     /* Device unplugged / disconnected. Set FIRST in the disconnect handler,
      * before any teardown, so every callback and netif op fast-returns and
      * stops touching the (soon-to-be-freed) device. The struct is NOT freed

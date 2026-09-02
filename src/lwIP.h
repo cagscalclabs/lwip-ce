@@ -102,7 +102,6 @@ typedef struct
 typedef enum
 {
     LWIP_STATUS_INIT = 0,         /**< handle created, not connecting yet */
-    LWIP_STATUS_WAITING_SERVICES, /**< deferred: netif/link/DHCP/DNS not ready */
     LWIP_STATUS_RESOLVING,        /**< DNS lookup in flight */
     LWIP_STATUS_CONNECTING,       /**< TCP / TLS handshake in flight */
     LWIP_STATUS_CONNECTED,        /**< ready for write/read */
@@ -162,8 +161,6 @@ typedef enum
     LWIP_SOCKET_ERR_OP_CREATE,
     LWIP_SOCKET_ERR_OP_CONNECT,
     LWIP_SOCKET_ERR_OP_DNS_LOOKUP,
-    LWIP_SOCKET_ERR_OP_SERVICE_WAIT,
-    LWIP_SOCKET_ERR_OP_SERVICE_START,
     LWIP_SOCKET_ERR_OP_RECV,
     LWIP_SOCKET_ERR_OP_SEND,
     LWIP_SOCKET_ERR_OP_WRITE,
@@ -223,10 +220,25 @@ typedef enum
     LWIP_NETIF_SERVICE_TIMEOUT,
 } lwip_netif_service_status_t;
 
+/** Event payload delivered to lwip_netif_service_cb on each per-service
+ *  transition.  The callback fires once per service as it becomes ready,
+ *  fails, or times out — never batched.
+ *
+ *  service_id   — the single service that just fired (LWIP_SOCKET_SVC_*)
+ *  status       — UP / FAILED / TIMEOUT for that service
+ *  ready_bitmap — bitmask of ALL services currently up on this netif
+ *                 (same bits as LWIP_SOCKET_SVC_*; useful to check
+ *                  "are all the services I care about up?" inline) */
+typedef struct
+{
+    uint8_t                    service_id;
+    lwip_netif_service_status_t status;
+    uint8_t                    ready_bitmap;
+} lwip_netif_service_event_t;
+
 typedef void (*lwip_netif_service_cb)(struct netif *netif,
-                                      void *arg,
-                                      uint8_t service_id,
-                                      lwip_netif_service_status_t status);
+                                      const lwip_netif_service_event_t *ev,
+                                      void *arg);
 
 /** Snapshot of the default lwIP netif. */
 typedef struct
@@ -244,7 +256,6 @@ typedef struct
 } lwip_netif_info_t;
 
 /** Timing constants. */
-#define LWIP_SOCKET_SERVICES_TIMEOUT_MS  30000u
 #define LWIP_SOCKET_RX_RING_INIT_SIZE    512u
 #define LWIP_SOCKET_RX_RING_STEP_SIZE    512u
 #define LWIP_SOCKET_RX_RING_MAX_SIZE     4096u
@@ -264,7 +275,6 @@ struct lwip_socket
 
     /* Internal. */
     uint8_t   protocol;       /**< lwip_socket_type_t */
-    uint8_t   flags;          /**< service flags */
     uint8_t   aborting;
     uint16_t  remote_port;
     ip_addr_t remote_ip;
@@ -293,20 +303,20 @@ struct lwip_socket
     uint16_t                    pending_error_operation;
     lwip_status_t               pending_state_previous;
 
-    /* Deferred-connect / inactivity watchdog state. */
+    /* Connect / inactivity watchdog state. */
     const char *pending_host;
-    uint32_t    services_deadline;
     uint32_t    connect_timeout_ms;
+    uint32_t    connect_deadline; /**< inactivity watchdog arm timestamp; 0=disarmed */
     uint32_t    activity_seen;
 
-    struct lwip_socket *services_next;
     struct lwip_socket *registry_next;
 
     /* Server-side: singly-linked queue of accepted peer sockets (listen socket
      * only).  Each entry was heap-allocated by the internal accept callback and
      * is transferred to the caller via lwip_socket_accept(). */
     struct lwip_socket *accept_queue;
-    bool                is_listen; /**< pcb.tcp is a listen PCB (tcp_listen was called) */
+    struct lwip_socket *accept_next; /**< link within accept_queue chain */
+    bool                is_listen;   /**< pcb.tcp is a listen PCB (tcp_listen was called) */
 };
 
 /* ------------------------------------------------------------------ */
@@ -324,11 +334,18 @@ void     lwip_service_events(void);
 uint32_t lwip_now_ms(void);
 bool     lwip_default_netif_info(lwip_netif_info_t *info);
 
-lwip_error_t lwip_request_services(uint8_t flags);
+lwip_error_t lwip_request_services(uint8_t flags, uint32_t timeout_ms);
 lwip_error_t lwip_netif_request_services(struct netif *netif,
                                          uint8_t flags,
+                                         uint32_t timeout_ms,
                                          lwip_netif_service_cb cb,
                                          void *cb_data);
+
+/** Returns true iff every service bit set in @p flags is currently up on
+ *  @p netif (NULL = default netif).  Pure synchronous poll — no side effects,
+ *  no timer involvement.  Useful as the main-loop readiness gate after calling
+ *  lwip_netif_request_services(). */
+bool lwip_are_services_ready(struct netif *netif, uint8_t flags);
 
 /** Create a socket handle. Non-blocking: returns immediately after binding
  *  the netif preference and kicking DHCP/static-IP. Readiness is awaited

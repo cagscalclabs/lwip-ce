@@ -19,6 +19,7 @@ extern "C"
 #endif
 #include <lwip.h>
 #include <lwip/core/logging.h>
+#include <lwip/core/pcap.h>
 #ifdef __cplusplus
 #undef class
 }
@@ -583,6 +584,7 @@ public:
         service_up_mask_ = 0;
         service_failed_ = false;
         service_timed_out_ = false;
+        pcap_enabled_ = false;
         connect_watch_ticks_ = 0;
         network_watch_active_ = false;
         connect_watch_active_ = false;
@@ -647,6 +649,15 @@ public:
         payload_in.release();
         state_ = nullptr;
         initialized_ = false;
+        if (pcap_enabled_)
+        {
+            struct netif *netif = netif_default;
+            if (netif)
+            {
+                pcap_disable_on_netif(netif);
+            }
+            pcap_enabled_ = false;
+        }
         if (network_started_)
         {
             network_started_ = false;
@@ -696,9 +707,8 @@ public:
 
 private:
     static void netif_service_callback(struct netif *netif,
-                                       void *arg,
-                                       uint8_t service_id,
-                                       lwip_netif_service_status_t status);
+                                       const lwip_netif_service_event_t *ev,
+                                       void *arg);
     static void network_watch_timeout(void *arg);
     static void connect_watch_timeout(void *arg);
     static void interpreter_timeout(void *arg);
@@ -792,6 +802,7 @@ private:
     uint8_t service_up_mask_;
     bool service_failed_;
     bool service_timed_out_;
+    bool pcap_enabled_;
     bool network_watch_active_;
     bool connect_watch_active_;
     bool interpreter_watch_active_;
@@ -3350,22 +3361,21 @@ static bool browser_fetch_connect_socket(struct browser_state *state)
 }
 
 void Browser::netif_service_callback(struct netif *netif,
-                                     void *arg,
-                                     uint8_t service_id,
-                                     lwip_netif_service_status_t status)
+                                     const lwip_netif_service_event_t *ev,
+                                     void *arg)
 {
     Browser *browser = (Browser *)arg;
 
     (void)netif;
-    if (!browser)
+    if (!browser || !ev)
     {
         return;
     }
-    if (status == LWIP_NETIF_SERVICE_UP)
+    if (ev->status == LWIP_NETIF_SERVICE_UP)
     {
-        browser->service_up_mask_ |= service_id;
+        browser->service_up_mask_ |= ev->service_id;
     }
-    else if (status == LWIP_NETIF_SERVICE_TIMEOUT)
+    else if (ev->status == LWIP_NETIF_SERVICE_TIMEOUT)
     {
         browser->service_timed_out_ = true;
     }
@@ -3413,7 +3423,7 @@ void Browser::network_watch_step(void)
         {
             state_->fetch.err = LWIP_ERR_NETIF;
             state_->fetch.err_component = LWIP_SOCKET_ERR_COMP_NETIF;
-            state_->fetch.err_operation = LWIP_SOCKET_ERR_OP_SERVICE_WAIT;
+            state_->fetch.err_operation = LWIP_SOCKET_ERR_OP_CONNECT;
             state_->fetch.raw_error = service_timed_out_ ? -1 : 0;
             state_->fetch.done = true;
         }
@@ -3494,12 +3504,19 @@ bool Browser::connect(struct browser_state *state)
     {
         state->fetch.err = LWIP_ERR_NETIF;
         state->fetch.err_component = LWIP_SOCKET_ERR_COMP_NETIF;
-        state->fetch.err_operation = LWIP_SOCKET_ERR_OP_SERVICE_WAIT;
+        state->fetch.err_operation = LWIP_SOCKET_ERR_OP_CONNECT;
         state->fetch.done = true;
         return false;
     }
     if (!(flags_ & BROWSER_FLAG_READY))
     {
+        uint8_t svc_flags = LWIP_SOCKET_SVC_DHCP |
+                            LWIP_SOCKET_SVC_DNS  |
+                            LWIP_SOCKET_SVC_SNTP;
+        service_requested_mask_ = svc_flags;
+        (void)lwip_netif_request_services(nullptr, svc_flags,
+                                          BROWSER_SOCKET_TIMEOUT_MS,
+                                          netif_service_callback, this);
         browser_set_body(state, "Waiting for network");
         schedule_network_watch();
         return true;
@@ -4653,6 +4670,30 @@ int main(void)
                 browser_reload(state);
                 redraw = true;
                 break;
+            case sk_Store:
+            {
+                struct netif *netif = netif_default;
+                if (netif && state->browser)
+                {
+                    if (state->browser->pcap_enabled_)
+                    {
+                        pcap_disable_on_netif(netif);
+                        state->browser->pcap_enabled_ = false;
+                        browser_set_event_line(state, "pcap off");
+                    }
+                    else if (pcap_enable_on_netif(netif))
+                    {
+                        state->browser->pcap_enabled_ = true;
+                        browser_set_event_line(state, "pcap on");
+                    }
+                    else
+                    {
+                        browser_set_event_line(state, "pcap failed");
+                    }
+                    redraw = true;
+                }
+                break;
+            }
             case sk_Left:
                 browser_scroll_horizontal(state, -4);
                 redraw = true;

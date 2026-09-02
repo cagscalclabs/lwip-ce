@@ -288,30 +288,30 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
 
         if (tls_asn1_tag_number(ext_tlv.tag) != ASN1_SEQUENCE || !tls_asn1_tag_constructed(ext_tlv.tag))
         {
-            return false;
+            continue;
         }
         if (!tls_asn1_child_cursor(&ext_tlv, &ext_item_cursor))
         {
-            return false;
+            continue;
         }
         if (!tls_asn1_next(&ext_item_cursor, &oid_tlv))
         {
-            return false;
+            continue;
         }
         if (tls_asn1_tag_number(oid_tlv.tag) != ASN1_OBJECTID)
         {
-            return false;
+            continue;
         }
 
         if (!tls_asn1_next(&ext_item_cursor, &maybe_critical_tlv))
         {
-            return false;
+            continue;
         }
         if (tls_asn1_tag_number(maybe_critical_tlv.tag) == ASN1_BOOLEAN)
         {
             if (!tls_asn1_next(&ext_item_cursor, &value_tlv))
             {
-                return false;
+                continue;
             }
         }
         else
@@ -321,7 +321,7 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
 
         if (tls_asn1_tag_number(value_tlv.tag) != ASN1_OCTETSTRING)
         {
-            return false;
+            continue;
         }
 
         if (oid_tlv.len == sizeof(oid_basic_constraints) &&
@@ -519,30 +519,30 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
 
         if (tls_asn1_tag_number(ext_tlv.tag) != ASN1_SEQUENCE || !tls_asn1_tag_constructed(ext_tlv.tag))
         {
-            return false;
+            continue;
         }
         if (!tls_asn1_child_cursor(&ext_tlv, &ext_item_cursor))
         {
-            return false;
+            continue;
         }
         if (!tls_asn1_next(&ext_item_cursor, &oid_tlv))
         {
-            return false;
+            continue;
         }
         if (tls_asn1_tag_number(oid_tlv.tag) != ASN1_OBJECTID)
         {
-            return false;
+            continue;
         }
 
         if (!tls_asn1_next(&ext_item_cursor, &maybe_critical_tlv))
         {
-            return false;
+            continue;
         }
         if (tls_asn1_tag_number(maybe_critical_tlv.tag) == ASN1_BOOLEAN)
         {
             if (!tls_asn1_next(&ext_item_cursor, &value_tlv))
             {
-                return false;
+                continue;
             }
         }
         else
@@ -552,7 +552,7 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
 
         if (tls_asn1_tag_number(value_tlv.tag) != ASN1_OCTETSTRING)
         {
-            return false;
+            continue;
         }
 
         if (oid_tlv.len == sizeof(oid_subject_alt_name) &&

@@ -7,6 +7,7 @@ func,lwip_now_ms,socket,src/lwIP.h,lwip.h
 func,lwip_default_netif_info,socket,src/lwIP.h,lwip.h
 func,lwip_request_services,socket,src/lwIP.h,lwip.h
 func,lwip_netif_request_services,socket,src/lwIP.h,lwip.h
+func,lwip_are_services_ready,socket,src/lwIP.h,lwip.h
 func,lwip_socket_create,socket,src/lwIP.h,lwip.h
 func,lwip_socket_create_ex,socket,src/lwIP.h,lwip.h
 func,lwip_socket_destroy,socket,src/lwIP.h,lwip.h
@@ -392,6 +393,12 @@ func,udp_netif_ip_addr_changed,udp,src/include/lwip/udp.h,lwip/core/udp.h
 func,eth_get_interfaces,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
 func,netif_is_link_error,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
 func,eth_usb_event_callback,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
+func,pcap_enable_on_netif,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+func,pcap_disable_on_netif,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+func,pcap_init_reader_ctx,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+func,pcap_set_filter_netif,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+func,pcap_set_filter_name_num,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+func,pcap_read_next,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
 func,tls_x25519_publickey,cryptography,src/tls/contrib/x25519/src/x25519.h,lwip/cryptography/x25519.h
 func,tls_x25519_secret,cryptography,src/tls/contrib/x25519/src/x25519.h,lwip/cryptography/x25519.h
 struct,lwip_socket,socket,src/lwIP.h,lwip.h
@@ -711,3 +718,8 @@ func,url_decode,parsers,src/parsers/url.h,lwip/parsers/url.h
 func,url_build_query,parsers,src/parsers/url.h,lwip/parsers/url.h
 func,lwip_socket_listen,socket,src/lwIP.h,lwip.h
 func,lwip_socket_accept,socket,src/lwIP.h,lwip.h
+typedef,pcap_direction_t,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+struct,pcap,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+struct,pcap_reader_ctx,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+struct,lwip_netif_service_event_t,socket,src/lwIP.h,lwip.h
+typedef,lwip_netif_service_cb,socket,src/lwIP.h,lwip.h

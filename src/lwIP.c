@@ -91,7 +91,6 @@ static bool g_lwip_stack_started = false;
 static bool g_lwip_started = false;
 static bool g_lwip_stopping = false;
 static lwip_app_config_t g_lwip_cfg;
-static uint8_t g_requested_service_flags = 0;
 static uint8_t g_lwip_start_error = 0;
 static struct lwip_socket *g_conn_registry = NULL;
 
@@ -103,8 +102,7 @@ static lwip_socket_io_data_t    lwip_socket_io_data;
 
 typedef enum
 {
-    CONN_PENDING_WAITING = 0,
-    CONN_PENDING_RESOLVING,
+    CONN_PENDING_RESOLVING = 0,
     CONN_PENDING_CONNECTING,
     CONN_PENDING_CONNECTED,
     CONN_PENDING_READABLE,
@@ -129,8 +127,6 @@ static bool netif_has_usable_gateway(const struct netif *n);
 static bool host_requires_dns(const char *host);
 static bool dns_has_configured_server(void);
 static void lwip_socket_detach_pcb_callbacks(struct lwip_socket *conn);
-static void services_list_remove(struct lwip_socket *c);
-static void services_list_cancel_all(lwip_error_t err);
 static void netif_service_requests_cancel_all(lwip_netif_service_status_t status);
 static void services_arm(void);
 static void services_dispatch(void);
@@ -271,10 +267,6 @@ void lwip_service_events(void)
     }
     usb_fn.handle_events();
     sys_check_timeouts();
-    if (g_requested_service_flags)
-    {
-        (void)apply_service_flags(find_external_netif(), g_requested_service_flags);
-    }
     if (!g_lwip_stopping)
     {
         services_dispatch();
@@ -490,8 +482,7 @@ static bool conn_event_pop(struct lwip_socket *conn,
 
 static bool conn_pending_is_state_event(conn_pending_event_t event)
 {
-    return event == CONN_PENDING_WAITING ||
-           event == CONN_PENDING_RESOLVING ||
+    return event == CONN_PENDING_RESOLVING ||
            event == CONN_PENDING_CONNECTING ||
            event == CONN_PENDING_CONNECTED ||
            event == CONN_PENDING_CLOSING ||
@@ -505,8 +496,6 @@ static lwip_status_t conn_pending_status(conn_pending_event_t event,
 {
     switch (event)
     {
-    case CONN_PENDING_WAITING:
-        return LWIP_STATUS_WAITING_SERVICES;
     case CONN_PENDING_RESOLVING:
         return LWIP_STATUS_RESOLVING;
     case CONN_PENDING_CONNECTING:
@@ -660,7 +649,6 @@ static void conn_registry_close_tcp_like(void)
         struct lwip_socket *next = conn->registry_next;
         if (conn_registry_is_tcp_like(conn))
         {
-            services_list_remove(conn);
             (void)lwip_socket_close(conn);
             if (conn->status != LWIP_STATUS_CLOSED)
             {
@@ -693,7 +681,6 @@ static void conn_registry_close_udp(void)
         struct lwip_socket *next = conn->registry_next;
         if ((lwip_socket_type_t)conn->protocol == LWIP_SOCKET_UDP)
         {
-            services_list_remove(conn);
             (void)lwip_socket_close(conn);
         }
         conn = next;
@@ -724,7 +711,6 @@ static void conn_registry_mark_closed(lwip_error_t err)
     {
         struct lwip_socket *conn = g_conn_registry;
         conn_registry_remove(conn);
-        services_list_remove(conn);
         lwip_socket_set_pending_host(conn, NULL);
         lwip_socket_detach_pcb_callbacks(conn);
         conn->pcb.tcp = NULL;
@@ -989,8 +975,6 @@ static void lwip_stack_cleanup(void)
      * teardown pumps USB/timeouts to finish orderly TCP/TLS closes. */
     g_lwip_started = false;
     g_lwip_stopping = true;
-    g_requested_service_flags = 0;
-    services_list_cancel_all(LWIP_ERR_CLOSED);
     netif_service_requests_cancel_all(LWIP_NETIF_SERVICE_FAILED);
 
     /* ---- Phase A: wire-side close, USB still LIVE ------------------------
@@ -1225,22 +1209,11 @@ static void socket_bind_netif(struct lwip_socket *conn, struct netif *netif)
     }
 
     if (conn->bind_descriptor != LWIP_NETIF_LOOP &&
-        !netif_is_loop_network(netif))
+        !netif_is_loop_network(netif) &&
+        conn->has_addrinfo && !conn->static_applied)
     {
-        if (conn->has_addrinfo)
-        {
-            if (!conn->static_applied)
-            {
-                socket_apply_addrinfo(netif, &conn->addrinfo);
-                conn->static_applied = true;
-            }
-        }
-        else
-        {
-            (void)apply_service_flags(netif,
-                                      LWIP_SOCKET_SVC_DHCP |
-                                      LWIP_SOCKET_SVC_DNS);
-        }
+        socket_apply_addrinfo(netif, &conn->addrinfo);
+        conn->static_applied = true;
     }
 
     conn->netif = netif;
@@ -1250,17 +1223,10 @@ static void socket_bind_netif(struct lwip_socket *conn, struct netif *netif)
     }
 }
 
-lwip_error_t lwip_request_services(uint8_t flags)
+lwip_error_t lwip_request_services(uint8_t flags, uint32_t timeout_ms)
 {
-    return lwip_netif_request_services(NULL, flags, NULL, NULL);
+    return lwip_netif_request_services(NULL, flags, timeout_ms, NULL, NULL);
 }
-
-typedef enum
-{
-    LWIP_SOCKET_SERVICES_WAIT = 0,
-    LWIP_SOCKET_SERVICES_READY,
-    LWIP_SOCKET_SERVICES_FAILED,
-} lwip_socket_services_state_t;
 
 static bool lwip_socket_services_timed_out(uint32_t now, uint32_t deadline)
 {
@@ -1273,11 +1239,11 @@ static void lwip_socket_fail(struct lwip_socket *conn, lwip_error_t err)
         return;
     ERROR_CODE(err);
     lwip_socket_set_pending_host(conn, NULL);
-    conn->services_deadline = 0;
+    conn->connect_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = err;
-    conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_SERVICES,
-                       LWIP_SOCKET_ERR_OP_SERVICE_WAIT, (int)err, err);
+    conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_NETIF,
+                       LWIP_SOCKET_ERR_OP_CONNECT, (int)err, err);
 }
 
 static bool netif_has_usable_ipv4(const struct netif *n)
@@ -1342,8 +1308,9 @@ typedef struct
 {
     bool active;
     struct netif *netif;
-    uint8_t pending_flags;
-    uint32_t deadline;
+    uint8_t pending_flags; /* services not yet settled (UP/FAILED/TIMEOUT) */
+    uint8_t ready_bitmap;  /* services confirmed UP so far on this request */
+    uint32_t deadline;     /* 0 = no timeout */
     lwip_netif_service_cb cb;
     void *cb_data;
 } lwip_netif_service_request_t;
@@ -1401,7 +1368,12 @@ static void netif_service_emit(lwip_netif_service_request_t *req,
 {
     if (req && req->cb)
     {
-        req->cb(netif, req->cb_data, service_id, status);
+        lwip_netif_service_event_t ev = {
+            .service_id  = service_id,
+            .status      = status,
+            .ready_bitmap = req->ready_bitmap,
+        };
+        req->cb(netif, &ev, req->cb_data);
     }
 }
 
@@ -1436,119 +1408,92 @@ static void netif_service_requests_cancel_all(lwip_netif_service_status_t status
     }
 }
 
+/* Check and settle one service bit. Returns true if the bit was settled
+ * (either UP or timed-out) and callers should emit + clear it. */
+static void netif_service_settle_bit(lwip_netif_service_request_t *req,
+                                     struct netif *netif,
+                                     uint8_t svc_id,
+                                     bool timed_out)
+{
+    if (!(req->pending_flags & svc_id))
+        return;
+
+    if (netif_service_ready(netif, svc_id))
+    {
+        req->pending_flags &= (uint8_t)~svc_id;
+        req->ready_bitmap  |= svc_id;
+        netif_service_emit(req, netif, svc_id, LWIP_NETIF_SERVICE_UP);
+    }
+    else if (timed_out)
+    {
+        req->pending_flags &= (uint8_t)~svc_id;
+        netif_service_emit(req, netif, svc_id, LWIP_NETIF_SERVICE_TIMEOUT);
+    }
+}
+
 static void netif_services_dispatch(uint32_t now)
 {
     for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
     {
         lwip_netif_service_request_t *req = &g_netif_service_requests[i];
         if (!req->active)
-        {
             continue;
-        }
 
         struct netif *netif = req->netif ? req->netif : find_external_netif();
         uint8_t pending = req->pending_flags;
         lwip_error_t svc_err = apply_service_flags(netif, pending);
-        bool timed_out = lwip_socket_services_timed_out(now, req->deadline);
 
         if (svc_err != LWIP_OK)
         {
             req->active = false;
             req->pending_flags = 0;
             if (pending & LWIP_SOCKET_SVC_DHCP)
-            {
                 netif_service_emit(req, netif, LWIP_SOCKET_SVC_DHCP,
                                    LWIP_NETIF_SERVICE_FAILED);
-            }
             if (pending & LWIP_SOCKET_SVC_DNS)
-            {
                 netif_service_emit(req, netif, LWIP_SOCKET_SVC_DNS,
                                    LWIP_NETIF_SERVICE_FAILED);
-            }
             if (pending & LWIP_SOCKET_SVC_SNTP)
-            {
                 netif_service_emit(req, netif, LWIP_SOCKET_SVC_SNTP,
                                    LWIP_NETIF_SERVICE_FAILED);
-            }
             continue;
         }
 
-        if (pending & LWIP_SOCKET_SVC_DHCP)
-        {
-            if (netif_service_ready(netif, LWIP_SOCKET_SVC_DHCP))
-            {
-                req->pending_flags &= (uint8_t)~LWIP_SOCKET_SVC_DHCP;
-                netif_service_emit(req, netif, LWIP_SOCKET_SVC_DHCP,
-                                   LWIP_NETIF_SERVICE_UP);
-            }
-            else if (timed_out)
-            {
-                req->pending_flags &= (uint8_t)~LWIP_SOCKET_SVC_DHCP;
-                netif_service_emit(req, netif, LWIP_SOCKET_SVC_DHCP,
-                                   LWIP_NETIF_SERVICE_TIMEOUT);
-            }
-        }
-        if (pending & LWIP_SOCKET_SVC_DNS)
-        {
-            if (netif_service_ready(netif, LWIP_SOCKET_SVC_DNS))
-            {
-                req->pending_flags &= (uint8_t)~LWIP_SOCKET_SVC_DNS;
-                netif_service_emit(req, netif, LWIP_SOCKET_SVC_DNS,
-                                   LWIP_NETIF_SERVICE_UP);
-            }
-            else if (timed_out)
-            {
-                req->pending_flags &= (uint8_t)~LWIP_SOCKET_SVC_DNS;
-                netif_service_emit(req, netif, LWIP_SOCKET_SVC_DNS,
-                                   LWIP_NETIF_SERVICE_TIMEOUT);
-            }
-        }
-        if (pending & LWIP_SOCKET_SVC_SNTP)
-        {
-            if (netif_service_ready(netif, LWIP_SOCKET_SVC_SNTP))
-            {
-                req->pending_flags &= (uint8_t)~LWIP_SOCKET_SVC_SNTP;
-                netif_service_emit(req, netif, LWIP_SOCKET_SVC_SNTP,
-                                   LWIP_NETIF_SERVICE_UP);
-            }
-            else if (timed_out)
-            {
-                req->pending_flags &= (uint8_t)~LWIP_SOCKET_SVC_SNTP;
-                netif_service_emit(req, netif, LWIP_SOCKET_SVC_SNTP,
-                                   LWIP_NETIF_SERVICE_TIMEOUT);
-            }
-        }
+        /* deadline == 0 means no timeout was requested. */
+        bool timed_out = req->deadline && lwip_socket_services_timed_out(now, req->deadline);
+
+        netif_service_settle_bit(req, netif, LWIP_SOCKET_SVC_DHCP, timed_out);
+        netif_service_settle_bit(req, netif, LWIP_SOCKET_SVC_DNS,  timed_out);
+        netif_service_settle_bit(req, netif, LWIP_SOCKET_SVC_SNTP, timed_out);
 
         if (req->pending_flags == 0)
-        {
             req->active = false;
-        }
     }
 }
 
 lwip_error_t lwip_netif_request_services(struct netif *netif,
                                          uint8_t flags,
+                                         uint32_t timeout_ms,
                                          lwip_netif_service_cb cb,
                                          void *cb_data)
 {
     flags &= (LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS | LWIP_SOCKET_SVC_SNTP);
     if (!flags)
-    {
         return LWIP_ERR_ARG;
-    }
     if (!g_lwip_started || g_lwip_stopping)
-    {
         return LWIP_ERR_STATE;
-    }
 
-    g_requested_service_flags |= flags;
-    lwip_error_t err = apply_service_flags(netif ? netif : find_external_netif(),
-                                           flags);
-    if (err != LWIP_OK || !cb)
-    {
+    struct netif *target = netif ? netif : find_external_netif();
+    lwip_error_t err = apply_service_flags(target, flags);
+    if (err != LWIP_OK)
         return err;
-    }
 
+    if (!cb)
+        return LWIP_OK;
+
+    uint32_t deadline = timeout_ms ? sys_now() + timeout_ms : 0;
+
+    /* Merge into existing request for the same netif/cb/arg triple. */
     for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
     {
         lwip_netif_service_request_t *req = &g_netif_service_requests[i];
@@ -1556,7 +1501,7 @@ lwip_error_t lwip_netif_request_services(struct netif *netif,
             req->cb_data == cb_data)
         {
             req->pending_flags |= flags;
-            req->deadline = sys_now() + LWIP_SOCKET_SERVICES_TIMEOUT_MS;
+            req->deadline = deadline;
             services_arm();
             return LWIP_OK;
         }
@@ -1567,12 +1512,13 @@ lwip_error_t lwip_netif_request_services(struct netif *netif,
         lwip_netif_service_request_t *req = &g_netif_service_requests[i];
         if (!req->active)
         {
-            req->active = true;
-            req->netif = netif;
+            req->active       = true;
+            req->netif        = netif;
             req->pending_flags = flags;
-            req->deadline = sys_now() + LWIP_SOCKET_SERVICES_TIMEOUT_MS;
-            req->cb = cb;
-            req->cb_data = cb_data;
+            req->ready_bitmap  = 0;
+            req->deadline      = deadline;
+            req->cb            = cb;
+            req->cb_data       = cb_data;
             services_arm();
             return LWIP_OK;
         }
@@ -1581,266 +1527,42 @@ lwip_error_t lwip_netif_request_services(struct netif *netif,
     return LWIP_ERR_MEM;
 }
 
-/* Are the requested netif-level services ready for a connect? This also
- * resolves a lazily-created NULL conn->netif to netif_default once USB
- * enumeration creates it, and starts requested netif services the first
- * time a usable netif appears.
- *
- * A socket always needs an administratively-up, link-up netif with a
- * usable local address. With DHCP requested, also require a gateway before
- * attempting transport connect; public destinations otherwise commonly
- * fail immediately with ERR_RTE even though DHCP is still converging. */
-static lwip_socket_services_state_t services_check(struct lwip_socket *conn,
-                                                 lwip_error_t *err_out,
-                                                 const char *host)
+bool lwip_are_services_ready(struct netif *netif, uint8_t flags)
 {
-    lwip_error_t svc_err;
-
-    if (err_out)
-        *err_out = LWIP_OK;
-    if (!conn)
-        return LWIP_SOCKET_SERVICES_FAILED;
-    /* create() is non-blocking, so the qualifying netif may not have existed
-     * yet. Re-resolve it here (and apply static IP / kick DHCP) once it shows
-     * up; until then, keep waiting. */
-    if (!conn->netif)
+    struct netif *target = netif ? netif : find_external_netif();
+    if (!target)
+        return false;
+    flags &= (LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS | LWIP_SOCKET_SVC_SNTP);
+    if (!flags)
+        return true;
+    if (flags & LWIP_SOCKET_SVC_DHCP)
     {
-        struct netif *netif = socket_find_qualifying_netif(
-            (lwip_socket_bind_descriptor_t)conn->bind_descriptor);
-        if (netif)
-        {
-            socket_bind_netif(conn, netif);
-        }
+        if (!netif_service_ready(target, LWIP_SOCKET_SVC_DHCP))
+            return false;
     }
-    if (!conn->netif)
+    if (flags & LWIP_SOCKET_SVC_DNS)
     {
-        if (err_out)
-            *err_out = LWIP_ERR_NETIF;
-        return LWIP_SOCKET_SERVICES_WAIT;
+        if (!netif_service_ready(target, LWIP_SOCKET_SVC_DNS))
+            return false;
     }
-
-    svc_err = apply_service_flags(conn->netif, conn->flags);
-    if (svc_err != LWIP_OK)
+    if (flags & LWIP_SOCKET_SVC_SNTP)
     {
-        if (err_out)
-            *err_out = svc_err;
-        return LWIP_SOCKET_SERVICES_FAILED;
+        if (!netif_service_ready(target, LWIP_SOCKET_SVC_SNTP))
+            return false;
     }
-
-    if (!netif_is_up(conn->netif))
-    {
-        if (err_out)
-            *err_out = LWIP_ERR_NETIF;
-        return LWIP_SOCKET_SERVICES_WAIT;
-    }
-    if (netif_is_loop_network(conn->netif))
-    {
-        return LWIP_SOCKET_SERVICES_READY;
-    }
-    if (!netif_is_link_up(conn->netif))
-    {
-        if (err_out)
-            *err_out = LWIP_ERR_NETIF;
-        return LWIP_SOCKET_SERVICES_WAIT;
-    }
-    if (!netif_has_usable_ipv4(conn->netif))
-    {
-        if (err_out)
-            *err_out = LWIP_ERR_NETIF;
-        return LWIP_SOCKET_SERVICES_WAIT;
-    }
-
-    if (netif_default != conn->netif)
-    {
-        netif_set_default(conn->netif);
-    }
-
-#if LWIP_DHCP
-    if (conn->flags & LWIP_SOCKET_SVC_DHCP)
-    {
-        if (!dhcp_client_running(conn->netif))
-        {
-            if (err_out)
-                *err_out = LWIP_ERR_NETIF;
-            return LWIP_SOCKET_SERVICES_WAIT;
-        }
-        if (!dhcp_supplied_address(conn->netif))
-        {
-            if (err_out)
-                *err_out = LWIP_ERR_NETIF;
-            return LWIP_SOCKET_SERVICES_WAIT;
-        }
-        if (!netif_has_usable_gateway(conn->netif))
-        {
-            if (err_out)
-                *err_out = LWIP_ERR_NETIF;
-            return LWIP_SOCKET_SERVICES_WAIT;
-        }
-    }
-#endif
-#if LWIP_DNS
-    if ((conn->flags & LWIP_SOCKET_SVC_DNS) && host_requires_dns(host) &&
-        !dns_has_configured_server())
-    {
-        if (err_out)
-            *err_out = LWIP_ERR_DNS;
-        return LWIP_SOCKET_SERVICES_WAIT;
-    }
-#endif
-    return LWIP_SOCKET_SERVICES_READY;
-}
-
-/* Waiting-services list. Conns enter this list when lwip_socket_connect
- * is called against a netif that isn't ready yet; the dispatcher walks
- * the list every tick and re-attempts the deferred connects. */
-static struct lwip_socket *g_services_waiters = NULL;
-
-static void services_list_add(struct lwip_socket *c)
-{
-    /* Prepend; iteration order doesn't matter. */
-    if (!c)
-        return;
-    /* Guard against double-add. */
-    for (struct lwip_socket *cur = g_services_waiters; cur; cur = cur->services_next)
-    {
-        if (cur == c)
-            return;
-    }
-    c->services_next = g_services_waiters;
-    g_services_waiters = c;
-}
-
-static void services_list_remove(struct lwip_socket *c)
-{
-    if (!c)
-        return;
-    struct lwip_socket **slot = &g_services_waiters;
-    while (*slot)
-    {
-        if (*slot == c)
-        {
-            *slot = c->services_next;
-            c->services_next = NULL;
-            return;
-        }
-        slot = &(*slot)->services_next;
-    }
-}
-
-static void services_list_cancel_all(lwip_error_t err)
-{
-    while (g_services_waiters)
-    {
-        struct lwip_socket *conn = g_services_waiters;
-        services_list_remove(conn);
-        lwip_socket_set_pending_host(conn, NULL);
-        conn->services_deadline = 0;
-        conn->status = LWIP_STATUS_CLOSED;
-        conn->last_error = err;
-    }
-    lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES, 0);
-}
-
-/* Forward decls so the services dispatcher can drive a connect. */
-static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
-                                          const char *host, uint16_t port);
-static void services_arm(void);
-
-static lwip_error_t lwip_socket_wait_for_services(struct lwip_socket *conn,
-                                                const char *host,
-                                                uint16_t port,
-                                                uint32_t deadline)
-{
-    /* Deferring a connect requires owning the host string. If we already
-     * owned one from a previous attempt, free it first. */
-    lwip_error_t host_err = lwip_socket_set_pending_host(conn, host);
-    if (host_err != LWIP_OK)
-        return host_err;
-
-    conn->remote_port = port;
-    conn->status = LWIP_STATUS_WAITING_SERVICES;
-    conn->last_error = LWIP_OK;
-    conn->services_deadline = deadline;
-    services_list_add(conn);
-    conn_event_enqueue(conn, CONN_PENDING_WAITING, LWIP_OK);
-    DEBUG();
-#if LWIP_DNS
-    if ((conn->flags & LWIP_SOCKET_SVC_DNS) && host_requires_dns(host) &&
-        !dns_has_configured_server())
-    {
-        DEBUG();
-    }
-#endif
-    services_arm();
-    return LWIP_OK;
+    return true;
 }
 
 static void services_dispatch(void)
 {
-    if (!g_services_waiters && !netif_service_requests_active())
+    if (!netif_service_requests_active())
     {
-        /* Nothing to do — disable ourselves until something gets added. */
         lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES, 0);
         return;
     }
-
-    uint32_t now = sys_now();
-    netif_services_dispatch(now);
-
-    struct lwip_socket *c = g_services_waiters;
-    while (c)
-    {
-        struct lwip_socket *next = c->services_next;
-        lwip_error_t svc_err = LWIP_OK;
-        lwip_socket_services_state_t svc_state = services_check(c, &svc_err,
-                                                              c->pending_host);
-        if (svc_state == LWIP_SOCKET_SERVICES_READY)
-        {
-            uint16_t port = c->remote_port;
-            uint32_t deadline = c->services_deadline;
-            lwip_error_t err;
-
-            /* We must NOT free pending_host yet. If connect_now starts
-             * DNS resolution, it needs this pointer to remain valid. */
-            services_list_remove(c);
-            c->services_deadline = 0;
-
-            err = lwip_socket_connect_now(c, c->pending_host, port);
-
-            if (err == LWIP_ERR_NETIF)
-            {
-                WARN_CODE(LWIP_ERR_NETIF);
-                /* Transient routing (ERR_RTE/IF) — re-park and let the
-                 * inactivity watchdog, not a fixed deadline, decide when to
-                 * give up. Preserves the existing pending_host. */
-                (void)lwip_socket_wait_for_services(c, c->pending_host, port, deadline);
-            }
-            else if (err != LWIP_OK)
-            {
-                lwip_socket_set_pending_host(c, NULL);
-                c->status = LWIP_STATUS_ERROR;
-                c->last_error = err;
-                conn_error_enqueue(c, conn_transport_component(c),
-                                   LWIP_SOCKET_ERR_OP_CONNECT, (int)err, err);
-            }
-            /* If err == LWIP_OK, either it's connected or resolving.
-             * If resolving, pending_host is now owned by the DNS state. */
-        }
-        else if (svc_state == LWIP_SOCKET_SERVICES_FAILED)
-        {
-            services_list_remove(c);
-            lwip_socket_set_pending_host(c, NULL);
-            lwip_socket_fail(c, svc_err ? svc_err : LWIP_ERR_NETIF);
-        }
-        /* Still WAITING: stay parked. conn_connect_watchdog owns the
-         * inactivity timeout (it covers RESOLVING/CONNECTING too). */
-        c = next;
-    }
-
-    if (!g_services_waiters && !netif_service_requests_active())
-    {
+    netif_services_dispatch(sys_now());
+    if (!netif_service_requests_active())
         lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES, 0);
-    }
 }
 
 static void services_arm(void)
@@ -1856,7 +1578,7 @@ static void services_arm(void)
 /* ============================================================
  * Connect/handshake inactivity watchdog
  *
- * A socket in WAITING_SERVICES / RESOLVING / CONNECTING is failed only
+ * A socket in RESOLVING / CONNECTING is failed only
  * after `connect_window` ms of NO inbound line activity (eth_last_rx_activity_ms
  * stops advancing). Any received frame pushes the deadline forward, so a
  * slow-but-progressing DNS lookup or TLS handshake is never killed — only a
@@ -1870,13 +1592,12 @@ static uint32_t conn_window_ms(const struct lwip_socket *conn)
     {
         return conn->connect_timeout_ms;
     }
-    return LWIP_SOCKET_SERVICES_TIMEOUT_MS;
+    return 30000u; /* 30 s default inactivity window */
 }
 
 static bool conn_in_connect_phase(const struct lwip_socket *conn)
 {
-    return conn && (conn->status == LWIP_STATUS_WAITING_SERVICES ||
-                    conn->status == LWIP_STATUS_RESOLVING ||
+    return conn && (conn->status == LWIP_STATUS_RESOLVING ||
                     conn->status == LWIP_STATUS_CONNECTING);
 }
 
@@ -1890,9 +1611,8 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
     {
         return;
     }
-    services_list_remove(conn);
     lwip_socket_set_pending_host(conn, NULL);
-    conn->services_deadline = 0;
+    conn->connect_deadline = 0;
     lwip_socket_detach_pcb_callbacks(conn);
     switch ((lwip_socket_type_t)conn->protocol)
     {
@@ -1944,16 +1664,16 @@ static void conn_connect_watchdog(uint32_t now)
         {
             /* Not connecting: keep the deadline disarmed and the activity
              * snapshot current so the next connect attempt arms cleanly. */
-            conn->services_deadline = 0;
+            conn->connect_deadline = 0;
             conn->activity_seen = activity;
             conn = next;
             continue;
         }
 
-        if (conn->services_deadline == 0)
+        if (conn->connect_deadline == 0)
         {
             /* Just entered a connect phase — arm a fresh idle window. */
-            conn->services_deadline = now + conn_window_ms(conn);
+            conn->connect_deadline = now + conn_window_ms(conn);
             conn->activity_seen = activity;
         }
         else if (activity != conn->activity_seen)
@@ -1961,9 +1681,9 @@ static void conn_connect_watchdog(uint32_t now)
             /* Inbound line activity since last tick: the connect is making
              * progress, so push the idle deadline forward. */
             conn->activity_seen = activity;
-            conn->services_deadline = now + conn_window_ms(conn);
+            conn->connect_deadline = now + conn_window_ms(conn);
         }
-        else if (lwip_socket_services_timed_out(now, conn->services_deadline))
+        else if (lwip_socket_services_timed_out(now, conn->connect_deadline))
         {
             conn_connect_fail_timeout(conn);
         }
@@ -2352,7 +2072,6 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
                                    size_t rx_ring_max)
 {
     lwip_error_t attach_err;
-    uint8_t flags;
 
     if (!conn)
         return LWIP_ERR_ARG;
@@ -2369,13 +2088,8 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
     conn->status = LWIP_STATUS_INIT;
     conn->protocol = (uint8_t)protocol;
     conn->connect_timeout_ms = timeout_ms;
-    flags = addrinfo || bind == LWIP_NETIF_LOOP ?
-        LWIP_SOCKET_SVC_DNS :
-        (LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS);
-    conn->flags = flags;
     conn->rx_ring_init = LWIP_SOCKET_RX_RING_INIT_SIZE;
     conn->rx_ring_max = rx_ring_max ? rx_ring_max : LWIP_SOCKET_RX_RING_MAX_SIZE;
-    g_requested_service_flags |= flags;
 
     attach_err = socket_attach_netif(conn, bind, addrinfo, timeout_ms);
     if (attach_err != LWIP_OK)
@@ -2503,14 +2217,11 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
     if (!conn)
         return LWIP_ERR_ARG;
     conn_registry_remove(conn);
-    /* Drop from the services waiter list if we were parked. Safe no-op
-     * for conns that never entered WAITING_SERVICES. */
-    services_list_remove(conn);
     /* Drain any queued-but-not-yet-accepted peer sockets on a listener. */
     while (conn->accept_queue)
     {
         struct lwip_socket *q = conn->accept_queue;
-        conn->accept_queue = q->services_next;
+        conn->accept_queue = q->accept_next;
         conn_registry_remove(q);
         if (q->pcb.tcp)
         {
@@ -2628,7 +2339,7 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
     if (!ipaddr)
     {
         lwip_socket_set_pending_host(c, NULL);
-        c->services_deadline = 0;
+        c->connect_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = LWIP_ERR_DNS;
         ERROR_CODE(c->last_error);
@@ -2645,19 +2356,8 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
     if (err != ERR_OK)
     {
         lwip_error_t mapped = lwip_err_translate(err);
-        if (mapped == LWIP_ERR_NETIF)
-        {
-            uint32_t deadline = c->services_deadline;
-            if (!deadline)
-            {
-                deadline = sys_now() + LWIP_SOCKET_SERVICES_TIMEOUT_MS;
-            }
-            (void)lwip_socket_wait_for_services(c, c->pending_host ? c->pending_host : name,
-                                              c->remote_port, deadline);
-            return;
-        }
         lwip_socket_set_pending_host(c, NULL);
-        c->services_deadline = 0;
+        c->connect_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = mapped;
         ERROR_CODE(c->last_error);
@@ -2667,7 +2367,7 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
         return;
     }
     lwip_socket_set_pending_host(c, NULL);
-    c->services_deadline = 0;
+    c->connect_deadline = 0;
 }
 #endif /* LWIP_DNS */
 
@@ -2729,7 +2429,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
             return conn->last_error;
         }
         lwip_socket_set_pending_host(conn, NULL);
-        conn->services_deadline = 0;
+        conn->connect_deadline = 0;
         return LWIP_OK;
     }
 #if LWIP_IPV6
@@ -2750,7 +2450,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
             return conn->last_error;
         }
         lwip_socket_set_pending_host(conn, NULL);
-        conn->services_deadline = 0;
+        conn->connect_deadline = 0;
         return LWIP_OK;
     }
 #endif
@@ -2760,10 +2460,6 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     if (host_err != LWIP_OK)
         return host_err;
 
-    if (!conn->services_deadline)
-    {
-        conn->services_deadline = sys_now() + LWIP_SOCKET_SERVICES_TIMEOUT_MS;
-    }
     conn->status = LWIP_STATUS_RESOLVING;
     conn_event_enqueue(conn, CONN_PENDING_RESOLVING, LWIP_OK);
     err_t derr = dns_gethostbyname(conn->pending_host, &conn->remote_ip,
@@ -2772,10 +2468,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     {
         /* Cached hit — drive the next stage synchronously. conn_dns_found_cb
          * may itself fail (e.g. tcp_connect() returning ERR_MEM) and set
-         * conn->status/last_error accordingly; surface that instead of
-         * blindly reporting success. WAITING_SERVICES is the one non-error,
-         * non-connected outcome (conn_dns_found_cb parked us on the
-         * services waiter after an ERR_NETIF) — also fine to report OK. */
+         * conn->status/last_error accordingly; surface that. */
         conn_dns_found_cb(host, &conn->remote_ip, conn);
         if (conn->status == LWIP_STATUS_ERROR)
         {
@@ -2788,7 +2481,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         return LWIP_OK; /* async — caller polls status */
     }
     lwip_socket_set_pending_host(conn, NULL);
-    conn->services_deadline = 0;
+    conn->connect_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
     ERROR_CODE(conn->last_error);
@@ -2798,7 +2491,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     return LWIP_ERR_DNS;
 #else
     conn->pending_host = NULL;
-    conn->services_deadline = 0;
+    conn->connect_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
     ERROR_CODE(conn->last_error);
@@ -2817,48 +2510,40 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
         return LWIP_ERR_ARG;
     if (conn->status == LWIP_STATUS_CONNECTED ||
         conn->status == LWIP_STATUS_CONNECTING ||
-        conn->status == LWIP_STATUS_RESOLVING ||
-        conn->status == LWIP_STATUS_WAITING_SERVICES)
+        conn->status == LWIP_STATUS_RESOLVING)
     {
         return LWIP_ERR_STATE;
     }
 
-    lwip_error_t svc_err = LWIP_OK;
-    uint32_t deadline = sys_now() + conn_window_ms(conn);
-    lwip_socket_services_state_t svc_state = services_check(conn, &svc_err, host);
-
-    /* Fast path: services already up — drive the connect synchronously.
-     * If routing still says "not yet" (ERR_RTE/ERR_IF), fall back into
-     * the waiter instead of surfacing a transient connect failure. */
-    if (svc_state == LWIP_SOCKET_SERVICES_READY)
+    /* Resolve the netif if create() ran before USB enumerated. */
+    if (!conn->netif)
     {
-        lwip_error_t err = lwip_socket_connect_now(conn, host, port);
-        if (err != LWIP_ERR_NETIF)
-        {
-            return err;
-        }
+        struct netif *netif = socket_find_qualifying_netif(
+            (lwip_socket_bind_descriptor_t)conn->bind_descriptor);
+        if (netif)
+            socket_bind_netif(conn, netif);
     }
-    else if (svc_state == LWIP_SOCKET_SERVICES_FAILED)
+
+    /* Require a usable netif — the app is responsible for ensuring
+     * services (DHCP, DNS, SNTP) are ready before calling connect. */
+    if (!conn->netif ||
+        !netif_is_up(conn->netif) ||
+        (!netif_is_loop_network(conn->netif) && !netif_is_link_up(conn->netif)) ||
+        (!netif_is_loop_network(conn->netif) && !netif_has_usable_ipv4(conn->netif)))
     {
         conn->status = LWIP_STATUS_ERROR;
-        conn->last_error = svc_err ? svc_err : LWIP_ERR_NETIF;
-        ERROR_CODE(conn->last_error);
-        conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_SERVICES,
-                           LWIP_SOCKET_ERR_OP_SERVICE_WAIT,
-                           (int)conn->last_error, conn->last_error);
-        return conn->last_error;
+        conn->last_error = LWIP_ERR_NETIF;
+        ERROR_CODE(LWIP_ERR_NETIF);
+        conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_NETIF,
+                           LWIP_SOCKET_ERR_OP_CONNECT,
+                           (int)LWIP_ERR_NETIF, LWIP_ERR_NETIF);
+        return LWIP_ERR_NETIF;
     }
 
-    /* Slow path: park the conn on the services waiter list. The
-     * services dispatcher polls every 100 ms and re-attempts the
-     * connect once netif_is_up && link_up && (DHCP got an IP if
-     * requested). On services timeout we transition to ERROR with
-     * LWIP_ERR_NETIF.
-     *
-     * NOTE: `host` is borrowed; the caller must keep it alive until
-     * the conn leaves WAITING_SERVICES. Callers passing string
-     * literals are safe. */
-    return lwip_socket_wait_for_services(conn, host, port, deadline);
+    if (netif_default != conn->netif && netif_is_external_network(conn->netif))
+        netif_set_default(conn->netif);
+
+    return lwip_socket_connect_now(conn, host, port);
 }
 
 /* ============================================================
@@ -2904,9 +2589,9 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     /* Append to listener's accept queue (FIFO). */
     struct lwip_socket **tail = &listener->accept_queue;
     while (*tail)
-        tail = &(*tail)->services_next;
+        tail = &(*tail)->accept_next;
     *tail = peer;
-    peer->services_next = NULL;
+    peer->accept_next = NULL;
 
     return ERR_OK;
 }
@@ -2944,8 +2629,8 @@ lwip_error_t lwip_socket_accept(struct lwip_socket *listener,
         return LWIP_ERR_STATE;
 
     struct lwip_socket *src = listener->accept_queue;
-    listener->accept_queue = src->services_next;
-    src->services_next = NULL;
+    listener->accept_queue = src->accept_next;
+    src->accept_next = NULL;
 
     /* Transfer the fully-initialised peer socket into caller's storage. */
     memcpy(peer, src, sizeof(*peer));
@@ -3153,10 +2838,6 @@ lwip_error_t lwip_socket_close(struct lwip_socket *conn)
     closing_tcp = lwip_socket_leaf_tcp_pcb(conn);
     wait_for_tcp = closing_tcp && !g_lwip_stopping;
 
-    /* Cancel any pending service work (DHCP/DNS) and free the host string
-     * before clearing the handle. This prevents memory leaks and
-     * use-after-free during deferred connects. */
-    services_list_remove(conn);
     lwip_socket_set_pending_host(conn, NULL);
 
     /* Detach BEFORE attempting close so a deferred FIN ACK/err cb
@@ -3242,7 +2923,6 @@ lwip_error_t lwip_socket_abort(struct lwip_socket *conn)
         return LWIP_ERR_ARG;
     conn_registry_remove(conn);
     lwip_socket_set_pending_host(conn, NULL);
-    services_list_remove(conn);
     switch ((lwip_socket_type_t)conn->protocol)
     {
 #if LWIP_TCP
@@ -3321,7 +3001,6 @@ bool lwip_socket_is_active(const struct lwip_socket *conn)
     switch (conn->status)
     {
     case LWIP_STATUS_INIT:
-    case LWIP_STATUS_WAITING_SERVICES:
     case LWIP_STATUS_RESOLVING:
     case LWIP_STATUS_CONNECTING:
     case LWIP_STATUS_CONNECTED:
@@ -3362,11 +3041,11 @@ lwip_error_t lwip_socket_set_connect_timeout(struct lwip_socket *conn,
         return LWIP_ERR_ARG;
     }
     conn->connect_timeout_ms = timeout_ms; /* 0 ⇒ default window */
-    /* Re-arm: the watchdog recomputes services_deadline from the new window
-     * on its next tick (services_deadline==0 ⇒ fresh arm) when connecting. */
+    /* Re-arm: the watchdog recomputes connect_deadline from the new window
+     * on its next tick (connect_deadline==0 ⇒ fresh arm) when connecting. */
     if (conn_in_connect_phase(conn))
     {
-        conn->services_deadline = 0;
+        conn->connect_deadline = 0;
     }
     return LWIP_OK;
 }

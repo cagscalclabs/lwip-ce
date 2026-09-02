@@ -1049,7 +1049,6 @@ static const char *lwip_example_socket_status_name(lwip_status_t status)
     switch (status)
     {
     case LWIP_STATUS_INIT:             return "init";
-    case LWIP_STATUS_WAITING_SERVICES: return "waiting";
     case LWIP_STATUS_RESOLVING:        return "resolving";
     case LWIP_STATUS_CONNECTING:       return "connecting";
     case LWIP_STATUS_CONNECTED:        return "connected";
