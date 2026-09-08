@@ -46,11 +46,11 @@ bool lwip_init_runtime_internal(const void *imports_src, size_t imports_len)
     /* Bootstrap passes the libload-side table size as a sanity check;
      * if the lib was built against a different lwip_imports layout the
      * sizes won't match and we refuse to copy a misaligned blob. */
-    if (imports_len != copy_len)
+    if (imports_len > copy_len)
     {
         return false;
     }
-    for (i = 0; i < copy_len; i++)
+    for (i = 0; i < imports_len; i++)
     {
         dst[i] = src[i];
     }

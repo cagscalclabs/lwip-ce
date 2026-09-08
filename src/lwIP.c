@@ -46,6 +46,7 @@
 #include "drivers/mem.h"
 #include "lwip-imports.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
+#include "apps/altcp_ws/altcp_ws.h"
 #include "tls/includes/tls.h"
 
 #include <usbdrvce.h>
@@ -543,6 +544,8 @@ static lwip_socket_error_component_t conn_transport_component(
         return LWIP_SOCKET_ERR_COMP_UDP;
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         return LWIP_SOCKET_ERR_COMP_ALTCP;
     default:
         return LWIP_SOCKET_ERR_COMP_SOCKET;
@@ -635,6 +638,8 @@ static bool conn_registry_is_tcp_like(const struct lwip_socket *conn)
 #endif
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         return true;
     default:
         return false;
@@ -781,6 +786,8 @@ static struct tcp_pcb *lwip_socket_leaf_tcp_pcb(struct lwip_socket *conn)
 #endif
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
     {
         struct altcp_pcb *leaf = conn->pcb.altcp;
         while (leaf && leaf->inner_conn)
@@ -890,6 +897,20 @@ static bool dhcp_client_running(const struct netif *n)
     return dhcp && dhcp->state != DHCP_STATE_OFF;
 }
 #endif
+
+/* A retained address is not proof that DHCP has finished acquiring a lease.
+ * Static interfaces have no running DHCP client. BOUND, RENEWING and REBINDING
+ * retain a valid lease, as defined by dhcp_supplied_address(). */
+static bool netif_address_configuration_ready(const struct netif *n)
+{
+    if (!n || !netif_has_usable_ipv4(n))
+        return false;
+#if LWIP_DHCP
+    if (dhcp_client_running(n) && !dhcp_supplied_address(n))
+        return false;
+#endif
+    return true;
+}
 
 static void copy_ip4_octets(uint8_t out[4], const ip4_addr_t *addr)
 {
@@ -1097,7 +1118,7 @@ static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags)
     if (svc_flags & LWIP_SOCKET_SVC_SNTP)
     {
         if (!netif_is_up(n) || !netif_is_link_up(n) ||
-            !netif_has_usable_ipv4(n) ||
+            !netif_address_configuration_ready(n) ||
             !netif_has_usable_gateway(n))
         {
             return LWIP_OK;
@@ -1344,13 +1365,13 @@ static bool netif_service_ready(struct netif *netif, uint8_t service_id)
 #endif
     case LWIP_SOCKET_SVC_DNS:
 #if LWIP_DNS
-        return netif_has_usable_ipv4(netif) && dns_has_configured_server();
+        return netif_address_configuration_ready(netif) && dns_has_configured_server();
 #else
         return true;
 #endif
     case LWIP_SOCKET_SVC_SNTP:
 #if LWIP_SNTP
-        return netif_has_usable_ipv4(netif) &&
+        return netif_address_configuration_ready(netif) &&
                netif_has_usable_gateway(netif) &&
                sntp_enabled() != 0;
 #else
@@ -1628,6 +1649,8 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
 #endif
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
             struct altcp_pcb *pcb = conn->pcb.altcp;
@@ -1638,6 +1661,11 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
         {
             altcp_tls_ce_free_config(conn->tls_conf);
             conn->tls_conf = NULL;
+        }
+        if (conn->ws_conf)
+        {
+            altcp_ws_free_config(conn->ws_conf);
+            conn->ws_conf = NULL;
         }
         break;
     default:
@@ -2018,6 +2046,8 @@ static void rebind_pcb_callbacks(struct lwip_socket *c)
     {
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         if (c->pcb.altcp)
         {
             altcp_arg(c->pcb.altcp, c);
@@ -2146,6 +2176,13 @@ lwip_error_t lwip_socket_create_ex(struct lwip_socket *conn,
         conn->tls_conf = NULL;
         conn->pcb.altcp = NULL;
         break;
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
+        /* ws_conf and pcb are created at connect() once the host/path are known. */
+        conn->ws_conf    = NULL;
+        conn->tls_conf   = NULL;
+        conn->pcb.altcp  = NULL;
+        break;
     default:
         lwip_socket_rx_ring_destroy(conn);
         return LWIP_ERR_PROTO;
@@ -2198,6 +2235,8 @@ static void lwip_socket_detach_pcb_callbacks(struct lwip_socket *conn)
         break;
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
             altcp_arg(conn->pcb.altcp, NULL);
@@ -2256,6 +2295,8 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
         break;
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
             altcp_abort(conn->pcb.altcp);
@@ -2263,6 +2304,11 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
         if (conn->tls_conf)
         {
             altcp_tls_ce_free_config(conn->tls_conf);
+        }
+        if (conn->ws_conf)
+        {
+            altcp_ws_free_config(conn->ws_conf);
+            conn->ws_conf = NULL;
         }
         break;
     default:
@@ -2305,6 +2351,8 @@ static err_t start_transport_connect(struct lwip_socket *c)
     }
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
     {
         struct altcp_pcb *leaf = c->pcb.altcp;
         while (leaf && leaf->inner_conn)
@@ -2335,7 +2383,11 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
      * aborted this conn (status != RESOLVING, pcb torn down). Acting on it then
      * would re-enter connect on a dead pcb — drop the stale result. */
     if (c->status != LWIP_STATUS_RESOLVING)
+    {
+        INFO("dns: stale callback ignored");
         return;
+    }
+    INFO(ipaddr ? "dns: address received" : "dns: lookup failed");
     if (!ipaddr)
     {
         lwip_socket_set_pending_host(c, NULL);
@@ -2409,6 +2461,85 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         rebind_pcb_callbacks(conn);
     }
 
+    /* WS/WSS: build ws_conf + pcb now that host and path are known. */
+    if ((conn->protocol == LWIP_SOCKET_ALTCP_WS ||
+         conn->protocol == LWIP_SOCKET_ALTCP_WSS) &&
+        conn->pcb.altcp == NULL)
+    {
+        const char *ws_path = conn->ws_conf ? conn->ws_conf->path : "/";
+        const char *ws_sub  = conn->ws_conf ? conn->ws_conf->subprotocol : NULL;
+
+        /* ws_conf created by the socket layer is the app's — free it, rebuild
+         * with the resolved host so the HTTP Host header is correct. */
+        if (conn->ws_conf)
+        {
+            altcp_ws_free_config(conn->ws_conf);
+            conn->ws_conf = NULL;
+        }
+        conn->ws_conf = altcp_ws_create_config(host, ws_path, ws_sub);
+        if (!conn->ws_conf)
+        {
+            conn->status     = LWIP_STATUS_ERROR;
+            conn->last_error = LWIP_ERR_MEM;
+            conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_ALTCP,
+                               LWIP_SOCKET_ERR_OP_CREATE, (int)ERR_MEM,
+                               LWIP_ERR_MEM);
+            return LWIP_ERR_MEM;
+        }
+
+        if (conn->protocol == LWIP_SOCKET_ALTCP_WSS)
+        {
+            if (!g_lwip_cfg.tls_enabled ||
+                (!tls_ctx.initialized && !tls_init()))
+            {
+                altcp_ws_free_config(conn->ws_conf);
+                conn->ws_conf    = NULL;
+                conn->status     = LWIP_STATUS_ERROR;
+                conn->last_error = LWIP_ERR_MEM;
+                conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_TLS,
+                                   LWIP_SOCKET_ERR_OP_TLS_INIT, (int)ERR_MEM,
+                                   LWIP_ERR_MEM);
+                return LWIP_ERR_MEM;
+            }
+            conn->tls_conf = altcp_tls_ce_create_config_client_ecdhe(host);
+            if (!conn->tls_conf)
+            {
+                altcp_ws_free_config(conn->ws_conf);
+                conn->ws_conf    = NULL;
+                conn->status     = LWIP_STATUS_ERROR;
+                conn->last_error = LWIP_ERR_MEM;
+                conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_TLS,
+                                   LWIP_SOCKET_ERR_OP_TLS_CONFIG, (int)ERR_MEM,
+                                   LWIP_ERR_MEM);
+                return LWIP_ERR_MEM;
+            }
+            conn->pcb.altcp = altcp_ws_new_tls(conn->ws_conf, conn->tls_conf,
+                                               IPADDR_TYPE_V4);
+        }
+        else
+        {
+            conn->pcb.altcp = altcp_ws_new(conn->ws_conf, IPADDR_TYPE_V4);
+        }
+
+        if (!conn->pcb.altcp)
+        {
+            if (conn->tls_conf)
+            {
+                altcp_tls_ce_free_config(conn->tls_conf);
+                conn->tls_conf = NULL;
+            }
+            altcp_ws_free_config(conn->ws_conf);
+            conn->ws_conf    = NULL;
+            conn->status     = LWIP_STATUS_ERROR;
+            conn->last_error = LWIP_ERR_MEM;
+            conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_ALTCP,
+                               LWIP_SOCKET_ERR_OP_CREATE, (int)ERR_MEM,
+                               LWIP_ERR_MEM);
+            return LWIP_ERR_MEM;
+        }
+        rebind_pcb_callbacks(conn);
+    }
+
     /* IPv4 / IPv6 literal short-circuits DNS. Try v4 first because it
      * fails fast on anything containing ':'; v6 succeeds on either
      * '::1'-style or v4-mapped forms. */
@@ -2462,10 +2593,13 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
 
     conn->status = LWIP_STATUS_RESOLVING;
     conn_event_enqueue(conn, CONN_PENDING_RESOLVING, LWIP_OK);
+    INFO("dns: lookup begin");
+    INFO(conn->pending_host);
     err_t derr = dns_gethostbyname(conn->pending_host, &conn->remote_ip,
                                    conn_dns_found_cb, conn);
     if (derr == ERR_OK)
     {
+        INFO("dns: cached address");
         /* Cached hit — drive the next stage synchronously. conn_dns_found_cb
          * may itself fail (e.g. tcp_connect() returning ERR_MEM) and set
          * conn->status/last_error accordingly; surface that. */
@@ -2478,6 +2612,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     }
     if (derr == ERR_INPROGRESS)
     {
+        INFO("dns: waiting for response");
         return LWIP_OK; /* async — caller polls status */
     }
     lwip_socket_set_pending_host(conn, NULL);
@@ -2529,7 +2664,7 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
     if (!conn->netif ||
         !netif_is_up(conn->netif) ||
         (!netif_is_loop_network(conn->netif) && !netif_is_link_up(conn->netif)) ||
-        (!netif_is_loop_network(conn->netif) && !netif_has_usable_ipv4(conn->netif)))
+        (!netif_is_loop_network(conn->netif) && !netif_address_configuration_ready(conn->netif)))
     {
         conn->status = LWIP_STATUS_ERROR;
         conn->last_error = LWIP_ERR_NETIF;
@@ -2718,6 +2853,8 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
     }
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
     {
         err_t e = altcp_write(conn->pcb.altcp, buf, (u16_t)len,
                               TCP_WRITE_FLAG_COPY);
@@ -2802,6 +2939,8 @@ lwip_error_t lwip_socket_shutdown(struct lwip_socket *conn)
 #endif
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
             err_t e = altcp_shutdown(conn->pcb.altcp, 0, 1);
@@ -2879,6 +3018,8 @@ lwip_error_t lwip_socket_close(struct lwip_socket *conn)
         break;
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
             err_t e = altcp_close(conn->pcb.altcp);
@@ -2899,6 +3040,11 @@ lwip_error_t lwip_socket_close(struct lwip_socket *conn)
         {
             altcp_tls_ce_free_config(conn->tls_conf);
             conn->tls_conf = NULL;
+        }
+        if (conn->ws_conf)
+        {
+            altcp_ws_free_config(conn->ws_conf);
+            conn->ws_conf = NULL;
         }
         break;
     default:
@@ -2950,6 +3096,8 @@ lwip_error_t lwip_socket_abort(struct lwip_socket *conn)
         break;
     case LWIP_SOCKET_ALTCP:
     case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
             struct altcp_pcb *pcb = conn->pcb.altcp;
@@ -2966,6 +3114,11 @@ lwip_error_t lwip_socket_abort(struct lwip_socket *conn)
         {
             altcp_tls_ce_free_config(conn->tls_conf);
             conn->tls_conf = NULL;
+        }
+        if (conn->ws_conf)
+        {
+            altcp_ws_free_config(conn->ws_conf);
+            conn->ws_conf = NULL;
         }
         break;
     default:
@@ -3047,5 +3200,28 @@ lwip_error_t lwip_socket_set_connect_timeout(struct lwip_socket *conn,
     {
         conn->connect_deadline = 0;
     }
+    return LWIP_OK;
+}
+
+lwip_error_t lwip_socket_set_ws_config(struct lwip_socket *conn,
+                                       const char *path,
+                                       const char *subprotocol)
+{
+    if (!conn)
+        return LWIP_ERR_ARG;
+    if (conn->protocol != LWIP_SOCKET_ALTCP_WS &&
+        conn->protocol != LWIP_SOCKET_ALTCP_WSS)
+        return LWIP_ERR_PROTO;
+    if (conn->status != LWIP_STATUS_INIT)
+        return LWIP_ERR_STATE;
+
+    if (conn->ws_conf)
+    {
+        altcp_ws_free_config(conn->ws_conf);
+        conn->ws_conf = NULL;
+    }
+    conn->ws_conf = altcp_ws_create_config("", path ? path : "/", subprotocol);
+    if (!conn->ws_conf)
+        return LWIP_ERR_MEM;
     return LWIP_OK;
 }

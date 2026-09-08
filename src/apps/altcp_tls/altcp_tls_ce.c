@@ -1284,7 +1284,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     {
                         if (rec_len >= 2 && tmp[5] == TLS_ALERT_LEVEL_FATAL)
                         {
-                            uint8_t alert_desc = (rec_len >= 3) ? tmp[6] : 0xFFu;
+                            uint8_t alert_desc = (rec_len >= 2) ? tmp[6] : 0xFFu;
                             ERROR_CODE(alert_desc);
                             state->tls_ctx.state = TLS_STATE_ERROR;
                             plaintext_ok = false;

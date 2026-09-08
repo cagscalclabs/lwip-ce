@@ -43,6 +43,7 @@
 .extern _lwip_default_netif_info
 .extern _lwip_request_services
 .extern _lwip_netif_request_services
+.extern _lwip_are_services_ready
 .extern _lwip_socket_create
 .extern _lwip_socket_create_ex
 .extern _lwip_socket_destroy
@@ -427,6 +428,14 @@
 .extern _eth_get_interfaces
 .extern _netif_is_link_error
 .extern _eth_usb_event_callback
+.extern _pcap_enable_on_netif
+.extern _pcap_disable_on_netif
+.extern _pcap_flush
+.extern _pcap_init_reader_ctx
+.extern _pcap_set_filter_netif
+.extern _pcap_set_filter_name_num
+.extern _pcap_read_next
+.extern _pcap_close_reader_ctx
 .extern _tls_x25519_publickey
 .extern _tls_x25519_secret
 .extern _tls_x509_hostname_matches
@@ -455,17 +464,17 @@
 .extern _url_build_query
 .extern _lwip_socket_listen
 .extern _lwip_socket_accept
-.extern _lwip_are_services_ready
-.extern _pcap_enable_on_netif
-.extern _pcap_disable_on_netif
-.extern _pcap_init_reader_ctx
-.extern _pcap_set_filter_netif
-.extern _pcap_set_filter_name_num
-.extern _pcap_read_next
+.extern _altcp_ws_create_config
+.extern _altcp_ws_free_config
+.extern _altcp_ws_wrap
+.extern _altcp_ws_new
+.extern _altcp_ws_new_tls
+.extern _altcp_ws_alloc
+.extern _lwip_socket_set_ws_config
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 428    ; entry count
+    d24 437    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -479,6 +488,7 @@ _fn_exports_table:
     d24 _lwip_default_netif_info
     d24 _lwip_request_services
     d24 _lwip_netif_request_services
+    d24 _lwip_are_services_ready
     d24 _lwip_socket_create
     d24 _lwip_socket_create_ex
     d24 _lwip_socket_destroy
@@ -982,6 +992,16 @@ _fn_exports_table:
     d24 _netif_is_link_error
     d24 _eth_usb_event_callback
 
+; --- src/drivers/pcap.c ---
+    d24 _pcap_enable_on_netif
+    d24 _pcap_disable_on_netif
+    d24 _pcap_flush
+    d24 _pcap_init_reader_ctx
+    d24 _pcap_set_filter_netif
+    d24 _pcap_set_filter_name_num
+    d24 _pcap_read_next
+    d24 _pcap_close_reader_ctx
+
 ; --- src/tls/contrib/x25519/src/x25519.s ---
     d24 _tls_x25519_publickey
     d24 _tls_x25519_secret
@@ -1021,12 +1041,14 @@ _fn_exports_table:
 ; --- src/lwIP.c ---
     d24 _lwip_socket_listen
     d24 _lwip_socket_accept
-    d24 _lwip_are_services_ready
 
-; --- src/drivers/pcap.c ---
-    d24 _pcap_enable_on_netif
-    d24 _pcap_disable_on_netif
-    d24 _pcap_init_reader_ctx
-    d24 _pcap_set_filter_netif
-    d24 _pcap_set_filter_name_num
-    d24 _pcap_read_next
+; --- src/apps/altcp_ws/altcp_ws.c ---
+    d24 _altcp_ws_create_config
+    d24 _altcp_ws_free_config
+    d24 _altcp_ws_wrap
+    d24 _altcp_ws_new
+    d24 _altcp_ws_new_tls
+    d24 _altcp_ws_alloc
+
+; --- src/lwIP.c ---
+    d24 _lwip_socket_set_ws_config

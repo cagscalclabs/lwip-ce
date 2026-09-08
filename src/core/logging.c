@@ -227,6 +227,7 @@ const char *lwip_debug_module_name(uint16_t module)
     case LWIP_DBG_MOD_USB:  return "usb";
     case LWIP_DBG_MOD_MEM:  return "mem";
     case LWIP_DBG_MOD_TLS:  return "tls";
+    case LWIP_DBG_MOD_WS:   return "ws";
     default:                return "?";
     }
 }
@@ -252,6 +253,12 @@ const char *lwip_debug_file_name(uint8_t file_id)
     case LWIP_FILE_X509:                 return "x509.c";
     case LWIP_FILE_ALTCP_TLS_CE:         return "altcp_tls_ce.c";
     case LWIP_FILE_ALTCP_TLS_CE_EXAMPLE: return "altcp_tls_ce_example.c";
+    case LWIP_FILE_DNS: return "dns.c";
+    case LWIP_FILE_UDP: return "udp.c";
+    case LWIP_FILE_IP4: return "ip4.c";
+    case LWIP_FILE_ETHARP: return "etharp.c";
+    case LWIP_FILE_ETHERNET: return "ethernet.c";
+    case LWIP_FILE_ALTCP_WS:             return "altcp_ws.c";
     case LWIP_FILE_USB_ETHERNET:         return "usb_ethernet.c";
     case LWIP_FILE_MEM:                  return "mem.c";
     case LWIP_FILE_LWIP_CE:              return "lwIP.c";

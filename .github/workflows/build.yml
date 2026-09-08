@@ -24,7 +24,35 @@ env:
   NIGHTLY_TAG: nightly
 
 jobs:
+  check_inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.result.outputs.changed }}
+      input_hash: ${{ steps.hash.outputs.hash }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute input hash
+        id: hash
+        run: |
+          echo "hash=${{ hashFiles('src/**', 'build-tools/**', 'tests/**', '.github/workflows/build.yml', '.github/workflows/tests.yml', '.github/workflows/cavp.yml', '.github/workflows/sast.yml', '.github/workflows/dast.yml') }}" >> "$GITHUB_OUTPUT"
+      - name: Check sentinel cache
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ci-sentinel
+          key: build-inputs-${{ steps.hash.outputs.hash }}
+      - name: Set changed output
+        id: result
+        run: |
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   dylib_latest:
+    needs: check_inputs
+    if: needs.check_inputs.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
@@ -156,30 +184,30 @@ jobs:
       build_success: ${{ steps.upload_action_artifact.outcome == 'success' }}
 
   dylib_unit_tests:
-    needs: dylib_latest
-    if: needs.dylib_latest.outputs.build_success == 'true'
+    needs: [check_inputs, dylib_latest]
+    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
     uses: ./.github/workflows/tests.yml
     with:
       artifact_name: lwip-latest
     secrets: inherit
 
   cavp_validation:
-    needs: dylib_latest
-    if: needs.dylib_latest.outputs.build_success == 'true'
+    needs: [check_inputs, dylib_latest]
+    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
     uses: ./.github/workflows/cavp.yml
     with:
       artifact_name: lwip-latest
     secrets: inherit
 
   sast:
-    needs: dylib_latest
-    if: needs.dylib_latest.outputs.build_success == 'true'
+    needs: [check_inputs, dylib_latest]
+    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
     uses: ./.github/workflows/sast.yml
     secrets: inherit
 
   dast:
-    needs: dylib_latest
-    if: needs.dylib_latest.outputs.build_success == 'true'
+    needs: [check_inputs, dylib_latest]
+    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
     uses: ./.github/workflows/dast.yml
     secrets: inherit
 
@@ -193,8 +221,8 @@ jobs:
     # "endpoint" JSON per check (https://shields.io/badges/endpoint-badge)
     # reflecting this run's real per-job result, and publishing it to an
     # orphan `badges` branch the README badges read via raw.githubusercontent.com.
-    needs: [dylib_unit_tests, cavp_validation, sast, dast]
-    if: always() && github.event_name != 'pull_request'
+    needs: [check_inputs, dylib_unit_tests, cavp_validation, sast, dast]
+    if: always() && github.event_name != 'pull_request' && needs.dylib_unit_tests.result != 'skipped'
     runs-on: ubuntu-latest
 
     steps:
@@ -232,7 +260,7 @@ jobs:
           git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" badges:badges
 
   publish:
-    needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
+    needs: [check_inputs, dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
     # dast is intentionally excluded from this gate. dast.json is a
     # manually-produced, operator-graded report (see dast.yml), not a
     # fresh-per-run signal -- gating on it blocks releases on human
@@ -334,8 +362,21 @@ jobs:
             echo "| publish nightly release | ${{ steps.publish_release.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  save_sentinel:
+    needs: [check_inputs, dylib_unit_tests, cavp_validation, sast]
+    if: needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write sentinel
+        run: touch .ci-sentinel
+      - name: Save sentinel cache
+        uses: actions/cache/save@v5
+        with:
+          path: .ci-sentinel
+          key: build-inputs-${{ needs.check_inputs.outputs.input_hash }}
+
   notify_pr_on_failure:
-    needs: [dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
+    needs: [check_inputs, dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
     if: always() && github.event_name == 'pull_request' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
 

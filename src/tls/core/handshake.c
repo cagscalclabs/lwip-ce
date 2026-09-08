@@ -1590,6 +1590,7 @@ bool tls_handshake_init(
         return false;
     }
 
+    INFO("init: clear context");
     /* Clear context */
     tls_secure_memzero(ctx, sizeof(*ctx));
 
@@ -1614,6 +1615,7 @@ bool tls_handshake_init(
     ctx->client_seq_num = 0;
     ctx->server_seq_num = 0;
 
+    INFO("init: client random");
     /* Generate client random */
     for (size_t i = 0; i < 4; i++)
     {
@@ -1621,6 +1623,7 @@ bool tls_handshake_init(
         memcpy(&ctx->client_random[i * 8], &rand, 8);
     }
 
+    INFO("init: transcript hash");
     /* Initialize transcript hash (using embedded storage) */
     ctx->transcript_hash = &ctx->transcript_hash_storage;
     if (!transcript_hash_init(ctx->transcript_hash))
@@ -1629,6 +1632,7 @@ bool tls_handshake_init(
         return false;
     }
 
+    INFO("init: private random");
     /* Generate ephemeral X25519 keypair for ECDHE */
     for (size_t i = 0; i < 4; i++)
     {
@@ -1636,6 +1640,7 @@ bool tls_handshake_init(
         memcpy(&ctx->ecdhe_private[i * 8], &rand, 8);
     }
 
+    INFO("init: X25519 public key");
     if (!tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
                               NULL, NULL))
     {
@@ -1643,6 +1648,7 @@ bool tls_handshake_init(
         return false;
     }
 
+    INFO("init: X25519 done");
     ctx->ecdhe_negotiated = false;
     ctx->hostname = NULL;
 
@@ -1740,7 +1746,7 @@ bool tls_send_client_hello(
     /* Fixed ClientHello body before extensions is 43 bytes. The constants
      * below include the 4-byte handshake header so the unchecked serializer
      * cannot overrun a too-small caller buffer. */
-    required_ext_len = 7 + 8 + 42 + 8 + 18 + 15 + sni_len; /* +15 = ALPN http/1.1 */
+    required_ext_len = 7 + 8 + 42 + 8 + 12 + 15 + sni_len;
     if (ctx->psk_mode)
     {
         required_ext_len += 7 + 47 + ctx->psk_identity.identity_len;
@@ -1829,7 +1835,10 @@ bool tls_send_client_hello(
     memcpy(out + offset, ctx->ecdhe_public, 32);
     offset += 32;
 
-    /* Extension 4: signature_algorithms (required for ECDHE) */
+    /* Extension 4: signature_algorithms.
+     * Only RSA-PSS-SHA256 — the one algorithm we can actually verify for
+     * CertificateVerify. Advertising ECDSA here would allow the server to
+     * pick it and we could not verify the result. */
     out[offset++] = 0x00;
     out[offset++] = 0x0d; /* Extension type: signature_algorithms */
     out[offset++] = 0x00;
@@ -1840,18 +1849,20 @@ bool tls_send_client_hello(
     out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
 
     /* Extension 5: signature_algorithms_cert.
-     * Only advertise algorithms we actually verify: PKCS#1-v1.5-SHA256 for
-     * chain links and PSS-SHA256 for CertificateVerify. */
+     * Advertise algorithms we can verify in cert chains: RSA PKCS#1-v1.5-SHA256,
+     * RSA-PSS-SHA256, and ECDSA-P256-SHA256. */
     out[offset++] = 0x00;
     out[offset++] = 0x32; /* Extension type: signature_algorithms_cert */
     out[offset++] = 0x00;
-    out[offset++] = 0x06; /* Extension length: 6 */
+    out[offset++] = 0x08; /* Extension length: 8 */
     out[offset++] = 0x00;
-    out[offset++] = 0x04; /* Signature algorithms list length: 4 */
+    out[offset++] = 0x06; /* Signature algorithms list length: 6 */
     out[offset++] = 0x04;
     out[offset++] = 0x01; /* rsa_pkcs1_sha256 */
     out[offset++] = 0x08;
     out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
+    out[offset++] = 0x04;
+    out[offset++] = 0x03; /* ecdsa_secp256r1_sha256 */
 
     /* Extension 6: ALPN (application_layer_protocol_negotiation).
      * Advertise HTTP/1.1 explicitly. Some HTTP front doors (e.g. large CDNs /
@@ -2858,11 +2869,7 @@ cleanup:
  * just sent. It's the live proof-of-possession that binds "I trust this
  * cert chain" to "I'm actually talking to that cert's owner."
  *
- * We RSA-decrypt the signature against the leaf SPKI captured during
- * cert walking and run PSS padding verification. Only rsa_pss_rsae_sha256
- * is wired up — the rest of the PSS variants would need SHA-384/SHA-512,
- * which are not in the hash framework. ECDSA / rsa_pkcs1_* are rejected
- * in CertificateVerify per RFC 8446 §4.4.3.
+ * Supports rsa_pss_rsae_sha256 only.
  */
 static bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -2924,8 +2931,7 @@ static bool tls_recv_certificate_verify(
         sig_ok = tls_certverify_rsa_pss_sha256(ctx, data + offset, sig_len);
         break;
     default:
-        /* Only rsa_pss_rsae_sha256 is advertised and supported; any other
-         * algorithm selected by the server fails closed. */
+        /* Unsupported algorithm — fail closed. */
         sig_ok = false;
         break;
     }

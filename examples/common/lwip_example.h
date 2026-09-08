@@ -1213,7 +1213,15 @@ static bool lwip_example_stack_start(void)
     if (!lwip_start()) /* bootstrap + stack init (no network yet) */
 #endif
     {
-        lwip_example_show_and_wait("lwIP failed", lwip_get_start_errstring());
+        {
+            char __errno_buf[8];
+            uint8_t __e = (uint8_t)lwip_get_start_errno();
+            __errno_buf[0] = 'E';
+            __errno_buf[1] = '0' + (__e / 10);
+            __errno_buf[2] = '0' + (__e % 10);
+            __errno_buf[3] = '\0';
+            lwip_example_show_and_wait("lwIP failed", __errno_buf);
+        }
         return false;
     }
     lwip_example_gfx_blit_start();

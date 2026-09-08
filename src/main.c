@@ -39,6 +39,7 @@
 #include "drivers/mem.h"
 #include "drivers/usb_ethernet.h"
 #include "drivers/pcap.h"
+#include "drivers/pcap_decode.h"
 #include "lwip-imports.h"
 #include "tls/includes/handshake.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
@@ -953,12 +954,21 @@ static bool setup_test_network(const char *test_name)
  * ------------------------------------------------------------------------- */
 
 #define PCAP_MAX_LIST  128
-#define PCAP_HEX_COLS  16
+#define PCAP_HEX_COLS  8
+
+static int pcap_detail_rows(const struct pcap_decoded *decoded)
+{
+    int rows = 0;
+    for (unsigned i = 0; i < decoded->count; i++)
+        rows += 1 + (decoded->section[i].length + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
+    return rows;
+}
 
 static void pcap_draw_detail(const char *title, const struct pcap *hdr,
                              const uint8_t *data, int scroll)
 {
-    int total_rows = ((int)hdr->len + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
+    struct pcap_decoded decoded = pcap_decode(data, hdr->len);
+    int total_rows = pcap_detail_rows(&decoded);
     int visible = UI_CONTENT_H / UI_ROW_H;
 
     ui_draw_header(title);
@@ -968,15 +978,29 @@ static void pcap_draw_detail(const char *title, const struct pcap *hdr,
     {
         int row = scroll + v;
         if (row >= total_rows) break;
-        int y = ui_row_y(v);
-        int off = row * PCAP_HEX_COLS;
-        int n = (int)hdr->len - off;
-        if (n > PCAP_HEX_COLS) n = PCAP_HEX_COLS;
         char buf[64];
-        int pos = snprintf(buf, sizeof(buf), "%04X ", off);
-        for (int i = 0; i < n && pos < (int)sizeof(buf) - 3; i++)
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%02X ", data[off + i]);
-        os_FontDrawTransText(buf, UI_MARGIN, y + UI_ROW_TEXT_OFF);
+        for (unsigned j = 0; j < decoded.count; j++)
+        {
+            const struct pcap_section *section = &decoded.section[j];
+            int rows = 1 + (section->length + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
+            if (row >= rows) { row -= rows; continue; }
+            if (!row)
+                snprintf(buf, sizeof(buf), "%s: %s", section->name,
+                         section->detail ? section->detail : "");
+            else
+            {
+                size_t relative = (row - 1) * PCAP_HEX_COLS;
+                size_t off = section->offset + relative;
+                size_t n = section->length - relative;
+                if (n > PCAP_HEX_COLS) n = PCAP_HEX_COLS;
+                int pos = snprintf(buf, sizeof(buf), "%04X | ", (unsigned)off);
+                for (size_t i = 0; i < n; i++)
+                    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
+                                    "%02X ", data[off + i]);
+            }
+            break;
+        }
+        os_FontDrawTransText(buf, UI_MARGIN, ui_row_y(v) + UI_ROW_TEXT_OFF);
     }
     ui_draw_scrollbar(scroll, total_rows);
     ui_draw_footer("<up/dn> Scroll", "<clear> Back");
@@ -984,7 +1008,8 @@ static void pcap_draw_detail(const char *title, const struct pcap *hdr,
 
 static void pcap_viewer_detail(const struct pcap *hdr, const uint8_t *data)
 {
-    int total_rows = ((int)hdr->len + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
+    struct pcap_decoded decoded = pcap_decode(data, hdr->len);
+    int total_rows = pcap_detail_rows(&decoded);
     int visible = UI_CONTENT_H / UI_ROW_H;
     int scroll = 0;
 
@@ -1041,6 +1066,28 @@ static void pcap_draw_list(const size_t *offsets, int count, int selected, int s
     ui_draw_footer("<up/dn> Select  <enter> View", "<clear> Back");
 }
 
+static void pcap_draw_list_row(const size_t *offsets, int count, int idx,
+                               int scroll, bool selected)
+{
+    var_t *var = os_GetAppVarData("lwIPPCAP", NULL);
+    if (!var) return;
+    uint8_t *base = (uint8_t *)var->data;
+    if (idx < scroll || idx >= count) return;
+    int v = idx - scroll;
+    const struct pcap *hdr = (const struct pcap *)(base + offsets[idx]);
+    int y = ui_row_y(v);
+    ui_fill_rect(0, y, LCD_WIDTH, UI_ROW_H,
+                 selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
+    os_SetDrawFGColor(UI_COLOR_FG);
+    char row[40];
+    snprintf(row, sizeof(row), "#%-3d %c%c%u %-2s %u B",
+             idx + 1,
+             hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
+             hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
+             hdr->len);
+    os_FontDrawTransText(row, UI_MARGIN, y + UI_ROW_TEXT_OFF);
+}
+
 static bool config_run_pcap_viewer(struct config_option *opt)
 {
     (void)opt;
@@ -1052,9 +1099,12 @@ static bool config_run_pcap_viewer(struct config_option *opt)
         struct pcap_reader_ctx ctx;
         struct pcap *hdr;
         const uint8_t *fdata;
-        pcap_init_reader_ctx(&ctx);
-        while (count < PCAP_MAX_LIST && pcap_read_next(&ctx, &hdr, &fdata))
-            offsets[count++] = ctx.offset - sizeof(struct pcap) - hdr->len;
+        if (pcap_init_reader_ctx(&ctx))
+        {
+            while (count < PCAP_MAX_LIST && pcap_read_next(&ctx, &hdr, &fdata))
+                offsets[count++] = ctx.offset - sizeof(struct pcap) - hdr->len;
+            pcap_close_reader_ctx(&ctx);
+        }
     }
 
     if (count == 0)
@@ -1079,15 +1129,33 @@ static bool config_run_pcap_viewer(struct config_option *opt)
         if (key == sk_Clear) break;
         if (key == sk_Up && selected > 0)
         {
-            selected--;
-            if (selected < scroll) scroll = selected;
-            pcap_draw_list(offsets, count, selected, scroll);
+            int prev = selected--;
+            if (selected < scroll)
+            {
+                scroll = selected;
+                pcap_draw_list(offsets, count, selected, scroll);
+            }
+            else
+            {
+                pcap_draw_list_row(offsets, count, prev, scroll, false);
+                pcap_draw_list_row(offsets, count, selected, scroll, true);
+                ui_draw_scrollbar(scroll, count);
+            }
         }
         else if (key == sk_Down && selected < count - 1)
         {
-            selected++;
-            if (selected >= scroll + visible) scroll = selected - visible + 1;
-            pcap_draw_list(offsets, count, selected, scroll);
+            int prev = selected++;
+            if (selected >= scroll + visible)
+            {
+                scroll = selected - visible + 1;
+                pcap_draw_list(offsets, count, selected, scroll);
+            }
+            else
+            {
+                pcap_draw_list_row(offsets, count, prev, scroll, false);
+                pcap_draw_list_row(offsets, count, selected, scroll, true);
+                ui_draw_scrollbar(scroll, count);
+            }
         }
         else if (key == sk_Enter)
         {
@@ -2648,6 +2716,8 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
 
 int main(void)
 {
+    lwip_fileio_self_init();
+
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     atexit(cleanup_lwip_stack);
     lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
@@ -2832,11 +2902,6 @@ int main(void)
                 }
                 ui_draw_single_option(selected, scroll_pos, selected, true);
                 ui_draw_mode_footer(true, edit_mode);
-            }
-            else if (opt->type == F_TYPE_BOOL_TOGGLE && opt->setter)
-            {
-                opt->setter(opt);
-                ui_draw_single_option(selected, scroll_pos, selected, false);
             }
             else if (opt->type == F_TYPE_ACTION && opt->setter)
             {

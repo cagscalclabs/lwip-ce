@@ -90,6 +90,7 @@ functable:
 # and copying the completed package to build/.
 .PHONY: dylib
 dylib:
+	make clean
 	$(CURDIR)/build-tools/build-release-dylib.sh
 
 # Print section sizes and the contract a libload consumer needs to honor

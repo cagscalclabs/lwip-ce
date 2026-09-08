@@ -35,7 +35,7 @@
 #endif
 
 #ifndef IRC_DEBUG
-#define IRC_DEBUG 1
+#define IRC_DEBUG 0
 #endif
 
 #define IRC_CONNECT_TIMEOUT_MS 45000u
@@ -651,7 +651,7 @@ static void irc_pcap_toggle(struct irc_state *state, struct lwip_socket *sock)
     }
     else
     {
-        if (pcap_enable_on_netif(netif))
+        if (pcap_enable_on_netif(netif) == PCAP_OK)
         {
             state->pcap_enabled = true;
             irc_append_system(state, "pcap on");
@@ -733,6 +733,7 @@ static void irc_register(struct irc_state *state, struct lwip_socket *sock)
     lwip_error_t err;
     char line[40];
 
+    irc_append_system(state, "sending NICK/USER");
     err = irc_writef(sock, "NICK %s\r\n", state->nick);
     if (err == LWIP_OK)
     {
@@ -740,11 +741,14 @@ static void irc_register(struct irc_state *state, struct lwip_socket *sock)
     }
     if (err != LWIP_OK)
     {
+        snprintf(line, sizeof(line), "registration write error %d", (int)err);
+        irc_append_system(state, line);
         state->err = err;
         state->done = true;
         state->done_reason = 1; /* irc_register: NICK/USER write failed */
         return;
     }
+    irc_append_system(state, "NICK/USER queued; waiting for server");
     snprintf(line, sizeof(line), "nick %s", state->nick);
     irc_append_system(state, line);
 }
@@ -1357,7 +1361,7 @@ static void irc_session_run(struct irc_state *state)
             state->exiting = true;
             break;
         }
-        if (key == sk_Store)
+        if (key == sk_Trace)
         {
             irc_pcap_toggle(state, &sock);
         }
@@ -1488,7 +1492,13 @@ int main(void)
     lwip_example_show("lwIP runtime", NULL);
     if (!lwip_start())
     {
-        lwip_example_show_and_wait("lwIP failed", lwip_get_start_errstring());
+        {
+            lwip_example_clear();
+            lwip_example_line("lwIP failure");
+            lwip_example_line("ERRTEST");
+            lwip_example_present();
+            os_GetKey();
+        }
         lwip_example_gfx_stop();
         return 1;
     }

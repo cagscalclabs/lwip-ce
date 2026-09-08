@@ -46,7 +46,8 @@ typedef enum lwip_debug_module
     LWIP_DBG_MOD_LWIP,   /* lwIP-CE glue (conn/socket layer, dispatch, netif) */
     LWIP_DBG_MOD_USB,    /* USB ethernet driver                       */
     LWIP_DBG_MOD_MEM,    /* custom allocator                          */
-    LWIP_DBG_MOD_TLS     /* TLS handshake / record layer / crypto     */
+    LWIP_DBG_MOD_TLS,    /* TLS handshake / record layer / crypto     */
+    LWIP_DBG_MOD_WS      /* WebSocket framing layer (RFC 6455)        */
 } lwip_debug_module_t;
 
 /**
@@ -78,6 +79,7 @@ typedef enum lwip_debug_file_id
     /* ---- altcp / TLS integration ---- */
     LWIP_FILE_ALTCP_TLS_CE,         /* apps/altcp_tls/altcp_tls_ce.c         */
     LWIP_FILE_ALTCP_TLS_CE_EXAMPLE, /* apps/altcp_tls/altcp_tls_ce_example.c */
+    LWIP_FILE_ALTCP_WS,             /* apps/altcp_ws/altcp_ws.c              */
 
     /* ---- USB driver ---- */
     LWIP_FILE_USB_ETHERNET,         /* drivers/usb_ethernet.c    */
@@ -93,6 +95,13 @@ typedef enum lwip_debug_file_id
     LWIP_FILE_TEARDOWN,             /* core/teardown.c           */
     LWIP_FILE_LOGGING,              /* core/logging.c            */
     LWIP_FILE_MAIN,                 /* main.c (config app)       */
+
+    /* Appended to preserve existing traceback IDs. */
+    LWIP_FILE_DNS,
+    LWIP_FILE_UDP,
+    LWIP_FILE_IP4,
+    LWIP_FILE_ETHARP,
+    LWIP_FILE_ETHERNET,
 
     LWIP_FILE_MAX
 } lwip_debug_file_id_t;
@@ -284,6 +293,16 @@ void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
 #define ERROR_CODE(extra) \
     lwip_event_emit_code(LWIP_DBG_MODULE, LWIP_EV_ERROR, \
                          LWIP_EVENT_CODE(LWIP_DBG_FILE_ID, __LINE__), (uint16_t)(extra))
+
+/* Evaluate once and preserve the caller's file/line, including forwarding
+ * returns. Success and asynchronous progress are not failures. */
+#define LWIP_TRACE_RETURN(expression) do { \
+    err_t trace_result_ = (expression); \
+    if (trace_result_ != ERR_OK && trace_result_ != ERR_INPROGRESS) { \
+        ERROR_CODE(trace_result_); \
+    } \
+    return trace_result_; \
+} while (0)
 
 #define WARN() \
     lwip_event_emit_code(LWIP_DBG_MODULE, LWIP_EV_WARN, \

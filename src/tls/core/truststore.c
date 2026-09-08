@@ -1,5 +1,5 @@
-#include <ti/vars.h>
 #include <string.h>
+#include "../../lwip-imports.h"
 
 #include "../includes/truststore.h"
 #include "../includes/rsa.h"
@@ -81,7 +81,6 @@ uint8_t trust_store_pubkey[] = {
 #define TRUSTSTORE_SIG_LEN 256
 tls_truststore_status_t tls_truststore_init(void)
 {
-    var_t *truststore_var;
     /* Decrypted-signature output uses the shared static RSA scratch region
      * (.bss) instead of a 256-byte stack local, to keep the deep
      * truststore->rsa->powmod call chain off the eZ80 stack. */
@@ -105,8 +104,8 @@ tls_truststore_status_t tls_truststore_init(void)
 
     // Attempt to load the trust store.
     // Return with error if not found.
-    truststore_var = os_GetAppVarData(truststore_name, NULL);
-    if (!truststore_var)
+    uint8_t ts_h = file_fn.ti_open(truststore_name, "r");
+    if (!ts_h)
     {
         WARN_CODE(TLS_STORE_NOT_FOUND);
         return TLS_STORE_NOT_FOUND;
@@ -114,16 +113,18 @@ tls_truststore_status_t tls_truststore_init(void)
     TS_TRACE("E0b appvar found");
 
     // Get length of store, entry-db len, and sig ptr
-    uint16_t truststore_size = *((uint16_t *)truststore_var);
+    uint16_t truststore_size = file_fn.ti_getsize(ts_h);
     if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
     {
+        file_fn.ti_close(ts_h);
         ERROR_CODE(TLS_STORE_SIZE_INVALID);
         return TLS_STORE_SIZE_INVALID;
     }
-    uint8_t *store_header_bytes = (uint8_t *)truststore_var + 2;
+    uint8_t *store_header_bytes = (uint8_t *)file_fn.ti_getdataptr(ts_h);
     struct tls_truststore_header *header = (struct tls_truststore_header *)store_header_bytes;
     if (header->version != TLS_TRUSTSTORE_VERSION)
     {
+        file_fn.ti_close(ts_h);
         ERROR_CODE(TLS_STORE_VERSION_MISMATCH);
         return TLS_STORE_VERSION_MISMATCH;
     }
@@ -143,6 +144,7 @@ tls_truststore_status_t tls_truststore_init(void)
     // Decrypt the truststore signature
     if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
     {
+        file_fn.ti_close(ts_h);
         ERROR_CODE(TLS_STORE_SIG_INVALID);
         return TLS_STORE_SIG_INVALID;
     }
@@ -150,6 +152,7 @@ tls_truststore_status_t tls_truststore_init(void)
     // Verify the signature
     bool verified = tls_rsa_pss_verify(d_sig, sizeof(trust_store_pubkey), tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
     tls_secure_memzero(d_sig, TRUSTSTORE_SIG_LEN);
+    file_fn.ti_close(ts_h);
     TS_TRACE("E6 verify done");
     if (verified)
     {
@@ -164,21 +167,29 @@ tls_truststore_status_t tls_truststore_init(void)
 }
 
 static bool tls_truststore_open_db(uint8_t **db_out, uint16_t *db_len_out,
-                                    struct tls_truststore_header **header_out)
+                                    struct tls_truststore_header **header_out,
+                                    uint8_t *handle_out)
 {
-    var_t *truststore_var = os_GetAppVarData(truststore_name, NULL);
-    if (!truststore_var)
+    uint8_t h = file_fn.ti_open(truststore_name, "r");
+    if (!h)
         return false;
 
-    uint16_t truststore_size = *((uint16_t *)truststore_var);
+    uint16_t truststore_size = file_fn.ti_getsize(h);
     if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
+    {
+        file_fn.ti_close(h);
         return false;
+    }
 
     struct tls_truststore_header *header =
-        (struct tls_truststore_header *)((uint8_t *)truststore_var + 2);
+        (struct tls_truststore_header *)file_fn.ti_getdataptr(h);
     if (header->version != TLS_TRUSTSTORE_VERSION)
+    {
+        file_fn.ti_close(h);
         return false;
+    }
 
+    *handle_out  = h;
     *header_out  = header;
     *db_out      = (uint8_t *)header + TLS_TRUSTSTORE_HEADER_LEN;
     *db_len_out  = truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
@@ -193,9 +204,11 @@ bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **res
     uint8_t *db;
     uint16_t db_len;
     struct tls_truststore_header *header;
-    if (!tls_truststore_open_db(&db, &db_len, &header))
+    uint8_t h;
+    if (!tls_truststore_open_db(&db, &db_len, &header, &h))
         return false;
 
+    bool found = false;
     uint16_t count = 0, offset = 0;
     while (offset + sizeof(struct tls_truststore_entry) <= db_len)
     {
@@ -207,12 +220,14 @@ bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **res
         if (tls_bytes_compare(ski, entry->ski, TLS_TRUSTSTORE_SKI_LEN))
         {
             if (result) *result = entry;
-            return true;
+            found = true;
+            break;
         }
         if (++count > header->entry_count) break;
         offset += (uint16_t)entry->len;
     }
-    return false;
+    file_fn.ti_close(h);
+    return found;
 }
 
 bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
@@ -225,9 +240,11 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
     uint8_t *db;
     uint16_t db_len;
     struct tls_truststore_header *header;
-    if (!tls_truststore_open_db(&db, &db_len, &header))
+    uint8_t h;
+    if (!tls_truststore_open_db(&db, &db_len, &header, &h))
         return false;
 
+    bool found = false;
     uint16_t count = 0, offset = 0;
     while (offset + sizeof(struct tls_truststore_entry) <= db_len)
     {
@@ -244,10 +261,12 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
             memcmp(subject, entry->subject, subject_len) == 0)
         {
             if (result) *result = entry;
-            return true;
+            found = true;
+            break;
         }
         if (++count > header->entry_count) break;
         offset += (uint16_t)entry->len;
     }
-    return false;
+    file_fn.ti_close(h);
+    return found;
 }

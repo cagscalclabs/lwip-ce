@@ -1,8 +1,7 @@
 #include <string.h>
 
-#include <ti/vars.h>
-
 #include "lwip/app_config.h"
+#include "lwip-imports.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_APP_CONFIG
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_LWIP
@@ -10,9 +9,6 @@
 
 static lwip_app_config_t g_cfg;
 static bool g_cfg_loaded = false;
-
-void lwip_app_config_delete_var(const char *name, uint8_t type);
-void lwip_app_config_arc_unarc_var(const char *name, uint8_t type);
 
 static void lwip_app_config_normalize(lwip_app_config_t *cfg)
 {
@@ -65,54 +61,55 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
 
 bool lwip_app_config_load(lwip_app_config_t *cfg)
 {
-    int archived = 0;
-    var_t *var = os_GetAppVarData(LWIP_CFG_APPVAR, &archived);
-    if (!var)
+    uint8_t h = file_fn.ti_open(LWIP_CFG_APPVAR, "r");
+    if (!h)
     {
         WARN();
         lwip_app_config_defaults(cfg);
         return false;
     }
-    uint16_t size = *((uint16_t *)var);
-    if (size < sizeof(uint16_t))
+    uint16_t size = file_fn.ti_getsize(h);
+    if (size < sizeof(*cfg))
     {
         ERROR_CODE(size);
+        file_fn.ti_close(h);
         lwip_app_config_defaults(cfg);
         return false;
     }
     IO_FILE(LWIP_IO_READ, LWIP_CFG_APPVAR, size);
-    const uint8_t *data = (const uint8_t *)var + 2;
-    const lwip_app_config_t *stored = (const lwip_app_config_t *)data;
-    if (stored->version == LWIP_CFG_VERSION && size >= sizeof(*cfg))
+    lwip_app_config_t stored;
+    file_fn.ti_read(&stored, sizeof(stored), 1, h);
+    file_fn.ti_close(h);
+    if (stored.version == LWIP_CFG_VERSION)
     {
-        memcpy(cfg, stored, sizeof(*cfg));
+        memcpy(cfg, &stored, sizeof(*cfg));
         lwip_app_config_normalize(cfg);
         return true;
     }
-    WARN_CODE(stored->version);
+    WARN_CODE(stored.version);
     lwip_app_config_defaults(cfg);
     return false;
 }
 
 bool lwip_app_config_save(const lwip_app_config_t *cfg)
 {
-    var_t *var;
-
     if (!cfg)
     {
         ERROR();
         return false;
     }
 
-    lwip_app_config_delete_var(LWIP_CFG_APPVAR, OS_TYPE_APPVAR);
-    var = os_CreateAppVar(LWIP_CFG_APPVAR, (uint16_t)sizeof(*cfg));
-    if (!var)
+    file_fn.ti_delete(LWIP_CFG_APPVAR);
+    uint8_t h = file_fn.ti_open(LWIP_CFG_APPVAR, "w");
+    if (!h)
     {
         ERROR();
         return false;
     }
-    memcpy(var->data, cfg, sizeof(*cfg));
-    lwip_app_config_arc_unarc_var(LWIP_CFG_APPVAR, OS_TYPE_APPVAR);
+    file_fn.ti_resize(sizeof(*cfg), h);
+    file_fn.ti_write(cfg, sizeof(*cfg), 1, h);
+    file_fn.ti_setarchivestatus(1, h);
+    file_fn.ti_close(h);
     IO_FILE(LWIP_IO_WRITE, LWIP_CFG_APPVAR, sizeof(*cfg));
     return true;
 }

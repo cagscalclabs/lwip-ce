@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <usbdrvce.h>
 #include "mem.h"
+#include "pcap.h"  /* struct pcap_if, embedded by value below */
 
 #include "lwip/err.h"
 #include "lwip/netif.h"
@@ -164,7 +165,10 @@ typedef struct _eth_device_t
     bool disabled_with_error;
     bool shutting_down;
     bool dhcp_auto_started;
-    bool pcap_enabled;
+    /* Packet-capture state. pcap.buf is NULL when capture is off; non-NULL is
+     * what gates capture — there is no separate enable flag. Allocated by
+     * pcap_enable_on_netif, released by pcap_disable_on_netif. */
+    struct pcap_if pcap;
     /* Device unplugged / disconnected. Set FIRST in the disconnect handler,
      * before any teardown, so every callback and netif op fast-returns and
      * stops touching the (soon-to-be-freed) device. The struct is NOT freed

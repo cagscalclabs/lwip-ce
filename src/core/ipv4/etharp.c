@@ -44,6 +44,9 @@
  */
 
 #include "lwip/opt.h"
+#define LWIP_DBG_FILE_ID LWIP_FILE_ETHARP
+#define LWIP_DBG_MODULE LWIP_DBG_MOD_LWIP
+#include "lwip/logging.h"
 
 #if LWIP_IPV4 && LWIP_ARP /* don't build if not configured for use in lwipopts.h */
 
@@ -433,7 +436,7 @@ etharp_update_arp_entry(struct netif *netif, const ip4_addr_t *ipaddr, struct et
       ip4_addr_isbroadcast(ipaddr, netif) ||
       ip4_addr_ismulticast(ipaddr)) {
     LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_update_arp_entry: will not add non-unicast IP address to ARP cache\n"));
-    return ERR_ARG;
+    LWIP_TRACE_RETURN(ERR_ARG);
   }
   /* find or create ARP entry */
   i = etharp_find_entry(ipaddr, flags, netif);
@@ -448,7 +451,7 @@ etharp_update_arp_entry(struct netif *netif, const ip4_addr_t *ipaddr, struct et
     arp_table[i].state = ETHARP_STATE_STATIC;
   } else if (arp_table[i].state == ETHARP_STATE_STATIC) {
     /* found entry is a static type, don't overwrite it */
-    return ERR_VAL;
+    LWIP_TRACE_RETURN(ERR_VAL);
   } else
 #endif /* ETHARP_SUPPORT_STATIC_ENTRIES */
   {
@@ -512,10 +515,10 @@ etharp_add_static_entry(const ip4_addr_t *ipaddr, struct eth_addr *ethaddr)
 
   netif = ip4_route(ipaddr);
   if (netif == NULL) {
-    return ERR_RTE;
+    LWIP_TRACE_RETURN(ERR_RTE);
   }
 
-  return etharp_update_arp_entry(netif, ipaddr, ethaddr, ETHARP_FLAG_TRY_HARD | ETHARP_FLAG_STATIC_ENTRY);
+  LWIP_TRACE_RETURN(etharp_update_arp_entry(netif, ipaddr, ethaddr, ETHARP_FLAG_TRY_HARD | ETHARP_FLAG_STATIC_ENTRY));
 }
 
 /** Remove a static entry from the ARP table previously added with a call to
@@ -543,7 +546,7 @@ etharp_remove_static_entry(const ip4_addr_t *ipaddr)
 
   if (arp_table[i].state != ETHARP_STATE_STATIC) {
     /* entry wasn't a static entry, cannot remove it */
-    return ERR_ARG;
+    LWIP_TRACE_RETURN(ERR_ARG);
   }
   /* entry found, free it */
   etharp_free_entry(i);
@@ -767,7 +770,7 @@ etharp_output_to_arp_index(struct netif *netif, struct pbuf *q, netif_addr_idx_t
     }
   }
 
-  return ethernet_output(netif, q, (struct eth_addr *)(netif->hwaddr), &arp_table[arp_idx].ethaddr, ETHTYPE_IP);
+  LWIP_TRACE_RETURN(ethernet_output(netif, q, (struct eth_addr *)(netif->hwaddr), &arp_table[arp_idx].ethaddr, ETHTYPE_IP));
 }
 
 /**
@@ -848,7 +851,7 @@ etharp_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ipaddr)
             /* no default gateway available */
           } else {
             /* no route to destination error (default gateway missing) */
-            return ERR_RTE;
+            LWIP_TRACE_RETURN(ERR_RTE);
           }
         }
       }
@@ -866,7 +869,7 @@ etharp_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ipaddr)
             (ip4_addr_eq(dst_addr, &arp_table[etharp_cached_entry].ipaddr))) {
           /* the per-pcb-cached entry is stable and the right one! */
           ETHARP_STATS_INC(etharp.cachehit);
-          return etharp_output_to_arp_index(netif, q, etharp_cached_entry);
+          LWIP_TRACE_RETURN(etharp_output_to_arp_index(netif, q, etharp_cached_entry));
         }
 #if LWIP_NETIF_HWADDRHINT
       }
@@ -883,18 +886,18 @@ etharp_output(struct netif *netif, struct pbuf *q, const ip4_addr_t *ipaddr)
           (ip4_addr_eq(dst_addr, &arp_table[i].ipaddr))) {
         /* found an existing, stable entry */
         ETHARP_SET_ADDRHINT(netif, i);
-        return etharp_output_to_arp_index(netif, q, i);
+        LWIP_TRACE_RETURN(etharp_output_to_arp_index(netif, q, i));
       }
     }
     /* no stable entry found, use the (slower) query function:
        queue on destination Ethernet address belonging to ipaddr */
-    return etharp_query(netif, dst_addr, q);
+    LWIP_TRACE_RETURN(etharp_query(netif, dst_addr, q));
   }
 
   /* continuation for multicast/broadcast destinations */
   /* obtain source Ethernet address of the given interface */
   /* send packet directly on the link */
-  return ethernet_output(netif, q, (struct eth_addr *)(netif->hwaddr), dest, ETHTYPE_IP);
+  LWIP_TRACE_RETURN(ethernet_output(netif, q, (struct eth_addr *)(netif->hwaddr), dest, ETHTYPE_IP));
 }
 
 /**
@@ -944,7 +947,7 @@ etharp_query(struct netif *netif, const ip4_addr_t *ipaddr, struct pbuf *q)
       ip4_addr_isbroadcast(ipaddr, netif) ||
       ip4_addr_ismulticast(ipaddr)) {
     LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_query: will not add non-unicast IP address to ARP cache\n"));
-    return ERR_ARG;
+    LWIP_TRACE_RETURN(ERR_ARG);
   }
 
   /* find entry in ARP cache, ask to create entry if queueing packet */
@@ -957,7 +960,7 @@ etharp_query(struct netif *netif, const ip4_addr_t *ipaddr, struct pbuf *q)
       LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_query: packet dropped\n"));
       ETHARP_STATS_INC(etharp.memerr);
     }
-    return (err_t)i_err;
+    LWIP_TRACE_RETURN((err_t)i_err);
   }
   LWIP_ASSERT("type overflow", (size_t)i_err < NETIF_ADDR_IDX_MAX);
   i = (netif_addr_idx_t)i_err;
@@ -994,7 +997,7 @@ etharp_query(struct netif *netif, const ip4_addr_t *ipaddr, struct pbuf *q)
       }
     }
     if (q == NULL) {
-      return result;
+      LWIP_TRACE_RETURN(result);
     }
   }
 
@@ -1070,6 +1073,7 @@ etharp_query(struct netif *netif, const ip4_addr_t *ipaddr, struct pbuf *q)
         /* the pool MEMP_ARP_QUEUE is empty */
         pbuf_free(p);
         LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_query: could not queue a copy of PBUF_REF packet %p (out of memory)\n", (void *)q));
+        ERROR_CODE(ERR_MEM);
         result = ERR_MEM;
       }
 #else /* ARP_QUEUEING */
@@ -1085,10 +1089,11 @@ etharp_query(struct netif *netif, const ip4_addr_t *ipaddr, struct pbuf *q)
     } else {
       ETHARP_STATS_INC(etharp.memerr);
       LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_query: could not queue a copy of PBUF_REF packet %p (out of memory)\n", (void *)q));
-      result = ERR_MEM;
+      ERROR_CODE(ERR_MEM);
+        result = ERR_MEM;
     }
   }
-  return result;
+  LWIP_TRACE_RETURN(result);
 }
 
 /**
@@ -1126,7 +1131,7 @@ etharp_raw(struct netif *netif, const struct eth_addr *ethsrc_addr,
     LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_LEVEL_SERIOUS,
                 ("etharp_raw: could not allocate pbuf for ARP request.\n"));
     ETHARP_STATS_INC(etharp.memerr);
-    return ERR_MEM;
+    LWIP_TRACE_RETURN(ERR_MEM);
   }
   LWIP_ASSERT("check that first pbuf can hold struct etharp_hdr",
               (p->len >= SIZEOF_ETHARP_HDR));
@@ -1171,7 +1176,7 @@ etharp_raw(struct netif *netif, const struct eth_addr *ethsrc_addr,
   p = NULL;
   /* could not allocate pbuf for ARP request */
 
-  return result;
+  LWIP_TRACE_RETURN(result);
 }
 
 /**
@@ -1189,9 +1194,9 @@ etharp_raw(struct netif *netif, const struct eth_addr *ethsrc_addr,
 static err_t
 etharp_request_dst(struct netif *netif, const ip4_addr_t *ipaddr, const struct eth_addr *hw_dst_addr)
 {
-  return etharp_raw(netif, (struct eth_addr *)netif->hwaddr, hw_dst_addr,
+  LWIP_TRACE_RETURN(etharp_raw(netif, (struct eth_addr *)netif->hwaddr, hw_dst_addr,
                     (struct eth_addr *)netif->hwaddr, netif_ip4_addr(netif), &ethzero,
-                    ipaddr, ARP_REQUEST);
+                    ipaddr, ARP_REQUEST));
 }
 
 /**
@@ -1207,7 +1212,7 @@ err_t
 etharp_request(struct netif *netif, const ip4_addr_t *ipaddr)
 {
   LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, ("etharp_request: sending ARP request.\n"));
-  return etharp_request_dst(netif, ipaddr, &ethbroadcast);
+  LWIP_TRACE_RETURN(etharp_request_dst(netif, ipaddr, &ethbroadcast));
 }
 
 #if LWIP_ACD
@@ -1224,9 +1229,9 @@ etharp_request(struct netif *netif, const ip4_addr_t *ipaddr)
 err_t
 etharp_acd_probe(struct netif *netif, const ip4_addr_t *ipaddr)
 {
-  return etharp_raw(netif, (struct eth_addr *)netif->hwaddr, &ethbroadcast,
+  LWIP_TRACE_RETURN(etharp_raw(netif, (struct eth_addr *)netif->hwaddr, &ethbroadcast,
                     (struct eth_addr *)netif->hwaddr, IP4_ADDR_ANY4, &ethzero,
-                    ipaddr, ARP_REQUEST);
+                    ipaddr, ARP_REQUEST));
 }
 
 /**
@@ -1242,9 +1247,9 @@ etharp_acd_probe(struct netif *netif, const ip4_addr_t *ipaddr)
 err_t
 etharp_acd_announce(struct netif *netif, const ip4_addr_t *ipaddr)
 {
-  return etharp_raw(netif, (struct eth_addr *)netif->hwaddr, &ethbroadcast,
+  LWIP_TRACE_RETURN(etharp_raw(netif, (struct eth_addr *)netif->hwaddr, &ethbroadcast,
                     (struct eth_addr *)netif->hwaddr, ipaddr, &ethzero,
-                    ipaddr, ARP_REQUEST);
+                    ipaddr, ARP_REQUEST));
 }
 #endif /* LWIP_ACD */
 

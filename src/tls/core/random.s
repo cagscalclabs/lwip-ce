@@ -207,9 +207,15 @@ _tls_random_bytes:
     ld bc,8
     or a,a
     sbc hl,bc
+    jr nc,.Lbytes_full
+    ; Short tail: HL is len-8 modulo 2^24. Restore len for the copy,
+    ; and consume the entire remainder instead of storing the underflow.
+    add hl,bc
+    ld c,l ; remaining length is 1..7; upper BC bytes are already zero
+    or a,a
+    sbc hl,hl
+.Lbytes_full:
     ld (ix+9),hl
-    jr nc,.Lbytes_not_last
-    ld c,l ; both uh and ub are zero here, we only need the low byte
 .Lbytes_not_last:
     ld hl,(ix-3)
     add hl,bc

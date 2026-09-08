@@ -71,6 +71,7 @@ def run_functable(argv: list[str] | None = None) -> int:
     STUB_ONLY_LIBLOAD_EXPORTS = [
         "_lwip_start_with_crt",
         "_lwip_get_start_errstring",
+        "_lwip_get_start_errno",
         "_lwip_is_newer",
     ]
 
@@ -99,13 +100,9 @@ def run_functable(argv: list[str] | None = None) -> int:
     LIBLOAD_NAME = "LWIP"
     LIBLOAD_VERSION = 0
 
-    # usbdrvce symbols that lwIP's vtable (struct usb_configurator) needs,
-    # in the EXACT order the struct's fields appear in src/drivers/usb_ethernet.h.
-    # The libload build statically initialises fn_imports_table.usb from this
-    # list; each `dl usb_Foo` slot resolves to the address of usbdrvce's jp
-    # stub (installed by `include_library '../usbdrvce/usbdrvce.asm'`). The order must
-    # match `struct usb_configurator` field order or every call site
-    # dispatches to the wrong function — change both together or not at all.
+    # Per-group vtable symbol lists. Order within each list must exactly match
+    # the corresponding struct field order in lwip-imports.h — change both
+    # together or not at all.
     USB_VTABLE_IMPORTS = [
         "usb_ResetDevice",
         "usb_DisableDevice",
@@ -130,6 +127,29 @@ def run_functable(argv: list[str] | None = None) -> int:
         "usb_Init",
         "usb_HandleEvents",
         "usb_Cleanup",
+    ]
+
+    FILEIO_VTABLE_IMPORTS = [
+        "ti_Open",
+        "ti_Close",
+        "ti_Write",
+        "ti_Read",
+        "ti_GetSize",
+        "ti_Seek",
+        "ti_Resize",
+        "ti_SetArchiveStatus",
+        "ti_Delete",
+        "ti_GetDataPtr",
+    ]
+
+    # Authoritative vtable import groups for _fn_imports_table.
+    # Each entry is (asm comment, symbol list). The generator emits all groups
+    # in order; add a new (comment, LIST_NAME) tuple here to add a new vtable.
+    VTABLE_IMPORTS = [
+        ("USB vtable — struct usb_configurator (populated at link time by include_library)",
+         USB_VTABLE_IMPORTS),
+        ("File I/O vtable — struct fileio_configurator (populated at link time)",
+         FILEIO_VTABLE_IMPORTS),
     ]
 
     # Source directories whose .c files are scanned for public symbols. The
@@ -588,12 +608,14 @@ def run_functable(argv: list[str] | None = None) -> int:
             "; Do not edit by hand. Sources: build-tools/scripts/parse_manifest.py,",
             "; build-tools/stubs/lwip_init_runtime.asm.",
             "",
+            "assume adl=1",
             "include '../include/library.inc'",
             "include '../include/include_library.inc'",
             "",
             f"library {LIBLOAD_NAME}, {LIBLOAD_VERSION}",
             "",
             "\tinclude_library '../usbdrvce/usbdrvce.asm'",
+            "\tinclude_library '../fileioc/fileioc.asm'",
             "",
             "; _fn_imports_table is a plain in-library label, not exported: it is",
             "; referenced only by the bootstrap below (intra-file) and reached at",
@@ -605,10 +627,11 @@ def run_functable(argv: list[str] | None = None) -> int:
             "\tdl 0",
             "\tdl 0",
             "\tdl 0",
-            "\t; USB vtable (populated at link time by include_library)",
         ]
-        for sym in USB_VTABLE_IMPORTS:
-            lines.append(f"\tdl {sym}")
+        for comment, symbols in VTABLE_IMPORTS:
+            lines.append(f"\t; {comment}")
+            for sym in symbols:
+                lines.append(f"\tdl {sym}")
         lines.append("_fn_imports_table_end:")
         lines.append("")
         # `export foo` records the offset to foo's body; lwIP's real bodies live
@@ -1224,6 +1247,7 @@ def run_headers(argv: list[str] | None = None) -> int:
         allowed_roots = [
             (SRC_DIR / "include").resolve(),
             (SRC_DIR / "drivers").resolve(),
+            (SRC_DIR / "apps" / "altcp_ws").resolve(),
             TLS_INCLUDES.resolve(),
             # Contrib x25519 ships tls_x25519_publickey/_secret as public API;
             # its header lives outside src/tls/includes but is part of the
@@ -2815,6 +2839,7 @@ def run_headers(argv: list[str] | None = None) -> int:
                 " * not itself a failure). */",
                 "bool lwip_start_with_crt(void *malloc_fn, void *free_fn, void *realloc_fn);",
                 "char *lwip_get_start_errstring(void);",
+                "uint8_t lwip_get_start_errno(void);",
                 "bool lwip_is_newer(void);",
                 "",
                 "#define lwip_start() \\",

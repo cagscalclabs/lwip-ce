@@ -14,6 +14,7 @@ __lwip_fn_table_off := 0x000040
 __lwip_expected_export_count := 0x000000
 
 	export lwip_start_with_crt
+	export lwip_get_start_errno
 	export lwip_get_start_errstring
 	export lwip_is_newer
 
@@ -25,6 +26,7 @@ __lwip_error_lut:
 	dl __err_library_too_old_str
 	dl __err_lwip_init_failed_str
 	dl __err_lwip_function_unset_str
+	dl __err_lwip_unknown_str
 __err_library_not_found_str:
 	db "library missing",0
 __err_library_invalid_str:
@@ -35,12 +37,19 @@ __err_lwip_init_failed_str:
 	db "runtime-int failed",0
 __err_lwip_function_unset_str:
 	db "function unsupported, version",0
-	__lwip_errno		db		0
+__err_lwip_unknown_str:
+	db "unknown error",0
+	__lwip_errno		db		6
 	__lwip_is_newer		db		0
-	__lwip_max_errno	equ		5
+	__lwip_max_errno	equ		6
 
 lwip_is_newer:
 	ld a, (__lwip_is_newer)
+	ret
+
+;int lwip_get_start_errno();
+lwip_get_start_errno:
+	ld a, (__lwip_errno)
 	ret
 
 ; char *lwip_get_start_errstring(void);

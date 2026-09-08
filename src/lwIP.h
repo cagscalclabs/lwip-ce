@@ -55,6 +55,7 @@ struct tcp_pcb;
 struct udp_pcb;
 struct altcp_pcb;
 struct altcp_tls_ce_config;
+struct altcp_ws_config;
 struct mem_buffer;
 struct lwip_socket;   /* forward decl for callback typedefs */
 
@@ -80,6 +81,8 @@ typedef enum
     LWIP_SOCKET_UDP,          /**< UDP via udp_*      */
     LWIP_SOCKET_ALTCP,        /**< altcp (default TCP allocator) */
     LWIP_SOCKET_ALTCP_TLS,    /**< altcp wrapped in TLS 1.3 (altcp_tls_ce) */
+    LWIP_SOCKET_ALTCP_WS,     /**< WebSocket over plain TCP (RFC 6455)     */
+    LWIP_SOCKET_ALTCP_WSS,    /**< WebSocket over TLS (WSS)                */
 } lwip_socket_type_t;
 
 /** Which netif a socket attaches to at create(). */
@@ -292,6 +295,7 @@ struct lwip_socket
         struct altcp_pcb *altcp;
     } pcb;
     struct altcp_tls_ce_config *tls_conf;
+    struct altcp_ws_config     *ws_conf;
     struct mem_buffer          *rx_ring;
     size_t                      rx_ring_init;
     size_t                      rx_ring_max;
@@ -322,6 +326,7 @@ struct lwip_socket
 /* ------------------------------------------------------------------ */
 
 uint8_t  lwip_start_last_error(void);
+uint8_t  lwip_get_start_errno(void);
 void     lwip_stop(void);
 bool     lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
 
@@ -440,6 +445,14 @@ lwip_error_t  lwip_socket_abort(struct lwip_socket *socket);
 lwip_error_t lwip_socket_set_rx_limits(struct lwip_socket *socket,
                                        size_t initial_size,
                                        size_t max_size);
+
+/** Set the WebSocket path and optional subprotocol for a WS/WSS socket.
+ *  Must be called after lwip_socket_create() and before lwip_socket_connect().
+ *  Strings are borrowed — caller must keep them alive until connect() returns.
+ *  The host field is filled in automatically at connect time. */
+lwip_error_t lwip_socket_set_ws_config(struct lwip_socket *socket,
+                                       const char *path,
+                                       const char *subprotocol);
 
 #ifdef __cplusplus
 }

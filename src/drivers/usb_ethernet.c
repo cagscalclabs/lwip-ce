@@ -24,6 +24,7 @@
 #include "lwip/stats.h"
 #include "lwip/snmp.h"
 #include "lwip/pbuf.h"
+#include "lwip/mem.h"
 #include "lwip/dhcp.h"
 #include "lwip/prot/dhcp.h"
 #include "usb_ethernet.h" /* Communications Data Class header file */
@@ -144,6 +145,10 @@ static void eth_free_device_storage(eth_device_t *dev)
         mem_buffer_destroy(dev->rx_ring);
         dev->rx_ring = NULL;
     }
+    /* Return the capture buffer before the device goes away, so unplugging a
+     * capturing interface doesn't leak it or pin the pcap pool alive. This
+     * flushes any staged records first — see pcap_release_on_teardown. */
+    pcap_release_on_teardown(&dev->iface);
     free(dev);
 }
 
@@ -292,7 +297,7 @@ static bool eth_input_frame(struct netif *netif, const uint8_t *data, uint16_t l
     }
 
     eth_device_t *dev = (eth_device_t *)netif->state;
-    if (dev->pcap_enabled)
+    if (dev->pcap.buf)
         pcap_write(netif, PCAP_DIR_RX, data, len);
 
     if (netif->input(p, netif) != ERR_OK)
@@ -792,7 +797,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
     {
         if (tbuf)
             pbuf_free(tbuf);
-        free(ctx);
+        mem_free(ctx);
         return USB_SUCCESS;
     }
 
@@ -802,7 +807,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
         if (eth_xmit_fatal_error(dev, dev->tx_retries))
         {
             pbuf_free(tbuf);
-            free(ctx);
+            mem_free(ctx);
             dev->tx_retries = 0;
             return USB_ERROR_FAILED;
         }
@@ -818,7 +823,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
                                      ctx) != USB_SUCCESS)
         {
             pbuf_free(tbuf);
-            free(ctx);
+            mem_free(ctx);
             (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
             return USB_ERROR_FAILED;
         }
@@ -831,7 +836,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
 
     if (tbuf)
         pbuf_free(tbuf);
-    free(ctx);
+    mem_free(ctx);
 
     return USB_SUCCESS;
 }
@@ -903,17 +908,17 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
     if (eth_is_shutting_down(dev))
-        return ERR_IF;
+        LWIP_TRACE_RETURN(ERR_IF);
     if (p->tot_len > ETHERNET_MTU)
-        return ERR_MEM;
+        LWIP_TRACE_RETURN(ERR_MEM);
     struct pbuf *tbuf = pbuf_alloc(PBUF_RAW, p->tot_len, PBUF_RAM);
     if (tbuf == NULL)
-        return ERR_MEM;
-    struct eth_tx_ctx *ctx = malloc(sizeof(*ctx));
+        LWIP_TRACE_RETURN(ERR_MEM);
+    struct eth_tx_ctx *ctx = mem_malloc(sizeof(*ctx));
     if (ctx == NULL)
     {
         pbuf_free(tbuf);
-        return ERR_MEM;
+        LWIP_TRACE_RETURN(ERR_MEM);
     }
     LINK_STATS_INC(link.xmit);
     // Update SNMP stats(only if you use SNMP)
@@ -921,20 +926,20 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     if (pbuf_copy(tbuf, p))
     {
         pbuf_free(tbuf);
-        free(ctx);
-        return ERR_MEM;
+        mem_free(ctx);
+        LWIP_TRACE_RETURN(ERR_MEM);
     }
     ctx->dev = dev;
     ctx->p = tbuf;
-    if (dev->pcap_enabled)
+    if (dev->pcap.buf)
         pcap_write(netif, PCAP_DIR_TX, tbuf->payload, tbuf->tot_len);
     if (usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len,
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)
     {
         pbuf_free(tbuf);
-        free(ctx);
+        mem_free(ctx);
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
-        return ERR_IF;
+        LWIP_TRACE_RETURN(ERR_IF);
     }
     eth_transfer_began(dev);
     return ERR_OK;
@@ -1182,10 +1187,10 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
     if (eth_is_shutting_down(dev) || dev->dead)
-        return ERR_IF;
+        LWIP_TRACE_RETURN(ERR_IF);
     uint16_t offset_ndp = get_next_offset(NCM_NTH_LEN, dev->class.ncm.ntb_params.wNdpInAlignment, 0);
     if (p->tot_len > ETHERNET_MTU)
-        return ERR_MEM;
+        LWIP_TRACE_RETURN(ERR_MEM);
 
     /* Size the NTB to the actual datagram, not the MTU. A 40-byte TCP ACK
      * was previously allocated and transmitted as a 1578-byte buffer; on
@@ -1196,12 +1201,12 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     // allocate TX packet buffer
     struct pbuf *obuf = pbuf_alloc(PBUF_RAW, ntb_len, PBUF_RAM);
     if (obuf == NULL)
-        return ERR_MEM;
-    struct eth_tx_ctx *ctx = malloc(sizeof(*ctx));
+        LWIP_TRACE_RETURN(ERR_MEM);
+    struct eth_tx_ctx *ctx = mem_malloc(sizeof(*ctx));
     if (ctx == NULL)
     {
         pbuf_free(obuf);
-        return ERR_MEM;
+        LWIP_TRACE_RETURN(ERR_MEM);
     }
 
     memset(obuf->payload, 0, ntb_len);
@@ -1240,7 +1245,7 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     // printf("sent packet %u at time %lu\n", sequence, sys_now());
     ctx->dev = dev;
     ctx->p = obuf;
-    if (dev->pcap_enabled)
+    if (dev->pcap.buf)
     {
         uint8_t frame_buf[ETHERNET_MTU];
         uint16_t frame_len = (uint16_t)pbuf_copy_partial(p, frame_buf, sizeof(frame_buf), 0);
@@ -1251,9 +1256,9 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)
     {
         pbuf_free(obuf);
-        free(ctx);
+        mem_free(ctx);
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
-        return ERR_IF;
+        LWIP_TRACE_RETURN(ERR_IF);
     }
     eth_transfer_began(dev);
     return ERR_OK;
@@ -1393,6 +1398,15 @@ static void eth_arm_dhcp_once(eth_device_t *dev)
 
 ///----------------------------------------
 /// @brief ethernet NETIF initialization
+/* Called by lwIP from netif_remove(), whichever path removes the interface —
+ * orderly shutdown, unplug, or an application removing it directly. Commits any
+ * staged packet-capture records so the tail of a capture is never lost when the
+ * interface goes away. The buffer itself is released later, with the device. */
+static void eth_netif_remove_callback(struct netif *netif)
+{
+    pcap_flush(netif);
+}
+
 static err_t eth_netif_init(struct netif *netif)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
@@ -1407,6 +1421,7 @@ static err_t eth_netif_init(struct netif *netif)
     netif->hwaddr_len = NETIF_MAX_HWADDR_LEN;
     netif_set_link_callback(netif, eth_link_callback);
     netif_set_status_callback(netif, eth_status_callback);
+    netif_set_remove_callback(netif, eth_netif_remove_callback);
     return ERR_OK;
 }
 

@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <sys/rtc.h>
-#include <ti/vars.h>
+#include "../../lwip-imports.h"
 #include "lwip/opt.h"
 #include "lwip/pbuf.h"
 #include "../includes/tls.h"
@@ -201,51 +201,43 @@ bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
  * a stack restart). Called once from tls_init(). */
 static void tls_psk_cache_load(void)
 {
-    var_t *var;
-    const uint8_t *data;
-    uint16_t size;
     struct tls_psk_cache_store_header hdr;
     uint32_t now;
 
     if (!g_psk_cache)
-    {
         return;
-    }
-    var = os_GetAppVarData(TLS_PSK_CACHE_APPVAR, NULL);
-    if (!var)
-    {
+
+    uint8_t h = file_fn.ti_open(TLS_PSK_CACHE_APPVAR, "r");
+    if (!h)
         return;
-    }
-    size = *((uint16_t *)var);
-    data = (const uint8_t *)var + 2;
+
+    uint16_t size = file_fn.ti_getsize(h);
     if (size < sizeof(hdr))
     {
+        file_fn.ti_close(h);
         return;
     }
-    memcpy(&hdr, data, sizeof(hdr));
+
+    file_fn.ti_read(&hdr, sizeof(hdr), 1, h);
     if (hdr.magic != TLS_PSK_CACHE_MAGIC || hdr.version != TLS_PSK_CACHE_VERSION ||
-        hdr.count > TLS_PSK_CACHE_MAX_ENTRIES)
+        hdr.count > TLS_PSK_CACHE_MAX_ENTRIES ||
+        size != sizeof(hdr) + hdr.count * sizeof(struct tls_psk_cache_entry))
     {
-        return;
-    }
-    if (size != sizeof(hdr) + hdr.count * sizeof(struct tls_psk_cache_entry))
-    {
+        file_fn.ti_close(h);
         return;
     }
 
     now = rtc_Time();
-    const uint8_t *entry_data = data + sizeof(hdr);
     unsigned out = 0;
     for (uint16_t i = 0; i < hdr.count && out < TLS_PSK_CACHE_MAX_ENTRIES; i++)
     {
         struct tls_psk_cache_entry e;
-        memcpy(&e, entry_data + (size_t)i * sizeof(e), sizeof(e));
+        file_fn.ti_read(&e, sizeof(e), 1, h);
         if (!e.in_use || tls_psk_cache_entry_expired(&e, now))
-        {
             continue;
-        }
         g_psk_cache[out++] = e;
     }
+    file_fn.ti_close(h);
 }
 
 /* Serialize the live cache back to flash in one write. Called once from
@@ -253,9 +245,7 @@ static void tls_psk_cache_load(void)
 static void tls_psk_cache_save(void)
 {
     if (!g_psk_cache)
-    {
         return;
-    }
 
     struct tls_psk_cache_entry live[TLS_PSK_CACHE_MAX_ENTRIES];
     uint32_t now = rtc_Time();
@@ -263,29 +253,26 @@ static void tls_psk_cache_save(void)
     for (unsigned i = 0; i < TLS_PSK_CACHE_MAX_ENTRIES; i++)
     {
         if (g_psk_cache[i].in_use && !tls_psk_cache_entry_expired(&g_psk_cache[i], now))
-        {
             live[count++] = g_psk_cache[i];
-        }
     }
+
+    file_fn.ti_delete(TLS_PSK_CACHE_APPVAR);
+    if (count == 0)
+        return; /* nothing live to persist; leave no stale appvar behind */
 
     struct tls_psk_cache_store_header hdr = {
-        .magic = TLS_PSK_CACHE_MAGIC,
+        .magic   = TLS_PSK_CACHE_MAGIC,
         .version = TLS_PSK_CACHE_VERSION,
-        .count = count};
+        .count   = count};
     size_t total = sizeof(hdr) + (size_t)count * sizeof(struct tls_psk_cache_entry);
 
-    os_DelAppVar(TLS_PSK_CACHE_APPVAR);
-    if (count == 0)
-    {
-        return; /* nothing live to persist; leave no stale appvar behind */
-    }
-    var_t *var = os_CreateAppVar(TLS_PSK_CACHE_APPVAR, (uint16_t)total);
-    if (!var)
-    {
+    uint8_t h = file_fn.ti_open(TLS_PSK_CACHE_APPVAR, "w");
+    if (!h)
         return;
-    }
-    memcpy(var->data, &hdr, sizeof(hdr));
-    memcpy(var->data + sizeof(hdr), live, count * sizeof(struct tls_psk_cache_entry));
+    file_fn.ti_resize(total, h);
+    file_fn.ti_write(&hdr, sizeof(hdr), 1, h);
+    file_fn.ti_write(live, sizeof(struct tls_psk_cache_entry), count, h);
+    file_fn.ti_close(h);
 }
 
 bool tls_init(void)
