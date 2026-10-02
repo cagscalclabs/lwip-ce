@@ -304,7 +304,6 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     uint8_t received_tag[16];
     struct tls_aes_context aes_ctx;
     struct pbuf *out_head = NULL;
-    struct pbuf *out_tail = NULL;
     struct tls_handshake_context *ctx = &state->tls_ctx;
     const uint8_t *key;
     const uint8_t *iv;
@@ -442,12 +441,13 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         if (!out_head)
         {
             out_head = out_seg;
-            out_tail = out_seg;
         }
         else
         {
-            pbuf_cat(out_tail, out_seg);
-            out_tail = out_seg;
+            /* pbuf_cat updates tot_len from its first argument through the
+             * whole chain.  Passing the tail left out_head->tot_len stale
+             * after a third chunk, corrupting application records over 2 KiB. */
+            pbuf_cat(out_head, out_seg);
         }
 
         altcp_tls_ce_consume_recved(state, take);
@@ -1570,6 +1570,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         size_t dec_len = 0;
         uint8_t inner_type = 0;
         struct pbuf *dec_pbuf = NULL;
+        tls_dbg_status("rx: app decrypt");
         err_t dec_err = altcp_tls_ce_decrypt_record_stream(state, conn,
                                                            false, total_rec_len,
                                                            &dec_pbuf, &dec_len,
@@ -1583,6 +1584,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             altcp_abort(conn);
             return ERR_ABRT;
         }
+        tls_dbg_status("rx: app decrypted");
 
         if (inner_type == TLS_CONTENT_TYPE_APPLICATION_DATA)
         {
@@ -1681,6 +1683,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             }
             return ERR_OK;
         }
+        tls_dbg_status("rx: app delivered");
     }
 
     return ERR_OK;
@@ -2156,6 +2159,7 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
         return ERR_VAL;
     }
 
+    tls_dbg_status("tx: app encrypt");
     /* Allocate ciphertext buffer: 5 header + len + 1 content_type + 16 tag */
     size_t ct_buf_size = (size_t)len + 22;
     uint8_t *ciphertext = (uint8_t *)mem_malloc(ct_buf_size);
@@ -2176,6 +2180,7 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
         return ERR_MEM;
     }
 
+    tls_dbg_status("tx: app write");
     /* Send encrypted record over TCP */
     err_t err = altcp_write(conn->inner_conn, ciphertext, (u16_t)ciphertext_len, TCP_WRITE_FLAG_COPY);
     if (err == ERR_OK)
@@ -2183,6 +2188,7 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
         altcp_output(conn->inner_conn);
         state->overhead_bytes_adjust -= len;
         state->overhead_bytes_adjust += ciphertext_len;
+        tls_dbg_status("tx: app sent");
     }
 
     mem_stats_tls_direct_release(ct_buf_size, ct_buf_size);

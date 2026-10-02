@@ -122,23 +122,24 @@ Network services and sockets
 
 Unified debug logging
    Diagnostics across the whole stack go through a single callback registered
-   with ``lwip_set_debug(fn, mode, depth)``, replacing the former per-module
-   debug hooks. Each event arrives as a ``struct lwip_debug_info`` carrying the
-   emitting ``module``, the ``module_state`` (where in the code it fired),
-   an ``errnum`` (0 = ok), the source ``line``, a verbosity ``depth``
-   (``MILESTONE`` vs ``VERBOSE``), and a ``severity``:
+   with ``lwip_set_event_cb(event_fn)``. The callback receives a pointer to a
+   ``struct lwip_event`` for each event. The ``kind`` field (``lwip_event_kind_t``)
+   identifies the event type:
 
-   - ``INFO`` — normal progress / informational milestone.
-   - ``ALERT`` — the stack noticed something wrong but chose to proceed (for
-     example, an unsupported-but-tolerated certificate link).
-   - ``ERROR`` — an operation is failing or aborting (always delivered,
-     regardless of the configured depth).
+   - ``LWIP_EV_INFO`` — normal progress milestone; ``data.msg`` is a literal
+     string.
+   - ``LWIP_EV_DEBUG`` — trace point; deduplicated by source location.
+   - ``LWIP_EV_WARN`` — the stack noticed something wrong but chose to proceed
+     (for example, an unsupported-but-tolerated certificate link); ``data.code``
+     carries the file/line.
+   - ``LWIP_EV_ERROR`` — a hard failure; ``data.code`` carries the file/line.
+   - ``LWIP_EV_STATE_CHG`` — a meaningful state transition; ``data.state``
+     carries the object and ``change_event`` identifier.
 
-   The callback's ``mode`` selects whether every emit is delivered
-   (``LWIP_DBG_INFO``) or only error emits (``LWIP_DBG_ERROR``), and ``depth``
-   gates verbosity. This gives an application one place to surface a clean
-   high-level progress view or a deep trace, with the ALERT level making
-   "proceeded despite a problem" distinguishable from a hard error.
+   Pass ``NULL`` to ``lwip_set_event_cb()`` to disable the callback. No mode
+   or depth filter applies — every emitted event reaches the callback.
+   ``LWIP_EV_WARN`` makes "proceeded despite a problem" distinguishable from
+   a hard error without silently swallowing either.
 
 CI And Test Harnesses
 ---------------------

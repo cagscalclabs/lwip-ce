@@ -83,7 +83,7 @@ socket API:
 
    int main(void)
    {
-       if (lwip_start() != 0) {
+       if (!lwip_start()) {
            return 1;
        }
 
@@ -99,7 +99,7 @@ socket API:
    }
 
 ``lwip_start()`` (or ``lwip_start_with_crt(malloc, free, realloc)`` if you need to provide explicit CRT allocator hooks) **must be the first lwIP call** in your program. In most applications, use ``lwip_start()``; use ``lwip_start_with_crt(...)`` only when your runtime requires passing custom ``malloc``/``free``/``realloc`` function pointers. It returns
-``true`` on success and ``false`` on failure, with ``lwip_get_start_errstring()`` returning a string-ified error message indicating what failed. Nothing else will work if this step is skipped or called out of order. In the event you forget ``lwip_start()``, rather than crashing, the exports will simply resolve to no-ops that clear all registers and ``lwip_get_start_errstring()`` will return: "function unsupported, version". The same thing happens if there is a version mismatch between the libload stub and the resident library. If the libload stub expects more functions than exist, the remaining functions remain resolved to the same no-op. If the libload stub expects less functions than the resident has, only the count the stub can absorb are patched. In this way, things remain stable even if the stub and resident app version desync.
+``true`` on success and ``false`` on failure. ``lwip_get_start_errstring()`` (from the LibLoad stub) returns a human-readable string describing the failure. ``lwip_get_start_errno()`` returns a numeric code. Nothing else will work if this step is skipped or called out of order. In the event you forget ``lwip_start()``, rather than crashing, the exports will simply resolve to no-ops that clear all registers and ``lwip_get_start_errstring()`` will return: "function unsupported, version". The same thing happens if there is a version mismatch between the libload stub and the resident library. If the libload stub expects more functions than exist, the remaining functions remain resolved to the same no-op. If the libload stub expects less functions than the resident has, only the count the stub can absorb are patched. In this way, things remain stable even if the stub and resident app version desync.
 
 ``lwip_start()`` initializes the lwIP environment - bss/data segments, imports and exports, async API (``sys_timeouts``) and the memory system (``membuffer``). You are at liberty to use the stack's internals without bringing up networking, but if you want networking, you would next call ``lwip_network_up``. This brings up the USB Ethernet driver and calls ``lwip_init`` (the internal stack-up op).
 
@@ -173,6 +173,17 @@ Transport selectors:
      - ALTCP using the default TCP allocator.
    * - ``LWIP_SOCKET_ALTCP_TLS``
      - ALTCP wrapped in the CE TLS client path.
+   * - ``LWIP_SOCKET_ALTCP_WS``
+     - WebSocket over plain TCP (RFC 6455).
+   * - ``LWIP_SOCKET_ALTCP_WSS``
+     - WebSocket over TLS.
+
+For ``LWIP_SOCKET_ALTCP_WS`` and ``LWIP_SOCKET_ALTCP_WSS`` sockets, call
+``lwip_socket_set_ws_config(socket, path, subprotocol)`` after
+``lwip_socket_create()`` and before ``lwip_socket_connect()``. ``path`` is the
+WebSocket resource path (e.g. ``"/"``); ``subprotocol`` may be ``NULL``. The
+strings are borrowed and must remain valid until ``lwip_socket_connect()``
+returns.
 
 The service flags are netif-level startup requests for code that needs a
 service without creating a socket:
@@ -226,12 +237,13 @@ into their own code.
        return false;
    }
 
-   static void on_event(void *arg, struct lwip_socket *socket,
+   static void on_event(struct lwip_socket *socket,
                         lwip_socket_event_type_t type,
-                        const void *data)
+                        const void *ev_data,
+                        void *arg)
    {
+       (void)ev_data;
        (void)arg;
-       (void)data;
 
        if (type == LWIP_SOCKET_EV_STATE_CHANGE &&
            lwip_socket_status(socket) == LWIP_STATUS_CONNECTED) {
@@ -277,7 +289,7 @@ into their own code.
        lwip_socket_on_event(&socket,
                             LWIP_SOCKET_EVENTF_STATE_CHANGE |
                             LWIP_SOCKET_EVENTF_IO,
-                            on_event);
+                            on_event, NULL);
 
        if (lwip_socket_connect(&socket, "example.com", 80) != LWIP_OK) {
            lwip_socket_destroy(&socket);
@@ -444,100 +456,7 @@ umbrella header over ``lwip/cryptography/*.h``. Programs still need to call ``lw
 Use ``parsers.h`` when the program needs to parse JSON, XML, or URL-encoded
 response bodies. It is a root-level umbrella over ``lwip/parsers/*.h``. The
 parsers operate on any contiguous buffer and do not require the network stack
-to be running.
-
-Parse Responses
----------------
-
-``parsers.h`` is an umbrella over ``lwip/parsers/*.h``. The parsers avoid heap
-allocation and use caller-supplied buffers. JSON is cursor-based over a
-complete response body, XML is streaming/event-based over a caller-owned ring
-buffer, and URL helpers write encoded/decoded data into caller-owned output
-buffers.
-
-**JSON** follows the same cursor model as the ASN.1 parser. ``json_next()``
-advances a cursor and returns one token. Objects and arrays are returned as a
-single token whose ``value`` span covers the interior content; the parent
-cursor has already advanced past the closing brace or bracket. Descend with
-``json_enter()``; skip by simply not calling it.
-
-.. code-block:: c
-
-   #include <parsers.h>
-
-   static const char body[] =
-       "{\"token_type\":\"Bearer\",\"expires_in\":3600}";
-
-   json_parser_t root, obj;
-   json_token_t tok;
-   char type_buf[32];
-   long expires;
-
-   json_init(&root, body, sizeof(body) - 1);
-   if (json_next(&root, &tok) == JSON_OK && tok.type == JSON_TOK_OBJECT) {
-       json_enter(&obj, &tok);
-       json_get_string(&obj, "token_type", type_buf, sizeof(type_buf));
-       json_get_number(&obj, "expires_in", &expires);
-   }
-
-To walk an array and descend only into elements you care about:
-
-.. code-block:: c
-
-   json_parser_t root, arr, item;
-   json_token_t tok;
-
-   json_init(&root, buf, len);
-   json_next(&root, &tok);           /* JSON_TOK_ARRAY */
-   json_enter(&arr, &tok);
-
-   while (json_next(&arr, &tok) == JSON_OK) {
-       if (tok.type != JSON_TOK_OBJECT) continue;
-       json_enter(&item, &tok);      /* descend into this element */
-       /* ... search item with json_get_string / json_get_key_value ... */
-       /* previous elements are already past in &arr — no skip needed */
-   }
-
-**XML** is streaming and SAX-style. Feed bytes with ``xml_take()``, call
-``xml_finish()`` after the final byte, then pull events with ``xml_next()``.
-Comments and processing instructions are skipped automatically. Event names,
-text, and attributes are copied into ``xml_event_t`` so callers do not need to
-hold on to the original input buffer. ``XML_FLAG_LAX`` enables HTML-tolerant
-behavior such as lowercase tag names, unquoted attributes, boolean attributes,
-and auto-ended void elements.
-
-.. code-block:: c
-
-   xml_ctx_t x;
-   xml_event_t evt;
-   char ring[512];
-   char title[64], id_buf[8];
-
-   xml_init(&x, ring, sizeof(ring), 0);
-   xml_take(&x, buf, len);
-   xml_finish(&x);
-
-   while (xml_next(&x, &evt) == XML_OK) {
-       if (evt.type != XML_EVT_ELEMENT_START) continue;
-       if (strcmp(evt.name, "item") == 0) {
-           xml_get_attr(&evt, "id", id_buf, sizeof(id_buf));
-           /* descend to find <title> child */
-       } else if (strcmp(evt.name, "title") == 0) {
-           xml_get_inner_text(&x, title, sizeof(title));
-       }
-   }
-
-**URL encoding** provides percent-encoding per RFC 3986 and a
-``url_build_query()`` helper for constructing ``application/x-www-form-urlencoded``
-bodies:
-
-.. code-block:: c
-
-   char query[256];
-   const char *keys[]   = {"grant_type", "client_id"};
-   const char *values[] = {"client_credentials", "myapp"};
-   url_build_query(query, sizeof(query), keys, values, 2);
-   /* query == "grant_type=client_credentials&client_id=myapp" */
+to be running. See :doc:`parsing` for usage and examples.
 
 Release Layout
 --------------

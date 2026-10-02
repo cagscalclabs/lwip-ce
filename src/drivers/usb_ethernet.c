@@ -1998,6 +1998,32 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         }
     }
     break;
+    case USB_DEVICE_SUSPENDED_EVENT:
+    {
+        /* Adapter entered USB suspend. Mark the link down so lwIP stops
+         * queuing outbound frames against a device that won't accept them.
+         * Do not tear down the eth_device — the device is still present,
+         * just suspended; we expect a RESUMED event to follow. */
+        eth_device_t *eth_device = (eth_device_t *)usb_fn.get_device_data(usb_device);
+        if (eth_device && !eth_device->dead)
+        {
+            netif_set_link_down(&eth_device->iface);
+        }
+        break;
+    }
+    case USB_DEVICE_RESUMED_EVENT:
+    {
+        /* Adapter woke from USB suspend. Endpoints are still valid after
+         * resume — just bring the link back up and re-arm RX so transfers
+         * resume without dropping active connections. */
+        eth_device_t *eth_device = (eth_device_t *)usb_fn.get_device_data(usb_device);
+        if (eth_device && !eth_device->dead && !eth_driver_shutting_down)
+        {
+            netif_set_link_up(&eth_device->iface);
+            eth_schedule_rx_for_netifs();
+        }
+        break;
+    }
     case USB_HUB_LOCAL_POWER_GOOD_EVENT:
         /* Hub switched to its own power supply — no longer drawing bus power
          * from the calculator. Battery may now charge if a supply is present. */

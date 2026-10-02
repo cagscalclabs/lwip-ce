@@ -821,14 +821,17 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     struct tls_x509_parse_result cert_parsed = {0};
     bool is_leaf = (w->cert_index == 0);
 
+    INFO("cert: parse");
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len,
                                     cert_fields, &cert_parsed))
     {
+        INFO("cert: parse fail");
         return false;
     }
     if (!cert_parsed.spki_raw || !cert_parsed.spki_raw->data ||
         cert_parsed.spki_raw->len == 0)
     {
+        INFO("cert: spki fail");
         return false;
     }
 
@@ -841,6 +844,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     if (!tls_x509_time_in_validity(cert_parsed.valid_before, cert_parsed.valid_after,
                                    lwip_sntp_read_rtc_raw()))
     {
+        INFO("cert: date fail");
         return false;
     }
 
@@ -860,6 +864,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         if (!w->ctx || !w->ctx->hostname ||
             !tls_x509_hostname_matches(ext_data, ext_len, cert_parsed.subject_cn, w->ctx->hostname))
         {
+            INFO("cert: host fail");
             return false;
         }
     }
@@ -873,6 +878,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         {
             /* Without the leaf SPKI, CertificateVerify can't run and the
              * server would be unauthenticated. Fail closed. */
+            INFO("cert: spki alloc fail");
             return false;
         }
         mem_stats_tls_direct_add(cert_parsed.spki_raw->len, cert_parsed.spki_raw->len);
@@ -902,6 +908,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
      * accepted with an ALERT. */
     if (!tls_cert_chain_verify_one(w, &cert_parsed, is_leaf))
     {
+        INFO("cert: chain fail");
         return false;
     }
 
@@ -912,6 +919,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     {
         w->chain_validated = true;
     }
+    INFO("cert: accepted");
     return true;
 }
 
@@ -2876,6 +2884,7 @@ static bool tls_recv_certificate_verify(
     const uint8_t *data,
     size_t data_len)
 {
+    INFO("certverify: begin");
     if (!ctx || !data || data_len < 8)
     {
         return false;
@@ -2919,6 +2928,7 @@ static bool tls_recv_certificate_verify(
     {
         /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
          * CertificateVerify without a leaf is unverifiable; fail closed. */
+        INFO("certverify: missing spki");
         ERROR();
         ctx->state = TLS_STATE_ERROR;
         return false;
@@ -2938,6 +2948,7 @@ static bool tls_recv_certificate_verify(
 
     if (!sig_ok)
     {
+        INFO("certverify: signature fail");
         ERROR();
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
         ctx->state = TLS_STATE_ERROR;
@@ -2953,6 +2964,7 @@ static bool tls_recv_certificate_verify(
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
+    INFO("certverify: accepted");
     DEBUG();
 
     return true;

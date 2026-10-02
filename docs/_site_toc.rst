@@ -4,6 +4,7 @@
    :hidden:
 
    getting-started
+   parsing
    api/index
    libload-environment
    technical-details

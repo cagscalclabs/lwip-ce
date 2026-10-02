@@ -194,19 +194,31 @@ static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_t
         param_out->len = 0;
     }
 
+    /* RFC 4055: RSASSA-PSS parameters are a SEQUENCE, unlike the NULL
+     * parameters used by rsaEncryption / sha256WithRSAEncryption. Preserve
+     * the parameter value for callers; parsing is not signature verification. */
+    static const uint8_t oid_rsassa_pss[] = {
+        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a
+    };
+    bool is_pss = tls_x509_oid_eq(&oid, oid_rsassa_pss, sizeof(oid_rsassa_pss));
     if (tls_asn1_next(&c, &param))
     {
-        /* Current callers only expose OBJECT IDENTIFIER params in output. */
-        if (param_out && tls_asn1_tag_number(param.tag) == ASN1_OBJECTID)
+        if (is_pss)
+        {
+            if (param.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+            {
+                return false;
+            }
+        }
+        else if (param.tag != ASN1_OBJECTID && param.tag != ASN1_NULL)
+        {
+            return false;
+        }
+        if (param_out && param.tag != ASN1_NULL)
         {
             param_out->tag = param.tag;
             param_out->data = (uint8_t *)param.value;
             param_out->len = param.len;
-        }
-        else if (tls_asn1_tag_number(param.tag) != ASN1_NULL)
-        {
-            /* Reject unexpected parameter encoding to keep parser strict. */
-            return false;
         }
     }
     else if (!param_optional)
@@ -214,7 +226,8 @@ static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_t
         return false;
     }
 
-    return true;
+    /* Do not silently accept a second parameter or a truncated TLV. */
+    return c.cur == c.end;
 }
 
 static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, size_t ext_len,

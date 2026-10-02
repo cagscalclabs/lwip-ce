@@ -2764,11 +2764,21 @@ int main(void)
             break;
         }
 
-        // Save
+        // Save — deferred when the network stack is live to avoid triggering
+        // OS garbage collection (ti_Open/ti_Write move the heap) while lwIP
+        // PCBs and pbufs are allocated. The exit-path save covers persistence.
         if (key == sk_2nd)
         {
+#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
+            if (!lwip_started)
+            {
+                lwip_app_config_save(&g_cfg);
+                config_sync_from_cfg();
+            }
+#else
             lwip_app_config_save(&g_cfg);
             config_sync_from_cfg();
+#endif
             ui_draw_menu(selected, scroll_pos, false);
             continue;
         }

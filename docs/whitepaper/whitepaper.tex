@@ -322,11 +322,11 @@ fontupper=\footnotesize
 	The reader is assumed to have familiarity with TCP/IP fundamentals, embedded systems design, and basic cryptographic concepts.
 	
 	I am fully aware that many readers, particularly within the cryptography community, will invoke the well-known principle: "Don't roll your own crypto". On platforms where mature, audited cryptographic libraries exist, that principle is not only sound but essential. The TI-84+ CE, however, offers no such luxury. When I began work on CryptX several years ago, it was a proof of concept and a personal learning exercise. Over time, it evolved beyond experimentation. The calculator community responded positively, and I discovered that I genuinely valued both the engineering challenge and the responsibility that came with it.
-	
+
 	When the scope expanded from standalone cryptographic primitives to a full TLS 1.3 implementation integrated with lwIP, the standards changed. The margin for error narrowed. The expectations rose. This document reflects that shift. Every design decision, optimization, constraint, and trade-off was examined with care. While no implementation on a platform this heavily constrained can claim perfection, this work represents a deliberate, disciplined effort to pursue correctness, interoperability, and security to the fullest extent the hardware permits.
-	
-	This project -- along with the associated research, sustained study and research -- is where I learned most of what I now know about cryptography. In that sense, it achieved its core purpose. Even where the implementation is imperfect, the technical growth has been substantial. Early iterations reflected the exploratory nature of the work; over time, the project matured alongside a deeper understanding of cryptographic rigor. I include that candidly, not as self-criticism, but as context for how much this work changed my engineering standards. At the time of writing, I have a materially stronger grasp of the field, including why “good enough” is not adequate for security work, how to design around logical, mathematical, and statistical rigor, and how to document and own security-relevant tradeoffs explicitly.
-	
+
+	This project -- along with the associated research, sustained study and research -- is where I learned most of what I now know about cryptography. In that sense, it achieved its core purpose. Even where the implementation is imperfect, the technical growth has been substantial. Early iterations reflected the exploratory nature of the work; over time, the project matured alongside a deeper understanding of cryptographic rigor. I include that candidly, not as self-criticism, but as context for how much this work changed my engineering standards. At the time of writing, I have a materially stronger grasp of the field, including why "good enough" is not adequate for security work, how to design around logical, mathematical, and statistical rigor, and how to document and own security-relevant tradeoffs explicitly.
+
 	\newpage
 	\section{Stack Adaptations and Extensions}
 	\label{sec:implementation_overview}
@@ -812,7 +812,7 @@ for (uint8_t i = 0; i < count; i++) {
 		\rowcolor{gray!18}
 		\textbf{Status} & \textbf{TLS Scope} \\
 		\midrule
-		Supported now & TLS~1.3 client handshakes, RSA-PSS/SHA-256 \texttt{CertificateVerify} for 1024--2048 bit RSA leaf keys, streaming certificate-chain parsing, RSA/SHA-256 adjacent-link checks where supported, leaf hostname/SAN matching with wildcard support, fatal validity-period enforcement on every certificate in the chain, empty client-certificate response handling, signed compact truststore loading, and application-visible warnings when trust anchoring is incomplete. \\
+		Supported now & TLS~1.3 client handshakes, RSA-PSS/SHA-256 \texttt{CertificateVerify} for 1024--2048 bit RSA leaf keys, streaming certificate-chain parsing, PKCS\#1~v1.5/SHA-256 adjacent-link chain verification where supported (unsupported link types accepted with warning), leaf hostname/SAN matching with wildcard support, fatal validity-period enforcement on every certificate in the chain, empty client-certificate response handling, signed compact truststore loading, and application-visible warnings when trust anchoring is incomplete. \\
 		Planned & ECDSA-P-256 verification, RSA keys up to 4096 bits where performance permits, and wider RSA-PSS hash variants. \\
 		Out of scope & Client-certificate identity support, local physical compromise resistance, secure key storage, hardware-backed trust, RSA-PKCS1 \texttt{CertificateVerify} signatures forbidden by TLS~1.3, and full desktop WebPKI behavior. \\
 		\bottomrule
@@ -1561,14 +1561,14 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 			\endhead
 			TLS \texttt{CertificateVerify} & Complete & \texttt{rsa\_pss\_rsae\_sha256} with 1024--2048 bit RSA leaf keys.\\
 			 & Planned & ECDSA-P-256, RSA keys up to 4096 bits. \\
-			TLS Certificate & Supported now & RSA/SHA-256 adjacent-link verification; leaf hostname/SAN matching (wildcard-capable, CN fallback); fatal validity-period (\texttt{notBefore}/\texttt{notAfter}) enforcement on every chain certificate; all fail-closed. \\
+			TLS Certificate & Supported now & PKCS\#1~v1.5/SHA-256 adjacent-link chain verification (RSA-2048 links only; other signature types accepted with warning); leaf hostname/SAN matching (wildcard-capable, CN fallback); fatal validity-period (\texttt{notBefore}/\texttt{notAfter}) enforcement on every chain certificate; all fail-closed. \\
 			 & Planned & Broader issuer-key and signature-algorithm coverage. \\
 			 & Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
 			\addlinespace
 			TLS CertificateRequest & Skip & \texttt{CertificateRequest} is parsed, included in the transcript, and answered with an empty client certificate list. \\
 			\addlinespace
 			Trust Store Schema & Complete & Signed compact AppVar truststore, derived from curated WebPKI root certificates. \\
-			Trust Store Policy & Fail-Closed & Algorithm supported but does not verify. \\
+			Trust Store Policy & Fail-Closed & RSA link verified; fatal on signature failure. \\
 			 & Warn-Proceed & Algorithm unsupported/signer not in store (temporary) \\
 			\addlinespace
 			State Compromise & Complete & tls\_secure\_memzero \\
