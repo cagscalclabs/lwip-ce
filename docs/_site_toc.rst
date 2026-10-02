@@ -4,8 +4,9 @@
    :hidden:
 
    getting-started
+   using-the-network
+   using-cryptography
    parsing
    api/index
-   libload-environment
    technical-details
    credits
