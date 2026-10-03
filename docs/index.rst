@@ -1,59 +1,35 @@
-lwIP-CE Documentation
-=====================
+lwIP-CE
+=======
 
-.. raw:: html
+*TCP/IP, TLS 1.3, and USB Ethernet for a calculator that was not consulted.*
 
-   <section class="lwip-hero">
-     <div class="lwip-hero-copy">
-       <p class="lwip-kicker">TCP/IP, TLS, and USB Ethernet for a calculator that was not consulted.</p>
-       <h1>lwIP-CE</h1>
-       <p class="lwip-lede">
-         A real network stack forked from <a href="https://www.nongnu.org/lwip/2_1_x/">lwIP</a>, dragged onto the TI-84 Plus CE, wired through USB,
-         trimmed for the platform, and packaged so C programs can actually use it.
-       </p>
-       <div class="lwip-actions">
-         <a class="lwip-button lwip-button-primary" href="getting-started.html">Getting Started</a>
-         <a class="lwip-button lwip-button-primary" href="api/index.html">Usable API</a>
-       </div>
-     </div>
-     <div class="lwip-hero-art" aria-hidden="true">
-       <img src="_static/lwip-ce-console.svg" alt="" />
-     </div>
-   </section>
+lwIP-CE is a port of the `lwIP <https://www.nongnu.org/lwip/2_1_x/>`_ network stack to the TI-84 Plus CE. It allows you to connect to the Internet from your graphing calculator.
 
-   <section class="lwip-strip">
-     <p>
-       This is not a mirror of lwIP&apos;s docs. The useful stuff here is the CE-specific
-       behavior: what got exposed, what got cut, how the dynamic release is shaped,
-       and where the sharp edges are.
-     </p>
-   </section>
+.. note ::
 
-   <section class="lwip-grid">
-     <article>
-       <h2>Curated Release API</h2>
-       <p>The release headers are generated automatically from the intersection between symbols exposed at link time and a manifest file of functions.</p>
-     </article>
-      <article>
-       <h2>Dual-Mode Allocator</h2>
-       <p>
-         lwIP&apos;s pbuf-allocation system can operate dynamically or statically. It can absorb and use the caller&apos;s malloc implementation, or it can receive a statically-allocated buffer and size.
-       </p>
-     </article>
-     <article>
-       <h2>TLS And Crypto</h2>
-       <p>
-         TLS, certificates, hashes, AES, RSA, HKDF, HMAC, ASN.1, and random number generation--a lightweight TLS 1.3 implementation. Primitives exposed for consumer use (eg: hashing a program).
-       </p>
-     </article>
-   </section>
+  This is an API for allowing Internet connectivity in programs (similar to using sockets in
+  C or Python). It is not a magic switch that lets the calculator just go online.
 
-   <section class="lwip-note">
-     <h2>Where To Start</h2>
-     <p>
-       If you already know lwIP, start with the <a href="api/index.html">Usable API</a> and look for
-       what is CE-specific. If you do not know lwIP yet, read the <a href="https://www.nongnu.org/lwip/2_1_x/group__callbackstyle__api.html">upstream raw API docs</a> first, then come back here for the TI-84 Plus CE-specific breakdown.
-     </p>
-   </section>
+lwIP-CE is a full TCP/IP stack providing:
+
+- A USB CDC class Ethernet driver supporting ECM and NCM.
+- A membuffer driver designed to optimize resource ownership in a device that has very little RAM.
+- A minimalistic TLS 1.3 client.
+- An assortment of cryptographic primitives.
+- JSON, XML, and URL encoders.
+
+This documentation covers CE-specific behavior only. It does not mirror upstream lwIP's docs; for
+standard lwIP types, callbacks, and protocol APIs, see the
+`upstream lwIP API reference <https://www.nongnu.org/lwip/2_1_x/group__api.html>`_.
+
+Where to start
+--------------
+
+- :doc:`getting-started`: Installation, configuration, basic stack flow.
+- :doc:`using-the-network`: Using sockets, PCBs, and networking details.
+- :doc:`parsing`: Using the JSON, XML, and URL encode parsers.
+- :doc:`using-cryptography`: Using the cryptography subsystem.
+- :doc:`debugging`: Using the stack debugging tools.
+- :doc:`technical-details`: LibLoad handshake, TLS specifications, test harnesses.
 
 .. include:: _site_toc.rst

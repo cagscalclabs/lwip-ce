@@ -5,8 +5,8 @@
 
    getting-started
    using-the-network
-   using-cryptography
    parsing
-   api/index
+   using-cryptography
+   debugging
    technical-details
    credits
