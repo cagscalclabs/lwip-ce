@@ -1247,10 +1247,12 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     ctx->p = obuf;
     if (dev->pcap.buf)
     {
-        uint8_t frame_buf[ETHERNET_MTU];
-        uint16_t frame_len = (uint16_t)pbuf_copy_partial(p, frame_buf, sizeof(frame_buf), 0);
-        if (frame_len > 0)
-            pcap_write(netif, PCAP_DIR_TX, frame_buf, frame_len);
+        /* obuf->payload + NCM_HBUF_SIZE is the flat frame copy already built
+         * above for the USB transfer — reuse it directly to avoid a 1518-byte
+         * stack allocation. */
+        pcap_write(netif, PCAP_DIR_TX,
+                   (const uint8_t *)obuf->payload + NCM_HBUF_SIZE,
+                   (uint16_t)p->tot_len);
     }
     if (usb_fn.schedule_transfer(dev->tx.endpoint, obuf->payload, obuf->tot_len,
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)

@@ -2,8 +2,7 @@ Using the Network
 =================
 
 This page covers everything you need after ``lwip_start()`` to open
-connections, serve requests, and diagnose network problems. If you only need
-cryptography without networking, see :doc:`using-cryptography`.
+connections, serve requests, and diagnose network problems.
 
 Before starting, make sure the stack is initialized and the network interface
 is up:
@@ -16,53 +15,42 @@ is up:
 See :doc:`getting-started` for the full setup sequence including the
 required ``BSSHEAP_LOW`` makefile setting.
 
-Reserve Memory Before Opening Sockets
---------------------------------------
+Establish a Network Connection
+-------------------------------
 
-The calculator's heap is shared between your app, lwIP's internal pools, and
-anything else running. Before creating sockets, decide what your app needs to
-hold for its own buffers and reserve it explicitly with ``mem_request()``,
-``mem_resize()``, and ``mem_release()`` from ``lwip/core/mem.h``:
+``lwip.h`` provides a socket-style API so that users familiar with sockets but not PCB-level programming can use a familiar API in their programs. If you want fine-grained control, use the PCB-level API for:
 
-.. code-block:: c
+- :doc:`api/core/tcp` — TCP connections and streams
+- :doc:`api/core/udp` — UDP datagrams
+- :doc:`api/core/altcp` — ALTCP abstraction layer (wraps TCP, TLS, WebSocket)
+- :doc:`api/core/altcp_tls` — ALTCP TLS integration
+- :doc:`api/core/raw` — raw IP protocol PCBs
+- :doc:`api/core/pbuf` — packet buffer management
+- :doc:`api/core/netif` — network interface control
 
-   uint8_t *http_buf = mem_request(4096);
-   if (!http_buf) {
-       return 1; /* not enough heap left to proceed */
-   }
+However, if you don't need fine-grained control, I recommend most average users just use the socket-style API.
 
-   /* ... use http_buf for the lifetime of the app ... */
+.. c:function:: lwip_error_t lwip_socket_create(struct lwip_socket *socket, lwip_socket_type_t type, lwip_socket_bind_descriptor_t bind, const lwip_socket_addrinfo_t *addrinfo, uint32_t timeout_ms)
 
-   mem_release(http_buf);
+   Allocate and initialize a socket handle. Non-blocking — returns immediately
+   after binding the netif preference and kicking DHCP or applying static IP.
+   Readiness is awaited asynchronously when ``lwip_socket_connect()`` is called.
 
-These calls route through the same accounting lwIP uses for its own pools, so
-a reservation here is reflected in ``mem_get_stats()`` and counts against the
-heap limit. Reserving up front, before sockets and their pbufs start competing
-for the same heap, means you find out about a too-small heap immediately
-instead of mid-handshake when an allocation silently fails. ``mem_resize()``
-lets you grow or shrink a reservation later without an extra free/request pair.
-
-You are not forced to use ``mem_request/resize/release``, but it is recommended
-as it gives the stack better visibility into how much memory it actually has
-left, which influences its memory-pressure behavior.
-
-Use the Socket API
-------------------
-
-``lwip.h`` is an app-facing wrapper for programs that do not want to wire raw
-TCP, UDP, ALTCP, and TLS callbacks by hand.
-
-``lwip_socket_create()`` accepts a transport selector, a netif selector, an
-optional static IPv4 configuration, and a timeout:
-
-.. code-block:: c
-
-   lwip_socket_create(&socket, LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, 30000);
-
-``NULL`` address info means DHCP mode. ``LWIP_NETIF_EXT`` rejects loopback and
-waits for USB Ethernet, link-up, DHCP address, and gateway. A non-NULL
-``lwip_socket_addrinfo_t`` applies static ``ip/netmask/gateway`` instead of
-starting DHCP.
+   :param socket: Caller-allocated handle. Zeroed by this call. Must remain
+      valid until ``lwip_socket_destroy()``.
+   :param type: Transport selector (``lwip_socket_type_t``). See table below.
+   :param bind: Netif preference (``lwip_socket_bind_descriptor_t``).
+      ``LWIP_NETIF_EXT`` waits for USB Ethernet, link-up, DHCP address, and
+      gateway. ``LWIP_NETIF_ANY`` accepts loopback or external.
+      ``LWIP_NETIF_LOOP`` restricts to loopback only.
+   :param addrinfo: ``NULL`` for DHCP. Non-``NULL`` pointer to a
+      ``lwip_socket_addrinfo_t`` applies static ``ip``/``netmask``/``gateway``
+      instead of starting DHCP.
+   :param timeout_ms: Inactivity watchdog window for the connect/handshake
+      phase in milliseconds. ``0`` uses the stack default. If no progress is
+      made within this window the socket transitions to ``LWIP_STATUS_ERROR``.
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_MEM`` if allocation failed,
+      ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
 
 Transport selectors:
 
@@ -348,6 +336,60 @@ caller-supplied ``peer`` handle when a connection is queued, or
    multiple ticks until the full HTTP header block (``\\r\\n\\r\\n``) is present
    before dispatching. See ``examples/httpd/`` for a complete multi-connection
    HTTP/1.1 server with keep-alive, idle timeouts, and concurrent peer handling.
+
+Memmory Safety & Usage
+-------------------------
+
+One of the biggest issues you will run into with lwIP is memory-related. 
+
+**Hardware Stack Usage**: lwIP consumes some space on the stack for scratch while copying resources, performing cryptography, and more. A quick review of the code suggests that average stack frame usage is ~200 bytes, with TLS Certificate Verify spiking to ~1 KiB and TLS Client Hello using ~800 bytes. Consider this when using stack-memory as the caller.
+
+**Heap Usage**: The calculator's heap is shared between your app, lwIP's internal pools, and
+anything else running. lwIP-CE tracks memory usage for all of its internals, and exposes an API by which the caller can reserve memory.
+
+.. code-block:: c
+
+    uint8_t *http_buf = mem_request(4096);
+    if (!http_buf) {
+       return 1; /* not enough heap left to proceed */
+    }
+
+    /* ... use http_buf for the lifetime of the app ... */
+
+    /* ... possibly resize http_buf ... */
+    uint8_t *new_http_buf = mem_resize(http_buf, 8192);
+    if(new_http_buf)
+        http_buf = new_http_buf;
+
+   mem_release(http_buf);
+
+While you are at perfect liberty to use ``malloc()`` or just statically-allocate memory, it is recommended to use this API for any heap allocations. Because lwIP-CE can wind up operating under severe memory constraints, having awareness of all buffers in use is important lest you wind up with out-of-memory errors while still believing you have memory available. Additionally, lwIP-CE can take certain actions to relieve memory pressure (ex: defer TCP window updates), but those will never happen if lwIP-CE is unaware that memory is actually low. 
+
+To illustrate this, take the following example. Say you allocate an 8 KiB buffer via something like ``uint8_t buf[8192];`` as a static variable versus via ``mem_request()``. The table below will illustrate how lwIP-CE manages memory based on 54 KiB (what the stack tends to default to) and 46 KiB (the result of using ``mem_request()``)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 33 33 34
+
+   * - Pressure Level
+     - @ 54 KiB
+     - @ 46 KiB
+   * - MILD (70%)
+     - 37.8 KiB
+     - 32.2 KiB
+   * - HIGH (85%)
+     - 45.9 KiB
+     - 39.1 KiB
+   * - SEVERE (90%)
+     - 48.6 KiB
+     - 41.4 KiB
+   * - CRITICAL (95%+)
+     - 51.3 KiB
+     - 43.7 KiB
+
+The table lists the memory usage at which the stack would enter pressure state for each max heap cap. Notice that, in the case in which you reserved your 8 KiB buffer but lwIP-CE was unaware, the stack would OOM-fault before even hitting CRITICAL pressure state. This is just one example of the larger issue: the stack will make decisions based on the supposition it has more memory than it actually does if you do not tell it the memory is reserved. This is the main reason why I exposed this API surface and highly recommend people use it.
+
+Users may return the current lwIP memory usage heuristics via the ``mem_get_stats()`` function.
 
 Debugging: Traceback
 --------------------
