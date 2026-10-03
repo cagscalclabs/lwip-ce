@@ -42,7 +42,11 @@ jobs:
       - name: Install Doxygen
         run: |
           sudo apt-get update
-          sudo apt-get install -y doxygen graphviz clang-18 libclang-18-dev
+          sudo apt-get install -y graphviz clang-18 libclang-18-dev
+          wget -q "https://github.com/doxygen/doxygen/releases/download/Release_1_17_0/doxygen-1.17.0.linux.bin.tar.gz" -O /tmp/doxygen.tar.gz
+          tar -xzf /tmp/doxygen.tar.gz -C /tmp
+          sudo cp /tmp/doxygen-1.17.0/bin/doxygen /usr/local/bin/doxygen
+          doxygen --version
 
       - name: Install docs dependencies
         run: python -m pip install -r docs/requirements.txt
