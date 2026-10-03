@@ -2,17 +2,20 @@ Using Cryptography
 ==================
 
 lwIP-CE exposes a set of cryptographic primitives independently of the network
-stack. TLS over a network connection is also covered here.
+stack. This section will go over the modules of the cryptography API, and end with some use-case examples.
+
+.. important::
+
+   The calculator has no secure enclave or cryptographic acceleration. It has no concept of permissions, file ownership, or process ownership. There are no built-in controls to ensure file integrity or prevent arbitrary code execution. Please be aware of this when using TLS or any cryptographic module in this project. Operate under the premise that your calculator is your trust boundary.
 
 Setup
 -----
 
-Call ``lwip_start()`` before using any crypto API. You do **not** need to call
-``lwip_network_up()`` for crypto-only programs. Every unit test under
-``tests/unit/`` relies on this pattern.
+Call ``lwip_start()`` before using any crypto API (it patches the LibLoad stub so that the function table is correct). You do **not** need to call ``lwip_network_up()`` for crypto-only programs.
 
 .. code-block:: c
 
+   #include <lwip.h>       // for lwip_start()
    #include <cryptography.h>
 
    int main(void)
@@ -23,17 +26,144 @@ Call ``lwip_start()`` before using any crypto API. You do **not** need to call
        /* crypto primitives are ready — no network interface needed */
    }
 
-Include ``cryptography.h`` for the full set of primitives, or include
-individual headers from ``lwip/cryptography/`` for a narrower surface.
+Include ``cryptography.h`` for the full set of primitives, or include individual headers from ``lwip/cryptography/`` for a narrower surface.
 
-TLS is gated on the **Enable TLS** setting in the lwIP-CE app configuration
-wizard. If TLS is disabled by the end user, any attempt to open a TLS socket
-fails immediately. There is no way to override this from application code.
+``lwip_start()`` also initializes the RNG.
 
-----
+-----
+
+Randomness
+-----------
+
+``lwip/cryptography/random.h`` — SRAM-noise TRNG
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The calculator has no hardware RNG. lwIP-CE derives entropy from SRAM noise —
+the electrical state of uninitialized SRAM varies between power cycles. The
+generator is designed in alignment with NIST SP 800-90 standards and achieves
+a measured min-entropy of H∞ ≈ 0.99998 bits per output bit (≈ 1.00000 across
+the full entropy pool), with a median correlation coefficient of k\ :sub:`eff`
+= 1.031, computed over a 1.2 MB nominal dataset per unit tested. For the full entropy analysis,
+see the `whitepaper <https://github.com/cagscalclabs/lwip-ce/releases/tag/whitepaper-latest>`_.
+Do not use the toolchain ``rand()`` functions for anything security-sensitive;
+they are not cryptographically secure.
+
+.. c:function:: bool tls_random_init_entropy(void)
+
+   Initialize the cryptographic TRNG. Selects an SRAM entropy source, runs the
+   conditioning pass, and seeds the DRBG. Must be called before
+   ``tls_random()`` or ``tls_random_bytes()`` unless ``lwip_start()`` has
+   already been called (which initializes entropy automatically).
+
+   :returns: ``true`` on success, ``false`` if entropy initialization failed
+      (e.g. no suitable SRAM source found).
+
+.. c:function:: bool tls_rng_healthcheck(void)
+
+   Run one immediate health-check cycle — the same lightweight sanity and
+   recovery logic used by the periodic RNG health timer. If repeated failures
+   have been detected, this may trigger a re-initialization of the entropy
+   source. **Always call this before generating random data.**
+
+   :returns: ``true`` if the RNG is healthy and safe to use, ``false``
+      otherwise. On ``false``, retry ``tls_random_init_entropy()`` or abort.
+
+.. c:function:: void *tls_random_bytes(void *buffer, size_t len)
+
+   Fill ``buffer`` with ``len`` cryptographically random bytes, synchronously.
+   The health check must pass before calling this.
+
+   :param buffer: Caller-supplied destination buffer.
+   :param len: Number of bytes to fill.
+   :returns: ``buffer`` on success.
+
+.. c:function:: uint64_t tls_random(void)
+
+   Return a single cryptographically random 64-bit value, synchronously.
+   The health check must pass before calling this.
+
+   :returns: A 64-bit random integer.
+
+.. c:function:: bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t cb, void *arg, bool blocking)
+
+   Request ``len`` random bytes into ``out``, either synchronously or via
+   lwIP timer callbacks. Only one request can be active at a time — check
+   ``tls_rng_is_busy()`` before calling. The caller must keep ``out`` valid
+   until the request completes (i.e. until ``cb`` is invoked in async mode).
+
+   :param out: Destination buffer. Must remain valid until completion.
+   :param len: Number of random bytes requested.
+   :param cb: Optional completion callback
+      (``void cb(bool ok, void *arg)``). ``ok`` is ``true`` on success.
+   :param arg: Opaque pointer passed through to ``cb``.
+   :param blocking: ``true`` to gather entropy immediately in the caller
+      (may block for a long time); ``false`` to gather in chunks via
+      ``lwip_service_events()`` and invoke ``cb`` when done.
+   :returns: ``true`` if the request started or completed successfully,
+      ``false`` on failure (busy, bad args, or health failure).
+
+.. c:function:: bool tls_rng_is_busy(void)
+
+   Returns ``true`` if a ``tls_request_random_bytes()`` request is currently
+   in progress. Use this to guard against starting a second request before
+   the first completes.
+
+   :returns: ``true`` if busy, ``false`` if idle.
+
+**Simple synchronous use:**
+
+.. code-block:: c
+
+   /* generator already initialized by lwip_start() */
+   uint8_t key[32];
+
+   if(tls_rng_healthcheck())              /* always ensure healthiness before generating */
+      tls_random_bytes(key, sizeof(key)); /* fill with cryptographic random bytes */
+   else printf("error: rng");
+   /* ^ You'll want to actually handle this (ex: retry tls_random_init_entropy()) */
+
+   // ... a bit later ...
+   if(tls_rng_healthcheck())              /* always ensure healthiness before generating */
+      uint64_t r = tls_random();          /* get a single random 64-bit value */
+   else printf("error: rng");
+   /* ^ You'll want to actually handle this (ex: retry tls_random_init_entropy()) */
+
+After ``lwip_start()``, the entropy source is initialized automatically as part of the TLS subsystem setup; calling ``tls_random_init_entropy()`` again after that is harmless but redundant.
+
+**Async gathering (large requests, main-loop friendly):**
+
+.. code-block:: c
+
+   static void on_random(bool ok, void *arg) {
+       /* called from lwip_service_events() when entropy is ready */
+   }
+
+   uint8_t entropy_buf[64];
+   tls_request_random_bytes(entropy_buf, sizeof(entropy_buf),
+                            on_random, NULL,
+                            false);  /* false = async via lwIP timers */
+
+   /* OR: blocking (may stall the UI for a moment) */
+   tls_request_random_bytes(entropy_buf, sizeof(entropy_buf),
+                            NULL, NULL,
+                            true);   /* true = gather immediately */
+
+Only one request can be in flight at a time. ``tls_rng_is_busy()`` returns
+``true`` if a request is active. The ``out`` buffer must remain valid until
+the callback fires (async) or the call returns (blocking).
+
+``tls_rng_healthcheck()`` runs the same lightweight sanity check the periodic
+internal timer runs. It returns ``true`` if the RNG health is currently
+acceptable.
+
+------
 
 Symmetric Encryption
 --------------------
+
+.. note::
+
+   **Symmetric encryption** is a type of encryption in which a single key can be used to both encrypt and decrypt data. AES is one of the symmetric ciphers used to obfuscate messages in flight in TLS 1.3 and can also be used to encrypt files at rest.
 
 ``lwip/cryptography/aes.h`` — AES-GCM, AES-CBC, AES-CCM
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -420,58 +550,7 @@ low-order point inputs (RFC 7748 §6 check).
 
 ----
 
-Randomness
-----------
 
-``lwip/cryptography/random.h`` — SRAM-noise TRNG
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The calculator has no hardware RNG. lwIP-CE derives entropy from SRAM noise —
-the electrical state of uninitialized SRAM varies between power cycles. Do not
-use the toolchain ``rand()`` functions for anything security-sensitive; they
-are not cryptographically secure.
-
-**Simple synchronous use:**
-
-.. code-block:: c
-
-   uint8_t key[32];
-   tls_random_init_entropy();          /* initialize entropy source once */
-   tls_random_bytes(key, sizeof(key)); /* fill with cryptographic random bytes */
-
-   uint64_t r = tls_random();          /* get a single random 64-bit value */
-
-``tls_random_init_entropy()`` must be called before ``tls_random()`` or
-``tls_random_bytes()``. It returns ``true`` on success and ``false`` if
-entropy initialization fails. After ``lwip_start()``, the entropy source is
-initialized automatically as part of the TLS subsystem setup; calling
-``tls_random_init_entropy()`` again after that is harmless but redundant.
-
-**Async gathering (large requests, main-loop friendly):**
-
-.. code-block:: c
-
-   static void on_random(bool ok, void *arg) {
-       /* called from lwip_service_events() when entropy is ready */
-   }
-
-   uint8_t entropy_buf[64];
-   tls_request_random_bytes(entropy_buf, sizeof(entropy_buf),
-                            on_random, NULL,
-                            false);  /* false = async via lwIP timers */
-
-   /* OR: blocking (may stall the UI for a moment) */
-   tls_request_random_bytes(entropy_buf, sizeof(entropy_buf),
-                            NULL, NULL,
-                            true);   /* true = gather immediately */
-
-Only one request can be in flight at a time. ``tls_rng_is_busy()`` returns
-``true`` if a request is active. The ``out`` buffer must remain valid until
-the callback fires (async) or the call returns (blocking).
-
-``tls_rng_healthcheck()`` runs the same lightweight sanity check the periodic
-internal timer runs. It returns ``true`` if the RNG health is currently
-acceptable.
 
 ----
 

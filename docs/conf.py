@@ -42,3 +42,7 @@ breathe_domain_by_extension = {
 
 primary_domain = "c"
 highlight_language = "c"
+
+suppress_warnings = [
+    "duplicate_declaration.c",
+]

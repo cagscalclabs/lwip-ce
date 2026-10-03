@@ -267,26 +267,7 @@ Network services and sockets
    ``lwip_netif_info_t`` snapshot (link/admin state, DHCP state, assigned IPv4
    address, gateway) for status displays.
 
-Unified debug logging
-   Diagnostics across the whole stack go through a single callback registered
-   with ``lwip_set_event_cb(event_fn)``. The callback receives a pointer to a
-   ``struct lwip_event`` for each event. The ``kind`` field (``lwip_event_kind_t``)
-   identifies the event type:
 
-   - ``LWIP_EV_INFO`` — normal progress milestone; ``data.msg`` is a literal
-     string.
-   - ``LWIP_EV_DEBUG`` — trace point; deduplicated by source location.
-   - ``LWIP_EV_WARN`` — the stack noticed something wrong but chose to proceed
-     (for example, an unsupported-but-tolerated certificate link); ``data.code``
-     carries the file/line.
-   - ``LWIP_EV_ERROR`` — a hard failure; ``data.code`` carries the file/line.
-   - ``LWIP_EV_STATE_CHG`` — a meaningful state transition; ``data.state``
-     carries the object and ``change_event`` identifier.
-
-   Pass ``NULL`` to ``lwip_set_event_cb()`` to disable the callback. No mode
-   or depth filter applies — every emitted event reaches the callback.
-   ``LWIP_EV_WARN`` makes "proceeded despite a problem" distinguishable from
-   a hard error without silently swallowing either.
 
 CI And Test Harnesses
 ---------------------
