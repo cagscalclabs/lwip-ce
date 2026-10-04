@@ -13,6 +13,9 @@ permissions:
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     # Only run on master branch
     if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
 
