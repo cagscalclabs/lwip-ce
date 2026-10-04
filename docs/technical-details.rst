@@ -141,7 +141,7 @@ Security Posture
    * - RNG
      - SRAM-noise-derived, NIST SP 800-90A/90B aligned. Measured min-entropy:
        H∞ ≈ 0.99998 bits per output bit (≈ 1.00000 across the full entropy
-       pool), median correlation coefficient k_eff = 1.031 over a 1.2 MB
+       pool), median effective correlation k_eff = 1.031 over a 1.2 MB
        nominal dataset per unit tested. See the whitepaper for the full
        entropy analysis.
    * - TLS trust store

@@ -25,10 +25,10 @@ standard lwIP types, callbacks, and protocol APIs, see the
 Requirements
 -------------
 
-- A TI-84+ CE graphing calculator.
+- A TI-84+ CE or TI-84+ CE Python Edition graphing calculator.
 - A USB Ethernet adapter compliant with **Communications Data Class (CDC)** subtype ECM or NCM. [#cdcnote]_
 - An Ethernet cable connected to a switch, router, or an Ethernet-compatible WPS Wi-Fi adapter.
-- A means to transfer the appropriate files to your calculator (TI Connect CE, TiLp2).
+- Software for transferring the appropriate files to your calculator (TI Connect CE, TiLp2).
 - **As developer**, the CE C toolchain, lwIP headers and .lib file.
 
 .. rubric:: Notes
@@ -58,7 +58,7 @@ Contributing
 lwIP-CE is under active development and as such welcomes platform-specific contributions.
 It is rebased quarter-annually against upstream lwIP, but the cryptography needs to be written in ez80 assembly by those with knowledge of how to write efficient, timing-safe code.
 
-**Required for full TLS 1.3 compliance:**
+**Remaining unimplemented mandatory TLS 1.3 algorithms:**
 
 - P-256 key exchange (ECDHE secp256r1)
 - P-256 signature verification (ECDSA secp256r1 SHA-256)
