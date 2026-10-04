@@ -84,6 +84,29 @@ jobs:
         run: |
           git push origin ${{ steps.sync.outputs.branch_name }}
 
+      - name: Compute next version tag
+        id: version
+        run: |
+          git fetch --tags origin
+          # Find the latest vX.Y.Z tag
+          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0.1"
+          else
+            # Bump the Z component
+            X=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+            Y=$(echo "$LATEST" | cut -d. -f2)
+            Z=$(echo "$LATEST" | cut -d. -f3)
+            NEXT="v${X}.${Y}.$((Z + 1))"
+          fi
+          echo "tag=${NEXT}" >> $GITHUB_OUTPUT
+          echo "previous=${LATEST}" >> $GITHUB_OUTPUT
+
+      - name: Tag sync branch with next version
+        run: |
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
+
       - name: Get commit information
         id: commits
         run: |
@@ -100,13 +123,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ steps.sync.outputs.branch_name }}
           base: master
-          title: "🔄 Sync upstream lwIP changes ($(date +%Y-%m-%d))"
+          title: "🔄 Sync upstream lwIP changes → ${{ steps.version.outputs.tag }}"
           body: |
-            ## Automated Upstream Sync
+            ## Automated Upstream Sync — ${{ steps.version.outputs.tag }}
 
             This PR automatically merges changes from the upstream lwIP repository.
+            Merging will trigger a versioned release of **${{ steps.version.outputs.tag }}**.
 
             **Source:** https://github.com/lwip-tcpip/lwip
+            **Previous version:** ${{ steps.version.outputs.previous }}
+            **New version:** ${{ steps.version.outputs.tag }}
             **Merge Strategy:** `-X ours` (prefers local changes on conflicts)
             **Status:** ${{ steps.merge.outputs.has_conflicts == 'true' && '⚠️ Has Conflicts' || '✅ Clean Merge' }}
 

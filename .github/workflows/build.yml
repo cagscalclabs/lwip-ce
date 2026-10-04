@@ -6,6 +6,8 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
   pull_request:
+  push:
+    branches: [master]
 
 permissions:
   contents: write
@@ -286,34 +288,67 @@ jobs:
           name: lwip-latest
           path: ${{ github.workspace }}/build
 
-      - name: Prepare nightly release notes
-        id: release_notes
+      - name: Detect version tag on HEAD
+        id: vtag
         run: |
           git fetch --force --tags origin
-          NOTES_FILE="$RUNNER_TEMP/nightly-release-notes.md"
-          {
-            echo "Automated nightly lwIP-CE dylib build."
-            echo
-            echo "Commit: \`$GITHUB_SHA\`"
-            echo
-            echo "Changes since previous nightly release:"
-            echo
-            if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
-              if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
-                git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
+          TAG=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | head -1)
+          if [ -n "$TAG" ]; then
+            echo "versioned=true" >> $GITHUB_OUTPUT
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          else
+            echo "versioned=false" >> $GITHUB_OUTPUT
+            echo "tag=$NIGHTLY_TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare release notes
+        id: release_notes
+        run: |
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          if [ "${{ steps.vtag.outputs.versioned }}" = "true" ]; then
+            PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | sed -n '2p')
+            {
+              echo "## lwIP-CE ${{ steps.vtag.outputs.tag }}"
+              echo
+              echo "Upstream lwIP rebase — $(date +%Y-%m-%d)"
+              echo
+              echo "Commit: \`$GITHUB_SHA\`"
+              echo
+              echo "### Changes since ${PREV:-initial release}"
+              echo
+              if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/${PREV}^{commit}" >/dev/null; then
+                git log --reverse --pretty=format:'- %s (%h)' "${PREV}..HEAD"
                 echo
               else
-                echo "- No commits since the previous nightly release."
+                git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+                echo
               fi
-            else
-              echo "- No previous nightly release tag found; listing recent history."
-              git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+            } > "$NOTES_FILE"
+          else
+            {
+              echo "Automated nightly lwIP-CE dylib build."
               echo
-            fi
-          } > "$NOTES_FILE"
+              echo "Commit: \`$GITHUB_SHA\`"
+              echo
+              echo "Changes since previous nightly release:"
+              echo
+              if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
+                if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
+                  git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
+                  echo
+                else
+                  echo "- No commits since the previous nightly release."
+                fi
+              else
+                echo "- No previous nightly release tag found; listing recent history."
+                git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+                echo
+              fi
+            } > "$NOTES_FILE"
+          fi
           echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: package nightly release asset
+      - name: Package release asset
         id: package_release
         if: success()
         run: |
@@ -321,9 +356,20 @@ jobs:
           tar -czf "$ASSET" -C "${{ github.workspace }}/build" .
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
 
-      - name: publish nightly release
-        id: publish_release
-        if: success()
+      - name: Publish versioned release
+        id: publish_versioned
+        if: success() && steps.vtag.outputs.versioned == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.vtag.outputs.tag }}" \
+            --title "lwIP-CE ${{ steps.vtag.outputs.tag }}" \
+            --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
+            "${{ steps.package_release.outputs.asset }}"
+
+      - name: Publish nightly release
+        id: publish_nightly
+        if: success() && steps.vtag.outputs.versioned == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -350,7 +396,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## lwIP Nightly Release"
+            echo "## lwIP Release"
             echo
             echo "| Step | Status |"
             echo "|------|--------|"
@@ -358,13 +404,17 @@ jobs:
             echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
             echo "| sast | ${{ needs.sast.result }} |"
             echo "| dast (informational) | ${{ needs.dast.result }} |"
-            echo "| package nightly release asset | ${{ steps.package_release.outcome }} |"
-            echo "| publish nightly release | ${{ steps.publish_release.outcome }} |"
+            echo "| package release asset | ${{ steps.package_release.outcome }} |"
+            if [ "${{ steps.vtag.outputs.versioned }}" = "true" ]; then
+              echo "| publish versioned release (${{ steps.vtag.outputs.tag }}) | ${{ steps.publish_versioned.outcome }} |"
+            else
+              echo "| publish nightly release | ${{ steps.publish_nightly.outcome }} |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   save_sentinel:
     needs: [check_inputs, dylib_unit_tests, cavp_validation, sast]
-    if: needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
+    if: github.event_name != 'pull_request' && needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Write sentinel

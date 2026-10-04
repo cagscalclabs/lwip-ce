@@ -62,7 +62,7 @@ It is rebased quarter-annually against upstream lwIP, but the cryptography needs
 
 - P-256 key exchange (ECDHE secp256r1)
 - P-256 signature verification (ECDSA secp256r1 SHA-256)
-- RSA key expansion to 4096-bit
+- RSA, expand support for key sizes through 4096 bits
 
 **Optional / nice to have:**
 

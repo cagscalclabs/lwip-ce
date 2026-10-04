@@ -15,7 +15,7 @@ is up:
 See :doc:`getting-started` for the full setup sequence including the
 required ``BSSHEAP_LOW`` makefile setting.
 
-Socket-Style v. PCB-level API
+Socket-Style v. PCB-Level API
 ------------------------------
 
 ``lwip.h`` provides a socket-style API so that users familiar with sockets but not PCB-level programming can use a familiar API in their programs. If you want fine-grained control, use the PCB-level API for:
@@ -54,6 +54,31 @@ First, create a socket.
    :param timeout_ms: Inactivity watchdog window for the connect/handshake
       phase in milliseconds. ``0`` uses the stack default. If no progress is
       made within this window the socket transitions to ``LWIP_STATUS_ERROR``.
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_MEM`` if allocation failed,
+      ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
+
+Sockets own an internal, heap-allocated RX ring buffer that you can read from with ``lwip_socket_read()`` (more on that later). That buffer starts at 512 bytes and maxes out at 4 KiB. Should you need a larger (or smaller) max size, you can use the *extended attributes* socket creation function below.
+
+.. c:function:: lwip_error_t lwip_socket_create_ex(struct lwip_socket *socket, lwip_socket_type_t type, lwip_socket_bind_descriptor_t bind, const lwip_socket_addrinfo_t *addrinfo, uint32_t timeout_ms, size_t rx_ring_max)
+
+   Identical to ``lwip_socket_create()`` but lets you override the RX ring
+   maximum. Use this when the default 4 KiB ceiling is too small (a high-bandwidth
+   stream) or unnecessarily large (a tight-RAM scenario where you know the
+   largest message that will arrive).
+
+   The ring starts at ``LWIP_SOCKET_RX_RING_INIT_SIZE`` (512 B) and grows in
+   ``LWIP_SOCKET_RX_RING_STEP_SIZE`` (512 B) increments up to ``rx_ring_max``.
+   Passing ``0`` for ``rx_ring_max`` uses ``LWIP_SOCKET_RX_RING_MAX_SIZE``
+   (4096 B), the same ceiling as ``lwip_socket_create()``.
+
+   :param socket: Caller-allocated handle. Zeroed by this call.
+   :param type: Transport selector (``lwip_socket_type_t``).
+   :param bind: Netif preference (``lwip_socket_bind_descriptor_t``).
+   :param addrinfo: ``NULL`` for DHCP; non-``NULL`` for static IP.
+   :param timeout_ms: Connect/handshake inactivity watchdog in milliseconds.
+      ``0`` uses the stack default.
+   :param rx_ring_max: Hard ceiling for the RX ring in bytes. ``0`` uses
+      ``LWIP_SOCKET_RX_RING_MAX_SIZE`` (4096 B).
    :returns: ``LWIP_OK`` on success, ``LWIP_ERR_MEM`` if allocation failed,
       ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
 
@@ -110,6 +135,41 @@ When using ``LWIP_SOCKET_ALTCP_WS`` or ``LWIP_SOCKET_ALTCP_WSS``, you will need 
       Borrowed under the same lifetime constraint as ``path``.
    :returns: ``LWIP_OK`` on success, ``LWIP_ERR_ARG`` if ``socket`` or ``path``
       is ``NULL``.
+
+Socket Reconfiguration
+-----------------------
+
+Some socket attributes are modifiable in flight should the situation call for it.
+
+.. c:function:: lwip_error_t lwip_socket_set_connect_timeout(struct lwip_socket *socket, uint32_t timeout_ms)
+
+   Update the inactivity watchdog window after the socket has been created.
+   The timer is reset to this new value immediately. Useful when you need a
+   longer budget for a slow DNS lookup or TLS handshake than you knew at
+   create time.
+
+   :param socket: An initialised socket handle.
+   :param timeout_ms: New watchdog window in milliseconds. ``0`` disarms the
+      watchdog entirely (use with care — a stalled connect will never
+      time out).
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
+
+.. c:function:: lwip_error_t lwip_socket_set_rx_limits(struct lwip_socket *socket, size_t initial_size, size_t max_size)
+
+   Resize the RX ring buffer limits on an existing socket. Takes effect on
+   the next internal growth step — it does not shrink a ring that has already
+   expanded past the new maximum.
+
+   Prefer ``lwip_socket_create_ex()`` when you know the right ceiling up front.
+   Use this function when the ceiling needs to change after creation — for
+   example, after reading a ``Content-Length`` header that tells you the
+   response will be larger than expected.
+
+   :param socket: An initialised socket handle.
+   :param initial_size: New initial allocation in bytes. ``0`` keeps the
+      current value.
+   :param max_size: New hard ceiling in bytes. ``0`` keeps the current value.
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
 
 Requesting Services
 --------------------
