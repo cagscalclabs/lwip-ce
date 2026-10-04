@@ -511,87 +511,6 @@ static void tls_cert_walker_free(struct tls_cert_walker *w)
     mem_buffer_custom_free(w);
 }
 
-/* DER prefix of a PKCS#1 v1.5 DigestInfo for id-sha256: the bytes that
- * precede the 32-byte digest in a correctly-padded SHA-256 signature.
- *   SEQUENCE { SEQUENCE { OID 2.16.840.1.101.3.4.2.1, NULL }, OCTET STRING }
- * (RFC 8017 §9.2 / B.1). Used to check the decrypted signature structure. */
-static const uint8_t tls_pkcs1_sha256_digestinfo_prefix[] = {
-    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
-    0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20};
-
-/* Verify an RSASSA-PKCS1-v1.5 signature over a precomputed SHA-256 digest,
- * given the issuer's raw RSA public key. Decrypts the signature, then checks
- * the EMSA-PKCS1-v1.5 encoding:
- *   EM = 0x00 || 0x01 || 0xFF...0xFF || 0x00 || DigestInfo(SHA-256, digest)
- * Returns true iff the encoding is well-formed and the embedded digest equals
- * `digest`. CA signatures on RSA-2048 chain links are PKCS#1 v1.5, not PSS. */
-static bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t sig_len,
-                                            const uint8_t digest[32],
-                                            const uint8_t *modulus,
-                                            size_t modulus_len,
-                                            uint24_t exponent)
-{
-    uint8_t *em;
-    size_t pos;
-    bool ok = false;
-
-    if (!sig || !digest || !modulus || sig_len != modulus_len ||
-        modulus_len > RSA_TRANSIENT_SIZE)
-    {
-        return false;
-    }
-    /* DigestInfo + at least 8 bytes of 0xFF padding + leading 00 01 / 00. */
-    if (modulus_len < sizeof(tls_pkcs1_sha256_digestinfo_prefix) + 32 + 11)
-    {
-        return false;
-    }
-
-    em = __rsa_transient;
-    if (!tls_rsa_decrypt_signature_exp(sig, sig_len, em,
-                                       exponent, modulus, modulus_len))
-    {
-        goto cleanup;
-    }
-
-    /* EM = 0x00 0x01 PS 0x00 T, where PS is >= 8 bytes of 0xFF and T is the
-     * DigestInfo. */
-    if (em[0] != 0x00 || em[1] != 0x01)
-    {
-        goto cleanup;
-    }
-    pos = 2;
-    while (pos < modulus_len && em[pos] == 0xFF)
-    {
-        pos++;
-    }
-    /* Need >= 8 bytes of 0xFF, then a single 0x00 separator. */
-    if (pos < 10 || pos >= modulus_len || em[pos] != 0x00)
-    {
-        goto cleanup;
-    }
-    pos++;
-    /* The remaining bytes must be exactly DigestInfo-prefix || digest. */
-    if (modulus_len - pos != sizeof(tls_pkcs1_sha256_digestinfo_prefix) + 32)
-    {
-        goto cleanup;
-    }
-    if (memcmp(em + pos, tls_pkcs1_sha256_digestinfo_prefix,
-               sizeof(tls_pkcs1_sha256_digestinfo_prefix)) != 0)
-    {
-        goto cleanup;
-    }
-    if (memcmp(em + pos + sizeof(tls_pkcs1_sha256_digestinfo_prefix),
-               digest, 32) != 0)
-    {
-        goto cleanup;
-    }
-    ok = true;
-
-cleanup:
-    tls_secure_memzero(em, modulus_len);
-    return ok;
-}
-
 /* Pull the bits needed to verify a cert's issuer signature out of its DER:
  *   Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signature }
  * Captures the full tbsCertificate TLV bytes (what the signature covers),
@@ -700,6 +619,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
 
         if (w->pending_is_rsa_sha256)
         {
+            struct tls_rsa_key issuer_key;
             const uint8_t *modulus;
             size_t modulus_len;
             uint24_t exponent;
@@ -713,11 +633,26 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
                                                 &modulus, &modulus_len,
                                                 &exponent))
             {
-                if (tls_rsa_pkcs1_v15_sha256_verify(w->pending_sig,
-                                                    w->pending_sig_len,
-                                                    w->pending_tbs_digest,
-                                                    modulus, modulus_len,
-                                                    exponent))
+                /* Pack the extracted (modulus, exponent) into a tls_rsa_key.
+                 * exp_be holds the 3-byte big-endian encoding of exponent. */
+                uint8_t exp_be[3] = {
+                    (uint8_t)(exponent >> 16),
+                    (uint8_t)(exponent >> 8),
+                    (uint8_t)(exponent),
+                };
+                issuer_key.exp_len  = sizeof(exp_be);
+                issuer_key.exponent = exp_be;
+                issuer_key.mod_len  = modulus_len;
+                issuer_key.modulus  = modulus;
+                struct tls_key issuer_tls_key = {
+                    .alg = TLS_ALG_RSA_PKCS1_SHA256,
+                    .rsa = issuer_key,
+                };
+                tls_key_op_result_t vr = tls_x509_signature_verify_digest(
+                    w->pending_tbs_digest,
+                    w->pending_sig, w->pending_sig_len,
+                    &issuer_tls_key);
+                if (vr == TLS_KEY_OP_OK)
                 {
                     verified_or_accepted = true;
                 }
@@ -2387,38 +2322,37 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                 if (key_len >= 3 + RSA_MODULUS_MIN_SUPPORTED &&
                     w->pending_link && w->pending_sig)
                 {
-                    uint24_t exp = (uint24_t)root_entry->key[0]
-                                 | ((uint24_t)root_entry->key[1] << 8)
-                                 | ((uint24_t)root_entry->key[2] << 16);
+                    /* Truststore packs exponent as 3-byte LE; convert to BE for
+                     * tls_rsa_key which expects big-endian exponent bytes. */
+                    uint8_t exp_be[3] = {
+                        root_entry->key[2],
+                        root_entry->key[1],
+                        root_entry->key[0],
+                    };
                     const uint8_t *mod     = root_entry->key + 3;
                     size_t         mod_len = key_len - 3;
                     bool verified = false;
 
+                    struct tls_rsa_key root_key = {
+                        sizeof(exp_be), exp_be,
+                        mod_len, mod,
+                    };
+
                     if (mod_len >= RSA_MODULUS_MIN_SUPPORTED &&
                         mod_len <= RSA_MODULUS_MAX_SUPPORTED)
                     {
-                        if (alg == TLS_CERT_SIG_RSA_PSS_SHA256)
-                        {
-                            uint8_t *dsig = __rsa_transient;
-                            if (tls_rsa_decrypt_signature_exp(w->pending_sig,
-                                                              w->pending_sig_len,
-                                                              dsig, exp, mod, mod_len))
-                            {
-                                verified = tls_rsa_pss_verify(dsig, mod_len,
-                                               w->pending_tbs_digest,
-                                               TLS_SHA256_DIGEST_LEN,
-                                               TLS_HASH_SHA256);
-                                tls_secure_memzero(dsig, mod_len);
-                            }
-                        }
-                        else
-                        {
-                            verified = tls_rsa_pkcs1_v15_sha256_verify(
-                                           w->pending_sig,
-                                           w->pending_sig_len,
-                                           w->pending_tbs_digest,
-                                           mod, mod_len, exp);
-                        }
+                        tls_alg_t tls_alg =
+                            (alg == TLS_CERT_SIG_RSA_PSS_SHA256)
+                                ? TLS_ALG_RSA_PSS_RSAE_SHA256
+                                : TLS_ALG_RSA_PKCS1_SHA256;
+                        struct tls_key root_tls_key = {
+                            .alg = tls_alg,
+                            .rsa = root_key,
+                        };
+                        verified = (tls_x509_signature_verify_digest(
+                                        w->pending_tbs_digest,
+                                        w->pending_sig, w->pending_sig_len,
+                                        &root_tls_key) == TLS_KEY_OP_OK);
                     }
 
                     if (!verified)
@@ -2848,9 +2782,17 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     {
         return false;
     }
+    uint8_t exp_be[3] = {
+        (uint8_t)(exponent >> 16),
+        (uint8_t)(exponent >> 8),
+        (uint8_t)(exponent),
+    };
+    struct tls_rsa_key leaf_key = {
+        sizeof(exp_be), exp_be,
+        modulus_len, modulus,
+    };
     em = __rsa_transient;
-    if (!tls_rsa_decrypt_signature_exp(sig, sig_len, em,
-                                       exponent, modulus, modulus_len))
+    if (!tls_rsa_decrypt_signature(sig, sig_len, em, &leaf_key))
     {
         goto cleanup;
     }

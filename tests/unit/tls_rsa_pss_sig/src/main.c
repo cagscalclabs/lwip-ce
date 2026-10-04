@@ -90,9 +90,14 @@ static uint32_t time_pss_verify(void)
     }
     if (ok)
     {
+        static const uint8_t exp_be[] = {0x01, 0x00, 0x01}; /* 65537 */
+        static const struct tls_rsa_key pub = {
+            sizeof(exp_be), exp_be,
+            sizeof(test_rsa_pubkey_2048), test_rsa_pubkey_2048,
+        };
         ok = tls_rsa_decrypt_signature(
             test_rsa_sig_2048, sizeof(test_rsa_sig_2048),
-            decoded_sig, test_rsa_pubkey_2048, sizeof(test_rsa_pubkey_2048));
+            decoded_sig, &pub);
     }
     if (ok)
     {
@@ -653,9 +658,14 @@ static bool test_pss_signature_verify(void)
     tls_hash_update(&hash_ctx, msg, sizeof(msg) - 1);
     tls_hash_digest(&hash_ctx, mhash);
 
+    static const uint8_t exp_be[] = {0x01, 0x00, 0x01}; /* 65537 */
+    static const struct tls_rsa_key pub = {
+        sizeof(exp_be), exp_be,
+        sizeof(test_rsa_pubkey_2048), test_rsa_pubkey_2048,
+    };
     if (!tls_rsa_decrypt_signature(
             test_rsa_sig_2048, sizeof(test_rsa_sig_2048),
-            decoded_sig, test_rsa_pubkey_2048, sizeof(test_rsa_pubkey_2048)))
+            decoded_sig, &pub))
     {
         free(decoded_sig);
         return false;

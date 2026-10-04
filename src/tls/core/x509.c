@@ -5,6 +5,8 @@
 #include "../includes/base64.h"
 #include "../includes/asn1.h"
 #include "../includes/bytes.h"
+#include "../includes/hash.h"
+#include "../includes/rsa.h"
 #include "../includes/keyobject.h"
 #include "../includes/x509.h"
 #include "../includes/tls.h"
@@ -1231,4 +1233,143 @@ void tls_x509_object_destroy(struct tls_x509_object *obj)
     }
     tls_secure_memzero(obj, obj->length);
     tls_x509_free(obj);
+}
+
+/* OID byte strings for the three signature algorithms we recognise. */
+static const uint8_t oid_sha256_rsa_pkcs1[] = {
+    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b  /* sha256WithRSAEncryption */
+};
+static const uint8_t oid_rsassa_pss[] = {
+    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a  /* id-RSASSA-PSS */
+};
+static const uint8_t oid_ecdsa_sha256[] = {
+    0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02          /* ecdsa-with-SHA256 */
+};
+
+tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len)
+{
+    if (!oid || oid_len == 0)
+    {
+        return TLS_ALG_UNKNOWN;
+    }
+    if (oid_len == sizeof(oid_sha256_rsa_pkcs1) &&
+        memcmp(oid, oid_sha256_rsa_pkcs1, oid_len) == 0)
+    {
+        return TLS_ALG_RSA_PKCS1_SHA256;
+    }
+    if (oid_len == sizeof(oid_rsassa_pss) &&
+        memcmp(oid, oid_rsassa_pss, oid_len) == 0)
+    {
+        return TLS_ALG_RSA_PSS_RSAE_SHA256;
+    }
+    if (oid_len == sizeof(oid_ecdsa_sha256) &&
+        memcmp(oid, oid_ecdsa_sha256, oid_len) == 0)
+    {
+        return TLS_ALG_ECDSA_SECP256R1_SHA256;
+    }
+    return TLS_ALG_UNKNOWN;
+}
+
+tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t content_len,
+                                               const uint8_t *sig, size_t sig_len,
+                                               const struct tls_key *key)
+{
+    if (!content || !sig || !key)
+    {
+        return TLS_KEY_OP_INVALID;
+    }
+
+    if (!TLS_ALG_IS_SIGNING(key->alg))
+    {
+        return TLS_KEY_OP_UNKNOWN;
+    }
+
+    /* Hash the content. */
+    struct tls_hash_context hash_ctx;
+    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    {
+        return TLS_KEY_OP_INVALID;
+    }
+    tls_hash_update(&hash_ctx, content, content_len);
+    tls_hash_digest(&hash_ctx, digest);
+
+    bool ok = false;
+    switch (key->alg)
+    {
+        case TLS_ALG_RSA_PKCS1_SHA256:
+            ok = tls_rsa_pkcs1_v15_sha256_verify(sig, sig_len, digest, &key->rsa);
+            break;
+
+        case TLS_ALG_RSA_PSS_RSAE_SHA256:
+            if (sig_len > RSA_TRANSIENT_SIZE)
+            {
+                return TLS_KEY_OP_INVALID;
+            }
+            {
+                uint8_t *em = __rsa_transient;
+                if (tls_rsa_decrypt_signature(sig, sig_len, em, &key->rsa))
+                {
+                    ok = tls_rsa_pss_verify(em, key->rsa.mod_len, digest,
+                                            TLS_SHA256_DIGEST_LEN, TLS_HASH_SHA256);
+                }
+                tls_secure_memzero(em, key->rsa.mod_len);
+            }
+            break;
+
+        case TLS_ALG_ECDSA_SECP256R1_SHA256:
+            return TLS_KEY_OP_UNSUPPORTED;
+
+        default:
+            return TLS_KEY_OP_UNKNOWN;
+    }
+
+    return ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
+}
+
+tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
+                                                      const uint8_t *sig, size_t sig_len,
+                                                      const struct tls_key *key)
+{
+    if (!digest || !sig || !key)
+    {
+        return TLS_KEY_OP_INVALID;
+    }
+
+    if (!TLS_ALG_IS_SIGNING(key->alg))
+    {
+        return TLS_KEY_OP_UNKNOWN;
+    }
+
+    bool ok = false;
+    switch (key->alg)
+    {
+        case TLS_ALG_RSA_PKCS1_SHA256:
+            ok = tls_rsa_pkcs1_v15_sha256_verify(sig, sig_len, digest, &key->rsa);
+            break;
+
+        case TLS_ALG_RSA_PSS_RSAE_SHA256:
+            if (sig_len > RSA_TRANSIENT_SIZE)
+            {
+                return TLS_KEY_OP_INVALID;
+            }
+            {
+                uint8_t *em = __rsa_transient;
+                if (tls_rsa_decrypt_signature(sig, sig_len, em, &key->rsa))
+                {
+                    ok = tls_rsa_pss_verify(em, key->rsa.mod_len, digest,
+                                            TLS_SHA256_DIGEST_LEN, TLS_HASH_SHA256);
+                }
+                tls_secure_memzero(em, key->rsa.mod_len);
+            }
+            break;
+
+        case TLS_ALG_ECDSA_SECP256R1_SHA256:
+            return TLS_KEY_OP_UNSUPPORTED;
+
+        default:
+            return TLS_KEY_OP_UNKNOWN;
+    }
+
+    return ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
 }

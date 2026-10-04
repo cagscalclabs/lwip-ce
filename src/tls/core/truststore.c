@@ -142,7 +142,12 @@ tls_truststore_status_t tls_truststore_init(void)
 
     TS_TRACE("E4 rsa decrypt");
     // Decrypt the truststore signature
-    if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, trust_store_pubkey, sizeof(trust_store_pubkey)))
+    static const uint8_t trust_store_exp[] = {0x01, 0x00, 0x01}; /* 65537 BE */
+    static const struct tls_rsa_key trust_store_key = {
+        sizeof(trust_store_exp), trust_store_exp,
+        sizeof(trust_store_pubkey), trust_store_pubkey,
+    };
+    if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, &trust_store_key))
     {
         file_fn.ti_close(ts_h);
         ERROR_CODE(TLS_STORE_SIG_INVALID);
@@ -150,7 +155,7 @@ tls_truststore_status_t tls_truststore_init(void)
     }
     TS_TRACE("E5 pss verify");
     // Verify the signature
-    bool verified = tls_rsa_pss_verify(d_sig, sizeof(trust_store_pubkey), tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
+    bool verified = tls_rsa_pss_verify(d_sig, TRUSTSTORE_SIG_LEN, tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
     tls_secure_memzero(d_sig, TRUSTSTORE_SIG_LEN);
     file_fn.ti_close(ts_h);
     TS_TRACE("E6 verify done");

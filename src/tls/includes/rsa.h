@@ -11,6 +11,8 @@
 #define tls_rsa_h
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 /* powmod_exp_u24 takes a uint8_t for modulus size, with 0 encoding 256.
  * Anything larger than 256 bytes (2048 bits) is unrepresentable. */
@@ -27,6 +29,23 @@ extern uint8_t __rsa_transient[RSA_TRANSIENT_SIZE];
 
 #define RSA_PUBLIC_EXP 65537
 
+/**
+ * RSA public (or private) key as explicit exponent + modulus byte arrays.
+ * Both public and private keys follow the same layout; the caller controls
+ * which exponent is loaded.  Byte arrays are big-endian, no DER wrapping.
+ *
+ * For the common case of a public key with exponent 65537, initialise with:
+ *   static const uint24_t exp = RSA_PUBLIC_EXP;
+ *   struct tls_rsa_key key = { sizeof(exp), (uint8_t *)&exp, mod_len, mod };
+ * Note: exp is stored as a uint24_t (3-byte LE) to match powmod_exp_u24.
+ */
+struct tls_rsa_key {
+    size_t         exp_len;   /**< length of exponent in bytes (typically 3) */
+    const uint8_t *exponent;  /**< big-endian exponent bytes                 */
+    size_t         mod_len;   /**< length of modulus in bytes                */
+    const uint8_t *modulus;   /**< big-endian modulus bytes                  */
+};
+
 /* Input is preserved unless inbuf == outbuf for exact in-place operation.
  * Partial input/output overlap is rejected. */
 bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
@@ -36,20 +55,13 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
  * Partial input/output overlap is rejected. */
 size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf, const char *auth, uint8_t hash_alg);
 
-bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf, const uint8_t *pubkey, size_t keylen, uint8_t hash_alg);
+bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
+                     const struct tls_rsa_key *key, uint8_t hash_alg);
 
 bool tls_rsa_decrypt_signature(const uint8_t *signature,
                                size_t signature_len,
                                uint8_t *outbuf,
-                               const uint8_t *pubkey,
-                               size_t keylen);
-
-bool tls_rsa_decrypt_signature_exp(const uint8_t *signature,
-                                   size_t signature_len,
-                                   uint8_t *outbuf,
-                                   uint24_t exp,
-                                   const uint8_t *pubkey,
-                                   size_t keylen);
+                               const struct tls_rsa_key *key);
 
 /**
  * @brief Verify RSA-PSS padding on an already-decrypted signature.
@@ -71,5 +83,21 @@ bool tls_rsa_decrypt_signature_exp(const uint8_t *signature,
 bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
                         const uint8_t *mhash, size_t mhash_len,
                         uint8_t hash_alg);
+
+/**
+ * @brief Verify an RSASSA-PKCS1-v1.5 signature over a precomputed SHA-256 digest.
+ *
+ * Decrypts @p sig with the public key, then validates the EMSA-PKCS1-v1.5 encoding:
+ *   EM = 0x00 || 0x01 || 0xFF...0xFF || 0x00 || DigestInfo(SHA-256, digest)
+ *
+ * @param sig      Raw signature bytes.
+ * @param sig_len  Length of @p sig (must equal key->mod_len).
+ * @param digest   SHA-256 digest of the signed content (32 bytes).
+ * @param key      RSA public key.
+ * @return true iff the signature is well-formed and the digest matches.
+ */
+bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t sig_len,
+                                     const uint8_t digest[32],
+                                     const struct tls_rsa_key *key);
 
 #endif

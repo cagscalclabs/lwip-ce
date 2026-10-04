@@ -9,6 +9,7 @@
 	export	lwip_default_netif_info
 	export	lwip_request_services
 	export	lwip_netif_request_services
+	export	lwip_are_services_ready
 	export	lwip_socket_create
 	export	lwip_socket_create_ex
 	export	lwip_socket_destroy
@@ -393,6 +394,14 @@
 	export	eth_get_interfaces
 	export	netif_is_link_error
 	export	eth_usb_event_callback
+	export	pcap_enable_on_netif
+	export	pcap_disable_on_netif
+	export	pcap_flush
+	export	pcap_init_reader_ctx
+	export	pcap_set_filter_netif
+	export	pcap_set_filter_name_num
+	export	pcap_read_next
+	export	pcap_close_reader_ctx
 	export	tls_x25519_publickey
 	export	tls_x25519_secret
 	export	tls_x509_hostname_matches
@@ -421,6 +430,23 @@
 	export	url_build_query
 	export	lwip_socket_listen
 	export	lwip_socket_accept
+	export	altcp_ws_create_config
+	export	altcp_ws_free_config
+	export	altcp_ws_wrap
+	export	altcp_ws_new
+	export	altcp_ws_new_tls
+	export	altcp_ws_alloc
+	export	lwip_socket_set_ws_config
+	export	tls_x509_oid_to_sig_alg
+	export	tls_x509_signature_verify
+	export	tls_x509_signature_verify_digest
+	export	tls_key_verify
+	export	tls_key_sign
+	export	tls_key_encrypt
+	export	tls_key_encrypt_aad
+	export	tls_key_decrypt
+	export	tls_key_decrypt_aad
 	export	lwip_start_with_crt
+	export	lwip_get_start_errno
 	export	lwip_get_start_errstring
 	export	lwip_is_newer

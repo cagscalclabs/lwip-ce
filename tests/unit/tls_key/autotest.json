@@ -1,0 +1,151 @@
+{
+  "description": "Test tls_key dispatch layer (verify, sign, encrypt, decrypt)",
+  "transfer_files": [
+    "bin/XKEY.8xp",
+    "../../common/clibs.8xg",
+    "../../common/lwIPINST.8xp",
+    "../../common/lwIP.0.8xv",
+    "../../common/lwIP.1.8xv",
+    "../../common/lwIP.2.8xv",
+    "../../common/lwIP.3.8xv",
+    "../../common/lwIP.4.8xv",
+    "../../common/lwIP.5.8xv",
+    "../../common/lwip.8xv"
+  ],
+  "target": {
+    "name": "XKEY",
+    "isASM": true
+  },
+  "sequence": [
+    "key|clear",
+    "key|2nd",
+    "key|0",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|down",
+    "key|enter",
+    "key|prgm",
+    "key|1",
+    "key|enter",
+    "key|enter",
+    "hashWait|10",
+    "key|left",
+    "key|enter",
+    "delay|1000",
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "hashWait|2",
+    "key|enter",
+    "hashWait|3",
+    "key|enter",
+    "hashWait|4",
+    "key|enter",
+    "hashWait|5",
+    "key|enter",
+    "hashWait|6",
+    "key|enter",
+    "hashWait|7",
+    "key|enter",
+    "hashWait|8",
+    "key|enter",
+    "hashWait|9",
+    "key|enter",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "AES-128-GCM round-trip, no AAD",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 9500
+    },
+    "2": {
+      "description": "AES-128-GCM round-trip with AAD",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "3": {
+      "description": "AES-256-GCM round-trip with AAD",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "4": {
+      "description": "AES-128-GCM bad tag — decrypt must return false",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "5": {
+      "description": "AES-128-CCM round-trip with AAD (RFC 3610 Packet Vector #1 key)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "6": {
+      "description": "AES-128-CBC round-trip, no AAD (NIST SP 800-38A F.2.1 key)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "7": {
+      "description": "AES-256-CBC round-trip, no AAD (NIST SP 800-38A F.2.5 key)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "8": {
+      "description": "tls_key_sign stub returns TLS_KEY_OP_UNSUPPORTED for RSA-PSS and ECDSA",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "9": {
+      "description": "tls_key_verify with encryption-range alg returns TLS_KEY_OP_UNKNOWN",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "10": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 100000
+    }
+  }
+}

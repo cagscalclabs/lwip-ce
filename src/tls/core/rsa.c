@@ -234,31 +234,43 @@ void powmod_exp_u24(uint8_t size, uint8_t *restrict base, uint24_t exp, const ui
 #define RSA_PUBLIC_EXP 65537
 // CRYPTO_FN
 bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
-                     const uint8_t *pubkey, size_t keylen, uint8_t hash_alg)
+                     const struct tls_rsa_key *key, uint8_t hash_alg)
 {
-    size_t spos = 0;
     if ((inbuf == NULL) ||
-        (pubkey == NULL) ||
+        (key == NULL) ||
+        (key->modulus == NULL) ||
+        (key->exponent == NULL) ||
         (outbuf == NULL) ||
         (in_len == 0) ||
-        (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
-        (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
-        (!(pubkey[keylen - 1] & 1)))
+        (key->mod_len > RSA_MODULUS_MAX_SUPPORTED) ||
+        (key->mod_len < RSA_MODULUS_MIN_SUPPORTED) ||
+        (!(key->modulus[key->mod_len - 1] & 1)))
     {
         ERROR();
         return false;
     }
 
+    /* Decode exponent from big-endian bytes into a uint24_t (LE). */
+    if (key->exp_len == 0 || key->exp_len > 3)
+    {
+        ERROR();
+        return false;
+    }
+    uint24_t exp = 0;
+    for (size_t i = 0; i < key->exp_len; i++)
+        exp = (exp << 8) | key->exponent[i];
+
     tls_crypto_guard_enable();
     bool ok = false;
+    size_t spos = 0;
 
-    while (pubkey[spos] == 0)
+    while (key->modulus[spos] == 0)
     {
         outbuf[spos++] = 0;
     }
-    if (!tls_rsa_encode_oaep(inbuf, in_len, &outbuf[spos], keylen - spos, NULL, hash_alg))
+    if (!tls_rsa_encode_oaep(inbuf, in_len, &outbuf[spos], key->mod_len - spos, NULL, hash_alg))
         goto cleanup;
-    powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
+    powmod_exp_u24((uint8_t)key->mod_len, outbuf, exp, key->modulus);
     tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
     ok = true;
 cleanup:
@@ -270,11 +282,12 @@ cleanup:
 bool tls_rsa_decrypt_signature(const uint8_t *signature,
                                size_t signature_len,
                                uint8_t *outbuf,
-                               const uint8_t *pubkey,
-                               size_t keylen)
+                               const struct tls_rsa_key *key)
 {
     if ((signature == NULL) ||
-        (pubkey == NULL) ||
+        (key == NULL) ||
+        (key->modulus == NULL) ||
+        (key->exponent == NULL) ||
         (outbuf == NULL) ||
         (signature_len == 0) ||
         /* An RSA signature is always exactly one modulus-width block (RFC
@@ -283,10 +296,22 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
          * size (e.g. an ECDSA signature paired against an RSA truststore
          * root by a subject-name collision) -- without this check the
          * memcpy below reads past the end of a shorter signature buffer. */
-        (signature_len != keylen) ||
-        (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
-        (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
-        (!(pubkey[keylen - 1] & 1)))
+        (signature_len != key->mod_len) ||
+        (key->mod_len > RSA_MODULUS_MAX_SUPPORTED) ||
+        (key->mod_len < RSA_MODULUS_MIN_SUPPORTED) ||
+        (!(key->modulus[key->mod_len - 1] & 1)) ||
+        (key->exp_len == 0) ||
+        (key->exp_len > 3))
+    {
+        ERROR();
+        return false;
+    }
+
+    /* Decode big-endian exponent bytes into uint24_t (LE for powmod). */
+    uint24_t exp = 0;
+    for (size_t i = 0; i < key->exp_len; i++)
+        exp = (exp << 8) | key->exponent[i];
+    if (exp == 0)
     {
         ERROR();
         return false;
@@ -296,56 +321,15 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
     tls_crypto_guard_enable();
     bool ok = false;
 
-    memcpy(outbuf, signature, keylen);
+    memcpy(outbuf, signature, key->mod_len);
     tls_crypto_guard_disable();
     RSA_TRACE("decsig: pre-powmod");
     tls_crypto_guard_enable();
-    powmod_exp_u24((uint8_t)keylen, outbuf, RSA_PUBLIC_EXP, pubkey);
+    powmod_exp_u24((uint8_t)key->mod_len, outbuf, exp, key->modulus);
     tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
     ok = true;
     tls_crypto_guard_disable();
     RSA_TRACE("decsig: post-powmod");
-    return ok;
-}
-
-bool tls_rsa_decrypt_signature_exp(const uint8_t *signature,
-                                   size_t signature_len,
-                                   uint8_t *outbuf,
-                                   uint24_t exp,
-                                   const uint8_t *pubkey,
-                                   size_t keylen)
-{
-    if ((signature == NULL) ||
-        (pubkey == NULL) ||
-        (outbuf == NULL) ||
-        (signature_len == 0) ||
-        /* See tls_rsa_decrypt_signature's matching check: an RSA signature
-         * must be exactly one modulus-width block. Without this, a
-         * wrong-sized signature (e.g. an ECDSA sig stashed from a chain
-         * link verified against an RSA truststore root by a subject-name
-         * collision) causes the memcpy below to read past its buffer and
-         * powmod a garbage-padded value -- slow (full modexp on garbage)
-         * and a heap out-of-bounds read. */
-        (signature_len != keylen) ||
-        (keylen > RSA_MODULUS_MAX_SUPPORTED) ||
-        (keylen < RSA_MODULUS_MIN_SUPPORTED) ||
-        (!(pubkey[keylen - 1] & 1)) ||
-        (exp == 0))
-    {
-        ERROR();
-        return false;
-    }
-
-    tls_crypto_guard_enable();
-    bool ok = false;
-
-    memcpy(outbuf, signature, keylen);
-    tls_crypto_guard_disable();
-    tls_crypto_guard_enable();
-    powmod_exp_u24((uint8_t)keylen, outbuf, exp, pubkey);
-    tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
-    ok = true;
-    tls_crypto_guard_disable();
     return ok;
 }
 
@@ -460,5 +444,70 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     }
 cleanup:
     tls_crypto_guard_disable();
+    return ok;
+}
+
+/* DER DigestInfo prefix for SHA-256: SEQUENCE { SEQUENCE { OID sha-256, NULL }, OCTET STRING(32) } */
+static const uint8_t tls_pkcs1_sha256_digestinfo_prefix[] = {
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+    0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20
+};
+
+bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t sig_len,
+                                     const uint8_t digest[32],
+                                     const struct tls_rsa_key *key)
+{
+    uint8_t *em;
+    size_t pos;
+    bool ok = false;
+
+    if (!sig || !digest || !key || sig_len != key->mod_len ||
+        key->mod_len > RSA_TRANSIENT_SIZE)
+    {
+        return false;
+    }
+    if (key->mod_len < sizeof(tls_pkcs1_sha256_digestinfo_prefix) + 32 + 11)
+    {
+        return false;
+    }
+
+    em = __rsa_transient;
+    if (!tls_rsa_decrypt_signature(sig, sig_len, em, key))
+    {
+        goto cleanup;
+    }
+
+    /* EM = 0x00 || 0x01 || PS || 0x00 || T  (PS >= 8 bytes of 0xFF) */
+    if (em[0] != 0x00 || em[1] != 0x01)
+    {
+        goto cleanup;
+    }
+    pos = 2;
+    while (pos < key->mod_len && em[pos] == 0xFF)
+    {
+        pos++;
+    }
+    if (pos < 10 || pos >= key->mod_len || em[pos] != 0x00)
+    {
+        goto cleanup;
+    }
+    pos++;
+    if (key->mod_len - pos != sizeof(tls_pkcs1_sha256_digestinfo_prefix) + 32)
+    {
+        goto cleanup;
+    }
+    if (memcmp(em + pos, tls_pkcs1_sha256_digestinfo_prefix,
+               sizeof(tls_pkcs1_sha256_digestinfo_prefix)) != 0)
+    {
+        goto cleanup;
+    }
+    if (memcmp(em + pos + sizeof(tls_pkcs1_sha256_digestinfo_prefix), digest, 32) != 0)
+    {
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    tls_secure_memzero(em, key->mod_len);
     return ok;
 }

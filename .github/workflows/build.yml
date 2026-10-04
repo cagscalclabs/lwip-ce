@@ -6,8 +6,26 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
   pull_request:
+    paths:
+      - 'src/**'
+      - 'build-tools/**'
+      - 'tests/**'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/tests.yml'
+      - '.github/workflows/cavp.yml'
+      - '.github/workflows/sast.yml'
+      - '.github/workflows/dast.yml'
   push:
     branches: [master]
+    paths:
+      - 'src/**'
+      - 'build-tools/**'
+      - 'tests/**'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/tests.yml'
+      - '.github/workflows/cavp.yml'
+      - '.github/workflows/sast.yml'
+      - '.github/workflows/dast.yml'
 
 permissions:
   contents: write

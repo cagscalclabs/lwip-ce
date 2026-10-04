@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "asn1.h"
+#include "key.h"
 
 struct tls_x509_parse_result
 {
@@ -37,6 +38,61 @@ struct tls_x509_object
 
 bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len);
 bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len);
+
+/**
+ * @brief Map a DER-encoded OID to an algorithm identifier.
+ *
+ * Recognises the three algorithms currently supported:
+ *   - sha256WithRSAEncryption (1.2.840.113549.1.1.11) → TLS_ALG_RSA_PKCS1_SHA256
+ *   - id-RSASSA-PSS           (1.2.840.113549.1.1.10) → TLS_ALG_RSA_PSS_RSAE_SHA256
+ *   - ecdsa-with-SHA256       (1.2.840.10045.4.3.2)   → TLS_ALG_ECDSA_SECP256R1_SHA256
+ *
+ * Any unrecognised OID returns TLS_ALG_UNKNOWN.
+ *
+ * @param oid      Pointer to the raw DER OID value bytes (excluding the 0x06 tag and length).
+ * @param oid_len  Number of bytes pointed to by @p oid.
+ * @return  tls_alg_t identifying the algorithm, or TLS_ALG_UNKNOWN.
+ */
+tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len);
+
+/**
+ * @brief Verify a signature over arbitrary content using a self-describing key.
+ *
+ * Dispatches on key->alg:
+ *   - TLS_ALG_RSA_PKCS1_SHA256       → RSASSA-PKCS1-v1.5 SHA-256
+ *   - TLS_ALG_RSA_PSS_RSAE_SHA256    → RSASSA-PSS SHA-256 (saltLen=32)
+ *   - TLS_ALG_ECDSA_SECP256R1_SHA256 → TLS_KEY_OP_UNSUPPORTED
+ *   - TLS_ALG_UNKNOWN / encryption   → TLS_KEY_OP_UNKNOWN
+ *
+ * The function SHA-256 hashes @p content internally before verifying.
+ *
+ * @param content      Signed data (e.g. DER TBSCertificate bytes).
+ * @param content_len  Length of @p content.
+ * @param sig          Raw signature bytes.
+ * @param sig_len      Length of @p sig.
+ * @param key          Self-describing key; key->alg drives dispatch.
+ * @return  tls_key_op_result_t describing the outcome.
+ */
+tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t content_len,
+                                               const uint8_t *sig, size_t sig_len,
+                                               const struct tls_key *key);
+
+/**
+ * @brief Verify a signature over a pre-computed SHA-256 digest.
+ *
+ * Same dispatch as tls_x509_signature_verify() but accepts an already-hashed
+ * digest instead of raw content.  Used when the TBS bytes are no longer
+ * available (e.g. certificate chain walker that pre-hashes and discards TBS).
+ *
+ * @param digest    32-byte SHA-256 digest of the signed content.
+ * @param sig       Raw signature bytes.
+ * @param sig_len   Length of @p sig.
+ * @param key       Self-describing key; key->alg drives dispatch.
+ * @return  tls_key_op_result_t describing the outcome.
+ */
+tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
+                                                      const uint8_t *sig, size_t sig_len,
+                                                      const struct tls_key *key);
 
 /**
  * @brief Check whether a leaf certificate is valid for the given hostname.

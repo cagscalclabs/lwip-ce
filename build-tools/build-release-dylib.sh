@@ -270,4 +270,11 @@ log "installing lwip.lib into $CEDEV_DIR"
 mkdir -p "$CEDEV_DIR/lib/libload"
 rsync -a --checksum "$STAGE_DIR/lwip.lib" "$CEDEV_DIR/lib/libload/lwip.lib"
 
+log "updating tests/common with fresh library files"
+TESTS_COMMON_DIR="$ROOT_DIR/tests/common"
+mkdir -p "$TESTS_COMMON_DIR"
+rsync -a --checksum "$RELEASE_DIR/appinst"/ "$TESTS_COMMON_DIR"/
+rsync -a --checksum "$RELEASE_DIR/lwip.8xv" "$TESTS_COMMON_DIR/lwip.8xv"
+rsync -a --checksum "$RELEASE_DIR/lwip.lib" "$TESTS_COMMON_DIR/lwip.lib"
+
 log "release dylib package ready"

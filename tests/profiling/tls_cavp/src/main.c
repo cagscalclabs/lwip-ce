@@ -390,7 +390,12 @@ static size_t run_rsa_pss_verify(const uint8_t *in, size_t in_len, uint8_t *out,
         return 1;
     }
     static uint8_t em_buf[256];
-    if (!tls_rsa_decrypt_signature(sig, sig_len, em_buf, modulus, modulus_len)) {
+    static const uint8_t cavp_exp_be[] = {0x01, 0x00, 0x01}; /* 65537 */
+    struct tls_rsa_key cavp_key = {
+        sizeof(cavp_exp_be), cavp_exp_be,
+        modulus_len, modulus,
+    };
+    if (!tls_rsa_decrypt_signature(sig, sig_len, em_buf, &cavp_key)) {
         out[0] = 0;
         return 1;
     }

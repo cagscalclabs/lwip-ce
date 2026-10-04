@@ -471,10 +471,19 @@
 .extern _altcp_ws_new_tls
 .extern _altcp_ws_alloc
 .extern _lwip_socket_set_ws_config
+.extern _tls_x509_oid_to_sig_alg
+.extern _tls_x509_signature_verify
+.extern _tls_x509_signature_verify_digest
+.extern _tls_key_verify
+.extern _tls_key_sign
+.extern _tls_key_encrypt
+.extern _tls_key_encrypt_aad
+.extern _tls_key_decrypt
+.extern _tls_key_decrypt_aad
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 437    ; entry count
+    d24 446    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -1052,3 +1061,16 @@ _fn_exports_table:
 
 ; --- src/lwIP.c ---
     d24 _lwip_socket_set_ws_config
+
+; --- src/tls/core/x509.c ---
+    d24 _tls_x509_oid_to_sig_alg
+    d24 _tls_x509_signature_verify
+    d24 _tls_x509_signature_verify_digest
+
+; --- src/tls/core/key.c ---
+    d24 _tls_key_verify
+    d24 _tls_key_sign
+    d24 _tls_key_encrypt
+    d24 _tls_key_encrypt_aad
+    d24 _tls_key_decrypt
+    d24 _tls_key_decrypt_aad
