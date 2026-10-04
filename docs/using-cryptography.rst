@@ -1267,13 +1267,13 @@ material before freeing or reusing a buffer.
 ----
 
 Common Cryptography Usages
-==========================
+---------------------------
 
 The examples below cover common patterns. They are not exhaustive, but
 demonstrate the idiomatic way to combine the APIs above.
 
 File Integrity
---------------
+~~~~~~~~~~~~~~~
 
 Hash a file's contents at two points in time and compare the digests to
 detect tampering or corruption. ``tls_bytes_compare()`` is used instead of
@@ -1320,7 +1320,7 @@ detect tampering or corruption. ``tls_bytes_compare()`` is used instead of
    }
 
 Encrypt a File at Rest
------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
 Derive a key from a user password with PBKDF2, then encrypt data with
 AES-GCM. The IV and salt are written to the file alongside the ciphertext
@@ -1332,6 +1332,8 @@ and authentication tag so decryption can reconstruct the same key and IV.
    #include <lwip.h>
    #include <cryptography.h>
    #include <string.h>
+
+   #define KDF_ROUNDS /* benchmark and choose for your application's latency budget */
 
    if (!lwip_start()) return 1;
 
@@ -1354,7 +1356,7 @@ and authentication tag so decryption can reconstruct the same key and IV.
    tls_pbkdf2(passwd, strlen(passwd),
               salt, sizeof(salt),
               key, sizeof(key),
-              100,
+              KDF_ROUNDS,
               TLS_HASH_SHA256);
 
    /* Encrypt */
@@ -1365,6 +1367,7 @@ and authentication tag so decryption can reconstruct the same key and IV.
    ti_Write(salt, sizeof(salt), 1, f);
    tls_aes_encrypt(&e, (const uint8_t *)secure_me, strlen(secure_me),
                    (uint8_t *)secure_me);
+                  // ^ yes the in and out bufs are aliasable
    ti_Write(secure_me, strlen(secure_me), 1, f);
    uint8_t tag[TLS_AES_AUTH_TAG_SIZE];
    tls_aes_digest(&e, tag);
@@ -1372,7 +1375,7 @@ and authentication tag so decryption can reconstruct the same key and IV.
    ti_Close(f);
 
 Decrypt a File at Rest
------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
 The mirror of the encrypt example. Read the IV and salt back from the file,
 re-derive the key with PBKDF2, then **verify the authentication tag before
@@ -1385,6 +1388,8 @@ or tampered — do not decrypt.
    #include <lwip.h>
    #include <cryptography.h>
    #include <string.h>
+
+   #define KDF_ROUNDS /* benchmark and choose for your application's latency budget */
 
    if (!lwip_start()) return 1;
 
@@ -1412,7 +1417,7 @@ or tampered — do not decrypt.
    tls_pbkdf2(passwd, strlen(passwd),
               salt, TLS_AES_BLOCK_SIZE,
               key, sizeof(key),
-              100,
+              KDF_ROUNDS,
               TLS_HASH_SHA256);
 
    /* Verify tag before decrypting */
@@ -1424,6 +1429,6 @@ or tampered — do not decrypt.
    }
 
    /* Tag valid — safe to decrypt */
-   uint8_t plaintext[ct_len];
+   uint8_t plaintext[/* some size large enough to hold decryption */];
    tls_aes_decrypt(&e, ct, ct_len, plaintext);
    ti_Close(f);

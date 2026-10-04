@@ -170,8 +170,8 @@ ERROR, WARN, and DEBUG events encode ``{file_id, line}`` into ``data.code.loc``:
 
    int main(void)
    {
-       lwip_set_event_cb(on_event);
        if (!lwip_start()) return 1;
+       lwip_set_event_cb(on_event);
        /* ... */
    }
 

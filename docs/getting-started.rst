@@ -63,7 +63,7 @@ Install lwIP-CE Headers and .lib File
 
 In order to use lwIP-CE in your applications you will need to make sure the lwIP-CE headers and .lib file are installed into the correct locations.
 
-- Copy ``lwip.h`` and ``cryptography.h`` into ``$CEDEV/include``.
+- Copy ``lwip.h``, ``parsers.h``, and ``cryptography.h`` into ``$CEDEV/include``.
 - Copy the entire ``lwip`` folder into ``$CEDEV/include``.
 - Copy ``lwip.lib`` into ``$CEDEV/lib/libload``.
 
