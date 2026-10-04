@@ -98,19 +98,7 @@
 .extern _tls_hmac_context_init
 .extern _tls_hmac_update
 .extern _tls_hmac_digest
-.extern _tls_keyobject_import_private
-.extern _tls_keyobject_import_public
-.extern _tls_keyobject_import_certificate
-.extern _tls_x509_has_required_ca_constraints
-.extern _tls_keyobject_destroy
 .extern _tls_pbkdf2
-.extern _tls_pkcs8_strerror
-.extern _tls_pkcs8_import
-.extern _tls_pkcs8_import_private
-.extern _tls_pkcs8_import_public
-.extern _tls_pkcs8_object_import_private
-.extern _tls_pkcs8_object_import_public
-.extern _tls_pkcs8_object_destroy
 .extern _tls_random_init_entropy
 .extern _tls_random
 .extern _tls_random_bytes
@@ -124,11 +112,23 @@
 .extern _tls_rsa_pss_verify
 .extern _tls_truststore_init
 .extern _tls_truststore_lookup
+.extern _tls_truststore_lookup_by_subject
 .extern _tls_x509_has_valid_constraints
+.extern _tls_x509_has_required_ca_constraints
 .extern _tls_x509_parse_certificate
-.extern _tls_x509_import_and_parse_certificate
 .extern _tls_x509_import_certificate
-.extern _tls_x509_object_destroy
+.extern _tls_x509_object_free
+.extern _tls_x509_oid_to_sig_alg
+.extern _tls_x509_signature_verify
+.extern _tls_x509_signature_verify_digest
+.extern _tls_key_import
+.extern _tls_key_free
+.extern _tls_key_verify
+.extern _tls_key_sign
+.extern _tls_key_encrypt
+.extern _tls_key_encrypt_aad
+.extern _tls_key_decrypt
+.extern _tls_key_decrypt_aad
 .extern _acd_add
 .extern _acd_remove
 .extern _acd_start
@@ -471,19 +471,10 @@
 .extern _altcp_ws_new_tls
 .extern _altcp_ws_alloc
 .extern _lwip_socket_set_ws_config
-.extern _tls_x509_oid_to_sig_alg
-.extern _tls_x509_signature_verify
-.extern _tls_x509_signature_verify_digest
-.extern _tls_key_verify
-.extern _tls_key_sign
-.extern _tls_key_encrypt
-.extern _tls_key_encrypt_aad
-.extern _tls_key_decrypt
-.extern _tls_key_decrypt_aad
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 446    ; entry count
+    d24 437    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -571,28 +562,8 @@ _fn_exports_table:
     d24 _tls_hmac_update
     d24 _tls_hmac_digest
 
-; --- src/tls/core/keyobject.c ---
-    d24 _tls_keyobject_import_private
-    d24 _tls_keyobject_import_public
-    d24 _tls_keyobject_import_certificate
-
-; --- src/tls/core/x509.c ---
-    d24 _tls_x509_has_required_ca_constraints
-
-; --- src/tls/core/keyobject.c ---
-    d24 _tls_keyobject_destroy
-
 ; --- src/tls/core/passwords.c ---
     d24 _tls_pbkdf2
-
-; --- src/tls/core/pkcs8.c ---
-    d24 _tls_pkcs8_strerror
-    d24 _tls_pkcs8_import
-    d24 _tls_pkcs8_import_private
-    d24 _tls_pkcs8_import_public
-    d24 _tls_pkcs8_object_import_private
-    d24 _tls_pkcs8_object_import_public
-    d24 _tls_pkcs8_object_destroy
 
 ; --- src/tls/core/random.s ---
     d24 _tls_random_init_entropy
@@ -614,13 +585,27 @@ _fn_exports_table:
 ; --- src/tls/core/truststore.c ---
     d24 _tls_truststore_init
     d24 _tls_truststore_lookup
+    d24 _tls_truststore_lookup_by_subject
 
 ; --- src/tls/core/x509.c ---
     d24 _tls_x509_has_valid_constraints
+    d24 _tls_x509_has_required_ca_constraints
     d24 _tls_x509_parse_certificate
-    d24 _tls_x509_import_and_parse_certificate
     d24 _tls_x509_import_certificate
-    d24 _tls_x509_object_destroy
+    d24 _tls_x509_object_free
+    d24 _tls_x509_oid_to_sig_alg
+    d24 _tls_x509_signature_verify
+    d24 _tls_x509_signature_verify_digest
+
+; --- src/tls/core/key.c ---
+    d24 _tls_key_import
+    d24 _tls_key_free
+    d24 _tls_key_verify
+    d24 _tls_key_sign
+    d24 _tls_key_encrypt
+    d24 _tls_key_encrypt_aad
+    d24 _tls_key_decrypt
+    d24 _tls_key_decrypt_aad
 
 ; --- src/core/ipv4/acd.c ---
     d24 _acd_add
@@ -1061,16 +1046,3 @@ _fn_exports_table:
 
 ; --- src/lwIP.c ---
     d24 _lwip_socket_set_ws_config
-
-; --- src/tls/core/x509.c ---
-    d24 _tls_x509_oid_to_sig_alg
-    d24 _tls_x509_signature_verify
-    d24 _tls_x509_signature_verify_digest
-
-; --- src/tls/core/key.c ---
-    d24 _tls_key_verify
-    d24 _tls_key_sign
-    d24 _tls_key_encrypt
-    d24 _tls_key_encrypt_aad
-    d24 _tls_key_decrypt
-    d24 _tls_key_decrypt_aad

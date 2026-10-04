@@ -557,9 +557,8 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
         tls_asn1_child_cursor(&sig_alg, &alg_body) &&
         tls_asn1_next(&alg_body, &alg_oid) &&
         tls_asn1_tag_number(alg_oid.tag) == ASN1_OBJECTID &&
-        alg_oid.len == 9 &&
-        memcmp(alg_oid.value,
-               tls_objectid_bytes[TLS_OID_SHA256_RSA_ENCRYPTION], 9) == 0)
+        (tls_x509_oid_to_sig_alg(alg_oid.value, alg_oid.len) == TLS_ALG_RSA_PKCS1_SHA256 ||
+         tls_x509_oid_to_sig_alg(alg_oid.value, alg_oid.len) == TLS_ALG_RSA_PSS_RSAE_SHA256))
     {
         *is_rsa_sha256_out = true;
     }
@@ -2628,7 +2627,7 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
 cleanup:
     if (em)
     {
-        tls_secure_memzero(em, modulus_len);
+        tls_secure_memzero(em, rsa->mod_len);
     }
     return ok;
 }
