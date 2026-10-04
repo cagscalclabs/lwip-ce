@@ -27,6 +27,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "hash.h"
+#include "key.h"
 #include "lwip/logging.h"
 
 #ifdef __cplusplus
@@ -253,15 +254,13 @@ extern "C"
          * on a read that never completes. */
         bool peer_close_notify_received;
 
-        /* Leaf cert SPKI (SubjectPublicKeyInfo) captured during
-         * Certificate-receive. Used by tls_recv_certificate_verify to
-         * RSA-verify the CertificateVerify signature against the leaf's
-         * public key, which is the live proof-of-possession that pins
-         * the server to its leaf private key. Heap-allocated on first
-         * cert, freed in tls_handshake_cleanup. NULL if the chain was
-         * empty or the leaf had no extractable SPKI. */
-        uint8_t *leaf_spki;
-        size_t leaf_spki_len;
+        /* Leaf cert public key captured during Certificate-receive.
+         * Used by tls_recv_certificate_verify to verify the server's
+         * CertificateVerify signature.  Key material pointers reference the
+         * heap block allocated for the leaf DER copy; freed in
+         * tls_handshake_cleanup via tls_key_free (leaf_pubkey.allocated=true).
+         * alg == TLS_ALG_UNKNOWN when no leaf cert has been seen. */
+        struct tls_key leaf_pubkey;
     };
 
     /**

@@ -325,7 +325,7 @@ void tls_cleanup(void)
  *
  * File I/O (loading certs / keys from appvars) is the caller's
  * responsibility: pass raw DER/PEM bytes directly to tls_x509_*,
- * tls_pkcs8_*, etc.  The library never opens files itself.
+ * tls_key_import(), etc.  The library never opens files itself.
  */
 typedef struct
 {

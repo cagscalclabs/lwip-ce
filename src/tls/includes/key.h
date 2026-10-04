@@ -105,6 +105,8 @@ typedef enum
 struct tls_key
 {
     tls_alg_t alg;
+    bool      allocated; /**< true when this struct was returned by tls_key_import()
+                              and must be freed with tls_key_free(). */
     union
     {
         struct tls_rsa_key    rsa; /**< Valid for TLS_ALG_RSA_*.  */
@@ -119,6 +121,63 @@ struct tls_key
         } aes;
     };
 };
+
+/**
+ * Input format for tls_key_import().
+ */
+typedef enum
+{
+    TLS_KEY_FORMAT_PEM = 0, /**< PEM text (-----BEGIN ... -----).            */
+    TLS_KEY_FORMAT_DER = 1, /**< Raw DER bytes.                              */
+} tls_key_format_t;
+
+/**
+ * Result codes for tls_key_import().
+ */
+typedef enum
+{
+    TLS_KEY_IMPORT_OK             = 0, /**< Success.                                      */
+    TLS_KEY_IMPORT_INVALID_ARG    = 1, /**< NULL pointer or zero length.                  */
+    TLS_KEY_IMPORT_ALLOC_FAIL     = 2, /**< Memory allocation failed.                     */
+    TLS_KEY_IMPORT_PARSE_FAIL     = 3, /**< DER/PEM structure malformed.                  */
+    TLS_KEY_IMPORT_BAD_ALG        = 4, /**< Key algorithm OID not recognised.             */
+    TLS_KEY_IMPORT_UNSUPPORTED_ENC= 5, /**< Encrypted key uses an unsupported cipher.     */
+    TLS_KEY_IMPORT_DECRYPT_FAIL   = 6, /**< PBES2 decryption or tag verification failed.  */
+} tls_key_import_result_t;
+
+/**
+ * @brief Parse a PEM or DER-encoded key, allocate a self-describing tls_key,
+ *        and store a pointer to it in @p *out.
+ *
+ * The returned key owns its key material in a trailing allocation; it must be
+ * freed with tls_key_free().  Pointer members (rsa.modulus, ec.data, etc.)
+ * reference that same allocation — never point elsewhere.
+ *
+ * @param out       Receives the allocated key on success; set to NULL on error.
+ * @param data      PEM text or raw DER bytes.
+ * @param len       Length of @p data in bytes.
+ * @param format    TLS_KEY_FORMAT_PEM or TLS_KEY_FORMAT_DER.
+ * @param alg       Algorithm to assign (TLS_ALG_UNKNOWN lets the function
+ *                  infer a default from the key type).
+ * @param password  Passphrase for PBES2-encrypted private keys; may be NULL
+ *                  for unencrypted keys.
+ * @return tls_key_import_result_t status code.
+ */
+tls_key_import_result_t tls_key_import(struct tls_key **out,
+                                        const void *data, size_t len,
+                                        tls_key_format_t format,
+                                        tls_alg_t alg,
+                                        const char *password);
+
+/**
+ * @brief Free a key returned by tls_key_import().
+ *
+ * Checks key->allocated before doing anything: if the flag is false the
+ * function returns immediately (safe to call on stack-allocated or
+ * externally-managed keys).  When true, zeroes the entire allocation
+ * (key header + trailing key material) and frees it.  Safe to call with NULL.
+ */
+void tls_key_free(struct tls_key *key);
 
 /**
  * @brief Verify a signature over @p content using @p key.

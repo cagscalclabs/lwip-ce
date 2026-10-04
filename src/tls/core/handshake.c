@@ -174,7 +174,6 @@
 #include "../includes/hkdf.h"
 #include "../includes/asn1.h"
 #include "../includes/rsa.h"
-#include "../includes/keyobject.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
 #include "../includes/x509.h"
@@ -291,10 +290,6 @@ static bool tls_recv_key_update(struct tls_handshake_context *ctx,
                                 const uint8_t *data, size_t data_len);
 static bool tls_send_alert(struct tls_handshake_context *ctx,
                            uint8_t level, uint8_t description);
-static bool tls_spki_extract_rsa_public_key(const uint8_t *spki, size_t spki_len,
-                                            const uint8_t **mod_out,
-                                            size_t *mod_len_out,
-                                            uint24_t *exp_out);
 
 /**
  * @brief Build the TLS 1.3 AEAD nonce: static IV XOR right-aligned seq number.
@@ -446,7 +441,7 @@ struct tls_cert_walker
     bool chain_validated;
     /* Index of the cert currently in cert_buf within the chain — 0 means
      * leaf. Used by tls_cert_walker_validate_one to know when to capture
-     * the leaf SPKI into ctx->leaf_spki. */
+     * the leaf public key into ctx->leaf_pubkey. */
     uint16_t cert_index;
     /* Owning handshake context, so per-cert callbacks can reach back for
      * leaf SPKI capture etc. Set by the caller via tls_cert_walker_new. */
@@ -598,13 +593,12 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
  *     ("unsupported cert type, proceeding") and accepts the link.
  *
  * @param w           Walker (holds ctx, chain position, and the pending stash).
- * @param cert_parsed Parsed fields of the cert currently in cert_buf (for its
- *                    SPKI, used as the issuer key of the pending cert).
+ * @param cert        Parsed certificate (pubkey used as issuer key of pending cert).
  * @param is_leaf     True for cert_index 0.
  * @return true if acceptable. Returning false aborts the chain.
  */
 static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
-                                      const struct tls_x509_parse_result *cert_parsed,
+                                      const struct tls_x509_object *cert,
                                       bool is_leaf)
 {
     const uint8_t *tbs, *sig;
@@ -619,39 +613,21 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
 
         if (w->pending_is_rsa_sha256)
         {
-            struct tls_rsa_key issuer_key;
-            const uint8_t *modulus;
-            size_t modulus_len;
-            uint24_t exponent;
-
-            /* Issuer key is this cert's SPKI. Only RSA issuers can have signed
-             * an RSA-SHA256 link; a non-RSA issuer SPKI means we can't verify
-             * it here — treat as unsupported (ALERT + accept). */
-            if (cert_parsed->spki_raw && cert_parsed->spki_raw->data &&
-                tls_spki_extract_rsa_public_key(cert_parsed->spki_raw->data,
-                                                cert_parsed->spki_raw->len,
-                                                &modulus, &modulus_len,
-                                                &exponent))
+            /* Issuer key is this cert's pubkey. Only RSA issuers can have
+             * signed an RSA-SHA256 link; a non-RSA issuer means unsupported
+             * (ALERT + accept). */
+            if ((cert->pubkey.alg == TLS_ALG_RSA_PKCS1_SHA256 ||
+                 cert->pubkey.alg == TLS_ALG_RSA_PSS_RSAE_SHA256) &&
+                cert->pubkey.rsa.modulus && cert->pubkey.rsa.mod_len > 0)
             {
-                /* Pack the extracted (modulus, exponent) into a tls_rsa_key.
-                 * exp_be holds the 3-byte big-endian encoding of exponent. */
-                uint8_t exp_be[3] = {
-                    (uint8_t)(exponent >> 16),
-                    (uint8_t)(exponent >> 8),
-                    (uint8_t)(exponent),
-                };
-                issuer_key.exp_len  = sizeof(exp_be);
-                issuer_key.exponent = exp_be;
-                issuer_key.mod_len  = modulus_len;
-                issuer_key.modulus  = modulus;
-                struct tls_key issuer_tls_key = {
+                struct tls_key issuer_key = {
                     .alg = TLS_ALG_RSA_PKCS1_SHA256,
-                    .rsa = issuer_key,
+                    .rsa = cert->pubkey.rsa,
                 };
                 tls_key_op_result_t vr = tls_x509_signature_verify_digest(
                     w->pending_tbs_digest,
                     w->pending_sig, w->pending_sig_len,
-                    &issuer_tls_key);
+                    &issuer_key);
                 if (vr == TLS_KEY_OP_OK)
                 {
                     verified_or_accepted = true;
@@ -666,7 +642,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
             }
             else
             {
-                /* Issuer isn't an RSA-2048 key we can use: unsupported. */
+                /* Issuer isn't an RSA key we can use: unsupported. */
                 WARN();
                 verified_or_accepted = true;
             }
@@ -752,108 +728,109 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
  */
 static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 {
-    struct tls_asn1_serialization cert_fields[13];
-    struct tls_x509_parse_result cert_parsed = {0};
+    struct tls_x509_object cert = {0};
     bool is_leaf = (w->cert_index == 0);
 
     INFO("cert: parse");
-    if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len,
-                                    cert_fields, &cert_parsed))
+    if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len, &cert))
     {
         INFO("cert: parse fail");
         return false;
     }
-    if (!cert_parsed.spki_raw || !cert_parsed.spki_raw->data ||
-        cert_parsed.spki_raw->len == 0)
+    if (cert.pubkey.alg == TLS_ALG_UNKNOWN ||
+        (cert.pubkey.rsa.mod_len == 0 && cert.pubkey.ec.len == 0))
     {
         INFO("cert: spki fail");
         return false;
     }
 
-    /* Validity window: every cert in the chain (leaf, intermediates, and
-     * the topmost cert) must cover the current time, per RFC 5280. The RTC
-     * is clamped forward at lwip_stack_init() to rule out an implausible
-     * post-RAM-clear clock (see LWIP_MIN_PLAUSIBLE_CLOCK_UNIX), so this
-     * reading is trustworthy even before SNTP has run. Fail closed on any
-     * parse failure or out-of-window result. */
-    if (!tls_x509_time_in_validity(cert_parsed.valid_before, cert_parsed.valid_after,
-                                   lwip_sntp_read_rtc_raw()))
+    /* Validity window check — fails closed on any parse error. */
+    if (!tls_x509_time_in_validity(&cert, lwip_sntp_read_rtc_raw()))
     {
         INFO("cert: date fail");
         return false;
     }
 
-    /* Hostname/SAN check: leaf only -- this is what proves the cert is for
-     * the server we actually connected to, not just a validly-signed cert
-     * for someone else's domain. SAN dNSName entries are preferred; CN is
-     * only consulted when no SAN extension is present (RFC 6125 ss 6.4.4).
-     * Fail closed if there's no hostname to check against (shouldn't
-     * happen -- SNI is always set before the handshake starts) or if the
-     * leaf doesn't match. */
+    /* Hostname/SAN check: leaf only. */
     if (is_leaf)
     {
-        const uint8_t *ext_data = (cert_parsed.extensions && cert_parsed.extensions->data)
-                                  ? cert_parsed.extensions->data : NULL;
-        size_t ext_len = cert_parsed.extensions ? cert_parsed.extensions->len : 0;
-
         if (!w->ctx || !w->ctx->hostname ||
-            !tls_x509_hostname_matches(ext_data, ext_len, cert_parsed.subject_cn, w->ctx->hostname))
+            !tls_x509_hostname_matches(cert.extensions, cert.extensions_len,
+                                       cert.subject_cn, cert.subject_cn_len,
+                                       w->ctx->hostname))
         {
             INFO("cert: host fail");
             return false;
         }
     }
 
-    /* Verify-leaf-first: capture the leaf SPKI so CertificateVerify can
-     * authenticate the server. This is the actual trust anchor today. */
-    if (is_leaf && w->ctx && !w->ctx->leaf_spki)
+    /* Capture the leaf public key for CertificateVerify.  We need it to
+     * survive past this function, so copy the key material into a heap block
+     * and mark it allocated=true so tls_key_free() will clean it up. */
+    if (is_leaf && w->ctx && w->ctx->leaf_pubkey.alg == TLS_ALG_UNKNOWN)
     {
-        uint8_t *copy = (uint8_t *)mem_buffer_custom_malloc(cert_parsed.spki_raw->len);
-        if (!copy)
+        size_t mat_len = 0;
+        if (cert.pubkey.rsa.mod_len)
+            mat_len = cert.pubkey.rsa.mod_len + cert.pubkey.rsa.exp_len;
+        else if (cert.pubkey.ec.len)
+            mat_len = cert.pubkey.ec.len;
+
+        if (mat_len == 0)
         {
-            /* Without the leaf SPKI, CertificateVerify can't run and the
-             * server would be unauthenticated. Fail closed. */
-            INFO("cert: spki alloc fail");
+            INFO("cert: key alloc fail");
             return false;
         }
-        mem_stats_tls_direct_add(cert_parsed.spki_raw->len, cert_parsed.spki_raw->len);
-        memcpy(copy, cert_parsed.spki_raw->data, cert_parsed.spki_raw->len);
-        w->ctx->leaf_spki = copy;
-        w->ctx->leaf_spki_len = cert_parsed.spki_raw->len;
+
+        uint8_t *mat = (uint8_t *)mem_buffer_custom_malloc(mat_len);
+        if (!mat)
+        {
+            INFO("cert: key alloc fail");
+            return false;
+        }
+        mem_stats_tls_direct_add(mat_len, mat_len);
+
+        w->ctx->leaf_pubkey.alg       = cert.pubkey.alg;
+        w->ctx->leaf_pubkey.allocated = true;
+
+        if (cert.pubkey.rsa.mod_len)
+        {
+            memcpy(mat, cert.pubkey.rsa.modulus, cert.pubkey.rsa.mod_len);
+            memcpy(mat + cert.pubkey.rsa.mod_len,
+                   cert.pubkey.rsa.exponent, cert.pubkey.rsa.exp_len);
+            w->ctx->leaf_pubkey.rsa.modulus  = mat;
+            w->ctx->leaf_pubkey.rsa.mod_len  = cert.pubkey.rsa.mod_len;
+            w->ctx->leaf_pubkey.rsa.exponent = mat + cert.pubkey.rsa.mod_len;
+            w->ctx->leaf_pubkey.rsa.exp_len  = cert.pubkey.rsa.exp_len;
+        }
+        else
+        {
+            memcpy(mat, cert.pubkey.ec.data, cert.pubkey.ec.len);
+            w->ctx->leaf_pubkey.ec.data = mat;
+            w->ctx->leaf_pubkey.ec.len  = cert.pubkey.ec.len;
+        }
     }
 
-    /* Capture this cert's issuer CN on every cert — after the loop, the last
-     * cert processed is the topmost, so w->topmost_issuer_cn will hold its
-     * issuer (the root CA we look up in the truststore). */
-    if (cert_parsed.issuer_cn && cert_parsed.issuer_cn->data &&
-        cert_parsed.issuer_cn->len > 0)
+    /* Issuer CN — captured for truststore root lookup. */
+    if (cert.issuer_cn && cert.issuer_cn_len > 0)
     {
-        uint8_t copy_len = (cert_parsed.issuer_cn->len < TLS_TRUSTSTORE_SUBJECT_LEN)
-                           ? (uint8_t)cert_parsed.issuer_cn->len
+        uint8_t copy_len = (cert.issuer_cn_len < TLS_TRUSTSTORE_SUBJECT_LEN)
+                           ? (uint8_t)cert.issuer_cn_len
                            : TLS_TRUSTSTORE_SUBJECT_LEN;
-        memcpy(w->topmost_issuer_cn, cert_parsed.issuer_cn->data, copy_len);
+        memcpy(w->topmost_issuer_cn, cert.issuer_cn, copy_len);
         memset(w->topmost_issuer_cn + copy_len, 0,
                TLS_TRUSTSTORE_SUBJECT_LEN - copy_len);
         w->topmost_issuer_cn_len = copy_len;
     }
 
-    /* Then walk the chain: verify the previously-stashed link against this
-     * cert's key, and stash this cert for the next link. RSA-2048 links are
-     * verified for real (a failure aborts here); unsupported sig types are
-     * accepted with an ALERT. */
-    if (!tls_cert_chain_verify_one(w, &cert_parsed, is_leaf))
+    if (!tls_cert_chain_verify_one(w, &cert, is_leaf))
     {
         INFO("cert: chain fail");
         return false;
     }
 
-    /* Chain is acceptable once we have the leaf SPKI in hand and no verified
-     * link has been rejected. (Unsupported links are accepted-with-alert and
-     * still reach here; only a genuine RSA verify failure returns false.) */
-    if (w->ctx && w->ctx->leaf_spki)
-    {
+    if (w->ctx && w->ctx->leaf_pubkey.alg != TLS_ALG_UNKNOWN)
         w->chain_validated = true;
-    }
+
     INFO("cert: accepted");
     return true;
 }
@@ -2577,140 +2554,6 @@ static bool tls_recv_certificate_request(
 /* TLS 1.3 signature_algorithms code points (RFC 8446 §4.2.3). */
 #define TLS_SIG_RSA_PSS_RSAE_SHA256 0x0804
 
-/* Extract the raw modulus bytes and public exponent from a DER-encoded
- * SubjectPublicKeyInfo for an rsaEncryption key. On success, *mod_out points into the SPKI
- * buffer at the first non-zero modulus byte and *mod_len_out is the
- * stripped length (matching the RSA modulus size in bytes; 256 for
- * RSA-2048). Returns false for non-RSA SPKIs, malformed input, or exponents
- * too large for powmod_exp_u24. */
-static bool tls_spki_extract_rsa_public_key(const uint8_t *spki, size_t spki_len,
-                                            const uint8_t **mod_out,
-                                            size_t *mod_len_out,
-                                            uint24_t *exp_out)
-{
-    struct tls_asn1_cursor c;
-    struct tls_asn1_tlv spki_seq;
-    struct tls_asn1_cursor spki_body;
-    struct tls_asn1_tlv alg_seq;
-    struct tls_asn1_tlv spk_bits;
-    struct tls_asn1_cursor alg_body;
-    struct tls_asn1_tlv alg_oid;
-    struct tls_asn1_cursor rsa_body;
-    struct tls_asn1_tlv rsa_seq;
-    struct tls_asn1_cursor rsa_fields;
-    struct tls_asn1_tlv modulus;
-    struct tls_asn1_tlv exponent;
-
-    if (!spki || spki_len == 0 || !mod_out || !mod_len_out || !exp_out)
-    {
-        return false;
-    }
-
-    /* SubjectPublicKeyInfo ::= SEQUENCE { AlgorithmIdentifier, BIT STRING } */
-    if (!tls_asn1_cursor_init(&c, spki, spki_len) ||
-        !tls_asn1_next(&c, &spki_seq) ||
-        tls_asn1_tag_number(spki_seq.tag) != ASN1_SEQUENCE ||
-        !tls_asn1_tag_constructed(spki_seq.tag))
-    {
-        return false;
-    }
-    if (!tls_asn1_child_cursor(&spki_seq, &spki_body) ||
-        !tls_asn1_next(&spki_body, &alg_seq) ||
-        !tls_asn1_next(&spki_body, &spk_bits))
-    {
-        return false;
-    }
-    if (tls_asn1_tag_number(spk_bits.tag) != ASN1_BITSTRING || spk_bits.len < 2)
-    {
-        return false;
-    }
-
-    /* AlgorithmIdentifier { OID rsaEncryption, NULL } */
-    if (!tls_asn1_child_cursor(&alg_seq, &alg_body) ||
-        !tls_asn1_next(&alg_body, &alg_oid) ||
-        tls_asn1_tag_number(alg_oid.tag) != ASN1_OBJECTID)
-    {
-        return false;
-    }
-    if (alg_oid.len != 9 ||
-        memcmp(alg_oid.value, tls_objectid_bytes[TLS_OID_RSA_ENCRYPTION], 9) != 0)
-    {
-        return false;
-    }
-
-    /* BIT STRING content: first byte is the unused-bits count (must be 0
-     * for a DER-encoded RSAPublicKey), followed by RSAPublicKey DER. */
-    if (spk_bits.value[0] != 0)
-    {
-        return false;
-    }
-    if (!tls_asn1_cursor_init(&rsa_body, spk_bits.value + 1, spk_bits.len - 1) ||
-        !tls_asn1_next(&rsa_body, &rsa_seq) ||
-        tls_asn1_tag_number(rsa_seq.tag) != ASN1_SEQUENCE ||
-        !tls_asn1_tag_constructed(rsa_seq.tag))
-    {
-        return false;
-    }
-    if (!tls_asn1_child_cursor(&rsa_seq, &rsa_fields) ||
-        !tls_asn1_next(&rsa_fields, &modulus) ||
-        tls_asn1_tag_number(modulus.tag) != ASN1_INTEGER ||
-        modulus.len == 0 ||
-        !tls_asn1_next(&rsa_fields, &exponent) ||
-        tls_asn1_tag_number(exponent.tag) != ASN1_INTEGER ||
-        exponent.len == 0)
-    {
-        return false;
-    }
-
-    /* ASN.1 INTEGER is signed big-endian — RSA moduli always have the high
-     * bit set so DER prepends a 0x00 sign byte. Strip it (and any further
-     * leading zeros, just in case) so we hand powmod the raw N. */
-    const uint8_t *p = modulus.value;
-    size_t n = modulus.len;
-    while (n > 0 && *p == 0)
-    {
-        p++;
-        n--;
-    }
-    if (n < RSA_MODULUS_MIN_SUPPORTED || n > RSA_MODULUS_MAX_SUPPORTED)
-    {
-        return false;
-    }
-    /* powmod requires odd modulus; RSA N is always odd. Belt-and-suspenders. */
-    if ((p[n - 1] & 1) == 0)
-    {
-        return false;
-    }
-
-    const uint8_t *e = exponent.value;
-    size_t e_len = exponent.len;
-    while (e_len > 0 && *e == 0)
-    {
-        e++;
-        e_len--;
-    }
-    if (e_len == 0 || e_len > 3)
-    {
-        /* powmod_exp_u24 is the current implementation boundary. */
-        ERROR();
-        return false;
-    }
-    uint24_t exp = 0;
-    for (size_t i = 0; i < e_len; i++)
-    {
-        exp = (uint24_t)((exp << 8) | e[i]);
-    }
-    if (exp < 3 || (exp & 1) == 0)
-    {
-        ERROR();
-        return false;
-    }
-
-    *mod_out = p;
-    *mod_len_out = n;
-    *exp_out = exp;
-    return true;
-}
 
 /* Verify a TLS 1.3 server CertificateVerify signature against the leaf
  * cert's SPKI. Implements the construction from RFC 8446 §4.4.3:
@@ -2732,71 +2575,50 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     uint8_t transcript[32];
     uint8_t message_hash[32];
     struct tls_hash_context hash_ctx;
-    const uint8_t *modulus;
-    size_t modulus_len;
-    uint24_t exponent;
     uint8_t *em = NULL;
     bool ok = false;
 
-    if (!ctx || !ctx->leaf_spki || ctx->leaf_spki_len == 0 ||
+    if (!ctx || ctx->leaf_pubkey.alg == TLS_ALG_UNKNOWN ||
         !sig || sig_len == 0)
     {
         return false;
     }
 
-    if (!tls_spki_extract_rsa_public_key(ctx->leaf_spki, ctx->leaf_spki_len,
-                                         &modulus, &modulus_len, &exponent))
-    {
+    const struct tls_rsa_key *rsa = &ctx->leaf_pubkey.rsa;
+    if (!rsa->modulus || rsa->mod_len == 0)
         return false;
-    }
+
     /* TLS 1.3 PSS uses salt length == hash length, so the signature must
      * exactly match the modulus size in bytes. */
-    if (sig_len != modulus_len)
-    {
+    if (sig_len != rsa->mod_len)
         return false;
-    }
 
     /* Build the signed-content digest. */
     if (!ctx->transcript_hash)
-    {
         return false;
-    }
+
     transcript_hash_digest(ctx->transcript_hash, transcript);
 
     memset(spaces, 0x20, sizeof(spaces));
     if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-    {
         return false;
-    }
+
     tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
     tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
     tls_hash_update(&hash_ctx, &zero, 1);
     tls_hash_update(&hash_ctx, transcript, sizeof(transcript));
     tls_hash_digest(&hash_ctx, message_hash);
 
-    /* RSA decrypt the signature, then run the PSS padding check. Keep the
-     * encoded-message buffer in the fixed RSA transient region instead of
-     * allocating a mem_buffer block from inside the handshake callback path.
-     * powmod has its own non-overlapping __tls_scratch arena. */
-    if (modulus_len > RSA_TRANSIENT_SIZE)
-    {
+    /* RSA decrypt the signature, then run the PSS padding check. */
+    if (rsa->mod_len > RSA_TRANSIENT_SIZE)
         return false;
-    }
-    uint8_t exp_be[3] = {
-        (uint8_t)(exponent >> 16),
-        (uint8_t)(exponent >> 8),
-        (uint8_t)(exponent),
-    };
-    struct tls_rsa_key leaf_key = {
-        sizeof(exp_be), exp_be,
-        modulus_len, modulus,
-    };
+
     em = __rsa_transient;
-    if (!tls_rsa_decrypt_signature(sig, sig_len, em, &leaf_key))
+    if (!tls_rsa_decrypt_signature(sig, sig_len, em, rsa))
     {
         goto cleanup;
     }
-    if (!tls_rsa_pss_verify(em, modulus_len, message_hash, sizeof(message_hash),
+    if (!tls_rsa_pss_verify(em, rsa->mod_len, message_hash, sizeof(message_hash),
                             TLS_HASH_SHA256))
     {
         goto cleanup;
@@ -2866,11 +2688,11 @@ static bool tls_recv_certificate_verify(
         return false;
     }
 
-    if (!ctx->leaf_spki || ctx->leaf_spki_len == 0)
+    if (ctx->leaf_pubkey.alg == TLS_ALG_UNKNOWN)
     {
         /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
          * CertificateVerify without a leaf is unverifiable; fail closed. */
-        INFO("certverify: missing spki");
+        INFO("certverify: missing leaf key");
         ERROR();
         ctx->state = TLS_STATE_ERROR;
         return false;
@@ -3962,12 +3784,23 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 
     /* Release captured leaf SPKI (allocated during cert walking,
      * consumed by tls_recv_certificate_verify). */
-    if (ctx->leaf_spki)
+    if (ctx->leaf_pubkey.allocated)
     {
-        mem_stats_tls_direct_release(ctx->leaf_spki_len, ctx->leaf_spki_len);
-        mem_buffer_custom_free(ctx->leaf_spki);
-        ctx->leaf_spki = NULL;
-        ctx->leaf_spki_len = 0;
+        /* Key material was heap-copied in tls_cert_walker_validate_one.
+         * The allocation covers both modulus and exponent (or EC point)
+         * contiguously; free via the modulus pointer (always the start). */
+        size_t mat_len = ctx->leaf_pubkey.rsa.mod_len + ctx->leaf_pubkey.rsa.exp_len;
+        if (mat_len == 0)
+            mat_len = ctx->leaf_pubkey.ec.len;
+        if (mat_len > 0)
+        {
+            const uint8_t *mat = ctx->leaf_pubkey.rsa.modulus
+                                 ? ctx->leaf_pubkey.rsa.modulus
+                                 : ctx->leaf_pubkey.ec.data;
+            mem_stats_tls_direct_release(mat_len, mat_len);
+            mem_buffer_custom_free((void *)mat);
+        }
+        memset(&ctx->leaf_pubkey, 0, sizeof(ctx->leaf_pubkey));
     }
 
     /* Securely zero sensitive data */

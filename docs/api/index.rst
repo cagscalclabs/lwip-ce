@@ -29,6 +29,8 @@ under ``lwip/core/`` and ``lwip/cryptography/``.
    * - :doc:`lwip/cryptography/ <cryptography>`
      - Lower-level primitives that can be used
        outside the network stack.
+   * - :doc:`lwip/cryptography/ (detailed) <crypto>`
+     - Per-header API reference for the cryptography primitives.
    * - :doc:`parsers.h <parsers>`
      - Root-level parsers umbrella header.
    * - :doc:`lwip/parsers/ <parsers>`
@@ -43,4 +45,5 @@ For stack usage and a full socket example, start with :doc:`../getting-started`.
    lwip
    core
    cryptography
+   crypto
    parsers

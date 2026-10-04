@@ -6,7 +6,6 @@
 #include <stdlib.h>
 
 #include <lwip/cryptography/x509.h>
-#include <lwip/cryptography/keyobject.h>
 #include <lwip.h>
 
 static void draw_line(const char *msg, int *y)
@@ -277,15 +276,15 @@ int main(void)
 
     pass =
         obj1 &&
-        obj1->parsed.issuer_cn && obj1->parsed.issuer_cn->data &&
-        obj1->parsed.subject_cn && obj1->parsed.subject_cn->data &&
-        obj1->parsed.spki_raw && obj1->parsed.spki_raw->data && obj1->parsed.spki_raw->len > 0 &&
-        obj1->parsed.extensions && obj1->parsed.extensions->data && obj1->parsed.extensions->len > 0;
+        obj1->issuer_cn &&
+        obj1->subject_cn &&
+        obj1->pubkey.rsa.mod_len > 0 &&
+        obj1->extensions && obj1->extensions_len > 0;
     ok &= show_parse_result("cert1 parse", pass, obj1);
 
     pass =
         obj1 &&
-        tls_x509_has_valid_constraints(obj1->parsed.extensions->data, obj1->parsed.extensions->len) &&
+        tls_x509_has_valid_constraints(obj1->extensions, obj1->extensions_len) &&
         tls_x509_has_required_ca_constraints(obj1->der, obj1->der_len);
     ok &= show_result("cert1 constraints", pass);
 
@@ -304,15 +303,15 @@ int main(void)
 
     pass =
         obj2 &&
-        obj2->parsed.issuer_cn && obj2->parsed.issuer_cn->data &&
-        obj2->parsed.subject_cn && obj2->parsed.subject_cn->data &&
-        obj2->parsed.spki_raw && obj2->parsed.spki_raw->data && obj2->parsed.spki_raw->len > 0 &&
-        obj2->parsed.extensions && obj2->parsed.extensions->data && obj2->parsed.extensions->len > 0;
+        obj2->issuer_cn &&
+        obj2->subject_cn &&
+        obj2->pubkey.rsa.mod_len > 0 &&
+        obj2->extensions && obj2->extensions_len > 0;
     ok &= show_parse_result("cert2 parse", pass, obj2);
 
     pass =
         obj2 &&
-        tls_x509_has_valid_constraints(obj2->parsed.extensions->data, obj2->parsed.extensions->len) &&
+        tls_x509_has_valid_constraints(obj2->extensions, obj2->extensions_len) &&
         tls_x509_has_required_ca_constraints(obj2->der, obj2->der_len);
     ok &= show_result("cert2 constraints", pass);
 
@@ -336,59 +335,66 @@ int main(void)
 
         pass =
             obj_san &&
-            obj_san->parsed.subject_cn && obj_san->parsed.subject_cn->data &&
-            obj_san->parsed.extensions && obj_san->parsed.extensions->data && obj_san->parsed.extensions->len > 0;
+            obj_san->subject_cn &&
+            obj_san->extensions && obj_san->extensions_len > 0;
         ok &= show_parse_result("san cert parse", pass, obj_san);
 
-        if (obj_san && obj_san->parsed.extensions)
+        if (obj_san)
         {
-            ext_data = obj_san->parsed.extensions->data;
-            ext_len = obj_san->parsed.extensions->len;
+            ext_data = obj_san->extensions;
+            ext_len  = obj_san->extensions_len;
         }
 
         /* Exact SAN dNSName match. */
         pass = obj_san &&
-               tls_x509_hostname_matches(ext_data, ext_len, obj_san->parsed.subject_cn, "san.example.com");
+               tls_x509_hostname_matches(ext_data, ext_len,
+                                         obj_san->subject_cn, obj_san->subject_cn_len,
+                                         "san.example.com");
         ok &= show_result("hostname exact SAN match", pass);
 
         /* Wildcard SAN match: "*.wild.example.com" should match a single
          * leading label. */
         pass = obj_san &&
-               tls_x509_hostname_matches(ext_data, ext_len, obj_san->parsed.subject_cn, "foo.wild.example.com");
+               tls_x509_hostname_matches(ext_data, ext_len,
+                                         obj_san->subject_cn, obj_san->subject_cn_len,
+                                         "foo.wild.example.com");
         ok &= show_result("hostname wildcard SAN match", pass);
 
         /* Wildcard must not match the bare suffix itself. */
         pass = obj_san &&
-               !tls_x509_hostname_matches(ext_data, ext_len, obj_san->parsed.subject_cn, "wild.example.com");
+               !tls_x509_hostname_matches(ext_data, ext_len,
+                                          obj_san->subject_cn, obj_san->subject_cn_len,
+                                          "wild.example.com");
         ok &= show_result("wildcard rejects bare suffix", pass);
 
-        /* Wildcard must not match a second-level sub-label
-         * ("*.wild.example.com" != "foo.bar.wild.example.com"). */
+        /* Wildcard must not match a second-level sub-label. */
         pass = obj_san &&
-               !tls_x509_hostname_matches(ext_data, ext_len, obj_san->parsed.subject_cn, "foo.bar.wild.example.com");
+               !tls_x509_hostname_matches(ext_data, ext_len,
+                                          obj_san->subject_cn, obj_san->subject_cn_len,
+                                          "foo.bar.wild.example.com");
         ok &= show_result("wildcard rejects multi-label", pass);
 
-        /* SAN present but no entry matches a totally different domain --
-         * must fail closed, and must NOT silently fall back to CN. */
+        /* SAN present but no entry matches a totally different domain. */
         pass = obj_san &&
-               !tls_x509_hostname_matches(ext_data, ext_len, obj_san->parsed.subject_cn, "attacker.example.org");
+               !tls_x509_hostname_matches(ext_data, ext_len,
+                                          obj_san->subject_cn, obj_san->subject_cn_len,
+                                          "attacker.example.org");
         ok &= show_result("hostname mismatch rejected", pass);
 
-        /* CN-only fallback: cert1/cert2 have no SAN extension at all, so
-         * matching must fall back to subject CN. cert1's CN is literally
-         * "Anthony" (not a DNS-shaped name), which is exactly the legacy
-         * case this fallback exists for. */
-        pass = obj1 && obj1->parsed.subject_cn &&
-               (!obj1->parsed.extensions ||
-                tls_x509_hostname_matches(obj1->parsed.extensions->data, obj1->parsed.extensions->len,
-                                          obj1->parsed.subject_cn, "Anthony"));
+        /* CN-only fallback: cert1/cert2 have no SAN extension at all. */
+        pass = obj1 && obj1->subject_cn &&
+               tls_x509_hostname_matches(obj1->extensions, obj1->extensions_len,
+                                         obj1->subject_cn, obj1->subject_cn_len,
+                                         "Anthony");
         ok &= show_result("CN fallback when no SAN", pass);
 
-        /* No hostname / empty hostname must fail closed, not match-anything. */
-        pass = obj_san && !tls_x509_hostname_matches(ext_data, ext_len, obj_san->parsed.subject_cn, NULL);
+        /* No hostname must fail closed. */
+        pass = obj_san && !tls_x509_hostname_matches(ext_data, ext_len,
+                                                      obj_san->subject_cn, obj_san->subject_cn_len,
+                                                      NULL);
         ok &= show_result("null hostname rejected", pass);
 
-        tls_x509_object_destroy(obj_san);
+        tls_x509_object_free(obj_san);
     }
 
     {
@@ -398,71 +404,54 @@ int main(void)
         /* Known-good UTCTime conversion: cert2's notBefore is
          * 2026-02-24T21:46:52Z (YYMMDDHHMMSSZ = "260224214652Z"). */
         {
-            struct tls_asn1_serialization utc = {0};
             static const uint8_t utc_bytes[] = "260224214652Z";
-            utc.tag = ASN1_UTCTIME;
-            utc.data = (uint8_t *)utc_bytes;
-            utc.len = sizeof(utc_bytes) - 1;
-            pass = tls_x509_time_to_unix(&utc, &ts) && ts == 1771969612u;
+            pass = tls_x509_time_to_unix(utc_bytes, sizeof(utc_bytes) - 1,
+                                          ASN1_UTCTIME, &ts)
+                   && ts == 1771969612u;
             ok &= show_result("UTCTime parse known value", pass);
         }
 
         /* Known-good GeneralizedTime conversion: same instant, 4-digit year. */
         {
-            struct tls_asn1_serialization gt = {0};
             static const uint8_t gt_bytes[] = "20260224214652Z";
-            gt.tag = ASN1_GENERALIZEDTIME;
-            gt.data = (uint8_t *)gt_bytes;
-            gt.len = sizeof(gt_bytes) - 1;
             ts = 0;
-            pass = tls_x509_time_to_unix(&gt, &ts) && ts == 1771969612u;
+            pass = tls_x509_time_to_unix(gt_bytes, sizeof(gt_bytes) - 1,
+                                          ASN1_GENERALIZEDTIME, &ts)
+                   && ts == 1771969612u;
             ok &= show_result("GeneralizedTime parse known value", pass);
         }
 
         /* Malformed input (missing trailing 'Z') must fail closed. */
         {
-            struct tls_asn1_serialization bad = {0};
             static const uint8_t bad_bytes[] = "260224214652";
-            bad.tag = ASN1_UTCTIME;
-            bad.data = (uint8_t *)bad_bytes;
-            bad.len = sizeof(bad_bytes) - 1;
-            pass = !tls_x509_time_to_unix(&bad, &ts);
+            pass = !tls_x509_time_to_unix(bad_bytes, sizeof(bad_bytes) - 1,
+                                           ASN1_UTCTIME, &ts);
             ok &= show_result("time parse rejects no Z", pass);
         }
 
-        /* Full validity-window check using the real parsed cert: a
-         * timestamp inside [notBefore, notAfter] passes, one before
-         * notBefore and one after notAfter both fail. Uses obj_san
-         * (valid 2026-06-23 .. 2036-06-20) since cert1 is expired and
-         * would conflate "checker works" with "cert is expired". */
-        pass = obj_san && obj_san->parsed.valid_before && obj_san->parsed.valid_after &&
-               tls_x509_time_in_validity(obj_san->parsed.valid_before, obj_san->parsed.valid_after,
-                                         1782864000u /* 2026-07-01, inside window (notBefore is 2026-06-23) */);
+        /* Full validity-window check using the real parsed cert. */
+        pass = obj_san &&
+               tls_x509_time_in_validity(obj_san, 1782864000u /* 2026-07-01, inside window */);
         ok &= show_result("validity window: inside", pass);
 
-        pass = obj_san && obj_san->parsed.valid_before && obj_san->parsed.valid_after &&
-               !tls_x509_time_in_validity(obj_san->parsed.valid_before, obj_san->parsed.valid_after,
-                                          1700000000u /* 2023, before notBefore */);
+        pass = obj_san &&
+               !tls_x509_time_in_validity(obj_san, 1700000000u /* 2023, before notBefore */);
         ok &= show_result("validity window: before notBefore", pass);
 
-        pass = obj_san && obj_san->parsed.valid_before && obj_san->parsed.valid_after &&
-               !tls_x509_time_in_validity(obj_san->parsed.valid_before, obj_san->parsed.valid_after,
-                                          2114380800u /* 2037-01-01, after notAfter (2036-06-20) */);
+        pass = obj_san &&
+               !tls_x509_time_in_validity(obj_san, 2114380800u /* 2037-01-01, after notAfter */);
         ok &= show_result("validity window: after notAfter", pass);
 
-        /* cert1 is a real, already-expired certificate (notAfter
-         * 2025-09-08) -- exercise the checker against genuine expired
-         * cert bytes, not just synthetic TLVs. */
-        pass = obj1 && obj1->parsed.valid_before && obj1->parsed.valid_after &&
-               !tls_x509_time_in_validity(obj1->parsed.valid_before, obj1->parsed.valid_after,
-                                          1782000000u /* 2026, long after cert1 expired */);
+        /* cert1 is expired (notAfter 2025-09-08). */
+        pass = obj1 &&
+               !tls_x509_time_in_validity(obj1, 1782000000u /* 2026, long after cert1 expired */);
         ok &= show_result("real expired cert rejected", pass);
 
-        tls_x509_object_destroy(obj_san);
+        tls_x509_object_free(obj_san);
     }
 
     os_ClrHome();
-    tls_x509_object_destroy(obj1);
-    tls_x509_object_destroy(obj2);
+    tls_x509_object_free(obj1);
+    tls_x509_object_free(obj2);
     return ok ? 0 : 1;
 }

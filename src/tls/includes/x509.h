@@ -14,25 +14,38 @@
 #include "asn1.h"
 #include "key.h"
 
-struct tls_x509_parse_result
-{
-    struct tls_asn1_serialization *issuer_cn;
-    struct tls_asn1_serialization *subject_cn;
-    struct tls_asn1_serialization *valid_before;
-    struct tls_asn1_serialization *valid_after;
-    struct tls_asn1_serialization *spki_raw;
-    struct tls_asn1_serialization *spki_algorithm;
-    struct tls_asn1_serialization *spki_key_bits;
-    struct tls_asn1_serialization *extensions;
-};
-
+/**
+ * Parsed X.509 certificate.
+ *
+ * All pointer members reference the certificate's DER bytes.  When
+ * from_handshake is true those bytes live in the caller's buffer (zero extra
+ * allocation, pointers borrow).  When false (standalone import via
+ * tls_x509_import_certificate) the trailing der[] carries a heap copy and
+ * every pointer references that copy; call tls_x509_object_free() to release.
+ *
+ * pubkey.allocated is always false — the key material is inside der[], not
+ * independently allocated.  Never call tls_key_free() on pubkey.
+ */
 struct tls_x509_object
 {
-    size_t length;
-    size_t type;
-    size_t der_len;
-    struct tls_asn1_serialization fields[13];
-    struct tls_x509_parse_result parsed;
+    bool from_handshake; /**< true: pointers borrow caller's buffer; no free. */
+
+    /* Distinguished-name fields — raw string bytes (no NUL). */
+    const uint8_t *issuer_cn;     size_t issuer_cn_len;
+    const uint8_t *subject_cn;    size_t subject_cn_len;
+
+    /* Validity window — data bytes + ASN.1 tag (UTCTime or GeneralizedTime). */
+    const uint8_t *valid_before;  size_t valid_before_len;  uint8_t valid_before_tag;
+    const uint8_t *valid_after;   size_t valid_after_len;   uint8_t valid_after_tag;
+
+    /* Extensions content bytes (SEQUENCE OF Extension, inner of [3] EXPLICIT). */
+    const uint8_t *extensions;    size_t extensions_len;
+
+    /* Public key extracted from SubjectPublicKeyInfo. */
+    struct tls_key pubkey;
+
+    /* DER storage (only meaningful when !from_handshake). */
+    size_t  der_len;
     uint8_t der[];
 };
 
@@ -105,53 +118,75 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
  * CommonName instead (legacy behavior; SAN takes priority when present,
  * per RFC 6125). Comparison is ASCII case-insensitive.
  *
- * @param ext_data    Raw bytes of the leaf's extensions field (parsed.extensions->data).
- * @param ext_len     Length of @p ext_data.
- * @param subject_cn  Leaf's parsed subject CommonName (CN fallback), may be NULL.
- * @param hostname    NUL-terminated hostname the connection was made to.
+ * @param ext_data      Raw bytes of the leaf's extensions field (cert.extensions).
+ * @param ext_len       Length of @p ext_data.
+ * @param subject_cn    Subject CommonName bytes for CN fallback; may be NULL.
+ * @param subject_cn_len Length of @p subject_cn.
+ * @param hostname      NUL-terminated hostname the connection was made to.
  * @return true if the certificate is valid for @p hostname, false otherwise
  *         (including on any parse failure -- fails closed).
  */
 bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
-                               const struct tls_asn1_serialization *subject_cn,
+                               const uint8_t *subject_cn, size_t subject_cn_len,
                                const char *hostname);
 
 /**
  * @brief Parse an X.509 UTCTime or GeneralizedTime value into Unix seconds.
  *
- * Supports the DER-mandated encodings: UTCTime "YYMMDDHHMMSSZ" (two-digit
- * year, RFC 5280 pivot: 50-99 => 19xx, 00-49 => 20xx) and GeneralizedTime
- * "YYYYMMDDHHMMSSZ". Both must be UTC (trailing 'Z'); fractional seconds
- * and explicit offsets are not accepted (DER requires 'Z' with no fraction
- * for certificate validity fields).
- *
- * @param tlv      Parsed ASN1_UTCTIME or ASN1_GENERALIZEDTIME TLV.
+ * @param data     Raw value bytes (the TLV value, not the TLV header).
+ * @param len      Length of @p data.
+ * @param tag      Raw ASN.1 tag byte (ASN1_UTCTIME or ASN1_GENERALIZEDTIME).
  * @param out_secs Receives the Unix timestamp on success.
  * @return true on success, false on malformed input (fails closed).
  */
-bool tls_x509_time_to_unix(const struct tls_asn1_serialization *tlv, uint32_t *out_secs);
+bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
+                            uint32_t *out_secs);
 
 /**
- * @brief Check whether the current time falls within [valid_before, valid_after].
+ * @brief Check whether @p now_secs falls within the certificate validity window.
  *
- * @param valid_before  Parsed notBefore field (ASN1_UTCTIME/ASN1_GENERALIZEDTIME).
- * @param valid_after   Parsed notAfter field (ASN1_UTCTIME/ASN1_GENERALIZEDTIME).
- * @param now_secs      Current time, Unix seconds (caller-supplied so this stays testable).
- * @return true if now_secs is within the validity window, false otherwise
- *         (including on any parse failure -- fails closed).
+ * Reads notBefore and notAfter directly from a parsed tls_x509_object.
+ * Fails closed on any parse error or inverted window.
+ *
+ * @param cert      Parsed certificate whose validity fields to check.
+ * @param now_secs  Current time, Unix seconds.
+ * @return true if now_secs is within [notBefore, notAfter].
  */
-bool tls_x509_time_in_validity(const struct tls_asn1_serialization *valid_before,
-                               const struct tls_asn1_serialization *valid_after,
-                               uint32_t now_secs);
+bool tls_x509_time_in_validity(const struct tls_x509_object *cert, uint32_t now_secs);
+
+/**
+ * @brief Parse a DER-encoded X.509 certificate into @p out.
+ *
+ * All pointer fields in @p out reference bytes inside @p cert_der.
+ * The caller must keep @p cert_der live for the lifetime of @p out.
+ * Sets out->from_handshake = true.
+ *
+ * @param cert_der  DER-encoded certificate bytes.
+ * @param cert_len  Length of @p cert_der.
+ * @param out       Caller-allocated object to receive parsed fields.
+ * @return true on success.
+ */
 bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
-                                struct tls_asn1_serialization fields[13],
-                                struct tls_x509_parse_result *out);
-bool tls_x509_import_and_parse_certificate(const char *pem_data, size_t size,
-                                           uint8_t *der_out, size_t der_out_len,
-                                           size_t *der_written,
-                                           struct tls_asn1_serialization fields[13],
-                                           struct tls_x509_parse_result *out);
+                                struct tls_x509_object *out);
+
+/**
+ * @brief Decode a PEM certificate and allocate a tls_x509_object.
+ *
+ * Allocates a single block: tls_x509_object header + DER bytes.
+ * All pointer fields reference the trailing DER.  Free with
+ * tls_x509_object_free().
+ *
+ * @param pem_data  PEM text starting with -----BEGIN CERTIFICATE-----.
+ * @param size      Length of @p pem_data in bytes.
+ * @return Allocated object on success, NULL on failure.
+ */
 struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t size);
-void tls_x509_object_destroy(struct tls_x509_object *obj);
+
+/**
+ * @brief Free a tls_x509_object allocated by tls_x509_import_certificate().
+ *
+ * Safe to call with NULL.  No-op when obj->from_handshake is true.
+ */
+void tls_x509_object_free(struct tls_x509_object *obj);
 
 #endif

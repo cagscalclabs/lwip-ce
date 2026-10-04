@@ -7,7 +7,6 @@
 #include "../includes/bytes.h"
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
-#include "../includes/keyobject.h"
 #include "../includes/x509.h"
 #include "../includes/tls.h"
 
@@ -25,35 +24,6 @@ static void tls_x509_free(void *ptr)
     tls_fileio_free(ptr);
 }
 
-/*
- * Field index contract used by handshake.c and truststore tests.
- * Keep this mapping stable unless all call sites are updated in lockstep.
- */
-#define TLS_X509_IDX_SUBJSIGALG 0
-#define TLS_X509_IDX_ISSUERNAME 1
-#define TLS_X509_IDX_VALIDBEFORE 2
-#define TLS_X509_IDX_VALIDAFTER 3
-#define TLS_X509_IDX_SUBJECTNAME 4
-#define TLS_X509_IDX_SPKIRAW 5
-#define TLS_X509_IDX_PKEYALG 6
-#define TLS_X509_IDX_PKEYPARAM 7
-#define TLS_X509_IDX_PKEYBITS 8
-#define TLS_X509_IDX_EXTENSIONS 9
-#define TLS_X509_IDX_CASIGALG 10
-#define TLS_X509_IDX_CASIGPARAM 11
-#define TLS_X509_IDX_CASIGVAL 12
-
-static void tls_x509_set_field(struct tls_asn1_serialization *f,
-                               char *name,
-                               uint8_t tag,
-                               const uint8_t *data,
-                               size_t len)
-{
-    f->name = name;
-    f->tag = tag;
-    f->data = (uint8_t *)data;
-    f->len = len;
-}
 
 static bool tls_x509_is_string_tag(uint8_t tag)
 {
@@ -632,39 +602,29 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
 }
 
 bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
-                               const struct tls_asn1_serialization *subject_cn,
+                               const uint8_t *subject_cn, size_t subject_cn_len,
                                const char *hostname)
 {
     bool san_present = false;
     size_t hostname_len;
 
     if (!hostname)
-    {
         return false;
-    }
+
     hostname_len = strlen(hostname);
     if (hostname_len == 0)
-    {
         return false;
-    }
 
     if (tls_x509_san_dns_matches(ext_data, ext_len, hostname, hostname_len, &san_present))
-    {
         return true;
-    }
-    if (san_present)
-    {
-        /* SAN extension was present but none of its dNSName entries
-         * matched -- do not fall back to CN. */
-        return false;
-    }
 
-    /* No SAN extension at all: legacy fallback to subject CN. */
-    if (!subject_cn || !subject_cn->data || subject_cn->len == 0)
-    {
+    if (san_present)
+        return false; /* SAN present but no match — don't fall back to CN */
+
+    if (!subject_cn || subject_cn_len == 0)
         return false;
-    }
-    return tls_x509_pattern_matches_host(subject_cn->data, subject_cn->len, hostname, hostname_len);
+
+    return tls_x509_pattern_matches_host(subject_cn, subject_cn_len, hostname, hostname_len);
 }
 
 static bool tls_x509_digit_pair(const uint8_t *p, uint32_t *out)
@@ -695,22 +655,21 @@ static int32_t tls_x509_days_from_civil(int32_t y, uint32_t m, uint32_t d)
     return era * 146097 + (int32_t)doe - 719468;
 }
 
-bool tls_x509_time_to_unix(const struct tls_asn1_serialization *tlv, uint32_t *out_secs)
+bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
+                            uint32_t *out_secs)
 {
     uint8_t tag_num;
     const uint8_t *v;
-    size_t len;
     uint32_t year, month, day, hour, minute, second;
     int32_t days;
     int64_t secs64;
 
-    if (!tlv || !tlv->data || !out_secs)
+    if (!data || len == 0 || !out_secs)
     {
         return false;
     }
-    tag_num = tls_asn1_tag_number(tlv->tag);
-    v = tlv->data;
-    len = tlv->len;
+    tag_num = tls_asn1_tag_number(tag);
+    v = data;
 
     if (tag_num == ASN1_UTCTIME)
     {
@@ -776,15 +735,18 @@ bool tls_x509_time_to_unix(const struct tls_asn1_serialization *tlv, uint32_t *o
     return true;
 }
 
-bool tls_x509_time_in_validity(const struct tls_asn1_serialization *valid_before,
-                               const struct tls_asn1_serialization *valid_after,
-                               uint32_t now_secs)
+bool tls_x509_time_in_validity(const struct tls_x509_object *cert, uint32_t now_secs)
 {
     uint32_t not_before_secs;
     uint32_t not_after_secs;
 
-    if (!tls_x509_time_to_unix(valid_before, &not_before_secs) ||
-        !tls_x509_time_to_unix(valid_after, &not_after_secs))
+    if (!cert)
+        return false;
+
+    if (!tls_x509_time_to_unix(cert->valid_before, cert->valid_before_len,
+                                cert->valid_before_tag, &not_before_secs) ||
+        !tls_x509_time_to_unix(cert->valid_after,  cert->valid_after_len,
+                                cert->valid_after_tag,  &not_after_secs))
     {
         return false;
     }
@@ -826,24 +788,19 @@ bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len)
 
 bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len)
 {
-    struct tls_asn1_serialization fields[13];
-    struct tls_x509_parse_result parsed = {0};
+    struct tls_x509_object parsed = {0};
 
-    if (!tls_x509_parse_certificate(cert_der, cert_len, fields, &parsed))
-    {
+    if (!tls_x509_parse_certificate(cert_der, cert_len, &parsed))
         return false;
-    }
 
-    if (!parsed.extensions || !parsed.extensions->data || parsed.extensions->len == 0)
-    {
+    if (!parsed.extensions || parsed.extensions_len == 0)
         return false;
-    }
-    return tls_x509_has_valid_constraints(parsed.extensions->data, parsed.extensions->len);
+
+    return tls_x509_has_valid_constraints(parsed.extensions, parsed.extensions_len);
 }
 
 bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
-                                struct tls_asn1_serialization fields[13],
-                                struct tls_x509_parse_result *out)
+                                struct tls_x509_object *out)
 {
     struct tls_asn1_cursor top_cursor;
     struct tls_asn1_tlv cert_seq;
@@ -852,40 +809,42 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
     struct tls_asn1_tlv ca_sig_alg;
     struct tls_asn1_tlv ca_sig_val;
 
-    if (!cert_der || cert_len == 0 || !fields || !out)
+    /* Temporary serialization scratch for tls_x509_parse_algorithm_identifier
+     * and tls_x509_parse_name_common_name — we only need their results
+     * transiently to populate the flat fields in out. */
+    struct tls_asn1_serialization scratch_alg;
+    struct tls_asn1_serialization scratch_param;
+    struct tls_asn1_serialization scratch_cn;
+
+    if (!cert_der || cert_len == 0 || !out)
     {
         ERROR();
         return false;
     }
 
-    memset(fields, 0, sizeof(struct tls_asn1_serialization) * 13);
     memset(out, 0, sizeof(*out));
+    out->from_handshake = true; /* all pointers reference cert_der */
 
     if (!tls_asn1_cursor_init(&top_cursor, cert_der, cert_len) ||
         !tls_asn1_next(&top_cursor, &cert_seq))
-    {
         return false;
-    }
-    if (!tls_asn1_tag_constructed(cert_seq.tag) || tls_asn1_tag_number(cert_seq.tag) != ASN1_SEQUENCE)
-    {
+
+    if (!tls_asn1_tag_constructed(cert_seq.tag) ||
+        tls_asn1_tag_number(cert_seq.tag) != ASN1_SEQUENCE)
         return false;
-    }
+
     if (!tls_asn1_child_cursor(&cert_seq, &cert_items) ||
         !tls_asn1_next(&cert_items, &tbs) ||
         !tls_asn1_next(&cert_items, &ca_sig_alg) ||
         !tls_asn1_next(&cert_items, &ca_sig_val))
-    {
         return false;
-    }
-    /* Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue } */
-    if (!tls_asn1_tag_constructed(tbs.tag) || tls_asn1_tag_number(tbs.tag) != ASN1_SEQUENCE)
-    {
+
+    if (!tls_asn1_tag_constructed(tbs.tag) ||
+        tls_asn1_tag_number(tbs.tag) != ASN1_SEQUENCE)
         return false;
-    }
+
     if (tls_asn1_tag_number(ca_sig_val.tag) != ASN1_BITSTRING)
-    {
         return false;
-    }
 
     {
         struct tls_asn1_cursor tbs_cursor;
@@ -897,106 +856,77 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
         struct tls_asn1_tlv spki;
 
         if (!tls_asn1_child_cursor(&tbs, &tbs_cursor))
-        {
             return false;
-        }
 
         if (!tls_asn1_next(&tbs_cursor, &item))
-        {
             return false;
-        }
+
         /* version is [0] EXPLICIT and optional in v1 certs. */
         if (tls_asn1_tag_class(item.tag) == ASN1_CONTEXTSPEC &&
             tls_asn1_tag_number(item.tag) == 0 &&
             tls_asn1_tag_constructed(item.tag))
         {
             if (!tls_asn1_next(&tbs_cursor, &item))
-            {
                 return false;
-            }
         }
 
         if (tls_asn1_tag_number(item.tag) != ASN1_INTEGER)
-        {
             return false;
-        }
-        if (!tls_asn1_next(&tbs_cursor, &sig_alg) ||
-            !tls_asn1_next(&tbs_cursor, &issuer) ||
-            !tls_asn1_next(&tbs_cursor, &validity) ||
-            !tls_asn1_next(&tbs_cursor, &subject) ||
+
+        if (!tls_asn1_next(&tbs_cursor, &sig_alg)  ||
+            !tls_asn1_next(&tbs_cursor, &issuer)    ||
+            !tls_asn1_next(&tbs_cursor, &validity)  ||
+            !tls_asn1_next(&tbs_cursor, &subject)   ||
             !tls_asn1_next(&tbs_cursor, &spki))
-        {
             return false;
-        }
 
-        if (!tls_x509_parse_algorithm_identifier(&sig_alg,
-                                                 &fields[TLS_X509_IDX_SUBJSIGALG],
-                                                 NULL,
-                                                 true))
-        {
+        /* issuer CN */
+        memset(&scratch_cn, 0, sizeof(scratch_cn));
+        if (!tls_x509_parse_name_common_name(&issuer, &scratch_cn))
             return false;
-        }
-        fields[TLS_X509_IDX_SUBJSIGALG].name = "algorithm";
+        out->issuer_cn     = scratch_cn.data;
+        out->issuer_cn_len = scratch_cn.len;
 
-        if (!tls_x509_parse_name_common_name(&issuer, &fields[TLS_X509_IDX_ISSUERNAME]))
-        {
-            return false;
-        }
-        fields[TLS_X509_IDX_ISSUERNAME].name = "issuerName";
-
+        /* validity */
         {
             struct tls_asn1_cursor validity_cursor;
-            struct tls_asn1_tlv not_before;
-            struct tls_asn1_tlv not_after;
+            struct tls_asn1_tlv not_before, not_after;
 
-            if (!tls_asn1_tag_constructed(validity.tag) || tls_asn1_tag_number(validity.tag) != ASN1_SEQUENCE)
-            {
+            if (!tls_asn1_tag_constructed(validity.tag) ||
+                tls_asn1_tag_number(validity.tag) != ASN1_SEQUENCE)
                 return false;
-            }
+
             if (!tls_asn1_child_cursor(&validity, &validity_cursor) ||
                 !tls_asn1_next(&validity_cursor, &not_before) ||
                 !tls_asn1_next(&validity_cursor, &not_after))
-            {
                 return false;
-            }
-            if (!((tls_asn1_tag_number(not_before.tag) == ASN1_UTCTIME) ||
-                  (tls_asn1_tag_number(not_before.tag) == ASN1_GENERALIZEDTIME)))
-            {
-                return false;
-            }
-            if (!((tls_asn1_tag_number(not_after.tag) == ASN1_UTCTIME) ||
-                  (tls_asn1_tag_number(not_after.tag) == ASN1_GENERALIZEDTIME)))
-            {
-                return false;
-            }
 
-            tls_x509_set_field(&fields[TLS_X509_IDX_VALIDBEFORE],
-                               "valid-before",
-                               not_before.tag,
-                               not_before.value,
-                               not_before.len);
-            tls_x509_set_field(&fields[TLS_X509_IDX_VALIDAFTER],
-                               "valid-after",
-                               not_after.tag,
-                               not_after.value,
-                               not_after.len);
+            uint8_t nb_tag = tls_asn1_tag_number(not_before.tag);
+            uint8_t na_tag = tls_asn1_tag_number(not_after.tag);
+            if (nb_tag != ASN1_UTCTIME && nb_tag != ASN1_GENERALIZEDTIME)
+                return false;
+            if (na_tag != ASN1_UTCTIME && na_tag != ASN1_GENERALIZEDTIME)
+                return false;
+
+            out->valid_before     = not_before.value;
+            out->valid_before_len = not_before.len;
+            out->valid_before_tag = not_before.tag;
+            out->valid_after      = not_after.value;
+            out->valid_after_len  = not_after.len;
+            out->valid_after_tag  = not_after.tag;
         }
 
-        if (!tls_x509_parse_name_common_name(&subject, &fields[TLS_X509_IDX_SUBJECTNAME]))
-        {
+        /* subject CN */
+        memset(&scratch_cn, 0, sizeof(scratch_cn));
+        if (!tls_x509_parse_name_common_name(&subject, &scratch_cn))
             return false;
-        }
-        fields[TLS_X509_IDX_SUBJECTNAME].name = "subjectName";
+        out->subject_cn     = scratch_cn.data;
+        out->subject_cn_len = scratch_cn.len;
 
-        if (!tls_asn1_tag_constructed(spki.tag) || tls_asn1_tag_number(spki.tag) != ASN1_SEQUENCE)
-        {
+        /* SPKI — parse into pubkey */
+        if (!tls_asn1_tag_constructed(spki.tag) ||
+            tls_asn1_tag_number(spki.tag) != ASN1_SEQUENCE)
             return false;
-        }
-        tls_x509_set_field(&fields[TLS_X509_IDX_SPKIRAW],
-                           "SubjectPublicKeyInfo",
-                           spki.tag,
-                           spki.tlv,
-                           spki.header_len + spki.len);
 
         {
             struct tls_asn1_cursor spki_cursor;
@@ -1004,76 +934,86 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             struct tls_asn1_tlv spki_bits;
 
             if (!tls_asn1_child_cursor(&spki, &spki_cursor) ||
-                !tls_asn1_next(&spki_cursor, &spki_alg) ||
+                !tls_asn1_next(&spki_cursor, &spki_alg)      ||
                 !tls_asn1_next(&spki_cursor, &spki_bits))
-            {
                 return false;
-            }
-            if (!tls_x509_parse_algorithm_identifier(&spki_alg,
-                                                     &fields[TLS_X509_IDX_PKEYALG],
-                                                     &fields[TLS_X509_IDX_PKEYPARAM],
-                                                     true))
-            {
+
+            memset(&scratch_alg, 0, sizeof(scratch_alg));
+            if (!tls_x509_parse_algorithm_identifier(&spki_alg, &scratch_alg,
+                                                      &scratch_param, true))
                 return false;
-            }
-            fields[TLS_X509_IDX_PKEYALG].name = "algorithm";
-            fields[TLS_X509_IDX_PKEYPARAM].name = "parameters";
 
             if (tls_asn1_tag_number(spki_bits.tag) != ASN1_BITSTRING)
-            {
                 return false;
+
+            /* Infer the algorithm from the SPKI OID and extract key material. */
+            tls_alg_t alg = tls_x509_oid_to_sig_alg(scratch_alg.data, scratch_alg.len);
+            out->pubkey.alg       = alg;
+            out->pubkey.allocated = false;
+
+            if (alg == TLS_ALG_RSA_PSS_RSAE_SHA256 ||
+                alg == TLS_ALG_RSA_PKCS1_SHA256)
+            {
+                /* BIT STRING payload: skip the leading unused-bits byte. */
+                if (spki_bits.len < 2 || spki_bits.value[0] != 0x00)
+                    return false;
+                /* key_parse_spki (key.c) logic inline: parse RSAPublicKey. */
+                struct tls_asn1_cursor rsa_c;
+                struct tls_asn1_tlv rsa_seq, rsa_mod, rsa_exp;
+                if (!tls_asn1_cursor_init(&rsa_c, spki_bits.value + 1,
+                                          spki_bits.len - 1) ||
+                    !tls_asn1_next(&rsa_c, &rsa_seq) ||
+                    !tls_asn1_tag_constructed(rsa_seq.tag) ||
+                    tls_asn1_tag_number(rsa_seq.tag) != ASN1_SEQUENCE)
+                    return false;
+                struct tls_asn1_cursor rsa_body;
+                if (!tls_asn1_child_cursor(&rsa_seq, &rsa_body) ||
+                    !tls_asn1_next(&rsa_body, &rsa_mod) ||
+                    !tls_asn1_next(&rsa_body, &rsa_exp) ||
+                    tls_asn1_tag_number(rsa_mod.tag) != ASN1_INTEGER ||
+                    tls_asn1_tag_number(rsa_exp.tag) != ASN1_INTEGER)
+                    return false;
+
+                const uint8_t *mod = rsa_mod.value;
+                size_t         mod_len = rsa_mod.len;
+                if (mod_len > 1 && mod[0] == 0x00) { mod++; mod_len--; }
+
+                out->pubkey.rsa.modulus  = mod;
+                out->pubkey.rsa.mod_len  = mod_len;
+                out->pubkey.rsa.exponent = rsa_exp.value;
+                out->pubkey.rsa.exp_len  = rsa_exp.len;
             }
-            tls_x509_set_field(&fields[TLS_X509_IDX_PKEYBITS],
-                               "subjectPublicKey",
-                               spki_bits.tag,
-                               spki_bits.value,
-                               spki_bits.len);
+            else if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256)
+            {
+                /* EC public key: BIT STRING value after the unused-bits byte. */
+                if (spki_bits.len < 2)
+                    return false;
+                out->pubkey.ec.data = spki_bits.value + 1;
+                out->pubkey.ec.len  = spki_bits.len  - 1;
+            }
+            /* else: unknown alg — pubkey fields remain zeroed; callers that
+             * need to verify will fail via tls_key_verify returning UNKNOWN. */
         }
 
+        /* extensions [3] EXPLICIT — expose inner content bytes */
         while (tls_asn1_next(&tbs_cursor, &item))
         {
-            /*
-             * extensions is [3] EXPLICIT.
-             * We expose the *content* of the wrapper (which starts with
-             * SEQUENCE OF Extension) so constraints parser can iterate it.
-             */
             if (tls_asn1_tag_class(item.tag) == ASN1_CONTEXTSPEC &&
                 tls_asn1_tag_number(item.tag) == 3 &&
                 tls_asn1_tag_constructed(item.tag))
             {
-                tls_x509_set_field(&fields[TLS_X509_IDX_EXTENSIONS],
-                                   "extensions",
-                                   item.tag,
-                                   item.value,
-                                   item.len);
+                out->extensions     = item.value;
+                out->extensions_len = item.len;
                 break;
             }
         }
     }
 
-    if (!tls_x509_parse_algorithm_identifier(&ca_sig_alg,
-                                             &fields[TLS_X509_IDX_CASIGALG],
-                                             &fields[TLS_X509_IDX_CASIGPARAM],
-                                             true))
-    {
+    /* Validate ca signature algorithm field exists (not used for value here). */
+    memset(&scratch_alg, 0, sizeof(scratch_alg));
+    if (!tls_x509_parse_algorithm_identifier(&ca_sig_alg, &scratch_alg,
+                                              &scratch_param, true))
         return false;
-    }
-    fields[TLS_X509_IDX_CASIGALG].name = "algorithm";
-    fields[TLS_X509_IDX_CASIGPARAM].name = "parameters";
-    tls_x509_set_field(&fields[TLS_X509_IDX_CASIGVAL],
-                       "signatureValue",
-                       ca_sig_val.tag,
-                       ca_sig_val.value,
-                       ca_sig_val.len);
-
-    out->issuer_cn = &fields[TLS_X509_IDX_ISSUERNAME];
-    out->subject_cn = &fields[TLS_X509_IDX_SUBJECTNAME];
-    out->valid_before = &fields[TLS_X509_IDX_VALIDBEFORE];
-    out->valid_after = &fields[TLS_X509_IDX_VALIDAFTER];
-    out->spki_raw = &fields[TLS_X509_IDX_SPKIRAW];
-    out->spki_algorithm = &fields[TLS_X509_IDX_PKEYALG];
-    out->spki_key_bits = &fields[TLS_X509_IDX_PKEYBITS];
-    out->extensions = &fields[TLS_X509_IDX_EXTENSIONS];
 
     return true;
 }
@@ -1154,38 +1094,11 @@ static bool tls_x509_decode_pem_certificate(const char *pem_data,
     return true;
 }
 
-bool tls_x509_import_and_parse_certificate(const char *pem_data, size_t size,
-                                           uint8_t *der_out, size_t der_out_len,
-                                           size_t *der_written,
-                                           struct tls_asn1_serialization fields[13],
-                                           struct tls_x509_parse_result *out)
-{
-    size_t parsed_der_len = 0;
-
-    if (!pem_data || size == 0 || !der_out || !der_written || !fields || !out)
-    {
-        ERROR();
-        return false;
-    }
-
-    if (!tls_x509_decode_pem_certificate(pem_data,
-                                         size,
-                                         der_out,
-                                         der_out_len,
-                                         &parsed_der_len))
-    {
-        ERROR();
-        return false;
-    }
-
-    *der_written = parsed_der_len;
-    return tls_x509_parse_certificate(der_out, parsed_der_len, fields, out);
-}
-
 struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t size)
 {
     size_t der_cap;
     size_t total_len;
+    size_t der_len = 0;
     struct tls_x509_object *obj;
 
     if (!pem_data || size == 0)
@@ -1194,9 +1107,8 @@ struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t
         return NULL;
     }
 
-    /* PEM decode writes base64 text before in-place decode, so cap must
-       accommodate input text length. */
-    der_cap = size;
+    /* PEM body is always shorter than the PEM text, so size is a safe cap. */
+    der_cap   = size;
     total_len = sizeof(struct tls_x509_object) + der_cap;
     obj = (struct tls_x509_object *)tls_x509_alloc(total_len);
     if (!obj)
@@ -1206,32 +1118,36 @@ struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t
     }
     memset(obj, 0, total_len);
 
-    if (!tls_x509_import_and_parse_certificate(pem_data,
-                                               size,
-                                               obj->der,
-                                               der_cap,
-                                               &obj->der_len,
-                                               obj->fields,
-                                               &obj->parsed))
+    if (!tls_x509_decode_pem_certificate(pem_data, size, obj->der, der_cap, &der_len))
     {
         ERROR();
         tls_secure_memzero(obj, total_len);
         tls_x509_free(obj);
         return NULL;
     }
+    obj->der_len = der_len;
 
-    obj->length = total_len;
-    obj->type = TLS_CERTIFICATE;
+    /* Parse into the object itself.  from_handshake starts true after
+     * tls_x509_parse_certificate; we clear it so object_free knows to free. */
+    if (!tls_x509_parse_certificate(obj->der, der_len, obj))
+    {
+        ERROR();
+        tls_secure_memzero(obj, total_len);
+        tls_x509_free(obj);
+        return NULL;
+    }
+    obj->from_handshake = false;
     return obj;
 }
 
-void tls_x509_object_destroy(struct tls_x509_object *obj)
+void tls_x509_object_free(struct tls_x509_object *obj)
 {
-    if (!obj)
-    {
+    if (!obj || obj->from_handshake)
         return;
-    }
-    tls_secure_memzero(obj, obj->length);
+    /* Recover allocation size: header + der_len (der_cap was size at alloc,
+     * but we zeroed the rest so wiping the whole header+der_len is enough). */
+    size_t total = sizeof(struct tls_x509_object) + obj->der_len;
+    tls_secure_memzero(obj, total);
     tls_x509_free(obj);
 }
 
