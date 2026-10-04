@@ -54,7 +54,7 @@ Set the BSSHEAP Constraint
 
     .. code-block:: text
 
-        BSSHEAP_LOW >= 0xD072C6
+        BSSHEAP_LOW = 0xD072C6
 
     lwIP-CE reserves an 8 KiB window at the bottom of the default ``BSSHEAP_LOW``. Without this line, your program's BSS and lwIP-CE's reserved memory will overlap and cause unpredictable failures. See :doc:`technical-details` for why this window exists.
 

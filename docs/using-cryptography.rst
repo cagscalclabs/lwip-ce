@@ -36,13 +36,11 @@ Randomness
 -----------
 
 The calculator has no hardware RNG. lwIP-CE derives entropy from SRAM noise —
-the electrical state of uninitialized SRAM varies between power cycles. The
-generator is designed in alignment with NIST SP 800-90 standards and achieves
-a measured min-entropy of H∞ ≈ 0.99998 bits per output bit (≈ 1.00000 across
-the full entropy pool), with a median correlation coefficient of k\ :sub:`eff`
+the electrical state of uninitialized SRAM varies between power cycles. The generator is designed in alignment with NIST SP 800-90 guidance. Testing indicates that the entropy source provides sufficient min-entropy for lwIP-CE's cryptographic random-value requirements, with an estimated min-entropy of H∞ ≈ 0.99998 bits per output bit (≈ 1.00000 across
+the full entropy pool), with a median correlation factor of k\ :sub:`eff`
 = 1.031, computed over a 1.2 MB nominal dataset per unit tested. For the full entropy analysis,
 see the `whitepaper <https://github.com/cagscalclabs/lwip-ce/releases/tag/whitepaper-latest>`_.
-Do not use the toolchain ``rand()`` functions for anything security-sensitive;
+Do not use the toolchain ``random()`` functions for anything security-sensitive;
 they are not cryptographically secure.
 
 ``lwip/cryptography/random.h`` — SRAM-noise TRNG

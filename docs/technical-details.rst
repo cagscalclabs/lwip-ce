@@ -7,129 +7,43 @@ deeper engineering notes behind the stack.
 LibLoad Environment
 -------------------
 
-lwIP-CE is too big to copy into every program that wants to use it. The core
-plus TLS is around 200 KB, and the calculator only has just under 2 MB of Flash,
+Bootstrapping
+~~~~~~~~~~~~~~~
+
+lwIP-CE is too big to statically include into every program that wants to use it. The core
+plus TLS is around 375 KiB, and the calculator only has just under 2 MB of Flash,
 so statically linking it into each consumer would burn that space fast. Instead,
 lwIP-CE ships as a resident **application** that other programs call into. One
 copy lives on the calculator; everything else dispatches to it.
 
 That "call into a resident app" trick is built on top of the CE toolchain's
 ``LIBLOAD`` mechanism -- but with some custom logic bolted on, because LIBLOAD
-was not designed for this exact use case. This section explains how the two fit
-together.
+was not designed for this exact use case. 
 
-What LIBLOAD normally does
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+``lwip.8xv`` is a LibLoad library that defines every function in lwIP that is part
+of the public API as well as the bootstrapping function ``lwip_start()``.
+Calling ``lwip_start()``:
 
-LIBLOAD is the toolchain's way of sharing code between programs without
-recompiling it into each one. The usual flow looks like this:
-
-- A library exposes a list of exported functions (its public API).
-- At link time, those exports become a jump table -- one trampoline per
-  function, each holding an *offset* rather than a real address.
-- When a consumer program starts, a LIBLOAD bootstrap finds the library in
-  memory and rewrites each trampoline: ``real address = library base + offset``.
-- After that, calling an API function just hits its trampoline, which jumps to
-  the resolved address.
-
-This works great for small libraries that live in RAM as AppVars. The catch:
-LIBLOAD assumes the *library* is the thing being loaded. lwIP-CE is an
-**Application** sitting in Flash, not a RAM AppVar, so it needs a bit more.
-
-How lwIP Works with LibLoad
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A few working pieces make an Application usable as a LIBLOAD-style API source:
-
-- The resident app (lwIP) links its own **export table** which is an exhaustive list of absolute
-  addresses to all its publicly exported symbols into the Flash image at a fixed offset from ``app_base``.
-- The resident app also reserves a slice of static memory at ``BSSHEAP_LOW`` just large enough to
-  hold everything it requires (measured from the link output of the size of the BSS and data sections).
-- The reserved BSS also holds an uninitialized **import table** which is an exhaustive list of the
-  runtime addresses of any caller-owned functions: malloc implementation, and other LibLoad library imports.
-- A small **companion library** linked as a LibLoad library provides a double-indirection of absolute
-  jumps. The first layer is the ordinary LIBLOAD exports, relocated directly into the calling program — patching those in place would be awkward. The second layer adds a level of indirection at a fixed, known runtime address, which the companion can safely rewrite.
-- The companion library provides ``lwip_init_runtime`` (and the underlying
-  ``lwip_init_runtime_opaque``, which takes the import pointers explicitly --
-  ``lwip_init_runtime`` is a thin wrapper that fills those in for the common
-  case). Bootstrapping happens in three steps:
-
-  1. Import ``malloc``, ``free``, ``realloc``, and any other LibLoad-imported
-     function lwIP needs, and write them into an *import table*.
-  2. Locate the lwIP Application, failing if it isn't installed. If found,
-     jump to the fixed offset where the jump table lives and check for a
-     *magic header*; a missing header is a failure.
-  3. Once the magic check passes, copy the shared prefix of the resident
-     app's *export table* and the companion library's expected export count
-     into the second-layer LibLoad jump table in ``lwip.8xv``. Count
-     differences are tolerated: trailing newer exports simply remain
-     unavailable to that app/stub pairing.
-  4. Once the *export table* is patched, ``lwip_init_runtime_internal`` is called
-     which takes a pointer to the *import table* and the size of table. This function
-     first initializes the ``.bss`` and ``.data`` sections of the Application's runtime
-     and then copies the provided *import table* into its own BSS before returning control
-     to the caller.
+- Locates the resident lwIP App in Flash.
+- Jumps to a static offset from the start of the app, where the **exports table** is linked.
+- Copies the exports to the LibLoad exports table.
+- Calls ``lwip_init_runtime_internal()`` with the CRT pointers and a pointer/length to a table of functions to import.
+- Zeroes ``.bss``, copies ``.data`` to its correct location.
+- Copies the CRT pointers and imports to an **imports table** within the App's BSS.
+- Returns to the caller.
 
 So the consumer links against the tiny stub; the stub, once bootstrapped, routes
 every call into the real app in Flash.
 
-The whole sequence, end to end:
+Heap Ownership
+~~~~~~~~~~~~~~~~~
 
-.. code-block:: text
+lwIP-CE is an oddity with regard to heap usage because the application itself needs
+some heap space of its own. However, when you use lwIP-CE as a dylib (via LibLoad),
+the heap allocations of the app are not active or initialized. This was solved by:
 
-   +-------------------------------------------------------------+
-   | LIBLOAD loads the companion library                         |
-   | USB vtable filled via include_library 'usbdrvce';           |
-   +-------------------------------------------------------------+
-                              |
-                              v
-   +-------------------------------------------------------------+
-   | consumer calls lwip_init_runtime(malloc, free, realloc)     |
-   | -> host CRT pointers written into the imports table         |
-   +-------------------------------------------------------------+
-                              |
-                              v
-   +-------------------------------------------------------------+
-   | bootstrap locates resident app and computes linked image    |
-   | app not found -> fail closed                                |
-   | base from app metadata; + fixed  offset -> export table     |
-   +-------------------------------------------------------------+
-                              |
-                              v
-   +-------------------------------------------------------------+
-   | verify "LWIPTB" magic                                      |
-   | missing/invalid descriptor -> fail closed                   |
-   +-------------------------------------------------------------+
-                              |
-                              v
-   +-------------------------------------------------------------+
-   | patch shared export prefix -> relocated in-app address      |
-   | trailing newer exports remain unavailable to this pairing   |
-   +-------------------------------------------------------------+
-                              |
-                              v
-   +-------------------------------------------------------------+
-   | call lwip_init_runtime_internal  (now reachable!)           |
-   | app zeroes .bss, copies .data from Flash,                   |
-   | copies imports table into its reserved storage              |
-   +-------------------------------------------------------------+
-                              |
-                              v
-                     stack ready to use
-
-The ordering is the subtle part: ``lwip_init_runtime_internal`` is itself an
-exported call, so it can only run *after* the trampolines are patched. The
-bootstrap reaches into the app to finish setting up the app.
-
-Memory layout: the BSSHEAP contract
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Because the lwIP app's ``.bss`` and ``.data`` get initialized at runtime (Stage
-2 above), they need a fixed home in RAM that does not collide with the consumer
-program's own variables. lwIP-CE reserves an **8 KiB window** starting at the
-toolchain's default ``BSSHEAP_LOW`` (``0xD052C6``), running up to
-``0xD072C6``. That window holds the app's runtime ``.bss`` + ``.data`` (about
-6.6 KiB in practice, with the rest as headroom for API growth).
+- Setting lwIP-CE's ``BSSHEAP_HIGH`` to ``0xD072C6`` causing the app to build with only 8 KiB of BSS/Heap space. This was precomputed to fit the needed space plus some headroom.
+- Direct developers building with lwIP-CE to set ``BSSHEAP_LOW`` to ``0xD072C6`` in their program's makefile. This ensures that the caller does not clash with the library's heap usage.
 
 The practical consequence for **consumer programs**: you must move your own
 ``BSSHEAP_LOW`` up by 8 KiB so your variables start *above* lwIP-CE's reserved
@@ -137,74 +51,81 @@ window. In other words, link with:
 
 .. code-block:: text
 
-   BSSHEAP_LOW >= 0xD072C6
+   BSSHEAP_LOW = 0xD072C6
 
 If you leave ``BSSHEAP_LOW`` at the default, your program's BSS and lwIP-CE's
 will overlap, and you will have very bad things happen.
 
-Why it is done this way
-~~~~~~~~~~~~~~~~~~~~~~~
 
-It would be simpler to statically link lwIP into each program -- no bootstrap, no
-trampolines, no memory contract. But "simpler" here means paying ~350 KB of
-Flash per program that wants networking, on a device that does not have that to
-spare. The resident-app model trades a one-time init dance for a single shared
-copy, stable state across callers, and a public interface that does not balloon
-every consumer's binary. The handshake above is the price of admission, and it
-runs once at startup.
-
-Configuration Wizard
---------------------
-
-lwIP-CE has a configuration wizard that opens when you run the app. It keeps the
-resident stack policy in one place:
-
-- Hostname
-- Static IPv4 settings
-- Timezone, DST settings
-- TLS enabled/disabled
-
-The options present end-users with a modest level of control over how the stack behaves
-on their device. Particularly with TLS. While this TLS implementation is decently-engineered
-not everyone will feel comfortable connecting to secure services from an insecure device.
-With TLS flagged off in the App settings, attempts by programs to use TLS will fail-closed
-immediately unconditionally, giving end users the final authority.
-
-
-Allocator System
-----------------
-
-lwIP-CE uses a custom allocator system that can operate in two modes:
-
-- Dynamic: *Default* lwIP-CE ingests malloc, free, and realloc. Only what is needed is absorbed. The stack manages its own pbuf pool, TLS scratch, RX rings, socket rings, and user-reserved regions; heap sizing is no longer a wizard-level policy knob.
-
-- Static: *Requires manual* ``mem_init_static`` *followed by* ``lwip_init`` *instead of* ``lwip_start``. You give lwIP-CE a pointer and a size, and it treats that region as its heap.
-
-The allocator also exposes live accounting. ``mem_get_stats`` fills a
-``struct mem_accounting_stats`` with total heap, pbuf pool size/usage,
-non-pool heap used/free, user-reserved bytes, TLS usage, RX ring usage, socket
-ring usage, and pbuf/heap/effective pressure levels. Applications can poll this
-each event-loop tick to render a live memory readout (the examples and test
-harnesses stream it to the LCD). ``mem_set_global_pressure_cb`` registers an
-observer that fires when the effective pressure level changes, for
-transport-level backpressure (for example, delaying ``tcp_recved`` window
-updates under load).
-
-
-Ethernet Driver
----------------
-
-The Ethernet driver is an abstraction layer on top of `USBDRVCE <https://ce-programming.github.io/toolchain/libraries/usbdrvce.html>`_, the TI-84+ CE USB driver provided as part of the CE toolchain.
-
-The Ethernet driver supports USB-CDC-ECM and USB-CDC-NCM devices; in practice, ECM is common on 10/100 adapters, while NCM is common on gigabit-class adapters. It should also support hubs with a USB port that use one of those protocols, and an Ethernet adapter connected via a hub. Wi-Fi is possible only through an external Ethernet-to-Wi-Fi bridge (typically a USB Ethernet adapter connected to an Ethernet WiFi adapter). The adapter must handle association, WPA/WPA2, SSID selection, and key storage itself, typically through WPS or its own setup flow. lwIP-CE sees that device as Ethernet; it does not implement native Wi-Fi management.
-
-The driver is event-loop driven. Applications must continue pumping the stack for RX, TX, timers, and device recovery to make progress.
-
-TLS Stack
----------
+TLS Details
+------------
 
 The TLS stack is intentionally narrow: enough to make real secure client
-sockets, not a general-purpose OS crypto subsystem.
+sockets, not a general-purpose OS crypto subsystem. A thin TLS 1.3 client is
+provided.
+
+Algorithm Support
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 25 25 15
+
+   * - Component / Purpose
+     - Algorithm
+     - OID / Code
+     - Status
+   * - Record encryption
+     - AES-128-GCM-SHA256
+     - ``0x1301``
+     - Done
+   * - Record encryption
+     - AES-256-GCM-SHA384
+     - ``0x1302``
+     - Not planned (optional per RFC 8446; contributions welcome)
+   * - Record encryption
+     - ChaCha20-Poly1305-SHA256
+     - ``0x1303``
+     - Not planned (optional per RFC 8446; contributions welcome)
+   * - Key exchange (ECDHE)
+     - X25519
+     - ``0x001d``
+     - Done
+   * - Key exchange (ECDHE)
+     - secp256r1 (P-256)
+     - ``0x0017``
+     - TODO
+   * - Server signature verification
+     - rsa_pss_rsae_sha256
+     - ``0x0804``
+     - Done
+   * - Server signature verification
+     - ecdsa_secp256r1_sha256
+     - ``0x0403``
+     - TODO
+   * - Server signature verification
+     - rsa_pkcs1_sha256
+     - ``0x0401``
+     - Done (chain walk only)
+   * - Certificate chain — link signature
+     - sha256WithRSAEncryption (PKCS#1 v1.5)
+     - ``1.2.840.113549.1.1.11``
+     - Done
+   * - Certificate chain — link signature
+     - ecdsa-with-SHA256 (P-256)
+     - ``1.2.840.10045.4.3.2``
+     - TODO
+   * - Trust store root verification
+     - RSA-PSS-SHA256
+     - ``1.2.840.113549.1.1.10``
+     - Done
+   * - Trust store root verification
+     - ECDSA-SHA256 (P-256)
+     - ``1.2.840.10045.4.3.2``
+     - TODO
+
+Security Posture
+~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -218,10 +139,11 @@ sockets, not a general-purpose OS crypto subsystem.
        of trust, secure enclave, crypto accelerator, protected filesystem, or
        trusted clock.
    * - RNG
-     - SRAM-noise-derived. Entropy taps are statistically analyzed on hardware.
-       Current dataset: correlation factor about ``1.1``; XOR conditioning
-       depth ``17``; effective conditioning about ``16``; ``P(+)`` about
-       ``0.5``; estimated min-entropy about ``1``.
+     - SRAM-noise-derived, NIST SP 800-90A/90B aligned. Measured min-entropy:
+       H∞ ≈ 0.99998 bits per output bit (≈ 1.00000 across the full entropy
+       pool), median correlation coefficient k_eff = 1.031 over a 1.2 MB
+       nominal dataset per unit tested. See the whitepaper for the full
+       entropy analysis.
    * - TLS trust store
      - A curated trust store derived from CA material staged on a common Linux
        box, shipped as a signed AppVar and verified with RSA-PSS-SHA256 against
@@ -252,22 +174,6 @@ sockets, not a general-purpose OS crypto subsystem.
        chain walk above, but it is not a root-of-trust anchor by itself.
 
 For more details, proofs, and datasets, see the whitepaper below.
-
-Application Interfaces
-----------------------
-
-Network services and sockets
-   Applications request netif-level services and drive sockets through a
-   small C API rather than touching raw lwIP PCBs directly. ``lwip_request_services``
-   (and the per-netif ``lwip_netif_request_services``) start DHCP, the DNS
-   resolver, and SNTP on demand using ``LWIP_SOCKET_SVC_*`` flags; the per-netif
-   form takes a status callback that fires once per requested service with a
-   ``lwip_netif_service_status_t`` (up / timeout / failed), so an application
-   can react to "DHCP is up" without polling. ``lwip_default_netif_info`` fills a
-   ``lwip_netif_info_t`` snapshot (link/admin state, DHCP state, assigned IPv4
-   address, gateway) for status displays.
-
-
 
 CI And Test Harnesses
 ---------------------
