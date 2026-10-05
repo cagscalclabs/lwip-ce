@@ -6,15 +6,18 @@
  *   1.  AES-128-GCM  round-trip (no AAD)
  *   2.  AES-128-GCM  round-trip with AAD
  *   3.  AES-256-GCM  round-trip with AAD
- *   4.  AES-128-GCM  bad-tag → decrypt returns false
+ *   4.  AES-128-GCM  bad-tag → decrypt returns NULL
  *   5.  AES-128-CCM  round-trip with AAD
  *   6.  AES-128-CBC  round-trip (no AAD)
  *   7.  AES-256-CBC  round-trip (no AAD)
  *   8.  tls_key_sign stub → TLS_KEY_OP_UNSUPPORTED
  *   9.  tls_key_verify with unknown alg → TLS_KEY_OP_UNKNOWN
  *
- * AES vectors use round-trips (encrypt → decrypt → compare plaintext) because
- * tls_key_encrypt generates a fresh random IV each call.
+ * Encrypt returns a self-describing blob:
+ *   <u16 iv_len><iv><u16 ct_len><ct><u16 tag_len><tag>
+ * Decrypt returns a self-describing blob:
+ *   <u16 plain_len><plaintext>
+ * All u16 values are little-endian.
  *
  * Sources:
  *   GCM key/plaintext/aad: McGrew/Viega GCM Specification Appendix B, Test Case 4
@@ -103,6 +106,33 @@ static const uint8_t ccm_plaintext[] = {
 };
 
 /* --------------------------------------------------------------------------
+ * Blob field accessors (little-endian u16 prefix convention)
+ * -------------------------------------------------------------------------- */
+
+static uint16_t blob_u16(const uint8_t *p)
+{
+    return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
+/* Return pointer to the encrypt blob's tag field, or NULL if tag_len == 0. */
+static uint8_t *encrypt_blob_tag(uint8_t *blob)
+{
+    uint16_t iv_len = blob_u16(blob);
+    uint16_t ct_len = blob_u16(blob + 2 + iv_len);
+    uint16_t tag_len = blob_u16(blob + 2 + iv_len + 2 + ct_len);
+    if (tag_len == 0)
+        return NULL;
+    return blob + 2 + iv_len + 2 + ct_len + 2;
+}
+
+/* Return pointer to plaintext inside a decrypt blob, and set *len. */
+static const uint8_t *decrypt_blob_plaintext(const uint8_t *blob, size_t *len)
+{
+    *len = blob_u16(blob);
+    return blob + 2;
+}
+
+/* --------------------------------------------------------------------------
  * Helpers
  * -------------------------------------------------------------------------- */
 
@@ -125,116 +155,154 @@ int main(void)
     if (!lwip_start()) return 1;
     os_ClrHome();
 
-    /* Shared encrypt output bundle — iv/ct/tag filled by encrypt, passed
-     * as-is to decrypt.  pt receives the recovered plaintext. */
-    uint8_t ct[128];
-    uint8_t pt[128];
-    uint8_t iv[TLS_KEY_GCM_IV_LEN];
-    uint8_t tag[TLS_KEY_AES_TAG_LEN];
-    struct tls_key_cipher_io io = { iv, sizeof gcm_plaintext, ct, tag };
     struct tls_key k;
+    tls_alg_t alg;
     bool ok;
 
     /* ------------------------------------------------------------------
      * Test 1: AES-128-GCM round-trip, no AAD
      * ------------------------------------------------------------------ */
-    memset(ct, 0, sizeof ct); memset(pt, 0, sizeof pt);
-    k.alg      = TLS_ALG_AES_128_GCM;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_128_GCM;
     k.aes.data = gcm128_key;
     k.aes.len  = sizeof gcm128_key;
-    io.obuf_len = sizeof gcm_plaintext;
-    ok = tls_key_encrypt(&k, gcm_plaintext, sizeof gcm_plaintext, &io) &&
-         tls_key_decrypt(&k, &io, pt, sizeof pt) &&
-         memcmp(pt, gcm_plaintext, sizeof gcm_plaintext) == 0;
+    {
+        uint8_t *enc = tls_cipher_encrypt(&k, alg, gcm_plaintext, sizeof gcm_plaintext);
+        uint8_t *dec = enc ? tls_cipher_decrypt(&k, alg, enc) : NULL;
+        size_t plen;
+        const uint8_t *pt = dec ? decrypt_blob_plaintext(dec, &plen) : NULL;
+        ok = pt && plen == sizeof gcm_plaintext &&
+             memcmp(pt, gcm_plaintext, sizeof gcm_plaintext) == 0;
+        tls_cipher_blob_free(enc);
+        tls_cipher_blob_free(dec);
+    }
     show_result(ok);
 
     /* ------------------------------------------------------------------
      * Test 2: AES-128-GCM round-trip with AAD
      * ------------------------------------------------------------------ */
-    memset(ct, 0, sizeof ct); memset(pt, 0, sizeof pt);
-    io.obuf_len = sizeof gcm_plaintext;
-    ok = tls_key_encrypt_aad(&k, gcm_aad, sizeof gcm_aad,
-                              gcm_plaintext, sizeof gcm_plaintext, &io) &&
-         tls_key_decrypt_aad(&k, gcm_aad, sizeof gcm_aad,
-                              &io, pt, sizeof pt) &&
-         memcmp(pt, gcm_plaintext, sizeof gcm_plaintext) == 0;
+    {
+        uint8_t *enc = tls_cipher_encrypt_aad(&k, alg,
+                                            gcm_aad, sizeof gcm_aad,
+                                            gcm_plaintext, sizeof gcm_plaintext);
+        uint8_t *dec = enc ? tls_cipher_decrypt_aad(&k, alg,
+                                                   gcm_aad, sizeof gcm_aad,
+                                                   enc) : NULL;
+        size_t plen;
+        const uint8_t *pt = dec ? decrypt_blob_plaintext(dec, &plen) : NULL;
+        ok = pt && plen == sizeof gcm_plaintext &&
+             memcmp(pt, gcm_plaintext, sizeof gcm_plaintext) == 0;
+        tls_cipher_blob_free(enc);
+        tls_cipher_blob_free(dec);
+    }
     show_result(ok);
 
     /* ------------------------------------------------------------------
      * Test 3: AES-256-GCM round-trip with AAD
      * ------------------------------------------------------------------ */
-    memset(ct, 0, sizeof ct); memset(pt, 0, sizeof pt);
-    k.alg      = TLS_ALG_AES_256_GCM;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_256_GCM;
     k.aes.data = gcm256_key;
     k.aes.len  = sizeof gcm256_key;
-    io.obuf_len = sizeof gcm_plaintext;
-    ok = tls_key_encrypt_aad(&k, gcm_aad, sizeof gcm_aad,
-                              gcm_plaintext, sizeof gcm_plaintext, &io) &&
-         tls_key_decrypt_aad(&k, gcm_aad, sizeof gcm_aad,
-                              &io, pt, sizeof pt) &&
-         memcmp(pt, gcm_plaintext, sizeof gcm_plaintext) == 0;
+    {
+        uint8_t *enc = tls_cipher_encrypt_aad(&k, alg,
+                                            gcm_aad, sizeof gcm_aad,
+                                            gcm_plaintext, sizeof gcm_plaintext);
+        uint8_t *dec = enc ? tls_cipher_decrypt_aad(&k, alg,
+                                                   gcm_aad, sizeof gcm_aad,
+                                                   enc) : NULL;
+        size_t plen;
+        const uint8_t *pt = dec ? decrypt_blob_plaintext(dec, &plen) : NULL;
+        ok = pt && plen == sizeof gcm_plaintext &&
+             memcmp(pt, gcm_plaintext, sizeof gcm_plaintext) == 0;
+        tls_cipher_blob_free(enc);
+        tls_cipher_blob_free(dec);
+    }
     show_result(ok);
 
     /* ------------------------------------------------------------------
-     * Test 4: AES-128-GCM bad tag → decrypt must return false
+     * Test 4: AES-128-GCM bad tag → decrypt must return NULL
      * ------------------------------------------------------------------ */
-    memset(ct, 0, sizeof ct); memset(pt, 0, sizeof pt);
-    k.alg      = TLS_ALG_AES_128_GCM;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_128_GCM;
     k.aes.data = gcm128_key;
     k.aes.len  = sizeof gcm128_key;
-    io.obuf_len = sizeof gcm_plaintext;
-    ok = tls_key_encrypt(&k, gcm_plaintext, sizeof gcm_plaintext, &io);
-    io.tag[0] ^= 0xFF; /* corrupt the tag */
-    ok = ok && !tls_key_decrypt(&k, &io, pt, sizeof pt);
+    {
+        uint8_t *enc = tls_cipher_encrypt(&k, alg, gcm_plaintext, sizeof gcm_plaintext);
+        ok = enc != NULL;
+        if (ok)
+        {
+            uint8_t *tag = encrypt_blob_tag(enc);
+            ok = tag != NULL;
+            if (ok)
+                tag[0] ^= 0xFF;  /* corrupt the tag */
+        }
+        uint8_t *dec = ok ? tls_cipher_decrypt(&k, alg, enc) : NULL;
+        ok = ok && dec == NULL;
+        tls_cipher_blob_free(enc);
+        /* dec is NULL, tls_cipher_blob_free(NULL) is safe but skip for clarity */
+    }
     show_result(ok);
 
     /* ------------------------------------------------------------------
      * Test 5: AES-128-CCM round-trip with AAD
      * ------------------------------------------------------------------ */
-    uint8_t ccm_iv[TLS_KEY_CCM_NONCE_LEN];
-    struct tls_key_cipher_io ccm_io = { ccm_iv, sizeof ccm_plaintext, ct, tag };
-    memset(ct, 0, sizeof ct); memset(pt, 0, sizeof pt);
-    k.alg      = TLS_ALG_AES_128_CCM;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_128_CCM;
     k.aes.data = ccm128_key;
     k.aes.len  = sizeof ccm128_key;
-    ok = tls_key_encrypt_aad(&k, ccm_aad, sizeof ccm_aad,
-                              ccm_plaintext, sizeof ccm_plaintext, &ccm_io) &&
-         tls_key_decrypt_aad(&k, ccm_aad, sizeof ccm_aad,
-                              &ccm_io, pt, sizeof pt) &&
-         memcmp(pt, ccm_plaintext, sizeof ccm_plaintext) == 0;
+    {
+        uint8_t *enc = tls_cipher_encrypt_aad(&k, alg,
+                                            ccm_aad, sizeof ccm_aad,
+                                            ccm_plaintext, sizeof ccm_plaintext);
+        uint8_t *dec = enc ? tls_cipher_decrypt_aad(&k, alg,
+                                                   ccm_aad, sizeof ccm_aad,
+                                                   enc) : NULL;
+        size_t plen;
+        const uint8_t *pt = dec ? decrypt_blob_plaintext(dec, &plen) : NULL;
+        ok = pt && plen == sizeof ccm_plaintext &&
+             memcmp(pt, ccm_plaintext, sizeof ccm_plaintext) == 0;
+        tls_cipher_blob_free(enc);
+        tls_cipher_blob_free(dec);
+    }
     show_result(ok);
 
     /* ------------------------------------------------------------------
      * Test 6: AES-128-CBC round-trip (no AAD, no tag)
-     * CBC ciphertext is padded to block boundary; plaintext recovered is
-     * sizeof cbc_plaintext bytes (PKCS#7 padding stripped by decrypt).
      * ------------------------------------------------------------------ */
-    uint8_t cbc_iv[TLS_AES_IV_SIZE];
-    /* sizeof cbc_plaintext == 64 == 4 blocks; no padding needed, but the
-     * encrypt layer always pads, so allocate one extra block. */
-    uint8_t cbc_ct[64 + 16];
-    size_t  cbc_ct_len = sizeof cbc_ct; /* worst-case ciphertext size */
-    struct tls_key_cipher_io cbc_io = { cbc_iv, cbc_ct_len, cbc_ct, NULL };
-    memset(cbc_ct, 0, sizeof cbc_ct); memset(pt, 0, sizeof pt);
-    k.alg      = TLS_ALG_AES_128_CBC;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_128_CBC;
     k.aes.data = cbc128_key;
     k.aes.len  = sizeof cbc128_key;
-    ok = tls_key_encrypt(&k, cbc_plaintext, sizeof cbc_plaintext, &cbc_io) &&
-         tls_key_decrypt(&k, &cbc_io, pt, sizeof pt) &&
-         memcmp(pt, cbc_plaintext, sizeof cbc_plaintext) == 0;
+    {
+        uint8_t *enc = tls_cipher_encrypt(&k, alg, cbc_plaintext, sizeof cbc_plaintext);
+        uint8_t *dec = enc ? tls_cipher_decrypt(&k, alg, enc) : NULL;
+        size_t plen;
+        const uint8_t *pt = dec ? decrypt_blob_plaintext(dec, &plen) : NULL;
+        ok = pt && plen == sizeof cbc_plaintext &&
+             memcmp(pt, cbc_plaintext, sizeof cbc_plaintext) == 0;
+        tls_cipher_blob_free(enc);
+        tls_cipher_blob_free(dec);
+    }
     show_result(ok);
 
     /* ------------------------------------------------------------------
      * Test 7: AES-256-CBC round-trip (no AAD, no tag)
      * ------------------------------------------------------------------ */
-    memset(cbc_ct, 0, sizeof cbc_ct); memset(pt, 0, sizeof pt);
-    cbc_io.obuf_len = cbc_ct_len;
-    k.alg      = TLS_ALG_AES_256_CBC;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_256_CBC;
     k.aes.data = cbc256_key;
     k.aes.len  = sizeof cbc256_key;
-    ok = tls_key_encrypt(&k, cbc_plaintext, sizeof cbc_plaintext, &cbc_io) &&
-         tls_key_decrypt(&k, &cbc_io, pt, sizeof pt) &&
-         memcmp(pt, cbc_plaintext, sizeof cbc_plaintext) == 0;
+    {
+        uint8_t *enc = tls_cipher_encrypt(&k, alg, cbc_plaintext, sizeof cbc_plaintext);
+        uint8_t *dec = enc ? tls_cipher_decrypt(&k, alg, enc) : NULL;
+        size_t plen;
+        const uint8_t *pt = dec ? decrypt_blob_plaintext(dec, &plen) : NULL;
+        ok = pt && plen == sizeof cbc_plaintext &&
+             memcmp(pt, cbc_plaintext, sizeof cbc_plaintext) == 0;
+        tls_cipher_blob_free(enc);
+        tls_cipher_blob_free(dec);
+    }
     show_result(ok);
 
     /* ------------------------------------------------------------------
@@ -243,40 +311,50 @@ int main(void)
      * ------------------------------------------------------------------ */
     uint8_t sig_buf[256];
     size_t  sig_len = 0;
-    k.alg      = TLS_ALG_RSA_PSS_RSAE_SHA256;
+    k.type = TLS_KEY_TYPE_RSA;
+    alg = TLS_ALG_RSA_PSS_RSAE_SHA256;
     k.aes.data = NULL;
     k.aes.len  = 0;
     ok = (tls_key_sign(gcm_plaintext, sizeof gcm_plaintext,
-                       sig_buf, &sig_len, &k) == TLS_KEY_OP_UNSUPPORTED);
-    k.alg = TLS_ALG_ECDSA_SECP256R1_SHA256;
+                       sig_buf, &sig_len, &k, alg) == TLS_KEY_OP_UNSUPPORTED);
+    k.type = TLS_KEY_TYPE_EC_P256;
+    alg = TLS_ALG_ECDSA_SECP256R1_SHA256;
     ok = ok && (tls_key_sign(gcm_plaintext, sizeof gcm_plaintext,
-                             sig_buf, &sig_len, &k) == TLS_KEY_OP_UNSUPPORTED);
+                             sig_buf, &sig_len, &k, alg) == TLS_KEY_OP_UNSUPPORTED);
     /* Encryption-range alg passed to sign → UNKNOWN (wrong key type) */
-    k.alg = TLS_ALG_AES_128_GCM;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_128_GCM;
     ok = ok && (tls_key_sign(gcm_plaintext, sizeof gcm_plaintext,
-                             sig_buf, &sig_len, &k) == TLS_KEY_OP_UNKNOWN);
+                             sig_buf, &sig_len, &k, alg) == TLS_KEY_OP_UNKNOWN);
     show_result(ok);
 
     /* ------------------------------------------------------------------
      * Test 9: cross-type rejection
      *   a) tls_key_verify with encryption-range alg → TLS_KEY_OP_UNKNOWN
-     *   b) tls_key_encrypt with signing-range alg   → false
-     *   c) tls_key_decrypt with signing-range alg   → false
+     *   b) tls_cipher_encrypt with signing-range alg   → NULL
+     *   c) tls_cipher_decrypt with signing-range alg   → NULL
      * ------------------------------------------------------------------ */
-    k.alg      = TLS_ALG_AES_128_GCM;
+    k.type = TLS_KEY_TYPE_AES;
+    alg = TLS_ALG_AES_128_GCM;
     k.aes.data = gcm128_key;
     k.aes.len  = sizeof gcm128_key;
     ok = (tls_key_verify(gcm_plaintext, sizeof gcm_plaintext,
-                         sig_buf, 16, &k) == TLS_KEY_OP_UNKNOWN);
-    /* Signing-range alg (RSA-PSS) has no encrypt/decrypt dispatch → false */
-    k.alg     = TLS_ALG_RSA_PSS_RSAE_SHA256;
+                         sig_buf, 16, &k, alg) == TLS_KEY_OP_UNKNOWN);
+    /* Signing-range alg (RSA-PSS) has no encrypt/decrypt dispatch → NULL */
+    k.type = TLS_KEY_TYPE_RSA;
+    alg = TLS_ALG_RSA_PSS_RSAE_SHA256;
     k.rsa.mod_len  = 0;
     k.rsa.modulus  = NULL;
     k.rsa.exp_len  = 0;
     k.rsa.exponent = NULL;
-    struct tls_key_cipher_io rej_io = { iv, sizeof gcm_plaintext, ct, tag };
-    ok = ok && !tls_key_encrypt(&k, gcm_plaintext, sizeof gcm_plaintext, &rej_io);
-    ok = ok && !tls_key_decrypt(&k, &rej_io, pt, sizeof pt);
+    {
+        uint8_t *rej_enc = tls_cipher_encrypt(&k, alg, gcm_plaintext, sizeof gcm_plaintext);
+        ok = ok && rej_enc == NULL;
+        /* Build a dummy blob to pass to decrypt */
+        uint8_t dummy_blob[6] = {0};  /* all-zero: iv_len=0, ct_len=0, tag_len=0 */
+        uint8_t *rej_dec = tls_cipher_decrypt(&k, alg, dummy_blob);
+        ok = ok && rej_dec == NULL;
+    }
     show_result(ok);
 
     return 0;

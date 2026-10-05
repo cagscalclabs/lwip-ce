@@ -35,9 +35,9 @@ extern uint8_t __rsa_transient[RSA_TRANSIENT_SIZE];
  * which exponent is loaded.  Byte arrays are big-endian, no DER wrapping.
  *
  * For the common case of a public key with exponent 65537, initialise with:
- *   static const uint24_t exp = RSA_PUBLIC_EXP;
- *   struct tls_rsa_key key = { sizeof(exp), (uint8_t *)&exp, mod_len, mod };
- * Note: exp is stored as a uint24_t (3-byte LE) to match powmod_exp_u24.
+ *   static const uint8_t exp[] = {0x01, 0x00, 0x01};
+ *   struct tls_rsa_key key = { sizeof(exp), exp, mod_len, mod };
+ * The RSA entry points decode these big-endian bytes for powmod_exp_u24.
  */
 struct tls_rsa_key {
     size_t         exp_len;   /**< length of exponent in bytes (typically 3) */

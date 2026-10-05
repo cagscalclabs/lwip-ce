@@ -91,10 +91,12 @@
 	export	tls_key_free
 	export	tls_key_verify
 	export	tls_key_sign
-	export	tls_key_encrypt
-	export	tls_key_encrypt_aad
-	export	tls_key_decrypt
-	export	tls_key_decrypt_aad
+	export	tls_cipher_encrypt
+	export	tls_cipher_encrypt_aad
+	export	tls_cipher_decrypt
+	export	tls_cipher_decrypt_aad
+	export	tls_cipher_blob_free
+	export	tls_cipher_blob_assemble
 	export	acd_add
 	export	acd_remove
 	export	acd_start

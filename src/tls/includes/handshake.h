@@ -258,7 +258,7 @@ extern "C"
          * Used by tls_recv_certificate_verify to verify the server's
          * CertificateVerify signature.  Key material pointers reference the
          * heap block allocated for the leaf DER copy; freed in
-         * tls_handshake_cleanup via tls_key_free (leaf_pubkey.allocated=true).
+         * tls_handshake_cleanup (leaf_pubkey.allocated=true).
          * alg == TLS_ALG_UNKNOWN when no leaf cert has been seen. */
         struct tls_key leaf_pubkey;
     };

@@ -37,31 +37,3 @@ most ``input_len * 3 / 4`` bytes.
 
    uint8_t decoded[256];
    size_t dec_len = tls_base64_decode(encoded, enc_len, decoded);
-
-``lwip/cryptography/bytes.h`` — Secure compare and erase
----------------------------------------------------------
-
-Two small utilities for safely handling sensitive data. Use
-``tls_bytes_compare()`` instead of ``memcmp()`` when comparing MACs, tags,
-or other secrets — timing leaks from early-exit comparisons can reveal
-information about secret values. Use ``tls_secure_memzero()`` to clear key
-material before freeing or reusing a buffer.
-
-.. c:function:: bool tls_bytes_compare(const void *buf1, const void *buf2, size_t len)
-
-   Constant-time buffer comparison. Does not short-circuit on mismatch,
-   preventing timing side-channels.
-
-   :param buf1: First buffer.
-   :param buf2: Second buffer.
-   :param len: Number of bytes to compare.
-   :returns: ``true`` if the buffers are identical, ``false`` otherwise.
-
-.. c:function:: void tls_secure_memzero(void *ptr, size_t len)
-
-   Zero a buffer in a way the compiler cannot optimize away. Uses
-   ``volatile`` writes to ensure the zeroing is not elided, which is
-   critical for clearing cryptographic key material.
-
-   :param ptr: Buffer to zero.
-   :param len: Number of bytes to zero.

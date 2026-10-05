@@ -8,6 +8,8 @@
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
 #include "../includes/x509.h"
+#include "x509_internal.h"
+#include "key_internal.h"
 #include "../includes/tls.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_X509
@@ -823,6 +825,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
     }
 
     memset(out, 0, sizeof(*out));
+    out->pubkey.type = TLS_KEY_TYPE_UNKNOWN;
     out->from_handshake = true; /* all pointers reference cert_der */
 
     if (!tls_asn1_cursor_init(&top_cursor, cert_der, cert_len) ||
@@ -947,8 +950,23 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                 return false;
 
             /* Infer the algorithm from the SPKI OID and extract key material. */
-            tls_alg_t alg = tls_x509_oid_to_sig_alg(scratch_alg.data, scratch_alg.len);
-            out->pubkey.alg       = alg;
+            static const uint8_t rsa_oid[] = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x01,0x01};
+            static const uint8_t ec_oid[] = {0x2a,0x86,0x48,0xce,0x3d,0x02,0x01};
+            static const uint8_t p256_oid[] = {0x2a,0x86,0x48,0xce,0x3d,0x03,0x01,0x07};
+            tls_alg_t alg = TLS_ALG_UNKNOWN;
+            if (scratch_alg.len == sizeof(rsa_oid) &&
+                !memcmp(scratch_alg.data, rsa_oid, sizeof(rsa_oid)))
+                alg = TLS_ALG_RSA_PKCS1_SHA256;
+            else if (scratch_alg.len == sizeof(ec_oid) &&
+                     !memcmp(scratch_alg.data, ec_oid, sizeof(ec_oid)) &&
+                     scratch_param.tag == ASN1_OBJECTID && scratch_param.len == sizeof(p256_oid) &&
+                     !memcmp(scratch_param.data, p256_oid, sizeof(p256_oid)))
+                alg = TLS_ALG_ECDSA_SECP256R1_SHA256;
+            /* PSS-restricted SPKIs require separate key restrictions and TLS
+             * rsa_pss_pss schemes, neither of which is implemented yet. */
+            out->pubkey.type = alg == TLS_ALG_RSA_PKCS1_SHA256 ? TLS_KEY_TYPE_RSA
+                : alg == TLS_ALG_ECDSA_SECP256R1_SHA256 ? TLS_KEY_TYPE_EC_P256
+                : TLS_KEY_TYPE_UNKNOWN;
             out->pubkey.allocated = false;
 
             if (alg == TLS_ALG_RSA_PSS_RSAE_SHA256 ||
@@ -986,7 +1004,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             else if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256)
             {
                 /* EC public key: BIT STRING value after the unused-bits byte. */
-                if (spki_bits.len < 2)
+                if (spki_bits.len < 2 || spki_bits.value[0] != 0)
                     return false;
                 out->pubkey.ec.data = spki_bits.value + 1;
                 out->pubkey.ec.len  = spki_bits.len  - 1;
@@ -1197,16 +1215,111 @@ tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len)
     return TLS_ALG_UNKNOWN;
 }
 
+/* Match a SHA-256 AlgorithmIdentifier, accepting absent or NULL parameters. */
+static bool x509_sha256_identifier(const struct tls_asn1_tlv *identifier)
+{
+    static const uint8_t sha256[] = {0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x02,0x01};
+    struct tls_asn1_cursor c;
+    struct tls_asn1_tlv oid, param;
+    if (identifier->tag != 0x30 || !tls_asn1_child_cursor(identifier, &c) ||
+        !tls_asn1_next(&c, &oid) || oid.tag != ASN1_OBJECTID ||
+        oid.len != sizeof(sha256) || memcmp(oid.value, sha256, sizeof(sha256)))
+        return false;
+    if (c.cur != c.end &&
+        (!tls_asn1_next(&c, &param) || param.tag != ASN1_NULL || param.len))
+        return false;
+    return c.cur == c.end;
+}
+
+bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
+                                  tls_alg_t *alg)
+{
+    static const uint8_t mgf1[] = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x01,0x08};
+    struct tls_asn1_cursor c;
+    struct tls_asn1_tlv oid, param;
+    if (!alg)
+        return false;
+    *alg = TLS_ALG_UNKNOWN;
+    if (!identifier || identifier->tag != 0x30 ||
+        !tls_asn1_child_cursor(identifier, &c) || !tls_asn1_next(&c, &oid) ||
+        oid.tag != ASN1_OBJECTID)
+        return false;
+    /* rsaEncryption identifies a key, never a certificate signature. */
+    if (oid.len == sizeof(oid_rsa_encryption) &&
+        !memcmp(oid.value, oid_rsa_encryption, oid.len))
+        return false;
+    tls_alg_t scheme = tls_x509_oid_to_sig_alg(oid.value, oid.len);
+    if (scheme == TLS_ALG_RSA_PSS_RSAE_SHA256)
+    {
+        /* RFC 4055 defaults are SHA-1/MGF1-SHA-1/saltLen=20. Our verifier
+         * supports only explicit SHA-256/MGF1-SHA-256/saltLen=32. */
+        if (!tls_asn1_next(&c, &param) || param.tag != 0x30 || c.cur != c.end)
+            return false;
+        struct tls_asn1_cursor params;
+        if (!tls_asn1_child_cursor(&param, &params))
+            return false;
+        uint8_t seen = 0;
+        uint8_t previous = 0;
+        while (params.cur != params.end)
+        {
+            struct tls_asn1_tlv field, value;
+            struct tls_asn1_cursor explicit_value;
+            if (!tls_asn1_next(&params, &field) || field.tag < 0xa0 || field.tag > 0xa3 ||
+                (seen && field.tag <= previous) ||
+                !tls_asn1_child_cursor(&field, &explicit_value) ||
+                !tls_asn1_next(&explicit_value, &value) || explicit_value.cur != explicit_value.end)
+                return false;
+            previous = field.tag;
+            seen |= (uint8_t)(1u << (field.tag - 0xa0));
+            if (field.tag == 0xa0)
+            {
+                if (!x509_sha256_identifier(&value))
+                    return false;
+            }
+            else if (field.tag == 0xa1)
+            {
+                struct tls_asn1_cursor mask;
+                struct tls_asn1_tlv mask_oid, hash;
+                if (value.tag != 0x30 || !tls_asn1_child_cursor(&value, &mask) ||
+                    !tls_asn1_next(&mask, &mask_oid) || mask_oid.tag != ASN1_OBJECTID ||
+                    mask_oid.len != sizeof(mgf1) || memcmp(mask_oid.value, mgf1, sizeof(mgf1)) ||
+                    !tls_asn1_next(&mask, &hash) || mask.cur != mask.end ||
+                    !x509_sha256_identifier(&hash))
+                    return false;
+            }
+            else if (value.tag != ASN1_INTEGER || value.len != 1 ||
+                     value.value[0] != (field.tag == 0xa2 ? 32 : 1))
+                return false;
+        }
+        if ((seen & 7) != 7)
+            return false;
+    }
+    else
+    {
+        if (c.cur != c.end)
+        {
+            if (!tls_asn1_next(&c, &param) ||
+                (scheme == TLS_ALG_RSA_PKCS1_SHA256 && (param.tag != ASN1_NULL || param.len)) ||
+                scheme == TLS_ALG_ECDSA_SECP256R1_SHA256)
+                return false;
+        }
+        if (c.cur != c.end)
+            return false;
+    }
+    *alg = scheme;
+    return true;
+}
+
 tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t content_len,
                                                const uint8_t *sig, size_t sig_len,
-                                               const struct tls_key *key)
+                                               const struct tls_key *key, tls_alg_t alg)
 {
     if (!content || !sig || !key)
     {
         return TLS_KEY_OP_INVALID;
     }
 
-    if (!TLS_ALG_IS_SIGNING(key->alg))
+    if (!TLS_ALG_IS_SIGNING(alg))
     {
         return TLS_KEY_OP_UNKNOWN;
     }
@@ -1221,62 +1334,35 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
     tls_hash_update(&hash_ctx, content, content_len);
     tls_hash_digest(&hash_ctx, digest);
 
-    bool ok = false;
-    switch (key->alg)
-    {
-        case TLS_ALG_RSA_PKCS1_SHA256:
-            ok = tls_rsa_pkcs1_v15_sha256_verify(sig, sig_len, digest, &key->rsa);
-            break;
-
-        case TLS_ALG_RSA_PSS_RSAE_SHA256:
-            if (sig_len > RSA_TRANSIENT_SIZE)
-            {
-                return TLS_KEY_OP_INVALID;
-            }
-            {
-                uint8_t *em = __rsa_transient;
-                if (tls_rsa_decrypt_signature(sig, sig_len, em, &key->rsa))
-                {
-                    ok = tls_rsa_pss_verify(em, key->rsa.mod_len, digest,
-                                            TLS_SHA256_DIGEST_LEN, TLS_HASH_SHA256);
-                }
-                tls_secure_memzero(em, key->rsa.mod_len);
-            }
-            break;
-
-        case TLS_ALG_ECDSA_SECP256R1_SHA256:
-            return TLS_KEY_OP_UNSUPPORTED;
-
-        default:
-            return TLS_KEY_OP_UNKNOWN;
-    }
-
-    return ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
+    return tls_x509_signature_verify_digest(digest, sig, sig_len, key, alg);
 }
 
 tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                                                       const uint8_t *sig, size_t sig_len,
-                                                      const struct tls_key *key)
+                                                      const struct tls_key *key, tls_alg_t alg)
 {
     if (!digest || !sig || !key)
     {
         return TLS_KEY_OP_INVALID;
     }
 
-    if (!TLS_ALG_IS_SIGNING(key->alg))
+    if (!TLS_ALG_IS_SIGNING(alg))
     {
         return TLS_KEY_OP_UNKNOWN;
     }
 
     bool ok = false;
-    switch (key->alg)
+    switch (alg)
     {
         case TLS_ALG_RSA_PKCS1_SHA256:
+            if (!tls_key_supports_operation(key, alg)) return TLS_KEY_OP_INVALID;
             ok = tls_rsa_pkcs1_v15_sha256_verify(sig, sig_len, digest, &key->rsa);
             break;
 
         case TLS_ALG_RSA_PSS_RSAE_SHA256:
-            if (sig_len > RSA_TRANSIENT_SIZE)
+            if (!tls_key_supports_operation(key, alg)) return TLS_KEY_OP_INVALID;
+            if (key->rsa.mod_len > RSA_TRANSIENT_SIZE ||
+                sig_len != key->rsa.mod_len)
             {
                 return TLS_KEY_OP_INVALID;
             }
@@ -1292,7 +1378,8 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
             break;
 
         case TLS_ALG_ECDSA_SECP256R1_SHA256:
-            return TLS_KEY_OP_UNSUPPORTED;
+            return tls_key_supports_operation(key, alg)
+                ? TLS_KEY_OP_UNSUPPORTED : TLS_KEY_OP_INVALID;
 
         default:
             return TLS_KEY_OP_UNKNOWN;

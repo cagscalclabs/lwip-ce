@@ -1,6 +1,7 @@
 # random osx filesystem nonsense
 .dccache
 **/.DS_Store
+**/._*
 
 # AI agents
 .continue/agents/new-config.yaml

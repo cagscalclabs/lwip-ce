@@ -1,18 +1,10 @@
 /**
  * @file key.h
  * @author Anthony Cagliano
- * @brief Self-describing key container for asymmetric and symmetric operations.
+ * @brief Typed key material for asymmetric and symmetric operations.
  *
- * A struct tls_key carries both the algorithm identifier and the key material,
- * so callers never pass alg separately.  The alg field determines which union
- * member is valid and which tls_key_* operation makes sense.
- *
- * Algorithm values are split into two ranges:
- *   0x00–0x0F  signing/verification algorithms  (asymmetric)
- *   0x10–0xFE  encryption/decryption algorithms (asymmetric or symmetric)
- *
- * Use tls_x509_oid_to_sig_alg() to map a DER OID to tls_alg_t when building
- * a key from a parsed certificate.
+ * Import infers the key type from the encoded input. Signature schemes and
+ * ciphers are selected per operation, independently of the stored key type.
  */
 
 #ifndef TLS_KEY_H
@@ -29,9 +21,9 @@ extern "C" {
 #endif
 
 /**
- * Algorithm identifier — encodes key type, cipher, and hash/padding scheme.
- * Drives dispatch in tls_key_verify(), tls_key_sign(), tls_key_encrypt(),
- * and tls_key_decrypt().
+ * Operation identifier — selects cipher or signature hash/padding scheme.
+ * Drives dispatch in tls_key_verify(), tls_key_sign(), tls_cipher_encrypt(),
+ * and tls_cipher_decrypt().
  *
  * Signing range (0x00–0x0F): asymmetric signature algorithms.
  * Encryption range (0x10–0xFE): symmetric and asymmetric encryption.
@@ -77,34 +69,27 @@ typedef enum
     TLS_KEY_OP_OK          = 0, /**< Operation succeeded.                                       */
     TLS_KEY_OP_INVALID     = 1, /**< Operation failed (bad signature, wrong key, etc.).          */
     TLS_KEY_OP_UNSUPPORTED = 2, /**< Algorithm is known but not yet implemented (e.g. ECDSA).   */
-    TLS_KEY_OP_UNKNOWN     = 3, /**< key->alg is TLS_ALG_UNKNOWN or wrong for this operation.   */
+    TLS_KEY_OP_UNKNOWN     = 3, /**< Unknown algorithm or wrong operation category.   */
 } tls_key_op_result_t;
 
-/**
- * Self-describing key.
- *
- * The alg field drives dispatch; only the matching union member is valid.
- *
- * RSA-PSS example (2048-bit key, e=65537):
- * @code
- *   static const uint8_t exp[] = {0x01, 0x00, 0x01};
- *   struct tls_key k = {
- *       .alg = TLS_ALG_RSA_PSS_RSAE_SHA256,
- *       .rsa = { sizeof(exp), exp, mod_len, mod },
- *   };
- * @endcode
- *
- * AES-128-GCM example (key material pre-loaded into ctx):
- * @code
- *   struct tls_key k = {
- *       .alg = TLS_ALG_AES_128_GCM,
- *       // populate k.aes via tls_aes_init() before use
- *   };
- * @endcode
+/** Key material type, independent of padding, hash, or cipher mode.
+ * Zero initialization denotes an empty key. EC imports currently support P-256.
+ */
+typedef enum
+{
+    TLS_KEY_TYPE_UNKNOWN = 0,
+    TLS_KEY_TYPE_RSA,
+    TLS_KEY_TYPE_EC_P256,
+    TLS_KEY_TYPE_AES,
+} tls_key_type_t;
+
+/** Key material. Only the union member selected by type is valid.
+ * Manually constructed keys borrow their buffers and leave allocated=false.
+ * AES keys contain 16 or 32 raw bytes, not a tls_aes_context.
  */
 struct tls_key
 {
-    tls_alg_t alg;
+    tls_key_type_t type;
     bool      allocated; /**< true when this struct was returned by tls_key_import()
                               and must be freed with tls_key_free(). */
     union
@@ -146,7 +131,7 @@ typedef enum
 } tls_key_import_result_t;
 
 /**
- * @brief Parse a PEM or DER-encoded key, allocate a self-describing tls_key,
+ * @brief Parse a PEM or DER-encoded key, allocate a typed tls_key,
  *        and store a pointer to it in @p *out.
  *
  * The returned key owns its key material in a trailing allocation; it must be
@@ -157,8 +142,9 @@ typedef enum
  * @param data      PEM text or raw DER bytes.
  * @param len       Length of @p data in bytes.
  * @param format    TLS_KEY_FORMAT_PEM or TLS_KEY_FORMAT_DER.
- * @param alg       Algorithm to assign (TLS_ALG_UNKNOWN lets the function
- *                  infer a default from the key type).
+ * PEM and DER both infer type from their structure and algorithm OID.
+ * Unsupported OIDs/restrictions are rejected, not treated as unrestricted keys.
+ * Private-key imports currently expose only public components.
  * @param password  Passphrase for PBES2-encrypted private keys; may be NULL
  *                  for unencrypted keys.
  * @return tls_key_import_result_t status code.
@@ -166,7 +152,6 @@ typedef enum
 tls_key_import_result_t tls_key_import(struct tls_key **out,
                                         const void *data, size_t len,
                                         tls_key_format_t format,
-                                        tls_alg_t alg,
                                         const char *password);
 
 /**
@@ -182,106 +167,116 @@ void tls_key_free(struct tls_key *key);
 /**
  * @brief Verify a signature over @p content using @p key.
  *
- * Dispatches on key->alg; SHA-256 hashes @p content internally.
+ * Dispatches on alg after checking key->type; hashes content with SHA-256.
  * Only valid for signing-range algorithms (TLS_ALG_IS_SIGNING).
+ * @param alg Signature scheme to use; must be compatible with key->type.
  */
 tls_key_op_result_t tls_key_verify(const uint8_t *content, size_t content_len,
                                     const uint8_t *sig, size_t sig_len,
-                                    const struct tls_key *key);
+                                    const struct tls_key *key, tls_alg_t alg);
 
 /**
  * @brief Sign @p content with @p key, writing the raw signature to @p sig_out.
  *
+ * @param alg Signature scheme to use; must be compatible with key->type.
  * @p sig_len_out receives the number of bytes written on success.
  * Returns TLS_KEY_OP_UNSUPPORTED for all algorithms until private-key
  * signing is implemented.
  */
 tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
                                   uint8_t *sig_out, size_t *sig_len_out,
-                                  const struct tls_key *key);
+                                  const struct tls_key *key, tls_alg_t alg);
 
 /**
- * Ciphertext bundle for one-shot encrypt/decrypt operations.
+ * @brief One-shot encrypt.  Allocates and returns a self-describing blob:
  *
- * On encrypt, the caller pre-allocates all fields and the function fills them:
- *   - iv      receives the freshly generated nonce/IV
- *   - obuf    receives the ciphertext
- *   - obuf_len must be set by the caller before encrypting:
- *               GCM/CCM: equal to the plaintext length (output is same size)
- *               CBC:     ceil(plaintext_len / 16) * 16  (PKCS#7 padded)
- *   - tag     receives the authentication tag (TLS_KEY_AES_TAG_LEN bytes);
- *             may be NULL for CBC (no tag)
+ *   <uint16_t iv_len> <iv> <uint16_t ct_len> <ciphertext> <uint16_t tag_len> <tag>
  *
- * On decrypt, the caller populates all fields from the previously stored
- * bundle; the function reads iv/obuf/obuf_len/tag as ciphertext input.
- * The recovered plaintext is written to the separate outbuf/outbuf_len
- * parameters of tls_key_decrypt() / tls_key_decrypt_aad().
- * For CBC, the plaintext is shorter than obuf_len (padding stripped).
+ * All uint16_t values are little-endian.  For RSA-OAEP iv_len and tag_len
+ * are 0.  For CBC tag_len is 0.  The RNG health check is performed internally.
  *
- * All of iv, obuf, and tag must be non-NULL for AEAD modes (GCM, CCM).
+ * @param key    Key to encrypt with; alg and key type must be compatible.
+ * @param alg    Cipher to use (e.g. TLS_ALG_AES_256_GCM).
+ * @param in     Plaintext input.
+ * @param in_len Plaintext length in bytes.
+ * @return Allocated blob on success, NULL on any error
+ *         (bad args, RNG failure, allocation failure, or cipher error).
+ *         Free with tls_cipher_blob_free().
  */
-struct tls_key_cipher_io
-{
-    uint8_t *iv;       /**< Nonce/IV — written on encrypt, read on decrypt. */
-    size_t   obuf_len; /**< Ciphertext length. For CBC: padded to block boundary. */
-    uint8_t *obuf;     /**< Ciphertext buffer. */
-    uint8_t *tag;      /**< Auth tag (TLS_KEY_AES_TAG_LEN bytes); NULL ok for CBC. */
-};
+uint8_t *tls_cipher_encrypt(const struct tls_key *key, tls_alg_t alg,
+                          const uint8_t *in, size_t in_len);
 
 /**
- * @brief One-shot encrypt @p inbuf, writing IV, ciphertext, and auth tag
- *        into @p io.
- *
- *   AES keys — fresh IV/nonce written to io->iv; ciphertext written to
- *              io->obuf (io->obuf_len must equal in_len); auth tag written
- *              to io->tag (GCM/CCM only).
- *   RSA keys — (TLS_ALG_RSA_OAEP_SHA256) io->obuf must be ≥ mod_len bytes;
- *              io->iv and io->tag are unused and may be NULL.
- *
- * @return true on success, false on any error.
+ * @brief One-shot encrypt with additional authenticated data (AAD).
+ *        The AAD is authenticated but not encrypted; supply the identical
+ *        bytes when decrypting. RSA and CBC ignore AAD.
+ *        Otherwise identical to tls_cipher_encrypt().
  */
-bool tls_key_encrypt(struct tls_key *key,
-                     const uint8_t *inbuf, size_t in_len,
-                     struct tls_key_cipher_io *io);
+uint8_t *tls_cipher_encrypt_aad(const struct tls_key *key, tls_alg_t alg,
+                               const uint8_t *aad, size_t aad_len,
+                               const uint8_t *in, size_t in_len);
 
 /**
- * @brief One-shot encrypt with associated data.  Same as tls_key_encrypt()
- *        but feeds @p aad into the AEAD tag before encrypting.
- *        For RSA and CBC, @p aad is ignored.
+ * @brief One-shot decrypt from an encrypt blob.  Allocates and returns a
+ *        self-describing plaintext blob:
+ *
+ *   <uint16_t plain_len> <plaintext>
+ *
+ * @p blob must be a buffer previously returned by tls_cipher_encrypt() or
+ * tls_cipher_encrypt_aad() (or any externally constructed blob in the same
+ * format).  For GCM/CCM the auth tag is verified before decrypting; returns
+ * NULL on mismatch.
+ *
+ * @param key   Key to decrypt with.
+ * @param alg   Cipher used to encrypt.
+ * @param blob  Self-describing ciphertext blob.
+ * @return Allocated plaintext blob on success, NULL on any error.
+ *         Free with tls_cipher_blob_free().
  */
-bool tls_key_encrypt_aad(struct tls_key *key,
-                         const uint8_t *aad, size_t aad_len,
-                         const uint8_t *inbuf, size_t in_len,
-                         struct tls_key_cipher_io *io);
+uint8_t *tls_cipher_decrypt(const struct tls_key *key, tls_alg_t alg,
+                          const uint8_t *blob);
 
 /**
- * @brief One-shot decrypt the ciphertext bundle in @p io into @p outbuf.
- *
- *   AES keys — iv and tag are read from @p io; ciphertext is io->obuf
- *              (io->obuf_len bytes).  For GCM/CCM the tag is verified before
- *              decrypting; returns false on tag mismatch.
- *   RSA keys — (TLS_ALG_RSA_OAEP_SHA256) raw RSA + OAEP unpad; io->iv and
- *              io->tag are unused.
- *
- * @param outbuf     Caller-allocated plaintext destination.
- * @param outbuf_len Capacity of @p outbuf in bytes; must be ≥ io->obuf_len.
- *                   For CBC the actual plaintext written will be < io->obuf_len
- *                   (padding stripped); for GCM/CCM it equals io->obuf_len.
- * @return true on success, false on error or tag mismatch.
+ * @brief One-shot decrypt with additional authenticated data.
+ *        The AAD must match what was passed to tls_cipher_encrypt_aad().
+ *        RSA and CBC ignore AAD. Otherwise identical to tls_cipher_decrypt().
  */
-bool tls_key_decrypt(struct tls_key *key,
-                     struct tls_key_cipher_io *io,
-                     uint8_t *outbuf, size_t outbuf_len);
+uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
+                               const uint8_t *aad, size_t aad_len,
+                               const uint8_t *blob);
 
 /**
- * @brief One-shot decrypt with associated data.  Same as tls_key_decrypt()
- *        but feeds @p aad into AEAD tag verification before decrypting.
- *        For RSA and CBC, @p aad is ignored.
+ * @brief Zero and free a blob returned by tls_cipher_encrypt(),
+ *        tls_cipher_encrypt_aad(), tls_cipher_decrypt(), or tls_cipher_decrypt_aad().
+ *        Safe to call with NULL.
  */
-bool tls_key_decrypt_aad(struct tls_key *key,
-                         const uint8_t *aad, size_t aad_len,
-                         struct tls_key_cipher_io *io,
-                         uint8_t *outbuf, size_t outbuf_len);
+void tls_cipher_blob_free(uint8_t *buf);
+
+/**
+ * @brief Assemble a ciphertext blob from separately held fields.
+ *
+ * Use this when IV, ciphertext, and tag arrive as distinct buffers (e.g.
+ * received over the network) and need to be packed into the blob format
+ * expected by tls_cipher_decrypt() / tls_cipher_decrypt_aad().
+ *
+ * Blob layout:
+ *   <uint16_t iv_len><iv><uint16_t ct_len><ct><uint16_t tag_len><tag>
+ *
+ * Any field may be NULL with a corresponding length of 0 (e.g. RSA-OAEP
+ * has no IV or tag; CBC has no tag).
+ *
+ * @param iv      IV/nonce bytes, or NULL.
+ * @param iv_len  Length of @p iv in bytes.
+ * @param ct      Ciphertext bytes.
+ * @param ct_len  Length of @p ct in bytes.
+ * @param tag     Authentication tag bytes, or NULL.
+ * @param tag_len Length of @p tag in bytes.
+ * @return Allocated ciphertext blob on success, NULL on allocation failure.
+ *         Free with tls_cipher_blob_free().
+ */
+uint8_t *tls_cipher_blob_assemble(const uint8_t *iv,  size_t iv_len,
+                                   const uint8_t *ct,  size_t ct_len,
+                                   const uint8_t *tag, size_t tag_len);
 
 #ifdef __cplusplus
 }

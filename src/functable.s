@@ -125,10 +125,12 @@
 .extern _tls_key_free
 .extern _tls_key_verify
 .extern _tls_key_sign
-.extern _tls_key_encrypt
-.extern _tls_key_encrypt_aad
-.extern _tls_key_decrypt
-.extern _tls_key_decrypt_aad
+.extern _tls_cipher_encrypt
+.extern _tls_cipher_encrypt_aad
+.extern _tls_cipher_decrypt
+.extern _tls_cipher_decrypt_aad
+.extern _tls_cipher_blob_free
+.extern _tls_cipher_blob_assemble
 .extern _acd_add
 .extern _acd_remove
 .extern _acd_start
@@ -474,7 +476,7 @@
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 437    ; entry count
+    d24 439    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -602,10 +604,12 @@ _fn_exports_table:
     d24 _tls_key_free
     d24 _tls_key_verify
     d24 _tls_key_sign
-    d24 _tls_key_encrypt
-    d24 _tls_key_encrypt_aad
-    d24 _tls_key_decrypt
-    d24 _tls_key_decrypt_aad
+    d24 _tls_cipher_encrypt
+    d24 _tls_cipher_encrypt_aad
+    d24 _tls_cipher_decrypt
+    d24 _tls_cipher_decrypt_aad
+    d24 _tls_cipher_blob_free
+    d24 _tls_cipher_blob_assemble
 
 ; --- src/core/ipv4/acd.c ---
     d24 _acd_add

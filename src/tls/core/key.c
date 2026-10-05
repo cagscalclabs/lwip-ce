@@ -4,7 +4,7 @@
  * @brief Self-describing key operations: import, verify, sign, encrypt, decrypt.
  *
  * tls_key_import / tls_key_free handle PEM/DER parsing and allocation.
- * All other functions dispatch on key->alg.  AES encrypt/decrypt operations
+ * Operations select alg explicitly and validate key->type.  AES encrypt/decrypt operations
  * are fully one-shot: the AES context is constructed internally, a fresh IV
  * is generated via tls_random_bytes, and the context is destroyed on return.
  */
@@ -23,6 +23,7 @@
 #include "../includes/passwords.h"
 #include "../includes/asn1.h"
 #include "../includes/key.h"
+#include "key_internal.h"
 #include "../includes/x509.h"
 #include "../includes/tls.h"
 
@@ -144,6 +145,7 @@ key_parse_rsa_pub(const uint8_t *der, size_t der_len,
     size_t         mod_len  = mod.len;
     if (mod_len > 1 && mod_data[0] == 0x00) { mod_data++; mod_len--; }
 
+    out->type = TLS_KEY_TYPE_RSA;
     out->rsa.mod_len  = mod_len;
     out->rsa.modulus  = mod_data;
     out->rsa.exp_len  = exp.len;
@@ -185,6 +187,7 @@ key_parse_rsa_priv(const uint8_t *der, size_t der_len,
     size_t         mod_len  = mod.len;
     if (mod_len > 1 && mod_data[0] == 0x00) { mod_data++; mod_len--; }
 
+    out->type = TLS_KEY_TYPE_RSA;
     out->rsa.mod_len  = mod_len;
     out->rsa.modulus  = mod_data;
     out->rsa.exp_len  = exp.len;
@@ -201,14 +204,62 @@ key_parse_ec_pub_point(const uint8_t *data, size_t len,
                        struct tls_key *out)
 {
     /* BIT STRING has a leading unused-bits byte; skip it. */
-    if (len < 2) return TLS_KEY_IMPORT_PARSE_FAIL;
+    if (len != 66 || data[0] != 0 || data[1] != 4)
+        return TLS_KEY_IMPORT_PARSE_FAIL;
+    out->type = TLS_KEY_TYPE_EC_P256;
     out->ec.data = data + 1;
     out->ec.len  = len  - 1;
     return TLS_KEY_IMPORT_OK;
 }
 
+/* Only named P-256 is representable by the current EC algorithm enum. */
+static bool key_p256(const struct tls_asn1_tlv *param)
+{
+    static const uint8_t oid[] = {0x2a,0x86,0x48,0xce,0x3d,0x03,0x01,0x07};
+    return oid_eq(param, oid, sizeof(oid));
+}
+
+static tls_key_import_result_t
+key_parse_sec1(const uint8_t *der, size_t len, struct tls_key *out,
+               bool inherited_p256)
+{
+    struct tls_asn1_cursor c, body;
+    struct tls_asn1_tlv seq, version, secret, field, value;
+    const uint8_t *point = NULL;
+    size_t point_len = 0;
+    bool have_params = false;
+    if (!tls_asn1_cursor_init(&c, der, len) || !tls_asn1_next(&c, &seq) ||
+        c.cur != c.end || seq.tag != 0x30 || !tls_asn1_child_cursor(&seq, &body) ||
+        !tls_asn1_next(&body, &version) || version.tag != ASN1_INTEGER ||
+        version.len != 1 || version.value[0] != 1 ||
+        !tls_asn1_next(&body, &secret) || secret.tag != ASN1_OCTETSTRING || secret.len != 32)
+        return TLS_KEY_IMPORT_PARSE_FAIL;
+    while (body.cur != body.end)
+    {
+        struct tls_asn1_cursor explicit_value;
+        if (!tls_asn1_next(&body, &field) ||
+            !tls_asn1_child_cursor(&field, &explicit_value) ||
+            !tls_asn1_next(&explicit_value, &value) || explicit_value.cur != explicit_value.end)
+            return TLS_KEY_IMPORT_PARSE_FAIL;
+        if (field.tag == 0xa0 && !have_params && !point)
+        {
+            if (!key_p256(&value)) return TLS_KEY_IMPORT_BAD_ALG;
+            have_params = true;
+        }
+        else if (field.tag == 0xa1 && !point && value.tag == ASN1_BITSTRING)
+        {
+            point = value.value;
+            point_len = value.len;
+        }
+        else return TLS_KEY_IMPORT_PARSE_FAIL;
+    }
+    if (!inherited_p256 && !have_params) return TLS_KEY_IMPORT_BAD_ALG;
+    if (!point) return TLS_KEY_IMPORT_PARSE_FAIL;
+    return key_parse_ec_pub_point(point, point_len, out);
+}
+
 /* ---------------------------------------------------------------------------
- * Import: parse SubjectPublicKeyInfo (PKCS#8 public key wrapper)
+ * Import: parse SubjectPublicKeyInfo (public key wrapper)
  *   SEQUENCE { SEQUENCE { OID algorithm }, BIT STRING subjectPublicKey }
  * --------------------------------------------------------------------------- */
 
@@ -243,7 +294,12 @@ key_parse_spki(const uint8_t *der, size_t der_len, struct tls_key *out)
         return key_parse_rsa_pub(spk_bits.value + 1, spk_bits.len - 1, out);
     }
     if (oid_eq(&alg_oid, OID_EC_PUBLICKEY, sizeof(OID_EC_PUBLICKEY)))
+    {
+        struct tls_asn1_tlv curve;
+        if (!tls_asn1_next(&alg_body, &curve) || !key_p256(&curve) || alg_body.cur != alg_body.end)
+            return TLS_KEY_IMPORT_BAD_ALG;
         return key_parse_ec_pub_point(spk_bits.value, spk_bits.len, out);
+    }
 
     return TLS_KEY_IMPORT_BAD_ALG;
 }
@@ -281,45 +337,12 @@ key_parse_pkcs8_priv(const uint8_t *der, size_t der_len, struct tls_key *out)
     if (oid_eq(&alg_oid, OID_RSA_ENCRYPTION, sizeof(OID_RSA_ENCRYPTION)))
         return key_parse_rsa_priv(priv_octet.value, priv_octet.len, out);
 
-    /* EC: the inner OCTET STRING is an ECPrivateKey (SEC1); we surface the
-     * public key point when present, otherwise reject — we only expose the
-     * public-key half through tls_key for now. */
     if (oid_eq(&alg_oid, OID_EC_PUBLICKEY, sizeof(OID_EC_PUBLICKEY)))
     {
-        /* ECPrivateKey: SEQUENCE { version, OCTET STRING privkey,
-         *   [0] OID params OPTIONAL, [1] BIT STRING pubkey OPTIONAL } */
-        struct tls_asn1_cursor ec_body;
-        struct tls_asn1_tlv ec_seq, ec_item;
-        if (!tls_asn1_cursor_init(&ec_body, priv_octet.value, priv_octet.len))
-            return TLS_KEY_IMPORT_PARSE_FAIL;
-        if (!tls_asn1_next(&ec_body, &ec_seq) ||
-            !tls_asn1_tag_constructed(ec_seq.tag) ||
-            tls_asn1_tag_number(ec_seq.tag) != ASN1_SEQUENCE)
-            return TLS_KEY_IMPORT_PARSE_FAIL;
-
-        struct tls_asn1_cursor inner;
-        if (!tls_asn1_child_cursor(&ec_seq, &inner)) return TLS_KEY_IMPORT_PARSE_FAIL;
-        /* Skip version, skip private key bytes. */
-        if (!tls_asn1_next(&inner, &ec_item)) return TLS_KEY_IMPORT_PARSE_FAIL;
-        if (!tls_asn1_next(&inner, &ec_item)) return TLS_KEY_IMPORT_PARSE_FAIL;
-
-        /* Scan optional context-specific fields for [1] public key. */
-        while (tls_asn1_next(&inner, &ec_item))
-        {
-            if (tls_asn1_tag_class(ec_item.tag) == ASN1_CONTEXTSPEC &&
-                tls_asn1_tag_number(ec_item.tag) == 1 &&
-                tls_asn1_tag_constructed(ec_item.tag))
-            {
-                struct tls_asn1_cursor pubc;
-                struct tls_asn1_tlv pubbit;
-                if (!tls_asn1_child_cursor(&ec_item, &pubc) ||
-                    !tls_asn1_next(&pubc, &pubbit) ||
-                    tls_asn1_tag_number(pubbit.tag) != ASN1_BITSTRING)
-                    return TLS_KEY_IMPORT_PARSE_FAIL;
-                return key_parse_ec_pub_point(pubbit.value, pubbit.len, out);
-            }
-        }
-        return TLS_KEY_IMPORT_PARSE_FAIL; /* no public key in EC private key */
+        struct tls_asn1_tlv curve;
+        if (!tls_asn1_next(&alg_body, &curve) || !key_p256(&curve) || alg_body.cur != alg_body.end)
+            return TLS_KEY_IMPORT_BAD_ALG;
+        return key_parse_sec1(priv_octet.value, priv_octet.len, out, true);
     }
 
     return TLS_KEY_IMPORT_BAD_ALG;
@@ -535,6 +558,26 @@ static const struct
     { "-----BEGIN EC PRIVATE KEY-----",        KEY_FMT_SEC1_EC_PRIV    },
 };
 
+/* Determine the encoding from its ASN.1 structure, independently of the
+ * requested operation. The selected parser validates the contents/OID. */
+static bool key_der_format(const uint8_t *der, size_t len, key_pem_fmt_t *fmt)
+{
+    struct tls_asn1_cursor c, body;
+    struct tls_asn1_tlv seq, first, second;
+    if (!tls_asn1_cursor_init(&c, der, len) || !tls_asn1_next(&c, &seq) ||
+        c.cur != c.end || seq.tag != 0x30 || !tls_asn1_child_cursor(&seq, &body) ||
+        !tls_asn1_next(&body, &first) || !tls_asn1_next(&body, &second))
+        return false;
+    if (first.tag == 0x30 && second.tag == ASN1_BITSTRING) *fmt = KEY_FMT_SPKI;
+    else if (first.tag == 0x30 && second.tag == ASN1_OCTETSTRING) *fmt = KEY_FMT_PKCS8_ENC_PRIV;
+    else if (first.tag == ASN1_INTEGER && second.tag == 0x30) *fmt = KEY_FMT_PKCS8_PRIV;
+    else if (first.tag == ASN1_INTEGER && second.tag == ASN1_OCTETSTRING) *fmt = KEY_FMT_SEC1_EC_PRIV;
+    else if (first.tag == ASN1_INTEGER && second.tag == ASN1_INTEGER)
+        *fmt = body.cur == body.end ? KEY_FMT_PKCS1_RSA_PUB : KEY_FMT_PKCS1_RSA_PRIV;
+    else return false;
+    return true;
+}
+
 /* ---------------------------------------------------------------------------
  * tls_key_import / tls_key_destroy
  * --------------------------------------------------------------------------- */
@@ -542,10 +585,12 @@ static const struct
 tls_key_import_result_t tls_key_import(struct tls_key **out,
                                         const void *data, size_t len,
                                         tls_key_format_t format,
-                                        tls_alg_t alg,
                                         const char *password)
 {
-    if (!out || !data || len == 0)
+    if (!out) return TLS_KEY_IMPORT_INVALID_ARG;
+    *out = NULL;
+    if (!data || len == 0 || len > SIZE_MAX - sizeof(struct tls_key) ||
+        (format != TLS_KEY_FORMAT_PEM && format != TLS_KEY_FORMAT_DER))
         return TLS_KEY_IMPORT_INVALID_ARG;
 
     /*
@@ -561,6 +606,9 @@ tls_key_import_result_t tls_key_import(struct tls_key **out,
     if (!key)
         return TLS_KEY_IMPORT_ALLOC_FAIL;
 
+    memset(key, 0, sizeof(*key));
+    key->type = TLS_KEY_TYPE_UNKNOWN;
+
     uint8_t *der_buf  = (uint8_t *)(key + 1);
     size_t   der_len  = 0;
     const uint8_t *parse_der     = NULL;
@@ -568,12 +616,10 @@ tls_key_import_result_t tls_key_import(struct tls_key **out,
     tls_key_import_result_t rc   = TLS_KEY_IMPORT_PARSE_FAIL;
 
     key_pem_fmt_t fmt;
-    bool          is_pem = false;
 
     if (format == TLS_KEY_FORMAT_PEM)
     {
         /* Identify the banner and pick the parse path. */
-        is_pem = true;
         const char *pem = (const char *)data;
         size_t      i;
         const char *matched_banner = NULL;
@@ -604,22 +650,11 @@ tls_key_import_result_t tls_key_import(struct tls_key **out,
     }
     else /* TLS_KEY_FORMAT_DER */
     {
-        /*
-         * For raw DER the caller must tell us what kind of key it is via alg.
-         * We infer the DER structure from the algorithm family.
-         */
         memcpy(der_buf, data, len);
-        parse_der     = der_buf;
+        parse_der = der_buf;
         parse_der_len = len;
-
-        if (TLS_ALG_IS_SIGNING(alg) || alg == TLS_ALG_RSA_OAEP_SHA256)
-            fmt = KEY_FMT_PKCS8_PRIV; /* try PKCS#8 wrapper first for DER */
-        else
-        {
-            rc = TLS_KEY_IMPORT_BAD_ALG;
+        if (!key_der_format(parse_der, parse_der_len, &fmt))
             goto fail;
-        }
-        is_pem = false;
     }
 
     /* Handle encrypted private key — decrypt into der_buf, re-point. */
@@ -646,28 +681,11 @@ tls_key_import_result_t tls_key_import(struct tls_key **out,
         case KEY_FMT_PKCS1_RSA_PUB:   rc = key_parse_rsa_pub (parse_der, parse_der_len, key); break;
         case KEY_FMT_PKCS8_PRIV:      rc = key_parse_pkcs8_priv(parse_der, parse_der_len, key); break;
         case KEY_FMT_SPKI:            rc = key_parse_spki    (parse_der, parse_der_len, key); break;
-        case KEY_FMT_SEC1_EC_PRIV:    rc = key_parse_pkcs8_priv(parse_der, parse_der_len, key); break;
+        case KEY_FMT_SEC1_EC_PRIV:    rc = key_parse_sec1(parse_der, parse_der_len, key, false); break;
         default:                       rc = TLS_KEY_IMPORT_PARSE_FAIL; break;
     }
     if (rc != TLS_KEY_IMPORT_OK)
         goto fail;
-
-    /* Set the algorithm.  For PEM paths where alg == TLS_ALG_UNKNOWN we infer
-     * a sensible default; the caller can always adjust key->alg afterwards. */
-    if (alg != TLS_ALG_UNKNOWN)
-    {
-        key->alg = alg;
-    }
-    else
-    {
-        /* Auto-assign: RSA keys default to PSS-SHA256, EC to ECDSA-P256. */
-        if (fmt == KEY_FMT_PKCS1_RSA_PRIV ||
-            fmt == KEY_FMT_PKCS1_RSA_PUB  ||
-            (fmt == KEY_FMT_PKCS8_PRIV && key->rsa.mod_len > 0))
-            key->alg = TLS_ALG_RSA_PSS_RSAE_SHA256;
-        else
-            key->alg = TLS_ALG_ECDSA_SECP256R1_SHA256;
-    }
 
     key->allocated = true;
     *out = key;
@@ -695,18 +713,18 @@ void tls_key_free(struct tls_key *key)
 
 tls_key_op_result_t tls_key_verify(const uint8_t *content, size_t content_len,
                                     const uint8_t *sig, size_t sig_len,
-                                    const struct tls_key *key)
+                                    const struct tls_key *key, tls_alg_t alg)
 {
     if (!key)
     {
         return TLS_KEY_OP_INVALID;
     }
-    return tls_x509_signature_verify(content, content_len, sig, sig_len, key);
+    return tls_x509_signature_verify(content, content_len, sig, sig_len, key, alg);
 }
 
 tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
                                   uint8_t *sig_out, size_t *sig_len_out,
-                                  const struct tls_key *key)
+                                  const struct tls_key *key, tls_alg_t alg)
 {
     (void)content;
     (void)content_len;
@@ -718,12 +736,13 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
         return TLS_KEY_OP_INVALID;
     }
 
-    switch (key->alg)
+    switch (alg)
     {
         case TLS_ALG_RSA_PSS_RSAE_SHA256:
         case TLS_ALG_RSA_PKCS1_SHA256:
         case TLS_ALG_ECDSA_SECP256R1_SHA256:
-            return TLS_KEY_OP_UNSUPPORTED;
+            return tls_key_supports_operation(key, alg)
+                ? TLS_KEY_OP_UNSUPPORTED : TLS_KEY_OP_INVALID;
 
         case TLS_ALG_UNKNOWN:
             return TLS_KEY_OP_UNKNOWN;
@@ -782,34 +801,94 @@ static bool key_is_aead(tls_alg_t alg)
 }
 
 /* ---------------------------------------------------------------------------
+ * Blob helpers
+ *
+ * Encrypt output: <u16 iv_len><iv><u16 ct_len><ct><u16 tag_len><tag>
+ * Decrypt output: <u16 plain_len><plaintext>
+ * All u16 values are little-endian.
+ * --------------------------------------------------------------------------- */
+
+#define BLOB_HDR  sizeof(uint16_t)
+
+static void blob_write_u16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static uint16_t blob_read_u16(const uint8_t *p)
+{
+    return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
+/* Allocate an encrypt blob and return pointers to its field regions.
+ * Returns the blob base, or NULL on allocation failure. */
+static uint8_t *encrypt_blob_alloc(size_t iv_len, size_t ct_len, size_t tag_len,
+                                    uint8_t **iv_out,
+                                    uint8_t **ct_out,
+                                    uint8_t **tag_out)
+{
+    size_t total = BLOB_HDR + iv_len + BLOB_HDR + ct_len + BLOB_HDR + tag_len;
+    uint8_t *blob = (uint8_t *)tls_fileio_alloc(total);
+    if (!blob)
+        return NULL;
+
+    uint8_t *p = blob;
+    blob_write_u16(p, (uint16_t)iv_len);  p += BLOB_HDR;
+    *iv_out = p;                            p += iv_len;
+    blob_write_u16(p, (uint16_t)ct_len);  p += BLOB_HDR;
+    *ct_out = p;                            p += ct_len;
+    blob_write_u16(p, (uint16_t)tag_len); p += BLOB_HDR;
+    *tag_out = p;
+
+    return blob;
+}
+
+/* Parse the encrypt blob into its field pointers and lengths.
+ * Returns false if the blob pointer is NULL. */
+static bool encrypt_blob_parse(const uint8_t *blob,
+                                 size_t *iv_len_out,  const uint8_t **iv_out,
+                                 size_t *ct_len_out,  const uint8_t **ct_out,
+                                 size_t *tag_len_out, const uint8_t **tag_out)
+{
+    if (!blob)
+        return false;
+    const uint8_t *p = blob;
+    *iv_len_out  = blob_read_u16(p); p += BLOB_HDR; *iv_out  = p; p += *iv_len_out;
+    *ct_len_out  = blob_read_u16(p); p += BLOB_HDR; *ct_out  = p; p += *ct_len_out;
+    *tag_len_out = blob_read_u16(p); p += BLOB_HDR; *tag_out = p;
+    return true;
+}
+
+/* Allocate a decrypt output blob: <u16 plain_len><plaintext>. */
+static uint8_t *decrypt_blob_alloc(size_t plain_len, uint8_t **plain_out)
+{
+    uint8_t *blob = (uint8_t *)tls_fileio_alloc(BLOB_HDR + plain_len);
+    if (!blob)
+        return NULL;
+    blob_write_u16(blob, (uint16_t)plain_len);
+    *plain_out = blob + BLOB_HDR;
+    return blob;
+}
+
+/* ---------------------------------------------------------------------------
  * AES one-shot encrypt (shared by plain and AAD variants)
  * --------------------------------------------------------------------------- */
 
-static bool aes_encrypt_oneshot(tls_alg_t alg,
-                                 const uint8_t *key_data, size_t key_len,
-                                 const uint8_t *aad, size_t aad_len,
-                                 const uint8_t *inbuf, size_t in_len,
-                                 struct tls_key_cipher_io *io)
+static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
+                                     const uint8_t *key_data,
+                                     size_t key_len,
+                                     const uint8_t *aad,
+                                     size_t aad_len,
+                                     const uint8_t *inbuf,
+                                     size_t in_len)
 {
     struct tls_aes_context ctx;
-    size_t iv_len = key_iv_len(alg);
-    uint8_t mode  = key_aes_mode(alg);
-    bool ok = false;
+    size_t iv_len  = key_iv_len(alg);
+    uint8_t mode   = key_aes_mode(alg);
+    bool aead      = key_is_aead(alg);
+    size_t tag_len = aead ? TLS_KEY_AES_TAG_LEN : 0;
 
-    if (!io || !io->iv || !io->obuf)
-    {
-        return false;
-    }
-    if (key_is_aead(alg) && !io->tag)
-    {
-        return false;
-    }
-
-    /* Generate a fresh IV/nonce. */
-    tls_random_bytes(io->iv, iv_len);
-
-    /* Compute actual ciphertext length: CBC pads partial last block; all others
-     * are same length as plaintext. */
     size_t ct_len;
     if (mode == TLS_AES_CBC)
     {
@@ -821,43 +900,45 @@ static bool aes_encrypt_oneshot(tls_alg_t alg,
         ct_len = in_len;
     }
 
+    if (!tls_rng_healthcheck())
+        return NULL;
+
+    uint8_t *iv, *ct, *tag;
+    uint8_t *blob = encrypt_blob_alloc(iv_len, ct_len, tag_len, &iv, &ct, &tag);
+    if (!blob)
+        return NULL;
+
+    tls_random_bytes(iv, iv_len);
+
+    bool ok = false;
+    memset(&ctx, 0, sizeof(ctx));
+
     if (mode == TLS_AES_CCM)
     {
-        if (!tls_aes_ccm_encrypt(key_data, key_len,
-                                  io->iv, iv_len,
+        ok = tls_aes_ccm_encrypt(key_data, key_len,
+                                  iv, iv_len,
                                   aad, aad_len,
                                   inbuf, in_len,
-                                  io->obuf, io->tag, TLS_KEY_AES_TAG_LEN))
-        {
-            goto cleanup;
-        }
-        ok = true;
+                                  ct, tag, TLS_KEY_AES_TAG_LEN);
     }
     else
     {
-        if (!tls_aes_init(&ctx, mode, key_data, key_len, io->iv, iv_len))
+        if (tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
+            (!aad || !aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
+            tls_aes_encrypt(&ctx, inbuf, in_len, ct) &&
+            (!aead || tls_aes_digest(&ctx, tag)))
         {
-            goto cleanup;
+            ok = true;
         }
-        if (aad && aad_len && !tls_aes_update_aad(&ctx, aad, aad_len))
-        {
-            goto cleanup;
-        }
-        if (!tls_aes_encrypt(&ctx, inbuf, in_len, io->obuf))
-        {
-            goto cleanup;
-        }
-        if (key_is_aead(alg) && !tls_aes_digest(&ctx, io->tag))
-        {
-            goto cleanup;
-        }
-        ok = true;
+        tls_secure_memzero(&ctx, sizeof(ctx));
     }
-    io->obuf_len = ct_len;
 
-cleanup:
-    tls_secure_memzero(&ctx, sizeof(ctx));
-    return ok;
+    if (!ok)
+    {
+        tls_cipher_blob_free(blob);
+        return NULL;
+    }
+    return blob;
 }
 
 
@@ -865,24 +946,50 @@ cleanup:
  * Public API
  * --------------------------------------------------------------------------- */
 
-bool tls_key_encrypt(struct tls_key *key,
-                     const uint8_t *inbuf, size_t in_len,
-                     struct tls_key_cipher_io *io)
+void tls_cipher_blob_free(uint8_t *buf)
 {
-    if (!key || !inbuf || !io)
-    {
-        return false;
-    }
+    tls_fileio_free(buf);
+}
 
-    switch (key->alg)
+uint8_t *tls_cipher_blob_assemble(const uint8_t *iv,  size_t iv_len,
+                                   const uint8_t *ct,  size_t ct_len,
+                                   const uint8_t *tag, size_t tag_len)
+{
+    uint8_t *iv_p, *ct_p, *tag_p;
+    uint8_t *blob = encrypt_blob_alloc(iv_len, ct_len, tag_len,
+                                        &iv_p, &ct_p, &tag_p);
+    if (!blob)
+        return NULL;
+    if (iv_len && iv)   memcpy(iv_p,  iv,  iv_len);
+    if (ct_len && ct)   memcpy(ct_p,  ct,  ct_len);
+    if (tag_len && tag) memcpy(tag_p, tag, tag_len);
+    return blob;
+}
+
+uint8_t *tls_cipher_encrypt(const struct tls_key *key, tls_alg_t alg,
+                          const uint8_t *in, size_t in_len)
+{
+    if (!key || !tls_key_supports_operation(key, alg) || !in)
+        return NULL;
+
+    switch (alg)
     {
         case TLS_ALG_RSA_OAEP_SHA256:
-            if (!io->obuf)
+        {
+            if (!tls_rng_healthcheck())
+                return NULL;
+            uint8_t *iv_p, *ct_p, *tag_p;
+            uint8_t *blob = encrypt_blob_alloc(0, key->rsa.mod_len, 0,
+                                                &iv_p, &ct_p, &tag_p);
+            if (!blob)
+                return NULL;
+            if (!tls_rsa_encrypt(in, in_len, ct_p, &key->rsa, TLS_HASH_SHA256))
             {
-                return false;
+                tls_cipher_blob_free(blob);
+                return NULL;
             }
-            return tls_rsa_encrypt(inbuf, in_len, io->obuf,
-                                   &key->rsa, TLS_HASH_SHA256);
+            return blob;
+        }
 
         case TLS_ALG_AES_128_GCM:
         case TLS_ALG_AES_256_GCM:
@@ -890,36 +997,25 @@ bool tls_key_encrypt(struct tls_key *key,
         case TLS_ALG_AES_256_CCM:
         case TLS_ALG_AES_128_CBC:
         case TLS_ALG_AES_256_CBC:
-            return aes_encrypt_oneshot(key->alg,
-                                       key->aes.data, key->aes.len,
-                                       NULL, 0,
-                                       inbuf, in_len, io);
+            return aes_encrypt_oneshot(alg, key->aes.data, key->aes.len,
+                                       NULL, 0, in, in_len);
 
         default:
-            return false;
+            return NULL;
     }
 }
 
-bool tls_key_encrypt_aad(struct tls_key *key,
-                         const uint8_t *aad, size_t aad_len,
-                         const uint8_t *inbuf, size_t in_len,
-                         struct tls_key_cipher_io *io)
+uint8_t *tls_cipher_encrypt_aad(const struct tls_key *key, tls_alg_t alg,
+                               const uint8_t *aad, size_t aad_len,
+                               const uint8_t *in, size_t in_len)
 {
-    if (!key || !inbuf || !io)
-    {
-        return false;
-    }
+    if (!key || !tls_key_supports_operation(key, alg) || !in)
+        return NULL;
 
-    switch (key->alg)
+    switch (alg)
     {
         case TLS_ALG_RSA_OAEP_SHA256:
-            /* AAD not applicable to RSA-OAEP here; treat as plain encrypt. */
-            if (!io->obuf)
-            {
-                return false;
-            }
-            return tls_rsa_encrypt(inbuf, in_len, io->obuf,
-                                   &key->rsa, TLS_HASH_SHA256);
+            return tls_cipher_encrypt(key, alg, in, in_len);
 
         case TLS_ALG_AES_128_GCM:
         case TLS_ALG_AES_256_GCM:
@@ -927,100 +1023,110 @@ bool tls_key_encrypt_aad(struct tls_key *key,
         case TLS_ALG_AES_256_CCM:
         case TLS_ALG_AES_128_CBC:
         case TLS_ALG_AES_256_CBC:
-            return aes_encrypt_oneshot(key->alg,
-                                       key->aes.data, key->aes.len,
-                                       aad, aad_len,
-                                       inbuf, in_len, io);
+            return aes_encrypt_oneshot(alg, key->aes.data, key->aes.len,
+                                       aad, aad_len, in, in_len);
 
         default:
-            return false;
+            return NULL;
     }
 }
 
-bool tls_key_decrypt(struct tls_key *key,
-                     struct tls_key_cipher_io *io,
-                     uint8_t *outbuf, size_t outbuf_len)
+uint8_t *tls_cipher_decrypt(const struct tls_key *key, tls_alg_t alg,
+                          const uint8_t *blob)
 {
-    return tls_key_decrypt_aad(key, NULL, 0, io, outbuf, outbuf_len);
+    return tls_cipher_decrypt_aad(key, alg, NULL, 0, blob);
 }
 
-bool tls_key_decrypt_aad(struct tls_key *key,
-                         const uint8_t *aad, size_t aad_len,
-                         struct tls_key_cipher_io *io,
-                         uint8_t *outbuf, size_t outbuf_len)
+uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
+                               const uint8_t *aad, size_t aad_len,
+                               const uint8_t *blob)
 {
-    if (!key || !io || !io->iv || !io->obuf || !outbuf || outbuf_len < io->obuf_len)
-    {
-        return false;
-    }
+    if (!key || !tls_key_supports_operation(key, alg) || !blob)
+        return NULL;
 
-    switch (key->alg)
+    size_t iv_len, ct_len, tag_len;
+    const uint8_t *iv, *ct, *tag;
+    if (!encrypt_blob_parse(blob, &iv_len, &iv, &ct_len, &ct, &tag_len, &tag))
+        return NULL;
+
+    switch (alg)
     {
         case TLS_ALG_RSA_OAEP_SHA256:
-            /* AAD not applicable to RSA-OAEP; aad is ignored. */
-            if (io->obuf_len > RSA_TRANSIENT_SIZE)
-            {
-                return false;
-            }
-            {
-                bool ok = false;
-                if (tls_rsa_decrypt_signature(io->obuf, io->obuf_len, __rsa_transient, &key->rsa))
-                {
-                    ok = tls_rsa_decode_oaep(__rsa_transient, io->obuf_len,
-                                             outbuf, NULL, TLS_HASH_SHA256) > 0;
-                }
-                tls_secure_memzero(__rsa_transient, io->obuf_len);
-                return ok;
-            }
+        {
+            if (ct_len > RSA_TRANSIENT_SIZE)
+                return NULL;
+            if (!tls_rsa_decrypt_signature(ct, ct_len, __rsa_transient, &key->rsa))
+                return NULL;
+            uint8_t tmp[RSA_TRANSIENT_SIZE];
+            size_t plen = tls_rsa_decode_oaep(__rsa_transient, ct_len,
+                                               tmp, NULL, TLS_HASH_SHA256);
+            tls_secure_memzero(__rsa_transient, ct_len);
+            if (plen == 0)
+                return NULL;
+            uint8_t *plain;
+            uint8_t *out = decrypt_blob_alloc(plen, &plain);
+            if (!out)
+                return NULL;
+            memcpy(plain, tmp, plen);
+            tls_secure_memzero(tmp, plen);
+            return out;
+        }
 
         case TLS_ALG_AES_128_GCM:
         case TLS_ALG_AES_256_GCM:
         case TLS_ALG_AES_128_CBC:
         case TLS_ALG_AES_256_CBC:
         {
-            if (key_is_aead(key->alg) && !io->tag)
-            {
-                return false;
-            }
+            if (iv_len == 0 || (key_is_aead(alg) && tag_len == 0))
+                return NULL;
+            uint8_t *plain;
+            uint8_t *out = decrypt_blob_alloc(ct_len, &plain);
+            if (!out)
+                return NULL;
             struct tls_aes_context ctx;
-            size_t iv_len = key_iv_len(key->alg);
             bool ok = false;
-            if (!tls_aes_init(&ctx, key_aes_mode(key->alg),
-                              key->aes.data, key->aes.len, io->iv, iv_len))
+            if (tls_aes_init(&ctx, key_aes_mode(alg),
+                              key->aes.data, key->aes.len, iv, iv_len))
             {
-                goto gcm_cbc_cleanup;
-            }
-            if (key_is_aead(key->alg))
-            {
-                if (!tls_aes_verify(&ctx, aad, aad_len,
-                                    io->obuf, io->obuf_len, io->tag))
+                if (!key_is_aead(alg) ||
+                    tls_aes_verify(&ctx, aad, aad_len, ct, ct_len, tag))
                 {
-                    goto gcm_cbc_cleanup;
+                    if (tls_aes_decrypt(&ctx, ct, ct_len, plain))
+                        ok = true;
                 }
             }
-            if (tls_aes_decrypt(&ctx, io->obuf, io->obuf_len, outbuf))
-            {
-                ok = true;
-            }
-gcm_cbc_cleanup:
             tls_secure_memzero(&ctx, sizeof(ctx));
-            return ok;
+            if (!ok)
+            {
+                tls_cipher_blob_free(out);
+                return NULL;
+            }
+            return out;
         }
 
         case TLS_ALG_AES_128_CCM:
         case TLS_ALG_AES_256_CCM:
-            if (!io->tag)
+        {
+            if (iv_len == 0 || tag_len == 0)
+                return NULL;
+            uint8_t *plain;
+            uint8_t *out = decrypt_blob_alloc(ct_len, &plain);
+            if (!out)
+                return NULL;
+            if (!tls_aes_ccm_decrypt(key->aes.data, key->aes.len,
+                                      iv, iv_len,
+                                      aad, aad_len,
+                                      ct, ct_len,
+                                      tag, TLS_KEY_AES_TAG_LEN,
+                                      plain))
             {
-                return false;
+                tls_cipher_blob_free(out);
+                return NULL;
             }
-            return tls_aes_ccm_decrypt(key->aes.data, key->aes.len,
-                                        io->iv, key_iv_len(key->alg),
-                                        aad, aad_len,
-                                        io->obuf, io->obuf_len,
-                                        io->tag, TLS_KEY_AES_TAG_LEN,
-                                        outbuf);
+            return out;
+        }
 
         default:
-            return false;
+            return NULL;
     }
 }

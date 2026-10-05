@@ -7,19 +7,6 @@ Most callers should use the :doc:`key API <../using-cryptography>` in
 
 ------
 
-Symmetric Encryption
---------------------
-
-AES-GCM, AES-CBC, and AES-CCM are available for symmetric encryption.
-Most callers should use the :ref:`Key API <key-api>` below, which wraps the AES
-primitives in a self-describing handle and handles IV generation, tag
-verification, and algorithm dispatch automatically.
-
-For direct access to the AES context API and one-shot CCM helpers, see
-:doc:`api/crypto/aes`.
-
-------
-
 .. list-table::
    :header-rows: 1
    :widths: 28 72

@@ -85,8 +85,8 @@
  * NOT a substitute for SNTP: it only rules out "clock reads before this
  * library was released," not "clock is accurate." Bump this manually each
  * release; do not try to keep it in sync with the actual build date
- * automatically. Currently: 2026-06-21T00:00:00Z. */
-#define LWIP_MIN_PLAUSIBLE_CLOCK_UNIX 1782000000u
+ * automatically. Currently: 2026-10-04T00:00:00Z. */
+#define LWIP_MIN_PLAUSIBLE_CLOCK_UNIX 1791086400u
 
 static bool g_lwip_stack_started = false;
 static bool g_lwip_started = false;

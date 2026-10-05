@@ -174,6 +174,7 @@
 #include "../includes/hkdf.h"
 #include "../includes/asn1.h"
 #include "../includes/rsa.h"
+#include "x509_internal.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
 #include "../includes/x509.h"
@@ -398,10 +399,9 @@ static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
  * When CS_CERT_BODY completes, the walker invokes tls_cert_walker_validate_one
  * on that cert: verify-leaf-first (capture the leaf SPKI that CertificateVerify
  * will authenticate against), then walk the chain link-by-link. The per-link
- * signature check is currently a stub that accepts (see
- * tls_cert_chain_verify_one) until P-256/RSA chain verification and an
- * issuer-key truststore exist. The walker captures ZERO bytes between certs —
- * once a cert is processed, its buffer is freed and we move on.
+ * signature check dispatches using the signed certificate's algorithm.
+ * Once a cert is processed its buffer is freed; only its digest, signature,
+ * and scheme survive until the issuer arrives.
  * ------------------------------------------------------------------------ */
 
 enum tls_cert_walk_state
@@ -434,8 +434,8 @@ struct tls_cert_walker
     size_t cert_buf_len;
     /* True once the leaf SPKI has been captured (so CertificateVerify can run)
      * and every cert walked so far passed chain verification. The actual
-     * cert-to-cert signature check is currently stubbed to accept — see
-     * tls_cert_chain_verify_one(). Leaf authenticity is established separately
+     * cert-to-cert signature check rejects invalid or unsupported signatures.
+     * Leaf proof of possession is established separately
      * by the mandatory CertificateVerify record against the captured leaf
      * SPKI. */
     bool chain_validated;
@@ -453,12 +453,11 @@ struct tls_cert_walker
      * cert N+1), but N+1 arrives only after N. So when a cert finishes we
      * stash the material needed to verify it — the SHA-256 digest of its
      * tbsCertificate and a copy of its signatureValue — and run the actual
-     * RSA verify once the next cert's public key is in hand. The topmost
-     * cert has no issuer in the chain and is left unverified (adjacent-links
-     * only; see tls_cert_chain_verify_one). Only RSA-2048/sha256WithRSA links
-     * are verified; other signature types are accepted with an ALERT. */
+     * verification once the next cert's public key is in hand. The topmost
+     * cert is checked against the truststore when an issuer entry is found.
+     * RSA PKCS#1 v1.5 and PSS with SHA-256 are implemented. */
     bool pending_link;             /* a prior cert is awaiting its issuer key */
-    bool pending_is_rsa_sha256;    /* prior cert used sha256WithRSAEncryption  */
+    tls_alg_t pending_sig_alg;     /* scheme from the signed certificate */
     uint8_t pending_tbs_digest[32];/* SHA-256(tbsCertificate) of prior cert    */
     uint8_t *pending_sig;          /* signatureValue of prior cert (heap copy) */
     size_t pending_sig_len;
@@ -509,20 +508,20 @@ static void tls_cert_walker_free(struct tls_cert_walker *w)
 /* Pull the bits needed to verify a cert's issuer signature out of its DER:
  *   Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signature }
  * Captures the full tbsCertificate TLV bytes (what the signature covers),
- * whether signatureAlgorithm is sha256WithRSAEncryption, and the raw
+ * the validated signature scheme, and the raw
  * signature bytes (BIT STRING content, unused-bits byte stripped).
- * Returns false only on malformed DER. */
+ * Returns false on malformed DER or unsupported signature parameters. */
 static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
                                           const uint8_t **tbs_out,
                                           size_t *tbs_len_out,
-                                          bool *is_rsa_sha256_out,
+                                          tls_alg_t *sig_alg_out,
                                           const uint8_t **sig_out,
                                           size_t *sig_len_out)
 {
-    struct tls_asn1_cursor top, items, alg_body;
-    struct tls_asn1_tlv cert_seq, tbs, sig_alg, sig_val, alg_oid;
+    struct tls_asn1_cursor top, items;
+    struct tls_asn1_tlv cert_seq, tbs, sig_alg, sig_val;
 
-    *is_rsa_sha256_out = false;
+    *sig_alg_out = TLS_ALG_UNKNOWN;
 
     if (!tls_asn1_cursor_init(&top, der, der_len) ||
         !tls_asn1_next(&top, &cert_seq) ||
@@ -549,19 +548,20 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
     *tbs_out = tbs.tlv;
     *tbs_len_out = tbs.header_len + tbs.len;
 
-    /* signatureAlgorithm: AlgorithmIdentifier { OID, params }. Flag the one
-     * algorithm we verify (sha256WithRSAEncryption); leave the flag false for
-     * anything else so the caller can ALERT-and-accept. */
-    if (tls_asn1_tag_constructed(sig_alg.tag) &&
-        tls_asn1_tag_number(sig_alg.tag) == ASN1_SEQUENCE &&
-        tls_asn1_child_cursor(&sig_alg, &alg_body) &&
-        tls_asn1_next(&alg_body, &alg_oid) &&
-        tls_asn1_tag_number(alg_oid.tag) == ASN1_OBJECTID &&
-        (tls_x509_oid_to_sig_alg(alg_oid.value, alg_oid.len) == TLS_ALG_RSA_PKCS1_SHA256 ||
-         tls_x509_oid_to_sig_alg(alg_oid.value, alg_oid.len) == TLS_ALG_RSA_PSS_RSAE_SHA256))
-    {
-        *is_rsa_sha256_out = true;
-    }
+    if (!tls_x509_signature_algorithm(&sig_alg, sig_alg_out))
+        return false;
+
+    /* The signed inner AlgorithmIdentifier must agree with the outer one. */
+    struct tls_asn1_cursor body;
+    struct tls_asn1_tlv serial, inner_alg;
+    if (!tls_asn1_child_cursor(&tbs, &body) || !tls_asn1_next(&body, &serial))
+        return false;
+    if (serial.tag == 0xa0 && !tls_asn1_next(&body, &serial))
+        return false;
+    if (serial.tag != ASN1_INTEGER || !tls_asn1_next(&body, &inner_alg) ||
+        inner_alg.tag != sig_alg.tag || inner_alg.len != sig_alg.len ||
+        memcmp(inner_alg.value, sig_alg.value, sig_alg.len))
+        return false;
 
     /* signatureValue BIT STRING: first content byte is the unused-bits count
      * (0 for a byte-aligned signature); the rest is the signature. */
@@ -574,84 +574,37 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
     return true;
 }
 
-/*
- * Walk one link in the certificate chain (adjacent links only).
- *
- * A cert is signed by the NEXT cert in the wire chain (cert N signed-by cert
- * N+1's key), but N+1 has not arrived yet when N completes. So this defers:
- * it verifies the PREVIOUSLY stashed cert (if any) using THIS cert's public
- * key, then stashes this cert's own signature material for the next call.
- * The topmost cert is never stashed-then-verified — it has no issuer in the
- * chain — so the very top link is left unverified (we do not anchor to a
- * truststore root here; see the cert roadmap).
- *
- * Verification policy:
- *   - RSA-2048 + sha256WithRSAEncryption link: verified for real. A bad
- *     signature emits an ERROR and aborts the handshake (returns false).
- *   - any other signature type: NOT verified — emits an ALERT
- *     ("unsupported cert type, proceeding") and accepts the link.
- *
- * @param w           Walker (holds ctx, chain position, and the pending stash).
- * @param cert        Parsed certificate (pubkey used as issuer key of pending cert).
- * @param is_leaf     True for cert_index 0.
- * @return true if acceptable. Returning false aborts the chain.
- */
+/* Bind the certificate's signature scheme to a compatible issuer key.
+ * The issuer's key algorithm does not choose the child's signature padding. */
+static tls_key_op_result_t tls_cert_verify_digest(tls_alg_t scheme,
+                                                 const struct tls_key *issuer,
+                                                 const uint8_t digest[32],
+                                                 const uint8_t *sig, size_t sig_len)
+{
+    return tls_x509_signature_verify_digest(digest, sig, sig_len, issuer, scheme);
+}
+
+/* Verify the deferred child with this issuer, then retain this certificate's
+ * signature scheme, SHA-256 digest and signature for the next issuer/root. */
 static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
                                       const struct tls_x509_object *cert,
                                       bool is_leaf)
 {
     const uint8_t *tbs, *sig;
     size_t tbs_len, sig_len;
-    bool is_rsa_sha256;
+    tls_alg_t sig_alg;
 
     /* Step 1: if a prior cert is awaiting its issuer key, THIS cert is that
      * issuer — verify the pending link now. */
     if (w->pending_link)
     {
-        bool verified_or_accepted = false;
-
-        if (w->pending_is_rsa_sha256)
+        if (tls_cert_verify_digest(w->pending_sig_alg, &cert->pubkey,
+                                   w->pending_tbs_digest, w->pending_sig,
+                                   w->pending_sig_len) != TLS_KEY_OP_OK)
         {
-            /* Issuer key is this cert's pubkey. Only RSA issuers can have
-             * signed an RSA-SHA256 link; a non-RSA issuer means unsupported
-             * (ALERT + accept). */
-            if ((cert->pubkey.alg == TLS_ALG_RSA_PKCS1_SHA256 ||
-                 cert->pubkey.alg == TLS_ALG_RSA_PSS_RSAE_SHA256) &&
-                cert->pubkey.rsa.modulus && cert->pubkey.rsa.mod_len > 0)
-            {
-                struct tls_key issuer_key = {
-                    .alg = TLS_ALG_RSA_PKCS1_SHA256,
-                    .rsa = cert->pubkey.rsa,
-                };
-                tls_key_op_result_t vr = tls_x509_signature_verify_digest(
-                    w->pending_tbs_digest,
-                    w->pending_sig, w->pending_sig_len,
-                    &issuer_key);
-                if (vr == TLS_KEY_OP_OK)
-                {
-                    verified_or_accepted = true;
-                }
-                else
-                {
-                    /* RSA-2048 link that genuinely failed to verify: the chain
-                     * is broken or tampered. ERROR + abort. */
-                    ERROR();
-                    return false;
-                }
-            }
-            else
-            {
-                /* Issuer isn't an RSA key we can use: unsupported. */
-                WARN();
-                verified_or_accepted = true;
-            }
-        }
-        else
-        {
-            /* Pending cert's signature wasn't RSA-SHA256 (e.g. ECDSA): we
-             * don't verify it. Proceed, but tell the caller. */
-            WARN();
-            verified_or_accepted = true;
+            /* Unsupported schemes and incompatible keys are not verified. */
+            ERROR();
+            return false;
         }
 
         /* Stash consumed. */
@@ -663,19 +616,14 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         }
         w->pending_sig_len = 0;
         w->pending_link = false;
-        w->pending_is_rsa_sha256 = false;
-
-        if (!verified_or_accepted)
-        {
-            return false;
-        }
+        w->pending_sig_alg = TLS_ALG_UNKNOWN;
     }
 
     /* Step 2: stash THIS cert's signature material so the next cert (its
      * issuer) can verify it. Pre-hash the tbs now so we don't have to retain
      * the cert buffer — only the 32-byte digest and the signature survive. */
     if (!tls_cert_extract_sig_material(w->cert_buf, w->cert_buf_len, &tbs,
-                                       &tbs_len, &is_rsa_sha256, &sig, &sig_len))
+                                       &tbs_len, &sig_alg, &sig, &sig_len))
     {
         return false;
     }
@@ -692,12 +640,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
      * call returns). Cap at the max RSA modulus we support. */
     if (sig_len == 0 || sig_len > RSA_MODULUS_MAX_SUPPORTED)
     {
-        /* Signature we could never verify with our RSA path: don't stash it
-         * for verification, but the link itself is still "unsupported" rather
-         * than malformed — record that only when it later goes unverified. */
-        w->pending_is_rsa_sha256 = false;
-        w->pending_sig = NULL;
-        w->pending_sig_len = 0;
+        return false;
     }
     else
     {
@@ -709,7 +652,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         mem_stats_tls_direct_add(sig_len, sig_len);
         memcpy(w->pending_sig, sig, sig_len);
         w->pending_sig_len = sig_len;
-        w->pending_is_rsa_sha256 = is_rsa_sha256;
+        w->pending_sig_alg = sig_alg;
     }
     w->pending_link = true;
     (void)is_leaf;
@@ -736,8 +679,9 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         INFO("cert: parse fail");
         return false;
     }
-    if (cert.pubkey.alg == TLS_ALG_UNKNOWN ||
-        (cert.pubkey.rsa.mod_len == 0 && cert.pubkey.ec.len == 0))
+    if (cert.pubkey.type == TLS_KEY_TYPE_UNKNOWN ||
+        ((cert.pubkey.type == TLS_KEY_TYPE_RSA)
+             ? cert.pubkey.rsa.mod_len == 0 : cert.pubkey.ec.len == 0))
     {
         INFO("cert: spki fail");
         return false;
@@ -765,11 +709,11 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 
     /* Capture the leaf public key for CertificateVerify.  We need it to
      * survive past this function, so copy the key material into a heap block
-     * and mark it allocated=true so tls_key_free() will clean it up. */
-    if (is_leaf && w->ctx && w->ctx->leaf_pubkey.alg == TLS_ALG_UNKNOWN)
+     * and mark it allocated=true for tls_handshake_cleanup(). */
+    if (is_leaf && w->ctx && w->ctx->leaf_pubkey.type == TLS_KEY_TYPE_UNKNOWN)
     {
         size_t mat_len = 0;
-        if (cert.pubkey.rsa.mod_len)
+        if (cert.pubkey.type == TLS_KEY_TYPE_RSA)
             mat_len = cert.pubkey.rsa.mod_len + cert.pubkey.rsa.exp_len;
         else if (cert.pubkey.ec.len)
             mat_len = cert.pubkey.ec.len;
@@ -788,10 +732,10 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         }
         mem_stats_tls_direct_add(mat_len, mat_len);
 
-        w->ctx->leaf_pubkey.alg       = cert.pubkey.alg;
+        w->ctx->leaf_pubkey.type       = cert.pubkey.type;
         w->ctx->leaf_pubkey.allocated = true;
 
-        if (cert.pubkey.rsa.mod_len)
+        if (cert.pubkey.type == TLS_KEY_TYPE_RSA)
         {
             memcpy(mat, cert.pubkey.rsa.modulus, cert.pubkey.rsa.mod_len);
             memcpy(mat + cert.pubkey.rsa.mod_len,
@@ -827,7 +771,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         return false;
     }
 
-    if (w->ctx && w->ctx->leaf_pubkey.alg != TLS_ALG_UNKNOWN)
+    if (w->ctx && w->ctx->leaf_pubkey.type != TLS_KEY_TYPE_UNKNOWN)
         w->chain_validated = true;
 
     INFO("cert: accepted");
@@ -1512,6 +1456,7 @@ bool tls_handshake_init(
     INFO("init: clear context");
     /* Clear context */
     tls_secure_memzero(ctx, sizeof(*ctx));
+    ctx->leaf_pubkey.type = TLS_KEY_TYPE_UNKNOWN;
 
     /* Copy PSK and identity (NULL = pure ECDHE mode, PSK stays zeroed) */
     if (psk && psk_identity)
@@ -1665,7 +1610,7 @@ bool tls_send_client_hello(
     /* Fixed ClientHello body before extensions is 43 bytes. The constants
      * below include the 4-byte handshake header so the unchecked serializer
      * cannot overrun a too-small caller buffer. */
-    required_ext_len = 7 + 8 + 42 + 8 + 12 + 15 + sni_len;
+    required_ext_len = 7 + 8 + 42 + 8 + 10 + 15 + sni_len;
     if (ctx->psk_mode)
     {
         required_ext_len += 7 + 47 + ctx->psk_identity.identity_len;
@@ -1769,19 +1714,17 @@ bool tls_send_client_hello(
 
     /* Extension 5: signature_algorithms_cert.
      * Advertise algorithms we can verify in cert chains: RSA PKCS#1-v1.5-SHA256,
-     * RSA-PSS-SHA256, and ECDSA-P256-SHA256. */
+     * RSA-PSS-SHA256. ECDSA verification is not implemented. */
     out[offset++] = 0x00;
     out[offset++] = 0x32; /* Extension type: signature_algorithms_cert */
     out[offset++] = 0x00;
-    out[offset++] = 0x08; /* Extension length: 8 */
+    out[offset++] = 0x06; /* Extension length: 6 */
     out[offset++] = 0x00;
-    out[offset++] = 0x06; /* Signature algorithms list length: 6 */
+    out[offset++] = 0x04; /* Signature algorithms list length: 4 */
     out[offset++] = 0x04;
     out[offset++] = 0x01; /* rsa_pkcs1_sha256 */
     out[offset++] = 0x08;
     out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
-    out[offset++] = 0x04;
-    out[offset++] = 0x03; /* ecdsa_secp256r1_sha256 */
 
     /* Extension 6: ALPN (application_layer_protocol_negotiation).
      * Advertise HTTP/1.1 explicitly. Some HTTP front doors (e.g. large CDNs /
@@ -2243,7 +2186,7 @@ bool tls_recv_server_hello(
  * Called by tls_consume_handshake_buffer when the cert walker reaches
  * CW_DONE. Checks the state/PSK gates and requires w->chain_validated, which
  * now means "the leaf SPKI was captured and every chain link the walker checked
- * passed" (the per-link check is currently stubbed to accept). It does NOT mean
+ * passed". It does NOT mean
  * a truststore root-pin matched. Real server authentication still happens next,
  * in the mandatory CertificateVerify record against the captured leaf SPKI.
  * The walker has already updated the transcript hash incrementally as bytes
@@ -2294,6 +2237,11 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
             if (root_rsa)
             {
                 /* Extract stored exp (uint24_t LE) and modulus from key[]. */
+                if (root_entry->len < sizeof(struct tls_truststore_entry))
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    return false;
+                }
                 size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
                 if (key_len >= 3 + RSA_MODULUS_MIN_SUPPORTED &&
                     w->pending_link && w->pending_sig)
@@ -2317,18 +2265,14 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     if (mod_len >= RSA_MODULUS_MIN_SUPPORTED &&
                         mod_len <= RSA_MODULUS_MAX_SUPPORTED)
                     {
-                        tls_alg_t tls_alg =
-                            (alg == TLS_CERT_SIG_RSA_PSS_SHA256)
-                                ? TLS_ALG_RSA_PSS_RSAE_SHA256
-                                : TLS_ALG_RSA_PKCS1_SHA256;
                         struct tls_key root_tls_key = {
-                            .alg = tls_alg,
+                            .type = TLS_KEY_TYPE_RSA,
                             .rsa = root_key,
                         };
-                        verified = (tls_x509_signature_verify_digest(
+                        verified = (tls_cert_verify_digest(
+                                        w->pending_sig_alg, &root_tls_key,
                                         w->pending_tbs_digest,
-                                        w->pending_sig, w->pending_sig_len,
-                                        &root_tls_key) == TLS_KEY_OP_OK);
+                                        w->pending_sig, w->pending_sig_len) == TLS_KEY_OP_OK);
                     }
 
                     if (!verified)
@@ -2338,11 +2282,17 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                         return false;
                     }
                 }
+                else
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    return false;
+                }
             }
             else
             {
-                /* Root alg not yet supported (e.g. ECDSA). Warn and accept. */
-                WARN();
+                /* No verifier is implemented for this truststore key type. */
+                ctx->state = TLS_STATE_ERROR;
+                return false;
             }
         }
         else
@@ -2577,7 +2527,7 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     uint8_t *em = NULL;
     bool ok = false;
 
-    if (!ctx || ctx->leaf_pubkey.alg == TLS_ALG_UNKNOWN ||
+    if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_RSA ||
         !sig || sig_len == 0)
     {
         return false;
@@ -2585,12 +2535,18 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
 
     const struct tls_rsa_key *rsa = &ctx->leaf_pubkey.rsa;
     if (!rsa->modulus || rsa->mod_len == 0)
+    {
+        INFO("certverify: no rsa key");
         return false;
+    }
 
     /* TLS 1.3 PSS uses salt length == hash length, so the signature must
      * exactly match the modulus size in bytes. */
     if (sig_len != rsa->mod_len)
+    {
+        INFO("certverify: len mismatch");
         return false;
+    }
 
     /* Build the signed-content digest. */
     if (!ctx->transcript_hash)
@@ -2615,11 +2571,13 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     em = __rsa_transient;
     if (!tls_rsa_decrypt_signature(sig, sig_len, em, rsa))
     {
+        INFO("certverify: rsa decrypt fail");
         goto cleanup;
     }
     if (!tls_rsa_pss_verify(em, rsa->mod_len, message_hash, sizeof(message_hash),
                             TLS_HASH_SHA256))
     {
+        INFO("certverify: pss verify fail");
         goto cleanup;
     }
     ok = true;
@@ -2687,7 +2645,7 @@ static bool tls_recv_certificate_verify(
         return false;
     }
 
-    if (ctx->leaf_pubkey.alg == TLS_ALG_UNKNOWN)
+    if (ctx->leaf_pubkey.type == TLS_KEY_TYPE_UNKNOWN)
     {
         /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
          * CertificateVerify without a leaf is unverifiable; fail closed. */
@@ -3788,12 +3746,13 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
         /* Key material was heap-copied in tls_cert_walker_validate_one.
          * The allocation covers both modulus and exponent (or EC point)
          * contiguously; free via the modulus pointer (always the start). */
-        size_t mat_len = ctx->leaf_pubkey.rsa.mod_len + ctx->leaf_pubkey.rsa.exp_len;
-        if (mat_len == 0)
-            mat_len = ctx->leaf_pubkey.ec.len;
+        bool is_rsa = ctx->leaf_pubkey.type == TLS_KEY_TYPE_RSA;
+        size_t mat_len = is_rsa
+            ? ctx->leaf_pubkey.rsa.mod_len + ctx->leaf_pubkey.rsa.exp_len
+            : ctx->leaf_pubkey.ec.len;
         if (mat_len > 0)
         {
-            const uint8_t *mat = ctx->leaf_pubkey.rsa.modulus
+            const uint8_t *mat = is_rsa
                                  ? ctx->leaf_pubkey.rsa.modulus
                                  : ctx->leaf_pubkey.ec.data;
             mem_stats_tls_direct_release(mat_len, mat_len);
@@ -3809,6 +3768,7 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     tls_secure_memzero(ctx->ecdhe_public, sizeof(ctx->ecdhe_public));
     tls_secure_memzero(&ctx->keys, sizeof(ctx->keys));
     tls_secure_memzero(ctx, sizeof(*ctx));
+    ctx->leaf_pubkey.type = TLS_KEY_TYPE_UNKNOWN;
 }
 
 /*

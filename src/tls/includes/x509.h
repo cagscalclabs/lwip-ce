@@ -55,11 +55,13 @@ bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_l
 /**
  * @brief Map a DER-encoded OID to an algorithm identifier.
  *
- * Recognises the three algorithms currently supported:
+ * Recognises these signature algorithm OIDs (ECDSA verification is unimplemented):
  *   - sha256WithRSAEncryption (1.2.840.113549.1.1.11) → TLS_ALG_RSA_PKCS1_SHA256
  *   - id-RSASSA-PSS           (1.2.840.113549.1.1.10) → TLS_ALG_RSA_PSS_RSAE_SHA256
  *   - ecdsa-with-SHA256       (1.2.840.10045.4.3.2)   → TLS_ALG_ECDSA_SECP256R1_SHA256
  *
+ * Also maps rsaEncryption (a public-key OID) to TLS_ALG_RSA_PKCS1_SHA256.
+ * This OID-only helper does not validate PSS parameters or key restrictions.
  * Any unrecognised OID returns TLS_ALG_UNKNOWN.
  *
  * @param oid      Pointer to the raw DER OID value bytes (excluding the 0x06 tag and length).
@@ -69,9 +71,9 @@ bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_l
 tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len);
 
 /**
- * @brief Verify a signature over arbitrary content using a self-describing key.
+ * @brief Verify a signature over arbitrary content using a key and an explicit signature scheme.
  *
- * Dispatches on key->alg:
+ * Dispatches on alg after checking the key type:
  *   - TLS_ALG_RSA_PKCS1_SHA256       → RSASSA-PKCS1-v1.5 SHA-256
  *   - TLS_ALG_RSA_PSS_RSAE_SHA256    → RSASSA-PSS SHA-256 (saltLen=32)
  *   - TLS_ALG_ECDSA_SECP256R1_SHA256 → TLS_KEY_OP_UNSUPPORTED
@@ -83,12 +85,13 @@ tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len);
  * @param content_len  Length of @p content.
  * @param sig          Raw signature bytes.
  * @param sig_len      Length of @p sig.
- * @param key          Self-describing key; key->alg drives dispatch.
+ * @param key          Self-describing key; key->type identifies its material.
+ * @param alg       Signature scheme to verify.
  * @return  tls_key_op_result_t describing the outcome.
  */
 tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t content_len,
                                                const uint8_t *sig, size_t sig_len,
-                                               const struct tls_key *key);
+                                               const struct tls_key *key, tls_alg_t alg);
 
 /**
  * @brief Verify a signature over a pre-computed SHA-256 digest.
@@ -100,12 +103,13 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
  * @param digest    32-byte SHA-256 digest of the signed content.
  * @param sig       Raw signature bytes.
  * @param sig_len   Length of @p sig.
- * @param key       Self-describing key; key->alg drives dispatch.
+ * @param key       Self-describing key; key->type identifies its material.
+ * @param alg       Signature scheme to verify.
  * @return  tls_key_op_result_t describing the outcome.
  */
 tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                                                       const uint8_t *sig, size_t sig_len,
-                                                      const struct tls_key *key);
+                                                      const struct tls_key *key, tls_alg_t alg);
 
 /**
  * @brief Check whether a leaf certificate is valid for the given hostname.
