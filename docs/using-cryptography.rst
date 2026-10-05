@@ -30,15 +30,8 @@ stack. This section will go over the modules of the cryptography API, and end wi
 
 The recommended API surface consists of:
 
-- TRNG
-- Hashing & HMAC
-- Key Operations
-- Passwords
-- Certificates
-- Byte Operations
-
 .. contents:: :local:
-   :depth: 3
+   :depth: 2
 
 -----
 
