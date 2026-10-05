@@ -598,7 +598,9 @@ originated from ``tls_cipher_encrypt()``.
 
    Encrypt with additional authenticated data (AAD). The AAD is authenticated
    but not encrypted; supply the identical bytes to the matching decrypt call.
-   RSA and CBC ignore AAD. Otherwise identical to ``tls_cipher_encrypt()``.
+   RSA-OAEP and CBC do not support AAD — passing a non-``NULL`` ``aad`` or a
+   non-zero ``aad_len`` with those algorithms returns ``NULL``.
+   Otherwise identical to ``tls_cipher_encrypt()``.
 
    :param aad: Additional authenticated data. Pass ``NULL`` and ``0`` for none.
    :param aad_len: Length of AAD in bytes.
@@ -623,9 +625,10 @@ originated from ``tls_cipher_encrypt()``.
 
 .. c:function:: uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg, const uint8_t *aad, size_t aad_len, const uint8_t *blob)
 
-   Decrypt with AAD.
-   The AAD is fed into tag verification; a mismatch returns ``NULL``. RSA and CBC
-   ignore AAD. Otherwise identical to ``tls_cipher_decrypt()``.
+   Decrypt with AAD. The AAD is fed into tag verification before any bytes are
+   decrypted; a mismatch returns ``NULL``. RSA-OAEP and CBC do not support AAD
+   — passing a non-``NULL`` ``aad`` or a non-zero ``aad_len`` with those
+   algorithms returns ``NULL``. Otherwise identical to ``tls_cipher_decrypt()``.
 
    :param aad: Additional authenticated data; must match what was passed to encrypt.
    :param aad_len: Length of AAD in bytes.
@@ -910,18 +913,20 @@ The Object
 
       Subject CommonName — raw string bytes (no NUL terminator).
 
-   .. c:member:: const uint8_t *valid_before
-   .. c:member:: size_t valid_before_len
-   .. c:member:: uint8_t valid_before_tag
+   .. c:member:: const uint8_t *not_before
+   .. c:member:: size_t not_before_len
+   .. c:member:: uint8_t not_before_tag
 
-      notAfter field: raw value bytes and the ASN.1 tag
-      (``ASN1_UTCTIME`` or ``ASN1_GENERALIZEDTIME``).
+      RFC 5280 ``notBefore`` field: raw value bytes and the ASN.1 tag
+      (``ASN1_UTCTIME`` or ``ASN1_GENERALIZEDTIME``). The certificate is not
+      valid before this time.
 
-   .. c:member:: const uint8_t *valid_after
-   .. c:member:: size_t valid_after_len
-   .. c:member:: uint8_t valid_after_tag
+   .. c:member:: const uint8_t *not_after
+   .. c:member:: size_t not_after_len
+   .. c:member:: uint8_t not_after_tag
 
-      notBefore field: raw value bytes and ASN.1 tag.
+      RFC 5280 ``notAfter`` field: raw value bytes and ASN.1 tag. The
+      certificate is not valid after this time.
 
    .. c:member:: const uint8_t *extensions
    .. c:member:: size_t extensions_len

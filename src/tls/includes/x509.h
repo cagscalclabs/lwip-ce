@@ -35,8 +35,8 @@ struct tls_x509_object
     const uint8_t *subject_cn;    size_t subject_cn_len;
 
     /* Validity window — data bytes + ASN.1 tag (UTCTime or GeneralizedTime). */
-    const uint8_t *valid_before;  size_t valid_before_len;  uint8_t valid_before_tag;
-    const uint8_t *valid_after;   size_t valid_after_len;   uint8_t valid_after_tag;
+    const uint8_t *not_before;  size_t not_before_len;  uint8_t not_before_tag;
+    const uint8_t *not_after;   size_t not_after_len;   uint8_t not_after_tag;
 
     /* Extensions content bytes (SEQUENCE OF Extension, inner of [3] EXPLICIT). */
     const uint8_t *extensions;    size_t extensions_len;

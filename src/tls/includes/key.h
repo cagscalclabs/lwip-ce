@@ -209,7 +209,8 @@ uint8_t *tls_cipher_encrypt(const struct tls_key *key, tls_alg_t alg,
 /**
  * @brief One-shot encrypt with additional authenticated data (AAD).
  *        The AAD is authenticated but not encrypted; supply the identical
- *        bytes when decrypting. RSA and CBC ignore AAD.
+ *        bytes when decrypting. RSA-OAEP and CBC do not support AAD —
+ *        a non-NULL aad or non-zero aad_len returns NULL for those algorithms.
  *        Otherwise identical to tls_cipher_encrypt().
  */
 uint8_t *tls_cipher_encrypt_aad(const struct tls_key *key, tls_alg_t alg,
@@ -239,7 +240,9 @@ uint8_t *tls_cipher_decrypt(const struct tls_key *key, tls_alg_t alg,
 /**
  * @brief One-shot decrypt with additional authenticated data.
  *        The AAD must match what was passed to tls_cipher_encrypt_aad().
- *        RSA and CBC ignore AAD. Otherwise identical to tls_cipher_decrypt().
+ *        RSA-OAEP and CBC do not support AAD — a non-NULL aad or non-zero
+ *        aad_len returns NULL for those algorithms.
+ *        Otherwise identical to tls_cipher_decrypt().
  */
 uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
                                const uint8_t *aad, size_t aad_len,

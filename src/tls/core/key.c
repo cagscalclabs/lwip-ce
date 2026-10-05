@@ -1015,14 +1015,19 @@ uint8_t *tls_cipher_encrypt_aad(const struct tls_key *key, tls_alg_t alg,
     switch (alg)
     {
         case TLS_ALG_RSA_OAEP_SHA256:
+            if (aad || aad_len) return NULL;
             return tls_cipher_encrypt(key, alg, in, in_len);
+
+        case TLS_ALG_AES_128_CBC:
+        case TLS_ALG_AES_256_CBC:
+            if (aad || aad_len) return NULL;
+            return aes_encrypt_oneshot(alg, key->aes.data, key->aes.len,
+                                       NULL, 0, in, in_len);
 
         case TLS_ALG_AES_128_GCM:
         case TLS_ALG_AES_256_GCM:
         case TLS_ALG_AES_128_CCM:
         case TLS_ALG_AES_256_CCM:
-        case TLS_ALG_AES_128_CBC:
-        case TLS_ALG_AES_256_CBC:
             return aes_encrypt_oneshot(alg, key->aes.data, key->aes.len,
                                        aad, aad_len, in, in_len);
 
@@ -1053,7 +1058,7 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
     {
         case TLS_ALG_RSA_OAEP_SHA256:
         {
-            if (ct_len > RSA_TRANSIENT_SIZE)
+            if (aad || aad_len || ct_len > RSA_TRANSIENT_SIZE)
                 return NULL;
             if (!tls_rsa_decrypt_signature(ct, ct_len, __rsa_transient, &key->rsa))
                 return NULL;
@@ -1072,10 +1077,13 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
             return out;
         }
 
-        case TLS_ALG_AES_128_GCM:
-        case TLS_ALG_AES_256_GCM:
         case TLS_ALG_AES_128_CBC:
         case TLS_ALG_AES_256_CBC:
+            if (aad || aad_len)
+                return NULL;
+            /* fall through */
+        case TLS_ALG_AES_128_GCM:
+        case TLS_ALG_AES_256_GCM:
         {
             if (iv_len == 0 || (key_is_aead(alg) && tag_len == 0))
                 return NULL;

@@ -745,10 +745,10 @@ bool tls_x509_time_in_validity(const struct tls_x509_object *cert, uint32_t now_
     if (!cert)
         return false;
 
-    if (!tls_x509_time_to_unix(cert->valid_before, cert->valid_before_len,
-                                cert->valid_before_tag, &not_before_secs) ||
-        !tls_x509_time_to_unix(cert->valid_after,  cert->valid_after_len,
-                                cert->valid_after_tag,  &not_after_secs))
+    if (!tls_x509_time_to_unix(cert->not_before, cert->not_before_len,
+                                cert->not_before_tag, &not_before_secs) ||
+        !tls_x509_time_to_unix(cert->not_after,  cert->not_after_len,
+                                cert->not_after_tag,  &not_after_secs))
     {
         return false;
     }
@@ -911,12 +911,12 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             if (na_tag != ASN1_UTCTIME && na_tag != ASN1_GENERALIZEDTIME)
                 return false;
 
-            out->valid_before     = not_before.value;
-            out->valid_before_len = not_before.len;
-            out->valid_before_tag = not_before.tag;
-            out->valid_after      = not_after.value;
-            out->valid_after_len  = not_after.len;
-            out->valid_after_tag  = not_after.tag;
+            out->not_before     = not_before.value;
+            out->not_before_len = not_before.len;
+            out->not_before_tag = not_before.tag;
+            out->not_after      = not_after.value;
+            out->not_after_len  = not_after.len;
+            out->not_after_tag  = not_after.tag;
         }
 
         /* subject CN */
