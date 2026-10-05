@@ -33,54 +33,58 @@ If you don't need fine-grained control, the socket-style API described below cov
 Creating a Socket
 ------------------
 
-First, create a socket.
+Sockets are opaque, heap-allocated handles. ``lwip_socket_create()`` returns
+an owned pointer; check it for ``NULL`` and release it with
+``lwip_socket_destroy()`` when finished. Do not embed ``struct lwip_socket``
+in another structure or allocate it on the stack. Use accessors such as
+``lwip_socket_status()`` and ``lwip_socket_last_error()`` to inspect it.
 
-.. c:function:: lwip_error_t lwip_socket_create(struct lwip_socket *socket, lwip_socket_type_t type, lwip_socket_bind_descriptor_t bind, const lwip_socket_addrinfo_t *addrinfo, uint32_t timeout_ms)
+.. c:function:: struct lwip_socket *lwip_socket_create(lwip_socket_type_t type, lwip_socket_bind_descriptor_t bind, const lwip_socket_addrinfo_t *addrinfo, uint32_t timeout_ms)
 
-   Allocate and initialize a socket handle. Non-blocking — returns immediately
-   after binding the netif preference and kicking DHCP or applying static IP.
-   Readiness is awaited asynchronously when ``lwip_socket_connect()`` is called.
+   Allocate and initialize a socket handle. Non-blocking — records the netif
+   preference, applies static IP when an interface is available, and requests
+   the services needed by the transport. The interface can appear after
+   creation; ``lwip_socket_connect()`` awaits readiness asynchronously while
+   your main loop calls ``lwip_service_events()``.
 
-   :param socket: Caller-allocated handle. Zeroed by this call. Must remain
-      valid until ``lwip_socket_destroy()``.
    :param type: Transport selector (``lwip_socket_type_t``). See table below.
    :param bind: Netif preference (``lwip_socket_bind_descriptor_t``).
-      ``LWIP_NETIF_EXT`` waits for USB Ethernet, link-up, DHCP address, and
-      gateway. ``LWIP_NETIF_ANY`` accepts loopback or external.
-      ``LWIP_NETIF_LOOP`` restricts to loopback only.
-   :param addrinfo: ``NULL`` for DHCP. Non-``NULL`` pointer to a
-      ``lwip_socket_addrinfo_t`` applies static ``ip``/``netmask``/``gateway``
-      instead of starting DHCP.
-   :param timeout_ms: Inactivity watchdog window for the connect/handshake
-      phase in milliseconds. ``0`` uses the stack default. If no progress is
-      made within this window the socket transitions to ``LWIP_STATUS_ERROR``.
-   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_MEM`` if allocation failed,
-      ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
+      ``LWIP_NETIF_EXT`` selects USB Ethernet, ``LWIP_NETIF_ANY`` accepts
+      loopback or external, and ``LWIP_NETIF_LOOP`` restricts to loopback.
+      Selecting an interface does not wait for it to become ready.
+   :param addrinfo: ``NULL`` uses DHCP on external interfaces. A non-``NULL``
+      ``lwip_socket_addrinfo_t`` supplies static ``ip``/``netmask``/``gateway``
+      instead. The address settings are copied into the socket.
+   :param timeout_ms: Inactivity watchdog window in milliseconds, covering
+      service wait, connection establishment, TLS handshake, and data transfer.
+      Network activity extends the deadline. ``0`` disables the inactivity
+      timeout; the application manages the socket's lifetime.
+   :returns: Owned socket pointer, or ``NULL`` on failure, including allocation
+      failure, invalid arguments, an unsupported transport, a stopped stack,
+      or failure to initialize the requested transport.
 
-Sockets own an internal, heap-allocated RX ring buffer that you can read from with ``lwip_socket_read()`` (more on that later). That buffer starts at 512 bytes and maxes out at 4 KiB. Should you need a larger (or smaller) max size, you can use the *extended attributes* socket creation function below.
+Sockets own an RX ring buffer read with ``lwip_socket_read()``. By default it
+starts at 512 bytes and grows up to 4 KiB. Use the extended creation function
+to choose a different maximum.
 
-.. c:function:: lwip_error_t lwip_socket_create_ex(struct lwip_socket *socket, lwip_socket_type_t type, lwip_socket_bind_descriptor_t bind, const lwip_socket_addrinfo_t *addrinfo, uint32_t timeout_ms, size_t rx_ring_max)
+.. c:function:: struct lwip_socket *lwip_socket_create_ex(lwip_socket_type_t type, lwip_socket_bind_descriptor_t bind, const lwip_socket_addrinfo_t *addrinfo, uint32_t timeout_ms, size_t rx_ring_max)
 
-   Identical to ``lwip_socket_create()`` but lets you override the RX ring
-   maximum. Use this when the default 4 KiB ceiling is too small (a high-bandwidth
-   stream) or unnecessarily large (a tight-RAM scenario where you know the
-   largest message that will arrive).
+   Like ``lwip_socket_create()``, with an explicit RX ring maximum. The returned
+   pointer has the same ownership and readiness behavior.
 
-   The ring starts at ``LWIP_SOCKET_RX_RING_INIT_SIZE`` (512 B) and grows in
-   ``LWIP_SOCKET_RX_RING_STEP_SIZE`` (512 B) increments up to ``rx_ring_max``.
-   Passing ``0`` for ``rx_ring_max`` uses ``LWIP_SOCKET_RX_RING_MAX_SIZE``
-   (4096 B), the same ceiling as ``lwip_socket_create()``.
+   The ring starts at ``LWIP_SOCKET_RX_RING_INIT_SIZE`` (512 B), clamped to
+   the selected maximum, and grows in ``LWIP_SOCKET_RX_RING_STEP_SIZE``
+   (512 B) increments. ``rx_ring_max = 0`` selects the default
+   ``LWIP_SOCKET_RX_RING_MAX_SIZE`` (4096 B).
 
-   :param socket: Caller-allocated handle. Zeroed by this call.
    :param type: Transport selector (``lwip_socket_type_t``).
    :param bind: Netif preference (``lwip_socket_bind_descriptor_t``).
-   :param addrinfo: ``NULL`` for DHCP; non-``NULL`` for static IP.
-   :param timeout_ms: Connect/handshake inactivity watchdog in milliseconds.
-      ``0`` uses the stack default.
+   :param addrinfo: ``NULL`` for DHCP on external interfaces; non-``NULL``
+      for static IPv4.
+   :param timeout_ms: Inactivity watchdog in milliseconds. ``0`` disables it.
    :param rx_ring_max: Hard ceiling for the RX ring in bytes. ``0`` uses
       ``LWIP_SOCKET_RX_RING_MAX_SIZE`` (4096 B).
-   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_MEM`` if allocation failed,
-      ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
+   :returns: Owned socket pointer, or ``NULL`` on failure.
 
 Transport selectors:
 
@@ -108,13 +112,14 @@ An example use case is given below:
 
 .. code-block:: c
 
-    struct lwip_socket s;
-    lwip_socket_create(&s, LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, 30000);
-    /*  Creates new socket on s using:
-        - protocol TCP
-        - external interfaces only
-        - use DHCP for IP address
-        - 30 second socket timeout */
+   struct lwip_socket *s = lwip_socket_create(
+       LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, 30000);
+   if (!s)
+       return 1;
+
+   /* TCP, external interface, DHCP, 30-second inactivity timeout.
+    * Use s directly in socket calls, then release the owned handle. */
+   lwip_socket_destroy(s);
 
 Using Websockets
 ------------------
@@ -141,12 +146,11 @@ Socket Reconfiguration
 
 Some socket attributes are modifiable in flight should the situation call for it.
 
-.. c:function:: lwip_error_t lwip_socket_set_connect_timeout(struct lwip_socket *socket, uint32_t timeout_ms)
+.. c:function:: lwip_error_t lwip_socket_set_inactivity_timeout(struct lwip_socket *socket, uint32_t timeout_ms)
 
-   Update the inactivity watchdog window after the socket has been created.
-   The timer is reset to this new value immediately. Useful when you need a
-   longer budget for a slow DNS lookup or TLS handshake than you knew at
-   create time.
+   Update the inactivity watchdog window after creation. It covers service
+   wait, connection establishment, handshake, and data transfer. The watchdog
+   re-arms on the next service tick; network activity extends the deadline.
 
    :param socket: An initialised socket handle.
    :param timeout_ms: New watchdog window in milliseconds. ``0`` disarms the
@@ -156,9 +160,9 @@ Some socket attributes are modifiable in flight should the situation call for it
 
 .. c:function:: lwip_error_t lwip_socket_set_rx_limits(struct lwip_socket *socket, size_t initial_size, size_t max_size)
 
-   Resize the RX ring buffer limits on an existing socket. Takes effect on
-   the next internal growth step — it does not shrink a ring that has already
-   expanded past the new maximum.
+   Replace the RX ring on an existing socket with new limits. The ring must
+   be empty; otherwise this returns ``LWIP_ERR_STATE`` without replacing it.
+   Both sizes must be nonzero and ``initial_size`` must not exceed ``max_size``.
 
    Prefer ``lwip_socket_create_ex()`` when you know the right ceiling up front.
    Use this function when the ceiling needs to change after creation — for
@@ -166,18 +170,24 @@ Some socket attributes are modifiable in flight should the situation call for it
    response will be larger than expected.
 
    :param socket: An initialised socket handle.
-   :param initial_size: New initial allocation in bytes. ``0`` keeps the
-      current value.
-   :param max_size: New hard ceiling in bytes. ``0`` keeps the current value.
-   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
+   :param initial_size: New initial allocation in bytes.
+   :param max_size: New hard ceiling in bytes.
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_ARG`` for invalid arguments,
+      ``LWIP_ERR_STATE`` if unread bytes remain, or ``LWIP_ERR_MEM`` on
+      allocation failure.
 
 Requesting Services
 --------------------
 
-Before connecting, you may need to request network services such as DHCP, DNS,
-or SNTP. ``lwip_socket_create()`` in DHCP mode starts DHCP and DNS
-automatically, but you can also request them explicitly — and SNTP always
-requires an explicit request.
+Socket clients request their required services automatically. External sockets
+without static address settings request DHCP. DNS readiness is required when
+connecting to a hostname; TLS and WSS also require SNTP synchronization before
+starting the handshake. Static and loopback sockets do not start DHCP.
+
+``lwip_socket_connect()`` parks the socket in ``LWIP_STATUS_WAITING_SERVICES``
+until its interface and required services are ready. Keep calling
+``lwip_service_events()`` to advance this wait. You can also request services
+explicitly to prepare an interface before listening or doing PCB-level work.
 
 .. c:function:: lwip_error_t lwip_request_services(uint8_t flags, uint32_t timeout_ms)
 
@@ -235,8 +245,8 @@ requires an explicit request.
 
 .. code-block:: c
 
-   /* Simple blocking form — request SNTP on the default interface.
-    * DHCP and DNS start automatically when the socket is created in DHCP mode. */
+   /* Optional blocking form — prepare SNTP on the default interface.
+    * TLS/WSS socket clients request it automatically. */
    lwip_request_services(LWIP_SOCKET_SVC_SNTP, 10000);
 
    /* Per-service callback form — fires once per service as it comes up,
@@ -270,9 +280,10 @@ As a client you are connecting a socket to another remote endpoint.
 
    Initiate a connection to a remote host. Non-blocking — returns as soon as
    the attempt is queued. The socket transitions through
-   ``LWIP_STATUS_RESOLVING`` and ``LWIP_STATUS_CONNECTING`` before reaching
+   ``LWIP_STATUS_WAITING_SERVICES``, ``LWIP_STATUS_RESOLVING``, and
+   ``LWIP_STATUS_CONNECTING`` as needed before reaching
    ``LWIP_STATUS_CONNECTED`` (or ``LWIP_STATUS_ERROR`` on failure). Poll
-   ``socket->status`` from the main loop or subscribe to
+   ``lwip_socket_status(socket)`` from the main loop or subscribe to
    ``LWIP_SOCKET_EVENTF_STATE_CHANGE`` via ``lwip_socket_on_event()`` to know
    when the socket is ready.
 
@@ -306,20 +317,17 @@ individual peer sockets, each of which you read from and write to independently.
       in ``LWIP_STATUS_INIT`` state, ``LWIP_ERR_PROTO`` if the socket is not
       TCP, ``LWIP_ERR_MEM`` on allocation failure.
 
-.. c:function:: lwip_error_t lwip_socket_accept(struct lwip_socket *socket, struct lwip_socket *peer)
+.. c:function:: struct lwip_socket *lwip_socket_accept(struct lwip_socket *socket)
 
    Dequeue one accepted peer from a listening socket. Non-blocking — returns
-   ``LWIP_ERR_STATE`` immediately if no peer is ready yet. On success,
-   ``*peer`` is a fully-initialised socket in ``LWIP_STATUS_CONNECTED`` state.
-   The caller owns the peer handle and must call ``lwip_socket_destroy()`` when
-   done with it.
+   ``NULL`` if no peer is ready. On success, returns an owned, heap-allocated
+   socket in ``LWIP_STATUS_CONNECTED`` state. Destroy each accepted peer with
+   ``lwip_socket_destroy()`` when done; do not create another socket for it.
 
    :param socket: A listening socket (``lwip_socket_listen()`` must have been
       called on it).
-   :param peer: Caller-allocated socket handle to receive the accepted
-      connection.
-   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_STATE`` if the accept queue is
-      empty, ``LWIP_ERR_ARG`` on bad arguments.
+   :returns: Owned peer pointer, or ``NULL`` if the queue is empty or the
+      listener argument is invalid.
 
 See the full multi-connection server skeleton in `TCP Server (multi-connection)`_ below.
 
@@ -428,12 +436,14 @@ without calling any close function yourself:
      - Stack error: timeout, out-of-memory, or a local ``lwip_socket_abort()``.
 
 In all three cases ``lwip_socket_is_active()`` returns ``false``. Poll
-``socket->status`` or subscribe to ``LWIP_SOCKET_EVENTF_STATE_CHANGE`` to
+``lwip_socket_status(socket)`` or subscribe to ``LWIP_SOCKET_EVENTF_STATE_CHANGE`` to
 detect these transitions.
 
 .. c:function:: lwip_error_t lwip_socket_destroy(struct lwip_socket *socket)
 
-   Free all resources held by the socket handle. This is **not** a graceful
+   Free the socket handle itself and all resources it owns. The pointer becomes
+   invalid after this call; clear stored pointers and do not reuse it.
+   This is **not** a graceful
    close — call ``lwip_socket_close()`` or ``lwip_socket_abort()`` first if
    the connection is still live, otherwise the PCB will be hard-aborted
    internally. For a listener socket, any connections waiting in the accept
@@ -469,7 +479,7 @@ your own send/receive logic where the comments indicate.
    #define RX_BUF_MAX 2048
 
    typedef struct {
-       struct lwip_socket socket;
+       struct lwip_socket *socket;
        uint8_t  rx_buf[RX_BUF_MAX];
        size_t   rx_len;
        bool     want_close;   /* set by app when it is done sending */
@@ -531,17 +541,18 @@ your own send/receive logic where the comments indicate.
 
        client_ctx_t ctx = {0};
 
-       if (lwip_socket_create(&ctx.socket, LWIP_SOCKET_TCP,
-                              LWIP_NETIF_EXT, NULL, 30000) != LWIP_OK)
+       ctx.socket = lwip_socket_create(LWIP_SOCKET_TCP,
+                                       LWIP_NETIF_EXT, NULL, 30000);
+       if (!ctx.socket)
            return 1;
 
-       lwip_socket_on_event(&ctx.socket,
+       lwip_socket_on_event(ctx.socket,
                             LWIP_SOCKET_EVENTF_STATE_CHANGE |
                             LWIP_SOCKET_EVENTF_IO,
                             client_on_event, &ctx);
 
-       if (lwip_socket_connect(&ctx.socket, "your.server.com", YOUR_PORT) != LWIP_OK) {
-           lwip_socket_destroy(&ctx.socket);
+       if (lwip_socket_connect(ctx.socket, "your.server.com", YOUR_PORT) != LWIP_OK) {
+           lwip_socket_destroy(ctx.socket);
            return 1;
        }
 
@@ -550,8 +561,8 @@ your own send/receive logic where the comments indicate.
 
            /* Initiate half-close once the response is complete. */
            if (ctx.want_close &&
-               ctx.socket.status == LWIP_STATUS_CONNECTED) {
-               lwip_socket_shutdown(&ctx.socket);
+               lwip_socket_status(ctx.socket) == LWIP_STATUS_CONNECTED) {
+               lwip_socket_shutdown(ctx.socket);
                ctx.want_close = false;
            }
 
@@ -559,11 +570,11 @@ your own send/receive logic where the comments indicate.
        }
 
        /* If the remote did not already close us, do so now. */
-       if (ctx.socket.status != LWIP_STATUS_CLOSED &&
-           ctx.socket.status != LWIP_STATUS_RESET) {
-           lwip_socket_close(&ctx.socket);
+       if (lwip_socket_status(ctx.socket) != LWIP_STATUS_CLOSED &&
+           lwip_socket_status(ctx.socket) != LWIP_STATUS_RESET) {
+           lwip_socket_close(ctx.socket);
        }
-       lwip_socket_destroy(&ctx.socket);
+       lwip_socket_destroy(ctx.socket);
        return ctx.exit_code;
    }
 
@@ -592,7 +603,7 @@ remote closes or an error occurs.
    } peer_state_t;
 
    typedef struct {
-       struct lwip_socket socket;
+       struct lwip_socket *socket;
        peer_state_t       state;
        char               buf[BUF_MAX];
        size_t             buf_len;
@@ -611,7 +622,7 @@ remote closes or an error occurs.
 
    static void peer_release(peer_slot_t *p)
    {
-       lwip_socket_destroy(&p->socket);
+       lwip_socket_destroy(p->socket);
        memset(p, 0, sizeof(*p));   /* returns slot to pool */
    }
 
@@ -619,7 +630,7 @@ remote closes or an error occurs.
     * Returns true when the slot should be released. */
    static bool peer_service(peer_slot_t *p)
    {
-       lwip_status_t st = p->socket.status;
+       lwip_status_t st = lwip_socket_status(p->socket);
 
        /* Remote closed cleanly, reset, or a stack error — tear down. */
        if (st == LWIP_STATUS_CLOSED  ||
@@ -629,24 +640,24 @@ remote closes or an error occurs.
 
        /* Waiting for our own close to complete. */
        if (p->state == PEER_CLOSING)
-           return !lwip_socket_is_active(&p->socket);
+           return !lwip_socket_is_active(p->socket);
 
        /* ---- application logic ---- */
 
        /* Accumulate incoming bytes. */
-       size_t avail = lwip_socket_available(&p->socket);
+       size_t avail = lwip_socket_available(p->socket);
        if (avail) {
            size_t space = sizeof(p->buf) - p->buf_len;
            size_t n = avail < space ? avail : space;
            p->buf_len += lwip_socket_read(
-               &p->socket, (uint8_t *)p->buf + p->buf_len, n);
+               p->socket, (uint8_t *)p->buf + p->buf_len, n);
        }
 
        /* TODO: parse p->buf[0..p->buf_len] for a complete message.
         * When ready to respond:
-        *   lwip_socket_write(&p->socket, my_response, my_response_len);
+        *   lwip_socket_write(p->socket, my_response, my_response_len);
         * When done with this peer:
-        *   lwip_socket_close(&p->socket);
+        *   lwip_socket_close(p->socket);
         *   p->state = PEER_CLOSING;
         *   p->buf_len = 0;
         */
@@ -659,17 +670,17 @@ remote closes or an error occurs.
        if (!lwip_start())      return 1;
        if (!lwip_network_up()) return 1;
 
-       /* Request DHCP; server sockets don't auto-start it. */
+       /* Wait for an address before listening; listen() does not await DHCP. */
        if (lwip_request_services(LWIP_SOCKET_SVC_DHCP, 30000) != LWIP_OK)
            return 1;
 
-       struct lwip_socket server;
-       if (lwip_socket_create(&server, LWIP_SOCKET_TCP,
-                              LWIP_NETIF_EXT, NULL, 0) != LWIP_OK)
+       struct lwip_socket *server = lwip_socket_create(
+           LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, 0);
+       if (!server)
            return 1;
 
-       if (lwip_socket_listen(&server, PORT) != LWIP_OK) {
-           lwip_socket_destroy(&server);
+       if (lwip_socket_listen(server, PORT) != LWIP_OK) {
+           lwip_socket_destroy(server);
            return 1;
        }
 
@@ -680,7 +691,8 @@ remote closes or an error occurs.
            /* Accept new connections while pool has space. */
            peer_slot_t *slot = peer_alloc();
            if (slot) {
-               if (lwip_socket_accept(&server, &slot->socket) == LWIP_OK) {
+               slot->socket = lwip_socket_accept(server);
+               if (slot->socket) {
                    slot->state = PEER_ACTIVE;
                }
                /* else: queue empty this tick — slot stays IDLE */
@@ -701,11 +713,11 @@ remote closes or an error occurs.
        /* Abort any still-open peers and destroy the listener. */
        for (int i = 0; i < MAX_CLIENTS; i++) {
            if (peers[i].state != PEER_IDLE) {
-               lwip_socket_abort(&peers[i].socket);
+               lwip_socket_abort(peers[i].socket);
                peer_release(&peers[i]);
            }
        }
-       lwip_socket_destroy(&server);
+       lwip_socket_destroy(server);
        return 0;
    }
 
