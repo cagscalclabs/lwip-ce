@@ -56,6 +56,7 @@ static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
 static uint64_t tls_random(void) { return 1; }
 static bool tls_x25519_publickey(uint8_t *pub, const uint8_t *priv, void *a, void *b) { return true; }
 static uint32_t lwip_sntp_read_rtc_raw(void) { return 1700000000; }
+static uint32_t lwip_sntp_get_unix_time(void) { return 1700000000; }
 static void tls_hs_reasm_reset(struct tls_handshake_context *ctx) {}
 bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t alg) { memset(ctx, 0, sizeof(*ctx)); return true; }
 void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *p, size_t n) {}

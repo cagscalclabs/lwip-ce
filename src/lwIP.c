@@ -159,6 +159,12 @@ static bool g_lwip_stopping = false;
 static lwip_app_config_t g_lwip_cfg;
 static uint8_t g_lwip_start_error = 0;
 static struct lwip_socket *g_conn_registry = NULL;
+static bool g_services_dirty = false;
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+static netif_ext_callback_t g_socket_netif_callback;
+static void socket_netif_changed(struct netif *netif, netif_nsc_reason_t reason,
+                                 const netif_ext_callback_args_t *args);
+#endif
 
 /* Internal event data buffers — pointed at by ev_data in the callback.
  * Static storage; valid only for the duration of the callback dispatch. */
@@ -286,6 +292,9 @@ bool lwip_stack_init(void)
         return false;
     }
 
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+    netif_add_ext_callback(&g_socket_netif_callback, socket_netif_changed);
+#endif
     g_lwip_stack_started = true;
     return true;
 }
@@ -339,7 +348,8 @@ void lwip_service_events(void)
     sys_check_timeouts();
     if (!g_lwip_stopping)
     {
-        services_dispatch();
+        if (g_services_dirty)
+            services_dispatch();
         conn_connect_watchdog(sys_now());
         conn_registry_dispatch_events();
     }
@@ -1084,7 +1094,7 @@ static void lwip_stack_cleanup(void)
     }
     lwip_teardown_abort_time_wait_pcbs();
 
-#if LWIP_SNTP
+#if LWIP_UDP
     sntp_stop();
 #endif
 
@@ -1144,6 +1154,11 @@ static void lwip_stack_cleanup(void)
      * frees-and-NULLs its buffer so a stray future reference sees NULL. */
     STOP_TRACE("P8 ethFinish");
     eth_finish_shutdown();
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+    netif_remove_ext_callback(&g_socket_netif_callback);
+#endif
+    g_services_dirty = false;
+    lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES, 0);
     STOP_TRACE("P9 memRelease");
     lwip_membuffers_release();
 
@@ -1175,14 +1190,8 @@ static lwip_error_t apply_service_flags(struct netif *n, uint8_t svc_flags)
     }
 #endif
 
-#if LWIP_DNS
-    if (svc_flags & LWIP_SOCKET_SVC_DNS)
-    {
-        /* dns_init() runs as part of lwip_init() already; calling again
-         * is a no-op but documents intent. */
-        dns_init();
-    }
-#endif
+    /* DNS is initialized once by lwip_init(). Reinitializing here can
+     * overwrite the server learned from DHCP with DNS_SERVER_ADDRESS. */
 
     if (svc_flags & LWIP_SOCKET_SVC_SNTP)
     {
@@ -1249,14 +1258,9 @@ static void socket_apply_addrinfo(struct netif *netif,
 #endif
 }
 
-/* Non-blocking netif attach. Records the bind preference (and any static
- * addrinfo) on the socket and resolves a qualifying netif *if one already
- * exists*, kicking DHCP / applying the static IP eagerly in that case. It
- * never blocks waiting for the interface to come up: if no qualifying netif
- * exists yet, conn->netif stays NULL and socket_resolve_netif (driven from the
- * async connect path) finishes the job once USB/link/DHCP enumerate. The old
- * version spun a pump loop here for up to timeout_ms, which froze the calc's
- * UI for the whole DHCP-acquisition window. */
+/* Record the bind preference and static address without blocking. Resolve
+ * an existing interface eagerly; services_dispatch resolves late registration
+ * after the netif callback signals it to the event loop. */
 static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
                                         lwip_socket_bind_descriptor_t bind,
                                         const lwip_socket_addrinfo_t *addrinfo,
@@ -1290,7 +1294,7 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
 
 /* Bind a resolved netif onto the socket: apply the static IP (once) or kick
  * DHCP/DNS, promote an external netif to default, and record it. Shared by the
- * eager path in socket_attach_netif and the async retry in services_check. */
+ * eager path in socket_attach_netif and the deferred retry in services_dispatch. */
 static void socket_bind_netif(struct lwip_socket *conn, struct netif *netif)
 {
     if (!conn || !netif)
@@ -1302,6 +1306,9 @@ static void socket_bind_netif(struct lwip_socket *conn, struct netif *netif)
         !netif_is_loop_network(netif) &&
         conn->has_addrinfo && !conn->static_applied)
     {
+#if LWIP_DHCP
+        dhcp_release_and_stop(netif);
+#endif
         socket_apply_addrinfo(netif, &conn->addrinfo);
         conn->static_applied = true;
     }
@@ -1408,6 +1415,57 @@ typedef struct
 static lwip_netif_service_request_t
     g_netif_service_requests[LWIP_NETIF_SERVICE_REQUEST_MAX];
 
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+/* These callbacks may run before a netif transition is complete. Only
+ * invalidate cached pointers and schedule work; never connect or call apps
+ * from inside netif_add/remove/set_addr. */
+static void socket_netif_changed(struct netif *netif, netif_nsc_reason_t reason,
+                                 const netif_ext_callback_args_t *args)
+{
+    (void)args;
+    if (reason & LWIP_NSC_NETIF_REMOVED)
+    {
+        for (struct lwip_socket *c = g_conn_registry; c; c = c->registry_next)
+        {
+            if (c->netif == netif)
+            {
+                c->netif = NULL;
+                c->static_applied = false;
+            }
+        }
+        for (uint8_t i = 0; i < LWIP_NETIF_SERVICE_REQUEST_MAX; i++)
+        {
+            if (g_netif_service_requests[i].netif == netif)
+                g_netif_service_requests[i].netif = NULL;
+        }
+    }
+    g_services_dirty = true;
+}
+#endif
+
+static uint8_t socket_required_services(const struct lwip_socket *conn,
+                                         const char *host)
+{
+    if (conn->bind_descriptor == LWIP_NETIF_LOOP ||
+        netif_is_loop_network(conn->netif))
+        return 0;
+    uint8_t flags = conn->has_addrinfo ? 0 : LWIP_SOCKET_SVC_DHCP;
+    if (host_requires_dns(host))
+        flags |= LWIP_SOCKET_SVC_DNS;
+    if (conn->protocol == LWIP_SOCKET_ALTCP_TLS ||
+        conn->protocol == LWIP_SOCKET_ALTCP_WSS)
+        flags |= LWIP_SOCKET_SVC_SNTP;
+    return flags;
+}
+
+static bool socket_network_ready(const struct lwip_socket *conn, uint8_t flags)
+{
+    return conn->netif && netif_is_up(conn->netif) &&
+           netif_is_link_up(conn->netif) &&
+           netif_address_configuration_ready(conn->netif) &&
+           lwip_are_services_ready(conn->netif, flags);
+}
+
 static bool netif_service_base_ready(const struct netif *netif)
 {
     return netif &&
@@ -1439,13 +1497,14 @@ static bool netif_service_ready(struct netif *netif, uint8_t service_id)
         return true;
 #endif
     case LWIP_SOCKET_SVC_SNTP:
-#if LWIP_SNTP
+        /* The SNTP module is compiled under LWIP_UDP, not LWIP_SNTP. */
+#if LWIP_UDP
         return netif_address_configuration_ready(netif) &&
                netif_has_usable_gateway(netif) &&
                sntp_enabled() != 0 &&
                lwip_sntp_time_was_set();
 #else
-        return true;
+        return false;
 #endif
     default:
         return false;
@@ -1703,11 +1762,22 @@ static void conn_waiting_services_poll(uint32_t now)
                 socket_bind_netif(conn, netif);
         }
 
-        if (!lwip_are_services_ready(conn->netif, conn->pending_svc_flags))
+        conn->pending_svc_flags = socket_required_services(conn, conn->pending_host);
+        if (!socket_network_ready(conn, conn->pending_svc_flags))
         {
             /* Keep apply_service_flags firing each tick now that we have a netif. */
             if (conn->netif)
-                apply_service_flags(conn->netif, conn->pending_svc_flags);
+            {
+                lwip_error_t err = apply_service_flags(conn->netif, conn->pending_svc_flags);
+                if (err != LWIP_OK)
+                {
+                    lwip_socket_set_pending_host(conn, NULL);
+                    conn->pending_svc_flags = 0;
+                    conn->pending_port = 0;
+                    conn->connect_deadline = 0;
+                    lwip_socket_fail(conn, err);
+                }
+            }
             conn = next;
             continue;
         }
@@ -1731,6 +1801,21 @@ static void conn_waiting_services_poll(uint32_t now)
 
 static void services_dispatch(void)
 {
+    g_services_dirty = false;
+    if (g_lwip_stopping)
+        return;
+    /* Resolve idle sockets too, so get_netif reflects late enumeration. */
+    for (struct lwip_socket *c = g_conn_registry; c; c = c->registry_next)
+    {
+        if (!c->netif && (c->status == LWIP_STATUS_INIT ||
+                         c->status == LWIP_STATUS_WAITING_SERVICES))
+        {
+            struct netif *n = socket_find_qualifying_netif(
+                (lwip_socket_bind_descriptor_t)c->bind_descriptor);
+            if (n)
+                socket_bind_netif(c, n);
+        }
+    }
     bool svc_active    = netif_service_requests_active();
     bool sockets_wait  = conn_registry_has_waiting_services();
 
@@ -1755,8 +1840,10 @@ static void services_arm(void)
     /* 100 ms cadence: fast enough that the app sees CONNECTING soon
      * after DHCP completes, slow enough not to dominate CPU. */
     lwip_dispatch_attach(LWIP_DISPATCH_CONN_SERVICES, services_dispatch);
-    lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES,
-                             lwip_dispatch_period_from_ms(100));
+    if (!lwip_dispatch_get_period(LWIP_DISPATCH_CONN_SERVICES))
+        lwip_dispatch_set_period(LWIP_DISPATCH_CONN_SERVICES,
+                                 lwip_dispatch_period_from_ms(100));
+    g_services_dirty = true;
     lwip_dispatch_start();
 }
 
@@ -2359,16 +2446,12 @@ struct lwip_socket *lwip_socket_create_ex(lwip_socket_type_t protocol,
     rebind_pcb_callbacks(conn);
     conn_registry_add(conn);
 
-    /* Kick off the services this socket will need so they are ready (or
-     * nearly so) by the time the app calls lwip_socket_connect().
-     * DHCP+DNS are needed for all external sockets; SNTP is additionally
-     * required for TLS/WSS because cert validation needs a trusted clock. */
-    {
-        uint8_t svc = LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS;
-        if (protocol == LWIP_SOCKET_ALTCP_TLS || protocol == LWIP_SOCKET_ALTCP_WSS)
-            svc |= LWIP_SOCKET_SVC_SNTP;
+    /* Prewarm interface services without starting DHCP on static/loopback
+     * sockets. Destination DNS requirements are known at connect time. */
+    uint8_t svc = socket_required_services(conn, NULL);
+    if (svc)
         lwip_netif_request_services(conn->netif, svc, 0, NULL, NULL);
-    }
+    g_services_dirty = true;
 
     return conn;
 
@@ -2840,60 +2923,20 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
             socket_bind_netif(conn, netif);
     }
 
-    /* For loopback sockets, require a fully configured netif immediately.
-     * For external sockets, only require the link to be present — DHCP/DNS/SNTP
-     * completion is handled by WAITING_SERVICES, not here. */
-    if (conn->netif && netif_is_loop_network(conn->netif))
+    uint8_t svc = socket_required_services(conn, host);
+    if (!socket_network_ready(conn, svc))
     {
-        if (!netif_is_up(conn->netif) || !netif_is_link_up(conn->netif) ||
-            !netif_address_configuration_ready(conn->netif))
-        {
-            conn->status = LWIP_STATUS_ERROR;
-            conn->last_error = LWIP_ERR_NETIF;
-            ERROR_CODE(LWIP_ERR_NETIF);
-            conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_NETIF,
-                               LWIP_SOCKET_ERR_OP_CONNECT,
-                               (int)LWIP_ERR_NETIF, LWIP_ERR_NETIF);
-            return LWIP_ERR_NETIF;
-        }
-    }
-
-    if (netif_default != conn->netif && netif_is_external_network(conn->netif))
-        netif_set_default(conn->netif);
-
-    /* Check that the services this socket type needs are ready.  Loopback
-     * sockets bypass this — they don't use DHCP/DNS/SNTP.  For external
-     * sockets, if services aren't up yet, park the socket in
-     * WAITING_SERVICES and let the service dispatch wake it when ready. */
-    if (!netif_is_loop_network(conn->netif))
-    {
-        uint8_t svc = LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS;
-        lwip_socket_type_t proto = (lwip_socket_type_t)conn->protocol;
-        if (proto == LWIP_SOCKET_ALTCP_TLS || proto == LWIP_SOCKET_ALTCP_WSS)
-            svc |= LWIP_SOCKET_SVC_SNTP;
-        if (!lwip_are_services_ready(conn->netif, svc))
-        {
-            lwip_error_t herr = lwip_socket_set_pending_host(conn, host);
-            if (herr != LWIP_OK)
-            {
-                conn->status    = LWIP_STATUS_ERROR;
-                conn->last_error = LWIP_ERR_MEM;
-                conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_NETIF,
-                                   LWIP_SOCKET_ERR_OP_CONNECT,
-                                   (int)LWIP_ERR_MEM, LWIP_ERR_MEM);
-                return LWIP_ERR_MEM;
-            }
-            conn->pending_port      = port;
-            conn->pending_svc_flags = svc;
-            conn->connect_deadline  = sys_now() + conn_window_ms(conn);
-            conn->status            = LWIP_STATUS_WAITING_SERVICES;
-            /* Register a no-callback service request so apply_service_flags
-             * starts SNTP/DHCP/DNS, then arm the dispatch timer to poll
-             * readiness and advance the socket when all services are up. */
-            lwip_netif_request_services(conn->netif, svc, 0, NULL, NULL);
-            services_arm();
-            return LWIP_OK;
-        }
+        lwip_error_t herr = lwip_socket_set_pending_host(conn, host);
+        if (herr != LWIP_OK)
+            return herr;
+        conn->pending_port = port;
+        conn->pending_svc_flags = svc;
+        conn->connect_deadline = sys_now() + conn_window_ms(conn);
+        conn->status = LWIP_STATUS_WAITING_SERVICES;
+        /* The socket owns this wait. Do not allocate an unbounded,
+         * anonymous service request that outlives a cancelled connection. */
+        services_arm();
+        return LWIP_OK;
     }
 
     return lwip_socket_connect_now(conn, host, port);

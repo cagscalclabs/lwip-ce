@@ -555,23 +555,31 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
     *tbs_len_out = tbs.header_len + tbs.len;
 
     if (!tls_x509_signature_algorithm(&sig_alg, sig_alg_out))
+    {
         ERROR_CODE(0x06);
         return false;
+    }
 
     /* The signed inner AlgorithmIdentifier must agree with the outer one. */
     struct tls_asn1_cursor body;
     struct tls_asn1_tlv serial, inner_alg;
     if (!tls_asn1_child_cursor(&tbs, &body) || !tls_asn1_next(&body, &serial))
+    {
         ERROR_CODE(0x07);
         return false;
+    }
     if (serial.tag == 0xa0 && !tls_asn1_next(&body, &serial))
+    {
         ERROR_CODE(0x08);
         return false;
+    }
     if (serial.tag != ASN1_INTEGER || !tls_asn1_next(&body, &inner_alg) ||
         inner_alg.tag != sig_alg.tag || inner_alg.len != sig_alg.len ||
         memcmp(inner_alg.value, sig_alg.value, sig_alg.len))
+    {
         ERROR_CODE(0x09);
         return false;
+    }
 
     /* signatureValue BIT STRING: first content byte is the unused-bits count
      * (0 for a byte-aligned signature); the rest is the signature. */
@@ -1690,8 +1698,11 @@ bool tls_send_client_hello(
         }
         uint8_t ip[16];
         int ip_len = tls_identity_ip(ctx->hostname, ip);
-        ERROR_CODE(0x2d);
-        if (ip_len < 0) return false;
+        if (ip_len < 0)
+        {
+            ERROR_CODE(0x2d);
+            return false;
+        }
         /* SNI HostName is a DNS name, never an IP literal. */
         if (ip_len == 0) sni_len = 9 + hostname_len;
     }
@@ -1732,8 +1743,10 @@ bool tls_send_client_hello(
 
     /* Reserve space for handshake header (will fill in later) */
     if (offset + 4 > out_len)
+    {
         ERROR_CODE(0x30);
         return false;
+    }
     offset += 4;
 
     /* Legacy protocol version: 0x0303 (TLS 1.2) */
@@ -1742,8 +1755,10 @@ bool tls_send_client_hello(
 
     /* Client random (32 bytes) */
     if (offset + 32 > out_len)
+    {
         ERROR_CODE(0x31);
         return false;
+    }
     memcpy(out + offset, ctx->client_random, 32);
     offset += 32;
 
@@ -1801,8 +1816,10 @@ bool tls_send_client_hello(
     out[offset++] = 0x00;
     out[offset++] = 0x20; /* Key exchange length: 32 */
     if (offset + 32 > out_len)
+    {
         ERROR_CODE(0x32);
         return false;
+    }
     memcpy(out + offset, ctx->ecdhe_public, 32);
     offset += 32;
 
@@ -1853,8 +1870,10 @@ bool tls_send_client_hello(
     if (sni_len)
     {
         if (offset + 9 + hostname_len > out_len)
+        {
             ERROR_CODE(0x33);
             return false;
+        }
         out[offset++] = 0x00;
         out[offset++] = 0x00; /* Extension type: server_name */
         /* Extension length = hostname_len + 5 */
@@ -1877,8 +1896,10 @@ bool tls_send_client_hello(
     if (ctx->hrr_cookie_len > 0)
     {
         if (offset + 4 + 2 + ctx->hrr_cookie_len > out_len)
+        {
             ERROR_CODE(0x34);
             return false;
+        }
         out[offset++] = 0x00;
         out[offset++] = 0x2c; /* Extension type: cookie */
         size_t cookie_ext_body = 2 + ctx->hrr_cookie_len;
@@ -1920,8 +1941,10 @@ bool tls_send_client_hello(
         out[offset++] = (uint8_t)(ctx->psk_identity.identity_len >> 8);
         out[offset++] = (uint8_t)(ctx->psk_identity.identity_len & 0xFF);
         if (offset + ctx->psk_identity.identity_len > out_len)
+        {
             ERROR_CODE(0x35);
             return false;
+        }
         memcpy(out + offset, ctx->psk_identity.identity, ctx->psk_identity.identity_len);
         offset += ctx->psk_identity.identity_len;
 
@@ -1952,8 +1975,10 @@ bool tls_send_client_hello(
 
         /* Calculate PSK binder */
         if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret))
+        {
             ERROR_CODE(0x36);
             return false;
+        }
 
         const char *binder_label = (ctx->psk_type == TLS_PSK_TYPE_EXTERNAL)
                                        ? "ext binder"
@@ -1962,20 +1987,26 @@ bool tls_send_client_hello(
          * so the HKDF context is Transcript-Hash(empty), not a zero-length
          * context field. */
         if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+        {
             ERROR_CODE(0x37);
             return false;
+        }
         tls_hash_digest(&hash_ctx, partial_hash);
 
         if (!tls_hkdf_expand_label(TLS_HASH_SHA256, early_secret, 32,
                                    binder_label, 10,
                                    partial_hash, 32, binder_key, 32))
+        {
             ERROR_CODE(0x38);
             return false;
+        }
 
         if (!tls_hkdf_expand_label(TLS_HASH_SHA256, binder_key, 32,
                                    "finished", 8, NULL, 0, finished_key, 32))
+        {
             ERROR_CODE(0x39);
             return false;
+        }
 
         /* Fill in length fields for binder hash computation */
         size_t total_msg_len = offset + 32 - msg_start;
@@ -2002,22 +2033,28 @@ bool tls_send_client_hello(
          * PskBinderEntry length, not just the 32-byte HMAC value — so the
          * cut point is binder_offset itself, not binder_offset + 3. */
         if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+        {
             ERROR_CODE(0x3a);
             return false;
+        }
         tls_hash_update(&hash_ctx, out, binder_offset);
         tls_hash_digest(&hash_ctx, partial_hash);
 
         /* Compute binder = HMAC(finished_key, partial_hash) */
         if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
+        {
             ERROR_CODE(0x3b);
             return false;
+        }
         tls_hmac_update(&hmac_ctx, partial_hash, 32);
         tls_hmac_digest(&hmac_ctx, binder);
 
         /* Write binder value */
         if (offset + 32 > out_len)
+        {
             ERROR_CODE(0x3c);
             return false;
+        }
         memcpy(out + offset, binder, 32);
         offset += 32;
     }
@@ -2902,15 +2939,19 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
 
     /* Build the signed-content digest. */
     if (!ctx->transcript_hash)
+    {
         ERROR_CODE(0x7b);
         return false;
+    }
 
     transcript_hash_digest(ctx->transcript_hash, transcript);
 
     memset(spaces, 0x20, sizeof(spaces));
     if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    {
         ERROR_CODE(0x7c);
         return false;
+    }
 
     tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
     tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
@@ -2920,8 +2961,10 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
 
     /* RSA decrypt the signature, then run the PSS padding check. */
     if (rsa->mod_len > RSA_TRANSIENT_SIZE)
+    {
         ERROR_CODE(0x7d);
         return false;
+    }
 
     em = __rsa_transient;
     if (!tls_rsa_decrypt_signature(sig, sig_len, em, rsa))

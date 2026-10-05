@@ -149,7 +149,7 @@ static void eth_free_device_storage(eth_device_t *dev)
      * capturing interface doesn't leak it or pin the pcap pool alive. This
      * flushes any staged records first — see pcap_release_on_teardown. */
     pcap_release_on_teardown(&dev->iface);
-    free(dev);
+    mem_free(dev);
 }
 
 static void eth_cleanup_failed_init(usb_device_t device,
@@ -1383,6 +1383,9 @@ static void eth_arm_dhcp_once(eth_device_t *dev)
 
     if (!eth_dhcp_client_running(netif))
     {
+        /* A configured address without a DHCP client is static. */
+        if (!ip4_addr_isany_val(*netif_ip4_addr(netif)))
+            return;
         err_t err = dhcp_start(netif);
         if (err != ERR_OK)
         {
@@ -1482,12 +1485,16 @@ static bool init_ethernet_usb_device(usb_device_t device)
         eth_free_device_storage(stale);
     }
 
-    eth_device_t *eth = malloc(sizeof(eth_device_t));
+    /* The resident application's libc heap is only the unused tail of its
+     * fixed BSS window. A device includes a 2 KiB RX buffer and cannot fit
+     * there. Use lwIP's allocator, configured with the consumer's CRT (or
+     * static memory backend), and pair it with mem_free on every teardown. */
+    eth_device_t *eth = mem_calloc(1, sizeof(eth_device_t));
     if (!eth)
     {
+        ERROR_CODE(ERR_MEM);
         return false;
     }
-    memset(eth, 0, sizeof(eth_device_t));
     eth->device = device;
 
     bool netif_registered = false;
