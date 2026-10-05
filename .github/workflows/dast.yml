@@ -24,6 +24,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history: the staleness check below walks `git log -- src/`
+          # to find the last commit touching src/, which a shallow (depth-1)
+          # clone can't resolve correctly (it only ever has HEAD itself).
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
