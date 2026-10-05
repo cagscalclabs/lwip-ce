@@ -1125,10 +1125,9 @@ struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t
         tls_x509_free(obj);
         return NULL;
     }
-    obj->der_len = der_len;
-
-    /* Parse into the object itself.  from_handshake starts true after
-     * tls_x509_parse_certificate; we clear it so object_free knows to free. */
+    /* Parse into the object itself.  tls_x509_parse_certificate does a
+     * memset(out, 0, sizeof(*out)) internally, so set der_len AFTER the
+     * parse call — otherwise it gets zeroed and never restored. */
     if (!tls_x509_parse_certificate(obj->der, der_len, obj))
     {
         ERROR();
@@ -1136,6 +1135,7 @@ struct tls_x509_object *tls_x509_import_certificate(const char *pem_data, size_t
         tls_x509_free(obj);
         return NULL;
     }
+    obj->der_len = der_len;
     obj->from_handshake = false;
     return obj;
 }
@@ -1152,6 +1152,9 @@ void tls_x509_object_free(struct tls_x509_object *obj)
 }
 
 /* OID byte strings for the three signature algorithms we recognise. */
+static const uint8_t oid_rsa_encryption[] = {
+    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01  /* rsaEncryption (SPKI key type) */
+};
 static const uint8_t oid_sha256_rsa_pkcs1[] = {
     0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b  /* sha256WithRSAEncryption */
 };
@@ -1167,6 +1170,14 @@ tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len)
     if (!oid || oid_len == 0)
     {
         return TLS_ALG_UNKNOWN;
+    }
+    /* rsaEncryption: the SPKI key-type OID used in SubjectPublicKeyInfo.
+     * Distinct from sha256WithRSAEncryption (the signature algorithm OID)
+     * but maps to the same RSA key representation. */
+    if (oid_len == sizeof(oid_rsa_encryption) &&
+        memcmp(oid, oid_rsa_encryption, oid_len) == 0)
+    {
+        return TLS_ALG_RSA_PKCS1_SHA256;
     }
     if (oid_len == sizeof(oid_sha256_rsa_pkcs1) &&
         memcmp(oid, oid_sha256_rsa_pkcs1, oid_len) == 0)

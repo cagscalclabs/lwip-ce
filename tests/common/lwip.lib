@@ -64,19 +64,7 @@
 	export	tls_hmac_context_init
 	export	tls_hmac_update
 	export	tls_hmac_digest
-	export	tls_keyobject_import_private
-	export	tls_keyobject_import_public
-	export	tls_keyobject_import_certificate
-	export	tls_x509_has_required_ca_constraints
-	export	tls_keyobject_destroy
 	export	tls_pbkdf2
-	export	tls_pkcs8_strerror
-	export	tls_pkcs8_import
-	export	tls_pkcs8_import_private
-	export	tls_pkcs8_import_public
-	export	tls_pkcs8_object_import_private
-	export	tls_pkcs8_object_import_public
-	export	tls_pkcs8_object_destroy
 	export	tls_random_init_entropy
 	export	tls_random
 	export	tls_random_bytes
@@ -90,11 +78,23 @@
 	export	tls_rsa_pss_verify
 	export	tls_truststore_init
 	export	tls_truststore_lookup
+	export	tls_truststore_lookup_by_subject
 	export	tls_x509_has_valid_constraints
+	export	tls_x509_has_required_ca_constraints
 	export	tls_x509_parse_certificate
-	export	tls_x509_import_and_parse_certificate
 	export	tls_x509_import_certificate
-	export	tls_x509_object_destroy
+	export	tls_x509_object_free
+	export	tls_x509_oid_to_sig_alg
+	export	tls_x509_signature_verify
+	export	tls_x509_signature_verify_digest
+	export	tls_key_import
+	export	tls_key_free
+	export	tls_key_verify
+	export	tls_key_sign
+	export	tls_key_encrypt
+	export	tls_key_encrypt_aad
+	export	tls_key_decrypt
+	export	tls_key_decrypt_aad
 	export	acd_add
 	export	acd_remove
 	export	acd_start
@@ -437,15 +437,6 @@
 	export	altcp_ws_new_tls
 	export	altcp_ws_alloc
 	export	lwip_socket_set_ws_config
-	export	tls_x509_oid_to_sig_alg
-	export	tls_x509_signature_verify
-	export	tls_x509_signature_verify_digest
-	export	tls_key_verify
-	export	tls_key_sign
-	export	tls_key_encrypt
-	export	tls_key_encrypt_aad
-	export	tls_key_decrypt
-	export	tls_key_decrypt_aad
 	export	lwip_start_with_crt
 	export	lwip_get_start_errno
 	export	lwip_get_start_errstring
