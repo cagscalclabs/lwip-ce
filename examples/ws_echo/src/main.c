@@ -62,7 +62,7 @@ static const char *SEND_MSG = "Hello from TI-84+CE via lwIP-CE!";
 
 typedef struct
 {
-    struct lwip_socket sock;
+    struct lwip_socket *sock;
     bool   connected;
     bool   sent;
     bool   done;
@@ -139,9 +139,9 @@ static void ws_on_event(struct lwip_socket *sock,
             break;
 
         uint8_t tmp[128];
-        while (lwip_socket_available(&ph.sock))
+        while (lwip_socket_available(ph.sock))
         {
-            size_t got = lwip_socket_read(&ph.sock, tmp, sizeof(tmp));
+            size_t got = lwip_socket_read(ph.sock, tmp, sizeof(tmp));
             for (size_t i = 0; i < got; i++)
             {
                 if (ph.rx_len + 1 < sizeof(ph.rx_buf))
@@ -179,18 +179,18 @@ static bool run_phase(lwip_socket_type_t type,
     log_linef("[ %s ]", label);
     log_linef("  host: %s:%u", host, (unsigned)port);
 
-    lwip_error_t e = lwip_socket_create(&ph.sock, type, LWIP_NETIF_EXT,
-                                        NULL, CONNECT_TIMEOUT_MS);
-    if (e != LWIP_OK)
+    ph.sock = lwip_socket_create(type, LWIP_NETIF_EXT,
+                                 NULL, CONNECT_TIMEOUT_MS);
+    if (!ph.sock)
     {
-        log_linef("  create failed: %d", (int)e);
+        log_line("  create failed: OOM");
         return false;
     }
 
-    lwip_socket_set_ws_config(&ph.sock, path, NULL);
-    lwip_socket_on_event(&ph.sock, LWIP_SOCKET_EVENTF_ALL, ws_on_event, NULL);
+    lwip_socket_set_ws_config(ph.sock, path, NULL);
+    lwip_socket_on_event(ph.sock, LWIP_SOCKET_EVENTF_ALL, ws_on_event, NULL);
 
-    e = lwip_socket_connect(&ph.sock, host, port);
+    lwip_error_t e = lwip_socket_connect(ph.sock, host, port);
     if (e != LWIP_OK)
     {
         log_linef("  connect failed: %d", (int)e);
@@ -206,7 +206,7 @@ static bool run_phase(lwip_socket_type_t type,
         if (ph.connected && !ph.sent)
         {
             ph.sent = true;
-            lwip_error_t we = lwip_socket_write(&ph.sock,
+            lwip_error_t we = lwip_socket_write(ph.sock,
                                                 (const uint8_t *)SEND_MSG,
                                                 strlen(SEND_MSG));
             if (we != LWIP_OK)
@@ -252,14 +252,14 @@ static bool run_phase(lwip_socket_type_t type,
     }
 
 cleanup:
-    if (lwip_socket_is_active(&ph.sock))
+    if (lwip_socket_is_active(ph.sock))
     {
-        lwip_socket_close(&ph.sock);
+        lwip_socket_close(ph.sock);
         uint32_t t = lwip_now_ms() + 2000u;
-        while (lwip_socket_is_active(&ph.sock) && lwip_now_ms() < t)
+        while (lwip_socket_is_active(ph.sock) && lwip_now_ms() < t)
             lwip_service_events();
     }
-    lwip_socket_destroy(&ph.sock);
+    lwip_socket_destroy(ph.sock);
     return ph.echo_received;
 }
 

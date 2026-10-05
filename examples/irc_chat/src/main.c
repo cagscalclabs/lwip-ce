@@ -636,7 +636,7 @@ static void irc_service_cb(struct netif *netif,
 
 static void irc_pcap_toggle(struct irc_state *state, struct lwip_socket *sock)
 {
-    struct netif *netif = sock->netif;
+    struct netif *netif = lwip_socket_get_netif(sock);
 
     if (!netif)
     {
@@ -942,7 +942,7 @@ static void irc_on_event(struct lwip_socket *sock,
                  st->current == LWIP_STATUS_RESET)
         {
             state->connected = false;
-            state->err = sock->last_error ? sock->last_error : LWIP_ERR_CLOSED;
+            state->err = lwip_socket_last_error(sock) ? lwip_socket_last_error(sock) : LWIP_ERR_CLOSED;
             state->done = true;
             state->done_reason = (uint8_t)(st->current == LWIP_STATUS_RESET
                                                 ? 2  /* STATE_CHANGE: RESET */
@@ -971,7 +971,7 @@ static void irc_on_event(struct lwip_socket *sock,
             lwip_example_draw_mem_stats();
         }
 #endif
-        state->err = err ? err->err : sock->last_error;
+        state->err = err ? err->err : lwip_socket_last_error(sock);
         state->connected = false;
         state->done = true;
         state->done_reason = 4; /* EV_ERROR */
@@ -1239,8 +1239,8 @@ static void irc_session_close(struct irc_state *state, struct lwip_socket *sock)
     }
     (void)lwip_socket_close(sock);
     start = lwip_example_now_ms();
-    while ((sock->status == LWIP_STATUS_CONNECTED ||
-            sock->status == LWIP_STATUS_CLOSING) &&
+    while ((lwip_socket_status(sock) == LWIP_STATUS_CONNECTED ||
+            lwip_socket_status(sock) == LWIP_STATUS_CLOSING) &&
            (uint32_t)(lwip_example_now_ms() - start) < 500u)
     {
         lwip_service_events();
@@ -1250,28 +1250,27 @@ static void irc_session_close(struct irc_state *state, struct lwip_socket *sock)
 
 static void irc_session_run(struct irc_state *state)
 {
-    static struct lwip_socket sock;
+    struct lwip_socket *sock;
     lwip_error_t err;
     char connect_line[48];
 
-    memset(&sock, 0, sizeof(sock));
     irc_session_reset(state);
 
-    err = lwip_socket_create(&sock, irc_socket_type(state), LWIP_NETIF_EXT,
-                             NULL, IRC_CONNECT_TIMEOUT_MS);
-    if (err != LWIP_OK)
+    sock = lwip_socket_create(irc_socket_type(state), LWIP_NETIF_EXT,
+                              NULL, IRC_CONNECT_TIMEOUT_MS);
+    if (!sock)
     {
-        lwip_example_show_socket_error("IRC create", &sock, err);
+        lwip_example_show_and_wait("IRC create", "OOM");
         return;
     }
 
-    lwip_socket_on_event(&sock, LWIP_SOCKET_EVENTF_ALL,
+    lwip_socket_on_event(sock, LWIP_SOCKET_EVENTF_ALL,
                          irc_on_event, state);
 
     /* Request DHCP, DNS, and SNTP on the bound netif.  The service callback
      * fires per-service and appends a system message so the user can see
      * progress.  30 s timeout matches the connect watchdog. */
-    err = lwip_netif_request_services(sock.netif,
+    err = lwip_netif_request_services(lwip_socket_get_netif(sock),
                                       LWIP_SOCKET_SVC_DHCP |
                                       LWIP_SOCKET_SVC_DNS  |
                                       LWIP_SOCKET_SVC_SNTP,
@@ -1279,8 +1278,8 @@ static void irc_session_run(struct irc_state *state)
                                       irc_service_cb, state);
     if (err != LWIP_OK)
     {
-        lwip_example_show_socket_error("IRC services", &sock, err);
-        lwip_socket_destroy(&sock);
+        lwip_example_show_socket_error("IRC services", sock, err);
+        lwip_socket_destroy(sock);
         return;
     }
 
@@ -1290,7 +1289,7 @@ static void irc_session_run(struct irc_state *state)
     /* Gate: wait until DHCP + DNS are up before connecting.  SNTP is
      * best-effort — we don't require it to proceed.  Bail on Clear or
      * service hard-failure. */
-    while (!lwip_are_services_ready(sock.netif,
+    while (!lwip_are_services_ready(lwip_socket_get_netif(sock),
                                     LWIP_SOCKET_SVC_DHCP |
                                     LWIP_SOCKET_SVC_DNS))
     {
@@ -1301,13 +1300,13 @@ static void irc_session_run(struct irc_state *state)
 
         if (lwip_example_cancelled(key))
         {
-            lwip_socket_destroy(&sock);
+            lwip_socket_destroy(sock);
             return;
         }
         if (state->services_failed)
         {
             lwip_example_show_and_wait("IRC services", "failed");
-            lwip_socket_destroy(&sock);
+            lwip_socket_destroy(sock);
             return;
         }
         if (state->redraw)
@@ -1335,13 +1334,13 @@ static void irc_session_run(struct irc_state *state)
                        state->use_tls ? "tls" : "tcp");
 #endif
 
-    err = lwip_socket_connect(&sock, state->server, irc_port(state));
+    err = lwip_socket_connect(sock, state->server, irc_port(state));
     if (err != LWIP_OK)
     {
-        lwip_example_show_socket_error("IRC connect", &sock, err);
+        lwip_example_show_socket_error("IRC connect", sock, err);
         goto cleanup;
     }
-    irc_note_status(state, &sock);
+    irc_note_status(state, sock);
 
     while (!state->done)
     {
@@ -1349,11 +1348,11 @@ static void irc_session_run(struct irc_state *state)
 
         lwip_service_events();
         key = os_GetCSC();
-        irc_note_status(state, &sock);
+        irc_note_status(state, sock);
 
-        if (state->connected && lwip_socket_available(&sock))
+        if (state->connected && lwip_socket_available(sock))
         {
-            irc_on_readable(state, &sock);
+            irc_on_readable(state, sock);
         }
 
         if (lwip_example_cancelled(key))
@@ -1363,7 +1362,7 @@ static void irc_session_run(struct irc_state *state)
         }
         if (key == sk_Trace)
         {
-            irc_pcap_toggle(state, &sock);
+            irc_pcap_toggle(state, sock);
         }
         if (lwip_example_mem_stats_tick(key))
         {
@@ -1405,7 +1404,7 @@ static void irc_session_run(struct irc_state *state)
             }
             break;
         case sk_Enter:
-            irc_send_input(state, &sock);
+            irc_send_input(state, sock);
             break;
         default:
             {
@@ -1440,9 +1439,9 @@ static void irc_session_run(struct irc_state *state)
     }
 
 cleanup:
-    if (state->pcap_enabled && sock.netif)
+    if (state->pcap_enabled && lwip_socket_get_netif(sock))
     {
-        pcap_disable_on_netif(sock.netif);
+        pcap_disable_on_netif(lwip_socket_get_netif(sock));
         state->pcap_enabled = false;
     }
     if (state && state->done && !state->exiting)
@@ -1465,16 +1464,16 @@ cleanup:
         char reason[24];
         snprintf(reason, sizeof(reason), "reason %u", (unsigned)state->done_reason);
         lwip_example_show_and_wait("IRC disconnected", reason);
-        lwip_example_show_socket_error("IRC disconnected", &sock, state->err);
+        lwip_example_show_socket_error("IRC disconnected", sock, state->err);
 #endif
     }
     if (state->exiting)
     {
-        irc_session_close(state, &sock);
+        irc_session_close(state, sock);
     }
     else
     {
-        lwip_socket_destroy(&sock);
+        lwip_socket_destroy(sock);
     }
 }
 

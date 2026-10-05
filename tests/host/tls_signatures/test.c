@@ -10,22 +10,31 @@ static void algorithm(const uint8_t *der, size_t n, bool expected, tls_alg_t sch
 #define ALG(v, ok, scheme) algorithm(v, sizeof(v), ok, scheme)
 
 static unsigned be16(const uint8_t *p) { return (unsigned)p[0] * 256 + p[1]; }
-static void hello(bool psk)
+static void hello(bool psk, const char *hostname)
 {
     struct tls_handshake_context ctx;
     assert(tls_handshake_init(&ctx, NULL, NULL));
     ctx.psk_mode = psk;
+    ctx.hostname = hostname;
     ctx.psk_identity.identity_len = 1;
     uint8_t buf[512]; size_t n, again;
     assert(tls_send_client_hello(&ctx, buf, sizeof(buf), &n));
+    ctx.state = TLS_STATE_INIT; /* Each serialization starts a fresh flight. */
     assert(tls_send_client_hello(&ctx, buf, n, &again) && n == again);
+    ctx.state = TLS_STATE_INIT;
     assert(!tls_send_client_hello(&ctx, buf, n-1, &again));
     assert(be16(buf+45) == n-47);
-    unsigned found = 0;
+    unsigned found = 0, sni = 0;
     for (size_t off = 47; off < n; )
     {
         unsigned type = be16(buf+off), len = be16(buf+off+2);
         assert(off + 4 + len <= n);
+        if (type == 0)
+        {
+            sni++;
+            assert(hostname && len == strlen(hostname) + 5);
+            assert(memcmp(buf + off + 9, hostname, strlen(hostname)) == 0);
+        }
         if (type == 13)
         {
             assert(len == 4 && be16(buf+off+4) == 2 && be16(buf+off+6) == 0x0804);
@@ -40,6 +49,7 @@ static void hello(bool psk)
         off += 4 + len;
     }
     assert(found == 2);
+    assert(sni == (unsigned)(hostname && !strcmp(hostname, "example.test")));
     tls_handshake_cleanup(&ctx);
 }
 
@@ -109,7 +119,11 @@ int main(void)
     ALG(bad_salt, false, 0); ALG(bad_hash, false, 0);
     ALG(bad_mgf_hash, false, 0); ALG(bad_duplicate, false, 0);
     ALG(bad_trailer, false, 0); ALG(bad_key_oid, false, 0);
-    hello(false); hello(true);
+    hello(false, NULL); hello(true, NULL);
+    hello(false, "example.test"); hello(true, "example.test");
+    hello(false, "192.168.2.10"); hello(true, "192.168.2.10");
+    hello(false, "2001:db8::1"); hello(true, "2001:db8::1");
+    identity_tests();
     chain(cert_pkcs, sizeof(cert_pkcs), TLS_ALG_RSA_PKCS1_SHA256);
     chain(cert_pss, sizeof(cert_pss), TLS_ALG_RSA_PSS_RSAE_SHA256);
     assert(pkcs_calls && pss_calls);

@@ -3315,20 +3315,13 @@ static bool browser_fetch_connect_socket(struct browser_state *state)
 {
     lwip_error_t err;
 
+    state->sock = lwip_socket_create_ex(state->fetch.req.tls
+                                            ? LWIP_SOCKET_ALTCP_TLS
+                                            : LWIP_SOCKET_TCP,
+                                        LWIP_NETIF_EXT, nullptr,
+                                        BROWSER_SOCKET_TIMEOUT_MS,
+                                        BROWSER_SOCKET_RX_MAX);
     if (!state->sock)
-    {
-        browser_set_body(state, "Socket unavailable");
-        return false;
-    }
-    memset(state->sock, 0, sizeof(*state->sock));
-    err = lwip_socket_create_ex(state->sock,
-                                state->fetch.req.tls
-                                    ? LWIP_SOCKET_ALTCP_TLS
-                                    : LWIP_SOCKET_TCP,
-                                LWIP_NETIF_EXT, nullptr,
-                                BROWSER_SOCKET_TIMEOUT_MS,
-                                BROWSER_SOCKET_RX_MAX);
-    if (err != LWIP_OK)
     {
         browser_set_body(state, "Socket create failed");
         browser_fetch_cleanup(state);
@@ -4019,7 +4012,7 @@ static void browser_fetch_cleanup(struct browser_state *state)
     if (state->sock)
     {
         lwip_socket_destroy(state->sock);
-        memset(state->sock, 0, sizeof(*state->sock));
+        state->sock = NULL;
     }
     memset(&state->fetch, 0, sizeof(state->fetch));
     memset(&state->socket_req, 0, sizeof(state->socket_req));
@@ -4523,7 +4516,6 @@ static void browser_state_release(struct browser_state *state)
 int main(void)
 {
     static Browser browser;
-    static struct lwip_socket sock;
     struct browser_state *state;
     bool redraw = true;
 
@@ -4542,8 +4534,7 @@ int main(void)
     memset(state, 0, sizeof(*state));
     state->browser = &browser;
     browser.attach_state(state);
-    state->sock = &sock;
-    memset(state->sock, 0, sizeof(*state->sock));
+    state->sock = nullptr;
     browser_copy(state->url, sizeof(state->url), BROWSER_URL);
     browser_normalize_url(state->url, sizeof(state->url));
     browser_copy(state->edit_url, sizeof(state->edit_url), state->url);

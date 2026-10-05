@@ -9,6 +9,7 @@
 #include "../includes/rsa.h"
 #include "../includes/x509.h"
 #include "x509_internal.h"
+#include "ip_identity.h"
 #include "key_internal.h"
 #include "../includes/tls.h"
 
@@ -57,14 +58,17 @@ static bool tls_x509_parse_name_common_name(const struct tls_asn1_tlv *name_tlv,
 
     if (!name_tlv || !out)
     {
+        ERROR_CODE(0x01);
         return false;
     }
     if (!tls_asn1_tag_constructed(name_tlv->tag) || tls_asn1_tag_number(name_tlv->tag) != ASN1_SEQUENCE)
     {
+        ERROR_CODE(0x02);
         return false;
     }
     if (!tls_asn1_child_cursor(name_tlv, &rdn_cursor))
     {
+        ERROR_CODE(0x03);
         return false;
     }
 
@@ -86,6 +90,7 @@ static bool tls_x509_parse_name_common_name(const struct tls_asn1_tlv *name_tlv,
         }
         if (!tls_asn1_child_cursor(&rdn_set, &set_cursor))
         {
+            ERROR_CODE(0x04);
             return false;
         }
 
@@ -103,6 +108,7 @@ static bool tls_x509_parse_name_common_name(const struct tls_asn1_tlv *name_tlv,
                 !tls_asn1_next(&atv_cursor, &attr_oid) ||
                 !tls_asn1_next(&atv_cursor, &attr_value))
             {
+                ERROR_CODE(0x05);
                 return false;
             }
             if (!tls_x509_is_string_tag(attr_value.tag))
@@ -142,18 +148,22 @@ static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_t
 
     if (!alg_tlv || !alg_out)
     {
+        ERROR_CODE(0x06);
         return false;
     }
     if (!tls_asn1_tag_constructed(alg_tlv->tag) || tls_asn1_tag_number(alg_tlv->tag) != ASN1_SEQUENCE)
     {
+        ERROR_CODE(0x07);
         return false;
     }
     if (!tls_asn1_child_cursor(alg_tlv, &c) || !tls_asn1_next(&c, &oid))
     {
+        ERROR_CODE(0x08);
         return false;
     }
     if (tls_asn1_tag_number(oid.tag) != ASN1_OBJECTID)
     {
+        ERROR_CODE(0x09);
         return false;
     }
 
@@ -181,11 +191,13 @@ static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_t
         {
             if (param.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
             {
+                ERROR_CODE(0x0a);
                 return false;
             }
         }
         else if (param.tag != ASN1_OBJECTID && param.tag != ASN1_NULL)
         {
+            ERROR_CODE(0x0b);
             return false;
         }
         if (param_out && param.tag != ASN1_NULL)
@@ -197,6 +209,7 @@ static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_t
     }
     else if (!param_optional)
     {
+        ERROR_CODE(0x0c);
         return false;
     }
 
@@ -218,10 +231,12 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
 
     if (!ext_data || ext_len == 0)
     {
+        ERROR_CODE(0x0d);
         return false;
     }
     if (!tls_asn1_cursor_init(&ext_cursor, ext_data, ext_len))
     {
+        ERROR_CODE(0x0e);
         return false;
     }
 
@@ -241,6 +256,7 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
         {
             if (!tls_asn1_child_cursor(&ext_tlv, &ext_list_cursor))
             {
+                ERROR_CODE(0x0f);
                 return false;
             }
         }
@@ -252,6 +268,7 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
     }
     else
     {
+        ERROR_CODE(0x10);
         return false;
     }
 
@@ -318,10 +335,12 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
             if (!tls_asn1_cursor_init(&inner_cursor, value_tlv.value, value_tlv.len) ||
                 !tls_asn1_next(&inner_cursor, &inner_tlv))
             {
+                ERROR_CODE(0x11);
                 return false;
             }
             if (tls_asn1_tag_number(inner_tlv.tag) != ASN1_SEQUENCE || !tls_asn1_tag_constructed(inner_tlv.tag))
             {
+                ERROR_CODE(0x12);
                 return false;
             }
 
@@ -333,6 +352,7 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
                 struct tls_asn1_tlv bc_item;
                 if (!tls_asn1_child_cursor(&inner_tlv, &bc_cursor))
                 {
+                    ERROR_CODE(0x13);
                     return false;
                 }
                 if (tls_asn1_next(&bc_cursor, &bc_item) &&
@@ -354,11 +374,13 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
             if (!tls_asn1_cursor_init(&inner_cursor, value_tlv.value, value_tlv.len) ||
                 !tls_asn1_next(&inner_cursor, &inner_tlv))
             {
+                ERROR_CODE(0x14);
                 return false;
             }
             if (tls_asn1_tag_number(inner_tlv.tag) != ASN1_BITSTRING ||
                 inner_tlv.len < 2 || inner_tlv.value[0] > 7)
             {
+                ERROR_CODE(0x15);
                 return false;
             }
             *key_usage_present = true;
@@ -381,12 +403,14 @@ static bool tls_x509_name_eq_ci(const uint8_t *a, size_t a_len, const uint8_t *b
     size_t i;
     if (a_len != b_len)
     {
+        ERROR_CODE(0x16);
         return false;
     }
     for (i = 0; i < a_len; i++)
     {
         if (tls_x509_ascii_lower(a[i]) != tls_x509_ascii_lower(b[i]))
         {
+            ERROR_CODE(0x17);
             return false;
         }
     }
@@ -416,6 +440,7 @@ static bool tls_x509_pattern_matches_host(const uint8_t *pattern, size_t pattern
 
     if (pattern_len < 3 || pattern[0] != '*' || pattern[1] != '.')
     {
+        ERROR_CODE(0x18);
         return false;
     }
 
@@ -432,11 +457,13 @@ static bool tls_x509_pattern_matches_host(const uint8_t *pattern, size_t pattern
         /* Hostname has no dot at all -- can't match a "*.suffix" pattern,
          * and prevents "*.com"-style patterns from matching a single
          * label such as "com". */
+        ERROR_CODE(0x19);
         return false;
     }
     h_first_label_len = (size_t)(h_dot - hostname);
     if (h_first_label_len == 0)
     {
+        ERROR_CODE(0x1a);
         return false;
     }
 
@@ -453,8 +480,9 @@ static bool tls_x509_pattern_matches_host(const uint8_t *pattern, size_t pattern
 
 /* OID 2.5.29.17 subjectAltName. GeneralName ::= CHOICE, dNSName is
  * [2] IMPLICIT IA5String (context-specific, primitive, tag number 2). */
-static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
+static bool tls_x509_san_matches(const uint8_t *ext_data, size_t ext_len,
                                      const char *hostname, size_t hostname_len,
+                                     const uint8_t *ip, size_t ip_len,
                                      bool *san_present)
 {
     static const uint8_t oid_subject_alt_name[] = {0x55, 0x1D, 0x11};
@@ -466,10 +494,12 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
 
     if (!ext_data || ext_len == 0)
     {
+        ERROR_CODE(0x30);
         return false;
     }
     if (!tls_asn1_cursor_init(&ext_cursor, ext_data, ext_len))
     {
+        ERROR_CODE(0x31);
         return false;
     }
 
@@ -483,6 +513,7 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
         {
             if (!tls_asn1_child_cursor(&ext_tlv, &ext_list_cursor))
             {
+                ERROR_CODE(0x1b);
                 return false;
             }
         }
@@ -494,6 +525,7 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
     }
     else
     {
+        ERROR_CODE(0x1c);
         return false;
     }
 
@@ -553,6 +585,7 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
 
             if (!tls_asn1_cursor_init(&san_cursor, value_tlv.value, value_tlv.len))
             {
+                ERROR_CODE(0x1d);
                 return false;
             }
 
@@ -563,19 +596,35 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
                 struct tls_asn1_cursor san_seq_cursor;
                 if (!tls_asn1_next(&san_cursor, &san_seq) ||
                     tls_asn1_tag_number(san_seq.tag) != ASN1_SEQUENCE ||
-                    !tls_asn1_tag_constructed(san_seq.tag))
+                    !tls_asn1_tag_constructed(san_seq.tag) ||
+                    san_cursor.cur != san_cursor.end)
                 {
+                    ERROR_CODE(0x1e);
                     return false;
                 }
                 if (!tls_asn1_child_cursor(&san_seq, &san_seq_cursor))
                 {
+                    ERROR_CODE(0x1f);
                     return false;
                 }
                 san_cursor = san_seq_cursor;
             }
 
-            while (tls_asn1_next(&san_cursor, &san_item))
+            while (san_cursor.cur < san_cursor.end)
             {
+                ERROR_CODE(0x20);
+                if (!tls_asn1_next(&san_cursor, &san_item)) return false;
+                if (san_item.tag == 0x87 && san_item.len != 4 && san_item.len != 16)
+                    ERROR_CODE(0x21);
+                    return false;
+                if (ip_len)
+                {
+                    /* iPAddress [7] contains 4 or 16 network-order octets. */
+                    if (san_item.tag == 0x87 && san_item.len == ip_len &&
+                        memcmp(san_item.value, ip, ip_len) == 0)
+                        matched = true;
+                    continue;
+                }
                 /* dNSName: context class, primitive, tag number 2 -- raw
                  * tag byte 0x82 ((2<<6) CONTEXTSPEC | (0<<5) PRIMITIVE | 2). */
                 if (san_item.tag != (uint8_t)(ASN1_CONTEXTSPEC | ASN1_PRIMITIVE | 2u))
@@ -600,6 +649,7 @@ static bool tls_x509_san_dns_matches(const uint8_t *ext_data, size_t ext_len,
         }
     }
 
+    ERROR_CODE(0x22);
     return false;
 }
 
@@ -611,19 +661,29 @@ bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
     size_t hostname_len;
 
     if (!hostname)
+        ERROR_CODE(0x23);
         return false;
 
     hostname_len = strlen(hostname);
     if (hostname_len == 0)
+        ERROR_CODE(0x24);
         return false;
 
-    if (tls_x509_san_dns_matches(ext_data, ext_len, hostname, hostname_len, &san_present))
+    uint8_t ip[16];
+    int ip_len = tls_identity_ip(hostname, ip);
+    ERROR_CODE(0x25);
+    if (ip_len < 0) return false;
+
+    if (tls_x509_san_matches(ext_data, ext_len, hostname, hostname_len,
+                              ip, (size_t)ip_len, &san_present))
         return true;
 
-    if (san_present)
+    if (ip_len || san_present)
+        ERROR_CODE(0x26);
         return false; /* SAN present but no match — don't fall back to CN */
 
     if (!subject_cn || subject_cn_len == 0)
+        ERROR_CODE(0x27);
         return false;
 
     return tls_x509_pattern_matches_host(subject_cn, subject_cn_len, hostname, hostname_len);
@@ -633,6 +693,7 @@ static bool tls_x509_digit_pair(const uint8_t *p, uint32_t *out)
 {
     if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9')
     {
+        ERROR_CODE(0x28);
         return false;
     }
     *out = (uint32_t)((p[0] - '0') * 10 + (p[1] - '0'));
@@ -668,6 +729,7 @@ bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
 
     if (!data || len == 0 || !out_secs)
     {
+        ERROR_CODE(0x29);
         return false;
     }
     tag_num = tls_asn1_tag_number(tag);
@@ -679,6 +741,7 @@ bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
         uint32_t yy;
         if (len != 13 || v[12] != 'Z')
         {
+            ERROR_CODE(0x2a);
             return false;
         }
         if (!tls_x509_digit_pair(v, &yy) ||
@@ -688,6 +751,7 @@ bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
             !tls_x509_digit_pair(v + 8, &minute) ||
             !tls_x509_digit_pair(v + 10, &second))
         {
+            ERROR_CODE(0x2b);
             return false;
         }
         /* RFC 5280 4.1.2.5.1 pivot: 50-99 => 19xx, 00-49 => 20xx. */
@@ -699,6 +763,7 @@ bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
         uint32_t y_hi, y_lo;
         if (len != 15 || v[14] != 'Z')
         {
+            ERROR_CODE(0x2c);
             return false;
         }
         if (!tls_x509_digit_pair(v, &y_hi) ||
@@ -709,18 +774,21 @@ bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
             !tls_x509_digit_pair(v + 10, &minute) ||
             !tls_x509_digit_pair(v + 12, &second))
         {
+            ERROR_CODE(0x2d);
             return false;
         }
         year = y_hi * 100u + y_lo;
     }
     else
     {
+        ERROR_CODE(0x2e);
         return false;
     }
 
     if (month < 1 || month > 12 || day < 1 || day > 31 ||
         hour > 23 || minute > 59 || second > 60 /* allow leap second */)
     {
+        ERROR_CODE(0x2f);
         return false;
     }
 
@@ -730,6 +798,7 @@ bool tls_x509_time_to_unix(const uint8_t *data, size_t len, uint8_t tag,
     {
         /* Out of uint32_t Unix-seconds range (pre-1970 or post-2106) --
          * cleanly fail closed rather than silently truncating/wrapping. */
+        ERROR_CODE(0x30);
         return false;
     }
 
@@ -743,6 +812,7 @@ bool tls_x509_time_in_validity(const struct tls_x509_object *cert, uint32_t now_
     uint32_t not_after_secs;
 
     if (!cert)
+        ERROR_CODE(0x31);
         return false;
 
     if (!tls_x509_time_to_unix(cert->not_before, cert->not_before_len,
@@ -750,11 +820,13 @@ bool tls_x509_time_in_validity(const struct tls_x509_object *cert, uint32_t now_
         !tls_x509_time_to_unix(cert->not_after,  cert->not_after_len,
                                 cert->not_after_tag,  &not_after_secs))
     {
+        ERROR_CODE(0x32);
         return false;
     }
     if (not_before_secs > not_after_secs)
     {
         /* Malformed/inverted validity window. */
+        ERROR_CODE(0x33);
         return false;
     }
     return now_secs >= not_before_secs && now_secs <= not_after_secs;
@@ -773,15 +845,18 @@ bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len)
                                                     &key_usage_present,
                                                     &key_usage_key_cert_sign))
     {
+        ERROR_CODE(0x34);
         return false;
     }
 
     if (!basic_constraints_present || !basic_constraints_ca_true)
     {
+        ERROR_CODE(0x35);
         return false;
     }
     if (key_usage_present && !key_usage_key_cert_sign)
     {
+        ERROR_CODE(0x36);
         return false;
     }
 
@@ -793,9 +868,11 @@ bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_l
     struct tls_x509_object parsed = {0};
 
     if (!tls_x509_parse_certificate(cert_der, cert_len, &parsed))
+        ERROR_CODE(0x37);
         return false;
 
     if (!parsed.extensions || parsed.extensions_len == 0)
+        ERROR_CODE(0x38);
         return false;
 
     return tls_x509_has_valid_constraints(parsed.extensions, parsed.extensions_len);
@@ -830,23 +907,28 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
 
     if (!tls_asn1_cursor_init(&top_cursor, cert_der, cert_len) ||
         !tls_asn1_next(&top_cursor, &cert_seq))
+        ERROR_CODE(0x39);
         return false;
 
     if (!tls_asn1_tag_constructed(cert_seq.tag) ||
         tls_asn1_tag_number(cert_seq.tag) != ASN1_SEQUENCE)
+        ERROR_CODE(0x3a);
         return false;
 
     if (!tls_asn1_child_cursor(&cert_seq, &cert_items) ||
         !tls_asn1_next(&cert_items, &tbs) ||
         !tls_asn1_next(&cert_items, &ca_sig_alg) ||
         !tls_asn1_next(&cert_items, &ca_sig_val))
+        ERROR_CODE(0x3b);
         return false;
 
     if (!tls_asn1_tag_constructed(tbs.tag) ||
         tls_asn1_tag_number(tbs.tag) != ASN1_SEQUENCE)
+        ERROR_CODE(0x3c);
         return false;
 
     if (tls_asn1_tag_number(ca_sig_val.tag) != ASN1_BITSTRING)
+        ERROR_CODE(0x3d);
         return false;
 
     {
@@ -859,9 +941,11 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
         struct tls_asn1_tlv spki;
 
         if (!tls_asn1_child_cursor(&tbs, &tbs_cursor))
+            ERROR_CODE(0x3e);
             return false;
 
         if (!tls_asn1_next(&tbs_cursor, &item))
+            ERROR_CODE(0x3f);
             return false;
 
         /* version is [0] EXPLICIT and optional in v1 certs. */
@@ -870,10 +954,12 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             tls_asn1_tag_constructed(item.tag))
         {
             if (!tls_asn1_next(&tbs_cursor, &item))
+                ERROR_CODE(0x40);
                 return false;
         }
 
         if (tls_asn1_tag_number(item.tag) != ASN1_INTEGER)
+            ERROR_CODE(0x41);
             return false;
 
         if (!tls_asn1_next(&tbs_cursor, &sig_alg)  ||
@@ -881,11 +967,13 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             !tls_asn1_next(&tbs_cursor, &validity)  ||
             !tls_asn1_next(&tbs_cursor, &subject)   ||
             !tls_asn1_next(&tbs_cursor, &spki))
+            ERROR_CODE(0x42);
             return false;
 
         /* issuer CN */
         memset(&scratch_cn, 0, sizeof(scratch_cn));
         if (!tls_x509_parse_name_common_name(&issuer, &scratch_cn))
+            ERROR_CODE(0x43);
             return false;
         out->issuer_cn     = scratch_cn.data;
         out->issuer_cn_len = scratch_cn.len;
@@ -897,18 +985,22 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
 
             if (!tls_asn1_tag_constructed(validity.tag) ||
                 tls_asn1_tag_number(validity.tag) != ASN1_SEQUENCE)
+                ERROR_CODE(0x44);
                 return false;
 
             if (!tls_asn1_child_cursor(&validity, &validity_cursor) ||
                 !tls_asn1_next(&validity_cursor, &not_before) ||
                 !tls_asn1_next(&validity_cursor, &not_after))
+                ERROR_CODE(0x45);
                 return false;
 
             uint8_t nb_tag = tls_asn1_tag_number(not_before.tag);
             uint8_t na_tag = tls_asn1_tag_number(not_after.tag);
             if (nb_tag != ASN1_UTCTIME && nb_tag != ASN1_GENERALIZEDTIME)
+                ERROR_CODE(0x46);
                 return false;
             if (na_tag != ASN1_UTCTIME && na_tag != ASN1_GENERALIZEDTIME)
+                ERROR_CODE(0x47);
                 return false;
 
             out->not_before     = not_before.value;
@@ -922,6 +1014,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
         /* subject CN */
         memset(&scratch_cn, 0, sizeof(scratch_cn));
         if (!tls_x509_parse_name_common_name(&subject, &scratch_cn))
+            ERROR_CODE(0x48);
             return false;
         out->subject_cn     = scratch_cn.data;
         out->subject_cn_len = scratch_cn.len;
@@ -929,6 +1022,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
         /* SPKI — parse into pubkey */
         if (!tls_asn1_tag_constructed(spki.tag) ||
             tls_asn1_tag_number(spki.tag) != ASN1_SEQUENCE)
+            ERROR_CODE(0x49);
             return false;
 
         {
@@ -939,14 +1033,17 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             if (!tls_asn1_child_cursor(&spki, &spki_cursor) ||
                 !tls_asn1_next(&spki_cursor, &spki_alg)      ||
                 !tls_asn1_next(&spki_cursor, &spki_bits))
+                ERROR_CODE(0x4a);
                 return false;
 
             memset(&scratch_alg, 0, sizeof(scratch_alg));
             if (!tls_x509_parse_algorithm_identifier(&spki_alg, &scratch_alg,
                                                       &scratch_param, true))
+                ERROR_CODE(0x4b);
                 return false;
 
             if (tls_asn1_tag_number(spki_bits.tag) != ASN1_BITSTRING)
+                ERROR_CODE(0x4c);
                 return false;
 
             /* Infer the algorithm from the SPKI OID and extract key material. */
@@ -974,6 +1071,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             {
                 /* BIT STRING payload: skip the leading unused-bits byte. */
                 if (spki_bits.len < 2 || spki_bits.value[0] != 0x00)
+                    ERROR_CODE(0x4d);
                     return false;
                 /* key_parse_spki (key.c) logic inline: parse RSAPublicKey. */
                 struct tls_asn1_cursor rsa_c;
@@ -983,6 +1081,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                     !tls_asn1_next(&rsa_c, &rsa_seq) ||
                     !tls_asn1_tag_constructed(rsa_seq.tag) ||
                     tls_asn1_tag_number(rsa_seq.tag) != ASN1_SEQUENCE)
+                    ERROR_CODE(0x4e);
                     return false;
                 struct tls_asn1_cursor rsa_body;
                 if (!tls_asn1_child_cursor(&rsa_seq, &rsa_body) ||
@@ -990,6 +1089,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                     !tls_asn1_next(&rsa_body, &rsa_exp) ||
                     tls_asn1_tag_number(rsa_mod.tag) != ASN1_INTEGER ||
                     tls_asn1_tag_number(rsa_exp.tag) != ASN1_INTEGER)
+                    ERROR_CODE(0x4f);
                     return false;
 
                 const uint8_t *mod = rsa_mod.value;
@@ -1005,6 +1105,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             {
                 /* EC public key: BIT STRING value after the unused-bits byte. */
                 if (spki_bits.len < 2 || spki_bits.value[0] != 0)
+                    ERROR_CODE(0x50);
                     return false;
                 out->pubkey.ec.data = spki_bits.value + 1;
                 out->pubkey.ec.len  = spki_bits.len  - 1;
@@ -1031,6 +1132,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
     memset(&scratch_alg, 0, sizeof(scratch_alg));
     if (!tls_x509_parse_algorithm_identifier(&ca_sig_alg, &scratch_alg,
                                               &scratch_param, true))
+        ERROR_CODE(0x51);
         return false;
 
     return true;
@@ -1051,11 +1153,13 @@ static bool tls_x509_decode_pem_certificate(const char *pem_data,
 
     if (!pem_data || !der_out || !der_written || size == 0)
     {
+        ERROR_CODE(0x52);
         return false;
     }
     if (size < (sizeof(begin_banner) - 1) ||
         memcmp(pem_data, begin_banner, sizeof(begin_banner) - 1) != 0)
     {
+        ERROR_CODE(0x53);
         return false;
     }
 
@@ -1063,6 +1167,7 @@ static bool tls_x509_decode_pem_certificate(const char *pem_data,
     p = memchr(pem_data, '\n', size);
     if (!p)
     {
+        ERROR_CODE(0x54);
         return false;
     }
     p++;
@@ -1086,12 +1191,14 @@ static bool tls_x509_decode_pem_certificate(const char *pem_data,
         {
             if (b64_count >= der_out_len)
             {
+                ERROR_CODE(0x55);
                 return false;
             }
             der_out[b64_count++] = (uint8_t)*p;
         }
         else if ((*p != '\n') && (*p != '\r') && (*p != ' ') && (*p != '\t'))
         {
+            ERROR_CODE(0x56);
             return false;
         }
         p++;
@@ -1099,12 +1206,14 @@ static bool tls_x509_decode_pem_certificate(const char *pem_data,
 
     if (p >= end || b64_count == 0 || (b64_count & 3) != 0)
     {
+        ERROR_CODE(0x57);
         return false;
     }
 
     i = tls_base64_decode(der_out, b64_count, der_out);
     if (i == 0 || i > der_out_len)
     {
+        ERROR_CODE(0x58);
         return false;
     }
 
@@ -1224,9 +1333,11 @@ static bool x509_sha256_identifier(const struct tls_asn1_tlv *identifier)
     if (identifier->tag != 0x30 || !tls_asn1_child_cursor(identifier, &c) ||
         !tls_asn1_next(&c, &oid) || oid.tag != ASN1_OBJECTID ||
         oid.len != sizeof(sha256) || memcmp(oid.value, sha256, sizeof(sha256)))
+        ERROR_CODE(0x59);
         return false;
     if (c.cur != c.end &&
         (!tls_asn1_next(&c, &param) || param.tag != ASN1_NULL || param.len))
+        ERROR_CODE(0x5a);
         return false;
     return c.cur == c.end;
 }
@@ -1238,15 +1349,18 @@ bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
     struct tls_asn1_cursor c;
     struct tls_asn1_tlv oid, param;
     if (!alg)
+        ERROR_CODE(0x5b);
         return false;
     *alg = TLS_ALG_UNKNOWN;
     if (!identifier || identifier->tag != 0x30 ||
         !tls_asn1_child_cursor(identifier, &c) || !tls_asn1_next(&c, &oid) ||
         oid.tag != ASN1_OBJECTID)
+        ERROR_CODE(0x5c);
         return false;
     /* rsaEncryption identifies a key, never a certificate signature. */
     if (oid.len == sizeof(oid_rsa_encryption) &&
         !memcmp(oid.value, oid_rsa_encryption, oid.len))
+        ERROR_CODE(0x5d);
         return false;
     tls_alg_t scheme = tls_x509_oid_to_sig_alg(oid.value, oid.len);
     if (scheme == TLS_ALG_RSA_PSS_RSAE_SHA256)
@@ -1254,9 +1368,11 @@ bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
         /* RFC 4055 defaults are SHA-1/MGF1-SHA-1/saltLen=20. Our verifier
          * supports only explicit SHA-256/MGF1-SHA-256/saltLen=32. */
         if (!tls_asn1_next(&c, &param) || param.tag != 0x30 || c.cur != c.end)
+            ERROR_CODE(0x5e);
             return false;
         struct tls_asn1_cursor params;
         if (!tls_asn1_child_cursor(&param, &params))
+            ERROR_CODE(0x5f);
             return false;
         uint8_t seen = 0;
         uint8_t previous = 0;
@@ -1268,12 +1384,14 @@ bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
                 (seen && field.tag <= previous) ||
                 !tls_asn1_child_cursor(&field, &explicit_value) ||
                 !tls_asn1_next(&explicit_value, &value) || explicit_value.cur != explicit_value.end)
+                ERROR_CODE(0x60);
                 return false;
             previous = field.tag;
             seen |= (uint8_t)(1u << (field.tag - 0xa0));
             if (field.tag == 0xa0)
             {
                 if (!x509_sha256_identifier(&value))
+                    ERROR_CODE(0x61);
                     return false;
             }
             else if (field.tag == 0xa1)
@@ -1285,13 +1403,16 @@ bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
                     mask_oid.len != sizeof(mgf1) || memcmp(mask_oid.value, mgf1, sizeof(mgf1)) ||
                     !tls_asn1_next(&mask, &hash) || mask.cur != mask.end ||
                     !x509_sha256_identifier(&hash))
+                    ERROR_CODE(0x62);
                     return false;
             }
             else if (value.tag != ASN1_INTEGER || value.len != 1 ||
                      value.value[0] != (field.tag == 0xa2 ? 32 : 1))
+                ERROR_CODE(0x63);
                 return false;
         }
         if ((seen & 7) != 7)
+            ERROR_CODE(0x64);
             return false;
     }
     else
@@ -1301,9 +1422,11 @@ bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
             if (!tls_asn1_next(&c, &param) ||
                 (scheme == TLS_ALG_RSA_PKCS1_SHA256 && (param.tag != ASN1_NULL || param.len)) ||
                 scheme == TLS_ALG_ECDSA_SECP256R1_SHA256)
+                ERROR_CODE(0x65);
                 return false;
         }
         if (c.cur != c.end)
+            ERROR_CODE(0x66);
             return false;
     }
     *alg = scheme;

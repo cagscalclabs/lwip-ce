@@ -57,7 +57,7 @@ static void on_event(struct lwip_socket *sock,
     {
         const lwip_socket_error_data_t *err =
             (const lwip_socket_error_data_t *)ev_data;
-        state->err = err ? err->err : sock->last_error;
+        state->err = err ? err->err : lwip_socket_last_error(sock);
         if (err)
         {
             lwip_example_linef("fail c%u o%u r%d e%u",
@@ -71,9 +71,8 @@ static void on_event(struct lwip_socket *sock,
 
 int main(void)
 {
-    struct lwip_socket sock  = {0};
-    struct tls_state   state = {0};
-    lwip_error_t err;
+    struct lwip_socket *sock = NULL;
+    struct tls_state    state = {0};
 
     if (!lwip_example_stack_start())
     {
@@ -82,33 +81,32 @@ int main(void)
 
     lwip_example_dbg_console_begin("TLS HTTPS");
 
-    err = lwip_socket_create(&sock, LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT,
-                             NULL, 60000);
-    if (err != LWIP_OK)
+    sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT,
+                              NULL, 60000);
+    if (!sock)
     {
-        lwip_example_show_socket_error("HTTPS create", &sock, err);
-        lwip_socket_destroy(&sock);
+        lwip_example_line("HTTPS create: OOM");
         return lwip_example_finish(1);
     }
     lwip_example_line("tls initialize ok");
 
-    lwip_socket_on_event(&sock, LWIP_SOCKET_EVENTF_ALL, on_event, &state);
+    lwip_socket_on_event(sock, LWIP_SOCKET_EVENTF_ALL, on_event, &state);
 
     lwip_example_linef("connecting to %s:%u", TLS_HOST, (unsigned)TLS_PORT);
-    err = lwip_socket_connect(&sock, TLS_HOST, TLS_PORT);
+    lwip_error_t err = lwip_socket_connect(sock, TLS_HOST, TLS_PORT);
     /* Enable debug output after connect is initiated so events don't fire
      * re-entrantly during socket setup. */
     lwip_set_event_cb(lwip_example_dbg_console_cb);
     if (err != LWIP_OK)
     {
-        lwip_example_show_socket_error("HTTPS connect", &sock, err);
-        lwip_socket_destroy(&sock);
+        lwip_example_show_socket_error("HTTPS connect", sock, err);
+        lwip_socket_destroy(sock);
         return lwip_example_finish(1);
     }
 
     uint32_t start = lwip_example_now_ms();
     bool cancelled = false;
-    while (lwip_socket_is_active(&sock) &&
+    while (lwip_socket_is_active(sock) &&
            !lwip_example_timed_out(start, TLS_TIMEOUT_SECONDS) &&
            !cancelled)
     {
@@ -122,7 +120,7 @@ int main(void)
         if (space)
         {
             size_t got = lwip_socket_read(
-                &sock,
+                sock,
                 (uint8_t *)state.rx + state.rx_len,
                 space);
             if (got)
@@ -132,7 +130,7 @@ int main(void)
                 if (strstr(state.rx, "HTTP/"))
                 {
                     state.ok = true;
-                    lwip_socket_close(&sock);
+                    lwip_socket_close(sock);
                 }
             }
         }
@@ -146,8 +144,8 @@ int main(void)
         {
             state.err = LWIP_ERR_CONNECT;
         }
-        lwip_example_show_socket_error("HTTPS failed", &sock, state.err);
-        lwip_socket_destroy(&sock);
+        lwip_example_show_socket_error("HTTPS failed", sock, state.err);
+        lwip_socket_destroy(sock);
         return lwip_example_finish(1);
     }
 
@@ -155,6 +153,6 @@ int main(void)
     lwip_example_lines_crlf(state.rx, state.rx_len);
     lwip_example_draw_mem_stats();
     lwip_example_wait_key();
-    lwip_socket_destroy(&sock);
+    lwip_socket_destroy(sock);
     return lwip_example_finish(0);
 }

@@ -22,7 +22,9 @@ func,lwip_socket_abort,socket,src/lwIP.h,lwip.h
 func,lwip_socket_on_event,socket,src/lwIP.h,lwip.h
 func,lwip_socket_is_active,socket,src/lwIP.h,lwip.h
 func,lwip_socket_set_rx_limits,socket,src/lwIP.h,lwip.h
-func,lwip_socket_set_connect_timeout,socket,src/lwIP.h,lwip.h
+func,lwip_socket_set_inactivity_timeout,socket,src/lwIP.h,lwip.h
+func,lwip_socket_last_error,socket,src/lwIP.h,lwip.h
+func,lwip_socket_get_netif,socket,src/lwIP.h,lwip.h
 func,lwip_set_event_cb,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_get_traceback,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_module_name,core,src/include/lwip/logging.h,lwip/core/logging.h
@@ -347,12 +349,12 @@ func,raw_sendto,raw,src/include/lwip/raw.h,lwip/core/raw.h
 func,raw_sendto_if_src,raw,src/include/lwip/raw.h,lwip/core/raw.h
 func,raw_send,raw,src/include/lwip/raw.h,lwip/core/raw.h
 func,raw_recv,raw,src/include/lwip/raw.h,lwip/core/raw.h
-func,lwip_sntp_set_timezone_offset,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
-func,lwip_sntp_set_dst_enabled,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
 func,lwip_sntp_set_time,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
 func,lwip_sntp_reset_flag,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
 func,lwip_sntp_time_was_set,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
 func,lwip_sntp_get_unix_time,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
+func,lwip_sntp_read_rtc_raw,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
+func,lwip_sntp_clamp_rtc_floor,time,src/include/lwip/sntp_time.h,lwip/core/sntp_time.h
 func,sys_timeout,timeouts,src/include/lwip/timeouts.h,lwip/core/timeouts.h
 func,sys_untimeout,timeouts,src/include/lwip/timeouts.h,lwip/core/timeouts.h
 func,tcp_new,tcp,src/include/lwip/tcp.h,lwip/core/tcp.h

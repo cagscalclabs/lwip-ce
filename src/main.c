@@ -1194,9 +1194,6 @@ static bool config_run_ntp_test(struct config_option *opt)
     // Start SNTP
     os_FontDrawText("Starting SNTP...", 10, 50);
 
-    // Apply timezone and DST settings before starting SNTP
-    lwip_sntp_set_timezone_offset((int32_t)g_cfg.tz_offset_minutes * 60);
-    lwip_sntp_set_dst_enabled(g_cfg.dst_enabled != 0);
     lwip_sntp_reset_flag();
 
     ip_addr_t ntp_server;
@@ -2560,9 +2557,6 @@ static bool config_uses_static_ip(const lwip_app_config_t *cfg)
 
 static void apply_network_config(const lwip_app_config_t *cfg)
 {
-    lwip_sntp_set_timezone_offset((int32_t)cfg->tz_offset_minutes * 60);
-    lwip_sntp_set_dst_enabled(cfg->dst_enabled != 0);
-
     bool static_ip = config_uses_static_ip(cfg);
 
     if (!static_ip)

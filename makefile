@@ -105,7 +105,12 @@ release:
 	cp README.md build/README.md
 	cp CHANGELOG.md build/CHANGELOG.md
 	rm -f lwip.zip
-	zip -r lwip.zip build/
+	zip -r lwip.zip build/ \
+	    -x "*/obj/*" \
+	    -x "*/bin/*" \
+	    -x "*/.DS_Store" \
+	    -x "*/__MACOSX/*" \
+	    -x "*/._*"
 
 
 .PHONY: sizes

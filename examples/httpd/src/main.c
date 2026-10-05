@@ -242,7 +242,7 @@ static bool appvar_find(const char *path, size_t path_len,
 
 /* Per-connection state. */
 typedef struct {
-    struct lwip_socket sock;
+    struct lwip_socket *sock;
     char               buf[REQ_BUF_MAX];
     size_t             buf_len;
     uint32_t           idle_since;  /* lwip_now_ms() when last activity ended */
@@ -327,9 +327,9 @@ static void send_response(peer_t *p,
         (unsigned)body_len,
         keep_alive ? "keep-alive" : "close");
     if (n > 0)
-        lwip_socket_write(&p->sock, (const uint8_t *)hdr, (size_t)n);
+        lwip_socket_write(p->sock, (const uint8_t *)hdr, (size_t)n);
     if (body && body_len)
-        lwip_socket_write(&p->sock, body, body_len);
+        lwip_socket_write(p->sock, body, body_len);
 }
 
 /* ---- request dispatch ---- */
@@ -433,21 +433,23 @@ static bool peer_tick(peer_t *p)
     if (!p->in_use)
         return false;
 
-    lwip_status_t st = lwip_socket_status(&p->sock);
+    lwip_status_t st = lwip_socket_status(p->sock);
 
     /* Socket gone (reset, error, closed by remote). */
-    if (!lwip_socket_is_active(&p->sock)) {
-        lwip_socket_destroy(&p->sock);
+    if (!lwip_socket_is_active(p->sock)) {
+        lwip_socket_destroy(p->sock);
+        p->sock = NULL;
         p->in_use = false;
         return false;
     }
 
     /* Idle timeout. */
     if ((uint32_t)(lwip_now_ms() - p->idle_since) >= KEEPALIVE_MS) {
-        lwip_socket_close(&p->sock);
+        lwip_socket_close(p->sock);
         /* Let it drain to CLOSED/RESET before destroying. */
-        if (!lwip_socket_is_active(&p->sock)) {
-            lwip_socket_destroy(&p->sock);
+        if (!lwip_socket_is_active(p->sock)) {
+            lwip_socket_destroy(p->sock);
+            p->sock = NULL;
             p->in_use = false;
         }
         return p->in_use;
@@ -457,11 +459,11 @@ static bool peer_tick(peer_t *p)
         return true;
 
     /* Drain ring into request buffer. */
-    size_t avail = lwip_socket_available(&p->sock);
+    size_t avail = lwip_socket_available(p->sock);
     if (avail) {
         size_t space  = REQ_BUF_MAX - 1 - p->buf_len;
         size_t to_read = avail < space ? avail : space;
-        p->buf_len += lwip_socket_read(&p->sock,
+        p->buf_len += lwip_socket_read(p->sock,
                                        (uint8_t *)(p->buf + p->buf_len),
                                        to_read);
         p->buf[p->buf_len] = '\0';
@@ -475,7 +477,7 @@ static bool peer_tick(peer_t *p)
         p->req_count++;
 
         if (!p->keep_alive) {
-            lwip_socket_close(&p->sock);
+            lwip_socket_close(p->sock);
         } else {
             /* Consume the processed request from the buffer.
              * Simple: find end of headers (\r\n\r\n or \n\n) and discard. */
@@ -506,13 +508,13 @@ static bool peer_tick(peer_t *p)
             p->keep_alive = dispatch(p, p->buf_len);
             p->req_count++;
             if (!p->keep_alive)
-                lwip_socket_close(&p->sock);
+                lwip_socket_close(p->sock);
             else
                 p->buf_len = 0;   /* discard; next request starts fresh */
         } else {
             send_response(p, 431, "Request Header Fields Too Large", "text/plain",
                           (const uint8_t *)"Request too large", 17, false);
-            lwip_socket_close(&p->sock);
+            lwip_socket_close(p->sock);
         }
     }
 
@@ -567,9 +569,9 @@ int main(void)
 
     lwip_request_services(LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS);
 
-    struct lwip_socket listen_sock = {0};
-    if (lwip_socket_create(&listen_sock, LWIP_SOCKET_TCP,
-                           LWIP_NETIF_EXT, NULL, 0) != LWIP_OK) {
+    struct lwip_socket *listen_sock = lwip_socket_create(LWIP_SOCKET_TCP,
+                                                         LWIP_NETIF_EXT, NULL, 0);
+    if (!listen_sock) {
         lwip_example_line("socket create failed");
         lwip_example_wait_key();
         return lwip_example_finish(1);
@@ -591,7 +593,7 @@ int main(void)
             lwip_netif_info_t info = {0};
             lwip_default_netif_info(&info);
             if (info.has_ipv4) {
-                if (lwip_socket_listen(&listen_sock, HTTP_PORT) != LWIP_OK) {
+                if (lwip_socket_listen(listen_sock, HTTP_PORT) != LWIP_OK) {
                     lwip_example_line("listen failed");
                     lwip_example_present();
                     break;
@@ -612,8 +614,10 @@ int main(void)
             if (g_peers[i].in_use)
                 continue;
             peer_t *p = &g_peers[i];
-            if (lwip_socket_accept(&listen_sock, &p->sock) != LWIP_OK)
+            struct lwip_socket *peer = lwip_socket_accept(listen_sock);
+            if (!peer)
                 break;   /* queue empty */
+            p->sock      = peer;
             p->buf_len   = 0;
             p->req_count = 0;
             p->keep_alive = true;
@@ -630,10 +634,10 @@ int main(void)
 
     /* Teardown. */
     for (int i = 0; i < MAX_PEERS; i++) {
-        if (g_peers[i].in_use)
-            lwip_socket_destroy(&g_peers[i].sock);
+        if (g_peers[i].in_use && g_peers[i].sock)
+            lwip_socket_destroy(g_peers[i].sock);
     }
-    lwip_socket_destroy(&listen_sock);
+    lwip_socket_destroy(listen_sock);
     lwip_example_draw_mem_stats();
     lwip_example_wait_key();
     return lwip_example_finish(0);

@@ -24,7 +24,7 @@
 	export	lwip_socket_on_event
 	export	lwip_socket_is_active
 	export	lwip_socket_set_rx_limits
-	export	lwip_socket_set_connect_timeout
+	export	lwip_socket_set_inactivity_timeout
 	export	lwip_set_event_cb
 	export	lwip_get_traceback
 	export	lwip_debug_module_name
@@ -348,12 +348,12 @@
 	export	raw_sendto_if_src
 	export	raw_send
 	export	raw_recv
-	export	lwip_sntp_set_timezone_offset
-	export	lwip_sntp_set_dst_enabled
 	export	lwip_sntp_set_time
 	export	lwip_sntp_reset_flag
 	export	lwip_sntp_time_was_set
 	export	lwip_sntp_get_unix_time
+	export	lwip_sntp_read_rtc_raw
+	export	lwip_sntp_clamp_rtc_floor
 	export	sys_timeout
 	export	sys_untimeout
 	export	tcp_new
@@ -438,6 +438,8 @@
 	export	altcp_ws_new
 	export	altcp_ws_new_tls
 	export	altcp_ws_alloc
+	export	lwip_socket_last_error
+	export	lwip_socket_get_netif
 	export	lwip_socket_set_ws_config
 	export	lwip_start_with_crt
 	export	lwip_get_start_errno

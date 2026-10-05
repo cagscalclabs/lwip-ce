@@ -147,7 +147,7 @@ static void lwip_chat_on_event(struct lwip_socket *sock,
         const lwip_socket_error_data_t *err =
             (const lwip_socket_error_data_t *)ev_data;
         char line[40];
-        state->err = err ? err->err : sock->last_error;
+        state->err = err ? err->err : lwip_socket_last_error(sock);
         state->connected = false;
         if (!state->exiting)
         {
@@ -170,13 +170,10 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
                          uint16_t port,
                          bool debug)
 {
-    static struct lwip_socket sock;
+    struct lwip_socket *sock = NULL;
     struct lwip_chat_state *state = NULL;
     lwip_error_t err;
-    bool socket_created = false;
     int result = 1;
-
-    memset(&sock, 0, sizeof(sock));
 
     if (!lwip_example_stack_start())
     {
@@ -218,25 +215,24 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
         lwip_set_event_cb(lwip_chat_debug_cb);
     }
 
-    err = lwip_socket_create(&sock, protocol, LWIP_NETIF_EXT, NULL, 30000);
-    if (err != LWIP_OK)
+    sock = lwip_socket_create(protocol, LWIP_NETIF_EXT, NULL, 30000);
+    if (!sock)
     {
-        lwip_example_show_socket_error("chat create", &sock, err);
+        lwip_example_show_and_wait("chat create", "OOM");
         goto cleanup;
     }
-    socket_created = true;
 
-    lwip_socket_on_event(&sock, LWIP_SOCKET_EVENTF_ALL,
+    lwip_socket_on_event(sock, LWIP_SOCKET_EVENTF_ALL,
                          lwip_chat_on_event, state);
 
     lwip_example_chat_append(&state->chat, "* ", "connecting", 10);
     lwip_example_chat_append(&state->chat, "  ", host, strlen(host));
     lwip_example_chat_render(&state->chat);
 
-    err = lwip_socket_connect(&sock, host, port);
+    err = lwip_socket_connect(sock, host, port);
     if (err != LWIP_OK)
     {
-        lwip_example_show_socket_error("chat connect", &sock, err);
+        lwip_example_show_socket_error("chat connect", sock, err);
         goto cleanup;
     }
 
@@ -254,9 +250,9 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
 
         /* Drain inbound data each iteration — callbacks own lifecycle,
          * the loop owns data. */
-        if (state->connected && lwip_socket_available(&sock))
+        if (state->connected && lwip_socket_available(sock))
         {
-            lwip_chat_on_readable(state, &sock);
+            lwip_chat_on_readable(state, sock);
         }
 
         if (lwip_example_cancelled(key))
@@ -304,7 +300,7 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
                     size_t len = strlen(outbound);
                     outbound[len++] = '\n';
                     outbound[len] = '\0';
-                    err = lwip_socket_write(&sock, (const uint8_t *)outbound, len);
+                    err = lwip_socket_write(sock, (const uint8_t *)outbound, len);
                     if (err != LWIP_OK)
                     {
                         char line[32];
@@ -344,7 +340,7 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
 
     if (!state->exiting && state->err != LWIP_OK)
     {
-        lwip_example_show_socket_error("chat failed", &sock, state->err);
+        lwip_example_show_socket_error("chat failed", sock, state->err);
         goto cleanup;
     }
 
@@ -356,17 +352,14 @@ cleanup:
         lwip_set_event_cb(NULL);
         lwip_chat_debug_state = NULL;
     }
-    if (state && state->exiting && socket_created)
+    if (sock)
     {
-        err = lwip_socket_close(&sock);
-        if (err == LWIP_OK || sock.status == LWIP_STATUS_CLOSED)
+        if (state && state->exiting)
         {
-            socket_created = false;
+            err = lwip_socket_close(sock);
+            (void)err;
         }
-    }
-    if (socket_created)
-    {
-        lwip_socket_destroy(&sock);
+        lwip_socket_destroy(sock);
     }
     if (state)
     {

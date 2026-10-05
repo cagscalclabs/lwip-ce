@@ -11,8 +11,9 @@
 
 /*
  * Known constraints:
- * - Only x25519 key exchange is supported. HelloRetryRequest is detected
- *   and aborted gracefully since no alternative groups are available.
+ * - Only x25519 key exchange is supported. HelloRetryRequest requesting
+ *   x25519 is handled correctly (transcript rewrite, fresh keypair, cookie).
+ *   HRR requesting any other group sends handshake_failure and aborts.
  * - Cross-record handshake message reassembly is bounded at
  *   TLS_HS_REASSEMBLY_MAX bytes (16KB). Anything larger is fatal.
  * - The ALTCP CE transport keeps encrypted input as pbufs and passes complete
@@ -49,6 +50,7 @@ extern "C"
 #define TLS_EXT_SUPPORTED_VERSIONS 0x002b
 #define TLS_EXT_PSK_KEY_EXCHANGE_MODES 0x002d
 #define TLS_EXT_PRE_SHARED_KEY 0x0029
+#define TLS_EXT_COOKIE 0x002c
 
 /* Named Groups */
 #define TLS_NAMED_GROUP_X25519 0x001d
@@ -196,6 +198,7 @@ extern "C"
         {
             TLS_STATE_INIT,
             TLS_STATE_CLIENT_HELLO_SENT,
+            TLS_STATE_HRR_RECEIVED,      /* HRR arrived; second ClientHello pending */
             TLS_STATE_SERVER_HELLO_RECEIVED,
             TLS_STATE_HANDSHAKE_KEYS_DERIVED,
             TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED,
@@ -212,6 +215,14 @@ extern "C"
         uint8_t ecdhe_public[32];    /* Our ephemeral public key */
         bool ecdhe_negotiated;       /* True if server selected PSK+ECDHE */
         bool client_certificate_requested; /* True if server sent TLS 1.3 CertificateRequest */
+
+        /* HelloRetryRequest state (RFC 8446 §4.1.4).
+         * hrr_cookie_len > 0 after a valid HRR that carried a cookie extension.
+         * hrr_done is set after processing the first HRR so a second HRR is
+         * rejected with unexpected_message (RFC 8446 §4.1.4 forbids two HRRs). */
+        uint8_t *hrr_cookie;         /* Heap-allocated HRR cookie bytes, or NULL */
+        size_t   hrr_cookie_len;     /* Length of hrr_cookie, 0 = no cookie */
+        bool     hrr_done;           /* True once one HRR has been processed */
         uint32_t ticket_age_add;     /* NST ticket_age_add */
         uint32_t ticket_received_ms; /* sys_now() when last ticket was accepted */
         uint32_t ticket_lifetime;    /* NST ticket_lifetime, seconds (RFC 8446 4.6.1) */

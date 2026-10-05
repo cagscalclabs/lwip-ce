@@ -293,48 +293,56 @@ TLS_PROBES = {
     "tls_unsupported_certverify",
 }
 
-TLS_ECHO_TIMEOUT = 45.0
+TLS_ECHO_TIMEOUT = 60.0
 TLS_TEST_CERT_DIR = Path(tempfile.gettempdir()) / "lwip-ce-dast-tls"
 
 
-def ensure_test_cert(kind: str) -> tuple[Path, Path]:
+def ensure_test_cert(kind: str, server_ip: str) -> tuple[Path, Path]:
+    import ipaddress
+    server_ip = str(ipaddress.IPv4Address(server_ip))
     TLS_TEST_CERT_DIR.mkdir(parents=True, exist_ok=True)
     cert = TLS_TEST_CERT_DIR / f"{kind}.crt"
     key = TLS_TEST_CERT_DIR / f"{kind}.key"
-    if cert.is_file() and key.is_file():
-        return cert, key
+    cert.unlink(missing_ok=True)
+    key.unlink(missing_ok=True)
 
     import shutil
     openssl = shutil.which("openssl")
     if not openssl:
         die("openssl is required to generate DAST TLS test certificates")
 
+    import datetime as _dt
+    now = datetime.now(timezone.utc)
+    not_before = (now - _dt.timedelta(hours=1)).strftime("%Y%m%d%H%M%SZ")
+    not_after  = (now + _dt.timedelta(hours=2)).strftime("%Y%m%d%H%M%SZ")
     if kind == "rsa":
-        cmd = [
+        subprocess.run([
             openssl, "req", "-x509", "-newkey", "rsa:2048",
-            "-sha256", "-nodes", "-days", "1",
+            "-sha256", "-nodes",
+            "-not_before", not_before, "-not_after", not_after,
             "-subj", "/CN=lwip-dast-rsa",
+            "-addext", f"subjectAltName=IP:{server_ip}",
             "-keyout", str(key), "-out", str(cert),
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL)
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif kind == "ecdsa":
         subprocess.run(
             [openssl, "ecparam", "-name", "prime256v1", "-genkey",
              "-noout", "-out", str(key)],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(
-            [openssl, "req", "-new", "-x509", "-sha256", "-days", "1",
-             "-subj", "/CN=lwip-dast-ecdsa",
-             "-key", str(key), "-out", str(cert)],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([
+            openssl, "req", "-new", "-x509", "-sha256",
+            "-not_before", not_before, "-not_after", not_after,
+            "-subj", "/CN=lwip-dast-ecdsa",
+            "-addext", f"subjectAltName=IP:{server_ip}",
+            "-key", str(key), "-out", str(cert),
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         die(f"unknown TLS cert kind {kind!r}")
     return cert, key
 
 
-def make_tls_context(kind: str) -> ssl.SSLContext:
-    cert, key = ensure_test_cert(kind)
+def make_tls_context(kind: str, server_ip: str) -> ssl.SSLContext:
+    cert, key = ensure_test_cert(kind, server_ip)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     try:
         ctx.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -343,6 +351,14 @@ def make_tls_context(kind: str) -> ssl.SSLContext:
         die("this Python ssl backend cannot serve TLS 1.3; set "
             "DAST_PYTHON to an OpenSSL-backed Python, e.g. "
             "/opt/homebrew/bin/python3.11")
+    # OpenSSL 3.4+ defaults to X25519MLKEM768 as its preferred key-exchange
+    # group. The calc only supports plain X25519; when the server's key_share
+    # preference doesn't match the client's key_share entry, OpenSSL sends a
+    # HelloRetryRequest — which the calc treats as fatal (it cannot respond
+    # with ML-KEM material). SSL_OP_NO_MLKEM (0x40000000, OpenSSL 3.4+)
+    # disables the hybrid group so the server accepts X25519 directly.
+    SSL_OP_NO_MLKEM = 0x40000000
+    ctx.options |= SSL_OP_NO_MLKEM
     try:
         ctx.set_ciphersuites("TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384")
     except AttributeError:
@@ -386,25 +402,27 @@ class TlsProbeServer:
                 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 srv.bind((self.bind, self.port))
                 srv.listen(1)
-                srv.settimeout(20.0)
+                srv.settimeout(TLS_ECHO_TIMEOUT)
                 self.ready.set()
                 conn, peer = srv.accept()
                 with conn:
-                    conn.settimeout(20.0)
+                    conn.settimeout(TLS_ECHO_TIMEOUT)
                     if self.probe == "tls_missing_record":
                         self._missing_record(conn, peer)
                     else:
                         self._tls_echo(conn, peer)
         except Exception as exc:  # noqa: BLE001
+            self.detail = f"{type(exc).__name__}: {exc}"
             if not self.ready.is_set():
-                self.detail = f"listen failed: {type(exc).__name__}: {exc}"
                 self.response = "HANG"
+            elif isinstance(exc, (ConnectionResetError, ConnectionAbortedError,
+                                  ssl.SSLError)):
+                # Calc actively reset or aborted — not a hang.
+                self.response = "ABORT"
             elif self.probe.startswith("tls_") and self.probe not in (
                     "tls_echo_clean", "tls_echo_resume"):
-                self.detail = f"{type(exc).__name__}: {exc}"
                 self.response = "ABORT"
             else:
-                self.detail = f"{type(exc).__name__}: {exc}"
                 self.response = "HANG"
         finally:
             self.ready.set()
@@ -444,8 +462,10 @@ class TlsProbeServer:
 
 
 class TlsFixtures:
-    def __init__(self, bind: str, dry: bool):
+    def __init__(self, bind: str, dry: bool, calc_ip: str):
         self.bind = bind
+        self.calc_ip = calc_ip
+        self.server_ip: str | None = None
         self.dry = dry
         self._rsa_context: ssl.SSLContext | None = None
         self._ecdsa_context: ssl.SSLContext | None = None
@@ -453,12 +473,21 @@ class TlsFixtures:
     def _context(self, probe: str) -> ssl.SSLContext | None:
         if probe == "tls_missing_record":
             return None
+        if self.server_ip is None:
+            # The calculator connects to the source of our NEXT control packet.
+            # UDP connect selects that same route/source without sending data.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+                route.connect((self.calc_ip, DAST_CTRL_PORT))
+                self.server_ip = route.getsockname()[0]
+            if self.bind not in ("0.0.0.0", self.server_ip):
+                die(f"--tls-bind must be 0.0.0.0 or {self.server_ip}: "
+                    "the calculator connects to the control packet source")
         if probe == "tls_unsupported_certverify":
             if self._ecdsa_context is None:
-                self._ecdsa_context = make_tls_context("ecdsa")
+                self._ecdsa_context = make_tls_context("ecdsa", self.server_ip)
             return self._ecdsa_context
         if self._rsa_context is None:
-            self._rsa_context = make_tls_context("rsa")
+            self._rsa_context = make_tls_context("rsa", self.server_ip)
         return self._rsa_context
 
     def start(self, probe: str, port: int) -> TlsProbeServer | None:
@@ -535,11 +564,22 @@ def load_prior() -> dict[str, dict]:
     return {r["id"]: r for r in prior.get("results", []) if "id" in r}
 
 
+def _src_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "log", "-1", "--format=%H", "--", "src/"],
+            cwd=REPO_ROOT, stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+
 def write_report(target_ip: str, results: list[dict]) -> None:
     fails = sum(1 for r in results if r["grade"] == "fail")
     doc = {
         "tool": "lwip-dast",
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "src_commit": _src_commit(),
         "target_ip": target_ip,
         "summary": {
             "total": len(results),
@@ -573,6 +613,31 @@ def ctrl_send(ip: str, msg: str) -> None:
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.sendto(msg.encode(), (ip, DAST_CTRL_PORT))
+
+
+def ctrl_request_traceback(ip: str, timeout: float = 1.0) -> list[str]:
+    """Send TRBK to the calc and collect TBK:... reply lines.
+
+    Returns a list of decoded traceback strings, empty if none arrive in time.
+    The calc responds with one UDP datagram per traceback entry; we collect
+    until the socket times out.
+    """
+    import socket
+    lines: list[str] = []
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", DAST_CTRL_PORT))
+        s.settimeout(timeout)
+        s.sendto(b"TRBK", (ip, DAST_CTRL_PORT))
+        while True:
+            try:
+                data, _ = s.recvfrom(64)
+                text = data.decode(errors="replace").strip()
+                if text.startswith("TBK:"):
+                    lines.append(text)
+            except socket.timeout:
+                break
+    return lines
 
 
 def ctrl_send_and_wait_ready(ip: str, msg: str,
@@ -618,7 +683,7 @@ def run(args) -> int:
     tests = load_manifest()
     prior = load_prior()
     probes = Probes(args.ip, args.iface, dry=args.self_test)
-    tls_fixtures = TlsFixtures(args.tls_bind, dry=args.self_test)
+    tls_fixtures = TlsFixtures(args.tls_bind, dry=args.self_test, calc_ip=args.ip)
 
     print(f"==> lwIP-CE DAST against {args.ip}"
           f"{' [self-test/dry-run]' if args.self_test else ''}")
@@ -690,6 +755,14 @@ def run(args) -> int:
                 ping_state = ping_alive(args.ip, args.self_test)
                 if ping_state is False and response in ("ABORT", "ALIVE"):
                     response = "CRASH"
+                if response in ("ABORT", "HANG"):
+                    tbk = ctrl_request_traceback(args.ip)
+                    if tbk:
+                        print("    TLS traceback (newest first):")
+                        for entry in tbk:
+                            print(f"      {entry}")
+                    else:
+                        print("    TLS traceback: (none — calc may not have errored yet)")
             hint = ("(ping: alive)" if ping_state is True
                     else "(ping: NO response)" if ping_state is False
                     else "")

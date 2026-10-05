@@ -81,7 +81,7 @@ vectors = {
     'cert_ec': cert(pkcs, ec_spki), 'cert_mismatch': cert(pss, inner=pkcs),
 }
 
-source = (here / 'mock.h').read_text()
+source = (here / 'mock.h').read_text() + '\n#include "ip_identity.h"\n'
 source += x509[x509.index('static bool tls_x509_is_string_tag'):x509.index('static bool tls_x509_decode_pem_certificate')]
 source += x509[x509.index('static const uint8_t oid_rsa_encryption'):]
 key_source = (root / 'src/tls/core/key.c').read_text()
@@ -100,6 +100,51 @@ for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_
     source += function(hs, name)
 for name, data in vectors.items():
     source += f'static const uint8_t {name}[] = {{' + ','.join(map(str, data)) + '};\n'
+# Exercise the real matcher with DER SANs, including negative identities.
+import ipaddress
+
+def extensions(*names):
+    return seq(seq(oid('551d11'), tlv(4, seq(*names))))
+
+cases = []
+def identity(ext, host, expected, cn=None):
+    cases.append((ext, host, expected, cn or host))
+
+v4 = tlv(0x87, ipaddress.ip_address('192.168.2.10').packed)
+v6 = tlv(0x87, ipaddress.ip_address('2001:db8::1').packed)
+for host, expected in [('192.168.2.10', True), ('192.168.2.11', False),
+                       ('192.168.002.10', False), ('192.168.2', False),
+                       ('256.168.2.10', False), ('192.168.2.10.', False)]:
+    identity(extensions(v4), host, expected)
+for host, expected in [('2001:db8::1', True), ('2001:0DB8:0:0:0:0:0:1', True),
+                       ('2001:db8::2', False), ('2001::db8::1', False),
+                       ('[2001:db8::1]', False), ('2001:db8::1%en0', False),
+                       ('2001:db8:0:0:0:0:0:1::', False)]:
+    identity(extensions(v6), host, expected)
+for host in ['::', '::1', '1::', '::ffff:192.168.2.10']:
+    identity(extensions(tlv(0x87, ipaddress.ip_address(host).packed)), host, True)
+identity(extensions(v4, v6), '2001:db8::1', True)
+identity(extensions(v4, v6), '192.168.2.10', True)
+identity(extensions(v6), '192.168.2.10', False)
+identity(extensions(tlv(0x87, b'192.168.2.10')), '192.168.2.10', False)
+identity(extensions(tlv(0x82, b'192.168.2.10')), '192.168.2.10', False)
+identity(extensions(tlv(0x82, b'*.168.2.10')), '192.168.2.10', False)
+identity(b'', '192.168.2.10', False)
+for alias in ['0xc0a8020a', '192.0xa8.2.10', '3232236042', '0300.0250.2.012']:
+    identity(extensions(tlv(0x82, alias.encode())), alias, False)
+identity(b'', '2001:db8::1', False)
+identity(extensions(v4), 'example.test', False)
+identity(extensions(tlv(0x82, b'*.example.test')), 'www.example.test', True)
+identity(extensions(tlv(0x82, b'*.example.test')), 'a.b.example.test', False)
+identity(b'', 'example.test', True)
+identity(extensions(tlv(0x82, b'other.test')), 'example.test', False)
+# A match must not hide a truncated following GeneralName.
+identity(seq(seq(oid('551d11'), tlv(4, tlv(0x30, v4 + b'\x87\x04\x01')))), '192.168.2.10', False)
+checks = []
+for i, (ext, host, expected, cn) in enumerate(cases):
+    source += f'static const uint8_t identity_{i}[] = {{' + ','.join(map(str, ext or b'\0')) + '};\n'
+    checks.append(f'assert(tls_x509_hostname_matches(identity_{i}, {len(ext)}, (const uint8_t *)"{cn}", {len(cn)}, "{host}") == {int(expected)});')
+source += 'static void identity_tests(void) {\n' + '\n'.join(checks) + '\n}\n'
 source += (here / 'test.c').read_text()
 
 with tempfile.TemporaryDirectory() as tmp:

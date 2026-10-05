@@ -26,6 +26,7 @@
 #define LWIP_DBG_FILE_ID LWIP_FILE_ALTCP_TLS_CE
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
+#include "lwip/sntp_time.h"
 
 #include <string.h>
 #include <limits.h>
@@ -1000,15 +1001,30 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
 {
     err_t write_err;
 
-    if (state->tls_ctx.state >= TLS_STATE_CLIENT_HELLO_SENT)
+    if (state->tls_ctx.state >= TLS_STATE_CLIENT_HELLO_SENT &&
+        state->tls_ctx.state != TLS_STATE_HRR_RECEIVED)
     {
-        return ERR_OK; /* already sent */
+        return ERR_OK; /* already sent (and not retrying after HRR) */
     }
 
-    /* Generate the ClientHello exactly once. tls_send_client_hello folds it
-     * into the transcript hash as a side effect, so it must never be called
-     * twice for one connection — we cache the built record and only retry the
-     * write below. */
+
+    /* For an HRR retry, discard the cached first ClientHello record — we must
+     * build a new one with fresh X25519 keys and possibly a cookie extension.
+     * tls_send_client_hello regenerates the keypair in this case. */
+    if (state->tls_ctx.state == TLS_STATE_HRR_RECEIVED &&
+        state->pending_chello != NULL)
+    {
+        mem_stats_tls_direct_release(state->pending_chello_len,
+                                     state->pending_chello_len);
+        mem_free(state->pending_chello);
+        state->pending_chello = NULL;
+        state->pending_chello_len = 0;
+    }
+
+    /* Generate the ClientHello exactly once per attempt. tls_send_client_hello
+     * folds it into the transcript hash as a side effect, so it must never be
+     * called twice for the same attempt — we cache the built record and only
+     * retry the write below on ERR_MEM. */
     if (state->pending_chello == NULL)
     {
         uint8_t record[512];
@@ -1255,7 +1271,9 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                             if (msg_type == TLS_HANDSHAKE_SERVER_HELLO)
                             {
                                 tls_dbg_status("serverhello: parse");
-                                if (state->tls_ctx.state != TLS_STATE_CLIENT_HELLO_SENT ||
+                                bool sh_state_ok =
+                                    (state->tls_ctx.state == TLS_STATE_CLIENT_HELLO_SENT);
+                                if (!sh_state_ok ||
                                     !tls_recv_server_hello(&state->tls_ctx,
                                                            payload + off,
                                                            msg_end - off))
@@ -1264,7 +1282,25 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                                     plaintext_ok = false;
                                     break;
                                 }
-                                tls_dbg_status("serverhello: ok");
+                                if (state->tls_ctx.state == TLS_STATE_HRR_RECEIVED)
+                                {
+                                    /* Server sent HelloRetryRequest — send second CH. */
+                                    tls_dbg_status("serverhello: hrr, retry ch");
+                                    err_t hrr_err = altcp_tls_ce_send_client_hello(conn, state);
+                                    if (hrr_err == ERR_ABRT)
+                                    {
+                                        return ERR_ABRT;
+                                    }
+                                    if (hrr_err == ERR_MEM)
+                                    {
+                                        /* Lower buffer not ready; retry on next tick. */
+                                        plaintext_ok = true;
+                                    }
+                                }
+                                else
+                                {
+                                    tls_dbg_status("serverhello: ok");
+                                }
                             }
                             else
                             {

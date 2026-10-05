@@ -27,10 +27,10 @@
  *   lwip_stop()                 — stack shutdown
  *
  * Typical main loop:
- *   while (lwip_socket_is_active(&sock) && !done) {
+ *   while (lwip_socket_is_active(sock) && !done) {
  *       lwip_service_events();
- *       size_t n = lwip_socket_available(&sock);
- *       if (n) lwip_socket_read(&sock, buf, n);
+ *       size_t n = lwip_socket_available(sock);
+ *       if (n) lwip_socket_read(sock, buf, n);
  *   }
  */
 
@@ -72,6 +72,7 @@ typedef enum
     LWIP_ERR_PROTO,      /**< unsupported protocol for this op */
     LWIP_ERR_CLOSED,     /**< peer has closed (or local close pending) */
     LWIP_ERR_INTERNAL,   /**< lwIP returned an unexpected err_t */
+    LWIP_ERR_SERVICES,   /**< required network services (DHCP/DNS/SNTP) not yet ready */
 } lwip_error_t;
 
 /** Transport selector for lwip_socket_create. */
@@ -105,6 +106,7 @@ typedef struct
 typedef enum
 {
     LWIP_STATUS_INIT = 0,         /**< handle created, not connecting yet */
+    LWIP_STATUS_WAITING_SERVICES, /**< waiting for DHCP/DNS/SNTP before connect */
     LWIP_STATUS_RESOLVING,        /**< DNS lookup in flight */
     LWIP_STATUS_CONNECTING,       /**< TCP / TLS handshake in flight */
     LWIP_STATUS_CONNECTED,        /**< ready for write/read */
@@ -263,65 +265,9 @@ typedef struct
 #define LWIP_SOCKET_RX_RING_STEP_SIZE    512u
 #define LWIP_SOCKET_RX_RING_MAX_SIZE     4096u
 
-/** Socket handle. status and last_error are app-readable; all other fields
- *  are managed by the implementation — do not write them. */
-struct lwip_socket
-{
-    /* Public, app-readable. */
-    lwip_status_t  status;
-    lwip_error_t   last_error;
-
-    /* App-supplied (written by lwip_socket_on_event). */
-    void                *user_arg;
-    lwip_socket_event_cb on_event;
-    uint8_t              event_flags;
-
-    /* Internal. */
-    uint8_t   protocol;       /**< lwip_socket_type_t */
-    uint8_t   aborting;
-    uint16_t  remote_port;
-    ip_addr_t remote_ip;
-    struct netif *netif;
-
-    /* Netif bind preference (recorded non-blocking at create). */
-    uint8_t                bind_descriptor;
-    bool                   has_addrinfo;
-    bool                   static_applied;
-    lwip_socket_addrinfo_t addrinfo;
-
-    union {
-        struct tcp_pcb   *tcp;
-        struct udp_pcb   *udp;
-        struct altcp_pcb *altcp;
-    } pcb;
-    struct altcp_tls_ce_config *tls_conf;
-    struct altcp_ws_config     *ws_conf;
-    struct mem_buffer          *rx_ring;
-    size_t                      rx_ring_init;
-    size_t                      rx_ring_max;
-    uint16_t                    last_sent_len;
-    uint16_t                    pending_events;
-    lwip_error_t                pending_error;
-    int                         pending_raw_error;
-    uint16_t                    pending_error_component;
-    uint16_t                    pending_error_operation;
-    lwip_status_t               pending_state_previous;
-
-    /* Connect / inactivity watchdog state. */
-    const char *pending_host;
-    uint32_t    connect_timeout_ms;
-    uint32_t    connect_deadline; /**< inactivity watchdog arm timestamp; 0=disarmed */
-    uint32_t    activity_seen;
-
-    struct lwip_socket *registry_next;
-
-    /* Server-side: singly-linked queue of accepted peer sockets (listen socket
-     * only).  Each entry was heap-allocated by the internal accept callback and
-     * is transferred to the caller via lwip_socket_accept(). */
-    struct lwip_socket *accept_queue;
-    struct lwip_socket *accept_next; /**< link within accept_queue chain */
-    bool                is_listen;   /**< pcb.tcp is a listen PCB (tcp_listen was called) */
-};
+/** Socket handle — opaque. Allocated by lwip_socket_create(); freed by
+ *  lwip_socket_destroy(). Do not embed or stack-allocate. */
+struct lwip_socket;
 
 /* ------------------------------------------------------------------ */
 
@@ -356,26 +302,26 @@ bool lwip_are_services_ready(struct netif *netif, uint8_t flags);
  *  the netif preference and kicking DHCP/static-IP. Readiness is awaited
  *  asynchronously by lwip_socket_connect.
  *
- *  @param socket     Caller-allocated handle. Zeroed by this call.
  *  @param type       Transport selector (lwip_socket_type_t).
  *  @param bind       Netif preference (lwip_socket_bind_descriptor_t).
  *  @param addrinfo   NULL for DHCP; non-NULL for static IPv4.
- *  @param timeout_ms Inactivity watchdog window for connect/handshake (ms);
- *                    0 = default (LWIP_SOCKET_SERVICES_TIMEOUT_MS). */
-lwip_error_t lwip_socket_create(struct lwip_socket *socket,
-                                lwip_socket_type_t type,
-                                lwip_socket_bind_descriptor_t bind,
-                                const lwip_socket_addrinfo_t *addrinfo,
-                                uint32_t timeout_ms);
+ *  @param timeout_ms Inactivity watchdog window (ms) applied across all socket
+ *                    states — connect, handshake, and data transfer.
+ *                    0 = no inactivity timeout (app manages lifetime).
+ *  @returns          Heap-allocated socket handle, or NULL on hard failure
+ *                    (OOM or invalid arguments). */
+struct lwip_socket *lwip_socket_create(lwip_socket_type_t type,
+                                       lwip_socket_bind_descriptor_t bind,
+                                       const lwip_socket_addrinfo_t *addrinfo,
+                                       uint32_t timeout_ms);
 
 /** Like lwip_socket_create but with an explicit RX ring maximum.
  *  rx_ring_max == 0 uses LWIP_SOCKET_RX_RING_MAX_SIZE. */
-lwip_error_t lwip_socket_create_ex(struct lwip_socket *socket,
-                                   lwip_socket_type_t type,
-                                   lwip_socket_bind_descriptor_t bind,
-                                   const lwip_socket_addrinfo_t *addrinfo,
-                                   uint32_t timeout_ms,
-                                   size_t rx_ring_max);
+struct lwip_socket *lwip_socket_create_ex(lwip_socket_type_t type,
+                                          lwip_socket_bind_descriptor_t bind,
+                                          const lwip_socket_addrinfo_t *addrinfo,
+                                          uint32_t timeout_ms,
+                                          size_t rx_ring_max);
 
 lwip_error_t lwip_socket_destroy(struct lwip_socket *socket);
 
@@ -395,16 +341,13 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *socket,
 lwip_error_t lwip_socket_listen(struct lwip_socket *socket, uint16_t port);
 
 /** Dequeue one accepted peer socket from a listening socket.
- *  Non-blocking: returns LWIP_ERR_STATE if no peer is ready yet.
- *  On success *peer is a fully-initialised socket in LWIP_STATUS_CONNECTED
- *  state; the caller owns it and must call lwip_socket_destroy() when done.
+ *  Non-blocking: returns NULL if no peer is ready yet.
+ *  On success returns a heap-allocated socket in LWIP_STATUS_CONNECTED state;
+ *  the caller owns it and must call lwip_socket_destroy() when done.
  *
  *  @param socket  Listening socket (must have called lwip_socket_listen()).
- *  @param peer    Caller-allocated socket handle to receive the peer.
- *  @returns LWIP_OK on success, LWIP_ERR_STATE if queue is empty,
- *           LWIP_ERR_ARG on bad arguments. */
-lwip_error_t lwip_socket_accept(struct lwip_socket *socket,
-                                struct lwip_socket *peer);
+ *  @returns Heap-allocated peer socket, or NULL if queue is empty. */
+struct lwip_socket *lwip_socket_accept(struct lwip_socket *socket);
 
 /** Register the single event callback.
  *
@@ -426,8 +369,12 @@ void lwip_socket_on_event(struct lwip_socket *socket,
  *  as the main-loop exit condition. */
 bool lwip_socket_is_active(const struct lwip_socket *socket);
 
-lwip_error_t lwip_socket_set_connect_timeout(struct lwip_socket *socket,
-                                             uint32_t timeout_ms);
+/** Set (or update) the inactivity timeout window.  Applies to all socket
+ *  states — service wait, connect/handshake, and data transfer.  The
+ *  deadline is extended by any inbound or outbound wire activity, so a
+ *  socket making progress never times out.  0 = disable the timeout. */
+lwip_error_t lwip_socket_set_inactivity_timeout(struct lwip_socket *socket,
+                                                uint32_t timeout_ms);
 lwip_error_t lwip_socket_write(struct lwip_socket *socket,
                                const uint8_t *buf,
                                size_t len);
@@ -437,7 +384,9 @@ size_t       lwip_socket_available(const struct lwip_socket *socket);
 size_t       lwip_socket_read(struct lwip_socket *socket,
                               uint8_t *buf,
                               size_t len);
-lwip_status_t lwip_socket_status(const struct lwip_socket *socket);
+lwip_status_t  lwip_socket_status(const struct lwip_socket *socket);
+lwip_error_t   lwip_socket_last_error(const struct lwip_socket *socket);
+struct netif  *lwip_socket_get_netif(const struct lwip_socket *socket);
 lwip_error_t  lwip_socket_shutdown(struct lwip_socket *socket);
 lwip_error_t  lwip_socket_close(struct lwip_socket *socket);
 lwip_error_t  lwip_socket_abort(struct lwip_socket *socket);

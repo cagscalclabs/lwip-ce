@@ -58,7 +58,7 @@
 .extern _lwip_socket_on_event
 .extern _lwip_socket_is_active
 .extern _lwip_socket_set_rx_limits
-.extern _lwip_socket_set_connect_timeout
+.extern _lwip_socket_set_inactivity_timeout
 .extern _lwip_set_event_cb
 .extern _lwip_get_traceback
 .extern _lwip_debug_module_name
@@ -382,12 +382,12 @@
 .extern _raw_sendto_if_src
 .extern _raw_send
 .extern _raw_recv
-.extern _lwip_sntp_set_timezone_offset
-.extern _lwip_sntp_set_dst_enabled
 .extern _lwip_sntp_set_time
 .extern _lwip_sntp_reset_flag
 .extern _lwip_sntp_time_was_set
 .extern _lwip_sntp_get_unix_time
+.extern _lwip_sntp_read_rtc_raw
+.extern _lwip_sntp_clamp_rtc_floor
 .extern _sys_timeout
 .extern _sys_untimeout
 .extern _tcp_new
@@ -472,11 +472,13 @@
 .extern _altcp_ws_new
 .extern _altcp_ws_new_tls
 .extern _altcp_ws_alloc
+.extern _lwip_socket_last_error
+.extern _lwip_socket_get_netif
 .extern _lwip_socket_set_ws_config
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 439    ; entry count
+    d24 441    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -505,7 +507,7 @@ _fn_exports_table:
     d24 _lwip_socket_on_event
     d24 _lwip_socket_is_active
     d24 _lwip_socket_set_rx_limits
-    d24 _lwip_socket_set_connect_timeout
+    d24 _lwip_socket_set_inactivity_timeout
 
 ; --- src/core/logging.c ---
     d24 _lwip_set_event_cb
@@ -925,12 +927,12 @@ _fn_exports_table:
     d24 _raw_recv
 
 ; --- src/core/sntp_time.c ---
-    d24 _lwip_sntp_set_timezone_offset
-    d24 _lwip_sntp_set_dst_enabled
     d24 _lwip_sntp_set_time
     d24 _lwip_sntp_reset_flag
     d24 _lwip_sntp_time_was_set
     d24 _lwip_sntp_get_unix_time
+    d24 _lwip_sntp_read_rtc_raw
+    d24 _lwip_sntp_clamp_rtc_floor
 
 ; --- src/core/timeouts.c ---
     d24 _sys_timeout
@@ -1049,4 +1051,6 @@ _fn_exports_table:
     d24 _altcp_ws_alloc
 
 ; --- src/lwIP.c ---
+    d24 _lwip_socket_last_error
+    d24 _lwip_socket_get_netif
     d24 _lwip_socket_set_ws_config

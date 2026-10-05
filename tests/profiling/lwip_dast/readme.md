@@ -61,3 +61,9 @@ Run the same renderer locally with `python3 build-tools/dast/dast_report.py`.
 
 - host: `python3`, `scapy` (`pip install scapy`), root for raw sockets
 - dry run with no deps/root: `python3 build-tools/dast/lwip-dast.py --ip x --self-test`
+
+TLS fixtures generate an IP SAN for the runner address selected by the route
+back to the calculator (`--ip`). This is the source of the NEXT control packet
+and the address the calculator verifies. Use the default `--tls-bind 0.0.0.0`
+or that same address. Both RSA and ECDSA fixtures include this IP SAN; certificate
+validity still requires the calculator clock to be synchronized.

@@ -52,7 +52,7 @@ static void on_event(struct lwip_socket *sock,
     {
         const lwip_socket_error_data_t *err =
             (const lwip_socket_error_data_t *)ev_data;
-        state->err = err ? err->err : sock->last_error;
+        state->err = err ? err->err : lwip_socket_last_error(sock);
         if (err)
         {
             lwip_example_linef("err c%u o%u r%d e%u",
@@ -66,38 +66,35 @@ static void on_event(struct lwip_socket *sock,
 
 int main(void)
 {
-    struct lwip_socket sock  = {0};
-    struct echo_state  state = {0};
-    lwip_error_t err;
+    struct lwip_socket *sock = NULL;
+    struct echo_state   state = {0};
 
     if (!lwip_example_stack_start())
     {
         return 1;
     }
 
-    err = lwip_socket_create(&sock, LWIP_SOCKET_TCP, LWIP_NETIF_EXT,
-                             NULL, 30000);
-    if (err != LWIP_OK)
+    sock = lwip_socket_create(LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, 30000);
+    if (!sock)
     {
-        lwip_example_show_socket_error("TCP create", &sock, err);
-        lwip_socket_destroy(&sock);
+        lwip_example_line("TCP create: OOM");
         return lwip_example_finish(1);
     }
 
-    lwip_socket_on_event(&sock, LWIP_SOCKET_EVENTF_ALL, on_event, &state);
+    lwip_socket_on_event(sock, LWIP_SOCKET_EVENTF_ALL, on_event, &state);
 
     lwip_example_show("TCP echo", "connecting");
-    err = lwip_socket_connect(&sock, ECHO_HOST, ECHO_PORT);
+    lwip_error_t err = lwip_socket_connect(sock, ECHO_HOST, ECHO_PORT);
     if (err != LWIP_OK)
     {
-        lwip_example_show_socket_error("TCP connect", &sock, err);
-        lwip_socket_destroy(&sock);
+        lwip_example_show_socket_error("TCP connect", sock, err);
+        lwip_socket_destroy(sock);
         return lwip_example_finish(1);
     }
 
     uint32_t start = lwip_example_now_ms();
     bool cancelled = false;
-    while (lwip_socket_is_active(&sock) &&
+    while (lwip_socket_is_active(sock) &&
            !lwip_example_timed_out(start, ECHO_TIMEOUT_SECONDS) &&
            !cancelled)
     {
@@ -107,18 +104,18 @@ int main(void)
         key = os_GetCSC();
         cancelled = lwip_example_cancelled(key);
 
-        size_t avail = lwip_socket_available(&sock);
+        size_t avail = lwip_socket_available(sock);
         if (avail && state.rx_len < sizeof(state.rx) - 1)
         {
             state.rx_len += lwip_socket_read(
-                &sock,
+                sock,
                 (uint8_t *)state.rx + state.rx_len,
                 avail);
             state.rx[state.rx_len] = '\0';
             if (strstr(state.rx, "lwip-ce echo"))
             {
                 state.ok = true;
-                lwip_socket_close(&sock);
+                lwip_socket_close(sock);
             }
         }
 
@@ -127,11 +124,11 @@ int main(void)
 
     /* Drain any bytes that arrived after the loop condition turned false. */
     size_t avail;
-    while (!state.ok && (avail = lwip_socket_available(&sock)) &&
+    while (!state.ok && (avail = lwip_socket_available(sock)) &&
            state.rx_len < sizeof(state.rx) - 1)
     {
         state.rx_len += lwip_socket_read(
-            &sock, (uint8_t *)state.rx + state.rx_len, avail);
+            sock, (uint8_t *)state.rx + state.rx_len, avail);
         state.rx[state.rx_len] = '\0';
         if (strstr(state.rx, "lwip-ce echo"))
         {
@@ -145,12 +142,12 @@ int main(void)
         {
             state.err = LWIP_ERR_CONNECT;
         }
-        lwip_example_show_socket_error("TCP failed", &sock, state.err);
-        lwip_socket_destroy(&sock);
+        lwip_example_show_socket_error("TCP failed", sock, state.err);
+        lwip_socket_destroy(sock);
         return lwip_example_finish(1);
     }
 
     lwip_example_show_and_wait("TCP echo OK", state.rx);
-    lwip_socket_destroy(&sock);
+    lwip_socket_destroy(sock);
     return lwip_example_finish(0);
 }

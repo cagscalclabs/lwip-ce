@@ -995,6 +995,11 @@ Validation Helpers
    subjectAltName extension is present (RFC 6125 legacy). Fails closed on any
    parse error.
 
+   IP literals require an exact binary ``iPAddress`` SAN match (IPv4 or
+   IPv6). Neither DNS SANs nor CommonName can authenticate an IP destination.
+   IPv6 literals must be unbracketed and have no zone identifier. TLS omits
+   SNI when connecting to an IP literal.
+
    :param ext_data: Raw bytes of ``obj->extensions``.
    :param ext_len: ``obj->extensions_len``.
    :param subject_cn: ``obj->subject_cn`` for CN fallback; may be ``NULL``.

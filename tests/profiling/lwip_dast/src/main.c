@@ -58,7 +58,7 @@ static struct udp_pcb *dast_ctrl_pcb = NULL;
 static ip_addr_t dast_ctrl_peer;
 static bool dast_ctrl_peer_valid = false;
 
-static struct lwip_socket dast_tls_sock;
+static struct lwip_socket *dast_tls_sock = NULL;
 static bool dast_tls_live = false;
 static char dast_tls_host[DAST_TLS_HOST_CAP];
 static volatile uint16_t dast_tls_err;
@@ -72,15 +72,15 @@ static volatile uint8_t dast_tls_status;
  * re-polling-until-netif-exists behavior the socket-connect path relies on. */
 static volatile lwip_netif_service_status_t dast_dhcp_status = (lwip_netif_service_status_t)0xFF;
 
-static void dast_dhcp_service_cb(struct netif *netif, void *arg,
-                                 uint8_t service_id,
-                                 lwip_netif_service_status_t status)
+static void dast_dhcp_service_cb(struct netif *netif,
+                                 const lwip_netif_service_event_t *ev,
+                                 void *arg)
 {
     (void)netif;
     (void)arg;
-    if (service_id == LWIP_SOCKET_SVC_DHCP)
+    if (ev->service_id == LWIP_SOCKET_SVC_DHCP)
     {
-        dast_dhcp_status = status;
+        dast_dhcp_status = ev->status;
     }
 }
 
@@ -119,6 +119,29 @@ static void dast_ctrl_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         dast_ctrl_signal = DAST_CTRL_ABRT;
     else if (strncmp(buf, "START", 5) == 0)
         dast_ctrl_signal = DAST_CTRL_START;
+    else if (strncmp(buf, "TRBK", 4) == 0)
+    {
+        uint8_t tb_count = 0;
+        const struct lwip_traceback_entry *tb = lwip_get_traceback(&tb_count);
+        char tbline[32];
+        for (uint8_t i = 0; i < tb_count; i++)
+        {
+            int n = snprintf(tbline, sizeof(tbline), "TBK:%u:f%u:L%lu:k%u:x%u",
+                             (unsigned)i,
+                             (unsigned)tb[i].file,
+                             (unsigned long)tb[i].line,
+                             (unsigned)tb[i].kind,
+                             (unsigned)tb[i].extra);
+            if (n <= 0)
+                continue;
+            struct pbuf *rp = pbuf_alloc(PBUF_TRANSPORT, (u16_t)n, PBUF_RAM);
+            if (!rp)
+                break;
+            memcpy(rp->payload, tbline, (size_t)n);
+            udp_sendto(dast_ctrl_pcb, rp, &dast_ctrl_peer, DAST_CTRL_PORT);
+            pbuf_free(rp);
+        }
+    }
 }
 
 /* Sends READY back to whichever host last sent us a control message.
@@ -356,46 +379,48 @@ static void dast_tls_event(struct lwip_socket *sock,
     {
         const lwip_socket_error_data_t *err =
             (const lwip_socket_error_data_t *)ev_data;
-        dast_tls_err = err ? (uint16_t)err->err : (uint16_t)sock->last_error;
+        dast_tls_err = err ? (uint16_t)err->err : (uint16_t)lwip_socket_last_error(sock);
         dast_tls_raw = err ? err->raw_error : 0;
-        dast_tls_status = (uint8_t)sock->status;
+        dast_tls_status = (uint8_t)lwip_socket_status(sock);
         dast_events++;
     }
 }
 
-static bool dast_tls_open(uint16_t port)
+static bool dast_tls_create(void)
 {
-    lwip_error_t err;
-
     if (!dast_ctrl_peer_valid)
         return false;
 
-    memset(&dast_tls_sock, 0, sizeof(dast_tls_sock));
     memset(dast_tls_host, 0, sizeof(dast_tls_host));
     if (!ipaddr_ntoa_r(&dast_ctrl_peer, dast_tls_host, sizeof(dast_tls_host)))
         return false;
 
-    err = lwip_socket_create_ex(&dast_tls_sock, LWIP_SOCKET_ALTCP_TLS,
-                                LWIP_NETIF_EXT, NULL,
-                                DAST_TLS_TIMEOUT_MS, DAST_TLS_RX_MAX);
-    if (err != LWIP_OK)
+    dast_tls_sock = lwip_socket_create_ex(LWIP_SOCKET_ALTCP_TLS,
+                                          LWIP_NETIF_EXT, NULL,
+                                          DAST_TLS_TIMEOUT_MS, DAST_TLS_RX_MAX);
+    if (!dast_tls_sock)
     {
-        dast_tls_err = (uint16_t)err;
-        dast_tls_status = (uint8_t)dast_tls_sock.status;
+        dast_tls_err = (uint16_t)LWIP_ERR_MEM;
+        dast_tls_status = 0;
         return false;
     }
 
-    lwip_socket_on_event(&dast_tls_sock, LWIP_SOCKET_EVENTF_ALL,
+    lwip_socket_on_event(dast_tls_sock, LWIP_SOCKET_EVENTF_ALL,
                          dast_tls_event, NULL);
     dast_tls_live = true;
-    dast_tls_status = (uint8_t)dast_tls_sock.status;
+    dast_tls_status = (uint8_t)lwip_socket_status(dast_tls_sock);
+    return true;
+}
 
-    err = lwip_socket_connect(&dast_tls_sock, dast_tls_host, port);
+static bool dast_tls_connect(uint16_t port)
+{
+    lwip_error_t err = lwip_socket_connect(dast_tls_sock, dast_tls_host, port);
     if (err != LWIP_OK)
     {
         dast_tls_err = (uint16_t)err;
-        dast_tls_status = (uint8_t)dast_tls_sock.status;
-        lwip_socket_destroy(&dast_tls_sock);
+        dast_tls_status = (uint8_t)lwip_socket_status(dast_tls_sock);
+        lwip_socket_destroy(dast_tls_sock);
+        dast_tls_sock = NULL;
         dast_tls_live = false;
         return false;
     }
@@ -407,25 +432,25 @@ static void dast_tls_pump_rx(void)
     if (!dast_tls_live)
         return;
 
-    dast_tls_status = (uint8_t)lwip_socket_status(&dast_tls_sock);
+    dast_tls_status = (uint8_t)lwip_socket_status(dast_tls_sock);
 
-    size_t avail = lwip_socket_available(&dast_tls_sock);
+    size_t avail = lwip_socket_available(dast_tls_sock);
     while (avail > 0)
     {
         size_t take = avail < DAST_RECV_CAP ? avail : DAST_RECV_CAP;
-        size_t got = lwip_socket_read(&dast_tls_sock,
+        size_t got = lwip_socket_read(dast_tls_sock,
                                       (uint8_t *)dast_recv_buf, take);
         if (!got)
             break;
         dast_last_len = (uint16_t)got;
         dast_events++;
-        if (lwip_socket_write(&dast_tls_sock, (const uint8_t *)dast_recv_buf,
+        if (lwip_socket_write(dast_tls_sock, (const uint8_t *)dast_recv_buf,
                               got) != LWIP_OK)
         {
-            lwip_socket_abort(&dast_tls_sock);
+            lwip_socket_abort(dast_tls_sock);
             break;
         }
-        avail = lwip_socket_available(&dast_tls_sock);
+        avail = lwip_socket_available(dast_tls_sock);
     }
 }
 
@@ -434,19 +459,20 @@ static void dast_tls_close(void)
     if (!dast_tls_live)
         return;
 
-    if (lwip_socket_is_active(&dast_tls_sock))
+    if (lwip_socket_is_active(dast_tls_sock))
     {
         uint32_t start;
-        (void)lwip_socket_close(&dast_tls_sock);
+        (void)lwip_socket_close(dast_tls_sock);
         start = lwip_now_ms();
-        while (lwip_socket_is_active(&dast_tls_sock) &&
+        while (lwip_socket_is_active(dast_tls_sock) &&
                (uint32_t)(lwip_now_ms() - start) < 3000u)
         {
             lwip_service_events();
         }
     }
 
-    lwip_socket_destroy(&dast_tls_sock);
+    lwip_socket_destroy(dast_tls_sock);
+    dast_tls_sock = NULL;
     dast_tls_live = false;
 }
 
@@ -467,7 +493,7 @@ static bool dast_enter_state(const dast_test_t *t)
     case DAST_STATE_TCP_LISTEN:
         return dast_tcp_open(t->port);
     case DAST_STATE_TLS_CLIENT:
-        return dast_tls_open(t->port);
+        return dast_tls_create();
     case DAST_STATE_IDLE:
     case DAST_STATE_RAW_RECV:
     default:
@@ -572,6 +598,7 @@ static void dast_draw_counter(const dast_test_t *t)
         snprintf(line, sizeof(line), "evt:%u len:%u",
                  (unsigned)dast_events, (unsigned)dast_last_len);
     dast_status_line(7, line);
+
 }
 
 static void dast_draw_start(const lwip_netif_info_t *info)
@@ -629,6 +656,34 @@ static uint8_t dast_run_test(int idx, const dast_test_t *t)
     bool open_ok = dast_enter_state(t);
     dast_draw_test(idx, t, open_ok);
     lwip_example_draw_mem_stats();
+
+    /* For TLS tests, wait until SNTP has synced before connecting and telling
+     * the host we are ready — lwip_socket_connect() returns LWIP_ERR_SERVICES
+     * if the clock isn't trustworthy yet (cert validation requires it). */
+    if (t->state == DAST_STATE_TLS_CLIENT)
+    {
+        while (!lwip_are_services_ready(NULL, LWIP_SOCKET_SVC_SNTP))
+        {
+            lwip_service_events();
+            if (os_GetCSC() == sk_Clear)
+            {
+                dast_leave_state(t);
+                return DAST_CTRL_ABRT;
+            }
+        }
+        if (!dast_tls_connect(t->port))
+        {
+            dast_ctrl_send_ready(); /* tell host we're up, it will see ABORT */
+            dast_ctrl_signal = DAST_CTRL_NONE;
+            while (dast_ctrl_signal == DAST_CTRL_NONE)
+            {
+                lwip_service_events();
+                if (os_GetCSC() == sk_Clear)
+                    return DAST_CTRL_ABRT;
+            }
+            return dast_ctrl_signal;
+        }
+    }
 
     /* Tell the host this test's listener is open and ready for its probe.
      * The host blocks on this before dispatching, so the probe never races
@@ -702,7 +757,7 @@ int main(void)
      * until USB enumeration has actually created the netif and DHCP can
      * start. The callback-less form resolves the netif once and silently
      * no-ops if it doesn't exist yet, with nothing left to retry it. */
-    (void)lwip_netif_request_services(NULL, LWIP_SOCKET_SVC_DHCP,
+    (void)lwip_netif_request_services(NULL, LWIP_SOCKET_SVC_DHCP, 0,
                                       dast_dhcp_service_cb, NULL);
 
     /* Pump until script sends START, or [clear] to abort. Network status

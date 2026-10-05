@@ -6,7 +6,7 @@
  * I/O: persistence/console/log is entirely the caller's choice inside its
  * callback. See lwip/logging.h. */
 
-#define LWIP_TRACEBACK_DEPTH 16u
+#define LWIP_TRACEBACK_DEPTH 32u
 
 static lwip_event_fn g_event_fn = NULL;
 static uint32_t g_last_debug_loc = 0xFFFFFFFFu; /* no event has this value */

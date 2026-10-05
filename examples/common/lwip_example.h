@@ -1165,9 +1165,9 @@ static void lwip_example_show_socket_error(const char *label,
     lwip_example_clear();
     lwip_example_line(label);
     lwip_example_linef("st:%u err:%u",
-                       sock ? (unsigned)sock->status : 0u,
+                       sock ? (unsigned)lwip_socket_status(sock) : 0u,
                        err ? (unsigned)err
-                           : (sock ? (unsigned)sock->last_error : 0u));
+                           : (sock ? (unsigned)lwip_socket_last_error(sock) : 0u));
     if (lwip_default_netif_info(&info))
     {
         lwip_example_linef("u:%u l:%u dh:%u",

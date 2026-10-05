@@ -122,6 +122,10 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
  * CommonName instead (legacy behavior; SAN takes priority when present,
  * per RFC 6125). Comparison is ASCII case-insensitive.
  *
+ * IP literals instead require an exact binary iPAddress SAN match (IPv4 or
+ * IPv6); DNS SANs and CommonName never authenticate an IP destination.
+ * IPv6 literals must be unbracketed, without a zone identifier.
+ *
  * @param ext_data      Raw bytes of the leaf's extensions field (cert.extensions).
  * @param ext_len       Length of @p ext_data.
  * @param subject_cn    Subject CommonName bytes for CN fallback; may be NULL.

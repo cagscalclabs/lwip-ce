@@ -30,6 +30,27 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Check report covers current src/ commit
+        run: |
+          report_commit=$(python3 -c "
+          import json
+          with open('tests/dast.json') as f:
+              d = json.load(f)
+          print(d.get('src_commit', ''))
+          ")
+          src_commit=$(git log -1 --format="%H" -- src/)
+          if [ -z "$src_commit" ]; then
+            echo "No commits touch src/ — skipping staleness check."
+            exit 0
+          fi
+          echo "Report tested : $report_commit"
+          echo "Current src/  : $src_commit"
+          if [ "$report_commit" != "$src_commit" ]; then
+            echo "::error::dast.json was generated against $report_commit but src/ is now at $src_commit — re-run the DAST harness and commit a fresh report."
+            exit 1
+          fi
+          echo "Report is current."
+
       - name: Render report to job summary and gate on failures
         run: |
           python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"

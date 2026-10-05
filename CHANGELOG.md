@@ -45,8 +45,17 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - **Socket server API:** `lwip_conn_listen`, `lwip_conn_accept`, and associated types added to the high-level socket API, enabling TCP server applications. Includes an httpd example with file-serving and a JSON stats endpoint.
 - **Parser improvements:** XML, JSON, and URL parsers promoted to the v1.2 release with additional fixes and API refinements from post-v1.1 development.
 
-## Unreleased
+## v1.3-stable
 
 - **XML parser rewrite:** Ring-buffered streaming pull parser with lax/HTML mode. New API: `xml_init`, `xml_take`, `xml_next`, `xml_finish`, `xml_get_attr`, `xml_decode_entity`. Supports chunked input (feeds bytes in, pops complete events out), void element auto-close (`<br>` → START + synthesized END), boolean attributes, unquoted attribute values, case folding, `&nbsp;` and other HTML entities, and `<!DOCTYPE>` skip. Replaces the old slice-based batch parser.
 - **JSON parser refinements:** Simplified public API; improved handling of nested structures and edge cases in streaming context.
 - **URL encoder/decoder refinements:** API cleanup.
+- A PCAP interface
+
+## v2.0-stable
+
+- Significant API changes to cryptography: keys, x509.
+- TLS bug in `HelloRetryRequest` handling resolved.
+- Implement IP-based SAN verification; Omit SNI for IP literals.
+- DAST certificates now include the runner control-source IPv4 address.
+- Stabilize RTC locale behavior.
