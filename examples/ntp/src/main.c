@@ -14,11 +14,11 @@
 
 static volatile bool g_sntp_ready = false;
 
-static void ntp_service_cb(struct netif *n, void *arg, uint8_t svc,
-                            lwip_netif_service_status_t st)
+static void ntp_service_cb(struct netif *n, const lwip_netif_service_event_t *ev,
+                            void *arg)
 {
-    (void)n; (void)arg; (void)svc;
-    if (st == LWIP_NETIF_SERVICE_UP)
+    (void)n; (void)arg;
+    if (ev->service_id == LWIP_SOCKET_SVC_SNTP && ev->status == LWIP_NETIF_SERVICE_UP)
         g_sntp_ready = true;
 }
 
@@ -40,6 +40,7 @@ int main(void)
     lwip_example_show("NTP", "starting");
     err = lwip_netif_request_services(NULL,
                                       LWIP_SOCKET_SVC_DNS | LWIP_SOCKET_SVC_SNTP,
+                                      0,
                                       ntp_service_cb, NULL);
     if (err != LWIP_OK)
     {

@@ -616,11 +616,20 @@ def build_macro_file() -> Path | None:
               file=sys.stderr)
         return None
     guard_like = re.compile(r"^#define\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+    # Standard-library macros the host compiler predefines in C mode (-dM
+    # dumps these unconditionally) must never be re-emitted here: their C
+    # expansion (e.g. NULL as `((void *)0)`) is wrong for a C++ consumer,
+    # which already gets a correct definition from its own <cstddef>/core
+    # language support. Every real consumer has its own standard headers;
+    # this generator should never need to supply one.
+    STDLIB_EXCLUDE = {"NULL"}
     lines: list[str] = []
     for line in res.stdout.splitlines():
         match = guard_like.match(line)
         if match:
             name = match.group(1)
+            if name in STDLIB_EXCLUDE:
+                continue
             if (
                 name.startswith("LWIP_HDR_") or
                 name.endswith("_H") or

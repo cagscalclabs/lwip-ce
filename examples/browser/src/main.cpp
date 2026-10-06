@@ -634,39 +634,11 @@ public:
         return true;
     }
 
-    void release(void)
-    {
-        sys_untimeout(network_watch_timeout, this);
-        sys_untimeout(connect_watch_timeout, this);
-        sys_untimeout(interpreter_timeout, this);
-        network_watch_active_ = false;
-        connect_watch_active_ = false;
-        interpreter_watch_active_ = false;
-        id_names.release();
-        class_names.release();
-        raw_content.release();
-        render_object.release();
-        payload_in.release();
-        state_ = nullptr;
-        initialized_ = false;
-        if (pcap_enabled_)
-        {
-            struct netif *netif = netif_default;
-            if (netif)
-            {
-                pcap_disable_on_netif(netif);
-            }
-            pcap_enabled_ = false;
-        }
-        if (network_started_)
-        {
-            network_started_ = false;
-            lwip_stop();
-        }
-        lwip_example_gfx_stop();
-    }
+    void release(void);
 
     void attach_state(struct browser_state *state) { state_ = state; }
+    bool pcap_enabled(void) const { return pcap_enabled_; }
+    void set_pcap_enabled(bool enabled) { pcap_enabled_ = enabled; }
     bool connect(struct browser_state *state);
     bool close(struct browser_state *state);
     bool fetch(struct browser_state *state);
@@ -3479,6 +3451,39 @@ void Browser::connect_watch_step(void)
     schedule_connect_watch();
 }
 
+void Browser::release(void)
+{
+    sys_untimeout(network_watch_timeout, this);
+    sys_untimeout(connect_watch_timeout, this);
+    sys_untimeout(interpreter_timeout, this);
+    network_watch_active_ = false;
+    connect_watch_active_ = false;
+    interpreter_watch_active_ = false;
+    id_names.release();
+    class_names.release();
+    raw_content.release();
+    render_object.release();
+    payload_in.release();
+    if (pcap_enabled_)
+    {
+        struct netif *netif = (state_ && state_->sock)
+            ? lwip_socket_get_netif(state_->sock) : nullptr;
+        if (netif)
+        {
+            pcap_disable_on_netif(netif);
+        }
+        pcap_enabled_ = false;
+    }
+    state_ = nullptr;
+    initialized_ = false;
+    if (network_started_)
+    {
+        network_started_ = false;
+        lwip_stop();
+    }
+    lwip_example_gfx_stop();
+}
+
 bool Browser::connect(struct browser_state *state)
 {
     state_ = state;
@@ -4000,7 +4005,7 @@ static void browser_on_event(struct lwip_socket *sock,
         }
         else
         {
-            fetch->err = sock->last_error;
+            fetch->err = lwip_socket_last_error(sock);
         }
         fetch->done = true;
         fetch->settle_ticks = BROWSER_CLOSE_DRAIN_TICKS;
@@ -4663,18 +4668,18 @@ int main(void)
                 break;
             case sk_Store:
             {
-                struct netif *netif = netif_default;
+                struct netif *netif = state->sock ? lwip_socket_get_netif(state->sock) : nullptr;
                 if (netif && state->browser)
                 {
-                    if (state->browser->pcap_enabled_)
+                    if (state->browser->pcap_enabled())
                     {
                         pcap_disable_on_netif(netif);
-                        state->browser->pcap_enabled_ = false;
+                        state->browser->set_pcap_enabled(false);
                         browser_set_event_line(state, "pcap off");
                     }
                     else if (pcap_enable_on_netif(netif))
                     {
-                        state->browser->pcap_enabled_ = true;
+                        state->browser->set_pcap_enabled(true);
                         browser_set_event_line(state, "pcap on");
                     }
                     else

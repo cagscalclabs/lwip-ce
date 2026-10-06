@@ -567,7 +567,7 @@ int main(void)
     lwip_example_present();
     lwip_set_event_cb(lwip_example_dbg_console_cb);
 
-    lwip_request_services(LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS);
+    lwip_request_services(LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS, 0);
 
     struct lwip_socket *listen_sock = lwip_socket_create(LWIP_SOCKET_TCP,
                                                          LWIP_NETIF_EXT, NULL, 0);
