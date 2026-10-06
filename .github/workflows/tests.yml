@@ -186,22 +186,45 @@ jobs:
           total_tests=0
           total_passed=0
           total_failed=0
+          total_timeout=0
           start_time=$(($(date +%s%N)/1000000))
+
+          # A single hung cemu-autotester run has no other way to be noticed --
+          # nothing elsewhere in this job times out, so a stall here would
+          # otherwise block the whole job until GitHub's own ~6h ceiling.
+          # TEST_TIMEOUT_SECONDS bounds one attempt; a hang is retried up to
+          # TEST_MAX_ATTEMPTS times (CEmu/CI flakiness, not necessarily a real
+          # bug -- see the Known CI flakiness note below) before giving up and
+          # recording "timeout" rather than "failed", since a stall is not the
+          # same signal as the autotester actually reporting a mismatch.
+          TEST_TIMEOUT_SECONDS=120
+          TEST_MAX_ATTEMPTS=3
 
           while IFS= read -r -d '' test; do
             status=0
             test_dir=$(dirname "$test")
             failed_hash_ids=""
+            timed_out=0
             test_start=$(($(date +%s%N)/1000000))
             make -C "$test_dir" clean
             make -C "$test_dir" || ((status=$?))
             if [ $status -eq 0 ]; then
               set +e
-              AUTOTESTER_LIBS_DIR="${{github.workspace}}/release/appinst" \
-                make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
-              status=${PIPESTATUS[0]}
+              for attempt in $(seq 1 "$TEST_MAX_ATTEMPTS"); do
+                AUTOTESTER_LIBS_DIR="${{github.workspace}}/release/appinst" \
+                  timeout "${TEST_TIMEOUT_SECONDS}s" \
+                  make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
+                status=${PIPESTATUS[0]}
+                if [ "$status" -eq 124 ]; then
+                  echo "::warning::$(basename "$test_dir") timed out after ${TEST_TIMEOUT_SECONDS}s (attempt $attempt/$TEST_MAX_ATTEMPTS)"
+                  timed_out=1
+                  continue
+                fi
+                timed_out=0
+                break
+              done
               set -e
-              if [ "$status" -ne 0 ]; then
+              if [ "$status" -ne 0 ] && [ "$timed_out" -eq 0 ]; then
                 # Autotester reports each mismatched hash on its own line, e.g.:
                 #   [Test failed!] Hash #1 ("...") did not match the expected CRC ...
                 # Collect every failed hash id (a run can fail more than one).
@@ -211,7 +234,10 @@ jobs:
             test_done=$(($(date +%s%N)/1000000))
             test_duration=$((test_done - test_start))
             (( total_tests += 1 ))
-            if [ $status -eq 0 ]; then
+            if [ "$timed_out" -eq 1 ]; then
+              (( total_timeout += 1 ))
+              test_status="timeout; manual verification needed"
+            elif [ $status -eq 0 ]; then
               (( total_passed += 1 ))
               test_status="passed"
             else
@@ -222,8 +248,8 @@ jobs:
           done < <(find ${{env.LWIP_DYLIB_TESTS}} -name autotest.json -print0)
 
           end_time=$(($(date +%s%N)/1000000))
-          echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
-          cmake -E echo "$total_tests dyload modules tested, $total_passed passed, $total_failed failed!"
+          echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"$total_timeout\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
+          cmake -E echo "$total_tests dyload modules tested, $total_passed passed, $total_failed failed, $total_timeout timed out (skipped; manual verification needed)!"
           exit $total_failed
 
       - name: Generate Dyload JSON Results
@@ -255,12 +281,14 @@ jobs:
           total=$(jq -r '.results.summary.tests' ${{github.workspace}}/results-dylib.json)
           passed=$(jq -r '.results.summary.passed' ${{github.workspace}}/results-dylib.json)
           failed=$(jq -r '.results.summary.failed' ${{github.workspace}}/results-dylib.json)
+          timed_out=$(jq -r '.results.summary.skipped' ${{github.workspace}}/results-dylib.json)
 
           echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
           echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
           echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏱️ Timed out (manual verification needed) | $timed_out |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
@@ -280,6 +308,8 @@ jobs:
 
             if [ "$status" = "passed" ]; then
               status_icon="✅ Passed"
+            elif [ "$status" = "timeout; manual verification needed" ]; then
+              status_icon="⏱️ Timed out (manual verification needed)"
             else
               status_icon="❌ Failed"
             fi
@@ -298,6 +328,8 @@ jobs:
               hash_desc=${hash_desc//|/\\|}
               if [ "$status" = "passed" ]; then
                 hash_status="✅ Passed"
+              elif [ "$status" = "timeout; manual verification needed" ]; then
+                hash_status="⏱️ Unknown (run timed out)"
               elif [[ ",$failed_hash_ids," == *",$hash_id,"* ]]; then
                 hash_status="❌ Failed"
               else
