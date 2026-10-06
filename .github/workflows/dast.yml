@@ -12,6 +12,17 @@ name: DAST
 on:
   workflow_dispatch:
   workflow_call:
+  # A tests/dast.json-only commit (an operator publishing a fresh report)
+  # should re-render/gate it on its own, without pulling in the full
+  # rebuild + unit tests + CAVP chain that build.yml's path filter
+  # deliberately skips for this exact file -- see that filter's comment.
+  push:
+    branches: [master]
+    paths:
+      - 'tests/dast.json'
+  pull_request:
+    paths:
+      - 'tests/dast.json'
 
 permissions:
   contents: read

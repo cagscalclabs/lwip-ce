@@ -10,6 +10,7 @@ on:
       - 'src/**'
       - 'build-tools/**'
       - 'tests/**'
+      - '!tests/dast.json'
       - '.github/workflows/build.yml'
       - '.github/workflows/tests.yml'
       - '.github/workflows/cavp.yml'
@@ -21,6 +22,7 @@ on:
       - 'src/**'
       - 'build-tools/**'
       - 'tests/**'
+      - '!tests/dast.json'
       - '.github/workflows/build.yml'
       - '.github/workflows/tests.yml'
       - '.github/workflows/cavp.yml'
@@ -54,7 +56,12 @@ jobs:
       - name: Compute input hash
         id: hash
         run: |
-          echo "hash=${{ hashFiles('src/**', 'build-tools/**', 'tests/**', '.github/workflows/build.yml', '.github/workflows/tests.yml', '.github/workflows/cavp.yml', '.github/workflows/sast.yml', '.github/workflows/dast.yml') }}" >> "$GITHUB_OUTPUT"
+          # tests/dast.json is excluded deliberately: it's a manually-produced,
+          # operator-graded DAST report committed after a hardware run, not a
+          # build/test input -- hashing it here would invalidate the sentinel
+          # cache (forcing a full rebuild + unit tests + CAVP) on every report
+          # commit even when nothing that actually needs rebuilding changed.
+          echo "hash=${{ hashFiles('src/**', 'build-tools/**', 'tests/unit/**', 'tests/host/**', 'tests/common/**', 'tests/profiling/**', '.github/workflows/build.yml', '.github/workflows/tests.yml', '.github/workflows/cavp.yml', '.github/workflows/sast.yml', '.github/workflows/dast.yml') }}" >> "$GITHUB_OUTPUT"
       - name: Check sentinel cache
         id: cache
         uses: actions/cache/restore@v5
