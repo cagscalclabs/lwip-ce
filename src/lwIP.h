@@ -369,12 +369,12 @@ void lwip_socket_on_event(struct lwip_socket *socket,
  *  as the main-loop exit condition. */
 bool lwip_socket_is_active(const struct lwip_socket *socket);
 
-/** Set (or update) the inactivity timeout window.  Applies to all socket
+/** Set (or update) the socket's timeout window.  Applies to all socket
  *  states — service wait, connect/handshake, and data transfer.  The
  *  deadline is extended by any inbound or outbound wire activity, so a
  *  socket making progress never times out.  0 = disable the timeout. */
-lwip_error_t lwip_socket_set_inactivity_timeout(struct lwip_socket *socket,
-                                                uint32_t timeout_ms);
+lwip_error_t lwip_socket_set_timeout(struct lwip_socket *socket,
+                                     uint32_t timeout_ms);
 lwip_error_t lwip_socket_write(struct lwip_socket *socket,
                                const uint8_t *buf,
                                size_t len);
@@ -391,9 +391,14 @@ lwip_error_t  lwip_socket_shutdown(struct lwip_socket *socket);
 lwip_error_t  lwip_socket_close(struct lwip_socket *socket);
 lwip_error_t  lwip_socket_abort(struct lwip_socket *socket);
 
-lwip_error_t lwip_socket_set_rx_limits(struct lwip_socket *socket,
-                                       size_t initial_size,
-                                       size_t max_size);
+/** Resize the socket's RX ring ceiling immediately (grow or shrink); the
+ *  initial size set at socket creation is never changed by this call. Data
+ *  already in the ring is preserved — this fails only if there isn't enough
+ *  heap to grow, or there's more data in the ring than the new max could
+ *  hold when shrinking. Safe to call at any time, with any amount of data
+ *  already buffered. */
+lwip_error_t lwip_socket_resize_rx_max(struct lwip_socket *socket,
+                                       size_t new_max);
 
 /** Set the WebSocket path and optional subprotocol for a WS/WSS socket.
  *  Must be called after lwip_socket_create() and before lwip_socket_connect().

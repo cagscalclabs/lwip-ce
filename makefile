@@ -61,49 +61,21 @@ CSOURCES := $(filter-out src/tls/contrib/x25519/src/main.c,$(CSOURCES))
 LINK_CSOURCES := $(call UPDIR_ADD,$(CSOURCES:%.$(C_EXTENSION)=$(OBJDIR)/%.$(C_EXTENSION).o))
 OBJECTS := $(LINK_CSOURCES) $(LINK_CPPSOURCES) $(LINK_ASMSOURCES) $(LINK_PREASMSOURCES)
 
-# Regenerate src/functable.s and the curated release header tree from
-# build-tools/meta/public_api_manifest.csv. Run after adding/removing any
-# public API. parse_manifest.py is the single implementation entry point for
-# both the export table and the release header tree.
-#
-# Header generation uses libclang, which on this dev machine only loads
-# cleanly from the Homebrew python3.11 binary against the Xcode CLT's
-# libclang.dylib — pip-install of the bindings is unavailable. Override
-# with `make functable HEADER_PYTHON=/path/to/python3` if you have a
-# working clang.cindex elsewhere.
-#
-# Optional local AI doc cleanup:
-#   make functable LWIP_AI_DOCSTRINGS=1
-# Defaults to qwen2.5-coder:7b via Ollama and caches by generated header
-# content. If Ollama is missing, the header generator exits with install
-# instructions. CI/release builds should leave this disabled unless
-# explicitly preparing refreshed release documentation.
-HEADER_PYTHON ?= /opt/homebrew/bin/python3.11
-LWIP_RELEASE_DIR ?= $(CURDIR)/build
-
-.PHONY: functable
-functable:
-	LWIP_RELEASE_DIR="$(LWIP_RELEASE_DIR)" HEADER_PYTHON="$(HEADER_PYTHON)" python3 $(CURDIR)/build-tools/scripts/parse_manifest.py
-
-# Full dylib release build. The script owns dependency checkout, generated
-# package staging under submodules/toolchain/src/lwip, libload make/install,
-# and copying the completed package to build/.
+# Run a full build of this project in dylib mode
+# Set `REBUILD_EXPORTS=1` to rebuild the exports table rather than
+# append new entries (this will break backwards compatibility).
 .PHONY: dylib
 dylib:
 	make clean
 	$(CURDIR)/build-tools/build-release-dylib.sh
 
-# Print section sizes and the contract a libload consumer needs to honor
-# when reserving RAM for lwIP's .data + .bss. Run after a build.
-#
-# The total reserve = ___data_len + ___bss_len. Consumers link with:
-#   --defsym BSSHEAP_LOW=<base>
-#   --defsym BSSHEAP_HIGH=<base + reserve + heap_shared_with_lwip>
+# Package output of `make dylib` (and readmes) into `lwip.zip`
 .PHONY: release
 release:
 	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
 	cp README.md build/README.md
 	cp CHANGELOG.md build/CHANGELOG.md
+	cp SECURITY.md build/SECURITY.md
 	rm -f lwip.zip
 	zip -r lwip.zip build/ \
 	    -x "*/obj/*" \
@@ -112,12 +84,18 @@ release:
 	    -x "*/__MACOSX/*" \
 	    -x "*/._*"
 
+# Combine `make dylib` and `make release` into a single command.
+# Setting `REBUILD_EXPORTS=1` is valid here too.
+.PHONY: dylib-release
+dylib-release:
+	make dylib
+	make release
 
 .PHONY: sizes
 sizes:linker_script_app
 	@if [ ! -f bin/$(NAME).map ]; then echo "Run 'make' first to produce bin/$(NAME).map"; exit 1; fi
 	@printf '\nlwIP-CE memory footprint (from bin/$(NAME).map):\n\n'
-	@MAPFILE=bin/$(NAME).map python3 build-tools/scripts/print_sizes.py
+	@MAPFILE=bin/$(NAME).map python3 build-tools/scripts/helpers/print_sizes.py
 	@printf '\n  Consumer link contract:\n'
 	@printf '    --defsym BSSHEAP_LOW=<base>\n'
 	@printf '    --defsym BSSHEAP_HIGH=<base + reserve + heap_shared_with_lwip>\n\n'

@@ -22,6 +22,7 @@
  */
 
 #include "lwIP.h"
+#include "lwip/mem.h"
 #include "lwip/init.h"
 #include "lwip/netif.h"
 #include "lwip/tcp.h"
@@ -3431,30 +3432,47 @@ bool lwip_socket_is_active(const struct lwip_socket *conn)
     }
 }
 
-lwip_error_t lwip_socket_set_rx_limits(struct lwip_socket *conn,
-                                     size_t initial_size,
-                                     size_t max_size)
+lwip_error_t lwip_socket_resize_rx_max(struct lwip_socket *conn,
+                                       size_t new_max)
 {
-    if (!conn || initial_size == 0 || max_size == 0 || initial_size > max_size)
+    if (!conn || new_max == 0)
     {
         return LWIP_ERR_ARG;
     }
-    if (conn->rx_ring && mem_buffer_len(conn->rx_ring) != 0)
+    if (!conn->rx_ring)
     {
         return LWIP_ERR_STATE;
     }
-    if (conn->rx_ring)
+    /* Shrinking below what's already buffered would lose data -- refuse
+     * rather than silently drop it. The ring's own initial size (set once
+     * at socket creation) is never touched here. */
+    if (mem_buffer_len(conn->rx_ring) > new_max)
     {
-        mem_buffer_destroy(conn->rx_ring);
-        conn->rx_ring = NULL;
+        return LWIP_ERR_MEM;
     }
-    conn->rx_ring_init = initial_size;
-    conn->rx_ring_max = max_size;
-    return lwip_socket_rx_ring_create(conn);
+    /* Lower the ceiling immediately; the ring shrinks toward it on its own
+     * as data drains (mem_buffer_set_shrink's existing step/threshold). */
+    mem_buffer_set_max_size(conn->rx_ring, new_max);
+    /* Growing: ask for the full new ceiling up front so a caller raising
+     * the max can rely on it being usable right away rather than waiting
+     * for the next write to trigger growth. mem_buffer_reserve's len is
+     * bytes beyond what's already stored, so request the shortfall to
+     * reach new_max as total capacity. */
+    if (new_max > conn->rx_ring_max)
+    {
+        size_t have = mem_buffer_len(conn->rx_ring);
+        size_t shortfall = (new_max > have) ? (new_max - have) : 0;
+        if (shortfall && !mem_buffer_reserve(conn->rx_ring, shortfall))
+        {
+            return LWIP_ERR_MEM;
+        }
+    }
+    conn->rx_ring_max = new_max;
+    return LWIP_OK;
 }
 
-lwip_error_t lwip_socket_set_inactivity_timeout(struct lwip_socket *conn,
-                                                uint32_t timeout_ms)
+lwip_error_t lwip_socket_set_timeout(struct lwip_socket *conn,
+                                     uint32_t timeout_ms)
 {
     if (!conn)
     {

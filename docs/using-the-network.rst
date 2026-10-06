@@ -146,9 +146,9 @@ Socket Reconfiguration
 
 Some socket attributes are modifiable in flight should the situation call for it.
 
-.. c:function:: lwip_error_t lwip_socket_set_inactivity_timeout(struct lwip_socket *socket, uint32_t timeout_ms)
+.. c:function:: lwip_error_t lwip_socket_set_timeout(struct lwip_socket *socket, uint32_t timeout_ms)
 
-   Update the inactivity watchdog window after creation. It covers service
+   Update the socket's timeout window after creation. It covers service
    wait, connection establishment, handshake, and data transfer. The watchdog
    re-arms on the next service tick; network activity extends the deadline.
 
@@ -158,11 +158,14 @@ Some socket attributes are modifiable in flight should the situation call for it
       time out).
    :returns: ``LWIP_OK`` on success, ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
 
-.. c:function:: lwip_error_t lwip_socket_set_rx_limits(struct lwip_socket *socket, size_t initial_size, size_t max_size)
+.. c:function:: lwip_error_t lwip_socket_resize_rx_max(struct lwip_socket *socket, size_t new_max)
 
-   Replace the RX ring on an existing socket with new limits. The ring must
-   be empty; otherwise this returns ``LWIP_ERR_STATE`` without replacing it.
-   Both sizes must be nonzero and ``initial_size`` must not exceed ``max_size``.
+   Resize the RX ring's ceiling on an existing socket, growing or shrinking
+   it immediately. The ring's initial size (set once at creation) is never
+   changed by this call, and data already buffered is preserved. This fails
+   only if there's more data already in the ring than ``new_max`` could hold
+   (shrinking), or there isn't enough heap to grow — it never requires the
+   ring to be empty first.
 
    Prefer ``lwip_socket_create_ex()`` when you know the right ceiling up front.
    Use this function when the ceiling needs to change after creation — for
@@ -170,11 +173,10 @@ Some socket attributes are modifiable in flight should the situation call for it
    response will be larger than expected.
 
    :param socket: An initialised socket handle.
-   :param initial_size: New initial allocation in bytes.
-   :param max_size: New hard ceiling in bytes.
+   :param new_max: New hard ceiling in bytes.
    :returns: ``LWIP_OK`` on success, ``LWIP_ERR_ARG`` for invalid arguments,
-      ``LWIP_ERR_STATE`` if unread bytes remain, or ``LWIP_ERR_MEM`` on
-      allocation failure.
+      or ``LWIP_ERR_MEM`` if the resize couldn't be performed (not enough
+      room to shrink into, or heap exhaustion while growing).
 
 Requesting Services
 --------------------

@@ -1,4 +1,4 @@
-	library	LWIP, 0
+	library	LWIP, 1
 
 	export	lwip_init_runtime_internal
 	export	lwip_start_last_error
@@ -23,8 +23,10 @@
 	export	lwip_socket_abort
 	export	lwip_socket_on_event
 	export	lwip_socket_is_active
-	export	lwip_socket_set_rx_limits
-	export	lwip_socket_set_inactivity_timeout
+	export	lwip_socket_resize_rx_max
+	export	lwip_socket_set_timeout
+	export	lwip_socket_last_error
+	export	lwip_socket_get_netif
 	export	lwip_set_event_cb
 	export	lwip_get_traceback
 	export	lwip_debug_module_name
@@ -438,8 +440,6 @@
 	export	altcp_ws_new
 	export	altcp_ws_new_tls
 	export	altcp_ws_alloc
-	export	lwip_socket_last_error
-	export	lwip_socket_get_netif
 	export	lwip_socket_set_ws_config
 	export	lwip_start_with_crt
 	export	lwip_get_start_errno

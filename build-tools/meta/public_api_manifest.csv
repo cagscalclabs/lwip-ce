@@ -21,8 +21,8 @@ func,lwip_socket_close,socket,src/lwIP.h,lwip.h
 func,lwip_socket_abort,socket,src/lwIP.h,lwip.h
 func,lwip_socket_on_event,socket,src/lwIP.h,lwip.h
 func,lwip_socket_is_active,socket,src/lwIP.h,lwip.h
-func,lwip_socket_set_rx_limits,socket,src/lwIP.h,lwip.h
-func,lwip_socket_set_inactivity_timeout,socket,src/lwIP.h,lwip.h
+func,lwip_socket_resize_rx_max,socket,src/lwIP.h,lwip.h
+func,lwip_socket_set_timeout,socket,src/lwIP.h,lwip.h
 func,lwip_socket_last_error,socket,src/lwIP.h,lwip.h
 func,lwip_socket_get_netif,socket,src/lwIP.h,lwip.h
 func,lwip_set_event_cb,core,src/include/lwip/logging.h,lwip/core/logging.h
