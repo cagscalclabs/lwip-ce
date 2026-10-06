@@ -33,6 +33,7 @@
 
 #include <lwip.h>
 #include <lwip/cryptography/key.h>
+#include <lwip/cryptography/random.h>
 
 /* --------------------------------------------------------------------------
  * Test vectors
@@ -155,7 +156,21 @@ int main(void)
     if (!lwip_start()) return 1;
     os_ClrHome();
 
-    struct tls_key k;
+    /* One-shot encryption requires a healthy RNG for its fresh IV. On CEmu,
+     * the entropy source may not be ready immediately after lwip_start(). */
+    uint32_t rng_wait_start = lwip_now_ms();
+    while (!tls_rng_healthcheck())
+    {
+        lwip_service_events();
+        if ((uint32_t)(lwip_now_ms() - rng_wait_start) >= 10000u)
+        {
+            printf("RNG setup timed out");
+            os_GetKey();
+            return 1;
+        }
+    }
+
+    struct tls_key k = {0};
     tls_alg_t alg;
     bool ok;
 
