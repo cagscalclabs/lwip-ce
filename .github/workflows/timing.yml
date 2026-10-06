@@ -165,8 +165,7 @@ jobs:
           cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
           cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_TESTS_COMMON}}/
           for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
-            name="$(basename "$appvar")"
-            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/${name/LWIP/lwIP}"
+            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/"
           done
           curl -fL \
             -o ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv \
@@ -178,12 +177,13 @@ jobs:
           test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
           test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
           test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.0.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.1.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.2.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.3.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.4.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIP.5.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.0.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.1.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.2.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.3.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.4.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.5.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.6.8xv
           ls -lh ${{env.LWIP_TESTS_COMMON}}
 
       - name: Run Timing Unit Test
