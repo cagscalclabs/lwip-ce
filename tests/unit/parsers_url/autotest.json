@@ -20,19 +20,7 @@
   },
   "sequence": [
     "key|clear",
-    "key|2nd",
-    "key|0",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|enter",
-    "key|prgm",
-    "key|1",
-    "key|enter",
-    "key|enter",
+    "action|launch:INSTALL",
     "hashWait|7",
     "key|left",
     "key|enter",
@@ -56,6 +44,7 @@
       "description": "Encode: unreserved chars pass through unchanged",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 10000
     },
@@ -63,6 +52,7 @@
       "description": "Encode: spaces and special chars become %XX",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
@@ -70,6 +60,7 @@
       "description": "Decode: %XX sequences decoded correctly",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
@@ -77,6 +68,7 @@
       "description": "Decode: plain string passthrough",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
@@ -84,6 +76,7 @@
       "description": "Query string: single key=value pair",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
@@ -91,6 +84,7 @@
       "description": "Query string: multiple pairs with encoding",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": ["D1F2869F"],
       "timeout": 1000
     },
@@ -98,6 +92,7 @@
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@lwip_installed",
       "expected_CRCs": ["F7C03D8D"],
       "timeout": 100000
     }

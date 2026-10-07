@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  AUTOTESTER_ROM: ${{github.workspace}}/CE.rom
+  AUTOTESTER_ROM: ${{ github.workspace }}/${{ vars.AUTOTESTER_ROM }}
   LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
   LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
   CEMU_PATH: ${{github.workspace}}/CEmu
@@ -110,7 +110,7 @@ jobs:
             --retry 3 \
             --retry-delay 2 \
             -o "${{github.workspace}}/CE.rom.enc" \
-            https://cagscalclabs.net/restricted/CE.rom.enc
+            https://cagscalclabs.net/restricted/${{ vars.AUTOTESTER_ROM }}.enc
 
           gpg --batch --yes \
             --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \

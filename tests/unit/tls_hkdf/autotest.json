@@ -19,19 +19,7 @@
   },
   "sequence": [
     "key|clear",
-    "key|2nd",
-    "key|0",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|enter",
-    "key|prgm",
-    "key|1",
-    "key|enter",
-    "key|enter",
+    "action|launch:INSTALL",
     "hashWait|2",
     "key|left",
     "key|enter",
@@ -46,6 +34,7 @@
       "description": "HKDF-SHA256 - RFC 5869, Appendix A, Test Cases 1-3",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -55,6 +44,7 @@
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@lwip_installed",
       "expected_CRCs": [
         "F7C03D8D"
       ],

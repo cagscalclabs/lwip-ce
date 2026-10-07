@@ -20,19 +20,7 @@
   },
   "sequence": [
     "key|clear",
-    "key|2nd",
-    "key|0",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|enter",
-    "key|prgm",
-    "key|1",
-    "key|enter",
-    "key|enter",
+    "action|launch:INSTALL",
     "hashWait|4",
     "key|left",
     "key|enter",
@@ -51,6 +39,7 @@
       "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 1 (c=1)",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -60,6 +49,7 @@
       "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 2 (c=2)",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -69,6 +59,7 @@
       "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 7 (c=1, 32 bytes)",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -78,6 +69,7 @@
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@lwip_installed",
       "expected_CRCs": [
         "F7C03D8D"
       ],

@@ -19,19 +19,7 @@
   },
   "sequence": [
     "key|clear",
-    "key|2nd",
-    "key|0",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|enter",
-    "key|prgm",
-    "key|1",
-    "key|enter",
-    "key|enter",
+    "action|launch:INSTALL",
     "hashWait|7",
     "key|left",
     "key|enter",
@@ -109,6 +97,7 @@
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@lwip_installed",
       "expected_CRCs": [
         "F7C03D8D"
       ],

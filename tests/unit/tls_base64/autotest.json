@@ -19,19 +19,7 @@
   },
   "sequence": [
     "key|clear",
-    "key|2nd",
-    "key|0",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|down",
-    "key|enter",
-    "key|prgm",
-    "key|1",
-    "key|enter",
-    "key|enter",
+    "action|launch:INSTALL",
     "hashWait|7",
     "key|left",
     "key|enter",
@@ -55,6 +43,7 @@
       "description": "Encode('f'), RFC 4648, Section 10, Vector 2",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -64,6 +53,7 @@
       "description": "Encode('foo'), RFC 4648, Section 10, Vector 4",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -73,6 +63,7 @@
       "description": "Encode('foobar'), RFC 4648, Section 10, Vector 7",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -82,6 +73,7 @@
       "description": "Decode('Zg=='), RFC 4648, Section 10, Vector 2",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -91,6 +83,7 @@
       "description": "Decode('Zm9v'), RFC 4648, Section 10, Vector 4",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -100,6 +93,7 @@
       "description": "Decode('Zm9vYmFy'), RFC 4648, Section 10, Vector 7",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@success",
       "expected_CRCs": [
         "D1F2869F"
       ],
@@ -109,6 +103,7 @@
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",
+      "label": "@lwip_installed",
       "expected_CRCs": [
         "F7C03D8D"
       ],
