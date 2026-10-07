@@ -211,7 +211,7 @@ jobs:
           # hash check) so a failure leaves behind evidence of what was
           # actually on screen. Screenshots/dumps are only uploaded as
           # artifacts when the test fails (see the upload step below).
-          ( cd "$test_dir" && "${{env.CEDEV_BIN}}/cemu-autotester" -d -s "$test_dir/autotest.json" ) 2>&1 | tee "$test_dir/autotest.log"
+          ( cd "$test_dir" && "${{env.CEDEV_BIN}}/cemu-autotester" -d -s autotest.json ) 2>&1 | tee "$test_dir/autotest.log"
           status=${PIPESTATUS[0]}
           set -e
 
