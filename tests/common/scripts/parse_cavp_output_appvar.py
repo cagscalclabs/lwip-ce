@@ -44,7 +44,7 @@ APPVAR_NAME = "CAVPOUT"
 
 # Must match src/main.c
 ALG_NAMES = {
-    1: "AES-128-GCM",
+    1: "AES-GCM",
     2: "SHA-256",
     3: "HMAC-SHA-256",
     4: "HKDF-SHA-256",
@@ -52,6 +52,10 @@ ALG_NAMES = {
     6: "RSA-PSS-SHA-256-VERIFY",
     7: "X25519-PUBLICKEY",
     8: "X25519-SECRET",
+    9: "AES-CBC",
+    10: "AES-CCM",
+    11: "PBKDF2-HMAC-SHA256",
+    12: "SHA-256-MCT",
 }
 STATUS_NAMES = {0: "ok", 1: "unsupported", 2: "internal_error"}
 
@@ -120,26 +124,50 @@ def parse_responses(body: bytes) -> tuple[list[dict[str, Any]], list[str]]:
     return responses, warnings
 
 
-def grade_aes_gcm(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
-    """Result wire format: tag_len(1) + tag(16) + ct_len(2) + ct(ct_len)."""
-    if len(result) < 19:
+def grade_aead(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
+    """Result: accepted(1) + data_len(2) + data + tag_len(1) + tag."""
+    if len(result) < 4:
         return False, f"result too short ({len(result)} bytes)"
-    tag_len = result[0]
-    if tag_len != 16:
-        return False, f"tag_len={tag_len}, expected 16"
-    tag = result[1:17]
-    ct_len = struct.unpack("<H", result[17:19])[0]
-    ct = result[19:19 + ct_len]
-    if len(ct) != ct_len:
-        return False, f"ct truncated: {len(ct)} of {ct_len} bytes"
+    accepted = bool(result[0])
+    data_len = struct.unpack("<H", result[1:3])[0]
+    if 3 + data_len + 1 > len(result):
+        return False, f"data truncated: claimed {data_len} bytes"
+    data = result[3:3 + data_len]
+    tag_len = result[3 + data_len]
+    tag = result[4 + data_len:]
+    if len(tag) != tag_len:
+        return False, f"tag truncated: {len(tag)} of {tag_len} bytes"
 
-    exp_tag = bytes.fromhex(expected["expected_tag_hex"])
-    exp_ct = bytes.fromhex(expected["expected_ct_hex"]) if expected.get("expected_ct_hex") else b""
+    exp_accept = bool(expected["expected_accept"])
+    if accepted != exp_accept:
+        return False, ("authentication verdict mismatch: got "
+                       f"{'accept' if accepted else 'reject'}, expected "
+                       f"{'accept' if exp_accept else 'reject'}")
+    if not accepted:
+        if data_len or tag_len:
+            return False, "rejected AEAD vector returned unauthenticated output"
+        return True, "ok"
 
+    exp_data = bytes.fromhex(expected.get("expected_data_hex", ""))
+    if data != exp_data:
+        return False, f"data mismatch: got {data.hex()}, expected {exp_data.hex()}"
+    exp_tag = bytes.fromhex(expected.get("expected_tag_hex", ""))
     if tag != exp_tag:
         return False, f"tag mismatch: got {tag.hex()}, expected {exp_tag.hex()}"
-    if ct != exp_ct:
-        return False, f"ciphertext mismatch: got {ct.hex()}, expected {exp_ct.hex()}"
+    return True, "ok"
+
+
+def grade_length_prefixed(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
+    """Result wire format: output_len(2) + output(output_len)."""
+    if len(result) < 2:
+        return False, f"result too short ({len(result)} bytes)"
+    output_len = struct.unpack("<H", result[:2])[0]
+    output = result[2:]
+    if len(output) != output_len:
+        return False, f"output length mismatch: got {len(output)}, header says {output_len}"
+    exp = bytes.fromhex(expected["expected_hex"])
+    if output != exp:
+        return False, f"output mismatch: got {output.hex()}, expected {exp.hex()}"
     return True, "ok"
 
 
@@ -234,14 +262,18 @@ def grade_x25519_secret(result: bytes, expected: dict[str, Any]) -> tuple[bool, 
 
 
 GRADERS = {
-    "AES-GCM": grade_aes_gcm,
+    "AES-GCM": grade_aead,
+    "AES-CBC": grade_length_prefixed,
+    "AES-CCM": grade_aead,
     "SHA-256": grade_sha256,
+    "SHA-256-MCT": grade_sha256,
     "HMAC-SHA-256": grade_hmac,
     "HKDF-SHA-256": grade_hkdf,
     "DRBG-SHA-256": grade_drbg,
     "RSA-PSS-SHA-256-VERIFY": grade_rsa_pss_verify,
     "X25519-PUBLICKEY": grade_x25519_pub,
     "X25519-SECRET": grade_x25519_secret,
+    "PBKDF2-HMAC-SHA256": grade_length_prefixed,
 }
 
 
@@ -259,6 +291,8 @@ def has_expected(vector: dict[str, Any]) -> bool:
         if vector.get(k):
             return True
     if "expected_verify" in vector and isinstance(vector["expected_verify"], bool):
+        return True
+    if "expected_accept" in vector and isinstance(vector["expected_accept"], bool):
         return True
     return False
 
@@ -404,13 +438,13 @@ def main() -> int:
     md_lines.append("")
     md_lines.append("For CAVP-covered primitives, the workflow downloads the published NIST")
     md_lines.append("`.rsp` vector archives, randomly selects the configured sample count")
-    md_lines.append("from each primitive, packs those inputs into `CAVPIN.8xv`, runs the")
+    md_lines.append("from each primitive, packs those inputs into `CAVP00..15.8xv`, runs the")
     md_lines.append("calculator implementation in CEmu, and validates `CAVPOUT.8xv` against")
     md_lines.append("the NIST expected outputs. For primitives without compatible `.rsp`")
     md_lines.append("coverage, vectors are generated with `python3-cryptography` using the")
     md_lines.append("same RFC-required algorithms and parameters, then graded against that")
-    md_lines.append("reference output. The random seed is printed by `cavp_fetch.py` so any")
-    md_lines.append("failing run can be reproduced exactly.")
+    md_lines.append("reference output. The random seed reproduces vector selection and all")
+    md_lines.append("generated inputs except the fresh OS-random RSA keypair.")
     md_lines.append("")
     md_lines.append("### Run Metadata")
     md_lines.append("")
@@ -428,7 +462,8 @@ def main() -> int:
     # DRBG-SHA-256 intentionally omitted from the pinned vector set. It is
     # kept in the dispatcher as a stub so the wiring is ready when a
     # standalone DRBG API lands.
-    for alg in ["AES-GCM", "SHA-256", "HMAC-SHA-256", "HKDF-SHA-256",
+    for alg in ["AES-GCM", "AES-CBC", "AES-CCM", "SHA-256", "SHA-256-MCT",
+                "HMAC-SHA-256", "HKDF-SHA-256", "PBKDF2-HMAC-SHA256",
                 "RSA-PSS-SHA-256-VERIFY", "X25519-PUBLICKEY", "X25519-SECRET"]:
         c = by_alg.get(alg, {"pass": 0, "fail": 0, "skip": 0, "unsupported": 0})
         alg_vectors = [v for v in expected_data["vectors"] if v["algorithm"] == alg]

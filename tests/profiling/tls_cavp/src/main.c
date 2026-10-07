@@ -2,18 +2,21 @@
  * @file main.c
  * @brief NIST CAVP-format primitive validation runner (calculator side).
  *
- * Reads CAVPIN.8xv (input vectors), dispatches each vector to the
+ * Streams CAVP00..15.8xv (input vectors), dispatches each vector to the
  * appropriate primitive, and writes responses to CAVPOUT.8xv. Does NOT
  * grade itself; expected outputs live host-side in vectors/expected.json
  * and are compared by tests/common/scripts/parse_cavp_output_appvar.py.
  *
  * AppVar wire format (host-readable, see tests/common/scripts/cavp_fetch.py):
  *
- *   CAVPIN.8xv:
+ *   Each CAVPxx.8xv:
  *     magic[4]      = 'A','I','N','1'
  *     vector_count  uint16  little-endian
  *     repeat vector_count:
- *       algorithm_id  uint8   (1=AES-GCM, 2=SHA-256, 3=HMAC, 4=HKDF, 5=DRBG)
+ *       algorithm_id  uint8   (1=AES-GCM, 2=SHA-256, 3=HMAC, 4=HKDF,
+ *                              5=DRBG, 6=RSA-PSS, 7/8=X25519,
+ *                              9=AES-CBC, 10=AES-CCM, 11=PBKDF2,
+ *                              12=SHA-256-MCT)
  *       test_id       uint16  little-endian
  *       payload_len   uint16  little-endian
  *       payload[payload_len]  algorithm-specific TLV (see runners below)
@@ -42,11 +45,12 @@
 #include <lwip/cryptography/hash.h>
 #include <lwip/cryptography/hmac.h>
 #include <lwip/cryptography/hkdf.h>
+#include <lwip/cryptography/passwords.h>
 #include <lwip/cryptography/rsa.h>
 #include <lwip/cryptography/x25519.h>
 #include <lwip.h>
 
-#define CAVPIN_NAME "CAVPIN"
+#define CAVPIN_CHUNKS 16
 #define CAVPOUT_NAME "CAVPOUT"
 
 #define ALG_AES_GCM                1
@@ -57,6 +61,10 @@
 #define ALG_RSA_PSS_SHA256_VERIFY  6
 #define ALG_X25519_PUBLICKEY       7
 #define ALG_X25519_SECRET          8
+#define ALG_AES_CBC                9
+#define ALG_AES_CCM               10
+#define ALG_PBKDF2_HMAC_SHA256    11
+#define ALG_SHA256_MCT            12
 
 #define STATUS_OK 0
 #define STATUS_UNSUPPORTED 1
@@ -74,27 +82,34 @@ static void wr_u16(uint8_t *p, uint16_t v)
 /* ---------- Per-algorithm payload runners ---------- */
 
 /*
- * AES-GCM payload TLV (encrypt):
- *   key_len      uint8   (always 16)
+ * AES-GCM payload TLV:
+ *   direction    uint8   (0=encrypt, 1=decrypt)
+ *   key_len      uint8   (16, 24, or 32)
  *   key          [key_len]
  *   iv_len       uint8   (always 12)
  *   iv           [iv_len]
  *   aad_len      uint16
  *   aad          [aad_len]
- *   pt_len       uint16
- *   pt           [pt_len]
+ *   data_len     uint16
+ *   data         [data_len] (plaintext for encrypt, ciphertext for decrypt)
+ *   tag_len      uint8   (16; GCM API exposes a fixed-size tag)
+ *   tag           [tag_len] (decrypt only)
  *
  * Response (little-endian):
- *   tag_len      uint8 (16)
- *   tag          [16]
- *   ct_len       uint16
- *   ct           [ct_len]
+ *   accepted     uint8   (decrypt tag verdict; always 1 for encrypt)
+ *   data_len     uint16
+ *   data         [data_len] (ciphertext for encrypt, plaintext for decrypt)
+ *   tag_len      uint8
+ *   tag          [tag_len] (encrypt only)
  */
 static size_t run_aes_gcm(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
 {
-    if (in_len < 1)
+    if (in_len < 2)
         return 0;
     size_t off = 0;
+    uint8_t direction = in[off++];
+    if (direction > 1)
+        return 0;
     uint8_t key_len = in[off++];
     if (off + key_len > in_len)
         return 0;
@@ -120,37 +135,132 @@ static size_t run_aes_gcm(const uint8_t *in, size_t in_len, uint8_t *out, size_t
 
     if (off + 2 > in_len)
         return 0;
-    uint16_t pt_len = rd_u16(in + off);
+    uint16_t data_len = rd_u16(in + off);
     off += 2;
-    if (off + pt_len > in_len)
+    if (off + data_len > in_len)
         return 0;
-    const uint8_t *pt = in + off;
+    const uint8_t *data = in + off;
+    off += data_len;
 
-    /* Need: ct (pt_len) + tag (16) + framing (1 + 16 tag header + 2 ct_len) */
-    if (out_max < (size_t)1 + 16 + 2 + pt_len)
+    if (off + 1 > in_len)
+        return 0;
+    uint8_t tag_len = in[off++];
+    if (tag_len != 16 || off + (direction ? tag_len : 0) != in_len)
+        return 0;
+    const uint8_t *tag_in = direction ? in + off : NULL;
+
+    if (out_max < (size_t)1 + 2 + data_len + 1 + (direction ? 0 : tag_len))
         return 0;
 
     struct tls_aes_context ctx;
     if (!tls_aes_init(&ctx, TLS_AES_GCM, key, key_len, iv, iv_len))
         return 0;
-    if (aad_len && !tls_aes_update_aad(&ctx, aad, aad_len))
-        return 0;
-
-    uint8_t *ct_buf = out + 1 + 16 + 2; /* leave room for header */
-    if (pt_len && !tls_aes_encrypt(&ctx, pt, pt_len, ct_buf))
-        return 0;
-
-    uint8_t tag[16];
-    if (!tls_aes_digest(&ctx, tag))
-        return 0;
 
     size_t o = 0;
-    out[o++] = 16; /* tag_len */
-    memcpy(out + o, tag, 16);
-    o += 16;
-    wr_u16(out + o, pt_len);
-    o += 2;      /* ct_len */
-    o += pt_len; /* ct already at ct_buf */
+    if (direction == 0) {
+        if (aad_len && !tls_aes_update_aad(&ctx, aad, aad_len))
+            return 0;
+        out[o++] = 1;
+        wr_u16(out + o, data_len); o += 2;
+        if (data_len && !tls_aes_encrypt(&ctx, data, data_len, out + o))
+            return 0;
+        o += data_len;
+        out[o++] = tag_len;
+        if (!tls_aes_digest(&ctx, out + o))
+            return 0;
+        o += tag_len;
+    } else {
+        bool accepted = tls_aes_verify(&ctx,
+                                       aad_len ? aad : NULL, aad_len,
+                                       data_len ? data : NULL, data_len,
+                                       tag_in);
+        out[o++] = accepted ? 1 : 0;
+        wr_u16(out + o, accepted ? data_len : 0); o += 2;
+        if (accepted && data_len) {
+            if (!tls_aes_decrypt(&ctx, data, data_len, out + o))
+                return 0;
+            o += data_len;
+        }
+        out[o++] = 0;
+    }
+    return o;
+}
+
+/* AES-CBC: direction, key_len+key, IV[16], data_len+data.
+ * Response: output_len uint16 + output bytes. */
+static size_t run_aes_cbc(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len < 2) return 0;
+    size_t off = 0;
+    uint8_t direction = in[off++];
+    uint8_t key_len = in[off++];
+    if (direction > 1 || off + key_len + 16 + 2 > in_len) return 0;
+    const uint8_t *key = in + off; off += key_len;
+    const uint8_t *iv = in + off; off += 16;
+    uint16_t data_len = rd_u16(in + off); off += 2;
+    if (off + data_len != in_len || (data_len % 16) != 0) return 0;
+    if (out_max < (size_t)2 + data_len) return 0;
+
+    struct tls_aes_context ctx;
+    if (!tls_aes_init(&ctx, TLS_AES_CBC, key, key_len, iv, 16)) return 0;
+    bool ok = direction
+        ? tls_aes_decrypt(&ctx, in + off, data_len, out + 2)
+        : tls_aes_encrypt(&ctx, in + off, data_len, out + 2);
+    if (!ok) return 0;
+    wr_u16(out, data_len);
+    return (size_t)2 + data_len;
+}
+
+/* AES-CCM uses the same response framing as AES-GCM. */
+static size_t run_aes_ccm(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len < 3) return 0;
+    size_t off = 0;
+    uint8_t direction = in[off++];
+    uint8_t key_len = in[off++];
+    if (direction > 1 || off + key_len + 1 > in_len) return 0;
+    const uint8_t *key = in + off; off += key_len;
+    uint8_t nonce_len = in[off++];
+    if (off + nonce_len + 2 > in_len) return 0;
+    const uint8_t *nonce = in + off; off += nonce_len;
+    uint16_t aad_len = rd_u16(in + off); off += 2;
+    if (off + aad_len + 2 > in_len) return 0;
+    const uint8_t *aad = in + off; off += aad_len;
+    uint16_t data_len = rd_u16(in + off); off += 2;
+    if (off + data_len + 1 > in_len) return 0;
+    const uint8_t *data = in + off; off += data_len;
+    uint8_t tag_len = in[off++];
+    if (off + (direction ? tag_len : 0) != in_len) return 0;
+    const uint8_t *tag_in = direction ? in + off : NULL;
+    if (out_max < (size_t)1 + 2 + data_len + 1 + (direction ? 0 : tag_len)) return 0;
+
+    size_t o = 0;
+    out[o++] = 1;
+    wr_u16(out + o, data_len); o += 2;
+    if (direction == 0) {
+        uint8_t *ciphertext = out + o;
+        uint8_t *tag_out = ciphertext + data_len + 1;
+        if (!tls_aes_ccm_encrypt(key, key_len, nonce, nonce_len,
+                                 aad_len ? aad : NULL, aad_len,
+                                 data, data_len, ciphertext, tag_out, tag_len))
+            return 0;
+        o += data_len;
+        out[o++] = tag_len;
+        o += tag_len;
+    } else {
+        bool accepted = tls_aes_ccm_decrypt(key, key_len, nonce, nonce_len,
+                                            aad_len ? aad : NULL, aad_len,
+                                            data, data_len, tag_in, tag_len,
+                                            out + o);
+        out[0] = accepted ? 1 : 0;
+        if (accepted) {
+            o += data_len;
+        } else {
+            wr_u16(out + 1, 0);
+            o = 3;
+        }
+        out[o++] = 0;
+    }
     return o;
 }
 
@@ -181,6 +291,31 @@ static size_t run_sha256(const uint8_t *in, size_t in_len, uint8_t *out, size_t 
     uint8_t digest[32];
     tls_hash_digest(&hctx, digest);
 
+    out[0] = 32;
+    memcpy(out + 1, digest, 32);
+    return 33;
+}
+
+/* SHA-256 Monte Carlo payload: seed[32]. Each response performs the NIST
+ * 1000-step three-digest chaining operation and returns digest_len+digest. */
+static size_t run_sha256_mct(const uint8_t *in, size_t in_len,
+                             uint8_t *out, size_t out_max)
+{
+    if (in_len != 32 || out_max < 33) return 0;
+    static uint8_t state[96];
+    uint8_t digest[32];
+    memcpy(state, in, 32);
+    memcpy(state + 32, in, 32);
+    memcpy(state + 64, in, 32);
+
+    for (uint16_t i = 0; i < 1000; i++) {
+        struct tls_hash_context hctx;
+        if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256)) return 0;
+        tls_hash_update(&hctx, state, sizeof(state));
+        tls_hash_digest(&hctx, digest);
+        memmove(state, state + 32, 64);
+        memcpy(state + 64, digest, 32);
+    }
     out[0] = 32;
     memcpy(out + 1, digest, 32);
     return 33;
@@ -294,6 +429,32 @@ static size_t run_hkdf_sha256(const uint8_t *in, size_t in_len, uint8_t *out, si
 
     wr_u16(out, L);
     return (size_t)2 + L;
+}
+
+/* PBKDF2-HMAC-SHA-256 payload:
+ * password_len+password, salt_len+salt, rounds uint16, key_len uint16.
+ * Response: derived_len uint16 + derived bytes. */
+static size_t run_pbkdf2_sha256(const uint8_t *in, size_t in_len,
+                                uint8_t *out, size_t out_max)
+{
+    if (in_len < 2) return 0;
+    size_t off = 0;
+    uint16_t password_len = rd_u16(in + off); off += 2;
+    if (off + password_len + 2 > in_len) return 0;
+    const uint8_t *password = in + off; off += password_len;
+    uint16_t salt_len = rd_u16(in + off); off += 2;
+    if (off + salt_len + 4 != in_len) return 0;
+    const uint8_t *salt = in + off; off += salt_len;
+    uint16_t rounds = rd_u16(in + off); off += 2;
+    uint16_t key_len = rd_u16(in + off);
+    if (!rounds || !key_len || out_max < (size_t)2 + key_len) return 0;
+
+    if (!tls_pbkdf2((const char *)password, password_len,
+                    salt, salt_len, out + 2, key_len,
+                    rounds, TLS_HASH_SHA256))
+        return 0;
+    wr_u16(out, key_len);
+    return (size_t)2 + key_len;
 }
 
 /*
@@ -453,48 +614,11 @@ int main(void)
         return 1;
     }
 
-    uint8_t in_handle = ti_Open(CAVPIN_NAME, "r");
-    if (!in_handle)
-    {
-        printf("ERROR: no %s\n", CAVPIN_NAME);
-        printf("Press any key");
-        os_GetKey();
-        return 1;
-    }
-
-    /* ti_GetDataPtr returns a pointer to the var content directly (no
-     * leading length prefix to skip — that's a quirk of os_GetAppVarData,
-     * which is a different API). ti_GetSize returns the content length. */
-    size_t in_size = ti_GetSize(in_handle);
-    const uint8_t *in = ti_GetDataPtr(in_handle);
-    if (!in || in_size < 6)
-    {
-        ti_Close(in_handle);
-        printf("ERROR: bad %s (size=%u)\n", CAVPIN_NAME, (unsigned)in_size);
-        printf("Press any key");
-        os_GetKey();
-        return 1;
-    }
-
-    /* Validate magic */
-    if (in[0] != 'A' || in[1] != 'I' || in[2] != 'N' || in[3] != '1')
-    {
-        ti_Close(in_handle);
-        printf("ERROR: bad magic %02x%02x%02x%02x\n", in[0], in[1], in[2], in[3]);
-        printf("Press any key");
-        os_GetKey();
-        return 1;
-    }
-
-    uint16_t vector_count = rd_u16(in + 4);
-    size_t in_off = 6;
-
     /* Open output AppVar */
     (void)ti_Delete(CAVPOUT_NAME);
     uint8_t out_handle = ti_Open(CAVPOUT_NAME, "w");
     if (!out_handle)
     {
-        ti_Close(in_handle);
         printf("ERROR: open %s\n", CAVPOUT_NAME);
         printf("Press any key");
         os_GetKey();
@@ -511,10 +635,40 @@ int main(void)
      * total AppVar size sane for this CI sample. */
     static uint8_t scratch[8192];
 
-    printf("running %u vectors\n", vector_count);
+    printf("running vectors\n");
 
-    for (uint16_t i = 0; i < vector_count; i++)
+    for (uint8_t chunk = 0; chunk < CAVPIN_CHUNKS; chunk++)
     {
+        char input_name[9] = "CAVP00";
+        input_name[4] = (char)('0' + chunk / 10);
+        input_name[5] = (char)('0' + chunk % 10);
+        uint8_t in_handle = ti_Open(input_name, "r");
+        if (!in_handle) {
+            ti_Close(out_handle);
+            printf("ERROR: no %s\n", input_name);
+            printf("Press any key");
+            os_GetKey();
+            return 1;
+        }
+
+        /* ti_GetDataPtr returns variable content without the on-disk
+         * length prefix. Each chunk is an independent AIN1 record stream. */
+        size_t in_size = ti_GetSize(in_handle);
+        const uint8_t *in = ti_GetDataPtr(in_handle);
+        if (!in || in_size < 6 ||
+            in[0] != 'A' || in[1] != 'I' || in[2] != 'N' || in[3] != '1') {
+            ti_Close(in_handle);
+            ti_Close(out_handle);
+            printf("ERROR: bad %s\n", input_name);
+            printf("Press any key");
+            os_GetKey();
+            return 1;
+        }
+
+        uint16_t vector_count = rd_u16(in + 4);
+        size_t in_off = 6;
+        for (uint16_t i = 0; i < vector_count; i++)
+        {
         if (in_off + 5 > in_size)
             break;
         uint8_t alg = in[in_off++];
@@ -572,6 +726,26 @@ int main(void)
             if (result_len == 0)
                 status = STATUS_INTERNAL;
             break;
+        case ALG_AES_CBC:
+            result_len = run_aes_cbc(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_AES_CCM:
+            result_len = run_aes_ccm(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_PBKDF2_HMAC_SHA256:
+            result_len = run_pbkdf2_sha256(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_SHA256_MCT:
+            result_len = run_sha256_mct(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
         default:
             status = STATUS_UNSUPPORTED;
             result_len = 0;
@@ -587,6 +761,8 @@ int main(void)
             ti_Write(scratch, result_len, 1, out_handle);
 
         responses_written++;
+        }
+        ti_Close(in_handle);
     }
 
     /* Patch the response_count field in the AppVar header */
@@ -597,8 +773,6 @@ int main(void)
 
     ti_SetArchiveStatus(true, out_handle);
     ti_Close(out_handle);
-
-    ti_Close(in_handle);
 
     os_ClrHome();
     printf("CAVP runner\n");

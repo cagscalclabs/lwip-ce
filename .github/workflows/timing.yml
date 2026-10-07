@@ -205,8 +205,7 @@ jobs:
           make -C "$test_dir"
 
           set +e
-          AUTOTESTER_LIBS_DIR="${{github.workspace}}/release/appinst" \
-            make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
+          make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
           status=${PIPESTATUS[0]}
           set -e
 

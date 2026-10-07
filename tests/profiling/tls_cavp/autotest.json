@@ -1,10 +1,8 @@
 {
-  "description": "Run NIST CAVP-format test vectors against the shipping primitives. The vectors are pre-packed into CAVPIN.8xv by the workflow; the calculator-side runner dispatches each vector to the appropriate primitive (AES-128-GCM, SHA-256, HMAC-SHA-256, HKDF-SHA-256, DRBG-SHA-256) and writes responses into CAVPOUT.8xv. The host-side parser then grades responses against the pinned expected outputs.",
+  "description": "Run external validation vectors against the shipping primitives. CAVP00..15 include NIST AES-GCM/CBC/CCM, SHA-256 and HMAC vectors plus generated/RFC HKDF, PBKDF2, RSA-PSS and X25519 coverage. The calculator writes CAVPOUT and the host grader checks every response.",
   "transfer_files": [
     "bin/XCAVP.8xp",
-    "vectors/CAVPIN.8xv",
     "../../common/clibs.8xg",
-    "../../common/lwIPCERT.8xv",
     "../../common/lwIPINST.8xp",
     "../../common/LWIP.0.8xv",
     "../../common/LWIP.1.8xv",
@@ -13,7 +11,24 @@
     "../../common/LWIP.4.8xv",
     "../../common/LWIP.5.8xv",
     "../../common/LWIP.6.8xv",
-    "../../common/lwip.8xv"
+    "../../common/lwip.8xv",
+    "../../common/lwIPCERT.8xv",
+    "vectors/CAVP00.8xv",
+    "vectors/CAVP01.8xv",
+    "vectors/CAVP02.8xv",
+    "vectors/CAVP03.8xv",
+    "vectors/CAVP04.8xv",
+    "vectors/CAVP05.8xv",
+    "vectors/CAVP06.8xv",
+    "vectors/CAVP07.8xv",
+    "vectors/CAVP08.8xv",
+    "vectors/CAVP09.8xv",
+    "vectors/CAVP10.8xv",
+    "vectors/CAVP11.8xv",
+    "vectors/CAVP12.8xv",
+    "vectors/CAVP13.8xv",
+    "vectors/CAVP14.8xv",
+    "vectors/CAVP15.8xv"
   ],
   "target": {
     "name": "XCAVP",

@@ -529,7 +529,7 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
 
 bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t *ct, size_t ct_len)
 {
-    if (ctx == NULL || ct == NULL || ctx->mode != TLS_AES_GCM)
+    if (ctx == NULL || (ct == NULL && ct_len != 0) || ctx->mode != TLS_AES_GCM)
         return false;
 
     aes_prepare_ghash();
@@ -792,13 +792,11 @@ cleanup:
 bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *tag)
 {
     if ((ctx == NULL) ||
-        (ciphertext == NULL) ||
-        (ciphertext_len == 0) ||
+        ((aad == NULL) && (aad_len != 0)) ||
+        ((ciphertext == NULL) && (ciphertext_len != 0)) ||
         (tag == NULL))
         return false;
     if ((ctx->mode != TLS_AES_GCM) && (ctx->mode != TLS_AES_CCM))
-        return false;
-    if (aad && (aad_len == 0))
         return false;
     struct tls_aes_context tmp;
     uint8_t digest[AES_BLOCK_SIZE];
@@ -806,10 +804,12 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
     // do this work on a copy of ctx
     memcpy(&tmp, ctx, sizeof(tmp));
 
-    if (aad != NULL)
-        tls_aes_update_aad(&tmp, aad, aad_len);
-    tls_aes_update_ciphertext(&tmp, ciphertext, ciphertext_len);
-    tls_aes_digest(&tmp, digest);
+    if (aad_len && !tls_aes_update_aad(&tmp, aad, aad_len))
+        return false;
+    if (ciphertext_len && !tls_aes_update_ciphertext(&tmp, ciphertext, ciphertext_len))
+        return false;
+    if (!tls_aes_digest(&tmp, digest))
+        return false;
 
     // memset(&tmp, 0, sizeof(tmp));
     bool tag_ok = (ctx->mode == TLS_AES_CCM)

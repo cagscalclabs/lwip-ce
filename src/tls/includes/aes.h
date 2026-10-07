@@ -190,6 +190,8 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx,
  * @param ciphertext        Pointer to ciphertext data to verify.
  * @param ciphertext_len    Length of ciphertext data.
  * @param tag           Pointer to a tag to verify.
+ * @note AAD and ciphertext pointers may be NULL when their corresponding
+ * lengths are zero.
  * @returns @b true if tag valid, @b false otherwise.
  * @note For security, this function does not decrypt the ciphertext. Call \p tls_aes_decrypt
  * if this function returns @b true.

@@ -5,9 +5,10 @@ name: CAVP Primitive Validation
 # manifest-gated lwip.lib produced by build.yml. Triggers on push to
 # relevant paths, manual dispatch, and as a workflow_call target from
 # build.yml (gating the nightly release). tests/common/scripts/cavp_fetch.py
-# downloads NIST CAVP archives, samples 16 vectors per primitive at random
-# (per run), adds generated RSA-PSS/X25519 coverage plus RFC-pinned
-# HKDF/X25519 vectors, and emits CAVPIN.8xv + expected.json for the test run.
+# downloads NIST CAVP archives, stratifies 16 vectors per primitive across
+# AES modes/key sizes/directions and SHA message classes, adds generated
+# RSA-PSS/PBKDF2/HKDF/X25519 coverage plus RFC-pinned vectors, and emits
+# CAVP00..15.8xv + expected.json for the test run.
 
 on:
   workflow_dispatch:
@@ -50,11 +51,9 @@ jobs:
           sudo apt-get update && \
           sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb \
                                   python3 python3-cryptography
-          # cavp_fetch.py uses stdlib for CAVP-sourced primitives (AES-GCM,
-          # SHA-256, HMAC). RSA-PSS vectors are generated fresh per run via
-          # python3-cryptography (e=65537 keygen + PSS signing) since CAVP's
-          # SigVerPSS_186-3.rsp ships every vector with a random e and the
-          # project's verifier hardcodes e=65537.
+          # CAVP archive parsing uses stdlib. RSA-PSS, PBKDF2, HKDF, and
+          # X25519 reference outputs use python3-cryptography. RSA is generated
+          # with e=65537 because the project's verifier fixes that exponent.
 
       - name: Cache CEdev Toolchain
         id: cedev-cache
@@ -199,19 +198,19 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{env.CAVP_TEST_DIR}}/vectors/cache
-          key: ${{ runner.os }}-cavp-archives-v1
+          key: ${{ runner.os }}-cavp-archives-v2
           restore-keys: |
             ${{ runner.os }}-cavp-archives-
 
-      - name: Fetch CAVP vectors and pack CAVPIN.8xv
+      - name: Fetch CAVP vectors and pack input AppVars
         # cavp_fetch.py: downloads NIST CAVP zips (if not cached), parses
         # the .rsp files, randomly samples vectors per algorithm, merges in
-        # generated RSA-PSS/X25519 coverage plus RFC-pinned HKDF/X25519
-        # vectors, packs CAVPIN.8xv for the calc, and writes expected.json
+        # generated RSA-PSS/PBKDF2/HKDF/X25519 coverage plus RFC-pinned
+        # vectors, packs CAVP00..15.8xv for the calc, and writes expected.json
         # for the grader. All in one shot.
         run: |
           python3 "${{github.workspace}}/tests/common/scripts/cavp_fetch.py"
-          ls -lh "${{env.CAVP_TEST_DIR}}/vectors/CAVPIN.8xv" \
+          ls -lh "${{env.CAVP_TEST_DIR}}"/vectors/CAVP*.8xv \
                  "${{env.CAVP_TEST_DIR}}/vectors/expected.json"
 
       - name: Run CAVP Test
@@ -282,7 +281,7 @@ jobs:
           name: tls-cavp-raw
           path: |
             ${{env.CAVP_TEST_DIR}}/CAVPOUT.8xv
-            ${{env.CAVP_TEST_DIR}}/vectors/CAVPIN.8xv
+            ${{env.CAVP_TEST_DIR}}/vectors/CAVP*.8xv
             ${{env.CAVP_TEST_DIR}}/vectors/expected.json
             ${{env.CAVP_TEST_DIR}}/autotest.log
             ${{github.workspace}}/cavp-summary.md

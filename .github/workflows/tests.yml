@@ -215,8 +215,7 @@ jobs:
             if [ $status -eq 0 ]; then
               set +e
               for attempt in $(seq 1 "$TEST_MAX_ATTEMPTS"); do
-                AUTOTESTER_LIBS_DIR="${{github.workspace}}/release/appinst" \
-                  timeout "${TEST_TIMEOUT_SECONDS}s" \
+                timeout "${TEST_TIMEOUT_SECONDS}s" \
                   make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
                 status=${PIPESTATUS[0]}
                 if [ "$status" -eq 124 ]; then
