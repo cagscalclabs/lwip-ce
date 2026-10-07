@@ -1,7 +1,7 @@
 {
   "tool": "lwip-dast",
-  "generated": "2026-10-06T19:47:53+00:00",
-  "src_commit": "e3db7de96f3b49d18f8d298620adf06907f33ac0",
+  "generated": "2026-10-07T22:43:12+00:00",
+  "src_commit": "a881bec48c7a7a70ad37ba6f0fe29845df8347e0",
   "target_ip": "192.168.2.32",
   "summary": {
     "total": 20,
