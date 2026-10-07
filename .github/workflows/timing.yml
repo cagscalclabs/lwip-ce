@@ -205,13 +205,8 @@ jobs:
           make -C "$test_dir"
 
           set +e
-          # Invoke the autotester directly (instead of `make test`) with
-          # -d (debug: dump raw VRAM bytes on a hash mismatch) and
-          # -s (screenshots: dump a raw RGBA frame of the screen at every
-          # hash check) so a failure leaves behind evidence of what was
-          # actually on screen. Screenshots/dumps are only uploaded as
-          # artifacts when the test fails (see the upload step below).
-          ( cd "$test_dir" && "${{env.CEDEV_BIN}}/cemu-autotester" -d -s autotest.json ) 2>&1 | tee "$test_dir/autotest.log"
+          AUTOTESTER_LIBS_DIR="${{github.workspace}}/release/appinst" \
+            make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
           status=${PIPESTATUS[0]}
           set -e
 
@@ -488,16 +483,6 @@ jobs:
             ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.txt
             ${{env.LWIP_PROF_TESTS}}/tls_timing/autotest.log
             ${{github.workspace}}/timing-verbose-summary.md
-          if-no-files-found: warn
-
-      - name: Upload Autotester Screenshots/Dumps
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tls-timing-screenshots
-          path: |
-            ${{env.LWIP_PROF_TESTS}}/tls_timing/*.rgba
-            ${{env.LWIP_PROF_TESTS}}/tls_timing/failure_hash*_dump.bin
           if-no-files-found: warn
 
       - name: Remove CEmu Rom
