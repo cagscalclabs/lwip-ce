@@ -3,16 +3,14 @@
 **Main CI**
 
 ![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=master&cache=1)
-![Unit Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/unit-tests.json)
-
-*The same workflow that generates the nightly release also runs the CI tests, however running this in this way causes the default GitHub badges to never update. To work around this, we export a badge for each test result to img.shield.io, hence the different aesthetic. You can still audit last run output and results from the actions tab.*
+![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=master&cache=1)
 
 <hr>
 
 **Code Quality**
 
-![SAST](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/sast.json)
-![DAST](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/dast.json)
+![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?branch=master&cache=1)
+![DAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/dast.yml/badge.svg?branch=master&cache=1)
 
 *SAST uses `git diff` against upstream lwIP to filter out untouched upstream code and scans only targets unique to this repository. For upstream issues, file an issue with [nonGNU](https://savannah.nongnu.org/bugs/?group=lwip).*
 
@@ -23,15 +21,11 @@
 **Cryptography Quality Checks**
 
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
-![CAVP Primitive Validation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/cavp.json)
+![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
 
 *Timing analysis checks for secret-dependent timing leaks: it samples repeated runs of a primitive across input classes designed to exercise different internal code paths (e.g. a bad MAC vs. a good one), then looks for variance in runtime that tracks the input class rather than noise. Some allowance is given for CPU jitter, computed via MAD-based sigma over the baseline class. This test does not prove the absence of secret-dependent timing leaks, but it provides statistical evidence that runtime stays consistent across all classes of input.*
 
 *CAVP selects 16 random samples from the NIST RSP datasets that match the primitives we provide (with the exception of SHA-256 Monte Carlo, which selects one) (totaling 185 samples covering AES-CBC, GCM, CCM, SHA-256, HMAC-SHA-256, PBKDF2, HKDF, RSA-PSS-RSAE-SHA256, RSA-PKCS1-SHA256, and X25519). Where NIST publishes no RSP for a primitive (or in the case of RSA with e=65537), the output of python3-cryptography is used instead. Our workflow caches the expected values and then serializes the inputs into an AppVar for transfer to the TI-84+ CE. The CAVP profiler runs on the calculator, dumping the on-device primitive output to an AppVar that gets fed back to the test environment. The AppVar is then parsed and graded against the expectations cached. This test does not constitute a formal NIST CAVP certification; it validates our implementations against samples drawn from NIST’s published CAVP validation-vector datasets.*
-
-<hr>
-
-*Workflow badges are sourced from a custom `badges` branch updated by `build.yml`, since these workflows only ever run as `workflow_call` targets and GitHub's native badge.svg cannot see those runs (see build.yml's `update_badges` job).*
 
 <hr>
 

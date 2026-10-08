@@ -1,0 +1,340 @@
+name: Update Latest Release
+
+# The single gate that decides whether the latest build.yml artifact becomes
+# a published release (nightly or versioned tag). Runs after build.yml
+# completes, but only actually does anything when build.yml's artifact
+# content changed from what's already published -- re-running this on every
+# unrelated build.yml run (e.g. a no-op rebuild) would just re-tag/re-publish
+# identical bits.
+#
+# Gate: all of build.yml, cavp.yml, timing.yml, tests.yml, sast.yml, and
+# dast.yml must "cover" HEAD. A workflow covers HEAD if either its latest
+# successful run is AT HEAD, or its latest successful run's commit has no
+# diff against HEAD restricted to that workflow's own `paths:` filter (i.e.
+# nothing that would have re-triggered it actually changed since).
+
+on:
+  workflow_run:
+    workflows: ["Build Latest lwIP Dylib"]
+    types: [completed]
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/update-latest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: lwip-update-latest
+  cancel-in-progress: false
+
+env:
+  NIGHTLY_TAG: nightly
+
+jobs:
+  check_artifact_changed:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      build_run_id: ${{ steps.latest_build.outputs.run_id }}
+      head_sha: ${{ steps.latest_build.outputs.head_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find latest successful build.yml run
+        id: latest_build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_json=$(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=success&branch=master&per_page=1" \
+            --jq '.workflow_runs[0]')
+          run_id=$(echo "$run_json" | jq -r '.id // empty')
+          head_sha=$(echo "$run_json" | jq -r '.head_sha // empty')
+          if [ -z "$run_id" ]; then
+            echo "::error::No successful build.yml run found on master."
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest build.yml artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "${{ github.workspace }}/latest-build"
+          gh run download "${{ steps.latest_build.outputs.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name lwip-latest \
+            --dir "${{ github.workspace }}/latest-build"
+
+      - name: Hash artifact contents
+        id: hash_artifact
+        run: |
+          hash=$(find "${{ github.workspace }}/latest-build" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Restore last-published artifact hash
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .last-published-hash
+          key: last-published-hash-${{ steps.hash_artifact.outputs.hash }}
+          restore-keys: |
+            last-published-hash-
+
+      - name: Compare against last-published hash
+        id: compare
+        run: |
+          if [ -f .last-published-hash ] && [ "$(cat .last-published-hash)" = "${{ steps.hash_artifact.outputs.hash }}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Artifact content unchanged since last publish; skipping."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Artifact content changed (or no prior publish recorded)."
+          fi
+
+      - name: Save artifact hash for next comparison
+        if: steps.compare.outputs.changed == 'true'
+        run: echo "${{ steps.hash_artifact.outputs.hash }}" > .last-published-hash
+
+      - name: Cache artifact hash
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .last-published-hash
+          key: last-published-hash-${{ steps.hash_artifact.outputs.hash }}
+
+  check_coverage:
+    needs: check_artifact_changed
+    if: needs.check_artifact_changed.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      all_covered: ${{ steps.verdict.outputs.all_covered }}
+      report: ${{ steps.verdict.outputs.report }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check each gating workflow covers HEAD
+        id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.check_artifact_changed.outputs.head_sha }}
+        run: |
+          declare -A PATHS
+          PATHS[build.yml]="src/** build-tools/** tests/** !tests/dast.json .github/workflows/build.yml"
+          PATHS[cavp.yml]="src/** tests/profiling/tls_cavp/** tests/common/** .github/workflows/cavp.yml"
+          PATHS[timing.yml]="src/** tests/profiling/tls_timing/** tests/common/** .github/workflows/timing.yml"
+          PATHS[tests.yml]="src/** tests/unit/** tests/common/** .github/workflows/tests.yml"
+          PATHS[sast.yml]="src/** .github/workflows/sast.yml"
+          PATHS[dast.yml]="tests/dast.json"
+
+          all_covered=true
+          report=""
+
+          for wf in build.yml cavp.yml timing.yml tests.yml sast.yml dast.yml; do
+            run_json=$(gh api "repos/${{ github.repository }}/actions/workflows/$wf/runs?status=success&branch=master&per_page=1" \
+              --jq '.workflow_runs[0]')
+            run_sha=$(echo "$run_json" | jq -r '.head_sha // empty')
+
+            if [ -z "$run_sha" ]; then
+              all_covered=false
+              report="${report}- ❌ $wf: no successful run found\n"
+              continue
+            fi
+
+            if [ "$run_sha" = "$HEAD_SHA" ]; then
+              report="${report}- ✅ $wf: latest success is at HEAD ($run_sha)\n"
+              continue
+            fi
+
+            # Build pathspec args, translating a leading '!' into git's
+            # exclude-pathspec syntax.
+            pathspec_args=()
+            for p in ${PATHS[$wf]}; do
+              if [[ "$p" == '!'* ]]; then
+                pathspec_args+=(":(exclude)${p#!}")
+              else
+                pathspec_args+=("$p")
+              fi
+            done
+
+            if git diff --quiet "$run_sha" "$HEAD_SHA" -- "${pathspec_args[@]}"; then
+              report="${report}- ✅ $wf: last success at $run_sha has no diff against HEAD in its paths\n"
+            else
+              all_covered=false
+              report="${report}- ❌ $wf: last success at $run_sha differs from HEAD in its paths\n"
+            fi
+          done
+
+          echo "all_covered=$all_covered" >> "$GITHUB_OUTPUT"
+          {
+            echo "report<<EOF"
+            echo -e "$report"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "## Coverage check" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo -e "$report" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [check_artifact_changed, check_coverage]
+    if: needs.check_artifact_changed.outputs.changed == 'true' && needs.check_coverage.outputs.all_covered == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout lwIP-CE
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.check_artifact_changed.outputs.head_sha }}
+
+      - name: Download build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "${{ github.workspace }}/build"
+          gh run download "${{ needs.check_artifact_changed.outputs.build_run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name lwip-latest \
+            --dir "${{ github.workspace }}/build"
+
+      - name: Detect version tag on HEAD
+        id: vtag
+        run: |
+          git fetch --force --tags origin
+          TAG=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | head -1)
+          if [ -n "$TAG" ]; then
+            echo "versioned=true" >> $GITHUB_OUTPUT
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          else
+            echo "versioned=false" >> $GITHUB_OUTPUT
+            echo "tag=$NIGHTLY_TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare release notes
+        id: release_notes
+        run: |
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          if [ "${{ steps.vtag.outputs.versioned }}" = "true" ]; then
+            PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | sed -n '2p')
+            {
+              echo "## lwIP-CE ${{ steps.vtag.outputs.tag }}"
+              echo
+              echo "Upstream lwIP rebase — $(date +%Y-%m-%d)"
+              echo
+              echo "Commit: \`${{ needs.check_artifact_changed.outputs.head_sha }}\`"
+              echo
+              echo "### Changes since ${PREV:-initial release}"
+              echo
+              if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/${PREV}^{commit}" >/dev/null; then
+                git log --reverse --pretty=format:'- %s (%h)' "${PREV}..HEAD"
+                echo
+              else
+                git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+                echo
+              fi
+            } > "$NOTES_FILE"
+          else
+            {
+              echo "Automated nightly lwIP-CE dylib build."
+              echo
+              echo "Commit: \`${{ needs.check_artifact_changed.outputs.head_sha }}\`"
+              echo
+              echo "Changes since previous nightly release:"
+              echo
+              if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
+                if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
+                  git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
+                  echo
+                else
+                  echo "- No commits since the previous nightly release."
+                fi
+              else
+                echo "- No previous nightly release tag found; listing recent history."
+                git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
+                echo
+              fi
+            } > "$NOTES_FILE"
+          fi
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Package release asset
+        id: package_release
+        run: |
+          ASSET="$RUNNER_TEMP/lwip-latest.tar.gz"
+          tar -czf "$ASSET" -C "${{ github.workspace }}/build" .
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Publish versioned release
+        id: publish_versioned
+        if: steps.vtag.outputs.versioned == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.vtag.outputs.tag }}" \
+            --title "lwIP-CE ${{ steps.vtag.outputs.tag }}" \
+            --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
+            "${{ steps.package_release.outputs.asset }}"
+
+      - name: Publish nightly release
+        id: publish_nightly
+        if: steps.vtag.outputs.versioned == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f "$NIGHTLY_TAG" "${{ needs.check_artifact_changed.outputs.head_sha }}"
+          git push -f origin "refs/tags/$NIGHTLY_TAG"
+
+          if gh release view "$NIGHTLY_TAG" >/dev/null 2>&1; then
+            gh release edit "$NIGHTLY_TAG" \
+              --title "$NIGHTLY_TAG" \
+              --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
+              --prerelease
+          else
+            gh release create "$NIGHTLY_TAG" \
+              --title "$NIGHTLY_TAG" \
+              --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
+              --prerelease
+          fi
+
+          gh release upload "$NIGHTLY_TAG" \
+            "${{ steps.package_release.outputs.asset }}" \
+            --clobber
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          {
+            echo "## lwIP Release"
+            echo
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| package release asset | ${{ steps.package_release.outcome }} |"
+            if [ "${{ steps.vtag.outputs.versioned }}" = "true" ]; then
+              echo "| publish versioned release (${{ steps.vtag.outputs.tag }}) | ${{ steps.publish_versioned.outcome }} |"
+            else
+              echo "| publish nightly release | ${{ steps.publish_nightly.outcome }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  not_covered_summary:
+    needs: [check_artifact_changed, check_coverage]
+    if: needs.check_artifact_changed.outputs.changed == 'true' && needs.check_coverage.outputs.all_covered == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report why publish was skipped
+        run: |
+          echo "## lwIP Release — skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifact content changed, but not all gating workflows cover HEAD:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo -e "${{ needs.check_coverage.outputs.report }}" >> "$GITHUB_STEP_SUMMARY"

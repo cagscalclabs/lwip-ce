@@ -1,5 +1,13 @@
 name: Build Latest lwIP Dylib
 
+# Builds the dylib and packages it as lwip.zip (`make dylib-release`), then
+# uploads both as artifacts. This workflow ONLY attempts the build -- it no
+# longer runs unit tests, CAVP, SAST, or DAST, and it no longer publishes a
+# release. Those are independent workflows on their own triggers now (see
+# tests.yml, cavp.yml, sast.yml, dast.yml, timing.yml); update-latest.yml is
+# the single gate that checks all of them before tagging/publishing a
+# release from whatever this workflow last built successfully.
+
 on:
   schedule:
     # 03:00 UTC is roughly 11 PM US Eastern during daylight time.
@@ -12,10 +20,6 @@ on:
       - 'tests/**'
       - '!tests/dast.json'
       - '.github/workflows/build.yml'
-      - '.github/workflows/tests.yml'
-      - '.github/workflows/cavp.yml'
-      - '.github/workflows/sast.yml'
-      - '.github/workflows/dast.yml'
   push:
     branches: [master]
     paths:
@@ -24,26 +28,20 @@ on:
       - 'tests/**'
       - '!tests/dast.json'
       - '.github/workflows/build.yml'
-      - '.github/workflows/tests.yml'
-      - '.github/workflows/cavp.yml'
-      - '.github/workflows/sast.yml'
-      - '.github/workflows/dast.yml'
 
 permissions:
-  contents: write
-  security-events: write
+  contents: read
   actions: read
   pull-requests: write
 
 concurrency:
-  group: lwip-nightly-release-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  group: lwip-build-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CEDEV: ${{ github.workspace }}/CEdev
   CEDEV_BIN: ${{ github.workspace }}/CEdev/bin
   TOOLCHAIN_SRC: ${{ github.workspace }}/toolchain
-  NIGHTLY_TAG: nightly
 
 jobs:
   check_inputs:
@@ -58,10 +56,10 @@ jobs:
         run: |
           # tests/dast.json is excluded deliberately: it's a manually-produced,
           # operator-graded DAST report committed after a hardware run, not a
-          # build/test input -- hashing it here would invalidate the sentinel
-          # cache (forcing a full rebuild + unit tests + CAVP) on every report
-          # commit even when nothing that actually needs rebuilding changed.
-          echo "hash=${{ hashFiles('src/**', 'build-tools/**', 'tests/unit/**', 'tests/host/**', 'tests/common/**', 'tests/profiling/**', '.github/workflows/build.yml', '.github/workflows/tests.yml', '.github/workflows/cavp.yml', '.github/workflows/sast.yml', '.github/workflows/dast.yml') }}" >> "$GITHUB_OUTPUT"
+          # build input -- hashing it here would invalidate the sentinel cache
+          # (forcing a rebuild) on every report commit even when nothing that
+          # actually needs rebuilding changed.
+          echo "hash=${{ hashFiles('src/**', 'build-tools/**', 'tests/unit/**', 'tests/host/**', 'tests/common/**', 'tests/profiling/**', '.github/workflows/build.yml') }}" >> "$GITHUB_OUTPUT"
       - name: Check sentinel cache
         id: cache
         uses: actions/cache/restore@v5
@@ -96,7 +94,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make tar curl unzip libxml2-utils unifdef python3 python3-clang libclang-dev
+          sudo apt-get install -y make tar curl unzip zip libxml2-utils unifdef python3 python3-clang libclang-dev
 
       - name: Cache CEdev Toolchain
         id: cedev-cache
@@ -163,7 +161,7 @@ jobs:
           sed -i -E 's/^([[:space:]]*LINKER_SCRIPT[[:space:]]*):?=([^=])/\1?=\2/' "$META"
           echo "after:";  grep -nE 'LINKER_SCRIPT[[:space:]]*[:?]?=' "$META" || true
 
-      - name: make dylib
+      - name: make dylib-release
         id: make_dylib
         env:
           LWIP_SKIP_DEP_CHECKOUT: '1'
@@ -179,7 +177,9 @@ jobs:
           FASMG: fasmg
           CONVBIN: ${{ env.CEDEV_BIN }}/convbin
           HEADER_PYTHON: python3
-        run: ./build-tools/build-release-dylib.sh
+        run: |
+          ./build-tools/build-release-dylib.sh
+          make release
 
       - name: verify libload lib
         id: make_libload
@@ -188,14 +188,24 @@ jobs:
           test -f "${{ github.workspace }}/build/lwip.lib"
           test -f "${{ env.CEDEV }}/lib/libload/lwip.lib"
           test -d "${{ env.CEDEV }}/include/lwip"
+          test -f "${{ github.workspace }}/lwip.zip"
 
-      - name: upload action artifact
-        id: upload_action_artifact
+      - name: upload build artifact
+        id: upload_build_artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: lwip-latest
           path: ${{ github.workspace }}/build/
+          if-no-files-found: error
+
+      - name: upload release zip artifact
+        id: upload_zip_artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-release-zip
+          path: ${{ github.workspace }}/lwip.zip
           if-no-files-found: error
 
       - name: Publish job summary
@@ -206,244 +216,18 @@ jobs:
             echo
             echo "| Step | Status |"
             echo "|------|--------|"
-            echo "| make dylib | ${{ steps.make_dylib.outcome }} |"
+            echo "| make dylib-release | ${{ steps.make_dylib.outcome }} |"
             echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
-            echo "| upload action artifact | ${{ steps.upload_action_artifact.outcome }} |"
+            echo "| upload build artifact | ${{ steps.upload_build_artifact.outcome }} |"
+            echo "| upload release zip artifact | ${{ steps.upload_zip_artifact.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
     outputs:
-      build_success: ${{ steps.upload_action_artifact.outcome == 'success' }}
-
-  dylib_unit_tests:
-    needs: [check_inputs, dylib_latest]
-    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
-    uses: ./.github/workflows/tests.yml
-    with:
-      artifact_name: lwip-latest
-    secrets: inherit
-
-  cavp_validation:
-    needs: [check_inputs, dylib_latest]
-    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
-    uses: ./.github/workflows/cavp.yml
-    with:
-      artifact_name: lwip-latest
-    secrets: inherit
-
-  sast:
-    needs: [check_inputs, dylib_latest]
-    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
-    uses: ./.github/workflows/sast.yml
-    secrets: inherit
-
-  dast:
-    needs: [check_inputs, dylib_latest]
-    if: needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
-    uses: ./.github/workflows/dast.yml
-    secrets: inherit
-
-  update_badges:
-    # GitHub's native badge.svg for a reusable workflow (cavp.yml, tests.yml,
-    # sast.yml, dast.yml) only reflects runs triggered DIRECTLY on that
-    # workflow file -- a workflow_call invocation from build.yml (which is
-    # how these always run in practice) never appears in the callee's own
-    # run history, so badge.svg silently goes stale relative to what
-    # actually happened. Work around this by writing a shields.io
-    # "endpoint" JSON per check (https://shields.io/badges/endpoint-badge)
-    # reflecting this run's real per-job result, and publishing it to an
-    # orphan `badges` branch the README badges read via raw.githubusercontent.com.
-    needs: [check_inputs, dylib_unit_tests, cavp_validation, sast, dast]
-    if: always() && github.event_name != 'pull_request' && needs.dylib_unit_tests.result != 'skipped'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Write badge JSON
-        run: |
-          mkdir -p badges
-          write_badge() {
-            local file="$1" label="$2" result="$3"
-            local message color
-            case "$result" in
-              success)  message="passing"; color="brightgreen" ;;
-              failure)  message="failing"; color="red" ;;
-              cancelled) message="cancelled"; color="lightgrey" ;;
-              skipped)  message="skipped"; color="lightgrey" ;;
-              *)        message="unknown"; color="lightgrey" ;;
-            esac
-            cat > "badges/$file" <<EOF
-          {"schemaVersion":1,"label":"$label","message":"$message","color":"$color"}
-          EOF
-          }
-          write_badge "unit-tests.json" "unit tests" "${{ needs.dylib_unit_tests.result }}"
-          write_badge "cavp.json" "cavp" "${{ needs.cavp_validation.result }}"
-          write_badge "sast.json" "sast" "${{ needs.sast.result }}"
-          write_badge "dast.json" "dast" "${{ needs.dast.result }}"
-
-      - name: Publish badge JSON to badges branch
-        run: |
-          cd badges
-          git init -q
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -q -B badges
-          git add .
-          git commit -q -m "Update badges for ${{ github.sha }}"
-          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" badges:badges
-
-  publish:
-    needs: [check_inputs, dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
-    # dast is intentionally excluded from this gate. dast.json is a
-    # manually-produced, operator-graded report (see dast.yml), not a
-    # fresh-per-run signal -- gating on it blocks releases on human
-    # availability rather than code correctness. It still runs here for
-    # visibility in the summary below, and always() lets publish proceed
-    # regardless of its outcome. timing.yml runs entirely on its own
-    # schedule (see timing.yml) and is not part of this workflow at all.
-    # Never runs on pull_request -- nightly tagging/release only happens
-    # off schedule or manual dispatch on the base repo.
-    if: always() && github.event_name != 'pull_request' && needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout lwIP-CE
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: true
-
-      - name: Download in-run build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: lwip-latest
-          path: ${{ github.workspace }}/build
-
-      - name: Detect version tag on HEAD
-        id: vtag
-        run: |
-          git fetch --force --tags origin
-          TAG=$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' | head -1)
-          if [ -n "$TAG" ]; then
-            echo "versioned=true" >> $GITHUB_OUTPUT
-            echo "tag=$TAG" >> $GITHUB_OUTPUT
-          else
-            echo "versioned=false" >> $GITHUB_OUTPUT
-            echo "tag=$NIGHTLY_TAG" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Prepare release notes
-        id: release_notes
-        run: |
-          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
-          if [ "${{ steps.vtag.outputs.versioned }}" = "true" ]; then
-            PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | sed -n '2p')
-            {
-              echo "## lwIP-CE ${{ steps.vtag.outputs.tag }}"
-              echo
-              echo "Upstream lwIP rebase — $(date +%Y-%m-%d)"
-              echo
-              echo "Commit: \`$GITHUB_SHA\`"
-              echo
-              echo "### Changes since ${PREV:-initial release}"
-              echo
-              if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/${PREV}^{commit}" >/dev/null; then
-                git log --reverse --pretty=format:'- %s (%h)' "${PREV}..HEAD"
-                echo
-              else
-                git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
-                echo
-              fi
-            } > "$NOTES_FILE"
-          else
-            {
-              echo "Automated nightly lwIP-CE dylib build."
-              echo
-              echo "Commit: \`$GITHUB_SHA\`"
-              echo
-              echo "Changes since previous nightly release:"
-              echo
-              if git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}^{commit}" >/dev/null; then
-                if git log --format='%H' "${NIGHTLY_TAG}..HEAD" | grep -q .; then
-                  git log --reverse --pretty=format:'- %s (%h)' "${NIGHTLY_TAG}..HEAD"
-                  echo
-                else
-                  echo "- No commits since the previous nightly release."
-                fi
-              else
-                echo "- No previous nightly release tag found; listing recent history."
-                git log --reverse --max-count=50 --pretty=format:'- %s (%h)'
-                echo
-              fi
-            } > "$NOTES_FILE"
-          fi
-          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Package release asset
-        id: package_release
-        if: success()
-        run: |
-          ASSET="$RUNNER_TEMP/lwip-latest.tar.gz"
-          tar -czf "$ASSET" -C "${{ github.workspace }}/build" .
-          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
-
-      - name: Publish versioned release
-        id: publish_versioned
-        if: success() && steps.vtag.outputs.versioned == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ steps.vtag.outputs.tag }}" \
-            --title "lwIP-CE ${{ steps.vtag.outputs.tag }}" \
-            --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
-            "${{ steps.package_release.outputs.asset }}"
-
-      - name: Publish nightly release
-        id: publish_nightly
-        if: success() && steps.vtag.outputs.versioned == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git tag -f "$NIGHTLY_TAG" "$GITHUB_SHA"
-          git push -f origin "refs/tags/$NIGHTLY_TAG"
-
-          if gh release view "$NIGHTLY_TAG" >/dev/null 2>&1; then
-            gh release edit "$NIGHTLY_TAG" \
-              --title "$NIGHTLY_TAG" \
-              --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
-              --prerelease
-          else
-            gh release create "$NIGHTLY_TAG" \
-              --title "$NIGHTLY_TAG" \
-              --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
-              --prerelease
-          fi
-
-          gh release upload "$NIGHTLY_TAG" \
-            "${{ steps.package_release.outputs.asset }}" \
-            --clobber
-
-      - name: Publish job summary
-        if: always()
-        run: |
-          {
-            echo "## lwIP Release"
-            echo
-            echo "| Step | Status |"
-            echo "|------|--------|"
-            echo "| unit tests | ${{ needs.dylib_unit_tests.result }} |"
-            echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
-            echo "| sast | ${{ needs.sast.result }} |"
-            echo "| dast (informational) | ${{ needs.dast.result }} |"
-            echo "| package release asset | ${{ steps.package_release.outcome }} |"
-            if [ "${{ steps.vtag.outputs.versioned }}" = "true" ]; then
-              echo "| publish versioned release (${{ steps.vtag.outputs.tag }}) | ${{ steps.publish_versioned.outcome }} |"
-            else
-              echo "| publish nightly release | ${{ steps.publish_nightly.outcome }} |"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+      build_success: ${{ steps.upload_build_artifact.outcome == 'success' && steps.upload_zip_artifact.outcome == 'success' }}
 
   save_sentinel:
-    needs: [check_inputs, dylib_unit_tests, cavp_validation, sast]
-    if: github.event_name != 'pull_request' && needs.dylib_unit_tests.result == 'success' && needs.cavp_validation.result == 'success' && needs.sast.result == 'success'
+    needs: [check_inputs, dylib_latest]
+    if: github.event_name != 'pull_request' && needs.dylib_latest.result == 'success' && needs.dylib_latest.outputs.build_success == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Write sentinel
@@ -455,8 +239,8 @@ jobs:
           key: build-inputs-${{ needs.check_inputs.outputs.input_hash }}
 
   notify_pr_on_failure:
-    needs: [check_inputs, dylib_latest, dylib_unit_tests, cavp_validation, sast, dast]
-    if: always() && github.event_name == 'pull_request' && contains(needs.*.result, 'failure')
+    needs: [check_inputs, dylib_latest]
+    if: always() && github.event_name == 'pull_request' && needs.dylib_latest.result == 'failure'
     runs-on: ubuntu-latest
 
     steps:
@@ -465,15 +249,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           {
-            echo "@${{ github.event.pull_request.user.login }} CI failed on this PR (commit \`${{ github.event.pull_request.head.sha }}\`):"
-            echo
-            echo "| Job | Result |"
-            echo "|-----|--------|"
-            echo "| build | ${{ needs.dylib_latest.result }} |"
-            echo "| unit tests | ${{ needs.dylib_unit_tests.result }} |"
-            echo "| cavp validation | ${{ needs.cavp_validation.result }} |"
-            echo "| sast | ${{ needs.sast.result }} |"
-            echo "| dast | ${{ needs.dast.result }} |"
+            echo "@${{ github.event.pull_request.user.login }} build failed on this PR (commit \`${{ github.event.pull_request.head.sha }}\`):"
             echo
             echo "[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } > comment.md

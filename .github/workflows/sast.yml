@@ -3,6 +3,15 @@ name: SAST
 on:
   workflow_dispatch:
   workflow_call:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - '.github/workflows/sast.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - '.github/workflows/sast.yml'
 
 permissions:
   contents: read
