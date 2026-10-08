@@ -18,8 +18,6 @@
 
 *DAST uses a locally-run hardware-in-the-loop workflow because the current emulator does not support Ethernet devices. A helper program runs on the calculator and exposes the DAST target while a local script attaches to it, performs network probes, advances the calculator-side test state, and writes results to JSON. This workflow then parses the JSON report and updates the test state accordingly.*
 
-*Unit Tests, SAST, and DAST badges are sourced from a custom `badges` branch updated by `build.yml`, since these workflows only ever run as `workflow_call` targets and GitHub's native badge.svg cannot see those runs (see build.yml's `update_badges` job).*
-
 <hr>
 
 **Cryptography Quality Checks**
@@ -27,7 +25,13 @@
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 ![CAVP Primitive Validation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cagscalclabs/lwip-ce/badges/cavp.json)
 
-*Timing analysis samples*
+*Timing analysis checks for secret-dependent timing leaks: it samples repeated runs of a primitive across input classes designed to exercise different internal code paths (e.g. a bad MAC vs. a good one), then looks for variance in runtime that tracks the input class rather than noise. Some allowance is given for CPU jitter, computed via MAD-based sigma over the baseline class. This test does not prove the absence of secret-dependent timing leaks, but it provides statistical evidence that runtime stays consistent across all classes of input.*
+
+*CAVP selects 16 random samples from the NIST RSP datasets that match the primitives we provide (with the exception of SHA-256 Monte Carlo, which selects one). It caches the expected values and then serializes the inputs into an AppVar for transfer to the TI-84+ CE. The CAVP profiler runs on the calculator, dumping the on-device primitive output to an AppVar that gets fed back to the test environment. The AppVar is then parsed and graded against the expectations cached. This test does not constitute a formal NIST CAVP certification; it validates our implementations against a sample of the same published test vectors NIST CAVP uses.*
+
+<hr>
+
+*Workflow badges are sourced from a custom `badges` branch updated by `build.yml`, since these workflows only ever run as `workflow_call` targets and GitHub's native badge.svg cannot see those runs (see build.yml's `update_badges` job).*
 
 <hr>
 
