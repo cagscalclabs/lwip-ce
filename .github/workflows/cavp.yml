@@ -2,9 +2,10 @@ name: CAVP Primitive Validation
 
 # Runs NIST CAVP test vectors against the shipping cryptographic primitives.
 # Dyload variant: links tests/profiling/tls_cavp against the curated,
-# manifest-gated lwip.lib produced by build.yml. Triggers on push to
-# relevant paths, manual dispatch, and as a workflow_call target from
-# build.yml (gating the nightly release). tests/common/scripts/cavp_fetch.py
+# manifest-gated lwip.lib produced by build.yml. Triggers on build.yml's
+# completion (workflow_run) so it always has a fresh artifact to pull from,
+# plus manual dispatch and workflow_call (for other callers that already
+# have an in-run artifact). tests/common/scripts/cavp_fetch.py
 # downloads NIST CAVP archives, stratifies 16 vectors per primitive across
 # AES modes/key sizes/directions and SHA message classes, adds generated
 # RSA-PSS/RSA-PKCS1v15/PBKDF2/HKDF/X25519 coverage plus RFC-pinned vectors,
@@ -18,19 +19,15 @@ on:
         description: "Name of an in-run build artifact (e.g. lwip-latest) to download instead of fetching the published nightly release."
         required: false
         type: string
-  push:
-    branches: [master]
-    paths:
-      - 'src/**'
-      - 'tests/profiling/tls_cavp/**'
-      - 'tests/common/**'
-      - '.github/workflows/cavp.yml'
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'tests/profiling/tls_cavp/**'
-      - 'tests/common/**'
-      - '.github/workflows/cavp.yml'
+  # Triggered off build.yml's completion rather than our own push/PR filter:
+  # this job needs build.yml's lwip-latest artifact, and a push-triggered
+  # run here would race build.yml's own run on the same commit (and often
+  # lose -- see incident where "no valid artifacts found to download" fired
+  # because our run queried before build.yml's had finished uploading).
+  # workflow_run guarantees build.yml is done (success or not) before we start.
+  workflow_run:
+    workflows: ["Build Latest lwIP Dylib"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -48,6 +45,7 @@ env:
 
 jobs:
   cavp:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
 
     steps:
@@ -55,6 +53,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Load pinned CI dependency versions
         id: ci_versions
@@ -93,16 +92,23 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: ${{github.workspace}}/release
 
-      - name: Download latest successful build.yml artifact
+      - name: Download build.yml artifact
+        # On workflow_run, download from the exact build.yml run that
+        # triggered us (its head_sha is what we checked out above) --
+        # no need to re-query "latest successful", which is what raced
+        # build.yml's own upload in the old push-triggered design.
         if: inputs.artifact_name == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{github.workspace}}/release"
-          run_id=$(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=success&branch=master&per_page=1" \
-            --jq '.workflow_runs[0].id')
+          run_id="${{ github.event.workflow_run.id }}"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=success&branch=master&per_page=1" \
+              --jq '.workflow_runs[0].id')
+          fi
           if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-            echo "::error::No successful build.yml run found on master."
+            echo "::error::No build.yml run found to pull an artifact from."
             exit 1
           fi
           gh run download "$run_id" --repo "${{ github.repository }}" --name lwip-latest --dir "${{github.workspace}}/release"
