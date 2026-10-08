@@ -1,21 +1,33 @@
 name: Update Latest Release
 
 # The single gate that decides whether the latest build.yml artifact becomes
-# a published release (nightly or versioned tag). Runs after build.yml
-# completes, but only actually does anything when build.yml's artifact
-# content changed from what's already published -- re-running this on every
-# unrelated build.yml run (e.g. a no-op rebuild) would just re-tag/re-publish
-# identical bits.
+# a published release (nightly or versioned tag). Only actually does
+# anything when build.yml's artifact content changed from what's already
+# published -- re-running this on every unrelated run (e.g. a no-op
+# rebuild) would just re-tag/re-publish identical bits.
 #
 # Gate: all of build.yml, cavp.yml, timing.yml, tests.yml, sast.yml, and
 # dast.yml must "cover" HEAD. A workflow covers HEAD if either its latest
 # successful run is AT HEAD, or its latest successful run's commit has no
 # diff against HEAD restricted to that workflow's own `paths:` filter (i.e.
 # nothing that would have re-triggered it actually changed since).
-
+#
+# Triggers on completion of EVERY gating workflow, not just build.yml:
+# tests.yml/cavp.yml themselves only start once build.yml finishes
+# (they're workflow_run-triggered off it too), so firing this only on
+# build.yml's completion would check coverage before those had even
+# started, let alone finished. Each completion re-runs the same
+# idempotent check; whichever workflow finishes last is the one whose
+# run actually finds full coverage and publishes.
 on:
   workflow_run:
-    workflows: ["Build Latest lwIP Dylib"]
+    workflows:
+      - "Build Latest lwIP Dylib"
+      - "Unit Tests"
+      - "CAVP Primitive Validation"
+      - "Timing Profiling"
+      - "SAST"
+      - "DAST"
     types: [completed]
   push:
     branches: [master]

@@ -1,8 +1,8 @@
 {
   "tool": "lwip-dast",
-  "generated": "2026-10-07T22:43:12+00:00",
-  "src_commit": "a881bec48c7a7a70ad37ba6f0fe29845df8347e0",
-  "target_ip": "192.168.2.32",
+  "generated": "2026-10-08T17:32:28+00:00",
+  "src_commit": "1661148be9daa7f4c01bfebb1c32c9c650dd8234",
+  "target_ip": "192.168.1.22",
   "summary": {
     "total": 20,
     "ok": 20,
@@ -13,7 +13,7 @@
     {
       "id": "icmp-echo-baseline",
       "name": "ICMP echo baseline",
-      "command": "probe=icmp_echo_normal target=192.168.2.32",
+      "command": "probe=icmp_echo_normal target=192.168.1.22",
       "intent": "Liveness baseline: a well-formed ping must be answered.",
       "expect": "reply",
       "response": "REPLY",
@@ -23,7 +23,7 @@
     {
       "id": "arp-malformed",
       "name": "Malformed ARP",
-      "command": "probe=arp_malformed target=192.168.2.32",
+      "command": "probe=arp_malformed target=192.168.1.22",
       "intent": "Bogus hlen/plen and truncated ARP must not corrupt the ARP cache or crash.",
       "expect": "alive",
       "response": "ALIVE",
@@ -33,7 +33,7 @@
     {
       "id": "arp-flood",
       "name": "ARP request flood",
-      "command": "probe=arp_flood target=192.168.2.32",
+      "command": "probe=arp_flood target=192.168.1.22",
       "intent": "Rapid gratuitous/who-has flood: bounded ARP table, no OOM crash.",
       "expect": "alive",
       "response": "ALIVE",
@@ -43,7 +43,7 @@
     {
       "id": "icmp-oversize",
       "name": "Oversized ICMP echo (fragmented)",
-      "command": "probe=icmp_oversize target=192.168.2.32",
+      "command": "probe=icmp_oversize target=192.168.1.22",
       "intent": "Multi-fragment ICMP (3KB, 2-3 fragments) must reassemble or drop cleanly without crashing.",
       "expect": "alive",
       "response": "ALIVE",
@@ -53,7 +53,7 @@
     {
       "id": "icmp-malformed",
       "name": "Malformed ICMP",
-      "command": "probe=icmp_malformed target=192.168.2.32",
+      "command": "probe=icmp_malformed target=192.168.1.22",
       "intent": "Bad ICMP checksum / truncated header must be dropped, not parsed.",
       "expect": "alive",
       "response": "ALIVE",
@@ -63,7 +63,7 @@
     {
       "id": "ip-bad-checksum",
       "name": "IP bad header checksum",
-      "command": "probe=ip_bad_checksum target=192.168.2.32",
+      "command": "probe=ip_bad_checksum target=192.168.1.22",
       "intent": "Corrupt IPv4 header checksum must cause a silent drop.",
       "expect": "alive",
       "response": "ALIVE",
@@ -73,7 +73,7 @@
     {
       "id": "ip-frag-overlap",
       "name": "Overlapping IP fragments",
-      "command": "probe=ip_frag_overlap target=192.168.2.32",
+      "command": "probe=ip_frag_overlap target=192.168.1.22",
       "intent": "Teardrop-style overlapping fragments must not mis-reassemble or crash.",
       "expect": "alive",
       "response": "ALIVE",
@@ -83,7 +83,7 @@
     {
       "id": "ip-frag-bomb",
       "name": "Incomplete fragment bomb",
-      "command": "probe=ip_frag_bomb target=192.168.2.32",
+      "command": "probe=ip_frag_bomb target=192.168.1.22",
       "intent": "Many never-completed fragments must be reaped (bounded reassembly memory).",
       "expect": "alive",
       "response": "ALIVE",
@@ -93,7 +93,7 @@
     {
       "id": "udp-recv-baseline",
       "name": "UDP recv baseline",
-      "command": "probe=udp_normal target=192.168.2.32:9999",
+      "command": "probe=udp_normal target=192.168.1.22:9999",
       "intent": "A well-formed datagram reaches the recv callback and is handled.",
       "expect": "alive",
       "response": "ALIVE",
@@ -103,7 +103,7 @@
     {
       "id": "udp-oversize",
       "name": "Oversized fragmented UDP",
-      "command": "probe=udp_oversize target=192.168.2.32:9999",
+      "command": "probe=udp_oversize target=192.168.1.22:9999",
       "intent": "Large fragmented UDP payload must not overflow the recv path.",
       "expect": "alive",
       "response": "ALIVE",
@@ -113,7 +113,7 @@
     {
       "id": "udp-malformed-len",
       "name": "UDP bad length/checksum",
-      "command": "probe=udp_malformed target=192.168.2.32:9999",
+      "command": "probe=udp_malformed target=192.168.1.22:9999",
       "intent": "UDP length field longer than the packet / bad checksum must be dropped.",
       "expect": "alive",
       "response": "ALIVE",
@@ -123,7 +123,7 @@
     {
       "id": "tcp-syn-closed",
       "name": "SYN to closed port",
-      "command": "probe=tcp_syn_closed target=192.168.2.32",
+      "command": "probe=tcp_syn_closed target=192.168.1.22",
       "intent": "SYN to an unbound port must elicit a RST, not a hang or crash.",
       "expect": "rst",
       "response": "ALIVE",
@@ -133,7 +133,7 @@
     {
       "id": "tcp-listen-baseline",
       "name": "TCP listen baseline",
-      "command": "probe=tcp_connect_data target=192.168.2.32:9998",
+      "command": "probe=tcp_connect_data target=192.168.1.22:9998",
       "intent": "A normal connect + data exchange must be accepted and read.",
       "expect": "alive",
       "response": "ALIVE",
@@ -143,7 +143,7 @@
     {
       "id": "tcp-malformed-flags",
       "name": "Malformed TCP flags",
-      "command": "probe=tcp_flag_storm target=192.168.2.32:9998",
+      "command": "probe=tcp_flag_storm target=192.168.1.22:9998",
       "intent": "NULL / FIN / XMAS / SYN+FIN flag combos must be dropped or RST, not crash.",
       "expect": "alive",
       "response": "ALIVE",
@@ -153,7 +153,7 @@
     {
       "id": "tcp-tiny-window",
       "name": "Tiny/zero window + overlap",
-      "command": "probe=tcp_tiny_window target=192.168.2.32:9998",
+      "command": "probe=tcp_tiny_window target=192.168.1.22:9998",
       "intent": "Zero-window probes and overlapping segments must not desync or overrun.",
       "expect": "alive",
       "response": "ALIVE",
@@ -163,7 +163,7 @@
     {
       "id": "tcp-data-overflow",
       "name": "Oversized TCP data burst",
-      "command": "probe=tcp_data_overflow target=192.168.2.32:9998",
+      "command": "probe=tcp_data_overflow target=192.168.1.22:9998",
       "intent": "A data burst far larger than the app recv buffer must be bounded (no overflow).",
       "expect": "alive",
       "response": "ALIVE",
@@ -173,7 +173,7 @@
     {
       "id": "tls-clean-echo",
       "name": "TLS clean echo",
-      "command": "probe=tls_echo_clean target=192.168.2.32:9443",
+      "command": "probe=tls_echo_clean target=192.168.1.22:9443",
       "intent": "TLS 1.3 baseline: complete handshake, receive encrypted payload, echo it back.",
       "expect": "reply",
       "response": "REPLY",
@@ -183,7 +183,7 @@
     {
       "id": "tls-psk-resume-echo",
       "name": "TLS PSK resume echo",
-      "command": "probe=tls_echo_resume target=192.168.2.32:9443",
+      "command": "probe=tls_echo_resume target=192.168.1.22:9443",
       "intent": "Second connection should resume by TLS 1.3 PSK/session ticket, then echo encrypted data.",
       "expect": "reply",
       "response": "REPLY",
@@ -193,7 +193,7 @@
     {
       "id": "tls-missing-record",
       "name": "TLS missing record",
-      "command": "probe=tls_missing_record target=192.168.2.32:9443",
+      "command": "probe=tls_missing_record target=192.168.1.22:9443",
       "intent": "Server accepts TCP and drops the handshake before any TLS record; calc must fail closed and stay alive.",
       "expect": "abort_alive",
       "response": "ABORT",
@@ -203,7 +203,7 @@
     {
       "id": "tls-unsupported-certverify",
       "name": "TLS unsupported certverify",
-      "command": "probe=tls_unsupported_certverify target=192.168.2.32:9443",
+      "command": "probe=tls_unsupported_certverify target=192.168.1.22:9443",
       "intent": "Server presents an ECDSA TLS 1.3 identity; calc must reject unsupported CertificateVerify behavior and stay alive.",
       "expect": "abort_alive",
       "response": "ABORT",
