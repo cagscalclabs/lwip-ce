@@ -18,30 +18,40 @@ CAVP archives covered:
 
 Not from CAVP (no compatible archive):
   RSA-2048-PSS-SHA-256    fresh-per-run keygen + sign (see notes below)
+  RSA-2048-PKCS1v15-SHA-256 fresh-per-run keygen + sign (see notes below)
   HKDF-SHA-256            RFC 5869 §A.1-A.3 plus generated vectors
   PBKDF2-HMAC-SHA-256     generated ACVP-shaped vectors (small iterations)
   X25519                  RFC 7748 §6.1 + §5.2 plus generated vectors
 
-RSA-PSS notes:
+RSA-PSS / RSA-PKCS1v15 notes:
   Calc-side `tls_rsa_decrypt_signature` hardcodes e=65537 and ignores
-  the exponent in the wire format. NIST's SigVerPSS_186-3.rsp ships
-  every vector with a randomly-generated `e`, so none of its 90 vectors
-  are compatible with a fixed-e=65537 verifier. Instead, we generate a
-  fresh RSA-2048 keypair each run via python3-cryptography, sign random
-  messages with PKCS#1 v2.1 PSS (SHA-256, salt=32), and inject negatives
-  by tampering with the signature or message. The per-run keygen also
-  exercises that the verifier accepts arbitrary valid keys, not just the
-  truststore key. Additional API constraint: `powmod_exp_u24` takes a
-  uint8_t for modulus size, with 0 encoding 256 bytes — so the generator
-  enforces a canonical 256-byte modulus (MSB set, no leading zero).
+  the exponent in the wire format. NIST's SigVerPSS_186-3.rsp and
+  SigVer15_186-3.rsp both ship every vector with a randomly-generated
+  `e`, so none of those vectors are compatible with a fixed-e=65537
+  verifier. Instead, for each scheme we generate a fresh RSA-2048
+  keypair each run via python3-cryptography, sign random messages
+  (PKCS#1 v2.1 PSS, SHA-256, salt=32, or RSASSA-PKCS1-v1.5 SHA-256
+  respectively), and inject negatives by tampering with the signature
+  or message. The per-run keygen also exercises that the verifier
+  accepts arbitrary valid keys, not just the truststore key. Additional
+  API constraint: `powmod_exp_u24` takes a uint8_t for modulus size,
+  with 0 encoding 256 bytes — so both generators enforce a canonical
+  256-byte modulus (MSB set, no leading zero).
+
+  RSASSA-PKCS1-v1.5/SHA-256 verification (tls_rsa_pkcs1_v15_sha256_verify)
+  is the function src/tls/core/x509.c actually calls to verify
+  adjacent-link signatures when walking a certificate chain, so this
+  coverage targets the real chain-acceptance gate, not just an isolated
+  primitive.
 
 Random sampling:
   Default 16 per primitive (override with CAVP_FETCH_SAMPLE=N).
   Seed defaults to int(time()) so each run is fresh; CAVP selection and
   non-RSA generated vectors are reproducible with CAVP_FETCH_SEED. RSA
   key generation intentionally still uses the OS CSPRNG.
-  RSA-PSS samples are forced to contain >=1 positive and >=1 negative so
-  a verifier that always accepts (or always rejects) is caught.
+  RSA-PSS and RSA-PKCS1v15 samples are each forced to contain >=1
+  positive and >=1 negative so a verifier that always accepts (or
+  always rejects) is caught.
 
 Exit codes:
   0  All good.
@@ -92,6 +102,7 @@ ALG_ID = {
     "AES-CCM":                 10,
     "PBKDF2-HMAC-SHA256":      11,
     "SHA-256-MCT":             12,
+    "RSA-PKCS1v15-SHA-256-VERIFY": 13,
 }
 
 # Test ID ranges (sequentially assigned per algorithm)
@@ -107,6 +118,7 @@ TID_RANGES = {
     "AES-CCM":              10001,
     "PBKDF2-HMAC-SHA256":   11001,
     "SHA-256-MCT":          12001,
+    "RSA-PKCS1v15-SHA-256-VERIFY": 13001,
 }
 
 
@@ -604,6 +616,87 @@ def gen_rsa_pss_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any
     return out
 
 
+def gen_rsa_pkcs1_v15_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any]]:
+    """Generate a fresh RSA-2048 keypair and sign N random messages with
+    RSASSA-PKCS1-v1.5 (SHA-256).
+
+    Mirrors gen_rsa_pss_sha256 above -- same rationale applies: NIST's
+    SigVer15_186-3.rsp ships vectors with a randomly-generated `e` per
+    vector, incompatible with this project's fixed e=65537 verifier, so
+    vectors are generated fresh per run instead.
+
+    This exercises tls_rsa_pkcs1_v15_sha256_verify (src/tls/core/rsa.c),
+    which is the function src/tls/core/x509.c actually calls to verify
+    adjacent-link signatures when walking a certificate chain -- i.e.
+    this is the real signature-verification gate for RSA-2048+SHA-256
+    chain links, not just a standalone primitive exercised in isolation.
+
+    Returns roughly equal numbers of positive (valid) and negative
+    (tampered) vectors, same tamper strategy as the PSS generator: flip
+    a bit in either the signature (exercises modexp) or the message
+    (exercises the digest/DigestInfo comparison, modexp still succeeds).
+    """
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa, padding
+    except ImportError as e:
+        raise SystemExit(
+            "RSA-PKCS1v15 vector generation needs python3-cryptography "
+            f"(apt install python3-cryptography). Import failed: {e}")
+
+    print("  generating fresh RSA-2048 keypair (e=65537) ...", file=sys.stderr)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    n = key.public_key().public_numbers().n
+    n_bytes = n.to_bytes(256, "big")
+    if (n_bytes[0] & 0x80) == 0:
+        raise SystemExit("generated 2048-bit modulus has MSB clear "
+                         "(should be impossible)")
+
+    pkcs1v15 = padding.PKCS1v15()
+
+    n_negatives = max(1, n_vectors // 2) if n_vectors >= 2 else 0
+    n_positives = n_vectors - n_negatives
+
+    out: list[dict[str, Any]] = []
+    for i in range(n_positives):
+        msg = rng.randbytes(rng.randint(16, 128))
+        sig = key.sign(msg, pkcs1v15, hashes.SHA256())
+        out.append({
+            "algorithm": "RSA-PKCS1v15-SHA-256-VERIFY",
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"positive[{i}],msg_len={len(msg)}",
+            "modulus_hex": n_bytes.hex(),
+            "exponent_hex": "010001",
+            "msg_hex": msg.hex(),
+            "sig_hex": sig.hex(),
+            "expected_verify": True,
+        })
+
+    for i in range(n_negatives):
+        msg = rng.randbytes(rng.randint(16, 128))
+        sig = bytearray(key.sign(msg, pkcs1v15, hashes.SHA256()))
+        if rng.random() < 0.5:
+            sig[rng.randrange(len(sig))] ^= 1 << rng.randrange(8)
+            mode = "sig_flip"
+        else:
+            msg = bytearray(msg)
+            msg[rng.randrange(len(msg))] ^= 1 << rng.randrange(8)
+            msg = bytes(msg)
+            mode = "msg_flip"
+        out.append({
+            "algorithm": "RSA-PKCS1v15-SHA-256-VERIFY",
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"negative[{i}],{mode},msg_len={len(msg)}",
+            "modulus_hex": n_bytes.hex(),
+            "exponent_hex": "010001",
+            "msg_hex": msg.hex(),
+            "sig_hex": bytes(sig).hex(),
+            "expected_verify": False,
+        })
+
+    return out
+
+
 def gen_hkdf_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any]]:
     """Generate deterministic HKDF-SHA-256 vectors."""
     try:
@@ -899,6 +992,15 @@ def pack_payload(v: dict) -> bytes:
                 + bytes([salt_len])
                 + struct.pack("<H", len(msg)) + msg
                 + struct.pack("<H", len(sig)) + sig)
+    if alg == "RSA-PKCS1v15-SHA-256-VERIFY":
+        modulus = h(v["modulus_hex"])
+        exponent = h(v["exponent_hex"])
+        msg = h(v["msg_hex"])
+        sig = h(v["sig_hex"])
+        return (struct.pack("<H", len(modulus)) + modulus
+                + bytes([len(exponent)]) + exponent
+                + struct.pack("<H", len(msg)) + msg
+                + struct.pack("<H", len(sig)) + sig)
     if alg == "X25519-PUBLICKEY":
         priv = h(v["priv_hex"])
         if len(priv) != 32:
@@ -1138,6 +1240,26 @@ def main() -> int:
     assign_test_ids(rsa_vectors, rsa_label)
     all_vectors.extend(rsa_vectors)
     for v in rsa_vectors:
+        verdict_note = f" verdict={'P' if v['expected_verify'] else 'F'}"
+        print(f"    generated tid={v['test_id']} <- {v['source_file']} "
+              f"Count={v['source_count']}{verdict_note}", file=sys.stderr)
+
+    # --- RSA-PKCS1v15: same rationale as RSA-PSS above (see fn docstring).
+    # This is the function src/tls/core/x509.c actually calls to verify
+    # adjacent-link certificate chain signatures.
+    rsa_pkcs1_label = "RSA-PKCS1v15-SHA-256-VERIFY"
+    print(f"==> [{rsa_pkcs1_label}] generating {sample_size} fresh vectors ...",
+          file=sys.stderr)
+    try:
+        rsa_pkcs1_vectors = gen_rsa_pkcs1_v15_sha256(rng, sample_size)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"==> [{rsa_pkcs1_label}] FAILED: {e}", file=sys.stderr)
+        return 2
+    assign_test_ids(rsa_pkcs1_vectors, rsa_pkcs1_label)
+    all_vectors.extend(rsa_pkcs1_vectors)
+    for v in rsa_pkcs1_vectors:
         verdict_note = f" verdict={'P' if v['expected_verify'] else 'F'}"
         print(f"    generated tid={v['test_id']} <- {v['source_file']} "
               f"Count={v['source_count']}{verdict_note}", file=sys.stderr)

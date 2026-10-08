@@ -56,6 +56,7 @@ ALG_NAMES = {
     10: "AES-CCM",
     11: "PBKDF2-HMAC-SHA256",
     12: "SHA-256-MCT",
+    13: "RSA-PKCS1v15-SHA-256-VERIFY",
 }
 STATUS_NAMES = {0: "ok", 1: "unsupported", 2: "internal_error"}
 
@@ -224,6 +225,10 @@ def grade_drbg(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
 def grade_rsa_pss_verify(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
     """Result wire format: verdict(1)  (1 = signature valid, 0 = invalid).
 
+    Shared by RSA-PSS-SHA-256-VERIFY and RSA-PKCS1v15-SHA-256-VERIFY — both
+    reduce to a single verdict byte checked against expected_verify, with
+    no algorithm-specific grading needed.
+
     Note: an 'unsupported' status (handled at the caller level, not here)
     indicates the calc couldn't perform the verify — distinct from a verify
     that returned a definite false. We only see this grader for status=OK
@@ -271,6 +276,7 @@ GRADERS = {
     "HKDF-SHA-256": grade_hkdf,
     "DRBG-SHA-256": grade_drbg,
     "RSA-PSS-SHA-256-VERIFY": grade_rsa_pss_verify,
+    "RSA-PKCS1v15-SHA-256-VERIFY": grade_rsa_pss_verify,
     "X25519-PUBLICKEY": grade_x25519_pub,
     "X25519-SECRET": grade_x25519_secret,
     "PBKDF2-HMAC-SHA256": grade_length_prefixed,
@@ -464,7 +470,8 @@ def main() -> int:
     # standalone DRBG API lands.
     for alg in ["AES-GCM", "AES-CBC", "AES-CCM", "SHA-256", "SHA-256-MCT",
                 "HMAC-SHA-256", "HKDF-SHA-256", "PBKDF2-HMAC-SHA256",
-                "RSA-PSS-SHA-256-VERIFY", "X25519-PUBLICKEY", "X25519-SECRET"]:
+                "RSA-PSS-SHA-256-VERIFY", "RSA-PKCS1v15-SHA-256-VERIFY",
+                "X25519-PUBLICKEY", "X25519-SECRET"]:
         c = by_alg.get(alg, {"pass": 0, "fail": 0, "skip": 0, "unsupported": 0})
         alg_vectors = [v for v in expected_data["vectors"] if v["algorithm"] == alg]
         source = summarize_sources(alg_vectors).replace("|", "\\|")

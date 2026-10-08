@@ -441,6 +441,7 @@
 	export	altcp_ws_new_tls
 	export	altcp_ws_alloc
 	export	lwip_socket_set_ws_config
+	export	tls_rsa_pkcs1_v15_sha256_verify
 	export	lwip_start_with_crt
 	export	lwip_get_start_errno
 	export	lwip_get_start_errstring

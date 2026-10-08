@@ -16,7 +16,7 @@
  *       algorithm_id  uint8   (1=AES-GCM, 2=SHA-256, 3=HMAC, 4=HKDF,
  *                              5=DRBG, 6=RSA-PSS, 7/8=X25519,
  *                              9=AES-CBC, 10=AES-CCM, 11=PBKDF2,
- *                              12=SHA-256-MCT)
+ *                              12=SHA-256-MCT, 13=RSA-PKCS1v15-verify)
  *       test_id       uint16  little-endian
  *       payload_len   uint16  little-endian
  *       payload[payload_len]  algorithm-specific TLV (see runners below)
@@ -65,6 +65,7 @@
 #define ALG_AES_CCM               10
 #define ALG_PBKDF2_HMAC_SHA256    11
 #define ALG_SHA256_MCT            12
+#define ALG_RSA_PKCS1_SHA256_VERIFY 13
 
 #define STATUS_OK 0
 #define STATUS_UNSUPPORTED 1
@@ -576,6 +577,77 @@ static size_t run_rsa_pss_verify(const uint8_t *in, size_t in_len, uint8_t *out,
 }
 
 /*
+ * RSA-PKCS1v15-SHA-256 verify payload TLV:
+ *   modulus_len  uint16    (n size, big-endian; typically 256 for RSA-2048)
+ *   modulus      [modulus_len]
+ *   exponent_len uint8
+ *   exponent     [exponent_len]    (NOTE: project's RSA hardcodes e=65537;
+ *                                   this field is accepted but ignored.)
+ *   msg_len      uint16
+ *   msg          [msg_len]
+ *   sig_len      uint16            (= modulus_len)
+ *   sig          [sig_len]
+ *
+ * Response:
+ *   verdict      uint8     (1 = signature valid, 0 = invalid)
+ *
+ * Unlike RSA-PSS above, tls_rsa_pkcs1_v15_sha256_verify composes the
+ * modexp and EMSA-PKCS1-v1.5 encoding check internally -- this is the
+ * same function src/tls/core/x509.c uses to verify adjacent-link
+ * signatures in the certificate chain walk (RSA-2048+SHA-256 links),
+ * so this is the primitive that actually gates chain acceptance.
+ */
+static size_t run_rsa_pkcs1_v15_verify(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len < 2 || out_max < 1) return 0;
+    size_t off = 0;
+
+    uint16_t modulus_len = rd_u16(in + off); off += 2;
+    if (off + modulus_len > in_len) return 0;
+    const uint8_t *modulus = in + off; off += modulus_len;
+
+    if (off + 1 > in_len) return 0;
+    uint8_t exp_len = in[off++];
+    if (off + exp_len > in_len) return 0;
+    /* Skip the exponent bytes — project's RSA hardcodes e=65537. */
+    off += exp_len;
+
+    if (off + 2 > in_len) return 0;
+    uint16_t msg_len = rd_u16(in + off); off += 2;
+    if (off + msg_len > in_len) return 0;
+    const uint8_t *msg = in + off; off += msg_len;
+
+    if (off + 2 > in_len) return 0;
+    uint16_t sig_len = rd_u16(in + off); off += 2;
+    if (off + sig_len > in_len) return 0;
+    const uint8_t *sig = in + off;
+
+    if (sig_len != modulus_len) {
+        out[0] = 0;  /* verdict: invalid (size mismatch is a hard reject) */
+        return 1;
+    }
+    if (modulus_len > 256) {
+        out[0] = 0;
+        return 1;
+    }
+
+    struct tls_hash_context hctx;
+    if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256)) return 0;
+    if (msg_len) tls_hash_update(&hctx, msg, msg_len);
+    uint8_t mhash[32];
+    tls_hash_digest(&hctx, mhash);
+
+    static const uint8_t cavp_exp_be[] = {0x01, 0x00, 0x01}; /* 65537 */
+    struct tls_rsa_key cavp_key = {
+        sizeof(cavp_exp_be), cavp_exp_be,
+        modulus_len, modulus,
+    };
+    bool ok = tls_rsa_pkcs1_v15_sha256_verify(sig, sig_len, mhash, &cavp_key);
+    out[0] = ok ? 1 : 0;
+    return 1;
+}
+
+/*
  * X25519-PUBLICKEY payload: priv[32].
  * Response: pub[32].
  */
@@ -713,6 +785,11 @@ int main(void)
             break;
         case ALG_RSA_PSS_SHA256_VERIFY:
             result_len = run_rsa_pss_verify(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_RSA_PKCS1_SHA256_VERIFY:
+            result_len = run_rsa_pkcs1_v15_verify(payload, payload_len, scratch, sizeof(scratch));
             if (result_len == 0)
                 status = STATUS_INTERNAL;
             break;

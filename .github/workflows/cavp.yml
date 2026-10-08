@@ -7,8 +7,8 @@ name: CAVP Primitive Validation
 # build.yml (gating the nightly release). tests/common/scripts/cavp_fetch.py
 # downloads NIST CAVP archives, stratifies 16 vectors per primitive across
 # AES modes/key sizes/directions and SHA message classes, adds generated
-# RSA-PSS/PBKDF2/HKDF/X25519 coverage plus RFC-pinned vectors, and emits
-# CAVP00..15.8xv + expected.json for the test run.
+# RSA-PSS/RSA-PKCS1v15/PBKDF2/HKDF/X25519 coverage plus RFC-pinned vectors,
+# and emits CAVP00..15.8xv + expected.json for the test run.
 
 on:
   workflow_dispatch:
@@ -51,9 +51,10 @@ jobs:
           sudo apt-get update && \
           sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb \
                                   python3 python3-cryptography
-          # CAVP archive parsing uses stdlib. RSA-PSS, PBKDF2, HKDF, and
-          # X25519 reference outputs use python3-cryptography. RSA is generated
-          # with e=65537 because the project's verifier fixes that exponent.
+          # CAVP archive parsing uses stdlib. RSA-PSS, RSA-PKCS1v15, PBKDF2,
+          # HKDF, and X25519 reference outputs use python3-cryptography. RSA
+          # is generated with e=65537 because the project's verifier fixes
+          # that exponent.
 
       - name: Cache CEdev Toolchain
         id: cedev-cache
@@ -205,9 +206,9 @@ jobs:
       - name: Fetch CAVP vectors and pack input AppVars
         # cavp_fetch.py: downloads NIST CAVP zips (if not cached), parses
         # the .rsp files, randomly samples vectors per algorithm, merges in
-        # generated RSA-PSS/PBKDF2/HKDF/X25519 coverage plus RFC-pinned
-        # vectors, packs CAVP00..15.8xv for the calc, and writes expected.json
-        # for the grader. All in one shot.
+        # generated RSA-PSS/RSA-PKCS1v15/PBKDF2/HKDF/X25519 coverage plus
+        # RFC-pinned vectors, packs CAVP00..15.8xv for the calc, and writes
+        # expected.json for the grader. All in one shot.
         run: |
           python3 "${{github.workspace}}/tests/common/scripts/cavp_fetch.py"
           ls -lh "${{env.CAVP_TEST_DIR}}"/vectors/CAVP*.8xv \

@@ -475,10 +475,11 @@
 .extern _altcp_ws_new_tls
 .extern _altcp_ws_alloc
 .extern _lwip_socket_set_ws_config
+.extern _tls_rsa_pkcs1_v15_sha256_verify
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 441    ; entry count
+    d24 442    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -1054,3 +1055,6 @@ _fn_exports_table:
 
 ; --- src/lwIP.c ---
     d24 _lwip_socket_set_ws_config
+
+; --- src/tls/core/rsa.c ---
+    d24 _tls_rsa_pkcs1_v15_sha256_verify
