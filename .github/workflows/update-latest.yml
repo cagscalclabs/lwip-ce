@@ -12,23 +12,13 @@ name: Update Latest Release
 # diff against HEAD restricted to that workflow's own `paths:` filter (i.e.
 # nothing that would have re-triggered it actually changed since).
 #
-# Triggers on completion of EVERY gating workflow, not just build.yml:
-# tests.yml/cavp.yml themselves only start once build.yml finishes
-# (they're workflow_run-triggered off it too), so firing this only on
-# build.yml's completion would check coverage before those had even
-# started, let alone finished. Each completion re-runs the same
-# idempotent check; whichever workflow finishes last is the one whose
-# run actually finds full coverage and publishes.
+# Runs once daily after the nightly build/test window. This avoids one
+# coordinator run for every gating-workflow completion; manual dispatch remains
+# available when a release should be evaluated immediately.
 on:
-  workflow_run:
-    workflows:
-      - "Build Latest lwIP Dylib"
-      - "Unit Tests"
-      - "CAVP Primitive Validation"
-      - "Timing Profiling"
-      - "SAST"
-      - "DAST"
-    types: [completed]
+  schedule:
+    # build.yml starts at 03:00 UTC; allow six hours for all downstream gates.
+    - cron: '0 9 * * *'
   push:
     branches: [master]
     paths:
@@ -48,7 +38,6 @@ env:
 
 jobs:
   check_artifact_changed:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
