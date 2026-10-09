@@ -23,12 +23,38 @@ static void hello(bool psk, const char *hostname)
     assert(tls_send_client_hello(&ctx, buf, n, &again) && n == again);
     ctx.state = TLS_STATE_INIT;
     assert(!tls_send_client_hello(&ctx, buf, n-1, &again));
+    assert(buf[0] == TLS_HANDSHAKE_CLIENT_HELLO);
+    assert((((unsigned)buf[1] << 16) | ((unsigned)buf[2] << 8) | buf[3]) == n-4);
+    assert(buf[4] == 3 && buf[5] == 3);
+    assert(memcmp(buf + 6, ctx.client_random, 32) == 0);
+    static const uint8_t fixed_body[] = {0, 0, 2, 0x13, 1, 1, 0};
+    assert(memcmp(buf + 38, fixed_body, sizeof(fixed_body)) == 0);
     assert(be16(buf+45) == n-47);
-    unsigned found = 0, sni = 0;
+    unsigned versions = 0, groups = 0, key_share = 0;
+    unsigned signatures = 0, alpn = 0, sni = 0, psk_modes = 0, psk_ext = 0;
     for (size_t off = 47; off < n; )
     {
         unsigned type = be16(buf+off), len = be16(buf+off+2);
         assert(off + 4 + len <= n);
+        if (type == 43)
+        {
+            static const uint8_t expected[] = {2, 3, 4};
+            assert(len == sizeof(expected) && memcmp(buf+off+4, expected, len) == 0);
+            versions++;
+        }
+        if (type == 10)
+        {
+            static const uint8_t expected[] = {0, 2, 0, 0x1d};
+            assert(len == sizeof(expected) && memcmp(buf+off+4, expected, len) == 0);
+            groups++;
+        }
+        if (type == 51)
+        {
+            static const uint8_t expected_header[] = {0, 0x24, 0, 0x1d, 0, 0x20};
+            assert(len == 38 && memcmp(buf+off+4, expected_header, sizeof(expected_header)) == 0);
+            assert(memcmp(buf+off+10, ctx.ecdhe_public, 32) == 0);
+            key_share++;
+        }
         if (type == 0)
         {
             sni++;
@@ -38,18 +64,36 @@ static void hello(bool psk, const char *hostname)
         if (type == 13)
         {
             assert(len == 4 && be16(buf+off+4) == 2 && be16(buf+off+6) == 0x0804);
-            found++;
+            signatures++;
         }
         if (type == 50)
         {
             assert(len == 6 && be16(buf+off+4) == 4);
             assert(be16(buf+off+6) == 0x0401 && be16(buf+off+8) == 0x0804);
-            found++;
+            signatures++;
+        }
+        if (type == 16)
+        {
+            static const uint8_t expected[] = {0, 9, 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+            assert(len == sizeof(expected) && memcmp(buf+off+4, expected, len) == 0);
+            alpn++;
+        }
+        if (type == 45)
+        {
+            assert(len == 2 && buf[off+4] == 1 && buf[off+5] == 1);
+            psk_modes++;
+        }
+        if (type == 41)
+        {
+            assert(off + 4 + len == n); /* pre_shared_key must be last */
+            psk_ext++;
         }
         off += 4 + len;
     }
-    assert(found == 2);
+    assert(versions == 1 && groups == 1 && key_share == 1);
+    assert(signatures == 2 && alpn == 1);
     assert(sni == (unsigned)(hostname && !strcmp(hostname, "example.test")));
+    assert(psk_modes == (unsigned)psk && psk_ext == (unsigned)psk);
     tls_handshake_cleanup(&ctx);
 }
 

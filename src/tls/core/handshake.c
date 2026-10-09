@@ -1656,6 +1656,66 @@ bool tls_send_client_hello(
     size_t out_len,
     size_t *written)
 {
+    enum {
+        HELLO_RANDOM_OFFSET = 6,
+        HELLO_EXT_LEN_OFFSET = 45,
+        HELLO_EXT_START = 47,
+        HELLO_KEY_SHARE_OFFSET = 72
+    };
+    /* Base ClientHello with zero placeholders for the 32-byte client random,
+     * 32-byte key share, and dependent lengths. Optional extensions append. */
+    static const uint8_t hello_template[] = {
+        TLS_HANDSHAKE_CLIENT_HELLO, 0x00, 0x00, 0x00, /* body length patched */
+        0x03, 0x03,                                   /* legacy_version */
+        /* client_random patched at offset 6 */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0x00,                    /* legacy_session_id length */
+        0x00, 0x02, 0x13, 0x01, /* TLS_AES_128_GCM_SHA256 */
+        0x01, 0x00,              /* one null compression method */
+        0x00, 0x00,              /* extensions length patched */
+        /* supported_versions: TLS 1.3 */
+        0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04,
+        /* supported_groups: x25519 */
+        0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d,
+        /* key_share header: one 32-byte x25519 key follows */
+        0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20,
+        /* x25519 key patched at offset 72 */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* signature_algorithms: rsa_pss_rsae_sha256 */
+        0x00, 0x0d, 0x00, 0x04, 0x00, 0x02, 0x08, 0x04,
+        /* signature_algorithms_cert: rsa_pkcs1_sha256, rsa_pss_rsae_sha256 */
+        0x00, 0x32, 0x00, 0x06, 0x00, 0x04, 0x04, 0x01, 0x08, 0x04,
+        /* ALPN: http/1.1 */
+        0x00, 0x10, 0x00, 0x0b, 0x00, 0x09, 0x08,
+        'h', 't', 't', 'p', '/', '1', '.', '1'
+    };
+    static const uint8_t sni_header[] = {
+        0x00, 0x00,             /* server_name */
+        0x00, 0x00,             /* extension length patched */
+        0x00, 0x00,             /* name-list length patched */
+        0x00,                   /* host_name */
+        0x00, 0x00              /* hostname length patched */
+    };
+    static const uint8_t cookie_header[] = {
+        0x00, 0x2c,             /* cookie */
+        0x00, 0x00,             /* extension length patched */
+        0x00, 0x00              /* cookie length patched */
+    };
+    static const uint8_t psk_modes[] = {
+        0x00, 0x2d, 0x00, 0x02, 0x01, 0x01 /* psk_dhe_ke */
+    };
+    static const uint8_t psk_header[] = {
+        0x00, 0x29,             /* pre_shared_key */
+        0x00, 0x00,             /* extension length patched */
+        0x00, 0x00              /* identities length patched */
+    };
+    static const uint8_t binder_header[] = {
+        0x00, 0x00,             /* binders length patched */
+        0x20                    /* SHA-256 binder length */
+    };
+
     if (!ctx || !out || !written)
     {
         ERROR();
@@ -1732,174 +1792,50 @@ bool tls_send_client_hello(
         cookie_ext_len = 4 + 2 + ctx->hrr_cookie_len; /* ext header + inner length field */
     }
 
-    /* Fixed ClientHello body before extensions is 43 bytes. The constants
-     * below include the 4-byte handshake header so the unchecked serializer
-     * cannot overrun a too-small caller buffer. */
-    required_ext_len = 7 + 8 + 42 + 8 + 10 + 15 + sni_len + cookie_ext_len;
+    /* The exact-size check makes all template copies below safe. */
+    required_ext_len = sizeof(hello_template) - HELLO_EXT_START +
+                       sni_len + cookie_ext_len;
     if (ctx->psk_mode)
     {
         /* psk_key_exchange_modes (6: header 4 + modes-length 1 + psk_dhe_ke
          * 1) + pre_shared_key fixed overhead (47) + identity bytes. */
-        required_ext_len += 6 + 47 + ctx->psk_identity.identity_len;
+        required_ext_len += sizeof(psk_modes) + 47 + ctx->psk_identity.identity_len;
     }
     if (required_ext_len > 0xFFFFu)
     {
         ERROR_CODE(0x2f);
         return false;
     }
-    required_len = 47 + required_ext_len;
+    required_len = HELLO_EXT_START + required_ext_len;
     if (required_len > out_len || required_len - 4 > 0xFFFFFFu)
     {
         ERROR_CODE(required_len > 0xFFFF ? 0xFFFF : required_len);
         return false;
     }
 
-    /* Reserve space for handshake header (will fill in later) */
-    if (offset + 4 > out_len)
-    {
-        ERROR_CODE(0x30);
-        return false;
-    }
-    offset += 4;
-
-    /* Legacy protocol version: 0x0303 (TLS 1.2) */
-    out[offset++] = 0x03;
-    out[offset++] = 0x03;
-
-    /* Client random (32 bytes) */
-    if (offset + 32 > out_len)
-    {
-        ERROR_CODE(0x31);
-        return false;
-    }
-    memcpy(out + offset, ctx->client_random, 32);
-    offset += 32;
-
-    /* Session ID (empty for TLS 1.3) */
-    out[offset++] = 0x00;
-
-    /* Cipher suites length (2 bytes) */
-    out[offset++] = 0x00;
-    out[offset++] = 0x02; /* 2 bytes total */
-
-    /* Cipher suite: TLS_AES_128_GCM_SHA256 (0x1301) */
-    out[offset++] = 0x13;
-    out[offset++] = 0x01;
-
-    /* Compression methods length (1 byte) */
-    out[offset++] = 0x01;
-
-    /* Compression method: null (0x00) */
-    out[offset++] = 0x00;
-
-    /* Extensions total length (placeholder, will calculate) */
-    size_t ext_len_offset = offset;
-    offset += 2;
-
-    size_t ext_start = offset;
-
-    /* Extension 1: supported_versions */
-    out[offset++] = 0x00;
-    out[offset++] = 0x2b; /* Extension type */
-    out[offset++] = 0x00;
-    out[offset++] = 0x03; /* Extension length */
-    out[offset++] = 0x02; /* Versions length */
-    out[offset++] = 0x03;
-    out[offset++] = 0x04; /* TLS 1.3 */
-
-    /* Extension 2: supported_groups */
-    out[offset++] = 0x00;
-    out[offset++] = 0x0a; /* Extension type: supported_groups */
-    out[offset++] = 0x00;
-    out[offset++] = 0x04; /* Extension length */
-    out[offset++] = 0x00;
-    out[offset++] = 0x02; /* Named group list length */
-    out[offset++] = 0x00;
-    out[offset++] = 0x1d; /* x25519 */
-
-    /* Extension 3: key_share */
-    out[offset++] = 0x00;
-    out[offset++] = 0x33; /* Extension type: key_share */
-    out[offset++] = 0x00;
-    out[offset++] = 0x26; /* Extension length: 38 */
-    out[offset++] = 0x00;
-    out[offset++] = 0x24; /* Client shares length: 36 */
-    out[offset++] = 0x00;
-    out[offset++] = 0x1d; /* Named group: x25519 */
-    out[offset++] = 0x00;
-    out[offset++] = 0x20; /* Key exchange length: 32 */
-    if (offset + 32 > out_len)
-    {
-        ERROR_CODE(0x32);
-        return false;
-    }
-    memcpy(out + offset, ctx->ecdhe_public, 32);
-    offset += 32;
-
-    /* Extension 4: signature_algorithms.
-     * Only RSA-PSS-SHA256 — the one algorithm we can actually verify for
-     * CertificateVerify. Advertising ECDSA here would allow the server to
-     * pick it and we could not verify the result. */
-    out[offset++] = 0x00;
-    out[offset++] = 0x0d; /* Extension type: signature_algorithms */
-    out[offset++] = 0x00;
-    out[offset++] = 0x04; /* Extension length: 4 */
-    out[offset++] = 0x00;
-    out[offset++] = 0x02; /* Signature algorithms list length: 2 */
-    out[offset++] = 0x08;
-    out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
-
-    /* Extension 5: signature_algorithms_cert.
-     * Advertise algorithms we can verify in cert chains: RSA PKCS#1-v1.5-SHA256,
-     * RSA-PSS-SHA256. ECDSA verification is not implemented. */
-    out[offset++] = 0x00;
-    out[offset++] = 0x32; /* Extension type: signature_algorithms_cert */
-    out[offset++] = 0x00;
-    out[offset++] = 0x06; /* Extension length: 6 */
-    out[offset++] = 0x00;
-    out[offset++] = 0x04; /* Signature algorithms list length: 4 */
-    out[offset++] = 0x04;
-    out[offset++] = 0x01; /* rsa_pkcs1_sha256 */
-    out[offset++] = 0x08;
-    out[offset++] = 0x04; /* rsa_pss_rsae_sha256 */
-
-    /* Extension 6: ALPN (application_layer_protocol_negotiation).
-     * Advertise HTTP/1.1 explicitly. Some HTTP front doors (e.g. large CDNs /
-     * Microsoft's) require ALPN to be negotiated; without it they may complete
-     * the TLS handshake and then immediately close the connection once
-     * application data starts — which looked like a post-Finished close.
-     * 15 bytes total: type(2) + ext_len(2) + list_len(2) + name_len(1) + 8. */
-    out[offset++] = 0x00;
-    out[offset++] = 0x10; /* Extension type: ALPN */
-    out[offset++] = 0x00;
-    out[offset++] = 0x0b; /* Extension length: 11 */
-    out[offset++] = 0x00;
-    out[offset++] = 0x09; /* ProtocolNameList length: 9 */
-    out[offset++] = 0x08; /* ProtocolName length: 8 */
-    memcpy(out + offset, "http/1.1", 8);
-    offset += 8;
+    memcpy(out, hello_template, sizeof(hello_template));
+    memcpy(out + HELLO_RANDOM_OFFSET, ctx->client_random, 32);
+    memcpy(out + HELLO_KEY_SHARE_OFFSET, ctx->ecdhe_public, 32);
+    offset = sizeof(hello_template);
+    size_t ext_len_offset = HELLO_EXT_LEN_OFFSET;
+    size_t ext_start = HELLO_EXT_START;
 
     /* Extension 7: server_name (SNI) */
     if (sni_len)
     {
-        if (offset + 9 + hostname_len > out_len)
-        {
-            ERROR_CODE(0x33);
-            return false;
-        }
-        out[offset++] = 0x00;
-        out[offset++] = 0x00; /* Extension type: server_name */
+        size_t sni_offset = offset;
+        memcpy(out + offset, sni_header, sizeof(sni_header));
+        offset += sizeof(sni_header);
         /* Extension length = hostname_len + 5 */
         size_t sni_ext_len = hostname_len + 5;
-        out[offset++] = (uint8_t)(sni_ext_len >> 8);
-        out[offset++] = (uint8_t)(sni_ext_len & 0xFF);
+        out[sni_offset + 2] = (uint8_t)(sni_ext_len >> 8);
+        out[sni_offset + 3] = (uint8_t)(sni_ext_len & 0xFF);
         /* Server name list length = hostname_len + 3 */
         size_t sni_list_len = hostname_len + 3;
-        out[offset++] = (uint8_t)(sni_list_len >> 8);
-        out[offset++] = (uint8_t)(sni_list_len & 0xFF);
-        out[offset++] = 0x00; /* Host name type */
-        out[offset++] = (uint8_t)(hostname_len >> 8);
-        out[offset++] = (uint8_t)(hostname_len & 0xFF);
+        out[sni_offset + 4] = (uint8_t)(sni_list_len >> 8);
+        out[sni_offset + 5] = (uint8_t)(sni_list_len & 0xFF);
+        out[sni_offset + 7] = (uint8_t)(hostname_len >> 8);
+        out[sni_offset + 8] = (uint8_t)(hostname_len & 0xFF);
         memcpy(out + offset, ctx->hostname, hostname_len);
         offset += hostname_len;
     }
@@ -1908,18 +1844,14 @@ bool tls_send_client_hello(
      * ClientHello when the HRR included one. */
     if (ctx->hrr_cookie_len > 0)
     {
-        if (offset + 4 + 2 + ctx->hrr_cookie_len > out_len)
-        {
-            ERROR_CODE(0x34);
-            return false;
-        }
-        out[offset++] = 0x00;
-        out[offset++] = 0x2c; /* Extension type: cookie */
+        size_t cookie_offset = offset;
+        memcpy(out + offset, cookie_header, sizeof(cookie_header));
+        offset += sizeof(cookie_header);
         size_t cookie_ext_body = 2 + ctx->hrr_cookie_len;
-        out[offset++] = (uint8_t)(cookie_ext_body >> 8);
-        out[offset++] = (uint8_t)(cookie_ext_body & 0xFF);
-        out[offset++] = (uint8_t)(ctx->hrr_cookie_len >> 8);
-        out[offset++] = (uint8_t)(ctx->hrr_cookie_len & 0xFF);
+        out[cookie_offset + 2] = (uint8_t)(cookie_ext_body >> 8);
+        out[cookie_offset + 3] = (uint8_t)(cookie_ext_body & 0xFF);
+        out[cookie_offset + 4] = (uint8_t)(ctx->hrr_cookie_len >> 8);
+        out[cookie_offset + 5] = (uint8_t)(ctx->hrr_cookie_len & 0xFF);
         memcpy(out + offset, ctx->hrr_cookie, ctx->hrr_cookie_len);
         offset += ctx->hrr_cookie_len;
     }
@@ -1932,25 +1864,16 @@ bool tls_send_client_hello(
          * later-compromised PSK/ticket key would retroactively expose that
          * session's traffic. psk_dhe_ke-only means every resumed session
          * still gets forward secrecy via a fresh key_share. */
-        out[offset++] = 0x00;
-        out[offset++] = 0x2d; /* Extension type */
-        out[offset++] = 0x00;
-        out[offset++] = 0x02; /* Extension length */
-        out[offset++] = 0x01; /* Modes length */
-        out[offset++] = 0x01; /* psk_dhe_ke (PSK with ECDHE) */
+        memcpy(out + offset, psk_modes, sizeof(psk_modes));
+        offset += sizeof(psk_modes);
 
-        /* Extension 5: pre_shared_key (MUST be last extension) */
-        out[offset++] = 0x00;
-        out[offset++] = 0x29; /* Extension type */
-
-        size_t psk_ext_len_offset = offset;
-        offset += 2; /* Extension length (fill later) */
-
-        size_t psk_ext_start = offset;
-
-        /* PSK identities */
-        size_t identities_len_offset = offset;
-        offset += 2; /* Identities length (fill later) */
+        /* Extension 5: pre_shared_key (MUST be last extension). */
+        size_t psk_header_offset = offset;
+        memcpy(out + offset, psk_header, sizeof(psk_header));
+        offset += sizeof(psk_header);
+        size_t psk_ext_len_offset = psk_header_offset + 2;
+        size_t psk_ext_start = psk_header_offset + 4;
+        size_t identities_len_offset = psk_header_offset + 4;
 
         size_t identities_start = offset;
 
@@ -1982,13 +1905,12 @@ bool tls_send_client_hello(
         out[identities_len_offset] = (uint8_t)(identities_len >> 8);
         out[identities_len_offset + 1] = (uint8_t)(identities_len & 0xFF);
 
-        /* PSK binders */
+        /* PSK binders. The binder vector itself is a fixed-size template;
+         * its value is the only dynamic portion. */
         binder_offset = offset;
         size_t binders_len_offset = offset;
-        offset += 2; /* Binders length (fill later) */
-
-        /* Binder length (SHA-256 = 32 bytes) */
-        out[offset++] = 32;
+        memcpy(out + offset, binder_header, sizeof(binder_header));
+        offset += sizeof(binder_header);
 
         /* Calculate PSK binder */
         if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret))
@@ -3513,6 +3435,10 @@ bool tls_send_finished(
     size_t out_len,
     size_t *written)
 {
+    static const uint8_t finished_header[] = {
+        TLS_HANDSHAKE_FINISHED, 0x00, 0x00, 0x20
+    };
+
     if (!ctx || !out || !written)
     {
         ERROR_CODE(0x98);
@@ -3574,20 +3500,10 @@ bool tls_send_finished(
     tls_hmac_update(&hmac_ctx, transcript_hash, 32);
     tls_hmac_digest(&hmac_ctx, verify_data);
 
-    /* Step 5: Build Finished message */
-    size_t offset = 0;
-
-    /* Handshake type: Finished (0x14) */
-    out[offset++] = TLS_HANDSHAKE_FINISHED;
-
-    /* Length: 32 bytes */
-    out[offset++] = 0x00;
-    out[offset++] = 0x00;
-    out[offset++] = 0x20;
-
-    /* Verify data */
-    memcpy(out + offset, verify_data, 32);
-    offset += 32;
+    /* Step 5: Copy the fixed header, then append the dynamic verify_data. */
+    memcpy(out, finished_header, sizeof(finished_header));
+    memcpy(out + sizeof(finished_header), verify_data, 32);
+    size_t offset = sizeof(finished_header) + 32;
 
     *written = offset;
 
@@ -3635,7 +3551,11 @@ bool tls_send_empty_certificate(
     size_t out_len,
     size_t *written)
 {
-    size_t offset = 0;
+    static const uint8_t empty_certificate[] = {
+        TLS_HANDSHAKE_CERTIFICATE, 0x00, 0x00, 0x04,
+        0x00,                   /* certificate_request_context length */
+        0x00, 0x00, 0x00       /* certificate_list length */
+    };
 
     if (!ctx || !out || !written)
     {
@@ -3648,26 +3568,18 @@ bool tls_send_empty_certificate(
         ERROR_CODE(0x9e);
         return false;
     }
-    if (out_len < 8)
+    if (out_len < sizeof(empty_certificate))
     {
         ERROR_CODE(0x9f);
         return false;
     }
 
-    out[offset++] = TLS_HANDSHAKE_CERTIFICATE;
-    out[offset++] = 0x00;
-    out[offset++] = 0x00;
-    out[offset++] = 0x04;
-    out[offset++] = 0x00; /* certificate_request_context length */
-    out[offset++] = 0x00;
-    out[offset++] = 0x00;
-    out[offset++] = 0x00; /* certificate_list length */
-
-    *written = offset;
+    memcpy(out, empty_certificate, sizeof(empty_certificate));
+    *written = sizeof(empty_certificate);
 
     if (ctx->transcript_hash)
     {
-        transcript_hash_update(ctx->transcript_hash, out, offset);
+        transcript_hash_update(ctx->transcript_hash, out, sizeof(empty_certificate));
     }
 
     DEBUG();

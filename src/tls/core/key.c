@@ -37,15 +37,15 @@
  * --------------------------------------------------------------------------- */
 
 /* DER OIDs referenced during key parsing. */
-static const uint8_t OID_RSA_ENCRYPTION[]     = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x01,0x01}; /* 9 */
-static const uint8_t OID_EC_PUBLICKEY[]        = {0x2a,0x86,0x48,0xce,0x3d,0x02,0x01};           /* 7 */
-static const uint8_t OID_PBKDF2[]             = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x05,0x0c}; /* 9 */
-static const uint8_t OID_PBES2[]              = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x05,0x0d}; /* 9 */
-static const uint8_t OID_HMAC_SHA256[]        = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x02,0x09};      /* 8 */
-static const uint8_t OID_AES_128_CBC[]        = {0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x01,0x02}; /* 9 */
-static const uint8_t OID_AES_256_CBC[]        = {0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x01,0x2a}; /* 9 */
-static const uint8_t OID_AES_128_GCM[]        = {0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x01,0x06}; /* 9 */
-static const uint8_t OID_AES_256_GCM[]        = {0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x01,0x2e}; /* 9 */
+static const uint8_t OID_RSA_ENCRYPTION[] = {TLS_OID_RSA_ENCRYPTION_BYTES};
+static const uint8_t OID_EC_PUBLICKEY[]   = {TLS_OID_EC_PUBLIC_KEY_BYTES};
+static const uint8_t OID_PBKDF2[]         = {TLS_OID_PBKDF2_BYTES};
+static const uint8_t OID_PBES2[]          = {TLS_OID_PBES2_BYTES};
+static const uint8_t OID_HMAC_SHA256[]    = {TLS_OID_HMAC_WITH_SHA256_BYTES};
+static const uint8_t OID_AES_128_CBC[]    = {TLS_OID_AES_128_CBC_BYTES};
+static const uint8_t OID_AES_256_CBC[]    = {TLS_OID_AES_256_CBC_BYTES};
+static const uint8_t OID_AES_128_GCM[]    = {TLS_OID_AES_128_GCM_BYTES};
+static const uint8_t OID_AES_256_GCM[]    = {TLS_OID_AES_256_GCM_BYTES};
 
 static bool oid_eq(const struct tls_asn1_tlv *tlv,
                    const uint8_t *oid, size_t oid_len)
@@ -216,7 +216,7 @@ key_parse_ec_pub_point(const uint8_t *data, size_t len,
 /* Only named P-256 is representable by the current EC algorithm enum. */
 static bool key_p256(const struct tls_asn1_tlv *param)
 {
-    static const uint8_t oid[] = {0x2a,0x86,0x48,0xce,0x3d,0x03,0x01,0x07};
+    static const uint8_t oid[] = {TLS_OID_SECP256R1_BYTES};
     return oid_eq(param, oid, sizeof(oid));
 }
 

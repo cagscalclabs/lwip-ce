@@ -13,47 +13,13 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "tls_algorithms.h"
 #include "rsa.h"
 #include "aes.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/**
- * Operation identifier — selects cipher or signature hash/padding scheme.
- * Drives dispatch in tls_key_verify(), tls_key_sign(), tls_cipher_encrypt(),
- * and tls_cipher_decrypt().
- *
- * Signing range (0x00–0x0F): asymmetric signature algorithms.
- * Encryption range (0x10–0xFE): symmetric and asymmetric encryption.
- */
-typedef enum
-{
-    /* --- Signing / verification (0x00–0x0F) --- */
-    TLS_ALG_RSA_PSS_RSAE_SHA256    = 0x00, /**< RSASSA-PSS MGF1-SHA-256 saltLen=32. rsa member. */
-    TLS_ALG_RSA_PKCS1_SHA256       = 0x01, /**< RSASSA-PKCS1-v1.5 SHA-256.          rsa member. */
-    TLS_ALG_ECDSA_SECP256R1_SHA256 = 0x02, /**< ECDSA P-256 SHA-256.                ec member.  */
-    /* 0x03–0x0F reserved for future signing algorithms */
-
-    /* --- Encryption / decryption (0x10–0xFE) --- */
-    TLS_ALG_AES_128_GCM            = 0x10, /**< AES-128-GCM (AEAD). aes member (128-bit key). IV=12 B, tag=16 B. */
-    TLS_ALG_AES_256_GCM            = 0x11, /**< AES-256-GCM (AEAD). aes member (256-bit key). IV=12 B, tag=16 B. */
-    TLS_ALG_AES_128_CCM            = 0x12, /**< AES-128-CCM (AEAD). aes member (128-bit key). nonce=13 B, tag=16 B. */
-    TLS_ALG_AES_256_CCM            = 0x13, /**< AES-256-CCM (AEAD). aes member (256-bit key). nonce=13 B, tag=16 B. */
-    TLS_ALG_AES_128_CBC            = 0x14, /**< AES-128-CBC. aes member (128-bit key). IV=16 B, no tag. */
-    TLS_ALG_AES_256_CBC            = 0x15, /**< AES-256-CBC. aes member (256-bit key). IV=16 B, no tag. */
-    TLS_ALG_RSA_OAEP_SHA256        = 0x16, /**< RSAES-OAEP SHA-256. rsa member. Encryption only. */
-    /* 0x17–0xFE reserved for future encryption algorithms */
-
-    TLS_ALG_UNKNOWN                = 0xFF,
-} tls_alg_t;
-
-/** True when @p alg is in the signing range. */
-#define TLS_ALG_IS_SIGNING(alg)    ((uint8_t)(alg) <= 0x0F)
-
-/** True when @p alg is in the encryption range. */
-#define TLS_ALG_IS_ENCRYPTION(alg) ((uint8_t)(alg) >= 0x10 && (uint8_t)(alg) <= 0xFE)
 
 /* NIST-recommended nonce/IV sizes (SP 800-38D §5.2.1.1, SP 800-38C §A.1). */
 #define TLS_KEY_GCM_IV_LEN   12  /**< 96-bit IV for AES-GCM (NIST SP 800-38D). */

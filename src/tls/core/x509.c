@@ -181,9 +181,7 @@ static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_t
     /* RFC 4055: RSASSA-PSS parameters are a SEQUENCE, unlike the NULL
      * parameters used by rsaEncryption / sha256WithRSAEncryption. Preserve
      * the parameter value for callers; parsing is not signature verification. */
-    static const uint8_t oid_rsassa_pss[] = {
-        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a
-    };
+    static const uint8_t oid_rsassa_pss[] = {TLS_OID_RSASSA_PSS_BYTES};
     bool is_pss = tls_x509_oid_eq(&oid, oid_rsassa_pss, sizeof(oid_rsassa_pss));
     if (tls_asn1_next(&c, &param))
     {
@@ -1116,9 +1114,9 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             }
 
             /* Infer the algorithm from the SPKI OID and extract key material. */
-            static const uint8_t rsa_oid[] = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x01,0x01};
-            static const uint8_t ec_oid[] = {0x2a,0x86,0x48,0xce,0x3d,0x02,0x01};
-            static const uint8_t p256_oid[] = {0x2a,0x86,0x48,0xce,0x3d,0x03,0x01,0x07};
+            static const uint8_t rsa_oid[] = {TLS_OID_RSA_ENCRYPTION_BYTES};
+            static const uint8_t ec_oid[] = {TLS_OID_EC_PUBLIC_KEY_BYTES};
+            static const uint8_t p256_oid[] = {TLS_OID_SECP256R1_BYTES};
             tls_alg_t alg = TLS_ALG_UNKNOWN;
             if (scratch_alg.len == sizeof(rsa_oid) &&
                 !memcmp(scratch_alg.data, rsa_oid, sizeof(rsa_oid)))
@@ -1359,16 +1357,16 @@ void tls_x509_object_free(struct tls_x509_object *obj)
 
 /* OID byte strings for the three signature algorithms we recognise. */
 static const uint8_t oid_rsa_encryption[] = {
-    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01  /* rsaEncryption (SPKI key type) */
+    TLS_OID_RSA_ENCRYPTION_BYTES
 };
 static const uint8_t oid_sha256_rsa_pkcs1[] = {
-    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b  /* sha256WithRSAEncryption */
+    TLS_OID_SHA256_WITH_RSA_ENCRYPTION_BYTES
 };
 static const uint8_t oid_rsassa_pss[] = {
-    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a  /* id-RSASSA-PSS */
+    TLS_OID_RSASSA_PSS_BYTES
 };
 static const uint8_t oid_ecdsa_sha256[] = {
-    0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02          /* ecdsa-with-SHA256 */
+    TLS_OID_ECDSA_WITH_SHA256_BYTES
 };
 
 tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len)
@@ -1406,7 +1404,7 @@ tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len)
 /* Match a SHA-256 AlgorithmIdentifier, accepting absent or NULL parameters. */
 static bool x509_sha256_identifier(const struct tls_asn1_tlv *identifier)
 {
-    static const uint8_t sha256[] = {0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x02,0x01};
+    static const uint8_t sha256[] = {TLS_OID_SHA256_BYTES};
     struct tls_asn1_cursor c;
     struct tls_asn1_tlv oid, param;
     if (identifier->tag != 0x30 || !tls_asn1_child_cursor(identifier, &c) ||
@@ -1428,7 +1426,7 @@ static bool x509_sha256_identifier(const struct tls_asn1_tlv *identifier)
 bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
                                   tls_alg_t *alg)
 {
-    static const uint8_t mgf1[] = {0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x01,0x08};
+    static const uint8_t mgf1[] = {TLS_OID_MGF1_BYTES};
     struct tls_asn1_cursor c;
     struct tls_asn1_tlv oid, param;
     if (!alg)
