@@ -1061,6 +1061,14 @@ static void lwip_membuffers_release(void)
         tls_cleanup();
 #endif
     mem_buffer_lwip_release_pools();
+
+    /* Safety net: force-free any mem_buffer still outstanding after every
+     * subsystem above has had its chance to free its own. A non-zero
+     * return means something leaked a ring/pool/file buffer -- logged by
+     * mem_buffer_release_all_tracked itself. Without this, a leaked buffer
+     * would silently survive into a subsequent lwip_start() in the same
+     * process. */
+    mem_buffer_release_all_tracked();
 }
 
 static void lwip_stack_cleanup(void)
@@ -1155,6 +1163,7 @@ static void lwip_stack_cleanup(void)
      * frees-and-NULLs its buffer so a stray future reference sees NULL. */
     STOP_TRACE("P8 ethFinish");
     eth_finish_shutdown();
+    lwip_usb_callback_chain_clear();
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
     netif_remove_ext_callback(&g_socket_netif_callback);
 #endif

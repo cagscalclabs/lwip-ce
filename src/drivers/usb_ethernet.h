@@ -212,6 +212,37 @@ typedef struct _eth_device_t
 /// @brief Callback function to be passed to @b usb_Init to enable Ethernet driver for lwIP
 usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_callback_data_t *callback_data);
 
+/** @brief Attach a caller-supplied USB event listener, chained onto lwIP's
+ *  own eth_usb_event_callback. lwIP owns usb_Init and is the only handler
+ *  ever registered with the real USB driver; a caller that also needs to
+ *  react to USB events (e.g. a non-ethernet device sharing the bus)
+ *  attaches here instead of calling usb_Init a second time, which the
+ *  hardware does not support. The listener's own signature is exactly
+ *  usb_event_callback_t (usbdrvce.h) -- same event/event_data/
+ *  callback_data a handler passed to usb_Init would receive directly.
+ *
+ *  Chained callbacks run AFTER lwIP's own internal handling of the event
+ *  (netif up/down, PCB teardown, device reap, etc. have already happened),
+ *  so a listener always observes consistent, already-settled lwIP state.
+ *  lwIP owns the storage for the registration internally; the caller only
+ *  ever deals in plain usb_event_callback_t function pointers.
+ *  @param fn Callback to attach. Must not already be attached.
+ *  @return true on success, false if fn is already attached or storage
+ *          could not be allocated. */
+bool lwip_attach_usb_callback(usb_event_callback_t fn);
+
+/** @brief Detach a previously-attached USB event listener.
+ *  @param fn Callback previously passed to lwip_attach_usb_callback. */
+void lwip_detach_usb_callback(usb_event_callback_t fn);
+
+/** @brief Detach and free every attached USB event listener.
+ *  @note Internal teardown hook, called by lwip_stack_cleanup(). Attached
+ *        callbacks do not survive lwip_stop() -- consistent with the rest
+ *        of the stack's reset-to-clean-slate teardown. A caller that wants
+ *        its listener active again re-attaches after the next
+ *        lwip_start()/lwip_network_up(). */
+void lwip_usb_callback_chain_clear(void);
+
 /** @brief Halt every USB endpoint backing every active ethernet netif.
  *  Used during stack shutdown to quiesce the device-side transport
  *  before lwIP tears down its PCBs. After this call the USB driver

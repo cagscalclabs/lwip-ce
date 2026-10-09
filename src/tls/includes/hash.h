@@ -71,6 +71,18 @@ struct tls_hash_context
 bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm);
 
 /***************************************************************************
+ * @brief Copies a hash context's state into another, independent context.
+ * @param dst       Pointer to the destination context (overwritten).
+ * @param src       Pointer to the context to copy from.
+ * @note The context is a pure value type (no heap pointers), so this is a
+ *       plain struct copy. Digesting dst afterward does not disturb src --
+ *       used to branch a transcript hash (e.g. to compute a PSK binder
+ *       over a snapshot of the running transcript without finalizing the
+ *       transcript hash itself).
+ */
+void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_context *src);
+
+/***************************************************************************
  * @brief Updates a hash context for data.
  * @param ctx       Pointer to a hash context to update.
  * @param data     Pointer to data to hash.

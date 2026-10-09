@@ -1,6 +1,8 @@
 #include "mem.h"
 #include <string.h>
 #include "../tls/includes/bytes.h"
+#include "lwip/opt.h"
+#include "lwip/debug.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_MEM
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_MEM
@@ -1902,6 +1904,35 @@ void mem_buffer_lwip_release_pools(void)
     g_lwip_pool_count = 0;
     g_lwip_pbuf_pool = NULL;
     mem_effective_pressure_update();
+}
+
+size_t mem_buffer_release_all_tracked(void)
+{
+    /* Safety-net sweep for stack teardown (lwip_stack_cleanup), called
+     * last, after every subsystem has had the chance to free its own
+     * mem_buffer allocations. Anything still on g_mem_buffer_stats_head at
+     * this point is a leak -- normally every ring/pool/file buffer is
+     * destroyed by its owner (TLS ring buffers, lwIP pools via
+     * mem_buffer_lwip_release_pools, etc.) well before this runs. Walking
+     * and force-destroying what remains makes a second lwip_start() in the
+     * same process safe even if some future subsystem forgets to free
+     * something, instead of silently leaking heap across restarts.
+     *
+     * This does NOT cover arbitrary mem_buffer_custom_malloc allocations
+     * (socket structs, eth_device_t, the PSK cache, etc.) -- those are not
+     * mem_buffer objects and are not tracked on this list. Those remain
+     * each subsystem's own responsibility to free during teardown. */
+    size_t leaked = 0;
+    while (g_mem_buffer_stats_head != NULL)
+    {
+        struct mem_buffer *rb = g_mem_buffer_stats_head;
+        LWIP_DEBUGF(MEM_DEBUG | LWIP_DBG_LEVEL_WARNING,
+                    ("mem_buffer_release_all_tracked: force-freeing leaked buffer %p (type=%d)\n",
+                     (void *)rb, (int)rb->type));
+        mem_buffer_destroy(rb);
+        leaked++;
+    }
+    return leaked;
 }
 
 bool mem_buffer_is_lwip_pool(const struct mem_buffer *mb)

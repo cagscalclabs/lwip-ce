@@ -19,6 +19,7 @@
 #include "altcp_tls_ce.h"
 #include "../../tls/includes/aes.h"
 #include "../../tls/includes/bytes.h"
+#include "../../tls/includes/crypto_guard.h"
 #include "../../tls/includes/handshake.h"
 #include "../../tls/includes/tls.h"
 #include "../../drivers/mem.h"
@@ -1031,8 +1032,16 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         size_t client_hello_len = 0;
 
         tls_dbg_status("clienthello: gen");
-        if (!tls_send_client_hello(&state->tls_ctx, record + 5,
-                                   sizeof(record) - 5, &client_hello_len))
+        /* On the PSK path, tls_send_client_hello holds early_secret/
+         * binder_key/finished_key/binder/hmac_ctx on its own stack
+         * frame; wrapping the call lets tls_crypto_guard_disable()
+         * scrub that whole frame once it's returned and SP is back
+         * above it. Harmless no-op overhead on the non-PSK path. */
+        tls_crypto_guard_enable();
+        bool chello_ok = tls_send_client_hello(&state->tls_ctx, record + 5,
+                                               sizeof(record) - 5, &client_hello_len);
+        tls_crypto_guard_disable();
+        if (!chello_ok)
         {
             tls_dbg_status("clienthello: gen fail");
             if (conn->err)
@@ -1166,7 +1175,15 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                  * so we can decrypt the subsequent encrypted handshake records */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED)
                 {
-                    if (!tls_derive_handshake_keys(&state->tls_ctx))
+                    /* tls_derive_handshake_keys holds early_secret/
+                     * handshake_secret/derived_secret on its own stack
+                     * frame; wrapping the call lets tls_crypto_guard_disable()
+                     * scrub that whole frame once it's returned and SP is
+                     * back above it. */
+                    tls_crypto_guard_enable();
+                    bool derive_ok = tls_derive_handshake_keys(&state->tls_ctx);
+                    tls_crypto_guard_disable();
+                    if (!derive_ok)
                     {
                         ERROR();
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
@@ -1351,7 +1368,15 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                      * RFC 8446 Section 7.1 uses transcript through server Finished only.
                      * tls_send_finished() will update the transcript with client Finished. */
                     tls_dbg_status("keys: derive app");
-                    if (!tls_derive_application_keys(&state->tls_ctx))
+                    /* tls_derive_application_keys holds master_secret/
+                     * derived_secret on its own stack frame; wrapping the
+                     * call lets tls_crypto_guard_disable() scrub that
+                     * whole frame once it's returned and SP is back
+                     * above it. */
+                    tls_crypto_guard_enable();
+                    bool derive_app_ok = tls_derive_application_keys(&state->tls_ctx);
+                    tls_crypto_guard_disable();
+                    if (!derive_app_ok)
                     {
                         tls_dbg_status("keys: derive app fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: application key derivation failed\n"));
@@ -1405,8 +1430,15 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     uint8_t finished_hs[36];
                     size_t finished_hs_len = 0;
                     tls_dbg_status("clientfin: gen");
-                    if (!tls_send_finished(&state->tls_ctx, true, finished_hs,
-                                           sizeof(finished_hs), &finished_hs_len))
+                    /* tls_send_finished holds finished_key/verify_data/
+                     * hmac_ctx on its own stack frame; wrapping the call
+                     * lets tls_crypto_guard_disable() scrub that whole
+                     * frame once it's returned and SP is back above it. */
+                    tls_crypto_guard_enable();
+                    bool send_finished_ok = tls_send_finished(&state->tls_ctx, true, finished_hs,
+                                                              sizeof(finished_hs), &finished_hs_len);
+                    tls_crypto_guard_disable();
+                    if (!send_finished_ok)
                     {
                         tls_dbg_status("clientfin: gen fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished generation failed\n"));

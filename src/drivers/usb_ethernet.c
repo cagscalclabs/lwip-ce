@@ -130,6 +130,96 @@ static inline void eth_transfer_ended(eth_device_t *dev)
  * from a small intrusive list of dead-pending devices. */
 static eth_device_t *g_dead_devices = NULL; /* singly-linked via ->dead_next */
 
+/* Chain of caller-attached USB event listeners, invoked after lwIP's own
+ * handling in eth_usb_event_callback. Node storage is internal (lwIP owns
+ * it via mem_malloc) -- the caller only ever deals in plain
+ * usb_event_callback_t function pointers, never a node struct. Intrusive
+ * singly-linked list, same attach/detach/invoke shape as
+ * netif_ext_callback_t (src/core/netif.c), adapted to own its own nodes. */
+struct lwip_usb_callback_node
+{
+    usb_event_callback_t callback_fn;
+    struct lwip_usb_callback_node *next;
+};
+
+static struct lwip_usb_callback_node *g_usb_callback_chain = NULL;
+
+bool lwip_attach_usb_callback(usb_event_callback_t fn)
+{
+    LWIP_ASSERT("fn must be != NULL", fn != NULL);
+
+    for (struct lwip_usb_callback_node *iter = g_usb_callback_chain; iter != NULL; iter = iter->next)
+    {
+        if (iter->callback_fn == fn)
+        {
+            return false;
+        }
+    }
+
+    struct lwip_usb_callback_node *node = mem_malloc(sizeof(*node));
+    if (!node)
+    {
+        return false;
+    }
+    node->callback_fn    = fn;
+    node->next           = g_usb_callback_chain;
+    g_usb_callback_chain = node;
+    return true;
+}
+
+void lwip_detach_usb_callback(usb_event_callback_t fn)
+{
+    struct lwip_usb_callback_node *last = NULL;
+
+    LWIP_ASSERT("fn must be != NULL", fn != NULL);
+
+    for (struct lwip_usb_callback_node *iter = g_usb_callback_chain; iter != NULL; last = iter, iter = iter->next)
+    {
+        if (iter->callback_fn == fn)
+        {
+            if (last)
+            {
+                last->next = iter->next;
+            }
+            else
+            {
+                g_usb_callback_chain = iter->next;
+            }
+            mem_free(iter);
+            return;
+        }
+    }
+}
+
+/* Invoke every attached listener in turn, caching `next` before each call
+ * so a listener that detaches itself mid-walk doesn't break iteration
+ * (same safeguard as netif_invoke_ext_callback). */
+static void lwip_invoke_usb_callback_chain(usb_event_t event, void *event_data,
+                                           usb_callback_data_t *callback_data)
+{
+    struct lwip_usb_callback_node *callback = g_usb_callback_chain;
+
+    while (callback != NULL)
+    {
+        struct lwip_usb_callback_node *next = callback->next;
+        callback->callback_fn(event, event_data, callback_data);
+        callback = next;
+    }
+}
+
+void lwip_usb_callback_chain_clear(void)
+{
+    struct lwip_usb_callback_node *callback = g_usb_callback_chain;
+
+    while (callback != NULL)
+    {
+        struct lwip_usb_callback_node *next = callback->next;
+        mem_free(callback);
+        callback = next;
+    }
+    g_usb_callback_chain = NULL;
+}
+
 static void eth_free_device_storage(eth_device_t *dev)
 {
     if (!dev)
@@ -2044,11 +2134,12 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         POWER_EVENT(LWIP_POWER_HUB_LOST, boot_BatteryCharging());
         break;
     case USB_HOST_PORT_CONNECT_STATUS_CHANGE_INTERRUPT:
+        lwip_invoke_usb_callback_chain(event, event_data, callback_data);
         return USB_ERROR_NO_DEVICE;
-        break;
     default:
         break;
     }
+    lwip_invoke_usb_callback_chain(event, event_data, callback_data);
     return USB_SUCCESS;
 }
 

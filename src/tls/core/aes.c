@@ -4,7 +4,6 @@
 
 #include "../includes/aes.h"
 #include "../includes/bytes.h"
-#include "../includes/crypto_guard.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_AES
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -640,7 +639,6 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         return false;
     if ((in_len == 0) && !(ctx && (ctx->mode == TLS_AES_CCM) && (ctx->private.ccm.msg_len == 0)))
         return false;
-    tls_crypto_guard_enable();
     if (ctx->op_assoc == AES_OP_DECRYPT)
         goto cleanup;
     if (ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT)
@@ -711,7 +709,6 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     }
     ok = true;
 cleanup:
-    tls_crypto_guard_disable();
     return ok;
 }
 
@@ -725,7 +722,6 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         return false;
     bool ok = false;
 
-    tls_crypto_guard_enable();
     if (ctx->op_assoc == AES_OP_ENCRYPT)
         goto cleanup;
     if (ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT)
@@ -785,7 +781,6 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     }
     ok = true;
 cleanup:
-    tls_crypto_guard_disable();
     return ok;
 }
 

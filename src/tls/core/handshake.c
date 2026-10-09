@@ -178,6 +178,7 @@
 #include "x509_internal.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
+#include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
 #include "../contrib/x25519/src/x25519.h"
 #include <string.h>
@@ -192,6 +193,13 @@
 #define LWIP_DBG_FILE_ID LWIP_FILE_HANDSHAKE
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
+
+/* Cleanup helpers for TLS_AUTOZERO_BUF/TLS_AUTOZERO_STRUCT (bytes.h):
+ * every stack-local secret buffer in this file is one of these two
+ * shapes, so one helper per shape covers the whole file. */
+TLS_AUTOZERO_DECL(uint8_t, 32)
+TLS_AUTOZERO_DECL_STRUCT(tls_hmac_context)
+TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 
 /*
  * ============================================================================
@@ -1347,7 +1355,13 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
         break;
     case TLS_HANDSHAKE_FINISHED:
         INFO("hs: server finished");
+        /* tls_recv_finished holds finished_key/expected_verify_data/
+         * hmac_ctx on its own stack frame; wrapping the call (rather than
+         * scrubbing from inside it) lets tls_crypto_guard_disable() reach
+         * that whole frame once it's returned and SP is back above it. */
+        tls_crypto_guard_enable();
         ok = tls_recv_finished(ctx, true, msg, msg_len);
+        tls_crypto_guard_disable();
         break;
     case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
         INFO("hs: new ticket");
@@ -1655,24 +1669,21 @@ bool tls_send_client_hello(
         return false;
     }
 
-    /* For an HRR retry, generate a fresh X25519 keypair (RFC 8446 §4.1.4). */
-    if (is_hrr_retry)
-    {
-        for (size_t i = 0; i < 4; i++)
-        {
-            uint64_t rand = tls_random();
-            memcpy(&ctx->ecdhe_private[i * 8], &rand, 8);
-        }
-        if (!tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
-                                  NULL, NULL))
-        {
-            tls_secure_memzero(ctx->ecdhe_private, 32);
-            ctx->state = TLS_STATE_ERROR;
-            ERROR_CODE(0x2b);
-            return false;
-        }
-    }
+    /* RFC 8446 §4.1.2: key_share is only regenerated if the HRR itself
+     * requested a different group. The HRR parser (tls_parse_server_hello)
+     * already rejects any key_share group other than x25519 (the only
+     * group we support, and the one already sent in CH1), so a key_share
+     * HRR we accept at all never actually changes the group -- the
+     * original ecdhe_private/ecdhe_public from CH1 are still correct and
+     * must be resent as-is. Regenerating here would both violate the RFC
+     * and silently desync us from the key the server already began
+     * deriving against. */
 
+    /* early_secret/binder_key/finished_key/binder/hmac_ctx are secret
+     * material only ever populated inside the ctx->psk_mode block below,
+     * held on this function's own stack frame. They're cleaned up by
+     * the caller, which wraps this call with
+     * tls_crypto_guard_enable()/disable(). */
     uint8_t early_secret[32];
     uint8_t binder_key[32];
     uint8_t finished_key[32];
@@ -1727,7 +1738,9 @@ bool tls_send_client_hello(
     required_ext_len = 7 + 8 + 42 + 8 + 10 + 15 + sni_len + cookie_ext_len;
     if (ctx->psk_mode)
     {
-        required_ext_len += 7 + 47 + ctx->psk_identity.identity_len;
+        /* psk_key_exchange_modes (6: header 4 + modes-length 1 + psk_dhe_ke
+         * 1) + pre_shared_key fixed overhead (47) + identity bytes. */
+        required_ext_len += 6 + 47 + ctx->psk_identity.identity_len;
     }
     if (required_ext_len > 0xFFFFu)
     {
@@ -1913,14 +1926,18 @@ bool tls_send_client_hello(
 
     if (ctx->psk_mode)
     {
-        /* Extension 4: psk_key_exchange_modes */
+        /* Extension 4: psk_key_exchange_modes.
+         * Advertise psk_dhe_ke only -- never psk_ke. Offering psk_ke lets
+         * the server pick PSK-only resumption with no fresh ECDHE, so a
+         * later-compromised PSK/ticket key would retroactively expose that
+         * session's traffic. psk_dhe_ke-only means every resumed session
+         * still gets forward secrecy via a fresh key_share. */
         out[offset++] = 0x00;
         out[offset++] = 0x2d; /* Extension type */
         out[offset++] = 0x00;
-        out[offset++] = 0x03; /* Extension length */
-        out[offset++] = 0x02; /* Modes length */
+        out[offset++] = 0x02; /* Extension length */
+        out[offset++] = 0x01; /* Modes length */
         out[offset++] = 0x01; /* psk_dhe_ke (PSK with ECDHE) */
-        out[offset++] = 0x00; /* psk_ke (PSK-only fallback) */
 
         /* Extension 5: pre_shared_key (MUST be last extension) */
         out[offset++] = 0x00;
@@ -2031,8 +2048,19 @@ bool tls_send_client_hello(
          * RFC 8446 4.2.11.2: Truncate removes the entire OfferedPsks.binders
          * field, i.e. the 2-byte binders-vector length AND the 1-byte
          * PskBinderEntry length, not just the 32-byte HMAC value — so the
-         * cut point is binder_offset itself, not binder_offset + 3. */
-        if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+         * cut point is binder_offset itself, not binder_offset + 3.
+         *
+         * On an HRR retry the binder is computed over the transcript so
+         * far -- message_hash(CH1) || HRR -- followed by truncated CH2,
+         * not just truncated CH2 alone (RFC 8446 §4.2.11.2). ctx->
+         * transcript_hash already holds message_hash(CH1) || HRR at this
+         * point (set by the HRR parser in tls_parse_server_hello), so
+         * branch off a copy of it instead of starting from empty. */
+        if (is_hrr_retry && ctx->transcript_hash)
+        {
+            tls_hash_context_copy(&hash_ctx, ctx->transcript_hash);
+        }
+        else if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
         {
             ERROR_CODE(0x3a);
             return false;
@@ -3139,6 +3167,10 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
+    /* early_secret/handshake_secret/derived_secret are real TLS 1.3
+     * secrets held on this function's own stack frame. They're cleaned
+     * up by the caller, which wraps this call with
+     * tls_crypto_guard_enable()/disable(). */
     uint8_t early_secret[32];
     uint8_t handshake_secret[32];
     uint8_t derived_secret[32];
@@ -3328,6 +3360,9 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
+    /* master_secret/derived_secret are real TLS 1.3 secrets held on this
+     * function's own stack frame. They're cleaned up by the caller,
+     * which wraps this call with tls_crypto_guard_enable()/disable(). */
     uint8_t master_secret[32];
     uint8_t derived_secret[32];
     uint8_t empty_hash[32];
@@ -3490,6 +3525,10 @@ bool tls_send_finished(
         return false;
     }
 
+    /* finished_key/verify_data/hmac_ctx are secret-derived material held
+     * on this function's own stack frame. They're cleaned up by the
+     * caller, which wraps this call with
+     * tls_crypto_guard_enable()/disable(). */
     uint8_t finished_key[32];
     uint8_t verify_data[32];
     uint8_t transcript_hash[32];
@@ -3684,6 +3723,12 @@ static bool tls_recv_finished(
         }
     }
 
+    /* finished_key/expected_verify_data/hmac_ctx are secret-derived
+     * material held on this function's own stack frame. They're cleaned
+     * up by the caller, which wraps this call with
+     * tls_crypto_guard_enable()/disable() -- once this function returns,
+     * its whole frame sits below the caller's SP and gets scrubbed from
+     * there, regardless of which exit path was taken. */
     uint8_t finished_key[32];
     uint8_t expected_verify_data[32];
     uint8_t transcript_hash[32];
@@ -4104,7 +4149,10 @@ static bool tls_send_alert(
             const uint8_t *key, *iv;
             uint64_t *seq_num;
             uint8_t nonce[12];
-            struct tls_aes_context aes_ctx;
+            /* aes_ctx holds the expanded AES-GCM key schedule derived from
+             * the live client traffic key; TLS_AUTOZERO_STRUCT zeroes it
+             * automatically when this block ends. */
+            TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
             uint8_t auth_tag[16];
 
             if (phase == 1)

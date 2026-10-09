@@ -21,9 +21,6 @@ globl _tls_random_debug_source_ptr
 .type _tls_random_debug_source_ptr,@function
 
 
-extern _tls_crypto_guard_enable
-extern _tls_crypto_guard_disable
-
 ;-------------------------------------
 ; bool tls_random_init_entropy(void);
 _tls_random_init_entropy:
@@ -93,8 +90,14 @@ _tls_random_init_entropy:
 
 ;--------------------------------------
 ; uint64_t tls_random(void);
+; All sensitive state here (_sprng_entropy_pool, _sprng_sha_digest,
+; _sprng_sha_mbuffer, _sprng_hash_ctx) lives in a BSS overlay, never on
+; this function's own stack frame -- tls_crypto_guard_disable() (a
+; stack scrub) was never capable of reaching it regardless of where it
+; was called from. The entropy pool/SHA scratch is explicitly zeroed
+; via the ldir below instead; _sprng_rand itself is left intact since
+; it's the value about to be returned to the caller.
 _tls_random:
-    call _tls_crypto_guard_enable
 ; set rand to 0
     or a,a
     sbc hl,hl
@@ -174,7 +177,6 @@ _tls_random:
     ld bc, _sprng_rand.offset - 1
     ldir
 .Lrandom_return:
-    call _tls_crypto_guard_disable
 ; load 64 bits from _sprng_rand into BC:UDE:UHL
     ld hl,_sprng_rand
     ld c,(hl)

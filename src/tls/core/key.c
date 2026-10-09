@@ -19,6 +19,7 @@
 #include "../includes/aes.h"
 #include "../includes/random.h"
 #include "../includes/bytes.h"
+#include "../includes/crypto_guard.h"
 #include "../includes/base64.h"
 #include "../includes/passwords.h"
 #include "../includes/asn1.h"
@@ -1063,15 +1064,28 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
             if (!tls_rsa_decrypt_signature(ct, ct_len, __rsa_transient, &key->rsa))
                 return NULL;
             uint8_t tmp[RSA_TRANSIENT_SIZE];
+            /* tls_rsa_decode_oaep holds the recovered OAEP seed and
+             * derived mask/digest buffers on its own stack frame;
+             * wrapping the call lets tls_crypto_guard_disable() scrub
+             * that whole frame once it's returned and SP is back above
+             * it. */
+            tls_crypto_guard_enable();
             size_t plen = tls_rsa_decode_oaep(__rsa_transient, ct_len,
                                                tmp, NULL, TLS_HASH_SHA256);
+            tls_crypto_guard_disable();
             tls_secure_memzero(__rsa_transient, ct_len);
             if (plen == 0)
+            {
+                tls_secure_memzero(tmp, sizeof(tmp));
                 return NULL;
+            }
             uint8_t *plain;
             uint8_t *out = decrypt_blob_alloc(plen, &plain);
             if (!out)
+            {
+                tls_secure_memzero(tmp, plen);
                 return NULL;
+            }
             memcpy(plain, tmp, plen);
             tls_secure_memzero(tmp, plen);
             return out;

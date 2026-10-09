@@ -740,3 +740,5 @@ func,altcp_ws_new_tls,ws,src/apps/altcp_ws/altcp_ws.h,lwip/core/altcp_ws.h
 func,altcp_ws_alloc,ws,src/apps/altcp_ws/altcp_ws.h,lwip/core/altcp_ws.h
 func,lwip_socket_set_ws_config,socket,src/lwIP.h,lwip.h
 func,tls_rsa_pkcs1_v15_sha256_verify,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
+func,lwip_attach_usb_callback,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
+func,lwip_detach_usb_callback,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h

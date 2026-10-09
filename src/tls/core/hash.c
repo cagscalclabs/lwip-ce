@@ -50,6 +50,11 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
     return ctx->init(&ctx->_private);
 }
 
+void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_context *src)
+{
+    memcpy(dst, src, sizeof(*dst));
+}
+
 void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *data, size_t len)
 {
     tls_crypto_guard_enable();

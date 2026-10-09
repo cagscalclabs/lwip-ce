@@ -5,7 +5,6 @@
 #include "../includes/random.h"
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
-#include "../includes/crypto_guard.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_RSA
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -102,7 +101,6 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         return false;
     }
 
-    tls_crypto_guard_enable();
     bool ok = false;
 
     struct tls_hash_context hash;
@@ -150,7 +148,6 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     // Return the static size of 256
     ok = true;
 cleanup:
-    tls_crypto_guard_disable();
     return ok;
 }
 
@@ -165,7 +162,10 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     if (inbuf != outbuf && rsa_buffers_overlap(inbuf, in_len, outbuf, in_len))
         return 0;
 
-    tls_crypto_guard_enable();
+    /* seed/sha256_digest/mgf_block below hold the recovered OAEP seed
+     * and its derived masks -- real secret material held on this
+     * function's own stack frame. They're cleaned up by the caller,
+     * which wraps this call with tls_crypto_guard_enable()/disable(). */
     size_t out_len = 0;
 
     struct tls_hash_context hash;
@@ -226,7 +226,6 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     if (!have_delimiter)
         goto cleanup;
 cleanup:
-    tls_crypto_guard_disable();
     return out_len;
 }
 
@@ -260,7 +259,6 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     for (size_t i = 0; i < key->exp_len; i++)
         exp = (exp << 8) | key->exponent[i];
 
-    tls_crypto_guard_enable();
     bool ok = false;
     size_t spos = 0;
 
@@ -274,7 +272,6 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
     ok = true;
 cleanup:
-    tls_crypto_guard_disable();
     return ok;
 }
 
@@ -318,17 +315,13 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
     }
 
     RSA_TRACE("decsig: pre-guard");
-    tls_crypto_guard_enable();
     bool ok = false;
 
     memcpy(outbuf, signature, key->mod_len);
-    tls_crypto_guard_disable();
     RSA_TRACE("decsig: pre-powmod");
-    tls_crypto_guard_enable();
     powmod_exp_u24((uint8_t)key->mod_len, outbuf, exp, key->modulus);
     tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
     ok = true;
-    tls_crypto_guard_disable();
     RSA_TRACE("decsig: post-powmod");
     return ok;
 }
@@ -363,7 +356,6 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     /* Derive em_bits from em_len: modBits - 1 */
     uint16_t em_bits = (uint16_t)((em_len * 8) - 1);
 
-    tls_crypto_guard_enable();
     bool ok = false;
 
     struct tls_hash_context hash;
@@ -443,7 +435,6 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
         ERROR();
     }
 cleanup:
-    tls_crypto_guard_disable();
     return ok;
 }
 

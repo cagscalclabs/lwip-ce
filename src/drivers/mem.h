@@ -356,6 +356,19 @@ bool mem_buffer_lwip_init_pools(const struct mem_buffer_pool_cfg *pools,
  */
 void mem_buffer_lwip_release_pools(void);
 /**
+ * @brief Force-free every still-tracked mem_buffer (ring/pool/file-type)
+ *        left outstanding, as a teardown safety net.
+ * @note Call last, after every subsystem (TLS, lwIP pools, etc.) has had
+ *       the chance to free its own buffers during normal teardown.
+ *       Anything still alive at this point is a leak -- this prevents it
+ *       from surviving into a subsequent lwip_start() in the same process.
+ *       Does not cover plain mem_buffer_custom_malloc allocations (socket
+ *       structs, eth_device_t, PSK cache, etc.), which are not mem_buffer
+ *       objects and remain each subsystem's own responsibility.
+ * @return Number of buffers that were force-freed (0 means no leak found).
+ */
+size_t mem_buffer_release_all_tracked(void);
+/**
  * @brief Check if a buffer is an lwIP pool.
  * @param mb Buffer.
  * @return true if lwIP pool, false otherwise.
