@@ -36,36 +36,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history: the staleness check below walks `git log -- src/`
-          # to find the last commit touching src/, which a shallow (depth-1)
-          # clone can't resolve correctly (it only ever has HEAD itself).
+          # Keep full history so the report's src_commit remains useful
+          # provenance even though freshness is decided by src_hash.
           fetch-depth: 0
+          # src/ includes the X25519 gitlink, and its working-tree contents are
+          # part of the source fingerprint produced by the local DAST runner.
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Check report covers current src/ commit
+      - name: Check report covers current src/ contents
         run: |
-          report_commit=$(python3 -c "
+          readarray -t report_source < <(python3 -c "
           import json
           with open('tests/dast.json') as f:
               d = json.load(f)
           print(d.get('src_commit', ''))
+          print(d.get('src_hash', ''))
           ")
-          src_commit=$(git log -1 --format="%H" -- src/)
-          if [ -z "$src_commit" ]; then
-            echo "No commits touch src/ — skipping staleness check."
-            exit 0
-          fi
-          echo "Report tested : $report_commit"
-          echo "Current src/  : $src_commit"
-          if [ "$report_commit" != "$src_commit" ]; then
-            echo "::error::dast.json was generated against $report_commit but src/ is now at $src_commit — re-run the DAST harness and commit a fresh report."
+          report_commit=${report_source[0]}
+          report_hash=${report_source[1]}
+          current_hash=$(python3 build-tools/dast/lwip-dast.py --src-hash)
+          if [ -z "$report_hash" ]; then
+            echo "::error::dast.json has no src_hash — re-run the DAST harness once to record the exact tested source contents."
             exit 1
           fi
-          echo "Report is current."
+          echo "Report commit : $report_commit (provenance only)"
+          echo "Report src hash: $report_hash"
+          echo "Current src hash: $current_hash"
+          if [ "$report_hash" != "$current_hash" ]; then
+            echo "::error::dast.json covers different src/ contents — re-run the DAST harness and commit the refreshed report."
+            exit 1
+          fi
+          echo "Report covers the current src/ contents."
 
       - name: Render report to job summary and gate on failures
         run: |

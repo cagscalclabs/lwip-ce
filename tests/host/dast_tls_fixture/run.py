@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,11 @@ root = Path(__file__).resolve().parents[3]
 path = root / 'build-tools/dast/lwip-dast.py'
 source = path.read_text()
 compile(source, str(path), 'exec')
+
+fingerprint = subprocess.run([sys.executable, str(path), '--src-hash'],
+                             check=True, capture_output=True, text=True).stdout.strip()
+assert len(fingerprint) == 64 and all(c in '0123456789abcdef' for c in fingerprint)
+
 names = {'ensure_test_cert', 'TlsFixtures'}
 selected = [n for n in ast.parse(source).body
             if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]

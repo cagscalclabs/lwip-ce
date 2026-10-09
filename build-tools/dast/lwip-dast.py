@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -574,12 +575,73 @@ def _src_commit() -> str:
         return "unknown"
 
 
+def _src_hash() -> str:
+    """Fingerprint the exact working-tree src/ contents tested by DAST.
+
+    A commit ID is insufficient here because DAST is normally run before the
+    source and report are committed together. Length-prefixing paths and file
+    contents makes the digest deterministic and unambiguous across machines.
+    """
+    def git_visible_files(repo: Path, pathspec: str,
+                          prefix: Path) -> list[tuple[Path, Path]]:
+        listed = subprocess.check_output(
+            ["git", "ls-files", "-z", "--cached", "--others",
+             "--exclude-standard", "--", pathspec],
+            cwd=repo, stderr=subprocess.DEVNULL
+        )
+        files: list[tuple[Path, Path]] = []
+        for item in listed.split(b"\0"):
+            if not item:
+                continue
+            local = Path(os.fsdecode(item))
+            absolute = repo / local
+            relative = prefix / local
+            if absolute.is_dir():
+                # A tracked directory is a gitlink. Fingerprint its working
+                # tree too, so pre-commit submodule changes work exactly like
+                # pre-commit changes in the parent repository.
+                files.extend(git_visible_files(absolute, ".", relative))
+            else:
+                files.append((relative, absolute))
+        return files
+
+    digest = hashlib.sha256()
+    try:
+        source_files = git_visible_files(REPO_ROOT, "src/", Path())
+    except Exception:
+        src_root = REPO_ROOT / "src"
+        source_files = [
+            (path.relative_to(REPO_ROOT), path)
+            for path in src_root.rglob("*")
+            if ".git" not in path.relative_to(src_root).parts
+        ]
+
+    for relative_path, path in sorted(source_files,
+                                      key=lambda item: item[0].as_posix()):
+        if path.is_symlink():
+            kind = b"L"
+            data = os.readlink(path).encode("utf-8")
+        elif path.is_file():
+            kind = b"F"
+            data = path.read_bytes()
+        else:
+            continue
+        relative = relative_path.as_posix().encode("utf-8")
+        digest.update(kind)
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
 def write_report(target_ip: str, results: list[dict]) -> None:
     fails = sum(1 for r in results if r["grade"] == "fail")
     doc = {
         "tool": "lwip-dast",
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "src_commit": _src_commit(),
+        "src_hash": _src_hash(),
         "target_ip": target_ip,
         "summary": {
             "total": len(results),
@@ -851,7 +913,13 @@ def main() -> int:
                     help="regenerate the calc-side C test list and exit")
     ap.add_argument("--self-test", action="store_true",
                     help="dry run: no packets, no prompts, no root needed")
+    ap.add_argument("--src-hash", action="store_true",
+                    help="print the deterministic working-tree src/ fingerprint and exit")
     args = ap.parse_args()
+
+    if args.src_hash:
+        print(_src_hash())
+        return 0
 
     if args.gen_header:
         gen_header()

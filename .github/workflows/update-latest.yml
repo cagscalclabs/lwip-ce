@@ -146,7 +146,7 @@ jobs:
           PATHS[timing.yml]="src/** tests/profiling/tls_timing/** tests/common/** .github/workflows/timing.yml"
           PATHS[tests.yml]="src/** tests/unit/** tests/common/** .github/workflows/tests.yml"
           PATHS[sast.yml]="src/** .github/workflows/sast.yml"
-          PATHS[dast.yml]="tests/dast.json"
+          PATHS[dast.yml]="src/** tests/dast.json"
 
           all_covered=true
           report=""
