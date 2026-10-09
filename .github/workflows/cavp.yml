@@ -97,7 +97,19 @@ jobs:
         # triggered us (its head_sha is what we checked out above) --
         # no need to re-query "latest successful", which is what raced
         # build.yml's own upload in the old push-triggered design.
+        #
+        # build.yml's own dylib_latest job can legitimately SKIP (its
+        # sentinel-cache gate found nothing changed since the last
+        # successful build -- e.g. a scheduled run that lands on a
+        # no-op tick) while the overall run still reports "success"
+        # (a skipped job doesn't fail a workflow). That means a
+        # workflow_run completion here is not a guarantee an artifact
+        # actually exists. Treat "no artifact" as "nothing to test this
+        # time" (found=false, job exits clean) rather than a failure --
+        # the alternative is this job hard-failing on every build.yml
+        # no-op tick with nothing to actually report on.
         if: inputs.artifact_name == ''
+        id: download_build_artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -108,18 +120,33 @@ jobs:
               --jq '.workflow_runs[0].id')
           fi
           if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-            echo "::error::No build.yml run found to pull an artifact from."
-            exit 1
+            echo "::warning::No build.yml run found to pull an artifact from -- nothing to test."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          has_artifact=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" \
+            --jq '.artifacts[] | select(.name == "lwip-latest") | .name' | head -1)
+          if [ -z "$has_artifact" ]; then
+            echo "::warning::build.yml run $run_id has no lwip-latest artifact (its build job likely skipped as a no-op) -- nothing to test."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           gh run download "$run_id" --repo "${{ github.repository }}" --name lwip-latest --dir "${{github.workspace}}/release"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - name: No artifact to test
+        if: inputs.artifact_name == '' && steps.download_build_artifact.outputs.found != 'true'
+        run: echo "No lwip-latest artifact available this run; skipping CAVP." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify build artifact contents
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           test -f "${{github.workspace}}/release/appinst/lwIPINST.8xp"
           test -n "$(find "${{github.workspace}}/release/appinst" -name 'LWIP.*.8xv' -print -quit)"
           ls -lh "${{github.workspace}}/release"
 
       - name: Install lwip.lib + headers into CEdev
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           mkdir -p "${{env.CEDEV}}/lib/libload" "${{env.CEDEV}}/include"
           cp "${{github.workspace}}/release/lwip.lib" "${{env.CEDEV}}/lib/libload/lwip.lib"
@@ -130,6 +157,7 @@ jobs:
           test -d "${{env.CEDEV}}/include/lwip"
 
       - name: Download CEmu Rom
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           curl -fSL \
             --retry 3 \
@@ -150,6 +178,7 @@ jobs:
           fi
 
       - name: Checkout CEmu
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         uses: actions/checkout@v4
         with:
           repository: CE-Programming/CEmu
@@ -158,6 +187,7 @@ jobs:
           persist-credentials: false
 
       - name: Cache CEmu Build Outputs
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         id: cemu-cache
         uses: actions/cache@v5
         with:
@@ -167,17 +197,19 @@ jobs:
             ${{env.CEMU_PATH}}/tests/autotester/autotester
 
       - name: Build CEmu
-        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        if: (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true') && steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
-        if: steps.cemu-cache.outputs.cache-hit != 'true'
+        if: (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true') && steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
 
       - name: Install Autotester CLI
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
 
       - name: Verify saveVar Support In Autotester
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           # saveVar is required to pull CAVPOUT.8xv off the emulator after the run
           strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar" || {
@@ -186,11 +218,13 @@ jobs:
           }
 
       - name: Verify Autotester Setup
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           ls -lh ${{env.AUTOTESTER_ROM}}
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
       - name: Prepare shared dyload test files
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           mkdir -p ${{env.LWIP_TESTS_COMMON}}
           cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
@@ -218,6 +252,7 @@ jobs:
           ls -lh ${{env.LWIP_TESTS_COMMON}}
 
       - name: Cache CAVP vector archives
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         # NIST CAVP zips are bandwidth-friendly to cache (a few MB each) and
         # version-stable; refreshing them isn't valuable per-CI-run. The
         # actual vectors are re-sampled randomly inside cavp_fetch.py.
@@ -229,6 +264,7 @@ jobs:
             ${{ runner.os }}-cavp-archives-
 
       - name: Fetch CAVP vectors and pack input AppVars
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         # cavp_fetch.py: downloads NIST CAVP zips (if not cached), parses
         # the .rsp files, randomly samples vectors per algorithm, merges in
         # generated RSA-PSS/RSA-PKCS1v15/PBKDF2/HKDF/X25519 coverage plus
@@ -240,6 +276,7 @@ jobs:
                  "${{env.CAVP_TEST_DIR}}/vectors/expected.json"
 
       - name: Run CAVP Test
+        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         id: run_cavp
         run: |
           test_dir="${{env.CAVP_TEST_DIR}}"
@@ -262,7 +299,7 @@ jobs:
 
       - name: Locate CAVPOUT AppVar
         id: locate_appvar
-        if: always()
+        if: always() && (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true')
         run: |
           test_dir="${{env.CAVP_TEST_DIR}}"
           appvar_out="$test_dir/CAVPOUT.8xv"
@@ -301,7 +338,7 @@ jobs:
           exit $grade_status
 
       - name: Upload CAVP Raw Artifacts
-        if: always()
+        if: always() && (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: tls-cavp-raw
