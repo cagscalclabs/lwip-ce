@@ -15,6 +15,15 @@ is up:
 See :doc:`getting-started` for the full setup sequence including the
 required ``BSSHEAP_LOW`` makefile setting.
 
+.. note::
+
+    Some consumers may need to use other USB drivers at the same time as lwIP-CE owns the Ethernet driver. As of Version 2.1, lwIP-CE now allows for chained USB callbacks to be registered via:
+
+    .. code-block::c
+
+        lwip_attach_usb_callback(usb_event_callback_t fn);
+        lwip_detach_usb_callback(usb_event_callback_t fn);
+
 Socket-Style v. PCB-Level API
 ------------------------------
 
