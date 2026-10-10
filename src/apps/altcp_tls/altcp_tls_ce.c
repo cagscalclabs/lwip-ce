@@ -1954,8 +1954,10 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)conf;
     altcp_tls_ce_state_t *state;
 
-    if (!conf)
+    if (!conf || !tls_ctx.initialized)
     {
+        /* lwip_start() deliberately survives a TLS-only initialization
+         * failure. Do not let direct ALTCP callers bypass that TLS gate. */
         return ERR_ARG;
     }
     LWIP_ASSERT("invalid inner_conn", conn != inner_conn);

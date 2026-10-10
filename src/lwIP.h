@@ -14,8 +14,8 @@
  *                                  Sufficient on its own for crypto/memory
  *                                  primitives (every unit test under
  *                                  tests/unit/ relies on this).
- *   lwip_network_up()           — bring up USB/netif + TLS truststore/PSK
- *                                  cache; call once before networking
+ *   lwip_network_up()           — bring up USB/netif; call once before
+ *                                  networking
  *   lwip_service_events()  — every main-loop iteration (drives callbacks)
  *   lwip_socket_create()        — allocate handle, bind netif, kick DHCP
  *   lwip_socket_on_event()      — register single event callback + arg

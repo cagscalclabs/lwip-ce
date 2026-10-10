@@ -504,11 +504,11 @@ static void tls_rng_ensure_attached(void)
     attached = true;
 }
 
-static bool tls_rng_healthcheck_start(void)
+static void tls_rng_healthcheck_start(void)
 {
     if (g_tls_rng_health_timer_running)
     {
-        return g_tls_rng_health_ready;
+        return;
     }
     g_tls_rng_health_failures = 0;
     g_tls_rng_health_ready = tls_random_init_entropy();
@@ -531,7 +531,6 @@ static bool tls_rng_healthcheck_start(void)
     }
     lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_HEALTHCHECK,
                              lwip_dispatch_period_from_ms(TLS_RNG_HEALTHCHECK_INTERVAL_MS));
-    return g_tls_rng_health_ready;
 }
 
 static void tls_rng_healthcheck_stop(void)
@@ -658,12 +657,15 @@ bool tls_rng_is_busy(void)
     return g_tls_rng_request_active || (g_tls_rng_request_q_head != NULL);
 }
 
-bool tls_rng_start(void)
+void tls_rng_start(void)
 {
 #if LWIP_TIMERS
-    return tls_rng_healthcheck_start();
+    tls_rng_healthcheck_start();
 #else
-    return tls_random_init_entropy();
+    /* Readiness is checked by each randomness-consuming operation. Startup
+     * must not make deterministic crypto primitives depend on entropy being
+     * immediately available. */
+    (void)tls_random_init_entropy();
 #endif
 }
 

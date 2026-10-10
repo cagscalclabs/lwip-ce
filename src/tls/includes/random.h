@@ -100,7 +100,13 @@ bool tls_rng_is_busy(void);
 
 /* Internal lifecycle hooks used by tls.c. They are intentionally not part of
  * the release API surface. */
-bool tls_rng_start(void);
+/** Start RNG health monitoring and entropy gathering.
+ *
+ * Entropy may not be ready immediately (notably under CEmu). Operations that
+ * require randomness must use tls_request_random_bytes(), which enforces
+ * readiness and fails closed if entropy cannot be obtained.
+ */
+void tls_rng_start(void);
 void tls_rng_cleanup(void);
 
 #endif

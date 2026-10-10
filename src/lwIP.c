@@ -288,9 +288,10 @@ bool lwip_stack_init(void)
      * setting -- skip it entirely when TLS is disabled. */
     if (g_lwip_cfg.tls_enabled && !tls_init())
     {
-        g_lwip_start_error = 1;
-        lwip_membuffers_release();
-        return false;
+        /* TLS initialization failures are component-scoped. Keep the base
+         * stack and deterministic crypto/parser APIs available; TLS creation
+         * retries tls_init() and remains gated until the problem is resolved. */
+        WARN();
     }
 
 #if LWIP_NETIF_EXT_STATUS_CALLBACK

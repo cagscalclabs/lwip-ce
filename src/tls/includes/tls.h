@@ -72,10 +72,10 @@ bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
  */
 struct pbuf *tls_rx_pbuf_alloc(uint16_t len);
 
-/** Initialize the TLS subsystem: starts the RNG, then brings up the cert
- *  truststore and the PSK/session-ticket resumption cache. Internal —
- *  dispatched from lwip_network_up(), not part of the public surface.
- *  Call before any TLS operations. */
+/** Initialize the TLS subsystem: starts the RNG service, then brings up the
+ *  cert truststore and PSK/session-ticket resumption cache. Internal —
+ *  attempted from lwip_start(), with failure scoped to TLS so deterministic
+ *  crypto and the base stack remain available. Call before TLS operations. */
 bool tls_init(void);
 
 /**
