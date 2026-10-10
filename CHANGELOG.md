@@ -59,3 +59,15 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - Implement IP-based SAN verification; Omit SNI for IP literals.
 - DAST certificates now include the runner control-source IPv4 address.
 - Stabilize RTC locale behavior.
+
+## v2.1-stable
+
+- Fix bug in AES-GCM where 0-length AAD was not handled correctly (CAVP-identified).
+- Fix bug where `tls_crypto_guard_disable()` was not freeing the intended stack frames.
+- Make `HelloRetryRequest` RFC-compliant.
+- Implement USB callback chaining.
+
+## v2.1.1-stable
+
+- TLS handshakes build static portions via memcpy and dynamic portions dynamically
+- tls_algorithms.h include file added for easy oid inclusion, and easy reference within project
