@@ -50,6 +50,7 @@
 #if LWIP_ALTCP_TLS
 
 #include "lwip/altcp.h"
+#include "../../tls/includes/tls-alpn.h"
 
 /* check if mbedtls port is enabled */
 #include "lwip/apps/altcp_tls_mbedtls_opts.h"
@@ -123,7 +124,9 @@ struct altcp_tls_config *altcp_tls_create_config_client_2wayauth(const u8_t *ca,
                             const u8_t *cert, size_t cert_len);
 
 /** @ingroup altcp_tls
- * Configure ALPN TLS extension
+ * Configure the ALPN TLS extension. Protocol strings are copied into the
+ * configuration, may be released by the caller after this function returns,
+ * and remain in preference order. Passing NULL or an empty list disables ALPN.
  * Example:<br>
  * static const char *g_alpn_protocols[] = { "x-amzn-mqtt-ca", NULL };<br>
  * tls_config = altcp_tls_create_config_client(ca, ca_len);<br>

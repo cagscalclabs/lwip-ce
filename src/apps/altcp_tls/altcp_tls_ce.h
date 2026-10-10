@@ -80,6 +80,10 @@ struct altcp_tls_ce_config {
     /* SNI hostname (pointer to caller-owned string, must outlive config) */
     const char *hostname;
 
+    /* Serialized ALPN ProtocolNameList entries, owned by this config. */
+    uint8_t *alpn_protocols;
+    size_t alpn_protocols_len;
+
     /* Certificate/key for RSA mode (future) */
     const u8_t *cert;
     size_t cert_len;

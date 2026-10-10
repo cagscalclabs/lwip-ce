@@ -233,7 +233,14 @@ static void tls_psk_cache_load(void)
     {
         struct tls_psk_cache_entry e;
         file_fn.ti_read(&e, sizeof(e), 1, h);
-        if (!e.in_use || tls_psk_cache_entry_expired(&e, now))
+        const char *hostname_end = (const char *)memchr(e.hostname, '\0', sizeof(e.hostname));
+        if (!e.in_use || !hostname_end || hostname_end == e.hostname ||
+            e.identity.identity_len == 0 ||
+            e.identity.identity_len > sizeof(e.identity.identity) ||
+            e.ticket_lifetime == 0 || e.ticket_lifetime > 7u * 24u * 60u * 60u ||
+            (e.psk_type != TLS_PSK_TYPE_RESUMPTION &&
+             e.psk_type != TLS_PSK_TYPE_EXTERNAL) ||
+            tls_psk_cache_entry_expired(&e, now))
             continue;
         g_psk_cache[out++] = e;
     }
@@ -284,13 +291,25 @@ bool tls_init(void)
         return true;
     }
 
-    tls_ctx.initialized = true;
-    tls_rng_start();
+    if (!tls_rng_start())
+    {
+        ERROR();
+        return false;
+    }
 
     tls_ctx.network_up = true;
-    tls_truststore_init();
+    tls_ctx.truststore.status = tls_truststore_init();
+    if (tls_ctx.truststore.status != TLS_STORE_OK &&
+        tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
+    {
+        tls_rng_cleanup();
+        tls_ctx.network_up = false;
+        return false;
+    }
     tls_psk_cache_alloc();
     tls_psk_cache_load();
+
+    tls_ctx.initialized = true;
 
     INFO("tls_init done");
     return true;

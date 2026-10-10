@@ -11,7 +11,7 @@ Bootstrapping
 ~~~~~~~~~~~~~~~
 
 lwIP-CE is too big to statically include into every program that wants to use it. The core
-plus TLS is around 375 KiB, and the calculator only has just under 2 MB of Flash,
+plus TLS is around 420 KiB, and the calculator only has just under 2 MB of Flash,
 so statically linking it into each consumer would burn that space fast. Instead,
 lwIP-CE ships as a resident **application** that other programs call into. One
 copy lives on the calculator; everything else dispatches to it.

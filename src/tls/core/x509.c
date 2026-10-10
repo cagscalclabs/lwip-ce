@@ -54,7 +54,6 @@ static bool tls_x509_parse_name_common_name(const struct tls_asn1_tlv *name_tlv,
     static const uint8_t oid_common_name[] = {0x55, 0x04, 0x03};
     struct tls_asn1_cursor rdn_cursor;
     struct tls_asn1_tlv rdn_set;
-    bool have_first_string = false;
 
     if (!name_tlv || !out)
     {
@@ -76,8 +75,8 @@ static bool tls_x509_parse_name_common_name(const struct tls_asn1_tlv *name_tlv,
      * Name ::= SEQUENCE OF RDN
      * RDN  ::= SET OF AttributeTypeAndValue
      *
-     * We prefer CN (2.5.4.3), but fall back to the first string value to
-     * preserve prior behavior for certs that omit CN but include other RDNs.
+     * Only CN (2.5.4.3) is returned. Other RDN string values must never be
+     * treated as a CommonName.
      */
     while (tls_asn1_next(&rdn_cursor, &rdn_set))
     {
@@ -116,14 +115,6 @@ static bool tls_x509_parse_name_common_name(const struct tls_asn1_tlv *name_tlv,
                 continue;
             }
 
-            if (!have_first_string)
-            {
-                out->tag = attr_value.tag;
-                out->data = (uint8_t *)attr_value.value;
-                out->len = attr_value.len;
-                have_first_string = true;
-            }
-
             if (tls_x509_oid_eq(&attr_oid, oid_common_name, sizeof(oid_common_name)))
             {
                 out->tag = attr_value.tag;
@@ -134,7 +125,10 @@ static bool tls_x509_parse_name_common_name(const struct tls_asn1_tlv *name_tlv,
         }
     }
 
-    return have_first_string;
+    out->tag = 0;
+    out->data = NULL;
+    out->len = 0;
+    return true;
 }
 
 static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_tlv,
@@ -387,6 +381,154 @@ static bool tls_x509_parse_constraints_from_extensions(const uint8_t *ext_data, 
     }
 
     return true;
+}
+
+/* Validate the extension subset needed by this client path builder. Anything
+ * critical that we do not interpret is rejected; nameConstraints is rejected
+ * even when non-critical because silently ignoring it can broaden a CA's
+ * authority. */
+bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
+                                       bool is_ca, size_t subordinate_ca_count)
+{
+    static const uint8_t oid_basic_constraints[] = {0x55, 0x1D, 0x13};
+    static const uint8_t oid_key_usage[] = {0x55, 0x1D, 0x0F};
+    static const uint8_t oid_subject_alt_name[] = {0x55, 0x1D, 0x11};
+    static const uint8_t oid_extended_key_usage[] = {0x55, 0x1D, 0x25};
+    static const uint8_t oid_name_constraints[] = {0x55, 0x1D, 0x1E};
+    static const uint8_t oid_server_auth[] = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01};
+    static const uint8_t oid_any_eku[] = {0x55, 0x1D, 0x25, 0x00};
+    struct tls_asn1_cursor outer, list;
+    struct tls_asn1_tlv item;
+    bool have_bc = false, ca = false, have_path_len = false;
+    bool have_ku = false, digital_signature = false, key_cert_sign = false;
+    bool have_eku = false, server_auth = false;
+    size_t path_len = 0;
+
+    if (!cert || !cert->extensions || cert->extensions_len == 0)
+        return !is_ca; /* leaf extensions may be absent; CA constraints may not */
+    if (!tls_asn1_cursor_init(&outer, cert->extensions, cert->extensions_len))
+        return false;
+    list = outer;
+    if (!tls_asn1_next(&outer, &item))
+        return false;
+    if (item.header_len + item.len == cert->extensions_len &&
+        tls_asn1_tag_constructed(item.tag) &&
+        tls_asn1_tag_number(item.tag) == ASN1_SEQUENCE)
+    {
+        if (!tls_asn1_child_cursor(&item, &list)) return false;
+    }
+    else
+    {
+        list = outer;
+        list.cur = cert->extensions;
+    }
+
+    while (list.cur < list.end)
+    {
+        struct tls_asn1_cursor ec, vc;
+        struct tls_asn1_tlv ext, oid, next, value, inner;
+        bool critical = false;
+        if (!tls_asn1_next(&list, &ext) ||
+            !tls_asn1_tag_constructed(ext.tag) ||
+            tls_asn1_tag_number(ext.tag) != ASN1_SEQUENCE ||
+            !tls_asn1_child_cursor(&ext, &ec) ||
+            !tls_asn1_next(&ec, &oid) ||
+            tls_asn1_tag_number(oid.tag) != ASN1_OBJECTID ||
+            !tls_asn1_next(&ec, &next))
+            return false;
+        if (tls_asn1_tag_number(next.tag) == ASN1_BOOLEAN)
+        {
+            if (next.len != 1 || (next.value[0] != 0x00 && next.value[0] != 0xFF) ||
+                !tls_asn1_next(&ec, &value))
+                return false;
+            critical = next.value[0] != 0;
+        }
+        else value = next;
+        if (tls_asn1_tag_number(value.tag) != ASN1_OCTETSTRING || ec.cur != ec.end)
+            return false;
+
+        bool is_bc = oid.len == sizeof(oid_basic_constraints) &&
+                     memcmp(oid.value, oid_basic_constraints, sizeof(oid_basic_constraints)) == 0;
+        bool is_ku = oid.len == sizeof(oid_key_usage) &&
+                     memcmp(oid.value, oid_key_usage, sizeof(oid_key_usage)) == 0;
+        bool is_san = oid.len == sizeof(oid_subject_alt_name) &&
+                      memcmp(oid.value, oid_subject_alt_name, sizeof(oid_subject_alt_name)) == 0;
+        bool is_eku = oid.len == sizeof(oid_extended_key_usage) &&
+                      memcmp(oid.value, oid_extended_key_usage, sizeof(oid_extended_key_usage)) == 0;
+        bool is_nc = oid.len == sizeof(oid_name_constraints) &&
+                     memcmp(oid.value, oid_name_constraints, sizeof(oid_name_constraints)) == 0;
+
+        if (is_nc) return false;
+        if (!is_bc && !is_ku && !is_san && !is_eku)
+        {
+            if (critical) return false;
+            continue;
+        }
+        if (is_san) continue; /* Fully parsed by hostname validation for leaves. */
+        if (!tls_asn1_cursor_init(&vc, value.value, value.len) ||
+            !tls_asn1_next(&vc, &inner) || vc.cur != vc.end)
+            return false;
+
+        if (is_bc)
+        {
+            struct tls_asn1_cursor bc;
+            struct tls_asn1_tlv v;
+            if (have_bc || !tls_asn1_tag_constructed(inner.tag) ||
+                tls_asn1_tag_number(inner.tag) != ASN1_SEQUENCE ||
+                !tls_asn1_child_cursor(&inner, &bc)) return false;
+            have_bc = true;
+            if (bc.cur < bc.end)
+            {
+                if (!tls_asn1_next(&bc, &v)) return false;
+                if (tls_asn1_tag_number(v.tag) == ASN1_BOOLEAN)
+                {
+                    if (v.len != 1 || (v.value[0] != 0x00 && v.value[0] != 0xFF)) return false;
+                    ca = v.value[0] != 0;
+                    if (bc.cur == bc.end) goto basic_constraints_done;
+                    if (!tls_asn1_next(&bc, &v)) return false;
+                }
+                if (tls_asn1_tag_number(v.tag) != ASN1_INTEGER || v.len == 0 ||
+                    v.len > sizeof(size_t) || (v.value[0] & 0x80)) return false;
+                for (size_t i = 0; i < v.len; i++) path_len = (path_len << 8) | v.value[i];
+                have_path_len = true;
+            }
+basic_constraints_done:
+            if (bc.cur != bc.end || (have_path_len && !ca)) return false;
+        }
+        else if (is_ku)
+        {
+            if (have_ku || tls_asn1_tag_number(inner.tag) != ASN1_BITSTRING ||
+                inner.len < 2 || inner.value[0] > 7) return false;
+            have_ku = true;
+            digital_signature = (inner.value[1] & 0x80) != 0;
+            key_cert_sign = (inner.value[1] & 0x04) != 0;
+        }
+        else /* extendedKeyUsage */
+        {
+            struct tls_asn1_cursor eku;
+            struct tls_asn1_tlv purpose;
+            if (have_eku || !tls_asn1_tag_constructed(inner.tag) ||
+                tls_asn1_tag_number(inner.tag) != ASN1_SEQUENCE ||
+                !tls_asn1_child_cursor(&inner, &eku)) return false;
+            have_eku = true;
+            while (eku.cur < eku.end)
+            {
+                if (!tls_asn1_next(&eku, &purpose) ||
+                    tls_asn1_tag_number(purpose.tag) != ASN1_OBJECTID) return false;
+                if ((purpose.len == sizeof(oid_server_auth) &&
+                     memcmp(purpose.value, oid_server_auth, sizeof(oid_server_auth)) == 0) ||
+                    (purpose.len == sizeof(oid_any_eku) &&
+                     memcmp(purpose.value, oid_any_eku, sizeof(oid_any_eku)) == 0))
+                    server_auth = true;
+            }
+        }
+    }
+
+    if (is_ca)
+        return have_bc && ca && (!have_ku || key_cert_sign) &&
+               (!have_path_len || subordinate_ca_count <= path_len) &&
+               (!have_eku || server_auth);
+    return (!have_ku || digital_signature) && (!have_eku || server_auth);
 }
 
 static uint8_t tls_x509_ascii_lower(uint8_t c)
@@ -682,19 +824,10 @@ bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
                               ip, (size_t)ip_len, &san_present))
         return true;
 
-    if (ip_len || san_present)
-    {
-        ERROR_CODE(0x26);
-        return false;
-    } /* SAN present but no match — don't fall back to CN */
-
-    if (!subject_cn || subject_cn_len == 0)
-    {
-        ERROR_CODE(0x27);
-        return false;
-    }
-
-    return tls_x509_pattern_matches_host(subject_cn, subject_cn_len, hostname, hostname_len);
+    (void)subject_cn;
+    (void)subject_cn_len;
+    ERROR_CODE(0x26);
+    return false; /* RFC 9525: identifiers must come from subjectAltName. */
 }
 
 static bool tls_x509_digit_pair(const uint8_t *p, uint32_t *out)
@@ -1018,6 +1151,8 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
         }
 
         /* issuer CN */
+        out->issuer_name = issuer.tlv;
+        out->issuer_name_len = issuer.header_len + issuer.len;
         memset(&scratch_cn, 0, sizeof(scratch_cn));
         if (!tls_x509_parse_name_common_name(&issuer, &scratch_cn))
         {
@@ -1069,6 +1204,8 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
         }
 
         /* subject CN */
+        out->subject_name = subject.tlv;
+        out->subject_name_len = subject.header_len + subject.len;
         memset(&scratch_cn, 0, sizeof(scratch_cn));
         if (!tls_x509_parse_name_common_name(&subject, &scratch_cn))
         {

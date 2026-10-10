@@ -17,6 +17,9 @@
 #include "lwip/priv/altcp_priv.h"
 #include "lwip/mem.h"
 #include "altcp_tls_ce.h"
+
+/* Internal record-layer hook implemented by handshake.c. */
+extern bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx);
 #include "../../tls/includes/aes.h"
 #include "../../tls/includes/bytes.h"
 #include "../../tls/includes/crypto_guard.h"
@@ -288,6 +291,9 @@ static err_t altcp_tls_ce_pbuf_ghash(struct tls_aes_context *aes_ctx,
  * Peak working set during pass 2 is (record_size - consumed) + chunk_scratch
  * + (output pbuf chain so far). Input and output sum stays bounded near
  * record_size — at no point are both copies live at full size.
+ * Allocation failure remains retryable only before input consumption begins.
+ * Once the header has been consumed, any failure is fatal: retrying would
+ * attempt to parse the partially consumed record as a new TLS record.
  *
  * On success, *plaintext is a pbuf chain containing the decrypted record
  * with trailing zero padding and the inner content-type byte stripped.
@@ -432,7 +438,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         out_seg = pbuf_alloc(PBUF_RAW, (u16_t)take, PBUF_RAM);
         if (!out_seg)
         {
-            status = ERR_MEM;
+            status = ERR_ABRT;
             goto fail;
         }
         if (pbuf_take(out_seg, scratch, (u16_t)take) != ERR_OK)
@@ -591,7 +597,6 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     }
     memcpy(record + 5 + inner_len, auth_tag, sizeof(auth_tag));
 
-    (*seq_num)++;
     *written = total_len;
     return true;
 }
@@ -799,6 +804,12 @@ void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
 {
     if (conf)
     {
+        if (conf->alpn_protocols)
+        {
+            mem_stats_tls_direct_release(conf->alpn_protocols_len,
+                                         conf->alpn_protocols_len);
+            mem_free(conf->alpn_protocols);
+        }
         memset(conf->psk, 0, 32);
         mem_stats_tls_direct_release(sizeof(*conf), sizeof(*conf));
         mem_free(conf);
@@ -1009,27 +1020,47 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
     }
 
 
-    /* For an HRR retry, discard the cached first ClientHello record — we must
-     * build a new one with fresh X25519 keys and possibly a cookie extension.
-     * tls_send_client_hello regenerates the keypair in this case. */
-    if (state->tls_ctx.state == TLS_STATE_HRR_RECEIVED &&
-        state->pending_chello != NULL)
-    {
-        mem_stats_tls_direct_release(state->pending_chello_len,
-                                     state->pending_chello_len);
-        mem_free(state->pending_chello);
-        state->pending_chello = NULL;
-        state->pending_chello_len = 0;
-    }
-
     /* Generate the ClientHello exactly once per attempt. tls_send_client_hello
      * folds it into the transcript hash as a side effect, so it must never be
      * called twice for the same attempt — we cache the built record and only
      * retry the write below on ERR_MEM. */
     if (state->pending_chello == NULL)
     {
-        uint8_t record[512];
         size_t client_hello_len = 0;
+        size_t record_len;
+        int prebuild_state = state->tls_ctx.state;
+
+        /* Query the exact serialized size first. Optional ALPN, SNI, PSK, and
+         * HRR cookie data are variable-length; a fixed local buffer can reject
+         * an otherwise valid ClientHello2 merely because the server supplied a
+         * longer cookie. This sender emits one plaintext record, so retain the
+         * TLS record-size bound explicitly. */
+        if (!tls_send_client_hello(&state->tls_ctx, NULL, 0,
+                                   &client_hello_len) ||
+            client_hello_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT ||
+            client_hello_len > UINT16_MAX - 5u)
+        {
+            tls_dbg_status("clienthello: size fail");
+            if (conn->err)
+            {
+                conn->err(conn->arg, ERR_ABRT);
+            }
+            altcp_abort(conn);
+            return ERR_ABRT;
+        }
+        record_len = 5u + client_hello_len;
+        state->pending_chello = (uint8_t *)mem_malloc(record_len);
+        if (state->pending_chello == NULL)
+        {
+            if (conn->err)
+            {
+                conn->err(conn->arg, ERR_ABRT);
+            }
+            altcp_abort(conn);
+            return ERR_ABRT;
+        }
+        state->pending_chello_len = (uint16_t)record_len;
+        mem_stats_tls_direct_add(record_len, record_len);
 
         tls_dbg_status("clienthello: gen");
         /* On the PSK path, tls_send_client_hello holds early_secret/
@@ -1038,12 +1069,18 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
          * scrub that whole frame once it's returned and SP is back
          * above it. Harmless no-op overhead on the non-PSK path. */
         tls_crypto_guard_enable();
-        bool chello_ok = tls_send_client_hello(&state->tls_ctx, record + 5,
-                                               sizeof(record) - 5, &client_hello_len);
+        bool chello_ok = tls_send_client_hello(&state->tls_ctx,
+                                               state->pending_chello + 5,
+                                               record_len - 5,
+                                               &client_hello_len);
         tls_crypto_guard_disable();
         if (!chello_ok)
         {
             tls_dbg_status("clienthello: gen fail");
+            mem_stats_tls_direct_release(record_len, record_len);
+            mem_free(state->pending_chello);
+            state->pending_chello = NULL;
+            state->pending_chello_len = 0;
             if (conn->err)
             {
                 conn->err(conn->arg, ERR_ABRT);
@@ -1051,30 +1088,19 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
             altcp_abort(conn);
             return ERR_ABRT;
         }
+        /* Serialization updates the transcript and historically advanced the
+         * protocol state. The flight is not sent until altcp_write succeeds,
+         * so retain the pre-write state while the cached bytes are pending. */
+        state->tls_ctx.state = prebuild_state;
 
-        /* TLS record header (0x16 = handshake, version 0x0301). */
-        record[0] = TLS_CONTENT_TYPE_HANDSHAKE;
-        record[1] = 0x03;
-        record[2] = 0x01;
-        record[3] = (uint8_t)(client_hello_len >> 8);
-        record[4] = (uint8_t)(client_hello_len & 0xFF);
-
-        state->pending_chello_len = (uint16_t)(5 + client_hello_len);
-        state->pending_chello = (uint8_t *)mem_malloc(state->pending_chello_len);
-        if (state->pending_chello == NULL)
-        {
-            /* Out of memory for the cached record — but the transcript already
-             * includes this ClientHello, so we can't cleanly regenerate. Fail
-             * the connection rather than desync. */
-            if (conn->err)
-            {
-                conn->err(conn->arg, ERR_ABRT);
-            }
-            altcp_abort(conn);
-            return ERR_ABRT;
-        }
-        mem_stats_tls_direct_add(state->pending_chello_len, state->pending_chello_len);
-        memcpy(state->pending_chello, record, state->pending_chello_len);
+        /* TLS record header. RFC 8446 section 5.1 permits 0x0301 only on an
+         * initial ClientHello; ClientHello2 after HRR uses 0x0303. */
+        state->pending_chello[0] = TLS_CONTENT_TYPE_HANDSHAKE;
+        state->pending_chello[1] = 0x03;
+        state->pending_chello[2] =
+            (prebuild_state == TLS_STATE_HRR_RECEIVED) ? 0x03 : 0x01;
+        state->pending_chello[3] = (uint8_t)(client_hello_len >> 8);
+        state->pending_chello[4] = (uint8_t)(client_hello_len & 0xFF);
     }
 
     tls_dbg_status("clienthello: write");
@@ -1159,7 +1185,9 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 size_t rec_len = ((size_t)header[3] << 8) | (size_t)header[4];
                 size_t total_len = 5 + rec_len;
 
-                if (total_len > 0xFFFF)
+                if (header[1] != 0x03 || header[2] != 0x03 || rec_len == 0 ||
+                    rec_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 256u ||
+                    total_len > 0xFFFF)
                 {
                     altcp_abort(conn);
                     return ERR_ABRT;
@@ -1335,15 +1363,30 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     }
                     else if (header[0] == TLS_CONTENT_TYPE_ALERT)
                     {
-                        if (rec_len >= 2 && tmp[5] == TLS_ALERT_LEVEL_FATAL)
+                        uint8_t alert_desc = (rec_len == 2) ? tmp[6] : 0xFFu;
+                        if (alert_desc == TLS_ALERT_USER_CANCELED)
                         {
-                            uint8_t alert_desc = (rec_len >= 2) ? tmp[6] : 0xFFu;
+                            /* This warning is explicitly ignorable, including
+                             * before handshake traffic keys are available. */
+                            plaintext_ok = true;
+                        }
+                        else
+                        {
                             ERROR_CODE(alert_desc);
                             state->tls_ctx.state = TLS_STATE_ERROR;
                             plaintext_ok = false;
                         }
                     }
-                    /* CCS (0x14) is silently ignored for middlebox compatibility. */
+                    else if (header[0] == TLS_CONTENT_TYPE_CHANGE_CIPHER_SPEC)
+                    {
+                        plaintext_ok = rec_len == 1 && tmp[5] == 0x01 &&
+                            state->tls_ctx.state >= TLS_STATE_CLIENT_HELLO_SENT &&
+                            state->tls_ctx.state < TLS_STATE_SERVER_FINISHED_RECEIVED;
+                    }
+                    else
+                    {
+                        plaintext_ok = false;
+                    }
 
                     mem_stats_tls_direct_release(total_len, total_len);
                     mem_free(tmp);
@@ -1423,6 +1466,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                             altcp_abort(conn);
                             return ERR_ABRT;
                         }
+                        state->tls_ctx.client_hs_seq_num++;
                         tls_dbg_status("clientcert: sent empty");
                     }
 
@@ -1472,6 +1516,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         altcp_abort(conn);
                         return ERR_ABRT;
                     }
+                    state->tls_ctx.client_hs_seq_num++;
                     tls_dbg_status("clientfin: sent");
 
                     /* Handshake complete */
@@ -1615,6 +1660,11 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
      * here only routes the decrypted plaintext by inner content-type. */
     while (state->rx != NULL && state->rx->tot_len >= 5)
     {
+        if (state->tls_ctx.peer_close_notify_received)
+        {
+            altcp_tls_ce_consume_recved(state, state->rx->tot_len);
+            break;
+        }
         uint8_t header[5];
         pbuf_copy_partial(state->rx, header, 5, 0);
 
@@ -1626,7 +1676,9 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             break;
         }
 
-        if (header[0] != TLS_CONTENT_TYPE_APPLICATION_DATA)
+        if (header[0] != TLS_CONTENT_TYPE_APPLICATION_DATA ||
+            header[1] != 0x03 || header[2] != 0x03 || rec_payload_len == 0 ||
+            rec_payload_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 256u)
         {
             /* All post-handshake records must arrive AEAD-wrapped inside an
              * application_data outer record (RFC 8446 §5). Any plaintext
@@ -1679,15 +1731,15 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
              * etc.) flow through the same reassembly dispatcher we use during
              * the handshake. The dispatcher already routes NewSessionTicket
              * into the PSK store. */
+            if (!tls_process_inner_plaintext_pbuf(&state->tls_ctx, inner_type,
+                                                  dec_pbuf, dec_len))
+            {
+                pbuf_free(dec_pbuf);
+                altcp_abort(conn);
+                return ERR_ABRT;
+            }
             if (dec_len > 0)
             {
-                if (!tls_process_inner_plaintext_pbuf(&state->tls_ctx, inner_type,
-                                                      dec_pbuf, dec_len))
-                {
-                    pbuf_free(dec_pbuf);
-                    altcp_abort(conn);
-                    return ERR_ABRT;
-                }
                 /* Side-effect: NewSessionTicket may have updated ctx's PSK fields;
                  * cache the fresh resumption identity in memory. No disk I/O here —
                  * the in-memory cache is flushed to flash once at tls_cleanup(). */
@@ -1710,16 +1762,14 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         }
         else if (inner_type == TLS_CONTENT_TYPE_ALERT)
         {
-            if (dec_len >= 2 && pbuf_get_at(dec_pbuf, 0) == TLS_ALERT_LEVEL_FATAL)
+            if (dec_len != 2)
             {
-                uint8_t alert_desc = pbuf_get_at(dec_pbuf, 1);
-                ERROR_CODE(alert_desc);
                 pbuf_free(dec_pbuf);
                 altcp_abort(conn);
                 return ERR_ABRT;
             }
-            else if (dec_len >= 2 && pbuf_get_at(dec_pbuf, 0) == TLS_ALERT_LEVEL_WARNING &&
-                     pbuf_get_at(dec_pbuf, 1) == TLS_ALERT_CLOSE_NOTIFY)
+            uint8_t alert_desc = pbuf_get_at(dec_pbuf, 1);
+            if (alert_desc == TLS_ALERT_CLOSE_NOTIFY)
             {
                 /* RFC 8446 §6.1: a close_notify is the peer's orderly
                  * shutdown signal and must be surfaced as EOF to the
@@ -1734,12 +1784,25 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 state->tls_ctx.peer_close_notify_received = true;
                 state->flags |= ALTCP_TLS_CE_FLAGS_RX_CLOSE_QUEUED;
             }
+            else if (alert_desc == TLS_ALERT_USER_CANCELED)
+            {
+                /* RFC 8446 section 6.1 recommends ignoring this alert. The
+                 * peer normally follows it with close_notify. */
+            }
+            else
+            {
+                ERROR_CODE(alert_desc);
+                pbuf_free(dec_pbuf);
+                altcp_abort(conn);
+                return ERR_ABRT;
+            }
             pbuf_free(dec_pbuf);
         }
         else
         {
-            /* Unknown inner content type — ignore per RFC 8446 §5.1 forward-compat. */
             pbuf_free(dec_pbuf);
+            altcp_abort(conn);
+            return ERR_ABRT;
         }
 
         err_t err = altcp_tls_ce_pass_rx_data(conn, state);
@@ -1938,6 +2001,8 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
 
     /* Set SNI hostname if configured */
     state->tls_ctx.hostname = config->hostname;
+    state->tls_ctx.alpn_protocols = config->alpn_protocols;
+    state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
 
     /* Wire the transport write hook so handshake.c can emit alerts and
      * close_notify without depending on lwIP/altcp directly. */
@@ -2226,6 +2291,10 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
     {
         return ERR_VAL;
     }
+    if (!tls_update_write_keys_if_needed(&state->tls_ctx))
+    {
+        return ERR_MEM;
+    }
 
     tls_dbg_status("tx: app encrypt");
     /* Allocate ciphertext buffer: 5 header + len + 1 content_type + 16 tag */
@@ -2253,6 +2322,7 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
     err_t err = altcp_write(conn->inner_conn, ciphertext, (u16_t)ciphertext_len, TCP_WRITE_FLAG_COPY);
     if (err == ERR_OK)
     {
+        state->tls_ctx.client_seq_num++;
         altcp_output(conn->inner_conn);
         state->overhead_bytes_adjust -= len;
         state->overhead_bytes_adjust += ciphertext_len;
@@ -2407,11 +2477,11 @@ struct altcp_tls_config *altcp_tls_create_config_client(const u8_t *cert, size_t
 {
     LWIP_UNUSED_ARG(cert);
     LWIP_UNUSED_ARG(cert_len);
-    /* CE supports ECDHE client mode, but not caller-supplied CA material on
-     * this generic lwIP entry point. Host-aware callers should use
-     * altcp_tls_ce_create_config_client_ecdhe(hostname) directly so SNI and
-     * PSK resumption can bind to the target host. */
-    return (struct altcp_tls_config *)altcp_tls_ce_create_config_client_ecdhe(NULL);
+    /* This API has no hostname parameter, so it cannot create a configuration
+     * that performs RFC 9525 service-identity verification. Fail here instead
+     * of constructing a client that is guaranteed to fail (or be tempted to
+     * skip hostname validation). Host-aware CE callers use the ECDHE factory. */
+    return NULL;
 }
 
 struct altcp_tls_config *altcp_tls_create_config_psk_client(
@@ -2447,10 +2517,56 @@ struct altcp_tls_config *altcp_tls_create_config_client_2wayauth(
 
 int altcp_tls_configure_alpn_protocols(struct altcp_tls_config *conf, const char **protos)
 {
-    LWIP_UNUSED_ARG(conf);
-    LWIP_UNUSED_ARG(protos);
-    /* ALPN not yet supported on CE */
-    return -1;
+    struct altcp_tls_ce_config *ce_conf = (struct altcp_tls_ce_config *)conf;
+    uint8_t *encoded = NULL;
+    size_t encoded_len = 0;
+    size_t offset = 0;
+
+    if (!ce_conf)
+    {
+        return -1;
+    }
+
+    if (protos)
+    {
+        for (size_t i = 0; protos[i] != NULL; i++)
+        {
+            size_t protocol_len = strlen(protos[i]);
+            if (protocol_len == 0 || protocol_len > TLS_ALPN_PROTOCOL_NAME_MAX ||
+                encoded_len > 0xFFFFu - protocol_len - 1u)
+            {
+                return -1;
+            }
+            encoded_len += protocol_len + 1u;
+        }
+    }
+
+    if (encoded_len != 0)
+    {
+        encoded = (uint8_t *)mem_malloc(encoded_len);
+        if (!encoded)
+        {
+            return -1;
+        }
+        mem_stats_tls_direct_add(encoded_len, encoded_len);
+        for (size_t i = 0; protos[i] != NULL; i++)
+        {
+            size_t protocol_len = strlen(protos[i]);
+            encoded[offset++] = (uint8_t)protocol_len;
+            memcpy(encoded + offset, protos[i], protocol_len);
+            offset += protocol_len;
+        }
+    }
+
+    if (ce_conf->alpn_protocols)
+    {
+        mem_stats_tls_direct_release(ce_conf->alpn_protocols_len,
+                                     ce_conf->alpn_protocols_len);
+        mem_free(ce_conf->alpn_protocols);
+    }
+    ce_conf->alpn_protocols = encoded;
+    ce_conf->alpn_protocols_len = encoded_len;
+    return 0;
 }
 
 void altcp_tls_free_config(struct altcp_tls_config *conf)
@@ -2460,7 +2576,7 @@ void altcp_tls_free_config(struct altcp_tls_config *conf)
 
 void altcp_tls_free_entropy(void)
 {
-    /* No global entropy state on CE */
+    /* Compatibility no-op: CE entropy state follows tls_init/tls_cleanup. */
 }
 
 struct altcp_pcb *altcp_tls_wrap(struct altcp_tls_config *config, struct altcp_pcb *inner_pcb)

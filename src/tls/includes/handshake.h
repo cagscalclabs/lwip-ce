@@ -6,19 +6,24 @@
  * @author OpenAI Codex
  *
  * @note Implements TLS 1.3 handshake with PSK and/or ECDHE (X25519) key exchange.
- * @note Certificate validation uses SPKI pinning against a compiled-in truststore.
+ * @note Certificate chains are checked against a signed truststore appvar when
+ *       a matching root subject is available. As a temporary compatibility
+ *       policy, the current implementation warns and proceeds when no matching
+ *       trust anchor is found or a chain link uses a known unsupported
+ *       signature operation/RSA width. Invalid signatures for supported
+ *       operations still fail closed.
  */
 
 /*
  * Known constraints:
- * - Only x25519 key exchange is supported. HelloRetryRequest requesting
- *   x25519 is handled correctly (transcript rewrite, fresh keypair, cookie).
- *   HRR requesting any other group sends handshake_failure and aborts.
- * - Cross-record handshake message reassembly is bounded at
- *   TLS_HS_REASSEMBLY_MAX bytes (16KB). Anything larger is fatal.
+ * - Only x25519 key exchange is supported. HelloRetryRequest transcript and
+ *   cookie handling are implemented; unsupported groups abort the handshake.
+ * - Cross-record non-Certificate handshake message reassembly is bounded at
+ *   TLS_HS_REASSEMBLY_MAX bytes (16KB). Certificate chains stream through a
+ *   dedicated walker and are not subject to that whole-message bound.
  * - The ALTCP CE transport keeps encrypted input as pbufs and passes complete
- *   records into this layer. Very large cross-record handshake messages are
- *   bounded by TLS_HS_REASSEMBLY_MAX.
+ *   records into this layer. Very large non-Certificate handshake messages
+ *   are bounded by TLS_HS_REASSEMBLY_MAX.
  */
 
 #ifndef TLS_HANDSHAKE_H
@@ -29,6 +34,7 @@
 #include <stdbool.h>
 #include "hash.h"
 #include "key.h"
+#include "tls-alpn.h"
 #include "lwip/logging.h"
 
 #ifdef __cplusplus
@@ -45,7 +51,13 @@ extern "C"
 #define TLS_AES_128_GCM_SHA256 0x1301
 
 /* Extension Types */
+#define TLS_EXT_SERVER_NAME 0x0000
 #define TLS_EXT_SUPPORTED_GROUPS 0x000a
+#define TLS_EXT_SIGNATURE_ALGORITHMS 0x000d
+#define TLS_EXT_ALPN 0x0010
+#define TLS_EXT_CERTIFICATE_AUTHORITIES 0x002f
+#define TLS_EXT_OID_FILTERS 0x0030
+#define TLS_EXT_SIGNATURE_ALGORITHMS_CERT 0x0032
 #define TLS_EXT_KEY_SHARE 0x0033
 #define TLS_EXT_SUPPORTED_VERSIONS 0x002b
 #define TLS_EXT_PSK_KEY_EXCHANGE_MODES 0x002d
@@ -100,14 +112,16 @@ extern "C"
 #define TLS_ALERT_BAD_RECORD_MAC 0x14
 #define TLS_ALERT_RECORD_OVERFLOW 0x16
 #define TLS_ALERT_HANDSHAKE_FAILURE 0x28
+#define TLS_ALERT_ILLEGAL_PARAMETER 0x2F
 #define TLS_ALERT_DECODE_ERROR 0x32
 #define TLS_ALERT_DECRYPT_ERROR 0x33
 #define TLS_ALERT_PROTOCOL_VERSION 0x46
 #define TLS_ALERT_INTERNAL_ERROR 0x50
+#define TLS_ALERT_USER_CANCELED 0x5A
+#define TLS_ALERT_UNSUPPORTED_EXTENSION 0x6E
 
-/* Bound on cross-record handshake message reassembly. Any handshake message
- * larger than this is treated as fatal (record_overflow). 16KB matches the
- * TLS 1.3 max plaintext record size and accommodates realistic cert chains. */
+/* Bound on flat, cross-record handshake-message reassembly. Certificate
+ * messages use a streaming walker instead. */
 #define TLS_HS_REASSEMBLY_MAX 16384
 
     /**
@@ -192,6 +206,8 @@ extern "C"
         uint64_t server_seq_num;
         uint64_t client_hs_seq_num; /* Handshake traffic sequence numbers */
         uint64_t server_hs_seq_num;
+        uint8_t client_key_updates;
+        uint8_t server_key_updates;
 
         /* Connection State */
         enum
@@ -230,6 +246,14 @@ extern "C"
         /* SNI hostname for server_name extension */
         const char *hostname;
 
+        /* Caller-owned ALPN ProtocolNameList contents (one-byte length plus
+         * bytes for each protocol). The configuration must outlive this
+         * handshake, as it already must for hostname and key material. */
+        const uint8_t *alpn_protocols;
+        size_t alpn_protocols_len;
+        const uint8_t *negotiated_alpn;
+        uint8_t negotiated_alpn_len;
+
         /* Transport plumbing for outbound records (alerts, close_notify). Set by
          * the altcp layer before the handshake begins. NULL means tls_send_alert
          * just updates local state without emitting on the wire. */
@@ -259,7 +283,7 @@ extern "C"
         bool close_notify_sent;
 
         /* True once a close_notify alert has been received from the peer
-         * (RFC 8446 6.1). The altcp layer checks this to delivery an EOF to
+         * (RFC 8446 6.1). The altcp layer checks this to deliver an EOF to
          * the application the same way it would for a TCP FIN, instead of
          * silently discarding the alert and leaving the application hanging
          * on a read that never completes. */
@@ -267,8 +291,8 @@ extern "C"
 
         /* Leaf cert public key captured during Certificate-receive.
          * Used by tls_recv_certificate_verify to verify the server's
-         * CertificateVerify signature.  Key material pointers reference the
-         * heap block allocated for the leaf DER copy; freed in
+         * CertificateVerify signature. Key material pointers reference a
+         * heap block containing the copied public-key material; freed in
          * tls_handshake_cleanup (leaf_pubkey.allocated=true).
          * alg == TLS_ALG_UNKNOWN when no leaf cert has been seen. */
         struct tls_key leaf_pubkey;
@@ -298,12 +322,11 @@ extern "C"
      * - PSK binder (HMAC of transcript)
      *
      * @param ctx Handshake context
-     * @param out Output buffer for ClientHello
-     * @param out_len Size of output buffer
-     * @param written Number of bytes written
+     * @param out Output buffer for ClientHello, or NULL to query its size
+     * @param out_len Size of output buffer; must be zero when out is NULL
+     * @param written Number of bytes written, or required when querying
      * @return true on success, false on failure
      *
-     * TODO: Implement ClientHello generation
      */
     bool tls_send_client_hello(
         struct tls_handshake_context *ctx,
@@ -325,7 +348,6 @@ extern "C"
      * @param data_len Length of ServerHello
      * @return true on success, false on failure
      *
-     * TODO: Implement ServerHello parsing
      */
     bool tls_recv_server_hello(
         struct tls_handshake_context *ctx,
@@ -344,7 +366,6 @@ extern "C"
      * @param ctx Handshake context
      * @return true on success, false on failure
      *
-     * TODO: Wire in HKDF implementation
      */
     bool tls_derive_handshake_keys(struct tls_handshake_context *ctx);
 
@@ -359,7 +380,6 @@ extern "C"
      * @param ctx Handshake context
      * @return true on success, false on failure
      *
-     * TODO: Wire in HKDF implementation
      */
     bool tls_derive_application_keys(struct tls_handshake_context *ctx);
 
@@ -377,7 +397,6 @@ extern "C"
      * @param written Number of bytes written
      * @return true on success, false on failure
      *
-     * TODO: Implement Finished message generation
      */
     bool tls_send_finished(
         struct tls_handshake_context *ctx,
@@ -446,6 +465,7 @@ extern "C"
      * @return true if close_notify was sent (or already sent), false on failure.
      */
     bool tls_send_close_notify(struct tls_handshake_context *ctx);
+
 
     /**
      * @brief Clean up handshake context

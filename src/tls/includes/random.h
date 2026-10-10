@@ -100,7 +100,7 @@ bool tls_rng_is_busy(void);
 
 /* Internal lifecycle hooks used by tls.c. They are intentionally not part of
  * the release API surface. */
-void tls_rng_start(void);
+bool tls_rng_start(void);
 void tls_rng_cleanup(void);
 
 #endif

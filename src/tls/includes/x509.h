@@ -33,6 +33,10 @@ struct tls_x509_object
     /* Distinguished-name fields — raw string bytes (no NUL). */
     const uint8_t *issuer_cn;     size_t issuer_cn_len;
     const uint8_t *subject_cn;    size_t subject_cn_len;
+    /* Complete DER Name TLVs, used to bind each certificate to the named
+     * issuer before accepting the issuer's signature. */
+    const uint8_t *issuer_name;   size_t issuer_name_len;
+    const uint8_t *subject_name;  size_t subject_name_len;
 
     /* Validity window — data bytes + ASN.1 tag (UTCTime or GeneralizedTime). */
     const uint8_t *not_before;  size_t not_before_len;  uint8_t not_before_tag;
@@ -51,6 +55,15 @@ struct tls_x509_object
 
 bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len);
 bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len);
+
+/** Validate path-relevant extensions for a TLS server certificate.
+ * For a CA certificate, basicConstraints CA=TRUE is mandatory, keyCertSign
+ * is mandatory when keyUsage is present, and pathLenConstraint is enforced.
+ * For a leaf, digitalSignature/serverAuth are required when their respective
+ * extensions are present. Unknown critical extensions and nameConstraints
+ * (not implemented by this constrained verifier) fail closed. */
+bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
+                                       bool is_ca, size_t subordinate_ca_count);
 
 /**
  * @brief Map a DER-encoded OID to an algorithm identifier.
@@ -118,9 +131,9 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
  * matches each against @p hostname, including a single leading-label
  * wildcard (e.g. "*.example.com" matches "foo.example.com" but not
  * "foo.bar.example.com" or "example.com" itself). If the certificate has
- * no subjectAltName extension at all, falls back to matching the subject
- * CommonName instead (legacy behavior; SAN takes priority when present,
- * per RFC 6125). Comparison is ASCII case-insensitive.
+ * requires a matching subjectAltName identity. CommonName and other subject
+ * attributes are not service identities (RFC 9525). Comparison is ASCII
+ * case-insensitive.
  *
  * IP literals instead require an exact binary iPAddress SAN match (IPv4 or
  * IPv6); DNS SANs and CommonName never authenticate an IP destination.
@@ -128,8 +141,8 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
  *
  * @param ext_data      Raw bytes of the leaf's extensions field (cert.extensions).
  * @param ext_len       Length of @p ext_data.
- * @param subject_cn    Subject CommonName bytes for CN fallback; may be NULL.
- * @param subject_cn_len Length of @p subject_cn.
+ * @param subject_cn    Retained for API compatibility; ignored.
+ * @param subject_cn_len Retained for API compatibility; ignored.
  * @param hostname      NUL-terminated hostname the connection was made to.
  * @return true if the certificate is valid for @p hostname, false otherwise
  *         (including on any parse failure -- fails closed).

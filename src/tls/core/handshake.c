@@ -109,7 +109,8 @@
  *
  * AEAD nonce is the static IV XOR'd with the per-direction sequence counter,
  * right-aligned to the last 8 bytes (RFC 8446 §5.3). Sequence counters are
- * separate for handshake and application phases — they do NOT reset.
+ * separate for handshake and application phases and reset when their
+ * corresponding traffic keys are updated.
  *
  *
  * 4. WHAT THIS IMPLEMENTATION SKIPS (DELIBERATELY)
@@ -121,8 +122,8 @@
  *     rejected. CertificateVerify itself is always required and verified
  *     against the chain's leaf SPKI.
  *   - 0-RTT / early_data.
- *   - HelloRetryRequest negotiation — we only ever offer x25519, so if the
- *     server demands a different group we just abort.
+ *   - HelloRetryRequest negotiation of a different key-exchange group — we
+ *     only support x25519, so a request for another group aborts.
  *   - Server-side handshake (this is a client-only implementation; the
  *     altcp layer has a server entry point that returns "not implemented").
  *
@@ -280,6 +281,19 @@ static size_t tls_parse_handshake_header(const uint8_t *data, size_t data_len,
     return 4;
 }
 
+/* X25519 maps low-order public inputs to an all-zero shared secret. Keep this
+ * check separate from the assembly primitive so every byte is examined before
+ * the caller branches on the result. */
+static bool tls_x25519_shared_is_nonzero(const uint8_t shared[32])
+{
+    uint8_t value = 0;
+    for (size_t i = 0; i < 32; i++)
+    {
+        value |= shared[i];
+    }
+    return value != 0;
+}
+
 /* Forward decl — the dispatcher needs it; full body lives further down. */
 static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
                                          uint8_t msg_type,
@@ -300,6 +314,10 @@ static bool tls_recv_key_update(struct tls_handshake_context *ctx,
                                 const uint8_t *data, size_t data_len);
 static bool tls_send_alert(struct tls_handshake_context *ctx,
                            uint8_t level, uint8_t description);
+static bool tls_send_key_update_record(struct tls_handshake_context *ctx);
+
+#define TLS_AES_GCM_RECORD_LIMIT (1ULL << 24)
+#define TLS_MAX_KEY_UPDATES 32u
 
 /**
  * @brief Build the TLS 1.3 AEAD nonce: static IV XOR right-aligned seq number.
@@ -324,7 +342,8 @@ static void tls_build_aead_nonce(const uint8_t iv[12], uint64_t seq_num,
  * TLS 1.3 servers may fragment a handshake message across multiple encrypted
  * records (RFC 8446 §5.1). When the tail of a decrypted buffer doesn't
  * contain a full message, we copy it into ctx->hs_reasm_buf and resume on
- * the next record. Anything beyond TLS_HS_REASSEMBLY_MAX is fatal.
+ * the next record. Non-Certificate messages beyond TLS_HS_REASSEMBLY_MAX are
+ * fatal; Certificate messages use the streaming walker instead.
  * ------------------------------------------------------------------------ */
 
 static void tls_hs_reasm_reset(struct tls_handshake_context *ctx)
@@ -444,8 +463,10 @@ struct tls_cert_walker
     size_t cert_buf_cap;
     size_t cert_buf_len;
     /* True once the leaf SPKI has been captured (so CertificateVerify can run)
-     * and every cert walked so far passed chain verification. The actual
-     * cert-to-cert signature check rejects invalid or unsupported signatures.
+     * and every cert walked so far was accepted by the chain policy. Invalid
+     * signatures for supported operations fail closed; known unsupported
+     * operations and RSA keys wider than this platform supports warn and
+     * proceed temporarily.
      * Leaf proof of possession is established separately
      * by the mandatory CertificateVerify record against the captured leaf
      * SPKI. */
@@ -468,8 +489,10 @@ struct tls_cert_walker
      * cert is checked against the truststore when an issuer entry is found.
      * RSA PKCS#1 v1.5 and PSS with SHA-256 are implemented. */
     bool pending_link;             /* a prior cert is awaiting its issuer key */
+    bool pending_sig_omitted;      /* unsupported algorithm/width; bytes omitted */
     tls_alg_t pending_sig_alg;     /* scheme from the signed certificate */
     uint8_t pending_tbs_digest[32];/* SHA-256(tbsCertificate) of prior cert    */
+    uint8_t pending_issuer_name_digest[32]; /* DER Name named by prior cert    */
     uint8_t *pending_sig;          /* signatureValue of prior cert (heap copy) */
     size_t pending_sig_len;
 
@@ -611,6 +634,44 @@ static tls_key_op_result_t tls_cert_verify_digest(tls_alg_t scheme,
     return tls_x509_signature_verify_digest(digest, sig, sig_len, issuer, scheme);
 }
 
+/* Verify a deferred chain link while preserving the temporary compatibility
+ * policy: a known-but-unimplemented operation, including an otherwise valid
+ * RSA signature whose issuer key is wider than our 2048-bit arithmetic, is
+ * distinguishable from a bad signature for an operation we do support. */
+static tls_key_op_result_t tls_cert_verify_pending_link(
+    const struct tls_cert_walker *w, const struct tls_key *issuer)
+{
+    if (!w || !issuer || !w->pending_link)
+        return TLS_KEY_OP_INVALID;
+
+    /* The AlgorithmIdentifier was structurally valid and matched the signed
+     * tbsCertificate, but its OID is not implemented by this build. */
+    if (w->pending_sig_alg == TLS_ALG_UNKNOWN)
+        return w->pending_sig_omitted ? TLS_KEY_OP_UNSUPPORTED
+                                      : TLS_KEY_OP_INVALID;
+
+    bool rsa_scheme = (w->pending_sig_alg == TLS_ALG_RSA_PKCS1_SHA256 ||
+                       w->pending_sig_alg == TLS_ALG_RSA_PSS_RSAE_SHA256);
+    if (rsa_scheme && issuer->type == TLS_KEY_TYPE_RSA &&
+        issuer->rsa.mod_len > RSA_MODULUS_MAX_SUPPORTED)
+    {
+        /* RSA signatures are exactly one modulus-width block. A different
+         * length is invalid even though the key itself is unsupported. */
+        return (w->pending_sig_omitted &&
+                w->pending_sig_len == issuer->rsa.mod_len)
+            ? TLS_KEY_OP_UNSUPPORTED : TLS_KEY_OP_INVALID;
+    }
+
+    /* An omitted oversized signature is only acceptable with the matching
+     * oversized RSA issuer handled above. */
+    if (w->pending_sig_omitted || !w->pending_sig)
+        return TLS_KEY_OP_INVALID;
+
+    return tls_cert_verify_digest(w->pending_sig_alg, issuer,
+                                  w->pending_tbs_digest, w->pending_sig,
+                                  w->pending_sig_len);
+}
+
 /* Verify the deferred child with this issuer, then retain this certificate's
  * signature scheme, SHA-256 digest and signature for the next issuer/root. */
 static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
@@ -625,11 +686,31 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
      * issuer — verify the pending link now. */
     if (w->pending_link)
     {
-        if (tls_cert_verify_digest(w->pending_sig_alg, &cert->pubkey,
-                                   w->pending_tbs_digest, w->pending_sig,
-                                   w->pending_sig_len) != TLS_KEY_OP_OK)
+        uint8_t subject_name_digest[32];
+        struct tls_hash_context name_hash;
+        if (!cert->subject_name || cert->subject_name_len == 0 ||
+            !tls_hash_context_init(&name_hash, TLS_HASH_SHA256))
+            return false;
+        tls_hash_update(&name_hash, cert->subject_name, cert->subject_name_len);
+        tls_hash_digest(&name_hash, subject_name_digest);
+        if (memcmp(subject_name_digest, w->pending_issuer_name_digest,
+                   sizeof(subject_name_digest)) != 0)
         {
-            /* Unsupported schemes and incompatible keys are not verified. */
+            ERROR_CODE(0x15);
+            return false;
+        }
+        tls_key_op_result_t verify_result =
+            tls_cert_verify_pending_link(w, &cert->pubkey);
+        if (verify_result == TLS_KEY_OP_UNSUPPORTED)
+        {
+            /* Interim compatibility pinhole: retain all structural/name/path
+             * checks but allow a link this platform cannot verify. */
+            WARN();
+        }
+        else if (verify_result != TLS_KEY_OP_OK)
+        {
+            /* A supported verification operation produced a bad signature,
+             * or the signature/key pairing is structurally incompatible. */
             ERROR();
             return false;
         }
@@ -643,6 +724,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         }
         w->pending_sig_len = 0;
         w->pending_link = false;
+        w->pending_sig_omitted = false;
         w->pending_sig_alg = TLS_ALG_UNKNOWN;
     }
 
@@ -666,11 +748,35 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         tls_hash_digest(&hctx, w->pending_tbs_digest);
     }
     /* Copy the signature (it lives in cert_buf, which is freed after this
-     * call returns). Cap at the max RSA modulus we support. */
-    if (sig_len == 0 || sig_len > RSA_MODULUS_MAX_SUPPORTED)
+     * call returns). Oversized RSA signatures are retained by length only so
+     * the next issuer can prove that the width matches an unsupported RSA
+     * key; arbitrary oversized signatures remain malformed. */
+    if (sig_len == 0)
     {
         ERROR_CODE(0x0d);
         return false;
+    }
+    else if (sig_alg == TLS_ALG_UNKNOWN)
+    {
+        /* Retain no attacker-controlled signature bytes for an operation this
+         * build cannot dispatch. Structural and issuer-name checks still run. */
+        w->pending_sig = NULL;
+        w->pending_sig_len = sig_len;
+        w->pending_sig_alg = sig_alg;
+        w->pending_sig_omitted = true;
+    }
+    else if (sig_len > RSA_MODULUS_MAX_SUPPORTED)
+    {
+        if (sig_alg != TLS_ALG_RSA_PKCS1_SHA256 &&
+            sig_alg != TLS_ALG_RSA_PSS_RSAE_SHA256)
+        {
+            ERROR_CODE(0x0d);
+            return false;
+        }
+        w->pending_sig = NULL;
+        w->pending_sig_len = sig_len;
+        w->pending_sig_alg = sig_alg;
+        w->pending_sig_omitted = true;
     }
     else
     {
@@ -684,8 +790,17 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         memcpy(w->pending_sig, sig, sig_len);
         w->pending_sig_len = sig_len;
         w->pending_sig_alg = sig_alg;
+        w->pending_sig_omitted = false;
     }
     w->pending_link = true;
+    if (!cert->issuer_name || cert->issuer_name_len == 0)
+        return false;
+    {
+        struct tls_hash_context name_hash;
+        if (!tls_hash_context_init(&name_hash, TLS_HASH_SHA256)) return false;
+        tls_hash_update(&name_hash, cert->issuer_name, cert->issuer_name_len);
+        tls_hash_digest(&name_hash, w->pending_issuer_name_digest);
+    }
     (void)is_leaf;
     return true;
 }
@@ -726,6 +841,17 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     {
         INFO("cert: date fail");
         ERROR_CODE(0x03);
+        return false;
+    }
+
+    /* Enforce leaf TLS usage and every issuer's CA/key/path constraints.
+     * cert_index excludes the leaf, so an issuer at index N has N-1
+     * subordinate CA certificates beneath it. */
+    if (!tls_x509_validate_path_extensions(&cert, !is_leaf,
+                                            is_leaf ? 0 : w->cert_index - 1u))
+    {
+        INFO("cert: constraints fail");
+        ERROR_CODE(0x12);
         return false;
     }
 
@@ -883,8 +1009,8 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                  * CertificateList payload counted by chain_remaining.
                  * Check value bounds before computing 3+value to avoid
                  * size_t overflow on eZ80 (3-byte size_t, max 0xFFFFFF). */
-                if (value == 0 || value > TLS_HS_REASSEMBLY_MAX ||
-                    w->chain_remaining < 3 + value)
+                if (value == 0 || value > SIZE_MAX - 3u ||
+                    w->chain_remaining < 3u + value)
                 {
                     ERROR_CODE(0x10);
                     w->state = CW_ERROR;
@@ -1165,8 +1291,21 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         size_t body_len = ((size_t)ctx->hs_reasm_buf[1] << 16) |
                           ((size_t)ctx->hs_reasm_buf[2] << 8) |
                           (size_t)ctx->hs_reasm_buf[3];
+        if (body_len > SIZE_MAX - 4u)
+        {
+            tls_hs_reasm_reset(ctx);
+            ERROR_CODE(0x18);
+            return false;
+        }
+        if (body_len == 0)
+        {
+            tls_hs_reasm_reset(ctx);
+            ERROR_CODE(0x18);
+            return false;
+        }
         ctx->hs_reasm_expected = 4 + body_len;
-        if (ctx->hs_reasm_expected > TLS_HS_REASSEMBLY_MAX)
+        if (ctx->hs_reasm_buf[0] != TLS_HANDSHAKE_CERTIFICATE &&
+            ctx->hs_reasm_expected > TLS_HS_REASSEMBLY_MAX)
         {
             tls_hs_reasm_reset(ctx);
             ERROR_CODE(0x18);
@@ -1226,11 +1365,24 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         size_t body_len = ((size_t)buf[off + 1] << 16) |
                           ((size_t)buf[off + 2] << 8) |
                           (size_t)buf[off + 3];
+        if (body_len > SIZE_MAX - 4u)
+        {
+            ERROR_CODE(0x1b);
+            return false;
+        }
         size_t total = 4 + body_len;
 
-        if (total > TLS_HS_REASSEMBLY_MAX)
+        if (body_len == 0)
         {
-            /* Honestly-formed but ludicrously large — record_overflow. */
+            ERROR_CODE(0x1b);
+            return false;
+        }
+
+        if (msg_type != TLS_HANDSHAKE_CERTIFICATE &&
+            total > TLS_HS_REASSEMBLY_MAX)
+        {
+            /* Non-Certificate parsers hold their message flat, so enforce the
+             * documented memory bound. Certificate chains stream below. */
             ERROR_CODE(0x1b);
             return false;
         }
@@ -1372,8 +1524,8 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
         ok = tls_recv_key_update(ctx, msg, msg_len);
         break;
     default:
-        /* Unknown inner type — ignore per RFC 8446 §4 forward-compat note. */
-        return true;
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
+        return false;
     }
     if (!ok)
     {
@@ -1409,6 +1561,11 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
 
     if (inner_content_type == TLS_CONTENT_TYPE_HANDSHAKE)
     {
+        if (plaintext_len == 0)
+        {
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
+            return false;
+        }
         size_t consumed = 0;
         const struct pbuf *q = plaintext;
 
@@ -1450,29 +1607,24 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
 
     if (inner_content_type == TLS_CONTENT_TYPE_ALERT)
     {
-        if (plaintext_len >= 2)
+        if (plaintext_len != 2)
         {
-            uint8_t level = pbuf_get_at((struct pbuf *)plaintext, 0);
-            uint8_t desc = pbuf_get_at((struct pbuf *)plaintext, 1);
-            if (level == TLS_ALERT_LEVEL_FATAL)
-            {
-                ctx->state = TLS_STATE_ERROR;
-            }
-            else if (level == TLS_ALERT_LEVEL_WARNING && desc == TLS_ALERT_CLOSE_NOTIFY)
-            {
-                /* Peer is walking away mid-handshake (RFC 8446 §6.1: any data
-                 * received after a closure alert is to be ignored). There is
-                 * no app data to deliver an EOF for yet, so the correct
-                 * outcome is a clean failure now rather than silently
-                 * returning true and leaving the handshake stalled forever
-                 * waiting on a Finished that will never arrive. */
-                ctx->peer_close_notify_received = true;
-                ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x26);
-                return false;
-            }
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
+            ctx->state = TLS_STATE_ERROR;
+            ERROR_CODE(0x26);
+            return false;
         }
-        return true;
+
+        uint8_t alert_desc = pbuf_get_at((struct pbuf *)plaintext, 1);
+        /* RFC 8446 section 6.1: recipients SHOULD ignore user_canceled so
+         * that an otherwise valid connection is not failed closed. */
+        if (alert_desc == TLS_ALERT_USER_CANCELED)
+            return true;
+        if (alert_desc == TLS_ALERT_CLOSE_NOTIFY)
+            ctx->peer_close_notify_received = true;
+        ctx->state = TLS_STATE_ERROR;
+        ERROR_CODE(0x26);
+        return false;
     }
 
     /* Application data during handshake is unexpected. */
@@ -1564,11 +1716,13 @@ bool tls_handshake_init(
     ctx->server_seq_num = 0;
 
     INFO("init: client random");
-    /* Generate client random */
-    for (size_t i = 0; i < 4; i++)
+    /* Use the checked request path so entropy-source failure aborts before
+     * any handshake secret or nonce is generated. */
+    if (!tls_request_random_bytes(ctx->client_random,
+                                  sizeof(ctx->client_random), NULL, NULL, true))
     {
-        uint64_t rand = tls_random();
-        memcpy(&ctx->client_random[i * 8], &rand, 8);
+        ERROR_CODE(0x2b);
+        return false;
     }
 
     INFO("init: transcript hash");
@@ -1583,10 +1737,11 @@ bool tls_handshake_init(
 
     INFO("init: private random");
     /* Generate ephemeral X25519 keypair for ECDHE */
-    for (size_t i = 0; i < 4; i++)
+    if (!tls_request_random_bytes(ctx->ecdhe_private,
+                                  sizeof(ctx->ecdhe_private), NULL, NULL, true))
     {
-        uint64_t rand = tls_random();
-        memcpy(&ctx->ecdhe_private[i * 8], &rand, 8);
+        ERROR_CODE(0x2c);
+        return false;
     }
 
     INFO("init: X25519 public key");
@@ -1686,10 +1841,7 @@ bool tls_send_client_hello(
         /* signature_algorithms: rsa_pss_rsae_sha256 */
         0x00, 0x0d, 0x00, 0x04, 0x00, 0x02, 0x08, 0x04,
         /* signature_algorithms_cert: rsa_pkcs1_sha256, rsa_pss_rsae_sha256 */
-        0x00, 0x32, 0x00, 0x06, 0x00, 0x04, 0x04, 0x01, 0x08, 0x04,
-        /* ALPN: http/1.1 */
-        0x00, 0x10, 0x00, 0x0b, 0x00, 0x09, 0x08,
-        'h', 't', 't', 'p', '/', '1', '.', '1'
+        0x00, 0x32, 0x00, 0x06, 0x00, 0x04, 0x04, 0x01, 0x08, 0x04
     };
     static const uint8_t sni_header[] = {
         0x00, 0x00,             /* server_name */
@@ -1706,6 +1858,11 @@ bool tls_send_client_hello(
     static const uint8_t psk_modes[] = {
         0x00, 0x2d, 0x00, 0x02, 0x01, 0x01 /* psk_dhe_ke */
     };
+    static const uint8_t alpn_header[] = {
+        0x00, 0x10,             /* application_layer_protocol_negotiation */
+        0x00, 0x00,             /* extension length patched */
+        0x00, 0x00              /* ProtocolNameList length patched */
+    };
     static const uint8_t psk_header[] = {
         0x00, 0x29,             /* pre_shared_key */
         0x00, 0x00,             /* extension length patched */
@@ -1716,7 +1873,7 @@ bool tls_send_client_hello(
         0x20                    /* SHA-256 binder length */
     };
 
-    if (!ctx || !out || !written)
+    if (!ctx || !written || (!out && out_len != 0))
     {
         ERROR();
         return false;
@@ -1729,15 +1886,9 @@ bool tls_send_client_hello(
         return false;
     }
 
-    /* RFC 8446 §4.1.2: key_share is only regenerated if the HRR itself
-     * requested a different group. The HRR parser (tls_parse_server_hello)
-     * already rejects any key_share group other than x25519 (the only
-     * group we support, and the one already sent in CH1), so a key_share
-     * HRR we accept at all never actually changes the group -- the
-     * original ecdhe_private/ecdhe_public from CH1 are still correct and
-     * must be resent as-is. Regenerating here would both violate the RFC
-     * and silently desync us from the key the server already began
-     * deriving against. */
+    /* This implementation reuses the original x25519 share in ClientHello2.
+     * A conforming HRR cannot request x25519 because it was already offered
+     * in ClientHello1; a cookie-only HRR leaves the key_share unchanged. */
 
     /* early_secret/binder_key/finished_key/binder/hmac_ctx are secret
      * material only ever populated inside the ctx->psk_mode block below,
@@ -1756,6 +1907,7 @@ bool tls_send_client_hello(
     size_t binder_offset;
     size_t hostname_len = 0;
     size_t sni_len = 0;
+    size_t alpn_ext_len = 0;
     size_t required_len;
     size_t required_ext_len;
 
@@ -1785,6 +1937,28 @@ bool tls_send_client_hello(
         return false;
     }
 
+    if (ctx->alpn_protocols_len != 0)
+    {
+        size_t alpn_offset = 0;
+        if (!ctx->alpn_protocols || ctx->alpn_protocols_len > 0xFFFFu)
+        {
+            ERROR_CODE(0x2f);
+            return false;
+        }
+        while (alpn_offset < ctx->alpn_protocols_len)
+        {
+            size_t protocol_len = ctx->alpn_protocols[alpn_offset++];
+            if (protocol_len == 0 ||
+                protocol_len > ctx->alpn_protocols_len - alpn_offset)
+            {
+                ERROR_CODE(0x30);
+                return false;
+            }
+            alpn_offset += protocol_len;
+        }
+        alpn_ext_len = sizeof(alpn_header) + ctx->alpn_protocols_len;
+    }
+
     /* Cookie extension overhead: type(2)+len(2)+inner_len(2)+cookie_bytes. */
     size_t cookie_ext_len = 0;
     if (ctx->hrr_cookie_len > 0)
@@ -1794,7 +1968,7 @@ bool tls_send_client_hello(
 
     /* The exact-size check makes all template copies below safe. */
     required_ext_len = sizeof(hello_template) - HELLO_EXT_START +
-                       sni_len + cookie_ext_len;
+                       sni_len + cookie_ext_len + alpn_ext_len;
     if (ctx->psk_mode)
     {
         /* psk_key_exchange_modes (6: header 4 + modes-length 1 + psk_dhe_ke
@@ -1807,7 +1981,17 @@ bool tls_send_client_hello(
         return false;
     }
     required_len = HELLO_EXT_START + required_ext_len;
-    if (required_len > out_len || required_len - 4 > 0xFFFFFFu)
+    if (required_len - 4 > 0xFFFFFFu)
+    {
+        ERROR_CODE(0x2f);
+        return false;
+    }
+    if (!out)
+    {
+        *written = required_len;
+        return true;
+    }
+    if (required_len > out_len)
     {
         ERROR_CODE(required_len > 0xFFFF ? 0xFFFF : required_len);
         return false;
@@ -1854,6 +2038,21 @@ bool tls_send_client_hello(
         out[cookie_offset + 5] = (uint8_t)(ctx->hrr_cookie_len & 0xFF);
         memcpy(out + offset, ctx->hrr_cookie, ctx->hrr_cookie_len);
         offset += ctx->hrr_cookie_len;
+    }
+
+    /* ALPN is application policy, so it is sent only when configured. */
+    if (alpn_ext_len != 0)
+    {
+        size_t alpn_offset = offset;
+        size_t ext_body_len = 2 + ctx->alpn_protocols_len;
+        memcpy(out + offset, alpn_header, sizeof(alpn_header));
+        offset += sizeof(alpn_header);
+        out[alpn_offset + 2] = (uint8_t)(ext_body_len >> 8);
+        out[alpn_offset + 3] = (uint8_t)ext_body_len;
+        out[alpn_offset + 4] = (uint8_t)(ctx->alpn_protocols_len >> 8);
+        out[alpn_offset + 5] = (uint8_t)ctx->alpn_protocols_len;
+        memcpy(out + offset, ctx->alpn_protocols, ctx->alpn_protocols_len);
+        offset += ctx->alpn_protocols_len;
     }
 
     if (ctx->psk_mode)
@@ -2096,7 +2295,7 @@ bool tls_recv_server_hello(
     size_t msg_end = offset + msg_len;
 
     /* Step 3: Verify legacy version (0x0303) */
-    if (data[offset] != 0x03 || data[offset + 1] != 0x03)
+    if (offset + 2 > msg_end || data[offset] != 0x03 || data[offset + 1] != 0x03)
     {
         ctx->state = TLS_STATE_ERROR;
         ERROR_CODE(0x3f);
@@ -2153,10 +2352,23 @@ bool tls_recv_server_hello(
                 ERROR_CODE(0x43);
                 return false;
             }
+            if (sid_len != 0)
+            {
+                ctx->state = TLS_STATE_ERROR;
+                ERROR_CODE(0x43);
+                return false;
+            }
             hrr_offset += sid_len;
 
             /* Skip cipher suite (2) + compression method (1). */
             if (hrr_offset + 3 > msg_end)
+            {
+                ctx->state = TLS_STATE_ERROR;
+                ERROR_CODE(0x44);
+                return false;
+            }
+            if ((((uint16_t)data[hrr_offset] << 8) | data[hrr_offset + 1]) !=
+                    ctx->cipher_suite || data[hrr_offset + 2] != 0)
             {
                 ctx->state = TLS_STATE_ERROR;
                 ERROR_CODE(0x44);
@@ -2175,16 +2387,16 @@ bool tls_recv_server_hello(
                                     data[hrr_offset + 1];
             hrr_offset += 2;
             size_t hrr_ext_end = hrr_offset + hrr_ext_len;
-            if (hrr_ext_end > msg_end)
+            if (hrr_ext_end != msg_end)
             {
                 ctx->state = TLS_STATE_ERROR;
                 ERROR_CODE(0x46);
                 return false;
             }
 
-            uint16_t hrr_group = 0;
             const uint8_t *cookie_data = NULL;
             uint16_t cookie_len = 0;
+            bool hrr_version = false, hrr_key_share = false, hrr_cookie_seen = false;
 
             while (hrr_offset + 4 <= hrr_ext_end)
             {
@@ -2202,19 +2414,18 @@ bool tls_recv_server_hello(
                 if (etype == TLS_EXT_KEY_SHARE)
                 {
                     /* HRR key_share extension body = 2-byte NamedGroup. */
-                    if (elen < 2)
+                    if (hrr_key_share || elen != 2)
                     {
                         ctx->state = TLS_STATE_ERROR;
                         ERROR_CODE(0x48);
                         return false;
                     }
-                    hrr_group = ((uint16_t)data[hrr_offset] << 8) |
-                                 data[hrr_offset + 1];
+                    hrr_key_share = true;
                 }
                 else if (etype == TLS_EXT_COOKIE)
                 {
                     /* Cookie body = 2-byte length + cookie bytes. */
-                    if (elen < 2)
+                    if (hrr_cookie_seen || elen < 3)
                     {
                         ctx->state = TLS_STATE_ERROR;
                         ERROR_CODE(0x49);
@@ -2222,7 +2433,7 @@ bool tls_recv_server_hello(
                     }
                     uint16_t clen = ((uint16_t)data[hrr_offset] << 8) |
                                      data[hrr_offset + 1];
-                    if ((size_t)clen + 2u > elen)
+                    if ((size_t)clen + 2u != elen)
                     {
                         ctx->state = TLS_STATE_ERROR;
                         ERROR_CODE(0x4a);
@@ -2230,12 +2441,38 @@ bool tls_recv_server_hello(
                     }
                     cookie_data = data + hrr_offset + 2;
                     cookie_len  = clen;
+                    hrr_cookie_seen = true;
+                }
+                else if (etype == TLS_EXT_SUPPORTED_VERSIONS)
+                {
+                    if (hrr_version || elen != 2 || data[hrr_offset] != 0x03 ||
+                        data[hrr_offset + 1] != 0x04)
+                    {
+                        ctx->state = TLS_STATE_ERROR;
+                        ERROR_CODE(0x4a);
+                        return false;
+                    }
+                    hrr_version = true;
+                }
+                else
+                {
+                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNSUPPORTED_EXTENSION);
+                    return false;
                 }
                 hrr_offset += elen;
             }
 
-            /* If the server asked for a group we can't satisfy, refuse. */
-            if (hrr_group != 0 && hrr_group != TLS_NAMED_GROUP_X25519)
+            if (hrr_offset != hrr_ext_end || !hrr_version ||
+                (!hrr_key_share && !hrr_cookie_seen))
+            {
+                ctx->state = TLS_STATE_ERROR;
+                ERROR_CODE(0x4a);
+                return false;
+            }
+
+            /* x25519 was already offered in ClientHello1 and therefore cannot
+             * be selected by HRR; every other group is unsupported here. */
+            if (hrr_key_share)
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_HANDSHAKE_FAILURE);
@@ -2305,7 +2542,7 @@ bool tls_recv_server_hello(
         return false;
     }
     uint8_t session_id_len = data[offset++];
-    if (offset + session_id_len > msg_end)
+    if (session_id_len != 0 || offset + session_id_len > msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
         ERROR_CODE(0x4f);
@@ -2349,7 +2586,7 @@ bool tls_recv_server_hello(
     offset += 2;
 
     size_t ext_end = offset + ext_len;
-    if (ext_end > msg_end)
+    if (ext_end != msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
         ERROR_CODE(0x54);
@@ -2380,7 +2617,7 @@ bool tls_recv_server_hello(
         {
         case TLS_EXT_SUPPORTED_VERSIONS:
             /* Verify TLS 1.3 (0x0304) */
-            if (ext_data_len != 2)
+            if (found_supported_versions || ext_data_len != 2)
             {
                 ctx->state = TLS_STATE_ERROR;
                 ERROR_CODE(0x57);
@@ -2398,7 +2635,7 @@ bool tls_recv_server_hello(
         case TLS_EXT_KEY_SHARE:
         {
             /* ServerHello key_share: named_group (2) + key_exchange_length (2) + key_exchange */
-            if (ext_data_len < 4)
+            if (ctx->ecdhe_negotiated || ext_data_len < 4)
             {
                 ctx->state = TLS_STATE_ERROR;
                 ERROR_CODE(0x59);
@@ -2424,6 +2661,20 @@ bool tls_recv_server_hello(
                 ERROR_CODE(0x5b);
                 return false;
             }
+            /* RFC 7748 §6 requires protocols using X25519 to reject an
+             * all-zero shared secret (the result for low-order inputs). */
+            if (!tls_x25519_shared_is_nonzero(ctx->ecdhe_shared))
+            {
+                tls_secure_memzero(ctx->ecdhe_private,
+                                   sizeof(ctx->ecdhe_private));
+                tls_secure_memzero(ctx->ecdhe_shared,
+                                   sizeof(ctx->ecdhe_shared));
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_ILLEGAL_PARAMETER);
+                ctx->state = TLS_STATE_ERROR;
+                ERROR_CODE(0x5c);
+                return false;
+            }
             /* Securely erase private key immediately */
             tls_secure_memzero(ctx->ecdhe_private, 32);
             ctx->ecdhe_negotiated = true;
@@ -2433,7 +2684,7 @@ bool tls_recv_server_hello(
 
         case TLS_EXT_PRE_SHARED_KEY:
         {
-            if (!ctx->psk_mode)
+            if (found_psk || !ctx->psk_mode)
             {
                 /* Server selected a PSK identity we did not offer. */
                 ctx->state = TLS_STATE_ERROR;
@@ -2460,8 +2711,8 @@ bool tls_recv_server_hello(
         }
 
         default:
-            /* Skip unknown extensions */
-            break;
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNSUPPORTED_EXTENSION);
+            return false;
         }
 
         offset += ext_data_len;
@@ -2482,11 +2733,6 @@ bool tls_recv_server_hello(
         transcript_hash_update(ctx->transcript_hash, data, msg_end);
     }
 
-    /* TODO(cert-chain): For full (non-PSK) handshakes, parse the incoming
-     * Certificate message after ServerHello/EncryptedExtensions.
-     * When you have that handshake message buffer, the certificate bytes start at:
-     * cert_msg + 4 (handshake header) + 1 (context len) + 3 (cert_list_len).
-     */
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
     DEBUG();
     return true;
@@ -2498,9 +2744,9 @@ bool tls_recv_server_hello(
  * Called by tls_consume_handshake_buffer when the cert walker reaches
  * CW_DONE. Checks the state/PSK gates and requires w->chain_validated, which
  * now means "the leaf SPKI was captured and every chain link the walker checked
- * passed". It does NOT mean
- * a truststore root-pin matched. Real server authentication still happens next,
- * in the mandatory CertificateVerify record against the captured leaf SPKI.
+ * passed". It does NOT mean a truststore root matched. CertificateVerify later
+ * proves possession of the leaf private key; server authentication additionally
+ * depends on successful path anchoring and service-identity validation.
  * The walker has already updated the transcript hash incrementally as bytes
  * arrived, so we don't touch it here.
  */
@@ -2562,7 +2808,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                 }
                 size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
                 if (key_len >= 3 + RSA_MODULUS_MIN_SUPPORTED &&
-                    w->pending_link && w->pending_sig)
+                    w->pending_link)
                 {
                     /* Truststore packs exponent as 3-byte LE; convert to BE for
                      * tls_rsa_key which expects big-endian exponent bytes. */
@@ -2573,27 +2819,21 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     };
                     const uint8_t *mod     = root_entry->key + 3;
                     size_t         mod_len = key_len - 3;
-                    bool verified = false;
-
                     struct tls_rsa_key root_key = {
                         sizeof(exp_be), exp_be,
                         mod_len, mod,
                     };
-
-                    if (mod_len >= RSA_MODULUS_MIN_SUPPORTED &&
-                        mod_len <= RSA_MODULUS_MAX_SUPPORTED)
+                    struct tls_key root_tls_key = {
+                        .type = TLS_KEY_TYPE_RSA,
+                        .rsa = root_key,
+                    };
+                    tls_key_op_result_t verify_result =
+                        tls_cert_verify_pending_link(w, &root_tls_key);
+                    if (verify_result == TLS_KEY_OP_UNSUPPORTED)
                     {
-                        struct tls_key root_tls_key = {
-                            .type = TLS_KEY_TYPE_RSA,
-                            .rsa = root_key,
-                        };
-                        verified = (tls_cert_verify_digest(
-                                        w->pending_sig_alg, &root_tls_key,
-                                        w->pending_tbs_digest,
-                                        w->pending_sig, w->pending_sig_len) == TLS_KEY_OP_OK);
+                        WARN();
                     }
-
-                    if (!verified)
+                    else if (verify_result != TLS_KEY_OP_OK)
                     {
                         ERROR();
                         ctx->state = TLS_STATE_ERROR;
@@ -2609,10 +2849,9 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
             }
             else
             {
-                /* No verifier is implemented for this truststore key type. */
-                ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x67);
-                return false;
+                /* Interim compatibility pinhole: the trust anchor exists but
+                 * its key/signature operation is not implemented. */
+                WARN();
             }
         }
         else
@@ -2637,17 +2876,17 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
  * most extensions were moved here precisely so eavesdroppers can't see
  * which servers/protocols a client supports.
  *
- * In practice we don't care about any of the extensions a server might
- * include here (ALPN, server_name confirmation, etc.) — we just need to:
+ * The current implementation consumes ALPN and validates the informational
+ * supported_groups list; otherwise it:
  *
  *   1. Validate the framing (length fields nest correctly).
- *   2. Walk past every extension to confirm it parses cleanly.
+ *   2. Validate every permitted extension and reject duplicates.
  *   3. Feed the message bytes into the running transcript hash, because
  *      the next message's transcript hash snapshot must include it.
  *   4. Advance state to ENCRYPTED_EXTENSIONS_RECEIVED.
  *
- * If a server sends us extensions we don't understand, RFC 8446 §4 says
- * we should ignore unknown extension types — exactly what we do.
+ * ALPN, when returned, must select exactly one protocol that appeared in the
+ * client's configured ProtocolNameList.
  */
 static bool tls_recv_encrypted_extensions(
     struct tls_handshake_context *ctx,
@@ -2686,14 +2925,15 @@ static bool tls_recv_encrypted_extensions(
     offset += 2;
 
     /* Verify extensions fit in message */
-    if (offset + ext_len > data_len)
+    if (offset + ext_len != data_len || ext_len != msg_len - 2u)
     {
         ERROR_CODE(0x6c);
         return false;
     }
 
-    /* Parse extensions (for now we just skip them, but could process
-     * server_name, supported_groups, etc. if needed) */
+    bool seen_server_name = false, seen_alpn = false, seen_groups = false;
+    ctx->negotiated_alpn = NULL;
+    ctx->negotiated_alpn_len = 0;
     size_t ext_offset = 0;
     while (ext_offset + 4 <= ext_len)
     {
@@ -2713,8 +2953,111 @@ static bool tls_recv_encrypted_extensions(
             return false;
         }
 
-        /* Skip extension data - we don't process any extensions currently */
-        (void)ext_type;
+        const uint8_t *ext_data = data + offset + ext_offset;
+        if (ext_type == TLS_EXT_SERVER_NAME)
+        {
+            if (seen_server_name || ext_data_len != 0)
+            {
+                ERROR_CODE(0x6f);
+                return false;
+            }
+            seen_server_name = true;
+        }
+        else if (ext_type == TLS_EXT_ALPN)
+        {
+            size_t offered_offset = 0;
+            const uint8_t *selected = NULL;
+            uint16_t list_len;
+            uint8_t selected_len;
+
+            if (seen_alpn || !ctx->alpn_protocols ||
+                ctx->alpn_protocols_len == 0 || ext_data_len < 4)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_UNSUPPORTED_EXTENSION);
+                return false;
+            }
+            list_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
+            selected_len = ext_data[2];
+            /* A server ALPN response contains exactly one non-empty name. */
+            if (selected_len == 0 || list_len != (uint16_t)(selected_len + 1u) ||
+                ext_data_len != (uint16_t)(list_len + 2u))
+            {
+                ERROR_CODE(0x70);
+                return false;
+            }
+            while (offered_offset < ctx->alpn_protocols_len)
+            {
+                uint8_t offered_len = ctx->alpn_protocols[offered_offset++];
+                if (offered_len == 0 ||
+                    offered_len > ctx->alpn_protocols_len - offered_offset)
+                {
+                    ERROR_CODE(0x71);
+                    return false;
+                }
+                if (offered_len == selected_len &&
+                    memcmp(ctx->alpn_protocols + offered_offset,
+                           ext_data + 3, selected_len) == 0)
+                {
+                    selected = ctx->alpn_protocols + offered_offset;
+                }
+                offered_offset += offered_len;
+            }
+            if (!selected)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_ILLEGAL_PARAMETER);
+                return false;
+            }
+            ctx->negotiated_alpn = selected;
+            ctx->negotiated_alpn_len = selected_len;
+            seen_alpn = true;
+        }
+        else if (ext_type == TLS_EXT_SUPPORTED_GROUPS)
+        {
+            uint16_t groups_len;
+            if (seen_groups || ext_data_len < 4)
+            {
+                ERROR_CODE(0x72);
+                return false;
+            }
+            groups_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
+            if (groups_len < 2 || (groups_len & 1u) != 0 ||
+                groups_len != (uint16_t)(ext_data_len - 2u))
+            {
+                ERROR_CODE(0x73);
+                return false;
+            }
+            /* This is the server's complete supported-group preference list,
+             * not a second key-exchange selection. Unknown/private/grease
+             * groups are valid here; ServerHello.key_share already selected
+             * and validated X25519. Only malformed or duplicate entries are
+             * rejected. */
+            for (size_t group_offset = 2; group_offset < ext_data_len;
+                 group_offset += 2)
+            {
+                uint16_t group = ((uint16_t)ext_data[group_offset] << 8) |
+                                 ext_data[group_offset + 1];
+                for (size_t previous = 2; previous < group_offset;
+                     previous += 2)
+                {
+                    uint16_t previous_group =
+                        ((uint16_t)ext_data[previous] << 8) |
+                        ext_data[previous + 1];
+                    if (previous_group == group)
+                    {
+                        ERROR_CODE(0x74);
+                        return false;
+                    }
+                }
+            }
+            seen_groups = true;
+        }
+        else
+        {
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNSUPPORTED_EXTENSION);
+            return false;
+        }
         ext_offset += ext_data_len;
     }
     if (ext_offset != ext_len)
@@ -2756,6 +3099,7 @@ static bool tls_recv_certificate_request(
     uint8_t request_context_len;
     size_t ext_len;
     size_t ext_offset = 0;
+    bool found_signature_algorithms = false;
 
     if (!ctx || !data || data_len < 7)
     {
@@ -2768,6 +3112,14 @@ static bool tls_recv_certificate_request(
         ERROR_CODE(0x70);
         return false;
     }
+    /* A server authenticating this main handshake with a selected PSK is not
+     * permitted to request a client certificate (RFC 8446 §4.3.2). */
+    if (ctx->psk_mode)
+    {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
+        ERROR_CODE(0x71);
+        return false;
+    }
 
     offset = tls_parse_handshake_header(data, data_len,
                                         TLS_HANDSHAKE_CERTIFICATE_REQUEST,
@@ -2778,6 +3130,11 @@ static bool tls_recv_certificate_request(
         return false;
     }
     msg_end = offset + msg_len;
+    if (msg_end != data_len)
+    {
+        ERROR_CODE(0x72);
+        return false;
+    }
 
     if (offset + 1 > msg_end)
     {
@@ -2788,6 +3145,15 @@ static bool tls_recv_certificate_request(
     if (offset + request_context_len > msg_end)
     {
         ERROR_CODE(0x73);
+        return false;
+    }
+    /* A CertificateRequest sent in the main handshake has an empty context.
+     * Non-empty contexts are reserved for post-handshake authentication,
+     * which this client does not negotiate. */
+    if (request_context_len != 0)
+    {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
+        ERROR_CODE(0x74);
         return false;
     }
     offset += request_context_len;
@@ -2807,9 +3173,14 @@ static bool tls_recv_certificate_request(
 
     while (ext_offset + 4 <= ext_len)
     {
+        size_t this_ext_offset = ext_offset;
+        size_t previous_offset = 0;
+        uint16_t ext_type;
         uint16_t ext_data_len;
 
-        ext_offset += 2; /* Extension type. */
+        ext_type = ((uint16_t)data[offset + ext_offset] << 8) |
+                   (uint16_t)data[offset + ext_offset + 1];
+        ext_offset += 2;
         ext_data_len = ((uint16_t)data[offset + ext_offset] << 8) |
                        (uint16_t)data[offset + ext_offset + 1];
         ext_offset += 2;
@@ -2819,11 +3190,144 @@ static bool tls_recv_certificate_request(
             ERROR_CODE(0x76);
             return false;
         }
+
+        /* RFC 8446 §4.2 forbids duplicate extensions in any extension block,
+         * including types that this client otherwise ignores. */
+        while (previous_offset < this_ext_offset)
+        {
+            uint16_t previous_type =
+                ((uint16_t)data[offset + previous_offset] << 8) |
+                (uint16_t)data[offset + previous_offset + 1];
+            uint16_t previous_len =
+                ((uint16_t)data[offset + previous_offset + 2] << 8) |
+                (uint16_t)data[offset + previous_offset + 3];
+            if (previous_type == ext_type)
+            {
+                ERROR_CODE(0x77);
+                return false;
+            }
+            previous_offset += 4u + previous_len;
+        }
+
+        if (ext_type == TLS_EXT_SIGNATURE_ALGORITHMS ||
+            ext_type == TLS_EXT_SIGNATURE_ALGORITHMS_CERT)
+        {
+            const uint8_t *ext_data = data + offset + ext_offset;
+            uint16_t algorithms_len;
+            if (ext_data_len < 4)
+            {
+                ERROR_CODE(0x78);
+                return false;
+            }
+            algorithms_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
+            if (algorithms_len < 2 || (algorithms_len & 1u) != 0 ||
+                algorithms_len != (uint16_t)(ext_data_len - 2u))
+            {
+                ERROR_CODE(0x79);
+                return false;
+            }
+            if (ext_type == TLS_EXT_SIGNATURE_ALGORITHMS)
+            {
+                found_signature_algorithms = true;
+            }
+        }
+        else if (ext_type == TLS_EXT_CERTIFICATE_AUTHORITIES)
+        {
+            const uint8_t *ext_data = data + offset + ext_offset;
+            size_t names_offset = 2;
+            uint16_t names_len;
+            if (ext_data_len < 5)
+            {
+                ERROR_CODE(0x7a);
+                return false;
+            }
+            names_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
+            if (names_len < 3 || names_len != (uint16_t)(ext_data_len - 2u))
+            {
+                ERROR_CODE(0x7b);
+                return false;
+            }
+            while (names_offset < ext_data_len)
+            {
+                uint16_t name_len;
+                if (ext_data_len - names_offset < 2)
+                {
+                    return false;
+                }
+                name_len = ((uint16_t)ext_data[names_offset] << 8) |
+                           ext_data[names_offset + 1];
+                names_offset += 2;
+                if (name_len == 0 || name_len > ext_data_len - names_offset)
+                {
+                    return false;
+                }
+                names_offset += name_len;
+            }
+        }
+        else if (ext_type == TLS_EXT_OID_FILTERS)
+        {
+            const uint8_t *ext_data = data + offset + ext_offset;
+            size_t filter_offset = 2;
+            uint16_t filters_len;
+            if (ext_data_len < 2)
+            {
+                return false;
+            }
+            filters_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
+            if (filters_len != (uint16_t)(ext_data_len - 2u))
+            {
+                return false;
+            }
+            while (filter_offset < ext_data_len)
+            {
+                size_t this_filter = filter_offset;
+                size_t previous_filter = 2;
+                uint8_t oid_len = ext_data[filter_offset++];
+                uint16_t values_len;
+                if (oid_len == 0 ||
+                    oid_len > ext_data_len - filter_offset ||
+                    ext_data_len - filter_offset - oid_len < 2)
+                {
+                    return false;
+                }
+                while (previous_filter < this_filter)
+                {
+                    uint8_t previous_oid_len = ext_data[previous_filter++];
+                    uint16_t previous_values_len;
+                    if (previous_oid_len == oid_len &&
+                        memcmp(ext_data + previous_filter,
+                               ext_data + filter_offset, oid_len) == 0)
+                    {
+                        return false;
+                    }
+                    previous_filter += previous_oid_len;
+                    previous_values_len =
+                        ((uint16_t)ext_data[previous_filter] << 8) |
+                        ext_data[previous_filter + 1];
+                    previous_filter += 2u + previous_values_len;
+                }
+                filter_offset += oid_len;
+                values_len = ((uint16_t)ext_data[filter_offset] << 8) |
+                             ext_data[filter_offset + 1];
+                filter_offset += 2;
+                if (values_len > ext_data_len - filter_offset)
+                {
+                    return false;
+                }
+                filter_offset += values_len;
+            }
+        }
         ext_offset += ext_data_len;
     }
     if (ext_offset != ext_len)
     {
         ERROR_CODE(0x77);
+        return false;
+    }
+    /* signature_algorithms is mandatory in a TLS 1.3 CertificateRequest. */
+    if (!found_signature_algorithms)
+    {
+        ERROR_CODE(0x7a);
         return false;
     }
 
@@ -3589,10 +4093,10 @@ bool tls_send_empty_certificate(
 /**
  * @brief Verify the server's Finished MAC.
  *
- * This is the critical authentication step. Up to this point we've been
- * trading messages with *someone* — but until we verify a HMAC over the
- * transcript using a key only the legitimate server should know, we
- * have no proof of who's on the other end.
+ * Finished proves that the peer derived the same handshake traffic secret and
+ * that the transcript was not modified. Server identity authentication also
+ * depends on the PSK or on certificate-path, identity, and CertificateVerify
+ * validation performed earlier in the handshake.
  *
  * Compute the same MAC the server claims to have computed and compare
  * in constant time. Mismatch ⇒ MitM, key disagreement, or bug — abort.
@@ -3767,8 +4271,8 @@ static bool tls_recv_finished(
  * We also record sys_now() so we can compute the obfuscated ticket age
  * (ticket_age_add + (sys_now - received_at)) for the next ClientHello.
  *
- * The altcp layer is responsible for persisting (psk, identity) to flash
- * via the appvar mechanism — see altcp_tls_ce_save_pski.
+ * The altcp layer copies accepted tickets into the in-memory PSK cache; the
+ * cache is persisted by tls_cleanup().
  */
 static bool tls_recv_new_session_ticket(
     struct tls_handshake_context *ctx,
@@ -3788,6 +4292,11 @@ static bool tls_recv_new_session_ticket(
     if (!ctx || !data || data_len < 4)
     {
         ERROR_CODE(0xa4);
+        return false;
+    }
+    if (ctx->state != TLS_STATE_HANDSHAKE_COMPLETE)
+    {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
         return false;
     }
 
@@ -3817,7 +4326,7 @@ static bool tls_recv_new_session_ticket(
                      (uint32_t)data[offset + 3];
     offset += 4;
 
-    if (ticket_lifetime == 0)
+    if (ticket_lifetime == 0 || ticket_lifetime > 7u * 24u * 60u * 60u)
     {
         /* RFC 8446 uses a zero lifetime to invalidate/discard the ticket.
          * Resumption is optional; keep the established connection alive. */
@@ -3873,11 +4382,6 @@ static bool tls_recv_new_session_ticket(
          * otherwise healthy application connection. */
         return true;
     }
-    if (nonce_len == 0)
-    {
-        return true;
-    }
-
     if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
                                ctx->keys.resumption_master_secret, 32,
                                "resumption", 10,
@@ -3912,13 +4416,8 @@ static bool tls_recv_new_session_ticket(
  *
  * then re-derives the server application key/IV from the new secret and
  * resets server_seq_num to 0 (a fresh secret means a fresh nonce space,
- * per §7.2 / §5.3). The client's own write-side keys are untouched; if the
- * server requested a reciprocal update we ratchet our own write secret the
- * same way and must emit a non-requesting KeyUpdate of our own before our
- * next application record, but since this implementation does not yet emit
- * post-handshake records of its own outside of alerts, an unanswered
- * update_requested is logged and otherwise treated like an ordinary update;
- * we do not yet send a reciprocal KeyUpdate.
+ * per §7.2 / §5.3). For update_requested, a non-requesting reciprocal
+ * KeyUpdate is sent under the old client key before that write key is ratcheted.
  */
 static bool tls_recv_key_update(
     struct tls_handshake_context *ctx,
@@ -3930,6 +4429,12 @@ static bool tls_recv_key_update(
     if (!ctx || !data || data_len < 5)
     {
         ERROR_CODE(0xad);
+        return false;
+    }
+    if (ctx->state != TLS_STATE_HANDSHAKE_COMPLETE ||
+        ctx->server_key_updates >= TLS_MAX_KEY_UPDATES)
+    {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
         return false;
     }
 
@@ -3949,7 +4454,7 @@ static bool tls_recv_key_update(
         return false;
     }
 
-    uint8_t next_secret[32];
+    uint8_t next_secret[32], next_key[16], next_iv[12];
     if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
                                ctx->keys.server_application_traffic_secret, 32,
                                "traffic upd", 11, NULL, 0,
@@ -3958,26 +4463,39 @@ static bool tls_recv_key_update(
         ERROR_CODE(0xb0);
         return false;
     }
-    memcpy(ctx->keys.server_application_traffic_secret, next_secret, 32);
-    tls_secure_memzero(next_secret, 32);
-
     if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
-                               ctx->keys.server_application_traffic_secret, 32,
+                               next_secret, 32,
                                "key", 3, NULL, 0,
-                               ctx->keys.server_application_key, 16))
+                               next_key, 16))
     {
+        tls_secure_memzero(next_secret, sizeof(next_secret));
         ERROR_CODE(0xb1);
         return false;
     }
     if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
-                               ctx->keys.server_application_traffic_secret, 32,
+                               next_secret, 32,
                                "iv", 2, NULL, 0,
-                               ctx->keys.server_application_iv, 12))
+                               next_iv, 12))
     {
+        tls_secure_memzero(next_secret, sizeof(next_secret));
+        tls_secure_memzero(next_key, sizeof(next_key));
         ERROR_CODE(0xb2);
         return false;
     }
+    memcpy(ctx->keys.server_application_traffic_secret, next_secret, 32);
+    memcpy(ctx->keys.server_application_key, next_key, 16);
+    memcpy(ctx->keys.server_application_iv, next_iv, 12);
+    tls_secure_memzero(next_secret, sizeof(next_secret));
+    tls_secure_memzero(next_key, sizeof(next_key));
+    tls_secure_memzero(next_iv, sizeof(next_iv));
     ctx->server_seq_num = 0;
+    ctx->server_key_updates++;
+
+    if (request_update == 1 && !tls_send_key_update_record(ctx))
+    {
+        ERROR_CODE(0xb3);
+        return false;
+    }
 
     INFO("hs: server key update applied");
     return true;
@@ -4017,6 +4535,68 @@ static int tls_outbound_phase(const struct tls_handshake_context *ctx)
         return 1;
     }
     return 0;
+}
+
+static bool tls_ratchet_client_application_keys(struct tls_handshake_context *ctx)
+{
+    uint8_t next_secret[32], next_key[16], next_iv[12];
+    bool ok = tls_hkdf_expand_label(TLS_HASH_SHA256,
+                                    ctx->keys.client_application_traffic_secret, 32,
+                                    "traffic upd", 11, NULL, 0, next_secret, 32) &&
+              tls_hkdf_expand_label(TLS_HASH_SHA256, next_secret, 32,
+                                    "key", 3, NULL, 0, next_key, 16) &&
+              tls_hkdf_expand_label(TLS_HASH_SHA256, next_secret, 32,
+                                    "iv", 2, NULL, 0, next_iv, 12);
+    if (ok)
+    {
+        memcpy(ctx->keys.client_application_traffic_secret, next_secret, 32);
+        memcpy(ctx->keys.client_application_key, next_key, 16);
+        memcpy(ctx->keys.client_application_iv, next_iv, 12);
+        ctx->client_seq_num = 0;
+        ctx->client_key_updates++;
+    }
+    tls_secure_memzero(next_secret, sizeof(next_secret));
+    tls_secure_memzero(next_key, sizeof(next_key));
+    tls_secure_memzero(next_iv, sizeof(next_iv));
+    return ok;
+}
+
+static bool tls_send_key_update_record(struct tls_handshake_context *ctx)
+{
+    uint8_t record[27]; /* 5 header + 5 handshake + 1 inner type + 16 tag */
+    uint8_t nonce[12], tag[16];
+    TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
+    static const uint8_t message[5] = {TLS_HANDSHAKE_KEY_UPDATE, 0, 0, 1, 0};
+
+    if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE ||
+        !ctx->transport_write || ctx->client_key_updates >= TLS_MAX_KEY_UPDATES ||
+        ctx->client_seq_num >= TLS_AES_GCM_RECORD_LIMIT)
+        return false;
+    record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
+    record[1] = 0x03; record[2] = 0x03;
+    record[3] = 0; record[4] = 22;
+    tls_build_aead_nonce(ctx->keys.client_application_iv, ctx->client_seq_num, nonce);
+    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM,
+                      ctx->keys.client_application_key, 16, nonce, sizeof(nonce)) ||
+        !tls_aes_update_aad(&aes_ctx, record, 5) ||
+        !tls_aes_encrypt(&aes_ctx, message, sizeof(message), record + 5))
+        return false;
+    uint8_t inner_type = TLS_CONTENT_TYPE_HANDSHAKE;
+    if (!tls_aes_encrypt(&aes_ctx, &inner_type, 1, record + 10) ||
+        !tls_aes_digest(&aes_ctx, tag))
+        return false;
+    memcpy(record + 11, tag, sizeof(tag));
+    if (!ctx->transport_write(ctx->transport_arg, record, sizeof(record)))
+        return false;
+    ctx->client_seq_num++;
+    return tls_ratchet_client_application_keys(ctx);
+}
+
+bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx)
+{
+    if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE) return false;
+    if (ctx->client_seq_num < TLS_AES_GCM_RECORD_LIMIT - 1u) return true;
+    return tls_send_key_update_record(ctx);
 }
 
 /**
@@ -4080,6 +4660,9 @@ static bool tls_send_alert(
                 seq_num = &ctx->client_seq_num;
             }
 
+            if (*seq_num >= TLS_AES_GCM_RECORD_LIMIT)
+                return false;
+
             record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
             record[1] = 0x03;
             record[2] = 0x03;
@@ -4096,8 +4679,8 @@ static bool tls_send_alert(
                     tls_aes_digest(&aes_ctx, auth_tag))
                 {
                     memcpy(record + 8, auth_tag, 16);
-                    (*seq_num)++;
                     ok = ctx->transport_write(ctx->transport_arg, record, sizeof(record));
+                    if (ok) (*seq_num)++;
                 }
             }
         }
@@ -4127,7 +4710,7 @@ bool tls_send_close_notify(struct tls_handshake_context *ctx)
         return true;
     }
     bool ok = tls_send_alert(ctx, TLS_ALERT_LEVEL_WARNING, TLS_ALERT_CLOSE_NOTIFY);
-    ctx->close_notify_sent = true;
+    if (ok) ctx->close_notify_sent = true;
     return ok;
 }
 

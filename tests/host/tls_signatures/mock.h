@@ -20,6 +20,15 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t alg, const uint
 void tls_hmac_update(struct tls_hmac_context *ctx, const uint8_t *p, size_t n) {}
 void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *out) { memset(out, 0, 32); }
 static uint32_t sys_now(void) { return 1; }
+static unsigned last_alert;
+static bool tls_send_alert(struct tls_handshake_context *ctx,
+                           uint8_t level, uint8_t description)
+{
+    (void)ctx;
+    (void)level;
+    last_alert = description;
+    return true;
+}
 
 static unsigned pkcs_calls, pss_calls;
 static unsigned cipher_calls;
@@ -50,6 +59,8 @@ static void *tls_fileio_alloc(size_t n) { return malloc(n); }
 static void tls_fileio_free(void *p) { free(p); }
 static bool tls_rng_healthcheck(void) { return true; }
 static void tls_random_bytes(uint8_t *buf, size_t n) { memset(buf, 0, n); }
+static bool tls_request_random_bytes(uint8_t *buf, size_t n, void *cb, void *arg, bool blocking)
+{ (void)cb; (void)arg; (void)blocking; memset(buf, 1, n); return true; }
 static void mem_stats_tls_direct_add(size_t n, size_t unused) { allocated += n; }
 static void mem_stats_tls_direct_release(size_t n, size_t unused) { assert(allocated >= n); allocated -= n; }
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }

@@ -1,8 +1,8 @@
 /**
  * @file tls_algorithms.h
  * @brief TLS algorithm identifiers and canonical DER OID value bytes.
- * 
- * @b {This file contains an exhaustive list of every algorithm currently offered in this TLS implementation.}
+ *
+ * **This file contains an exhaustive list of every algorithm currently offered in this TLS implementation.**
  *
  * This file identifies algorithms only. Parsing rules, parameter validation,
  * key compatibility, and execution deliberately remain with their respective

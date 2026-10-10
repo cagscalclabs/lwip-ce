@@ -5,6 +5,8 @@
 #include "../includes/rsa.h"
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
+#include "../includes/tls.h"
+#include "lwip/sntp_time.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_TRUSTSTORE
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -51,14 +53,16 @@
  * subject-name lookup (tls_truststore_lookup_by_subject) of its issuer. If
  * absent, root anchoring is skipped for that chain (see truststore.h).
  *
- * [TODO] Age warning: if (now - created_timestamp) > TLS_TRUSTSTORE_AGE_WARN_DAYS,
- * library will print a warning suggesting truststore update.
+ * Stores older than the configured age threshold emit a warning after their
+ * signature has been verified; individual root validity windows are enforced
+ * during lookup.
  */
 
 char *truststore_name = "lwIPCERT";
 bool truststore_valid_for_session = false;
 
 #define TLS_TRUSTSTORE_VERSION 1
+#define TLS_TRUSTSTORE_AGE_WARN_SECONDS (180u * 24u * 60u * 60u)
 
 uint8_t trust_store_pubkey[] = {
     0xA1, 0xD3, 0x45, 0x9D, 0xC3, 0xD2, 0x1D, 0x6A, 0x9B, 0xA1, 0xD2, 0xCD, 0xEB, 0x4A, 0x10, 0xD0,
@@ -93,11 +97,17 @@ tls_truststore_status_t tls_truststore_init(void)
      * from a previous lwip session could survive a stop/restart and let
      * certificate lookups trust an unvalidated store (fail-OPEN). */
     truststore_valid_for_session = false;
+    tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
+    tls_ctx.truststore.size = 0;
+    tls_ctx.truststore.entry_count = 0;
+    tls_ctx.truststore.version = 0;
+    tls_ctx.truststore.created_timestamp = 0;
 
     TS_TRACE("E0 enter");
     // If hash init fails, error out early
     if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
     {
+        tls_ctx.truststore.status = TLS_STORE_HASH_FAIL;
         ERROR_CODE(TLS_STORE_HASH_FAIL);
         return TLS_STORE_HASH_FAIL;
     }
@@ -107,6 +117,7 @@ tls_truststore_status_t tls_truststore_init(void)
     uint8_t ts_h = file_fn.ti_open(truststore_name, "r");
     if (!ts_h)
     {
+        tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
         WARN_CODE(TLS_STORE_NOT_FOUND);
         return TLS_STORE_NOT_FOUND;
     }
@@ -117,6 +128,7 @@ tls_truststore_status_t tls_truststore_init(void)
     if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
     {
         file_fn.ti_close(ts_h);
+        tls_ctx.truststore.status = TLS_STORE_SIZE_INVALID;
         ERROR_CODE(TLS_STORE_SIZE_INVALID);
         return TLS_STORE_SIZE_INVALID;
     }
@@ -125,15 +137,20 @@ tls_truststore_status_t tls_truststore_init(void)
     if (header->version != TLS_TRUSTSTORE_VERSION)
     {
         file_fn.ti_close(ts_h);
+        tls_ctx.truststore.status = TLS_STORE_VERSION_MISMATCH;
         ERROR_CODE(TLS_STORE_VERSION_MISMATCH);
         return TLS_STORE_VERSION_MISMATCH;
     }
     uint8_t *store_db_start = store_header_bytes + TLS_TRUSTSTORE_HEADER_LEN;
     uint16_t store_db_len = truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
+    tls_ctx.truststore.size = truststore_size;
+    tls_ctx.truststore.entry_count = header->entry_count;
+    tls_ctx.truststore.version = header->version;
+    tls_ctx.truststore.created_timestamp = header->created_timestamp;
 
     TS_TRACE("E1 hash hdr");
     // Hash header fields (version + timestamp + entry_count) and entries
-    tls_hash_update(&hash_ctx, &header->version,
+    tls_hash_update(&hash_ctx, (const uint8_t *)&header->version,
                     sizeof(header->version) + sizeof(header->created_timestamp) + sizeof(header->entry_count));
     TS_TRACE("E2 hash db");
     tls_hash_update(&hash_ctx, store_db_start, store_db_len);
@@ -150,6 +167,7 @@ tls_truststore_status_t tls_truststore_init(void)
     if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, &trust_store_key))
     {
         file_fn.ti_close(ts_h);
+        tls_ctx.truststore.status = TLS_STORE_SIG_INVALID;
         ERROR_CODE(TLS_STORE_SIG_INVALID);
         return TLS_STORE_SIG_INVALID;
     }
@@ -162,13 +180,26 @@ tls_truststore_status_t tls_truststore_init(void)
     if (verified)
     {
         truststore_valid_for_session = true;
+        tls_ctx.truststore.status = TLS_STORE_OK;
+        uint32_t now = lwip_sntp_get_unix_time();
+        if (now != 0 && now > tls_ctx.truststore.created_timestamp &&
+            now - tls_ctx.truststore.created_timestamp > TLS_TRUSTSTORE_AGE_WARN_SECONDS)
+            WARN_CODE((now - tls_ctx.truststore.created_timestamp) / (24u * 60u * 60u));
         INFO("truststore verified");
     }
     else
     {
+        tls_ctx.truststore.status = TLS_STORE_SIG_INVALID;
         ERROR_CODE(TLS_STORE_SIG_INVALID);
     }
     return verified ? TLS_STORE_OK : TLS_STORE_SIG_INVALID;
+}
+
+static bool tls_truststore_entry_current(const struct tls_truststore_entry *entry)
+{
+    uint32_t now = lwip_sntp_get_unix_time();
+    return entry && now != 0 && entry->expiry_start <= entry->expiry_end &&
+           now >= entry->expiry_start && now <= entry->expiry_end;
 }
 
 static bool tls_truststore_open_db(uint8_t **db_out, uint16_t *db_len_out,
@@ -222,7 +253,8 @@ bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **res
         if (entry->len < sizeof(struct tls_truststore_entry) ||
             offset + entry->len > db_len)
             break;
-        if (tls_bytes_compare(ski, entry->ski, TLS_TRUSTSTORE_SKI_LEN))
+        if (tls_bytes_compare(ski, entry->ski, TLS_TRUSTSTORE_SKI_LEN) &&
+            tls_truststore_entry_current(entry))
         {
             if (result) *result = entry;
             found = true;
@@ -263,7 +295,8 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
         while (entry_subj_len < TLS_TRUSTSTORE_SUBJECT_LEN && entry->subject[entry_subj_len])
             entry_subj_len++;
         if (entry_subj_len == subject_len &&
-            memcmp(subject, entry->subject, subject_len) == 0)
+            memcmp(subject, entry->subject, subject_len) == 0 &&
+            tls_truststore_entry_current(entry))
         {
             if (result) *result = entry;
             found = true;
