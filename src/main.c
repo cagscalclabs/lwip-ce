@@ -41,16 +41,13 @@
 #include "drivers/pcap.h"
 #include "drivers/pcap_decode.h"
 #include "lwip-imports.h"
+#include "lwIP.h"
 #include "tls/includes/handshake.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
 
 #define LWIP_CFG_TZ_MIN_MINUTES (-12 * 60)
 #define LWIP_CFG_TZ_MAX_MINUTES (14 * 60)
 #define LWIP_CFG_TZ_STEP_MINUTES 15
-
-#define LWIP_CFG_LOG_MIN_BYTES 1024u
-#define LWIP_CFG_LOG_MAX_BYTES 16384u
-#define LWIP_CFG_LOG_STEP_BYTES 512u
 
 #ifndef LWIP_APP_ENABLE_SERVICE_EXAMPLES
 #define LWIP_APP_ENABLE_SERVICE_EXAMPLES 0
@@ -73,6 +70,7 @@ typedef enum
     OPT_TZ_OFFSET,
     OPT_DST,
     OPT_TLS_ENABLED,
+    OPT_PCAP_MAX_SIZE,
     OPT_VIEW_PCAP,
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     OPT_SEP_TESTS,
@@ -89,7 +87,8 @@ typedef enum
 typedef enum
 {
     EDIT_NONE = 0,
-    EDIT_TZ
+    EDIT_TZ,
+    EDIT_PCAP_SIZE
 } edit_mode_t;
 
 struct config_option;
@@ -98,6 +97,7 @@ typedef bool (*config_setter_fn)(struct config_option *opt);
 struct config_option
 {
     const char *name;
+    const char *hint;
     config_option_id id;
     f_type type;
     config_setter_fn setter;
@@ -115,6 +115,7 @@ static volatile bool netif_unavailable = false;
 #endif
 
 static lwip_app_config_t g_cfg;
+static bool g_pcap_available;
 
 // Legacy color constants (used by test functions)
 #define COLOR_WHITE 0xFFFF
@@ -122,13 +123,15 @@ static lwip_app_config_t g_cfg;
 #define COLOR_LIGHT_GRAY 0xD6BA
 
 // New UI color palette
-#define UI_COLOR_BG         0xFFFF  // White background
-#define UI_COLOR_FG         0x0000  // Black text
-#define UI_COLOR_ACCENT     0x001F  // Blue accent (RGB565)
-#define UI_COLOR_SELECTED   0x7BEF  // Light blue selection
-#define UI_COLOR_SEPARATOR  0xC618  // Gray for separators
-#define UI_COLOR_HEADER     0x0000  // Black header
-#define UI_COLOR_EDIT_BG    0xFFE0  // Yellow for edit mode
+#define UI_COLOR_BG         0xF7BE  // Warm white
+#define UI_COLOR_SURFACE    0xFFFF  // Card surface
+#define UI_COLOR_FG         0x18C3  // Ink blue
+#define UI_COLOR_MUTED      0x8410  // Secondary text
+#define UI_COLOR_ACCENT     0x24BF  // Bright blue
+#define UI_COLOR_SELECTED   0xD69F  // Pale blue selection
+#define UI_COLOR_SEPARATOR  0xDEFB  // Subtle divider
+#define UI_COLOR_HEADER     0x1083  // Deep navy
+#define UI_COLOR_EDIT_BG    0xFF35  // Warm edit highlight
 
 static void delay_ms(unsigned int ms)
 {
@@ -149,6 +152,7 @@ static void apply_network_config(const lwip_app_config_t *cfg);
 static void fill_rect(int x, int y, int w, int h, uint16_t color);
 static void ui_draw_header(const char *title);
 static void ui_draw_footer(const char *line1, const char *line2);
+static void ui_slider(int x, int y, int w, int value, int min_val, int max_val);
 
 static bool config_toggle_option(struct config_option *opt);
 static bool config_edit_ip(struct config_option *opt);
@@ -173,20 +177,21 @@ static bool dhcp_client_running(const struct netif *netif)
 #endif
 
 static struct config_option config_options[] = {
-    {"IP Config",       OPT_EDIT_IP,      F_TYPE_ACTION,       config_edit_ip, {0}},
-    {"Hostname",        OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
-    {"Timezone",        OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
-    {"DST",             OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Enable TLS",      OPT_TLS_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"View pcap file",  OPT_VIEW_PCAP,    F_TYPE_ACTION,       config_run_pcap_viewer, {0}},
+    {"Network address", "DHCP or static IPv4",       OPT_EDIT_IP,      F_TYPE_ACTION,       config_edit_ip, {0}},
+    {"Hostname",        "Name advertised by lwIP",   OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
+    {"Timezone",        "Local offset from UTC",     OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
+    {"Daylight saving", "Apply the DST adjustment",  OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"TLS",             "Allow encrypted sockets",   OPT_TLS_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Capture limit",   "Maximum saved AppVar size", OPT_PCAP_MAX_SIZE,F_TYPE_INT_SLIDER,   NULL, {0}},
+    {"Packet capture",  "Inspect saved packets",     OPT_VIEW_PCAP,    F_TYPE_ACTION,       config_run_pcap_viewer, {0}},
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-    {"-- Tests --",     OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
-    {"NTP Test",        OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
-    {"HTTP Test",       OPT_HTTP_TEST,    F_TYPE_ACTION,       config_run_http_test, {0}},
-    {"DNS Test",        OPT_DNS_TEST,     F_TYPE_ACTION,       config_run_dns_test, {0}},
-    {"Ping Test",       OPT_PING_TEST,    F_TYPE_ACTION,       config_run_ping_test, {0}},
-    {"TCP Echo",        OPT_TCP_ECHO_TEST,F_TYPE_ACTION,       config_run_tcp_echo_test, {0}},
-    {"TLS Test",        OPT_TLS_TEST,     F_TYPE_ACTION,       config_run_tls_test, {0}},
+    {"Tests",           NULL,             OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
+    {"NTP Test",        "Request network time", OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
+    {"HTTP Test",       "Open a sample request", OPT_HTTP_TEST,    F_TYPE_ACTION,       config_run_http_test, {0}},
+    {"DNS Test",        "Resolve a hostname", OPT_DNS_TEST,     F_TYPE_ACTION,       config_run_dns_test, {0}},
+    {"Ping Test",       "Send ICMP echo", OPT_PING_TEST,    F_TYPE_ACTION,       config_run_ping_test, {0}},
+    {"TCP Echo",        "Exercise a TCP stream", OPT_TCP_ECHO_TEST,F_TYPE_ACTION,       config_run_tcp_echo_test, {0}},
+    {"TLS Test",        "Exercise a TLS stream", OPT_TLS_TEST,     F_TYPE_ACTION,       config_run_tls_test, {0}},
 #endif
 };
 
@@ -235,18 +240,17 @@ static bool option_get_bool(const uint8_t value[4])
 #define VRAM_BASE ((uint16_t *)0xD40000)
 
 // Layout constants
-#define UI_HEADER_H     22
-#define UI_FOOTER_H     28
+#define UI_HEADER_H     28
+#define UI_FOOTER_H     30
 #define UI_CONTENT_Y    (UI_HEADER_H)
 #define UI_CONTENT_H    (LCD_HEIGHT - UI_HEADER_H - UI_FOOTER_H)
-/* Row line spacing. Font height is 8px; rowN_texty_start = rowN_y + 1,
- * rowN_boxy_start = rowN_y, box height = 10 -- exactly UI_ROW_H, so a row's
- * box/text never overlaps the next row's background fill. */
-#define UI_ROW_H        16
-#define UI_ROW_TEXT_OFF  2
+/* The selected small font is 8px high. Two measured text lines plus breathing
+ * room fit in each row without assuming fixed character widths. */
+#define UI_ROW_H        30
+#define UI_ROW_TEXT_OFF  4
 #define UI_VISIBLE_ROWS (UI_CONTENT_H / UI_ROW_H)
 #define UI_MARGIN       8
-#define UI_VALUE_X      180
+#define UI_VALUE_X      174
 #define UI_FOOTER_LINE_H 12
 
 // Fill rectangle with clipping
@@ -332,49 +336,88 @@ static void ui_draw_header(const char *title)
 {
     ui_fill_rect(0, 0, LCD_WIDTH, UI_HEADER_H, UI_COLOR_HEADER);
     os_SetDrawFGColor(UI_COLOR_BG);
-    int tw = (int)os_FontGetWidth(title);
-    os_FontDrawTransText(title, (LCD_WIDTH - tw) / 2, 5);
+    os_FontDrawTransText(title, UI_MARGIN, 8);
+
+    char version[20];
+    snprintf(version, sizeof(version), "v%s", lwip_version_string());
+    int vw = (int)os_FontGetWidth(version);
+    os_FontDrawTransText(version, LCD_WIDTH - UI_MARGIN - vw, 8);
 }
 
 // Draw footer with help text (supports two lines)
 static void ui_draw_footer(const char *line1, const char *line2)
 {
     int y = LCD_HEIGHT - UI_FOOTER_H;
-    ui_fill_rect(0, y, LCD_WIDTH, UI_FOOTER_H, UI_COLOR_SEPARATOR);
-    ui_hline(0, y, LCD_WIDTH, UI_COLOR_FG);
+    ui_fill_rect(0, y, LCD_WIDTH, UI_FOOTER_H, UI_COLOR_HEADER);
+    ui_hline(0, y, LCD_WIDTH, UI_COLOR_ACCENT);
     os_SetDrawFGColor(UI_COLOR_FG);
 
     // Center each line
     if (line1)
     {
         int w1 = (int)os_FontGetWidth(line1);
-        os_FontDrawTransText(line1, (LCD_WIDTH - w1) / 2, y + 2);
+        os_SetDrawFGColor(UI_COLOR_BG);
+        os_FontDrawTransText(line1, (LCD_WIDTH - w1) / 2, y + 3);
     }
     if (line2)
     {
         int w2 = (int)os_FontGetWidth(line2);
-        os_FontDrawTransText(line2, (LCD_WIDTH - w2) / 2, y + 2 + UI_FOOTER_LINE_H);
+        os_SetDrawFGColor(UI_COLOR_SEPARATOR);
+        os_FontDrawTransText(line2, (LCD_WIDTH - w2) / 2, y + 3 + UI_FOOTER_LINE_H);
     }
+}
+
+static void ui_draw_toggle(int x, int y, bool on)
+{
+    uint16_t track = on ? UI_COLOR_ACCENT : UI_COLOR_SEPARATOR;
+    ui_fill_rect(x, y, 38, 14, track);
+    ui_fill_rect(x + (on ? 25 : 3), y + 3, 10, 8,
+                 on ? UI_COLOR_SURFACE : UI_COLOR_MUTED);
+}
+
+static void ui_draw_fitted_right(const char *text, int right, int y, int max_width)
+{
+    char fitted[32];
+    size_t len;
+
+    if (!text || !text[0] || max_width <= 0)
+        return;
+
+    snprintf(fitted, sizeof(fitted), "%s", text);
+    len = strlen(fitted);
+    while (len > 1 && (int)os_FontGetWidth(fitted) > max_width)
+    {
+        fitted[--len] = '\0';
+    }
+    if (len < strlen(text) && len > 3)
+    {
+        fitted[len - 1] = '.';
+        fitted[len - 2] = '.';
+        fitted[len - 3] = '.';
+    }
+
+    int width = (int)os_FontGetWidth(fitted);
+    os_FontDrawTransText(fitted, right - width, y);
 }
 
 // Draw a single menu row
 static void ui_draw_row(int row_y, const char *label, const char *value,
                         bool selected, bool editing, bool is_separator,
-                        f_type type)
+                        f_type type, config_option_id id, const char *hint)
 {
-    uint16_t bg = UI_COLOR_BG;
+    uint16_t bg = UI_COLOR_SURFACE;
     uint16_t fg = UI_COLOR_FG;
 
     if (is_separator)
     {
         // Separator: centered text with lines
         ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, UI_COLOR_BG);
-        os_SetDrawFGColor(UI_COLOR_SEPARATOR);
+        os_SetDrawFGColor(UI_COLOR_MUTED);
         int lw = (int)os_FontGetWidth(label);
         int lx = (LCD_WIDTH - lw) / 2;
         ui_hline(UI_MARGIN, row_y + UI_ROW_H/2, lx - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
         ui_hline(lx + lw + 4, row_y + UI_ROW_H/2, LCD_WIDTH - lx - lw - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
-        os_FontDrawTransText(label, lx, row_y + UI_ROW_TEXT_OFF);
+        os_FontDrawTransText(label, lx, row_y + 11);
         return;
     }
 
@@ -383,21 +426,64 @@ static void ui_draw_row(int row_y, const char *label, const char *value,
         bg = editing ? UI_COLOR_EDIT_BG : UI_COLOR_SELECTED;
     }
 
-    ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, bg);
+    ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, UI_COLOR_BG);
+    ui_fill_rect(4, row_y + 1, LCD_WIDTH - 8, UI_ROW_H - 2, bg);
+    if (selected)
+        ui_fill_rect(4, row_y + 1, 4, UI_ROW_H - 2, UI_COLOR_ACCENT);
 
-    // Label
     os_SetDrawFGColor(fg);
     os_FontDrawTransText(label, UI_MARGIN + 6, row_y + UI_ROW_TEXT_OFF);
-
-    (void)type;
-
-    // Value (right-aligned area)
-    if (value && value[0])
+    if (hint && hint[0])
     {
-        int vw = (int)os_FontGetWidth(value);
-        int vx = LCD_WIDTH - UI_MARGIN - vw;
-        if (vx < UI_VALUE_X) vx = UI_VALUE_X;
-        os_FontDrawTransText(value, vx, row_y + UI_ROW_TEXT_OFF);
+        os_SetDrawFGColor(UI_COLOR_MUTED);
+        os_FontDrawTransText(hint, UI_MARGIN + 6, row_y + 16);
+    }
+
+    if (type == F_TYPE_BOOL_TOGGLE)
+    {
+        ui_draw_toggle(LCD_WIDTH - UI_MARGIN - 42, row_y + 8,
+                       value && strcmp(value, "ON") == 0);
+    }
+    else if (type == F_TYPE_ACTION)
+    {
+        if (value && value[0])
+        {
+            os_SetDrawFGColor(UI_COLOR_FG);
+            ui_draw_fitted_right(value, LCD_WIDTH - 28, row_y + UI_ROW_TEXT_OFF,
+                                 LCD_WIDTH - UI_VALUE_X - 36);
+        }
+        os_SetDrawFGColor(UI_COLOR_ACCENT);
+        os_FontDrawTransText(">", LCD_WIDTH - 18, row_y + 10);
+    }
+    else if (value && value[0])
+    {
+        os_SetDrawFGColor(UI_COLOR_FG);
+        ui_draw_fitted_right(value, LCD_WIDTH - UI_MARGIN - 4,
+                             row_y + UI_ROW_TEXT_OFF,
+                             LCD_WIDTH - UI_VALUE_X - UI_MARGIN);
+        if (type == F_TYPE_INT_SLIDER && selected)
+        {
+            int val;
+            int min_val;
+            int max_val;
+            if (id == OPT_PCAP_MAX_SIZE)
+            {
+                uint16_t bytes = option_get_u16(config_options[OPT_PCAP_MAX_SIZE].value);
+                val = bytes == LWIP_CFG_PCAP_SIZE_4K ? 0 :
+                      bytes == LWIP_CFG_PCAP_SIZE_8K ? 1 :
+                      bytes == LWIP_CFG_PCAP_SIZE_16K ? 2 : 3;
+                min_val = 0;
+                max_val = 3;
+            }
+            else
+            {
+                val = option_get_i16(config_options[OPT_TZ_OFFSET].value);
+                min_val = LWIP_CFG_TZ_MIN_MINUTES;
+                max_val = LWIP_CFG_TZ_MAX_MINUTES;
+            }
+            ui_slider(UI_VALUE_X, row_y + 16, LCD_WIDTH - UI_VALUE_X - 12,
+                      val, min_val, max_val);
+        }
     }
 }
 
@@ -405,6 +491,47 @@ static void ui_draw_row(int row_y, const char *label, const char *value,
 static int ui_row_y(int visible_idx)
 {
     return UI_CONTENT_Y + visible_idx * UI_ROW_H;
+}
+
+static bool option_is_visible(const struct config_option *opt)
+{
+    return opt->id != OPT_VIEW_PCAP || g_pcap_available;
+}
+
+static int visible_option_count(void)
+{
+    int count = 0;
+    for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
+        if (option_is_visible(&config_options[i]))
+            count++;
+    return count;
+}
+
+static int visible_position_for_index(int idx)
+{
+    int position = 0;
+    for (int i = 0; i < (int)CONFIG_OPTION_COUNT; i++)
+    {
+        if (!option_is_visible(&config_options[i]))
+            continue;
+        if (i == idx)
+            return position;
+        position++;
+    }
+    return -1;
+}
+
+static int option_index_at_visible(int position)
+{
+    int visible = 0;
+    for (int i = 0; i < (int)CONFIG_OPTION_COUNT; i++)
+    {
+        if (!option_is_visible(&config_options[i]))
+            continue;
+        if (visible++ == position)
+            return i;
+    }
+    return -1;
 }
 
 // Draw scrollbar if needed
@@ -425,7 +552,7 @@ static void ui_draw_scrollbar(int scroll_pos, int total_items)
 // Draw a single option row by index (for optimized redraws)
 static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, bool editing)
 {
-    int v = idx - scroll_pos;
+    int v = visible_position_for_index(idx) - scroll_pos;
     if (v < 0 || v >= UI_VISIBLE_ROWS) return;
     if (idx < 0 || idx >= (int)CONFIG_OPTION_COUNT) return;
 
@@ -440,7 +567,7 @@ static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, boo
 
     ui_draw_row(ui_row_y(v), opt->name, value,
                 idx == selected_idx, editing && idx == selected_idx, is_sep,
-                opt->type);
+                opt->type, opt->id, opt->hint);
 }
 
 // Draw entire menu
@@ -452,8 +579,8 @@ static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
     // Draw visible rows
     for (int v = 0; v < UI_VISIBLE_ROWS; v++)
     {
-        int idx = scroll_pos + v;
-        if (idx >= (int)CONFIG_OPTION_COUNT) break;
+        int idx = option_index_at_visible(scroll_pos + v);
+        if (idx < 0) break;
 
         const struct config_option *opt = &config_options[idx];
         char value[32] = {0};
@@ -466,10 +593,10 @@ static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
 
         ui_draw_row(ui_row_y(v), opt->name, value,
                     idx == selected_idx, editing && idx == selected_idx, is_sep,
-                    opt->type);
+                    opt->type, opt->id, opt->hint);
     }
 
-    ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
+    ui_draw_scrollbar(scroll_pos, visible_option_count());
 }
 
 // Draw footer based on current mode
@@ -500,10 +627,11 @@ static void ui_draw_full(int selected_idx, int scroll_pos, edit_mode_t edit_mode
 // Ensure selected item is visible, returns new scroll position
 static int ui_ensure_visible(int selected_idx, int scroll_pos)
 {
-    if (selected_idx < scroll_pos)
-        return selected_idx;
-    if (selected_idx >= scroll_pos + UI_VISIBLE_ROWS)
-        return selected_idx - UI_VISIBLE_ROWS + 1;
+    int position = visible_position_for_index(selected_idx);
+    if (position < scroll_pos)
+        return position;
+    if (position >= scroll_pos + UI_VISIBLE_ROWS)
+        return position - UI_VISIBLE_ROWS + 1;
     return scroll_pos;
 }
 
@@ -519,6 +647,9 @@ static void option_sync_from_cfg(struct config_option *opt)
         break;
     case OPT_TLS_ENABLED:
         option_set_bool(opt->value, g_cfg.tls_enabled != 0);
+        break;
+    case OPT_PCAP_MAX_SIZE:
+        option_set_u16(opt->value, g_cfg.pcap_max_bytes);
         break;
     default:
         // Action/separator types, no sync needed
@@ -544,10 +675,9 @@ static void config_sync_from_cfg(void)
 
 static bool option_is_selectable(const struct config_option *opt)
 {
-    if (opt->type == F_TYPE_LABEL || opt->type == F_TYPE_SEPARATOR)
+    if (!option_is_visible(opt))
         return false;
-    /* Hide pcap viewer if no capture file exists yet. */
-    if (opt->id == OPT_VIEW_PCAP && !os_GetAppVarData("lwIPPCAP", NULL))
+    if (opt->type == F_TYPE_LABEL || opt->type == F_TYPE_SEPARATOR)
         return false;
     return true;
 }
@@ -595,6 +725,9 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_TLS_ENABLED:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
+    case OPT_PCAP_MAX_SIZE:
+        snprintf(buf, buf_len, "%u KiB", option_get_u16(opt->value) / 1024u);
+        break;
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     case OPT_NTP_TEST:
     case OPT_HTTP_TEST:
@@ -602,13 +735,17 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_PING_TEST:
     case OPT_TCP_ECHO_TEST:
     case OPT_TLS_TEST:
-        snprintf(buf, buf_len, ">");
+        buf[0] = '\0';
         break;
 #endif
     case OPT_EDIT_IP:
-        snprintf(buf, buf_len, "%u.%u.%u.%u",
-                 g_cfg.ip_addr[0], g_cfg.ip_addr[1],
-                 g_cfg.ip_addr[2], g_cfg.ip_addr[3]);
+        if ((g_cfg.ip_addr[0] | g_cfg.ip_addr[1] |
+             g_cfg.ip_addr[2] | g_cfg.ip_addr[3]) == 0)
+            snprintf(buf, buf_len, "DHCP");
+        else
+            snprintf(buf, buf_len, "%u.%u.%u.%u",
+                     g_cfg.ip_addr[0], g_cfg.ip_addr[1],
+                     g_cfg.ip_addr[2], g_cfg.ip_addr[3]);
         break;
     case OPT_HOSTNAME:
         snprintf(buf, buf_len, "%s", g_cfg.hostname);
@@ -648,6 +785,19 @@ static bool config_edit_hostname(struct config_option *opt)
     (void)opt;
     edit_hostname_config(&g_cfg);
     return true;
+}
+
+static bool config_has_readable_pcap(void)
+{
+    struct pcap_reader_ctx ctx;
+    struct pcap *header;
+    const uint8_t *data;
+
+    if (!pcap_init_reader_ctx(&ctx))
+        return false;
+    bool available = pcap_read_next(&ctx, &header, &data);
+    pcap_close_reader_ctx(&ctx);
+    return available;
 }
 
 // Common cleanup for all tests - waits for Clear key and clears screen
@@ -2257,8 +2407,10 @@ static void ui_draw_number_input(int x, int y, int w, const char *digits)
 // Numeric entry dialog (0-255)
 static bool ui_edit_number(const char *title, uint8_t *value, uint8_t max_val)
 {
-    char digits[4] = {0};
-    int pos = 0;
+    char digits[4];
+    snprintf(digits, sizeof(digits), "%u", *value);
+    int pos = (int)strlen(digits);
+    bool replace_on_type = true;
 
     // Dialog layout
     const int dlg_x = 70, dlg_y = 80, dlg_w = 180, dlg_h = 60;
@@ -2291,14 +2443,23 @@ static bool ui_edit_number(const char *title, uint8_t *value, uint8_t max_val)
         }
         if (key == sk_Del && pos > 0)
         {
+            replace_on_type = false;
             digits[--pos] = 0;
             ui_draw_number_input(input_x, input_y, input_w, digits);
             continue;
         }
 
         char c = scancode_to_digit(key);
-        if (c && pos < 3)
+        if (c)
         {
+            if (replace_on_type)
+            {
+                pos = 0;
+                digits[0] = '\0';
+                replace_on_type = false;
+            }
+            if (pos >= 3)
+                continue;
             digits[pos++] = c;
             digits[pos] = 0;
             ui_draw_number_input(input_x, input_y, input_w, digits);
@@ -2343,14 +2504,18 @@ static char scancode_to_alpha(uint8_t key, input_mode_t mode)
         if (key == sk_7) return '7';
         if (key == sk_8) return '8';
         if (key == sk_9) return '9';
-        // Allow space in digit mode too
-        if (key < 64 && keymap[key] == ' ') return ' ';
+        if (key == sk_DecPnt) return '.';
+        if (key == sk_Sub) return '-';
         return 0;
     }
 
     // Handle letter modes
     if (key >= 64) return 0;
     char c = keymap[key];
+    if (key == sk_Sub) c = '-';
+    if (key == sk_DecPnt) c = '.';
+    if (!((c >= 'a' && c <= 'z') || c == '-' || c == '.'))
+        return 0;
     if (c >= 'a' && c <= 'z' && mode == INPUT_MODE_UPPER)
     {
         c = (char)(c - 'a' + 'A');
@@ -2392,7 +2557,7 @@ static void edit_hostname_config(lwip_app_config_t *cfg)
     ui_dialog_box(dlg_x, dlg_y, dlg_w, dlg_h, "Edit Hostname");
     ui_draw_hostname_mode(mode_y, mode);
     ui_draw_hostname_input(input_y, buffer);
-    ui_draw_footer("<alpha> Mode  <del> Back",
+    ui_draw_footer("<alpha> Mode  <del> Backspace",
                    "<enter> OK  <clear> Cancel");
 
     while (1)
@@ -2448,6 +2613,8 @@ static void ui_draw_ip_octets(int y, const uint8_t *addr, bool selected, int sel
         char buf[8];
         snprintf(buf, sizeof(buf), "%u", addr[o]);
         int x = IP_ADDR_X + o * IP_OCTET_W;
+        int text_w = (int)os_FontGetWidth(buf);
+        int text_x = x + (30 - text_w) / 2;
 
         if (selected && o == sel_octet)
         {
@@ -2458,7 +2625,7 @@ static void ui_draw_ip_octets(int y, const uint8_t *addr, bool selected, int sel
         {
             os_SetDrawFGColor(UI_COLOR_FG);
         }
-        os_FontDrawTransText(buf, x, y + 4);
+        os_FontDrawTransText(buf, text_x, y + 4);
 
         if (o < 3)
         {
@@ -2466,6 +2633,23 @@ static void ui_draw_ip_octets(int y, const uint8_t *addr, bool selected, int sel
             os_FontDrawTransText(".", x + 26, y + 4);
         }
     }
+}
+
+static bool ui_ip_is_dhcp(const lwip_app_config_t *cfg)
+{
+    return (cfg->ip_addr[0] | cfg->ip_addr[1] |
+            cfg->ip_addr[2] | cfg->ip_addr[3]) == 0;
+}
+
+static void ui_draw_ip_mode(const lwip_app_config_t *cfg)
+{
+    const char *mode = ui_ip_is_dhcp(cfg) ? "DHCP" : "Static";
+    ui_fill_rect(0, UI_HEADER_H, LCD_WIDTH, 18, UI_COLOR_BG);
+    os_SetDrawFGColor(UI_COLOR_MUTED);
+    os_FontDrawTransText("Addressing", 20, UI_HEADER_H + 5);
+    os_SetDrawFGColor(UI_COLOR_ACCENT);
+    int width = (int)os_FontGetWidth(mode);
+    os_FontDrawTransText(mode, LCD_WIDTH - 20 - width, UI_HEADER_H + 5);
 }
 
 // Draw full IP row (label + octets)
@@ -2492,12 +2676,13 @@ static void edit_ip_config(lwip_app_config_t *cfg)
     boot_ClearVRAM();
     os_FontSelect(os_SmallFont);
     ui_draw_header("IP Configuration");
+    ui_draw_ip_mode(cfg);
     for (int f = 0; f < 3; f++)
     {
         ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
     }
     ui_draw_footer("<arrows> Navigate  <enter> Edit",
-                   "<clear> Done  DHCP default");
+                   "<mode> DHCP  <clear> Done");
 
     while (1)
     {
@@ -2505,6 +2690,18 @@ static void edit_ip_config(lwip_app_config_t *cfg)
         do { key = os_GetCSC(); } while (key == 0);
 
         if (key == sk_Clear) return;
+
+        if (key == sk_Mode)
+        {
+            memset(cfg->ip_addr, 0, sizeof(cfg->ip_addr));
+            memset(cfg->ip_gateway, 0, sizeof(cfg->ip_gateway));
+            memset(cfg->ip_netmask, 0, sizeof(cfg->ip_netmask));
+            ui_draw_ip_mode(cfg);
+            for (int f = 0; f < 3; f++)
+                ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f],
+                                    f == field, f == field ? octet : -1);
+            continue;
+        }
 
         int old_field = field;
         int old_octet = octet;
@@ -2521,12 +2718,13 @@ static void edit_ip_config(lwip_app_config_t *cfg)
                 boot_ClearVRAM();
                 os_FontSelect(os_SmallFont);
                 ui_draw_header("IP Configuration");
+                ui_draw_ip_mode(cfg);
                 for (int f = 0; f < 3; f++)
                 {
                     ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
                 }
                 ui_draw_footer("<arrows> Navigate  <enter> Edit",
-                               "<clear> Done  DHCP default");
+                               "<mode> DHCP  <clear> Done");
             }
             continue;
         }
@@ -2711,6 +2909,7 @@ static bool start_lwip_stack(const lwip_app_config_t *cfg)
 int main(void)
 {
     lwip_fileio_self_init();
+    g_pcap_available = config_has_readable_pcap();
 
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     atexit(cleanup_lwip_stack);
@@ -2810,6 +3009,31 @@ int main(void)
                     value_changed = true;
                 }
             }
+            else if ((key == sk_Left || key == sk_Right) &&
+                     edit_mode == EDIT_PCAP_SIZE && edit_option >= 0)
+            {
+                struct config_option *opt = &config_options[edit_option];
+                uint16_t current = g_cfg.pcap_max_bytes;
+                uint16_t next = current;
+                if (key == sk_Left)
+                {
+                    if (current == LWIP_CFG_PCAP_SIZE_32K) next = LWIP_CFG_PCAP_SIZE_16K;
+                    else if (current == LWIP_CFG_PCAP_SIZE_16K) next = LWIP_CFG_PCAP_SIZE_8K;
+                    else if (current == LWIP_CFG_PCAP_SIZE_8K) next = LWIP_CFG_PCAP_SIZE_4K;
+                }
+                else
+                {
+                    if (current == LWIP_CFG_PCAP_SIZE_4K) next = LWIP_CFG_PCAP_SIZE_8K;
+                    else if (current == LWIP_CFG_PCAP_SIZE_8K) next = LWIP_CFG_PCAP_SIZE_16K;
+                    else if (current == LWIP_CFG_PCAP_SIZE_16K) next = LWIP_CFG_PCAP_SIZE_32K;
+                }
+                if (next != current)
+                {
+                    g_cfg.pcap_max_bytes = next;
+                    option_sync_from_cfg(opt);
+                    value_changed = true;
+                }
+            }
             if (value_changed)
             {
                 ui_draw_single_option(selected, scroll_pos, selected, true);
@@ -2850,7 +3074,7 @@ int main(void)
 
                     // Redraw old selection as unselected BEFORE scroll
                     // so shifted pixels don't have selection highlight
-                    ui_draw_single_option(old_sel, old_scroll, old_sel + 1, false);
+                    ui_draw_single_option(old_sel, old_scroll, -1, false);
 
                     // Shift VRAM content
                     ui_scroll_content(scroll_diff);
@@ -2861,8 +3085,9 @@ int main(void)
                         // Scrolled down: draw new rows at bottom
                         for (int i = 0; i < abs_diff && i < UI_VISIBLE_ROWS; i++)
                         {
-                            int idx = scroll_pos + UI_VISIBLE_ROWS - 1 - i;
-                            if (idx < (int)CONFIG_OPTION_COUNT)
+                            int idx = option_index_at_visible(
+                                scroll_pos + UI_VISIBLE_ROWS - 1 - i);
+                            if (idx >= 0)
                                 ui_draw_single_option(idx, scroll_pos, selected, false);
                         }
                     }
@@ -2871,7 +3096,7 @@ int main(void)
                         // Scrolled up: draw new rows at top
                         for (int i = 0; i < abs_diff && i < UI_VISIBLE_ROWS; i++)
                         {
-                            int idx = scroll_pos + i;
+                            int idx = option_index_at_visible(scroll_pos + i);
                             if (idx >= 0)
                                 ui_draw_single_option(idx, scroll_pos, selected, false);
                         }
@@ -2879,7 +3104,7 @@ int main(void)
                     // Redraw new selection
                     ui_draw_single_option(selected, scroll_pos, selected, false);
                     // Update scrollbar
-                    ui_draw_scrollbar(scroll_pos, (int)CONFIG_OPTION_COUNT);
+                    ui_draw_scrollbar(scroll_pos, visible_option_count());
                 }
                 else
                 {
@@ -2902,6 +3127,11 @@ int main(void)
                 if (opt->id == OPT_TZ_OFFSET)
                 {
                     edit_mode = EDIT_TZ;
+                    edit_option = selected;
+                }
+                else if (opt->id == OPT_PCAP_MAX_SIZE)
+                {
+                    edit_mode = EDIT_PCAP_SIZE;
                     edit_option = selected;
                 }
                 ui_draw_single_option(selected, scroll_pos, selected, true);

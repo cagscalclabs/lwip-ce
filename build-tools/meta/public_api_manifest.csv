@@ -1,5 +1,6 @@
 type,symbol,category,source_header,output_header
 func,lwip_start_last_error,socket,src/lwIP.h,lwip.h
+func,lwip_version_string,socket,src/lwIP.h,lwip.h
 func,lwip_network_up,socket,src/lwIP.h,lwip.h
 func,lwip_stop,socket,src/lwIP.h,lwip.h
 func,lwip_service_events,socket,src/lwIP.h,lwip.h

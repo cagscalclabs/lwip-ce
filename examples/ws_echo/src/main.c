@@ -1,7 +1,8 @@
 /**
  * WebSocket Echo Example for the TI-84+CE
  *
- * Demonstrates both WS (plain TCP) and WSS (TLS) using the altcp_ws layer.
+ * Demonstrates both WS (plain TCP) and WSS (TLS) using the public
+ * lwip_socket API.
  *
  * Phase 1 — WS  (ws://websocket-echo.com/):
  *   Connect to a public plain-TCP WebSocket echo server, send one message,
@@ -14,12 +15,8 @@
  * Controls:  any key aborts the current phase and moves to the next.
  *            [clear] exits at any point.
  *
- * Notes:
- *   LWIP_SOCKET_ALTCP_WS  and LWIP_SOCKET_ALTCP_WSS may not be present in
- *   the installed cedev lwip.h yet.  They are shimmed below with #ifndef
- *   guards and numeric values that match src/lwIP.h.
- *
- *   lwip_socket_set_ws_config() is shimmed as an extern declaration.
+ * Requires an lwIP-CE release that exposes LWIP_SOCKET_ALTCP_WS,
+ * LWIP_SOCKET_ALTCP_WSS, and lwip_socket_set_ws_config() in <lwip.h>.
  */
 
 #include <stdbool.h>
@@ -174,6 +171,7 @@ static bool run_phase(lwip_socket_type_t type,
                       const char *host, uint16_t port, const char *path,
                       const char *label)
 {
+    lwip_error_t e;
     memset(&ph, 0, sizeof(ph));
 
     log_linef("[ %s ]", label);
@@ -187,10 +185,15 @@ static bool run_phase(lwip_socket_type_t type,
         return false;
     }
 
-    lwip_socket_set_ws_config(ph.sock, path, NULL);
+    e = lwip_socket_set_ws_config(ph.sock, path, NULL);
+    if (e != LWIP_OK)
+    {
+        log_linef("  WS config failed: %d", (int)e);
+        goto cleanup;
+    }
     lwip_socket_on_event(ph.sock, LWIP_SOCKET_EVENTF_ALL, ws_on_event, NULL);
 
-    lwip_error_t e = lwip_socket_connect(ph.sock, host, port);
+    e = lwip_socket_connect(ph.sock, host, port);
     if (e != LWIP_OK)
     {
         log_linef("  connect failed: %d", (int)e);

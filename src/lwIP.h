@@ -50,6 +50,12 @@
 extern "C" {
 #endif
 
+/** lwIP-CE release version (distinct from the vendored upstream lwIP version). */
+#define LWIP_CE_VERSION_MAJOR 2
+#define LWIP_CE_VERSION_MINOR 1
+#define LWIP_CE_VERSION_PATCH 2
+#define LWIP_CE_VERSION_STRING "2.1.2"
+
 struct netif;
 struct tcp_pcb;
 struct udp_pcb;
@@ -273,6 +279,8 @@ struct lwip_socket;
 
 uint8_t  lwip_start_last_error(void);
 uint8_t  lwip_get_start_errno(void);
+/** Returns the NUL-terminated lwIP-CE release version string. */
+const char *lwip_version_string(void);
 void     lwip_stop(void);
 bool     lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
 

@@ -41,6 +41,17 @@ static void lwip_app_config_normalize(lwip_app_config_t *cfg)
     {
         cfg->tls_enabled = 1;
     }
+    switch (cfg->pcap_max_bytes)
+    {
+    case LWIP_CFG_PCAP_SIZE_4K:
+    case LWIP_CFG_PCAP_SIZE_8K:
+    case LWIP_CFG_PCAP_SIZE_16K:
+    case LWIP_CFG_PCAP_SIZE_32K:
+        break;
+    default:
+        cfg->pcap_max_bytes = LWIP_CFG_PCAP_SIZE_DEFAULT;
+        break;
+    }
 }
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg)
@@ -53,7 +64,7 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     cfg->tz_offset_minutes = 0;
     cfg->dst_enabled = 0;
     cfg->log_min_level = LWIP_CFG_LOG_LEVEL_DEF;
-    cfg->log_size_bytes = 4096u;
+    cfg->pcap_max_bytes = LWIP_CFG_PCAP_SIZE_DEFAULT;
     strncpy(cfg->hostname, "ti84plusce", LWIP_CFG_HOSTNAME_MAX - 1);
     cfg->hostname[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
     cfg->tls_enabled = 1;

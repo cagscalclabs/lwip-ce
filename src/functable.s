@@ -478,10 +478,11 @@
 .extern _tls_rsa_pkcs1_v15_sha256_verify
 .extern _lwip_attach_usb_callback
 .extern _lwip_detach_usb_callback
+.extern _lwip_version_string
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 444    ; entry count
+    d24 445    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -1064,3 +1065,6 @@ _fn_exports_table:
 ; --- src/drivers/usb_ethernet.c ---
     d24 _lwip_attach_usb_callback
     d24 _lwip_detach_usb_callback
+
+; --- src/lwIP.c ---
+    d24 _lwip_version_string

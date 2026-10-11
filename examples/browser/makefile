@@ -13,6 +13,8 @@ BROWSER_URL ?= http://example.com/
 CFLAGS = -Wall -Wextra -Oz \
     -DBROWSER_URL=\"$(BROWSER_URL)\"
 CXXFLAGS = $(CFLAGS)
+EXTRA_LDFLAGS += --no-warn-execstack
+EXTRA_PRE_LDFLAGS += --no-warn-execstack
 
 # ----------------------------
 

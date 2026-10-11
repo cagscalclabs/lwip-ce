@@ -1,6 +1,14 @@
 #ifndef LWIP_EXAMPLE_H
 #define LWIP_EXAMPLE_H
 
+/* This umbrella header intentionally provides more optional, translation-unit
+ * local helpers than any one example consumes. Keep normal warnings enabled
+ * for example code without reporting the unused helper subset in every app. */
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1160,7 +1168,8 @@ static void lwip_example_show_socket_error(const char *label,
                                          const struct lwip_socket *sock,
                                          lwip_error_t err)
 {
-    lwip_netif_info_t info = {0};
+    lwip_netif_info_t info;
+    memset(&info, 0, sizeof(info));
 
     lwip_example_clear();
     lwip_example_line(label);
@@ -1271,5 +1280,9 @@ static bool lwip_example_cancelled(uint8_t key)
 {
     return key == sk_Clear;
 }
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #endif /* LWIP_EXAMPLE_H */

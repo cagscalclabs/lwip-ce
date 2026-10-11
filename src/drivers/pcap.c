@@ -3,6 +3,7 @@
 #include <string.h>
 #include "lwip/netif.h"
 #include "lwip/debug.h"
+#include "lwip/app_config.h"
 #include "usb_ethernet.h"
 #include "mem.h"
 #include "pcap.h"
@@ -17,6 +18,13 @@ const char *pcap_file = "lwIPPCAP";
  * that never captures pays nothing for it. */
 static struct mem_buffer *pcap_pool;
 static uint8_t pcap_pool_refs;
+
+typedef enum
+{
+    PCAP_APPEND_OK,
+    PCAP_APPEND_FULL,
+    PCAP_APPEND_ERROR
+} pcap_append_result_t;
 
 /* Hand a capture buffer back to the pool, tearing the pool down once the last
  * one is returned. Safe on an interface that isn't capturing. */
@@ -91,10 +99,25 @@ static void pcap_disable_netif(struct netif *netif)
         pcap_free_buffer((eth_device_t *)netif->state);
 }
 
-/* Append `nbytes` from `src` to the capture appvar, creating it on first
- * write. Returns false on failure; the caller is responsible for disabling
- * capture. */
-static bool pcap_append_appvar(const uint8_t *src, size_t nbytes)
+static size_t pcap_prefix_within_limit(const uint8_t *src, size_t nbytes,
+                                       size_t remaining)
+{
+    size_t offset = 0;
+    while (offset + sizeof(struct pcap) <= nbytes)
+    {
+        struct pcap record;
+        memcpy(&record, src + offset, sizeof(record));
+        size_t record_size = sizeof(record) + record.len;
+        if (record_size > nbytes - offset || record_size > remaining - offset)
+            break;
+        offset += record_size;
+    }
+    return offset;
+}
+
+/* Append complete records from `src` to the capture AppVar without crossing
+ * the configured file ceiling. The caller disables capture on FULL or ERROR. */
+static pcap_append_result_t pcap_append_appvar(const uint8_t *src, size_t nbytes)
 {
     uint8_t h = file_fn.ti_open(pcap_file, "r+");
     if (!h)
@@ -104,17 +127,30 @@ static bool pcap_append_appvar(const uint8_t *src, size_t nbytes)
     if (!h)
     {
         LWIP_DEBUGF(LWIP_DBG_LEVEL_SEVERE, ("pcap: ti_open failed\n"));
-        return false;
+        return PCAP_APPEND_ERROR;
     }
+
+    size_t current_size = file_fn.ti_getsize(h);
+    size_t max_size = lwip_app_config_get()->pcap_max_bytes;
+    if (current_size >= max_size)
+    {
+        file_fn.ti_close(h);
+        return PCAP_APPEND_FULL;
+    }
+
+    size_t write_len = pcap_prefix_within_limit(
+        src, nbytes, max_size - current_size);
     file_fn.ti_seek(0, SEEK_END, h);
-    size_t written = file_fn.ti_write(src, 1, nbytes, h);
+    size_t written = write_len ? file_fn.ti_write(src, 1, write_len, h) : 0;
     file_fn.ti_close(h);
-    if (written != nbytes)
+    if (written != write_len)
     {
         LWIP_DEBUGF(LWIP_DBG_LEVEL_SEVERE, ("pcap: ti_write short\n"));
-        return false;
+        return PCAP_APPEND_ERROR;
     }
-    return true;
+    return (write_len < nbytes || current_size + write_len >= max_size)
+               ? PCAP_APPEND_FULL
+               : PCAP_APPEND_OK;
 }
 
 bool pcap_flush(struct netif *netif)
@@ -129,12 +165,19 @@ bool pcap_flush(struct netif *netif)
     if (eth->pcap.offset == 0)
         return true; /* nothing staged */
 
-    if (!pcap_append_appvar(eth->pcap.buf, eth->pcap.offset))
+    pcap_append_result_t result =
+        pcap_append_appvar(eth->pcap.buf, eth->pcap.offset);
+    if (result != PCAP_APPEND_OK)
     {
-        LWIP_DEBUGF(LWIP_DBG_LEVEL_SEVERE,
-                    ("pcap: flush failed, disabling capture\n"));
-        /* Drop the staged bytes: they can't be written, and keeping them would
-         * stall every subsequent write against a buffer that never drains. */
+        if (result == PCAP_APPEND_ERROR)
+            LWIP_DEBUGF(LWIP_DBG_LEVEL_SEVERE,
+                        ("pcap: flush failed, disabling capture\n"));
+        else
+            LWIP_DEBUGF(LWIP_DBG_LEVEL_WARNING,
+                        ("pcap: capture limit reached\n"));
+        /* A full capture may have accepted a prefix of complete records. Drop
+         * the remaining staged records before turning capture off. An I/O
+         * failure drops all staged bytes for the same reason. */
         eth->pcap.offset = 0;
         pcap_disable_netif(netif);
         return false;

@@ -11,6 +11,12 @@
 
 #define LWIP_CFG_HOSTNAME_MAX 16
 
+#define LWIP_CFG_PCAP_SIZE_4K   (4u * 1024u)
+#define LWIP_CFG_PCAP_SIZE_8K   (8u * 1024u)
+#define LWIP_CFG_PCAP_SIZE_16K (16u * 1024u)
+#define LWIP_CFG_PCAP_SIZE_32K (32u * 1024u)
+#define LWIP_CFG_PCAP_SIZE_DEFAULT LWIP_CFG_PCAP_SIZE_4K
+
 #define LWIP_CFG_DNS                  (1u << 0) /* legacy config bit */
 #define LWIP_CFG_LOG_USB              (1u << 1) /* legacy config bit */
 #define LWIP_CFG_AUTO_NTP             (1u << 2) /* legacy config bit */
@@ -31,8 +37,7 @@
 #define LWIP_CFG_MEM_CAP_DEF        (0xFFFFu)   /* uncapped: os_MemChk provides the real limit at init */
 #define LWIP_CFG_MEM_CAP_STEP       1024u
 /* Vestigial log-config fields. The appvar-backed log system was replaced by
- * the unified event callback (lwip_set_event_cb); these fields are retained
- * only to keep the persisted config layout stable and are no longer consulted. */
+ * the unified event callback (lwip_set_event_cb). */
 #define LWIP_CFG_LOG_ENABLED_DEF    1u
 #define LWIP_CFG_LOG_LEVEL_DEF      3u   /* was LWIP_LOG_LEVEL_ERROR */
 #define LWIP_CFG_LOG_LEVEL_MIN      1u
@@ -46,7 +51,13 @@ typedef struct lwip_app_config {
     int16_t tz_offset_minutes;
     uint8_t dst_enabled;
     uint8_t log_min_level;
-    uint16_t log_size_bytes;
+    /* Repurposes the former log_size_bytes slot, retaining the v1 on-disk
+     * layout and source compatibility while giving packet captures a
+     * user-selected AppVar ceiling. */
+    union {
+        uint16_t pcap_max_bytes;
+        uint16_t log_size_bytes; /* Deprecated alias. */
+    };
     uint8_t ip_addr[4];
     uint8_t ip_gateway[4];
     uint8_t ip_netmask[4];

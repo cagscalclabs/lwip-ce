@@ -245,6 +245,11 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
 
 #define SOCKET_EVT_BIT(e) ((uint16_t)(1u << (uint8_t)(e)))
 
+const char *lwip_version_string(void)
+{
+    return LWIP_CE_VERSION_STRING;
+}
+
 /* No-network bootstrap: stack memory, timers, and (RNG-only) TLS init.
  * Touches nothing USB/netif-related — see lwip_network_up() for that.
  * Dispatched once from lwip_start_with_crt() (the libload bootstrap), but

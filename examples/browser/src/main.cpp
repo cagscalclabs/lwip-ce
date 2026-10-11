@@ -1994,7 +1994,7 @@ static size_t browser_parse_entity(struct browser_state *state,
 
 static void browser_parse_html(struct browser_state *state)
 {
-    struct browser_parse_state parse = {0};
+    struct browser_parse_state parse = {};
     size_t i = 0;
 
     browser_page_reset(state);
@@ -2961,7 +2961,7 @@ static bool browser_layout_render_objects(struct browser_state *state,
 
 static void browser_layout_document(struct browser_state *state)
 {
-    struct browser_layout layout = {0};
+    struct browser_layout layout = {};
     uint16_t i;
     bool rendered_objects;
 
@@ -4677,7 +4677,7 @@ int main(void)
                         state->browser->set_pcap_enabled(false);
                         browser_set_event_line(state, "pcap off");
                     }
-                    else if (pcap_enable_on_netif(netif))
+                    else if (pcap_enable_on_netif(netif) == PCAP_OK)
                     {
                         state->browser->set_pcap_enabled(true);
                         browser_set_event_line(state, "pcap on");
