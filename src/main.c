@@ -65,8 +65,7 @@ typedef enum
 
 typedef enum
 {
-    OPT_EDIT_IP = 0,
-    OPT_HOSTNAME,
+    OPT_HOSTNAME = 0,
     OPT_TZ_OFFSET,
     OPT_DST,
     OPT_TLS_ENABLED,
@@ -109,7 +108,6 @@ static bool run_main = true;
 static bool dhcp_started = false;
 static bool httpd_running = false;
 static bool sntp_started = false;
-static bool manual_ip_applied = false;
 static bool lwip_started = false;
 static volatile bool netif_unavailable = false;
 #endif
@@ -143,7 +141,6 @@ static void delay_ms(unsigned int ms)
 
 // Forward declarations
 static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes);
-static void edit_ip_config(lwip_app_config_t *cfg);
 static void edit_hostname_config(lwip_app_config_t *cfg);
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static bool start_lwip_stack(const lwip_app_config_t *cfg);
@@ -155,7 +152,6 @@ static void ui_draw_footer(const char *line1, const char *line2);
 static void ui_slider(int x, int y, int w, int value, int min_val, int max_val);
 
 static bool config_toggle_option(struct config_option *opt);
-static bool config_edit_ip(struct config_option *opt);
 static bool config_edit_hostname(struct config_option *opt);
 static bool config_run_pcap_viewer(struct config_option *opt);
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
@@ -177,7 +173,6 @@ static bool dhcp_client_running(const struct netif *netif)
 #endif
 
 static struct config_option config_options[] = {
-    {"Network address", "DHCP or static IPv4",       OPT_EDIT_IP,      F_TYPE_ACTION,       config_edit_ip, {0}},
     {"Hostname",        "Name advertised by lwIP",   OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
     {"Timezone",        "Local offset from UTC",     OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"Daylight saving", "Apply the DST adjustment",  OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
@@ -738,15 +733,6 @@ static void format_option_value(const struct config_option *opt, char *buf, size
         buf[0] = '\0';
         break;
 #endif
-    case OPT_EDIT_IP:
-        if ((g_cfg.ip_addr[0] | g_cfg.ip_addr[1] |
-             g_cfg.ip_addr[2] | g_cfg.ip_addr[3]) == 0)
-            snprintf(buf, buf_len, "DHCP");
-        else
-            snprintf(buf, buf_len, "%u.%u.%u.%u",
-                     g_cfg.ip_addr[0], g_cfg.ip_addr[1],
-                     g_cfg.ip_addr[2], g_cfg.ip_addr[3]);
-        break;
     case OPT_HOSTNAME:
         snprintf(buf, buf_len, "%s", g_cfg.hostname);
         break;
@@ -771,13 +757,6 @@ static bool config_toggle_option(struct config_option *opt)
     default:
         return false;
     }
-}
-
-static bool config_edit_ip(struct config_option *opt)
-{
-    (void)opt;
-    edit_ip_config(&g_cfg);
-    return true;
 }
 
 static bool config_edit_hostname(struct config_option *opt)
@@ -880,7 +859,6 @@ static void netif_ext_callback(struct netif *netif, netif_nsc_reason_t reason,
         }
         httpd_running = false;
         dhcp_started = false;
-        manual_ip_applied = false;
     }
 }
 
@@ -2379,94 +2357,6 @@ static void ui_slider(int x, int y, int w, int value, int min_val, int max_val)
     ui_fill_rect(x + pos, y, 12, 14, UI_COLOR_ACCENT);
 }
 
-// Map scancode to digit character
-static char scancode_to_digit(uint8_t key)
-{
-    switch (key)
-    {
-        case sk_0: return '0';
-        case sk_1: return '1';
-        case sk_2: return '2';
-        case sk_3: return '3';
-        case sk_4: return '4';
-        case sk_5: return '5';
-        case sk_6: return '6';
-        case sk_7: return '7';
-        case sk_8: return '8';
-        case sk_9: return '9';
-        default: return 0;
-    }
-}
-
-// Helper to draw just the number input field
-static void ui_draw_number_input(int x, int y, int w, const char *digits)
-{
-    ui_input_field(x, y, w, digits, true);
-}
-
-// Numeric entry dialog (0-255)
-static bool ui_edit_number(const char *title, uint8_t *value, uint8_t max_val)
-{
-    char digits[4];
-    snprintf(digits, sizeof(digits), "%u", *value);
-    int pos = (int)strlen(digits);
-    bool replace_on_type = true;
-
-    // Dialog layout
-    const int dlg_x = 70, dlg_y = 80, dlg_w = 180, dlg_h = 60;
-    const int input_x = 90, input_y = 110, input_w = 100;
-
-    // Initial full draw
-    ui_dialog_box(dlg_x, dlg_y, dlg_w, dlg_h, title);
-    ui_draw_number_input(input_x, input_y, input_w, digits);
-    ui_draw_footer("<0-9> Type  <del> Back",
-                   "<enter> OK  <clear> Cancel");
-
-    while (1)
-    {
-        uint8_t key = 0;
-        do { key = os_GetCSC(); } while (key == 0);
-
-        if (key == sk_Clear) return false;
-        if (key == sk_Enter && pos > 0)
-        {
-            int val = 0;
-            for (int i = 0; i < pos; i++)
-                val = val * 10 + (digits[i] - '0');
-            if (val <= max_val)
-            {
-                *value = (uint8_t)val;
-                return true;
-            }
-            // Value too large - just continue, don't update
-            continue;
-        }
-        if (key == sk_Del && pos > 0)
-        {
-            replace_on_type = false;
-            digits[--pos] = 0;
-            ui_draw_number_input(input_x, input_y, input_w, digits);
-            continue;
-        }
-
-        char c = scancode_to_digit(key);
-        if (c)
-        {
-            if (replace_on_type)
-            {
-                pos = 0;
-                digits[0] = '\0';
-                replace_on_type = false;
-            }
-            if (pos >= 3)
-                continue;
-            digits[pos++] = c;
-            digits[pos] = 0;
-            ui_draw_number_input(input_x, input_y, input_w, digits);
-        }
-    }
-}
-
 // Input modes for text editing
 typedef enum {
     INPUT_MODE_LOWER = 0,  // a-z
@@ -2595,213 +2485,27 @@ static void edit_hostname_config(lwip_app_config_t *cfg)
     }
 }
 
-// IP config layout constants
-#define IP_ROW_Y(f)     (50 + (f) * 28)
-#define IP_LABEL_X      20
-#define IP_ADDR_X       100
-#define IP_OCTET_W      38
-
-// Draw just the octets for a single IP row (not the label)
-static void ui_draw_ip_octets(int y, const uint8_t *addr, bool selected, int sel_octet)
-{
-    // Clear octet area
-    ui_fill_rect(IP_ADDR_X - 2, y + 2, 4 * IP_OCTET_W, 18,
-                 selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
-
-    for (int o = 0; o < 4; o++)
-    {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%u", addr[o]);
-        int x = IP_ADDR_X + o * IP_OCTET_W;
-        int text_w = (int)os_FontGetWidth(buf);
-        int text_x = x + (30 - text_w) / 2;
-
-        if (selected && o == sel_octet)
-        {
-            ui_fill_rect(x - 2, y + 2, 32, 18, UI_COLOR_ACCENT);
-            os_SetDrawFGColor(UI_COLOR_BG);
-        }
-        else
-        {
-            os_SetDrawFGColor(UI_COLOR_FG);
-        }
-        os_FontDrawTransText(buf, text_x, y + 4);
-
-        if (o < 3)
-        {
-            os_SetDrawFGColor(UI_COLOR_FG);
-            os_FontDrawTransText(".", x + 26, y + 4);
-        }
-    }
-}
-
-static bool ui_ip_is_dhcp(const lwip_app_config_t *cfg)
-{
-    return (cfg->ip_addr[0] | cfg->ip_addr[1] |
-            cfg->ip_addr[2] | cfg->ip_addr[3]) == 0;
-}
-
-static void ui_draw_ip_mode(const lwip_app_config_t *cfg)
-{
-    const char *mode = ui_ip_is_dhcp(cfg) ? "DHCP" : "Static";
-    ui_fill_rect(0, UI_HEADER_H, LCD_WIDTH, 18, UI_COLOR_BG);
-    os_SetDrawFGColor(UI_COLOR_MUTED);
-    os_FontDrawTransText("Addressing", 20, UI_HEADER_H + 5);
-    os_SetDrawFGColor(UI_COLOR_ACCENT);
-    int width = (int)os_FontGetWidth(mode);
-    os_FontDrawTransText(mode, LCD_WIDTH - 20 - width, UI_HEADER_H + 5);
-}
-
-// Draw full IP row (label + octets)
-static void ui_draw_ip_row_full(int y, const char *label, const uint8_t *addr,
-                                 bool selected, int sel_octet)
-{
-    uint16_t bg = selected ? UI_COLOR_SELECTED : UI_COLOR_BG;
-    ui_fill_rect(10, y, 300, 22, bg);
-
-    os_SetDrawFGColor(UI_COLOR_FG);
-    os_FontDrawTransText(label, IP_LABEL_X, y + 4);
-
-    ui_draw_ip_octets(y, addr, selected, sel_octet);
-}
-
-static void edit_ip_config(lwip_app_config_t *cfg)
-{
-    int field = 0;
-    int octet = 0;
-    const char *labels[3] = {"IP", "Gateway", "Netmask"};
-    uint8_t *addrs[3] = {cfg->ip_addr, cfg->ip_gateway, cfg->ip_netmask};
-
-    // Initial full draw
-    boot_ClearVRAM();
-    os_FontSelect(os_SmallFont);
-    ui_draw_header("IP Configuration");
-    ui_draw_ip_mode(cfg);
-    for (int f = 0; f < 3; f++)
-    {
-        ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
-    }
-    ui_draw_footer("<arrows> Navigate  <enter> Edit",
-                   "<mode> DHCP  <clear> Done");
-
-    while (1)
-    {
-        uint8_t key = 0;
-        do { key = os_GetCSC(); } while (key == 0);
-
-        if (key == sk_Clear) return;
-
-        if (key == sk_Mode)
-        {
-            memset(cfg->ip_addr, 0, sizeof(cfg->ip_addr));
-            memset(cfg->ip_gateway, 0, sizeof(cfg->ip_gateway));
-            memset(cfg->ip_netmask, 0, sizeof(cfg->ip_netmask));
-            ui_draw_ip_mode(cfg);
-            for (int f = 0; f < 3; f++)
-                ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f],
-                                    f == field, f == field ? octet : -1);
-            continue;
-        }
-
-        int old_field = field;
-        int old_octet = octet;
-
-        if (key == sk_Up && field > 0) field--;
-        else if (key == sk_Down && field < 2) field++;
-        else if (key == sk_Left && octet > 0) octet--;
-        else if (key == sk_Right && octet < 3) octet++;
-        else if (key == sk_Enter)
-        {
-            if (ui_edit_number("Edit Octet", &addrs[field][octet], 255))
-            {
-                // Full redraw after modal dialog
-                boot_ClearVRAM();
-                os_FontSelect(os_SmallFont);
-                ui_draw_header("IP Configuration");
-                ui_draw_ip_mode(cfg);
-                for (int f = 0; f < 3; f++)
-                {
-                    ui_draw_ip_row_full(IP_ROW_Y(f), labels[f], addrs[f], f == field, octet);
-                }
-                ui_draw_footer("<arrows> Navigate  <enter> Edit",
-                               "<mode> DHCP  <clear> Done");
-            }
-            continue;
-        }
-
-        // Only redraw changed rows
-        if (field != old_field)
-        {
-            // Row changed - redraw old and new rows
-            ui_draw_ip_row_full(IP_ROW_Y(old_field), labels[old_field], addrs[old_field], false, -1);
-            ui_draw_ip_row_full(IP_ROW_Y(field), labels[field], addrs[field], true, octet);
-        }
-        else if (octet != old_octet)
-        {
-            // Just octet changed - only redraw octets on current row
-            ui_draw_ip_octets(IP_ROW_Y(field), addrs[field], true, octet);
-        }
-    }
-}
-
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-/* A non-zero configured IP means the user wants a static address;
- * an all-zero IP means use DHCP (the default). */
-static bool config_uses_static_ip(const lwip_app_config_t *cfg)
-{
-    return (cfg->ip_addr[0] | cfg->ip_addr[1] |
-            cfg->ip_addr[2] | cfg->ip_addr[3]) != 0;
-}
-
 static void apply_network_config(const lwip_app_config_t *cfg)
 {
-    bool static_ip = config_uses_static_ip(cfg);
-
-    if (!static_ip)
+    /* The configuration utility's built-in service tests always use DHCP.
+     * Applications that need static addressing provide lwip_socket_addrinfo_t
+     * when creating their sockets. */
+    if (netif_default && !dhcp_client_running(netif_default))
     {
-        /* DHCP is the default. It also supplies DNS servers, so there is
-         * nothing extra to start for name resolution. */
-        if (netif_default && !dhcp_client_running(netif_default))
-        {
-            dhcp_start(netif_default);
-            dhcp_started = true;
-            manual_ip_applied = false;
-        }
-        else if (netif_default)
-        {
-            dhcp_started = true;
-        }
+        dhcp_start(netif_default);
+        dhcp_started = true;
     }
-    else
+    else if (netif_default)
     {
-        if (netif_default && !manual_ip_applied)
-        {
-            ip4_addr_t ip, gw, mask;
-            IP4_ADDR(&ip, cfg->ip_addr[0], cfg->ip_addr[1], cfg->ip_addr[2], cfg->ip_addr[3]);
-            IP4_ADDR(&gw, cfg->ip_gateway[0], cfg->ip_gateway[1], cfg->ip_gateway[2], cfg->ip_gateway[3]);
-            IP4_ADDR(&mask, cfg->ip_netmask[0], cfg->ip_netmask[1], cfg->ip_netmask[2], cfg->ip_netmask[3]);
-            netif_set_addr(netif_default, &ip, &mask, &gw);
-            manual_ip_applied = true;
-            dhcp_started = false;
-            /* DHCP would have populated DNS servers for us; with a static
-             * address bring DNS up explicitly. */
-            dns_init();
-        }
+        dhcp_started = true;
     }
 
     if ((cfg->flags & LWIP_CFG_TEST_HTTP) != 0)
     {
         if (netif_default && !httpd_running)
         {
-            bool has_ip;
-            if (static_ip)
-            {
-                has_ip = !ip4_addr_isany(netif_ip4_addr(netif_default));
-            }
-            else
-            {
-                has_ip = dhcp_supplied_address(netif_default);
-            }
+            bool has_ip = dhcp_supplied_address(netif_default);
             if (has_ip)
             {
                 httpd_init();
@@ -2817,7 +2521,6 @@ static void apply_network_config(const lwip_app_config_t *cfg)
     if (!netif_default)
     {
         dhcp_started = false;
-        manual_ip_applied = false;
         if (sntp_started)
         {
             sntp_stop();
@@ -2863,7 +2566,6 @@ static void cleanup_lwip_stack(void)
     }
 
     dhcp_started = false;
-    manual_ip_applied = false;
     httpd_running = false;
     eth_finish_shutdown();
     usb_Cleanup();

@@ -7,7 +7,6 @@
 #include "lwip/logging.h"
 
 #define LWIP_CFG_APPVAR "lwIPCFG"
-#define LWIP_CFG_VERSION 1u
 
 #define LWIP_CFG_HOSTNAME_MAX 16
 
@@ -28,10 +27,8 @@
 #define LWIP_CFG_FULL_CHAIN_VERIFY    (1u << 5)
 #define LWIP_CFG_LOG_TLS              (1u << 7) /* legacy config bit */
 
-/* Legacy memory cap field. The wizard no longer exposes this; allocator
- * accounting is managed by lwIP and user reservations go through
- * mem_request/mem_resize/mem_release. Values remain in the appvar only to
- * keep the persisted config layout stable. */
+/* Legacy runtime fields retained for source compatibility. They are no longer
+ * serialized into the settings AppVar. */
 #define LWIP_TLS_FLOOR_BYTES        (24u * 1024u)
 #define LWIP_MIN_FLOOR_BYTES        LWIP_TLS_FLOOR_BYTES
 #define LWIP_CFG_MEM_CAP_DEF        (0xFFFFu)   /* uncapped: os_MemChk provides the real limit at init */
@@ -44,23 +41,17 @@
 #define LWIP_CFG_LOG_LEVEL_MAX      4u
 
 typedef struct lwip_app_config {
-    uint16_t version;
-    uint16_t lwip_mem_cap;        /* Legacy persisted allocator cap. */
+    uint16_t lwip_mem_cap;
     uint8_t flags;
     uint8_t log_enabled;
     int16_t tz_offset_minutes;
     uint8_t dst_enabled;
     uint8_t log_min_level;
-    /* Repurposes the former log_size_bytes slot, retaining the v1 on-disk
-     * layout and source compatibility while giving packet captures a
-     * user-selected AppVar ceiling. */
+    /* Deprecated alias retained for source compatibility. */
     union {
         uint16_t pcap_max_bytes;
         uint16_t log_size_bytes; /* Deprecated alias. */
     };
-    uint8_t ip_addr[4];
-    uint8_t ip_gateway[4];
-    uint8_t ip_netmask[4];
     char hostname[LWIP_CFG_HOSTNAME_MAX];
     uint8_t tls_enabled;
 } lwip_app_config_t;
