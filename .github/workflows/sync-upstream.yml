@@ -53,6 +53,23 @@ jobs:
           echo "ref=${LATEST_STABLE}" >> $GITHUB_OUTPUT
           echo "Latest upstream stable release: ${LATEST_STABLE}"
 
+      - name: Compute next version tag
+        id: version
+        run: |
+          git fetch --tags origin
+          # Find the latest vX.Y.Z tag and increment its patch/build number.
+          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0.1"
+          else
+            X=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+            Y=$(echo "$LATEST" | cut -d. -f2)
+            Z=$(echo "$LATEST" | cut -d. -f3)
+            NEXT="v${X}.${Y}.$((Z + 1))"
+          fi
+          echo "tag=${NEXT}" >> $GITHUB_OUTPUT
+          echo "previous=${LATEST}" >> $GITHUB_OUTPUT
+
       - name: Create sync branch
         id: sync
         run: |
@@ -98,31 +115,37 @@ jobs:
             echo "has_conflicts=false" >> $GITHUB_OUTPUT
           fi
 
-          git add -A -- src/core src/netif src/include src/api src/apps build-tools/UPSTREAM_LWIP_REF
+      - name: Update lwIP-CE version and commit sync
+        run: |
+          VERSION_TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${VERSION_TAG#v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid generated lwIP-CE version: ${VERSION_TAG}"
+            exit 1
+          fi
+
+          sed -i -E \
+            -e "s/^#define LWIP_CE_VERSION_MAJOR .*/#define LWIP_CE_VERSION_MAJOR ${MAJOR}/" \
+            -e "s/^#define LWIP_CE_VERSION_MINOR .*/#define LWIP_CE_VERSION_MINOR ${MINOR}/" \
+            -e "s/^#define LWIP_CE_VERSION_PATCH .*/#define LWIP_CE_VERSION_PATCH ${PATCH}/" \
+            -e "s/^#define LWIP_CE_VERSION_STRING .*/#define LWIP_CE_VERSION_STRING \"${VERSION}\"/" \
+            src/lwIP.h
+
+          grep -Fx "#define LWIP_CE_VERSION_MAJOR ${MAJOR}" src/lwIP.h
+          grep -Fx "#define LWIP_CE_VERSION_MINOR ${MINOR}" src/lwIP.h
+          grep -Fx "#define LWIP_CE_VERSION_PATCH ${PATCH}" src/lwIP.h
+          grep -Fx "#define LWIP_CE_VERSION_STRING \"${VERSION}\"" src/lwIP.h
+
+          git add -A -- src/core src/netif src/include src/api src/apps src/lwIP.h build-tools/UPSTREAM_LWIP_REF
           git commit -m "Sync vendored lwIP paths to ${{ steps.upstream_ref.outputs.ref }} ($(date +%Y-%m-%d))" --allow-empty
 
       - name: Push sync branch
-        if: always()
         run: |
           git push origin ${{ steps.sync.outputs.branch_name }}
-
-      - name: Compute next version tag
-        id: version
-        run: |
-          git fetch --tags origin
-          # Find the latest vX.Y.Z tag
-          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1)
-          if [ -z "$LATEST" ]; then
-            NEXT="v1.0.1"
-          else
-            # Bump the Z component
-            X=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
-            Y=$(echo "$LATEST" | cut -d. -f2)
-            Z=$(echo "$LATEST" | cut -d. -f3)
-            NEXT="v${X}.${Y}.$((Z + 1))"
-          fi
-          echo "tag=${NEXT}" >> $GITHUB_OUTPUT
-          echo "previous=${LATEST}" >> $GITHUB_OUTPUT
 
       - name: Tag sync branch with next version
         run: |

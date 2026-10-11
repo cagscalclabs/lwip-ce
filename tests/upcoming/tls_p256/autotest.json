@@ -1,0 +1,46 @@
+{
+  "description": "Test P-256 ECDH, deterministic ECDSA, and input validation",
+  "transfer_files": [
+    "bin/P256.8xp",
+    "../../common/clibs.8xg",
+    "../../common/lwIPINST.8xp",
+    "../../common/LWIP.0.8xv",
+    "../../common/LWIP.1.8xv",
+    "../../common/LWIP.2.8xv",
+    "../../common/LWIP.3.8xv",
+    "../../common/LWIP.4.8xv",
+    "../../common/LWIP.5.8xv",
+    "../../common/LWIP.6.8xv",
+    "../../common/lwip.8xv"
+  ],
+  "target": { "name": "P256", "isASM": true },
+  "sequence": [
+    "key|clear",
+    "action|launch:INSTALL",
+    "hashWait|2",
+    "key|left",
+    "key|enter",
+    "delay|2000",
+    "action|launch",
+    "hashWait|1",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "P-256 RFC 5903/RFC 6979 tests pass",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": ["D1F2869F"],
+      "timeout": 120000
+    },
+    "2": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@lwip_installed",
+      "expected_CRCs": ["F7C03D8D"],
+      "timeout": 100000
+    }
+  }
+}

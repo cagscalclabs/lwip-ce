@@ -2,13 +2,14 @@
 # Makefile Options
 # ----------------------------
 
-NAME = P256TST
-ICON = icon.png
-DESCRIPTION = "P-256 Contest Test Suite"
+NAME = P256
+ARCHIVED = NO
+BSSHEAP_LOW = 0xD072C6
+DESCRIPTION = "P-256 ECDH/ECDSA Test"
 COMPRESSED = NO
 
 CFLAGS = -Wall -Wextra -Oz
-CXXFLAGS = -Wall -Wextra -Oz
+SOURCES = src/main.c src/p256_reference.c
 
 # ----------------------------
 
