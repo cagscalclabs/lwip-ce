@@ -32,7 +32,7 @@
 4. Require minimum score: `256 * 8 / 3` (ensures sufficient entropy)
 
 **Entropy Extraction**:
-1. Read 119-byte pool from selected source (17 reads per byte, XORed to reduce correlation)
+1. Read 952 observations from the selected source bit and pack them, eight per byte, into a 119-byte pool
 2. Hash pool with SHA-256
 3. Compress 32-byte digest to `uint64_t` by XORing each 4 bytes
 4. Minimum entropy: ~100 bits at 99% confidence

@@ -960,20 +960,20 @@ for (uint8_t i = 0; i < count; i++) {
 		\end{itemize}
 	
 	\paragraph{Entropy Collection Model}
-	The entropy collector prepares one 128-bit contribution via the following algorithm:
+	The entropy collector prepares one 256-bit contribution via the following algorithm:
 	\begin{itemize}
-		\item Read the selected source byte 17 times for each of 119 entropy-pool bytes, XORing the reads into one composite byte.
+		\item Read the selected source bit once for each bit of the 119-byte entropy pool, packing eight consecutive observations into each byte for a total of 952 raw observations.
 		\item Apply the runtime repetition-count and adaptive-proportion health tests to every observation of the selected source bit.
 		\item Hash the resulting 119-byte pool with SHA-256.
-		\item Use the leftmost 128 digest bits as the conditioned contribution to the Hash\_DRBG entropy reserve.
+		\item Use the full 256-bit digest as the conditioned contribution to the Hash\_DRBG entropy reserve.
 	\end{itemize}
 	
 		The following \textbf{derived assumptions} apply:
 		\begin{itemize}
 			\item Entropy is credited only to the selected source bit; all other bits in each raw byte are treated as zero-entropy in the bound.
-			\item Entropy is estimated at the raw selected tap. XOR and SHA-256 are deterministic conditioners and receive no independent entropy credit.
+			\item Entropy is estimated at the raw selected tap. Bit packing is information-preserving, while SHA-256 is a deterministic conditioner and receives no independent entropy credit.
 			\item The measured most-common-value estimate is marginal. Multiplying it by the number of observations is an engineering accounting model, not a formal non-IID entropy-rate proof; serial dependence can reduce the true joint min-entropy.
-			\item A contribution is never credited with more than its 128-bit conditioned width, regardless of the raw accounting result.
+			\item A contribution is never credited with more than its 256-bit conditioned width, regardless of the raw accounting result.
 			\item Runtime health checks are assumed to detect gross source failure, but short-window entropy collapse between checks remains a residual risk.
 		\end{itemize}
 		
@@ -1015,15 +1015,15 @@ for (uint8_t i = 0; i < count; i++) {
 		h_{\text{all models}}=\min_m h_m=\RngOverallH\ \text{bits per raw selected-bit observation}.
 	\]
 
-	One collection performs $17\times119=2023$ selected-bit observations and emits a 128-bit conditioned contribution. Under the provisional additive-observation accounting model, the weakest measured model therefore gives
+	One collection performs $8\times119=\RngRawSamplesPerCollection$ selected-bit observations and emits a 256-bit conditioned contribution. Under the provisional additive-observation accounting model, the weakest measured model therefore gives
 	\[
-		H_{\text{raw,collection}}=2023h_{\text{all models}}=\RngOverallRawCollectionH\ \text{bits},
+		H_{\text{raw,collection}}=\RngRawSamplesPerCollection h_{\text{all models}}=\RngOverallRawCollectionH\ \text{bits},
 	\]
-	The implementation rounds the measured cross-model value down to the configurable policy value $h_{\text{policy}}=0.35$, yielding $2023(0.35)=708.05$ provisionally accounted raw bits per collection. The contribution is then credited as
+	The implementation rounds the measured cross-model value down to the configurable policy value $h_{\text{policy}}=0.35$, yielding $952(0.35)=333.20$ provisionally accounted raw bits per collection. The contribution is then credited as
 	\[
-		H_{\text{credited}}=\min(128,2023h_{\text{policy}})=\RngOverallCredit\ \text{bits}.
+		H_{\text{credited}}=\min(256,952h_{\text{policy}})=\RngOverallCredit\ \text{bits}.
 	\]
-	The 128-bit result is a credit cap imposed by the conditioned output width; it is not a claim that XOR or SHA-256 created entropy. More importantly, the reported MCV values characterize marginal bias only. Serial dependence can make joint min-entropy lower than $2023h$, so this multiplication and the configured working value remain conservative engineering policy supported by online health tests, not a complete SP~800-90B non-IID entropy assessment or certification. Post-conditioning measurements may test output quality, but they are not used to inflate the raw-source entropy estimate.
+	The 256-bit result is a credit cap imposed by the conditioned output width; it is not a claim that SHA-256 created entropy. More importantly, the reported MCV values characterize marginal bias only. Serial dependence can make joint min-entropy lower than $952h$, so this multiplication and the configured working value remain conservative engineering policy supported by online health tests, not a complete SP~800-90B non-IID entropy assessment or certification. Post-conditioning measurements may test output quality, but they are not used to inflate the raw-source entropy estimate.
 	
 	\paragraph{Encapsulation}
 	\label{ssec:encapsulation}
@@ -1045,11 +1045,11 @@ for (uint8_t i = 0; i < count; i++) {
 		\item If \texttt{blocking=false}, execution returns to the caller immediately; the callback function fires when the request is fulfilled.
 	\end{itemize}
 	
-		The timer fills a 256-bit entropy reserve in 16-byte conditioned steps. On each active collection cycle, the RNG path behaves as follows:
+		The timer fills a 256-bit entropy reserve in one 32-byte conditioned step. On each active collection cycle, the RNG path behaves as follows:
 		\begin{itemize}
 			\item The assembly collector reads the selected SRAM tap, applying the repetition-count and adaptive-proportion tests to every selected-bit observation.
-			\item Seventeen raw byte reads are XOR-conditioned into each of 119 pool bytes; SHA-256 then conditions the pool, and its leftmost 16 bytes form one contribution.
-			\item The contribution receives at most 128 bits of entropy credit, bounded by the configured conservative raw-source min-entropy estimate.
+			\item Eight consecutive selected-bit observations are packed into each of 119 pool bytes; SHA-256 then conditions the 952-observation pool, and its full 32-byte digest forms one contribution.
+			\item The contribution receives at most 256 bits of entropy credit, bounded by the configured conservative raw-source min-entropy estimate.
 			\item At 256 credited bits, an uninstantiated generator is instantiated. Otherwise the complete reserve is retained and incorporated by the next Hash\_DRBG reseed.
 			\item Once instantiated, Hash\_DRBG output does not consume entropy credit one-for-one. The timer replenishes the reseed reserve independently and stops while that reserve is full.
 		\end{itemize}

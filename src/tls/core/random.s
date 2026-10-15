@@ -17,7 +17,7 @@ globl _tls_random_debug_source_ptr
 globl _tls_random_debug_source_mask
 globl _tls_random_health_epoch
 .type _tls_random_init_entropy,@function
-.type _tls_entropy_gather128,@function
+.type _tls_entropy_gather256,@function
 .type _tls_entropy_collect,@function
 .type _tls_random_debug_source_ptr,@function
 .type _tls_random_debug_source_mask,@function
@@ -348,42 +348,53 @@ _tls_random_init_entropy:
     ret
 
 ;--------------------------------------
-; Internal 128-bit conditioned-source gather used by tls_entropy_collect().
+; Internal 256-bit conditioned-source gather used by tls_entropy_collect().
 ; All sensitive state here (_sprng_entropy_pool, _sprng_sha_digest,
 ; _sprng_sha_mbuffer, _sprng_hash_ctx) lives in a BSS overlay, never on
 ; this function's own stack frame -- tls_crypto_guard_disable() (a
 ; stack scrub) was never capable of reaching it regardless of where it
 ; was called from. The entropy pool/SHA scratch is explicitly zeroed
 ; by tls_entropy_collect() after the digest has been copied to the caller.
-_tls_entropy_gather128:
+_tls_entropy_gather256:
     xor a,a
     ld (_sprng_random_last_ok),a
     ld (_sprng_recovery_rescanned),a
 .Lrandom_retry:
 
-; populate entropy pool with entropy
-;   119 bytes at 0.811 bits of entropy per byte in pool = 96.51 bits
-;   xor from entropy source 17 times per byte => reduce correlation
+; Populate the 119-byte entropy pool with 952 consecutive observations of the
+; selected source bit. Each pool byte preserves eight observations in arrival
+; order (first observation becomes bit 7); SHA-256 conditions the complete raw
+; bitstream below. Do not XOR observations together here: doing so collapses
+; several source observations into one bit before the conditioner sees them.
     ld hl,(_sprng_read_addr)
     ld de, _sprng_entropy_pool
     ld b, 119
 .Lrandom_byte_read_loop:
     xor a,a
-    ld (_sprng_sample_xor),a
-    ld c,17
+    ld (_sprng_sample_byte),a
+    ld c,8
 .Lrandom_raw_read_loop:
     ld a,(hl)
     ld (_sprng_raw_sample),a
     call .Lhealth_observe
     jr c,.Lrandom_health_fail
-    push hl
-    ld hl,_sprng_raw_sample
-    ld a,(_sprng_sample_xor)
-    xor a,(hl)
-    pop hl
-    ld (_sprng_sample_xor),a
+
+    ; Shift the next selected bit into the low end of the pool byte. The
+    ; health observer has already normalized the selected bit to zero or the
+    ; one-hot source mask in _sprng_health_current.
+    ld a,(_sprng_sample_byte)
+    add a,a
+    ld (_sprng_sample_byte),a
+    ld a,(_sprng_health_current)
+    or a,a
+    jr z,.Lrandom_raw_bit_stored
+    ld a,(_sprng_sample_byte)
+    inc a
+    ld (_sprng_sample_byte),a
+.Lrandom_raw_bit_stored:
     dec c
     jr nz,.Lrandom_raw_read_loop
+    ld a,(_sprng_sample_byte)
     ld (de), a
     inc de
     djnz .Lrandom_byte_read_loop
@@ -409,7 +420,7 @@ _tls_entropy_gather128:
     pop bc
     pop hl
 
-; tls_entropy_collect() copies the leftmost 128 digest bits directly. Avoid
+; tls_entropy_collect() copies the full 256-bit digest directly. Avoid
 ; the former custom XOR-folding step and leave the digest live only until that
 ; copy completes.
     ld a,1
@@ -621,19 +632,19 @@ _tls_entropy_collect:
     or a,a
     sbc hl,bc
     jr z,.Lbytes_done ; handle end of loop and when len is zero
-    call _tls_entropy_gather128
+    call _tls_entropy_gather256
     ld a,(_sprng_random_last_ok)
     or a,a
     jr z,.Lbytes_failed
     ld hl,(ix+9)
-    ld bc,16
+    ld bc,32
     or a,a
     sbc hl,bc
     jr nc,.Lbytes_full
-    ; Short tail: HL is len-16 modulo 2^24. Restore len for the copy,
+    ; Short tail: HL is len-32 modulo 2^24. Restore len for the copy,
     ; and consume the entire remainder instead of storing the underflow.
     add hl,bc
-    ld c,l ; remaining length is 1..7; upper BC bytes are already zero
+    ld c,l ; remaining length is 1..31; upper BC bytes are already zero
     or a,a
     sbc hl,hl
 .Lbytes_full:
@@ -730,7 +741,7 @@ _sprng_recovery_rescanned:
     .zero 1
 _sprng_raw_sample:
     .zero 1
-_sprng_sample_xor:
+_sprng_sample_byte:
     .zero 1
 
 .section	.note.GNU-stack,"",@progbits

@@ -816,8 +816,8 @@ def build_appendix_b_model_summary(datasets_root: Path) -> str:
 
 
 RNG_Z_99 = 2.576
-RNG_READS_PER_COLLECTION = 17 * 119
-RNG_CONDITIONED_BITS = 128
+RNG_READS_PER_COLLECTION = 8 * 119
+RNG_CONDITIONED_BITS = 256
 
 
 def rng_mcv_estimate(ones: int, zeros: int) -> Dict[str, float | int]:
@@ -978,7 +978,7 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
             "\\begin{xltabular}{\\textwidth}{@{}>{\\raggedright\\arraybackslash}X*{7}{>{\\centering\\arraybackslash}X}@{}}",
             "\\toprule",
             "\\rowcolor{gray!18}",
-            "\\textbf{Model} & \\textbf{Tests} & \\textbf{$n$} & \\textbf{$\\epsilon_{99}$} & \\textbf{$H_{99,agg}$} & \\textbf{$H_{99,worst}$} & \\textbf{$h_{model}$} & \\textbf{$2023h_{model}$} \\\\",
+            f"\\textbf{{Model}} & \\textbf{{Tests}} & \\textbf{{$n$}} & \\textbf{{$\\epsilon_{{99}}$}} & \\textbf{{$H_{{99,agg}}$}} & \\textbf{{$H_{{99,worst}}$}} & \\textbf{{$h_{{model}}$}} & \\textbf{{${RNG_READS_PER_COLLECTION}h_{{model}}$}} \\\\",
             "\\midrule",
         ]
     )
@@ -996,6 +996,7 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
     overall_raw_h = RNG_READS_PER_COLLECTION * overall_h
     overall_credit = min(float(RNG_CONDITIONED_BITS), overall_raw_h)
     out.append(f"\\newcommand{{\\RngOverallH}}{{{overall_h:.6f}}}")
+    out.append(f"\\newcommand{{\\RngRawSamplesPerCollection}}{{{RNG_READS_PER_COLLECTION}}}")
     out.append(f"\\newcommand{{\\RngOverallRawCollectionH}}{{{overall_raw_h:.3f}}}")
     out.append(f"\\newcommand{{\\RngOverallCredit}}{{{overall_credit:.0f}}}")
     return "\n".join(out) + "\n", "\n".join(detail) + "\n"

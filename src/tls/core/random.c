@@ -18,17 +18,17 @@
 #define TLS_RNG_REQUEST_QUEUE_MAX_DEPTH 16u
 #define TLS_HASH_DRBG_SEED_BYTES 55u
 #define TLS_HASH_DRBG_ENTROPY_BYTES 32u
-#define TLS_HASH_DRBG_ENTROPY_STEP_BYTES 16u
+#define TLS_HASH_DRBG_ENTROPY_STEP_BYTES 32u
 #define TLS_HASH_DRBG_ENTROPY_TARGET_BITS 256u
-#define TLS_ENTROPY_RAW_SAMPLES_PER_STEP (119u * 17u)
+#define TLS_ENTROPY_RAW_SAMPLES_PER_STEP (UINT32_C(119) * UINT32_C(8))
 /* Provisional engineering floor: 0.35 bits per selected raw bit, Q16. The
- * conditioner emits only 128 bits, so min(raw_samples * Hmin, 128) credits
- * the complete 16-byte block. Replace this floor after the non-IID assessment. */
-#define TLS_ENTROPY_HMIN_Q16 22938u
+ * conditioner emits 256 bits, so min(raw_samples * Hmin, 256) credits the
+ * complete 32-byte block. Replace this floor after the non-IID assessment. */
+#define TLS_ENTROPY_HMIN_Q16 UINT32_C(22938)
 #define TLS_ENTROPY_RAW_CREDIT_BITS \
     ((TLS_ENTROPY_RAW_SAMPLES_PER_STEP * TLS_ENTROPY_HMIN_Q16) >> 16)
 #define TLS_HASH_DRBG_ENTROPY_STEP_CREDIT_BITS \
-    ((TLS_ENTROPY_RAW_CREDIT_BITS < 128u) ? TLS_ENTROPY_RAW_CREDIT_BITS : 128u)
+    ((TLS_ENTROPY_RAW_CREDIT_BITS < 256u) ? TLS_ENTROPY_RAW_CREDIT_BITS : 256u)
 #define TLS_HASH_DRBG_MAX_REQUEST_BYTES 65536u
 #define TLS_HASH_DRBG_RESEED_INTERVAL UINT64_C(0x0001000000000000)
 #define TLS_RNG_STATS_CAPTURE_CHUNK 32u
