@@ -171,7 +171,11 @@ static err_t altcp_ws_send_upgrade_request(struct altcp_pcb *conn,
     uint8_t key_raw[16];
     int n;
 
-    tls_random_bytes(key_raw, sizeof(key_raw));
+    if (tls_random_bytes(key_raw, sizeof(key_raw)) == NULL)
+    {
+        ERROR();
+        return ERR_VAL;
+    }
     ws_base64_encode16(key_raw, key_b64);
 
     if (state->conf->subprotocol)
@@ -232,7 +236,8 @@ static void altcp_ws_send_close_frame(struct altcp_pcb *conn,
     (void)state;
     frame[0] = WS_FIN | WS_OP_CLOSE;
     frame[1] = WS_MASK_BIT | 0u; /* masked, payload len = 0 */
-    tls_random_bytes(&frame[2], 4);
+    if (tls_random_bytes(&frame[2], 4) == NULL)
+        return;
     altcp_write(conn->inner_conn, frame, 6, TCP_WRITE_FLAG_COPY);
     altcp_output(conn->inner_conn);
 }
@@ -249,7 +254,8 @@ static void altcp_ws_send_pong(struct altcp_pcb *conn,
     uint8_t frame[6u + 125u];
     frame[0] = WS_FIN | WS_OP_PONG;
     frame[1] = (uint8_t)(WS_MASK_BIT | payload_len);
-    tls_random_bytes(&frame[2], 4);
+    if (tls_random_bytes(&frame[2], 4) == NULL)
+        return;
 
     if (payload_len > 0u && state->rx)
     {
@@ -886,7 +892,11 @@ static err_t altcp_ws_write(struct altcp_pcb *conn, const void *dataptr,
     }
 
     /* Masking key */
-    tls_random_bytes(&frame[hdr_end], 4);
+    if (tls_random_bytes(&frame[hdr_end], 4) == NULL)
+    {
+        mem_free(frame);
+        return ERR_VAL;
+    }
 
     /* Masked payload */
     const uint8_t *mask = &frame[hdr_end];

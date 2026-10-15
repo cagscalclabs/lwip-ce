@@ -1,0 +1,177 @@
+/**
+ * @file main.c
+ * @brief Collect repeated diagnostic windows from the selected raw RNG tap.
+ *
+ * The output AppVar is deliberately textual so it can be inspected directly
+ * or processed by tools/analyze_rng_stats.py.  Entropy estimates belong in
+ * the host-side analyzer: floating-point logarithms add no value to the
+ * calculator-side sampler and would make the measurement program larger.
+ */
+
+#include <fileioc.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <ti/getkey.h>
+#include <ti/screen.h>
+
+#include <lwip/cryptography/random.h>
+#include <lwip.h>
+
+#define RNG_STATS_APPVAR "RNGSTATS"
+#define RNG_STATS_RUNS 8u
+#define RNG_STATS_SAMPLES_PER_RUN 32768u
+
+static uint8_t output_handle;
+
+static bool output_open(void)
+{
+    (void)ti_Delete(RNG_STATS_APPVAR);
+    output_handle = ti_Open(RNG_STATS_APPVAR, "w");
+    return output_handle != 0u;
+}
+
+static bool output_line(const char *format, ...)
+{
+    char line[224];
+    va_list args;
+    int length;
+
+    va_start(args, format);
+    length = vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+
+    if ((length <= 0) || ((size_t)length >= sizeof(line)))
+    {
+        return false;
+    }
+
+    return ti_Write(line, (size_t)length, 1u, output_handle) == 1u;
+}
+
+static void output_close(bool archive)
+{
+    if (output_handle == 0u)
+    {
+        return;
+    }
+
+    if (archive)
+    {
+        (void)ti_SetArchiveStatus(true, output_handle);
+    }
+    (void)ti_Close(output_handle);
+    output_handle = 0u;
+}
+
+static void print_q16_percent(const char *label, uint32_t value)
+{
+    uint32_t percent_x100 = (value * 10000u + 32768u) >> 16;
+    printf("%s%lu.%02lu%%\n",
+           label,
+           (unsigned long)(percent_x100 / 100u),
+           (unsigned long)(percent_x100 % 100u));
+}
+
+int main(void)
+{
+    struct tls_rng_stats stats;
+    uint8_t random_probe[8];
+    uint8_t run;
+    bool ok = true;
+
+    os_ClrHome();
+    printf("TLS RNG tap profile\n");
+
+    if (!lwip_start())
+    {
+        printf("lwip_start failed: %u\n", (unsigned int)lwip_start_last_error());
+        printf("Press any key\n");
+        os_GetKey();
+        return 1;
+    }
+
+    /* Exercise the same checked assembly sampling path used by callers of
+     * the public RNG API before collecting raw diagnostic observations. */
+    if (tls_random_bytes(random_probe, sizeof(random_probe)) == NULL)
+    {
+        printf("random source failed\n");
+        lwip_stop();
+        printf("Press any key\n");
+        os_GetKey();
+        return 1;
+    }
+
+    if (!output_open())
+    {
+        printf("cannot open %s\n", RNG_STATS_APPVAR);
+        lwip_stop();
+        printf("Press any key\n");
+        os_GetKey();
+        return 1;
+    }
+
+    ok = output_line("rng_stats,version=1,runs=%u,samples_per_run=%lu\n",
+                     (unsigned int)RNG_STATS_RUNS,
+                     (unsigned long)RNG_STATS_SAMPLES_PER_RUN);
+
+    for (run = 0u; ok && (run < RNG_STATS_RUNS); run++)
+    {
+        os_ClrHome();
+        printf("TLS RNG tap profile\n");
+        printf("window %u/%u\n",
+               (unsigned int)(run + 1u),
+               (unsigned int)RNG_STATS_RUNS);
+
+        if (!tls_rng_compute_stats(RNG_STATS_SAMPLES_PER_RUN, &stats))
+        {
+            ok = false;
+            break;
+        }
+
+        ok = output_line(
+            "run=%u,source=%06lX,mask=%02X,samples=%lu,ones=%lu,zeros=%lu,"
+            "transitions=%lu,longest=%lu,longest0=%lu,longest1=%lu,"
+            "p1_q16=%lu,bias_q16=%lu,transition_q16=%lu\n",
+            (unsigned int)run,
+            (unsigned long)stats.source_address,
+            (unsigned int)stats.source_mask,
+            (unsigned long)stats.sample_count,
+            (unsigned long)stats.ones,
+            (unsigned long)stats.zeros,
+            (unsigned long)stats.transitions,
+            (unsigned long)stats.longest_run,
+            (unsigned long)stats.longest_zero_run,
+            (unsigned long)stats.longest_one_run,
+            (unsigned long)stats.p1_q16,
+            (unsigned long)stats.bias_q16,
+            (unsigned long)stats.transition_rate_q16);
+
+        printf("src %06lX mask %02X\n",
+               (unsigned long)stats.source_address,
+               (unsigned int)stats.source_mask);
+        print_q16_percent("p(1) ", stats.p1_q16);
+        print_q16_percent("bias ", stats.bias_q16);
+    }
+
+    output_close(ok);
+    lwip_stop();
+
+    os_ClrHome();
+    if (ok)
+    {
+        printf("Profile complete\n");
+        printf("Saved %s\n", RNG_STATS_APPVAR);
+        printf("%lu raw bits\n",
+               (unsigned long)RNG_STATS_RUNS * RNG_STATS_SAMPLES_PER_RUN);
+    }
+    else
+    {
+        printf("Profile failed\n");
+        printf("partial output left\n");
+    }
+    printf("Press any key\n");
+    os_GetKey();
+    return ok ? 0 : 1;
+}

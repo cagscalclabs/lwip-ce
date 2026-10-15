@@ -51,37 +51,41 @@ they are not cryptographically secure.
 
 .. c:function:: bool tls_random_init_entropy(void)
 
-   Initialize the cryptographic TRNG. Selects an SRAM entropy source, runs the
-   conditioning pass, and seeds the DRBG. Must be called before
-   ``tls_random()`` or ``tls_random_bytes()`` unless ``lwip_start()`` has
-   already been called (which initializes entropy automatically).
+   Select and validate an SRAM entropy tap. ``lwip_start()`` also starts the
+   timer-driven entropy collector, which instantiates Hash_DRBG and prepares a
+   256-bit reseed reserve in two 128-bit conditioned contributions.
 
    :returns: ``true`` on success, ``false`` if entropy initialization failed
       (e.g. no suitable SRAM source found).
 
 .. c:function:: bool tls_rng_healthcheck(void)
 
-   Run one immediate health-check cycle — the same lightweight sanity and
-   recovery logic used by the periodic RNG health timer. If repeated failures
-   have been detected, this may trigger a re-initialization of the entropy
-   source. **Always call this before generating random data.**
+   Ensure that a validated raw entropy source is available, initializing one
+   if necessary. SP 800-90B repetition-count and adaptive-proportion tests run
+   continuously on the selected raw bit as random data is gathered; no
+   separate periodic health-test callback or output-sample test is used.
 
    :returns: ``true`` if the RNG is healthy and safe to use, ``false``
       otherwise. On ``false``, retry ``tls_random_init_entropy()`` or abort.
 
 .. c:function:: void *tls_random_bytes(void *buffer, size_t len)
 
-   Fill ``buffer`` with ``len`` cryptographically random bytes, synchronously.
-   The health check must pass before calling this.
+   Fill ``buffer`` synchronously from SHA-256 Hash_DRBG. If the DRBG has not
+   yet been instantiated, this call blocks while gathering the initial
+   entropy. Once instantiated, output does not consume entropy one-for-one.
+   A complete timer-prepared entropy reserve is incorporated before output.
 
    :param buffer: Caller-supplied destination buffer.
    :param len: Number of bytes to fill.
-   :returns: ``buffer`` on success.
+   :returns: ``buffer`` on success, or ``NULL`` if instantiation/reseeding
+      fails or another RNG request is active. The destination is zeroized on
+      failure.
 
 .. c:function:: uint64_t tls_random(void)
 
-   Return a single cryptographically random 64-bit value, synchronously.
-   The health check must pass before calling this.
+   Deprecated compatibility wrapper returning one random 64-bit value.
+   New code should call ``tls_random_bytes()`` so an unrecoverable source
+   failure is distinguishable from a legitimate all-zero result.
 
    :returns: A 64-bit random integer.
 
@@ -97,8 +101,8 @@ they are not cryptographically secure.
    :param cb: Optional completion callback
       (``void cb(bool ok, void *arg)``). ``ok`` is ``true`` on success.
    :param arg: Opaque pointer passed through to ``cb``.
-   :param blocking: ``true`` to gather entropy immediately in the caller
-      (may block for a long time); ``false`` to gather in chunks via
+   :param blocking: ``true`` to gather any required instantiation/reseed
+      entropy in the caller; ``false`` to perform that work through
       ``lwip_service_events()`` and invoke ``cb`` when done.
    :returns: ``true`` if the request started or completed successfully,
       ``false`` on failure (busy, bad args, or health failure).
@@ -111,6 +115,30 @@ they are not cryptographically secure.
 
    :returns: ``true`` if busy, ``false`` if idle.
 
+.. c:function:: bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
+
+   Collect a blocking diagnostic sample from the exact raw SRAM bit selected
+   by ``tls_random_init_entropy()``. ``sample_count`` must be between
+   ``TLS_RNG_STATS_MIN_SAMPLES`` (256) and
+   ``TLS_RNG_STATS_MAX_SAMPLES`` (65535), inclusive. The function refuses to
+   run before source selection or while the RNG request engine is busy.
+
+   The result reports the source address and one-hot bit mask, zero and one
+   counts, adjacent-bit transitions, longest overall/zero/one runs, and three
+   unsigned Q16 rates. Divide ``p1_q16``, ``bias_q16``, and
+   ``transition_rate_q16`` by ``TLS_RNG_STATS_Q16_ONE`` (65536) to obtain the
+   corresponding fractional values.
+
+   This API observes the source before conditioning and is intended for
+   development and source characterization. Its output is not random data,
+   a min-entropy estimate, or a substitute for SP 800-90B analysis. Sampling
+   also advances the physical source's observation history.
+
+   :param sample_count: Number of selected raw-bit observations to collect.
+   :param stats: Destination ``struct tls_rng_stats``.
+   :returns: ``true`` on success; ``false`` for invalid arguments, an
+      uninitialized source, or a busy RNG request engine.
+
 **Simple synchronous use:**
 
 .. code-block:: c
@@ -118,17 +146,13 @@ they are not cryptographically secure.
    /* generator already initialized by lwip_start() */
    uint8_t key[32];
 
-   if(tls_rng_healthcheck())              /* always ensure healthiness before generating */
-      tls_random_bytes(key, sizeof(key)); /* fill with cryptographic random bytes */
-   else printf("error: rng");
-   /* ^ You'll want to actually handle this (ex: retry tls_random_init_entropy()) */
+   if (tls_random_bytes(key, sizeof(key)) == NULL)
+      printf("error: rng");
 
    // ... a bit later ...
    uint64_t r;
-   if(tls_rng_healthcheck())
-      r = tls_random();                  /* get a single random 64-bit value */
-   else printf("error: rng");
-   /* ^ You'll want to actually handle this (ex: retry tls_random_init_entropy()) */
+   if (tls_random_bytes(&r, sizeof(r)) == NULL)
+      printf("error: rng");
 
 After ``lwip_start()``, the entropy source is initialized automatically as part of the TLS subsystem setup; calling ``tls_random_init_entropy()`` again after that is harmless but redundant.
 
@@ -154,9 +178,8 @@ Only one request can be in flight at a time. ``tls_rng_is_busy()`` returns
 ``true`` if a request is active. The ``out`` buffer must remain valid until
 the callback fires (async) or the call returns (blocking).
 
-``tls_rng_healthcheck()`` runs the same lightweight sanity check the periodic
-internal timer runs. It returns ``true`` if the RNG health is currently
-acceptable.
+``tls_rng_healthcheck()`` ensures that a validated source is ready. Continuous
+raw-source health testing occurs inside entropy collection itself.
 
 Hashing and HMAC
 -----------------

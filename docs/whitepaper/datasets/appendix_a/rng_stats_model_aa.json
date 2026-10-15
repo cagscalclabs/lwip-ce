@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "device_model": "AA",
+  "source": "D658B2",
+  "mask": "20",
+  "aggregate": {
+    "samples": 262144,
+    "p1": 0.23482894897460938,
+    "bias": 0.2651710510253906,
+    "transition_rate": 0.3598132267220069,
+    "longest_run": 58,
+    "h_mcv_plugin_bits_per_raw_bit": 0.38614580213922806,
+    "h_mcv_lower_99_bits_per_raw_bit": 0.3821302684070076
+  },
+  "worst_window_h_mcv_lower_99_bits_per_raw_bit": 0.3559412517496038,
+  "conservative_working_h_bits_per_raw_bit": 0.3559412517496038,
+  "runs": [
+    {"run": 0, "p1": 0.224578857421875, "transition_rate": 0.34626300851466413, "longest_run": 39, "h_mcv_plugin_bits_per_raw_bit": 0.3669480228408636, "h_mcv_lower_99_bits_per_raw_bit": 0.3559412517496038},
+    {"run": 1, "p1": 0.230224609375, "transition_rate": 0.3577074495681631, "longest_run": 46, "h_mcv_plugin_bits_per_raw_bit": 0.3774905453166654, "h_mcv_lower_99_bits_per_raw_bit": 0.36630617815961325},
+    {"run": 2, "p1": 0.240325927734375, "transition_rate": 0.3683278908658101, "longest_run": 36, "h_mcv_plugin_bits_per_raw_bit": 0.3965475120958103, "h_mcv_lower_99_bits_per_raw_bit": 0.38504596101119876},
+    {"run": 3, "p1": 0.24761962890625, "transition_rate": 0.3707388531144139, "longest_run": 58, "h_mcv_plugin_bits_per_raw_bit": 0.4104658841111875, "h_mcv_lower_99_bits_per_raw_bit": 0.3987355851522459},
+    {"run": 4, "p1": 0.23919677734375, "transition_rate": 0.3650624103518784, "longest_run": 39, "h_mcv_plugin_bits_per_raw_bit": 0.394404737621137, "h_mcv_lower_99_bits_per_raw_bit": 0.38293861502522086},
+    {"run": 5, "p1": 0.228302001953125, "transition_rate": 0.3512680440687277, "longest_run": 45, "h_mcv_plugin_bits_per_raw_bit": 0.37389173180251395, "h_mcv_lower_99_bits_per_raw_bit": 0.3627678122957947},
+    {"run": 6, "p1": 0.2337646484375, "transition_rate": 0.3610034485915708, "longest_run": 39, "h_mcv_plugin_bits_per_raw_bit": 0.38414050641691944, "h_mcv_lower_99_bits_per_raw_bit": 0.37284491132197645},
+    {"run": 7, "p1": 0.234619140625, "transition_rate": 0.35813470870082707, "longest_run": 35, "h_mcv_plugin_bits_per_raw_bit": 0.3857502723105987, "h_mcv_lower_99_bits_per_raw_bit": 0.37442784169088594}
+  ]
+}

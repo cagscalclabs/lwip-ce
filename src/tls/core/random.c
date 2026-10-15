@@ -7,32 +7,39 @@
 #include "lwip/dispatch.h"
 #include "../includes/random.h"
 #include "../includes/hash.h"
+#include "../includes/bytes.h"
 #include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_RANDOM
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
 
-#define TLS_RNG_HEALTHCHECK_INTERVAL_MS 30000u
-#define TLS_RNG_HEALTHCHECK_FAIL_THRESHOLD 3u
-#define TLS_RNG_HEALTHCHECK_SAMPLE_BYTES 32u
-#define TLS_RNG_HEALTHCHECK_MIN_ONES 88u
-#define TLS_RNG_HEALTHCHECK_MAX_ONES 168u
-#define TLS_RNG_HEALTHCHECK_MAX_EQUAL_RUN 4u
 #define TLS_RNG_REQUEST_INTERVAL_MS 50u
-#define TLS_RNG_REQUEST_BLOCKING_MAX_RETRIES 16u
 #define TLS_RNG_REQUEST_QUEUE_MAX_DEPTH 16u
-#define TLS_DRBG_STATE_BYTES 32u
-#define TLS_DRBG_ENTROPY_BUDGET_MAX 32u
-#define TLS_DRBG_ENTROPY_STEP_BYTES 8u
+#define TLS_HASH_DRBG_SEED_BYTES 55u
+#define TLS_HASH_DRBG_ENTROPY_BYTES 32u
+#define TLS_HASH_DRBG_ENTROPY_STEP_BYTES 16u
+#define TLS_HASH_DRBG_ENTROPY_TARGET_BITS 256u
+#define TLS_ENTROPY_RAW_SAMPLES_PER_STEP (119u * 17u)
+/* Provisional engineering floor: 0.35 bits per selected raw bit, Q16. The
+ * conditioner emits only 128 bits, so min(raw_samples * Hmin, 128) credits
+ * the complete 16-byte block. Replace this floor after the non-IID assessment. */
+#define TLS_ENTROPY_HMIN_Q16 22938u
+#define TLS_ENTROPY_RAW_CREDIT_BITS \
+    ((TLS_ENTROPY_RAW_SAMPLES_PER_STEP * TLS_ENTROPY_HMIN_Q16) >> 16)
+#define TLS_HASH_DRBG_ENTROPY_STEP_CREDIT_BITS \
+    ((TLS_ENTROPY_RAW_CREDIT_BITS < 128u) ? TLS_ENTROPY_RAW_CREDIT_BITS : 128u)
+#define TLS_HASH_DRBG_MAX_REQUEST_BYTES 65536u
+#define TLS_HASH_DRBG_RESEED_INTERVAL UINT64_C(0x0001000000000000)
+#define TLS_RNG_STATS_CAPTURE_CHUNK 32u
 
-static bool g_tls_rng_health_timer_running = false;
-static bool g_tls_rng_health_ready = false;
-static uint8_t g_tls_rng_health_failures = 0;
-static bool g_tls_rng_prev_sample_valid = false;
-static uint8_t g_tls_rng_prev_sample[TLS_RNG_HEALTHCHECK_SAMPLE_BYTES];
-static bool tls_rng_healthcheck_run_once(void);
+/* Assembly accessor for the selected bit within the sampled SRAM byte. */
+extern uint8_t tls_random_debug_source_mask(void);
+extern uint8_t tls_random_health_epoch(void);
+extern void *tls_entropy_collect(void *buffer, size_t len);
+
 static bool g_tls_rng_entropy_timer_running = false;
+static bool g_tls_rng_started = false;
 static bool g_tls_rng_request_active = false;
 static uint8_t *g_tls_rng_request_out = NULL;
 static size_t g_tls_rng_request_len = 0;
@@ -53,11 +60,24 @@ static struct tls_rng_request_ctx *g_tls_rng_request_q_head = NULL;
 static struct tls_rng_request_ctx *g_tls_rng_request_q_tail = NULL;
 static uint8_t g_tls_rng_request_q_depth = 0;
 static bool g_tls_drbg_seeded = false;
-static uint8_t g_tls_drbg_state[TLS_DRBG_STATE_BYTES];
-static uint8_t g_tls_drbg_seed_material[TLS_DRBG_STATE_BYTES];
-static size_t g_tls_drbg_seed_material_len = 0;
-static size_t g_tls_drbg_entropy_budget = 0;
-static uint64_t g_tls_drbg_counter = 1;
+static uint8_t g_tls_drbg_v[TLS_HASH_DRBG_SEED_BYTES];
+static uint8_t g_tls_drbg_c[TLS_HASH_DRBG_SEED_BYTES];
+static uint64_t g_tls_drbg_reseed_counter = 0;
+static uint8_t g_tls_entropy_reserve[TLS_HASH_DRBG_ENTROPY_BYTES];
+static size_t g_tls_entropy_reserve_len = 0;
+static uint16_t g_tls_entropy_budget_bits = 0;
+static uint8_t g_tls_rng_source_epoch = 0;
+
+static void tls_drbg_reset(void)
+{
+    g_tls_drbg_seeded = false;
+    g_tls_drbg_reseed_counter = 0;
+    g_tls_entropy_reserve_len = 0;
+    g_tls_entropy_budget_bits = 0;
+    tls_secure_memzero(g_tls_drbg_v, sizeof(g_tls_drbg_v));
+    tls_secure_memzero(g_tls_drbg_c, sizeof(g_tls_drbg_c));
+    tls_secure_memzero(g_tls_entropy_reserve, sizeof(g_tls_entropy_reserve));
+}
 
 static void tls_rng_request_reset_state(void)
 {
@@ -175,129 +195,242 @@ static void tls_store_u64_be(uint64_t x, uint8_t out[8])
     out[7] = (uint8_t)x;
 }
 
-static bool tls_drbg_instantiate_from_seed_material(void)
+/* SP 800-90A Rev. 1 Hash_DRBG with SHA-256 uses seedlen=440 bits. */
+static bool tls_hash_df(const uint8_t *input, size_t input_len,
+                        uint8_t output[TLS_HASH_DRBG_SEED_BYTES])
 {
-    if (g_tls_drbg_seed_material_len < TLS_DRBG_STATE_BYTES)
+    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    uint8_t header[5] = {1u, 0u, 0u, 1u, 0xB8u}; /* 440, big endian. */
+    size_t written = 0;
+
+    while (written < TLS_HASH_DRBG_SEED_BYTES)
     {
-        return false;
+        struct tls_hash_context ctx;
+        size_t take;
+
+        if (!tls_hash_context_init(&ctx, TLS_HASH_SHA256))
+            return false;
+        tls_hash_update(&ctx, header, sizeof(header));
+        tls_hash_update(&ctx, input, input_len);
+        tls_hash_digest(&ctx, digest);
+
+        take = TLS_HASH_DRBG_SEED_BYTES - written;
+        if (take > sizeof(digest))
+            take = sizeof(digest);
+        memcpy(output + written, digest, take);
+        written += take;
+        header[0]++;
     }
-    if (!tls_sha256_buf(g_tls_drbg_seed_material, TLS_DRBG_STATE_BYTES, g_tls_drbg_state))
-    {
-        ERROR();
-        return false;
-    }
-    g_tls_drbg_seeded = true;
-    g_tls_drbg_counter = 1;
-    g_tls_drbg_seed_material_len = 0;
-    memset(g_tls_drbg_seed_material, 0, sizeof(g_tls_drbg_seed_material));
+
+    tls_secure_memzero(digest, sizeof(digest));
     return true;
 }
 
-static bool tls_drbg_reseed_with_entropy(const uint8_t entropy[TLS_DRBG_ENTROPY_STEP_BYTES])
+static void tls_hash_drbg_add(uint8_t value[TLS_HASH_DRBG_SEED_BYTES],
+                              const uint8_t *addend, size_t addend_len)
 {
-    uint8_t material[TLS_DRBG_STATE_BYTES + TLS_DRBG_ENTROPY_STEP_BYTES + 8];
-    uint8_t ctr_be[8];
+    size_t vi = TLS_HASH_DRBG_SEED_BYTES;
+    size_t ai = addend_len;
+    uint16_t carry = 0;
+
+    while (vi != 0u)
+    {
+        uint16_t sum = (uint16_t)value[--vi] + carry;
+        if (ai != 0u)
+            sum += addend[--ai];
+        value[vi] = (uint8_t)sum;
+        carry = sum >> 8;
+    }
+}
+
+static void tls_hash_drbg_increment(uint8_t value[TLS_HASH_DRBG_SEED_BYTES])
+{
+    size_t i = TLS_HASH_DRBG_SEED_BYTES;
+    while (i != 0u)
+    {
+        value[--i]++;
+        if (value[i] != 0u)
+            break;
+    }
+}
+
+static bool tls_hash_drbg_make_c(void)
+{
+    uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES];
+    material[0] = 0u;
+    memcpy(material + 1u, g_tls_drbg_v, sizeof(g_tls_drbg_v));
+    if (!tls_hash_df(material, sizeof(material), g_tls_drbg_c))
+    {
+        tls_secure_memzero(material, sizeof(material));
+        return false;
+    }
+    tls_secure_memzero(material, sizeof(material));
+    return true;
+}
+
+static bool tls_hash_drbg_instantiate(const uint8_t entropy[TLS_HASH_DRBG_ENTROPY_BYTES])
+{
+    /* The implementation claims 128-bit strength. Supplying 256 bits of
+     * assessed entropy satisfies the 3/2-strength rule that permits the nonce
+     * to be omitted (SP 800-90A Rev. 1, 8.6.7). */
+    if (!tls_hash_df(entropy, TLS_HASH_DRBG_ENTROPY_BYTES, g_tls_drbg_v) ||
+        !tls_hash_drbg_make_c())
+    {
+        tls_drbg_reset();
+        return false;
+    }
+    g_tls_drbg_reseed_counter = 1u;
+    g_tls_drbg_seeded = true;
+    return true;
+}
+
+static bool tls_hash_drbg_reseed(const uint8_t entropy[TLS_HASH_DRBG_ENTROPY_BYTES])
+{
+    uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES];
+    uint8_t new_v[TLS_HASH_DRBG_SEED_BYTES];
 
     if (!g_tls_drbg_seeded)
+        return false;
+    material[0] = 1u;
+    memcpy(material + 1u, g_tls_drbg_v, sizeof(g_tls_drbg_v));
+    memcpy(material + 1u + sizeof(g_tls_drbg_v), entropy,
+           TLS_HASH_DRBG_ENTROPY_BYTES);
+    if (!tls_hash_df(material, sizeof(material), new_v))
     {
-        ERROR();
+        tls_secure_memzero(material, sizeof(material));
+        tls_secure_memzero(new_v, sizeof(new_v));
         return false;
     }
-
-    tls_store_u64_be(g_tls_drbg_counter, ctr_be);
-    memcpy(material, g_tls_drbg_state, TLS_DRBG_STATE_BYTES);
-    memcpy(material + TLS_DRBG_STATE_BYTES, entropy, TLS_DRBG_ENTROPY_STEP_BYTES);
-    memcpy(material + TLS_DRBG_STATE_BYTES + TLS_DRBG_ENTROPY_STEP_BYTES, ctr_be, sizeof(ctr_be));
-    if (!tls_sha256_buf(material, sizeof(material), g_tls_drbg_state))
+    memcpy(g_tls_drbg_v, new_v, sizeof(g_tls_drbg_v));
+    tls_secure_memzero(new_v, sizeof(new_v));
+    tls_secure_memzero(material, sizeof(material));
+    if (!tls_hash_drbg_make_c())
     {
-        ERROR();
+        tls_drbg_reset();
         return false;
     }
-    g_tls_drbg_counter++;
+    g_tls_drbg_reseed_counter = 1u;
     return true;
+}
+
+static bool tls_hash_drbg_hashgen(uint8_t *out, size_t len)
+{
+    uint8_t data[TLS_HASH_DRBG_SEED_BYTES];
+    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    size_t produced = 0;
+
+    memcpy(data, g_tls_drbg_v, sizeof(data));
+    while (produced < len)
+    {
+        size_t take = len - produced;
+        if (!tls_sha256_buf(data, sizeof(data), digest))
+            goto fail;
+        if (take > sizeof(digest))
+            take = sizeof(digest);
+        memcpy(out + produced, digest, take);
+        produced += take;
+        tls_hash_drbg_increment(data);
+    }
+    tls_secure_memzero(data, sizeof(data));
+    tls_secure_memzero(digest, sizeof(digest));
+    return true;
+
+fail:
+    tls_secure_memzero(data, sizeof(data));
+    tls_secure_memzero(digest, sizeof(digest));
+    return false;
 }
 
 static bool tls_drbg_generate_bytes(uint8_t *out, size_t len)
 {
-    uint8_t block[32];
-    uint8_t material[TLS_DRBG_STATE_BYTES + 8];
-    uint8_t update_mat[TLS_DRBG_STATE_BYTES + 32 + 1];
-    uint8_t ctr_be[8];
-    size_t produced = 0;
-    size_t take;
+    uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES];
+    uint8_t h[TLS_SHA256_DIGEST_LEN];
+    uint8_t counter_be[8];
 
-    if (!g_tls_drbg_seeded || out == NULL)
-    {
+    if (!g_tls_drbg_seeded || out == NULL ||
+        len > TLS_HASH_DRBG_MAX_REQUEST_BYTES ||
+        g_tls_drbg_reseed_counter > TLS_HASH_DRBG_RESEED_INTERVAL)
         return false;
-    }
+    if (!tls_hash_drbg_hashgen(out, len))
+        return false;
 
-    while (produced < len)
-    {
-        tls_store_u64_be(g_tls_drbg_counter, ctr_be);
-        memcpy(material, g_tls_drbg_state, TLS_DRBG_STATE_BYTES);
-        memcpy(material + TLS_DRBG_STATE_BYTES, ctr_be, sizeof(ctr_be));
-        if (!tls_sha256_buf(material, sizeof(material), block))
-        {
-            ERROR();
-            return false;
-        }
-
-        take = ((len - produced) < sizeof(block)) ? (len - produced) : sizeof(block);
-        memcpy(out + produced, block, take);
-
-        memcpy(update_mat, g_tls_drbg_state, TLS_DRBG_STATE_BYTES);
-        memcpy(update_mat + TLS_DRBG_STATE_BYTES, block, sizeof(block));
-        update_mat[TLS_DRBG_STATE_BYTES + sizeof(block)] = 0xA5;
-        if (!tls_sha256_buf(update_mat, sizeof(update_mat), g_tls_drbg_state))
-        {
-            ERROR();
-            return false;
-        }
-
-        g_tls_drbg_counter++;
-        produced += take;
-    }
+    material[0] = 3u;
+    memcpy(material + 1u, g_tls_drbg_v, sizeof(g_tls_drbg_v));
+    if (!tls_sha256_buf(material, sizeof(material), h))
+        goto fail;
+    tls_hash_drbg_add(g_tls_drbg_v, h, sizeof(h));
+    tls_hash_drbg_add(g_tls_drbg_v, g_tls_drbg_c, sizeof(g_tls_drbg_c));
+    tls_store_u64_be(g_tls_drbg_reseed_counter, counter_be);
+    tls_hash_drbg_add(g_tls_drbg_v, counter_be, sizeof(counter_be));
+    g_tls_drbg_reseed_counter++;
+    tls_secure_memzero(material, sizeof(material));
+    tls_secure_memzero(h, sizeof(h));
     return true;
+
+fail:
+    tls_secure_memzero(material, sizeof(material));
+    tls_secure_memzero(h, sizeof(h));
+    return false;
 }
 
 static bool tls_drbg_entropy_gather_step(void)
 {
-    uint64_t r64;
-    uint8_t entropy[TLS_DRBG_ENTROPY_STEP_BYTES];
+    uint8_t entropy[TLS_HASH_DRBG_ENTROPY_STEP_BYTES];
+    uint8_t source_epoch;
 
-    if (!tls_rng_healthcheck_run_once())
+    if (g_tls_entropy_budget_bits >= TLS_HASH_DRBG_ENTROPY_TARGET_BITS)
+        return true;
+    if (!tls_rng_healthcheck())
+        return false;
+
+    source_epoch = tls_random_health_epoch();
+    if (tls_entropy_collect(entropy, sizeof(entropy)) == NULL)
     {
+        tls_drbg_reset();
+        g_tls_rng_source_epoch = tls_random_health_epoch();
         return false;
     }
 
-    r64 = tls_random();
-    memcpy(entropy, &r64, sizeof(entropy));
-
-    if (!g_tls_drbg_seeded)
+    /* Never combine observations spanning a failed or replaced source. */
+    if ((source_epoch != tls_random_health_epoch()) ||
+        (g_tls_rng_source_epoch != tls_random_health_epoch()))
     {
-        size_t remain = TLS_DRBG_STATE_BYTES - g_tls_drbg_seed_material_len;
-        size_t take = (remain < sizeof(entropy)) ? remain : sizeof(entropy);
-        memcpy(g_tls_drbg_seed_material + g_tls_drbg_seed_material_len, entropy, take);
-        g_tls_drbg_seed_material_len += take;
-        if (g_tls_drbg_seed_material_len >= TLS_DRBG_STATE_BYTES)
-        {
-            if (!tls_drbg_instantiate_from_seed_material())
-            {
-                return false;
-            }
-        }
-    }
-    else if (!tls_drbg_reseed_with_entropy(entropy))
-    {
-        return false;
+        WARN_CODE(tls_random_health_epoch());
+        tls_drbg_reset();
+        g_tls_rng_source_epoch = tls_random_health_epoch();
     }
 
-    if (g_tls_drbg_entropy_budget < TLS_DRBG_ENTROPY_BUDGET_MAX)
+    memcpy(g_tls_entropy_reserve + g_tls_entropy_reserve_len,
+           entropy, sizeof(entropy));
+    g_tls_entropy_reserve_len += sizeof(entropy);
+    g_tls_entropy_budget_bits = (uint16_t)(
+        g_tls_entropy_budget_bits + TLS_HASH_DRBG_ENTROPY_STEP_CREDIT_BITS);
+    tls_secure_memzero(entropy, sizeof(entropy));
+
+    if (!g_tls_drbg_seeded &&
+        g_tls_entropy_budget_bits >= TLS_HASH_DRBG_ENTROPY_TARGET_BITS)
     {
-        size_t next = g_tls_drbg_entropy_budget + TLS_DRBG_ENTROPY_STEP_BYTES;
-        g_tls_drbg_entropy_budget = (next > TLS_DRBG_ENTROPY_BUDGET_MAX) ? TLS_DRBG_ENTROPY_BUDGET_MAX : next;
+        if (!tls_hash_drbg_instantiate(g_tls_entropy_reserve))
+            return false;
+        tls_secure_memzero(g_tls_entropy_reserve, sizeof(g_tls_entropy_reserve));
+        g_tls_entropy_reserve_len = 0;
+        g_tls_entropy_budget_bits = 0;
     }
     return true;
+}
+
+static bool tls_drbg_apply_entropy_reserve(void)
+{
+    bool ok;
+    if (g_tls_entropy_budget_bits < TLS_HASH_DRBG_ENTROPY_TARGET_BITS)
+        return true;
+    ok = g_tls_drbg_seeded
+             ? tls_hash_drbg_reseed(g_tls_entropy_reserve)
+             : tls_hash_drbg_instantiate(g_tls_entropy_reserve);
+    tls_secure_memzero(g_tls_entropy_reserve, sizeof(g_tls_entropy_reserve));
+    g_tls_entropy_reserve_len = 0;
+    g_tls_entropy_budget_bits = 0;
+    return ok;
 }
 
 static bool tls_rng_request_try_complete(void)
@@ -319,121 +452,37 @@ static bool tls_rng_request_try_complete(void)
     {
         return true;
     }
-    if (g_tls_drbg_entropy_budget == 0)
-    {
+    if (!tls_drbg_apply_entropy_reserve())
         return false;
-    }
-
-    take = (remain < g_tls_drbg_entropy_budget) ? remain : g_tls_drbg_entropy_budget;
+    take = remain;
+    if (take > TLS_HASH_DRBG_MAX_REQUEST_BYTES)
+        take = TLS_HASH_DRBG_MAX_REQUEST_BYTES;
     if (!tls_drbg_generate_bytes(g_tls_rng_request_out + g_tls_rng_request_collected, take))
     {
         return false;
     }
-    g_tls_drbg_entropy_budget -= take;
     g_tls_rng_request_collected += take;
     return g_tls_rng_request_collected >= g_tls_rng_request_len;
 }
 
-static uint8_t tls_popcount_u8(uint8_t x)
-{
-    uint8_t c = 0;
-    while (x != 0)
-    {
-        c += (uint8_t)(x & 1u);
-        x >>= 1;
-    }
-    return c;
-}
-
-static bool tls_rng_healthcheck_sample_ok(void)
-{
-    uint8_t sample[TLS_RNG_HEALTHCHECK_SAMPLE_BYTES];
-    uint16_t ones = 0;
-    uint8_t max_equal_run = 1;
-    uint8_t run_len = 1;
-    size_t i;
-
-    tls_random_bytes(sample, sizeof(sample));
-
-    if (g_tls_rng_prev_sample_valid &&
-        memcmp(sample, g_tls_rng_prev_sample, sizeof(sample)) == 0)
-    {
-        WARN();
-        return false;
-    }
-
-    for (i = 0; i < sizeof(sample); i++)
-    {
-        ones += tls_popcount_u8(sample[i]);
-        if ((i > 0) && (sample[i] == sample[i - 1]))
-        {
-            run_len++;
-            if (run_len > max_equal_run)
-            {
-                max_equal_run = run_len;
-            }
-        }
-        else
-        {
-            run_len = 1;
-        }
-    }
-
-    if ((ones < TLS_RNG_HEALTHCHECK_MIN_ONES) || (ones > TLS_RNG_HEALTHCHECK_MAX_ONES))
-    {
-        WARN_CODE(ones);
-        return false;
-    }
-    if (max_equal_run > TLS_RNG_HEALTHCHECK_MAX_EQUAL_RUN)
-    {
-        WARN_CODE(max_equal_run);
-        return false;
-    }
-
-    memcpy(g_tls_rng_prev_sample, sample, sizeof(sample));
-    g_tls_rng_prev_sample_valid = true;
-    return true;
-}
-
-static bool tls_rng_healthcheck_run_once(void)
-{
-    if (!g_tls_rng_health_ready)
-    {
-        g_tls_rng_health_ready = tls_random_init_entropy();
-        if (g_tls_rng_health_ready)
-        {
-            g_tls_rng_health_failures = 0;
-            g_tls_rng_prev_sample_valid = false;
-        }
-        else
-        {
-            ERROR();
-        }
-        return g_tls_rng_health_ready;
-    }
-
-    if (tls_rng_healthcheck_sample_ok())
-    {
-        g_tls_rng_health_failures = 0;
-        return true;
-    }
-
-    g_tls_rng_health_failures++;
-    if (g_tls_rng_health_failures >= TLS_RNG_HEALTHCHECK_FAIL_THRESHOLD)
-    {
-        ERROR();
-        g_tls_rng_health_ready = tls_random_init_entropy();
-        g_tls_rng_health_failures = g_tls_rng_health_ready ? 0 : TLS_RNG_HEALTHCHECK_FAIL_THRESHOLD;
-    }
-    return g_tls_rng_health_ready;
-}
-
 #if LWIP_TIMERS
-/* Dispatcher entry: drive the RNG entropy pump. The dispatcher is
- * self-throttling — when there's no request in flight AND the DRBG is
- * seeded with full entropy, we set our period to 0 (disable) so we
- * don't waste cycles. tls_request_random_bytes() re-arms us when a new
- * request comes in. */
+static void tls_rng_fail_pending_requests(void)
+{
+    while (g_tls_rng_request_active || tls_rng_request_q_pop_start_active())
+    {
+        tls_random_request_cb_t cb = g_tls_rng_request_cb;
+        void *cb_arg = g_tls_rng_request_arg;
+        if (cb != NULL)
+        {
+            cb(false, cb_arg);
+        }
+        tls_rng_request_reset_state();
+    }
+}
+
+/* Dispatcher entry: drive the entropy pump. Once Hash_DRBG is instantiated
+ * and a complete 256-bit reseed reserve is waiting, the dispatcher disables
+ * itself. Consuming that reserve or submitting a request re-arms it. */
 static void tls_rng_request_dispatch(void)
 {
     bool done = false;
@@ -445,12 +494,21 @@ static void tls_rng_request_dispatch(void)
     {
         done = tls_rng_request_try_complete();
     }
-    if (!done && (g_tls_rng_request_active || !g_tls_drbg_seeded || (g_tls_drbg_entropy_budget < TLS_DRBG_ENTROPY_BUDGET_MAX)))
+    if (!done && (g_tls_rng_request_active || !g_tls_drbg_seeded ||
+                  (g_tls_entropy_budget_bits < TLS_HASH_DRBG_ENTROPY_TARGET_BITS)))
     {
         gather_ok = tls_drbg_entropy_gather_step();
         if (gather_ok && g_tls_rng_request_active)
         {
             done = tls_rng_request_try_complete();
+        }
+        else if (!gather_ok)
+        {
+            ERROR();
+            tls_rng_fail_pending_requests();
+            lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST, 0);
+            g_tls_rng_entropy_timer_running = false;
+            return;
         }
     }
 
@@ -466,7 +524,9 @@ static void tls_rng_request_dispatch(void)
         (void)tls_rng_request_q_pop_start_active();
     }
 
-    if ((g_tls_rng_request_active) || (g_tls_rng_request_q_head != NULL) || (!g_tls_drbg_seeded) || (g_tls_drbg_entropy_budget < TLS_DRBG_ENTROPY_BUDGET_MAX))
+    if ((g_tls_rng_request_active) || (g_tls_rng_request_q_head != NULL) ||
+        (!g_tls_drbg_seeded) ||
+        (g_tls_entropy_budget_bits < TLS_HASH_DRBG_ENTROPY_TARGET_BITS))
     {
         /* Stay armed at the request cadence — there's still work. */
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
@@ -481,17 +541,7 @@ static void tls_rng_request_dispatch(void)
     }
 }
 
-static void tls_rng_healthcheck_dispatch(void)
-{
-    if (!g_tls_rng_health_timer_running)
-    {
-        return;
-    }
-    (void)tls_rng_healthcheck_run_once();
-}
-
-/* Attach the RNG dispatchers exactly once. Repeat starts/stops only
- * toggle periods. */
+/* Attach the entropy-pump dispatcher exactly once. */
 static void tls_rng_ensure_attached(void)
 {
     static bool attached = false;
@@ -500,26 +550,19 @@ static void tls_rng_ensure_attached(void)
         return;
     }
     lwip_dispatch_attach(LWIP_DISPATCH_TLS_RNG_REQUEST, tls_rng_request_dispatch);
-    lwip_dispatch_attach(LWIP_DISPATCH_TLS_RNG_HEALTHCHECK, tls_rng_healthcheck_dispatch);
     attached = true;
 }
 
-static void tls_rng_healthcheck_start(void)
+static void tls_rng_timer_start(void)
 {
-    if (g_tls_rng_health_timer_running)
+    if (g_tls_rng_started)
     {
         return;
     }
-    g_tls_rng_health_failures = 0;
-    g_tls_rng_health_ready = tls_random_init_entropy();
-    g_tls_rng_prev_sample_valid = false;
-    g_tls_drbg_seeded = false;
-    g_tls_drbg_seed_material_len = 0;
-    g_tls_drbg_entropy_budget = 0;
-    g_tls_drbg_counter = 1;
-    memset(g_tls_drbg_state, 0, sizeof(g_tls_drbg_state));
-    memset(g_tls_drbg_seed_material, 0, sizeof(g_tls_drbg_seed_material));
-    g_tls_rng_health_timer_running = true;
+    g_tls_rng_started = true;
+    (void)tls_random_init_entropy();
+    g_tls_rng_source_epoch = tls_random_health_epoch();
+    tls_drbg_reset();
 
     tls_rng_ensure_attached();
     lwip_dispatch_start();
@@ -529,42 +572,108 @@ static void tls_rng_healthcheck_start(void)
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
                                  lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
     }
-    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_HEALTHCHECK,
-                             lwip_dispatch_period_from_ms(TLS_RNG_HEALTHCHECK_INTERVAL_MS));
 }
 
-static void tls_rng_healthcheck_stop(void)
+static void tls_rng_timer_stop(void)
 {
-    if (!g_tls_rng_health_timer_running)
+    if (!g_tls_rng_started)
     {
         return;
     }
-    g_tls_rng_health_timer_running = false;
-    g_tls_rng_health_ready = false;
-    g_tls_rng_health_failures = 0;
-    g_tls_rng_prev_sample_valid = false;
+    g_tls_rng_started = false;
     g_tls_rng_entropy_timer_running = false;
-    g_tls_drbg_seeded = false;
-    g_tls_drbg_seed_material_len = 0;
-    g_tls_drbg_entropy_budget = 0;
-    g_tls_drbg_counter = 1;
-    memset(g_tls_drbg_state, 0, sizeof(g_tls_drbg_state));
-    memset(g_tls_drbg_seed_material, 0, sizeof(g_tls_drbg_seed_material));
-    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_HEALTHCHECK, 0);
+    tls_drbg_reset();
     lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST, 0);
 }
 #endif
 
 bool tls_rng_healthcheck(void)
 {
-    return tls_rng_healthcheck_run_once();
+    void *source = tls_random_debug_source_ptr();
+    uint8_t mask = tls_random_debug_source_mask();
+
+    if ((source != NULL) && (mask != 0u) && ((mask & (uint8_t)(mask - 1u)) == 0u))
+    {
+        return true;
+    }
+    if (!tls_random_init_entropy())
+    {
+        ERROR();
+        return false;
+    }
+    g_tls_rng_source_epoch = tls_random_health_epoch();
+    tls_drbg_reset();
+    return true;
+}
+
+void *tls_random_bytes(void *buffer, size_t len)
+{
+    uint8_t *out = (uint8_t *)buffer;
+    size_t requested_len = len;
+
+    if (buffer == NULL)
+        return NULL;
+    if (len == 0u)
+        return buffer;
+    if (g_tls_rng_request_active || (g_tls_rng_request_q_head != NULL))
+        return NULL;
+
+    while (!g_tls_drbg_seeded)
+    {
+        if (!tls_drbg_entropy_gather_step())
+            goto fail;
+    }
+    if (g_tls_drbg_reseed_counter > TLS_HASH_DRBG_RESEED_INTERVAL)
+    {
+        while (g_tls_entropy_budget_bits < TLS_HASH_DRBG_ENTROPY_TARGET_BITS)
+        {
+            if (!tls_drbg_entropy_gather_step())
+                goto fail;
+        }
+    }
+    if (!tls_drbg_apply_entropy_reserve())
+        goto fail;
+
+    while (len != 0u)
+    {
+        size_t take = len;
+        if (take > TLS_HASH_DRBG_MAX_REQUEST_BYTES)
+            take = TLS_HASH_DRBG_MAX_REQUEST_BYTES;
+        if (!tls_drbg_generate_bytes(out, take))
+            goto fail;
+        out += take;
+        len -= take;
+    }
+
+#if LWIP_TIMERS
+    if (g_tls_rng_started && !g_tls_rng_entropy_timer_running &&
+        g_tls_entropy_budget_bits < TLS_HASH_DRBG_ENTROPY_TARGET_BITS)
+    {
+        g_tls_rng_entropy_timer_running = true;
+        tls_rng_ensure_attached();
+        lwip_dispatch_start();
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
+                                 lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
+    }
+#endif
+    return buffer;
+
+fail:
+    tls_secure_memzero(buffer, requested_len);
+    return NULL;
+}
+
+uint64_t tls_random(void)
+{
+    uint64_t value = 0;
+    if (tls_random_bytes(&value, sizeof(value)) == NULL)
+        return 0;
+    return value;
 }
 
 bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t cb, void *arg, bool blocking)
 {
     bool done = false;
-    uint8_t retries = 0;
-
     if (out == NULL || len == 0)
     {
         return false;
@@ -593,20 +702,14 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
             }
             if (!tls_drbg_entropy_gather_step())
             {
-                retries++;
-                if (retries >= TLS_RNG_REQUEST_BLOCKING_MAX_RETRIES)
+                ERROR();
+                if (cb != NULL)
                 {
-                    ERROR_CODE(retries);
-                    if (cb != NULL)
-                    {
-                        cb(false, arg);
-                    }
-                    tls_rng_request_reset_state();
-                    return false;
+                    cb(false, arg);
                 }
-                continue;
+                tls_rng_request_reset_state();
+                return false;
             }
-            retries = 0;
             done = tls_rng_request_try_complete();
         }
         if (cb != NULL)
@@ -657,10 +760,113 @@ bool tls_rng_is_busy(void)
     return g_tls_rng_request_active || (g_tls_rng_request_q_head != NULL);
 }
 
+bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
+{
+    const volatile uint8_t *source;
+    uint8_t source_mask;
+    uint8_t captured[TLS_RNG_STATS_CAPTURE_CHUNK];
+    uint8_t previous = 0;
+    uint32_t current_run = 0;
+    uint32_t remaining;
+    bool have_previous = false;
+
+    if ((stats == NULL) ||
+        (sample_count < TLS_RNG_STATS_MIN_SAMPLES) ||
+        (sample_count > TLS_RNG_STATS_MAX_SAMPLES) ||
+        tls_rng_is_busy())
+    {
+        return false;
+    }
+
+    source = (const volatile uint8_t *)tls_random_debug_source_ptr();
+    source_mask = tls_random_debug_source_mask();
+    if ((source == NULL) || (source_mask == 0u) ||
+        ((source_mask & (uint8_t)(source_mask - 1u)) != 0u))
+    {
+        return false;
+    }
+
+    memset(stats, 0, sizeof(*stats));
+    stats->source_address = (uintptr_t)source;
+    stats->source_mask = source_mask;
+    stats->sample_count = (uint32_t)sample_count;
+    remaining = (uint32_t)sample_count;
+
+    while (remaining != 0u)
+    {
+        uint8_t count = (remaining > TLS_RNG_STATS_CAPTURE_CHUNK)
+                            ? TLS_RNG_STATS_CAPTURE_CHUNK
+                            : (uint8_t)remaining;
+        uint8_t i;
+
+        /* Keep raw reads adjacent and independent of the observed bit value. */
+        for (i = 0; i < count; i++)
+        {
+            captured[i] = *source;
+        }
+
+        for (i = 0; i < count; i++)
+        {
+            uint8_t bit = (captured[i] & source_mask) != 0u;
+
+            if (bit != 0u)
+            {
+                stats->ones++;
+            }
+
+            if (!have_previous)
+            {
+                current_run = 1u;
+                have_previous = true;
+            }
+            else if (bit == previous)
+            {
+                current_run++;
+            }
+            else
+            {
+                stats->transitions++;
+                current_run = 1u;
+            }
+
+            if (current_run > stats->longest_run)
+            {
+                stats->longest_run = current_run;
+            }
+            if ((bit == 0u) && (current_run > stats->longest_zero_run))
+            {
+                stats->longest_zero_run = current_run;
+            }
+            if ((bit != 0u) && (current_run > stats->longest_one_run))
+            {
+                stats->longest_one_run = current_run;
+            }
+
+            previous = bit;
+        }
+
+        remaining -= count;
+    }
+
+    stats->zeros = stats->sample_count - stats->ones;
+    stats->p1_q16 = (uint32_t)((((uint64_t)stats->ones << 16) +
+                                (stats->sample_count / 2u)) /
+                               stats->sample_count);
+    stats->bias_q16 = (stats->p1_q16 >= 32768u)
+                          ? stats->p1_q16 - 32768u
+                          : 32768u - stats->p1_q16;
+    stats->transition_rate_q16 = (uint32_t)(
+        (((uint64_t)stats->transitions << 16) +
+         ((stats->sample_count - 1u) / 2u)) /
+        (stats->sample_count - 1u));
+
+    return true;
+}
+
 void tls_rng_start(void)
 {
 #if LWIP_TIMERS
-    tls_rng_healthcheck_start();
+    tls_rng_timer_start();
 #else
     /* Readiness is checked by each randomness-consuming operation. Startup
      * must not make deterministic crypto primitives depend on entropy being
@@ -672,7 +878,7 @@ void tls_rng_start(void)
 void tls_rng_cleanup(void)
 {
 #if LWIP_TIMERS
-    tls_rng_healthcheck_stop();
+    tls_rng_timer_stop();
 #endif
     tls_rng_request_reset_state();
     tls_rng_request_q_clear();

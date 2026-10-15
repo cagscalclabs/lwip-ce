@@ -281,19 +281,6 @@ static size_t tls_parse_handshake_header(const uint8_t *data, size_t data_len,
     return 4;
 }
 
-/* X25519 maps low-order public inputs to an all-zero shared secret. Keep this
- * check separate from the assembly primitive so every byte is examined before
- * the caller branches on the result. */
-static bool tls_x25519_shared_is_nonzero(const uint8_t shared[32])
-{
-    uint8_t value = 0;
-    for (size_t i = 0; i < 32; i++)
-    {
-        value |= shared[i];
-    }
-    return value != 0;
-}
-
 /* Forward decl — the dispatcher needs it; full body lives further down. */
 static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
                                          uint8_t msg_type,
@@ -1716,10 +1703,10 @@ bool tls_handshake_init(
     ctx->server_seq_num = 0;
 
     INFO("init: client random");
-    /* Use the checked request path so entropy-source failure aborts before
-     * any handshake secret or nonce is generated. */
-    if (!tls_request_random_bytes(ctx->client_random,
-                                  sizeof(ctx->client_random), NULL, NULL, true))
+    /* The public byte API generates through Hash_DRBG and fails closed if
+     * initial instantiation or mandatory reseeding cannot obtain entropy. */
+    if (tls_random_bytes(ctx->client_random,
+                         sizeof(ctx->client_random)) == NULL)
     {
         ERROR_CODE(0x2b);
         return false;
@@ -1737,8 +1724,8 @@ bool tls_handshake_init(
 
     INFO("init: private random");
     /* Generate ephemeral X25519 keypair for ECDHE */
-    if (!tls_request_random_bytes(ctx->ecdhe_private,
-                                  sizeof(ctx->ecdhe_private), NULL, NULL, true))
+    if (tls_random_bytes(ctx->ecdhe_private,
+                         sizeof(ctx->ecdhe_private)) == NULL)
     {
         ERROR_CODE(0x2c);
         return false;
@@ -2650,21 +2637,13 @@ bool tls_recv_server_hello(
                 ERROR_CODE(0x5a);
                 return false;
             }
-            /* Compute shared secret from server's public key */
+            /* Compute the shared secret. The primitive rejects an all-zero
+             * result; TLS 1.3 requires illegal_parameter in that case. */
             if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
                                    data + offset + 4,
                                    NULL, NULL))
             {
                 ERROR();
-                tls_secure_memzero(ctx->ecdhe_private, 32);
-                ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5b);
-                return false;
-            }
-            /* RFC 7748 §6 requires protocols using X25519 to reject an
-             * all-zero shared secret (the result for low-order inputs). */
-            if (!tls_x25519_shared_is_nonzero(ctx->ecdhe_shared))
-            {
                 tls_secure_memzero(ctx->ecdhe_private,
                                    sizeof(ctx->ecdhe_private));
                 tls_secure_memzero(ctx->ecdhe_shared,

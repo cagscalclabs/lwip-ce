@@ -125,7 +125,8 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     // set first byte to 00
     outbuf[ENCODE_START] = 0x00;
     // seed next 32 bytes
-    tls_random_bytes(&outbuf[ENCODE_SALT], hash.digestlen);
+    if (tls_random_bytes(&outbuf[ENCODE_SALT], hash.digestlen) == NULL)
+        goto cleanup;
 
     // hash the authentication string
     if (auth != NULL)

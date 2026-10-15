@@ -72,6 +72,7 @@ func,tls_random_bytes,cryptography,src/tls/includes/random.h,lwip/cryptography/r
 func,tls_rng_healthcheck,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_request_random_bytes,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rng_is_busy,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
+func,tls_rng_compute_stats,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rsa_encode_oaep,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
 func,tls_rsa_decode_oaep,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
 func,tls_rsa_encrypt,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h

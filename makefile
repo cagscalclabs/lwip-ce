@@ -99,3 +99,10 @@ sizes:linker_script_app
 	@printf '\n  Consumer link contract:\n'
 	@printf '    --defsym BSSHEAP_LOW=<base>\n'
 	@printf '    --defsym BSSHEAP_HIGH=<base + reserve + heap_shared_with_lwip>\n\n'
+
+# Regenerate derived datasets and build the whitepaper using the same PDF
+# options as CI. Force a clean rebuild to prevent stale cross-reference state.
+.PHONY: whitepaper
+whitepaper:
+	cd $(CURDIR)/docs/whitepaper && python3 scripts/generate_docs_data.py
+	cd $(CURDIR)/docs/whitepaper && latexmk -gg -pdf -shell-escape -interaction=nonstopmode -file-line-error whitepaper.tex

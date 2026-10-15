@@ -909,7 +909,11 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
     if (!blob)
         return NULL;
 
-    tls_random_bytes(iv, iv_len);
+    if (tls_random_bytes(iv, iv_len) == NULL)
+    {
+        tls_cipher_blob_free(blob);
+        return NULL;
+    }
 
     bool ok = false;
     memset(&ctx, 0, sizeof(ctx));

@@ -479,10 +479,11 @@
 .extern _lwip_attach_usb_callback
 .extern _lwip_detach_usb_callback
 .extern _lwip_version_string
+.extern _tls_rng_compute_stats
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 445    ; entry count
+    d24 446    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -577,10 +578,10 @@ _fn_exports_table:
 
 ; --- src/tls/core/random.s ---
     d24 _tls_random_init_entropy
-    d24 _tls_random
-    d24 _tls_random_bytes
 
 ; --- src/tls/core/random.c ---
+    d24 _tls_random
+    d24 _tls_random_bytes
     d24 _tls_rng_healthcheck
     d24 _tls_request_random_bytes
     d24 _tls_rng_is_busy
@@ -1068,3 +1069,6 @@ _fn_exports_table:
 
 ; --- src/lwIP.c ---
     d24 _lwip_version_string
+
+; --- src/tls/core/random.c ---
+    d24 _tls_rng_compute_stats

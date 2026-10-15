@@ -225,6 +225,9 @@ EXCLUDE_SYMBOLS = {
     "_tls_crypto_guard_enable",
     "_tls_crypto_guard_disable",
     "_tls_random_debug_source_ptr",
+    "_tls_random_debug_source_mask",
+    "_tls_random_health_epoch",
+    "_tls_random_gather64",
 
     # Sample / demo entry points that ship in the source tree for docs
     # but aren't part of the library surface.

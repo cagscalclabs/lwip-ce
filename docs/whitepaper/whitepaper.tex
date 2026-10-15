@@ -50,7 +50,7 @@
 \usepackage{array}
 
 
-\renewcommand{\baselinestretch}{1.5} %this is your line spacing, current at, you guessed it! 1.5
+\renewcommand{\baselinestretch}{1.2} % Main document line spacing.
 \pagestyle{fancy}
 \setcounter{secnumdepth}{3}
 \setcounter{tocdepth}{3}
@@ -70,7 +70,7 @@
 \usetikzlibrary{positioning}
 
 \usepackage{xcolor}
-\usepackage[fontsize=12pt]{fontsize}
+\usepackage[fontsize=11pt]{fontsize}
 % report.cls's \@makeschapterhead (used by \tableofcontents for the
 % "Contents" heading, via \chapter*) is a hardcoded \def, not built on
 % \@startsection -- titlesec's \titlespacing has no effect on it. Redefine
@@ -81,7 +81,7 @@
   {\parindent \z@ \raggedright
     \normalfont
     \interlinepenalty\@M
-    \Huge \bfseries  #1\par\nobreak
+    \LARGE \bfseries #1\par\nobreak
     \vskip 20\p@
   }}
 \makeatother
@@ -278,11 +278,12 @@ fontupper=\footnotesize
 	\begin{titlepage}
 		\begin{center}
 			\vspace*{1in}
-			{\Large\textbf{lwIP-CE with TLS 1.3\\Whitepaper}}\\
+			{\Large\textbf{lwIP-CE with TLS 1.3}}\\
 			\vspace*{0.5in}
-			{\huge\textbf{Analysis\\\vspace{10px}Justifications}}\\
+			{\LARGE\textbf{Architecture, Implementation\\[0.25in]\& Security Analysis}}\\
 			\vspace*{1in}
-			by Anthony Cagliano
+			{\large\textsc{Anthony Cagliano}}\\[0.1in]
+			{\small @CagsCalcLabs}
 		\end{center}
 	\end{titlepage}
 	\setcounter{secnumdepth}{2}
@@ -297,67 +298,64 @@ fontupper=\footnotesize
 
 	\newpage
 	\section{Foreword}
-	The \textbf{lwIP-CE} project is an adaptation and integration of the Lightweight IP (lwIP) stack for highly constrained embedded systems, specifically targeting the TI-84+ CE platform. This work represents a deliberate effort to bring modern networking capabilities—including Ethernet, IPv4/IPv6, and TLS—to hardware never originally designed for full internet participation.
-	
-	Traditional networking stacks assume megabytes of memory, preemptive multitasking, and operating systems with dynamic resource management. The TI-84+ CE provides none of these conveniences. Instead, it offers a single-threaded execution model, limited RAM, no native networking abstraction, and tight timing constraints on a 48 MHz processor. Yet despite these constraints, the goal of lwIP-CE is not merely “minimal networking,” but correct, standards-aligned, interoperable networking.
-	
-	This whitepaper documents the architecture, design decisions, trade-offs, and implementation details behind lwIP-CE. It covers the layering model from USB driver integration through Ethernet abstraction and into the lwIP stack, as well as the TLS implementation constraints and cryptographic considerations required on this class of device.
-	
-	lwIP-CE is not intended to turn a calculator into a server farm. It is predominately a proof of concept and capability, an engineering exploration, and a platform for experimentation in secure embedded networking. It demonstrates that: 
-	\begin{itemize}
-	\item Modern TCP/IP stacks can be responsibly adapted to deeply constrained systems.
-	\item TLS with contemporary cipher suites is feasible within tight memory and performance limits.
-	\item Clean architectural boundaries (USB,  Ethernet, lwIP, TLS) allow portability and long-term maintainability even in non-traditional environments.
-	\end{itemize}
-	
-	This document is intended for:
-	\begin{itemize}
-	\item Embedded systems developers
-	\item Networking and protocol engineers
-	\item Security researchers
-	\item Contributors evaluating or auditing the design
-	\item Advanced calculator developers exploring networked applications
-	\end{itemize}
-	
-	The reader is assumed to have familiarity with TCP/IP fundamentals, embedded systems design, and basic cryptographic concepts.
-	
-	I am fully aware that many readers, particularly within the cryptography community, will invoke the well-known principle: "Don't roll your own crypto". On platforms where mature, audited cryptographic libraries exist, that principle is not only sound but essential. The TI-84+ CE, however, offers no such luxury. When I began work on CryptX several years ago, it was a proof of concept and a personal learning exercise. Over time, it evolved beyond experimentation. The calculator community responded positively, and I discovered that I genuinely valued both the engineering challenge and the responsibility that came with it.
 
-	When the scope expanded from standalone cryptographic primitives to a full TLS 1.3 implementation integrated with lwIP, the standards changed. The margin for error narrowed. The expectations rose. This document reflects that shift. Every design decision, optimization, constraint, and trade-off was examined with care. While no implementation on a platform this heavily constrained can claim perfection, this work represents a deliberate, disciplined effort to pursue correctness, interoperability, and security to the fullest extent the hardware permits.
+	\textbf{lwIP-CE} ports the Lightweight IP (lwIP) stack to the TI-84+ CE, bringing USB Ethernet, IPv4/IPv6, and TLS 1.3 to a 48 MHz, single-threaded platform with limited RAM and no native networking abstraction. The objective is not connectivity at any cost, but standards-aligned, interoperable networking within the calculator's hardware constraints.
 
-	This project -- along with the associated research, sustained study and research -- is where I learned most of what I now know about cryptography. In that sense, it achieved its core purpose. Even where the implementation is imperfect, the technical growth has been substantial. Early iterations reflected the exploratory nature of the work; over time, the project matured alongside a deeper understanding of cryptographic rigor. I include that candidly, not as self-criticism, but as context for how much this work changed my engineering standards. At the time of writing, I have a materially stronger grasp of the field, including why "good enough" is not adequate for security work, how to design around logical, mathematical, and statistical rigor, and how to document and own security-relevant tradeoffs explicitly.
+	This whitepaper documents the resulting architecture, from USB transport and Ethernet abstraction through lwIP integration and TLS. It describes the memory model, resident-application interface, cryptographic components, validation strategy, and engineering trade-offs required to make contemporary secure networking practical on this platform. In doing so, lwIP-CE serves as both a usable networking stack and a proof of feasibility: deeply constrained systems need not abandon protocol correctness, clear architectural boundaries, or systematic testing.
+
+	The document is intended for embedded-systems developers, networking and security engineers, auditors, and calculator developers. It assumes familiarity with TCP/IP, embedded software, and basic cryptographic concepts.
+
+	I am mindful of the familiar warning, ``Don't roll your own crypto.'' Where mature, audited libraries are available, that advice is essential; the TI-84+ CE, however, has no such implementation suited to its ABI, memory limits, and performance envelope. CryptX began as a proof of concept and learning exercise, then matured as community interest and my own understanding grew. Extending that work into TLS 1.3 raised the standard considerably: ``good enough'' was no longer adequate, and design choices had to be grounded in protocol compliance, known-answer testing, statistical validation, and explicit documentation of platform trade-offs. This project is where I learned much of what I now know about cryptography, and that growth is reflected in its progression from experimentation toward disciplined security engineering.
+
+	lwIP-CE targets conformance with the applicable RFCs and uses standardized cryptographic primitives and validation methods where practical. It is not a FIPS-validated cryptographic module and has not undergone an independent professional security audit. Review and validation to date include third-party calculator-community review, static application security testing, continuous-integration validation pipelines, and AI-assisted analysis using \texttt{Codex/Daybreak Blue}. Any security assurances should therefore be understood within that context.
+
+	The platform necessarily imposes trade-offs among performance, memory use, and defensive hardening. This paper documents the cryptographic constructions, mitigations, limitations, and design rationale so that readers can evaluate those decisions on their merits.
 
 	\newpage
-	\section{Stack Adaptations and Extensions}
-	\label{sec:implementation_overview}
-	
-		Before examining the architecture and technical details, an important disclaimer is necessary.
-		
-		This implementation is designed to be RFC-compliant and is informed by FIPS-aligned design principles; however, it is not FIPS-certified, nor has it undergone formal third-party cryptographic audit beyond review within the TI-84+ CE development community. Any security assurances provided by this project should therefore be considered provisional and contextual.
-		
-		These limitations are not the result of neglect, but of constraint. The TI-84+ CE platform imposes strict trade-offs between computational performance, memory usage, and defensive hardening. Certain implementation decisions reflect careful balancing between theoretical ideal and practical feasibility on a 48 MHz, resource-limited system.
-		
-		That said, this document is written with full transparency. The architecture, cryptographic constructions, mitigation, and design rationale are laid out in detail. Readers are encouraged to evaluate the implementation on its merits. You may find that the conservatism expressed here exceeds what the engineering decisions ultimately warrant.
+	\section{Porting lwIP to the TI-84+ CE}
+	\label{sec:porting}
 
-		\paragraph{Stack TLDR}
-		The stack work in this section is scoped to a resident networking application, a small callable companion library, and the memory/driver contracts needed to make that model reliable on the TI-84+ CE. It is not trying to recreate a desktop shared-library loader or a protected operating-system networking service.
 
-		\begin{center}
-		\footnotesize
-		\rowcolors{2}{ltgray}{white}
-		\begin{tabularx}{0.94\textwidth}{@{}p{0.25\textwidth}X@{}}
-			\toprule
-			\rowcolor{gray!18}
-			\textbf{Status} & \textbf{Scope} \\
-			\midrule
-			Supported now & USB CDC Ethernet transport, lwIP protocol dispatch, resident-app callability, fixed memory reservation, explicit event/error reporting, and a bounded traceback buffer. \\
-			Planned & Post-v1.0 append-only export growth with normalized ABI expectations and continued tightening of consumer compatibility checks. \\
-			Out of scope & Process isolation, secure local storage, preemptive scheduling, protected memory, and general-purpose dynamic loading beyond the lwIP companion-library model. \\
-			\bottomrule
-		\end{tabularx}
-		\end{center}
+
+	\subsection{Stack Architecture Overview}
+
+		The lwIP-CE data path is divided across four platform-specific component boundaries, ordered below from the hardware-facing transport to the consuming calculator program.
+
+\begin{xltabular}{\textwidth}{@{}>{\bfseries}p{0.20\textwidth}X@{}}
+	\caption{Component boundaries in the lwIP-CE networking architecture.} \\
+	\toprule
+		\textbf{Component} & \textbf{Responsibility} \\
+		\midrule
+		\endfirsthead
+		\toprule
+		\textbf{Component} & \textbf{Responsibility} \\
+		\midrule
+		\endhead
+		\bottomrule
+		\endfoot
+
+		\texttt{USBDRVCE} &
+		Provides the calculator's USB host interface, including device enumeration,
+		endpoint transfers, control requests, and interrupt-driven USB activity. \\
+
+		Ethernet driver &
+		Configures CDC ECM/NCM adapters, exchanges Ethernet frames or NCM transfer
+		blocks, tracks link and MAC state, and bridges the USB transport to an lwIP
+		\texttt{netif}. \\
+
+		lwIP-CE &
+		Provides the IP networking stack, transport protocols, DNS and socket APIs,
+		ALTCP/TLS integration, and the resident application's callable public
+		interface. \\
+
+		Application &
+		Initializes and drives lwIP-CE through the public API, selects the required
+		transport and security behavior, and consumes or produces application data. \\
+
+	\end{xltabular}
 		
-		\subsection{Adapting lwIP to the TI-84+ CE}
+		
+	\subsection{Porting lwIP to the TI-84+ CE}
 		The initial porting effort was undertaken by Cemetech user \textit{commandblockguy}, who prepared lwIP for the TI-84+ CE environment by isolating and conditionally excluding features incompatible with the calculator’s execution model. This included removing OS-dependent functionality, threading assumptions, and unsupported memory abstractions, while preserving protocol correctness.
 		
 		A more substantial challenge arose from the calculator’s atypical integer model. The eZ80 CPU operates in a 24-bit address and data environment, and under the CE toolchain, the fundamental C types differ from conventional 32- or 64-bit architectures. In particular:
@@ -370,108 +368,245 @@ fontupper=\footnotesize
 		
 		Subsequent revisions of the toolchain introduced additional fixed-width types (e.g., 48-bit and 64-bit integers), allowing portions of earlier compatibility workarounds to be simplified or reverted. Nevertheless, all lwIP fixed-width types were explicitly audited to ensure that their effective widths and promotion behavior matched protocol expectations.
 		
-		
-\subsection{Stack Architecture Overview}
-
-Before beginning this project we needed to itemize what was available and what was needed. The chart below shows the TCP/IP and OSI layer, and what components are assigned to that layer.
-
-\begin{xltabular}{\textwidth}{C C l X}
-	\caption{Relationship between the lwIP-CE networking architecture, the TCP/IP model, and the OSI model.} \\
-	\toprule
-		\textbf{TCP/IP Layer} & \textbf{OSI Layer} & \textbf{Component} & \textbf{Function} \\
-		\midrule
-		\endfirsthead
-		\toprule
-		\textbf{TCP/IP Layer} & \textbf{OSI Layer} & \textbf{Component} & \textbf{Function} \\
-		\midrule
-		\endhead
-		\bottomrule
-		\endfoot
-
-		1 $\leftrightarrow$ 2 & 1--2 & USBDRVCE &
-		Hardware transport interface for USB host communication. Handles device
-		enumeration, endpoint transfers, and interrupt-driven USB activity used
-		by Ethernet adapters. \\
-
-		2 & 2 & CDC ECM / NCM Ethernet &
-		Ethernet data link layer provided by USB CDC-class adapters. Responsible
-		for Ethernet frame encapsulation, MAC addressing, and link state
-		notifications. \\
-
-		3 $\leftrightarrow$ 4 & 3--4 & lwIP &
-		Core networking stack implementing IP, ARP, ICMP, IPv6, TCP, and UDP.
-		Provides packet routing, protocol handling, and socket-style networking
-		interfaces. \\
-
-		5 & 5--7 & ALTCP, TLS, Application &
-		High-level abstractions exposed to calculator programs. ALTCP provides a
-		transport wrapper allowing optional TLS integration, while TLS provides
-		confidentiality, integrity, and endpoint authentication for application
-		data. \\
-
-\end{xltabular}
-		
-		
 		\subsection{USB CDC-Class Ethernet driver}
 		To provide reliable networking on TI-84+ CE hardware, a USB CDC Ethernet host driver was implemented for ECM (Ethernet Control Model) and NCM (Network Control Model) adapters. These are the common CDC Ethernet profiles available on commodity USB dongles and provide the broadest practical compatibility.
 
-		The implementation is layered on \texttt{USBDRVCE} (toolchain USB library by jacobly). \texttt{USBDRVCE} owns low-level bus/device lifecycle handling; the CDC layer focuses on class parsing, endpoint wiring, and forwarding frames into lwIP.
+		The implementation is layered on \texttt{USBDRVCE}, the toolchain USB library by \textit{jacobly}. \texttt{USBDRVCE} owns low-level bus/device lifecycle handling; the CDC layer focuses on class parsing, endpoint wiring, and forwarding frames into lwIP.
 
-		Initialization starts from the USB callback path and performs descriptor parsing for hubs and CDC-capable devices. The metadata extracted includes:
-		\begin{itemize}
-			\item The configuration/interface containing the CDC ECM/NCM subclass (vendor-specific configurations often appear first).
-			\item Bulk RX, bulk TX, and interrupt endpoint descriptors.
-			\item MAC address via descriptor string, or fallback control request.
-			\item For NCM, the NCM functional descriptor and NTB capability fields.
-		\end{itemize}
+		The driver lifecycle is summarized below. Discovery deliberately searches all configurations because vendor-specific interfaces commonly precede the usable CDC interface. NCM negotiation bounds the input NTB to approximately 2\,KiB, limiting burst memory on the calculator; ECM requires no equivalent aggregation step.
 
-		After discovery, the driver applies CDC setup:
-		\begin{enumerate}
-			\item \texttt{SetConfiguration} to the CDC-capable configuration.
-			\item \texttt{SetInterface} to the selected bulk transfer interface.
-			\item If MAC retrieval fails, generate a valid local MAC and program it via control request.
-			\item For NCM we perform the following additional actions:
-				\begin{enumerate}
-					\item Query NTB parameters.
-					\item Set NTB input size to a small supported size (typically 2048 bytes) to keep RX bursts manageable on CE.
-					\item Apply packet filter/multicast controls when supported.
-				\end{enumerate}
-			\item Bind RX/TX/interrupt callbacks into \texttt{eth\_device\_t} and attach the lwIP \texttt{netif}.
-		\end{enumerate}
+		\begin{figure}[H]
+			\centering
+			\begin{tikzpicture}[
+				font=\scriptsize,
+				node distance=4mm and 5mm,
+				box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt},
+				setup/.style={box, fill=blue!6, text width=0.20\textwidth},
+				path/.style={box, fill=green!6, text width=0.22\textwidth},
+				recovery/.style={box, fill=red!6, text width=0.24\textwidth},
+				flow/.style={->, thick}
+			]
+				\node[setup] (enabled) {USB device\\\texttt{ENABLED}};
+				\node[setup, right=of enabled] (discover) {scan configurations;\\select ECM/NCM interface,\\endpoints, MAC, NTB limits};
+				\node[setup, right=of discover] (configure) {configure interface;\\bound NCM input;\\create \texttt{eth\_device\_t}};
+				\node[setup, right=of configure] (ready) {attach lwIP \texttt{netif};\\arm bulk-IN and\\interrupt transfers};
 
-		Interrupt-endpoint handling is intentionally narrow. For CDC ECM/NCM on this platform, only one notification is operationally relevant:
-		\begin{itemize}
-			\item \textbf{NetworkConnection}: maps directly to \texttt{netif} link up/down state through \texttt{wValue}.
-		\end{itemize}
-		Other CDC notifications (for example \texttt{NetworkSpeedChange}) are either non-actionable for this target or already covered at lower driver layers.
+				\node[path, below=12mm of enabled] (tx) {\textbf{TX}\\lwIP \texttt{linkoutput} $\rightarrow$\\ECM frame or NCM NTB $\rightarrow$ bulk OUT};
+				\node[path, below=12mm of configure] (rx) {\textbf{RX}\\bulk-IN completion $\rightarrow$ decode $\rightarrow$\\direct \texttt{netif->input}; pbuf pressure $\rightarrow$ bounded overflow ring; then rearm};
+				\node[path, below=12mm of ready] (status) {\textbf{Status}\\\texttt{NetworkConnection} notification $\rightarrow$\\lwIP link up/down};
+				\node[recovery, below=of rx] (recover) {disconnect or fatal endpoint stall $\rightarrow$\\link down, cancel callbacks, clear state/reset $\rightarrow$ next \texttt{ENABLED}};
+				\coordinate (branch) at ([yshift=-5mm]ready.south);
 
-		After setup, RX ingress is decoupled from callback latency via scheduled bulk reads and a ring-buffer drain timer, so frame ingestion remains bounded under memory pressure. Disconnect or disable transitions force link-down and clean up endpoint state before the next device-enable cycle.
+				\draw[flow] (enabled) -- (discover);
+				\draw[flow] (discover) -- (configure);
+				\draw[flow] (configure) -- (ready);
+				\draw[thick] (ready.south) -- (branch);
+				\draw[thick] (branch -| tx.north) -- (branch -| status.north);
+				\draw[flow] (branch -| tx.north) -- (tx.north);
+				\draw[flow] (branch -| rx.north) -- (rx.north);
+				\draw[flow] (branch -| status.north) -- (status.north);
+				\draw[flow] (rx) -- (recover);
+				\draw[flow] (status.south) |- (recover.east);
+			\end{tikzpicture}
+			\caption{CDC ECM/NCM initialization, data paths, link-state handling, and recovery.}
+			\label{fig:cdc_ethernet_flow}
+		\end{figure}
+
+		Successful RX completions normally enter lwIP immediately and rearm the transfer in the same polling cycle. The overflow ring exists only for temporary pbuf exhaustion, and its drain timer stops once the queue is empty. A periodic dispatcher recovers transfers that fail to rearm; disconnects and unrecoverable stalls instead tear down device state and restart through the ordinary enable path.
 		
-		The driver also defines a fatal-error state entered on non-recoverable endpoint stall. In that state, the device is reset, which:
-		\begin{itemize}
-			\item unschedules callbacks bound to the affected device;
-			\item clears endpoint halt/stall and related transfer error state; and
-			\item triggers a subsequent \texttt{ENABLED} event, restarting the normal device-initialization sequence.
-		\end{itemize}
-		
-		This driver provides robust, platform-appropriate USB Ethernet transport for lwIP on TI-84+ CE hardware. By constraining scope to CDC ECM/NCM, prioritizing deterministic recovery on endpoint failure, and decoupling RX ingestion through scheduled drain/throttle control, the implementation achieves stable link behavior under low memory and timing constraints.
-		
+		This driver provides platform-appropriate USB Ethernet transport for lwIP on TI-84+ CE hardware. Its focused CDC ECM/NCM support, direct RX delivery with immediate transfer rearming, bounded overflow buffering under memory pressure, and deterministic endpoint recovery provide stable link behavior within the platform's memory and timing constraints.
 	
-		\subsection{Membuffer "driver"}
-		In addition to the USB driver, lwIP-CE includes a dedicated \texttt{membuffer} layer to make allocation pressure visible and predictable across lwIP, USB RX/TX staging, socket queues, file-backed data, and TLS scratch space. On this platform, allocator stability is a correctness property: when memory pressure spikes, ingress paths must throttle and security-sensitive buffers must be cleaned up deliberately. The subsystem supports \textbf{dynamic mode}, which wraps toolchain allocation with accounting and pressure reporting, and \textbf{static mode}, which uses a caller-provided arena with fixed bounds after initialization.
+	\section{Architectural Considerations}
 
-		Every buffer is one of three classes, chosen for the shape of its workload:
+	\subsection{Application Callability}
+	\label{ssec:application_callability}
+
+		lwIP-CE is intended to operate similarly to a dylib for a conventional computer architecture that you would include via including definitions/fuctions from standard header, resulting in references to the library binary being linked into your code. I was intent on making this library callable in place rather than statically included because the lwIP core and TLS internals are huge (around 415 KiB) and on a device with just under 2 MiB of Flash storage, this adds up quickly.
+
+		The toolchain utility \texttt{LIBLOAD} provides this dylib functionality loosely on the TI-84+ CE by building a relocatable symbol table that is patched in-place at initialization.
+
+		A Flash Application, which this project needs to be, is unsupported by \texttt{LIBLOAD} for a handful of reasons. Standard LIBLOAD cannot directly support this resident Flash Application because Flash cannot be patched in place and the App’s writable runtime sections are not initialized when it is called without being launched normally.
+
+		A solution was identified that involved using a LIBLOAD stub library that contains:
+		
 		\begin{itemize}
-			\item \texttt{MEM\_BUFFER\_RING}: a FIFO streaming buffer, used by asynchronous ingress paths such as USB RX and per-socket application RX queues.
-			\item \texttt{MEM\_BUFFER\_POOL}: a block allocator for frequent, uniformly-sized alloc/free traffic.
-			\item \texttt{MEM\_BUFFER\_FILE}: a slot-based allocator for lazy file I/O, always running with \texttt{BUFFER\_SECURE\_MODE} enabled.
-		\end{itemize}
+			\item A table of exports, initialized to a no-op function defined in the stub.
+			\item A table of imports, zero initialized.
+			\item A single initialization function that:
+			\begin{itemize}
+				\item Imports caller's CRT (malloc, free, realloc) and external dynamic dependencies into the stub's imports table.
+				\item Locates the LWIP Flash Application, finds its exports table, validates the magic header, patches the stub's exports table to the correct in-Flash addresses.
+				\item Calls a now-valid internal initialization function that causes the App to initialize its runtime by zeroing \texttt{.bss}, coping \texttt{.data} from Flash to RAM, and copying the imports table into place.
+			\end{itemize}
+			\end{itemize}
+
+			\begin{figure}[H]
+				\centering
+				\begin{tikzpicture}[
+					font=\footnotesize,
+					node distance=5mm,
+					box/.style={draw, rounded corners=2pt, align=center,
+						text width=0.80\textwidth, inner sep=3pt},
+					lib/.style={box, fill=blue!5},
+					app/.style={box, fill=green!6},
+					flow/.style={->, thick}
+				]
+					\node[lib] (load) {\textbf{Stage 1 --- LIBLOAD loads the companion library}\\
+						external imports populated; lwIP trampolines present but unpatched};
+					\node[lib, below=of load] (call) {\textbf{Stage 2 --- consumer calls} \texttt{lwip\_start\_with\_crt(malloc, free, realloc)}\\
+						host CRT pointers written into the imports table};
+					\node[lib, below=of call] (find) {\textbf{Bootstrap locates the resident application}\\
+						by name $\rightarrow$ app base; metadata $\rightarrow$ linked image base; fixed offset $\rightarrow$ export table};
+					\node[lib, below=of find] (verify) {\textbf{Verify} \texttt{"LWIPTB"} \textbf{magic}\\
+						missing/invalid descriptor $\Rightarrow$ fail closed};
+					\node[lib, below=of verify] (patch) {\textbf{Patch shared export prefix} $\rightarrow$ relocated in-app address\\
+						trailing newer exports remain unavailable to this pairing};
+					\node[app, below=of patch] (internal) {\textbf{Call} \texttt{lwip\_init\_runtime\_internal} \textbf{(now live)}\\
+						app zeroes \texttt{.bss}, copies \texttt{.data} from Flash, and copies the imports table into reserved storage};
+					\node[app, below=of internal] (ready) {\textbf{Stack ready} --- consumer allocator, external imports, and supported API calls wired to the resident app};
+
+					\draw[flow] (load) -- (call);
+					\draw[flow] (call) -- (find);
+					\draw[flow] (find) -- (verify);
+					\draw[flow] (verify) -- (patch);
+					\draw[flow] (patch) -- (internal);
+					\draw[flow] (internal) -- (ready);
+				\end{tikzpicture}
+				\caption{LIBLOAD dispatch and resident-application bootstrap flow. Blue nodes execute in the companion library; green nodes execute in the initialized lwIP-CE application.}
+				\label{fig:libload_bootstrap}
+			\end{figure}
+
+			To ensure cross-version compatibility, the exports table is placed at a linker-guaranteed offset from the start of the App binary. This means that you can build the App a million times and the exports table will always be at the same offset.
+
+		To allow LWIP to own its own necessary \texttt{.bss/data} reservations (imports table, initial states, head structs for linked lists), when building LWIP we set \texttt{BSSHEAP\_HIGH = 0xD072C6}. This bounds the resident App's writable RAM to the 8 KiB at the bottom of the heap. This then requires all consumers to add the following to their makefile to ensure they do not touch that region:
+
+			\texttt{BSSHEAP\_LOW = 0xD072C6}
+
+			\begin{figure}[H]
+				\centering
+				\begin{tikzpicture}[
+					font=\footnotesize,
+					reg/.style={draw, align=center, text width=3.4cm, inner sep=3pt, minimum height=1.1cm},
+					lwip/.style={reg, fill=green!8},
+					cons/.style={reg, fill=blue!6},
+					bad/.style={reg, fill=red!10, minimum height=1.8cm},
+					addr/.style={font=\scriptsize\ttfamily, anchor=east},
+					note/.style={font=\scriptsize, anchor=west, text width=3.0cm},
+					hdr/.style={font=\footnotesize\bfseries, align=center}
+				]
+					% addresses increase upward; two independent layouts
+					% ---- LEFT: valid layout ----
+					\node[hdr, text width=3.4cm] at (0,3.55) {Valid configuration:\\\texttt{BSSHEAP\_LOW} raised};
+					\node[lwip] (L1) at (0,1.0) {lwIP app\\ \texttt{.bss} + \texttt{.data}\\ (8\,KiB)};
+					\node[cons, above=1pt of L1] (L2) {consumer\\ BSS / heap};
+					\node[addr] at (-1.95,0.45) {0xD052C6};
+					\node[addr] at (-1.95,1.57) {0xD072C6};
+					\node[note] at (1.85,1.57) {$\leftarrow$ consumer \texttt{BSSHEAP\_LOW} $\geq$ here};
+					\node[note] at (1.85,0.45) {$\leftarrow$ default \texttt{BSSHEAP\_LOW}};
+
+					% ---- RIGHT: overlapping layout ----
+					\node[hdr, text width=3.4cm] at (8.5,3.55) {Overlapping configuration:\\\texttt{BSSHEAP\_LOW} at default};
+					\node[bad] (R1) at (8.5,1.0) {lwIP app window\\ \emph{and} consumer BSS\\ both claim this region\\[2pt]\textbf{both are corrupted}};
+					\node[addr] at (6.55,0.15) {0xD052C6};
+					\node[addr] at (6.55,1.85) {0xD072C6};
+				\end{tikzpicture}
+				\caption{Resident-application RAM contract. Addresses increase upward; the consumer must begin its BSS at or above the upper boundary of lwIP-CE's reserved 8\,KiB window.}
+				\label{fig:bssheap_contract}
+			\end{figure}
+
+			\paragraph{Versioning \& Export ABI Compatibility}
+			lwIP-CE releases are versioned in tuples, defined: \texttt{MAJ.MIN.PATCH}. The patch number will typically bump for bugfixes, RFC or other spec compliance patches, or periodic re-syncs with lwIP's upstream (the ported source). The minor version number will typically bump for smaller feature additions or algorithm additions. Forward compatibility is maintained through minor and revision updates. The major version number will bump for major API changes or massive functionality changes. While forward compatibility remains a goal, major releases may break forward-compat; Please check the release notes for indication of if a release affects compatibility.
+
+			The LIBLOAD stub handles the following version (mis)matches:
+
+			\begin{xltabular}{\textwidth}{@{}
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				{Version pairing} & {Compatibility behavior} \\
+				\midrule
+				\endfirsthead
+				\toprule
+				{Version pairing} & {Compatibility behavior} \\
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+				% Add rows using: first column & second column \\
+				Newer resident App with older companion stub & Startup succeeds and the shared export prefix is patched. APIs added after the stub was built are not exposed. \\
+
+				Older resident App with newer companion stub & Startup succeeds for shared exports. Unsupported trailing stub entries remain guarded and report a version error if called. \\
+
+				Installed companion stub newer than the consumer's required LIBLOAD version & Loads normally; the consumer uses only the exports against which it was linked. \\
+
+				Installed companion stub older than the consumer's required LIBLOAD version & LIBLOAD rejects the stub as too old; a newer companion library must be installed. \\
+			\end{xltabular}
+
+		\subsection{Membuffer "driver"}
+		\label{ssec:membuffer}
+		In addition to the USB driver, a dedicated \texttt{membuffer} layer was implemented that abstracts the caller's CRT into lwIP via pointers to \texttt{malloc}, \texttt{realloc}, and \texttt{free}. However, this implementation does far more.
+
+		The abstraction allows you to create membuffer "objects" of varying types.
+
+		\begin{center}
+			\footnotesize
+			\rowcolors{2}{ltgray}{white}
+			\begin{tabularx}{0.96\textwidth}{@{}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.20\textwidth}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Class} & \textbf{Allocation model} & \textbf{Primary use} \\
+				\midrule
+				\texttt{MEM\_BUFFER\_RING} & FIFO streaming & Asynchronous ingress, including USB RX and per-socket application RX queues. \\
+				\texttt{MEM\_BUFFER\_POOL} & Uniform blocks & Frequent allocation and release of equally sized objects. \\
+				\texttt{MEM\_BUFFER\_FILE} & Slot-based lazy I/O & File-backed data; always uses \texttt{BUFFER\_SECURE\_MODE}. \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
 
 		In dynamic mode, each buffer tracks its own usage and resizes independently. Growth is proactive once occupancy crosses \texttt{grow\_threshold\_pct}; shrinking uses hysteresis, requiring \texttt{shrink\_hold\_count} consecutive low-usage checks before releasing one \texttt{step}, with longer hold periods after repeated shrinks. Any renewed pressure resets shrink eligibility, and \texttt{BUFFER\_LOCK\_SIZE} pins a buffer at its initial size.
 
-		Pressure is reported both per-buffer and globally. Buffer pressure is tiered \texttt{NONE} $\rightarrow$ \texttt{MILD} ($>$70\%) $\rightarrow$ \texttt{HIGH} ($>$85\%) $\rightarrow$ \texttt{SEVERE} ($>$90\%) $\rightarrow$ \texttt{CRITICAL} ($>$95\% or unable to grow further), with callbacks fired when the level changes. Global pressure is derived from total stack heap usage and layered onto notifications via \texttt{MEM\_PRESSURE\_GLOBAL}; caller-owned reservations flagged \texttt{BUFFER\_USER\_ALLOC} are excluded. The Ethernet ingress path uses this model directly: RX rings drain under timer budgets, while pressure callbacks adjust scheduling and throttling during bursts.
+		Pressure is reported both per-buffer and globally. Buffer pressure is classified as follows:
 
-		Applications can reserve their own headroom with \texttt{mem\_reserve}, resize it with \texttt{mem\_resize}, and release it with \texttt{mem\_release}. The stack accounts memory in six visible buckets: \textbf{P} (fixed $8\,\text{KiB}$ pbuf pool), \textbf{T} (TLS scratch/session buffers), \textbf{H} (protocol control blocks, driver state, RNG, DNS, outbound segments, and other stack heap), \textbf{R} (USB RX ring), \textbf{C} (per-connection application RX rings), and \textbf{U} (caller reservation). A climbing \textbf{H} bucket is therefore a signal that stack-owned heap is being retained longer than expected.\label{ssec:mem_accounting}
+		\begin{center}
+			\footnotesize
+			\rowcolors{2}{ltgray}{white}
+			\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.28\textwidth}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Pressure state} & \textbf{Buffer occupancy or condition} \\
+				\midrule
+				\texttt{NONE} & At or below 70\% \\
+				\texttt{MILD} & Above 70\%, through 85\% \\
+				\texttt{HIGH} & Above 85\%, through 90\% \\
+				\texttt{SEVERE} & Above 90\%, through 95\% \\
+				\texttt{CRITICAL} & Above 95\%, or unable to grow further \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
+
+		Callbacks fire whenever the pressure level changes. Global pressure is derived from total stack heap usage and layered onto notifications via \texttt{MEM\_PRESSURE\_GLOBAL}; caller-owned reservations flagged \texttt{BUFFER\_USER\_ALLOC} are excluded. The Ethernet ingress path uses this model directly: RX rings drain under timer budgets, while pressure callbacks adjust scheduling and throttling during bursts.
+
+		Applications can reserve their own headroom with \texttt{mem\_reserve}, resize it with \texttt{mem\_resize}, and release it with \texttt{mem\_release}. The stack accounts memory in six visible buckets: 
+		
+		\begin{center}
+			\footnotesize
+			\rowcolors{2}{ltgray}{white}
+			\begin{tabularx}{\textwidth}{@{}>{\centering\arraybackslash}p{0.12\textwidth}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Bucket} & \textbf{Accounted memory} \\
+				\midrule
+				\textbf{P} & Fixed $8\,\text{KiB}$ pbuf pool \\
+				\textbf{T} & TLS scratch and session buffers \\
+				\textbf{H} & Protocol control blocks, driver state, RNG, DNS, outbound segments, and other stack heap \\
+				\textbf{R} & USB RX ring \\
+				\textbf{C} & Per-connection application RX rings \\
+				\textbf{U} & Caller reservation \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
+
+		A climbing \textbf{H} bucket is therefore a signal that stack-owned heap is being retained longer than expected.\label{ssec:mem_accounting}
 
 		From a security perspective, any buffer can be flagged with \texttt{BUFFER\_SECURE\_MODE} (always on for \texttt{MEM\_BUFFER\_FILE}), enabling automatic zeroization on pop, free, release, and destroy. This does not replace higher-layer cryptographic hygiene, but it reduces residual plaintext/key exposure in normal allocator lifecycles.
 
@@ -485,289 +620,218 @@ Before beginning this project we needed to itemize what was available and what w
 			\subsection{Stack Memory Requirements}
 
 			The lwIP-CE stack has a small fixed baseline and then grows buffers only as traffic requires. At initialization it consumes:
-			\begin{itemize}
-				\item Approximately 8,192 bytes of static memory for: ARP tables, DNS resolver state, dispatch/timer states, RNG state, and more. During build of lwIP we force this data to live in the first 8 KB of the BSS and we force consumers to link their $BSSHEAP\_LOW$ above that region for memory safety.
-				\item The 8,192-byte fixed-size pbuf pool.
-				\item The 512-byte growable Ethernet RX ring buffer.
-			\end{itemize}
-			
-			Everything beyond that baseline is demand-driven and bounded either by per-buffer limits, the global heap ceiling, or the caller's reservation from Section~\ref{ssec:mem_accounting}.
-
-			\refstepcounter{table}\label{tab:lwip-memory}
-			\textbf{Table \thetable: Memory footprint of the full lwIP-CE stack.}
-
-			%% Standalone unruled tabulars. meminnerbss: Acc. Usage Buffer (3 col).
-			%% meminner: Acc. Idle Typical Max Buffer (5 col).
-			%% Page-breaking versions: longtable, opened/closed explicitly at
-			%% each call site (a longtable's row content can't be passed
-			%% through a macro argument -- it has to sit directly in the
-			%% document body for LaTeX's page-breaking to see it).
-			\newenvironment{meminner}{%
-				\begin{longtable}{@{}
-					>{\small\centering\arraybackslash}p{0.062\textwidth}
-					>{\small\raggedleft\arraybackslash}p{0.156\textwidth}
-					>{\small\raggedleft\arraybackslash}p{0.156\textwidth}
-					>{\small\raggedleft\arraybackslash}p{0.156\textwidth}
-					>{\small\raggedright\arraybackslash}p{0.469\textwidth}@{}}
-				\toprule
-				\textbf{Acc.} & \textbf{Idle} & \textbf{Typical} & \textbf{Max} & \textbf{Buffer} \\[2pt]
-				\midrule
-				\endfirsthead
-				\toprule
-				\textbf{Acc.} & \textbf{Idle} & \textbf{Typical} & \textbf{Max} & \textbf{Buffer} \\[2pt]
-				\midrule
-				\endhead
-				\bottomrule
-				\endfoot
-			}{%
-				\end{longtable}%
-			}
-			\newenvironment{meminnerbss}{%
-				\begin{longtable}{@{}
-					>{\small\centering\arraybackslash}p{0.1\textwidth}
-					>{\small\raggedleft\arraybackslash}p{0.1\textwidth}
-					>{\small\raggedright\arraybackslash}p{0.8\textwidth}@{}}
-				\toprule
-				\textbf{Acc.} & \textbf{Usage} & \textbf{Buffer} \\[2pt]
-				\midrule
-				\endfirsthead
-				\toprule
-				\textbf{Acc.} & \textbf{Usage} & \textbf{Buffer} \\[2pt]
-				\midrule
-				\endhead
-				\bottomrule
-				\endfoot
-			}{%
-				\end{longtable}%
-			}
-
-			\begin{meminnerbss}
-				.bss & $520\,\text{B}$ & \texttt{\_\_tls\_scratch} \\
-				.bss & $704\,\text{B}$ & \texttt{g\_traceback} / \texttt{g\_traceback\_ordered} \\
-				.bss & $320\,\text{B}$ & \texttt{dns\_table} \\
-				.bss & $256\,\text{B}$ & \texttt{\_\_rsa\_transient} \\
-				.bss & $218\,\text{B}$ & \texttt{loop\_netif} \\
-				.bss & $200\,\text{B}$ & \texttt{arp\_table} \\
-				.bss & $140\,\text{B}$ & \texttt{neighbor\_cache} \\
-				.bss & $84\,\text{B}$  & \texttt{destination\_cache} \\
-				.bss & $78\,\text{B}$  & \texttt{fn\_imports\_table} \\
-				.bss & $60\,\text{B}$  & \texttt{g\_netif\_service\_requests} \\
-				.bss & $96\,\text{B}$  & \texttt{g\_dispatchers} / \texttt{prefix\_list} \\
-				.bss & $42\,\text{B}$  & \texttt{g\_lwip\_cfg} \\
-				.bss & $80\,\text{B}$  & \texttt{dhcp\_rx\_options\_val} / \texttt{ip6addr\_ntoa.str} \\
-				.bss & $128\,\text{B}$ & \texttt{nd6\_ra\_buffer} / \texttt{g\_tls\_rng\_prev\_sample} / \texttt{g\_tls\_drbg\_state} / \texttt{g\_tls\_drbg\_seed\_material} \\
-				.bss & $75\,\text{B}$  & \texttt{sntp\_servers} / \texttt{dns\_servers} / \texttt{g\_lwip\_pools} / \texttt{multicast\_address} \\
-				.bss & $46\,\text{B}$  & \texttt{dns\_requests} / \texttt{ip4addr\_ntoa.str} / \texttt{lwip\_socket\_error\_data} \\
-				.bss & $20\,\text{B}$  & \texttt{dhcp\_rx\_options\_given} / \texttt{g\_mem\_static} \\
-				.bss & $282\,\text{B}$ & other small globals (118 symbols $<$8\,B each: PCB list heads, flags, counters) \\
-				.bss & ${\sim}179\,\text{B}$ & alignment padding between symbols \\[4pt]
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $3{,}528\,\text{B}$ & \textit{\texttt{.bss}, fixed at link time (\texttt{\_\_bss\_len})} \\[6pt]
-				.data & $256\,\text{B}$ & \texttt{trust\_store\_pubkey} \\
-				.data & $130\,\text{B}$ & \texttt{tls\_objectid\_bytes} \\
-				.data & $80\,\text{B}$  & \texttt{config\_options} \\
-				.data & $65\,\text{B}$  & \texttt{b64\_charset} \\
-				.data & $18\,\text{B}$  & \texttt{tls\_pkcs8\_str\_error\_arr} \\
-				.data & $16\,\text{B}$  & \texttt{tls\_ctx} \\
-				.data & $8\,\text{B}$   & \texttt{g\_tls\_drbg\_counter} \\
-				.data & $16\,\text{B}$  & \texttt{reachable\_time} / \texttt{retrans\_timer} / \texttt{g\_last\_debug\_loc} / \texttt{tcp\_next\_iss.iss} \\
-				.data & $10\,\text{B}$  & \texttt{truststore\_name} / \texttt{heap\_ptr} / \texttt{tcp\_port} / \texttt{udp\_port} \\
-				.data & ${\sim}17\,\text{B}$ & alignment padding between symbols \\[4pt]
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $616\,\text{B}$ & \textit{\texttt{.data}, fixed at link time (\texttt{\_\_data\_len})} \\[6pt]
-			\textbf{Total} & $4{,}144\,\text{B}$ & \textit{\texttt{.bss}+\texttt{.data} ($\approx4.05\,\text{KiB}$) of the 8\,KiB reserved window, leaving headroom for API growth} \\
-			\end{meminnerbss}
-
-			\begin{meminner}
-				P & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & $8{,}192\,\text{B}$ & \texttt{pbuf\_pool} \\
-				H & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & ${\sim}150\,\text{B}$ & \texttt{sys\_timeo} (${\times}7$) / \texttt{dns\_pcb} / DRBG heap \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & ${\sim}8{,}342\,\text{B}$ & \textit{\texttt{lwip\_start()}, stack up, idle} \\[6pt]
-				H & $0$ & ${\sim}2{,}200\,\text{B}$ & ${\sim}2{,}200\,\text{B}$ & \texttt{eth\_device\_t} \\
-				R & $0$ & $512\,\text{B}$           & $2{,}048\,\text{B}$       & RX overflow ring \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $0$ & ${\sim}2{,}712\,\text{B}$ & ${\sim}4{,}248\,\text{B}$ & \textit{\texttt{eth\_device\_init()}, per device} \\[6pt]
-			H & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \texttt{raw\_pcb} \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{l}{\textbf{Subtotal}} & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & ${\sim}49\,\text{B}$ & \textit{RAW connection, per endpoint} \\[6pt]
-				H & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \texttt{udp\_pcb} \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & ${\sim}52\,\text{B}$ & \textit{UDP connection, per endpoint} \\[6pt]
-				H & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & ${\sim}200\,\text{B}$ & \texttt{tcp\_pcb} \\
-				H & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & ${\sim}63\,\text{B}$  & \texttt{dhcp} \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & ${\sim}263\,\text{B}$ & \textit{TCP connection, additive per connection} \\[6pt]
-			H & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & TCP send queue (\texttt{TCP\_SND\_BUF}) \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $0$ & ${\sim}512\,\text{B}$ & $4\,\text{KiB}$ & \textit{outbound TCP segments, cleared on ACK} \\[6pt]
-				H & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \texttt{altcp\_pcb} \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & ${\sim}25\,\text{B}$ & \textit{altcp connection, sits above a TCP PCB} \\[6pt]
-				T & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & ${\sim}1{,}110\,\text{B}$ & \texttt{altcp\_tls\_ce\_state\_t} \\
-				T & $0$                       & ${\sim}220\,\text{B}$      & ${\leq}16\,\text{KiB}$    & decrypted record pbuf \\
-				T & $0$                       & ${\sim}220\,\text{B}$      & $16\,\text{KiB}$          & \texttt{hs\_reassembly\_buf} \\
-				T & $0$                       & ${\sim}1$--$5\,\text{KiB}$ & $5\,\text{KiB}$           & cert walker DER buf \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & ${\sim}1{,}110\,\text{B}$ & see below & ${\sim}34\,\text{KiB}$ & \textit{altcp TLS connection; buffers are not simultaneous, see peak figures below} \\[6pt]
-			
-				
-				C & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \texttt{lwip\_socket.rx\_ring} (\texttt{LWIP\_SOCKET\_RX\_RING\_MAX\_SIZE}) \\[4pt]
-				\rowcolor{gray!18}
-			\multicolumn{1}{>{\raggedright\arraybackslash}p{0.10\textwidth}}{\textbf{Subtotal}} & $512\,\text{B}$ & ${\sim}512\,\text{B}$--$2\,\text{KiB}$ & $4\,\text{KiB}$ & \textit{\texttt{lwip\_socket} RX ring, per open socket} \\
-			\end{meminner}
-
-			\textbf{Accounting key:}\\ \textbf{P} = packet buffer pool \quad\newline
-				\textbf{H} = transient heap \quad\newline
-				\textbf{R} = Ethernet RX ring \quad\newline
-				\textbf{T} = TLS \quad\newline
-				\textbf{U} = user reservation (see \S\ref{ssec:mem_accounting}) \quad\newline
-				\textbf{C} = socket RX ring
-
-			\noindent\rule{\linewidth}{0.4pt}
-
-			In practice, a single TLS connection peaks around $29\,\text{KiB}$ for the common single-record Certificate path and around $34\,\text{KiB}$ when Certificate data is fragmented across records. The difference comes from transient coexistence between the decrypted record pbuf, the handshake reassembly path, and the current certificate DER buffer. Full-chain buffering is avoided: the cert walker holds at most one certificate's DER at a time and frees it after verification. Multi-connection deployments add roughly $1\,\text{KiB}$ per idle TLS connection, plus transient record/reassembly cost for each concurrent handshake.
-
-			\subsection{Application Callability}\label{ssec:application_callability}
-			lwIP-CE is intended to operate as a resident networking component that other calculator programs can call, rather than as a program whose networking stack is statically copied into each consumer. I was intent on making this library callable in place rather than statically included because the lwIP core and TLS internals are huge (around 200KB) and on a device with just under 2MB of Flash storage, this adds up quickly. This design reduces duplicated code size, centralizes network state, and allows application programs to depend on a stable exported interface.
-			
-			The calculator environment does not provide conventional shared-library loading in the desktop sense. The TI-84+ CE toolchain provides a dispatch utility for loading on-device libraries called \texttt{LIBLOAD}. This utility normally works through:
-			\begin{itemize}
-				\item A series of C- or assembly-callable functions that perform some action and return.
-				\item An exports table listing every function that should be part of the public API.
-				\item \textbf{During linking}: exports are converted into a jump table, in export order, where each jump target is represented as an offset to the exported function.
-				\item \textbf{At program initialization}: a LibLoad bootstrap function locates the library in memory and combines the library base address with the stored offsets to produce callable entry points.
-				\item \textbf{At API call}: \verb|call my_api| targets a stub entry that dispatches to the resolved implementation address.
-			\end{itemize}
-
-
-			The issue here is that this model targets small AppVar libraries that can live in RAM for their usage cycle and is not designed to support Applications as the API source. This requires a slightly different engineering solution.
-
-			\begin{itemize}
-				\item A table of exports is linked into the application, similarly to how \texttt{LIBLOAD} handles library exports.
-				\item The export table must either live at a consistent location across builds or have its location recorded in an unused application-header field.
-				\item A small \texttt{LIBLOAD} companion library provides consumer-side stubs and a bootstrap function. The bootstrap locates the installed lwIP application, resolves the application export table, and patches or populates the local stubs so later API calls dispatch into the resident application.
-			\end{itemize}
-
-			Concretely, the implementation realizes this with three cooperating pieces. The lwIP application links an \emph{export table} into its own image at a fixed early descriptor offset: a six-byte magic marker (\texttt{"LWIPTB"}) followed by one entry per public symbol. Each entry is emitted as a normal relocatable symbol reference, so the installer patches it to the real installed Flash address when it fixes the app. The \emph{companion library} is an ordinary \texttt{LIBLOAD} library the consumer links against; it carries one jump-table trampoline per exported lwIP function plus an imports table (host CRT slots and the USB vtable). At runtime, a \emph{bootstrap} routine ties the two together by computing the app's linked-image base from installed app metadata, adding the fixed descriptor offset, validating the table, and copying the relocated addresses into the trampolines.
-
-			\paragraph{Export ABI Compatibility}
-			Before the formal v1.0 release, release-candidate builds should be treated as a matched pair: the resident application and \texttt{lwip.8xv} companion library are expected to be updated together. After v1.0, the public export table is intended to be append-only: existing slots keep their meaning, and new exports are added at the end. The \texttt{"LWIPTB"} magic remains the fail-closed format check. The export count is a compatibility boundary, not an all-or-nothing equality check: the bootstrap copies the smaller of the resident application's export count and the companion library's expected count. If the resident app has more entries than the companion knows about, the older companion simply cannot surface the newer exports. If the companion was built expecting more entries than the installed app provides, only the shared prefix is patched; calls that require trailing, newer exports remain unavailable until the resident app is upgraded. This gives forward-compatible startup for unchanged APIs while making backward compatibility for newly added APIs explicitly conditional on updating the resident app.
-
-			\subsubsection{Initialization Handshake}
-			Bringing the stack up happens in two stages: the ordinary \texttt{LIBLOAD} initialization of the companion library, followed by lwIP-CE's own runtime setup, triggered explicitly when the consumer calls \texttt{lwip\_start\_with\_crt(malloc, free, realloc)} --- aliased to \texttt{lwip\_start()} for the common case. Figure~\ref{fig:libload_bootstrap} traces the full sequence. The key ordering constraint is that the application's own initialization (\texttt{lwip\_init\_runtime\_internal}) is itself an exported call, so it can only run \emph{after} the trampolines have been patched --- the bootstrap reaches into the app to finish setting up the app.
-
-			\begin{figure}[H]
-				\centering
-				\begin{tikzpicture}[
-					font=\footnotesize,
-					node distance=6mm,
-					box/.style={draw, rounded corners=2pt, align=center,
-						text width=0.80\textwidth, inner sep=4pt},
-					lib/.style={box, fill=blue!5},
-					app/.style={box, fill=green!6},
-					flow/.style={->, thick}
-				]
-					\node[lib] (load) {\textbf{Stage 1 --- LIBLOAD loads the companion library}\\
-						USB vtable filled via \texttt{include\_library 'usbdrvce'}; lwIP trampolines present but unpatched};
-					\node[lib, below=of load] (call) {\textbf{Stage 2 --- consumer calls} \texttt{lwip\_start\_with\_crt(malloc, free, realloc)}\\
-						host CRT pointers written into the imports table};
-					\node[lib, below=of call] (find) {\textbf{Bootstrap locates the resident application}\\
-						by name $\rightarrow$ app base; metadata $\rightarrow$ linked image base; fixed offset $\rightarrow$ export table};
-					\node[lib, below=of find] (verify) {\textbf{Verify} \texttt{"LWIPTB"} \textbf{magic}\\
-						missing/invalid descriptor $\Rightarrow$ fail closed};
-					\node[lib, below=of verify] (patch) {\textbf{Patch shared export prefix} $\rightarrow$ relocated in-app address\\
-						trailing newer exports remain unavailable to this pairing};
-					\node[app, below=of patch] (internal) {\textbf{Call} \texttt{lwip\_init\_runtime\_internal} \textbf{(now live)}\\
-						app zeroes \texttt{.bss}, copies \texttt{.data} from Flash, copies imports table into its reserved storage};
-					\node[app, below=of internal] (ready) {\textbf{Stack ready} --- consumer's allocator, USB, and every API call wired to the resident app};
-
-					\draw[flow] (load) -- (call);
-					\draw[flow] (call) -- (find);
-					\draw[flow] (find) -- (verify);
-					\draw[flow] (verify) -- (patch);
-					\draw[flow] (patch) -- (internal);
-					\draw[flow] (internal) -- (ready);
-				\end{tikzpicture}
-				\caption{\footnotesize LIBLOAD dispatch and bootstrap flow. Stage~1 is ordinary \texttt{LIBLOAD} library init (blue); Stage~2 is lwIP-CE's custom runtime setup, triggered by \texttt{lwip\_start\_with\_crt} (aliased to \texttt{lwip\_start}), ending with the app's own initialization (green). The three host C-runtime pointers are stored before the app is located; the app's \texttt{.bss}/\texttt{.data} init and imports-table copy run last, through the now-patched table.}
-				\label{fig:libload_bootstrap}
-			\end{figure}
-
-			\subsubsection{Runtime Memory Contract}
-			Because the application's \texttt{.bss} and \texttt{.data} are initialized at runtime rather than at launch, they require a fixed RAM home that does not collide with the consumer program's own variables. lwIP-CE reserves an 8\,KiB window from the toolchain's default \texttt{BSSHEAP\_LOW} (\texttt{0xD052C6}) up to \texttt{0xD072C6}, holding the application's runtime \texttt{.bss} and \texttt{.data} (about 6.6\,KiB in the current build, with the remainder as headroom for API growth). This places exactly one obligation on consumers, satisfied by a single link-time definition: raise their own \texttt{BSSHEAP\_LOW} to at least \texttt{0xD072C6} so their BSS begins above the reserved window (Figure~\ref{fig:bssheap_contract}). Leaving it at the default overlaps the two regions and corrupts both.
-
-			\begin{figure}[H]
-				\centering
-				\begin{tikzpicture}[
-					font=\footnotesize,
-					reg/.style={draw, align=center, text width=3.4cm, inner sep=3pt, minimum height=1.1cm},
-					lwip/.style={reg, fill=green!8},
-					cons/.style={reg, fill=blue!6},
-					bad/.style={reg, fill=red!10, minimum height=1.6cm},
-					addr/.style={font=\scriptsize\ttfamily, anchor=east},
-					note/.style={font=\scriptsize, anchor=west, text width=3.0cm},
-					hdr/.style={font=\footnotesize\bfseries, align=center}
-				]
-					% addresses increase upward; two independent stacks, well separated
-					% ---- LEFT: correct layout ----
-					\node[hdr, text width=3.4cm] at (0,3.55) {Correct:\\\texttt{BSSHEAP\_LOW} raised};
-					\node[lwip] (L1) at (0,1.0) {lwIP app\\ \texttt{.bss} + \texttt{.data}\\ (8\,KiB)};
-					\node[cons, above=1pt of L1] (L2) {consumer\\ BSS / heap};
-					\node[addr] at (-1.95,0.45) {0xD052C6};
-					\node[addr] at (-1.95,1.57) {0xD072C6};
-					\node[note] at (1.85,1.57) {$\leftarrow$ consumer \texttt{BSSHEAP\_LOW} $\geq$ here};
-					\node[note] at (1.85,0.45) {$\leftarrow$ default \texttt{BSSHEAP\_LOW}};
-
-					% ---- RIGHT: broken layout ----
-					\node[hdr, text width=3.4cm] at (8.5,3.55) {Wrong:\\\texttt{BSSHEAP\_LOW} at default};
-					\node[bad] (R1) at (8.5,1.0) {lwIP app window\\ \emph{and} consumer BSS\\ both claim this region};
-					\node[addr] at (6.55,0.3) {0xD052C6};
-					\node[note, text width=2.6cm] at (10.35,1.0) {overlap $\Rightarrow$ both corrupt};
-				\end{tikzpicture}
-				\caption{\footnotesize dylib-mode RAM contract (addresses increase upward). lwIP-CE owns the 8\,KiB window \texttt{0xD052C6}--\texttt{0xD072C6} for its runtime-initialized \texttt{.bss}/\texttt{.data}. Consumers must set \texttt{BSSHEAP\_LOW}~$\geq$~\texttt{0xD072C6} (left); leaving it at the toolchain default puts the consumer's BSS on top of lwIP's window and corrupts both (right).}
-				\label{fig:bssheap_contract}
-			\end{figure}
-
-		\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
-		The project is backed by a deterministic unit test suite for security-critical cryptographic and parser paths. Tests run under \texttt{CEmu}, driven by \texttt{cemu-autotester}, which replays fixed calculator input sequences and asserts on CRC hashes of expected screen states. Tests are written against explicit acceptance criteria; where policy requires fail-closed behavior, the expected result is rejection rather than silent degradation.
-
-		The suite is dyload-driven: each test links against the curated, manifest-gated \texttt{lwip.lib} produced by the release build, the same artifact a consumer application loads at runtime. This exercises the released ABI surface and the public \texttt{lwip\_start()} initialization path instead of compiling TLS sources directly from \texttt{src/} or using test-only bootstrap code. A missing export, manifest omission, or ABI mismatch therefore fails the test at build or link time before runtime behavior is considered.
-
-		Unit coverage includes truststore integrity verification, certificate-chain trust decisions, ASN.1/X.509/PKCS parser behavior, malformed-input rejection, and dedicated primitive tests for hashing, HMAC, HKDF, PBKDF2, AES, RSA-OAEP/PSS, X25519, and Base64. Tests use RFC vectors where available, with RFC and section identifiers recorded in metadata, and implementation-directed cases where no official vector set exists.
-
-		\texttt{build.yml} orchestrates the validation pipeline by building the dylib once, then fanning out to independent checks:
-		\begin{figure}[H]
-			\centering
-			\scriptsize
 			\rowcolors{2}{ltgray}{white}
-			\begin{tabularx}{0.94\textwidth}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+			\begin{xltabular}{\textwidth}{@{}
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X@{}}
 				\toprule
 				\rowcolor{gray!18}
-				Workflow & Purpose & Reviewer signal \\
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
 				\midrule
-				\texttt{tests.yml} & Deterministic CEmu unit tests for parser, trust, and primitive behavior. & Hard regression gate; failures name the unit and vector/case. \\
-				\texttt{cavp.yml} & On-device validation against CAVP-derived and compatible generated vectors. & Confirms the shipping eZ80 binary computes expected primitive outputs. \\
-				\texttt{timing.yml} & Differential timing profiler for supported cryptographic units. & Telemetry gate; red rows or elevated exceedance rates flag investigation. \\
-				\texttt{sast.yml} & Semgrep scan over project-owned changes relative to upstream lwIP. & Static review surface focused on added or modified code. \\
-				\texttt{dast.yml} & Network-facing ARP, ICMP, TCP, and UDP probes against the emulated stack. & Integration coverage for transport behavior outside unit scope. \\
+				\endfirsthead
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endhead
 				\bottomrule
-			\end{tabularx}
-		\end{figure}
+				\endfoot
+				BSSHEAP resv'd\footnotemark[1] & 8 KiB & Initial states, linked list head pointers. \\
+				pbuf\_pool & 8 KiB & Stores active pbuf chains. \\
+				& $\sim 150\,\text{B}$ & system timeouts queue, dns pcb, DRBG reservation. \\*
+				\midrule
+				\rowcolor{gray!18}
+				\textbf{Total} & $\boldsymbol{\approx 16.15\,\text{KiB}}$ & \textbf{Fixed initialization footprint.} \\
+				% Add rows using: first column & second column & third column \\
+			\end{xltabular}
 
-		These checks are separated so deterministic correctness gates are not conflated with profiling or integration telemetry. Unit and CAVP failures are treated as hard correctness failures; timing results are evidence of drift or input-dependent behavior, not a formal leakage proof under adversarial averaging models. The nightly \texttt{publish} job is gated on the validation set, so release artifacts are not produced from a failed run.
+			\Needspace{11\baselineskip}
+			When an Ethernet device is connected, the following additional allocations occur:
 
-		Each workflow writes a self-contained job summary intended to be usable as an audit artifact without cloning the repository. Unit summaries list the governing RFC section and failing vector where applicable; CAVP summaries report per-primitive pass counts and mismatches; timing summaries include deviation charts and median/exceedance tables; SAST summaries list scoped findings. Current runs are available from the repository Actions page: \url{https://github.com/cagscalclabs/lwip-ce/actions}.
+			\rowcolors{2}{ltgray}{white}
+			\begin{xltabular}{\textwidth}{@{}
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endfirsthead
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+				Ethernet state & $\approx 2200\,\text{B}$ & \texttt{eth\_device\_t} \\
+				RX Ring & 512 - 2048 B & Queues incoming pbufs when the pbuf\_pool is full. \\*
+				\midrule
+				\rowcolor{gray!18}
+				\textbf{Total} & $\boldsymbol{\approx 2.65\text{--}4.15\,\text{KiB}}$ & \textbf{Per connected Ethernet device.} \\
+				% Add rows using: first column & second column & third column \\
+			\end{xltabular}
 
-		\begin{figure}[H]
-			\centering
-			\includegraphics[width=0.62\linewidth]{ci_pipeline_graph.jpg}
-			\caption{\footnotesize GitHub Actions visualization of a \texttt{build.yml} run: \texttt{dylib\_latest} builds once, then fans out to the unit, CAVP, and timing workflows alongside SAST/DAST, all gating \texttt{publish}.}
-		\end{figure}
+			Upon the initialization of a \texttt{PCB (Protocol Control Block)}, the following memory is used, per PCB.
 
-		One deliberate exclusion is worth documenting: RNG validation is not part of the emulator unit suite. \texttt{CEmu}'s SRAM behavior is deterministic and does not reproduce the physical bitline noise used by the entropy source, so emulator RNG output is not meaningful evidence for this implementation. RNG behavior is instead validated against hardware captures, following the protocol in Section~\ref{ssec:contributing_data}. There is also no dedicated unit-level harness for the Ethernet RX driver or the \texttt{membuffer} allocator in isolation; network-facing behavior is covered by DAST, while allocator behavior is exercised through stack integration paths.
+			\rowcolors{2}{ltgray}{white}
+			\begin{xltabular}{\textwidth}{@{}
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endfirsthead
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+				Raw PCB & 49 B & \texttt{struct raw\_pcb} \\
+				UDP PCB & 52 B & \texttt{struct udp\_pcb} \\
+				TCP PCB & $\approx 200\,\text{B}$ & \texttt{struct tcp\_pcb} \\
+				ALTCP PCB & $\approx 225\,\text{B}$ & \texttt{struct tcp\_pcb} (wraps a tcp\_pcb) \\*
+				\midrule
+				\rowcolor{gray!18}
+				\textbf{Total} & $\boldsymbol{\approx 526\,\text{B}}$ & \textbf{One instance of each listed PCB type.} \\
+				% Add rows using: first column & second column & third column \\
+			\end{xltabular}
+
+			\Needspace{18\baselineskip}
+			Services and protocols have the following memory fingerprint:
+
+			\rowcolors{2}{ltgray}{white}
+			\begin{xltabular}{\textwidth}{@{}
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endfirsthead
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+				\midrule
+				\rowcolor{gray!18}
+				\textbf{Total} & $\boldsymbol{\approx 851\text{--}1059\,\text{B}}$ & \textbf{All listed services; excludes transient SNTP polling overhead.} \\
+				\bottomrule
+				\endlastfoot
+				DHCP & $\approx 63\,\text{B}$ & \\
+				DNS resolver & $704\,\text{B}$ static $+ 0$--$208\,\text{B}$ active & Four-entry cache and request state, plus up to four active UDP PCBs. The PCB portion is already represented by the generic UDP PCB row above. \\
+				SNTP client & $32\,\text{B}$ static $+ 52\,\text{B}$ active & Server and retry state plus one UDP PCB while initialized. Polling briefly adds a 48-byte request payload, pbuf overhead, and a timeout node. \\
+				% Add rows using: first column & second column & third column \\
+			\end{xltabular}
+
+			\Needspace{15\baselineskip}
+			TLS has the following memory fingerprint:
+
+			\rowcolors{2}{ltgray}{white}
+			\begin{xltabular}{\textwidth}{@{}
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endfirsthead
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Component} & \textbf{Amount} & \textbf{Contains} \\
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+				\texttt{ALTCP\_TLS} & $\approx 1100\,\text{B}$ & \texttt{struct altcp\_tls\_ce\_state\_t}\\
+				Decrypted Record Pbuf & 0 - 16 KiB & Holds a pbuf to store decrypted records. \\
+				Handshake Reassembly Buf\footnotemark[2] & 0 - 16 KiB & \\
+				Certificate decoding buffer & 1 - 5 KiB & Holds the Certificate currently being parsed. \\*
+				\midrule
+				\rowcolor{gray!18}
+				\textbf{Total} & $\boldsymbol{\approx 1.1\text{--}34\,\text{KiB}}$ & \textbf{Practical per-connection range from idle state through a fragmented handshake peak.} \\
+				% Add rows using: first column & second column & third column \\
+			\end{xltabular}
+		
+			\footnotetext[1]{This region is not part of the caller heap. It is the 8 KiB BSS reservation that requires consumers to set their makefile's \texttt{BSSHEAP\_LOW}.}
+			\footnotetext[2]{While it would appear that \texttt{Decrypted Record Pbuf} and \texttt{Handshake Reassembly Buf} could collectively occupy approximately 32 KiB, in reality, the per-buffer maxima represent a worst-case allocation pattern and are not normally reached simultaneously. In practice, except for particularly hefty Certificate chains or large records, expect somewhere in the handful-of-kilobytes range (and no more than 34 KiB for highly fragmented records).}
+			\setcounter{footnote}{2}
+
+			Multi-connection TLS deployments add roughly $1\,\text{KiB}$ per idle TLS connection, plus transient record/reassembly cost for each concurrent handshake.
+
+			For convenience, lwIP-CE exposes a socket-style API modeled after the standard BSD socket interface, including functions such as \texttt{lwip\_socket\_create()}, \texttt{lwip\_socket\_connect()}, and \texttt{lwip\_socket\_listen()}. The API retains lwIP's nonblocking, callback-driven execution model while presenting consumers with opaque socket handles and familiar socket operations.
+
+			\paragraph{Projected In-Flight Memory Usage}
+			{\footnotesize
+			\rowcolors{2}{ltgray}{white}
+			\begin{xltabular}{\textwidth}{@{}
+				>{\raggedright\arraybackslash}p{0.18\textwidth}
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X
+				>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Use case} & \parbox[t]{\linewidth}{\textbf{Fixed stack/}\\\textbf{device}} & \textbf{Connection state} & \parbox[t]{\linewidth}{\textbf{Transient}\\\textbf{buffers}} & \textbf{Projected total} \\
+				\midrule
+				\endfirsthead
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{Use case} & \parbox[t]{\linewidth}{\textbf{Fixed stack/}\\\textbf{device}} & \textbf{Connection state} & \parbox[t]{\linewidth}{\textbf{Transient}\\\textbf{buffers}} & \textbf{Projected total} \\
+				\midrule
+				\endhead
+				\bottomrule
+				\endfoot
+				UDP socket &
+				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$118\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$52\,\text{B}$ UDP PCB\\$\approx 226\,\text{B}$ total} &
+				$0.5\text{--}4\,\text{KiB}$ RX ring &
+				$\approx 19.5\text{--}24.5\,\text{KiB}$ \\
+
+				TCP socket &
+				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$118\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$\approx 200\,\text{B}$ TCP PCB\\$\approx 374\,\text{B}$ total} &
+				$0.5\text{--}4\,\text{KiB}$ RX ring &
+				$\approx 19.7\text{--}24.7\,\text{KiB}$ \\
+
+				TLS socket, idle &
+				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$118\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$\approx 225\,\text{B}$ ALTCP/TCP\\$321\,\text{B}$ TLS config\\$\approx 1.1\,\text{KiB}$ TLS layer\\$\approx 1.8\,\text{KiB}$ total} &
+				$0.5\,\text{KiB}$ RX ring &
+				$\approx 21.1\text{--}22.6\,\text{KiB}$ \\
+
+				TLS socket, application data &
+				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
+				$\approx 1.8\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$0.5\text{--}4\,\text{KiB}$ RX ring\\$0\text{--}16\,\text{KiB}$\\decrypted record} &
+				$\approx 21.1\text{--}42.1\,\text{KiB}$ \\
+
+				TLS socket, handshake &
+				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
+				$\approx 1.8\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$0.5\text{--}4\,\text{KiB}$ RX ring\\up to $\approx 32.9\,\text{KiB}$\\TLS transient} &
+				$\approx 21.1\text{--}59.0\,\text{KiB}$ \\
+			\end{xltabular}
+
+			\emph{These projections count the shared initialization and one Ethernet device once, then add one socket. They exclude optional DHCP/DNS/SNTP state, allocator bookkeeping, application-owned buffers, and caller data copied into an outbound UDP datagram or TCP send queue. For additional simultaneous sockets, add only the applicable connection-state and transient-buffer columns.}
+			}
 
 		\subsection{Unified Event System and Diagnostic Traceback}
 
 		Every module that can fail---USB, the custom allocator, TLS handshake/record processing, and the lwIP-CE glue layer itself---routes notable events through a single shared callback rather than each maintaining its own ad-hoc logging. The library performs no I/O of its own; if the caller wants a console, a persisted log, or an on-screen HUD, that happens inside the callback it registers with \texttt{lwip\_set\_event\_cb}. Each event carries a \texttt{module} (which subsystem) and a \texttt{kind}: \texttt{INFO} milestones, \texttt{DEBUG} trace points (self-throttling---a given \{file, line\} only re-fires once it stops repeating), \texttt{WARN} for tolerated problems, \texttt{ERROR} for hard failures, \texttt{STATE\_CHG} for transitions worth surfacing on their own (link up/down, IP acquired/lost, connection established/closed/failed, TLS handshake begin/done/failed), and \texttt{IO\_FILE}/\texttt{IO\_ETH} for AppVar and network byte-level traffic.
 
-		On a single-threaded, callback-buried system like this one, the practical debugging problem is rarely ``something failed''---the application layer already gets that much from a socket error or a closed connection. The problem is finding \emph{where}, several callback frames removed from the code that can act on it, without re-running the failure under a debugger that may not even be attachable (most field failures happen on hardware, not in an emulator). To address this, every \texttt{WARN} and \texttt{ERROR} event additionally pushes a compact entry into a 16-deep ring buffer, independent of whether a callback is even registered. The application can pull this buffer at the moment it actually needs it---typically right after a socket operation reports failure---rather than having had to be watching every event live as it happened.
+		On a single-threaded, callback-buried system like this one, the practical debugging problem is rarely ``something failed''---the application layer already gets that much from a socket error or a closed connection. The problem is finding \emph{where}, several callback frames removed from the code that can act on it, without re-running the failure under a debugger that may not even be attachable (most field failures happen on hardware, not in an emulator). To address this, every \texttt{WARN} and \texttt{ERROR} event additionally pushes a compact entry into a 32-deep ring buffer, independent of whether a callback is even registered. The application can pull this buffer at the moment it actually needs it---typically right after a socket operation reports failure---rather than having had to be watching every event live as it happened.
 
 		\begin{verbatim}
 const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count);
@@ -797,27 +861,9 @@ for (uint8_t i = 0; i < count; i++) {
 		The result is that a socket-level failure---a connection that times out, a write that fails, a handshake that aborts---is no longer just a single opaque status code at the top of the call stack. The application can walk backward through exactly the chain of WARN/ERROR events that led to it, down to the file and line where the underlying condition was first detected, without needing to have instrumented anything in advance or reproduced the failure under a debugger.
 
 		\newpage
-		\section{TLS Architecture and Security Model}
+		\section{TLS 1.3 Implementation Considerations}
 	
 	This section is not a full TLS implementation guide; it focuses only on platform-specific design choices and any standards deviations that require explicit justification.
-
-	\paragraph{TLS TLDR}
-	The TLS implementation is a constrained TLS~1.3 client designed for remote-network security on calculator hardware. It supports the handshake and certificate paths needed for current RSA-based interoperability, while deliberately leaving heavier or identity-bearing features out until their implementation can be tested and bounded.
-
-	\begin{center}
-	\footnotesize
-	\rowcolors{2}{ltgray}{white}
-	\begin{tabularx}{0.94\textwidth}{@{}p{0.25\textwidth}X@{}}
-		\toprule
-		\rowcolor{gray!18}
-		\textbf{Status} & \textbf{TLS Scope} \\
-		\midrule
-		Supported now & TLS~1.3 client handshakes, RSA-PSS/SHA-256 \texttt{CertificateVerify} for 1024--2048 bit RSA leaf keys, streaming certificate-chain parsing, PKCS\#1~v1.5/SHA-256 adjacent-link chain verification where supported (unsupported link types accepted with warning), leaf hostname/SAN matching with wildcard support, fatal validity-period enforcement on every certificate in the chain, empty client-certificate response handling, signed compact truststore loading, and application-visible warnings when trust anchoring is incomplete. \\
-		Planned & ECDSA-P-256 verification, RSA keys up to 4096 bits where performance permits, and wider RSA-PSS hash variants. \\
-		Out of scope & Client-certificate identity support, local physical compromise resistance, secure key storage, hardware-backed trust, RSA-PKCS1 \texttt{CertificateVerify} signatures forbidden by TLS~1.3, and full desktop WebPKI behavior. \\
-		\bottomrule
-	\end{tabularx}
-	\end{center}
 	
 	\subsection{Threat Model}
 	
@@ -861,26 +907,19 @@ for (uint8_t i = 0; i < count; i++) {
 		\item Controlled handling of memory and sensitive state where feasible on the platform.
 	\end{itemize}
 	
-	\subsection{HWRNG Design and Entropy Model}\label{ssec:hwrng_design}
+	\subsection{Hardware Entropy Profiling and Conditioning}
+	\label{ssec:hwrng_design}
 	\label{sec:entropy}
 	\label{ssec:entropy}
 	
-	This section defines the evidence model behind the RNG claims in this document. The objective is to keep distinct:
-	\begin{itemize}
-		\item design reasoning and implementation intent,
-		\item hardware/electrical mechanism,
-		\item formal lower-bound analysis, and
-		\item empirical calibration from device captures.
-	\end{itemize}
-	
 	Randomness is the foundational security dependency for the TLS stack; if the source is weak, all downstream cryptography is weakened regardless of algorithm choice.
 	
-	The first technical question, therefore, was whether the TI-84+ CE exposes usable entropy, and if so, how that entropy behaves across hardware revisions. Unlike general-purpose systems, the calculator has very few dynamic entropy sources. Early candidates (such as the \texttt{r} register and cycle counters) were rejected as predictable. The investigation then shifted to hardware-level behavior in unmapped SRAM regions, using community discussion and direct measurement to build a source model that could be tested and bounded.
+	The first technical question, therefore, was whether the TI-84+ CE exposes usable entropy, and if so, how that entropy behaves across hardware revisions. Unlike general-purpose systems, the calculator has very few reliable entropy sources. Early candidates (such as the \texttt{r} register and cycle counters) were rejected as predictable. The investigation then shifted to hardware-level behavior in unmapped SRAM regions, using community discussion and direct measurement to build a source model that could be tested and bounded.
 
 	This section documents the RNG design rationale and construction, including the statistical and mathematical basis for key decisions, explicit assumptions, identified failure modes, and bounded security estimates. It is not a claim of NIST SP 800-90* compliance or certification. Its purpose is to show that the design was developed against the NIST model and evaluated deliberately rather than implemented ad hoc.
 
 	\paragraph{Entropy Characterization}
-	The short answer is yes: the calculator does expose usable entropy, but through a much narrower and weaker physical mechanism than modern general-purpose systems. Cemetech user \textit{Zeroko} summarized the underlying behavior as follows:
+	Our investigation determined that the calculator does expose usable entropy, but through a much narrower and weaker physical mechanism than modern general-purpose systems: repeated reads from the calculator's unmapped SRAM address range. Cemetech user \textit{Zeroko} summarized the underlying behavior as follows:
 	
 	\begin{newquote}
 		SRAM has a pair of bitlines for each bit of each column address, which are connected to a circuit that tries to make them both be charged to an equal, high level before reading from a memory cell (which partially discharges one of the two) and to a sense amplifier (basically a comparator) to read the resulting state afterward. (There may also be another level of gating between the bitlines and the comparators, but that does not strongly affect the dynamics.) In the unmapped space, there are no memory cells, so the controller equalizes the bitlines however well it does, then does nothing (there being no memory cell to discharge them), then senses which bitline is at a higher level. For some column addresses, this will be heavily biased one way or the other because the pre-charge transistors on the bitlines are too different, while for others, it will be less biased because they are more similar.\\\\
@@ -899,436 +938,122 @@ for (uint8_t i = 0; i < count; i++) {
 		\item Bias and correlation introduced via lazy voltage balancing behavior by the controller
 	\end{itemize}
 	
-	Designing around this required an iterative approach. At the outset, my understanding of entropy modeling and conditioning was limited; through repeated testing, literature review, and community technical feedback, the design converged into a defensible source-selection and conditioning model.
-	
 	\paragraph{Entropy Tap Selection Model}
 	The generator selects an entropy tap via the following algorithm:
 	\begin{itemize}
-		\item Set monobit-min (current best bit) to range $[512, 1536]$, to effect a worst-case bias of $max(p, 1-p), p \in [0.25, 0.75]$.
-		\item Iterate over each bit in the SRAM region defined above, performing a monobit test over 1024 reads for each bit sampled.
-		\item Reject any bit whose monobit count does not outperform the current best bit.
-		\item If the bit being tested outperforms the current best bit, it becomes the current best bit.
-		\item Once the entire region is evaluated, the tap is selected.
+		\item Scan all eight bit positions at each of the 513 byte addresses beginning at \texttt{0xD65800}. No acceptable early candidate terminates the scan.
+		\item At each address, perform 256 pairs of physically adjacent reads, producing 512 marginal observations and 256 pairwise transition observations for every bit position.
+		\item Require the marginal one-count to lie in $[128,384]$, equivalent to an observed $\hat p(1)\in[0.25,0.75]$ over the discovery sample.
+		\item Require the adjacent-pair disagreement count to lie in $[64,192]$, rejecting both nearly static sources and sources dominated by deterministic alternation.
+		\item Score each qualifying address/bit pair as $s=\min(d,256-d)$, where $d$ is its disagreement count. The candidate with the largest score---the transition rate closest to one half---becomes the primary tap; the first candidate wins an exact tie, making selection deterministic for a fixed observation sequence.
+		\item Retain up to three eligible candidates displaced from the lead or tied with it as recovery candidates.
+		\item After completing the scan, revalidate the selected tap using 512 fresh adjacent pairs (1,024 raw reads). Revalidation requires a marginal one-count in $[256,768]$ and a disagreement count in $[128,384]$; initialization fails if the selected tap does not pass this independent sample.
 	\end{itemize}
 	
 		The following \textbf{derived assumptions} apply:
 		\begin{itemize}
-		\item $p \in [0.25, 0.75]$ for the probability of a 1 on the selected raw bit is guaranteed at init/re-init, notwithstanding sudden entropy collapse between health checks. The generator fails outright if no qualifying bit is identified.
-		\item Tap selection does not early-exit after finding an acceptable tap; it evaluates the full candidate set, which makes runtime deterministic with respect to scan coverage.
+		\item The marginal and disagreement limits characterize only the finite discovery and revalidation samples. They do not prove independence or establish the source's future min-entropy rate.
+		\item The disagreement score is a source-selection heuristic, not an entropy estimator. Min-entropy accounting is performed separately from the raw-bit profiles described below.
+		\item During collection, every selected-bit observation is subjected to a Repetition Count Test with cutoff $C=51$ and a binary Adaptive Proportion Test with window $W=1024$ and cutoff $C=840$ in either bit direction.
+		\item If either continuous health test fails, the partial entropy pool is destroyed. Each cached recovery candidate is revalidated against a fresh 1,024-read sample before activation; if none survives, the implementation performs at most one complete 513-address rescan for that collection attempt. Collection fails closed if no replacement qualifies.
+		\item Physical TI-84+ CE hardware is expected to qualify reliably, whereas CEmu may fail because deterministic SRAM emulation does not reproduce the physical source.
 		\end{itemize}
 	
-	\paragraph{Entropy Tapping Model}
-	The generator returns a pseudorandom \texttt{uint64\_t} via the following algorithm:
+	\paragraph{Entropy Collection Model}
+	The entropy collector prepares one 128-bit contribution via the following algorithm:
 	\begin{itemize}
-		\item Read from the entropy tap into a 119-byte entropy pool.
-		\item XOR multiple reads, $n$, into a single composite byte per byte of the entropy pool.
-		\item $n$ began as a data-justified heuristic estimate by Zeroko, $k_{\text{eff}}$ was later computed over observable datasets (see Section~\ref{ssec:correlation_calibration}, “Calibrating for Correlation”).
-		\item Hash the entropy pool to soften entropy distribution.
-		\item Compress digest in blocks to output size.
+		\item Read the selected source byte 17 times for each of 119 entropy-pool bytes, XORing the reads into one composite byte.
+		\item Apply the runtime repetition-count and adaptive-proportion health tests to every observation of the selected source bit.
+		\item Hash the resulting 119-byte pool with SHA-256.
+		\item Use the leftmost 128 digest bits as the conditioned contribution to the Hash\_DRBG entropy reserve.
 	\end{itemize}
 	
 		The following \textbf{derived assumptions} apply:
 		\begin{itemize}
 			\item Entropy is credited only to the selected source bit; all other bits in each raw byte are treated as zero-entropy in the bound.
-			\item XOR conditioning is modeled with effective samples, not independence: \(n_{\mathrm{eff}}=\lfloor n/k_{\text{eff}} \rfloor\). Here \(k_{\text{eff}}\) is a correlation factor empirically fit from observed \(p_{\mathrm{in}}\)/\(p_{\mathrm{out}}\) pairs at the fixed conditioning depth \(n=17\) (see Section~\ref{ssec:correlation_calibration}).
-			\item Conditioning and hashing do not create entropy; they only redistribute/extract available source entropy.
-			\item Per-byte min-entropy after conditioning is bounded by \(H_\infty(p_{\mathrm{out}})\), with \(p_{\mathrm{out}}\) derived from the calibrated \(p_{\mathrm{in}}\), \(n\), and \(k_{\text{eff}}\).
-			\item Pool-level entropy is bounded as \(m_{\mathrm{eff}} \cdot H_\infty\), where \(m_{\mathrm{eff}}\) uses the same correlation discount model.
+			\item Entropy is estimated at the raw selected tap. XOR and SHA-256 are deterministic conditioners and receive no independent entropy credit.
+			\item The measured most-common-value estimate is marginal. Multiplying it by the number of observations is an engineering accounting model, not a formal non-IID entropy-rate proof; serial dependence can reduce the true joint min-entropy.
+			\item A contribution is never credited with more than its 128-bit conditioned width, regardless of the raw accounting result.
 			\item Runtime health checks are assumed to detect gross source failure, but short-window entropy collapse between checks remains a residual risk.
 		\end{itemize}
 		
-		\IfFileExists{generated/correlation_data.tex}{
-			\input{generated/correlation_data.tex}
-		}{
-			\newcommand{\CalibRunRows}{test1 & 5 & 0.8867 & 0.4874 & 0.0126 \\ test2 & 5 & 0.8935 & 0.4910 & 0.0090 \\ test3 & 5 & 0.5369 & 0.4997 & 0.0003 \\ test4 & 2 & 0.5861 & 0.4997 & 0.0003 \\ test5 & 5 & 0.8852 & 0.4927 & 0.0073 \\}
-			\newcommand{\CalibLineSegments}{\draw[blue!60,opacity=0.8] (1,0.8867) -- (2,0.4874); \draw[blue!60,opacity=0.8] (1,0.8935) -- (2,0.4910); \draw[blue!60,opacity=0.8] (1,0.5369) -- (2,0.4997); \draw[blue!60,opacity=0.8] (1,0.5861) -- (2,0.4997); \draw[blue!60,opacity=0.8] (1,0.8852) -- (2,0.4927);}
-			\newcommand{\CalibPointFills}{\filldraw[blue!80] (1,0.8867) circle (0.7pt); \filldraw[blue!80] (2,0.4874) circle (0.7pt); \filldraw[blue!80] (1,0.8935) circle (0.7pt); \filldraw[blue!80] (2,0.4910) circle (0.7pt); \filldraw[blue!80] (1,0.5369) circle (0.7pt); \filldraw[blue!80] (2,0.4997) circle (0.7pt); \filldraw[blue!80] (1,0.5861) circle (0.7pt); \filldraw[blue!80] (2,0.4997) circle (0.7pt); \filldraw[blue!80] (1,0.8852) circle (0.7pt); \filldraw[blue!80] (2,0.4927) circle (0.7pt);}
-			\newcommand{\CalibKRows}{test1-bit5 & 0.8867 & 0.4874 & 1.188 \\ test2-bit5 & 0.8935 & 0.4910 & 1.014 \\ test3-bit5 & 0.5369 & 0.4997 & 6.002 \\ test4-bit2 & 0.5861 & 0.4997 & 4.084 \\ test5-bit5 & 0.8852 & 0.4927 & 1.049 \\}
-			\newcommand{\CalibKMedian}{1.188}
-			\newcommand{\CalibKMean}{2.667}
-			\newcommand{\CalibKSigma}{2.033}
-			\newcommand{\CalibKQOne}{1.049}
-			\newcommand{\CalibKQThree}{4.084}
-			\newcommand{\CalibKIQR}{3.035}
-			\newcommand{\CalibRangeLow}{1.014}
-			\newcommand{\CalibRangeHigh}{6.002}
-			\newcommand{\CalibWorkingK}{1.188}
-			\newcommand{\CalibBiasRZero}{0.2577}
-			\newcommand{\CalibBiasRSeventeen}{0.0059}
-			\newcommand{\CalibYTicks}{\foreach \yy/\lbl in {1/1,2/2,3/3,4/4,5/5,6/6}{\draw (0.65,\yy) -- (0.75,\yy);\node[left] at (0.65,\yy) {\scriptsize \lbl};}}
-			\newcommand{\CalibKPath}{(1,1.188) -- (2,1.014) -- (3,6.002) -- (4,4.084) -- (5,1.049)}
-			\newcommand{\CalibKPointFills}{\filldraw[blue!85] (1,1.188) circle (0.8pt); \filldraw[blue!85] (2,1.014) circle (0.8pt); \filldraw[blue!85] (3,6.002) circle (0.8pt); \filldraw[blue!85] (4,4.084) circle (0.8pt); \filldraw[blue!85] (5,1.049) circle (0.8pt);}
-			\newcommand{\CalibXAxisMax}{5.6}
-			\newcommand{\CalibXAxisLabel}{5.65}
-			\newcommand{\CalibXTicks}{\draw (1,0.55) -- (1,0.65);\node[below] at (1,0.55) {\scriptsize 1}; \draw (2,0.55) -- (2,0.65);\node[below] at (2,0.55) {\scriptsize 2}; \draw (3,0.55) -- (3,0.65);\node[below] at (3,0.55) {\scriptsize 3}; \draw (4,0.55) -- (4,0.65);\node[below] at (4,0.55) {\scriptsize 4}; \draw (5,0.55) -- (5,0.65);\node[below] at (5,0.55) {\scriptsize 5};}
-			\newcommand{\CalibXorReads}{17}
-			\newcommand{\CalibPoolBytes}{119}
-			\newcommand{\CalibOutputBits}{64}
-			\newcommand{\CalibPWorst}{0.7500}
-			\newcommand{\CalibNeffByte}{14}
-			\newcommand{\CalibNeffPool}{1702}
-			\newcommand{\CalibPOutByte}{0.49997}
-			\newcommand{\CalibPOutPool}{0.50000}
-			\newcommand{\CalibMinEntropyBit}{0.99991}
-			\newcommand{\CalibMinEntropyOutput}{1.00000}
-			\newcommand{\CalibDisplayCount}{5}
-			\newcommand{\CalibTotalCount}{5}
-			\newcommand{\CalibTruncatedNote}{}
-		}
-		
-	
-	
-	\subsubsection{Calibrating for Correlation}
-	\label{ssec:correlation_calibration}
-	This subsection estimates the correlation factor $k_{\text{eff}}$ and the resulting $n_{\text{eff,byte}}$ used by the effective-sample model. We collected 1,179,648 bytes ($\approx$1.2 MB) of source output per device, split evenly across two conditioning modes: no whitening (R0) and 16 XORs (R17). The capture size, though small relative to what some might ask for, was intentionally capped for platform constraints:
-	\begin{itemize}
-		\item Total calculator storage (RAM + Archive) is roughly 2 MB.
-		\item Archive space is partially consumed by resident applications and system artifacts.
-		\item SRAM tap behavior is time-varying; long captures increase risk of tap drift during acquisition; continuing collection over re-runs risks choosing different taps, which defeats the purpose.
-		\item Pushing capture size substantially higher increases the chance of garbage collection, out-of-memory faults, and collection instability.
-	\end{itemize}
-	Accordingly, 1.2 MB was selected as a conservative operating point that balances statistical utility against collection reliability, allowing 589,824 bytes per whitening mode, R0 (no whitening) and R17 (17 XORS).
 
-	Each mode was analyzed on computer as an $8\times N$ bit matrix, with each bit column treated as an independent Bernoulli stream. A targeted subset of Dieharder tests was used for coarse non-uniformity screening and repeated across runs for reproducibility checks. Bit-columns were evaluated independently and never concatenated, since mixing columns would invalidate the per-source-bit interpretation. Full local run output is slated for Appendix A and can be extended with community submissions.
-	
-	The resulting sample size still provides 589,824 credited-bit observations per mode (one selected source bit per byte, per the entropy-accounting model in Section~\ref{ssec:entropy}), sufficient for coarse bias and first-order correlation estimation.
-
-	\paragraph{What this sample size resolves}
-	Treating each mode's credited bits as $n=589{,}824$ i.i.d.\ Bernoulli$(p)$ trials, the standard error of the empirical estimate $\hat p$ is maximized at $p=0.5$ and given by the usual proportion-estimate formula:
-	\[
-		\mathrm{SE}(\hat p)=\sqrt{\frac{p(1-p)}{n}}\ \le\ \sqrt{\frac{0.5\times 0.5}{589{,}824}}\approx 6.51\times10^{-4}.
-	\]
-	The confidence interval is $\hat p \pm z_{\alpha/2}\,\mathrm{SE}(\hat p)$, where $z_{\alpha/2}$ is the standard-normal percentile point that leaves $\alpha/2$ probability in each tail for a confidence level of $1-\alpha$. The table and curve below solve this for several standard levels at $\mathrm{SE}(\hat p)\approx 6.51\times10^{-4}$:
-
-	\begin{figure}[H]
-		\centering
-		\begin{minipage}[t]{0.42\textwidth}
-			\vspace{0pt}
-			\centering
-			\scriptsize
-			\rowcolors{2}{ltgray}{white}
-			\begin{tabularx}{\textwidth}{@{}>{\centering\arraybackslash}X>{\centering\arraybackslash}X>{\centering\arraybackslash}X@{}}
-				\toprule
-				\rowcolor{gray!18}
-				Confidence & $z_{\alpha/2}$ & Margin $\hat p\pm$ \\
-				\midrule
-				80.0\% & 1.282 & 0.000834 \\
-				90.0\% & 1.645 & 0.001071 \\
-				95.0\% & 1.960 & 0.001276 \\
-				97.5\% & 2.241 & 0.001459 \\
-				99.0\% & 2.576 & 0.001677 \\
-				99.9\% & 3.291 & 0.002142 \\
-				\bottomrule
-			\end{tabularx}
-		\end{minipage}\hfill
-		\begin{minipage}[t]{0.5\textwidth}
-			\vspace{0pt}
-			\centering
-			\begin{tikzpicture}[x=6.2cm,y=1.6cm]
-				% margin values plotted in units of 0.001 (axis labeled accordingly)
-				\draw[->] (0.48,0) -- (1.0,0) node[right] {\scriptsize confidence};
-				\draw[->] (0.48,0) -- (0.48,2.3) node[above] {\scriptsize margin ($\times10^{-3}$)};
-				\foreach \xx/\lbl in {0.50/50\%,0.65/65\%,0.80/80\%,0.99/99\%}{
-					\draw (\xx,-0.04) -- (\xx,0.04);
-					\node[below] at (\xx,-0.04) {\scriptsize \lbl};
-				}
-				\foreach \yy/\lbl in {1/1,2/2}{
-					\draw (0.475,\yy) -- (0.485,\yy);
-					\node[left] at (0.475,\yy) {\scriptsize \lbl};
-				}
-				\draw[blue!70,thick] plot coordinates {
-					(0.5,0.439) (0.6,0.548) (0.7,0.675) (0.8,0.834)
-					(0.85,0.937) (0.9,1.071) (0.95,1.276) (0.975,1.459)
-					(0.99,1.677) (0.995,1.827) (0.999,2.142)
-				};
-				\filldraw[red!70!black] (0.95,1.276) circle (1.2pt);
-				\node[anchor=west,red!70!black] at (0.96,1.6) {\scriptsize 95\%};
-			\end{tikzpicture}
-		\end{minipage}
-	\end{figure}
-
-	As the chart and table above show, this sample size keeps the margin of error small even out to a 99.9\% confidence level ($\pm0.0021$) -- nowhere close to threatening the gross, order-of-magnitude biases this capture is meant to catch (R0 biases in the observed dataset run as high as $0.3$--$0.4$; see the per-run figures above) -- which is what gives us confidence in relying on this sample size for the assertions that follow. It is not, however, fine enough to distinguish a residual post-conditioning bias of $0.0001$ from $0.0005$ -- which is exactly the ``coarse'' qualifier above, not a hedge. The same finite-sample noise also bounds how cleanly a single capture's $k_{\text{eff}}$ inversion can be trusted near $p_{\text{out}}\approx 0.5$, where the inversion's denominator $\ln|1-2p_{\text{out}}|$ is most sensitive to exactly this order of estimation error -- see the note on inversion instability in Section~\ref{ssec:entropy}.
-	
-	Using one best-bit trace per test run (\CalibDisplayCount{} shown of \CalibTotalCount{} total) from the dataset:
-
-	\begin{figure}[H]
-		\centering
-		\begin{minipage}[t]{0.56\textwidth}
-			\vspace{0pt}
-			\centering
-			\scriptsize
-			\rowcolors{2}{ltgray}{white}
-				\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X*{4}{>{\centering\arraybackslash}X}@{}}
-					\toprule
-					\rowcolor{gray!18}
-					Run & Bit & $p^\star_{R0}$ & $p^\star_{R17}$ & $|p^\star_{R17}-0.5|$ \\
-				\midrule
-				\CalibRunRows
-				\bottomrule
-			\end{tabularx}
-		\end{minipage}\hfill
-		\begin{minipage}[t]{0.42\textwidth}
-			\vspace{0pt}
-			\centering
-				\begin{tikzpicture}[x=2.1cm,y=6.5cm]
-					\draw[->] (0.7,0.44) -- (2.35,0.44) node[right] {mode};
-					\draw[->] (0.7,0.44) -- (0.7,0.91) node[above] {$p^\star$};
-				\foreach \yy/\lbl in {0.5/0.50,0.6/0.60,0.7/0.70,0.8/0.80,0.9/0.90}
-				{
-					\draw (0.67,\yy) -- (0.7,\yy);
-					\node[left] at (0.67,\yy) {\scriptsize \lbl};
-				}
-				\node[below] at (1,0.44) {\scriptsize R0};
-				\node[below] at (2,0.44) {\scriptsize R17};
-				
-				\CalibLineSegments
-				\CalibPointFills
-			\end{tikzpicture}
-		\end{minipage}
-		\vspace{0.1em}
-			\caption{\footnotesize{Per-test best-bit progression from raw source (R0) to conditioned output (R17), plotted as $p^\star=\max(p_1,1-p_1)$ so bias direction is folded symmetrically. Each polyline is one test trace from the table above. Full dataset will be available in Appendix 1.}}
-		\end{figure}
-	\CalibTruncatedNote
-	
-	On this subset, mean absolute bias contracts from $\CalibBiasRZero$ (R0) to $\CalibBiasRSeventeen$ (R17), consistent with strong whitening under \CalibXorReads-read conditioning.
-
-	This extract, together with the larger dataset, is consistent with the generator constraint: source selection (R0) requires at least one bit no worse than 75/25 bias. Accordingly, the conservative proof domain is set to $p\in[0.5007,\CalibPWorst]$, with bounds evaluated through $\max(p,1-p)$ to cover both bias directions symmetrically.
-	
-	\[
-	k_{\text{eff}}(n)=\min\!\left(\CalibXorReads,\ \max\!\left(1,\ \frac{n\,\ln\!\left|1-2p_{\text{in}}\right|}{\ln\!\left|1-2p_{\text{out}}\right|}\right)\right),\qquad n=\CalibXorReads
-	\]
-		For implementation-level bounds in this section, $k_{\text{eff}}$ is hard-capped at 17 (the total reads in the 1-read + 16-XOR path) to avoid divergence in the inversion as $p\to0.5$.
-	
-	Across all \CalibTotalCount $(p_{\text{in}},p_{\text{out}})$ pairs from the dataset (using R0 as $p_{\text{in}}$ and R17 as $p_{\text{out}}$), the raw inversion values are:
-	\begin{figure}[H]
-		\centering
-		\begin{minipage}[t]{0.62\textwidth}
-			\vspace{0pt}
-			\centering
-			\scriptsize
-			\rowcolors{2}{ltgray}{white}
-			\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X*{3}{>{\centering\arraybackslash}X}@{}}
-				\toprule
-				\rowcolor{gray!18}
-				Run-bit & $p_{\text{in}}$ & $p_{\text{out}}$ & $k_{\text{raw}}$ \\
-				\midrule
-				\CalibKRows
-				\rowcolor{gray!12}
-				\bottomrule
-			\end{tabularx}
-		\end{minipage}\hfill
-		\begin{minipage}[t]{0.35\textwidth}
-			\vspace{0pt}
-			\centering
-			\scriptsize
-			\rowcolors{2}{ltgray}{white}
-			\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X>{\centering\arraybackslash}X@{}}
-				\toprule
-				\rowcolor{gray!18}
-				Metric & Value \\
-				\midrule
-				Median $k_{\text{eff}}$ & \CalibKMedian \\
-				Mean $k_{\text{eff}}$ & \CalibKMean \\
-				$\sigma$ (pop.) & \CalibKSigma \\
-				Q1 & \CalibKQOne \\
-				Q3 & \CalibKQThree \\
-				IQR & \CalibKIQR \\
-				Defensible range & $[\CalibRangeLow,\,\CalibRangeHigh]$ \\
-				\bottomrule
-			\end{tabularx}
-			\vspace{0.4em}
-			\begin{tikzpicture}[x=0.40cm,y=0.28cm]
-				\draw[->] (0.7,0.6) -- (\CalibXAxisMax,0.6) node[right] {\scriptsize sample};
-				\draw[->] (0.7,0.6) -- (0.7,6.7) node[above] {\scriptsize $k_{\text{raw}}$};
-				\CalibXTicks
-				\CalibYTicks
-				\draw[gray!60,dashed] (0.8,\CalibKQOne) -- (\CalibXAxisMax,\CalibKQOne);
-				\draw[gray!60,dashed] (0.8,\CalibKQThree) -- (\CalibXAxisMax,\CalibKQThree);
-				\draw[red!70!black,dashed] (0.8,\CalibKMedian) -- (\CalibXAxisMax,\CalibKMedian);
-				\draw[blue!70,thick] \CalibKPath;
-				\CalibKPointFills
-				\node[anchor=west] at (\CalibXAxisLabel,\CalibKQThree) {\scriptsize Q3};
-				\node[anchor=west] at (\CalibXAxisLabel,\CalibKMedian) {\scriptsize median};
-				\node[anchor=west] at (\CalibXAxisLabel,\CalibKQOne) {\scriptsize Q1};
-			\end{tikzpicture}
-		\end{minipage}
-	\end{figure}
-
-		From these traces, we take $k_{\text{eff}}\in[\CalibRangeLow,\,\CalibRangeHigh]$ as a defensible empirical range and carry forward $k_{\text{eff,median}}=\CalibKMedian$ as the central working value.
-
-		For this proof section, the conservative accounting model is:
-	\begin{itemize}
-		\item only one entropy-bearing bit is credited per pool byte, and
-		\item each credited bit is conditioned by \CalibXorReads  reads (1 read + 16 XOR reads).
-	\end{itemize}
-
-		With correlation discounting, this gives:
-	\begingroup
-	\setlength{\abovedisplayskip}{4pt}
-	\setlength{\abovedisplayshortskip}{4pt}
-	\setlength{\belowdisplayskip}{4pt}
-	\setlength{\belowdisplayshortskip}{4pt}
-	\vspace{-0.35em}
-	\begin{center}
-		\begin{minipage}[t]{0.48\textwidth}
-			\vspace{0pt}
-			\textbf{Per-bit (conditioning depth)}
-			\begin{align*}
-				n_{\text{eff,byte}} &= \left\lfloor\frac{\CalibXorReads}{k_{\text{eff}}}\right\rfloor
-			\end{align*}
-		\end{minipage}\hfill
-		\begin{minipage}[t]{0.48\textwidth}
-			\vspace{0pt}
-				\textbf{Across entropy pool}
-			\begin{align*}
-				n_{\text{eff,pool}} &= \CalibPoolBytes\cdot n_{\text{eff,byte}} = \left\lfloor\frac{\CalibXorReads\cdot\CalibPoolBytes}{k_{\text{eff}}}\right\rfloor
-			\end{align*}
-		\end{minipage}
-	\end{center}
-	\vspace{-0.35em}
-	\endgroup
-	For $k_{\text{eff}}=\CalibKMedian$:
-	\begingroup
-	\setlength{\abovedisplayskip}{4pt}
-	\setlength{\abovedisplayshortskip}{4pt}
-	\setlength{\belowdisplayskip}{4pt}
-	\setlength{\belowdisplayshortskip}{4pt}
-	\vspace{-0.35em}
-	\begin{center}
-		\begin{minipage}[t]{0.48\textwidth}
-			\vspace{0pt}
-			\textbf{Per-bit result}
-			\begin{align*}
-				n_{\text{eff,byte}}&=\left\lfloor\frac{\CalibXorReads}{\CalibKMedian}\right\rfloor=\CalibNeffByte
-			\end{align*}
-		\end{minipage}\hfill
-		\begin{minipage}[t]{0.48\textwidth}
-			\vspace{0pt}
-				\textbf{Across entropy pool}
-			\begin{align*}
-				n_{\text{eff,pool}}&=\left\lfloor\frac{\CalibXorReads\cdot\CalibPoolBytes}{\CalibKMedian}\right\rfloor=\CalibNeffPool
-			\end{align*}
-		\end{minipage}
-	\end{center}
-	\vspace{-0.35em}
-	\endgroup
-	
-	\paragraph{Min-Entropy}
+	\subsubsection{Raw-Tap Min-Entropy Estimate}
 	\label{ssec:min_entropy}
-		We now combine the median correlation coefficient with the worst-case bias assumption $p=\CalibPWorst$ to compute a minimum effective entropy bound.
-		
-		Using $n_{\text{eff}}$, compute the conditioned Bernoulli parameter per-bit and per-output:
-	\begingroup
-	\setlength{\abovedisplayskip}{4pt}
-	\setlength{\abovedisplayshortskip}{4pt}
-	\setlength{\belowdisplayskip}{4pt}
-	\setlength{\belowdisplayshortskip}{4pt}
-	\vspace{-0.35em}
-		\begin{center}
-			\begin{minipage}[t]{0.48\textwidth}
-				\vspace{0pt}
-				\textbf{Per-bit conditioning}
-				\begin{align*}
-					p_{\oplus}&=\frac{1-(1-2p)^{n_{\text{eff,byte}}}}{2} \\
-					p_{\oplus}&=\frac{1-(1-2(\CalibPWorst))^{\CalibNeffByte}}{2} \\
-					p_{\oplus}&\approx \CalibPOutByte
-				\end{align*}
-			\end{minipage}\hfill
-			\begin{minipage}[t]{0.48\textwidth}
-				\vspace{0pt}
-				\textbf{Across entropy pool}
-				\begin{align*}
-					p_{\oplus}&=\frac{1-(1-2p)^{n_{\text{eff,pool}}}}{2} \\
-					p_{\oplus}&=\frac{1-(1-2(\CalibPWorst))^{\CalibNeffPool}}{2} \\
-					p_{\oplus}&\approx \CalibPOutPool
-				\end{align*}
-			\end{minipage}
-		\end{center}
-		\vspace{-0.35em}
-		\endgroup
-	
-		Now that we have fixed $p_{\oplus}$, we can compute min-entropy over a single bit and over the entire output.
-	\begingroup
-	\setlength{\abovedisplayskip}{4pt}
-	\setlength{\abovedisplayshortskip}{4pt}
-	\setlength{\belowdisplayskip}{4pt}
-	\setlength{\belowdisplayshortskip}{4pt}
-	\vspace{-0.35em}
-	\begin{center}
-		\begin{minipage}[t]{0.48\textwidth}
-			\vspace{0pt}
-			\textbf{Per-bit computation}
-			\begin{align*}
-				H_{\infty}(p)&=-\log_2\!\left(\max(p,1-p)\right) \\
-				H_{\infty}(p)&=-\log_2\!\left(\CalibPOutByte\right) \\
-				H_{\infty}(p)&\approx \CalibMinEntropyBit
-			\end{align*}
-		\end{minipage}\hfill
-		\begin{minipage}[t]{0.48\textwidth}
-			\vspace{0pt}
-			\textbf{Across entropy pool}
-			\begin{align*}
-				H_{\infty}(p)&=-\log_2\!\left(\max(p,1-p)\right) \\
-				H_{\infty}(p)&=-\log_2\!\left(\CalibPOutPool\right) \\
-				H_{\infty}(p)&\approx \CalibMinEntropyOutput
-			\end{align*}
-		\end{minipage}
-	\end{center}
-	\vspace{-0.35em}
-	\endgroup
-	
-	As modeled above, the conditioned output trends to approximately one bit of min-entropy per output bit under the stated assumptions. This satisfies the expected entropy density for secure random artifacts.
-	
-	The generator’s primitive output width is \texttt{u64}; therefore, larger random artifacts must be produced as sequential blocks, with entropy accounting applied per block and cumulatively.
-	
-	This is an ultra-conservative reading of the generator, and normal operation is expected to outperform these selected bounds for three reasons:
-	\begin{itemize}
-		\item The chosen $p$ interval is a worst-case admissible bound. In observed runs, source selection consistently finds at least one bit with lower bias than that bound.
-		\item The selected $k_{\text{eff}}$ is the median of empirical estimates; those estimates include upward excursions driven by inversion instability as $p$ approaches $0.5$ (i.e., as $\lim_{p\to0.5}\ln|1-2p|\to-\infty$ in the denominator-sensitive regime).
-		\item The proof assigns entropy to only one live bit per source byte. In practice, additional bits may contribute entropy and are also subjected to the same XOR conditioning.
-	\end{itemize}
-	
-	Given this conservative model and empirical calibration, the construction appears suitable for cryptographic randomness generation on this platform, provided it is implemented with proper block-width scaling, reseed and health-check policy, and fail-safe handling on entropy degradation.
+	The current profiler records eight tests of 32,768 selected raw bits per calculator, for 262,144 observations per profile. The checked-in reports are maintained directly in the repository's \href{https://github.com/cagscalclabs/lwip-ce/tree/master/statistics/rng}{\texttt{statistics/rng}} directory; this analysis does not depend on separately maintained appendix datasets.
+
+	For each test, let
+	\[
+		\hat p_{\max}=\max\!\left(\frac{n_0}{n},\frac{n_1}{n}\right).
+	\]
+	The SP~800-90B MCV procedure's 99\% upper-confidence adjustment is recomputed from that test's own counts using its prescribed normal-approximation factor, $z=2.576$:
+	\[
+		\epsilon_{99}=2.576\sqrt{\frac{\hat p_{\max}(1-\hat p_{\max})}{n-1}},
+		\qquad
+		p_{\max,99}=\min(1,\hat p_{\max}+\epsilon_{99}).
+	\]
+	The plug-in and confidence-adjusted binary marginal MCV estimates are then
+	\[
+		\widehat H_\infty=-\log_2(\hat p_{\max}),
+		\qquad
+		H_{99}=-\log_2(p_{\max,99}).
+	\]
+	This adjustment is intentionally one-sided: only an upper bound on the most-common outcome probability produces the required lower bound on min-entropy. The same computation is repeated over the aggregate counts for each model rather than reusing a common margin of error.
+
+	\IfFileExists{generated/rng_entropy_analysis.tex}{
+		\input{generated/rng_entropy_analysis.tex}
+	}{
+		No generated RNG entropy analysis was found at build time.
+	}
+
+	For each model, the working marginal estimate is the smaller of its aggregate lower bound and its worst individual-test lower bound:
+	\[
+		h_{\text{model}}=\min\!\left(H_{99,\mathrm{aggregate}},\ \min_i H_{99,i}\right).
+	\]
+	This prevents a long aggregate from hiding a weaker interval. Across calculator revisions, the implementation-level value is selected from the weakest measured model:
+	\[
+		h_{\text{all models}}=\min_m h_m=\RngOverallH\ \text{bits per raw selected-bit observation}.
+	\]
+
+	One collection performs $17\times119=2023$ selected-bit observations and emits a 128-bit conditioned contribution. Under the provisional additive-observation accounting model, the weakest measured model therefore gives
+	\[
+		H_{\text{raw,collection}}=2023h_{\text{all models}}=\RngOverallRawCollectionH\ \text{bits},
+	\]
+	The implementation rounds the measured cross-model value down to the configurable policy value $h_{\text{policy}}=0.35$, yielding $2023(0.35)=708.05$ provisionally accounted raw bits per collection. The contribution is then credited as
+	\[
+		H_{\text{credited}}=\min(128,2023h_{\text{policy}})=\RngOverallCredit\ \text{bits}.
+	\]
+	The 128-bit result is a credit cap imposed by the conditioned output width; it is not a claim that XOR or SHA-256 created entropy. More importantly, the reported MCV values characterize marginal bias only. Serial dependence can make joint min-entropy lower than $2023h$, so this multiplication and the configured working value remain conservative engineering policy supported by online health tests, not a complete SP~800-90B non-IID entropy assessment or certification. Post-conditioning measurements may test output quality, but they are not used to inflate the raw-source entropy estimate.
 	
 	\paragraph{Encapsulation}
 	\label{ssec:encapsulation}
 	
-	The raw generator can be used directly through \texttt{tls\_random()} or \texttt{tls\_random\_bytes()}, without initializing the full TLS stack. Those calls use the tap-selection and conditioning model described above, but bypass the TLS DRBG service layer. Direct callers therefore own the source-health policy at the point of use; \texttt{tls\_rng\_healthcheck()} is exposed for that purpose.
+	Applications obtain random output through \texttt{tls\_random\_bytes()}, which is backed by SHA-256 Hash\_DRBG; the deprecated \texttt{tls\_random()} entry point is a compatibility wrapper over the same generator. Raw tap collection and conditioning are internal and cannot be requested through the public API.
 	
-	When the TLS stack is operational, it requests random bytes internally. \texttt{Tls\_init()} enables two timers, one for generator seeding and one for source health checking. Entropy can be provided asynchronously by means of a callback-style \textit{entropy request} (\texttt{tls\_request\_random\_bytes()}).
+	When the stack starts, it selects the SRAM tap and enables a 50\,ms entropy-collection dispatcher. Entropy-backed output can also be requested asynchronously through \texttt{tls\_request\_random\_bytes()}.
 		\inputminted[
 			breaklines,
 			breakanywhere,
 			fontsize=\footnotesize,
-			firstline=93,
-			lastline=93
+			firstline=153,
+			lastline=153
 		]{c}{../../src/tls/includes/random.h}
 	This:
 	\begin{itemize}
 		\item Registers a request for random bytes, a buffer to return those bytes into, and a callback to run when the request completes.
-		\item If \texttt{blocking=true}, execution halts until enough entropy is returned to fill the request.
+		\item If \texttt{blocking=true}, execution halts only if instantiation or mandatory reseeding requires additional entropy.
 		\item If \texttt{blocking=false}, execution returns to the caller immediately; the callback function fires when the request is fulfilled.
 	\end{itemize}
 	
-		While being used within TLS, entropy is returned through a SHA-256 DRBG serviced by a 50\,ms request timer. On each timer cycle, the RNG path behaves as follows:
+		The timer fills a 256-bit entropy reserve in 16-byte conditioned steps. On each active collection cycle, the RNG path behaves as follows:
 		\begin{itemize}
-			\item A health-check gate runs first. If source health fails, the gather step aborts and no new DRBG material is accepted for that cycle.
-			\item One \texttt{tls\_random()} value (8 bytes) is collected.
-			\item \textbf{If the DRBG is not yet instantiated}: those 8 bytes are appended to seed material. Once 32 bytes total are accumulated, the DRBG state is instantiated as \texttt{SHA256(seed\_material)}.
-			\item \textbf{If the DRBG is already instantiated}: the new 8-byte sample is mixed by reseeding the state with a SHA-256 update over current state, entropy chunk, and counter.
-			\item An entropy budget is credited by 8 bytes each successful gather, capped at 32 bytes.
-			\item Active requests are fulfilled from DRBG output only when budget is available; output decrements the budget by the number of bytes returned.
+			\item The assembly collector reads the selected SRAM tap, applying the repetition-count and adaptive-proportion tests to every selected-bit observation.
+			\item Seventeen raw byte reads are XOR-conditioned into each of 119 pool bytes; SHA-256 then conditions the pool, and its leftmost 16 bytes form one contribution.
+			\item The contribution receives at most 128 bits of entropy credit, bounded by the configured conservative raw-source min-entropy estimate.
+			\item At 256 credited bits, an uninstantiated generator is instantiated. Otherwise the complete reserve is retained and incorporated by the next Hash\_DRBG reseed.
+			\item Once instantiated, Hash\_DRBG output does not consume entropy credit one-for-one. The timer replenishes the reseed reserve independently and stops while that reserve is full.
 		\end{itemize}
-		In blocking mode, \texttt{tls\_request\_random\_bytes()} runs this same gather/fulfill loop synchronously until complete (or retry limit). In non-blocking mode, requests are queued and completed by the timer path.
-		
-		Additionally, a RNG source health check is also serviced by a 30s timer that runs the following statistical analysis:
-		\begin{itemize}
-			\item Request 32 random bytes through \texttt{tls\_random()}. Note that we are not using DRBG-conditioned output.
-			\item If sample matches last sample, fail health check.
-			\item Test monobits (total \texttt{1} bits across sample). If outside range $[88, 168]$, fail health check.
-			\item Test max equal byte run. If max run exceeds 4, fail health check.
-		\end{itemize}
-		These tests and sample sizes represent a tradeoff between test quality and the calculator's available computation.
+		In blocking mode, \texttt{tls\_request\_random\_bytes()} performs only entropy work required for initial instantiation or mandatory reseeding. In non-blocking mode, requests are queued and completed by the dispatcher.
 		
 		If quick statistical testing demonstrates that the source has degraded beyond acceptable levels, the generator initialization function is called, which should cause a new source to be selected. Given the abstraction between tap, the entropy pool, and the DRBG, choosing a new entropy tap is invisible and does not impact upstream state.
 
@@ -1435,7 +1160,45 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 		\item Publish a security advisory across project channels (GitHub, Discord, and community forums).
 	\end{enumerate}
 
-	
+	\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
+		The project is backed by a deterministic unit test suite for security-critical cryptographic and parser paths. Tests run under \texttt{CEmu}, driven by \texttt{cemu-autotester}, which replays fixed calculator input sequences and asserts on CRC hashes of expected screen states. Tests are written against explicit acceptance criteria; where policy requires fail-closed behavior, the expected result is rejection rather than silent degradation.
+
+		The suite is dyload-driven: each test links against the curated, manifest-gated \texttt{lwip.lib} produced by the release build, the same artifact a consumer application loads at runtime. This exercises the released ABI surface and the public \texttt{lwip\_start()} initialization path instead of compiling TLS sources directly from \texttt{src/} or using test-only bootstrap code. A missing export, manifest omission, or ABI mismatch therefore fails the test at build or link time before runtime behavior is considered.
+
+		Unit coverage includes truststore integrity verification, certificate-chain trust decisions, ASN.1/X.509/PKCS parser behavior, malformed-input rejection, and dedicated primitive tests for hashing, HMAC, HKDF, PBKDF2, AES, RSA-OAEP/PSS, X25519, and Base64. Tests use RFC vectors where available, with RFC and section identifiers recorded in metadata, and implementation-directed cases where no official vector set exists.
+
+		\texttt{build.yml} orchestrates the validation pipeline by building the dylib once, then fanning out to independent checks:
+		\begin{figure}[H]
+			\centering
+			\scriptsize
+			\rowcolors{2}{ltgray}{white}
+			\begin{tabularx}{0.94\textwidth}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				Workflow & Purpose & Reviewer signal \\
+				\midrule
+				\texttt{tests.yml} & Deterministic CEmu unit tests for parser, trust, and primitive behavior. & Hard regression gate; failures name the unit and vector/case. \\
+				\texttt{cavp.yml} & On-device validation against CAVP-derived and compatible generated vectors. & Confirms the shipping eZ80 binary computes expected primitive outputs. \\
+				\texttt{timing.yml} & Differential timing profiler for supported cryptographic units. & Telemetry gate; red rows or elevated exceedance rates flag investigation. \\
+				\texttt{sast.yml} & Semgrep scan over project-owned changes relative to upstream lwIP. & Static review surface focused on added or modified code. \\
+				\texttt{dast.yml} & Network-facing ARP, ICMP, TCP, and UDP probes against the emulated stack. & Integration coverage for transport behavior outside unit scope. \\
+				\bottomrule
+			\end{tabularx}
+		\end{figure}
+
+		These checks are separated so deterministic correctness gates are not conflated with profiling or integration telemetry. Unit and CAVP failures are treated as hard correctness failures; timing results are evidence of drift or input-dependent behavior, not a formal leakage proof under adversarial averaging models. The nightly \texttt{publish} job is gated on the validation set, so release artifacts are not produced from a failed run.
+
+		Each workflow writes a self-contained job summary intended to be usable as an audit artifact without cloning the repository. Unit summaries list the governing RFC section and failing vector where applicable; CAVP summaries report per-primitive pass counts and mismatches; timing summaries include deviation charts and median/exceedance tables; SAST summaries list scoped findings. Current runs are available from the repository Actions page: \url{https://github.com/cagscalclabs/lwip-ce/actions}.
+
+		\begin{figure}[H]
+			\centering
+			\includegraphics[width=0.62\linewidth]{ci_pipeline_graph.jpg}
+			\caption{\footnotesize GitHub Actions visualization of a \texttt{build.yml} run: \texttt{dylib\_latest} builds once, then fans out to the unit, CAVP, and timing workflows alongside SAST/DAST, all gating \texttt{publish}.}
+		\end{figure}
+
+		One deliberate exclusion is worth documenting: RNG validation is not part of the emulator unit suite. \texttt{CEmu}'s SRAM behavior is deterministic and does not reproduce the physical bitline noise used by the entropy source, so emulator RNG output is not meaningful evidence for this implementation. RNG behavior is instead validated against hardware captures, following the protocol in Section~\ref{ssec:contributing_data}. There is also no dedicated unit-level harness for the Ethernet RX driver or the \texttt{membuffer} allocator in isolation; network-facing behavior is covered by DAST, while allocator behavior is exercised through stack integration paths.
+
+
 	\subsection{Profiling}\label{ssec:profiling}
 
 	Alongside the stack-wide unit tests described in Section~\ref{ssec:profiling_unit_tests_ref}, this section covers the TLS-specific, profiling-oriented validation layer. Where unit tests verify functional correctness, safety checks, and regression resistance for module behavior, profiling tests characterize timing stability, performance behavior, and platform-dependent variance under controlled workloads.
@@ -1658,16 +1421,30 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	\section{Appendixes}
 	\setcounter{subsection}{0}
 	\renewcommand{\thesubsection}{\Alph{subsection}}
+
+	\subsection{RNG Per-Test Statistical Results}
+	\label{ssec:rng_statistical_results}
+	This appendix contains the complete per-test calculations summarized in Section~\ref{ssec:min_entropy}. It is generated directly from the checked-in JSON and CSV reports in \href{https://github.com/cagscalclabs/lwip-ce/tree/master/statistics/rng}{\texttt{statistics/rng}}; it does not use a separately maintained appendix dataset.
+
+	\IfFileExists{generated/rng_entropy_appendix.tex}{
+		\input{generated/rng_entropy_appendix.tex}
+	}{
+		No generated per-test RNG analysis was found at build time.
+	}
+
+	\textit{Privacy Note: RNG statistical reports contain only aggregate measurements of the selected raw tap, its address and mask, and the contributor-supplied hardware revision. Filenames use randomly generated identifiers solely to prevent collisions; they are not derived from the calculator, device, or contributor. No personally identifiable information is collected or retained with a report.}
+
+	\newpage
 	
 	\subsection{Community Data Contributions}
 	\label{ssec:contributing_data}
 
-	Two of the analyses in this document --- the empirical correlation calibration in Section~\ref{ssec:correlation_calibration} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
+	Two of the analyses in this document --- the raw-tap entropy characterization in Section~\ref{ssec:min_entropy} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
 
 	\paragraph{What to capture}
 	Two on-device tools produce the submission artifacts:
 	\begin{itemize}
-		\item \textbf{RNG calibration capture.} Produces a series of AppVars, half for raw source output (R0) and half for 16-XOR conditioned output (R17). The output is sharded across multiple AppVars because individual AppVar size and on-device pagination limits prevent emitting a single contiguous file. A companion Python script (in \texttt{docs/whitepaper/scripts/}) parses the submitted AppVars, treats each byte as eight independent bit streams (bit position 1 across all bytes is one stream, bit position 2 another, and so on), and performs per-stream Bernoulli analysis. This per-bit-column treatment is the empirical mirror of the proof's accounting assumption in Section~\ref{ssec:entropy} that credits at most one entropy-bearing bit per source byte.
+		\item \textbf{RNG tap profile.} The profiling application records eight windows of 32,768 observations from the exact selected source bit used by the runtime collector. Its companion analyzer recomputes the per-window and aggregate MCV estimates and writes a uniquely named JSON or CSV report to \texttt{statistics/rng}. Submissions should identify the calculator model so results can be grouped by hardware revision.
 		\item \textbf{Differential timing capture.} Produces a structured log file using a \texttt{key=value} record format. Each unit's calibration class and per-class results are emitted with explicit denotation so the upstream analysis can locate each unit and its associated measurements by regular expression. The log can be exfiltrated via standard AppVar transfer.
 	\end{itemize}
 
@@ -1702,18 +1479,6 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	\paragraph{Privacy and licensing}
 	The project does not collect personally identifying information from contributors and does not maintain an attribution roster for submitted captures. This is a deliberate privacy-by-design choice: the community includes minors, and the analytical value of a capture is determined entirely by the device metadata accompanying it (hardware revision, OS version, boot code), not by the identity of the submitter. Captures are processed and incorporated into the published dataset under the project's existing license; once accepted, a capture is not retraceable to its submitter through any project-controlled record. Contributors who wish to be visible may identify themselves publicly on Discord or in GitHub discussions, but the project itself maintains no such linkage.
 
-	\newpage
-	\subsection{RNG Statistical Dumps}
-	This appendix includes the RNG dataset summary generated from \texttt{datasets/appendix\_a} at build time.
-
-	\paragraph{Reading these tables}: each row is one source bit on one run, shown before and after conditioning. The \textbf{R0} columns describe the raw entropy source and the \textbf{R17} columns the conditioned output; \texttt{p1} is the probability of a one (ideal $0.5$), \texttt{bias} is the distance from that ideal (ideal $0$), and \texttt{trans} is the transition rate (ideal $0.5$). A healthy result is one where conditioning \emph{moves a biased raw bit toward ideal}: R0 columns may be far off (a raw bit can sit near \texttt{p1}~$=0$ or $1$), but the corresponding R17 \texttt{p1} should land near $0.5$ with \texttt{bias} near $0$. The final column, \(k_{\text{eff}}\), is the conditioning amplification factor for that bit; the per-model \textbf{$k_{\text{eff}}$(median)} at the foot of each table summarizes how much headroom the conditioning step buys across bits. In short: do not expect the raw source to look random --- expect the \emph{conditioned} output to, and expect \(k_{\text{eff}}\) to reflect a comfortable margin rather than bits that only barely clear the floor.
-	
-	\IfFileExists{generated/appendix_a_include.tex}{
-		\input{generated/appendix_a_include.tex}
-	}{
-		No generated Appendix A data was found at build time.
-	}
-	
 	\newpage
 	\subsection{Differential Timing Analysis Dumps}
 	
@@ -1884,7 +1649,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 			& N/A
 			& \yes
 			& None identified
-			& Entropy $\approx$1~bit/byte (heuristic; see \S\ref{ssec:hwrng_design}). Bespoke SHA-256 DRBG, not SP~800-90A \\
+			& Provisional source estimate; see \S\ref{ssec:hwrng_design}. SHA-256 Hash\_DRBG follows SP~800-90A Rev.~1 \\
 		\addlinespace
 
 		\bottomrule

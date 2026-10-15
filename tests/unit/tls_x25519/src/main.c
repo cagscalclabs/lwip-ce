@@ -150,6 +150,16 @@ static bool test_vector_6(void)
     return memcmp(out, expected, 32) == 0;
 }
 
+/* RFC 7748 Section 6.1: protocols must reject an all-zero shared secret. */
+static bool test_reject_all_zero(void)
+{
+    const uint8_t scalar[32] = {9};
+    const uint8_t low_order_public[32] = {0};
+    uint8_t out[32];
+
+    return !tls_x25519_secret(out, scalar, low_order_public, NULL, NULL);
+}
+
 int main(void)
 {
     bool t1;
@@ -182,11 +192,11 @@ int main(void)
     printf("clamping test: %s\n", t5 ? "PASS" : "FAIL");
     os_GetKey();
     os_ClrHome();
-    t6 = test_vector_6();
+    t6 = test_vector_6() && test_reject_all_zero();
     printf("high bit test: %s\n", t6 ? "PASS" : "FAIL");
     os_GetKey();
     os_ClrHome();
     printf("\nPress any key\n");
 
-    return (t1 && t2 && t3 && t4 && t5) ? 0 : 1;
+    return (t1 && t2 && t3 && t4 && t5 && t6) ? 0 : 1;
 }

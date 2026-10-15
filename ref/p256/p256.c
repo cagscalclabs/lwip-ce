@@ -347,6 +347,7 @@ bool tls_p256_secret(uint8_t shared_secret[32], const uint8_t private_key[32],
 
 static void hmac256(uint8_t out[32], const uint8_t key[32], const uint8_t *msg, uint8_t len)
 {
+    // no need for this, just use hmac api
     memset(sha_pad,0x36,64); for(uint8_t i=0;i!=32;++i)sha_pad[i]^=key[i];
     tls_sha256_init(&sha_ctx); tls_sha256_update(&sha_ctx,sha_pad,64);
     tls_sha256_update(&sha_ctx,msg,len); tls_sha256_digest(&sha_ctx,sha_inner);
