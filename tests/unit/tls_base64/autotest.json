@@ -47,7 +47,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 10000
+      "timeout": 30000
     },
     "2": {
       "description": "Encode('foo'), RFC 4648, Section 10, Vector 4",

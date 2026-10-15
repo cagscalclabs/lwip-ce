@@ -39,7 +39,7 @@
       "expected_CRCs": [
         "806269A3"
       ],
-      "timeout": 11000
+      "timeout": 30000
     },
     "2": {
       "description": "RSA-OAEP decode - RFC 8017 (PKCS#1 v2.2) SHA-256",

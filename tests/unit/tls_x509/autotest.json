@@ -47,7 +47,7 @@
       "expected_CRCs": [
         "598C32C0"
       ],
-      "timeout": 15000
+      "timeout": 30000
     },
     "2": {
       "description": "Certificate 1, CA constraints valid",

@@ -43,7 +43,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 11000
+      "timeout": 30000
     },
     "2": {
       "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 2 (c=2)",

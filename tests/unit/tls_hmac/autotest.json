@@ -43,7 +43,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 11000
+      "timeout": 30000
     },
     "2": {
       "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 2",

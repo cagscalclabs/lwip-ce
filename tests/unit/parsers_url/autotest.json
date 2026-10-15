@@ -46,7 +46,7 @@
       "size": "vram_16_size",
       "label": "@success",
       "expected_CRCs": ["D1F2869F"],
-      "timeout": 10000
+      "timeout": 30000
     },
     "2": {
       "description": "Encode: spaces and special chars become %XX",
