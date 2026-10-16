@@ -23,6 +23,18 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/** Values reported in lwip_event.data.code.extra for RNG error events. */
+typedef enum tls_rng_failure
+{
+    TLS_RNG_FAILURE_SOURCE_INIT = 1, /**< No usable entropy tap could be selected. */
+    TLS_RNG_FAILURE_SOURCE_HEALTH,   /**< A continuous health test replaced the tap. */
+    TLS_RNG_FAILURE_COLLECTION,      /**< Conditioned entropy collection failed. */
+    TLS_RNG_FAILURE_ACCOUNTING,      /**< Internal reserve length/credit mismatch. */
+    TLS_RNG_FAILURE_INSTANTIATE,     /**< Hash_DRBG instantiation failed. */
+    TLS_RNG_FAILURE_RESEED,          /**< Hash_DRBG reseeding failed. */
+    TLS_RNG_FAILURE_GENERATE         /**< Hash_DRBG output generation failed. */
+} tls_rng_failure_t;
+
 /*************************************************************************************
  * @brief Initializes the cryptographic TRNG within this module.
  * @returns @b true if generator initialization succeeded, @b false if failed.
@@ -41,14 +53,17 @@ bool tls_random_init_entropy(void);
 uint64_t tls_random(void);
 
 /*************************************************************************************
- * @brief Fills a buffer from the SHA-256 Hash_DRBG.
+ * @brief Fills a buffer from the 256-bit-strength SHA-256 Hash_DRBG.
  * @param buffer    Pointer to a buffer to fill with random bytes.
  * @param len    Length of buffer to fill.
  * If the DRBG is not yet instantiated, this call synchronously gathers the
- * required entropy. A complete timer-prepared reseed reserve is incorporated
- * before output is generated.
+ * 256-bit entropy input and separate 256-bit nonce. A complete timer-prepared
+ * reseed reserve is incorporated before output is generated.
  * @returns @p buffer on success, or NULL if instantiation/reseeding fails or
  * the RNG request engine is busy. On failure, the destination is zeroized.
+ * @warning The calculator cannot isolate or securely persist DRBG state.
+ * Callers must not assume resistance to an attacker capable of reading or
+ * modifying process memory or restoring prior machine state.
  */
 void *tls_random_bytes(void *buffer, size_t len);
 

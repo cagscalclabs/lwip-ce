@@ -1035,8 +1035,8 @@ for (uint8_t i = 0; i < count; i++) {
 			breaklines,
 			breakanywhere,
 			fontsize=\footnotesize,
-			firstline=153,
-			lastline=153
+			firstline=168,
+			lastline=168
 		]{c}{../../src/tls/includes/random.h}
 	This:
 	\begin{itemize}
@@ -1045,14 +1045,10 @@ for (uint8_t i = 0; i < count; i++) {
 		\item If \texttt{blocking=false}, execution returns to the caller immediately; the callback function fires when the request is fulfilled.
 	\end{itemize}
 	
-		The timer fills a 256-bit entropy reserve in one 32-byte conditioned step. On each active collection cycle, the RNG path behaves as follows:
-		\begin{itemize}
-			\item The assembly collector reads the selected SRAM tap, applying the repetition-count and adaptive-proportion tests to every selected-bit observation.
-			\item Eight consecutive selected-bit observations are packed into each of 119 pool bytes; SHA-256 then conditions the 952-observation pool, and its full 32-byte digest forms one contribution.
-			\item The contribution receives at most 256 bits of entropy credit, bounded by the configured conservative raw-source min-entropy estimate.
-			\item At 256 credited bits, an uninstantiated generator is instantiated. Otherwise the complete reserve is retained and incorporated by the next Hash\_DRBG reseed.
-			\item Once instantiated, Hash\_DRBG output does not consume entropy credit one-for-one. The timer replenishes the reseed reserve independently and stops while that reserve is full.
-		\end{itemize}
+		Each conditioned contribution described in the Entropy Collection Model supplies at most 256 credited bits. Initial instantiation uses two independent contributions: the first supplies a 256-bit entropy input and the second supplies a 256-bit nonce. SP~800-90A requires only 128 bits of nonce entropy at this security strength, but retaining the complete second SHA-256 digest avoids discarding already-conditioned output. The stronger-than-required nonce provides margin against moderate entropy-source degradation without raising the claimed security strength beyond 256 bits; tap failure remains tap failure and causes the generator to fail closed. The concatenated seed material is passed through Hash\_df, satisfying the SP~800-90A Rev.~1 instantiation requirements for 256-bit security strength.
+
+		After instantiation, one complete contribution is retained and incorporated by the next Hash\_DRBG reseed. DRBG output does not consume entropy credit one-for-one; the timer replenishes the reseed reserve independently and stops while that reserve is full.
+		This is a 256-bit algorithmic security-strength claim under the documented entropy-source assumptions, not a hardware state-protection claim or a certification claim. The calculator provides no isolated execution environment, immutable monotonic state, secure persistent storage, or guaranteed secure erasure. An attacker able to read or modify process memory can obtain or replace the Hash\_DRBG working state and any pending reseed material; restoring an earlier calculator state can likewise roll the generator back. The Hash\_DRBG state update retains its ordinary algorithmic backtracking properties under its erasure assumptions, but lwIP-CE cannot claim resistance to physical or privileged state compromise on this hardware. Recovery after compromise requires a subsequent healthy entropy collection performed after the attacker has lost access.
 		In blocking mode, \texttt{tls\_request\_random\_bytes()} performs only entropy work required for initial instantiation or mandatory reseeding. In non-blocking mode, requests are queued and completed by the dispatcher.
 		
 		If quick statistical testing demonstrates that the source has degraded beyond acceptable levels, the generator initialization function is called, which should cause a new source to be selected. Given the abstraction between tap, the entropy pool, and the DRBG, choosing a new entropy tap is invisible and does not impact upstream state.

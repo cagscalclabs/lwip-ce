@@ -41,19 +41,29 @@ TRNG
 | **Header:** ``lwip/cryptography/random.h``
 | **References:** `NIST SP 800-90A Rev.1 <https://doi.org/10.6028/NIST.SP.800-90Ar1>`_ — DRBG; `NIST SP 800-90B <https://doi.org/10.6028/NIST.SP.800-90B>`_ — Entropy assessment
 
-The calculator has no hardware RNG. lwIP-CE derives entropy from SRAM noise —
-the electrical state of uninitialized SRAM varies between power cycles. The generator is designed in alignment with NIST SP 800-90 guidance. Testing indicates that the entropy source provides sufficient min-entropy for lwIP-CE's cryptographic random-value requirements, with an estimated min-entropy of H∞ ≈ 0.99998 bits per output bit (≈ 1.00000 across
-the full entropy pool), with a median correlation factor of k\ :sub:`eff`
-= 1.031, computed over a 1.2 MB nominal dataset per unit tested. For the full entropy analysis,
-see the `whitepaper <https://github.com/cagscalclabs/lwip-ce/releases/tag/whitepaper-latest>`_.
+The calculator has no hardware RNG. lwIP-CE derives entropy from a selected
+noisy SRAM bit, continuously applies repetition-count and adaptive-proportion
+health tests, packs 952 observations into a 119-byte pool, and conditions that
+pool with SHA-256. The configured conservative source estimate is 0.35 bits
+per selected-bit observation. For the full entropy analysis, see the
+`whitepaper <https://github.com/cagscalclabs/lwip-ce/releases/tag/whitepaper-latest>`_.
 Do not use the toolchain ``random()`` functions for anything security-sensitive;
 they are not cryptographically secure.
+
+Hash_DRBG is instantiated at 256-bit security strength using one independently
+conditioned 256-bit entropy input and a second independently conditioned
+256-bit nonce. Later reseeds require one 256-bit conditioned contribution.
+The calculator provides no isolated execution, immutable monotonic state,
+protected key storage, or guaranteed secure erasure. Consequently, this API
+does not claim resistance to an attacker capable of reading or modifying the
+live DRBG state or restoring an earlier calculator state.
 
 .. c:function:: bool tls_random_init_entropy(void)
 
    Select and validate an SRAM entropy tap. ``lwip_start()`` also starts the
-   timer-driven entropy collector, which instantiates Hash_DRBG and prepares a
-   256-bit reseed reserve in two 128-bit conditioned contributions.
+   timer-driven entropy collector. Initial Hash_DRBG instantiation collects a
+   256-bit entropy input and a separate 256-bit nonce; afterward, the timer
+   prepares each 256-bit reseed reserve in one conditioned contribution.
 
    :returns: ``true`` on success, ``false`` if entropy initialization failed
       (e.g. no suitable SRAM source found).
@@ -70,7 +80,7 @@ they are not cryptographically secure.
 
 .. c:function:: void *tls_random_bytes(void *buffer, size_t len)
 
-   Fill ``buffer`` synchronously from SHA-256 Hash_DRBG. If the DRBG has not
+   Fill ``buffer`` synchronously from the 256-bit-strength SHA-256 Hash_DRBG. If the DRBG has not
    yet been instantiated, this call blocks while gathering the initial
    entropy. Once instantiated, output does not consume entropy one-for-one.
    A complete timer-prepared entropy reserve is incorporated before output.

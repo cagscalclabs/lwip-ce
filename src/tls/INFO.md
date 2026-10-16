@@ -34,8 +34,15 @@
 **Entropy Extraction**:
 1. Read 952 observations from the selected source bit and pack them, eight per byte, into a 119-byte pool
 2. Hash pool with SHA-256
-3. Compress 32-byte digest to `uint64_t` by XORing each 4 bytes
-4. Minimum entropy: ~100 bits at 99% confidence
+3. Retain the full 32-byte digest as a conditioned 256-bit contribution
+4. Instantiate SHA-256 Hash_DRBG at 256-bit strength with one 32-byte entropy contribution and a separately collected 32-byte nonce
+5. Reseed with one complete 32-byte conditioned contribution
+
+**State-compromise boundary**: The calculator has no isolated execution,
+immutable monotonic state, secure persistent storage, or guaranteed secure
+erasure. Hash_DRBG state and pending reseed material therefore cannot be
+protected from an attacker capable of reading or modifying process memory or
+restoring an earlier machine state.
 
 ### Hash Functions
 - **SHA-256**: Implemented (assembly optimized)
