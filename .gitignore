@@ -57,7 +57,6 @@ doc/
 docs/_build/
 docs/_doxygen/
 docs/.python/
-docs/_static/whitepaper.pdf
 docs/whitepaper/_minted-whitepaper/
 docs/whitepaper/generated/
 docs/whitepaper/whitepaper.pdf

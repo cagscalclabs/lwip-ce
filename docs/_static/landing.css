@@ -112,55 +112,6 @@
   margin: 1.25rem 0 2rem;
 }
 
-.whitepaper-panel {
-  background: #1d232b;
-  border-radius: 10px;
-  color: #f7f3e8;
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: minmax(16rem, .42fr) minmax(18rem, 1fr);
-  margin: 1.5rem 0 2rem;
-  padding: 1rem;
-}
-
-.whitepaper-copy {
-  padding: .35rem;
-}
-
-.whitepaper-copy p {
-  color: #f7f3e8;
-  line-height: 1.5;
-}
-
-.whitepaper-kicker {
-  color: #ffd35f !important;
-  font-size: .85rem;
-  font-weight: 800;
-  letter-spacing: .04em;
-  margin: 0 0 .5rem;
-  text-transform: uppercase;
-}
-
-.whitepaper-button {
-  background: #df5b4f;
-  border: 2px solid #f7f3e8;
-  border-radius: 8px;
-  color: #fffaf0 !important;
-  display: inline-flex;
-  font-weight: 800;
-  padding: .6rem .9rem;
-  text-decoration: none !important;
-}
-
-.whitepaper-viewer {
-  background: #f7f3e8;
-  border: 2px solid #f7f3e8;
-  border-radius: 8px;
-  height: min(74vh, 760px);
-  min-height: 520px;
-  width: 100%;
-}
-
 /* The RTD theme defaults are a little too optimistic for long links, paths,
  * and C identifiers. Let docs tables wrap instead of forcing page overflow. */
 .wy-table-responsive {
@@ -190,17 +141,12 @@
 
 @media (max-width: 860px) {
   .lwip-hero,
-  .lwip-grid,
-  .whitepaper-panel {
+  .lwip-grid {
     grid-template-columns: 1fr;
   }
 
   .lwip-hero-art {
     margin: 0 auto;
     max-width: 430px;
-  }
-
-  .whitepaper-viewer {
-    min-height: 420px;
   }
 }

@@ -5,14 +5,12 @@ SPHINXBUILD ?= $(shell command -v sphinx-build 2>/dev/null || echo $(HOMEBREW_PR
 DOXYGEN ?= $(shell command -v doxygen 2>/dev/null || echo $(HOMEBREW_PREFIX)/opt/doxygen/bin/doxygen)
 SOURCEDIR = .
 BUILDDIR = _build
-WHITEPAPER_STATIC = _static/whitepaper.pdf
-WHITEPAPER_RELEASE_URL ?= https://github.com/cagscalclabs/lwip-ce/releases/download/whitepaper-latest/whitepaper.pdf
 LWIP_RELEASE_DIR ?= ../build
 HEADER_PYTHON ?= python3
 
-.PHONY: html doxygen release-headers whitepaper-pdf clean
+.PHONY: html doxygen release-headers clean
 
-html: doxygen whitepaper-pdf
+html: doxygen
 	$(SPHINXBUILD) -b html "$(SOURCEDIR)" "$(BUILDDIR)/html"
 
 doxygen: release-headers
@@ -21,10 +19,5 @@ doxygen: release-headers
 release-headers:
 	cd .. && LWIP_RELEASE_DIR="$(abspath $(LWIP_RELEASE_DIR))" $(HEADER_PYTHON) build-tools/scripts/generate_lwip_headers.py
 
-whitepaper-pdf:
-	@mkdir -p "_static"
-	@curl -fL --retry 3 --connect-timeout 10 "$(WHITEPAPER_RELEASE_URL)" -o "$(WHITEPAPER_STATIC)"
-	@echo "downloaded $(WHITEPAPER_RELEASE_URL) -> $(WHITEPAPER_STATIC)"
-
 clean:
-	rm -rf "$(BUILDDIR)" "_doxygen" "$(WHITEPAPER_STATIC)" "$(LWIP_RELEASE_DIR)"
+	rm -rf "$(BUILDDIR)" "_doxygen" "$(LWIP_RELEASE_DIR)"

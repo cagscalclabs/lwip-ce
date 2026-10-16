@@ -255,41 +255,36 @@ _tls_random_init_entropy:
     ld (_sprng_init_eval_mask),a
 .Linit_consider_bit:
     ; 512 marginal samples: require 128 <= ones <= 384.
-    ld bc,(iy+0)
-    push bc
-    pop hl
+    ld hl,(iy+0)
     ld de,128
     or a,a
     sbc hl,de
     jr c,.Linit_consider_next
-    push bc
-    pop hl
+    add hl,de
     ld de,385
     or a,a
     sbc hl,de
     jr nc,.Linit_consider_next
 
     ; 256 adjacent pairs: require 64 <= disagreements <= 192.
-    ld bc,(iy+3)
-    push bc
-    pop hl
+    ld hl,(iy+3)
     ld de,64
     or a,a
     sbc hl,de
     jr c,.Linit_consider_next
-    push bc
-    pop hl
+    add hl,de
     ld de,193
     or a,a
     sbc hl,de
     jr nc,.Linit_consider_next
+    add hl,de
 
     ; Score is min(flips, 256-flips), in the range [64, 128].
-    ld a,c
+    ld a,l
     cp a,129
     jr c,.Linit_score_ready
     xor a,a
-    sub a,c
+    sub a,l
 .Linit_score_ready:
     ld e,a
     ld a,(_sprng_init_best_score)
