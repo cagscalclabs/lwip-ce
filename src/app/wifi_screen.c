@@ -13,6 +13,7 @@
 #include "drivers/usb_ethernet.h"
 #include "lwip-imports.h"
 #include "wireless/wifi.h"
+#include "../tls/includes/bytes.h"
 #include "app/ui.h"
 #include "app/wifi_screen.h"
 
@@ -293,7 +294,7 @@ static void add_network(const char *known_ssid, uint8_t security)
 
     ui_busy("Wi-Fi", "Saving...");
     err = lwip_wifi_save_profile(LWIP_WIFI_SLOT_NONE, ssid, password, security, LWIP_WIFI_PROFILE_ENABLED, &slot);
-    memset(password, 0, sizeof password);
+    tls_secure_memzero(password, sizeof password);
     if (report("Save network", err))
         connect_and_wait(slot);
 }
@@ -316,7 +317,7 @@ static void edit_profile(const lwip_wifi_profile_t *p, int what)
     ui_busy("Wi-Fi", "Saving...");
     err = lwip_wifi_save_profile(p->slot, ssid, password, security,
                                  (uint8_t)(p->flags & (LWIP_WIFI_PROFILE_ENABLED | LWIP_WIFI_PROFILE_HIDDEN)), NULL);
-    memset(password, 0, sizeof password);
+    tls_secure_memzero(password, sizeof password);
     report("Save network", err);
 }
 

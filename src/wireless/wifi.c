@@ -7,6 +7,7 @@
 #include "lwip/timeouts.h"
 #include "drivers/usb_ethernet.h"
 #include "lwip-imports.h"
+#include "../tls/includes/bytes.h"
 #include "wireless/wifi.h"
 #include "wireless/wifi_hook.h"
 
@@ -150,6 +151,7 @@ static lwip_wifi_error_t request(uint8_t op, const uint8_t *body, uint16_t body_
     g_done = false;
     g_waiting = true;
     err_t err = netif->linkoutput(netif, p);
+    tls_secure_memzero(frame + WIFI_HEADER, body_len);
     pbuf_free(p);
     if (err != ERR_OK)
     {
@@ -280,7 +282,7 @@ lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const c
     length = (uint16_t)(length + put_string(&body[length], ssid, LWIP_WIFI_SSID_MAX));
     length = (uint16_t)(length + put_string(&body[length], password, LWIP_WIFI_PASSWORD_MAX));
     err = request(OP_SAVE, body, length, WIFI_CHANGE_TIMEOUT_MS);
-    memset(body, 0, sizeof body);
+    tls_secure_memzero(body, sizeof body);
     if (err == LWIP_WIFI_OK && saved)
         *saved = g_reply_len ? g_reply[0] : LWIP_WIFI_SLOT_NONE;
     return err;

@@ -4,6 +4,7 @@
 #include <graphx.h>
 #include <ti/getcsc.h>
 
+#include "../tls/includes/bytes.h"
 #include "app/ui.h"
 
 #define MARGIN 8
@@ -419,13 +420,13 @@ bool ui_edit_text(const char *title, char *buffer, size_t size, bool secret)
         key = ui_wait_key();
         if (key == sk_Clear)
         {
-            memset(work, 0, sizeof work);
+            tls_secure_memzero(work, sizeof work);
             return false;
         }
         if (key == sk_Enter)
         {
             snprintf(buffer, size, "%s", work);
-            memset(work, 0, sizeof work);
+            tls_secure_memzero(work, sizeof work);
             return true;
         }
         if (key == sk_Del || key == sk_Left)
