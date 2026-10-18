@@ -139,11 +139,12 @@ Security Posture
        of trust, secure enclave, crypto accelerator, protected filesystem, or
        trusted clock.
    * - RNG
-     - SRAM-noise-derived, NIST SP 800-90A/90B aligned. Measured min-entropy:
-       H∞ ≈ 0.99998 bits per output bit (≈ 1.00000 across the full entropy
-       pool), median effective correlation k_eff = 1.031 over a 1.2 MB
-       nominal dataset per unit tested. See the whitepaper for the full
-       entropy analysis.
+     - SRAM-noise-derived, NIST SP 800-90A/90B aligned. The checked-in
+       selected-tap profiles give a cross-model working bound of 0.351112
+       bits per raw observation after marginal MCV and coarse first-order
+       Markov analysis; implementation policy rounds this down to 0.35.
+       See the whitepaper for the confidence bounds, lag-1 coefficients,
+       dependency factors, and limitations of this non-certification analysis.
    * - TLS trust store
      - A curated trust store derived from CA material staged on a common Linux
        box, shipped as a signed AppVar and verified with RSA-PSS-SHA256 against

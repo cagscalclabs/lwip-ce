@@ -93,6 +93,14 @@ struct tls_rng_stats
     uint32_t zeros;
     /** Changes between adjacent selected-bit observations. */
     uint32_t transitions;
+    /** Adjacent observation pairs with values 0 then 0. */
+    uint32_t pairs_00;
+    /** Adjacent observation pairs with values 0 then 1. */
+    uint32_t pairs_01;
+    /** Adjacent observation pairs with values 1 then 0. */
+    uint32_t pairs_10;
+    /** Adjacent observation pairs with values 1 then 1. */
+    uint32_t pairs_11;
     /** Longest run of either value. */
     uint32_t longest_run;
     /** Longest run of zeroes. */

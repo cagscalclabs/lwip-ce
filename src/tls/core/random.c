@@ -880,6 +880,32 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
                 stats->ones++;
             }
 
+            if (have_previous)
+            {
+                if (previous == 0u)
+                {
+                    if (bit == 0u)
+                    {
+                        stats->pairs_00++;
+                    }
+                    else
+                    {
+                        stats->pairs_01++;
+                    }
+                }
+                else
+                {
+                    if (bit == 0u)
+                    {
+                        stats->pairs_10++;
+                    }
+                    else
+                    {
+                        stats->pairs_11++;
+                    }
+                }
+            }
+
             if (!have_previous)
             {
                 current_run = 1u;

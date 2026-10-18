@@ -134,8 +134,9 @@ live DRBG state or restoring an earlier calculator state.
    run before source selection or while the RNG request engine is busy.
 
    The result reports the source address and one-hot bit mask, zero and one
-   counts, adjacent-bit transitions, longest overall/zero/one runs, and three
-   unsigned Q16 rates. Divide ``p1_q16``, ``bias_q16``, and
+   counts, the four adjacent-pair counts (``pairs_00`` through ``pairs_11``),
+   total transitions, longest overall/zero/one runs, and three unsigned Q16
+   rates. Divide ``p1_q16``, ``bias_q16``, and
    ``transition_rate_q16`` by ``TLS_RNG_STATS_Q16_ONE`` (65536) to obtain the
    corresponding fractional values.
 

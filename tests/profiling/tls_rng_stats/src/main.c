@@ -112,7 +112,7 @@ int main(void)
         return 1;
     }
 
-    ok = output_line("rng_stats,version=1,runs=%u,samples_per_run=%lu\n",
+    ok = output_line("rng_stats,version=2,runs=%u,samples_per_run=%lu\n",
                      (unsigned int)RNG_STATS_RUNS,
                      (unsigned long)RNG_STATS_SAMPLES_PER_RUN);
 
@@ -132,7 +132,8 @@ int main(void)
 
         ok = output_line(
             "run=%u,source=%06lX,mask=%02X,samples=%lu,ones=%lu,zeros=%lu,"
-            "transitions=%lu,longest=%lu,longest0=%lu,longest1=%lu,"
+            "transitions=%lu,n00=%lu,n01=%lu,n10=%lu,n11=%lu,"
+            "longest=%lu,longest0=%lu,longest1=%lu,"
             "p1_q16=%lu,bias_q16=%lu,transition_q16=%lu\n",
             (unsigned int)run,
             (unsigned long)stats.source_address,
@@ -141,6 +142,10 @@ int main(void)
             (unsigned long)stats.ones,
             (unsigned long)stats.zeros,
             (unsigned long)stats.transitions,
+            (unsigned long)stats.pairs_00,
+            (unsigned long)stats.pairs_01,
+            (unsigned long)stats.pairs_10,
+            (unsigned long)stats.pairs_11,
             (unsigned long)stats.longest_run,
             (unsigned long)stats.longest_zero_run,
             (unsigned long)stats.longest_one_run,

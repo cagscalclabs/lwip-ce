@@ -972,7 +972,7 @@ for (uint8_t i = 0; i < count; i++) {
 		\begin{itemize}
 			\item Entropy is credited only to the selected source bit; all other bits in each raw byte are treated as zero-entropy in the bound.
 			\item Entropy is estimated at the raw selected tap. Bit packing is information-preserving, while SHA-256 is a deterministic conditioner and receives no independent entropy credit.
-			\item The measured most-common-value estimate is marginal. Multiplying it by the number of observations is an engineering accounting model, not a formal non-IID entropy-rate proof; serial dependence can reduce the true joint min-entropy.
+			\item The measured most-common-value estimate is supplemented by a first-order Markov bound. Multiplying the resulting estimate by the number of observations remains an engineering accounting model, not a formal non-IID entropy-rate proof; longer-range dependence can reduce the true joint min-entropy.
 			\item A contribution is never credited with more than its 256-bit conditioned width, regardless of the raw accounting result.
 			\item Runtime health checks are assumed to detect gross source failure, but short-window entropy collapse between checks remains a residual risk.
 		\end{itemize}
@@ -1000,17 +1000,27 @@ for (uint8_t i = 0; i < count; i++) {
 	\]
 	This adjustment is intentionally one-sided: only an upper bound on the most-common outcome probability produces the required lower bound on min-entropy. The same computation is repeated over the aggregate counts for each model rather than reusing a common margin of error.
 
+	The profiler also counts every adjacent pair as $n_{00}$, $n_{01}$, $n_{10}$, or $n_{11}$. These counts provide the lag-one phi coefficient and a coarse first-order Markov entropy rate. Let $p_{ab}=n_{ab}/(n_{a0}+n_{a1})$. The most probable asymptotic cycle in a binary first-order chain has per-step probability
+	\[
+		p_{M}=\max\!\left(p_{00},p_{11},\sqrt{p_{01}p_{10}}\right).
+	\]
+	Each transition probability is replaced by its Wilson upper confidence bound before calculating the lower estimate $H_{M,99}=-\log_2(p_{M,99})$. The four bounds use a Bonferroni-adjusted one-sided factor ($z=2.807034$) to retain 99\% simultaneous coverage. The self-loop terms capture persistence, while the two-state cycle captures predictable alternation. Version~1 reports did not store the four cells separately; for those reports the analyzer enumerates the endpoint-consistent matrices implied by the marginal and total-transition counts and retains the lower estimate. The resulting one-transition ambiguity has no material effect at 32,768 observations per window.
+
 	\IfFileExists{generated/rng_entropy_analysis.tex}{
 		\input{generated/rng_entropy_analysis.tex}
 	}{
 		No generated RNG entropy analysis was found at build time.
 	}
 
-	For each model, the working marginal estimate is the smaller of its aggregate lower bound and its worst individual-test lower bound:
+	For each model, the marginal and first-order estimates each take the smaller of their aggregate lower bound and their worst individual-test lower bound. The working estimate is the smaller of those two results:
 	\[
-		h_{\text{model}}=\min\!\left(H_{99,\mathrm{aggregate}},\ \min_i H_{99,i}\right).
+		h_{\text{MCV}}=\min\!\left(H_{99,\mathrm{aggregate}},\ \min_i H_{99,i}\right),
 	\]
-	This prevents a long aggregate from hiding a weaker interval. Across calculator revisions, the implementation-level value is selected from the weakest measured model:
+	\[
+		h_{\text{Markov}}=\min\!\left(H_{M,99,\mathrm{aggregate}},\ \min_i H_{M,99,i}\right),
+		\qquad h_{\text{model}}=\min(h_{\text{MCV}},h_{\text{Markov}}).
+	\]
+	The reported first-order dependence factor is $f_{\mathrm{dep}}=\min(1,h_{\mathrm{model}}/h_{\text{MCV}})$. It is a convenient description of the observed lag-one penalty, not a general-purpose correction for arbitrary dependence. Taking the worst window prevents a long aggregate from hiding a weaker interval. Across calculator revisions, the implementation-level value is selected from the weakest measured model:
 	\[
 		h_{\text{all models}}=\min_m h_m=\RngOverallH\ \text{bits per raw selected-bit observation}.
 	\]
@@ -1023,7 +1033,7 @@ for (uint8_t i = 0; i < count; i++) {
 	\[
 		H_{\text{credited}}=\min(256,952h_{\text{policy}})=\RngOverallCredit\ \text{bits}.
 	\]
-	The 256-bit result is a credit cap imposed by the conditioned output width; it is not a claim that SHA-256 created entropy. More importantly, the reported MCV values characterize marginal bias only. Serial dependence can make joint min-entropy lower than $952h$, so this multiplication and the configured working value remain conservative engineering policy supported by online health tests, not a complete SP~800-90B non-IID entropy assessment or certification. Post-conditioning measurements may test output quality, but they are not used to inflate the raw-source entropy estimate.
+	The 256-bit result is a credit cap imposed by the conditioned output width; it is not a claim that SHA-256 created entropy. The added Markov estimate accounts for adjacent dependence but cannot detect every longer-range pattern. Consequently this multiplication and the configured working value remain conservative engineering policy supported by online health tests, not a complete SP~800-90B non-IID entropy assessment or certification. Post-conditioning measurements may test output quality, but they are not used to inflate the raw-source entropy estimate.
 	
 	\paragraph{Encapsulation}
 	\label{ssec:encapsulation}
@@ -1440,7 +1450,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	\paragraph{What to capture}
 	Two on-device tools produce the submission artifacts:
 	\begin{itemize}
-		\item \textbf{RNG tap profile.} The profiling application records eight windows of 32,768 observations from the exact selected source bit used by the runtime collector. Its companion analyzer recomputes the per-window and aggregate MCV estimates and writes a uniquely named JSON or CSV report to \texttt{statistics/rng}. Submissions should identify the calculator model so results can be grouped by hardware revision.
+		\item \textbf{RNG tap profile.} The profiling application records eight windows of 32,768 observations from the exact selected source bit used by the runtime collector, including the complete adjacent-pair transition matrix. Its companion analyzer recomputes per-window and aggregate MCV and first-order Markov estimates and writes a uniquely named JSON or CSV report to \texttt{statistics/rng}. Submissions should identify the calculator model so results can be grouped by hardware revision.
 		\item \textbf{Differential timing capture.} Produces a structured log file using a \texttt{key=value} record format. Each unit's calibration class and per-class results are emitted with explicit denotation so the upstream analysis can locate each unit and its associated measurements by regular expression. The log can be exfiltrated via standard AppVar transfer.
 	\end{itemize}
 

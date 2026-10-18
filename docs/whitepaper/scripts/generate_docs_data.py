@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -20,6 +21,14 @@ DATASET_DIR = DATASETS_ROOT / "appendix_a"
 APPENDIX_B_DIR = DATASETS_ROOT / "appendix_b"
 APPENDIX_B_ALT_DIR = DATASETS_ROOT / "appendex_b"
 RNG_STATS_DIR = REPOSITORY_ROOT / "statistics" / "rng"
+RNG_ANALYZER_PATH = (
+    REPOSITORY_ROOT
+    / "tests"
+    / "profiling"
+    / "tls_rng_stats"
+    / "tools"
+    / "analyze_rng_stats.py"
+)
 GENERATED_DIR = ROOT / "generated"
 MANIFEST_FILE = GENERATED_DIR / ".dataset_manifest.sha256"
 APPENDIX_TEX = GENERATED_DIR / "appendix_a_include.tex"
@@ -27,6 +36,14 @@ CORR_TEX = GENERATED_DIR / "correlation_data.tex"
 APPENDIX_B_TEX = GENERATED_DIR / "appendix_b_model_summary.tex"
 RNG_ENTROPY_TEX = GENERATED_DIR / "rng_entropy_analysis.tex"
 RNG_ENTROPY_APPENDIX_TEX = GENERATED_DIR / "rng_entropy_appendix.tex"
+
+RNG_ANALYZER_SPEC = importlib.util.spec_from_file_location(
+    "lwip_ce_analyze_rng_stats", RNG_ANALYZER_PATH
+)
+if RNG_ANALYZER_SPEC is None or RNG_ANALYZER_SPEC.loader is None:
+    raise RuntimeError(f"cannot load RNG analyzer from {RNG_ANALYZER_PATH}")
+RNG_ANALYZER = importlib.util.module_from_spec(RNG_ANALYZER_SPEC)
+RNG_ANALYZER_SPEC.loader.exec_module(RNG_ANALYZER)
 
 TEST_HEADER_RE = re.compile(r"^--Test(\d+)--\s*$")
 MODEL_LINE_RE = re.compile(r"^(?:model|HW\s+Revision)\s*:\s*(.+?)\s*$", re.IGNORECASE)
@@ -74,6 +91,8 @@ def manifest_hash(dataset_dirs: List[Path]) -> str:
     h = hashlib.sha256()
     h.update(b"generate_docs_data_v2\n")
     h.update(sha256_file(Path(__file__).resolve()).encode("ascii"))
+    h.update(b"\n")
+    h.update(sha256_file(RNG_ANALYZER_PATH).encode("ascii"))
     h.update(b"\n")
     for dataset_dir in dataset_dirs:
         if not dataset_dir.exists():
@@ -846,7 +865,34 @@ def load_rng_stat_profiles(stats_dir: Path) -> List[Dict[str, object]]:
     for path in sorted(stats_dir.glob("*_rngstats.json")):
         report = json.loads(path.read_text(encoding="utf-8"))
         model = str(report.get("model", report.get("device_model", "uncategorized")))
-        profiles.append({"model": model, "source_file": path.name, "runs": report.get("runs", [])})
+        runs = report.get("runs", [])
+        aggregate = report.get("aggregate", {})
+        required_run_fields = {
+            "n00", "n01", "n10", "n11", "transition_counts_source",
+            "lag1_phi", "h_markov_lower_99_bits_per_raw_bit",
+            "first_order_dependency_factor",
+        }
+        if not isinstance(runs, list) or not runs:
+            raise ValueError(f"{path}: no RNG run rows")
+        for row in runs:
+            missing = required_run_fields.difference(row)
+            if missing:
+                fields = ", ".join(sorted(missing))
+                raise ValueError(
+                    f"{path}: stored run is missing {fields}; migrate it with "
+                    "analyze_rng_stats.py --in-place"
+                )
+        if "h_markov_lower_99_bits_per_raw_bit" not in aggregate:
+            raise ValueError(
+                f"{path}: stored aggregate lacks the Markov estimate; migrate it "
+                "with analyze_rng_stats.py --in-place"
+            )
+        profiles.append({
+            "model": model,
+            "source_file": path.name,
+            "runs": runs,
+            "aggregate": aggregate,
+        })
 
     for path in sorted(stats_dir.glob("*_rngstats.csv")):
         with path.open("r", encoding="utf-8", newline="") as source:
@@ -856,16 +902,19 @@ def load_rng_stat_profiles(stats_dir: Path) -> List[Dict[str, object]]:
         model = (rows[0].get("model") or "uncategorized").strip()
         runs: List[Dict[str, object]] = []
         for row in rows:
-            runs.append(
-                {
-                    "run": int(row["run"]),
-                    "source": row.get("source", "unknown"),
-                    "mask": row.get("mask", "unknown"),
-                    "samples": int(row["samples"]),
-                    "ones": int(row["ones"]),
-                    "zeros": int(row["zeros"]),
-                }
-            )
+            parsed: Dict[str, object] = {
+                "run": int(row["run"]),
+                "source": row.get("source", "unknown"),
+                "mask": row.get("mask", "unknown"),
+            }
+            for key in (
+                "samples", "ones", "zeros", "transitions",
+                "n00", "n01", "n10", "n11",
+                "longest", "longest0", "longest1",
+            ):
+                if row.get(key) not in (None, ""):
+                    parsed[key] = int(row[key])
+            runs.append(RNG_ANALYZER.analyze_run(parsed))
         profiles.append({"model": model, "source_file": path.name, "runs": runs})
     return profiles
 
@@ -881,8 +930,15 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
     grouped: Dict[str, Dict[str, object]] = {}
     for profile in profiles:
         model = str(profile["model"])
-        group = grouped.setdefault(model, {"runs": [], "files": []})
+        group = grouped.setdefault(
+            model, {"runs": [], "files": [], "profile_markov": []}
+        )
         group["files"].append(str(profile["source_file"]))
+        profile_aggregate = profile.get("aggregate")
+        if isinstance(profile_aggregate, dict):
+            group["profile_markov"].append(
+                float(profile_aggregate["h_markov_lower_99_bits_per_raw_bit"])
+            )
         for row in profile["runs"]:
             samples = int(row["samples"])
             ones = int(row["ones"])
@@ -904,15 +960,15 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
             "\\begin{xltabular}{\\textwidth}{@{}"
             ">{\\hsize=0.60\\hsize\\raggedright\\arraybackslash}X"
             ">{\\hsize=2.00\\hsize\\raggedright\\arraybackslash}X"
-            "*{6}{>{\\hsize=0.90\\hsize\\centering\\arraybackslash}X}@{}}",
+            "*{8}{>{\\hsize=0.925\\hsize\\centering\\arraybackslash}X}@{}}",
             "\\toprule",
             "\\rowcolor{gray!18}",
-            "\\textbf{Model} & \\textbf{Profile/test} & \\textbf{$n$} & \\textbf{$\\hat p_1$} & \\textbf{$\\hat p_{\\max}$} & \\textbf{$\\epsilon_{99}$} & \\textbf{$\\widehat H_\\infty$} & \\textbf{$H_{99}$} \\\\",
+            "\\textbf{Model} & \\textbf{Profile/test} & \\textbf{$n$} & \\textbf{$\\hat p_1$} & \\textbf{$\\hat p_{\\max}$} & \\textbf{$\\epsilon_{99}$} & \\textbf{$\\rho_1$} & \\textbf{$H_{99}$} & \\textbf{$H_{M,99}$} & \\textbf{$f_{dep}$} \\\\",
             "\\midrule",
             "\\endfirsthead",
             "\\toprule",
             "\\rowcolor{gray!18}",
-            "\\textbf{Model} & \\textbf{Profile/test} & \\textbf{$n$} & \\textbf{$\\hat p_1$} & \\textbf{$\\hat p_{\\max}$} & \\textbf{$\\epsilon_{99}$} & \\textbf{$\\widehat H_\\infty$} & \\textbf{$H_{99}$} \\\\",
+            "\\textbf{Model} & \\textbf{Profile/test} & \\textbf{$n$} & \\textbf{$\\hat p_1$} & \\textbf{$\\hat p_{\\max}$} & \\textbf{$\\epsilon_{99}$} & \\textbf{$\\rho_1$} & \\textbf{$H_{99}$} & \\textbf{$H_{M,99}$} & \\textbf{$f_{dep}$} \\\\",
             "\\midrule",
             "\\endhead",
         ]
@@ -924,15 +980,28 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
         total_ones = sum(int(row["ones"]) for row in runs)
         total_zeros = sum(int(row["zeros"]) for row in runs)
         aggregate = rng_mcv_estimate(total_ones, total_zeros)
-        worst_window = min(float(row["h_lower_99"]) for row in runs)
-        working_h = min(float(aggregate["h_lower_99"]), worst_window)
+        worst_window_mcv = min(float(row["h_lower_99"]) for row in runs)
+        worst_window_markov = min(
+            float(row["h_markov_lower_99_bits_per_raw_bit"]) for row in runs
+        )
+        profile_markov_values = grouped[model]["profile_markov"]
+        marginal_h = min(float(aggregate["h_lower_99"]), worst_window_mcv)
+        markov_h = min(worst_window_markov, *profile_markov_values)
+        max_abs_lag1_phi = max(abs(float(row["lag1_phi"])) for row in runs)
+        working_h = min(marginal_h, markov_h)
+        dependency_factor = min(1.0, working_h / marginal_h) if marginal_h > 0.0 else 0.0
         raw_collection_h = RNG_READS_PER_COLLECTION * working_h
         summaries.append(
             {
                 "model": model,
                 "tests": len(runs),
                 "aggregate": aggregate,
-                "worst_window": worst_window,
+                "worst_window_mcv": worst_window_mcv,
+                "worst_window_markov": worst_window_markov,
+                "marginal_h": marginal_h,
+                "markov_h": markov_h,
+                "dependency_factor": dependency_factor,
+                "max_abs_lag1_phi": max_abs_lag1_phi,
                 "working_h": working_h,
                 "raw_collection_h": raw_collection_h,
                 "files": grouped[model]["files"],
@@ -944,8 +1013,10 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
             detail.append(
                 f"{tex_escape(model)} & {tex_escape(test_label)} & {int(row['samples']):,} & "
                 f"{float(row['p1']):.6f} & {float(row['p_max']):.6f} & "
-                f"{float(row['margin']):.6f} & {float(row['h_plugin']):.6f} & "
-                f"{float(row['h_lower_99']):.6f} \\\\"
+                f"{float(row['margin']):.6f} & {float(row['lag1_phi']):.6f} & "
+                f"{float(row['h_lower_99']):.6f} & "
+                f"{float(row['h_markov_lower_99_bits_per_raw_bit']):.6f} & "
+                f"{float(row['first_order_dependency_factor']):.6f} \\\\"
             )
 
     detail.extend(["\\bottomrule", "\\end{xltabular}", "}", ""])
@@ -975,10 +1046,10 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
             "",
             "{\\scriptsize",
             "\\rowcolors{2}{ltgray}{white}",
-            "\\begin{xltabular}{\\textwidth}{@{}>{\\raggedright\\arraybackslash}X*{7}{>{\\centering\\arraybackslash}X}@{}}",
+            "\\begin{xltabular}{\\textwidth}{@{}>{\\raggedright\\arraybackslash}X*{8}{>{\\centering\\arraybackslash}X}@{}}",
             "\\toprule",
             "\\rowcolor{gray!18}",
-            f"\\textbf{{Model}} & \\textbf{{Tests}} & \\textbf{{$n$}} & \\textbf{{$\\epsilon_{{99}}$}} & \\textbf{{$H_{{99,agg}}$}} & \\textbf{{$H_{{99,worst}}$}} & \\textbf{{$h_{{model}}$}} & \\textbf{{${RNG_READS_PER_COLLECTION}h_{{model}}$}} \\\\",
+            f"\\textbf{{Model}} & \\textbf{{Tests}} & \\textbf{{$n$}} & \\textbf{{$H_{{MCV}}$}} & \\textbf{{$H_{{Markov}}$}} & \\textbf{{$f_{{dep}}$}} & \\textbf{{max $|\\rho_1|$}} & \\textbf{{$h_{{model}}$}} & \\textbf{{${RNG_READS_PER_COLLECTION}h_{{model}}$}} \\\\",
             "\\midrule",
         ]
     )
@@ -986,8 +1057,9 @@ def build_rng_entropy_analysis(stats_dir: Path) -> Tuple[str, str]:
         aggregate = summary["aggregate"]
         out.append(
             f"{tex_escape(str(summary['model']))} & {int(summary['tests'])} & "
-            f"{int(aggregate['samples']):,} & {float(aggregate['margin']):.6f} & "
-            f"{float(aggregate['h_lower_99']):.6f} & {float(summary['worst_window']):.6f} & "
+            f"{int(aggregate['samples']):,} & {float(summary['marginal_h']):.6f} & "
+            f"{float(summary['markov_h']):.6f} & {float(summary['dependency_factor']):.6f} & "
+            f"{float(summary['max_abs_lag1_phi']):.6f} & "
             f"{float(summary['working_h']):.6f} & {float(summary['raw_collection_h']):.3f} \\\\"
         )
     out.extend(["\\bottomrule", "\\end{xltabular}", "}", ""])

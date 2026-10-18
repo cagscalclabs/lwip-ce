@@ -40,12 +40,37 @@ The analyzer reports two binary marginal estimates:
   the observed most-common-value probability before taking `-log2`, following
   the Most Common Value estimator in NIST SP 800-90B section 6.3.1.
 
-It also reports the worst per-window confidence-bound estimate. The
-`conservative_working_h_bits_per_raw_bit` field is the smaller of the
-aggregate and worst-window lower estimates.
+The version 2 profiler also records the complete adjacent-pair transition
+matrix (`n00`, `n01`, `n10`, and `n11`). From it the analyzer reports the
+lag-1 phi correlation, a runs-test z-score, and a coarse first-order Markov
+min-entropy rate. The Markov lower estimate applies simultaneous Wilson upper
+confidence bounds, Bonferroni-adjusted across the four transition
+probabilities, before selecting the most probable self-loop or two-state
+cycle.
+
+Version 1 captures remain supported. Their pair counts are reconstructed from
+the marginal and total-transition counts; when the unrecorded endpoints leave
+two possibilities, the analyzer retains the one producing the lower Markov
+estimate. Migrate an existing checked-in report in place with:
+
+```sh
+python3 tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py \
+  statistics/rng/<name>_rngstats.json --in-place
+```
+
+This stores the selected `n00`, `n01`, `n10`, and `n11` values and every
+derived correlation field in the JSON. The
+`transition_counts_source: reconstructed_conservatively` marker is retained
+on later analyzer passes so the inferred legacy matrix cannot be mistaken for
+a matrix directly recorded by the version 2 profiler. The whitepaper build
+requires these stored fields and does not reconstruct legacy JSON reports.
+
+`conservative_working_h_bits_per_raw_bit` is the minimum of the aggregate and
+worst-window 99% lower estimates from both MCV and the first-order model.
+`first_order_dependency_factor` is the ratio of that result to the marginal
+MCV working estimate, capped at 1.0.
 
 This is useful for selecting a conservative engineering value for `H`, but it
-is not by itself a complete NIST SP 800-90B non-IID entropy assessment.
-Marginal `p(0)`/`p(1)` does not capture serial dependence; use the recorded
-transition and run statistics as warning indicators and retain a safety
-margin below the observed estimate.
+is not by itself a complete NIST SP 800-90B non-IID entropy assessment. The
+Markov estimate models only adjacent dependence; longer-range patterns require
+a raw sequential capture and the complete non-IID estimator suite.
