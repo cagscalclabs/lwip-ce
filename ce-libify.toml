@@ -59,4 +59,4 @@ ASFLAGS = "-I src/tls/core -I src/tls/core/share"
 BSSHEAP_HIGH = "0xD072C6"
 
 [[step]]
-run = ["env", "LWIP_FUNCTABLE=obj/libify/functable.s", "LWIP_RELEASE_DIR=bin/include", "python3", "build-tools/scripts/generate_lwip_headers.py"]
+run = ["env", "LWIP_EXPORTS=obj/libify/functable.s", "LWIP_RELEASE_DIR=bin/include", "python3", "build-tools/scripts/generate_lwip_headers.py"]

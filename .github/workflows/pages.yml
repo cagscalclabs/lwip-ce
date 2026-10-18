@@ -6,6 +6,8 @@ on:
     paths:
       - docs/**
       - src/**
+      - exports.txt
+      - build-tools/scripts/generate_lwip_headers.py
       - build-tools/scripts/header_dump.py
       - build-tools/meta/public_api_manifest.csv
       - .github/workflows/pages.yml
@@ -13,6 +15,8 @@ on:
     paths:
       - docs/**
       - src/**
+      - exports.txt
+      - build-tools/scripts/generate_lwip_headers.py
       - build-tools/scripts/header_dump.py
       - build-tools/meta/public_api_manifest.csv
       - .github/workflows/pages.yml
