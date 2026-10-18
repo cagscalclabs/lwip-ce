@@ -1,0 +1,64 @@
+name = "LWIP"
+lib-version = 1
+exports = "exports.txt"
+depend = ["usbdrvce", "fileioc"]
+exclude = ["tls/contrib/x25519/src/main.c"]
+header = ["bin/include/lwip.h", "bin/include/cryptography.h", "bin/include/parsers.h", "bin/include/wireless.h", "bin/include/lwip"]
+
+[app]
+name = "lwIP"
+init = "lwip_init_runtime_internal"
+linker_script = "build-tools/meta/linker_script_lwip.ld"
+installer_patches = ["build-tools/patches/app_tools-installer-lwip.patch"]
+imports = [
+    "usb_ResetDevice",
+    "usb_DisableDevice",
+    "usb_RefDevice",
+    "usb_UnrefDevice",
+    "usb_SetDeviceData",
+    "usb_GetDeviceData",
+    "usb_GetRole",
+    "usb_GetDeviceFlags",
+    "usb_ScheduleTransfer",
+    "usb_ControlTransfer",
+    "usb_GetConfigurationDescriptorTotalLength",
+    "usb_GetDescriptor",
+    "usb_GetStringDescriptor",
+    "usb_SetConfiguration",
+    "usb_SetInterface",
+    "usb_GetDeviceEndpoint",
+    "usb_SetEndpointData",
+    "usb_GetEndpointData",
+    "usb_SetEndpointFlags",
+    "usb_SetEndpointHalt",
+    "usb_Init",
+    "usb_HandleEvents",
+    "usb_Cleanup",
+    "usb_FindDevice",
+    "usb_ScheduleControlTransfer",
+    "ti_Open",
+    "ti_Close",
+    "ti_Write",
+    "ti_Read",
+    "ti_GetSize",
+    "ti_Seek",
+    "ti_Resize",
+    "ti_SetArchiveStatus",
+    "ti_Delete",
+    "ti_GetDataPtr",
+]
+
+[app.make]
+ICON = "icon.png"
+DESCRIPTION = '"lwIP-CE Network Stack"'
+APPLICATION_DESCRIPTION = '"lwIP-CE Network Stack"'
+COMPRESSED = "NO"
+ARCHIVED = "NO"
+LTO = "NO"
+CFLAGS = "-Wall -Wextra -Oz -I src/include"
+CXXFLAGS = "-Wall -Wextra -Oz -I src/include"
+ASFLAGS = "-I src/tls/core -I src/tls/core/share"
+BSSHEAP_HIGH = "0xD072C6"
+
+[[step]]
+run = ["env", "LWIP_EXPORTS=obj/libify/functable.s", "LWIP_RELEASE_DIR=bin/include", "python3", "build-tools/scripts/generate_lwip_headers.py"]

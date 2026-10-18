@@ -33,7 +33,6 @@ permissions:
 env:
   CEDEV: ${{ github.workspace }}/CEdev
   CEDEV_BIN: ${{ github.workspace }}/CEdev/bin
-  TOOLCHAIN_SRC: ${{ github.workspace }}/toolchain
 
 jobs:
   analyze:
@@ -116,64 +115,33 @@ jobs:
         run: |
           echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
 
-      - name: Checkout CEdev toolchain source
-        uses: actions/checkout@v4
-        with:
-          repository: CE-Programming/toolchain
-          ref: ${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
-          path: ${{ env.TOOLCHAIN_SRC }}
-          submodules: recursive
-          persist-credentials: false
-
       - name: Checkout fixed convbin branch
         uses: actions/checkout@v4
         with:
           repository: mateoconlechuga/convbin
           ref: R_Z80_BYTE012
-          path: ${{ env.TOOLCHAIN_SRC }}/tools/convbin
+          path: ${{ github.workspace }}/convbin
           submodules: recursive
           persist-credentials: false
 
-      - name: Build toolchain fasmg support
-        run: |
-          make -C "${{ env.TOOLCHAIN_SRC }}/tools/fasmg"
-          cd "${{ env.TOOLCHAIN_SRC }}/tools/fasmg/fasmg-ez80"
-          ./bin/install_fasmg
-          cmake -E copy bin/fasmg "${{ env.CEDEV_BIN }}/fasmg"
-          test "$(command -v fasmg)" = "${{ env.CEDEV_BIN }}/fasmg"
-          fasmg /dev/null /dev/null
-
       - name: Build fixed convbin from source
         run: |
-          test -f "${{ env.TOOLCHAIN_SRC }}/tools/convbin/Makefile"
-          make -C "${{ env.TOOLCHAIN_SRC }}/tools/convbin" clean || true
-          make -C "${{ env.TOOLCHAIN_SRC }}/tools/convbin" -j"$(nproc)"
-          cmake -E copy "${{ env.TOOLCHAIN_SRC }}/tools/convbin/bin/convbin" "${{ env.CEDEV_BIN }}/convbin"
+          make -C "${{ github.workspace }}/convbin" -j"$(nproc)"
+          cmake -E copy "${{ github.workspace }}/convbin/bin/convbin" "${{ env.CEDEV_BIN }}/convbin"
           "${{ env.CEDEV_BIN }}/convbin" --version || true
 
-      # TEMPORARY: the v15.0 release CEdev/meta/makefile.mk hard-assigns
-      # LINKER_SCRIPT with `=`/`:=`, so our makefile's
-      # `LINKER_SCRIPT = build-tools/meta/linker_script_lwip.ld` cannot win and the app links
-      # against the stock script (missing our overlay/PROVIDE symbols ->
-      # undefined references). master already fixed this to `?=`. Patch the
-      # release meta in place to `?=` so our assignment takes effect.
-      # REMOVE this step once a CEdev release ships the `?=` fix.
-      - name: Patch CEdev meta LINKER_SCRIPT to ?= (temporary)
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install ce-libify
         run: |
-          META="${{ env.CEDEV }}/meta/makefile.mk"
-          sed -i -E 's/^([[:space:]]*LINKER_SCRIPT[[:space:]]*):?=([^=])/\1?=\2/' "$META"
+          git clone --depth 1 --branch "${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}" https://github.com/alessiodam/toolchain_libify.git "${{ runner.temp }}/ce-libify"
+          make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
+          ce-libify --version
 
       - name: make dylib (traced by CodeQL)
-        env:
-          LWIP_SKIP_DEP_CHECKOUT: '1'
-          APP_TOOLS_DIR: ${{ github.workspace }}/submodules/app_tools
-          TOOLCHAIN_DIR: ${{ env.TOOLCHAIN_SRC }}
-          TOOLCHAIN_SRC: ${{ env.TOOLCHAIN_SRC }}/src
-          CEDEV: ${{ env.CEDEV }}
-          FASMG: fasmg
-          CONVBIN: ${{ env.CEDEV_BIN }}/convbin
-          HEADER_PYTHON: python3
-        run: ./build-tools/build-release-dylib.sh
+        run: make dylib
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
