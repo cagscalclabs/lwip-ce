@@ -1,5 +1,9 @@
 	library	LWIP, 1
 
+	export	lwip_start_with_crt
+	export	lwip_get_start_errno
+	export	lwip_get_start_errstring
+	export	lwip_is_newer
 	export	lwip_init_runtime_internal
 	export	lwip_start_last_error
 	export	lwip_network_up
@@ -446,7 +450,3 @@
 	export	lwip_detach_usb_callback
 	export	lwip_version_string
 	export	tls_rng_compute_stats
-	export	lwip_start_with_crt
-	export	lwip_get_start_errno
-	export	lwip_get_start_errstring
-	export	lwip_is_newer

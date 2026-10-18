@@ -110,12 +110,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD_TOOLS_DIR = REPO_ROOT / "build-tools"
 SRC_DIR = REPO_ROOT / "src"
 OBJ_DIR = REPO_ROOT / "obj" / "src"
-FUNCTABLE_S = SRC_DIR / "functable.s"
+FUNCTABLE_S = REPO_ROOT / os.environ.get("LWIP_FUNCTABLE", "src/functable.s")
 PUBLIC_API_MANIFEST = BUILD_TOOLS_DIR / "meta" / "public_api_manifest.csv"
 CONN_SRC = SRC_DIR / "lwIP.h"
 TLS_INCLUDES = SRC_DIR / "tls" / "includes"
 
-OUT_ROOT = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build"))
+OUT_ROOT = REPO_ROOT / os.environ.get("LWIP_RELEASE_DIR", "build")
 OUT_DIR = OUT_ROOT / "lwip"
 OUT_CORE_INDEX = OUT_ROOT / "lwip.h"
 OUT_CRYPTO_INDEX = OUT_ROOT / "cryptography.h"
