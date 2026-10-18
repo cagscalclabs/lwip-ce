@@ -17,8 +17,9 @@ Pruning strategy:
 
   1. build-tools/meta/public_api_manifest.csv is the manual allowlist. Its category
      column chooses socket/core/cryptography output placement.
-  2. The libload export table (src/functable.s) is the build-filtered
-     surface: manifest functions that were visible at compile time.
+  2. The ordered libload export manifest (exports.txt) is the canonical
+     surface. Dylib builds may instead provide their generated assembly
+     table through LWIP_EXPORTS to reflect the exact compiled surface.
   3. For each manifest source header, libclang identifies FunctionDecls.
      Any decl whose name is *not* in the export table gets stripped
      out of the copy (along with its preceding doxygen block).
@@ -32,8 +33,8 @@ Run from repo root:
 
     python3 build-tools/scripts/generate_lwip_headers.py
 
-A build must have been run first so obj/src/**/*.o exists; otherwise
-the script can't tell which functions are actually defined.
+The default exports.txt input works from a clean checkout. Dylib builds pass
+their generated table explicitly after compilation.
 """
 
 from __future__ import annotations
@@ -110,12 +111,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD_TOOLS_DIR = REPO_ROOT / "build-tools"
 SRC_DIR = REPO_ROOT / "src"
 OBJ_DIR = REPO_ROOT / "obj" / "src"
-FUNCTABLE_S = SRC_DIR / "functable.s"
+EXPORTS_SOURCE = REPO_ROOT / os.environ.get(
+    "LWIP_EXPORTS",
+    os.environ.get("LWIP_FUNCTABLE", "exports.txt"),
+)
 PUBLIC_API_MANIFEST = BUILD_TOOLS_DIR / "meta" / "public_api_manifest.csv"
 CONN_SRC = SRC_DIR / "lwIP.h"
 TLS_INCLUDES = SRC_DIR / "tls" / "includes"
 
-OUT_ROOT = Path(os.environ.get("LWIP_RELEASE_DIR", REPO_ROOT / "build"))
+OUT_ROOT = REPO_ROOT / os.environ.get("LWIP_RELEASE_DIR", "build")
 OUT_DIR = OUT_ROOT / "lwip"
 OUT_CORE_INDEX = OUT_ROOT / "lwip.h"
 OUT_CRYPTO_INDEX = OUT_ROOT / "cryptography.h"
@@ -207,6 +211,7 @@ CFLAGS = [
 
 ENTRY_RE = re.compile(
     r"^\s*(?:d24|dl)\s+(_[A-Za-z_][A-Za-z0-9_]*)\s*(?:-\s*app\s*)?$")
+PLAIN_EXPORT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 STD_HEADER_TYPES = {
     "bool": "<stdbool.h>",
@@ -453,15 +458,35 @@ OPAQUE_STRUCTS = {
 # ---------------------------------------------------------------------
 
 def load_exports() -> set[str]:
-    """Read the unmangled symbol names from src/functable.s. The table
-    entries are `d24 _foo - app`; we strip the leading underscore so
-    the result matches the C function name as libclang reports it."""
+    """Read exports.txt or a generated assembly export table.
+
+    Plain-text manifests contain one unmangled C symbol per line. Assembly
+    entries use ``d24 _foo`` or ``dl _foo - app``; their leading underscore
+    is removed to match the names reported by libclang.
+    """
     syms: set[str] = set()
-    with FUNCTABLE_S.open() as fh:
-        for line in fh:
+    plain_text = EXPORTS_SOURCE.suffix.lower() == ".txt"
+    with EXPORTS_SOURCE.open() as fh:
+        for line_number, line in enumerate(fh, start=1):
             m = ENTRY_RE.match(line)
             if m:
-                syms.add(m.group(1)[1:])
+                symbol = m.group(1)[1:]
+            elif plain_text:
+                symbol = line.partition("#")[0].strip()
+                if not symbol:
+                    continue
+                if not PLAIN_EXPORT_RE.fullmatch(symbol):
+                    raise ValueError(
+                        f"{EXPORTS_SOURCE}:{line_number}: invalid export {symbol!r}"
+                    )
+            else:
+                continue
+
+            if symbol in syms:
+                raise ValueError(
+                    f"{EXPORTS_SOURCE}:{line_number}: duplicate export {symbol}"
+                )
+            syms.add(symbol)
     return syms
 
 
@@ -2260,14 +2285,26 @@ def main() -> int:
 
     PRELUDE_PATH.write_text(PRELUDE)
 
-    if not FUNCTABLE_S.is_file():
-        print(f"ERROR: {FUNCTABLE_S} not found — run `make functable` first",
+    if not EXPORTS_SOURCE.is_file():
+        print(f"ERROR: export source not found at {EXPORTS_SOURCE}",
               file=sys.stderr)
         return 1
 
-    exports = load_exports()
+    try:
+        exports = load_exports()
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    if not exports:
+        print(f"ERROR: no exports found in {EXPORTS_SOURCE}", file=sys.stderr)
+        return 1
+
+    try:
+        exports_label = EXPORTS_SOURCE.relative_to(REPO_ROOT)
+    except ValueError:
+        exports_label = EXPORTS_SOURCE
     print(f"==> loaded {len(exports)} exports from "
-          f"{FUNCTABLE_S.relative_to(REPO_ROOT)}", file=sys.stderr)
+          f"{exports_label}", file=sys.stderr)
     manifest = load_public_api_manifest()
     print(f"==> loaded {len(manifest)} manifest rows from "
           f"{PUBLIC_API_MANIFEST.relative_to(REPO_ROOT)}", file=sys.stderr)
