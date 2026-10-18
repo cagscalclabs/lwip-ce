@@ -446,6 +446,17 @@
 	export	lwip_detach_usb_callback
 	export	lwip_version_string
 	export	tls_rng_compute_stats
+	export	lwip_wifi_available
+	export	lwip_wifi_get_state
+	export	lwip_wifi_list_profiles
+	export	lwip_wifi_scan
+	export	lwip_wifi_save_profile
+	export	lwip_wifi_forget_profile
+	export	lwip_wifi_enable_profile
+	export	lwip_wifi_prefer_profile
+	export	lwip_wifi_connect
+	export	lwip_wifi_disconnect
+	export	lwip_wifi_set_event_cb
 	export	lwip_start_with_crt
 	export	lwip_get_start_errno
 	export	lwip_get_start_errstring

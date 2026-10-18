@@ -120,6 +120,7 @@ OUT_DIR = OUT_ROOT / "lwip"
 OUT_CORE_INDEX = OUT_ROOT / "lwip.h"
 OUT_CRYPTO_INDEX = OUT_ROOT / "cryptography.h"
 OUT_PARSERS_INDEX = OUT_ROOT / "parsers.h"
+OUT_WIRELESS_INDEX = OUT_ROOT / "wireless.h"
 
 # The socket convenience API is inlined directly at the TOP of lwip.h so it is
 # the visibly-preferred surface (not buried among the core headers). This holds
@@ -387,6 +388,7 @@ def source_dependency_closure(initial_headers: list[Path]) -> list[Path]:
         # exported surface (see build-tools/meta/public_api_manifest.csv).
         (SRC_DIR / "tls" / "contrib" / "x25519" / "src").resolve(),
         (SRC_DIR / "parsers").resolve(),
+        (SRC_DIR / "wireless").resolve(),
     ]
 
     def allowed(path: Path) -> bool:
@@ -1208,7 +1210,7 @@ def should_emit_source_decl(group: str, header: Path, cur: C.Cursor) -> bool:
     header_rel = header.relative_to(REPO_ROOT).as_posix()
     if cur.spelling in FORCE_SOURCE_DECLS_BY_HEADER.get(header_rel, set()):
         return cursor_in_file(cur, header)
-    if group in ("cryptography", "parsers"):
+    if group in ("cryptography", "parsers", "wireless"):
         return cursor_in_file(cur, header)
     if group == "core" and header_rel in SOURCE_DECL_OWNER_HEADERS:
         return cursor_in_file(cur, header)
@@ -1380,7 +1382,7 @@ def synthetic_header_body(
     header_rel = header.relative_to(REPO_ROOT).as_posix()
     if (
         support_only or
-        group in ("cryptography", "parsers") or
+        group in ("cryptography", "parsers", "wireless") or
         header_rel in SOURCE_DECL_OWNER_HEADERS or
         header_rel in FORCE_SOURCE_DECLS_BY_HEADER or
         header == CONN_SRC
@@ -1914,6 +1916,8 @@ def output_group_for(row: dict[str, str]) -> str:
         return "cryptography"
     if row["category"] == "parsers":
         return "parsers"
+    if row["category"] == "wireless":
+        return "wireless"
     return "core"
 
 
@@ -1935,6 +1939,8 @@ def write_group_index(group: str, names: list[str], source_headers: list[Path]) 
         out_path = OUT_CORE_INDEX
     elif group == "parsers":
         out_path = OUT_PARSERS_INDEX
+    elif group == "wireless":
+        out_path = OUT_WIRELESS_INDEX
     else:
         out_path = OUT_CRYPTO_INDEX
     guard = derive_guard(out_path)
@@ -2274,7 +2280,7 @@ def main() -> int:
 
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
-    for aggregate in (OUT_CRYPTO_INDEX, OUT_PARSERS_INDEX):  # OUT_CORE_INDEX (lwip.h) is hand-maintained
+    for aggregate in (OUT_CRYPTO_INDEX, OUT_PARSERS_INDEX, OUT_WIRELESS_INDEX):  # OUT_CORE_INDEX (lwip.h) is hand-maintained
         if aggregate.exists():
             aggregate.unlink()
     OUT_DIR.mkdir(parents=True)

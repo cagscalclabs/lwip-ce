@@ -19,14 +19,16 @@ on:
       - 'build-tools/**'
       - 'tests/**'
       - '!tests/dast.json'
+      - 'examples/wifi_*/**'
       - '.github/workflows/build.yml'
   push:
-    branches: [master]
+    branches: [master, wireless]
     paths:
       - 'src/**'
       - 'build-tools/**'
       - 'tests/**'
       - '!tests/dast.json'
+      - 'examples/wifi_*/**'
       - '.github/workflows/build.yml'
 
 permissions:
@@ -59,7 +61,7 @@ jobs:
           # build input -- hashing it here would invalidate the sentinel cache
           # (forcing a rebuild) on every report commit even when nothing that
           # actually needs rebuilding changed.
-          echo "hash=${{ hashFiles('src/**', 'build-tools/**', 'tests/unit/**', 'tests/host/**', 'tests/common/**', 'tests/profiling/**', '.github/workflows/build.yml') }}" >> "$GITHUB_OUTPUT"
+          echo "hash=${{ hashFiles('src/**', 'build-tools/**', 'examples/wifi_*/**', 'tests/unit/**', 'tests/host/**', 'tests/common/**', 'tests/profiling/**', '.github/workflows/build.yml') }}" >> "$GITHUB_OUTPUT"
       - name: Check sentinel cache
         id: cache
         uses: actions/cache/restore@v5
@@ -190,6 +192,23 @@ jobs:
           test -d "${{ env.CEDEV }}/include/lwip"
           test -f "${{ github.workspace }}/lwip.zip"
 
+      - name: build Wi-Fi examples
+        id: make_wifi_examples
+        run: |
+          make -C examples/wifi_ping
+          make -C examples/wifi_api
+          mkdir -p wifi-examples
+          cp examples/wifi_ping/bin/LWPING.8xp examples/wifi_api/bin/LWWIFI.8xp wifi-examples/
+
+      - name: upload Wi-Fi examples artifact
+        id: upload_wifi_examples
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-wifi-examples
+          path: ${{ github.workspace }}/wifi-examples/
+          if-no-files-found: error
+
       - name: upload build artifact
         id: upload_build_artifact
         if: success()
@@ -218,6 +237,7 @@ jobs:
             echo "|------|--------|"
             echo "| make dylib-release | ${{ steps.make_dylib.outcome }} |"
             echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
+            echo "| build Wi-Fi examples | ${{ steps.make_wifi_examples.outcome }} |"
             echo "| upload build artifact | ${{ steps.upload_build_artifact.outcome }} |"
             echo "| upload release zip artifact | ${{ steps.upload_zip_artifact.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"

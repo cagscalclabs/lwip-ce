@@ -57,6 +57,123 @@ If you leave ``BSSHEAP_LOW`` at the default, your program's BSS and lwIP-CE's
 will overlap, and you will have very bad things happen.
 
 
+USB Device Mode and the Wi-Fi Bridge
+------------------------------------
+
+With a USB Ethernet adapter the calculator is the USB host. With the lwIP-CE
+Wi-Fi bridge the roles flip: the bridge is the host and the calculator is a USB
+device, so the stock calculator cable works. ``usb_ethernet.c`` handles both;
+which one applies is decided by the cable (``usb_GetRole()``).
+
+As a device the calculator presents a CDC-ACM configuration (``16c0:05e1``,
+"lwIP Wi-Fi") with a notification endpoint ``0x82``, bulk OUT ``0x04`` and bulk
+IN ``0x83``, 64 bytes each. CDC-ACM is used instead of CDC-ECM because its
+configuration descriptor fits in a single 64-byte control packet and every
+USB host stack has a driver for it. The calculator answers the class requests
+itself:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Request
+     - Handling
+   * - ``SET_LINE_CODING`` / ``GET_LINE_CODING``
+     - Accepted and echoed back; the values have no effect.
+   * - ``SET_CONTROL_LINE_STATE``
+     - DTR sets the netif link: the bridge raises DTR only while Wi-Fi is
+       connected.
+   * - ``SET_NET_ADDRESS`` (``0x82``)
+     - Six bytes, the MAC the netif uses. The bridge sends its Wi-Fi station
+       MAC, since a station may only transmit from its own address.
+
+When the host selects the configuration (``USB_HOST_CONFIGURE_EVENT``), an
+``en`` netif is created on the bulk endpoints. Each USB transfer carries one
+Ethernet frame. The calculator ends IN transfers with a short or zero-length
+packet (``USB_AUTO_TERMINATE``); the bridge pads frames whose length is a
+multiple of 64 bytes by one byte, so every OUT transfer also ends short and the
+calculator's 1536-byte receive transfers complete per frame. The trailing byte
+is ignored by IP. In device mode the receive transfer stays armed while the
+link is down, so control frames still arrive when Wi-Fi is offline.
+
+On the bridge, frames from the calculator go straight out of the Wi-Fi station
+interface and everything the station receives goes back to the calculator. The
+bridge runs no IP stack on Wi-Fi; the calculator gets its address from the
+network's DHCP server.
+
+Wi-Fi Control Frames
+~~~~~~~~~~~~~~~~~~~~
+
+``lwip/wireless/wifi.h`` talks to the bridge with Ethernet frames of EtherType
+``0x88B5`` (IEEE local experimental) on the same link. The bridge consumes
+them and never forwards them to Wi-Fi. On the calculator they are picked up by
+``LWIP_HOOK_UNKNOWN_ETH_PROTOCOL``. All multi-byte values are little-endian and
+strings are a length byte followed by the bytes, without a terminator.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Offset
+     - Field
+   * - 0
+     - Destination MAC (``ff:ff:ff:ff:ff:ff`` for requests and events)
+   * - 6
+     - Source MAC
+   * - 12
+     - EtherType ``0x88B5``
+   * - 14
+     - Protocol version, ``1``
+   * - 15
+     - Operation; replies set bit 7
+   * - 16
+     - Sequence number, echoed in the reply
+   * - 17
+     - Status in replies: 0 ok, 1 bad request, 2 not found, 3 full
+   * - 18
+     - Body
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 22 64
+
+   * - Op
+     - Name
+     - Body
+   * - 1
+     - Status
+     - Reply: connected, slot, RSSI, channel, BSSID (6), saved count, SSID.
+   * - 2
+     - List
+     - Reply: count, then per network slot, flags, security, SSID.
+   * - 3
+     - Scan
+     - Reply: count, then per network RSSI, channel, security, SSID.
+   * - 4
+     - Save
+     - Request: slot (``0xFF`` adds), security, flags, SSID, password (empty
+       keeps the stored one). Reply: slot used.
+   * - 5
+     - Forget
+     - Request: slot.
+   * - 6
+     - Enable
+     - Request: slot, enabled.
+   * - 7
+     - Prefer
+     - Request: slot.
+   * - 8
+     - Connect
+     - Request: slot, or ``0xFF`` to resume automatic joining.
+   * - 9
+     - Disconnect
+     - None.
+   * - 64
+     - Event
+     - Sent unprompted as op ``0xC0`` when Wi-Fi connects or drops; body as Status.
+
+Saved networks live in the bridge's NVS under the ``lwip_wifi`` namespace.
+
 TLS Details
 ------------
 

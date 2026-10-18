@@ -480,10 +480,21 @@
 .extern _lwip_detach_usb_callback
 .extern _lwip_version_string
 .extern _tls_rng_compute_stats
+.extern _lwip_wifi_available
+.extern _lwip_wifi_get_state
+.extern _lwip_wifi_list_profiles
+.extern _lwip_wifi_scan
+.extern _lwip_wifi_save_profile
+.extern _lwip_wifi_forget_profile
+.extern _lwip_wifi_enable_profile
+.extern _lwip_wifi_prefer_profile
+.extern _lwip_wifi_connect
+.extern _lwip_wifi_disconnect
+.extern _lwip_wifi_set_event_cb
 
 _fn_exports_table:
     db 'L','W','I','P','T','B'    ; magic
-    d24 446    ; entry count
+    d24 457    ; entry count
 
 ; --- src/core/lwip_runtime.c ---
     d24 _lwip_init_runtime_internal
@@ -1072,3 +1083,16 @@ _fn_exports_table:
 
 ; --- src/tls/core/random.c ---
     d24 _tls_rng_compute_stats
+
+; --- src/wireless/wifi.c ---
+    d24 _lwip_wifi_available
+    d24 _lwip_wifi_get_state
+    d24 _lwip_wifi_list_profiles
+    d24 _lwip_wifi_scan
+    d24 _lwip_wifi_save_profile
+    d24 _lwip_wifi_forget_profile
+    d24 _lwip_wifi_enable_profile
+    d24 _lwip_wifi_prefer_profile
+    d24 _lwip_wifi_connect
+    d24 _lwip_wifi_disconnect
+    d24 _lwip_wifi_set_event_cb

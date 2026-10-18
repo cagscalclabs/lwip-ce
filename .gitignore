@@ -91,3 +91,9 @@ service-releases
 tests/common/*.8xp
 tests/common/*.8xv
 tests/common/*.8xg
+
+# Wi-Fi bridge firmware and tools
+wifi_bridge/build/
+wifi_bridge/managed_components/
+wifi_bridge/sdkconfig.old
+wifi_tools/.lwip-installed

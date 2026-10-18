@@ -13,6 +13,8 @@ lwIP-CE is a port of the `lwIP <https://www.nongnu.org/lwip/2_1_x/>`_ network st
 lwIP-CE is a full TCP/IP stack providing:
 
 - A USB CDC class Ethernet driver supporting ECM and NCM.
+- Wi-Fi through the lwIP-CE Wi-Fi bridge, including scanning and saved-network
+  management from calculator programs.
 - A membuffer driver designed to optimize resource ownership in a device that has very little RAM.
 - A minimalistic TLS 1.3 client.
 - An assortment of cryptographic primitives.
@@ -26,8 +28,10 @@ Requirements
 -------------
 
 - A TI-84+ CE or TI-84+ CE Python Edition graphing calculator.
-- A USB Ethernet adapter compliant with **Communications Data Class (CDC)** subtype ECM or NCM. [#cdcnote]_
-- An Ethernet cable connected to a switch, router, or an Ethernet-compatible WPS Wi-Fi adapter.
+- One of:
+
+  - A USB Ethernet adapter compliant with **Communications Data Class (CDC)** subtype ECM or NCM, and an Ethernet cable connected to a switch, router, or an Ethernet-compatible WPS Wi-Fi adapter. [#cdcnote]_
+  - The lwIP-CE Wi-Fi bridge (an ESP32-P4 board running ``wifi_bridge/``) and the calculator's stock USB cable. See :doc:`using-wifi`.
 - Software for transferring the appropriate files to your calculator (TI Connect CE, TiLp2).
 - **As developer**, the CE C toolchain, lwIP headers and .lib file.
 
@@ -47,6 +51,7 @@ Where to start
 
 - :doc:`getting-started`: Installation, configuration, basic stack flow.
 - :doc:`using-the-network`: Using sockets, PCBs, and networking details.
+- :doc:`using-wifi`: The Wi-Fi bridge and the Wi-Fi control API.
 - :doc:`parsing`: Using the JSON, XML, and URL encode parsers.
 - :doc:`using-cryptography`: Using the cryptography subsystem.
 - :doc:`debugging`: Using the stack debugging tools.

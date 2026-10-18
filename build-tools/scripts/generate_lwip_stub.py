@@ -93,6 +93,8 @@ USB_VTABLE_IMPORTS = [
     "usb_Init",
     "usb_HandleEvents",
     "usb_Cleanup",
+    "usb_FindDevice",
+    "usb_ScheduleControlTransfer",
 ]
 
 FILEIO_VTABLE_IMPORTS = [
@@ -130,6 +132,7 @@ SCAN_DIRS = [
     SRC_DIR / "tls" / "core",
     SRC_DIR / "apps",
     SRC_DIR / "parsers",
+    SRC_DIR / "wireless",
 ]
 
 # Specific .c files at src/ root that *are* part of the library (vs
