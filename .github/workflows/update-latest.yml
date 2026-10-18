@@ -158,7 +158,7 @@ jobs:
           HEAD_SHA: ${{ needs.check_artifact_changed.outputs.head_sha }}
         run: |
           declare -A PATHS
-          PATHS[build.yml]="src/** build-tools/** tests/** !tests/dast.json .github/workflows/build.yml"
+          PATHS[build.yml]="src/** build-tools/** ce-libify.toml exports.txt makefile tests/** !tests/dast.json .github/workflows/build.yml"
           PATHS[cavp.yml]="src/** tests/profiling/tls_cavp/** tests/common/** .github/workflows/cavp.yml"
           PATHS[timing.yml]="src/** tests/profiling/tls_timing/** tests/common/** .github/workflows/timing.yml"
           PATHS[tests.yml]="src/** tests/unit/** tests/common/** .github/workflows/tests.yml"
