@@ -444,3 +444,7 @@ lwip_attach_usb_callback
 lwip_detach_usb_callback
 lwip_version_string
 tls_rng_compute_stats
+lwip_start_with_crt
+lwip_get_start_errno
+lwip_get_start_errstring
+lwip_is_newer
