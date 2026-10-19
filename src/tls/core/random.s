@@ -126,7 +126,11 @@ _tls_random_init_entropy:
     jr .Linit_return
 
 .Linit_fail:
+    ; Never expose a stale or partially selected source after failure.
+    ld hl,0
+    ld (_sprng_read_addr),hl
     xor a,a
+    ld (_sprng_read_mask),a
 .Linit_return:
     pop iy
     pop ix

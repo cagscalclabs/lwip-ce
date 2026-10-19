@@ -1,6 +1,6 @@
 {
     "capture_format": "cagscalclabs-rngstats-v2",
-    "model": "TI-84 Plus CE / L-0719M",
+    "model": "TI-84 Plus CE / M",
     "estimator": "binary marginal MCV and coarse first-order Markov estimates",
     "confidence": "99% upper bounds (MCV normal z=2.576; Markov simultaneous Wilson with Bonferroni-adjusted z=2.807034)",
     "scope_warning": "The Markov result is a coarse first-order dependence bound, not a complete SP 800-90B non-IID entropy assessment; longer-range dependence can reduce actual min-entropy.",

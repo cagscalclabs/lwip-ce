@@ -63,6 +63,10 @@ static void output_close(bool archive)
     }
     (void)ti_Close(output_handle);
     output_handle = 0u;
+    if (!archive)
+    {
+        (void)ti_Delete(RNG_STATS_APPVAR);
+    }
 }
 
 static void print_q16_percent(const char *label, uint32_t value)
@@ -174,7 +178,7 @@ int main(void)
     else
     {
         printf("Profile failed\n");
-        printf("partial output left\n");
+        printf("partial output discarded\n");
     }
     printf("Press any key\n");
     os_GetKey();

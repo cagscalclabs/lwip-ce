@@ -74,6 +74,10 @@ live DRBG state or restoring an earlier calculator state.
    if necessary. SP 800-90B repetition-count and adaptive-proportion tests run
    continuously on the selected raw bit as random data is gathered; no
    separate periodic health-test callback or output-sample test is used.
+   Initial automatic source discovery is limited to two complete scans per RNG
+   lifecycle. If neither scan finds a usable tap, later RNG operations fail
+   immediately instead of repeatedly rescanning. A successful explicit
+   ``tls_random_init_entropy()`` call or an lwIP restart permits recovery.
 
    :returns: ``true`` if the RNG is healthy and safe to use, ``false``
       otherwise. On ``false``, retry ``tls_random_init_entropy()`` or abort.
@@ -131,7 +135,9 @@ live DRBG state or restoring an earlier calculator state.
    by ``tls_random_init_entropy()``. ``sample_count`` must be between
    ``TLS_RNG_STATS_MIN_SAMPLES`` (256) and
    ``TLS_RNG_STATS_MAX_SAMPLES`` (65535), inclusive. The function refuses to
-   run before source selection or while the RNG request engine is busy.
+   run before source selection or while the RNG request engine is busy. On
+   failure, a non-NULL ``stats`` structure is cleared so stale measurements
+   cannot be mistaken for a successful capture.
 
    The result reports the source address and one-hot bit mask, zero and one
    counts, the four adjacent-pair counts (``pairs_00`` through ``pairs_11``),
