@@ -2,12 +2,17 @@ dependencies:
   espressif/usb: "*"
   espressif/usb_host_cdc_acm: "^2.0.0"
   espressif/esp_wifi_remote:
+    # Only the P4 needs these: it reaches its Wi-Fi co-processor over SDIO.
+    rules:
+      - if: "target == esp32p4"
     matches:
       - if: "idf_version >= 6.0"
         version: ">=1.6,<2.0"
       - if: "idf_version < 6.0"
         version: "0.14.*"
   espressif/esp_hosted:
+    rules:
+      - if: "target == esp32p4"
     matches:
       - if: "idf_version >= 6.0"
         version: ">=2.12,<3.0"

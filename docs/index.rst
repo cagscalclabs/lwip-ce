@@ -31,7 +31,7 @@ Requirements
 - One of:
 
   - A USB Ethernet adapter compliant with **Communications Data Class (CDC)** subtype ECM or NCM, and an Ethernet cable connected to a switch, router, or an Ethernet-compatible WPS Wi-Fi adapter. [#cdcnote]_
-  - The lwIP-CE Wi-Fi bridge (an ESP32-P4 board running ``wifi_bridge/``) and the calculator's stock USB cable. See :doc:`using-wifi`.
+  - The lwIP-CE Wi-Fi bridge (an ESP32-S3 or ESP32-P4 board running ``wifi_bridge/``) and the calculator's stock USB cable. See :doc:`using-wifi`.
 - Software for transferring the appropriate files to your calculator (TI Connect CE, TiLp2).
 - **As developer**, the CE C toolchain, lwIP headers and .lib file.
 

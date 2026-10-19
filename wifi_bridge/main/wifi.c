@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -231,6 +232,15 @@ void wifi_get_status(wifi_status_t *out)
     }
 }
 
+static void set_led(bool on)
+{
+#if CONFIG_BRIDGE_LED_GPIO >= 0
+    gpio_set_level(CONFIG_BRIDGE_LED_GPIO, on);
+#else
+    (void)on;
+#endif
+}
+
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -244,6 +254,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = false;
         s_joining = false;
         profiles_clear_active();
+        set_led(false);
         bridge_set_wifi(false);
         control_notify();
         /* Lost a working link: look for a network now. A failed join waits for
@@ -256,6 +267,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = true;
         s_joining = false;
         profiles_mark_active(s_slot);
+        set_led(true);
         bridge_set_wifi(true);
         control_notify();
     }
@@ -270,6 +282,11 @@ esp_err_t wifi_init(void)
     if (s_scan_lock == NULL) {
         return ESP_ERR_NO_MEM;
     }
+#if CONFIG_BRIDGE_LED_GPIO >= 0
+    gpio_reset_pin(CONFIG_BRIDGE_LED_GPIO);
+    gpio_set_direction(CONFIG_BRIDGE_LED_GPIO, GPIO_MODE_OUTPUT);
+    set_led(false);
+#endif
 
     err = profiles_init();
     if (err != ESP_OK) {

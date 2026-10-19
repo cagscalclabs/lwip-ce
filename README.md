@@ -32,7 +32,7 @@
 
 # lwIP-CE
 
-**lwIP** is a small networking stack built for low-resource embedded systems, maintained by [nonGNU](https://github.com/lwip-tcpip/lwip). **lwIP-CE** is a fork of it targeting the Texas Instruments TI-84+ CE graphing calculator, shipped as a dynamic library (libload) with a TLS 1.3 client stack, a USB CDC-ECM/NCM Ethernet driver, Wi-Fi through an ESP32-P4 bridge (firmware in [`wifi_bridge/`](./wifi_bridge)), and an app-facing socket API. The original upstream readme is [here](./README-ORIG.md).
+**lwIP** is a small networking stack built for low-resource embedded systems, maintained by [nonGNU](https://github.com/lwip-tcpip/lwip). **lwIP-CE** is a fork of it targeting the Texas Instruments TI-84+ CE graphing calculator, shipped as a dynamic library (libload) with a TLS 1.3 client stack, a USB CDC-ECM/NCM Ethernet driver, Wi-Fi through an ESP32-S3 or ESP32-P4 bridge (firmware in [`wifi_bridge/`](./wifi_bridge)), and an app-facing socket API. The original upstream readme is [here](./README-ORIG.md).
 
 **Full documentation, API reference, and getting-started guide:** **https://cagscalclabs.github.io/lwip-ce/index.html**
 

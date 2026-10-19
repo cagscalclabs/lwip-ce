@@ -154,7 +154,7 @@ Any program that uses networking needs either a USB CDC Ethernet adapter (CDC-EC
 
     ┌────────────┐   USB   ┌──────────────────┐   802.11   ┌────────┐
     │ Calculator │────────▶│ lwIP-CE Wi-Fi    │ ·  ·  ·  · │  Wi-Fi │
-    └────────────┘  stock  │ bridge (ESP32-P4)│            │ network│
+    └────────────┘  stock  │ bridge (ESP32)   │            │ network│
                     cable  └──────────────────┘            └────────┘
 
 Programs that only use the cryptography or parser APIs do not need any adapter.

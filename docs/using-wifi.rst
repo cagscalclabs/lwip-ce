@@ -2,7 +2,7 @@ Using Wi-Fi
 ===========
 
 lwIP-CE can reach a Wi-Fi network through the **lwIP-CE Wi-Fi bridge**, an
-ESP32-P4 board running the firmware in ``wifi_bridge/``. The calculator plugs
+ESP32-S3 or ESP32-P4 board running the firmware in ``wifi_bridge/``. The calculator plugs
 into the bridge with its stock USB cable and gets an ordinary Ethernet
 interface. Everything that works over a USB Ethernet adapter (DHCP, TCP, UDP,
 TLS, DNS) works the same way over the bridge.
@@ -21,8 +21,19 @@ manage saved networks. The lwIP-CE app uses the same API for its Wi-Fi screen.
 Hardware
 --------
 
-- An ESP32-P4 board with an ESP32-C6 companion connected over SDIO, and a USB-A
-  host port. The Waveshare ESP32-P4 Module Dev Kit works as is.
+One of these boards:
+
+- **The lwIP-CE bridge board** (firmware target ``esp32s3``, the default). The design is in
+  ``wifi_bridge/hardware``: KiCad project, BOM and placement files in ``fab/``,
+  and a printable enclosure. It is built around an ESP32-S3-WROOM-1-N16R8. The
+  USB-C port powers the board and carries the console through a CH340K, which
+  also handles reset and boot for flashing. The S3's own USB drives the USB-A
+  port for the calculator. The red LED is lit while the bridge is on Wi-Fi.
+- **A Waveshare ESP32-P4 Module Dev Kit** (target ``esp32p4``), which reaches its
+  ESP32-C6 Wi-Fi co-processor over SDIO. It works as is.
+
+You also need:
+
 - The cable that came with the calculator, plugged into the board's USB-A port.
   No OTG adapter is needed: the calculator is the USB device and the bridge is
   the USB host.
@@ -33,25 +44,35 @@ Setting Up
 ----------
 
 Flash the bridge once, then install lwIP-CE on the calculator as usual (see
-:doc:`getting-started`).
+:doc:`getting-started`). The firmware builds for the bridge board by default.
+For the ESP32-P4 kit, switch the target once (this resets
+``wifi_bridge/sdkconfig``; ``set-target esp32s3`` switches back):
+
+.. code-block:: text
+
+    idf.py -C wifi_bridge set-target esp32p4
+
+The bridge board's console shows up as ``/dev/ttyUSB0`` (CH340K); the ESP32-P4
+kit's as ``/dev/ttyACM0``.
 
 .. code-block:: text
 
     make dylib                                           # lwIP-CE release in build/
-    wifi_tools/push.sh --bridge /dev/ttyACM0             # flash the bridge, then push
+    wifi_tools/push.sh --bridge /dev/ttyUSB0             # flash the bridge, then push
                                                          # lwIP and the examples
     wifi_tools/push.sh                                   # calculator only
-    wifi_tools/push.sh --bridge /dev/ttyACM0 --bridge-only
+    wifi_tools/push.sh --bridge /dev/ttyUSB0 --bridge-only
     idf.py -C wifi_bridge monitor                        # bridge log
 
 ``wifi_tools/push.sh`` needs libticalcs2 (it builds a small ``calclink``
 helper) and, for ``--bridge``, ESP-IDF v6.1. Release builds of the firmware
-are produced by the ``wifi_bridge.yml`` workflow as
-``lwip_wifi_bridge-<version>-merged.bin``, which flashes at offset ``0x0``:
+are produced by the ``wifi_bridge.yml`` workflow for both targets as
+``lwip_wifi_bridge-<target>-<version>-merged.bin``, which flashes at offset
+``0x0``:
 
 .. code-block:: text
 
-    esptool.py --chip esp32p4 write_flash 0x0 lwip_wifi_bridge-<version>-merged.bin
+    esptool.py --chip esp32s3 write_flash 0x0 lwip_wifi_bridge-esp32s3-<version>-merged.bin
 
 The bridge starts with no saved networks. Open the lwIP-CE app on the
 calculator, choose **Wi-Fi**, then **Scan for networks** or **Add a network**.

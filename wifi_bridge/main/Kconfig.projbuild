@@ -8,4 +8,13 @@ config BRIDGE_LOG_TRAFFIC
         calculator and DHCP leases it receives. Useful when bringing up a
         new setup; costs CPU on every frame, so leave it off otherwise.
 
+config BRIDGE_LED_GPIO
+    int "Status LED GPIO (-1 for none)"
+    range -1 48
+    default 2 if IDF_TARGET_ESP32S3
+    default -1
+    help
+        Active-high LED that is lit while the bridge is joined to Wi-Fi.
+        The bridge board in wifi_bridge/hardware has it on GPIO2.
+
 endmenu
