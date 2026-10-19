@@ -1044,9 +1044,8 @@ for (uint8_t i = 0; i < count; i++) {
 		\inputminted[
 			breaklines,
 			breakanywhere,
-			fontsize=\footnotesize,
-			rangeregex={bool tls_request_random_bytes[(][^;]*;}
-		]{c}{../../src/tls/includes/random.h}
+			fontsize=\footnotesize
+		]{c}{generated/tls_request_random_bytes.h}
 	This:
 	\begin{itemize}
 		\item Registers a request for random bytes, a buffer to return those bytes into, and a callback to run when the request completes.

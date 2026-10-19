@@ -80,6 +80,10 @@ Algorithm Support
      - ``0x1301``
      - Done
    * - Record encryption
+     - AES-128-CCM-SHA256
+     - ``0x1304``
+     - Done
+   * - Record encryption
      - AES-256-GCM-SHA384
      - ``0x1302``
      - Not planned (optional per RFC 8446; contributions welcome)

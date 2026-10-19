@@ -100,7 +100,7 @@ for name in ['tls_cipher_blob_free', 'tls_cipher_encrypt', 'tls_cipher_encrypt_a
     source += function(key_source, name)
 source += hs[hs.index('enum tls_cert_walk_state'):hs.index('/* Feed body bytes into the walker.')]
 for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_digest',
-             'tls_parse_handshake_header', 'tls_x25519_shared_is_nonzero',
+             'tls_parse_handshake_header',
              'tls_handshake_init', 'tls_send_client_hello',
              'tls_recv_encrypted_extensions', 'tls_recv_certificate_request',
              'tls_recv_certificate_streamed', 'tls_certverify_rsa_pss_sha256',

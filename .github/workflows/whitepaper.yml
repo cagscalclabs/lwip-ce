@@ -6,6 +6,7 @@ on:
       - docs/whitepaper/whitepaper.tex
       - docs/whitepaper/scripts/**
       - docs/whitepaper/datasets/**
+      - src/tls/includes/random.h
       - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
       - .github/workflows/whitepaper.yml
       - statistics/rng/**
@@ -14,6 +15,7 @@ on:
       - docs/whitepaper/whitepaper.tex
       - docs/whitepaper/scripts/**
       - docs/whitepaper/datasets/**
+      - src/tls/includes/random.h
       - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
       - .github/workflows/whitepaper.yml
       - statistics/rng/**
@@ -50,7 +52,7 @@ jobs:
             docs/whitepaper/whitepaper.fls
             docs/whitepaper/whitepaper.out
             docs/whitepaper/whitepaper.toc
-          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('docs/whitepaper/whitepaper.tex', 'docs/whitepaper/scripts/**', 'docs/whitepaper/datasets/**', 'tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py', 'statistics/rng/**') }}
+          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('docs/whitepaper/whitepaper.tex', 'docs/whitepaper/scripts/**', 'docs/whitepaper/datasets/**', 'src/tls/includes/random.h', 'tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py', 'statistics/rng/**') }}
           restore-keys: |
             ${{ runner.os }}-whitepaper-build-
 

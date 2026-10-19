@@ -49,6 +49,7 @@ extern "C"
 
 /* Cipher Suites */
 #define TLS_AES_128_GCM_SHA256 0x1301
+#define TLS_AES_128_CCM_SHA256 0x1304
 
 /* Extension Types */
 #define TLS_EXT_SERVER_NAME 0x0000
@@ -192,7 +193,7 @@ extern "C"
         /* Handshake State */
         uint8_t client_random[32];
         uint8_t server_random[32];
-        uint16_t cipher_suite; /* TLS_AES_128_GCM_SHA256 */
+        uint16_t cipher_suite; /* Selected TLS 1.3 cipher suite. */
 
         /* Transcript Hash (running hash of all handshake messages) */
         struct tls_hash_context transcript_hash_storage; /* Embedded storage */
@@ -317,7 +318,7 @@ extern "C"
      * Creates a TLS 1.3 ClientHello with PSK extension for resumption or
      * PSK-only mode. The message includes:
      * - Random nonce
-     * - Cipher suite (TLS_AES_128_GCM_SHA256)
+     * - Cipher suites (TLS_AES_128_GCM_SHA256 and TLS_AES_128_CCM_SHA256)
      * - Extensions (supported_versions, psk_key_exchange_modes, pre_shared_key)
      * - PSK binder (HMAC of transcript)
      *

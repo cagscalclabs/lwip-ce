@@ -236,7 +236,37 @@ int main(void)
         status &= (tbuf[i] == 0);
     show_result(status);
 
-    // Test 10: AES192-CBC encrypt (NIST SP 800-38A F.2.3)
+    // Test 10: AES-CCM chunked encrypt and authentication-only decrypt
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    memset(tag, 0, sizeof(tag));
+    status &= tls_aes_ccm_init(&ctx, ccm_key, sizeof ccm_key,
+                               ccm_nonce_2, sizeof ccm_nonce_2,
+                               sizeof ccm_tag_2, sizeof ccm_plaintext_2,
+                               sizeof ccm_aad);
+    status &= tls_aes_update_aad(&ctx, ccm_aad, sizeof ccm_aad);
+    status &= tls_aes_encrypt(&ctx, ccm_plaintext_2, 5, tbuf);
+    status &= tls_aes_encrypt(&ctx, ccm_plaintext_2 + 5, 7, tbuf + 5);
+    status &= tls_aes_encrypt(&ctx, ccm_plaintext_2 + 12,
+                              sizeof ccm_plaintext_2 - 12, tbuf + 12);
+    status &= tls_aes_digest(&ctx, tag);
+    status &= memcmp(tbuf, ccm_ciphertext_2, sizeof ccm_ciphertext_2) == 0;
+    status &= memcmp(tag, ccm_tag_2, sizeof ccm_tag_2) == 0;
+
+    status &= tls_aes_ccm_init(&ctx, ccm_key, sizeof ccm_key,
+                               ccm_nonce_2, sizeof ccm_nonce_2,
+                               sizeof ccm_tag_2, sizeof ccm_ciphertext_2,
+                               sizeof ccm_aad);
+    status &= tls_aes_update_aad(&ctx, ccm_aad, sizeof ccm_aad);
+    status &= tls_aes_decrypt(&ctx, ccm_ciphertext_2, 3, NULL);
+    status &= tls_aes_decrypt(&ctx, ccm_ciphertext_2 + 3, 11, NULL);
+    status &= tls_aes_decrypt(&ctx, ccm_ciphertext_2 + 14,
+                              sizeof ccm_ciphertext_2 - 14, NULL);
+    status &= tls_aes_digest(&ctx, tag);
+    status &= memcmp(tag, ccm_tag_2, sizeof ccm_tag_2) == 0;
+    show_result(status);
+
+    // Test 11: AES192-CBC encrypt (NIST SP 800-38A F.2.3)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc192_key, sizeof cbc192_key, cbc_iv, sizeof cbc_iv);
@@ -244,7 +274,7 @@ int main(void)
     ok = status && (memcmp(tbuf, cbc192_ciphertext, sizeof cbc192_ciphertext) == 0);
     show_result(ok);
 
-    // Test 11: AES192-CBC decrypt (NIST SP 800-38A F.2.4)
+    // Test 12: AES192-CBC decrypt (NIST SP 800-38A F.2.4)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc192_key, sizeof cbc192_key, cbc_iv, sizeof cbc_iv);
@@ -252,7 +282,7 @@ int main(void)
     ok = status && (memcmp(tbuf, cbc_plaintext, sizeof cbc_plaintext) == 0);
     show_result(ok);
 
-    // Test 12: AES256-CBC encrypt (NIST SP 800-38A F.2.5)
+    // Test 13: AES256-CBC encrypt (NIST SP 800-38A F.2.5)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc256_key, sizeof cbc256_key, cbc_iv, sizeof cbc_iv);
@@ -260,7 +290,7 @@ int main(void)
     ok = status && (memcmp(tbuf, cbc256_ciphertext, sizeof cbc256_ciphertext) == 0);
     show_result(ok);
 
-    // Test 13: AES256-CBC decrypt (NIST SP 800-38A F.2.6)
+    // Test 14: AES256-CBC decrypt (NIST SP 800-38A F.2.6)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc256_key, sizeof cbc256_key, cbc_iv, sizeof cbc_iv);

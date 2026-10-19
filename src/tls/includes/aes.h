@@ -46,6 +46,8 @@ struct _ccm_private
     uint8_t s0[16];
     uint8_t msg_cache[16];
     uint8_t msg_cache_len;
+    uint8_t last_block[16];
+    uint8_t last_block_len;
     size_t aad_len_total;
     size_t aad_len;
     size_t msg_len;
