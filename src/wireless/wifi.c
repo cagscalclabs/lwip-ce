@@ -89,6 +89,13 @@ err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
     return ERR_OK;
 }
 
+void lwip_wifi_reset(void)
+{
+    g_waiting = false;
+    g_reply = NULL;
+    g_reply_len = 0;
+}
+
 static void pump(void)
 {
     usb_fn.handle_events();

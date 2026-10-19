@@ -188,3 +188,14 @@ When the end user runs the lwIP-CE app directly on the calculator, a configurati
 
 These are end-user settings, not build-time flags — application code cannot
 override them.
+
+Building from Source
+--------------------
+
+Run ``make dylib`` with the CE C toolchain and `ce-libify
+<https://github.com/alessiodam/toolchain_libify>`_ installed. The stock
+``convbin`` in a CEdev release cannot link the X25519 code and fails with
+``Unsupported relocation type: 7 (expected R_Z80_24)``. Build ``convbin`` from
+the ``R_Z80_BYTE012`` branch of `mateoconlechuga/convbin
+<https://github.com/mateoconlechuga/convbin>`_ and copy it over
+``$CEDEV/bin/convbin``, as the CI workflows do.
