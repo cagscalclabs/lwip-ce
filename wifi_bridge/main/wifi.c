@@ -13,19 +13,10 @@
 #define TAG "wifi"
 #define RETRY_MS 15000
 
-enum {
-    SEC_OPEN,
-    SEC_WEP,
-    SEC_WPA,
-    SEC_WPA2,
-    SEC_WPA3,
-    SEC_WPA2_WPA3,
-    SEC_ENTERPRISE,
-};
-
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_scan_lock;
 static volatile bool s_connected;
+static volatile bool s_joining;
 static volatile bool s_paused;
 static volatile uint8_t s_pending = PROFILE_NONE;
 static uint8_t s_slot = PROFILE_NONE;
@@ -34,21 +25,24 @@ static wifi_ap_record_t s_records[WIFI_SCAN_MAX];
 static wifi_auth_mode_t auth_for(uint8_t security)
 {
     switch (security) {
-    case SEC_OPEN:
+    case LWIP_WIFI_SEC_OPEN:
         return WIFI_AUTH_OPEN;
-    case SEC_WEP:
+    case LWIP_WIFI_SEC_WEP:
         return WIFI_AUTH_WEP;
-    case SEC_WPA:
+    case LWIP_WIFI_SEC_WPA:
         return WIFI_AUTH_WPA_PSK;
-    case SEC_WPA3:
+    case LWIP_WIFI_SEC_WPA3:
         return WIFI_AUTH_WPA3_PSK;
-    case SEC_WPA2_WPA3:
+    case LWIP_WIFI_SEC_WPA2_WPA3:
         return WIFI_AUTH_WPA2_WPA3_PSK;
-    case SEC_ENTERPRISE:
-        return WIFI_AUTH_ENTERPRISE;
     default:
         return WIFI_AUTH_WPA2_PSK;
     }
+}
+
+static bool is_enterprise(wifi_auth_mode_t auth)
+{
+    return auth == WIFI_AUTH_ENTERPRISE || auth == WIFI_AUTH_WPA3_ENTERPRISE;
 }
 
 static uint8_t security_from_auth(wifi_auth_mode_t auth)
@@ -56,75 +50,77 @@ static uint8_t security_from_auth(wifi_auth_mode_t auth)
     switch (auth) {
     case WIFI_AUTH_OPEN:
     case WIFI_AUTH_OWE:
-        return SEC_OPEN;
+        return LWIP_WIFI_SEC_OPEN;
     case WIFI_AUTH_WEP:
-        return SEC_WEP;
+        return LWIP_WIFI_SEC_WEP;
     case WIFI_AUTH_WPA_PSK:
-        return SEC_WPA;
+        return LWIP_WIFI_SEC_WPA;
     case WIFI_AUTH_WPA3_PSK:
-        return SEC_WPA3;
+        return LWIP_WIFI_SEC_WPA3;
     case WIFI_AUTH_WPA2_WPA3_PSK:
-        return SEC_WPA2_WPA3;
-    case WIFI_AUTH_ENTERPRISE:
-    case WIFI_AUTH_WPA3_ENTERPRISE:
-        return SEC_ENTERPRISE;
+        return LWIP_WIFI_SEC_WPA2_WPA3;
     default:
-        return SEC_WPA2;
+        return LWIP_WIFI_SEC_WPA2;
     }
 }
 
-static uint16_t scan_records(void)
+/* Returns -1 when the radio cannot scan right now, for example while joining. */
+int wifi_scan(wifi_scan_entry_t *out, uint8_t max)
 {
     uint16_t count = 0;
+    int used = -1;
 
     xSemaphoreTake(s_scan_lock, portMAX_DELAY);
     if (esp_wifi_scan_start(NULL, true) == ESP_OK && esp_wifi_scan_get_ap_num(&count) == ESP_OK) {
         if (count > WIFI_SCAN_MAX) {
             count = WIFI_SCAN_MAX;
         }
-        if (esp_wifi_scan_get_ap_records(&count, s_records) != ESP_OK) {
-            count = 0;
+        if (esp_wifi_scan_get_ap_records(&count, s_records) == ESP_OK) {
+            used = 0;
+            for (uint16_t i = 0; i < count; i++) {
+                const char *ssid = (const char *)s_records[i].ssid;
+                int at = 0;
+
+                /* Enterprise networks are not supported, so do not offer them. */
+                if (ssid[0] == 0 || is_enterprise(s_records[i].authmode)) {
+                    continue;
+                }
+                /* One entry per network: keep the strongest of its access points. */
+                while (at < used && strncmp(out[at].ssid, ssid, LWIP_WIFI_SSID_MAX) != 0) {
+                    at++;
+                }
+                if (at < used ? s_records[i].rssi <= out[at].rssi : used == max) {
+                    continue;
+                }
+                if (at == used) {
+                    used++;
+                }
+                memcpy(out[at].ssid, ssid, LWIP_WIFI_SSID_MAX);
+                out[at].ssid[LWIP_WIFI_SSID_MAX] = 0;
+                out[at].rssi = s_records[i].rssi;
+                out[at].channel = s_records[i].primary;
+                out[at].security = security_from_auth(s_records[i].authmode);
+            }
         }
     }
     esp_wifi_clear_ap_list();
-    return count;
-}
-
-uint8_t wifi_scan(wifi_scan_entry_t *out, uint8_t max)
-{
-    uint16_t count = scan_records();
-    uint8_t used = 0;
-
-    for (uint16_t i = 0; i < count && used < max; i++) {
-        if (s_records[i].ssid[0] == 0) {
-            continue;
-        }
-        memcpy(out[used].ssid, s_records[i].ssid, 32);
-        out[used].ssid[32] = 0;
-        out[used].rssi = s_records[i].rssi;
-        out[used].channel = s_records[i].primary;
-        out[used].security = security_from_auth(s_records[i].authmode);
-        used++;
-    }
     xSemaphoreGive(s_scan_lock);
     return used;
 }
 
 static uint8_t pick_profile(void)
 {
+    static wifi_scan_entry_t found[WIFI_SCAN_MAX];
     char visible[WIFI_SCAN_MAX][PROFILE_SSID_MAX];
-    uint16_t count = scan_records();
-    uint8_t slot;
+    int count = wifi_scan(found, WIFI_SCAN_MAX);
 
-    for (uint16_t i = 0; i < count; i++) {
-        memcpy(visible[i], s_records[i].ssid, PROFILE_SSID_MAX - 1);
-        visible[i][PROFILE_SSID_MAX - 1] = 0;
+    if (count < 0) {
+        count = 0;
     }
-    xSemaphoreGive(s_scan_lock);
-
-    slot = profiles_pick(count ? (const char (*)[PROFILE_SSID_MAX])visible : NULL,
-                              (uint8_t)count);
-    return slot;
+    for (int i = 0; i < count; i++) {
+        memcpy(visible[i], found[i].ssid, PROFILE_SSID_MAX);
+    }
+    return profiles_pick(count ? (const char (*)[PROFILE_SSID_MAX])visible : NULL, (uint8_t)count);
 }
 
 static void join(uint8_t slot)
@@ -145,13 +141,18 @@ static void join(uint8_t slot)
     config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     config.sta.threshold.authmode = password[0] ? auth_for(security) : WIFI_AUTH_OPEN;
     config.sta.pmf_cfg.capable = true;
-    config.sta.pmf_cfg.required = security == SEC_WPA3;
+    config.sta.pmf_cfg.required = security == LWIP_WIFI_SEC_WPA3;
     memset(password, 0, sizeof password);
 
     s_slot = slot;
     ESP_LOGI(TAG, "joining %s", ssid);
     esp_wifi_set_config(WIFI_IF_STA, &config);
-    esp_wifi_connect();
+    memset(&config, 0, sizeof config);
+    /* Set before connecting: the result event can arrive before connect returns. */
+    s_joining = true;
+    if (esp_wifi_connect() != ESP_OK) {
+        s_joining = false;
+    }
 }
 
 static void wifi_task(void *arg)
@@ -168,7 +169,7 @@ static void wifi_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(200));
             }
             join(pending);
-        } else if (!s_connected && !s_paused) {
+        } else if (!s_connected && !s_joining && !s_paused) {
             uint8_t slot = pick_profile();
 
             if (s_pending != PROFILE_NONE) {
@@ -237,15 +238,23 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 
     if (id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *event = data;
+        bool was_connected = s_connected;
 
         ESP_LOGW(TAG, "disconnected, reason %u", event->reason);
         s_connected = false;
+        s_joining = false;
         profiles_clear_active();
         bridge_set_wifi(false);
         control_notify();
+        /* Lost a working link: look for a network now. A failed join waits for
+         * RETRY_MS instead, so a wrong password does not hammer the AP. */
+        if (was_connected && !s_paused) {
+            wifi_kick();
+        }
     } else if (id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG, "connected");
         s_connected = true;
+        s_joining = false;
         profiles_mark_active(s_slot);
         bridge_set_wifi(true);
         control_notify();

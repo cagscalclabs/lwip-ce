@@ -10,30 +10,8 @@
 #include "esp_wifi.h"
 
 #define TAG "control"
-#define CTL_VERSION 1
-#define CTL_HEADER 18
 #define CTL_MAX 1514
 #define CTL_QUEUE_LEN 4
-
-enum {
-    OP_STATUS = 1,
-    OP_LIST,
-    OP_SCAN,
-    OP_SAVE,
-    OP_FORGET,
-    OP_ENABLE,
-    OP_PREFER,
-    OP_CONNECT,
-    OP_DISCONNECT,
-    OP_EVENT = 0x40,
-};
-
-enum {
-    ST_OK,
-    ST_BAD_REQUEST,
-    ST_NOT_FOUND,
-    ST_FULL,
-};
 
 typedef struct {
     uint16_t length;
@@ -46,7 +24,7 @@ static wifi_scan_entry_t s_scan[WIFI_SCAN_MAX];
 
 static size_t put_string(uint8_t *out, size_t room, const char *text)
 {
-    size_t length = strnlen(text, 32);
+    size_t length = strnlen(text, LWIP_WIFI_SSID_MAX);
 
     if (room < length + 1) {
         return 0;
@@ -115,13 +93,16 @@ static size_t op_list(uint8_t *out, size_t room)
     return used;
 }
 
-static size_t op_scan(uint8_t *out, size_t room)
+static uint8_t op_scan(uint8_t *out, size_t room, size_t *reply_used)
 {
-    uint8_t found = wifi_scan(s_scan, WIFI_SCAN_MAX);
+    int found = wifi_scan(s_scan, WIFI_SCAN_MAX);
     size_t used = 1;
     uint8_t count = 0;
 
-    for (uint8_t index = 0; index < found; index++) {
+    if (found < 0) {
+        return CTL_ST_BUSY;
+    }
+    for (int index = 0; index < found; index++) {
         size_t text;
 
         if (room - used < 3) {
@@ -138,7 +119,8 @@ static size_t op_scan(uint8_t *out, size_t room)
         count++;
     }
     out[0] = count;
-    return used;
+    *reply_used = used;
+    return CTL_ST_OK;
 }
 
 static uint8_t op_save(const uint8_t *in, const uint8_t *end, uint8_t *out, size_t *used)
@@ -151,21 +133,21 @@ static uint8_t op_save(const uint8_t *in, const uint8_t *end, uint8_t *out, size
     bool existing;
 
     if (end - in < 3) {
-        return ST_BAD_REQUEST;
+        return CTL_ST_BAD_REQUEST;
     }
     slot = in[0];
     security = in[1];
     flags = in[2];
     in += 3;
-    if (!get_string(&in, end, ssid, sizeof ssid) || ssid[0] == 0 ||
-        !get_string(&in, end, password, sizeof password)) {
-        return ST_BAD_REQUEST;
+    if (security > LWIP_WIFI_SEC_WPA2_WPA3 || !get_string(&in, end, ssid, sizeof ssid) ||
+        ssid[0] == 0 || !get_string(&in, end, password, sizeof password)) {
+        return CTL_ST_BAD_REQUEST;
     }
 
     existing = slot != PROFILE_NONE &&
                profiles_credentials(slot, old_ssid, old_password, NULL, NULL);
     if (slot != PROFILE_NONE && !existing) {
-        return ST_NOT_FOUND;
+        return CTL_ST_NOT_FOUND;
     }
     if (existing && password[0] == 0) {
         memcpy(password, old_password, sizeof password);
@@ -178,14 +160,11 @@ static uint8_t op_save(const uint8_t *in, const uint8_t *end, uint8_t *out, size
     memset(password, 0, sizeof password);
     memset(old_password, 0, sizeof old_password);
     if (saved == PROFILE_NONE) {
-        return ST_FULL;
-    }
-    if (!(flags & PROFILE_F_ENABLED)) {
-        profiles_enable(saved, false);
+        return CTL_ST_FULL;
     }
     out[0] = saved;
     *used = 1;
-    return ST_OK;
+    return CTL_ST_OK;
 }
 
 static void handle(const request_t *request)
@@ -196,68 +175,68 @@ static void handle(const request_t *request)
     uint8_t *out = s_reply + CTL_HEADER;
     size_t room = sizeof s_reply - CTL_HEADER;
     size_t used = 0;
-    uint8_t status = ST_OK;
+    uint8_t status = CTL_ST_OK;
     uint8_t op = frame[15];
     uint8_t mac[6];
 
     switch (op) {
-    case OP_STATUS:
+    case CTL_OP_STATUS:
         used = op_status(out, room);
         break;
-    case OP_LIST:
+    case CTL_OP_LIST:
         used = op_list(out, room);
         break;
-    case OP_SCAN:
-        used = op_scan(out, room);
+    case CTL_OP_SCAN:
+        status = op_scan(out, room, &used);
         break;
-    case OP_SAVE:
+    case CTL_OP_SAVE:
         status = op_save(in, end, out, &used);
         break;
-    case OP_FORGET:
-        status = in < end && profiles_forget(in[0]) ? ST_OK : ST_NOT_FOUND;
+    case CTL_OP_FORGET:
+        status = in < end && profiles_forget(in[0]) ? CTL_ST_OK : CTL_ST_NOT_FOUND;
         break;
-    case OP_ENABLE:
-        status = end - in >= 2 && profiles_enable(in[0], in[1] != 0) ? ST_OK : ST_NOT_FOUND;
-        if (status == ST_OK) {
+    case CTL_OP_ENABLE:
+        status = end - in >= 2 && profiles_enable(in[0], in[1] != 0) ? CTL_ST_OK : CTL_ST_NOT_FOUND;
+        if (status == CTL_ST_OK) {
             wifi_kick();
         }
         break;
-    case OP_PREFER:
-        status = in < end && profiles_prefer(in[0]) ? ST_OK : ST_NOT_FOUND;
+    case CTL_OP_PREFER:
+        status = in < end && profiles_prefer(in[0]) ? CTL_ST_OK : CTL_ST_NOT_FOUND;
         break;
-    case OP_CONNECT:
+    case CTL_OP_CONNECT:
         if (in >= end) {
-            status = ST_BAD_REQUEST;
+            status = CTL_ST_BAD_REQUEST;
         } else if (in[0] == PROFILE_NONE) {
             wifi_resume();
         } else if (profiles_credentials(in[0], NULL, NULL, NULL, NULL)) {
             wifi_join_slot(in[0]);
         } else {
-            status = ST_NOT_FOUND;
+            status = CTL_ST_NOT_FOUND;
         }
         break;
-    case OP_DISCONNECT:
+    case CTL_OP_DISCONNECT:
         wifi_disconnect();
         break;
-    case OP_EVENT:
+    case CTL_OP_EVENT:
         used = op_status(out, room);
         break;
     default:
-        status = ST_BAD_REQUEST;
+        status = CTL_ST_BAD_REQUEST;
         break;
     }
 
     esp_wifi_get_mac(WIFI_IF_STA, mac);
-    if (op == OP_EVENT) {
+    if (op == CTL_OP_EVENT) {
         memset(s_reply, 0xFF, 6);
     } else {
         memcpy(s_reply, frame + 6, 6);
     }
     memcpy(s_reply + 6, mac, 6);
-    s_reply[12] = CONTROL_ETHERTYPE >> 8;
-    s_reply[13] = CONTROL_ETHERTYPE & 0xFF;
+    s_reply[12] = CTL_ETHERTYPE >> 8;
+    s_reply[13] = CTL_ETHERTYPE & 0xFF;
     s_reply[14] = CTL_VERSION;
-    s_reply[15] = (uint8_t)(op | 0x80);
+    s_reply[15] = (uint8_t)(op | CTL_REPLY);
     s_reply[16] = frame[16];
     s_reply[17] = status;
     bridge_send(s_reply, CTL_HEADER + used);
@@ -282,7 +261,7 @@ void control_notify(void)
 
     memset(request.data, 0, CTL_HEADER);
     request.data[14] = CTL_VERSION;
-    request.data[15] = OP_EVENT;
+    request.data[15] = CTL_OP_EVENT;
     request.length = CTL_HEADER;
     xQueueSend(s_queue, &request, 0);
 }
@@ -291,7 +270,7 @@ void control_request(const uint8_t *frame, size_t length)
 {
     static request_t request;
 
-    if (length < CTL_HEADER || length > CTL_MAX || frame[14] != CTL_VERSION || frame[15] == OP_EVENT) {
+    if (length < CTL_HEADER || length > CTL_MAX || frame[14] != CTL_VERSION || frame[15] == CTL_OP_EVENT) {
         return;
     }
     request.length = (uint16_t)length;

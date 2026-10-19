@@ -29,20 +29,15 @@ static uint8_t s_count;
 static uint8_t s_active = PROFILE_NONE;
 static uint32_t s_next_rank = 1;
 static SemaphoreHandle_t s_mutex;
-static bool s_ready;
 
 static void lock(void)
 {
-    if (s_mutex != NULL) {
-        xSemaphoreTake(s_mutex, portMAX_DELAY);
-    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
 }
 
 static void unlock(void)
 {
-    if (s_mutex != NULL) {
-        xSemaphoreGive(s_mutex);
-    }
+    xSemaphoreGive(s_mutex);
 }
 
 static void slot_key(uint8_t slot, char *out, size_t size)
@@ -111,10 +106,6 @@ esp_err_t profiles_init(void)
     nvs_handle_t handle;
     esp_err_t err;
 
-    if (s_ready) {
-        return ESP_OK;
-    }
-
     s_mutex = xSemaphoreCreateMutex();
 
     if (s_mutex == NULL) {
@@ -127,7 +118,6 @@ esp_err_t profiles_init(void)
 
     if (err != ESP_OK) {
         ESP_LOGW(PROFILE_TAG, "no credential store: %s", esp_err_to_name(err));
-        s_ready = true;
         return ESP_OK;
     }
 
@@ -160,7 +150,6 @@ esp_err_t profiles_init(void)
 
     nvs_close(handle);
     rebuild_order();
-    s_ready = true;
 
     ESP_LOGI(PROFILE_TAG, "%u saved network(s)", (unsigned)s_count);
 
@@ -176,11 +165,6 @@ uint8_t profiles_count(void)
     unlock();
 
     return count;
-}
-
-uint8_t profiles_capacity(void)
-{
-    return PROFILE_SLOTS;
 }
 
 uint8_t profiles_active(void)
@@ -262,8 +246,7 @@ uint8_t profiles_save(const char *ssid, const char *password,
     s_records[slot].version = PROFILE_RECORD_VERSION;
     s_records[slot].used = 1;
     s_records[slot].security = security;
-    s_records[slot].flags = (uint8_t)((flags | PROFILE_F_ENABLED) &
-                                      ~PROFILE_F_ACTIVE);
+    s_records[slot].flags = (uint8_t)(flags & ~PROFILE_F_ACTIVE);
     s_records[slot].rank = s_next_rank++;
     strncpy(s_records[slot].ssid, ssid, PROFILE_SSID_MAX - 1);
 
@@ -301,26 +284,6 @@ bool profiles_forget(uint8_t slot)
     unlock();
 
     return erased;
-}
-
-void profiles_forget_all(void)
-{
-    lock();
-
-    for (uint8_t slot = 0; slot < PROFILE_SLOTS; slot++) {
-        if (!s_records[slot].used) {
-            continue;
-        }
-
-        memset(&s_records[slot], 0, sizeof(profile_record_t));
-        write_slot(slot);
-    }
-
-    s_active = PROFILE_NONE;
-    rebuild_order();
-    unlock();
-
-    ESP_LOGI(PROFILE_TAG, "credential store cleared");
 }
 
 bool profiles_enable(uint8_t slot, bool enabled)
@@ -370,9 +333,12 @@ void profiles_mark_active(uint8_t slot)
     if (slot < PROFILE_SLOTS && s_records[slot].used) {
         s_active = slot;
 
-        s_records[slot].rank = s_next_rank++;
-        rebuild_order();
-        write_slot(slot);
+        /* Skip the flash write when the slot already leads the order. */
+        if (s_order[0] != slot) {
+            s_records[slot].rank = s_next_rank++;
+            rebuild_order();
+            write_slot(slot);
+        }
     }
 
     unlock();
@@ -409,8 +375,11 @@ uint8_t profiles_pick(const char (*visible)[PROFILE_SSID_MAX],
         }
     }
 
+    /* Hidden networks never appear in a scan, so try them blind. */
     for (uint8_t index = 0; index < s_count && chosen == PROFILE_NONE; index++) {
-        if (s_records[s_order[index]].flags & PROFILE_F_ENABLED) {
+        uint8_t flags = s_records[s_order[index]].flags;
+
+        if ((flags & PROFILE_F_ENABLED) && (flags & PROFILE_F_HIDDEN)) {
             chosen = s_order[index];
         }
     }

@@ -56,7 +56,9 @@ are produced by the ``wifi_bridge.yml`` workflow as
 The bridge starts with no saved networks. Open the lwIP-CE app on the
 calculator, choose **Wi-Fi**, then **Scan for networks** or **Add a network**.
 The bridge stores up to 8 networks and joins the best saved one in range on its
-own, retrying every 15 seconds while it is offline.
+own. When a working connection drops it looks for a network right away; after a
+failed join it retries every 15 seconds. A network typed in by name is marked
+hidden, so the bridge also tries it when it does not show up in a scan.
 
 How the Link Behaves
 --------------------
@@ -90,7 +92,9 @@ lwIP or USB callback.
 
 Requests never reach the wireless network and work while Wi-Fi is down, so
 they are also how a program gets the calculator online in the first place.
-Saved passwords stay on the bridge: no call can read one back.
+Saved passwords stay on the bridge: no call can read one back. Do not call
+them from the event callback either: a call made while another one is waiting
+returns ``LWIP_WIFI_ERR_BUSY``.
 
 .. list-table::
    :header-rows: 1
@@ -156,11 +160,17 @@ Return codes:
      - All 8 slots are in use.
    * - ``LWIP_WIFI_ERR_MEM``
      - lwIP could not allocate a buffer for the request.
+   * - ``LWIP_WIFI_ERR_BUSY``
+     - Another request is still waiting, or the bridge cannot scan right now
+       (for example while it is joining a network). Try again shortly.
 
 Security values are the ``LWIP_WIFI_SEC_*`` constants: open, WEP, WPA, WPA2,
-WPA3, WPA2/WPA3 and enterprise. Profile flags are
-``LWIP_WIFI_PROFILE_ENABLED``, ``LWIP_WIFI_PROFILE_HIDDEN`` and
-``LWIP_WIFI_PROFILE_ACTIVE`` (the network the bridge is joined to).
+WPA3 and WPA2/WPA3. Enterprise (802.1X) networks are not supported and are
+left out of scan results. Profile flags are
+``LWIP_WIFI_PROFILE_ENABLED``, ``LWIP_WIFI_PROFILE_HIDDEN`` (tried even when a
+scan does not see it) and ``LWIP_WIFI_PROFILE_ACTIVE`` (the network the bridge
+is joined to). A profile saved without ``LWIP_WIFI_PROFILE_ENABLED`` is stored
+disabled.
 
 Example
 ~~~~~~~

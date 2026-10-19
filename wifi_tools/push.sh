@@ -27,17 +27,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$BRIDGE_PORT" ]]; then
-    if ! command -v idf.py >/dev/null 2>&1; then
+    flash=(idf.py -C "$REPO/wifi_bridge" -p "$BRIDGE_PORT" build flash)
+    if command -v idf.py >/dev/null 2>&1; then
+        "${flash[@]}"
+    else
+        activate=""
         for env in "$HOME/.espressif/tools/activate_idf_v6.1.sh" "${IDF_PATH:-}/export.sh"; do
-            if [[ -f "$env" ]]; then
-                set +u
-                source "$env" >/dev/null 2>&1
-                set -u
-                break
-            fi
+            [[ -f "$env" ]] && { activate="$env"; break; }
         done
+        [[ -n "$activate" ]] || { echo "push: ESP-IDF v6.1 not found" >&2; exit 1; }
+        # The IDF activate script exits unless $0 names a shell, so it cannot be
+        # sourced from this script directly.
+        bash -c 'source "$1" >/dev/null 2>&1 && shift && "$@"' bash "$activate" "${flash[@]}"
     fi
-    idf.py -C "$REPO/wifi_bridge" -p "$BRIDGE_PORT" build flash
     echo "push: bridge flashed on $BRIDGE_PORT"
 fi
 
@@ -50,7 +52,10 @@ link() {
 }
 
 programs=()
-for example in wifi_ping wifi_api; do
+for example in wifi_ping wifi_api wifi_stats; do
+    # Clean first: make cannot see lwip.lib change, and a stale build calls the
+    # wrong library functions.
+    make -s -C "$REPO/examples/$example" clean >/dev/null
     make -s -C "$REPO/examples/$example" >/dev/null
     programs+=("$REPO"/examples/"$example"/bin/*.8xp)
 done

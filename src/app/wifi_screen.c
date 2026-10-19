@@ -39,12 +39,14 @@ static ui_item_t *g_items;
 static char (*g_values)[24];
 
 static const char *const security_names[] = {
-    "Open", "WEP", "WPA", "WPA2", "WPA3", "WPA2/WPA3", "Enterprise"
+    "Open", "WEP", "WPA", "WPA2", "WPA3", "WPA2/WPA3"
 };
+
+#define SECURITY_COUNT (sizeof security_names / sizeof security_names[0])
 
 static const char *security_name(uint8_t security)
 {
-    return security < sizeof security_names / sizeof security_names[0] ? security_names[security] : "?";
+    return security < SECURITY_COUNT ? security_names[security] : "?";
 }
 
 static void on_wifi_event(const lwip_wifi_state_t *state, void *arg)
@@ -167,6 +169,8 @@ static const char *error_text(lwip_wifi_error_t err)
         return "All slots are in use";
     case LWIP_WIFI_ERR_MEM:
         return "Out of memory";
+    case LWIP_WIFI_ERR_BUSY:
+        return "The bridge is busy, try again";
     default:
         return "The bridge refused the request";
     }
@@ -272,7 +276,8 @@ static void connect_and_wait(uint8_t slot)
 
 static uint8_t choose_security(uint8_t current)
 {
-    int choice = ui_choose("Security", security_names, 6, current < 6 ? current : LWIP_WIFI_SEC_WPA2);
+    int choice = ui_choose("Security", security_names, SECURITY_COUNT,
+                           current < SECURITY_COUNT ? current : LWIP_WIFI_SEC_WPA2);
 
     return choice < 0 ? LWIP_WIFI_SLOT_NONE : (uint8_t)choice;
 }
@@ -293,7 +298,11 @@ static void add_network(const char *known_ssid, uint8_t security)
         return;
 
     ui_busy("Wi-Fi", "Saving...");
-    err = lwip_wifi_save_profile(LWIP_WIFI_SLOT_NONE, ssid, password, security, LWIP_WIFI_PROFILE_ENABLED, &slot);
+    /* A typed name may be a hidden network, which never shows up in a scan. */
+    err = lwip_wifi_save_profile(LWIP_WIFI_SLOT_NONE, ssid, password, security,
+                                 known_ssid ? LWIP_WIFI_PROFILE_ENABLED
+                                            : LWIP_WIFI_PROFILE_ENABLED | LWIP_WIFI_PROFILE_HIDDEN,
+                                 &slot);
     tls_secure_memzero(password, sizeof password);
     if (report("Save network", err))
         connect_and_wait(slot);

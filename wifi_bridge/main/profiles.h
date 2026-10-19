@@ -5,15 +5,16 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "wifi_proto.h"
 
 #define PROFILE_SLOTS 8
-#define PROFILE_SSID_MAX 33
-#define PROFILE_PASSWORD_MAX 65
-#define PROFILE_NONE 0xFF
+#define PROFILE_SSID_MAX (LWIP_WIFI_SSID_MAX + 1)
+#define PROFILE_PASSWORD_MAX (LWIP_WIFI_PASSWORD_MAX + 1)
+#define PROFILE_NONE LWIP_WIFI_SLOT_NONE
 
-#define PROFILE_F_ENABLED 0x01
-#define PROFILE_F_HIDDEN 0x02
-#define PROFILE_F_ACTIVE 0x04
+#define PROFILE_F_ENABLED LWIP_WIFI_PROFILE_ENABLED
+#define PROFILE_F_HIDDEN LWIP_WIFI_PROFILE_HIDDEN
+#define PROFILE_F_ACTIVE LWIP_WIFI_PROFILE_ACTIVE
 
 typedef struct {
     uint8_t slot;
@@ -25,7 +26,6 @@ typedef struct {
 esp_err_t profiles_init(void);
 
 uint8_t profiles_count(void);
-uint8_t profiles_capacity(void);
 uint8_t profiles_active(void);
 
 bool profiles_view(uint8_t index, profile_view_t *out);
@@ -34,7 +34,6 @@ uint8_t profiles_save(const char *ssid, const char *password,
                            uint8_t security, uint8_t flags);
 
 bool profiles_forget(uint8_t slot);
-void profiles_forget_all(void);
 bool profiles_enable(uint8_t slot, bool enabled);
 bool profiles_prefer(uint8_t slot);
 

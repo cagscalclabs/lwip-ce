@@ -19,8 +19,7 @@ typedef enum
     LWIP_WIFI_SEC_WPA,
     LWIP_WIFI_SEC_WPA2,
     LWIP_WIFI_SEC_WPA3,
-    LWIP_WIFI_SEC_WPA2_WPA3,
-    LWIP_WIFI_SEC_ENTERPRISE
+    LWIP_WIFI_SEC_WPA2_WPA3
 } lwip_wifi_security_t;
 
 typedef enum
@@ -31,7 +30,8 @@ typedef enum
     LWIP_WIFI_ERR_BAD_REQUEST,
     LWIP_WIFI_ERR_NOT_FOUND,
     LWIP_WIFI_ERR_FULL,
-    LWIP_WIFI_ERR_MEM
+    LWIP_WIFI_ERR_MEM,
+    LWIP_WIFI_ERR_BUSY
 } lwip_wifi_error_t;
 
 typedef struct

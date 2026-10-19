@@ -44,6 +44,7 @@ static void drop_queued(void)
     }
 }
 
+#ifdef CONFIG_BRIDGE_LOG_TRAFFIC
 static void log_ping(const uint8_t *frame, size_t length)
 {
     size_t ihl;
@@ -80,6 +81,10 @@ static void log_lease(const uint8_t *frame, size_t length)
         }
     }
 }
+#else
+#define log_ping(frame, length)
+#define log_lease(frame, length)
+#endif
 
 void bridge_send(const uint8_t *data, size_t length)
 {
@@ -105,7 +110,11 @@ void bridge_send(const uint8_t *data, size_t length)
 
 static esp_err_t wifi_rx(void *buffer, uint16_t length, void *eb)
 {
-    if (s_cdc != NULL) {
+    const uint8_t *frame = buffer;
+
+    /* Control frames only ever come from this bridge; one from the air is forged. */
+    if (s_cdc != NULL && length >= FRAME_MIN &&
+        ((frame[12] << 8) | frame[13]) != CTL_ETHERTYPE) {
         log_lease(buffer, length);
         bridge_send(buffer, length);
     }
@@ -122,7 +131,7 @@ static bool cdc_data(const uint8_t *data, size_t length, void *arg)
         return true;
     }
 
-    if (((data[12] << 8) | data[13]) == CONTROL_ETHERTYPE) {
+    if (((data[12] << 8) | data[13]) == CTL_ETHERTYPE) {
         control_request(data, length);
         return true;
     }

@@ -8,30 +8,13 @@
 #include "drivers/usb_ethernet.h"
 #include "lwip-imports.h"
 #include "../tls/includes/bytes.h"
-#include "wireless/wifi.h"
 #include "wireless/wifi_hook.h"
+#include "wireless/wifi_proto.h"
 
-#define WIFI_ETHERTYPE 0x88B5
-#define WIFI_VERSION 1
-#define WIFI_HEADER 18
 #define WIFI_REPLY_MAX 1024
 #define WIFI_SHORT_TIMEOUT_MS 2000
 #define WIFI_CHANGE_TIMEOUT_MS 6000
 #define WIFI_SCAN_TIMEOUT_MS 10000
-
-enum
-{
-    OP_STATUS = 1,
-    OP_LIST,
-    OP_SCAN,
-    OP_SAVE,
-    OP_FORGET,
-    OP_ENABLE,
-    OP_PREFER,
-    OP_CONNECT,
-    OP_DISCONNECT,
-    OP_EVENT = 0x40,
-};
 
 static uint8_t g_seq;
 static uint8_t g_wait_op;
@@ -72,20 +55,19 @@ void lwip_wifi_set_event_cb(lwip_wifi_event_fn fn, void *arg)
 
 err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
 {
-    uint8_t header[WIFI_HEADER];
+    uint8_t header[CTL_HEADER];
     uint16_t length;
 
-    (void)netif;
-
-    if (p->tot_len < WIFI_HEADER || pbuf_copy_partial(p, header, WIFI_HEADER, 0) != WIFI_HEADER ||
-        ((header[12] << 8) | header[13]) != WIFI_ETHERTYPE)
+    if (netif != eth_device_netif() || p->tot_len < CTL_HEADER ||
+        pbuf_copy_partial(p, header, CTL_HEADER, 0) != CTL_HEADER ||
+        ((header[12] << 8) | header[13]) != CTL_ETHERTYPE)
         return ERR_VAL;
 
-    if (header[14] == WIFI_VERSION && header[15] == (OP_EVENT | 0x80) && g_event_fn)
+    if (header[14] == CTL_VERSION && header[15] == (CTL_OP_EVENT | CTL_REPLY) && g_event_fn)
     {
         uint8_t body[12 + LWIP_WIFI_SSID_MAX];
         lwip_wifi_state_t state;
-        uint16_t got = pbuf_copy_partial(p, body, sizeof body, WIFI_HEADER);
+        uint16_t got = pbuf_copy_partial(p, body, sizeof body, CTL_HEADER);
 
         pbuf_free(p);
         if (parse_state(body, got, &state))
@@ -93,13 +75,13 @@ err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
         return ERR_OK;
     }
 
-    if (g_waiting && header[14] == WIFI_VERSION && header[15] == (g_wait_op | 0x80) &&
+    if (g_waiting && header[14] == CTL_VERSION && header[15] == (g_wait_op | CTL_REPLY) &&
         header[16] == g_wait_seq)
     {
-        length = (uint16_t)(p->tot_len - WIFI_HEADER);
+        length = (uint16_t)(p->tot_len - CTL_HEADER);
         if (length > WIFI_REPLY_MAX)
             length = WIFI_REPLY_MAX;
-        g_reply_len = pbuf_copy_partial(p, g_reply, length, WIFI_HEADER);
+        g_reply_len = pbuf_copy_partial(p, g_reply, length, CTL_HEADER);
         g_status = header[17];
         g_done = true;
     }
@@ -127,31 +109,33 @@ static lwip_wifi_error_t request(uint8_t op, const uint8_t *body, uint16_t body_
 
     if (!netif)
         return LWIP_WIFI_ERR_NO_BRIDGE;
+    if (g_waiting)
+        return LWIP_WIFI_ERR_BUSY;
     if (!g_reply && !(g_reply = mem_malloc(WIFI_REPLY_MAX)))
         return LWIP_WIFI_ERR_MEM;
 
-    p = pbuf_alloc(PBUF_RAW, (u16_t)(WIFI_HEADER + body_len), PBUF_RAM);
+    p = pbuf_alloc(PBUF_RAW, (u16_t)(CTL_HEADER + body_len), PBUF_RAM);
     if (!p)
         return LWIP_WIFI_ERR_MEM;
 
     frame = p->payload;
     memset(frame, 0xFF, 6);
     memcpy(frame + 6, netif->hwaddr, 6);
-    frame[12] = WIFI_ETHERTYPE >> 8;
-    frame[13] = WIFI_ETHERTYPE & 0xFF;
-    frame[14] = WIFI_VERSION;
+    frame[12] = CTL_ETHERTYPE >> 8;
+    frame[13] = CTL_ETHERTYPE & 0xFF;
+    frame[14] = CTL_VERSION;
     frame[15] = op;
     frame[16] = ++g_seq;
     frame[17] = 0;
     if (body_len)
-        memcpy(frame + WIFI_HEADER, body, body_len);
+        memcpy(frame + CTL_HEADER, body, body_len);
 
     g_wait_op = op;
     g_wait_seq = g_seq;
     g_done = false;
     g_waiting = true;
     err_t err = netif->linkoutput(netif, p);
-    tls_secure_memzero(frame + WIFI_HEADER, body_len);
+    tls_secure_memzero(frame + CTL_HEADER, body_len);
     pbuf_free(p);
     if (err != ERR_OK)
     {
@@ -168,12 +152,14 @@ static lwip_wifi_error_t request(uint8_t op, const uint8_t *body, uint16_t body_
         return LWIP_WIFI_ERR_TIMEOUT;
     switch (g_status)
     {
-    case 0:
+    case CTL_ST_OK:
         return LWIP_WIFI_OK;
-    case 2:
+    case CTL_ST_NOT_FOUND:
         return LWIP_WIFI_ERR_NOT_FOUND;
-    case 3:
+    case CTL_ST_FULL:
         return LWIP_WIFI_ERR_FULL;
+    case CTL_ST_BUSY:
+        return LWIP_WIFI_ERR_BUSY;
     default:
         return LWIP_WIFI_ERR_BAD_REQUEST;
     }
@@ -208,7 +194,7 @@ static uint16_t put_string(uint8_t *out, const char *text, size_t max)
 
 lwip_wifi_error_t lwip_wifi_get_state(lwip_wifi_state_t *state)
 {
-    lwip_wifi_error_t err = request(OP_STATUS, NULL, 0, WIFI_SHORT_TIMEOUT_MS);
+    lwip_wifi_error_t err = request(CTL_OP_STATUS, NULL, 0, WIFI_SHORT_TIMEOUT_MS);
 
     if (err != LWIP_WIFI_OK)
         return err;
@@ -217,7 +203,7 @@ lwip_wifi_error_t lwip_wifi_get_state(lwip_wifi_state_t *state)
 
 lwip_wifi_error_t lwip_wifi_list_profiles(lwip_wifi_profile_t *profiles, uint8_t max, uint8_t *count)
 {
-    lwip_wifi_error_t err = request(OP_LIST, NULL, 0, WIFI_SHORT_TIMEOUT_MS);
+    lwip_wifi_error_t err = request(CTL_OP_LIST, NULL, 0, WIFI_SHORT_TIMEOUT_MS);
     uint16_t at = 1;
     uint8_t used = 0;
 
@@ -242,7 +228,7 @@ lwip_wifi_error_t lwip_wifi_list_profiles(lwip_wifi_profile_t *profiles, uint8_t
 
 lwip_wifi_error_t lwip_wifi_scan(lwip_wifi_network_t *networks, uint8_t max, uint8_t *count)
 {
-    lwip_wifi_error_t err = request(OP_SCAN, NULL, 0, WIFI_SCAN_TIMEOUT_MS);
+    lwip_wifi_error_t err = request(CTL_OP_SCAN, NULL, 0, WIFI_SCAN_TIMEOUT_MS);
     uint16_t at = 1;
     uint8_t used = 0;
 
@@ -272,7 +258,7 @@ lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const c
     uint16_t length = 3;
     lwip_wifi_error_t err;
 
-    if (!ssid || !ssid[0] || strlen(ssid) > LWIP_WIFI_SSID_MAX ||
+    if (!ssid || !ssid[0] || strlen(ssid) > LWIP_WIFI_SSID_MAX || security > LWIP_WIFI_SEC_WPA2_WPA3 ||
         (password && strlen(password) > LWIP_WIFI_PASSWORD_MAX))
         return LWIP_WIFI_ERR_BAD_REQUEST;
 
@@ -281,7 +267,7 @@ lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const c
     body[2] = flags;
     length = (uint16_t)(length + put_string(&body[length], ssid, LWIP_WIFI_SSID_MAX));
     length = (uint16_t)(length + put_string(&body[length], password, LWIP_WIFI_PASSWORD_MAX));
-    err = request(OP_SAVE, body, length, WIFI_CHANGE_TIMEOUT_MS);
+    err = request(CTL_OP_SAVE, body, length, WIFI_CHANGE_TIMEOUT_MS);
     tls_secure_memzero(body, sizeof body);
     if (err == LWIP_WIFI_OK && saved)
         *saved = g_reply_len ? g_reply[0] : LWIP_WIFI_SLOT_NONE;
@@ -290,27 +276,27 @@ lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const c
 
 lwip_wifi_error_t lwip_wifi_forget_profile(uint8_t slot)
 {
-    return request(OP_FORGET, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
+    return request(CTL_OP_FORGET, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_enable_profile(uint8_t slot, bool enabled)
 {
     uint8_t body[2] = {slot, enabled ? 1 : 0};
 
-    return request(OP_ENABLE, body, sizeof body, WIFI_SHORT_TIMEOUT_MS);
+    return request(CTL_OP_ENABLE, body, sizeof body, WIFI_SHORT_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_prefer_profile(uint8_t slot)
 {
-    return request(OP_PREFER, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
+    return request(CTL_OP_PREFER, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_connect(uint8_t slot)
 {
-    return request(OP_CONNECT, &slot, 1, WIFI_CHANGE_TIMEOUT_MS);
+    return request(CTL_OP_CONNECT, &slot, 1, WIFI_CHANGE_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_disconnect(void)
 {
-    return request(OP_DISCONNECT, NULL, 0, WIFI_CHANGE_TIMEOUT_MS);
+    return request(CTL_OP_DISCONNECT, NULL, 0, WIFI_CHANGE_TIMEOUT_MS);
 }

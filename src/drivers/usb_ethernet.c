@@ -41,6 +41,8 @@
 #define LWIP_DBG_FILE_ID LWIP_FILE_USB_ETHERNET
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_USB
 #include "lwip/logging.h"
+#include "wireless/wifi_proto.h"
+#include "../tls/includes/bytes.h"
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
@@ -763,6 +765,22 @@ struct eth_tx_ctx
     struct pbuf *p;
 };
 
+/* Wi-Fi control frames can carry a password, so wipe the copy before freeing it. */
+static void eth_tx_release(struct eth_tx_ctx *ctx)
+{
+    struct pbuf *p = ctx->p;
+
+    if (p)
+    {
+        const uint8_t *frame = p->payload;
+
+        if (p->len >= CTL_HEADER && ((frame[12] << 8) | frame[13]) == CTL_ETHERTYPE)
+            tls_secure_memzero(p->payload, p->len);
+        pbuf_free(p);
+    }
+    mem_free(ctx);
+}
+
 ///---------------------------------------------------
 /// @brief interrupt transfer callback function
 static usb_error_t
@@ -888,9 +906,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
     eth_transfer_ended(dev);
     if (eth_is_shutting_down(dev))
     {
-        if (tbuf)
-            pbuf_free(tbuf);
-        mem_free(ctx);
+        eth_tx_release(ctx);
         return USB_SUCCESS;
     }
 
@@ -899,8 +915,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
         log_usb_transfer_status(status);
         if (eth_xmit_fatal_error(dev, dev->tx_retries))
         {
-            pbuf_free(tbuf);
-            mem_free(ctx);
+            eth_tx_release(ctx);
             dev->tx_retries = 0;
             return USB_ERROR_FAILED;
         }
@@ -915,8 +930,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
                                      tbuf->tot_len, bulk_transmit_callback,
                                      ctx) != USB_SUCCESS)
         {
-            pbuf_free(tbuf);
-            mem_free(ctx);
+            eth_tx_release(ctx);
             (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
             return USB_ERROR_FAILED;
         }
@@ -927,9 +941,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
     /* Successful transmission - reset retry counter */
     dev->tx_retries = 0;
 
-    if (tbuf)
-        pbuf_free(tbuf);
-    mem_free(ctx);
+    eth_tx_release(ctx);
 
     return USB_SUCCESS;
 }
@@ -1029,8 +1041,7 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     if (usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len,
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)
     {
-        pbuf_free(tbuf);
-        mem_free(ctx);
+        eth_tx_release(ctx);
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
         LWIP_TRACE_RETURN(ERR_IF);
     }
