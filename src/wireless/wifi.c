@@ -100,19 +100,12 @@ bool lwip_wifi_available(void)
     return eth_device_netif() != NULL;
 }
 
-static lwip_wifi_error_t request(uint8_t op, const uint8_t *body, uint16_t body_len, uint32_t timeout_ms)
+static lwip_wifi_error_t exchange(struct netif *netif, uint8_t op, const uint8_t *body,
+                                  uint16_t body_len, uint32_t timeout_ms)
 {
-    struct netif *netif = eth_device_netif();
     struct pbuf *p;
     uint8_t *frame;
     uint32_t start;
-
-    if (!netif)
-        return LWIP_WIFI_ERR_NO_BRIDGE;
-    if (g_waiting)
-        return LWIP_WIFI_ERR_BUSY;
-    if (!g_reply && !(g_reply = mem_malloc(WIFI_REPLY_MAX)))
-        return LWIP_WIFI_ERR_MEM;
 
     p = pbuf_alloc(PBUF_RAW, (u16_t)(CTL_HEADER + body_len), PBUF_RAM);
     if (!p)
@@ -165,6 +158,42 @@ static lwip_wifi_error_t request(uint8_t op, const uint8_t *body, uint16_t body_
     }
 }
 
+/* Frees the reply buffer. Every public call releases it before returning: lwIP's
+ * statics outlive the program, but the heap it came from may not. */
+static lwip_wifi_error_t release(lwip_wifi_error_t err)
+{
+    if (g_reply)
+        mem_free(g_reply);
+    g_reply = NULL;
+    g_reply_len = 0;
+    return err;
+}
+
+/* On success the reply stays in g_reply until the caller calls release(). */
+static lwip_wifi_error_t request(uint8_t op, const uint8_t *body, uint16_t body_len, uint32_t timeout_ms)
+{
+    struct netif *netif = eth_device_netif();
+    lwip_wifi_error_t err;
+
+    if (!netif)
+        return LWIP_WIFI_ERR_NO_BRIDGE;
+    if (g_waiting)
+        return LWIP_WIFI_ERR_BUSY;
+    if (!(g_reply = mem_malloc(WIFI_REPLY_MAX)))
+        return LWIP_WIFI_ERR_MEM;
+    g_reply_len = 0;
+    err = exchange(netif, op, body, body_len, timeout_ms);
+    return err == LWIP_WIFI_OK ? err : release(err);
+}
+
+/* For calls whose reply carries nothing but the status. */
+static lwip_wifi_error_t command(uint8_t op, const uint8_t *body, uint16_t body_len, uint32_t timeout_ms)
+{
+    lwip_wifi_error_t err = request(op, body, body_len, timeout_ms);
+
+    return err == LWIP_WIFI_OK ? release(err) : err;
+}
+
 static bool take_string(uint16_t *at, char *out)
 {
     uint8_t length;
@@ -198,7 +227,7 @@ lwip_wifi_error_t lwip_wifi_get_state(lwip_wifi_state_t *state)
 
     if (err != LWIP_WIFI_OK)
         return err;
-    return parse_state(g_reply, g_reply_len, state) ? LWIP_WIFI_OK : LWIP_WIFI_ERR_BAD_REQUEST;
+    return release(parse_state(g_reply, g_reply_len, state) ? LWIP_WIFI_OK : LWIP_WIFI_ERR_BAD_REQUEST);
 }
 
 lwip_wifi_error_t lwip_wifi_list_profiles(lwip_wifi_profile_t *profiles, uint8_t max, uint8_t *count)
@@ -223,7 +252,7 @@ lwip_wifi_error_t lwip_wifi_list_profiles(lwip_wifi_profile_t *profiles, uint8_t
         used++;
     }
     *count = used;
-    return LWIP_WIFI_OK;
+    return release(LWIP_WIFI_OK);
 }
 
 lwip_wifi_error_t lwip_wifi_scan(lwip_wifi_network_t *networks, uint8_t max, uint8_t *count)
@@ -248,7 +277,7 @@ lwip_wifi_error_t lwip_wifi_scan(lwip_wifi_network_t *networks, uint8_t max, uin
         used++;
     }
     *count = used;
-    return LWIP_WIFI_OK;
+    return release(LWIP_WIFI_OK);
 }
 
 lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const char *password,
@@ -271,32 +300,32 @@ lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const c
     tls_secure_memzero(body, sizeof body);
     if (err == LWIP_WIFI_OK && saved)
         *saved = g_reply_len ? g_reply[0] : LWIP_WIFI_SLOT_NONE;
-    return err;
+    return err == LWIP_WIFI_OK ? release(err) : err;
 }
 
 lwip_wifi_error_t lwip_wifi_forget_profile(uint8_t slot)
 {
-    return request(CTL_OP_FORGET, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
+    return command(CTL_OP_FORGET, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_enable_profile(uint8_t slot, bool enabled)
 {
     uint8_t body[2] = {slot, enabled ? 1 : 0};
 
-    return request(CTL_OP_ENABLE, body, sizeof body, WIFI_SHORT_TIMEOUT_MS);
+    return command(CTL_OP_ENABLE, body, sizeof body, WIFI_SHORT_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_prefer_profile(uint8_t slot)
 {
-    return request(CTL_OP_PREFER, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
+    return command(CTL_OP_PREFER, &slot, 1, WIFI_SHORT_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_connect(uint8_t slot)
 {
-    return request(CTL_OP_CONNECT, &slot, 1, WIFI_CHANGE_TIMEOUT_MS);
+    return command(CTL_OP_CONNECT, &slot, 1, WIFI_CHANGE_TIMEOUT_MS);
 }
 
 lwip_wifi_error_t lwip_wifi_disconnect(void)
 {
-    return request(CTL_OP_DISCONNECT, NULL, 0, WIFI_CHANGE_TIMEOUT_MS);
+    return command(CTL_OP_DISCONNECT, NULL, 0, WIFI_CHANGE_TIMEOUT_MS);
 }

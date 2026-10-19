@@ -168,9 +168,22 @@ static void respond(struct lwip_socket *peer)
 
     served++;
     body_len = 0;
-    collect_lwip();
-    collect_wifi();
-    collect_calc();
+    /* Test paths for leak hunting: /bare reports only the free heap, /nowifi
+     * skips the bridge query. Anything else returns every stat. */
+    if (strncmp(request, "GET /bare ", 10) == 0)
+    {
+        struct mem_accounting_stats mem;
+
+        if (mem_get_stats(&mem))
+            stat("mem.heap_free", "%u", (unsigned)mem.heap_free);
+    }
+    else
+    {
+        collect_lwip();
+        if (strncmp(request, "GET /nowifi ", 12) != 0)
+            collect_wifi();
+        collect_calc();
+    }
     lwip_socket_write(peer, (const uint8_t *)header, sizeof header - 1);
     lwip_socket_write(peer, (const uint8_t *)body, body_len);
     lwip_socket_close(peer);
