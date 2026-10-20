@@ -238,6 +238,9 @@ void lwip_teardown_abort_pcbs_on_netif(const struct netif *netif)
         struct tcp_pcb *next = tpcb->next;
         if (pcb_belongs_to_netif((const struct ip_pcb *)tpcb, netif))
         {
+            /* Keep errf/callback_arg attached: tcp_abort() frees the PCB and
+             * then reports ERR_ABRT. The socket facade relies on that callback
+             * to clear its PCB pointer and enter a terminal state. */
             tcp_abort(tpcb);
         }
         tpcb = next;
@@ -265,5 +268,37 @@ void lwip_teardown_abort_pcbs_on_netif(const struct netif *netif)
         }
         tpcb = next;
     }
+
+    /* Listening PCBs: tcp_close is the documented teardown for them. */
+    struct tcp_pcb_listen *lpcb = tcp_listen_pcbs.listen_pcbs;
+    while (lpcb)
+    {
+        struct tcp_pcb_listen *next = lpcb->next;
+        if (pcb_belongs_to_netif((const struct ip_pcb *)lpcb, netif))
+        {
+            lwip_teardown_detach_listener(lpcb);
+            tcp_close((struct tcp_pcb *)lpcb);
+        }
+        lpcb = next;
+    }
 #endif
+
+#if LWIP_UDP
+    struct udp_pcb *upcb = udp_pcbs;
+    while (upcb)
+    {
+        struct udp_pcb *next = upcb->next;
+        if (pcb_belongs_to_netif((const struct ip_pcb *)upcb, netif))
+        {
+            udp_recv(upcb, NULL, NULL);
+            udp_remove(upcb);
+        }
+        upcb = next;
+    }
+#endif
+
+    /* TCP/ALTCP error callbacks have now invalidated their socket handles.
+     * UDP and listening PCBs have no equivalent error callback, so let the
+     * socket facade clear any remaining handles before control returns. */
+    lwip_socket_netif_teardown_complete(netif);
 }

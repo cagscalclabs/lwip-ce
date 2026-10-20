@@ -10,6 +10,7 @@
 #ifndef tls_base64_t
 #define tls_base64_t
 
+#include <stddef.h>
 #include <stdint.h>
 
 /***********************************************************************
@@ -26,7 +27,8 @@ size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf);
  * @param inbuf     Pointer to data to decode.
  * @param len       Size of data to decode.
  * @param outbuf    Pointer to buffer to write decoded data.
- * @returns Output size of decoded data.
+ * @returns Output size of decoded data, or 0 for invalid input. Input must be
+ *          non-empty RFC 4648 base64 with a length divisible by four.
  */
 size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf);
 

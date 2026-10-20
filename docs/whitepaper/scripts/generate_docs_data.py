@@ -29,6 +29,14 @@ RNG_ANALYZER_PATH = (
     / "tools"
     / "analyze_rng_stats.py"
 )
+RNG_REPORTER_PATH = (
+    REPOSITORY_ROOT
+    / "tests"
+    / "profiling"
+    / "tls_rng_stats"
+    / "tools"
+    / "summarize_rng_stats.py"
+)
 GENERATED_DIR = ROOT / "generated"
 MANIFEST_FILE = GENERATED_DIR / ".dataset_manifest.sha256"
 APPENDIX_TEX = GENERATED_DIR / "appendix_a_include.tex"
@@ -38,6 +46,7 @@ RNG_ENTROPY_TEX = GENERATED_DIR / "rng_entropy_analysis.tex"
 RNG_ENTROPY_APPENDIX_TEX = GENERATED_DIR / "rng_entropy_appendix.tex"
 RNG_API_HEADER = REPOSITORY_ROOT / "src" / "tls" / "includes" / "random.h"
 RNG_REQUEST_SNIPPET = GENERATED_DIR / "tls_request_random_bytes.h"
+RNG_DISTRIBUTION_SVG = GENERATED_DIR / "rng_entropy_distributions.svg"
 
 RNG_ANALYZER_SPEC = importlib.util.spec_from_file_location(
     "lwip_ce_analyze_rng_stats", RNG_ANALYZER_PATH
@@ -46,6 +55,14 @@ if RNG_ANALYZER_SPEC is None or RNG_ANALYZER_SPEC.loader is None:
     raise RuntimeError(f"cannot load RNG analyzer from {RNG_ANALYZER_PATH}")
 RNG_ANALYZER = importlib.util.module_from_spec(RNG_ANALYZER_SPEC)
 RNG_ANALYZER_SPEC.loader.exec_module(RNG_ANALYZER)
+
+RNG_REPORTER_SPEC = importlib.util.spec_from_file_location(
+    "lwip_ce_summarize_rng_stats", RNG_REPORTER_PATH
+)
+if RNG_REPORTER_SPEC is None or RNG_REPORTER_SPEC.loader is None:
+    raise RuntimeError(f"cannot load RNG reporter from {RNG_REPORTER_PATH}")
+RNG_REPORTER = importlib.util.module_from_spec(RNG_REPORTER_SPEC)
+RNG_REPORTER_SPEC.loader.exec_module(RNG_REPORTER)
 
 TEST_HEADER_RE = re.compile(r"^--Test(\d+)--\s*$")
 MODEL_LINE_RE = re.compile(r"^(?:model|HW\s+Revision)\s*:\s*(.+?)\s*$", re.IGNORECASE)
@@ -95,6 +112,8 @@ def manifest_hash(dataset_dirs: List[Path]) -> str:
     h.update(sha256_file(Path(__file__).resolve()).encode("ascii"))
     h.update(b"\n")
     h.update(sha256_file(RNG_ANALYZER_PATH).encode("ascii"))
+    h.update(b"\n")
+    h.update(sha256_file(RNG_REPORTER_PATH).encode("ascii"))
     h.update(b"\n")
     h.update(sha256_file(RNG_API_HEADER).encode("ascii"))
     h.update(b"\n")
@@ -1132,6 +1151,7 @@ def main() -> int:
         and RNG_ENTROPY_APPENDIX_TEX.exists()
         and APPENDIX_B_TEX.exists()
         and RNG_REQUEST_SNIPPET.exists()
+        and RNG_DISTRIBUTION_SVG.exists()
     ):
         print("docs-data: cache hit (inputs unchanged)")
         return 0
@@ -1148,6 +1168,16 @@ def main() -> int:
         extract_c_declaration(RNG_API_HEADER, "tls_request_random_bytes"),
         args.force,
     )
+    old_chart = (
+        RNG_DISTRIBUTION_SVG.read_text(encoding="utf-8")
+        if RNG_DISTRIBUTION_SVG.exists()
+        else None
+    )
+    rng_report = RNG_REPORTER.build_report(
+        RNG_REPORTER.load_profiles(RNG_STATS_DIR)
+    )
+    RNG_REPORTER.write_svg(RNG_DISTRIBUTION_SVG, rng_report, paper_chart=True)
+    changed |= old_chart != RNG_DISTRIBUTION_SVG.read_text(encoding="utf-8")
 
     MANIFEST_FILE.write_text(digest + "\n", encoding="utf-8")
 

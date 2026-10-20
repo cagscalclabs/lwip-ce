@@ -1,8 +1,9 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
 //#define MIN(a,b) (((a)<(b))?(a):(b))
-char b64_charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char b64_charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static int mod_table[] = {0, 2, 1};
 size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
     size_t olen = 4 * ((len + 2) / 3);
@@ -27,37 +28,41 @@ size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
     return j;
 }
 
-static int b64_value(uint8_t c)
+static int b64_value(uint8_t ch)
 {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
+    const char *p = strchr(b64_charset, (int)ch);
+    return p ? (int)(p - b64_charset) : -1;
 }
 
 size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
-
     size_t j = 0;
-    if (len % 4) return 0;
+
+    if (!inbuf || !outbuf || len == 0 || (len & 3u) != 0)
+        return 0;
 
     for (size_t i = 0; i < len; i += 4) {
-        uint32_t triple = 0;
-        uint8_t pad = 0;
-        for (uint8_t k = 0; k < 4; k++) {
-            uint8_t c = inbuf[i + k];
-            int v = b64_value(c);
-            if (c == '=' && k >= 2 && i + 4 == len) {
-                pad++;
-                v = 0;
-            }
-            else if (pad || v < 0) return 0;
-            triple = (triple << 6) | (uint32_t)v;
-        }
-        outbuf[j++] = (triple >> 2 * 8) & 0xFF;
-        if (pad < 2) outbuf[j++] = (triple >> 1 * 8) & 0xFF;
-        if (pad < 1) outbuf[j++] = (triple >> 0 * 8) & 0xFF;
+        bool last = (i + 4 == len);
+        bool pad_c = inbuf[i + 2] == '=';
+        bool pad_d = inbuf[i + 3] == '=';
+        int a = b64_value(inbuf[i]);
+        int b = b64_value(inbuf[i + 1]);
+        int c = pad_c ? 0 : b64_value(inbuf[i + 2]);
+        int d = pad_d ? 0 : b64_value(inbuf[i + 3]);
+
+        /* Padding is legal only in the final quartet. A padded third sextet
+         * requires the fourth to be padded as well. */
+        if (a < 0 || b < 0 || c < 0 || d < 0 ||
+            ((!last) && (pad_c || pad_d)) || (pad_c && !pad_d))
+            return 0;
+
+        uint32_t triple = ((uint32_t)a << 18)
+                        | ((uint32_t)b << 12)
+                        | ((uint32_t)c << 6)
+                        | (uint32_t)d;
+
+        outbuf[j++] = (uint8_t)(triple >> 16);
+        if (!pad_c) outbuf[j++] = (uint8_t)(triple >> 8);
+        if (!pad_d) outbuf[j++] = (uint8_t)triple;
     }
 
     return j;
