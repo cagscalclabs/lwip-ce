@@ -55,7 +55,9 @@ void tls_psk_cache_put(const char *hostname, uint8_t psk_type,
                        uint32_t ticket_lifetime);
 
 /**
- * Look up a non-expired PSK identity cached for `hostname`.
+ * Take a non-expired PSK identity cached for `hostname`. Tickets are single
+ * use (RFC 8446 §8.1): a hit removes the entry, and a successful resumption
+ * caches the fresh ticket the server issues.
  * @return true and fills psk_type/psk/identity on a live hit, false otherwise.
  */
 bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
