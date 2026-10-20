@@ -2700,17 +2700,15 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
          conn->protocol == LWIP_SOCKET_ALTCP_WSS) &&
         conn->pcb.altcp == NULL)
     {
-        const char *ws_path = conn->ws_conf ? conn->ws_conf->path : "/";
-        const char *ws_sub  = conn->ws_conf ? conn->ws_conf->subprotocol : NULL;
+        altcp_ws_config_t *old_conf = conn->ws_conf;
 
-        /* ws_conf created by the socket layer is the app's — free it, rebuild
-         * with the resolved host so the HTTP Host header is correct. */
-        if (conn->ws_conf)
-        {
-            altcp_ws_free_config(conn->ws_conf);
-            conn->ws_conf = NULL;
-        }
-        conn->ws_conf = altcp_ws_create_config(host, ws_path, ws_sub);
+        /* ws_conf created by the socket layer is the app's — rebuild it with
+         * the resolved host so the HTTP Host header is correct. */
+        conn->ws_conf = altcp_ws_create_config(host,
+                                               old_conf ? old_conf->path : "/",
+                                               old_conf ? old_conf->subprotocol : NULL);
+        if (old_conf)
+            altcp_ws_free_config(old_conf);
         if (!conn->ws_conf)
         {
             conn->status     = LWIP_STATUS_ERROR;

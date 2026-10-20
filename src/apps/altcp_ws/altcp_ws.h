@@ -38,8 +38,8 @@ extern "C" {
 
 struct altcp_tls_ce_config;
 
-/** Configuration for a WebSocket connection. Strings are borrowed — caller
- *  must keep them alive for the lifetime of the connection. */
+/** Configuration for a WebSocket connection. altcp_ws_create_config copies
+ *  the strings; the caller's buffers can be released after it returns. */
 typedef struct altcp_ws_config
 {
     const char *host;        /**< HTTP Host header value (e.g. "example.com")  */

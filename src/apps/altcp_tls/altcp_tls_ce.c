@@ -794,17 +794,19 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     struct tls_psk_identity resumed_identity;
 
     tls_dbg_status("config: ecdhe enter");
-    conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
+    size_t host_len = hostname ? strlen(hostname) + 1 : 0;
+    conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config) + host_len);
     if (conf == NULL)
     {
         return NULL;
     }
-    mem_stats_tls_direct_add(sizeof(*conf), sizeof(*conf));
+    mem_stats_tls_direct_add(sizeof(*conf) + host_len, sizeof(*conf) + host_len);
 
     memset(conf, 0, sizeof(struct altcp_tls_ce_config));
     conf->is_server = 0;
     conf->psk_mode = 0;
-    conf->hostname = hostname;
+    conf->hostname = hostname ? memcpy(conf + 1, hostname, host_len) : NULL;
+    hostname = conf->hostname;
     tls_truststore_prepare();
 
     /* Opportunistically resume from the in-memory PSK cache, but only if a
@@ -836,7 +838,10 @@ void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
             mem_free(conf->alpn_protocols);
         }
         memset(conf->psk, 0, 32);
-        mem_stats_tls_direct_release(sizeof(*conf), sizeof(*conf));
+        size_t size = sizeof(*conf);
+        if (conf->hostname == (const char *)(conf + 1))
+            size += strlen(conf->hostname) + 1;
+        mem_stats_tls_direct_release(size, size);
         mem_free(conf);
     }
 }
