@@ -20,7 +20,8 @@
 #define LWIP_NETIF_HOSTNAME 1
 #define LWIP_NETIF_REMOVE_CALLBACK 1
 
-#define LWIP_CHKSUM_ALGORITHM 1 // todo: does this do anything?
+uint16_t lwip_ce_chksum(const void *dataptr, int len);
+#define LWIP_CHKSUM lwip_ce_chksum
 
 #define LWIP_IGMP LWIP_IPV4
 #define LWIP_ICMP LWIP_IPV4
