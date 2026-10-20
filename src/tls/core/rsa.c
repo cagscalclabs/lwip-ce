@@ -231,6 +231,7 @@ cleanup:
 }
 
 void powmod_exp_u24(uint8_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
+void powmod_exp_u24_vartime(uint8_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
 #define RSA_PUBLIC_EXP 65537
 // CRYPTO_FN
 bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
@@ -318,9 +319,15 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
     RSA_TRACE("decsig: pre-guard");
     bool ok = false;
 
+    if (memcmp(signature, key->modulus, key->mod_len) >= 0)
+    {
+        ERROR();
+        return false;
+    }
+
     memcpy(outbuf, signature, key->mod_len);
     RSA_TRACE("decsig: pre-powmod");
-    powmod_exp_u24((uint8_t)key->mod_len, outbuf, exp, key->modulus);
+    powmod_exp_u24_vartime((uint8_t)key->mod_len, outbuf, exp, key->modulus);
     tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
     ok = true;
     RSA_TRACE("decsig: post-powmod");
