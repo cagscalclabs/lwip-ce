@@ -78,7 +78,7 @@ a raw sequential capture and the complete non-IID estimator suite.
 ## Published statistics report
 
 Pushes to `master` that change the checked-in RNG reports, either analysis
-tool, or the reporting workflow run `Publish RNG Statistics`. The workflow
+tool, or the reporting workflow run `Publish Statistics`. The RNG suite
 recomputes analyzer-owned fields from the stored raw counts and publishes:
 
 - aggregate and per-model tables in the GitHub Actions job summary;

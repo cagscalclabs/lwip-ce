@@ -49,3 +49,21 @@ python3 tests/common/scripts/parse_timing_appvar.py \
   tests/profiling/tls_timing/captures/TLSTMLOG.8xv \
   -o tests/profiling/tls_timing/reports/TLSTMLOG.csv
 ```
+
+## Published statistics report
+
+JSON reports produced by the CagsCalcLabs CTStats capture belong in
+`statistics/timing/` with names ending in `_ctstats.json`. The general
+statistics workflow validates every report, aggregates standard (`c=6`) and
+rigorous (`c=4`) differential-pass decisions by model and primitive, and
+publishes JSON, CSV, and Markdown summaries to the
+`statistics-assets-latest` release. The Markdown report is also rendered in
+the GitHub Actions job summary.
+
+Generate the same outputs locally with:
+
+```sh
+python3 tests/profiling/tls_timing/tools/summarize_timing_stats.py \
+  --stats-dir statistics/timing \
+  --output-dir build/statistics/timing
+```
