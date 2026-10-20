@@ -3064,6 +3064,10 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
         }
         return LWIP_ERR_STATE;
     }
+    if (len > 0xFFFFu ||
+        ((conn->protocol == LWIP_SOCKET_TCP ||
+          conn->protocol == LWIP_SOCKET_ALTCP) && len > TCP_SND_BUF))
+        return LWIP_ERR_ARG;
 
     switch ((lwip_socket_type_t)conn->protocol)
     {

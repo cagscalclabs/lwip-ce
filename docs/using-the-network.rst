@@ -373,13 +373,21 @@ immediately. There is no pbuf ownership or ``recved`` call in the socket API.
    Send ``len`` bytes from ``buf`` over the socket. The socket must be in
    ``LWIP_STATUS_CONNECTED`` state.
 
+   A write never sends part of the buffer: either all ``len`` bytes are queued
+   or none are. ``LWIP_ERR_MEM`` means the send buffer has no room right now;
+   retry after a ``LWIP_SOCKET_IO_WRITABLE`` event. A single write can be at
+   most 65535 bytes, and at most ``TCP_SND_BUF`` (4096) bytes on
+   ``LWIP_SOCKET_TCP`` and ``LWIP_SOCKET_ALTCP`` sockets; split larger data
+   into several writes. On a UDP socket each write sends one datagram.
+
    :param socket: A connected socket handle.
    :param buf: Data to send.
    :param len: Number of bytes to send. Must be greater than ``0``.
-   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_CLOSED`` if the connection is
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_MEM`` if the send buffer is
+      currently full, ``LWIP_ERR_CLOSED`` if the connection is
       closing or already closed, ``LWIP_ERR_STATE`` if the socket is not yet
-      connected, ``LWIP_ERR_ARG`` if any argument is ``NULL`` or ``len`` is
-      ``0``.
+      connected, ``LWIP_ERR_ARG`` if any argument is ``NULL``, ``len`` is
+      ``0``, or ``len`` exceeds the limits above.
 
 Closing/Destroying a Socket
 -----------------------------
