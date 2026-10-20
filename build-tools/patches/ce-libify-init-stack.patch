@@ -1,0 +1,44 @@
+diff --git a/internal/appdylib/appdylib_test.go b/internal/appdylib/appdylib_test.go
+index 78534e0..7b55a10 100644
+--- a/internal/appdylib/appdylib_test.go
++++ b/internal/appdylib/appdylib_test.go
+@@ -86,6 +86,24 @@ func TestStubNeedsExportedInit(t *testing.T) {
+ 	}
+ }
+ 
++func TestStubRestoresIXExactlyOnceOnInitFailure(t *testing.T) {
++	stub, err := Stub(StubOptions{
++		Name:    "LWIP",
++		App:     "lwIP",
++		Prefix:  "lwip",
++		Init:    "lwip_init",
++		Exports: []string{"lwip_init"},
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	text := string(stub)
++	want := "call lwip_init\n\tpop hl\n\tpop hl\n\n\tor a, a\n\tjr z, .init_failed\n\tpop ix\n\tld a, 1"
++	if !strings.Contains(text, want) {
++		t.Fatalf("init result must be checked before the success path restores ix:\n%s", text)
++	}
++}
++
+ func TestLinkerScriptPinsTable(t *testing.T) {
+ 	stock := ".header :\n{\n    KEEP (*(.header.icon))\n} >prgm\n\n.init :\n"
+ 
+diff --git a/internal/appdylib/bootstrap.asm b/internal/appdylib/bootstrap.asm
+index 6f5fd7e..56694d1 100644
+--- a/internal/appdylib/bootstrap.asm
++++ b/internal/appdylib/bootstrap.asm
+@@ -133,9 +133,9 @@ __libify_max_errno := 6
+ 	pop hl
+ 	pop hl
+ 
+-	pop ix
+ 	or a, a
+ 	jr z, .init_failed
++	pop ix
+ 	ld a, 1
+ 	ret
+ 
