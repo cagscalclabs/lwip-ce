@@ -40,11 +40,13 @@ void lwip_teardown_abort_time_wait_pcbs(void);
 /** Remove non-TCP PCBs after their owning services have been stopped. */
 void lwip_teardown_remove_non_tcp_pcbs(void);
 
-/** Abort every TCP/UDP/RAW PCB bound to the given netif (by netif_idx).
- *  Each PCB's err callback fires with ERR_RST so the application can
+/** Abort every TCP PCB bound to the given netif (by netif_idx or local IP).
+ *  Each PCB's err callback fires with ERR_ABRT so the application can
  *  release its own state. Designed to be called from a netif link
  *  callback when a backing transport has gone down so consumers see a
- *  clean reset rather than a stuck connection.
+ *  clean error rather than a stuck connection. Listening and UDP PCBs
+ *  hold no connection state and are left in place for when the link
+ *  returns.
  *
  *  @param netif The netif whose bound PCBs should be aborted.
  */
