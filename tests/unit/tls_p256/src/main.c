@@ -172,57 +172,57 @@ int main(void)
 
     os_ClrHome();
     t1 = test_keygen();
-    printf("RFC 5903 S8.1 keygen: %s\n", t1 ? "PASS" : "FAIL");
+    printf("keygen: %s\n", t1 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t2 = test_ecdh_initiator();
-    printf("RFC 5903 S8.1 ECDH init: %s\n", t2 ? "PASS" : "FAIL");
+    printf("ecdh-init: %s\n", t2 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t3 = test_ecdh_responder();
-    printf("RFC 5903 S8.1 ECDH resp: %s\n", t3 ? "PASS" : "FAIL");
+    printf("ecdh-resp: %s\n", t3 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t4 = test_sign();
-    printf("RFC 6979 A.2.5 sign: %s\n", t4 ? "PASS" : "FAIL");
+    printf("sign: %s\n", t4 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t5 = test_verify_valid();
-    printf("RFC 6979 A.2.5 verify: %s\n", t5 ? "PASS" : "FAIL");
+    printf("verify: %s\n", t5 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t6 = test_reject_tampered();
-    printf("FIPS186-4 S6.4 rej-tamper: %s\n", t6 ? "PASS" : "FAIL");
+    printf("rej-tamper: %s\n", t6 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t7 = test_reject_offcurve();
-    printf("FIPS186-4 S6.4 rej-offcurve: %s\n", t7 ? "PASS" : "FAIL");
+    printf("rej-offcurve: %s\n", t7 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t8 = test_reject_r0();
-    printf("FIPS186-4 S6.4 rej-r=0: %s\n", t8 ? "PASS" : "FAIL");
+    printf("rej-r=0: %s\n", t8 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t9 = test_reject_s0();
-    printf("FIPS186-4 S6.4 rej-s=0: %s\n", t9 ? "PASS" : "FAIL");
+    printf("rej-s=0: %s\n", t9 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t10 = test_reject_rn();
-    printf("FIPS186-4 S6.4 rej-r=n: %s\n", t10 ? "PASS" : "FAIL");
+    printf("rej-r=n: %s\n", t10 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
     t11 = test_reject_sn();
-    printf("FIPS186-4 S6.4 rej-s=n: %s\n", t11 ? "PASS" : "FAIL");
+    printf("rej-s=n: %s\n", t11 ? "PASS" : "FAIL");
     os_GetKey();
 
     os_ClrHome();
