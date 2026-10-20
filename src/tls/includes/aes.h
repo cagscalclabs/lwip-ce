@@ -172,6 +172,8 @@ bool tls_aes_update_ciphertext(struct tls_aes_context *ctx,
  */
 bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest);
 
+bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf);
+
 /********************************************************************
  * @brief Decrypts a block of data.
  * @param ctx           Pointer to an AES context.

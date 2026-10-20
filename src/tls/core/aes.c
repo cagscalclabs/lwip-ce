@@ -703,6 +703,14 @@ cleanup:
 }
 
 // CRYPTO_FN
+bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
+{
+    if (ctx == NULL || inbuf == NULL || outbuf == NULL || ctx->mode != TLS_AES_GCM)
+        return false;
+    gcm_ctr_xor(ctx, inbuf, outbuf, in_len);
+    return true;
+}
+
 bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
 

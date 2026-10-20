@@ -454,7 +454,9 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         {
             goto fail;
         }
-        if (!tls_aes_decrypt(&aes_ctx, scratch, take, scratch))
+        if (ctx->cipher_suite == TLS_AES_128_GCM_SHA256
+                ? !tls_aes_gcm_ctr(&aes_ctx, scratch, take, scratch)
+                : !tls_aes_decrypt(&aes_ctx, scratch, take, scratch))
         {
             goto fail;
         }
@@ -651,6 +653,33 @@ static struct pbuf *altcp_tls_ce_copy_rx_to_ram(struct pbuf *p)
     return copy;
 }
 
+static void altcp_tls_ce_open_window_for_record(altcp_tls_ce_state_t *state)
+{
+    uint8_t header[5];
+    size_t want;
+
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) || state->rx == NULL ||
+        state->rx_app != NULL || state->conn == NULL || state->conn->inner_conn == NULL)
+    {
+        return;
+    }
+    want = state->rx->tot_len;
+    if (want >= sizeof(header) &&
+        pbuf_copy_partial(state->rx, header, sizeof(header), 0) == sizeof(header))
+    {
+        size_t record = sizeof(header) + (((size_t)header[3] << 8) | (size_t)header[4]);
+        if (want > record)
+        {
+            want = record;
+        }
+    }
+    if (want > state->rx_acked_len)
+    {
+        altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)(want - state->rx_acked_len));
+        state->rx_acked_len = want;
+    }
+}
+
 static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
 {
     u16_t added = (p != NULL) ? p->tot_len : 0;
@@ -678,14 +707,16 @@ static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
      * rx_acked_len; the consume path (altcp_tls_ce_consume_recved) then only
      * acks the bytes it releases that this counter did NOT already cover, so
      * no byte is ever acked twice — even for a pbuf that straddles the
-     * handshake -> app-data transition. The post-handshake app-data path does
-     * not pre-ack; the consume path acks those encrypted bytes normally. */
+     * handshake -> app-data transition. After the handshake only the bytes of
+     * the record at the head of state->rx are pre-acked, so a record larger
+     * than the TCP window can still complete. */
     if (added != 0 && !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
         state->conn != NULL && state->conn->inner_conn != NULL)
     {
         altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)added);
         state->rx_acked_len += added;
     }
+    altcp_tls_ce_open_window_for_record(state);
 }
 
 /* Release `n` bytes from the front of state->rx and ack to the lower TCP only
@@ -1695,6 +1726,18 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             altcp_tls_ce_consume_recved(state, state->rx->tot_len);
             break;
         }
+        if (state->rx_app != NULL)
+        {
+            err_t pass_err = altcp_tls_ce_pass_rx_data(conn, state);
+            if (pass_err == ERR_ABRT)
+            {
+                return ERR_ABRT;
+            }
+            if (state->rx_app != NULL)
+            {
+                return ERR_OK;
+            }
+        }
         uint8_t header[5];
         pbuf_copy_partial(state->rx, header, 5, 0);
 
@@ -1847,6 +1890,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         tls_dbg_status("rx: app delivered");
     }
 
+    altcp_tls_ce_open_window_for_record(state);
     return ERR_OK;
 }
 
@@ -2169,6 +2213,14 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
      * plaintext length to TCP would double-credit the receive window and can
      * destabilize long-lived TLS streams. */
     state->rx_passed_unrecved -= len;
+    if (state->rx_app != NULL && altcp_tls_ce_pass_rx_data(conn, state) != ERR_OK)
+    {
+        return;
+    }
+    if (state->rx_app == NULL)
+    {
+        (void)altcp_tls_ce_handle_rx_appldata(conn, state);
+    }
 }
 
 static err_t
@@ -2324,6 +2376,10 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
         return ERR_VAL;
     }
     if (!tls_update_write_keys_if_needed(&state->tls_ctx))
+    {
+        return ERR_MEM;
+    }
+    if ((size_t)altcp_sndbuf(conn->inner_conn) < (size_t)len + 22u)
     {
         return ERR_MEM;
     }
