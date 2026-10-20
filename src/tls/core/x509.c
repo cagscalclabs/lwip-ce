@@ -543,14 +543,12 @@ static bool tls_x509_name_eq_ci(const uint8_t *a, size_t a_len, const uint8_t *b
     size_t i;
     if (a_len != b_len)
     {
-        ERROR_CODE(0x16);
         return false;
     }
     for (i = 0; i < a_len; i++)
     {
         if (tls_x509_ascii_lower(a[i]) != tls_x509_ascii_lower(b[i]))
         {
-            ERROR_CODE(0x17);
             return false;
         }
     }
@@ -580,7 +578,6 @@ static bool tls_x509_pattern_matches_host(const uint8_t *pattern, size_t pattern
 
     if (pattern_len < 3 || pattern[0] != '*' || pattern[1] != '.')
     {
-        ERROR_CODE(0x18);
         return false;
     }
 
@@ -597,13 +594,11 @@ static bool tls_x509_pattern_matches_host(const uint8_t *pattern, size_t pattern
         /* Hostname has no dot at all -- can't match a "*.suffix" pattern,
          * and prevents "*.com"-style patterns from matching a single
          * label such as "com". */
-        ERROR_CODE(0x19);
         return false;
     }
     h_first_label_len = (size_t)(h_dot - hostname);
     if (h_first_label_len == 0)
     {
-        ERROR_CODE(0x1a);
         return false;
     }
 
@@ -752,8 +747,11 @@ static bool tls_x509_san_matches(const uint8_t *ext_data, size_t ext_len,
 
             while (san_cursor.cur < san_cursor.end)
             {
-                ERROR_CODE(0x20);
-                if (!tls_asn1_next(&san_cursor, &san_item)) return false;
+                if (!tls_asn1_next(&san_cursor, &san_item))
+                {
+                    ERROR_CODE(0x20);
+                    return false;
+                }
                 if (san_item.tag == 0x87 && san_item.len != 4 && san_item.len != 16)
                 {
                     ERROR_CODE(0x21);
@@ -817,8 +815,11 @@ bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
 
     uint8_t ip[16];
     int ip_len = tls_identity_ip(hostname, ip);
-    ERROR_CODE(0x25);
-    if (ip_len < 0) return false;
+    if (ip_len < 0)
+    {
+        ERROR_CODE(0x25);
+        return false;
+    }
 
     if (tls_x509_san_matches(ext_data, ext_len, hostname, hostname_len,
                               ip, (size_t)ip_len, &san_present))
