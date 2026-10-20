@@ -1359,6 +1359,51 @@ static void lwip_socket_fail(struct lwip_socket *conn, lwip_error_t err)
                        LWIP_SOCKET_ERR_OP_CONNECT, (int)err, err);
 }
 
+void lwip_socket_netif_teardown_complete(const struct netif *netif)
+{
+    if (!netif)
+        return;
+
+    for (struct lwip_socket *conn = g_conn_registry; conn;
+         conn = conn->registry_next)
+    {
+        if (conn->netif != netif)
+            continue;
+
+        conn->netif = NULL;
+        conn->static_applied = false;
+
+        /* tcp_abort() and the ALTCP error chain normally clear these first.
+         * Any pointer still present for a transport that had started is now
+         * stale (UDP and listeners have no error callback), so invalidate it
+         * without dereferencing it. Pre-connect sockets retain their live PCB
+         * so normal destroy can still release it. */
+        bool transport_started =
+            conn->status == LWIP_STATUS_CONNECTING ||
+            conn->status == LWIP_STATUS_CONNECTED ||
+            conn->status == LWIP_STATUS_CLOSING;
+        if (transport_started || conn->is_listen)
+        {
+            conn->pcb.tcp = NULL;
+        }
+
+        if (conn->status == LWIP_STATUS_CLOSED ||
+            conn->status == LWIP_STATUS_RESET ||
+            conn->status == LWIP_STATUS_ERROR)
+        {
+            continue;
+        }
+
+        lwip_socket_set_pending_host(conn, NULL);
+        conn->connect_deadline = 0;
+        conn->status = LWIP_STATUS_ERROR;
+        conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_NETIF,
+                           transport_started ? LWIP_SOCKET_ERR_OP_RECV
+                                             : LWIP_SOCKET_ERR_OP_CONNECT,
+                           (int)ERR_IF, LWIP_ERR_NETIF);
+    }
+}
+
 static bool netif_has_usable_ipv4(const struct netif *n)
 {
 #if LWIP_IPV4
@@ -3054,7 +3099,7 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
                              const uint8_t *buf,
                              size_t len)
 {
-    if (!conn || !buf || len == 0)
+    if (!conn || !buf || len == 0 || len > (size_t)UINT16_MAX)
         return LWIP_ERR_ARG;
     if (conn->status != LWIP_STATUS_CONNECTED)
     {

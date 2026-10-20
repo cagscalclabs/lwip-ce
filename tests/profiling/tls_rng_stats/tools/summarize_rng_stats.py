@@ -240,15 +240,15 @@ def svg_text(x: float, y: float, value: str, **attrs: str) -> str:
     return f'<text x="{x:.1f}" y="{y:.1f}" {attributes}>{html.escape(value)}</text>'
 
 
-def write_svg(path: Path, report: dict[str, Any]) -> None:
+def write_svg(path: Path, report: dict[str, Any], paper_chart: bool = False) -> None:
     scopes = report["scopes"]
     width = 1500
     left = 250
     right = 35
     gap = 35
-    top = 120
+    top = 70 if paper_chart else 120
     row_height = 92
-    bottom = 85
+    bottom = 55 if paper_chart else 85
     panel_width = (width - left - right - 2 * gap) / 3
     height = top + row_height * len(scopes) + bottom
     rho_limit = nice_correlation_limit(scopes)
@@ -258,7 +258,7 @@ def write_svg(path: Path, report: dict[str, Any]) -> None:
         ("conservative_h", "Conservative H", 0.0, 1.0, "#1a7f37"),
     ]
 
-    out = [
+    out: list[str] = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
@@ -266,19 +266,31 @@ def write_svg(path: Path, report: dict[str, Any]) -> None:
         ),
         '<rect width="100%" height="100%" fill="#ffffff"/>',
         '<g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" fill="#24292f">',
-        svg_text(24, 36, "RNG entropy statistics", font_size="24", font_weight="600"),
-        svg_text(
-            24,
-            62,
-            "Smoothed window distributions with every measured window overlaid",
-            font_size="14",
-            fill="#57606a",
-        ),
     ]
+    if not paper_chart:
+        out.extend(
+            [
+                svg_text(24, 36, "RNG entropy statistics", font_size="24", font_weight="600"),
+                svg_text(
+                    24,
+                    62,
+                    "Smoothed window distributions with every measured window overlaid",
+                    font_size="14",
+                    fill="#57606a",
+                ),
+            ]
+        )
+
+    for row_index in range(len(scopes)):
+        if row_index % 2 == 0:
+            center_y = top + row_index * row_height + row_height / 2
+            out.append(
+                f'<rect x="10" y="{center_y - row_height / 2:.1f}" width="{width - 20}" height="{row_height:.1f}" rx="6" fill="#f6f8fa"/>'
+            )
 
     for panel_index, (key, title, axis_min, axis_max, color) in enumerate(panels):
         panel_x = left + panel_index * (panel_width + gap)
-        out.append(svg_text(panel_x + panel_width / 2, 92, title, text_anchor="middle", font_size="17", font_weight="600"))
+        out.append(svg_text(panel_x + panel_width / 2, top - 28, title, text_anchor="middle", font_size="17", font_weight="600"))
         ticks = [axis_min + (axis_max - axis_min) * index / 4 for index in range(5)]
         for tick in ticks:
             x = panel_x + (tick - axis_min) / (axis_max - axis_min) * panel_width
@@ -286,7 +298,8 @@ def write_svg(path: Path, report: dict[str, Any]) -> None:
                 f'<line x1="{x:.1f}" y1="{top - 8}" x2="{x:.1f}" y2="{top + row_height * len(scopes)}" stroke="#d8dee4" stroke-width="1"/>'
             )
             label = f"{tick:.2f}"
-            out.append(svg_text(x, height - 48, label, text_anchor="middle", font_size="12", fill="#57606a"))
+            tick_y = height - (48 if not paper_chart else 20)
+            out.append(svg_text(x, tick_y, label, text_anchor="middle", font_size="12", fill="#57606a"))
 
         for row_index, scope in enumerate(scopes):
             center_y = top + row_index * row_height + row_height / 2
@@ -317,16 +330,11 @@ def write_svg(path: Path, report: dict[str, Any]) -> None:
 
     for row_index, scope in enumerate(scopes):
         center_y = top + row_index * row_height + row_height / 2
-        if row_index % 2 == 0:
-            out.insert(
-                5,
-                f'<rect x="10" y="{center_y - row_height / 2:.1f}" width="{width - 20}" height="{row_height:.1f}" rx="6" fill="#f6f8fa"/>',
-            )
         out.append(svg_text(24, center_y - 2, str(scope["scope"]), font_size="15", font_weight="600"))
         out.append(svg_text(24, center_y + 19, f"{scope['profiles']} profiles · {scope['windows']} windows", font_size="12", fill="#57606a"))
 
-    out.extend(
-        [
+    if not paper_chart:
+        out.append(
             svg_text(
                 width / 2,
                 height - 15,
@@ -334,11 +342,9 @@ def write_svg(path: Path, report: dict[str, Any]) -> None:
                 text_anchor="middle",
                 font_size="12",
                 fill="#57606a",
-            ),
-            "</g>",
-            "</svg>",
-        ]
-    )
+            )
+        )
+    out.extend(["</g>", "</svg>"])
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
@@ -351,6 +357,11 @@ def main() -> int:
         default="rng-distributions.svg",
         help="image URL embedded in the generated Markdown summary",
     )
+    parser.add_argument(
+        "--paper-chart",
+        action="store_true",
+        help="omit the standalone heading and explanatory footer",
+    )
     args = parser.parse_args()
 
     profiles = load_profiles(args.stats_dir)
@@ -360,7 +371,11 @@ def main() -> int:
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
     write_csv(args.output_dir / "rng-statistics.csv", report)
-    write_svg(args.output_dir / "rng-distributions.svg", report)
+    write_svg(
+        args.output_dir / "rng-distributions.svg",
+        report,
+        paper_chart=args.paper_chart,
+    )
     write_markdown(args.output_dir / "rng-statistics.md", report, args.image_url)
     print(
         f"wrote RNG report for {len(profiles)} profiles and "

@@ -330,8 +330,10 @@ uint32_t eth_last_rx_activity_ms(void);
 /// @brief Polls for the registration status of interfaces.
 /// @return A bitmap indicating what NETIFs are registered (netif->num)
 /// @note Example: a return value of 0b00001101 indicates that en0, en2, and en3 currently exist.
-/// @note The ifnum assignment system seeks to the next free ifnum.
-/// @note Up to 8 simultaneous interfaces allowed. Any more causes device init to fail.
+/// @deprecated This eight-bit ABI compatibility view cannot represent every
+///             lwIP interface number. Use netif_find() for a known interface
+///             or NETIF_FOREACH over lwIP's existing netif_list to enumerate
+///             all Ethernet interfaces.
 uint8_t eth_get_interfaces(void);
 
 /// @brief Reports whether an ethernet netif has been brought down by an

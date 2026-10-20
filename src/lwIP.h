@@ -383,6 +383,8 @@ bool lwip_socket_is_active(const struct lwip_socket *socket);
  *  socket making progress never times out.  0 = disable the timeout. */
 lwip_error_t lwip_socket_set_timeout(struct lwip_socket *socket,
                                      uint32_t timeout_ms);
+/** Write one transport chunk. len must fit in lwIP's 16-bit pbuf/TCP length
+ *  fields; values above UINT16_MAX fail with LWIP_ERR_ARG. */
 lwip_error_t lwip_socket_write(struct lwip_socket *socket,
                                const uint8_t *buf,
                                size_t len);

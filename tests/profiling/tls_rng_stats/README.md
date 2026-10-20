@@ -89,3 +89,5 @@ recomputes analyzer-owned fields from the stored raw counts and publishes:
 
 The chart's density shapes are descriptive rather than fitted normal
 distributions. Its overlaid circles are the individual profiler windows.
+The whitepaper uses the same chart generator but rebuilds from the checked-out
+reports so a historical paper build cannot silently import newer release data.

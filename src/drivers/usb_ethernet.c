@@ -44,7 +44,6 @@
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
-static uint8_t ifnums_used = 0;
 static bool eth_driver_shutting_down = false;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
@@ -269,10 +268,6 @@ static void eth_cleanup_failed_init(usb_device_t device,
             if (netif_is_up(&dev->iface))
             {
                 netif_set_down(&dev->iface);
-            }
-            if (dev->iface.num < 8)
-            {
-                ifnums_used &= ~(1 << dev->iface.num);
             }
             netif_remove(&dev->iface);
         }
@@ -672,10 +667,6 @@ void eth_finish_shutdown(void)
         dev->shutting_down = true;
         dev->rx_transfer_active = false;
         usb_fn.set_device_data(dev->device, NULL);
-        if (netif->num < 8)
-        {
-            ifnums_used &= ~(1 << netif->num);
-        }
         netif_remove(netif);
         /* Cancels any pending drain timer, destroys the ring, frees dev. */
         eth_free_device_storage(dev);
@@ -1544,13 +1535,6 @@ static bool init_ethernet_usb_device(usb_device_t device)
         return false;
     }
 
-    if (ifnums_used == 0b11111111)
-    {
-        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_WARNING,
-                    ("WARNING, device=%p, if_slots full", device));
-        return false;
-    }
-
     /* No "resume into an existing live device" path: a disconnect is always
      * a full teardown (see USB_DEVICE_DISCONNECTED_EVENT/DISABLED_EVENT
      * below), and a later ENABLED_EVENT for what is logically the same
@@ -1822,24 +1806,6 @@ init_success:
     eth->tx.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.out);
     eth->interrupt.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.interrupt);
 
-    // better ifnum assignment
-    uint8_t ifnum_assigned;
-#define NETIFS_MAX_ALLOWED 8
-#define CHECK_BIT(var, pos) ((var) & (1 << (pos)))
-    for (ifnum_assigned = 0; ifnum_assigned < NETIFS_MAX_ALLOWED; ifnum_assigned++)
-        if (!CHECK_BIT(ifnums_used, ifnum_assigned))
-            break;
-
-#if ETH_DEBUG
-    if (ifnum_assigned == NETIFS_MAX_ALLOWED)
-    {
-        // this is a bug because code earlier should detect this condition
-        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
-                    ("ERROR: Interface assign err. This is a bug. File an issue on https://github.com/cagstech/lwip-ce with the following:\nusb_ethernet.c:731 ifs_used=%u, if_assign=%u", ifnums_used, ifnum_assigned));
-        goto fail;
-    }
-#endif
-
     {
         struct netif *iface = &eth->iface;
         // add to lwIP list of active netifs (save pointer to eth_device_t too)
@@ -1850,7 +1816,6 @@ init_success:
             goto fail;
         }
         netif_registered = true;
-        // fetch next available device number to use
         // set pointer to eth_device_t as associated data for usb device too
         usb_fn.set_device_data(device, eth);
         device_data_set = true;
@@ -1858,13 +1823,10 @@ init_success:
         iface->name[0] = 'e';
         iface->name[1] = 'n';
 
-        iface->num = ifnum_assigned; // use IFnum that triggered break
-
         // allow IPv4 and IPv6 on device
         netif_create_ip6_linklocal_address(iface, 1);
         iface->ip6_autoconfig_enabled = 1;
 
-        ifnums_used |= 1 << ifnum_assigned;                         // set flag marking the ifnum used
         netif_set_hostname(iface, lwip_app_config_get()->hostname); // set hostname from config
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                     ("NEW, netif=%c%c%u <- device=%p", iface->name[0], iface->name[1], iface->num, device));
@@ -2071,7 +2033,6 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         }
         if (eth_device)
         {
-            ifnums_used &= ~(1 << eth_device->iface.num);
             netif_remove(&eth_device->iface);
             /* Unbind from the USB device so no later event re-finds this
              * (about-to-be-reaped) struct, then defer the free: enqueue on the
@@ -2145,7 +2106,20 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
 
 uint8_t eth_get_interfaces(void)
 {
-    return ifnums_used;
+    uint8_t interfaces = 0;
+    struct netif *netif;
+
+    NETIF_FOREACH(netif)
+    {
+        /* Compatibility bitmap: lwIP owns num and guarantees its global
+         * uniqueness. Numbers beyond the legacy eight-bit view are omitted;
+         * callers needing every interface should use netif_find/NETIF_FOREACH. */
+        if (eth_is_eth_netif(netif) && netif->num < 8)
+        {
+            interfaces |= (uint8_t)(1u << netif->num);
+        }
+    }
+    return interfaces;
 }
 
 bool netif_is_link_error(const struct netif *netif)

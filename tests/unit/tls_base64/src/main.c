@@ -83,5 +83,22 @@ int main(void)
     ok = (strncmp(buf, decoded3, olen) == 0) && (olen == strlen(decoded3));
     show_result(ok);
 
+    // malformed input must fail without reading beyond its bounds
+    olen = tls_base64_decode((const uint8_t *)"", 0, (uint8_t *)buf);
+    ok = (olen == 0);
+    show_result(ok);
+
+    olen = tls_base64_decode((const uint8_t *)"Z", 1, (uint8_t *)buf);
+    ok = (olen == 0);
+    show_result(ok);
+
+    olen = tls_base64_decode((const uint8_t *)"Zm$v", 4, (uint8_t *)buf);
+    ok = (olen == 0);
+    show_result(ok);
+
+    olen = tls_base64_decode((const uint8_t *)"Zg=A", 4, (uint8_t *)buf);
+    ok = (olen == 0);
+    show_result(ok);
+
     return 0;
 }

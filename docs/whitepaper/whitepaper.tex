@@ -1012,6 +1012,15 @@ for (uint8_t i = 0; i < count; i++) {
 		No generated RNG entropy analysis was found at build time.
 	}
 
+	\IfFileExists{generated/rng_entropy_distributions.pdf}{
+		\begin{figure}[H]
+			\centering
+			\includegraphics[width=\linewidth]{generated/rng_entropy_distributions.pdf}
+			\caption{Distribution of the per-window 99\% lower marginal min-entropy estimate, signed lag-one phi coefficient, and per-window conservative estimate. Density envelopes are descriptive rather than fitted normal distributions; each circle is one profiler window. The table above remains authoritative for the conservative per-model bounds.}
+			\label{fig:rng-entropy-distributions}
+		\end{figure}
+	}{}
+
 	For each model, the marginal and first-order estimates each take the smaller of their aggregate lower bound and their worst individual-test lower bound. The working estimate is the smaller of those two results:
 	\[
 		h_{\text{MCV}}=\min\!\left(H_{99,\mathrm{aggregate}},\ \min_i H_{99,i}\right),
