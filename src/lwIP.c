@@ -352,6 +352,7 @@ void lwip_service_events(void)
         return;
     }
     usb_fn.handle_events();
+    netif_poll_all();
     sys_check_timeouts();
     if (!g_lwip_stopping)
     {
@@ -819,6 +820,7 @@ static void conn_registry_mark_closed(lwip_error_t err)
 static void lwip_stop_pump_once(void)
 {
     usb_fn.handle_events();
+    netif_poll_all();
     sys_check_timeouts();
 }
 
@@ -1478,7 +1480,8 @@ static bool socket_network_ready(const struct lwip_socket *conn, uint8_t flags)
 {
     return conn->netif && netif_is_up(conn->netif) &&
            netif_is_link_up(conn->netif) &&
-           netif_address_configuration_ready(conn->netif) &&
+           (netif_is_loop_network(conn->netif) ||
+            netif_address_configuration_ready(conn->netif)) &&
            lwip_are_services_ready(conn->netif, flags);
 }
 
