@@ -896,9 +896,18 @@ static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
         ERROR();
         return false;
     }
-    if (!mem_buffer_reserve(conn->rx_ring, p->tot_len))
+    bool framed = conn->protocol == LWIP_SOCKET_UDP;
+    if (!mem_buffer_reserve(conn->rx_ring, p->tot_len + (framed ? 2u : 0u)))
     {
         return false;
+    }
+    if (framed)
+    {
+        uint8_t hdr[2] = {(uint8_t)p->tot_len, (uint8_t)(p->tot_len >> 8)};
+        if (!mem_buffer_push(conn->rx_ring, hdr, sizeof(hdr)))
+        {
+            return false;
+        }
     }
 
     for (struct pbuf *q = p; q; q = q->next)
@@ -3103,7 +3112,37 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
 
 size_t lwip_socket_available(const struct lwip_socket *conn)
 {
-    return (conn && conn->rx_ring) ? mem_buffer_len(conn->rx_ring) : 0;
+    if (!conn || !conn->rx_ring)
+        return 0;
+    if (conn->protocol == LWIP_SOCKET_UDP)
+    {
+        uint8_t hdr[2];
+        if (!mem_buffer_peek(conn->rx_ring, 0, hdr, sizeof(hdr)))
+            return 0;
+        return (size_t)hdr[0] | ((size_t)hdr[1] << 8);
+    }
+    return mem_buffer_len(conn->rx_ring);
+}
+
+static size_t lwip_socket_read_datagram(struct lwip_socket *conn,
+                                        uint8_t *buf, size_t len)
+{
+    uint8_t hdr[2];
+    if (mem_buffer_pop(conn->rx_ring, hdr, sizeof(hdr)) != sizeof(hdr))
+        return 0;
+    size_t left = (size_t)hdr[0] | ((size_t)hdr[1] << 8);
+    size_t take = len < left ? len : left;
+    if (take)
+        mem_buffer_pop(conn->rx_ring, buf, take);
+    left -= take;
+    while (left)
+    {
+        uint8_t skip[32];
+        size_t n = left < sizeof(skip) ? left : sizeof(skip);
+        mem_buffer_pop(conn->rx_ring, skip, n);
+        left -= n;
+    }
+    return take;
 }
 
 size_t lwip_socket_read(struct lwip_socket *conn, uint8_t *buf, size_t len)
@@ -3117,6 +3156,10 @@ size_t lwip_socket_read(struct lwip_socket *conn, uint8_t *buf, size_t len)
     if (avail == 0)
     {
         return 0;
+    }
+    if (conn->protocol == LWIP_SOCKET_UDP)
+    {
+        return lwip_socket_read_datagram(conn, buf, len);
     }
     if (len > avail)
     {

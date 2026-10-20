@@ -354,6 +354,8 @@ immediately. There is no pbuf ownership or ``recved`` call in the socket API.
    Use this to check before calling ``lwip_socket_read()`` to avoid a
    zero-length read.
 
+   On a UDP socket this is the size of the next datagram instead.
+
    :param socket: A connected socket handle.
    :returns: Number of bytes available to read; ``0`` if the ring is empty.
 
@@ -362,6 +364,9 @@ immediately. There is no pbuf ownership or ``recved`` call in the socket API.
    Read up to ``len`` bytes from the socket's RX ring into ``buf``. Never
    blocks — returns immediately with however many bytes are available, clamped
    to ``len``. Returns ``0`` if the ring is empty.
+
+   On a UDP socket each call returns one datagram. If ``len`` is smaller than
+   the datagram, the rest of that datagram is discarded.
 
    :param socket: A connected socket handle.
    :param buf: Caller-supplied buffer to receive the data.
