@@ -2814,7 +2814,6 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     conn->status = LWIP_STATUS_RESOLVING;
     conn_event_enqueue(conn, CONN_PENDING_RESOLVING, LWIP_OK);
     INFO("dns: lookup begin");
-    INFO(conn->pending_host);
     err_t derr = dns_gethostbyname(conn->pending_host, &conn->remote_ip,
                                    conn_dns_found_cb, conn);
     if (derr == ERR_OK)
