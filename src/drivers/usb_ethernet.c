@@ -270,10 +270,7 @@ static void eth_cleanup_failed_init(usb_device_t device,
             {
                 netif_set_down(&dev->iface);
             }
-            if (dev->iface.num < 8)
-            {
-                ifnums_used &= ~(1 << dev->iface.num);
-            }
+            ifnums_used &= ~(1 << dev->ifslot);
             netif_remove(&dev->iface);
         }
         eth_free_device_storage(dev);
@@ -672,10 +669,7 @@ void eth_finish_shutdown(void)
         dev->shutting_down = true;
         dev->rx_transfer_active = false;
         usb_fn.set_device_data(dev->device, NULL);
-        if (netif->num < 8)
-        {
-            ifnums_used &= ~(1 << netif->num);
-        }
+        ifnums_used &= ~(1 << dev->ifslot);
         netif_remove(netif);
         /* Cancels any pending drain timer, destroys the ring, frees dev. */
         eth_free_device_storage(dev);
@@ -1830,7 +1824,6 @@ init_success:
         if (!CHECK_BIT(ifnums_used, ifnum_assigned))
             break;
 
-#if ETH_DEBUG
     if (ifnum_assigned == NETIFS_MAX_ALLOWED)
     {
         // this is a bug because code earlier should detect this condition
@@ -1838,7 +1831,7 @@ init_success:
                     ("ERROR: Interface assign err. This is a bug. File an issue on https://github.com/cagstech/lwip-ce with the following:\nusb_ethernet.c:731 ifs_used=%u, if_assign=%u", ifnums_used, ifnum_assigned));
         goto fail;
     }
-#endif
+    eth->ifslot = ifnum_assigned;
 
     {
         struct netif *iface = &eth->iface;
@@ -1857,8 +1850,6 @@ init_success:
 
         iface->name[0] = 'e';
         iface->name[1] = 'n';
-
-        iface->num = ifnum_assigned; // use IFnum that triggered break
 
         // allow IPv4 and IPv6 on device
         netif_create_ip6_linklocal_address(iface, 1);
@@ -2071,7 +2062,7 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         }
         if (eth_device)
         {
-            ifnums_used &= ~(1 << eth_device->iface.num);
+            ifnums_used &= ~(1 << eth_device->ifslot);
             netif_remove(&eth_device->iface);
             /* Unbind from the USB device so no later event re-finds this
              * (about-to-be-reaped) struct, then defer the free: enqueue on the
