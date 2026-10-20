@@ -768,19 +768,25 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     uint8_t resumed_psk_type;
     uint8_t resumed_psk[32];
     struct tls_psk_identity resumed_identity;
+    size_t host_size = hostname ? strlen(hostname) + 1 : 0;
 
     tls_dbg_status("config: ecdhe enter");
-    conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config));
+    /* The hostname is copied in after the struct: callers such as the socket
+     * layer free their string as soon as the connect has started. */
+    conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config) + host_size);
     if (conf == NULL)
     {
         return NULL;
     }
-    mem_stats_tls_direct_add(sizeof(*conf), sizeof(*conf));
+    mem_stats_tls_direct_add(sizeof(*conf) + host_size, sizeof(*conf) + host_size);
 
     memset(conf, 0, sizeof(struct altcp_tls_ce_config));
     conf->is_server = 0;
     conf->psk_mode = 0;
-    conf->hostname = hostname;
+    if (hostname)
+    {
+        conf->hostname = memcpy(conf + 1, hostname, host_size);
+    }
 
     /* Opportunistically resume from the in-memory PSK cache, but only if a
      * live (non-expired) entry exists for this exact hostname. Cross-host
@@ -810,8 +816,10 @@ void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
                                          conf->alpn_protocols_len);
             mem_free(conf->alpn_protocols);
         }
+        size_t size = sizeof(*conf) + (conf->hostname ? strlen(conf->hostname) + 1 : 0);
+
         memset(conf->psk, 0, 32);
-        mem_stats_tls_direct_release(sizeof(*conf), sizeof(*conf));
+        mem_stats_tls_direct_release(size, size);
         mem_free(conf);
     }
 }
@@ -995,6 +1003,58 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
     return altcp_tls_ce_lower_recv_process(conn, state);
 }
 
+/* Collects work handed to the Wi-Fi bridge. ERR_INPROGRESS while it is still
+ * out: the state is flagged, and altcp_tls_ce_offload_ready() resumes it. */
+static err_t
+altcp_tls_ce_settle(altcp_tls_ce_state_t *state)
+{
+    int settled = tls_offload_settle(&state->tls_ctx);
+
+    if (settled > 0)
+    {
+        return ERR_OK;
+    }
+    if (settled == 0)
+    {
+        state->flags |= ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT;
+        return ERR_INPROGRESS;
+    }
+    return ERR_VAL;
+}
+
+void
+altcp_tls_ce_offload_ready(void)
+{
+    altcp_tls_ce_state_t *state;
+
+    for (state = g_tls_state_head; state != NULL; state = state->next)
+    {
+        if (state->flags & ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT)
+        {
+            state->flags = (u8_t)((state->flags & ~ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT) |
+                                  ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK);
+        }
+    }
+    /* Resuming can abort a connection and unlink its state, so rescan from
+     * the head after each one. A handshake still waiting sets WAIT again, not
+     * KICK, so this ends. */
+    state = g_tls_state_head;
+    while (state != NULL)
+    {
+        if (!(state->flags & ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK))
+        {
+            state = state->next;
+            continue;
+        }
+        state->flags &= (u8_t)~ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK;
+        if (state->conn != NULL && state->conn->state == state)
+        {
+            (void)altcp_tls_ce_lower_recv_process(state->conn, state);
+        }
+        state = g_tls_state_head;
+    }
+}
+
 /*
  * Send the ClientHello if the client handshake hasn't started yet. Driven from
  * lower_recv_process (which runs on the connected callback, every recv, and the
@@ -1029,6 +1089,22 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         size_t client_hello_len = 0;
         size_t record_len;
         int prebuild_state = state->tls_ctx.state;
+        err_t settle_err = altcp_tls_ce_settle(state);
+
+        /* Our key share may still be on the bridge. */
+        if (settle_err == ERR_INPROGRESS)
+        {
+            return ERR_MEM;
+        }
+        if (settle_err != ERR_OK)
+        {
+            if (conn->err)
+            {
+                conn->err(conn->arg, ERR_ABRT);
+            }
+            altcp_abort(conn);
+            return ERR_ABRT;
+        }
 
         /* Query the exact serialized size first. Optional ALPN, SNI, PSK, and
          * HRR cookie data are variable-length; a fixed local buffer can reject
@@ -1173,9 +1249,16 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
              * 5-byte header, waits for the whole record to arrive, then hands
              * off to the streaming decrypter (encrypted records) or the
              * inline plaintext handler (ServerHello / CCS / early alert). */
-            while (state->rx != NULL && state->rx->tot_len >= 5)
+            while ((state->rx != NULL && state->rx->tot_len >= 5) ||
+                   state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED)
             {
                 uint8_t header[5];
+                /* Back from waiting on the bridge with the server flight
+                 * already consumed: go straight to completing. */
+                if (state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED)
+                {
+                    goto record_processed;
+                }
                 if (pbuf_copy_partial(state->rx, header, sizeof(header), 0) != sizeof(header))
                 {
                     altcp_abort(conn);
@@ -1203,6 +1286,18 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                  * so we can decrypt the subsequent encrypted handshake records */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED)
                 {
+                    /* The shared secret may still be on the bridge; the
+                     * record stays queued until it is in. */
+                    err_t settle_err = altcp_tls_ce_settle(state);
+                    if (settle_err == ERR_INPROGRESS)
+                    {
+                        return ERR_OK;
+                    }
+                    if (settle_err != ERR_OK)
+                    {
+                        altcp_abort(conn);
+                        return ERR_ABRT;
+                    }
                     /* tls_derive_handshake_keys holds early_secret/
                      * handshake_secret/derived_secret on its own stack
                      * frame; wrapping the call lets tls_crypto_guard_disable()
@@ -1407,6 +1502,21 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 /* Check if server Finished received — time to send client Finished */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED)
                 {
+                    /* Signature checks handed to the bridge must all pass
+                     * before anything is sent or delivered under the new
+                     * keys. */
+                    err_t settle_err = altcp_tls_ce_settle(state);
+                    if (settle_err == ERR_INPROGRESS)
+                    {
+                        return ERR_OK;
+                    }
+                    if (settle_err != ERR_OK)
+                    {
+                        tls_dbg_status("offload: verify fail");
+                        altcp_abort(conn);
+                        return ERR_ABRT;
+                    }
+
                     /* Derive application keys BEFORE client Finished, because
                      * RFC 8446 Section 7.1 uses transcript through server Finished only.
                      * tls_send_finished() will update the transcript with client Finished. */

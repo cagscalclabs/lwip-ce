@@ -54,6 +54,8 @@ typedef struct lwip_app_config {
     };
     char hostname[LWIP_CFG_HOSTNAME_MAX];
     uint8_t tls_enabled;
+    uint8_t crypto_offload; /* hand X25519 and RSA checks to the Wi-Fi bridge */
+    uint8_t bridge_rng;     /* seed every random byte from the bridge TRNG */
 } lwip_app_config_t;
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg);

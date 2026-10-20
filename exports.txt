@@ -459,3 +459,7 @@ lwip_wifi_prefer_profile
 lwip_wifi_connect
 lwip_wifi_disconnect
 lwip_wifi_set_event_cb
+lwip_wifi_crypto_caps
+lwip_wifi_x25519
+lwip_wifi_rsa_verify
+lwip_wifi_random

@@ -64,6 +64,9 @@ typedef struct altcp_tls_ce_state {
  * off; a retried close() (because the TCP-level close came back ERR_MEM)
  * skips re-sending the alert. The peer has already seen it. */
 #define ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT 0x10
+/* The handshake is waiting on the Wi-Fi bridge (wireless/crypto.h). */
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x20
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x40
 
 /**
  * @brief TLS configuration for CE implementation
@@ -77,7 +80,7 @@ struct altcp_tls_ce_config {
     struct tls_psk_identity psk_identity;    /* PSK identity */
     enum tls_psk_type psk_type;              /* Resumption vs external PSK */
 
-    /* SNI hostname (pointer to caller-owned string, must outlive config) */
+    /* SNI hostname; the ECDHE client factory stores its own copy */
     const char *hostname;
 
     /* Serialized ALPN ProtocolNameList entries, owned by this config. */
@@ -158,6 +161,13 @@ struct altcp_pcb *altcp_tls_ce_new(
 );
 
 void altcp_tls_ce_set_rx_throttle(enum mem_pressure_level level);
+
+/**
+ * @brief Resume handshakes that were waiting on the Wi-Fi bridge
+ *
+ * Called by the crypto offload client whenever an offloaded job finishes.
+ */
+void altcp_tls_ce_offload_ready(void);
 
 /**
  * @brief Allocator function for use with altcp_new

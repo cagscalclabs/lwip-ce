@@ -2,6 +2,7 @@
 #define LWIP_WIRELESS_WIFI_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define LWIP_WIFI_SSID_MAX 32
@@ -11,6 +12,11 @@
 #define LWIP_WIFI_PROFILE_ENABLED 0x01
 #define LWIP_WIFI_PROFILE_HIDDEN 0x02
 #define LWIP_WIFI_PROFILE_ACTIVE 0x04
+
+#define LWIP_WIFI_CAP_X25519 0x01
+#define LWIP_WIFI_CAP_RSA 0x02
+#define LWIP_WIFI_CAP_RANDOM 0x04
+#define LWIP_WIFI_RANDOM_MAX 64
 
 typedef enum
 {
@@ -31,7 +37,8 @@ typedef enum
     LWIP_WIFI_ERR_NOT_FOUND,
     LWIP_WIFI_ERR_FULL,
     LWIP_WIFI_ERR_MEM,
-    LWIP_WIFI_ERR_BUSY
+    LWIP_WIFI_ERR_BUSY,
+    LWIP_WIFI_ERR_REJECTED
 } lwip_wifi_error_t;
 
 typedef struct
@@ -85,5 +92,26 @@ lwip_wifi_error_t lwip_wifi_prefer_profile(uint8_t slot);
 lwip_wifi_error_t lwip_wifi_connect(uint8_t slot);
 
 lwip_wifi_error_t lwip_wifi_disconnect(void);
+
+/* Crypto on the bridge. TLS already uses it on its own; these are for programs.
+ * They wait for the answer, so call them from the main loop, not from a socket
+ * callback. X25519 and RSA need the Crypto offload setting, random needs the
+ * Bridge TRNG setting. LWIP_WIFI_ERR_NO_BRIDGE when no bridge offers the
+ * operation, LWIP_WIFI_ERR_TIMEOUT when the bridge could not answer. */
+uint8_t lwip_wifi_crypto_caps(void);
+
+/* out = X25519(scalar, point); point NULL means the base point (a public key).
+ * LWIP_WIFI_ERR_REJECTED for an all-zero result. */
+lwip_wifi_error_t lwip_wifi_x25519(const uint8_t scalar[32], const uint8_t point[32], uint8_t out[32]);
+
+/* RSA signature check over a SHA-256 digest, PKCS#1 v1.5 or PSS (salt length
+ * 32). Numbers are big-endian; the signature is mod_len bytes.
+ * LWIP_WIFI_OK when valid, LWIP_WIFI_ERR_REJECTED when not. */
+lwip_wifi_error_t lwip_wifi_rsa_verify(bool pss, const uint8_t digest[32], const uint8_t *modulus,
+                                       size_t mod_len, const uint8_t *exponent, size_t exp_len,
+                                       const uint8_t *sig);
+
+/* len (at most LWIP_WIFI_RANDOM_MAX) bytes from the bridge TRNG. */
+lwip_wifi_error_t lwip_wifi_random(uint8_t *out, uint8_t len);
 
 #endif

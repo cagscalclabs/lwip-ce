@@ -96,6 +96,41 @@ How the Link Behaves
   may only send frames from its own address. As a result, the calculator usually
   gets the same address every time from the same network.
 
+Crypto Offload
+--------------
+
+The bridge can also take over the slow parts of TLS. Two settings in the
+lwIP-CE app's **Security** section control it, and both are on by default:
+
+**Crypto offload**
+    The bridge computes the X25519 key exchange and checks the RSA signatures
+    on the server's certificate chain and CertificateVerify, using its hardware
+    accelerators. The calculator still runs the rest of TLS (key schedule,
+    record encryption, certificate parsing and policy) itself.
+
+**Bridge TRNG**
+    The bridge's hardware random number generator becomes the entropy source.
+    As soon as the bridge answers, its output replaces the calculator's random
+    generator state outright, and each new TLS handshake reseeds it with fresh
+    bridge output. The calculator stops collecting its own entropy in the
+    background meanwhile. Until the bridge answers (and whenever it is
+    unplugged) the calculator's own source is used.
+
+Offloading never changes a verdict. Signature checks run in parallel with the
+rest of the handshake, and the handshake waits for all of them before it sends
+its Finished message or hands any data to the program. If the bridge does not
+answer within two seconds, or cannot decide (for example, an unusual key), the
+calculator runs that operation itself. With an older bridge firmware, or with
+another USB Ethernet adapter, nothing is offloaded.
+
+The key exchange's ephemeral private key and the random bytes cross the USB
+cable to and from the bridge, so the bridge is part of the trusted hardware.
+
+Programs can use the same operations directly: ``lwip_wifi_x25519()``,
+``lwip_wifi_rsa_verify()`` and ``lwip_wifi_random()`` wait for the bridge's
+answer, and ``lwip_wifi_crypto_caps()`` reports which ones are available. Call
+them from the main loop, not from a socket callback.
+
 Wi-Fi Control API
 -----------------
 

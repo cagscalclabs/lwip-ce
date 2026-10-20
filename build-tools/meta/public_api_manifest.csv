@@ -769,3 +769,7 @@ func,lwip_wifi_prefer_profile,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_connect,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_disconnect,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_set_event_cb,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
+func,lwip_wifi_crypto_caps,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
+func,lwip_wifi_x25519,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
+func,lwip_wifi_rsa_verify,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
+func,lwip_wifi_random,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h

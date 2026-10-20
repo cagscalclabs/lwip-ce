@@ -177,6 +177,7 @@
 #include "../includes/asn1.h"
 #include "../includes/rsa.h"
 #include "x509_internal.h"
+#include "key_internal.h"
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
@@ -190,6 +191,8 @@
 #include "lwip/app_config.h"
 #include "lwip/sys.h"
 #include "lwip/pbuf.h"
+#include "../../wireless/crypto.h"
+#include "../../wireless/wifi_proto.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_HANDSHAKE
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -611,13 +614,101 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
     return true;
 }
 
+/* An RSA check handed to the Wi-Fi bridge. It carries copies of everything
+ * the local code needs, in case the bridge never answers. The verdict is
+ * collected by tls_offload_settle() before the handshake completes, so nothing
+ * from the peer is trusted before then. */
+struct tls_deferred_verify
+{
+    struct tls_deferred_verify *next;
+    size_t size;
+    lwip_crypto_job_t job;
+    tls_alg_t alg;
+    uint8_t alert;
+    uint8_t digest[32];
+    struct tls_key key; /* modulus and exponent point into data */
+    uint8_t data[];     /* modulus, exponent, signature */
+};
+
+static void tls_deferred_free(struct tls_deferred_verify *d)
+{
+    size_t size = d->size;
+
+    lwip_crypto_cancel(d->job);
+    mem_stats_tls_direct_release(size, size);
+    mem_buffer_custom_free(d);
+}
+
+/* Hands an RSA check to the bridge. Returns false when it must run locally:
+ * offload unavailable, or a key the local code would reject outright. */
+static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg,
+                                const struct tls_key *key, const uint8_t digest[32],
+                                const uint8_t *sig, size_t sig_len, uint8_t alert)
+{
+    const struct tls_rsa_key *rsa = &key->rsa;
+    struct tls_deferred_verify *d;
+    lwip_crypto_job_t job;
+    size_t size;
+
+    if (!ctx || key->type != TLS_KEY_TYPE_RSA ||
+        (alg != TLS_ALG_RSA_PKCS1_SHA256 && alg != TLS_ALG_RSA_PSS_RSAE_SHA256) ||
+        !tls_key_supports_operation(key, alg) || !rsa->modulus || !rsa->exponent ||
+        sig_len != rsa->mod_len || rsa->mod_len < RSA_MODULUS_MIN_SUPPORTED ||
+        rsa->mod_len > RSA_MODULUS_MAX_SUPPORTED ||
+        !(rsa->modulus[rsa->mod_len - 1] & 1) || rsa->exp_len == 0 || rsa->exp_len > 3)
+    {
+        return false;
+    }
+
+    job = lwip_crypto_rsa_verify(alg == TLS_ALG_RSA_PSS_RSAE_SHA256 ? CTL_RSA_PSS_SHA256
+                                                                   : CTL_RSA_PKCS1_SHA256,
+                                 digest, rsa->modulus, rsa->mod_len, rsa->exponent,
+                                 rsa->exp_len, sig);
+    if (!job)
+    {
+        return false;
+    }
+    size = sizeof(*d) + 2 * rsa->mod_len + rsa->exp_len;
+    d = (struct tls_deferred_verify *)mem_buffer_custom_malloc(size);
+    if (!d)
+    {
+        lwip_crypto_cancel(job);
+        return false;
+    }
+    mem_stats_tls_direct_add(size, size);
+
+    memset(d, 0, sizeof(*d));
+    d->size = size;
+    d->job = job;
+    d->alg = alg;
+    d->alert = alert;
+    memcpy(d->digest, digest, sizeof(d->digest));
+    d->key.type = TLS_KEY_TYPE_RSA;
+    d->key.rsa.mod_len = rsa->mod_len;
+    d->key.rsa.modulus = d->data;
+    d->key.rsa.exp_len = rsa->exp_len;
+    d->key.rsa.exponent = d->data + rsa->mod_len;
+    memcpy(d->data, rsa->modulus, rsa->mod_len);
+    memcpy(d->data + rsa->mod_len, rsa->exponent, rsa->exp_len);
+    memcpy(d->data + rsa->mod_len + rsa->exp_len, sig, sig_len);
+    d->next = ctx->deferred;
+    ctx->deferred = d;
+    return true;
+}
+
 /* Bind the certificate's signature scheme to a compatible issuer key.
  * The issuer's key algorithm does not choose the child's signature padding. */
-static tls_key_op_result_t tls_cert_verify_digest(tls_alg_t scheme,
+static tls_key_op_result_t tls_cert_verify_digest(struct tls_handshake_context *ctx,
+                                                 tls_alg_t scheme,
                                                  const struct tls_key *issuer,
                                                  const uint8_t digest[32],
                                                  const uint8_t *sig, size_t sig_len)
 {
+    if (tls_verify_deferred(ctx, scheme, issuer, digest, sig, sig_len,
+                            TLS_ALERT_BAD_CERTIFICATE))
+    {
+        return TLS_KEY_OP_OK;
+    }
     return tls_x509_signature_verify_digest(digest, sig, sig_len, issuer, scheme);
 }
 
@@ -654,7 +745,7 @@ static tls_key_op_result_t tls_cert_verify_pending_link(
     if (w->pending_sig_omitted || !w->pending_sig)
         return TLS_KEY_OP_INVALID;
 
-    return tls_cert_verify_digest(w->pending_sig_alg, issuer,
+    return tls_cert_verify_digest(w->ctx, w->pending_sig_alg, issuer,
                                   w->pending_tbs_digest, w->pending_sig,
                                   w->pending_sig_len);
 }
@@ -1702,6 +1793,9 @@ bool tls_handshake_init(
     ctx->client_seq_num = 0;
     ctx->server_seq_num = 0;
 
+    /* Fresh bridge TRNG input for the next handshake's randomness. */
+    lwip_crypto_reseed();
+
     INFO("init: client random");
     /* The public byte API generates through Hash_DRBG and fails closed if
      * initial instantiation or mandatory reseeding cannot obtain entropy. */
@@ -1732,7 +1826,9 @@ bool tls_handshake_init(
     }
 
     INFO("init: X25519 public key");
-    if (!tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
+    ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, NULL, ctx->ecdhe_public);
+    if (!ctx->ecdhe_job &&
+        !tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
                               NULL, NULL))
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
@@ -2637,6 +2733,16 @@ bool tls_recv_server_hello(
                 ERROR_CODE(0x5a);
                 return false;
             }
+            /* Hand the shared secret to the bridge when we can; it is
+             * collected by tls_offload_settle() before key derivation. */
+            memcpy(ctx->ecdhe_peer, data + offset + 4, 32);
+            ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, ctx->ecdhe_peer,
+                                                ctx->ecdhe_shared);
+            if (ctx->ecdhe_job)
+            {
+                ctx->ecdhe_negotiated = true;
+                break;
+            }
             /* Compute the shared secret. The primitive rejects an all-zero
              * result; TLS 1.3 requires illegal_parameter in that case. */
             if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
@@ -3397,6 +3503,12 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     {
         ERROR_CODE(0x7d);
         return false;
+    }
+
+    if (tls_verify_deferred(ctx, TLS_ALG_RSA_PSS_RSAE_SHA256, &ctx->leaf_pubkey,
+                            message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
+    {
+        return true;
     }
 
     em = __rsa_transient;
@@ -4696,11 +4808,92 @@ bool tls_send_close_notify(struct tls_handshake_context *ctx)
 /**
  * @brief Clean up handshake context
  */
+int tls_offload_settle(struct tls_handshake_context *ctx)
+{
+    if (ctx->ecdhe_job)
+    {
+        /* Before ServerHello the job makes our public key; after, the
+         * shared secret. */
+        bool secret = ctx->ecdhe_negotiated;
+        uint8_t *out = secret ? ctx->ecdhe_shared : ctx->ecdhe_public;
+        lwip_crypto_status_t status = lwip_crypto_take(ctx->ecdhe_job);
+        bool ok;
+
+        if (status == LWIP_CRYPTO_PENDING)
+        {
+            return 0;
+        }
+        ctx->ecdhe_job = 0;
+        if (status == LWIP_CRYPTO_FAILED)
+        {
+            ok = secret ? tls_x25519_secret(out, ctx->ecdhe_private, ctx->ecdhe_peer, NULL, NULL)
+                        : tls_x25519_publickey(out, ctx->ecdhe_private, NULL, NULL);
+        }
+        else
+        {
+            ok = status == LWIP_CRYPTO_OK;
+        }
+        if (secret)
+        {
+            tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
+        }
+        if (!ok)
+        {
+            ERROR();
+            tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
+            tls_secure_memzero(ctx->ecdhe_shared, sizeof(ctx->ecdhe_shared));
+            if (secret)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
+            }
+            ctx->state = TLS_STATE_ERROR;
+            return -1;
+        }
+    }
+
+    while (ctx->deferred)
+    {
+        struct tls_deferred_verify *d = ctx->deferred;
+        lwip_crypto_status_t status = lwip_crypto_take(d->job);
+        uint8_t alert = d->alert;
+        bool ok;
+
+        if (status == LWIP_CRYPTO_PENDING)
+        {
+            return 0;
+        }
+        d->job = 0;
+        ok = status == LWIP_CRYPTO_OK ||
+             (status == LWIP_CRYPTO_FAILED &&
+              tls_x509_signature_verify_digest(d->digest,
+                                               d->data + d->key.rsa.mod_len + d->key.rsa.exp_len,
+                                               d->key.rsa.mod_len, &d->key, d->alg) == TLS_KEY_OP_OK);
+        ctx->deferred = d->next;
+        tls_deferred_free(d);
+        if (!ok)
+        {
+            ERROR();
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
+            ctx->state = TLS_STATE_ERROR;
+            return -1;
+        }
+    }
+    return 1;
+}
+
 void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 {
     if (!ctx)
     {
         return;
+    }
+
+    lwip_crypto_cancel(ctx->ecdhe_job);
+    while (ctx->deferred)
+    {
+        struct tls_deferred_verify *d = ctx->deferred;
+        ctx->deferred = d->next;
+        tls_deferred_free(d);
     }
 
     /* Transcript hash uses embedded storage, no need to free */

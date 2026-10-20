@@ -129,7 +129,8 @@ strings are a length byte followed by the bytes, without a terminator.
    * - 16
      - Sequence number, echoed in the reply
    * - 17
-     - Status in replies: 0 ok, 1 bad request, 2 not found, 3 full
+     - Status in replies: 0 ok, 1 bad request, 2 not found, 3 full, 4 busy,
+       5 rejected
    * - 18
      - Body
 
@@ -168,9 +169,29 @@ strings are a length byte followed by the bytes, without a terminator.
    * - 9
      - Disconnect
      - None.
+   * - 10
+     - Info
+     - Reply: crypto capabilities (bit 0 X25519, bit 1 RSA, bit 2 TRNG).
+   * - 11
+     - X25519
+     - Request: scalar (32), point (32; ``9`` for a public key). Reply: result
+       (32); status 5 for an all-zero result.
+   * - 12
+     - RSA verify
+     - Request: algorithm (1 PKCS#1 v1.5, 2 PSS, both SHA-256), digest (32),
+       modulus length (2), exponent length, modulus, exponent, signature
+       (modulus length). Numbers are big-endian. Status 0 valid, 5 invalid.
+   * - 13
+     - Random
+     - Request: count (at most 64). Reply: that many TRNG bytes.
    * - 64
      - Event
      - Sent unprompted as op ``0xC0`` when Wi-Fi connects or drops; body as Status.
+
+Ops 10 to 13 run on their own task on the bridge and may overlap, so their
+replies are matched by op and sequence number. The bridge answers status 1
+whenever it cannot decide; the calculator then does the work itself. See
+:doc:`using-wifi` for how the calculator uses them.
 
 Saved networks live in the bridge's NVS under the ``lwip_wifi`` namespace.
 

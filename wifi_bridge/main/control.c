@@ -177,7 +177,6 @@ static void handle(const request_t *request)
     size_t used = 0;
     uint8_t status = CTL_ST_OK;
     uint8_t op = frame[15];
-    uint8_t mac[6];
 
     switch (op) {
     case CTL_OP_STATUS:
@@ -226,21 +225,28 @@ static void handle(const request_t *request)
         break;
     }
 
-    esp_wifi_get_mac(WIFI_IF_STA, mac);
-    if (op == CTL_OP_EVENT) {
-        memset(s_reply, 0xFF, 6);
-    } else {
-        memcpy(s_reply, frame + 6, 6);
-    }
-    memcpy(s_reply + 6, mac, 6);
-    s_reply[12] = CTL_ETHERTYPE >> 8;
-    s_reply[13] = CTL_ETHERTYPE & 0xFF;
-    s_reply[14] = CTL_VERSION;
-    s_reply[15] = (uint8_t)(op | CTL_REPLY);
-    s_reply[16] = frame[16];
-    s_reply[17] = status;
-    bridge_send(s_reply, CTL_HEADER + used);
+    control_reply(frame, s_reply, status, used);
     ESP_LOGI(TAG, "op %u status %u, %u byte reply", op, status, (unsigned)used);
+}
+
+void control_reply(const uint8_t *request, uint8_t *reply, uint8_t status, size_t used)
+{
+    uint8_t mac[6];
+
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    if (request[15] == CTL_OP_EVENT) {
+        memset(reply, 0xFF, 6);
+    } else {
+        memcpy(reply, request + 6, 6);
+    }
+    memcpy(reply + 6, mac, 6);
+    reply[12] = CTL_ETHERTYPE >> 8;
+    reply[13] = CTL_ETHERTYPE & 0xFF;
+    reply[14] = CTL_VERSION;
+    reply[15] = (uint8_t)(request[15] | CTL_REPLY);
+    reply[16] = request[16];
+    reply[17] = status;
+    bridge_send(reply, CTL_HEADER + used);
 }
 
 static void control_task(void *arg)
@@ -271,6 +277,10 @@ void control_request(const uint8_t *frame, size_t length)
     static request_t request;
 
     if (length < CTL_HEADER || length > CTL_MAX || frame[14] != CTL_VERSION || frame[15] == CTL_OP_EVENT) {
+        return;
+    }
+    /* Crypto has its own task, so a long scan never stalls a TLS handshake. */
+    if (crypto_request(frame, length)) {
         return;
     }
     request.length = (uint16_t)length;

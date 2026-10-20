@@ -41,3 +41,9 @@ void wifi_kick(void);
 esp_err_t control_init(void);
 void control_request(const uint8_t *frame, size_t length);
 void control_notify(void);
+/* Fills in the reply header for request and sends CTL_HEADER + used bytes. */
+void control_reply(const uint8_t *request, uint8_t *reply, uint8_t status, size_t used);
+
+esp_err_t crypto_init(void);
+/* Queues a crypto request; false when the frame is not one. */
+bool crypto_request(const uint8_t *frame, size_t length);

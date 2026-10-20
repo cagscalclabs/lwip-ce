@@ -25,6 +25,8 @@ enum lwip_cfg_setting_id {
     LWIP_CFG_ID_PCAP_MAX_BYTES,
     LWIP_CFG_ID_HOSTNAME,
     LWIP_CFG_ID_TLS_ENABLED,
+    LWIP_CFG_ID_CRYPTO_OFFLOAD,
+    LWIP_CFG_ID_BRIDGE_RNG,
 };
 
 static const uint8_t lwip_cfg_magic[4] = {'L', 'W', 'C', 'F'};
@@ -103,6 +105,8 @@ static void lwip_app_config_normalize(lwip_app_config_t *cfg)
     cfg->log_min_level = LWIP_CFG_LOG_LEVEL_DEF;
     cfg->dst_enabled = cfg->dst_enabled ? 1u : 0u;
     cfg->tls_enabled = cfg->tls_enabled ? 1u : 0u;
+    cfg->crypto_offload = cfg->crypto_offload ? 1u : 0u;
+    cfg->bridge_rng = cfg->bridge_rng ? 1u : 0u;
 
     switch (cfg->pcap_max_bytes)
     {
@@ -131,6 +135,8 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     strncpy(cfg->hostname, "ti84plusce", LWIP_CFG_HOSTNAME_MAX - 1);
     cfg->hostname[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
     cfg->tls_enabled = 1;
+    cfg->crypto_offload = 1;
+    cfg->bridge_rng = 1;
 }
 
 static bool parse_serialized_config(lwip_app_config_t *cfg,
@@ -195,6 +201,14 @@ static bool parse_serialized_config(lwip_app_config_t *cfg,
         case LWIP_CFG_ID_TLS_ENABLED:
             if (length != 1u) return false;
             cfg->tls_enabled = data[pos];
+            break;
+        case LWIP_CFG_ID_CRYPTO_OFFLOAD:
+            if (length != 1u) return false;
+            cfg->crypto_offload = data[pos];
+            break;
+        case LWIP_CFG_ID_BRIDGE_RNG:
+            if (length != 1u) return false;
+            cfg->bridge_rng = data[pos];
             break;
         default:
             /* Forward-compatible setting: retain framing, ignore value. */
@@ -336,7 +350,11 @@ bool lwip_app_config_save(const lwip_app_config_t *cfg)
                         LWIP_CFG_ID_HOSTNAME, normalized.hostname,
                         (uint8_t)hostname_len) ||
         !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_TLS_ENABLED, &normalized.tls_enabled, 1u))
+                        LWIP_CFG_ID_TLS_ENABLED, &normalized.tls_enabled, 1u) ||
+        !append_setting(serialized, sizeof(serialized), &used,
+                        LWIP_CFG_ID_CRYPTO_OFFLOAD, &normalized.crypto_offload, 1u) ||
+        !append_setting(serialized, sizeof(serialized), &used,
+                        LWIP_CFG_ID_BRIDGE_RNG, &normalized.bridge_rng, 1u))
         return false;
 
     write_u16_le(serialized + 6, (uint16_t)(used - LWIP_CFG_HEADER_SIZE));

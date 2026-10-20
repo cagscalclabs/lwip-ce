@@ -41,6 +41,7 @@
 #define LWIP_DBG_FILE_ID LWIP_FILE_USB_ETHERNET
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_USB
 #include "lwip/logging.h"
+#include "wireless/crypto.h"
 #include "wireless/wifi_proto.h"
 #include "../tls/includes/bytes.h"
 
@@ -1402,6 +1403,9 @@ static void eth_link_callback(struct netif *netif)
     {
         lwip_teardown_abort_pcbs_on_netif(netif);
     }
+    /* Only the Wi-Fi bridge puts us in device mode. */
+    if (dev->device_mode)
+        lwip_crypto_link(netif_is_link_up(netif));
 }
 
 /* netif status callback: same idea, on the admin-down edge. Together

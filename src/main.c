@@ -30,6 +30,8 @@ enum
     ROW_TIMEZONE,
     ROW_DST,
     ROW_TLS,
+    ROW_CRYPTO_OFFLOAD,
+    ROW_BRIDGE_RNG,
     ROW_PCAP_SIZE,
     ROW_PCAP_VIEW
 };
@@ -237,6 +239,10 @@ static int build_menu(ui_item_t *items, uint8_t *roles, char *tz, size_t tz_size
     ADD(ROW_DST, UI_ITEM_TOGGLE, "Daylight saving", "Add an hour in summer", NULL, g_cfg.dst_enabled != 0, 0);
     ADD(ROW_SECTION, UI_ITEM_SECTION, "Security", NULL, NULL, false, 0);
     ADD(ROW_TLS, UI_ITEM_TOGGLE, "TLS", "Allow encrypted sockets", NULL, g_cfg.tls_enabled != 0, 0);
+    ADD(ROW_CRYPTO_OFFLOAD, UI_ITEM_TOGGLE, "Crypto offload", "Bridge does TLS key math", NULL,
+        g_cfg.crypto_offload != 0, 0);
+    ADD(ROW_BRIDGE_RNG, UI_ITEM_TOGGLE, "Bridge TRNG", "Bridge supplies all randomness", NULL,
+        g_cfg.bridge_rng != 0, 0);
     ADD(ROW_SECTION, UI_ITEM_SECTION, "Diagnostics", NULL, NULL, false, 0);
     ADD(ROW_PCAP_SIZE, UI_ITEM_VALUE, "Capture limit", "left/right to change", pcap, false, 0);
     if (has_pcap)
@@ -265,8 +271,8 @@ static void restore_os_screen(void)
 
 int main(void)
 {
-    ui_item_t items[12];
-    uint8_t roles[12];
+    ui_item_t items[14];
+    uint8_t roles[14];
     char tz[16];
     char pcap[16];
     char version[16];
@@ -325,6 +331,14 @@ int main(void)
         case ROW_TLS:
             if (enter || left || right)
                 g_cfg.tls_enabled = right ? 1 : left ? 0 : (uint8_t)!g_cfg.tls_enabled;
+            break;
+        case ROW_CRYPTO_OFFLOAD:
+            if (enter || left || right)
+                g_cfg.crypto_offload = right ? 1 : left ? 0 : (uint8_t)!g_cfg.crypto_offload;
+            break;
+        case ROW_BRIDGE_RNG:
+            if (enter || left || right)
+                g_cfg.bridge_rng = right ? 1 : left ? 0 : (uint8_t)!g_cfg.bridge_rng;
             break;
         case ROW_PCAP_SIZE:
             if (left || right || enter)

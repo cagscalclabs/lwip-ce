@@ -8,6 +8,7 @@
 #include "drivers/usb_ethernet.h"
 #include "lwip-imports.h"
 #include "../tls/includes/bytes.h"
+#include "wireless/crypto.h"
 #include "wireless/wifi_hook.h"
 #include "wireless/wifi_proto.h"
 
@@ -75,6 +76,12 @@ err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
         return ERR_OK;
     }
 
+    if (lwip_crypto_reply(header, p))
+    {
+        pbuf_free(p);
+        return ERR_OK;
+    }
+
     if (g_waiting && header[14] == CTL_VERSION && header[15] == (g_wait_op | CTL_REPLY) &&
         header[16] == g_wait_seq)
     {
@@ -91,6 +98,7 @@ err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
 
 void lwip_wifi_reset(void)
 {
+    lwip_crypto_reset();
     g_waiting = false;
     g_reply = NULL;
     g_reply_len = 0;
@@ -107,16 +115,17 @@ bool lwip_wifi_available(void)
     return eth_device_netif() != NULL;
 }
 
-static lwip_wifi_error_t exchange(struct netif *netif, uint8_t op, const uint8_t *body,
-                                  uint16_t body_len, uint32_t timeout_ms)
+struct pbuf *lwip_wifi_frame(uint8_t op, uint16_t body_len, uint8_t *seq)
 {
+    struct netif *netif = eth_device_netif();
     struct pbuf *p;
     uint8_t *frame;
-    uint32_t start;
 
+    if (!netif)
+        return NULL;
     p = pbuf_alloc(PBUF_RAW, (u16_t)(CTL_HEADER + body_len), PBUF_RAM);
     if (!p)
-        return LWIP_WIFI_ERR_MEM;
+        return NULL;
 
     frame = p->payload;
     memset(frame, 0xFF, 6);
@@ -127,17 +136,34 @@ static lwip_wifi_error_t exchange(struct netif *netif, uint8_t op, const uint8_t
     frame[15] = op;
     frame[16] = ++g_seq;
     frame[17] = 0;
+    *seq = g_seq;
+    return p;
+}
+
+err_t lwip_wifi_frame_send(struct pbuf *p)
+{
+    struct netif *netif = eth_device_netif();
+    err_t err = netif ? netif->linkoutput(netif, p) : ERR_IF;
+
+    tls_secure_memzero((uint8_t *)p->payload + CTL_HEADER, p->len - CTL_HEADER);
+    pbuf_free(p);
+    return err;
+}
+
+static lwip_wifi_error_t exchange(uint8_t op, const uint8_t *body, uint16_t body_len, uint32_t timeout_ms)
+{
+    struct pbuf *p = lwip_wifi_frame(op, body_len, &g_wait_seq);
+    uint32_t start;
+
+    if (!p)
+        return LWIP_WIFI_ERR_MEM;
     if (body_len)
-        memcpy(frame + CTL_HEADER, body, body_len);
+        memcpy((uint8_t *)p->payload + CTL_HEADER, body, body_len);
 
     g_wait_op = op;
-    g_wait_seq = g_seq;
     g_done = false;
     g_waiting = true;
-    err_t err = netif->linkoutput(netif, p);
-    tls_secure_memzero(frame + CTL_HEADER, body_len);
-    pbuf_free(p);
-    if (err != ERR_OK)
+    if (lwip_wifi_frame_send(p) != ERR_OK)
     {
         g_waiting = false;
         return LWIP_WIFI_ERR_NO_BRIDGE;
@@ -179,17 +205,16 @@ static lwip_wifi_error_t release(lwip_wifi_error_t err)
 /* On success the reply stays in g_reply until the caller calls release(). */
 static lwip_wifi_error_t request(uint8_t op, const uint8_t *body, uint16_t body_len, uint32_t timeout_ms)
 {
-    struct netif *netif = eth_device_netif();
     lwip_wifi_error_t err;
 
-    if (!netif)
+    if (!eth_device_netif())
         return LWIP_WIFI_ERR_NO_BRIDGE;
     if (g_waiting)
         return LWIP_WIFI_ERR_BUSY;
     if (!(g_reply = mem_malloc(WIFI_REPLY_MAX)))
         return LWIP_WIFI_ERR_MEM;
     g_reply_len = 0;
-    err = exchange(netif, op, body, body_len, timeout_ms);
+    err = exchange(op, body, body_len, timeout_ms);
     return err == LWIP_WIFI_OK ? err : release(err);
 }
 
@@ -335,4 +360,41 @@ lwip_wifi_error_t lwip_wifi_connect(uint8_t slot)
 lwip_wifi_error_t lwip_wifi_disconnect(void)
 {
     return command(CTL_OP_DISCONNECT, NULL, 0, WIFI_CHANGE_TIMEOUT_MS);
+}
+
+/* Waits for a crypto job, keeping the stack running meanwhile. */
+static lwip_wifi_error_t settle(lwip_crypto_job_t job)
+{
+    lwip_crypto_status_t status;
+
+    if (!job)
+        return LWIP_WIFI_ERR_NO_BRIDGE;
+    while ((status = lwip_crypto_take(job)) == LWIP_CRYPTO_PENDING)
+        pump();
+    if (status == LWIP_CRYPTO_OK)
+        return LWIP_WIFI_OK;
+    return status == LWIP_CRYPTO_REJECTED ? LWIP_WIFI_ERR_REJECTED : LWIP_WIFI_ERR_TIMEOUT;
+}
+
+uint8_t lwip_wifi_crypto_caps(void)
+{
+    return lwip_crypto_caps();
+}
+
+lwip_wifi_error_t lwip_wifi_x25519(const uint8_t scalar[32], const uint8_t point[32], uint8_t out[32])
+{
+    return settle(lwip_crypto_x25519(scalar, point, out));
+}
+
+lwip_wifi_error_t lwip_wifi_rsa_verify(bool pss, const uint8_t digest[32], const uint8_t *modulus,
+                                       size_t mod_len, const uint8_t *exponent, size_t exp_len,
+                                       const uint8_t *sig)
+{
+    return settle(lwip_crypto_rsa_verify(pss ? CTL_RSA_PSS_SHA256 : CTL_RSA_PKCS1_SHA256, digest,
+                                         modulus, mod_len, exponent, exp_len, sig));
+}
+
+lwip_wifi_error_t lwip_wifi_random(uint8_t *out, uint8_t len)
+{
+    return settle(lwip_crypto_random(out, len));
 }

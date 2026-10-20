@@ -181,6 +181,16 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
  */
 bool tls_rng_is_busy(void);
 
+/** Credits bytes from an external full-entropy source (the Wi-Fi bridge TRNG).
+ * 64 bytes (entropy input and nonce) re-instantiate the DRBG, discarding all
+ * earlier state; 32 bytes reseed it. Any other length is rejected. */
+bool tls_random_add_entropy(const uint8_t *data, size_t len);
+
+/** While set, the local SRAM source stops gathering in the background and the
+ * external source feeds the DRBG. The local source still steps in if the DRBG
+ * ever needs entropy that has not arrived. */
+void tls_random_set_external(bool external);
+
 /* Internal lifecycle hooks used by tls.c. They are intentionally not part of
  * the release API surface. */
 /** Start RNG health monitoring and entropy gathering.

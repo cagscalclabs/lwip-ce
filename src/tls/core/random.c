@@ -88,6 +88,7 @@ static uint8_t g_tls_entropy_reserve[TLS_HASH_DRBG_INSTANTIATE_BYTES];
 static size_t g_tls_entropy_reserve_len = 0;
 static uint16_t g_tls_entropy_reserve_bits = 0;
 static uint8_t g_tls_rng_source_epoch = 0;
+static bool g_tls_rng_external = false;
 
 static uint16_t tls_entropy_reserve_target_bits(void)
 {
@@ -558,7 +559,7 @@ static void tls_rng_request_dispatch(void)
         done = tls_rng_request_try_complete();
     }
     if (!done && (g_tls_rng_request_active || !g_tls_drbg_seeded ||
-                  (g_tls_entropy_reserve_bits <
+                  (!g_tls_rng_external && g_tls_entropy_reserve_bits <
                    tls_entropy_reserve_target_bits())))
     {
         gather_ok = tls_drbg_entropy_gather_step();
@@ -589,7 +590,8 @@ static void tls_rng_request_dispatch(void)
 
     if ((g_tls_rng_request_active) || (g_tls_rng_request_q_head != NULL) ||
         (!g_tls_drbg_seeded) ||
-        (g_tls_entropy_reserve_bits < tls_entropy_reserve_target_bits()))
+        (!g_tls_rng_external &&
+         g_tls_entropy_reserve_bits < tls_entropy_reserve_target_bits()))
     {
         /* Stay armed at the request cadence — there's still work. */
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
@@ -614,6 +616,18 @@ static void tls_rng_ensure_attached(void)
     }
     lwip_dispatch_attach(LWIP_DISPATCH_TLS_RNG_REQUEST, tls_rng_request_dispatch);
     attached = true;
+}
+
+static void tls_rng_timer_rearm(void)
+{
+    if (g_tls_rng_started && !g_tls_rng_entropy_timer_running)
+    {
+        g_tls_rng_entropy_timer_running = true;
+        tls_rng_ensure_attached();
+        lwip_dispatch_start();
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
+                                 lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
+    }
 }
 
 static void tls_rng_timer_start(void)
@@ -713,15 +727,9 @@ void *tls_random_bytes(void *buffer, size_t len)
     }
 
 #if LWIP_TIMERS
-    if (g_tls_rng_started && !g_tls_rng_entropy_timer_running &&
+    if (!g_tls_rng_external &&
         g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
-    {
-        g_tls_rng_entropy_timer_running = true;
-        tls_rng_ensure_attached();
-        lwip_dispatch_start();
-        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
-                                 lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
-    }
+        tls_rng_timer_rearm();
 #endif
     return buffer;
 
@@ -818,6 +826,27 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
     }
     tls_rng_request_reset_state();
     return false;
+#endif
+}
+
+bool tls_random_add_entropy(const uint8_t *data, size_t len)
+{
+    if (data == NULL)
+        return false;
+    if (len == TLS_HASH_DRBG_INSTANTIATE_BYTES)
+    {
+        tls_drbg_reset();
+        return tls_hash_drbg_instantiate(data);
+    }
+    return len == TLS_HASH_DRBG_ENTROPY_BYTES && tls_hash_drbg_reseed(data);
+}
+
+void tls_random_set_external(bool external)
+{
+    g_tls_rng_external = external;
+#if LWIP_TIMERS
+    if (!external)
+        tls_rng_timer_rearm();
 #endif
 }
 
@@ -970,6 +999,7 @@ void tls_rng_start(void)
 
 void tls_rng_cleanup(void)
 {
+    g_tls_rng_external = false;
 #if LWIP_TIMERS
     tls_rng_timer_stop();
 #endif
