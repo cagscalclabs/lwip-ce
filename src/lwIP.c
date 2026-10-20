@@ -1970,7 +1970,8 @@ static void conn_connect_watchdog(uint32_t now)
         {
             /* No timeout configured or not in a monitored state: disarm and
              * keep activity snapshot current for the next connect attempt. */
-            conn->connect_deadline = 0;
+            if (conn->status != LWIP_STATUS_WAITING_SERVICES)
+                conn->connect_deadline = 0;
             conn->activity_seen = activity;
             conn = next;
             continue;
