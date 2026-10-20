@@ -235,10 +235,6 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
 #define LWIP_STOP_TCP_CLOSE_TIMEOUT_MS LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT
 #endif
 
-#ifndef LWIP_SOCKET_CLOSE_TIMEOUT_MS
-#define LWIP_SOCKET_CLOSE_TIMEOUT_MS 3000u
-#endif
-
 #ifndef LWIP_NETIF_SERVICE_REQUEST_MAX
 #define LWIP_NETIF_SERVICE_REQUEST_MAX 4u
 #endif
@@ -836,57 +832,6 @@ static bool lwip_stop_wait_for_tcp(uint32_t timeout_ms)
         lwip_stop_pump_once();
     }
     return true;
-}
-
-static bool lwip_wait_for_tcp_pcb_close(struct tcp_pcb *pcb, uint32_t timeout_ms)
-{
-    uint32_t deadline;
-
-    if (!pcb)
-    {
-        return true;
-    }
-
-    deadline = sys_now() + timeout_ms;
-    while (lwip_teardown_tcp_pcb_pending(pcb))
-    {
-        if ((int32_t)(sys_now() - deadline) >= 0)
-        {
-            return false;
-        }
-        lwip_stop_pump_once();
-    }
-    return true;
-}
-
-static struct tcp_pcb *lwip_socket_leaf_tcp_pcb(struct lwip_socket *conn)
-{
-    if (!conn)
-    {
-        return NULL;
-    }
-
-    switch ((lwip_socket_type_t)conn->protocol)
-    {
-#if LWIP_TCP
-    case LWIP_SOCKET_TCP:
-        return conn->pcb.tcp;
-#endif
-    case LWIP_SOCKET_ALTCP:
-    case LWIP_SOCKET_ALTCP_TLS:
-    case LWIP_SOCKET_ALTCP_WS:
-    case LWIP_SOCKET_ALTCP_WSS:
-    {
-        struct altcp_pcb *leaf = conn->pcb.altcp;
-        while (leaf && leaf->inner_conn)
-        {
-            leaf = leaf->inner_conn;
-        }
-        return leaf ? (struct tcp_pcb *)leaf->state : NULL;
-    }
-    default:
-        return NULL;
-    }
 }
 
 static lwip_error_t lwip_socket_rx_ring_create(struct lwip_socket *conn)
@@ -3270,13 +3215,8 @@ lwip_error_t lwip_socket_shutdown(struct lwip_socket *conn)
 
 lwip_error_t lwip_socket_close(struct lwip_socket *conn)
 {
-    struct tcp_pcb *closing_tcp;
-    bool wait_for_tcp;
-
     if (!conn)
         return LWIP_ERR_ARG;
-    closing_tcp = lwip_socket_leaf_tcp_pcb(conn);
-    wait_for_tcp = closing_tcp && !g_lwip_stopping;
 
     lwip_socket_set_pending_host(conn, NULL);
 
@@ -3354,13 +3294,6 @@ lwip_error_t lwip_socket_close(struct lwip_socket *conn)
     conn->status = LWIP_STATUS_CLOSED;
     conn_event_enqueue(conn, CONN_PENDING_CLOSED, LWIP_OK);
     conn_registry_remove(conn);
-    if (wait_for_tcp &&
-        !lwip_wait_for_tcp_pcb_close(closing_tcp, LWIP_SOCKET_CLOSE_TIMEOUT_MS))
-    {
-        lwip_teardown_abort_tcp_pcb(closing_tcp);
-        conn->last_error = LWIP_ERR_CLOSED;
-        return LWIP_ERR_CLOSED;
-    }
     return LWIP_OK;
 }
 

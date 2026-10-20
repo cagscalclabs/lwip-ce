@@ -398,20 +398,20 @@ or an immediate abort.
 
 .. c:function:: lwip_error_t lwip_socket_close(struct lwip_socket *socket)
 
-   Initiate an orderly TCP close. Sends a FIN to the remote, then waits (up to
-   an internal timeout) for the remote to ACK and send its own FIN. The socket
-   transitions to ``LWIP_STATUS_CLOSING`` and then to ``LWIP_STATUS_CLOSED``
-   once the exchange completes. On timeout, the PCB is hard-aborted internally
-   and ``LWIP_ERR_CLOSED`` is returned, but the handle is still safe to
-   destroy.
+   Initiate an orderly TCP close and return immediately. A FIN is queued
+   to the remote and the socket goes to ``LWIP_STATUS_CLOSED``; the stack
+   finishes the FIN exchange in the background while you keep calling
+   ``lwip_service_events()``, and drops the connection on its own if the
+   remote never closes its side. Queued outgoing data is still delivered. The
+   handle is safe to destroy right after this call.
 
    For UDP sockets, ``lwip_socket_close()`` simply removes the PCB and sets
    the status to ``LWIP_STATUS_CLOSED`` immediately.
 
    :param socket: A connected (or connecting) socket handle.
-   :returns: ``LWIP_OK`` on clean close, ``LWIP_ERR_CLOSED`` if the ACK wait
-      timed out, ``LWIP_ERR_MEM`` if the FIN could not be enqueued (retry),
-      ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
+   :returns: ``LWIP_OK`` once the close is queued, ``LWIP_ERR_MEM`` if the
+      FIN could not be enqueued (retry), ``LWIP_ERR_ARG`` if ``socket`` is
+      ``NULL``.
 
 .. c:function:: lwip_error_t lwip_socket_shutdown(struct lwip_socket *socket)
 

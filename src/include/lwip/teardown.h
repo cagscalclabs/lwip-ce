@@ -22,15 +22,6 @@ void lwip_teardown_begin_tcp_close(void);
  *  are excluded because their FIN handshake has already completed. */
 bool lwip_teardown_tcp_pcbs_pending(void);
 
-/** True while a specific TCP PCB address is still present in the
- *  listen/bound/active lists. The pointer may already be unsafe to
- *  dereference after tcp_close(); callers must treat this as an address
- *  identity check only. */
-bool lwip_teardown_tcp_pcb_pending(const struct tcp_pcb *target);
-
-/** Abort a specific TCP PCB if it is still present in a live list. */
-void lwip_teardown_abort_tcp_pcb(struct tcp_pcb *target);
-
 /** Abort every remaining listen/bound/active TCP PCB. */
 void lwip_teardown_abort_tcp_pcbs(void);
 
