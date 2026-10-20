@@ -219,13 +219,13 @@
     },
     {
       "id": "tls-unsupported-certverify",
-      "name": "TLS unsupported certverify",
+      "name": "TLS ECDSA certverify echo",
       "state": "tls_client",
       "port": 9443,
       "probe": "tls_unsupported_certverify",
-      "intent": "Server presents an ECDSA TLS 1.3 identity; calc must reject unsupported CertificateVerify behavior and stay alive.",
-      "expect": "abort_alive",
-      "ok_responses": ["ABORT", "ALIVE"]
+      "intent": "Server presents an ECDSA P-256 TLS 1.3 identity; calc must complete the handshake, verify CertificateVerify, and echo data.",
+      "expect": "reply",
+      "ok_responses": ["REPLY"]
     }
   ]
 }
