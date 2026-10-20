@@ -949,8 +949,6 @@ static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
     }
     if (!mem_buffer_reserve(conn->rx_ring, p->tot_len))
     {
-        ERROR_CODE(p->tot_len);
-        conn->last_error = LWIP_ERR_MEM;
         return false;
     }
 
@@ -2013,6 +2011,7 @@ static void conn_connect_watchdog(uint32_t now)
 static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
                                 struct pbuf *p, err_t err)
 {
+    (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
     if (!c)
     {
@@ -2047,12 +2046,8 @@ static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
     }
     if (!lwip_socket_buffer_pbuf(c, p))
     {
-        conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_MEM,
-                           LWIP_SOCKET_ERR_OP_RECV, (int)ERR_MEM,
-                           LWIP_ERR_MEM);
         return ERR_MEM;
     }
-    altcp_recved(pcb, p->tot_len);
     pbuf_free(p);
     conn_event_enqueue(c, CONN_PENDING_READABLE, LWIP_OK);
     return ERR_OK;
@@ -2188,6 +2183,7 @@ static void conn_udp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
                               struct pbuf *p, err_t err)
 {
+    (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
     if (!c)
     {
@@ -2222,12 +2218,8 @@ static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
     }
     if (!lwip_socket_buffer_pbuf(c, p))
     {
-        conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_MEM,
-                           LWIP_SOCKET_ERR_OP_RECV, (int)ERR_MEM,
-                           LWIP_ERR_MEM);
         return ERR_MEM;
     }
-    tcp_recved(pcb, p->tot_len);
     pbuf_free(p);
     conn_event_enqueue(c, CONN_PENDING_READABLE, LWIP_OK);
     return ERR_OK;
@@ -3177,7 +3169,26 @@ size_t lwip_socket_read(struct lwip_socket *conn, uint8_t *buf, size_t len)
     {
         len = avail;
     }
-    return mem_buffer_pop(conn->rx_ring, buf, len);
+    len = mem_buffer_pop(conn->rx_ring, buf, len);
+    switch ((lwip_socket_type_t)conn->protocol)
+    {
+#if LWIP_TCP
+    case LWIP_SOCKET_TCP:
+        if (conn->pcb.tcp && !conn->is_listen)
+            tcp_recved(conn->pcb.tcp, (u16_t)len);
+        break;
+#endif
+    case LWIP_SOCKET_ALTCP:
+    case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
+        if (conn->pcb.altcp)
+            altcp_recved(conn->pcb.altcp, (u16_t)len);
+        break;
+    default:
+        break;
+    }
+    return len;
 }
 
 lwip_status_t lwip_socket_status(const struct lwip_socket *conn)
