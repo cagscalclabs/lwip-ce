@@ -182,6 +182,11 @@
 #include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
 #include "../contrib/x25519/src/x25519.h"
+/* P-256 public API (assembly implementation in p256.s). */
+bool tls_p256_publickey(uint8_t pub[65], const uint8_t priv[32]);
+bool tls_p256_secret(uint8_t ss[32], const uint8_t priv[32], const uint8_t peer[65]);
+bool tls_p256_sign(uint8_t sig[64], const uint8_t hash[32], const uint8_t priv[32]);
+bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32], const uint8_t pub[65]);
 #include <string.h>
 #include <usbdrvce.h>
 #include "../../drivers/mem.h"
@@ -1775,6 +1780,30 @@ bool tls_handshake_init(
     }
 
     INFO("init: X25519 done");
+
+    /* Generate ephemeral P-256 keypair for ECDHE */
+    INFO("init: P-256 private random");
+    if (tls_random_bytes(ctx->p256_private,
+                         sizeof(ctx->p256_private)) == NULL)
+    {
+        tls_secure_memzero(ctx->ecdhe_private, 32);
+        ERROR_CODE(0x2b);
+        return false;
+    }
+
+    INFO("init: P-256 public key");
+    tls_crypto_guard_enable();
+    bool p256_ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
+    tls_crypto_guard_disable();
+    if (!p256_ok)
+    {
+        tls_secure_memzero(ctx->ecdhe_private, 32);
+        tls_secure_memzero(ctx->p256_private, 32);
+        ERROR_CODE(0x2b);
+        return false;
+    }
+    INFO("init: P-256 done");
+
     ctx->ecdhe_negotiated = false;
     ctx->hostname = NULL;
 
@@ -1836,10 +1865,25 @@ bool tls_send_client_hello(
         HELLO_RANDOM_OFFSET = 6,
         HELLO_EXT_LEN_OFFSET = 47,
         HELLO_EXT_START = 49,
-        HELLO_KEY_SHARE_OFFSET = 74
+        /* x25519 public key is at byte 76 in the new template */
+        HELLO_KEY_SHARE_OFFSET = 76,
+        /* P-256 uncompressed public key (65 bytes) follows x25519 entry */
+        HELLO_P256_KEY_SHARE_OFFSET = 112
     };
     /* Base ClientHello with zero placeholders for the 32-byte client random,
-     * 32-byte key share, and dependent lengths. Optional extensions append. */
+     * 32-byte x25519 key share, 65-byte P-256 key share, and dependent
+     * lengths. Optional extensions append.
+     *
+     * Extensions layout (all offsets from byte 0 of this array):
+     *   [49..55]  supported_versions: TLS 1.3
+     *   [56..65]  supported_groups: x25519 + secp256r1
+     *   [66..75]  key_share ext header + x25519 group/len
+     *   [76..107] x25519 public key (32 bytes, patched)
+     *   [108..111] secp256r1 group/len
+     *   [112..176] P-256 public key (65 bytes, patched)
+     *   [177..186] signature_algorithms
+     *   [187..198] signature_algorithms_cert
+     */
     static const uint8_t hello_template[] = {
         TLS_HANDSHAKE_CLIENT_HELLO, 0x00, 0x00, 0x00, /* body length patched */
         0x03, 0x03,                                   /* legacy_version */
@@ -1854,17 +1898,33 @@ bool tls_send_client_hello(
         0x00, 0x00,              /* extensions length patched */
         /* supported_versions: TLS 1.3 */
         0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04,
-        /* supported_groups: x25519 */
-        0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d,
-        /* key_share header: one 32-byte x25519 key follows */
-        0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20,
-        /* x25519 key patched at offset 74 */
+        /* supported_groups: x25519 (0x001d) + secp256r1 (0x0017) */
+        /* ext_type=0x000a, ext_len=6, list_len=4 */
+        0x00, 0x0a, 0x00, 0x06, 0x00, 0x04, 0x00, 0x1d, 0x00, 0x17,
+        /* key_share: ext_type=0x0033, ext_len=0x006b=107,
+         *   client_shares_len=0x0069=105
+         *   x25519 entry: group=0x001d, key_len=0x0020=32 */
+        0x00, 0x33, 0x00, 0x6b, 0x00, 0x69, 0x00, 0x1d, 0x00, 0x20,
+        /* x25519 key patched at offset 76 (32 bytes) */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* signature_algorithms: rsa_pss_rsae_sha256 */
-        0x00, 0x0d, 0x00, 0x04, 0x00, 0x02, 0x08, 0x04,
-        /* signature_algorithms_cert: rsa_pkcs1_sha256, rsa_pss_rsae_sha256 */
-        0x00, 0x32, 0x00, 0x06, 0x00, 0x04, 0x04, 0x01, 0x08, 0x04
+        /* secp256r1 entry: group=0x0017, key_len=0x0041=65 */
+        0x00, 0x17, 0x00, 0x41,
+        /* P-256 key patched at offset 112 (65 bytes) */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0,
+        /* signature_algorithms: rsa_pss_rsae_sha256 (0x0804),
+         *                        ecdsa_secp256r1_sha256 (0x0403) */
+        /* ext_type=0x000d, ext_len=6, list_len=4 */
+        0x00, 0x0d, 0x00, 0x06, 0x00, 0x04, 0x08, 0x04, 0x04, 0x03,
+        /* signature_algorithms_cert: rsa_pkcs1_sha256 (0x0401),
+         *                            rsa_pss_rsae_sha256 (0x0804),
+         *                            ecdsa_secp256r1_sha256 (0x0403) */
+        /* ext_type=0x0032, ext_len=8, list_len=6 */
+        0x00, 0x32, 0x00, 0x08, 0x00, 0x06, 0x04, 0x01, 0x08, 0x04, 0x04, 0x03
     };
     static const uint8_t sni_header[] = {
         0x00, 0x00,             /* server_name */
@@ -2023,6 +2083,7 @@ bool tls_send_client_hello(
     memcpy(out, hello_template, sizeof(hello_template));
     memcpy(out + HELLO_RANDOM_OFFSET, ctx->client_random, 32);
     memcpy(out + HELLO_KEY_SHARE_OFFSET, ctx->ecdhe_public, 32);
+    memcpy(out + HELLO_P256_KEY_SHARE_OFFSET, ctx->p256_public, 65);
     offset = sizeof(hello_template);
     size_t ext_len_offset = HELLO_EXT_LEN_OFFSET;
     size_t ext_start = HELLO_EXT_START;
@@ -2671,32 +2732,77 @@ bool tls_recv_server_hello(
             }
             uint16_t group = (data[offset] << 8) | data[offset + 1];
             uint16_t ke_len = (data[offset + 2] << 8) | data[offset + 3];
-            if (group != TLS_NAMED_GROUP_X25519 || ke_len != 32 ||
-                ext_data_len != (size_t)(4 + ke_len))
+            if (ext_data_len != (size_t)(4 + ke_len))
             {
                 ctx->state = TLS_STATE_ERROR;
                 ERROR_CODE(0x5a);
                 return false;
             }
-            /* Compute the shared secret. The primitive rejects an all-zero
-             * result; TLS 1.3 requires illegal_parameter in that case. */
-            if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
-                                   data + offset + 4,
-                                   NULL, NULL))
+            if (group == TLS_NAMED_GROUP_X25519)
             {
-                ERROR();
-                tls_secure_memzero(ctx->ecdhe_private,
-                                   sizeof(ctx->ecdhe_private));
-                tls_secure_memzero(ctx->ecdhe_shared,
-                                   sizeof(ctx->ecdhe_shared));
-                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
-                               TLS_ALERT_ILLEGAL_PARAMETER);
+                if (ke_len != 32)
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5a);
+                    return false;
+                }
+                /* Compute X25519 shared secret. */
+                if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
+                                       data + offset + 4,
+                                       NULL, NULL))
+                {
+                    ERROR();
+                    tls_secure_memzero(ctx->ecdhe_private,
+                                       sizeof(ctx->ecdhe_private));
+                    tls_secure_memzero(ctx->ecdhe_shared,
+                                       sizeof(ctx->ecdhe_shared));
+                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                                   TLS_ALERT_ILLEGAL_PARAMETER);
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5c);
+                    return false;
+                }
+                /* Securely erase X25519 private key immediately */
+                tls_secure_memzero(ctx->ecdhe_private, 32);
+            }
+            else if (group == TLS_NAMED_GROUP_SECP256R1)
+            {
+                /* P-256 uncompressed point: 0x04 || x(32) || y(32) = 65 bytes */
+                if (ke_len != 65 || data[offset + 4] != 0x04)
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5a);
+                    return false;
+                }
+                /* Compute P-256 ECDH shared secret. */
+                tls_crypto_guard_enable();
+                bool p256_ok = tls_p256_secret(ctx->ecdhe_shared,
+                                               ctx->p256_private,
+                                               data + offset + 4);
+                tls_crypto_guard_disable();
+                if (!p256_ok)
+                {
+                    ERROR();
+                    tls_secure_memzero(ctx->p256_private,
+                                       sizeof(ctx->p256_private));
+                    tls_secure_memzero(ctx->ecdhe_shared,
+                                       sizeof(ctx->ecdhe_shared));
+                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                                   TLS_ALERT_ILLEGAL_PARAMETER);
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5c);
+                    return false;
+                }
+                /* Securely erase P-256 private key immediately */
+                tls_secure_memzero(ctx->p256_private, 32);
+            }
+            else
+            {
+                /* Server selected a group we didn't offer. */
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5c);
+                ERROR_CODE(0x5a);
                 return false;
             }
-            /* Securely erase private key immediately */
-            tls_secure_memzero(ctx->ecdhe_private, 32);
             ctx->ecdhe_negotiated = true;
             DEBUG();
             break;
@@ -3462,6 +3568,100 @@ cleanup:
     return ok;
 }
 
+/* Verify a TLS 1.3 server CertificateVerify using ECDSA P-256 with SHA-256
+ * (ecdsa_secp256r1_sha256, code point 0x0403).  Constructs:
+ *
+ *     content = 64 spaces || "TLS 1.3, server CertificateVerify" || 0x00
+ *               || Transcript-Hash(ClientHello..Certificate)
+ *     digest  = SHA-256(content)
+ *
+ * then calls tls_p256_verify(sig, digest, pubkey).  The signature is a
+ * DER-encoded SEQUENCE { INTEGER r, INTEGER s }; this function decodes
+ * both integers and serialises them as a flat 64-byte r||s buffer. */
+static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
+                                              const uint8_t *sig, size_t sig_len)
+{
+    static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
+    uint8_t spaces[64];
+    uint8_t zero = 0;
+    uint8_t transcript[32];
+    uint8_t message_hash[32];
+    struct tls_hash_context hash_ctx;
+    uint8_t rs[64]; /* flat r||s for tls_p256_verify */
+
+    if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P256 ||
+        !sig || sig_len == 0)
+    {
+        ERROR_CODE(0x85);
+        return false;
+    }
+
+    if (!ctx->leaf_pubkey.ec.data || ctx->leaf_pubkey.ec.len != 65)
+    {
+        ERROR_CODE(0x86);
+        return false;
+    }
+
+    /* Build the signed-content digest. */
+    if (!ctx->transcript_hash)
+    {
+        ERROR_CODE(0x87);
+        return false;
+    }
+    transcript_hash_digest(ctx->transcript_hash, transcript);
+
+    memset(spaces, 0x20, sizeof(spaces));
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    {
+        ERROR_CODE(0x88);
+        return false;
+    }
+    tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(&hash_ctx, &zero, 1);
+    tls_hash_update(&hash_ctx, transcript, sizeof(transcript));
+    tls_hash_digest(&hash_ctx, message_hash);
+
+    /* Parse DER SEQUENCE { INTEGER r, INTEGER s } → flat 64-byte r||s.
+     * Structure: 30 <seq_len> 02 <r_len> [r bytes] 02 <s_len> [s bytes].
+     * Integers are parsed as strict DER (minimal, non-negative) by
+     * tls_ecdsa_parse_int (x509.c). */
+    if (sig_len < 8 || sig[0] != 0x30)
+    {
+        ERROR_CODE(0x89);
+        return false;
+    }
+    size_t seq_len = sig[1];
+    /* Only support short-form length for this signature. */
+    if (seq_len & 0x80 || 2 + seq_len != sig_len)
+    {
+        ERROR_CODE(0x89);
+        return false;
+    }
+    {
+        const uint8_t *end = sig + sig_len;
+        const uint8_t *p = tls_ecdsa_parse_int(sig + 2, sig_len - 2, rs);
+        if (p)
+            p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
+        if (p != end)   /* NULL (parse error) or trailing bytes */
+        {
+            ERROR_CODE(0x89);
+            return false;
+        }
+    }
+
+    tls_crypto_guard_enable();
+    bool ok = tls_p256_verify(rs, message_hash, ctx->leaf_pubkey.ec.data);
+    tls_crypto_guard_disable();
+
+    tls_secure_memzero(rs, sizeof(rs));
+    tls_secure_memzero(message_hash, sizeof(message_hash));
+    return ok;
+}
+
+/* TLS 1.3 code point for ecdsa_secp256r1_sha256 (RFC 8446 §4.2.3). */
+#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403
+
 /**
  * @brief Parse and verify the server's CertificateVerify.
  *
@@ -3470,7 +3670,7 @@ cleanup:
  * just sent. It's the live proof-of-possession that binds "I trust this
  * cert chain" to "I'm actually talking to that cert's owner."
  *
- * Supports rsa_pss_rsae_sha256 only.
+ * Supports rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256.
  */
 static bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -3538,6 +3738,9 @@ static bool tls_recv_certificate_verify(
     {
     case TLS_SIG_RSA_PSS_RSAE_SHA256:
         sig_ok = tls_certverify_rsa_pss_sha256(ctx, data + offset, sig_len);
+        break;
+    case TLS_SIG_ECDSA_SECP256R1_SHA256:
+        sig_ok = tls_certverify_ecdsa_p256_sha256(ctx, data + offset, sig_len);
         break;
     default:
         /* Unsupported algorithm — fail closed. */
@@ -4792,6 +4995,8 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
     tls_secure_memzero(ctx->ecdhe_shared, sizeof(ctx->ecdhe_shared));
     tls_secure_memzero(ctx->ecdhe_public, sizeof(ctx->ecdhe_public));
+    tls_secure_memzero(ctx->p256_private, sizeof(ctx->p256_private));
+    tls_secure_memzero(ctx->p256_public, sizeof(ctx->p256_public));
     tls_secure_memzero(&ctx->keys, sizeof(ctx->keys));
     tls_secure_memzero(ctx, sizeof(*ctx));
     ctx->leaf_pubkey.type = TLS_KEY_TYPE_UNKNOWN;

@@ -450,3 +450,7 @@
 	export	lwip_get_start_errno
 	export	lwip_get_start_errstring
 	export	lwip_is_newer
+	export	tls_p256_publickey
+	export	tls_p256_secret
+	export	tls_p256_sign
+	export	tls_p256_verify

@@ -6,9 +6,10 @@
 # LIBLOAD_LIBS, so nothing can silently resolve against the resident dylib).
 #
 # P256_TEST exposes the C-ABI test shims (p256_test_mont_mul etc.) used to
-# time individual primitives.  tls_p256_sign lives in its own section and is
-# discarded by --gc-sections because this program never calls it, so no
-# SHA-256 implementation is needed here.
+# time individual primitives.  tls_p256_sign (RFC 6979) needs SHA-256, so
+# src/tls/core/sha256.s is assembled in too; src/sha_support.s pins its
+# scratch overlay base (_sprng_entropy_pool) to 0xE30800 as the lwIP linker
+# script does, and supplies u64_addi.
 #
 # Build:   make            (on-calc: prints results, waits for a key)
 #          make debug      (also mirrors results to the emulator console)
@@ -19,9 +20,10 @@ DESCRIPTION = "P-256 asm profiling"
 COMPRESSED = NO
 
 CFLAGS = -Wall -Wextra -Oz
-ASFLAGS = --defsym P256_TEST=1
+ASFLAGS = --defsym P256_TEST=1 -I ../../src/tls/core/share
 
-EXTRA_ASM_SOURCES = ../../src/tls/core/p256.s
+EXTRA_ASM_SOURCES = ../../src/tls/core/p256.s ../../src/tls/core/sha256.s \
+                    ../../src/tls/core/share/crypto_guard.s
 
 LIBLOAD_LIBS = $(filter-out %lwip.lib,$(wildcard $(shell cedev-config --prefix)/lib/libload/*.lib))
 

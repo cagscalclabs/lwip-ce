@@ -8,4 +8,13 @@
 bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
                                   tls_alg_t *alg);
 
+/* Internal: parse one strict-DER INTEGER (r or s of an ECDSA-Sig-Value)
+ * from der[0..len) into a big-endian, left-zero-padded 32-byte buffer.
+ * Rejects: wrong tag, long-form/zero/over-33 length, length past len,
+ * negative values (first content byte >= 0x80), and non-minimal encodings
+ * (a leading 0x00 not followed by a byte >= 0x80).  Returns a pointer just
+ * past the INTEGER, or NULL on error (out contents then unspecified). */
+const uint8_t *tls_ecdsa_parse_int(const uint8_t *der, size_t len,
+                                   uint8_t out[32]);
+
 #endif
