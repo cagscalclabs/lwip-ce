@@ -178,6 +178,7 @@
 #include "../includes/rsa.h"
 #include "x509_internal.h"
 #include "../includes/truststore.h"
+#include "../includes/tls.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
@@ -2873,6 +2874,13 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                  * its key/signature operation is not implemented. */
                 WARN();
             }
+        }
+        else if (tls_ctx.truststore.status != TLS_STORE_OK &&
+                 tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
+        {
+            ctx->state = TLS_STATE_ERROR;
+            ERROR_CODE(tls_ctx.truststore.status);
+            return false;
         }
         else
         {

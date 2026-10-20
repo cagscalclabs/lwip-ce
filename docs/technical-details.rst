@@ -152,7 +152,10 @@ Security Posture
    * - TLS trust store
      - A curated trust store derived from CA material staged on a common Linux
        box, shipped as a signed AppVar and verified with RSA-PSS-SHA256 against
-       an embedded public key at ``tls_truststore_init``. Entries are looked up
+       an embedded public key at ``tls_truststore_init``. The check runs when the
+       first certificate-based TLS connection is set up, before any network
+       traffic, not at ``lwip_start()``; a store that fails it aborts every
+       handshake that consults it. Entries are looked up
        by subject name to anchor the topmost certificate in a received chain
        (see Certificate chain below).
    * - Certificate chain

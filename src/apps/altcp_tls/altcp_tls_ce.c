@@ -25,6 +25,7 @@ extern bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx);
 #include "../../tls/includes/crypto_guard.h"
 #include "../../tls/includes/handshake.h"
 #include "../../tls/includes/tls.h"
+#include "../../tls/includes/truststore.h"
 #include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_ALTCP_TLS_CE
@@ -804,6 +805,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     conf->is_server = 0;
     conf->psk_mode = 0;
     conf->hostname = hostname;
+    tls_truststore_prepare();
 
     /* Opportunistically resume from the in-memory PSK cache, but only if a
      * live (non-expired) entry exists for this exact hostname. Cross-host
