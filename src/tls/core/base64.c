@@ -27,29 +27,38 @@ size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
     return j;
 }
 
+static int b64_value(uint8_t c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
 size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
 
-    size_t olen = len / 4 * 3;
     size_t j = 0;
-    if (inbuf[len - 1] == '=') olen--;
-    if (inbuf[len - 2] == '=') olen--;
+    if (len % 4) return 0;
 
-    for (size_t i = 0; i < len;) {
-        
-        uint32_t sextet_a = inbuf[i] == '=' ? 0 & i++ : strchr(b64_charset, inbuf[i++]) - b64_charset;
-        uint32_t sextet_b = inbuf[i] == '=' ? 0 & i++ : strchr(b64_charset, inbuf[i++]) - b64_charset;
-        uint32_t sextet_c = inbuf[i] == '=' ? 0 & i++ : strchr(b64_charset, inbuf[i++]) - b64_charset;
-        uint32_t sextet_d = inbuf[i] == '=' ? 0 & i++ : strchr(b64_charset, inbuf[i++]) - b64_charset;
-        
-        uint32_t triple = (sextet_a << 3 * 6)
-        + (sextet_b << 2 * 6)
-        + (sextet_c << 1 * 6)
-        + (sextet_d << 0 * 6);
-        
-        if (j < olen) outbuf[j++] = (triple >> 2 * 8) & 0xFF;
-        if (j < olen) outbuf[j++] = (triple >> 1 * 8) & 0xFF;
-        if (j < olen) outbuf[j++] = (triple >> 0 * 8) & 0xFF;
+    for (size_t i = 0; i < len; i += 4) {
+        uint32_t triple = 0;
+        uint8_t pad = 0;
+        for (uint8_t k = 0; k < 4; k++) {
+            uint8_t c = inbuf[i + k];
+            int v = b64_value(c);
+            if (c == '=' && k >= 2 && i + 4 == len) {
+                pad++;
+                v = 0;
+            }
+            else if (pad || v < 0) return 0;
+            triple = (triple << 6) | (uint32_t)v;
+        }
+        outbuf[j++] = (triple >> 2 * 8) & 0xFF;
+        if (pad < 2) outbuf[j++] = (triple >> 1 * 8) & 0xFF;
+        if (pad < 1) outbuf[j++] = (triple >> 0 * 8) & 0xFF;
     }
-    
+
     return j;
 }
