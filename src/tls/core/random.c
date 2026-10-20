@@ -694,6 +694,8 @@ void *tls_random_bytes(void *buffer, size_t len)
         return NULL;
     if (len == 0u)
         return buffer;
+    if (!g_tls_rng_started)
+        tls_rng_start();
     if (g_tls_rng_request_active || (g_tls_rng_request_q_head != NULL))
         return NULL;
 
@@ -760,6 +762,8 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
     {
         return false;
     }
+    if (!g_tls_rng_started)
+        tls_rng_start();
     if (!tls_rng_healthcheck())
     {
         return false;
