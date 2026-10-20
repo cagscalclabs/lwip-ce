@@ -890,6 +890,30 @@ def remove_orphan_comment_blocks(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(out))
 
 
+CONSTANT_ADDRESS_DATA = {
+    "ip_addr_any": "IPADDR4_INIT(IPADDR_ANY)",
+    "ip_addr_broadcast": "IPADDR4_INIT(IPADDR_BROADCAST)",
+    "ip6_addr_any": "IPADDR6_INIT(0ul, 0ul, 0ul, 0ul)",
+    "ip_addr_any_type": "IPADDR_ANY_TYPE_INIT",
+}
+
+
+def define_constant_address_data(text: str) -> str:
+    defs = []
+    for name, init in CONSTANT_ADDRESS_DATA.items():
+        pattern = re.compile(rf"^extern const ip_addr_t {name};\n", re.M)
+        if pattern.search(text):
+            text = pattern.sub("", text)
+            defs.append(f"static const ip_addr_t {name} = {init};\n")
+    if not defs:
+        return text
+    tail = "#ifdef __cplusplus\n}\n#endif"
+    pos = text.rfind(tail)
+    if pos < 0:
+        pos = text.rfind("#endif")
+    return text[:pos] + "".join(defs) + "\n" + text[pos:]
+
+
 def pruned_copy_header_body(
     header: Path,
     symbols: set[str],
@@ -904,6 +928,7 @@ def pruned_copy_header_body(
     text = add_missing_standard_includes(text)
     text = materialize_referenced_build_macros(text, macro_defs)
     text = remove_orphan_comment_blocks(text)
+    text = define_constant_address_data(text)
     return text.rstrip() + "\n", emitted_functions
 
 
