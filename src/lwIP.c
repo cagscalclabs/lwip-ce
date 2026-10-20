@@ -1117,6 +1117,9 @@ static void lwip_stack_cleanup(void)
     {
         netif_set_link_down(n);
         netif_set_down(n);
+#if LWIP_DHCP
+        dhcp_cleanup(n);
+#endif
     }
 
     /* Do not close OS/file state owned by the consumer program. The
