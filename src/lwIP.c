@@ -2772,6 +2772,10 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         rebind_pcb_callbacks(conn);
     }
 
+    if (conn->protocol == LWIP_SOCKET_ALTCP_TLS ||
+        conn->protocol == LWIP_SOCKET_ALTCP_WSS)
+        sys_restart_timeouts();
+
     /* IPv4 / IPv6 literal short-circuits DNS. Try v4 first because it
      * fails fast on anything containing ':'; v6 succeeds on either
      * '::1'-style or v4-mapped forms. */
