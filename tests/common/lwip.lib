@@ -1,4 +1,4 @@
-	library	LWIP, 1
+	library	LWIP, 2
 
 	export	lwip_init_runtime_internal
 	export	lwip_start_last_error

@@ -5,7 +5,7 @@
 # public tls_rng_compute_stats() API shipped to applications.
 
 NAME = RNGSTAT
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "TLS raw tap profiler"
 COMPRESSED = NO
