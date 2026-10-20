@@ -1865,7 +1865,9 @@ bool tls_send_client_hello(
         /* signature_algorithms: rsa_pss_rsae_sha256 */
         0x00, 0x0d, 0x00, 0x04, 0x00, 0x02, 0x08, 0x04,
         /* signature_algorithms_cert: rsa_pkcs1_sha256, rsa_pss_rsae_sha256 */
-        0x00, 0x32, 0x00, 0x06, 0x00, 0x04, 0x04, 0x01, 0x08, 0x04
+        0x00, 0x32, 0x00, 0x06, 0x00, 0x04, 0x04, 0x01, 0x08, 0x04,
+        /* max_fragment_length: 2^12 */
+        0x00, 0x01, 0x00, 0x01, 0x04
     };
     static const uint8_t sni_header[] = {
         0x00, 0x00,             /* server_name */
@@ -2960,6 +2962,7 @@ static bool tls_recv_encrypted_extensions(
     }
 
     bool seen_server_name = false, seen_alpn = false, seen_groups = false;
+    bool seen_max_fragment = false;
     ctx->negotiated_alpn = NULL;
     ctx->negotiated_alpn_len = 0;
     size_t ext_offset = 0;
@@ -2990,6 +2993,16 @@ static bool tls_recv_encrypted_extensions(
                 return false;
             }
             seen_server_name = true;
+        }
+        else if (ext_type == TLS_EXT_MAX_FRAGMENT_LENGTH)
+        {
+            if (seen_max_fragment || ext_data_len != 1 || ext_data[0] != 0x04)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_ILLEGAL_PARAMETER);
+                return false;
+            }
+            seen_max_fragment = true;
         }
         else if (ext_type == TLS_EXT_ALPN)
         {
