@@ -10,6 +10,7 @@ name = "lwIP"
 version = "2.1.3"
 init = "lwip_init_runtime_internal"
 linker_script = "build-tools/meta/linker_script_lwip.ld"
+retain_removed = true
 installer_patches = ["build-tools/patches/app_tools-installer-lwip.patch"]
 imports = [
     "usb_ResetDevice",

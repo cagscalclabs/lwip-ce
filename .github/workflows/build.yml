@@ -143,8 +143,6 @@ jobs:
       - name: Install ce-libify
         run: |
           git clone --depth 1 --branch "${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}" https://github.com/alessiodam/toolchain_libify.git "${{ runner.temp }}/ce-libify"
-          git -C "${{ runner.temp }}/ce-libify" apply "${{ github.workspace }}/build-tools/patches/ce-libify-init-stack.patch"
-          git -C "${{ runner.temp }}/ce-libify" apply "${{ github.workspace }}/build-tools/patches/ce-libify-version-string.patch"
           GOCACHE="${{ runner.temp }}/go-cache" go test -C "${{ runner.temp }}/ce-libify" ./...
           make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
           ce-libify --version
