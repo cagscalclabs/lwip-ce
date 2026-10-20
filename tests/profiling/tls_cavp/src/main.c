@@ -70,6 +70,8 @@
 #define ALG_RSA_PKCS1_SHA256_VERIFY 13
 #define ALG_P256_SIGVER            14
 #define ALG_P256_SIGGEN            15
+#define ALG_P256_PUBLICKEY         16
+#define ALG_P256_SECRET            17
 
 #define STATUS_OK 0
 #define STATUS_UNSUPPORTED 1
@@ -702,6 +704,30 @@ static size_t run_p256_siggen(const uint8_t *in, size_t in_len, uint8_t *out, si
     return 64;
 }
 
+/*
+ * P256-PUBLICKEY payload: priv[32].
+ * Response: pub[65] (uncompressed 04||x||y).
+ */
+static size_t run_p256_publickey(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 32 || out_max < 65) return 0;
+    if (!tls_p256_publickey(out, in)) return 0;
+    return 65;
+}
+
+/*
+ * P256-SECRET payload: priv[32] || peer[65] (97 bytes total).
+ * Response: shared[32].
+ */
+static size_t run_p256_secret(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 97 || out_max < 32) return 0;
+    const uint8_t *priv = in;
+    const uint8_t *peer = in + 32;
+    if (!tls_p256_secret(out, priv, peer)) return 0;
+    return 32;
+}
+
 /* ---------- Main runner ---------- */
 
 int main(void)
@@ -861,6 +887,16 @@ int main(void)
             break;
         case ALG_P256_SIGGEN:
             result_len = run_p256_siggen(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_PUBLICKEY:
+            result_len = run_p256_publickey(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_SECRET:
+            result_len = run_p256_secret(payload, payload_len, scratch, sizeof(scratch));
             if (result_len == 0)
                 status = STATUS_INTERNAL;
             break;

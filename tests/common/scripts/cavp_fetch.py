@@ -103,6 +103,10 @@ ALG_ID = {
     "PBKDF2-HMAC-SHA256":      11,
     "SHA-256-MCT":             12,
     "RSA-PKCS1v15-SHA-256-VERIFY": 13,
+    "P256-SIGVER":              14,
+    "P256-SIGGEN":              15,
+    "P256-PUBLICKEY":           16,
+    "P256-SECRET":              17,
 }
 
 # Test ID ranges (sequentially assigned per algorithm)
@@ -119,6 +123,10 @@ TID_RANGES = {
     "PBKDF2-HMAC-SHA256":   11001,
     "SHA-256-MCT":          12001,
     "RSA-PKCS1v15-SHA-256-VERIFY": 13001,
+    "P256-SIGVER":          14001,
+    "P256-SIGGEN":          15001,
+    "P256-PUBLICKEY":       16001,
+    "P256-SECRET":          17001,
 }
 
 
@@ -832,6 +840,111 @@ def gen_x25519(rng: random.Random, n_vectors: int) -> tuple[list[dict[str, Any]]
     return pub_vectors, secret_vectors
 
 
+def gen_p256(rng: random.Random, n_vectors: int) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]]]:
+    """Generate n_vectors each of P-256 keygen, ECDH, SIGGEN, and SIGVER vectors."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.backends import default_backend
+    except ImportError:
+        raise SystemExit(
+            "P-256 vector generation needs python3-cryptography: pip install cryptography"
+        )
+
+    n_order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+    backend = default_backend()
+
+    def rand_scalar() -> int:
+        while True:
+            v = int.from_bytes(rng.randbytes(32), "big")
+            if 1 <= v <= n_order - 1:
+                return v
+
+    def priv_key(scalar: int):
+        return ec.derive_private_key(scalar, SECP256R1(), backend)
+
+    def pub_bytes(key) -> bytes:
+        pn = key.public_key().public_numbers()
+        return b"\x04" + pn.x.to_bytes(32, "big") + pn.y.to_bytes(32, "big")
+
+    pub_vectors: list[dict[str, Any]] = []
+    secret_vectors: list[dict[str, Any]] = []
+    siggen_vectors: list[dict[str, Any]] = []
+    sigver_vectors: list[dict[str, Any]] = []
+
+    for i in range(n_vectors):
+        # keygen
+        s = rand_scalar()
+        k = priv_key(s)
+        pub = pub_bytes(k)
+        pub_vectors.append({
+            "algorithm": "P256-PUBLICKEY",
+            "priv_hex": s.to_bytes(32, "big").hex(),
+            "expected_pub_hex": pub.hex(),
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"publickey[{i}]",
+        })
+
+        # ECDH
+        peer_s = rand_scalar()
+        peer_k = priv_key(peer_s)
+        peer_pub = pub_bytes(peer_k)
+        shared = k.exchange(ec.ECDH(), peer_k.public_key())
+        secret_vectors.append({
+            "algorithm": "P256-SECRET",
+            "priv_hex": s.to_bytes(32, "big").hex(),
+            "peer_pub_hex": peer_pub.hex(),
+            "expected_shared_hex": shared.hex(),
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"secret[{i}]",
+        })
+
+        # SIGGEN
+        sign_s = rand_scalar()
+        sign_k = priv_key(sign_s)
+        msg = rng.randbytes(32)
+        import hashlib
+        msg_hash = hashlib.sha256(msg).digest()
+        sig_der = sign_k.sign(msg, ec.ECDSA(hashes.SHA256()))
+        r_int, s_int = decode_dss_signature(sig_der)
+        sig_bytes = r_int.to_bytes(32, "big") + s_int.to_bytes(32, "big")
+        siggen_vectors.append({
+            "algorithm": "P256-SIGGEN",
+            "priv_hex": sign_s.to_bytes(32, "big").hex(),
+            "hash_hex": msg_hash.hex(),
+            "expected_sig_hex": sig_bytes.hex(),
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"siggen[{i}]",
+        })
+
+        # SIGVER (valid)
+        ver_s = rand_scalar()
+        ver_k = priv_key(ver_s)
+        ver_pub = pub_bytes(ver_k)
+        ver_msg = rng.randbytes(32)
+        ver_hash = hashlib.sha256(ver_msg).digest()
+        ver_sig_der = ver_k.sign(ver_msg, ec.ECDSA(hashes.SHA256()))
+        ver_r, ver_s2 = decode_dss_signature(ver_sig_der)
+        ver_sig = ver_r.to_bytes(32, "big") + ver_s2.to_bytes(32, "big")
+        sigver_vectors.append({
+            "algorithm": "P256-SIGVER",
+            "pub_hex": ver_pub.hex(),
+            "hash_hex": ver_hash.hex(),
+            "sig_hex": ver_sig.hex(),
+            "expected_verify": True,
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"sigver[{i}]",
+        })
+
+    return pub_vectors, secret_vectors, siggen_vectors, sigver_vectors
+
+
 # ============================================================
 # Sampling
 # ============================================================
@@ -1023,6 +1136,31 @@ def pack_payload(v: dict) -> bytes:
         if len(seed) != 32:
             raise ValueError(f"SHA-256 MCT seed must be 32 bytes, got {len(seed)}")
         return seed
+    # P-256: payload formats match firmware run_p256_* wire format
+    if alg == "P256-PUBLICKEY":
+        priv = h(v["priv_hex"])
+        if len(priv) != 32:
+            raise ValueError(f"P256 priv must be 32 bytes, got {len(priv)}")
+        return priv                         # payload: priv[32]
+    if alg == "P256-SECRET":
+        priv = h(v["priv_hex"])
+        peer = h(v["peer_pub_hex"])
+        if len(priv) != 32 or len(peer) != 65:
+            raise ValueError(f"P256 priv=32, peer=65 bytes; got {len(priv)}, {len(peer)}")
+        return priv + peer                  # payload: priv[32] || peer[65]
+    if alg == "P256-SIGGEN":
+        priv = h(v["priv_hex"])
+        msg_hash = h(v["hash_hex"])
+        if len(priv) != 32 or len(msg_hash) != 32:
+            raise ValueError("P256-SIGGEN: priv and hash must each be 32 bytes")
+        return priv + msg_hash              # payload: priv[32] || hash[32]
+    if alg == "P256-SIGVER":
+        pub = h(v["pub_hex"])
+        msg_hash = h(v["hash_hex"])
+        sig = h(v["sig_hex"])
+        if len(pub) != 65 or len(msg_hash) != 32 or len(sig) != 64:
+            raise ValueError(f"P256-SIGVER: pub=65, hash=32, sig=64; got {len(pub)},{len(msg_hash)},{len(sig)}")
+        return pub + msg_hash + sig         # payload: pub[65] || hash[32] || sig[64]
     raise ValueError(f"unknown algorithm: {alg}")
 
 
@@ -1132,7 +1270,7 @@ def build_expected(vectors: list[dict[str, Any]], seed: int, sample_size: int) -
         for k in ("expected_hex", "expected_tag_hex", "expected_data_hex",
                   "expected_accept", "operation",
                   "expected_okm_hex", "expected_pub_hex", "expected_shared_hex",
-                  "expected_verify"):
+                  "expected_sig_hex", "expected_verify"):
             if k in v:
                 rec[k] = v[k]
         # Include the source info for traceability in failure reports
@@ -1333,6 +1471,29 @@ def main() -> int:
         source = v.get("source_file", v.get("$source", "unknown"))
         count = v.get("source_count", "pinned")
         print(f"    x25519 tid={v['test_id']} <- {source} Count={count}", file=sys.stderr)
+
+    print(f"==> [P256] generating {sample_size} vectors each for "
+          f"PUBLICKEY, SECRET, SIGGEN, SIGVER ...", file=sys.stderr)
+    try:
+        p256_pub_vectors, p256_secret_vectors, p256_siggen_vectors, p256_sigver_vectors = \
+            gen_p256(rng, sample_size)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"==> [P256] FAILED: {e}", file=sys.stderr)
+        return 2
+    assign_test_ids(p256_pub_vectors, "P256-PUBLICKEY")
+    assign_test_ids(p256_secret_vectors, "P256-SECRET")
+    assign_test_ids(p256_siggen_vectors, "P256-SIGGEN")
+    assign_test_ids(p256_sigver_vectors, "P256-SIGVER")
+    all_vectors.extend(p256_pub_vectors)
+    all_vectors.extend(p256_secret_vectors)
+    all_vectors.extend(p256_siggen_vectors)
+    all_vectors.extend(p256_sigver_vectors)
+    for v in p256_pub_vectors + p256_secret_vectors + p256_siggen_vectors + p256_sigver_vectors:
+        source = v.get("source_file", "generated/cavp_fetch.py")
+        count = v.get("source_count", "?")
+        print(f"    p256 tid={v['test_id']} <- {source} Count={count}", file=sys.stderr)
 
     # Sort for stable output
     all_vectors.sort(key=lambda v: v["test_id"])
