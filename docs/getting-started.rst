@@ -83,7 +83,7 @@ Initialize the Dylib
 
 ``lwip_start()`` must be the first lwIP-CE call in your program. It first patches the lwIP-CE
 LibLoad function table to call into the lwIP application and then initializes the stack's
-memory subsystem, timers, and RNG. It does not bring up the USB Ethernet interface; use ``lwip_network_up()`` for that.
+memory subsystem and timers. The RNG starts on its first use. It does not bring up the USB Ethernet interface; use ``lwip_network_up()`` for that.
 
 .. code-block:: c
 
@@ -121,6 +121,11 @@ LibLoad bootstrap.
 For cryptography or parser-only programs (no networking), ``lwip_start()`` is sufficient —
 ``lwip_network_up()`` is not needed. See :doc:`using-cryptography` for
 the cryptography API and :doc:`parsing` for the parser API.
+
+Call ``lwip_stop()`` before your program exits. It closes open connections and
+takes the calculator out of USB network mode. A program that exits without it
+leaves the calculator in that mode, and a connected PC cannot reach the
+calculator over the TI link until the cable is unplugged and plugged back in.
 
 ``lwip_service_events()`` must be called regularly from your main loop while
 networking is active (again, not needed for cryptography or parser-only code). Incoming packets, TCP timers, and connection state changes are all processed when this function runs. If it is not called often enough or too often, connections will stall or time out, or timing race conditions may occur. Once per tick is reasonable for most use cases.
