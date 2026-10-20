@@ -12,10 +12,47 @@
 #include "ip_identity.h"
 #include "key_internal.h"
 #include "../includes/tls.h"
+#include "../includes/crypto_guard.h"
+
+/* P-256 public API forward declarations (assembly in p256.s). */
+bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32],
+                     const uint8_t pub[65]);
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_X509
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
+
+const uint8_t *tls_ecdsa_parse_int(const uint8_t *der, size_t len,
+                                   uint8_t out[32])
+{
+    size_t ilen;
+    const uint8_t *v;
+
+    if (!der || len < 3 || der[0] != 0x02)
+        return NULL;
+    ilen = der[1];
+    /* ilen > 33 also rejects long-form lengths (0x80..0xFF). */
+    if (ilen == 0 || ilen > 33 || ilen > len - 2)
+        return NULL;
+    v = der + 2;
+    if (v[0] & 0x80)
+        return NULL;                    /* negative: invalid for r/s */
+    if (v[0] == 0x00)
+    {
+        /* A leading 0x00 is only legal DER as a sign pad before a byte with
+         * the high bit set.  A lone 0x00 (value 0) is also rejected: r/s = 0
+         * is never valid and tls_p256_verify would reject it anyway. */
+        if (ilen < 2 || !(v[1] & 0x80))
+            return NULL;
+        v++;
+        ilen--;
+    }
+    if (ilen > 32)
+        return NULL;
+    memset(out, 0, 32 - ilen);
+    memcpy(out + (32 - ilen), v, ilen);
+    return v + ilen;
+}
 
 static void *tls_x509_alloc(size_t size)
 {
@@ -1743,8 +1780,34 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
             break;
 
         case TLS_ALG_ECDSA_SECP256R1_SHA256:
-            return tls_key_supports_operation(key, alg)
-                ? TLS_KEY_OP_UNSUPPORTED : TLS_KEY_OP_INVALID;
+        {
+            if (!tls_key_supports_operation(key, alg))
+                return TLS_KEY_OP_INVALID;
+            if (key->ec.len != 65 || !key->ec.data)
+                return TLS_KEY_OP_INVALID;
+            /* sig is a DER SEQUENCE { INTEGER r, INTEGER s }.
+             * Decode into a flat 64-byte r||s buffer for tls_p256_verify. */
+            uint8_t rs[64];
+            /* Minimum valid DER ECDSA-Sig-Value is 8 bytes. */
+            if (sig_len < 8 || sig[0] != 0x30)
+                return TLS_KEY_OP_INVALID;
+            size_t seq_len = sig[1];
+            if ((seq_len & 0x80) || 2 + seq_len != sig_len)
+                return TLS_KEY_OP_INVALID;
+            {
+                const uint8_t *end = sig + sig_len;
+                const uint8_t *p = tls_ecdsa_parse_int(sig + 2, sig_len - 2, rs);
+                if (p)
+                    p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
+                if (p != end)   /* NULL (parse error) or trailing bytes */
+                    return TLS_KEY_OP_INVALID;
+            }
+            tls_crypto_guard_enable();
+            bool p256_ok = tls_p256_verify(rs, digest, key->ec.data);
+            tls_crypto_guard_disable();
+            tls_secure_memzero(rs, sizeof(rs));
+            return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
+        }
 
         default:
             return TLS_KEY_OP_UNKNOWN;

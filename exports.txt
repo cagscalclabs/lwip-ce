@@ -448,3 +448,7 @@ lwip_start_with_crt
 lwip_get_start_errno
 lwip_get_start_errstring
 lwip_is_newer
+tls_p256_publickey
+tls_p256_secret
+tls_p256_sign
+tls_p256_verify

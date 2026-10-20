@@ -16,7 +16,8 @@
  *       algorithm_id  uint8   (1=AES-GCM, 2=SHA-256, 3=HMAC, 4=HKDF,
  *                              5=DRBG, 6=RSA-PSS, 7/8=X25519,
  *                              9=AES-CBC, 10=AES-CCM, 11=PBKDF2,
- *                              12=SHA-256-MCT, 13=RSA-PKCS1v15-verify)
+ *                              12=SHA-256-MCT, 13=RSA-PKCS1v15-verify,
+ *                              14=P256-SIGVER, 15=P256-SIGGEN)
  *       test_id       uint16  little-endian
  *       payload_len   uint16  little-endian
  *       payload[payload_len]  algorithm-specific TLV (see runners below)
@@ -48,6 +49,7 @@
 #include <lwip/cryptography/passwords.h>
 #include <lwip/cryptography/rsa.h>
 #include <lwip/cryptography/x25519.h>
+#include <lwip/cryptography/p256.h>
 #include <lwip.h>
 
 #define CAVPIN_CHUNKS 16
@@ -66,6 +68,8 @@
 #define ALG_PBKDF2_HMAC_SHA256    11
 #define ALG_SHA256_MCT            12
 #define ALG_RSA_PKCS1_SHA256_VERIFY 13
+#define ALG_P256_SIGVER            14
+#define ALG_P256_SIGGEN            15
 
 #define STATUS_OK 0
 #define STATUS_UNSUPPORTED 1
@@ -671,6 +675,33 @@ static size_t run_x25519_secret(const uint8_t *in, size_t in_len, uint8_t *out, 
     return 32;
 }
 
+/*
+ * P256-SIGVER payload: pub[65] || hash[32] || sig[64] (161 bytes total).
+ * Response: 1 byte — 0x01 if signature is valid, 0x00 if not.
+ */
+static size_t run_p256_sigver(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 161 || out_max < 1) return 0;
+    const uint8_t *pub  = in;
+    const uint8_t *hash = in + 65;
+    const uint8_t *sig  = in + 65 + 32;
+    out[0] = tls_p256_verify(sig, hash, pub) ? 0x01 : 0x00;
+    return 1;
+}
+
+/*
+ * P256-SIGGEN payload: priv[32] || hash[32] (64 bytes total).
+ * Response: sig[64] (r||s, big-endian).
+ */
+static size_t run_p256_siggen(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 64 || out_max < 64) return 0;
+    const uint8_t *priv = in;
+    const uint8_t *hash = in + 32;
+    if (!tls_p256_sign(out, hash, priv)) return 0;
+    return 64;
+}
+
 /* ---------- Main runner ---------- */
 
 int main(void)
@@ -820,6 +851,16 @@ int main(void)
             break;
         case ALG_SHA256_MCT:
             result_len = run_sha256_mct(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_SIGVER:
+            result_len = run_p256_sigver(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_SIGGEN:
+            result_len = run_p256_siggen(payload, payload_len, scratch, sizeof(scratch));
             if (result_len == 0)
                 status = STATUS_INTERNAL;
             break;
