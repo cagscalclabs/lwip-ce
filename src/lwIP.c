@@ -175,7 +175,8 @@ static lwip_socket_io_data_t    lwip_socket_io_data;
 
 typedef enum
 {
-    CONN_PENDING_RESOLVING = 0,
+    CONN_PENDING_WAITING_SERVICES = 0,
+    CONN_PENDING_RESOLVING,
     CONN_PENDING_CONNECTING,
     CONN_PENDING_CONNECTED,
     CONN_PENDING_READABLE,
@@ -566,7 +567,8 @@ static bool conn_event_pop(struct lwip_socket *conn,
 
 static bool conn_pending_is_state_event(conn_pending_event_t event)
 {
-    return event == CONN_PENDING_RESOLVING ||
+    return event == CONN_PENDING_WAITING_SERVICES ||
+           event == CONN_PENDING_RESOLVING ||
            event == CONN_PENDING_CONNECTING ||
            event == CONN_PENDING_CONNECTED ||
            event == CONN_PENDING_CLOSING ||
@@ -580,6 +582,8 @@ static lwip_status_t conn_pending_status(conn_pending_event_t event,
 {
     switch (event)
     {
+    case CONN_PENDING_WAITING_SERVICES:
+        return LWIP_STATUS_WAITING_SERVICES;
     case CONN_PENDING_RESOLVING:
         return LWIP_STATUS_RESOLVING;
     case CONN_PENDING_CONNECTING:
@@ -2889,6 +2893,7 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
         conn->pending_svc_flags = svc;
         conn->connect_deadline = sys_now() + conn_window_ms(conn);
         conn->status = LWIP_STATUS_WAITING_SERVICES;
+        conn_event_enqueue(conn, CONN_PENDING_WAITING_SERVICES, LWIP_OK);
         /* The socket owns this wait. Do not allocate an unbounded,
          * anonymous service request that outlives a cancelled connection. */
         services_arm();
