@@ -58,7 +58,7 @@ static void mem_buffer_custom_free(void *p) { free(p); }
 static void *tls_fileio_alloc(size_t n) { return malloc(n); }
 static void tls_fileio_free(void *p) { free(p); }
 static bool tls_rng_healthcheck(void) { return true; }
-static void tls_random_bytes(uint8_t *buf, size_t n) { memset(buf, 0, n); }
+static void *tls_random_bytes(void *buf, size_t n) { memset(buf, 0, n); return buf; }
 static bool tls_request_random_bytes(uint8_t *buf, size_t n, void *cb, void *arg, bool blocking)
 { (void)cb; (void)arg; (void)blocking; memset(buf, 1, n); return true; }
 static void mem_stats_tls_direct_add(size_t n, size_t unused) { allocated += n; }

@@ -6,7 +6,9 @@ on:
       - docs/whitepaper/whitepaper.tex
       - docs/whitepaper/scripts/**
       - docs/whitepaper/datasets/**
+      - src/tls/includes/random.h
       - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
+      - tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py
       - .github/workflows/whitepaper.yml
       - statistics/rng/**
   pull_request:
@@ -14,7 +16,9 @@ on:
       - docs/whitepaper/whitepaper.tex
       - docs/whitepaper/scripts/**
       - docs/whitepaper/datasets/**
+      - src/tls/includes/random.h
       - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
+      - tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py
       - .github/workflows/whitepaper.yml
       - statistics/rng/**
   workflow_dispatch:
@@ -50,7 +54,7 @@ jobs:
             docs/whitepaper/whitepaper.fls
             docs/whitepaper/whitepaper.out
             docs/whitepaper/whitepaper.toc
-          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('docs/whitepaper/whitepaper.tex', 'docs/whitepaper/scripts/**', 'docs/whitepaper/datasets/**', 'tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py', 'statistics/rng/**') }}
+          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('docs/whitepaper/whitepaper.tex', 'docs/whitepaper/scripts/**', 'docs/whitepaper/datasets/**', 'src/tls/includes/random.h', 'tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py', 'tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py', 'statistics/rng/**') }}
           restore-keys: |
             ${{ runner.os }}-whitepaper-build-
 
@@ -64,6 +68,7 @@ jobs:
             -o Dir::Cache::archives="$APT_CACHE_DIR" \
             install -y \
             latexmk \
+            librsvg2-bin \
             python3-pygments \
             texlive-fonts-recommended \
             texlive-fonts-extra \
@@ -78,7 +83,12 @@ jobs:
           sudo chown -R "$USER:$USER" "$APT_CACHE_DIR"
 
       - name: Generate whitepaper data
-        run: python3 scripts/generate_docs_data.py
+        run: |
+          python3 scripts/generate_docs_data.py
+          rsvg-convert \
+            --format pdf \
+            --output generated/rng_entropy_distributions.pdf \
+            generated/rng_entropy_distributions.svg
         working-directory: docs/whitepaper
 
       - name: Build PDF

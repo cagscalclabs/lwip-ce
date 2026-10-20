@@ -5,7 +5,7 @@
 ### Current Implementation Status
 - **Protocol**: TLS 1.3 only
 - **Mode**: PSK-only (Pre-Shared Key without ECDHE)
-- **Cipher Suite**: TLS_AES_128_GCM_SHA256 (0x13, 0x01)
+- **Cipher Suites**: TLS_AES_128_GCM_SHA256 (0x13, 0x01) and TLS_AES_128_CCM_SHA256 (0x13, 0x04)
 - **State**: Handshake, key derivation, and AES-GCM encryption/decryption working
 
 ### Not Yet Implemented
@@ -13,7 +13,7 @@
 - Certificate validation beyond parsing
 - RSA signature verification
 - 0-RTT session resumption
-- Additional cipher suites
+- Additional cipher suites beyond AES-128 GCM/CCM with SHA-256
 
 ## Cryptographic Primitives
 
@@ -69,6 +69,7 @@ restoring an earlier machine state.
 #### Cipher Suites (TLS Extension)
 These are negotiated in TLS handshake, not ASN.1 OIDs:
 - **TLS_AES_128_GCM_SHA256**: `0x13, 0x01` (REQUIRED, currently supported)
+- **TLS_AES_128_CCM_SHA256**: `0x13, 0x04` (currently supported)
 - **TLS_AES_256_GCM_SHA384**: `0x13, 0x02` (recommended, requires SHA-384)
 - **TLS_CHACHA20_POLY1305_SHA256**: `0x13, 0x03` (optional)
 

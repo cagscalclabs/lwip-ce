@@ -53,8 +53,8 @@ extern "C" {
 /** lwIP-CE release version (distinct from the vendored upstream lwIP version). */
 #define LWIP_CE_VERSION_MAJOR 2
 #define LWIP_CE_VERSION_MINOR 1
-#define LWIP_CE_VERSION_PATCH 2
-#define LWIP_CE_VERSION_STRING "2.1.2"
+#define LWIP_CE_VERSION_PATCH 3
+#define LWIP_CE_VERSION_STRING "2.1.3"
 
 struct netif;
 struct tcp_pcb;
@@ -383,6 +383,8 @@ bool lwip_socket_is_active(const struct lwip_socket *socket);
  *  socket making progress never times out.  0 = disable the timeout. */
 lwip_error_t lwip_socket_set_timeout(struct lwip_socket *socket,
                                      uint32_t timeout_ms);
+/** Write one transport chunk. len must fit in lwIP's 16-bit pbuf/TCP length
+ *  fields; values above UINT16_MAX fail with LWIP_ERR_ARG. */
 lwip_error_t lwip_socket_write(struct lwip_socket *socket,
                                const uint8_t *buf,
                                size_t len);

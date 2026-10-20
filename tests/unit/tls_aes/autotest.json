@@ -20,7 +20,7 @@
   "sequence": [
     "key|clear",
     "action|launch:INSTALL",
-    "hashWait|14",
+    "hashWait|15",
     "key|left",
     "key|enter",
     "delay|2000",
@@ -50,6 +50,8 @@
     "hashWait|12",
     "key|enter",
     "hashWait|13",
+    "key|enter",
+    "hashWait|14",
     "key|enter",
     "key|enter"
   ],
@@ -145,7 +147,7 @@
       "timeout": 1500
     },
     "10": {
-      "description": "NIST SP 800-38A, Appendix F.2.3, CBC-AES192.Encrypt",
+      "description": "RFC 3610 AES-CCM vector #2 with chunked record processing",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
@@ -155,7 +157,7 @@
       "timeout": 1500
     },
     "11": {
-      "description": "NIST SP 800-38A, Appendix F.2.4, CBC-AES192.Decrypt",
+      "description": "NIST SP 800-38A, Appendix F.2.3, CBC-AES192.Encrypt",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
@@ -165,7 +167,7 @@
       "timeout": 1500
     },
     "12": {
-      "description": "NIST SP 800-38A, Appendix F.2.5, CBC-AES256.Encrypt",
+      "description": "NIST SP 800-38A, Appendix F.2.4, CBC-AES192.Decrypt",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
@@ -175,7 +177,7 @@
       "timeout": 1500
     },
     "13": {
-      "description": "NIST SP 800-38A, Appendix F.2.6, CBC-AES256.Decrypt",
+      "description": "NIST SP 800-38A, Appendix F.2.5, CBC-AES256.Encrypt",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
@@ -185,6 +187,16 @@
       "timeout": 1500
     },
     "14": {
+      "description": "NIST SP 800-38A, Appendix F.2.6, CBC-AES256.Decrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 1500
+    },
+    "15": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

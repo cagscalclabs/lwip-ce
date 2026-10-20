@@ -2,7 +2,7 @@
 
 ## Current Status
 
-✅ **Working**: PSK-only handshake with AES-128-GCM-SHA256
+✅ **Working**: TLS 1.3 handshake with AES-128-GCM-SHA256 and AES-128-CCM-SHA256
 ⚠️ **Blocked**: Full TLS 1.3 handshake (needs ECDHE + cert validation)
 
 ---

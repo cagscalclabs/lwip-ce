@@ -307,7 +307,42 @@ static bool tls_send_alert(struct tls_handshake_context *ctx,
 static bool tls_send_key_update_record(struct tls_handshake_context *ctx);
 
 #define TLS_AES_GCM_RECORD_LIMIT (1ULL << 24)
+/* RFC 9147 Appendix B derives 2^23 records for AEAD_AES_128_CCM at the
+ * security target used by TLS 1.3. Use the same conservative bound here. */
+#define TLS_AES_CCM_RECORD_LIMIT (1ULL << 23)
 #define TLS_MAX_KEY_UPDATES 32u
+
+static bool tls_cipher_suite_supported(uint16_t cipher_suite)
+{
+    return cipher_suite == TLS_AES_128_GCM_SHA256 ||
+           cipher_suite == TLS_AES_128_CCM_SHA256;
+}
+
+static uint8_t tls_cipher_suite_aes_mode(uint16_t cipher_suite)
+{
+    return cipher_suite == TLS_AES_128_CCM_SHA256 ? TLS_AES_CCM : TLS_AES_GCM;
+}
+
+static uint64_t tls_cipher_suite_record_limit(uint16_t cipher_suite)
+{
+    return cipher_suite == TLS_AES_128_CCM_SHA256
+        ? TLS_AES_CCM_RECORD_LIMIT
+        : TLS_AES_GCM_RECORD_LIMIT;
+}
+
+static bool tls_record_aead_init(struct tls_aes_context *aes_ctx,
+                                 uint16_t cipher_suite,
+                                 const uint8_t key[16],
+                                 const uint8_t nonce[12],
+                                 size_t plaintext_len)
+{
+    if (tls_cipher_suite_aes_mode(cipher_suite) == TLS_AES_CCM)
+    {
+        return tls_aes_ccm_init(aes_ctx, key, 16, nonce, 12,
+                                TLS_AES_AUTH_TAG_SIZE, plaintext_len, 5);
+    }
+    return tls_aes_init(aes_ctx, TLS_AES_GCM, key, 16, nonce, 12);
+}
 
 /**
  * @brief Build the TLS 1.3 AEAD nonce: static IV XOR right-aligned seq number.
@@ -1745,9 +1780,8 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
  * Concretely:
  *   1. Zero the context (prevents accidental key reuse).
  *   2. Stash PSK + identity (if provided) and set psk_mode accordingly.
- *   3. Pin the cipher suite to TLS_AES_128_GCM_SHA256 — the only one we
- *      negotiate. TLS 1.3 only defines a handful of cipher suites; this is
- *      the universally-supported floor.
+ *   3. Set the preferred cipher suite. The peer selects one of the two
+ *      SHA-256/AES-128 suites offered in ClientHello.
  *   4. Generate a 32-byte client_random by reading 4×uint64 from the TI RNG.
  *   5. Initialize the running SHA-256 transcript hash. Every handshake
  *      message we send or receive gets fed into this hash. Key derivation
@@ -1785,7 +1819,7 @@ bool tls_handshake_init(
         ctx->psk_mode = false;
     }
 
-    /* Set cipher suite */
+    /* Preferred suite until ServerHello selects from the offered list. */
     ctx->cipher_suite = TLS_AES_128_GCM_SHA256;
 
     /* Initialize state */
@@ -1855,7 +1889,7 @@ bool tls_handshake_init(
  *      |      |           |       |       |          |         |        |
  *      |      |           |       |       |          |         |        +-- extensions block
  *      |      |           |       |       |          |         +-- compression_methods (always 0x00)
- *      |      |           |       |       |          +-- cipher_suites (just 0x1301)
+ *      |      |           |       |       |          +-- cipher_suites (0x1301, 0x1304)
  *      |      |           |       |       +-- legacy session ID (empty / 32B echo)
  *      |      |           |       +-- 32-byte client_random
  *      |      |           +-- legacy_version 0x0303 (TLS 1.2 — TLS 1.3 hides in extensions)
@@ -1896,9 +1930,9 @@ bool tls_send_client_hello(
 {
     enum {
         HELLO_RANDOM_OFFSET = 6,
-        HELLO_EXT_LEN_OFFSET = 45,
-        HELLO_EXT_START = 47,
-        HELLO_KEY_SHARE_OFFSET = 72
+        HELLO_EXT_LEN_OFFSET = 47,
+        HELLO_EXT_START = 49,
+        HELLO_KEY_SHARE_OFFSET = 74
     };
     /* Base ClientHello with zero placeholders for the 32-byte client random,
      * 32-byte key share, and dependent lengths. Optional extensions append. */
@@ -1908,8 +1942,10 @@ bool tls_send_client_hello(
         /* client_random patched at offset 6 */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0x00,                    /* legacy_session_id length */
-        0x00, 0x02, 0x13, 0x01, /* TLS_AES_128_GCM_SHA256 */
+        0x00,                                /* legacy_session_id length */
+        0x00, 0x04,                         /* cipher suites length */
+        0x13, 0x01,                         /* TLS_AES_128_GCM_SHA256 */
+        0x13, 0x04,                         /* TLS_AES_128_CCM_SHA256 */
         0x01, 0x00,              /* one null compression method */
         0x00, 0x00,              /* extensions length patched */
         /* supported_versions: TLS 1.3 */
@@ -1918,7 +1954,7 @@ bool tls_send_client_hello(
         0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d,
         /* key_share header: one 32-byte x25519 key follows */
         0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20,
-        /* x25519 key patched at offset 72 */
+        /* x25519 key patched at offset 74 */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* signature_algorithms: rsa_pss_rsae_sha256 */
@@ -2450,13 +2486,16 @@ bool tls_recv_server_hello(
                 ERROR_CODE(0x44);
                 return false;
             }
-            if ((((uint16_t)data[hrr_offset] << 8) | data[hrr_offset + 1]) !=
-                    ctx->cipher_suite || data[hrr_offset + 2] != 0)
+            uint16_t hrr_cipher_suite = ((uint16_t)data[hrr_offset] << 8) |
+                                        data[hrr_offset + 1];
+            if (!tls_cipher_suite_supported(hrr_cipher_suite) ||
+                data[hrr_offset + 2] != 0)
             {
                 ctx->state = TLS_STATE_ERROR;
                 ERROR_CODE(0x44);
                 return false;
             }
+            ctx->cipher_suite = hrr_cipher_suite;
             hrr_offset += 3;
 
             /* Extensions block */
@@ -2643,12 +2682,14 @@ bool tls_recv_server_hello(
     uint16_t cipher_suite = (data[offset] << 8) | data[offset + 1];
     offset += 2;
 
-    if (cipher_suite != ctx->cipher_suite)
+    if (!tls_cipher_suite_supported(cipher_suite) ||
+        (ctx->hrr_done && cipher_suite != ctx->cipher_suite))
     {
         ctx->state = TLS_STATE_ERROR;
         ERROR_CODE(0x51);
         return false;
     }
+    ctx->cipher_suite = cipher_suite;
 
     /* Step 7: Verify compression method */
     if (offset >= msg_end || data[offset++] != 0x00)
@@ -4661,14 +4702,15 @@ static bool tls_send_key_update_record(struct tls_handshake_context *ctx)
 
     if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE ||
         !ctx->transport_write || ctx->client_key_updates >= TLS_MAX_KEY_UPDATES ||
-        ctx->client_seq_num >= TLS_AES_GCM_RECORD_LIMIT)
+        ctx->client_seq_num >= tls_cipher_suite_record_limit(ctx->cipher_suite))
         return false;
     record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
     record[1] = 0x03; record[2] = 0x03;
     record[3] = 0; record[4] = 22;
     tls_build_aead_nonce(ctx->keys.client_application_iv, ctx->client_seq_num, nonce);
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM,
-                      ctx->keys.client_application_key, 16, nonce, sizeof(nonce)) ||
+    if (!tls_record_aead_init(&aes_ctx, ctx->cipher_suite,
+                              ctx->keys.client_application_key, nonce,
+                              sizeof(message) + 1) ||
         !tls_aes_update_aad(&aes_ctx, record, 5) ||
         !tls_aes_encrypt(&aes_ctx, message, sizeof(message), record + 5))
         return false;
@@ -4686,7 +4728,8 @@ static bool tls_send_key_update_record(struct tls_handshake_context *ctx)
 bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx)
 {
     if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE) return false;
-    if (ctx->client_seq_num < TLS_AES_GCM_RECORD_LIMIT - 1u) return true;
+    if (ctx->client_seq_num < tls_cipher_suite_record_limit(ctx->cipher_suite) - 1u)
+        return true;
     return tls_send_key_update_record(ctx);
 }
 
@@ -4751,7 +4794,7 @@ static bool tls_send_alert(
                 seq_num = &ctx->client_seq_num;
             }
 
-            if (*seq_num >= TLS_AES_GCM_RECORD_LIMIT)
+            if (*seq_num >= tls_cipher_suite_record_limit(ctx->cipher_suite))
                 return false;
 
             record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
@@ -4761,7 +4804,7 @@ static bool tls_send_alert(
             record[4] = 3 + 16; /* 2 body + 1 type + 16 tag */
 
             tls_build_aead_nonce(iv, *seq_num, nonce);
-            if (tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, 12) &&
+            if (tls_record_aead_init(&aes_ctx, ctx->cipher_suite, key, nonce, 3) &&
                 tls_aes_update_aad(&aes_ctx, record, 5) &&
                 tls_aes_encrypt(&aes_ctx, alert_body, 2, record + 5))
             {

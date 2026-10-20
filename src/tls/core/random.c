@@ -16,6 +16,7 @@
 
 #define TLS_RNG_REQUEST_INTERVAL_MS 50u
 #define TLS_RNG_REQUEST_QUEUE_MAX_DEPTH 16u
+#define TLS_RNG_SOURCE_INIT_MAX_ATTEMPTS 2u
 #define TLS_HASH_DRBG_SEED_BYTES 55u
 #define TLS_HASH_DRBG_ENTROPY_BYTES 32u
 #define TLS_HASH_DRBG_NONCE_BYTES 32u
@@ -89,6 +90,7 @@ static size_t g_tls_entropy_reserve_len = 0;
 static uint16_t g_tls_entropy_reserve_bits = 0;
 static uint8_t g_tls_rng_source_epoch = 0;
 static bool g_tls_rng_external = false;
+static uint8_t g_tls_rng_source_init_attempts = 0;
 
 static uint16_t tls_entropy_reserve_target_bits(void)
 {
@@ -637,13 +639,13 @@ static void tls_rng_timer_start(void)
         return;
     }
     g_tls_rng_started = true;
-    if (!tls_random_init_entropy())
-        ERROR_CODE(TLS_RNG_FAILURE_SOURCE_INIT);
+    g_tls_rng_source_init_attempts = 0;
     g_tls_rng_source_epoch = tls_random_health_epoch();
     tls_drbg_reset();
 
     tls_rng_ensure_attached();
     lwip_dispatch_start();
+    (void)tls_rng_healthcheck();
     if (!g_tls_rng_entropy_timer_running)
     {
         g_tls_rng_entropy_timer_running = true;
@@ -660,6 +662,7 @@ static void tls_rng_timer_stop(void)
     }
     g_tls_rng_started = false;
     g_tls_rng_entropy_timer_running = false;
+    g_tls_rng_source_init_attempts = 0;
     tls_drbg_reset();
     lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST, 0);
 }
@@ -672,13 +675,25 @@ bool tls_rng_healthcheck(void)
 
     if ((source != NULL) && (mask != 0u) && ((mask & (uint8_t)(mask - 1u)) == 0u))
     {
+        g_tls_rng_source_init_attempts = 0;
         return true;
     }
+    /* Source discovery is a complete, fixed-size SRAM scan. Bound automatic
+     * retries so a machine with no usable tap cannot repeatedly monopolize
+     * the dispatcher or every randomness-consuming call. An explicit
+     * tls_random_init_entropy() may still recover the source; the validity
+     * check above recognizes that on the next call. */
+    if (g_tls_rng_source_init_attempts >= TLS_RNG_SOURCE_INIT_MAX_ATTEMPTS)
+    {
+        return false;
+    }
+    g_tls_rng_source_init_attempts++;
     if (!tls_random_init_entropy())
     {
         ERROR_CODE(TLS_RNG_FAILURE_SOURCE_INIT);
         return false;
     }
+    g_tls_rng_source_init_attempts = 0;
     g_tls_rng_source_epoch = tls_random_health_epoch();
     tls_drbg_reset();
     return true;
@@ -750,6 +765,10 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
 {
     bool done = false;
     if (out == NULL || len == 0)
+    {
+        return false;
+    }
+    if (!tls_rng_healthcheck())
     {
         return false;
     }
@@ -865,8 +884,13 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
     uint32_t remaining;
     bool have_previous = false;
 
-    if ((stats == NULL) ||
-        (sample_count < TLS_RNG_STATS_MIN_SAMPLES) ||
+    if (stats == NULL)
+    {
+        return false;
+    }
+    memset(stats, 0, sizeof(*stats));
+
+    if ((sample_count < TLS_RNG_STATS_MIN_SAMPLES) ||
         (sample_count > TLS_RNG_STATS_MAX_SAMPLES) ||
         tls_rng_is_busy())
     {
@@ -881,7 +905,6 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
         return false;
     }
 
-    memset(stats, 0, sizeof(*stats));
     stats->source_address = (uintptr_t)source;
     stats->source_mask = source_mask;
     stats->sample_count = (uint32_t)sample_count;
@@ -992,8 +1015,8 @@ void tls_rng_start(void)
     /* Readiness is checked by each randomness-consuming operation. Startup
      * must not make deterministic crypto primitives depend on entropy being
      * immediately available. */
-    if (!tls_random_init_entropy())
-        ERROR_CODE(TLS_RNG_FAILURE_SOURCE_INIT);
+    g_tls_rng_source_init_attempts = 0;
+    (void)tls_rng_healthcheck();
 #endif
 }
 

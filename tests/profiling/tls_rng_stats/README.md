@@ -74,3 +74,20 @@ This is useful for selecting a conservative engineering value for `H`, but it
 is not by itself a complete NIST SP 800-90B non-IID entropy assessment. The
 Markov estimate models only adjacent dependence; longer-range patterns require
 a raw sequential capture and the complete non-IID estimator suite.
+
+## Published statistics report
+
+Pushes to `master` that change the checked-in RNG reports, either analysis
+tool, or the reporting workflow run `Publish Statistics`. The RNG suite
+recomputes analyzer-owned fields from the stored raw counts and publishes:
+
+- aggregate and per-model tables in the GitHub Actions job summary;
+- an inline distribution chart for marginal `H_99`, lag-1 phi, and
+  conservative `H`;
+- Markdown, JSON, CSV, SVG, and PNG outputs as a workflow artifact; and
+- the same named outputs in the shared `statistics-assets-latest` release.
+
+The chart's density shapes are descriptive rather than fitted normal
+distributions. Its overlaid circles are the individual profiler windows.
+The whitepaper uses the same chart generator but rebuilds from the checked-out
+reports so a historical paper build cannot silently import newer release data.

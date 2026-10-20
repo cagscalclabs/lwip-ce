@@ -218,6 +218,24 @@ static void altcp_tls_ce_build_aead_nonce(const uint8_t iv[12], uint64_t seq_num
     }
 }
 
+static bool altcp_tls_ce_record_aead_init(struct tls_aes_context *aes_ctx,
+                                          const struct tls_handshake_context *ctx,
+                                          const uint8_t key[16],
+                                          const uint8_t nonce[12],
+                                          size_t plaintext_len)
+{
+    if (ctx->cipher_suite == TLS_AES_128_CCM_SHA256)
+    {
+        return tls_aes_ccm_init(aes_ctx, key, 16, nonce, 12,
+                                TLS_AES_AUTH_TAG_SIZE, plaintext_len, 5);
+    }
+    if (ctx->cipher_suite != TLS_AES_128_GCM_SHA256)
+    {
+        return false;
+    }
+    return tls_aes_init(aes_ctx, TLS_AES_GCM, key, 16, nonce, 12);
+}
+
 /* Chunk size for streaming AEAD passes. Sized to amortize per-call AES
  * overhead while keeping the working set well under one TLS record. */
 #ifndef ALTCP_TLS_CE_STREAM_CHUNK
@@ -225,16 +243,16 @@ static void altcp_tls_ce_build_aead_nonce(const uint8_t iv[12], uint64_t seq_num
 #endif
 
 /* Walk `len` ciphertext bytes from `src` starting at `src_offset`, feeding
- * each byte into the GHASH-only update path. No plaintext is produced and
- * no CTR keystream is touched. Used as Pass 1 of the streaming decrypt
- * before we trust any of the record contents.
+ * them into the negotiated AEAD authentication path. GCM authenticates the
+ * ciphertext directly; CCM runs its CTR/MAC pass without retaining plaintext.
+ * Used as Pass 1 of record decryption before any plaintext is released.
  *
  * Walks pbuf segments directly to avoid materializing the ciphertext into
  * a contiguous buffer. */
-static err_t altcp_tls_ce_pbuf_ghash(struct tls_aes_context *aes_ctx,
-                                     const struct pbuf *src,
-                                     size_t src_offset,
-                                     size_t len)
+static err_t altcp_tls_ce_pbuf_authenticate(struct tls_aes_context *aes_ctx,
+                                            const struct pbuf *src,
+                                            size_t src_offset,
+                                            size_t len)
 {
     u16_t inner = 0;
     const struct pbuf *q = pbuf_skip((struct pbuf *)src, (u16_t)src_offset, &inner);
@@ -257,9 +275,11 @@ static err_t altcp_tls_ce_pbuf_ghash(struct tls_aes_context *aes_ctx,
 
         avail = (size_t)q->len - inner;
         take = LWIP_MIN(avail, len - done);
-        if (!tls_aes_update_ciphertext(aes_ctx,
-                                       (const uint8_t *)q->payload + inner,
-                                       take))
+        const uint8_t *ciphertext = (const uint8_t *)q->payload + inner;
+        bool ok = aes_ctx->mode == TLS_AES_CCM
+            ? tls_aes_decrypt(aes_ctx, ciphertext, take, NULL)
+            : tls_aes_update_ciphertext(aes_ctx, ciphertext, take);
+        if (!ok)
         {
             return ERR_VAL;
         }
@@ -276,10 +296,11 @@ static err_t altcp_tls_ce_pbuf_ghash(struct tls_aes_context *aes_ctx,
 
 /* Streaming TLS 1.3 record decrypt with incremental input release.
  *
- *  Pass 1: GHASH the entire ciphertext (no decryption), then verify the
- *          16-byte tag against the trailer. Tag mismatch is fatal and the
+ *  Pass 1: authenticate the entire ciphertext without retaining plaintext,
+ *          then verify the 16-byte tag. Tag mismatch is fatal and the
  *          input rx chain is left intact for the caller to free.
- *  Pass 2: Re-init AES-GCM and walk the ciphertext in ALTCP_TLS_CE_STREAM_CHUNK
+ *  Pass 2: Re-init the selected AEAD and walk the ciphertext in
+ *          ALTCP_TLS_CE_STREAM_CHUNK
  *          strides. Each stride is copied from the head of `state->rx` into
  *          a scratch buffer, decrypted in place, and appended to a fresh
  *          output pbuf chain. After each stride we release the consumed
@@ -368,14 +389,15 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
 
     altcp_tls_ce_build_aead_nonce(iv, *seq_num, nonce);
 
-    /* Pass 1: GHASH-only verification over the ciphertext. */
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, sizeof(nonce)) ||
+    /* Pass 1: verify the complete record before releasing plaintext. */
+    if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce,
+                                       actual_plaintext_len) ||
         !tls_aes_update_aad(&aes_ctx, header, sizeof(header)))
     {
         return ERR_VAL;
     }
-    if (altcp_tls_ce_pbuf_ghash(&aes_ctx, state->rx, sizeof(header),
-                                actual_plaintext_len) != ERR_OK)
+    if (altcp_tls_ce_pbuf_authenticate(&aes_ctx, state->rx, sizeof(header),
+                                       actual_plaintext_len) != ERR_OK)
     {
         return ERR_VAL;
     }
@@ -398,7 +420,8 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     }
 
     /* Tag verified. Re-init AES for the decrypt pass. */
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, sizeof(nonce)) ||
+    if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce,
+                                       actual_plaintext_len) ||
         !tls_aes_update_aad(&aes_ctx, header, sizeof(header)))
     {
         return ERR_VAL;
@@ -566,7 +589,7 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     record[4] = (uint8_t)((inner_len + TLS_AES_AUTH_TAG_SIZE) & 0xFF);
 
     altcp_tls_ce_build_aead_nonce(iv, *seq_num, nonce);
-    if (!tls_aes_init(&aes_ctx, TLS_AES_GCM, key, 16, nonce, sizeof(nonce)) ||
+    if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce, inner_len) ||
         !tls_aes_update_aad(&aes_ctx, record, 5))
     {
         return false;

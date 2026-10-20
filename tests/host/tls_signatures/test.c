@@ -38,12 +38,14 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
     assert((((unsigned)buf[1] << 16) | ((unsigned)buf[2] << 8) | buf[3]) == n-4);
     assert(buf[4] == 3 && buf[5] == 3);
     assert(memcmp(buf + 6, ctx.client_random, 32) == 0);
-    static const uint8_t fixed_body[] = {0, 0, 2, 0x13, 1, 1, 0};
+    static const uint8_t fixed_body[] = {
+        0, 0, 4, 0x13, 0x01, 0x13, 0x04, 1, 0
+    };
     assert(memcmp(buf + 38, fixed_body, sizeof(fixed_body)) == 0);
-    assert(be16(buf+45) == n-47);
+    assert(be16(buf+47) == n-49);
     unsigned versions = 0, groups = 0, key_share = 0;
     unsigned signatures = 0, alpn = 0, sni = 0, psk_modes = 0, psk_ext = 0;
-    for (size_t off = 47; off < n; )
+    for (size_t off = 49; off < n; )
     {
         unsigned type = be16(buf+off), len = be16(buf+off+2);
         assert(off + 4 + len <= n);
@@ -160,12 +162,6 @@ static void handshake_extension_tests(void)
         0, TLS_EXT_SIGNATURE_ALGORITHMS, 0, 4, 0, 2, 0x08, 0x04
     };
     struct tls_handshake_context ctx;
-    uint8_t shared[32] = {0};
-
-    assert(!tls_x25519_shared_is_nonzero(shared));
-    shared[31] = 1;
-    assert(tls_x25519_shared_is_nonzero(shared));
-
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
     ctx.alpn_protocols = offered;

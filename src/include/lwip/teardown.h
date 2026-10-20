@@ -41,13 +41,19 @@ void lwip_teardown_abort_time_wait_pcbs(void);
 void lwip_teardown_remove_non_tcp_pcbs(void);
 
 /** Abort every TCP/UDP/RAW PCB bound to the given netif (by netif_idx).
- *  Each PCB's err callback fires with ERR_RST so the application can
- *  release its own state. Designed to be called from a netif link
+ *  TCP error callbacks fire with ERR_ABRT so their owners can release state;
+ *  the socket facade explicitly invalidates protocols without such a callback.
+ *  Designed to be called from a netif link
  *  callback when a backing transport has gone down so consumers see a
  *  clean reset rather than a stuck connection.
  *
  *  @param netif The netif whose bound PCBs should be aborted.
  */
 void lwip_teardown_abort_pcbs_on_netif(const struct netif *netif);
+
+/** Internal socket-facade completion hook for per-netif PCB teardown.
+ * TCP/ALTCP normally arrive here already invalidated by their err callbacks;
+ * this closes UDP/listener handles, which have no corresponding callback. */
+void lwip_socket_netif_teardown_complete(const struct netif *netif);
 
 #endif /* LWIP_TEARDOWN_H */

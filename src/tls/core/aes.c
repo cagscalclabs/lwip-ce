@@ -174,71 +174,58 @@ static void ccm_prepare_counter(struct tls_aes_context *ctx, uint32_t counter)
 static bool ccm_process_message(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len,
                                 uint8_t *outbuf, bool encrypt)
 {
-    if ((ctx->private.ccm.msg_processed != 0) || (in_len != ctx->private.ccm.msg_len))
+    struct _ccm_private *ccm = &ctx->private.ccm;
+    size_t offset = 0;
+
+    if ((inbuf == NULL && in_len != 0) ||
+        in_len > ccm->msg_len - ccm->msg_processed)
         return false;
 
-    size_t blocks = in_len / AES_BLOCK_SIZE;
-    size_t rem = in_len % AES_BLOCK_SIZE;
-    uint8_t keystream[AES_BLOCK_SIZE];
-
     aes_prepare_encrypt();
-    for (size_t idx = 0; idx < blocks; idx++)
+    while (offset < in_len)
     {
-        const uint8_t *in = &inbuf[idx * AES_BLOCK_SIZE];
-        uint8_t *out = outbuf ? &outbuf[idx * AES_BLOCK_SIZE] : NULL;
+        size_t stream_pos = ccm->last_block_len;
+        size_t take;
 
-        aes_encrypt_block(ctx->private.ccm.ctr, keystream, ctx);
-        if (encrypt)
+        if (stream_pos == 0)
         {
-            ccm_mac_update_block(ctx, in);
-            if (out)
+            aes_encrypt_block(ccm->ctr, ccm->last_block, ctx);
+            increment_iv(ccm->ctr, AES_BLOCK_SIZE - ccm->L, ccm->L);
+        }
+        take = MIN((size_t)AES_BLOCK_SIZE - stream_pos, in_len - offset);
+
+        for (size_t i = 0; i < take; i++)
+        {
+            uint8_t plaintext = encrypt
+                ? inbuf[offset + i]
+                : (uint8_t)(inbuf[offset + i] ^ ccm->last_block[stream_pos + i]);
+
+            if (outbuf)
             {
-                aes_xor_buf(in, keystream, AES_BLOCK_SIZE);
-                memcpy(out, keystream, AES_BLOCK_SIZE);
+                outbuf[offset + i] = encrypt
+                    ? (uint8_t)(plaintext ^ ccm->last_block[stream_pos + i])
+                    : plaintext;
+            }
+            ccm->msg_cache[ccm->msg_cache_len++] = plaintext;
+            if (ccm->msg_cache_len == AES_BLOCK_SIZE)
+            {
+                ccm_mac_update_block(ctx, ccm->msg_cache);
+                ccm->msg_cache_len = 0;
             }
         }
-        else
-        {
-            aes_xor_buf(in, keystream, AES_BLOCK_SIZE);
-            ccm_mac_update_block(ctx, keystream);
-            if (out)
-                memcpy(out, keystream, AES_BLOCK_SIZE);
-        }
-        increment_iv(ctx->private.ccm.ctr, AES_BLOCK_SIZE - ctx->private.ccm.L, ctx->private.ccm.L);
+        offset += take;
+        stream_pos += take;
+        ccm->last_block_len = (stream_pos == AES_BLOCK_SIZE) ? 0 : (uint8_t)stream_pos;
     }
 
-    if (rem)
+    ccm->msg_processed += in_len;
+    if (ccm->msg_processed == ccm->msg_len && ccm->msg_cache_len != 0)
     {
-        size_t offset = blocks * AES_BLOCK_SIZE;
-        const uint8_t *in = &inbuf[offset];
-        uint8_t *out = outbuf ? &outbuf[offset] : NULL;
-        aes_encrypt_block(ctx->private.ccm.ctr, keystream, ctx);
-        if (encrypt)
-        {
-            uint8_t tmp[AES_BLOCK_SIZE];
-            memcpy(tmp, in, rem);
-            tls_secure_memzero(&tmp[rem], AES_BLOCK_SIZE - rem);
-            ccm_mac_update_block(ctx, tmp);
-            if (out)
-            {
-                aes_xor_buf(tmp, keystream, rem);
-                memcpy(out, keystream, rem);
-            }
-            tls_secure_memzero(tmp, sizeof tmp);
-        }
-        else
-        {
-            aes_xor_buf(in, keystream, rem);
-            tls_secure_memzero(&keystream[rem], AES_BLOCK_SIZE - rem);
-            ccm_mac_update_block(ctx, keystream);
-            if (out)
-                memcpy(out, keystream, rem);
-        }
-        increment_iv(ctx->private.ccm.ctr, AES_BLOCK_SIZE - ctx->private.ccm.L, ctx->private.ccm.L);
+        tls_secure_memzero(ccm->msg_cache + ccm->msg_cache_len,
+                           AES_BLOCK_SIZE - ccm->msg_cache_len);
+        ccm_mac_update_block(ctx, ccm->msg_cache);
+        ccm->msg_cache_len = 0;
     }
-
-    ctx->private.ccm.msg_processed = in_len;
-    tls_secure_memzero(keystream, sizeof keystream);
     return true;
 }
 
@@ -435,6 +422,8 @@ bool tls_aes_ccm_init(struct tls_aes_context *ctx,
     ctx->private.ccm.lock = LOCK_ALLOW_ALL;
     ctx->private.ccm.msg_processed = 0;
     ctx->private.ccm.aad_len = 0;
+    ctx->private.ccm.msg_cache_len = 0;
+    ctx->private.ccm.last_block_len = 0;
 
     memcpy(ctx->private.ccm.nonce, nonce, nonce_len);
 
@@ -641,7 +630,8 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
         return false;
     if (ctx->op_assoc == AES_OP_DECRYPT)
         goto cleanup;
-    if (ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT)
+    if ((ctx->mode == TLS_AES_GCM && ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT) ||
+        (ctx->mode == TLS_AES_CCM && ctx->private.ccm.lock > LOCK_ALLOW_ENCRYPT))
         goto cleanup;
     ctx->op_assoc = AES_OP_ENCRYPT;
     uint8_t *iv = ctx->iv;
@@ -724,7 +714,8 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
 
     if (ctx->op_assoc == AES_OP_ENCRYPT)
         goto cleanup;
-    if (ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT)
+    if ((ctx->mode == TLS_AES_GCM && ctx->private.gcm.lock > LOCK_ALLOW_ENCRYPT) ||
+        (ctx->mode == TLS_AES_CCM && ctx->private.ccm.lock > LOCK_ALLOW_ENCRYPT))
         goto cleanup;
     ctx->op_assoc = AES_OP_DECRYPT;
     uint8_t *iv = ctx->iv;
@@ -801,8 +792,16 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
 
     if (aad_len && !tls_aes_update_aad(&tmp, aad, aad_len))
         return false;
-    if (ciphertext_len && !tls_aes_update_ciphertext(&tmp, ciphertext, ciphertext_len))
-        return false;
+    if (ciphertext_len)
+    {
+        if (tmp.mode == TLS_AES_CCM)
+        {
+            if (!tls_aes_decrypt(&tmp, ciphertext, ciphertext_len, NULL))
+                return false;
+        }
+        else if (!tls_aes_update_ciphertext(&tmp, ciphertext, ciphertext_len))
+            return false;
+    }
     if (!tls_aes_digest(&tmp, digest))
         return false;
 

@@ -35,6 +35,20 @@ SECTIONS
     ASSERT(_fn_exports_table == LOAD_ADDR + __lwip_dylib_descriptor_off,
            "Error: lwIP export table is not at fixed dylib descriptor offset")
 
+    /* Stable, relocation-free version string for host tools. Keep it separate
+     * from the legacy table header at 0x40 so existing stubs remain valid. */
+    PROVIDE(__lwip_version_off = 0x1000);
+    ASSERT(. <= LOAD_ADDR + __lwip_version_off,
+           "Error: lwIP export table exceeds fixed version offset")
+
+    .lwip_version LOAD_ADDR + __lwip_version_off :
+    {
+        KEEP(*(.libify_version))
+    } >prgm
+
+    ASSERT(_libify_version == LOAD_ADDR + __lwip_version_off,
+           "Error: lwIP version string is not at fixed version offset")
+
     .init :
     {
         *(.init)

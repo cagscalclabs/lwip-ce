@@ -140,7 +140,9 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats);
  * SP 800-90B repetition-count and adaptive-proportion tests run continuously
  * inside the raw sampling path. This function reports whether a source is
  * ready and performs source initialization when necessary; it does not draw a
- * separate diagnostic sample.
+ * separate diagnostic sample. Automatic initialization retries are bounded;
+ * after they are exhausted, calls fail until the RNG lifecycle is restarted
+ * or an explicit @ref tls_random_init_entropy succeeds.
  *
  * @return @b true if RNG health is currently acceptable, @b false otherwise.
  */
