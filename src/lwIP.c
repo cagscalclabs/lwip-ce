@@ -2926,7 +2926,7 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     peer->pcb.tcp  = newpcb;
     peer->netif    = listener->netif;
     peer->rx_ring_init = LWIP_SOCKET_RX_RING_INIT_SIZE;
-    peer->rx_ring_max  = LWIP_SOCKET_RX_RING_MAX_SIZE;
+    peer->rx_ring_max  = listener->rx_ring_max;
 
     if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
     {
