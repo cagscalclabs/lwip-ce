@@ -20,3 +20,13 @@ void sys_init(void)
     srandom(rtc_Time());
     timer_Enable(1, TIMER_32K, TIMER_NOINT, TIMER_UP);
 }
+
+u32_t lwip_ce_rand(void)
+{
+    static u32_t state;
+    state ^= (u32_t)clock() ^ rtc_Time();
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}

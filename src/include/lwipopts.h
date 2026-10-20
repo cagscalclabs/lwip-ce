@@ -362,7 +362,9 @@ a lot of data that needs to be copied, this should be set high. */
 
 /* miscellanous */
 #define HTTPD_SERVER_PORT 80
-#define LWIP_RAND rand
+uint32_t lwip_ce_rand(void);
+#define LWIP_RAND lwip_ce_rand
+#define LWIP_HOOK_TCP_ISN(local_ip, local_port, remote_ip, remote_port) lwip_ce_rand()
 
 /* ---------- SNTP options ---------- */
 /* Set the system time when SNTP receives a response */
