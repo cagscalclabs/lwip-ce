@@ -26,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   AUTOTESTER_ROM: ${{ github.workspace }}/${{ vars.AUTOTESTER_ROM }}
@@ -78,12 +79,34 @@ jobs:
 
       - name: Download nightly lwIP dylib build
         if: inputs.artifact_name == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{github.workspace}}/release"
-          curl -fL \
-            -o "${{github.workspace}}/lwip-latest.tar.gz" \
-            https://github.com/${{ github.repository }}/releases/download/nightly/lwip-latest.tar.gz
-          tar xzf "${{github.workspace}}/lwip-latest.tar.gz" -C "${{github.workspace}}/release"
+          # Prefer the latest successful build.yml artifact over the published
+          # nightly tag -- the tag may predate recent source changes (e.g. new
+          # public headers added since the last nightly publish).
+          run_id=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow build.yml \
+            --status success \
+            --limit 5 \
+            --json databaseId,headBranch \
+            --jq '[.[] | select(.headBranch == "master")] | first | .databaseId' \
+            2>/dev/null || true)
+          if [ -n "$run_id" ] && \
+             gh run download "$run_id" \
+               --repo "${{ github.repository }}" \
+               --name lwip-latest \
+               --dir "${{github.workspace}}/release" 2>/dev/null; then
+            echo "Using artifact from build.yml run $run_id"
+          else
+            echo "Falling back to published nightly release"
+            curl -fL \
+              -o "${{github.workspace}}/lwip-latest.tar.gz" \
+              https://github.com/${{ github.repository }}/releases/download/nightly/lwip-latest.tar.gz
+            tar xzf "${{github.workspace}}/lwip-latest.tar.gz" -C "${{github.workspace}}/release"
+          fi
 
       - name: Verify build artifact contents
         run: |

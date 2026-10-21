@@ -418,6 +418,21 @@ lwip_error_t lwip_socket_set_ws_config(struct lwip_socket *socket,
                                        const char *path,
                                        const char *subprotocol);
 
+/** Configure an LWIP_SOCKET_ALTCP_TLS socket for external PSK mode.
+ *  Must be called after lwip_socket_create() and before lwip_socket_connect().
+ *  When set, the TLS handshake uses an external pre-shared key instead of
+ *  certificate-based authentication.
+ *
+ *  @param socket       ALTCP_TLS socket handle in LWIP_STATUS_INIT state.
+ *  @param psk          32-byte pre-shared key.
+ *  @param identity     PSK identity bytes (label).
+ *  @param identity_len Length of identity in bytes (1 to TLS_PSK_IDENTITY_MAX_LEN).
+ *  @returns LWIP_OK, LWIP_ERR_ARG (wrong type/bad params), or LWIP_ERR_STATE. */
+lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket,
+                                     const uint8_t psk[32],
+                                     const uint8_t *identity,
+                                     size_t identity_len);
+
 #ifdef __cplusplus
 }
 #endif

@@ -2939,7 +2939,9 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     return false;
                 }
                 size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
+                size_t mod_len = key_len > 3 ? key_len - 3 : 0;
                 if (key_len >= 3 + RSA_MODULUS_MIN_SUPPORTED &&
+                    mod_len <= RSA_MODULUS_MAX_SUPPORTED &&
                     w->pending_link)
                 {
                     /* Truststore packs exponent as 3-byte LE; convert to BE for
@@ -2950,7 +2952,6 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                         root_entry->key[0],
                     };
                     const uint8_t *mod     = root_entry->key + 3;
-                    size_t         mod_len = key_len - 3;
                     struct tls_rsa_key root_key = {
                         sizeof(exp_be), exp_be,
                         mod_len, mod,

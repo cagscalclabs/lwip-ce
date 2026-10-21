@@ -110,6 +110,11 @@ struct lwip_socket
     } pcb;
     struct altcp_tls_ce_config *tls_conf;
     struct altcp_ws_config     *ws_conf;
+    /* Optional external PSK for LWIP_SOCKET_ALTCP_TLS; both fields are
+     * zero/NULL until lwip_socket_set_tls_psk() is called. */
+    uint8_t  tls_psk[32];
+    uint8_t  tls_psk_identity[TLS_PSK_IDENTITY_MAX_LEN];
+    size_t   tls_psk_identity_len;
     struct mem_buffer          *rx_ring;
     size_t                      rx_ring_init;
     size_t                      rx_ring_max;
@@ -2523,6 +2528,24 @@ fail_mem:
     return NULL;
 }
 
+lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket,
+                                     const uint8_t psk[32],
+                                     const uint8_t *identity,
+                                     size_t identity_len)
+{
+    if (!socket || socket->protocol != (uint8_t)LWIP_SOCKET_ALTCP_TLS)
+        return LWIP_ERR_ARG;
+    if (!psk || !identity || identity_len == 0 ||
+        identity_len > TLS_PSK_IDENTITY_MAX_LEN)
+        return LWIP_ERR_ARG;
+    if (socket->status != LWIP_STATUS_INIT)
+        return LWIP_ERR_STATE;
+    memcpy(socket->tls_psk, psk, 32);
+    memcpy(socket->tls_psk_identity, identity, identity_len);
+    socket->tls_psk_identity_len = identity_len;
+    return LWIP_OK;
+}
+
 /* Detach the conn shim from every callback slot on the underlying
  * pcb. After this the pcb may still emit events (a deferred recv after
  * tcp_close, the err cb after abort, etc.) but they'll go to NULL and
@@ -2760,7 +2783,22 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
      * both until connect() so the SNI hostname is in hand. */
     if (conn->protocol == LWIP_SOCKET_ALTCP_TLS && conn->pcb.altcp == NULL)
     {
-        conn->tls_conf = altcp_tls_ce_create_config_client_ecdhe(host);
+        if (conn->tls_psk_identity_len > 0)
+        {
+            struct tls_psk_identity id;
+            memset(&id, 0, sizeof(id));
+            size_t copy = conn->tls_psk_identity_len;
+            if (copy > sizeof(id.identity))
+                copy = sizeof(id.identity);
+            memcpy(id.identity, conn->tls_psk_identity, copy);
+            id.identity_len = copy;
+            conn->tls_conf = altcp_tls_ce_create_config_psk_client(
+                conn->tls_psk, &id);
+        }
+        else
+        {
+            conn->tls_conf = altcp_tls_ce_create_config_client_ecdhe(host);
+        }
         if (!conn->tls_conf)
         {
             conn->status = LWIP_STATUS_ERROR;

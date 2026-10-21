@@ -9,9 +9,6 @@
 #include <stdio.h>
 #include <ti/screen.h>
 #include <ti/getkey.h>
-#include <stdlib.h>
-#include <time.h>
-
 /* TLS includes */
 #include <lwip.h>
 #include <lwip/cryptography/rsa.h>
@@ -20,101 +17,6 @@
 static const uint8_t test_rsa_pubkey_2048[256];
 static const uint8_t test_rsa_sig_2048[256];
 
-static volatile uint8_t timing_sink = 0;
-
-struct timing_group
-{
-    uint16_t len;
-    uint16_t samples;
-    uint32_t mean;
-    uint32_t stddev;
-    uint32_t pct_x100;
-};
-
-static uint32_t isqrt_u64(uint64_t x)
-{
-    uint64_t op = x;
-    uint64_t res = 0;
-    uint64_t one = (uint64_t)1 << 62;
-    while (one > op)
-        one >>= 2;
-    while (one != 0)
-    {
-        if (op >= res + one)
-        {
-            op -= res + one;
-            res = (res >> 1) + one;
-        }
-        else
-        {
-            res >>= 1;
-        }
-        one >>= 2;
-    }
-    return (uint32_t)res;
-}
-
-static void compute_stats(const uint32_t *samples, uint16_t count, struct timing_group *out)
-{
-    uint64_t sum = 0;
-    for (uint16_t i = 0; i < count; i++)
-        sum += samples[i];
-    uint32_t mean = (count != 0) ? (uint32_t)(sum / count) : 0;
-    uint64_t var_sum = 0;
-    for (uint16_t i = 0; i < count; i++)
-    {
-        int64_t diff = (int64_t)samples[i] - (int64_t)mean;
-        var_sum += (uint64_t)(diff * diff);
-    }
-    uint32_t var = (count != 0) ? (uint32_t)(var_sum / count) : 0;
-    uint32_t stddev = isqrt_u64(var);
-    uint32_t pct_x100 = (mean != 0) ? (uint32_t)(((uint64_t)stddev * 10000u) / mean) : 0;
-    out->mean = mean;
-    out->stddev = stddev;
-    out->pct_x100 = pct_x100;
-}
-
-static uint32_t time_pss_verify(void)
-{
-    const uint8_t msg[] = "hello world";
-    uint8_t mhash[TLS_SHA256_DIGEST_LEN];
-    uint8_t *decoded_sig = malloc(sizeof(test_rsa_pubkey_2048));
-    struct tls_hash_context hash_ctx;
-    clock_t start = clock();
-
-    bool ok = decoded_sig != NULL && tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256);
-    if (ok)
-    {
-        tls_hash_update(&hash_ctx, msg, sizeof(msg) - 1);
-        tls_hash_digest(&hash_ctx, mhash);
-    }
-    if (ok)
-    {
-        static const uint8_t exp_be[] = {0x01, 0x00, 0x01}; /* 65537 */
-        static const struct tls_rsa_key pub = {
-            sizeof(exp_be), exp_be,
-            sizeof(test_rsa_pubkey_2048), test_rsa_pubkey_2048,
-        };
-        ok = tls_rsa_decrypt_signature(
-            test_rsa_sig_2048, sizeof(test_rsa_sig_2048),
-            decoded_sig, &pub);
-    }
-    if (ok)
-    {
-        ok = tls_rsa_pss_verify(
-            decoded_sig, sizeof(test_rsa_pubkey_2048),
-            mhash, sizeof(mhash),
-            TLS_HASH_SHA256);
-    }
-    if (decoded_sig)
-    {
-        timing_sink ^= decoded_sig[0];
-        free(decoded_sig);
-    }
-    if (!ok)
-        timing_sink ^= 0xFF;
-    return (uint32_t)(clock() - start);
-}
 
 /**
  * Test 1: RSA-PSS Verify (signature + public key)
@@ -780,14 +682,10 @@ static bool test_pss_signature_verify_4096(void)
     const uint8_t msg[] = "hello world";
     uint8_t mhash[TLS_SHA256_DIGEST_LEN];
     struct tls_hash_context hash_ctx;
-    uint8_t *decoded_sig = malloc(sizeof(test_rsa_pubkey_4096));
-    bool ok = false;
+    static uint8_t em[sizeof(test_rsa_pubkey_4096)]; /* static: too large for eZ80 stack */
 
-    if (!decoded_sig || !tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-    {
-        free(decoded_sig);
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
         return false;
-    }
 
     tls_hash_update(&hash_ctx, msg, sizeof(msg) - 1);
     tls_hash_digest(&hash_ctx, mhash);
@@ -799,33 +697,24 @@ static bool test_pss_signature_verify_4096(void)
     };
     if (!tls_rsa_decrypt_signature(
             test_rsa_sig_4096, sizeof(test_rsa_sig_4096),
-            decoded_sig, &pub))
-    {
-        free(decoded_sig);
+            em, &pub))
         return false;
-    }
 
-    ok = tls_rsa_pss_verify(
-        decoded_sig, sizeof(test_rsa_pubkey_4096),
+    return tls_rsa_pss_verify(
+        em, sizeof(test_rsa_pubkey_4096),
         mhash, sizeof(mhash),
         TLS_HASH_SHA256);
-    free(decoded_sig);
-    return ok;
 }
 
 static bool test_pss_signature_verify(void)
 {
     const uint8_t msg[] = "hello world";
     uint8_t mhash[TLS_SHA256_DIGEST_LEN];
-    uint8_t *decoded_sig = malloc(sizeof(test_rsa_pubkey_2048));
     struct tls_hash_context hash_ctx;
-    bool ok = false;
+    static uint8_t em[sizeof(test_rsa_pubkey_2048)];
 
-    if (!decoded_sig || !tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-    {
-        free(decoded_sig);
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
         return false;
-    }
 
     tls_hash_update(&hash_ctx, msg, sizeof(msg) - 1);
     tls_hash_digest(&hash_ctx, mhash);
@@ -837,18 +726,13 @@ static bool test_pss_signature_verify(void)
     };
     if (!tls_rsa_decrypt_signature(
             test_rsa_sig_2048, sizeof(test_rsa_sig_2048),
-            decoded_sig, &pub))
-    {
-        free(decoded_sig);
+            em, &pub))
         return false;
-    }
 
-    ok = tls_rsa_pss_verify(
-        decoded_sig, sizeof(test_rsa_pubkey_2048),
+    return tls_rsa_pss_verify(
+        em, sizeof(test_rsa_pubkey_2048),
         mhash, sizeof(mhash),
         TLS_HASH_SHA256);
-    free(decoded_sig);
-    return ok;
 }
 
 int main(void)
@@ -863,28 +747,11 @@ int main(void)
 
     /* Output results */
     os_ClrHome();
-    printf("T1 (2048 Sig): %s\n", test1 ? "ok" : "FAIL");
+    printf("Test 1 (2048): %s\n", test1 ? "success" : "fail");
     os_GetKey();
     os_ClrHome();
-    printf("T2 (4096 Sig): %s\n", test2 ? "ok" : "FAIL");
+    printf("Test 2 (4096): %s\n", test2 ? "success" : "fail");
     os_GetKey();
-
-    {
-        const uint16_t samples = 5;
-        struct timing_group group = {0};
-        uint32_t ticks[5];
-        for (uint16_t i = 0; i < samples; i++)
-            ticks[i] = time_pss_verify();
-        group.len = (uint16_t)sizeof(test_rsa_sig_2048);
-        group.samples = samples;
-        compute_stats(ticks, samples, &group);
-        printf("timing len=%u dev=%lu.%02lu%%",
-               group.len,
-               group.pct_x100 / 100,
-               group.pct_x100 % 100);
-        os_GetKey();
-        os_ClrHome();
-    }
 
     return (test1 && test2) ? 0 : 1;
 }
