@@ -2973,10 +2973,44 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     return false;
                 }
             }
+            else if (alg == TLS_CERT_SIG_ECDSA_SHA256)
+            {
+                if (root_entry->len < sizeof(struct tls_truststore_entry))
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x65);
+                    return false;
+                }
+                size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
+                if (key_len == 65 && w->pending_link)
+                {
+                    struct tls_key root_tls_key = {
+                        .type = TLS_KEY_TYPE_EC_P256,
+                        .ec = { key_len, root_entry->key },
+                    };
+                    tls_key_op_result_t verify_result =
+                        tls_cert_verify_pending_link(w, &root_tls_key);
+                    if (verify_result == TLS_KEY_OP_UNSUPPORTED)
+                    {
+                        WARN();
+                    }
+                    else if (verify_result != TLS_KEY_OP_OK)
+                    {
+                        ERROR();
+                        ctx->state = TLS_STATE_ERROR;
+                        return false;
+                    }
+                }
+                else
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x66);
+                    return false;
+                }
+            }
             else
             {
-                /* Interim compatibility pinhole: the trust anchor exists but
-                 * its key/signature operation is not implemented. */
+                /* Trust anchor key type not implemented by this build. */
                 WARN();
             }
         }
