@@ -35,6 +35,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|2000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|2",
