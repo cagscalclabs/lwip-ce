@@ -22,6 +22,7 @@ bin
 *.8xv
 release/
 build/
+tests/profiling/tls_cavp/vectors/expected.json
 submodules/toolchain/
 
 # generated dylib installer artifacts
