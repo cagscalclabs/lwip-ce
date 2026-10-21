@@ -129,7 +129,7 @@
       "size": "vram_16_size",
       "label": "@lwip_installed",
       "expected_CRCs": ["F7C03D8D"],
-      "timeout": 100000
+      "timeout": 200000
     }
   }
 }

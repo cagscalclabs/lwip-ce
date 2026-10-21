@@ -63,7 +63,11 @@ jobs:
         run: |
           sudo apt-get update && \
           sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb \
-                                  python3 python3-cryptography
+                                  python3 python3-pip
+          # cryptography>=44 required for ec.ECDSA(deterministic_signing=True)
+          # (RFC 6979 P-256 SIGGEN reference). The Ubuntu package is too old;
+          # install via pip to get a pinned, recent version.
+          pip install --break-system-packages "cryptography>=44"
           # CAVP archive parsing uses stdlib. RSA-PSS, RSA-PKCS1v15, PBKDF2,
           # HKDF, and X25519 reference outputs use python3-cryptography. RSA
           # is generated with e=65537 because the project's verifier fixes

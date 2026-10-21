@@ -911,7 +911,7 @@ def gen_p256(rng: random.Random, n_vectors: int) -> tuple[
         msg = rng.randbytes(32)
         import hashlib
         msg_hash = hashlib.sha256(msg).digest()
-        sig_der = sign_k.sign(msg, ec.ECDSA(hashes.SHA256()))
+        sig_der = sign_k.sign(msg, ec.ECDSA(hashes.SHA256(), deterministic_signing=True))
         r_int, s_int = decode_dss_signature(sig_der)
         sig_bytes = r_int.to_bytes(32, "big") + s_int.to_bytes(32, "big")
         siggen_vectors.append({
