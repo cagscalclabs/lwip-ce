@@ -509,7 +509,8 @@ def main() -> int:
     for alg in ["AES-GCM", "AES-CBC", "AES-CCM", "SHA-256", "SHA-256-MCT",
                 "HMAC-SHA-256", "HKDF-SHA-256", "PBKDF2-HMAC-SHA256",
                 "RSA-PSS-SHA-256-VERIFY", "RSA-PKCS1v15-SHA-256-VERIFY",
-                "X25519-PUBLICKEY", "X25519-SECRET"]:
+                "X25519-PUBLICKEY", "X25519-SECRET",
+                "P256-PUBLICKEY", "P256-SECRET", "P256-SIGGEN", "P256-SIGVER"]:
         c = by_alg.get(alg, {"pass": 0, "fail": 0, "skip": 0, "unsupported": 0})
         alg_vectors = [v for v in expected_data["vectors"] if v["algorithm"] == alg]
         source = summarize_sources(alg_vectors).replace("|", "\\|")
