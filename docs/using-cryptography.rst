@@ -475,7 +475,7 @@ AES-128 key can be used with GCM, CCM, or CBC. Operations reject a key whose
    .. c:macro:: TLS_KEY_TYPE_EC_P256
 
       EC P-256 key. Populate the ``ec`` union member. Compatible with
-      ``TLS_ALG_ECDSA_SECP256R1_SHA256`` (currently unimplemented).
+      ``TLS_ALG_ECDSA_SECP256R1_SHA256`` for both verify and sign.
 
    .. c:macro:: TLS_KEY_TYPE_AES
 
@@ -804,13 +804,14 @@ Functions
    Hashes ``content`` with SHA-256 internally; pass the raw message, not a
    pre-computed digest.  ``sig_len_out`` receives the number of bytes written on
    success.  The caller must pre-allocate ``sig_out`` large enough to hold the
-   output (RSA signatures are ``key->rsa.mod_len`` bytes).
+   output (RSA signatures are ``key->rsa.mod_len`` bytes; P-256 signatures are
+   DER-encoded and up to 72 bytes).
 
    .. note::
 
-      Signing is currently unimplemented for all algorithms, including RSA.
-      All calls return ``TLS_KEY_OP_UNSUPPORTED`` until private-key signing is
-      added.
+      P-256 signing (``TLS_ALG_ECDSA_SECP256R1_SHA256``) is implemented using
+      RFC 6979 deterministic ECDSA. RSA signing is not yet implemented and
+      returns ``TLS_KEY_OP_UNSUPPORTED``.
 
    :param content: Message bytes to sign.
    :param content_len: Length of ``content`` in bytes.
@@ -837,7 +838,7 @@ Functions
      - Verify PSS signatures with SHA-256, MGF1-SHA-256 and a 32-byte salt.
    * - ``TLS_ALG_ECDSA_SECP256R1_SHA256``
      - ``ec``
-     - Recognized, but verification and signing are unimplemented.
+     - Verify and sign (RFC 6979 deterministic ECDSA, SHA-256). Hardware-verified on TI-84 Plus CE.
 
 Example::
 
@@ -1085,7 +1086,7 @@ instead.
 
    - ``TLS_ALG_RSA_PKCS1_SHA256`` — RSASSA-PKCS1-v1.5 SHA-256
    - ``TLS_ALG_RSA_PSS_RSAE_SHA256`` — RSASSA-PSS SHA-256 (saltLen=32)
-   - ``TLS_ALG_ECDSA_SECP256R1_SHA256`` — returns ``TLS_KEY_OP_UNSUPPORTED``
+   - ``TLS_ALG_ECDSA_SECP256R1_SHA256`` — ECDSA-P256-SHA256 (verify only)
    - Encryption-range or unknown ``alg`` — returns ``TLS_KEY_OP_UNKNOWN``
 
    :param content: Signed data (e.g. DER TBSCertificate bytes).

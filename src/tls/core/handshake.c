@@ -1865,24 +1865,24 @@ bool tls_send_client_hello(
         HELLO_RANDOM_OFFSET = 6,
         HELLO_EXT_LEN_OFFSET = 47,
         HELLO_EXT_START = 49,
-        /* x25519 public key is at byte 76 in the new template */
-        HELLO_KEY_SHARE_OFFSET = 76,
-        /* P-256 uncompressed public key (65 bytes) follows x25519 entry */
-        HELLO_P256_KEY_SHARE_OFFSET = 112
+        /* P-256 uncompressed public key (65 bytes) is first key_share entry */
+        HELLO_P256_KEY_SHARE_OFFSET = 70,
+        /* x25519 public key (32 bytes) follows P-256 entry */
+        HELLO_KEY_SHARE_OFFSET = 139
     };
     /* Base ClientHello with zero placeholders for the 32-byte client random,
-     * 32-byte x25519 key share, 65-byte P-256 key share, and dependent
+     * 65-byte P-256 key share, 32-byte x25519 key share, and dependent
      * lengths. Optional extensions append.
      *
      * Extensions layout (all offsets from byte 0 of this array):
      *   [49..55]  supported_versions: TLS 1.3
-     *   [56..65]  supported_groups: x25519 + secp256r1
-     *   [66..75]  key_share ext header + x25519 group/len
-     *   [76..107] x25519 public key (32 bytes, patched)
-     *   [108..111] secp256r1 group/len
-     *   [112..176] P-256 public key (65 bytes, patched)
-     *   [177..186] signature_algorithms
-     *   [187..198] signature_algorithms_cert
+     *   [56..65]  supported_groups: secp256r1 + x25519 (P-256 preferred)
+     *   [66..69]  key_share ext header + secp256r1 group/len
+     *   [70..134] P-256 public key (65 bytes, patched)
+     *   [135..138] x25519 group/len
+     *   [139..170] x25519 public key (32 bytes, patched)
+     *   [171..180] signature_algorithms
+     *   [181..192] signature_algorithms_cert
      */
     static const uint8_t hello_template[] = {
         TLS_HANDSHAKE_CLIENT_HELLO, 0x00, 0x00, 0x00, /* body length patched */
@@ -1898,24 +1898,24 @@ bool tls_send_client_hello(
         0x00, 0x00,              /* extensions length patched */
         /* supported_versions: TLS 1.3 */
         0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04,
-        /* supported_groups: x25519 (0x001d) + secp256r1 (0x0017) */
+        /* supported_groups: secp256r1 (0x0017) + x25519 (0x001d) (P-256 preferred) */
         /* ext_type=0x000a, ext_len=6, list_len=4 */
-        0x00, 0x0a, 0x00, 0x06, 0x00, 0x04, 0x00, 0x1d, 0x00, 0x17,
+        0x00, 0x0a, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x1d,
         /* key_share: ext_type=0x0033, ext_len=0x006b=107,
          *   client_shares_len=0x0069=105
-         *   x25519 entry: group=0x001d, key_len=0x0020=32 */
-        0x00, 0x33, 0x00, 0x6b, 0x00, 0x69, 0x00, 0x1d, 0x00, 0x20,
-        /* x25519 key patched at offset 76 (32 bytes) */
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* secp256r1 entry: group=0x0017, key_len=0x0041=65 */
-        0x00, 0x17, 0x00, 0x41,
-        /* P-256 key patched at offset 112 (65 bytes) */
+         *   secp256r1 entry: group=0x0017, key_len=0x0041=65 */
+        0x00, 0x33, 0x00, 0x6b, 0x00, 0x69, 0x00, 0x17, 0x00, 0x41,
+        /* P-256 key patched at offset 70 (65 bytes) */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0,
+        /* x25519 entry: group=0x001d, key_len=0x0020=32 */
+        0x00, 0x1d, 0x00, 0x20,
+        /* x25519 key patched at offset 139 (32 bytes) */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* signature_algorithms: rsa_pss_rsae_sha256 (0x0804),
          *                        ecdsa_secp256r1_sha256 (0x0403) */
         /* ext_type=0x000d, ext_len=6, list_len=4 */
@@ -1969,9 +1969,10 @@ bool tls_send_client_hello(
         return false;
     }
 
-    /* This implementation reuses the original x25519 share in ClientHello2.
-     * A conforming HRR cannot request x25519 because it was already offered
-     * in ClientHello1; a cookie-only HRR leaves the key_share unchanged. */
+    /* This implementation reuses the original key_shares in ClientHello2.
+     * A conforming HRR cannot request secp256r1 or x25519 because both were
+     * already offered in ClientHello1; a cookie-only HRR leaves key_share
+     * unchanged. */
 
     /* early_secret/binder_key/finished_key/binder/hmac_ctx are secret
      * material only ever populated inside the ctx->psk_mode block below,
@@ -2557,8 +2558,9 @@ bool tls_recv_server_hello(
                 return false;
             }
 
-            /* x25519 was already offered in ClientHello1 and therefore cannot
-             * be selected by HRR; every other group is unsupported here. */
+            /* Both secp256r1 and x25519 were offered in ClientHello1, so a
+             * conforming HRR cannot request either; every other group is
+             * unsupported here. */
             if (hrr_key_share)
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
