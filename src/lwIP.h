@@ -53,88 +53,88 @@ extern "C" {
 /** lwIP-CE release version (distinct from the vendored upstream lwIP version). */
 #define LWIP_CE_VERSION_MAJOR 3
 #define LWIP_CE_VERSION_MINOR 0
-#define LWIP_CE_VERSION_PATCH 0
-#define LWIP_CE_VERSION_STRING "3.0.0"
+#define LWIP_CE_VERSION_PATCH 1
+#define LWIP_CE_VERSION_STRING "3.0.1"
 
-struct netif;
-struct tcp_pcb;
-struct udp_pcb;
-struct altcp_pcb;
-struct altcp_tls_ce_config;
-struct altcp_ws_config;
-struct mem_buffer;
-struct lwip_socket;   /* forward decl for callback typedefs */
+    struct netif;
+    struct tcp_pcb;
+    struct udp_pcb;
+    struct altcp_pcb;
+    struct altcp_tls_ce_config;
+    struct altcp_ws_config;
+    struct mem_buffer;
+    struct lwip_socket; /* forward decl for callback typedefs */
 
-/** API result codes. */
-typedef enum
-{
-    LWIP_OK = 0,
-    LWIP_ERR_ARG,        /**< NULL / out-of-range argument */
-    LWIP_ERR_STATE,      /**< called in wrong lifecycle state */
-    LWIP_ERR_MEM,        /**< allocation failed */
-    LWIP_ERR_NETIF,      /**< no netif available / not up */
-    LWIP_ERR_DNS,        /**< DNS resolution failed / unavailable */
-    LWIP_ERR_CONNECT,    /**< connect() failed at transport layer */
-    LWIP_ERR_PROTO,      /**< unsupported protocol for this op */
-    LWIP_ERR_CLOSED,     /**< peer has closed (or local close pending) */
-    LWIP_ERR_INTERNAL,   /**< lwIP returned an unexpected err_t */
-    LWIP_ERR_SERVICES,   /**< required network services (DHCP/DNS/SNTP) not yet ready */
-} lwip_error_t;
+    /** API result codes. */
+    typedef enum
+    {
+        LWIP_OK = 0,
+        LWIP_ERR_ARG,      /**< NULL / out-of-range argument */
+        LWIP_ERR_STATE,    /**< called in wrong lifecycle state */
+        LWIP_ERR_MEM,      /**< allocation failed */
+        LWIP_ERR_NETIF,    /**< no netif available / not up */
+        LWIP_ERR_DNS,      /**< DNS resolution failed / unavailable */
+        LWIP_ERR_CONNECT,  /**< connect() failed at transport layer */
+        LWIP_ERR_PROTO,    /**< unsupported protocol for this op */
+        LWIP_ERR_CLOSED,   /**< peer has closed (or local close pending) */
+        LWIP_ERR_INTERNAL, /**< lwIP returned an unexpected err_t */
+        LWIP_ERR_SERVICES, /**< required network services (DHCP/DNS/SNTP) not yet ready */
+    } lwip_error_t;
 
-/** Transport selector for lwip_socket_create. */
-typedef enum
-{
-    LWIP_SOCKET_TCP = 0,      /**< raw TCP via tcp_*  */
-    LWIP_SOCKET_UDP,          /**< UDP via udp_*      */
-    LWIP_SOCKET_ALTCP,        /**< altcp (default TCP allocator) */
-    LWIP_SOCKET_ALTCP_TLS,    /**< altcp wrapped in TLS 1.3 (altcp_tls_ce) */
-    LWIP_SOCKET_ALTCP_WS,     /**< WebSocket over plain TCP (RFC 6455)     */
-    LWIP_SOCKET_ALTCP_WSS,    /**< WebSocket over TLS (WSS)                */
-} lwip_socket_type_t;
+    /** Transport selector for lwip_socket_create. */
+    typedef enum
+    {
+        LWIP_SOCKET_TCP = 0,   /**< raw TCP via tcp_*  */
+        LWIP_SOCKET_UDP,       /**< UDP via udp_*      */
+        LWIP_SOCKET_ALTCP,     /**< altcp (default TCP allocator) */
+        LWIP_SOCKET_ALTCP_TLS, /**< altcp wrapped in TLS 1.3 (altcp_tls_ce) */
+        LWIP_SOCKET_ALTCP_WS,  /**< WebSocket over plain TCP (RFC 6455)     */
+        LWIP_SOCKET_ALTCP_WSS, /**< WebSocket over TLS (WSS)                */
+    } lwip_socket_type_t;
 
-/** Which netif a socket attaches to at create(). */
-typedef enum
-{
-    LWIP_NETIF_ANY = 0,  /**< first usable netif (loopback or external) */
-    LWIP_NETIF_LOOP,     /**< loopback only */
-    LWIP_NETIF_EXT,      /**< external Ethernet only */
-} lwip_socket_bind_descriptor_t;
+    /** Which netif a socket attaches to at create(). */
+    typedef enum
+    {
+        LWIP_NETIF_ANY = 0, /**< first usable netif (loopback or external) */
+        LWIP_NETIF_LOOP,    /**< loopback only */
+        LWIP_NETIF_EXT,     /**< external Ethernet only */
+    } lwip_socket_bind_descriptor_t;
 
-/** Optional static IPv4 configuration. Pass NULL for DHCP. */
-typedef struct
-{
-    ip4_addr_t ip;
-    ip4_addr_t netmask;
-    ip4_addr_t gateway;
-} lwip_socket_addrinfo_t;
+    /** Optional static IPv4 configuration. Pass NULL for DHCP. */
+    typedef struct
+    {
+        ip4_addr_t ip;
+        ip4_addr_t netmask;
+        ip4_addr_t gateway;
+    } lwip_socket_addrinfo_t;
 
-/** Socket lifecycle status. Poll via socket->status or STATE_CHANGE events. */
-typedef enum
-{
-    LWIP_STATUS_INIT = 0,         /**< handle created, not connecting yet */
-    LWIP_STATUS_WAITING_SERVICES, /**< waiting for DHCP/DNS/SNTP before connect */
-    LWIP_STATUS_RESOLVING,        /**< DNS lookup in flight */
-    LWIP_STATUS_CONNECTING,       /**< TCP / TLS handshake in flight */
-    LWIP_STATUS_CONNECTED,        /**< ready for write/read */
-    LWIP_STATUS_CLOSING,          /**< local shutdown / close issued */
-    LWIP_STATUS_CLOSED,           /**< peer sent FIN, clean close */
-    LWIP_STATUS_RESET,            /**< peer sent RST, connection immediately gone */
-    LWIP_STATUS_ERROR,            /**< stack error (timeout, OOM, abort) */
-} lwip_status_t;
+    /** Socket lifecycle status. Poll via socket->status or STATE_CHANGE events. */
+    typedef enum
+    {
+        LWIP_STATUS_INIT = 0,         /**< handle created, not connecting yet */
+        LWIP_STATUS_WAITING_SERVICES, /**< waiting for DHCP/DNS/SNTP before connect */
+        LWIP_STATUS_RESOLVING,        /**< DNS lookup in flight */
+        LWIP_STATUS_CONNECTING,       /**< TCP / TLS handshake in flight */
+        LWIP_STATUS_CONNECTED,        /**< ready for write/read */
+        LWIP_STATUS_CLOSING,          /**< local shutdown / close issued */
+        LWIP_STATUS_CLOSED,           /**< peer sent FIN, clean close */
+        LWIP_STATUS_RESET,            /**< peer sent RST, connection immediately gone */
+        LWIP_STATUS_ERROR,            /**< stack error (timeout, OOM, abort) */
+    } lwip_status_t;
 
-/** Socket event types delivered to the event callback.
- *
- *  ERROR is always delivered if a callback is registered, regardless of flags.
- *  For STATE_CHANGE, ev_data is lwip_socket_state_data_t* (previous + current
- *  status). For IO, ev_data is lwip_socket_io_data_t*. For ERROR, ev_data is
- *  lwip_socket_error_data_t* with the full component/operation/raw breakdown.
- *  All ev_data pointers are valid only for the duration of the callback. */
-typedef enum
-{
-    LWIP_SOCKET_EV_ERROR = 0,
-    LWIP_SOCKET_EV_STATE_CHANGE,
-    LWIP_SOCKET_EV_IO,
-} lwip_socket_event_type_t;
+    /** Socket event types delivered to the event callback.
+     *
+     *  ERROR is always delivered if a callback is registered, regardless of flags.
+     *  For STATE_CHANGE, ev_data is lwip_socket_state_data_t* (previous + current
+     *  status). For IO, ev_data is lwip_socket_io_data_t*. For ERROR, ev_data is
+     *  lwip_socket_error_data_t* with the full component/operation/raw breakdown.
+     *  All ev_data pointers are valid only for the duration of the callback. */
+    typedef enum
+    {
+        LWIP_SOCKET_EV_ERROR = 0,
+        LWIP_SOCKET_EV_STATE_CHANGE,
+        LWIP_SOCKET_EV_IO,
+    } lwip_socket_event_type_t;
 
 #define LWIP_SOCKET_EVENTF_ERROR        (1u << LWIP_SOCKET_EV_ERROR)
 #define LWIP_SOCKET_EVENTF_STATE_CHANGE (1u << LWIP_SOCKET_EV_STATE_CHANGE)

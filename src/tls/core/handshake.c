@@ -728,16 +728,8 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         }
         tls_key_op_result_t verify_result =
             tls_cert_verify_pending_link(w, &cert->pubkey);
-        if (verify_result == TLS_KEY_OP_UNSUPPORTED)
+        if (verify_result != TLS_KEY_OP_OK)
         {
-            /* Interim compatibility pinhole: retain all structural/name/path
-             * checks but allow a link this platform cannot verify. */
-            WARN();
-        }
-        else if (verify_result != TLS_KEY_OP_OK)
-        {
-            /* A supported verification operation produced a bad signature,
-             * or the signature/key pairing is structurally incompatible. */
             ERROR();
             return false;
         }
@@ -858,6 +850,18 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
              ? cert.pubkey.rsa.mod_len == 0 : cert.pubkey.ec.len == 0))
     {
         INFO("cert: spki fail");
+        ERROR_CODE(0x02);
+        return false;
+    }
+    /* Enforce RSA key size policy: 2048-4096 bits only.  Keys shorter than
+     * 2048 bits are cryptographically weak; keys longer than 4096 bits
+     * exceed the implementation's scratch-space budget.  Fail closed on
+     * anything outside the supported range. */
+    if (cert.pubkey.type == TLS_KEY_TYPE_RSA &&
+        (cert.pubkey.rsa.mod_len < RSA_MODULUS_MIN_SUPPORTED ||
+         cert.pubkey.rsa.mod_len > RSA_MODULUS_MAX_SUPPORTED))
+    {
+        INFO("cert: rsa keysize fail");
         ERROR_CODE(0x02);
         return false;
     }
@@ -2957,11 +2961,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     };
                     tls_key_op_result_t verify_result =
                         tls_cert_verify_pending_link(w, &root_tls_key);
-                    if (verify_result == TLS_KEY_OP_UNSUPPORTED)
-                    {
-                        WARN();
-                    }
-                    else if (verify_result != TLS_KEY_OP_OK)
+                    if (verify_result != TLS_KEY_OP_OK)
                     {
                         ERROR();
                         ctx->state = TLS_STATE_ERROR;
@@ -2992,11 +2992,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     };
                     tls_key_op_result_t verify_result =
                         tls_cert_verify_pending_link(w, &root_tls_key);
-                    if (verify_result == TLS_KEY_OP_UNSUPPORTED)
-                    {
-                        WARN();
-                    }
-                    else if (verify_result != TLS_KEY_OP_OK)
+                    if (verify_result != TLS_KEY_OP_OK)
                     {
                         ERROR();
                         ctx->state = TLS_STATE_ERROR;
@@ -3012,16 +3008,18 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
             }
             else
             {
-                /* Trust anchor key type not implemented by this build. */
-                WARN();
+                /* Truststore entry uses an algorithm not supported by this build. */
+                ERROR();
+                ctx->state = TLS_STATE_ERROR;
+                return false;
             }
         }
         else
         {
-            /* No truststore entry found: no root anchor available. Proceed
-             * without root pinning (consistent with prior behaviour when
-             * truststore absent), but tell the caller. */
-            WARN();
+            /* No truststore entry found: cannot anchor the chain. */
+            ERROR();
+            ctx->state = TLS_STATE_ERROR;
+            return false;
         }
     }
 
@@ -3576,7 +3574,8 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     tls_hash_digest(&hash_ctx, message_hash);
 
     /* RSA decrypt the signature, then run the PSS padding check. */
-    if (rsa->mod_len > RSA_TRANSIENT_SIZE)
+    if (rsa->mod_len > RSA_TRANSIENT_SIZE ||
+        rsa->mod_len < RSA_MODULUS_MIN_SUPPORTED)
     {
         ERROR_CODE(0x7d);
         return false;

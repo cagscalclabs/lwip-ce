@@ -26,8 +26,8 @@ static bool test_oaep_encode(void)
         0xd4, 0x36, 0xe9, 0x95, 0x69, 0xfd, 0x32, 0xa7,
         0xc8, 0xa0, 0x5b, 0xbc, 0x90, 0xd3, 0x2c, 0x49};
 
-    const size_t modulus_len = 128; /* 1024-bit RSA */
-    uint8_t encoded[128];
+    const size_t modulus_len = 256; /* 2048-bit RSA */
+    uint8_t encoded[256];
 
     bool result = tls_rsa_encode_oaep(
         message, sizeof(message),
@@ -48,9 +48,9 @@ static bool test_oaep_decode(void)
         0xd4, 0x36, 0xe9, 0x95, 0x69, 0xfd, 0x32, 0xa7,
         0xc8, 0xa0, 0x5b, 0xbc, 0x90, 0xd3, 0x2c, 0x49};
 
-    const size_t modulus_len = 128; /* 1024-bit RSA */
-    uint8_t encoded[128];
-    uint8_t decoded[128];
+    const size_t modulus_len = 256; /* 2048-bit RSA */
+    uint8_t encoded[256];
+    uint8_t decoded[256];
 
     /* First encode the message */
     if (!tls_rsa_encode_oaep(message, sizeof(message), encoded, modulus_len,

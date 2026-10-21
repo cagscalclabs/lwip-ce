@@ -548,16 +548,14 @@ static size_t run_rsa_pss_verify(const uint8_t *in, size_t in_len, uint8_t *out,
     }
 
     /* Step 1: RSA modexp to recover EM from sig.
-     * em_buf is in a file-scope static rather than stack: powmod_exp_u24
-     * carves ~2*modulus_len bytes of scratch off the stack internally,
-     * and the eZ80 stack is tight. Moving the EM buffer off-stack also
-     * rules out any caller-side stack-smash interaction with the bigint
-     * workspace. */
-    if (modulus_len > 256) {
+     * em_buf is in a file-scope static rather than stack: the powmod
+     * implementation uses a shared BSS scratch region, not the stack,
+     * but a stack-allocated buffer would waste eZ80's limited stack. */
+    if (modulus_len > RSA_MODULUS_MAX_SUPPORTED) {
         out[0] = 0;
         return 1;
     }
-    static uint8_t em_buf[256];
+    static uint8_t em_buf[RSA_MODULUS_MAX_SUPPORTED];
     static const uint8_t cavp_exp_be[] = {0x01, 0x00, 0x01}; /* 65537 */
     struct tls_rsa_key cavp_key = {
         sizeof(cavp_exp_be), cavp_exp_be,
@@ -632,7 +630,7 @@ static size_t run_rsa_pkcs1_v15_verify(const uint8_t *in, size_t in_len, uint8_t
         out[0] = 0;  /* verdict: invalid (size mismatch is a hard reject) */
         return 1;
     }
-    if (modulus_len > 256) {
+    if (modulus_len > RSA_MODULUS_MAX_SUPPORTED) {
         out[0] = 0;
         return 1;
     }

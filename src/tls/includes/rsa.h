@@ -2,7 +2,7 @@
  * @file rsa.h
  * @author jacobly (modexp)
  * @author Anthony Cagliano
- * @brief Provides RSA implementation for between 1024 and 2048 bit keys,
+ * @brief Provides RSA implementation for 2048 to 4096 bit keys,
  * including encryption and signature verification.
  * @reference: RFC 8017
  */
@@ -17,7 +17,7 @@
 /* powmod_exp_u24 takes a uint16_t for modulus size (bytes), range 128–512.
  * No zero-encodes-256 encoding; callers pass the exact byte count. */
 #define RSA_MODULUS_MAX_SUPPORTED (4096 >> 3)
-#define RSA_MODULUS_MIN_SUPPORTED (1024 >> 3)
+#define RSA_MODULUS_MIN_SUPPORTED (2048 >> 3)
 
 /* RSA result/transient buffer: decoded signature, OAEP plaintext, etc.
  * Occupies the bottom RSA_TRANSIENT_SIZE bytes of the shared scratch region.
