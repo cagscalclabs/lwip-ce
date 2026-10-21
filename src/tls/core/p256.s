@@ -77,7 +77,14 @@
 ; Scratch (.bss).  Layout constraints:
 ;   r0,r1 contiguous and saved0,saved1 contiguous (single 192-byte ldir).
 ;   The RFC 6979 state (DK_*) overlays r0.. -- it is dead before the ladder.
+;
+; This buffer is the single shared scratch for P-256, powmod, and HKDF/RSA.
+; All consumers are mutually exclusive at runtime.  The linker provides
+; __tls_scratch_start/__tls_scratch_end aliases to __p256_scratch_start/_end.
 ; ===========================================================================
+.include "scratch.inc"
+globl __p256_scratch_start
+globl __p256_scratch_end
     .section .bss.__p256_scratch,"aw",@nobits
 __p256_scratch_start:
 ; --- p256_mul_p / p256_sq_p working set.  The index displacements are

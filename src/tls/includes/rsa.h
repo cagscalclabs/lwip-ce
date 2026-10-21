@@ -14,18 +14,19 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* powmod_exp_u24 takes a uint8_t for modulus size, with 0 encoding 256.
- * Anything larger than 256 bytes (2048 bits) is unrepresentable. */
-#define RSA_MODULUS_MAX_SUPPORTED (2048 >> 3)
+/* powmod_exp_u24 takes a uint16_t for modulus size (bytes), range 128–512.
+ * No zero-encodes-256 encoding; callers pass the exact byte count. */
+#define RSA_MODULUS_MAX_SUPPORTED (4096 >> 3)
 #define RSA_MODULUS_MIN_SUPPORTED (1024 >> 3)
 
-/* Static .bss scratch for RSA OAEP/PSS encoded-message work (e.g. the
- * decrypted-signature buffer). Replaces a 256-byte stack local in the deep
- * crypto call chain. Defined in src/tls/core/share/memory.s. Pure scratch:
- * its contents do not persist across calls and callers must not assume any
- * particular initial value. Sized for the max supported modulus (RSA-2048). */
-#define RSA_TRANSIENT_SIZE RSA_MODULUS_MAX_SUPPORTED
+/* RSA result/transient buffer: decoded signature, OAEP plaintext, etc.
+ * Occupies the bottom RSA_TRANSIENT_SIZE bytes of the shared scratch region.
+ * powmod's Lacc/Ltmp working area lives at the top (last 2*mod_len bytes)
+ * and never overlaps this region. */
+#define RSA_TRANSIENT_SIZE RSA_MODULUS_MAX_SUPPORTED  /* 512 bytes for RSA-4096 */
 extern uint8_t __rsa_transient[RSA_TRANSIENT_SIZE];
+/* Top of the shared scratch region; used to locate powmod's working area. */
+extern uint8_t __tls_scratch_end[];
 
 #define RSA_PUBLIC_EXP 65537
 
