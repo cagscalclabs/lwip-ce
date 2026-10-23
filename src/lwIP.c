@@ -371,6 +371,22 @@ uint32_t lwip_now_ms(void)
     return sys_now();
 }
 
+bool lwip_tls_rng_wait_for_ready(uint32_t timeout_ms)
+{
+    uint32_t start = sys_now();
+
+    while (tls_rng_available_strength() < TLS_RNG_STRENGTH_192)
+    {
+        if (tls_rng_status() == TLS_RNG_FAILED ||
+            (uint32_t)(sys_now() - start) >= timeout_ms)
+        {
+            return false;
+        }
+        lwip_service_events();
+    }
+    return true;
+}
+
 /* ============================================================
  * Helpers
  * ============================================================ */

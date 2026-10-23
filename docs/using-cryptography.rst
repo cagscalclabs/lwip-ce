@@ -88,10 +88,13 @@ live DRBG state or restoring an earlier calculator state.
 
 .. c:function:: void *tls_random_bytes(void *buffer, size_t len)
 
-   Fill ``buffer`` synchronously from the 192-bit-strength SHA-256 Hash_DRBG. If the DRBG has not
-   yet been instantiated, this call blocks while gathering the initial
-   entropy. Once instantiated, output does not consume entropy one-for-one.
-   A complete timer-prepared entropy reserve is incorporated before output.
+   Fill ``buffer`` synchronously from the 192-bit-strength SHA-256 Hash_DRBG.
+   This call does not wait: the DRBG is seeded by a stack timer that only runs
+   while ``lwip_service_events()`` is being pumped, so right after
+   ``lwip_start()`` it returns ``NULL`` until the DRBG is ready. Call
+   ``lwip_tls_rng_wait_for_ready()`` first. Once instantiated, output does not
+   consume entropy one-for-one. A complete timer-prepared entropy reserve is
+   incorporated before output.
 
    :param buffer: Caller-supplied destination buffer.
    :param len: Number of bytes to fill.
@@ -107,6 +110,16 @@ live DRBG state or restoring an earlier calculator state.
    to require 192-bit readiness.
 
    :returns: ``buffer`` on success, or ``NULL`` with the destination zeroized.
+
+.. c:function:: bool lwip_tls_rng_wait_for_ready(uint32_t timeout_ms)
+
+   Pump the stack's event loop until the random generator reaches 192-bit
+   readiness, so that ``tls_random_bytes()`` and the APIs built on it
+   (one-shot encryption, RSA-OAEP, ...) can be used without the caller writing
+   a wait loop. Call it once after ``lwip_start()``.
+
+   :param timeout_ms: Maximum time to wait. ``0`` checks once without waiting.
+   :returns: ``true`` once ready, ``false`` on timeout or RNG failure.
 
 .. c:function:: tls_rng_state_t tls_rng_status(void)
 

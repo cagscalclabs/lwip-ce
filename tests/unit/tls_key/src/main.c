@@ -156,18 +156,12 @@ int main(void)
     if (!lwip_start()) return 1;
     os_ClrHome();
 
-    /* One-shot encryption requires a healthy RNG for its fresh IV. On CEmu,
-     * the entropy source may not be ready immediately after lwip_start(). */
-    uint32_t rng_wait_start = lwip_now_ms();
-    while (!tls_rng_healthcheck())
+    /* One-shot encryption needs a seeded DRBG for its fresh IV. */
+    if (!lwip_tls_rng_wait_for_ready(10000u))
     {
-        lwip_service_events();
-        if ((uint32_t)(lwip_now_ms() - rng_wait_start) >= 10000u)
-        {
-            printf("RNG setup timed out");
-            os_GetKey();
-            return 1;
-        }
+        printf("RNG setup timed out");
+        os_GetKey();
+        return 1;
     }
 
     struct tls_key k = {0};
