@@ -70,6 +70,12 @@ static void mem_stats_tls_direct_release(size_t n, size_t unused) { assert(alloc
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
 static uint64_t tls_random(void) { return 1; }
 static bool tls_x25519_publickey(uint8_t *pub, const uint8_t *priv, void *a, void *b) { return true; }
+static bool tls_p256_publickey(uint8_t *pub, const uint8_t *priv)
+{ (void)priv; memset(pub, 0x5a, 65); pub[0] = 0x04; return true; }
+static bool tls_p256_verify(const uint8_t *sig, const uint8_t *hash, const uint8_t *pub)
+{ (void)sig; (void)hash; (void)pub; return true; }
+static void tls_crypto_guard_enable(void) {}
+static void tls_crypto_guard_disable(void) {}
 static uint32_t lwip_sntp_read_rtc_raw(void) { return 1700000000; }
 static uint32_t lwip_sntp_get_unix_time(void) { return 1700000000; }
 static void tls_hs_reasm_reset(struct tls_handshake_context *ctx) {}

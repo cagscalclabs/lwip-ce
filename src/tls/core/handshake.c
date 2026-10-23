@@ -1846,8 +1846,9 @@ bool tls_handshake_init(
  * The interesting work is in the extensions block. We always emit:
  *
  *    supported_versions     : tells the server we speak TLS 1.3
- *    supported_groups       : just x25519
- *    key_share              : our ephemeral x25519 pubkey
+ *    supported_groups       : secp256r1 and x25519
+ *    key_share              : our ephemeral P-256 and x25519 public keys
+ *    max_fragment_length    : request 4096-byte plaintext records
  *    psk_key_exchange_modes : if PSK mode, advertise psk_dhe_ke
  *    server_name            : SNI hostname (if set)
  *    pre_shared_key         : MUST be last — see binder comment below
@@ -1880,9 +1881,9 @@ bool tls_send_client_hello(
         HELLO_EXT_LEN_OFFSET = 47,
         HELLO_EXT_START = 49,
         /* P-256 uncompressed public key (65 bytes) is first key_share entry */
-        HELLO_P256_KEY_SHARE_OFFSET = 70,
+        HELLO_P256_KEY_SHARE_OFFSET = 76,
         /* x25519 public key (32 bytes) follows P-256 entry */
-        HELLO_KEY_SHARE_OFFSET = 139
+        HELLO_KEY_SHARE_OFFSET = 145
     };
     /* Base ClientHello with zero placeholders for the 32-byte client random,
      * 65-byte P-256 key share, 32-byte x25519 key share, and dependent
@@ -1891,13 +1892,13 @@ bool tls_send_client_hello(
      * Extensions layout (all offsets from byte 0 of this array):
      *   [49..55]  supported_versions: TLS 1.3
      *   [56..65]  supported_groups: secp256r1 + x25519 (P-256 preferred)
-     *   [66..69]  key_share ext header + secp256r1 group/len
-     *   [70..134] P-256 public key (65 bytes, patched)
-     *   [135..138] x25519 group/len
-     *   [139..170] x25519 public key (32 bytes, patched)
-     *   [171..180] signature_algorithms
-     *   [181..192] signature_algorithms_cert
-     *   [193..197] max_fragment_length: 2^12
+     *   [66..75]  key_share ext header + vector length + secp256r1 group/len
+     *   [76..140] P-256 public key (65 bytes, patched)
+     *   [141..144] x25519 group/len
+     *   [145..176] x25519 public key (32 bytes, patched)
+     *   [177..186] signature_algorithms
+     *   [187..198] signature_algorithms_cert
+     *   [199..203] max_fragment_length: 4096 bytes
      */
     static const uint8_t hello_template[] = {
         TLS_HANDSHAKE_CLIENT_HELLO, 0x00, 0x00, 0x00, /* body length patched */
@@ -1920,7 +1921,7 @@ bool tls_send_client_hello(
          *   client_shares_len=0x0069=105
          *   secp256r1 entry: group=0x0017, key_len=0x0041=65 */
         0x00, 0x33, 0x00, 0x6b, 0x00, 0x69, 0x00, 0x17, 0x00, 0x41,
-        /* P-256 key patched at offset 70 (65 bytes) */
+        /* P-256 key patched at offset 76 (65 bytes) */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1928,7 +1929,7 @@ bool tls_send_client_hello(
         0,
         /* x25519 entry: group=0x001d, key_len=0x0020=32 */
         0x00, 0x1d, 0x00, 0x20,
-        /* x25519 key patched at offset 139 (32 bytes) */
+        /* x25519 key patched at offset 145 (32 bytes) */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* signature_algorithms: rsa_pss_rsae_sha256 (0x0804),
@@ -1940,8 +1941,8 @@ bool tls_send_client_hello(
          *                            ecdsa_secp256r1_sha256 (0x0403) */
         /* ext_type=0x0032, ext_len=8, list_len=6 */
         0x00, 0x32, 0x00, 0x08, 0x00, 0x06, 0x04, 0x01, 0x08, 0x04, 0x04, 0x03,
-        /* max_fragment_length: 2^12 */
-        0x00, 0x01, 0x00, 0x01, 0x04
+        /* max_fragment_length: 2^12 = 4096 bytes (RFC 6066 section 4) */
+        0x00, 0x01, 0x00, 0x01, TLS_MAX_FRAGMENT_LENGTH_4096
     };
     static const uint8_t sni_header[] = {
         0x00, 0x00,             /* server_name */
@@ -3067,8 +3068,9 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
  * most extensions were moved here precisely so eavesdroppers can't see
  * which servers/protocols a client supports.
  *
- * The current implementation consumes ALPN and validates the informational
- * supported_groups list; otherwise it:
+ * The current implementation consumes ALPN, validates the informational
+ * supported_groups list, and accepts only the offered 4096-byte
+ * max_fragment_length echo; otherwise it:
  *
  *   1. Validate the framing (length fields nest correctly).
  *   2. Validate every permitted extension and reject duplicates.
@@ -3123,7 +3125,7 @@ static bool tls_recv_encrypted_extensions(
     }
 
     bool seen_server_name = false, seen_alpn = false, seen_groups = false;
-    bool seen_max_fragment = false;
+    bool seen_max_fragment_length = false;
     ctx->negotiated_alpn = NULL;
     ctx->negotiated_alpn_len = 0;
     size_t ext_offset = 0;
@@ -3157,13 +3159,18 @@ static bool tls_recv_encrypted_extensions(
         }
         else if (ext_type == TLS_EXT_MAX_FRAGMENT_LENGTH)
         {
-            if (seen_max_fragment || ext_data_len != 1 || ext_data[0] != 0x04)
+            /* We offer only RFC 6066 code 4 (2^12 = 4096). A server may omit
+             * the extension, but if it echoes it the value must exactly match
+             * the ClientHello offer. */
+            if (seen_max_fragment_length || ext_data_len != 1 ||
+                ext_data[0] != TLS_MAX_FRAGMENT_LENGTH_4096)
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_ILLEGAL_PARAMETER);
+                ERROR_CODE(0x74);
                 return false;
             }
-            seen_max_fragment = true;
+            seen_max_fragment_length = true;
         }
         else if (ext_type == TLS_EXT_ALPN)
         {

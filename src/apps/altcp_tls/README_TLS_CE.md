@@ -22,6 +22,9 @@ The TLS CE integration provides TLS 1.3 encryption for lwIP network applications
 - **altcp Integration**: Full lwIP compatibility
 - **Sequence Numbers**: Proper nonce construction
 - **Error Handling**: Authentication failures, connection errors
+- **Request 4 KB TLS records**: ClientHello offers RFC 6066
+  `max_fragment_length` code 4 (4096 bytes). An EncryptedExtensions echo is
+  accepted only with that value; servers that omit the extension are unaffected.
 
 ### ⚠️ Partially Implemented
 - **Server Handshake**: Structure in place, needs testing

@@ -43,7 +43,7 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
     };
     assert(memcmp(buf + 38, fixed_body, sizeof(fixed_body)) == 0);
     assert(be16(buf+47) == n-49);
-    unsigned versions = 0, groups = 0, key_share = 0;
+    unsigned versions = 0, groups = 0, key_share = 0, max_fragment_length = 0;
     unsigned signatures = 0, alpn = 0, sni = 0, psk_modes = 0, psk_ext = 0;
     for (size_t off = 49; off < n; )
     {
@@ -57,16 +57,25 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         }
         if (type == 10)
         {
-            static const uint8_t expected[] = {0, 2, 0, 0x1d};
+            static const uint8_t expected[] = {0, 4, 0, 0x17, 0, 0x1d};
             assert(len == sizeof(expected) && memcmp(buf+off+4, expected, len) == 0);
             groups++;
         }
         if (type == 51)
         {
-            static const uint8_t expected_header[] = {0, 0x24, 0, 0x1d, 0, 0x20};
-            assert(len == 38 && memcmp(buf+off+4, expected_header, sizeof(expected_header)) == 0);
-            assert(memcmp(buf+off+10, ctx.ecdhe_public, 32) == 0);
+            static const uint8_t expected_header[] = {0, 0x69, 0, 0x17, 0, 0x41};
+            static const uint8_t x25519_header[] = {0, 0x1d, 0, 0x20};
+            assert(len == 107 &&
+                   memcmp(buf+off+4, expected_header, sizeof(expected_header)) == 0);
+            assert(memcmp(buf+off+10, ctx.p256_public, 65) == 0);
+            assert(memcmp(buf+off+75, x25519_header, sizeof(x25519_header)) == 0);
+            assert(memcmp(buf+off+79, ctx.ecdhe_public, 32) == 0);
             key_share++;
+        }
+        if (type == TLS_EXT_MAX_FRAGMENT_LENGTH)
+        {
+            assert(len == 1 && buf[off+4] == TLS_MAX_FRAGMENT_LENGTH_4096);
+            max_fragment_length++;
         }
         if (type == 0)
         {
@@ -76,13 +85,15 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         }
         if (type == 13)
         {
-            assert(len == 4 && be16(buf+off+4) == 2 && be16(buf+off+6) == 0x0804);
+            assert(len == 6 && be16(buf+off+4) == 4 &&
+                   be16(buf+off+6) == 0x0804 && be16(buf+off+8) == 0x0403);
             signatures++;
         }
         if (type == 50)
         {
-            assert(len == 6 && be16(buf+off+4) == 4);
-            assert(be16(buf+off+6) == 0x0401 && be16(buf+off+8) == 0x0804);
+            assert(len == 8 && be16(buf+off+4) == 6);
+            assert(be16(buf+off+6) == 0x0401 && be16(buf+off+8) == 0x0804 &&
+                   be16(buf+off+10) == 0x0403);
             signatures++;
         }
         if (type == 16)
@@ -107,6 +118,7 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         off += 4 + len;
     }
     assert(versions == 1 && groups == 1 && key_share == 1);
+    assert(max_fragment_length == 1);
     assert(signatures == 2 && alpn == (unsigned)offer_alpn);
     assert(sni == (unsigned)(hostname && !strcmp(hostname, "example.test")));
     assert(psk_modes == (unsigned)psk && psk_ext == (unsigned)psk);
@@ -141,6 +153,21 @@ static void handshake_extension_tests(void)
         0, 10, TLS_EXT_SUPPORTED_GROUPS >> 8,
         TLS_EXT_SUPPORTED_GROUPS & 0xff, 0, 6,
         0, 4, 0, 0x1d, 0, 0x1d
+    };
+    static const uint8_t ee_mfl_4096[] = {
+        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 7,
+        0, 5, 0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1,
+        TLS_MAX_FRAGMENT_LENGTH_4096
+    };
+    static const uint8_t ee_mfl_wrong[] = {
+        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 7,
+        0, 5, 0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1, 3
+    };
+    static const uint8_t ee_mfl_duplicate[] = {
+        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 12,
+        0, 10,
+        0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1, TLS_MAX_FRAGMENT_LENGTH_4096,
+        0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1, TLS_MAX_FRAGMENT_LENGTH_4096
     };
     static const uint8_t cert_request[] = {
         TLS_HANDSHAKE_CERTIFICATE_REQUEST, 0, 0, 11,
@@ -195,6 +222,21 @@ static void handshake_extension_tests(void)
                                           sizeof(ee_duplicate_group)));
 
     memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
+    assert(tls_recv_encrypted_extensions(&ctx, ee_mfl_4096,
+                                          sizeof(ee_mfl_4096)));
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
+    last_alert = 0;
+    assert(!tls_recv_encrypted_extensions(&ctx, ee_mfl_wrong,
+                                           sizeof(ee_mfl_wrong)));
+    assert(last_alert == TLS_ALERT_ILLEGAL_PARAMETER);
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
+    assert(!tls_recv_encrypted_extensions(&ctx, ee_mfl_duplicate,
+                                           sizeof(ee_mfl_duplicate)));
+
+    memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
     assert(tls_recv_certificate_request(&ctx, cert_request,
                                         sizeof(cert_request)));
@@ -237,17 +279,17 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     mem_stats_tls_direct_add(n, n);
     assert(tls_cert_walker_validate_one(w));
     assert(w->pending_sig_alg == expected);
-    assert(ctx.leaf_pubkey.allocated && ctx.leaf_pubkey.rsa.mod_len == 128);
+    assert(ctx.leaf_pubkey.allocated && ctx.leaf_pubkey.rsa.mod_len == 256);
     assert(ctx.leaf_pubkey.rsa.exponent[0] == 1);
     // One imported/captured RSA key, two independent signature operations.
-    uint8_t operation_sig[128];
+    uint8_t operation_sig[256];
     memset(operation_sig, 0x11, sizeof(operation_sig));
-    assert(tls_key_verify((const uint8_t *)"message", 7, operation_sig, 128,
+    assert(tls_key_verify((const uint8_t *)"message", 7, operation_sig, sizeof(operation_sig),
                          &ctx.leaf_pubkey, TLS_ALG_RSA_PKCS1_SHA256) == TLS_KEY_OP_OK);
-    assert(tls_key_verify((const uint8_t *)"message", 7, operation_sig, 128,
+    assert(tls_key_verify((const uint8_t *)"message", 7, operation_sig, sizeof(operation_sig),
                          &ctx.leaf_pubkey, TLS_ALG_RSA_PSS_RSAE_SHA256) == TLS_KEY_OP_INVALID);
     memset(operation_sig, 0x22, sizeof(operation_sig));
-    assert(tls_key_verify((const uint8_t *)"message", 7, operation_sig, 128,
+    assert(tls_key_verify((const uint8_t *)"message", 7, operation_sig, sizeof(operation_sig),
                          &ctx.leaf_pubkey, TLS_ALG_RSA_PSS_RSAE_SHA256) == TLS_KEY_OP_OK);
     assert(ctx.leaf_pubkey.type == TLS_KEY_TYPE_RSA);
     w->cert_index = 1;
@@ -255,12 +297,12 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     w->state = CW_DONE;
 
     // Root metadata deliberately differs from the child's signature scheme.
-    root_entry = calloc(1, sizeof(*root_entry) + 131);
-    root_entry->len = sizeof(*root_entry) + 131;
+    root_entry = calloc(1, sizeof(*root_entry) + 259);
+    root_entry->len = sizeof(*root_entry) + 259;
     root_entry->alg_id = expected == TLS_ALG_RSA_PKCS1_SHA256
         ? TLS_CERT_SIG_RSA_PSS_SHA256 : TLS_CERT_SIG_RSA_PKCS1_SHA256;
     root_entry->key[0] = root_entry->key[2] = 1;
-    memset(root_entry->key + 3, 0x81, 128);
+    memset(root_entry->key + 3, 0x81, 256);
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
     assert(tls_recv_certificate_streamed(&ctx, w));
     w->pending_sig[0] ^= 1;
@@ -268,7 +310,7 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     assert(!tls_recv_certificate_streamed(&ctx, w));
     assert(!tls_cert_walker_validate_one(w)); // invalid adjacent link too
 
-    uint8_t sig[128]; memset(sig, 0x22, sizeof(sig));
+    uint8_t sig[256]; memset(sig, 0x22, sizeof(sig));
     assert(tls_certverify_rsa_pss_sha256(&ctx, sig, sizeof(sig)));
     assert(!tls_certverify_rsa_pss_sha256(&ctx, sig, sizeof(sig)-1));
     tls_handshake_cleanup(&ctx);
@@ -302,39 +344,40 @@ int main(void)
     assert(tls_x509_parse_certificate(cert_ec, sizeof(cert_ec), &ec));
     assert(ec.pubkey.type == TLS_KEY_TYPE_EC_P256 && ec.pubkey.ec.len == 65);
     uint8_t digest[32], sig[128]; memset(digest, 0x42, 32); memset(sig, 0x22, 128);
-    assert(tls_cert_verify_digest(TLS_ALG_ECDSA_SECP256R1_SHA256, &ec.pubkey, digest, sig, 128) == TLS_KEY_OP_UNSUPPORTED);
+    assert(tls_cert_verify_digest(TLS_ALG_ECDSA_SECP256R1_SHA256, &ec.pubkey,
+                                  digest, sig, 128) == TLS_KEY_OP_INVALID);
     assert(tls_cert_verify_digest(TLS_ALG_RSA_PSS_RSAE_SHA256, &ec.pubkey, digest, sig, 128) == TLS_KEY_OP_INVALID);
 
     /* Chain-policy distinction: a correctly-sized signature under an RSA key
      * wider than the platform cap is unsupported, while a width mismatch is
      * invalid and must remain fail-closed. */
     struct tls_cert_walker pending = {0};
-    uint8_t rsa4096_modulus[512] = {0};
+    uint8_t rsa_oversize_modulus[RSA_MODULUS_MAX_SUPPORTED + 1] = {0};
     uint8_t rsa_exponent[] = {1, 0, 1};
-    struct tls_key rsa4096 = {
+    struct tls_key rsa_oversize = {
         .type = TLS_KEY_TYPE_RSA,
         .rsa = {
             .exp_len = sizeof(rsa_exponent),
             .exponent = rsa_exponent,
-            .mod_len = sizeof(rsa4096_modulus),
-            .modulus = rsa4096_modulus,
+            .mod_len = sizeof(rsa_oversize_modulus),
+            .modulus = rsa_oversize_modulus,
         },
     };
     pending.pending_link = true;
     pending.pending_sig_omitted = true;
     pending.pending_sig_alg = TLS_ALG_RSA_PKCS1_SHA256;
-    pending.pending_sig_len = sizeof(rsa4096_modulus);
-    assert(tls_cert_verify_pending_link(&pending, &rsa4096) ==
+    pending.pending_sig_len = sizeof(rsa_oversize_modulus);
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
            TLS_KEY_OP_UNSUPPORTED);
     pending.pending_sig_len = 256;
-    assert(tls_cert_verify_pending_link(&pending, &rsa4096) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
            TLS_KEY_OP_INVALID);
 
     /* A structurally accepted but unknown signature OID follows the same
      * temporary unsupported-operation policy without retaining its bytes. */
     pending.pending_sig_alg = TLS_ALG_UNKNOWN;
     pending.pending_sig_len = 384;
-    assert(tls_cert_verify_pending_link(&pending, &rsa4096) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
            TLS_KEY_OP_UNSUPPORTED);
 
     struct tls_handshake_context ctx;

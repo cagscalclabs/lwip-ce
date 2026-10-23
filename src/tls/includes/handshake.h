@@ -66,6 +66,9 @@ extern "C"
 #define TLS_EXT_PRE_SHARED_KEY 0x0029
 #define TLS_EXT_COOKIE 0x002c
 
+/* RFC 6066 max_fragment_length extension values. */
+#define TLS_MAX_FRAGMENT_LENGTH_4096 0x04
+
 /* Named Groups */
 #define TLS_NAMED_GROUP_X25519    0x001d
 #define TLS_NAMED_GROUP_SECP256R1 0x0017
