@@ -12,6 +12,7 @@
     "../../common/LWIP.5.8xv",
     "../../common/LWIP.6.8xv",
     "../../common/LWIP.7.8xv",
+    "../../common/LWIP.8.8xv",
     "../../common/lwip.8xv",
     "../../common/lwIPCERT.8xv",
     "vectors/CAVP00.8xv",
