@@ -53,6 +53,7 @@ extern "C"
 
 /* Extension Types */
 #define TLS_EXT_SERVER_NAME 0x0000
+#define TLS_EXT_MAX_FRAGMENT_LENGTH 0x0001
 #define TLS_EXT_SUPPORTED_GROUPS 0x000a
 #define TLS_EXT_SIGNATURE_ALGORITHMS 0x000d
 #define TLS_EXT_ALPN 0x0010
@@ -64,6 +65,9 @@ extern "C"
 #define TLS_EXT_PSK_KEY_EXCHANGE_MODES 0x002d
 #define TLS_EXT_PRE_SHARED_KEY 0x0029
 #define TLS_EXT_COOKIE 0x002c
+
+/* RFC 6066 max_fragment_length extension values. */
+#define TLS_MAX_FRAGMENT_LENGTH_4096 0x04
 
 /* Named Groups */
 #define TLS_NAMED_GROUP_X25519    0x001d

@@ -17,7 +17,8 @@ hs = (root / 'src/tls/core/handshake.c').read_text()
 def function(source, name):
     # Find the definition (skip prototypes), preserving its full body.
     import re
-    match = re.search(r'^(?:static )?\w+\s*\*?\s*' + name + r'\([^;]*?\)\s*\{', source, re.M)
+    match = re.search(r'^(?:static )?(?:const\s+)?\w+\s*\*?\s*' + name +
+                      r'\([^;]*?\)\s*\{', source, re.M)
     start = match.start()
     pos = match.end()
     depth = 1
@@ -51,7 +52,7 @@ pss_oid = oid('2a864886f70d01010a')
 pss = seq(pss_oid, seq(params))
 ecdsa = seq(oid('2a8648ce3d040302'))
 spki = seq(seq(rsa, b'\x05\x00'), tlv(3, b'\0' + seq(
-    tlv(2, b'\0' + b'\x81' * 128), tlv(2, b'\x01\x00\x01'))))
+    tlv(2, b'\0' + b'\x81' * 256), tlv(2, b'\x01\x00\x01'))))
 ec_spki = seq(seq(oid('2a8648ce3d0201'), oid('2a8648ce3d030107')),
               tlv(3, b'\0\x04' + b'\x01' * 64))
 name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'example.test'))))
@@ -66,7 +67,7 @@ cert_extensions = tlv(0xa3, seq(
 def cert(algorithm, key=spki, inner=None):
     tbs = seq(b'\x02\x01\x01', inner or algorithm, name, valid, name, key,
               cert_extensions)
-    signature = bytes([0x22 if algorithm == pss else 0x11]) * 128
+    signature = bytes([0x22 if algorithm == pss else 0x11]) * 256
     return seq(tbs, algorithm, tlv(3, b'\0' + signature))
 
 
@@ -88,6 +89,7 @@ vectors = {
 }
 
 source = (here / 'mock.h').read_text() + '\n#include "ip_identity.h"\n'
+source += function(x509, 'tls_ecdsa_parse_int')
 source += x509[x509.index('static bool tls_x509_is_string_tag'):x509.index('static bool tls_x509_decode_pem_certificate')]
 source += x509[x509.index('static const uint8_t oid_rsa_encryption'):]
 key_source = (root / 'src/tls/core/key.c').read_text()
