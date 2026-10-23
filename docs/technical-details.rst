@@ -185,8 +185,9 @@ For more details, proofs, and datasets, see the whitepaper below.
 The clause-by-clause mapping of the RFC, NIST SP, and FIPS requirements this
 implementation targets to the code that satisfies or deviates from them is
 published as the
-`TLS specification compliance ledger <tls-specifications.xml>`_
-(rendered in the browser from the raw XML via an XSLT stylesheet).
+`TLS specification compliance ledger <tls-specifications.html>`_
+as a static HTML report generated from the authoritative XML source during the
+documentation build.
 
 CI And Test Harnesses
 ---------------------

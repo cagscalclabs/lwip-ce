@@ -183,12 +183,61 @@ struct tls_rng_stats
     uint8_t source_mask;
     /** Differing observation pairs at lags 1 through 4, respectively. */
     uint32_t lag_mismatches[4];
+    /** Health/qualification tests for which at least one complete window was evaluated. */
+    uint8_t health_tests_evaluated;
+    /** Evaluated tests which passed every diagnostic window. */
+    uint8_t health_tests_passed;
+    /** Runs which reached the production RCT cutoff. */
+    uint32_t rct_failure_runs;
+    /** Complete production-sized APT windows evaluated. */
+    uint32_t apt_windows;
+    /** APT windows in which either symbol reached the cutoff. */
+    uint32_t apt_failures;
+    /** Minimum and maximum one counts among complete APT windows. */
+    uint32_t apt_min_ones;
+    uint32_t apt_max_ones;
+    /** Production-sized windows outside the startup marginal gate. */
+    uint32_t startup_marginal_failures;
+    /** Qualification-window failures for lags 1 through 4. */
+    uint32_t lag_window_failures[4];
+    /** Minimum lag mismatch count among complete qualification windows. */
+    uint32_t lag_window_min_mismatches[4];
+    /** Maximum lag mismatch count among complete qualification windows. */
+    uint32_t lag_window_max_mismatches[4];
+    /** Complete 1024-sample distribution windows evaluated. */
+    uint32_t distribution_windows;
+    /** Distribution windows failing either marginal or pair-disagreement gate. */
+    uint32_t distribution_failures;
+    /** One-count extrema among complete distribution windows. */
+    uint32_t distribution_min_ones;
+    uint32_t distribution_max_ones;
+    /** Disjoint adjacent-pair disagreement extrema among distribution windows. */
+    uint32_t distribution_min_disagreements;
+    uint32_t distribution_max_disagreements;
 };
 
 #define TLS_RNG_STATS_LAG_COUNT 4u
 #define TLS_RNG_STATS_MIN_SAMPLES 256u
 #define TLS_RNG_STATS_MAX_SAMPLES 65535u
 #define TLS_RNG_STATS_Q16_ONE 65536u
+#define TLS_RNG_STATS_RCT_CUTOFF 76u
+#define TLS_RNG_STATS_APT_WINDOW 952u
+#define TLS_RNG_STATS_APT_CUTOFF 844u
+#define TLS_RNG_STATS_STARTUP_ONES_MIN 238u
+#define TLS_RNG_STATS_STARTUP_ONES_MAX 714u
+#define TLS_RNG_STATS_LAG1_MISMATCH_MIN 136u
+#define TLS_RNG_STATS_LAG1_MISMATCH_MAX 815u
+#define TLS_RNG_STATS_LAG2_MISMATCH_MIN 136u
+#define TLS_RNG_STATS_LAG2_MISMATCH_MAX 814u
+#define TLS_RNG_STATS_LAG3_MISMATCH_MIN 135u
+#define TLS_RNG_STATS_LAG3_MISMATCH_MAX 814u
+#define TLS_RNG_STATS_LAG4_MISMATCH_MIN 135u
+#define TLS_RNG_STATS_LAG4_MISMATCH_MAX 813u
+#define TLS_RNG_STATS_DISTRIBUTION_WINDOW 1024u
+#define TLS_RNG_STATS_DISTRIBUTION_ONES_MIN 256u
+#define TLS_RNG_STATS_DISTRIBUTION_ONES_MAX 768u
+#define TLS_RNG_STATS_DISTRIBUTION_DISAGREEMENTS_MIN 128u
+#define TLS_RNG_STATS_DISTRIBUTION_DISAGREEMENTS_MAX 384u
 
 /*************************************************************************************
  * @brief Samples the selected raw SRAM bit and computes diagnostic statistics.

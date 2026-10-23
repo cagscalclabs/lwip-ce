@@ -2,7 +2,8 @@
 
 `RNGSTAT` calls the public `tls_rng_compute_stats()` diagnostic eight times,
 collecting 32,768 selected raw bits per window (262,144 bits total). It writes
-the textual results to the archived `RNGSTATS` AppVar.
+the textual results to the archived `RNGSTATS` AppVar. The exact version 4
+payload format is documented in [SCHEMA.md](SCHEMA.md).
 
 Build and run it after installing the current resident library:
 
@@ -54,6 +55,14 @@ each mismatch rate, a stationary-binary correlation heuristic
 `1-q_k/(2*p0*p1)`, and whether the aggregate rate projects inside the broad
 startup-screen bounds. These higher-lag results are periodicity diagnostics;
 they do not increase the entropy credit or replace a full non-IID assessment.
+
+Version 4 adds exact diagnostic evaluations of the production RCT/APT limits,
+the 952-sample startup marginal and lag gates, and the 1024-sample marginal and
+disjoint-pair distribution gates. It records evaluated/pass masks, failure
+counts, and per-window extrema. These are calculated alongside the existing
+statistics from the same reads; they do not invoke or alter the live assembly
+health-test state. The published statistics workflow includes the resulting
+health-test summary when version 4 captures are checked in.
 
 Version 1 captures remain supported. Their pair counts are reconstructed from
 the marginal and total-transition counts; when the unrecorded endpoints leave

@@ -6,8 +6,10 @@ on:
       - master
     paths:
       - statistics/**
-      - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
-      - tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py
+      - tests/profiling/tls_rng_stats/**
+      - src/tls/includes/random.h
+      - src/tls/core/random.c
+      - src/tls/core/random.s
       - tests/profiling/tls_timing/tools/summarize_timing_stats.py
       - .github/workflows/statistics.yml
   workflow_dispatch:

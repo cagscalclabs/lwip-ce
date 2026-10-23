@@ -186,6 +186,17 @@ live DRBG state or restoring an earlier calculator state.
    ``transition_rate_q16`` by ``TLS_RNG_STATS_Q16_ONE`` (65536) to obtain the
    corresponding fractional values.
 
+   It also reports which production health
+   and qualification tests had enough data to evaluate, which passed all
+   complete diagnostic windows, the RCT/APT and qualification failure counts,
+   and per-window APT, lag, and distribution-gate extrema. Partial trailing
+   windows are not scored.
+
+   These window results reproduce the configured thresholds over the captured
+   observations; they do not read or mutate the live assembly health-test
+   state. The profiler AppVar schema is documented in
+   ``tests/profiling/tls_rng_stats/SCHEMA.md``.
+
    This API observes the source before conditioning and is intended for
    development and source characterization. Its output is not random data,
    a min-entropy estimate, or a substitute for SP 800-90B analysis. Sampling

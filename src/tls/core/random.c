@@ -1164,7 +1164,17 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
     uint8_t lag_history_count = 0u;
     uint8_t lag_history_next = 0u;
     uint8_t previous = 0;
+    uint8_t window_history[TLS_RNG_STATS_LAG_COUNT];
+    uint8_t window_history_count = 0u;
+    uint8_t window_history_next = 0u;
+    uint8_t distribution_pair_first = 0u;
     uint32_t current_run = 0;
+    uint32_t apt_position = 0u;
+    uint32_t apt_ones = 0u;
+    uint32_t window_lag_mismatches[TLS_RNG_STATS_LAG_COUNT] = {0u};
+    uint32_t distribution_position = 0u;
+    uint32_t distribution_ones = 0u;
+    uint32_t distribution_disagreements = 0u;
     uint32_t remaining;
     bool have_previous = false;
 
@@ -1192,6 +1202,8 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
     stats->source_address = (uintptr_t)source;
     stats->source_mask = source_mask;
     stats->sample_count = (uint32_t)sample_count;
+    stats->health_tests_evaluated = TLS_RNG_HEALTH_RCT_PASS;
+    stats->health_tests_passed = TLS_RNG_HEALTH_ALL_PASS;
     remaining = (uint32_t)sample_count;
 
     while (remaining != 0u)
@@ -1239,6 +1251,30 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
             if (lag_history_count < TLS_RNG_STATS_LAG_COUNT)
             {
                 lag_history_count++;
+            }
+
+            for (lag = 1u; lag <= window_history_count; lag++)
+            {
+                uint8_t history_index = (uint8_t)(
+                    window_history_next + TLS_RNG_STATS_LAG_COUNT - lag);
+                if (history_index >= TLS_RNG_STATS_LAG_COUNT)
+                {
+                    history_index -= TLS_RNG_STATS_LAG_COUNT;
+                }
+                if (bit != window_history[history_index])
+                {
+                    window_lag_mismatches[lag - 1u]++;
+                }
+            }
+            window_history[window_history_next] = bit;
+            window_history_next++;
+            if (window_history_next == TLS_RNG_STATS_LAG_COUNT)
+            {
+                window_history_next = 0u;
+            }
+            if (window_history_count < TLS_RNG_STATS_LAG_COUNT)
+            {
+                window_history_count++;
             }
 
             if (have_previous)
@@ -1294,6 +1330,122 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
             {
                 stats->longest_one_run = current_run;
             }
+            if (current_run == TLS_RNG_STATS_RCT_CUTOFF)
+            {
+                stats->rct_failure_runs++;
+            }
+
+            apt_ones += bit;
+            apt_position++;
+            if (apt_position == TLS_RNG_STATS_APT_WINDOW)
+            {
+                uint32_t apt_zeros = TLS_RNG_STATS_APT_WINDOW - apt_ones;
+                static const uint16_t lag_min[TLS_RNG_STATS_LAG_COUNT] =
+                    {TLS_RNG_STATS_LAG1_MISMATCH_MIN,
+                     TLS_RNG_STATS_LAG2_MISMATCH_MIN,
+                     TLS_RNG_STATS_LAG3_MISMATCH_MIN,
+                     TLS_RNG_STATS_LAG4_MISMATCH_MIN};
+                static const uint16_t lag_max[TLS_RNG_STATS_LAG_COUNT] =
+                    {TLS_RNG_STATS_LAG1_MISMATCH_MAX,
+                     TLS_RNG_STATS_LAG2_MISMATCH_MAX,
+                     TLS_RNG_STATS_LAG3_MISMATCH_MAX,
+                     TLS_RNG_STATS_LAG4_MISMATCH_MAX};
+
+                if ((stats->apt_windows == 0u) ||
+                    (apt_ones < stats->apt_min_ones))
+                {
+                    stats->apt_min_ones = apt_ones;
+                }
+                if (apt_ones > stats->apt_max_ones)
+                {
+                    stats->apt_max_ones = apt_ones;
+                }
+                stats->apt_windows++;
+                if ((apt_ones >= TLS_RNG_STATS_APT_CUTOFF) ||
+                    (apt_zeros >= TLS_RNG_STATS_APT_CUTOFF))
+                {
+                    stats->apt_failures++;
+                }
+                if ((apt_ones < TLS_RNG_STATS_STARTUP_ONES_MIN) ||
+                    (apt_ones > TLS_RNG_STATS_STARTUP_ONES_MAX))
+                {
+                    stats->startup_marginal_failures++;
+                }
+                for (lag = 0u; lag < TLS_RNG_STATS_LAG_COUNT; lag++)
+                {
+                    uint32_t mismatches = window_lag_mismatches[lag];
+                    if ((stats->apt_windows == 1u) ||
+                        (mismatches < stats->lag_window_min_mismatches[lag]))
+                    {
+                        stats->lag_window_min_mismatches[lag] = mismatches;
+                    }
+                    if (mismatches > stats->lag_window_max_mismatches[lag])
+                    {
+                        stats->lag_window_max_mismatches[lag] = mismatches;
+                    }
+                    if ((mismatches < lag_min[lag]) ||
+                        (mismatches > lag_max[lag]))
+                    {
+                        stats->lag_window_failures[lag]++;
+                    }
+                    window_lag_mismatches[lag] = 0u;
+                }
+                apt_position = 0u;
+                apt_ones = 0u;
+                window_history_count = 0u;
+                window_history_next = 0u;
+            }
+
+            distribution_ones += bit;
+            if ((distribution_position & 1u) == 0u)
+            {
+                distribution_pair_first = bit;
+            }
+            else if (bit != distribution_pair_first)
+            {
+                distribution_disagreements++;
+            }
+            distribution_position++;
+            if (distribution_position == TLS_RNG_STATS_DISTRIBUTION_WINDOW)
+            {
+                if ((stats->distribution_windows == 0u) ||
+                    (distribution_ones < stats->distribution_min_ones))
+                {
+                    stats->distribution_min_ones = distribution_ones;
+                }
+                if (distribution_ones > stats->distribution_max_ones)
+                {
+                    stats->distribution_max_ones = distribution_ones;
+                }
+                if ((stats->distribution_windows == 0u) ||
+                    (distribution_disagreements <
+                     stats->distribution_min_disagreements))
+                {
+                    stats->distribution_min_disagreements =
+                        distribution_disagreements;
+                }
+                if (distribution_disagreements >
+                    stats->distribution_max_disagreements)
+                {
+                    stats->distribution_max_disagreements =
+                        distribution_disagreements;
+                }
+                stats->distribution_windows++;
+                if ((distribution_ones <
+                     TLS_RNG_STATS_DISTRIBUTION_ONES_MIN) ||
+                    (distribution_ones >
+                     TLS_RNG_STATS_DISTRIBUTION_ONES_MAX) ||
+                    (distribution_disagreements <
+                     TLS_RNG_STATS_DISTRIBUTION_DISAGREEMENTS_MIN) ||
+                    (distribution_disagreements >
+                     TLS_RNG_STATS_DISTRIBUTION_DISAGREEMENTS_MAX))
+                {
+                    stats->distribution_failures++;
+                }
+                distribution_position = 0u;
+                distribution_ones = 0u;
+                distribution_disagreements = 0u;
+            }
 
             previous = bit;
         }
@@ -1312,6 +1464,42 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
         (((uint64_t)stats->transitions << 16) +
          ((stats->sample_count - 1u) / 2u)) /
         (stats->sample_count - 1u));
+
+    if (stats->rct_failure_runs != 0u)
+    {
+        stats->health_tests_passed &= (uint8_t)~TLS_RNG_HEALTH_RCT_PASS;
+    }
+    if (stats->apt_windows != 0u)
+    {
+        uint8_t lag;
+        stats->health_tests_evaluated |=
+            TLS_RNG_HEALTH_APT_PASS | TLS_RNG_HEALTH_LAG1_PASS |
+            TLS_RNG_HEALTH_LAG2_PASS | TLS_RNG_HEALTH_LAG3_PASS |
+            TLS_RNG_HEALTH_LAG4_PASS;
+        if (stats->apt_failures != 0u)
+        {
+            stats->health_tests_passed &= (uint8_t)~TLS_RNG_HEALTH_APT_PASS;
+        }
+        for (lag = 0u; lag < TLS_RNG_STATS_LAG_COUNT; lag++)
+        {
+            if (stats->lag_window_failures[lag] != 0u)
+            {
+                stats->health_tests_passed &= (uint8_t)~(1u << (lag + 2u));
+            }
+        }
+    }
+    if ((stats->apt_windows != 0u) &&
+        (stats->distribution_windows != 0u))
+    {
+        stats->health_tests_evaluated |= TLS_RNG_HEALTH_DISTRIBUTION_PASS;
+        if ((stats->startup_marginal_failures != 0u) ||
+            (stats->distribution_failures != 0u))
+        {
+            stats->health_tests_passed &=
+                (uint8_t)~TLS_RNG_HEALTH_DISTRIBUTION_PASS;
+        }
+    }
+    stats->health_tests_passed &= stats->health_tests_evaluated;
 
     return true;
 }

@@ -12,6 +12,7 @@ import re
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = (ROOT / "src/tls/core/random.s").read_text()
 C_SOURCE = (ROOT / "src/tls/core/random.c").read_text()
+HEADER = (ROOT / "src/tls/includes/random.h").read_text()
 
 
 def constant(name: str) -> int:
@@ -27,6 +28,17 @@ STARTUP_BYTES = constant("_sprng_startup_bytes")
 STARTUP_LAG_COUNT = constant("_sprng_startup_lag_count")
 
 assert (RCT_CUTOFF, APT_WINDOW, APT_CUTOFF) == (76, 952, 844)
+assert f"#define TLS_RNG_STATS_RCT_CUTOFF {RCT_CUTOFF}u" in HEADER
+assert f"#define TLS_RNG_STATS_APT_WINDOW {APT_WINDOW}u" in HEADER
+assert f"#define TLS_RNG_STATS_APT_CUTOFF {APT_CUTOFF}u" in HEADER
+for lag, low, high in (
+    (1, 136, 815),
+    (2, 136, 814),
+    (3, 135, 814),
+    (4, 135, 813),
+):
+    assert f"#define TLS_RNG_STATS_LAG{lag}_MISMATCH_MIN {low}u" in HEADER
+    assert f"#define TLS_RNG_STATS_LAG{lag}_MISMATCH_MAX {high}u" in HEADER
 assert STARTUP_BYTES * 8 == APT_WINDOW
 assert STARTUP_LAG_COUNT == 4
 assert "#define TLS_ENTROPY_HMIN_Q16 UINT32_C(17630)" in C_SOURCE

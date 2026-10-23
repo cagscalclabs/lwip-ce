@@ -89,6 +89,12 @@ def summarize_scope(name: str, profiles: list[dict[str, Any]]) -> dict[str, Any]
         not bool(row["projected_startup_lag_screen_pass"])
         for row in lag_screen_runs
     )
+    health_runs = [row for row in runs if row["health_diagnostics_available"]]
+    health_evaluated_mask = ANALYZER.HEALTH_ALL_PASS
+    health_passed_mask = ANALYZER.HEALTH_ALL_PASS
+    for row in health_runs:
+        health_evaluated_mask &= int(row["health_tests_evaluated"])
+        health_passed_mask &= int(row["health_tests_passed"])
 
     distributions = {
         "marginal_h": [
@@ -123,6 +129,31 @@ def summarize_scope(name: str, profiles: list[dict[str, Any]]) -> dict[str, Any]
         },
         "projected_lag_screen_windows": len(lag_screen_runs),
         "projected_lag_screen_failures": lag_screen_failures,
+        "health_profile_windows": len(health_runs),
+        "health_tests_evaluated_mask": (
+            health_evaluated_mask if health_runs else None
+        ),
+        "health_tests_passed_mask": (
+            health_passed_mask & health_evaluated_mask if health_runs else None
+        ),
+        "rct_failures": sum(int(row["rct_failures"]) for row in health_runs),
+        "apt_windows": sum(int(row["apt_windows"]) for row in health_runs),
+        "apt_failures": sum(int(row["apt_failures"]) for row in health_runs),
+        "startup_marginal_failures": sum(
+            int(row["startup_marginal_failures"]) for row in health_runs
+        ),
+        **{
+            f"window_lag{lag}_failures": sum(
+                int(row[f"window_lag{lag}_failures"]) for row in health_runs
+            )
+            for lag in ANALYZER.PROFILED_LAGS
+        },
+        "distribution_windows": sum(
+            int(row["distribution_windows"]) for row in health_runs
+        ),
+        "distribution_failures": sum(
+            int(row["distribution_failures"]) for row in health_runs
+        ),
         "markov_h_lower_99_bits_per_raw_bit": markov_h,
         "first_order_dependency_factor": (
             min(1.0, conservative_h / marginal_h) if marginal_h > 0.0 else 0.0
@@ -213,11 +244,32 @@ def write_markdown(path: Path, report: dict[str, Any], image_url: str) -> None:
         "",
         *summary_table(scopes[1:]),
         "",
+        "## Production health-test diagnostics",
+        "",
+        "| Scope | Version 4 runs | Evaluated mask | Passed mask | RCT failures | APT failures/windows | Startup marginal failures | Lag 1/2/3/4 failures | Distribution failures/windows |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---:|",
+        *[
+            f"| {markdown_escape(str(scope['scope']))} "
+            f"| {int(scope['health_profile_windows'])} "
+            f"| {('0x%02X' % int(scope['health_tests_evaluated_mask'])) if scope['health_tests_evaluated_mask'] is not None else 'n/a'} "
+            f"| {('0x%02X' % int(scope['health_tests_passed_mask'])) if scope['health_tests_passed_mask'] is not None else 'n/a'} "
+            f"| {int(scope['rct_failures'])} "
+            f"| {int(scope['apt_failures'])}/{int(scope['apt_windows'])} "
+            f"| {int(scope['startup_marginal_failures'])} "
+            f"| {int(scope['window_lag1_failures'])}/"
+            f"{int(scope['window_lag2_failures'])}/"
+            f"{int(scope['window_lag3_failures'])}/"
+            f"{int(scope['window_lag4_failures'])} "
+            f"| {int(scope['distribution_failures'])}/"
+            f"{int(scope['distribution_windows'])} |"
+            for scope in scopes
+        ],
+        "",
         "## Interpretation",
         "",
         "- **Marginal H₉₉** is the lower 99% MCV estimate, conservatively taking the poorer of the pooled and worst-window results.",
         "- **Worst ρ₁…₄** uses the stationary-binary correlation heuristic `1-qₖ/(2p₀p₁)`; these values diagnose periodicity and do not add entropy credit.",
-        "- **Projected lag-screen failures** compares each complete version 3 profile window's aggregate lag rates with the startup bounds; it is diagnostic and is not an execution of the 952-sample startup test.",
+        "- **Projected lag-screen failures** compares each version 3-or-newer run's aggregate lag rates with the startup bounds; version 4 health diagnostics separately count exact non-overlapping 952-sample windows.",
         "- **Conservative H** is the lower of the marginal and first-order Markov estimates.",
         "- The aggregate headline is a worst-supported bound across the dataset, not an average calculator.",
         "",
@@ -242,6 +294,19 @@ def write_csv(path: Path, report: dict[str, Any]) -> None:
         "worst_lag4_correlation_heuristic",
         "projected_lag_screen_windows",
         "projected_lag_screen_failures",
+        "health_profile_windows",
+        "health_tests_evaluated_mask",
+        "health_tests_passed_mask",
+        "rct_failures",
+        "apt_windows",
+        "apt_failures",
+        "startup_marginal_failures",
+        "window_lag1_failures",
+        "window_lag2_failures",
+        "window_lag3_failures",
+        "window_lag4_failures",
+        "distribution_windows",
+        "distribution_failures",
         "markov_h_lower_99_bits_per_raw_bit",
         "first_order_dependency_factor",
         "conservative_h_bits_per_raw_bit",

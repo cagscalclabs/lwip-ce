@@ -34,7 +34,7 @@ static bool output_open(void)
 
 static bool output_line(const char *format, ...)
 {
-    char line[416];
+    char line[512];
     va_list args;
     int length;
 
@@ -116,9 +116,14 @@ int main(void)
         return 1;
     }
 
-    ok = output_line("rng_stats,version=3,runs=%u,samples_per_run=%lu,lags=4\n",
-                     (unsigned int)RNG_STATS_RUNS,
-                     (unsigned long)RNG_STATS_SAMPLES_PER_RUN);
+    ok = output_line(
+        "rng_stats,version=4,runs=%u,samples_per_run=%lu,lags=4,"
+        "rct_cutoff=%u,apt_window=%u,apt_cutoff=%u\n",
+        (unsigned int)RNG_STATS_RUNS,
+        (unsigned long)RNG_STATS_SAMPLES_PER_RUN,
+        (unsigned int)TLS_RNG_STATS_RCT_CUTOFF,
+        (unsigned int)TLS_RNG_STATS_APT_WINDOW,
+        (unsigned int)TLS_RNG_STATS_APT_CUTOFF);
 
     for (run = 0u; ok && (run < RNG_STATS_RUNS); run++)
     {
@@ -162,6 +167,54 @@ int main(void)
             (unsigned long)stats.p1_q16,
             (unsigned long)stats.bias_q16,
             (unsigned long)stats.transition_rate_q16);
+
+        if (ok)
+        {
+            ok = output_line(
+                "health_run=%u,evaluated=%02X,passed=%02X,rct_failures=%lu,"
+                "apt_windows=%lu,apt_failures=%lu,apt_min_ones=%lu,"
+                "apt_max_ones=%lu,startup_marginal_failures=%lu,"
+                "distribution_windows=%lu,distribution_failures=%lu,"
+                "distribution_min_ones=%lu,distribution_max_ones=%lu,"
+                "distribution_min_disagreements=%lu,"
+                "distribution_max_disagreements=%lu\n",
+                (unsigned int)run,
+                (unsigned int)stats.health_tests_evaluated,
+                (unsigned int)stats.health_tests_passed,
+                (unsigned long)stats.rct_failure_runs,
+                (unsigned long)stats.apt_windows,
+                (unsigned long)stats.apt_failures,
+                (unsigned long)stats.apt_min_ones,
+                (unsigned long)stats.apt_max_ones,
+                (unsigned long)stats.startup_marginal_failures,
+                (unsigned long)stats.distribution_windows,
+                (unsigned long)stats.distribution_failures,
+                (unsigned long)stats.distribution_min_ones,
+                (unsigned long)stats.distribution_max_ones,
+                (unsigned long)stats.distribution_min_disagreements,
+                (unsigned long)stats.distribution_max_disagreements);
+        }
+        if (ok)
+        {
+            ok = output_line(
+                "lag_health_run=%u,lag1_failures=%lu,lag1_min=%lu,lag1_max=%lu,"
+                "lag2_failures=%lu,lag2_min=%lu,lag2_max=%lu,"
+                "lag3_failures=%lu,lag3_min=%lu,lag3_max=%lu,"
+                "lag4_failures=%lu,lag4_min=%lu,lag4_max=%lu\n",
+                (unsigned int)run,
+                (unsigned long)stats.lag_window_failures[0],
+                (unsigned long)stats.lag_window_min_mismatches[0],
+                (unsigned long)stats.lag_window_max_mismatches[0],
+                (unsigned long)stats.lag_window_failures[1],
+                (unsigned long)stats.lag_window_min_mismatches[1],
+                (unsigned long)stats.lag_window_max_mismatches[1],
+                (unsigned long)stats.lag_window_failures[2],
+                (unsigned long)stats.lag_window_min_mismatches[2],
+                (unsigned long)stats.lag_window_max_mismatches[2],
+                (unsigned long)stats.lag_window_failures[3],
+                (unsigned long)stats.lag_window_min_mismatches[3],
+                (unsigned long)stats.lag_window_max_mismatches[3]);
+        }
 
         printf("src %06lX mask %02X\n",
                (unsigned long)stats.source_address,

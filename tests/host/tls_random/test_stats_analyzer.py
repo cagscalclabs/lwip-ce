@@ -74,4 +74,28 @@ iid = MODULE.transition_estimate(iid_counts, ones=500, zeros=500)
 assert abs(iid["lag1_phi"]) < 0.002
 assert iid["h_markov_plugin_bits_per_raw_bit"] > 0.99
 
-print("RNG stats analyzer passed: marginal, first-order, and lag-1..4 diagnostics")
+version4_text = """\
+rng_stats,version=4,runs=1,samples_per_run=1000,lags=4,rct_cutoff=76,apt_window=952,apt_cutoff=844
+run=0,source=D65800,mask=04,samples=1000,ones=500,zeros=500,transitions=500,n00=249,n01=250,n10=250,n11=250,lag1_mismatches=500,lag2_mismatches=490,lag3_mismatches=505,lag4_mismatches=480,longest=4,longest0=4,longest1=3,p1_q16=32768,bias_q16=0,transition_q16=32800
+health_run=0,evaluated=3F,passed=3F,rct_failures=0,apt_windows=1,apt_failures=0,apt_min_ones=476,apt_max_ones=476,startup_marginal_failures=0,distribution_windows=0,distribution_failures=0,distribution_min_ones=0,distribution_max_ones=0,distribution_min_disagreements=0,distribution_max_disagreements=0
+lag_health_run=0,lag1_failures=0,lag1_min=476,lag1_max=476,lag2_failures=0,lag2_min=465,lag2_max=465,lag3_failures=0,lag3_min=480,lag3_max=480,lag4_failures=0,lag4_min=455,lag4_max=455
+"""
+version4 = MODULE.analyze(MODULE.parse_runs(version4_text))
+version4_run = version4["runs"][0]
+assert version4_run["profiler_version"] == 4
+assert version4_run["health_diagnostics_available"]
+assert not version4_run["health_tests_all_evaluated"]
+assert version4_run["health_tests_all_passed"]
+assert version4_run["health_failure_total"] == 0
+assert version4["aggregate"]["health_profile_runs"] == 1
+assert version4["aggregate"]["health_tests_evaluated"] == 0x3F
+assert version4["aggregate"]["apt_windows"] == 1
+
+try:
+    MODULE.parse_runs("\n".join(version4_text.splitlines()[:-1]))
+except ValueError as error:
+    assert "missing health detail rows" in str(error)
+else:
+    raise AssertionError("version 4 capture without lag-health row was accepted")
+
+print("RNG stats analyzer passed: entropy, lag, and health diagnostics")

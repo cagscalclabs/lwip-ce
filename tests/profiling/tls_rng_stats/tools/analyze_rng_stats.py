@@ -18,6 +18,7 @@ Z_99 = 2.576
 # Bonferroni-adjusted one-sided z for four simultaneous 99% transition bounds.
 MARKOV_Z_99 = 2.807033768343811
 PROFILED_LAGS = range(1, 5)
+HEALTH_ALL_PASS = 0x7F
 # Startup qualification match bounds in random.s, over 952 samples.
 STARTUP_LAG_MATCH_BOUNDS = {
     1: (136, 815),
@@ -53,7 +54,12 @@ def parse_fields(line: str) -> dict[str, str]:
 
 def parse_runs(text: str) -> list[dict[str, int | str]]:
     runs: list[dict[str, int | str]] = []
+    profiler_version = 1
     for line in text.splitlines():
+        if line.startswith("rng_stats,"):
+            header = parse_fields(line)
+            profiler_version = int(header.get("version", "1"))
+            continue
         if not line.startswith("run="):
             continue
         fields = parse_fields(line)
@@ -73,7 +79,139 @@ def parse_runs(text: str) -> list[dict[str, int | str]]:
 
     if not runs:
         raise ValueError("no rng_stats run rows found")
+
+    by_run = {int(row["run"]): row for row in runs}
+    if len(by_run) != len(runs):
+        raise ValueError("duplicate rng_stats run number")
+    health_rows: set[int] = set()
+    lag_health_rows: set[int] = set()
+    for line in text.splitlines():
+        if line.startswith("health_run="):
+            fields = parse_fields(line)
+            run = int(fields.pop("health_run"))
+            if run not in by_run or run in health_rows:
+                raise ValueError(f"invalid or duplicate health row for run {run}")
+            health_rows.add(run)
+            for key, value in fields.items():
+                canonical = {
+                    "evaluated": "health_tests_evaluated",
+                    "passed": "health_tests_passed",
+                }.get(key, key)
+                by_run[run][canonical] = (
+                    int(value, 16) if key in {"evaluated", "passed"} else int(value)
+                )
+        elif line.startswith("lag_health_run="):
+            fields = parse_fields(line)
+            run = int(fields.pop("lag_health_run"))
+            if run not in by_run or run in lag_health_rows:
+                raise ValueError(f"invalid or duplicate lag-health row for run {run}")
+            lag_health_rows.add(run)
+            for key, value in fields.items():
+                by_run[run][f"window_{key}"] = int(value)
+
+    if profiler_version >= 4:
+        expected = set(by_run)
+        if health_rows != expected or lag_health_rows != expected:
+            raise ValueError("version 4 capture is missing health detail rows")
+    for row in runs:
+        row["profiler_version"] = profiler_version
     return runs
+
+
+def health_diagnostics(row: dict[str, Any]) -> dict[str, Any]:
+    """Validate and summarize version 4 production-window diagnostics."""
+    if "health_tests_evaluated" not in row:
+        return {
+            "health_diagnostics_available": False,
+            "health_tests_all_evaluated": None,
+            "health_tests_all_passed": None,
+            "health_failure_total": None,
+        }
+
+    evaluated = int(row["health_tests_evaluated"])
+    passed = int(row["health_tests_passed"])
+    if evaluated & ~HEALTH_ALL_PASS or passed & ~evaluated:
+        raise ValueError(f"run {row['run']} has an invalid health-test mask")
+
+    count_fields = [
+        "rct_failures",
+        "apt_windows",
+        "apt_failures",
+        "startup_marginal_failures",
+        "distribution_windows",
+        "distribution_failures",
+        *(f"window_lag{lag}_failures" for lag in PROFILED_LAGS),
+    ]
+    if any(int(row.get(field, -1)) < 0 for field in count_fields):
+        raise ValueError(f"run {row['run']} has incomplete health-test counts")
+    samples = int(row["samples"])
+    apt_windows = int(row["apt_windows"])
+    distribution_windows = int(row["distribution_windows"])
+    if apt_windows != samples // 952 or distribution_windows != samples // 1024:
+        raise ValueError(f"run {row['run']} has inconsistent health window counts")
+    expected_evaluated = 0x01
+    if apt_windows:
+        expected_evaluated |= 0x3E
+        if not (
+            0 <= int(row["apt_min_ones"]) <= int(row["apt_max_ones"]) <= 952
+        ):
+            raise ValueError(f"run {row['run']} has invalid APT extrema")
+        for lag in PROFILED_LAGS:
+            minimum = int(row[f"window_lag{lag}_min"])
+            maximum = int(row[f"window_lag{lag}_max"])
+            if not 0 <= minimum <= maximum <= 952 - lag:
+                raise ValueError(f"run {row['run']} has invalid lag-{lag} extrema")
+    if apt_windows and distribution_windows:
+        expected_evaluated |= 0x40
+    if distribution_windows and not (
+        0
+        <= int(row["distribution_min_ones"])
+        <= int(row["distribution_max_ones"])
+        <= 1024
+        and 0
+        <= int(row["distribution_min_disagreements"])
+        <= int(row["distribution_max_disagreements"])
+        <= 512
+    ):
+        raise ValueError(f"run {row['run']} has invalid distribution extrema")
+    if evaluated != expected_evaluated:
+        raise ValueError(f"run {row['run']} has an inconsistent evaluated mask")
+
+    bounded_failures = {
+        "apt_failures": apt_windows,
+        "startup_marginal_failures": apt_windows,
+        "distribution_failures": distribution_windows,
+        **{f"window_lag{lag}_failures": apt_windows for lag in PROFILED_LAGS},
+    }
+    if any(int(row[field]) > maximum for field, maximum in bounded_failures.items()):
+        raise ValueError(f"run {row['run']} has a failure count above its windows")
+
+    expected_passed = evaluated
+    if int(row["rct_failures"]):
+        expected_passed &= ~0x01
+    if int(row["apt_failures"]):
+        expected_passed &= ~0x02
+    for lag in PROFILED_LAGS:
+        if int(row[f"window_lag{lag}_failures"]):
+            expected_passed &= ~(1 << (lag + 1))
+    if int(row["startup_marginal_failures"]) or int(row["distribution_failures"]):
+        expected_passed &= ~0x40
+    if passed != expected_passed:
+        raise ValueError(f"run {row['run']} has an inconsistent passed mask")
+
+    failure_fields = [
+        "rct_failures",
+        "apt_failures",
+        "startup_marginal_failures",
+        "distribution_failures",
+        *(f"window_lag{lag}_failures" for lag in PROFILED_LAGS),
+    ]
+    return {
+        "health_diagnostics_available": True,
+        "health_tests_all_evaluated": evaluated == HEALTH_ALL_PASS,
+        "health_tests_all_passed": passed == evaluated,
+        "health_failure_total": sum(int(row[field]) for field in failure_fields),
+    }
 
 
 def estimate(ones: int, zeros: int) -> dict[str, float | int]:
@@ -337,6 +475,7 @@ def analyze_run(row: dict[str, int | str]) -> dict[str, Any]:
         **mcv,
         **transition,
         **lags,
+        **health_diagnostics(row),
         "transition_counts_source": stored_source,
         "first_order_dependency_factor": (
             min(
@@ -408,6 +547,41 @@ def analyze(runs: list[dict[str, int | str]]) -> dict[str, Any]:
             aggregate_lag_pairs,
         )
     )
+    health_runs = [
+        row for row in analyzed_runs if row["health_diagnostics_available"]
+    ]
+    aggregate["health_profile_runs"] = len(health_runs)
+    if health_runs:
+        evaluated = HEALTH_ALL_PASS
+        passed = HEALTH_ALL_PASS
+        for row in health_runs:
+            evaluated &= int(row["health_tests_evaluated"])
+            passed &= int(row["health_tests_passed"])
+        aggregate.update(
+            {
+                "health_tests_evaluated": evaluated,
+                "health_tests_passed": passed & evaluated,
+                "rct_failures": sum(int(row["rct_failures"]) for row in health_runs),
+                "apt_windows": sum(int(row["apt_windows"]) for row in health_runs),
+                "apt_failures": sum(int(row["apt_failures"]) for row in health_runs),
+                "startup_marginal_failures": sum(
+                    int(row["startup_marginal_failures"]) for row in health_runs
+                ),
+                "distribution_windows": sum(
+                    int(row["distribution_windows"]) for row in health_runs
+                ),
+                "distribution_failures": sum(
+                    int(row["distribution_failures"]) for row in health_runs
+                ),
+            }
+        )
+        for lag in PROFILED_LAGS:
+            aggregate[f"window_lag{lag}_failures"] = sum(
+                int(row[f"window_lag{lag}_failures"]) for row in health_runs
+            )
+    else:
+        aggregate["health_tests_evaluated"] = None
+        aggregate["health_tests_passed"] = None
     transition_counts_source = (
         "recorded"
         if all(
@@ -522,6 +696,35 @@ def write_csv(path: Path, report: dict[str, Any]) -> None:
         "longest",
         "longest0",
         "longest1",
+        "profiler_version",
+        "health_tests_evaluated",
+        "health_tests_passed",
+        "health_tests_all_evaluated",
+        "health_tests_all_passed",
+        "rct_failures",
+        "apt_windows",
+        "apt_failures",
+        "apt_min_ones",
+        "apt_max_ones",
+        "startup_marginal_failures",
+        "window_lag1_failures",
+        "window_lag1_min",
+        "window_lag1_max",
+        "window_lag2_failures",
+        "window_lag2_min",
+        "window_lag2_max",
+        "window_lag3_failures",
+        "window_lag3_min",
+        "window_lag3_max",
+        "window_lag4_failures",
+        "window_lag4_min",
+        "window_lag4_max",
+        "distribution_windows",
+        "distribution_failures",
+        "distribution_min_ones",
+        "distribution_max_ones",
+        "distribution_min_disagreements",
+        "distribution_max_disagreements",
     ]
     with path.open("w", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")

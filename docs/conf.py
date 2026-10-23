@@ -1,7 +1,18 @@
+import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REPO_ROOT = ROOT.parent
+
+_renderer_spec = importlib.util.spec_from_file_location(
+    "lwip_ce_tls_spec_renderer",
+    ROOT / "render_tls_specifications.py",
+)
+if _renderer_spec is None or _renderer_spec.loader is None:
+    raise RuntimeError("unable to load the TLS specification renderer")
+_renderer = importlib.util.module_from_spec(_renderer_spec)
+_renderer_spec.loader.exec_module(_renderer)
+render_tls_specifications = _renderer.render
 
 project = "lwIP-CE"
 author = "Anthony Cagliano"
@@ -28,11 +39,8 @@ html_theme_options = {
     "titles_only": False,
 }
 html_static_path = ["_static"]
-# Served as-is at the site root so the browser can apply the XSLT stylesheet
-# referenced by the XML's xml-stylesheet processing instruction.
 html_extra_path = [
     "tls-specifications.xml",
-    "tls-specifications.xsl",
 ]
 html_css_files = [
     "landing.css",
@@ -52,3 +60,16 @@ highlight_language = "c"
 suppress_warnings = [
     "duplicate_declaration.c",
 ]
+
+
+def _render_tls_ledger(app, exception):
+    """Write the standalone audit page after Sphinx has built its HTML tree."""
+    if exception is None and app.builder.format == "html":
+        render_tls_specifications(
+            ROOT / "tls-specifications.xml",
+            Path(app.outdir) / "tls-specifications.html",
+        )
+
+
+def setup(app):
+    app.connect("build-finished", _render_tls_ledger)
