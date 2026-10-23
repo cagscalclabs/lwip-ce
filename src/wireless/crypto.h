@@ -40,8 +40,12 @@ lwip_crypto_job_t lwip_crypto_rsa_verify(uint8_t alg, const uint8_t digest[32],
                                          const uint8_t *exponent, size_t exp_len,
                                          const uint8_t *sig);
 
+/* P-256 with an uncompressed point. point NULL: out gets our public key (65
+ * bytes). Otherwise out gets the ECDH shared secret's x-coordinate (32). The
+ * same lifetime rule as lwip_crypto_x25519() applies to out. */
 lwip_crypto_job_t lwip_crypto_p256(const uint8_t scalar[32], const uint8_t *point, uint8_t *out);
 
+/* ECDSA P-256 check over a SHA-256 digest; rs is r then s, big-endian. */
 lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t digest[32], const uint8_t pub[65],
                                           const uint8_t rs[64]);
 

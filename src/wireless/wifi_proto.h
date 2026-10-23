@@ -62,6 +62,10 @@ enum
  *                      modulus exponent signature[mod_len] (numbers big-endian)
  *                      -> CTL_ST_OK or CTL_ST_REJECTED
  *   CTL_OP_RANDOM      count -> count bytes from the bridge TRNG
+ *   CTL_OP_P256        scalar[32] -> uncompressed public key[65], or
+ *                      scalar[32] point[65] -> shared secret x-coordinate[32]
+ *   CTL_OP_ECDSA_VERIFY digest[32] public key[65] r[32] s[32]
+ *                      -> CTL_ST_OK or CTL_ST_REJECTED
  */
 #define CTL_CAP_X25519 LWIP_WIFI_CAP_X25519
 #define CTL_CAP_RSA LWIP_WIFI_CAP_RSA
