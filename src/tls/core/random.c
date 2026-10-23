@@ -1152,11 +1152,25 @@ bool tls_random_add_entropy(const uint8_t *data, size_t len)
         return false;
     if (len == TLS_HASH_DRBG_192_INSTANTIATE_BYTES)
     {
-        tls_drbg_reset();
-        if (!tls_hash_drbg_instantiate(&g_tls_drbg, data, len, TLS_RNG_STRENGTH_192))
+        uint8_t material[TLS_HASH_DRBG_192_INSTANTIATE_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES];
+        bool ok;
+
+        if (!g_tls_drbg.seeded)
             return false;
+        memcpy(material, data, len);
+        ok = tls_drbg_generate_bytes(&g_tls_drbg, material + len, TLS_HASH_DRBG_ENTROPY_BYTES) &&
+             tls_hash_drbg_instantiate(&g_tls_drbg_upgrade, material, sizeof(material),
+                                       TLS_RNG_STRENGTH_192);
+        tls_secure_memzero(material, sizeof(material));
+        if (!ok)
+        {
+            tls_hash_drbg_reset(&g_tls_drbg_upgrade);
+            return false;
+        }
+        memcpy(&g_tls_drbg, &g_tls_drbg_upgrade, sizeof(g_tls_drbg));
+        tls_hash_drbg_reset(&g_tls_drbg_upgrade);
+        tls_entropy_reserve_reset();
         g_tls_rng_state = TLS_RNG_DRBG_READY_192;
-        g_tls_rng_last_failure = 0;
         g_tls_rng_ready_deadline = 0;
         return true;
     }

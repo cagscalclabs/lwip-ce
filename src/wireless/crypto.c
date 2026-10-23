@@ -284,6 +284,8 @@ void lwip_crypto_reseed(void)
 {
     if (g_trng)
         request_random(CRYPTO_RESEED_BYTES);
+    else if (g_caps & CTL_CAP_RANDOM)
+        request_random(CRYPTO_INSTANTIATE_BYTES);
 }
 
 static void on_info(const uint8_t *header, struct pbuf *p)
@@ -304,8 +306,10 @@ static void on_info(const uint8_t *header, struct pbuf *p)
         request_random(CRYPTO_INSTANTIATE_BYTES);
 }
 
-/* The first answer replaces the DRBG state outright, so from then on every
- * random byte derives from the bridge TRNG; later answers reseed it. */
+/* The first answer is mixed with the calculator's own DRBG output into a fresh
+ * instance, so a faulty bridge cannot make random bytes predictable; later
+ * answers reseed it. Before the calculator's DRBG is seeded the answer is
+ * dropped, and the next handshake asks again. */
 static void on_random(const uint8_t *header, struct pbuf *p)
 {
     uint8_t bytes[CTL_RANDOM_MAX];

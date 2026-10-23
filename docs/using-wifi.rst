@@ -109,12 +109,14 @@ lwIP-CE app's **Security** section control it, and both are on by default:
     record encryption, certificate parsing and policy) itself.
 
 **Bridge TRNG**
-    The bridge's hardware random number generator becomes the entropy source.
-    As soon as the bridge answers, its output replaces the calculator's random
-    generator state outright, and each new TLS handshake reseeds it with fresh
-    bridge output. The calculator stops collecting its own entropy in the
-    background meanwhile. Until the bridge answers (and whenever it is
-    unplugged) the calculator's own source is used.
+    The bridge's hardware random number generator becomes the main entropy
+    source. Once the calculator's own generator is seeded, the bridge's output
+    is mixed with it into a fresh 192-bit generator, and each new TLS handshake
+    reseeds it with fresh bridge output. Because the calculator's own state is
+    part of the mix, a faulty bridge cannot make the output predictable. The
+    calculator stops collecting its own entropy in the background meanwhile.
+    Until the bridge answers (and whenever it is unplugged) the calculator's
+    own source is used alone.
 
 Offloading never changes a verdict. Signature checks run in parallel with the
 rest of the handshake, and the handshake waits for all of them before it sends

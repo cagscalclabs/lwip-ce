@@ -253,9 +253,10 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
 bool tls_rng_is_busy(void);
 
 /** Credits bytes from an external full-entropy source (the Wi-Fi bridge TRNG).
- * 48 bytes (entropy input and nonce) re-instantiate the DRBG at 192-bit
- * strength, discarding all earlier state; 24 bytes reseed it. Any other length
- * is rejected. */
+ * 48 bytes (entropy input and nonce) instantiate a fresh 192-bit DRBG from them
+ * together with output of the current one, so the result is no more
+ * predictable than either source; this needs the DRBG already seeded. 24 bytes
+ * reseed it. Any other length is rejected. */
 bool tls_random_add_entropy(const uint8_t *data, size_t len);
 
 /** While set, the local SRAM source stops gathering in the background and the
