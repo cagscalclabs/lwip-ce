@@ -22,7 +22,7 @@ typedef struct {
 } request_t;
 
 static QueueHandle_t s_queue;
-static uint8_t s_reply[CTL_HEADER + CTL_RANDOM_MAX];
+static uint8_t s_reply[CTL_HEADER + (CTL_RANDOM_MAX > 65 ? CTL_RANDOM_MAX : 65)];
 static uint8_t s_der[RSA_DER_MAX];
 
 /* The bridge only answers when it is sure. Anything it cannot work out is
@@ -54,6 +54,56 @@ static uint8_t x25519(const uint8_t *in, uint8_t *out)
         any |= out[i];
     }
     return any ? CTL_ST_OK : CTL_ST_REJECTED;
+}
+
+static uint8_t p256(const uint8_t *in, size_t in_len, uint8_t *out, size_t *used)
+{
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_id_t key;
+    psa_status_t err;
+    size_t length = 0;
+
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attributes, 256);
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DERIVE | PSA_KEY_USAGE_EXPORT);
+    psa_set_key_algorithm(&attributes, PSA_ALG_ECDH);
+    if (psa_import_key(&attributes, in, 32, &key) != PSA_SUCCESS) {
+        return CTL_ST_BAD_REQUEST;
+    }
+    if (in_len == 32) {
+        err = psa_export_public_key(key, out, 65, &length);
+    } else {
+        err = psa_raw_key_agreement(PSA_ALG_ECDH, key, in + 32, 65, out, 32, &length);
+    }
+    psa_destroy_key(key);
+    if (err != PSA_SUCCESS || length != (in_len == 32 ? 65u : 32u)) {
+        memset(out, 0, 65);
+        return CTL_ST_BAD_REQUEST;
+    }
+    *used = length;
+    return CTL_ST_OK;
+}
+
+static uint8_t ecdsa_verify(const uint8_t *in)
+{
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_algorithm_t alg = PSA_ALG_ECDSA(PSA_ALG_SHA_256);
+    psa_key_id_t key;
+    psa_status_t err;
+
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attributes, 256);
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_VERIFY_HASH);
+    psa_set_key_algorithm(&attributes, alg);
+    if (psa_import_key(&attributes, in + 32, 65, &key) != PSA_SUCCESS) {
+        return CTL_ST_BAD_REQUEST;
+    }
+    err = psa_verify_hash(key, alg, in, 32, in + 97, 64);
+    psa_destroy_key(key);
+    if (err == PSA_SUCCESS) {
+        return CTL_ST_OK;
+    }
+    return err == PSA_ERROR_INVALID_SIGNATURE ? CTL_ST_REJECTED : CTL_ST_BAD_REQUEST;
 }
 
 static size_t der_length(uint8_t *out, size_t length)
@@ -164,7 +214,7 @@ static void handle(const uint8_t *frame, size_t length)
 
     switch (frame[15]) {
     case CTL_OP_INFO:
-        out[0] = CTL_CAP_X25519 | CTL_CAP_RSA | CTL_CAP_RANDOM;
+        out[0] = CTL_CAP_X25519 | CTL_CAP_RSA | CTL_CAP_RANDOM | CTL_CAP_P256;
         used = 1;
         status = CTL_ST_OK;
         break;
@@ -176,6 +226,16 @@ static void handle(const uint8_t *frame, size_t length)
         break;
     case CTL_OP_RSA_VERIFY:
         status = rsa_verify(in, in_len);
+        break;
+    case CTL_OP_P256:
+        if (in_len == 32 || in_len == 97) {
+            status = p256(in, in_len, out, &used);
+        }
+        break;
+    case CTL_OP_ECDSA_VERIFY:
+        if (in_len == 161) {
+            status = ecdsa_verify(in);
+        }
         break;
     case CTL_OP_RANDOM:
         if (in_len >= 1 && in[0] > 0 && in[0] <= CTL_RANDOM_MAX) {
@@ -210,7 +270,7 @@ bool crypto_request(const uint8_t *frame, size_t length)
 {
     request_t *request;
 
-    if (frame[15] < CTL_OP_INFO || frame[15] > CTL_OP_RANDOM) {
+    if (frame[15] < CTL_OP_INFO || frame[15] > CTL_OP_ECDSA_VERIFY) {
         return false;
     }
     request = malloc(sizeof *request + length);

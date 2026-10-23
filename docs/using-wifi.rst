@@ -103,9 +103,9 @@ The bridge can also take over the slow parts of TLS. Two settings in the
 lwIP-CE app's **Security** section control it, and both are on by default:
 
 **Crypto offload**
-    The bridge computes the X25519 key exchange and checks the RSA signatures
-    on the server's certificate chain and CertificateVerify, using its hardware
-    accelerators. The calculator still runs the rest of TLS (key schedule,
+    The bridge computes the X25519 and P-256 key exchanges and checks the RSA
+    and ECDSA P-256 signatures on the server's certificate chain and
+    CertificateVerify, using its hardware accelerators. The calculator still runs the rest of TLS (key schedule,
     record encryption, certificate parsing and policy) itself.
 
 **Bridge TRNG**

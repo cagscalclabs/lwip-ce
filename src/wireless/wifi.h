@@ -16,6 +16,7 @@
 #define LWIP_WIFI_CAP_X25519 0x01
 #define LWIP_WIFI_CAP_RSA 0x02
 #define LWIP_WIFI_CAP_RANDOM 0x04
+#define LWIP_WIFI_CAP_P256 0x08
 #define LWIP_WIFI_RANDOM_MAX 64
 
 typedef enum

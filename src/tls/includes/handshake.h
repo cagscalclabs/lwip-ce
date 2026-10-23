@@ -237,7 +237,8 @@ extern "C"
          * server key share kept for a local fallback, and signature checks
          * still waiting for the bridge's verdict. */
         uint16_t ecdhe_job;
-        uint8_t ecdhe_peer[32];
+        uint16_t p256_job;
+        uint8_t ecdhe_peer[65];
         struct tls_deferred_verify *deferred;
 
         /* P-256 (secp256r1) ephemeral key pair for ECDHE */

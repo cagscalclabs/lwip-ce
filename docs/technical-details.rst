@@ -171,7 +171,8 @@ strings are a length byte followed by the bytes, without a terminator.
      - None.
    * - 10
      - Info
-     - Reply: crypto capabilities (bit 0 X25519, bit 1 RSA, bit 2 TRNG).
+     - Reply: crypto capabilities (bit 0 X25519, bit 1 RSA, bit 2 TRNG, bit 3
+       P-256).
    * - 11
      - X25519
      - Request: scalar (32), point (32; ``9`` for a public key). Reply: result
@@ -184,11 +185,20 @@ strings are a length byte followed by the bytes, without a terminator.
    * - 13
      - Random
      - Request: count (at most 64). Reply: that many TRNG bytes.
+   * - 14
+     - P-256
+     - Request: scalar (32), then optionally the peer's uncompressed point (65).
+       Reply: our uncompressed public key (65) without a point, otherwise the
+       shared secret's x-coordinate (32).
+   * - 15
+     - ECDSA verify
+     - Request: digest (32), uncompressed P-256 public key (65), signature as
+       r then s (32 each). Status 0 valid, 5 invalid.
    * - 64
      - Event
      - Sent unprompted as op ``0xC0`` when Wi-Fi connects or drops; body as Status.
 
-Ops 10 to 13 run on their own task on the bridge and may overlap, so their
+Ops 10 to 15 run on their own task on the bridge and may overlap, so their
 replies are matched by op and sequence number. The bridge answers status 1
 whenever it cannot decide; the calculator then does the work itself. See
 :doc:`using-wifi` for how the calculator uses them.

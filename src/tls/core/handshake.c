@@ -666,8 +666,9 @@ struct tls_deferred_verify
     tls_alg_t alg;
     uint8_t alert;
     uint8_t digest[32];
+    size_t sig_len;
     struct tls_key key; /* modulus and exponent point into data */
-    uint8_t data[];     /* modulus, exponent, signature */
+    uint8_t data[];     /* signature, then the key */
 };
 
 static void tls_deferred_free(struct tls_deferred_verify *d)
@@ -681,6 +682,22 @@ static void tls_deferred_free(struct tls_deferred_verify *d)
 
 /* Hands an RSA check to the bridge. Returns false when it must run locally:
  * offload unavailable, or a key the local code would reject outright. */
+static bool tls_ecdsa_sig_rs(const uint8_t *sig, size_t sig_len, uint8_t rs[64])
+{
+    const uint8_t *p;
+
+    if (!sig || sig_len < 8 || sig[0] != 0x30 || (sig[1] & 0x80) || 2u + sig[1] != sig_len)
+    {
+        return false;
+    }
+    p = tls_ecdsa_parse_int(sig + 2, sig_len - 2, rs);
+    if (p)
+    {
+        p = tls_ecdsa_parse_int(p, (size_t)(sig + sig_len - p), rs + 32);
+    }
+    return p == sig + sig_len;
+}
+
 static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg,
                                 const struct tls_key *key, const uint8_t digest[32],
                                 const uint8_t *sig, size_t sig_len, uint8_t alert)
@@ -688,27 +705,44 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
     const struct tls_rsa_key *rsa = &key->rsa;
     struct tls_deferred_verify *d;
     lwip_crypto_job_t job;
+    size_t key_len;
     size_t size;
+    uint8_t rs[64];
 
-    if (!ctx || key->type != TLS_KEY_TYPE_RSA ||
-        (alg != TLS_ALG_RSA_PKCS1_SHA256 && alg != TLS_ALG_RSA_PSS_RSAE_SHA256) ||
-        !tls_key_supports_operation(key, alg) || !rsa->modulus || !rsa->exponent ||
-        sig_len != rsa->mod_len || rsa->mod_len < RSA_MODULUS_MIN_SUPPORTED ||
-        rsa->mod_len > RSA_MODULUS_MAX_SUPPORTED ||
-        !(rsa->modulus[rsa->mod_len - 1] & 1) || rsa->exp_len == 0 || rsa->exp_len > 3)
+    if (!ctx || !tls_key_supports_operation(key, alg))
     {
         return false;
     }
-
-    job = lwip_crypto_rsa_verify(alg == TLS_ALG_RSA_PSS_RSAE_SHA256 ? CTL_RSA_PSS_SHA256
-                                                                   : CTL_RSA_PKCS1_SHA256,
-                                 digest, rsa->modulus, rsa->mod_len, rsa->exponent,
-                                 rsa->exp_len, sig);
+    if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256)
+    {
+        if (!key->ec.data || key->ec.len != 65 || !tls_ecdsa_sig_rs(sig, sig_len, rs))
+        {
+            return false;
+        }
+        job = lwip_crypto_p256_verify(digest, key->ec.data, rs);
+        key_len = 65;
+    }
+    else if ((alg == TLS_ALG_RSA_PKCS1_SHA256 || alg == TLS_ALG_RSA_PSS_RSAE_SHA256) &&
+             rsa->modulus && rsa->exponent && sig_len == rsa->mod_len &&
+             rsa->mod_len >= RSA_MODULUS_MIN_SUPPORTED &&
+             rsa->mod_len <= RSA_MODULUS_MAX_SUPPORTED &&
+             (rsa->modulus[rsa->mod_len - 1] & 1) && rsa->exp_len != 0 && rsa->exp_len <= 3)
+    {
+        job = lwip_crypto_rsa_verify(alg == TLS_ALG_RSA_PSS_RSAE_SHA256 ? CTL_RSA_PSS_SHA256
+                                                                       : CTL_RSA_PKCS1_SHA256,
+                                     digest, rsa->modulus, rsa->mod_len, rsa->exponent,
+                                     rsa->exp_len, sig);
+        key_len = rsa->mod_len + rsa->exp_len;
+    }
+    else
+    {
+        return false;
+    }
     if (!job)
     {
         return false;
     }
-    size = sizeof(*d) + 2 * rsa->mod_len + rsa->exp_len;
+    size = sizeof(*d) + key_len + sig_len;
     d = (struct tls_deferred_verify *)mem_buffer_custom_malloc(size);
     if (!d)
     {
@@ -723,14 +757,24 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
     d->alg = alg;
     d->alert = alert;
     memcpy(d->digest, digest, sizeof(d->digest));
-    d->key.type = TLS_KEY_TYPE_RSA;
-    d->key.rsa.mod_len = rsa->mod_len;
-    d->key.rsa.modulus = d->data;
-    d->key.rsa.exp_len = rsa->exp_len;
-    d->key.rsa.exponent = d->data + rsa->mod_len;
-    memcpy(d->data, rsa->modulus, rsa->mod_len);
-    memcpy(d->data + rsa->mod_len, rsa->exponent, rsa->exp_len);
-    memcpy(d->data + rsa->mod_len + rsa->exp_len, sig, sig_len);
+    d->sig_len = sig_len;
+    d->key.type = key->type;
+    memcpy(d->data, sig, sig_len);
+    if (key->type == TLS_KEY_TYPE_EC_P256)
+    {
+        d->key.ec.len = 65;
+        d->key.ec.data = d->data + sig_len;
+        memcpy(d->data + sig_len, key->ec.data, 65);
+    }
+    else
+    {
+        d->key.rsa.mod_len = rsa->mod_len;
+        d->key.rsa.modulus = d->data + sig_len;
+        d->key.rsa.exp_len = rsa->exp_len;
+        d->key.rsa.exponent = d->data + sig_len + rsa->mod_len;
+        memcpy(d->data + sig_len, rsa->modulus, rsa->mod_len);
+        memcpy(d->data + sig_len + rsa->mod_len, rsa->exponent, rsa->exp_len);
+    }
     d->next = ctx->deferred;
     ctx->deferred = d;
     return true;
@@ -1902,9 +1946,14 @@ bool tls_handshake_init(
     }
 
     INFO("init: P-256 public key");
-    tls_crypto_guard_enable();
-    bool p256_ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
-    tls_crypto_guard_disable();
+    ctx->p256_job = lwip_crypto_p256(ctx->p256_private, NULL, ctx->p256_public);
+    bool p256_ok = ctx->p256_job != 0;
+    if (!p256_ok)
+    {
+        tls_crypto_guard_enable();
+        p256_ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
+        tls_crypto_guard_disable();
+    }
     if (!p256_ok)
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
@@ -2895,6 +2944,14 @@ bool tls_recv_server_hello(
                     ERROR_CODE(0x5a);
                     return false;
                 }
+                memcpy(ctx->ecdhe_peer, data + offset + 4, 65);
+                ctx->p256_job = lwip_crypto_p256(ctx->p256_private, ctx->ecdhe_peer,
+                                                 ctx->ecdhe_shared);
+                if (ctx->p256_job)
+                {
+                    ctx->ecdhe_negotiated = true;
+                    break;
+                }
                 /* Compute P-256 ECDH shared secret. */
                 tls_crypto_guard_enable();
                 bool p256_ok = tls_p256_secret(ctx->ecdhe_shared,
@@ -3789,32 +3846,20 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
     tls_hash_update(&hash_ctx, transcript, sizeof(transcript));
     tls_hash_digest(&hash_ctx, message_hash);
 
+    if (tls_verify_deferred(ctx, TLS_ALG_ECDSA_SECP256R1_SHA256, &ctx->leaf_pubkey,
+                            message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
+    {
+        tls_secure_memzero(message_hash, sizeof(message_hash));
+        return true;
+    }
+
     /* Parse DER SEQUENCE { INTEGER r, INTEGER s } → flat 64-byte r||s.
-     * Structure: 30 <seq_len> 02 <r_len> [r bytes] 02 <s_len> [s bytes].
      * Integers are parsed as strict DER (minimal, non-negative) by
      * tls_ecdsa_parse_int (x509.c). */
-    if (sig_len < 8 || sig[0] != 0x30)
+    if (!tls_ecdsa_sig_rs(sig, sig_len, rs))
     {
         ERROR_CODE(0x89);
         return false;
-    }
-    size_t seq_len = sig[1];
-    /* Only support short-form length for this signature. */
-    if (seq_len & 0x80 || 2 + seq_len != sig_len)
-    {
-        ERROR_CODE(0x89);
-        return false;
-    }
-    {
-        const uint8_t *end = sig + sig_len;
-        const uint8_t *p = tls_ecdsa_parse_int(sig + 2, sig_len - 2, rs);
-        if (p)
-            p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
-        if (p != end)   /* NULL (parse error) or trailing bytes */
-        {
-            ERROR_CODE(0x89);
-            return false;
-        }
     }
 
     tls_crypto_guard_enable();
@@ -5121,50 +5166,66 @@ bool tls_send_close_notify(struct tls_handshake_context *ctx)
     return ok;
 }
 
-/**
- * @brief Clean up handshake context
- */
-int tls_offload_settle(struct tls_handshake_context *ctx)
+static int tls_settle_ecdhe(struct tls_handshake_context *ctx, uint16_t *job, bool p256)
 {
-    if (ctx->ecdhe_job)
-    {
-        /* Before ServerHello the job makes our public key; after, the
-         * shared secret. */
-        bool secret = ctx->ecdhe_negotiated;
-        uint8_t *out = secret ? ctx->ecdhe_shared : ctx->ecdhe_public;
-        lwip_crypto_status_t status = lwip_crypto_take(ctx->ecdhe_job);
-        bool ok;
+    /* Before ServerHello the job makes our public key; after, the
+     * shared secret. */
+    bool secret = ctx->ecdhe_negotiated;
+    uint8_t *priv = p256 ? ctx->p256_private : ctx->ecdhe_private;
+    lwip_crypto_status_t status = lwip_crypto_take(*job);
+    bool ok;
 
-        if (status == LWIP_CRYPTO_PENDING)
-        {
-            return 0;
-        }
-        ctx->ecdhe_job = 0;
-        if (status == LWIP_CRYPTO_FAILED)
-        {
-            ok = secret ? tls_x25519_secret(out, ctx->ecdhe_private, ctx->ecdhe_peer, NULL, NULL)
-                        : tls_x25519_publickey(out, ctx->ecdhe_private, NULL, NULL);
-        }
-        else
-        {
-            ok = status == LWIP_CRYPTO_OK;
-        }
+    if (status == LWIP_CRYPTO_PENDING)
+    {
+        return 0;
+    }
+    *job = 0;
+    if (status == LWIP_CRYPTO_FAILED && p256)
+    {
+        tls_crypto_guard_enable();
+        ok = secret ? tls_p256_secret(ctx->ecdhe_shared, priv, ctx->ecdhe_peer)
+                    : tls_p256_publickey(ctx->p256_public, priv);
+        tls_crypto_guard_disable();
+    }
+    else if (status == LWIP_CRYPTO_FAILED)
+    {
+        ok = secret ? tls_x25519_secret(ctx->ecdhe_shared, priv, ctx->ecdhe_peer, NULL, NULL)
+                    : tls_x25519_publickey(ctx->ecdhe_public, priv, NULL, NULL);
+    }
+    else
+    {
+        ok = status == LWIP_CRYPTO_OK;
+    }
+    if (secret)
+    {
+        tls_secure_memzero(priv, 32);
+    }
+    if (!ok)
+    {
+        ERROR();
+        tls_secure_memzero(priv, 32);
+        tls_secure_memzero(ctx->ecdhe_shared, sizeof(ctx->ecdhe_shared));
         if (secret)
         {
-            tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
         }
-        if (!ok)
-        {
-            ERROR();
-            tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
-            tls_secure_memzero(ctx->ecdhe_shared, sizeof(ctx->ecdhe_shared));
-            if (secret)
-            {
-                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
-            }
-            ctx->state = TLS_STATE_ERROR;
-            return -1;
-        }
+        ctx->state = TLS_STATE_ERROR;
+        return -1;
+    }
+    return 1;
+}
+
+int tls_offload_settle(struct tls_handshake_context *ctx)
+{
+    int settled;
+
+    if (ctx->ecdhe_job && (settled = tls_settle_ecdhe(ctx, &ctx->ecdhe_job, false)) <= 0)
+    {
+        return settled;
+    }
+    if (ctx->p256_job && (settled = tls_settle_ecdhe(ctx, &ctx->p256_job, true)) <= 0)
+    {
+        return settled;
     }
 
     while (ctx->deferred)
@@ -5181,9 +5242,7 @@ int tls_offload_settle(struct tls_handshake_context *ctx)
         d->job = 0;
         ok = status == LWIP_CRYPTO_OK ||
              (status == LWIP_CRYPTO_FAILED &&
-              tls_x509_signature_verify_digest(d->digest,
-                                               d->data + d->key.rsa.mod_len + d->key.rsa.exp_len,
-                                               d->key.rsa.mod_len, &d->key, d->alg) == TLS_KEY_OP_OK);
+              tls_x509_signature_verify_digest(d->digest, d->data, d->sig_len, &d->key, d->alg) == TLS_KEY_OP_OK);
         ctx->deferred = d->next;
         tls_deferred_free(d);
         if (!ok)
@@ -5197,6 +5256,9 @@ int tls_offload_settle(struct tls_handshake_context *ctx)
     return 1;
 }
 
+/**
+ * @brief Clean up handshake context
+ */
 void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 {
     if (!ctx)
@@ -5205,6 +5267,7 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     }
 
     lwip_crypto_cancel(ctx->ecdhe_job);
+    lwip_crypto_cancel(ctx->p256_job);
     while (ctx->deferred)
     {
         struct tls_deferred_verify *d = ctx->deferred;

@@ -190,6 +190,41 @@ lwip_crypto_job_t lwip_crypto_rsa_verify(uint8_t alg, const uint8_t digest[32],
     return send(job, p);
 }
 
+lwip_crypto_job_t lwip_crypto_p256(const uint8_t scalar[32], const uint8_t *point, uint8_t *out)
+{
+    struct pbuf *p;
+    job_t *job = start(CTL_CAP_P256, CTL_OP_P256, point ? 97 : 32, &p);
+    uint8_t *body;
+
+    if (!job)
+        return 0;
+    job->out = out;
+    job->out_len = point ? 32 : 65;
+    body = (uint8_t *)p->payload + CTL_HEADER;
+    memcpy(body, scalar, 32);
+    if (point)
+        memcpy(body + 32, point, 65);
+    return send(job, p);
+}
+
+lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t digest[32], const uint8_t pub[65],
+                                          const uint8_t rs[64])
+{
+    struct pbuf *p;
+    job_t *job = start(CTL_CAP_P256, CTL_OP_ECDSA_VERIFY, 161, &p);
+    uint8_t *body;
+
+    if (!job)
+        return 0;
+    job->out = NULL;
+    job->out_len = 0;
+    body = (uint8_t *)p->payload + CTL_HEADER;
+    memcpy(body, digest, 32);
+    memcpy(body + 32, pub, 65);
+    memcpy(body + 97, rs, 64);
+    return send(job, p);
+}
+
 lwip_crypto_job_t lwip_crypto_random(uint8_t *out, uint8_t len)
 {
     struct pbuf *p;
@@ -261,7 +296,7 @@ static void on_info(const uint8_t *header, struct pbuf *p)
         pbuf_copy_partial(p, &caps, 1, CTL_HEADER) != 1)
         return;
     if (cfg->crypto_offload)
-        wanted |= CTL_CAP_X25519 | CTL_CAP_RSA;
+        wanted |= CTL_CAP_X25519 | CTL_CAP_RSA | CTL_CAP_P256;
     if (cfg->bridge_rng)
         wanted |= CTL_CAP_RANDOM;
     g_caps = caps & wanted;
@@ -293,7 +328,7 @@ bool lwip_crypto_reply(const uint8_t *header, struct pbuf *p)
     uint8_t op = header[15] & (uint8_t)~CTL_REPLY;
 
     if (header[14] != CTL_VERSION || !(header[15] & CTL_REPLY) || op < CTL_OP_INFO ||
-        op > CTL_OP_RANDOM)
+        op > CTL_OP_ECDSA_VERIFY)
         return false;
 
     if (op == CTL_OP_INFO)
