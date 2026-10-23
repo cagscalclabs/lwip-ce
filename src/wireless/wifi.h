@@ -18,6 +18,7 @@
 #define LWIP_WIFI_CAP_RANDOM 0x04
 #define LWIP_WIFI_CAP_P256 0x08
 #define LWIP_WIFI_RANDOM_MAX 64
+#define LWIP_WIFI_VERSION_MAX 32
 
 typedef enum
 {
@@ -105,6 +106,11 @@ lwip_wifi_error_t lwip_wifi_prefer_profile(uint8_t slot);
 lwip_wifi_error_t lwip_wifi_connect(uint8_t slot);
 
 lwip_wifi_error_t lwip_wifi_disconnect(void);
+
+/* The bridge firmware's version, such as "v1.2.0", into out (size bytes,
+ * LWIP_WIFI_VERSION_MAX + 1 holds any). An empty string with LWIP_WIFI_OK means
+ * the firmware predates version reporting and should be updated. */
+lwip_wifi_error_t lwip_wifi_bridge_version(char *out, size_t size);
 
 /* Crypto on the bridge. TLS already uses it on its own; these are for programs.
  * They wait for the answer, so call them from the main loop, not from a socket

@@ -469,3 +469,4 @@ lwip_wifi_crypto_caps
 lwip_wifi_x25519
 lwip_wifi_rsa_verify
 lwip_wifi_random
+lwip_wifi_bridge_version

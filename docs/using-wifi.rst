@@ -187,6 +187,9 @@ returns ``LWIP_WIFI_ERR_BUSY``.
    * - ``lwip_wifi_disconnect()``
      - Leaves the current network and stops automatic joining until the next
        ``lwip_wifi_connect()``.
+   * - ``lwip_wifi_bridge_version(out, size)``
+     - The bridge firmware's version string. Empty when the firmware is too old
+       to report one; the lwIP-CE app's Wi-Fi screen then asks you to update it.
    * - ``lwip_wifi_set_event_cb(fn, arg)``
      - Registers a callback that receives the new state whenever the bridge
        joins or leaves a network. Pass ``NULL`` to remove it.

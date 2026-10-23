@@ -26,6 +26,7 @@
 #define PROFILES_MAX 8
 #define NETWORKS_MAX 20
 #define ITEMS_MAX (PROFILES_MAX + NETWORKS_MAX + 8)
+#define VERSION_LINE_MAX (LWIP_WIFI_VERSION_MAX + 24)
 
 static bool g_net_started;
 static bool g_net_failed;
@@ -39,6 +40,8 @@ static lwip_wifi_network_t *g_networks;
 static uint8_t g_network_count;
 static ui_item_t *g_items;
 static char (*g_values)[24];
+static char *g_version;
+static bool g_version_ok;
 
 static const char *const security_names[] = {
     "Open", "WEP", "WPA", "WPA2", "WPA3", "WPA2/WPA3"
@@ -79,7 +82,8 @@ static bool net_start(void)
     g_networks = mem_malloc(NETWORKS_MAX * sizeof *g_networks);
     g_items = mem_malloc(ITEMS_MAX * sizeof *g_items);
     g_values = mem_malloc(ITEMS_MAX * sizeof *g_values);
-    if (!g_profiles || !g_networks || !g_items || !g_values)
+    g_version = mem_malloc(VERSION_LINE_MAX);
+    if (!g_profiles || !g_networks || !g_items || !g_values || !g_version)
         return false;
     lwip_wifi_set_event_cb(on_wifi_event, NULL);
     if (usb_fn.init(eth_usb_event_callback, NULL, &eth_device_descriptors, USB_DEFAULT_INIT_FLAGS) != USB_SUCCESS)
@@ -265,10 +269,17 @@ static bool wait_for_bridge(void)
 
 static void refresh(void)
 {
+    char version[LWIP_WIFI_VERSION_MAX + 1];
+    lwip_wifi_error_t err;
+
     ui_busy("Wi-Fi", "Talking to the bridge...");
     g_state_valid = lwip_wifi_get_state(&g_state) == LWIP_WIFI_OK;
     if (lwip_wifi_list_profiles(g_profiles, PROFILES_MAX, &g_profile_count) != LWIP_WIFI_OK)
         g_profile_count = 0;
+    err = lwip_wifi_bridge_version(version, sizeof version);
+    g_version_ok = err == LWIP_WIFI_OK && version[0];
+    snprintf(g_version, VERSION_LINE_MAX, "Bridge firmware %s",
+             g_version_ok ? version : err == LWIP_WIFI_OK ? "is old, please update it" : "unknown");
 }
 
 static bool joined(uint8_t slot)
@@ -545,6 +556,8 @@ static int build_main(uint8_t *roles, int8_t *profile_index)
         g_items[count] = (ui_item_t){UI_ITEM_ACTION, "Join automatically", "Best saved network in range", NULL,
                                      false, 0};
     roles[count++] = ROW_JOIN;
+    g_items[count] = (ui_item_t){UI_ITEM_LINE, g_version, NULL, NULL, false, g_version_ok ? UI_MUTED : UI_WARN};
+    roles[count++] = ROW_OTHER;
     return count;
 }
 

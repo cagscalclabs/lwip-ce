@@ -173,7 +173,8 @@ strings are a length byte followed by the bytes, without a terminator.
    * - 10
      - Info
      - Reply: crypto capabilities (bit 0 X25519, bit 1 RSA, bit 2 TRNG, bit 3
-       P-256).
+       P-256), firmware version (string, at most 32 characters; absent from
+       older firmware).
    * - 11
      - X25519
      - Request: scalar (32), point (32; ``9`` for a public key). Reply: result

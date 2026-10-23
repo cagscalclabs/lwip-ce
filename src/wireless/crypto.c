@@ -335,8 +335,11 @@ bool lwip_crypto_reply(const uint8_t *header, struct pbuf *p)
         op > CTL_OP_ECDSA_VERIFY)
         return false;
 
+    /* Other Info requests are a program's, waiting in wifi.c. */
     if (op == CTL_OP_INFO)
     {
+        if (header[16] != g_info_seq)
+            return false;
         on_info(header, p);
         return true;
     }

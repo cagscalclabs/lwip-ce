@@ -471,3 +471,4 @@
 	export	lwip_wifi_x25519
 	export	lwip_wifi_rsa_verify
 	export	lwip_wifi_random
+	export	lwip_wifi_bridge_version

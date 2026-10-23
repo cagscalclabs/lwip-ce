@@ -55,7 +55,8 @@ enum
 /* Crypto offload. These requests may overlap: each reply is matched by op
  * and sequence number, not just the most recent request.
  *
- *   CTL_OP_INFO        -> caps (CTL_CAP_*)
+ *   CTL_OP_INFO        -> caps (CTL_CAP_*) version (length byte, then at most
+ *                      LWIP_WIFI_VERSION_MAX characters; absent from older firmware)
  *   CTL_OP_X25519      scalar[32] point[32] -> X25519(scalar, point)[32];
  *                      CTL_ST_REJECTED for an all-zero result
  *   CTL_OP_RSA_VERIFY  alg digest[32] mod_len[2, little-endian] exp_len

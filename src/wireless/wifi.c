@@ -377,6 +377,26 @@ static lwip_wifi_error_t settle(lwip_crypto_job_t job)
     return status == LWIP_CRYPTO_REJECTED ? LWIP_WIFI_ERR_REJECTED : LWIP_WIFI_ERR_TIMEOUT;
 }
 
+lwip_wifi_error_t lwip_wifi_bridge_version(char *out, size_t size)
+{
+    lwip_wifi_error_t err;
+    size_t length = 0;
+
+    if (!out || !size)
+        return LWIP_WIFI_ERR_BAD_REQUEST;
+    out[0] = '\0';
+    err = request(CTL_OP_INFO, NULL, 0, WIFI_SHORT_TIMEOUT_MS);
+    if (err != LWIP_WIFI_OK)
+        return err;
+    if (g_reply_len >= 2 && 2u + g_reply[1] <= g_reply_len)
+        length = g_reply[1];
+    if (length >= size)
+        length = size - 1;
+    memcpy(out, &g_reply[2], length);
+    out[length] = '\0';
+    return release(LWIP_WIFI_OK);
+}
+
 uint8_t lwip_wifi_crypto_caps(void)
 {
     return lwip_crypto_caps();

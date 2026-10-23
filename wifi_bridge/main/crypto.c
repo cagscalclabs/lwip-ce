@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "psa/crypto.h"
@@ -213,11 +214,17 @@ static void handle(const uint8_t *frame, size_t length)
     size_t used = 0;
 
     switch (frame[15]) {
-    case CTL_OP_INFO:
+    case CTL_OP_INFO: {
+        const char *version = esp_app_get_description()->version;
+        size_t length = strnlen(version, LWIP_WIFI_VERSION_MAX);
+
         out[0] = CTL_CAP_X25519 | CTL_CAP_RSA | CTL_CAP_RANDOM | CTL_CAP_P256;
-        used = 1;
+        out[1] = (uint8_t)length;
+        memcpy(out + 2, version, length);
+        used = 2 + length;
         status = CTL_ST_OK;
         break;
+    }
     case CTL_OP_X25519:
         if (in_len == 64) {
             status = x25519(in, out);
