@@ -178,6 +178,7 @@
 #include "../includes/rsa.h"
 #include "x509_internal.h"
 #include "../includes/truststore.h"
+#include "../includes/tls.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
@@ -2870,6 +2871,15 @@ bool tls_recv_server_hello(
         ERROR_CODE(0x5f);
         return false;
     }
+
+    /* Reject psk_ke (PSK without ECDHE): RFC 8446 §4.2.9 requires psk_dhe_ke
+     * when we sent a key_share — accepting psk_ke silently drops forward secrecy. */
+    if (found_psk && !ctx->ecdhe_negotiated)
+    {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_HANDSHAKE_FAILURE);
+        return false;
+    }
+
     ctx->psk_mode = found_psk;
 
     /* Step 9: Update transcript hash with ServerHello */
@@ -3027,6 +3037,13 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                 ctx->state = TLS_STATE_ERROR;
                 return false;
             }
+        }
+        else if (tls_ctx.truststore.status != TLS_STORE_OK &&
+                 tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
+        {
+            ctx->state = TLS_STATE_ERROR;
+            ERROR_CODE(tls_ctx.truststore.status);
+            return false;
         }
         else
         {

@@ -40,7 +40,8 @@ typedef enum
     TLS_STORE_SIZE_INVALID,
     TLS_STORE_VERSION_MISMATCH,
     TLS_STORE_HASH_FAIL,
-    TLS_STORE_SIG_INVALID
+    TLS_STORE_SIG_INVALID,
+    TLS_STORE_UNCHECKED
 } tls_truststore_status_t;
 
 struct tls_truststore_state
@@ -84,6 +85,8 @@ struct tls_truststore_entry
  * @returns [tls_truststore_status_t] status code
  */
 tls_truststore_status_t tls_truststore_init(void);
+
+void tls_truststore_prepare(void);
 
 /********************
  * @brief Attempts to find a certificate by Subject Key Identifier in the trust store.

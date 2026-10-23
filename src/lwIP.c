@@ -190,7 +190,8 @@ static lwip_socket_io_data_t    lwip_socket_io_data;
 
 typedef enum
 {
-    CONN_PENDING_RESOLVING = 0,
+    CONN_PENDING_WAITING_SERVICES = 0,
+    CONN_PENDING_RESOLVING,
     CONN_PENDING_CONNECTING,
     CONN_PENDING_CONNECTED,
     CONN_PENDING_READABLE,
@@ -248,10 +249,6 @@ static lwip_error_t socket_attach_netif(struct lwip_socket *conn,
 
 #ifndef LWIP_STOP_TCP_CLOSE_TIMEOUT_MS
 #define LWIP_STOP_TCP_CLOSE_TIMEOUT_MS LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT
-#endif
-
-#ifndef LWIP_SOCKET_CLOSE_TIMEOUT_MS
-#define LWIP_SOCKET_CLOSE_TIMEOUT_MS 3000u
 #endif
 
 #ifndef LWIP_NETIF_SERVICE_REQUEST_MAX
@@ -357,6 +354,7 @@ void lwip_stop(void)
 void lwip_service_events(void)
 {
     usb_fn.handle_events();
+    netif_poll_all();
     sys_check_timeouts();
     lwip_log_file_flush();
     if (!g_lwip_stopping)
@@ -575,7 +573,8 @@ static bool conn_event_pop(struct lwip_socket *conn,
 
 static bool conn_pending_is_state_event(conn_pending_event_t event)
 {
-    return event == CONN_PENDING_RESOLVING ||
+    return event == CONN_PENDING_WAITING_SERVICES ||
+           event == CONN_PENDING_RESOLVING ||
            event == CONN_PENDING_CONNECTING ||
            event == CONN_PENDING_CONNECTED ||
            event == CONN_PENDING_CLOSING ||
@@ -589,6 +588,8 @@ static lwip_status_t conn_pending_status(conn_pending_event_t event,
 {
     switch (event)
     {
+    case CONN_PENDING_WAITING_SERVICES:
+        return LWIP_STATUS_WAITING_SERVICES;
     case CONN_PENDING_RESOLVING:
         return LWIP_STATUS_RESOLVING;
     case CONN_PENDING_CONNECTING:
@@ -825,6 +826,7 @@ static void conn_registry_mark_closed(lwip_error_t err)
 static void lwip_stop_pump_once(void)
 {
     usb_fn.handle_events();
+    netif_poll_all();
     sys_check_timeouts();
 }
 
@@ -840,57 +842,6 @@ static bool lwip_stop_wait_for_tcp(uint32_t timeout_ms)
         lwip_stop_pump_once();
     }
     return true;
-}
-
-static bool lwip_wait_for_tcp_pcb_close(struct tcp_pcb *pcb, uint32_t timeout_ms)
-{
-    uint32_t deadline;
-
-    if (!pcb)
-    {
-        return true;
-    }
-
-    deadline = sys_now() + timeout_ms;
-    while (lwip_teardown_tcp_pcb_pending(pcb))
-    {
-        if ((int32_t)(sys_now() - deadline) >= 0)
-        {
-            return false;
-        }
-        lwip_stop_pump_once();
-    }
-    return true;
-}
-
-static struct tcp_pcb *lwip_socket_leaf_tcp_pcb(struct lwip_socket *conn)
-{
-    if (!conn)
-    {
-        return NULL;
-    }
-
-    switch ((lwip_socket_type_t)conn->protocol)
-    {
-#if LWIP_TCP
-    case LWIP_SOCKET_TCP:
-        return conn->pcb.tcp;
-#endif
-    case LWIP_SOCKET_ALTCP:
-    case LWIP_SOCKET_ALTCP_TLS:
-    case LWIP_SOCKET_ALTCP_WS:
-    case LWIP_SOCKET_ALTCP_WSS:
-    {
-        struct altcp_pcb *leaf = conn->pcb.altcp;
-        while (leaf && leaf->inner_conn)
-        {
-            leaf = leaf->inner_conn;
-        }
-        return leaf ? (struct tcp_pcb *)leaf->state : NULL;
-    }
-    default:
-        return NULL;
-    }
 }
 
 static lwip_error_t lwip_socket_rx_ring_create(struct lwip_socket *conn)
@@ -951,11 +902,18 @@ static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
         ERROR();
         return false;
     }
-    if (!mem_buffer_reserve(conn->rx_ring, p->tot_len))
+    bool framed = conn->protocol == LWIP_SOCKET_UDP;
+    if (!mem_buffer_reserve(conn->rx_ring, p->tot_len + (framed ? 2u : 0u)))
     {
-        ERROR_CODE(p->tot_len);
-        conn->last_error = LWIP_ERR_MEM;
         return false;
+    }
+    if (framed)
+    {
+        uint8_t hdr[2] = {(uint8_t)p->tot_len, (uint8_t)(p->tot_len >> 8)};
+        if (!mem_buffer_push(conn->rx_ring, hdr, sizeof(hdr)))
+        {
+            return false;
+        }
     }
 
     for (struct pbuf *q = p; q; q = q->next)
@@ -1168,6 +1126,9 @@ static void lwip_stack_cleanup(void)
     {
         netif_set_link_down(n);
         netif_set_down(n);
+#if LWIP_DHCP
+        dhcp_cleanup(n);
+#endif
     }
 
     /* Do not close OS/file state owned by the consumer program. The
@@ -1544,7 +1505,8 @@ static bool socket_network_ready(const struct lwip_socket *conn, uint8_t flags)
         return false;
     return conn->netif && netif_is_up(conn->netif) &&
            netif_is_link_up(conn->netif) &&
-           netif_address_configuration_ready(conn->netif) &&
+           (netif_is_loop_network(conn->netif) ||
+            netif_address_configuration_ready(conn->netif)) &&
            lwip_are_services_ready(conn->netif, flags);
 }
 
@@ -2051,7 +2013,8 @@ static void conn_connect_watchdog(uint32_t now)
         {
             /* No timeout configured or not in a monitored state: disarm and
              * keep activity snapshot current for the next connect attempt. */
-            conn->connect_deadline = 0;
+            if (conn->status != LWIP_STATUS_WAITING_SERVICES)
+                conn->connect_deadline = 0;
             conn->activity_seen = activity;
             conn = next;
             continue;
@@ -2093,6 +2056,7 @@ static void conn_connect_watchdog(uint32_t now)
 static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
                                 struct pbuf *p, err_t err)
 {
+    (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
     if (!c)
     {
@@ -2127,12 +2091,8 @@ static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
     }
     if (!lwip_socket_buffer_pbuf(c, p))
     {
-        conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_MEM,
-                           LWIP_SOCKET_ERR_OP_RECV, (int)ERR_MEM,
-                           LWIP_ERR_MEM);
         return ERR_MEM;
     }
-    altcp_recved(pcb, p->tot_len);
     pbuf_free(p);
     conn_event_enqueue(c, CONN_PENDING_READABLE, LWIP_OK);
     return ERR_OK;
@@ -2271,6 +2231,7 @@ static void conn_udp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
                               struct pbuf *p, err_t err)
 {
+    (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
     if (!c)
     {
@@ -2305,12 +2266,8 @@ static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
     }
     if (!lwip_socket_buffer_pbuf(c, p))
     {
-        conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_MEM,
-                           LWIP_SOCKET_ERR_OP_RECV, (int)ERR_MEM,
-                           LWIP_ERR_MEM);
         return ERR_MEM;
     }
-    tcp_recved(pcb, p->tot_len);
     pbuf_free(p);
     conn_event_enqueue(c, CONN_PENDING_READABLE, LWIP_OK);
     return ERR_OK;
@@ -2871,17 +2828,15 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
          conn->protocol == LWIP_SOCKET_ALTCP_WSS) &&
         conn->pcb.altcp == NULL)
     {
-        const char *ws_path = conn->ws_conf ? conn->ws_conf->path : "/";
-        const char *ws_sub  = conn->ws_conf ? conn->ws_conf->subprotocol : NULL;
+        altcp_ws_config_t *old_conf = conn->ws_conf;
 
-        /* ws_conf created by the socket layer is the app's — free it, rebuild
-         * with the resolved host so the HTTP Host header is correct. */
-        if (conn->ws_conf)
-        {
-            altcp_ws_free_config(conn->ws_conf);
-            conn->ws_conf = NULL;
-        }
-        conn->ws_conf = altcp_ws_create_config(host, ws_path, ws_sub);
+        /* ws_conf created by the socket layer is the app's — rebuild it with
+         * the resolved host so the HTTP Host header is correct. */
+        conn->ws_conf = altcp_ws_create_config(host,
+                                               old_conf ? old_conf->path : "/",
+                                               old_conf ? old_conf->subprotocol : NULL);
+        if (old_conf)
+            altcp_ws_free_config(old_conf);
         if (!conn->ws_conf)
         {
             conn->status     = LWIP_STATUS_ERROR;
@@ -2945,6 +2900,10 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         rebind_pcb_callbacks(conn);
     }
 
+    if (conn->protocol == LWIP_SOCKET_ALTCP_TLS ||
+        conn->protocol == LWIP_SOCKET_ALTCP_WSS)
+        sys_restart_timeouts();
+
     /* IPv4 / IPv6 literal short-circuits DNS. Try v4 first because it
      * fails fast on anything containing ':'; v6 succeeds on either
      * '::1'-style or v4-mapped forms. */
@@ -2999,7 +2958,6 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     conn->status = LWIP_STATUS_RESOLVING;
     conn_event_enqueue(conn, CONN_PENDING_RESOLVING, LWIP_OK);
     INFO("dns: lookup begin");
-    INFO(conn->pending_host);
     err_t derr = dns_gethostbyname(conn->pending_host, &conn->remote_ip,
                                    conn_dns_found_cb, conn);
     if (derr == ERR_OK)
@@ -3075,6 +3033,7 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
         conn->pending_svc_flags = svc;
         conn->connect_deadline = sys_now() + conn_window_ms(conn);
         conn->status = LWIP_STATUS_WAITING_SERVICES;
+        conn_event_enqueue(conn, CONN_PENDING_WAITING_SERVICES, LWIP_OK);
         /* The socket owns this wait. Do not allocate an unbounded,
          * anonymous service request that outlives a cancelled connection. */
         services_arm();
@@ -3115,7 +3074,7 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     peer->pcb.tcp  = newpcb;
     peer->netif    = listener->netif;
     peer->rx_ring_init = LWIP_SOCKET_RX_RING_INIT_SIZE;
-    peer->rx_ring_max  = LWIP_SOCKET_RX_RING_MAX_SIZE;
+    peer->rx_ring_max  = listener->rx_ring_max;
 
     if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
     {
@@ -3199,6 +3158,10 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
         }
         return LWIP_ERR_STATE;
     }
+    if (len > 0xFFFFu ||
+        ((conn->protocol == LWIP_SOCKET_TCP ||
+          conn->protocol == LWIP_SOCKET_ALTCP) && len > TCP_SND_BUF))
+        return LWIP_ERR_ARG;
 
     switch ((lwip_socket_type_t)conn->protocol)
     {
@@ -3285,7 +3248,37 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
 
 size_t lwip_socket_available(const struct lwip_socket *conn)
 {
-    return (conn && conn->rx_ring) ? mem_buffer_len(conn->rx_ring) : 0;
+    if (!conn || !conn->rx_ring)
+        return 0;
+    if (conn->protocol == LWIP_SOCKET_UDP)
+    {
+        uint8_t hdr[2];
+        if (!mem_buffer_peek(conn->rx_ring, 0, hdr, sizeof(hdr)))
+            return 0;
+        return (size_t)hdr[0] | ((size_t)hdr[1] << 8);
+    }
+    return mem_buffer_len(conn->rx_ring);
+}
+
+static size_t lwip_socket_read_datagram(struct lwip_socket *conn,
+                                        uint8_t *buf, size_t len)
+{
+    uint8_t hdr[2];
+    if (mem_buffer_pop(conn->rx_ring, hdr, sizeof(hdr)) != sizeof(hdr))
+        return 0;
+    size_t left = (size_t)hdr[0] | ((size_t)hdr[1] << 8);
+    size_t take = len < left ? len : left;
+    if (take)
+        mem_buffer_pop(conn->rx_ring, buf, take);
+    left -= take;
+    while (left)
+    {
+        uint8_t skip[32];
+        size_t n = left < sizeof(skip) ? left : sizeof(skip);
+        mem_buffer_pop(conn->rx_ring, skip, n);
+        left -= n;
+    }
+    return take;
 }
 
 size_t lwip_socket_read(struct lwip_socket *conn, uint8_t *buf, size_t len)
@@ -3300,11 +3293,34 @@ size_t lwip_socket_read(struct lwip_socket *conn, uint8_t *buf, size_t len)
     {
         return 0;
     }
+    if (conn->protocol == LWIP_SOCKET_UDP)
+    {
+        return lwip_socket_read_datagram(conn, buf, len);
+    }
     if (len > avail)
     {
         len = avail;
     }
-    return mem_buffer_pop(conn->rx_ring, buf, len);
+    len = mem_buffer_pop(conn->rx_ring, buf, len);
+    switch ((lwip_socket_type_t)conn->protocol)
+    {
+#if LWIP_TCP
+    case LWIP_SOCKET_TCP:
+        if (conn->pcb.tcp && !conn->is_listen)
+            tcp_recved(conn->pcb.tcp, (u16_t)len);
+        break;
+#endif
+    case LWIP_SOCKET_ALTCP:
+    case LWIP_SOCKET_ALTCP_TLS:
+    case LWIP_SOCKET_ALTCP_WS:
+    case LWIP_SOCKET_ALTCP_WSS:
+        if (conn->pcb.altcp)
+            altcp_recved(conn->pcb.altcp, (u16_t)len);
+        break;
+    default:
+        break;
+    }
+    return len;
 }
 
 lwip_status_t lwip_socket_status(const struct lwip_socket *conn)
@@ -3382,13 +3398,8 @@ lwip_error_t lwip_socket_shutdown(struct lwip_socket *conn)
 
 lwip_error_t lwip_socket_close(struct lwip_socket *conn)
 {
-    struct tcp_pcb *closing_tcp;
-    bool wait_for_tcp;
-
     if (!conn)
         return LWIP_ERR_ARG;
-    closing_tcp = lwip_socket_leaf_tcp_pcb(conn);
-    wait_for_tcp = closing_tcp && !g_lwip_stopping;
 
     lwip_socket_set_pending_host(conn, NULL);
 
@@ -3466,13 +3477,6 @@ lwip_error_t lwip_socket_close(struct lwip_socket *conn)
     conn->status = LWIP_STATUS_CLOSED;
     conn_event_enqueue(conn, CONN_PENDING_CLOSED, LWIP_OK);
     conn_registry_remove(conn);
-    if (wait_for_tcp &&
-        !lwip_wait_for_tcp_pcb_close(closing_tcp, LWIP_SOCKET_CLOSE_TIMEOUT_MS))
-    {
-        lwip_teardown_abort_tcp_pcb(closing_tcp);
-        conn->last_error = LWIP_ERR_CLOSED;
-        return LWIP_ERR_CLOSED;
-    }
     return LWIP_OK;
 }
 

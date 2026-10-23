@@ -14,9 +14,9 @@ dylib: build
 	cp bin/LWIP.lib build/lwip.lib
 	cp bin/LWIP.*.8xv build/appinst/
 	cp bin/INSTALL.8xp build/appinst/lwIPINST.8xp
-	mkdir -p "$(CEDEV_TOOLCHAIN)/lib/libload" "$(CEDEV_TOOLCHAIN)/include"
+	mkdir -p "$(CEDEV_TOOLCHAIN)/lib/libload" "$(CEDEV_TOOLCHAIN)/include/lwip"
 	cp build/lwip.lib "$(CEDEV_TOOLCHAIN)/lib/libload/lwip.lib"
-	cp -R build/lwip "$(CEDEV_TOOLCHAIN)/include/lwip"
+	cp -R build/lwip/. "$(CEDEV_TOOLCHAIN)/include/lwip"
 	cp build/lwip.h build/cryptography.h build/parsers.h "$(CEDEV_TOOLCHAIN)/include/"
 	mkdir -p tests/common
 	cp build/appinst/* build/lwip.8xv build/lwip.lib tests/common/

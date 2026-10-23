@@ -67,6 +67,9 @@ typedef struct altcp_tls_ce_state {
 /* tls_handshake_init has been called successfully for this state. Set once;
  * cleared on reset. Guards the deferred-init path in send_client_hello. */
 #define ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED   0x20
+/* Plaintext is being delivered to the application. An app recv callback may
+ * call altcp_recved(), which must not re-enter delivery. */
+#define ALTCP_TLS_CE_FLAGS_RX_BUSY           0x40
 
 /**
  * @brief TLS configuration for CE implementation

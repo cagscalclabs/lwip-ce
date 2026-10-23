@@ -55,6 +55,8 @@ int main(void) {
     services_dispatch();assert(c.status==LWIP_STATUS_ERROR && !c.pending_host);
     now=0;wait_on(&c,"example.com");apply_error=9;
     services_dispatch();assert(c.status==LWIP_STATUS_ERROR && !c.pending_host);
+    struct netif lo={true,true,false,true,0};c.netif=&lo;
+    assert(socket_network_ready(&c,0));
     assert(starts);puts("Socket readiness regressions passed (ASan + UBSan)");
     return 0;
 }

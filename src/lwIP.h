@@ -412,7 +412,7 @@ lwip_error_t lwip_socket_resize_rx_max(struct lwip_socket *socket,
 
 /** Set the WebSocket path and optional subprotocol for a WS/WSS socket.
  *  Must be called after lwip_socket_create() and before lwip_socket_connect().
- *  Strings are borrowed — caller must keep them alive until connect() returns.
+ *  The strings are copied; the caller does not need to keep them alive.
  *  The host field is filled in automatically at connect time. */
 lwip_error_t lwip_socket_set_ws_config(struct lwip_socket *socket,
                                        const char *path,

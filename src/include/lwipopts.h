@@ -20,7 +20,8 @@
 #define LWIP_NETIF_HOSTNAME 1
 #define LWIP_NETIF_REMOVE_CALLBACK 1
 
-#define LWIP_CHKSUM_ALGORITHM 1 // todo: does this do anything?
+uint16_t lwip_ce_chksum(const void *dataptr, int len);
+#define LWIP_CHKSUM lwip_ce_chksum
 
 #define LWIP_IGMP LWIP_IPV4
 #define LWIP_ICMP LWIP_IPV4
@@ -226,7 +227,7 @@ a lot of data that needs to be copied, this should be set high. */
 #define TCP_SNDLOWAT (TCP_SND_BUF / 2)
 
 /* TCP receive window. */
-#define TCP_WND (16 * TCP_MSS)
+#define TCP_WND (8 * TCP_MSS)
 
 /* Window-update threshold: how much freed receive window must accumulate
  * before lwIP proactively advertises it to the peer.
@@ -361,7 +362,9 @@ a lot of data that needs to be copied, this should be set high. */
 
 /* miscellanous */
 #define HTTPD_SERVER_PORT 80
-#define LWIP_RAND rand
+uint32_t lwip_ce_rand(void);
+#define LWIP_RAND lwip_ce_rand
+#define LWIP_HOOK_TCP_ISN(local_ip, local_port, remote_ip, remote_port) lwip_ce_rand()
 
 /* ---------- SNTP options ---------- */
 /* Set the system time when SNTP receives a response */

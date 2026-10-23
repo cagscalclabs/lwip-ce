@@ -53,6 +53,7 @@ bool tls_rsa_encrypt(const uint8_t *in, size_t len, uint8_t *out,
 static size_t allocated;
 uint8_t __rsa_transient[RSA_TRANSIENT_SIZE];
 static struct tls_truststore_entry *root_entry;
+static struct { struct { tls_truststore_status_t status; } truststore; } tls_ctx;
 static void *mem_buffer_custom_malloc(size_t n) { return malloc(n); }
 static void mem_buffer_custom_free(void *p) { free(p); }
 static void *tls_fileio_alloc(size_t n) { return malloc(n); }
