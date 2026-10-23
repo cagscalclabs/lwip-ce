@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tls-specifications>
+  <requirement>
+    <ref>RFC 5869</ref>
+    <section>2.3</section>
+    <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L257-265) -> tls_hkdf_expand (L105-172)</location>
+    <grade>COMPLIANT</grade>
+    <note>Full HkdfLabel passed as info; T(i)=HMAC(PRK, T(i-1)|info|i), L &gt; 255*HashLen rejected, final block truncated correctly. RFC 5869 vectors pass for Expand (tests/unit/tls_hkdf).</note>
+  </requirement>
+  <requirement>
+    <ref>RFC 8446</ref>
+    <section>7.1</section>
+    <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L239-240) - HkdfLabel.length</location>
+    <grade>COMPLIANT</grade>
+    <note>uint16 big-endian, equals out_len passed as L; no explicit &lt;= 0xFFFF check but tls_hkdf_expand caps at 8160 (hkdf.c:127).</note>
+  </requirement>
+  <requirement>
+    <ref>RFC 8446</ref>
+    <section>7.1</section>
+    <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L201-203, 212-216, 243-247) - HkdfLabel.label</location>
+    <grade>COMPLIANT</grade>
+    <note>Length byte = 6 + label_len; prefix exactly "tls13 " (no NUL); 7..255 bound enforced fail-closed; all caller label lengths match.</note>
+  </requirement>
+  <requirement>
+    <ref>RFC 8446</ref>
+    <section>7.1</section>
+    <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L219-222, 250-254) - HkdfLabel.context</location>
+    <grade>COMPLIANT</grade>
+    <note>Context &gt; 255 rejected; empty context encoded as 0x00; assembled size checked against 520-byte scratch (L225); label wiped after use (L266).</note>
+  </requirement>
+  <requirement>
+    <ref>RFC 8446</ref>
+    <section>7.1</section>
+    <location>src/tls/core/hkdf.c: tls_derive_secret (L278-306) - Derive-Secret</location>
+    <grade>COMPLIANT</grade>
+    <note>Context length must equal hash length (32); output length forced to hash length.</note>
+  </requirement>
+  <requirement>
+    <ref>RFC 8446</ref>
+    <section>7.1</section>
+    <location>src/tls/core/handshake.c: tls_send_client_hello, tls_derive_handshake_keys, tls_derive_application_keys, Finished generation, tls_recv_new_session_ticket, tls_recv_key_update, tls_ratchet_client_application_keys - Derive-Secret/Expand-Label callers</location>
+    <grade>COMPLIANT</grade>
+    <note>All label/context pairings match spec (also 4.2.11.2, 4.4.4, 4.6.1, 7.2). Transcript snapshot timing at altcp call sites verified via code comments only, not call-order trace.</note>
+  </requirement>
+  <requirement>
+    <ref>RFC 8446</ref>
+    <section>7.1</section>
+    <location>src/tls/core/handshake.c: tls_derive_handshake_keys (L3943-3947), tls_derive_application_keys (L4109-4113), Finished generation (L4267-4274) - missing transcript handling</location>
+    <grade>DEVIANT</grade>
+    <note>Low severity. If ctx-&gt;transcript_hash is NULL, 32 zero bytes are silently used as Transcript-Hash and derivation continues (fail-open in principle; peer Finished check would fail in practice). Fix: return error when transcript_hash is NULL.</note>
+  </requirement>
+  <requirement>
+    <ref>RFC 8446</ref>
+    <section>7.1</section>
+    <location>tests/unit/tls_hkdf/src/main.c: test_hkdf_expand_label (L306-310) - KAT evidence</location>
+    <grade>NEEDS-EVIDENCE</grade>
+    <note>Test is a stub returning true (code comment: "TODO: Implement HKDF-Expand-Label test" / "Stub - not yet implemented"). No KAT for label construction; only indirect evidence is live-server interop. Add RFC 8448 section 3 vectors.</note>
+  </requirement>
+</tls-specifications>

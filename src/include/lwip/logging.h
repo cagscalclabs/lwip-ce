@@ -29,6 +29,7 @@ extern "C" {
  *   if (degraded)      { WARN(); }
  *   DEBUG();                          // fires only when the {file,line} changes
  *   ERROR_CODE(status);               // ERROR + a caller-supplied uint16_t
+ *   ERROR_INFO("named failure");       // textual ERROR without traceback entry
  *   WARN_CODE(bitmask);
  *   INFO("sent ClientHello");         // milestone, payload is the string itself
  *   STATE_CHG(conn, LWIP_STATE_CONN_ESTABLISHED);
@@ -95,6 +96,7 @@ typedef enum lwip_debug_file_id
     LWIP_FILE_TEARDOWN,             /* core/teardown.c           */
     LWIP_FILE_LOGGING,              /* core/logging.c            */
     LWIP_FILE_MAIN,                 /* main.c (config app)       */
+    LWIP_FILE_LOG_FILE,             /* core/log_file.c           */
 
     /* Appended to preserve existing traceback IDs. */
     LWIP_FILE_DNS,
@@ -116,8 +118,33 @@ typedef enum lwip_event_kind
     LWIP_EV_STATE_CHG,    /* meaningful state transition; data.state         */
     LWIP_EV_IO_FILE,      /* appvar/flash read or write; data.file           */
     LWIP_EV_IO_ETH,       /* network bytes rx/tx; data.eth                   */
-    LWIP_EV_POWER         /* USB/calc power state change; data.power         */
+    LWIP_EV_POWER,        /* USB/calc power state change; data.power         */
+    /* Appended to preserve existing event-kind values. */
+    LWIP_EV_ERROR_MSG     /* named error detail; data.msg                    */
 } lwip_event_kind_t;
+
+/**
+ * User-configurable verbosity gate. Each level admits itself and every level
+ * above it: ERROR admits only ERROR; WARNING admits WARNING+ERROR; INFO adds
+ * INFO; DEBUG admits everything, including self-throttled DEBUG trace points
+ * and STATE_CHG/IO_FILE/IO_ETH/POWER events. Applied once, centrally, in
+ * lwip_event_emit_*() before the event reaches the callback — individual
+ * call sites never need to check it themselves.
+ */
+typedef enum lwip_log_verbosity
+{
+    LWIP_LOG_VERBOSITY_ERROR = 0,
+    LWIP_LOG_VERBOSITY_WARNING,
+    LWIP_LOG_VERBOSITY_INFO,
+    LWIP_LOG_VERBOSITY_DEBUG
+} lwip_log_verbosity_t;
+
+/** Install the verbosity gate. Events below the configured level are dropped
+ *  before reaching the event callback. Default is LWIP_LOG_VERBOSITY_INFO. */
+void lwip_set_log_verbosity(lwip_log_verbosity_t level);
+
+/** Return the currently configured verbosity gate. */
+lwip_log_verbosity_t lwip_get_log_verbosity(void);
 
 /**
  * Power event subtypes for LWIP_EV_POWER events (lwip_event.data.power.subtype).
@@ -189,7 +216,7 @@ struct lwip_event
     uint8_t kind;    /* lwip_event_kind_t   */
     union
     {
-        const char *msg;        /* INFO: literal message               */
+        const char *msg;        /* INFO / ERROR_MSG: message           */
         struct
         {
             uint32_t loc;        /* LWIP_EVENT_CODE(file_id, line)      */
@@ -250,8 +277,20 @@ typedef void (*lwip_event_fn)(const struct lwip_event *ev);
  * depth filter any more — every emitted event reaches the callback (DEBUG is
  * already self-throttling: it only fires when the {file,line} it's raised at
  * changes from the previous DEBUG emit).
+ *
+ * @internal Not part of the public API (absent from exports.txt and
+ * public_api_manifest.csv on purpose). The user's persisted config
+ * (file_log_enabled / log_verbosity, set from the config app UI) is the
+ * sole authority over what gets observed and logged; log_file.c is the only
+ * caller, from lwip_log_file_start()/lwip_log_file_stop(). A dev embedding
+ * this stack must not be able to install a callback that bypasses, starves,
+ * or silently disables the user's file logger.
  */
 void lwip_set_event_cb(lwip_event_fn event_fn);
+
+/** Return the currently installed event callback (NULL if none).
+ * @internal Not part of the public API; see lwip_set_event_cb(). */
+lwip_event_fn lwip_get_event_cb(void);
 
 /** Return recent WARN/ERROR/socket-error trace entries, newest first.
  *  The returned pointer is owned by lwIP and remains valid until the next call
@@ -273,6 +312,7 @@ const char *lwip_debug_state_change_name(uint16_t change_event);
  * -------------------------------------------------------------------- */
 void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra);
 void lwip_event_emit_info(uint8_t module, const char *msg);
+void lwip_event_emit_error_info(uint8_t module, const char *msg);
 void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event);
 void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes);
 void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes);
@@ -318,6 +358,10 @@ void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
 
 #define INFO(str) \
     lwip_event_emit_info(LWIP_DBG_MODULE, (str))
+
+#define ERROR_INFO(str) \
+    lwip_event_emit_error_info(LWIP_DBG_MODULE, (str))
+
 
 #define STATE_CHG(owner, change_event) \
     lwip_event_emit_state(LWIP_DBG_MODULE, (void *)(owner), (uint16_t)(change_event))

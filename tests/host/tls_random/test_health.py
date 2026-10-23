@@ -5,10 +5,13 @@ the assembly source. Hardware tests remain responsible for exercising the
 actual SRAM read path and candidate replacement logic.
 """
 from pathlib import Path
+import math
 import re
 
 
-SOURCE = (Path(__file__).resolve().parents[3] / "src/tls/core/random.s").read_text()
+ROOT = Path(__file__).resolve().parents[3]
+SOURCE = (ROOT / "src/tls/core/random.s").read_text()
+C_SOURCE = (ROOT / "src/tls/core/random.c").read_text()
 
 
 def constant(name: str) -> int:
@@ -20,8 +23,67 @@ def constant(name: str) -> int:
 RCT_CUTOFF = constant("_sprng_rct_cutoff")
 APT_WINDOW = constant("_sprng_apt_window")
 APT_CUTOFF = constant("_sprng_apt_cutoff")
+STARTUP_BYTES = constant("_sprng_startup_bytes")
+STARTUP_LAG_COUNT = constant("_sprng_startup_lag_count")
 
-assert (RCT_CUTOFF, APT_WINDOW, APT_CUTOFF) == (51, 1024, 840)
+assert (RCT_CUTOFF, APT_WINDOW, APT_CUTOFF) == (76, 952, 844)
+assert STARTUP_BYTES * 8 == APT_WINDOW
+assert STARTUP_LAG_COUNT == 4
+assert "#define TLS_ENTROPY_HMIN_Q16 UINT32_C(17630)" in C_SOURCE
+assert "#define TLS_HASH_DRBG_ENTROPY_BYTES 24u" in C_SOURCE
+
+# Tie both cutoffs to the configured Q16 entropy floor and alpha=2^-20.
+h_min = 17630 / 65536
+p_max = 2 ** -h_min
+alpha = 2 ** -20
+assert (952 * 17630) >> 16 == 256
+assert 1 + math.ceil(20 / h_min) == RCT_CUTOFF
+tail_at_cutoff = sum(
+    math.comb(APT_WINDOW, k)
+    * p_max**k
+    * (1 - p_max) ** (APT_WINDOW - k)
+    for k in range(APT_CUTOFF, APT_WINDOW + 1)
+)
+tail_below_cutoff = tail_at_cutoff + (
+    math.comb(APT_WINDOW, APT_CUTOFF - 1)
+    * p_max ** (APT_CUTOFF - 1)
+    * (1 - p_max) ** (APT_WINDOW - APT_CUTOFF + 1)
+)
+assert tail_at_cutoff <= alpha < tail_below_cutoff
+assert "call .Lstartup_lag_tests" in SOURCE
+gather = SOURCE.split("_tls_entropy_gather192:", 1)[1].split(".Lsample_bits:", 1)[0]
+assert ".Lstartup_lag_tests" not in gather
+assert ".Lrandom_post_fail" not in SOURCE
+assert "_sprng_markov_max_q8" not in SOURCE
+assert "ld (_sprng_last_health_mask),a" in SOURCE
+assert "and a,$FF-_sprng_test_rct_pass" in SOURCE
+assert "and a,$FF-_sprng_test_apt_pass" in SOURCE
+validation = SOURCE.split(".Linit_validate_candidate:", 1)[1].split(
+    "; Clear the bit-sliced", 1
+)[0]
+assert validation.count("call .Lsample_health_check") == 2
+assert validation.count("call .Linit_startup_marginal_check") == 2
+assert "ld b,4" in SOURCE
+assert "lea iy,iy+6" in SOURCE
+assert ".zero 24" in SOURCE
+
+
+def selection_rank(ones, disagreements):
+    """Return the assembly selector's lexicographic score, or None."""
+    if not 128 <= ones <= 384 or not 64 <= disagreements <= 192:
+        return None
+    return (
+        min(ones, 512 - ones) - 128,
+        min(disagreements, 256 - disagreements),
+    )
+
+
+# A balanced tap wins even when the biased tap has a perfect transition score.
+assert selection_rank(256, 112) > selection_rank(160, 128)
+assert selection_rank(255, 120) > selection_rank(250, 128)
+assert selection_rank(256, 128) > selection_rank(256, 120)
+assert selection_rank(127, 128) is None
+assert selection_rank(256, 193) is None
 
 
 def health_ok(bits):
@@ -68,9 +130,17 @@ assert health_ok([0, 1] * 2048)
 assert health_ok([1] * (RCT_CUTOFF - 1))
 assert not health_ok([1] * RCT_CUTOFF)
 
+# APT counts are per collection/window, not lifetime totals. Across two
+# individually healthy windows either symbol may occur more than the cutoff.
+balanced_window = [0, 1, 0, 1, 0] * 190 + [0, 0]
+assert len(balanced_window) == APT_WINDOW
+assert health_ok(balanced_window * 2)
+
 # Strongly biased without a long repeated run: exercises the APT rather than RCT.
-biased = ([0] * 5 + [1]) * 171
+# With H=0.269, APT_CUTOFF=844; a 19:1 pattern gives about 904 matches
+# without approaching the RCT cutoff.
+biased = ([0] * 19 + [1]) * 52
 assert max(len(run) for run in "".join(map(str, biased)).split("1")) < RCT_CUTOFF
 assert not health_ok(biased)
 
-print("RNG health model passed: RCT=51, binary APT W=1024/C=840")
+print("RNG health model passed: RCT=76, binary APT W=952/C=844")

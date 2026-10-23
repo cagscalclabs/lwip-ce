@@ -36,6 +36,7 @@
 #include "lwip/timeouts.h"
 #include "lwip/app_config.h"
 #include "lwip/logging.h"
+#include "lwip/log_file.h"
 #include "lwip/teardown.h"
 #include "lwip/dispatch.h"
 #include "lwip/sys.h"
@@ -51,6 +52,7 @@
 #include "apps/altcp_ws/altcp_ws.h"
 #include "tls/includes/tls.h"
 #include "wireless/wifi_hook.h"
+#include "tls/includes/random.h"
 
 #include <usbdrvce.h>
 #include <string.h>
@@ -111,6 +113,11 @@ struct lwip_socket
     } pcb;
     struct altcp_tls_ce_config *tls_conf;
     struct altcp_ws_config     *ws_conf;
+    /* Optional external PSK for LWIP_SOCKET_ALTCP_TLS; both fields are
+     * zero/NULL until lwip_socket_set_tls_psk() is called. */
+    uint8_t  tls_psk[32];
+    uint8_t  tls_psk_identity[TLS_PSK_IDENTITY_MAX_LEN];
+    size_t   tls_psk_identity_len;
     struct mem_buffer          *rx_ring;
     size_t                      rx_ring_init;
     size_t                      rx_ring_max;
@@ -155,7 +162,15 @@ struct lwip_socket
  * automatically. Currently: 2026-10-04T00:00:00Z. */
 #define LWIP_MIN_PLAUSIBLE_CLOCK_UNIX 1791086400u
 
+/* lwip_init_runtime_internal() clears the library BSS on every program load,
+ * so this cannot remain stale across callers even though the library itself
+ * is flash-resident.  Within one caller it makes lwip_stack_init() idempotent:
+ * lwip_start() initializes the core during bootstrap, and lwip_network_up()
+ * must not initialize the same pools, timeout lists, and callbacks again. */
 static bool g_lwip_stack_started = false;
+
+/* Same-run network readiness flag: true once lwip_network_up() has actually
+ * brought USB up, false again once lwip_stop()/cleanup begins. */
 static bool g_lwip_started = false;
 static bool g_lwip_stopping = false;
 static lwip_app_config_t g_lwip_cfg;
@@ -261,12 +276,6 @@ const char *lwip_version_string(void)
  * without updating every test under tests/unit/ first. */
 bool lwip_stack_init(void)
 {
-    /* Runs on every call, even when the stack is already up: g_lwip_stack_started
-     * is a flash-resident static that outlives any single program's lifetime
-     * (nothing calls lwip_stop() on normal exit), so this is the only
-     * reliably-repeated hook available to keep correcting an implausible
-     * clock across separate program launches. Cheap and idempotent --
-     * lwip_sntp_clamp_rtc_floor() no-ops once the RTC is past the floor. */
     lwip_sntp_clamp_rtc_floor(LWIP_MIN_PLAUSIBLE_CLOCK_UNIX);
     /* Same reason: a program that died inside a Wi-Fi call leaves the
      * request marked as waiting, and every later call would return busy. */
@@ -277,11 +286,17 @@ bool lwip_stack_init(void)
         return true;
     }
 
+    lwip_app_config_load(&g_lwip_cfg);
+    lwip_set_log_verbosity((lwip_log_verbosity_t)g_lwip_cfg.log_verbosity);
+
     g_lwip_start_error = 0;
     g_lwip_stopping = false;
-    lwip_app_config_load(&g_lwip_cfg);
     lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
     eth_reset_shutdown();
+
+#if NO_SYS
+    sys_init();
+#endif
 
     if (lwip_init() != ERR_OK)
     {
@@ -289,19 +304,15 @@ bool lwip_stack_init(void)
         lwip_membuffers_release();
         return false;
     }
-    /* tls_init() brings up the RNG, the cert truststore, and the PSK/
-     * session-ticket cache in one call -- fixed one-time setup, run here
-     * rather than lazily on the first TLS socket so lwip_start() alone is
-     * sufficient for crypto-only callers (every unit test under
-     * tests/unit/ relies on this). Gated on the wizard's "Enable TLS"
-     * setting -- skip it entirely when TLS is disabled. */
+
+    /* lwip_log_file_start() allocates its stage buffer via mem_malloc(), so
+     * it must not run until lwip_init() has set up the custom allocator
+     * pool -- calling it earlier dereferences an uninitialized pool. */
+    if (g_lwip_cfg.file_log_enabled)
+        lwip_log_file_start(g_lwip_cfg.log_archive_slots);
+
     if (g_lwip_cfg.tls_enabled && !tls_init())
-    {
-        /* TLS initialization failures are component-scoped. Keep the base
-         * stack and deterministic crypto/parser APIs available; TLS creation
-         * retries tls_init() and remains gated until the problem is resolved. */
         WARN();
-    }
 
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
     netif_add_ext_callback(&g_socket_netif_callback, socket_netif_changed);
@@ -318,9 +329,7 @@ bool lwip_network_up(void)
     }
 
     if (!lwip_stack_init())
-    {
         return false;
-    }
 
     /* USB init via usb_fn so the libload build resolves through
      * include_library '../usbdrvce/usbdrvce.asm' without a special case. If this
@@ -351,12 +360,9 @@ void lwip_stop(void)
 
 void lwip_service_events(void)
 {
-    if (!g_lwip_started && !g_lwip_stopping)
-    {
-        return;
-    }
     usb_fn.handle_events();
     sys_check_timeouts();
+    lwip_log_file_flush();
     if (!g_lwip_stopping)
     {
         if (g_services_dirty)
@@ -1066,6 +1072,10 @@ bool lwip_default_netif_info(lwip_netif_info_t *info)
  * reference sees NULL rather than a dangling pointer. */
 static void lwip_membuffers_release(void)
 {
+    if (!g_lwip_started && !g_lwip_stopping)
+    {
+        return;
+    }
 #if LWIP_ALTCP_TLS
     if (g_lwip_cfg.tls_enabled)
         tls_cleanup();
@@ -1182,6 +1192,7 @@ static void lwip_stack_cleanup(void)
     STOP_TRACE("P9 memRelease");
     lwip_membuffers_release();
 
+    lwip_log_file_stop();
     STOP_TRACE("P10 complete");
     g_lwip_stopping = false;
     g_lwip_stack_started = false;
@@ -1523,8 +1534,18 @@ static uint8_t socket_required_services(const struct lwip_socket *conn,
     return flags;
 }
 
+static bool socket_uses_tls(const struct lwip_socket *conn)
+{
+    return conn != NULL &&
+           (conn->protocol == LWIP_SOCKET_ALTCP_TLS ||
+            conn->protocol == LWIP_SOCKET_ALTCP_WSS);
+}
+
 static bool socket_network_ready(const struct lwip_socket *conn, uint8_t flags)
 {
+    if (socket_uses_tls(conn) &&
+        tls_rng_available_strength() < TLS_RNG_STRENGTH_128)
+        return false;
     return conn->netif && netif_is_up(conn->netif) &&
            netif_is_link_up(conn->netif) &&
            netif_address_configuration_ready(conn->netif) &&
@@ -1806,6 +1827,22 @@ static void conn_waiting_services_poll(uint32_t now)
             continue;
         }
 
+        if (socket_uses_tls(conn) && tls_rng_status() == TLS_RNG_FAILED)
+        {
+            lwip_socket_set_pending_host(conn, NULL);
+            conn->pending_svc_flags = 0;
+            conn->pending_port = 0;
+            conn->connect_deadline = 0;
+            conn->status = LWIP_STATUS_ERROR;
+            conn->last_error = LWIP_ERR_CONNECT;
+            conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_TLS,
+                               LWIP_SOCKET_ERR_OP_TLS_INIT,
+                               (int)tls_rng_last_failure(),
+                               LWIP_ERR_CONNECT);
+            conn = next;
+            continue;
+        }
+
         if (conn->connect_deadline &&
             lwip_socket_services_timed_out(now, conn->connect_deadline))
         {
@@ -1967,6 +2004,7 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
         {
             struct tcp_pcb *pcb = conn->pcb.tcp;
             conn->pcb.tcp = NULL;
+            /* ERROR_AUDIT: connect timeout is reported after transport cleanup. */
             tcp_abort(pcb);
         }
         break;
@@ -1979,6 +2017,7 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
         {
             struct altcp_pcb *pcb = conn->pcb.altcp;
             conn->pcb.altcp = NULL;
+            /* ERROR_AUDIT: connect timeout is reported after transport cleanup. */
             altcp_abort(pcb);
         }
         if (conn->tls_conf)
@@ -2115,6 +2154,7 @@ static err_t conn_altcp_sent_cb(void *arg, struct altcp_pcb *pcb, u16_t len)
         conn_event_enqueue(c, CONN_PENDING_WRITABLE, LWIP_OK);
     }
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2128,6 +2168,7 @@ static err_t conn_altcp_poll_cb(void *arg, struct altcp_pcb *pcb)
     if (c)
         conn_event_enqueue(c, CONN_PENDING_POLL, LWIP_OK);
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2186,6 +2227,7 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
     STATE_CHG(c, LWIP_STATE_CONN_ESTABLISHED);
     conn_event_enqueue(c, CONN_PENDING_CONNECTED, LWIP_OK);
     if (c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2290,6 +2332,7 @@ static err_t conn_tcp_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len)
         conn_event_enqueue(c, CONN_PENDING_WRITABLE, LWIP_OK);
     }
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2303,6 +2346,7 @@ static err_t conn_tcp_poll_cb(void *arg, struct tcp_pcb *pcb)
     if (c)
         conn_event_enqueue(c, CONN_PENDING_POLL, LWIP_OK);
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2355,6 +2399,7 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
     STATE_CHG(c, LWIP_STATE_CONN_ESTABLISHED);
     conn_event_enqueue(c, CONN_PENDING_CONNECTED, LWIP_OK);
     if (c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2527,6 +2572,24 @@ fail_mem:
     return NULL;
 }
 
+lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket,
+                                     const uint8_t psk[32],
+                                     const uint8_t *identity,
+                                     size_t identity_len)
+{
+    if (!socket || socket->protocol != (uint8_t)LWIP_SOCKET_ALTCP_TLS)
+        return LWIP_ERR_ARG;
+    if (!psk || !identity || identity_len == 0 ||
+        identity_len > TLS_PSK_IDENTITY_MAX_LEN)
+        return LWIP_ERR_ARG;
+    if (socket->status != LWIP_STATUS_INIT)
+        return LWIP_ERR_STATE;
+    memcpy(socket->tls_psk, psk, 32);
+    memcpy(socket->tls_psk_identity, identity, identity_len);
+    socket->tls_psk_identity_len = identity_len;
+    return LWIP_OK;
+}
+
 /* Detach the conn shim from every callback slot on the underlying
  * pcb. After this the pcb may still emit events (a deferred recv after
  * tcp_close, the err cb after abort, etc.) but they'll go to NULL and
@@ -2594,6 +2657,7 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
         if (q->pcb.tcp)
         {
             tcp_arg(q->pcb.tcp, NULL);
+            /* ERROR_AUDIT: destroy-owned queued peer cleanup. */
             tcp_abort(q->pcb.tcp);
         }
         lwip_socket_rx_ring_destroy(q);
@@ -2614,6 +2678,7 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
             if (conn->is_listen)
                 tcp_close(conn->pcb.tcp);  /* listen PCB — tcp_abort is invalid */
             else
+                /* ERROR_AUDIT: explicit socket destruction cleanup. */
                 tcp_abort(conn->pcb.tcp);
         }
         break;
@@ -2628,6 +2693,7 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
     case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
+            /* ERROR_AUDIT: explicit socket destruction cleanup. */
             altcp_abort(conn->pcb.altcp);
         }
         if (conn->tls_conf)
@@ -2764,7 +2830,22 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
      * both until connect() so the SNI hostname is in hand. */
     if (conn->protocol == LWIP_SOCKET_ALTCP_TLS && conn->pcb.altcp == NULL)
     {
-        conn->tls_conf = altcp_tls_ce_create_config_client_ecdhe(host);
+        if (conn->tls_psk_identity_len > 0)
+        {
+            struct tls_psk_identity id;
+            memset(&id, 0, sizeof(id));
+            size_t copy = conn->tls_psk_identity_len;
+            if (copy > sizeof(id.identity))
+                copy = sizeof(id.identity);
+            memcpy(id.identity, conn->tls_psk_identity, copy);
+            id.identity_len = copy;
+            conn->tls_conf = altcp_tls_ce_create_config_psk_client(
+                conn->tls_psk, &id);
+        }
+        else
+        {
+            conn->tls_conf = altcp_tls_ce_create_config_client_ecdhe(host);
+        }
         if (!conn->tls_conf)
         {
             conn->status = LWIP_STATUS_ERROR;
@@ -3020,11 +3101,15 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     struct lwip_socket *listener = (struct lwip_socket *)arg;
 
     if (err != ERR_OK || !newpcb || !listener)
+    {
+        ERROR_CODE(err != ERR_OK ? (uint16_t)(-err) : (uint16_t)(-ERR_ARG));
         return ERR_VAL;
+    }
 
     struct lwip_socket *peer = mem_malloc(sizeof(*peer));
     if (!peer)
     {
+        ERROR_CODE(-ERR_MEM);
         tcp_abort(newpcb);
         return ERR_ABRT;
     }
@@ -3038,6 +3123,7 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 
     if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
     {
+        ERROR_CODE(-ERR_MEM);
         mem_free(peer);
         tcp_abort(newpcb);
         return ERR_ABRT;
@@ -3414,6 +3500,7 @@ lwip_error_t lwip_socket_abort(struct lwip_socket *conn)
             tcp_sent(pcb, NULL);
             tcp_err(pcb, NULL);
             tcp_poll(pcb, NULL, pcb->pollinterval);
+            /* ERROR_AUDIT: caller explicitly requested socket abort. */
             tcp_abort(pcb);
         }
         break;
@@ -3439,6 +3526,7 @@ lwip_error_t lwip_socket_abort(struct lwip_socket *conn)
             altcp_sent(pcb, NULL);
             altcp_err(pcb, NULL);
             altcp_poll(pcb, NULL, pcb->pollinterval);
+            /* ERROR_AUDIT: caller explicitly requested socket abort. */
             altcp_abort(pcb);
         }
         if (conn->tls_conf)

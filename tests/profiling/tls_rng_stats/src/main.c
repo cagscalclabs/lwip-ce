@@ -34,7 +34,7 @@ static bool output_open(void)
 
 static bool output_line(const char *format, ...)
 {
-    char line[224];
+    char line[416];
     va_list args;
     int length;
 
@@ -116,7 +116,7 @@ int main(void)
         return 1;
     }
 
-    ok = output_line("rng_stats,version=2,runs=%u,samples_per_run=%lu\n",
+    ok = output_line("rng_stats,version=3,runs=%u,samples_per_run=%lu,lags=4\n",
                      (unsigned int)RNG_STATS_RUNS,
                      (unsigned long)RNG_STATS_SAMPLES_PER_RUN);
 
@@ -137,6 +137,8 @@ int main(void)
         ok = output_line(
             "run=%u,source=%06lX,mask=%02X,samples=%lu,ones=%lu,zeros=%lu,"
             "transitions=%lu,n00=%lu,n01=%lu,n10=%lu,n11=%lu,"
+            "lag1_mismatches=%lu,lag2_mismatches=%lu,"
+            "lag3_mismatches=%lu,lag4_mismatches=%lu,"
             "longest=%lu,longest0=%lu,longest1=%lu,"
             "p1_q16=%lu,bias_q16=%lu,transition_q16=%lu\n",
             (unsigned int)run,
@@ -150,6 +152,10 @@ int main(void)
             (unsigned long)stats.pairs_01,
             (unsigned long)stats.pairs_10,
             (unsigned long)stats.pairs_11,
+            (unsigned long)stats.lag_mismatches[0],
+            (unsigned long)stats.lag_mismatches[1],
+            (unsigned long)stats.lag_mismatches[2],
+            (unsigned long)stats.lag_mismatches[3],
             (unsigned long)stats.longest_run,
             (unsigned long)stats.longest_zero_run,
             (unsigned long)stats.longest_one_run,

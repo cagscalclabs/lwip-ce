@@ -34,6 +34,7 @@ struct lwip_imports {
         int (*ti_setarchivestatus)(uint8_t, uint8_t);
         int (*ti_delete)(const char *);
         void *(*ti_getdataptr)(uint8_t);
+        uint8_t (*ti_rename)(const char *, const char *);
     } file;
 };
 extern struct lwip_imports fn_imports_table;

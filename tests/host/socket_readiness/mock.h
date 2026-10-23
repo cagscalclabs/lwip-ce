@@ -21,6 +21,12 @@
 #define LWIP_STATUS_ERROR 3
 #define LWIP_OK 0
 #define LWIP_ERR_SERVICES 7
+#define LWIP_ERR_CONNECT 6
+#define LWIP_SOCKET_ERR_COMP_TLS 7
+#define LWIP_SOCKET_ERR_OP_TLS_INIT 9
+#define TLS_RNG_FAILURE_TIMEOUT 9
+#define TLS_RNG_STRENGTH_128 128
+#define TLS_RNG_FAILED 5
 #define LWIP_DISPATCH_CONN_SERVICES 0
 typedef int lwip_error_t;
 typedef int lwip_socket_bind_descriptor_t;
@@ -31,7 +37,7 @@ struct lwip_socket {
     struct lwip_socket *registry_next;
     struct netif *netif;
     bool static_applied, has_addrinfo;
-    int status, bind_descriptor, protocol;
+    int status, last_error, bind_descriptor, protocol;
     uint32_t connect_deadline;
     uint8_t pending_svc_flags;
     uint16_t pending_port;
@@ -45,6 +51,10 @@ static uint32_t now;
 static unsigned connects, starts, period_sets;
 static uint16_t period;
 static int apply_error;
+static unsigned rng_strength=256, rng_state=4, socket_errors;
+static unsigned tls_rng_available_strength(void) { return rng_strength; }
+static unsigned tls_rng_status(void) { return rng_state; }
+static unsigned tls_rng_last_failure(void) { return TLS_RNG_FAILURE_TIMEOUT; }
 static bool netif_is_loop_network(const struct netif *n) { return n && n->loop; }
 static bool host_requires_dns(const char *h) { return h && !strcmp(h,"example.com"); }
 static bool netif_is_up(const struct netif *n) { return n->up; }
@@ -61,6 +71,10 @@ static void socket_bind_netif(struct lwip_socket *c,struct netif *n) { c->netif=
 static bool lwip_socket_services_timed_out(uint32_t n,uint32_t d) { return (int32_t)(n-d)>=0; }
 static void lwip_socket_set_pending_host(struct lwip_socket *c,const char *h) { assert(!h); free(c->pending_host);c->pending_host=NULL; }
 static void lwip_socket_fail(struct lwip_socket *c,int err) { assert(err); c->status=LWIP_STATUS_ERROR; }
+static void conn_error_enqueue(struct lwip_socket *c,int component,int operation,int raw,int mapped) {
+    (void)c; assert(component==LWIP_SOCKET_ERR_COMP_TLS); assert(operation==LWIP_SOCKET_ERR_OP_TLS_INIT);
+    assert(raw==TLS_RNG_FAILURE_TIMEOUT); assert(mapped==LWIP_ERR_CONNECT); socket_errors++;
+}
 static int apply_service_flags(struct netif *n,unsigned f) { (void)n;(void)f; return apply_error; }
 static void lwip_socket_connect_now(struct lwip_socket *c,const char *h,unsigned p) { assert(h && p==80); c->status=LWIP_STATUS_CONNECTING; connects++; }
 #define mem_free free

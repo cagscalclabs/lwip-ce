@@ -301,33 +301,74 @@ static bool test_hkdf_rfc5869_case3(void) {
 }
 
 /**
- * Test HKDF-Expand-Label for TLS 1.3
+ * Test HKDF-Expand-Label for TLS 1.3 (RFC 8446 section 7.1) against the
+ * published RFC 8448 section 3 "Simple 1-RTT Handshake" vectors.
+ *
+ * Derive-Secret(handshake_secret, "c hs traffic", hello_hash) must equal
+ * the documented client_handshake_traffic_secret. This exercises the real
+ * HkdfLabel construction end to end: the "tls13 " prefix, the label, and
+ * the context (here, a transcript hash rather than empty), not just
+ * HKDF-Expand in isolation (already covered by the RFC 5869 cases above).
  */
 static bool test_hkdf_expand_label(void) {
-    /* Example from TLS 1.3 spec derivation */
-    /* TODO: Implement HKDF-Expand-Label test */
-    return true; /* Stub - not yet implemented */
+    /* RFC 8448 3, handshake secret (output of
+     * HKDF-Extract with salt=derived-handshake-secret, ikm=(EC)DHE) */
+    const uint8_t handshake_secret[] = {
+        0x1d, 0xc8, 0x26, 0xe9, 0x36, 0x06, 0xaa, 0x6f,
+        0xdc, 0x0a, 0xad, 0xc1, 0x2f, 0x74, 0x1b, 0x01,
+        0x04, 0x6a, 0xa6, 0xb9, 0x9f, 0x69, 0x1e, 0xd2,
+        0x21, 0xa9, 0xf0, 0xca, 0x04, 0x3f, 0xbe, 0xac
+    };
+
+    /* RFC 8448 3, hash of ClientHello..ServerHello (the "hello_hash") */
+    const uint8_t hello_hash[] = {
+        0x86, 0x0c, 0x06, 0xed, 0xc0, 0x78, 0x58, 0xee,
+        0x8e, 0x78, 0xf0, 0xe7, 0x42, 0x8c, 0x58, 0xed,
+        0xd6, 0xb4, 0x3f, 0x2c, 0xa3, 0xe6, 0xe9, 0x5f,
+        0x02, 0xed, 0x06, 0x3c, 0xf0, 0xe1, 0xca, 0xd8
+    };
+
+    /* RFC 8448 3, expected client_handshake_traffic_secret =
+     * Derive-Secret(handshake_secret, "c hs traffic", hello_hash) */
+    const uint8_t expected_chts[] = {
+        0xb3, 0xed, 0xdb, 0x12, 0x6e, 0x06, 0x7f, 0x35,
+        0xa7, 0x80, 0xb3, 0xab, 0xf4, 0x5e, 0x2d, 0x8f,
+        0x3b, 0x1a, 0x95, 0x07, 0x38, 0xf5, 0x2e, 0x96,
+        0x00, 0x74, 0x6a, 0x0e, 0x27, 0xa5, 0x5a, 0x21
+    };
+
+    uint8_t chts[32];
+
+    /* Derive-Secret(Secret, Label, Messages) =
+     *     HKDF-Expand-Label(Secret, Label, Transcript-Hash(Messages), Hash.length)
+     * -- here the transcript hash is supplied directly rather than fed
+     * through an incremental hash context, since this test only exercises
+     * the label/context construction, not transcript hashing itself. */
+    if (!tls_hkdf_expand_label(TLS_HASH_SHA256, handshake_secret, sizeof(handshake_secret),
+                               "c hs traffic", 12, hello_hash, sizeof(hello_hash),
+                               chts, sizeof(chts))) {
+        return false;
+    }
+
+    return memcmp(chts, expected_chts, sizeof(expected_chts)) == 0;
+}
+
+/* Run one test on its own cleared screen, printing only "success" or
+ * "fail" so each screen's VRAM CRC is a stable, independent checkpoint --
+ * unaffected by any other test's result or by future tests added here. */
+static void run_test_screen(bool result) {
+    os_ClrHome();
+    printf(result ? "success" : "fail");
+    os_GetKey();
 }
 
 int main(void) {
     if (!lwip_start()) return 1;
 
-    os_ClrHome();
-
-    /* Run all tests */
-    bool test1 = test_hkdf_rfc5869_case1();
-    bool test2 = test_hkdf_rfc5869_case2();
-    bool test3 = test_hkdf_rfc5869_case3();
-    bool test4 = test_hkdf_expand_label();
-
-    /* Output result */
-    if (test1 && test2 && test3 && test4) {
-        printf("success");
-    } else {
-        printf("failed");
-    }
-
-    os_GetKey();
+    run_test_screen(test_hkdf_rfc5869_case1());
+    run_test_screen(test_hkdf_rfc5869_case2());
+    run_test_screen(test_hkdf_rfc5869_case3());
+    run_test_screen(test_hkdf_expand_label());
 
     {
         const uint16_t samples = 5;

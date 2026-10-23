@@ -17,6 +17,14 @@ from typing import Any
 Z_99 = 2.576
 # Bonferroni-adjusted one-sided z for four simultaneous 99% transition bounds.
 MARKOV_Z_99 = 2.807033768343811
+PROFILED_LAGS = range(1, 5)
+# Startup qualification match bounds in random.s, over 952 samples.
+STARTUP_LAG_MATCH_BOUNDS = {
+    1: (136, 815),
+    2: (136, 814),
+    3: (135, 814),
+    4: (135, 813),
+}
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 STATISTICS_DIR = REPOSITORY_ROOT / "statistics" / "rng"
 
@@ -91,6 +99,69 @@ def estimate(ones: int, zeros: int) -> dict[str, float | int]:
         "h_mcv_plugin_bits_per_raw_bit": h_plugin,
         "h_mcv_lower_99_bits_per_raw_bit": h_lower_99,
     }
+
+
+def lag_diagnostics(
+    row: dict[str, Any], pair_counts: dict[int, int] | None = None
+) -> dict[str, Any]:
+    """Describe lag-1..4 behavior without treating it as entropy credit."""
+    samples = int(row["samples"])
+    p1 = int(row["ones"]) / samples
+    iid_mismatch_rate = 2.0 * p1 * (1.0 - p1)
+    result: dict[str, Any] = {}
+    available: list[int] = []
+    correlations: list[float] = []
+
+    for lag in PROFILED_LAGS:
+        key = f"lag{lag}_mismatches"
+        raw_count = row.get(key)
+        if raw_count is None and lag == 1 and "transitions" in row:
+            raw_count = row["transitions"]
+        if raw_count is None:
+            result[key] = None
+            result[f"lag{lag}_mismatch_rate"] = None
+            result[f"lag{lag}_correlation_heuristic"] = None
+            result[f"lag{lag}_projected_startup_pass"] = None
+            continue
+
+        count = int(raw_count)
+        if lag == 1 and "transitions" in row and count != int(row["transitions"]):
+            raise ValueError(
+                f"run {row.get('run', 'aggregate')} lag-1 count does not match transitions"
+            )
+        pairs = pair_counts[lag] if pair_counts is not None else samples - lag
+        if count < 0 or count > pairs:
+            raise ValueError(f"run {row.get('run', 'aggregate')} has invalid lag-{lag} count")
+        rate = count / pairs
+        correlation = (
+            max(-1.0, min(1.0, 1.0 - rate / iid_mismatch_rate))
+            if iid_mismatch_rate > 0.0
+            else 0.0
+        )
+        match_low, match_high = STARTUP_LAG_MATCH_BOUNDS[lag]
+        startup_pairs = 952 - lag
+        mismatch_low = startup_pairs - match_high
+        mismatch_high = startup_pairs - match_low
+
+        result[key] = count
+        result[f"lag{lag}_mismatch_rate"] = rate
+        result[f"lag{lag}_correlation_heuristic"] = correlation
+        result[f"lag{lag}_projected_startup_pass"] = (
+            mismatch_low / startup_pairs <= rate <= mismatch_high / startup_pairs
+        )
+        available.append(lag)
+        correlations.append(correlation)
+
+    result["profiled_lags_available"] = available
+    result["max_abs_lag_correlation_heuristic"] = (
+        max(abs(value) for value in correlations) if correlations else None
+    )
+    result["projected_startup_lag_screen_pass"] = (
+        all(bool(result[f"lag{lag}_projected_startup_pass"]) for lag in available)
+        if available
+        else None
+    )
+    return result
 
 
 def wilson_upper(successes: int, trials: int) -> float:
@@ -253,6 +324,7 @@ def analyze_run(row: dict[str, int | str]) -> dict[str, Any]:
         key=lambda item: float(item["h_markov_lower_99_bits_per_raw_bit"]),
     )
     mcv = estimate(ones, zeros)
+    lags = lag_diagnostics(row)
     stored_source = str(row.get("transition_counts_source", ""))
     if stored_source not in {"recorded", "reconstructed_conservatively"}:
         stored_source = (
@@ -264,6 +336,7 @@ def analyze_run(row: dict[str, int | str]) -> dict[str, Any]:
         **row,
         **mcv,
         **transition,
+        **lags,
         "transition_counts_source": stored_source,
         "first_order_dependency_factor": (
             min(
@@ -316,6 +389,25 @@ def analyze(runs: list[dict[str, int | str]]) -> dict[str, Any]:
         else 0.0
     )
     aggregate = {**aggregate_mcv, **aggregate_transition}
+    aggregate_lag_counts: dict[str, int] = {}
+    aggregate_lag_pairs: dict[int, int] = {}
+    for lag in PROFILED_LAGS:
+        key = f"lag{lag}_mismatches"
+        values = [row[key] for row in analyzed_runs]
+        if all(value is not None for value in values):
+            aggregate_lag_counts[key] = sum(int(value) for value in values)
+            aggregate_lag_pairs[lag] = sum(int(row["samples"]) - lag for row in analyzed_runs)
+    aggregate.update(
+        lag_diagnostics(
+            {
+                **aggregate_lag_counts,
+                "samples": total_ones + total_zeros,
+                "ones": total_ones,
+                "transitions": aggregate_transition["transitions"],
+            },
+            aggregate_lag_pairs,
+        )
+    )
     transition_counts_source = (
         "recorded"
         if all(
@@ -355,7 +447,14 @@ def analyze(runs: list[dict[str, int | str]]) -> dict[str, Any]:
         "scope_warning": (
             "The Markov result is a coarse first-order dependence bound, not a "
             "complete SP 800-90B non-IID entropy assessment; longer-range "
-            "dependence can reduce actual min-entropy."
+            "dependence can reduce actual min-entropy. Lag-2 through lag-4 "
+            "results are diagnostics only and do not increase entropy credit."
+        ),
+        "lag_diagnostics_note": (
+            "Lag-1 through lag-4 mismatch rates mirror the startup qualification "
+            "range. Correlation values use the stationary-binary approximation "
+            "1-q_k/(2*p0*p1); projected startup results compare reported rates "
+            "with the qualification bounds and are not per-window health tests."
         ),
         "transition_counts_provenance": transition_counts_source,
         "transition_counts_note": (
@@ -363,7 +462,7 @@ def analyze(runs: list[dict[str, int | str]]) -> dict[str, Any]:
             "transition matrices are the endpoint-consistent candidates that "
             "produce the lowest first-order 99% lower estimate."
             if transition_counts_source != "recorded"
-            else "Transition matrices were recorded directly by the version 2 profiler."
+            else "Transition matrices were recorded directly by the version 2-or-newer profiler."
         ),
         "sources": sources,
         "aggregate": aggregate,
@@ -402,6 +501,20 @@ def write_csv(path: Path, report: dict[str, Any]) -> None:
         "transition_rate",
         "iid_expected_transition_rate",
         "lag1_phi",
+        "lag1_mismatches",
+        "lag1_mismatch_rate",
+        "lag1_correlation_heuristic",
+        "lag2_mismatches",
+        "lag2_mismatch_rate",
+        "lag2_correlation_heuristic",
+        "lag3_mismatches",
+        "lag3_mismatch_rate",
+        "lag3_correlation_heuristic",
+        "lag4_mismatches",
+        "lag4_mismatch_rate",
+        "lag4_correlation_heuristic",
+        "max_abs_lag_correlation_heuristic",
+        "projected_startup_lag_screen_pass",
         "runs_z",
         "h_markov_plugin_bits_per_raw_bit",
         "h_markov_lower_99_bits_per_raw_bit",
@@ -498,6 +611,10 @@ def main() -> int:
         f"{report['worst_window_h_mcv_lower_99_bits_per_raw_bit']:.6f} bits/raw bit"
     )
     print(f"lag-1 phi: {aggregate['lag1_phi']:.6f}")
+    for lag in PROFILED_LAGS:
+        value = aggregate[f"lag{lag}_correlation_heuristic"]
+        if value is not None:
+            print(f"lag-{lag} correlation heuristic: {value:.6f}")
     print(
         "Markov 99% lower H: "
         f"{aggregate['h_markov_lower_99_bits_per_raw_bit']:.6f} bits/raw bit"

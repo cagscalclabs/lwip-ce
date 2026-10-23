@@ -25,7 +25,6 @@ lwip_socket_resize_rx_max
 lwip_socket_set_timeout
 lwip_socket_last_error
 lwip_socket_get_netif
-lwip_set_event_cb
 lwip_get_traceback
 lwip_debug_module_name
 lwip_debug_file_name
@@ -396,8 +395,6 @@ udp_netif_ip_addr_changed
 eth_get_interfaces
 netif_is_link_error
 eth_usb_event_callback
-pcap_enable_on_netif
-pcap_disable_on_netif
 pcap_flush
 pcap_init_reader_ctx
 pcap_set_filter_netif
@@ -448,6 +445,15 @@ lwip_start_with_crt
 lwip_get_start_errno
 lwip_get_start_errstring
 lwip_is_newer
+tls_p256_publickey
+tls_p256_secret
+tls_p256_sign
+tls_p256_verify
+lwip_socket_set_tls_psk
+tls_random_bytes_ex
+tls_rng_status
+tls_rng_available_strength
+tls_rng_last_failure
 lwip_wifi_available
 lwip_wifi_get_state
 lwip_wifi_list_profiles

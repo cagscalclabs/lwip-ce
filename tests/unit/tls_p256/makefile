@@ -9,7 +9,7 @@ DESCRIPTION = "P-256 ECDH/ECDSA Test"
 COMPRESSED = NO
 
 CFLAGS = -Wall -Wextra -Oz
-SOURCES = src/main.c src/p256_reference.c
+SOURCES = src/main.c
 
 # ----------------------------
 

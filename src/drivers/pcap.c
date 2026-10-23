@@ -44,7 +44,7 @@ static void pcap_free_buffer(eth_device_t *eth)
     }
 }
 
-pcap_err_t pcap_enable_on_netif(struct netif *netif)
+static pcap_err_t pcap_enable_on_netif(struct netif *netif)
 {
     if (netif == NULL)
         return PCAP_ERR_ARG;
@@ -187,7 +187,7 @@ bool pcap_flush(struct netif *netif)
     return true;
 }
 
-bool pcap_disable_on_netif(struct netif *netif)
+static bool pcap_disable_on_netif(struct netif *netif)
 {
     if (netif == NULL)
         return false;
@@ -201,6 +201,20 @@ bool pcap_disable_on_netif(struct netif *netif)
     pcap_flush(netif);
     pcap_free_buffer(eth);
     return true;
+}
+
+void pcap_apply_config(void)
+{
+    bool enabled = lwip_app_config_get()->pcap_enabled;
+    struct netif *netif;
+
+    NETIF_FOREACH(netif)
+    {
+        if (enabled)
+            pcap_enable_on_netif(netif);
+        else
+            pcap_disable_on_netif(netif);
+    }
 }
 
 void pcap_release_on_teardown(struct netif *netif)

@@ -95,8 +95,9 @@ jobs:
 
           SUBJECT_LEN  = 32
           SKI_LEN      = 32
-          RSA_MOD_MAX  = 256
-          EC_POINT_LEN = 32
+          RSA_MOD_MIN  = 256   # 2048 bits
+          RSA_MOD_MAX  = 512   # 4096 bits
+          EC_POINT_LEN = 65
           # Fixed-size prefix before key[]: len(4) + subject(32) + ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) = 77
           ENTRY_FIXED_PREFIX = 4 + SUBJECT_LEN + SKI_LEN + 4 + 4 + 1
 
@@ -160,7 +161,7 @@ jobs:
 
           def extract_rsa_pubkey(path):
               """Return (exp_bytes_le_3, mod_bytes_be) for an RSA public key.
-              Raises RuntimeError if modulus > RSA_MOD_MAX bytes (e.g. 4096-bit)."""
+              Raises RuntimeError if modulus is outside [RSA_MOD_MIN, RSA_MOD_MAX]."""
               pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
               text = run_cmd([
                   "openssl", "rsa", "-pubin", "-text", "-noout",
@@ -182,15 +183,16 @@ jobs:
                           continue
                       mod_hex.extend(line.replace(":", "").split())
               mod_bytes = bytes.fromhex("".join(mod_hex).lstrip("00"))
+              if len(mod_bytes) < RSA_MOD_MIN:
+                  raise RuntimeError(f"RSA modulus too small ({len(mod_bytes)}B < {RSA_MOD_MIN}B), skipping")
               if len(mod_bytes) > RSA_MOD_MAX:
                   raise RuntimeError(f"RSA modulus too large ({len(mod_bytes)}B > {RSA_MOD_MAX}B), skipping")
-              mod_padded = b"\x00" * (RSA_MOD_MAX - len(mod_bytes)) + mod_bytes
               exp_val = exp_val or 65537
               exp_le = struct.pack("<I", exp_val)[:3]  # uint24_t little-endian
-              return exp_le, mod_padded
+              return exp_le, mod_bytes
 
           def extract_ec_pubkey(path):
-              """Return 32-byte x-coordinate of a P-256 public key.
+              """Return 65-byte uncompressed P-256 public key (0x04 || x || y).
               Raises RuntimeError for non-P256 curves (e.g. P-384)."""
               pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
               pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
@@ -198,8 +200,8 @@ jobs:
               # Preceded by 0x00 unused-bits byte in the BIT STRING
               for i in range(len(pubkey_der) - 65, -1, -1):
                   if pubkey_der[i] == 0x00 and pubkey_der[i+1] == 0x04 and (len(pubkey_der) - i - 1) == 65:
-                      return bytes(pubkey_der[i+2:i+34])  # x-coordinate
-              raise RuntimeError("not a P-256 key, skipping")
+                      return bytes(pubkey_der[i+1:i+66])  # 0x04 || x || y
+              raise RuntimeError("EC key is not P-256 (P-384/P-521 not supported), skipping")
 
           def build_entries(cert_paths):
               entries = {}

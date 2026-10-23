@@ -64,7 +64,7 @@ struct tls_truststore_header
 /* Variable-length per-entry record. The key[] FAM holds the raw public key
  * bytes whose format depends on alg_id:
  *   RSA: uint8_t exp[3] (little-endian uint24) || uint8_t mod[key_len - 3]
- *   EC:  uint8_t point[key_len]  (x-coordinate, big-endian)
+ *   EC:  uint8_t point[key_len]  (uncompressed: 0x04 || x || y, 65 bytes)
  * len covers the entire struct including the key[] bytes. */
 struct tls_truststore_entry
 {

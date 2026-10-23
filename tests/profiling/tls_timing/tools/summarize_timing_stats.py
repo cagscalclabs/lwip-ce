@@ -23,6 +23,9 @@ PRIMITIVES = (
     "AESCCM-E",
     "AESCCM-D",
     "X25519",
+    "P256-KG",
+    "P256-DH",
+    "P256-SG",
 )
 CLASSES = {"best", "worst", "random", "edge"}
 CONFIGURATION = {"c": 6, "c_rig": 4, "sigma_scale": 14826}
@@ -89,7 +92,7 @@ def validate_threshold(value: Any, label: str, expected_c: int) -> dict[str, Any
 def validate_profile(path: Path, stored: Any) -> dict[str, Any]:
     if not isinstance(stored, dict):
         raise ValueError(f"{path}: root must be an object")
-    if stored.get("capture_format") != "cagscalclabs-ctstats-v1":
+    if stored.get("capture_format") not in ("cagscalclabs-ctstats-v1", "cagscalclabs-ctstats-v3"):
         raise ValueError(f"{path}: unsupported capture_format")
     model = stored.get("model")
     if not isinstance(model, str) or not model.strip():

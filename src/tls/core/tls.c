@@ -291,6 +291,16 @@ bool tls_init(void)
         return true;
     }
 
+    /* Run the blocking entropy source scan once at init time so the async RNG
+     * timer finds the source already valid on its first tick. */
+    if (!tls_random_init_entropy())
+    {
+        INFO("rng source select fail");
+        tls_ctx.network_up = false;
+        return false;
+    }
+    INFO("rng source select ok");
+
     /* Starting the asynchronous RNG service is not the same as having entropy
      * ready immediately. Randomness-consuming operations enforce readiness at
      * request time; deterministic crypto remains usable in the meantime. */

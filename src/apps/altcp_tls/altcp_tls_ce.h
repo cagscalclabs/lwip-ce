@@ -64,9 +64,12 @@ typedef struct altcp_tls_ce_state {
  * off; a retried close() (because the TCP-level close came back ERR_MEM)
  * skips re-sending the alert. The peer has already seen it. */
 #define ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT 0x10
+/* tls_handshake_init has been called successfully for this state. Set once;
+ * cleared on reset. Guards the deferred-init path in send_client_hello. */
+#define ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED   0x20
 /* The handshake is waiting on the Wi-Fi bridge (wireless/crypto.h). */
-#define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x20
-#define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x40
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x40
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x80
 
 /**
  * @brief TLS configuration for CE implementation

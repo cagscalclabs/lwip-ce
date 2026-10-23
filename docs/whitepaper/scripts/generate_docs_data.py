@@ -883,7 +883,7 @@ def build_appendix_b_model_summary(datasets_root: Path) -> str:
 
 RNG_Z_99 = 2.576
 RNG_READS_PER_COLLECTION = 8 * 119
-RNG_CONDITIONED_BITS = 256
+RNG_CONDITIONED_BITS = 192
 
 
 def rng_mcv_estimate(ones: int, zeros: int) -> Dict[str, float | int]:

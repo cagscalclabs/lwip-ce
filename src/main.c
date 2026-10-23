@@ -6,10 +6,15 @@
 #include <ti/getcsc.h>
 #include <ti/screen.h>
 #include <ti/vars.h>
+#include <fileioc.h>
+#include <graphx.h>
 
 #include "lwip/app_config.h"
+#include "lwip/log_file.h"
+#include "lwip/mem.h"
 #include "drivers/pcap.h"
 #include "drivers/pcap_decode.h"
+#include "drivers/mem.h"
 #include "lwip-imports.h"
 #include "lwIP.h"
 #include "app/ui.h"
@@ -20,7 +25,9 @@
 #define TZ_STEP_MINUTES 15
 #define PCAP_MAX_LIST 48
 #define PCAP_HEX_COLS 8
-#define PCAP_LINE_ROWS 14
+#define TEXT_ROWS 14
+#define TEXT_COLS 48
+#define LOG_MAX_SLOTS (LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX + 1u)
 
 enum
 {
@@ -32,8 +39,13 @@ enum
     ROW_TLS,
     ROW_CRYPTO_OFFLOAD,
     ROW_BRIDGE_RNG,
+    ROW_PCAP_ENABLED,
     ROW_PCAP_SIZE,
-    ROW_PCAP_VIEW
+    ROW_PCAP_VIEW,
+    ROW_LOG_ENABLED,
+    ROW_LOG_VERBOSITY,
+    ROW_LOG_SLOTS,
+    ROW_LOG_VIEW
 };
 
 static lwip_app_config_t g_cfg;
@@ -142,11 +154,11 @@ static void pcap_detail(const struct pcap *hdr)
 
     for (;;)
     {
-        char lines[PCAP_LINE_ROWS][48];
-        const char *ptrs[PCAP_LINE_ROWS];
+        char lines[TEXT_ROWS][TEXT_COLS];
+        const char *ptrs[TEXT_ROWS];
         int shown = 0;
 
-        for (; shown < PCAP_LINE_ROWS && scroll + shown < total; shown++)
+        for (; shown < TEXT_ROWS && scroll + shown < total; shown++)
         {
             pcap_detail_line(&decoded, data, scroll + shown, lines[shown], sizeof lines[shown]);
             ptrs[shown] = lines[shown];
@@ -160,15 +172,15 @@ static void pcap_detail(const struct pcap *hdr)
             return;
         if (key == sk_Up && scroll > 0)
             scroll--;
-        if (key == sk_Down && scroll + PCAP_LINE_ROWS < total)
+        if (key == sk_Down && scroll + TEXT_ROWS < total)
             scroll++;
     }
 }
 
 static void pcap_viewer(void)
 {
-    static ui_item_t items[PCAP_MAX_LIST];
-    static char labels[PCAP_MAX_LIST][20];
+    ui_item_t *items;
+    char (*labels)[20];
     ui_list_t list = {0, 0};
     int count = load_pcap_offsets();
 
@@ -177,13 +189,20 @@ static void pcap_viewer(void)
         ui_message("Packet capture", "No packets captured yet", NULL);
         return;
     }
+    items = mem_is_ready() ? mem_malloc((mem_size_t)(count * (sizeof *items + sizeof *labels))) : NULL;
+    if (!items)
+    {
+        ui_message("Packet capture", "Not enough memory", NULL);
+        return;
+    }
+    labels = (char (*)[20])(items + count);
 
     for (int i = 0; i < count; i++)
     {
         const struct pcap *hdr = pcap_at(i);
 
         if (!hdr)
-            return;
+            goto done;
         snprintf(labels[i], sizeof labels[i], "#%d  %c%c%u %s  %u B", i + 1, hdr->ifname[0], hdr->ifname[1],
                  hdr->ifnum, hdr->direction == PCAP_DIR_TX ? "TX" : "RX", hdr->len);
         items[i] = (ui_item_t){UI_ITEM_ACTION, labels[i], NULL, NULL, false, 0};
@@ -200,7 +219,7 @@ static void pcap_viewer(void)
 
         uint8_t key = ui_wait_key();
         if (key == sk_Clear)
-            return;
+            break;
         ui_list_key(&list, items, count, key);
         if (key == sk_Enter)
         {
@@ -208,6 +227,137 @@ static void pcap_viewer(void)
             if (hdr)
                 pcap_detail(hdr);
         }
+    }
+done:
+    mem_free(items);
+}
+
+static const char *verbosity_name(uint8_t level)
+{
+    switch ((lwip_log_verbosity_t)level)
+    {
+    case LWIP_LOG_VERBOSITY_ERROR:   return "ERROR";
+    case LWIP_LOG_VERBOSITY_WARNING: return "WARNING";
+    case LWIP_LOG_VERBOSITY_INFO:    return "INFO";
+    case LWIP_LOG_VERBOSITY_DEBUG:   return "DEBUG";
+    default:                         return "?";
+    }
+}
+
+static int log_slots(char names[LOG_MAX_SLOTS][9])
+{
+    var_t *var;
+    uint8_t meta[3] = {0};
+    int count = 0;
+
+    if ((var = os_GetAppVarData(LWIP_LOG_APPVAR, NULL)) && var->size)
+        memcpy(names[count++], LWIP_LOG_APPVAR, sizeof LWIP_LOG_APPVAR);
+    if ((var = os_GetAppVarData(LWIP_LOG_META_APPVAR, NULL)) && var->size >= sizeof meta)
+        memcpy(meta, var->data, sizeof meta);
+
+    uint8_t max = meta[2] ? meta[2] : (uint8_t)LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX;
+
+    for (int i = (int)meta[1] - 1; i >= 0 && count < (int)LOG_MAX_SLOTS; i--)
+    {
+        snprintf(names[count], 9, LWIP_LOG_ARCHIVE_PFX "%02u", (unsigned)((meta[0] + i) % max));
+        if ((var = os_GetAppVarData(names[count], NULL)) && var->size)
+            count++;
+    }
+    return count;
+}
+
+static uint16_t log_wrap_next(const uint8_t *data, uint16_t size, uint16_t pos, char *out, size_t cap)
+{
+    uint16_t end = pos;
+    uint16_t take;
+
+    while (end < size && data[end] != '\n')
+        end++;
+    take = (uint16_t)(end - pos);
+    if (take >= cap)
+        take = (uint16_t)(cap - 1);
+    for (;;)
+    {
+        memcpy(out, data + pos, take);
+        out[take] = '\0';
+        if (take <= 1 || (int)gfx_GetStringWidth(out) <= UI_WIDTH - 16)
+            break;
+        take--;
+    }
+    pos = (uint16_t)(pos + take);
+    if (pos >= end)
+        pos = end < size ? (uint16_t)(end + 1) : end;
+    return pos;
+}
+
+static void log_viewer(void)
+{
+    char names[LOG_MAX_SLOTS][9];
+    int count = log_slots(names);
+    int slot = 0;
+    int top = 0;
+    int total = -1;
+
+    if (!count)
+    {
+        ui_message("Log", "No log saved yet", NULL);
+        return;
+    }
+
+    for (;;)
+    {
+        var_t *var = os_GetAppVarData(names[slot], NULL);
+        const uint8_t *data = var ? var->data : NULL;
+        uint16_t size = var ? var->size : 0;
+        char lines[TEXT_ROWS][TEXT_COLS];
+        const char *ptrs[TEXT_ROWS];
+        char title[32];
+        uint16_t pos = 0;
+        int shown = 0;
+
+        if (total < 0)
+        {
+            for (total = 0; pos < size; total++)
+                pos = log_wrap_next(data, size, pos, lines[0], TEXT_COLS);
+            top = total > TEXT_ROWS ? total - TEXT_ROWS : 0;
+            pos = 0;
+        }
+        for (int row = 0; row < top && pos < size; row++)
+            pos = log_wrap_next(data, size, pos, lines[0], TEXT_COLS);
+        for (; shown < TEXT_ROWS && pos < size; shown++)
+        {
+            pos = log_wrap_next(data, size, pos, lines[shown], TEXT_COLS);
+            ptrs[shown] = lines[shown];
+        }
+
+        if (slot)
+            snprintf(title, sizeof title, "Log archive %d", slot);
+        else
+            snprintf(title, sizeof title, "Log");
+        char right[8];
+        snprintf(right, sizeof right, "%d/%d", slot + 1, count);
+        ui_frame(title, right, NULL, 0, "left/right: file   del: delete   clear: back");
+        ui_body_text(ptrs, shown, 0);
+        ui_present();
+
+        uint8_t key = ui_wait_key();
+        if (key == sk_Clear)
+            return;
+        if (key == sk_Del && ui_confirm("Delete log", "Delete all saved logs?"))
+        {
+            for (int i = 0; i < count; i++)
+                ti_Delete(names[i]);
+            ti_Delete(LWIP_LOG_META_APPVAR);
+            return;
+        }
+        if (key == sk_Left && slot > 0)
+            slot--, total = -1;
+        if (key == sk_Right && slot < count - 1)
+            slot++, total = -1;
+        if (key == sk_Up && top > 0)
+            top--;
+        if (key == sk_Down && top + TEXT_ROWS < total)
+            top++;
     }
 }
 
@@ -221,7 +371,7 @@ static void edit_hostname(void)
 }
 
 static int build_menu(ui_item_t *items, uint8_t *roles, char *tz, size_t tz_size, char *pcap, size_t pcap_size,
-                      bool has_pcap)
+                      char *slots, size_t slots_size, bool has_pcap, bool has_log)
 {
     uint8_t wifi_color;
     const char *wifi = app_wifi_summary(&wifi_color);
@@ -229,6 +379,7 @@ static int build_menu(ui_item_t *items, uint8_t *roles, char *tz, size_t tz_size
 
     format_tz(tz, tz_size, g_cfg.tz_offset_minutes);
     snprintf(pcap, pcap_size, "%u KiB", g_cfg.pcap_max_bytes / 1024u);
+    snprintf(slots, slots_size, "%u", (unsigned)g_cfg.log_archive_slots);
 
 #define ADD(role, ...) (roles[count] = (role), items[count++] = (ui_item_t){__VA_ARGS__})
     ADD(ROW_SECTION, UI_ITEM_SECTION, "Network", NULL, NULL, false, 0);
@@ -244,9 +395,18 @@ static int build_menu(ui_item_t *items, uint8_t *roles, char *tz, size_t tz_size
     ADD(ROW_BRIDGE_RNG, UI_ITEM_TOGGLE, "Bridge TRNG", "Bridge supplies all randomness", NULL,
         g_cfg.bridge_rng != 0, 0);
     ADD(ROW_SECTION, UI_ITEM_SECTION, "Diagnostics", NULL, NULL, false, 0);
+    ADD(ROW_PCAP_ENABLED, UI_ITEM_TOGGLE, "Enable PCAP", "Always capture packets", NULL,
+        g_cfg.pcap_enabled != 0, 0);
     ADD(ROW_PCAP_SIZE, UI_ITEM_VALUE, "Capture limit", "left/right to change", pcap, false, 0);
     if (has_pcap)
         ADD(ROW_PCAP_VIEW, UI_ITEM_ACTION, "Packet capture", "Inspect saved packets", NULL, false, 0);
+    ADD(ROW_LOG_ENABLED, UI_ITEM_TOGGLE, "Enable logging", "Log all events to file", NULL,
+        g_cfg.file_log_enabled != 0, 0);
+    ADD(ROW_LOG_VERBOSITY, UI_ITEM_VALUE, "Verbosity", "left/right to change",
+        verbosity_name(g_cfg.log_verbosity), false, 0);
+    ADD(ROW_LOG_SLOTS, UI_ITEM_VALUE, "Archive slots", "left/right to change", slots, false, 0);
+    if (has_log)
+        ADD(ROW_LOG_VIEW, UI_ITEM_ACTION, "View log", "Inspect saved log", NULL, false, 0);
 #undef ADD
     return count;
 }
@@ -271,17 +431,22 @@ static void restore_os_screen(void)
 
 int main(void)
 {
-    ui_item_t items[14];
-    uint8_t roles[14];
+    ui_item_t items[20];
+    uint8_t roles[20];
     char tz[16];
     char pcap[16];
+    char slots[4];
+    char log_names[LOG_MAX_SLOTS][9];
     char version[16];
     ui_list_t list = {1, 0};
     bool has_pcap;
+    bool has_log;
 
     lwip_fileio_self_init();
     lwip_app_config_load(&g_cfg);
+    lwip_set_log_verbosity((lwip_log_verbosity_t)g_cfg.log_verbosity);
     has_pcap = load_pcap_offsets() > 0;
+    has_log = log_slots(log_names) > 0;
     snprintf(version, sizeof version, "v%s", lwip_version_string());
 
     ui_begin();
@@ -290,7 +455,8 @@ int main(void)
 
     for (;;)
     {
-        int count = build_menu(items, roles, tz, sizeof tz, pcap, sizeof pcap, has_pcap);
+        int count = build_menu(items, roles, tz, sizeof tz, pcap, sizeof pcap, slots, sizeof slots, has_pcap,
+                               has_log);
 
         ui_frame("lwIP-CE Settings", version, NULL, 0, "enter: open   left/right: change   clear: save and quit");
         ui_list_draw(&list, items, count);
@@ -340,6 +506,10 @@ int main(void)
             if (enter || left || right)
                 g_cfg.bridge_rng = right ? 1 : left ? 0 : (uint8_t)!g_cfg.bridge_rng;
             break;
+        case ROW_PCAP_ENABLED:
+            if (enter || left || right)
+                g_cfg.pcap_enabled = right ? 1 : left ? 0 : (uint8_t)!g_cfg.pcap_enabled;
+            break;
         case ROW_PCAP_SIZE:
             if (left || right || enter)
                 g_cfg.pcap_max_bytes = next_pcap_size(g_cfg.pcap_max_bytes, !left);
@@ -348,15 +518,40 @@ int main(void)
             if (enter)
                 pcap_viewer();
             break;
+        case ROW_LOG_ENABLED:
+            if (enter || left || right)
+                g_cfg.file_log_enabled = right ? 1 : left ? 0 : (uint8_t)!g_cfg.file_log_enabled;
+            break;
+        case ROW_LOG_VERBOSITY:
+            if (left && g_cfg.log_verbosity > LWIP_CFG_LOG_VERBOSITY_MIN)
+                g_cfg.log_verbosity--;
+            if ((right || enter) && g_cfg.log_verbosity < LWIP_CFG_LOG_VERBOSITY_MAX)
+                g_cfg.log_verbosity++;
+            lwip_set_log_verbosity((lwip_log_verbosity_t)g_cfg.log_verbosity);
+            break;
+        case ROW_LOG_SLOTS:
+            if (left && g_cfg.log_archive_slots > LWIP_CFG_LOG_ARCHIVE_SLOTS_MIN)
+                g_cfg.log_archive_slots--;
+            if ((right || enter) && g_cfg.log_archive_slots < LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX)
+                g_cfg.log_archive_slots++;
+            break;
+        case ROW_LOG_VIEW:
+            if (enter)
+            {
+                log_viewer();
+                has_log = log_slots(log_names) > 0;
+            }
+            break;
         default:
             break;
         }
     }
 
+    lwip_app_config_save(&g_cfg);
+    lwip_app_config_refresh();
     app_net_stop();
     ui_set_idle(NULL);
     ui_end();
-    lwip_app_config_save(&g_cfg);
     restore_os_screen();
     return 0;
 }

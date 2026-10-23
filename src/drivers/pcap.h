@@ -63,29 +63,20 @@ struct pcap_reader_ctx {
 };
 
 /**
- * @brief Enables packet capture for the given netif.
+ * @brief Applies the user's persisted pcap_enabled setting to every current
+ * netif, enabling or disabling capture on each to match.
  *
- * Allocates the interface's capture buffer from the pcap memory pool (created
- * on first use) and hands it to the interface's device state. Capture is gated
- * on that buffer being present, so this is what turns capture on.
+ * This is the only entry point that turns capture on or off. There is
+ * deliberately no per-netif enable/disable exposed to application code: the
+ * user's config setting (lwip_app_config_t.pcap_enabled, set from the config
+ * app UI) is the sole authority over whether traffic gets captured, so a
+ * dev embedding this stack cannot silently turn capture on (or keep it on
+ * after the user turned it off) from code.
  *
- * @param netif The network interface to capture on
- * @returns PCAP_OK on success (or if capture is already enabled), PCAP_ERR_ARG
- * if @b netif is NULL or has no device state, PCAP_ERR_MEM if the buffer could
- * not be allocated
+ * Safe to call at any time (link up/down, config change, interface added);
+ * a netif already in the desired state is left alone.
  */
-pcap_err_t pcap_enable_on_netif(struct netif *netif);
-
-/**
- * @brief Disables packet capture for the given netif.
- *
- * Releases the interface's capture buffer, which stops capture. Safe to call
- * on an interface that is not capturing.
- *
- * @param netif The network interface to stop capturing on
- * @returns true unless @b netif is NULL or has no device state
- */
-bool pcap_disable_on_netif(struct netif *netif);
+void pcap_apply_config(void);
 
 /**
  * @brief Flushes any staged capture records for @b netif to the capture file.
@@ -117,8 +108,7 @@ bool pcap_write(struct netif *netif, pcap_direction_t dir, const uint8_t *data, 
  * @param netif The interface being torn down
  * @note **Internal.** Flushes staged records first, unless the device is
  * already dead (unplugged), in which case the tail is dropped rather than
- * running heap-moving OS routines on a teardown path. Applications should call
- * @b pcap_disable_on_netif instead.
+ * running heap-moving OS routines on a teardown path.
  */
 void pcap_release_on_teardown(struct netif *netif);
 

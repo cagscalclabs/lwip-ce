@@ -584,7 +584,6 @@ public:
         service_up_mask_ = 0;
         service_failed_ = false;
         service_timed_out_ = false;
-        pcap_enabled_ = false;
         connect_watch_ticks_ = 0;
         network_watch_active_ = false;
         connect_watch_active_ = false;
@@ -637,8 +636,6 @@ public:
     void release(void);
 
     void attach_state(struct browser_state *state) { state_ = state; }
-    bool pcap_enabled(void) const { return pcap_enabled_; }
-    void set_pcap_enabled(bool enabled) { pcap_enabled_ = enabled; }
     bool connect(struct browser_state *state);
     bool close(struct browser_state *state);
     bool fetch(struct browser_state *state);
@@ -774,7 +771,6 @@ private:
     uint8_t service_up_mask_;
     bool service_failed_;
     bool service_timed_out_;
-    bool pcap_enabled_;
     bool network_watch_active_;
     bool connect_watch_active_;
     bool interpreter_watch_active_;
@@ -829,8 +825,6 @@ struct browser_state
     bool event_dirty;
 };
 
-static struct browser_state *browser_event_state;
-
 static void browser_parse_html(struct browser_state *state);
 static void browser_stream_flush_text(struct browser_state *state);
 static void browser_stream_flush_style_text(struct browser_state *state);
@@ -851,42 +845,6 @@ static bool browser_starts_with(const char *text, const char *prefix)
 static void browser_copy(char *dst, size_t dst_len, const char *src)
 {
     snprintf(dst, dst_len, "%s", src ? src : "");
-}
-
-static void browser_set_event_line(struct browser_state *state,
-                                   const char *text)
-{
-    if (!state)
-    {
-        return;
-    }
-    browser_copy(state->event_line, sizeof(state->event_line), text);
-    state->event_dirty = true;
-}
-
-static void browser_lwip_event_cb(const struct lwip_event *ev)
-{
-    struct browser_state *state = browser_event_state;
-
-    if (!state || !ev || ev->module != LWIP_DBG_MOD_TLS)
-    {
-        return;
-    }
-
-    if (ev->kind == LWIP_EV_INFO)
-    {
-        browser_set_event_line(state, ev->data.msg);
-    }
-    else if (ev->kind == LWIP_EV_WARN || ev->kind == LWIP_EV_ERROR)
-    {
-        char line[BROWSER_STATUS_MAX + 1];
-        snprintf(line, sizeof(line), "%s %s:%u",
-                 ev->kind == LWIP_EV_WARN ? "warn" : "err",
-                 lwip_debug_file_name(
-                     LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                 (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc));
-        browser_set_event_line(state, line);
-    }
 }
 
 static void browser_set_body(struct browser_state *state, const char *text)
@@ -3464,16 +3422,6 @@ void Browser::release(void)
     raw_content.release();
     render_object.release();
     payload_in.release();
-    if (pcap_enabled_)
-    {
-        struct netif *netif = (state_ && state_->sock)
-            ? lwip_socket_get_netif(state_->sock) : nullptr;
-        if (netif)
-        {
-            pcap_disable_on_netif(netif);
-        }
-        pcap_enabled_ = false;
-    }
     state_ = nullptr;
     initialized_ = false;
     if (network_started_)
@@ -4506,8 +4454,6 @@ static void browser_state_release(struct browser_state *state)
     {
         browser_fetch_cleanup(state);
     }
-    browser_event_state = nullptr;
-    lwip_set_event_cb(nullptr);
     browser_document_release(state);
     browser_page_release(state);
     if (state->browser)
@@ -4546,8 +4492,6 @@ int main(void)
     state->editing = true;
     state->input_mode = LWIP_EXAMPLE_CHAT_MODE_LOWER;
     browser_set_body(state, "");
-    browser_event_state = state;
-    lwip_set_event_cb(browser_lwip_event_cb);
 
     while (true)
     {
@@ -4666,30 +4610,6 @@ int main(void)
                 browser_reload(state);
                 redraw = true;
                 break;
-            case sk_Store:
-            {
-                struct netif *netif = state->sock ? lwip_socket_get_netif(state->sock) : nullptr;
-                if (netif && state->browser)
-                {
-                    if (state->browser->pcap_enabled())
-                    {
-                        pcap_disable_on_netif(netif);
-                        state->browser->set_pcap_enabled(false);
-                        browser_set_event_line(state, "pcap off");
-                    }
-                    else if (pcap_enable_on_netif(netif) == PCAP_OK)
-                    {
-                        state->browser->set_pcap_enabled(true);
-                        browser_set_event_line(state, "pcap on");
-                    }
-                    else
-                    {
-                        browser_set_event_line(state, "pcap failed");
-                    }
-                    redraw = true;
-                }
-                break;
-            }
             case sk_Left:
                 browser_scroll_horizontal(state, -4);
                 redraw = true;

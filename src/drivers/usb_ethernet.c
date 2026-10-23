@@ -1389,6 +1389,10 @@ static void eth_link_callback(struct netif *netif)
         eth_schedule_rx_for_netifs();
         eth_promote_default_if_needed(netif);
         eth_arm_dhcp_once(dev);
+        /* pcap_apply_config() re-reads pcap_enabled itself and is a no-op on
+         * every other netif, so this stays correct even though it touches
+         * more than just `netif`. */
+        pcap_apply_config();
     }
     else
     {

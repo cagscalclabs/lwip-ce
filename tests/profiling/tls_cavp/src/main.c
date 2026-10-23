@@ -16,7 +16,8 @@
  *       algorithm_id  uint8   (1=AES-GCM, 2=SHA-256, 3=HMAC, 4=HKDF,
  *                              5=DRBG, 6=RSA-PSS, 7/8=X25519,
  *                              9=AES-CBC, 10=AES-CCM, 11=PBKDF2,
- *                              12=SHA-256-MCT, 13=RSA-PKCS1v15-verify)
+ *                              12=SHA-256-MCT, 13=RSA-PKCS1v15-verify,
+ *                              14=P256-SIGVER, 15=P256-SIGGEN)
  *       test_id       uint16  little-endian
  *       payload_len   uint16  little-endian
  *       payload[payload_len]  algorithm-specific TLV (see runners below)
@@ -48,6 +49,7 @@
 #include <lwip/cryptography/passwords.h>
 #include <lwip/cryptography/rsa.h>
 #include <lwip/cryptography/x25519.h>
+#include <lwip/cryptography/p256.h>
 #include <lwip.h>
 
 #define CAVPIN_CHUNKS 16
@@ -66,6 +68,10 @@
 #define ALG_PBKDF2_HMAC_SHA256    11
 #define ALG_SHA256_MCT            12
 #define ALG_RSA_PKCS1_SHA256_VERIFY 13
+#define ALG_P256_SIGVER            14
+#define ALG_P256_SIGGEN            15
+#define ALG_P256_PUBLICKEY         16
+#define ALG_P256_SECRET            17
 
 #define STATUS_OK 0
 #define STATUS_UNSUPPORTED 1
@@ -542,16 +548,14 @@ static size_t run_rsa_pss_verify(const uint8_t *in, size_t in_len, uint8_t *out,
     }
 
     /* Step 1: RSA modexp to recover EM from sig.
-     * em_buf is in a file-scope static rather than stack: powmod_exp_u24
-     * carves ~2*modulus_len bytes of scratch off the stack internally,
-     * and the eZ80 stack is tight. Moving the EM buffer off-stack also
-     * rules out any caller-side stack-smash interaction with the bigint
-     * workspace. */
-    if (modulus_len > 256) {
+     * em_buf is in a file-scope static rather than stack: the powmod
+     * implementation uses a shared BSS scratch region, not the stack,
+     * but a stack-allocated buffer would waste eZ80's limited stack. */
+    if (modulus_len > RSA_MODULUS_MAX_SUPPORTED) {
         out[0] = 0;
         return 1;
     }
-    static uint8_t em_buf[256];
+    static uint8_t em_buf[RSA_MODULUS_MAX_SUPPORTED];
     static const uint8_t cavp_exp_be[] = {0x01, 0x00, 0x01}; /* 65537 */
     struct tls_rsa_key cavp_key = {
         sizeof(cavp_exp_be), cavp_exp_be,
@@ -626,7 +630,7 @@ static size_t run_rsa_pkcs1_v15_verify(const uint8_t *in, size_t in_len, uint8_t
         out[0] = 0;  /* verdict: invalid (size mismatch is a hard reject) */
         return 1;
     }
-    if (modulus_len > 256) {
+    if (modulus_len > RSA_MODULUS_MAX_SUPPORTED) {
         out[0] = 0;
         return 1;
     }
@@ -668,6 +672,57 @@ static size_t run_x25519_secret(const uint8_t *in, size_t in_len, uint8_t *out, 
     const uint8_t *priv = in;
     const uint8_t *peer = in + 32;
     if (!tls_x25519_secret(out, priv, peer, NULL, NULL)) return 0;
+    return 32;
+}
+
+/*
+ * P256-SIGVER payload: pub[65] || hash[32] || sig[64] (161 bytes total).
+ * Response: 1 byte — 0x01 if signature is valid, 0x00 if not.
+ */
+static size_t run_p256_sigver(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 161 || out_max < 1) return 0;
+    const uint8_t *pub  = in;
+    const uint8_t *hash = in + 65;
+    const uint8_t *sig  = in + 65 + 32;
+    out[0] = tls_p256_verify(sig, hash, pub) ? 0x01 : 0x00;
+    return 1;
+}
+
+/*
+ * P256-SIGGEN payload: priv[32] || hash[32] (64 bytes total).
+ * Response: sig[64] (r||s, big-endian).
+ */
+static size_t run_p256_siggen(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 64 || out_max < 64) return 0;
+    const uint8_t *priv = in;
+    const uint8_t *hash = in + 32;
+    if (!tls_p256_sign(out, hash, priv)) return 0;
+    return 64;
+}
+
+/*
+ * P256-PUBLICKEY payload: priv[32].
+ * Response: pub[65] (uncompressed 04||x||y).
+ */
+static size_t run_p256_publickey(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 32 || out_max < 65) return 0;
+    if (!tls_p256_publickey(out, in)) return 0;
+    return 65;
+}
+
+/*
+ * P256-SECRET payload: priv[32] || peer[65] (97 bytes total).
+ * Response: shared[32].
+ */
+static size_t run_p256_secret(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_max)
+{
+    if (in_len != 97 || out_max < 32) return 0;
+    const uint8_t *priv = in;
+    const uint8_t *peer = in + 32;
+    if (!tls_p256_secret(out, priv, peer)) return 0;
     return 32;
 }
 
@@ -820,6 +875,26 @@ int main(void)
             break;
         case ALG_SHA256_MCT:
             result_len = run_sha256_mct(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_SIGVER:
+            result_len = run_p256_sigver(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_SIGGEN:
+            result_len = run_p256_siggen(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_PUBLICKEY:
+            result_len = run_p256_publickey(payload, payload_len, scratch, sizeof(scratch));
+            if (result_len == 0)
+                status = STATUS_INTERNAL;
+            break;
+        case ALG_P256_SECRET:
+            result_len = run_p256_secret(payload, payload_len, scratch, sizeof(scratch));
             if (result_len == 0)
                 status = STATUS_INTERNAL;
             break;

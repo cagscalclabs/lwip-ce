@@ -17,8 +17,8 @@ CAVP archives covered:
   HMAC-SHA-256            HMAC.rsp [L=32] from hmactestvectors.zip
 
 Not from CAVP (no compatible archive):
-  RSA-2048-PSS-SHA-256    fresh-per-run keygen + sign (see notes below)
-  RSA-2048-PKCS1v15-SHA-256 fresh-per-run keygen + sign (see notes below)
+  RSA-PSS-SHA-256         fresh-per-run keygen + sign at 2048/3072/4096 bits (see notes below)
+  RSA-PKCS1v15-SHA-256    fresh-per-run keygen + sign at 2048/3072/4096 bits (see notes below)
   HKDF-SHA-256            RFC 5869 §A.1-A.3 plus generated vectors
   PBKDF2-HMAC-SHA-256     generated ACVP-shaped vectors (small iterations)
   X25519                  RFC 7748 §6.1 + §5.2 plus generated vectors
@@ -28,15 +28,14 @@ RSA-PSS / RSA-PKCS1v15 notes:
   the exponent in the wire format. NIST's SigVerPSS_186-3.rsp and
   SigVer15_186-3.rsp both ship every vector with a randomly-generated
   `e`, so none of those vectors are compatible with a fixed-e=65537
-  verifier. Instead, for each scheme we generate a fresh RSA-2048
-  keypair each run via python3-cryptography, sign random messages
-  (PKCS#1 v2.1 PSS, SHA-256, salt=32, or RSASSA-PKCS1-v1.5 SHA-256
-  respectively), and inject negatives by tampering with the signature
-  or message. The per-run keygen also exercises that the verifier
-  accepts arbitrary valid keys, not just the truststore key. Additional
-  API constraint: `powmod_exp_u24` takes a uint8_t for modulus size,
-  with 0 encoding 256 bytes — so both generators enforce a canonical
-  256-byte modulus (MSB set, no leading zero).
+  verifier. Instead, for each scheme we generate a fresh keypair each
+  run via python3-cryptography at 2048, 3072 and 4096 bits, sign random
+  messages (PKCS#1 v2.1 PSS, SHA-256, salt=32, or RSASSA-PKCS1-v1.5
+  SHA-256 respectively), and inject negatives by tampering with the
+  signature or message. The per-run keygen also exercises that the
+  verifier accepts arbitrary valid keys, not just the truststore key.
+  All three key sizes are tested to exercise RSA-4096 (512-byte modulus)
+  support added alongside the Comba Montgomery multiply rewrite.
 
   RSASSA-PKCS1-v1.5/SHA-256 verification (tls_rsa_pkcs1_v15_sha256_verify)
   is the function src/tls/core/x509.c actually calls to verify
@@ -103,6 +102,10 @@ ALG_ID = {
     "PBKDF2-HMAC-SHA256":      11,
     "SHA-256-MCT":             12,
     "RSA-PKCS1v15-SHA-256-VERIFY": 13,
+    "P256-SIGVER":              14,
+    "P256-SIGGEN":              15,
+    "P256-PUBLICKEY":           16,
+    "P256-SECRET":              17,
 }
 
 # Test ID ranges (sequentially assigned per algorithm)
@@ -119,6 +122,10 @@ TID_RANGES = {
     "PBKDF2-HMAC-SHA256":   11001,
     "SHA-256-MCT":          12001,
     "RSA-PKCS1v15-SHA-256-VERIFY": 13001,
+    "P256-SIGVER":          14001,
+    "P256-SIGGEN":          15001,
+    "P256-PUBLICKEY":       16001,
+    "P256-SECRET":          17001,
 }
 
 
@@ -528,25 +535,14 @@ def fetch_hmac_sha256() -> list[dict[str, Any]]:
 
 
 def gen_rsa_pss_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any]]:
-    """Generate a fresh RSA-2048 keypair and sign N random messages with
-    PKCS#1 v2.1 PSS (SHA-256, salt=32 bytes).
+    """Generate fresh RSA keypairs at 2048, 3072, and 4096 bits and sign
+    N random messages total with PKCS#1 v2.1 PSS (SHA-256, salt=32 bytes).
 
-    Returns roughly equal numbers of positive (valid) and negative
-    (tampered) vectors so a verifier that always-accepts or always-rejects
-    is caught. Negatives are produced by flipping a single bit in either
-    the signature or the message; the verifier has no way to detect that
-    flip without running modexp + PSS decode, so both stages get tested.
+    Vectors are spread evenly across the three key sizes so all are exercised.
+    Returns roughly equal numbers of positive and negative vectors.
 
-    Uses python3-cryptography (apt: python3-cryptography). The library's
-    PSS signer is the reference for what our calc-side verifier should
-    accept; matching its output bit-for-bit is the success criterion.
-
-    The per-run keygen also exercises that the verifier accepts arbitrary
-    valid 2048-bit keys, not just the truststore key — i.e., it catches
-    code that accidentally hardwires anything beyond e=65537.
+    Uses python3-cryptography (apt: python3-cryptography).
     """
-    # Lazy import — only the RSA path needs cryptography. The apt package
-    # python3-cryptography is the runtime fix for the missing dep.
     try:
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -555,86 +551,78 @@ def gen_rsa_pss_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any
             "RSA-PSS vector generation needs python3-cryptography "
             f"(apt install python3-cryptography). Import failed: {e}")
 
-    print("  generating fresh RSA-2048 keypair (e=65537) ...", file=sys.stderr)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    n = key.public_key().public_numbers().n
-    # API constraint: powmod_exp_u24 takes uint8_t for size, where 0
-    # encodes 256. A freshly generated 2048-bit key always has MSB set
-    # in its modulus, but assert to fail loud if the library ever lies.
-    n_bytes = n.to_bytes(256, "big")
-    if (n_bytes[0] & 0x80) == 0:
-        raise SystemExit("generated 2048-bit modulus has MSB clear "
-                         "(should be impossible)")
-
+    key_sizes = [2048, 3072, 4096]
     pss = padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32)
 
     n_negatives = max(1, n_vectors // 2) if n_vectors >= 2 else 0
     n_positives = n_vectors - n_negatives
 
     out: list[dict[str, Any]] = []
-    for i in range(n_positives):
-        msg = rng.randbytes(rng.randint(16, 128))
-        sig = key.sign(msg, pss, hashes.SHA256())
-        out.append({
-            "algorithm": "RSA-PSS-SHA-256-VERIFY",
-            "source_file": "generated/cavp_fetch.py",
-            "source_count": f"positive[{i}],msg_len={len(msg)}",
-            "modulus_hex": n_bytes.hex(),
-            "exponent_hex": "010001",
-            "salt_len": 32,
-            "msg_hex": msg.hex(),
-            "sig_hex": sig.hex(),
-            "expected_verify": True,
-        })
+    pos_idx = 0
+    neg_idx = 0
 
-    for i in range(n_negatives):
-        msg = rng.randbytes(rng.randint(16, 128))
-        sig = bytearray(key.sign(msg, pss, hashes.SHA256()))
-        # Tamper either the signature or the message. Sig tampering
-        # exercises modexp (different EM); msg tampering exercises PSS
-        # decode (modexp ok, but H' != H).
-        if rng.random() < 0.5:
-            sig[rng.randrange(len(sig))] ^= 1 << rng.randrange(8)
-            mode = "sig_flip"
+    for i in range(n_vectors):
+        key_bits = key_sizes[i % len(key_sizes)]
+        mod_bytes = key_bits // 8
+        print(f"  generating fresh RSA-{key_bits} keypair (e=65537) ...", file=sys.stderr)
+        key = rsa.generate_private_key(public_exponent=65537, key_size=key_bits)
+        n = key.public_key().public_numbers().n
+        n_bytes = n.to_bytes(mod_bytes, "big")
+        if (n_bytes[0] & 0x80) == 0:
+            raise SystemExit(f"generated {key_bits}-bit modulus has MSB clear "
+                             "(should be impossible)")
+
+        if i < n_positives:
+            msg = rng.randbytes(rng.randint(16, 128))
+            sig = key.sign(msg, pss, hashes.SHA256())
+            out.append({
+                "algorithm": "RSA-PSS-SHA-256-VERIFY",
+                "source_file": "generated/cavp_fetch.py",
+                "source_count": f"positive[{pos_idx}],bits={key_bits},msg_len={len(msg)}",
+                "modulus_hex": n_bytes.hex(),
+                "exponent_hex": "010001",
+                "salt_len": 32,
+                "msg_hex": msg.hex(),
+                "sig_hex": sig.hex(),
+                "expected_verify": True,
+            })
+            pos_idx += 1
         else:
-            msg = bytearray(msg)
-            msg[rng.randrange(len(msg))] ^= 1 << rng.randrange(8)
-            msg = bytes(msg)
-            mode = "msg_flip"
-        out.append({
-            "algorithm": "RSA-PSS-SHA-256-VERIFY",
-            "source_file": "generated/cavp_fetch.py",
-            "source_count": f"negative[{i}],{mode},msg_len={len(msg)}",
-            "modulus_hex": n_bytes.hex(),
-            "exponent_hex": "010001",
-            "salt_len": 32,
-            "msg_hex": msg.hex(),
-            "sig_hex": bytes(sig).hex(),
-            "expected_verify": False,
-        })
+            msg = rng.randbytes(rng.randint(16, 128))
+            sig = bytearray(key.sign(msg, pss, hashes.SHA256()))
+            if rng.random() < 0.5:
+                sig[rng.randrange(len(sig))] ^= 1 << rng.randrange(8)
+                mode = "sig_flip"
+            else:
+                msg = bytearray(msg)
+                msg[rng.randrange(len(msg))] ^= 1 << rng.randrange(8)
+                msg = bytes(msg)
+                mode = "msg_flip"
+            out.append({
+                "algorithm": "RSA-PSS-SHA-256-VERIFY",
+                "source_file": "generated/cavp_fetch.py",
+                "source_count": f"negative[{neg_idx}],{mode},bits={key_bits},msg_len={len(msg)}",
+                "modulus_hex": n_bytes.hex(),
+                "exponent_hex": "010001",
+                "salt_len": 32,
+                "msg_hex": msg.hex(),
+                "sig_hex": bytes(sig).hex(),
+                "expected_verify": False,
+            })
+            neg_idx += 1
 
     return out
 
 
 def gen_rsa_pkcs1_v15_sha256(rng: random.Random, n_vectors: int) -> list[dict[str, Any]]:
-    """Generate a fresh RSA-2048 keypair and sign N random messages with
-    RSASSA-PKCS1-v1.5 (SHA-256).
+    """Generate fresh RSA keypairs at 2048, 3072, and 4096 bits and sign
+    N random messages total with RSASSA-PKCS1-v1.5 (SHA-256).
 
-    Mirrors gen_rsa_pss_sha256 above -- same rationale applies: NIST's
-    SigVer15_186-3.rsp ships vectors with a randomly-generated `e` per
-    vector, incompatible with this project's fixed e=65537 verifier, so
-    vectors are generated fresh per run instead.
+    Mirrors gen_rsa_pss_sha256 -- same rationale applies. Vectors spread
+    evenly across three key sizes. Returns roughly equal positive/negative.
 
-    This exercises tls_rsa_pkcs1_v15_sha256_verify (src/tls/core/rsa.c),
-    which is the function src/tls/core/x509.c actually calls to verify
-    adjacent-link signatures when walking a certificate chain -- i.e.
-    this is the real signature-verification gate for RSA-2048+SHA-256
-    chain links, not just a standalone primitive exercised in isolation.
-
-    Returns roughly equal numbers of positive (valid) and negative
-    (tampered) vectors, same tamper strategy as the PSS generator: flip
-    a bit in either the signature (exercises modexp) or the message
-    (exercises the digest/DigestInfo comparison, modexp still succeeds).
+    This exercises tls_rsa_pkcs1_v15_sha256_verify, which is what x509.c
+    calls to verify adjacent-link certificate chain signatures.
     """
     try:
         from cryptography.hazmat.primitives import hashes
@@ -644,55 +632,63 @@ def gen_rsa_pkcs1_v15_sha256(rng: random.Random, n_vectors: int) -> list[dict[st
             "RSA-PKCS1v15 vector generation needs python3-cryptography "
             f"(apt install python3-cryptography). Import failed: {e}")
 
-    print("  generating fresh RSA-2048 keypair (e=65537) ...", file=sys.stderr)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    n = key.public_key().public_numbers().n
-    n_bytes = n.to_bytes(256, "big")
-    if (n_bytes[0] & 0x80) == 0:
-        raise SystemExit("generated 2048-bit modulus has MSB clear "
-                         "(should be impossible)")
-
+    key_sizes = [2048, 3072, 4096]
     pkcs1v15 = padding.PKCS1v15()
 
     n_negatives = max(1, n_vectors // 2) if n_vectors >= 2 else 0
     n_positives = n_vectors - n_negatives
 
     out: list[dict[str, Any]] = []
-    for i in range(n_positives):
-        msg = rng.randbytes(rng.randint(16, 128))
-        sig = key.sign(msg, pkcs1v15, hashes.SHA256())
-        out.append({
-            "algorithm": "RSA-PKCS1v15-SHA-256-VERIFY",
-            "source_file": "generated/cavp_fetch.py",
-            "source_count": f"positive[{i}],msg_len={len(msg)}",
-            "modulus_hex": n_bytes.hex(),
-            "exponent_hex": "010001",
-            "msg_hex": msg.hex(),
-            "sig_hex": sig.hex(),
-            "expected_verify": True,
-        })
+    pos_idx = 0
+    neg_idx = 0
 
-    for i in range(n_negatives):
-        msg = rng.randbytes(rng.randint(16, 128))
-        sig = bytearray(key.sign(msg, pkcs1v15, hashes.SHA256()))
-        if rng.random() < 0.5:
-            sig[rng.randrange(len(sig))] ^= 1 << rng.randrange(8)
-            mode = "sig_flip"
+    for i in range(n_vectors):
+        key_bits = key_sizes[i % len(key_sizes)]
+        mod_bytes = key_bits // 8
+        print(f"  generating fresh RSA-{key_bits} keypair (e=65537) ...", file=sys.stderr)
+        key = rsa.generate_private_key(public_exponent=65537, key_size=key_bits)
+        n = key.public_key().public_numbers().n
+        n_bytes = n.to_bytes(mod_bytes, "big")
+        if (n_bytes[0] & 0x80) == 0:
+            raise SystemExit(f"generated {key_bits}-bit modulus has MSB clear "
+                             "(should be impossible)")
+
+        if i < n_positives:
+            msg = rng.randbytes(rng.randint(16, 128))
+            sig = key.sign(msg, pkcs1v15, hashes.SHA256())
+            out.append({
+                "algorithm": "RSA-PKCS1v15-SHA-256-VERIFY",
+                "source_file": "generated/cavp_fetch.py",
+                "source_count": f"positive[{pos_idx}],bits={key_bits},msg_len={len(msg)}",
+                "modulus_hex": n_bytes.hex(),
+                "exponent_hex": "010001",
+                "msg_hex": msg.hex(),
+                "sig_hex": sig.hex(),
+                "expected_verify": True,
+            })
+            pos_idx += 1
         else:
-            msg = bytearray(msg)
-            msg[rng.randrange(len(msg))] ^= 1 << rng.randrange(8)
-            msg = bytes(msg)
-            mode = "msg_flip"
-        out.append({
-            "algorithm": "RSA-PKCS1v15-SHA-256-VERIFY",
-            "source_file": "generated/cavp_fetch.py",
-            "source_count": f"negative[{i}],{mode},msg_len={len(msg)}",
-            "modulus_hex": n_bytes.hex(),
-            "exponent_hex": "010001",
-            "msg_hex": msg.hex(),
-            "sig_hex": bytes(sig).hex(),
-            "expected_verify": False,
-        })
+            msg = rng.randbytes(rng.randint(16, 128))
+            sig = bytearray(key.sign(msg, pkcs1v15, hashes.SHA256()))
+            if rng.random() < 0.5:
+                sig[rng.randrange(len(sig))] ^= 1 << rng.randrange(8)
+                mode = "sig_flip"
+            else:
+                msg = bytearray(msg)
+                msg[rng.randrange(len(msg))] ^= 1 << rng.randrange(8)
+                msg = bytes(msg)
+                mode = "msg_flip"
+            out.append({
+                "algorithm": "RSA-PKCS1v15-SHA-256-VERIFY",
+                "source_file": "generated/cavp_fetch.py",
+                "source_count": f"negative[{neg_idx}],{mode},bits={key_bits},msg_len={len(msg)}",
+                "modulus_hex": n_bytes.hex(),
+                "exponent_hex": "010001",
+                "msg_hex": msg.hex(),
+                "sig_hex": bytes(sig).hex(),
+                "expected_verify": False,
+            })
+            neg_idx += 1
 
     return out
 
@@ -830,6 +826,111 @@ def gen_x25519(rng: random.Random, n_vectors: int) -> tuple[list[dict[str, Any]]
         })
 
     return pub_vectors, secret_vectors
+
+
+def gen_p256(rng: random.Random, n_vectors: int) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]]]:
+    """Generate n_vectors each of P-256 keygen, ECDH, SIGGEN, and SIGVER vectors."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.backends import default_backend
+    except ImportError:
+        raise SystemExit(
+            "P-256 vector generation needs python3-cryptography: pip install cryptography"
+        )
+
+    n_order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+    backend = default_backend()
+
+    def rand_scalar() -> int:
+        while True:
+            v = int.from_bytes(rng.randbytes(32), "big")
+            if 1 <= v <= n_order - 1:
+                return v
+
+    def priv_key(scalar: int):
+        return ec.derive_private_key(scalar, SECP256R1(), backend)
+
+    def pub_bytes(key) -> bytes:
+        pn = key.public_key().public_numbers()
+        return b"\x04" + pn.x.to_bytes(32, "big") + pn.y.to_bytes(32, "big")
+
+    pub_vectors: list[dict[str, Any]] = []
+    secret_vectors: list[dict[str, Any]] = []
+    siggen_vectors: list[dict[str, Any]] = []
+    sigver_vectors: list[dict[str, Any]] = []
+
+    for i in range(n_vectors):
+        # keygen
+        s = rand_scalar()
+        k = priv_key(s)
+        pub = pub_bytes(k)
+        pub_vectors.append({
+            "algorithm": "P256-PUBLICKEY",
+            "priv_hex": s.to_bytes(32, "big").hex(),
+            "expected_pub_hex": pub.hex(),
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"publickey[{i}]",
+        })
+
+        # ECDH
+        peer_s = rand_scalar()
+        peer_k = priv_key(peer_s)
+        peer_pub = pub_bytes(peer_k)
+        shared = k.exchange(ec.ECDH(), peer_k.public_key())
+        secret_vectors.append({
+            "algorithm": "P256-SECRET",
+            "priv_hex": s.to_bytes(32, "big").hex(),
+            "peer_pub_hex": peer_pub.hex(),
+            "expected_shared_hex": shared.hex(),
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"secret[{i}]",
+        })
+
+        # SIGGEN
+        sign_s = rand_scalar()
+        sign_k = priv_key(sign_s)
+        msg = rng.randbytes(32)
+        import hashlib
+        msg_hash = hashlib.sha256(msg).digest()
+        sig_der = sign_k.sign(msg, ec.ECDSA(hashes.SHA256(), deterministic_signing=True))
+        r_int, s_int = decode_dss_signature(sig_der)
+        sig_bytes = r_int.to_bytes(32, "big") + s_int.to_bytes(32, "big")
+        siggen_vectors.append({
+            "algorithm": "P256-SIGGEN",
+            "priv_hex": sign_s.to_bytes(32, "big").hex(),
+            "hash_hex": msg_hash.hex(),
+            "expected_sig_hex": sig_bytes.hex(),
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"siggen[{i}]",
+        })
+
+        # SIGVER (valid)
+        ver_s = rand_scalar()
+        ver_k = priv_key(ver_s)
+        ver_pub = pub_bytes(ver_k)
+        ver_msg = rng.randbytes(32)
+        ver_hash = hashlib.sha256(ver_msg).digest()
+        ver_sig_der = ver_k.sign(ver_msg, ec.ECDSA(hashes.SHA256()))
+        ver_r, ver_s2 = decode_dss_signature(ver_sig_der)
+        ver_sig = ver_r.to_bytes(32, "big") + ver_s2.to_bytes(32, "big")
+        sigver_vectors.append({
+            "algorithm": "P256-SIGVER",
+            "pub_hex": ver_pub.hex(),
+            "hash_hex": ver_hash.hex(),
+            "sig_hex": ver_sig.hex(),
+            "expected_verify": True,
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"sigver[{i}]",
+        })
+
+    return pub_vectors, secret_vectors, siggen_vectors, sigver_vectors
 
 
 # ============================================================
@@ -1023,6 +1124,31 @@ def pack_payload(v: dict) -> bytes:
         if len(seed) != 32:
             raise ValueError(f"SHA-256 MCT seed must be 32 bytes, got {len(seed)}")
         return seed
+    # P-256: payload formats match firmware run_p256_* wire format
+    if alg == "P256-PUBLICKEY":
+        priv = h(v["priv_hex"])
+        if len(priv) != 32:
+            raise ValueError(f"P256 priv must be 32 bytes, got {len(priv)}")
+        return priv                         # payload: priv[32]
+    if alg == "P256-SECRET":
+        priv = h(v["priv_hex"])
+        peer = h(v["peer_pub_hex"])
+        if len(priv) != 32 or len(peer) != 65:
+            raise ValueError(f"P256 priv=32, peer=65 bytes; got {len(priv)}, {len(peer)}")
+        return priv + peer                  # payload: priv[32] || peer[65]
+    if alg == "P256-SIGGEN":
+        priv = h(v["priv_hex"])
+        msg_hash = h(v["hash_hex"])
+        if len(priv) != 32 or len(msg_hash) != 32:
+            raise ValueError("P256-SIGGEN: priv and hash must each be 32 bytes")
+        return priv + msg_hash              # payload: priv[32] || hash[32]
+    if alg == "P256-SIGVER":
+        pub = h(v["pub_hex"])
+        msg_hash = h(v["hash_hex"])
+        sig = h(v["sig_hex"])
+        if len(pub) != 65 or len(msg_hash) != 32 or len(sig) != 64:
+            raise ValueError(f"P256-SIGVER: pub=65, hash=32, sig=64; got {len(pub)},{len(msg_hash)},{len(sig)}")
+        return pub + msg_hash + sig         # payload: pub[65] || hash[32] || sig[64]
     raise ValueError(f"unknown algorithm: {alg}")
 
 
@@ -1132,7 +1258,7 @@ def build_expected(vectors: list[dict[str, Any]], seed: int, sample_size: int) -
         for k in ("expected_hex", "expected_tag_hex", "expected_data_hex",
                   "expected_accept", "operation",
                   "expected_okm_hex", "expected_pub_hex", "expected_shared_hex",
-                  "expected_verify"):
+                  "expected_sig_hex", "expected_verify"):
             if k in v:
                 rec[k] = v[k]
         # Include the source info for traceability in failure reports
@@ -1333,6 +1459,29 @@ def main() -> int:
         source = v.get("source_file", v.get("$source", "unknown"))
         count = v.get("source_count", "pinned")
         print(f"    x25519 tid={v['test_id']} <- {source} Count={count}", file=sys.stderr)
+
+    print(f"==> [P256] generating {sample_size} vectors each for "
+          f"PUBLICKEY, SECRET, SIGGEN, SIGVER ...", file=sys.stderr)
+    try:
+        p256_pub_vectors, p256_secret_vectors, p256_siggen_vectors, p256_sigver_vectors = \
+            gen_p256(rng, sample_size)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"==> [P256] FAILED: {e}", file=sys.stderr)
+        return 2
+    assign_test_ids(p256_pub_vectors, "P256-PUBLICKEY")
+    assign_test_ids(p256_secret_vectors, "P256-SECRET")
+    assign_test_ids(p256_siggen_vectors, "P256-SIGGEN")
+    assign_test_ids(p256_sigver_vectors, "P256-SIGVER")
+    all_vectors.extend(p256_pub_vectors)
+    all_vectors.extend(p256_secret_vectors)
+    all_vectors.extend(p256_siggen_vectors)
+    all_vectors.extend(p256_sigver_vectors)
+    for v in p256_pub_vectors + p256_secret_vectors + p256_siggen_vectors + p256_sigver_vectors:
+        source = v.get("source_file", "generated/cavp_fetch.py")
+        count = v.get("source_count", "?")
+        print(f"    p256 tid={v['test_id']} <- {source} Count={count}", file=sys.stderr)
 
     # Sort for stable output
     all_vectors.sort(key=lambda v: v["test_id"])

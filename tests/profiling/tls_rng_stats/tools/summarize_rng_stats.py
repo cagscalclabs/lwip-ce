@@ -75,12 +75,31 @@ def summarize_scope(name: str, profiles: list[dict[str, Any]]) -> dict[str, Any]
     conservative_h = min(marginal_h, markov_h)
     worst_rho_row = max(runs, key=lambda row: abs(float(row["lag1_phi"])))
     worst_rho = float(worst_rho_row["lag1_phi"])
+    worst_lag_correlations: dict[str, float | None] = {}
+    for lag in ANALYZER.PROFILED_LAGS:
+        key = f"lag{lag}_correlation_heuristic"
+        values = [float(row[key]) for row in runs if row.get(key) is not None]
+        worst_lag_correlations[str(lag)] = (
+            max(values, key=abs) if values else None
+        )
+    lag_screen_runs = [
+        row for row in runs if row.get("profiled_lags_available") == [1, 2, 3, 4]
+    ]
+    lag_screen_failures = sum(
+        not bool(row["projected_startup_lag_screen_pass"])
+        for row in lag_screen_runs
+    )
 
     distributions = {
         "marginal_h": [
             float(row["h_mcv_lower_99_bits_per_raw_bit"]) for row in runs
         ],
         "lag1_phi": [float(row["lag1_phi"]) for row in runs],
+        "max_abs_lag_correlation": [
+            float(row["max_abs_lag_correlation_heuristic"])
+            for row in runs
+            if row.get("max_abs_lag_correlation_heuristic") is not None
+        ],
         "conservative_h": [
             min(
                 float(row["h_mcv_lower_99_bits_per_raw_bit"]),
@@ -97,6 +116,13 @@ def summarize_scope(name: str, profiles: list[dict[str, Any]]) -> dict[str, Any]
         "marginal_h_lower_99_bits_per_raw_bit": marginal_h,
         "worst_window_lag1_phi": worst_rho,
         "max_abs_lag1_phi": abs(worst_rho),
+        "worst_lag_correlations": worst_lag_correlations,
+        **{
+            f"worst_lag{lag}_correlation_heuristic": value
+            for lag, value in worst_lag_correlations.items()
+        },
+        "projected_lag_screen_windows": len(lag_screen_runs),
+        "projected_lag_screen_failures": lag_screen_failures,
         "markov_h_lower_99_bits_per_raw_bit": markov_h,
         "first_order_dependency_factor": (
             min(1.0, conservative_h / marginal_h) if marginal_h > 0.0 else 0.0
@@ -124,7 +150,8 @@ def build_report(profiles: list[dict[str, Any]]) -> dict[str, Any]:
         "scope_warning": (
             "The Markov result is a coarse first-order dependence bound, not a "
             "complete SP 800-90B non-IID entropy assessment; longer-range "
-            "dependence can reduce actual min-entropy."
+            "dependence can reduce actual min-entropy. Lag-2 through lag-4 "
+            "results are diagnostics only and do not increase entropy credit."
         ),
         "source_files": [str(profile["source_file"]) for profile in profiles],
         "scopes": scopes,
@@ -137,16 +164,22 @@ def markdown_escape(value: str) -> str:
 
 def summary_table(scopes: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| Scope | Profiles | Windows | Samples | Marginal H₉₉ | Worst ρ₁ | Markov H₉₉ | Dependency factor | Conservative H |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Scope | Profiles | Windows | Samples | Marginal H₉₉ | Worst ρ₁…₄ (heuristic) | Projected lag-screen failures | Markov H₉₉ | Dependency factor | Conservative H |",
+        "|---|---:|---:|---:|---:|---|---:|---:|---:|---:|",
     ]
     for scope in scopes:
+        lag_values = scope["worst_lag_correlations"]
+        lag_summary = ", ".join(
+            f"ρ{lag}={float(value):+.4f}" if value is not None else f"ρ{lag}=n/a"
+            for lag, value in lag_values.items()
+        )
         lines.append(
             f"| {markdown_escape(str(scope['scope']))} "
             f"| {int(scope['profiles'])} | {int(scope['windows'])} "
             f"| {int(scope['samples']):,} "
             f"| {float(scope['marginal_h_lower_99_bits_per_raw_bit']):.6f} "
-            f"| {float(scope['worst_window_lag1_phi']):+.6f} "
+            f"| {lag_summary} "
+            f"| {int(scope['projected_lag_screen_failures'])}/{int(scope['projected_lag_screen_windows'])} "
             f"| {float(scope['markov_h_lower_99_bits_per_raw_bit']):.6f} "
             f"| {float(scope['first_order_dependency_factor']):.6f} "
             f"| {float(scope['conservative_h_bits_per_raw_bit']):.6f} |"
@@ -165,7 +198,7 @@ def write_markdown(path: Path, report: dict[str, Any], image_url: str) -> None:
             "bits per raw bit."
         ),
         "",
-        f"![RNG entropy and lag-1 correlation distributions]({image_url})",
+        f"![RNG entropy and lag-1 through lag-4 correlation distributions]({image_url})",
         "",
         (
             "> Smoothed distributions are descriptive rather than fitted normal "
@@ -183,7 +216,8 @@ def write_markdown(path: Path, report: dict[str, Any], image_url: str) -> None:
         "## Interpretation",
         "",
         "- **Marginal H₉₉** is the lower 99% MCV estimate, conservatively taking the poorer of the pooled and worst-window results.",
-        "- **Worst ρ₁** is the signed lag-1 phi coefficient having the largest absolute magnitude.",
+        "- **Worst ρ₁…₄** uses the stationary-binary correlation heuristic `1-qₖ/(2p₀p₁)`; these values diagnose periodicity and do not add entropy credit.",
+        "- **Projected lag-screen failures** compares each complete version 3 profile window's aggregate lag rates with the startup bounds; it is diagnostic and is not an execution of the 952-sample startup test.",
         "- **Conservative H** is the lower of the marginal and first-order Markov estimates.",
         "- The aggregate headline is a worst-supported bound across the dataset, not an average calculator.",
         "",
@@ -202,6 +236,12 @@ def write_csv(path: Path, report: dict[str, Any]) -> None:
         "marginal_h_lower_99_bits_per_raw_bit",
         "worst_window_lag1_phi",
         "max_abs_lag1_phi",
+        "worst_lag1_correlation_heuristic",
+        "worst_lag2_correlation_heuristic",
+        "worst_lag3_correlation_heuristic",
+        "worst_lag4_correlation_heuristic",
+        "projected_lag_screen_windows",
+        "projected_lag_screen_failures",
         "markov_h_lower_99_bits_per_raw_bit",
         "first_order_dependency_factor",
         "conservative_h_bits_per_raw_bit",
@@ -217,7 +257,7 @@ def nice_correlation_limit(scopes: list[dict[str, Any]]) -> float:
     observed = max(
         abs(value)
         for scope in scopes
-        for value in scope["distributions"]["lag1_phi"]
+        for value in scope["distributions"]["max_abs_lag_correlation"]
     )
     return min(1.0, max(0.05, math.ceil(observed * 20.0) / 20.0))
 
@@ -254,7 +294,7 @@ def write_svg(path: Path, report: dict[str, Any], paper_chart: bool = False) -> 
     rho_limit = nice_correlation_limit(scopes)
     panels = [
         ("marginal_h", "Marginal H₉₉", 0.0, 1.0, "#0969da"),
-        ("lag1_phi", "Lag-1 correlation ρ₁", -rho_limit, rho_limit, "#8250df"),
+        ("max_abs_lag_correlation", "Max |lag correlation|, k=1…4", 0.0, rho_limit, "#8250df"),
         ("conservative_h", "Conservative H", 0.0, 1.0, "#1a7f37"),
     ]
 

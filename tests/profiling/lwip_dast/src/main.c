@@ -34,9 +34,11 @@
 #define DAST_RECV_CAP      128
 #define DAST_TCP_ACTIVE_MAX  4
 #define DAST_CTRL_PORT      9997
+#define DAST_CTRL_BUF_CAP  80  /* large enough for PSK:<64 hex> */
 #define DAST_TLS_HOST_CAP 48
 #define DAST_TLS_TIMEOUT_MS 45000u
 #define DAST_TLS_RX_MAX 1024u
+#define DAST_PSK_IDENTITY "lwip-dast"
 
 static volatile uint16_t dast_events;
 static volatile uint16_t dast_accepts;
@@ -64,6 +66,11 @@ static char dast_tls_host[DAST_TLS_HOST_CAP];
 static volatile uint16_t dast_tls_err;
 static volatile int dast_tls_raw;
 static volatile uint8_t dast_tls_status;
+
+/* PSK for the next TLS connection, set via PSK: control message.
+ * psk_len > 0 means a PSK was received and should be used. */
+static uint8_t dast_tls_psk[32];
+static bool dast_tls_use_psk = false;
 
 /* Set by dast_dhcp_service_cb once lwip_netif_request_services() resolves
  * the DHCP request (success, failure, or timeout). Using the callback form
@@ -101,7 +108,7 @@ static void dast_ctrl_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     (void)port;
     if (!p)
         return;
-    char buf[8] = {0};
+    char buf[DAST_CTRL_BUF_CAP] = {0};
     pbuf_copy_partial(p, buf, sizeof(buf) - 1, 0);
     pbuf_free(p);
 
@@ -119,6 +126,27 @@ static void dast_ctrl_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         dast_ctrl_signal = DAST_CTRL_ABRT;
     else if (strncmp(buf, "START", 5) == 0)
         dast_ctrl_signal = DAST_CTRL_START;
+    else if (strncmp(buf, "PSK:", 4) == 0)
+    {
+        /* PSK:<64 hex chars> — store 32-byte PSK for the next TLS connect */
+        const char *hex = buf + 4;
+        bool ok = true;
+        for (uint8_t i = 0; i < 32 && ok; i++)
+        {
+            char hi = hex[i * 2], lo = hex[i * 2 + 1];
+            uint8_t hv = 0, lv = 0;
+            if (hi >= '0' && hi <= '9') hv = (uint8_t)(hi - '0');
+            else if (hi >= 'a' && hi <= 'f') hv = (uint8_t)(hi - 'a' + 10);
+            else if (hi >= 'A' && hi <= 'F') hv = (uint8_t)(hi - 'A' + 10);
+            else ok = false;
+            if (lo >= '0' && lo <= '9') lv = (uint8_t)(lo - '0');
+            else if (lo >= 'a' && lo <= 'f') lv = (uint8_t)(lo - 'a' + 10);
+            else if (lo >= 'A' && lo <= 'F') lv = (uint8_t)(lo - 'A' + 10);
+            else ok = false;
+            dast_tls_psk[i] = (uint8_t)((hv << 4) | lv);
+        }
+        dast_tls_use_psk = ok;
+    }
     else if (strncmp(buf, "TRBK", 4) == 0)
     {
         uint8_t tb_count = 0;
@@ -403,6 +431,16 @@ static bool dast_tls_create(void)
         dast_tls_err = (uint16_t)LWIP_ERR_MEM;
         dast_tls_status = 0;
         return false;
+    }
+
+    if (dast_tls_use_psk)
+    {
+        lwip_socket_set_tls_psk(dast_tls_sock,
+                                dast_tls_psk,
+                                (const uint8_t *)DAST_PSK_IDENTITY,
+                                sizeof(DAST_PSK_IDENTITY) - 1);
+        dast_tls_use_psk = false;
+        memset(dast_tls_psk, 0, sizeof(dast_tls_psk));
     }
 
     lwip_socket_on_event(dast_tls_sock, LWIP_SOCKET_EVENTF_ALL,

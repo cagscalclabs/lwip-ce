@@ -9,6 +9,8 @@
 #include "lwip/sys.h"
 #include "lwip/timeouts.h"
 #include "lwip/dispatch.h"
+#include "lwip/app_config.h"
+#include "lwip/log_file.h"
 #include "drivers/mem.h"
 #include "drivers/usb_ethernet.h"
 #include "lwip-imports.h"
@@ -71,6 +73,8 @@ static bool net_start(void)
     eth_reset_shutdown();
     if (lwip_init() != ERR_OK)
         return false;
+    if (lwip_app_config_get()->file_log_enabled)
+        lwip_log_file_start(lwip_app_config_get()->log_archive_slots);
     g_profiles = mem_malloc(PROFILES_MAX * sizeof *g_profiles);
     g_networks = mem_malloc(NETWORKS_MAX * sizeof *g_networks);
     g_items = mem_malloc(ITEMS_MAX * sizeof *g_items);
@@ -97,6 +101,7 @@ void app_net_stop(void)
     g_net_started = false;
     lwip_wifi_set_event_cb(NULL, NULL);
     lwip_dispatch_stop();
+    lwip_log_file_stop();
     eth_prepare_shutdown();
     usb_fn.cleanup();
     eth_finish_shutdown();
