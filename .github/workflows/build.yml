@@ -145,6 +145,9 @@ jobs:
           make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
           ce-libify --version
 
+      - name: Audit fatal error logging
+        run: python3 tests/host/error_logging/test_error_sites.py
+
       - name: make dylib-release
         id: make_dylib
         run: make dylib-release

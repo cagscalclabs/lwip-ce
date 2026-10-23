@@ -16,12 +16,10 @@ globl _tls_entropy_collect
 globl _tls_random_debug_source_ptr
 globl _tls_random_debug_source_mask
 globl _tls_random_health_epoch
-; Exported for the C layer to read and log after tls_entropy_collect()
-; returns -- see tls_rng_log_asm_health() in random.c. Read-only from C.
-globl _sprng_consec_health_fails
 globl _sprng_recovery_rescanned
+globl _sprng_last_health_mask
 .type _tls_random_init_entropy,@function
-.type _tls_entropy_gather256,@function
+.type _tls_entropy_gather192,@function
 .type _tls_entropy_collect,@function
 .type _tls_random_debug_source_ptr,@function
 .type _tls_random_debug_source_mask,@function
@@ -37,15 +35,20 @@ globl _sprng_recovery_rescanned
 ;   - marginal ones must be within [128, 384] (observed 25/75 bound), and
 ;   - pair disagreements must be within [64, 192].
 ;
-; Among qualifying bits, prefer the disagreement count closest to 128. The
-; selected address/bit pair is then validated (.Linit_validate_candidate):
-; first by an SP 800-90B §4.3 start-up test -- 1024 samples drawn through
-; .Lsample_bits, the exact code path and sample spacing used by generation,
-; all of which must pass the continuous RCT/APT (.Lsample_health_check) --
-; and then by 512 fresh adjacent pairs (1024 raw reads) against the scaled
-; marginal/disagreement bounds. Start-up samples are wiped and never conditioned or credited. Only the
-; byte address is needed by tls_entropy_collect(); the bit mask is retained so raw
-; source diagnostics can target the exact bit to which entropy is credited.
+; Among qualifying bits, prefer the marginal count closest to 256 ones, using
+; disagreement closeness to 128 only as a tie-breaker. This matches the source
+; model: sense-amplifier noise is expressed primarily as an unpredictable
+; marginal decision, while read-to-read disagreement is useful for rejecting
+; stuck or deterministic-alternating behavior but is not itself entropy.
+;
+; The best four candidates are retained in exact score order. Candidates are
+; then validated in that order (.Linit_validate_candidate): two consecutive
+; 952-sample windows are drawn through .Lsample_bits, the exact code path and
+; spacing used by generation, and must pass continuous RCT/APT plus the 25/75
+; marginal gate. The first window also gets the lag-1..4 periodicity screen.
+; Finally, 512 fresh adjacent pairs (1024 raw reads) must meet the scaled
+; marginal/disagreement bounds.
+; Startup samples are wiped and never conditioned or credited.
 ;
 ; Counter records use the RNG overlay because initialization and generation
 ; are never live at the same time:
@@ -72,49 +75,61 @@ globl _sprng_recovery_rescanned
 .equ _sprng_init_records,       _sprng_entropy_pool
 .equ _sprng_init_sample0,       _sprng_init_records + 48
 .equ _sprng_init_sample1,       _sprng_init_sample0 + 1
-.equ _sprng_init_best_addr,     _sprng_init_sample1 + 1
-.equ _sprng_init_best_mask,     _sprng_init_best_addr + 3
-.equ _sprng_init_best_score,    _sprng_init_best_mask + 1
-.equ _sprng_init_eval_mask,     _sprng_init_best_score + 1
+.equ _sprng_init_eval_mask,     _sprng_init_sample1 + 1
 .equ _sprng_init_insert_addr,   _sprng_init_eval_mask + 1
 .equ _sprng_init_insert_mask,   _sprng_init_insert_addr + 3
+.equ _sprng_init_insert_mscore, _sprng_init_insert_mask + 1
+.equ _sprng_init_insert_tscore, _sprng_init_insert_mscore + 1
 .equ _sprng_init_dplanes,       _sprng_entropy_pool + 64
 .equ _sprng_init_aplanes,       _sprng_init_dplanes + _sprng_init_plane_count
 
 ; SP 800-90B continuous health-test parameters. The engineering Hmin floor is
-; TLS_ENTROPY_HMIN_Q16 = 22282/65536 ≈ 0.34 bits per selected-bit sample.
-; h_in = 952 * 0.34 = 323.68 bits >= n_out+64 = 320 (SP 800-90C full-entropy margin).
-; With H=0.34 and alpha=2^-20:
+; TLS_ENTROPY_HMIN_Q16 = 17630/65536 ≈ 0.269 bits per selected-bit sample.
+; h_in = 952 * 0.269 = 256.088 bits >= n_out+64 = 256 for a 192-bit
+; conditioned contribution (SP 800-90C full-entropy margin).
+; With H=0.269 and alpha=2^-20:
 ;
-;   RCT: C = 1 + ceil(20 / 0.34) = 60
-;   APT: binary W=1024, C=870 (SP 800-90B §4.4.2, H=0.34, alpha=2^-20)
+;   RCT: C = 1 + ceil(20 / 0.269) = 76
+;   APT: binary W=952, C=844 (SP 800-90B §4.4.2, H=0.269, alpha=2^-20)
 ;
 ; The binary APT extension checks both the reference bit and its complement.
-.equ _sprng_rct_cutoff,         60
-.equ _sprng_apt_window,         1024
-.equ _sprng_apt_cutoff,         870
+.equ _sprng_rct_cutoff,         76
+.equ _sprng_apt_window,         952
+.equ _sprng_apt_cutoff,         844
 
-; SP 800-90B §4.3 start-up test: 128 pool-format bytes = 1024 samples, i.e.
-; exactly one complete APT window. The samples are written into the (idle)
+; Seven diagnostic pass bits mirrored by TLS_RNG_HEALTH_* in random.h.
+; A set bit passed; a clear bit failed.
+.equ _sprng_test_rct_pass,      $01
+.equ _sprng_test_apt_pass,      $02
+.equ _sprng_test_lag1_pass,     $04
+.equ _sprng_test_lag2_pass,     $08
+.equ _sprng_test_lag3_pass,     $10
+.equ _sprng_test_lag4_pass,     $20
+.equ _sprng_test_dist_pass,     $40
+.equ _sprng_test_all_pass,      $7F
+
+; SP 800-90B §4.3 start-up test: 119 pool-format bytes = 952 samples, i.e.
+; exactly one complete production-size APT window. The samples are written into the (idle)
 ; SHA message-buffer region of the overlay -- never into the entropy pool,
 ; whose low bytes hold the live _sprng_init_* selection scratch -- and are
 ; wiped before validation returns.
-.equ _sprng_startup_bytes,           128
+.equ _sprng_startup_bytes,           119
 .equ _sprng_init_startup_samples,    _sprng_sha_mbuffer
 
-; §4.5 post-collection tests: lag-k match counts (k=1..8) and first-order Markov.
-; Null hypothesis: p(match at lag k) = p_s = 2^-H = 2^-0.34 ≈ 0.790 (H=0.34 claim).
-; Family-wise alpha = 2^-20 per gather, split by Bonferroni over 18 tails (16 lag +
-; 2 Markov), giving per-tail alpha ≈ 2^-24.17. Cutoffs from exact binomial quantiles.
-; Markov: fail if n_sx*256 > n_s*243 for either state s. Worst-case FP = 2^-25.8
-; (n_s in [150,475]). At n_s < 150 (unreachable under H=0.34) FP rises to ~2^-17.
+; Source-specific startup screen over the 952 startup samples.
+; This is deliberately not a continuous SP 800-90B health test and is not used
+; to justify the entropy credit. It cheaply rejects gross short-period behavior
+; while a tap is being qualified; continuous operation relies on RCT/APT above.
+; Four lags bound the cost on this platform. The broad legacy limits are retained
+; pending production-cadence characterization and must not be interpreted as
+; exact non-IID false-positive probabilities.
 ;
-; Raw pool: 119 bytes, n = 952 samples, tested after collection and before SHA-256.
 ; Lag-k match test: matches_k = #{ i < n-k : s[i] == s[i+k] }, n_k = n-k pairs.
 ; Fail if matches_k < LOW_k or matches_k > HIGH_k. (The routine counts
 ; mismatches; mismatches = (n-k) - matches, so the bounds table below holds
 ; [(n-k)-HIGH_k, (n-k)-LOW_k].)
-.equ _sprng_post_n,             952
+.equ _sprng_startup_lag_n,      952
+.equ _sprng_startup_lag_count,  4
 .equ _sprng_lag1_low,           136
 .equ _sprng_lag1_high,          815
 .equ _sprng_lag2_low,           136
@@ -123,46 +138,19 @@ globl _sprng_recovery_rescanned
 .equ _sprng_lag3_high,          814
 .equ _sprng_lag4_low,           135
 .equ _sprng_lag4_high,          813
-.equ _sprng_lag5_low,           135
-.equ _sprng_lag5_high,          812
-.equ _sprng_lag6_low,           135
-.equ _sprng_lag6_high,          811
-.equ _sprng_lag7_low,           135
-.equ _sprng_lag7_high,          810
-.equ _sprng_lag8_low,           135
-.equ _sprng_lag8_high,          809
+; Shift scratch follows all 119 startup bytes, so it cannot overwrite samples
+; still needed by later lag passes. Both regions live in the idle SHA buffer.
+.equ _sprng_startup_lag_shifted, _sprng_init_startup_samples + _sprng_startup_bytes
 
-; First-order Markov test. For each state s in {0,1} with n_s transitions out
-; of s, fail if n_s0 > MAX*n_s or n_s1 > MAX*n_s, evaluated exactly in
-; integers as n_sx*256 > n_s*_sprng_markov_max_q8.
-;   Fixed Q = 243 (MAX = 243/256 = 0.9492). Exact binomial at p = 2^-0.34:
-;   worst-case per-tail FP = 2^-25.8 over n_s in [150,475], within the
-;   2^-24.17 per-tail budget. Residual: for n_s < 150 (unreachable for a
-;   healthy H=0.34 source) FP rises, reaching ~2^-17 at n_s = 100.
-.equ _sprng_markov_max_q8,      243
-
-; Tap abandonment: the third consecutive §4.5 failure on one tap forces
-; .Lhealth_recover; earlier failures discard the pool and resample the tap.
-.equ _sprng_post_max_consec,    3
-
-; §4.5 scratch, in the overlay region that is idle until SHA-256 starts and
-; is covered by every 520-byte overlay wipe:
-;   _sprng_post_shifted: 119-byte copy of the pool, shifted left k bits
-;   _sprng_post_*:       24-bit Markov intermediates
-.equ _sprng_post_shifted,       _sprng_sha_digest
-.equ _sprng_post_mis1,          _sprng_post_shifted + _sprng_entropy_pool.size
-.equ _sprng_post_n1,            _sprng_post_mis1 + 3
-.equ _sprng_post_ob,            _sprng_post_n1 + 3
-.equ _sprng_post_n11,           _sprng_post_ob + 3
-.equ _sprng_post_n0,            _sprng_post_n11 + 3
-.equ _sprng_post_n01,           _sprng_post_n0 + 3
-
-; .Lpost_tests unrolls its shift chain by 7 and its lag loop by 2.
+; .Lstartup_lag_tests unrolls its shift chain by 7 and byte-count loop by 2.
 .if (_sprng_entropy_pool.size % 7) <> 0
-.error "pool size must be a multiple of 7 (.Lpost_tests shift chain)"
+.error "pool size must be a multiple of 7 (.Lstartup_lag_tests shift chain)"
 .endif
 .if ((_sprng_entropy_pool.size - 1) % 2) <> 0
-.error "pool size - 1 must be even (.Lpost_tests lag loop)"
+.error "pool size - 1 must be even (.Lstartup_lag_tests lag loop)"
+.endif
+.if (_sprng_startup_lag_shifted + _sprng_entropy_pool.size) > _sprng_rand
+.error "startup lag scratch exceeds the idle SHA buffer"
 .endif
 ; .Lsample_bits treats B = 0 as 256 bytes, which would corrupt the pool.
 .if (_sprng_entropy_pool.size < 1) || (_sprng_entropy_pool.size > 255)
@@ -177,19 +165,18 @@ _tls_random_init_entropy:
     push iy
 
     xor a,a
-    ld (_sprng_init_best_score),a
-    ld (_sprng_init_best_mask),a
     ld (_sprng_read_mask),a
     ld hl,0
     ld (_sprng_read_addr),hl
 
-    ; The top three non-selected candidates survive initialization so a
-    ; failed active source can be replaced without immediately rescanning all
-    ; 513 addresses. Each record is {address[3], mask[1]}.
+    ; Four records sorted by marginal score, then transition tie-break score:
+    ; {address[3], mask[1], marginal_score[1], transition_score[1]}.
+    ; The activated record is consumed; the other three remain as recovery
+    ; candidates without requiring another complete scan.
     ld hl,_sprng_backup_candidates
     ld (hl),0
     ld de,_sprng_backup_candidates+1
-    ld bc,11
+    ld bc,23
     ldir
 
     ld ix,$D65800
@@ -208,20 +195,31 @@ _tls_random_init_entropy:
     or a,c
     jr nz,.Linit_scan_address
 
-    ; No bit met both discovery bounds.
-    ld a,(_sprng_init_best_mask)
+    ; Validate the top four in rank order. Consuming a record before testing
+    ; prevents a failed or active tap from later reappearing as its own backup.
+    ld iy,_sprng_backup_candidates
+    ld b,4
+.Linit_try_ranked:
+    ld a,(iy+3)
     or a,a
-    jr z,.Linit_fail
-
-    ; Revalidate the selected address/bit with 1024 fresh reads.
-    ld ix,(_sprng_init_best_addr)
-    ld a,(_sprng_init_best_mask)
+    jr z,.Linit_next_ranked
+    ld ix,(iy+0)
+    ld (iy+3),0
+    push bc
+    push iy
     call .Linit_validate_candidate
-    jr c,.Linit_fail
+    pop iy
+    pop bc
+    jr nc,.Linit_ranked_ok
+.Linit_next_ranked:
+    lea iy,iy+6
+    djnz .Linit_try_ranked
+    jr .Linit_fail
 
-    ld hl,(_sprng_init_best_addr)
+.Linit_ranked_ok:
+    lea hl,ix+0
     ld (_sprng_read_addr),hl
-    ld a,(_sprng_init_best_mask)
+    ld a,(_sprng_init_eval_mask)
     ld (_sprng_read_mask),a
     call .Lhealth_reset
     ld a,(_sprng_health_epoch_value)
@@ -244,9 +242,11 @@ _tls_random_init_entropy:
 ; Revalidate IX/A as an address/mask candidate. Returns carry clear on
 ; success and carry set on failure. IX, _sprng_init_eval_mask (= A), the
 ; _sprng_init_* selection scratch, and _sprng_read_addr/_sprng_read_mask are
-; preserved. RCT/APT/consecutive-failure state is reset on both exits.
+; preserved. RCT/APT state is reset on both exits.
 .Linit_validate_candidate:
     ld (_sprng_init_eval_mask),a
+    ld a,_sprng_test_all_pass
+    ld (_sprng_test_pass_mask),a
 
     ; SP 800-90B §4.3 start-up test. .Lsample_bits samples, and
     ; .Lsample_health_check tests, the bit selected by _sprng_read_mask, so
@@ -265,16 +265,43 @@ _tls_random_init_entropy:
     ld hl,_sprng_init_startup_samples
     ld b,_sprng_startup_bytes
     call .Lsample_health_check      ; CF set: a sample failed RCT or APT
-    pop bc                          ; POP/LD/LDIR below leave CF intact
-    ld a,c
-    ld (_sprng_read_mask),a
-    ; Start-up samples are test-only: destroy them, never condition them.
+    jr c,.Linit_first_startup_tested
+    call .Linit_startup_marginal_check
+    jr c,.Linit_first_startup_tested
+    call .Lstartup_lag_tests        ; qualification-only periodicity screen
+.Linit_first_startup_tested:
+    ; Destroy the first test window before reusing the scratch. LDIR preserves
+    ; carry, so a failure still skips the second window below.
     ld hl,_sprng_init_startup_samples
     ld (hl),0
     ld de,_sprng_init_startup_samples+1
-    ld bc,_sprng_startup_bytes-1
+    ld bc,_sprng_startup_bytes+_sprng_entropy_pool.size-1
     ldir
-    jr c,.Linit_validate_fail
+    jr c,.Linit_startup_tested
+
+    ; A second consecutive production-cadence window cheaply rejects taps
+    ; whose apparently balanced discovery sample was only a short transient.
+    lea hl,ix+0
+    ld de,_sprng_init_startup_samples
+    ld b,_sprng_startup_bytes
+    call .Lsample_bits
+    ld hl,_sprng_init_startup_samples
+    ld b,_sprng_startup_bytes
+    call .Lsample_health_check
+    jr c,.Linit_startup_tested
+    call .Linit_startup_marginal_check
+.Linit_startup_tested:
+    pop bc                          ; POP/LD/LDIR below leave CF intact
+    ld a,c
+    ld (_sprng_read_mask),a
+    ; Start-up samples and the lag-shift copy are test-only: destroy them,
+    ; never condition them.
+    ld hl,_sprng_init_startup_samples
+    ld (hl),0
+    ld de,_sprng_init_startup_samples+1
+    ld bc,_sprng_startup_bytes+_sprng_entropy_pool.size-1
+    ldir
+    jr c,.Linit_validate_distribution_fail
 
     ; Additional fixed marginal/disagreement gates on 1024 fresh reads.
     call .Linit_clear_counters
@@ -305,7 +332,7 @@ _tls_random_init_entropy:
     ld de,769
     or a,a
     sbc hl,de
-    jr nc,.Linit_validate_fail
+    jr nc,.Linit_validate_distribution_fail
 
     ; 512 adjacent pairs: require 128 <= disagreements <= 384.
     ld bc,(iy+3)
@@ -314,18 +341,46 @@ _tls_random_init_entropy:
     ld de,128
     or a,a
     sbc hl,de
-    jr c,.Linit_validate_fail
+    jr c,.Linit_validate_distribution_fail
     push bc
     pop hl
     ld de,385
     or a,a
     sbc hl,de
-    jr nc,.Linit_validate_fail
+    jr nc,.Linit_validate_distribution_fail
     call .Lhealth_reset             ; start-up state never leaks into use
     or a,a
     ret
+.Linit_validate_distribution_fail:
+    ld a,(_sprng_test_pass_mask)
+    and a,$FF-_sprng_test_dist_pass
+    ld (_sprng_test_pass_mask),a
 .Linit_validate_fail:
     call .Lhealth_reset
+    scf
+    ret
+
+; The completed 952-sample APT window already holds the count equal to its
+; first-bit reference. Require that count in 238..714; its complement is then
+; in the same 25/75 range. This adds a production-cadence marginal gate without a
+; second scan or popcount pass. Carry set means failure.
+.Linit_startup_marginal_check:
+    ld hl,(_sprng_apt_matches)
+    ld de,238
+    or a,a
+    sbc hl,de
+    jr c,.Linit_startup_marginal_fail
+    add hl,de
+    ld de,715
+    or a,a
+    sbc hl,de
+    jr nc,.Linit_startup_marginal_fail
+    or a,a
+    ret
+.Linit_startup_marginal_fail:
+    ld a,(_sprng_test_pass_mask)
+    and a,$FF-_sprng_test_dist_pass
+    ld (_sprng_test_pass_mask),a
     scf
     ret
 
@@ -420,9 +475,9 @@ _tls_random_init_entropy:
     djnz .Linit_decode_plane
     ret
 
-; Evaluate all eight bits from one discovery sample. Marginal balance is a
-; hard gate. Among passing bits, maximize min(flips, 256-flips), which
-; prefers active but non-alternating sources.
+; Evaluate all eight bits from one discovery sample. Marginal balance and
+; disagreement are hard gates. Rank primarily by marginal balance and use
+; transition balance only to break exact marginal-score ties.
 .Linit_consider_candidate:
     ld iy,_sprng_init_records
     ld a,1
@@ -439,6 +494,22 @@ _tls_random_init_entropy:
     or a,a
     sbc hl,de
     jr nc,.Linit_consider_next
+    add hl,de                       ; HL = ones, 128..384
+
+    ; Marginal score = min(ones,512-ones)-128, in 0..128.
+    ; For the admitted range, H distinguishes the two halves and the score
+    ; fits in one byte. A perfectly balanced candidate scores 128.
+    ld a,h
+    or a,a
+    jr nz,.Linit_mscore_high
+    ld a,l
+    sub a,128
+    jr .Linit_mscore_ready
+.Linit_mscore_high:
+    ld a,128
+    sub a,l
+.Linit_mscore_ready:
+    ld (_sprng_init_insert_mscore),a
 
     ; 256 adjacent pairs: require 64 <= disagreements <= 192.
     ld hl,(iy+3)
@@ -453,44 +524,21 @@ _tls_random_init_entropy:
     jr nc,.Linit_consider_next
     add hl,de
 
-    ; Score is min(flips, 256-flips), in the range [64, 128].
+    ; Transition tie-break score = min(flips,256-flips), in 64..128.
     ld a,l
     cp a,129
-    jr c,.Linit_score_ready
+    jr c,.Linit_tscore_ready
     xor a,a
     sub a,l
-.Linit_score_ready:
-    ld e,a
-    ld a,(_sprng_init_best_score)
-    cp a,e
-    jr c,.Linit_replace_best
-    jr z,.Linit_cache_equal
-    jr .Linit_consider_next
-
-.Linit_replace_best:
-    ; Preserve the displaced winner as the first backup candidate.
-    ld a,(_sprng_init_best_mask)
-    or a,a
-    jr z,.Linit_store_best
-    ld hl,(_sprng_init_best_addr)
-    push de
-    call .Linit_cache_backup
-    pop de
-.Linit_store_best:
-    ld a,e
-    ld (_sprng_init_best_score),a
+.Linit_tscore_ready:
+    ld (_sprng_init_insert_tscore),a
     lea hl,ix+0
-    ld (_sprng_init_best_addr),hl
+    ld (_sprng_init_insert_addr),hl
     ld a,(_sprng_init_eval_mask)
-    ld (_sprng_init_best_mask),a
-    jr .Linit_consider_next
-
-.Linit_cache_equal:
-    ; Equal-scoring taps are excellent fallbacks even though the first one
-    ; remains the deterministic primary selection.
-    lea hl,ix+0
-    ld a,(_sprng_init_eval_mask)
-    call .Linit_cache_backup
+    ld (_sprng_init_insert_mask),a
+    push iy
+    call .Linit_insert_ranked
+    pop iy
 
 .Linit_consider_next:
     lea iy,iy+6
@@ -500,31 +548,98 @@ _tls_random_init_entropy:
     jp nz,.Linit_consider_bit
     ret
 
-; Insert HL/A at the front of the three-record backup cache, dropping the
-; oldest record. This cache is deliberately outside the RNG scratch overlay
-; because it must survive after initialization returns.
-.Linit_cache_backup:
-    ld (_sprng_init_insert_addr),hl
-    ld (_sprng_init_insert_mask),a
-    ld hl,_sprng_backup_candidates+7
-    ld de,_sprng_backup_candidates+11
-    ld bc,8
-    lddr
+; Insert the scratch candidate into the four-record ranking. Each time it
+; outranks a record, swap them and continue with the displaced record; after
+; four records the lowest candidate falls off. Exact ties retain scan order.
+; Record: {address[3], mask, marginal_score, transition_score}.
+.Linit_insert_ranked:
+    ; Once full, compare against fourth place first. Most later candidates
+    ; stop here after one lexicographic comparison instead of walking all four
+    ; records; this does not change the resulting stable top-four order.
+    ld iy,_sprng_backup_candidates+18
+    ld a,(iy+3)
+    or a,a
+    jr z,.Linit_insert_scan
+    ld a,(_sprng_init_insert_mscore)
+    cp a,(iy+4)
+    jr c,.Linit_insert_return
+    jr nz,.Linit_insert_scan
+    ld a,(_sprng_init_insert_tscore)
+    cp a,(iy+5)
+    jr c,.Linit_insert_return
+    jr z,.Linit_insert_return
+
+.Linit_insert_scan:
+    ld iy,_sprng_backup_candidates
+    ld b,4
+.Linit_insert_compare:
+    ld a,(iy+3)
+    or a,a
+    jr z,.Linit_insert_empty
+    ld a,(_sprng_init_insert_mscore)
+    cp a,(iy+4)
+    jr c,.Linit_insert_next
+    jr nz,.Linit_insert_swap
+    ld a,(_sprng_init_insert_tscore)
+    cp a,(iy+5)
+    jr c,.Linit_insert_next
+    jr z,.Linit_insert_next         ; stable first-wins tie
+
+.Linit_insert_swap:
+    push bc
+    ld hl,(iy+0)
+    push hl
+    ld a,(iy+3)
+    push af
+    ld a,(iy+4)
+    push af
+    ld a,(iy+5)
+    push af
+
     ld hl,(_sprng_init_insert_addr)
-    ld (_sprng_backup_candidates),hl
+    ld (iy+0),hl
     ld a,(_sprng_init_insert_mask)
-    ld (_sprng_backup_candidates+3),a
+    ld (iy+3),a
+    ld a,(_sprng_init_insert_mscore)
+    ld (iy+4),a
+    ld a,(_sprng_init_insert_tscore)
+    ld (iy+5),a
+
+    pop af
+    ld (_sprng_init_insert_tscore),a
+    pop af
+    ld (_sprng_init_insert_mscore),a
+    pop af
+    ld (_sprng_init_insert_mask),a
+    pop hl
+    ld (_sprng_init_insert_addr),hl
+    pop bc
+.Linit_insert_next:
+    lea iy,iy+6
+    djnz .Linit_insert_compare
+.Linit_insert_return:
+    ret
+
+.Linit_insert_empty:
+    ld hl,(_sprng_init_insert_addr)
+    ld (iy+0),hl
+    ld a,(_sprng_init_insert_mask)
+    ld (iy+3),a
+    ld a,(_sprng_init_insert_mscore)
+    ld (iy+4),a
+    ld a,(_sprng_init_insert_tscore)
+    ld (iy+5),a
     ret
 
 ;--------------------------------------
-; Internal 256-bit conditioned-source gather used by tls_entropy_collect().
+; Internal 192-bit conditioned-source gather used by tls_entropy_collect().
 ; All sensitive state here (_sprng_entropy_pool, _sprng_sha_digest,
 ; _sprng_sha_mbuffer, _sprng_hash_ctx) lives in a BSS overlay, never on
 ; this function's own stack frame -- tls_crypto_guard_disable() (a
 ; stack scrub) was never capable of reaching it regardless of where it
 ; was called from. The entropy pool/SHA scratch is explicitly zeroed
 ; by tls_entropy_collect() after the digest has been copied to the caller.
-_tls_entropy_gather256:
+_tls_entropy_gather192:
     xor a,a
     ld (_sprng_random_last_ok),a
     ld (_sprng_recovery_rescanned),a
@@ -544,13 +659,11 @@ _tls_entropy_gather256:
     ld hl,_sprng_entropy_pool
     ld b,_sprng_entropy_pool.size
     call .Lsample_health_check
-    jr c,.Lrandom_health_fail
-
-; SP 800-90B §4.5 post-collection tests on the raw pool, before conditioning.
-    call .Lpost_tests
-    jr c,.Lrandom_post_fail
-    xor a,a
-    ld (_sprng_consec_health_fails),a
+    jr nc,.Lrandom_health_ok
+    ld a,(_sprng_test_pass_mask)
+    ld (_sprng_last_health_mask),a
+    jr .Lrandom_health_fail
+.Lrandom_health_ok:
 
 ; hash the entropy pool sha256
     ld hl, _sprng_hash_ctx
@@ -573,35 +686,13 @@ _tls_entropy_gather256:
     pop bc
     pop hl
 
-; tls_entropy_collect() copies the full 256-bit digest directly. Avoid
-; the former custom XOR-folding step and leave the digest live only until that
-; copy completes.
+; tls_entropy_collect() copies the first 192 bits of the digest directly.
+; Avoid the former custom XOR-folding step and leave the digest live only
+; until that copy completes.
     ld a,1
     ld (_sprng_random_last_ok),a
 .Lrandom_return:
     ret
-
-.Lrandom_post_fail:
-    ; The pool failed a §4.5 test. It is never conditioned. Count the failure
-    ; against this tap; on the third consecutive failure abandon the tap via
-    ; the continuous-test failure path below.
-    ld hl,_sprng_consec_health_fails
-    inc (hl)
-    ld a,(hl)
-    cp a,_sprng_post_max_consec
-    jr nc,.Lrandom_health_fail
-    ; Below the abandonment threshold: destroy the pool and the §4.5 scratch,
-    ; advance the epoch so the C layer discards this step, and resample the
-    ; same tap (its RCT/APT state continues uninterrupted).
-    ld hl,_sprng_entropy_pool
-    ld (hl),0
-    ld de,_sprng_entropy_pool+1
-    ld bc,519
-    ldir
-    ld a,(_sprng_health_epoch_value)
-    inc a
-    ld (_sprng_health_epoch_value),a
-    jp .Lrandom_retry
 
 .Lrandom_health_fail:
     ; The current pool contains observations from a source that has failed a
@@ -713,7 +804,7 @@ _tls_entropy_gather256:
 ;
 ;   APT: a segment's samples are tallied by popcount and folded in when the
 ;        segment ends: matches += samples equal to the reference, other +=
-;        the rest, position += 8n (1024 -> 0). A segment starting at
+;        the rest, position += 8n (952 -> 0). A segment starting at
 ;        position 0 first opens the window: reference = its first sample,
 ;        counts zeroed (that sample then counts as its own match). Counts
 ;        only grow inside a window and both start below the cutoff, so a
@@ -735,6 +826,9 @@ _tls_entropy_gather256:
 .Lsample_health_check:
     push ix
     push iy
+    ld a,(_sprng_test_pass_mask)
+    or a,_sprng_test_rct_pass|_sprng_test_apt_pass
+    ld (_sprng_test_pass_mask),a
     ex de,hl                        ; DE = buffer
     ld a,(_sprng_apt_position)
     and a,7
@@ -762,7 +856,7 @@ _tls_entropy_gather256:
     ld bc,0
 
 .Lhc_segment:
-    ld hl,(_sprng_apt_position)     ; multiple of 8, 0..1016
+    ld hl,(_sprng_apt_position)     ; multiple of 8, 0..944
     ld a,h
     or a,l
     jr nz,.Lhc_window_open
@@ -777,16 +871,16 @@ _tls_entropy_gather256:
     ld (_sprng_apt_matches),hl
     ld (_sprng_apt_other),hl
 .Lhc_window_open:
-    ; Bytes to the end of the window: 128 - position/8 (1..128).
+    ; Bytes to the end of the window: 119 - position/8 (1..119).
     ld a,l
     srl h
     rra
     srl h
     rra
     srl h
-    rra                             ; A = position/8 (0..127)
+    rra                             ; A = position/8 (0..118)
     neg
-    add a,128
+    add a,119
     ld c,a
     ld a,(_sprng_sample_byte)
     sub a,c
@@ -829,7 +923,7 @@ _tls_entropy_gather256:
     ; ending just before b is that byte's trailing run.
     add hl,de
     call .Lhc_cross
-    jr c,.Lhc_fail1
+    jr c,.Lhc_rct_fail1
     dec de
     ld a,(de)
     inc de
@@ -848,7 +942,7 @@ _tls_entropy_gather256:
     add a,8
     ld (hl),a                       ; run length through b
     cp a,_sprng_rct_cutoff
-    jr nc,.Lhc_fail1
+    jr nc,.Lhc_rct_fail1
     ld a,(de)
     ld hl,_sprng_read_mask
     and a,(hl)
@@ -860,6 +954,21 @@ _tls_entropy_gather256:
     ld bc,0
     jr .Lhc_scan_next
 
+.Lhc_apt_fail3:
+    ld a,(_sprng_test_pass_mask)
+    and a,$FF-_sprng_test_apt_pass
+    ld (_sprng_test_pass_mask),a
+    jr .Lhc_fail3
+.Lhc_rct_fail1:
+    ld a,(_sprng_test_pass_mask)
+    and a,$FF-_sprng_test_rct_pass
+    ld (_sprng_test_pass_mask),a
+    jr .Lhc_fail1
+.Lhc_rct_fail0:
+    ld a,(_sprng_test_pass_mask)
+    and a,$FF-_sprng_test_rct_pass
+    ld (_sprng_test_pass_mask),a
+    jr .Lhc_fail0
 .Lhc_fail3:
     pop hl
     pop hl
@@ -895,7 +1004,7 @@ _tls_entropy_gather256:
     ld (_sprng_apt_matches),hl
     or a,a
     sbc hl,bc
-    jr nc,.Lhc_fail3                ; matches >= cutoff
+    jr nc,.Lhc_apt_fail3            ; matches >= cutoff
     pop hl
     push hl
     or a,a
@@ -906,13 +1015,16 @@ _tls_entropy_gather256:
     ld (_sprng_apt_other),hl
     or a,a
     sbc hl,bc
-    jr nc,.Lhc_fail3                ; other >= cutoff
+    jr nc,.Lhc_apt_fail3            ; other >= cutoff
     pop de                          ; DE = 8n
     ld hl,(_sprng_apt_position)
-    add hl,de                       ; <= window (1024 = $000400)
-    ld a,h
-    and a,3                         ; 1024 -> 0; anything below unchanged
-    ld h,a
+    add hl,de                       ; <= window
+    ld bc,_sprng_apt_window
+    or a,a
+    sbc hl,bc
+    jr z,.Lhc_position_ready        ; a complete 952-sample window -> 0
+    add hl,bc                       ; restore an incomplete position
+.Lhc_position_ready:
     ld (_sprng_apt_position),hl
     pop de                          ; DE = next byte
     ld bc,0
@@ -927,7 +1039,7 @@ _tls_entropy_gather256:
     jr z,.Lhc_pass                  ; the last byte was uniform: state final
     add hl,de
     call .Lhc_cross                 ; the stored run, into the byte at P
-    jr c,.Lhc_fail0
+    jp c,.Lhc_rct_fail0
     dec de
     ld a,(de)                       ; last byte (non-uniform)
     call .Lhc_set_trailing
@@ -1045,7 +1157,7 @@ _tls_entropy_gather256:
     inc a
     ld (_sprng_rct_count),a
     cp a,_sprng_rct_cutoff
-    jp nc,.Lhealth_observe_fail
+    jp nc,.Lhealth_rct_fail
     jr .Lhealth_apt
 .Lhealth_rct_new_value:
     ld a,b
@@ -1088,7 +1200,7 @@ _tls_entropy_gather256:
     ld de,_sprng_apt_cutoff
     or a,a
     sbc hl,de
-    jr nc,.Lhealth_observe_fail
+    jr nc,.Lhealth_apt_fail
 
     ld hl,(_sprng_apt_position)
     inc hl
@@ -1106,6 +1218,15 @@ _tls_entropy_gather256:
     pop bc
     or a,a
     ret
+.Lhealth_rct_fail:
+    ld a,(_sprng_test_pass_mask)
+    and a,$FF-_sprng_test_rct_pass
+    ld (_sprng_test_pass_mask),a
+    jr .Lhealth_observe_fail
+.Lhealth_apt_fail:
+    ld a,(_sprng_test_pass_mask)
+    and a,$FF-_sprng_test_apt_pass
+    ld (_sprng_test_pass_mask),a
 .Lhealth_observe_fail:
     pop hl
     pop de
@@ -1113,30 +1234,30 @@ _tls_entropy_gather256:
     scf
     ret
 
-; SP 800-90B §4.5 post-collection tests over the 952-sample raw pool
-; (_sprng_entropy_pool, MSB-first). Lag-k match counts for k = 1..8, then a
-; first-order Markov transition check. All per-sample work is branch-free:
+; Source-specific qualification screen over 952 startup samples
+; (_sprng_init_startup_samples, MSB-first). Lag-k mismatch counts for k=1..4.
+; All per-sample work is branch-free:
 ; popcounts use a table (eZ80 has no data cache, so lookups take constant
 ; time); the only data-dependent branches are the final pass/fail decisions.
 ;
 ; Out: CF clear = pass, CF set = fail. Preserves IX, IY. Clobbers AF,BC,DE,HL.
-.Lpost_tests:
+.Lstartup_lag_tests:
     push ix
     push iy
-    ; _sprng_post_shifted starts as a copy of the pool; each lag pass shifts
+    ; _sprng_startup_lag_shifted starts as a copy; each lag pass shifts
     ; it one more bit left (zero fill), so pass k holds s << k.
-    ld hl,_sprng_entropy_pool
-    ld de,_sprng_post_shifted
+    ld hl,_sprng_init_startup_samples
+    ld de,_sprng_startup_lag_shifted
     ld bc,_sprng_entropy_pool.size
     ldir
-    ld hl,.Lpost_lag_bounds
+    ld hl,.Lstartup_lag_bounds
     ld d,1                          ; D = k
-.Lpost_lag_pass:
+.Lstartup_lag_pass:
     push hl                         ; bounds entry for this k
-    ld hl,_sprng_post_shifted+_sprng_entropy_pool.size-1
+    ld hl,_sprng_startup_lag_shifted+_sprng_entropy_pool.size-1
     ld b,_sprng_entropy_pool.size/7 ; 119 = 17 * 7
     or a,a                          ; zero fill into the last byte
-.Lpost_shift_chain:
+.Lstartup_lag_shift_chain:
     rl (hl)
     dec hl                          ; 24-bit DEC and DJNZ preserve CF
     rl (hl)
@@ -1151,27 +1272,29 @@ _tls_entropy_gather256:
     dec hl
     rl (hl)
     dec hl
-    djnz .Lpost_shift_chain
+    djnz .Lstartup_lag_shift_chain
 
-    ; mismatches_k = popcount(pool[j] ^ shifted[j]) for j = 0..117, two
+    ; mismatches_k = popcount(samples[j] ^ shifted[j]) for j = 0..117, two
     ; bytes per iteration. HL stays at the table base: ADD HL,BC cannot
     ; carry out of 24 bits, so SBC HL,BC (CF = 0) restores it.
-    ld ix,_sprng_entropy_pool
+    ; Point IX at the shifted copy so the source is reachable with the signed
+    ; -128 indexed displacement supported by the eZ80 instruction encoding.
+    ld ix,_sprng_startup_lag_shifted
     ld iy,0
     ld bc,0                         ; BCU = B = 0 for table indexing
     ld hl,.Lpost_popcount8
     ld e,(_sprng_entropy_pool.size-1)/2
-.Lpost_lag_byte:
-    ld a,(ix+0)
-    xor a,(ix+_sprng_entropy_pool.size)
+.Lstartup_lag_byte:
+    ld a,(ix-_sprng_startup_bytes)
+    xor a,(ix+0)
     ld c,a
     add hl,bc
     ld a,(hl)
     sbc hl,bc
     ld c,a
     add iy,bc
-    ld a,(ix+1)
-    xor a,(ix+_sprng_entropy_pool.size+1)
+    ld a,(ix-_sprng_startup_bytes+1)
+    xor a,(ix+1)
     ld c,a
     add hl,bc
     ld a,(hl)
@@ -1180,17 +1303,17 @@ _tls_entropy_gather256:
     add iy,bc
     lea ix,ix+2
     dec e
-    jr nz,.Lpost_lag_byte
+    jr nz,.Lstartup_lag_byte
     ; Last byte: only its first 8-k samples have a partner k later, i.e.
-    ; the top 8-k bits. Mask = $FF << k (zero for k = 8).
+    ; the top 8-k bits. Mask = $FF << k.
     ld a,$FF
     ld b,d
-.Lpost_tail_mask:
+.Lstartup_lag_tail_mask:
     add a,a
-    djnz .Lpost_tail_mask           ; leaves B = 0
+    djnz .Lstartup_lag_tail_mask    ; leaves B = 0
     ld c,a
-    ld a,(ix+0)
-    xor a,(ix+_sprng_entropy_pool.size)
+    ld a,(ix-_sprng_startup_bytes)
+    xor a,(ix+0)
     and a,c
     ld hl,.Lpost_popcount8
     ld c,a
@@ -1199,12 +1322,7 @@ _tls_entropy_gather256:
     add iy,bc                       ; IY = mismatches_k
 
     pop hl                          ; HL = bounds entry
-    ld a,d
-    dec a
-    jr nz,.Lpost_lag_compare
-    lea bc,iy+0
-    ld (_sprng_post_mis1),bc        ; lag-1 mismatches = n01 + n10
-.Lpost_lag_compare:
+.Lstartup_lag_compare:
     push de                         ; save k
     ld de,(hl)                      ; DE = min mismatches
     inc hl
@@ -1216,7 +1334,7 @@ _tls_entropy_gather256:
     or a,a
     sbc hl,de                       ; CF: mismatches < min (matches > HIGH)
     pop hl
-    jp c,.Lpost_fail_pop_k
+    jp c,.Lstartup_lag_fail_pop_k
     ld de,(hl)                      ; DE = max mismatches
     inc hl
     inc hl
@@ -1226,146 +1344,42 @@ _tls_entropy_gather256:
     sbc hl,bc                       ; CF: mismatches > max (matches < LOW)
     ex de,hl                        ; HL = next entry
     pop de                          ; D = k
-    jp c,.Lpost_fail
+    jp c,.Lstartup_lag_fail
     inc d
     ld a,d
-    cp a,9
-    jp c,.Lpost_lag_pass
-
-    ; Markov: derive transition counts from the ones count O, the first and
-    ; last samples, and lag-1 mismatches M1 (exact for any bit string):
-    ;   n_1 = O - s[951]       (transitions out of 1 = ones in s[0..950])
-    ;   O_b = O - s[0]         (ones in s[1..951] = n01 + n11)
-    ;   n11 = (n_1 + O_b - M1) / 2
-    ;   n10 = n_1 - n11,  n_0 = 951 - n_1,  n01 = O_b - n11,  n00 = n_0 - n01
-    ld de,_sprng_entropy_pool
-    ld iy,0
-    ld bc,0
-    ld hl,.Lpost_popcount8          ; table base, restored as above
-    ld ixl,_sprng_entropy_pool.size
-.Lpost_ones:
-    ld a,(de)
-    inc de
-    ld c,a
-    add hl,bc
-    ld a,(hl)
-    sbc hl,bc
-    ld c,a
-    add iy,bc
-    dec ixl
-    jr nz,.Lpost_ones               ; IY = O
-
-    ld a,(_sprng_entropy_pool+_sprng_entropy_pool.size-1)
-    and a,1
-    ld c,a                          ; BC = s[951]
-    lea hl,iy+0
-    or a,a
-    sbc hl,bc
-    ld (_sprng_post_n1),hl          ; n_1
-    ld a,(_sprng_entropy_pool)
-    rlca
-    and a,1
-    ld c,a                          ; BC = s[0]
-    lea hl,iy+0
-    or a,a
-    sbc hl,bc
-    ld (_sprng_post_ob),hl          ; O_b
-    ld de,(_sprng_post_n1)
-    add hl,de
-    ld de,(_sprng_post_mis1)
-    or a,a
-    sbc hl,de                       ; 2*n11, in [0, 1902]: HLU = 0
-    srl h
-    rr l
-    ld (_sprng_post_n11),hl         ; n11
-
-    ld de,(_sprng_post_n1)
-    call .Lpost_markov_check        ; n11 vs n_1
-    jr c,.Lpost_fail
-    ld hl,(_sprng_post_n1)
-    ld de,(_sprng_post_n11)
-    or a,a
-    sbc hl,de                       ; n10
-    ld de,(_sprng_post_n1)
-    call .Lpost_markov_check        ; n10 vs n_1
-    jr c,.Lpost_fail
-    ld hl,_sprng_post_n-1
-    ld de,(_sprng_post_n1)
-    or a,a
-    sbc hl,de
-    ld (_sprng_post_n0),hl          ; n_0
-    ld hl,(_sprng_post_ob)
-    ld de,(_sprng_post_n11)
-    or a,a
-    sbc hl,de
-    ld (_sprng_post_n01),hl         ; n01
-    ld de,(_sprng_post_n0)
-    call .Lpost_markov_check        ; n01 vs n_0
-    jr c,.Lpost_fail
-    ld hl,(_sprng_post_n0)
-    ld de,(_sprng_post_n01)
-    or a,a
-    sbc hl,de                       ; n00
-    ld de,(_sprng_post_n0)
-    call .Lpost_markov_check        ; n00 vs n_0
-    jr c,.Lpost_fail
+    cp a,_sprng_startup_lag_count+1
+    jp c,.Lstartup_lag_pass
 
     pop iy
     pop ix
     or a,a
     ret
 
-.Lpost_fail_pop_k:
+.Lstartup_lag_fail_pop_k:
     pop de
-.Lpost_fail:
+.Lstartup_lag_fail:
+    ; Clear pass bit k+1 for lag k (lag 1 -> bit 2, ..., lag 4 -> bit 5).
+    ld a,2
+    ld b,d
+.Lstartup_lag_fail_bit:
+    add a,a
+    djnz .Lstartup_lag_fail_bit
+    cpl
+    ld b,a
+    ld a,(_sprng_test_pass_mask)
+    and a,b
+    ld (_sprng_test_pass_mask),a
     pop iy
     pop ix
     scf
     ret
 
-; In: HL = n_sx (transition count), DE = n_s (transitions out of s), both
-; <= 951. Out: CF set iff n_sx*256 > n_s*_sprng_markov_max_q8.
-; Clobbers AF, B, DE, HL.
-.Lpost_markov_check:
-    push hl                         ; n_sx
-    ; HL = n_s * constant (<= 255): MSB-first shift/add with DE = n_s.
-    ; Branches depend only on the constant's bits. Max 951*255 < 2^24.
-    or a,a
-    sbc hl,hl
-    ld a,_sprng_markov_max_q8
-    ld b,8
-.Lpost_mul_loop:
-    add hl,hl
-    rla                             ; constant bit 7 -> CF (bit 0 gets junk,
-    jr nc,.Lpost_mul_skip           ; never examined within 8 iterations)
-    add hl,de
-.Lpost_mul_skip:
-    djnz .Lpost_mul_loop
-    pop de                          ; DE = n_sx
-    ex de,hl                        ; HL = n_sx, DE = n_s*MAX_Q8
-    add hl,hl
-    add hl,hl
-    add hl,hl
-    add hl,hl
-    add hl,hl
-    add hl,hl
-    add hl,hl
-    add hl,hl                       ; HL = n_sx*256 (<= 243456)
-    ex de,hl
-    or a,a
-    sbc hl,de                       ; CF iff n_s*MAX_Q8 < n_sx*256
-    ret
-
 ; {min, max} mismatches per lag, mismatches = (n-k) - matches.
-.Lpost_lag_bounds:
-    .d24 (_sprng_post_n-1)-_sprng_lag1_high, (_sprng_post_n-1)-_sprng_lag1_low
-    .d24 (_sprng_post_n-2)-_sprng_lag2_high, (_sprng_post_n-2)-_sprng_lag2_low
-    .d24 (_sprng_post_n-3)-_sprng_lag3_high, (_sprng_post_n-3)-_sprng_lag3_low
-    .d24 (_sprng_post_n-4)-_sprng_lag4_high, (_sprng_post_n-4)-_sprng_lag4_low
-    .d24 (_sprng_post_n-5)-_sprng_lag5_high, (_sprng_post_n-5)-_sprng_lag5_low
-    .d24 (_sprng_post_n-6)-_sprng_lag6_high, (_sprng_post_n-6)-_sprng_lag6_low
-    .d24 (_sprng_post_n-7)-_sprng_lag7_high, (_sprng_post_n-7)-_sprng_lag7_low
-    .d24 (_sprng_post_n-8)-_sprng_lag8_high, (_sprng_post_n-8)-_sprng_lag8_low
+.Lstartup_lag_bounds:
+    .d24 (_sprng_startup_lag_n-1)-_sprng_lag1_high, (_sprng_startup_lag_n-1)-_sprng_lag1_low
+    .d24 (_sprng_startup_lag_n-2)-_sprng_lag2_high, (_sprng_startup_lag_n-2)-_sprng_lag2_low
+    .d24 (_sprng_startup_lag_n-3)-_sprng_lag3_high, (_sprng_startup_lag_n-3)-_sprng_lag3_low
+    .d24 (_sprng_startup_lag_n-4)-_sprng_lag4_high, (_sprng_startup_lag_n-4)-_sprng_lag4_low
 
 ; popcount(i), i = 0..255
 .Lpost_popcount8:
@@ -1393,21 +1407,20 @@ _tls_entropy_gather256:
     ld (_sprng_rct_previous),a
     ld (_sprng_rct_count),a
     ld (_sprng_apt_reference),a
-    ld (_sprng_consec_health_fails),a
     ld hl,0
     ld (_sprng_apt_matches),hl
     ld (_sprng_apt_other),hl
     ld (_sprng_apt_position),hl
     ret
 
-; Try the three cached runner-up taps, validating each with fresh samples.
+; Try the remaining ranked taps, validating each with fresh samples.
 ; If none passes, perform at most one complete source-selection scan for this
 ; entropy-collection call. Carry clear means recovery succeeded.
 .Lhealth_recover:
     push ix
     push iy
     ld iy,_sprng_backup_candidates
-    ld b,3
+    ld b,4
 .Lhealth_try_backup:
     ld a,(iy+3)
     or a,a
@@ -1421,7 +1434,7 @@ _tls_entropy_gather256:
     pop bc
     jr nc,.Lhealth_backup_ok
 .Lhealth_next_backup:
-    lea iy,iy+4
+    lea iy,iy+6
     djnz .Lhealth_try_backup
 
     ld a,(_sprng_recovery_rescanned)
@@ -1479,19 +1492,19 @@ _tls_entropy_collect:
     or a,a
     sbc hl,bc
     jr z,.Lbytes_done ; handle end of loop and when len is zero
-    call _tls_entropy_gather256
+    call _tls_entropy_gather192
     ld a,(_sprng_random_last_ok)
     or a,a
     jr z,.Lbytes_failed
     ld hl,(ix+9)
-    ld bc,32
+    ld bc,24
     or a,a
     sbc hl,bc
     jr nc,.Lbytes_full
-    ; Short tail: HL is len-32 modulo 2^24. Restore len for the copy,
+    ; Short tail: HL is len-24 modulo 2^24. Restore len for the copy,
     ; and consume the entire remainder instead of storing the underflow.
     add hl,bc
-    ld c,l ; remaining length is 1..31; upper BC bytes are already zero
+    ld c,l ; remaining length is 1..23; upper BC bytes are already zero
     or a,a
     sbc hl,hl
 .Lbytes_full:
@@ -1563,7 +1576,7 @@ _sprng_read_addr:
 _sprng_read_mask:
     .zero 1
 _sprng_backup_candidates:
-    .zero 12
+    .zero 24
 _sprng_rct_valid:
     .zero 1
 _sprng_rct_previous:
@@ -1588,8 +1601,8 @@ _sprng_recovery_rescanned:
     .zero 1
 _sprng_sample_byte:
     .zero 1
-_sprng_consec_health_fails:
+_sprng_test_pass_mask:
     .zero 1
-
-
+_sprng_last_health_mask:
+    .zero 1
 .section	.note.GNU-stack,"",@progbits

@@ -81,6 +81,7 @@ static lwip_log_verbosity_t kind_min_verbosity(uint8_t kind)
 {
     switch ((lwip_event_kind_t)kind)
     {
+    case LWIP_EV_ERROR_MSG:
     case LWIP_EV_ERROR: return LWIP_LOG_VERBOSITY_ERROR;
     case LWIP_EV_WARN:  return LWIP_LOG_VERBOSITY_WARNING;
     case LWIP_EV_INFO:  return LWIP_LOG_VERBOSITY_INFO;
@@ -166,6 +167,19 @@ void lwip_event_emit_info(uint8_t module, const char *msg)
     struct lwip_event ev;
     ev.module = module;
     ev.kind = LWIP_EV_INFO;
+    ev.data.msg = msg;
+    g_event_fn(&ev);
+}
+
+void lwip_event_emit_error_info(uint8_t module, const char *msg)
+{
+    if (!g_event_fn || !kind_admitted(LWIP_EV_ERROR_MSG))
+    {
+        return;
+    }
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = LWIP_EV_ERROR_MSG;
     ev.data.msg = msg;
     g_event_fn(&ev);
 }

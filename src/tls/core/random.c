@@ -19,35 +19,37 @@
 #define TLS_RNG_READY_TIMEOUT_MS 15000u
 #define TLS_RNG_REQUEST_QUEUE_MAX_DEPTH 16u
 #define TLS_HASH_DRBG_SEED_BYTES 55u
-#define TLS_HASH_DRBG_ENTROPY_BYTES 32u
-#define TLS_HASH_DRBG_NONCE_BYTES 32u
+#define TLS_HASH_DRBG_ENTROPY_BYTES 24u
+#define TLS_HASH_DRBG_NONCE_BYTES 24u
 #define TLS_HASH_DRBG_128_INSTANTIATE_BYTES TLS_HASH_DRBG_ENTROPY_BYTES
-#define TLS_HASH_DRBG_256_INSTANTIATE_BYTES \
+#define TLS_HASH_DRBG_192_INSTANTIATE_BYTES \
     (TLS_HASH_DRBG_ENTROPY_BYTES + TLS_HASH_DRBG_NONCE_BYTES)
-#define TLS_HASH_DRBG_MAX_INSTANTIATE_BYTES TLS_HASH_DRBG_256_INSTANTIATE_BYTES
-#define TLS_HASH_DRBG_ENTROPY_STEP_BYTES 32u
-#define TLS_HASH_DRBG_RESEED_TARGET_BITS 256u
-#define TLS_HASH_DRBG_128_INSTANTIATE_TARGET_BITS 256u
-#define TLS_HASH_DRBG_256_INSTANTIATE_TARGET_BITS 512u
+#define TLS_HASH_DRBG_MAX_INSTANTIATE_BYTES TLS_HASH_DRBG_192_INSTANTIATE_BYTES
+#define TLS_HASH_DRBG_ENTROPY_STEP_BYTES TLS_HASH_DRBG_ENTROPY_BYTES
+#define TLS_HASH_DRBG_RESEED_TARGET_BITS 192u
+#define TLS_HASH_DRBG_128_INSTANTIATE_TARGET_BITS 192u
+#define TLS_HASH_DRBG_192_INSTANTIATE_TARGET_BITS 384u
 #define TLS_ENTROPY_RAW_SAMPLES_PER_STEP (UINT32_C(119) * UINT32_C(8))
-/* Provisional engineering floor: 0.34 bits per selected raw bit, Q16.
- * h_in = 952 * 0.34 = 323.68 bits, satisfying the SP 800-90C full-entropy
- * margin (n_out + 64 = 320). Replace after formal non-IID assessment. */
-#define TLS_ENTROPY_HMIN_Q16 UINT32_C(22282)
+/* Provisional engineering floor: 0.269 bits per selected raw bit, Q16.
+ * h_in = 952 * 0.269 = 256.088 bits, satisfying the SP 800-90C
+ * full-entropy margin for a 192-bit conditioned contribution
+ * (n_out + 64 = 256). Replace after formal non-IID assessment. */
+#define TLS_ENTROPY_HMIN_Q16 UINT32_C(17630)
 #define TLS_ENTROPY_RAW_CREDIT_BITS \
     ((TLS_ENTROPY_RAW_SAMPLES_PER_STEP * TLS_ENTROPY_HMIN_Q16) >> 16)
-#if TLS_ENTROPY_RAW_CREDIT_BITS < TLS_RNG_STRENGTH_256
-#error "Configured entropy policy cannot support 256-bit Hash_DRBG strength"
+#define TLS_ENTROPY_CONTRIBUTION_BITS (TLS_HASH_DRBG_ENTROPY_BYTES * 8u)
+#if TLS_ENTROPY_RAW_CREDIT_BITS < (TLS_ENTROPY_CONTRIBUTION_BITS + 64u)
+#error "Configured entropy policy lacks the conditioning safety margin"
 #endif
-#if (TLS_HASH_DRBG_ENTROPY_BYTES * 8u) < TLS_RNG_STRENGTH_256
+#if TLS_ENTROPY_CONTRIBUTION_BITS != TLS_RNG_STRENGTH_192
 #error "Hash_DRBG entropy input is shorter than its security strength"
 #endif
 #if (TLS_HASH_DRBG_NONCE_BYTES * 8u) < \
-    (TLS_RNG_STRENGTH_256 / 2u)
+    (TLS_RNG_STRENGTH_192 / 2u)
 #error "Hash_DRBG nonce is shorter than half its security strength"
 #endif
-#if TLS_HASH_DRBG_256_INSTANTIATE_TARGET_BITS != \
-    (TLS_HASH_DRBG_256_INSTANTIATE_BYTES * 8u)
+#if TLS_HASH_DRBG_192_INSTANTIATE_TARGET_BITS != \
+    (TLS_HASH_DRBG_192_INSTANTIATE_BYTES * 8u)
 #error "Hash_DRBG instantiation accounting does not match its seed material"
 #endif
 #if TLS_HASH_DRBG_RESEED_TARGET_BITS != (TLS_HASH_DRBG_ENTROPY_BYTES * 8u)
@@ -62,41 +64,25 @@ extern uint8_t tls_random_debug_source_mask(void);
 extern uint8_t tls_random_health_epoch(void);
 extern void *tls_entropy_collect(void *buffer, size_t len);
 
-/* Plain data symbols in random.s (not functions): the asm layer updates
- * these as it runs, but never classifies or logs them itself -- it has no
- * access to the C logging macros. Read them from C right after the asm
- * call that can change them and classify severity here instead.
- *   _sprng_consec_health_fails -- consecutive SP 800-90B post-test failures
- *     against the active tap, reset to 0 on any pass. Nonzero means the
- *     active source is degraded but not yet abandoned.
- *   _sprng_recovery_rescanned  -- 0/1, set when the active tap was abandoned
- *     mid-collection and a full source rescan (tls_random_init_entropy) ran
- *     to find a replacement. This is the "why did entropy collection just
- *     take much longer than usual" signal. */
-extern uint8_t sprng_consec_health_fails;
-extern uint8_t sprng_recovery_rescanned;
+/* Assembly retains the active tap's seven-bit pass mask before recovery can
+ * run candidate qualification and reuse its diagnostic scratch. */
+extern uint8_t sprng_last_health_mask;
 
-/* Classify and log the asm entropy layer's health counters after a
- * successful tls_entropy_collect() call (a NULL return is already a hard
- * failure, logged at the call site via ERROR_CODE). Three tiers:
- *   rescanned        -- the active tap was abandoned mid-collection and a
- *                        full source rescan ran to find a replacement.
- *                        This is the "collection just took much longer than
- *                        usual" signal -- WARN.
- *   consec_fails > 0 -- the active tap failed an SP 800-90B post-test but
- *                        recovered without a rescan. Not yet a problem, but
- *                        worth seeing if it keeps happening -- DEBUG.
- *   neither          -- clean collection -- DEBUG. */
-static void tls_rng_log_asm_health(void)
+static void tls_rng_log_health_failure(void)
 {
-    if (sprng_recovery_rescanned)
+    uint8_t mask = sprng_last_health_mask & TLS_RNG_HEALTH_ALL_PASS;
+    char message[] = "rng health fail 0b0000000";
+    uint8_t i;
+
+    for (i = 0u; i < 7u; i++)
     {
-        WARN_CODE(sprng_consec_health_fails);
+        message[18u + i] = (mask & (uint8_t)(1u << (6u - i))) ? '1' : '0';
     }
-    else
-    {
-        DEBUG();
-    }
+
+    /* The code event retains the call site/mask in the traceback. The named
+     * error event gives the file logger a stable, immediately readable line. */
+    ERROR_CODE(mask);
+    ERROR_INFO(message);
 }
 
 static bool g_tls_rng_entropy_timer_running = false;
@@ -135,7 +121,7 @@ struct tls_hash_drbg_state
 static struct tls_hash_drbg_state g_tls_drbg;
 static struct tls_hash_drbg_state g_tls_drbg_upgrade;
 /* During startup this holds seed material for the current lifecycle phase.
- * At READY_256 it instead holds a prepared 256-bit reseed input. */
+ * At READY_192 it instead holds a prepared 192-bit reseed input. */
 static uint8_t g_tls_entropy_reserve[TLS_HASH_DRBG_MAX_INSTANTIATE_BYTES];
 static size_t g_tls_entropy_reserve_len = 0;
 static uint16_t g_tls_entropy_reserve_bits = 0;
@@ -150,8 +136,8 @@ static uint16_t tls_entropy_reserve_target_bits(void)
     case TLS_RNG_DRBG_SEEDING:
         return TLS_HASH_DRBG_128_INSTANTIATE_TARGET_BITS;
     case TLS_RNG_DRBG_READY_128:
-        return TLS_HASH_DRBG_256_INSTANTIATE_TARGET_BITS;
-    case TLS_RNG_DRBG_READY_256:
+        return TLS_HASH_DRBG_192_INSTANTIATE_TARGET_BITS;
+    case TLS_RNG_DRBG_READY_192:
         return TLS_HASH_DRBG_RESEED_TARGET_BITS;
     default:
         return 0;
@@ -165,8 +151,8 @@ static size_t tls_entropy_reserve_target_bytes(void)
     case TLS_RNG_DRBG_SEEDING:
         return TLS_HASH_DRBG_128_INSTANTIATE_BYTES;
     case TLS_RNG_DRBG_READY_128:
-        return TLS_HASH_DRBG_256_INSTANTIATE_BYTES;
-    case TLS_RNG_DRBG_READY_256:
+        return TLS_HASH_DRBG_192_INSTANTIATE_BYTES;
+    case TLS_RNG_DRBG_READY_192:
         return TLS_HASH_DRBG_ENTROPY_BYTES;
     default:
         return 0;
@@ -389,13 +375,15 @@ static bool tls_hash_drbg_instantiate(
     size_t seed_material_len,
     uint16_t strength_bits)
 {
-    /* The 128-bit instance uses one independently conditioned 256-bit input,
-     * exceeding SP 800-90A's 3/2-strength combined entropy+nonce rule. The
-     * 256-bit instance uses a fresh 256-bit entropy input followed by a fresh
-     * 256-bit nonce. Seed material is never reused between the instances. */
+    /* The 128-bit instance partitions one independently conditioned 192-bit
+     * contribution into a 128-bit entropy input and 64-bit nonce, meeting
+     * SP 800-90A's 3/2-strength combined entropy+nonce requirement.
+     * The 192-bit instance uses a fresh 192-bit entropy input followed by a
+     * fresh independently conditioned 192-bit nonce contribution (96 bits
+     * are required). Seed material is never reused between the instances. */
     if (drbg == NULL || seed_material == NULL ||
         (strength_bits != TLS_RNG_STRENGTH_128 &&
-         strength_bits != TLS_RNG_STRENGTH_256))
+         strength_bits != TLS_RNG_STRENGTH_192))
         return false;
     tls_hash_drbg_reset(drbg);
     if (!tls_hash_df(seed_material, seed_material_len, drbg->v) ||
@@ -562,7 +550,7 @@ static bool tls_drbg_entropy_gather_step(void)
 
     if (g_tls_rng_state != TLS_RNG_DRBG_SEEDING &&
         g_tls_rng_state != TLS_RNG_DRBG_READY_128 &&
-        g_tls_rng_state != TLS_RNG_DRBG_READY_256)
+        g_tls_rng_state != TLS_RNG_DRBG_READY_192)
         return false;
 
     /* A source disappearing after startup restarts the complete lifecycle;
@@ -603,12 +591,12 @@ static bool tls_drbg_entropy_gather_step(void)
     source_epoch = tls_random_health_epoch();
     if (tls_entropy_collect(entropy, collect_len) == NULL)
     {
+        tls_rng_log_health_failure();
         INFO("rng collect fail");
         ERROR_CODE(TLS_RNG_FAILURE_COLLECTION);
         tls_rng_begin_initialization(TLS_RNG_FAILURE_COLLECTION);
         return false;
     }
-    tls_rng_log_asm_health();
     INFO("rng collect ok");
 
     /* Never combine observations spanning a failed or replaced source.
@@ -619,7 +607,7 @@ static bool tls_drbg_entropy_gather_step(void)
      * TLS_DRBG_GATHER_MAX_EPOCH_CHANGES per step means no stable source. (B3) */
     if (source_epoch != tls_random_health_epoch())
     {
-        WARN_CODE(TLS_RNG_FAILURE_SOURCE_HEALTH);
+        tls_rng_log_health_failure();
         tls_secure_memzero(entropy, sizeof(entropy));
         /* Discard material that may span two physical sources. An already
          * instantiated DRBG remains valid after a recovered source change. */
@@ -637,6 +625,9 @@ static bool tls_drbg_entropy_gather_step(void)
     memcpy(g_tls_entropy_reserve + g_tls_entropy_reserve_len,
            entropy, collect_len);
     g_tls_entropy_reserve_len += collect_len;
+    /* tls_entropy_collect() truncates SHA-256 to 192 bits. The raw source
+     * supplies at least 256 accounted bits, leaving the configured 64-bit
+     * full-entropy conditioning margin. */
     conditioned_bits = (uint16_t)(collect_len * 8u);
     g_tls_entropy_reserve_bits = (uint16_t)(
         g_tls_entropy_reserve_bits + conditioned_bits);
@@ -661,23 +652,23 @@ static bool tls_drbg_entropy_gather_step(void)
         g_tls_rng_ready_deadline = 0;
     }
     else if (g_tls_rng_state == TLS_RNG_DRBG_READY_128 &&
-             g_tls_entropy_reserve_bits >= TLS_HASH_DRBG_256_INSTANTIATE_TARGET_BITS)
+             g_tls_entropy_reserve_bits >= TLS_HASH_DRBG_192_INSTANTIATE_TARGET_BITS)
     {
         if (!tls_hash_drbg_instantiate(&g_tls_drbg_upgrade,
                                        g_tls_entropy_reserve,
-                                       TLS_HASH_DRBG_256_INSTANTIATE_BYTES,
-                                       TLS_RNG_STRENGTH_256))
+                                       TLS_HASH_DRBG_192_INSTANTIATE_BYTES,
+                                       TLS_RNG_STRENGTH_192))
         {
             INFO("rng seed drbg fail");
             tls_rng_fail(TLS_RNG_FAILURE_INSTANTIATE);
             return false;
         }
-        INFO("rng seed drbg ok 256");
+        INFO("rng seed drbg ok 192");
         tls_hash_drbg_reset(&g_tls_drbg);
         memcpy(&g_tls_drbg, &g_tls_drbg_upgrade, sizeof(g_tls_drbg));
         tls_hash_drbg_reset(&g_tls_drbg_upgrade);
         tls_entropy_reserve_reset();
-        g_tls_rng_state = TLS_RNG_DRBG_READY_256;
+        g_tls_rng_state = TLS_RNG_DRBG_READY_192;
     }
     return true;
 }
@@ -690,7 +681,7 @@ static bool tls_drbg_apply_entropy_reserve(void)
         DEBUG(); /* reserve below reseed target -- skipping reseed, DRBG runs on existing seed */
         return true;
     }
-    if (g_tls_rng_state != TLS_RNG_DRBG_READY_256 ||
+    if (g_tls_rng_state != TLS_RNG_DRBG_READY_192 ||
         !g_tls_drbg.seeded ||
         g_tls_entropy_reserve_len < TLS_HASH_DRBG_ENTROPY_BYTES)
     {
@@ -713,8 +704,8 @@ static bool tls_rng_request_try_complete(void)
     {
         return true;
     }
-    /* The compatibility request API retains its original 256-bit contract. */
-    if (tls_rng_available_strength() < TLS_RNG_STRENGTH_256)
+    /* The compatibility request API requires the maximum supported strength. */
+    if (tls_rng_available_strength() < TLS_RNG_STRENGTH_192)
     {
         return false;
     }
@@ -724,7 +715,7 @@ static bool tls_rng_request_try_complete(void)
     {
         return true;
     }
-    if (g_tls_rng_state == TLS_RNG_DRBG_READY_256 &&
+    if (g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
         !tls_drbg_apply_entropy_reserve())
         return false;
     take = remain;
@@ -757,7 +748,7 @@ static void tls_rng_fail_pending_requests(void)
 }
 
 /* Dispatcher entry: select the source, instantiate a 128-bit DRBG, then build
- * a separate 256-bit instance from entirely fresh material and promote it.
+ * a separate 192-bit instance from entirely fresh material and promote it.
  * Each post-scan invocation performs no more than one conditioned gather. */
 static void tls_rng_request_dispatch(void)
 {
@@ -796,7 +787,7 @@ static void tls_rng_request_dispatch(void)
         (g_tls_rng_state == TLS_RNG_DRBG_SEEDING ||
          g_tls_rng_state == TLS_RNG_DRBG_READY_128 ||
          g_tls_rng_request_active ||
-         (g_tls_rng_state == TLS_RNG_DRBG_READY_256 &&
+         (g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
           g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)))
     {
         gather_ok = tls_drbg_entropy_gather_step();
@@ -834,7 +825,7 @@ static void tls_rng_request_dispatch(void)
         g_tls_rng_state == TLS_RNG_AWAITING_INIT ||
         g_tls_rng_state == TLS_RNG_DRBG_SEEDING ||
         g_tls_rng_state == TLS_RNG_DRBG_READY_128 ||
-        (g_tls_rng_state == TLS_RNG_DRBG_READY_256 &&
+        (g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
          g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS))
     {
         /* Stay armed at the request cadence — there's still work. */
@@ -977,7 +968,7 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
     if (len == 0u)
         return buffer;
     if (strength_bits != TLS_RNG_STRENGTH_128 &&
-        strength_bits != TLS_RNG_STRENGTH_256)
+        strength_bits != TLS_RNG_STRENGTH_192)
     {
         DEBUG(); /* bad strength_bits argument -- caller bug, not an RNG state problem */
         goto fail;
@@ -999,14 +990,14 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
     {
         /* Reseed entropy is gathered by the async timer. Fail fast if not ready;
          * the caller retries on the next tick once the reserve is full. */
-        if (g_tls_rng_state != TLS_RNG_DRBG_READY_256 ||
+        if (g_tls_rng_state != TLS_RNG_DRBG_READY_192 ||
             g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
         {
             DEBUG(); /* reseed interval exceeded but reserve not ready -- bytes withheld until it is */
             goto fail;
         }
     }
-    if (g_tls_rng_state == TLS_RNG_DRBG_READY_256 &&
+    if (g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
         !tls_drbg_apply_entropy_reserve())
         goto fail;
 
@@ -1045,7 +1036,7 @@ fail:
 
 void *tls_random_bytes(void *buffer, size_t len)
 {
-    return tls_random_bytes_ex(buffer, len, TLS_RNG_STRENGTH_256);
+    return tls_random_bytes_ex(buffer, len, TLS_RNG_STRENGTH_192);
 }
 
 uint64_t tls_random(void)
@@ -1152,6 +1143,9 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
     const volatile uint8_t *source;
     uint8_t source_mask;
     uint8_t captured[TLS_RNG_STATS_CAPTURE_CHUNK];
+    uint8_t lag_history[TLS_RNG_STATS_LAG_COUNT];
+    uint8_t lag_history_count = 0u;
+    uint8_t lag_history_next = 0u;
     uint8_t previous = 0;
     uint32_t current_run = 0;
     uint32_t remaining;
@@ -1199,10 +1193,35 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
         for (i = 0; i < count; i++)
         {
             uint8_t bit = (captured[i] & source_mask) != 0u;
+            uint8_t lag;
 
             if (bit != 0u)
             {
                 stats->ones++;
+            }
+
+            for (lag = 1u; lag <= lag_history_count; lag++)
+            {
+                uint8_t history_index =
+                    (uint8_t)(lag_history_next + TLS_RNG_STATS_LAG_COUNT - lag);
+                if (history_index >= TLS_RNG_STATS_LAG_COUNT)
+                {
+                    history_index -= TLS_RNG_STATS_LAG_COUNT;
+                }
+                if (bit != lag_history[history_index])
+                {
+                    stats->lag_mismatches[lag - 1u]++;
+                }
+            }
+            lag_history[lag_history_next] = bit;
+            lag_history_next++;
+            if (lag_history_next == TLS_RNG_STATS_LAG_COUNT)
+            {
+                lag_history_next = 0u;
+            }
+            if (lag_history_count < TLS_RNG_STATS_LAG_COUNT)
+            {
+                lag_history_count++;
             }
 
             if (have_previous)

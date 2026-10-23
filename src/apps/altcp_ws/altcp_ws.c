@@ -32,6 +32,18 @@
 /* Max frame header overhead: 2 base + 8 ext len + 4 mask = 14 bytes */
 #define WS_MAX_FRAME_OVERHEAD 14u
 
+/* Fatal protocol termination must be reported at the decision site. Direct
+ * altcp_abort() calls are reserved for documented cleanup or peer close. */
+#define ALTCP_WS_ERROR_ABORT(pcb) do { \
+    ERROR(); \
+    altcp_abort(pcb); \
+} while (0)
+
+#define ALTCP_WS_ERROR_ABORT_CODE(pcb, code) do { \
+    ERROR_CODE(code); \
+    altcp_abort(pcb); \
+} while (0)
+
 /* altcp_ws_state_t flags */
 #define ALTCP_WS_FLAGS_UPGRADE_DONE     0x01u
 #define ALTCP_WS_FLAGS_UPPER_CALLED     0x02u
@@ -358,7 +370,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
         {
             if (tot >= WS_RX_LIMIT)
             {
-                altcp_abort(conn->inner_conn);
+                ALTCP_WS_ERROR_ABORT(conn->inner_conn);
                 return ERR_ABRT;
             }
             return ERR_OK; /* wait for more data */
@@ -375,8 +387,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
                 status[11] >= '0' && status[11] <= '9')
                 http_status = (status[9] - '0') * 100u +
                               (status[10] - '0') * 10u + status[11] - '0';
-            ERROR_CODE(http_status);
-            altcp_abort(conn->inner_conn);
+            ALTCP_WS_ERROR_ABORT_CODE(conn->inner_conn, http_status);
             return ERR_ABRT;
         }
 
@@ -459,8 +470,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
 
             if (!found_upgrade || !found_connection)
             {
-                WARN();
-                altcp_abort(conn->inner_conn);
+                ALTCP_WS_ERROR_ABORT(conn->inner_conn);
                 return ERR_ABRT;
             }
         }
@@ -525,8 +535,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
             if (ext[0] || ext[1] || ext[2] || ext[3] ||
                 ext[4] || ext[5] || (((uint32_t)ext[6] << 8u) | ext[7]) > 0xFFFFu)
             {
-                ERROR();
-                altcp_abort(conn->inner_conn);
+                ALTCP_WS_ERROR_ABORT(conn->inner_conn);
                 return ERR_ABRT;
             }
             payload_len = ((uint32_t)ext[6] << 8u) | ext[7];
@@ -544,8 +553,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
             ((opcode == WS_OP_TEXT || opcode == WS_OP_BINARY) &&
              (state->flags & ALTCP_WS_FLAGS_RECV_FRAGMENT)))
         {
-            WARN_CODE(opcode);
-            altcp_abort(conn->inner_conn);
+            ALTCP_WS_ERROR_ABORT_CODE(conn->inner_conn, opcode);
             return ERR_ABRT;
         }
         u16_t total_frame = (u16_t)(hdr_size + payload_len);
@@ -592,8 +600,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
              * must have payload ≤ 125 bytes. */
             if (!fin || payload_len > 125u)
             {
-                WARN();
-                altcp_abort(conn->inner_conn);
+                ALTCP_WS_ERROR_ABORT(conn->inner_conn);
                 return ERR_ABRT;
             }
             if (!(state->flags & ALTCP_WS_FLAGS_CLOSE_SENT))
@@ -609,8 +616,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
              * must have payload ≤ 125 bytes. */
             if (!fin || payload_len > 125u)
             {
-                WARN();
-                altcp_abort(conn->inner_conn);
+                ALTCP_WS_ERROR_ABORT(conn->inner_conn);
                 return ERR_ABRT;
             }
             altcp_ws_send_pong(conn, state, hdr_size, (u16_t)payload_len);
@@ -619,21 +625,19 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
         case WS_OP_PONG:
             if (!fin || payload_len > 125u)
             {
-                WARN();
-                altcp_abort(conn->inner_conn);
+                ALTCP_WS_ERROR_ABORT(conn->inner_conn);
                 return ERR_ABRT;
             }
             break; /* ignore */
 
         default:
             /* RFC 6455 §5.2: unknown opcodes must close with Protocol Error */
-            WARN_CODE(opcode);
             if (!(state->flags & ALTCP_WS_FLAGS_CLOSE_SENT))
             {
                 altcp_ws_send_close_frame(conn, state);
                 state->flags |= ALTCP_WS_FLAGS_CLOSE_SENT;
             }
-            altcp_abort(conn->inner_conn);
+            ALTCP_WS_ERROR_ABORT_CODE(conn->inner_conn, opcode);
             return ERR_ABRT;
         }
 
@@ -647,7 +651,10 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
         {
             err_t e = altcp_ws_pass_rx_data(conn, state);
             if (e == ERR_ABRT)
+            {
+                ERROR_CODE(-ERR_ABRT);
                 return ERR_ABRT;
+            }
             if (e != ERR_OK)
                 return ERR_OK; /* input is owned here; retry payload on poll */
         }
@@ -738,6 +745,7 @@ static err_t altcp_ws_lower_sent(void *arg, struct altcp_pcb *inner_conn,
 static void altcp_ws_lower_err(void *arg, err_t err)
 {
     struct altcp_pcb *conn = (struct altcp_pcb *)arg;
+    ERROR_CODE(-err);
     if (!conn) return;
 
     altcp_ws_state_t *state = (altcp_ws_state_t *)conn->state;
@@ -777,6 +785,7 @@ static err_t altcp_ws_lower_connected(void *arg, struct altcp_pcb *inner_conn,
 
     if (err != ERR_OK)
     {
+        ERROR_CODE(-err);
         if (conn->connected)
             conn->connected(conn->arg, conn, err);
         return ERR_OK;
@@ -785,7 +794,7 @@ static err_t altcp_ws_lower_connected(void *arg, struct altcp_pcb *inner_conn,
     err_t e = altcp_ws_send_upgrade_request(conn, state);
     if (e != ERR_OK)
     {
-        altcp_abort(conn->inner_conn);
+        ALTCP_WS_ERROR_ABORT_CODE(conn->inner_conn, -e);
         return ERR_ABRT;
     }
     return ERR_OK;
@@ -949,6 +958,7 @@ static err_t altcp_ws_close(struct altcp_pcb *conn)
 static void altcp_ws_abort(struct altcp_pcb *conn)
 {
     if (conn && conn->inner_conn)
+        /* ERROR_AUDIT: caller-requested abort, not a newly detected error. */
         altcp_abort(conn->inner_conn);
 }
 
@@ -1034,7 +1044,10 @@ static err_t altcp_ws_setup(altcp_ws_config_t *conf,
     altcp_ws_state_t *state =
         (altcp_ws_state_t *)mem_malloc(sizeof(altcp_ws_state_t));
     if (!state)
+    {
+        ERROR_CODE(-ERR_MEM);
         return ERR_MEM;
+    }
 
     memset(state, 0, sizeof(*state));
     state->conf = conf;
@@ -1058,7 +1071,10 @@ struct altcp_pcb *altcp_ws_wrap(altcp_ws_config_t *conf,
 {
     struct altcp_pcb *conn = altcp_alloc();
     if (!conn)
+    {
+        ERROR_CODE(-ERR_MEM);
         return NULL;
+    }
 
     if (altcp_ws_setup(conf, conn, inner_pcb) != ERR_OK)
     {
@@ -1072,11 +1088,15 @@ struct altcp_pcb *altcp_ws_new(altcp_ws_config_t *conf, u8_t ip_type)
 {
     struct altcp_pcb *inner = altcp_tcp_new_ip_type(ip_type);
     if (!inner)
+    {
+        ERROR_CODE(-ERR_MEM);
         return NULL;
+    }
 
     struct altcp_pcb *ret = altcp_ws_wrap(conf, inner);
     if (!ret)
     {
+        /* ERROR_AUDIT: altcp_ws_wrap emitted; release the owned lower pcb. */
         altcp_abort(inner);
         return NULL;
     }
@@ -1089,11 +1109,15 @@ struct altcp_pcb *altcp_ws_new_tls(altcp_ws_config_t          *conf,
 {
     struct altcp_pcb *tls_pcb = altcp_tls_ce_new(tls_conf, ip_type);
     if (!tls_pcb)
+    {
+        ERROR_CODE(-ERR_MEM);
         return NULL;
+    }
 
     struct altcp_pcb *ret = altcp_ws_wrap(conf, tls_pcb);
     if (!ret)
     {
+        /* ERROR_AUDIT: altcp_ws_wrap emitted; release the owned TLS pcb. */
         altcp_abort(tls_pcb);
         return NULL;
     }

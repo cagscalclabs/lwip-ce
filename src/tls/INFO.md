@@ -26,17 +26,18 @@
 **Source Selection Algorithm**:
 1. Poll 513 bytes starting at `$D65800`
 2. For each byte, repeat 256 times:
-   - XOR two consecutive reads
-   - Count set bits, accumulate score
-3. Select address with highest score
-4. Require minimum score: `256 * 8 / 3` (ensures sufficient entropy)
+   - Count ones across both reads for every bit position
+   - Count adjacent-read disagreements for every bit position
+3. Reject marginal counts outside 25--75% and disagreement counts outside 25--75%
+4. Rank primarily by marginal balance; use disagreement balance only as a tie-breaker
+5. Retain the true top four candidates and activate the first that passes two fresh production-cadence 1,024-sample 25--75% marginal windows, lag-1 through lag-4 screening, and fresh adjacent-pair gates
 
 **Entropy Extraction**:
 1. Read 952 observations from the selected source bit and pack them, eight per byte, into a 119-byte pool
 2. Hash pool with SHA-256
-3. Retain the full 32-byte digest as a conditioned 256-bit contribution
-4. Instantiate SHA-256 Hash_DRBG at 256-bit strength with one 32-byte entropy contribution and a separately collected 32-byte nonce
-5. Reseed with one complete 32-byte conditioned contribution
+3. Retain the first 24 digest bytes as a conditioned 192-bit contribution; the configured `H=0.269` accounts for 256.088 raw bits and preserves a 64-bit conditioning margin
+4. Instantiate SHA-256 Hash_DRBG at 192-bit strength with one 24-byte entropy contribution and a separately collected 24-byte nonce contribution (at least 12 nonce bytes are required)
+5. Reseed with one complete 24-byte conditioned contribution
 
 **State-compromise boundary**: The calculator has no isolated execution,
 immutable monotonic state, secure persistent storage, or guaranteed secure

@@ -44,16 +44,18 @@ TRNG
 The calculator has no hardware RNG. lwIP-CE derives entropy from a selected
 noisy SRAM bit, continuously applies repetition-count and adaptive-proportion
 health tests, packs 952 observations into a 119-byte pool, and conditions that
-pool with SHA-256. The configured conservative source estimate is 0.34 bits
-per selected-bit observation. For the full entropy analysis, see the
+pool with SHA-256 and retains a 192-bit conditioned contribution. The
+configured conservative source estimate is 0.269 bits per selected-bit
+observation, so 952 observations account for 256.088 raw bits: 192 output
+bits plus a 64-bit conditioning margin. For the full entropy analysis, see the
 `whitepaper <https://github.com/cagscalclabs/lwip-ce/releases/tag/whitepaper-latest>`_.
 Do not use the toolchain ``random()`` functions for anything security-sensitive;
 they are not cryptographically secure.
 
 The timer first instantiates Hash_DRBG at 128-bit security strength from one
-independently conditioned 256-bit contribution. It then collects entirely
-fresh material for a separate 256-bit instance and atomically promotes that
-instance when ready. Later reseeds require one 256-bit conditioned
+independently conditioned 192-bit contribution. It then collects two entirely
+fresh contributions for a separate 192-bit instance and atomically promotes
+that instance when ready. Later reseeds require one 192-bit conditioned
 contribution.
 The calculator provides no isolated execution, immutable monotonic state,
 protected key storage, or guaranteed secure erasure. Consequently, this API
@@ -86,7 +88,7 @@ live DRBG state or restoring an earlier calculator state.
 
 .. c:function:: void *tls_random_bytes(void *buffer, size_t len)
 
-   Fill ``buffer`` synchronously from the 256-bit-strength SHA-256 Hash_DRBG. If the DRBG has not
+   Fill ``buffer`` synchronously from the 192-bit-strength SHA-256 Hash_DRBG. If the DRBG has not
    yet been instantiated, this call blocks while gathering the initial
    entropy. Once instantiated, output does not consume entropy one-for-one.
    A complete timer-prepared entropy reserve is incorporated before output.
@@ -100,20 +102,20 @@ live DRBG state or restoring an earlier calculator state.
 .. c:function:: void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
 
    Fill ``buffer`` from a DRBG whose instantiated security strength is at
-   least ``TLS_RNG_STRENGTH_128`` or ``TLS_RNG_STRENGTH_256``. TLS 1.3 uses
+   least ``TLS_RNG_STRENGTH_128`` or ``TLS_RNG_STRENGTH_192``. TLS 1.3 uses
    the 128-bit level; the compatibility ``tls_random_bytes()`` API continues
-   to require 256-bit readiness.
+   to require 192-bit readiness.
 
    :returns: ``buffer`` on success, or ``NULL`` with the destination zeroized.
 
 .. c:function:: tls_rng_state_t tls_rng_status(void)
 
    Return the lifecycle state: stopped, awaiting source initialization,
-   seeding, ready at 128 bits, ready at 256 bits, or failed.
+   seeding, ready at 128 bits, ready at 192 bits, or failed.
 
 .. c:function:: uint16_t tls_rng_available_strength(void)
 
-   Return the currently available instantiated strength: 0, 128, or 256.
+   Return the currently available instantiated strength: 0, 128, or 192.
 
 .. c:function:: tls_rng_failure_t tls_rng_last_failure(void)
 

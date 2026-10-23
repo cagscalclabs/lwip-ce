@@ -47,6 +47,7 @@ assert all(
 )
 assert math.isclose(report["aggregate"]["transition_rate"], 980 / 1998)
 assert abs(report["aggregate"]["lag1_phi"]) < 0.06
+assert report["aggregate"]["profiled_lags_available"] == [1]
 assert report["conservative_working_h_bits_per_raw_bit"] <= min(
     report["worst_window_h_mcv_lower_99_bits_per_raw_bit"],
     report["aggregate"]["h_mcv_lower_99_bits_per_raw_bit"],
@@ -54,13 +55,17 @@ assert report["conservative_working_h_bits_per_raw_bit"] <= min(
 
 alternating_text = """\
 rng_stats,version=2,runs=1,samples_per_run=1000
-run=0,source=D65800,mask=04,samples=1000,ones=500,zeros=500,transitions=999,n00=0,n01=500,n10=499,n11=0,longest=1,longest0=1,longest1=1,p1_q16=32768,bias_q16=0,transition_q16=65536
+run=0,source=D65800,mask=04,samples=1000,ones=500,zeros=500,transitions=999,n00=0,n01=500,n10=499,n11=0,lag1_mismatches=999,lag2_mismatches=0,lag3_mismatches=997,lag4_mismatches=0,longest=1,longest0=1,longest1=1,p1_q16=32768,bias_q16=0,transition_q16=65536
 """
 alternating = MODULE.analyze(MODULE.parse_runs(alternating_text))
 alternating_run = alternating["runs"][0]
 assert alternating_run["transition_counts_source"] == "recorded"
 assert alternating["transition_counts_provenance"] == "recorded"
 assert alternating_run["lag1_phi"] == -1.0
+assert alternating_run["profiled_lags_available"] == [1, 2, 3, 4]
+assert alternating_run["lag2_correlation_heuristic"] == 1.0
+assert alternating_run["lag3_correlation_heuristic"] == -1.0
+assert not alternating_run["projected_startup_lag_screen_pass"]
 assert alternating_run["h_markov_lower_99_bits_per_raw_bit"] < 0.01
 assert alternating["first_order_dependency_factor"] < 0.01
 
@@ -69,4 +74,4 @@ iid = MODULE.transition_estimate(iid_counts, ones=500, zeros=500)
 assert abs(iid["lag1_phi"]) < 0.002
 assert iid["h_markov_plugin_bits_per_raw_bit"] > 0.99
 
-print("RNG stats analyzer passed: marginal and first-order estimates")
+print("RNG stats analyzer passed: marginal, first-order, and lag-1..4 diagnostics")

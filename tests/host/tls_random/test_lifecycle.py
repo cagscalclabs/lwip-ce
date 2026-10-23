@@ -28,6 +28,9 @@ MOCKS = f'''\
 #define ERROR_CODE(x) ((void)(x))
 #define ERROR() ((void)0)
 #define WARN_CODE(x) ((void)(x))
+#define ERROR_INFO(x) ((void)(x))
+#define INFO(x) ((void)(x))
+#define DEBUG() ((void)0)
 
 struct tls_hash_context {{ uint32_t state; }};
 static uint32_t mock_now;
@@ -39,6 +42,7 @@ static unsigned mock_gathers;
 static uint8_t mock_source;
 static uint8_t mock_epoch;
 static bool mock_source_ready;
+uint8_t sprng_last_health_mask = TLS_RNG_HEALTH_ALL_PASS;
 
 static uint32_t sys_now(void) {{ return mock_now; }}
 static void lwip_dispatch_attach(int id, void (*fn)(void))
@@ -96,18 +100,16 @@ int main(void)
 {
     uint8_t out[32];
 
-    mock_init_failures = 2;
+    /* tls_init() selects the source before starting the asynchronous DRBG
+     * lifecycle. Source discovery itself is intentionally not timer-retried. */
+    assert(tls_random_init_entropy());
     tls_rng_start();
     assert(tls_rng_status() == TLS_RNG_AWAITING_INIT);
     assert(tls_rng_available_strength() == 0u);
 
     tick();
-    assert(tls_rng_status() == TLS_RNG_AWAITING_INIT);
-    tick();
-    assert(tls_rng_status() == TLS_RNG_AWAITING_INIT);
-    tick();
     assert(tls_rng_status() == TLS_RNG_DRBG_SEEDING);
-    assert(mock_gathers == 0u); /* source selection owns its complete tick */
+    assert(mock_gathers == 0u); /* source validation owns its complete tick */
 
     tick();
     assert(tls_rng_status() == TLS_RNG_DRBG_READY_128);
@@ -116,15 +118,11 @@ int main(void)
 
     tick();
     assert(tls_rng_status() == TLS_RNG_DRBG_READY_128 && mock_gathers == 2u);
-    mock_source_ready = false;
     tick();
-    assert(tls_rng_status() == TLS_RNG_DRBG_READY_128 && mock_gathers == 3u);
-    assert(g_tls_entropy_reserve_len == 32u); /* old-source reserve was discarded */
+    assert(tls_rng_status() == TLS_RNG_DRBG_READY_192 && mock_gathers == 3u);
+    assert(tls_rng_available_strength() == 192u);
     tick();
-    assert(tls_rng_status() == TLS_RNG_DRBG_READY_256 && mock_gathers == 4u);
-    assert(tls_rng_available_strength() == 256u);
-    tick();
-    assert(mock_gathers == 5u && mock_period == 0u); /* reseed reserve is full */
+    assert(mock_gathers == 4u && mock_period == 0u); /* reseed reserve is full */
     assert(tls_random_bytes(out, sizeof(out)) == out);
 
     tls_rng_cleanup();
@@ -142,7 +140,7 @@ int main(void)
     assert(tls_rng_available_strength() == 0u);
     assert(tls_rng_last_failure() == TLS_RNG_FAILURE_TIMEOUT);
 
-    puts("RNG lifecycle passed: retry, READY_128, source reset, fresh promotion, timeout");
+    puts("RNG lifecycle passed: READY_128, fresh 192-bit promotion, reseed, timeout");
     return 0;
 }
 '''

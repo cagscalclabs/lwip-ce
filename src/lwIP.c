@@ -2000,6 +2000,7 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
         {
             struct tcp_pcb *pcb = conn->pcb.tcp;
             conn->pcb.tcp = NULL;
+            /* ERROR_AUDIT: connect timeout is reported after transport cleanup. */
             tcp_abort(pcb);
         }
         break;
@@ -2012,6 +2013,7 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
         {
             struct altcp_pcb *pcb = conn->pcb.altcp;
             conn->pcb.altcp = NULL;
+            /* ERROR_AUDIT: connect timeout is reported after transport cleanup. */
             altcp_abort(pcb);
         }
         if (conn->tls_conf)
@@ -2148,6 +2150,7 @@ static err_t conn_altcp_sent_cb(void *arg, struct altcp_pcb *pcb, u16_t len)
         conn_event_enqueue(c, CONN_PENDING_WRITABLE, LWIP_OK);
     }
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2161,6 +2164,7 @@ static err_t conn_altcp_poll_cb(void *arg, struct altcp_pcb *pcb)
     if (c)
         conn_event_enqueue(c, CONN_PENDING_POLL, LWIP_OK);
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2219,6 +2223,7 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
     STATE_CHG(c, LWIP_STATE_CONN_ESTABLISHED);
     conn_event_enqueue(c, CONN_PENDING_CONNECTED, LWIP_OK);
     if (c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2323,6 +2328,7 @@ static err_t conn_tcp_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len)
         conn_event_enqueue(c, CONN_PENDING_WRITABLE, LWIP_OK);
     }
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2336,6 +2342,7 @@ static err_t conn_tcp_poll_cb(void *arg, struct tcp_pcb *pcb)
     if (c)
         conn_event_enqueue(c, CONN_PENDING_POLL, LWIP_OK);
     if (c && c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2388,6 +2395,7 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
     STATE_CHG(c, LWIP_STATE_CONN_ESTABLISHED);
     conn_event_enqueue(c, CONN_PENDING_CONNECTED, LWIP_OK);
     if (c->aborting)
+        /* ERROR_AUDIT: propagate caller-requested socket abort. */
         return ERR_ABRT;
     return ERR_OK;
 }
@@ -2645,6 +2653,7 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
         if (q->pcb.tcp)
         {
             tcp_arg(q->pcb.tcp, NULL);
+            /* ERROR_AUDIT: destroy-owned queued peer cleanup. */
             tcp_abort(q->pcb.tcp);
         }
         lwip_socket_rx_ring_destroy(q);
@@ -2665,6 +2674,7 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
             if (conn->is_listen)
                 tcp_close(conn->pcb.tcp);  /* listen PCB — tcp_abort is invalid */
             else
+                /* ERROR_AUDIT: explicit socket destruction cleanup. */
                 tcp_abort(conn->pcb.tcp);
         }
         break;
@@ -2679,6 +2689,7 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
     case LWIP_SOCKET_ALTCP_WSS:
         if (conn->pcb.altcp)
         {
+            /* ERROR_AUDIT: explicit socket destruction cleanup. */
             altcp_abort(conn->pcb.altcp);
         }
         if (conn->tls_conf)
@@ -3086,11 +3097,15 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     struct lwip_socket *listener = (struct lwip_socket *)arg;
 
     if (err != ERR_OK || !newpcb || !listener)
+    {
+        ERROR_CODE(err != ERR_OK ? (uint16_t)(-err) : (uint16_t)(-ERR_ARG));
         return ERR_VAL;
+    }
 
     struct lwip_socket *peer = mem_malloc(sizeof(*peer));
     if (!peer)
     {
+        ERROR_CODE(-ERR_MEM);
         tcp_abort(newpcb);
         return ERR_ABRT;
     }
@@ -3104,6 +3119,7 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 
     if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
     {
+        ERROR_CODE(-ERR_MEM);
         mem_free(peer);
         tcp_abort(newpcb);
         return ERR_ABRT;
@@ -3480,6 +3496,7 @@ lwip_error_t lwip_socket_abort(struct lwip_socket *conn)
             tcp_sent(pcb, NULL);
             tcp_err(pcb, NULL);
             tcp_poll(pcb, NULL, pcb->pollinterval);
+            /* ERROR_AUDIT: caller explicitly requested socket abort. */
             tcp_abort(pcb);
         }
         break;
@@ -3505,6 +3522,7 @@ lwip_error_t lwip_socket_abort(struct lwip_socket *conn)
             altcp_sent(pcb, NULL);
             altcp_err(pcb, NULL);
             altcp_poll(pcb, NULL, pcb->pollinterval);
+            /* ERROR_AUDIT: caller explicitly requested socket abort. */
             altcp_abort(pcb);
         }
         if (conn->tls_conf)

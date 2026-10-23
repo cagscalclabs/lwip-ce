@@ -245,6 +245,7 @@ static const char *kind_str(uint8_t kind)
     case LWIP_EV_DEBUG:     return "DBG";
     case LWIP_EV_WARN:      return "WARN";
     case LWIP_EV_ERROR:     return "ERR";
+    case LWIP_EV_ERROR_MSG: return "ERR";
     case LWIP_EV_STATE_CHG: return "STATE";
     case LWIP_EV_IO_FILE:   return "IOFILE";
     case LWIP_EV_IO_ETH:    return "IOETH";
@@ -336,6 +337,13 @@ static void log_event_cb(const struct lwip_event *ev)
     {
         const char *msg = ev->data.msg ? ev->data.msg : "";
         n = snprintf(line, sizeof(line), "%lu: EVT: INFO %s %s\n",
+                     (unsigned long)ts, mod, msg);
+        break;
+    }
+    case LWIP_EV_ERROR_MSG:
+    {
+        const char *msg = ev->data.msg ? ev->data.msg : "";
+        n = snprintf(line, sizeof(line), "%lu: EVT: ERR: %s %s\n",
                      (unsigned long)ts, mod, msg);
         break;
     }

@@ -945,27 +945,27 @@ for (uint8_t i = 0; i < count; i++) {
 		\item At each address, perform 256 pairs of physically adjacent reads, producing 512 marginal observations and 256 pairwise transition observations for every bit position.
 		\item Require the marginal one-count to lie in $[128,384]$, equivalent to an observed $\hat p(1)\in[0.25,0.75]$ over the discovery sample.
 		\item Require the adjacent-pair disagreement count to lie in $[64,192]$, rejecting both nearly static sources and sources dominated by deterministic alternation.
-		\item Score each qualifying address/bit pair as $s=\min(d,256-d)$, where $d$ is its disagreement count. The candidate with the largest score---the transition rate closest to one half---becomes the primary tap; the first candidate wins an exact tie, making selection deterministic for a fixed observation sequence.
-		\item Retain up to three eligible candidates displaced from the lead or tied with it as recovery candidates.
-		\item After completing the scan, revalidate the selected tap using 512 fresh adjacent pairs (1,024 raw reads). Revalidation requires a marginal one-count in $[256,768]$ and a disagreement count in $[128,384]$; initialization fails if the selected tap does not pass this independent sample.
+		\item Rank each qualifying address/bit pair primarily by marginal balance, $s_m=\min(o,512-o)-128$, where $o$ is its one-count. Use transition balance, $s_t=\min(d,256-d)$, only to break an exact marginal-score tie. The first candidate wins an exact two-score tie, making selection deterministic for a fixed observation sequence.
+		\item Retain the true top four candidates in score order. The first candidate that passes fresh qualification becomes active; the remaining ranked candidates are cached for fast recovery without another complete scan.
+		\item Qualify a candidate with two consecutive 952-sample windows collected through the production sampling path. Both must pass RCT/APT and independently contain between 238 and 714 ones; the first also undergoes the lag-1 through lag-4 periodicity screen. Then take 512 fresh adjacent pairs (1,024 raw reads) and require a marginal one-count in $[256,768]$ and disagreement count in $[128,384]$.
 	\end{itemize}
 	
 		The following \textbf{derived assumptions} apply:
 		\begin{itemize}
 		\item The marginal and disagreement limits characterize only the finite discovery and revalidation samples. They do not prove independence or establish the source's future min-entropy rate.
-		\item The disagreement score is a source-selection heuristic, not an entropy estimator. Min-entropy accounting is performed separately from the raw-bit profiles described below.
-		\item During collection, every selected-bit observation is subjected to a Repetition Count Test with cutoff $C=51$ and a binary Adaptive Proportion Test with window $W=1024$ and cutoff $C=840$ in either bit direction.
-		\item If either continuous health test fails, the partial entropy pool is destroyed. Each cached recovery candidate is revalidated against a fresh 1,024-read sample before activation; if none survives, the implementation performs at most one complete 513-address rescan for that collection attempt. Collection fails closed if no replacement qualifies.
+		\item Marginal balance is the primary ranking signal because it directly addresses the most-common-value behavior of this sense-amplifier source. Disagreement and lag measurements reject gross static, alternating, or short-period behavior; they are diagnostics rather than independent entropy credits.
+		\item During collection, every selected-bit observation is subjected to a Repetition Count Test with cutoff $C=76$ and a binary Adaptive Proportion Test with one collection-sized window, $W=952$, and cutoff $C=844$ in either bit direction. These cutoffs use $H=0.269$ and a per-test false-positive probability $\alpha=2^{-20}$.
+		\item If either continuous health test fails, the partial entropy pool is destroyed. Each cached recovery candidate is requalified against two fresh production-cadence windows plus the adjacent-pair gates before activation; if none survives, the implementation performs at most one complete 513-address rescan for that collection attempt. Collection fails closed if no replacement qualifies.
 		\item Physical TI-84+ CE hardware is expected to qualify reliably, whereas CEmu may fail because deterministic SRAM emulation does not reproduce the physical source.
 		\end{itemize}
 	
 	\paragraph{Entropy Collection Model}
-	The entropy collector prepares one 256-bit contribution via the following algorithm:
+	The entropy collector prepares one 192-bit contribution via the following algorithm:
 	\begin{itemize}
 		\item Read the selected source bit once for each bit of the 119-byte entropy pool, packing eight consecutive observations into each byte for a total of 952 raw observations.
 		\item Apply the runtime repetition-count and adaptive-proportion health tests to every observation of the selected source bit.
 		\item Hash the resulting 119-byte pool with SHA-256.
-		\item Use the full 256-bit digest as the conditioned contribution to the Hash\_DRBG entropy reserve.
+		\item Use the first 192 digest bits as the conditioned contribution to the Hash\_DRBG entropy reserve.
 	\end{itemize}
 	
 		The following \textbf{derived assumptions} apply:
@@ -973,7 +973,7 @@ for (uint8_t i = 0; i < count; i++) {
 			\item Entropy is credited only to the selected source bit; all other bits in each raw byte are treated as zero-entropy in the bound.
 			\item Entropy is estimated at the raw selected tap. Bit packing is information-preserving, while SHA-256 is a deterministic conditioner and receives no independent entropy credit.
 			\item The measured most-common-value estimate is supplemented by a first-order Markov bound. Multiplying the resulting estimate by the number of observations remains an engineering accounting model, not a formal non-IID entropy-rate proof; longer-range dependence can reduce the true joint min-entropy.
-			\item A contribution is never credited with more than its 256-bit conditioned width, regardless of the raw accounting result.
+			\item A contribution is never credited with more than its 192-bit conditioned width, regardless of the raw accounting result.
 			\item Runtime health checks are assumed to detect gross source failure, but short-window entropy collapse between checks remains a residual risk.
 		\end{itemize}
 		
@@ -1034,15 +1034,15 @@ for (uint8_t i = 0; i < count; i++) {
 		h_{\text{all models}}=\min_m h_m=\RngOverallH\ \text{bits per raw selected-bit observation}.
 	\]
 
-	One collection performs $8\times119=\RngRawSamplesPerCollection$ selected-bit observations and emits a 256-bit conditioned contribution. Under the provisional additive-observation accounting model, the weakest measured model therefore gives
+	One collection performs $8\times119=\RngRawSamplesPerCollection$ selected-bit observations and emits a 192-bit conditioned contribution. Under the provisional additive-observation accounting model, the weakest measured model therefore gives
 	\[
 		H_{\text{raw,collection}}=\RngRawSamplesPerCollection h_{\text{all models}}=\RngOverallRawCollectionH\ \text{bits},
 	\]
-	The implementation rounds the measured cross-model value down to the configurable policy value $h_{\text{policy}}=0.34$, yielding $952(0.34)=323.68$ provisionally accounted raw bits per collection. The contribution is then credited as
+	The implementation rounds the measured cross-model value down to the configurable policy value $h_{\text{policy}}=0.269$, yielding $952(0.269)=256.088$ provisionally accounted raw bits per collection. This meets the $n_{\text{out}}+64=256$ full-entropy conditioning bound for a 192-bit output. The contribution is then credited as
 	\[
-		H_{\text{credited}}=\min(256,952h_{\text{policy}})=\RngOverallCredit\ \text{bits}.
+		H_{\text{credited}}=\min(192,952h_{\text{policy}})=\RngOverallCredit\ \text{bits}.
 	\]
-	The 256-bit result is a credit cap imposed by the conditioned output width; it is not a claim that SHA-256 created entropy. The added Markov estimate accounts for adjacent dependence but cannot detect every longer-range pattern. Consequently this multiplication and the configured working value remain conservative engineering policy supported by online health tests, not a complete SP~800-90B non-IID entropy assessment or certification. Post-conditioning measurements may test output quality, but they are not used to inflate the raw-source entropy estimate.
+	The 192-bit result is a credit cap imposed by the conditioned output width; it is not a claim that SHA-256 created entropy. The added Markov estimate accounts for adjacent dependence but cannot detect every longer-range pattern. Consequently this multiplication and the configured working value remain conservative engineering policy supported by online health tests, not a complete SP~800-90B non-IID entropy assessment or certification. Post-conditioning measurements may test output quality, but they are not used to inflate the raw-source entropy estimate.
 	
 	\paragraph{Encapsulation}
 	\label{ssec:encapsulation}
@@ -1062,10 +1062,10 @@ for (uint8_t i = 0; i < count; i++) {
 		\item If \texttt{blocking=false}, execution returns to the caller immediately; the callback function fires when the request is fulfilled.
 	\end{itemize}
 	
-		Each conditioned contribution described in the Entropy Collection Model supplies at most 256 credited bits. The first contribution instantiates a 128-bit Hash\_DRBG; its 256 credited bits exceed SP~800-90A Rev.~1's $3/2$-strength combined entropy-and-nonce requirement. This makes the generator available for the library's 128-bit TLS 1.3 suites after one contribution. The dispatcher then gathers two entirely fresh contributions for a separate 256-bit instance: a 256-bit entropy input and a separately conditioned 256-bit nonce. Seed material from the 128-bit instance is not reused. Once the second instance is complete, it atomically replaces and wipes the 128-bit instance.
+		Each conditioned contribution described in the Entropy Collection Model supplies 192 credited bits. The first contribution is partitioned into a 128-bit entropy input and 64-bit nonce to instantiate a 128-bit Hash\_DRBG, exactly meeting SP~800-90A Rev.~1's $3/2$-strength combined entropy-and-nonce requirement. This makes the generator available for the library's 128-bit TLS 1.3 suites after one contribution. The dispatcher then gathers two entirely fresh contributions for a separate 192-bit instance: a 192-bit entropy input and a separately conditioned 192-bit nonce contribution, exceeding the 96-bit nonce requirement. Seed material from the 128-bit instance is not reused. Once the second instance is complete, it atomically replaces and wipes the 128-bit instance.
 
 		After promotion, one complete contribution is retained and incorporated by the next Hash\_DRBG reseed. DRBG output does not consume entropy credit one-for-one; the timer replenishes the reseed reserve independently and stops while that reserve is full.
-		This is a 256-bit algorithmic security-strength claim under the documented entropy-source assumptions, not a hardware state-protection claim or a certification claim. The calculator provides no isolated execution environment, immutable monotonic state, secure persistent storage, or guaranteed secure erasure. An attacker able to read or modify process memory can obtain or replace the Hash\_DRBG working state and any pending reseed material; restoring an earlier calculator state can likewise roll the generator back. The Hash\_DRBG state update retains its ordinary algorithmic backtracking properties under its erasure assumptions, but lwIP-CE cannot claim resistance to physical or privileged state compromise on this hardware. Recovery after compromise requires a subsequent healthy entropy collection performed after the attacker has lost access.
+		This is a 192-bit algorithmic security-strength claim under the documented entropy-source assumptions, not a hardware state-protection claim or a certification claim. The calculator provides no isolated execution environment, immutable monotonic state, secure persistent storage, or guaranteed secure erasure. An attacker able to read or modify process memory can obtain or replace the Hash\_DRBG working state and any pending reseed material; restoring an earlier calculator state can likewise roll the generator back. The Hash\_DRBG state update retains its ordinary algorithmic backtracking properties under its erasure assumptions, but lwIP-CE cannot claim resistance to physical or privileged state compromise on this hardware. Recovery after compromise requires a subsequent healthy entropy collection performed after the attacker has lost access.
 		In blocking mode, \texttt{tls\_request\_random\_bytes()} performs only entropy work required for initial instantiation or mandatory reseeding. In non-blocking mode, requests are queued and completed by the dispatcher.
 		
 		If quick statistical testing demonstrates that the source has degraded beyond acceptable levels, the generator initialization function is called, which should cause a new source to be selected. Given the abstraction between tap, the entropy pool, and the DRBG, choosing a new entropy tap is invisible and does not impact upstream state.

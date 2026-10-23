@@ -29,6 +29,7 @@ extern "C" {
  *   if (degraded)      { WARN(); }
  *   DEBUG();                          // fires only when the {file,line} changes
  *   ERROR_CODE(status);               // ERROR + a caller-supplied uint16_t
+ *   ERROR_INFO("named failure");       // textual ERROR without traceback entry
  *   WARN_CODE(bitmask);
  *   INFO("sent ClientHello");         // milestone, payload is the string itself
  *   STATE_CHG(conn, LWIP_STATE_CONN_ESTABLISHED);
@@ -117,7 +118,9 @@ typedef enum lwip_event_kind
     LWIP_EV_STATE_CHG,    /* meaningful state transition; data.state         */
     LWIP_EV_IO_FILE,      /* appvar/flash read or write; data.file           */
     LWIP_EV_IO_ETH,       /* network bytes rx/tx; data.eth                   */
-    LWIP_EV_POWER         /* USB/calc power state change; data.power         */
+    LWIP_EV_POWER,        /* USB/calc power state change; data.power         */
+    /* Appended to preserve existing event-kind values. */
+    LWIP_EV_ERROR_MSG     /* named error detail; data.msg                    */
 } lwip_event_kind_t;
 
 /**
@@ -213,7 +216,7 @@ struct lwip_event
     uint8_t kind;    /* lwip_event_kind_t   */
     union
     {
-        const char *msg;        /* INFO: literal message               */
+        const char *msg;        /* INFO / ERROR_MSG: message           */
         struct
         {
             uint32_t loc;        /* LWIP_EVENT_CODE(file_id, line)      */
@@ -309,6 +312,7 @@ const char *lwip_debug_state_change_name(uint16_t change_event);
  * -------------------------------------------------------------------- */
 void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra);
 void lwip_event_emit_info(uint8_t module, const char *msg);
+void lwip_event_emit_error_info(uint8_t module, const char *msg);
 void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event);
 void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes);
 void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes);
@@ -354,6 +358,9 @@ void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
 
 #define INFO(str) \
     lwip_event_emit_info(LWIP_DBG_MODULE, (str))
+
+#define ERROR_INFO(str) \
+    lwip_event_emit_error_info(LWIP_DBG_MODULE, (str))
 
 
 #define STATE_CHG(owner, change_event) \
