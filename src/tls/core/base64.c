@@ -30,7 +30,8 @@ size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
 
 static int b64_value(uint8_t ch)
 {
-    const char *p = strchr(b64_charset, (int)ch);
+    /* strchr() matches the terminating NUL, which would decode as value 64. */
+    const char *p = (ch == 0) ? NULL : strchr(b64_charset, (int)ch);
     return p ? (int)(p - b64_charset) : -1;
 }
 

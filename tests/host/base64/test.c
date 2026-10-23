@@ -27,6 +27,10 @@ int main(void)
     assert(dec("T=Fu", out) == 0);
     assert(dec("TQ==TWFu", out) == 0);
     assert(dec("TQ=a", out) == 0);
+    {
+        uint8_t with_nul[4] = {'T', 'W', 'F', 0};
+        assert(tls_base64_decode(with_nul, 4, out) == 0); /* NUL is not a sextet */
+    }
     assert(dec("TQ==", out) == 1 && out[0] == 'M');
     assert(dec("TWE=", out) == 2 && !memcmp(out, "Ma", 2));
     assert(dec("TWFu", out) == 3 && !memcmp(out, "Man", 3));

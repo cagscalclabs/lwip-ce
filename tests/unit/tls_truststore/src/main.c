@@ -15,7 +15,8 @@
 #include <lwip/cryptography/truststore.h>
 #include <lwip.h>
 
-#define TLS_TRUSTSTORE_VERSION 1
+#define TEST_TRUSTSTORE_VERSION 2
+#define TEST_TRUSTSTORE_INDEX_ENTRY_LEN 34u
 
 static int text_y = 20;
 
@@ -68,8 +69,15 @@ static const struct tls_truststore_entry *tls_truststore_first_entry(void)
         return NULL;
     }
 
-    const uint8_t *db_start = (const uint8_t *)header + TLS_TRUSTSTORE_HEADER_LEN;
-    return (const struct tls_truststore_entry *)db_start;
+    size_t indexes_len = (size_t)header->entry_count *
+                         TEST_TRUSTSTORE_INDEX_ENTRY_LEN * 2u;
+    if (indexes_len > truststore_size - TLS_TRUSTSTORE_HEADER_LEN)
+    {
+        return NULL;
+    }
+    const uint8_t *metadata = (const uint8_t *)header +
+                              TLS_TRUSTSTORE_HEADER_LEN + indexes_len;
+    return (const struct tls_truststore_entry *)metadata;
 }
 
 int main(void)
@@ -107,7 +115,7 @@ int main(void)
         uint8_t *base = (uint8_t *)truststore_var + 2;
         struct tls_truststore_header *header =
             (struct tls_truststore_header *)base;
-        if (header->version != TLS_TRUSTSTORE_VERSION)
+        if (header->version != TEST_TRUSTSTORE_VERSION)
         {
             draw_line("appvar version bad");
             os_GetKey();

@@ -264,6 +264,17 @@ static void handshake_extension_tests(void)
                                          sizeof(cert_request_duplicate)));
 }
 
+/* Run every queued certificate job; false as soon as one fails. */
+static bool drain_jobs(struct tls_handshake_context *ctx)
+{
+    while (tls_cert_jobs_pending(ctx))
+    {
+        if (!tls_cert_jobs_step(ctx))
+            return false;
+    }
+    return true;
+}
+
 static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
 {
     struct tls_handshake_context ctx;
@@ -294,6 +305,8 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     assert(ctx.leaf_pubkey.type == TLS_KEY_TYPE_RSA);
     w->cert_index = 1;
     assert(tls_cert_walker_validate_one(w)); // adjacent link uses stored scheme
+    // The link signature check is queued, not run inline.
+    assert(tls_cert_jobs_pending(&ctx) && ctx.cert_jobs_count == 1);
     w->state = CW_DONE;
 
     // Root metadata deliberately differs from the child's signature scheme.
@@ -303,12 +316,72 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
         ? TLS_CERT_SIG_RSA_PSS_SHA256 : TLS_CERT_SIG_RSA_PKCS1_SHA256;
     root_entry->key[0] = root_entry->key[2] = 1;
     memset(root_entry->key + 3, 0x81, 256);
+    struct tls_truststore_entry *wrong_root = calloc(1, sizeof(*wrong_root) + 259);
+    wrong_root->len = sizeof(*wrong_root) + 259;
+    wrong_root->alg_id = root_entry->alg_id;
+    wrong_root->key[0] = wrong_root->key[2] = 1;
+    memset(wrong_root->key + 3, 0x82, 256);
+    root_candidates[0] = wrong_root;
+    root_candidates[1] = root_entry;
+    root_candidate_count = 2;
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
     assert(tls_recv_certificate_streamed(&ctx, w));
+    assert(ctx.cert_jobs_count == 2); // link + root, nothing verified yet
+    // Held-back handshake bytes are replayed only after the queue drains.
+    assert(tls_hs_defer_bytes(&ctx, (const uint8_t *)"abc", 3));
+    assert(tls_hs_defer_bytes(&ctx, (const uint8_t *)"de", 2));
+    assert(ctx.hs_deferred_len == 5);
+    replayed_bytes = 0;
+    assert(tls_cert_jobs_step(&ctx));      // link job
+    assert(ctx.cert_jobs_count == 1 && replayed_bytes == 0);
+    assert(tls_cert_jobs_step(&ctx));      // root job; queue drained
+    assert(!tls_cert_jobs_pending(&ctx) && replayed_bytes == 5);
+    assert(ctx.hs_deferred == NULL && ctx.hs_deferred_len == 0);
+    // A failing replayed message is fatal too.
+    assert(tls_hs_defer_bytes(&ctx, (const uint8_t *)"xy", 2));
+    assert(tls_cert_job_enqueue(w, &ctx.leaf_pubkey));
+    replay_result = false;
+    assert(!drain_jobs(&ctx));
+    replay_result = true;
+    assert(!tls_cert_jobs_pending(&ctx) && ctx.hs_deferred == NULL);
+    root_candidate_count = 0;
+    free(wrong_root);
+    // The root job took the walker's signature; give it a fresh valid one.
+    assert(w->pending_sig == NULL && w->pending_link);
+    w->pending_sig = malloc(256);
+    mem_stats_tls_direct_add(256, 256);
+    memset(w->pending_sig, expected == TLS_ALG_RSA_PKCS1_SHA256 ? 0x11 : 0x22, 256);
+    w->pending_sig_len = 256;
     w->pending_sig[0] ^= 1;
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
-    assert(!tls_recv_certificate_streamed(&ctx, w));
-    assert(!tls_cert_walker_validate_one(w)); // invalid adjacent link too
+    ctx.fatal_alert_sent = false; /* synthetic second connection phase */
+    last_alert = 0;
+    root_candidates[0] = root_entry;
+    root_candidate_count = 1;
+    // A bad signature is caught when the job runs: fatal alert, state ERROR,
+    // queue and held bytes discarded.
+    assert(tls_recv_certificate_streamed(&ctx, w));
+    assert(tls_hs_defer_bytes(&ctx, (const uint8_t *)"zz", 2));
+    assert(!drain_jobs(&ctx));
+    assert(last_alert == TLS_ALERT_BAD_CERTIFICATE && ctx.state == TLS_STATE_ERROR);
+    assert(!tls_cert_jobs_pending(&ctx) && ctx.hs_deferred == NULL);
+    // The pending signature moved to the (failed) root job, so this adjacent
+    // link has no signature left to check and is rejected when it runs.
+    assert(tls_cert_walker_validate_one(w));
+    assert(!drain_jobs(&ctx));
+    assert(!tls_cert_jobs_pending(&ctx));
+    // Queue bound: a full queue runs the oldest job inline.
+    for (int i = 0; i < 6; i++)
+    {
+        ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
+        root_candidate_count = 0;
+        assert(tls_cert_walker_validate_one(w) || true);
+        assert(ctx.cert_jobs_count <= TLS_CERT_JOB_MAX);
+        (void)drain_jobs(&ctx);
+    }
+    // Cleanup frees whatever is still queued (accounting checked below).
+    assert(tls_cert_walker_validate_one(w) || true);
+    assert(tls_hs_defer_bytes(&ctx, (const uint8_t *)"q", 1));
 
     uint8_t sig[256]; memset(sig, 0x22, sizeof(sig));
     assert(tls_certverify_rsa_pss_sha256(&ctx, sig, sizeof(sig)));
@@ -320,8 +393,31 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     free(root_entry); root_entry = NULL;
 }
 
+static void time_tests(void)
+{
+    uint32_t t = 1;
+    /* RFC 5280 4.1.2.5: 9999-12-31T23:59:59Z means "no expiry"; saturate. */
+    assert(tls_x509_time_to_unix((const uint8_t *)"99991231235959Z", 15,
+                                 ASN1_GENERALIZEDTIME, &t) && t == UINT32_MAX);
+    /* A pre-1970 instant saturates to 0 (UTCTime pivot: 50 -> 1950). */
+    assert(tls_x509_time_to_unix((const uint8_t *)"500101000000Z", 13,
+                                 ASN1_UTCTIME, &t) && t == 0);
+    /* Calendar validity: leap day only in leap years, no Feb 30 / Apr 31. */
+    assert(tls_x509_time_to_unix((const uint8_t *)"20240229000000Z", 15,
+                                 ASN1_GENERALIZEDTIME, &t));
+    assert(!tls_x509_time_to_unix((const uint8_t *)"20230229000000Z", 15,
+                                  ASN1_GENERALIZEDTIME, &t));
+    assert(!tls_x509_time_to_unix((const uint8_t *)"21000229000000Z", 15,
+                                  ASN1_GENERALIZEDTIME, &t));
+    assert(tls_x509_time_to_unix((const uint8_t *)"20000229000000Z", 15,
+                                 ASN1_GENERALIZEDTIME, &t));
+    assert(!tls_x509_time_to_unix((const uint8_t *)"20260431000000Z", 15,
+                                  ASN1_GENERALIZEDTIME, &t));
+}
+
 int main(void)
 {
+    time_tests();
     ALG(alg_pkcs, true, TLS_ALG_RSA_PKCS1_SHA256);
     ALG(alg_pss, true, TLS_ALG_RSA_PSS_RSAE_SHA256);
     ALG(alg_pss_trailer, true, TLS_ALG_RSA_PSS_RSAE_SHA256);
@@ -338,7 +434,19 @@ int main(void)
     identity_tests();
     chain(cert_pkcs, sizeof(cert_pkcs), TLS_ALG_RSA_PKCS1_SHA256);
     chain(cert_pss, sizeof(cert_pss), TLS_ALG_RSA_PSS_RSAE_SHA256);
+    chain(cert_aki, sizeof(cert_aki), TLS_ALG_RSA_PKCS1_SHA256);
+    assert(ski_lookup_calls != 0);
     assert(pkcs_calls && pss_calls);
+
+    struct tls_x509_object with_aki;
+    assert(tls_x509_parse_certificate(cert_aki, sizeof(cert_aki), &with_aki));
+    assert(with_aki.authority_key_id_len == 20 &&
+           with_aki.authority_key_id[0] == 0xa0 &&
+           with_aki.authority_key_id[19] == 0xb3);
+    assert(!tls_x509_parse_certificate(cert_duplicate_aki,
+                                       sizeof(cert_duplicate_aki), &with_aki));
+    assert(!tls_x509_parse_certificate(cert_bad_aki,
+                                       sizeof(cert_bad_aki), &with_aki));
 
     struct tls_x509_object ec;
     assert(tls_x509_parse_certificate(cert_ec, sizeof(cert_ec), &ec));

@@ -79,6 +79,14 @@ bool tls_asn1_next(struct tls_asn1_cursor *cursor, struct tls_asn1_tlv *out)
     out->tlv = p;
     out->tag = *p++;
 
+    /* This compact parser supports only DER's single-octet tag form. Treating
+     * 0x1f as tag 31 would misparse the first high-tag-number octet as a
+     * length and create a parser differential inside signed certificate data. */
+    if ((out->tag & 0x1Fu) == 0x1Fu)
+    {
+        return false;
+    }
+
     if (!tls_asn1_parse_len(p, cursor->end, &content_len, &len_len))
     {
         return false;

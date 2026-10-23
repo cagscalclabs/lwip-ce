@@ -22,7 +22,7 @@
     "delay|2000",
     "key|clear",
     "action|launch:INSTALL",
-    "hashWait|15",
+    "hashWait|16",
     "key|left",
     "key|enter",
     "delay|2000",
@@ -54,6 +54,8 @@
     "hashWait|13",
     "key|enter",
     "hashWait|14",
+    "key|enter",
+    "hashWait|15",
     "key|enter",
     "key|enter"
   ],
@@ -199,6 +201,16 @@
       "timeout": 1500
     },
     "15": {
+      "description": "AES-128-GCM tag over a 9000-byte record (length block bits 16..23)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 20000
+    },
+    "16": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

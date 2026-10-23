@@ -45,6 +45,10 @@ struct tls_x509_object
     /* Extensions content bytes (SEQUENCE OF Extension, inner of [3] EXPLICIT). */
     const uint8_t *extensions;    size_t extensions_len;
 
+    /* authorityKeyIdentifier.keyIdentifier, when present. This identifies
+     * the issuer key and is matched against a trust anchor's stored SKI. */
+    const uint8_t *authority_key_id; size_t authority_key_id_len;
+
     /* Public key extracted from SubjectPublicKeyInfo. */
     struct tls_key pubkey;
 

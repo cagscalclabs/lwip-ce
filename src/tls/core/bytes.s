@@ -74,12 +74,16 @@ _bytelen_to_bitlen:
 	adc a, a
 	add hl, hl
 	adc a, a
-	ld (iy + 5), a
-	ld (iy + 6), h
-	ld (iy + 7), l
-	sbc hl, hl
-	ld (iy + 0), hl
-	ld (iy + 2), hl
+	; a = bits 24..26, hl = bits 0..23 of (size * 8)
+	ld (iy + 4), a
+	ld (iy + 5), hl		; little-endian: +5=L +6=H +7=U
+	ld a, (iy + 5)
+	ld c, (iy + 7)
+	ld (iy + 7), a		; byte 7 = bits 0..7
+	ld (iy + 5), c		; byte 5 = bits 16..23 (byte 6 = bits 8..15)
+	ld hl, 0
+	ld (iy + 0), hl		; bytes 0..2
+	ld (iy + 3), l		; byte 3
 	ret
 
 .section	.note.GNU-stack,"",@progbits

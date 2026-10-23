@@ -274,13 +274,15 @@ static void tls_rng_request_q_clear(void)
 
 static bool tls_sha256_buf(const uint8_t *in, size_t in_len, uint8_t out[32])
 {
-    struct tls_hash_context hctx;
+    struct tls_hash_context hctx = {0};
     if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256))
     {
+        tls_secure_memzero(&hctx, sizeof hctx);
         return false;
     }
     tls_hash_update(&hctx, in, in_len);
     tls_hash_digest(&hctx, out);
+    tls_secure_memzero(&hctx, sizeof hctx);
     return true;
 }
 
@@ -306,14 +308,19 @@ static bool tls_hash_df(const uint8_t *input, size_t input_len,
 
     while (written < TLS_HASH_DRBG_SEED_BYTES)
     {
-        struct tls_hash_context ctx;
+        struct tls_hash_context ctx = {0};
         size_t take;
 
         if (!tls_hash_context_init(&ctx, TLS_HASH_SHA256))
+        {
+            tls_secure_memzero(&ctx, sizeof ctx);
+            tls_secure_memzero(digest, sizeof digest);
             return false;
+        }
         tls_hash_update(&ctx, header, sizeof(header));
         tls_hash_update(&ctx, input, input_len);
         tls_hash_digest(&ctx, digest);
+        tls_secure_memzero(&ctx, sizeof ctx);
 
         take = TLS_HASH_DRBG_SEED_BYTES - written;
         if (take > sizeof(digest))
@@ -725,7 +732,7 @@ static bool tls_rng_request_try_complete(void)
                                  g_tls_rng_request_out + g_tls_rng_request_collected,
                                  take))
     {
-        ERROR_CODE(TLS_RNG_FAILURE_GENERATE);
+        tls_rng_fail(TLS_RNG_FAILURE_GENERATE);
         return false;
     }
     g_tls_rng_request_collected += take;
@@ -1058,6 +1065,8 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
 
     if (blocking)
     {
+        uint32_t request_deadline = sys_now() + TLS_RNG_READY_TIMEOUT_MS;
+
         if (g_tls_rng_request_active || (g_tls_rng_request_q_head != NULL))
         {
             return false;
@@ -1072,6 +1081,14 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
 
         while (!done)
         {
+            if ((int32_t)(sys_now() - request_deadline) >= 0)
+            {
+                tls_rng_fail(TLS_RNG_FAILURE_TIMEOUT);
+                if (cb != NULL)
+                    cb(false, arg);
+                tls_rng_request_reset_state();
+                return false;
+            }
             done = tls_rng_request_try_complete();
             if (done)
             {

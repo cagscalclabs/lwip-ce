@@ -53,7 +53,9 @@ bool tls_rsa_encrypt(const uint8_t *in, size_t len, uint8_t *out,
 static size_t allocated;
 uint8_t __rsa_transient[RSA_TRANSIENT_SIZE];
 static struct tls_truststore_entry *root_entry;
-static struct { struct { tls_truststore_status_t status; } truststore; } tls_ctx;
+static struct tls_truststore_entry *root_candidates[2];
+static size_t root_candidate_count;
+static unsigned ski_lookup_calls;
 static void *mem_buffer_custom_malloc(size_t n) { return malloc(n); }
 static void mem_buffer_custom_free(void *p) { free(p); }
 static void *tls_fileio_alloc(size_t n) { return malloc(n); }
@@ -86,11 +88,13 @@ void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *out) { memset(out, 0
 bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t n, const uint8_t *hash, const struct tls_rsa_key *key)
 {
     pkcs_calls++;
-    return n == key->mod_len && sig[0] == 0x11 && hash[0] == 0x42;
+    return n == key->mod_len && key->modulus && key->modulus[0] == 0x81 &&
+           sig[0] == 0x11 && hash[0] == 0x42;
 }
 bool tls_rsa_decrypt_signature(const uint8_t *sig, size_t n, uint8_t *em, const struct tls_rsa_key *key)
 {
-    if (n != key->mod_len || !key->modulus || !key->exponent || n > RSA_TRANSIENT_SIZE)
+    if (n != key->mod_len || !key->modulus || key->modulus[0] != 0x81 ||
+        !key->exponent || n > RSA_TRANSIENT_SIZE)
         return false;
     memcpy(em, sig, n);
     return true;
@@ -100,8 +104,46 @@ bool tls_rsa_pss_verify(const uint8_t *em, size_t n, const uint8_t *hash, size_t
     pss_calls++;
     return em[0] == 0x22 && hash[0] == 0x42;
 }
-bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t len, struct tls_truststore_entry **out)
+bool tls_truststore_lookup_by_subject_index(const uint8_t *subject, size_t len,
+                                            uint16_t index,
+                                            struct tls_truststore_entry **out)
 {
+    (void)subject;
+    (void)len;
+    if (root_candidate_count != 0)
+    {
+        if (index >= root_candidate_count) return false;
+        *out = root_candidates[index];
+        return *out != NULL;
+    }
+    if (index != 0) return false;
     *out = root_entry;
     return root_entry != NULL;
+}
+bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t len, struct tls_truststore_entry **out)
+{
+    return tls_truststore_lookup_by_subject_index(subject, len, 0, out);
+}
+bool tls_truststore_lookup_key_id(const uint8_t *ski, size_t ski_len,
+                                  struct tls_truststore_entry **out)
+{
+    ski_lookup_calls++;
+    if (!ski || ski_len != 20 || ski[0] != 0xa0) return false;
+    *out = root_entry;
+    return root_entry != NULL;
+}
+bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **out)
+{
+    return tls_truststore_lookup_key_id(ski, TLS_TRUSTSTORE_SKI_LEN, out);
+}
+
+/* Replay entry point used by tls_cert_jobs_step once the job queue drains. */
+static size_t replayed_bytes;
+static bool replay_result = true;
+static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
+                                         const uint8_t *buf, size_t buf_len)
+{
+    (void)ctx; (void)buf;
+    replayed_bytes += buf_len;
+    return replay_result;
 }

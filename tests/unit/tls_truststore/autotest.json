@@ -1,5 +1,5 @@
 {
-  "description": "Truststore signature verification and first-entry owner check",
+  "description": "Truststore v2 signature, index layout, and first-entry owner check",
   "transfer_files": [
     "bin/XTRUST.8xp",
      "../../common/clibs.8xg",

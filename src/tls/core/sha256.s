@@ -341,6 +341,12 @@ _tls_sha256_digest:
 	lea iy, ix-_sha256ctx_size + sha256_offset_state
 	ld b, 8
 	call _sha256_reverse_endianness
+	; The non-destructive digest operates on a full context copy. Erase it
+	; before releasing the frame so keyed hash state is not left on the stack.
+	ld hl,$FF0000
+	lea de, ix-_sha256ctx_size
+	ld bc,_sha256ctx_size
+	ldir
 	ld sp,ix
 	pop ix
 	ret
@@ -722,6 +728,17 @@ _sha256_transform:
 
 	djnz .Ltransform_loop4
 	lea ix, ix + -8*4
+
+	; Wipe both the transform frame and the shared message schedule. The latter
+	; can contain K xor ipad blocks after HMAC operations.
+	ld hl,$FF0000
+	lea de, ix + ._frame_offset
+	ld bc,-._frame_offset
+	ldir
+	ld hl,$FF0000
+	ld de,_sha256_m_buffer
+	ld bc,256
+	ldir
 
 	ld sp,ix
 	pop ix

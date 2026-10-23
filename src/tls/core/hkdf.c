@@ -69,8 +69,13 @@ bool tls_hkdf_extract(
         salt_len = hash_len;
     }
     if (!ikm) {
+        /* ikm_len kept as-is so the caller controls how many zero bytes, but
+         * it can never exceed the zero buffer (HashLen at most). */
+        if (ikm_len > sizeof(zeros)) {
+            ERROR();
+            return false;
+        }
         ikm = zeros;
-        /* ikm_len kept as-is so the caller controls how many zero bytes */
     }
 
     /* PRK = HMAC(salt, ikm) */

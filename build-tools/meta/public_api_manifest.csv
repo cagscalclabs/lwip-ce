@@ -684,6 +684,9 @@ typedef,tls_random_request_cb_t,cryptography,src/tls/includes/random.h,lwip/cryp
 macro,RSA_PUBLIC_EXP,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
 macro,TLS_TRUSTSTORE_SKI_LEN,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
 macro,TLS_TRUSTSTORE_SUBJECT_LEN,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
+macro,TLS_TRUSTSTORE_VERSION,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
+macro,TLS_TRUSTSTORE_INDEX_KEY_LEN,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
+macro,TLS_TRUSTSTORE_INDEX_ENTRY_LEN,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
 struct,tls_truststore_entry,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
 typedef,tls_truststore_status_t,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h
 struct,tls_x509_object,cryptography,src/tls/includes/x509.h,lwip/cryptography/x509.h

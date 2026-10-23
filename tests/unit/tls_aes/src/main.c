@@ -107,6 +107,13 @@ uint8_t ccm_tag_2[] = {
     0xa0, 0x91, 0xd5, 0x6e, 0x10, 0x40, 0x09, 0x16};
 
 
+/* AES-128-GCM over 9000 bytes of (i*7+3)&0xFF with the GCM Spec Test Case 4
+ * key/IV/AAD. Reference tag computed with the Python `cryptography` AESGCM.
+ * 9000 bytes = 72000 bits needs the length block's bits 16..23. */
+#define GCM_BIG_LEN 9000u
+uint8_t gcm_big_tag[] = {
+    0x4c, 0xcb, 0x3b, 0x95, 0x8e, 0xf1, 0x6f, 0x25, 0x2e, 0x38, 0x42, 0x88, 0x12, 0x76, 0x7e, 0x42};
+
 static void show_result(bool ok)
 {
     if (ok)
@@ -297,6 +304,27 @@ int main(void)
     status &= tls_aes_decrypt(&ctx, cbc256_ciphertext, sizeof cbc256_ciphertext, tbuf);
     ok = status && (memcmp(tbuf, cbc_plaintext, sizeof cbc_plaintext) == 0);
     show_result(ok);
+
+    // Test 15: AES-GCM tag over a record >= 8 KiB (length block bits 16..23)
+    {
+        uint8_t *big = (uint8_t *)malloc(GCM_BIG_LEN);
+        uint8_t *out = (uint8_t *)malloc(GCM_BIG_LEN);
+        ok = false;
+        if (big && out)
+        {
+            for (size_t i = 0; i < GCM_BIG_LEN; i++)
+                big[i] = (uint8_t)(i * 7u + 3u);
+            status = true;
+            status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm_key, sizeof gcm_key, gcm_iv, sizeof gcm_iv);
+            status &= tls_aes_update_aad(&ctx, gcm_aad, sizeof gcm_aad);
+            status &= tls_aes_encrypt(&ctx, big, GCM_BIG_LEN, out);
+            status &= tls_aes_digest(&ctx, tag);
+            ok = status && memcmp(tag, gcm_big_tag, TLS_AES_AUTH_TAG_SIZE) == 0;
+        }
+        free(big);
+        free(out);
+        show_result(ok);
+    }
 
     return 0;
 }

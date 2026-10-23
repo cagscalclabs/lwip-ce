@@ -13,7 +13,9 @@ u32_t sys_jiffies(void)
 
 u32_t sys_now(void)
 {
-    return sys_jiffies() * 1000 / CLOCKS_PER_SEC;
+    u32_t t = sys_jiffies();
+    /* t * 1000 overflows 32 bits after ~131 s at 32768 Hz; split seconds out. */
+    return (t >> 15) * 1000u + (((t & 0x7FFFu) * 1000u) >> 15);
 }
 
 void sys_init(void)

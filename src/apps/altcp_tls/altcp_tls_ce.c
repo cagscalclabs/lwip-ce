@@ -28,7 +28,6 @@ extern bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, s
 #include "../../tls/includes/handshake.h"
 #include "../../tls/includes/random.h"
 #include "../../tls/includes/tls.h"
-#include "../../tls/includes/truststore.h"
 #include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_ALTCP_TLS_CE
@@ -38,6 +37,8 @@ extern bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, s
 
 #include <string.h>
 #include <limits.h>
+
+TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 
 static inline void tls_dbg_status(const char *msg) { INFO(msg); }
 
@@ -61,6 +62,20 @@ static inline void tls_dbg_status(const char *msg) { INFO(msg); }
 
 static enum mem_pressure_level g_tls_rx_throttle_level = MEM_PRESSURE_NONE;
 static altcp_tls_ce_state_t *g_tls_state_head = NULL;
+
+/* True while `state` is still linked, i.e. has not been freed by an app
+ * callback that closed or aborted the connection. */
+static bool altcp_tls_ce_state_alive(const altcp_tls_ce_state_t *state)
+{
+    for (const altcp_tls_ce_state_t *s = g_tls_state_head; s != NULL; s = s->next)
+    {
+        if (s == state)
+        {
+            return true;
+        }
+    }
+    return false;
+}
 static bool g_tls_rx_release_attached = false;
 
 static void altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cnt);
@@ -229,6 +244,17 @@ static void altcp_tls_ce_rx_release_arm(void)
 static err_t altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p, err_t err);
 static err_t altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_conn);
 static err_t altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
+static void altcp_tls_ce_cert_job_arm(void);
+
+/* True once the held-back server flight has been replayed and the server
+ * Finished was processed, but the client Finished / key switch has not run yet
+ * (it normally runs right after a record; after a deferred replay no record is
+ * pending to drive it). */
+static bool altcp_tls_ce_finish_ready(const altcp_tls_ce_state_t *state)
+{
+    return !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
+           state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED;
+}
 static err_t altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
 
 static void altcp_tls_ce_build_aead_nonce(const uint8_t iv[12], uint64_t seq_num,
@@ -355,7 +381,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     uint8_t nonce[12];
     uint8_t computed_tag[16];
     uint8_t received_tag[16];
-    struct tls_aes_context aes_ctx;
+    TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
     struct pbuf *out_head = NULL;
     struct tls_handshake_context *ctx = &state->tls_ctx;
     const uint8_t *key;
@@ -395,6 +421,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     if (actual_plaintext_len == 0 ||
         actual_plaintext_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 1)
     {
+        (void)tls_send_fatal_alert(ctx, TLS_ALERT_RECORD_OVERFLOW);
         return ERR_VAL;
     }
 
@@ -413,26 +440,39 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
 
     altcp_tls_ce_build_aead_nonce(iv, *seq_num, nonce);
 
+    /* Allocate the pass-2 scratch before the GHASH pass: failing after pass 1
+     * would make every retry redo the whole (slow) authentication. */
+    scratch = (uint8_t *)mem_buffer_custom_malloc(ALTCP_TLS_CE_STREAM_CHUNK);
+    if (!scratch)
+    {
+        return ERR_MEM;
+    }
+    mem_stats_tls_direct_add(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
+
     /* Pass 1: verify the complete record before releasing plaintext. */
     if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce,
                                        actual_plaintext_len) ||
         !tls_aes_update_aad(&aes_ctx, header, sizeof(header)))
     {
-        return ERR_VAL;
+        status = ERR_VAL;
+        goto fail;
     }
     if (altcp_tls_ce_pbuf_authenticate(&aes_ctx, state->rx, sizeof(header),
                                        actual_plaintext_len) != ERR_OK)
     {
-        return ERR_VAL;
+        status = ERR_VAL;
+        goto fail;
     }
     if (!tls_aes_digest(&aes_ctx, computed_tag))
     {
-        return ERR_VAL;
+        status = ERR_VAL;
+        goto fail;
     }
     if (pbuf_copy_partial(state->rx, received_tag, sizeof(received_tag),
                           (u16_t)(sizeof(header) + actual_plaintext_len)) != sizeof(received_tag))
     {
-        return ERR_BUF;
+        status = ERR_BUF;
+        goto fail;
     }
     for (size_t i = 0; i < sizeof(computed_tag); i++)
     {
@@ -440,7 +480,9 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     }
     if (diff != 0)
     {
-        return ERR_VAL;
+        (void)tls_send_fatal_alert(ctx, TLS_ALERT_BAD_RECORD_MAC);
+        status = ERR_VAL;
+        goto fail;
     }
 
     /* Tag verified. Re-init AES for the decrypt pass. */
@@ -448,15 +490,9 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
                                        actual_plaintext_len) ||
         !tls_aes_update_aad(&aes_ctx, header, sizeof(header)))
     {
-        return ERR_VAL;
+        status = ERR_VAL;
+        goto fail;
     }
-
-    scratch = (uint8_t *)mem_buffer_custom_malloc(ALTCP_TLS_CE_STREAM_CHUNK);
-    if (!scratch)
-    {
-        return ERR_MEM;
-    }
-    mem_stats_tls_direct_add(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
 
     /* Release the 5-byte header from the input pbuf. altcp_tls_ce_consume_recved
      * acks to the lower TCP only the bytes not already pre-acked at queue time,
@@ -531,6 +567,8 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         if (pt_end == 0)
         {
             pbuf_free(out_head);
+            tls_secure_memzero(&aes_ctx, sizeof aes_ctx);
+            (void)tls_send_fatal_alert(ctx, TLS_ALERT_UNEXPECTED_MESSAGE);
             return ERR_VAL;
         }
         *inner_content_type = pbuf_get_at(out_head, (u16_t)(pt_end - 1));
@@ -539,6 +577,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     }
 
     *plaintext = out_head;
+    tls_secure_memzero(&aes_ctx, sizeof aes_ctx);
     return ERR_OK;
 
 fail:
@@ -552,6 +591,7 @@ fail:
     {
         pbuf_free(out_head);
     }
+    tls_secure_memzero(&aes_ctx, sizeof aes_ctx);
     return (status != ERR_OK) ? status : ERR_VAL;
 }
 
@@ -574,7 +614,7 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
                                                size_t *written)
 {
     uint8_t nonce[12];
-    struct tls_aes_context aes_ctx;
+    TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
     const uint8_t *key;
     const uint8_t *iv;
     uint64_t *seq_num;
@@ -823,6 +863,8 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_client(
     conf->psk_type = TLS_PSK_TYPE_EXTERNAL;
     memcpy(conf->psk, psk, 32);
     memcpy(&conf->psk_identity, psk_identity, sizeof(struct tls_psk_identity));
+    /* RFC 8446 4.2.11: external PSKs use an obfuscated_ticket_age of zero. */
+    conf->psk_identity.obfuscated_ticket_age = 0;
 
     return conf;
 }
@@ -874,7 +916,6 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     conf->psk_mode = 0;
     conf->hostname = hostname ? memcpy(conf + 1, hostname, host_len) : NULL;
     hostname = conf->hostname;
-    tls_truststore_prepare();
 
     /* Opportunistically resume from the in-memory PSK cache, but only if a
      * live (non-expired) entry exists for this exact hostname. Cross-host
@@ -890,6 +931,9 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
         tls_dbg_status("config: resume found");
     }
 
+    tls_secure_memzero(resumed_psk, sizeof resumed_psk);
+    tls_secure_memzero(&resumed_identity, sizeof resumed_identity);
+
     tls_dbg_status("config: done");
     return conf;
 }
@@ -904,7 +948,7 @@ void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
                                          conf->alpn_protocols_len);
             mem_free(conf->alpn_protocols);
         }
-        memset(conf->psk, 0, 32);
+        tls_secure_memzero(conf->psk, sizeof conf->psk);
         size_t size = sizeof(*conf);
         if (conf->hostname == (const char *)(conf + 1))
             size += strlen(conf->hostname) + 1;
@@ -1279,6 +1323,47 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
     return ERR_OK;
 }
 
+#define ALTCP_TLS_CE_CERT_JOB_TICK_MS 20u
+
+/* Runs one queued certificate verification for the first connection that has
+ * any, then lets that connection continue (replayed handshake bytes, queued
+ * records, completing the handshake). One job per tick keeps each blocking
+ * stretch to a single signature check. */
+static void altcp_tls_ce_cert_job_dispatch(void)
+{
+    for (altcp_tls_ce_state_t *state = g_tls_state_head; state != NULL; state = state->next)
+    {
+        struct altcp_pcb *conn = state->conn;
+
+        if (!conn || !tls_cert_jobs_pending(&state->tls_ctx))
+        {
+            continue;
+        }
+        if (!tls_cert_jobs_step(&state->tls_ctx))
+        {
+            ALTCP_TLS_CE_ERROR_ABORT(conn);
+            return; /* state may be freed */
+        }
+        (void)altcp_tls_ce_lower_recv_process(conn, state);
+        return; /* state may be freed; resume from the list head next tick */
+    }
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_CERT_JOB, 0);
+}
+
+static void altcp_tls_ce_cert_job_arm(void)
+{
+    static bool attached;
+
+    if (!attached)
+    {
+        lwip_dispatch_attach(LWIP_DISPATCH_TLS_CERT_JOB, altcp_tls_ce_cert_job_dispatch);
+        attached = true;
+    }
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_CERT_JOB,
+                             lwip_dispatch_period_from_ms(ALTCP_TLS_CE_CERT_JOB_TICK_MS));
+    lwip_dispatch_start();
+}
+
 /**
  * @brief Process received data (handshake or application data)
  */
@@ -1319,9 +1404,21 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
              * 5-byte header, waits for the whole record to arrive, then hands
              * off to the streaming decrypter (encrypted records) or the
              * inline plaintext handler (ServerHello / CCS / early alert). */
-            while (state->rx != NULL && state->rx->tot_len >= 5)
+            while ((state->rx != NULL && state->rx->tot_len >= 5) ||
+                   altcp_tls_ce_finish_ready(state))
             {
                 uint8_t header[5];
+                if (altcp_tls_ce_finish_ready(state))
+                {
+                    goto record_processed; /* drive client Finished after a deferred replay */
+                }
+                if (tls_cert_jobs_pending(&state->tls_ctx))
+                {
+                    /* The server Finished is still held back, so later records
+                     * may already be under application keys. Leave them queued;
+                     * the job tick resumes this loop once the queue drains. */
+                    break;
+                }
                 if (pbuf_copy_partial(state->rx, header, sizeof(header), 0) != sizeof(header))
                 {
                     ALTCP_TLS_CE_ERROR_ABORT(conn);
@@ -1331,10 +1428,21 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 size_t rec_len = ((size_t)header[3] << 8) | (size_t)header[4];
                 size_t total_len = 5 + rec_len;
 
-                if (header[1] != 0x03 || header[2] != 0x03 || rec_len == 0 ||
-                    rec_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 256u ||
-                    total_len > 0xFFFF)
+                size_t record_limit = header[0] == TLS_CONTENT_TYPE_APPLICATION_DATA
+                                          ? ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 256u
+                                          : ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT;
+                if (rec_len > record_limit || total_len > 0xFFFF)
                 {
+                    (void)tls_send_fatal_alert(&state->tls_ctx,
+                                               TLS_ALERT_RECORD_OVERFLOW);
+                    ALTCP_TLS_CE_ERROR_ABORT(conn);
+                    return ERR_ABRT;
+                }
+                /* RFC 8446 5.1: legacy_record_version is ignored. */
+                if (rec_len == 0)
+                {
+                    (void)tls_send_fatal_alert(&state->tls_ctx,
+                                               TLS_ALERT_UNEXPECTED_MESSAGE);
                     ALTCP_TLS_CE_ERROR_ABORT(conn);
                     return ERR_ABRT;
                 }
@@ -1377,6 +1485,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                     if (!use_hs_keys)
                     {
+                        (void)tls_send_fatal_alert(&state->tls_ctx,
+                                                   TLS_ALERT_UNEXPECTED_MESSAGE);
                         ALTCP_TLS_CE_ERROR_ABORT(conn);
                         return ERR_ABRT;
                     }
@@ -1416,6 +1526,10 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     tls_dbg_status("rx: inner ok");
 
                     pbuf_free(dec_pbuf);
+                    if (tls_cert_jobs_pending(&state->tls_ctx))
+                    {
+                        altcp_tls_ce_cert_job_arm();
+                    }
                     goto record_processed;
                 }
 
@@ -1670,24 +1784,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     /* Handshake complete */
                     state->flags |= ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE;
                     state->tls_ctx.state = TLS_STATE_HANDSHAKE_COMPLETE;
+                    state->tls_ctx.tx_epoch = 2;
                     STATE_CHG(conn, LWIP_STATE_TLS_HANDSHAKE_DONE);
-
-                    /* Cache an existing resumption PSK identity in memory for future
-                     * connects. Fresh tickets are handled below by NewSessionTicket. */
-                    if (state->tls_ctx.psk_mode &&
-                        state->tls_ctx.psk_type == TLS_PSK_TYPE_RESUMPTION &&
-                        state->tls_ctx.psk_identity.identity_len > 0 &&
-                        state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity) &&
-                        state->tls_ctx.ticket_lifetime > 0)
-                    {
-                        struct altcp_tls_ce_config *cfg = (struct altcp_tls_ce_config *)state->conf;
-                        if (cfg && cfg->hostname)
-                        {
-                            tls_psk_cache_put(cfg->hostname, state->tls_ctx.psk_type,
-                                              state->tls_ctx.psk, &state->tls_ctx.psk_identity,
-                                              state->tls_ctx.ticket_lifetime);
-                        }
-                    }
 
                     /* Notify upper layer */
                     if (conn->connected)
@@ -1794,24 +1892,60 @@ altcp_tls_ce_pass_rx_data(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
  */
 static err_t altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
 
+/* Entry point for plaintext delivery. Not re-entrant: a nested call (from an
+ * app recv callback) records RX_REPEAT and returns, and this outer call loops
+ * again. The loop is bounded, nothing here waits, and after any callback the
+ * state is re-validated before it is touched, so the guard can neither spin
+ * nor dangle. Data left queued by the bound is picked up by the next recv,
+ * recved() or poll tick. */
 static err_t
 altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
 {
-    err_t err;
+    enum { ALTCP_TLS_CE_RX_PASSES = 4 };
+    err_t err = ERR_OK;
 
     LWIP_ASSERT("state != NULL", state != NULL);
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
+        return ERR_VAL;
+    }
     if (state->flags & ALTCP_TLS_CE_FLAGS_RX_BUSY)
     {
-        /* Re-entered from an app callback; the outer loop will pick up
-         * whatever is queued. */
+        state->flags |= ALTCP_TLS_CE_FLAGS_RX_REPEAT;
         return ERR_OK;
     }
+
     state->flags |= ALTCP_TLS_CE_FLAGS_RX_BUSY;
-    err = altcp_tls_ce_handle_rx_appldata_impl(conn, state);
-    if (err != ERR_ABRT && conn->state == state)
+    for (unsigned pass = 0; pass < ALTCP_TLS_CE_RX_PASSES; pass++)
     {
-        state->flags &= (u8_t)~ALTCP_TLS_CE_FLAGS_RX_BUSY;
+        state->flags &= (u8_t)~ALTCP_TLS_CE_FLAGS_RX_REPEAT;
+
+        if (state->rx_app != NULL)
+        {
+            err = altcp_tls_ce_pass_rx_data(conn, state);
+            if (err == ERR_ABRT || !altcp_tls_ce_state_alive(state))
+            {
+                return err; /* state may be gone: do not touch it */
+            }
+            if (err != ERR_OK)
+            {
+                break; /* app declined the data; retried on the next event */
+            }
+        }
+        if (state->rx_app == NULL)
+        {
+            err = altcp_tls_ce_handle_rx_appldata_impl(conn, state);
+            if (err == ERR_ABRT || !altcp_tls_ce_state_alive(state))
+            {
+                return err;
+            }
+        }
+        if (!(state->flags & ALTCP_TLS_CE_FLAGS_RX_REPEAT))
+        {
+            break;
+        }
     }
+    state->flags &= (u8_t)~(ALTCP_TLS_CE_FLAGS_RX_BUSY | ALTCP_TLS_CE_FLAGS_RX_REPEAT);
     return err;
 }
 
@@ -1861,13 +1995,21 @@ altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_
             break;
         }
 
+        if (rec_payload_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 256u)
+        {
+            (void)tls_send_fatal_alert(&state->tls_ctx,
+                                       TLS_ALERT_RECORD_OVERFLOW);
+            ALTCP_TLS_CE_ERROR_ABORT(conn);
+            return ERR_ABRT;
+        }
         if (header[0] != TLS_CONTENT_TYPE_APPLICATION_DATA ||
-            header[1] != 0x03 || header[2] != 0x03 || rec_payload_len == 0 ||
-            rec_payload_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 256u)
+            rec_payload_len == 0)
         {
             /* All post-handshake records must arrive AEAD-wrapped inside an
              * application_data outer record (RFC 8446 §5). Any plaintext
              * here is a protocol violation. */
+            (void)tls_send_fatal_alert(&state->tls_ctx,
+                                       TLS_ALERT_UNEXPECTED_MESSAGE);
             ALTCP_TLS_CE_ERROR_ABORT(conn);
             return ERR_ABRT;
         }
@@ -1931,7 +2073,8 @@ altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_
                 /* Side-effect: NewSessionTicket may have updated ctx's PSK fields;
                  * cache the fresh resumption identity in memory. No disk I/O here —
                  * the in-memory cache is flushed to flash once at tls_cleanup(). */
-                if (state->tls_ctx.psk_mode &&
+                if (state->tls_ctx.ticket_fresh &&
+                    state->tls_ctx.psk_mode &&
                     state->tls_ctx.psk_type == TLS_PSK_TYPE_RESUMPTION &&
                     state->tls_ctx.psk_identity.identity_len > 0 &&
                     state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity) &&
@@ -1945,6 +2088,7 @@ altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_
                                           state->tls_ctx.ticket_lifetime);
                     }
                 }
+                state->tls_ctx.ticket_fresh = false;
             }
             pbuf_free(dec_pbuf);
         }
@@ -2314,30 +2458,7 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
      * plaintext length to TCP would double-credit the receive window and can
      * destabilize long-lived TLS streams. */
     state->rx_passed_unrecved -= len;
-    if (state->flags & ALTCP_TLS_CE_FLAGS_RX_BUSY)
-    {
-        /* Called from inside an app recv callback: accounting is done, the
-         * outer delivery loop continues draining state->rx_app / state->rx. */
-        return;
-    }
-    if (state->rx_app != NULL)
-    {
-        err_t pass_err;
-        state->flags |= ALTCP_TLS_CE_FLAGS_RX_BUSY;
-        pass_err = altcp_tls_ce_pass_rx_data(conn, state);
-        if (pass_err != ERR_ABRT && conn->state == state)
-        {
-            state->flags &= (u8_t)~ALTCP_TLS_CE_FLAGS_RX_BUSY;
-        }
-        if (pass_err != ERR_OK)
-        {
-            return;
-        }
-    }
-    if (state->rx_app == NULL)
-    {
-        (void)altcp_tls_ce_handle_rx_appldata(conn, state);
-    }
+    (void)altcp_tls_ce_handle_rx_appldata(conn, state);
 }
 
 static err_t
@@ -2414,8 +2535,7 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
      * TCP-level close hits ERR_MEM and the caller retries) doesn't
      * re-emit the alert — the peer has already seen one. */
     altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
-    if (state &&
-        (state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
+    if (state && !state->tls_ctx.fatal_alert_sent &&
         !(state->flags & ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT))
     {
         if (tls_send_close_notify(&state->tls_ctx))
@@ -2510,6 +2630,10 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
     {
         ERROR_CODE(-ERR_MEM);
         return ERR_MEM;
+    }
+    if ((size_t)len + 22u > TCP_SND_BUF)
+    {
+        return ERR_VAL; /* can never fit; ERR_MEM would be retried forever */
     }
     if ((size_t)altcp_sndbuf(conn->inner_conn) < (size_t)len + 22u)
     {
@@ -2851,16 +2975,13 @@ err_t altcp_tls_get_session(struct altcp_pcb *conn, struct altcp_tls_session *de
             state->tls_ctx.psk_identity.identity_len > 0 &&
             state->tls_ctx.psk_identity.identity_len <= sizeof(state->tls_ctx.psk_identity.identity))
         {
-            struct altcp_tls_ce_config *cfg = (struct altcp_tls_ce_config *)state->conf;
             dest->valid = 1;
             dest->psk_type = state->tls_ctx.psk_type;
             memcpy(dest->psk, state->tls_ctx.psk, sizeof(dest->psk));
             memcpy(&dest->identity, &state->tls_ctx.psk_identity, sizeof(dest->identity));
-            if (cfg && cfg->hostname && state->tls_ctx.ticket_lifetime > 0)
-            {
-                tls_psk_cache_put(cfg->hostname, dest->psk_type, dest->psk,
-                                  &dest->identity, state->tls_ctx.ticket_lifetime);
-            }
+            /* Not re-cached here: the ticket was cached when it arrived, and
+             * caching again would restart its lifetime and could resurrect a
+             * ticket another connection already used. */
             return ERR_OK;
         }
     }
@@ -2891,8 +3012,6 @@ err_t altcp_tls_set_session(struct altcp_pcb *conn, struct altcp_tls_session *fr
         psk_type = TLS_PSK_TYPE_RESUMPTION;
     }
 
-    const char *hostname = NULL;
-    uint32_t ticket_lifetime = 0;
     if (conn && conn->state)
     {
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
@@ -2903,23 +3022,16 @@ err_t altcp_tls_set_session(struct altcp_pcb *conn, struct altcp_tls_session *fr
             conf->psk_type = psk_type;
             memcpy(conf->psk, from->psk, sizeof(conf->psk));
             memcpy(&conf->psk_identity, &from->identity, sizeof(conf->psk_identity));
-            hostname = conf->hostname;
         }
         memcpy(state->tls_ctx.psk, from->psk, sizeof(state->tls_ctx.psk));
         memcpy(&state->tls_ctx.psk_identity, &from->identity, sizeof(state->tls_ctx.psk_identity));
         state->tls_ctx.psk_mode = true;
         state->tls_ctx.psk_type = psk_type;
-        ticket_lifetime = state->tls_ctx.ticket_lifetime;
     }
 
     from->psk_type = psk_type;
-    /* Cache only if we have a hostname to bind the session to (without one
-     * we can't safely reuse it — cross-host PSK reuse is a protocol bug) and
-     * a known ticket lifetime to judge expiry by. */
-    if (hostname && ticket_lifetime > 0)
-    {
-        tls_psk_cache_put(hostname, psk_type, from->psk, &from->identity, ticket_lifetime);
-    }
+    /* Not cached: a caller-supplied session has no receive time we can trust,
+     * and caching would stamp it as fresh (RFC 8446 4.6.1). */
     return ERR_OK;
 }
 

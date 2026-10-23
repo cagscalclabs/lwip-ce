@@ -100,6 +100,7 @@ jobs:
           EC_POINT_LEN = 65
           # Fixed-size prefix before key[]: len(4) + subject(32) + ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) = 77
           ENTRY_FIXED_PREFIX = 4 + SUBJECT_LEN + SKI_LEN + 4 + 4 + 1
+          INDEX_ENTRY_LEN = 32 + 2  # fixed key plus uint16 metadata offset
 
           def run_cmd(args, input_bytes=None):
               result = subprocess.run(
@@ -145,19 +146,29 @@ jobs:
 
           def extract_ski(path):
               """Extract SubjectKeyIdentifier extension bytes (raw hex).
-              Returns a zero-padded SKI_LEN buffer; zeros if extension absent."""
+              Returns a zero-padded SKI_LEN buffer. Version 2 requires an SKI
+              because it is the primary sorted lookup key."""
               try:
                   out = run_cmd([
-                      "openssl", "x509", "-in", path, "-noout", "-ext", "subjectKeyIdentifier",
+                      "openssl", "x509", "-in", path, "-noout", "-text",
                   ]).decode("utf-8", "ignore")
-                  for line in out.splitlines():
-                      line = line.strip()
-                      if re.match(r"^([0-9A-Fa-f]{2}:)+[0-9A-Fa-f]{2}$", line):
-                          raw = bytes.fromhex(line.replace(":", ""))
-                          return pad_field(raw, SKI_LEN)
+                  lines = out.splitlines()
+                  for position, line in enumerate(lines):
+                      if "X509v3 Subject Key Identifier:" not in line:
+                          continue
+                      for value_line in lines[position + 1:]:
+                          value = value_line.strip()
+                          if not value:
+                              continue
+                          if re.match(r"^([0-9A-Fa-f]{2}:)+[0-9A-Fa-f]{2}$", value):
+                              raw = bytes.fromhex(value.replace(":", ""))
+                              if not raw or len(raw) > SKI_LEN:
+                                  raise RuntimeError("invalid SubjectKeyIdentifier length")
+                              return pad_field(raw, SKI_LEN)
+                          break
               except Exception:
-                  pass
-              return b"\x00" * SKI_LEN
+                  raise
+              raise RuntimeError("missing SubjectKeyIdentifier")
 
           def extract_rsa_pubkey(path):
               """Return (exp_bytes_le_3, mod_bytes_be) for an RSA public key.
@@ -239,6 +250,11 @@ jobs:
                       exclusions.append((path, str(e)))
                       continue
 
+                  if bytes(ski) in entries:
+                      reason = "duplicate SubjectKeyIdentifier"
+                      print(f"  skip {path}: {reason}", flush=True)
+                      exclusions.append((path, reason))
+                      continue
                   entries[bytes(ski)] = (
                       pad_field(subject_cn.encode("ascii", "replace"), SUBJECT_LEN),
                       ski,
@@ -265,11 +281,15 @@ jobs:
 
           created_ts = int(time.time())
           entry_count = len(entries)
-          version = 1
+          version = 2
           header_fields = struct.pack("<H", version) + struct.pack("<IH", created_ts, entry_count)
 
           entry_bytes = bytearray()
+          metadata_offsets = []
           for subject, ski, not_before, not_after, sig_alg, key_bytes in entries:
+              if len(entry_bytes) > 0xFFFF:
+                  raise RuntimeError("truststore metadata offset exceeds uint16")
+              metadata_offsets.append(len(entry_bytes))
               entry_len = ENTRY_FIXED_PREFIX + len(key_bytes)
               entry_bytes.extend(struct.pack("<I", entry_len))     # len (uint32_t)
               entry_bytes.extend(subject)                          # subject[32]
@@ -278,6 +298,36 @@ jobs:
               entry_bytes.extend(struct.pack("<I", not_after))     # expiry_end (uint32_t)
               entry_bytes.extend(struct.pack("B", sig_alg))        # alg_id (uint8_t)
               entry_bytes.extend(key_bytes)                        # key[]
+
+          if len(entry_bytes) > 0xFFFF:
+              raise RuntimeError("truststore metadata block exceeds uint16")
+
+          # Both indexes are fixed-width and covered by the store signature.
+          # Metadata remains in SKI order, making SKI offsets monotonically
+          # increasing. Subject duplicates are ordered by SKI so every index
+          # has one canonical encoding.
+          ski_index = bytearray()
+          for entry, offset in zip(entries, metadata_offsets):
+              ski_index.extend(entry[1])
+              ski_index.extend(struct.pack("<H", offset))
+
+          subject_index = bytearray()
+          subject_rows = sorted(
+              ((entry[0], entry[1], offset)
+               for entry, offset in zip(entries, metadata_offsets)),
+              key=lambda row: (row[0], row[1]),
+          )
+          for subject, _ski, offset in subject_rows:
+              subject_index.extend(subject)
+              subject_index.extend(struct.pack("<H", offset))
+
+          expected_index_len = entry_count * INDEX_ENTRY_LEN
+          if (len(ski_index) != expected_index_len or
+                  len(subject_index) != expected_index_len):
+              raise RuntimeError("internal truststore index length mismatch")
+          if 256 + len(header_fields) + len(ski_index) + \
+                  len(subject_index) + len(entry_bytes) > 0xFFFF:
+              raise RuntimeError("serialized truststore exceeds uint16/AppVar size")
 
           os.makedirs("truststore_out", exist_ok=True)
           data_path    = os.path.join("truststore_out", "lwIPCERT.data")
@@ -288,6 +338,8 @@ jobs:
 
           with open(data_path, "wb") as f:
               f.write(header_fields)
+              f.write(ski_index)
+              f.write(subject_index)
               f.write(entry_bytes)
 
           run_cmd([
@@ -303,12 +355,15 @@ jobs:
           with open(bin_path, "wb") as f:
               f.write(open(sig_path, "rb").read())
               f.write(header_fields)
+              f.write(ski_index)
+              f.write(subject_index)
               f.write(entry_bytes)
 
           print(f"entries={entry_count}")
           print(f"bin={bin_path}")
 
           with open(notes_path, "w", encoding="utf-8") as notes:
+              notes.write("Truststore schema: **v2** (indexed SKI/subject metadata lookup).\n\n")
               notes.write("This release includes the following CA roots:\n\n")
               for subject, _ski, not_before, not_after, sig_alg, _key in entries:
                   subj = subject.split(b"\x00", 1)[0].decode("ascii", "ignore")
@@ -325,7 +380,7 @@ jobs:
 
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as summary:
-                  summary.write(f"## Truststore Build Summary (v1)\n\n")
+                  summary.write(f"## Truststore Build Summary (v2)\n\n")
                   summary.write(f"{len(entries)} accepted, {len(exclusions)} excluded\n\n")
 
                   summary.write("### Allowed key types\n\n")
@@ -359,6 +414,74 @@ jobs:
       - name: Build AppVar
         run: |
           convbin -i truststore_out/lwIPCERT.bin -o truststore_out/lwIPCERT.8xv -j bin -k 8xv -n lwIPCERT -r
+
+      - name: Validate truststore v2 layout
+        run: |
+          python3 - <<'PY'
+          import struct
+
+          with open("truststore_out/lwIPCERT.bin", "rb") as f:
+              blob = f.read()
+
+          SIGNATURE_LEN = 256
+          HEADER_LEN = SIGNATURE_LEN + 2 + 4 + 2
+          KEY_LEN = 32
+          INDEX_ENTRY_LEN = KEY_LEN + 2
+          ENTRY_PREFIX_LEN = 4 + 32 + 32 + 4 + 4 + 1
+
+          if len(blob) < HEADER_LEN:
+              raise RuntimeError("truststore shorter than v2 header")
+          version, _created, count = struct.unpack_from("<HIH", blob, SIGNATURE_LEN)
+          if version != 2 or count == 0:
+              raise RuntimeError("invalid truststore version or empty index")
+
+          index_len = count * INDEX_ENTRY_LEN
+          metadata_start = HEADER_LEN + 2 * index_len
+          if metadata_start >= len(blob):
+              raise RuntimeError("indexes exceed truststore size")
+          ski_index = blob[HEADER_LEN:HEADER_LEN + index_len]
+          subject_index = blob[HEADER_LEN + index_len:metadata_start]
+          metadata = blob[metadata_start:]
+
+          def rows(index):
+              return [
+                  (index[i:i + KEY_LEN],
+                   struct.unpack_from("<H", index, i + KEY_LEN)[0])
+                  for i in range(0, len(index), INDEX_ENTRY_LEN)
+              ]
+
+          ski_rows = rows(ski_index)
+          subject_rows = rows(subject_index)
+          if [key for key, _ in ski_rows] != sorted(key for key, _ in ski_rows):
+              raise RuntimeError("SKI index is not sorted")
+
+          boundaries = set()
+          end = 0
+          for key, offset in ski_rows:
+              if offset != end or offset + ENTRY_PREFIX_LEN > len(metadata):
+                  raise RuntimeError("invalid canonical metadata offset")
+              entry_len = struct.unpack_from("<I", metadata, offset)[0]
+              if entry_len < ENTRY_PREFIX_LEN or offset + entry_len > len(metadata):
+                  raise RuntimeError("invalid metadata record length")
+              if key != metadata[offset + 36:offset + 68]:
+                  raise RuntimeError("SKI index key disagrees with metadata")
+              boundaries.add(offset)
+              end += entry_len
+          if end != len(metadata):
+              raise RuntimeError("metadata records do not exactly cover block")
+
+          subject_order = []
+          for key, offset in subject_rows:
+              if offset not in boundaries:
+                  raise RuntimeError("subject index offset is not an entry boundary")
+              if key != metadata[offset + 4:offset + 36]:
+                  raise RuntimeError("subject index key disagrees with metadata")
+              subject_order.append((key, metadata[offset + 36:offset + 68]))
+          if subject_order != sorted(subject_order):
+              raise RuntimeError("subject index is not sorted by subject and SKI")
+
+          print(f"validated truststore v2: {count} entries, {len(blob)} bytes")
+          PY
 
       - name: Verify truststore signature
         run: |

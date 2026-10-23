@@ -57,16 +57,33 @@ ec_spki = seq(seq(oid('2a8648ce3d0201'), oid('2a8648ce3d030107')),
               tlv(3, b'\0\x04' + b'\x01' * 64))
 name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'example.test'))))
 valid = seq(tlv(0x17, b'200101000000Z'), tlv(0x17, b'491231235959Z'))
-cert_extensions = tlv(0xa3, seq(
+base_extensions = (
     seq(oid('551d11'), tlv(4, seq(tlv(0x82, b'example.test')))),
     seq(oid('551d13'), tlv(1, b'\xff'), tlv(4, seq(tlv(1, b'\xff')))),
     seq(oid('551d0f'), tlv(1, b'\xff'), tlv(4, tlv(3, b'\x00\x84'))),
-    seq(oid('551d25'), tlv(4, seq(oid('2b06010505070301'))))))
+    seq(oid('551d25'), tlv(4, seq(oid('2b06010505070301')))),
+)
+cert_extensions = tlv(0xa3, seq(*base_extensions))
+authority_key_id = bytes(range(0xa0, 0xb4))
+aki_extension = seq(oid('551d23'), tlv(4, seq(tlv(0x80, authority_key_id))))
+cert_extensions_aki = tlv(0xa3, seq(
+    *base_extensions,
+    aki_extension,
+))
+cert_extensions_duplicate_aki = tlv(0xa3, seq(
+    *base_extensions, aki_extension, aki_extension,
+))
+cert_extensions_bad_aki = tlv(0xa3, seq(
+    *base_extensions,
+    seq(oid('551d23'), tlv(4, seq(tlv(0xa0, authority_key_id)))),
+))
 
 
-def cert(algorithm, key=spki, inner=None):
-    tbs = seq(b'\x02\x01\x01', inner or algorithm, name, valid, name, key,
-              cert_extensions)
+def cert(algorithm, key=spki, inner=None, extensions=cert_extensions):
+    # Extensions require v3 (version INTEGER 2 in [0] EXPLICIT).
+    tbs = seq(tlv(0xa0, b'\x02\x01\x02'), b'\x02\x01\x01',
+              inner or algorithm, name, valid, name, key,
+              extensions)
     signature = bytes([0x22 if algorithm == pss else 0x11]) * 256
     return seq(tbs, algorithm, tlv(3, b'\0' + signature))
 
@@ -85,6 +102,9 @@ vectors = {
     'bad_trailer': seq(pss_oid, seq(params + tlv(0xa3, b'\x02\x01\x02'))),
     'bad_key_oid': seq(rsa, b'\x05\x00'),
     'cert_pkcs': cert(pkcs), 'cert_pss': cert(pss),
+    'cert_aki': cert(pkcs, extensions=cert_extensions_aki),
+    'cert_duplicate_aki': cert(pkcs, extensions=cert_extensions_duplicate_aki),
+    'cert_bad_aki': cert(pkcs, extensions=cert_extensions_bad_aki),
     'cert_ec': cert(pkcs, ec_spki), 'cert_mismatch': cert(pss, inner=pkcs),
 }
 
@@ -103,9 +123,11 @@ for name in ['tls_cipher_blob_free', 'tls_cipher_encrypt', 'tls_cipher_encrypt_a
 source += hs[hs.index('enum tls_cert_walk_state'):hs.index('/* Feed body bytes into the walker.')]
 for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_digest',
              'tls_parse_handshake_header',
+             'tls_extension_type_known',
              'tls_handshake_init', 'tls_send_client_hello',
              'tls_recv_encrypted_extensions', 'tls_recv_certificate_request',
              'tls_recv_certificate_streamed', 'tls_certverify_rsa_pss_sha256',
+             'tls_hs_defer_bytes', 'tls_cert_jobs_pending', 'tls_cert_jobs_step',
              'tls_handshake_cleanup']:
     source += function(hs, name)
 for name, data in vectors.items():

@@ -152,12 +152,11 @@ Security Posture
    * - TLS trust store
      - A curated trust store derived from CA material staged on a common Linux
        box, shipped as a signed AppVar and verified with RSA-PSS-SHA256 against
-       an embedded public key at ``tls_truststore_init``. The check runs when the
-       first certificate-based TLS connection is set up, before any network
-       traffic, not at ``lwip_start()``; a store that fails it aborts every
-       handshake that consults it. Entries are looked up
-       by subject name to anchor the topmost certificate in a received chain
-       (see Certificate chain below).
+       an embedded public key at ``tls_truststore_init``. Schema v2 uses signed,
+       fixed-width SKI and subject indexes containing validated offsets into a
+       variable-length root-metadata block. Normal anchoring binary-searches the
+       root SKI from the certificate's AKI; subject lookup is the fail-closed
+       fallback when AKI is absent (see Certificate chain below).
    * - Certificate chain
      - The stack walks the server's certificate chain link by link. Each link
        is checked against the next certificate's public key with RSA PKCS#1
@@ -182,6 +181,12 @@ Security Posture
        chain walk above, but it is not a root-of-trust anchor by itself.
 
 For more details, proofs, and datasets, see the whitepaper below.
+
+The clause-by-clause mapping of the RFC, NIST SP, and FIPS requirements this
+implementation targets to the code that satisfies or deviates from them is
+published as the
+`TLS specification compliance ledger <tls-specifications.xml>`_
+(rendered in the browser from the raw XML via an XSLT stylesheet).
 
 CI And Test Harnesses
 ---------------------

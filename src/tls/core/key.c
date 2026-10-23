@@ -515,10 +515,22 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
             goto done;
         if (!tls_aes_decrypt(&aes_ctx, enc_data.value, enc_data.len, buf))
             goto done;
-        /* Strip PKCS#7 padding. */
-        if (enc_data.len == 0 || buf[enc_data.len - 1] > enc_data.len)
+        /* Strip PKCS#7 padding (RFC 5652 6.3): 1..16 bytes, every pad byte
+         * equal to the pad length, and a whole number of blocks. */
+        if (enc_data.len == 0 || (enc_data.len % TLS_AES_BLOCK_SIZE) != 0)
             goto done;
-        pt_len = enc_data.len - buf[enc_data.len - 1];
+        {
+            uint8_t pad = buf[enc_data.len - 1];
+            uint8_t diff = 0;
+
+            if (pad == 0 || pad > TLS_AES_BLOCK_SIZE || pad > enc_data.len)
+                goto done;
+            for (size_t i = 0; i < pad; i++)
+                diff |= (uint8_t)(buf[enc_data.len - 1 - i] ^ pad);
+            if (diff != 0)
+                goto done;
+            pt_len = enc_data.len - pad;
+        }
         ok = true;
     }
 
@@ -1062,38 +1074,12 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
     switch (alg)
     {
         case TLS_ALG_RSA_OAEP_SHA256:
-        {
-            if (aad || aad_len || ct_len > RSA_TRANSIENT_SIZE)
-                return NULL;
-            if (!tls_rsa_decrypt_signature(ct, ct_len, __rsa_transient, &key->rsa))
-                return NULL;
-            uint8_t tmp[RSA_TRANSIENT_SIZE];
-            /* tls_rsa_decode_oaep holds the recovered OAEP seed and
-             * derived mask/digest buffers on its own stack frame;
-             * wrapping the call lets tls_crypto_guard_disable() scrub
-             * that whole frame once it's returned and SP is back above
-             * it. */
-            tls_crypto_guard_enable();
-            size_t plen = tls_rsa_decode_oaep(__rsa_transient, ct_len,
-                                               tmp, NULL, TLS_HASH_SHA256);
-            tls_crypto_guard_disable();
-            tls_secure_memzero(__rsa_transient, ct_len);
-            if (plen == 0)
-            {
-                tls_secure_memzero(tmp, sizeof(tmp));
-                return NULL;
-            }
-            uint8_t *plain;
-            uint8_t *out = decrypt_blob_alloc(plen, &plain);
-            if (!out)
-            {
-                tls_secure_memzero(tmp, plen);
-                return NULL;
-            }
-            memcpy(plain, tmp, plen);
-            tls_secure_memzero(tmp, plen);
-            return out;
-        }
+            /* RSAES-OAEP decryption needs the private exponent. tls_key holds
+             * only public RSA fields and tls_rsa_decrypt_signature performs a
+             * public-exponent operation, so "decrypting" here would never
+             * recover a message encrypted to this key. Report failure rather
+             * than return garbage. */
+            return NULL;
 
         case TLS_ALG_AES_128_CBC:
         case TLS_ALG_AES_256_CBC:
