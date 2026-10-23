@@ -44,6 +44,13 @@ int main(void) {
     c.has_addrinfo=false;wait_on(&c,"example.com");services_arm();
     services_dispatch();assert(connects==1);
     replacement.ready=3;services_dispatch();assert(connects==2);
+    replacement.ready=7;c.protocol=LWIP_SOCKET_ALTCP_TLS;rng_strength=0;rng_state=1;
+    wait_on(&c,"example.com");services_arm();services_dispatch();assert(connects==2);
+    rng_strength=128;rng_state=3;services_dispatch();assert(connects==3);
+    rng_strength=0;rng_state=TLS_RNG_FAILED;
+    wait_on(&c,"example.com");services_arm();services_dispatch();
+    assert(c.status==LWIP_STATUS_ERROR && socket_errors==1);
+    c.protocol=0;rng_strength=256;rng_state=4;
     wait_on(&c,"example.com");replacement.ready=0;now=1000;
     services_dispatch();assert(c.status==LWIP_STATUS_ERROR && !c.pending_host);
     now=0;wait_on(&c,"example.com");apply_error=9;

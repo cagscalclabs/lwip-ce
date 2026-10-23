@@ -44,15 +44,17 @@ TRNG
 The calculator has no hardware RNG. lwIP-CE derives entropy from a selected
 noisy SRAM bit, continuously applies repetition-count and adaptive-proportion
 health tests, packs 952 observations into a 119-byte pool, and conditions that
-pool with SHA-256. The configured conservative source estimate is 0.35 bits
+pool with SHA-256. The configured conservative source estimate is 0.34 bits
 per selected-bit observation. For the full entropy analysis, see the
 `whitepaper <https://github.com/cagscalclabs/lwip-ce/releases/tag/whitepaper-latest>`_.
 Do not use the toolchain ``random()`` functions for anything security-sensitive;
 they are not cryptographically secure.
 
-Hash_DRBG is instantiated at 256-bit security strength using one independently
-conditioned 256-bit entropy input and a second independently conditioned
-256-bit nonce. Later reseeds require one 256-bit conditioned contribution.
+The timer first instantiates Hash_DRBG at 128-bit security strength from one
+independently conditioned 256-bit contribution. It then collects entirely
+fresh material for a separate 256-bit instance and atomically promotes that
+instance when ready. Later reseeds require one 256-bit conditioned
+contribution.
 The calculator provides no isolated execution, immutable monotonic state,
 protected key storage, or guaranteed secure erasure. Consequently, this API
 does not claim resistance to an attacker capable of reading or modifying the
@@ -60,10 +62,10 @@ live DRBG state or restoring an earlier calculator state.
 
 .. c:function:: bool tls_random_init_entropy(void)
 
-   Select and validate an SRAM entropy tap. ``lwip_start()`` also starts the
-   timer-driven entropy collector. Initial Hash_DRBG instantiation collects a
-   256-bit entropy input and a separate 256-bit nonce; afterward, the timer
-   prepares each 256-bit reseed reserve in one conditioned contribution.
+   Select and validate an SRAM entropy tap. ``lwip_start()`` starts a 50 ms
+   lifecycle dispatcher; its first callback performs this complete blocking
+   source-selection scan. Failed scans are retried until the absolute
+   15-second readiness deadline expires.
 
    :returns: ``true`` on success, ``false`` if entropy initialization failed
       (e.g. no suitable SRAM source found).
@@ -74,10 +76,10 @@ live DRBG state or restoring an earlier calculator state.
    if necessary. SP 800-90B repetition-count and adaptive-proportion tests run
    continuously on the selected raw bit as random data is gathered; no
    separate periodic health-test callback or output-sample test is used.
-   Initial automatic source discovery is limited to two complete scans per RNG
-   lifecycle. If neither scan finds a usable tap, later RNG operations fail
-   immediately instead of repeatedly rescanning. A successful explicit
-   ``tls_random_init_entropy()`` call or an lwIP restart permits recovery.
+   Automatic source discovery retries on the 50 ms lifecycle cadence until
+   the RNG has spent 15 seconds trying to reach its first ready state. A
+   terminal timeout requires restarting the lwIP/RNG lifecycle before random
+   output can be requested again.
 
    :returns: ``true`` if the RNG is healthy and safe to use, ``false``
       otherwise. On ``false``, retry ``tls_random_init_entropy()`` or abort.
@@ -94,6 +96,29 @@ live DRBG state or restoring an earlier calculator state.
    :returns: ``buffer`` on success, or ``NULL`` if instantiation/reseeding
       fails or another RNG request is active. The destination is zeroized on
       failure.
+
+.. c:function:: void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
+
+   Fill ``buffer`` from a DRBG whose instantiated security strength is at
+   least ``TLS_RNG_STRENGTH_128`` or ``TLS_RNG_STRENGTH_256``. TLS 1.3 uses
+   the 128-bit level; the compatibility ``tls_random_bytes()`` API continues
+   to require 256-bit readiness.
+
+   :returns: ``buffer`` on success, or ``NULL`` with the destination zeroized.
+
+.. c:function:: tls_rng_state_t tls_rng_status(void)
+
+   Return the lifecycle state: stopped, awaiting source initialization,
+   seeding, ready at 128 bits, ready at 256 bits, or failed.
+
+.. c:function:: uint16_t tls_rng_available_strength(void)
+
+   Return the currently available instantiated strength: 0, 128, or 256.
+
+.. c:function:: tls_rng_failure_t tls_rng_last_failure(void)
+
+   Return the terminal failure reason, or zero when no terminal failure has
+   been recorded.
 
 .. c:function:: uint64_t tls_random(void)
 
@@ -171,7 +196,9 @@ live DRBG state or restoring an earlier calculator state.
    if (tls_random_bytes(&r, sizeof(r)) == NULL)
       printf("error: rng");
 
-After ``lwip_start()``, the entropy source is initialized automatically as part of the TLS subsystem setup; calling ``tls_random_init_entropy()`` again after that is harmless but redundant.
+After ``lwip_start()``, RNG initialization progresses through
+``lwip_service_events()``. TLS sockets wait internally for 128-bit readiness;
+applications do not need to race ``tls_rng_status()`` before connecting.
 
 **Async gathering (large requests, main-loop friendly):**
 

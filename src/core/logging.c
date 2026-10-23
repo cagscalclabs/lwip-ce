@@ -10,6 +10,7 @@
 
 static lwip_event_fn g_event_fn = NULL;
 static uint32_t g_last_debug_loc = 0xFFFFFFFFu; /* no event has this value */
+static lwip_log_verbosity_t g_verbosity = LWIP_LOG_VERBOSITY_INFO;
 static bool g_in_fatal = false;
 static void (*g_fatal_cleanup)(void) = NULL;
 static struct lwip_traceback_entry g_traceback[LWIP_TRACEBACK_DEPTH];
@@ -60,6 +61,38 @@ void lwip_set_event_cb(lwip_event_fn event_fn)
     g_last_debug_loc = 0xFFFFFFFFu;
 }
 
+lwip_event_fn lwip_get_event_cb(void)
+{
+    return g_event_fn;
+}
+
+void lwip_set_log_verbosity(lwip_log_verbosity_t level)
+{
+    g_verbosity = level;
+}
+
+lwip_log_verbosity_t lwip_get_log_verbosity(void)
+{
+    return g_verbosity;
+}
+
+/* Lowest verbosity level that admits a given event kind. */
+static lwip_log_verbosity_t kind_min_verbosity(uint8_t kind)
+{
+    switch ((lwip_event_kind_t)kind)
+    {
+    case LWIP_EV_ERROR: return LWIP_LOG_VERBOSITY_ERROR;
+    case LWIP_EV_WARN:  return LWIP_LOG_VERBOSITY_WARNING;
+    case LWIP_EV_INFO:  return LWIP_LOG_VERBOSITY_INFO;
+    default:            return LWIP_LOG_VERBOSITY_DEBUG; /* DEBUG, STATE_CHG, IO_*, POWER */
+    }
+}
+
+static bool kind_admitted(uint8_t kind)
+{
+    return g_verbosity >= kind_min_verbosity(kind);
+}
+
 const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count)
 {
     for (uint8_t i = 0; i < g_traceback_count; i++)
@@ -92,12 +125,12 @@ void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t e
         lwip_traceback_push_code(module, kind, loc, extra);
     }
 
-    if (!g_event_fn)
+    if (!g_event_fn || !kind_admitted(kind))
     {
         return;
     }
 
-    struct lwip_event ev;
+    struct lwip_event ev = {0};
     ev.module = module;
     ev.kind = kind;
     ev.data.code.loc = loc;
@@ -126,7 +159,7 @@ void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
 
 void lwip_event_emit_info(uint8_t module, const char *msg)
 {
-    if (!g_event_fn)
+    if (!g_event_fn || !kind_admitted(LWIP_EV_INFO))
     {
         return;
     }
@@ -139,7 +172,7 @@ void lwip_event_emit_info(uint8_t module, const char *msg)
 
 void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event)
 {
-    if (!g_event_fn)
+    if (!g_event_fn || !kind_admitted(LWIP_EV_STATE_CHG))
     {
         return;
     }
@@ -153,7 +186,7 @@ void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event)
 
 void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes)
 {
-    if (!g_event_fn)
+    if (!g_event_fn || !kind_admitted(LWIP_EV_IO_FILE))
     {
         return;
     }
@@ -168,7 +201,7 @@ void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint
 
 void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes)
 {
-    if (!g_event_fn)
+    if (!g_event_fn || !kind_admitted(LWIP_EV_IO_ETH))
     {
         return;
     }
@@ -182,7 +215,7 @@ void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes)
 
 void lwip_event_emit_power(uint8_t module, uint8_t subtype, uint8_t charging)
 {
-    if (!g_event_fn)
+    if (!g_event_fn || !kind_admitted(LWIP_EV_POWER))
     {
         return;
     }
@@ -268,6 +301,7 @@ const char *lwip_debug_file_name(uint8_t file_id)
     case LWIP_FILE_TEARDOWN:             return "teardown.c";
     case LWIP_FILE_LOGGING:              return "logging.c";
     case LWIP_FILE_MAIN:                 return "main.c";
+    case LWIP_FILE_LOG_FILE:             return "log_file.c";
     default:                             return "?";
     }
 }

@@ -36,6 +36,7 @@
 #include "lwip/timeouts.h"
 #include "lwip/app_config.h"
 #include "lwip/logging.h"
+#include "lwip/log_file.h"
 #include "lwip/teardown.h"
 #include "lwip/dispatch.h"
 #include "lwip/sys.h"
@@ -50,6 +51,7 @@
 #include "apps/altcp_tls/altcp_tls_ce.h"
 #include "apps/altcp_ws/altcp_ws.h"
 #include "tls/includes/tls.h"
+#include "tls/includes/random.h"
 
 #include <usbdrvce.h>
 #include <string.h>
@@ -159,7 +161,15 @@ struct lwip_socket
  * automatically. Currently: 2026-10-04T00:00:00Z. */
 #define LWIP_MIN_PLAUSIBLE_CLOCK_UNIX 1791086400u
 
+/* lwip_init_runtime_internal() clears the library BSS on every program load,
+ * so this cannot remain stale across callers even though the library itself
+ * is flash-resident.  Within one caller it makes lwip_stack_init() idempotent:
+ * lwip_start() initializes the core during bootstrap, and lwip_network_up()
+ * must not initialize the same pools, timeout lists, and callbacks again. */
 static bool g_lwip_stack_started = false;
+
+/* Same-run network readiness flag: true once lwip_network_up() has actually
+ * brought USB up, false again once lwip_stop()/cleanup begins. */
 static bool g_lwip_started = false;
 static bool g_lwip_stopping = false;
 static lwip_app_config_t g_lwip_cfg;
@@ -265,12 +275,6 @@ const char *lwip_version_string(void)
  * without updating every test under tests/unit/ first. */
 bool lwip_stack_init(void)
 {
-    /* Runs on every call, even when the stack is already up: g_lwip_stack_started
-     * is a flash-resident static that outlives any single program's lifetime
-     * (nothing calls lwip_stop() on normal exit), so this is the only
-     * reliably-repeated hook available to keep correcting an implausible
-     * clock across separate program launches. Cheap and idempotent --
-     * lwip_sntp_clamp_rtc_floor() no-ops once the RTC is past the floor. */
     lwip_sntp_clamp_rtc_floor(LWIP_MIN_PLAUSIBLE_CLOCK_UNIX);
 
     if (g_lwip_stack_started)
@@ -278,11 +282,17 @@ bool lwip_stack_init(void)
         return true;
     }
 
+    lwip_app_config_load(&g_lwip_cfg);
+    lwip_set_log_verbosity((lwip_log_verbosity_t)g_lwip_cfg.log_verbosity);
+
     g_lwip_start_error = 0;
     g_lwip_stopping = false;
-    lwip_app_config_load(&g_lwip_cfg);
     lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
     eth_reset_shutdown();
+
+#if NO_SYS
+    sys_init();
+#endif
 
     if (lwip_init() != ERR_OK)
     {
@@ -290,19 +300,15 @@ bool lwip_stack_init(void)
         lwip_membuffers_release();
         return false;
     }
-    /* tls_init() brings up the RNG, the cert truststore, and the PSK/
-     * session-ticket cache in one call -- fixed one-time setup, run here
-     * rather than lazily on the first TLS socket so lwip_start() alone is
-     * sufficient for crypto-only callers (every unit test under
-     * tests/unit/ relies on this). Gated on the wizard's "Enable TLS"
-     * setting -- skip it entirely when TLS is disabled. */
+
+    /* lwip_log_file_start() allocates its stage buffer via mem_malloc(), so
+     * it must not run until lwip_init() has set up the custom allocator
+     * pool -- calling it earlier dereferences an uninitialized pool. */
+    if (g_lwip_cfg.file_log_enabled)
+        lwip_log_file_start(g_lwip_cfg.log_archive_slots);
+
     if (g_lwip_cfg.tls_enabled && !tls_init())
-    {
-        /* TLS initialization failures are component-scoped. Keep the base
-         * stack and deterministic crypto/parser APIs available; TLS creation
-         * retries tls_init() and remains gated until the problem is resolved. */
         WARN();
-    }
 
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
     netif_add_ext_callback(&g_socket_netif_callback, socket_netif_changed);
@@ -319,9 +325,7 @@ bool lwip_network_up(void)
     }
 
     if (!lwip_stack_init())
-    {
         return false;
-    }
 
     /* USB init via usb_fn so the libload build resolves through
      * include_library '../usbdrvce/usbdrvce.asm' without a special case. If this
@@ -352,12 +356,9 @@ void lwip_stop(void)
 
 void lwip_service_events(void)
 {
-    if (!g_lwip_started && !g_lwip_stopping)
-    {
-        return;
-    }
     usb_fn.handle_events();
     sys_check_timeouts();
+    lwip_log_file_flush();
     if (!g_lwip_stopping)
     {
         if (g_services_dirty)
@@ -1067,6 +1068,10 @@ bool lwip_default_netif_info(lwip_netif_info_t *info)
  * reference sees NULL rather than a dangling pointer. */
 static void lwip_membuffers_release(void)
 {
+    if (!g_lwip_started && !g_lwip_stopping)
+    {
+        return;
+    }
 #if LWIP_ALTCP_TLS
     if (g_lwip_cfg.tls_enabled)
         tls_cleanup();
@@ -1183,6 +1188,7 @@ static void lwip_stack_cleanup(void)
     STOP_TRACE("P9 memRelease");
     lwip_membuffers_release();
 
+    lwip_log_file_stop();
     STOP_TRACE("P10 complete");
     g_lwip_stopping = false;
     g_lwip_stack_started = false;
@@ -1524,8 +1530,18 @@ static uint8_t socket_required_services(const struct lwip_socket *conn,
     return flags;
 }
 
+static bool socket_uses_tls(const struct lwip_socket *conn)
+{
+    return conn != NULL &&
+           (conn->protocol == LWIP_SOCKET_ALTCP_TLS ||
+            conn->protocol == LWIP_SOCKET_ALTCP_WSS);
+}
+
 static bool socket_network_ready(const struct lwip_socket *conn, uint8_t flags)
 {
+    if (socket_uses_tls(conn) &&
+        tls_rng_available_strength() < TLS_RNG_STRENGTH_128)
+        return false;
     return conn->netif && netif_is_up(conn->netif) &&
            netif_is_link_up(conn->netif) &&
            netif_address_configuration_ready(conn->netif) &&
@@ -1803,6 +1819,22 @@ static void conn_waiting_services_poll(uint32_t now)
 
         if (conn->status != LWIP_STATUS_WAITING_SERVICES)
         {
+            conn = next;
+            continue;
+        }
+
+        if (socket_uses_tls(conn) && tls_rng_status() == TLS_RNG_FAILED)
+        {
+            lwip_socket_set_pending_host(conn, NULL);
+            conn->pending_svc_flags = 0;
+            conn->pending_port = 0;
+            conn->connect_deadline = 0;
+            conn->status = LWIP_STATUS_ERROR;
+            conn->last_error = LWIP_ERR_CONNECT;
+            conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_TLS,
+                               LWIP_SOCKET_ERR_OP_TLS_INIT,
+                               (int)tls_rng_last_failure(),
+                               LWIP_ERR_CONNECT);
             conn = next;
             continue;
         }

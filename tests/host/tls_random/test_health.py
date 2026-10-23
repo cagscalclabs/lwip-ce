@@ -21,7 +21,7 @@ RCT_CUTOFF = constant("_sprng_rct_cutoff")
 APT_WINDOW = constant("_sprng_apt_window")
 APT_CUTOFF = constant("_sprng_apt_cutoff")
 
-assert (RCT_CUTOFF, APT_WINDOW, APT_CUTOFF) == (51, 1024, 840)
+assert (RCT_CUTOFF, APT_WINDOW, APT_CUTOFF) == (60, 1024, 870)
 
 
 def health_ok(bits):
@@ -69,8 +69,10 @@ assert health_ok([1] * (RCT_CUTOFF - 1))
 assert not health_ok([1] * RCT_CUTOFF)
 
 # Strongly biased without a long repeated run: exercises the APT rather than RCT.
-biased = ([0] * 5 + [1]) * 171
+# With H=0.34, APT_CUTOFF=870; need matches/1023 > 870/1024 ≈ 0.849 in a window.
+# Pattern [0]*9+[1] gives ~9/10 = 900 matches; well above the cutoff.
+biased = ([0] * 9 + [1]) * 103
 assert max(len(run) for run in "".join(map(str, biased)).split("1")) < RCT_CUTOFF
 assert not health_ok(biased)
 
-print("RNG health model passed: RCT=51, binary APT W=1024/C=840")
+print("RNG health model passed: RCT=60, binary APT W=1024/C=870")

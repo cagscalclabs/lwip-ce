@@ -40,7 +40,9 @@
 #include "drivers/usb_ethernet.h"
 #include "drivers/pcap.h"
 #include "drivers/pcap_decode.h"
+#include <fileioc.h>
 #include "lwip-imports.h"
+#include "lwip/log_file.h"
 #include "lwIP.h"
 #include "tls/includes/handshake.h"
 #include "apps/altcp_tls/altcp_tls_ce.h"
@@ -69,8 +71,13 @@ typedef enum
     OPT_TZ_OFFSET,
     OPT_DST,
     OPT_TLS_ENABLED,
+    OPT_PCAP_ENABLED,
     OPT_PCAP_MAX_SIZE,
     OPT_VIEW_PCAP,
+    OPT_LOG_ENABLED,
+    OPT_LOG_VERBOSITY,
+    OPT_LOG_ARCHIVE_SLOTS,
+    OPT_VIEW_LOG,
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     OPT_SEP_TESTS,
     OPT_NTP_TEST,
@@ -87,7 +94,9 @@ typedef enum
 {
     EDIT_NONE = 0,
     EDIT_TZ,
-    EDIT_PCAP_SIZE
+    EDIT_PCAP_SIZE,
+    EDIT_LOG_SLOTS,
+    EDIT_LOG_VERBOSITY
 } edit_mode_t;
 
 struct config_option;
@@ -114,6 +123,7 @@ static volatile bool netif_unavailable = false;
 
 static lwip_app_config_t g_cfg;
 static bool g_pcap_available;
+static bool g_log_available;
 
 // Legacy color constants (used by test functions)
 #define COLOR_WHITE 0xFFFF
@@ -154,6 +164,7 @@ static void ui_slider(int x, int y, int w, int value, int min_val, int max_val);
 static bool config_toggle_option(struct config_option *opt);
 static bool config_edit_hostname(struct config_option *opt);
 static bool config_run_pcap_viewer(struct config_option *opt);
+static bool config_run_log_viewer(struct config_option *opt);
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
 static bool config_run_ntp_test(struct config_option *opt);
 static bool config_run_http_test(struct config_option *opt);
@@ -163,6 +174,18 @@ static bool config_run_tcp_echo_test(struct config_option *opt);
 static bool config_run_tls_test(struct config_option *opt);
 #endif
 static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len);
+
+static const char *verbosity_name(uint8_t level)
+{
+    switch ((lwip_log_verbosity_t)level)
+    {
+    case LWIP_LOG_VERBOSITY_ERROR:   return "ERROR";
+    case LWIP_LOG_VERBOSITY_WARNING: return "WARNING";
+    case LWIP_LOG_VERBOSITY_INFO:    return "INFO";
+    case LWIP_LOG_VERBOSITY_DEBUG:   return "DEBUG";
+    default:                         return "?";
+    }
+}
 
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES && LWIP_DHCP
 static bool dhcp_client_running(const struct netif *netif)
@@ -177,8 +200,13 @@ static struct config_option config_options[] = {
     {"Timezone",        "Local offset from UTC",     OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
     {"Daylight saving", "Apply the DST adjustment",  OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"TLS",             "Allow encrypted sockets",   OPT_TLS_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
+    {"Enable PCAP",     "Always capture packets",    OPT_PCAP_ENABLED, F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
     {"Capture limit",   "Maximum saved AppVar size", OPT_PCAP_MAX_SIZE,F_TYPE_INT_SLIDER,   NULL, {0}},
     {"Packet capture",  "Inspect saved packets",     OPT_VIEW_PCAP,    F_TYPE_ACTION,       config_run_pcap_viewer, {0}},
+    {"Enable logging",  "Log all events to file",    OPT_LOG_ENABLED,        F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
+    {"Verbosity",       "Minimum event level logged",OPT_LOG_VERBOSITY,      F_TYPE_INT_SLIDER,  NULL, {0}},
+    {"Archive slots",   "Rotated log files to keep", OPT_LOG_ARCHIVE_SLOTS,  F_TYPE_INT_SLIDER,  NULL, {0}},
+    {"View log",        "Inspect saved log",         OPT_VIEW_LOG,     F_TYPE_ACTION,       config_run_log_viewer, {0}},
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     {"Tests",           NULL,             OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
     {"NTP Test",        "Request network time", OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
@@ -470,6 +498,18 @@ static void ui_draw_row(int row_y, const char *label, const char *value,
                 min_val = 0;
                 max_val = 3;
             }
+            else if (id == OPT_LOG_ARCHIVE_SLOTS)
+            {
+                val = config_options[OPT_LOG_ARCHIVE_SLOTS].value[0];
+                min_val = LWIP_CFG_LOG_ARCHIVE_SLOTS_MIN;
+                max_val = LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX;
+            }
+            else if (id == OPT_LOG_VERBOSITY)
+            {
+                val = config_options[OPT_LOG_VERBOSITY].value[0];
+                min_val = LWIP_CFG_LOG_VERBOSITY_MIN;
+                max_val = LWIP_CFG_LOG_VERBOSITY_MAX;
+            }
             else
             {
                 val = option_get_i16(config_options[OPT_TZ_OFFSET].value);
@@ -490,7 +530,11 @@ static int ui_row_y(int visible_idx)
 
 static bool option_is_visible(const struct config_option *opt)
 {
-    return opt->id != OPT_VIEW_PCAP || g_pcap_available;
+    if (opt->id == OPT_VIEW_PCAP)
+        return g_pcap_available;
+    if (opt->id == OPT_VIEW_LOG)
+        return g_log_available;
+    return true;
 }
 
 static int visible_option_count(void)
@@ -643,8 +687,22 @@ static void option_sync_from_cfg(struct config_option *opt)
     case OPT_TLS_ENABLED:
         option_set_bool(opt->value, g_cfg.tls_enabled != 0);
         break;
+    case OPT_PCAP_ENABLED:
+        option_set_bool(opt->value, g_cfg.pcap_enabled != 0);
+        break;
     case OPT_PCAP_MAX_SIZE:
         option_set_u16(opt->value, g_cfg.pcap_max_bytes);
+        break;
+    case OPT_LOG_ENABLED:
+        option_set_bool(opt->value, g_cfg.file_log_enabled != 0);
+        break;
+    case OPT_LOG_VERBOSITY:
+        opt->value[0] = g_cfg.log_verbosity;
+        opt->value[1] = 0; opt->value[2] = 0; opt->value[3] = 0;
+        break;
+    case OPT_LOG_ARCHIVE_SLOTS:
+        opt->value[0] = g_cfg.log_archive_slots;
+        opt->value[1] = 0; opt->value[2] = 0; opt->value[3] = 0;
         break;
     default:
         // Action/separator types, no sync needed
@@ -654,9 +712,7 @@ static void option_sync_from_cfg(struct config_option *opt)
 
 static void apply_logging_config(void)
 {
-    /* The appvar-backed log system was replaced by the unified event callback
-     * (lwip_set_event_cb). The persisted log_* config fields are retained for
-     * layout stability but no longer drive any runtime logging here. */
+    lwip_set_log_verbosity((lwip_log_verbosity_t)g_cfg.log_verbosity);
 }
 
 static void config_sync_from_cfg(void)
@@ -720,8 +776,20 @@ static void format_option_value(const struct config_option *opt, char *buf, size
     case OPT_TLS_ENABLED:
         snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
         break;
+    case OPT_PCAP_ENABLED:
+        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
+        break;
     case OPT_PCAP_MAX_SIZE:
         snprintf(buf, buf_len, "%u KiB", option_get_u16(opt->value) / 1024u);
+        break;
+    case OPT_LOG_ENABLED:
+        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
+        break;
+    case OPT_LOG_VERBOSITY:
+        snprintf(buf, buf_len, "%s", verbosity_name(opt->value[0]));
+        break;
+    case OPT_LOG_ARCHIVE_SLOTS:
+        snprintf(buf, buf_len, "%u", (unsigned)opt->value[0]);
         break;
 #if LWIP_APP_ENABLE_SERVICE_EXAMPLES
     case OPT_NTP_TEST:
@@ -752,6 +820,14 @@ static bool config_toggle_option(struct config_option *opt)
         return true;
     case OPT_TLS_ENABLED:
         g_cfg.tls_enabled = (uint8_t)!g_cfg.tls_enabled;
+        option_sync_from_cfg(opt);
+        return true;
+    case OPT_PCAP_ENABLED:
+        g_cfg.pcap_enabled = (uint8_t)!g_cfg.pcap_enabled;
+        option_sync_from_cfg(opt);
+        return true;
+    case OPT_LOG_ENABLED:
+        g_cfg.file_log_enabled = (uint8_t)!g_cfg.file_log_enabled;
         option_sync_from_cfg(opt);
         return true;
     default:
@@ -1097,7 +1173,8 @@ static void pcap_draw_detail(const char *title, const struct pcap *hdr,
 {
     struct pcap_decoded decoded = pcap_decode(data, hdr->len);
     int total_rows = pcap_detail_rows(&decoded);
-    int visible = UI_CONTENT_H / UI_ROW_H;
+    int row_h = (int)os_FontGetHeight() + 2;
+    int visible = UI_CONTENT_H / row_h;
 
     ui_draw_header(title);
     ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
@@ -1128,7 +1205,7 @@ static void pcap_draw_detail(const char *title, const struct pcap *hdr,
             }
             break;
         }
-        os_FontDrawTransText(buf, UI_MARGIN, ui_row_y(v) + UI_ROW_TEXT_OFF);
+        os_FontDrawTransText(buf, UI_MARGIN, UI_CONTENT_Y + v * row_h);
     }
     ui_draw_scrollbar(scroll, total_rows);
     ui_draw_footer("<up/dn> Scroll", "<clear> Back");
@@ -1138,7 +1215,8 @@ static void pcap_viewer_detail(const struct pcap *hdr, const uint8_t *data)
 {
     struct pcap_decoded decoded = pcap_decode(data, hdr->len);
     int total_rows = pcap_detail_rows(&decoded);
-    int visible = UI_CONTENT_H / UI_ROW_H;
+    int row_h = (int)os_FontGetHeight() + 2;
+    int visible = UI_CONTENT_H / row_h;
     int scroll = 0;
 
     char title[28];
@@ -1163,7 +1241,8 @@ static void pcap_viewer_detail(const struct pcap *hdr, const uint8_t *data)
 
 static void pcap_draw_list(const size_t *offsets, int count, int selected, int scroll)
 {
-    int visible = UI_CONTENT_H / UI_ROW_H;
+    int row_h  = (int)os_FontGetHeight() + 2;
+    int visible = UI_CONTENT_H / row_h;
 
     ui_draw_header("pcap viewer");
     ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
@@ -1178,8 +1257,8 @@ static void pcap_draw_list(const size_t *offsets, int count, int selected, int s
         int idx = scroll + v;
         if (idx >= count) break;
         const struct pcap *hdr = (const struct pcap *)(base + offsets[idx]);
-        int y = ui_row_y(v);
-        ui_fill_rect(0, y, LCD_WIDTH, UI_ROW_H,
+        int y = UI_CONTENT_Y + v * row_h;
+        ui_fill_rect(0, y, LCD_WIDTH, row_h,
                      idx == selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
         os_SetDrawFGColor(UI_COLOR_FG);
         char row[40];
@@ -1188,7 +1267,7 @@ static void pcap_draw_list(const size_t *offsets, int count, int selected, int s
                  hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
                  hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
                  hdr->len);
-        os_FontDrawTransText(row, UI_MARGIN, y + UI_ROW_TEXT_OFF);
+        os_FontDrawTransText(row, UI_MARGIN, y + 2);
     }
     ui_draw_scrollbar(scroll, count);
     ui_draw_footer("<up/dn> Select  <enter> View", "<clear> Back");
@@ -1201,10 +1280,11 @@ static void pcap_draw_list_row(const size_t *offsets, int count, int idx,
     if (!var) return;
     uint8_t *base = (uint8_t *)var->data;
     if (idx < scroll || idx >= count) return;
+    int row_h = (int)os_FontGetHeight() + 2;
     int v = idx - scroll;
     const struct pcap *hdr = (const struct pcap *)(base + offsets[idx]);
-    int y = ui_row_y(v);
-    ui_fill_rect(0, y, LCD_WIDTH, UI_ROW_H,
+    int y = UI_CONTENT_Y + v * row_h;
+    ui_fill_rect(0, y, LCD_WIDTH, row_h,
                  selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
     os_SetDrawFGColor(UI_COLOR_FG);
     char row[40];
@@ -1213,7 +1293,7 @@ static void pcap_draw_list_row(const size_t *offsets, int count, int idx,
              hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
              hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
              hdr->len);
-    os_FontDrawTransText(row, UI_MARGIN, y + UI_ROW_TEXT_OFF);
+    os_FontDrawTransText(row, UI_MARGIN, y + 2);
 }
 
 static bool config_run_pcap_viewer(struct config_option *opt)
@@ -1299,6 +1379,283 @@ static bool config_run_pcap_viewer(struct config_option *opt)
         }
     }
 
+    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+    return true;
+}
+
+/* Maximum number of log lines we index in RAM.  Each entry is a uint16_t
+ * byte-offset into the appvar, so 256 entries = 512 bytes on the stack. */
+/* ---------------------------------------------------------------------------
+ * Log viewer — zero-copy, reads directly from appvar data pointer.
+ *
+ * Viewer state per slot: a uint16_t byte-offset into the appvar marking the
+ * first byte of the topmost visible line.  Up/Down search backward/forward
+ * for newlines in the raw appvar data; no buffer copy, no line index.
+ * ------------------------------------------------------------------------- */
+
+/* Logical '\n'-delimited lines can be longer than one screen row and must be
+ * wrapped across several display rows rather than truncated. All of the
+ * helpers below walk the raw appvar bytes directly (no copy, no index) and
+ * speak in terms of *display rows*: one wrapped screen-width segment, found
+ * by greedily fitting the longest prefix of the remaining logical line that
+ * still fits in UI_CONTENT_W pixels (falling back to LWIP_LOG_LINE_MAX chars
+ * if a pathological line has no fitting prefix at all, which can't normally
+ * happen since the logger's own lines are already short).
+ *
+ * log_wrap_next() advances from byte offset `pos` (anywhere inside a logical
+ * line) to the end of the next display row, filling `out` with that row's
+ * text (NUL-terminated) and returning the byte offset to resume from. */
+#define UI_CONTENT_W (LCD_WIDTH - UI_MARGIN * 2)
+
+static uint16_t log_wrap_next(const uint8_t *data, uint16_t size, uint16_t pos,
+                              char *out, size_t out_cap)
+{
+    uint16_t line_end = pos;
+    while (line_end < size && data[line_end] != '\n') line_end++;
+
+    uint16_t avail = (uint16_t)(line_end - pos);
+    uint16_t take = avail;
+    if (take >= (uint16_t)out_cap) take = (uint16_t)(out_cap - 1u);
+
+    /* Greedily shrink `take` until the fitted text's pixel width fits, or
+     * we're down to a single character (always drawn, even if it overflows,
+     * so a run never silently produces an empty row). */
+    for (;;)
+    {
+        memcpy(out, data + pos, take);
+        out[take] = '\0';
+        if (take <= 1 || (int)os_FontGetWidth(out) <= UI_CONTENT_W)
+            break;
+        take--;
+    }
+
+    uint16_t next = (uint16_t)(pos + take);
+    if (next >= line_end)
+        next = (next < size && data[next] == '\n') ? (uint16_t)(next + 1u) : line_end;
+    return next;
+}
+
+/* Count display rows (wrapped segments) in [data, data+size). */
+static int log_count_lines(const uint8_t *data, uint16_t size)
+{
+    char scratch[LWIP_LOG_LINE_MAX];
+    int n = 0;
+    uint16_t pos = 0;
+    while (pos < size)
+    {
+        uint16_t next = log_wrap_next(data, size, pos, scratch, sizeof(scratch));
+        n++;
+        if (next <= pos) break; /* safety: never spin in place */
+        pos = next;
+    }
+    return n;
+}
+
+/* Return the byte offset of the start of display row `target` (0-based). */
+static uint16_t log_line_offset(const uint8_t *data, uint16_t size, int target)
+{
+    char scratch[LWIP_LOG_LINE_MAX];
+    if (target <= 0) return 0;
+    uint16_t pos = 0;
+    for (int row = 0; row < target && pos < size; row++)
+    {
+        uint16_t next = log_wrap_next(data, size, pos, scratch, sizeof(scratch));
+        if (next <= pos) break;
+        pos = next;
+    }
+    return pos;
+}
+
+/* Render the visible window of a slot whose raw data is at `data[0..size)`.
+ * `top_offset` is the byte offset of the first visible display row. */
+static void log_render_slot(const uint8_t *data, uint16_t size,
+                            uint16_t top_offset, int slot_idx, int slot_total)
+{
+    int row_h = (int)os_FontGetHeight() + 2;
+    int visible_rows = UI_CONTENT_H / row_h;
+
+    char hdr[40];
+    if (slot_idx == 0)
+        snprintf(hdr, sizeof(hdr), "Log: active [%d/%d] Lr/Rr:slot",
+                 slot_idx + 1, slot_total);
+    else
+        snprintf(hdr, sizeof(hdr), "Log: archive %d [%d/%d] Lr/Rr:slot",
+                 slot_idx, slot_idx + 1, slot_total);
+    ui_draw_header(hdr);
+    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
+    ui_draw_footer("Clr:back  2nd:delete", NULL);
+
+    /* Display rows. */
+    os_SetDrawFGColor(0x0000); /* black on white */
+    char row_buf[LWIP_LOG_LINE_MAX];
+    uint16_t pos = top_offset;
+    for (int r = 0; r < visible_rows && pos < size; r++)
+    {
+        uint16_t next = log_wrap_next(data, size, pos, row_buf, sizeof(row_buf));
+
+        int y = UI_CONTENT_Y + r * row_h;
+        os_FontDrawTransText(row_buf, UI_MARGIN, y + 2);
+
+        if (next <= pos) break; /* safety: never spin in place */
+        pos = next;
+    }
+}
+
+#define LOG_VIEWER_MAX_SLOTS (LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX + 1u) /* +1 for active */
+
+/* Build archive slot name "lwIPLgXX" for index idx. */
+static void log_viewer_slot_name(uint8_t idx, char out[9])
+{
+    out[0]='l'; out[1]='w'; out[2]='I'; out[3]='P';
+    out[4]='L'; out[5]='g';
+    out[6]=(char)('0'+idx/10u); out[7]=(char)('0'+idx%10u); out[8]='\0';
+}
+
+static bool config_run_log_viewer(struct config_option *opt)
+{
+    (void)opt;
+
+    /* Collect slot names newest-first using fileioc directly. */
+    char slot_names[LOG_VIEWER_MAX_SLOTS][9];
+    int slot_total = 0;
+
+    /* Active log first. */
+    {
+        uint8_t h = ti_Open(LWIP_LOG_APPVAR, "r");
+        if (h)
+        {
+            uint16_t sz = (uint16_t)ti_GetSize(h);
+            ti_Close(h);
+            if (sz > 0)
+                memcpy(slot_names[slot_total++], LWIP_LOG_APPVAR, sizeof(LWIP_LOG_APPVAR));
+        }
+    }
+
+    /* Archive slots from ring metadata. */
+    {
+        uint8_t mh = ti_Open(LWIP_LOG_META_APPVAR, "r");
+        if (mh)
+        {
+            uint8_t meta[3] = {0};
+            ti_Read(meta, 1, 3, mh);
+            ti_Close(mh);
+            uint8_t head  = meta[0];
+            uint8_t count = meta[1];
+            uint8_t maxs  = meta[2] ? meta[2] : (uint8_t)LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX;
+            /* Newest archive = (head + count - 1) % maxs, walk backwards. */
+            for (int i = (int)count - 1; i >= 0 && slot_total < (int)LOG_VIEWER_MAX_SLOTS; i--)
+            {
+                uint8_t idx = (uint8_t)((head + (uint8_t)i) % maxs);
+                char aname[9];
+                log_viewer_slot_name(idx, aname);
+                uint8_t h = ti_Open(aname, "r");
+                if (h)
+                {
+                    uint16_t sz = (uint16_t)ti_GetSize(h);
+                    ti_Close(h);
+                    if (sz > 0)
+                        memcpy(slot_names[slot_total++], aname, 9);
+                }
+            }
+        }
+    }
+
+    if (slot_total == 0)
+    {
+        fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
+        os_FontDrawText("No log data.", 10, 40);
+        cleanup_test_screen();
+        return true;
+    }
+
+    int      slot_idx = 0;
+    int      line_top = 0;
+    int      line_tot = 0;
+
+    uint8_t        cur_h    = 0;
+    const uint8_t *cur_data = NULL;
+    uint16_t       cur_size = 0;
+
+    cur_h = ti_Open(slot_names[slot_idx], "r");
+    if (cur_h)
+    {
+        cur_size = (uint16_t)ti_GetSize(cur_h);
+        cur_data = (const uint8_t *)ti_GetDataPtr(cur_h);
+    }
+    line_tot = cur_data ? log_count_lines(cur_data, cur_size) : 0;
+    {
+        int visible = UI_CONTENT_H / ((int)os_FontGetHeight() + 2);
+        line_top = (line_tot > visible) ? line_tot - visible : 0;
+    }
+
+    while (os_GetCSC()) ;
+    if (cur_data)
+        log_render_slot(cur_data, cur_size,
+                        log_line_offset(cur_data, cur_size, line_top),
+                        slot_idx, slot_total);
+
+    while (1)
+    {
+        uint8_t key = os_GetCSC();
+        if (!key) continue;
+
+        if (key == sk_Clear) break;
+
+        if (key == sk_2nd)
+        {
+            /* Delete all log appvars directly. */
+            if (cur_h) { ti_Close(cur_h); cur_h = 0; cur_data = NULL; }
+            for (int i = 0; i < slot_total; i++)
+                ti_Delete(slot_names[i]);
+            ti_Delete(LWIP_LOG_META_APPVAR);
+            g_log_available = false;
+            break;
+        }
+
+        bool redraw = false;
+
+        if (key == sk_Left && slot_idx > 0)
+        {
+            if (cur_h) { ti_Close(cur_h); cur_h = 0; }
+            slot_idx--;
+            cur_h = ti_Open(slot_names[slot_idx], "r");
+            cur_data = cur_h ? (const uint8_t *)ti_GetDataPtr(cur_h) : NULL;
+            cur_size = cur_h ? (uint16_t)ti_GetSize(cur_h) : 0;
+            line_tot = cur_data ? log_count_lines(cur_data, cur_size) : 0;
+            int visible = UI_CONTENT_H / ((int)os_FontGetHeight() + 2);
+            line_top = (line_tot > visible) ? line_tot - visible : 0;
+            redraw = true;
+        }
+        else if (key == sk_Right && slot_idx < slot_total - 1)
+        {
+            if (cur_h) { ti_Close(cur_h); cur_h = 0; }
+            slot_idx++;
+            cur_h = ti_Open(slot_names[slot_idx], "r");
+            cur_data = cur_h ? (const uint8_t *)ti_GetDataPtr(cur_h) : NULL;
+            cur_size = cur_h ? (uint16_t)ti_GetSize(cur_h) : 0;
+            line_tot = cur_data ? log_count_lines(cur_data, cur_size) : 0;
+            int visible = UI_CONTENT_H / ((int)os_FontGetHeight() + 2);
+            line_top = (line_tot > visible) ? line_tot - visible : 0;
+            redraw = true;
+        }
+        else if (key == sk_Up && line_top > 0)
+        {
+            line_top--;
+            redraw = true;
+        }
+        else if (key == sk_Down && line_top < line_tot - 1)
+        {
+            line_top++;
+            redraw = true;
+        }
+
+        if (redraw && cur_data)
+            log_render_slot(cur_data, cur_size,
+                            log_line_offset(cur_data, cur_size, line_top),
+                            slot_idx, slot_total);
+    }
+
+    if (cur_h) ti_Close(cur_h);
     fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
     return true;
 }
@@ -2621,6 +2978,24 @@ int main(void)
     lwip_app_config_load(&g_cfg);
     config_sync_from_cfg();
 
+    if (g_cfg.file_log_enabled)
+        lwip_log_file_start(g_cfg.log_archive_slots);
+    {
+        uint8_t lh = ti_Open(LWIP_LOG_APPVAR, "r");
+        if (lh) { g_log_available = ti_GetSize(lh) > 0; ti_Close(lh); }
+        if (!g_log_available)
+        {
+            uint8_t mh = ti_Open(LWIP_LOG_META_APPVAR, "r");
+            if (mh)
+            {
+                uint8_t meta[3] = {0};
+                ti_Read(meta, 1, 3, mh);
+                ti_Close(mh);
+                g_log_available = meta[1] > 0;
+            }
+        }
+    }
+
     // Clear screen and set up font
     boot_ClearVRAM();
     os_FontSelect(os_SmallFont);
@@ -2669,10 +3044,14 @@ int main(void)
             {
                 lwip_app_config_save(&g_cfg);
                 config_sync_from_cfg();
+                lwip_app_config_refresh();
+                pcap_apply_config();
             }
 #else
             lwip_app_config_save(&g_cfg);
             config_sync_from_cfg();
+            lwip_app_config_refresh();
+            pcap_apply_config();
 #endif
             ui_draw_menu(selected, scroll_pos, false);
             continue;
@@ -2733,6 +3112,41 @@ int main(void)
                 {
                     g_cfg.pcap_max_bytes = next;
                     option_sync_from_cfg(opt);
+                    value_changed = true;
+                }
+            }
+            else if ((key == sk_Left || key == sk_Right) &&
+                     edit_mode == EDIT_LOG_SLOTS && edit_option >= 0)
+            {
+                struct config_option *opt = &config_options[edit_option];
+                uint8_t current = g_cfg.log_archive_slots;
+                uint8_t next = current;
+                if (key == sk_Left && current > LWIP_CFG_LOG_ARCHIVE_SLOTS_MIN)
+                    next = (uint8_t)(current - 1u);
+                else if (key == sk_Right && current < LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX)
+                    next = (uint8_t)(current + 1u);
+                if (next != current)
+                {
+                    g_cfg.log_archive_slots = next;
+                    option_sync_from_cfg(opt);
+                    value_changed = true;
+                }
+            }
+            else if ((key == sk_Left || key == sk_Right) &&
+                     edit_mode == EDIT_LOG_VERBOSITY && edit_option >= 0)
+            {
+                struct config_option *opt = &config_options[edit_option];
+                uint8_t current = g_cfg.log_verbosity;
+                uint8_t next = current;
+                if (key == sk_Left && current > LWIP_CFG_LOG_VERBOSITY_MIN)
+                    next = (uint8_t)(current - 1u);
+                else if (key == sk_Right && current < LWIP_CFG_LOG_VERBOSITY_MAX)
+                    next = (uint8_t)(current + 1u);
+                if (next != current)
+                {
+                    g_cfg.log_verbosity = next;
+                    option_sync_from_cfg(opt);
+                    apply_logging_config();
                     value_changed = true;
                 }
             }
@@ -2834,6 +3248,16 @@ int main(void)
                 else if (opt->id == OPT_PCAP_MAX_SIZE)
                 {
                     edit_mode = EDIT_PCAP_SIZE;
+                    edit_option = selected;
+                }
+                else if (opt->id == OPT_LOG_ARCHIVE_SLOTS)
+                {
+                    edit_mode = EDIT_LOG_SLOTS;
+                    edit_option = selected;
+                }
+                else if (opt->id == OPT_LOG_VERBOSITY)
+                {
+                    edit_mode = EDIT_LOG_VERBOSITY;
                     edit_option = selected;
                 }
                 ui_draw_single_option(selected, scroll_pos, selected, true);

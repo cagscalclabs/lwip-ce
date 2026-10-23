@@ -948,7 +948,12 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         }
     }
 
-    /* Issuer CN — captured for truststore root lookup. */
+    /* Issuer CN — captured for truststore root lookup. Each cert processed
+     * overwrites this with its own issuer CN, so once the walk finishes it
+     * holds the topmost cert's issuer. A cert with no/empty issuer CN must
+     * clear it rather than leave an earlier (non-topmost) cert's value
+     * stale -- otherwise root anchoring below would silently validate
+     * against the wrong issuer name. */
     if (cert.issuer_cn && cert.issuer_cn_len > 0)
     {
         uint8_t copy_len = (cert.issuer_cn_len < TLS_TRUSTSTORE_SUBJECT_LEN)
@@ -958,6 +963,12 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         memset(w->topmost_issuer_cn + copy_len, 0,
                TLS_TRUSTSTORE_SUBJECT_LEN - copy_len);
         w->topmost_issuer_cn_len = copy_len;
+    }
+    else
+    {
+        DEBUG(); /* this cert's issuer has no CN -- clearing so a stale earlier value can't be used */
+        memset(w->topmost_issuer_cn, 0, TLS_TRUSTSTORE_SUBJECT_LEN);
+        w->topmost_issuer_cn_len = 0;
     }
 
     if (!tls_cert_chain_verify_one(w, &cert, is_leaf))
@@ -1317,6 +1328,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         off += take;
         if (ctx->hs_reasm_len < 4)
         {
+            DEBUG(); /* still waiting on the rest of a split handshake header */
             return true; /* Still need more header bytes. */
         }
         size_t body_len = ((size_t)ctx->hs_reasm_buf[1] << 16) |
@@ -1379,6 +1391,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
 
         if (!tls_inflight_message_complete(ctx))
         {
+            DEBUG(); /* in-flight handshake message reassembly still incomplete */
             return true; /* Still incomplete; wait for more. */
         }
 
@@ -1746,10 +1759,9 @@ bool tls_handshake_init(
     ctx->server_seq_num = 0;
 
     INFO("init: client random");
-    /* The public byte API generates through Hash_DRBG and fails closed if
-     * initial instantiation or mandatory reseeding cannot obtain entropy. */
-    if (tls_random_bytes(ctx->client_random,
-                         sizeof(ctx->client_random)) == NULL)
+    if (tls_random_bytes_ex(ctx->client_random,
+                            sizeof(ctx->client_random),
+                            TLS_RNG_STRENGTH_128) == NULL)
     {
         ERROR_CODE(0x2b);
         return false;
@@ -1766,9 +1778,9 @@ bool tls_handshake_init(
     }
 
     INFO("init: private random");
-    /* Generate ephemeral X25519 keypair for ECDHE */
-    if (tls_random_bytes(ctx->ecdhe_private,
-                         sizeof(ctx->ecdhe_private)) == NULL)
+    if (tls_random_bytes_ex(ctx->ecdhe_private,
+                            sizeof(ctx->ecdhe_private),
+                            TLS_RNG_STRENGTH_128) == NULL)
     {
         ERROR_CODE(0x2c);
         return false;
@@ -1783,12 +1795,10 @@ bool tls_handshake_init(
         return false;
     }
 
-    INFO("init: X25519 done");
-
-    /* Generate ephemeral P-256 keypair for ECDHE */
     INFO("init: P-256 private random");
-    if (tls_random_bytes(ctx->p256_private,
-                         sizeof(ctx->p256_private)) == NULL)
+    if (tls_random_bytes_ex(ctx->p256_private,
+                            sizeof(ctx->p256_private),
+                            TLS_RNG_STRENGTH_128) == NULL)
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
         ERROR_CODE(0x2b);
@@ -1806,7 +1816,6 @@ bool tls_handshake_init(
         ERROR_CODE(0x2b);
         return false;
     }
-    INFO("init: P-256 done");
 
     ctx->ecdhe_negotiated = false;
     ctx->hostname = NULL;
@@ -3023,6 +3032,16 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
             return false;
         }
     }
+    else
+    {
+        /* The topmost certificate's issuer has no (or an unparsed) CN, so
+         * there is nothing to look up in the truststore. Per RFC 5280
+         * section 6.1 the path must end at a trust anchor; silently
+         * accepting an unanchored chain here would be a fail-open. */
+        ERROR();
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
 
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
     DEBUG();
@@ -3920,12 +3939,17 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         }
     }
 
-    /* Step 5: Get transcript hash (ClientHello...ServerHello). */
-    tls_secure_memzero(transcript_hash, 32);
-    if (ctx->transcript_hash)
+    /* Step 5: Get transcript hash (ClientHello...ServerHello). A missing
+     * transcript_hash context means transcript hashing was never started
+     * for this connection -- deriving keys against 32 zero bytes instead
+     * would silently produce the wrong secret rather than failing, so
+     * refuse instead of falling back. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb5);
+        return false;
     }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Step 6: Derive client handshake traffic secret
      * client_handshake_traffic_secret =
@@ -4086,12 +4110,16 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     }
     memcpy(ctx->keys.master_secret, master_secret, 32);
 
-    /* Step 4: Get transcript hash (ClientHello...server Finished). */
-    tls_secure_memzero(transcript_hash, 32);
-    if (ctx->transcript_hash)
+    /* Step 4: Get transcript hash (ClientHello...server Finished). A
+     * missing transcript_hash context means transcript hashing was never
+     * started for this connection -- fail rather than silently deriving
+     * against 32 zero bytes. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb6);
+        return false;
     }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Step 5: Derive client application traffic secret
      * client_application_traffic_secret =
@@ -4244,15 +4272,16 @@ bool tls_send_finished(
         return false;
     }
 
-    /* Step 3: Get transcript hash up to this point */
-    if (ctx->transcript_hash)
+    /* Step 3: Get transcript hash up to this point. A missing
+     * transcript_hash context means transcript hashing was never started
+     * for this connection -- fail rather than computing verify_data
+     * against 32 zero bytes. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb7);
+        return false;
     }
-    else
-    {
-        tls_secure_memzero(transcript_hash, 32);
-    }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Step 4: Compute verify_data = HMAC(finished_key, transcript_hash) */
     if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
@@ -4444,15 +4473,17 @@ static bool tls_recv_finished(
         return false;
     }
 
-    /* Get transcript hash (before this Finished message) */
-    if (ctx->transcript_hash)
+    /* Get transcript hash (before this Finished message). A missing
+     * transcript_hash context means transcript hashing was never started
+     * for this connection -- fail rather than verifying against 32 zero
+     * bytes, even though a real peer's verify_data would not match a
+     * zero-transcript expectation either way. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb8);
+        return false;
     }
-    else
-    {
-        tls_secure_memzero(transcript_hash, 32);
-    }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Compute expected verify_data */
     if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
@@ -4639,6 +4670,7 @@ static bool tls_recv_new_session_ticket(
         /* Some TLS 1.3 servers emit tickets larger than the calculator-side
          * PSK identity store. Ignore those tickets rather than aborting an
          * otherwise healthy application connection. */
+        DEBUG(); /* ticket ignored: zero-length or exceeds PSK identity store -- resumption skipped */
         return true;
     }
     if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
@@ -4647,6 +4679,7 @@ static bool tls_recv_new_session_ticket(
                                nonce, nonce_len,
                                ctx->psk, 32))
     {
+        DEBUG(); /* PSK derivation from ticket nonce failed -- resumption skipped, connection stays up */
         return true;
     }
 
@@ -4857,6 +4890,7 @@ bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx)
     if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE) return false;
     if (ctx->client_seq_num < tls_cipher_suite_record_limit(ctx->cipher_suite) - 1u)
         return true;
+    DEBUG(); /* record sequence number crossed cipher suite's limit -- sending KeyUpdate */
     return tls_send_key_update_record(ctx);
 }
 

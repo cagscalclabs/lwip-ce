@@ -21,74 +21,11 @@ struct lwip_chat_state
     lwip_error_t err;
 };
 
-static struct lwip_chat_state *lwip_chat_debug_state;
-
 static void lwip_chat_append_system(struct lwip_chat_state *state,
                                     const char *message)
 {
     lwip_example_chat_append(&state->chat, "* ", message, strlen(message));
     lwip_example_chat_render(&state->chat);
-}
-
-static void lwip_chat_debug_cb(const struct lwip_event *ev)
-{
-    struct lwip_chat_state *state = lwip_chat_debug_state;
-    char line[48];
-
-    if (!ev || !state)
-    {
-        return;
-    }
-
-    switch (ev->kind)
-    {
-    case LWIP_EV_INFO:
-        snprintf(line, sizeof(line), "%s: %s",
-                 lwip_debug_module_name(ev->module),
-                 ev->data.msg ? ev->data.msg : "");
-        break;
-    case LWIP_EV_DEBUG:
-        snprintf(line, sizeof(line), "%s %s:%u",
-                 lwip_debug_module_name(ev->module),
-                 lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                 (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc));
-        break;
-    case LWIP_EV_WARN:
-        snprintf(line, sizeof(line), "!%s %s:%u x%u",
-                 lwip_debug_module_name(ev->module),
-                 lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                 (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                 (unsigned)ev->data.code.extra);
-        break;
-    case LWIP_EV_ERROR:
-        snprintf(line, sizeof(line), "X%s %s:%u x%u",
-                 lwip_debug_module_name(ev->module),
-                 lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                 (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                 (unsigned)ev->data.code.extra);
-        break;
-    case LWIP_EV_STATE_CHG:
-        snprintf(line, sizeof(line), "%s -> %s",
-                 lwip_debug_module_name(ev->module),
-                 lwip_debug_state_change_name(ev->data.state.change_event));
-        break;
-    case LWIP_EV_IO_FILE:
-        snprintf(line, sizeof(line), "%s io:%s %s %u",
-                 lwip_debug_module_name(ev->module),
-                 ev->data.file.name ? ev->data.file.name : "?",
-                 ev->data.file.dir == LWIP_IO_WRITE ? "w" : "r",
-                 (unsigned)ev->data.file.bytes);
-        break;
-    case LWIP_EV_IO_ETH:
-        snprintf(line, sizeof(line), "%s io:eth %s %u",
-                 lwip_debug_module_name(ev->module),
-                 ev->data.eth.dir == LWIP_IO_TX ? "tx" : "rx",
-                 (unsigned)ev->data.eth.bytes);
-        break;
-    default:
-        return;
-    }
-    lwip_chat_append_system(state, line);
 }
 
 static void lwip_chat_on_readable(struct lwip_chat_state *state,
@@ -167,8 +104,7 @@ static void lwip_chat_on_event(struct lwip_socket *sock,
 static int lwip_chat_run(lwip_socket_type_t protocol,
                          const char *title,
                          const char *host,
-                         uint16_t port,
-                         bool debug)
+                         uint16_t port)
 {
     struct lwip_socket *sock = NULL;
     struct lwip_chat_state *state = NULL;
@@ -209,11 +145,6 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
     }
 
     lwip_example_chat_begin(&state->chat, title);
-    if (debug)
-    {
-        lwip_chat_debug_state = state;
-        lwip_set_event_cb(lwip_chat_debug_cb);
-    }
 
     sock = lwip_socket_create(protocol, LWIP_NETIF_EXT, NULL, 30000);
     if (!sock)
@@ -347,11 +278,6 @@ static int lwip_chat_run(lwip_socket_type_t protocol,
     result = 0;
 
 cleanup:
-    if (debug)
-    {
-        lwip_set_event_cb(NULL);
-        lwip_chat_debug_state = NULL;
-    }
     if (sock)
     {
         if (state && state->exiting)

@@ -24,6 +24,7 @@ extern bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx);
 #include "../../tls/includes/bytes.h"
 #include "../../tls/includes/crypto_guard.h"
 #include "../../tls/includes/handshake.h"
+#include "../../tls/includes/random.h"
 #include "../../tls/includes/tls.h"
 #include "../../drivers/mem.h"
 
@@ -134,6 +135,10 @@ static void altcp_tls_ce_release_pending(altcp_tls_ce_state_t *state, size_t bud
 {
     if (!state || !state->conn || !state->conn->inner_conn)
     {
+        if (state && state->rx_throttle_pending > 0)
+        {
+            DEBUG(); /* throttled recved bytes stuck un-acked: conn/inner_conn gone before release */
+        }
         return;
     }
 
@@ -186,6 +191,7 @@ static void altcp_tls_ce_rx_release_arm(void)
 
     if (!altcp_tls_ce_has_pending_recved())
     {
+        DEBUG(); /* nothing throttled pending -- disarming the rx-release dispatcher */
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
         return;
     }
@@ -193,6 +199,7 @@ static void altcp_tls_ce_rx_release_arm(void)
     interval_ms = altcp_tls_ce_rx_release_interval_ms(g_tls_rx_throttle_level);
     if (interval_ms == 0)
     {
+        DEBUG(); /* release interval computed as 0 at current throttle level -- disarming instead of busy-looping */
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
         return;
     }
@@ -685,6 +692,13 @@ static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
         altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)added);
         state->rx_acked_len += added;
     }
+    else if (added != 0 && !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
+        /* Handshake still in progress but conn/inner_conn is gone: the
+         * pre-ack that keeps the window open for a multi-segment handshake
+         * record (see comment above) did NOT happen this time. */
+        DEBUG();
+    }
 }
 
 /* Release `n` bytes from the front of state->rx and ack to the lower TCP only
@@ -700,6 +714,7 @@ static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n)
     if (state->rx_acked_len >= n)
     {
         /* Entire span was already acked at queue time. */
+        DEBUG();
         state->rx_acked_len -= n;
         return;
     }
@@ -1042,6 +1057,40 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         return ERR_OK; /* already sent (and not retrying after HRR) */
     }
 
+    /* Deferred key generation: tls_handshake_init was not called at setup time
+     * because the async DRBG may not have been seeded yet. Attempt it now; if
+     * the RNG is still not ready (tls_random_bytes_ex returns NULL immediately
+     * rather than spinning), return ERR_MEM so the caller retries next tick. */
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED))
+    {
+        struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
+        bool init_ok;
+        tls_dbg_status("clienthello: deferred hs init");
+        if (config->psk_mode)
+        {
+            init_ok = tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity);
+            if (init_ok)
+                state->tls_ctx.psk_type = config->psk_type;
+        }
+        else
+        {
+            init_ok = tls_handshake_init(&state->tls_ctx, NULL, NULL);
+        }
+        if (!init_ok)
+        {
+            /* Encode (rng_state << 8 | last_failure) so the caller can decode
+             * both from a single WARN_CODE event on the calc's debug console. */
+            WARN_CODE(((uint16_t)tls_rng_status() << 8) |
+                      (uint16_t)tls_rng_last_failure());
+            tls_dbg_status("clienthello: hs init not ready, retry");
+            return ERR_MEM; /* retry next tick */
+        }
+        /* tls_handshake_init nulls out hostname; reapply from config. */
+        state->tls_ctx.hostname = config->hostname;
+        state->tls_ctx.alpn_protocols = config->alpn_protocols;
+        state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
+        state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
+    }
 
     /* Generate the ClientHello exactly once per attempt. tls_send_client_hello
      * folds it into the transcript hash as a side effect, so it must never be
@@ -1219,6 +1268,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 {
                     /* Record split across TCP segments — wait for the rest.
                      * Large messages (Certificate) commonly land here. */
+                    DEBUG();
                     break;
                 }
 
@@ -1306,6 +1356,10 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     uint8_t *tmp = (uint8_t *)mem_malloc(total_len);
                     if (!tmp)
                     {
+                        /* Allocation failed: leave the record queued and
+                         * retry on the next tick/recv rather than aborting
+                         * on transient memory pressure. */
+                        DEBUG();
                         return ERR_OK;
                     }
                     mem_stats_tls_direct_add(total_len, total_len);
@@ -1696,6 +1750,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
         if ((size_t)state->rx->tot_len < total_rec_len)
         {
+            DEBUG(); /* app-data record split across segments -- waiting for the rest */
             break;
         }
 
@@ -1720,6 +1775,9 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                                                            &inner_type);
         if (dec_err == ERR_MEM)
         {
+            /* Decrypt buffer allocation failed: leave the record queued and
+             * retry on the next tick/recv. */
+            DEBUG();
             return ERR_OK;
         }
         if (dec_err != ERR_OK)
@@ -1835,6 +1893,9 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             {
                 return ERR_ABRT;
             }
+            /* Non-fatal, non-abort error delivering decrypted app data to
+             * the application layer -- bytes stay queued, retried later. */
+            DEBUG();
             return ERR_OK;
         }
         tls_dbg_status("rx: app delivered");
@@ -1999,35 +2060,9 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->conf = conf;
     state->conn = conn;
 
-    /* Initialize TLS handshake context */
-    if (config->psk_mode)
-    {
-        tls_dbg_status("setup: hs init psk");
-        if (!tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity))
-        {
-            tls_dbg_status("setup: hs init fail");
-            mem_stats_tls_direct_release(sizeof(*state), sizeof(*state));
-            mem_free(state);
-            return ERR_MEM;
-        }
-        state->tls_ctx.psk_type = config->psk_type;
-    }
-    else
-    {
-        tls_dbg_status("setup: hs init full");
-        if (!tls_handshake_init(&state->tls_ctx, NULL, NULL))
-        {
-            tls_dbg_status("setup: hs init fail");
-            mem_stats_tls_direct_release(sizeof(*state), sizeof(*state));
-            mem_free(state);
-            return ERR_MEM;
-        }
-    }
-
-    /* Set SNI hostname if configured */
-    state->tls_ctx.hostname = config->hostname;
-    state->tls_ctx.alpn_protocols = config->alpn_protocols;
-    state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
+    /* tls_handshake_init (which consumes RNG entropy) is deferred to the first
+     * send_client_hello call, by which point the async DRBG will be seeded.
+     * hostname/alpn are applied there too, since tls_handshake_init nulls them. */
 
     /* Wire the transport write hook so handshake.c can emit alerts and
      * close_notify without depending on lwIP/altcp directly. */
@@ -2041,6 +2076,7 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->rx_throttle_pending = 0;
     tls_state_add(state);
     mem_set_global_pressure_cb(altcp_tls_ce_set_rx_throttle);
+
     tls_dbg_status("setup: done");
 
     return ERR_OK;
@@ -2276,6 +2312,10 @@ altcp_tls_ce_sndbuf(struct altcp_pcb *conn)
 
         if (!state || !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
         {
+            /* Reports 0 until the handshake completes -- an app write stall
+             * here is expected/by-design, not a bug, but worth being able
+             * to see when diagnosing "writes never happen". */
+            DEBUG();
             return 0;
         }
 

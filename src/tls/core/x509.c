@@ -441,6 +441,7 @@ bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
     bool have_eku = false, server_auth = false;
     size_t path_len = 0;
 
+    DEBUG(); /* path-extension validation entry: is_ca / subordinate_ca_count given by caller */
     if (!cert || !cert->extensions || cert->extensions_len == 0)
         return !is_ca; /* leaf extensions may be absent; CA constraints may not */
     if (!tls_asn1_cursor_init(&outer, cert->extensions, cert->extensions_len))
@@ -562,9 +563,35 @@ basic_constraints_done:
     }
 
     if (is_ca)
+    {
+        if (!have_bc || !ca)
+        {
+            DEBUG(); /* CA cert rejected: basicConstraints missing or CA=false */
+        }
+        else if (have_ku && !key_cert_sign)
+        {
+            DEBUG(); /* CA cert rejected: keyUsage present but keyCertSign not set */
+        }
+        else if (have_path_len && subordinate_ca_count > path_len)
+        {
+            DEBUG(); /* CA cert rejected: chain depth exceeds this cert's pathLenConstraint */
+        }
+        else if (have_eku && !server_auth)
+        {
+            DEBUG(); /* CA cert rejected: EKU present but lacks serverAuth/anyEKU */
+        }
         return have_bc && ca && (!have_ku || key_cert_sign) &&
                (!have_path_len || subordinate_ca_count <= path_len) &&
                (!have_eku || server_auth);
+    }
+    if (have_ku && !digital_signature)
+    {
+        DEBUG(); /* leaf cert rejected: keyUsage present but digitalSignature not set */
+    }
+    else if (have_eku && !server_auth)
+    {
+        DEBUG(); /* leaf cert rejected: EKU present but lacks serverAuth/anyEKU */
+    }
     return (!have_ku || digital_signature) && (!have_eku || server_auth);
 }
 
@@ -854,8 +881,13 @@ bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
 
     uint8_t ip[16];
     int ip_len = tls_identity_ip(hostname, ip);
-    ERROR_CODE(0x25);
-    if (ip_len < 0) return false;
+    if (ip_len < 0)
+    {
+        /* Malformed IP-literal syntax (e.g. a hex/octal alias): reject
+         * outright rather than authenticate it as a DNS identity. */
+        ERROR_CODE(0x25);
+        return false;
+    }
 
     if (tls_x509_san_matches(ext_data, ext_len, hostname, hostname_len,
                               ip, (size_t)ip_len, &san_present))
@@ -863,6 +895,14 @@ bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
 
     (void)subject_cn;
     (void)subject_cn_len;
+    if (san_present)
+    {
+        DEBUG(); /* SAN extension present but none of its entries matched the hostname */
+    }
+    else
+    {
+        DEBUG(); /* no SAN extension at all -- RFC 9525 forbids falling back to CN */
+    }
     ERROR_CODE(0x26);
     return false; /* RFC 9525: identifiers must come from subjectAltName. */
 }

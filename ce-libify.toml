@@ -45,6 +45,7 @@ imports = [
     "ti_SetArchiveStatus",
     "ti_Delete",
     "ti_GetDataPtr",
+    "ti_Rename",
 ]
 
 [app.make]

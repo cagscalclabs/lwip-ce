@@ -26,7 +26,6 @@ func,lwip_socket_resize_rx_max,socket,src/lwIP.h,lwip.h
 func,lwip_socket_set_timeout,socket,src/lwIP.h,lwip.h
 func,lwip_socket_last_error,socket,src/lwIP.h,lwip.h
 func,lwip_socket_get_netif,socket,src/lwIP.h,lwip.h
-func,lwip_set_event_cb,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_get_traceback,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_module_name,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_file_name,core,src/include/lwip/logging.h,lwip/core/logging.h
@@ -69,9 +68,13 @@ func,tls_pbkdf2,cryptography,src/tls/includes/passwords.h,lwip/cryptography/pass
 func,tls_random_init_entropy,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_random,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_random_bytes,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
+func,tls_random_bytes_ex,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rng_healthcheck,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_request_random_bytes,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rng_is_busy,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
+func,tls_rng_status,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
+func,tls_rng_available_strength,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
+func,tls_rng_last_failure,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rng_compute_stats,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rsa_encode_oaep,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
 func,tls_rsa_decode_oaep,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
@@ -399,8 +402,7 @@ func,udp_netif_ip_addr_changed,udp,src/include/lwip/udp.h,lwip/core/udp.h
 func,eth_get_interfaces,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
 func,netif_is_link_error,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
 func,eth_usb_event_callback,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
-func,pcap_enable_on_netif,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
-func,pcap_disable_on_netif,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
+func,pcap_apply_config,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
 func,pcap_flush,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
 func,pcap_init_reader_ctx,driver,src/drivers/pcap.h,lwip/drivers/pcap.h
 func,pcap_set_filter_netif,driver,src/drivers/pcap.h,lwip/drivers/pcap.h

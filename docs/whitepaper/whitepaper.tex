@@ -1038,7 +1038,7 @@ for (uint8_t i = 0; i < count; i++) {
 	\[
 		H_{\text{raw,collection}}=\RngRawSamplesPerCollection h_{\text{all models}}=\RngOverallRawCollectionH\ \text{bits},
 	\]
-	The implementation rounds the measured cross-model value down to the configurable policy value $h_{\text{policy}}=0.35$, yielding $952(0.35)=333.20$ provisionally accounted raw bits per collection. The contribution is then credited as
+	The implementation rounds the measured cross-model value down to the configurable policy value $h_{\text{policy}}=0.34$, yielding $952(0.34)=323.68$ provisionally accounted raw bits per collection. The contribution is then credited as
 	\[
 		H_{\text{credited}}=\min(256,952h_{\text{policy}})=\RngOverallCredit\ \text{bits}.
 	\]
@@ -1049,7 +1049,7 @@ for (uint8_t i = 0; i < count; i++) {
 	
 	Applications obtain random output through \texttt{tls\_random\_bytes()}, which is backed by SHA-256 Hash\_DRBG; the deprecated \texttt{tls\_random()} entry point is a compatibility wrapper over the same generator. Raw tap collection and conditioning are internal and cannot be requested through the public API.
 	
-	When the stack starts, it selects the SRAM tap and enables a 50\,ms entropy-collection dispatcher. Entropy-backed output can also be requested asynchronously through \texttt{tls\_request\_random\_bytes()}.
+	When the stack starts, it enables a 50\,ms RNG lifecycle dispatcher. The first callback performs the complete, blocking SRAM tap-selection scan; failures are retried until an absolute 15-second readiness deadline expires. Subsequent callbacks perform one conditioned entropy contribution at a time. Entropy-backed output can also be requested asynchronously through \texttt{tls\_request\_random\_bytes()}.
 		\inputminted[
 			breaklines,
 			breakanywhere,
@@ -1062,9 +1062,9 @@ for (uint8_t i = 0; i < count; i++) {
 		\item If \texttt{blocking=false}, execution returns to the caller immediately; the callback function fires when the request is fulfilled.
 	\end{itemize}
 	
-		Each conditioned contribution described in the Entropy Collection Model supplies at most 256 credited bits. Initial instantiation uses two independent contributions: the first supplies a 256-bit entropy input and the second supplies a 256-bit nonce. SP~800-90A requires only 128 bits of nonce entropy at this security strength, but retaining the complete second SHA-256 digest avoids discarding already-conditioned output. The stronger-than-required nonce provides margin against moderate entropy-source degradation without raising the claimed security strength beyond 256 bits; tap failure remains tap failure and causes the generator to fail closed. The concatenated seed material is passed through Hash\_df, satisfying the SP~800-90A Rev.~1 instantiation requirements for 256-bit security strength.
+		Each conditioned contribution described in the Entropy Collection Model supplies at most 256 credited bits. The first contribution instantiates a 128-bit Hash\_DRBG; its 256 credited bits exceed SP~800-90A Rev.~1's $3/2$-strength combined entropy-and-nonce requirement. This makes the generator available for the library's 128-bit TLS 1.3 suites after one contribution. The dispatcher then gathers two entirely fresh contributions for a separate 256-bit instance: a 256-bit entropy input and a separately conditioned 256-bit nonce. Seed material from the 128-bit instance is not reused. Once the second instance is complete, it atomically replaces and wipes the 128-bit instance.
 
-		After instantiation, one complete contribution is retained and incorporated by the next Hash\_DRBG reseed. DRBG output does not consume entropy credit one-for-one; the timer replenishes the reseed reserve independently and stops while that reserve is full.
+		After promotion, one complete contribution is retained and incorporated by the next Hash\_DRBG reseed. DRBG output does not consume entropy credit one-for-one; the timer replenishes the reseed reserve independently and stops while that reserve is full.
 		This is a 256-bit algorithmic security-strength claim under the documented entropy-source assumptions, not a hardware state-protection claim or a certification claim. The calculator provides no isolated execution environment, immutable monotonic state, secure persistent storage, or guaranteed secure erasure. An attacker able to read or modify process memory can obtain or replace the Hash\_DRBG working state and any pending reseed material; restoring an earlier calculator state can likewise roll the generator back. The Hash\_DRBG state update retains its ordinary algorithmic backtracking properties under its erasure assumptions, but lwIP-CE cannot claim resistance to physical or privileged state compromise on this hardware. Recovery after compromise requires a subsequent healthy entropy collection performed after the attacker has lost access.
 		In blocking mode, \texttt{tls\_request\_random\_bytes()} performs only entropy work required for initial instantiation or mandatory reseeding. In non-blocking mode, requests are queued and completed by the dispatcher.
 		

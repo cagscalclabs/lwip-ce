@@ -16,6 +16,15 @@
 #define LWIP_CFG_PCAP_SIZE_32K (32u * 1024u)
 #define LWIP_CFG_PCAP_SIZE_DEFAULT LWIP_CFG_PCAP_SIZE_4K
 
+/* Hard cap on each log file.  Not user-configurable; kept here for reference
+ * by log_file.c and the config app. */
+#define LWIP_CFG_LOG_FILE_MAX_BYTES  (16u * 1024u)
+
+/* Range for the user-configurable archive slot count. */
+#define LWIP_CFG_LOG_ARCHIVE_SLOTS_MIN     1u
+#define LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX     9u
+#define LWIP_CFG_LOG_ARCHIVE_SLOTS_DEFAULT 2u
+
 #define LWIP_CFG_DNS                  (1u << 0) /* legacy config bit */
 #define LWIP_CFG_LOG_USB              (1u << 1) /* legacy config bit */
 #define LWIP_CFG_AUTO_NTP             (1u << 2) /* legacy config bit */
@@ -36,17 +45,20 @@
 /* Vestigial log-config fields. The appvar-backed log system was replaced by
  * the unified event callback (lwip_set_event_cb). */
 #define LWIP_CFG_LOG_ENABLED_DEF    1u
-#define LWIP_CFG_LOG_LEVEL_DEF      3u   /* was LWIP_LOG_LEVEL_ERROR */
-#define LWIP_CFG_LOG_LEVEL_MIN      1u
-#define LWIP_CFG_LOG_LEVEL_MAX      4u
+
+/* User-configurable verbosity gate (see lwip_log_verbosity_t). Persisted as
+ * a plain uint8_t matching that enum's values. */
+#define LWIP_CFG_LOG_VERBOSITY_DEFAULT LWIP_LOG_VERBOSITY_INFO
+#define LWIP_CFG_LOG_VERBOSITY_MIN     LWIP_LOG_VERBOSITY_ERROR
+#define LWIP_CFG_LOG_VERBOSITY_MAX     LWIP_LOG_VERBOSITY_DEBUG
 
 typedef struct lwip_app_config {
     uint16_t lwip_mem_cap;
     uint8_t flags;
-    uint8_t log_enabled;
+    uint8_t log_enabled;     /* vestigial; do not use */
     int16_t tz_offset_minutes;
     uint8_t dst_enabled;
-    uint8_t log_min_level;
+    uint8_t log_verbosity;   /* lwip_log_verbosity_t: ERROR|WARNING|INFO|DEBUG */
     /* Deprecated alias retained for source compatibility. */
     union {
         uint16_t pcap_max_bytes;
@@ -54,6 +66,9 @@ typedef struct lwip_app_config {
     };
     char hostname[LWIP_CFG_HOSTNAME_MAX];
     uint8_t tls_enabled;
+    uint8_t pcap_enabled;       /* User-persisted PCAP on/off toggle. */
+    uint8_t file_log_enabled;   /* Route all events to lwIPLog appvar. */
+    uint8_t log_archive_slots;  /* How many archive slots to keep (1-9). */
 } lwip_app_config_t;
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg);

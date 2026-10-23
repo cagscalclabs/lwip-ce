@@ -27,7 +27,6 @@
 	export	lwip_socket_set_timeout
 	export	lwip_socket_last_error
 	export	lwip_socket_get_netif
-	export	lwip_set_event_cb
 	export	lwip_get_traceback
 	export	lwip_debug_module_name
 	export	lwip_debug_file_name
@@ -398,8 +397,6 @@
 	export	eth_get_interfaces
 	export	netif_is_link_error
 	export	eth_usb_event_callback
-	export	pcap_enable_on_netif
-	export	pcap_disable_on_netif
 	export	pcap_flush
 	export	pcap_init_reader_ctx
 	export	pcap_set_filter_netif
@@ -455,3 +452,7 @@
 	export	tls_p256_sign
 	export	tls_p256_verify
 	export	lwip_socket_set_tls_psk
+	export	tls_random_bytes_ex
+	export	tls_rng_status
+	export	tls_rng_available_strength
+	export	tls_rng_last_failure

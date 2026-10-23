@@ -21,7 +21,8 @@ def function(name):
     return source[start:end]
 
 names = ['netif_service_base_ready', 'netif_service_ready',
-         'socket_netif_changed', 'socket_required_services', 'socket_network_ready',
+         'socket_netif_changed', 'socket_required_services', 'socket_uses_tls',
+         'socket_network_ready',
          'conn_registry_has_waiting_services', 'conn_waiting_services_poll',
          'services_dispatch', 'services_arm']
 with tempfile.TemporaryDirectory() as tmp:

@@ -2,8 +2,7 @@
   "description": "Test TLS_HASH primitive",
   "transfer_files": [
     "bin/XHASH.8xp",
- "../../common/clibs.8xg",
-    "../../common/lwIPCERT.8xv",
+    "../../common/clibs.8xg",
     "../../common/lwIPINST.8xp",
     "../../common/LWIP.0.8xv",
     "../../common/LWIP.1.8xv",
@@ -12,6 +11,7 @@
     "../../common/LWIP.4.8xv",
     "../../common/LWIP.5.8xv",
     "../../common/LWIP.6.8xv",
+    "../../common/LWIP.7.8xv",
     "../../common/lwip.8xv"
   ],
   "target": {
@@ -19,6 +19,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|2000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|4",

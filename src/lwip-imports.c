@@ -32,4 +32,5 @@ void lwip_fileio_self_init(void)
     fn_imports_table.file.ti_setarchivestatus = ti_SetArchiveStatus;
     fn_imports_table.file.ti_delete           = ti_Delete;
     fn_imports_table.file.ti_getdataptr       = ti_GetDataPtr;
+    fn_imports_table.file.ti_rename           = ti_Rename;
 }
