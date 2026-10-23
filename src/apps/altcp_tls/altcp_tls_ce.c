@@ -1809,6 +1809,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             err_t pass_err = altcp_tls_ce_pass_rx_data(conn, state);
             if (pass_err == ERR_ABRT)
             {
+                /* ERROR_AUDIT: pass_rx_data emitted before abort. */
                 return ERR_ABRT;
             }
             if (state->rx_app != NULL)
