@@ -51,6 +51,7 @@
 #include "apps/altcp_tls/altcp_tls_ce.h"
 #include "apps/altcp_ws/altcp_ws.h"
 #include "tls/includes/tls.h"
+#include "wireless/wifi_hook.h"
 #include "tls/includes/random.h"
 
 #include <usbdrvce.h>
@@ -273,6 +274,9 @@ const char *lwip_version_string(void)
 bool lwip_stack_init(void)
 {
     lwip_sntp_clamp_rtc_floor(LWIP_MIN_PLAUSIBLE_CLOCK_UNIX);
+    /* Same reason: a program that died inside a Wi-Fi call leaves the
+     * request marked as waiting, and every later call would return busy. */
+    lwip_wifi_reset();
 
     if (g_lwip_stack_started)
     {
@@ -329,7 +333,7 @@ bool lwip_network_up(void)
      * fails we must roll back lwip_init's side effects — leaving
      * timeouts / netifs alive after lwip_network_up returned false would
      * let the next start attempt see a half-initialized stack. */
-    if (usb_fn.init(eth_usb_event_callback, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
+    if (usb_fn.init(eth_usb_event_callback, NULL, &eth_device_descriptors, USB_DEFAULT_INIT_FLAGS))
     {
         g_lwip_start_error = 2;
         g_lwip_started = true; /* let cleanup do its full sweep */

@@ -2,178 +2,235 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
 #include <ti/getcsc.h>
 #include <ti/screen.h>
 #include <ti/vars.h>
-#include <sys/rtc.h>
-#include <usbdrvce.h>
+#include <fileioc.h>
+#include <graphx.h>
 
-#include "lwip/init.h"
-#include "lwip/timeouts.h"
-#include "lwip/sys.h"
-#include "lwip/netif.h"
-#include "lwip/mem.h"
-#include "lwip/dhcp.h"
-#include "lwip/prot/dhcp.h"
-#include "lwip/ip4_addr.h"
-#include "lwip/ip4.h"
-#include "lwip/ip_addr.h"
-#include "lwip/apps/httpd.h"
-#include "lwip/apps/sntp.h"
-#include "lwip/sntp_time.h"
 #include "lwip/app_config.h"
-#include "lwip/dns.h"
-#include "lwip/icmp.h"
-#include "lwip/raw.h"
-#include "lwip/inet_chksum.h"
-#include "lwip/tcp.h"
-#include "lwip/logging.h"
-#include "lwip/teardown.h"
-#include "lwip/dispatch.h"
-
-#include "lwip/altcp.h"
-#include "lwip/altcp_tls.h"
-
-#include "drivers/mem.h"
-#include "drivers/usb_ethernet.h"
+#include "lwip/log_file.h"
+#include "lwip/mem.h"
 #include "drivers/pcap.h"
 #include "drivers/pcap_decode.h"
-#include <fileioc.h>
+#include "drivers/mem.h"
 #include "lwip-imports.h"
-#include "lwip/log_file.h"
 #include "lwIP.h"
-#include "tls/includes/handshake.h"
-#include "apps/altcp_tls/altcp_tls_ce.h"
+#include "app/ui.h"
+#include "app/wifi_screen.h"
 
-#define LWIP_CFG_TZ_MIN_MINUTES (-12 * 60)
-#define LWIP_CFG_TZ_MAX_MINUTES (14 * 60)
-#define LWIP_CFG_TZ_STEP_MINUTES 15
+#define TZ_MIN_MINUTES (-12 * 60)
+#define TZ_MAX_MINUTES (14 * 60)
+#define TZ_STEP_MINUTES 15
+#define PCAP_MAX_LIST 48
+#define PCAP_HEX_COLS 8
+#define TEXT_ROWS 14
+#define TEXT_COLS 48
+#define LOG_MAX_SLOTS (LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX + 1u)
 
-#ifndef LWIP_APP_ENABLE_SERVICE_EXAMPLES
-#define LWIP_APP_ENABLE_SERVICE_EXAMPLES 0
-#endif
-
-typedef enum
+enum
 {
-    F_TYPE_BOOL_TOGGLE,
-    F_TYPE_STRING,
-    F_TYPE_INT_SLIDER,
-    F_TYPE_ACTION,
-    F_TYPE_LABEL,
-    F_TYPE_SEPARATOR
-} f_type;
-
-typedef enum
-{
-    OPT_HOSTNAME = 0,
-    OPT_TZ_OFFSET,
-    OPT_DST,
-    OPT_TLS_ENABLED,
-    OPT_PCAP_ENABLED,
-    OPT_PCAP_MAX_SIZE,
-    OPT_VIEW_PCAP,
-    OPT_LOG_ENABLED,
-    OPT_LOG_VERBOSITY,
-    OPT_LOG_ARCHIVE_SLOTS,
-    OPT_VIEW_LOG,
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-    OPT_SEP_TESTS,
-    OPT_NTP_TEST,
-    OPT_HTTP_TEST,
-    OPT_DNS_TEST,
-    OPT_PING_TEST,
-    OPT_TCP_ECHO_TEST,
-    OPT_TLS_TEST,
-#endif
-    OPT_COUNT
-} config_option_id;
-
-typedef enum
-{
-    EDIT_NONE = 0,
-    EDIT_TZ,
-    EDIT_PCAP_SIZE,
-    EDIT_LOG_SLOTS,
-    EDIT_LOG_VERBOSITY
-} edit_mode_t;
-
-struct config_option;
-typedef bool (*config_setter_fn)(struct config_option *opt);
-
-struct config_option
-{
-    const char *name;
-    const char *hint;
-    config_option_id id;
-    f_type type;
-    config_setter_fn setter;
-    uint8_t value[4];
+    ROW_SECTION,
+    ROW_WIFI,
+    ROW_HOSTNAME,
+    ROW_TIMEZONE,
+    ROW_DST,
+    ROW_TLS,
+    ROW_CRYPTO_OFFLOAD,
+    ROW_BRIDGE_RNG,
+    ROW_PCAP_ENABLED,
+    ROW_PCAP_SIZE,
+    ROW_PCAP_VIEW,
+    ROW_LOG_ENABLED,
+    ROW_LOG_VERBOSITY,
+    ROW_LOG_SLOTS,
+    ROW_LOG_VIEW
 };
 
-static bool run_main = true;
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-static bool dhcp_started = false;
-static bool httpd_running = false;
-static bool sntp_started = false;
-static bool lwip_started = false;
-static volatile bool netif_unavailable = false;
-#endif
-
 static lwip_app_config_t g_cfg;
-static bool g_pcap_available;
-static bool g_log_available;
+static size_t g_pcap_offsets[PCAP_MAX_LIST];
 
-// Legacy color constants (used by test functions)
-#define COLOR_WHITE 0xFFFF
-#define COLOR_BLACK 0x0000
-#define COLOR_LIGHT_GRAY 0xD6BA
-
-// New UI color palette
-#define UI_COLOR_BG         0xF7BE  // Warm white
-#define UI_COLOR_SURFACE    0xFFFF  // Card surface
-#define UI_COLOR_FG         0x18C3  // Ink blue
-#define UI_COLOR_MUTED      0x8410  // Secondary text
-#define UI_COLOR_ACCENT     0x24BF  // Bright blue
-#define UI_COLOR_SELECTED   0xD69F  // Pale blue selection
-#define UI_COLOR_SEPARATOR  0xDEFB  // Subtle divider
-#define UI_COLOR_HEADER     0x1083  // Deep navy
-#define UI_COLOR_EDIT_BG    0xFF35  // Warm edit highlight
-
-static void delay_ms(unsigned int ms)
+static void format_tz(char *buf, size_t size, int16_t minutes)
 {
-    for (unsigned int i = 0; i < ms; i++)
+    int16_t abs_min = minutes < 0 ? (int16_t)-minutes : minutes;
+
+    if (!minutes)
+        snprintf(buf, size, "UTC");
+    else
+        snprintf(buf, size, "UTC%c%u:%02u", minutes < 0 ? '-' : '+', abs_min / 60, abs_min % 60);
+}
+
+static uint16_t next_pcap_size(uint16_t current, bool up)
+{
+    static const uint16_t sizes[] = {
+        LWIP_CFG_PCAP_SIZE_4K, LWIP_CFG_PCAP_SIZE_8K, LWIP_CFG_PCAP_SIZE_16K, LWIP_CFG_PCAP_SIZE_32K
+    };
+    int index = 0;
+
+    while (index < 3 && sizes[index] < current)
+        index++;
+    if (up && index < 3)
+        index++;
+    if (!up && index > 0)
+        index--;
+    return sizes[index];
+}
+
+static int load_pcap_offsets(void)
+{
+    struct pcap_reader_ctx ctx;
+    struct pcap *hdr;
+    const uint8_t *data;
+    int count = 0;
+
+    if (!pcap_init_reader_ctx(&ctx))
+        return 0;
+    while (count < PCAP_MAX_LIST && pcap_read_next(&ctx, &hdr, &data))
+        g_pcap_offsets[count++] = ctx.offset - sizeof(struct pcap) - hdr->len;
+    pcap_close_reader_ctx(&ctx);
+    return count;
+}
+
+static const struct pcap *pcap_at(int index)
+{
+    var_t *var = os_GetAppVarData("lwIPPCAP", NULL);
+
+    return var ? (const struct pcap *)((const uint8_t *)var->data + g_pcap_offsets[index]) : NULL;
+}
+
+static int pcap_detail_rows(const struct pcap_decoded *decoded)
+{
+    int rows = 0;
+
+    for (unsigned i = 0; i < decoded->count; i++)
+        rows += 1 + (int)((decoded->section[i].length + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS);
+    return rows;
+}
+
+static void pcap_detail_line(const struct pcap_decoded *decoded, const uint8_t *data, int row,
+                             char *buf, size_t size)
+{
+    buf[0] = '\0';
+    for (unsigned j = 0; j < decoded->count; j++)
     {
-        for (volatile unsigned int j = 0; j < 1500; j++) { }
+        const struct pcap_section *section = &decoded->section[j];
+        int rows = 1 + (int)((section->length + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS);
+
+        if (row >= rows)
+        {
+            row -= rows;
+            continue;
+        }
+        if (!row)
+        {
+            snprintf(buf, size, "%s: %s", section->name, section->detail ? section->detail : "");
+            return;
+        }
+
+        size_t relative = (size_t)(row - 1) * PCAP_HEX_COLS;
+        size_t offset = section->offset + relative;
+        size_t n = section->length - relative;
+        int pos = snprintf(buf, size, "%04X  ", (unsigned)offset);
+
+        if (n > PCAP_HEX_COLS)
+            n = PCAP_HEX_COLS;
+        for (size_t i = 0; i < n; i++)
+            pos += snprintf(buf + pos, size - (size_t)pos, "%02X ", data[offset + i]);
+        return;
     }
 }
 
-// Forward declarations
-static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes);
-static void edit_hostname_config(lwip_app_config_t *cfg);
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-static bool start_lwip_stack(const lwip_app_config_t *cfg);
-static void apply_network_config(const lwip_app_config_t *cfg);
-#endif
-static void fill_rect(int x, int y, int w, int h, uint16_t color);
-static void ui_draw_header(const char *title);
-static void ui_draw_footer(const char *line1, const char *line2);
-static void ui_slider(int x, int y, int w, int value, int min_val, int max_val);
+static void pcap_detail(const struct pcap *hdr)
+{
+    const uint8_t *data = (const uint8_t *)hdr + sizeof(struct pcap);
+    struct pcap_decoded decoded = pcap_decode(data, hdr->len);
+    int total = pcap_detail_rows(&decoded);
+    int scroll = 0;
+    char title[32];
 
-static bool config_toggle_option(struct config_option *opt);
-static bool config_edit_hostname(struct config_option *opt);
-static bool config_run_pcap_viewer(struct config_option *opt);
-static bool config_run_log_viewer(struct config_option *opt);
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-static bool config_run_ntp_test(struct config_option *opt);
-static bool config_run_http_test(struct config_option *opt);
-static bool config_run_dns_test(struct config_option *opt);
-static bool config_run_ping_test(struct config_option *opt);
-static bool config_run_tcp_echo_test(struct config_option *opt);
-static bool config_run_tls_test(struct config_option *opt);
-#endif
-static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len);
+    snprintf(title, sizeof title, "%c%c%u %s, %u bytes", hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
+             hdr->direction == PCAP_DIR_TX ? "sent" : "received", hdr->len);
+
+    for (;;)
+    {
+        char lines[TEXT_ROWS][TEXT_COLS];
+        const char *ptrs[TEXT_ROWS];
+        int shown = 0;
+
+        for (; shown < TEXT_ROWS && scroll + shown < total; shown++)
+        {
+            pcap_detail_line(&decoded, data, scroll + shown, lines[shown], sizeof lines[shown]);
+            ptrs[shown] = lines[shown];
+        }
+        ui_frame(title, NULL, NULL, 0, "up/down: scroll   clear: back");
+        ui_body_text(ptrs, shown, 0);
+        ui_present();
+
+        uint8_t key = ui_wait_key();
+        if (key == sk_Clear)
+            return;
+        if (key == sk_Up && scroll > 0)
+            scroll--;
+        if (key == sk_Down && scroll + TEXT_ROWS < total)
+            scroll++;
+    }
+}
+
+static void pcap_viewer(void)
+{
+    ui_item_t *items;
+    char (*labels)[20];
+    ui_list_t list = {0, 0};
+    int count = load_pcap_offsets();
+
+    if (!count)
+    {
+        ui_message("Packet capture", "No packets captured yet", NULL);
+        return;
+    }
+    items = mem_is_ready() ? mem_malloc((mem_size_t)(count * (sizeof *items + sizeof *labels))) : NULL;
+    if (!items)
+    {
+        ui_message("Packet capture", "Not enough memory", NULL);
+        return;
+    }
+    labels = (char (*)[20])(items + count);
+
+    for (int i = 0; i < count; i++)
+    {
+        const struct pcap *hdr = pcap_at(i);
+
+        if (!hdr)
+            goto done;
+        snprintf(labels[i], sizeof labels[i], "#%d  %c%c%u %s  %u B", i + 1, hdr->ifname[0], hdr->ifname[1],
+                 hdr->ifnum, hdr->direction == PCAP_DIR_TX ? "TX" : "RX", hdr->len);
+        items[i] = (ui_item_t){UI_ITEM_ACTION, labels[i], NULL, NULL, false, 0};
+    }
+
+    for (;;)
+    {
+        char right[16];
+
+        snprintf(right, sizeof right, "%d packets", count);
+        ui_frame("Packet capture", right, NULL, 0, "enter: view   clear: back");
+        ui_list_draw(&list, items, count);
+        ui_present();
+
+        uint8_t key = ui_wait_key();
+        if (key == sk_Clear)
+            break;
+        ui_list_key(&list, items, count, key);
+        if (key == sk_Enter)
+        {
+            const struct pcap *hdr = pcap_at(list.selected);
+            if (hdr)
+                pcap_detail(hdr);
+        }
+    }
+done:
+    mem_free(items);
+}
 
 static const char *verbosity_name(uint8_t level)
 {
@@ -187,3126 +244,314 @@ static const char *verbosity_name(uint8_t level)
     }
 }
 
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES && LWIP_DHCP
-static bool dhcp_client_running(const struct netif *netif)
+static int log_slots(char names[LOG_MAX_SLOTS][9])
 {
-    struct dhcp *dhcp = netif ? netif_dhcp_data(netif) : NULL;
-    return dhcp && dhcp->state != DHCP_STATE_OFF;
-}
-#endif
-
-static struct config_option config_options[] = {
-    {"Hostname",        "Name advertised by lwIP",   OPT_HOSTNAME,     F_TYPE_ACTION,       config_edit_hostname, {0}},
-    {"Timezone",        "Local offset from UTC",     OPT_TZ_OFFSET,    F_TYPE_INT_SLIDER,   NULL, {0}},
-    {"Daylight saving", "Apply the DST adjustment",  OPT_DST,          F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"TLS",             "Allow encrypted sockets",   OPT_TLS_ENABLED,  F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Enable PCAP",     "Always capture packets",    OPT_PCAP_ENABLED, F_TYPE_BOOL_TOGGLE,  config_toggle_option, {0}},
-    {"Capture limit",   "Maximum saved AppVar size", OPT_PCAP_MAX_SIZE,F_TYPE_INT_SLIDER,   NULL, {0}},
-    {"Packet capture",  "Inspect saved packets",     OPT_VIEW_PCAP,    F_TYPE_ACTION,       config_run_pcap_viewer, {0}},
-    {"Enable logging",  "Log all events to file",    OPT_LOG_ENABLED,        F_TYPE_BOOL_TOGGLE, config_toggle_option, {0}},
-    {"Verbosity",       "Minimum event level logged",OPT_LOG_VERBOSITY,      F_TYPE_INT_SLIDER,  NULL, {0}},
-    {"Archive slots",   "Rotated log files to keep", OPT_LOG_ARCHIVE_SLOTS,  F_TYPE_INT_SLIDER,  NULL, {0}},
-    {"View log",        "Inspect saved log",         OPT_VIEW_LOG,     F_TYPE_ACTION,       config_run_log_viewer, {0}},
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-    {"Tests",           NULL,             OPT_SEP_TESTS,    F_TYPE_SEPARATOR,    NULL, {0}},
-    {"NTP Test",        "Request network time", OPT_NTP_TEST,     F_TYPE_ACTION,       config_run_ntp_test, {0}},
-    {"HTTP Test",       "Open a sample request", OPT_HTTP_TEST,    F_TYPE_ACTION,       config_run_http_test, {0}},
-    {"DNS Test",        "Resolve a hostname", OPT_DNS_TEST,     F_TYPE_ACTION,       config_run_dns_test, {0}},
-    {"Ping Test",       "Send ICMP echo", OPT_PING_TEST,    F_TYPE_ACTION,       config_run_ping_test, {0}},
-    {"TCP Echo",        "Exercise a TCP stream", OPT_TCP_ECHO_TEST,F_TYPE_ACTION,       config_run_tcp_echo_test, {0}},
-    {"TLS Test",        "Exercise a TLS stream", OPT_TLS_TEST,     F_TYPE_ACTION,       config_run_tls_test, {0}},
-#endif
-};
-
-#define CONFIG_OPTION_COUNT (sizeof(config_options) / sizeof(config_options[0]))
-
-static void option_set_u16(uint8_t value[4], uint16_t v)
-{
-    value[0] = (uint8_t)(v & 0xFF);
-    value[1] = (uint8_t)((v >> 8) & 0xFF);
-    value[2] = 0;
-    value[3] = 0;
-}
-
-static uint16_t option_get_u16(const uint8_t value[4])
-{
-    return (uint16_t)(value[0] | ((uint16_t)value[1] << 8));
-}
-
-static void option_set_i16(uint8_t value[4], int16_t v)
-{
-    option_set_u16(value, (uint16_t)v);
-}
-
-static int16_t option_get_i16(const uint8_t value[4])
-{
-    return (int16_t)option_get_u16(value);
-}
-
-static void option_set_bool(uint8_t value[4], bool v)
-{
-    value[0] = v ? 1u : 0u;
-    value[1] = 0;
-    value[2] = 0;
-    value[3] = 0;
-}
-
-static bool option_get_bool(const uint8_t value[4])
-{
-    return value[0] != 0;
-}
-
-// ============================================================================
-// NEW CLEAN UI DESIGN - Single scrollable menu
-// ============================================================================
-
-#define VRAM_BASE ((uint16_t *)0xD40000)
-
-// Layout constants
-#define UI_HEADER_H     28
-#define UI_FOOTER_H     30
-#define UI_CONTENT_Y    (UI_HEADER_H)
-#define UI_CONTENT_H    (LCD_HEIGHT - UI_HEADER_H - UI_FOOTER_H)
-/* The selected small font is 8px high. Two measured text lines plus breathing
- * room fit in each row without assuming fixed character widths. */
-#define UI_ROW_H        30
-#define UI_ROW_TEXT_OFF  4
-#define UI_VISIBLE_ROWS (UI_CONTENT_H / UI_ROW_H)
-#define UI_MARGIN       8
-#define UI_VALUE_X      174
-#define UI_FOOTER_LINE_H 12
-
-// Fill rectangle with clipping
-static void ui_fill_rect(int x, int y, int w, int h, uint16_t color)
-{
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
-    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
-    if (w <= 0 || h <= 0) return;
-
-    for (int row = y; row < y + h; row++)
-    {
-        uint16_t *ptr = VRAM_BASE + row * LCD_WIDTH + x;
-        for (int col = 0; col < w; col++)
-            *ptr++ = color;
-    }
-}
-
-// Alias for backward compatibility with test functions
-static void fill_rect(int x, int y, int w, int h, uint16_t color)
-{
-    ui_fill_rect(x, y, w, h, color);
-}
-
-// Draw horizontal line
-static void ui_hline(int x, int y, int w, uint16_t color)
-{
-    ui_fill_rect(x, y, w, 1, color);
-}
-
-// Draw box with border
-static void ui_box(int x, int y, int w, int h, uint16_t bg, uint16_t border)
-{
-    ui_fill_rect(x, y, w, h, bg);
-    ui_fill_rect(x, y, w, 2, border);           // top
-    ui_fill_rect(x, y + h - 2, w, 2, border);   // bottom
-    ui_fill_rect(x, y, 2, h, border);           // left
-    ui_fill_rect(x + w - 2, y, 2, h, border);   // right
-}
-
-// Scroll content area by shifting VRAM pixels
-// amount > 0: scroll down by N rows (content moves up, new rows appear at bottom)
-// amount < 0: scroll up by N rows (content moves down, new rows appear at top)
-static void ui_scroll_content(int amount)
-{
-    if (amount == 0) return;
-
-    int pixel_shift = (amount > 0 ? amount : -amount) * UI_ROW_H;
-    if (pixel_shift >= UI_CONTENT_H)
-    {
-        // Scrolling more than visible area, just clear
-        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-        return;
-    }
-
-    uint16_t *vram = VRAM_BASE;
-
-    if (amount > 0)
-    {
-        // Scroll down: shift pixels up
-        uint16_t *dst = vram + UI_CONTENT_Y * LCD_WIDTH;
-        uint16_t *src = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
-        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
-        memmove(dst, src, copy_pixels * sizeof(uint16_t));
-        // Clear the newly exposed area at bottom
-        ui_fill_rect(0, UI_CONTENT_Y + UI_CONTENT_H - pixel_shift, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
-    }
-    else
-    {
-        // Scroll up: shift pixels down
-        uint16_t *dst = vram + (UI_CONTENT_Y + pixel_shift) * LCD_WIDTH;
-        uint16_t *src = vram + UI_CONTENT_Y * LCD_WIDTH;
-        int copy_pixels = (UI_CONTENT_H - pixel_shift) * LCD_WIDTH;
-        memmove(dst, src, copy_pixels * sizeof(uint16_t));
-        // Clear the newly exposed area at top
-        ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, pixel_shift, UI_COLOR_BG);
-    }
-}
-
-// Draw header bar
-static void ui_draw_header(const char *title)
-{
-    ui_fill_rect(0, 0, LCD_WIDTH, UI_HEADER_H, UI_COLOR_HEADER);
-    os_SetDrawFGColor(UI_COLOR_BG);
-    os_FontDrawTransText(title, UI_MARGIN, 8);
-
-    char version[20];
-    snprintf(version, sizeof(version), "v%s", lwip_version_string());
-    int vw = (int)os_FontGetWidth(version);
-    os_FontDrawTransText(version, LCD_WIDTH - UI_MARGIN - vw, 8);
-}
-
-// Draw footer with help text (supports two lines)
-static void ui_draw_footer(const char *line1, const char *line2)
-{
-    int y = LCD_HEIGHT - UI_FOOTER_H;
-    ui_fill_rect(0, y, LCD_WIDTH, UI_FOOTER_H, UI_COLOR_HEADER);
-    ui_hline(0, y, LCD_WIDTH, UI_COLOR_ACCENT);
-    os_SetDrawFGColor(UI_COLOR_FG);
-
-    // Center each line
-    if (line1)
-    {
-        int w1 = (int)os_FontGetWidth(line1);
-        os_SetDrawFGColor(UI_COLOR_BG);
-        os_FontDrawTransText(line1, (LCD_WIDTH - w1) / 2, y + 3);
-    }
-    if (line2)
-    {
-        int w2 = (int)os_FontGetWidth(line2);
-        os_SetDrawFGColor(UI_COLOR_SEPARATOR);
-        os_FontDrawTransText(line2, (LCD_WIDTH - w2) / 2, y + 3 + UI_FOOTER_LINE_H);
-    }
-}
-
-static void ui_draw_toggle(int x, int y, bool on)
-{
-    uint16_t track = on ? UI_COLOR_ACCENT : UI_COLOR_SEPARATOR;
-    ui_fill_rect(x, y, 38, 14, track);
-    ui_fill_rect(x + (on ? 25 : 3), y + 3, 10, 8,
-                 on ? UI_COLOR_SURFACE : UI_COLOR_MUTED);
-}
-
-static void ui_draw_fitted_right(const char *text, int right, int y, int max_width)
-{
-    char fitted[32];
-    size_t len;
-
-    if (!text || !text[0] || max_width <= 0)
-        return;
-
-    snprintf(fitted, sizeof(fitted), "%s", text);
-    len = strlen(fitted);
-    while (len > 1 && (int)os_FontGetWidth(fitted) > max_width)
-    {
-        fitted[--len] = '\0';
-    }
-    if (len < strlen(text) && len > 3)
-    {
-        fitted[len - 1] = '.';
-        fitted[len - 2] = '.';
-        fitted[len - 3] = '.';
-    }
-
-    int width = (int)os_FontGetWidth(fitted);
-    os_FontDrawTransText(fitted, right - width, y);
-}
-
-// Draw a single menu row
-static void ui_draw_row(int row_y, const char *label, const char *value,
-                        bool selected, bool editing, bool is_separator,
-                        f_type type, config_option_id id, const char *hint)
-{
-    uint16_t bg = UI_COLOR_SURFACE;
-    uint16_t fg = UI_COLOR_FG;
-
-    if (is_separator)
-    {
-        // Separator: centered text with lines
-        ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, UI_COLOR_BG);
-        os_SetDrawFGColor(UI_COLOR_MUTED);
-        int lw = (int)os_FontGetWidth(label);
-        int lx = (LCD_WIDTH - lw) / 2;
-        ui_hline(UI_MARGIN, row_y + UI_ROW_H/2, lx - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
-        ui_hline(lx + lw + 4, row_y + UI_ROW_H/2, LCD_WIDTH - lx - lw - UI_MARGIN - 4, UI_COLOR_SEPARATOR);
-        os_FontDrawTransText(label, lx, row_y + 11);
-        return;
-    }
-
-    if (selected)
-    {
-        bg = editing ? UI_COLOR_EDIT_BG : UI_COLOR_SELECTED;
-    }
-
-    ui_fill_rect(0, row_y, LCD_WIDTH, UI_ROW_H, UI_COLOR_BG);
-    ui_fill_rect(4, row_y + 1, LCD_WIDTH - 8, UI_ROW_H - 2, bg);
-    if (selected)
-        ui_fill_rect(4, row_y + 1, 4, UI_ROW_H - 2, UI_COLOR_ACCENT);
-
-    os_SetDrawFGColor(fg);
-    os_FontDrawTransText(label, UI_MARGIN + 6, row_y + UI_ROW_TEXT_OFF);
-    if (hint && hint[0])
-    {
-        os_SetDrawFGColor(UI_COLOR_MUTED);
-        os_FontDrawTransText(hint, UI_MARGIN + 6, row_y + 16);
-    }
-
-    if (type == F_TYPE_BOOL_TOGGLE)
-    {
-        ui_draw_toggle(LCD_WIDTH - UI_MARGIN - 42, row_y + 8,
-                       value && strcmp(value, "ON") == 0);
-    }
-    else if (type == F_TYPE_ACTION)
-    {
-        if (value && value[0])
-        {
-            os_SetDrawFGColor(UI_COLOR_FG);
-            ui_draw_fitted_right(value, LCD_WIDTH - 28, row_y + UI_ROW_TEXT_OFF,
-                                 LCD_WIDTH - UI_VALUE_X - 36);
-        }
-        os_SetDrawFGColor(UI_COLOR_ACCENT);
-        os_FontDrawTransText(">", LCD_WIDTH - 18, row_y + 10);
-    }
-    else if (value && value[0])
-    {
-        os_SetDrawFGColor(UI_COLOR_FG);
-        ui_draw_fitted_right(value, LCD_WIDTH - UI_MARGIN - 4,
-                             row_y + UI_ROW_TEXT_OFF,
-                             LCD_WIDTH - UI_VALUE_X - UI_MARGIN);
-        if (type == F_TYPE_INT_SLIDER && selected)
-        {
-            int val;
-            int min_val;
-            int max_val;
-            if (id == OPT_PCAP_MAX_SIZE)
-            {
-                uint16_t bytes = option_get_u16(config_options[OPT_PCAP_MAX_SIZE].value);
-                val = bytes == LWIP_CFG_PCAP_SIZE_4K ? 0 :
-                      bytes == LWIP_CFG_PCAP_SIZE_8K ? 1 :
-                      bytes == LWIP_CFG_PCAP_SIZE_16K ? 2 : 3;
-                min_val = 0;
-                max_val = 3;
-            }
-            else if (id == OPT_LOG_ARCHIVE_SLOTS)
-            {
-                val = config_options[OPT_LOG_ARCHIVE_SLOTS].value[0];
-                min_val = LWIP_CFG_LOG_ARCHIVE_SLOTS_MIN;
-                max_val = LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX;
-            }
-            else if (id == OPT_LOG_VERBOSITY)
-            {
-                val = config_options[OPT_LOG_VERBOSITY].value[0];
-                min_val = LWIP_CFG_LOG_VERBOSITY_MIN;
-                max_val = LWIP_CFG_LOG_VERBOSITY_MAX;
-            }
-            else
-            {
-                val = option_get_i16(config_options[OPT_TZ_OFFSET].value);
-                min_val = LWIP_CFG_TZ_MIN_MINUTES;
-                max_val = LWIP_CFG_TZ_MAX_MINUTES;
-            }
-            ui_slider(UI_VALUE_X, row_y + 16, LCD_WIDTH - UI_VALUE_X - 12,
-                      val, min_val, max_val);
-        }
-    }
-}
-
-// Calculate visible row Y position
-static int ui_row_y(int visible_idx)
-{
-    return UI_CONTENT_Y + visible_idx * UI_ROW_H;
-}
-
-static bool option_is_visible(const struct config_option *opt)
-{
-    if (opt->id == OPT_VIEW_PCAP)
-        return g_pcap_available;
-    if (opt->id == OPT_VIEW_LOG)
-        return g_log_available;
-    return true;
-}
-
-static int visible_option_count(void)
-{
+    var_t *var;
+    uint8_t meta[3] = {0};
     int count = 0;
-    for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
-        if (option_is_visible(&config_options[i]))
+
+    if ((var = os_GetAppVarData(LWIP_LOG_APPVAR, NULL)) && var->size)
+        memcpy(names[count++], LWIP_LOG_APPVAR, sizeof LWIP_LOG_APPVAR);
+    if ((var = os_GetAppVarData(LWIP_LOG_META_APPVAR, NULL)) && var->size >= sizeof meta)
+        memcpy(meta, var->data, sizeof meta);
+
+    uint8_t max = meta[2] ? meta[2] : (uint8_t)LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX;
+
+    for (int i = (int)meta[1] - 1; i >= 0 && count < (int)LOG_MAX_SLOTS; i--)
+    {
+        snprintf(names[count], 9, LWIP_LOG_ARCHIVE_PFX "%02u", (unsigned)((meta[0] + i) % max));
+        if ((var = os_GetAppVarData(names[count], NULL)) && var->size)
             count++;
+    }
     return count;
 }
 
-static int visible_position_for_index(int idx)
+static uint16_t log_wrap_next(const uint8_t *data, uint16_t size, uint16_t pos, char *out, size_t cap)
 {
-    int position = 0;
-    for (int i = 0; i < (int)CONFIG_OPTION_COUNT; i++)
-    {
-        if (!option_is_visible(&config_options[i]))
-            continue;
-        if (i == idx)
-            return position;
-        position++;
-    }
-    return -1;
-}
-
-static int option_index_at_visible(int position)
-{
-    int visible = 0;
-    for (int i = 0; i < (int)CONFIG_OPTION_COUNT; i++)
-    {
-        if (!option_is_visible(&config_options[i]))
-            continue;
-        if (visible++ == position)
-            return i;
-    }
-    return -1;
-}
-
-// Draw scrollbar if needed
-static void ui_draw_scrollbar(int scroll_pos, int total_items)
-{
-    if (total_items <= UI_VISIBLE_ROWS) return;
-
-    int sb_x = LCD_WIDTH - 6;
-    int sb_h = UI_CONTENT_H;
-    int thumb_h = (sb_h * UI_VISIBLE_ROWS) / total_items;
-    if (thumb_h < 10) thumb_h = 10;
-    int thumb_y = UI_CONTENT_Y + (scroll_pos * (sb_h - thumb_h)) / (total_items - UI_VISIBLE_ROWS);
-
-    ui_fill_rect(sb_x, UI_CONTENT_Y, 4, sb_h, UI_COLOR_SEPARATOR);
-    ui_fill_rect(sb_x, thumb_y, 4, thumb_h, UI_COLOR_FG);
-}
-
-// Draw a single option row by index (for optimized redraws)
-static void ui_draw_single_option(int idx, int scroll_pos, int selected_idx, bool editing)
-{
-    int v = visible_position_for_index(idx) - scroll_pos;
-    if (v < 0 || v >= UI_VISIBLE_ROWS) return;
-    if (idx < 0 || idx >= (int)CONFIG_OPTION_COUNT) return;
-
-    const struct config_option *opt = &config_options[idx];
-    char value[32] = {0};
-
-    bool is_sep = (opt->type == F_TYPE_SEPARATOR);
-    if (!is_sep)
-    {
-        format_option_value(opt, value, sizeof(value));
-    }
-
-    ui_draw_row(ui_row_y(v), opt->name, value,
-                idx == selected_idx, editing && idx == selected_idx, is_sep,
-                opt->type, opt->id, opt->hint);
-}
-
-// Draw entire menu
-static void ui_draw_menu(int selected_idx, int scroll_pos, bool editing)
-{
-    // Clear content area
-    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-
-    // Draw visible rows
-    for (int v = 0; v < UI_VISIBLE_ROWS; v++)
-    {
-        int idx = option_index_at_visible(scroll_pos + v);
-        if (idx < 0) break;
-
-        const struct config_option *opt = &config_options[idx];
-        char value[32] = {0};
-
-        bool is_sep = (opt->type == F_TYPE_SEPARATOR);
-        if (!is_sep)
-        {
-            format_option_value(opt, value, sizeof(value));
-        }
-
-        ui_draw_row(ui_row_y(v), opt->name, value,
-                    idx == selected_idx, editing && idx == selected_idx, is_sep,
-                    opt->type, opt->id, opt->hint);
-    }
-
-    ui_draw_scrollbar(scroll_pos, visible_option_count());
-}
-
-// Draw footer based on current mode
-static void ui_draw_mode_footer(bool editing, edit_mode_t edit_mode)
-{
-    if (editing)
-    {
-        (void)edit_mode;
-        ui_draw_footer("<left/right> Adjust value",
-                       "<enter> Confirm  <clear> Cancel");
-    }
-    else
-    {
-        ui_draw_footer("<up/down> Nav  <left/right> Toggle",
-                       "<2nd> Save  <clear> Exit");
-    }
-}
-
-// Full screen redraw
-static void ui_draw_full(int selected_idx, int scroll_pos, edit_mode_t edit_mode)
-{
-    bool editing = edit_mode != EDIT_NONE;
-    ui_draw_header("lwIP Configuration");
-    ui_draw_menu(selected_idx, scroll_pos, editing);
-    ui_draw_mode_footer(editing, edit_mode);
-}
-
-// Ensure selected item is visible, returns new scroll position
-static int ui_ensure_visible(int selected_idx, int scroll_pos)
-{
-    int position = visible_position_for_index(selected_idx);
-    if (position < scroll_pos)
-        return position;
-    if (position >= scroll_pos + UI_VISIBLE_ROWS)
-        return position - UI_VISIBLE_ROWS + 1;
-    return scroll_pos;
-}
-
-static void option_sync_from_cfg(struct config_option *opt)
-{
-    switch (opt->id)
-    {
-    case OPT_TZ_OFFSET:
-        option_set_i16(opt->value, g_cfg.tz_offset_minutes);
-        break;
-    case OPT_DST:
-        option_set_bool(opt->value, g_cfg.dst_enabled != 0);
-        break;
-    case OPT_TLS_ENABLED:
-        option_set_bool(opt->value, g_cfg.tls_enabled != 0);
-        break;
-    case OPT_PCAP_ENABLED:
-        option_set_bool(opt->value, g_cfg.pcap_enabled != 0);
-        break;
-    case OPT_PCAP_MAX_SIZE:
-        option_set_u16(opt->value, g_cfg.pcap_max_bytes);
-        break;
-    case OPT_LOG_ENABLED:
-        option_set_bool(opt->value, g_cfg.file_log_enabled != 0);
-        break;
-    case OPT_LOG_VERBOSITY:
-        opt->value[0] = g_cfg.log_verbosity;
-        opt->value[1] = 0; opt->value[2] = 0; opt->value[3] = 0;
-        break;
-    case OPT_LOG_ARCHIVE_SLOTS:
-        opt->value[0] = g_cfg.log_archive_slots;
-        opt->value[1] = 0; opt->value[2] = 0; opt->value[3] = 0;
-        break;
-    default:
-        // Action/separator types, no sync needed
-        break;
-    }
-}
-
-static void apply_logging_config(void)
-{
-    lwip_set_log_verbosity((lwip_log_verbosity_t)g_cfg.log_verbosity);
-}
-
-static void config_sync_from_cfg(void)
-{
-    for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
-    {
-        option_sync_from_cfg(&config_options[i]);
-    }
-    apply_logging_config();
-}
-
-static bool option_is_selectable(const struct config_option *opt)
-{
-    if (!option_is_visible(opt))
-        return false;
-    if (opt->type == F_TYPE_LABEL || opt->type == F_TYPE_SEPARATOR)
-        return false;
-    return true;
-}
-
-static int find_first_selectable(void)
-{
-    for (size_t i = 0; i < CONFIG_OPTION_COUNT; i++)
-    {
-        if (option_is_selectable(&config_options[i]))
-        {
-            return (int)i;
-        }
-    }
-    return -1;
-}
-
-static int find_next_selectable(int current, int dir)
-{
-    int i = current;
-    while (1)
-    {
-        i += dir;
-        if (i < 0 || i >= (int)CONFIG_OPTION_COUNT)
-        {
-            break;
-        }
-        if (option_is_selectable(&config_options[i]))
-        {
-            return i;
-        }
-    }
-    return current;
-}
-
-static void format_option_value(const struct config_option *opt, char *buf, size_t buf_len)
-{
-    switch (opt->id)
-    {
-    case OPT_TZ_OFFSET:
-        format_tz_offset(buf, buf_len, option_get_i16(opt->value));
-        break;
-    case OPT_DST:
-        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
-        break;
-    case OPT_TLS_ENABLED:
-        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
-        break;
-    case OPT_PCAP_ENABLED:
-        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
-        break;
-    case OPT_PCAP_MAX_SIZE:
-        snprintf(buf, buf_len, "%u KiB", option_get_u16(opt->value) / 1024u);
-        break;
-    case OPT_LOG_ENABLED:
-        snprintf(buf, buf_len, "%s", option_get_bool(opt->value) ? "ON" : "OFF");
-        break;
-    case OPT_LOG_VERBOSITY:
-        snprintf(buf, buf_len, "%s", verbosity_name(opt->value[0]));
-        break;
-    case OPT_LOG_ARCHIVE_SLOTS:
-        snprintf(buf, buf_len, "%u", (unsigned)opt->value[0]);
-        break;
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-    case OPT_NTP_TEST:
-    case OPT_HTTP_TEST:
-    case OPT_DNS_TEST:
-    case OPT_PING_TEST:
-    case OPT_TCP_ECHO_TEST:
-    case OPT_TLS_TEST:
-        buf[0] = '\0';
-        break;
-#endif
-    case OPT_HOSTNAME:
-        snprintf(buf, buf_len, "%s", g_cfg.hostname);
-        break;
-    default:
-        buf[0] = '\0';
-        break;
-    }
-}
-
-static bool config_toggle_option(struct config_option *opt)
-{
-    switch (opt->id)
-    {
-    case OPT_DST:
-        g_cfg.dst_enabled = (uint8_t)!g_cfg.dst_enabled;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_TLS_ENABLED:
-        g_cfg.tls_enabled = (uint8_t)!g_cfg.tls_enabled;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_PCAP_ENABLED:
-        g_cfg.pcap_enabled = (uint8_t)!g_cfg.pcap_enabled;
-        option_sync_from_cfg(opt);
-        return true;
-    case OPT_LOG_ENABLED:
-        g_cfg.file_log_enabled = (uint8_t)!g_cfg.file_log_enabled;
-        option_sync_from_cfg(opt);
-        return true;
-    default:
-        return false;
-    }
-}
-
-static bool config_edit_hostname(struct config_option *opt)
-{
-    (void)opt;
-    edit_hostname_config(&g_cfg);
-    return true;
-}
-
-static bool config_has_readable_pcap(void)
-{
-    struct pcap_reader_ctx ctx;
-    struct pcap *header;
-    const uint8_t *data;
-
-    if (!pcap_init_reader_ctx(&ctx))
-        return false;
-    bool available = pcap_read_next(&ctx, &header, &data);
-    pcap_close_reader_ctx(&ctx);
-    return available;
-}
-
-// Common cleanup for all tests - waits for Clear key and clears screen
-static void cleanup_test_screen(void)
-{
-    os_FontDrawText("Press Clear to exit", 10, 180);
-
-    // Clear any pending keys
-    while (os_GetCSC())
-        ;
-
-    // Wait for Clear key
-    while (1)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            break;
-        }
-        delay_ms(10);
-    }
-
-    // Clear screen before returning to wizard
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-}
-
-static void cleanup_test_screen_fast(void)
-{
-    while (os_GetCSC())
-        ;
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-}
-
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-// Common test network state - callbacks set these
-static volatile bool test_link_up = false;
-static volatile bool test_has_ip = false;
-
-NETIF_DECLARE_EXT_CALLBACK(netif_ext_cb);
-
-static void netif_ext_callback(struct netif *netif, netif_nsc_reason_t reason,
-                               const netif_ext_callback_args_t *args)
-{
-    if ((reason & LWIP_NSC_NETIF_REMOVED) != 0)
-    {
-        netif_unavailable = true;
-    }
-    if ((reason & LWIP_NSC_LINK_CHANGED) != 0)
-    {
-        if (!args || args->link_changed.state == 0)
-        {
-            netif_unavailable = true;
-        }
-        else
-        {
-            netif_unavailable = false;
-        }
-    }
-    if ((reason & LWIP_NSC_STATUS_CHANGED) != 0)
-    {
-        if (!args || args->status_changed.state == 0)
-        {
-            netif_unavailable = true;
-        }
-    }
-
-    if (netif_unavailable)
-    {
-        if (netif)
-        {
-            dhcp_stop(netif);
-        }
-        if (sntp_started || sntp_enabled())
-        {
-            sntp_stop();
-            sntp_started = false;
-        }
-        httpd_running = false;
-        dhcp_started = false;
-    }
-}
-
-static struct netif *find_first_ethernet_netif(void)
-{
-    struct netif *netif;
-    NETIF_FOREACH(netif)
-    {
-        if ((netif->flags & NETIF_FLAG_ETHERNET) != 0)
-        {
-            return netif;
-        }
-    }
-    return NULL;
-}
-
-static void test_link_callback(struct netif *netif)
-{
-    (void)netif;
-    test_link_up = netif_is_link_up(netif);
-}
-
-static void test_status_callback(struct netif *netif)
-{
-    (void)netif;
-    if (netif_is_up(netif) && !ip4_addr_isany(netif_ip4_addr(netif))
-        && !ip4_addr_isloopback(netif_ip4_addr(netif)))
-    {
-        test_has_ip = true;
-    }
-}
-
-static bool test_network_available(void)
-{
-    if (netif_unavailable || !netif_default)
-    {
-        return false;
-    }
-    return netif_is_link_up(netif_default);
-}
-
-// Common network setup for all tests
-// Returns true on success, false on failure/cancel
-static bool setup_test_network(const char *test_name)
-{
-    // Reset state
-    test_link_up = false;
-    test_has_ip = false;
-
-    // Start network stack
-    if (!start_lwip_stack(&g_cfg))
-    {
-        return false;
-    }
-
-    // Clear screen
-    fill_rect(0, 0, 320, 240, COLOR_WHITE);
-    os_SetDrawFGColor(COLOR_BLACK);
-
-    char title[32];
-    snprintf(title, sizeof(title), "%s Running", test_name);
-    os_FontDrawText(title, 10, 10);
-    os_FontDrawText("Waiting for network...", 10, 50);
-
-    // Wait for netif to be created (device enumeration)
-    int timeout = 1000; // 10 seconds at 10ms intervals
-    struct netif *found_netif = NULL;
-    while (timeout > 0 && !found_netif)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-
-        if (netif_unavailable)
-        {
-            os_FontDrawText("Network unavailable", 10, 70);
-            delay_ms(100);
-            cleanup_test_screen_fast();
-            return false;
-        }
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            os_FontDrawText("Test cancelled", 10, 70);
-            delay_ms(100);
-            cleanup_test_screen_fast();
-            return false;
-        }
-
-        delay_ms(10);
-        timeout--;
-        found_netif = find_first_ethernet_netif();
-    }
-
-    if (!found_netif)
-    {
-        os_FontDrawText("No network device found", 10, 70);
-        os_FontDrawText("Press any key", 10, 90);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return false;
-    }
-
-    if (!netif_default || ((netif_default->flags & NETIF_FLAG_ETHERNET) == 0))
-    {
-        netif_set_default(found_netif);
-    }
-
-    // Register callbacks for async notifications
-    netif_set_link_callback(netif_default, test_link_callback);
-    netif_set_status_callback(netif_default, test_status_callback);
-
-    // Check initial state (callbacks only fire on changes)
-    test_link_up = netif_is_link_up(netif_default);
-    if (netif_is_up(netif_default) && !ip4_addr_isany(netif_ip4_addr(netif_default))
-        && !ip4_addr_isloopback(netif_ip4_addr(netif_default)))
-    {
-        test_has_ip = true;
-    }
-
-    // Apply network config (starts DHCP if enabled)
-    apply_network_config(&g_cfg);
-
-    fill_rect(0, 50, 320, 20, COLOR_WHITE);
-    os_FontDrawText("Waiting for link...", 10, 50);
-
-    // Wait for link up (callback sets test_link_up)
-    timeout = 1000; // 10 seconds at 10ms intervals
-    while (timeout > 0 && !test_link_up)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-
-        if (netif_unavailable)
-        {
-            os_FontDrawText("Network unavailable", 10, 70);
-            delay_ms(100);
-            cleanup_test_screen_fast();
-            return false;
-        }
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            os_FontDrawText("Test cancelled", 10, 70);
-            delay_ms(100);
-            cleanup_test_screen_fast();
-            return false;
-        }
-
-        delay_ms(10);
-        timeout--;
-    }
-
-    if (!test_link_up)
-    {
-        os_FontDrawText("Link not detected", 10, 70);
-        os_FontDrawText("Check cable connection", 10, 90);
-        os_FontDrawText("Press any key", 10, 110);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return false;
-    }
-
-    fill_rect(0, 50, 320, 20, COLOR_WHITE);
-    os_FontDrawText("Link up! Getting IP...", 10, 50);
-
-    // Wait for IP address (callback sets test_has_ip)
-    timeout = 3000; // 30 seconds for DHCP at 10ms intervals
-    while (timeout > 0 && !test_has_ip)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-
-        if (netif_unavailable)
-        {
-            os_FontDrawText("Network unavailable", 10, 70);
-            delay_ms(100);
-            cleanup_test_screen_fast();
-            return false;
-        }
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            os_FontDrawText("Test cancelled", 10, 70);
-            delay_ms(100);
-            cleanup_test_screen_fast();
-            return false;
-        }
-
-        delay_ms(10);
-        timeout--;
-    }
-
-    if (!test_has_ip)
-    {
-        os_FontDrawText("Failed to get IP address", 10, 70);
-        os_FontDrawText("Check DHCP/network config", 10, 90);
-        os_FontDrawText("Press any key", 10, 110);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return false;
-    }
-
-    // Clear waiting messages and display IP
-    fill_rect(0, 30, 320, 40, COLOR_WHITE);
-    const ip4_addr_t *ip = netif_ip4_addr(netif_default);
-    char ip_buf[64];
-    snprintf(ip_buf, sizeof(ip_buf), "IP: %d.%d.%d.%d",
-             ip4_addr1(ip), ip4_addr2(ip), ip4_addr3(ip), ip4_addr4(ip));
-    os_FontDrawText(ip_buf, 10, 30);
-
-    return true;
-}
-
-#endif /* LWIP_APP_ENABLE_SERVICE_EXAMPLES */
-
-/* -------------------------------------------------------------------------
- * pcap viewer
- * ------------------------------------------------------------------------- */
-
-#define PCAP_MAX_LIST  128
-#define PCAP_HEX_COLS  8
-
-static int pcap_detail_rows(const struct pcap_decoded *decoded)
-{
-    int rows = 0;
-    for (unsigned i = 0; i < decoded->count; i++)
-        rows += 1 + (decoded->section[i].length + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
-    return rows;
-}
-
-static void pcap_draw_detail(const char *title, const struct pcap *hdr,
-                             const uint8_t *data, int scroll)
-{
-    struct pcap_decoded decoded = pcap_decode(data, hdr->len);
-    int total_rows = pcap_detail_rows(&decoded);
-    int row_h = (int)os_FontGetHeight() + 2;
-    int visible = UI_CONTENT_H / row_h;
-
-    ui_draw_header(title);
-    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-    os_SetDrawFGColor(UI_COLOR_FG);
-    for (int v = 0; v < visible; v++)
-    {
-        int row = scroll + v;
-        if (row >= total_rows) break;
-        char buf[64];
-        for (unsigned j = 0; j < decoded.count; j++)
-        {
-            const struct pcap_section *section = &decoded.section[j];
-            int rows = 1 + (section->length + PCAP_HEX_COLS - 1) / PCAP_HEX_COLS;
-            if (row >= rows) { row -= rows; continue; }
-            if (!row)
-                snprintf(buf, sizeof(buf), "%s: %s", section->name,
-                         section->detail ? section->detail : "");
-            else
-            {
-                size_t relative = (row - 1) * PCAP_HEX_COLS;
-                size_t off = section->offset + relative;
-                size_t n = section->length - relative;
-                if (n > PCAP_HEX_COLS) n = PCAP_HEX_COLS;
-                int pos = snprintf(buf, sizeof(buf), "%04X | ", (unsigned)off);
-                for (size_t i = 0; i < n; i++)
-                    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                                    "%02X ", data[off + i]);
-            }
-            break;
-        }
-        os_FontDrawTransText(buf, UI_MARGIN, UI_CONTENT_Y + v * row_h);
-    }
-    ui_draw_scrollbar(scroll, total_rows);
-    ui_draw_footer("<up/dn> Scroll", "<clear> Back");
-}
-
-static void pcap_viewer_detail(const struct pcap *hdr, const uint8_t *data)
-{
-    struct pcap_decoded decoded = pcap_decode(data, hdr->len);
-    int total_rows = pcap_detail_rows(&decoded);
-    int row_h = (int)os_FontGetHeight() + 2;
-    int visible = UI_CONTENT_H / row_h;
-    int scroll = 0;
-
-    char title[28];
-    snprintf(title, sizeof(title), "%c%c%u %s %u B",
-             hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
-             hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
-             hdr->len);
-
-    pcap_draw_detail(title, hdr, data, scroll);
-    while (os_GetCSC()) ;
-    while (1)
-    {
-        uint8_t key = os_GetCSC();
-        if (!key) continue;
-        if (key == sk_Clear) break;
-        if (key == sk_Up && scroll > 0)
-            { scroll--; pcap_draw_detail(title, hdr, data, scroll); }
-        if (key == sk_Down && scroll < total_rows - visible)
-            { scroll++; pcap_draw_detail(title, hdr, data, scroll); }
-    }
-}
-
-static void pcap_draw_list(const size_t *offsets, int count, int selected, int scroll)
-{
-    int row_h  = (int)os_FontGetHeight() + 2;
-    int visible = UI_CONTENT_H / row_h;
-
-    ui_draw_header("pcap viewer");
-    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-    os_SetDrawFGColor(UI_COLOR_FG);
-
-    var_t *var = os_GetAppVarData("lwIPPCAP", NULL);
-    if (!var) return;
-    uint8_t *base = (uint8_t *)var->data;
-
-    for (int v = 0; v < visible; v++)
-    {
-        int idx = scroll + v;
-        if (idx >= count) break;
-        const struct pcap *hdr = (const struct pcap *)(base + offsets[idx]);
-        int y = UI_CONTENT_Y + v * row_h;
-        ui_fill_rect(0, y, LCD_WIDTH, row_h,
-                     idx == selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
-        os_SetDrawFGColor(UI_COLOR_FG);
-        char row[40];
-        snprintf(row, sizeof(row), "#%-3d %c%c%u %-2s %u B",
-                 idx + 1,
-                 hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
-                 hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
-                 hdr->len);
-        os_FontDrawTransText(row, UI_MARGIN, y + 2);
-    }
-    ui_draw_scrollbar(scroll, count);
-    ui_draw_footer("<up/dn> Select  <enter> View", "<clear> Back");
-}
-
-static void pcap_draw_list_row(const size_t *offsets, int count, int idx,
-                               int scroll, bool selected)
-{
-    var_t *var = os_GetAppVarData("lwIPPCAP", NULL);
-    if (!var) return;
-    uint8_t *base = (uint8_t *)var->data;
-    if (idx < scroll || idx >= count) return;
-    int row_h = (int)os_FontGetHeight() + 2;
-    int v = idx - scroll;
-    const struct pcap *hdr = (const struct pcap *)(base + offsets[idx]);
-    int y = UI_CONTENT_Y + v * row_h;
-    ui_fill_rect(0, y, LCD_WIDTH, row_h,
-                 selected ? UI_COLOR_SELECTED : UI_COLOR_BG);
-    os_SetDrawFGColor(UI_COLOR_FG);
-    char row[40];
-    snprintf(row, sizeof(row), "#%-3d %c%c%u %-2s %u B",
-             idx + 1,
-             hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
-             hdr->direction == PCAP_DIR_TX ? "TX" : "RX",
-             hdr->len);
-    os_FontDrawTransText(row, UI_MARGIN, y + 2);
-}
-
-static bool config_run_pcap_viewer(struct config_option *opt)
-{
-    (void)opt;
-
-    static size_t offsets[PCAP_MAX_LIST];
-    int count = 0;
-
-    {
-        struct pcap_reader_ctx ctx;
-        struct pcap *hdr;
-        const uint8_t *fdata;
-        if (pcap_init_reader_ctx(&ctx))
-        {
-            while (count < PCAP_MAX_LIST && pcap_read_next(&ctx, &hdr, &fdata))
-                offsets[count++] = ctx.offset - sizeof(struct pcap) - hdr->len;
-            pcap_close_reader_ctx(&ctx);
-        }
-    }
-
-    if (count == 0)
-    {
-        fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-        os_FontDrawText("No packets captured.", 10, 40);
-        cleanup_test_screen();
-        return true;
-    }
-
-    int selected = 0;
-    int scroll = 0;
-    int visible = UI_CONTENT_H / UI_ROW_H;
-
-    while (os_GetCSC()) ;
-    pcap_draw_list(offsets, count, selected, scroll);
-
-    while (1)
-    {
-        uint8_t key = os_GetCSC();
-        if (!key) continue;
-        if (key == sk_Clear) break;
-        if (key == sk_Up && selected > 0)
-        {
-            int prev = selected--;
-            if (selected < scroll)
-            {
-                scroll = selected;
-                pcap_draw_list(offsets, count, selected, scroll);
-            }
-            else
-            {
-                pcap_draw_list_row(offsets, count, prev, scroll, false);
-                pcap_draw_list_row(offsets, count, selected, scroll, true);
-                ui_draw_scrollbar(scroll, count);
-            }
-        }
-        else if (key == sk_Down && selected < count - 1)
-        {
-            int prev = selected++;
-            if (selected >= scroll + visible)
-            {
-                scroll = selected - visible + 1;
-                pcap_draw_list(offsets, count, selected, scroll);
-            }
-            else
-            {
-                pcap_draw_list_row(offsets, count, prev, scroll, false);
-                pcap_draw_list_row(offsets, count, selected, scroll, true);
-                ui_draw_scrollbar(scroll, count);
-            }
-        }
-        else if (key == sk_Enter)
-        {
-            var_t *var = os_GetAppVarData("lwIPPCAP", NULL);
-            if (var)
-            {
-                uint8_t *base = (uint8_t *)var->data;
-                const struct pcap *hdr = (const struct pcap *)(base + offsets[selected]);
-                const uint8_t *fdata = (const uint8_t *)hdr + sizeof(struct pcap);
-                pcap_viewer_detail(hdr, fdata);
-                pcap_draw_list(offsets, count, selected, scroll);
-            }
-        }
-    }
-
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-    return true;
-}
-
-/* Maximum number of log lines we index in RAM.  Each entry is a uint16_t
- * byte-offset into the appvar, so 256 entries = 512 bytes on the stack. */
-/* ---------------------------------------------------------------------------
- * Log viewer — zero-copy, reads directly from appvar data pointer.
- *
- * Viewer state per slot: a uint16_t byte-offset into the appvar marking the
- * first byte of the topmost visible line.  Up/Down search backward/forward
- * for newlines in the raw appvar data; no buffer copy, no line index.
- * ------------------------------------------------------------------------- */
-
-/* Logical '\n'-delimited lines can be longer than one screen row and must be
- * wrapped across several display rows rather than truncated. All of the
- * helpers below walk the raw appvar bytes directly (no copy, no index) and
- * speak in terms of *display rows*: one wrapped screen-width segment, found
- * by greedily fitting the longest prefix of the remaining logical line that
- * still fits in UI_CONTENT_W pixels (falling back to LWIP_LOG_LINE_MAX chars
- * if a pathological line has no fitting prefix at all, which can't normally
- * happen since the logger's own lines are already short).
- *
- * log_wrap_next() advances from byte offset `pos` (anywhere inside a logical
- * line) to the end of the next display row, filling `out` with that row's
- * text (NUL-terminated) and returning the byte offset to resume from. */
-#define UI_CONTENT_W (LCD_WIDTH - UI_MARGIN * 2)
-
-static uint16_t log_wrap_next(const uint8_t *data, uint16_t size, uint16_t pos,
-                              char *out, size_t out_cap)
-{
-    uint16_t line_end = pos;
-    while (line_end < size && data[line_end] != '\n') line_end++;
-
-    uint16_t avail = (uint16_t)(line_end - pos);
-    uint16_t take = avail;
-    if (take >= (uint16_t)out_cap) take = (uint16_t)(out_cap - 1u);
-
-    /* Greedily shrink `take` until the fitted text's pixel width fits, or
-     * we're down to a single character (always drawn, even if it overflows,
-     * so a run never silently produces an empty row). */
+    uint16_t end = pos;
+    uint16_t take;
+
+    while (end < size && data[end] != '\n')
+        end++;
+    take = (uint16_t)(end - pos);
+    if (take >= cap)
+        take = (uint16_t)(cap - 1);
     for (;;)
     {
         memcpy(out, data + pos, take);
         out[take] = '\0';
-        if (take <= 1 || (int)os_FontGetWidth(out) <= UI_CONTENT_W)
+        if (take <= 1 || (int)gfx_GetStringWidth(out) <= UI_WIDTH - 16)
             break;
         take--;
     }
-
-    uint16_t next = (uint16_t)(pos + take);
-    if (next >= line_end)
-        next = (next < size && data[next] == '\n') ? (uint16_t)(next + 1u) : line_end;
-    return next;
-}
-
-/* Count display rows (wrapped segments) in [data, data+size). */
-static int log_count_lines(const uint8_t *data, uint16_t size)
-{
-    char scratch[LWIP_LOG_LINE_MAX];
-    int n = 0;
-    uint16_t pos = 0;
-    while (pos < size)
-    {
-        uint16_t next = log_wrap_next(data, size, pos, scratch, sizeof(scratch));
-        n++;
-        if (next <= pos) break; /* safety: never spin in place */
-        pos = next;
-    }
-    return n;
-}
-
-/* Return the byte offset of the start of display row `target` (0-based). */
-static uint16_t log_line_offset(const uint8_t *data, uint16_t size, int target)
-{
-    char scratch[LWIP_LOG_LINE_MAX];
-    if (target <= 0) return 0;
-    uint16_t pos = 0;
-    for (int row = 0; row < target && pos < size; row++)
-    {
-        uint16_t next = log_wrap_next(data, size, pos, scratch, sizeof(scratch));
-        if (next <= pos) break;
-        pos = next;
-    }
+    pos = (uint16_t)(pos + take);
+    if (pos >= end)
+        pos = end < size ? (uint16_t)(end + 1) : end;
     return pos;
 }
 
-/* Render the visible window of a slot whose raw data is at `data[0..size)`.
- * `top_offset` is the byte offset of the first visible display row. */
-static void log_render_slot(const uint8_t *data, uint16_t size,
-                            uint16_t top_offset, int slot_idx, int slot_total)
+static void log_viewer(void)
 {
-    int row_h = (int)os_FontGetHeight() + 2;
-    int visible_rows = UI_CONTENT_H / row_h;
-
-    char hdr[40];
-    if (slot_idx == 0)
-        snprintf(hdr, sizeof(hdr), "Log: active [%d/%d] Lr/Rr:slot",
-                 slot_idx + 1, slot_total);
-    else
-        snprintf(hdr, sizeof(hdr), "Log: archive %d [%d/%d] Lr/Rr:slot",
-                 slot_idx, slot_idx + 1, slot_total);
-    ui_draw_header(hdr);
-    ui_fill_rect(0, UI_CONTENT_Y, LCD_WIDTH, UI_CONTENT_H, UI_COLOR_BG);
-    ui_draw_footer("Clr:back  2nd:delete", NULL);
-
-    /* Display rows. */
-    os_SetDrawFGColor(0x0000); /* black on white */
-    char row_buf[LWIP_LOG_LINE_MAX];
-    uint16_t pos = top_offset;
-    for (int r = 0; r < visible_rows && pos < size; r++)
-    {
-        uint16_t next = log_wrap_next(data, size, pos, row_buf, sizeof(row_buf));
-
-        int y = UI_CONTENT_Y + r * row_h;
-        os_FontDrawTransText(row_buf, UI_MARGIN, y + 2);
-
-        if (next <= pos) break; /* safety: never spin in place */
-        pos = next;
-    }
-}
-
-#define LOG_VIEWER_MAX_SLOTS (LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX + 1u) /* +1 for active */
-
-/* Build archive slot name "lwIPLgXX" for index idx. */
-static void log_viewer_slot_name(uint8_t idx, char out[9])
-{
-    out[0]='l'; out[1]='w'; out[2]='I'; out[3]='P';
-    out[4]='L'; out[5]='g';
-    out[6]=(char)('0'+idx/10u); out[7]=(char)('0'+idx%10u); out[8]='\0';
-}
-
-static bool config_run_log_viewer(struct config_option *opt)
-{
-    (void)opt;
-
-    /* Collect slot names newest-first using fileioc directly. */
-    char slot_names[LOG_VIEWER_MAX_SLOTS][9];
-    int slot_total = 0;
-
-    /* Active log first. */
-    {
-        uint8_t h = ti_Open(LWIP_LOG_APPVAR, "r");
-        if (h)
-        {
-            uint16_t sz = (uint16_t)ti_GetSize(h);
-            ti_Close(h);
-            if (sz > 0)
-                memcpy(slot_names[slot_total++], LWIP_LOG_APPVAR, sizeof(LWIP_LOG_APPVAR));
-        }
-    }
-
-    /* Archive slots from ring metadata. */
-    {
-        uint8_t mh = ti_Open(LWIP_LOG_META_APPVAR, "r");
-        if (mh)
-        {
-            uint8_t meta[3] = {0};
-            ti_Read(meta, 1, 3, mh);
-            ti_Close(mh);
-            uint8_t head  = meta[0];
-            uint8_t count = meta[1];
-            uint8_t maxs  = meta[2] ? meta[2] : (uint8_t)LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX;
-            /* Newest archive = (head + count - 1) % maxs, walk backwards. */
-            for (int i = (int)count - 1; i >= 0 && slot_total < (int)LOG_VIEWER_MAX_SLOTS; i--)
-            {
-                uint8_t idx = (uint8_t)((head + (uint8_t)i) % maxs);
-                char aname[9];
-                log_viewer_slot_name(idx, aname);
-                uint8_t h = ti_Open(aname, "r");
-                if (h)
-                {
-                    uint16_t sz = (uint16_t)ti_GetSize(h);
-                    ti_Close(h);
-                    if (sz > 0)
-                        memcpy(slot_names[slot_total++], aname, 9);
-                }
-            }
-        }
-    }
-
-    if (slot_total == 0)
-    {
-        fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-        os_FontDrawText("No log data.", 10, 40);
-        cleanup_test_screen();
-        return true;
-    }
-
-    int      slot_idx = 0;
-    int      line_top = 0;
-    int      line_tot = 0;
-
-    uint8_t        cur_h    = 0;
-    const uint8_t *cur_data = NULL;
-    uint16_t       cur_size = 0;
-
-    cur_h = ti_Open(slot_names[slot_idx], "r");
-    if (cur_h)
-    {
-        cur_size = (uint16_t)ti_GetSize(cur_h);
-        cur_data = (const uint8_t *)ti_GetDataPtr(cur_h);
-    }
-    line_tot = cur_data ? log_count_lines(cur_data, cur_size) : 0;
-    {
-        int visible = UI_CONTENT_H / ((int)os_FontGetHeight() + 2);
-        line_top = (line_tot > visible) ? line_tot - visible : 0;
-    }
-
-    while (os_GetCSC()) ;
-    if (cur_data)
-        log_render_slot(cur_data, cur_size,
-                        log_line_offset(cur_data, cur_size, line_top),
-                        slot_idx, slot_total);
-
-    while (1)
-    {
-        uint8_t key = os_GetCSC();
-        if (!key) continue;
-
-        if (key == sk_Clear) break;
-
-        if (key == sk_2nd)
-        {
-            /* Delete all log appvars directly. */
-            if (cur_h) { ti_Close(cur_h); cur_h = 0; cur_data = NULL; }
-            for (int i = 0; i < slot_total; i++)
-                ti_Delete(slot_names[i]);
-            ti_Delete(LWIP_LOG_META_APPVAR);
-            g_log_available = false;
-            break;
-        }
-
-        bool redraw = false;
-
-        if (key == sk_Left && slot_idx > 0)
-        {
-            if (cur_h) { ti_Close(cur_h); cur_h = 0; }
-            slot_idx--;
-            cur_h = ti_Open(slot_names[slot_idx], "r");
-            cur_data = cur_h ? (const uint8_t *)ti_GetDataPtr(cur_h) : NULL;
-            cur_size = cur_h ? (uint16_t)ti_GetSize(cur_h) : 0;
-            line_tot = cur_data ? log_count_lines(cur_data, cur_size) : 0;
-            int visible = UI_CONTENT_H / ((int)os_FontGetHeight() + 2);
-            line_top = (line_tot > visible) ? line_tot - visible : 0;
-            redraw = true;
-        }
-        else if (key == sk_Right && slot_idx < slot_total - 1)
-        {
-            if (cur_h) { ti_Close(cur_h); cur_h = 0; }
-            slot_idx++;
-            cur_h = ti_Open(slot_names[slot_idx], "r");
-            cur_data = cur_h ? (const uint8_t *)ti_GetDataPtr(cur_h) : NULL;
-            cur_size = cur_h ? (uint16_t)ti_GetSize(cur_h) : 0;
-            line_tot = cur_data ? log_count_lines(cur_data, cur_size) : 0;
-            int visible = UI_CONTENT_H / ((int)os_FontGetHeight() + 2);
-            line_top = (line_tot > visible) ? line_tot - visible : 0;
-            redraw = true;
-        }
-        else if (key == sk_Up && line_top > 0)
-        {
-            line_top--;
-            redraw = true;
-        }
-        else if (key == sk_Down && line_top < line_tot - 1)
-        {
-            line_top++;
-            redraw = true;
-        }
-
-        if (redraw && cur_data)
-            log_render_slot(cur_data, cur_size,
-                            log_line_offset(cur_data, cur_size, line_top),
-                            slot_idx, slot_total);
-    }
-
-    if (cur_h) ti_Close(cur_h);
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-    return true;
-}
-
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-static bool config_run_ntp_test(struct config_option *opt)
-{
-    (void)opt;
-
-    if (!setup_test_network("NTP Test"))
-    {
-        return true;
-    }
-
-    if (sntp_enabled())
-    {
-        sntp_stop();
-        sntp_started = false;
-    }
-
-    // Start SNTP
-    os_FontDrawText("Starting SNTP...", 10, 50);
-
-    lwip_sntp_reset_flag();
-
-    ip_addr_t ntp_server;
-    const ip_addr_t *dhcp_server = sntp_getserver(0);
-    if (dhcp_server && !ip_addr_isany(dhcp_server))
-    {
-        ntp_server = *dhcp_server;
-    }
-    else
-    {
-        IP_ADDR4(&ntp_server, 162, 159, 200, 1); // time.cloudflare.com
-    }
-
-    sntp_servermode_dhcp(0);
-    sntp_setserver(0, &ntp_server);
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_init();
-
-    os_FontDrawText("Waiting for time sync...", 10, 70);
-    os_FontDrawText("This may take up to 30 seconds", 10, 90);
-
-    // Wait for time sync (flag set by lwip_sntp_set_time callback)
-    // Allow time for initial request (15s timeout) + at least one retry
-    int timeout = 4500; // 45 seconds at 10ms intervals
-
-    while (timeout > 0 && !lwip_sntp_time_was_set())
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-
-        if (!test_network_available())
-        {
-            os_FontDrawText("Network lost", 10, 110);
-            sntp_stop();
-            sntp_started = false;
-            cleanup_test_screen_fast();
-            return true;
-        }
-
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            break;
-        }
-
-        delay_ms(10);
-        timeout--;
-    }
-
-    if (lwip_sntp_time_was_set())
-    {
-        fill_rect(0, 70, 320, 40, COLOR_WHITE);
-        os_FontDrawText("Time synced!", 10, 70);
-
-        // Read the time that was just set
-        uint8_t sec, min, hr;
-        boot_GetTime(&sec, &min, &hr);
-
-        char time_buf[32];
-        snprintf(time_buf, sizeof(time_buf), "Time: %02u:%02u:%02u (Local)", hr, min, sec);
-        os_FontDrawText(time_buf, 10, 90);
-    }
-    else
-    {
-        fill_rect(0, 70, 320, 40, COLOR_WHITE);
-        os_FontDrawText("Time sync timeout", 10, 70);
-    }
-
-    // Shutdown
-    sntp_stop();
-    sntp_started = false;
-
-    cleanup_test_screen();
-    return true;
-}
-
-static bool config_run_http_test(struct config_option *opt)
-{
-    (void)opt;
-
-    if (!setup_test_network("HTTP Test"))
-    {
-        return true;
-    }
-
-    // Start HTTP server
-    g_cfg.flags |= LWIP_CFG_TEST_HTTP;
-    apply_network_config(&g_cfg);
-
-    if (httpd_running)
-    {
-        os_FontDrawText("HTTP server started", 10, 50);
-        os_FontDrawText("Port: 80", 10, 70);
-    }
-    else
-    {
-        os_FontDrawText("HTTP server failed", 10, 50);
-    }
-
-    os_FontDrawText("Press Clear to exit", 10, 100);
-
-    // Run server loop until Clear is pressed
-    // Clear any pending keys first
-    while (os_GetCSC())
-        ;
-
-    while (1)
-    {
-        // Service network events frequently for good performance
-        for (int i = 0; i < 10; i++)
-        {
-            usb_HandleEvents();
-            sys_check_timeouts();
-            delay_ms(1);
-        }
-
-        // Check for Clear key every ~10ms
-        uint8_t key = os_GetCSC();
-        if (key == sk_Clear)
-        {
-            break;
-        }
-    }
-
-    // Shutdown HTTP server
-    g_cfg.flags &= (uint8_t)~LWIP_CFG_TEST_HTTP;
-    httpd_running = false;
-
-    os_FontDrawText("Shutting down...", 10, 120);
-    delay_ms(100);
-
-    // Clear screen before returning to wizard
-    fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-
-    return true;
-}
-
-// DNS Test - callback state
-static volatile bool dns_result_ready = false;
-static volatile ip_addr_t dns_resolved_ip;
-static volatile err_t dns_result_err;
-
-static void dns_test_callback(const char *name, const ip_addr_t *ipaddr, void *callback_arg)
-{
-    (void)name;
-    (void)callback_arg;
-
-    if (ipaddr != NULL)
-    {
-        dns_resolved_ip = *ipaddr;
-        dns_result_err = ERR_OK;
-    }
-    else
-    {
-        dns_result_err = ERR_TIMEOUT;
-    }
-    dns_result_ready = true;
-}
-
-static bool config_run_dns_test(struct config_option *opt)
-{
-    (void)opt;
-
-    if (!setup_test_network("DNS Test"))
-    {
-        return true;
-    }
-
-    os_FontDrawText("Target: example.com", 10, 50);
-
-    // Start DNS lookup
-    int timeout;
-    dns_result_ready = false;
-    os_FontDrawText("Resolving example.com...", 10, 50);
-
-    ip_addr_t addr;
-    err_t err = dns_gethostbyname("example.com", &addr, dns_test_callback, NULL);
-
-    if (err == ERR_OK)
-    {
-        // Immediate result (cached)
-        dns_resolved_ip = addr;
-        dns_result_ready = true;
-        dns_result_err = ERR_OK;
-    }
-    else if (err == ERR_INPROGRESS)
-    {
-        // Wait for callback
-        timeout = 1000; // 10 seconds at 10ms intervals
-        while (timeout > 0 && !dns_result_ready)
-        {
-            usb_HandleEvents();
-            sys_check_timeouts();
-
-            if (!test_network_available())
-            {
-                os_FontDrawText("Network lost", 10, 70);
-                cleanup_test_screen_fast();
-                return true;
-            }
-
-            uint8_t key = os_GetCSC();
-            if (key == sk_Clear)
-            {
-                os_FontDrawText("Cancelled", 10, 70);
-                delay_ms(1000);
-                cleanup_test_screen_fast();
-                return true;
-            }
-
-            delay_ms(10);
-            timeout--;
-        }
-    }
-    else
-    {
-        dns_result_err = err;
-        dns_result_ready = true;
-    }
-
-    fill_rect(0, 50, 320, 40, COLOR_WHITE);
-    if (dns_result_ready && dns_result_err == ERR_OK)
-    {
-        os_FontDrawText("DNS lookup successful!", 10, 50);
-        char result_buf[64];
-        snprintf(result_buf, sizeof(result_buf), "example.com = %d.%d.%d.%d",
-                 ip4_addr1(&dns_resolved_ip.u_addr.ip4),
-                 ip4_addr2(&dns_resolved_ip.u_addr.ip4),
-                 ip4_addr3(&dns_resolved_ip.u_addr.ip4),
-                 ip4_addr4(&dns_resolved_ip.u_addr.ip4));
-        os_FontDrawText(result_buf, 10, 70);
-    }
-    else
-    {
-        os_FontDrawText("DNS lookup failed", 10, 50);
-        char err_buf[64];
-        snprintf(err_buf, sizeof(err_buf), "Error: %d", dns_result_err);
-        os_FontDrawText(err_buf, 10, 70);
-    }
-
-    cleanup_test_screen();
-    return true;
-}
-
-// Ping test state
-static volatile bool ping_reply_received = false;
-static volatile uint32_t ping_start_time = 0;
-static volatile uint32_t ping_rtt_ms = 0;
-static uint16_t ping_seq_num = 0;
-
-static uint8_t ping_recv_callback(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr)
-{
-    (void)arg;
-    (void)pcb;
-    (void)addr;
-
-    if (!p || p->len < (sizeof(struct ip_hdr) + sizeof(struct icmp_echo_hdr)))
-    {
-        if (p) pbuf_free(p);
-        return 0; // don't eat packet if invalid
-    }
-
-    struct ip_hdr *iphdr = (struct ip_hdr *)p->payload;
-    uint16_t iphdr_len = IPH_HL_BYTES(iphdr);
-    if (p->len < (iphdr_len + sizeof(struct icmp_echo_hdr)))
-    {
-        pbuf_free(p);
-        return 0; // don't eat packet if invalid
-    }
-
-    struct icmp_echo_hdr *iecho = (struct icmp_echo_hdr *)((uint8_t *)p->payload + iphdr_len);
-
-    if ((iecho->type == ICMP_ER) && (iecho->id == 0xABCD) && (lwip_ntohs(iecho->seqno) == ping_seq_num))
-    {
-        uint32_t now = sys_now();
-        ping_rtt_ms = now - ping_start_time;
-        ping_reply_received = true;
-    }
-
-    pbuf_free(p);
-    return 1; // eat packet
-}
-
-static bool config_run_ping_test(struct config_option *opt)
-{
-    (void)opt;
-
-    if (!setup_test_network("Ping Test"))
-    {
-        return true;
-    }
-
-    // Create RAW socket for ICMP
-    struct raw_pcb *ping_pcb = raw_new(IP_PROTO_ICMP);
-    if (!ping_pcb)
-    {
-        os_FontDrawText("Failed to create ICMP socket", 10, 50);
-        os_FontDrawText("Press any key", 10, 70);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return true;
-    }
-
-    raw_recv(ping_pcb, ping_recv_callback, NULL);
-    raw_bind_netif(ping_pcb, netif_default);
-
-    // Target: Google DNS (8.8.8.8) - reliable ping responder
-    ip_addr_t ping_target;
-    IP_ADDR4(&ping_target, 8, 8, 8, 8);
-
-    char target_buf[64];
-    snprintf(target_buf, sizeof(target_buf), "Target: 8.8.8.8 (Google DNS)");
-    fill_rect(0, 30, 320, 20, COLOR_WHITE);
-    os_FontDrawText(target_buf, 10, 30);
-
-    os_FontDrawText("Sending ping...", 10, 50);
-
-    // Send 4 pings
-    int timeout;
-    int successful_pings = 0;
-    uint32_t total_rtt = 0;
-
-    for (int i = 0; i < 4; i++)
-    {
-        ping_reply_received = false;
-        ping_seq_num = i + 1;
-
-        // Allocate ICMP echo request
-        struct pbuf *p = pbuf_alloc(PBUF_IP, sizeof(struct icmp_echo_hdr) + 32, PBUF_RAM);
-        if (!p)
-        {
-            continue;
-        }
-
-        struct icmp_echo_hdr *iecho = (struct icmp_echo_hdr *)p->payload;
-        ICMPH_TYPE_SET(iecho, ICMP_ECHO);
-        ICMPH_CODE_SET(iecho, 0);
-        iecho->chksum = 0;
-        iecho->id = 0xABCD;
-        iecho->seqno = lwip_htons(ping_seq_num);
-
-        // Fill data
-        char *data = (char *)iecho + sizeof(struct icmp_echo_hdr);
-        for (int j = 0; j < 32; j++)
-        {
-            data[j] = 0x61 + (j % 26); // a-z pattern
-        }
-
-        // Calculate checksum
-        iecho->chksum = inet_chksum(iecho, sizeof(struct icmp_echo_hdr) + 32);
-
-        // Send
-        ping_start_time = sys_now();
-        err_t err = raw_sendto(ping_pcb, p, &ping_target);
-        pbuf_free(p);
-
-        if (err != ERR_OK)
-        {
-            char err_buf[64];
-            snprintf(err_buf, sizeof(err_buf), "Ping %d: Send failed", i + 1);
-            os_FontDrawText(err_buf, 10, 70 + i * 15);
-            continue;
-        }
-
-        // Wait for reply (2 second timeout)
-        // Process network events frequently to avoid missing replies
-        timeout = 200; // 200 iterations * 10ms = 2 seconds
-        while (timeout > 0 && !ping_reply_received)
-        {
-            usb_HandleEvents();
-            sys_check_timeouts();
-
-            if (!test_network_available())
-            {
-                raw_remove(ping_pcb);
-                cleanup_test_screen_fast();
-                return true;
-            }
-
-            uint8_t key = os_GetCSC();
-            if (key == sk_Clear)
-            {
-                raw_remove(ping_pcb);
-                fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_WHITE);
-                return true;
-            }
-
-            delay_ms(10); // Shorter delay for faster network processing
-            timeout--;
-        }
-
-        // Display result
-        char result_buf[64];
-        if (ping_reply_received)
-        {
-            snprintf(result_buf, sizeof(result_buf), "Ping %d: %lu ms", i + 1, (unsigned long)ping_rtt_ms);
-            successful_pings++;
-            total_rtt += ping_rtt_ms;
-        }
-        else
-        {
-            snprintf(result_buf, sizeof(result_buf), "Ping %d: Timeout", i + 1);
-        }
-        os_FontDrawText(result_buf, 10, 70 + i * 15);
-
-        // Wait 500ms before next ping (process events while waiting)
-        if (i < 3)
-        {
-            for (int wait = 0; wait < 50; wait++)
-            {
-                usb_HandleEvents();
-                sys_check_timeouts();
-                delay_ms(10);
-            }
-        }
-    }
-
-    // Display statistics
-    char stats_buf[64];
-    snprintf(stats_buf, sizeof(stats_buf), "Success: %d/4", successful_pings);
-    os_FontDrawText(stats_buf, 10, 140);
-
-    if (successful_pings > 0)
-    {
-        uint32_t avg_rtt = total_rtt / successful_pings;
-        snprintf(stats_buf, sizeof(stats_buf), "Avg RTT: %lu ms", (unsigned long)avg_rtt);
-        os_FontDrawText(stats_buf, 10, 155);
-    }
-
-    raw_remove(ping_pcb);
-
-    cleanup_test_screen();
-    return true;
-}
-
-// TCP Echo test state
-static volatile bool tcp_echo_connected = false;
-static volatile bool tcp_echo_data_received = false;
-static volatile bool tcp_echo_error = false;
-static char tcp_echo_recv_buf[128];
-static size_t tcp_echo_recv_len = 0;
-
-static err_t tcp_echo_connected_callback(void *arg, struct tcp_pcb *tpcb, err_t err)
-{
-    (void)arg;
-    (void)tpcb;
-
-    if (err == ERR_OK)
-    {
-        tcp_echo_connected = true;
-    }
-    else
-    {
-        tcp_echo_error = true;
-    }
-    return ERR_OK;
-}
-
-static err_t tcp_echo_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
-{
-    (void)arg;
-    (void)err;
-
-    if (p == NULL)
-    {
-        // Connection closed
-        tcp_close(tpcb);
-        return ERR_OK;
-    }
-
-    // Copy received data
-    size_t to_copy = (p->tot_len < sizeof(tcp_echo_recv_buf) - 1) ? p->tot_len : (sizeof(tcp_echo_recv_buf) - 1);
-    pbuf_copy_partial(p, tcp_echo_recv_buf, to_copy, 0);
-    tcp_echo_recv_buf[to_copy] = '\0';
-    tcp_echo_recv_len = to_copy;
-    tcp_echo_data_received = true;
-
-    tcp_recved(tpcb, p->tot_len);
-    pbuf_free(p);
-    return ERR_OK;
-}
-
-static void tcp_echo_error_callback(void *arg, err_t err)
-{
-    (void)arg;
-    (void)err;
-    tcp_echo_error = true;
-}
-
-static bool config_run_tcp_echo_test(struct config_option *opt)
-{
-    (void)opt;
-
-    if (!setup_test_network("TCP Echo Test"))
-    {
-        return true;
-    }
-
-    os_FontDrawText("Target: tcpbin.com:4242", 10, 50);
-
-    // Resolve tcpbin.com
-    int timeout;
-    os_FontDrawText("Resolving tcpbin.com...", 10, 50);
-    dns_result_ready = false;
-
-    ip_addr_t server_addr;
-    err_t err = dns_gethostbyname("tcpbin.com", &server_addr, dns_test_callback, NULL);
-
-    if (err == ERR_INPROGRESS)
-    {
-        timeout = 1000; // 10 seconds at 10ms intervals
-        while (timeout > 0 && !dns_result_ready)
-        {
-            usb_HandleEvents();
-            sys_check_timeouts();
-            if (os_GetCSC() == sk_Clear)
-            {
-                os_FontDrawText("Cancelled", 10, 70);
-                delay_ms(100);
-                cleanup_test_screen_fast();
-                return true;
-            }
-            delay_ms(10);
-            timeout--;
-        }
-
-        if (!dns_result_ready || dns_result_err != ERR_OK)
-        {
-            os_FontDrawText("DNS lookup failed", 10, 70);
-            os_FontDrawText("Press any key", 10, 90);
-            os_GetKey();
-            cleanup_test_screen_fast();
-            return true;
-        }
-        server_addr = dns_resolved_ip;
-    }
-    else if (err != ERR_OK)
-    {
-        os_FontDrawText("DNS lookup failed", 10, 70);
-        os_FontDrawText("Press any key", 10, 90);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return true;
-    }
-
-    // Create TCP connection
-    os_FontDrawText("Connecting to server...", 10, 50);
-
-    struct tcp_pcb *tcp_pcb = tcp_new();
-    if (!tcp_pcb)
-    {
-        os_FontDrawText("Failed to create TCP socket", 10, 70);
-        os_FontDrawText("Press any key", 10, 90);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return true;
-    }
-
-    tcp_echo_connected = false;
-    tcp_echo_error = false;
-    tcp_echo_data_received = false;
-
-    tcp_arg(tcp_pcb, NULL);
-    tcp_recv(tcp_pcb, tcp_echo_recv_callback);
-    tcp_err(tcp_pcb, tcp_echo_error_callback);
-
-    err = tcp_connect(tcp_pcb, &server_addr, 4242, tcp_echo_connected_callback);
-    if (err != ERR_OK)
-    {
-        tcp_abort(tcp_pcb);
-        os_FontDrawText("Connection failed", 10, 70);
-        os_FontDrawText("Press any key", 10, 90);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return true;
-    }
-
-    // Wait for connection
-    timeout = 1000; // 10 seconds at 10ms intervals
-    while (timeout > 0 && !tcp_echo_connected && !tcp_echo_error)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-        if (!test_network_available())
-        {
-            tcp_abort(tcp_pcb);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        if (os_GetCSC() == sk_Clear)
-        {
-            tcp_abort(tcp_pcb);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        delay_ms(10);
-        timeout--;
-    }
-
-    if (tcp_echo_error || !tcp_echo_connected)
-    {
-        tcp_abort(tcp_pcb);
-        os_FontDrawText("Connection timeout/error", 10, 70);
-        os_FontDrawText("Press any key", 10, 90);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return true;
-    }
-
-    os_FontDrawText("Connected! Sending test data...", 10, 50);
-
-    // Send test message
-    const char *test_msg = "Hello from TI-84 CE!\r\n";
-    err = tcp_write(tcp_pcb, test_msg, strlen(test_msg), TCP_WRITE_FLAG_COPY);
-    if (err != ERR_OK)
-    {
-        tcp_close(tcp_pcb);
-        os_FontDrawText("Send failed", 10, 70);
-        os_FontDrawText("Press any key", 10, 90);
-        os_GetKey();
-        cleanup_test_screen_fast();
-        return true;
-    }
-
-    tcp_output(tcp_pcb);
-
-    // Wait for echo response
-    os_FontDrawText("Waiting for echo...", 10, 70);
-    timeout = 1000; // 10 seconds at 10ms intervals
-    while (timeout > 0 && !tcp_echo_data_received && !tcp_echo_error)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-        if (!test_network_available())
-        {
-            tcp_close(tcp_pcb);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        if (os_GetCSC() == sk_Clear)
-        {
-            tcp_close(tcp_pcb);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        delay_ms(10);
-        timeout--;
-    }
-
-    fill_rect(0, 50, 320, 100, COLOR_WHITE);
-    if (tcp_echo_data_received)
-    {
-        os_FontDrawText("Echo received!", 10, 50);
-        os_FontDrawText("Sent:", 10, 70);
-        os_FontDrawText("  Hello from TI-84 CE!", 10, 85);
-        os_FontDrawText("Received:", 10, 105);
-
-        char recv_display[40];
-        snprintf(recv_display, sizeof(recv_display), "  %.30s", tcp_echo_recv_buf);
-        os_FontDrawText(recv_display, 10, 120);
-
-        // Check if our sent message is contained in the response
-        // (echo servers may add extra characters like prompts)
-        if (strstr(tcp_echo_recv_buf, "Hello from TI-84 CE!") != NULL)
-        {
-            os_FontDrawText("Test PASSED!", 10, 140);
-        }
-        else
-        {
-            os_FontDrawText("Data mismatch - Test FAILED", 10, 140);
-        }
-    }
-    else
-    {
-        os_FontDrawText("No echo received (timeout)", 10, 50);
-    }
-
-    tcp_close(tcp_pcb);
-
-    cleanup_test_screen();
-    return true;
-}
-
-/* ========== TLS Connection Test ========== */
-
-/* TLS test state */
-static volatile bool tls_test_connected = false;
-static volatile bool tls_test_error = false;
-static volatile bool tls_test_data_received = false;
-static char tls_test_recv_buf[256];
-static size_t tls_test_recv_len = 0;
-
-static err_t tls_test_connected_callback(void *arg, struct altcp_pcb *tpcb, err_t err)
-{
-    (void)arg;
-
-    if (err == ERR_OK)
-    {
-        tls_test_connected = true;
-
-        /* Send HTTP GET request */
-        const char *request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
-        err_t write_err = altcp_write(tpcb, request, (u16_t)strlen(request), TCP_WRITE_FLAG_COPY);
-        if (write_err == ERR_OK)
-        {
-            altcp_output(tpcb);
-        }
-        else
-        {
-            tls_test_error = true;
-            altcp_abort(tpcb);
-            return ERR_ABRT;
-        }
-    }
-    else
-    {
-        tls_test_error = true;
-    }
-    return ERR_OK;
-}
-
-static err_t tls_test_recv_callback(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err)
-{
-    (void)arg;
-    (void)err;
-
-    if (p == NULL)
-    {
-        altcp_close(tpcb);
-        return ERR_OK;
-    }
-
-    if (!tls_test_data_received)
-    {
-        size_t to_copy = (p->tot_len < sizeof(tls_test_recv_buf) - 1)
-                             ? p->tot_len
-                             : (sizeof(tls_test_recv_buf) - 1);
-        pbuf_copy_partial(p, tls_test_recv_buf, (u16_t)to_copy, 0);
-        tls_test_recv_buf[to_copy] = '\0';
-        tls_test_recv_len = to_copy;
-        tls_test_data_received = true;
-    }
-
-    altcp_recved(tpcb, p->tot_len);
-    pbuf_free(p);
-    return ERR_OK;
-}
-
-static void tls_test_error_callback(void *arg, err_t err)
-{
-    (void)arg;
-    (void)err;
-    tls_test_error = true;
-}
-
-static bool config_run_tls_test(struct config_option *opt)
-{
-    (void)opt;
-
-    if (!setup_test_network("TLS Test"))
-    {
-        return true;
-    }
-
-    os_FontDrawText("Target: example.com:443", 10, 50);
-
-    /* Resolve example.com */
-    int timeout;
-    fill_rect(0, 50, 320, 14, COLOR_WHITE);
-    os_FontDrawText("Resolving example.com...", 10, 50);
-    dns_result_ready = false;
-
-    ip_addr_t server_addr;
-    err_t err = dns_gethostbyname("example.com", &server_addr, dns_test_callback, NULL);
-
-    if (err == ERR_INPROGRESS)
-    {
-        timeout = 1000;
-        while (timeout > 0 && !dns_result_ready)
-        {
-            usb_HandleEvents();
-            sys_check_timeouts();
-            if (os_GetCSC() == sk_Clear)
-            {
-                cleanup_test_screen_fast();
-                return true;
-            }
-            delay_ms(10);
-            timeout--;
-        }
-
-        if (!dns_result_ready || dns_result_err != ERR_OK)
-        {
-            os_FontDrawText("DNS lookup failed", 10, 70);
-            cleanup_test_screen();
-            return true;
-        }
-        server_addr = dns_resolved_ip;
-    }
-    else if (err != ERR_OK)
-    {
-        os_FontDrawText("DNS lookup failed", 10, 70);
-        cleanup_test_screen();
-        return true;
-    }
-
-    /* Show resolved IP and reject loopback */
-    {
-        char ip_buf[48];
-        snprintf(ip_buf, sizeof(ip_buf), "-> %d.%d.%d.%d",
-                 ip4_addr1(&server_addr.u_addr.ip4),
-                 ip4_addr2(&server_addr.u_addr.ip4),
-                 ip4_addr3(&server_addr.u_addr.ip4),
-                 ip4_addr4(&server_addr.u_addr.ip4));
-        fill_rect(0, 50, 320, 14, COLOR_WHITE);
-        os_FontDrawText(ip_buf, 10, 50);
-
-        if (ip4_addr1(&server_addr.u_addr.ip4) == 127) {
-            os_FontDrawText("Loopback addr - DNS issue", 10, 70);
-            cleanup_test_screen();
-            return true;
-        }
-    }
-
-    /* Create ECDHE-only TLS config + connection (includes ~5s X25519 keygen) */
-    os_FontDrawText("X25519 keygen (~5s)...", 10, 70);
-
-    struct altcp_tls_ce_config *tls_conf = altcp_tls_ce_create_config_client_ecdhe("example.com");
-    if (!tls_conf)
-    {
-        os_FontDrawText("Config creation failed", 10, 90);
-        cleanup_test_screen();
-        return true;
-    }
-
-    /* Flush any pending events/cleanup from prior tests */
-    usb_HandleEvents();
-    sys_check_timeouts();
-
-    struct altcp_pcb *tls_pcb = altcp_tls_ce_new(tls_conf, IPADDR_TYPE_V4);
-    if (!tls_pcb)
-    {
-        altcp_tls_ce_free_config(tls_conf);
-        os_FontDrawText("TLS PCB creation failed", 10, 70);
-        cleanup_test_screen();
-        return true;
-    }
-
-    tls_test_connected = false;
-    tls_test_error = false;
-    tls_test_data_received = false;
-    tls_test_recv_len = 0;
-
-    altcp_arg(tls_pcb, NULL);
-    altcp_recv(tls_pcb, tls_test_recv_callback);
-    altcp_err(tls_pcb, tls_test_error_callback);
-
-    fill_rect(0, 70, 320, 14, COLOR_WHITE);
-    os_FontDrawText("Connecting + handshake...", 10, 70);
-
-    err = altcp_connect(tls_pcb, &server_addr, 443, tls_test_connected_callback);
-    if (err != ERR_OK)
-    {
-        altcp_abort(tls_pcb);
-        altcp_tls_ce_free_config(tls_conf);
-        os_FontDrawText("Connect failed", 10, 70);
-        cleanup_test_screen();
-        return true;
-    }
-
-    /* Wait for TLS handshake + connected callback (may take ~15-20s for ECDHE) */
-    timeout = 6000; /* 60 seconds */
-    while (timeout > 0 && !tls_test_connected && !tls_test_error)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-        if (!test_network_available())
-        {
-            altcp_abort(tls_pcb);
-            altcp_tls_ce_free_config(tls_conf);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        if (os_GetCSC() == sk_Clear)
-        {
-            altcp_abort(tls_pcb);
-            altcp_tls_ce_free_config(tls_conf);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        delay_ms(10);
-        timeout--;
-    }
-
-    if (tls_test_error || !tls_test_connected)
-    {
-        altcp_abort(tls_pcb);
-        altcp_tls_ce_free_config(tls_conf);
-        fill_rect(0, 70, 320, 14, COLOR_WHITE);
-        os_FontDrawText("Handshake failed/timeout", 10, 70);
-        cleanup_test_screen();
-        return true;
-    }
-
-    fill_rect(0, 70, 320, 14, COLOR_WHITE);
-    os_FontDrawText("TLS connected! Waiting...", 10, 70);
-
-    /* Wait for HTTP response */
-    timeout = 1000; /* 10 seconds */
-    while (timeout > 0 && !tls_test_data_received && !tls_test_error)
-    {
-        usb_HandleEvents();
-        sys_check_timeouts();
-        if (!test_network_available())
-        {
-            altcp_close(tls_pcb);
-            altcp_tls_ce_free_config(tls_conf);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        if (os_GetCSC() == sk_Clear)
-        {
-            altcp_close(tls_pcb);
-            altcp_tls_ce_free_config(tls_conf);
-            cleanup_test_screen_fast();
-            return true;
-        }
-        delay_ms(10);
-        timeout--;
-    }
-
-    fill_rect(0, 70, 320, 150, COLOR_WHITE);
-    if (tls_test_data_received)
-    {
-        /* Check for HTTP 200 OK */
-        if (strstr(tls_test_recv_buf, "200 OK") != NULL)
-        {
-            os_SetDrawFGColor(0x07E0); /* Green */
-            os_FontDrawText("TLS Test PASSED!", 10, 70);
-            os_SetDrawFGColor(COLOR_BLACK);
-            os_FontDrawText("Got HTTP 200 from example.com", 10, 90);
-        }
-        else
-        {
-            os_FontDrawText("Got response (not 200):", 10, 70);
-        }
-
-        /* Show first line of response */
-        char *newline = strchr(tls_test_recv_buf, '\r');
-        if (newline) *newline = '\0';
-        char status_line[48];
-        snprintf(status_line, sizeof(status_line), "  %.44s", tls_test_recv_buf);
-        os_FontDrawText(status_line, 10, 110);
-    }
-    else
-    {
-        os_SetDrawFGColor(0xF800); /* Red */
-        os_FontDrawText("TLS Test FAILED", 10, 70);
-        os_SetDrawFGColor(COLOR_BLACK);
-        os_FontDrawText("No response received", 10, 90);
-    }
-
-    altcp_close(tls_pcb);
-    altcp_tls_ce_free_config(tls_conf);
-
-    cleanup_test_screen();
-    return true;
-}
-#endif
-
-static void format_tz_offset(char *buf, size_t buf_len, int16_t minutes)
-{
-    char sign = '+';
-    int16_t abs_min = minutes;
-    if (minutes < 0)
-    {
-        sign = '-';
-        abs_min = (int16_t)(-minutes);
-    }
-    if (abs_min == 0)
-    {
-        snprintf(buf, buf_len, "UTC");
+    char names[LOG_MAX_SLOTS][9];
+    int count = log_slots(names);
+    int slot = 0;
+    int top = 0;
+    int total = -1;
+
+    if (!count)
+    {
+        ui_message("Log", "No log saved yet", NULL);
         return;
     }
-    uint8_t hours = (uint8_t)(abs_min / 60);
-    uint8_t mins = (uint8_t)(abs_min % 60);
-    snprintf(buf, buf_len, "UTC%c%u:%02u", sign, hours, mins);
-}
 
-// ============================================================================
-// Modal Dialog Functions - Clean professional design
-// ============================================================================
-
-// Draw a modal dialog box
-static void ui_dialog_box(int x, int y, int w, int h, const char *title)
-{
-    // Shadow effect
-    ui_fill_rect(x + 3, y + 3, w, h, UI_COLOR_SEPARATOR);
-    // Main box
-    ui_box(x, y, w, h, UI_COLOR_BG, UI_COLOR_FG);
-    // Title bar
-    ui_fill_rect(x + 2, y + 2, w - 4, 18, UI_COLOR_HEADER);
-    os_SetDrawFGColor(UI_COLOR_BG);
-    int tw = (int)os_FontGetWidth(title);
-    os_FontDrawTransText(title, x + (w - tw) / 2, y + 4);
-}
-
-// Draw text input field
-static void ui_input_field(int x, int y, int w, const char *text, bool cursor)
-{
-    ui_fill_rect(x, y, w, 16, UI_COLOR_BG);
-    ui_fill_rect(x, y + 14, w, 2, UI_COLOR_FG);
-    os_SetDrawFGColor(UI_COLOR_FG);
-    os_FontDrawTransText(text, x + 2, y + 2);
-
-    // Draw block cursor after text (flush with underline)
-    if (cursor)
+    for (;;)
     {
-        int text_w = (int)os_FontGetWidth(text);
-        ui_fill_rect(x + 2 + text_w + 1, y + 4, 8, 10, UI_COLOR_ACCENT);
-    }
-}
+        var_t *var = os_GetAppVarData(names[slot], NULL);
+        const uint8_t *data = var ? var->data : NULL;
+        uint16_t size = var ? var->size : 0;
+        char lines[TEXT_ROWS][TEXT_COLS];
+        const char *ptrs[TEXT_ROWS];
+        char title[32];
+        uint16_t pos = 0;
+        int shown = 0;
 
-// Draw slider control
-static void ui_slider(int x, int y, int w, int value, int min_val, int max_val)
-{
-    int range = max_val - min_val;
-    int pos = range > 0 ? ((value - min_val) * (w - 12)) / range : 0;
-
-    // Track
-    ui_fill_rect(x, y + 5, w, 4, UI_COLOR_SEPARATOR);
-    // Thumb
-    ui_fill_rect(x + pos, y, 12, 14, UI_COLOR_ACCENT);
-}
-
-// Input modes for text editing
-typedef enum {
-    INPUT_MODE_LOWER = 0,  // a-z
-    INPUT_MODE_UPPER,      // A-Z
-    INPUT_MODE_DIGIT,      // 0-9
-    INPUT_MODE_COUNT
-} input_mode_t;
-
-static const char *input_mode_names[INPUT_MODE_COUNT] = {"a-z", "A-Z", "0-9"};
-
-static char scancode_to_alpha(uint8_t key, input_mode_t mode)
-{
-    // Letter keymap (lowercase)
-    static const char keymap[64] = {
-        0,   0,   0,   0,   0,   0,   0,   0,
-        0,   0,   '"', 'w', 'r', 'm', 'h', 0,
-        0,   '?', '[', 'v', 'q', 'l', 'g', 0,
-        0,   ':', 'z', 'u', 'p', 'k', 'f', 'c',
-        0,   ' ', 'y', 't', 'o', 'j', 'e', 'b',
-        0,   0,   'x', 's', 'n', 'i', 'd', 'a',
-        0,   0,   0,   0,   0,   0,   0,   0,
-        0,   0,   0,   0,   0,   0,   0,   0
-    };
-
-    // Handle digit mode
-    if (mode == INPUT_MODE_DIGIT)
-    {
-        if (key == sk_0) return '0';
-        if (key == sk_1) return '1';
-        if (key == sk_2) return '2';
-        if (key == sk_3) return '3';
-        if (key == sk_4) return '4';
-        if (key == sk_5) return '5';
-        if (key == sk_6) return '6';
-        if (key == sk_7) return '7';
-        if (key == sk_8) return '8';
-        if (key == sk_9) return '9';
-        if (key == sk_DecPnt) return '.';
-        if (key == sk_Sub) return '-';
-        return 0;
-    }
-
-    // Handle letter modes
-    if (key >= 64) return 0;
-    char c = keymap[key];
-    if (key == sk_Sub) c = '-';
-    if (key == sk_DecPnt) c = '.';
-    if (!((c >= 'a' && c <= 'z') || c == '-' || c == '.'))
-        return 0;
-    if (c >= 'a' && c <= 'z' && mode == INPUT_MODE_UPPER)
-    {
-        c = (char)(c - 'a' + 'A');
-    }
-    return c;
-}
-
-// Helper to draw just the mode indicator
-static void ui_draw_hostname_mode(int y, input_mode_t mode)
-{
-    // Clear mode area and redraw
-    ui_fill_rect(55, y, 100, 14, UI_COLOR_BG);
-    char mode_str[24];
-    snprintf(mode_str, sizeof(mode_str), "Mode: %s", input_mode_names[mode]);
-    os_SetDrawFGColor(UI_COLOR_ACCENT);
-    os_FontDrawTransText(mode_str, 55, y);
-}
-
-// Helper to draw just the hostname input field
-static void ui_draw_hostname_input(int y, const char *buffer)
-{
-    ui_input_field(55, y, 200, buffer, true);
-}
-
-static void edit_hostname_config(lwip_app_config_t *cfg)
-{
-    char buffer[LWIP_CFG_HOSTNAME_MAX];
-    strncpy(buffer, cfg->hostname, LWIP_CFG_HOSTNAME_MAX - 1);
-    buffer[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
-    int pos = (int)strlen(buffer);
-    input_mode_t mode = INPUT_MODE_LOWER;
-
-    // Dialog layout constants
-    const int dlg_x = 30, dlg_y = 60, dlg_w = 260, dlg_h = 70;
-    const int mode_y = 82;
-    const int input_y = 98;
-
-    // Initial full draw
-    ui_dialog_box(dlg_x, dlg_y, dlg_w, dlg_h, "Edit Hostname");
-    ui_draw_hostname_mode(mode_y, mode);
-    ui_draw_hostname_input(input_y, buffer);
-    ui_draw_footer("<alpha> Mode  <del> Backspace",
-                   "<enter> OK  <clear> Cancel");
-
-    while (1)
-    {
-        uint8_t key = 0;
-        do { key = os_GetCSC(); } while (key == 0);
-
-        if (key == sk_Clear) return;
-        if (key == sk_Enter)
+        if (total < 0)
         {
-            strncpy(cfg->hostname, buffer, LWIP_CFG_HOSTNAME_MAX - 1);
-            cfg->hostname[LWIP_CFG_HOSTNAME_MAX - 1] = '\0';
+            for (total = 0; pos < size; total++)
+                pos = log_wrap_next(data, size, pos, lines[0], TEXT_COLS);
+            top = total > TEXT_ROWS ? total - TEXT_ROWS : 0;
+            pos = 0;
+        }
+        for (int row = 0; row < top && pos < size; row++)
+            pos = log_wrap_next(data, size, pos, lines[0], TEXT_COLS);
+        for (; shown < TEXT_ROWS && pos < size; shown++)
+        {
+            pos = log_wrap_next(data, size, pos, lines[shown], TEXT_COLS);
+            ptrs[shown] = lines[shown];
+        }
+
+        if (slot)
+            snprintf(title, sizeof title, "Log archive %d", slot);
+        else
+            snprintf(title, sizeof title, "Log");
+        char right[8];
+        snprintf(right, sizeof right, "%d/%d", slot + 1, count);
+        ui_frame(title, right, NULL, 0, "left/right: file   del: delete   clear: back");
+        ui_body_text(ptrs, shown, 0);
+        ui_present();
+
+        uint8_t key = ui_wait_key();
+        if (key == sk_Clear)
+            return;
+        if (key == sk_Del && ui_confirm("Delete log", "Delete all saved logs?"))
+        {
+            for (int i = 0; i < count; i++)
+                ti_Delete(names[i]);
+            ti_Delete(LWIP_LOG_META_APPVAR);
             return;
         }
-        if (key == sk_Del && pos > 0)
-        {
-            buffer[--pos] = '\0';
-            ui_draw_hostname_input(input_y, buffer);
-            continue;
-        }
-        if (key == sk_Alpha)
-        {
-            mode = (input_mode_t)((mode + 1) % INPUT_MODE_COUNT);
-            ui_draw_hostname_mode(mode_y, mode);
-            continue;
-        }
-
-        char c = scancode_to_alpha(key, mode);
-        if (c && pos < LWIP_CFG_HOSTNAME_MAX - 1)
-        {
-            buffer[pos++] = c;
-            buffer[pos] = '\0';
-            ui_draw_hostname_input(input_y, buffer);
-        }
+        if (key == sk_Left && slot > 0)
+            slot--, total = -1;
+        if (key == sk_Right && slot < count - 1)
+            slot++, total = -1;
+        if (key == sk_Up && top > 0)
+            top--;
+        if (key == sk_Down && top + TEXT_ROWS < total)
+            top++;
     }
 }
 
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-static void apply_network_config(const lwip_app_config_t *cfg)
+static void edit_hostname(void)
 {
-    /* The configuration utility's built-in service tests always use DHCP.
-     * Applications that need static addressing provide lwip_socket_addrinfo_t
-     * when creating their sockets. */
-    if (netif_default && !dhcp_client_running(netif_default))
-    {
-        dhcp_start(netif_default);
-        dhcp_started = true;
-    }
-    else if (netif_default)
-    {
-        dhcp_started = true;
-    }
+    char buffer[LWIP_CFG_HOSTNAME_MAX];
 
-    if ((cfg->flags & LWIP_CFG_TEST_HTTP) != 0)
-    {
-        if (netif_default && !httpd_running)
-        {
-            bool has_ip = dhcp_supplied_address(netif_default);
-            if (has_ip)
-            {
-                httpd_init();
-                httpd_running = true;
-            }
-        }
-    }
-    else
-    {
-        httpd_running = false;
-    }
-
-    if (!netif_default)
-    {
-        dhcp_started = false;
-        if (sntp_started)
-        {
-            sntp_stop();
-            sntp_started = false;
-        }
-    }
+    snprintf(buffer, sizeof buffer, "%s", g_cfg.hostname);
+    if (ui_edit_text("Hostname", buffer, sizeof buffer, false) && buffer[0])
+        snprintf(g_cfg.hostname, sizeof g_cfg.hostname, "%s", buffer);
 }
 
-static void cleanup_lwip_stack(void)
+static int build_menu(ui_item_t *items, uint8_t *roles, char *tz, size_t tz_size, char *pcap, size_t pcap_size,
+                      char *slots, size_t slots_size, bool has_pcap, bool has_log)
 {
-    if (!lwip_started)
-    {
-        return;
-    }
-    lwip_started = false;
+    uint8_t wifi_color;
+    const char *wifi = app_wifi_summary(&wifi_color);
+    int count = 0;
 
-    lwip_dispatch_stop();
-    eth_prepare_shutdown();
+    format_tz(tz, tz_size, g_cfg.tz_offset_minutes);
+    snprintf(pcap, pcap_size, "%u KiB", g_cfg.pcap_max_bytes / 1024u);
+    snprintf(slots, slots_size, "%u", (unsigned)g_cfg.log_archive_slots);
 
-    if (sntp_started)
-    {
-        sntp_stop();
-        sntp_started = false;
-    }
-
-    struct netif *n = NULL;
-    NETIF_FOREACH(n)
-    {
-#if LWIP_DHCP
-        if (dhcp_client_running(n))
-        {
-            dhcp_release_and_stop(n);
-        }
-#endif
-    }
-
-    lwip_teardown_abort_pcbs();
-
-    NETIF_FOREACH(n)
-    {
-        netif_set_link_down(n);
-        netif_set_down(n);
-    }
-
-    dhcp_started = false;
-    httpd_running = false;
-    eth_finish_shutdown();
-    usb_Cleanup();
+#define ADD(role, ...) (roles[count] = (role), items[count++] = (ui_item_t){__VA_ARGS__})
+    ADD(ROW_SECTION, UI_ITEM_SECTION, "Network", NULL, NULL, false, 0);
+    ADD(ROW_WIFI, UI_ITEM_ACTION, "Wi-Fi", "Saved networks and scanning", wifi, false, wifi_color);
+    ADD(ROW_HOSTNAME, UI_ITEM_ACTION, "Hostname", "Name shown to the network", g_cfg.hostname, false, 0);
+    ADD(ROW_SECTION, UI_ITEM_SECTION, "Time", NULL, NULL, false, 0);
+    ADD(ROW_TIMEZONE, UI_ITEM_VALUE, "Timezone", "left/right to change", tz, false, 0);
+    ADD(ROW_DST, UI_ITEM_TOGGLE, "Daylight saving", "Add an hour in summer", NULL, g_cfg.dst_enabled != 0, 0);
+    ADD(ROW_SECTION, UI_ITEM_SECTION, "Security", NULL, NULL, false, 0);
+    ADD(ROW_TLS, UI_ITEM_TOGGLE, "TLS", "Allow encrypted sockets", NULL, g_cfg.tls_enabled != 0, 0);
+    ADD(ROW_CRYPTO_OFFLOAD, UI_ITEM_TOGGLE, "Crypto offload", "Bridge does TLS key math", NULL,
+        g_cfg.crypto_offload != 0, 0);
+    ADD(ROW_BRIDGE_RNG, UI_ITEM_TOGGLE, "Bridge TRNG", "Bridge supplies all randomness", NULL,
+        g_cfg.bridge_rng != 0, 0);
+    ADD(ROW_SECTION, UI_ITEM_SECTION, "Diagnostics", NULL, NULL, false, 0);
+    ADD(ROW_PCAP_ENABLED, UI_ITEM_TOGGLE, "Enable PCAP", "Always capture packets", NULL,
+        g_cfg.pcap_enabled != 0, 0);
+    ADD(ROW_PCAP_SIZE, UI_ITEM_VALUE, "Capture limit", "left/right to change", pcap, false, 0);
+    if (has_pcap)
+        ADD(ROW_PCAP_VIEW, UI_ITEM_ACTION, "Packet capture", "Inspect saved packets", NULL, false, 0);
+    ADD(ROW_LOG_ENABLED, UI_ITEM_TOGGLE, "Enable logging", "Log all events to file", NULL,
+        g_cfg.file_log_enabled != 0, 0);
+    ADD(ROW_LOG_VERBOSITY, UI_ITEM_VALUE, "Verbosity", "left/right to change",
+        verbosity_name(g_cfg.log_verbosity), false, 0);
+    ADD(ROW_LOG_SLOTS, UI_ITEM_VALUE, "Archive slots", "left/right to change", slots, false, 0);
+    if (has_log)
+        ADD(ROW_LOG_VIEW, UI_ITEM_ACTION, "View log", "Inspect saved log", NULL, false, 0);
+#undef ADD
+    return count;
 }
 
-static void lwip_fatal_cleanup(void)
+static void restore_os_screen(void)
 {
-    cleanup_lwip_stack();
-}
-
-static bool start_lwip_stack(const lwip_app_config_t *cfg)
-{
-    (void)cfg;
-
-    if (lwip_started)
-    {
-        return true;
-    }
-
-    eth_reset_shutdown();
-
-    if (lwip_init() != ERR_OK)
-    {
-        os_FontDrawText("lwip/mem init failed", 2, 2);
-        os_GetKey();
-        return false;
-    }
-
-    netif_add_ext_callback(&netif_ext_cb, netif_ext_callback);
-
-    if (usb_fn.init(eth_usb_event_callback, NULL, NULL, USB_DEFAULT_INIT_FLAGS))
-    {
-        os_FontDrawText("usb init failed", 2, 2);
-        os_GetKey();
-        return false;
-    }
-
-    lwip_started = true;
-    return true;
-}
-#endif
-
-int main(void)
-{
-    lwip_fileio_self_init();
-    g_pcap_available = config_has_readable_pcap();
-
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-    atexit(cleanup_lwip_stack);
-    lwip_debug_set_fatal_cleanup(lwip_fatal_cleanup);
-#endif
-
-    lwip_app_config_load(&g_cfg);
-    config_sync_from_cfg();
-
-    if (g_cfg.file_log_enabled)
-        lwip_log_file_start(g_cfg.log_archive_slots);
-    {
-        uint8_t lh = ti_Open(LWIP_LOG_APPVAR, "r");
-        if (lh) { g_log_available = ti_GetSize(lh) > 0; ti_Close(lh); }
-        if (!g_log_available)
-        {
-            uint8_t mh = ti_Open(LWIP_LOG_META_APPVAR, "r");
-            if (mh)
-            {
-                uint8_t meta[3] = {0};
-                ti_Read(meta, 1, 3, mh);
-                ti_Close(mh);
-                g_log_available = meta[1] > 0;
-            }
-        }
-    }
-
-    // Clear screen and set up font
-    boot_ClearVRAM();
-    os_FontSelect(os_SmallFont);
-
-    // New single-menu state
-    int selected = find_first_selectable();
-    int scroll_pos = 0;
-    edit_mode_t edit_mode = EDIT_NONE;
-    int edit_option = -1;
-    bool needs_redraw = true;
-
-    while (run_main)
-    {
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-        if (lwip_started)
-        {
-            apply_network_config(&g_cfg);
-            usb_HandleEvents();
-            sys_check_timeouts();
-        }
-#endif
-
-        if (needs_redraw)
-        {
-            ui_draw_full(selected, scroll_pos, edit_mode);
-            needs_redraw = false;
-        }
-
-        uint8_t key = os_GetCSC();
-        if (key == 0) continue;
-
-        // Exit
-        if (key == sk_Clear && edit_mode == EDIT_NONE)
-        {
-            run_main = false;
-            break;
-        }
-
-        // Save — deferred when the network stack is live to avoid triggering
-        // OS garbage collection (ti_Open/ti_Write move the heap) while lwIP
-        // PCBs and pbufs are allocated. The exit-path save covers persistence.
-        if (key == sk_2nd)
-        {
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-            if (!lwip_started)
-            {
-                lwip_app_config_save(&g_cfg);
-                config_sync_from_cfg();
-                lwip_app_config_refresh();
-                pcap_apply_config();
-            }
-#else
-            lwip_app_config_save(&g_cfg);
-            config_sync_from_cfg();
-            lwip_app_config_refresh();
-            pcap_apply_config();
-#endif
-            ui_draw_menu(selected, scroll_pos, false);
-            continue;
-        }
-
-        // Handle edit mode (slider adjustments)
-        if (edit_mode != EDIT_NONE)
-        {
-            if (key == sk_Clear || key == sk_Enter)
-            {
-                int old_edit = edit_option;
-                edit_mode = EDIT_NONE;
-                edit_option = -1;
-                ui_draw_single_option(old_edit, scroll_pos, selected, false);
-                ui_draw_mode_footer(false, EDIT_NONE);
-                continue;
-            }
-            bool value_changed = false;
-            if (key == sk_Left && edit_mode == EDIT_TZ && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                if (opt->id == OPT_TZ_OFFSET && g_cfg.tz_offset_minutes > LWIP_CFG_TZ_MIN_MINUTES)
-                {
-                    g_cfg.tz_offset_minutes = (int16_t)(g_cfg.tz_offset_minutes - LWIP_CFG_TZ_STEP_MINUTES);
-                    option_sync_from_cfg(opt);
-                    value_changed = true;
-                }
-            }
-            else if (key == sk_Right && edit_mode == EDIT_TZ && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                if (opt->id == OPT_TZ_OFFSET && g_cfg.tz_offset_minutes < LWIP_CFG_TZ_MAX_MINUTES)
-                {
-                    g_cfg.tz_offset_minutes = (int16_t)(g_cfg.tz_offset_minutes + LWIP_CFG_TZ_STEP_MINUTES);
-                    option_sync_from_cfg(opt);
-                    value_changed = true;
-                }
-            }
-            else if ((key == sk_Left || key == sk_Right) &&
-                     edit_mode == EDIT_PCAP_SIZE && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                uint16_t current = g_cfg.pcap_max_bytes;
-                uint16_t next = current;
-                if (key == sk_Left)
-                {
-                    if (current == LWIP_CFG_PCAP_SIZE_32K) next = LWIP_CFG_PCAP_SIZE_16K;
-                    else if (current == LWIP_CFG_PCAP_SIZE_16K) next = LWIP_CFG_PCAP_SIZE_8K;
-                    else if (current == LWIP_CFG_PCAP_SIZE_8K) next = LWIP_CFG_PCAP_SIZE_4K;
-                }
-                else
-                {
-                    if (current == LWIP_CFG_PCAP_SIZE_4K) next = LWIP_CFG_PCAP_SIZE_8K;
-                    else if (current == LWIP_CFG_PCAP_SIZE_8K) next = LWIP_CFG_PCAP_SIZE_16K;
-                    else if (current == LWIP_CFG_PCAP_SIZE_16K) next = LWIP_CFG_PCAP_SIZE_32K;
-                }
-                if (next != current)
-                {
-                    g_cfg.pcap_max_bytes = next;
-                    option_sync_from_cfg(opt);
-                    value_changed = true;
-                }
-            }
-            else if ((key == sk_Left || key == sk_Right) &&
-                     edit_mode == EDIT_LOG_SLOTS && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                uint8_t current = g_cfg.log_archive_slots;
-                uint8_t next = current;
-                if (key == sk_Left && current > LWIP_CFG_LOG_ARCHIVE_SLOTS_MIN)
-                    next = (uint8_t)(current - 1u);
-                else if (key == sk_Right && current < LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX)
-                    next = (uint8_t)(current + 1u);
-                if (next != current)
-                {
-                    g_cfg.log_archive_slots = next;
-                    option_sync_from_cfg(opt);
-                    value_changed = true;
-                }
-            }
-            else if ((key == sk_Left || key == sk_Right) &&
-                     edit_mode == EDIT_LOG_VERBOSITY && edit_option >= 0)
-            {
-                struct config_option *opt = &config_options[edit_option];
-                uint8_t current = g_cfg.log_verbosity;
-                uint8_t next = current;
-                if (key == sk_Left && current > LWIP_CFG_LOG_VERBOSITY_MIN)
-                    next = (uint8_t)(current - 1u);
-                else if (key == sk_Right && current < LWIP_CFG_LOG_VERBOSITY_MAX)
-                    next = (uint8_t)(current + 1u);
-                if (next != current)
-                {
-                    g_cfg.log_verbosity = next;
-                    option_sync_from_cfg(opt);
-                    apply_logging_config();
-                    value_changed = true;
-                }
-            }
-            if (value_changed)
-            {
-                ui_draw_single_option(selected, scroll_pos, selected, true);
-            }
-            continue;
-        }
-
-        // Left/Right - directly set a bool-toggle row
-        if ((key == sk_Left || key == sk_Right) && selected >= 0 &&
-            config_options[selected].type == F_TYPE_BOOL_TOGGLE)
-        {
-            struct config_option *opt = &config_options[selected];
-            bool new_value = (key == sk_Right);
-            if (new_value != option_get_bool(opt->value) && opt->setter)
-            {
-                opt->setter(opt);
-                ui_draw_single_option(selected, scroll_pos, selected, false);
-            }
-            continue;
-        }
-
-        // Navigation - Up/Down
-        if (key == sk_Up || key == sk_Down)
-        {
-            int dir = (key == sk_Up) ? -1 : 1;
-            int new_sel = find_next_selectable(selected, dir);
-            if (new_sel != selected)
-            {
-                int old_sel = selected;
-                int old_scroll = scroll_pos;
-                selected = new_sel;
-                scroll_pos = ui_ensure_visible(selected, scroll_pos);
-                if (scroll_pos != old_scroll)
-                {
-                    // Page shifted - use fast VRAM scroll
-                    int scroll_diff = scroll_pos - old_scroll;
-                    int abs_diff = scroll_diff > 0 ? scroll_diff : -scroll_diff;
-
-                    // Redraw old selection as unselected BEFORE scroll
-                    // so shifted pixels don't have selection highlight
-                    ui_draw_single_option(old_sel, old_scroll, -1, false);
-
-                    // Shift VRAM content
-                    ui_scroll_content(scroll_diff);
-
-                    // Draw the new rows that scrolled into view
-                    if (scroll_diff > 0)
-                    {
-                        // Scrolled down: draw new rows at bottom
-                        for (int i = 0; i < abs_diff && i < UI_VISIBLE_ROWS; i++)
-                        {
-                            int idx = option_index_at_visible(
-                                scroll_pos + UI_VISIBLE_ROWS - 1 - i);
-                            if (idx >= 0)
-                                ui_draw_single_option(idx, scroll_pos, selected, false);
-                        }
-                    }
-                    else
-                    {
-                        // Scrolled up: draw new rows at top
-                        for (int i = 0; i < abs_diff && i < UI_VISIBLE_ROWS; i++)
-                        {
-                            int idx = option_index_at_visible(scroll_pos + i);
-                            if (idx >= 0)
-                                ui_draw_single_option(idx, scroll_pos, selected, false);
-                        }
-                    }
-                    // Redraw new selection
-                    ui_draw_single_option(selected, scroll_pos, selected, false);
-                    // Update scrollbar
-                    ui_draw_scrollbar(scroll_pos, visible_option_count());
-                }
-                else
-                {
-                    // Same page, only redraw old and new rows
-                    ui_draw_single_option(old_sel, scroll_pos, selected, false);
-                    ui_draw_single_option(selected, scroll_pos, selected, false);
-                }
-            }
-            continue;
-        }
-
-        // Enter - activate option
-        if (key == sk_Enter && selected >= 0)
-        {
-            struct config_option *opt = &config_options[selected];
-
-            if (opt->type == F_TYPE_INT_SLIDER)
-            {
-                // Enter edit mode for sliders
-                if (opt->id == OPT_TZ_OFFSET)
-                {
-                    edit_mode = EDIT_TZ;
-                    edit_option = selected;
-                }
-                else if (opt->id == OPT_PCAP_MAX_SIZE)
-                {
-                    edit_mode = EDIT_PCAP_SIZE;
-                    edit_option = selected;
-                }
-                else if (opt->id == OPT_LOG_ARCHIVE_SLOTS)
-                {
-                    edit_mode = EDIT_LOG_SLOTS;
-                    edit_option = selected;
-                }
-                else if (opt->id == OPT_LOG_VERBOSITY)
-                {
-                    edit_mode = EDIT_LOG_VERBOSITY;
-                    edit_option = selected;
-                }
-                ui_draw_single_option(selected, scroll_pos, selected, true);
-                ui_draw_mode_footer(true, edit_mode);
-            }
-            else if (opt->type == F_TYPE_ACTION && opt->setter)
-            {
-                opt->setter(opt);
-                // Action dialogs clear screen, redraw everything
-                needs_redraw = true;
-            }
-            continue;
-        }
-
-        // Left/Right for slider quick adjust in edit mode is handled above
-    }
-
-#if LWIP_APP_ENABLE_SERVICE_EXAMPLES
-    cleanup_lwip_stack();
-#endif
-
-    lwip_app_config_save(&g_cfg);
-
-    // Restore OS drawing state before exit
-    // Reset all OS color state variables to defaults
-    os_SetDrawFGColor(0x0000); // Black
-    os_SetDrawBGColor(0xFFFF); // White
-
-    // Reset the direct OS color variables too
-    os_DrawFGColor = 0x0000; // Small font FG
-    os_DrawBGColor = 0xFFFF; // Small font BG
-    os_TextFGColor = 0x0000; // Large font FG
-    os_TextBGColor = 0xFFFF; // Large font BG
-    os_DrawColorCode = 0;    // Reset color code
-
-    // Reset font positions
+    os_SetDrawFGColor(0x0000);
+    os_SetDrawBGColor(0xFFFF);
+    os_DrawFGColor = 0x0000;
+    os_DrawBGColor = 0xFFFF;
+    os_TextFGColor = 0x0000;
+    os_TextBGColor = 0xFFFF;
+    os_DrawColorCode = 0;
     os_PenCol = 0;
     os_PenRow = 0;
     os_CurRow = 0;
     os_CurCol = 0;
-
-    // Select OS default font
     os_FontSelect(os_LargeFont);
-
-    // Clear text shadow area to prevent cursor artifacts
     os_ClrTxtShd();
-
-    // Full homescreen reset with status bar
     os_ClrHomeFull();
+}
 
+int main(void)
+{
+    ui_item_t items[20];
+    uint8_t roles[20];
+    char tz[16];
+    char pcap[16];
+    char slots[4];
+    char log_names[LOG_MAX_SLOTS][9];
+    char version[16];
+    ui_list_t list = {1, 0};
+    bool has_pcap;
+    bool has_log;
+
+    lwip_fileio_self_init();
+    lwip_app_config_load(&g_cfg);
+    lwip_set_log_verbosity((lwip_log_verbosity_t)g_cfg.log_verbosity);
+    has_pcap = load_pcap_offsets() > 0;
+    has_log = log_slots(log_names) > 0;
+    snprintf(version, sizeof version, "v%s", lwip_version_string());
+
+    ui_begin();
+    ui_set_idle(app_net_idle);
+    app_net_begin();
+
+    for (;;)
+    {
+        int count = build_menu(items, roles, tz, sizeof tz, pcap, sizeof pcap, slots, sizeof slots, has_pcap,
+                               has_log);
+
+        ui_frame("lwIP-CE Settings", version, NULL, 0, "enter: open   left/right: change   clear: save and quit");
+        ui_list_draw(&list, items, count);
+        ui_present();
+
+        uint8_t key = ui_wait_key();
+        uint8_t role = roles[list.selected];
+
+        if (key == sk_Clear)
+            break;
+        if (ui_list_key(&list, items, count, key))
+            continue;
+
+        bool left = key == sk_Left;
+        bool right = key == sk_Right;
+        bool enter = key == sk_Enter;
+
+        switch (role)
+        {
+        case ROW_WIFI:
+            if (enter)
+                app_wifi_screen();
+            break;
+        case ROW_HOSTNAME:
+            if (enter)
+                edit_hostname();
+            break;
+        case ROW_TIMEZONE:
+            if (left && g_cfg.tz_offset_minutes > TZ_MIN_MINUTES)
+                g_cfg.tz_offset_minutes = (int16_t)(g_cfg.tz_offset_minutes - TZ_STEP_MINUTES);
+            if ((right || enter) && g_cfg.tz_offset_minutes < TZ_MAX_MINUTES)
+                g_cfg.tz_offset_minutes = (int16_t)(g_cfg.tz_offset_minutes + TZ_STEP_MINUTES);
+            break;
+        case ROW_DST:
+            if (enter || left || right)
+                g_cfg.dst_enabled = right ? 1 : left ? 0 : (uint8_t)!g_cfg.dst_enabled;
+            break;
+        case ROW_TLS:
+            if (enter || left || right)
+                g_cfg.tls_enabled = right ? 1 : left ? 0 : (uint8_t)!g_cfg.tls_enabled;
+            break;
+        case ROW_CRYPTO_OFFLOAD:
+            if (enter || left || right)
+                g_cfg.crypto_offload = right ? 1 : left ? 0 : (uint8_t)!g_cfg.crypto_offload;
+            break;
+        case ROW_BRIDGE_RNG:
+            if (enter || left || right)
+                g_cfg.bridge_rng = right ? 1 : left ? 0 : (uint8_t)!g_cfg.bridge_rng;
+            break;
+        case ROW_PCAP_ENABLED:
+            if (enter || left || right)
+                g_cfg.pcap_enabled = right ? 1 : left ? 0 : (uint8_t)!g_cfg.pcap_enabled;
+            break;
+        case ROW_PCAP_SIZE:
+            if (left || right || enter)
+                g_cfg.pcap_max_bytes = next_pcap_size(g_cfg.pcap_max_bytes, !left);
+            break;
+        case ROW_PCAP_VIEW:
+            if (enter)
+                pcap_viewer();
+            break;
+        case ROW_LOG_ENABLED:
+            if (enter || left || right)
+                g_cfg.file_log_enabled = right ? 1 : left ? 0 : (uint8_t)!g_cfg.file_log_enabled;
+            break;
+        case ROW_LOG_VERBOSITY:
+            if (left && g_cfg.log_verbosity > LWIP_CFG_LOG_VERBOSITY_MIN)
+                g_cfg.log_verbosity--;
+            if ((right || enter) && g_cfg.log_verbosity < LWIP_CFG_LOG_VERBOSITY_MAX)
+                g_cfg.log_verbosity++;
+            lwip_set_log_verbosity((lwip_log_verbosity_t)g_cfg.log_verbosity);
+            break;
+        case ROW_LOG_SLOTS:
+            if (left && g_cfg.log_archive_slots > LWIP_CFG_LOG_ARCHIVE_SLOTS_MIN)
+                g_cfg.log_archive_slots--;
+            if ((right || enter) && g_cfg.log_archive_slots < LWIP_CFG_LOG_ARCHIVE_SLOTS_MAX)
+                g_cfg.log_archive_slots++;
+            break;
+        case ROW_LOG_VIEW:
+            if (enter)
+            {
+                log_viewer();
+                has_log = log_slots(log_names) > 0;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    lwip_app_config_save(&g_cfg);
+    lwip_app_config_refresh();
+    app_net_stop();
+    ui_set_idle(NULL);
+    ui_end();
+    restore_os_screen();
     return 0;
 }

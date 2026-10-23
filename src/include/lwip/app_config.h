@@ -69,6 +69,8 @@ typedef struct lwip_app_config {
     uint8_t pcap_enabled;       /* User-persisted PCAP on/off toggle. */
     uint8_t file_log_enabled;   /* Route all events to lwIPLog appvar. */
     uint8_t log_archive_slots;  /* How many archive slots to keep (1-9). */
+    uint8_t crypto_offload; /* hand X25519 and RSA checks to the Wi-Fi bridge */
+    uint8_t bridge_rng;     /* seed every random byte from the bridge TRNG */
 } lwip_app_config_t;
 
 void lwip_app_config_defaults(lwip_app_config_t *cfg);

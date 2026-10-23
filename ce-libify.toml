@@ -3,13 +3,14 @@ lib-version = 2
 exports = "exports.txt"
 depend = ["usbdrvce", "fileioc"]
 exclude = ["tls/contrib/x25519/src/main.c"]
-header = ["build/lwip.h", "build/cryptography.h", "build/parsers.h", "build/lwip"]
+header = ["build/lwip.h", "build/cryptography.h", "build/parsers.h", "build/wireless.h", "build/lwip"]
 
 [app]
 name = "lwIP"
 version = "3.0.0"
 init = "lwip_init_runtime_internal"
 linker_script = "build-tools/meta/linker_script_lwip.ld"
+retain_removed = true
 installer_patches = ["build-tools/patches/app_tools-installer-lwip.patch"]
 imports = [
     "usb_ResetDevice",
@@ -35,6 +36,8 @@ imports = [
     "usb_Init",
     "usb_HandleEvents",
     "usb_Cleanup",
+    "usb_FindDevice",
+    "usb_ScheduleControlTransfer",
     "ti_Open",
     "ti_Close",
     "ti_Write",

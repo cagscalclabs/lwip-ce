@@ -125,6 +125,7 @@ static struct tls_hash_drbg_state g_tls_drbg_upgrade;
 static uint8_t g_tls_entropy_reserve[TLS_HASH_DRBG_MAX_INSTANTIATE_BYTES];
 static size_t g_tls_entropy_reserve_len = 0;
 static uint16_t g_tls_entropy_reserve_bits = 0;
+static bool g_tls_rng_external = false;
 /* Consecutive gather steps discarded for a source-health epoch change. Reset
  * on DRBG reset, RNG start, and every successful gather step. (F4) */
 static uint8_t g_tls_rng_epoch_changes = 0;
@@ -794,7 +795,7 @@ static void tls_rng_request_dispatch(void)
         (g_tls_rng_state == TLS_RNG_DRBG_SEEDING ||
          g_tls_rng_state == TLS_RNG_DRBG_READY_128 ||
          g_tls_rng_request_active ||
-         (g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
+         (!g_tls_rng_external && g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
           g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)))
     {
         gather_ok = tls_drbg_entropy_gather_step();
@@ -832,7 +833,7 @@ static void tls_rng_request_dispatch(void)
         g_tls_rng_state == TLS_RNG_AWAITING_INIT ||
         g_tls_rng_state == TLS_RNG_DRBG_SEEDING ||
         g_tls_rng_state == TLS_RNG_DRBG_READY_128 ||
-        (g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
+        (!g_tls_rng_external && g_tls_rng_state == TLS_RNG_DRBG_READY_192 &&
          g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS))
     {
         /* Stay armed at the request cadence — there's still work. */
@@ -859,6 +860,18 @@ static void tls_rng_ensure_attached(void)
     }
     lwip_dispatch_attach(LWIP_DISPATCH_TLS_RNG_REQUEST, tls_rng_request_dispatch);
     attached = true;
+}
+
+static void tls_rng_timer_rearm(void)
+{
+    if (g_tls_rng_started && !g_tls_rng_entropy_timer_running)
+    {
+        g_tls_rng_entropy_timer_running = true;
+        tls_rng_ensure_attached();
+        lwip_dispatch_start();
+        lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST,
+                                 lwip_dispatch_period_from_ms(TLS_RNG_REQUEST_INTERVAL_MS));
+    }
 }
 
 static void tls_rng_timer_start(void)
@@ -1023,7 +1036,7 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
     }
 
 #if LWIP_TIMERS
-    if (g_tls_rng_started && !g_tls_rng_entropy_timer_running &&
+    if (g_tls_rng_started && !g_tls_rng_entropy_timer_running && !g_tls_rng_external &&
         g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
     {
         DEBUG(); /* re-arming background reseed timer after a successful generate */
@@ -1147,6 +1160,46 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
     }
     tls_rng_request_reset_state();
     return false;
+#endif
+}
+
+bool tls_random_add_entropy(const uint8_t *data, size_t len)
+{
+    if (data == NULL)
+        return false;
+    if (len == TLS_HASH_DRBG_192_INSTANTIATE_BYTES)
+    {
+        uint8_t material[TLS_HASH_DRBG_192_INSTANTIATE_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES];
+        bool ok;
+
+        if (!g_tls_drbg.seeded)
+            return false;
+        memcpy(material, data, len);
+        ok = tls_drbg_generate_bytes(&g_tls_drbg, material + len, TLS_HASH_DRBG_ENTROPY_BYTES) &&
+             tls_hash_drbg_instantiate(&g_tls_drbg_upgrade, material, sizeof(material),
+                                       TLS_RNG_STRENGTH_192);
+        tls_secure_memzero(material, sizeof(material));
+        if (!ok)
+        {
+            tls_hash_drbg_reset(&g_tls_drbg_upgrade);
+            return false;
+        }
+        memcpy(&g_tls_drbg, &g_tls_drbg_upgrade, sizeof(g_tls_drbg));
+        tls_hash_drbg_reset(&g_tls_drbg_upgrade);
+        tls_entropy_reserve_reset();
+        g_tls_rng_state = TLS_RNG_DRBG_READY_192;
+        g_tls_rng_ready_deadline = 0;
+        return true;
+    }
+    return len == TLS_HASH_DRBG_ENTROPY_BYTES && tls_hash_drbg_reseed(&g_tls_drbg, data);
+}
+
+void tls_random_set_external(bool external)
+{
+    g_tls_rng_external = external;
+#if LWIP_TIMERS
+    if (!external)
+        tls_rng_timer_rearm();
 #endif
 }
 
@@ -1515,6 +1568,7 @@ void tls_rng_start(void)
 
 void tls_rng_cleanup(void)
 {
+    g_tls_rng_external = false;
 #if LWIP_TIMERS
     tls_rng_timer_stop();
 #endif

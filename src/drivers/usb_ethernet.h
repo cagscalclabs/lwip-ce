@@ -20,6 +20,9 @@
 /* Ethernet MTU - ECM & NCM */
 #define ETHERNET_MTU 1518
 
+#define ECM_RX_SIZE 1536
+#define ETHERNET_IP_MTU 1500
+
 /* Interrupt buffer size */
 #define INTERRUPT_RX_MAX 64
 
@@ -165,6 +168,7 @@ typedef struct _eth_device_t
     bool disabled_with_error;
     bool shutting_down;
     bool dhcp_auto_started;
+    bool device_mode;
     uint8_t ifslot;
     /* Packet-capture state. pcap.buf is NULL when capture is off; non-NULL is
      * what gates capture — there is no separate enable flag. Allocated by
@@ -209,6 +213,10 @@ typedef struct _eth_device_t
     } class;
     struct netif iface;
 } eth_device_t;
+
+extern const usb_standard_descriptors_t eth_device_descriptors;
+
+struct netif *eth_device_netif(void);
 
 /// @brief Callback function to be passed to @b usb_Init to enable Ethernet driver for lwIP
 usb_error_t eth_usb_event_callback(usb_event_t event, void *event_data, usb_callback_data_t *callback_data);
@@ -313,6 +321,13 @@ struct usb_configurator {
                         usb_init_flags_t flags);
     usb_error_t (*handle_events)(void);
     void (*cleanup)(void);
+    usb_device_t (*find_device)(usb_device_t root, usb_device_t from,
+                                usb_find_device_flags_t flags);
+    usb_error_t (*schedule_control_transfer)(usb_endpoint_t endpoint,
+                                             const usb_control_setup_t *setup,
+                                             void *buffer,
+                                             usb_transfer_callback_t handler,
+                                             usb_transfer_data_t *data);
 };
 
 /* The unified imports table (struct lwip_imports, fn_imports_table, and

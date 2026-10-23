@@ -11,11 +11,23 @@ u32_t sys_jiffies(void)
     return clock();
 }
 
+/* clock() * 1000 overflows 32 bits after 131 s, which made the ms count wrap at
+ * 131072 instead of 2^32 and broke every lwIP timer. Accumulate elapsed ticks
+ * instead, so the result wraps at 2^32 like lwIP expects. */
 u32_t sys_now(void)
 {
-    u32_t t = sys_jiffies();
-    /* t * 1000 overflows 32 bits after ~131 s at 32768 Hz; split seconds out. */
-    return (t >> 15) * 1000u + (((t & 0x7FFFu) * 1000u) >> 15);
+    static u32_t last_ticks;
+    static u32_t ms;
+    static u32_t remainder;
+    u32_t ticks = sys_jiffies();
+    u32_t elapsed = ticks - last_ticks;
+
+    last_ticks = ticks;
+    ms += elapsed / CLOCKS_PER_SEC * 1000;
+    remainder += elapsed % CLOCKS_PER_SEC * 1000;
+    ms += remainder / CLOCKS_PER_SEC;
+    remainder %= CLOCKS_PER_SEC;
+    return ms;
 }
 
 void sys_init(void)

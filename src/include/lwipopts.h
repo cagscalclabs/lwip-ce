@@ -312,6 +312,7 @@ a lot of data that needs to be copied, this should be set high. */
 
 /* ---------- RAW options ---------- */
 #define LWIP_RAW 1
+#define LWIP_HOOK_FILENAME "wireless/wifi_hook.h"
 
 /* ---------- Statistics options ---------- */
 

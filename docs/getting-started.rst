@@ -15,6 +15,7 @@ lwIP-CE comes packaged with a number of files and directories:
    ├── lwip.lib                  # libload symbols for lwIP
    ├── lwip.8xv                  # lwIP LibLoad stub
    ├── parsers.h                 # parsers batch-include
+   ├── wireless.h                # Wi-Fi control batch-include
    ├── lwip/
    │   ├── core/                 # lower-level lwIP core, netif, socket, PCB headers
    │   │   ├── altcp.h
@@ -32,10 +33,12 @@ lwIP-CE comes packaged with a number of files and directories:
    │   │   ├── truststore.h
    │   │   ├── x509.h
    │   │   └── ...
-   │   └── parsers/              # zero-copy response parsers
-   │       ├── json.h
-   │       ├── xml.h
-   │       └── url.h
+   │   ├── parsers/              # zero-copy response parsers
+   │   │   ├── json.h
+   │   │   ├── xml.h
+   │   │   └── url.h
+   │   └── wireless/             # Wi-Fi bridge control
+   │       └── wifi.h
    └── appinst/
        ├── lwIPINST.8xp          # installer program (run once on-calc)
        └── LWIP.0.8xv ... LWIP.N.8xv  # split dynamic-library AppVars
@@ -63,7 +66,7 @@ Install lwIP-CE Headers and .lib File
 
 In order to use lwIP-CE in your applications you will need to make sure the lwIP-CE headers and .lib file are installed into the correct locations.
 
-- Copy ``lwip.h``, ``parsers.h``, and ``cryptography.h`` into ``$CEDEV/include``.
+- Copy ``lwip.h``, ``parsers.h``, ``wireless.h`` and ``cryptography.h`` into ``$CEDEV/include``.
 - Copy the entire ``lwip`` folder into ``$CEDEV/include``.
 - Copy ``lwip.lib`` into ``$CEDEV/lib/libload``.
 
@@ -76,6 +79,7 @@ Once that is done, you can reference the lwIP-CE headers in code as you would an
     #include <parsers.h>                // for parsers batch-include
     #include <lwip/core/altcp.h>        // for ALTCP lwIP core
     #include <lwip/parsers/json.h>      // for JSON parser
+    #include <lwip/wireless/wifi.h>     // for Wi-Fi bridge control
     #include <lwip/cryptography/hash.h> // for hash API
 
 Initialize the Dylib
@@ -139,7 +143,7 @@ Installing & Using lwIP-CE Application (as End User)
 
     The app installer cannot overwrite an Application that already exists. When updating this library you will need to delete the Application and then possibly ``GarbageCollect`` on your device before trying to install a new version.
 
-You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class) for any program that uses networking. Some Ethernet-to-WiFi adapters work as well, provided they speak CDC Ethernet on the USB side and support Wi-Fi Protected Setup (WPS).
+Any program that uses networking needs either a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class) on an OTG cable, or the lwIP-CE Wi-Fi bridge on the calculator's stock cable (see :doc:`using-wifi`). Some Ethernet-to-WiFi adapters work as well, provided they speak CDC Ethernet on the USB side and support Wi-Fi Protected Setup (WPS).
 
 .. code-block:: text
 
@@ -150,15 +154,20 @@ You will also need a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class) for any
 
     ┌────────────┐   USB   ┌──────────────────┐   802.11   ┌────────┐
     │ Calculator │────────▶│ CDC Ethernet +   │ ·  ·  ·  · │  Wi-Fi │
-    └────────────┘         │ Wi-Fi bridge     │            │ network│
+    └────────────┘         │ Wi-Fi adapter    │            │ network│
                            └──────────────────┘            └────────┘
+
+    ┌────────────┐   USB   ┌──────────────────┐   802.11   ┌────────┐
+    │ Calculator │────────▶│ lwIP-CE Wi-Fi    │ ·  ·  ·  · │  Wi-Fi │
+    └────────────┘  stock  │ bridge (ESP32)   │            │ network│
+                    cable  └──────────────────┘            └────────┘
 
 Programs that only use the cryptography or parser APIs do not need any adapter.
 
 lwIP-CE Configuration Wizard
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When the end user runs the lwIP-CE app directly on the calculator, a configuration wizard opens. Settings are persisted to an AppVar and loaded by the stack at startup. This allows the user to have some control over network-specific security-critical settings. For example, a user may decide that they do not want their calculator connecting to anything requiring TLS, regardless of what the application they are running does. Disabling TLS in the wizard is a hard-stop on any TLS connection.
+When the end user runs the lwIP-CE app directly on the calculator, a configuration wizard opens. Use the arrow keys to move, **enter** to open an item, **left**/**right** to change a value, and **clear** to save and quit. Settings are persisted to an AppVar and loaded by the stack at startup. This allows the user to have some control over network-specific security-critical settings. For example, a user may decide that they do not want their calculator connecting to anything requiring TLS, regardless of what the application they are running does. Disabling TLS in the wizard is a hard-stop on any TLS connection.
 
 .. list-table::
    :header-rows: 1
@@ -166,10 +175,12 @@ When the end user runs the lwIP-CE app directly on the calculator, a configurati
 
    * - Setting
      - Effect
+   * - Wi-Fi
+     - Saved networks, scanning and connecting through the lwIP-CE Wi-Fi
+       bridge. Shows the joined network, and updates on its own. See
+       :doc:`using-wifi`.
    * - Hostname
      - Device hostname advertised over DHCP.
-   * - Static IPv4
-     - IP address, gateway, and netmask. Leave blank to use DHCP.
    * - Timezone / DST
      - UTC offset and daylight-saving toggle, used by SNTP to set the
        real-time clock. **For TLS, this setting plus the device clock are relevant to certificate expiry checks. If both are not properly set by the user, certificate validation will fail.**
@@ -177,6 +188,19 @@ When the end user runs the lwIP-CE app directly on the calculator, a configurati
      - When off, any attempt by an application to open a TLS socket fails
        immediately. Gives the end user final authority over whether the
        calculator makes encrypted connections.
+   * - Capture limit / Packet capture
+     - Largest packet capture AppVar, and a viewer for captured packets.
 
 These are end-user settings, not build-time flags — application code cannot
 override them.
+
+Building from Source
+--------------------
+
+Run ``make dylib`` with the CE C toolchain and `ce-libify
+<https://github.com/alessiodam/toolchain_libify>`_ installed. The stock
+``convbin`` in a CEdev release cannot link the X25519 code and fails with
+``Unsupported relocation type: 7 (expected R_Z80_24)``. Build ``convbin`` from
+the ``R_Z80_BYTE012`` branch of `mateoconlechuga/convbin
+<https://github.com/mateoconlechuga/convbin>`_ and copy it over
+``$CEDEV/bin/convbin``, as the CI workflows do.

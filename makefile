@@ -17,7 +17,7 @@ dylib: build
 	mkdir -p "$(CEDEV_TOOLCHAIN)/lib/libload" "$(CEDEV_TOOLCHAIN)/include/lwip"
 	cp build/lwip.lib "$(CEDEV_TOOLCHAIN)/lib/libload/lwip.lib"
 	cp -R build/lwip/. "$(CEDEV_TOOLCHAIN)/include/lwip"
-	cp build/lwip.h build/cryptography.h build/parsers.h "$(CEDEV_TOOLCHAIN)/include/"
+	cp build/lwip.h build/cryptography.h build/parsers.h build/wireless.h "$(CEDEV_TOOLCHAIN)/include/"
 	mkdir -p tests/common
 	cp build/appinst/* build/lwip.8xv build/lwip.lib tests/common/
 
