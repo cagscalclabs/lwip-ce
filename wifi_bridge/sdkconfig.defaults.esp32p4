@@ -1,0 +1,3 @@
+# Waveshare ESP32-P4 Module Dev Kit (ESP32-C6 Wi-Fi co-processor over SDIO).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y

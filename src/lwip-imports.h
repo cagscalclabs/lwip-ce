@@ -45,5 +45,6 @@ extern struct lwip_imports fn_imports_table;
  * at the top of main() when the lwIP flash app runs as the active OS program,
  * since the libload bootstrap (which normally fills the table) does not run. */
 void lwip_fileio_self_init(void);
+void lwip_usb_self_init(void);
 
 #endif /* lwip_imports_h */

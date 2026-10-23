@@ -239,10 +239,18 @@ extern "C"
         uint8_t ecdhe_shared[32];    /* Computed ECDHE shared secret (32 bytes) */
         uint8_t ecdhe_public[32];    /* Our ephemeral X25519 public key */
         bool ecdhe_negotiated;       /* True if server selected PSK+ECDHE */
+        /* Crypto offload (wireless/crypto.h): the X25519 job in flight, the
+         * server key share kept for a local fallback, and signature checks
+         * still waiting for the bridge's verdict. */
+        uint16_t ecdhe_job;
+        uint16_t p256_job;
+        uint8_t ecdhe_peer[65];
+        struct tls_deferred_verify *deferred;
 
         /* P-256 (secp256r1) ephemeral key pair for ECDHE */
         uint8_t p256_private[32];    /* Ephemeral P-256 private key */
         uint8_t p256_public[65];     /* Our ephemeral P-256 public key (uncompressed) */
+        bool p256_offered;           /* P-256 key share sent; only when the bridge computes P-256 */
         bool client_certificate_requested; /* True if server sent TLS 1.3 CertificateRequest */
 
         /* HelloRetryRequest state (RFC 8446 §4.1.4).
@@ -412,6 +420,17 @@ extern "C"
      * @return true on success, false on failure
      *
      */
+    /**
+     * @brief Collect work handed to the Wi-Fi bridge.
+     *
+     * Call before the ClientHello is built, before handshake keys are
+     * derived, and before the handshake is declared complete.
+     *
+     * @return 1 when everything is in, 0 while the bridge is still working,
+     *         -1 on failure (alert sent, state set to TLS_STATE_ERROR)
+     */
+    int tls_offload_settle(struct tls_handshake_context *ctx);
+
     bool tls_derive_handshake_keys(struct tls_handshake_context *ctx);
 
     /**

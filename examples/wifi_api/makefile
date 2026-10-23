@@ -1,0 +1,11 @@
+NAME = LWWIFI
+DESCRIPTION = "lwIP Wi-Fi control example"
+COMPRESSED = NO
+ARCHIVED = YES
+BSSHEAP_LOW = 0xD072C6
+
+CFLAGS = -Wall -Wextra -Oz
+EXTRA_LDFLAGS += --no-warn-execstack
+EXTRA_PRE_LDFLAGS += --no-warn-execstack
+
+include $(shell cedev-config --makefile)

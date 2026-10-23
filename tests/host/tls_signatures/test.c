@@ -58,10 +58,20 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         if (type == 10)
         {
             static const uint8_t expected[] = {0, 4, 0, 0x17, 0, 0x1d};
-            assert(len == sizeof(expected) && memcmp(buf+off+4, expected, len) == 0);
+            static const uint8_t x25519_first[] = {0, 4, 0, 0x1d, 0, 0x17};
+            assert(len == sizeof(expected) &&
+                   memcmp(buf+off+4, mock_caps ? expected : x25519_first, len) == 0);
             groups++;
         }
-        if (type == 51)
+        if (type == 51 && !mock_caps)
+        {
+            static const uint8_t x25519_only[] = {0, 0x24, 0, 0x1d, 0, 0x20};
+            assert(len == 38 && memcmp(buf+off+4, x25519_only, sizeof(x25519_only)) == 0);
+            assert(memcmp(buf+off+10, ctx.ecdhe_public, 32) == 0);
+            assert(!ctx.p256_offered);
+            key_share++;
+        }
+        else if (type == 51)
         {
             static const uint8_t expected_header[] = {0, 0x69, 0, 0x17, 0, 0x41};
             static const uint8_t x25519_header[] = {0, 0x1d, 0, 0x20};
@@ -430,6 +440,10 @@ int main(void)
     hello(false, "example.test", true); hello(true, "example.test", true);
     hello(false, "192.168.2.10", false); hello(true, "192.168.2.10", false);
     hello(false, "2001:db8::1", false); hello(true, "2001:db8::1", false);
+    /* No P-256 on the bridge: only an x25519 share, x25519 listed first. */
+    mock_caps = 0;
+    hello(false, NULL, false); hello(true, "example.test", true);
+    mock_caps = CTL_CAP_P256;
     handshake_extension_tests();
     identity_tests();
     chain(cert_pkcs, sizeof(cert_pkcs), TLS_ALG_RSA_PKCS1_SHA256);
@@ -452,9 +466,9 @@ int main(void)
     assert(tls_x509_parse_certificate(cert_ec, sizeof(cert_ec), &ec));
     assert(ec.pubkey.type == TLS_KEY_TYPE_EC_P256 && ec.pubkey.ec.len == 65);
     uint8_t digest[32], sig[128]; memset(digest, 0x42, 32); memset(sig, 0x22, 128);
-    assert(tls_cert_verify_digest(TLS_ALG_ECDSA_SECP256R1_SHA256, &ec.pubkey,
+    assert(tls_cert_verify_digest(NULL, TLS_ALG_ECDSA_SECP256R1_SHA256, &ec.pubkey,
                                   digest, sig, 128) == TLS_KEY_OP_INVALID);
-    assert(tls_cert_verify_digest(TLS_ALG_RSA_PSS_RSAE_SHA256, &ec.pubkey, digest, sig, 128) == TLS_KEY_OP_INVALID);
+    assert(tls_cert_verify_digest(NULL, TLS_ALG_RSA_PSS_RSAE_SHA256, &ec.pubkey, digest, sig, 128) == TLS_KEY_OP_INVALID);
 
     /* Chain-policy distinction: a correctly-sized signature under an RSA key
      * wider than the platform cap is unsupported, while a width mismatch is
@@ -475,17 +489,17 @@ int main(void)
     pending.pending_sig_omitted = true;
     pending.pending_sig_alg = TLS_ALG_RSA_PKCS1_SHA256;
     pending.pending_sig_len = sizeof(rsa_oversize_modulus);
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
            TLS_KEY_OP_UNSUPPORTED);
     pending.pending_sig_len = 256;
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
            TLS_KEY_OP_INVALID);
 
     /* A structurally accepted but unknown signature OID follows the same
      * temporary unsupported-operation policy without retaining its bytes. */
     pending.pending_sig_alg = TLS_ALG_UNKNOWN;
     pending.pending_sig_len = 384;
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
            TLS_KEY_OP_UNSUPPORTED);
 
     struct tls_handshake_context ctx;

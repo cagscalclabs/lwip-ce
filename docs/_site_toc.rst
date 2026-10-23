@@ -5,6 +5,7 @@
 
    getting-started
    using-the-network
+   using-wifi
    parsing
    using-cryptography
    debugging

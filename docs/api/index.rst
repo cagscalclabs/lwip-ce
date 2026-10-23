@@ -36,6 +36,11 @@ under ``lwip/core/`` and ``lwip/cryptography/``.
    * - :doc:`lwip/parsers/ <parsers>`
      - JSON, XML, and URL-encoding parsers. No heap allocation; cursor-based,
        zero-copy slices into the input buffer.
+   * - :doc:`wireless.h <wireless>`
+     - Root-level Wi-Fi umbrella header.
+   * - :doc:`lwip/wireless/ <wireless>`
+     - Control of the lwIP-CE Wi-Fi bridge: state, scanning, saved networks,
+       change events.
 
 For stack usage and a full socket example, start with :doc:`../getting-started`.
 
@@ -47,3 +52,4 @@ For stack usage and a full socket example, start with :doc:`../getting-started`.
    cryptography
    crypto
    parsers
+   wireless

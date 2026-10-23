@@ -1143,6 +1143,87 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
     return altcp_tls_ce_lower_recv_process(conn, state);
 }
 
+/* Collects work handed to the Wi-Fi bridge. ERR_INPROGRESS while it is still
+ * out: the state is flagged, and altcp_tls_ce_offload_ready() resumes it. */
+static err_t
+altcp_tls_ce_settle(altcp_tls_ce_state_t *state)
+{
+    int settled = tls_offload_settle(&state->tls_ctx);
+
+    if (settled > 0)
+    {
+        return ERR_OK;
+    }
+    if (settled == 0)
+    {
+        state->flags |= ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT;
+        return ERR_INPROGRESS;
+    }
+    return ERR_VAL;
+}
+
+void
+altcp_tls_ce_offload_ready(void)
+{
+    altcp_tls_ce_state_t *state;
+
+    for (state = g_tls_state_head; state != NULL; state = state->next)
+    {
+        if (state->flags & ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT)
+        {
+            state->flags = (u16_t)((state->flags & ~ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT) |
+                                  ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK);
+        }
+    }
+    /* Resuming can abort a connection and unlink its state, so rescan from
+     * the head after each one. A handshake still waiting sets WAIT again, not
+     * KICK, so this ends. */
+    state = g_tls_state_head;
+    while (state != NULL)
+    {
+        if (!(state->flags & ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK))
+        {
+            state = state->next;
+            continue;
+        }
+        state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK;
+        if (state->conn != NULL && state->conn->state == state)
+        {
+            (void)altcp_tls_ce_lower_recv_process(state->conn, state);
+        }
+        state = g_tls_state_head;
+    }
+}
+
+/* Generates our key shares and client random. Done before the TCP connect
+ * when the RNG is ready: on the calculator alone this takes seconds, and some
+ * servers reset a connection that stays silent that long. */
+static bool
+altcp_tls_ce_init_handshake(altcp_tls_ce_state_t *state)
+{
+    struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
+    bool init_ok;
+
+    if (config->psk_mode)
+    {
+        init_ok = tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity);
+        if (init_ok)
+            state->tls_ctx.psk_type = config->psk_type;
+    }
+    else
+    {
+        init_ok = tls_handshake_init(&state->tls_ctx, NULL, NULL);
+    }
+    if (!init_ok)
+        return false;
+    /* tls_handshake_init nulls out hostname; reapply from config. */
+    state->tls_ctx.hostname = config->hostname;
+    state->tls_ctx.alpn_protocols = config->alpn_protocols;
+    state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
+    state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
+    return true;
+}
+
 /*
  * Send the ClientHello if the client handshake hasn't started yet. Driven from
  * lower_recv_process (which runs on the connected callback, every recv, and the
@@ -1167,26 +1248,14 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         return ERR_OK; /* already sent (and not retrying after HRR) */
     }
 
-    /* Deferred key generation: tls_handshake_init was not called at setup time
-     * because the async DRBG may not have been seeded yet. Attempt it now; if
-     * the RNG is still not ready (tls_random_bytes_ex returns NULL immediately
-     * rather than spinning), return ERR_MEM so the caller retries next tick. */
+    /* Deferred key generation: setup could not run tls_handshake_init because
+     * the async DRBG was not seeded yet. Attempt it now; if the RNG is still
+     * not ready (tls_random_bytes_ex returns NULL immediately rather than
+     * spinning), return ERR_MEM so the caller retries next tick. */
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED))
     {
-        struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
-        bool init_ok;
         tls_dbg_status("clienthello: deferred hs init");
-        if (config->psk_mode)
-        {
-            init_ok = tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity);
-            if (init_ok)
-                state->tls_ctx.psk_type = config->psk_type;
-        }
-        else
-        {
-            init_ok = tls_handshake_init(&state->tls_ctx, NULL, NULL);
-        }
-        if (!init_ok)
+        if (!altcp_tls_ce_init_handshake(state))
         {
             /* Encode (rng_state << 8 | last_failure) so the caller can decode
              * both from a single WARN_CODE event on the calc's debug console. */
@@ -1195,11 +1264,6 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
             tls_dbg_status("clienthello: hs init not ready, retry");
             return ERR_MEM; /* retry next tick */
         }
-        /* tls_handshake_init nulls out hostname; reapply from config. */
-        state->tls_ctx.hostname = config->hostname;
-        state->tls_ctx.alpn_protocols = config->alpn_protocols;
-        state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
-        state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
     }
 
     /* Generate the ClientHello exactly once per attempt. tls_send_client_hello
@@ -1211,6 +1275,22 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         size_t client_hello_len = 0;
         size_t record_len;
         int prebuild_state = state->tls_ctx.state;
+        err_t settle_err = altcp_tls_ce_settle(state);
+
+        /* Our key share may still be on the bridge. */
+        if (settle_err == ERR_INPROGRESS)
+        {
+            return ERR_MEM;
+        }
+        if (settle_err != ERR_OK)
+        {
+            if (conn->err)
+            {
+                conn->err(conn->arg, ERR_ABRT);
+            }
+            ALTCP_TLS_CE_ERROR_ABORT(conn);
+            return ERR_ABRT;
+        }
 
         /* Query the exact serialized size first. Optional ALPN, SNI, PSK, and
          * HRR cookie data are variable-length; a fixed local buffer can reject
@@ -1458,6 +1538,18 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                  * so we can decrypt the subsequent encrypted handshake records */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED)
                 {
+                    /* The shared secret may still be on the bridge; the
+                     * record stays queued until it is in. */
+                    err_t settle_err = altcp_tls_ce_settle(state);
+                    if (settle_err == ERR_INPROGRESS)
+                    {
+                        return ERR_OK;
+                    }
+                    if (settle_err != ERR_OK)
+                    {
+                        ALTCP_TLS_CE_ERROR_ABORT(conn);
+                        return ERR_ABRT;
+                    }
                     /* tls_derive_handshake_keys holds early_secret/
                      * handshake_secret/derived_secret on its own stack
                      * frame; wrapping the call lets tls_crypto_guard_disable()
@@ -1669,6 +1761,21 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 /* Check if server Finished received — time to send client Finished */
                 if (state->tls_ctx.state == TLS_STATE_SERVER_FINISHED_RECEIVED)
                 {
+                    /* Signature checks handed to the bridge must all pass
+                     * before anything is sent or delivered under the new
+                     * keys. */
+                    err_t settle_err = altcp_tls_ce_settle(state);
+                    if (settle_err == ERR_INPROGRESS)
+                    {
+                        return ERR_OK;
+                    }
+                    if (settle_err != ERR_OK)
+                    {
+                        tls_dbg_status("offload: verify fail");
+                        ALTCP_TLS_CE_ERROR_ABORT(conn);
+                        return ERR_ABRT;
+                    }
+
                     /* Derive application keys BEFORE client Finished, because
                      * RFC 8446 Section 7.1 uses transcript through server Finished only.
                      * tls_send_finished() will update the transcript with client Finished. */
@@ -1918,7 +2025,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
     state->flags |= ALTCP_TLS_CE_FLAGS_RX_BUSY;
     for (unsigned pass = 0; pass < ALTCP_TLS_CE_RX_PASSES; pass++)
     {
-        state->flags &= (u8_t)~ALTCP_TLS_CE_FLAGS_RX_REPEAT;
+        state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_RX_REPEAT;
 
         if (state->rx_app != NULL)
         {
@@ -1945,7 +2052,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
             break;
         }
     }
-    state->flags &= (u8_t)~(ALTCP_TLS_CE_FLAGS_RX_BUSY | ALTCP_TLS_CE_FLAGS_RX_REPEAT);
+    state->flags &= (u16_t)~(ALTCP_TLS_CE_FLAGS_RX_BUSY | ALTCP_TLS_CE_FLAGS_RX_REPEAT);
     return err;
 }
 
@@ -2315,9 +2422,10 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->conf = conf;
     state->conn = conn;
 
-    /* tls_handshake_init (which consumes RNG entropy) is deferred to the first
-     * send_client_hello call, by which point the async DRBG will be seeded.
-     * hostname/alpn are applied there too, since tls_handshake_init nulls them. */
+    /* Key generation runs now when the RNG is ready, so the ClientHello can go
+     * out as soon as TCP connects; otherwise send_client_hello retries it. */
+    tls_dbg_status("setup: hs init");
+    (void)altcp_tls_ce_init_handshake(state);
 
     /* Wire the transport write hook so handshake.c can emit alerts and
      * close_notify without depending on lwIP/altcp directly. */

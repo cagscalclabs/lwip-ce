@@ -41,11 +41,18 @@
 #define LWIP_DBG_FILE_ID LWIP_FILE_USB_ETHERNET
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_USB
 #include "lwip/logging.h"
+#include "wireless/crypto.h"
+#include "wireless/wifi_proto.h"
+#include "../tls/includes/bytes.h"
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
 static uint8_t ifnums_used = 0;
 static bool eth_driver_shutting_down = false;
+
+static bool device_dtr;
+/* The bridge's Wi-Fi MAC, kept until the netif exists to take it. */
+static bool device_mac_valid;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
 {
@@ -316,11 +323,11 @@ static void eth_schedule_rx_for_netifs(void)
          * interrupt endpoint (armed at init) carries the link-up notify; we
          * only start listening for data frames once link is up. */
         if (eth_is_shutting_down(dev) || !dev->rx.callback ||
-            dev->rx_transfer_active || !netif_is_link_up(netif))
+            dev->rx_transfer_active || (!netif_is_link_up(netif) && !dev->device_mode))
         {
             continue;
         }
-        size_t len = (dev->type == USB_NCM_SUBCLASS) ? NCM_RX_NTB_MAX_SIZE : ETHERNET_MTU;
+        size_t len = (dev->type == USB_NCM_SUBCLASS) ? NCM_RX_NTB_MAX_SIZE : ECM_RX_SIZE;
         if (usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf, len, dev->rx.callback, dev) == USB_SUCCESS)
         {
             dev->rx_transfer_active = true;
@@ -691,6 +698,8 @@ void eth_finish_shutdown(void)
 void eth_reset_shutdown(void)
 {
     eth_driver_shutting_down = false;
+    device_dtr = false;
+    device_mac_valid = false;
 }
 
 /// UTF-16 -> hex conversion
@@ -753,6 +762,22 @@ struct eth_tx_ctx
     eth_device_t *dev;
     struct pbuf *p;
 };
+
+/* Wi-Fi control frames can carry a password, so wipe the copy before freeing it. */
+static void eth_tx_release(struct eth_tx_ctx *ctx)
+{
+    struct pbuf *p = ctx->p;
+
+    if (p)
+    {
+        const uint8_t *frame = p->payload;
+
+        if (p->len >= CTL_HEADER && ((frame[12] << 8) | frame[13]) == CTL_ETHERTYPE)
+            tls_secure_memzero(p->payload, p->len);
+        pbuf_free(p);
+    }
+    mem_free(ctx);
+}
 
 ///---------------------------------------------------
 /// @brief interrupt transfer callback function
@@ -879,9 +904,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
     eth_transfer_ended(dev);
     if (eth_is_shutting_down(dev))
     {
-        if (tbuf)
-            pbuf_free(tbuf);
-        mem_free(ctx);
+        eth_tx_release(ctx);
         return USB_SUCCESS;
     }
 
@@ -890,8 +913,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
         log_usb_transfer_status(status);
         if (eth_xmit_fatal_error(dev, dev->tx_retries))
         {
-            pbuf_free(tbuf);
-            mem_free(ctx);
+            eth_tx_release(ctx);
             dev->tx_retries = 0;
             return USB_ERROR_FAILED;
         }
@@ -906,8 +928,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
                                      tbuf->tot_len, bulk_transmit_callback,
                                      ctx) != USB_SUCCESS)
         {
-            pbuf_free(tbuf);
-            mem_free(ctx);
+            eth_tx_release(ctx);
             (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
             return USB_ERROR_FAILED;
         }
@@ -918,9 +939,7 @@ static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t
     /* Successful transmission - reset retry counter */
     dev->tx_retries = 0;
 
-    if (tbuf)
-        pbuf_free(tbuf);
-    mem_free(ctx);
+    eth_tx_release(ctx);
 
     return USB_SUCCESS;
 }
@@ -959,7 +978,7 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
          * around. The dispatcher remains the safety net if this
          * synchronous re-arm fails. */
         if (usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
-                                     ETHERNET_MTU, ecm_receive_callback,
+                                     ECM_RX_SIZE, ecm_receive_callback,
                                      dev) == USB_SUCCESS)
         {
             dev->rx_transfer_active = true;
@@ -977,7 +996,7 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
     if (!eth_is_shutting_down(dev) &&
         !dev->rx_transfer_active &&
         usb_fn.schedule_transfer(dev->rx.endpoint, dev->rx.buf,
-                                 ETHERNET_MTU, ecm_receive_callback,
+                                 ECM_RX_SIZE, ecm_receive_callback,
                                  dev) == USB_SUCCESS)
     {
         dev->rx_transfer_active = true;
@@ -1020,8 +1039,7 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     if (usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len,
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)
     {
-        pbuf_free(tbuf);
-        mem_free(ctx);
+        eth_tx_release(ctx);
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
         LWIP_TRACE_RETURN(ERR_IF);
     }
@@ -1382,6 +1400,9 @@ static void eth_link_callback(struct netif *netif)
     {
         lwip_teardown_abort_pcbs_on_netif(netif);
     }
+    /* Only the Wi-Fi bridge puts us in device mode. */
+    if (dev->device_mode)
+        lwip_crypto_link(netif_is_link_up(netif));
 }
 
 /* netif status callback: same idea, on the admin-down edge. Together
@@ -1502,8 +1523,8 @@ static err_t eth_netif_init(struct netif *netif)
     netif->linkoutput = dev->tx.emit;
     netif->output = etharp_output;
     netif->output_ip6 = ethip6_output;
-    netif->mtu = ETHERNET_MTU;
-    netif->mtu6 = ETHERNET_MTU;
+    netif->mtu = ETHERNET_IP_MTU;
+    netif->mtu6 = ETHERNET_IP_MTU;
     netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET | NETIF_FLAG_IGMP | NETIF_FLAG_MLD6;
     MIB2_INIT_NETIF(netif, snmp_ifType_ethernet_csmacd, 100000000);
     memcpy(netif->hwaddr, dev->hwaddr, NETIF_MAX_HWADDR_LEN);
@@ -1512,6 +1533,82 @@ static err_t eth_netif_init(struct netif *netif)
     netif_set_status_callback(netif, eth_status_callback);
     netif_set_remove_callback(netif, eth_netif_remove_callback);
     return ERR_OK;
+}
+
+static bool eth_register_netif(eth_device_t *eth, bool *netif_registered,
+                               bool *device_data_set, bool *rx_ring_created)
+{
+    uint8_t ifnum_assigned;
+
+    for (ifnum_assigned = 0; ifnum_assigned < 8; ifnum_assigned++)
+        if (!(ifnums_used & (1u << ifnum_assigned)))
+            break;
+    if (ifnum_assigned == 8)
+    {
+        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_WARNING,
+                    ("WARNING, device=%p, if_slots full", eth->device));
+        return false;
+    }
+    eth->ifslot = ifnum_assigned;
+
+    {
+        struct netif *iface = &eth->iface;
+        // add to lwIP list of active netifs (save pointer to eth_device_t too)
+        if (netif_add_noaddr(iface, eth, eth_netif_init, netif_input) == NULL)
+        {
+            LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
+                        ("ERROR, ? netif= <- device=%p, netif add failed", eth->device));
+            return false;
+        }
+        *netif_registered = true;
+        // set pointer to eth_device_t as associated data for usb device too
+        usb_fn.set_device_data(eth->device, eth);
+        *device_data_set = true;
+
+        iface->name[0] = 'e';
+        iface->name[1] = 'n';
+
+        // allow IPv4 and IPv6 on device
+        netif_create_ip6_linklocal_address(iface, 1);
+        iface->ip6_autoconfig_enabled = 1;
+
+        ifnums_used |= 1 << ifnum_assigned;                         // set flag marking the ifnum used
+        netif_set_hostname(iface, lwip_app_config_get()->hostname); // set hostname from config
+        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
+                    ("NEW, netif=%c%c%u <- device=%p", iface->name[0], iface->name[1], iface->num, eth->device));
+    }
+
+    eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE,
+                                     ETH_RX_RING_MAX_SIZE,
+                                     ETH_RX_RING_STEP_SIZE,
+                                     BUFFER_RX_RING);
+    if (!eth->rx_ring)
+    {
+        return false;
+    }
+    *rx_ring_created = true;
+    mem_buffer_set_drain(eth->rx_ring, eth_rx_ring_drain, &eth->iface);
+    mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
+    mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
+
+    /* Wire the RX-schedule dispatcher into the master tick (idempotent —
+     * attach is safe to repeat across multiple device-init calls). It re-arms
+     * RX transfers that didn't self-re-arm and reaps unplugged devices.
+     *
+     * There is deliberately no RX-DRAIN dispatcher: received frames are now
+     * delivered straight into lwIP from the RX completion (eth_rx_deliver),
+     * and the overflow ring — used only when the pbuf pool is momentarily
+     * full — is drained by a self-limiting sys_timeout (eth_rx_ring_drain_timer)
+     * that runs only while the ring is non-empty. This removes the always-on
+     * drain hop whose self-re-arming chain could wedge RX delivery if a tick
+     * ever failed to re-arm. */
+    lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_SCHEDULE, eth_rx_schedule_dispatch);
+    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
+                             lwip_dispatch_period_from_ms(ETH_RX_SCHED_INTERVAL_MS));
+    lwip_dispatch_start();
+
+    netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
+    return true;
 }
 
 /** DESCRIPTOR PARSER AWAIT STATES */
@@ -1816,81 +1913,8 @@ init_success:
     eth->tx.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.out);
     eth->interrupt.endpoint = usb_fn.get_device_endpoint(device, endpoint_addr.interrupt);
 
-    // better ifnum assignment
-    uint8_t ifnum_assigned;
-#define NETIFS_MAX_ALLOWED 8
-#define CHECK_BIT(var, pos) ((var) & (1 << (pos)))
-    for (ifnum_assigned = 0; ifnum_assigned < NETIFS_MAX_ALLOWED; ifnum_assigned++)
-        if (!CHECK_BIT(ifnums_used, ifnum_assigned))
-            break;
-
-    if (ifnum_assigned == NETIFS_MAX_ALLOWED)
-    {
-        // this is a bug because code earlier should detect this condition
-        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
-                    ("ERROR: Interface assign err. This is a bug. File an issue on https://github.com/cagstech/lwip-ce with the following:\nusb_ethernet.c:731 ifs_used=%u, if_assign=%u", ifnums_used, ifnum_assigned));
+    if (!eth_register_netif(eth, &netif_registered, &device_data_set, &rx_ring_created))
         goto fail;
-    }
-    eth->ifslot = ifnum_assigned;
-
-    {
-        struct netif *iface = &eth->iface;
-        // add to lwIP list of active netifs (save pointer to eth_device_t too)
-        if (netif_add_noaddr(iface, eth, eth_netif_init, netif_input) == NULL)
-        {
-            LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SERIOUS,
-                        ("ERROR, ? netif= <- device=%p, netif add failed", device));
-            goto fail;
-        }
-        netif_registered = true;
-        // fetch next available device number to use
-        // set pointer to eth_device_t as associated data for usb device too
-        usb_fn.set_device_data(device, eth);
-        device_data_set = true;
-
-        iface->name[0] = 'e';
-        iface->name[1] = 'n';
-
-        // allow IPv4 and IPv6 on device
-        netif_create_ip6_linklocal_address(iface, 1);
-        iface->ip6_autoconfig_enabled = 1;
-
-        ifnums_used |= 1 << ifnum_assigned;                         // set flag marking the ifnum used
-        netif_set_hostname(iface, lwip_app_config_get()->hostname); // set hostname from config
-        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
-                    ("NEW, netif=%c%c%u <- device=%p", iface->name[0], iface->name[1], iface->num, device));
-    }
-
-    eth->rx_ring = mem_buffer_create(MEM_BUFFER_RING, ETH_RX_RING_INIT_SIZE,
-                                     ETH_RX_RING_MAX_SIZE,
-                                     ETH_RX_RING_STEP_SIZE,
-                                     BUFFER_RX_RING);
-    if (!eth->rx_ring)
-    {
-        goto fail;
-    }
-    rx_ring_created = true;
-    mem_buffer_set_drain(eth->rx_ring, eth_rx_ring_drain, &eth->iface);
-    mem_buffer_set_grow(eth->rx_ring, 85, ETH_RX_RING_STEP_SIZE);
-    mem_buffer_set_shrink(eth->rx_ring, 30, ETH_RX_RING_STEP_SIZE);
-
-    /* Wire the RX-schedule dispatcher into the master tick (idempotent —
-     * attach is safe to repeat across multiple device-init calls). It re-arms
-     * RX transfers that didn't self-re-arm and reaps unplugged devices.
-     *
-     * There is deliberately no RX-DRAIN dispatcher: received frames are now
-     * delivered straight into lwIP from the RX completion (eth_rx_deliver),
-     * and the overflow ring — used only when the pbuf pool is momentarily
-     * full — is drained by a self-limiting sys_timeout (eth_rx_ring_drain_timer)
-     * that runs only while the ring is non-empty. This removes the always-on
-     * drain hop whose self-re-arming chain could wedge RX delivery if a tick
-     * ever failed to re-arm. */
-    lwip_dispatch_attach(LWIP_DISPATCH_ETH_RX_SCHEDULE, eth_rx_schedule_dispatch);
-    lwip_dispatch_set_period(LWIP_DISPATCH_ETH_RX_SCHEDULE,
-                             lwip_dispatch_period_from_ms(ETH_RX_SCHED_INTERVAL_MS));
-    lwip_dispatch_start();
-
-    netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
     // enqueue callbacks for receiving interrupt and RX transfers from this device.
     if (usb_fn.schedule_transfer(eth->interrupt.endpoint, eth->interrupt.buf,
                                  INTERRUPT_RX_MAX, interrupt_receive_callback,
@@ -1913,6 +1937,180 @@ fail:
     return false;
 }
 
+#define DEVICE_EP_OUT 0x04
+#define DEVICE_EP_IN 0x83
+#define CDC_SET_LINE_CODING 0x20
+#define CDC_GET_LINE_CODING 0x21
+#define CDC_SET_CONTROL_LINE_STATE 0x22
+#define CDC_LINE_CODING_SIZE 7
+
+static usb_device_descriptor_t device_descriptor_blob = {
+    18, USB_DEVICE_DESCRIPTOR, 0x0200,
+    USB_COMM_CLASS, 0, 0, 64,
+    0x16C0, 0x05E1, 0x0300,
+    1, 2, 0, 1
+};
+
+static uint8_t device_configuration[62] = {
+    0x09, 0x02, 0x3E, 0x00, 0x02, 0x01, 0x00, 0xC0, 0x32,
+    0x09, 0x04, 0x00, 0x00, 0x01, 0x02, 0x02, 0x00, 0x00,
+    0x05, 0x24, 0x00, 0x10, 0x01,
+    0x04, 0x24, 0x02, 0x02,
+    0x05, 0x24, 0x06, 0x00, 0x01,
+    0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0xFF,
+    0x09, 0x04, 0x01, 0x00, 0x02, 0x0A, 0x00, 0x00, 0x00,
+    0x07, 0x05, DEVICE_EP_OUT, 0x02, 0x40, 0x00, 0x00,
+    0x07, 0x05, DEVICE_EP_IN, 0x02, 0x40, 0x00, 0x00
+};
+
+static uint16_t device_langids[2] = {0x0304, 0x0409};
+static uint16_t device_manufacturer[5] = {0x030A, 'l', 'w', 'I', 'P'};
+static uint16_t device_product[11] = {0x0316, 'l', 'w', 'I', 'P', ' ', 'W', 'i', '-', 'F', 'i'};
+static uint8_t device_line_coding[CDC_LINE_CODING_SIZE] = {0x00, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x08};
+static uint8_t device_mac[NETIF_MAX_HWADDR_LEN];
+
+static const usb_configuration_descriptor_t *const device_configurations[] = {
+    (const usb_configuration_descriptor_t *)device_configuration
+};
+
+static const usb_string_descriptor_t *const device_strings[] = {
+    (const usb_string_descriptor_t *)device_manufacturer,
+    (const usb_string_descriptor_t *)device_product
+};
+
+const usb_standard_descriptors_t eth_device_descriptors = {
+    &device_descriptor_blob,
+    device_configurations,
+    (const usb_string_descriptor_t *)device_langids,
+    2,
+    device_strings
+};
+
+static void device_apply_dtr(usb_device_t host)
+{
+    eth_device_t *eth = (eth_device_t *)usb_fn.get_device_data(host);
+
+    if (!eth || eth_is_shutting_down(eth))
+        return;
+    if (device_dtr)
+        netif_set_link_up(&eth->iface);
+    else
+        netif_set_link_down(&eth->iface);
+}
+
+static usb_error_t device_mac_received(__attribute__((unused)) usb_endpoint_t endpoint,
+                                     usb_transfer_status_t status, size_t transferred,
+                                     __attribute__((unused)) usb_transfer_data_t *data)
+{
+    usb_device_t host = usb_fn.find_device(NULL, NULL, USB_SKIP_HUBS);
+    eth_device_t *eth = host ? (eth_device_t *)usb_fn.get_device_data(host) : NULL;
+
+    if (status != USB_TRANSFER_COMPLETED || transferred != sizeof device_mac)
+        return USB_SUCCESS;
+    device_mac_valid = true;
+    if (!eth || eth_is_shutting_down(eth))
+        return USB_SUCCESS;
+
+    bool link_up = netif_is_link_up(&eth->iface);
+    if (link_up)
+        netif_set_link_down(&eth->iface);
+    memcpy(eth->hwaddr, device_mac, sizeof device_mac);
+    memcpy(eth->iface.hwaddr, device_mac, sizeof device_mac);
+    netif_create_ip6_linklocal_address(&eth->iface, 1);
+    if (link_up)
+        netif_set_link_up(&eth->iface);
+    return USB_SUCCESS;
+}
+
+static usb_error_t device_handle_setup(const usb_control_setup_t *setup)
+{
+    usb_transfer_callback_t handler = NULL;
+    void *buffer;
+
+    if (setup->bmRequestType == (USB_DEVICE_TO_HOST | USB_CLASS_REQUEST | USB_RECIPIENT_INTERFACE) &&
+        setup->bRequest == CDC_GET_LINE_CODING && setup->wLength == CDC_LINE_CODING_SIZE)
+        buffer = device_line_coding;
+    else if (setup->bmRequestType == (USB_HOST_TO_DEVICE | USB_CLASS_REQUEST | USB_RECIPIENT_INTERFACE) &&
+             setup->bRequest == CDC_SET_LINE_CODING && setup->wLength == CDC_LINE_CODING_SIZE)
+        buffer = device_line_coding;
+    else if (setup->bmRequestType == (USB_HOST_TO_DEVICE | USB_CLASS_REQUEST | USB_RECIPIENT_INTERFACE) &&
+             setup->bRequest == CDC_SET_CONTROL_LINE_STATE && setup->wLength == 0)
+        buffer = NULL;
+    else if (setup->bmRequestType == (USB_HOST_TO_DEVICE | USB_CLASS_REQUEST | USB_RECIPIENT_INTERFACE) &&
+             setup->bRequest == REQUEST_SET_NET_ADDRESS && setup->wLength == sizeof device_mac)
+    {
+        buffer = device_mac;
+        handler = device_mac_received;
+    }
+    else
+        return USB_SUCCESS;
+
+    usb_device_t host = usb_fn.find_device(NULL, NULL, USB_SKIP_HUBS);
+    if (!host)
+        return USB_SUCCESS;
+    usb_fn.schedule_control_transfer(usb_fn.get_device_endpoint(host, 0), setup, buffer, handler, NULL);
+    if (setup->bRequest == CDC_SET_CONTROL_LINE_STATE)
+    {
+        device_dtr = setup->wValue & 1;
+        device_apply_dtr(host);
+    }
+    return USB_IGNORE;
+}
+
+static void device_attach(void)
+{
+    usb_device_t host = usb_fn.find_device(NULL, NULL, USB_SKIP_HUBS);
+
+    if (eth_driver_shutting_down || !host || usb_fn.get_device_data(host))
+        return;
+
+    eth_device_t *eth = mem_calloc(1, sizeof(eth_device_t));
+    if (!eth)
+    {
+        ERROR_CODE(ERR_MEM);
+        return;
+    }
+
+    bool netif_registered = false;
+    bool device_data_set = false;
+    bool rx_ring_created = false;
+    uint24_t rmac[2];
+
+    eth->device = host;
+    eth->device_mode = true;
+    eth->type = USB_ECM_SUBCLASS;
+    eth->rx.callback = ecm_receive_callback;
+    eth->tx.emit = ecm_bulk_transmit;
+    eth->rx.endpoint = usb_fn.get_device_endpoint(host, DEVICE_EP_OUT);
+    eth->tx.endpoint = usb_fn.get_device_endpoint(host, DEVICE_EP_IN);
+    if (!eth->rx.endpoint || !eth->tx.endpoint)
+        goto fail;
+    usb_fn.set_endpoint_flags(eth->tx.endpoint, USB_AUTO_TERMINATE);
+
+    if (device_mac_valid)
+    {
+        memcpy(eth->hwaddr, device_mac, sizeof device_mac);
+    }
+    else
+    {
+        rmac[0] = (uint24_t)(random() & 0xFFFFFF);
+        rmac[1] = (uint24_t)(random() & 0xFFFFFF);
+        memcpy(&eth->hwaddr[0], rmac, 6);
+        eth->hwaddr[0] &= 0xFE;
+        eth->hwaddr[0] |= 0x02;
+    }
+
+    if (!eth_register_netif(eth, &netif_registered, &device_data_set, &rx_ring_created))
+        goto fail;
+
+    device_apply_dtr(host);
+    return;
+
+fail:
+    eth_cleanup_failed_init(host, eth, true, netif_registered,
+                            device_data_set, rx_ring_created);
+}
+
 usb_error_t
 eth_usb_event_callback(usb_event_t event, void *event_data,
                        __attribute__((unused)) usb_callback_data_t *callback_data)
@@ -1930,7 +2128,7 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
             usb_fn.reset_device(usb_device);
         break;
     case USB_DEVICE_ENABLED_EVENT:
-        if (eth_driver_shutting_down)
+        if (eth_driver_shutting_down || (usb_fn.get_role() & USB_ROLE_DEVICE))
         {
             break;
         }
@@ -1990,9 +2188,23 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         if (init_ethernet_usb_device(usb_device))
             break;
         break;
+    case USB_DEFAULT_SETUP_EVENT:
+        if (usb_fn.get_role() & USB_ROLE_DEVICE)
+        {
+            usb_error_t setup_result = device_handle_setup(event_data);
+            lwip_invoke_usb_callback_chain(event, event_data, callback_data);
+            return setup_result;
+        }
+        break;
+    case USB_HOST_CONFIGURE_EVENT:
+        if (!eth_driver_shutting_down)
+            device_attach();
+        break;
     case USB_DEVICE_DISCONNECTED_EVENT:
     case USB_DEVICE_DISABLED_EVENT:
     {
+        device_dtr = false;
+        device_mac_valid = false;
         eth_device_t *eth_device = (eth_device_t *)usb_fn.get_device_data(usb_device);
         if (eth_device)
         {
@@ -2049,7 +2261,8 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
          * try to reset it back online. Other devices that just happen
          * to disconnect at the same time keep their normal teardown
          * path. */
-        if (eth_device && eth_device->disabled_with_error && ETH_DO_RESTART_ON_ERROR)
+        if (eth_device && eth_device->disabled_with_error && ETH_DO_RESTART_ON_ERROR &&
+            !(usb_fn.get_role() & USB_ROLE_DEVICE))
         {
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_SEVERE,
                         ("device ptr=%p: disabled with error, resetting!", usb_device));
@@ -2132,6 +2345,20 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
     }
     lwip_invoke_usb_callback_chain(event, event_data, callback_data);
     return USB_SUCCESS;
+}
+
+struct netif *eth_device_netif(void)
+{
+    struct netif *netif = NULL;
+    NETIF_FOREACH(netif)
+    {
+        if (!eth_is_eth_netif(netif))
+            continue;
+        eth_device_t *dev = (eth_device_t *)netif->state;
+        if (dev->device_mode && !eth_is_shutting_down(dev))
+            return netif;
+    }
+    return NULL;
 }
 
 uint8_t eth_get_interfaces(void)
