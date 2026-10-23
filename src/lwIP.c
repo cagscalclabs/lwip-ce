@@ -282,9 +282,8 @@ bool lwip_stack_init(void)
         lwip_membuffers_release();
         return false;
     }
-    /* tls_init() brings up the cert truststore and the PSK/session-ticket
-     * cache in one call (the RNG starts on the first random request) --
-     * fixed one-time setup, run here
+    /* tls_init() brings up the RNG, the cert truststore, and the PSK/
+     * session-ticket cache in one call -- fixed one-time setup, run here
      * rather than lazily on the first TLS socket so lwip_start() alone is
      * sufficient for crypto-only callers (every unit test under
      * tests/unit/ relies on this). Gated on the wizard's "Enable TLS"

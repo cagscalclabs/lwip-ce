@@ -292,6 +292,11 @@ bool tls_init(void)
         return true;
     }
 
+    /* Starting the asynchronous RNG service is not the same as having entropy
+     * ready immediately. Randomness-consuming operations enforce readiness at
+     * request time; deterministic crypto remains usable in the meantime. */
+    tls_rng_start();
+
     tls_ctx.network_up = true;
     tls_ctx.truststore.status = TLS_STORE_UNCHECKED;
     tls_psk_cache_alloc();

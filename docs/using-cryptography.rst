@@ -11,8 +11,7 @@ stack. This section will go over the modules of the cryptography API, and end wi
 .. note::
 
    Call ``lwip_start()`` before using any lwIP-CE cryptography. This patches the LibLoad jump
-   table so lwIP-CE calls are safe. The TRNG starts on the first random request,
-   which takes about 3 seconds while it selects an entropy source.
+   table so lwIP-CE calls are safe, and initializes the TRNG.
 
    .. code-block:: c
 
