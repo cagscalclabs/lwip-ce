@@ -75,6 +75,17 @@ static bool tls_p256_verify(const uint8_t *sig, const uint8_t *hash, const uint8
 { (void)sig; (void)hash; (void)pub; return true; }
 static void tls_crypto_guard_enable(void) {}
 static void tls_crypto_guard_disable(void) {}
+/* No Wi-Fi bridge: every offload start returns 0, so the local code runs. */
+typedef uint16_t lwip_crypto_job_t;
+#define CTL_RSA_PKCS1_SHA256 1
+#define CTL_RSA_PSS_SHA256 2
+static lwip_crypto_job_t lwip_crypto_x25519(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
+static lwip_crypto_job_t lwip_crypto_p256(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
+static lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t *d, const uint8_t *p, const uint8_t *rs) { return 0; }
+static lwip_crypto_job_t lwip_crypto_rsa_verify(uint8_t a, const uint8_t *d, const uint8_t *m, size_t ml,
+                                                const uint8_t *e, size_t el, const uint8_t *s) { return 0; }
+static void lwip_crypto_cancel(lwip_crypto_job_t job) {}
+static void lwip_crypto_reseed(void) {}
 static uint32_t lwip_sntp_read_rtc_raw(void) { return 1700000000; }
 static uint32_t lwip_sntp_get_unix_time(void) { return 1700000000; }
 static void tls_hs_reasm_reset(struct tls_handshake_context *ctx) {}

@@ -344,9 +344,9 @@ int main(void)
     assert(tls_x509_parse_certificate(cert_ec, sizeof(cert_ec), &ec));
     assert(ec.pubkey.type == TLS_KEY_TYPE_EC_P256 && ec.pubkey.ec.len == 65);
     uint8_t digest[32], sig[128]; memset(digest, 0x42, 32); memset(sig, 0x22, 128);
-    assert(tls_cert_verify_digest(TLS_ALG_ECDSA_SECP256R1_SHA256, &ec.pubkey,
+    assert(tls_cert_verify_digest(NULL, TLS_ALG_ECDSA_SECP256R1_SHA256, &ec.pubkey,
                                   digest, sig, 128) == TLS_KEY_OP_INVALID);
-    assert(tls_cert_verify_digest(TLS_ALG_RSA_PSS_RSAE_SHA256, &ec.pubkey, digest, sig, 128) == TLS_KEY_OP_INVALID);
+    assert(tls_cert_verify_digest(NULL, TLS_ALG_RSA_PSS_RSAE_SHA256, &ec.pubkey, digest, sig, 128) == TLS_KEY_OP_INVALID);
 
     /* Chain-policy distinction: a correctly-sized signature under an RSA key
      * wider than the platform cap is unsupported, while a width mismatch is
