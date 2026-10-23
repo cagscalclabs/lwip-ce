@@ -64,6 +64,7 @@ static size_t op_status(uint8_t *out, size_t room)
     memcpy(out + 4, status.bssid, 6);
     out[10] = profiles_count();
     used += put_string(out + used, room - used, status.ssid);
+    out[used++] = status.reason;
     return used;
 }
 

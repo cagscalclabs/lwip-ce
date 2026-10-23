@@ -181,6 +181,25 @@ static const char *error_text(lwip_wifi_error_t err)
     }
 }
 
+static const char *reason_text(uint8_t reason)
+{
+    switch (reason)
+    {
+    case LWIP_WIFI_REASON_NOT_FOUND:
+        return "network not found";
+    case LWIP_WIFI_REASON_AUTH:
+        return "wrong password";
+    case LWIP_WIFI_REASON_LOST:
+        return "signal lost";
+    case LWIP_WIFI_REASON_REJECTED:
+        return "turned away by the network";
+    case LWIP_WIFI_REASON_OTHER:
+        return "connection failed";
+    default:
+        return NULL;
+    }
+}
+
 static bool report(const char *title, lwip_wifi_error_t err)
 {
     if (err == LWIP_WIFI_OK)
@@ -205,6 +224,11 @@ static void status_line(char *out, size_t size, uint8_t *color)
     {
         snprintf(out, size, "Connected to %s, %d dBm, channel %u", g_state.ssid, g_state.rssi, g_state.channel);
         *color = UI_GOOD;
+    }
+    else if (reason_text(g_state.reason))
+    {
+        snprintf(out, size, "Not connected: %s", reason_text(g_state.reason));
+        *color = UI_BAD;
     }
     else
     {
@@ -264,6 +288,7 @@ static void connect_and_wait(uint8_t slot)
         report("Connect", err);
         return;
     }
+    g_state.reason = LWIP_WIFI_REASON_NONE;
     start = last = sys_now();
     while (sys_now() - start < JOIN_WAIT_MS)
     {
@@ -274,6 +299,13 @@ static void connect_and_wait(uint8_t slot)
         {
             last = sys_now();
             g_state_valid = lwip_wifi_get_state(&g_state) == LWIP_WIFI_OK;
+        }
+        if (g_state_valid && g_state.reason == LWIP_WIFI_REASON_AUTH)
+            break;
+        if (g_state_valid && g_state.reason == LWIP_WIFI_REASON_NOT_FOUND)
+        {
+            ui_message("Not connected", "The network is not in range.", NULL);
+            return;
         }
     }
     ui_message("Not connected", "The network did not accept", "the bridge. Check the password.");

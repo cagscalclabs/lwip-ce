@@ -21,6 +21,7 @@ static volatile bool s_joining;
 static volatile bool s_paused;
 static volatile uint8_t s_pending = PROFILE_NONE;
 static uint8_t s_slot = PROFILE_NONE;
+static volatile uint8_t s_reason = LWIP_WIFI_REASON_NONE;
 static wifi_ap_record_t s_records[WIFI_SCAN_MAX];
 
 static wifi_auth_mode_t auth_for(uint8_t security)
@@ -195,6 +196,7 @@ void wifi_kick(void)
 
 void wifi_join_slot(uint8_t slot)
 {
+    s_reason = LWIP_WIFI_REASON_NONE;
     s_paused = false;
     s_pending = slot;
     wifi_kick();
@@ -209,6 +211,7 @@ void wifi_disconnect(void)
 
 void wifi_resume(void)
 {
+    s_reason = LWIP_WIFI_REASON_NONE;
     s_paused = false;
     if (s_connected) {
         esp_wifi_disconnect();
@@ -223,12 +226,41 @@ void wifi_get_status(wifi_status_t *out)
     memset(out, 0, sizeof *out);
     out->slot = PROFILE_NONE;
     out->connected = s_connected;
+    out->reason = s_reason;
     if (s_connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         out->slot = profiles_active();
         out->rssi = ap.rssi;
         out->channel = ap.primary;
         memcpy(out->bssid, ap.bssid, 6);
         memcpy(out->ssid, ap.ssid, 32);
+    }
+}
+
+static uint8_t reason_from_event(uint8_t reason)
+{
+    switch (reason) {
+    case WIFI_REASON_ASSOC_LEAVE:
+    case WIFI_REASON_ROAMING:
+        return LWIP_WIFI_REASON_NONE;
+    case WIFI_REASON_NO_AP_FOUND:
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+        return LWIP_WIFI_REASON_NOT_FOUND;
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_802_1X_AUTH_FAILED:
+        return LWIP_WIFI_REASON_AUTH;
+    case WIFI_REASON_BEACON_TIMEOUT:
+    case WIFI_REASON_MISSING_ACKS:
+        return LWIP_WIFI_REASON_LOST;
+    case WIFI_REASON_ASSOC_TOOMANY:
+    case WIFI_REASON_NOT_AUTHORIZED_THIS_LOCATION:
+    case WIFI_REASON_AP_INITIATED:
+        return LWIP_WIFI_REASON_REJECTED;
+    default:
+        return LWIP_WIFI_REASON_OTHER;
     }
 }
 
@@ -251,6 +283,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         bool was_connected = s_connected;
 
         ESP_LOGW(TAG, "disconnected, reason %u", event->reason);
+        s_reason = s_paused ? LWIP_WIFI_REASON_NONE : reason_from_event(event->reason);
         s_connected = false;
         s_joining = false;
         profiles_clear_active();
@@ -264,6 +297,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         }
     } else if (id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG, "connected");
+        s_reason = LWIP_WIFI_REASON_NONE;
         s_connected = true;
         s_joining = false;
         profiles_mark_active(s_slot);

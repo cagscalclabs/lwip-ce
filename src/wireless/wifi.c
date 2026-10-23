@@ -45,6 +45,7 @@ static bool parse_state(const uint8_t *data, uint16_t length, lwip_wifi_state_t 
         ssid_len = 0;
     memcpy(state->ssid, &data[12], ssid_len);
     state->ssid[ssid_len] = '\0';
+    state->reason = 12u + ssid_len < length ? data[12 + ssid_len] : LWIP_WIFI_REASON_NONE;
     return true;
 }
 
@@ -66,7 +67,7 @@ err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
 
     if (header[14] == CTL_VERSION && header[15] == (CTL_OP_EVENT | CTL_REPLY) && g_event_fn)
     {
-        uint8_t body[12 + LWIP_WIFI_SSID_MAX];
+        uint8_t body[13 + LWIP_WIFI_SSID_MAX];
         lwip_wifi_state_t state;
         uint16_t got = pbuf_copy_partial(p, body, sizeof body, CTL_HEADER);
 

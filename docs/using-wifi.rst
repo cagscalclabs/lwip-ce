@@ -164,7 +164,9 @@ returns ``LWIP_WIFI_ERR_BUSY``.
      - ``true`` once a bridge is attached over USB. Returns immediately.
    * - ``lwip_wifi_get_state(&state)``
      - Connection state: connected or not, SSID, RSSI, channel, BSSID, the
-       slot of the joined network and how many networks are saved.
+       slot of the joined network, how many networks are saved, and why the
+       bridge last left a network (``LWIP_WIFI_REASON_*``: not found, wrong
+       password, signal lost, turned away, other).
    * - ``lwip_wifi_list_profiles(profiles, max, &count)``
      - Saved networks in preference order: slot, SSID, security, flags.
    * - ``lwip_wifi_scan(networks, max, &count)``

@@ -24,6 +24,7 @@ typedef struct {
     uint8_t channel;
     uint8_t bssid[6];
     char ssid[LWIP_WIFI_SSID_MAX + 1];
+    uint8_t reason;
 } wifi_status_t;
 
 esp_err_t bridge_init(void);

@@ -143,7 +143,8 @@ strings are a length byte followed by the bytes, without a terminator.
      - Body
    * - 1
      - Status
-     - Reply: connected, slot, RSSI, channel, BSSID (6), saved count, SSID.
+     - Reply: connected, slot, RSSI, channel, BSSID (6), saved count, SSID,
+       disconnect reason (``LWIP_WIFI_REASON_*``; absent from older firmware).
    * - 2
      - List
      - Reply: count, then per network slot, flags, security, SSID.

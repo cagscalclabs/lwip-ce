@@ -58,6 +58,17 @@ typedef struct
     uint8_t security;
 } lwip_wifi_network_t;
 
+/* Why the bridge last left a network, kept until it joins one again. */
+typedef enum
+{
+    LWIP_WIFI_REASON_NONE,      /* no failure: never joined, or asked to leave */
+    LWIP_WIFI_REASON_NOT_FOUND, /* the network is not in range */
+    LWIP_WIFI_REASON_AUTH,      /* wrong password or credentials */
+    LWIP_WIFI_REASON_LOST,      /* the signal was lost */
+    LWIP_WIFI_REASON_REJECTED,  /* the network turned the bridge away */
+    LWIP_WIFI_REASON_OTHER
+} lwip_wifi_reason_t;
+
 typedef struct
 {
     bool connected;
@@ -67,6 +78,7 @@ typedef struct
     uint8_t bssid[6];
     uint8_t saved;
     char ssid[LWIP_WIFI_SSID_MAX + 1];
+    uint8_t reason; /* lwip_wifi_reason_t */
 } lwip_wifi_state_t;
 
 typedef void (*lwip_wifi_event_fn)(const lwip_wifi_state_t *state, void *arg);
