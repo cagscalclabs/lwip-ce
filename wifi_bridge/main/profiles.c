@@ -1,5 +1,6 @@
 #include "profiles.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -11,7 +12,7 @@
 
 #define PROFILE_TAG "profiles"
 #define PROFILE_NAMESPACE "lwip_wifi"
-#define PROFILE_RECORD_VERSION 1
+#define PROFILE_RECORD_VERSION 2
 
 typedef struct {
     uint8_t version;
@@ -21,7 +22,10 @@ typedef struct {
     uint32_t rank;
     char ssid[PROFILE_SSID_MAX];
     char password[PROFILE_PASSWORD_MAX];
+    char username[PROFILE_USERNAME_MAX]; /* added in version 2 */
 } profile_record_t;
+
+#define PROFILE_RECORD_V1_SIZE offsetof(profile_record_t, username)
 
 static profile_record_t s_records[PROFILE_SLOTS];
 static uint8_t s_order[PROFILE_SLOTS];
@@ -128,14 +132,19 @@ esp_err_t profiles_init(void)
         slot_key(slot, key, sizeof key);
 
         if (nvs_get_blob(handle, key, &s_records[slot], &size) != ESP_OK ||
-            size != sizeof(profile_record_t) ||
-            s_records[slot].version != PROFILE_RECORD_VERSION) {
+            !((size == sizeof(profile_record_t) && s_records[slot].version == PROFILE_RECORD_VERSION) ||
+              (size == PROFILE_RECORD_V1_SIZE && s_records[slot].version == 1))) {
             memset(&s_records[slot], 0, sizeof(profile_record_t));
             continue;
         }
 
+        if (s_records[slot].version == 1) {
+            memset(s_records[slot].username, 0, PROFILE_USERNAME_MAX);
+            s_records[slot].version = PROFILE_RECORD_VERSION;
+        }
         s_records[slot].ssid[PROFILE_SSID_MAX - 1] = 0;
         s_records[slot].password[PROFILE_PASSWORD_MAX - 1] = 0;
+        s_records[slot].username[PROFILE_USERNAME_MAX - 1] = 0;
         s_records[slot].flags &= (uint8_t)~PROFILE_F_ACTIVE;
 
         if (s_records[slot].ssid[0] == 0) {
@@ -209,7 +218,7 @@ bool profiles_view(uint8_t index, profile_view_t *out)
     return found;
 }
 
-uint8_t profiles_save(const char *ssid, const char *password,
+uint8_t profiles_save(const char *ssid, const char *username, const char *password,
                            uint8_t security, uint8_t flags)
 {
     uint8_t slot = PROFILE_NONE;
@@ -252,6 +261,10 @@ uint8_t profiles_save(const char *ssid, const char *password,
 
     if (password != NULL) {
         strncpy(s_records[slot].password, password, PROFILE_PASSWORD_MAX - 1);
+    }
+
+    if (username != NULL) {
+        strncpy(s_records[slot].username, username, PROFILE_USERNAME_MAX - 1);
     }
 
     rebuild_order();
@@ -389,7 +402,7 @@ uint8_t profiles_pick(const char (*visible)[PROFILE_SSID_MAX],
     return chosen;
 }
 
-bool profiles_credentials(uint8_t slot, char *ssid, char *password,
+bool profiles_credentials(uint8_t slot, char *ssid, char *username, char *password,
                                uint8_t *security, uint8_t *flags)
 {
     bool found = false;
@@ -399,6 +412,10 @@ bool profiles_credentials(uint8_t slot, char *ssid, char *password,
     if (slot < PROFILE_SLOTS && s_records[slot].used) {
         if (ssid != NULL) {
             memcpy(ssid, s_records[slot].ssid, PROFILE_SSID_MAX);
+        }
+
+        if (username != NULL) {
+            memcpy(username, s_records[slot].username, PROFILE_USERNAME_MAX);
         }
 
         if (password != NULL) {

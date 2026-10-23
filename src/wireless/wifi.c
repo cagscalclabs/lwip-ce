@@ -313,15 +313,16 @@ lwip_wifi_error_t lwip_wifi_scan(lwip_wifi_network_t *networks, uint8_t max, uin
     return release(LWIP_WIFI_OK);
 }
 
-lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const char *password,
-                                         uint8_t security, uint8_t flags, uint8_t *saved)
+static lwip_wifi_error_t save(uint8_t slot, const char *ssid, const char *username, const char *password,
+                              uint8_t security, uint8_t flags, uint8_t *saved)
 {
-    uint8_t body[3 + 1 + LWIP_WIFI_SSID_MAX + 1 + LWIP_WIFI_PASSWORD_MAX];
+    uint8_t body[3 + 1 + LWIP_WIFI_SSID_MAX + 1 + LWIP_WIFI_PASSWORD_MAX + 1 + LWIP_WIFI_USERNAME_MAX];
     uint16_t length = 3;
     lwip_wifi_error_t err;
 
-    if (!ssid || !ssid[0] || strlen(ssid) > LWIP_WIFI_SSID_MAX || security > LWIP_WIFI_SEC_WPA2_WPA3 ||
-        (password && strlen(password) > LWIP_WIFI_PASSWORD_MAX))
+    if (!ssid || !ssid[0] || strlen(ssid) > LWIP_WIFI_SSID_MAX ||
+        (password && strlen(password) > LWIP_WIFI_PASSWORD_MAX) ||
+        (username && strlen(username) > LWIP_WIFI_USERNAME_MAX))
         return LWIP_WIFI_ERR_BAD_REQUEST;
 
     body[0] = slot;
@@ -329,11 +330,29 @@ lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const c
     body[2] = flags;
     length = (uint16_t)(length + put_string(&body[length], ssid, LWIP_WIFI_SSID_MAX));
     length = (uint16_t)(length + put_string(&body[length], password, LWIP_WIFI_PASSWORD_MAX));
+    if (username)
+        length = (uint16_t)(length + put_string(&body[length], username, LWIP_WIFI_USERNAME_MAX));
     err = request(CTL_OP_SAVE, body, length, WIFI_CHANGE_TIMEOUT_MS);
     tls_secure_memzero(body, sizeof body);
     if (err == LWIP_WIFI_OK && saved)
         *saved = g_reply_len ? g_reply[0] : LWIP_WIFI_SLOT_NONE;
     return err == LWIP_WIFI_OK ? release(err) : err;
+}
+
+lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const char *password,
+                                         uint8_t security, uint8_t flags, uint8_t *saved)
+{
+    if (security > LWIP_WIFI_SEC_WPA2_WPA3)
+        return LWIP_WIFI_ERR_BAD_REQUEST;
+    return save(slot, ssid, NULL, password, security, flags, saved);
+}
+
+lwip_wifi_error_t lwip_wifi_save_enterprise_profile(uint8_t slot, const char *ssid, const char *username,
+                                                    const char *password, uint8_t flags, uint8_t *saved)
+{
+    if (slot == LWIP_WIFI_SLOT_NONE && (!username || !username[0]))
+        return LWIP_WIFI_ERR_BAD_REQUEST;
+    return save(slot, ssid, username ? username : "", password, LWIP_WIFI_SEC_ENTERPRISE, flags, saved);
 }
 
 lwip_wifi_error_t lwip_wifi_forget_profile(uint8_t slot)

@@ -128,8 +128,10 @@ static uint8_t op_save(const uint8_t *in, const uint8_t *end, uint8_t *out, size
 {
     char ssid[PROFILE_SSID_MAX];
     char password[PROFILE_PASSWORD_MAX];
+    char username[PROFILE_USERNAME_MAX] = "";
     char old_ssid[PROFILE_SSID_MAX];
     char old_password[PROFILE_PASSWORD_MAX];
+    char old_username[PROFILE_USERNAME_MAX];
     uint8_t slot, security, flags, saved;
     bool existing;
 
@@ -140,26 +142,39 @@ static uint8_t op_save(const uint8_t *in, const uint8_t *end, uint8_t *out, size
     security = in[1];
     flags = in[2];
     in += 3;
-    if (security > LWIP_WIFI_SEC_WPA2_WPA3 || !get_string(&in, end, ssid, sizeof ssid) ||
-        ssid[0] == 0 || !get_string(&in, end, password, sizeof password)) {
+    if (security > LWIP_WIFI_SEC_ENTERPRISE || !get_string(&in, end, ssid, sizeof ssid) ||
+        ssid[0] == 0 || !get_string(&in, end, password, sizeof password) ||
+        (in < end && !get_string(&in, end, username, sizeof username))) {
         return CTL_ST_BAD_REQUEST;
     }
 
     existing = slot != PROFILE_NONE &&
-               profiles_credentials(slot, old_ssid, old_password, NULL, NULL);
+               profiles_credentials(slot, old_ssid, old_username, old_password, NULL, NULL);
     if (slot != PROFILE_NONE && !existing) {
         return CTL_ST_NOT_FOUND;
     }
     if (existing && password[0] == 0) {
         memcpy(password, old_password, sizeof password);
     }
+    if (existing && username[0] == 0) {
+        memcpy(username, old_username, sizeof username);
+    }
+    if (security != LWIP_WIFI_SEC_ENTERPRISE) {
+        username[0] = 0;
+    } else if (username[0] == 0) {
+        memset(password, 0, sizeof password);
+        memset(old_password, 0, sizeof old_password);
+        return CTL_ST_BAD_REQUEST;
+    }
     if (existing && strcmp(old_ssid, ssid) != 0) {
         profiles_forget(slot);
     }
 
-    saved = profiles_save(ssid, password, security, flags);
+    saved = profiles_save(ssid, username, password, security, flags);
     memset(password, 0, sizeof password);
     memset(old_password, 0, sizeof old_password);
+    memset(username, 0, sizeof username);
+    memset(old_username, 0, sizeof old_username);
     if (saved == PROFILE_NONE) {
         return CTL_ST_FULL;
     }
@@ -209,7 +224,7 @@ static void handle(const request_t *request)
             status = CTL_ST_BAD_REQUEST;
         } else if (in[0] == PROFILE_NONE) {
             wifi_resume();
-        } else if (profiles_credentials(in[0], NULL, NULL, NULL, NULL)) {
+        } else if (profiles_credentials(in[0], NULL, NULL, NULL, NULL, NULL)) {
             wifi_join_slot(in[0]);
         } else {
             status = CTL_ST_NOT_FOUND;

@@ -470,3 +470,4 @@ lwip_wifi_x25519
 lwip_wifi_rsa_verify
 lwip_wifi_random
 lwip_wifi_bridge_version
+lwip_wifi_save_enterprise_profile

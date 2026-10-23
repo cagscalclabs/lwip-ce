@@ -7,11 +7,15 @@
 
 #define LWIP_WIFI_SSID_MAX 32
 #define LWIP_WIFI_PASSWORD_MAX 64
+#define LWIP_WIFI_USERNAME_MAX 64
 #define LWIP_WIFI_SLOT_NONE 0xFF
 
 #define LWIP_WIFI_PROFILE_ENABLED 0x01
 #define LWIP_WIFI_PROFILE_HIDDEN 0x02
 #define LWIP_WIFI_PROFILE_ACTIVE 0x04
+/* Enterprise only: join only if the network's certificate chains to a CA in
+ * the bridge's built-in bundle. */
+#define LWIP_WIFI_PROFILE_CHECK_SERVER 0x08
 
 #define LWIP_WIFI_CAP_X25519 0x01
 #define LWIP_WIFI_CAP_RSA 0x02
@@ -27,7 +31,8 @@ typedef enum
     LWIP_WIFI_SEC_WPA,
     LWIP_WIFI_SEC_WPA2,
     LWIP_WIFI_SEC_WPA3,
-    LWIP_WIFI_SEC_WPA2_WPA3
+    LWIP_WIFI_SEC_WPA2_WPA3,
+    LWIP_WIFI_SEC_ENTERPRISE /* WPA2/WPA3-Enterprise, PEAP or TTLS with a username */
 } lwip_wifi_security_t;
 
 typedef enum
@@ -96,6 +101,12 @@ lwip_wifi_error_t lwip_wifi_scan(lwip_wifi_network_t *networks, uint8_t max, uin
 
 lwip_wifi_error_t lwip_wifi_save_profile(uint8_t slot, const char *ssid, const char *password,
                                          uint8_t security, uint8_t flags, uint8_t *saved);
+
+/* Saves a WPA2/WPA3-Enterprise network (LWIP_WIFI_SEC_ENTERPRISE). Same rules
+ * as lwip_wifi_save_profile(); when changing an existing slot, an empty
+ * username or password keeps the stored one. */
+lwip_wifi_error_t lwip_wifi_save_enterprise_profile(uint8_t slot, const char *ssid, const char *username,
+                                                    const char *password, uint8_t flags, uint8_t *saved);
 
 lwip_wifi_error_t lwip_wifi_forget_profile(uint8_t slot);
 

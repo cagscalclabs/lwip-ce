@@ -175,6 +175,9 @@ returns ``LWIP_WIFI_ERR_BUSY``.
      - Adds a network (``slot = LWIP_WIFI_SLOT_NONE``) or edits the one in
        ``slot``. When editing, ``NULL`` or ``""`` keeps the stored password.
        Saving a name that is already stored updates that entry.
+   * - ``lwip_wifi_save_enterprise_profile(slot, ssid, username, password, flags, &saved)``
+     - The same for a WPA2/WPA3-Enterprise network. When editing, an empty
+       username or password keeps the stored one.
    * - ``lwip_wifi_forget_profile(slot)``
      - Deletes a saved network.
    * - ``lwip_wifi_enable_profile(slot, enabled)``
@@ -228,12 +231,21 @@ Return codes:
        (for example while it is joining a network). Try again shortly.
 
 Security values are the ``LWIP_WIFI_SEC_*`` constants: open, WEP, WPA, WPA2,
-WPA3 and WPA2/WPA3. Enterprise (802.1X) networks are not supported and are
-left out of scan results. Profile flags are
+WPA3, WPA2/WPA3 and Enterprise. Profile flags are
 ``LWIP_WIFI_PROFILE_ENABLED``, ``LWIP_WIFI_PROFILE_HIDDEN`` (tried even when a
-scan does not see it) and ``LWIP_WIFI_PROFILE_ACTIVE`` (the network the bridge
-is joined to). A profile saved without ``LWIP_WIFI_PROFILE_ENABLED`` is stored
+scan does not see it), ``LWIP_WIFI_PROFILE_ACTIVE`` (the network the bridge
+is joined to) and ``LWIP_WIFI_PROFILE_CHECK_SERVER`` (Enterprise only, see
+below). A profile saved without ``LWIP_WIFI_PROFILE_ENABLED`` is stored
 disabled.
+
+Enterprise networks (eduroam and most school and office networks) sign in with
+a username and password over PEAP or TTLS, whichever the network offers. The
+username is sent as the outer identity too. With
+``LWIP_WIFI_PROFILE_CHECK_SERVER`` the bridge only joins if the network's
+certificate chains to a CA in ESP-IDF's built-in bundle. Many enterprise
+networks use a private CA, so this check can fail on them. Without it, the
+bridge cannot tell the real network from a look-alike, and a look-alike can
+capture enough of the sign-in to attack the password offline.
 
 Example
 ~~~~~~~

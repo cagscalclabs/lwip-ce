@@ -781,3 +781,4 @@ func,lwip_wifi_x25519,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_rsa_verify,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_random,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_bridge_version,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
+func,lwip_wifi_save_enterprise_profile,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h

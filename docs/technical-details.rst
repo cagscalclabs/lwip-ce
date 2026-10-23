@@ -154,7 +154,8 @@ strings are a length byte followed by the bytes, without a terminator.
    * - 4
      - Save
      - Request: slot (``0xFF`` adds), security, flags, SSID, password (empty
-       keeps the stored one). Reply: slot used.
+       keeps the stored one), then for Enterprise the username (empty keeps the
+       stored one). Reply: slot used.
    * - 5
      - Forget
      - Request: slot.

@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_eap_client.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -37,6 +38,8 @@ static wifi_auth_mode_t auth_for(uint8_t security)
         return WIFI_AUTH_WPA3_PSK;
     case LWIP_WIFI_SEC_WPA2_WPA3:
         return WIFI_AUTH_WPA2_WPA3_PSK;
+    case LWIP_WIFI_SEC_ENTERPRISE:
+        return WIFI_AUTH_ENTERPRISE;
     default:
         return WIFI_AUTH_WPA2_PSK;
     }
@@ -44,11 +47,16 @@ static wifi_auth_mode_t auth_for(uint8_t security)
 
 static bool is_enterprise(wifi_auth_mode_t auth)
 {
-    return auth == WIFI_AUTH_ENTERPRISE || auth == WIFI_AUTH_WPA3_ENTERPRISE;
+    return auth == WIFI_AUTH_ENTERPRISE || auth == WIFI_AUTH_WPA3_ENTERPRISE ||
+           auth == WIFI_AUTH_WPA2_WPA3_ENTERPRISE || auth == WIFI_AUTH_WPA3_ENT_192 ||
+           auth == WIFI_AUTH_WPA_ENTERPRISE;
 }
 
 static uint8_t security_from_auth(wifi_auth_mode_t auth)
 {
+    if (is_enterprise(auth)) {
+        return LWIP_WIFI_SEC_ENTERPRISE;
+    }
     switch (auth) {
     case WIFI_AUTH_OPEN:
     case WIFI_AUTH_OWE:
@@ -83,8 +91,7 @@ int wifi_scan(wifi_scan_entry_t *out, uint8_t max)
                 const char *ssid = (const char *)s_records[i].ssid;
                 int at = 0;
 
-                /* Enterprise networks are not supported, so do not offer them. */
-                if (ssid[0] == 0 || is_enterprise(s_records[i].authmode)) {
+                if (ssid[0] == 0) {
                     continue;
                 }
                 /* One entry per network: keep the strongest of its access points. */
@@ -125,26 +132,51 @@ static uint8_t pick_profile(void)
     return profiles_pick(count ? (const char (*)[PROFILE_SSID_MAX])visible : NULL, (uint8_t)count);
 }
 
+/* PEAP or TTLS, whichever the network offers, with the username as both the
+ * outer identity and the inner MSCHAPv2 name. */
+static void set_enterprise(const char *username, const char *password, bool check_server)
+{
+    if (username == NULL) {
+        esp_wifi_sta_enterprise_disable();
+        esp_eap_client_clear_identity();
+        esp_eap_client_clear_username();
+        esp_eap_client_clear_password();
+        return;
+    }
+    esp_eap_client_set_identity((const unsigned char *)username, (int)strlen(username));
+    esp_eap_client_set_username((const unsigned char *)username, (int)strlen(username));
+    esp_eap_client_set_password((const unsigned char *)password, (int)strlen(password));
+    esp_eap_client_use_default_cert_bundle(check_server);
+    esp_wifi_sta_enterprise_enable();
+}
+
 static void join(uint8_t slot)
 {
     char ssid[PROFILE_SSID_MAX];
+    char username[PROFILE_USERNAME_MAX];
     char password[PROFILE_PASSWORD_MAX];
     uint8_t security;
     uint8_t flags;
+    bool enterprise;
     wifi_config_t config = {0};
 
-    if (!profiles_credentials(slot, ssid, password, &security, &flags)) {
+    if (!profiles_credentials(slot, ssid, username, password, &security, &flags)) {
         return;
     }
+    enterprise = security == LWIP_WIFI_SEC_ENTERPRISE;
 
     memcpy(config.sta.ssid, ssid, strnlen(ssid, sizeof config.sta.ssid));
-    strncpy((char *)config.sta.password, password, sizeof config.sta.password - 1);
+    if (!enterprise) {
+        strncpy((char *)config.sta.password, password, sizeof config.sta.password - 1);
+    }
     config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     config.sta.threshold.authmode = password[0] ? auth_for(security) : WIFI_AUTH_OPEN;
     config.sta.pmf_cfg.capable = true;
     config.sta.pmf_cfg.required = security == LWIP_WIFI_SEC_WPA3;
+    set_enterprise(enterprise ? username : NULL, password, (flags & PROFILE_F_CHECK_SERVER) != 0);
     memset(password, 0, sizeof password);
+    memset(username, 0, sizeof username);
 
     s_slot = slot;
     ESP_LOGI(TAG, "joining %s", ssid);

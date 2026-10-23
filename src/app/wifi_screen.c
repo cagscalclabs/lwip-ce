@@ -44,7 +44,7 @@ static char *g_version;
 static bool g_version_ok;
 
 static const char *const security_names[] = {
-    "Open", "WEP", "WPA", "WPA2", "WPA3", "WPA2/WPA3"
+    "Open", "WEP", "WPA", "WPA2", "WPA3", "WPA2/WPA3", "Enterprise"
 };
 
 #define SECURITY_COUNT (sizeof security_names / sizeof security_names[0])
@@ -330,11 +330,19 @@ static uint8_t choose_security(uint8_t current)
     return choice < 0 ? LWIP_WIFI_SLOT_NONE : (uint8_t)choice;
 }
 
+static bool ask_check_server(void)
+{
+    return ui_confirm("Enterprise", "Verify the server certificate?");
+}
+
 static void add_network(const char *known_ssid, uint8_t security)
 {
     char ssid[LWIP_WIFI_SSID_MAX + 1];
+    char username[LWIP_WIFI_USERNAME_MAX + 1] = "";
     char password[LWIP_WIFI_PASSWORD_MAX + 1] = "";
     uint8_t slot = LWIP_WIFI_SLOT_NONE;
+    /* A typed name may be a hidden network, which never shows up in a scan. */
+    uint8_t flags = known_ssid ? LWIP_WIFI_PROFILE_ENABLED : LWIP_WIFI_PROFILE_ENABLED | LWIP_WIFI_PROFILE_HIDDEN;
     lwip_wifi_error_t err;
 
     snprintf(ssid, sizeof ssid, "%s", known_ssid ? known_ssid : "");
@@ -342,15 +350,19 @@ static void add_network(const char *known_ssid, uint8_t security)
         return;
     if (security == LWIP_WIFI_SLOT_NONE && (security = choose_security(LWIP_WIFI_SEC_WPA2)) == LWIP_WIFI_SLOT_NONE)
         return;
+    if (security == LWIP_WIFI_SEC_ENTERPRISE &&
+        (!ui_edit_text("Username", username, sizeof username, false) || !username[0]))
+        return;
     if (security != LWIP_WIFI_SEC_OPEN && !ui_edit_text("Password", password, sizeof password, true))
         return;
+    if (security == LWIP_WIFI_SEC_ENTERPRISE && ask_check_server())
+        flags |= LWIP_WIFI_PROFILE_CHECK_SERVER;
 
     ui_busy("Wi-Fi", "Saving...");
-    /* A typed name may be a hidden network, which never shows up in a scan. */
-    err = lwip_wifi_save_profile(LWIP_WIFI_SLOT_NONE, ssid, password, security,
-                                 known_ssid ? LWIP_WIFI_PROFILE_ENABLED
-                                            : LWIP_WIFI_PROFILE_ENABLED | LWIP_WIFI_PROFILE_HIDDEN,
-                                 &slot);
+    if (security == LWIP_WIFI_SEC_ENTERPRISE)
+        err = lwip_wifi_save_enterprise_profile(LWIP_WIFI_SLOT_NONE, ssid, username, password, flags, &slot);
+    else
+        err = lwip_wifi_save_profile(LWIP_WIFI_SLOT_NONE, ssid, password, security, flags, &slot);
     tls_secure_memzero(password, sizeof password);
     if (report("Save network", err))
         connect_and_wait(slot);
@@ -359,21 +371,34 @@ static void add_network(const char *known_ssid, uint8_t security)
 static void edit_profile(const lwip_wifi_profile_t *p, int what)
 {
     char ssid[LWIP_WIFI_SSID_MAX + 1];
+    char username[LWIP_WIFI_USERNAME_MAX + 1] = "";
     char password[LWIP_WIFI_PASSWORD_MAX + 1] = "";
     uint8_t security = p->security;
+    uint8_t flags = (uint8_t)(p->flags & (LWIP_WIFI_PROFILE_ENABLED | LWIP_WIFI_PROFILE_HIDDEN |
+                                          LWIP_WIFI_PROFILE_CHECK_SERVER));
+    bool became_enterprise;
     lwip_wifi_error_t err;
 
     snprintf(ssid, sizeof ssid, "%s", p->ssid);
-    if (what == 0 && !ui_edit_text("New password", password, sizeof password, true))
+    if (what == 2 && (security = choose_security(p->security)) == LWIP_WIFI_SLOT_NONE)
+        return;
+    became_enterprise = security == LWIP_WIFI_SEC_ENTERPRISE && p->security != LWIP_WIFI_SEC_ENTERPRISE;
+    if (security == LWIP_WIFI_SEC_ENTERPRISE && (what == 0 || became_enterprise) &&
+        !ui_edit_text(became_enterprise ? "Username" : "Username, empty keeps it", username, sizeof username, false))
+        return;
+    if ((what == 0 || became_enterprise) && !ui_edit_text("New password", password, sizeof password, true))
         return;
     if (what == 1 && (!ui_edit_text("Rename network", ssid, sizeof ssid, false) || !ssid[0]))
         return;
-    if (what == 2 && (security = choose_security(p->security)) == LWIP_WIFI_SLOT_NONE)
-        return;
+    if (became_enterprise && ask_check_server())
+        flags |= LWIP_WIFI_PROFILE_CHECK_SERVER;
 
     ui_busy("Wi-Fi", "Saving...");
-    err = lwip_wifi_save_profile(p->slot, ssid, password, security,
-                                 (uint8_t)(p->flags & (LWIP_WIFI_PROFILE_ENABLED | LWIP_WIFI_PROFILE_HIDDEN)), NULL);
+    if (security == LWIP_WIFI_SEC_ENTERPRISE)
+        err = lwip_wifi_save_enterprise_profile(p->slot, ssid, username, password, flags, NULL);
+    else
+        err = lwip_wifi_save_profile(p->slot, ssid, password, security,
+                                     (uint8_t)(flags & ~LWIP_WIFI_PROFILE_CHECK_SERVER), NULL);
     tls_secure_memzero(password, sizeof password);
     report("Save network", err);
 }
