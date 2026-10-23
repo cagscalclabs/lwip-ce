@@ -248,6 +248,7 @@ extern "C"
         /* P-256 (secp256r1) ephemeral key pair for ECDHE */
         uint8_t p256_private[32];    /* Ephemeral P-256 private key */
         uint8_t p256_public[65];     /* Our ephemeral P-256 public key (uncompressed) */
+        bool p256_offered;           /* P-256 key share sent; only when the bridge computes P-256 */
         bool client_certificate_requested; /* True if server sent TLS 1.3 CertificateRequest */
 
         /* HelloRetryRequest state (RFC 8446 §4.1.4).

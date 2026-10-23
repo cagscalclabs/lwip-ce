@@ -106,7 +106,9 @@ lwIP-CE app's **Security** section control it, and both are on by default:
     The bridge computes the X25519 and P-256 key exchanges and checks the RSA
     and ECDSA P-256 signatures on the server's certificate chain and
     CertificateVerify, using its hardware accelerators. The calculator still runs the rest of TLS (key schedule,
-    record encryption, certificate parsing and policy) itself.
+    record encryption, certificate parsing and policy) itself. P-256 is slow
+    enough on the calculator alone that some servers give up, so without
+    offload it only offers X25519 for the key exchange.
 
 **Bridge TRNG**
     The bridge's hardware random number generator becomes the main entropy

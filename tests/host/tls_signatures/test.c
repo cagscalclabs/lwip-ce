@@ -58,10 +58,20 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         if (type == 10)
         {
             static const uint8_t expected[] = {0, 4, 0, 0x17, 0, 0x1d};
-            assert(len == sizeof(expected) && memcmp(buf+off+4, expected, len) == 0);
+            static const uint8_t x25519_first[] = {0, 4, 0, 0x1d, 0, 0x17};
+            assert(len == sizeof(expected) &&
+                   memcmp(buf+off+4, mock_caps ? expected : x25519_first, len) == 0);
             groups++;
         }
-        if (type == 51)
+        if (type == 51 && !mock_caps)
+        {
+            static const uint8_t x25519_only[] = {0, 0x24, 0, 0x1d, 0, 0x20};
+            assert(len == 38 && memcmp(buf+off+4, x25519_only, sizeof(x25519_only)) == 0);
+            assert(memcmp(buf+off+10, ctx.ecdhe_public, 32) == 0);
+            assert(!ctx.p256_offered);
+            key_share++;
+        }
+        else if (type == 51)
         {
             static const uint8_t expected_header[] = {0, 0x69, 0, 0x17, 0, 0x41};
             static const uint8_t x25519_header[] = {0, 0x1d, 0, 0x20};
@@ -334,6 +344,10 @@ int main(void)
     hello(false, "example.test", true); hello(true, "example.test", true);
     hello(false, "192.168.2.10", false); hello(true, "192.168.2.10", false);
     hello(false, "2001:db8::1", false); hello(true, "2001:db8::1", false);
+    /* No P-256 on the bridge: only an x25519 share, x25519 listed first. */
+    mock_caps = 0;
+    hello(false, NULL, false); hello(true, "example.test", true);
+    mock_caps = CTL_CAP_P256;
     handshake_extension_tests();
     identity_tests();
     chain(cert_pkcs, sizeof(cert_pkcs), TLS_ALG_RSA_PKCS1_SHA256);
