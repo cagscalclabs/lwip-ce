@@ -51,30 +51,10 @@ globl _powmod_exp_u24
 ; in memory.s.o) and the link fails with "multiple definition".
 
 _powmod_exp_u24:
-   xor   a, a
-   jr   .Lpowmod_copy
-
-globl _powmod_exp_u24_vartime
-.type _powmod_exp_u24_vartime,@function
-
-_powmod_exp_u24_vartime:
-   ld   a, 1
-.Lpowmod_copy:
    ld   hl, _powmod_reloc_load_start
    ld   de, _powmod_reloc_run_start
    ld   bc, _powmod_reloc_len
    ldir
-   ld   (.Lvartime), a
-   ld   a, i
-   di
-   ld   a, 0
-   jp   po, .Lpowmod_go
-   inc   a
-.Lpowmod_go:
-   ld   (.Lv_ei), a
-   exx
-   ld   (.Lv_hl2), hl
-   exx
    jp   _powmod_reloc_run_start
 
 .section	.powmod.reloc,"ax",@progbits
@@ -124,21 +104,6 @@ _powmod_exp_u24_impl:
    ld   hl, (ix + Lbase)
    add   hl, bc
    ld   (ix + Lbase), hl
-   ld   a, (.Lvartime)
-   or   a, a
-   jr   z, .Lmod_bitwise
-   ld   hl, (ix + Lmod)
-   or   a, a
-   sbc   hl, bc
-   ld   a, (hl)
-   cp   a, $80
-   jr   c, .Lmod_bitwise_hl
-   call   .Lmod_bytewise
-   jr   .Lmod_done
-.Lmod_bitwise_hl:
-   ld   hl, (ix + Lbase)
-   or   a, a
-.Lmod_bitwise:
    ld   c, 8
 .Lmod_outer:
    ld   b, (ix + Lsize)
@@ -159,7 +124,6 @@ _powmod_exp_u24_impl:
    djnz   .Lmod_inner ; leaks size
    dec   c
    jp   nz, .Lmod_outer ; leaks constant
-.Lmod_done:
    ld   c, (ix + Lsize)
    dec   c
    inc   bc
@@ -198,13 +162,6 @@ _powmod_exp_u24_impl:
    call   .Lmul_alt
    ld   sp, ix
    pop   ix
-   exx
-   ld   hl, (.Lv_hl2)
-   exx
-   ld   a, (.Lv_ei)
-   or   a, a
-   ret   z
-   ei
    ret
    ; vi(acc) = vi(acc) * vi(hl) % vi(mod)
    ; assumes bc = 0
@@ -259,16 +216,10 @@ _powmod_exp_u24_impl:
 ;   ld   d, 0
    rl   d
    pop   hl
-   push   hl
-   exx
-   pop   hl
-   exx
 .Lmul_inner:
-   exx
    dec   hl
-   ld   a, (hl)
-   exx
-   ld   l, a
+   push   hl
+   ld   l, (hl)
    ld   h, 0
 .Lcur = . - 1
    mlt   hl
@@ -286,6 +237,7 @@ _powmod_exp_u24_impl:
    dec   iy
    add   a, (iy)
    ld   (iy + 1), a
+   pop   hl
    djnz   .Lmul_inner ; leaks size
    ld   l, b
    rl   l
@@ -337,136 +289,6 @@ _powmod_exp_u24_impl:
    inc   bc
    lddr ; leaks size, assuming that base and stack are in normal ram
    ret
-
-.Lmod_bytewise:
-   ld   (.Lv_sizem1), bc
-   ld   a, (ix + Lsize)
-   ld   (.Lv_size), a
-   ld   (.Lv_count), a
-   ld   hl, (ix + Lbase)
-   ld   (.Lv_xlsb), hl
-   or   a, a
-   sbc   hl, bc
-   ld   (.Lv_xmsb), hl
-   ld   hl, (ix + Lmod)
-   ld   (.Lv_nlsb), hl
-   or   a, a
-   sbc   hl, bc
-   ld   (.Lv_nmsb), hl
-   push   ix
-.Lconv_step:
-   ld   hl, (.Lv_xmsb)
-   ld   a, (hl)
-   ld   (.Lv_top), a
-   ld   de, (.Lv_xmsb)
-   inc   hl
-   ld   bc, (.Lv_sizem1)
-   ldir
-   xor   a, a
-   ld   (de), a
-   ld   hl, (.Lv_xmsb)
-   ld   e, (hl)
-   ld   hl, (.Lv_nmsb)
-   ld   d, (hl)
-   ld   a, (.Lv_top)
-   ld   c, $FF
-   cp   a, d
-   jr   nc, .Lq_done
-   ld   b, 8
-.Lq_loop:
-   sla   e
-   rla
-   jr   c, .Lq_sub
-   cp   a, d
-   jr   c, .Lq_next
-.Lq_sub:
-   sub   a, d
-   inc   e
-.Lq_next:
-   djnz   .Lq_loop
-   ld   c, e
-.Lq_done:
-   ld   ix, (.Lv_xlsb)
-   ld   iy, (.Lv_nlsb)
-   ld   a, (.Lv_size)
-   ld   b, a
-   or   a, a
-   sbc   hl, hl
-.Lms_loop:
-   ld   e, (iy + 0)
-   ld   d, c
-   mlt   de
-   add   hl, de
-   ld   a, (ix + 0)
-   sub   a, l
-   ld   (ix + 0), a
-   ld   l, h
-   ld   h, 0
-   jr   nc, .Lms_nb
-   inc   hl
-.Lms_nb:
-   dec   ix
-   dec   iy
-   djnz   .Lms_loop
-   ex   de, hl
-   or   a, a
-   sbc   hl, hl
-   ld   a, (.Lv_top)
-   ld   l, a
-   sbc   hl, de
-.Lfix_check:
-   ld   de, 0
-   or   a, a
-   sbc   hl, de
-   jr   z, .Lfix_done
-   push   hl
-   ld   ix, (.Lv_xlsb)
-   ld   iy, (.Lv_nlsb)
-   ld   a, (.Lv_size)
-   ld   b, a
-   or   a, a
-.Ladd_loop:
-   ld   a, (ix + 0)
-   adc   a, (iy + 0)
-   ld   (ix + 0), a
-   dec   ix
-   dec   iy
-   djnz   .Ladd_loop
-   pop   hl
-   ld   de, 0
-   adc   hl, de
-   jr   .Lfix_check
-.Lfix_done:
-   ld   hl, .Lv_count
-   dec   (hl)
-   jp   nz, .Lconv_step
-   pop   ix
-   ld   hl, (ix + Lbase)
-   ld   bc, 0
-   ret
-
-.Lvartime:
-   .db 0
-.Lv_ei:
-   .db 0
-.Lv_hl2:
-   .d24 0
-.Lv_top:
-   .db 0
-.Lv_count:
-   .db 0
-.Lv_size:
-   .db 0
-.Lv_sizem1:
-   .d24 0
-.Lv_xmsb:
-   .d24 0
-.Lv_xlsb:
-   .d24 0
-.Lv_nmsb:
-   .d24 0
-.Lv_nlsb:
-   .d24 0
 _powmod_reloc_run_end:
 
 .section	.text,"ax",@progbits
