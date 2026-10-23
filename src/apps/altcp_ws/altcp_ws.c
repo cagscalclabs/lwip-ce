@@ -485,10 +485,10 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
         }
 
         /* Consume header bytes — ack to inner layer */
-        altcp_recved(conn->inner_conn, header_end);
         state->rx = pbuf_free_header(state->rx, header_end);
         if (!state->rx)
             state->rx = NULL;
+        altcp_recved(conn->inner_conn, header_end);
 
         state->flags |= ALTCP_WS_FLAGS_UPGRADE_DONE;
 
@@ -651,8 +651,8 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
         }
 
         /* Consume frame bytes — ack to inner layer */
-        altcp_recved(conn->inner_conn, total_frame);
         state->rx = pbuf_free_header(state->rx, total_frame);
+        altcp_recved(conn->inner_conn, total_frame);
 
         /* Deliver complete message to upper layer */
         if (opcode == WS_OP_TEXT || opcode == WS_OP_BINARY ||

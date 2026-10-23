@@ -345,8 +345,10 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         return false;
     }
 
-    if (iv_len > AES_BLOCK_SIZE)
+    if (iv_len > AES_BLOCK_SIZE || (mode == TLS_AES_GCM && iv_len == 0))
     {
+        /* SP 800-38D 5.2.1.1: a GCM IV is at least 1 bit; an empty one would
+         * make J0 depend on the key alone. */
         ERROR();
         return false;
     }
@@ -442,9 +444,12 @@ bool tls_aes_ccm_init(struct tls_aes_context *ctx,
 
 bool tls_aes_update_aad(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len)
 {
+    if (ctx == NULL || (aad == NULL && aad_len != 0))
+        return false;
     if (ctx->mode == TLS_AES_GCM)
     {
-        if (ctx->private.gcm.lock > LOCK_ALLOW_ALL)
+        if (ctx->private.gcm.lock > LOCK_ALLOW_ALL ||
+            aad_len > SIZE_MAX - ctx->private.gcm.aad_len)
             return false;
         // update the tag for full blocks of aad in input, cache any partial blocks
         aes_prepare_ghash();
@@ -515,9 +520,14 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
     return false;
 }
 
-bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t *ct, size_t ct_len)
+static bool aes_gcm_update_ciphertext(struct tls_aes_context *ctx,
+                                      const uint8_t *ct, size_t ct_len)
 {
     if (ctx == NULL || (ct == NULL && ct_len != 0) || ctx->mode != TLS_AES_GCM)
+        return false;
+
+    if (ctx->private.gcm.lock == LOCK_ALLOW_NONE ||
+        ct_len > SIZE_MAX - ctx->private.gcm.ct_len)
         return false;
 
     aes_prepare_ghash();
@@ -541,6 +551,16 @@ bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t *ct, s
     ghash(ctx, tag, ct, ct_len);
     ctx->private.gcm.ct_len += ct_len;
     return true;
+}
+
+bool tls_aes_update_ciphertext(struct tls_aes_context *ctx,
+                               const uint8_t *ct, size_t ct_len)
+{
+    /* The public streaming-authentication operation is the decrypt/verify
+     * path. Encryption hashes its own output through the private helper. */
+    if (ctx != NULL && ctx->op_assoc == AES_OP_ENCRYPT)
+        return false;
+    return aes_gcm_update_ciphertext(ctx, ct, ct_len);
 }
 
 #define AES_BLOCKSIZE 16
@@ -657,7 +677,7 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
          * left over from a previous chunk), then GHASH the produced ciphertext. */
         gcm_ctr_xor(ctx, inbuf, outbuf, in_len);
 
-        if (!tls_aes_update_ciphertext(ctx, outbuf, in_len))
+        if (!aes_gcm_update_ciphertext(ctx, outbuf, in_len))
             goto cleanup;
         break;
     }
@@ -680,7 +700,7 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             aes_xor_buf(inbuf, iv, rem);
             for (size_t idx = rem; idx < AES_BLOCK_SIZE; idx++)
             {
-                iv[rem] ^= byte_to_pad;
+                iv[idx] ^= byte_to_pad;
             }
             aes_encrypt_block(iv, iv, ctx);
             memcpy(outbuf, iv, AES_BLOCK_SIZE);
@@ -705,8 +725,11 @@ cleanup:
 // CRYPTO_FN
 bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
-    if (ctx == NULL || inbuf == NULL || outbuf == NULL || ctx->mode != TLS_AES_GCM)
+    if (ctx == NULL || inbuf == NULL || outbuf == NULL ||
+        ctx->mode != TLS_AES_GCM || ctx->private.gcm.lock == LOCK_ALLOW_NONE ||
+        ctx->op_assoc == AES_OP_ENCRYPT)
         return false;
+    ctx->op_assoc = AES_OP_DECRYPT;
     gcm_ctr_xor(ctx, inbuf, outbuf, in_len);
     return true;
 }
@@ -794,33 +817,37 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
         return false;
     struct tls_aes_context tmp;
     uint8_t digest[AES_BLOCK_SIZE];
+    bool tag_ok = false;
 
-    // do this work on a copy of ctx
+    // do this work on a copy of ctx; the copy holds the round keys and the
+    // GHASH key, so it is wiped on every exit
     memcpy(&tmp, ctx, sizeof(tmp));
 
     if (aad_len && !tls_aes_update_aad(&tmp, aad, aad_len))
-        return false;
+        goto done;
     if (ciphertext_len)
     {
         if (tmp.mode == TLS_AES_CCM)
         {
             if (!tls_aes_decrypt(&tmp, ciphertext, ciphertext_len, NULL))
-                return false;
+                goto done;
         }
         else if (!tls_aes_update_ciphertext(&tmp, ciphertext, ciphertext_len))
-            return false;
+            goto done;
     }
     if (!tls_aes_digest(&tmp, digest))
-        return false;
+        goto done;
 
-    // memset(&tmp, 0, sizeof(tmp));
-    bool tag_ok = (ctx->mode == TLS_AES_CCM)
+    tag_ok = (ctx->mode == TLS_AES_CCM)
         ? tls_bytes_compare(tag, digest, ctx->private.ccm.tag_len)
         : tls_bytes_compare(tag, digest, AES_BLOCK_SIZE);
     if (!tag_ok)
     {
         ERROR();
     }
+done:
+    tls_secure_memzero(&tmp, sizeof(tmp));
+    tls_secure_memzero(digest, sizeof digest);
     return tag_ok;
 }
 
@@ -832,26 +859,31 @@ bool tls_aes_ccm_encrypt(const uint8_t *key, size_t key_len,
 {
     struct tls_aes_context ctx;
     uint8_t digest[AES_BLOCK_SIZE];
+    bool ok = false;
 
     if ((key == NULL) || (nonce == NULL) || (plaintext == NULL) || (ciphertext == NULL) || (tag == NULL))
         return false;
     if (aad && (aad_len == 0))
         return false;
+    /* Checked before the uint8_t narrowing below so e.g. 260 cannot wrap to a
+     * valid 4 and later overrun the caller's tag buffer. */
+    if (tag_len == 0 || tag_len > AES_BLOCK_SIZE)
+        return false;
 
     if (!tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len, (uint8_t)tag_len, pt_len, aad_len))
         return false;
-    if (aad_len)
-    {
-        if (!tls_aes_update_aad(&ctx, aad, aad_len))
-            return false;
-    }
+    if (aad_len && !tls_aes_update_aad(&ctx, aad, aad_len))
+        goto done;
     if (!tls_aes_encrypt(&ctx, plaintext, pt_len, ciphertext))
-        return false;
+        goto done;
     if (!tls_aes_digest(&ctx, digest))
-        return false;
+        goto done;
     memcpy(tag, digest, tag_len);
+    ok = true;
+done:
+    tls_secure_memzero(&ctx, sizeof ctx);
     tls_secure_memzero(digest, sizeof digest);
-    return true;
+    return ok;
 }
 
 bool tls_aes_ccm_decrypt(const uint8_t *key, size_t key_len,
@@ -864,30 +896,35 @@ bool tls_aes_ccm_decrypt(const uint8_t *key, size_t key_len,
     struct tls_aes_context ctx;
     uint8_t digest[AES_BLOCK_SIZE];
     bool ok = false;
+    bool wrote = false;
 
     if ((key == NULL) || (nonce == NULL) || (ciphertext == NULL) || (tag == NULL) || (plaintext == NULL))
         return false;
     if (aad && (aad_len == 0))
         return false;
+    if (tag_len == 0 || tag_len > AES_BLOCK_SIZE)
+        return false;
 
     if (!tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len, (uint8_t)tag_len, ct_len, aad_len))
         return false;
-    if (aad_len)
-    {
-        if (!tls_aes_update_aad(&ctx, aad, aad_len))
-            return false;
-    }
+    if (aad_len && !tls_aes_update_aad(&ctx, aad, aad_len))
+        goto done;
+    wrote = true;
     if (!tls_aes_decrypt(&ctx, ciphertext, ct_len, plaintext))
-        return false;
+        goto done;
     if (!tls_aes_digest(&ctx, digest))
-        return false;
+        goto done;
     ok = tls_bytes_compare(tag, digest, tag_len);
     if (!ok)
     {
         ERROR();
-        if (plaintext != ciphertext)
-            tls_secure_memzero(plaintext, ct_len);
     }
+done:
+    /* Unauthenticated plaintext must never reach the caller, including when
+     * the decrypt ran in place over the ciphertext. */
+    if (!ok && wrote)
+        tls_secure_memzero(plaintext, ct_len);
+    tls_secure_memzero(&ctx, sizeof ctx);
     tls_secure_memzero(digest, sizeof digest);
     return ok;
 }

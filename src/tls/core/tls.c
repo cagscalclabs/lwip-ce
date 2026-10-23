@@ -247,18 +247,20 @@ static void tls_psk_cache_load(void)
     unsigned out = 0;
     for (uint16_t i = 0; i < hdr.count && out < TLS_PSK_CACHE_MAX_ENTRIES; i++)
     {
-        struct tls_psk_cache_entry e;
+        struct tls_psk_cache_entry e = {0};
         file_fn.ti_read(&e, sizeof(e), 1, h);
         const char *hostname_end = (const char *)memchr(e.hostname, '\0', sizeof(e.hostname));
-        if (!e.in_use || !hostname_end || hostname_end == e.hostname ||
-            e.identity.identity_len == 0 ||
-            e.identity.identity_len > sizeof(e.identity.identity) ||
-            e.ticket_lifetime == 0 || e.ticket_lifetime > 7u * 24u * 60u * 60u ||
-            (e.psk_type != TLS_PSK_TYPE_RESUMPTION &&
-             e.psk_type != TLS_PSK_TYPE_EXTERNAL) ||
-            tls_psk_cache_entry_expired(&e, now))
-            continue;
-        g_psk_cache[out++] = e;
+        bool valid = e.in_use && hostname_end && hostname_end != e.hostname &&
+                     e.identity.identity_len != 0 &&
+                     e.identity.identity_len <= sizeof(e.identity.identity) &&
+                     e.ticket_lifetime != 0 &&
+                     e.ticket_lifetime <= 7u * 24u * 60u * 60u &&
+                     (e.psk_type == TLS_PSK_TYPE_RESUMPTION ||
+                      e.psk_type == TLS_PSK_TYPE_EXTERNAL) &&
+                     !tls_psk_cache_entry_expired(&e, now);
+        if (valid)
+            g_psk_cache[out++] = e;
+        tls_secure_memzero(&e, sizeof e);
     }
     file_fn.ti_close(h);
 }
@@ -281,7 +283,7 @@ static void tls_psk_cache_save(void)
 
     file_fn.ti_delete(TLS_PSK_CACHE_APPVAR);
     if (count == 0)
-        return; /* nothing live to persist; leave no stale appvar behind */
+        goto done; /* nothing live to persist; leave no stale appvar behind */
 
     struct tls_psk_cache_store_header hdr = {
         .magic   = TLS_PSK_CACHE_MAGIC,
@@ -291,11 +293,13 @@ static void tls_psk_cache_save(void)
 
     uint8_t h = file_fn.ti_open(TLS_PSK_CACHE_APPVAR, "w");
     if (!h)
-        return;
+        goto done;
     file_fn.ti_resize(total, h);
     file_fn.ti_write(&hdr, sizeof(hdr), 1, h);
     file_fn.ti_write(live, sizeof(struct tls_psk_cache_entry), count, h);
     file_fn.ti_close(h);
+done:
+    tls_secure_memzero(live, sizeof live);
 }
 
 bool tls_init(void)
@@ -323,7 +327,14 @@ bool tls_init(void)
     tls_rng_start();
 
     tls_ctx.network_up = true;
-    tls_ctx.truststore.status = TLS_STORE_UNCHECKED;
+    tls_ctx.truststore.status = tls_truststore_init();
+    if (tls_ctx.truststore.status != TLS_STORE_OK &&
+        tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
+    {
+        tls_rng_cleanup();
+        tls_ctx.network_up = false;
+        return false;
+    }
     tls_psk_cache_alloc();
     tls_psk_cache_load();
 

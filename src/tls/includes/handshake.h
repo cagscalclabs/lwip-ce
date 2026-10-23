@@ -119,6 +119,8 @@ extern "C"
 #define TLS_ALERT_RECORD_OVERFLOW 0x16
 #define TLS_ALERT_HANDSHAKE_FAILURE 0x28
 #define TLS_ALERT_BAD_CERTIFICATE 0x2A
+#define TLS_ALERT_CERTIFICATE_EXPIRED 0x2D
+#define TLS_ALERT_UNKNOWN_CA 0x30
 #define TLS_ALERT_ILLEGAL_PARAMETER 0x2F
 #define TLS_ALERT_DECODE_ERROR 0x32
 #define TLS_ALERT_DECRYPT_ERROR 0x33
@@ -298,6 +300,38 @@ extern "C"
          * private to handshake.c. */
         struct tls_cert_walker *cert_walker;
 
+        /* Deferred certificate-chain verification. Each chain link (and the
+         * final trust-anchor check) is queued as a job and run one per
+         * dispatch tick via tls_cert_jobs_step(), so a slow signature check
+         * does not block the stack for the whole chain. Handshake bytes that
+         * arrive after the Certificate while jobs are queued are held in
+         * hs_deferred and replayed in order once the queue drains. */
+        /* Which client traffic keys protect what we send: 0 none (plaintext),
+         * 1 handshake keys, 2 application keys. Advances monotonically, so an
+         * alert sent after the handshake (even in TLS_STATE_ERROR) is never
+         * encrypted under keys the peer has stopped using. */
+        uint8_t tx_epoch;
+        /* A fatal alert has already been sent; later ones are suppressed so
+         * the first (most specific) description is the one on the wire. */
+        bool fatal_alert_sent;
+        /* A NewSessionTicket was received since the last time the altcp layer
+         * cached the resulting PSK. Only a fresh ticket may be (re)cached:
+         * caching stamps its receive time, so re-caching an old one would
+         * extend its lifetime (RFC 8446 4.6.1, Appendix C.4). */
+        bool ticket_fresh;
+        /* A server Finished or KeyUpdate was just processed. RFC 8446 5.1:
+         * messages must not span a key change, so nothing may follow it in
+         * the same record. Cleared at the record boundary. */
+        bool key_change_pending;
+        /* The ClientHello carried a server_name extension. */
+        bool sni_sent;
+
+        struct tls_cert_job *cert_jobs;
+        uint8_t cert_jobs_count;
+        uint8_t *hs_deferred;
+        size_t hs_deferred_len;
+        size_t hs_deferred_cap;
+
         /* True once close_notify has been sent so we don't send it twice. */
         bool close_notify_sent;
 
@@ -475,6 +509,23 @@ extern "C"
         size_t plaintext_len);
 
     /**
+     * @brief True while certificate-chain verification jobs are queued.
+     * Handshake processing past the Certificate is held until they finish.
+     */
+    bool tls_cert_jobs_pending(const struct tls_handshake_context *ctx);
+
+    /**
+     * @brief Run one queued certificate verification job.
+     *
+     * Call from a periodic tick while tls_cert_jobs_pending(). When the queue
+     * drains, handshake bytes held back behind the Certificate are replayed
+     * in order. Returns false on a fatal failure (bad chain, or a failure in
+     * the replayed messages): a fatal alert has been sent, ctx->state is
+     * TLS_STATE_ERROR, and the caller must abort the connection.
+     */
+    bool tls_cert_jobs_step(struct tls_handshake_context *ctx);
+
+    /**
      * @brief Register a transport write callback for outbound records.
      *
      * Used by the altcp_tls_ce layer to give the handshake code a way to send
@@ -495,6 +546,9 @@ extern "C"
      * @return true if close_notify was sent (or already sent), false on failure.
      */
     bool tls_send_close_notify(struct tls_handshake_context *ctx);
+
+/** Send one fatal alert under the currently active record epoch. */
+bool tls_send_fatal_alert(struct tls_handshake_context *ctx, uint8_t description);
 
 
     /**

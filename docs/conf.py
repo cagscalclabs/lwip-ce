@@ -28,6 +28,12 @@ html_theme_options = {
     "titles_only": False,
 }
 html_static_path = ["_static"]
+# Served as-is at the site root so the browser can apply the XSLT stylesheet
+# referenced by the XML's xml-stylesheet processing instruction.
+html_extra_path = [
+    "tls-specifications.xml",
+    "tls-specifications.xsl",
+]
 html_css_files = [
     "landing.css",
 ]

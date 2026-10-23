@@ -3,6 +3,7 @@
 #include <string.h>
 #include "../includes/hmac.h"
 #include "../includes/passwords.h"
+#include "../includes/bytes.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_PASSWORDS
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -10,6 +11,8 @@
 
 #define MIN(x, y)   ((x) < (y)) ? (x) : (y)
 #define HASH_BLOCK_OUT_MAX  32
+/* Bounds the blocking work a malicious encrypted-key file can demand. */
+#define TLS_PBKDF2_MAX_ROUNDS 1000000u
 
 bool tls_pbkdf2(const char* password, size_t passlen,
                 const uint8_t* salt, size_t saltlen,
@@ -22,18 +25,20 @@ bool tls_pbkdf2(const char* password, size_t passlen,
        (passlen==0) ||
        (saltlen==0) ||
        (keylen==0) ||
-       (rounds==0)) { ERROR(); return false; }
+       (rounds==0) ||
+       (rounds > TLS_PBKDF2_MAX_ROUNDS)) { ERROR(); return false; }
        
-    uint8_t hash_buffer[HASH_BLOCK_OUT_MAX],
-            hash_composite[HASH_BLOCK_OUT_MAX];
-    uint8_t c[4];
-    struct tls_hmac_context initial, counter, state;
+    uint8_t hash_buffer[HASH_BLOCK_OUT_MAX] = {0},
+            hash_composite[HASH_BLOCK_OUT_MAX] = {0};
+    uint8_t c[4] = {0};
+    struct tls_hmac_context initial = {0}, counter = {0}, state = {0};
     size_t outlen;
     uint32_t ctr = 1;
     
     //HASH = sha256
     // DK = T(i) for i in 0 => (keylen/HASH), concat
-    if(!tls_hmac_context_init(&initial, algorithm, password, passlen)) { ERROR(); return false; }
+    if(!tls_hmac_context_init(&initial, algorithm,
+                              (const uint8_t *)password, passlen)) { ERROR(); return false; }
     
     size_t hash_len = initial.digestlen;
     
@@ -65,5 +70,11 @@ bool tls_pbkdf2(const char* password, size_t passlen,
         }
         memcpy(&key[outlen], hash_composite, copylen);
     }
+    tls_secure_memzero(hash_buffer, sizeof hash_buffer);
+    tls_secure_memzero(hash_composite, sizeof hash_composite);
+    tls_secure_memzero(c, sizeof c);
+    tls_secure_memzero(&initial, sizeof initial);
+    tls_secure_memzero(&counter, sizeof counter);
+    tls_secure_memzero(&state, sizeof state);
     return true;
 }

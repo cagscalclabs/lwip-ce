@@ -179,7 +179,6 @@
 #include "x509_internal.h"
 #include "key_internal.h"
 #include "../includes/truststore.h"
-#include "../includes/tls.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
@@ -189,10 +188,6 @@ bool tls_p256_publickey(uint8_t pub[65], const uint8_t priv[32]);
 bool tls_p256_secret(uint8_t ss[32], const uint8_t priv[32], const uint8_t peer[65]);
 bool tls_p256_sign(uint8_t sig[64], const uint8_t hash[32], const uint8_t priv[32]);
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32], const uint8_t pub[65]);
-/* truststore.c: steps through current entries whose subject is exactly
- * subject; *cursor starts at 0. */
-bool tls_truststore_next_by_subject(const uint8_t *subject, size_t subject_len,
-                                    struct tls_truststore_entry **result, uint16_t *cursor);
 #include <string.h>
 #include <usbdrvce.h>
 #include "../../drivers/mem.h"
@@ -320,12 +315,32 @@ static bool tls_send_key_update_record(struct tls_handshake_context *ctx);
 /* RFC 9147 Appendix B derives 2^23 records for AEAD_AES_128_CCM at the
  * security target used by TLS 1.3. Use the same conservative bound here. */
 #define TLS_AES_CCM_RECORD_LIMIT (1ULL << 23)
-#define TLS_MAX_KEY_UPDATES 32u
 
 static bool tls_cipher_suite_supported(uint16_t cipher_suite)
 {
     return cipher_suite == TLS_AES_128_GCM_SHA256 ||
            cipher_suite == TLS_AES_128_CCM_SHA256;
+}
+
+static bool tls_extension_type_known(uint16_t type)
+{
+    switch (type)
+    {
+    case TLS_EXT_SERVER_NAME:
+    case TLS_EXT_MAX_FRAGMENT_LENGTH:
+    case TLS_EXT_SUPPORTED_GROUPS:
+    case TLS_EXT_SIGNATURE_ALGORITHMS:
+    case TLS_EXT_ALPN:
+    case TLS_EXT_PRE_SHARED_KEY:
+    case TLS_EXT_SUPPORTED_VERSIONS:
+    case TLS_EXT_COOKIE:
+    case TLS_EXT_PSK_KEY_EXCHANGE_MODES:
+    case TLS_EXT_SIGNATURE_ALGORITHMS_CERT:
+    case TLS_EXT_KEY_SHARE:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static uint8_t tls_cipher_suite_aes_mode(uint16_t cipher_suite)
@@ -506,6 +521,8 @@ struct tls_cert_walker
      * by the mandatory CertificateVerify record against the captured leaf
      * SPKI. */
     bool chain_validated;
+    /* Alert to send if validating the current certificate fails. */
+    uint8_t fail_alert;
     /* Index of the cert currently in cert_buf within the chain — 0 means
      * leaf. Used by tls_cert_walker_validate_one to know when to capture
      * the leaf public key into ctx->leaf_pubkey. */
@@ -536,6 +553,11 @@ struct tls_cert_walker
      * issuer_cn bytes (the root CA subject we should find in the truststore). */
     uint8_t topmost_issuer_cn[TLS_TRUSTSTORE_SUBJECT_LEN];
     uint8_t topmost_issuer_cn_len;
+    /* AuthorityKeyIdentifier of the last certificate walked. When present,
+     * this selects the trust anchor by its stored SubjectKeyIdentifier. */
+    uint8_t topmost_authority_key_id[TLS_TRUSTSTORE_SKI_LEN];
+    uint8_t topmost_authority_key_id_len;
+    bool topmost_authority_key_id_present;
 };
 
 static struct tls_cert_walker *tls_cert_walker_new(struct tls_handshake_context *ctx)
@@ -805,48 +827,6 @@ static tls_key_op_result_t tls_cert_verify_digest(struct tls_handshake_context *
  * policy: a known-but-unimplemented operation, including an otherwise valid
  * RSA signature whose issuer key is wider than our 2048-bit arithmetic, is
  * distinguishable from a bad signature for an operation we do support. */
-/* The public key of a truststore entry; exp_be holds an RSA exponent. False
- * for an algorithm or key size this build cannot check. */
-static bool tls_root_entry_key(const struct tls_truststore_entry *entry, struct tls_key *key,
-                               uint8_t exp_be[3])
-{
-    size_t key_len;
-
-    if (entry->len < sizeof(struct tls_truststore_entry))
-    {
-        return false;
-    }
-    key_len = entry->len - sizeof(struct tls_truststore_entry);
-    memset(key, 0, sizeof(*key));
-    if (entry->alg_id == TLS_CERT_SIG_RSA_PSS_SHA256 || entry->alg_id == TLS_CERT_SIG_RSA_PKCS1_SHA256)
-    {
-        size_t mod_len = key_len > 3 ? key_len - 3 : 0;
-
-        if (key_len < 3 + RSA_MODULUS_MIN_SUPPORTED || mod_len > RSA_MODULUS_MAX_SUPPORTED)
-        {
-            return false;
-        }
-        /* Truststore packs exp as 3-byte LE; tls_rsa_key wants big-endian. */
-        exp_be[0] = entry->key[2];
-        exp_be[1] = entry->key[1];
-        exp_be[2] = entry->key[0];
-        key->type = TLS_KEY_TYPE_RSA;
-        key->rsa.exp_len = 3;
-        key->rsa.exponent = exp_be;
-        key->rsa.mod_len = mod_len;
-        key->rsa.modulus = entry->key + 3;
-        return true;
-    }
-    if (entry->alg_id == TLS_CERT_SIG_ECDSA_SHA256 && key_len == 65)
-    {
-        key->type = TLS_KEY_TYPE_EC_P256;
-        key->ec.len = key_len;
-        key->ec.data = entry->key;
-        return true;
-    }
-    return false;
-}
-
 static tls_key_op_result_t tls_cert_verify_pending_link(
     const struct tls_cert_walker *w, const struct tls_key *issuer, bool offload)
 {
@@ -881,6 +861,298 @@ static tls_key_op_result_t tls_cert_verify_pending_link(
                                   w->pending_sig_len);
 }
 
+/* Convert one serialized trust anchor into a borrowed tls_key and verify the
+ * pending topmost certificate. The entry's alg_id identifies key type; the
+ * certificate's own AlgorithmIdentifier still selects its signature scheme.
+ * offload: may hand the check to the Wi-Fi bridge, which reports success
+ * before its verdict, so only for an anchor that is the only candidate. */
+static tls_key_op_result_t tls_cert_verify_root_entry(
+    const struct tls_cert_walker *w, const struct tls_truststore_entry *entry, bool offload)
+{
+    tls_cert_sig_alg_t alg;
+    size_t key_len;
+
+    if (!w || !entry || !w->pending_link ||
+        entry->len < sizeof(struct tls_truststore_entry))
+        return TLS_KEY_OP_INVALID;
+
+    alg = (tls_cert_sig_alg_t)entry->alg_id;
+    key_len = entry->len - sizeof(struct tls_truststore_entry);
+    if (alg == TLS_CERT_SIG_RSA_PSS_SHA256 ||
+        alg == TLS_CERT_SIG_RSA_PKCS1_SHA256)
+    {
+        size_t mod_len = key_len > 3 ? key_len - 3 : 0;
+        uint8_t exp_be[3];
+        struct tls_key root_key;
+
+        if (key_len < 3 + RSA_MODULUS_MIN_SUPPORTED ||
+            mod_len > RSA_MODULUS_MAX_SUPPORTED)
+            return TLS_KEY_OP_INVALID;
+        exp_be[0] = entry->key[2];
+        exp_be[1] = entry->key[1];
+        exp_be[2] = entry->key[0];
+        memset(&root_key, 0, sizeof(root_key));
+        root_key.type = TLS_KEY_TYPE_RSA;
+        root_key.rsa.exp_len = sizeof(exp_be);
+        root_key.rsa.exponent = exp_be;
+        root_key.rsa.mod_len = mod_len;
+        root_key.rsa.modulus = entry->key + 3;
+        return tls_cert_verify_pending_link(w, &root_key, offload);
+    }
+    if (alg == TLS_CERT_SIG_ECDSA_SHA256)
+    {
+        struct tls_key root_key;
+        if (key_len != 65)
+            return TLS_KEY_OP_INVALID;
+        memset(&root_key, 0, sizeof(root_key));
+        root_key.type = TLS_KEY_TYPE_EC_P256;
+        root_key.ec.len = key_len;
+        root_key.ec.data = entry->key;
+        return tls_cert_verify_pending_link(w, &root_key, offload);
+    }
+    return TLS_KEY_OP_UNKNOWN;
+}
+
+/* Anchor the topmost certificate (the walker's pending link) in the
+ * truststore. Prefer the AuthorityKeyIdentifier: it names the issuer key and
+ * maps directly to the truststore root's SKI, avoiding ambiguous CNs such as
+ * the several GlobalSign roots whose CN is simply "GlobalSign". An AKI that is
+ * present but cannot be represented or found fails closed; the subject
+ * fallback is only for certificates without an AKI. */
+static bool tls_cert_anchor_root(const struct tls_cert_walker *w, uint8_t *alert)
+{
+    if (alert)
+        *alert = TLS_ALERT_UNKNOWN_CA;
+    if (w->topmost_authority_key_id_present)
+    {
+        struct tls_truststore_entry *root_entry = NULL;
+        if (w->topmost_authority_key_id_len == 0 ||
+            !tls_truststore_lookup_key_id(w->topmost_authority_key_id,
+                                          w->topmost_authority_key_id_len,
+                                          &root_entry) || !root_entry)
+        {
+            ERROR_CODE(0x65);
+            return false;
+        }
+        if (tls_cert_verify_root_entry(w, root_entry, true) != TLS_KEY_OP_OK)
+        {
+            if (alert) *alert = TLS_ALERT_BAD_CERTIFICATE;
+            ERROR_CODE(0x65);
+            return false;
+        }
+        return true;
+    }
+    if (w->topmost_issuer_cn_len > 0)
+    {
+        /* Legacy AKI-absent fallback. CN is not unique, so try every current
+         * matching trust anchor and let the pending certificate signature
+         * identify the correct key. Never make truststore order authoritative. */
+        uint16_t match_index = 0;
+        bool found_candidate = false;
+        struct tls_truststore_entry *root_entry = NULL;
+        while (tls_truststore_lookup_by_subject_index(
+                   w->topmost_issuer_cn, w->topmost_issuer_cn_len,
+                   match_index++, &root_entry))
+        {
+            found_candidate = true;
+            if (root_entry &&
+                tls_cert_verify_root_entry(w, root_entry, false) == TLS_KEY_OP_OK)
+            {
+                return true;
+            }
+        }
+        if (found_candidate && alert)
+            *alert = TLS_ALERT_BAD_CERTIFICATE;
+        ERROR_CODE(0x66);
+        return false;
+    }
+    /* No AKI and no parsed issuer CN leaves no bounded truststore lookup. */
+    ERROR_CODE(0x67);
+    return false;
+}
+
+/* ------------------------------------------------------------------------
+ * Deferred certificate verification jobs.
+ *
+ * Verifying a chain link is a multi-second RSA/ECDSA operation. Running every
+ * link inline would hold the calculator inside one receive call for the whole
+ * chain, starving ACKs, timers and keypresses. Instead each link (and the
+ * final trust-anchor check) is captured as a job and run one per dispatch tick
+ * by tls_cert_jobs_step().
+ *
+ * A job owns everything it needs: a snapshot of the walker (pending digest,
+ * signature, algorithm and the topmost-issuer fields; cert_buf is never
+ * carried) and, for link jobs, a heap copy of the issuer's public key. The
+ * transferred signature buffer is freed with the job. At most
+ * TLS_CERT_JOB_MAX jobs are queued; if a new job arrives when the queue is
+ * full the oldest is run inline, bounding memory.
+ *
+ * Fail-closed ordering: while jobs are queued, handshake messages after the
+ * Certificate are held in hs_deferred and not parsed, and
+ * tls_dispatch_inner_handshake refuses any message if a job is still queued.
+ * CertificateVerify and Finished therefore cannot be processed, and the
+ * handshake cannot complete, until every job has passed.
+ * ------------------------------------------------------------------------ */
+
+#define TLS_CERT_JOB_MAX 4u
+/* Each certificate costs a slow signature check, so bound the chain length. */
+#define TLS_CERT_CHAIN_MAX 8u
+#define TLS_HS_DEFERRED_MAX 3072u
+
+struct tls_cert_job
+{
+    struct tls_cert_job *next;
+    bool is_root;
+    struct tls_cert_walker snap;
+    struct tls_key issuer;
+    uint8_t *issuer_mat;
+    size_t issuer_mat_len;
+};
+
+static void tls_cert_job_free(struct tls_cert_job *job)
+{
+    if (!job)
+        return;
+    if (job->snap.pending_sig)
+    {
+        mem_stats_tls_direct_release(job->snap.pending_sig_len,
+                                     job->snap.pending_sig_len);
+        mem_buffer_custom_free(job->snap.pending_sig);
+    }
+    if (job->issuer_mat)
+    {
+        mem_stats_tls_direct_release(job->issuer_mat_len, job->issuer_mat_len);
+        mem_buffer_custom_free(job->issuer_mat);
+    }
+    mem_stats_tls_direct_release(sizeof(*job), sizeof(*job));
+    mem_buffer_custom_free(job);
+}
+
+static void tls_cert_jobs_discard(struct tls_handshake_context *ctx)
+{
+    while (ctx->cert_jobs)
+    {
+        struct tls_cert_job *job = ctx->cert_jobs;
+        ctx->cert_jobs = job->next;
+        tls_cert_job_free(job);
+    }
+    ctx->cert_jobs_count = 0;
+    if (ctx->hs_deferred)
+    {
+        mem_stats_tls_direct_release(ctx->hs_deferred_cap, ctx->hs_deferred_cap);
+        mem_buffer_custom_free(ctx->hs_deferred);
+    }
+    ctx->hs_deferred = NULL;
+    ctx->hs_deferred_len = 0;
+    ctx->hs_deferred_cap = 0;
+}
+
+/* Copy the issuer's key material out of the (soon freed) cert buffer. */
+static bool tls_cert_job_clone_key(struct tls_cert_job *job, const struct tls_key *src)
+{
+    size_t mat_len;
+    uint8_t *mat;
+
+    if (src->type == TLS_KEY_TYPE_RSA)
+        mat_len = src->rsa.mod_len + src->rsa.exp_len;
+    else
+        mat_len = src->ec.len;
+    if (mat_len == 0)
+        return false;
+    mat = (uint8_t *)mem_buffer_custom_malloc(mat_len);
+    if (!mat)
+        return false;
+    mem_stats_tls_direct_add(mat_len, mat_len);
+
+    job->issuer = *src;
+    job->issuer.allocated = false;
+    if (src->type == TLS_KEY_TYPE_RSA)
+    {
+        memcpy(mat, src->rsa.modulus, src->rsa.mod_len);
+        memcpy(mat + src->rsa.mod_len, src->rsa.exponent, src->rsa.exp_len);
+        job->issuer.rsa.modulus = mat;
+        job->issuer.rsa.exponent = mat + src->rsa.mod_len;
+    }
+    else
+    {
+        memcpy(mat, src->ec.data, src->ec.len);
+        job->issuer.ec.data = mat;
+    }
+    job->issuer_mat = mat;
+    job->issuer_mat_len = mat_len;
+    return true;
+}
+
+static bool tls_cert_job_run_head(struct tls_handshake_context *ctx, uint8_t *alert)
+{
+    struct tls_cert_job *job = ctx->cert_jobs;
+    bool ok;
+
+    /* An anchoring failure means no trusted root vouches for the chain. */
+    if (alert)
+        *alert = job->is_root ? TLS_ALERT_UNKNOWN_CA : TLS_ALERT_BAD_CERTIFICATE;
+
+    ctx->cert_jobs = job->next;
+    ctx->cert_jobs_count--;
+    if (job->is_root)
+    {
+        ok = tls_cert_anchor_root(&job->snap, alert);
+    }
+    else
+    {
+        ok = tls_cert_verify_pending_link(&job->snap, &job->issuer, true) == TLS_KEY_OP_OK;
+        if (!ok)
+            ERROR();
+    }
+    tls_cert_job_free(job);
+    return ok;
+}
+
+/* Queue verification of the walker's pending link. `issuer` is the key that
+ * signed it (link job), or NULL to anchor the topmost certificate in the
+ * truststore (root job). Takes ownership of the walker's pending signature. */
+static bool tls_cert_job_enqueue(struct tls_cert_walker *w, const struct tls_key *issuer)
+{
+    struct tls_handshake_context *ctx = w ? w->ctx : NULL;
+    struct tls_cert_job *job, **tail;
+
+    if (!ctx || !w->pending_link)
+        return false;
+    while (ctx->cert_jobs_count >= TLS_CERT_JOB_MAX)
+    {
+        if (!tls_cert_job_run_head(ctx, NULL))
+            return false;
+    }
+    job = (struct tls_cert_job *)mem_buffer_custom_malloc(sizeof(*job));
+    if (!job)
+    {
+        ERROR_CODE(0x70);
+        return false;
+    }
+    mem_stats_tls_direct_add(sizeof(*job), sizeof(*job));
+    memset(job, 0, sizeof(*job));
+    memcpy(&job->snap, w, sizeof(*w));
+    job->snap.cert_buf = NULL;
+    job->snap.cert_buf_cap = 0;
+    job->snap.cert_buf_len = 0;
+    job->is_root = (issuer == NULL);
+    if (issuer && !tls_cert_job_clone_key(job, issuer))
+    {
+        job->snap.pending_sig = NULL; /* still owned by the walker */
+        tls_cert_job_free(job);
+        ERROR_CODE(0x71);
+        return false;
+    }
+    w->pending_sig = NULL; /* ownership moved to the job */
+
+    tail = &ctx->cert_jobs;
+    while (*tail)
+        tail = &(*tail)->next;
+    *tail = job;
+    ctx->cert_jobs_count++;
+    return true;
+}
+
 /* Verify the deferred child with this issuer, then retain this certificate's
  * signature scheme, SHA-256 digest and signature for the next issuer/root. */
 static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
@@ -908,15 +1180,15 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
             ERROR_CODE(0x15);
             return false;
         }
-        tls_key_op_result_t verify_result =
-            tls_cert_verify_pending_link(w, &cert->pubkey, true);
-        if (verify_result != TLS_KEY_OP_OK)
+        /* The signature check itself is deferred: it is queued as a job and
+         * run from the dispatch tick (see the job section above). */
+        if (!tls_cert_job_enqueue(w, &cert->pubkey))
         {
             ERROR();
             return false;
         }
 
-        /* Stash consumed. */
+        /* Stash consumed (the job owns the signature buffer now). */
         if (w->pending_sig)
         {
             mem_stats_tls_direct_release(w->pending_sig_len, w->pending_sig_len);
@@ -1020,6 +1292,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     struct tls_x509_object cert = {0};
     bool is_leaf = (w->cert_index == 0);
 
+    w->fail_alert = TLS_ALERT_BAD_CERTIFICATE;
     INFO("cert: parse");
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len, &cert))
     {
@@ -1052,6 +1325,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
      * which fails closed since no real cert is valid at epoch 0). */
     if (!tls_x509_time_in_validity(&cert, lwip_sntp_get_unix_time()))
     {
+        w->fail_alert = TLS_ALERT_CERTIFICATE_EXPIRED;
         INFO("cert: date fail");
         ERROR_CODE(0x03);
         return false;
@@ -1153,6 +1427,18 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         w->topmost_issuer_cn_len = 0;
     }
 
+    w->topmost_authority_key_id_present = cert.authority_key_id != NULL;
+    w->topmost_authority_key_id_len = 0;
+    memset(w->topmost_authority_key_id, 0,
+           sizeof(w->topmost_authority_key_id));
+    if (cert.authority_key_id &&
+        cert.authority_key_id_len <= sizeof(w->topmost_authority_key_id))
+    {
+        memcpy(w->topmost_authority_key_id, cert.authority_key_id,
+               cert.authority_key_id_len);
+        w->topmost_authority_key_id_len = (uint8_t)cert.authority_key_id_len;
+    }
+
     if (!tls_cert_chain_verify_one(w, &cert, is_leaf))
     {
         INFO("cert: chain fail");
@@ -1210,6 +1496,15 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
             switch (w->state)
             {
             case CW_REQ_CTX_LEN:
+                if (value != 0)
+                {
+                    /* RFC 8446 4.4.2: empty when the server authenticates. */
+                    tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL,
+                                   TLS_ALERT_ILLEGAL_PARAMETER);
+                    ERROR_CODE(0x0f);
+                    w->state = CW_ERROR;
+                    return false;
+                }
                 w->field_remaining = value;
                 w->state = (value == 0) ? CW_CHAIN_LEN : CW_REQ_CTX_BODY;
                 if (w->state == CW_CHAIN_LEN)
@@ -1233,6 +1528,14 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                  * CertificateList payload counted by chain_remaining.
                  * Check value bounds before computing 3+value to avoid
                  * size_t overflow on eZ80 (3-byte size_t, max 0xFFFFFF). */
+                if (w->cert_index >= TLS_CERT_CHAIN_MAX)
+                {
+                    tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL,
+                                   TLS_ALERT_ILLEGAL_PARAMETER);
+                    ERROR_CODE(0x16);
+                    w->state = CW_ERROR;
+                    return false;
+                }
                 if (value == 0 || value > SIZE_MAX - 3u ||
                     w->chain_remaining < 3u + value)
                 {
@@ -1349,6 +1652,9 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                 w->cert_buf_len = 0;
                 if (!ok)
                 {
+                    tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL,
+                                   w->fail_alert ? w->fail_alert
+                                                 : TLS_ALERT_BAD_CERTIFICATE);
                     w->state = CW_ERROR;
                     ERROR_CODE(0x13);
                     return false;
@@ -1379,6 +1685,15 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
             w->state = CW_ERROR;
             return false;
         }
+    }
+
+    /* Bytes after the end of certificate_list are not part of the message. */
+    if (w->state == CW_DONE && off < len)
+    {
+        tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
+        ERROR_CODE(0x17);
+        w->state = CW_ERROR;
+        return false;
     }
 
     return w->state != CW_ERROR;
@@ -1479,6 +1794,45 @@ static bool tls_inflight_message_complete(const struct tls_handshake_context *ct
     return ctx->hs_reasm_len >= ctx->hs_reasm_expected;
 }
 
+
+/* Append handshake bytes to the hold-back buffer (see the job section). */
+static bool tls_hs_defer_bytes(struct tls_handshake_context *ctx,
+                               const uint8_t *p, size_t n)
+{
+    size_t need = ctx->hs_deferred_len + n;
+
+    if (n == 0)
+        return true;
+    if (need > TLS_HS_DEFERRED_MAX)
+    {
+        ERROR_CODE(0x72);
+        return false;
+    }
+    if (need > ctx->hs_deferred_cap)
+    {
+        size_t cap = need < 256u ? 256u : need;
+        uint8_t *nb = (uint8_t *)mem_buffer_custom_malloc(cap);
+        if (!nb)
+        {
+            ERROR_CODE(0x73);
+            return false;
+        }
+        mem_stats_tls_direct_add(cap, cap);
+        if (ctx->hs_deferred_len)
+            memcpy(nb, ctx->hs_deferred, ctx->hs_deferred_len);
+        if (ctx->hs_deferred)
+        {
+            mem_stats_tls_direct_release(ctx->hs_deferred_cap, ctx->hs_deferred_cap);
+            mem_buffer_custom_free(ctx->hs_deferred);
+        }
+        ctx->hs_deferred = nb;
+        ctx->hs_deferred_cap = cap;
+    }
+    memcpy(ctx->hs_deferred + ctx->hs_deferred_len, p, n);
+    ctx->hs_deferred_len += n;
+    return true;
+}
+
 /**
  * @brief Process a buffer of decrypted handshake bytes, dispatching each
  *        complete message and spilling the tail into reassembly storage.
@@ -1496,6 +1850,11 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
                                          const uint8_t *buf, size_t buf_len)
 {
     size_t off = 0;
+
+    /* Bytes are already being held behind queued certificate jobs: keep the
+     * stream ordered by holding these too. */
+    if (ctx->hs_deferred_len > 0)
+        return tls_hs_defer_bytes(ctx, buf, buf_len);
 
     /* If we previously spilled a partial header (1-3 bytes) we don't yet
      * know the full message size. Top up to 4 bytes, learn the length, and
@@ -1587,6 +1946,20 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
     /* Drain complete messages from `buf`. */
     while (off + 4 <= buf_len)
     {
+        /* A Certificate was just finished and its verification is queued:
+         * hold everything after it until the jobs have run. */
+        if (ctx->cert_jobs != NULL)
+            return tls_hs_defer_bytes(ctx, buf + off, buf_len - off);
+
+        /* RFC 8446 5.1: a key-changing message (Finished, KeyUpdate) must end
+         * its record; more handshake data here would be under the wrong keys. */
+        if (ctx->key_change_pending)
+        {
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
+            ERROR_CODE(0x1b);
+            return false;
+        }
+
         uint8_t msg_type = buf[off];
         size_t body_len = ((size_t)buf[off + 1] << 16) |
                           ((size_t)buf[off + 2] << 8) |
@@ -1685,6 +2058,8 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
     }
 
     /* If we have a leftover header fragment (1-3 bytes), spill it too. */
+    if (off < buf_len && ctx->cert_jobs != NULL)
+        return tls_hs_defer_bytes(ctx, buf + off, buf_len - off);
     if (off < buf_len)
     {
         size_t have = buf_len - off;
@@ -1703,6 +2078,63 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
     return true;
 }
 
+bool tls_cert_jobs_pending(const struct tls_handshake_context *ctx)
+{
+    return ctx != NULL && ctx->cert_jobs != NULL;
+}
+
+bool tls_cert_jobs_step(struct tls_handshake_context *ctx)
+{
+    if (!ctx || !ctx->cert_jobs)
+        return true;
+
+    uint8_t alert = TLS_ALERT_BAD_CERTIFICATE;
+
+    if (!tls_cert_job_run_head(ctx, &alert))
+    {
+        tls_cert_jobs_discard(ctx);
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
+
+    if (ctx->cert_jobs == NULL && ctx->hs_deferred_len > 0)
+    {
+        /* Queue drained: replay the held handshake bytes in order. Detach the
+         * buffer first so the replay does not re-defer into it. */
+        uint8_t *buf = ctx->hs_deferred;
+        size_t len = ctx->hs_deferred_len;
+        size_t cap = ctx->hs_deferred_cap;
+        bool ok;
+
+        ctx->hs_deferred = NULL;
+        ctx->hs_deferred_len = 0;
+        ctx->hs_deferred_cap = 0;
+        ok = tls_consume_handshake_buffer(ctx, buf, len);
+        mem_stats_tls_direct_release(cap, cap);
+        mem_buffer_custom_free(buf);
+        /* The replayed bytes are the rest of one record, so this is a record
+         * boundary: nothing may be left over after a key-changing message. */
+        if (ok && ctx->key_change_pending)
+        {
+            ctx->key_change_pending = false;
+            if (ctx->hs_reasm_len != 0)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_UNEXPECTED_MESSAGE);
+                ok = false;
+            }
+        }
+        if (!ok)
+        {
+            tls_cert_jobs_discard(ctx);
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
+    }
+    return true;
+}
+
 /**
  * @brief Dispatch one complete inner handshake message (header + body).
  *
@@ -1715,6 +2147,17 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
                                          const uint8_t *msg, size_t msg_len)
 {
     bool ok;
+
+    /* Certificate verification jobs must have all passed before any further
+     * handshake message (CertificateVerify, Finished, ...) is acted on. The
+     * consume path holds such messages back, so reaching here with jobs
+     * queued is a logic error: fail closed. */
+    if (ctx->cert_jobs != NULL)
+    {
+        ERROR_CODE(0x74);
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
     switch (msg_type)
     {
     case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
@@ -1756,6 +2199,11 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     if (!ok)
     {
         ERROR_CODE(msg_type);
+    }
+    else if (msg_type == TLS_HANDSHAKE_FINISHED ||
+             msg_type == TLS_HANDSHAKE_KEY_UPDATE)
+    {
+        ctx->key_change_pending = true;
     }
     return ok;
 }
@@ -1826,6 +2274,18 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
             if (chunk == avail)
             {
                 q = q->next;
+            }
+        }
+        if (ctx->key_change_pending)
+        {
+            /* End of the record that carried a key-changing message: a
+             * partially received next message would also span the change. */
+            ctx->key_change_pending = false;
+            if (ctx->hs_reasm_len != 0)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_UNEXPECTED_MESSAGE);
+                return false;
             }
         }
         return true;
@@ -1973,9 +2433,15 @@ bool tls_handshake_init(
 
     INFO("init: X25519 public key");
     ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, NULL, ctx->ecdhe_public);
-    if (!ctx->ecdhe_job &&
-        !tls_x25519_publickey(ctx->ecdhe_public, ctx->ecdhe_private,
-                              NULL, NULL))
+    bool x25519_ok = ctx->ecdhe_job != 0;
+    if (!x25519_ok)
+    {
+        tls_crypto_guard_enable();
+        x25519_ok = tls_x25519_publickey(ctx->ecdhe_public,
+                                         ctx->ecdhe_private, NULL, NULL);
+        tls_crypto_guard_disable();
+    }
+    if (!x25519_ok)
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
         ERROR_CODE(0x2a);
@@ -2246,7 +2712,37 @@ bool tls_send_client_hello(
             return false;
         }
         /* SNI HostName is a DNS name, never an IP literal. */
-        if (ip_len == 0) sni_len = 9 + hostname_len;
+        if (ip_len == 0)
+        {
+            size_t label_len = 0;
+            if (hostname_len != 0 && ctx->hostname[hostname_len - 1] == '.')
+                hostname_len--;
+            if (hostname_len == 0 || hostname_len > 253)
+                return false;
+            for (size_t i = 0; i < hostname_len; i++)
+            {
+                uint8_t ch = (uint8_t)ctx->hostname[i];
+                if (ch == '.')
+                {
+                    if (label_len == 0 || label_len > 63 ||
+                        ctx->hostname[i - 1] == '-')
+                        return false;
+                    label_len = 0;
+                    continue;
+                }
+                if (!((ch >= 'A' && ch <= 'Z') ||
+                      (ch >= 'a' && ch <= 'z') ||
+                      (ch >= '0' && ch <= '9') || ch == '-') ||
+                    (label_len == 0 && ch == '-'))
+                    return false;
+                label_len++;
+            }
+            if (label_len == 0 || label_len > 63 ||
+                ctx->hostname[hostname_len - 1] == '-')
+                return false;
+            sni_len = 9 + hostname_len;
+        }
+        ctx->sni_sent = (sni_len != 0);
     }
     if (ctx->psk_mode &&
         (ctx->psk_identity.identity_len == 0 ||
@@ -2795,7 +3291,10 @@ bool tls_recv_server_hello(
                 }
                 else
                 {
-                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNSUPPORTED_EXTENSION);
+                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                                   tls_extension_type_known(etype)
+                                       ? TLS_ALERT_ILLEGAL_PARAMETER
+                                       : TLS_ALERT_UNSUPPORTED_EXTENSION);
                     return false;
                 }
                 hrr_offset += elen;
@@ -2814,8 +3313,10 @@ bool tls_recv_server_hello(
              * implemented, so any requested group ends the handshake. */
             if (hrr_key_share)
             {
+                /* RFC 8446 4.2.8: a HelloRetryRequest naming a group we already
+                 * sent a share for, or one we did not offer, is illegal. */
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
-                               TLS_ALERT_HANDSHAKE_FAILURE);
+                               TLS_ALERT_ILLEGAL_PARAMETER);
                 ERROR_CODE(0x4b);
                 return false;
             }
@@ -3010,9 +3511,13 @@ bool tls_recv_server_hello(
                     break;
                 }
                 /* Compute X25519 shared secret. */
-                if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
-                                       data + offset + 4,
-                                       NULL, NULL))
+                tls_crypto_guard_enable();
+                bool x25519_ok = tls_x25519_secret(ctx->ecdhe_shared,
+                                                   ctx->ecdhe_private,
+                                                   data + offset + 4,
+                                                   NULL, NULL);
+                tls_crypto_guard_disable();
+                if (!x25519_ok)
                 {
                     ERROR();
                     tls_secure_memzero(ctx->ecdhe_private,
@@ -3117,7 +3622,10 @@ bool tls_recv_server_hello(
         }
 
         default:
-            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNSUPPORTED_EXTENSION);
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                           tls_extension_type_known(ext_type)
+                               ? TLS_ALERT_ILLEGAL_PARAMETER
+                               : TLS_ALERT_UNSUPPORTED_EXTENSION);
             return false;
         }
 
@@ -3200,64 +3708,12 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
         return false;
     }
 
-    /* Root cert truststore validation: look up the topmost cert's issuer
-     * (the root CA) in the truststore by subject name. Several roots can
-     * share a name (GlobalSign R3, R6, ECC R4 and R5 are all "GlobalSign"),
-     * so every match is tried. With more than one, each check runs locally:
-     * one handed to the Wi-Fi bridge reports success before its verdict. */
-    if (w->topmost_issuer_cn_len > 0)
+    /* Anchoring the topmost certificate in the truststore is queued behind
+     * the chain-link jobs. Nothing past the Certificate is processed until
+     * every job has passed (see tls_dispatch_inner_handshake). */
+    if (!tls_cert_job_enqueue(w, NULL))
     {
-        struct tls_truststore_entry *root_entry = NULL;
-        uint16_t cursor = 0;
-        unsigned candidates = 0;
-        bool anchored = false;
-
-        while (tls_truststore_next_by_subject(w->topmost_issuer_cn, w->topmost_issuer_cn_len,
-                                              &root_entry, &cursor))
-        {
-            candidates++;
-        }
-        cursor = 0;
-        while (!anchored && w->pending_link &&
-               tls_truststore_next_by_subject(w->topmost_issuer_cn, w->topmost_issuer_cn_len,
-                                              &root_entry, &cursor))
-        {
-            struct tls_key root_tls_key;
-            uint8_t exp_be[3];
-
-            if (tls_root_entry_key(root_entry, &root_tls_key, exp_be))
-            {
-                anchored = tls_cert_verify_pending_link(w, &root_tls_key, candidates == 1) ==
-                           TLS_KEY_OP_OK;
-            }
-        }
-        if (!anchored)
-        {
-            ctx->state = TLS_STATE_ERROR;
-            if (candidates)
-            {
-                ERROR_CODE(0x66);
-            }
-            else if (tls_ctx.truststore.status != TLS_STORE_OK &&
-                     tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
-            {
-                ERROR_CODE(tls_ctx.truststore.status);
-            }
-            else
-            {
-                /* No truststore entry found: cannot anchor the chain. */
-                ERROR();
-            }
-            return false;
-        }
-    }
-    else
-    {
-        /* The topmost certificate's issuer has no (or an unparsed) CN, so
-         * there is nothing to look up in the truststore. Per RFC 5280
-         * section 6.1 the path must end at a trust anchor; silently
-         * accepting an unanchored chain here would be a fail-open. */
-        ERROR();
+        ERROR_CODE(0x65);
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
@@ -3357,6 +3813,14 @@ static bool tls_recv_encrypted_extensions(
         const uint8_t *ext_data = data + offset + ext_offset;
         if (ext_type == TLS_EXT_SERVER_NAME)
         {
+            /* RFC 6066 3: the server may only acknowledge an SNI we sent. */
+            if (!ctx->sni_sent)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_UNSUPPORTED_EXTENSION);
+                ERROR_CODE(0x6e);
+                return false;
+            }
             if (seen_server_name || ext_data_len != 0)
             {
                 ERROR_CODE(0x6f);
@@ -3471,7 +3935,10 @@ static bool tls_recv_encrypted_extensions(
         }
         else
         {
-            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNSUPPORTED_EXTENSION);
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                           tls_extension_type_known(ext_type)
+                               ? TLS_ALERT_ILLEGAL_PARAMETER
+                               : TLS_ALERT_UNSUPPORTED_EXTENSION);
             return false;
         }
         ext_offset += ext_data_len;
@@ -3522,9 +3989,11 @@ static bool tls_recv_certificate_request(
         ERROR_CODE(0x6f);
         return false;
     }
-    if (ctx->state != TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED)
+    if (ctx->state != TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED ||
+        ctx->client_certificate_requested)
     {
-        ctx->state = TLS_STATE_ERROR;
+        /* Wrong point in the flight, post-handshake, or a second request. */
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
         ERROR_CODE(0x70);
         return false;
     }
@@ -4250,6 +4719,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     memcpy(ctx->keys.handshake_secret, handshake_secret, 32);
 
     /* Advance state so this function is not called again */
+    ctx->tx_epoch = 1;
     ctx->state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
     DEBUG();
 
@@ -4734,6 +5204,7 @@ static bool tls_recv_finished(
     if (diff != 0)
     {
         ERROR();
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
         return false;
     }
 
@@ -4919,6 +5390,7 @@ static bool tls_recv_new_session_ticket(
     ctx->ticket_age_add = ticket_age_add;
     ctx->ticket_received_ms = sys_now();
     ctx->ticket_lifetime = ticket_lifetime;
+    ctx->ticket_fresh = true;
     ctx->psk_mode = true;
     ctx->psk_type = TLS_PSK_TYPE_RESUMPTION;
     return true;
@@ -4953,8 +5425,7 @@ static bool tls_recv_key_update(
         ERROR_CODE(0xad);
         return false;
     }
-    if (ctx->state != TLS_STATE_HANDSHAKE_COMPLETE ||
-        ctx->server_key_updates >= TLS_MAX_KEY_UPDATES)
+    if (ctx->state != TLS_STATE_HANDSHAKE_COMPLETE)
     {
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
         return false;
@@ -4972,6 +5443,7 @@ static bool tls_recv_key_update(
     uint8_t request_update = data[offset];
     if (request_update != 0 && request_update != 1)
     {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
         ERROR_CODE(0xaf);
         return false;
     }
@@ -5011,7 +5483,8 @@ static bool tls_recv_key_update(
     tls_secure_memzero(next_key, sizeof(next_key));
     tls_secure_memzero(next_iv, sizeof(next_iv));
     ctx->server_seq_num = 0;
-    ctx->server_key_updates++;
+    if (ctx->server_key_updates < UINT8_MAX)
+        ctx->server_key_updates++; /* statistic only; long sessions are fine */
 
     if (request_update == 1 && !tls_send_key_update_record(ctx))
     {
@@ -5048,15 +5521,10 @@ void tls_set_transport(
  */
 static int tls_outbound_phase(const struct tls_handshake_context *ctx)
 {
-    if (ctx->state == TLS_STATE_HANDSHAKE_COMPLETE)
-    {
-        return 2;
-    }
-    if (ctx->state >= TLS_STATE_HANDSHAKE_KEYS_DERIVED)
-    {
-        return 1;
-    }
-    return 0;
+    /* Not derived from ctx->state: TLS_STATE_ERROR sorts above
+     * HANDSHAKE_COMPLETE, which would send every post-handshake alert under
+     * the (retired) handshake keys. */
+    return ctx->tx_epoch;
 }
 
 static bool tls_ratchet_client_application_keys(struct tls_handshake_context *ctx)
@@ -5075,7 +5543,8 @@ static bool tls_ratchet_client_application_keys(struct tls_handshake_context *ct
         memcpy(ctx->keys.client_application_key, next_key, 16);
         memcpy(ctx->keys.client_application_iv, next_iv, 12);
         ctx->client_seq_num = 0;
-        ctx->client_key_updates++;
+        if (ctx->client_key_updates < UINT8_MAX)
+            ctx->client_key_updates++;
     }
     tls_secure_memzero(next_secret, sizeof(next_secret));
     tls_secure_memzero(next_key, sizeof(next_key));
@@ -5091,7 +5560,7 @@ static bool tls_send_key_update_record(struct tls_handshake_context *ctx)
     static const uint8_t message[5] = {TLS_HANDSHAKE_KEY_UPDATE, 0, 0, 1, 0};
 
     if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE ||
-        !ctx->transport_write || ctx->client_key_updates >= TLS_MAX_KEY_UPDATES ||
+        !ctx->transport_write ||
         ctx->client_seq_num >= tls_cipher_suite_record_limit(ctx->cipher_suite))
         return false;
     record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
@@ -5140,6 +5609,16 @@ static bool tls_send_alert(
 
     bool ok = false;
     uint8_t alert_body[2] = {level, description};
+
+    if (level == TLS_ALERT_LEVEL_FATAL)
+    {
+        if (ctx->fatal_alert_sent)
+        {
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
+        ctx->fatal_alert_sent = true;
+    }
 
     if (ctx->transport_write)
     {
@@ -5329,6 +5808,11 @@ int tls_offload_settle(struct tls_handshake_context *ctx)
     return 1;
 }
 
+bool tls_send_fatal_alert(struct tls_handshake_context *ctx, uint8_t description)
+{
+    return tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, description);
+}
+
 /**
  * @brief Clean up handshake context
  */
@@ -5358,6 +5842,9 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     tls_cert_walker_free(ctx->cert_walker);
     ctx->cert_walker = NULL;
     ctx->hs_reasm_body_fed = 0;
+
+    /* Drop queued certificate jobs and any handshake bytes held behind them. */
+    tls_cert_jobs_discard(ctx);
 
     /* Release captured leaf SPKI (allocated during cert walking,
      * consumed by tls_recv_certificate_verify). */
@@ -5411,10 +5898,9 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
  * key schedule, PSK binder, NewSessionTicket-driven resumption, alerts, and
  * close_notify are all done. CertificateVerify is mandatory and always
  * verified (RSA-PSS-SHA256 against the captured leaf SPKI). Adjacent chain
- * links are verified for RSA-2048+SHA256; the topmost cert's issuer is
- * additionally checked against the truststore by subject-name lookup when
- * present, but the chain is accepted without that final root anchor if the
- * issuer isn't found (see truststore.h).
+ * links are verified against their issuer keys; the topmost certificate is
+ * anchored by AKI-to-SKI lookup, with signature-tested duplicate-subject
+ * fallback only when AKI is absent. Missing or invalid anchors fail closed.
  *
  * Remaining work, roughly ordered:
  *   - AES-GCM speedup. Pure-C in aes.c; this is the bulk-data hot path and

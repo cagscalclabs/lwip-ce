@@ -49,6 +49,7 @@ typedef enum {
     LWIP_DISPATCH_TLS_RNG_HEALTHCHECK,
     LWIP_DISPATCH_TLS_RX_RECVD,      /**< TLS receive-window release */
     LWIP_DISPATCH_CONN_SERVICES,    /**< lwip_socket waiting-for-services poll */
+    LWIP_DISPATCH_TLS_CERT_JOB,     /**< deferred TLS certificate verification */
     LWIP_DISPATCH_COUNT
 } lwip_dispatch_id_t;
 

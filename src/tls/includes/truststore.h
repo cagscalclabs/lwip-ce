@@ -7,10 +7,10 @@
  * @note Custom PKI architecture engineered for constrained
  * runtime and storage environments.
  *
- * @warning The topmost certificate in a chain is only checked against the
- * truststore if its issuer is found by subject-name lookup; if absent, the
- * chain is accepted without root anchoring (see tls_truststore_lookup_by_subject).
- * Adjacent links below the root are verified via real RSA signature checks.
+ * @warning Certificate paths fail closed unless the topmost certificate can
+ * be anchored. AuthorityKeyIdentifier selects a root by stored SKI; chains
+ * without an AKI try every current matching subject entry and accept only a
+ * key that verifies the topmost certificate's signature.
  */
 
 #ifndef TLS_TRUSTSTORE_H
@@ -22,6 +22,13 @@
 
 #define TLS_TRUSTSTORE_SUBJECT_LEN  32
 #define TLS_TRUSTSTORE_SKI_LEN      32
+#define TLS_TRUSTSTORE_VERSION      2
+
+/* Version 2 stores two fixed-width lookup indexes before the variable-length
+ * metadata block. Each index record is key[32] followed by a little-endian
+ * uint16 offset relative to the start of the metadata block. */
+#define TLS_TRUSTSTORE_INDEX_KEY_LEN    32
+#define TLS_TRUSTSTORE_INDEX_ENTRY_LEN  (TLS_TRUSTSTORE_INDEX_KEY_LEN + 2u)
 
 /* Serialized signature algorithm IDs used in tls_truststore_entry.alg_id.
  * These are lwIP-internal codes, NOT ASN.1/DER OIDs. */
@@ -40,8 +47,7 @@ typedef enum
     TLS_STORE_SIZE_INVALID,
     TLS_STORE_VERSION_MISMATCH,
     TLS_STORE_HASH_FAIL,
-    TLS_STORE_SIG_INVALID,
-    TLS_STORE_UNCHECKED
+    TLS_STORE_SIG_INVALID
 } tls_truststore_status_t;
 
 struct tls_truststore_state
@@ -55,7 +61,7 @@ struct tls_truststore_state
 
 struct tls_truststore_header
 {
-    uint8_t sig[256];           /* RSA-2048 signature over header fields + entries */
+    uint8_t sig[256];           /* RSA-2048 signature over header fields + indexes + metadata */
     uint16_t version;           /* Truststore format version */
     uint32_t created_timestamp; /* Unix timestamp when truststore was generated */
     uint16_t entry_count;       /* Number of entries in truststore */
@@ -86,25 +92,42 @@ struct tls_truststore_entry
  */
 tls_truststore_status_t tls_truststore_init(void);
 
-void tls_truststore_prepare(void);
-
 /********************
  * @brief Attempts to find a certificate by Subject Key Identifier in the trust store.
- * @param ski       32-byte SKI value from the certificate's SubjectKeyIdentifier extension.
- * @param result    Out-pointer set to the in-place entry on match. May be NULL.
+ * @param ski       32-byte, zero-padded Subject Key Identifier.
+ * @param result    Out-pointer set to a bounded internal copy on match. The
+ *                  copy remains valid until the next truststore lookup. May
+ *                  be NULL when only presence is needed.
  * @returns [bool] True if match found, false otherwise.
  */
 bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **result);
+
+/** @internal Length-aware lookup used to match a certificate AKI keyIdentifier
+ * against the zero-padded SKI stored in a trust anchor entry. */
+bool tls_truststore_lookup_key_id(const uint8_t *key_id, size_t key_id_len,
+                                  struct tls_truststore_entry **result);
 
 /********************
  * @brief Attempts to find a truststore entry whose subject[] matches the given
  *        name (issuer CN of the topmost cert in the chain).
  * @param subject   Name bytes (up to TLS_TRUSTSTORE_SUBJECT_LEN), null-padded.
  * @param subject_len  Meaningful bytes in subject (0 < subject_len <= TLS_TRUSTSTORE_SUBJECT_LEN).
- * @param result    Out-pointer set to the in-place entry on match. May be NULL.
+ * @param result    Out-pointer set to a bounded internal copy on match. The
+ *                  copy remains valid until the next truststore lookup. May
+ *                  be NULL when only presence is needed.
  * @returns [bool] True if match found, false otherwise.
  */
 bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
                                       struct tls_truststore_entry **result);
+
+/** @internal
+ * Find the zero-based @p match_index current entry with the requested subject.
+ * This supports the AKI-absent fallback, where duplicate CN entries must each
+ * be tried cryptographically instead of trusting storage order.
+ */
+bool tls_truststore_lookup_by_subject_index(const uint8_t *subject,
+                                            size_t subject_len,
+                                            uint16_t match_index,
+                                            struct tls_truststore_entry **result);
 
 #endif /* TLS_TRUSTSTORE_H */

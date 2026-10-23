@@ -67,12 +67,15 @@ typedef struct altcp_tls_ce_state {
 /* tls_handshake_init has been called successfully for this state. Set once;
  * cleared on reset. Guards the deferred-init path in send_client_hello. */
 #define ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED   0x20
-/* Plaintext is being delivered to the application. An app recv callback may
- * call altcp_recved(), which must not re-enter delivery. */
+/* Plaintext delivery to the application is in progress. A nested delivery
+ * request (the app calling altcp_recved, or pumping events, from inside its
+ * recv callback) must not re-enter; it sets RX_REPEAT instead and the outer
+ * delivery loop runs once more. */
 #define ALTCP_TLS_CE_FLAGS_RX_BUSY           0x40
+#define ALTCP_TLS_CE_FLAGS_RX_REPEAT         0x80
 /* The handshake is waiting on the Wi-Fi bridge (wireless/crypto.h). */
-#define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x80
-#define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x100
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x100
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x200
 
 /**
  * @brief TLS configuration for CE implementation
