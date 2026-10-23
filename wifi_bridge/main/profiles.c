@@ -1,6 +1,5 @@
 #include "profiles.h"
 
-#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -25,7 +24,17 @@ typedef struct {
     char username[PROFILE_USERNAME_MAX]; /* added in version 2 */
 } profile_record_t;
 
-#define PROFILE_RECORD_V1_SIZE offsetof(profile_record_t, username)
+/* Version 1 records are the same fields without the username. Its size
+ * includes tail padding, so it is not offsetof(profile_record_t, username). */
+typedef struct {
+    uint8_t version;
+    uint8_t used;
+    uint8_t security;
+    uint8_t flags;
+    uint32_t rank;
+    char ssid[PROFILE_SSID_MAX];
+    char password[PROFILE_PASSWORD_MAX];
+} profile_record_v1_t;
 
 static profile_record_t s_records[PROFILE_SLOTS];
 static uint8_t s_order[PROFILE_SLOTS];
@@ -133,7 +142,7 @@ esp_err_t profiles_init(void)
 
         if (nvs_get_blob(handle, key, &s_records[slot], &size) != ESP_OK ||
             !((size == sizeof(profile_record_t) && s_records[slot].version == PROFILE_RECORD_VERSION) ||
-              (size == PROFILE_RECORD_V1_SIZE && s_records[slot].version == 1))) {
+              (size == sizeof(profile_record_v1_t) && s_records[slot].version == 1))) {
             memset(&s_records[slot], 0, sizeof(profile_record_t));
             continue;
         }

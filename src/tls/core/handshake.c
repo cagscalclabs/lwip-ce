@@ -179,6 +179,7 @@
 #include "x509_internal.h"
 #include "key_internal.h"
 #include "../includes/truststore.h"
+#include "../includes/tls.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
@@ -188,6 +189,10 @@ bool tls_p256_publickey(uint8_t pub[65], const uint8_t priv[32]);
 bool tls_p256_secret(uint8_t ss[32], const uint8_t priv[32], const uint8_t peer[65]);
 bool tls_p256_sign(uint8_t sig[64], const uint8_t hash[32], const uint8_t priv[32]);
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32], const uint8_t pub[65]);
+/* truststore.c: steps through current entries whose subject is exactly
+ * subject; *cursor starts at 0. */
+bool tls_truststore_next_by_subject(const uint8_t *subject, size_t subject_len,
+                                    struct tls_truststore_entry **result, uint16_t *cursor);
 #include <string.h>
 #include <usbdrvce.h>
 #include "../../drivers/mem.h"
@@ -800,8 +805,50 @@ static tls_key_op_result_t tls_cert_verify_digest(struct tls_handshake_context *
  * policy: a known-but-unimplemented operation, including an otherwise valid
  * RSA signature whose issuer key is wider than our 2048-bit arithmetic, is
  * distinguishable from a bad signature for an operation we do support. */
+/* The public key of a truststore entry; exp_be holds an RSA exponent. False
+ * for an algorithm or key size this build cannot check. */
+static bool tls_root_entry_key(const struct tls_truststore_entry *entry, struct tls_key *key,
+                               uint8_t exp_be[3])
+{
+    size_t key_len;
+
+    if (entry->len < sizeof(struct tls_truststore_entry))
+    {
+        return false;
+    }
+    key_len = entry->len - sizeof(struct tls_truststore_entry);
+    memset(key, 0, sizeof(*key));
+    if (entry->alg_id == TLS_CERT_SIG_RSA_PSS_SHA256 || entry->alg_id == TLS_CERT_SIG_RSA_PKCS1_SHA256)
+    {
+        size_t mod_len = key_len > 3 ? key_len - 3 : 0;
+
+        if (key_len < 3 + RSA_MODULUS_MIN_SUPPORTED || mod_len > RSA_MODULUS_MAX_SUPPORTED)
+        {
+            return false;
+        }
+        /* Truststore packs exp as 3-byte LE; tls_rsa_key wants big-endian. */
+        exp_be[0] = entry->key[2];
+        exp_be[1] = entry->key[1];
+        exp_be[2] = entry->key[0];
+        key->type = TLS_KEY_TYPE_RSA;
+        key->rsa.exp_len = 3;
+        key->rsa.exponent = exp_be;
+        key->rsa.mod_len = mod_len;
+        key->rsa.modulus = entry->key + 3;
+        return true;
+    }
+    if (entry->alg_id == TLS_CERT_SIG_ECDSA_SHA256 && key_len == 65)
+    {
+        key->type = TLS_KEY_TYPE_EC_P256;
+        key->ec.len = key_len;
+        key->ec.data = entry->key;
+        return true;
+    }
+    return false;
+}
+
 static tls_key_op_result_t tls_cert_verify_pending_link(
-    const struct tls_cert_walker *w, const struct tls_key *issuer)
+    const struct tls_cert_walker *w, const struct tls_key *issuer, bool offload)
 {
     if (!w || !issuer || !w->pending_link)
         return TLS_KEY_OP_INVALID;
@@ -829,7 +876,7 @@ static tls_key_op_result_t tls_cert_verify_pending_link(
     if (w->pending_sig_omitted || !w->pending_sig)
         return TLS_KEY_OP_INVALID;
 
-    return tls_cert_verify_digest(w->ctx, w->pending_sig_alg, issuer,
+    return tls_cert_verify_digest(offload ? w->ctx : NULL, w->pending_sig_alg, issuer,
                                   w->pending_tbs_digest, w->pending_sig,
                                   w->pending_sig_len);
 }
@@ -862,7 +909,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
             return false;
         }
         tls_key_op_result_t verify_result =
-            tls_cert_verify_pending_link(w, &cert->pubkey);
+            tls_cert_verify_pending_link(w, &cert->pubkey, true);
         if (verify_result != TLS_KEY_OP_OK)
         {
             ERROR();
@@ -3033,6 +3080,15 @@ bool tls_recv_server_hello(
         ERROR_CODE(0x5f);
         return false;
     }
+
+    /* Reject psk_ke (PSK without ECDHE): RFC 8446 §4.2.9 requires psk_dhe_ke
+     * when we sent a key_share — accepting psk_ke silently drops forward secrecy. */
+    if (found_psk && !ctx->ecdhe_negotiated)
+    {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_HANDSHAKE_FAILURE);
+        return false;
+    }
+
     ctx->psk_mode = found_psk;
 
     /* Step 9: Update transcript hash with ServerHello */
@@ -3094,108 +3150,53 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
     }
 
     /* Root cert truststore validation: look up the topmost cert's issuer
-     * (the root CA) in the truststore by subject name. */
+     * (the root CA) in the truststore by subject name. Several roots can
+     * share a name (GlobalSign R3, R6, ECC R4 and R5 are all "GlobalSign"),
+     * so every match is tried. With more than one, each check runs locally:
+     * one handed to the Wi-Fi bridge reports success before its verdict. */
     if (w->topmost_issuer_cn_len > 0)
     {
         struct tls_truststore_entry *root_entry = NULL;
-        if (tls_truststore_lookup_by_subject(w->topmost_issuer_cn,
-                                             w->topmost_issuer_cn_len,
-                                             &root_entry) && root_entry)
+        uint16_t cursor = 0;
+        unsigned candidates = 0;
+        bool anchored = false;
+
+        while (tls_truststore_next_by_subject(w->topmost_issuer_cn, w->topmost_issuer_cn_len,
+                                              &root_entry, &cursor))
         {
-            tls_cert_sig_alg_t alg = (tls_cert_sig_alg_t)root_entry->alg_id;
-            bool root_rsa = (alg == TLS_CERT_SIG_RSA_PSS_SHA256 ||
-                             alg == TLS_CERT_SIG_RSA_PKCS1_SHA256);
-            if (root_rsa)
+            candidates++;
+        }
+        cursor = 0;
+        while (!anchored && w->pending_link &&
+               tls_truststore_next_by_subject(w->topmost_issuer_cn, w->topmost_issuer_cn_len,
+                                              &root_entry, &cursor))
+        {
+            struct tls_key root_tls_key;
+            uint8_t exp_be[3];
+
+            if (tls_root_entry_key(root_entry, &root_tls_key, exp_be))
             {
-                /* Extract stored exp (uint24_t LE) and modulus from key[]. */
-                if (root_entry->len < sizeof(struct tls_truststore_entry))
-                {
-                    ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x65);
-                    return false;
-                }
-                size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
-                size_t mod_len = key_len > 3 ? key_len - 3 : 0;
-                if (key_len >= 3 + RSA_MODULUS_MIN_SUPPORTED &&
-                    mod_len <= RSA_MODULUS_MAX_SUPPORTED &&
-                    w->pending_link)
-                {
-                    /* Truststore packs exponent as 3-byte LE; convert to BE for
-                     * tls_rsa_key which expects big-endian exponent bytes. */
-                    uint8_t exp_be[3] = {
-                        root_entry->key[2],
-                        root_entry->key[1],
-                        root_entry->key[0],
-                    };
-                    const uint8_t *mod     = root_entry->key + 3;
-                    struct tls_rsa_key root_key = {
-                        sizeof(exp_be), exp_be,
-                        mod_len, mod,
-                    };
-                    struct tls_key root_tls_key = {
-                        .type = TLS_KEY_TYPE_RSA,
-                        .rsa = root_key,
-                    };
-                    tls_key_op_result_t verify_result =
-                        tls_cert_verify_pending_link(w, &root_tls_key);
-                    if (verify_result != TLS_KEY_OP_OK)
-                    {
-                        ERROR();
-                        ctx->state = TLS_STATE_ERROR;
-                        return false;
-                    }
-                }
-                else
-                {
-                    ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x66);
-                    return false;
-                }
+                anchored = tls_cert_verify_pending_link(w, &root_tls_key, candidates == 1) ==
+                           TLS_KEY_OP_OK;
             }
-            else if (alg == TLS_CERT_SIG_ECDSA_SHA256)
+        }
+        if (!anchored)
+        {
+            ctx->state = TLS_STATE_ERROR;
+            if (candidates)
             {
-                if (root_entry->len < sizeof(struct tls_truststore_entry))
-                {
-                    ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x65);
-                    return false;
-                }
-                size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
-                if (key_len == 65 && w->pending_link)
-                {
-                    struct tls_key root_tls_key = {
-                        .type = TLS_KEY_TYPE_EC_P256,
-                        .ec = { key_len, root_entry->key },
-                    };
-                    tls_key_op_result_t verify_result =
-                        tls_cert_verify_pending_link(w, &root_tls_key);
-                    if (verify_result != TLS_KEY_OP_OK)
-                    {
-                        ERROR();
-                        ctx->state = TLS_STATE_ERROR;
-                        return false;
-                    }
-                }
-                else
-                {
-                    ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x66);
-                    return false;
-                }
+                ERROR_CODE(0x66);
+            }
+            else if (tls_ctx.truststore.status != TLS_STORE_OK &&
+                     tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
+            {
+                ERROR_CODE(tls_ctx.truststore.status);
             }
             else
             {
-                /* Truststore entry uses an algorithm not supported by this build. */
+                /* No truststore entry found: cannot anchor the chain. */
                 ERROR();
-                ctx->state = TLS_STATE_ERROR;
-                return false;
             }
-        }
-        else
-        {
-            /* No truststore entry found: cannot anchor the chain. */
-            ERROR();
-            ctx->state = TLS_STATE_ERROR;
             return false;
         }
     }

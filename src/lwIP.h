@@ -291,6 +291,12 @@ bool     lwip_init_runtime_internal(const void *imports_src, size_t imports_len)
 bool     lwip_network_up(void);
 void     lwip_service_events(void);
 uint32_t lwip_now_ms(void);
+
+/* Pump the stack until the TLS random generator is ready for
+ * tls_random_bytes() (192-bit strength). Returns true once ready, false on
+ * timeout or RNG failure. Call after lwip_start() before using crypto APIs
+ * that need random bytes (tls_random_bytes, key encryption, RSA-OAEP, ...). */
+bool     lwip_tls_rng_wait_for_ready(uint32_t timeout_ms);
 bool     lwip_default_netif_info(lwip_netif_info_t *info);
 
 lwip_error_t lwip_request_services(uint8_t flags, uint32_t timeout_ms);
@@ -412,7 +418,7 @@ lwip_error_t lwip_socket_resize_rx_max(struct lwip_socket *socket,
 
 /** Set the WebSocket path and optional subprotocol for a WS/WSS socket.
  *  Must be called after lwip_socket_create() and before lwip_socket_connect().
- *  Strings are borrowed — caller must keep them alive until connect() returns.
+ *  The strings are copied; the caller does not need to keep them alive.
  *  The host field is filled in automatically at connect time. */
 lwip_error_t lwip_socket_set_ws_config(struct lwip_socket *socket,
                                        const char *path,

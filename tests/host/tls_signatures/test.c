@@ -367,17 +367,17 @@ int main(void)
     pending.pending_sig_omitted = true;
     pending.pending_sig_alg = TLS_ALG_RSA_PKCS1_SHA256;
     pending.pending_sig_len = sizeof(rsa_oversize_modulus);
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
            TLS_KEY_OP_UNSUPPORTED);
     pending.pending_sig_len = 256;
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
            TLS_KEY_OP_INVALID);
 
     /* A structurally accepted but unknown signature OID follows the same
      * temporary unsupported-operation policy without retaining its bytes. */
     pending.pending_sig_alg = TLS_ALG_UNKNOWN;
     pending.pending_sig_len = 384;
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize) ==
+    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
            TLS_KEY_OP_UNSUPPORTED);
 
     struct tls_handshake_context ctx;

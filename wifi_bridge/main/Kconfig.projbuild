@@ -1,11 +1,11 @@
 menu "lwIP Wi-Fi bridge"
 
 config BRIDGE_LOG_TRAFFIC
-    bool "Log calculator pings and DHCP leases"
+    bool "Log calculator pings, DHCP and DNS traffic"
     default n
     help
         Parse every bridged frame and log ICMP echo requests sent by the
-        calculator and DHCP leases it receives. Useful when bringing up a
+        calculator and every DHCP and DNS message in either direction. Useful when bringing up a
         new setup; costs CPU on every frame, so leave it off otherwise.
 
 config BRIDGE_LED_GPIO

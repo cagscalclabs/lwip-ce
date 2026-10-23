@@ -20,12 +20,15 @@
 
 /* Internal record-layer hook implemented by handshake.c. */
 extern bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx);
+/* CTR-only path used by the two-pass GCM decrypt (tag verified in pass 1). */
+extern bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf);
 #include "../../tls/includes/aes.h"
 #include "../../tls/includes/bytes.h"
 #include "../../tls/includes/crypto_guard.h"
 #include "../../tls/includes/handshake.h"
 #include "../../tls/includes/random.h"
 #include "../../tls/includes/tls.h"
+#include "../../tls/includes/truststore.h"
 #include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_ALTCP_TLS_CE
@@ -474,7 +477,9 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         {
             goto fail;
         }
-        if (!tls_aes_decrypt(&aes_ctx, scratch, take, scratch))
+        if (ctx->cipher_suite == TLS_AES_128_GCM_SHA256
+                ? !tls_aes_gcm_ctr(&aes_ctx, scratch, take, scratch)
+                : !tls_aes_decrypt(&aes_ctx, scratch, take, scratch))
         {
             goto fail;
         }
@@ -671,6 +676,33 @@ static struct pbuf *altcp_tls_ce_copy_rx_to_ram(struct pbuf *p)
     return copy;
 }
 
+static void altcp_tls_ce_open_window_for_record(altcp_tls_ce_state_t *state)
+{
+    uint8_t header[5];
+    size_t want;
+
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) || state->rx == NULL ||
+        state->rx_app != NULL || state->conn == NULL || state->conn->inner_conn == NULL)
+    {
+        return;
+    }
+    want = state->rx->tot_len;
+    if (want >= sizeof(header) &&
+        pbuf_copy_partial(state->rx, header, sizeof(header), 0) == sizeof(header))
+    {
+        size_t record = sizeof(header) + (((size_t)header[3] << 8) | (size_t)header[4]);
+        if (want > record)
+        {
+            want = record;
+        }
+    }
+    if (want > state->rx_acked_len)
+    {
+        altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)(want - state->rx_acked_len));
+        state->rx_acked_len = want;
+    }
+}
+
 static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
 {
     u16_t added = (p != NULL) ? p->tot_len : 0;
@@ -698,8 +730,9 @@ static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
      * rx_acked_len; the consume path (altcp_tls_ce_consume_recved) then only
      * acks the bytes it releases that this counter did NOT already cover, so
      * no byte is ever acked twice — even for a pbuf that straddles the
-     * handshake -> app-data transition. The post-handshake app-data path does
-     * not pre-ack; the consume path acks those encrypted bytes normally. */
+     * handshake -> app-data transition. After the handshake only the bytes of
+     * the record at the head of state->rx are pre-acked, so a record larger
+     * than the TCP window can still complete. */
     if (added != 0 && !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
         state->conn != NULL && state->conn->inner_conn != NULL)
     {
@@ -713,6 +746,7 @@ static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
          * record (see comment above) did NOT happen this time. */
         DEBUG();
     }
+    altcp_tls_ce_open_window_for_record(state);
 }
 
 /* Release `n` bytes from the front of state->rx and ack to the lower TCP only
@@ -824,26 +858,23 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     uint8_t resumed_psk_type;
     uint8_t resumed_psk[32];
     struct tls_psk_identity resumed_identity;
-    size_t host_size = hostname ? strlen(hostname) + 1 : 0;
 
     tls_dbg_status("config: ecdhe enter");
-    /* The hostname is copied in after the struct: callers such as the socket
-     * layer free their string as soon as the connect has started. */
-    conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config) + host_size);
+    size_t host_len = hostname ? strlen(hostname) + 1 : 0;
+    conf = (struct altcp_tls_ce_config *)mem_malloc(sizeof(struct altcp_tls_ce_config) + host_len);
     if (conf == NULL)
     {
         ERROR_CODE(-ERR_MEM);
         return NULL;
     }
-    mem_stats_tls_direct_add(sizeof(*conf) + host_size, sizeof(*conf) + host_size);
+    mem_stats_tls_direct_add(sizeof(*conf) + host_len, sizeof(*conf) + host_len);
 
     memset(conf, 0, sizeof(struct altcp_tls_ce_config));
     conf->is_server = 0;
     conf->psk_mode = 0;
-    if (hostname)
-    {
-        conf->hostname = memcpy(conf + 1, hostname, host_size);
-    }
+    conf->hostname = hostname ? memcpy(conf + 1, hostname, host_len) : NULL;
+    hostname = conf->hostname;
+    tls_truststore_prepare();
 
     /* Opportunistically resume from the in-memory PSK cache, but only if a
      * live (non-expired) entry exists for this exact hostname. Cross-host
@@ -873,9 +904,10 @@ void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
                                          conf->alpn_protocols_len);
             mem_free(conf->alpn_protocols);
         }
-        size_t size = sizeof(*conf) + (conf->hostname ? strlen(conf->hostname) + 1 : 0);
-
         memset(conf->psk, 0, 32);
+        size_t size = sizeof(*conf);
+        if (conf->hostname == (const char *)(conf + 1))
+            size += strlen(conf->hostname) + 1;
         mem_stats_tls_direct_release(size, size);
         mem_free(conf);
     }
@@ -1095,7 +1127,7 @@ altcp_tls_ce_offload_ready(void)
     {
         if (state->flags & ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT)
         {
-            state->flags = (u8_t)((state->flags & ~ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT) |
+            state->flags = (u16_t)((state->flags & ~ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT) |
                                   ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK);
         }
     }
@@ -1110,13 +1142,42 @@ altcp_tls_ce_offload_ready(void)
             state = state->next;
             continue;
         }
-        state->flags &= (u8_t)~ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK;
+        state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK;
         if (state->conn != NULL && state->conn->state == state)
         {
             (void)altcp_tls_ce_lower_recv_process(state->conn, state);
         }
         state = g_tls_state_head;
     }
+}
+
+/* Generates our key shares and client random. Done before the TCP connect
+ * when the RNG is ready: on the calculator alone this takes seconds, and some
+ * servers reset a connection that stays silent that long. */
+static bool
+altcp_tls_ce_init_handshake(altcp_tls_ce_state_t *state)
+{
+    struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
+    bool init_ok;
+
+    if (config->psk_mode)
+    {
+        init_ok = tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity);
+        if (init_ok)
+            state->tls_ctx.psk_type = config->psk_type;
+    }
+    else
+    {
+        init_ok = tls_handshake_init(&state->tls_ctx, NULL, NULL);
+    }
+    if (!init_ok)
+        return false;
+    /* tls_handshake_init nulls out hostname; reapply from config. */
+    state->tls_ctx.hostname = config->hostname;
+    state->tls_ctx.alpn_protocols = config->alpn_protocols;
+    state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
+    state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
+    return true;
 }
 
 /*
@@ -1143,26 +1204,14 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         return ERR_OK; /* already sent (and not retrying after HRR) */
     }
 
-    /* Deferred key generation: tls_handshake_init was not called at setup time
-     * because the async DRBG may not have been seeded yet. Attempt it now; if
-     * the RNG is still not ready (tls_random_bytes_ex returns NULL immediately
-     * rather than spinning), return ERR_MEM so the caller retries next tick. */
+    /* Deferred key generation: setup could not run tls_handshake_init because
+     * the async DRBG was not seeded yet. Attempt it now; if the RNG is still
+     * not ready (tls_random_bytes_ex returns NULL immediately rather than
+     * spinning), return ERR_MEM so the caller retries next tick. */
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED))
     {
-        struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
-        bool init_ok;
         tls_dbg_status("clienthello: deferred hs init");
-        if (config->psk_mode)
-        {
-            init_ok = tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity);
-            if (init_ok)
-                state->tls_ctx.psk_type = config->psk_type;
-        }
-        else
-        {
-            init_ok = tls_handshake_init(&state->tls_ctx, NULL, NULL);
-        }
-        if (!init_ok)
+        if (!altcp_tls_ce_init_handshake(state))
         {
             /* Encode (rng_state << 8 | last_failure) so the caller can decode
              * both from a single WARN_CODE event on the calc's debug console. */
@@ -1171,11 +1220,6 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
             tls_dbg_status("clienthello: hs init not ready, retry");
             return ERR_MEM; /* retry next tick */
         }
-        /* tls_handshake_init nulls out hostname; reapply from config. */
-        state->tls_ctx.hostname = config->hostname;
-        state->tls_ctx.alpn_protocols = config->alpn_protocols;
-        state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
-        state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
     }
 
     /* Generate the ClientHello exactly once per attempt. tls_send_client_hello
@@ -1298,6 +1342,14 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
     }
 
     altcp_output(conn->inner_conn);
+    {
+        struct altcp_tls_ce_config *sent_cfg = (struct altcp_tls_ce_config *)state->conf;
+        if (sent_cfg && sent_cfg->psk_mode && sent_cfg->hostname)
+        {
+            /* The ticket is on the wire now; it is single use. */
+            tls_psk_cache_discard(sent_cfg->hostname);
+        }
+    }
     mem_stats_tls_direct_release(state->pending_chello_len, state->pending_chello_len);
     mem_free(state->pending_chello);
     state->pending_chello = NULL;
@@ -1854,10 +1906,32 @@ altcp_tls_ce_pass_rx_data(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
  * After handshake, incoming TCP data is TLS records (type 0x17).
  * Each record has a 5-byte header followed by encrypted payload.
  */
+static err_t altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
+
 static err_t
 altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
 {
+    err_t err;
+
     LWIP_ASSERT("state != NULL", state != NULL);
+    if (state->flags & ALTCP_TLS_CE_FLAGS_RX_BUSY)
+    {
+        /* Re-entered from an app callback; the outer loop will pick up
+         * whatever is queued. */
+        return ERR_OK;
+    }
+    state->flags |= ALTCP_TLS_CE_FLAGS_RX_BUSY;
+    err = altcp_tls_ce_handle_rx_appldata_impl(conn, state);
+    if (err != ERR_ABRT && conn->state == state)
+    {
+        state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_RX_BUSY;
+    }
+    return err;
+}
+
+static err_t
+altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
+{
     tls_dbg_status("rx: appdata path");
 
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
@@ -1875,6 +1949,19 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         {
             altcp_tls_ce_consume_recved(state, state->rx->tot_len);
             break;
+        }
+        if (state->rx_app != NULL)
+        {
+            err_t pass_err = altcp_tls_ce_pass_rx_data(conn, state);
+            if (pass_err == ERR_ABRT)
+            {
+                /* ERROR_AUDIT: pass_rx_data emitted before abort. */
+                return ERR_ABRT;
+            }
+            if (state->rx_app != NULL)
+            {
+                return ERR_OK;
+            }
         }
         uint8_t header[5];
         pbuf_copy_partial(state->rx, header, 5, 0);
@@ -2035,6 +2122,7 @@ altcp_tls_ce_handle_rx_appldata(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
         tls_dbg_status("rx: app delivered");
     }
 
+    altcp_tls_ce_open_window_for_record(state);
     return ERR_OK;
 }
 
@@ -2197,9 +2285,10 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->conf = conf;
     state->conn = conn;
 
-    /* tls_handshake_init (which consumes RNG entropy) is deferred to the first
-     * send_client_hello call, by which point the async DRBG will be seeded.
-     * hostname/alpn are applied there too, since tls_handshake_init nulls them. */
+    /* Key generation runs now when the RNG is ready, so the ClientHello can go
+     * out as soon as TCP connects; otherwise send_client_hello retries it. */
+    tls_dbg_status("setup: hs init");
+    (void)altcp_tls_ce_init_handshake(state);
 
     /* Wire the transport write hook so handshake.c can emit alerts and
      * close_notify without depending on lwIP/altcp directly. */
@@ -2340,6 +2429,30 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
      * plaintext length to TCP would double-credit the receive window and can
      * destabilize long-lived TLS streams. */
     state->rx_passed_unrecved -= len;
+    if (state->flags & ALTCP_TLS_CE_FLAGS_RX_BUSY)
+    {
+        /* Called from inside an app recv callback: accounting is done, the
+         * outer delivery loop continues draining state->rx_app / state->rx. */
+        return;
+    }
+    if (state->rx_app != NULL)
+    {
+        err_t pass_err;
+        state->flags |= ALTCP_TLS_CE_FLAGS_RX_BUSY;
+        pass_err = altcp_tls_ce_pass_rx_data(conn, state);
+        if (pass_err != ERR_ABRT && conn->state == state)
+        {
+            state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_RX_BUSY;
+        }
+        if (pass_err != ERR_OK)
+        {
+            return;
+        }
+    }
+    if (state->rx_app == NULL)
+    {
+        (void)altcp_tls_ce_handle_rx_appldata(conn, state);
+    }
 }
 
 static err_t
@@ -2511,6 +2624,10 @@ altcp_tls_ce_write(struct altcp_pcb *conn, const void *dataptr, u16_t len, u8_t 
     if (!tls_update_write_keys_if_needed(&state->tls_ctx))
     {
         ERROR_CODE(-ERR_MEM);
+        return ERR_MEM;
+    }
+    if ((size_t)altcp_sndbuf(conn->inner_conn) < (size_t)len + 22u)
+    {
         return ERR_MEM;
     }
 

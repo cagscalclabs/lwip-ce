@@ -47,9 +47,12 @@
 
 #define ETH_USB_MAX_RETRIES 5
 #define ETH_DO_RESTART_ON_ERROR true
+static uint8_t ifnums_used = 0;
 static bool eth_driver_shutting_down = false;
 
 static bool device_dtr;
+/* The bridge's Wi-Fi MAC, kept until the netif exists to take it. */
+static bool device_mac_valid;
 
 static void log_usb_transfer_status(usb_transfer_status_t status)
 {
@@ -274,6 +277,7 @@ static void eth_cleanup_failed_init(usb_device_t device,
             {
                 netif_set_down(&dev->iface);
             }
+            ifnums_used &= ~(1 << dev->ifslot);
             netif_remove(&dev->iface);
         }
         eth_free_device_storage(dev);
@@ -672,6 +676,7 @@ void eth_finish_shutdown(void)
         dev->shutting_down = true;
         dev->rx_transfer_active = false;
         usb_fn.set_device_data(dev->device, NULL);
+        ifnums_used &= ~(1 << dev->ifslot);
         netif_remove(netif);
         /* Cancels any pending drain timer, destroys the ring, frees dev. */
         eth_free_device_storage(dev);
@@ -694,6 +699,7 @@ void eth_reset_shutdown(void)
 {
     eth_driver_shutting_down = false;
     device_dtr = false;
+    device_mac_valid = false;
 }
 
 /// UTF-16 -> hex conversion
@@ -1389,10 +1395,6 @@ static void eth_link_callback(struct netif *netif)
         eth_schedule_rx_for_netifs();
         eth_promote_default_if_needed(netif);
         eth_arm_dhcp_once(dev);
-        /* pcap_apply_config() re-reads pcap_enabled itself and is a no-op on
-         * every other netif, so this stays correct even though it touches
-         * more than just `netif`. */
-        pcap_apply_config();
     }
     else
     {
@@ -1536,6 +1538,19 @@ static err_t eth_netif_init(struct netif *netif)
 static bool eth_register_netif(eth_device_t *eth, bool *netif_registered,
                                bool *device_data_set, bool *rx_ring_created)
 {
+    uint8_t ifnum_assigned;
+
+    for (ifnum_assigned = 0; ifnum_assigned < 8; ifnum_assigned++)
+        if (!(ifnums_used & (1u << ifnum_assigned)))
+            break;
+    if (ifnum_assigned == 8)
+    {
+        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_WARNING,
+                    ("WARNING, device=%p, if_slots full", eth->device));
+        return false;
+    }
+    eth->ifslot = ifnum_assigned;
+
     {
         struct netif *iface = &eth->iface;
         // add to lwIP list of active netifs (save pointer to eth_device_t too)
@@ -1557,6 +1572,7 @@ static bool eth_register_netif(eth_device_t *eth, bool *netif_registered,
         netif_create_ip6_linklocal_address(iface, 1);
         iface->ip6_autoconfig_enabled = 1;
 
+        ifnums_used |= 1 << ifnum_assigned;                         // set flag marking the ifnum used
         netif_set_hostname(iface, lwip_app_config_get()->hostname); // set hostname from config
         LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                     ("NEW, netif=%c%c%u <- device=%p", iface->name[0], iface->name[1], iface->num, eth->device));
@@ -1616,6 +1632,13 @@ static bool init_ethernet_usb_device(usb_device_t device)
 {
     if (eth_driver_shutting_down)
     {
+        return false;
+    }
+
+    if (ifnums_used == 0b11111111)
+    {
+        LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_LEVEL_WARNING,
+                    ("WARNING, device=%p, if_slots full", device));
         return false;
     }
 
@@ -1982,8 +2005,10 @@ static usb_error_t device_mac_received(__attribute__((unused)) usb_endpoint_t en
     usb_device_t host = usb_fn.find_device(NULL, NULL, USB_SKIP_HUBS);
     eth_device_t *eth = host ? (eth_device_t *)usb_fn.get_device_data(host) : NULL;
 
-    if (status != USB_TRANSFER_COMPLETED || transferred != sizeof device_mac || !eth ||
-        eth_is_shutting_down(eth))
+    if (status != USB_TRANSFER_COMPLETED || transferred != sizeof device_mac)
+        return USB_SUCCESS;
+    device_mac_valid = true;
+    if (!eth || eth_is_shutting_down(eth))
         return USB_SUCCESS;
 
     bool link_up = netif_is_link_up(&eth->iface);
@@ -2062,11 +2087,18 @@ static void device_attach(void)
         goto fail;
     usb_fn.set_endpoint_flags(eth->tx.endpoint, USB_AUTO_TERMINATE);
 
-    rmac[0] = (uint24_t)(random() & 0xFFFFFF);
-    rmac[1] = (uint24_t)(random() & 0xFFFFFF);
-    memcpy(&eth->hwaddr[0], rmac, 6);
-    eth->hwaddr[0] &= 0xFE;
-    eth->hwaddr[0] |= 0x02;
+    if (device_mac_valid)
+    {
+        memcpy(eth->hwaddr, device_mac, sizeof device_mac);
+    }
+    else
+    {
+        rmac[0] = (uint24_t)(random() & 0xFFFFFF);
+        rmac[1] = (uint24_t)(random() & 0xFFFFFF);
+        memcpy(&eth->hwaddr[0], rmac, 6);
+        eth->hwaddr[0] &= 0xFE;
+        eth->hwaddr[0] |= 0x02;
+    }
 
     if (!eth_register_netif(eth, &netif_registered, &device_data_set, &rx_ring_created))
         goto fail;
@@ -2172,6 +2204,7 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
     case USB_DEVICE_DISABLED_EVENT:
     {
         device_dtr = false;
+        device_mac_valid = false;
         eth_device_t *eth_device = (eth_device_t *)usb_fn.get_device_data(usb_device);
         if (eth_device)
         {
@@ -2242,6 +2275,7 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
         }
         if (eth_device)
         {
+            ifnums_used &= ~(1 << eth_device->ifslot);
             netif_remove(&eth_device->iface);
             /* Unbind from the USB device so no later event re-finds this
              * (about-to-be-reaped) struct, then defer the free: enqueue on the
@@ -2329,20 +2363,7 @@ struct netif *eth_device_netif(void)
 
 uint8_t eth_get_interfaces(void)
 {
-    uint8_t interfaces = 0;
-    struct netif *netif;
-
-    NETIF_FOREACH(netif)
-    {
-        /* Compatibility bitmap: lwIP owns num and guarantees its global
-         * uniqueness. Numbers beyond the legacy eight-bit view are omitted;
-         * callers needing every interface should use netif_find/NETIF_FOREACH. */
-        if (eth_is_eth_netif(netif) && netif->num < 8)
-        {
-            interfaces |= (uint8_t)(1u << netif->num);
-        }
-    }
-    return interfaces;
+    return ifnums_used;
 }
 
 bool netif_is_link_error(const struct netif *netif)

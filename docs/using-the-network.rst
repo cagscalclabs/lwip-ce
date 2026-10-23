@@ -354,6 +354,8 @@ immediately. There is no pbuf ownership or ``recved`` call in the socket API.
    Use this to check before calling ``lwip_socket_read()`` to avoid a
    zero-length read.
 
+   On a UDP socket this is the size of the next datagram instead.
+
    :param socket: A connected socket handle.
    :returns: Number of bytes available to read; ``0`` if the ring is empty.
 
@@ -362,6 +364,9 @@ immediately. There is no pbuf ownership or ``recved`` call in the socket API.
    Read up to ``len`` bytes from the socket's RX ring into ``buf``. Never
    blocks — returns immediately with however many bytes are available, clamped
    to ``len``. Returns ``0`` if the ring is empty.
+
+   On a UDP socket each call returns one datagram. If ``len`` is smaller than
+   the datagram, the rest of that datagram is discarded.
 
    :param socket: A connected socket handle.
    :param buf: Caller-supplied buffer to receive the data.
@@ -373,13 +378,21 @@ immediately. There is no pbuf ownership or ``recved`` call in the socket API.
    Send ``len`` bytes from ``buf`` over the socket. The socket must be in
    ``LWIP_STATUS_CONNECTED`` state.
 
+   A write never sends part of the buffer: either all ``len`` bytes are queued
+   or none are. ``LWIP_ERR_MEM`` means the send buffer has no room right now;
+   retry after a ``LWIP_SOCKET_IO_WRITABLE`` event. A single write can be at
+   most 65535 bytes, and at most ``TCP_SND_BUF`` (4096) bytes on
+   ``LWIP_SOCKET_TCP`` and ``LWIP_SOCKET_ALTCP`` sockets; split larger data
+   into several writes. On a UDP socket each write sends one datagram.
+
    :param socket: A connected socket handle.
    :param buf: Data to send.
    :param len: Number of bytes to send. Must be greater than ``0``.
-   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_CLOSED`` if the connection is
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_MEM`` if the send buffer is
+      currently full, ``LWIP_ERR_CLOSED`` if the connection is
       closing or already closed, ``LWIP_ERR_STATE`` if the socket is not yet
-      connected, ``LWIP_ERR_ARG`` if any argument is ``NULL`` or ``len`` is
-      ``0``.
+      connected, ``LWIP_ERR_ARG`` if any argument is ``NULL``, ``len`` is
+      ``0``, or ``len`` exceeds the limits above.
 
 Closing/Destroying a Socket
 -----------------------------
@@ -390,20 +403,20 @@ or an immediate abort.
 
 .. c:function:: lwip_error_t lwip_socket_close(struct lwip_socket *socket)
 
-   Initiate an orderly TCP close. Sends a FIN to the remote, then waits (up to
-   an internal timeout) for the remote to ACK and send its own FIN. The socket
-   transitions to ``LWIP_STATUS_CLOSING`` and then to ``LWIP_STATUS_CLOSED``
-   once the exchange completes. On timeout, the PCB is hard-aborted internally
-   and ``LWIP_ERR_CLOSED`` is returned, but the handle is still safe to
-   destroy.
+   Initiate an orderly TCP close and return immediately. A FIN is queued
+   to the remote and the socket goes to ``LWIP_STATUS_CLOSED``; the stack
+   finishes the FIN exchange in the background while you keep calling
+   ``lwip_service_events()``, and drops the connection on its own if the
+   remote never closes its side. Queued outgoing data is still delivered. The
+   handle is safe to destroy right after this call.
 
    For UDP sockets, ``lwip_socket_close()`` simply removes the PCB and sets
    the status to ``LWIP_STATUS_CLOSED`` immediately.
 
    :param socket: A connected (or connecting) socket handle.
-   :returns: ``LWIP_OK`` on clean close, ``LWIP_ERR_CLOSED`` if the ACK wait
-      timed out, ``LWIP_ERR_MEM`` if the FIN could not be enqueued (retry),
-      ``LWIP_ERR_ARG`` if ``socket`` is ``NULL``.
+   :returns: ``LWIP_OK`` once the close is queued, ``LWIP_ERR_MEM`` if the
+      FIN could not be enqueued (retry), ``LWIP_ERR_ARG`` if ``socket`` is
+      ``NULL``.
 
 .. c:function:: lwip_error_t lwip_socket_shutdown(struct lwip_socket *socket)
 

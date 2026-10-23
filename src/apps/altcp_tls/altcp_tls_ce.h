@@ -45,7 +45,7 @@ typedef struct altcp_tls_ce_state {
     int overhead_bytes_adjust;               /* TLS overhead tracking */
     size_t rx_throttle_pending;              /* Pending bytes to recved */
     struct altcp_tls_ce_state *next;         /* Linked list of states */
-    u8_t flags;                              /* State flags */
+    u16_t flags;                             /* State flags */
     /* Pending ClientHello record awaiting a free lower send buffer. Generated
      * once (transcript hash is updated at generation, so it must NOT be
      * regenerated on retry); the write is retried on each recv/poll tick until
@@ -67,9 +67,12 @@ typedef struct altcp_tls_ce_state {
 /* tls_handshake_init has been called successfully for this state. Set once;
  * cleared on reset. Guards the deferred-init path in send_client_hello. */
 #define ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED   0x20
+/* Plaintext is being delivered to the application. An app recv callback may
+ * call altcp_recved(), which must not re-enter delivery. */
+#define ALTCP_TLS_CE_FLAGS_RX_BUSY           0x40
 /* The handshake is waiting on the Wi-Fi bridge (wireless/crypto.h). */
-#define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x40
-#define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x80
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x80
+#define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x100
 
 /**
  * @brief TLS configuration for CE implementation

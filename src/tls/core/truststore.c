@@ -195,6 +195,12 @@ tls_truststore_status_t tls_truststore_init(void)
     return verified ? TLS_STORE_OK : TLS_STORE_SIG_INVALID;
 }
 
+void tls_truststore_prepare(void)
+{
+    if (tls_ctx.truststore.status == TLS_STORE_UNCHECKED)
+        tls_truststore_init();
+}
+
 static bool tls_truststore_entry_current(const struct tls_truststore_entry *entry)
 {
     uint32_t now = lwip_sntp_get_unix_time();
@@ -234,6 +240,7 @@ static bool tls_truststore_open_db(uint8_t **db_out, uint16_t *db_len_out,
 
 bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **result)
 {
+    tls_truststore_prepare();
     if (ski == NULL || !truststore_valid_for_session)
         return false;
 
@@ -267,11 +274,12 @@ bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **res
     return found;
 }
 
-bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
-                                      struct tls_truststore_entry **result)
+bool tls_truststore_next_by_subject(const uint8_t *subject, size_t subject_len,
+                                    struct tls_truststore_entry **result, uint16_t *cursor)
 {
+    tls_truststore_prepare();
     if (subject == NULL || subject_len == 0 || subject_len > TLS_TRUSTSTORE_SUBJECT_LEN ||
-        !truststore_valid_for_session)
+        cursor == NULL || !truststore_valid_for_session)
         return false;
 
     uint8_t *db;
@@ -282,7 +290,7 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
         return false;
 
     bool found = false;
-    uint16_t count = 0, offset = 0;
+    uint16_t offset = *cursor;
     while (offset + sizeof(struct tls_truststore_entry) <= db_len)
     {
         struct tls_truststore_entry *entry =
@@ -290,6 +298,7 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
         if (entry->len < sizeof(struct tls_truststore_entry) ||
             offset + entry->len > db_len)
             break;
+        offset += (uint16_t)entry->len;
         /* Match: subject bytes compare equal, rest of entry->subject is zero-padding */
         size_t entry_subj_len = 0;
         while (entry_subj_len < TLS_TRUSTSTORE_SUBJECT_LEN && entry->subject[entry_subj_len])
@@ -302,9 +311,16 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
             found = true;
             break;
         }
-        if (++count > header->entry_count) break;
-        offset += (uint16_t)entry->len;
     }
+    *cursor = offset;
     file_fn.ti_close(h);
     return found;
+}
+
+bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
+                                      struct tls_truststore_entry **result)
+{
+    uint16_t cursor = 0;
+
+    return tls_truststore_next_by_subject(subject, subject_len, result, &cursor);
 }

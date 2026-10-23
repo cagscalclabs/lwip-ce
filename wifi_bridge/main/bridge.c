@@ -21,7 +21,10 @@
 #define USB_MPS 64
 #define USB_BUFFER 2048
 #define TX_QUEUE_LEN 32
-#define TX_TIMEOUT_MS 1000
+/* Long enough to ride out the calculator computing crypto on its own, which
+ * can keep it from reading USB for seconds; a dropped frame costs TCP a
+ * retransmission timeout instead. */
+#define TX_TIMEOUT_MS 5000
 #define CDC_SET_NET_ADDRESS 0x82
 
 typedef struct {
@@ -45,6 +48,28 @@ static void drop_queued(void)
 }
 
 #ifdef CONFIG_BRIDGE_LOG_TRAFFIC
+static volatile uint32_t s_wifi_rx_frames;
+static volatile uint32_t s_wifi_tx_frames;
+static volatile uint32_t s_wifi_tx_errors;
+
+/* Every 5 s while frames move, so a stalled direction shows up as zero. */
+static void stats_task(void *arg)
+{
+    uint32_t rx = 0, tx = 0, err = 0;
+
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (s_wifi_rx_frames != rx || s_wifi_tx_frames != tx || s_wifi_tx_errors != err) {
+            ESP_LOGI(TAG, "wifi rx +%lu tx +%lu tx errors +%lu", (unsigned long)(s_wifi_rx_frames - rx),
+                     (unsigned long)(s_wifi_tx_frames - tx), (unsigned long)(s_wifi_tx_errors - err));
+            rx = s_wifi_rx_frames;
+            tx = s_wifi_tx_frames;
+            err = s_wifi_tx_errors;
+        }
+    }
+}
+
 static void log_ping(const uint8_t *frame, size_t length)
 {
     size_t ihl;
@@ -59,31 +84,62 @@ static void log_ping(const uint8_t *frame, size_t length)
     }
 }
 
-static void log_lease(const uint8_t *frame, size_t length)
+/* Logs DNS queries and answers either way, with the query ID. */
+static void log_dns(const char *dir, const uint8_t *frame, size_t length)
 {
     size_t ihl;
+    const uint8_t *udp;
+
+    if (length < 34 || frame[12] != 0x08 || frame[13] != 0x00 || frame[23] != 17) {
+        return;
+    }
+    ihl = (size_t)(frame[14] & 0x0F) * 4;
+    udp = frame + 14 + ihl;
+    if (length < 14 + ihl + 8 + 12 ||
+        (!(udp[0] == 0 && udp[1] == 53) && !(udp[2] == 0 && udp[3] == 53))) {
+        return;
+    }
+    ESP_LOGI(TAG, "dns %s id %02x%02x %u bytes %u.%u.%u.%u -> %u.%u.%u.%u", dir, udp[8], udp[9],
+             (unsigned)length, frame[26], frame[27], frame[28], frame[29], frame[30], frame[31],
+             frame[32], frame[33]);
+}
+
+/* Logs every DHCP message either way, with the Ethernet source MAC: the
+ * calculator must send from the bridge's own Wi-Fi MAC. */
+static void log_dhcp(const char *dir, const uint8_t *frame, size_t length)
+{
+    static const char *const names[] = {"?", "discover", "offer", "request", "decline",
+                                        "ack", "nak", "release", "inform"};
+    size_t ihl;
     const uint8_t *dhcp;
+    uint8_t type = 0;
 
     if (length < 34 || frame[12] != 0x08 || frame[13] != 0x00 || frame[23] != 17) {
         return;
     }
     ihl = (size_t)(frame[14] & 0x0F) * 4;
     dhcp = frame + 14 + ihl + 8;
-    if (length < 14 + ihl + 8 + 244 || frame[14 + ihl + 2] != 0 || frame[14 + ihl + 3] != 68 ||
-        dhcp[0] != 2) {
+    if (length < 14 + ihl + 8 + 244 ||
+        !((frame[14 + ihl + 2] == 0 && frame[14 + ihl + 3] == 68) ||
+          (frame[14 + ihl + 2] == 0 && frame[14 + ihl + 3] == 67))) {
         return;
     }
     for (size_t i = 240; i + 2 < length - (size_t)(dhcp - frame) && dhcp[i] != 255;
          i += dhcp[i] ? (size_t)dhcp[i + 1] + 2 : 1) {
-        if (dhcp[i] == 53 && dhcp[i + 2] == 5) {
-            ESP_LOGI(TAG, "calculator leased %u.%u.%u.%u", dhcp[16], dhcp[17], dhcp[18], dhcp[19]);
-            return;
+        if (dhcp[i] == 53) {
+            type = dhcp[i + 2];
+            break;
         }
     }
+    ESP_LOGI(TAG, "dhcp %s %s src %02x:%02x:%02x:%02x:%02x:%02x yiaddr %u.%u.%u.%u", dir,
+             names[type < 9 ? type : 0], frame[6], frame[7], frame[8], frame[9], frame[10], frame[11],
+             dhcp[16], dhcp[17], dhcp[18], dhcp[19]);
 }
+
 #else
 #define log_ping(frame, length)
-#define log_lease(frame, length)
+#define log_dhcp(dir, frame, length)
+#define log_dns(dir, frame, length)
 #endif
 
 void bridge_send(const uint8_t *data, size_t length)
@@ -112,10 +168,15 @@ static esp_err_t wifi_rx(void *buffer, uint16_t length, void *eb)
 {
     const uint8_t *frame = buffer;
 
+#ifdef CONFIG_BRIDGE_LOG_TRAFFIC
+    s_wifi_rx_frames++;
+#endif
+
     /* Control frames only ever come from this bridge; one from the air is forged. */
     if (s_cdc != NULL && length >= FRAME_MIN &&
         ((frame[12] << 8) | frame[13]) != CTL_ETHERTYPE) {
-        log_lease(buffer, length);
+        log_dhcp("to calculator", buffer, length);
+        log_dns("to calculator", buffer, length);
         bridge_send(buffer, length);
     }
     esp_wifi_internal_free_rx_buffer(eb);
@@ -137,9 +198,23 @@ static bool cdc_data(const uint8_t *data, size_t length, void *arg)
     }
 
     log_ping(data, length);
+    log_dhcp("from calculator", data, length);
+    log_dns("from calculator", data, length);
     if (s_wifi_up) {
+#ifdef CONFIG_BRIDGE_LOG_TRAFFIC
+        s_wifi_tx_frames++;
+        if (esp_wifi_internal_tx(WIFI_IF_STA, (void *)data, (uint16_t)length) != ESP_OK) {
+            s_wifi_tx_errors++;
+        }
+#else
         esp_wifi_internal_tx(WIFI_IF_STA, (void *)data, (uint16_t)length);
+#endif
     }
+#ifdef CONFIG_BRIDGE_LOG_TRAFFIC
+    else {
+        ESP_LOGW(TAG, "dropped %u byte frame from calculator: Wi-Fi down", (unsigned)length);
+    }
+#endif
 
     return true;
 }
@@ -323,6 +398,9 @@ esp_err_t bridge_init(void)
 
     xTaskCreatePinnedToCore(attach_task, "usb_attach", 4096, NULL, 9, NULL, 0);
     xTaskCreatePinnedToCore(tx_task, "usb_tx", 4096, NULL, 10, NULL, 0);
+#ifdef CONFIG_BRIDGE_LOG_TRAFFIC
+    xTaskCreate(stats_task, "bridge_stats", 3072, NULL, 2, NULL);
+#endif
 
     return ESP_OK;
 }

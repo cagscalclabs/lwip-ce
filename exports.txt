@@ -454,6 +454,7 @@ tls_random_bytes_ex
 tls_rng_status
 tls_rng_available_strength
 tls_rng_last_failure
+lwip_tls_rng_wait_for_ready
 lwip_wifi_available
 lwip_wifi_get_state
 lwip_wifi_list_profiles

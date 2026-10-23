@@ -81,6 +81,14 @@ int main(void)
 
     if (!lwip_start()) return 1;
 
+    /* OAEP encoding draws a random seed. */
+    if (!lwip_tls_rng_wait_for_ready(10000u))
+    {
+        printf("RNG setup timed out");
+        os_GetKey();
+        return 1;
+    }
+
     /* Run tests */
     bool test1 = test_oaep_encode();
     bool test2 = test_oaep_decode();

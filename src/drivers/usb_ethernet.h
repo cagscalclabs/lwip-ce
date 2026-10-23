@@ -169,6 +169,7 @@ typedef struct _eth_device_t
     bool shutting_down;
     bool dhcp_auto_started;
     bool device_mode;
+    uint8_t ifslot;
     /* Packet-capture state. pcap.buf is NULL when capture is off; non-NULL is
      * what gates capture — there is no separate enable flag. Allocated by
      * pcap_enable_on_netif, released by pcap_disable_on_netif. */
@@ -343,12 +344,10 @@ struct usb_configurator {
 uint32_t eth_last_rx_activity_ms(void);
 
 /// @brief Polls for the registration status of interfaces.
-/// @return A bitmap indicating what NETIFs are registered (netif->num)
-/// @note Example: a return value of 0b00001101 indicates that en0, en2, and en3 currently exist.
-/// @deprecated This eight-bit ABI compatibility view cannot represent every
-///             lwIP interface number. Use netif_find() for a known interface
-///             or NETIF_FOREACH over lwIP's existing netif_list to enumerate
-///             all Ethernet interfaces.
+/// @return A bitmap indicating which interface slots are in use
+/// @note Example: a return value of 0b00001101 indicates that slots 0, 2, and 3 are in use.
+/// @note Slots are independent of netif->num, which lwIP assigns uniquely across all netifs.
+/// @note Up to 8 simultaneous interfaces allowed. Any more causes device init to fail.
 uint8_t eth_get_interfaces(void);
 
 /// @brief Reports whether an ethernet netif has been brought down by an

@@ -134,20 +134,33 @@ static uint8_t pick_profile(void)
 
 /* PEAP or TTLS, whichever the network offers, with the username as both the
  * outer identity and the inner MSCHAPv2 name. */
+/* Each call is an RPC on boards whose Wi-Fi runs on a co-processor (P4), and
+ * firmware there may not implement them: each then times out after seconds.
+ * So nothing is called for ordinary networks unless Enterprise was on, and
+ * the first failure stops the rest. */
 static void set_enterprise(const char *username, const char *password, bool check_server)
 {
+    static bool enabled;
+    int user_len = username ? (int)strlen(username) : 0;
+
     if (username == NULL) {
-        esp_wifi_sta_enterprise_disable();
-        esp_eap_client_clear_identity();
-        esp_eap_client_clear_username();
-        esp_eap_client_clear_password();
+        if (enabled) {
+            enabled = false;
+            esp_wifi_sta_enterprise_disable();
+            esp_eap_client_clear_identity();
+            esp_eap_client_clear_username();
+            esp_eap_client_clear_password();
+        }
         return;
     }
-    esp_eap_client_set_identity((const unsigned char *)username, (int)strlen(username));
-    esp_eap_client_set_username((const unsigned char *)username, (int)strlen(username));
-    esp_eap_client_set_password((const unsigned char *)password, (int)strlen(password));
-    esp_eap_client_use_default_cert_bundle(check_server);
-    esp_wifi_sta_enterprise_enable();
+    enabled = true;
+    if (esp_eap_client_set_identity((const unsigned char *)username, user_len) != ESP_OK ||
+        esp_eap_client_set_username((const unsigned char *)username, user_len) != ESP_OK ||
+        esp_eap_client_set_password((const unsigned char *)password, (int)strlen(password)) != ESP_OK ||
+        esp_eap_client_use_default_cert_bundle(check_server) != ESP_OK ||
+        esp_wifi_sta_enterprise_enable() != ESP_OK) {
+        ESP_LOGW(TAG, "Enterprise sign-in is not available on this board");
+    }
 }
 
 static void join(uint8_t slot)

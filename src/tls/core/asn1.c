@@ -30,10 +30,18 @@ static bool tls_asn1_parse_len(const uint8_t *p, const uint8_t *end, size_t *len
     {
         return false;
     }
+    if (p[1] == 0)
+    {
+        return false;
+    }
 
     for (size_t i = 0; i < n; i++)
     {
         value = (value << 8) | (size_t)p[1 + i];
+    }
+    if (value < 0x80)
+    {
+        return false;
     }
 
     *len = value;

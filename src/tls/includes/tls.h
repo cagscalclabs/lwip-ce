@@ -55,11 +55,18 @@ void tls_psk_cache_put(const char *hostname, uint8_t psk_type,
                        uint32_t ticket_lifetime);
 
 /**
- * Look up a non-expired PSK identity cached for `hostname`.
+ * Look up a non-expired PSK identity cached for `hostname`. Does not remove
+ * the entry: tickets are single use (RFC 8446 §8.1), so the caller must call
+ * tls_psk_cache_discard once the ticket has actually been sent in a
+ * ClientHello. A successful resumption caches the fresh ticket the server
+ * issues.
  * @return true and fills psk_type/psk/identity on a live hit, false otherwise.
  */
 bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
                        uint8_t *psk, struct tls_psk_identity *identity);
+
+/** Securely erase any cached ticket for `hostname` (after it was sent). */
+void tls_psk_cache_discard(const char *hostname);
 
 /**
  * Allocate a TLS-owned PBUF_CUSTOM pbuf of `len` payload bytes.

@@ -165,7 +165,7 @@ bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
         }
         if (tls_psk_cache_entry_expired(e, now))
         {
-            e->in_use = false;
+            tls_secure_memzero(e, sizeof(*e));
             return false;
         }
         if (psk_type)
@@ -194,6 +194,22 @@ bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
         return true;
     }
     return false;
+}
+
+void tls_psk_cache_discard(const char *hostname)
+{
+    if (!g_psk_cache || !hostname)
+    {
+        return;
+    }
+    for (unsigned i = 0; i < TLS_PSK_CACHE_MAX_ENTRIES; i++)
+    {
+        struct tls_psk_cache_entry *e = &g_psk_cache[i];
+        if (e->in_use && strcmp(e->hostname, hostname) == 0)
+        {
+            tls_secure_memzero(e, sizeof(*e));
+        }
+    }
 }
 
 /* Load the persisted cache from flash into g_psk_cache, dropping any entry
@@ -307,14 +323,7 @@ bool tls_init(void)
     tls_rng_start();
 
     tls_ctx.network_up = true;
-    tls_ctx.truststore.status = tls_truststore_init();
-    if (tls_ctx.truststore.status != TLS_STORE_OK &&
-        tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
-    {
-        tls_rng_cleanup();
-        tls_ctx.network_up = false;
-        return false;
-    }
+    tls_ctx.truststore.status = TLS_STORE_UNCHECKED;
     tls_psk_cache_alloc();
     tls_psk_cache_load();
 

@@ -33,6 +33,14 @@ static void mem_effective_pressure_update(void);
 
 #define MEM_SHRINK_HOLD_DEFAULT 1u
 
+enum {
+    MEM_PRESSURE_MILD_PCT = 70,
+    MEM_PRESSURE_HIGH_PCT = 85,
+    MEM_PRESSURE_SEVERE_PCT = 90,
+    MEM_PRESSURE_CRITICAL_PCT = 95,
+    MEM_PRESSURE_RELIEF_MARGIN = 10
+};
+
 struct mem_global_config
 {
     size_t max_heap;
@@ -401,8 +409,21 @@ static void mem_global_pressure_update(void)
         mem_effective_pressure_update();
         return;
     }
-    uint8_t usage_pct = (uint8_t)((g_mem_cfg.heap_used * 100u) / limit);
-    g_global_pressure_level = mem_pressure_level_from_usage(usage_pct);
+    static size_t thr_limit;
+    static size_t thr[4];
+    static const uint8_t pct[4] = {MEM_PRESSURE_MILD_PCT, MEM_PRESSURE_HIGH_PCT,
+                                   MEM_PRESSURE_SEVERE_PCT, MEM_PRESSURE_CRITICAL_PCT};
+    if (limit != thr_limit)
+    {
+        for (uint8_t i = 0; i < 4; i++)
+            thr[i] = (size_t)(((uint32_t)limit * (pct[i] + 1u) + 99u) / 100u);
+        thr_limit = limit;
+    }
+    size_t used = g_mem_cfg.heap_used;
+    g_global_pressure_level = used >= thr[3] ? MEM_PRESSURE_CRITICAL :
+                              used >= thr[2] ? MEM_PRESSURE_SEVERE :
+                              used >= thr[1] ? MEM_PRESSURE_HIGH :
+                              used >= thr[0] ? MEM_PRESSURE_MILD : MEM_PRESSURE_NONE;
     mem_effective_pressure_update();
 }
 
@@ -581,14 +602,6 @@ static uint8_t mem_buffer_usage_pct(const struct mem_buffer *rb, size_t used_byt
     uint8_t buf_pct = (uint8_t)((used_bytes * 100u) / limit);
     return buf_pct;
 }
-
-enum {
-    MEM_PRESSURE_MILD_PCT = 70,
-    MEM_PRESSURE_HIGH_PCT = 85,
-    MEM_PRESSURE_SEVERE_PCT = 90,
-    MEM_PRESSURE_CRITICAL_PCT = 95,
-    MEM_PRESSURE_RELIEF_MARGIN = 10
-};
 
 static enum mem_pressure_level mem_pressure_level_from_usage(uint8_t usage_pct)
 {

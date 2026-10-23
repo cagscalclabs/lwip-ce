@@ -100,15 +100,21 @@ altcp_ws_config_t *altcp_ws_create_config(const char *host,
                                            const char *path,
                                            const char *subprotocol)
 {
-    size_t host_size = host ? strlen(host) + 1 : 0;
-    /* Keep our own copy of the host: the socket layer frees its string as
-     * soon as the connect has started. */
-    altcp_ws_config_t *conf = (altcp_ws_config_t *)mem_malloc(sizeof(*conf) + host_size);
+    if (!path)
+        path = "/";
+    size_t host_len = host ? strlen(host) + 1 : 0;
+    size_t path_len = strlen(path) + 1;
+    size_t sub_len  = subprotocol ? strlen(subprotocol) + 1 : 0;
+    altcp_ws_config_t *conf = (altcp_ws_config_t *)mem_malloc(
+        sizeof(*conf) + host_len + path_len + sub_len);
     if (!conf)
         return NULL;
-    conf->host        = host ? memcpy(conf + 1, host, host_size) : NULL;
-    conf->path        = path ? path : "/";
-    conf->subprotocol = subprotocol;
+    char *str = (char *)(conf + 1);
+    conf->host = host ? memcpy(str, host, host_len) : NULL;
+    str += host_len;
+    conf->path = memcpy(str, path, path_len);
+    str += path_len;
+    conf->subprotocol = subprotocol ? memcpy(str, subprotocol, sub_len) : NULL;
     return conf;
 }
 
