@@ -72,7 +72,7 @@ def execute(length):
             if len(parts) == 1 or conditions[parts[0]]:
                 pc = labels[parts[-1]]
         elif op == 'call':
-            if args == '_tls_entropy_gather256':
+            if args == '_tls_entropy_gather192':
                 calls += 1
                 regs.update(hl=0x123456, bc=0xabcdef, de=0x987654)
                 slots['(_sprng_random_last_ok)'] = 1
@@ -81,7 +81,7 @@ def execute(length):
         elif op == 'ldir':
             count = regs['bc'] or 0x1000000
             if regs['hl'] == 0x100:
-                assert 1 <= count <= 32, (length, 'source overread', count)
+                assert 1 <= count <= 24, (length, 'source overread', count)
                 assert regs['de'] == 0x2000 + copied
                 copied += count
                 assert copied <= length, (length, 'destination overwrite', copied)
@@ -96,7 +96,7 @@ def execute(length):
             assert args == 'ix'
         elif op == 'ret':
             assert copied == length
-            assert calls == (length + 31) // 32
+            assert calls == (length + 23) // 24
             assert regs['hl'] == 0x2000
             return
         else:
@@ -105,4 +105,4 @@ def execute(length):
 
 for size in [*range(257), 511, 512, 513, 4095, 4096, 4097]:
     execute(size)
-print('263 RNG length cases passed: bounded 256-bit copies, termination, return pointer')
+print('263 RNG length cases passed: bounded 192-bit copies, termination, return pointer')

@@ -1,0 +1,1128 @@
+{
+    "capture_format": "cagscalclabs-ctstats-v3",
+    "model": "TI-84 Plus CE / PRE-A",
+    "profiler": "lwIP-CE tests/profiling/tls_timing",
+    "configuration": {
+        "c": 6,
+        "c_rig": 4,
+        "sigma_scale": 14826
+    },
+    "summary": {
+        "primitives": 15,
+        "samples_per_class": 32,
+        "standard_passes": 15,
+        "standard_failures": 0,
+        "rigorous_passes": 15,
+        "rigorous_failures": 0
+    },
+    "primitives": [
+        {
+            "name": "BYTES",
+            "reps": 8,
+            "samples": 32,
+            "robust": {
+                "median": 52,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 52,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 52,
+                    "median": 52,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "SHA256",
+            "reps": 8,
+            "samples": 32,
+            "robust": {
+                "median": 5430,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 5430,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 5430,
+                    "median": 5430,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 5430,
+                    "median": 5431,
+                    "trend": "+",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 5431,
+                    "median": 5431,
+                    "trend": "+",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 5430,
+                    "median": 5431,
+                    "trend": "+",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 5430,
+                    "median": 5430,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 5430,
+                    "median": 5431,
+                    "trend": "+",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 5431,
+                    "median": 5431,
+                    "trend": "+",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 5430,
+                    "median": 5431,
+                    "trend": "+",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "HMAC",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 5447,
+                "mad": 0,
+                "sigma": 0,
+                "c": 6,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 5447,
+                "mad": 0,
+                "sigma": 0,
+                "c": 4,
+                "accept": 4,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 5447,
+                    "median": 5447,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "HKDF",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 12024,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 12024,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 12024,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 12023,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 12023,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 12024,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 12024,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 12023,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 12023,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 12024,
+                    "median": 12024,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "PBKDF2",
+            "reps": 2,
+            "samples": 32,
+            "robust": {
+                "median": 45515,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 45515,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 45515,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 45515,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 45514,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 45515,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 45515,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 45515,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 45514,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 45515,
+                    "median": 45515,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "AESGCM-E",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 1484,
+                "mad": 0,
+                "sigma": 0,
+                "c": 6,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 1484,
+                "mad": 0,
+                "sigma": 0,
+                "c": 4,
+                "accept": 4,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 1483,
+                    "median": 1484,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 1482,
+                    "median": 1482,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 1482,
+                    "median": 1483,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 1482,
+                    "median": 1483,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 1483,
+                    "median": 1484,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 1482,
+                    "median": 1482,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 1482,
+                    "median": 1483,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 1482,
+                    "median": 1483,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "AESGCM-DV",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 2383,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 2383,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 2382,
+                    "median": 2383,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "AESCBC-E",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 373,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 373,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 372,
+                    "median": 373,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "AESCBC-D",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 375,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 375,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 375,
+                    "median": 375,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "AESCCM-E",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 1302,
+                "mad": 0,
+                "sigma": 0,
+                "c": 6,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 1302,
+                "mad": 0,
+                "sigma": 0,
+                "c": 4,
+                "accept": 4,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 1301,
+                    "median": 1302,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 1301,
+                    "median": 1302,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 1301,
+                    "median": 1301,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 1301,
+                    "median": 1301,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 1301,
+                    "median": 1302,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 1301,
+                    "median": 1302,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 1301,
+                    "median": 1301,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 1301,
+                    "median": 1301,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "AESCCM-D",
+            "reps": 4,
+            "samples": 32,
+            "robust": {
+                "median": 1305,
+                "mad": 0,
+                "sigma": 0,
+                "c": 6,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 1305,
+                "mad": 0,
+                "sigma": 0,
+                "c": 4,
+                "accept": 4,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 1304,
+                    "median": 1305,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 1304,
+                    "median": 1304,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 1304,
+                    "median": 1304,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 1304,
+                    "median": 1305,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 1304,
+                    "median": 1305,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 1304,
+                    "median": 1304,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 1304,
+                    "median": 1304,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 1304,
+                    "median": 1305,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "X25519",
+            "reps": 2,
+            "samples": 32,
+            "robust": {
+                "median": 271824,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 271824,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 271824,
+                    "median": 271824,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 271823,
+                    "median": 271823,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 271823,
+                    "median": 271824,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 271823,
+                    "median": 271824,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 271824,
+                    "median": 271824,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 271823,
+                    "median": 271823,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 271823,
+                    "median": 271824,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 271823,
+                    "median": 271824,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "P256-KG",
+            "reps": 1,
+            "samples": 32,
+            "robust": {
+                "median": 291811,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 291811,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 291810,
+                    "median": 291811,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 291811,
+                    "median": 291811,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 291811,
+                    "median": 291811,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 291810,
+                    "median": 291810,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 291810,
+                    "median": 291811,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 291811,
+                    "median": 291811,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 291811,
+                    "median": 291811,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 291810,
+                    "median": 291810,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "P256-DH",
+            "reps": 1,
+            "samples": 32,
+            "robust": {
+                "median": 291942,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 291942,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 291941,
+                    "median": 291942,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 291941,
+                    "median": 291942,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 291941,
+                    "median": 291941,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 291941,
+                    "median": 291941,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 291941,
+                    "median": 291942,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 291941,
+                    "median": 291942,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 291941,
+                    "median": 291941,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 291941,
+                    "median": 291941,
+                    "trend": "-",
+                    "over_percent": 0
+                }
+            }
+        },
+        {
+            "name": "P256-SG",
+            "reps": 1,
+            "samples": 32,
+            "robust": {
+                "median": 354875,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 6,
+                "accept": 9,
+                "differential_pass": true
+            },
+            "rigorous": {
+                "median": 354875,
+                "mad": 1,
+                "sigma": 1.4826,
+                "c": 4,
+                "accept": 6,
+                "differential_pass": true
+            },
+            "classes": {
+                "best": {
+                    "mean": 354874,
+                    "median": 354875,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 354873,
+                    "median": 354873,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 354874,
+                    "median": 354874,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 354874,
+                    "median": 354875,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            },
+            "rigorous_classes": {
+                "best": {
+                    "mean": 354874,
+                    "median": 354875,
+                    "trend": "=",
+                    "over_percent": 0
+                },
+                "worst": {
+                    "mean": 354873,
+                    "median": 354873,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "random": {
+                    "mean": 354874,
+                    "median": 354874,
+                    "trend": "-",
+                    "over_percent": 0
+                },
+                "edge": {
+                    "mean": 354874,
+                    "median": 354875,
+                    "trend": "=",
+                    "over_percent": 0
+                }
+            }
+        }
+    ],
+    "capture_id": "8c06acd75831",
+    "captured_at": "2026-10-21T06:42:23+00:00",
+    "collector": {
+        "name": "CagsCalcLabs browser capture",
+        "version": "2",
+        "webtilp_commit": "7fa46d59ab0dc48d26ed306641ecb9eb27761456",
+        "lwip_commit": "d25a0bdb1be726c9cead8dcfa027f417caa1601e",
+        "ctstats_commit": "d25a0bdb1be726c9cead8dcfa027f417caa1601e",
+        "runtime_version": "3.0.0",
+        "library_version_byte": 2,
+        "xtiming_asset_sha256": "875a0c653eac6a84e7b3cd9caec740aaa50651f30d055461f4db6338ef72dbe3",
+        "capture_bundle": "capture-builds"
+    }
+}

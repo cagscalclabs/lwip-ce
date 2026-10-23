@@ -12,10 +12,47 @@
 #include "ip_identity.h"
 #include "key_internal.h"
 #include "../includes/tls.h"
+#include "../includes/crypto_guard.h"
+
+/* P-256 public API forward declarations (assembly in p256.s). */
+bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32],
+                     const uint8_t pub[65]);
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_X509
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
+
+const uint8_t *tls_ecdsa_parse_int(const uint8_t *der, size_t len,
+                                   uint8_t out[32])
+{
+    size_t ilen;
+    const uint8_t *v;
+
+    if (!der || len < 3 || der[0] != 0x02)
+        return NULL;
+    ilen = der[1];
+    /* ilen > 33 also rejects long-form lengths (0x80..0xFF). */
+    if (ilen == 0 || ilen > 33 || ilen > len - 2)
+        return NULL;
+    v = der + 2;
+    if (v[0] & 0x80)
+        return NULL;                    /* negative: invalid for r/s */
+    if (v[0] == 0x00)
+    {
+        /* A leading 0x00 is only legal DER as a sign pad before a byte with
+         * the high bit set.  A lone 0x00 (value 0) is also rejected: r/s = 0
+         * is never valid and tls_p256_verify would reject it anyway. */
+        if (ilen < 2 || !(v[1] & 0x80))
+            return NULL;
+        v++;
+        ilen--;
+    }
+    if (ilen > 32)
+        return NULL;
+    memset(out, 0, 32 - ilen);
+    memcpy(out + (32 - ilen), v, ilen);
+    return v + ilen;
+}
 
 static void *tls_x509_alloc(size_t size)
 {
@@ -404,6 +441,7 @@ bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
     bool have_eku = false, server_auth = false;
     size_t path_len = 0;
 
+    DEBUG(); /* path-extension validation entry: is_ca / subordinate_ca_count given by caller */
     if (!cert || !cert->extensions || cert->extensions_len == 0)
         return !is_ca; /* leaf extensions may be absent; CA constraints may not */
     if (!tls_asn1_cursor_init(&outer, cert->extensions, cert->extensions_len))
@@ -525,9 +563,35 @@ basic_constraints_done:
     }
 
     if (is_ca)
+    {
+        if (!have_bc || !ca)
+        {
+            DEBUG(); /* CA cert rejected: basicConstraints missing or CA=false */
+        }
+        else if (have_ku && !key_cert_sign)
+        {
+            DEBUG(); /* CA cert rejected: keyUsage present but keyCertSign not set */
+        }
+        else if (have_path_len && subordinate_ca_count > path_len)
+        {
+            DEBUG(); /* CA cert rejected: chain depth exceeds this cert's pathLenConstraint */
+        }
+        else if (have_eku && !server_auth)
+        {
+            DEBUG(); /* CA cert rejected: EKU present but lacks serverAuth/anyEKU */
+        }
         return have_bc && ca && (!have_ku || key_cert_sign) &&
                (!have_path_len || subordinate_ca_count <= path_len) &&
                (!have_eku || server_auth);
+    }
+    if (have_ku && !digital_signature)
+    {
+        DEBUG(); /* leaf cert rejected: keyUsage present but digitalSignature not set */
+    }
+    else if (have_eku && !server_auth)
+    {
+        DEBUG(); /* leaf cert rejected: EKU present but lacks serverAuth/anyEKU */
+    }
     return (!have_ku || digital_signature) && (!have_eku || server_auth);
 }
 
@@ -817,6 +881,8 @@ bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
     int ip_len = tls_identity_ip(hostname, ip);
     if (ip_len < 0)
     {
+        /* Malformed IP-literal syntax (e.g. a hex/octal alias): reject
+         * outright rather than authenticate it as a DNS identity. */
         ERROR_CODE(0x25);
         return false;
     }
@@ -827,6 +893,14 @@ bool tls_x509_hostname_matches(const uint8_t *ext_data, size_t ext_len,
 
     (void)subject_cn;
     (void)subject_cn_len;
+    if (san_present)
+    {
+        DEBUG(); /* SAN extension present but none of its entries matched the hostname */
+    }
+    else
+    {
+        DEBUG(); /* no SAN extension at all -- RFC 9525 forbids falling back to CN */
+    }
     ERROR_CODE(0x26);
     return false; /* RFC 9525: identifiers must come from subjectAltName. */
 }
@@ -1744,8 +1818,34 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
             break;
 
         case TLS_ALG_ECDSA_SECP256R1_SHA256:
-            return tls_key_supports_operation(key, alg)
-                ? TLS_KEY_OP_UNSUPPORTED : TLS_KEY_OP_INVALID;
+        {
+            if (!tls_key_supports_operation(key, alg))
+                return TLS_KEY_OP_INVALID;
+            if (key->ec.len != 65 || !key->ec.data)
+                return TLS_KEY_OP_INVALID;
+            /* sig is a DER SEQUENCE { INTEGER r, INTEGER s }.
+             * Decode into a flat 64-byte r||s buffer for tls_p256_verify. */
+            uint8_t rs[64];
+            /* Minimum valid DER ECDSA-Sig-Value is 8 bytes. */
+            if (sig_len < 8 || sig[0] != 0x30)
+                return TLS_KEY_OP_INVALID;
+            size_t seq_len = sig[1];
+            if ((seq_len & 0x80) || 2 + seq_len != sig_len)
+                return TLS_KEY_OP_INVALID;
+            {
+                const uint8_t *end = sig + sig_len;
+                const uint8_t *p = tls_ecdsa_parse_int(sig + 2, sig_len - 2, rs);
+                if (p)
+                    p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
+                if (p != end)   /* NULL (parse error) or trailing bytes */
+                    return TLS_KEY_OP_INVALID;
+            }
+            tls_crypto_guard_enable();
+            bool p256_ok = tls_p256_verify(rs, digest, key->ec.data);
+            tls_crypto_guard_disable();
+            tls_secure_memzero(rs, sizeof(rs));
+            return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
+        }
 
         default:
             return TLS_KEY_OP_UNKNOWN;

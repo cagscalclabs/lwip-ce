@@ -11,6 +11,7 @@
     "../../common/LWIP.4.8xv",
     "../../common/LWIP.5.8xv",
     "../../common/LWIP.6.8xv",
+    "../../common/LWIP.7.8xv",
     "../../common/lwip.8xv"
   ],
   "target": {
@@ -18,6 +19,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|2000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|10",

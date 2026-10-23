@@ -67,7 +67,8 @@ extern "C"
 #define TLS_EXT_COOKIE 0x002c
 
 /* Named Groups */
-#define TLS_NAMED_GROUP_X25519 0x001d
+#define TLS_NAMED_GROUP_X25519    0x001d
+#define TLS_NAMED_GROUP_SECP256R1 0x0017
 
 /* PSK Key Exchange Modes */
 #define TLS_PSK_MODE_KE 0x00     /* PSK-only */
@@ -227,11 +228,15 @@ extern "C"
             TLS_STATE_ERROR
         } state;
 
-        /* ECDHE (X25519) key exchange state */
+        /* ECDHE key exchange state (X25519 and P-256 are both offered) */
         uint8_t ecdhe_private[32];   /* Ephemeral X25519 private key */
-        uint8_t ecdhe_shared[32];    /* Computed shared secret */
-        uint8_t ecdhe_public[32];    /* Our ephemeral public key */
+        uint8_t ecdhe_shared[32];    /* Computed ECDHE shared secret (32 bytes) */
+        uint8_t ecdhe_public[32];    /* Our ephemeral X25519 public key */
         bool ecdhe_negotiated;       /* True if server selected PSK+ECDHE */
+
+        /* P-256 (secp256r1) ephemeral key pair for ECDHE */
+        uint8_t p256_private[32];    /* Ephemeral P-256 private key */
+        uint8_t p256_public[65];     /* Our ephemeral P-256 public key (uncompressed) */
         bool client_certificate_requested; /* True if server sent TLS 1.3 CertificateRequest */
 
         /* HelloRetryRequest state (RFC 8446 §4.1.4).

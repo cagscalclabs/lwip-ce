@@ -57,6 +57,10 @@ ALG_NAMES = {
     11: "PBKDF2-HMAC-SHA256",
     12: "SHA-256-MCT",
     13: "RSA-PKCS1v15-SHA-256-VERIFY",
+    14: "P256-SIGVER",
+    15: "P256-SIGGEN",
+    16: "P256-PUBLICKEY",
+    17: "P256-SECRET",
 }
 STATUS_NAMES = {0: "ok", 1: "unsupported", 2: "internal_error"}
 
@@ -266,6 +270,36 @@ def grade_x25519_secret(result: bytes, expected: dict[str, Any]) -> tuple[bool, 
     return True, "ok"
 
 
+def grade_p256_pub(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
+    """Result wire format: pub[65] (uncompressed 04||x||y)."""
+    if len(result) != 65:
+        return False, f"result must be 65 bytes, got {len(result)}"
+    exp = bytes.fromhex(expected["expected_pub_hex"])
+    if result != exp:
+        return False, f"pubkey mismatch: got {result.hex()}, expected {exp.hex()}"
+    return True, "ok"
+
+
+def grade_p256_secret(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
+    """Result wire format: shared[32]."""
+    if len(result) != 32:
+        return False, f"result must be 32 bytes, got {len(result)}"
+    exp = bytes.fromhex(expected["expected_shared_hex"])
+    if result != exp:
+        return False, f"shared secret mismatch: got {result.hex()}, expected {exp.hex()}"
+    return True, "ok"
+
+
+def grade_p256_siggen(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
+    """Result wire format: sig[64] (r||s big-endian)."""
+    if len(result) != 64:
+        return False, f"result must be 64 bytes, got {len(result)}"
+    exp = bytes.fromhex(expected["expected_sig_hex"])
+    if result != exp:
+        return False, f"signature mismatch: got {result.hex()}, expected {exp.hex()}"
+    return True, "ok"
+
+
 GRADERS = {
     "AES-GCM": grade_aead,
     "AES-CBC": grade_length_prefixed,
@@ -280,6 +314,10 @@ GRADERS = {
     "X25519-PUBLICKEY": grade_x25519_pub,
     "X25519-SECRET": grade_x25519_secret,
     "PBKDF2-HMAC-SHA256": grade_length_prefixed,
+    "P256-SIGVER": grade_rsa_pss_verify,    # same 1-byte verdict wire format
+    "P256-SIGGEN": grade_p256_siggen,
+    "P256-PUBLICKEY": grade_p256_pub,
+    "P256-SECRET": grade_p256_secret,
 }
 
 
@@ -293,7 +331,7 @@ def has_expected(vector: dict[str, Any]) -> bool:
     value — False is a valid expected_verify) for the RSA-PSS bool.
     """
     for k in ("expected_tag_hex", "expected_hex", "expected_okm_hex",
-              "expected_pub_hex", "expected_shared_hex"):
+              "expected_pub_hex", "expected_shared_hex", "expected_sig_hex"):
         if vector.get(k):
             return True
     if "expected_verify" in vector and isinstance(vector["expected_verify"], bool):
@@ -471,7 +509,8 @@ def main() -> int:
     for alg in ["AES-GCM", "AES-CBC", "AES-CCM", "SHA-256", "SHA-256-MCT",
                 "HMAC-SHA-256", "HKDF-SHA-256", "PBKDF2-HMAC-SHA256",
                 "RSA-PSS-SHA-256-VERIFY", "RSA-PKCS1v15-SHA-256-VERIFY",
-                "X25519-PUBLICKEY", "X25519-SECRET"]:
+                "X25519-PUBLICKEY", "X25519-SECRET",
+                "P256-PUBLICKEY", "P256-SECRET", "P256-SIGGEN", "P256-SIGVER"]:
         c = by_alg.get(alg, {"pass": 0, "fail": 0, "skip": 0, "unsupported": 0})
         alg_vectors = [v for v in expected_data["vectors"] if v["algorithm"] == alg]
         source = summarize_sources(alg_vectors).replace("|", "\\|")

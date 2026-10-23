@@ -60,6 +60,9 @@ static void *tls_fileio_alloc(size_t n) { return malloc(n); }
 static void tls_fileio_free(void *p) { free(p); }
 static bool tls_rng_healthcheck(void) { return true; }
 static void *tls_random_bytes(void *buf, size_t n) { memset(buf, 0, n); return buf; }
+#define TLS_RNG_STRENGTH_128 128u
+static void *tls_random_bytes_ex(void *buf, size_t n, uint16_t strength)
+{ assert(strength == TLS_RNG_STRENGTH_128); return tls_random_bytes(buf, n); }
 static bool tls_request_random_bytes(uint8_t *buf, size_t n, void *cb, void *arg, bool blocking)
 { (void)cb; (void)arg; (void)blocking; memset(buf, 1, n); return true; }
 static void mem_stats_tls_direct_add(size_t n, size_t unused) { allocated += n; }

@@ -420,8 +420,7 @@ class TlsProbeServer:
                                   ssl.SSLError)):
                 # Calc actively reset or aborted — not a hang.
                 self.response = "ABORT"
-            elif self.probe.startswith("tls_") and self.probe not in (
-                    "tls_echo_clean", "tls_echo_resume"):
+            elif self.probe.startswith("tls_"):
                 self.response = "ABORT"
             else:
                 self.response = "HANG"
@@ -475,8 +474,6 @@ class TlsFixtures:
         if probe == "tls_missing_record":
             return None
         if self.server_ip is None:
-            # The calculator connects to the source of our NEXT control packet.
-            # UDP connect selects that same route/source without sending data.
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
                 route.connect((self.calc_ip, DAST_CTRL_PORT))
                 self.server_ip = route.getsockname()[0]
@@ -491,7 +488,7 @@ class TlsFixtures:
             self._rsa_context = make_tls_context("rsa", self.server_ip)
         return self._rsa_context
 
-    def start(self, probe: str, port: int) -> TlsProbeServer | None:
+    def start(self, probe: str, port: int) -> "TlsProbeServer | None":
         if self.dry:
             print(f"    [dry-run] would start TLS fixture {probe} on :{port}")
             return None
@@ -778,14 +775,17 @@ def run(args) -> int:
               + (f":{t['port']}" if t.get("port") else "")
               + f"   intent: {t['intent']}")
 
+        is_skip = bool(t.get("skip"))
         probe_fn = getattr(probes, t["probe"], None)
         is_tls = t["probe"] in TLS_PROBES
         tls_server = None
-        if is_tls:
-            print(f"    probe: {t['probe']}")
-            tls_server = tls_fixtures.start(t["probe"], int(t["port"]))
-        elif probe_fn is None:
-            die(f"test {t['id']}: no probe method {t['probe']!r}")
+
+        if not is_skip:
+            if is_tls:
+                print(f"    probe: {t['probe']}")
+                tls_server = tls_fixtures.start(t["probe"], int(t["port"]))
+            elif probe_fn is None:
+                die(f"test {t['id']}: no probe method {t['probe']!r}")
 
         if not args.self_test:
             # START already advanced the calc into test 1 and got its READY
@@ -800,10 +800,14 @@ def run(args) -> int:
                         f"(waited {DAST_CTRL_READY_TIMEOUT:.0f}s) -- it may "
                         "have crashed or hung; see partial results")
 
-        if is_tls:
+        if is_skip:
+            reason = t.get("skip_reason", "marked skip in dast_tests.json")
+            print(f"    [skip] {reason}")
+            response = "SKIP"
+            ping_state = None
+        elif is_tls:
             if args.self_test:
-                response = ("REPLY" if t["probe"] in
-                            ("tls_echo_clean", "tls_echo_resume") else "ABORT")
+                response = "ABORT"
                 ping_state = None
                 print(f"    [dry-run] would wait for TLS fixture completion")
             else:
@@ -878,6 +882,8 @@ def run(args) -> int:
             "ping_alive": ping_state,
             "grade": g,
         }
+        if t.get("skip_reason"):
+            rec["skip_reason"] = t["skip_reason"]
         old = prior.get(t["id"], {})
         if old.get("notes"):
             rec["notes"] = old["notes"]

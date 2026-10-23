@@ -1069,16 +1069,13 @@ static const char *lwip_example_socket_status_name(lwip_status_t status)
 }
 
 /* ----------------------------------------------------------------------
- * Debug console
+ * Debug console header
  *
- * A reusable sink for the unified lwIP event callback (lwip_event_fn). It
- * draws on the same text surface as the rest of these helpers, so it stays
- * visually consistent. Begin with the example-name header; each event then
- * prints one line beneath it, shaped by its kind.
- *
- * Usage:
- *   lwip_example_dbg_console_begin("TLS RSA");
- *   lwip_set_event_cb(lwip_example_dbg_console_cb);
+ * Draws the example-name header on the shared text surface. Event-level
+ * logging itself is no longer app-controllable — the user's persisted
+ * file_log_enabled/log_verbosity config (set from the config app UI) is the
+ * sole authority over what gets logged, so there is no app-installable
+ * event callback here any more.
  * -------------------------------------------------------------------- */
 
 /* Clear the screen and draw the example-name header. */
@@ -1090,78 +1087,6 @@ static void lwip_example_dbg_console_begin(const char *title)
         lwip_example_line(title);
     }
     lwip_example_draw_mem_stats();
-}
-
-/* lwip_event_fn: draw one event line, shaped by its kind. */
-static void lwip_example_dbg_console_cb(const struct lwip_event *ev)
-{
-    if (!ev)
-    {
-        return;
-    }
-
-    switch (ev->kind)
-    {
-    case LWIP_EV_INFO:
-        lwip_example_linef("%s: %s",
-                           lwip_debug_module_name(ev->module),
-                           ev->data.msg ? ev->data.msg : "");
-        break;
-    case LWIP_EV_DEBUG:
-        lwip_example_linef("%s %s:%u",
-                           lwip_debug_module_name(ev->module),
-                           lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                           (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc));
-        break;
-    case LWIP_EV_WARN:
-        lwip_example_linef("!%s %s:%u x%u",
-                           lwip_debug_module_name(ev->module),
-                           lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                           (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                           (unsigned)ev->data.code.extra);
-        break;
-    case LWIP_EV_ERROR:
-        lwip_example_linef("X%s %s:%u x%u",
-                           lwip_debug_module_name(ev->module),
-                           lwip_debug_file_name(LWIP_EVENT_CODE_FILE(ev->data.code.loc)),
-                           (unsigned)LWIP_EVENT_CODE_LINE(ev->data.code.loc),
-                           (unsigned)ev->data.code.extra);
-        break;
-    case LWIP_EV_STATE_CHG:
-        lwip_example_linef("%s -> %s",
-                           lwip_debug_module_name(ev->module),
-                           lwip_debug_state_change_name(ev->data.state.change_event));
-        break;
-    case LWIP_EV_IO_FILE:
-        lwip_example_linef("%s io:%s %s %u",
-                           lwip_debug_module_name(ev->module),
-                           ev->data.file.name ? ev->data.file.name : "?",
-                           ev->data.file.dir == LWIP_IO_WRITE ? "w" : "r",
-                           (unsigned)ev->data.file.bytes);
-        break;
-    case LWIP_EV_IO_ETH:
-        lwip_example_linef("%s io:eth %s %u",
-                           lwip_debug_module_name(ev->module),
-                           ev->data.eth.dir == LWIP_IO_TX ? "tx" : "rx",
-                           (unsigned)ev->data.eth.bytes);
-        break;
-    default:
-        break;
-    }
-    lwip_example_draw_mem_stats();
-}
-
-/* lwip_event_fn: same rendering as lwip_example_dbg_console_cb, but only
- * for WARN/ERROR events — everything else (INFO/DEBUG/STATE_CHG/IO_*) is
- * dropped. For apps (like the browser) that own the full screen and have
- * no dedicated console area, so routine traffic doesn't clobber the UI. */
-static void lwip_example_dbg_console_cb_errors_only(const struct lwip_event *ev)
-{
-    if (!ev || (ev->kind != LWIP_EV_WARN && ev->kind != LWIP_EV_ERROR))
-    {
-        return;
-    }
-    lwip_example_dbg_console_cb(ev);
 }
 
 static void lwip_example_show_socket_error(const char *label,

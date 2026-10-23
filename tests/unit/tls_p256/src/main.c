@@ -1,0 +1,232 @@
+/**
+ * @file main.c
+ * @brief P-256 (secp256r1) unit tests — ECDH, deterministic ECDSA, input rejection
+ */
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <ti/screen.h>
+#include <ti/getkey.h>
+
+#include <lwip.h>
+#include <lwip/cryptography/p256.h>
+
+/* ── RFC 5903 §8.1 — initiator key pair ─────────────────────────────────── */
+static const uint8_t initiator_private[32] = {
+    0xc8,0x8f,0x01,0xf5,0x10,0xd9,0xac,0x3f,0x70,0xa2,0x92,0xda,0xa2,0x31,0x6d,0xe5,
+    0x44,0xe9,0xaa,0xb8,0xaf,0xe8,0x40,0x49,0xc6,0x2a,0x9c,0x57,0x86,0x2d,0x14,0x33
+};
+static const uint8_t initiator_public[65] = {
+    0x04,0xda,0xd0,0xb6,0x53,0x94,0x22,0x1c,0xf9,0xb0,0x51,0xe1,0xfe,0xca,0x57,0x87,
+    0xd0,0x98,0xdf,0xe6,0x37,0xfc,0x90,0xb9,0xef,0x94,0x5d,0x0c,0x37,0x72,0x58,0x11,
+    0x80,0x52,0x71,0xa0,0x46,0x1c,0xdb,0x82,0x52,0xd6,0x1f,0x1c,0x45,0x6f,0xa3,0xe5,
+    0x9a,0xb1,0xf4,0x5b,0x33,0xac,0xcf,0x5f,0x58,0x38,0x9e,0x05,0x77,0xb8,0x99,0x0b,0xb3
+};
+
+/* ── RFC 5903 §8.1 — responder key pair ─────────────────────────────────── */
+static const uint8_t responder_private[32] = {
+    0xc6,0xef,0x9c,0x5d,0x78,0xae,0x01,0x2a,0x01,0x11,0x64,0xac,0xb3,0x97,0xce,0x20,
+    0x88,0x68,0x5d,0x8f,0x06,0xbf,0x9b,0xe0,0xb2,0x83,0xab,0x46,0x47,0x6b,0xee,0x53
+};
+static const uint8_t responder_public[65] = {
+    0x04,0xd1,0x2d,0xfb,0x52,0x89,0xc8,0xd4,0xf8,0x12,0x08,0xb7,0x02,0x70,0x39,0x8c,
+    0x34,0x22,0x96,0x97,0x0a,0x0b,0xcc,0xb7,0x4c,0x73,0x6f,0xc7,0x55,0x44,0x94,0xbf,
+    0x63,0x56,0xfb,0xf3,0xca,0x36,0x6c,0xc2,0x3e,0x81,0x57,0x85,0x4c,0x13,0xc5,0x8d,
+    0x6a,0xac,0x23,0xf0,0x46,0xad,0xa3,0x0f,0x83,0x53,0xe7,0x4f,0x33,0x03,0x98,0x72,0xab
+};
+
+/* ── RFC 5903 §8.1 — shared secret ──────────────────────────────────────── */
+static const uint8_t shared_expected[32] = {
+    0xd6,0x84,0x0f,0x6b,0x42,0xf6,0xed,0xaf,0xd1,0x31,0x16,0xe0,0xe1,0x25,0x65,0x20,
+    0x2f,0xef,0x8e,0x9e,0xce,0x7d,0xce,0x03,0x81,0x24,0x64,0xd0,0x4b,0x94,0x42,0xde
+};
+
+/* ── RFC 6979 §A.2.5 — P-256/SHA-256 "sample" signing key and hash ───────── */
+static const uint8_t sign_private[32] = {
+    0xc9,0xaf,0xa9,0xd8,0x45,0xba,0x75,0x16,0x6b,0x5c,0x21,0x57,0x67,0xb1,0xd6,0x93,
+    0x4e,0x50,0xc3,0xdb,0x36,0xe8,0x9b,0x12,0x7b,0x8a,0x62,0x2b,0x12,0x0f,0x67,0x21
+};
+static const uint8_t sample_hash[32] = {
+    0xaf,0x2b,0xdb,0xe1,0xaa,0x9b,0x6e,0xc1,0xe2,0xad,0xe1,0xd6,0x94,0xf4,0x1f,0xc7,
+    0x1a,0x83,0x1d,0x02,0x68,0xe9,0x89,0x15,0x62,0x11,0x3d,0x8a,0x62,0xad,0xd1,0xbf
+};
+static const uint8_t sample_signature[64] = {
+    0xef,0xd4,0x8b,0x2a,0xac,0xb6,0xa8,0xfd,0x11,0x40,0xdd,0x9c,0xd4,0x5e,0x81,0xd6,
+    0x9d,0x2c,0x87,0x7b,0x56,0xaa,0xf9,0x91,0xc3,0x4d,0x0e,0xa8,0x4e,0xaf,0x37,0x16,
+    0xf7,0xcb,0x1c,0x94,0x2d,0x65,0x7c,0x41,0xd4,0x36,0xc7,0xa1,0xb6,0xe2,0x9f,0x65,
+    0xf3,0xe9,0x00,0xdb,0xb9,0xaf,0xf4,0x06,0x4d,0xc4,0xab,0x2f,0x84,0x3a,0xcd,0xa8
+};
+
+/* ── P-256 group order n ──────────────────────────────────────────────────── */
+static const uint8_t p256_n[32] = {
+    0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xbc,0xe6,0xfa,0xad,0xa7,0x17,0x9e,0x84,0xf3,0xb9,0xca,0xc2,0xfc,0x63,0x25,0x51
+};
+
+/* Test 1: RFC 5903 §8.1 — initiator public key derivation */
+static bool test_keygen(void)
+{
+    uint8_t pub[65];
+    if (!tls_p256_publickey(pub, initiator_private)) return false;
+    return memcmp(pub, initiator_public, 65) == 0;
+}
+
+/* Test 2: RFC 5903 §8.1 — ECDH from initiator side */
+static bool test_ecdh_initiator(void)
+{
+    uint8_t secret[32];
+    if (!tls_p256_secret(secret, initiator_private, responder_public)) return false;
+    return memcmp(secret, shared_expected, 32) == 0;
+}
+
+/* Test 3: RFC 5903 §8.1 — ECDH from responder side (same shared secret) */
+static bool test_ecdh_responder(void)
+{
+    uint8_t secret[32];
+    if (!tls_p256_secret(secret, responder_private, initiator_public)) return false;
+    return memcmp(secret, shared_expected, 32) == 0;
+}
+
+/* Test 4: RFC 6979 §A.2.5 — deterministic sign, expect exact (r,s) */
+static bool test_sign(void)
+{
+    uint8_t sig[64];
+    if (!tls_p256_sign(sig, sample_hash, sign_private)) return false;
+    return memcmp(sig, sample_signature, 64) == 0;
+}
+
+/* Test 5: RFC 6979 §A.2.5 — verify valid signature */
+static bool test_verify_valid(void)
+{
+    uint8_t pub[65];
+    if (!tls_p256_publickey(pub, sign_private)) return false;
+    return tls_p256_verify(sample_signature, sample_hash, pub);
+}
+
+/* Test 6: FIPS 186-4 §6.4 — reject tampered signature (r bit flip) */
+static bool test_reject_tampered(void)
+{
+    uint8_t pub[65], bad[64];
+    if (!tls_p256_publickey(pub, sign_private)) return false;
+    memcpy(bad, sample_signature, 64);
+    bad[5] ^= 0x10;
+    return !tls_p256_verify(bad, sample_hash, pub);
+}
+
+/* Test 7: FIPS 186-4 §6.4 — reject off-curve public key */
+static bool test_reject_offcurve(void)
+{
+    uint8_t bad[65], secret[32];
+    memcpy(bad, responder_public, 65);
+    bad[64] ^= 0x01;
+    return !tls_p256_secret(secret, initiator_private, bad);
+}
+
+/* Test 8: FIPS 186-4 §6.4 — reject r = 0 */
+static bool test_reject_r0(void)
+{
+    uint8_t pub[65], bad[64];
+    if (!tls_p256_publickey(pub, sign_private)) return false;
+    memset(bad, 0, 32);
+    memcpy(bad + 32, sample_signature + 32, 32);
+    return !tls_p256_verify(bad, sample_hash, pub);
+}
+
+/* Test 9: FIPS 186-4 §6.4 — reject s = 0 */
+static bool test_reject_s0(void)
+{
+    uint8_t pub[65], bad[64];
+    if (!tls_p256_publickey(pub, sign_private)) return false;
+    memcpy(bad, sample_signature, 32);
+    memset(bad + 32, 0, 32);
+    return !tls_p256_verify(bad, sample_hash, pub);
+}
+
+/* Test 10: FIPS 186-4 §6.4 — reject r = n */
+static bool test_reject_rn(void)
+{
+    uint8_t pub[65], bad[64];
+    if (!tls_p256_publickey(pub, sign_private)) return false;
+    memcpy(bad, p256_n, 32);
+    memcpy(bad + 32, sample_signature + 32, 32);
+    return !tls_p256_verify(bad, sample_hash, pub);
+}
+
+/* Test 11: FIPS 186-4 §6.4 — reject s = n */
+static bool test_reject_sn(void)
+{
+    uint8_t pub[65], bad[64];
+    if (!tls_p256_publickey(pub, sign_private)) return false;
+    memcpy(bad, sample_signature, 32);
+    memcpy(bad + 32, p256_n, 32);
+    return !tls_p256_verify(bad, sample_hash, pub);
+}
+
+int main(void)
+{
+    bool t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11;
+
+    if (!lwip_start()) return 1;
+
+    os_ClrHome();
+    t1 = test_keygen();
+    printf("%s\n", t1 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t2 = test_ecdh_initiator();
+    printf("%s\n", t2 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t3 = test_ecdh_responder();
+    printf("%s\n", t3 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t4 = test_sign();
+    printf("%s\n", t4 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t5 = test_verify_valid();
+    printf("%s\n", t5 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t6 = test_reject_tampered();
+    printf("%s\n", t6 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t7 = test_reject_offcurve();
+    printf("%s\n", t7 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t8 = test_reject_r0();
+    printf("%s\n", t8 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t9 = test_reject_s0();
+    printf("%s\n", t9 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t10 = test_reject_rn();
+    printf("%s\n", t10 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    t11 = test_reject_sn();
+    printf("%s\n", t11 ? "PASS" : "FAIL");
+    os_GetKey();
+
+    os_ClrHome();
+    printf("\nPress any key\n");
+
+    return (t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11) ? 0 : 1;
+}

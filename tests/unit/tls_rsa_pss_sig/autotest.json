@@ -12,6 +12,7 @@
     "../../common/LWIP.4.8xv",
     "../../common/LWIP.5.8xv",
     "../../common/LWIP.6.8xv",
+    "../../common/LWIP.7.8xv",
     "../../common/lwip.8xv"
   ],
   "target": {
@@ -19,28 +20,40 @@
     "isASM": true
   },
   "sequence": [
+    "delay|2000",
     "key|clear",
     "action|launch:INSTALL",
-    "hashWait|2",
+    "hashWait|3",
     "key|left",
     "key|enter",
     "delay|1000",
     "action|launch",
     "hashWait|1",
     "key|enter",
+    "hashWait|2",
+    "key|enter",
     "key|enter"
   ],
   "hashes": {
     "1": {
-      "description": "RSA-2048-PSS signature verify - RFC 8017 SHA-256, OpenSSL-generated",
+      "description": "RSA-2048-PSS signature verify - success",
       "start": "vram_start",
       "size": "vram_16_size",
       "expected_CRCs": [
-        "63C8DC8B"
+        "05A97866"
       ],
-      "timeout": 30000
+      "timeout": 100000
     },
     "2": {
+      "description": "RSA-4096-PSS signature verify - success",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [
+        "AADE5EDA"
+      ],
+      "timeout": 100000
+    },
+    "3": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

@@ -10,8 +10,7 @@
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
 
-#define TLS_SCRATCH_SIZE 520u
-extern uint8_t __tls_scratch[TLS_SCRATCH_SIZE];
+#define TLS_SCRATCH_SIZE 1647u
 
 /* Temporary RSA decrypt tracing (key-gated). Set RSA_TRACE_ON 1 to
  * re-enable. Superseded by the TLS debug callback (tls_debug.h). */
@@ -230,7 +229,7 @@ cleanup:
     return out_len;
 }
 
-void powmod_exp_u24(uint8_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
+void powmod_exp_u24(uint16_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
 #define RSA_PUBLIC_EXP 65537
 // CRYPTO_FN
 bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
@@ -259,6 +258,11 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     uint24_t exp = 0;
     for (size_t i = 0; i < key->exp_len; i++)
         exp = (exp << 8) | key->exponent[i];
+    if (exp == 0)
+    {
+        ERROR();
+        return false;
+    }
 
     bool ok = false;
     size_t spos = 0;
@@ -269,8 +273,8 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     }
     if (!tls_rsa_encode_oaep(inbuf, in_len, &outbuf[spos], key->mod_len - spos, NULL, hash_alg))
         goto cleanup;
-    powmod_exp_u24((uint8_t)key->mod_len, outbuf, exp, key->modulus);
-    tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
+    powmod_exp_u24((uint16_t)key->mod_len, outbuf, exp, key->modulus);
+    tls_secure_memzero(__tls_scratch_end - 2 * key->mod_len, 2 * key->mod_len);
     ok = true;
 cleanup:
     return ok;
@@ -318,10 +322,18 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
     RSA_TRACE("decsig: pre-guard");
     bool ok = false;
 
+    /* RFC 8017 §5.2.2 step 1: s must be in [0, n-1]. A non-CT compare is
+     * fine because both signature and modulus are public values. */
+    if (memcmp(signature, key->modulus, key->mod_len) >= 0)
+    {
+        ERROR();
+        return false;
+    }
+
     memcpy(outbuf, signature, key->mod_len);
     RSA_TRACE("decsig: pre-powmod");
-    powmod_exp_u24((uint8_t)key->mod_len, outbuf, exp, key->modulus);
-    tls_secure_memzero(__tls_scratch, TLS_SCRATCH_SIZE);
+    powmod_exp_u24((uint16_t)key->mod_len, outbuf, exp, key->modulus);
+    tls_secure_memzero(__tls_scratch_end - 2 * key->mod_len, 2 * key->mod_len);
     ok = true;
     RSA_TRACE("decsig: post-powmod");
     return ok;

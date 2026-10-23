@@ -183,6 +183,11 @@
 #include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
 #include "../contrib/x25519/src/x25519.h"
+/* P-256 public API (assembly implementation in p256.s). */
+bool tls_p256_publickey(uint8_t pub[65], const uint8_t priv[32]);
+bool tls_p256_secret(uint8_t ss[32], const uint8_t priv[32], const uint8_t peer[65]);
+bool tls_p256_sign(uint8_t sig[64], const uint8_t hash[32], const uint8_t priv[32]);
+bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32], const uint8_t pub[65]);
 #include <string.h>
 #include <usbdrvce.h>
 #include "../../drivers/mem.h"
@@ -724,16 +729,8 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         }
         tls_key_op_result_t verify_result =
             tls_cert_verify_pending_link(w, &cert->pubkey);
-        if (verify_result == TLS_KEY_OP_UNSUPPORTED)
+        if (verify_result != TLS_KEY_OP_OK)
         {
-            /* Interim compatibility pinhole: retain all structural/name/path
-             * checks but allow a link this platform cannot verify. */
-            WARN();
-        }
-        else if (verify_result != TLS_KEY_OP_OK)
-        {
-            /* A supported verification operation produced a bad signature,
-             * or the signature/key pairing is structurally incompatible. */
             ERROR();
             return false;
         }
@@ -857,6 +854,18 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         ERROR_CODE(0x02);
         return false;
     }
+    /* Enforce RSA key size policy: 2048-4096 bits only.  Keys shorter than
+     * 2048 bits are cryptographically weak; keys longer than 4096 bits
+     * exceed the implementation's scratch-space budget.  Fail closed on
+     * anything outside the supported range. */
+    if (cert.pubkey.type == TLS_KEY_TYPE_RSA &&
+        (cert.pubkey.rsa.mod_len < RSA_MODULUS_MIN_SUPPORTED ||
+         cert.pubkey.rsa.mod_len > RSA_MODULUS_MAX_SUPPORTED))
+    {
+        INFO("cert: rsa keysize fail");
+        ERROR_CODE(0x02);
+        return false;
+    }
 
     /* Validity window check — requires SNTP sync (returns 0 if not set,
      * which fails closed since no real cert is valid at epoch 0). */
@@ -940,7 +949,12 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         }
     }
 
-    /* Issuer CN — captured for truststore root lookup. */
+    /* Issuer CN — captured for truststore root lookup. Each cert processed
+     * overwrites this with its own issuer CN, so once the walk finishes it
+     * holds the topmost cert's issuer. A cert with no/empty issuer CN must
+     * clear it rather than leave an earlier (non-topmost) cert's value
+     * stale -- otherwise root anchoring below would silently validate
+     * against the wrong issuer name. */
     if (cert.issuer_cn && cert.issuer_cn_len > 0)
     {
         uint8_t copy_len = (cert.issuer_cn_len < TLS_TRUSTSTORE_SUBJECT_LEN)
@@ -950,6 +964,12 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         memset(w->topmost_issuer_cn + copy_len, 0,
                TLS_TRUSTSTORE_SUBJECT_LEN - copy_len);
         w->topmost_issuer_cn_len = copy_len;
+    }
+    else
+    {
+        DEBUG(); /* this cert's issuer has no CN -- clearing so a stale earlier value can't be used */
+        memset(w->topmost_issuer_cn, 0, TLS_TRUSTSTORE_SUBJECT_LEN);
+        w->topmost_issuer_cn_len = 0;
     }
 
     if (!tls_cert_chain_verify_one(w, &cert, is_leaf))
@@ -1309,6 +1329,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         off += take;
         if (ctx->hs_reasm_len < 4)
         {
+            DEBUG(); /* still waiting on the rest of a split handshake header */
             return true; /* Still need more header bytes. */
         }
         size_t body_len = ((size_t)ctx->hs_reasm_buf[1] << 16) |
@@ -1371,6 +1392,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
 
         if (!tls_inflight_message_complete(ctx))
         {
+            DEBUG(); /* in-flight handshake message reassembly still incomplete */
             return true; /* Still incomplete; wait for more. */
         }
 
@@ -1738,10 +1760,9 @@ bool tls_handshake_init(
     ctx->server_seq_num = 0;
 
     INFO("init: client random");
-    /* The public byte API generates through Hash_DRBG and fails closed if
-     * initial instantiation or mandatory reseeding cannot obtain entropy. */
-    if (tls_random_bytes(ctx->client_random,
-                         sizeof(ctx->client_random)) == NULL)
+    if (tls_random_bytes_ex(ctx->client_random,
+                            sizeof(ctx->client_random),
+                            TLS_RNG_STRENGTH_128) == NULL)
     {
         ERROR_CODE(0x2b);
         return false;
@@ -1758,9 +1779,9 @@ bool tls_handshake_init(
     }
 
     INFO("init: private random");
-    /* Generate ephemeral X25519 keypair for ECDHE */
-    if (tls_random_bytes(ctx->ecdhe_private,
-                         sizeof(ctx->ecdhe_private)) == NULL)
+    if (tls_random_bytes_ex(ctx->ecdhe_private,
+                            sizeof(ctx->ecdhe_private),
+                            TLS_RNG_STRENGTH_128) == NULL)
     {
         ERROR_CODE(0x2c);
         return false;
@@ -1775,7 +1796,28 @@ bool tls_handshake_init(
         return false;
     }
 
-    INFO("init: X25519 done");
+    INFO("init: P-256 private random");
+    if (tls_random_bytes_ex(ctx->p256_private,
+                            sizeof(ctx->p256_private),
+                            TLS_RNG_STRENGTH_128) == NULL)
+    {
+        tls_secure_memzero(ctx->ecdhe_private, 32);
+        ERROR_CODE(0x2b);
+        return false;
+    }
+
+    INFO("init: P-256 public key");
+    tls_crypto_guard_enable();
+    bool p256_ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
+    tls_crypto_guard_disable();
+    if (!p256_ok)
+    {
+        tls_secure_memzero(ctx->ecdhe_private, 32);
+        tls_secure_memzero(ctx->p256_private, 32);
+        ERROR_CODE(0x2b);
+        return false;
+    }
+
     ctx->ecdhe_negotiated = false;
     ctx->hostname = NULL;
 
@@ -1837,10 +1879,26 @@ bool tls_send_client_hello(
         HELLO_RANDOM_OFFSET = 6,
         HELLO_EXT_LEN_OFFSET = 47,
         HELLO_EXT_START = 49,
-        HELLO_KEY_SHARE_OFFSET = 74
+        /* P-256 uncompressed public key (65 bytes) is first key_share entry */
+        HELLO_P256_KEY_SHARE_OFFSET = 70,
+        /* x25519 public key (32 bytes) follows P-256 entry */
+        HELLO_KEY_SHARE_OFFSET = 139
     };
     /* Base ClientHello with zero placeholders for the 32-byte client random,
-     * 32-byte key share, and dependent lengths. Optional extensions append. */
+     * 65-byte P-256 key share, 32-byte x25519 key share, and dependent
+     * lengths. Optional extensions append.
+     *
+     * Extensions layout (all offsets from byte 0 of this array):
+     *   [49..55]  supported_versions: TLS 1.3
+     *   [56..65]  supported_groups: secp256r1 + x25519 (P-256 preferred)
+     *   [66..69]  key_share ext header + secp256r1 group/len
+     *   [70..134] P-256 public key (65 bytes, patched)
+     *   [135..138] x25519 group/len
+     *   [139..170] x25519 public key (32 bytes, patched)
+     *   [171..180] signature_algorithms
+     *   [181..192] signature_algorithms_cert
+     *   [193..197] max_fragment_length: 2^12
+     */
     static const uint8_t hello_template[] = {
         TLS_HANDSHAKE_CLIENT_HELLO, 0x00, 0x00, 0x00, /* body length patched */
         0x03, 0x03,                                   /* legacy_version */
@@ -1855,17 +1913,33 @@ bool tls_send_client_hello(
         0x00, 0x00,              /* extensions length patched */
         /* supported_versions: TLS 1.3 */
         0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04,
-        /* supported_groups: x25519 */
-        0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d,
-        /* key_share header: one 32-byte x25519 key follows */
-        0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20,
-        /* x25519 key patched at offset 74 */
+        /* supported_groups: secp256r1 (0x0017) + x25519 (0x001d) (P-256 preferred) */
+        /* ext_type=0x000a, ext_len=6, list_len=4 */
+        0x00, 0x0a, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x1d,
+        /* key_share: ext_type=0x0033, ext_len=0x006b=107,
+         *   client_shares_len=0x0069=105
+         *   secp256r1 entry: group=0x0017, key_len=0x0041=65 */
+        0x00, 0x33, 0x00, 0x6b, 0x00, 0x69, 0x00, 0x17, 0x00, 0x41,
+        /* P-256 key patched at offset 70 (65 bytes) */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* signature_algorithms: rsa_pss_rsae_sha256 */
-        0x00, 0x0d, 0x00, 0x04, 0x00, 0x02, 0x08, 0x04,
-        /* signature_algorithms_cert: rsa_pkcs1_sha256, rsa_pss_rsae_sha256 */
-        0x00, 0x32, 0x00, 0x06, 0x00, 0x04, 0x04, 0x01, 0x08, 0x04,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0,
+        /* x25519 entry: group=0x001d, key_len=0x0020=32 */
+        0x00, 0x1d, 0x00, 0x20,
+        /* x25519 key patched at offset 139 (32 bytes) */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* signature_algorithms: rsa_pss_rsae_sha256 (0x0804),
+         *                        ecdsa_secp256r1_sha256 (0x0403) */
+        /* ext_type=0x000d, ext_len=6, list_len=4 */
+        0x00, 0x0d, 0x00, 0x06, 0x00, 0x04, 0x08, 0x04, 0x04, 0x03,
+        /* signature_algorithms_cert: rsa_pkcs1_sha256 (0x0401),
+         *                            rsa_pss_rsae_sha256 (0x0804),
+         *                            ecdsa_secp256r1_sha256 (0x0403) */
+        /* ext_type=0x0032, ext_len=8, list_len=6 */
+        0x00, 0x32, 0x00, 0x08, 0x00, 0x06, 0x04, 0x01, 0x08, 0x04, 0x04, 0x03,
         /* max_fragment_length: 2^12 */
         0x00, 0x01, 0x00, 0x01, 0x04
     };
@@ -1912,9 +1986,10 @@ bool tls_send_client_hello(
         return false;
     }
 
-    /* This implementation reuses the original x25519 share in ClientHello2.
-     * A conforming HRR cannot request x25519 because it was already offered
-     * in ClientHello1; a cookie-only HRR leaves the key_share unchanged. */
+    /* This implementation reuses the original key_shares in ClientHello2.
+     * A conforming HRR cannot request secp256r1 or x25519 because both were
+     * already offered in ClientHello1; a cookie-only HRR leaves key_share
+     * unchanged. */
 
     /* early_secret/binder_key/finished_key/binder/hmac_ctx are secret
      * material only ever populated inside the ctx->psk_mode block below,
@@ -2026,6 +2101,7 @@ bool tls_send_client_hello(
     memcpy(out, hello_template, sizeof(hello_template));
     memcpy(out + HELLO_RANDOM_OFFSET, ctx->client_random, 32);
     memcpy(out + HELLO_KEY_SHARE_OFFSET, ctx->ecdhe_public, 32);
+    memcpy(out + HELLO_P256_KEY_SHARE_OFFSET, ctx->p256_public, 65);
     offset = sizeof(hello_template);
     size_t ext_len_offset = HELLO_EXT_LEN_OFFSET;
     size_t ext_start = HELLO_EXT_START;
@@ -2499,8 +2575,9 @@ bool tls_recv_server_hello(
                 return false;
             }
 
-            /* x25519 was already offered in ClientHello1 and therefore cannot
-             * be selected by HRR; every other group is unsupported here. */
+            /* Both secp256r1 and x25519 were offered in ClientHello1, so a
+             * conforming HRR cannot request either; every other group is
+             * unsupported here. */
             if (hrr_key_share)
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
@@ -2674,32 +2751,77 @@ bool tls_recv_server_hello(
             }
             uint16_t group = (data[offset] << 8) | data[offset + 1];
             uint16_t ke_len = (data[offset + 2] << 8) | data[offset + 3];
-            if (group != TLS_NAMED_GROUP_X25519 || ke_len != 32 ||
-                ext_data_len != (size_t)(4 + ke_len))
+            if (ext_data_len != (size_t)(4 + ke_len))
             {
                 ctx->state = TLS_STATE_ERROR;
                 ERROR_CODE(0x5a);
                 return false;
             }
-            /* Compute the shared secret. The primitive rejects an all-zero
-             * result; TLS 1.3 requires illegal_parameter in that case. */
-            if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
-                                   data + offset + 4,
-                                   NULL, NULL))
+            if (group == TLS_NAMED_GROUP_X25519)
             {
-                ERROR();
-                tls_secure_memzero(ctx->ecdhe_private,
-                                   sizeof(ctx->ecdhe_private));
-                tls_secure_memzero(ctx->ecdhe_shared,
-                                   sizeof(ctx->ecdhe_shared));
-                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
-                               TLS_ALERT_ILLEGAL_PARAMETER);
+                if (ke_len != 32)
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5a);
+                    return false;
+                }
+                /* Compute X25519 shared secret. */
+                if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private,
+                                       data + offset + 4,
+                                       NULL, NULL))
+                {
+                    ERROR();
+                    tls_secure_memzero(ctx->ecdhe_private,
+                                       sizeof(ctx->ecdhe_private));
+                    tls_secure_memzero(ctx->ecdhe_shared,
+                                       sizeof(ctx->ecdhe_shared));
+                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                                   TLS_ALERT_ILLEGAL_PARAMETER);
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5c);
+                    return false;
+                }
+                /* Securely erase X25519 private key immediately */
+                tls_secure_memzero(ctx->ecdhe_private, 32);
+            }
+            else if (group == TLS_NAMED_GROUP_SECP256R1)
+            {
+                /* P-256 uncompressed point: 0x04 || x(32) || y(32) = 65 bytes */
+                if (ke_len != 65 || data[offset + 4] != 0x04)
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5a);
+                    return false;
+                }
+                /* Compute P-256 ECDH shared secret. */
+                tls_crypto_guard_enable();
+                bool p256_ok = tls_p256_secret(ctx->ecdhe_shared,
+                                               ctx->p256_private,
+                                               data + offset + 4);
+                tls_crypto_guard_disable();
+                if (!p256_ok)
+                {
+                    ERROR();
+                    tls_secure_memzero(ctx->p256_private,
+                                       sizeof(ctx->p256_private));
+                    tls_secure_memzero(ctx->ecdhe_shared,
+                                       sizeof(ctx->ecdhe_shared));
+                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                                   TLS_ALERT_ILLEGAL_PARAMETER);
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5c);
+                    return false;
+                }
+                /* Securely erase P-256 private key immediately */
+                tls_secure_memzero(ctx->p256_private, 32);
+            }
+            else
+            {
+                /* Server selected a group we didn't offer. */
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5c);
+                ERROR_CODE(0x5a);
                 return false;
             }
-            /* Securely erase private key immediately */
-            tls_secure_memzero(ctx->ecdhe_private, 32);
             ctx->ecdhe_negotiated = true;
             DEBUG();
             break;
@@ -2830,7 +2952,9 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     return false;
                 }
                 size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
+                size_t mod_len = key_len > 3 ? key_len - 3 : 0;
                 if (key_len >= 3 + RSA_MODULUS_MIN_SUPPORTED &&
+                    mod_len <= RSA_MODULUS_MAX_SUPPORTED &&
                     w->pending_link)
                 {
                     /* Truststore packs exponent as 3-byte LE; convert to BE for
@@ -2841,7 +2965,6 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                         root_entry->key[0],
                     };
                     const uint8_t *mod     = root_entry->key + 3;
-                    size_t         mod_len = key_len - 3;
                     struct tls_rsa_key root_key = {
                         sizeof(exp_be), exp_be,
                         mod_len, mod,
@@ -2852,11 +2975,38 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
                     };
                     tls_key_op_result_t verify_result =
                         tls_cert_verify_pending_link(w, &root_tls_key);
-                    if (verify_result == TLS_KEY_OP_UNSUPPORTED)
+                    if (verify_result != TLS_KEY_OP_OK)
                     {
-                        WARN();
+                        ERROR();
+                        ctx->state = TLS_STATE_ERROR;
+                        return false;
                     }
-                    else if (verify_result != TLS_KEY_OP_OK)
+                }
+                else
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x66);
+                    return false;
+                }
+            }
+            else if (alg == TLS_CERT_SIG_ECDSA_SHA256)
+            {
+                if (root_entry->len < sizeof(struct tls_truststore_entry))
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x65);
+                    return false;
+                }
+                size_t key_len = root_entry->len - sizeof(struct tls_truststore_entry);
+                if (key_len == 65 && w->pending_link)
+                {
+                    struct tls_key root_tls_key = {
+                        .type = TLS_KEY_TYPE_EC_P256,
+                        .ec = { key_len, root_entry->key },
+                    };
+                    tls_key_op_result_t verify_result =
+                        tls_cert_verify_pending_link(w, &root_tls_key);
+                    if (verify_result != TLS_KEY_OP_OK)
                     {
                         ERROR();
                         ctx->state = TLS_STATE_ERROR;
@@ -2872,9 +3022,10 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
             }
             else
             {
-                /* Interim compatibility pinhole: the trust anchor exists but
-                 * its key/signature operation is not implemented. */
-                WARN();
+                /* Truststore entry uses an algorithm not supported by this build. */
+                ERROR();
+                ctx->state = TLS_STATE_ERROR;
+                return false;
             }
         }
         else if (tls_ctx.truststore.status != TLS_STORE_OK &&
@@ -2886,11 +3037,21 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
         }
         else
         {
-            /* No truststore entry found: no root anchor available. Proceed
-             * without root pinning (consistent with prior behaviour when
-             * truststore absent), but tell the caller. */
-            WARN();
+            /* No truststore entry found: cannot anchor the chain. */
+            ERROR();
+            ctx->state = TLS_STATE_ERROR;
+            return false;
         }
+    }
+    else
+    {
+        /* The topmost certificate's issuer has no (or an unparsed) CN, so
+         * there is nothing to look up in the truststore. Per RFC 5280
+         * section 6.1 the path must end at a trust anchor; silently
+         * accepting an unanchored chain here would be a fail-open. */
+        ERROR();
+        ctx->state = TLS_STATE_ERROR;
+        return false;
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
@@ -3455,7 +3616,8 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     tls_hash_digest(&hash_ctx, message_hash);
 
     /* RSA decrypt the signature, then run the PSS padding check. */
-    if (rsa->mod_len > RSA_TRANSIENT_SIZE)
+    if (rsa->mod_len > RSA_TRANSIENT_SIZE ||
+        rsa->mod_len < RSA_MODULUS_MIN_SUPPORTED)
     {
         ERROR_CODE(0x7d);
         return false;
@@ -3483,6 +3645,100 @@ cleanup:
     return ok;
 }
 
+/* Verify a TLS 1.3 server CertificateVerify using ECDSA P-256 with SHA-256
+ * (ecdsa_secp256r1_sha256, code point 0x0403).  Constructs:
+ *
+ *     content = 64 spaces || "TLS 1.3, server CertificateVerify" || 0x00
+ *               || Transcript-Hash(ClientHello..Certificate)
+ *     digest  = SHA-256(content)
+ *
+ * then calls tls_p256_verify(sig, digest, pubkey).  The signature is a
+ * DER-encoded SEQUENCE { INTEGER r, INTEGER s }; this function decodes
+ * both integers and serialises them as a flat 64-byte r||s buffer. */
+static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
+                                              const uint8_t *sig, size_t sig_len)
+{
+    static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
+    uint8_t spaces[64];
+    uint8_t zero = 0;
+    uint8_t transcript[32];
+    uint8_t message_hash[32];
+    struct tls_hash_context hash_ctx;
+    uint8_t rs[64]; /* flat r||s for tls_p256_verify */
+
+    if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P256 ||
+        !sig || sig_len == 0)
+    {
+        ERROR_CODE(0x85);
+        return false;
+    }
+
+    if (!ctx->leaf_pubkey.ec.data || ctx->leaf_pubkey.ec.len != 65)
+    {
+        ERROR_CODE(0x86);
+        return false;
+    }
+
+    /* Build the signed-content digest. */
+    if (!ctx->transcript_hash)
+    {
+        ERROR_CODE(0x87);
+        return false;
+    }
+    transcript_hash_digest(ctx->transcript_hash, transcript);
+
+    memset(spaces, 0x20, sizeof(spaces));
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    {
+        ERROR_CODE(0x88);
+        return false;
+    }
+    tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(&hash_ctx, &zero, 1);
+    tls_hash_update(&hash_ctx, transcript, sizeof(transcript));
+    tls_hash_digest(&hash_ctx, message_hash);
+
+    /* Parse DER SEQUENCE { INTEGER r, INTEGER s } → flat 64-byte r||s.
+     * Structure: 30 <seq_len> 02 <r_len> [r bytes] 02 <s_len> [s bytes].
+     * Integers are parsed as strict DER (minimal, non-negative) by
+     * tls_ecdsa_parse_int (x509.c). */
+    if (sig_len < 8 || sig[0] != 0x30)
+    {
+        ERROR_CODE(0x89);
+        return false;
+    }
+    size_t seq_len = sig[1];
+    /* Only support short-form length for this signature. */
+    if (seq_len & 0x80 || 2 + seq_len != sig_len)
+    {
+        ERROR_CODE(0x89);
+        return false;
+    }
+    {
+        const uint8_t *end = sig + sig_len;
+        const uint8_t *p = tls_ecdsa_parse_int(sig + 2, sig_len - 2, rs);
+        if (p)
+            p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
+        if (p != end)   /* NULL (parse error) or trailing bytes */
+        {
+            ERROR_CODE(0x89);
+            return false;
+        }
+    }
+
+    tls_crypto_guard_enable();
+    bool ok = tls_p256_verify(rs, message_hash, ctx->leaf_pubkey.ec.data);
+    tls_crypto_guard_disable();
+
+    tls_secure_memzero(rs, sizeof(rs));
+    tls_secure_memzero(message_hash, sizeof(message_hash));
+    return ok;
+}
+
+/* TLS 1.3 code point for ecdsa_secp256r1_sha256 (RFC 8446 §4.2.3). */
+#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403
+
 /**
  * @brief Parse and verify the server's CertificateVerify.
  *
@@ -3491,7 +3747,7 @@ cleanup:
  * just sent. It's the live proof-of-possession that binds "I trust this
  * cert chain" to "I'm actually talking to that cert's owner."
  *
- * Supports rsa_pss_rsae_sha256 only.
+ * Supports rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256.
  */
 static bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -3559,6 +3815,9 @@ static bool tls_recv_certificate_verify(
     {
     case TLS_SIG_RSA_PSS_RSAE_SHA256:
         sig_ok = tls_certverify_rsa_pss_sha256(ctx, data + offset, sig_len);
+        break;
+    case TLS_SIG_ECDSA_SECP256R1_SHA256:
+        sig_ok = tls_certverify_ecdsa_p256_sha256(ctx, data + offset, sig_len);
         break;
     default:
         /* Unsupported algorithm — fail closed. */
@@ -3702,12 +3961,17 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         }
     }
 
-    /* Step 5: Get transcript hash (ClientHello...ServerHello). */
-    tls_secure_memzero(transcript_hash, 32);
-    if (ctx->transcript_hash)
+    /* Step 5: Get transcript hash (ClientHello...ServerHello). A missing
+     * transcript_hash context means transcript hashing was never started
+     * for this connection -- deriving keys against 32 zero bytes instead
+     * would silently produce the wrong secret rather than failing, so
+     * refuse instead of falling back. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb5);
+        return false;
     }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Step 6: Derive client handshake traffic secret
      * client_handshake_traffic_secret =
@@ -3868,12 +4132,16 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     }
     memcpy(ctx->keys.master_secret, master_secret, 32);
 
-    /* Step 4: Get transcript hash (ClientHello...server Finished). */
-    tls_secure_memzero(transcript_hash, 32);
-    if (ctx->transcript_hash)
+    /* Step 4: Get transcript hash (ClientHello...server Finished). A
+     * missing transcript_hash context means transcript hashing was never
+     * started for this connection -- fail rather than silently deriving
+     * against 32 zero bytes. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb6);
+        return false;
     }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Step 5: Derive client application traffic secret
      * client_application_traffic_secret =
@@ -4026,15 +4294,16 @@ bool tls_send_finished(
         return false;
     }
 
-    /* Step 3: Get transcript hash up to this point */
-    if (ctx->transcript_hash)
+    /* Step 3: Get transcript hash up to this point. A missing
+     * transcript_hash context means transcript hashing was never started
+     * for this connection -- fail rather than computing verify_data
+     * against 32 zero bytes. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb7);
+        return false;
     }
-    else
-    {
-        tls_secure_memzero(transcript_hash, 32);
-    }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Step 4: Compute verify_data = HMAC(finished_key, transcript_hash) */
     if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
@@ -4226,15 +4495,17 @@ static bool tls_recv_finished(
         return false;
     }
 
-    /* Get transcript hash (before this Finished message) */
-    if (ctx->transcript_hash)
+    /* Get transcript hash (before this Finished message). A missing
+     * transcript_hash context means transcript hashing was never started
+     * for this connection -- fail rather than verifying against 32 zero
+     * bytes, even though a real peer's verify_data would not match a
+     * zero-transcript expectation either way. */
+    if (!ctx->transcript_hash)
     {
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+        ERROR_CODE(0xb8);
+        return false;
     }
-    else
-    {
-        tls_secure_memzero(transcript_hash, 32);
-    }
+    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
 
     /* Compute expected verify_data */
     if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
@@ -4421,6 +4692,7 @@ static bool tls_recv_new_session_ticket(
         /* Some TLS 1.3 servers emit tickets larger than the calculator-side
          * PSK identity store. Ignore those tickets rather than aborting an
          * otherwise healthy application connection. */
+        DEBUG(); /* ticket ignored: zero-length or exceeds PSK identity store -- resumption skipped */
         return true;
     }
     if (!tls_hkdf_expand_label(TLS_HASH_SHA256,
@@ -4429,6 +4701,7 @@ static bool tls_recv_new_session_ticket(
                                nonce, nonce_len,
                                ctx->psk, 32))
     {
+        DEBUG(); /* PSK derivation from ticket nonce failed -- resumption skipped, connection stays up */
         return true;
     }
 
@@ -4639,6 +4912,7 @@ bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx)
     if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE) return false;
     if (ctx->client_seq_num < tls_cipher_suite_record_limit(ctx->cipher_suite) - 1u)
         return true;
+    DEBUG(); /* record sequence number crossed cipher suite's limit -- sending KeyUpdate */
     return tls_send_key_update_record(ctx);
 }
 
@@ -4813,6 +5087,8 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
     tls_secure_memzero(ctx->ecdhe_shared, sizeof(ctx->ecdhe_shared));
     tls_secure_memzero(ctx->ecdhe_public, sizeof(ctx->ecdhe_public));
+    tls_secure_memzero(ctx->p256_private, sizeof(ctx->p256_private));
+    tls_secure_memzero(ctx->p256_public, sizeof(ctx->p256_public));
     tls_secure_memzero(&ctx->keys, sizeof(ctx->keys));
     tls_secure_memzero(ctx, sizeof(*ctx));
     ctx->leaf_pubkey.type = TLS_KEY_TYPE_UNKNOWN;

@@ -40,13 +40,20 @@ The analyzer reports two binary marginal estimates:
   the observed most-common-value probability before taking `-log2`, following
   the Most Common Value estimator in NIST SP 800-90B section 6.3.1.
 
-The version 2 profiler also records the complete adjacent-pair transition
+The version 2 profiler records the complete adjacent-pair transition
 matrix (`n00`, `n01`, `n10`, and `n11`). From it the analyzer reports the
 lag-1 phi correlation, a runs-test z-score, and a coarse first-order Markov
 min-entropy rate. The Markov lower estimate applies simultaneous Wilson upper
 confidence bounds, Bonferroni-adjusted across the four transition
 probabilities, before selecting the most probable self-loop or two-state
 cycle.
+
+Version 3 additionally records mismatch counts at lags 1 through 4, matching
+the range used by source qualification in `random.s`. The analyzer reports
+each mismatch rate, a stationary-binary correlation heuristic
+`1-q_k/(2*p0*p1)`, and whether the aggregate rate projects inside the broad
+startup-screen bounds. These higher-lag results are periodicity diagnostics;
+they do not increase the entropy credit or replace a full non-IID assessment.
 
 Version 1 captures remain supported. Their pair counts are reconstructed from
 the marginal and total-transition counts; when the unrecorded endpoints leave
@@ -78,11 +85,12 @@ a raw sequential capture and the complete non-IID estimator suite.
 ## Published statistics report
 
 Pushes to `master` that change the checked-in RNG reports, either analysis
-tool, or the reporting workflow run `Publish RNG Statistics`. The workflow
+tool, or the reporting workflow run `Publish Statistics`. The RNG suite
 recomputes analyzer-owned fields from the stored raw counts and publishes:
 
 - aggregate and per-model tables in the GitHub Actions job summary;
-- an inline distribution chart for marginal `H_99`, lag-1 phi, and
+- an inline distribution chart for marginal `H_99`, maximum absolute lag-1
+  through lag-4 correlation heuristic, and
   conservative `H`;
 - Markdown, JSON, CSV, SVG, and PNG outputs as a workflow artifact; and
 - the same named outputs in the shared `statistics-assets-latest` release.

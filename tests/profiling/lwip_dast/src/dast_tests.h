@@ -45,7 +45,7 @@ static const dast_test_t dast_tests[DAST_TEST_COUNT] = {
     { "tls-clean-echo", "TLS clean echo", DAST_STATE_TLS_CLIENT, 9443, "TLS 1.3 baseline: complete handshake, receive encrypted payload, echo it back." },
     { "tls-psk-resume-echo", "TLS PSK resume echo", DAST_STATE_TLS_CLIENT, 9443, "Second connection should resume by TLS 1.3 PSK/session ticket, then echo encrypted data." },
     { "tls-missing-record", "TLS missing record", DAST_STATE_TLS_CLIENT, 9443, "Server accepts TCP and drops the handshake before any TLS record; calc must fail closed and stay alive." },
-    { "tls-unsupported-certverify", "TLS unsupported certverify", DAST_STATE_TLS_CLIENT, 9443, "Server presents an ECDSA TLS 1.3 identity; calc must reject unsupported CertificateVerify behavior and stay alive." },
+    { "tls-unsupported-certverify", "TLS ECDSA certverify reject", DAST_STATE_TLS_CLIENT, 9443, "Server presents an ECDSA P-256 cert not in the truststore; calc must abort (fail-closed: untrusted cert rejected)." },
 };
 
 #endif /* LWIP_DAST_TESTS_H */

@@ -91,7 +91,9 @@ static void lwip_dispatch_master(void *arg);
 static void lwip_dispatch_master(void *arg)
 {
     (void)arg;
+    INFO("dispatch tick");
     if (!g_master_running) {
+        INFO("dispatch tick early exit");
         return;
     }
 
@@ -122,6 +124,7 @@ void lwip_dispatch_start(void)
         return;
     }
     g_master_running = true;
+    INFO("dispatch start");
     sys_timeout(LWIP_DISPATCH_TICK_MS, lwip_dispatch_master, NULL);
 }
 

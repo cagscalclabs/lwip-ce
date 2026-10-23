@@ -565,7 +565,6 @@ int main(void)
     lwip_example_line("waiting for network...");
     lwip_example_line("press [clear] to quit");
     lwip_example_present();
-    lwip_set_event_cb(lwip_example_dbg_console_cb);
 
     lwip_request_services(LWIP_SOCKET_SVC_DHCP | LWIP_SOCKET_SVC_DNS, 0);
 

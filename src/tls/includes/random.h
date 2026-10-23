@@ -32,8 +32,48 @@ typedef enum tls_rng_failure
     TLS_RNG_FAILURE_ACCOUNTING,      /**< Internal reserve length/credit mismatch. */
     TLS_RNG_FAILURE_INSTANTIATE,     /**< Hash_DRBG instantiation failed. */
     TLS_RNG_FAILURE_RESEED,          /**< Hash_DRBG reseeding failed. */
-    TLS_RNG_FAILURE_GENERATE         /**< Hash_DRBG output generation failed. */
+    TLS_RNG_FAILURE_GENERATE,        /**< Hash_DRBG output generation failed. */
+    TLS_RNG_FAILURE_BUSY,            /**< tls_random_bytes called while async request active. */
+    TLS_RNG_FAILURE_TIMEOUT          /**< RNG did not become ready before its deadline. */
 } tls_rng_failure_t;
+
+/**
+ * Pass bits retained for the most recent raw-source health failure.
+ * Log output prints bit 6 first, so `0b1111110` means RCT failed and every
+ * other test passed:
+ *
+ *   bit 6  distribution qualification (marginal + pair disagreement)
+ *   bit 5  lag-4 qualification
+ *   bit 4  lag-3 qualification
+ *   bit 3  lag-2 qualification
+ *   bit 2  lag-1 qualification
+ *   bit 1  adaptive proportion test
+ *   bit 0  repetition count test
+ */
+#define TLS_RNG_HEALTH_RCT_PASS           (1u << 0)
+#define TLS_RNG_HEALTH_APT_PASS           (1u << 1)
+#define TLS_RNG_HEALTH_LAG1_PASS          (1u << 2)
+#define TLS_RNG_HEALTH_LAG2_PASS          (1u << 3)
+#define TLS_RNG_HEALTH_LAG3_PASS          (1u << 4)
+#define TLS_RNG_HEALTH_LAG4_PASS          (1u << 5)
+#define TLS_RNG_HEALTH_DISTRIBUTION_PASS  (1u << 6)
+#define TLS_RNG_HEALTH_ALL_PASS           0x7Fu
+
+/** Lifecycle state of the asynchronous RNG service. */
+typedef enum tls_rng_state
+{
+    TLS_RNG_STOPPED = 0,
+    TLS_RNG_AWAITING_INIT,
+    TLS_RNG_DRBG_SEEDING,
+    TLS_RNG_DRBG_READY_128,
+    TLS_RNG_DRBG_READY_192,
+    TLS_RNG_FAILED
+} tls_rng_state_t;
+
+/** Minimum supported security-strength request. */
+#define TLS_RNG_STRENGTH_128 128u
+/** Maximum supported security-strength request. */
+#define TLS_RNG_STRENGTH_192 192u
 
 /*************************************************************************************
  * @brief Initializes the cryptographic TRNG within this module.
@@ -53,12 +93,13 @@ bool tls_random_init_entropy(void);
 uint64_t tls_random(void);
 
 /*************************************************************************************
- * @brief Fills a buffer from the 256-bit-strength SHA-256 Hash_DRBG.
+ * @brief Fills a buffer from the 192-bit-strength SHA-256 Hash_DRBG.
  * @param buffer    Pointer to a buffer to fill with random bytes.
  * @param len    Length of buffer to fill.
- * If the DRBG is not yet instantiated, this call synchronously gathers the
- * 256-bit entropy input and separate 256-bit nonce. A complete timer-prepared
- * reseed reserve is incorporated before output is generated.
+ * If the 192-bit DRBG is not yet instantiated, this call synchronously drives
+ * source initialization, 128-bit availability, and fresh 192-bit promotion.
+ * A complete timer-prepared reseed reserve is incorporated before output is
+ * generated.
  * @returns @p buffer on success, or NULL if instantiation/reseeding fails or
  * the RNG request engine is busy. On failure, the destination is zeroized.
  * @warning The calculator cannot isolate or securely persist DRBG state.
@@ -66,6 +107,31 @@ uint64_t tls_random(void);
  * modifying process memory or restoring prior machine state.
  */
 void *tls_random_bytes(void *buffer, size_t len);
+
+/**
+ * Fill a buffer using a DRBG instantiated at no less than @p strength_bits.
+ *
+ * A call made before that strength is ready drives initialization
+ * synchronously for compatibility with existing direct crypto callers. TLS
+ * sockets normally avoid this path by waiting asynchronously for 128-bit
+ * readiness before constructing their TLS PCB.
+ *
+ * @param buffer Destination buffer.
+ * @param len Number of bytes to generate.
+ * @param strength_bits Either @ref TLS_RNG_STRENGTH_128 or
+ *        @ref TLS_RNG_STRENGTH_192.
+ * @return @p buffer on success, otherwise NULL with the destination zeroized.
+ */
+void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits);
+
+/** Return the current asynchronous RNG lifecycle state. */
+tls_rng_state_t tls_rng_status(void);
+
+/** Return the currently available DRBG security strength: 0, 128, or 192. */
+uint16_t tls_rng_available_strength(void);
+
+/** Return the terminal failure reason, or zero if none is recorded. */
+tls_rng_failure_t tls_rng_last_failure(void);
 
 /*************************************************************************************
  * @brief Debug/test hook: returns the current sampled entropy source address.
@@ -115,8 +181,11 @@ struct tls_rng_stats
     uint32_t transition_rate_q16;
     /** One-hot mask selecting the sampled bit within @ref source_address. */
     uint8_t source_mask;
+    /** Differing observation pairs at lags 1 through 4, respectively. */
+    uint32_t lag_mismatches[4];
 };
 
+#define TLS_RNG_STATS_LAG_COUNT 4u
 #define TLS_RNG_STATS_MIN_SAMPLES 256u
 #define TLS_RNG_STATS_MAX_SAMPLES 65535u
 #define TLS_RNG_STATS_Q16_ONE 65536u
@@ -140,9 +209,9 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats);
  * SP 800-90B repetition-count and adaptive-proportion tests run continuously
  * inside the raw sampling path. This function reports whether a source is
  * ready and performs source initialization when necessary; it does not draw a
- * separate diagnostic sample. Automatic initialization retries are bounded;
- * after they are exhausted, calls fail until the RNG lifecycle is restarted
- * or an explicit @ref tls_random_init_entropy succeeds.
+ * separate diagnostic sample. The lifecycle dispatcher retries source
+ * initialization until its 15-second readiness deadline; after a terminal
+ * timeout, restart the lwIP/RNG lifecycle before requesting output again.
  *
  * @return @b true if RNG health is currently acceptable, @b false otherwise.
  */
@@ -187,10 +256,12 @@ bool tls_rng_is_busy(void);
  * the release API surface. */
 /** Start RNG health monitoring and entropy gathering.
  *
- * Entropy may not be ready immediately (notably under CEmu). Operations that
- * require randomness may use tls_random_bytes() synchronously or
- * tls_request_random_bytes() asynchronously; both fail closed if entropy
- * cannot be obtained when required.
+ * The first 50 ms callback performs blocking source selection. Later callbacks
+ * instantiate at 128 bits, construct a separate 192-bit instance from fresh
+ * material, and maintain its reseed reserve. The first ready state must be
+ * reached within 15 seconds. Operations may use tls_random_bytes()
+ * synchronously or tls_request_random_bytes() asynchronously; both fail
+ * closed if entropy cannot be obtained when required.
  */
 void tls_rng_start(void);
 void tls_rng_cleanup(void);

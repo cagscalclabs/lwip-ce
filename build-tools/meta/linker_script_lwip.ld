@@ -122,6 +122,21 @@ SECTIONS
     PROVIDE(____data_lma = ___data_lma);
     PROVIDE(____data_len = ___data_len);
 
+    /* Shared crypto scratch aliases.  __p256_scratch_start/_end are the
+     * single authoritative .bss.__p256_scratch region (p256.s).  powmod,
+     * HKDF, and the RSA transient buffer all alias the same region; they
+     * are never live concurrently with P-256. */
+    PROVIDE(__tls_scratch_start  = __p256_scratch_start);
+    PROVIDE(__tls_scratch_end    = __p256_scratch_end);
+    PROVIDE(___tls_scratch_start = __p256_scratch_start);
+    PROVIDE(___tls_scratch_end   = __p256_scratch_end);
+    PROVIDE(__tls_scratch        = __p256_scratch_start);
+    PROVIDE(___tls_scratch       = __p256_scratch_start);
+    /* RSA result/transient buffer: bottom 512 bytes of shared scratch.
+     * powmod Lacc/Ltmp occupy the top 2*mod_len bytes and never reach here. */
+    PROVIDE(__rsa_transient      = __p256_scratch_start);
+    PROVIDE(___rsa_transient     = __p256_scratch_start);
+
     /* X25519 scratch variables. Uninitialized (NOLOAD) bss, page-aligned
      * so the hot loop can address them by patching only the low byte of
      * each address (R_Z80_BYTE0 relocations against a fixed page). Kept in

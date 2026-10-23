@@ -44,15 +44,19 @@ TRNG
 The calculator has no hardware RNG. lwIP-CE derives entropy from a selected
 noisy SRAM bit, continuously applies repetition-count and adaptive-proportion
 health tests, packs 952 observations into a 119-byte pool, and conditions that
-pool with SHA-256. The configured conservative source estimate is 0.35 bits
-per selected-bit observation. For the full entropy analysis, see the
+pool with SHA-256 and retains a 192-bit conditioned contribution. The
+configured conservative source estimate is 0.269 bits per selected-bit
+observation, so 952 observations account for 256.088 raw bits: 192 output
+bits plus a 64-bit conditioning margin. For the full entropy analysis, see the
 `whitepaper <https://github.com/cagscalclabs/lwip-ce/releases/tag/whitepaper-latest>`_.
 Do not use the toolchain ``random()`` functions for anything security-sensitive;
 they are not cryptographically secure.
 
-Hash_DRBG is instantiated at 256-bit security strength using one independently
-conditioned 256-bit entropy input and a second independently conditioned
-256-bit nonce. Later reseeds require one 256-bit conditioned contribution.
+The timer first instantiates Hash_DRBG at 128-bit security strength from one
+independently conditioned 192-bit contribution. It then collects two entirely
+fresh contributions for a separate 192-bit instance and atomically promotes
+that instance when ready. Later reseeds require one 192-bit conditioned
+contribution.
 The calculator provides no isolated execution, immutable monotonic state,
 protected key storage, or guaranteed secure erasure. Consequently, this API
 does not claim resistance to an attacker capable of reading or modifying the
@@ -60,10 +64,10 @@ live DRBG state or restoring an earlier calculator state.
 
 .. c:function:: bool tls_random_init_entropy(void)
 
-   Select and validate an SRAM entropy tap. ``lwip_start()`` also starts the
-   timer-driven entropy collector. Initial Hash_DRBG instantiation collects a
-   256-bit entropy input and a separate 256-bit nonce; afterward, the timer
-   prepares each 256-bit reseed reserve in one conditioned contribution.
+   Select and validate an SRAM entropy tap. ``lwip_start()`` starts a 50 ms
+   lifecycle dispatcher; its first callback performs this complete blocking
+   source-selection scan. Failed scans are retried until the absolute
+   15-second readiness deadline expires.
 
    :returns: ``true`` on success, ``false`` if entropy initialization failed
       (e.g. no suitable SRAM source found).
@@ -74,17 +78,17 @@ live DRBG state or restoring an earlier calculator state.
    if necessary. SP 800-90B repetition-count and adaptive-proportion tests run
    continuously on the selected raw bit as random data is gathered; no
    separate periodic health-test callback or output-sample test is used.
-   Initial automatic source discovery is limited to two complete scans per RNG
-   lifecycle. If neither scan finds a usable tap, later RNG operations fail
-   immediately instead of repeatedly rescanning. A successful explicit
-   ``tls_random_init_entropy()`` call or an lwIP restart permits recovery.
+   Automatic source discovery retries on the 50 ms lifecycle cadence until
+   the RNG has spent 15 seconds trying to reach its first ready state. A
+   terminal timeout requires restarting the lwIP/RNG lifecycle before random
+   output can be requested again.
 
    :returns: ``true`` if the RNG is healthy and safe to use, ``false``
       otherwise. On ``false``, retry ``tls_random_init_entropy()`` or abort.
 
 .. c:function:: void *tls_random_bytes(void *buffer, size_t len)
 
-   Fill ``buffer`` synchronously from the 256-bit-strength SHA-256 Hash_DRBG. If the DRBG has not
+   Fill ``buffer`` synchronously from the 192-bit-strength SHA-256 Hash_DRBG. If the DRBG has not
    yet been instantiated, this call blocks while gathering the initial
    entropy. Once instantiated, output does not consume entropy one-for-one.
    A complete timer-prepared entropy reserve is incorporated before output.
@@ -94,6 +98,29 @@ live DRBG state or restoring an earlier calculator state.
    :returns: ``buffer`` on success, or ``NULL`` if instantiation/reseeding
       fails or another RNG request is active. The destination is zeroized on
       failure.
+
+.. c:function:: void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
+
+   Fill ``buffer`` from a DRBG whose instantiated security strength is at
+   least ``TLS_RNG_STRENGTH_128`` or ``TLS_RNG_STRENGTH_192``. TLS 1.3 uses
+   the 128-bit level; the compatibility ``tls_random_bytes()`` API continues
+   to require 192-bit readiness.
+
+   :returns: ``buffer`` on success, or ``NULL`` with the destination zeroized.
+
+.. c:function:: tls_rng_state_t tls_rng_status(void)
+
+   Return the lifecycle state: stopped, awaiting source initialization,
+   seeding, ready at 128 bits, ready at 192 bits, or failed.
+
+.. c:function:: uint16_t tls_rng_available_strength(void)
+
+   Return the currently available instantiated strength: 0, 128, or 192.
+
+.. c:function:: tls_rng_failure_t tls_rng_last_failure(void)
+
+   Return the terminal failure reason, or zero when no terminal failure has
+   been recorded.
 
 .. c:function:: uint64_t tls_random(void)
 
@@ -171,7 +198,9 @@ live DRBG state or restoring an earlier calculator state.
    if (tls_random_bytes(&r, sizeof(r)) == NULL)
       printf("error: rng");
 
-After ``lwip_start()``, the entropy source is initialized automatically as part of the TLS subsystem setup; calling ``tls_random_init_entropy()`` again after that is harmless but redundant.
+After ``lwip_start()``, RNG initialization progresses through
+``lwip_service_events()``. TLS sockets wait internally for 128-bit readiness;
+applications do not need to race ``tls_rng_status()`` before connecting.
 
 **Async gathering (large requests, main-loop friendly):**
 
@@ -475,7 +504,7 @@ AES-128 key can be used with GCM, CCM, or CBC. Operations reject a key whose
    .. c:macro:: TLS_KEY_TYPE_EC_P256
 
       EC P-256 key. Populate the ``ec`` union member. Compatible with
-      ``TLS_ALG_ECDSA_SECP256R1_SHA256`` (currently unimplemented).
+      ``TLS_ALG_ECDSA_SECP256R1_SHA256`` for both verify and sign.
 
    .. c:macro:: TLS_KEY_TYPE_AES
 
@@ -804,13 +833,14 @@ Functions
    Hashes ``content`` with SHA-256 internally; pass the raw message, not a
    pre-computed digest.  ``sig_len_out`` receives the number of bytes written on
    success.  The caller must pre-allocate ``sig_out`` large enough to hold the
-   output (RSA signatures are ``key->rsa.mod_len`` bytes).
+   output (RSA signatures are ``key->rsa.mod_len`` bytes; P-256 signatures are
+   DER-encoded and up to 72 bytes).
 
    .. note::
 
-      Signing is currently unimplemented for all algorithms, including RSA.
-      All calls return ``TLS_KEY_OP_UNSUPPORTED`` until private-key signing is
-      added.
+      P-256 signing (``TLS_ALG_ECDSA_SECP256R1_SHA256``) is implemented using
+      RFC 6979 deterministic ECDSA. RSA signing is not yet implemented and
+      returns ``TLS_KEY_OP_UNSUPPORTED``.
 
    :param content: Message bytes to sign.
    :param content_len: Length of ``content`` in bytes.
@@ -837,7 +867,7 @@ Functions
      - Verify PSS signatures with SHA-256, MGF1-SHA-256 and a 32-byte salt.
    * - ``TLS_ALG_ECDSA_SECP256R1_SHA256``
      - ``ec``
-     - Recognized, but verification and signing are unimplemented.
+     - Verify and sign (RFC 6979 deterministic ECDSA, SHA-256). Hardware-verified on TI-84 Plus CE.
 
 Example::
 
@@ -1085,7 +1115,7 @@ instead.
 
    - ``TLS_ALG_RSA_PKCS1_SHA256`` — RSASSA-PKCS1-v1.5 SHA-256
    - ``TLS_ALG_RSA_PSS_RSAE_SHA256`` — RSASSA-PSS SHA-256 (saltLen=32)
-   - ``TLS_ALG_ECDSA_SECP256R1_SHA256`` — returns ``TLS_KEY_OP_UNSUPPORTED``
+   - ``TLS_ALG_ECDSA_SECP256R1_SHA256`` — ECDSA-P256-SHA256 (verify only)
    - Encryption-range or unknown ``alg`` — returns ``TLS_KEY_OP_UNKNOWN``
 
    :param content: Signed data (e.g. DER TBSCertificate bytes).

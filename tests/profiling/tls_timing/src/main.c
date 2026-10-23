@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/power.h>
 #include <time.h>
 
 #include <lwip/cryptography/aes.h>
@@ -15,6 +16,7 @@
 #include <lwip/cryptography/hmac.h>
 #include <lwip/cryptography/passwords.h>
 #include <lwip/cryptography/x25519.h>
+#include <lwip/cryptography/p256.h>
 #include <lwip.h>
 
 /* Dyload call overhead is far higher than the old statically-linked path
@@ -26,6 +28,10 @@
 #define TIMING_REPS_FAST 8u
 #define TIMING_REPS_MEDIUM 4u
 #define TIMING_REPS_SLOW 2u
+/* Low-rep count for asymmetric (P-256) operations that take hundreds of
+ * milliseconds per call; 1 rep keeps the suite inside CI wall-clock budget
+ * (half of X25519's TIMING_REPS_SLOW=2). */
+#define TIMING_REPS_LOWREP 1u
 
 #define STABILITY_MAX_PCT_X100 100u
 #define MAD_SIGMA_SCALE_X10000 14826u
@@ -867,6 +873,158 @@ static uint32_t time_x25519_case(uint8_t input_class)
     return (uint32_t)(clock() - start);
 }
 
+/* ---------------------------------------------------------------------------
+ * P-256 timing entries.
+ *
+ * KG (keygen) and DH (ECDH secret): input_class selects the private scalar.
+ *   best  = low Hamming-weight scalar (only bit 0 set)
+ *   worst = n-1 (high Hamming weight; n = FFFFFFFF00000000FFFFFFFFFFFFFFFF
+ *                BCE6FAADA7179E84F3B9CAC2FC632551)
+ *   random = prng scalar (sampled fresh each call)
+ *   edge  = scalar with leading zero bytes (0x00 0x00 0x01 0x00 ... 0x00)
+ * The peer public key is fixed (RFC 5903 §8.1 responder) for KG/DH; the
+ * private scalar is the secret we are testing for CT leakage.
+ *
+ * SG (sign): input_class selects the message hash fed to RFC 6979.
+ * Because k = HMAC-DRBG(d, h), changing h changes k, so hash-class variation
+ * exercises different nonces through the private-key scalar multiply.
+ *   best  = SHA-256("") (all-zero hash preimage)
+ *   worst = SHA-256(0xFF x 32) (all-ones hash preimage)
+ *   random = fresh prng bytes each call
+ *   edge  = SHA-256("test") (boundary-value preimage)
+ * The signing key is fixed (RFC 6979 A.2.5 P-256 key) so the private scalar
+ * is identical across classes, isolating the k path.
+ *
+ * VF (verify): all inputs are public; intentionally variable-time.
+ * No differential test — mean wall-clock only via run_slow_op.
+ * --------------------------------------------------------------------------*/
+
+/* P-256 order n minus 1 (big-endian). */
+static const uint8_t p256_scalar_worst[32] = {
+    0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xbc,0xe6,0xfa,0xad,0xa7,0x17,0x9e,0x84,0xf3,0xb9,0xca,0xc2,0xfc,0x63,0x25,0x50
+};
+/* Low Hamming-weight: bit 0 set only. */
+static const uint8_t p256_scalar_best[32] = {
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01
+};
+/* Edge: leading zero bytes then 0x01 at byte 2 (tests leading-zero handling). */
+static const uint8_t p256_scalar_edge[32] = {
+    0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/* RFC 5903 section 8.1, responder public key — fixed peer for KG/DH. */
+static const uint8_t p256_peer_pub[65] = {
+    0x04,0xd1,0x2d,0xfb,0x52,0x89,0xc8,0xd4,0xf8,0x12,0x08,0xb7,0x02,0x70,0x39,0x8c,
+    0x34,0x22,0x96,0x97,0x0a,0x0b,0xcc,0xb7,0x4c,0x73,0x6f,0xc7,0x55,0x44,0x94,0xbf,
+    0x63,0x56,0xfb,0xf3,0xca,0x36,0x6c,0xc2,0x3e,0x81,0x57,0x85,0x4c,0x13,0xc5,0x8d,
+    0x6a,0xac,0x23,0xf0,0x46,0xad,0xa3,0x0f,0x83,0x53,0xe7,0x4f,0x33,0x03,0x98,0x72,0xab
+};
+
+/* RFC 6979 A.2.5 P-256 signing key (fixed across all sign classes). */
+static const uint8_t p256_sign_priv[32] = {
+    0xc9,0xaf,0xa9,0xd8,0x45,0xba,0x75,0x16,0x6b,0x5c,0x21,0x57,0x67,0xb1,0xd6,0x93,
+    0x4e,0x50,0xc3,0xdb,0x36,0xe8,0x9b,0x12,0x7b,0x8a,0x62,0x2b,0x12,0x0f,0x67,0x21
+};
+/* SHA-256("") */
+static const uint8_t p256_hash_best[32] = {
+    0xe3,0xb0,0xc4,0x42,0x98,0xfc,0x1c,0x14,0x9a,0xfb,0xf4,0xc8,0x99,0x6f,0xb9,0x24,
+    0x27,0xae,0x41,0xe4,0x64,0x9b,0x93,0x4c,0xa4,0x95,0x99,0x1b,0x78,0x52,0xb8,0x55
+};
+/* SHA-256(0xFF x 32) */
+static const uint8_t p256_hash_worst[32] = {
+    0x76,0xbe,0x8b,0x52,0x8d,0x00,0x75,0xf7,0xaa,0xe9,0x8d,0x6f,0xa5,0x7a,0x6d,0x3c,
+    0x83,0xae,0x48,0x0a,0x87,0x86,0xb5,0x47,0xbb,0x24,0x7e,0x25,0x54,0x71,0x5f,0xad
+};
+/* SHA-256("test") */
+static const uint8_t p256_hash_edge[32] = {
+    0x9f,0x86,0xd0,0x81,0x88,0x4c,0x7d,0x65,0x9a,0x2f,0xea,0xa0,0xc5,0x5a,0xd0,0x15,
+    0xa3,0xbf,0x4f,0x1b,0x2b,0x0b,0x82,0x2c,0xd1,0x5d,0x6c,0x15,0xb0,0xf0,0x0a,0x08
+};
+
+static uint8_t p256_pub_scratch[65];
+static uint8_t p256_ss_scratch[32];
+static uint8_t p256_sig_scratch[64];
+static uint8_t p256_random_scalar[32];
+static uint8_t p256_random_hash[32];
+
+static uint32_t time_p256_keygen(uint8_t input_class)
+{
+    const uint8_t *priv;
+    clock_t start;
+    bool ok;
+
+    switch (input_class)
+    {
+    case TIMING_CLASS_BEST:   priv = p256_scalar_best;   break;
+    case TIMING_CLASS_WORST:  priv = p256_scalar_worst;  break;
+    case TIMING_CLASS_RANDOM:
+        fill_pattern(p256_random_scalar, sizeof(p256_random_scalar), TIMING_CLASS_RANDOM);
+        /* Clamp to [1, n-1]: ensure non-zero (set bit 0 if all-zero). */
+        if (p256_random_scalar[31] == 0) p256_random_scalar[31] = 0x01;
+        priv = p256_random_scalar;
+        break;
+    case TIMING_CLASS_EDGE:   priv = p256_scalar_edge;   break;
+    default:                  priv = p256_scalar_best;   break;
+    }
+
+    start = clock();
+    ok = tls_p256_publickey(p256_pub_scratch, priv);
+    timing_sink ^= (uint8_t)ok ^ p256_pub_scratch[1];
+    return (uint32_t)(clock() - start);
+}
+
+static uint32_t time_p256_secret(uint8_t input_class)
+{
+    const uint8_t *priv;
+    clock_t start;
+    bool ok;
+
+    switch (input_class)
+    {
+    case TIMING_CLASS_BEST:   priv = p256_scalar_best;   break;
+    case TIMING_CLASS_WORST:  priv = p256_scalar_worst;  break;
+    case TIMING_CLASS_RANDOM:
+        fill_pattern(p256_random_scalar, sizeof(p256_random_scalar), TIMING_CLASS_RANDOM);
+        if (p256_random_scalar[31] == 0) p256_random_scalar[31] = 0x01;
+        priv = p256_random_scalar;
+        break;
+    case TIMING_CLASS_EDGE:   priv = p256_scalar_edge;   break;
+    default:                  priv = p256_scalar_best;   break;
+    }
+
+    start = clock();
+    ok = tls_p256_secret(p256_ss_scratch, priv, p256_peer_pub);
+    timing_sink ^= (uint8_t)ok ^ p256_ss_scratch[0];
+    return (uint32_t)(clock() - start);
+}
+
+static uint32_t time_p256_sign(uint8_t input_class)
+{
+    const uint8_t *hash;
+    clock_t start;
+    bool ok;
+
+    switch (input_class)
+    {
+    case TIMING_CLASS_BEST:   hash = p256_hash_best;   break;
+    case TIMING_CLASS_WORST:  hash = p256_hash_worst;  break;
+    case TIMING_CLASS_RANDOM:
+        fill_pattern(p256_random_hash, sizeof(p256_random_hash), TIMING_CLASS_RANDOM);
+        hash = p256_random_hash;
+        break;
+    case TIMING_CLASS_EDGE:   hash = p256_hash_edge;   break;
+    default:                  hash = p256_hash_best;   break;
+    }
+
+    start = clock();
+    ok = tls_p256_sign(p256_sig_scratch, hash, p256_sign_priv);
+    timing_sink ^= (uint8_t)ok ^ p256_sig_scratch[0];
+    return (uint32_t)(clock() - start);
+}
+
 static void run_primitive(const char *name, uint32_t (*fn)(uint8_t), uint16_t reps,
                           struct primitive_result *out)
 {
@@ -1124,15 +1282,29 @@ int main(void)
     struct primitive_result r_aes_ccm_enc;
     struct primitive_result r_aes_ccm_dec;
     struct primitive_result r_x25519;
+    struct primitive_result r_p256_kg;
+    struct primitive_result r_p256_dh;
+    struct primitive_result r_p256_sg;
 
     if (!lwip_start())
     {
+        const char *start_error = lwip_get_start_errstring();
+
         os_ClrHome();
         printf("ERROR: lwip_start failed\n");
+        printf("Loader %u: %s\n",
+               (unsigned int)lwip_get_start_errno(),
+               start_error ? start_error : "unknown");
+        printf("Runtime: %u\n", (unsigned int)lwip_start_last_error());
         printf("Press any key");
         os_GetKey();
         return 1;
     }
+
+    /* This unattended hardware profile can run for well beyond TI-OS's APD
+     * window. Keep the calculator awake while measurements are in progress;
+     * restore normal APD behavior before waiting at the final screen. */
+    os_DisableAPD();
 
     (void)timing_log_begin();
     timing_logf("tls_timing,start,c=%u,c_rig=%u,sigma_scale=%u\n",
@@ -1175,8 +1347,28 @@ int main(void)
 
     run_primitive("X25519", time_x25519_case, TIMING_REPS_SLOW, &r_x25519);
     show_result("X25519", &r_x25519);
+
+    /* --- P256 --- */
+    timing_logf("tls_timing,section,P256\n");
+    os_ClrHome();
+    os_FontSelect(os_LargeFont);
+    printf("--- P256 ---\n");
+#ifndef TLS_TIMING_AUTORUN
+    printf("Press any key");
+    os_GetKey();
+#endif
+    run_primitive("P256-KG", time_p256_keygen, TIMING_REPS_LOWREP, &r_p256_kg);
+    show_result("P256-KG", &r_p256_kg);
+
+    run_primitive("P256-DH", time_p256_secret, TIMING_REPS_LOWREP, &r_p256_dh);
+    show_result("P256-DH", &r_p256_dh);
+
+    run_primitive("P256-SG", time_p256_sign, TIMING_REPS_LOWREP, &r_p256_sg);
+    show_result("P256-SG", &r_p256_sg);
+
     timing_logf("tls_timing,end\n");
     timing_log_end();
+    os_EnableAPD();
 
     os_ClrHome();
     os_FontSelect(os_LargeFont);
