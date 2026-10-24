@@ -15,8 +15,12 @@
     "../../common/LWIP.8.8xv",
     "../../common/lwip.8xv"
   ],
-  "target": { "name": "P256", "isASM": true },
+  "target": {
+    "name": "P256",
+    "isASM": true
+  },
   "sequence": [
+    "delay|5000",
     "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
@@ -53,77 +57,99 @@
       "description": "P-256 RFC 5903 S8.1 - initiator public key derivation",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["090C1EF72"],
+      "expected_CRCs": [
+        "090C1EF72"
+      ],
       "timeout": 30000
     },
     "2": {
       "description": "P-256 RFC 5903 S8.1 - ECDH initiator side",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 30000
     },
     "3": {
       "description": "P-256 RFC 5903 S8.1 - ECDH responder side",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 30000
     },
     "4": {
       "description": "P-256 RFC 6979 A.2.5 - deterministic sign (exact r,s)",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 60000
     },
     "5": {
       "description": "P-256 RFC 6979 A.2.5 - verify valid signature",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 60000
     },
     "6": {
       "description": "P-256 FIPS186-4 S6.4 - reject tampered signature",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 60000
     },
     "7": {
       "description": "P-256 FIPS186-4 S6.4 - reject off-curve public key",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 30000
     },
     "8": {
       "description": "P-256 FIPS186-4 S6.4 - reject r=0",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 60000
     },
     "9": {
       "description": "P-256 FIPS186-4 S6.4 - reject s=0",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 60000
     },
     "10": {
       "description": "P-256 FIPS186-4 S6.4 - reject r=n",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 60000
     },
     "11": {
       "description": "P-256 FIPS186-4 S6.4 - reject s=n",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": ["90C1EF72"],
+      "expected_CRCs": [
+        "90C1EF72"
+      ],
       "timeout": 60000
     },
     "12": {
@@ -131,7 +157,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@lwip_installed",
-      "expected_CRCs": ["F7C03D8D"],
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
       "timeout": 200000
     }
   }

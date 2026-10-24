@@ -124,6 +124,22 @@ void *tls_random_bytes(void *buffer, size_t len);
  */
 void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits);
 
+/**
+ * Fill a buffer with prediction-resistance enabled (SP 800-90A §9.3.1).
+ *
+ * Equivalent to @ref tls_random_bytes_ex but forces an immediate reseed from
+ * the entropy reserve before generating. Fails if the reserve is not ready,
+ * guaranteeing that output is never produced from a state that has not been
+ * freshly reseeded on this call.
+ *
+ * @param buffer Destination buffer.
+ * @param len Number of bytes to generate.
+ * @param strength_bits Either @ref TLS_RNG_STRENGTH_128 or
+ *        @ref TLS_RNG_STRENGTH_192.
+ * @return @p buffer on success, otherwise NULL with the destination zeroized.
+ */
+void *tls_random_bytes_pr(void *buffer, size_t len, uint16_t strength_bits);
+
 /** Return the current asynchronous RNG lifecycle state. */
 tls_rng_state_t tls_rng_status(void);
 

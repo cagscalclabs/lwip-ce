@@ -729,9 +729,9 @@
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>9.1 / 9.3.1 (prediction resistance)</section>
-    <location>src/tls/core/random.c: tls_random_bytes_ex (L961-1035) - prediction_resistance_flag</location>
-    <grade>NOT-APPLICABLE</grade>
-    <note>Prediction resistance is neither supported nor claimed. Opportunistic reseeding must not be described as PR because output is still produced when the reserve is empty (L679-683).</note>
+    <location>src/tls/core/random.c: tls_random_bytes_pr (L1062-1092) — per-call forced reseed before Generate</location>
+    <grade>COMPLIANT</grade>
+    <note>tls_random_bytes_pr() implements the SP 800-90A §9.3.1 per-call prediction-resistance flag: it unconditionally calls tls_drbg_apply_entropy_reserve() before generating, and returns NULL (zeroising the output buffer) if the entropy reserve is not ready. No output is ever produced from a state that has not been freshly reseeded on that exact call.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>

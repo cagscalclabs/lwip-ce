@@ -1059,6 +1059,38 @@ void *tls_random_bytes(void *buffer, size_t len)
     return tls_random_bytes_ex(buffer, len, TLS_RNG_STRENGTH_192);
 }
 
+void *tls_random_bytes_pr(void *buffer, size_t len, uint16_t strength_bits)
+{
+    if (buffer == NULL)
+        return NULL;
+    if (len == 0u)
+        return buffer;
+    if (strength_bits != TLS_RNG_STRENGTH_128 &&
+        strength_bits != TLS_RNG_STRENGTH_192)
+    {
+        DEBUG();
+        tls_secure_memzero(buffer, len);
+        return NULL;
+    }
+    /* SP 800-90A §9.3.1 prediction resistance: force an immediate reseed from
+     * the entropy reserve before generating. Fail if the reserve is not ready
+     * — never produce output from a state that has not been freshly reseeded
+     * on this call. */
+    if (g_tls_rng_state != TLS_RNG_DRBG_READY_192 ||
+        g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
+    {
+        DEBUG(); /* reserve not ready — PR request denied */
+        tls_secure_memzero(buffer, len);
+        return NULL;
+    }
+    if (!tls_drbg_apply_entropy_reserve())
+    {
+        tls_secure_memzero(buffer, len);
+        return NULL;
+    }
+    return tls_random_bytes_ex(buffer, len, strength_bits);
+}
+
 uint64_t tls_random(void)
 {
     uint64_t value = 0;

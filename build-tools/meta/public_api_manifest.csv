@@ -69,6 +69,7 @@ func,tls_random_init_entropy,cryptography,src/tls/includes/random.h,lwip/cryptog
 func,tls_random,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_random_bytes,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_random_bytes_ex,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
+func,tls_random_bytes_pr,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rng_healthcheck,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_request_random_bytes,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h
 func,tls_rng_is_busy,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h

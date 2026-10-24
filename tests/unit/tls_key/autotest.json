@@ -20,6 +20,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|5000",
     "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
@@ -80,7 +81,7 @@
       "timeout": 1500
     },
     "4": {
-      "description": "AES-128-GCM bad tag — decrypt must return false",
+      "description": "AES-128-GCM bad tag \u2014 decrypt must return false",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",

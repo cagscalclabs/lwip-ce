@@ -20,7 +20,7 @@
     "isASM": true
   },
   "sequence": [
-    "delay|2500",
+    "delay|5000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|16",
@@ -69,7 +69,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 15000
+      "timeout": 10000
     },
     "2": {
       "description": "GCM Spec (McGrew/Viega), Appendix B, Test Case 4",

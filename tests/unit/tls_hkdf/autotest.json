@@ -1,7 +1,7 @@
 {
   "transfer_files": [
     "bin/XHKDF.8xp",
-     "../../common/clibs.8xg",
+    "../../common/clibs.8xg",
     "../../common/lwIPINST.8xp",
     "../../common/LWIP.0.8xv",
     "../../common/LWIP.1.8xv",
@@ -19,6 +19,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|5000",
     "delay|2500",
     "key|clear",
     "action|launch:INSTALL",

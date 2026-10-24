@@ -20,6 +20,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|5000",
     "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
@@ -47,7 +48,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
-      "expected_CRCs": ["D1F2869F"],
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
       "timeout": 30000
     },
     "2": {
@@ -55,7 +58,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
-      "expected_CRCs": ["D1F2869F"],
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
       "timeout": 1000
     },
     "3": {
@@ -63,7 +68,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
-      "expected_CRCs": ["D1F2869F"],
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
       "timeout": 1000
     },
     "4": {
@@ -71,7 +78,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
-      "expected_CRCs": ["D1F2869F"],
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
       "timeout": 1000
     },
     "5": {
@@ -79,7 +88,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
-      "expected_CRCs": ["D1F2869F"],
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
       "timeout": 1000
     },
     "6": {
@@ -87,7 +98,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
-      "expected_CRCs": ["D1F2869F"],
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
       "timeout": 1000
     },
     "7": {
@@ -95,7 +108,9 @@
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@lwip_installed",
-      "expected_CRCs": ["F7C03D8D"],
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
       "timeout": 100000
     }
   }

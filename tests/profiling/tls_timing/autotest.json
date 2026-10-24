@@ -2,7 +2,7 @@
   "description": "Verify timing behavior. Compute acceptible jitter-based cycle deviation based on MAD, a tuning factor (c), then test that no input class exceeds the acceptable deviation more than 75% of the time",
   "transfer_files": [
     "bin/XTIMING.8xp",
-      "../../common/clibs.8xg",
+    "../../common/clibs.8xg",
     "../../common/lwIPCERT.8xv",
     "../../common/lwIPINST.8xp",
     "../../common/LWIP.0.8xv",
@@ -21,6 +21,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|5000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|2",
@@ -43,7 +44,7 @@
       ],
       "timeout": 4000000
     },
-      "2": {
+    "2": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

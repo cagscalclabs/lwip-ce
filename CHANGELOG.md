@@ -112,3 +112,8 @@ Users can now disable TLS completely through the app config wizard, for any unco
 
 - Remaining RFC deviations are either justified or resolved.
 - TLS alerts now echo to log rather than being silently lost.
+
+## upcoming in v3.0.0-rc3 (or v3.0.0 if no major bugs)
+
+- Switch from RFC 6066 `max_fragment_length` to RFC 8449 `record_size_limit`.
+- Add *NIST SP 800-90A Rev. 1, 9.1 / 9.3.1: prediction_resistance_flag* via new function `tls_random_bytes_pr()`.
