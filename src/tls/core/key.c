@@ -950,10 +950,24 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
     {
         if (tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
             (!aad || !aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
-            tls_aes_encrypt(&ctx, inbuf, in_len, ct) &&
+            (in_len == 0 || tls_aes_encrypt(&ctx, inbuf, in_len, ct)) &&
             (!aead || tls_aes_digest(&ctx, tag)))
         {
-            ok = true;
+            if (mode == TLS_AES_CBC)
+            {
+                /* PKCS#7: append the padding block (full 0x10 block when aligned). */
+                size_t rem = in_len % TLS_AES_BLOCK_SIZE;
+                uint8_t pad_byte = (uint8_t)(TLS_AES_BLOCK_SIZE - rem);
+                uint8_t pad_block[TLS_AES_BLOCK_SIZE];
+                memset(pad_block, pad_byte, sizeof(pad_block));
+                ok = tls_aes_encrypt(&ctx, pad_block, sizeof(pad_block),
+                                     ct + ct_len - TLS_AES_BLOCK_SIZE);
+                tls_secure_memzero(pad_block, sizeof(pad_block));
+            }
+            else
+            {
+                ok = true;
+            }
         }
         tls_secure_memzero(&ctx, sizeof(ctx));
     }
@@ -1120,6 +1134,25 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
             {
                 tls_cipher_blob_free(out);
                 return NULL;
+            }
+            /* Strip PKCS#7 padding for CBC blobs and update the blob length. */
+            if (!key_is_aead(alg) && ct_len > 0)
+            {
+                uint8_t pad = plain[ct_len - 1];
+                uint8_t diff = 0;
+                if (pad == 0 || pad > TLS_AES_BLOCK_SIZE || pad > ct_len)
+                {
+                    tls_cipher_blob_free(out);
+                    return NULL;
+                }
+                for (size_t i = 0; i < pad; i++)
+                    diff |= (uint8_t)(plain[ct_len - 1 - i] ^ pad);
+                if (diff != 0)
+                {
+                    tls_cipher_blob_free(out);
+                    return NULL;
+                }
+                blob_write_u16(out, (uint16_t)(ct_len - pad));
             }
             return out;
         }

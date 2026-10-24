@@ -694,14 +694,9 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             inbuf += AES_BLOCK_SIZE;
             outbuf += AES_BLOCK_SIZE;
         }
-        /* PKCS#7: always append a padding block (full block of 0x10 when rem==0). */
+        if (rem)
         {
-            uint8_t byte_to_pad = (uint8_t)(AES_BLOCK_SIZE - rem);
             aes_xor_buf(inbuf, iv, rem);
-            for (size_t idx = rem; idx < AES_BLOCK_SIZE; idx++)
-            {
-                iv[idx] ^= byte_to_pad;
-            }
             aes_encrypt_block(iv, iv, ctx);
             memcpy(outbuf, iv, AES_BLOCK_SIZE);
         }
