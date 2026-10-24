@@ -56,6 +56,7 @@ window. In other words, link with:
 If you leave ``BSSHEAP_LOW`` at the default, your program's BSS and lwIP-CE's
 will overlap, and you will have very bad things happen.
 
+-----
 
 USB Device Mode and the Wi-Fi Bridge
 ------------------------------------
@@ -208,6 +209,8 @@ whenever it cannot decide; the calculator then does the work itself. See
 
 Saved networks live in the bridge's NVS under the ``lwip_wifi`` namespace.
 
+-----
+
 TLS Details
 ------------
 
@@ -241,7 +244,7 @@ Algorithm Support
    * - Record encryption
      - ChaCha20-Poly1305-SHA256
      - ``0x1303``
-     - Not planned (optional per RFC 8446; contributions welcome)
+     - Not planned (optional per RFC 8446)
    * - Key exchange (ECDHE)
      - X25519
      - ``0x001d``
@@ -249,7 +252,7 @@ Algorithm Support
    * - Key exchange (ECDHE)
      - secp256r1 (P-256)
      - ``0x0017``
-     - TODO
+     - Done
    * - Server signature verification
      - rsa_pss_rsae_sha256
      - ``0x0804``
@@ -257,7 +260,7 @@ Algorithm Support
    * - Server signature verification
      - ecdsa_secp256r1_sha256
      - ``0x0403``
-     - TODO
+     - Done
    * - Server signature verification
      - rsa_pkcs1_sha256
      - ``0x0401``
@@ -269,7 +272,7 @@ Algorithm Support
    * - Certificate chain — link signature
      - ecdsa-with-SHA256 (P-256)
      - ``1.2.840.10045.4.3.2``
-     - TODO
+     - Done
    * - Trust store root verification
      - RSA-PSS-SHA256
      - ``1.2.840.113549.1.1.10``
@@ -277,7 +280,7 @@ Algorithm Support
    * - Trust store root verification
      - ECDSA-SHA256 (P-256)
      - ``1.2.840.10045.4.3.2``
-     - TODO
+     - Done
 
 Security Posture
 ~~~~~~~~~~~~~~~~~
@@ -294,11 +297,7 @@ Security Posture
        of trust, secure enclave, crypto accelerator, protected filesystem, or
        trusted clock.
    * - RNG
-     - SRAM-noise-derived, NIST SP 800-90A/90B aligned. The checked-in
-       selected-tap profiles give a cross-model working bound of 0.351112
-       bits per raw observation after marginal MCV and coarse first-order
-       Markov analysis; implementation policy rounds this down to 0.35.
-       See the whitepaper for the confidence bounds, lag-1 coefficients,
+     - SRAM-noise-derived, NIST SP 800-90A/90B aligned. Current data suggests Hmin around 0.267. See the whitepaper for the confidence bounds, lag-1 coefficients,
        dependency factors, and limitations of this non-certification analysis.
    * - TLS trust store
      - A curated trust store derived from CA material staged on a common Linux
@@ -313,16 +312,13 @@ Security Posture
        is verified against the next certificate's public key. RSA PKCS#1 v1.5 /
        sha256WithRSAEncryption and ECDSA-P-256/SHA-256 links are verified for
        real; a bad signature on either is an ``ERROR`` and aborts the handshake.
-       Unsupported signature types (wider RSA-PSS hashes, unknown key types)
-       raise ``ALERT("unsupported signature algorithm")`` and are allowed to pass.
+       Unsupported signature types (wider RSA-PSS hashes, unknown key types) fail closed as of ``v3.0.0-rc1``.
 
        Once the adjacent-link walk finishes, the topmost certificate's issuer
        is looked up in the trust store by subject name. If found and the stored
        key is RSA (PSS or PKCS#1-SHA256) or ECDSA P-256, the root signature is
        verified for real -- a bad signature is an ``ERROR`` and aborts. If the
-       root entry is absent or uses an unsupported algorithm, that raises
-       ``ALERT("CA not in root")`` and the chain is accepted (temporary
-       compatibility exception for absent or algorithmically unsupported roots).
+       root entry is absent or uses an unsupported algorithm the handshake fails-closed as of ``v3.0.0-rc1``.
 
    * - CertificateVerify
      - ``CertificateVerify`` is mandatory. Both ``rsa_pss_rsae_sha256``
@@ -338,6 +334,8 @@ published as the
 `TLS specification compliance ledger <tls-specifications.html>`_
 as a static HTML report generated from the authoritative XML source during the
 documentation build.
+
+-----
 
 CI And Test Harnesses
 ---------------------
@@ -379,6 +377,8 @@ The CAVP harness uses AppVars because that is the natural calculator transport
 boundary: host tools generate inputs, CEmu runs the app, and host tools parse
 the saved output. That keeps the validation path close to how a real program
 interacts with calculator storage instead of pretending this is a POSIX target.
+
+-----
 
 Whitepaper
 ----------

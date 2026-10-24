@@ -741,6 +741,13 @@ def allocate_output_path(output_format: str) -> Path:
             return path
 
 
+def _capture_format(runs: list[dict[str, Any]]) -> str:
+    """Return the capture_format tag appropriate for these run rows."""
+    if any(int(row.get("profiler_version", 0)) >= 4 for row in runs):
+        return "cagscalclabs-rngstats-v3"
+    return "cagscalclabs-rngstats-v2"
+
+
 def reanalyze_json(path: Path) -> dict[str, Any]:
     """Recompute a report from its raw run counts, preserving report metadata."""
     original = json.loads(path.read_text(encoding="utf-8"))
@@ -749,7 +756,11 @@ def reanalyze_json(path: Path) -> dict[str, Any]:
         raise ValueError(f"{path} has no run rows")
     # Existing top-level metadata (notably the hardware model) survives, while
     # every analyzer-owned result is replaced by the current computation.
-    return {**original, **analyze(runs)}
+    # Upgrade capture_format when the run data warrants it (e.g. a v2 file
+    # re-analyzed after the profiler was updated to v4).
+    result = {**original, **analyze(runs)}
+    result["capture_format"] = _capture_format(runs)
+    return result
 
 
 def main() -> int:
@@ -788,7 +799,9 @@ def main() -> int:
     if is_json_input:
         report = reanalyze_json(args.input)
     else:
-        report = analyze(parse_runs(load_text(args.input, args.convbin)))
+        runs = parse_runs(load_text(args.input, args.convbin))
+        report = analyze(runs)
+        report["capture_format"] = _capture_format(runs)
     if args.model is not None:
         report["model"] = args.model
     elif "model" not in report:
