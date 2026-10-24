@@ -12,20 +12,12 @@ import xml.etree.ElementTree as ET
 
 CSS = r"""
 :root {
+  color-scheme: light;
   --bg:#fff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
   --panel:#f6f8fa; --link:#0969da; --ok-bg:#dafbe1; --ok-fg:#116329;
   --dev-bg:#ffebe9; --dev-fg:#82071e; --ev-bg:#fff8c5; --ev-fg:#7d4e00;
   --part-bg:#ddf4ff; --part-fg:#0550ae; --na-bg:#eaeef2; --na-fg:#424a53;
   --rev-bg:#f0f6ff; --rev-fg:#0550ae; --rev-border:#b0c8f0;
-}
-@media (prefers-color-scheme:dark) {
-  :root {
-    --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#30363d;
-    --panel:#151b23; --link:#4493f8; --ok-bg:#12261e; --ok-fg:#56d364;
-    --dev-bg:#2d1216; --dev-fg:#ff7b72; --ev-bg:#2b2108; --ev-fg:#e3b341;
-    --part-bg:#0c2d6b; --part-fg:#79c0ff; --na-bg:#21262d; --na-fg:#9198a1;
-    --rev-bg:#0c1e3d; --rev-fg:#79c0ff; --rev-border:#1f3a6e;
-  }
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
