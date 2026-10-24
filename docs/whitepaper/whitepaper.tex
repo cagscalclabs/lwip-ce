@@ -1084,20 +1084,32 @@ for (uint8_t i = 0; i < count; i++) {
 	\paragraph{CertificateVerify}
 	Chain verification establishes that the certificates link together cryptographically, but it does not on its own prove that the entity we are speaking with controls the leaf private key. A network attacker holding only the leaf certificate---which is public---would otherwise pass a structural check. TLS 1.3's \texttt{CertificateVerify} message closes that gap: the server signs a digest of the handshake transcript with its leaf private key. We require this message and verify it on every full handshake.
 
-	The implementation supports two \texttt{CertificateVerify} schemes: \texttt{rsa\_pss\_rsae\_sha256} with a leaf RSA modulus between 1024 and 2048 bits, and \texttt{ecdsa\_secp256r1\_sha256} (P-256/SHA-256). Servers selecting the wider RSA-PSS hash variants or RSA-PKCS1 (which RFC~8446 §4.4.3 forbids in \texttt{CertificateVerify} regardless) are rejected with a fatal \texttt{decrypt\_error} alert. RSA keys above 2048 bits remain unsupported.
+	The implementation supports two \texttt{CertificateVerify} schemes: \texttt{rsa\_pss\_rsae\_sha256} with a leaf RSA modulus between 2048 and 4096 bits, and \texttt{ecdsa\_secp256r1\_sha256} (P-256/SHA-256). Servers selecting wider RSA-PSS hash variants or RSA-PKCS1 (which RFC~8446 §4.4.3 forbids in \texttt{CertificateVerify} regardless) are rejected with a fatal \texttt{decrypt\_error} alert. RSA keys above 4096 bits remain unsupported.
 
 	\paragraph{CertificateRequest}
 	A server may ask the client to authenticate with its own certificate. Client certificates are currently out of scope for this implementation, but the request still has to be handled correctly: \texttt{CertificateRequest} participates in the handshake transcript that both sides' \texttt{Finished} MACs are computed over, so it cannot simply be ignored. The handshake parser validates the message's nested request-context and extension-list lengths, feeds the exact bytes into the transcript hash, and records that the server asked (\texttt{client\_certificate\_requested}). Rather than aborting or omitting the response, the client replies with an empty \texttt{Certificate} message (a zero-length certificate list, per RFC~8446 §4.4.2) and no \texttt{CertificateVerify}, which is the standard, spec-compliant way to decline client authentication while keeping the transcript---and therefore the handshake---valid.
 
 	\paragraph{Certificate Chain Parsing and Adjacent-Link Verification}
 	When operating as a client, the implementation streams the TLS \texttt{Certificate} message one certificate at a time rather than buffering the whole chain, and verifies each \emph{link} against the next certificate's public key. Because certificate $N$ is signed by certificate $N{+}1$, and $N{+}1$ has not yet arrived when $N$ finishes parsing, the walker defers: it holds $N$'s signature material until $N{+}1$ arrives, then verifies the pending link with $N{+}1$'s key.
+
+	Certificate chain policy is as follows:
+
 	\begin{itemize}
-		\item An \texttt{RSA-2048} link signed with \texttt{sha256WithRSAEncryption} is verified for real (PKCS\#1~v1.5, SHA-256). A signature that fails to verify is fatal: the handshake is aborted (an \texttt{ERROR}-severity diagnostic is emitted).
-		\item An \texttt{ecdsa\_secp256r1\_sha256} link is verified for real using P-256/SHA-256. A signature that fails to verify is also fatal.
-		\item Other signature types---wider RSA-PSS hashes, or an issuer key type the verifier does not support---are \emph{not} verified. The link is accepted and the stack raises an \texttt{ALERT(unsupported algorithm, PASS)} so the application can observe that the link went cryptographically unchecked.
-		\item The topmost certificate has no issuer within the presented chain, so its issuer is looked up in the on-device truststore by subject name. If found and the stored key is RSA (PKCS\#1~v1.5 or PSS, SHA-256) or ECDSA P-256, the root link is verified for real with the same fatal-on-failure treatment as an adjacent in-chain link. If the issuer is absent from the truststore, or uses a signature type not yet supported, the chain is accepted with \texttt{ALERT(root not in store, PASS)}.
+		\item An \texttt{RSA-2048} link signed with \texttt{sha256WithRSAEncryption (PKCS\#1~v1.5, SHA-256)} or \texttt{rsa\_pss\_rsae\_sha256} is verified. An invalid signature results in ABORT and TLS fatal alert.
+		\item An \texttt{ecdsa\_secp256r1\_sha256} link is verified using curve \texttt{secp256r1}. An invalid signature results in ABORT and TLS fatal alert.
+		\item Other signature types---wider RSA-PSS hashes, or an issuer key type the verifier does not support---are \emph{not} verified and results in ABORT and TLS fatal alert.
+		\item The topmost certificate has no issuer within the presented chain, so its issuer is looked up in the on-device truststore by \textit{Subject Key Identifier} (with a fallback to \textit{Subject Name}). If found and the stored key is RSA (PKCS\#1~v1.5 or PSS, SHA-256) or ecdsa\_secp256r1\_sha256, the root link is verified. If the topmost certificate's signature is invalid against the matching SKI (or SN), or if the matching root cannot be found, or the truststore is missing or invalid ABORT and TLS fatal alert are sent.
 	\end{itemize}
-	The \texttt{WARN-PROCEED} posture for absent or algorithmically unsupported roots remains a temporary compatibility exception; supported algorithm failures are fail-closed.
+
+	During testing of \texttt{v3.0.0-rc1} it was discovered that TLS sockets would intermittently timeout during particularly long handshakes (ex: long Certificate chains). To mitigate this, a fix was applied, tested, and pushed to \texttt{rc2} in which:
+
+	\begin{itemize}
+		\item The leaf certificate is validated synchronously.
+		\item A \texttt{lwip\_dispatch} periodic tick fires every 20,ms (\texttt{ALTCP\_TLS\_CE\_CERT\_JOB\_TICK\_MS}) to advance the next queued certificate link verification; the slot arms when jobs enter the queue and disarms automatically once the queue is empty.
+		\item Certificate chain verify is now stateful, and continues in the background while the stack continues to process network events, TCP keepalives, and other TLS handshake records.
+	\end{itemize}
+
+	The handshake proceeds while background verification runs because blocking the stack for the full chain duration risks TCP keepalive failures and connection timeouts on constrained hardware. Fail-closed guarantees are preserved regardless: a link that fails signature validation or carries an unsupported algorithm immediately aborts the handshake with a TLS fatal alert. Additionally, if \texttt{CertificateVerify} or \texttt{Finished} arrives before the job queue has drained, the dispatcher holds those messages until every queued link has passed, so a valid-looking \texttt{Finished} cannot be exchanged over a chain that has not yet been fully verified.
 
 	\paragraph{Hostname and Validity-Period Checks}
 	Chain-link signatures and \texttt{CertificateVerify} together establish that the presented chain is internally consistent and that the peer holds the leaf private key --- but neither one proves the leaf certificate was actually issued for the host the client meant to connect to, nor that it is currently within its issuer-stated validity period. Both gaps are closed as part of the same per-certificate pass that runs the adjacent-link check above, fail-closed on either:
@@ -1176,7 +1188,7 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	Algorithm agility is version-gated. The current format uses RSA-2048 PSS-SHA-256 for truststore signatures; future signature-scheme migrations are expected to ship behind an explicit format/version transition plus corresponding verifier update.
 
 	\paragraph{Runtime Initialization}
-	When the network layer comes up, it also initializes the truststore, which performs (1) signature verification of the truststore against the embedded public verification key, and (2) schema/version compatibility checks against the version expected by lwIP. Truststore initialization failure does not block TLS connections outright: it degrades gracefully to the same posture as an absent truststore, leaving root anchoring unavailable for that session (the adjacent-link and \texttt{CertificateVerify} checks described above are unaffected and still run). A chain whose topmost issuer would otherwise have been anchored is instead accepted with an \texttt{ALERT}-severity diagnostic, the same fallback used for any issuer absent from a valid store.
+	When the network layer comes up, it also initializes the truststore, which performs (1) signature verification of the truststore against the embedded public verification key, and (2) schema/version compatibility checks against the version expected by lwIP. Truststore initialization failure or a missing truststore blocks TLS connections outright.
 
 	\paragraph{Compromise and Revocation}
 	If the truststore signing key is suspected or confirmed compromised, the incident response is:
@@ -1186,6 +1198,47 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 		\item Publish a new lwIP release embedding the replacement public verification key.
 		\item Publish a security advisory across project channels (GitHub, Discord, and community forums).
 	\end{enumerate}
+
+	\subsection{ClientHello Profile}
+	\label{ssec:clienthello_profile}
+
+	Every TLS 1.3 connection begins with a \texttt{ClientHello} whose fixed structure is determined at compile time. The table below enumerates the extensions this implementation always or conditionally emits. No other extensions are sent; a server that requires an unlisted extension will not be compatible without a code change.
+
+	\begin{figure}[H]
+		\centering
+		\footnotesize
+		\rowcolors{2}{ltgray}{white}
+		\begin{tabularx}{0.94\textwidth}{@{}>{\raggedright\arraybackslash}p{0.26\textwidth}>{\raggedright\arraybackslash}p{0.10\textwidth}>{\raggedright\arraybackslash}X@{}}
+			\toprule
+			\rowcolor{gray!18}
+			Extension & Presence & Value / Notes \\
+			\midrule
+			\texttt{supported\_versions} & Always & TLS~1.3 only (\texttt{0x0304}) \\
+			\texttt{supported\_groups} & Always & \texttt{secp256r1} (\texttt{0x0017}), \texttt{x25519} (\texttt{0x001d}); P-256 preferred \\
+			\texttt{key\_share} & Always & Ephemeral P-256 (65~B uncompressed) + X25519 (32~B) key shares; P-256 omitted if unavailable, falling back to X25519 only \\
+			\texttt{signature\_algorithms} & Always & \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp256r1\_sha256} \\
+			\texttt{signature\_algorithms\_cert} & Always & \texttt{rsa\_pkcs1\_sha256}, \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp256r1\_sha256} \\
+			\texttt{record\_size\_limit} & Always & 4096 bytes as \texttt{uint16} (RFC~8449) \\
+			\texttt{server\_name} (SNI) & If hostname set & Single \texttt{host\_name} entry; omitted for raw-IP connections \\
+			\texttt{psk\_key\_exchange\_modes} & If PSK mode & \texttt{psk\_dhe\_ke} only; pure-PSK (\texttt{psk\_ke}) is not offered \\
+			\texttt{application\_layer\_protocol\_negotiation} & If ALPN configured & Ordered list supplied by the application; see \texttt{tls-alpn.h} \\
+			\texttt{cookie} & On HRR retry & Echo of the cookie supplied by the server's HelloRetryRequest \\
+			\texttt{pre\_shared\_key} & If PSK mode & Identity + binder; \textbf{always last} per RFC~8446~\S4.2.11; binder is HMAC-SHA-256 over the transcript up to the binders field \\
+			\bottomrule
+		\end{tabularx}
+		\caption{\footnotesize lwIP-CE \texttt{ClientHello} extension profile. ``Always'' means present on every connection; conditional extensions are omitted when their prerequisite is not met.}
+	\end{figure}
+
+	\paragraph{Cipher suites}
+	Two cipher suites are offered, in preference order: \texttt{TLS\_AES\_128\_GCM\_SHA256} (\texttt{0x1301}) and \texttt{TLS\_AES\_128\_CCM\_SHA256} (\texttt{0x1304}). \texttt{TLS\_AES\_256\_GCM\_SHA384} and \texttt{TLS\_CHACHA20\_POLY1305\_SHA256} are not offered; SHA-384 requires a second hash state machine the eZ80 port does not carry, and ChaCha20-Poly1305 is not implemented. A server that supports only 256-bit or ChaCha suites will reject the handshake.
+
+	\paragraph{Record size}
+	The \texttt{record\_size\_limit} extension (RFC~8449) requests 4096-byte plaintext records. A server that echoes the extension must not exceed the negotiated limit; a server that ignores it may send up to the TLS maximum (16~KB), which the implementation accepts from heap. Either way, a record exceeding the negotiated (or default) limit triggers a fatal \texttt{record\_overflow} alert per RFC~8449~\S4.
+
+	\paragraph{Key exchange}
+	Both P-256 and X25519 key shares are sent speculatively in the initial \texttt{ClientHello}, eliminating a HelloRetryRequest round-trip in the common case. If the server issues an HRR requesting a group not in the original offer, the handshake is aborted; the implementation does not generate new key material in response to an HRR.
+
+	\textit{The remainder of the handshake hedges on the negotiation of material within \texttt{ClientHello}, \texttt{ServerHello}, and \texttt{HelloRetryRequest} and will not be documented here. See RFC 8446 if you would like a breakdown of the entire handshake process.}
 
 	\subsection{Session Resumption and Application Protocol Negotiation}
 
@@ -1337,6 +1390,10 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 
 When evaluated in unison, these mechanisms provide best-effort memory sanitization across allocation, use, and teardown paths, reducing residual plaintext/key exposure without claiming complete protection against a local or physical adversary.
 
+	\subsection{User Provenance}
+
+	In spite of this fairly rigorous engineering discipline, a user may decide they are uncomfortable allowing their calculator to participate in secure connections. To this end a user may run the \texttt{lwIP} resident application directly from the \texttt{[Apps]} menu which brings up the configuration UI. From there they may scroll down to \textit{Security} and disable TLS entirely. This results in any secure sockets (ALTCP\_TLS or WSS) refusing to create; this setting cannot be overridden in code.
+
 	
 		\newpage
 		
@@ -1345,48 +1402,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		
 		The central engineering result is not that the TI-84+ CE can be made equivalent to a desktop or server environment. It cannot. The platform lacks a hardware root of trust, secure key storage, preemptive multitasking, and the memory budget normally assumed by contemporary networking and cryptographic software. The relevant result is narrower and more useful: with explicit boundaries, conservative assumptions, and targeted validation, the platform can support interoperable secure-client workflows and provide a practical foundation for calculator-native networked applications.
 		
-		Several design choices carry that result. The USB Ethernet driver limits scope to CDC ECM/NCM behavior that can be made reliable on the device. The membuffer layer makes allocation pressure visible and gives ingress paths a way to degrade predictably. The RNG model treats the hardware entropy source as something to be measured, conditioned, and health-checked rather than assumed. The truststore design replaces desktop-scale WebPKI expectations with a signed, compact, platform-specific trust boundary. The TLS implementation and profiling suite then build on those constraints with explicit tests, timing telemetry, and failure behavior.
-
-		The four self-audit workflows described in this document --- deterministic unit testing, CAVP-vector validation, differential timing analysis, and static analysis (SAST) --- are not isolated test jobs but a single, deliberately layered \emph{pre-audit validation pipeline}. Unit testing establishes functional correctness and fail-closed behavior against RFC- and CAVP-derived vectors; CAVP validation independently confirms that the shipping on-device binary computes standard algorithm outputs correctly, end to end; differential timing analysis characterizes the constant-time properties that functional tests cannot see; and SAST (Semgrep) statically scans the project's own additions against upstream lwIP for unsafe patterns, so review attention is focused on changed code rather than the inherited base. Each runs on every push and emits a self-contained, source-independent job summary. Collectively they are intended to do the preparatory work a formal third-party audit would otherwise start from scratch: they make the project's correctness, timing, and code-quality claims continuously reproducible, machine-checked, and legible to an external reviewer, so that an audit can begin from evidence rather than assertion. That this depth of standing validation is achievable on a calculator is itself part of the result.
-
-		\newpage
-		\subsection{Known Limitations and Roadmap}
-		The table below consolidates the main edges called out across the document. It is intended to separate current support, planned compatibility work, and features that are deliberately outside this implementation's security claim.
-
-		\begingroup
-		\footnotesize
-		\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.22\textwidth}>{\raggedright\arraybackslash}p{0.17\textwidth}>{\raggedright\arraybackslash}p{0.55\textwidth}@{}}
-			\toprule
-			\textbf{Area} & \textbf{Status} & \textbf{Boundary} \\
-			\midrule
-			\endhead
-			TLS \texttt{CertificateVerify} & Complete & \texttt{rsa\_pss\_rsae\_sha256} (1024--2048 bit RSA) and \texttt{ecdsa\_secp256r1\_sha256} (P-256). \\
-			 & Not supported & RSA keys above 2048 bits. \\
-			TLS Certificate & Complete & Adjacent-link chain verification for RSA-2048/SHA-256 and ECDSA-P-256/SHA-256; root anchoring via truststore for both key types; leaf hostname/SAN matching (wildcard-capable); fatal validity-period enforcement on every chain certificate; all fail-closed. \\
-			 & Warn-proceed & Absent or algorithmically unsupported roots (temporary compatibility exception). \\
-			 & Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
-			\addlinespace
-			TLS CertificateRequest & Skip & \texttt{CertificateRequest} is parsed, included in the transcript, and answered with an empty client certificate list. \\
-			\addlinespace
-			Trust Store Schema & Complete & Signed compact AppVar truststore, derived from curated WebPKI root certificates. \\
-			Trust Store Policy & Fail-Closed & RSA link verified; fatal on signature failure. \\
-			 & Warn-Proceed & Algorithm unsupported/signer not in store (temporary) \\
-			\addlinespace
-			State Compromise & Complete & tls\_secure\_memzero \\
-			 & Complete & BUFFER\_MODE\_SECURE (membuffer) \\
-			 & Complete & \texttt{di} before crypto, \texttt{ei} when done \\
-			CI & Complete/Planned & Continued timing/profiling coverage and wider sample collection. \\
-			Hardware Security & Out of scope & The calculator has no secure runtime environment. \\
-			\bottomrule
-		\end{longtable}
-		\endgroup
-		
-		At the same time, this implementation should be understood as a constrained engineering artifact, not as a certified cryptographic module. It has not undergone formal third-party audit or certification, and its security claims are bounded by the hardware profile described in this document. Local physical attackers, compromised binaries, and side-channel observation remain outside the set of problems this project can fully solve. The mitigations provided here are best-effort hardening measures, not a substitute for secure hardware.
-		
-		The practical value of lwIP-CE is therefore twofold. First, it provides a usable networking and TLS substrate for calculator programs that would otherwise have no realistic path to modern internet protocols. Second, it documents the tradeoffs required to bring such a stack to a nontraditional embedded platform. Future work should focus on external review, continued interoperability testing, broader device sampling for entropy behavior, and continued tightening of the TLS and truststore policy surface.
-		
-		Within those limits, lwIP-CE shows that secure embedded networking on deeply constrained hardware is not a matter of pretending the constraints do not exist. It is a matter of making them explicit, measuring what can be measured, and designing each layer so that the system fails visibly and predictably when those constraints are exceeded.
-		
+		At the same time, this implementation should be understood as a constrained engineering artifact, not as a certified cryptographic module. It has not undergone formal third-party audit or certification, and its security claims are bounded by the hardware profile described in this document. Local physical attackers, compromised binaries, and side-channel observation remain outside the set of problems this project can fully solve. The mitigations provided here are best-effort hardening measures, not a substitute for secure hardware..
 
 	\newpage
 	\section{Contributions, References, and AI-Assisted Tooling Disclosure}\small
@@ -1401,21 +1417,19 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 			\textbf{Role} & \textbf{Contributor(s)} \\
 			\hline
 			Lead Developer & Anthony Cagliano \\
-			C $\rightarrow$ eZ80 & Adam Beckingham, calc84maniac \\
+			eZ80 Assembly Work &
+				SHA-256 (C $\rightarrow$ asm): Adam Beckingham\newline
+				AES inner (C $\rightarrow$ asm): calc84maniac\newline
+				fasm $\rightarrow$ GAS port: TIny\_Hacker \\
 			Entropy Analysis & Zeroko \\
-			modexp\_2048 & jacobly \\
-			x25519 & Peter Tillema (PT\_) \\
-			fasmg to GNU migration & TIny\_Hacker \\\hline
-			Other Contributions (Info, Optimizations, Supporting Algorithms) &  \begin{tabular}[t]{p{0.2\textwidth} p{0.2\textwidth} p{0.2\textwidth}}
-				jacobly & calc84maniac & Zeroko \\
-				John Caesarz & MateoC & 
-			\end{tabular} \\\hline
-			Testers &   \begin{tabular}[t]{p{0.2\textwidth} p{0.2\textwidth} p{0.2\textwidth}}
-				Alessio &
-			\end{tabular} \\\hline
-			Donations &   \begin{tabular}[t]{p{0.2\textwidth} p{0.2\textwidth} p{0.2\textwidth}}
-			\end{tabular} \\
-			\hline
+			Algorithm Contributions &
+				modexp(u2048\textasciicircum u24 \% u2048): jacobly\newline
+				X25519: Peter Tillema (PT\_) \\
+			Code Review & Anthony Cagliano \\\hline
+			Other Contributions (Info, Optimizations, Supporting Algorithms) &
+				jacobly, calc84maniac, Zeroko, John Caesarz, MateoC \\\hline
+			Testers & Alessio \\\hline
+			Donations & \\\hline
 		\end{tabularx}
 		}
 	\end{table}
@@ -1454,7 +1468,16 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 
 	AI assistance is never treated as an authoritative source for cryptographic claims, standards compliance, or empirical results and is subject to the same rigor as any other part of this project. Technical claims in this document are supported by cited references, source inspection, tests, or measured data.
 
+	\subsubsection{Case Study: eZ80 Assembly Optimization via Adversarial Agent Loop}
+
+	Two of the most performance-critical components in this stack --- the RSA modular exponentiation path and the P-256 elliptic curve operations --- required eZ80 assembly optimized to a degree beyond what the lead project author could produce unassisted. Writing correct, constant-time multiprecision assembly for a non-standard architecture is a narrow specialty; the community members with that depth of eZ80 expertise (see Section~\ref{ssec:contributing_data}) were unavailable at the time this work was needed. AI assistance was used to close that gap under the direction of the project author. It began as an experiment with P-256 and the author had minimal hope it would actually work.
+
+	The process employed was a structured adversarial loop: two specialized Claude Opus agents were run in alternation, one acting as an optimizer tasked with reducing cycle counts and register pressure, the other acting as a cryptographer tasked with challenging every output for correctness, constant-time discipline, and standards conformance. Neither agent's output was accepted without passing the other's review. At each stage, the proposed optimization and the cryptographer results (accept, reject, accept with asterisk) along with relevant RFC citations were presented to the project author to approve or decline. Upon a response, the agents re-entered their workflow. The loop continued until the cryptographer agent raised no further objections and the optimizer had no further gains to offer within the constraints.
+
+	The project author's doubts turned to actual surprise as the workflow yielded a P-256 algorithm that slightly outperformed the project's existing X25519 implementation and also passed all RFC-based unit tests and CAVP-adjacent primitive validation. Encouraged by that result, the project author pointed the same workflow at the project's existing RSA-2048 implementation with the direction to expand it to a 4096-bit implementation with as much of a speedup as possible. The result was an algorithm for which completing a 4096-bit operation took $\lesssim 1$ second second longer than the previous algorithm took to complete a 2048-bit operation (and again passes all appropriate test vectors). 
 	
+	For transparency the driving agent files are committed to the project repository under \texttt{claude-agents}, and the code is available on Cemetech and TI-Planet for review by peers, as with any other security-sensitive code contributed to this project.
+
 	\newpage
 	\section{Appendixes}
 	\setcounter{subsection}{0}
@@ -1473,106 +1496,86 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	\textit{Privacy Note: RNG statistical reports contain only aggregate measurements of the selected raw tap, its address and mask, and the contributor-supplied hardware revision. Filenames use randomly generated identifiers solely to prevent collisions; they are not derived from the calculator, device, or contributor. No personally identifiable information is collected or retained with a report.}
 
 	\newpage
-	
-	\subsection{Community Data Contributions}
-	\label{ssec:contributing_data}
-
-	Two of the analyses in this document --- the raw-tap entropy characterization in Section~\ref{ssec:min_entropy} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
-
-	\paragraph{What to capture}
-	Two on-device tools produce the submission artifacts:
-	\begin{itemize}
-		\item \textbf{RNG tap profile.} The profiling application records eight windows of 32,768 observations from the exact selected source bit used by the runtime collector, including the complete adjacent-pair transition matrix. Its companion analyzer recomputes per-window and aggregate MCV and first-order Markov estimates and writes a uniquely named JSON or CSV report to \texttt{statistics/rng}. Submissions should identify the calculator model so results can be grouped by hardware revision.
-		\item \textbf{Differential timing capture.} Produces a structured log file using a \texttt{key=value} record format. Each unit's calibration class and per-class results are emitted with explicit denotation so the upstream analysis can locate each unit and its associated measurements by regular expression. The log can be exfiltrated via standard AppVar transfer.
-	\end{itemize}
-
-	\paragraph{Device identification}\label{par:device_id}
-	Contributions are most useful when accompanied by enough device metadata to locate the submission within the broader sample population. At minimum:
-	\begin{itemize}
-		\item Hardware revision (visible on the back-label sticker or via \texttt{[mode]} $\rightarrow$ \texttt{[about]}).
-		\item Operating system version.
-		\item Boot code version, where reported by the device.
-	\end{itemize}
-	Contributors who are unsure which revision they hold are encouraged to submit anyway with whatever metadata they can identify; the project can usually disambiguate from the supplied OS and boot-code strings.
-
-	\paragraph{Issue tracebacks}\label{par:issue_tracebacks}
-	The known and outstanding issues tracked in Appendix~\ref{ssec:known_issues} (notably \texttt{st closed sent 0}/\texttt{st closed sent 1}) are presently blocked on field reproduction data rather than RNG or timing coverage, and benefit from the same submission channels. A useful traceback report includes:
-	\begin{itemize}
-		\item \textbf{Traceback output.} The v1.0-rc4 traceback system's captured output at the point of failure (see Section~\ref{ssec:engineering_notes}), including the state string (e.g.\ \texttt{st closed sent 0}) and any preceding trace lines, not just the final line.
-		\item \textbf{Peer/server identity.} The hostname or service the connection was made to, and, if known, the TLS server implementation (e.g.\ nginx, a specific embedded TLS stack) --- the suspected cause is a missing or misinterpreted record type from certain peers.
-		\item \textbf{Reproducibility.} Whether the failure is consistent against that peer or intermittent, and approximately how far into the post-handshake exchange it occurs.
-		\item \textbf{Build/version.} The lwIP-CE library version and, where applicable, the calling application's version, since trampoline and record-handling behavior can shift between revisions.
-		\item \textbf{Device metadata.} The same hardware revision, OS version, and boot code requested under \nameref{par:device_id} above, in case the failure correlates with a hardware or firmware class.
-	\end{itemize}
-	As with calibration captures, tracebacks carry no submitter-identifying metadata by default and are evaluated purely on their technical content.
-
-	\paragraph{How to submit}
-	Submissions can be sent via either channel below:
-	\begin{itemize}
-		\item Project Discord: \url{https://discord.gg/CtEq3rXZGJ} --- a dedicated channel exists for capture submissions and questions about the protocol.
-		\item Direct email: \texttt{info@cagscalclabs.net} --- preferred when attaching large AppVar bundles.
-	\end{itemize}
-	The capture tool itself, its source, and the parsing scripts are versioned within this repository; contributors are asked to record which tool version produced their submission so the analysis pipeline can account for any schema changes between releases.
-
-	\paragraph{Privacy and licensing}
-	The project does not collect personally identifying information from contributors and does not maintain an attribution roster for submitted captures. This is a deliberate privacy-by-design choice: the community includes minors, and the analytical value of a capture is determined entirely by the device metadata accompanying it (hardware revision, OS version, boot code), not by the identity of the submitter. Captures are processed and incorporated into the published dataset under the project's existing license; once accepted, a capture is not retraceable to its submitter through any project-controlled record. Contributors who wish to be visible may identify themselves publicly on Discord or in GitHub discussions, but the project itself maintains no such linkage.
-
-	\newpage
 	\subsection{Differential Timing Analysis Dumps}
-	
+
 	The differential timing profiler is a robust timing-assessment tool designed to verify that no input class for a unit exhibits detectable runtime drift beyond a class-independent jitter model. As described in the main text, it estimates $\sigma$ and derives both standard and strict cycle-deviation thresholds from variance measured in the best-case class.
-	
-	The tables below report per-unit averaged statistics by model. Each row is shaded green when the unit passes and red when it fails under the profiler criterion (directionally consistent runtime deviation above threshold at least 75\% of the time). For release-quality builds, all rows should be green.
 
-	\paragraph{What ``good'' looks like}: a passing unit shows a small \textbf{Avg $\sigma$} (low intrinsic jitter in the calibration class), \textbf{MedDev (W/R/E)} values close to zero for all three input classes --- worst-case (W), random (R), and edge (E) --- meaning no class runs systematically faster or slower than the others, and \textbf{Over\%} entries at or near $0\%$, indicating that few or no samples exceeded the cycle-deviation threshold. The \textbf{Avg $\Delta$ (c6/c4)} column reports the calibrated standard/strict thresholds themselves and is contextual rather than pass/fail. A failing unit is the inverse: a non-trivial MedDev that points the same direction across most samples, paired with a high Over\%, which is the signature of input-dependent timing the profiler is built to surface.
+	The tables below show every individual capture, one \texttt{xltabular} per primitive, sorted by hardware model then capture identifier. Rows highlighted in orange indicate a primitive whose Over\% c6 for any input class (W, R, or E) reaches or exceeds 75\%.
 
-	\paragraph{A note on per-model sample size}: each table's footer reports how many source files were parsed for that model, and this varies considerably by revision (the project's own bench coverage is uneven across hardware classes). A model represented by only one or two captures gives a single run's jitter outsized weight in \textbf{Avg $\sigma$} and \textbf{Avg $\Delta$}, so an isolated high reading on a thinly-sampled model --- as opposed to a reading that recurs across multiple runs or models --- is more plausibly a small-sample artifact than a genuine platform-specific timing characteristic, and should be read with that caveat rather than as a confirmed anomaly.
+	\paragraph{What ``good'' looks like}: a passing capture shows a small \textbf{$\sigma$} (low intrinsic jitter in the calibration class), \textbf{MedDev (W/R/E)} values close to zero for all three input classes --- worst-case (W), random (R), and edge (E) --- meaning no class runs systematically faster or slower than the others, and \textbf{Over\%} entries at or near $0\%$, indicating that few or no samples exceeded the cycle-deviation threshold. The \textbf{$\Delta$ c6/$\Delta$ c4} columns report the calibrated standard/strict thresholds themselves and are contextual rather than pass/fail. A failing capture is the inverse: a non-trivial MedDev that points the same direction across most samples, paired with a high Over\%, which is the signature of input-dependent timing the profiler is built to surface.
 
-	\IfFileExists{generated/appendix_b_model_summary.tex}{
-		\input{generated/appendix_b_model_summary.tex}
+	\paragraph{A note on sample size}: the project's own bench coverage is uneven across hardware revisions. A model represented by only one or two captures gives a single run's jitter outsized weight in \textbf{$\sigma$} and \textbf{$\Delta$}, so an isolated high reading on a thinly-sampled model --- as opposed to a reading that recurs across multiple captures or models --- is more plausibly a small-sample artifact than a confirmed platform-specific timing characteristic.
+
+	\IfFileExists{generated/appendix_b_timing_detail.tex}{
+		\input{generated/appendix_b_timing_detail.tex}
 	}{
-		No generated Appendix B model summary was found at build time.
+		No generated per-capture timing detail was found at build time.
 	}
 
-	\newpage
-	\subsection{Engineering Notes}\label{ssec:engineering_notes}
+	\textit{Privacy Note: Timing capture reports contain only per-primitive cycle measurements and the contributor-supplied hardware revision. Filenames use randomly generated identifiers solely to prevent collisions; they are not derived from the calculator, device, or contributor. No personally identifiable information is collected or retained with a report.}
 
-	This appendix documents security- or correctness-relevant bugs found and fixed in the TLS/runtime core since the v1.0-rc1 milestone, each surfaced through hardware-in-the-loop testing (the DAST harness; see Section~\ref{ssec:profiling}), the unit test suite, targeted manual code audit, or AI code review. Each is included for transparency about what \emph{wasn't} caught by static testing alone, and how it was actually found.
+	\newpage
+
+
+	\subsection{Errata and Known Issues}\label{ssec:errata}\label{ssec:engineering_notes}\label{ssec:known_issues}
+
+	This appendix records closed defects and open issues across the project's release history. Entries are kept brief here; see \texttt{CHANGELOG.md} in the repository for full detail.
+
+	\paragraph{Closed defects (errata)}
 
 	\renewcommand{\arraystretch}{1.3}
-	\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}@{}}
+	\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.12\textwidth}>{\raggedright\arraybackslash}p{0.40\textwidth}>{\raggedright\arraybackslash}p{0.41\textwidth}@{}}
 		\toprule
-		\textbf{Bug} & \textbf{Symptom / Presentation} & \textbf{Tracing Method} & \textbf{Resolution} \\
+		\textbf{Version} & \textbf{Defect} & \textbf{Resolution} \\
 		\midrule
 		\endhead
-		Post-handshake \texttt{close\_notify} and \texttt{KeyUpdate} silently dropped
-		&
-		A TLS connection would complete its handshake successfully and then simply stall with \texttt{st closed sent 0} or \texttt{st closed sent 1}.
-		&
-		Code audit (partially AI-assisted) of the post-handshake record-handling paths in \texttt{handshake.c} and \texttt{altcp\_tls\_ce.c}, combined with the addition of the v1.0-rc4 \texttt{traceback system}.
-		&
-		Added explicit handling for both previously-omitted message types. Issue still persists in some cases, cause unknown, waiting wider-berth of tracebacks from in-production use.\\
+		v1.0-rc2
+		& PSK session resumption transcript hashing bug.
+		& Fixed transcript hash computation in the PSK resumption path. \\
 		\addlinespace
-		RSA signature length unchecked before \texttt{memcpy} into a fixed-size modexp buffer
-		&
-		Found accidentally. DAST suite erroneously presented START and NEXT, causing the calc-side to be running one test ahead, and thus reporting CRASH/STALL for Test 20, when the client had ended the test. While on a rabbit-hole fixing a test that was actually not failing, identified edge where \texttt{rsa\_pss\_verify} didn't confirm signature length and keylen were the same.
-		&
-		Traced via the DAST report's \texttt{ping\_alive: false} result for that test.
-		&
-		Added an explicit \texttt{signature\_len~==~keylen} check (signatures must be exactly one modulus-width block per RFC~8017) to both \texttt{tls\_rsa\_decrypt\_signature()} and \texttt{tls\_rsa\_decrypt\_signature\_exp()} in \texttt{rsa.c}. \\
+		v1.0-rc4
+		& TLS connection state broken when server sent \texttt{CertificateRequest}; message type was unhandled, invalidating the transcript hash.
+		& Added explicit handling for \texttt{CertificateRequest}. \\
 		\addlinespace
-		Unpatched libload trampolines defaulted to \texttt{jp~0}
-		&
-		Not yet observed as a field failure --- found by inspection while reviewing the libload version-skew path. An application linking against a newer companion library than the installed lwIP application has exported entries beyond what the installed app's table provides; those trampoline slots are deliberately left unpatched (see the append-only export ABI in Section~\ref{ssec:application_callability}). Calling one would jump to address \texttt{0}.
-		&
-		Manual review of \texttt{lwip\_init\_runtime.asm}'s patch loop and the trampoline-generation step in \texttt{build-release-dylib.sh}\allowbreak{}/\allowbreak\texttt{parse\_manifest.py}, asking what happens to a slot that the loop's \texttt{min(app\_count, stub\_count)} bound never reaches.
-		&
-		Trampolines now default to \texttt{jp lwip\_function\_jp\_unset} instead of \texttt{jp~0}; the handler sets a dedicated ``function unsupported, version'' errno and zeroes every register a return value could plausibly occupy ( \texttt{a}, \texttt{hl}, \texttt{de}, \texttt{bc}) before returning. \\
+		v1.0-stable
+		& Post-handshake \texttt{close\_notify} and \texttt{KeyUpdate} silently dropped, causing stalls (\texttt{st closed sent 0}/\texttt{1}).
+		& Added explicit handling for both record types. \\
+		\addlinespace
+		v1.0-stable
+		& RSA signature length unchecked before \texttt{memcpy} into a fixed-size modexp buffer.
+		& Added \texttt{signature\_len == keylen} guard in \texttt{rsa.c} per RFC~8017. \\
+		\addlinespace
+		v1.0-stable
+		& Unpatched libload trampolines defaulted to \texttt{jp~0}; a version-skew call would jump to address zero.
+		& Trampolines now default to a defined no-op handler that sets an errno and zeroes return registers. \\
+		\addlinespace
+		v1.1-stable
+		& AES-GCM chunked CTR keystream desync: off-by-one (\texttt{idx <= blocks}) and \texttt{size\_t} underflow caused AEAD decryption to produce garbage on multi-block records.
+		& Fixed via shared \texttt{gcm\_ctr\_xor} helper; validated against PyCryptodome vectors. \\
+		\addlinespace
+		v1.1-stable
+		& USB-Ethernet unplug use-after-free: disconnect freed the device while in-flight bulk RX callbacks were still firing.
+		& Dead flag + pending-transfer count; device free deferred until all callbacks return. \\
+		\addlinespace
+		v1.1-stable
+		& DHCP stuck in SELECTING: bulk RX armed before link-up, causing the transfer to error and self-disable.
+		& RX arming gated on \texttt{netif\_is\_link\_up()}; triggered from the link-up callback. \\
+		\addlinespace
+		v2.0-stable
+		& \texttt{HelloRetryRequest} handling bug.
+		& Resolved; see changelog for detail. \\
+		\addlinespace
+		v2.1-stable
+		& AES-GCM did not handle 0-length AAD correctly (CAVP-identified).
+		& Fixed; CAVP vectors now pass. \\
+		\addlinespace
+		v2.1-stable
+		& \texttt{tls\_crypto\_guard\_disable()} not freeing intended stack frames.
+		& Fixed stack-scrub lower bound to stop at OS stack guard (\texttt{0xD19882}). \\
+		\addlinespace
 	\end{longtable}
 
-	\subsection{Known and Outstanding Issues}\label{ssec:known_issues}
-
-	This table tracks issues that are known, suspected, or under active investigation but not yet resolved as of this revision. Unlike the fixes in Section~\ref{ssec:engineering_notes}, these are not closed -- they are listed here for transparency and to give downstream consumers visibility into open risk before it's fixed. Where an entry's Notes column requests tracebacks, see \nameref{par:issue_tracebacks} (Section~\ref{ssec:contributing_data}) for what information makes a report actionable.
+	\paragraph{Open issues}
 
 	\renewcommand{\arraystretch}{1.3}
 	\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.14\textwidth}>{\raggedright\arraybackslash}p{0.33\textwidth}@{}}
@@ -1582,11 +1585,47 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		\endhead
 		\texttt{st closed sent 0} and \texttt{st closed sent 1}
 		&
-		A very strange failure that presents on some TLS connections that should fit the calculator's specs. Cause unknown.
+		Intermittent TLS stall after a successful handshake on some connections. Cause unknown.
 		&
-		Known issue, under investigation.
+		Under investigation (may be resolved by recent RFC audit).
 		&
-		Seems to occur at the end of the handshake, when the client seems to expect some data. Could be a missing Record type, close from the peer. If you experience this issue, please submit \texttt{tracebacks}. \\
+		Appears near the end of the handshake; may be a missing or mis-sequenced record from the server. If you encounter this, please submit a traceback (see Section~\ref{ssec:contributing_data}). \\
+		\addlinespace
+	\end{longtable}
+
+	\paragraph{Platform-constrained RFC non-compliances (permanent)}
+
+	The following deviations from RFC and NIST requirements are retained by design due to the constraints of the eZ80 platform. They are documented in full with justifications in the TLS specification compliance ledger (\url{https://cagscalclabs.github.io/lwip-ce/tls-specifications.html}).
+
+	\renewcommand{\arraystretch}{1.3}
+	\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.24\textwidth}>{\raggedright\arraybackslash}p{0.70\textwidth}@{}}
+		\toprule
+		\textbf{Requirement} & \textbf{Deviation and rationale} \\
+		\midrule
+		\endhead
+		NIST SP 800-56A Rev.~3, \S5.6.1.2
+		& No ACE-defense: the platform provides no isolated execution environment or tamper-resistant storage, so DRBG state isolation against physical adversaries is not achievable. \\
+		\addlinespace
+		NIST SP 800-90A Rev.~1, \S11.3
+		& No KAT self-test before first use. Old healthcheck function is a no-op that only validates entropy source is non-NULL; actual health is enforced during entropy collection/reseeding and results in tap re-selection. TLS/network timings ensure reliability; non-network usage is stable if preceeded with \texttt{lwip\_tls\_rng\_wait\_for\_ready(timeout\_ms)}. Follows from the same platform justification as SP 800-56A above. \\
+		\addlinespace
+		NIST SP 800-90B, \S4.3 (start-up test)
+		& Start-up test uses two 952-sample windows instead of the required 1024. Thresholds are scaled to the actual window size. \\
+		\addlinespace
+		NIST SP 800-90B, \S4.4.2 (APT window)
+		& APT window $W = 952$ instead of required 1024; cutoff is correct for $W = 952$. Follows from the 952-sample collection window. \\
+		\addlinespace
+		RFC 5280 \S6.1 / RFC 8446 \S4.4.2 (path building)
+		& No path reordering or extra certificate handling. Chain must be in wire order; any out-of-order or extraneous certificate aborts. Buffering an unordered chain would require RAM proportional to the chain length, which is not available. \\
+		\addlinespace
+		RFC 5280 \S6.1.3(a)(3), \S6.3 (revocation)
+		& No CRL or OCSP support. Revocation checking requires a live HTTP fetch during the handshake, which would require a second concurrent TCP connection --- not feasible on this platform. Permanently out of scope. \\
+		\addlinespace
+		RFC 5280 \S6.1.3(d)--(f), \S6.1.5 (policy tree)
+		& No certificate policy tree processing. A conformant policy tree requires recursive ASN.1 traversal and memory proportional to chain depth, neither of which is viable on eZ80. \\
+		\addlinespace
+		RFC 8446 \S9.1 (MTI cipher suites)
+		& \texttt{TLS\_CHACHA20\_POLY1305\_SHA256} (SHOULD) is not implemented. ChaCha20 and Poly1305 would each require a full eZ80 assembly primitive and together add $\sim$8~KB of code; no other use case on this platform justifies the cost. \\
 		\addlinespace
 	\end{longtable}
 
@@ -1693,5 +1732,51 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		\bottomrule
 	\end{xltabular}
 
+	\newpage
+
+	\subsection{Community Data Contributions}
+	\label{ssec:contributing_data}
+
+	Two of the analyses in this document --- the raw-tap entropy characterization in Section~\ref{ssec:min_entropy} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
+
+	\paragraph{What to capture}
+	The project maintainer hosts two online profiling tests for the purpose of assisting users with running capture tools on their calculator without having to use a sketchy, zipped pre-release build and profiling tool. The profiler sources binaries from a Github release tagged \texttt{capture-builds}, which is pinned to \texttt{v3.0.0-rc2} (this release is stable enough for the capture code).
+
+	The profiler is powered by WebTiLP, which means that it can communicate with your calculator via WebUSB and remotely control your device. The profilers execute the following steps:
+
+	\begin{itemize}
+		\item Locate the \texttt{lwIP} resident application on your device.
+		\item Jump to the version string, linked in the lwIP build at offset $0x1000$ from $app\_base$. Verify that it matches v3.0.0 or later.
+		\item [Conditional] If user's lwIP version is <3.0.0, uninstall lwIP, download the dylib installer bundle from the \texttt{capture-build} release, verify file integrity, transfer the files to your calculator, then run the app installer program on your calculator. The profiler then waits for the calculator to become responsive and for a directory check to report lwIP exists.
+		\item Download the profiler tool (RNGSTAT for the RNG capture, XTIMIG for the timing profiler), verify file integrity, transfer the profiler to your calculator, then run the profiler tool. The profiler then waits for the calculator to become responsive and for a directory check to report the metrics file exists (RNGSTATS for the RNG profiler, TLSTMLOG for the timing profiler).
+		\item Transfer the metrics file from the calculator into the browser. Parse the file into readable json, which gets emitted into a project-run Discord channel for accumulation.
+	\end{itemize}
+
+	\paragraph{Device identification}\label{par:device_id}
+	At the start of the profiler, you will need to provide the model identifier (ex: L, M, AA, ...) of your calculator if you know it, or the datecode from the back (formatted \texttt{L-NNNNN} or some variation of of this). If you do not see this and don't know your model number, ask on Cemetech, TI-Planet, or any other place frequented by TI programming hobbyists.
+
+	The device identifier is used to sort the the heuristics into per-model datasets, which in turn can help us see if behavior is reliable, or differs, across models.
+
+	\paragraph{Issue tracebacks}\label{par:issue_tracebacks}
+	The known and outstanding issues tracked in Appendix~\ref{ssec:known_issues} (notably \texttt{st closed sent 0}/\texttt{st closed sent 1}) are presently blocked on field reproduction data rather than RNG or timing coverage, and benefit from the same submission channels. A useful traceback report includes:
+	\begin{itemize}
+		\item \textbf{Traceback output.} The v1.0-rc4 traceback system's captured output at the point of failure (see Section~\ref{ssec:engineering_notes}), including the state string (e.g.\ \texttt{st closed sent 0}) and any preceding trace lines, not just the final line.
+		\item \textbf{Peer/server identity.} The hostname or service the connection was made to, and, if known, the TLS server implementation (e.g.\ nginx, a specific embedded TLS stack) --- the suspected cause is a missing or misinterpreted record type from certain peers.
+		\item \textbf{Reproducibility.} Whether the failure is consistent against that peer or intermittent, and approximately how far into the post-handshake exchange it occurs.
+		\item \textbf{Build/version.} The lwIP-CE library version and, where applicable, the calling application's version, since trampoline and record-handling behavior can shift between revisions.
+		\item \textbf{Device metadata.} The same hardware revision, OS version, and boot code requested under \nameref{par:device_id} above, in case the failure correlates with a hardware or firmware class.
+	\end{itemize}
+	As with calibration captures, tracebacks carry no submitter-identifying metadata by default and are evaluated purely on their technical content.
+
+	\paragraph{How to submit}
+	Submissions can be sent via either channel below:
+	\begin{itemize}
+		\item Project Discord: \url{https://discord.gg/CtEq3rXZGJ} --- a dedicated channel exists for capture submissions and questions about the protocol.
+		\item Direct email: \texttt{info@cagscalclabs.net} --- preferred when attaching large AppVar bundles.
+	\end{itemize}
+	The capture tool itself, its source, and the parsing scripts are versioned within this repository; contributors are asked to record which tool version produced their submission so the analysis pipeline can account for any schema changes between releases.
+
+	\paragraph{Privacy and licensing}
+	The project does not collect personally identifying information from contributors and does not maintain an attribution roster for submitted captures. This is a deliberate privacy-by-design choice: the community includes minors, and the analytical value of a capture is determined entirely by the device metadata accompanying it (hardware revision, OS version, boot code), not by the identity of the submitter. Captures are processed and incorporated into the published dataset under the project's existing license; once accepted, a capture is not retraceable to its submitter through any project-controlled record. Contributors who wish to be visible may identify themselves publicly on Discord or in GitHub discussions, but the project itself maintains no such linkage.
 
 \end{document}

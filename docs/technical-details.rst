@@ -282,6 +282,67 @@ Algorithm Support
      - ``1.2.840.10045.4.3.2``
      - Done
 
+ClientHello Profile
+~~~~~~~~~~~~~~~~~~~~
+
+Every connection starts with a ``ClientHello`` whose extension set is fixed at
+compile time. The table below lists every extension this implementation sends.
+No other extensions are emitted; a server that requires an extension not in
+this list will reject the handshake.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 14 56
+
+   * - Extension
+     - Presence
+     - Value / Notes
+   * - ``supported_versions``
+     - Always
+     - TLS 1.3 only (``0x0304``)
+   * - ``supported_groups``
+     - Always
+     - ``secp256r1`` (``0x0017``), ``x25519`` (``0x001d``); P-256 preferred
+   * - ``key_share``
+     - Always
+     - Ephemeral P-256 (65 B uncompressed) + X25519 (32 B). P-256 omitted
+       when unavailable; falls back to X25519-only share.
+   * - ``signature_algorithms``
+     - Always
+     - ``rsa_pss_rsae_sha256``, ``ecdsa_secp256r1_sha256``
+   * - ``signature_algorithms_cert``
+     - Always
+     - ``rsa_pkcs1_sha256``, ``rsa_pss_rsae_sha256``, ``ecdsa_secp256r1_sha256``
+   * - ``record_size_limit``
+     - Always
+     - 4096 bytes as ``uint16`` (RFC 8449). Supersedes the older
+       ``max_fragment_length`` (RFC 6066) for TLS 1.3 with broader server
+       support. A server that ignores the extension may send up to 16 KB;
+       a server that exceeds the negotiated limit gets a fatal
+       ``record_overflow`` alert.
+   * - ``server_name`` (SNI)
+     - If hostname set
+     - Single ``host_name`` entry. Omitted for raw-IP connections.
+   * - ``psk_key_exchange_modes``
+     - If PSK mode
+     - ``psk_dhe_ke`` only. Pure-PSK (``psk_ke``) is not offered.
+   * - ``application_layer_protocol_negotiation``
+     - If ALPN configured
+     - Ordered list supplied by the application. See ``tls-alpn.h``.
+   * - ``cookie``
+     - On HRR retry
+     - Echo of the cookie from the server's HelloRetryRequest.
+   * - ``pre_shared_key``
+     - If PSK mode
+     - Identity + binder. Must be the last extension (RFC 8446 §4.2.11).
+       Binder is HMAC-SHA-256 over the transcript up to but not including the
+       binders field.
+
+Both P-256 and X25519 key shares are sent speculatively in the first
+``ClientHello``, eliminating an HRR round-trip in the common case. If the
+server's HRR requests a group not in the original offer, the handshake is
+aborted; new key material is not generated in response to an HRR.
+
 Security Posture
 ~~~~~~~~~~~~~~~~~
 

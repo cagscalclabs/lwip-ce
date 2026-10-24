@@ -4,10 +4,15 @@
 #include "lwip/netif.h"
 #include "lwip/debug.h"
 #include "lwip/app_config.h"
+#include "lwip/dispatch.h"
 #include "usb_ethernet.h"
 #include "mem.h"
 #include "pcap.h"
 #include "../lwip-imports.h"
+
+/* Flush staged records to the appvar every 5 seconds so data isn't lost if
+ * the application exits without going through orderly netif teardown. */
+#define PCAP_FLUSH_INTERVAL_MS 5000u
 
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_DRIVER
 
@@ -203,6 +208,13 @@ static bool pcap_disable_on_netif(struct netif *netif)
     return true;
 }
 
+static void pcap_flush_dispatch(void)
+{
+    struct netif *netif;
+    NETIF_FOREACH(netif)
+        pcap_flush(netif);
+}
+
 void pcap_apply_config(void)
 {
     bool enabled = lwip_app_config_get()->pcap_enabled;
@@ -215,6 +227,10 @@ void pcap_apply_config(void)
         else
             pcap_disable_on_netif(netif);
     }
+
+    lwip_dispatch_attach(LWIP_DISPATCH_PCAP_FLUSH, pcap_flush_dispatch);
+    lwip_dispatch_set_period(LWIP_DISPATCH_PCAP_FLUSH,
+                             enabled ? lwip_dispatch_period_from_ms(PCAP_FLUSH_INTERVAL_MS) : 0);
 }
 
 void pcap_release_on_teardown(struct netif *netif)

@@ -33,6 +33,8 @@ lwIP-CE Contributors
      - jacobly, calc84maniac, Zeroko, John Caesarz, MateoC, Roccolox
    * - Testing
      - Alessio D'Ambrosio
+   * - Donors
+     - TIny_Hacker
 
 Upstream lwIP
 -------------

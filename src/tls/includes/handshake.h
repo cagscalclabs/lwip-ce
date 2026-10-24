@@ -53,7 +53,7 @@ extern "C"
 
 /* Extension Types */
 #define TLS_EXT_SERVER_NAME 0x0000
-#define TLS_EXT_MAX_FRAGMENT_LENGTH 0x0001
+#define TLS_EXT_RECORD_SIZE_LIMIT   0x001c
 #define TLS_EXT_SUPPORTED_GROUPS 0x000a
 #define TLS_EXT_SIGNATURE_ALGORITHMS 0x000d
 #define TLS_EXT_ALPN 0x0010
@@ -66,8 +66,9 @@ extern "C"
 #define TLS_EXT_PRE_SHARED_KEY 0x0029
 #define TLS_EXT_COOKIE 0x002c
 
-/* RFC 6066 max_fragment_length extension values. */
-#define TLS_MAX_FRAGMENT_LENGTH_4096 0x04
+/* RFC 8449 record_size_limit value: 4096 bytes as big-endian uint16. */
+#define TLS_RECORD_SIZE_LIMIT_4096_HI 0x10
+#define TLS_RECORD_SIZE_LIMIT_4096_LO 0x00
 
 /* Named Groups */
 #define TLS_NAMED_GROUP_X25519    0x001d
@@ -334,6 +335,12 @@ extern "C"
 
         /* True once close_notify has been sent so we don't send it twice. */
         bool close_notify_sent;
+
+        /* Negotiated record size limit (RFC 8449). Set from the server's
+         * EncryptedExtensions echo; defaults to the TLS maximum (16384).
+         * The decryption path enforces this and sends record_overflow if
+         * a plaintext record exceeds it. */
+        uint16_t peer_record_size_limit;
 
         /* True once a close_notify alert has been received from the peer
          * (RFC 8446 6.1). The altcp layer checks this to deliver an EOF to

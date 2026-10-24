@@ -16,6 +16,7 @@ CSS = r"""
   --panel:#f6f8fa; --link:#0969da; --ok-bg:#dafbe1; --ok-fg:#116329;
   --dev-bg:#ffebe9; --dev-fg:#82071e; --ev-bg:#fff8c5; --ev-fg:#7d4e00;
   --part-bg:#ddf4ff; --part-fg:#0550ae; --na-bg:#eaeef2; --na-fg:#424a53;
+  --rev-bg:#f0f6ff; --rev-fg:#0550ae; --rev-border:#b0c8f0;
 }
 @media (prefers-color-scheme:dark) {
   :root {
@@ -23,6 +24,7 @@ CSS = r"""
     --panel:#151b23; --link:#4493f8; --ok-bg:#12261e; --ok-fg:#56d364;
     --dev-bg:#2d1216; --dev-fg:#ff7b72; --ev-bg:#2b2108; --ev-fg:#e3b341;
     --part-bg:#0c2d6b; --part-fg:#79c0ff; --na-bg:#21262d; --na-fg:#9198a1;
+    --rev-bg:#0c1e3d; --rev-fg:#79c0ff; --rev-border:#1f3a6e;
   }
 }
 * { box-sizing:border-box; }
@@ -67,12 +69,20 @@ th,td { text-align:left; vertical-align:top; padding:8px 10px;
         border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
 th { color:var(--muted); font-size:12px; text-transform:uppercase;
      letter-spacing:.04em; }
-td.sec { width:14%; overflow-wrap:anywhere; word-break:break-word; }
-td.grade { width:130px; }
-td.loc { font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:22%;
+td.sec { width:13%; overflow-wrap:anywhere; word-break:break-word; }
+td.grade { width:120px; }
+td.loc { font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:20%;
          word-break:break-all; overflow-wrap:anywhere; }
-td.note { width:28%; overflow-wrap:anywhere; word-break:break-word; }
-td.justification { width:20%; overflow-wrap:anywhere; word-break:break-word; }
+td.note { width:22%; overflow-wrap:anywhere; word-break:break-word; }
+td.justification { width:18%; overflow-wrap:anywhere; word-break:break-word; }
+td.reviews { width:17%; overflow-wrap:anywhere; word-break:break-word; }
+.review-entry { margin-bottom:6px; padding:5px 8px; border-radius:4px;
+                background:var(--rev-bg); border:1px solid var(--rev-border); }
+.review-entry:last-child { margin-bottom:0; }
+.review-person { font-weight:600; color:var(--rev-fg); font-size:12px; }
+.review-scope { color:var(--muted); font-size:11px; font-style:italic; }
+.review-note { font-size:12px; margin-top:2px; }
+.no-reviews { color:var(--muted); font-style:italic; font-size:12px; }
 [hidden] { display:none !important; }
 @media (max-width:720px) {
   table,thead,tbody,tr,td { display:block; }
@@ -123,29 +133,37 @@ def esc(value: str) -> str:
     return html.escape(value, quote=True)
 
 
-def render(source: Path, destination: Path) -> None:
+def _parse_requirements(source: Path) -> tuple[list[dict], dict[str, list[dict]]]:
     root = ET.parse(source).getroot()
     if root.tag != "tls-specifications":
         raise ValueError(f"unexpected document root: {root.tag}")
-
     requirements = []
-    groups: dict[str, list[dict[str, str]]] = defaultdict(list)
+    groups: dict[str, list[dict]] = defaultdict(list)
     for node in root.findall("requirement"):
         item = {name: text(node, name) for name in
                 ("ref", "section", "location", "grade", "note", "justification")}
         if not all(item[name] for name in ("ref", "section", "location", "grade")):
             raise ValueError("requirement is missing ref, section, location, or grade")
+        reviewers = []
+        reviews_node = node.find("reviews")
+        if reviews_node is not None:
+            for rb in reviews_node.findall("reviewed-by"):
+                reviewer = {
+                    "person": text(rb, "person"),
+                    "scope":  text(rb, "scope"),
+                    "note":   text(rb, "note"),
+                }
+                if reviewer["person"]:
+                    reviewers.append(reviewer)
+        item["reviewers"] = reviewers
         requirements.append(item)
         groups[item["ref"]].append(item)
+    return requirements, groups
 
+
+def _build_body(requirements: list[dict], groups: dict[str, list[dict]]) -> list[str]:
     counts = Counter(item["grade"] for item in requirements)
-    out = ["<!doctype html>", '<html lang="en"><head>',
-           '<meta charset="utf-8">',
-           '<meta name="viewport" content="width=device-width,initial-scale=1">',
-           '<title>lwIP-CE TLS Specification Compliance</title>',
-           f"<style>{CSS}</style>", "</head><body><main>",
-           "<h1>lwIP-CE TLS Specification Compliance</h1>",
-           '<p class="lead">Clause-by-clause ledger mapping the standards this TLS '
+    out = ['<p class="lead">Clause-by-clause ledger mapping the standards this TLS '
            "implementation targets (RFC, NIST SP, FIPS) to the code that satisfies "
            f"or deviates from them. {len(requirements)} entries.</p>",
            '<div class="summary">']
@@ -179,21 +197,58 @@ def render(source: Path, destination: Path) -> None:
     for ref in ordered_refs:
         out.extend([f'<section class="audit-group"><h2 id="{anchors[ref]}">{esc(ref)}</h2>',
                     '<table><thead><tr><th>Section</th><th>Location</th><th>Grade</th>'
-                    '<th>Note</th><th>Justification</th></tr></thead><tbody>'])
+                    '<th>Note</th><th>Justification</th><th>Reviews</th></tr></thead><tbody>'])
         for item in groups[ref]:
             justification = esc(item["justification"])
             if not justification and item["grade"] == "DEVIANT":
                 justification = '<span class="missing-justification">Not yet documented.</span>'
+            if item["reviewers"]:
+                reviews_html = ""
+                for r in item["reviewers"]:
+                    reviews_html += '<div class="review-entry">'
+                    reviews_html += f'<div class="review-person">{esc(r["person"])}</div>'
+                    if r["scope"]:
+                        reviews_html += f'<div class="review-scope">{esc(r["scope"])}</div>'
+                    if r["note"]:
+                        reviews_html += f'<div class="review-note">{esc(r["note"])}</div>'
+                    reviews_html += '</div>'
+            else:
+                reviews_html = '<span class="no-reviews">—</span>'
             out.append(f'<tr data-grade="{esc(item["grade"])}">'
                        f'<td class="sec">{esc(item["section"])}</td>'
                        f'<td class="loc">{esc(item["location"])}</td>'
                        f'<td class="grade"><span class="badge {esc(item["grade"])}">'
                        f'{esc(item["grade"])}</span></td>'
                        f'<td class="note">{esc(item["note"])}</td>'
-                       f'<td class="justification">{justification}</td></tr>')
+                       f'<td class="justification">{justification}</td>'
+                       f'<td class="reviews">{reviews_html}</td></tr>')
         out.append('</tbody></table></section>')
-    out.extend([f"<script>{SCRIPT}</script>", "</main></body></html>"])
+    out.append(f"<script>{SCRIPT}</script>")
+    return out
 
+
+def render(source: Path, destination: Path) -> None:
+    """Render a standalone HTML page (used by the CLI)."""
+    requirements, groups = _parse_requirements(source)
+    body = _build_body(requirements, groups)
+    out = ["<!doctype html>", '<html lang="en"><head>',
+           '<meta charset="utf-8">',
+           '<meta name="viewport" content="width=device-width,initial-scale=1">',
+           '<title>lwIP-CE TLS Specification Compliance</title>',
+           f"<style>{CSS}</style>", "</head><body><main>",
+           "<h1>lwIP-CE TLS Specification Compliance</h1>"]
+    out.extend(body)
+    out.append("</main></body></html>")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(out), encoding="utf-8")
+
+
+def render_fragment(source: Path, destination: Path) -> None:
+    """Render a bare HTML fragment for embedding via Sphinx ``.. raw:: html``."""
+    requirements, groups = _parse_requirements(source)
+    body = _build_body(requirements, groups)
+    out = [f"<style>{CSS}</style>"]
+    out.extend(body)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text("\n".join(out), encoding="utf-8")
 
@@ -202,8 +257,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
+    parser.add_argument("--fragment", action="store_true",
+                        help="emit a bare HTML fragment instead of a full page")
     args = parser.parse_args()
-    render(args.source, args.destination)
+    if args.fragment:
+        render_fragment(args.source, args.destination)
+    else:
+        render(args.source, args.destination)
 
 
 if __name__ == "__main__":

@@ -1607,6 +1607,13 @@ static bool eth_register_netif(eth_device_t *eth, bool *netif_registered,
                              lwip_dispatch_period_from_ms(ETH_RX_SCHED_INTERVAL_MS));
     lwip_dispatch_start();
 
+    /* Apply capture config now that the netif exists. If pcap_enabled is set
+     * in the config appvar, this allocates the staging buffer for this device.
+     * Called here — at device init — so capture is never missed: the netif
+     * exists, the config has already been loaded by lwip_stack_init(), and
+     * there is no separate "enable" call to misplace or forget. */
+    pcap_apply_config();
+
     netif_set_up(&eth->iface); // tell lwIP that the interface is ready to receive
     return true;
 }

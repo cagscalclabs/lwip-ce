@@ -10,4 +10,5 @@
    using-cryptography
    debugging
    technical-details
+   tls-specifications
    credits

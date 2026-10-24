@@ -327,7 +327,7 @@ static bool tls_extension_type_known(uint16_t type)
     switch (type)
     {
     case TLS_EXT_SERVER_NAME:
-    case TLS_EXT_MAX_FRAGMENT_LENGTH:
+    case TLS_EXT_RECORD_SIZE_LIMIT:
     case TLS_EXT_SUPPORTED_GROUPS:
     case TLS_EXT_SIGNATURE_ALGORITHMS:
     case TLS_EXT_ALPN:
@@ -2381,6 +2381,11 @@ bool tls_handshake_init(
     /* Clear context */
     tls_secure_memzero(ctx, sizeof(*ctx));
     ctx->leaf_pubkey.type = TLS_KEY_TYPE_UNKNOWN;
+    /* RFC 8449: default is the TLS maximum (16384). If the server echoes
+     * record_size_limit in EncryptedExtensions, that value is stored here
+     * and enforced at decryption time. A server that ignores the extension
+     * leaves this at 16384 and we accept up to full-size records. */
+    ctx->peer_record_size_limit = 16384u;
 
     /* Copy PSK and identity (NULL = pure ECDHE mode, PSK stays zeroed) */
     if (psk && psk_identity)
@@ -2521,7 +2526,7 @@ bool tls_handshake_init(
  *    supported_versions     : tells the server we speak TLS 1.3
  *    supported_groups       : secp256r1 and x25519
  *    key_share              : our ephemeral P-256 and x25519 public keys
- *    max_fragment_length    : request 4096-byte plaintext records
+ *    record_size_limit      : request 4096-byte plaintext records (RFC 8449)
  *    psk_key_exchange_modes : if PSK mode, advertise psk_dhe_ke
  *    server_name            : SNI hostname (if set)
  *    pre_shared_key         : MUST be last — see binder comment below
@@ -2575,7 +2580,7 @@ bool tls_send_client_hello(
      *   [145..176] x25519 public key (32 bytes, patched)
      *   [177..186] signature_algorithms
      *   [187..198] signature_algorithms_cert
-     *   [199..203] max_fragment_length: 4096 bytes
+     *   [199..204] record_size_limit: 4096 bytes
      */
     static const uint8_t hello_template[] = {
         TLS_HANDSHAKE_CLIENT_HELLO, 0x00, 0x00, 0x00, /* body length patched */
@@ -2618,8 +2623,8 @@ bool tls_send_client_hello(
          *                            ecdsa_secp256r1_sha256 (0x0403) */
         /* ext_type=0x0032, ext_len=8, list_len=6 */
         0x00, 0x32, 0x00, 0x08, 0x00, 0x06, 0x04, 0x01, 0x08, 0x04, 0x04, 0x03,
-        /* max_fragment_length: 2^12 = 4096 bytes (RFC 6066 section 4) */
-        0x00, 0x01, 0x00, 0x01, TLS_MAX_FRAGMENT_LENGTH_4096
+        /* record_size_limit: 4096 bytes (RFC 8449) */
+        0x00, 0x1c, 0x00, 0x02, TLS_RECORD_SIZE_LIMIT_4096_HI, TLS_RECORD_SIZE_LIMIT_4096_LO
     };
     /* key_share with only x25519: ext_len=38, client_shares_len=36,
      * group=0x001d, key_len=32, then the key. */
@@ -3735,8 +3740,8 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
  * which servers/protocols a client supports.
  *
  * The current implementation consumes ALPN, validates the informational
- * supported_groups list, and accepts only the offered 4096-byte
- * max_fragment_length echo; otherwise it:
+ * supported_groups list, and accepts the server's record_size_limit echo
+ * (RFC 8449) if present; otherwise it:
  *
  *   1. Validate the framing (length fields nest correctly).
  *   2. Validate every permitted extension and reject duplicates.
@@ -3791,7 +3796,7 @@ static bool tls_recv_encrypted_extensions(
     }
 
     bool seen_server_name = false, seen_alpn = false, seen_groups = false;
-    bool seen_max_fragment_length = false;
+    bool seen_record_size_limit = false;
     ctx->negotiated_alpn = NULL;
     ctx->negotiated_alpn_len = 0;
     size_t ext_offset = 0;
@@ -3831,20 +3836,28 @@ static bool tls_recv_encrypted_extensions(
             }
             seen_server_name = true;
         }
-        else if (ext_type == TLS_EXT_MAX_FRAGMENT_LENGTH)
+        else if (ext_type == TLS_EXT_RECORD_SIZE_LIMIT)
         {
-            /* We offer only RFC 6066 code 4 (2^12 = 4096). A server may omit
-             * the extension, but if it echoes it the value must exactly match
-             * the ClientHello offer. */
-            if (seen_max_fragment_length || ext_data_len != 1 ||
-                ext_data[0] != TLS_MAX_FRAGMENT_LENGTH_4096)
+            /* RFC 8449 §4: server echoes the limit we sent (4096 = 0x1000).
+             * A server may omit the extension, but if present it must be a
+             * 2-byte value that does not exceed our offer. */
+            if (seen_record_size_limit || ext_data_len != 2)
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_ILLEGAL_PARAMETER);
                 ERROR_CODE(0x74);
                 return false;
             }
-            seen_max_fragment_length = true;
+            uint16_t server_limit = ((uint16_t)ext_data[0] << 8) | ext_data[1];
+            if (server_limit > 4096u)
+            {
+                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                               TLS_ALERT_ILLEGAL_PARAMETER);
+                ERROR_CODE(0x74);
+                return false;
+            }
+            ctx->peer_record_size_limit = server_limit;
+            seen_record_size_limit = true;
         }
         else if (ext_type == TLS_EXT_ALPN)
         {

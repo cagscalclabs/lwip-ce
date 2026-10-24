@@ -27,6 +27,7 @@ exclude_patterns = [
     "_site_toc.rst",
     "_build",
     "_doxygen",
+    "_generated",
     "whitepaper/generated",
     "whitepaper/_minted-whitepaper",
 ]
@@ -62,14 +63,13 @@ suppress_warnings = [
 ]
 
 
-def _render_tls_ledger(app, exception):
-    """Write the standalone audit page after Sphinx has built its HTML tree."""
-    if exception is None and app.builder.format == "html":
-        render_tls_specifications(
-            ROOT / "tls-specifications.xml",
-            Path(app.outdir) / "tls-specifications.html",
-        )
+def _render_tls_ledger(app):
+    """Write the TLS ledger fragment before Sphinx reads source files."""
+    _renderer.render_fragment(
+        ROOT / "tls-specifications.xml",
+        ROOT / "_generated" / "tls-specifications-fragment.html",
+    )
 
 
 def setup(app):
-    app.connect("build-finished", _render_tls_ledger)
+    app.connect("builder-inited", _render_tls_ledger)

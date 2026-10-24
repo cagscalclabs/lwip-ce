@@ -418,8 +418,11 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
 
     ciphertext_len = record_len - sizeof(header);
     actual_plaintext_len = ciphertext_len - TLS_AES_AUTH_TAG_SIZE;
+    /* +1 for the mandatory inner content-type byte (RFC 8446 §5.2).
+     * peer_record_size_limit is the RFC 8449 negotiated limit (default 16384);
+     * a record whose plaintext exceeds it gets a fatal record_overflow alert. */
     if (actual_plaintext_len == 0 ||
-        actual_plaintext_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 1)
+        actual_plaintext_len > (size_t)ctx->peer_record_size_limit + 1u)
     {
         (void)tls_send_fatal_alert(ctx, TLS_ALERT_RECORD_OVERFLOW);
         return ERR_VAL;

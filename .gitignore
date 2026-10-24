@@ -57,6 +57,7 @@ doc/
 # generated whitepaper outputs
 docs/_build/
 docs/_doxygen/
+docs/_generated/
 docs/.python/
 docs/whitepaper/_minted-whitepaper/
 docs/whitepaper/generated/
