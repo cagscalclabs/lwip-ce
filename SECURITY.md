@@ -11,7 +11,7 @@ and how to report problems.
 - A TLS 1.3 client implementation (handshake state machine, record layer,
   key schedule) — see `src/tls/core/handshake.c`.
 - A small cryptographic library backing that handshake: AES-GCM, AES-CBC,
-  AES-CCM, RSA (1024–2048 bit, PKCS#1 v1.5 and PSS), HMAC, HKDF, PBKDF2,
+  AES-CCM, RSA (1024–4096 bits [TLS allows only 2048-4096, <2048 can be used in lower-security app-level contexts but is generally considered insecure], PKCS#1 v1.5 and PSS), HMAC, HKDF, PBKDF2,
   SHA-256, X25519, and ASN.1/X.509 parsing — see `src/tls/core/` and
   `src/tls/includes/`.
 - A compact trust store and certificate chain verifier, built from a
@@ -34,18 +34,16 @@ source for "how to report a problem."
 
 - **TLS 1.3** is the only protocol version supported. Leaf
   `CertificateVerify` is mandatory on every full handshake (RSA-PSS-SHA256,
-  leaf modulus 1024–2048 bit) — this is what proves the peer controls the
+  leaf modulus 2048–4096 bit) — this is what proves the peer controls the
   leaf private key, not just that it possesses a public certificate.
 - **Certificate chain trust**: adjacent-link signature verification walks
-  the presented chain — RSA-2048+SHA-256 links are cryptographically
+  the presented chain — RSA+SHA-256 and P-256+SHA-256 links are cryptographically
   verified (a bad signature is a hard abort), other signature types are
-  currently accepted unverified pending broader algorithm support and are
-  logged as such. The topmost certificate's issuer is then looked up by
-  subject name in the on-device trust store and, if RSA, verified the same
+  fail-closed. The topmost certificate's issuer is then looked up by
+  Subject Key Identifier (falling back to Subject Name) in the on-device trust store and verified the same
   way. The trust store itself is generated from a host OS CA bundle by a
   signed, auditable GitHub Actions workflow and its own signature is
-  checked at TLS init. **No ECDSA/P-256 chain verification exists yet** —
-  see `docs/whitepaper/whitepaper.tex` for the current roadmap on this.
+  checked at TLS init.
 - **Entropy**: a hardware SRAM-tap source, conditioned via XOR-folding and
   hashing, gated by runtime health checks at startup. Empirical
   characterization (bias, correlation, min-entropy bounds) is in the
@@ -88,9 +86,6 @@ whitepaper's own threat-model section.
   not a formal proof. Timing differential analysis is run as part of CI
   (see `tests/profiling/tls_timing/`) but a passing run is evidence
   against gross timing leakage, not a constant-time certification.
-- **Partial chain verification.** See above — non-RSA chain links are
-  currently accepted unverified. This is a known gap, already tracked; you
-  don't need to discover it for us.
 
 ## Reporting a Vulnerability
 
