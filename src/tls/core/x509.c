@@ -531,12 +531,117 @@ static bool __attribute__((unused)) tls_x509_parse_constraints_from_extensions(c
     return true;
 }
 
+/* Returns true if `hostname` matches the dNSName constraint `constraint`.
+ * RFC 5280 §4.2.1.10: a leading '.' in the constraint is a domain suffix
+ * match (".example.com" matches "a.example.com"); otherwise exact match or
+ * subdomain (same as SAN matching). */
+static bool nc_dns_matches(const char *hostname, size_t hlen,
+                            const uint8_t *constraint, size_t clen)
+{
+    if (clen == 0 || hlen == 0)
+        return false;
+    /* Leading dot: constraint is a suffix. */
+    if (constraint[0] == '.')
+    {
+        if (hlen <= clen)
+            return false;
+        return memcmp(hostname + hlen - clen, constraint, clen) == 0;
+    }
+    /* No leading dot: exact match or host is a direct subdomain. */
+    if (hlen == clen)
+        return memcmp(hostname, constraint, clen) == 0;
+    if (hlen > clen + 1 &&
+        hostname[hlen - clen - 1] == '.' &&
+        memcmp(hostname + hlen - clen, constraint, clen) == 0)
+        return true;
+    return false;
+}
+
+/* Parse and enforce RFC 5280 nameConstraints on `hostname`.
+ * `nc_value` is the OCTET STRING value of the extension.
+ * Returns false (reject) if:
+ *   - The constraint contains non-dNSName entries in a critical extension
+ *   - The hostname fails a permittedSubtrees or excludedSubtrees check. */
+static bool nc_validate_hostname(const uint8_t *nc_value, size_t nc_len,
+                                  bool critical, const char *hostname)
+{
+    if (!hostname)
+        return !critical; /* no hostname to check; skip non-critical */
+
+    size_t hlen = strlen(hostname);
+    struct tls_asn1_cursor nc_cur, subtrees_cur;
+    struct tls_asn1_tlv nc_seq, subtrees;
+
+    if (!tls_asn1_cursor_init(&nc_cur, nc_value, nc_len) ||
+        !tls_asn1_next(&nc_cur, &nc_seq) ||
+        nc_seq.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+        return false;
+
+    if (!tls_asn1_child_cursor(&nc_seq, &nc_cur))
+        return false;
+
+    bool has_permitted = false;
+    bool hostname_permitted = false;
+
+    while (nc_cur.cur < nc_cur.end)
+    {
+        if (!tls_asn1_next(&nc_cur, &subtrees))
+            return false;
+        /* [0] = permittedSubtrees, [1] = excludedSubtrees (CONTEXT CONSTRUCTED) */
+        bool is_permitted = subtrees.tag == (0xA0u); /* [0] CONSTRUCTED */
+        bool is_excluded  = subtrees.tag == (0xA1u); /* [1] CONSTRUCTED */
+        if (!is_permitted && !is_excluded)
+            return false; /* unexpected item in NameConstraints */
+
+        if (!tls_asn1_child_cursor(&subtrees, &subtrees_cur))
+            return false;
+
+        while (subtrees_cur.cur < subtrees_cur.end)
+        {
+            struct tls_asn1_tlv subtree, base;
+            if (!tls_asn1_next(&subtrees_cur, &subtree) ||
+                subtree.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+                return false;
+            struct tls_asn1_cursor sub_cur;
+            if (!tls_asn1_child_cursor(&subtree, &sub_cur) ||
+                !tls_asn1_next(&sub_cur, &base))
+                return false;
+
+            /* dNSName is CONTEXT IMPLICIT tag 2 (0x82). */
+            if (base.tag == 0x82u)
+            {
+                bool matches = nc_dns_matches(hostname, hlen,
+                                               base.value, base.len);
+                if (is_permitted)
+                {
+                    has_permitted = true;
+                    if (matches) hostname_permitted = true;
+                }
+                else /* excluded */
+                {
+                    if (matches) return false; /* hostname excluded */
+                }
+            }
+            else if (critical)
+            {
+                /* Unsupported GeneralName type in a critical extension. */
+                return false;
+            }
+        }
+    }
+
+    /* If any permitted subtrees exist, hostname must match at least one. */
+    if (has_permitted && !hostname_permitted)
+        return false;
+    return true;
+}
+
 /* Validate the extension subset needed by this client path builder. Anything
- * critical that we do not interpret is rejected; nameConstraints is rejected
- * even when non-critical because silently ignoring it can broaden a CA's
- * authority. */
+ * critical that we do not interpret is rejected; nameConstraints are parsed
+ * and enforced for dNSName entries. */
 bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
-                                       bool is_ca, size_t subordinate_ca_count)
+                                       bool is_ca, size_t subordinate_ca_count,
+                                       const char *hostname)
 {
     static const uint8_t oid_basic_constraints[] = {0x55, 0x1D, 0x13};
     static const uint8_t oid_key_usage[] = {0x55, 0x1D, 0x0F};
@@ -632,7 +737,12 @@ bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
         bool is_nc = oid.len == sizeof(oid_name_constraints) &&
                      memcmp(oid.value, oid_name_constraints, sizeof(oid_name_constraints)) == 0;
 
-        if (is_nc) return false;
+        if (is_nc)
+        {
+            if (!nc_validate_hostname(value.value, value.len, critical, hostname))
+                return false;
+            continue;
+        }
         if (!is_bc && !is_ku && !is_san && !is_eku)
         {
             if (critical) return false;
@@ -1227,7 +1337,7 @@ bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len)
     struct tls_x509_object cert = {0};
     cert.extensions = ext_data;
     cert.extensions_len = ext_len;
-    return tls_x509_validate_path_extensions(&cert, true, 0);
+    return tls_x509_validate_path_extensions(&cert, true, 0, NULL);
 }
 
 bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len)

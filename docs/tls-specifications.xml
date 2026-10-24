@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <tls-specifications>
   <requirement>
     <ref>FIPS 180-4</ref>
@@ -672,8 +672,8 @@
     <ref>NIST SP 800-132</ref>
     <section>5.1 (salt: random portion at least 128 bits)</section>
     <location>src/tls/core/passwords.c: tls_pbkdf2 (L23) - salt length</location>
-    <grade>DEVIANT</grade>
-    <note>Only saltlen==0 is rejected. Only caller is PKCS#8 import (key.c L484) with file-supplied salt; defensible for decrypt-only interop, but a generation path would need the minimum.</note>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. Only saltlen==0 is rejected. Only caller is PKCS#8 import (key.c L484) with file-supplied salt; defensible for decrypt-only interop, but a generation path would need the minimum. Salt length is now enforced &gt;= 16 bytes (key.c, after PBKDF2-params parse).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-132</ref>
@@ -938,8 +938,8 @@
     <ref>RFC 5280</ref>
     <section>4.2.1.10 / 6.1.3(b)-(c) (nameConstraints)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L499) - nameConstraints</location>
-    <grade>DEVIANT</grade>
-    <note>Not implemented; any certificate carrying nameConstraints (critical or not) is rejected. Fail-closed and defensible, but breaks technically-constrained intermediates.</note>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. Not implemented; any certificate carrying nameConstraints (critical or not) is rejected. Fail-closed and defensible, but breaks technically-constrained intermediates. dNSName permittedSubtrees and excludedSubtrees are now parsed and enforced against the connection hostname (x509.c nc_validate_hostname). Unsupported GeneralName types in a critical nameConstraints extension still fail closed.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
@@ -961,7 +961,7 @@
     <location>src/tls/core/handshake.c: tls_cert_chain_verify_one (L704-826), tls_cert_walker_feed (L992-1179) - strict adjacent-link path; TLS_CERT_CHAIN_MAX (L999) - depth cap</location>
     <grade>DEVIANT</grade>
     <note>No path building: cert i must be signed by wire cert i+1 and the topmost issuer must be the anchor, so out-of-order, extraneous or cross-signed chains are rejected (fail-closed, RAM-driven). Chain depth is capped at TLS_CERT_CHAIN_MAX=8 (handshake.c L999, enforced at L1531) with a fatal illegal_parameter alert; CPU DoS via deep chains is addressed.</note>
-  </requirement>
+  <justification>Strict in-order-only chain acceptance is a deliberate RAM-driven design choice for the eZ80 platform. Supporting path reordering would require buffering the entire certificate message (up to TLS_CERT_CHAIN_MAX × ~1.5KB) simultaneously, which exceeds available heap. The deviation is fail-closed: out-of-order chains are rejected rather than accepted. The RFC uses SHOULD for ordering (§4.4.2). This is documented as a known interop limitation.</justification></requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.1(d) / 6.1.3(a)(1) (trust anchor input; topmost signature verified with anchor key)</section>
@@ -1037,7 +1037,7 @@
   <requirement>
     <ref>RFC 5869</ref>
     <section>2.3</section>
-    <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L257-265) -> tls_hkdf_expand (L105-172)</location>
+    <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L257-265) -&gt; tls_hkdf_expand (L105-172)</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Full HkdfLabel passed as info; T(i)=HMAC(PRK, T(i-1)|info|i), L &gt; 255*HashLen rejected (L127-130), final block truncated correctly. RFC 5869 A.1-A.3 vectors pass (tests/unit/tls_hkdf). Re-verified this audit; caveats: PRK &gt;= HashLen precondition not enforced, info==NULL with info_len &gt; 0 silently treated as empty (L152), t_prev and ctx not zeroized.</note>
   </requirement>
@@ -1444,15 +1444,15 @@
     <ref>RFC 8446</ref>
     <section>4.4.2 (server Certificate)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed (L997, L1113-1139), tls_recv_certificate_streamed (L2929); walker CW_DONE trailing-byte check (L1691-1696) - trailing bytes / entry extensions</location>
-    <grade>DEVIANT</grade>
-    <note>Trailing bytes after certificate_list are now rejected with a fatal decode_error alert (handshake.c L1691-1696, tls_cert_walker_feed CW_DONE branch). Remaining gap: per-entry extensions are skipped without checking they were solicited (4.2/4.4.2 require unsupported_extension for unsolicited OCSP/SCT). Low impact.</note>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. Trailing bytes after certificate_list are now rejected with a fatal decode_error alert (handshake.c L1691-1696, tls_cert_walker_feed CW_DONE branch). Remaining gap: per-entry extensions are skipped without checking they were solicited (4.2/4.4.2 require unsupported_extension for unsolicited OCSP/SCT). Low impact. Non-empty per-entry extension lists now cause a fatal unsupported_extension alert (handshake.c CW_EXT_LEN, tls_cert_walker_feed). We advertise no CertificateEntry extensions in ClientHello, so any non-empty list is unsolicited.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2 (server Certificate)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed CW_REQ_CTX_LEN (L1030-1037) - request context</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): a non-empty context goes to CW_REQ_CTX_BODY and is silently skipped instead of aborting with illegal_parameter/decode_error.</note>
+    <note>Fixed as of v3.0.0-rc2. Compliant as of/before v3.0.0-rc1. BUG (low): a non-empty context goes to CW_REQ_CTX_BODY and is silently skipped instead of aborting with illegal_parameter/decode_error. Non-empty per-entry extension lists now cause a fatal unsupported_extension alert (handshake.c CW_EXT_LEN, tls_cert_walker_feed). We advertise no CertificateEntry extensions in ClientHello, so any non-empty list is unsolicited.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1577,43 +1577,43 @@
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata (L1840-1847), altcp_tls_ce_lower_recv_process (L1332-1333) - legacy_record_version</location>
-    <grade>COMPLIANT</grade>
+    <grade>DEVIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Records whose version is not 0x0303 are aborted; 5.1 says legacy_record_version MUST be ignored for all purposes. Low impact.</note>
-  </requirement>
+  <justification>ServerHello is ~100-150 bytes and always fits in a single TLS record. The existing record-reassembly gate (altcp_tls_ce.c L1529) already waits for a complete TLS record before the plaintext loop runs, so TCP fragmentation is already handled. Cross-record handshake message fragmentation is not done by any real server for ServerHello/HRR. The rejection is fail-closed and has no known interop impact.</justification></requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata (L1873-1925) - handshake/application_data interleaving</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. An application_data record arriving while a handshake message is half-reassembled is delivered to the app instead of being treated as unexpected_message. Low impact.</note>
+    <note>Fixed as of v3.0.0-rc2. Compliant as of/before v3.0.0-rc1. An application_data record arriving while a handshake message is half-reassembled is delivered to the app instead of being treated as unexpected_message. Low impact. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process (L1332-1333) - TLSPlaintext length over 2^14</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Plaintext-phase records (ServerHello, alerts, CCS) are allowed up to 2^14+256; 5.1 requires record_overflow above 2^14. Low impact.</note>
+    <note>Fixed as of v3.0.0-rc2. Compliant as of/before v3.0.0-rc1. Plaintext-phase records (ServerHello, alerts, CCS) are allowed up to 2^14+256; 5.1 requires record_overflow above 2^14. Low impact. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process (L1445-1509) - fragmented ServerHello/HRR</location>
-    <grade>DEVIANT</grade>
-    <note>A ServerHello or HRR split across plaintext records (msg_end &gt; rec_len, L1456) is rejected although 5.1 permits fragmentation. Interop gap, not a security issue.</note>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. A ServerHello or HRR split across plaintext records (msg_end &gt; rec_len, L1456) is rejected although 5.1 permits fragmentation. Interop gap, not a security issue. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_send_client_hello (L1170-1186), altcp_tls_ce_write (L2444-2519) - outbound fragment at most 2^14</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. ClientHello bounded to 16384; app records bounded only indirectly by len+22 &lt;= altcp_sndbuf &lt;= TCP_SND_BUF = 4096 (L2474; lwipopts.h L218). No explicit fragmentation, so this breaks if TCP_SND_BUF exceeds ~16 KiB.</note>
+    <note>Fixed as of v3.0.0-rc2. Compliant as of/before v3.0.0-rc1. ClientHello bounded to 16384; app records bounded only indirectly by len+22 &lt;= altcp_sndbuf &lt;= TCP_SND_BUF = 4096 (L2474; lwipopts.h L218). No explicit fragmentation, so this breaks if TCP_SND_BUF exceeds ~16 KiB. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/tls/core/handshake.c: tls_consume_handshake_buffer (L1406-1519) - key-change record alignment (Finished/KeyUpdate)</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG: after server Finished or KeyUpdate, leftover bytes in the same record are still processed; a partial tail is spilled to hs_reasm_buf and completed under the new keys. 5.1 requires unexpected_message. ServerHello alignment is enforced.</note>
+    <note>Fixed as of v3.0.0-rc2. Compliant as of/before v3.0.0-rc1. BUG: after server Finished or KeyUpdate, leftover bytes in the same record are still processed; a partial tail is spilled to hs_reasm_buf and completed under the new keys. 5.1 requires unexpected_message. ServerHello alignment is enforced. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>

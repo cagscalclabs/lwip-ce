@@ -1335,7 +1335,8 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
      * cert_index excludes the leaf, so an issuer at index N has N-1
      * subordinate CA certificates beneath it. */
     if (!tls_x509_validate_path_extensions(&cert, !is_leaf,
-                                            is_leaf ? 0 : w->cert_index - 1u))
+                                            is_leaf ? 0 : w->cert_index - 1u,
+                                            w->ctx ? w->ctx->hostname : NULL))
     {
         INFO("cert: constraints fail");
         ERROR_CODE(0x12);
@@ -1567,26 +1568,27 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                     w->state = CW_ERROR;
                     return false;
                 }
-                w->chain_remaining -= 2 + value; /* length field + body */
-                w->field_remaining = value;
-                /* Empty CertificateEntry extensions (value == 0) is the common
-                 * TLS 1.3 case. Transition directly to the next cert (or DONE)
-                 * instead of routing a zero-length body through CW_EXT_BODY. */
-                if (value == 0)
+                /* RFC 8446 §4.4.2: server MUST NOT include CertificateEntry
+                 * extensions not advertised in ClientHello.  We advertise none,
+                 * so any non-empty extension list is unsolicited. */
+                if (value != 0)
                 {
-                    if (w->chain_remaining == 0)
-                    {
-                        w->state = CW_DONE;
-                    }
-                    else
-                    {
-                        w->state = CW_CERT_LEN;
-                        w->len_need = 3;
-                    }
+                    tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNSUPPORTED_EXTENSION);
+                    w->state = CW_ERROR;
+                    return false;
+                }
+                w->chain_remaining -= 2; /* only the length field was consumed */
+                w->field_remaining = 0;
+                /* Empty CertificateEntry extensions (value == 0) is the common
+                 * TLS 1.3 case. Transition directly to the next cert (or DONE). */
+                if (w->chain_remaining == 0)
+                {
+                    w->state = CW_DONE;
                 }
                 else
                 {
-                    w->state = CW_EXT_BODY;
+                    w->state = CW_CERT_LEN;
+                    w->len_need = 3;
                 }
                 break;
             default:

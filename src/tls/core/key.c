@@ -429,6 +429,10 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
         tls_asn1_tag_number(rounds_tlv.tag) != ASN1_INTEGER)
         return TLS_KEY_IMPORT_PARSE_FAIL;
 
+    /* SP 800-132 §5.1: salt random portion must be at least 128 bits (16 bytes). */
+    if (salt.len < 16)
+        return TLS_KEY_IMPORT_DECRYPT_FAIL;
+
     /* Optional keyLength and prf. */
     maybe_keylen.tag   = 0; maybe_keylen.value = NULL; maybe_keylen.len = 0;
     prf_seq.tag        = 0; prf_seq.value      = NULL; prf_seq.len      = 0;

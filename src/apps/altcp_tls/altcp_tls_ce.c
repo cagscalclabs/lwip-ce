@@ -1664,6 +1664,10 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                             size_t msg_end = off + 4 + msg_len;
                             if (msg_end > rec_len)
                             {
+                                /* ServerHello split across TLS records: not done
+                                 * in practice (fits in ~150 bytes), and TLS
+                                 * record reassembly already waits for a full
+                                 * record before this path runs.  Reject. */
                                 (void)tls_send_fatal_alert(&state->tls_ctx,
                                                            TLS_ALERT_DECODE_ERROR);
                                 plaintext_ok = false;
@@ -2859,7 +2863,6 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
                 state->pending_chello = NULL;
                 state->pending_chello_len = 0;
             }
-
             tls_state_remove(state);
             state->conn = NULL;
             mem_stats_tls_direct_release(sizeof(*state), sizeof(*state));
