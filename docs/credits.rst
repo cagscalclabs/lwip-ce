@@ -15,6 +15,8 @@ lwIP-CE Contributors
      - Credit
    * - Lead development
      - Anthony Cagliano
+   * - Maintainer, Wireless branch
+     - Alessio D'Ambrosio
    * - SHA-256 to eZ80 work
      - Adam Beckingham
    * - AES to eZ80 work
@@ -28,9 +30,9 @@ lwIP-CE Contributors
    * - fasmg to GNU migration
      - TIny_Hacker
    * - Info, optimizations, and supporting algorithms
-     - jacobly, calc84maniac, Zeroko, John Caesarz, MateoC
+     - jacobly, calc84maniac, Zeroko, John Caesarz, MateoC, Roccolox
    * - Testing
-     - Alessio
+     - Alessio D'Ambrosio
 
 Upstream lwIP
 -------------
