@@ -67,7 +67,7 @@ th,td { text-align:left; vertical-align:top; padding:8px 10px;
         border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
 th { color:var(--muted); font-size:12px; text-transform:uppercase;
      letter-spacing:.04em; }
-td.sec { width:70px; white-space:nowrap; }
+td.sec { width:14%; overflow-wrap:anywhere; word-break:break-word; }
 td.grade { width:130px; }
 td.loc { font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:22%;
          word-break:break-all; overflow-wrap:anywhere; }
