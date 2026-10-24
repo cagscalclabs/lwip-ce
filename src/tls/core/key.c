@@ -478,6 +478,9 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
         key_len = key_der_int_to_size(maybe_keylen.value, maybe_keylen.len);
 
     size_t rounds = key_der_int_to_size(rounds_tlv.value, rounds_tlv.len);
+    /* Cap rounds to prevent a CPU DoS via attacker-controlled PKCS#8 file. */
+    if (rounds == 0 || rounds > 600000u)
+        return TLS_KEY_IMPORT_DECRYPT_FAIL;
 
     /* Derive the wrapping key with PBKDF2-HMAC-SHA256. */
     uint8_t derived[32];
@@ -905,8 +908,9 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
     size_t ct_len;
     if (mode == TLS_AES_CBC)
     {
+        /* PKCS#7 always appends a full padding block when input is block-aligned. */
         size_t rem = in_len % TLS_AES_BLOCK_SIZE;
-        ct_len = rem ? (in_len - rem + TLS_AES_BLOCK_SIZE) : in_len;
+        ct_len = in_len - rem + TLS_AES_BLOCK_SIZE;
     }
     else
     {

@@ -191,6 +191,9 @@ bool tls_psk_cache_get(const char *hostname, uint8_t *psk_type,
             uint32_t elapsed_ms = (now - e->received_at) * 1000u;
             identity->obfuscated_ticket_age += elapsed_ms;
         }
+        /* Mark consumed so a second config for the same host cannot reuse
+         * this ticket before the first ClientHello goes out. */
+        tls_secure_memzero(e, sizeof(*e));
         return true;
     }
     return false;

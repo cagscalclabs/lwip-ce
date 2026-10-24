@@ -152,6 +152,11 @@ cleanup:
 }
 
 // CRYPTO_FN
+/* RFC 8017 §7.1.2 step 3 requires that all decoding errors be
+ * indistinguishable — an early exit on Y!=0 vs lHash mismatch vs bad PS
+ * is a Manger-style timing oracle.  This implementation accumulates all
+ * error conditions into `bad` and runs every loop iteration regardless,
+ * returning 0 on any failure. */
 size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf, const char *auth, uint8_t hash_alg)
 {
     if ((in_len > RSA_MODULUS_MAX_SUPPORTED) ||
@@ -179,12 +184,13 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     size_t mgf_len = 0;
     uint32_t counter = 0;
     size_t masked_db = ENCODE_SALT + hash.digestlen;
-    bool have_delimiter = false;
 
     if (hash.digestlen > sizeof(seed))
         goto cleanup;
-    if (inbuf[ENCODE_START] != 0)
-        goto cleanup;
+
+    /* Accumulate all decode errors; never exit the loop early.
+     * bad != 0 at the end means some check failed. */
+    uint8_t bad = inbuf[ENCODE_START]; /* Y byte must be 0x00 */
 
     memcpy(seed, &inbuf[ENCODE_SALT], hash.digestlen);
     if (!rsa_mgf1_xor(seed, hash.digestlen, &inbuf[masked_db], db_len, hash_alg))
@@ -195,6 +201,9 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         hash.update(&hash._private, (const uint8_t *)auth, strlen(auth));
     hash.digest(&hash._private, sha256_digest);
 
+    /* Scan DB: lHash region, then PS zeros, then 0x01 delimiter, then M.
+     * All iterations run unconditionally; errors accumulate into `bad`. */
+    size_t msg_start = db_len; /* index of first M byte; db_len = not found */
     for (size_t i = 0; i < db_len; i++)
     {
         if ((i % hash.digestlen) == 0)
@@ -207,24 +216,31 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         uint8_t db = inbuf[masked_db + i] ^ mgf_block[i % hash.digestlen];
         if (i < hash.digestlen)
         {
-            if (db != sha256_digest[i])
-                goto cleanup;
-            continue;
+            /* lHash check: accumulate mismatch into bad (constant-time OR). */
+            bad |= db ^ sha256_digest[i];
         }
-        if (!have_delimiter)
+        else if (msg_start == db_len)
         {
-            if (db == 0)
-                continue;
-            if (db != 0x01)
-                goto cleanup;
-            have_delimiter = true;
-            continue;
+            /* PS/delimiter scan: 0x00 bytes are padding, 0x01 is the
+             * delimiter; anything else is an error.  Use arithmetic to
+             * avoid branches that leak the position of the delimiter. */
+            uint8_t is_delim = (uint8_t)((db == 0x01) ? 1 : 0);
+            uint8_t is_zero  = (uint8_t)((db == 0x00) ? 1 : 0);
+            bad |= (uint8_t)(1 - is_delim - is_zero); /* error if neither */
+            if (is_delim)
+                msg_start = i + 1;
         }
-        outbuf[out_len++] = db;
+        else
+        {
+            outbuf[out_len++] = db;
+        }
     }
 
-    if (!have_delimiter)
-        goto cleanup;
+    /* Delimiter never found, or some earlier check failed. */
+    bad |= (uint8_t)(msg_start == db_len ? 1 : 0);
+    if (bad)
+        out_len = 0;
+
 cleanup:
     return out_len;
 }

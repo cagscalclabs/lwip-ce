@@ -1084,7 +1084,7 @@ for (uint8_t i = 0; i < count; i++) {
 	\paragraph{CertificateVerify}
 	Chain verification establishes that the certificates link together cryptographically, but it does not on its own prove that the entity we are speaking with controls the leaf private key. A network attacker holding only the leaf certificate---which is public---would otherwise pass a structural check. TLS 1.3's \texttt{CertificateVerify} message closes that gap: the server signs a digest of the handshake transcript with its leaf private key. We require this message and verify it on every full handshake.
 
-	The implementation is restricted to \texttt{rsa\_pss\_rsae\_sha256} with a leaf RSA modulus between 1024 and 2048 bits. Servers selecting \texttt{ecdsa\_secp256r1\_sha256}, the wider RSA-PSS hash variants, or RSA-PKCS1 (which RFC~8446 §4.4.3 forbids in \texttt{CertificateVerify} regardless) are rejected with a fatal \texttt{decrypt\_error} alert. Support for \texttt{ecdsa\_secp256r1\_sha256} and RSA keys up to 4096 bits is planned.
+	The implementation supports two \texttt{CertificateVerify} schemes: \texttt{rsa\_pss\_rsae\_sha256} with a leaf RSA modulus between 1024 and 2048 bits, and \texttt{ecdsa\_secp256r1\_sha256} (P-256/SHA-256). Servers selecting the wider RSA-PSS hash variants or RSA-PKCS1 (which RFC~8446 §4.4.3 forbids in \texttt{CertificateVerify} regardless) are rejected with a fatal \texttt{decrypt\_error} alert. RSA keys above 2048 bits remain unsupported.
 
 	\paragraph{CertificateRequest}
 	A server may ask the client to authenticate with its own certificate. Client certificates are currently out of scope for this implementation, but the request still has to be handled correctly: \texttt{CertificateRequest} participates in the handshake transcript that both sides' \texttt{Finished} MACs are computed over, so it cannot simply be ignored. The handshake parser validates the message's nested request-context and extension-list lengths, feeds the exact bytes into the transcript hash, and records that the server asked (\texttt{client\_certificate\_requested}). Rather than aborting or omitting the response, the client replies with an empty \texttt{Certificate} message (a zero-length certificate list, per RFC~8446 §4.4.2) and no \texttt{CertificateVerify}, which is the standard, spec-compliant way to decline client authentication while keeping the transcript---and therefore the handshake---valid.
@@ -1093,10 +1093,11 @@ for (uint8_t i = 0; i < count; i++) {
 	When operating as a client, the implementation streams the TLS \texttt{Certificate} message one certificate at a time rather than buffering the whole chain, and verifies each \emph{link} against the next certificate's public key. Because certificate $N$ is signed by certificate $N{+}1$, and $N{+}1$ has not yet arrived when $N$ finishes parsing, the walker defers: it holds $N$'s signature material until $N{+}1$ arrives, then verifies the pending link with $N{+}1$'s key.
 	\begin{itemize}
 		\item An \texttt{RSA-2048} link signed with \texttt{sha256WithRSAEncryption} is verified for real (PKCS\#1~v1.5, SHA-256). A signature that fails to verify is fatal: the handshake is aborted (an \texttt{ERROR}-severity diagnostic is emitted).
-		\item Any other signature type---\texttt{ecdsa\_secp256r1\_sha256}, wider RSA-PSS hashes, or a non-RSA issuer key the link cannot be checked against---is \emph{not} verified. The link is accepted and the stack raises an \texttt{ALERT(unsupported algorithm, PASS)} so the application can observe that the link went cryptographically unchecked.
-		\item The topmost certificate has no issuer within the presented chain, so its issuer is looked up in the on-device truststore by subject name. If found and RSA (PKCS\#1~v1.5 or PSS, SHA-256), the root link is verified for real with the same fatal-on-failure treatment as an adjacent in-chain link. If the issuer is absent from the truststore, or uses a signature type not yet supported (e.g. ECDSA), the chain is accepted with \texttt{ALERT(root not in store, PASS)}.
+		\item An \texttt{ecdsa\_secp256r1\_sha256} link is verified for real using P-256/SHA-256. A signature that fails to verify is also fatal.
+		\item Other signature types---wider RSA-PSS hashes, or an issuer key type the verifier does not support---are \emph{not} verified. The link is accepted and the stack raises an \texttt{ALERT(unsupported algorithm, PASS)} so the application can observe that the link went cryptographically unchecked.
+		\item The topmost certificate has no issuer within the presented chain, so its issuer is looked up in the on-device truststore by subject name. If found and the stored key is RSA (PKCS\#1~v1.5 or PSS, SHA-256) or ECDSA P-256, the root link is verified for real with the same fatal-on-failure treatment as an adjacent in-chain link. If the issuer is absent from the truststore, or uses a signature type not yet supported, the chain is accepted with \texttt{ALERT(root not in store, PASS)}.
 	\end{itemize}
-	The \texttt{WARN-PROCEED} is an interim posture only intended until gaps in our signature algorithm support are closed.
+	The \texttt{WARN-PROCEED} posture for absent or algorithmically unsupported roots remains a temporary compatibility exception; supported algorithm failures are fail-closed.
 
 	\paragraph{Hostname and Validity-Period Checks}
 	Chain-link signatures and \texttt{CertificateVerify} together establish that the presented chain is internally consistent and that the peer holds the leaf private key --- but neither one proves the leaf certificate was actually issued for the host the client meant to connect to, nor that it is currently within its issuer-stated validity period. Both gaps are closed as part of the same per-certificate pass that runs the adjacent-link check above, fail-closed on either:
@@ -1186,6 +1187,14 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 		\item Publish a security advisory across project channels (GitHub, Discord, and community forums).
 	\end{enumerate}
 
+	\subsection{Session Resumption and Application Protocol Negotiation}
+
+	\paragraph{PSK Session Resumption}
+	After a full handshake the server may issue a \texttt{NewSessionTicket} message. lwIP-CE stores these tickets in an in-memory cache of up to eight entries, keyed by identity and protected by RTC-based expiry. The cache is loaded from and saved to a single on-device AppVar (\texttt{lwIPPSKC}) at \texttt{tls\_init}/\texttt{tls\_cleanup}, giving resumption persistence across power cycles. On subsequent connections to the same host the client offers the cached ticket via the \texttt{pre\_shared\_key} extension; if the server accepts, the abbreviated handshake skips the certificate exchange entirely. 0-RTT early data is not supported; the client never sends application data before the server \texttt{Finished}.
+
+	\paragraph{ALPN}
+	The client supports application-layer protocol negotiation (RFC~7301). Applications configure an ordered list of protocol identifiers; these are advertised in the \texttt{ClientHello} \texttt{application\_layer\_protocol\_negotiation} extension. The server's selection is validated against the offered list and made available to the application after the handshake. Common registered identifiers are provided in \texttt{tls-alpn.h}.
+
 	\subsection{Validation and Unit Tests}\label{ssec:profiling_unit_tests_ref}
 		The project is backed by a deterministic unit test suite for security-critical cryptographic and parser paths. Tests run under \texttt{CEmu}, driven by \texttt{cemu-autotester}, which replays fixed calculator input sequences and asserts on CRC hashes of expected screen states. Tests are written against explicit acceptance criteria; where policy requires fail-closed behavior, the expected result is rejection rather than silent degradation.
 
@@ -1215,6 +1224,9 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 		These checks are separated so deterministic correctness gates are not conflated with profiling or integration telemetry. Unit and CAVP failures are treated as hard correctness failures; timing results are evidence of drift or input-dependent behavior, not a formal leakage proof under adversarial averaging models. The nightly \texttt{publish} job is gated on the validation set, so release artifacts are not produced from a failed run.
 
 		Each workflow writes a self-contained job summary intended to be usable as an audit artifact without cloning the repository. Unit summaries list the governing RFC section and failing vector where applicable; CAVP summaries report per-primitive pass counts and mismatches; timing summaries include deviation charts and median/exceedance tables; SAST summaries list scoped findings. Current runs are available from the repository Actions page: \url{https://github.com/cagscalclabs/lwip-ce/actions}.
+
+		\paragraph{RFC and Standards Compliance Ledger}
+		A clause-by-clause mapping of every RFC, NIST SP, and FIPS requirement this implementation targets is maintained as a machine-readable XML source and published as a static HTML report alongside these docs. Each entry records the standard reference, the specific section, the source location where the requirement is satisfied or deviated from, a \texttt{COMPLIANT}/\texttt{DEVIANT} grade, and a note explaining any deviation or known gap. The ledger is the authoritative cross-reference between the prose descriptions in this document and the actual code. It is available at \url{https://cagscalclabs.github.io/lwip-ce/tls-specifications.html}.
 
 		\begin{figure}[H]
 			\centering
@@ -1348,10 +1360,10 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 			\textbf{Area} & \textbf{Status} & \textbf{Boundary} \\
 			\midrule
 			\endhead
-			TLS \texttt{CertificateVerify} & Complete & \texttt{rsa\_pss\_rsae\_sha256} with 1024--2048 bit RSA leaf keys.\\
-			 & Planned & ECDSA-P-256, RSA keys up to 4096 bits. \\
-			TLS Certificate & Supported now & PKCS\#1~v1.5/SHA-256 adjacent-link chain verification (RSA-2048 links only; other signature types accepted with warning); leaf hostname/SAN matching (wildcard-capable, CN fallback); fatal validity-period (\texttt{notBefore}/\texttt{notAfter}) enforcement on every chain certificate; all fail-closed. \\
-			 & Planned & Broader issuer-key and signature-algorithm coverage. \\
+			TLS \texttt{CertificateVerify} & Complete & \texttt{rsa\_pss\_rsae\_sha256} (1024--2048 bit RSA) and \texttt{ecdsa\_secp256r1\_sha256} (P-256). \\
+			 & Not supported & RSA keys above 2048 bits. \\
+			TLS Certificate & Complete & Adjacent-link chain verification for RSA-2048/SHA-256 and ECDSA-P-256/SHA-256; root anchoring via truststore for both key types; leaf hostname/SAN matching (wildcard-capable); fatal validity-period enforcement on every chain certificate; all fail-closed. \\
+			 & Warn-proceed & Absent or algorithmically unsupported roots (temporary compatibility exception). \\
 			 & Out of scope & Full desktop WebPKI behavior and exhaustive path building. \\
 			\addlinespace
 			TLS CertificateRequest & Skip & \texttt{CertificateRequest} is parsed, included in the transcript, and answered with an empty client certificate list. \\

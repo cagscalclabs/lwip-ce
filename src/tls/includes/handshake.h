@@ -550,6 +550,9 @@ extern "C"
 /** Send one fatal alert under the currently active record epoch. */
 bool tls_send_fatal_alert(struct tls_handshake_context *ctx, uint8_t description);
 
+/** Return a human-readable name for a TLS alert description byte (e.g. "bad_record_mac"). */
+const char *tls_alert_name(uint8_t description);
+
 
     /**
      * @brief Clean up handshake context

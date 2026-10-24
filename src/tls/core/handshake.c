@@ -2309,7 +2309,8 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
         if (alert_desc == TLS_ALERT_CLOSE_NOTIFY)
             ctx->peer_close_notify_received = true;
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x26);
+        ERROR_CODE(alert_desc);
+        ERROR_INFO(tls_alert_name(alert_desc));
         return false;
     }
 
@@ -4886,6 +4887,10 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
+    /* handshake_secret is no longer needed once all application-phase secrets
+     * are derived from it; wipe it from ctx->keys per RFC 8446 §7.1 SHOULD. */
+    tls_secure_memzero(ctx->keys.handshake_secret, sizeof(ctx->keys.handshake_secret));
+
     DEBUG();
     return true;
 }
@@ -5017,6 +5022,8 @@ bool tls_send_finished(
             ERROR_CODE(0x9c);
             return false;
         }
+        /* master_secret served its last purpose; wipe per RFC 8446 §7.1. */
+        tls_secure_memzero(ctx->keys.master_secret, sizeof(ctx->keys.master_secret));
     }
 
     return true;
@@ -5593,6 +5600,29 @@ bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx)
     return tls_send_key_update_record(ctx);
 }
 
+const char *tls_alert_name(uint8_t description)
+{
+    switch (description)
+    {
+    case TLS_ALERT_CLOSE_NOTIFY:         return "close_notify";
+    case TLS_ALERT_UNEXPECTED_MESSAGE:   return "unexpected_message";
+    case TLS_ALERT_BAD_RECORD_MAC:       return "bad_record_mac";
+    case TLS_ALERT_RECORD_OVERFLOW:      return "record_overflow";
+    case TLS_ALERT_HANDSHAKE_FAILURE:    return "handshake_failure";
+    case TLS_ALERT_BAD_CERTIFICATE:      return "bad_certificate";
+    case TLS_ALERT_CERTIFICATE_EXPIRED:  return "certificate_expired";
+    case TLS_ALERT_UNKNOWN_CA:           return "unknown_ca";
+    case TLS_ALERT_ILLEGAL_PARAMETER:    return "illegal_parameter";
+    case TLS_ALERT_DECODE_ERROR:         return "decode_error";
+    case TLS_ALERT_DECRYPT_ERROR:        return "decrypt_error";
+    case TLS_ALERT_PROTOCOL_VERSION:     return "protocol_version";
+    case TLS_ALERT_INTERNAL_ERROR:       return "internal_error";
+    case TLS_ALERT_USER_CANCELED:        return "user_canceled";
+    case TLS_ALERT_UNSUPPORTED_EXTENSION: return "unsupported_extension";
+    default:                             return "unknown_alert";
+    }
+}
+
 /**
  * @brief Send alert message
  */
@@ -5694,6 +5724,7 @@ static bool tls_send_alert(
     {
         ctx->state = TLS_STATE_ERROR;
         ERROR_CODE(description);
+        ERROR_INFO(tls_alert_name(description));
     }
 
     return ok;

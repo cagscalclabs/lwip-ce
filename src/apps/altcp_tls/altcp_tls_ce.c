@@ -1561,6 +1561,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     if (!derive_ok)
                     {
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
+                        (void)tls_send_fatal_alert(&state->tls_ctx, TLS_ALERT_INTERNAL_ERROR);
                         ALTCP_TLS_CE_ERROR_ABORT(conn);
                         return ERR_ABRT;
                     }
@@ -1663,6 +1664,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                             size_t msg_end = off + 4 + msg_len;
                             if (msg_end > rec_len)
                             {
+                                (void)tls_send_fatal_alert(&state->tls_ctx,
+                                                           TLS_ALERT_DECODE_ERROR);
                                 plaintext_ok = false;
                                 break;
                             }
@@ -1677,6 +1680,13 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                                                            msg_end - off))
                                 {
                                     tls_dbg_status("serverhello: fail");
+                                    if (!state->tls_ctx.fatal_alert_sent)
+                                    {
+                                        (void)tls_send_fatal_alert(&state->tls_ctx,
+                                                                   sh_state_ok
+                                                                   ? TLS_ALERT_ILLEGAL_PARAMETER
+                                                                   : TLS_ALERT_UNEXPECTED_MESSAGE);
+                                    }
                                     plaintext_ok = false;
                                     break;
                                 }
@@ -1705,6 +1715,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                             {
                                 /* Any other handshake message must arrive encrypted
                                  * post-ServerHello (RFC 8446 §2). Reject. */
+                                (void)tls_send_fatal_alert(&state->tls_ctx,
+                                                           TLS_ALERT_UNEXPECTED_MESSAGE);
                                 plaintext_ok = false;
                                 break;
                             }
@@ -1712,6 +1724,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         }
                         if (plaintext_ok && off != rec_len)
                         {
+                            (void)tls_send_fatal_alert(&state->tls_ctx,
+                                                       TLS_ALERT_DECODE_ERROR);
                             plaintext_ok = false;
                         }
                     }
@@ -1727,6 +1741,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         else
                         {
                             ERROR_CODE(alert_desc);
+                            ERROR_INFO(tls_alert_name(alert_desc));
                             state->tls_ctx.state = TLS_STATE_ERROR;
                             plaintext_ok = false;
                         }
@@ -1736,9 +1751,16 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         plaintext_ok = rec_len == 1 && tmp[5] == 0x01 &&
                             state->tls_ctx.state >= TLS_STATE_CLIENT_HELLO_SENT &&
                             state->tls_ctx.state < TLS_STATE_SERVER_FINISHED_RECEIVED;
+                        if (!plaintext_ok)
+                        {
+                            (void)tls_send_fatal_alert(&state->tls_ctx,
+                                                       TLS_ALERT_UNEXPECTED_MESSAGE);
+                        }
                     }
                     else
                     {
+                        (void)tls_send_fatal_alert(&state->tls_ctx,
+                                                   TLS_ALERT_UNEXPECTED_MESSAGE);
                         plaintext_ok = false;
                     }
 
@@ -2232,6 +2254,7 @@ altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_
             {
                 pbuf_free(dec_pbuf);
                 ALTCP_TLS_CE_ERROR_ABORT_CODE(conn, alert_desc);
+                ERROR_INFO(tls_alert_name(alert_desc));
                 return ERR_ABRT;
             }
             pbuf_free(dec_pbuf);

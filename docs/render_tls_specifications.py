@@ -69,7 +69,10 @@ th { color:var(--muted); font-size:12px; text-transform:uppercase;
      letter-spacing:.04em; }
 td.sec { width:70px; white-space:nowrap; }
 td.grade { width:130px; }
-td.loc { font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:32%; }
+td.loc { font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:22%;
+         word-break:break-all; overflow-wrap:anywhere; }
+td.note { width:28%; overflow-wrap:anywhere; word-break:break-word; }
+td.justification { width:20%; overflow-wrap:anywhere; word-break:break-word; }
 [hidden] { display:none !important; }
 @media (max-width:720px) {
   table,thead,tbody,tr,td { display:block; }

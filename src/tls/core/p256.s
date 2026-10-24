@@ -3599,6 +3599,9 @@ p256_det_k:
     call    p256_import_be              ; accept iff 1 <= k < n
     or      a, a
     ret     nz
+; p256_det_k_continue: entry point for r=0/s=0 retry (RFC 6979 §3.2 step h.3).
+; K/V state in DK_K/DK_V must be valid before calling.
+p256_det_k_continue:
     ld      hl, DK_V
     ld      de, DK_RFC
     ld      bc, 32
@@ -3689,14 +3692,19 @@ _tls_p256_sign:
     ld      (dk_hash), hl
     ld      hl, (ix + 12)
     ld      (dk_priv), hl
+; RFC 6979 §3.2 step h.3: if r=0 or s=0 after scalar multiply, update K/V
+; and retry.  The loop label sits here so the retry path re-enters after the
+; initial p256_det_k seeding (which must run only once).
+.Lsg_try:
     call    _tls_crypto_guard_enable    ; nests inside p256_di: records IFF=0
-    call    p256_det_k                  ; k -> __p256_k
+    call    p256_det_k                  ; k -> __p256_k  (first try: full init)
     call    _tls_crypto_guard_disable   ; scrub SHA-256 frames below SP; no ei
     ld      hl, _sprng_sha_mbuffer      ; wipe the SHA-256 message schedule
     ld      (hl), 0                     ; (W[0..63] of the last HMAC block,
     ld      de, _sprng_sha_mbuffer + 1  ;  K/V-derived) in saferam
     ld      bc, 64 * 4 - 1
     ldir
+.Lsg_scalar:
     ld      hl, __p256_saved0
     ld      de, __p256_k
     ld      bc, __p256_G
@@ -3728,11 +3736,11 @@ _tls_p256_sign:
     ld      hl, PF2
     call    p256_ct_is_zero
     inc     a
-    jp      z, .Lsg_fail                ; r == 0
+    jp      z, .Lsg_retry               ; r == 0: RFC 6979 §3.2 step h.3
     ld      hl, PF6
     call    p256_ct_is_zero
     inc     a
-    jp      z, .Lsg_fail                ; s == 0
+    jp      z, .Lsg_retry               ; s == 0: RFC 6979 §3.2 step h.3
     ld      hl, PF2
     ld      de, (ix + 6)
     call    p256_order_export
@@ -3744,6 +3752,18 @@ _tls_p256_sign:
     call    p256_order_export
     ld      a, 1
     jp      p256_exit
+.Lsg_retry:
+    ; r=0 or s=0: advance K/V per RFC 6979 §3.2 step h.3, then retry.
+    ; DK_K/DK_V still hold valid state from the last p256_det_k run.
+    call    _tls_crypto_guard_enable
+    call    p256_det_k_continue         ; update K/V, generate new k
+    call    _tls_crypto_guard_disable
+    ld      hl, _sprng_sha_mbuffer
+    ld      (hl), 0
+    ld      de, _sprng_sha_mbuffer + 1
+    ld      bc, 64 * 4 - 1
+    ldir
+    jp      .Lsg_scalar
 .Lsg_fail:
     xor     a, a
     jp      p256_exit

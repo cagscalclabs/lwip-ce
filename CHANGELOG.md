@@ -94,3 +94,21 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - **Component-scoped initialization failures:** `lwip_start()` keeps the base stack, parsers, and deterministic cryptographic primitives available when TLS initialization fails. Entropy readiness gates randomness-consuming operations and TLS handshakes at request time, while an invalid existing truststore gates TLS initialization/connections without breaking unrelated APIs. Client randoms and ephemeral X25519 private keys use the checked random-request path.
 - **256-bit Hash_DRBG instantiation:** Condition 952 health-tested raw-bit observations into each full SHA-256 contribution; instantiate with separate 256-bit entropy-input and nonce collections; and replenish later 256-bit reseeds with one collection. Compile-time checks prevent the configured entropy policy or nonce width from silently falling below the claimed strength. The claim excludes physical or privileged state-compromise resistance because the calculator provides no isolated state, secure storage, rollback protection, or guaranteed secure erasure.
 - **Safer generic client API:** `altcp_tls_create_config_client()` now returns `NULL` because that lwIP-compatible entry point has no hostname parameter and therefore cannot perform RFC 9525 service-identity verification; callers must use the hostname-aware CE client factory.
+
+## v3.0.0-rc1
+
+- secp256r1 ECDHE and ECDSA now implemented, with signing over this curve now supported by the key API.
+- CSPRNG now uses a slightly modified version of the old tap-selection system. It uses min(ones, sample-ones) and choses the source closest to half as a candidate, then runs APT/RCT, and lag-1 through lag-4 tests before accepting a candidate as an entropy tap. Collecting entropy uses a Hash_DRBG seeded to a 192-bit security strength, H of ~0.26, 952 samples, SHA-256. Each entropy collection runs APT/RCT, and the lag-N checks before accepting the collection. If a collection fails those checks, tap selection falls back to cached candidates, or re-runs tap selection.
+- RSA optimized and now supports up to 4096-bits.
+- Alessio's WiFi bridge protocols now added; lwIP-CE can offload cryptographic acceleration to a USB-connected device that supports them. It's flag based so it shouldn't break existing crypto. [PR #59]
+- Alessio rewrote the config menu UI from my garbage earlier design.
+- Alessio ran a sideloaded networking bootstrap, assisted by Claude, to look for networking stack performance issues and map them to the code for possible fixes [PR #63].
+- I implemented 3 Claude "agents": A cryptographer, ez80-optimizer, and an auditor. The first two were involved in the production of: (1) An RSA-4096 implementation that almost matched the speed of the pre-existing RSA-2048, and (2) The earlier mentioned secp256r1 implementation that is probably the fastest "slow" algorithm in the implementation.
+- There is a full RFC compliance accountability document now located here (https://cagscalclabs.github.io/lwip-ce/tls-specifications.html) that documents major RFC, special publication, FIPS and other rules and grades us against them.
+- Certificate chain verification now runs asynchronously to avoid long-time crypto TCP socket timeouts. TLDR, we validate the leaf certificate synchronously, then enqueue a timer that continues to walk the Certificate chain per iteration while also continuing to dispatch network activity and handshake records. Certificate link failures still fail closed, and client will not Finish until full chain is verified.
+- Users can enable PCAP in the config UI explicitly; users can enable textual logging explicitly in the config UI. PCAPs have a hard size limit, configurable by the user. Log files cap at 16 KB and can rotate up to a user configured log count.
+
+## v3.0.0-rc2
+
+- Remaining RFC deviations are either justified or resolved.
+- TLS alerts now echo to log rather than being silently lost.

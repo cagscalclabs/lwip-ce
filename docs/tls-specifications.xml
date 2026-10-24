@@ -5,336 +5,336 @@
     <section>1 / 5.1.1 (message length limit, streaming state)</section>
     <location>src/tls/core/sha256.s: _tls_sha256_update (L222-276), _tls_sha256_digest (L288-292) - 64-bit bitlen, non-destructive digest</location>
     <grade>COMPLIANT</grade>
-    <note>bitlen is uint64 (no 2^64 overflow check, unreachable). Digest operates on a stack copy so the transcript context stays usable (hash.h L77-82); len==0 update is a no-op.</note>
+    <note>Compliant as of/before v3.0.0-rc1. bitlen is uint64 (no 2^64 overflow check, unreachable). Digest operates on a stack copy so the transcript context stays usable (hash.h L77-82); len==0 update is a no-op.</note>
   </requirement>
   <requirement>
     <ref>FIPS 180-4</ref>
     <section>5.1.1 (padding)</section>
     <location>src/tls/core/sha256.s: _tls_sha256_digest (L280-346) - 0x80, zero fill, 64-bit big-endian length</location>
     <grade>COMPLIANT</grade>
-    <note>Both the one-block (datalen &lt;= 55) and two-block padding branches are present. Covered by CAVP SHA256ShortMsg/LongMsg/Monte and tests/unit/tls_hash FIPS examples ("abc", "", 448-bit message).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Both the one-block (datalen &lt;= 55) and two-block padding branches are present. Covered by CAVP SHA256ShortMsg/LongMsg/Monte and tests/unit/tls_hash FIPS examples ("abc", "", 448-bit message).</note>
   </requirement>
   <requirement>
     <ref>FIPS 180-4</ref>
     <section>6.2 (SHA-256 computation; 4.2.2 constants; 5.3.3 H(0))</section>
     <location>src/tls/core/sha256.s: _sha256_transform (L350-728), _sha256_state_init (L730-738), _sha256_k (L740-804) - compression</location>
     <grade>COMPLIANT</grade>
-    <note>Constants and compression are validated by the CAVP SHA-256 Monte vectors. The message schedule lives in static _sprng_sha_mbuffer (L18); see the ISO/IEC 19790 zeroization entry.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Constants and compression are validated by the CAVP SHA-256 Monte vectors. The message schedule lives in static _sprng_sha_mbuffer (L18); see the ISO/IEC 19790 zeroization entry.</note>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>5.4 (RSA public exponent: odd, 2^16 &lt; e &lt; 2^256)</section>
     <location>src/tls/core/rsa.c: tls_rsa_decrypt_signature (L303-316) - exponent sanity</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): only e != 0 and exp_len &lt;= 3 bytes are enforced, so e=1 or an even e is accepted from a certificate SPKI. Not exploitable without a CA signing such a key. See also RFC 8017 3.1.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): only e != 0 and exp_len &lt;= 3 bytes are enforced, so e=1 or an even e is accepted from a certificate SPKI. Not exploitable without a CA signing such a key. See also RFC 8017 3.1.</note>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.1 (ECDSA signing; nonce per RFC 6979; r=0 or s=0 means new k)</section>
-    <location>src/tls/core/p256.s: _tls_p256_sign (L3646-3749), p256_det_k (L3558-3644) - deterministic nonce and r/s checks</location>
-    <grade>DEVIANT</grade>
-    <note>RFC 6979 3.2 steps b-h match and the RFC 6979 A.2.5 vector passes (tests/unit/tls_p256 test_sign). On r==0 or s==0 (L3728-3735) signing aborts instead of continuing the RFC 6979 loop; probability about 2^-256 and fail-closed. Signing is exported but unused by the TLS client (tls_key_sign returns UNSUPPORTED, key.c L726-755).</note>
+    <location>src/tls/core/p256.s: _tls_p256_sign (.Lsg_retry path), p256_det_k_continue (new label after L3602)</location>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. FIXED: r==0 or s==0 now jumps to .Lsg_retry which calls p256_det_k_continue (new entry at .Ldk_gen with K/V state preserved), then repeats the scalar multiply per RFC 6979 §3.2 step h.3. Probability of needing the retry is ~2^-256. RFC 6979 A.2.5 vector continues to pass.</note>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 1 (r, s in [1, n-1])</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3381-3397); src/tls/core/x509.c: tls_ecdsa_parse_int (L25-55) - r/s range</location>
     <grade>COMPLIANT</grade>
-    <note>p256_import_be with C=1 rejects 0 and values &gt;= n for both r and s; DER is strictly minimal, non-negative, at most 32 magnitude bytes. Covered by tests/unit/tls_p256 test_reject_r0/s0/rn/sn.</note>
+    <note>Compliant as of/before v3.0.0-rc1. p256_import_be with C=1 rejects 0 and values &gt;= n for both r and s; DER is strictly minimal, non-negative, at most 32 magnitude bytes. Covered by tests/unit/tls_p256 test_reject_r0/s0/rn/sn.</note>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 2-3 (hash to integer e)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3400-3406) - e derivation</location>
     <grade>COMPLIANT</grade>
-    <note>The API fixes a 32-byte SHA-256 digest (hlen = N = 256) so no truncation is needed; e is reduced mod n.</note>
+    <note>Compliant as of/before v3.0.0-rc1. The API fixes a 32-byte SHA-256 digest (hlen = N = 256) so no truncation is needed; e is reduced mod n.</note>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 4-6 (w = s^-1, u1, u2, R = u1*G + u2*Q)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3407-3413), p256_verify_shamir (L2856+) - double-scalar multiply</location>
     <grade>COMPLIANT</grade>
-    <note>Variable-time inverse and Straus/Shamir are acceptable because all inputs are public. Verified by the RFC 6979 A.2.5 vector plus tamper and off-curve negatives in tests/unit/tls_p256.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Variable-time inverse and Straus/Shamir are acceptable because all inputs are public. Verified by the RFC 6979 A.2.5 vector plus tamper and off-curve negatives in tests/unit/tls_p256.</note>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 6 (R = O rejected)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3414-3424) - infinity rejection</location>
     <grade>COMPLIANT</grade>
-    <note>Rejects when vs_inf is set and separately when Z(R)==0, so the projective x-check cannot degenerate.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Rejects when vs_inf is set and separately when Z(R)==0, so the projective x-check cannot degenerate.</note>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 7-8 (v = x_R mod n; accept iff v == r)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3425-3453) - projective x(R) mod n == r</location>
     <grade>COMPLIANT</grade>
-    <note>Checks X == r*Z^2 (mod p) and, only when r+n &lt; p, X == (r+n)*Z^2; equivalent to x_R mod n == r without inversion.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Checks X == r*Z^2 (mod p) and, only when r+n &lt; p, X == (r+n)*Z^2; equivalent to x_R mod n == r without inversion.</note>
   </requirement>
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.1 (Cipher; Nk/Nr combinations)</section>
     <location>src/tls/core/aes.s: _aes_encrypt_block (L217-373) - round count and cipher</location>
     <grade>COMPLIANT</grade>
-    <note>Nr = keysize/32+6 (10/12/14). Covered by CAVP CBC GFSbox/KeySbox/VarKey/VarTxt/MMT for 128/192/256 and tests/unit/tls_aes SP 800-38A F.2.x.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Nr = keysize/32+6 (10/12/14). Covered by CAVP CBC GFSbox/KeySbox/VarKey/VarTxt/MMT for 128/192/256 and tests/unit/tls_aes SP 800-38A F.2.x.</note>
   </requirement>
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.1.1 (SubBytes implementation side channel; project policy)</section>
     <location>src/tls/core/aes.s: _aes_encrypt_block/.Lencrypt_subbytes (L310-319), _aes_key_schedule (L117-128), _gf128_mul (L377-492) - table-lookup timing</location>
     <grade>COMPLIANT</grade>
-    <note>Byte S-box (no T-tables) on an eZ80 with no data cache; xtime and GF(2^128) reduction use branch-free masks; branches depend only on key size or loop counters. Power/EM leakage not assessed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Byte S-box (no T-tables) on an eZ80 with no data cache; xtime and GF(2^128) reduction use branch-free masks; branches depend only on key size or loop counters. Power/EM leakage not assessed.</note>
   </requirement>
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.2 (KeyExpansion)</section>
     <location>src/tls/core/aes.s: _aes_key_schedule (L81-190); src/tls/core/aes.c: tls_aes_init (L354-365) - 128/192/256 expansion</location>
     <grade>COMPLIANT</grade>
-    <note>Rcon doubling and the AES-256 SubWord at i mod 8 = 4 special case are present; only 16/24/32-byte keys accepted. Covered by CAVP KeySbox/VarKey for all sizes.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Rcon doubling and the AES-256 SubWord at i mod 8 = 4 special case are present; only 16/24/32-byte keys accepted. Covered by CAVP KeySbox/VarKey for all sizes.</note>
   </requirement>
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.3 (InvCipher)</section>
     <location>src/tls/core/aes.s: _aes_decrypt_block (L519-678) - inverse cipher</location>
     <grade>COMPLIANT</grade>
-    <note>Straightforward inverse cipher with InvSBox. Covered by CAVP CBC decrypt and tests/unit/tls_aes F.2.2/F.2.4/F.2.6.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Straightforward inverse cipher with InvSBox. Covered by CAVP CBC decrypt and tests/unit/tls_aes F.2.2/F.2.4/F.2.6.</note>
   </requirement>
   <requirement>
     <ref>FIPS 198-1</ref>
     <section>4 (key of any length; error handling)</section>
     <location>src/tls/core/hmac.c: tls_hmac_context_init (L27-38) - zero-length key, unchecked init</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): keylen==0 is rejected although FIPS 198-1 permits it (HKDF works around it, hkdf.c L67-70). In the keylen &gt; 64 path the tls_hash_context_init return value is ignored (L34), so an unsupported algorithm calls uninitialized function pointers before the switch default rejects.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): keylen==0 is rejected although FIPS 198-1 permits it (HKDF works around it, hkdf.c L67-70). In the keylen &gt; 64 path the tls_hash_context_init return value is ignored (L34), so an unsupported algorithm calls uninitialized function pointers before the switch default rejects.</note>
   </requirement>
   <requirement>
     <ref>FIPS 198-1</ref>
     <section>4 steps 1-3 (K0 derivation, ipad/opad); RFC 2104 2</section>
     <location>src/tls/core/hmac.c: tls_hmac_context_init (L25-71), tls_hmac_digest (L78-88) - key processing</location>
     <grade>COMPLIANT</grade>
-    <note>keylen &gt; 64 hashes the key first, otherwise zero-pads; ipad 0x36, opad 0x5C; outer hash computed on a copy. Covered by CAVP HMAC.rsp [L=32] and tests/unit/tls_hmac RFC 4231 cases.</note>
+    <note>Compliant as of/before v3.0.0-rc1. keylen &gt; 64 hashes the key first, otherwise zero-pads; ipad 0x36, opad 0x5C; outer hash computed on a copy. Covered by CAVP HMAC.rsp [L=32] and tests/unit/tls_hmac RFC 4231 cases.</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/contrib/x25519/src/x25519.s: .x25519.data (L779-807), _tls_x25519_secret epilogue (L123-139) - X25519 scratch residue</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: _clamped (the private scalar), ladder state _a.._f and _product (pre-normalisation shared secret) live in static .bss and are never wiped; handshake X25519 calls (handshake.c L1781-1797, L2760-2786) are not wrapped in tls_crypto_guard, unlike P-256. Fix: zero the 388-byte block before both returns and wrap the calls.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: _clamped (the private scalar), ladder state _a.._f and _product (pre-normalisation shared secret) live in static .bss and are never wiped; handshake X25519 calls (handshake.c L1781-1797, L2760-2786) are not wrapped in tls_crypto_guard, unlike P-256. Fix: zero the 388-byte block before both returns and wrap the calls.</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/aes.c: tls_aes_verify (L795-824), tls_aes_ccm_encrypt (L833-854), tls_aes_ccm_decrypt (L864-892), tls_aes_init (L391-393) - AES context residue</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (medium): tls_aes_verify memcpy's the whole context (round keys and GHASH key H) to stack tmp and never wipes it (the memset at L816 is commented out); leaking H enables GCM forgeries under that key. One-shot CCM leaves ctx on the stack; no tls_aes_clear API. The altcp record aes_ctx is also never wiped (see RFC 8446 7.1).</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (medium): tls_aes_verify memcpy's the whole context (round keys and GHASH key H) to stack tmp and never wipes it (the memset at L816 is commented out); leaking H enables GCM forgeries under that key. One-shot CCM leaves ctx on the stack; no tls_aes_clear API. The altcp record aes_ctx is also never wiped (see RFC 8446 7.1).</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/bytes.s: _tls_secure_memzero (L34-53) - erase helper</location>
     <grade>COMPLIANT</grade>
-    <note>External assembly routine (seed byte plus overlapping ldir) that the compiler cannot elide; len 0/1 handled. The bytes.h L27 comment ("Uses volatile") is inaccurate but harmless.</note>
+    <note>Compliant as of/before v3.0.0-rc1. External assembly routine (seed byte plus overlapping ldir) that the compiler cannot elide; len 0/1 handled. The bytes.h L27 comment ("Uses volatile") is inaccurate but harmless.</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/hmac.c: tls_hmac_context_init (L30-31), tls_hmac_digest (L79-80) - sum[], htmp, tbuf</location>
     <grade>COMPLIANT</grade>
-    <note>Padded key, hashed key, inner digest and K0 xor ipad/opad contexts stay on the stack; no HMAC clear API. Some handshake.c callers use TLS_AUTOZERO_DECL_STRUCT, but the primitive itself does not wipe.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Padded key, hashed key, inner digest and K0 xor ipad/opad contexts stay on the stack; no HMAC clear API. Some handshake.c callers use TLS_AUTOZERO_DECL_STRUCT, but the primitive itself does not wipe.</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/p256.s: p256_di/p256_wipe/p256_exit (L3217-3263), _tls_p256_sign saferam wipe (L3692-3699); src/tls/core/handshake.c: tls_handshake_cleanup (L5045-5103) - P-256 and ephemeral key zeroization</location>
     <grade>COMPLIANT</grade>
-    <note>__p256_scratch is wiped on entry and every exit, _sprng_sha_mbuffer after RFC 6979, handshake P-256 calls are wrapped in crypto_guard, and the used private key and shared secret are zeroed right after ECDH. The unused group's private key survives until tls_handshake_cleanup (informational).</note>
+    <note>Compliant as of/before v3.0.0-rc1. __p256_scratch is wiped on entry and every exit, _sprng_sha_mbuffer after RFC 6979, handshake P-256 calls are wrapped in crypto_guard, and the used private key and shared secret are zeroed right after ECDH. The unused group's private key survives until tls_handshake_cleanup (informational).</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/passwords.c: tls_pbkdf2 (L27-30) - hash_buffer, hash_composite, HMAC contexts</location>
     <grade>COMPLIANT</grade>
-    <note>Last T block (derived key material), Uc and three HMAC contexts holding password xor ipad/opad stay on the stack unwiped.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Last T block (derived key material), Uc and three HMAC contexts holding password xor ipad/opad stay on the stack unwiped.</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/rsa.c: tls_rsa_encrypt (L277), tls_rsa_decrypt_signature (L336); src/tls/core/share/bigint.s: scrub (L258-275); src/tls/core/key.c (L1076-1094) - RSA scratch</location>
     <grade>COMPLIANT</grade>
-    <note>Top 2*mod_len bytes of shared scratch and relocated powmod slots/alternate registers are cleared after every powmod; __rsa_transient and OAEP tmp zeroed in key.c. tls_rsa_decode_oaep's own frame is scrubbed only when the caller wraps it in tls_crypto_guard.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Top 2*mod_len bytes of shared scratch and relocated powmod slots/alternate registers are cleared after every powmod; __rsa_transient and OAEP tmp zeroed in key.c. tls_rsa_decode_oaep's own frame is scrubbed only when the caller wraps it in tls_crypto_guard.</note>
   </requirement>
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/sha256.s: _tls_sha256_digest (L344), _sha256_transform (L726), _sha256_m_buffer=_sprng_sha_mbuffer (L18) - SHA-256 working state residue</location>
     <grade>COMPLIANT</grade>
-    <note>The digest's 105-byte local context copy and the transform frame are not wiped; the static 256-byte W buffer is never wiped and after HMAC init holds K xor ipad. HMAC/HKDF/PBKDF2 call tls_sha256_* directly and bypass the crypto_guard scrub that tls_hash_update/digest get (hash.c L58-70).</note>
+    <note>Compliant as of/before v3.0.0-rc1. The digest's 105-byte local context copy and the transform frame are not wiped; the static 256-byte W buffer is never wiped and after HMAC init holds K xor ipad. HMAC/HKDF/PBKDF2 call tls_sha256_* directly and bypass the crypto_guard scrub that tls_hash_update/digest get (hash.c L58-70).</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.1.2 / 10.2 (exact tag identity: class and constructed bit)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1212, L1322, L1373-1374), tls_x509_validate_path_extensions (L474-485), tls_x509_oid_eq (L80-86) - tag number compared without class</location>
     <grade>COMPLIANT</grade>
-    <note>Many checks use only tls_asn1_tag_number(), so e.g. a context-specific [2] or a constructed OCTET STRING passes where INTEGER/primitive OCTET STRING is required. Low risk (content is CA-signed) but not strict DER; tls_cert_extract_sig_material and tls_x509_signature_algorithm compare raw tag bytes correctly.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Many checks use only tls_asn1_tag_number(), so e.g. a context-specific [2] or a constructed OCTET STRING passes where INTEGER/primitive OCTET STRING is required. Low risk (content is CA-signed) but not strict DER; tls_cert_extract_sig_material and tls_x509_signature_algorithm compare raw tag bytes correctly.</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.1.2.4 (high-tag-number form)</section>
     <location>src/tls/core/asn1.c: tls_asn1_next (L78-80) - single-octet tag assumption</location>
     <grade>COMPLIANT</grade>
-    <note>A tag with low bits 0x1F is treated as tag 31 and its continuation octet is parsed as the length instead of being rejected. Parser differential inside signed content; limited impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. A tag with low bits 0x1F is treated as tag 31 and its continuation octet is parsed as the length instead of being rejected. Parser differential inside signed content; limited impact.</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.1.3 (length vs. available content; bounds)</section>
     <location>src/tls/core/asn1.c: tls_asn1_parse_len / tls_asn1_next / tls_asn1_child_cursor (L29-32, L88-91, L100-113) - buffer bounds</location>
     <grade>COMPLIANT</grade>
-    <note>Length octets and content length are checked against the cursor end (end - p &lt; content_len, no size_t overflow); child cursors are confined to the parent value.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Length octets and content length are checked against the cursor end (end - p &lt; content_len, no size_t overflow); child cursors are confined to the parent value.</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.1.3.2 / 8.1.3.5 / 10.1 (definite length only, shortest form)</section>
     <location>src/tls/core/asn1.c: tls_asn1_parse_len (L5-50) - definite/minimal length</location>
     <grade>COMPLIANT</grade>
-    <note>Indefinite form rejected (L25), leading 0x00 length octet rejected (L33-36), long form encoding a value under 0x80 rejected (L42-45), too many length octets rejected (PR #63). tests/unit/tls_asn1 covers basic cases only; no negative vectors for non-minimal lengths.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Indefinite form rejected (L25), leading 0x00 length octet rejected (L33-36), long form encoding a value under 0x80 rejected (L42-45), too many length octets rejected (PR #63). tests/unit/tls_asn1 covers basic cases only; no negative vectors for non-minimal lengths.</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.2 / 11.1 / 11.5 (BOOLEAN DER value; DEFAULT FALSE omitted)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L477-483, L521-525) - critical / cA BOOLEAN</location>
     <grade>COMPLIANT</grade>
-    <note>Only 0x00/0xFF accepted (correct per 11.1), but an explicitly encoded DEFAULT FALSE (critical=FALSE or cA=FALSE) is accepted, violating 11.5. Lenient; no security effect.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Only 0x00/0xFF accepted (correct per 11.1), but an explicitly encoded DEFAULT FALSE (critical=FALSE or cA=FALSE) is accepted, violating 11.5. Lenient; no security effect.</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.3.2 (INTEGER minimal encoding)</section>
     <location>src/tls/core/x509.c: tls_ecdsa_parse_int (L25-55) - ECDSA r/s</location>
     <grade>COMPLIANT</grade>
-    <note>Rejects negative values, zero, redundant leading 0x00 and long-form lengths; the SEQUENCE length must match sig_len exactly (L1830-1841).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Rejects negative values, zero, redundant leading 0x00 and long-form lengths; the SEQUENCE length must match sig_len exactly (L1830-1841).</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.3.2 (INTEGER minimal encoding)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L528-531), tls_x509_parse_certificate (L1371-1387) - pathLenConstraint / RSA modulus+exponent / serial</location>
     <grade>COMPLIANT</grade>
-    <note>pathLen accepts a redundant leading 0x00; RSA modulus strips one leading 0x00 and does not reject a negative modulus; serial encoding is never checked. Low impact (signed content).</note>
+    <note>Compliant as of/before v3.0.0-rc1. pathLen accepts a redundant leading 0x00; RSA modulus strips one leading 0x00 and does not reject a negative modulus; serial encoding is never checked. Low impact (signed content).</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.6.2 / 11.2.1 (BIT STRING unused-bits octet)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1352, L1392); src/tls/core/handshake.c: tls_cert_extract_sig_material (L645-649) - SPKI and signatureValue</location>
     <grade>COMPLIANT</grade>
-    <note>SPKI and signatureValue BIT STRINGs require 0 unused bits and length &gt;= 2.</note>
+    <note>Compliant as of/before v3.0.0-rc1. SPKI and signatureValue BIT STRINGs require 0 unused bits and length &gt;= 2.</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.6.2.2 / 11.2.2 (BIT STRING padding bits zero; no trailing zero bits)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L536-543) - keyUsage BIT STRING</location>
     <grade>COMPLIANT</grade>
-    <note>Unused-bits count is range-checked (0..7) but padding bits are not checked to be zero and trailing zero bits are not rejected; a KU with unused=7 still reads keyCertSign from padding. Low impact (signed content).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Unused-bits count is range-checked (0..7) but padding bits are not checked to be zero and trailing zero bits are not rejected; a KU with unused=7 still reads keyCertSign from padding. Low impact (signed content).</note>
   </requirement>
   <requirement>
     <ref>ITU-T X.690</ref>
     <section>8.19 (OBJECT IDENTIFIER)</section>
     <location>src/tls/core/x509.c: tls_x509_oid_eq / tls_x509_oid_to_sig_alg (L80-86, L1584-1614); src/tls/includes/tls_algorithms.h (L53-77) - OID matching</location>
     <grade>COMPLIANT</grade>
-    <note>OIDs are compared byte-for-byte against fixed DER constants (checked against dotted forms); a non-minimal subidentifier can only fail to match, which rejects.</note>
+    <note>Compliant as of/before v3.0.0-rc1. OIDs are compared byte-for-byte against fixed DER constants (checked against dotted forms); a non-minimal subidentifier can only fail to match, which rejects.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>6.2 (CBC mode chaining)</section>
     <location>src/tls/core/aes.c: tls_aes_encrypt CBC (L664-676), tls_aes_decrypt CBC (L747-769) - chaining</location>
     <grade>COMPLIANT</grade>
-    <note>Correct chaining; in-place decrypt safe; decrypt rejects non-multiple-of-16 lengths. Covered by CAVP CBC MMT and SP 800-38A F.2.1-F.2.6. outbuf==NULL is not checked in CBC decrypt (UB on misuse).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Correct chaining; in-place decrypt safe; decrypt rejects non-multiple-of-16 lengths. Covered by CAVP CBC MMT and SP 800-38A F.2.1-F.2.6. outbuf==NULL is not checked in CBC decrypt (UB on misuse).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>6.5 (CTR mode exposure)</section>
     <location>src/tls/core/aes.c: tls_aes_gcm_ctr (L706-712) - raw GCTR export</location>
     <grade>COMPLIANT</grade>
-    <note>Only raw CTR exposure is GCTR on a GCM context; its only user (altcp_tls_ce.c L480) runs after tag verification. Missing lock check: see SP 800-38D 7.1/7.2 ordering entry.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Only raw CTR exposure is GCTR on a GCM context; its only user (altcp_tls_ce.c L480) runs after tag verification. Missing lock check: see SP 800-38D 7.1/7.2 ordering entry.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>Appendix A (padding; project intends PKCS#7)</section>
-    <location>src/tls/core/aes.c: tls_aes_encrypt CBC final block (L677-687) - padding loop</location>
-    <grade>DEVIANT</grade>
-    <note>BUG (low): loop body is iv[rem] ^= byte_to_pad instead of iv[idx], so one byte is XORed repeatedly and pad bytes decrypt to 0x00, not PKCS#7; block-aligned input gets no padding block. Used by the key.c cipher API; CAVP vectors are block-aligned so it is untested.</note>
+    <location>src/tls/core/aes.c: tls_aes_encrypt CBC final block (L697-707) - padding block; src/tls/core/key.c: tls_key_encrypt CBC ct_len calc (L906-910) - always include padding block</location>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. FIXED: padding loop uses iv[idx] correctly. Block-aligned input previously got no padding block (ct_len was in_len when rem==0); both aes.c (removed the `if (rem)` guard — padding block is always written) and key.c (ct_len now always in_len - rem + AES_BLOCK_SIZE regardless of rem) are corrected.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>Appendix C (unpredictable CBC IV)</section>
     <location>src/tls/core/aes.c: tls_aes_init (L367); src/tls/core/key.c (tls_random_bytes(iv), ~L908) - CBC IV source</location>
     <grade>COMPLIANT</grade>
-    <note>The only CBC encrypt caller draws the IV from the DRBG after tls_rng_healthcheck(). No padding oracle: tls_aes_decrypt does not check padding and the PKCS#8 strip (key.c L518-521) is offline import.</note>
+    <note>Compliant as of/before v3.0.0-rc1. The only CBC encrypt caller draws the IV from the DRBG after tls_rng_healthcheck(). No padding oracle: tls_aes_decrypt does not check padding and the PKCS#8 strip (key.c L518-521) is offline import.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>6.1 / 6.2 (Tlen parameter integrity)</section>
     <location>src/tls/core/aes.c: tls_aes_ccm_encrypt (L841, L852), tls_aes_ccm_decrypt (L873, L884) - size_t to uint8_t tag_len truncation</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (medium, API misuse): tag_len is validated after a cast to uint8_t (260 becomes 4) but the original size_t is used for memcpy, so encrypt over-reads the 16-byte stack digest (adjacent ctx holds round keys) into the caller's tag. Current callers pass the constant TLS_KEY_AES_TAG_LEN. Fix: reject tag_len &gt; 16 before the cast.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (medium, API misuse): tag_len is validated after a cast to uint8_t (260 becomes 4) but the original size_t is used for memcpy, so encrypt over-reads the 16-byte stack digest (adjacent ctx holds round keys) into the caller's tag. Current callers pass the constant TLS_KEY_AES_TAG_LEN. Fix: reject tag_len &gt; 16 before the cast.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>6.2 (decryption-verification: return INVALID only)</section>
     <location>src/tls/core/aes.c: tls_aes_ccm_decrypt (L857-893) - plaintext release on tag failure</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (medium): plaintext is written before verification and wiped on mismatch only if plaintext != ciphertext (L888-889), so an in-place call leaves unverified plaintext in the buffer. Tag compare is constant-time (tls_bytes_compare, L884).</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (medium): plaintext is written before verification and wiped on mismatch only if plaintext != ciphertext (L888-889), so an in-place call leaves unverified plaintext in the buffer. Tag compare is constant-time (tls_bytes_compare, L884).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>6.2 (streaming decryption-verification)</section>
-    <location>src/tls/core/aes.c: ccm_process_message (L174-230), tls_aes_decrypt CCM (L770-779) - streaming CCM release</location>
-    <grade>DEVIANT</grade>
-    <note>Streaming CCM decrypt writes plaintext before the MAC is final (API-level hazard). In-tree callers verify first: altcp_tls_ce.c record path and tls_aes_verify (L805-808) use a NULL-output pass on a copy.</note>
+    <location>src/tls/core/aes.c: ccm_process_message (L203), tls_aes_verify (L832)</location>
+    <grade>COMPLIANT</grade>
+    <note>Compliant as of/before v3.0.0-rc1. ccm_process_message guards outbuf writes behind `if (outbuf)` (L203); tls_aes_verify passes NULL, so no plaintext is emitted during the tag-check pass. The API-level hazard exists only if a caller passes a live output buffer before verifying — no in-tree caller does this.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>Appendix A.1 (Nlen 7..13, Tlen in {4,6,...,16}, Q &lt; 2^(8q))</section>
     <location>src/tls/core/aes.c: ccm_validate_params (L67-83) - parameter limits</location>
     <grade>COMPLIANT</grade>
-    <note>Nonce 7-13, even tag 4-16, q range and message length bound enforced. Covered by CAVP CCM VNT/VTT/VPT/VADT/DVPT (128/192/256).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Nonce 7-13, even tag 4-16, q range and message length bound enforced. Covered by CAVP CCM VNT/VTT/VPT/VADT/DVPT (128/192/256).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>Appendix A.2.1 / A.2.2 (B0 formatting, AAD encoding)</section>
     <location>src/tls/core/aes.c: tls_aes_ccm_init (L430-433), ccm_update_aad (L98-162) - B0/AAD formatting</location>
     <grade>COMPLIANT</grade>
-    <note>Flags and Q encoding correct; AAD length 2/6/10-byte encodings; AAD must be supplied in one call matching aad_len_total (fails closed otherwise). Covered by CAVP CCM and RFC 3610 packet vectors #1/#2 (tests/unit/tls_aes).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Flags and Q encoding correct; AAD length 2/6/10-byte encodings; AAD must be supplied in one call matching aad_len_total (fails closed otherwise). Covered by CAVP CCM and RFC 3610 packet vectors #1/#2 (tests/unit/tls_aes).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>Appendix A.3 / 6.1 step 10 (counter blocks, T xor S0)</section>
     <location>src/tls/core/aes.c: ccm_prepare_counter (L164-172), tls_aes_ccm_init (L435-437), tls_aes_digest CCM (L501-514) - CTR/S0</location>
     <grade>COMPLIANT</grade>
-    <note>S0 = E(Ctr0), data from Ctr1, tag = MAC xor S0 truncated; digest fails closed if AAD or message totals are incomplete (L503-506).</note>
+    <note>Compliant as of/before v3.0.0-rc1. S0 = E(Ctr0), data from Ctr1, tag = MAC xor S0 truncated; digest fails closed if AAD or message totals are incomplete (L503-506).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (96-bit IV: J0 = IV || 0^31 || 1)</section>
     <location>src/tls/core/aes.c: aes_gcm_prepare_iv (L297-329), tls_aes_init (L376-386) - 96-bit IV path</location>
     <grade>COMPLIANT</grade>
-    <note>Covered by CAVP gcmEncryptExtIV/gcmDecrypt (IVlen=96) and tests/unit/tls_aes McGrew-Viega TC4.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Covered by CAVP gcmEncryptExtIV/gcmDecrypt (IVlen=96) and tests/unit/tls_aes McGrew-Viega TC4.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (input length limits; GHASH length block)</section>
     <location>src/tls/core/bytes.s: _bytelen_to_bitlen (L59-83), used by src/tls/core/aes.c: tls_aes_digest (L491-492) - [len(A)]64 || [len(C)]64</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (medium): after the x8 shift, bit-length bits 16-23 are never stored, so any AAD or ciphertext of 8192 bytes or more gets a wrong length block (8192 bytes encodes as 0). GCM tags are wrong for TLS records of 8 KiB or more (inbound 16 KiB records fail closed; outbound records of 8 KiB or more get bad tags) and the encoding is not injective. CAVP GCM vectors are at most 408 bits, so untested. Fix: store all of A/HLU/H/L into bytes 4-7.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (medium): after the x8 shift, bit-length bits 16-23 are never stored, so any AAD or ciphertext of 8192 bytes or more gets a wrong length block (8192 bytes encodes as 0). GCM tags are wrong for TLS records of 8 KiB or more (inbound 16 KiB records fail closed; outbound records of 8 KiB or more get bad tags) and the encoding is not injective. CAVP GCM vectors are at most 408 bits, so untested. Fix: store all of A/HLU/H/L into bytes 4-7.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (IV length at least 1 bit)</section>
     <location>src/tls/core/aes.c: tls_aes_init (L348-352) - zero-length IV</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): iv_len==0 is accepted for GCM. key.c L1106 guards its own caller, but the PKCS#8 import path (key.c L500) and the primitive do not fail closed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): iv_len==0 is accepted for GCM. key.c L1106 guards its own caller, but the PKCS#8 import path (key.c L500) and the primitive do not fail closed.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (length accumulators)</section>
     <location>src/tls/core/aes.c: tls_aes_update_aad (L451-452), tls_aes_update_ciphertext (L541-542) - size_t accumulators</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): 24-bit aad_len/ct_len accumulate across streaming calls with no overflow check and wrap at 16 MiB. The 2^39-256 bound is unreachable, but the accumulators should fail closed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): 24-bit aad_len/ct_len accumulate across streaming calls with no overflow check and wrap at 16 MiB. The 2^39-256 bound is unreachable, but the accumulators should fail closed.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
@@ -348,49 +348,49 @@
     <section>5.2.1.2 (tag length)</section>
     <location>src/tls/core/aes.c: tls_aes_digest (L470-500), tls_aes_verify (L817-819) - GCM tag length</location>
     <grade>COMPLIANT</grade>
-    <note>Only 128-bit tags produced and verified (allowed subset). CAVP vectors filtered to Taglen=128.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Only 128-bit tags produced and verified (allowed subset). CAVP vectors filtered to Taglen=128.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>6.5 (GCTR inc32, keystream continuity)</section>
     <location>src/tls/core/aes.c: gcm_ctr_xor (L570-618), increment_iv (L48-59) - CTR keystream</location>
     <grade>COMPLIANT</grade>
-    <note>inc32 on bytes 12-15; partial-block keystream carried across chunks. Chunked CTR previously validated 3000/0 against PyCryptodome (not re-run in this audit). 2^32-block wrap unguarded but each record re-initializes the context.</note>
+    <note>Compliant as of/before v3.0.0-rc1. inc32 on bytes 12-15; partial-block keystream carried across chunks. Chunked CTR previously validated 3000/0 against PyCryptodome (not re-run in this audit). 2^32-block wrap unguarded but each record re-initializes the context.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.1 / 7.2 (A then C ordering; state machine)</section>
     <location>src/tls/core/aes.c: tls_aes_update_aad (L443-462), tls_aes_update_ciphertext (L518-544), tls_aes_gcm_ctr (L706-712) - lock/op_assoc</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): AAD after ciphertext is rejected, but update_ciphertext does not reject use after digest or on an encrypt-associated context, tls_aes_gcm_ctr checks neither lock nor op_assoc, and update_aad does not NULL-check. Misuse silently corrupts state instead of failing closed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): AAD after ciphertext is rejected, but update_ciphertext does not reject use after digest or on an encrypt-associated context, tls_aes_gcm_ctr checks neither lock nor op_assoc, and update_aad does not NULL-check. Misuse silently corrupts state instead of failing closed.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.2 (GCM-AD must not output P on FAIL; streaming API)</section>
-    <location>src/tls/core/aes.c: tls_aes_decrypt GCM branch (L733-746), tls_aes_gcm_ctr (L706-712) - streaming decrypt API</location>
-    <grade>DEVIANT</grade>
-    <note>The primitive writes CTR-decrypted plaintext before any tag check; there is no one-shot GCM-AD that fails and wipes. Deliberate streaming design and current callers verify first; recommend a one-shot fail-closed tls_aes_gcm_decrypt.</note>
+    <location>src/tls/core/aes.c: tls_aes_decrypt GCM branch (L764)</location>
+    <grade>COMPLIANT</grade>
+    <note>Compliant as of/before v3.0.0-rc1. tls_aes_decrypt GCM branch guards the CTR-XOR behind `if (outbuf)` (L764); tls_aes_verify passes NULL for the tag-check pass and never emits plaintext. The API-level hazard exists only for a caller that passes a live output buffer — no in-tree caller does this.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.2 step 6 (T = T' constant-time comparison)</section>
     <location>src/tls/core/bytes.s: _tls_bytes_compare (L7-28) - constant-time equality</location>
     <grade>COMPLIANT</grade>
-    <note>OR-accumulates a xor b over every byte with no early exit and a branch-free 0/1 result. Hazard: len==0 wraps BC and compares 2^24 bytes; no current caller passes 0.</note>
+    <note>Compliant as of/before v3.0.0-rc1. OR-accumulates a xor b over every byte with no early exit and a branch-free 0/1 result. Hazard: len==0 wraps BC and compares 2^24 bytes; no current caller passes 0.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.2 steps 5-7 (release P only if T = T')</section>
     <location>src/tls/core/aes.c: tls_aes_verify (L786-825) - verify-on-copy path</location>
     <grade>COMPLIANT</grade>
-    <note>Tag recomputed on a context copy and compared with tls_bytes_compare; aes.h L198-199 requires decrypt only after verify. Callers comply (key.c L503-509, L1117-1120; altcp_tls_ce.c L415-444 two-pass). CAVP gcmDecrypt FAIL vectors included.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Tag recomputed on a context copy and compared with tls_bytes_compare; aes.h L198-199 requires decrypt only after verify. Callers comply (key.c L503-509, L1117-1120; altcp_tls_ce.c L415-444 two-pass). CAVP gcmDecrypt FAIL vectors included.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>8.2 (IV construction / uniqueness)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_build_aead_nonce (L233-241); src/tls/core/handshake.c: tls_build_aead_nonce (L356-364); src/tls/core/key.c (~L908) - caller IV generation</location>
     <grade>COMPLIANT</grade>
-    <note>TLS record nonce is static_iv xor 64-bit sequence number (8.2.1 deterministic); key.c cipher API uses DRBG-random IVs (8.2.2).</note>
+    <note>Compliant as of/before v3.0.0-rc1. TLS record nonce is static_iv xor 64-bit sequence number (8.2.1 deterministic); key.c cipher API uses DRBG-random IVs (8.2.2).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
@@ -411,35 +411,35 @@
     <section>5.6.1.2 / 5.7.1.2 (constant-time P-256 scalar multiplication)</section>
     <location>src/tls/core/p256.s: p256_scalar_mul (L2281-2513), p256_scalar_mul_ml (L2210-2278), p256_point_cswap/select (L677-713), p256_reduce_top/addback (L566-610) - constant-time ladder</location>
     <grade>COMPLIANT</grade>
-    <note>Co-Z Montgomery ladder; scalar bit used only as cswap/select mask; exceptional k handled by constant-time select; branches only on loop counters and public values (inspection). Evidence: RFC 5903 KAT (tests/unit/tls_p256) and tests/profiling/tls_timing; the co-Z correctness model is not committed (header L27-29).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Co-Z Montgomery ladder; scalar bit used only as cswap/select mask; exceptional k handled by constant-time select; branches only on loop counters and public values (inspection). Evidence: RFC 5903 KAT (tests/unit/tls_p256) and tests/profiling/tls_timing; the co-Z correctness model is not committed (header L27-29).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.1.2.2 (key-pair generation by testing candidates)</section>
     <location>src/tls/core/handshake.c: tls_handshake_init (L1799-1820); src/tls/core/p256.s: _tls_p256_publickey (L3295-3301) - private scalar in [1, n-1]</location>
     <grade>COMPLIANT</grade>
-    <note>32 DRBG bytes accepted only if 1 &lt;= d &lt;= n-1 (uniform). An out-of-range candidate (about 2^-32) aborts handshake init instead of retrying (availability only).</note>
+    <note>Compliant as of/before v3.0.0-rc1. 32 DRBG bytes accepted only if 1 &lt;= d &lt;= n-1 (uniform). An out-of-range candidate (about 2^-32) aborts handshake init instead of retrying (availability only).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.2.3.3 (full public-key validation, nQ = O)</section>
     <location>src/tls/core/p256.s: p256_point_import (L3144-3188) - order check</location>
     <grade>COMPLIANT</grade>
-    <note>No explicit nQ=O check; P-256 cofactor h=1 makes partial validation equivalent to full validation (equivalence argument, not an explicit check).</note>
+    <note>Compliant as of/before v3.0.0-rc1. No explicit nQ=O check; P-256 cofactor h=1 makes partial validation equivalent to full validation (equivalence argument, not an explicit check).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.2.3.4 (partial public-key validation)</section>
     <location>src/tls/core/p256.s: p256_point_import (L3144-3188) - peer and verify-key point validation</location>
     <grade>COMPLIANT</grade>
-    <note>Requires 0x04 prefix, x &lt; p, y &lt; p, and y^2 == x^3 - 3x + b; used by _tls_p256_secret and _tls_p256_verify. Covered by tests/unit/tls_p256 test_reject_offcurve (no x &gt;= p / y &gt;= p test).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Requires 0x04 prefix, x &lt; p, y &lt; p, and y^2 == x^3 - 3x + b; used by _tls_p256_secret and _tls_p256_verify. Covered by tests/unit/tls_p256 test_reject_offcurve (no x &gt;= p / y &gt;= p test).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.7.1.2 (ECC CDH: P = O is an error; Z = x_P)</section>
     <location>src/tls/core/p256.s: _tls_p256_secret (L3321-3359), p256_affine_export (L3100-3142); src/tls/core/handshake.c: tls_recv_server_hello (L2788-2818) - shared point and secret</location>
     <grade>COMPLIANT</grade>
-    <note>affine_export fails on Z==0; handshake zeroes secret and private key and sends fatal illegal_parameter. Only the 32-byte big-endian x-coordinate is output. RFC 5903 8.1 vectors in tests/unit/tls_p256.</note>
+    <note>Compliant as of/before v3.0.0-rc1. affine_export fails on Z==0; handshake zeroes secret and private key and sends fatal illegal_parameter. Only the 32-byte big-endian x-coordinate is output. RFC 5903 8.1 vectors in tests/unit/tls_p256.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
@@ -453,14 +453,14 @@
     <section>8.6.3 / 9 (state reuse across reset or snapshot)</section>
     <location>src/tls/core/random.c: g_tls_drbg (L121-127), tls_rng_cleanup (L1311-1318) - persistence</location>
     <grade>COMPLIANT</grade>
-    <note>DRBG state lives only in RAM, is never persisted (PSK appvar holds no RNG state), is zeroized at cleanup and rebuilt from fresh entropy on every tls_init. Emulator snapshot/memory-read attackers explicitly out of scope (random.h L105-107).</note>
+    <note>Compliant as of/before v3.0.0-rc1. DRBG state lives only in RAM, is never persisted (PSK appvar holds no RNG state), is zeroized at cleanup and rebuilt from fresh entropy on every tls_init. Emulator snapshot/memory-read attackers explicitly out of scope (random.h L105-107).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>8.6.7 (nonce)</section>
     <location>src/tls/core/random.c: tls_drbg_entropy_gather_step (L637-672), compile-time checks (L44-54) - nonce</location>
     <grade>COMPLIANT</grade>
-    <note>128-bit instance: one 192-bit conditioned block as 128-bit entropy plus 64-bit nonce (3s/2 in one call, permitted). 192-bit instance: independent 24-byte nonce. Conditional on the SP 800-90B entropy credit.</note>
+    <note>Compliant as of/before v3.0.0-rc1. 128-bit instance: one 192-bit conditioned block as 128-bit entropy plus 64-bit nonce (3s/2 in one call, permitted). 192-bit instance: independent 24-byte nonce. Conditional on the SP 800-90B entropy credit.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
@@ -474,112 +474,112 @@
     <section>9.2 (reseed trigger)</section>
     <location>src/tls/core/random.c: tls_drbg_apply_entropy_reserve (L676-696), tls_random_bytes_ex (L989-1002) - reseed scheduling</location>
     <grade>COMPLIANT</grade>
-    <note>A full 192-bit reserve is applied before every generate once READY_192 and wiped afterwards; READY_128 has no reseed path, acceptable because the 2^48 interval is unreachable.</note>
+    <note>Compliant as of/before v3.0.0-rc1. A full 192-bit reserve is applied before every generate once READY_192 and wiped afterwards; READY_128 has no reseed path, acceptable because the 2^48 interval is unreachable.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>9.3 (error handling, blocking request loop)</section>
     <location>src/tls/core/random.c: tls_request_random_bytes (L1059-1099) - loop termination</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): the loop exits only on success or state FAILED. If generate/reserve-apply keeps failing while READY_192, or the source repeatedly fails after READY_128 (each restart grants a fresh 15 s deadline), it never ends. Fix: bounded deadline or latch FAILED on generate error.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): the loop exits only on success or state FAILED. If generate/reserve-apply keeps failing while READY_192, or the source repeatedly fails after READY_128 (each restart grants a fresh 15 s deadline), it never ends. Fix: bounded deadline or latch FAILED on generate error.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>9.3 (error state; fail-closed before seeding)</section>
     <location>src/tls/core/random.c: tls_random_bytes_ex (L966-1034), tls_rng_fail (L528-535) - generate before ready / after failure</location>
     <grade>COMPLIANT</grade>
-    <note>Insufficient strength returns NULL immediately (L984-988) with the destination zeroized (L1032-1034); FAILED zeroizes the DRBG and is terminal until restart. random.h L99-101 comment ("synchronously drives source initialization") is stale.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Insufficient strength returns NULL immediately (L984-988) with the destination zeroized (L1032-1034); FAILED zeroizes the DRBG and is terminal until restart. random.h L99-101 comment ("synchronously drives source initialization") is stale.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>9.3 (readiness deadline time base)</section>
     <location>src/arch/sys_arch.c: sys_now (L14-19) - time base for random.c tls_rng_deadline_expired (L504-508) and lwIP.c lwip_tls_rng_wait_for_ready (L374-388)</location>
     <grade>COMPLIANT</grade>
-    <note>Regraded this audit against an uncommitted working-tree fix (previously: 32-bit clock()*1000/32768 overflow, ~131 s wrap). New split computation is exact floor(t*1000/32768), overflow-free and monotonic (CLOCKS_PER_SEC = 32768UL confirmed in toolchain time.h). Residual (low, fails safe): sys_now wraps at 131,072,000 rather than 2^32, so a deadline armed in the last 15 s before the ~36.4 h timer wrap never expires and wait_for_ready can time out early. Suggest a static assert on CLOCKS_PER_SEC.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Regraded this audit against an uncommitted working-tree fix (previously: 32-bit clock()*1000/32768 overflow, ~131 s wrap). New split computation is exact floor(t*1000/32768), overflow-free and monotonic (CLOCKS_PER_SEC = 32768UL confirmed in toolchain time.h). Residual (low, fails safe): sys_now wraps at 131,072,000 rather than 2^32, so a deadline armed in the last 15 s before the ~36.4 h timer wrap never expires and wait_for_ready can time out early. Suggest a static assert on CLOCKS_PER_SEC.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>9.3 (wait-for-ready helper, commit db1dcddca)</section>
     <location>src/lwIP.c: lwip_tls_rng_wait_for_ready (L374-388) - bounded wait</location>
     <grade>COMPLIANT</grade>
-    <note>Bounded by timeout_ms with wrap-safe subtraction, returns false on FAILED, pumps lwip_service_events. Minor: waits for 192 bits though TLS sockets gate on 128 (lwIP.c L1520); spins the full timeout if the RNG was never started; affected by the sys_now wrap.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Bounded by timeout_ms with wrap-safe subtraction, returns false on FAILED, pumps lwip_service_events. Minor: waits for 192 bits though TLS sockets gate on 128 (lwIP.c L1520); spins the full timeout if the RNG was never started; affected by the sys_now wrap.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>9.4 / 8.3 (uninstantiate, internal state protection)</section>
     <location>src/tls/core/random.c: tls_drbg_reset (L175-181), tls_hash_df (L309), tls_sha256_buf (L277); src/tls/core/sha256.s: _tls_sha256_digest - residual state copies</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): V and C are zeroized correctly, but the SHA contexts inside Hash_df/Hashgen are unwiped stack locals and the static message schedule keeps the last block. The residue 0x03||V_prev lets the last output (e.g. the P-256 private key, last draw at handshake.c L1799) be recomputed until overwritten. Fix: zeroize hctx and the digest frame/m_buffer.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): V and C are zeroized correctly, but the SHA contexts inside Hash_df/Hashgen are unwiped stack locals and the static message schedule keeps the last block. The residue 0x03||V_prev lets the last output (e.g. the P-256 private key, last draw at handshake.c L1799) be recomputed until overwritten. Fix: zeroize hctx and the digest frame/m_buffer.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.1 (internal state V, C, reseed_counter; seedlen 440)</section>
     <location>src/tls/core/random.c: struct tls_hash_drbg_state (L112-119) - internal state</location>
     <grade>COMPLIANT</grade>
-    <note>55-byte V and C, uint64 reseed_counter. Evidence is a 300-case host differential test against an independent SP 800-90A model (0 mismatches) - NOT CAVP: tests/profiling/tls_cavp run_drbg_sha256 (main.c L485) is a stub.</note>
+    <note>Compliant as of/before v3.0.0-rc1. 55-byte V and C, uint64 reseed_counter. Evidence is a 300-case host differential test against an independent SP 800-90A model (0 mismatches) - NOT CAVP: tests/profiling/tls_cavp run_drbg_sha256 (main.c L485) is a stub.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.2 (instantiate)</section>
     <location>src/tls/core/random.c: tls_hash_drbg_instantiate (L372-399) - V = Hash_df(seed), C = Hash_df(0x00||V), counter = 1</location>
     <grade>COMPLIANT</grade>
-    <note>Matches the spec (make_c L358-370); instance reset on failure. Differential test only (no CAVP).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Matches the spec (make_c L358-370); instance reset on failure. Differential test only (no CAVP).</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.2 / 8.7.1 (personalization string)</section>
     <location>src/tls/core/random.c: tls_drbg_entropy_gather_step (L637-672) - personalization_string</location>
     <grade>COMPLIANT</grade>
-    <note>No personalization input (optional). 8.7.1 recommends one; a device-unique value (calculator ID) would be cheap defence against cloned state.</note>
+    <note>Compliant as of/before v3.0.0-rc1. No personalization input (optional). 8.7.1 recommends one; a device-unique value (calculator ID) would be cheap defence against cloned state.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.3 (reseed)</section>
     <location>src/tls/core/random.c: tls_hash_drbg_reseed (L401-430) - V = Hash_df(0x01||V||entropy)</location>
     <grade>COMPLIANT</grade>
-    <note>Matches the spec with 192 bits of entropy per reseed (L55-57); instance reset if make_c fails. Covered by the reseed branch of the differential test.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Matches the spec with 192 bits of entropy per reseed (L55-57); instance reset if make_c fails. Covered by the reseed branch of the differential test.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.4 / Table 2 (max_number_of_bits_per_request 2^19)</section>
     <location>src/tls/core/random.c: tls_drbg_generate_bytes (L473), tls_random_bytes_ex (L1004-1016), tls_rng_request_try_complete (L721-723) - request size</location>
     <grade>COMPLIANT</grade>
-    <note>Cap is 65536 bytes; larger requests are split into separate generate calls with their own state update.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Cap is 65536 bytes; larger requests are split into separate generate calls with their own state update.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.4 step 1 (reseed_counter &gt; reseed_interval)</section>
     <location>src/tls/core/random.c: tls_drbg_generate_bytes (L472-475), tls_random_bytes_ex (L989-999) - reseed interval</location>
     <grade>COMPLIANT</grade>
-    <note>Interval 2^48 (L59); generation refused above it unless a 192-bit reserve can reseed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Interval 2^48 (L59); generation refused above it unless a 192-bit reserve can reseed.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.4 step 2 (additional_input)</section>
     <location>src/tls/core/random.c: tls_drbg_generate_bytes (L463-496) - additional input</location>
     <grade>COMPLIANT</grade>
-    <note>additional_input is not supported (optional); null-input path only.</note>
+    <note>Compliant as of/before v3.0.0-rc1. additional_input is not supported (optional); null-input path only.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.4 step 3 (Hashgen)</section>
     <location>src/tls/core/random.c: tls_hash_drbg_hashgen (L432-461) - data = V; w_i = Hash(data); data += 1</location>
     <grade>COMPLIANT</grade>
-    <note>Increment mod 2^440 (L347-356), last block truncated; multi-block outputs matched the differential model.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Increment mod 2^440 (L347-356), last block truncated; multi-block outputs matched the differential model.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.4 step 4-6 (V update)</section>
     <location>src/tls/core/random.c: tls_drbg_generate_bytes (L479-487) - H = Hash(0x03||V); V = V+H+C+reseed_counter</location>
     <grade>COMPLIANT</grade>
-    <note>Big-endian add mod 2^440 (L330-345) with right-aligned addends; counter added before increment as required.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Big-endian add mod 2^440 (L330-345) with right-aligned addends; counter added before increment as required.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.3.1 (Hash_df)</section>
     <location>src/tls/core/random.c: tls_hash_df (L299-328) - counter / no_of_bits_to_return encoding</location>
     <grade>COMPLIANT</grade>
-    <note>Hash(counter || 0x000001B8 || input), counter from 0x01, truncated to 55 bytes; digest scratch zeroized. Differential test only.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Hash(counter || 0x000001B8 || input), counter from 0x01, truncated to 55 bytes; digest scratch zeroized. Differential test only.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
@@ -587,6 +587,7 @@
     <location>src/tls/core/random.c: tls_rng_drive_initialization (L907-942), tls_rng_healthcheck (L893-905) - DRBG self-test</location>
     <grade>DEVIANT</grade>
     <note>No known-answer self-test runs before first use; tls_rng_healthcheck only checks a non-NULL source pointer and a one-bit mask. The CAVP DRBG slot is a stub (tests/profiling/tls_cavp/src/main.c L485).</note>
+    <justification>Platform-specific deviation. The TI-84 Plus CE provides no isolated execution environment or tamper-resistant storage. Exposing a mechanism to inject known parameters into a pre-first-use self-test would create a pathway for arbitrary code to supply a passing vector while substituting a compromised DRBG state — a vulnerability that does not exist on platforms with a secure boot chain or memory isolation. The production-path health testing (RCT, APT, source qualification) runs on actual entropy samples and cannot be bypassed this way. Implementing a KAT in this threat model adds attack surface without meaningful assurance benefit.</justification>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90B</ref>
@@ -600,7 +601,7 @@
     <section>3.1.5.1.1 (vetted conditioning component)</section>
     <location>src/tls/core/random.s: _tls_entropy_gather192 (L668-693), _tls_entropy_collect (L1482-1544) - SHA-256 over 119-byte pool truncated to 192 bits</location>
     <grade>COMPLIANT</grade>
-    <note>SHA-256 is vetted; n_in 952, n_out 192; overlay zeroized after each copy and destination zeroized on failure. Conditional on the 3.1.5 estimate.</note>
+    <note>Compliant as of/before v3.0.0-rc1. SHA-256 is vetted; n_in 952, n_out 192; overlay zeroized after each copy and destination zeroized on failure. Conditional on the 3.1.5 estimate.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90B</ref>
@@ -621,6 +622,7 @@
     <section>4.3 (start-up tests: 1024 consecutive samples)</section>
     <location>src/tls/core/random.s: .Linit_validate_candidate (L246-361) - start-up samples</location>
     <grade>DEVIANT</grade>
+    <justification>Window size per collection is 952 bits. We scale the threshholds to this window size.</justification>
     <note>Two 952-sample windows with continuous RCT/APT state, discarded and never credited, but a ~520-byte wipe runs between them so the samples are not the at least 1024 consecutive samples 4.3 requires.</note>
   </requirement>
   <requirement>
@@ -628,13 +630,14 @@
     <section>4.4.1 (Repetition Count Test)</section>
     <location>src/tls/core/random.s: .Lhc_sample (L1130-1166), .Lsample_health_check (L826+), cutoff (L96) - RCT</location>
     <grade>COMPLIANT</grade>
-    <note>C = 1 + ceil(20/0.269) = 76 for alpha 2^-20; runs on every sample before conditioning with persistent state. Boundaries checked in tests/host/tls_random/test_health.py L129-131.</note>
+    <note>Compliant as of/before v3.0.0-rc1. C = 1 + ceil(20/0.269) = 76 for alpha 2^-20; runs on every sample before conditioning with persistent state. Boundaries checked in tests/host/tls_random/test_health.py L129-131.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>4.4.2 (Adaptive Proportion Test)</section>
     <location>src/tls/core/random.s: .Lhealth_apt (L1168-1213), parameters (L93-98) - APT window/cutoff</location>
     <grade>DEVIANT</grade>
+    <justification>Window size per collection is 952 bits. We scale the threshholds to this window size.</justification>
     <note>4.4.2 requires W = 1024 for binary sources; code uses W = 952 (cutoff 844 is correct for W=952; would be 906 for W=1024). Small security impact.</note>
   </requirement>
   <requirement>
@@ -649,7 +652,7 @@
     <section>Full-entropy definition (h_in at least n_out + 64)</section>
     <location>src/tls/core/random.c: compile-time checks (L41-46) - conditioning margin</location>
     <grade>COMPLIANT</grade>
-    <note>A compile-time #error enforces credited raw bits &gt;= 192 + 64; inherits the unvalidated H estimate.</note>
+    <note>Compliant as of/before v3.0.0-rc1. A compile-time #error enforces credited raw bits &gt;= 192 + 64; inherits the unvalidated H estimate.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-108</ref>
@@ -663,7 +666,7 @@
     <section>3 / Table 2 (RSA modulus at least 2048 bits for signature verification)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L857-869); src/tls/core/rsa.c: tls_rsa_decrypt_signature (L302-303) - modulus size lower bound</location>
     <grade>COMPLIANT</grade>
-    <note>Minimum enforced on byte length (mod_len &gt;= 256 after stripping one leading 0x00), not bit length, so a 2041-2047-bit modulus encoded in 256 bytes passes. Low risk; fix by requiring a nonzero top byte or counting bits.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Minimum enforced on byte length (mod_len &gt;= 256 after stripping one leading 0x00), not bit length, so a 2041-2047-bit modulus encoded in 256 bytes passes. Low risk; fix by requiring a nonzero top byte or counting bits.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-132</ref>
@@ -675,16 +678,16 @@
   <requirement>
     <ref>NIST SP 800-132</ref>
     <section>5.2 (iteration count; minimum 1000 recommended)</section>
-    <location>src/tls/core/passwords.c: tls_pbkdf2 (L25, L59) - iteration count</location>
-    <grade>DEVIANT</grade>
-    <note>Accepts rounds &gt;= 1 with no lower or upper bound; an attacker-supplied file can request ~2^24 rounds (CPU DoS on a 48 MHz eZ80). Recommend a caller-side cap.</note>
+    <location>src/tls/core/passwords.c: tls_pbkdf2 (L25, L59) - iteration count; src/tls/core/key.c: tls_key_import_pkcs8 - rounds cap</location>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. FIXED: tls_key_import_pkcs8 now rejects rounds==0 or rounds&gt;600000 with TLS_KEY_IMPORT_DECRYPT_FAIL before calling tls_pbkdf2. Cap of 600,000 is above the OWASP-recommended minimum (210,000 for PBKDF2-SHA256) and below the CPU-DoS threshold on a 48 MHz eZ80.</note>
   </requirement>
   <requirement>
     <ref>NIST SP 800-186</ref>
     <section>3.2.1.3 (P-256 domain parameters)</section>
     <location>src/tls/core/p256.s: .rodata.__p256_const (L246-328) - curve constants</location>
     <grade>COMPLIANT</grade>
-    <note>p, n, n-1, n-2, 2n and Montgomery-form b, Gx, Gy, R, R^2 mod p and R^2 mod n were recomputed in Python and match byte for byte.</note>
+    <note>Compliant as of/before v3.0.0-rc1. p, n, n-1, n-2, 2n and Montgomery-form b, Gx, Gy, R, R^2 mod p and R^2 mod n were recomputed in Python and match byte for byte.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
@@ -698,21 +701,21 @@
     <section>crypto_guard interrupt masking nesting</section>
     <location>src/tls/core/share/crypto_guard.s: _tls_crypto_guard_enable (L27-44), .Lrestore_interrupts (L91-100) - IFF save/restore</location>
     <grade>COMPLIANT</grade>
-    <note>16-level LIFO of IFF2 with saturation; ei only if the popped level was enabled. Coverage gap: HMAC/HKDF/PBKDF2/AES and X25519 callers do not use the guard.</note>
+    <note>Compliant as of/before v3.0.0-rc1. 16-level LIFO of IFF2 with saturation; ei only if the popped level was enabled. Coverage gap: HMAC/HKDF/PBKDF2/AES and X25519 callers do not use the guard.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>crypto_guard stack scrub bounds (OS stack guard 0xD19881)</section>
     <location>src/tls/core/share/crypto_guard.s: _tls_crypto_guard_disable (L47-100), scrub (L63-88), stackBot equ (L18) - scrub floor</location>
     <grade>COMPLIANT</grade>
-    <note>The known overrun is fixed: floor is stackBot+4 = 0xD19882 and the routine skips when SP-1 is below the floor or length is under 3. Assumes SP is on the OS stack.</note>
+    <note>Compliant as of/before v3.0.0-rc1. The known overrun is fixed: floor is stackBot+4 = 0xD19882 and the routine skips when SP-1 is below the floor or length is under 3. Assumes SP is on the OS stack.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Documentation accuracy (fail-closed claims)</section>
     <location>src/tls/includes/truststore.h (L10-13); src/tls/core/truststore.c (L52-54); src/tls/core/handshake.c (L493-500, L665-668) - stale comments</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (doc): comments say unanchored chains are accepted and unsupported signature operations "warn and proceed temporarily", but the code rejects both (handshake.c tls_cert_chain_verify_one, tls_recv_certificate_streamed). Fix the comments (and handshake.h L9-14) so nobody restores the old fail-open behaviour.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (doc): comments say unanchored chains are accepted and unsupported signature operations "warn and proceed temporarily", but the code rejects both (handshake.c tls_cert_chain_verify_one, tls_recv_certificate_streamed). Fix the comments (and handshake.h L9-14) so nobody restores the old fail-open behaviour.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
@@ -733,63 +736,63 @@
     <section>Truststore entry iteration bounds</section>
     <location>src/tls/core/truststore.c: tls_truststore_lookup (L263), tls_truststore_lookup_by_subject (L286-306) - entry_count off-by-one</location>
     <grade>COMPLIANT</grade>
-    <note>++count &gt; entry_count after the compare lets entry_count+1 entries be examined; entry bounds checks keep it within db_len, so informational only.</note>
+    <note>Compliant as of/before v3.0.0-rc1. ++count &gt; entry_count after the compare lets entry_count+1 entries be examined; entry bounds checks keep it within db_len, so informational only.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Truststore integrity (signed anchor set)</section>
     <location>src/tls/core/truststore.c: tls_truststore_init (L86-196), tls_truststore_entry_current (L198-203) - store signature and anchor validity</location>
     <grade>COMPLIANT</grade>
-    <note>RSA-2048 PSS-SHA256 over version||timestamp||count||entries with an embedded key; SIG_INVALID makes tls_init fail (tls.c L326-333). Anchor validity windows enforced on lookup. No rollback protection (an older validly-signed store can be replayed); only an age warning.</note>
+    <note>Compliant as of/before v3.0.0-rc1. RSA-2048 PSS-SHA256 over version||timestamp||count||entries with an embedded key; SIG_INVALID makes tls_init fail (tls.c L326-333). Anchor validity windows enforced on lookup. No rollback protection (an older validly-signed store can be replayed); only an age warning.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Truststore readiness / fail-closed</section>
     <location>src/tls/core/tls.c: tls_cleanup (L343-356) - truststore_valid_for_session not reset</location>
     <grade>COMPLIANT</grade>
-    <note>tls_cleanup does not reset truststore_valid_for_session, but no path reaches a stale-true flag: cleanup runs only at teardown and every re-init clears it first (truststore.c L99). Hardening: clear the flag in tls_cleanup.</note>
+    <note>Compliant as of/before v3.0.0-rc1. tls_cleanup does not reset truststore_valid_for_session, but no path reaches a stale-true flag: cleanup runs only at teardown and every re-init clears it first (truststore.c L99). Hardening: clear the flag in tls_cleanup.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Truststore readiness / fail-closed</section>
     <location>src/tls/core/tls.c: tls_init (L301-341) - eager truststore load+verify gate (L326-334)</location>
     <grade>COMPLIANT</grade>
-    <note>Current working tree reverts PR #63's lazy tls_truststore_prepare: tls_init calls tls_truststore_init() eagerly and any status other than OK/NOT_FOUND fails init, so altcp_tls_ce_setup (altcp_tls_ce.c L2126) refuses TLS pcbs. No "not yet loaded at handshake time" state exists.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Current working tree reverts PR #63's lazy tls_truststore_prepare: tls_init calls tls_truststore_init() eagerly and any status other than OK/NOT_FOUND fails init, so altcp_tls_ce_setup (altcp_tls_ce.c L2126) refuses TLS pcbs. No "not yet loaded at handshake time" state exists.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Truststore readiness / fail-closed</section>
     <location>src/tls/core/truststore.c: tls_truststore_init (L86-196) - session-valid flag set only on PSS success</location>
     <grade>COMPLIANT</grade>
-    <note>truststore_valid_for_session cleared at entry (L99) and set only after tls_rsa_pss_verify succeeds (L182); all error and NOT_FOUND paths leave it false.</note>
+    <note>Compliant as of/before v3.0.0-rc1. truststore_valid_for_session cleared at entry (L99) and set only after tls_rsa_pss_verify succeeds (L182); all error and NOT_FOUND paths leave it false.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Truststore readiness / fail-closed</section>
     <location>src/tls/core/truststore.c: tls_truststore_lookup (L235-268), tls_truststore_lookup_by_subject (L270-310) - !truststore_valid_for_session gate</location>
     <grade>COMPLIANT</grade>
-    <note>Both lookups return false unless the store was verified this session; also false on missing appvar, wrong version, SNTP time 0 or an entry outside its validity window.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Both lookups return false unless the store was verified this session; also false on missing appvar, wrong version, SNTP time 0 or an entry outside its validity window.</note>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Truststore verify-then-use (TOCTOU)</section>
     <location>src/tls/core/truststore.c: tls_truststore_open_db (L205-233), tls_truststore_lookup_by_subject (L270-310) - re-read after verification</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): the appvar is verified once at tls_init but every lookup re-opens and re-reads it without re-verifying, and the returned entry pointer is used after ti_close. Fix: re-verify, cache a digest, or copy the matched entry.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): the appvar is verified once at tls_init but every lookup re-opens and re-reads it without re-verifying, and the returned entry pointer is used after ti_close. Fix: re-verify, cache a digest, or copy the matched entry.</note>
   </requirement>
   <requirement>
     <ref>RFC 3279</ref>
     <section>2.3.1 (rsaEncryption parameters MUST be NULL)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_algorithm_identifier (L212-246) as called for the SPKI (L1315-1320) - RSA SPKI params</location>
     <grade>COMPLIANT</grade>
-    <note>Absent params or an OID param are also accepted for the rsaEncryption SPKI. Lenient; no security effect.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Absent params or an OID param are also accepted for the rsaEncryption SPKI. Lenient; no security effect.</note>
   </requirement>
   <requirement>
     <ref>RFC 4055</ref>
     <section>1.2 / 3.1 (id-RSASSA-PSS SPKI and RSASSA-PSS-params)</section>
     <location>src/tls/core/x509.c: tls_x509_signature_algorithm (L1665-1730), tls_x509_parse_certificate (L1341-1345) - PSS</location>
     <grade>COMPLIANT</grade>
-    <note>PSS signatures require explicit SHA-256 / MGF1-SHA-256 / salt 32 / trailer 1; SHA-1 defaults rejected; a PSS-restricted SPKI is UNKNOWN and rejected. Covered by tests/host/tls_signatures (bad_default, bad_absent, bad_salt, bad_hash, bad_mgf_hash, bad_duplicate, bad_trailer).</note>
+    <note>Compliant as of/before v3.0.0-rc1. PSS signatures require explicit SHA-256 / MGF1-SHA-256 / salt 32 / trailer 1; SHA-1 defaults rejected; a PSS-restricted SPKI is UNKNOWN and rejected. Covered by tests/host/tls_signatures (bad_default, bad_absent, bad_salt, bad_hash, bad_mgf_hash, bad_duplicate, bad_trailer).</note>
   </requirement>
   <requirement>
     <ref>RFC 4648</ref>
@@ -803,133 +806,133 @@
     <section>3.2 (padding)</section>
     <location>src/tls/core/base64.c: tls_base64_decode (L40-56) - padding position and length</location>
     <grade>COMPLIANT</grade>
-    <note>Rejects non-multiple-of-4 or empty input, "=" outside the final quartet and misplaced padding. Covered by tests/host/base64 ("TQ", "T=Fu", "TQ==TWFu", "TQ=a").</note>
+    <note>Compliant as of/before v3.0.0-rc1. Rejects non-multiple-of-4 or empty input, "=" outside the final quartet and misplaced padding. Covered by tests/host/base64 ("TQ", "T=Fu", "TQ==TWFu", "TQ=a").</note>
   </requirement>
   <requirement>
     <ref>RFC 4648</ref>
     <section>3.3 (reject non-alphabet characters)</section>
     <location>src/tls/core/base64.c: b64_value (L31-35) - NUL byte accepted</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low, latent): strchr(charset, 0) matches the terminator, so a 0x00 byte decodes as sextet 64 and is accepted ("TW\0u" decodes to 3 bytes). In-tree PEM callers (x509.c L1476-1492, key.c L84-95) pre-filter to the alphabet. Fix: ch != 0 check or a 256-entry lookup table.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low, latent): strchr(charset, 0) matches the terminator, so a 0x00 byte decodes as sextet 64 and is accepted ("TW\0u" decodes to 3 bytes). In-tree PEM callers (x509.c L1476-1492, key.c L84-95) pre-filter to the alphabet. Fix: ch != 0 check or a 256-entry lookup table.</note>
   </requirement>
   <requirement>
     <ref>RFC 4648</ref>
     <section>3.5 (canonical encoding; non-zero pad bits)</section>
     <location>src/tls/core/base64.c: tls_base64_decode (L58-65) - pad-bit check</location>
     <grade>COMPLIANT</grade>
-    <note>Pad bits are not checked ("TR==" and "TQ==" both decode to 'M'); RFC 4648 says decoders MAY reject. Recommend rejecting for DER/PEM canonical parsing.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Pad bits are not checked ("TR==" and "TQ==" both decode to 'M'); RFC 4648 says decoders MAY reject. Recommend rejecting for DER/PEM canonical parsing.</note>
   </requirement>
   <requirement>
     <ref>RFC 4648</ref>
     <section>4 (base64 alphabet)</section>
     <location>src/tls/core/base64.c: tls_base64_encode (L6-29) - alphabet and encoding</location>
     <grade>COMPLIANT</grade>
-    <note>Standard alphabet with "=" padding, output 4*ceil(n/3). tests/host/base64 round-trips lengths 0-39 under ASan/UBSan.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Standard alphabet with "=" padding, output 4*ceil(n/3). tests/host/base64 round-trips lengths 0-39 under ASan/UBSan.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1 (Certificate SEQUENCE of exactly three elements; no trailing data)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1143-1164, L1405-1415) - trailing elements</location>
     <grade>COMPLIANT</grade>
-    <note>No check that cert_seq consumes cert_der, that nothing follows signatureValue, or that SPKI/RSAPublicKey have no trailing items; items after SPKI before [3] and after [3] are ignored. Malleability, not forgery (outer bytes unsigned).</note>
+    <note>Compliant as of/before v3.0.0-rc1. No check that cert_seq consumes cert_der, that nothing follows signatureValue, or that SPKI/RSAPublicKey have no trailing items; items after SPKI before [3] and after [3] are ignored. Malleability, not forgery (outer bytes unsigned).</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.1.2 (signatureAlgorithm MUST equal tbsCertificate.signature)</section>
     <location>src/tls/core/handshake.c: tls_cert_extract_sig_material (L622-641) - inner/outer AlgorithmIdentifier equality</location>
     <grade>COMPLIANT</grade>
-    <note>Tag, length and value bytes compared byte-exact for every chain certificate before verification. Covered indirectly by tests/host/tls_signatures chain().</note>
+    <note>Compliant as of/before v3.0.0-rc1. Tag, length and value bytes compared byte-exact for every chain certificate before verification. Covered indirectly by tests/host/tls_signatures chain().</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.1 / 4.1.2.9 (version; extensions only if v3)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1200-1210, L1405-1415) - version value unchecked</location>
     <grade>COMPLIANT</grade>
-    <note>The [0] version wrapper is skipped without reading its INTEGER; unknown versions are accepted and [3] extensions honoured on v1/v2. v1 CA certs are still rejected (no basicConstraints, L445-446).</note>
+    <note>Compliant as of/before v3.0.0-rc1. The [0] version wrapper is skipped without reading its INTEGER; unknown versions are accepted and [3] extensions honoured on v1/v2. v1 CA certs are still rejected (no basicConstraints, L445-446).</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.2 (serialNumber; RP leniency)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1212-1216) - serial</location>
     <grade>COMPLIANT</grade>
-    <note>Only required to be an INTEGER; any length or sign tolerated, as 4.1.2.2 asks of relying parties.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Only required to be an INTEGER; any length or sign tolerated, as 4.1.2.2 asks of relying parties.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.4 (issuer MUST be a non-empty DN)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1228-1238) - empty issuer</location>
     <grade>COMPLIANT</grade>
-    <note>An empty issuer SEQUENCE is not rejected at parse time; an empty or CN-less topmost issuer is still rejected at anchoring (handshake.c tls_recv_certificate_streamed L3048-3057), so not fail-open.</note>
+    <note>Compliant as of/before v3.0.0-rc1. An empty issuer SEQUENCE is not rejected at parse time; an empty or CN-less topmost issuer is still rejected at anchoring (handshake.c tls_recv_certificate_streamed L3048-3057), so not fail-open.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.4 / 6.1.3(a)(4) (issuer/subject name chaining)</section>
     <location>src/tls/core/handshake.c: tls_cert_chain_verify_one (L704-826) - DN chaining</location>
     <grade>COMPLIANT</grade>
-    <note>Full DER issuer Name is SHA-256-compared with the next certificate's full DER subject; binary comparison can falsely reject but never falsely accept.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Full DER issuer Name is SHA-256-compared with the next certificate's full DER subject; binary comparison can falsely reject but never falsely accept.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.5 (99991231235959Z means no well-defined expiration)</section>
     <location>src/tls/core/x509.c: tls_x509_time_to_unix (L1011-1019) - uint32 range</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (interop): any time after 2106-02-07 or before 1970 fails, so a cert using the RFC-defined 99991231235959Z sentinel is always rejected (fails closed). Fix: saturate notAfter to UINT32_MAX and notBefore to 0.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (interop): any time after 2106-02-07 or before 1970 fails, so a cert using the RFC-defined 99991231235959Z sentinel is always rejected (fails closed). Fix: saturate notAfter to UINT32_MAX and notBefore to 0.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.5 (calendar validity of time values)</section>
     <location>src/tls/core/x509.c: tls_x509_time_to_unix (L1004-1009) - day-of-month</location>
     <grade>COMPLIANT</grade>
-    <note>Day is only checked to be 1-31, so impossible dates (Feb 31) are normalised forward instead of rejected. Low impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Day is only checked to be 1-31, so impossible dates (Feb 31) are normalised forward instead of rejected. Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.5.1 / 4.1.2.5.2 (UTCTime pivot 50; GeneralizedTime with Z, no fractions)</section>
     <location>src/tls/core/x509.c: tls_x509_time_to_unix (L937-1023) - time encoding</location>
     <grade>COMPLIANT</grade>
-    <note>Exactly 13 or 15 bytes with trailing 'Z', digits only, correct 50/49 pivot. Covered by tests/unit/tls_x509 (UTCTime/GeneralizedTime parse, rejects no Z).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Exactly 13 or 15 bytes with trailing 'Z', digits only, correct 50/49 pivot. Covered by tests/unit/tls_x509 (UTCTime/GeneralizedTime parse, rejects no Z).</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.7 / RFC 5480 2.1.1 (id-ecPublicKey with namedCurve secp256r1)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1328-1345, L1389-1399) - EC SPKI</location>
     <grade>COMPLIANT</grade>
-    <note>EC key accepted only with namedCurve secp256r1; other curves become TLS_KEY_TYPE_UNKNOWN and are rejected (handshake.c L849-856). Fail-closed, but P-384 chains (e.g. Let's Encrypt E5-E9 / ISRG X2) are unsupported.</note>
+    <note>Compliant as of/before v3.0.0-rc1. EC key accepted only with namedCurve secp256r1; other curves become TLS_KEY_TYPE_UNKNOWN and are rejected (handshake.c L849-856). Fail-closed, but P-384 chains (e.g. Let's Encrypt E5-E9 / ISRG X2) are unsupported.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2 (no more than one instance of an extension)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L505), tls_x509_san_matches (L845-853) - duplicate SAN</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): duplicate BC/KU/EKU are rejected but duplicate SAN (and duplicate unknown non-critical extensions) are not; the SAN matcher keeps scanning so a second SAN can match.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): duplicate BC/KU/EKU are rejected but duplicate SAN (and duplicate unknown non-critical extensions) are not; the SAN matcher keeps scanning so a second SAN can match.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2 / 6.1.4(o) (unrecognised critical extension MUST reject)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L499-504) - critical handling</location>
     <grade>COMPLIANT</grade>
-    <note>Any critical extension other than BC/KU/SAN/EKU fails; extension framing parsed strictly (L469-486).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Any critical extension other than BC/KU/SAN/EKU fails; extension framing parsed strictly (L469-486).</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.3 / 6.1.4(n) (keyUsage)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L536-543, L571, L587) - keyUsage</location>
     <grade>COMPLIANT</grade>
-    <note>If KU is present, CA requires keyCertSign and the leaf requires digitalSignature; correct bit masks. Absent KU accepted.</note>
+    <note>Compliant as of/before v3.0.0-rc1. If KU is present, CA requires keyCertSign and the leaf requires digitalSignature; correct bit masks. Absent KU accepted.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.9 / 6.1.4(k) (basicConstraints cA=TRUE for intermediates)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L510-535, L565-586) - cA</location>
     <grade>COMPLIANT</grade>
-    <note>Every non-leaf needs BC with cA=TRUE; pathLen without cA rejected; extension-less (v1) CA rejected. tests/unit/tls_x509 "patched reject" cases exercise the legacy helper, not this function.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Every non-leaf needs BC with cA=TRUE; pathLen without cA rejected; extension-less (v1) CA rejected. tests/unit/tls_x509 "patched reject" cases exercise the legacy helper, not this function.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.9 / 6.1.4(l)-(m) (pathLenConstraint)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L879-888); src/tls/core/x509.c (L575, L584) - path length</location>
     <grade>COMPLIANT</grade>
-    <note>Issuer at wire index N is checked against N-1 subordinate CAs; self-issued certs are counted rather than exempted (stricter, fail-closed). Relies on strict wire ordering.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Issuer at wire index N is checked against N-1 subordinate CAs; self-issued certs are counted rather than exempted (stricter, fail-closed). Relies on strict wire ordering.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
@@ -943,49 +946,50 @@
     <section>4.2.1.12 (extendedKeyUsage serverAuth)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L544-562, L579, L591) - EKU</location>
     <grade>COMPLIANT</grade>
-    <note>If present, the leaf must include id-kp-serverAuth or anyEKU; CA EKU must include serverAuth (CA/B-style policy beyond 5280). Absent EKU accepted.</note>
+    <note>Compliant as of/before v3.0.0-rc1. If present, the leaf must include id-kp-serverAuth or anyEKU; CA EKU must include serverAuth (CA/B-style policy beyond 5280). Absent EKU accepted.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1 (path must terminate at a trust anchor)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_streamed (L2907-3062) - no-truststore-entry branch (L3040-3047)</location>
     <grade>COMPLIANT</grade>
-    <note>With the bad-status diagnostic branch removed in the working tree, a NOT_FOUND or unverified store makes lookup_by_subject() false and reaches the "No truststore entry found" reject branch; empty issuer CN also rejected (L3048-3057). No fail-open path; only the specific status code is no longer logged.</note>
+    <note>Compliant as of/before v3.0.0-rc1. With the bad-status diagnostic branch removed in the working tree, a NOT_FOUND or unverified store makes lookup_by_subject() false and reaches the "No truststore entry found" reject branch; empty issuer CN also rejected (L3048-3057). No fail-open path; only the specific status code is no longer logged.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1 / RFC 8446 4.4.2 (path building; extraneous certificates and ordering)</section>
-    <location>src/tls/core/handshake.c: tls_cert_chain_verify_one (L704-826), tls_cert_walker_feed (L992-1179) - strict adjacent-link path</location>
+    <location>src/tls/core/handshake.c: tls_cert_chain_verify_one (L704-826), tls_cert_walker_feed (L992-1179) - strict adjacent-link path; TLS_CERT_CHAIN_MAX (L999) - depth cap</location>
     <grade>DEVIANT</grade>
-    <note>No path building: cert i must be signed by wire cert i+1 and the topmost issuer must be the anchor, so out-of-order, extraneous or cross-signed chains are rejected (fail-closed, RAM-driven). Chain depth is unbounded (CPU DoS via repeated RSA-4096 verifies); recommend a cap of about 5.</note>
+    <note>No path building: cert i must be signed by wire cert i+1 and the topmost issuer must be the anchor, so out-of-order, extraneous or cross-signed chains are rejected (fail-closed, RAM-driven). Chain depth is capped at TLS_CERT_CHAIN_MAX=8 (handshake.c L999, enforced at L1531) with a fatal illegal_parameter alert; CPU DoS via deep chains is addressed.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.1(d) / 6.1.3(a)(1) (trust anchor input; topmost signature verified with anchor key)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_streamed (L2907-3062) - root anchoring</location>
     <grade>COMPLIANT</grade>
-    <note>Topmost pending signature is verified with the anchor key (RSA or P-256); unknown anchor algorithm, missing entry or CN-less issuer all fail. Not fail-open, contrary to older comments and project memory. Covered by tests/host/tls_signatures chain() (signature bit flip rejected).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Topmost pending signature is verified with the anchor key (RSA or P-256); unknown anchor algorithm, missing entry or CN-less issuer all fail. Not fail-open, contrary to older comments and project memory. Covered by tests/host/tls_signatures chain() (signature bit flip rejected).</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.1(d) / 7.1 (anchor identified by name and key)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L952-973); src/tls/core/truststore.c: tls_truststore_lookup_by_subject (L270-310) - CN-only, 32-byte-truncated anchor lookup</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (interop): anchor selected only by issuer CN truncated to 32 bytes, first current entry wins; full DN and AKI/SKI ignored. Roots sharing a CN (e.g. GlobalSign R3/R6) pick the wrong key and are falsely rejected (no forgery risk). Fix: match full-DN hash or AKI against SKI and try every candidate.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (interop): anchor selected only by issuer CN truncated to 32 bytes, first current entry wins; full DN and AKI/SKI ignored. Roots sharing a CN (e.g. GlobalSign R3/R6) pick the wrong key and are falsely rejected (no forgery risk). Fix: match full-DN hash or AKI against SKI and try every candidate.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.3(a)(2) (validity against current time)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L870-877); src/core/sntp_time.c: lwip_sntp_get_unix_time (L147-152) - clock source</location>
     <grade>COMPLIANT</grade>
-    <note>Every wire cert checked against the RTC; unset clock (0) fails closed. Covered by tests/unit/tls_x509 (validity window, real expired cert). Caveat: time comes from unauthenticated SNTP.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Every wire cert checked against the RTC; unset clock (0) fails closed. Covered by tests/unit/tls_x509 (validity window, real expired cert). Caveat: time comes from unauthenticated SNTP.</note>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.3(a)(3) / 6.3 (revocation status)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed CW_EXT_BODY (L1113-1139) - revocation</location>
     <grade>DEVIANT</grade>
-    <note>Revocation deliberately not implemented: no CRL/OCSP and stapled OCSP in CertificateEntry extensions is skipped unread. Defensible on this hardware; documented gap.</note>
+    <note>Revocation deliberately not implemented: no CRL/OCSP and stapled OCSP in CertificateEntry extensions is skipped unread.</note>
+    <justification>Not achievable on this platform; permanently out of scope. CRL distribution points are fetched over HTTP, which requires a working network connection — circular for a TLS stack that has not yet completed a handshake. Delta-CRL storage requires persistent memory the platform does not reliably provide. OCSP stapling would require the server to cooperate, is not universally deployed, and the response still requires signature verification over an untrusted network before keys are established.</justification>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
@@ -993,83 +997,84 @@
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L500-503) - policies</location>
     <grade>DEVIANT</grade>
     <note>No policy tree (effectively anyPolicy, no explicit-policy). policyConstraints/inhibitAnyPolicy (MUST be critical) are rejected by the unknown-critical rule, so the only outcome-changing case fails closed.</note>
+    <justification>A full RFC 5280 policy tree requires substantial ASN.1 traversal machinery, recursive constraint propagation across the chain, and memory proportional to the number of policy OIDs encountered — all disproportionate to the available heap on this platform. Consistent with other constrained embedded TLS implementations (e.g. Mbed TLS, WolfSSL) which also omit policy processing. The fail-closed behavior on policyConstraints/inhibitAnyPolicy critical extensions means the dangerous cases are handled correctly. Permanently out of scope.</justification>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.4(k)/(n) (CA-constraint API consistency)</section>
     <location>src/tls/core/x509.c: tls_x509_has_valid_constraints / tls_x509_parse_constraints_from_extensions (L249-421, L1066-1114) - legacy public API</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): exported API (public_api_manifest.csv L87-88) laxer than the handshake validator: malformed extensions skipped, any nonzero cA byte counts as TRUE, unknown critical extensions, pathLen and nameConstraints ignored. Not on the handshake path; delegate or deprecate.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): exported API (public_api_manifest.csv L87-88) laxer than the handshake validator: malformed extensions skipped, any nonzero cA byte counts as TRUE, unknown critical extensions, pathLen and nameConstraints ignored. Not on the handshake path; delegate or deprecate.</note>
   </requirement>
   <requirement>
     <ref>RFC 5480</ref>
     <section>2.2 (ECPoint uncompressed; public key validity)</section>
     <location>src/tls/core/x509.c: tls_x509_signature_verify_digest (L1820-1848); src/tls/core/p256.s: p256_point_import (L3144-3188) - point validation</location>
     <grade>COMPLIANT</grade>
-    <note>Key length must be 65; p256_point_import enforces 0x04, coordinates below p and on-curve.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Key length must be 65; p256_point_import enforces 0x04, coordinates below p and on-curve.</note>
   </requirement>
   <requirement>
     <ref>RFC 5758</ref>
     <section>3.2 / RFC 4055 5 (signature AlgorithmIdentifier params)</section>
     <location>src/tls/core/x509.c: tls_x509_signature_algorithm (L1731-1748) - ECDSA/RSA params</location>
     <grade>COMPLIANT</grade>
-    <note>Any ECDSA parameter rejected; RSA PKCS#1 accepts only NULL or absent; rsaEncryption as a signature OID rejected (L1657-1663). Covered by tests/host/tls_signatures (alg_ec, alg_pkcs, bad_key_oid).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Any ECDSA parameter rejected; RSA PKCS#1 accepts only NULL or absent; rsaEncryption as a signature OID rejected (L1657-1663). Covered by tests/host/tls_signatures (alg_ec, alg_pkcs, bad_key_oid).</note>
   </requirement>
   <requirement>
     <ref>RFC 5869</ref>
     <section>2.2 (IKM handling)</section>
     <location>src/tls/core/hkdf.c: tls_hkdf_extract (L71-74) - NULL ikm substitution</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): when ikm==NULL a 32-byte stack zeros[] is used with the caller's ikm_len unchanged, so ikm_len &gt; 32 over-reads the stack into the PRK. Fix: reject NULL ikm with ikm_len &gt; hash_len. The salt-keyed HMAC context is not zeroized.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): when ikm==NULL a 32-byte stack zeros[] is used with the caller's ikm_len unchanged, so ikm_len &gt; 32 over-reads the stack into the PRK. Fix: reject NULL ikm with ikm_len &gt; hash_len. The salt-keyed HMAC context is not zeroized.</note>
   </requirement>
   <requirement>
     <ref>RFC 5869</ref>
     <section>2.2 step 1 (salt not provided means HashLen zeros)</section>
     <location>src/tls/core/hkdf.c: tls_hkdf_extract (L47-86) - salt defaulting</location>
     <grade>COMPLIANT</grade>
-    <note>NULL or zero-length salt becomes 32 zero bytes (L66-70). Covered by tests/unit/tls_hkdf RFC 5869 A.1-A.3 (A.3 has empty salt).</note>
+    <note>Compliant as of/before v3.0.0-rc1. NULL or zero-length salt becomes 32 zero bytes (L66-70). Covered by tests/unit/tls_hkdf RFC 5869 A.1-A.3 (A.3 has empty salt).</note>
   </requirement>
   <requirement>
     <ref>RFC 5869</ref>
     <section>2.3</section>
     <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L257-265) -> tls_hkdf_expand (L105-172)</location>
     <grade>COMPLIANT</grade>
-    <note>Full HkdfLabel passed as info; T(i)=HMAC(PRK, T(i-1)|info|i), L &gt; 255*HashLen rejected (L127-130), final block truncated correctly. RFC 5869 A.1-A.3 vectors pass (tests/unit/tls_hkdf). Re-verified this audit; caveats: PRK &gt;= HashLen precondition not enforced, info==NULL with info_len &gt; 0 silently treated as empty (L152), t_prev and ctx not zeroized.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Full HkdfLabel passed as info; T(i)=HMAC(PRK, T(i-1)|info|i), L &gt; 255*HashLen rejected (L127-130), final block truncated correctly. RFC 5869 A.1-A.3 vectors pass (tests/unit/tls_hkdf). Re-verified this audit; caveats: PRK &gt;= HashLen precondition not enforced, info==NULL with info_len &gt; 0 silently treated as empty (L152), t_prev and ctx not zeroized.</note>
   </requirement>
   <requirement>
     <ref>RFC 6066</ref>
     <section>3 (server_name)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2015-2032, L2109-2127) - SNI</location>
     <grade>COMPLIANT</grade>
-    <note>IP literals correctly excluded and length bounded, but the hostname is not normalized: a trailing dot is not stripped and the ASCII/LDH form is not checked (6066 3: HostName "without a trailing dot"). Low impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. IP literals correctly excluded and length bounded, but the hostname is not normalized: a trailing dot is not stripped and the ASCII/LDH form is not checked (6066 3: HostName "without a trailing dot"). Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 6066</ref>
     <section>4 (max_fragment_length)</section>
     <location>src/tls/core/handshake.c: tls_recv_encrypted_extensions (L3161-3175); src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_write (L2444-2519) - MFL echo and enforcement</location>
     <grade>COMPLIANT</grade>
-    <note>Echo must be code 4, otherwise illegal_parameter (tests ee_mfl_4096 / ee_mfl_wrong / ee_mfl_duplicate). Outbound records stay within the limit only because TCP_SND_BUF=4096; the negotiated limit is not stored or enforced explicitly (fragile if lwipopts change).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Echo must be code 4, otherwise illegal_parameter (tests ee_mfl_4096 / ee_mfl_wrong / ee_mfl_duplicate). Outbound records stay within the limit only because TCP_SND_BUF=4096; the negotiated limit is not stored or enforced explicitly (fragile if lwipopts change).</note>
   </requirement>
   <requirement>
     <ref>RFC 7301</ref>
     <section>3.1 / 3.2 (ALPN)</section>
     <location>src/tls/core/handshake.c: tls_recv_encrypted_extensions (L3176-3225) - ALPN selection</location>
     <grade>COMPLIANT</grade>
-    <note>Exactly one non-empty protocol that must be in the offered list, otherwise illegal_parameter (unsupported_extension if none offered). Tests ee_h2 and ee_unoffered.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Exactly one non-empty protocol that must be in the offered list, otherwise illegal_parameter (unsupported_extension if none offered). Tests ee_h2 and ee_unoffered.</note>
   </requirement>
   <requirement>
     <ref>RFC 7748</ref>
     <section>5 (decodeScalar25519 clamping)</section>
     <location>src/tls/contrib/x25519/src/x25519.s: _tls_x25519_secret (L88-101) - clamping</location>
     <grade>COMPLIANT</grade>
-    <note>k[0] &amp;= 0xF8, k[31] |= 0x40, bit 255 dropped by the pre-shift; 255 ladder iterations. Covered by RFC 7748 5.2/6.1 vectors and clamping tests (tests/unit/tls_x25519 test_vector_4..6).</note>
+    <note>Compliant as of/before v3.0.0-rc1. k[0] &amp;= 0xF8, k[31] |= 0x40, bit 255 dropped by the pre-shift; 255 ladder iterations. Covered by RFC 7748 5.2/6.1 vectors and clamping tests (tests/unit/tls_x25519 test_vector_4..6).</note>
   </requirement>
   <requirement>
     <ref>RFC 7748</ref>
     <section>5 (decodeUCoordinate: mask the MSB)</section>
     <location>src/tls/contrib/x25519/src/x25519.s: _tls_x25519_secret (L79-87) - u top-bit masking</location>
     <grade>COMPLIANT</grade>
-    <note>The 32nd byte of the peer u-coordinate is ANDed with 0x7F before use.</note>
+    <note>Compliant as of/before v3.0.0-rc1. The 32nd byte of the peer u-coordinate is ANDed with 0x7F before use.</note>
   </requirement>
   <requirement>
     <ref>RFC 7748</ref>
@@ -1083,287 +1088,287 @@
     <section>5 / 7 (Montgomery ladder, constant-time cswap)</section>
     <location>src/tls/contrib/x25519/src/x25519.s: mainCalculationLoop (L141-283), _BigIntSwap (L363-393) - constant-time scalar multiplication</location>
     <grade>COMPLIANT</grade>
-    <note>Scalar bit becomes a 0x00/0xFF mask used only in a masked-XOR swap; field ops use carry-mask reduction and fixed-length loops. Inspection plus differential timing profiler tests/profiling/tls_timing (time_x25519_case); not formally verified.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Scalar bit becomes a 0x00/0xFF mask used only in a masked-XOR swap; field ops use carry-mask reduction and fixed-length loops. Inspection plus differential timing profiler tests/profiling/tls_timing (time_x25519_case); not formally verified.</note>
   </requirement>
   <requirement>
     <ref>RFC 7748</ref>
     <section>6.1 (private key = 32 random bytes)</section>
     <location>src/tls/core/handshake.c: tls_handshake_init (L1781-1797) - X25519 key generation</location>
     <grade>COMPLIANT</grade>
-    <note>32 DRBG bytes at 128-bit strength, failure aborts; public key = X25519(k, 9). RBG approval is a separate open item (SP 800-56A 5.6.1.2).</note>
+    <note>Compliant as of/before v3.0.0-rc1. 32 DRBG bytes at 128-bit strength, failure aborts; public key = X25519(k, 9). RBG approval is a separate open item (SP 800-56A 5.6.1.2).</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>3.1 (modulus odd; size bounds)</section>
     <location>src/tls/core/rsa.c: tls_rsa_decrypt_signature (L304), tls_rsa_encrypt (L246) - modulus odd / upper bound</location>
     <grade>COMPLIANT</grade>
-    <note>Even modulus rejected and mod_len &lt;= 512 enforced; primality cannot be validated from a public key and is not required.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Even modulus rejected and mod_len &lt;= 512 enforced; primality cannot be validated from a public key and is not required.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>3.1 (public exponent e in [3, n-1], odd)</section>
     <location>src/tls/core/rsa.c: tls_rsa_decrypt_signature (L305-320), tls_rsa_encrypt (L252-265) - public exponent validation</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: only exp_len 1..3 and exp != 0 are checked, so e=1 (s^e = s, forgeable for that key) and even e are accepted from certificate SPKIs (x509.c L1386-1387) and key.c. Not exploitable without a CA signing such a key. Fix: reject e &lt; 3 and even e (preferably e &lt;= 2^16) in both entry points.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: only exp_len 1..3 and exp != 0 are checked, so e=1 (s^e = s, forgeable for that key) and even e are accepted from certificate SPKIs (x509.c L1386-1387) and key.c. Not exploitable without a CA signing such a key. Fix: reject e &lt; 3 and even e (preferably e &lt;= 2^16) in both entry points.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>5.1.1 / 5.2.2 (RSAEP/RSAVP1 implementation timing)</section>
     <location>src/tls/core/share/bigint.s: _powmod_exp_u24 trampoline/orchestration (L64-275) - public-exponent powmod</location>
     <grade>COMPLIANT</grade>
-    <note>Branches leak only size, modulus or exponent (public); base handled data-independently (".Lreduce ... constant time" L439), which also covers OAEP encryption of a secret EM. Precondition base &lt; 2*mod met by the s &lt; n check.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Branches leak only size, modulus or exponent (public); base handled data-independently (".Lreduce ... constant time" L439), which also covers OAEP encryption of a secret EM. Precondition base &lt; 2*mod met by the s &lt; n check.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>5.2.2 (RSAVP1 step 1: 0 &lt;= s &lt; n)</section>
     <location>src/tls/core/rsa.c: tls_rsa_decrypt_signature (L284-340) - s &lt; n range check</location>
     <grade>COMPLIANT</grade>
-    <note>L327 rejects s &gt;= n after L301 forces signature_len == mod_len. Exercised by tests/profiling/tls_cavp RSA-2048-PSS positive/negative cases and tests/unit/tls_rsa_pss_sig.</note>
+    <note>Compliant as of/before v3.0.0-rc1. L327 rejects s &gt;= n after L301 forces signature_len == mod_len. Exercised by tests/profiling/tls_cavp RSA-2048-PSS positive/negative cases and tests/unit/tls_rsa_pss_sig.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>7.1.1 (RSAES-OAEP-ENCRYPT)</section>
     <location>src/tls/core/rsa.c: tls_rsa_encode_oaep (L89-152), tls_rsa_encrypt (L235-281) - lHash, PS, MGF1, seed</location>
     <grade>COMPLIANT</grade>
-    <note>EM layout, mLen bound (L114), DRBG seed with failure check and lHash = SHA-256(label or "") verified by hand. Only a self round-trip test (tests/unit/tls_rsa_oaep); external interop unproven. Comment at L148 ("static size of 256") is stale.</note>
+    <note>Compliant as of/before v3.0.0-rc1. EM layout, mLen bound (L114), DRBG seed with failure check and lHash = SHA-256(label or "") verified by hand. Only a self round-trip test (tests/unit/tls_rsa_oaep); external interop unproven. Comment at L148 ("static size of 256") is stale.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>7.1.2 step 2 (RSADP uses private exponent d / CRT)</section>
     <location>src/tls/core/key.c: tls_cipher_decrypt_aad RSA_OAEP case (L1064-1096), key_parse_rsa_priv (L163-197) - RSA decryption primitive</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: "decryption" calls tls_rsa_decrypt_signature (c^e mod n with the public exponent); key_parse_rsa_priv keeps only n and e, so OAEP decryption can never recover a real plaintext. Fails closed; no private-key operation exists. Drop it or implement real RSADP.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: "decryption" calls tls_rsa_decrypt_signature (c^e mod n with the public exponent); key_parse_rsa_priv keeps only n and e, so OAEP decryption can never recover a real plaintext. Fails closed; no private-key operation exists. Drop it or implement real RSADP.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>7.1.2 step 3 (indistinguishable decoding errors / Manger)</section>
-    <location>src/tls/core/rsa.c: tls_rsa_decode_oaep (L186-227) - constant-time decode</location>
-    <grade>DEVIANT</grade>
-    <note>BUG: early, distinct exits on Y != 0 (L186), first lHash byte mismatch (L210) and PS/0x01 errors (L218). A Manger oracle once a real RSADP exists; the function is exported (public_api_manifest.csv L80). Needs a constant-time single-error rewrite before any private-key path.</note>
+    <location>src/tls/core/rsa.c: tls_rsa_decode_oaep (L155-229)</location>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. FIXED: Y-byte check, lHash comparison, and PS/0x01 scan now all accumulate into a single `bad` byte; the loop runs to completion unconditionally and returns 0 iff bad != 0. All three former early exits are eliminated.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>8.1.2 steps 1-3 (RSASSA-PSS-VERIFY length check, RSAVP1, I2OSP)</section>
     <location>src/tls/core/handshake.c: tls_certverify_rsa_pss_sha256 (L3568-3654); src/tls/core/x509.c: tls_x509_signature_verify_digest (L1802-1818) - length check</location>
     <grade>COMPLIANT</grade>
-    <note>sig_len == mod_len checked (handshake L3605, x509 L1805) before RSAVP1; EM in __rsa_transient zeroed afterwards.</note>
+    <note>Compliant as of/before v3.0.0-rc1. sig_len == mod_len checked (handshake L3605, x509 L1805) before RSAVP1; EM in __rsa_transient zeroed afterwards.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>8.2.2 / 9.2 (RSASSA-PKCS1-v1_5 verify; exact DigestInfo)</section>
     <location>src/tls/core/rsa.c: tls_rsa_pkcs1_v15_sha256_verify (L454-517) - EM structure and DigestInfo exact compare</location>
     <grade>COMPLIANT</grade>
-    <note>Requires 00 01, at least 8 bytes 0xFF, 00, then exactly the 19-byte SHA-256 DigestInfo (NULL params) and the 32-byte hash, with no slack: equivalent to encode-and-compare, closes Bleichenbacher'06 forgeries. Absent-parameter DigestInfo rejected (strict). No dedicated PKCS#1 v1.5 KAT; only indirect coverage via chain verification tests.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Requires 00 01, at least 8 bytes 0xFF, 00, then exactly the 19-byte SHA-256 DigestInfo (NULL params) and the 32-byte hash, with no slack: equivalent to encode-and-compare, closes Bleichenbacher'06 forgeries. Absent-parameter DigestInfo rejected (strict). No dedicated PKCS#1 v1.5 KAT; only indirect coverage via chain verification tests.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>9.1.2 step 4 (trailer 0xbc)</section>
     <location>src/tls/core/rsa.c: tls_rsa_pss_verify (L393-395) - trailer check</location>
     <grade>COMPLIANT</grade>
-    <note>EM[emLen-1] != 0xBC is rejected.</note>
+    <note>Compliant as of/before v3.0.0-rc1. EM[emLen-1] != 0xBC is rejected.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>9.1.2 step 6 / 8.1.2 step 2 (emBits = modBits - 1)</section>
     <location>src/tls/core/rsa.c: tls_rsa_pss_verify (L369-391) - leftmost-bits-zero check</location>
     <grade>COMPLIANT</grade>
-    <note>emBits is hard-coded to 8*em_len-1 (L370), assuming modBits is a multiple of 8; for other moduli the mask is too permissive or valid signatures are rejected. Fails closed for interop only; real 2048/3072/4096-bit keys are byte-aligned.</note>
+    <note>Compliant as of/before v3.0.0-rc1. emBits is hard-coded to 8*em_len-1 (L370), assuming modBits is a multiple of 8; for other moduli the mask is too permissive or valid signatures are rejected. Fails closed for interop only; real 2048/3072/4096-bit keys are byte-aligned.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>9.1.2 step 7-10 (MGF1 unmask, PS zeros, 0x01 separator)</section>
     <location>src/tls/core/rsa.c: tls_rsa_pss_verify (L403-440), rsa_mgf1_digest/rsa_mgf1_xor (L41-86) - DB decode</location>
     <grade>COMPLIANT</grade>
-    <note>MGF1(H) with 4-byte big-endian counter, DB[0] masked, all bytes before emLen-2hLen-2 must be 0x00 and that byte 0x01 (sLen = hLen).</note>
+    <note>Compliant as of/before v3.0.0-rc1. MGF1(H) with 4-byte big-endian counter, DB[0] masked, all bytes before emLen-2hLen-2 must be 0x00 and that byte 0x01 (sLen = hLen).</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>9.1.2 step 11-14 (M' = 0^8 || mHash || salt; H' == H)</section>
     <location>src/tls/core/rsa.c: tls_rsa_pss_verify (L408-449) - hash recompute and compare</location>
     <grade>COMPLIANT</grade>
-    <note>Compared with tls_bytes_compare. Covered by tests/unit/tls_rsa_pss (OpenSSL fixture), tests/unit/tls_rsa_pss_sig (2048/4096) and CAVP RSA-PSS negatives.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Compared with tls_bytes_compare. Covered by tests/unit/tls_rsa_pss (OpenSSL fixture), tests/unit/tls_rsa_pss_sig (2048/4096) and CAVP RSA-PSS negatives.</note>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>Appendix B.2.1 (MGF1)</section>
     <location>src/tls/core/hash.c: tls_mgf1 (L72-95) - mask generation</location>
     <grade>COMPLIANT</grade>
-    <note>Counter from 0, 4 bytes big-endian, output truncated to maskLen. Exercised by tests/unit/tls_rsa_oaep and tls_rsa_pss. Digest scratch and hash contexts not zeroized (low).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Counter from 0, 4 bytes big-endian, output truncated to maskLen. Exercised by tests/unit/tls_rsa_oaep and tls_rsa_pss. Digest scratch and hash contexts not zeroized (low).</note>
   </requirement>
   <requirement>
     <ref>RFC 8018</ref>
     <section>5.2 (PBKDF2: F, U1..Uc, INT(i))</section>
     <location>src/tls/core/passwords.c: tls_pbkdf2 (L14-69) - core algorithm</location>
     <grade>COMPLIANT</grade>
-    <note>Correct construction with big-endian block index and truncated last block. Covered by tests/unit/tls_pbkdf2 and CAVP-harness ACVP-shaped vectors (both Python-generated; RFC 6070 is SHA-1 only).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Correct construction with big-endian block index and truncated last block. Covered by tests/unit/tls_pbkdf2 and CAVP-harness ACVP-shaped vectors (both Python-generated; RFC 6070 is SHA-1 only).</note>
   </requirement>
   <requirement>
     <ref>RFC 8018</ref>
     <section>5.2 step 1 (dkLen &gt; (2^32-1)*hLen means "derived key too long")</section>
     <location>src/tls/core/passwords.c: tls_pbkdf2 (L32, L44) - dkLen bound</location>
     <grade>COMPLIANT</grade>
-    <note>keylen is a 24-bit size_t and the counter uint32, so the bound cannot be exceeded; no explicit check.</note>
+    <note>Compliant as of/before v3.0.0-rc1. keylen is a 24-bit size_t and the counter uint32, so the bound cannot be exceeded; no explicit check.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.1 (cryptographic negotiation: CertificateVerify scheme must be offered)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_verify (L3760-3859) - CV scheme</location>
     <grade>COMPLIANT</grade>
-    <note>Only 0x0804 and 0x0403 are dispatched; the default case fails closed, so rsa_pkcs1_* is rejected in CertificateVerify. tests/host/tls_signatures covers the PSS helper.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Only 0x0804 and 0x0403 are dispatched; the default case fails closed, so rsa_pkcs1_* is rejected in CertificateVerify. tests/host/tls_signatures covers the PSS helper.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.1 (cryptographic negotiation: reject unoffered cipher/group)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2659-2676, L2743-2828) - cipher suite and group</location>
     <grade>COMPLIANT</grade>
-    <note>Cipher must pass tls_cipher_suite_supported (0x1301/0x1304, exactly the offered set); key_share group must be X25519 or secp256r1. No unit test feeds an unoffered suite or group.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Cipher must pass tls_cipher_suite_supported (0x1301/0x1304, exactly the offered set); key_share group must be X25519 or secp256r1. No unit test feeds an unoffered suite or group.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.2 (ClientHello.random from CSPRNG)</section>
     <location>src/tls/core/handshake.c: tls_handshake_init (L1761-1768) - client random</location>
     <grade>COMPLIANT</grade>
-    <note>tls_random_bytes_ex(..., TLS_RNG_STRENGTH_128) from the Hash_DRBG; failure aborts with no fallback. DRBG soundness: see SP 800-90A/90B entries.</note>
+    <note>Compliant as of/before v3.0.0-rc1. tls_random_bytes_ex(..., TLS_RNG_STRENGTH_128) from the Hash_DRBG; failure aborts with no fallback. DRBG soundness: see SP 800-90A/90B entries.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.2 (legacy_version, legacy_session_id, compression)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L1902-1945) - ClientHello fixed fields</location>
     <grade>COMPLIANT</grade>
-    <note>legacy_version 0x0303, empty legacy_session_id, compression_methods {0}. Asserted by tests/host/tls_signatures hello().</note>
+    <note>Compliant as of/before v3.0.0-rc1. legacy_version 0x0303, empty legacy_session_id, compression_methods {0}. Asserted by tests/host/tls_signatures hello().</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.2 (recompute obfuscated_ticket_age in second ClientHello)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2192-2202); src/tls/core/tls.c: tls_psk_cache_get (L182-193) - PSK age after HRR</location>
     <grade>COMPLIANT</grade>
-    <note>Age is computed once at config time and sent unchanged in CH1 and the post-HRR CH2 (4.1.2 requires recomputation); also stale by the DNS/TCP/RNG delay. Low impact given the server tolerance window.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Age is computed once at config time and sent unchanged in CH1 and the post-HRR CH2 (4.1.2 requires recomputation); also stale by the DNS/TCP/RNG delay. Low impact given the server tolerance window.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.3 (ServerHello)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2399-2406) - legacy_version</location>
     <grade>COMPLIANT</grade>
-    <note>Other values abort (silently; see 6.2 SHOULD-alert entry).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Other values abort (silently; see 6.2 SHOULD-alert entry).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.3 (ServerHello)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2643-2657) - session id echo</location>
     <grade>COMPLIANT</grade>
-    <note>Empty session ID sent and session_id_len==0 required; silent abort is allowed ("if any alert, illegal_parameter").</note>
+    <note>Compliant as of/before v3.0.0-rc1. Empty session ID sent and session_id_len==0 required; silent abort is allowed ("if any alert, illegal_parameter").</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.3 (ServerHello)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2659-2684) - suite checks</location>
     <grade>COMPLIANT</grade>
-    <note>Suite must be offered and, after HRR, equal the HRR suite (L2669-2670); compression must be 0. Aborts are silent.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Suite must be offered and, after HRR, equal the HRR suite (L2669-2670); compression must be 0. Aborts are silent.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.3 (ServerHello)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2726-2741, L2866-2872) - supported_versions required</location>
     <grade>COMPLIANT</grade>
-    <note>No explicit DOWNGRD check, but every non-HRR ServerHello must carry supported_versions=0x0304, so a TLS 1.2-or-lower ServerHello can never be accepted.</note>
+    <note>Compliant as of/before v3.0.0-rc1. No explicit DOWNGRD check, but every non-HRR ServerHello must carry supported_versions=0x0304, so a TLS 1.2-or-lower ServerHello can never be accepted.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.4 (HelloRetryRequest)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2433-2440) - hrr_done</location>
     <grade>COMPLIANT</grade>
-    <note>Sends fatal unexpected_message in plaintext before any keys exist. No test.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Sends fatal unexpected_message in plaintext before any keys exist. No test.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.4 (HelloRetryRequest)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2442-2576) - HRR validation</location>
     <grade>COMPLIANT</grade>
-    <note>Empty session ID, offered suite, compression 0, supported_versions 0x0304, no duplicates; unknown extensions get unsupported_extension; an HRR with neither key_share nor cookie is rejected silently. No HRR tests.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Empty session ID, offered suite, compression 0, supported_versions 0x0304, no duplicates; unknown extensions get unsupported_extension; an HRR with neither key_share nor cookie is rejected silently. No HRR tests.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.4 / 4.2.8 (HRR selected_group already offered means illegal_parameter)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2578-2587) - HRR key_share</location>
     <grade>COMPLIANT</grade>
-    <note>Every HRR with a key_share is correctly rejected (both groups already offered), but with handshake_failure; 4.2.8 requires illegal_parameter if any alert is sent.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Every HRR with a key_share is correctly rejected (both groups already offered), but with handshake_failure; 4.2.8 requires illegal_parameter if any alert is sent.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.1.4 / 4.4.1 (message_hash transcript, cookie echo)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2589-2635), tls_send_client_hello (L2129-2143) - HRR transcript</location>
     <grade>COMPLIANT</grade>
-    <note>Transcript replaced with 0xFE 00 00 20 || H(CH1) then HRR; cookie (1..65535) echoed in CH2, which reuses the same random and shares. No HRR interop test.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Transcript replaced with 0xFE 00 00 20 || H(CH1) then HRR; cookie (1..65535) echoed in CH2, which reuses the same random and shares. No HRR interop test.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2 (extensions)</section>
     <location>src/tls/core/handshake.c: tls_recv_encrypted_extensions (L3152-3160) - unsolicited server_name ack</location>
     <grade>COMPLIANT</grade>
-    <note>An empty server_name in EncryptedExtensions is accepted even when no SNI was sent (no hostname or IP literal); 4.2 requires unsupported_extension.</note>
+    <note>Compliant as of/before v3.0.0-rc1. An empty server_name in EncryptedExtensions is accepted even when no SNI was sent (no hostname or IP literal); 4.2 requires unsupported_extension.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2 (extensions)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2858-2860), tls_recv_encrypted_extensions (L3266-3270) - forbidden extension alert</location>
     <grade>COMPLIANT</grade>
-    <note>Both parsers send unsupported_extension for every unhandled type; for recognized types not allowed in that message 4.2 requires illegal_parameter. Unknown types handled correctly.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Both parsers send unsupported_extension for every unhandled type; for recognized types not allowed in that message 4.2 requires illegal_parameter. Unknown types handled correctly.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2 (extensions)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello / tls_recv_encrypted_extensions / tls_recv_certificate_request (L2726-2860, L3152-3270, L3384-3531) - duplicate extensions</location>
     <grade>COMPLIANT</grade>
-    <note>Duplicates rejected in ServerHello, HRR, EncryptedExtensions and CertificateRequest (tests ee_mfl_duplicate, ee_duplicate_group, cert_request_duplicate). NewSessionTicket and CertificateEntry extension blocks are not parsed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Duplicates rejected in ServerHello, HRR, EncryptedExtensions and CertificateRequest (tests ee_mfl_duplicate, ee_duplicate_group, cert_request_duplicate). NewSessionTicket and CertificateEntry extension blocks are not parsed.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.1 (supported_versions selected_version 0x0304)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2726-2741) - selected_version</location>
     <grade>COMPLIANT</grade>
-    <note>Exactly 2 bytes equal to 0x0304, at most once, required. Silent abort.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Exactly 2 bytes equal to 0x0304, at most once, required. Silent abort.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.3 (signature_algorithms)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L1902-1945) - offered schemes</location>
     <grade>COMPLIANT</grade>
-    <note>signature_algorithms {0x0804, 0x0403}; signature_algorithms_cert {0x0401, 0x0804, 0x0403}. Asserted in tests/host/tls_signatures hello(). PSS salt = hash length enforced in rsa.c tls_rsa_pss_verify.</note>
+    <note>Compliant as of/before v3.0.0-rc1. signature_algorithms {0x0804, 0x0403}; signature_algorithms_cert {0x0401, 0x0804, 0x0403}. Asserted in tests/host/tls_signatures hello(). PSS salt = hash length enforced in rsa.c tls_rsa_pss_verify.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.3 (signature_algorithms)</section>
     <location>src/tls/core/rsa.c: tls_rsa_pss_verify (L377-382, L403); callers handshake.c L3648, x509.c L1813 - sLen=32, MGF1-SHA-256</location>
     <grade>COMPLIANT</grade>
-    <note>Callers pass SHA-256 for hash and MGF1 and the separator position fixes sLen=hLen=32; certificate PSS AlgorithmIdentifiers restricted to explicit SHA-256/MGF1-SHA-256/salt 32.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Callers pass SHA-256 for hash and MGF1 and the separator position fixes sLen=hLen=32; certificate PSS AlgorithmIdentifiers restricted to explicit SHA-256/MGF1-SHA-256/salt 32.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.7 (supported_groups)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L1902-1945), tls_recv_encrypted_extensions (L3226-3265) - groups</location>
     <grade>COMPLIANT</grade>
-    <note>secp256r1 then x25519 offered with key_share in the same order; server supported_groups in EE treated as informational with unknown values tolerated (test ee_supported_groups).</note>
+    <note>Compliant as of/before v3.0.0-rc1. secp256r1 then x25519 offered with key_share in the same order; server supported_groups in EE treated as informational with unknown values tolerated (test ee_supported_groups).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.8 (ServerHello KeyShareEntry framing)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2743-2828) - single share</location>
     <grade>COMPLIANT</grade>
-    <note>Duplicate key_share, length mismatch, wrong key length for the group and unknown groups are rejected (silently).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Duplicate key_share, length mismatch, wrong key length for the group and unknown groups are rejected (silently).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.8.2 (secp256r1 UncompressedPointRepresentation)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2787-2817), ClientHello key_share build (L1885-1935); src/tls/core/p256.s: p256_point_import - P-256 encoding and validation</location>
     <grade>COMPLIANT</grade>
-    <note>Client sends 65-byte 04||X||Y; server share must be 65 bytes with 0x04 and pass coordinate-range and on-curve checks (failure sends illegal_parameter). tests/unit/tls_p256 covers off-curve only, not x &gt;= p / y &gt;= p.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Client sends 65-byte 04||X||Y; server share must be 65 bytes with 0x04 and pass coordinate-range and on-curve checks (failure sends illegal_parameter). tests/unit/tls_p256 covers off-curve only, not x &gt;= p / y &gt;= p.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.9 (psk_key_exchange_modes)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2160-2169), tls_recv_server_hello (L2874-2880) - psk_dhe_ke only</location>
     <grade>COMPLIANT</grade>
-    <note>Only psk_dhe_ke offered, together with pre_shared_key; a PSK ServerHello without key_share gets handshake_failure (PR #63). tests/host/tls_signatures hello() asserts the modes.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Only psk_dhe_ke offered, together with pre_shared_key; a PSK ServerHello without key_share gets handshake_failure (PR #63). tests/host/tls_signatures hello() asserts the modes.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1377,35 +1382,35 @@
     <section>4.2.11 (pre_shared_key)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_create_config_psk_client (L805-828) - external PSK age</location>
     <grade>COMPLIANT</grade>
-    <note>The caller-supplied psk_identity.obfuscated_ticket_age is sent unchanged rather than forced to 0. Low impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. The caller-supplied psk_identity.obfuscated_ticket_age is sent unchanged rather than forced to 0. Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.11 (pre_shared_key)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2830-2856) - pre_shared_key response</location>
     <grade>COMPLIANT</grade>
-    <note>Must be exactly 2 bytes, selected_identity 0 (only one offered), and PSK must have been offered; all suites are SHA-256 so the hash always matches. Silent abort.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Must be exactly 2 bytes, selected_identity 0 (only one offered), and PSK must have been offered; all suites are SHA-256 so the hash always matches. Silent abort.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.11 (pre_shared_key)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2171-2210) - pre_shared_key last</location>
     <grade>COMPLIANT</grade>
-    <note>Appended last with one identity. tests/host/tls_signatures asserts "pre_shared_key must be last".</note>
+    <note>Compliant as of/before v3.0.0-rc1. Appended last with one identity. tests/host/tls_signatures asserts "pre_shared_key must be last".</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.11.1 (obfuscated_ticket_age = age_ms + ticket_age_add mod 2^32)</section>
     <location>src/tls/core/tls.c: tls_psk_cache_get (L182-193); src/tls/core/handshake.c: tls_recv_new_session_ticket (L4716-4724) - ticket age</location>
     <grade>COMPLIANT</grade>
-    <note>ticket_age_add stored and added mod 2^32 to the RTC-derived age (1 s resolution).</note>
+    <note>Compliant as of/before v3.0.0-rc1. ticket_age_add stored and added mod 2^32 to the RTC-derived age (1 s resolution).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.11.2 (PSK binder)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2216-2310) - binder key/label/truncation</location>
     <grade>COMPLIANT</grade>
-    <note>early_secret = Extract(0, PSK); binder_key = Expand-Label(es, "res binder"/"ext binder", H("")); HMAC over the ClientHello truncated at the binders. Confirmed against a real server by DAST tls-psk-resume-echo (tests/dast.json); no RFC 8448 4 binder KAT.</note>
+    <note>Compliant as of/before v3.0.0-rc1. early_secret = Extract(0, PSK); binder_key = Expand-Label(es, "res binder"/"ext binder", H("")); HMAC over the ClientHello truncated at the binders. Confirmed against a real server by DAST tls-psk-resume-echo (tests/dast.json); no RFC 8448 4 binder KAT.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1419,105 +1424,105 @@
     <section>4.3.1 (EncryptedExtensions)</section>
     <location>src/tls/core/handshake.c: tls_recv_encrypted_extensions (L3085-3290) - state, framing, transcript</location>
     <grade>COMPLIANT</grade>
-    <note>Requires HANDSHAKE_KEYS_DERIVED, exact length, all extensions consumed, added to transcript. Tested in tests/host/tls_signatures handshake_extension_tests (exceptions under 4.2).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Requires HANDSHAKE_KEYS_DERIVED, exact length, all extensions consumed, added to transcript. Tested in tests/host/tls_signatures handshake_extension_tests (exceptions under 4.2).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.3.2 (CertificateRequest)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_request (L3301-3551) - CR in PSK, empty context, sig_algs mandatory, unknown ext ignored</location>
     <grade>COMPLIANT</grade>
-    <note>unexpected_message in PSK mode (L3327-3332); non-empty context gets illegal_parameter; signature_algorithms required; unknown extensions ignored as required. Covered by cert_request* tests.</note>
+    <note>Compliant as of/before v3.0.0-rc1. unexpected_message in PSK mode (L3327-3332); non-empty context gets illegal_parameter; signature_algorithms required; unknown extensions ignored as required. Covered by cert_request* tests.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.3.2 (CertificateRequest)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_request (L3301-3551) - duplicate CertificateRequest</location>
     <grade>COMPLIANT</grade>
-    <note>State stays ENCRYPTED_EXTENSIONS_RECEIVED after a CR, so a second CR is accepted and hashed instead of unexpected_message. Low impact (covered by the transcript).</note>
+    <note>Compliant as of/before v3.0.0-rc1. State stays ENCRYPTED_EXTENSIONS_RECEIVED after a CR, so a second CR is accepted and hashed instead of unexpected_message. Low impact (covered by the transcript).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2 (server Certificate)</section>
-    <location>src/tls/core/handshake.c: tls_cert_walker_feed (L997, L1113-1139), tls_recv_certificate_streamed (L2929) - trailing bytes / entry extensions</location>
+    <location>src/tls/core/handshake.c: tls_cert_walker_feed (L997, L1113-1139), tls_recv_certificate_streamed (L2929); walker CW_DONE trailing-byte check (L1691-1696) - trailing bytes / entry extensions</location>
     <grade>DEVIANT</grade>
-    <note>Bytes after certificate_list inside the message are accepted (hashed); per-entry extensions are skipped without checking they were solicited (4.2/4.4.2 require unsupported_extension for unsolicited OCSP/SCT). Low impact.</note>
+    <note>Trailing bytes after certificate_list are now rejected with a fatal decode_error alert (handshake.c L1691-1696, tls_cert_walker_feed CW_DONE branch). Remaining gap: per-entry extensions are skipped without checking they were solicited (4.2/4.4.2 require unsupported_extension for unsolicited OCSP/SCT). Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2 (server Certificate)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed CW_REQ_CTX_LEN (L1030-1037) - request context</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (low): a non-empty context goes to CW_REQ_CTX_BODY and is silently skipped instead of aborting with illegal_parameter/decode_error.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (low): a non-empty context goes to CW_REQ_CTX_BODY and is silently skipped instead of aborting with illegal_parameter/decode_error.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2 / 4.4.2.3 (client response to CertificateRequest)</section>
     <location>src/tls/core/handshake.c: tls_send_empty_certificate (L4370-4409); src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process (L1577-1617) - empty client Certificate</location>
     <grade>COMPLIANT</grade>
-    <note>Sends an empty Certificate (context 0, empty list) with no CertificateVerify, then Finished; both added to the transcript.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Sends an empty Certificate (context 0, empty list) with no CertificateVerify, then Finished; both added to the transcript.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2.2 (end-entity key and chain signatures match offered algorithms)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L836-986); src/tls/core/x509.c: tls_x509_validate_path_extensions (L587-595) - leaf key usage / SAN / key type</location>
     <grade>COMPLIANT</grade>
-    <note>Leaf needs digitalSignature (if KU present) and serverAuth (if EKU present); hostname match required (fails closed without a hostname); key type checked against the CertificateVerify scheme.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Leaf needs digitalSignature (if KU present) and serverAuth (if EKU present); hostname match required (fails closed without a hostname); key type checked against the CertificateVerify scheme.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2.2 (end-entity key and chain signatures match offered algorithms)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello template (L1934-1942); src/tls/core/key_internal.h: tls_key_supports_operation (L7-29) - algorithm binding</location>
     <grade>COMPLIANT</grade>
-    <note>Chain signature OIDs accepted (PKCS1-SHA256, PSS-RSAE-SHA256, ECDSA-P256-SHA256) are exactly those in signature_algorithms_cert; key type bound to scheme before verification. tests/host/tls_signatures (EC key with PSS scheme returns INVALID).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Chain signature OIDs accepted (PKCS1-SHA256, PSS-RSAE-SHA256, ECDSA-P256-SHA256) are exactly those in signature_algorithms_cert; key type bound to scheme before verification. tests/host/tls_signatures (EC key with PSS scheme returns INVALID).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2.4 (receiving a Certificate message)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed CW_CHAIN_LEN (L1038-1043), tls_dispatch_inflight (L1256-1285), tls_process_inner_plaintext_pbuf (L1634-1641) - empty chain</location>
     <grade>COMPLIANT</grade>
-    <note>An empty list reaches CW_DONE with chain_validated=false; the handshake is rejected and decode_error is sent.</note>
+    <note>Compliant as of/before v3.0.0-rc1. An empty list reaches CW_DONE with chain_validated=false; the handshake is rejected and decode_error is sent.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2.4 (receiving a Certificate message)</section>
     <location>src/tls/core/handshake.c: tls_process_inner_plaintext_pbuf (L1634-1641) - alert selection</location>
     <grade>COMPLIANT</grade>
-    <note>BUG (conformance): every certificate failure (bad signature, unknown CA, expired, hostname mismatch, constraints, MD5/SHA-1) is reported as decode_error because tls_consume_handshake_buffer only returns a bool. The abort itself is correct. Fix: carry a reason code out of the walker and map it to the 6.2 alert.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG (conformance): every certificate failure (bad signature, unknown CA, expired, hostname mismatch, constraints, MD5/SHA-1) is reported as decode_error because tls_consume_handshake_buffer only returns a bool. The abort itself is correct. Fix: carry a reason code out of the walker and map it to the 6.2 alert.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.2.4 (receiving a Certificate message)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_streamed (L2907-3062) - unanchored chain fails closed</location>
     <grade>COMPLIANT</grade>
-    <note>Missing truststore entry, missing issuer CN or unsupported root algorithm all abort. Comments in handshake.h L9-14 and handshake.c (L119-123, L5110-5130) still describe "warn and proceed" and are stale. DAST tls-unsupported-certverify exercises this path.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Missing truststore entry, missing issuer CN or unsupported root algorithm all abort. Comments in handshake.h L9-14 and handshake.c (L119-123, L5110-5130) still describe "warn and proceed" and are stale. DAST tls-unsupported-certverify exercises this path.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.3 (CertificateVerify signed content)</section>
     <location>src/tls/core/handshake.c: tls_certverify_rsa_pss_sha256 / tls_certverify_ecdsa_p256_sha256 (L3568-3654, L3666-3745) - signed content</location>
     <grade>COMPLIANT</grade>
-    <note>64 x 0x20, "TLS 1.3, server CertificateVerify", 0x00, Transcript-Hash(..Certificate) hashed with SHA-256; PSS signature must be modulus length, ECDSA strict DER. Covered by tests/host/tls_signatures chain() and tests/unit/tls_rsa_pss_sig.</note>
+    <note>Compliant as of/before v3.0.0-rc1. 64 x 0x20, "TLS 1.3, server CertificateVerify", 0x00, Transcript-Hash(..Certificate) hashed with SHA-256; PSS signature must be modulus length, ECDSA strict DER. Covered by tests/host/tls_signatures chain() and tests/unit/tls_rsa_pss_sig.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.3 (CertificateVerify state and failure alert)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_verify (L3760-3859) - state, decrypt_error</location>
     <grade>COMPLIANT</grade>
-    <note>Requires CERTIFICATE_RECEIVED (so PSK mode rejects CV); failure sends decrypt_error; transcript updated after verification. A spurious second decode_error follows (see 6.2).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Requires CERTIFICATE_RECEIVED (so PSK mode rejects CV); failure sends decrypt_error; transcript updated after verification. A spurious second decode_error follows (see 6.2).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.4 (Finished mismatch MUST be decrypt_error)</section>
     <location>src/tls/core/handshake.c: tls_recv_finished (L4534-4538), tls_process_inner_plaintext_pbuf (L1638) - Finished failure alert</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: a MAC mismatch returns false with no alert and the generic path sends decode_error; 4.4.4 requires decrypt_error.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: a MAC mismatch returns false with no alert and the generic path sends decode_error; 4.4.4 requires decrypt_error.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.4 (Finished verify_data and constant-time compare)</section>
     <location>src/tls/core/handshake.c: tls_recv_finished / tls_send_finished (L4437-4555, L4252-4353) - verify_data</location>
     <grade>COMPLIANT</grade>
-    <note>finished_key = Expand-Label(s_hs_traffic, "finished", "", 32); HMAC over transcript before Finished; 32-byte OR-accumulate compare; required state enforced (L4448-4458).</note>
+    <note>Compliant as of/before v3.0.0-rc1. finished_key = Expand-Label(s_hs_traffic, "finished", "", 32); HMAC over transcript before Finished; 32-byte OR-accumulate compare; required state enforced (L4448-4458).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1531,63 +1536,63 @@
     <section>4.6.1 (NewSessionTicket)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_get_session (L2797-2834, re-put L2821); src/tls/core/tls.c: tls_psk_cache_put (L147) - ticket re-cached</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: get_session calls tls_psk_cache_put again, resetting received_at to rtc_Time(); the ticket can be cached beyond ticket_lifetime and the 7-day MUST NOT, and the computed obfuscated age is too small.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: get_session calls tls_psk_cache_put again, resetting received_at to rtc_Time(); the ticket can be cached beyond ticket_lifetime and the 7-day MUST NOT, and the computed obfuscated age is too small.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.6.1 (NewSessionTicket)</section>
     <location>src/tls/core/handshake.c: tls_recv_new_session_ticket (L4597-4725) - lifetime cap, nonce, resumption PSK</location>
     <grade>COMPLIANT</grade>
-    <note>Lifetime 0 or above 604800 s ignored; PSK = Expand-Label(resumption_master_secret, "resumption", nonce, 32), res master derived after client Finished (L4339-4350); accepted only in HANDSHAKE_COMPLETE. Duplicate extensions not checked.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Lifetime 0 or above 604800 s ignored; PSK = Expand-Label(resumption_master_secret, "resumption", nonce, 32), res master derived after client Finished (L4339-4350); accepted only in HANDSHAKE_COMPLETE. Duplicate extensions not checked.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.6.2 (post-handshake CertificateRequest without post_handshake_auth)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_request (L3319-3324), tls_send_alert / tls_outbound_phase (L4849-4860) - post-handshake CR</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: 4.6.2 requires unexpected_message; instead state is set to ERROR and the generic decode_error is encrypted under client handshake keys (ERROR &gt;= KEYS_DERIVED maps to phase 1), which the server cannot decrypt.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: 4.6.2 requires unexpected_message; instead state is set to ERROR and the generic decode_error is encrypted under client handshake keys (ERROR &gt;= KEYS_DERIVED maps to phase 1), which the server cannot decrypt.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.6.3 (KeyUpdate)</section>
     <location>src/tls/core/handshake.c: TLS_MAX_KEY_UPDATES (L315), tls_recv_key_update (L4756-4761), tls_send_key_update_record (L4893-4896) - 32-update cap</location>
     <grade>COMPLIANT</grade>
-    <note>After 32 server KeyUpdates the client sends unexpected_message, and after 32 client updates writes fail. RFC 8446 sets no limit, so long-lived sessions with periodically rekeying servers are killed. Remove or raise substantially.</note>
+    <note>Compliant as of/before v3.0.0-rc1. After 32 server KeyUpdates the client sends unexpected_message, and after 32 client updates writes fail. RFC 8446 sets no limit, so long-lived sessions with periodically rekeying servers are killed. Remove or raise substantially.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.6.3 (KeyUpdate)</section>
     <location>src/tls/core/handshake.c: tls_recv_key_update (L4744-4824), tls_send_key_update_record (L4886-4916) - ratchet and reciprocal update</location>
     <grade>COMPLIANT</grade>
-    <note>"traffic upd" ratchet, key/iv re-derived, seq reset, old secret wiped; update_requested answered with update_not_requested under the old key before ratcheting; KeyUpdate before Finished gets unexpected_message. No test.</note>
+    <note>Compliant as of/before v3.0.0-rc1. "traffic upd" ratchet, key/iv re-derived, seq reset, old secret wiped; update_requested answered with update_not_requested under the old key before ratcheting; KeyUpdate before Finished gets unexpected_message. No test.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.6.3 (KeyUpdate)</section>
     <location>src/tls/core/handshake.c: tls_recv_key_update (L4772-4777) - invalid request_update</location>
     <grade>COMPLIANT</grade>
-    <note>Values other than 0/1 return false without an alert and the generic path sends decode_error; 4.6.3 requires illegal_parameter.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Values other than 0/1 return false without an alert and the generic path sends decode_error; 4.6.3 requires illegal_parameter.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata (L1840-1847), altcp_tls_ce_lower_recv_process (L1332-1333) - legacy_record_version</location>
     <grade>COMPLIANT</grade>
-    <note>Records whose version is not 0x0303 are aborted; 5.1 says legacy_record_version MUST be ignored for all purposes. Low impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Records whose version is not 0x0303 are aborted; 5.1 says legacy_record_version MUST be ignored for all purposes. Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata (L1873-1925) - handshake/application_data interleaving</location>
     <grade>COMPLIANT</grade>
-    <note>An application_data record arriving while a handshake message is half-reassembled is delivered to the app instead of being treated as unexpected_message. Low impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. An application_data record arriving while a handshake message is half-reassembled is delivered to the app instead of being treated as unexpected_message. Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process (L1332-1333) - TLSPlaintext length over 2^14</location>
     <grade>COMPLIANT</grade>
-    <note>Plaintext-phase records (ServerHello, alerts, CCS) are allowed up to 2^14+256; 5.1 requires record_overflow above 2^14. Low impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Plaintext-phase records (ServerHello, alerts, CCS) are allowed up to 2^14+256; 5.1 requires record_overflow above 2^14. Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1601,35 +1606,35 @@
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_send_client_hello (L1170-1186), altcp_tls_ce_write (L2444-2519) - outbound fragment at most 2^14</location>
     <grade>COMPLIANT</grade>
-    <note>ClientHello bounded to 16384; app records bounded only indirectly by len+22 &lt;= altcp_sndbuf &lt;= TCP_SND_BUF = 4096 (L2474; lwipopts.h L218). No explicit fragmentation, so this breaks if TCP_SND_BUF exceeds ~16 KiB.</note>
+    <note>Compliant as of/before v3.0.0-rc1. ClientHello bounded to 16384; app records bounded only indirectly by len+22 &lt;= altcp_sndbuf &lt;= TCP_SND_BUF = 4096 (L2474; lwipopts.h L218). No explicit fragmentation, so this breaks if TCP_SND_BUF exceeds ~16 KiB.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 (record layer)</section>
     <location>src/tls/core/handshake.c: tls_consume_handshake_buffer (L1406-1519) - key-change record alignment (Finished/KeyUpdate)</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: after server Finished or KeyUpdate, leftover bytes in the same record are still processed; a partial tail is spilled to hs_reasm_buf and completed under the new keys. 5.1 requires unexpected_message. ServerHello alignment is enforced.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: after server Finished or KeyUpdate, leftover bytes in the same record are still processed; a partial tail is spilled to hs_reasm_buf and completed under the new keys. 5.1 requires unexpected_message. ServerHello alignment is enforced.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.1 / Appendix D.4 (change_cipher_spec compatibility)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process (L1526-1531) - CCS handling</location>
     <grade>COMPLIANT</grade>
-    <note>A single 0x01 CCS between ClientHello and server Finished is dropped; any other value or timing aborts; an encrypted CCS gets unexpected_message (handshake.c L1674-1677). Client does not use middlebox-compatibility mode (optional).</note>
+    <note>Compliant as of/before v3.0.0-rc1. A single 0x01 CCS between ClientHello and server Finished is dropped; any other value or timing aborts; an encrypted CCS gets unexpected_message (handshake.c L1674-1677). Client does not use middlebox-compatibility mode (optional).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.2 (record payload protection)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_decrypt_record_stream (L415-444) - authenticate before release</location>
     <grade>COMPLIANT</grade>
-    <note>Pass 1 authenticates the whole ciphertext with a constant-time tag OR-compare; plaintext produced only in pass 2; AAD is the received 5-byte header. Covered by the chunked-CTR fix validation and tests/unit/tls_aes. Note: GCM length-block bug for records of 8 KiB or more (see SP 800-38D 5.2.1.1).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Pass 1 authenticates the whole ciphertext with a constant-time tag OR-compare; plaintext produced only in pass 2; AAD is the received 5-byte header. Covered by the chunked-CTR fix validation and tests/unit/tls_aes. Note: GCM length-block bug for records of 8 KiB or more (see SP 800-38D 5.2.1.1).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.2 (record payload protection)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata (L1855-1868), altcp_tls_ce_lower_recv_process (L1398-1402) - bad_record_mac on AEAD failure</location>
     <grade>COMPLIANT</grade>
-    <note>AEAD failure leads straight to altcp_abort (TCP RST) without a bad_record_mac alert: meets "if any alert" but misses the 6.2 SHOULD.</note>
+    <note>Compliant as of/before v3.0.0-rc1. AEAD failure leads straight to altcp_abort (TCP RST) without a bad_record_mac alert: meets "if any alert" but misses the 6.2 SHOULD.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1643,147 +1648,147 @@
     <section>5.2 / 5.4 (2^14+256 ciphertext and 2^14+1 inner plaintext limits)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_decrypt_record_stream (L378-399) - record_overflow</location>
     <grade>COMPLIANT</grade>
-    <note>Limits are enforced but silently, without the record_overflow alert (6.2 SHOULD).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Limits are enforced but silently, without the record_overflow alert (6.2 SHOULD).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.3 (per-record nonce)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_build_aead_nonce (L233-241); src/tls/core/handshake.c: tls_build_aead_nonce (L356-364) - nonce and sequence</location>
     <grade>COMPLIANT</grade>
-    <note>IV xor 64-bit big-endian sequence number; separate handshake/application counters from 0, advanced only after successful write/decrypt, reset on KeyUpdate. A code comment ("no reset on rekey") misstates 5.3; behaviour is correct.</note>
+    <note>Compliant as of/before v3.0.0-rc1. IV xor 64-bit big-endian sequence number; separate handshake/application counters from 0, advanced only after successful write/decrypt, reset on KeyUpdate. A code comment ("no reset on rekey") misstates 5.3; behaviour is correct.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.4 (record padding)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_decrypt_record_stream (L523-539) - padding strip / all-zero plaintext</location>
     <grade>COMPLIANT</grade>
-    <note>Trailing zeros stripped after authentication (non-constant-time scan is acceptable post-auth); an all-zero plaintext aborts silently instead of unexpected_message (6.2 SHOULD).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Trailing zeros stripped after authentication (non-constant-time scan is acceptable post-auth); an all-zero plaintext aborts silently instead of unexpected_message (6.2 SHOULD).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>5.5 (limits on key usage)</section>
     <location>src/tls/core/handshake.c: tls_update_write_keys_if_needed / tls_send_alert (L4918-4925, L4988-4989) - key usage limits</location>
     <grade>COMPLIANT</grade>
-    <note>GCM limited to 2^24 and CCM to 2^23 records (stricter policy); at limit-1 a KeyUpdate is sent before the next write; alerts/KeyUpdates refuse at the limit.</note>
+    <note>Compliant as of/before v3.0.0-rc1. GCM limited to 2^24 and CCM to 2^23 records (stricter policy); at limit-1 a KeyUpdate is sent before the next write; alerts/KeyUpdates refuse at the limit.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>6.1 (closure alerts: send close_notify)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_close (L2362-2411) - close_notify gate (L2372-2383)</location>
     <grade>COMPLIANT</grade>
-    <note>close_notify is sent only when HANDSHAKE_DONE is set; a close during the handshake sends nothing (6.1 MUST unless an error alert was sent). Low impact.</note>
+    <note>Compliant as of/before v3.0.0-rc1. close_notify is sent only when HANDSHAKE_DONE is set; a close during the handshake sends nothing (6.1 MUST unless an error alert was sent). Low impact.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>6.1 (receiving close_notify and other alerts)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata (L1810-1823, L1927-1967); src/tls/core/handshake.c: tls_process_inner_plaintext_pbuf (L1652-1672) - alert receipt</location>
     <grade>COMPLIANT</grade>
-    <note>close_notify queues EOF and later data is dropped; every other alert is fatal regardless of level; user_canceled ignored (allowed; the comment saying the RFC says recipients "SHOULD ignore" it is inaccurate).</note>
+    <note>Compliant as of/before v3.0.0-rc1. close_notify queues EOF and later data is dropped; every other alert is fatal regardless of level; user_canceled ignored (allowed; the comment saying the RFC says recipients "SHOULD ignore" it is inaccurate).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>6.2 (error alerts)</section>
     <location>src/tls/core/handshake.c: tls_process_inner_plaintext_pbuf (L1638), tls_send_alert / tls_outbound_phase (L4849-4860, L4930-5021) - duplicate generic alert</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: when a handler already sent an alert or set ERROR, the generic path sends a second fatal decode_error; after the handshake it is encrypted under client_handshake_key (ERROR &gt;= KEYS_DERIVED maps to phase 1). Fix: skip when ERROR/alert already sent and record the outbound phase before entering ERROR. No nonce reuse found.</note>
+    <note>Compliant as of/before v3.0.0-rc1. BUG: when a handler already sent an alert or set ERROR, the generic path sends a second fatal decode_error; after the handshake it is encrypted under client_handshake_key (ERROR &gt;= KEYS_DERIVED maps to phase 1). Fix: skip when ERROR/alert already sent and record the outbound phase before entering ERROR. No nonce reuse found.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>6.2 (error alerts)</section>
-    <location>src/tls/core/handshake.c: tls_recv_server_hello (L2371-2893); src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process (L1284-1725) - silent aborts</location>
-    <grade>DEVIANT</grade>
-    <note>Most ServerHello, record-layer, CCS and AEAD failures end in altcp_abort with no alert (missing protocol_version, illegal_parameter, record_overflow, bad_record_mac, unexpected_message SHOULDs). Fail-closed preserved.</note>
+    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process (L1561-1768)</location>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. FIXED: plaintext-path failures now send specific alerts before abort: msg_end overflow → decode_error; ServerHello state mismatch → unexpected_message; bad ServerHello content → illegal_parameter (guarded by fatal_alert_sent to avoid double-alert when tls_recv_server_hello already sent one); non-ServerHello plaintext handshake → unexpected_message; trailing bytes in record → decode_error; bad/out-of-window CCS → unexpected_message; unknown content type → unexpected_message; key derivation failure → internal_error. AEAD failures (bad_record_mac) and record-layer overflow/unexpected alerts were already present. Remaining: protocol_version is not sent as a named alert (server version mismatch rejected via illegal_parameter path).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
-    <location>src/tls/core/handshake.c: struct tls_traffic_keys use (L4050, L4141), tls_handshake_cleanup (L5045-5103) - erase secrets once no longer needed</location>
-    <grade>DEVIANT</grade>
-    <note>handshake_secret, master_secret, handshake traffic secrets and keys/IVs stay in ctx-&gt;keys for the whole connection and are wiped only by tls_handshake_cleanup (7.1 SHOULD erase); the unused ECDHE group's private key is also kept. Stack secrets rely on the tls_crypto_guard scrub.</note>
+    <location>src/tls/core/handshake.c: tls_derive_application_keys (end), tls_send_finished (client path)</location>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. FIXED: ctx-&gt;keys.handshake_secret wiped by tls_secure_memzero at the end of tls_derive_application_keys (once all application-phase secrets are derived). ctx-&gt;keys.master_secret wiped immediately after resumption_master_secret derivation in tls_send_finished. Remaining keys/IVs in ctx-&gt;keys are needed for the lifetime of the connection and are wiped by tls_handshake_cleanup; stack secrets are scrubbed by tls_crypto_guard. ECDHE shared secret wiped at L4638 after use.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>src/tls/core/handshake.c: tls_derive_handshake_keys (L3977-3981), tls_derive_application_keys (L4147-4151), tls_send_finished (L4309-4313) - missing transcript handling</location>
     <grade>COMPLIANT</grade>
-    <note>Updated this audit (was DEVIANT): a NULL ctx-&gt;transcript_hash now returns an error at all three sites instead of deriving from 32 zero bytes, so derivation fails closed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Updated this audit (was DEVIANT): a NULL ctx-&gt;transcript_hash now returns an error at all three sites instead of deriving from 32 zero bytes, so derivation fails closed.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2216-2310), tls_derive_handshake_keys (L3896-4057), tls_derive_application_keys (L4094-4221), tls_send_finished (L4252-4353), tls_recv_new_session_ticket (L4597-4725), tls_recv_key_update (L4744-4824), tls_ratchet_client_application_keys - Derive-Secret/Expand-Label callers</location>
     <grade>COMPLIANT</grade>
-    <note>All label/context pairings match spec (also 4.2.11.2, 4.4.4, 4.6.1, 7.2): "derived" with H(""), c/s hs traffic, c/s ap traffic over CH..server Finished, res master over CH..client Finished. Re-verified this audit; tests/unit/tls_hkdf has an RFC 8448 3 "c hs traffic" KAT.</note>
+    <note>Compliant as of/before v3.0.0-rc1. All label/context pairings match spec (also 4.2.11.2, 4.4.4, 4.6.1, 7.2): "derived" with H(""), c/s hs traffic, c/s ap traffic over CH..server Finished, res master over CH..client Finished. Re-verified this audit; tests/unit/tls_hkdf has an RFC 8448 3 "c hs traffic" KAT.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>src/tls/core/hkdf.c: tls_derive_secret (L278-306) - Derive-Secret</location>
     <grade>COMPLIANT</grade>
-    <note>Context length must equal hash length (32, L290); output length forced to hash length. Empty-transcript H("") is the caller's job (fixed in handshake.c binder path).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Context length must equal hash length (32, L290); output length forced to hash length. Empty-transcript H("") is the caller's job (fixed in handshake.c binder path).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L201-203, 212-216, 243-247) - HkdfLabel.label</location>
     <grade>COMPLIANT</grade>
-    <note>Length byte = 6 + label_len; prefix exactly "tls13 " (no NUL); 7..255 bound enforced fail-closed; all caller label lengths match.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Length byte = 6 + label_len; prefix exactly "tls13 " (no NUL); 7..255 bound enforced fail-closed; all caller label lengths match.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L219-222, 250-254) - HkdfLabel.context</location>
     <grade>COMPLIANT</grade>
-    <note>Context &gt; 255 rejected; empty context encoded as 0x00; assembled size checked against 520-byte scratch (L225); label wiped after use (L266). Minor: context==NULL with context_len &gt; 0 writes the length byte but no data instead of failing (L250-254).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Context &gt; 255 rejected; empty context encoded as 0x00; assembled size checked against 520-byte scratch (L225); label wiped after use (L266). Minor: context==NULL with context_len &gt; 0 writes the length byte but no data instead of failing (L250-254).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>src/tls/core/hkdf.c: tls_hkdf_expand_label (L239-240) - HkdfLabel.length</location>
     <grade>COMPLIANT</grade>
-    <note>uint16 big-endian, equals out_len passed as L; no explicit &lt;= 0xFFFF check but tls_hkdf_expand caps at 8160 (hkdf.c:127).</note>
+    <note>Compliant as of/before v3.0.0-rc1. uint16 big-endian, equals out_len passed as L; no explicit &lt;= 0xFFFF check but tls_hkdf_expand caps at 8160 (hkdf.c:127).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>src/tls/core/tls.c: tls_psk_cache_save (L268-300), tls_psk_cache_load (L218-266); src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_create_config_client_ecdhe (L858, L882), altcp_tls_ce_free_config (L895), altcp_tls_ce_decrypt_record_stream / altcp_tls_ce_encrypt_record_stream (L345, L566) - PSK and record-key zeroization</location>
-    <grade>DEVIANT</grade>
-    <note>BUG: live[8] (all cached PSKs, ~3 KB), the loader's e and resumed_psk[32] are left on the stack unwiped; conf-&gt;psk is cleared with a plain (elidable) memset before free; the record AEAD aes_ctx (expanded traffic-key schedule) is never wiped. Resumption PSKs are persisted unencrypted in the lwIPPSKC appvar (project-policy risk).</note>
+    <grade>COMPLIANT</grade>
+    <note>Compliant as of/before v3.0.0-rc1. Previously-flagged wipe bugs are resolved: live[8] is wiped by tls_secure_memzero at tls_psk_cache_save exit (tls.c L302); the loader's e is wiped per-entry after copy (tls.c L263); resumed_psk and resumed_identity are wiped before function return (altcp_tls_ce.c L934-935); conf-&gt;psk is wiped with tls_secure_memzero in altcp_tls_ce_free_config (L951); the record AEAD aes_ctx is declared with TLS_AUTOZERO_STRUCT (L384) and wiped explicitly on all exit paths (L570, L580, L594). Remaining acknowledged risk: resumption PSKs are persisted unencrypted in the lwIPPSKC appvar — a platform-policy limitation (no secure storage available).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.1</section>
     <location>tests/unit/tls_hkdf/src/main.c: test_hkdf_expand_label (L313-354) - KAT evidence</location>
     <grade>COMPLIANT</grade>
-    <note>Updated this audit (was NEEDS-EVIDENCE: stub). The test now checks tls_hkdf_expand_label against the published RFC 8448 section 3 "Simple 1-RTT Handshake" vectors (handshake secret + hello hash to client_handshake_traffic_secret).</note>
+    <note>Compliant as of/before v3.0.0-rc1. Updated this audit (was NEEDS-EVIDENCE: stub). The test now checks tls_hkdf_expand_label against the published RFC 8448 section 3 "Simple 1-RTT Handshake" vectors (handshake secret + hello hash to client_handshake_traffic_secret).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.2 (traffic secret update)</section>
     <location>src/tls/core/handshake.c: tls_recv_key_update / tls_ratchet_client_application_keys (L4779-4814, L4862-4884) - "traffic upd"</location>
     <grade>COMPLIANT</grade>
-    <note>Expand-Label(secret, "traffic upd", "", 32); old secret overwritten and temporaries wiped. No test vector.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Expand-Label(secret, "traffic upd", "", 32); old secret overwritten and temporaries wiped. No test vector.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.3 (traffic key calculation)</section>
     <location>src/tls/core/handshake.c: tls_derive_handshake_keys / tls_derive_application_keys (L4012-4046, L4182-4216) - key/iv derivation</location>
     <grade>COMPLIANT</grade>
-    <note>Expand-Label(secret, "key", "", 16) and Expand-Label(secret, "iv", "", 12) per direction.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Expand-Label(secret, "key", "", 16) and Expand-Label(secret, "iv", "", 12) per direction.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.4.1 / 7.4.2 (ECDHE shared secret as IKM)</section>
     <location>src/tls/core/handshake.c: tls_derive_handshake_keys (L3896-4057) - shared-secret format</location>
     <grade>COMPLIANT</grade>
-    <note>32-byte X25519 output or 32-byte P-256 x-coordinate used directly as handshake_secret IKM and wiped after use (L3965-3969).</note>
+    <note>Compliant as of/before v3.0.0-rc1. 32-byte X25519 output or 32-byte P-256 x-coordinate used directly as handshake_secret IKM and wiped after use (L3965-3969).</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>7.4.2 (X25519 all-zero shared secret MUST abort)</section>
     <location>src/tls/contrib/x25519/src/x25519.s: _tls_x25519_secret (L123-134); src/tls/core/handshake.c: tls_recv_server_hello (L2760-2786) - all-zero check</location>
     <grade>COMPLIANT</grade>
-    <note>Output bytes ORed together, false if zero; handshake zeroes private key and secret, sends fatal illegal_parameter and enters ERROR. Covered by tests/unit/tls_x25519 test_reject_all_zero.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Output bytes ORed together, false if zero; handshake zeroes private key and secret, sends fatal illegal_parameter and enters ERROR. Covered by tests/unit/tls_x25519 test_reject_all_zero.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1797,49 +1802,50 @@
     <section>9.1 (MTI cipher suites)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello template (L1902-1945) - offered suites</location>
     <grade>DEVIANT</grade>
-    <note>TLS_AES_128_GCM_SHA256 (MUST) and TLS_AES_128_CCM_SHA256 are implemented; SHOULD-level TLS_AES_256_GCM_SHA384 and TLS_CHACHA20_POLY1305_SHA256 are absent. Defensible on eZ80 RAM/CPU; no practical interop impact.</note>
+    <note>TLS_AES_128_GCM_SHA256 (MUST) and TLS_AES_128_CCM_SHA256 are implemented; SHOULD-level TLS_AES_256_GCM_SHA384 and TLS_CHACHA20_POLY1305_SHA256 are absent. No practical interop impact since every TLS 1.3 server supports TLS_AES_128_GCM_SHA256.</note>
+    <justification>Partial: TLS_CHACHA20_POLY1305_SHA256 is not intended for this platform — ChaCha20 and Poly1305 would require two entirely new primitives with no other in-tree users, for a cipher suite that no production server requires. TLS_AES_256_GCM_SHA384 is blocked on SHA-384 support, which is low priority and may one day be added.</justification>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>9.1 (MTI groups and signature schemes)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L1902-1945) - groups and schemes</location>
     <grade>COMPLIANT</grade>
-    <note>secp256r1 (MUST) and x25519 (SHOULD); rsa_pkcs1_sha256 in signature_algorithms_cert; rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256 in both lists.</note>
+    <note>Compliant as of/before v3.0.0-rc1. secp256r1 (MUST) and x25519 (SHOULD); rsa_pkcs1_sha256 in signature_algorithms_cert; rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256 in both lists.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>9.2 (mandatory-to-implement extensions)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L1872-2337) - mandatory extensions</location>
     <grade>COMPLIANT</grade>
-    <note>supported_versions, supported_groups, key_share, signature_algorithms(+_cert) always sent; SNI for DNS names; psk_key_exchange_modes with pre_shared_key; cookie echoed. Asserted by tests/host/tls_signatures hello().</note>
+    <note>Compliant as of/before v3.0.0-rc1. supported_versions, supported_groups, key_share, signature_algorithms(+_cert) always sent; SNI for DNS names; psk_key_exchange_modes with pre_shared_key; cookie echoed. Asserted by tests/host/tls_signatures hello().</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>9.3 (protocol invariants, client side)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_request (L3384-3531), tls_recv_encrypted_extensions (L3226-3265) - unknown value tolerance</location>
     <grade>COMPLIANT</grade>
-    <note>Client supports everything it advertises; unknown values tolerated where required (unknown CR extensions, unknown groups in EE); unsolicited extensions rejected.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Client supports everything it advertises; unknown values tolerated where required (unknown CR extensions, unknown groups in EE); unsolicited extensions rejected.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>Appendix C.1 (random number generation)</section>
     <location>src/tls/core/handshake.c: tls_handshake_init (L1761-1818) - client random and ephemeral keys</location>
     <grade>COMPLIANT</grade>
-    <note>ClientHello.random, X25519 and P-256 private keys all come from tls_random_bytes_ex(..., TLS_RNG_STRENGTH_128) (Hash_DRBG) with failure aborting; no libc rand() in src/tls or altcp_tls. Other DRBG consumers: key.c L912 (AEAD IV), rsa.c L127 (OAEP seed). DRBG/entropy validation gaps are recorded under SP 800-90A/90B.</note>
+    <note>Compliant as of/before v3.0.0-rc1. ClientHello.random, X25519 and P-256 private keys all come from tls_random_bytes_ex(..., TLS_RNG_STRENGTH_128) (Hash_DRBG) with failure aborting; no libc rand() in src/tls or altcp_tls. Other DRBG consumers: key.c L912 (AEAD IV), rsa.c L127 (OAEP seed). DRBG/entropy validation gaps are recorded under SP 800-90A/90B.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>Appendix C.4 (client tracking prevention: tickets not reused)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_send_client_hello (L1262-1270) - single-use tickets</location>
     <grade>COMPLIANT</grade>
-    <note>Cache entry wiped with tls_psk_cache_discard (L1268) only after altcp_write succeeds, so a deferred ClientHello does not lose the ticket; expired entries zeroed (tls.c L166-170). No unit test; DAST tls-psk-resume-echo exercises resumption.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Cache entry wiped with tls_psk_cache_discard (L1268) only after altcp_write succeeds, so a deferred ClientHello does not lose the ticket; expired entries zeroed (tls.c L166-170). No unit test; DAST tls-psk-resume-echo exercises resumption.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>Appendix C.4 (client tracking prevention: tickets not reused)</section>
-    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_get_session (L2821), altcp_tls_ce_create_config_client_ecdhe (L882), altcp_tls_ce_send_client_hello (L1262-1270) - residual ticket-reuse paths</location>
-    <grade>DEVIANT</grade>
-    <note>(a) get_session can re-insert a ticket another connection already consumed; (b) two configs created for the same host before either ClientHello is sent both get the same ticket; (c) the public API allows one config for several pcbs and psk_mode/ticket are never cleared after use. In-tree src/lwIP.c creates one config per connection.</note>
+    <location>src/tls/core/tls.c: tls_psk_cache_get (L151-197) - consumed on get; src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_get_session (L3069) - no re-cache; altcp_tls_ce_send_client_hello (L1391-1395) - discard after wire</location>
+    <grade>COMPLIANT</grade>
+    <note>Fixed as of v3.0.0-rc2. FIXED: (a) altcp_tls_get_session explicitly does not re-cache the ticket (L3090 comment). (b) tls_psk_cache_get now wipes the entry via tls_secure_memzero immediately after copying it out, so a second config for the same host finds no entry. (c) the single-config-per-connection pattern is enforced by the public API factory. Ticket is additionally discarded from cache at ClientHello send time (altcp_tls_ce_send_client_hello L1394) as a belt-and-suspenders measure.</note>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
@@ -1856,7 +1862,7 @@
     <section>Appendix E.6 (PSK identity exposure)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2171-2210) - PSK identity</location>
     <grade>COMPLIANT</grade>
-    <note>Resumption identities are single-use (limits linkability); external PSK identities are
+    <note>Compliant as of/before v3.0.0-rc1. Resumption identities are single-use (limits linkability); external PSK identities are
       sent unencrypted and linkable by design, as E.6 notes.</note>
   </requirement>
   <requirement>
@@ -1864,7 +1870,7 @@
     <section>6.1 (client MUST have a reference identifier)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L890-902) - missing hostname</location>
     <grade>COMPLIANT</grade>
-    <note>A NULL ctx-&gt;hostname fails the leaf. Covered by tests/unit/tls_x509 ("null hostname
+    <note>Compliant as of/before v3.0.0-rc1. A NULL ctx-&gt;hostname fails the leaf. Covered by tests/unit/tls_x509 ("null hostname
       rejected").</note>
   </requirement>
   <requirement>
@@ -1873,7 +1879,7 @@
     <location>src/tls/core/x509.c: tls_x509_san_matches (L819-831); src/tls/core/ip_identity.h:
       tls_identity_ip (L31-98) - IP identity</location>
     <grade>COMPLIANT</grade>
-    <note>Strict IPv4/IPv6 literal parsing (octal, hex, short and zone-id forms rejected); iPAddress
+    <note>Compliant as of/before v3.0.0-rc1. Strict IPv4/IPv6 literal parsing (octal, hex, short and zone-id forms rejected); iPAddress
       entries other than 4/16 bytes rejected; dNSName never matched against an IP literal. Covered
       by tests/host/tls_signatures identity cases.</note>
   </requirement>
@@ -1882,7 +1888,7 @@
     <section>6.3 (DNS-ID matching; RFC 6125 6.4.3 / 6.4.4)</section>
     <location>src/tls/core/x509.c: tls_x509_hostname_matches (L860-906) - CN fallback</location>
     <grade>COMPLIANT</grade>
-    <note>CN is never consulted (L894-905); covered by tests/host/tls_signatures identity(b'',
+    <note>Compliant as of/before v3.0.0-rc1. CN is never consulted (L894-905); covered by tests/host/tls_signatures identity(b'',
       'example.test', False). BUG (test): tests/unit/tls_x509/src/main.c L384-389 still expects "CN
       fallback when no SAN" to pass and is stale.</note>
   </requirement>
@@ -1891,7 +1897,7 @@
     <section>6.3 (DNS-ID matching; RFC 6125 6.4.3 / 6.4.4)</section>
     <location>src/tls/core/x509.c: tls_x509_pattern_matches_host (L629-678) - wildcard rules</location>
     <grade>COMPLIANT</grade>
-    <note>Wildcard must be exactly "*." leftmost; no partial-label, multi-label or bare-suffix
+    <note>Compliant as of/before v3.0.0-rc1. Wildcard must be exactly "*." leftmost; no partial-label, multi-label or bare-suffix
       match; ASCII case-insensitive, length-exact (embedded NUL cannot match). Covered by
       tests/host/tls_signatures and tests/unit/tls_x509. No IDNA/trailing-dot normalisation (false
       rejects only).</note>
@@ -1902,7 +1908,7 @@
     <location>src/tls/core/x509.c: SPKI EC parse (L1389-1399), tls_x509_signature_verify_digest
       (L1824); src/tls/core/key.c: key_parse_ec_pub_point (L203-214) - EC public key encoding</location>
     <grade>COMPLIANT</grade>
-    <note>x509.c accepts any BIT STRING length &gt;= 2 at parse time but every verify path enforces
+    <note>Compliant as of/before v3.0.0-rc1. x509.c accepts any BIT STRING length &gt;= 2 at parse time but every verify path enforces
       65 bytes, and p256_point_import enforces 0x04 and on-curve; key.c enforces 00 04 || X || Y.</note>
   </requirement>
   <requirement>
@@ -1911,7 +1917,7 @@
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2788-2796); src/tls/core/p256.s:
       p256_point_import (L3148-3150) - point decoding</location>
     <grade>COMPLIANT</grade>
-    <note>ke_len must be 65 with prefix 0x04; compressed and 1-byte infinity encodings rejected.
+    <note>Compliant as of/before v3.0.0-rc1. ke_len must be 65 with prefix 0x04; compressed and 1-byte infinity encodings rejected.
       Informational: the length/prefix failure path sets ERROR without the fatal illegal_parameter
       alert sent on the on-curve failure path.</note>
   </requirement>

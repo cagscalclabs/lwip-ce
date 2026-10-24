@@ -310,26 +310,25 @@ Security Posture
        fallback when AKI is absent (see Certificate chain below).
    * - Certificate chain
      - The stack walks the server's certificate chain link by link. Each link
-       is checked against the next certificate's public key with RSA PKCS#1
-       v1.5 / sha256WithRSAEncryption; a bad signature on an RSA-SHA256 link is
-       an ``ERROR`` and aborts the handshake. Unsupported signature algorithms
-       on a link, including P-256 ECDSA, raise ``ALERT("unsupported signature algorithm")``
-       and are allowed to pass so the stack remains usable before P-256 verification lands.
+       is verified against the next certificate's public key. RSA PKCS#1 v1.5 /
+       sha256WithRSAEncryption and ECDSA-P-256/SHA-256 links are verified for
+       real; a bad signature on either is an ``ERROR`` and aborts the handshake.
+       Unsupported signature types (wider RSA-PSS hashes, unknown key types)
+       raise ``ALERT("unsupported signature algorithm")`` and are allowed to pass.
 
        Once the adjacent-link walk finishes, the topmost certificate's issuer
-       is looked up in the trust store by subject name. If found and the
-       stored key is RSA (PSS or PKCS#1-SHA256), the topmost certificate's
-       signature is verified against it for real -- a bad signature here is
-       also an ``ERROR`` and aborts. If the root entry isn't RSA, or isn't in
-       the trust store at all, that raises ``ALERT("CA not in root")`` and the 
-       chain is accepted. **This is a temporary behavior and will normalize 
-       to fail-closed once P-256 (and possibly RSA-4096) is implemented.**
+       is looked up in the trust store by subject name. If found and the stored
+       key is RSA (PSS or PKCS#1-SHA256) or ECDSA P-256, the root signature is
+       verified for real -- a bad signature is an ``ERROR`` and aborts. If the
+       root entry is absent or uses an unsupported algorithm, that raises
+       ``ALERT("CA not in root")`` and the chain is accepted (temporary
+       compatibility exception for absent or algorithmically unsupported roots).
 
    * - CertificateVerify
-     - ``CertificateVerify`` is mandatory. For the current RSA path, the
-       signature is verified against the leaf certificate's public key, proving
-       possession of the leaf private key. This complements the best-effort
-       chain walk above, but it is not a root-of-trust anchor by itself.
+     - ``CertificateVerify`` is mandatory. Both ``rsa_pss_rsae_sha256``
+       (RSA 1024--2048 bit) and ``ecdsa_secp256r1_sha256`` (P-256) are
+       supported. The signature is verified against the leaf certificate's
+       public key, proving possession of the leaf private key.
 
 For more details, proofs, and datasets, see the whitepaper below.
 
