@@ -13,7 +13,7 @@ on:
       - master
     paths:
       - statistics/timing/*
-      - tests/profiling/tls_timing/tools/summarize_timing_stats.py
+      - tests/host/tls_timing/check_timing_stats.py
       - .github/workflows/timing.yml
   workflow_dispatch:
 
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout TLS branch
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Run Timing Unit Test
