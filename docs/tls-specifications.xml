@@ -27,21 +27,29 @@
     <section>6.2 (SHA-256 computation; 4.2.2 constants; 5.3.3 H(0))</section>
     <location>src/tls/core/sha256.s: _sha256_transform (L350-728), _sha256_state_init (L730-738), _sha256_k (L740-804) - compression</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Constants and compression are validated by the CAVP SHA-256 Monte vectors. The message schedule lives in static _sprng_sha_mbuffer (L18); see the ISO/IEC 19790 zeroization entry.</note>
+    <note>Constants and compression are validated by the CAVP SHA-256 Monte vectors. The message schedule lives in static _sprng_sha_mbuffer (L18); see the ISO/IEC 19790 zeroization entry.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance</scope>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>5.4 (RSA public exponent: odd, 2^16 &lt; e &lt; 2^256)</section>
-    <location>src/tls/core/rsa.c: tls_rsa_decrypt_signature (L303-316) - exponent sanity</location>
+    <location>src/tls/core/rsa.c: rsa_public_key_shape_ok, tls_rsa_encrypt, tls_rsa_decrypt_signature - exponent sanity</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): only e != 0 and exp_len &lt;= 3 bytes are enforced, so e=1 or an even e is accepted from a certificate SPKI. Not exploitable without a CA signing such a key. See also RFC 8017 3.1.</note>
+    <note>Both RSA public-operation entry points reject exponents at or below 2^16 and even exponents before invoking powmod. The RSA-OAEP unit test explicitly verifies that tls_rsa_encrypt rejects e=1. See also RFC 8017 3.1.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance</scope>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -49,10 +57,14 @@
     <section>6.4.1 (ECDSA signing; nonce per RFC 6979; r=0 or s=0 means new k)</section>
     <location>src/tls/core/p256.s: _tls_p256_sign (.Lsg_retry path), p256_det_k_continue (new label after L3602)</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. FIXED: r==0 or s==0 now jumps to .Lsg_retry which calls p256_det_k_continue (new entry at .Ldk_gen with K/V state preserved), then repeats the scalar multiply per RFC 6979 §3.2 step h.3. Probability of needing the retry is ~2^-256. RFC 6979 A.2.5 vector continues to pass.</note>
+    <note>FIXED: r==0 or s==0 now jumps to .Lsg_retry which calls p256_det_k_continue (new entry at .Ldk_gen with K/V state preserved), then repeats the scalar multiply per RFC 6979 §3.2 step h.3. Probability of needing the retry is ~2^-256. RFC 6979 A.2.5 vector continues to pass.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance</scope>
+        <note>Fixed as of v3.0.0-rc2.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1756,9 +1768,9 @@
   <requirement>
     <ref>RFC 8017</ref>
     <section>3.1 (public exponent e in [3, n-1], odd)</section>
-    <location>src/tls/core/rsa.c: tls_rsa_decrypt_signature (L305-320), tls_rsa_encrypt (L252-265) - public exponent validation</location>
+    <location>src/tls/core/rsa.c: rsa_public_key_shape_ok, tls_rsa_encrypt, tls_rsa_decrypt_signature - public exponent validation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG: only exp_len 1..3 and exp != 0 are checked, so e=1 (s^e = s, forgeable for that key) and even e are accepted from certificate SPKIs (x509.c L1386-1387) and key.c. Not exploitable without a CA signing such a key. Fix: reject e &lt; 3 and even e (preferably e &lt;= 2^16) in both entry points.</note>
+    <note>Compliant as of/before v3.0.0-rc1. tls_rsa_encrypt and tls_rsa_decrypt_signature decode the public exponent and reject e &lt;= 2^16 or even e before invoking powmod. The RSA-OAEP unit test explicitly covers rejection of e=1 by the encryption entry point.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>

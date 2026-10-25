@@ -35,7 +35,27 @@ static bool test_oaep_encode(void)
         NULL, /* no label */
         TLS_HASH_SHA256);
 
-    return result;
+    if (!result)
+        return false;
+
+    /* Regression: RSAEP must reject the degenerate public exponent e = 1 at
+     * the RSA encryption boundary, before OAEP or generic powmod is used.
+     * The synthetic modulus satisfies the inexpensive shape checks so this
+     * test specifically exercises exponent validation. */
+    static uint8_t modulus[256];
+    static uint8_t ciphertext[256];
+    static const uint8_t exponent_one[] = {0x01};
+    memset(modulus, 0xff, sizeof(modulus));
+
+    const struct tls_rsa_key invalid_key = {
+        .exp_len = sizeof(exponent_one),
+        .exponent = exponent_one,
+        .mod_len = sizeof(modulus),
+        .modulus = modulus,
+    };
+
+    return !tls_rsa_encrypt(message, sizeof(message), ciphertext,
+                            &invalid_key, TLS_HASH_SHA256);
 }
 
 /**

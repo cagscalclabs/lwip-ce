@@ -2,7 +2,12 @@ name = "LWIP"
 lib-version = 2
 exports = "exports.txt"
 depend = ["usbdrvce", "fileioc"]
-exclude = ["tls/contrib/x25519/src/main.c"]
+exclude = [
+    "tls/contrib/x25519/src/main.c",
+    "tls/contrib/x25519/obj",
+    "tls/contrib/x25519/bin",
+    "tls/contrib/x25519/cmake-build-debug",
+]
 header = ["build/lwip.h", "build/cryptography.h", "build/parsers.h", "build/wireless.h", "build/lwip"]
 
 [app]
