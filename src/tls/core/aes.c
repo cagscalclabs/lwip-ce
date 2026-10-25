@@ -310,21 +310,30 @@ static void aes_gcm_prepare_iv(struct tls_aes_context *ctx, const uint8_t *iv, s
     {
         aes_prepare_ghash();
         /*
-         * s = 128 * ceil(len(IV)/128) - len(IV)
-         * J_0 = GHASH_H(IV || 0^(s+64) || [len(IV)]_64)
+         * SP 800-38D §5.2.1.1 (len(IV) != 96):
+         *   s = 128 * ceil(len(IV)/128) - len(IV)
+         *   J_0 = GHASH_H(IV || 0^(s+64) || [len(IV)]_64)
+         *
+         * Feed the IV through GHASH in 16-byte blocks, zero-padding the
+         * final partial block, then append the 16-byte length block.
+         * ctx->iv is already zeroed (tls_secure_memzero above).
          */
-        // hash the IV. Pad to block size
-        uint8_t tbuf[AES_BLOCK_SIZE] = {0};
-        memcpy(tbuf, iv, iv_len);
         tls_secure_memzero(ctx->iv, AES_BLOCK_SIZE);
-        ghash(ctx, ctx->iv, tbuf, sizeof(tbuf));
-        // aes_xor_buf(tbuf, ctx->iv, AES_BLOCK_SIZE);
-        // gf128_mul(out_buf, ctx->mode.gcm.ghash_key, out_buf);
-
-        tls_secure_memzero(tbuf, AES_BLOCK_SIZE >> 1);
-        bytelen_to_bitlen(iv_len, &tbuf[8]); // outputs in BE
-
-        ghash(ctx, ctx->iv, tbuf, sizeof(tbuf));
+        size_t remaining = iv_len;
+        const uint8_t *p = iv;
+        while (remaining > 0)
+        {
+            uint8_t tbuf[AES_BLOCK_SIZE] = {0};
+            size_t chunk = remaining < AES_BLOCK_SIZE ? remaining : AES_BLOCK_SIZE;
+            memcpy(tbuf, p, chunk);
+            ghash(ctx, ctx->iv, tbuf, AES_BLOCK_SIZE);
+            p += chunk;
+            remaining -= chunk;
+        }
+        /* Final block: 0^64 || [len(IV)]_64 (big-endian bit length) */
+        uint8_t len_block[AES_BLOCK_SIZE] = {0};
+        bytelen_to_bitlen(iv_len, &len_block[8]);
+        ghash(ctx, ctx->iv, len_block, AES_BLOCK_SIZE);
     }
 }
 
@@ -345,10 +354,12 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         return false;
     }
 
-    if (iv_len > AES_BLOCK_SIZE || (mode == TLS_AES_GCM && iv_len == 0))
+    if ((mode != TLS_AES_GCM && iv_len > AES_BLOCK_SIZE) ||
+        (mode == TLS_AES_GCM && iv_len == 0))
     {
         /* SP 800-38D 5.2.1.1: a GCM IV is at least 1 bit; an empty one would
-         * make J0 depend on the key alone. */
+         * make J0 depend on the key alone.  Non-GCM modes are limited to one
+         * block (CBC/CCM IVs/nonces are always <= 16 bytes). */
         ERROR();
         return false;
     }
@@ -366,8 +377,11 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         return false;
     }
 
-    memcpy(ctx->iv, iv, iv_len);
-    // memset(&ctx->iv[iv_len], 0, 16-iv_len);
+    /* For GCM with iv_len != 12, J0 is computed by aes_gcm_prepare_iv via
+     * GHASH — do not pre-copy a potentially oversized IV into the 16-byte
+     * ctx->iv.  For iv_len == 12 and all non-GCM modes, iv_len <= 16. */
+    if (!(mode == TLS_AES_GCM && iv_len != 12))
+        memcpy(ctx->iv, iv, iv_len);
     ctx->keysize = key_len << 3;
 
     aes_prepare_encrypt();
