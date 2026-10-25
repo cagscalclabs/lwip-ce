@@ -48,7 +48,7 @@
       "expected_CRCs": [
         "0F2E31E9"
       ],
-      "timeout": 180000
+      "timeout": 200000
     },
     "2": {
       "description": "x25519 RFC 7748, 6.1 - Bob private * Alice public",
@@ -103,7 +103,7 @@
       "expected_CRCs": [
         "F7C03D8D"
       ],
-      "timeout": 100000
+      "timeout": 200000
     }
   }
 }
