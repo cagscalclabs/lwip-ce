@@ -52,6 +52,7 @@ int main(void)
     if(memcmp(digest, expected1, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
     else printf("failed");
+    tls_hash_clear(&ctx);
     os_GetKey();
     os_ClrHome();
     
@@ -62,6 +63,7 @@ int main(void)
     if(memcmp(digest, expected2, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
     else printf("failed");
+    tls_hash_clear(&ctx);
     os_GetKey();
     os_ClrHome();
     
@@ -72,6 +74,7 @@ int main(void)
     if(memcmp(digest, expected3, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
     else printf("failed");
+    tls_hash_clear(&ctx);
     os_GetKey();
     os_ClrHome();
     

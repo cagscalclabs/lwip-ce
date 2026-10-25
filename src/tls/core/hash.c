@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "../includes/hash.h"
+#include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_HASH
@@ -29,6 +30,7 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
         ERROR();
         return false;
     }
+    tls_hash_clear(ctx);
     switch (algorithm)
     {
     case TLS_HASH_SHA256:
@@ -47,7 +49,12 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
         ERROR_CODE(algorithm);
         return false;
     }
-    return ctx->init(&ctx->_private);
+    if (!ctx->init(&ctx->_private))
+    {
+        tls_hash_clear(ctx);
+        return false;
+    }
+    return true;
 }
 
 void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_context *src)
@@ -69,13 +76,22 @@ void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *digest)
     tls_crypto_guard_disable();
 }
 
+void tls_hash_clear(struct tls_hash_context *ctx)
+{
+    if (ctx != NULL)
+        tls_secure_memzero(ctx, sizeof(*ctx));
+}
+
 bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outlen, uint8_t hash_alg)
 {
     uint32_t ctr = 0;
     uint8_t hash_digest[TLS_SHA256_DIGEST_LEN], ctr_data[4];
     struct tls_hash_context hash_data, hash_ctr;
     if (!tls_hash_context_init(&hash_data, hash_alg))
+    {
+        tls_hash_clear(&hash_data);
         return false;
+    }
     size_t hashlen = hash_data.digestlen;
     hash_data.update(&hash_data._private, data, datalen);
     for (size_t printlen = 0; printlen < outlen; printlen += hashlen, ctr++)
@@ -91,5 +107,9 @@ bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outle
         hash_ctr.digest(&hash_ctr._private, hash_digest);
         memcpy(&outbuf[printlen], hash_digest, copylen);
     }
+    tls_hash_clear(&hash_ctr);
+    tls_hash_clear(&hash_data);
+    tls_secure_memzero(hash_digest, sizeof hash_digest);
+    tls_secure_memzero(ctr_data, sizeof ctr_data);
     return true;
 }

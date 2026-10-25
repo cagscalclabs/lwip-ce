@@ -1386,6 +1386,8 @@ static void eth_link_callback(struct netif *netif)
     {
         return;
     }
+    STATE_CHG(netif, netif_is_link_up(netif) ? LWIP_STATE_LINK_UP
+                                              : LWIP_STATE_LINK_DOWN);
     if (netif_is_link_up(netif))
     {
         /* Start listening for data frames the moment the link is up, and do

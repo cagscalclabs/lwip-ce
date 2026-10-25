@@ -52,9 +52,12 @@ assert "ld (_sprng_read_addr),hl" in init_fail
 assert "ld (_sprng_read_mask),a" in init_fail
 assert "xor a,a" in init_fail
 
-assert 'char message[] = "rng health fail 0b0000000";' in C_SOURCE
-assert "ERROR_CODE(mask);" in C_SOURCE
-assert "ERROR_INFO(message);" in C_SOURCE
+health_log = C_SOURCE.split("static void tls_rng_log_health_failure", 1)[1].split(
+    "static bool g_tls_rng_entropy_timer_running", 1
+)[0]
+assert "WARN_CODE(mask);" in health_log
+assert "ERROR_CODE" not in health_log
+assert "ERROR_INFO" not in health_log
 assert '"%lu: EVT: ERR: %s %s\\n"' in LOG_SOURCE
 
 

@@ -475,3 +475,5 @@
 	export	lwip_wifi_bridge_version
 	export	lwip_wifi_save_enterprise_profile
 	export	tls_random_bytes_pr
+	export	tls_hash_clear
+	export	tls_hmac_clear

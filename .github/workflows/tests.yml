@@ -25,7 +25,7 @@ env:
   # out") on CEmu because CEmu has no physical TRNG.  A failure on hash #1
   # with that exact CRC is downgraded to a skip+warning instead of a hard
   # failure so CI is not broken by an emulator quirk.
-  EMULATOR_QUIRK_UNITS: "tls_key"
+  # EMULATOR_QUIRK_UNITS:
 
 jobs:
   dylib_unit_tests:

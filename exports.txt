@@ -473,3 +473,5 @@ lwip_wifi_random
 lwip_wifi_bridge_version
 lwip_wifi_save_enterprise_profile
 tls_random_bytes_pr
+tls_hash_clear
+tls_hmac_clear

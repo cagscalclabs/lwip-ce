@@ -1293,10 +1293,8 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     bool is_leaf = (w->cert_index == 0);
 
     w->fail_alert = TLS_ALERT_BAD_CERTIFICATE;
-    INFO("cert: parse");
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len, &cert))
     {
-        INFO("cert: parse fail");
         ERROR_CODE(0x01);
         return false;
     }
@@ -1304,7 +1302,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         ((cert.pubkey.type == TLS_KEY_TYPE_RSA)
              ? cert.pubkey.rsa.mod_len == 0 : cert.pubkey.ec.len == 0))
     {
-        INFO("cert: spki fail");
         ERROR_CODE(0x02);
         return false;
     }
@@ -1316,7 +1313,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         (cert.pubkey.rsa.mod_len < RSA_MODULUS_MIN_SUPPORTED ||
          cert.pubkey.rsa.mod_len > RSA_MODULUS_MAX_SUPPORTED))
     {
-        INFO("cert: rsa keysize fail");
         ERROR_CODE(0x02);
         return false;
     }
@@ -1326,7 +1322,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     if (!tls_x509_time_in_validity(&cert, lwip_sntp_get_unix_time()))
     {
         w->fail_alert = TLS_ALERT_CERTIFICATE_EXPIRED;
-        INFO("cert: date fail");
         ERROR_CODE(0x03);
         return false;
     }
@@ -1338,7 +1333,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
                                             is_leaf ? 0 : w->cert_index - 1u,
                                             w->ctx ? w->ctx->hostname : NULL))
     {
-        INFO("cert: constraints fail");
         ERROR_CODE(0x12);
         return false;
     }
@@ -1351,7 +1345,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
                                        cert.subject_cn, cert.subject_cn_len,
                                        w->ctx->hostname))
         {
-            INFO("cert: host fail");
             ERROR_CODE(0x04);
             return false;
         }
@@ -1370,7 +1363,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 
         if (mat_len == 0)
         {
-            INFO("cert: key alloc fail");
             ERROR_CODE(0x0f);
             return false;
         }
@@ -1378,7 +1370,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         uint8_t *mat = (uint8_t *)mem_buffer_custom_malloc(mat_len);
         if (!mat)
         {
-            INFO("cert: key alloc fail");
             ERROR_CODE(0x10);
             return false;
         }
@@ -1442,7 +1433,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 
     if (!tls_cert_chain_verify_one(w, &cert, is_leaf))
     {
-        INFO("cert: chain fail");
         ERROR_CODE(0x11);
         return false;
     }
@@ -1450,7 +1440,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     if (w->ctx && w->ctx->leaf_pubkey.type != TLS_KEY_TYPE_UNKNOWN)
         w->chain_validated = true;
 
-    INFO("cert: accepted");
     return true;
 }
 
@@ -1716,7 +1705,6 @@ static bool tls_feed_inflight_body(struct tls_handshake_context *ctx,
 {
     if (msg_type == TLS_HANDSHAKE_CERTIFICATE)
     {
-        INFO("hs: certificate");
         if (!ctx->cert_walker)
         {
             ctx->cert_walker = tls_cert_walker_new(ctx);
@@ -1871,7 +1859,6 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         off += take;
         if (ctx->hs_reasm_len < 4)
         {
-            DEBUG(); /* still waiting on the rest of a split handshake header */
             return true; /* Still need more header bytes. */
         }
         size_t body_len = ((size_t)ctx->hs_reasm_buf[1] << 16) |
@@ -1934,7 +1921,6 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
 
         if (!tls_inflight_message_complete(ctx))
         {
-            DEBUG(); /* in-flight handshake message reassembly still incomplete */
             return true; /* Still incomplete; wait for more. */
         }
 
@@ -2163,21 +2149,17 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     switch (msg_type)
     {
     case TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS:
-        INFO("hs: encrypted extensions");
         ok = tls_recv_encrypted_extensions(ctx, msg, msg_len);
         break;
     case TLS_HANDSHAKE_CERTIFICATE_REQUEST:
-        INFO("hs: certificate request");
         ok = tls_recv_certificate_request(ctx, msg, msg_len);
         break;
     /* TLS_HANDSHAKE_CERTIFICATE is handled by the streaming cert walker in
      * tls_consume_handshake_buffer; it never reaches this dispatcher. */
     case TLS_SERVER_HANDSHAKE_CERTIFICATE_VERIFY:
-        INFO("hs: cert verify");
         ok = tls_recv_certificate_verify(ctx, msg, msg_len);
         break;
     case TLS_HANDSHAKE_FINISHED:
-        INFO("hs: server finished");
         /* tls_recv_finished holds finished_key/expected_verify_data/
          * hmac_ctx on its own stack frame; wrapping the call (rather than
          * scrubbing from inside it) lets tls_crypto_guard_disable() reach
@@ -2187,11 +2169,9 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
         tls_crypto_guard_disable();
         break;
     case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
-        INFO("hs: new ticket");
         ok = tls_recv_new_session_ticket(ctx, msg, msg_len);
         break;
     case TLS_HANDSHAKE_KEY_UPDATE:
-        INFO("hs: key update");
         ok = tls_recv_key_update(ctx, msg, msg_len);
         break;
     default:
@@ -2377,7 +2357,6 @@ bool tls_handshake_init(
         return false;
     }
 
-    INFO("init: clear context");
     /* Clear context */
     tls_secure_memzero(ctx, sizeof(*ctx));
     ctx->leaf_pubkey.type = TLS_KEY_TYPE_UNKNOWN;
@@ -2411,7 +2390,6 @@ bool tls_handshake_init(
     /* Fresh bridge TRNG input for the next handshake's randomness. */
     lwip_crypto_reseed();
 
-    INFO("init: client random");
     if (tls_random_bytes_ex(ctx->client_random,
                             sizeof(ctx->client_random),
                             TLS_RNG_STRENGTH_128) == NULL)
@@ -2420,7 +2398,6 @@ bool tls_handshake_init(
         return false;
     }
 
-    INFO("init: transcript hash");
     /* Initialize transcript hash (using embedded storage) */
     ctx->transcript_hash = &ctx->transcript_hash_storage;
     if (!transcript_hash_init(ctx->transcript_hash))
@@ -2430,7 +2407,6 @@ bool tls_handshake_init(
         return false;
     }
 
-    INFO("init: private random");
     if (tls_random_bytes_ex(ctx->ecdhe_private,
                             sizeof(ctx->ecdhe_private),
                             TLS_RNG_STRENGTH_128) == NULL)
@@ -2439,7 +2415,6 @@ bool tls_handshake_init(
         return false;
     }
 
-    INFO("init: X25519 public key");
     ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, NULL, ctx->ecdhe_public);
     bool x25519_ok = ctx->ecdhe_job != 0;
     if (!x25519_ok)
@@ -2469,7 +2444,6 @@ bool tls_handshake_init(
         return true;
     }
 
-    INFO("init: P-256 private random");
     if (tls_random_bytes_ex(ctx->p256_private,
                             sizeof(ctx->p256_private),
                             TLS_RNG_STRENGTH_128) == NULL)
@@ -2479,7 +2453,6 @@ bool tls_handshake_init(
         return false;
     }
 
-    INFO("init: P-256 public key");
     ctx->p256_job = lwip_crypto_p256(ctx->p256_private, NULL, ctx->p256_public);
     bool p256_ok = ctx->p256_job != 0;
     if (!p256_ok)
@@ -3070,7 +3043,6 @@ bool tls_send_client_hello(
     }
 
     ctx->state = TLS_STATE_CLIENT_HELLO_SENT;
-    DEBUG();
     return true;
 }
 
@@ -3597,7 +3569,6 @@ bool tls_recv_server_hello(
                 return false;
             }
             ctx->ecdhe_negotiated = true;
-            DEBUG();
             break;
         }
 
@@ -3665,7 +3636,6 @@ bool tls_recv_server_hello(
     }
 
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
-    DEBUG();
     return true;
 }
 
@@ -3727,7 +3697,6 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
-    DEBUG();
     return true;
 }
 
@@ -3973,7 +3942,6 @@ static bool tls_recv_encrypted_extensions(
 
     /* Update state */
     ctx->state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
-    DEBUG();
 
     return true;
 }
@@ -4237,7 +4205,6 @@ static bool tls_recv_certificate_request(
         transcript_hash_update(ctx->transcript_hash, data, 4 + msg_len);
     }
     ctx->client_certificate_requested = true;
-    DEBUG();
     return true;
 }
 
@@ -4278,7 +4245,6 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     const struct tls_rsa_key *rsa = &ctx->leaf_pubkey.rsa;
     if (!rsa->modulus || rsa->mod_len == 0)
     {
-        INFO("certverify: no rsa key");
         ERROR_CODE(0x79);
         return false;
     }
@@ -4287,7 +4253,6 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
      * exactly match the modulus size in bytes. */
     if (sig_len != rsa->mod_len)
     {
-        INFO("certverify: len mismatch");
         ERROR_CODE(0x7a);
         return false;
     }
@@ -4331,13 +4296,11 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     em = __rsa_transient;
     if (!tls_rsa_decrypt_signature(sig, sig_len, em, rsa))
     {
-        INFO("certverify: rsa decrypt fail");
         goto cleanup;
     }
     if (!tls_rsa_pss_verify(em, rsa->mod_len, message_hash, sizeof(message_hash),
                             TLS_HASH_SHA256))
     {
-        INFO("certverify: pss verify fail");
         goto cleanup;
     }
     ok = true;
@@ -4447,7 +4410,6 @@ static bool tls_recv_certificate_verify(
     const uint8_t *data,
     size_t data_len)
 {
-    INFO("certverify: begin");
     if (!ctx || !data || data_len < 8)
     {
         ERROR_CODE(0x7e);
@@ -4497,7 +4459,6 @@ static bool tls_recv_certificate_verify(
     {
         /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
          * CertificateVerify without a leaf is unverifiable; fail closed. */
-        INFO("certverify: missing leaf key");
         ERROR();
         ctx->state = TLS_STATE_ERROR;
         return false;
@@ -4520,7 +4481,6 @@ static bool tls_recv_certificate_verify(
 
     if (!sig_ok)
     {
-        INFO("certverify: signature fail");
         ERROR();
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
         ctx->state = TLS_STATE_ERROR;
@@ -4537,8 +4497,6 @@ static bool tls_recv_certificate_verify(
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
-    INFO("certverify: accepted");
-    DEBUG();
 
     return true;
 }
@@ -4737,7 +4695,6 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     /* Advance state so this function is not called again */
     ctx->tx_epoch = 1;
     ctx->state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
-    DEBUG();
 
     return true;
 }
@@ -4906,7 +4863,6 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
      * are derived from it; wipe it from ctx->keys per RFC 8446 §7.1 SHOULD. */
     tls_secure_memzero(ctx->keys.handshake_secret, sizeof(ctx->keys.handshake_secret));
 
-    DEBUG();
     return true;
 }
 
@@ -5096,7 +5052,6 @@ bool tls_send_empty_certificate(
         transcript_hash_update(ctx->transcript_hash, out, sizeof(empty_certificate));
     }
 
-    DEBUG();
     return true;
 }
 
@@ -5241,7 +5196,6 @@ static bool tls_recv_finished(
     {
         /* Client verified server's Finished */
         ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
-        DEBUG();
     }
 
     return true;
@@ -5514,7 +5468,6 @@ static bool tls_recv_key_update(
         return false;
     }
 
-    INFO("hs: server key update applied");
     return true;
 }
 

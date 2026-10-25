@@ -307,10 +307,8 @@ done:
 
 bool tls_init(void)
 {
-    INFO("tls_init started");
     if (tls_ctx.initialized)
     {
-        INFO("tls_init done");
         return true;
     }
 
@@ -318,11 +316,9 @@ bool tls_init(void)
      * timer finds the source already valid on its first tick. */
     if (!tls_random_init_entropy())
     {
-        INFO("rng source select fail");
         tls_ctx.network_up = false;
         return false;
     }
-    INFO("rng source select ok");
 
     /* Starting the asynchronous RNG service is not the same as having entropy
      * ready immediately. Randomness-consuming operations enforce readiness at

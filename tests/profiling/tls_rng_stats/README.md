@@ -94,7 +94,7 @@ a raw sequential capture and the complete non-IID estimator suite.
 ## Published statistics report
 
 Pushes to `master` that change the checked-in RNG reports, either analysis
-tool, or the reporting workflow run `Publish Statistics`. The RNG suite
+tool, or `.github/workflows/rngstats.yml` run `Publish RNG Statistics`. The RNG suite
 recomputes analyzer-owned fields from the stored raw counts and publishes:
 
 - aggregate and per-model tables in the GitHub Actions job summary;
@@ -102,7 +102,7 @@ recomputes analyzer-owned fields from the stored raw counts and publishes:
   through lag-4 correlation heuristic, and
   conservative `H`;
 - Markdown, JSON, CSV, SVG, and PNG outputs as a workflow artifact; and
-- the same named outputs in the shared `statistics-assets-latest` release.
+- the same named outputs in the `rngstats-assets-latest` release.
 
 The chart's density shapes are descriptive rather than fitted normal
 distributions. Its overlaid circles are the individual profiler windows.

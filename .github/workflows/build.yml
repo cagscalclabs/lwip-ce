@@ -1,4 +1,4 @@
-name: Build Latest lwIP Dylib
+name: Build Dylib
 
 # Builds the dylib and packages it as lwip.zip (`make dylib-release`), then
 # uploads both as artifacts. This workflow ONLY attempts the build -- it no

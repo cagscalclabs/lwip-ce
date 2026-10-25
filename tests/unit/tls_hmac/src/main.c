@@ -117,6 +117,7 @@ static uint32_t time_hmac(const uint8_t *data, size_t len)
         ctx.digest(&ctx, digest);
         timing_sink ^= digest[0];
     }
+    tls_hmac_clear(&ctx);
     if (!ok)
         timing_sink ^= 0xFF;
     return (uint32_t)(clock() - start);
@@ -139,6 +140,7 @@ int main(void)
     if(memcmp(digest, expected1, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
     else printf("failed");
+    tls_hmac_clear(&ctx);
     os_GetKey();
     os_ClrHome();
 
@@ -149,6 +151,7 @@ int main(void)
     if(memcmp(digest, expected2, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
     else printf("failed");
+    tls_hmac_clear(&ctx);
     os_GetKey();
     os_ClrHome();
 
@@ -159,6 +162,7 @@ int main(void)
     if(memcmp(digest, expected3, TLS_SHA256_DIGEST_LEN)==0)
         printf("success");
     else printf("failed");
+    tls_hmac_clear(&ctx);
     os_GetKey();
     os_ClrHome();
 

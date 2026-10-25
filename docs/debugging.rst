@@ -1,10 +1,27 @@
 Debugging
 =========
 
-lwIP-CE provides two complementary tools for diagnosing problems: a **live event
-callback** that fires as the stack runs, and a **traceback buffer** that captures
-the most recent WARN and ERROR events so you can read them after the fact. Neither
-requires a debugger or a serial console — both work on real hardware.
+lwIP-CE provides complementary tools for diagnosing problems.
+
+- [Recommended] The toggleable, user-controlled PCAP and Logging interfaces.
+- A live event callback function and traceback system.
+
+Neither requires a debugger or a serial console — both work on real hardware.
+
+
+-----
+
+Packet Capture and Logging interface
+--------------------------------------
+
+If you are on v3.0.0-rc2 or later you can run lwIP directly from the [apps] menu and scroll down to the *Diagnostics* group. From there, you can toggle packet captures and logging as well as feature-specific settings: packet capture size limit, log verbosity, max number of log slots (log slots are capped to 16 KiB, 9 slots max).
+
+The project maintainer's website hosts a `Bug Reporting Assistant <https://cagscalclabs.net/contribute/captures/bugreport/>`_ designed for allowing a user to file a bug. This utility automatically files a GitHub issue on your behalf while also allowing you to submit lwIP-CE-serialized packet captures and logfiles either via upload or via WebUSB directly from your connected calculator. The captures are decoded: packet captures into Wireshark-compatible pcap files; the logs into log files. Because these files may contain sensitive information (IP addresses, hostnames, packet contents), they are sent into a dev-only Discord channel rather than filed with your GitHub issue. This will help us with debugging any issues that may arise.
+
+This is the recommended way to diagnose lwIP-CE problems because collection
+is reliable and remains under the end user's control. Applications can also
+consume the event and traceback interfaces described below.
+
 
 Unified event callback
 ----------------------

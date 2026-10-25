@@ -24,17 +24,36 @@ static void tls_hmac_sha256_digest_adapter(void *ctx, uint8_t *digest)
 }
 
 bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, const uint8_t* key, size_t keylen){
-    
-    if((ctx==NULL)||
-       (key==NULL && keylen != 0)) { ERROR(); return false; }
-    struct tls_hash_context htmp;
+    if(ctx == NULL) { ERROR(); return false; }
+    tls_hmac_clear(ctx);
+    if(key == NULL && keylen != 0) { ERROR(); return false; }
+
+    switch(algorithm){
+        case TLS_HASH_SHA256:
+            ctx->digestlen = TLS_SHA256_DIGEST_LEN;
+            ctx->update = tls_hmac_update;
+            ctx->digest = tls_hmac_digest;
+            ctx->_init = tls_hmac_sha256_init_adapter;
+            ctx->_update = tls_hmac_sha256_update_adapter;
+            ctx->_final = tls_hmac_sha256_digest_adapter;
+            break;
+        default:
+            ERROR_CODE(algorithm);
+            return false;
+    }
+
+    struct tls_hash_context htmp = {0};
     uint8_t sum[64] = {0};
     
     if(keylen > 64){
-        if(!tls_hash_context_init(&htmp, algorithm)) { ERROR(); return false; }
+        if(!tls_hash_context_init(&htmp, algorithm)) {
+            ERROR();
+            tls_hmac_clear(ctx);
+            return false;
+        }
         htmp.update(&htmp._private, key, keylen);
         htmp.digest(&htmp._private, sum);
-        tls_secure_memzero(&htmp, sizeof htmp);
+        tls_hash_clear(&htmp);
         keylen = 32;
     }
     else if (keylen != 0) memcpy(sum, key, keylen);
@@ -48,26 +67,10 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, cons
     }
     tls_secure_memzero(sum, sizeof sum);
     
-    switch(algorithm){
-        case TLS_HASH_SHA256:
-            ctx->digestlen = TLS_SHA256_DIGEST_LEN;
-            ctx->update = tls_hmac_update;
-            ctx->digest = tls_hmac_digest;
-            ctx->_init = tls_hmac_sha256_init_adapter;
-            ctx->_update = tls_hmac_sha256_update_adapter;
-            ctx->_final = tls_hmac_sha256_digest_adapter;
-            break;
-       /* case TLS_SHA256_HW:
-            ctx->digestlen = TLS_SHA256_DIGEST_LEN;
-            ctx->init = tls_sha256hw_init;
-            ctx->update = tls_sha256hw_update;
-            ctx->digest = tls_sha256hw_digest;
-            break; */
-        default:
-            ERROR_CODE(algorithm);
-            return false;
+    if (!ctx->_init(&ctx->_private)) {
+        tls_hmac_clear(ctx);
+        return false;
     }
-    ctx->_init(&ctx->_private);
     ctx->_update(&ctx->_private, ctx->ipad, sizeof ctx->ipad);
     return true;
 }
@@ -89,4 +92,10 @@ void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *digest){
     htmp._final(&htmp._private, digest);
     tls_secure_memzero(tbuf, sizeof tbuf);
     tls_secure_memzero(&htmp, sizeof htmp);
+}
+
+void tls_hmac_clear(struct tls_hmac_context *ctx)
+{
+    if (ctx != NULL)
+        tls_secure_memzero(ctx, sizeof(*ctx));
 }

@@ -2751,10 +2751,8 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
      * would re-enter connect on a dead pcb — drop the stale result. */
     if (c->status != LWIP_STATUS_RESOLVING)
     {
-        INFO("dns: stale callback ignored");
         return;
     }
-    INFO(ipaddr ? "dns: address received" : "dns: lookup failed");
     if (!ipaddr)
     {
         lwip_socket_set_pending_host(c, NULL);
@@ -2977,12 +2975,10 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
 
     conn->status = LWIP_STATUS_RESOLVING;
     conn_event_enqueue(conn, CONN_PENDING_RESOLVING, LWIP_OK);
-    INFO("dns: lookup begin");
     err_t derr = dns_gethostbyname(conn->pending_host, &conn->remote_ip,
                                    conn_dns_found_cb, conn);
     if (derr == ERR_OK)
     {
-        INFO("dns: cached address");
         /* Cached hit — drive the next stage synchronously. conn_dns_found_cb
          * may itself fail (e.g. tcp_connect() returning ERR_MEM) and set
          * conn->status/last_error accordingly; surface that. */
@@ -2995,7 +2991,6 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     }
     if (derr == ERR_INPROGRESS)
     {
-        INFO("dns: waiting for response");
         return LWIP_OK; /* async — caller polls status */
     }
     lwip_socket_set_pending_host(conn, NULL);

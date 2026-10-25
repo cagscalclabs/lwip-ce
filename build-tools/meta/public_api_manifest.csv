@@ -789,3 +789,5 @@ func,lwip_wifi_rsa_verify,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_random,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_bridge_version,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_save_enterprise_profile,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
+func,tls_hash_clear,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+func,tls_hmac_clear,cryptography,src/tls/includes/hmac.h,lwip/cryptography/hmac.h

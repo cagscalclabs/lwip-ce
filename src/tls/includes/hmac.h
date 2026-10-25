@@ -57,4 +57,12 @@ void tls_hmac_update(struct tls_hmac_context *ctx, const uint8_t *data, size_t l
  */
 void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *digest);
 
+/***************************************************************************
+ * @brief Securely clears an HMAC context.
+ * @param ctx       Pointer to the HMAC context to clear. May be NULL.
+ * @note Call when the context is no longer needed to erase the key-derived
+ *       ipad/opad values and intermediate hash state.
+ */
+void tls_hmac_clear(struct tls_hmac_context *ctx);
+
 #endif

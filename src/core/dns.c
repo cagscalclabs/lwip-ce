@@ -873,20 +873,10 @@ dns_send(u8_t idx)
       dst = &dns_servers[entry->server_idx];
     }
     err = udp_sendto(dns_pcbs[pcb_idx], p, dst, dst_port);
-    /* Always-visible diagnostics: ERR_INPROGRESS at the socket API does not
-     * mean this UDP send succeeded. Keep the normal retry policy unchanged. */
-    {
-      char message[64];
-      snprintf(message, sizeof(message), "dns: UDP send %d server %u",
-               (int)err, (unsigned)entry->server_idx);
-      INFO(message);
-      INFO(ipaddr_ntoa(dst));
-    }
-
     /* free pbuf */
     pbuf_free(p);
   } else {
-    INFO("dns: query allocation failed");
+    WARN();
     err = ERR_MEM;
   }
 

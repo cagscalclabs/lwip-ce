@@ -111,6 +111,12 @@ live DRBG state or restoring an earlier calculator state.
 
    :returns: ``buffer`` on success, or ``NULL`` with the destination zeroized.
 
+.. c:function:: void *tls_random_bytes_pr(void *buffer, size_t len, uint16_t strength_bits)
+
+   Functionally-equivalent to ``tls_random_bytes_ex`` but with prediction-resistance enabled (SP 800-90A §9.3.1). Forces an immediate reseed of the DRBG from available entropy, fails-closed if entropy not available.
+
+   :returns: ``buffer`` on success, or ``NULL`` with the destination zeroized.
+
 .. c:function:: bool lwip_tls_rng_wait_for_ready(uint32_t timeout_ms)
 
    Pump the stack's event loop until the random generator reaches 192-bit
@@ -195,7 +201,7 @@ live DRBG state or restoring an earlier calculator state.
    These window results reproduce the configured thresholds over the captured
    observations; they do not read or mutate the live assembly health-test
    state. The profiler AppVar schema is documented in
-   ``tests/profiling/tls_rng_stats/SCHEMA.md``.
+   ``tests/profiling/tls_rng_stats/SCHEMA.md``; this function drives the project's RNG statistics captures.
 
    This API observes the source before conditioning and is intended for
    development and source characterization. Its output is not random data,
@@ -290,6 +296,12 @@ the digest length.
    :param digest: Output buffer sized to the algorithm's digest length
       (``TLS_SHA256_DIGEST_LEN`` = 32 bytes for SHA-256).
 
+.. c:function:: void tls_hash_clear(struct tls_hash_context *ctx)
+
+   Securely erase a hash context, including buffered input and intermediate
+   hash state. A ``NULL`` pointer is accepted. Call this when a context that
+   processed sensitive input is no longer needed.
+
 .. c:function:: bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outlen, uint8_t hash_alg)
 
    Compute an MGF1 mask. Used internally by RSA-OAEP and RSA-PSS; exposed
@@ -310,6 +322,7 @@ the digest length.
    tls_hash_context_init(&hctx, TLS_HASH_SHA256);
    tls_hash_update(&hctx, data, len);
    tls_hash_digest(&hctx, digest);
+   tls_hash_clear(&hctx);
 
 HMAC
 ~~~~~~
@@ -319,7 +332,7 @@ HMAC
 
 HMAC wraps the hash context with a key. The interface mirrors the hash API:
 init with a key, feed data with update, retrieve the MAC with digest. The
-context is caller-allocated and requires no teardown.
+context is caller-allocated and must be cleared when it is no longer needed.
 
 .. c:function:: bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, const uint8_t *key, size_t keylen)
 
@@ -347,6 +360,12 @@ context is caller-allocated and requires no teardown.
    :param ctx: Initialized HMAC context with data fed in.
    :param digest: Output buffer (``TLS_SHA256_DIGEST_LEN`` = 32 bytes for HMAC-SHA-256).
 
+.. c:function:: void tls_hmac_clear(struct tls_hmac_context *ctx)
+
+   Securely erase an HMAC context, including its key-derived ipad/opad values
+   and intermediate hash state. A ``NULL`` pointer is accepted. Call this on
+   every exit path after a context has held a key.
+
 .. code-block:: c
 
    struct tls_hmac_context ctx;
@@ -355,6 +374,7 @@ context is caller-allocated and requires no teardown.
    tls_hmac_context_init(&ctx, TLS_HASH_SHA256, key, key_len);
    tls_hmac_update(&ctx, data, len);
    tls_hmac_digest(&ctx, mac);
+   tls_hmac_clear(&ctx);
 
 ----
 

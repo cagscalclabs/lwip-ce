@@ -5,10 +5,13 @@
     <section>1 / 5.1.1 (message length limit, streaming state)</section>
     <location>src/tls/core/sha256.s: _tls_sha256_update (L222-276), _tls_sha256_digest (L288-292) - 64-bit bitlen, non-destructive digest</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. bitlen is uint64 (no 2^64 overflow check, unreachable). Digest operates on a stack copy so the transcript context stays usable (hash.h L77-82); len==0 update is a no-op.</note>
+    <note>bitlen is uint64 (no 2^64 overflow check, unreachable). Digest operates on a stack copy so the transcript context stays usable (hash.h L77-82); len==0 update is a no-op.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -16,10 +19,13 @@
     <section>5.1.1 (padding)</section>
     <location>src/tls/core/sha256.s: _tls_sha256_digest (L280-346) - 0x80, zero fill, 64-bit big-endian length</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Both the one-block (datalen &lt;= 55) and two-block padding branches are present. Covered by CAVP SHA256ShortMsg/LongMsg/Monte and tests/unit/tls_hash FIPS examples ("abc", "", 448-bit message).</note>
+    <note>Both the one-block (datalen &lt;= 55) and two-block padding branches are present. Covered by CAVP SHA256ShortMsg/LongMsg/Monte and tests/unit/tls_hash FIPS examples ("abc", "", 448-bit message).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -72,10 +78,13 @@
     <section>6.4.2 step 1 (r, s in [1, n-1])</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3381-3397); src/tls/core/x509.c: tls_ecdsa_parse_int (L25-55) - r/s range</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. p256_import_be with C=1 rejects 0 and values &gt;= n for both r and s; DER is strictly minimal, non-negative, at most 32 magnitude bytes. Covered by tests/unit/tls_p256 test_reject_r0/s0/rn/sn.</note>
+    <note>p256_import_be with C=1 rejects 0 and values &gt;= n for both r and s; DER is strictly minimal, non-negative, at most 32 magnitude bytes. Covered by tests/unit/tls_p256 test_reject_r0/s0/rn/sn.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -83,10 +92,13 @@
     <section>6.4.2 step 2-3 (hash to integer e)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3400-3406) - e derivation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. The API fixes a 32-byte SHA-256 digest (hlen = N = 256) so no truncation is needed; e is reduced mod n.</note>
+    <note>The API fixes a 32-byte SHA-256 digest (hlen = N = 256) so no truncation is needed; e is reduced mod n.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+   <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -94,10 +106,13 @@
     <section>6.4.2 step 4-6 (w = s^-1, u1, u2, R = u1*G + u2*Q)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3407-3413), p256_verify_shamir (L2856+) - double-scalar multiply</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Variable-time inverse and Straus/Shamir are acceptable because all inputs are public. Verified by the RFC 6979 A.2.5 vector plus tamper and off-curve negatives in tests/unit/tls_p256.</note>
+    <note>Variable-time inverse and Straus/Shamir are acceptable because all inputs are public. Verified by the RFC 6979 A.2.5 vector plus tamper and off-curve negatives in tests/unit/tls_p256.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -105,10 +120,13 @@
     <section>6.4.2 step 6 (R = O rejected)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3414-3424) - infinity rejection</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Rejects when vs_inf is set and separately when Z(R)==0, so the projective x-check cannot degenerate.</note>
+    <note>Rejects when vs_inf is set and separately when Z(R)==0, so the projective x-check cannot degenerate.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -116,10 +134,13 @@
     <section>6.4.2 step 7-8 (v = x_R mod n; accept iff v == r)</section>
     <location>src/tls/core/p256.s: _tls_p256_verify (L3425-3453) - projective x(R) mod n == r</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Checks X == r*Z^2 (mod p) and, only when r+n &lt; p, X == (r+n)*Z^2; equivalent to x_R mod n == r without inversion.</note>
+    <note>Checks X == r*Z^2 (mod p) and, only when r+n &lt; p, X == (r+n)*Z^2; equivalent to x_R mod n == r without inversion.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -127,10 +148,13 @@
     <section>5.1 (Cipher; Nk/Nr combinations)</section>
     <location>src/tls/core/aes.s: _aes_encrypt_block (L217-373) - round count and cipher</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Nr = keysize/32+6 (10/12/14). Covered by CAVP CBC GFSbox/KeySbox/VarKey/VarTxt/MMT for 128/192/256 and tests/unit/tls_aes SP 800-38A F.2.x.</note>
+    <note>Nr = keysize/32+6 (10/12/14). Covered by CAVP CBC GFSbox/KeySbox/VarKey/VarTxt/MMT for 128/192/256 and tests/unit/tls_aes SP 800-38A F.2.x.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -138,10 +162,13 @@
     <section>5.1.1 (SubBytes implementation side channel; project policy)</section>
     <location>src/tls/core/aes.s: _aes_encrypt_block/.Lencrypt_subbytes (L310-319), _aes_key_schedule (L117-128), _gf128_mul (L377-492) - table-lookup timing</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Byte S-box (no T-tables) on an eZ80 with no data cache; xtime and GF(2^128) reduction use branch-free masks; branches depend only on key size or loop counters. Power/EM leakage not assessed.</note>
+    <note>Byte S-box (no T-tables) on an eZ80 with no data cache; xtime and GF(2^128) reduction use branch-free masks; branches depend only on key size or loop counters. Power/EM leakage not assessed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -149,10 +176,13 @@
     <section>5.2 (KeyExpansion)</section>
     <location>src/tls/core/aes.s: _aes_key_schedule (L81-190); src/tls/core/aes.c: tls_aes_init (L354-365) - 128/192/256 expansion</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Rcon doubling and the AES-256 SubWord at i mod 8 = 4 special case are present; only 16/24/32-byte keys accepted. Covered by CAVP KeySbox/VarKey for all sizes.</note>
+    <note>Rcon doubling and the AES-256 SubWord at i mod 8 = 4 special case are present; only 16/24/32-byte keys accepted. Covered by CAVP KeySbox/VarKey for all sizes.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -160,10 +190,13 @@
     <section>5.3 (InvCipher)</section>
     <location>src/tls/core/aes.s: _aes_decrypt_block (L519-678) - inverse cipher</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Straightforward inverse cipher with InvSBox. Covered by CAVP CBC decrypt and tests/unit/tls_aes F.2.2/F.2.4/F.2.6.</note>
+    <note>Straightforward inverse cipher with InvSBox. Covered by CAVP CBC decrypt and tests/unit/tls_aes F.2.2/F.2.4/F.2.6.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -171,10 +204,13 @@
     <section>4 (key of any length; error handling)</section>
     <location>src/tls/core/hmac.c: tls_hmac_context_init (L27-38) - zero-length key, unchecked init</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): keylen==0 is rejected although FIPS 198-1 permits it (HKDF works around it, hkdf.c L67-70). In the keylen &gt; 64 path the tls_hash_context_init return value is ignored (L34), so an unsupported algorithm calls uninitialized function pointers before the switch default rejects.</note>
+    <note>BUG (low): keylen==0 is rejected although FIPS 198-1 permits it (HKDF works around it, hkdf.c L67-70). In the keylen &gt; 64 path the tls_hash_context_init return value is ignored (L34), so an unsupported algorithm calls uninitialized function pointers before the switch default rejects.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -182,10 +218,13 @@
     <section>4 steps 1-3 (K0 derivation, ipad/opad); RFC 2104 2</section>
     <location>src/tls/core/hmac.c: tls_hmac_context_init (L25-71), tls_hmac_digest (L78-88) - key processing</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. keylen &gt; 64 hashes the key first, otherwise zero-pads; ipad 0x36, opad 0x5C; outer hash computed on a copy. Covered by CAVP HMAC.rsp [L=32] and tests/unit/tls_hmac RFC 4231 cases.</note>
+    <note>keylen &gt; 64 hashes the key first, otherwise zero-pads; ipad 0x36, opad 0x5C; outer hash computed on a copy. Covered by CAVP HMAC.rsp [L=32] and tests/unit/tls_hmac RFC 4231 cases.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -193,10 +232,13 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/contrib/x25519/src/x25519.s: .x25519.data (L779-807), _tls_x25519_secret epilogue (L123-139) - X25519 scratch residue</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG: _clamped (the private scalar), ladder state _a.._f and _product (pre-normalisation shared secret) live in static .bss and are never wiped; handshake X25519 calls (handshake.c L1781-1797, L2760-2786) are not wrapped in tls_crypto_guard, unlike P-256. Fix: zero the 388-byte block before both returns and wrap the calls.</note>
+    <note>BUG: _clamped (the private scalar), ladder state _a.._f and _product (pre-normalisation shared secret) live in static .bss and are never wiped; handshake X25519 calls (handshake.c L1781-1797, L2760-2786) are not wrapped in tls_crypto_guard, unlike P-256. Fix: zero the 388-byte block before both returns and wrap the calls.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>.bss wipe leak fixed as of v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -204,10 +246,13 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/aes.c: tls_aes_verify (L795-824), tls_aes_ccm_encrypt (L833-854), tls_aes_ccm_decrypt (L864-892), tls_aes_init (L391-393) - AES context residue</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (medium): tls_aes_verify memcpy's the whole context (round keys and GHASH key H) to stack tmp and never wipes it (the memset at L816 is commented out); leaking H enables GCM forgeries under that key. One-shot CCM leaves ctx on the stack; no tls_aes_clear API. The altcp record aes_ctx is also never wiped (see RFC 8446 7.1).</note>
+    <note>BUG (medium): tls_aes_verify memcpy's the whole context (round keys and GHASH key H) to stack tmp and never wipes it (the memset at L816 is commented out); leaking H enables GCM forgeries under that key. One-shot CCM leaves ctx on the stack; no tls_aes_clear API. The altcp record aes_ctx is also never wiped (see RFC 8446 7.1).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+     <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>fixed as of v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -224,12 +269,15 @@
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
-    <location>src/tls/core/hmac.c: tls_hmac_context_init (L30-31), tls_hmac_digest (L79-80) - sum[], htmp, tbuf</location>
+    <location>src/tls/core/hmac.c: tls_hmac_context_init, tls_hmac_digest, tls_hmac_clear; src/tls/core/hkdf.c; src/tls/core/passwords.c</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Padded key, hashed key, inner digest and K0 xor ipad/opad contexts stay on the stack; no HMAC clear API. Some handshake.c callers use TLS_AUTOZERO_DECL_STRUCT, but the primitive itself does not wipe.</note>
+    <note>HMAC initialization and digest wipe their temporary padded/hashed key material, inner digest, and copied context. tls_hmac_clear securely erases the caller-owned K0 xor ipad/opad values and intermediate hash state; HKDF and PBKDF2 call it for their internal contexts. tls_hash_clear provides the equivalent lifecycle operation for hash contexts. Handshake callers additionally use whole-frame crypto-guard cleanup.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of v3.0.0-rc3</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -237,10 +285,13 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/p256.s: p256_di/p256_wipe/p256_exit (L3217-3263), _tls_p256_sign saferam wipe (L3692-3699); src/tls/core/handshake.c: tls_handshake_cleanup (L5045-5103) - P-256 and ephemeral key zeroization</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. __p256_scratch is wiped on entry and every exit, _sprng_sha_mbuffer after RFC 6979, handshake P-256 calls are wrapped in crypto_guard, and the used private key and shared secret are zeroed right after ECDH. The unused group's private key survives until tls_handshake_cleanup (informational).</note>
+    <note>__p256_scratch is wiped on entry and every exit, _sprng_sha_mbuffer after RFC 6979, handshake P-256 calls are wrapped in crypto_guard, and the used private key and shared secret are zeroed right after ECDH. The unused group's private key survives until tls_handshake_cleanup (informational).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>

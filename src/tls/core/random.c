@@ -71,18 +71,10 @@ extern uint8_t sprng_last_health_mask;
 static void tls_rng_log_health_failure(void)
 {
     uint8_t mask = sprng_last_health_mask & TLS_RNG_HEALTH_ALL_PASS;
-    char message[] = "rng health fail 0b0000000";
-    uint8_t i;
 
-    for (i = 0u; i < 7u; i++)
-    {
-        message[18u + i] = (mask & (uint8_t)(1u << (6u - i))) ? '1' : '0';
-    }
-
-    /* The code event retains the call site/mask in the traceback. The named
-     * error event gives the file logger a stable, immediately readable line. */
-    ERROR_CODE(mask);
-    ERROR_INFO(message);
+    /* Source recovery continues after this event. Keep the failed test mask
+     * in the traceback, but reserve ERROR for a terminal RNG failure. */
+    WARN_CODE(mask);
 }
 
 static bool g_tls_rng_entropy_timer_running = false;
@@ -566,7 +558,6 @@ static bool tls_drbg_entropy_gather_step(void)
     health_epoch = tls_random_health_epoch();
     if (!tls_rng_healthcheck())
     {
-        DEBUG(); /* healthcheck failed -- restarting the whole RNG lifecycle */
         tls_rng_begin_initialization(TLS_RNG_FAILURE_SOURCE_INIT);
         return false;
     }
@@ -583,7 +574,6 @@ static bool tls_drbg_entropy_gather_step(void)
 
     if (g_tls_entropy_reserve_bits >= target_bits)
     {
-        DEBUG(); /* reserve already at target -- no gather needed this step */
         return true;
     }
     if (g_tls_entropy_reserve_len >= target_bytes)
@@ -600,12 +590,9 @@ static bool tls_drbg_entropy_gather_step(void)
     if (tls_entropy_collect(entropy, collect_len) == NULL)
     {
         tls_rng_log_health_failure();
-        INFO("rng collect fail");
-        ERROR_CODE(TLS_RNG_FAILURE_COLLECTION);
         tls_rng_begin_initialization(TLS_RNG_FAILURE_COLLECTION);
         return false;
     }
-    INFO("rng collect ok");
 
     /* Never combine observations spanning a failed or replaced source.
      * If the epoch changed the asm layer already selected a new tap and
@@ -650,7 +637,6 @@ static bool tls_drbg_entropy_gather_step(void)
                                        TLS_HASH_DRBG_128_INSTANTIATE_BYTES,
                                        TLS_RNG_STRENGTH_128))
         {
-            INFO("rng seed drbg fail");
             tls_rng_fail(TLS_RNG_FAILURE_INSTANTIATE);
             return false;
         }
@@ -667,7 +653,6 @@ static bool tls_drbg_entropy_gather_step(void)
                                        TLS_HASH_DRBG_192_INSTANTIATE_BYTES,
                                        TLS_RNG_STRENGTH_192))
         {
-            INFO("rng seed drbg fail");
             tls_rng_fail(TLS_RNG_FAILURE_INSTANTIATE);
             return false;
         }
@@ -686,7 +671,6 @@ static bool tls_drbg_apply_entropy_reserve(void)
     bool ok;
     if (g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
     {
-        DEBUG(); /* reserve below reseed target -- skipping reseed, DRBG runs on existing seed */
         return true;
     }
     if (g_tls_rng_state != TLS_RNG_DRBG_READY_192 ||
@@ -766,11 +750,8 @@ static void tls_rng_request_dispatch(void)
     tls_random_request_cb_t cb;
     void *cb_arg;
 
-    DEBUG(); /* rng dispatcher tick; state is in the traceback-free trace, check g_tls_rng_state live */
-
     if (tls_rng_available_strength() == 0u && tls_rng_deadline_expired())
     {
-        DEBUG(); /* deadline expired with no usable strength yet -> failing as TIMEOUT */
         tls_rng_fail(TLS_RNG_FAILURE_TIMEOUT);
     }
     else if (g_tls_rng_state == TLS_RNG_AWAITING_INIT)
@@ -811,14 +792,8 @@ static void tls_rng_request_dispatch(void)
             return;
         }
     }
-    else
-    {
-        DEBUG(); /* tick did no gather work this pass -- none of the gather conditions held */
-    }
-
     if (done)
     {
-        { char _msg[32]; snprintf(_msg, sizeof(_msg), "rng bytes returned %u", (unsigned)g_tls_rng_request_collected); INFO(_msg); }
         cb = g_tls_rng_request_cb;
         cb_arg = g_tls_rng_request_arg;
         if (cb != NULL)
@@ -844,7 +819,6 @@ static void tls_rng_request_dispatch(void)
     else
     {
         /* Idle: disable until the next request brings us back online. */
-        INFO("rng timer idle stop");
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RNG_REQUEST, 0);
         g_tls_rng_entropy_timer_running = false;
     }
@@ -930,13 +904,11 @@ static bool tls_rng_drive_initialization(void)
         tls_rng_begin_initialization(0);
     if (g_tls_rng_state == TLS_RNG_FAILED)
     {
-        INFO("rng entropy init fail");
         return false;
     }
     if (tls_rng_available_strength() == 0u && tls_rng_deadline_expired())
     {
         tls_rng_fail(TLS_RNG_FAILURE_TIMEOUT);
-        INFO("rng entropy init fail");
         return false;
     }
     if (g_tls_rng_state == TLS_RNG_AWAITING_INIT)
@@ -946,15 +918,9 @@ static bool tls_rng_drive_initialization(void)
             if (tls_rng_deadline_expired())
             {
                 tls_rng_fail(TLS_RNG_FAILURE_TIMEOUT);
-                INFO("rng entropy init fail");
-            }
-            else
-            {
-                DEBUG(); /* healthcheck not yet passing, deadline not expired -- still waiting on a source */
             }
             return false;
         }
-        INFO("rng entropy init ok");
         g_tls_rng_state = TLS_RNG_DRBG_SEEDING;
         return true;
     }
@@ -1003,7 +969,6 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
      * the required strength is not yet available rather than spin-blocking. */
     if (tls_rng_available_strength() < strength_bits)
     {
-        DEBUG(); /* requested strength not yet available -- caller should retry on next tick */
         goto fail;
     }
     if (g_tls_drbg.reseed_counter > TLS_HASH_DRBG_RESEED_INTERVAL)
@@ -1013,7 +978,6 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
         if (g_tls_rng_state != TLS_RNG_DRBG_READY_192 ||
             g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
         {
-            DEBUG(); /* reseed interval exceeded but reserve not ready -- bytes withheld until it is */
             goto fail;
         }
     }
@@ -1039,7 +1003,6 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
     if (g_tls_rng_started && !g_tls_rng_entropy_timer_running && !g_tls_rng_external &&
         g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
     {
-        DEBUG(); /* re-arming background reseed timer after a successful generate */
         g_tls_rng_entropy_timer_running = true;
         tls_rng_ensure_attached();
         lwip_dispatch_start();
@@ -1079,7 +1042,6 @@ void *tls_random_bytes_pr(void *buffer, size_t len, uint16_t strength_bits)
     if (g_tls_rng_state != TLS_RNG_DRBG_READY_192 ||
         g_tls_entropy_reserve_bits < TLS_HASH_DRBG_RESEED_TARGET_BITS)
     {
-        DEBUG(); /* reserve not ready — PR request denied */
         tls_secure_memzero(buffer, len);
         return NULL;
     }
@@ -1106,8 +1068,6 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
     {
         return false;
     }
-    { char _msg[32]; snprintf(_msg, sizeof(_msg), "rng bytes requested %u", (unsigned)len); INFO(_msg); }
-
     if (blocking)
     {
         uint32_t request_deadline = sys_now() + TLS_RNG_READY_TIMEOUT_MS;
@@ -1151,7 +1111,6 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
             }
             done = tls_rng_request_try_complete();
         }
-        { char _msg[32]; snprintf(_msg, sizeof(_msg), "rng bytes returned %u", (unsigned)g_tls_rng_request_collected); INFO(_msg); }
         if (cb != NULL)
         {
             cb(true, arg);

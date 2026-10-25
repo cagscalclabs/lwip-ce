@@ -100,6 +100,14 @@ void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *data, size_t l
 void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *digest);
 
 /***************************************************************************
+ * @brief Securely clears a hash context.
+ * @param ctx       Pointer to the hash context to clear. May be NULL.
+ * @note Call when the context is no longer needed to erase buffered input
+ *       and intermediate hash state.
+ */
+void tls_hash_clear(struct tls_hash_context *ctx);
+
+/***************************************************************************
  * @brief Returns a MGF1 digest from some data. Used with RSA.
  * @param data      Pointer to data to hash.
  * @param datalen   Length of data to hash.

@@ -81,11 +81,13 @@ bool tls_hkdf_extract(
     /* PRK = HMAC(salt, ikm) */
     if (!tls_hmac_context_init(&ctx, hash_algorithm, salt, salt_len)) {
         ERROR();
+        tls_hmac_clear(&ctx);
         return false;
     }
 
     tls_hmac_update(&ctx, ikm, ikm_len);
     tls_hmac_digest(&ctx, prk);
+    tls_hmac_clear(&ctx);
 
     return true;
 }
@@ -144,6 +146,8 @@ bool tls_hkdf_expand(
         /* Initialize HMAC with PRK */
         if (!tls_hmac_context_init(&ctx, hash_algorithm, prk, prk_len)) {
             ERROR();
+            tls_hmac_clear(&ctx);
+            tls_secure_memzero(t_prev, sizeof t_prev);
             return false;
         }
 
@@ -163,6 +167,7 @@ bool tls_hkdf_expand(
 
         /* Compute T(i) */
         tls_hmac_digest(&ctx, t_prev);
+        tls_hmac_clear(&ctx);
 
         /* Copy to output (possibly partial on last iteration) */
         size_t to_copy = hash_len;
@@ -173,6 +178,8 @@ bool tls_hkdf_expand(
         offset += to_copy;
     }
 
+    tls_hmac_clear(&ctx);
+    tls_secure_memzero(t_prev, sizeof t_prev);
     return true;
 }
 

@@ -38,7 +38,11 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     //HASH = sha256
     // DK = T(i) for i in 0 => (keylen/HASH), concat
     if(!tls_hmac_context_init(&initial, algorithm,
-                              (const uint8_t *)password, passlen)) { ERROR(); return false; }
+                              (const uint8_t *)password, passlen)) {
+        tls_hmac_clear(&initial);
+        ERROR();
+        return false;
+    }
     
     size_t hash_len = initial.digestlen;
     
@@ -73,8 +77,8 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     tls_secure_memzero(hash_buffer, sizeof hash_buffer);
     tls_secure_memzero(hash_composite, sizeof hash_composite);
     tls_secure_memzero(c, sizeof c);
-    tls_secure_memzero(&initial, sizeof initial);
-    tls_secure_memzero(&counter, sizeof counter);
-    tls_secure_memzero(&state, sizeof state);
+    tls_hmac_clear(&initial);
+    tls_hmac_clear(&counter);
+    tls_hmac_clear(&state);
     return true;
 }

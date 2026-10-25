@@ -40,7 +40,10 @@ extern bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, s
 
 TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 
-static inline void tls_dbg_status(const char *msg) { INFO(msg); }
+/* Keep the stage labels beside the code as breadcrumbs, but do not emit them.
+ * TLS record and handshake paths are too frequent for the bounded persistent
+ * log; failures below already emit a location-bearing ERROR event. */
+#define tls_dbg_status(msg) ((void)sizeof(msg))
 
 /* Fatal TLS connection termination must always leave a traceback entry at the
  * actual decision site.  Do not call altcp_abort() directly for an error path;
@@ -222,7 +225,6 @@ static void altcp_tls_ce_rx_release_arm(void)
 
     if (!altcp_tls_ce_has_pending_recved())
     {
-        DEBUG(); /* nothing throttled pending -- disarming the rx-release dispatcher */
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
         return;
     }
@@ -230,7 +232,6 @@ static void altcp_tls_ce_rx_release_arm(void)
     interval_ms = altcp_tls_ce_rx_release_interval_ms(g_tls_rx_throttle_level);
     if (interval_ms == 0)
     {
-        DEBUG(); /* release interval computed as 0 at current throttle level -- disarming instead of busy-looping */
         lwip_dispatch_set_period(LWIP_DISPATCH_TLS_RX_RECVD, 0);
         return;
     }
@@ -805,7 +806,6 @@ static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n)
     if (state->rx_acked_len >= n)
     {
         /* Entire span was already acked at queue time. */
-        DEBUG();
         state->rx_acked_len -= n;
         return;
     }
@@ -1260,10 +1260,6 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         tls_dbg_status("clienthello: deferred hs init");
         if (!altcp_tls_ce_init_handshake(state))
         {
-            /* Encode (rng_state << 8 | last_failure) so the caller can decode
-             * both from a single WARN_CODE event on the calc's debug console. */
-            WARN_CODE(((uint16_t)tls_rng_status() << 8) |
-                      (uint16_t)tls_rng_last_failure());
             tls_dbg_status("clienthello: hs init not ready, retry");
             return ERR_MEM; /* retry next tick */
         }
@@ -1533,7 +1529,6 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 {
                     /* Record split across TCP segments — wait for the rest.
                      * Large messages (Certificate) commonly land here. */
-                    DEBUG();
                     break;
                 }
 
@@ -1608,8 +1603,6 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         ALTCP_TLS_CE_ERROR_ABORT_CODE(conn, -dec_err);
                         return ERR_ABRT;
                     }
-                    DEBUG();
-
                     if (!tls_process_inner_plaintext_pbuf(&state->tls_ctx, inner_type,
                                                           dec_pbuf, dec_len))
                     {
@@ -1618,7 +1611,6 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         ALTCP_TLS_CE_ERROR_ABORT(conn);
                         return ERR_ABRT;
                     }
-                    DEBUG();
                     tls_dbg_status("rx: inner ok");
 
                     pbuf_free(dec_pbuf);
@@ -2127,7 +2119,6 @@ altcp_tls_ce_handle_rx_appldata_impl(struct altcp_pcb *conn, altcp_tls_ce_state_
 
         if ((size_t)state->rx->tot_len < total_rec_len)
         {
-            DEBUG(); /* app-data record split across segments -- waiting for the rest */
             break;
         }
 
@@ -2720,7 +2711,6 @@ altcp_tls_ce_sndbuf(struct altcp_pcb *conn)
             /* Reports 0 until the handshake completes -- an app write stall
              * here is expected/by-design, not a bug, but worth being able
              * to see when diagnosing "writes never happen". */
-            DEBUG();
             return 0;
         }
 
