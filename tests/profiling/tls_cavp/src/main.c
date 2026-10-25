@@ -356,8 +356,16 @@ static size_t run_hmac_sha256(const uint8_t *in, size_t in_len, uint8_t *out, si
     if (off + msg_len > in_len)
         return 0;
     const uint8_t *msg = in + off;
+    off += msg_len;
 
-    if (out_max < 1 + 32)
+    if (off + 1 > in_len)
+        return 0;
+    uint8_t tlen = in[off];
+    off++;
+    if (tlen < 1 || tlen > 32)
+        return 0;
+
+    if (out_max < 1 + tlen)
         return 0;
 
     struct tls_hmac_context hctx;
@@ -368,9 +376,9 @@ static size_t run_hmac_sha256(const uint8_t *in, size_t in_len, uint8_t *out, si
     uint8_t tag[32];
     tls_hmac_digest(&hctx, tag);
 
-    out[0] = 32;
-    memcpy(out + 1, tag, 32);
-    return 33;
+    out[0] = tlen;
+    memcpy(out + 1, tag, tlen);
+    return (size_t)(1 + tlen);
 }
 
 /*

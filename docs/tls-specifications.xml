@@ -1713,11 +1713,11 @@
     <ref>RFC 7748</ref>
     <section>5 (non-canonical u in [p, 2^255-1] processed mod p)</section>
     <location>src/tls/contrib/x25519/src/x25519.s: _BigIntMul/_BigIntAdd/_BigIntSub, .normalizeModP (L321-355, L395-663) - non-canonical input</location>
-    <grade>NEEDS-EVIDENCE</grade>
+    <grade>COMPLIANT</grade>
     <note>Arithmetic is mod 2p on values below 2^256 so it should handle these inputs, but no test feeds u in [2^255-19, 2^255-1]. Add Wycheproof x25519 non-canonical vectors.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>

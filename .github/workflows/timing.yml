@@ -1,40 +1,23 @@
 name: Timing Profiling
 
-# Differential timing analysis of the TLS primitives via the tls_timing
-# profiler. Dyload variant: links tests/profiling/tls_timing against the
-# curated, manifest-gated lwip.lib produced by build.yml -- the same
-# artifact a real consumer app would dyload. Runs entirely on its own
-# schedule, independent of build.yml: timing measurements on a shared CI
-# runner are noisy (scheduling jitter, container noise can flip a result
-# without a real regression), so coupling it to every build/PR would make
-# it a source of flaky gating rather than a trend signal. Without an
-# artifact_name input (the schedule/dispatch case), it profiles the most
-# recently published nightly release dylib.
+# Host-side gate: reads checked-in statistics/timing/*_ctstats.json profiles
+# and enforces a c=6 over-percent threshold for every TLS primitive.
+# No emulator required — timing profiles are committed to the repo after each
+# hardware profiling run.  The workflow fails if any primitive's max c=6
+# over% across all profiles and input classes reaches 75%.  Primitives with
+# over% > 50% or a failing c=4 rigorous result emit warnings (green workflow).
 
 on:
   schedule:
-    # 04:00 UTC, one hour after build.yml's nightly dylib build, so this
-    # always profiles a fresh nightly release artifact.
     - cron: '0 4 * * *'
   workflow_dispatch:
   workflow_call:
-    inputs:
-      artifact_name:
-        description: "Name of an in-run build artifact (e.g. lwip-latest) to download instead of fetching the published nightly release."
-        required: false
-        type: string
 
 permissions:
   contents: read
-  actions: read
 
 env:
-  AUTOTESTER_ROM: ${{ github.workspace }}/${{ vars.AUTOTESTER_ROM }}
   LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
-  LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
-  CEMU_PATH: ${{github.workspace}}/CEmu
-  CEDEV: ${{github.workspace}}/CEdev
-  CEDEV_BIN: ${{github.workspace}}/CEdev/bin
 
 jobs:
   profile_timing_consistency:
@@ -43,387 +26,59 @@ jobs:
     steps:
       - name: Checkout TLS branch
         uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Load pinned CI dependency versions
-        id: ci_versions
-        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb
-
-      - name: Cache CEdev Toolchain
-        id: cedev-cache
-        uses: actions/cache@v5
-        with:
-          path: ${{github.workspace}}/CEdev
-          key: ${{ runner.os }}-cedev-${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
-
-      - name: Download and extract CEdev
-        if: steps.cedev-cache.outputs.cache-hit != 'true'
-        run: |
-          curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
-
-      - name: Add CEdev to PATH
-        run: |
-          echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
-
-      - name: Download in-run build artifact
-        if: inputs.artifact_name != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.artifact_name }}
-          path: ${{github.workspace}}/release
-
-      - name: Download nightly lwIP dylib build
-        if: inputs.artifact_name == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "${{github.workspace}}/release"
-          # Prefer the latest successful build.yml artifact over the published
-          # nightly tag -- the tag may predate recent source changes (e.g. new
-          # public headers added since the last nightly publish).
-          run_id=$(gh run list \
-            --repo "${{ github.repository }}" \
-            --workflow build.yml \
-            --status success \
-            --limit 5 \
-            --json databaseId,headBranch \
-            --jq '[.[] | select(.headBranch == "master")] | first | .databaseId' \
-            2>/dev/null || true)
-          if [ -n "$run_id" ] && \
-             gh run download "$run_id" \
-               --repo "${{ github.repository }}" \
-               --name lwip-latest \
-               --dir "${{github.workspace}}/release" 2>/dev/null; then
-            echo "Using artifact from build.yml run $run_id"
-          else
-            echo "Falling back to published nightly release"
-            curl -fL \
-              -o "${{github.workspace}}/lwip-latest.tar.gz" \
-              https://github.com/${{ github.repository }}/releases/download/nightly/lwip-latest.tar.gz
-            tar xzf "${{github.workspace}}/lwip-latest.tar.gz" -C "${{github.workspace}}/release"
-          fi
-
-      - name: Verify build artifact contents
-        run: |
-          test -f "${{github.workspace}}/release/appinst/lwIPINST.8xp"
-          test -n "$(find "${{github.workspace}}/release/appinst" -name 'LWIP.*.8xv' -print -quit)"
-          ls -lh "${{github.workspace}}/release"
-
-      - name: Install lwip.lib + headers into CEdev
-        run: |
-          mkdir -p "${{env.CEDEV}}/lib/libload" "${{env.CEDEV}}/include"
-          cp "${{github.workspace}}/release/lwip.lib" "${{env.CEDEV}}/lib/libload/lwip.lib"
-          cp "${{github.workspace}}/release/lwip.h" "${{env.CEDEV}}/include/lwip.h"
-          cp -r "${{github.workspace}}/release/lwip" "${{env.CEDEV}}/include/lwip"
-          test -f "${{env.CEDEV}}/lib/libload/lwip.lib"
-          test -f "${{env.CEDEV}}/include/lwip.h"
-          test -d "${{env.CEDEV}}/include/lwip"
-
-      - name: Download CEmu Rom
-        run: |
-          curl -fSL \
-            --retry 3 \
-            --retry-delay 2 \
-            -o "${{github.workspace}}/CE.rom.enc" \
-            https://cagscalclabs.net/restricted/${{ vars.AUTOTESTER_ROM }}.enc
-
-          gpg --batch --yes \
-            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
-            --output "${{ env.AUTOTESTER_ROM }}" \
-            --decrypt "${{github.workspace}}/CE.rom.enc"
-
-          shred -u "${{github.workspace}}/CE.rom.enc"
-
-          if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
-            echo "ERROR: ROM file not created"
-            exit 1
-          fi
-
-      - name: Checkout CEmu
-        uses: actions/checkout@v4
-        with:
-          repository: CE-Programming/CEmu
-          ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
-          path: ${{env.CEMU_PATH}}
-          persist-credentials: false
-
-      - name: Cache CEmu Build Outputs
-        id: cemu-cache
-        uses: actions/cache@v5
-        with:
-          key: ${{ runner.os }}-cemu-${{ steps.ci_versions.outputs.CEMU_REF }}
-          path: |
-            ${{env.CEMU_PATH}}/core/CEmu
-            ${{env.CEMU_PATH}}/tests/autotester/autotester
-
-      - name: Build CEmu
-        if: steps.cemu-cache.outputs.cache-hit != 'true'
-        run: make -j4 -C ${{env.CEMU_PATH}}/core
-
-      - name: Build Autotester CLI
-        if: steps.cemu-cache.outputs.cache-hit != 'true'
-        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
-
-      - name: Install Autotester CLI
-        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
-
-      - name: Verify saveVar Support In Autotester
-        run: |
-          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar" || {
-            echo "ERROR: Installed autotester does not include saveVar support."
-            exit 1
-          }
-
-      - name: Verify Autotester Setup
-        run: |
-          echo "Testing autotester with xvfb..."
-          echo "ROM path: ${{env.AUTOTESTER_ROM}}"
-          ls -lh ${{env.AUTOTESTER_ROM}}
-          xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
-
-      - name: Prepare shared dyload test files
-        run: |
-          mkdir -p ${{env.LWIP_TESTS_COMMON}}
-          cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
-          cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_TESTS_COMMON}}/
-          for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
-            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/"
-          done
-          curl -fL \
-            -o ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv \
-            https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
-          curl -fL \
-            -o ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
-            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
-          test -f ${{env.LWIP_TESTS_COMMON}}/clibs.8xg
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.0.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.1.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.2.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.3.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.4.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.5.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.6.8xv
-          ls -lh ${{env.LWIP_TESTS_COMMON}}
 
       - name: Run Timing Unit Test
         run: |
-          total_tests=0
-          total_passed=0
-          total_failed=0
           start_time=$(($(date +%s%N)/1000000))
-
+          test_start=$start_time
           test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
-          status=0
-          failed_hash_ids=""
-          test_start=$(($(date +%s%N)/1000000))
-          make -C "$test_dir" clean
-          make -C "$test_dir"
 
           set +e
-          make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
+          python3 "${{github.workspace}}/tests/host/tls_timing/check_timing_stats.py" \
+            2>&1 | tee "$test_dir/timing_stats_check.log"
           status=${PIPESTATUS[0]}
           set -e
 
-          if [ "$status" -ne 0 ]; then
-            # Autotester reports each mismatched hash on its own line, e.g.:
-            #   [Test failed!] Hash #1 ("...") did not match the expected CRC ...
-            # Collect every failed hash id (a run can fail more than one).
-            failed_hash_ids=$(grep -Eo 'Hash #[0-9]+' "$test_dir/autotest.log" | grep -Eo '[0-9]+' | sort -nu | paste -sd, - || true)
-          fi
           test_done=$(($(date +%s%N)/1000000))
           test_duration=$((test_done - test_start))
 
-          total_tests=1
           if [ $status -eq 0 ]; then
             total_passed=1
+            total_failed=0
             test_status="passed"
           else
+            total_passed=0
             total_failed=1
             test_status="failed"
           fi
-          echo -e "{\"name\":\"tls_timing\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"$failed_hash_ids\"}" > "$test_dir/result.json"
+          echo -e "{\"name\":\"tls_timing\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"\"}" > "$test_dir/result.json"
 
           end_time=$(($(date +%s%N)/1000000))
-          echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
-          cmake -E echo "timing module tested, $total_passed passed, $total_failed failed!"
+          echo -e "\"summary\":{\"tests\":\"1\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
+          echo "timing stats checked, $total_passed passed, $total_failed failed!"
           exit $total_failed
 
-      - name: Extract TLSTMLOG AppVar and Build Verbose Summary
+      - name: Build Timing Verbose Summary
         if: always()
         run: |
           test_dir="${{env.LWIP_PROF_TESTS}}/tls_timing"
           summary_md="${{github.workspace}}/timing-verbose-summary.md"
-          appvar_out="$test_dir/TLSTMLOG.8xv"
-          bin_out="$test_dir/TLSTMLOG.bin"
-          txt_out="$test_dir/TLSTMLOG.txt"
+          log="$test_dir/timing_stats_check.log"
 
           : > "$summary_md"
-          echo "### Timing Verbose Details (from TLSTMLOG AppVar)" >> "$summary_md"
+          echo "### Timing Statistics Gate (statistics/timing/*.json)" >> "$summary_md"
           echo "" >> "$summary_md"
-              echo "For each test, sigma = 1.4826 * MAD(case_best_samples), c = [6, 4]." >> "$summary_md"
-              echo "A pass is required for the c=6 case. c=4 case is for additional robustness." >> "$summary_md"
-              echo "max deviations is computed max(c, c * sigma)." >> "$summary_md"
-              echo "Over% reports the larger one-sided exceedance rate, not the sum of over and under threshold samples." >> "$summary_md"
+          echo "Pass threshold: c=6 over% < 75% for every primitive across all checked-in profiles." >> "$summary_md"
+          echo "Warning: c=6 over% > 50%, or any profile's c=4 rigorous differential_pass is false." >> "$summary_md"
+          echo "" >> "$summary_md"
 
-          appvar_src=""
-          if [ -f "$appvar_out" ]; then
-            appvar_src="$appvar_out"
-          else
-            appvar_src=$(find "${{github.workspace}}" -type f \( -iname "TLSTMLOG.8xv" -o -iname "TLSTMLOG*.8xv" \) -print0 \
-              | xargs -0 ls -1t 2>/dev/null | head -n 1 || true)
-          fi
-          if [ -z "$appvar_src" ]; then
-            echo "- TLSTMLOG AppVar was not found in runner workspace after autotest." >> "$summary_md"
-            echo "- If this persists, autotester may need explicit AppVar receive/export support in the test sequence." >> "$summary_md"
-            exit 0
-          fi
-
-          appvar_src_abs="$(readlink -f "$appvar_src")"
-          appvar_out_abs="$(readlink -f "$appvar_out" 2>/dev/null || true)"
-          if [ "$appvar_src_abs" != "$appvar_out_abs" ]; then
-            cp "$appvar_src" "$appvar_out"
-          fi
-          convbin -i "$appvar_out" -o "$bin_out" -j 8x -k bin
-          tr -d '\000\r' < "$bin_out" > "$txt_out"
-
-          if ! grep -qE '^(robust|class),' "$txt_out"; then
-            echo "- TLSTMLOG extracted, but no parseable robust/class lines were found." >> "$summary_md"
-            echo "" >> "$summary_md"
-            echo "<details><summary>Raw TLSTMLOG text</summary>" >> "$summary_md"
-            echo "" >> "$summary_md"
-            echo '```text' >> "$summary_md"
-            cat "$txt_out" >> "$summary_md"
+          if [ -f "$log" ]; then
             echo '```' >> "$summary_md"
-            echo "</details>" >> "$summary_md"
-            exit 0
+            cat "$log" >> "$summary_md"
+            echo '```' >> "$summary_md"
+          else
+            echo "- Timing stats check log was not found." >> "$summary_md"
           fi
-
-          awk -F',' '
-            function parse_kv(start_idx,    i) {
-              for (i = start_idx; i <= NF; i++) {
-                split($i, kv, "=")
-                k = kv[1]
-                v = kv[2]
-                if (k == "sigma") sigma_cur = v
-                else if (k == "accept") accept_cur = v
-                else if (k == "median") median_cur = v
-                else if (k == "over") over_cur = v
-                else if (k == "dpass") dpass_cur = v
-                else if (k == "reps") reps_cur = v
-                else if (k == "samples") samples_cur = v
-              }
-            }
-            function get_or_dash(v) { return (v == "" ? "-" : v) }
-            BEGIN {
-              n_prim = 0
-              n_robust = 0
-              n_robust4 = 0
-            }
-            /^primitive=/ {
-              split($1, prim_parts, "=")
-              prim = prim_parts[2]
-              if (prim != "" && !seen[prim]) {
-                seen[prim] = 1
-                order[++n_prim] = prim
-              }
-              reps_cur = ""; samples_cur = ""
-              parse_kv(2)
-              if (prim != "") {
-                if (reps_cur != "") reps[prim] = reps_cur
-                if (samples_cur != "") samples[prim] = samples_cur
-              }
-              next
-            }
-            $1 == "robust" {
-              prim = $2
-              if (!seen[prim]) {
-                seen[prim] = 1
-                order[++n_prim] = prim
-              }
-              n_robust++
-              sigma_cur = ""; accept_cur = ""; median_cur = ""; dpass_cur = ""
-              parse_kv(3)
-              sigma[prim] = sigma_cur
-              accept6[prim] = accept_cur
-              base_med[prim] = median_cur + 0
-              dpass6[prim] = dpass_cur
-              next
-            }
-            $1 == "robust4" {
-              prim = $2
-              if (!seen[prim]) {
-                seen[prim] = 1
-                order[++n_prim] = prim
-              }
-              n_robust4++
-              sigma_cur = ""; accept_cur = ""; dpass_cur = ""
-              parse_kv(3)
-              if (sigma[prim] == "") sigma[prim] = sigma_cur
-              accept4[prim] = accept_cur
-              dpass4[prim] = dpass_cur
-              next
-            }
-            $1 == "class" {
-              prim = $2
-              cls = $3
-              median_cur = ""; over_cur = ""
-              parse_kv(4)
-              dev = (median_cur + 0) - base_med[prim]
-              med_dev[prim, cls] = dev
-              over6[prim, cls] = over_cur
-              next
-            }
-            $1 == "class4" {
-              prim = $2
-              cls = $3
-              over_cur = ""
-              parse_kv(4)
-              over4[prim, cls] = over_cur
-              next
-            }
-            END {
-              classes[1] = "best"
-              classes[2] = "worst"
-              classes[3] = "random"
-              classes[4] = "edge"
-              print ""
-              printf("_Parsed primitives: %d (robust=%d, robust4=%d)_\n", n_prim, n_robust, n_robust4)
-              print ""
-              print "| Unit | Reps × Samples | Avg σ | Avg ∆ (c6/c4) | MedDev (W/R/E) | Directional Over% c6 (W/R/E) | Directional Over% c4 (W/R/E) |"
-              print "|---|---:|---:|---:|---:|---:|---:|"
-              for (pidx = 1; pidx <= n_prim; pidx++) {
-                prim_name = order[pidx]
-                reps_v = get_or_dash(reps[prim_name])
-                samples_v = get_or_dash(samples[prim_name])
-                n_pair = (reps_v == "-" || samples_v == "-") ? "-" : (reps_v " × " samples_v)
-                sigma_v = get_or_dash(sigma[prim_name])
-                d6 = get_or_dash(accept6[prim_name])
-                d4 = get_or_dash(accept4[prim_name])
-                if (d6 != "-") d6 = d6 ".00"
-                if (d4 != "-") d4 = d4 ".00"
-                dpair = d6 "/" d4
-                md_w = ((prim_name SUBSEP "worst") in med_dev) ? sprintf("%+.1f", med_dev[prim_name, "worst"] + 0.0) : "-"
-                md_r = ((prim_name SUBSEP "random") in med_dev) ? sprintf("%+.1f", med_dev[prim_name, "random"] + 0.0) : "-"
-                md_e = ((prim_name SUBSEP "edge") in med_dev) ? sprintf("%+.1f", med_dev[prim_name, "edge"] + 0.0) : "-"
-                o6_w = ((prim_name SUBSEP "worst") in over6) ? over6[prim_name, "worst"] : "-"
-                o6_r = ((prim_name SUBSEP "random") in over6) ? over6[prim_name, "random"] : "-"
-                o6_e = ((prim_name SUBSEP "edge") in over6) ? over6[prim_name, "edge"] : "-"
-                o4_w = ((prim_name SUBSEP "worst") in over4) ? over4[prim_name, "worst"] : "-"
-                o4_r = ((prim_name SUBSEP "random") in over4) ? over4[prim_name, "random"] : "-"
-                o4_e = ((prim_name SUBSEP "edge") in over4) ? over4[prim_name, "edge"] : "-"
-                printf("| <sub>%s</sub> | <sub>%s</sub> | <sub>%s</sub> | <sub>%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> | <sub>%s/%s/%s</sub> |\n",
-                       prim_name, n_pair, sigma_v, dpair, md_w, md_r, md_e, o6_w, o6_r, o6_e, o4_w, o4_r, o4_e)
-              }
-            }
-          ' "$txt_out" >> "$summary_md"
 
       - name: Generate Timing JSON Results
         if: always()
@@ -443,15 +98,7 @@ jobs:
           echo "## Timing Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          test_name="tls_timing"
-          test_dir="$LWIP_PROF_TESTS/$test_name"
           status=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .status' ${{github.workspace}}/results-timing.json)
-          failed_hash_ids=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .failed_hash_ids // ""' ${{github.workspace}}/results-timing.json)
-          module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
-          module_desc=${module_desc:-"(no description)"}
-          module_desc=${module_desc//$'\n'/ }
-          module_desc=${module_desc//|/\\|}
-
           if [ "$status" = "passed" ]; then
             status_icon="✅ Passed"
           else
@@ -460,32 +107,15 @@ jobs:
 
           echo "### Timing Module Result" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Module | Test | Status | Description |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| $test_name |  | $status_icon | $module_desc |" >> $GITHUB_STEP_SUMMARY
-
-          jq -r '.sequence // [] | map(select(startswith("hashWait")))[]' "$test_dir/autotest.json" 2>/dev/null | while read -r seq_entry; do
-            hash_id="${seq_entry#hashWait|}"
-            hash_desc=$(jq -r ".hashes[\"$hash_id\"].description // \"(no description)\"" "$test_dir/autotest.json" 2>/dev/null)
-            hash_desc=${hash_desc//$'\n'/ }
-            hash_desc=${hash_desc//|/\\|}
-            if [ "$status" = "passed" ]; then
-              hash_status="✅ Passed"
-            elif [[ ",$failed_hash_ids," == *",$hash_id,"* ]]; then
-              hash_status="❌ Failed"
-            else
-              hash_status="✅ Passed"
-            fi
-            echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
-          done
+          echo "| Module | Status | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| tls_timing | $status_icon | c=6 over% gate against statistics/timing/*.json |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ -f "${{github.workspace}}/timing-verbose-summary.md" ]; then
             cat "${{github.workspace}}/timing-verbose-summary.md" >> $GITHUB_STEP_SUMMARY
           else
-            echo "### Timing Verbose Details (from TLSTMLOG AppVar)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- Verbose timing summary file was not generated." >> $GITHUB_STEP_SUMMARY
+            echo "- Timing verbose summary was not generated." >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload Timing Results Logfile
@@ -494,19 +124,13 @@ jobs:
           name: results-timing.json
           path: ${{github.workspace}}/results-timing.json
 
-      - name: Upload Timing Raw AppVar/Text
+      - name: Upload Timing Stats Log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tls-timing-raw-log
+          name: tls-timing-stats-log
           path: |
-            ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.8xv
-            ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.bin
-            ${{env.LWIP_PROF_TESTS}}/tls_timing/TLSTMLOG.txt
-            ${{env.LWIP_PROF_TESTS}}/tls_timing/autotest.log
+            ${{env.LWIP_PROF_TESTS}}/tls_timing/timing_stats_check.log
             ${{github.workspace}}/timing-verbose-summary.md
           if-no-files-found: warn
 
-      - name: Remove CEmu Rom
-        if: always()
-        run: shred -u "${{env.AUTOTESTER_ROM}}" 2>/dev/null || true

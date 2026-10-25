@@ -194,6 +194,20 @@ RFC_VECTORS: list[dict[str, Any]] = [
         "peer_pub_hex": "0900000000000000000000000000000000000000000000000000000000000000",
         "expected_shared_hex": "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079",
     },
+    {
+        "$source": "RFC 7748 §5 non-canonical u: p+9 (= 2^255-10) reduces to 9 (base point)",
+        "algorithm": "X25519-SECRET",
+        "priv_hex": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+        "peer_pub_hex": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "expected_shared_hex": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+    },
+    {
+        "$source": "RFC 7748 §5 non-canonical u: 2^255-1 (reduces to 18 mod p)",
+        "algorithm": "X25519-SECRET",
+        "priv_hex": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+        "peer_pub_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "expected_shared_hex": "359668d79a67267a57ffef8f0f4a9882a7c0e3122cb1999c5626346383f9f811",
+    },
 ]
 
 
@@ -519,17 +533,21 @@ def fetch_hmac_sha256() -> list[dict[str, Any]]:
             text = f.read().decode("latin-1")
     out = []
     for t in parse_rsp(text, anchor="Count"):
-        if t.get("L") != "32" or t.get("Tlen") != "32":
+        if t.get("L") != "32":
             continue
-        if not all(k in t for k in ("Key", "Msg", "Mac")):
+        if not all(k in t for k in ("Key", "Msg", "Mac", "Tlen")):
+            continue
+        tlen = int(t["Tlen"])
+        if tlen < 1 or tlen > 32:
             continue
         out.append({
             "algorithm": "HMAC-SHA-256",
             "source_file": "HMAC.rsp",
-            "source_count": f"L={t['L']},Count={t['Count']}",
+            "source_count": f"L={t['L']},Tlen={tlen},Count={t['Count']}",
             "key_hex": t["Key"].lower(),
             "msg_hex": t["Msg"].lower(),
             "expected_hex": t["Mac"].lower(),
+            "tlen": tlen,
         })
     return out
 
@@ -930,6 +948,32 @@ def gen_p256(rng: random.Random, n_vectors: int) -> tuple[
             "source_count": f"sigver[{i}]",
         })
 
+        # SIGVER negative: tampered signature (flip one byte of r)
+        bad_sig = bytearray(ver_sig)
+        bad_sig[i % 32] ^= 0x01
+        sigver_vectors.append({
+            "algorithm": "P256-SIGVER",
+            "pub_hex": ver_pub.hex(),
+            "hash_hex": ver_hash.hex(),
+            "sig_hex": bytes(bad_sig).hex(),
+            "expected_verify": False,
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"sigver_neg_sig[{i}]",
+        })
+
+        # SIGVER negative: tampered hash (flip one byte)
+        bad_hash = bytearray(ver_hash)
+        bad_hash[i % 32] ^= 0x80
+        sigver_vectors.append({
+            "algorithm": "P256-SIGVER",
+            "pub_hex": ver_pub.hex(),
+            "hash_hex": bytes(bad_hash).hex(),
+            "sig_hex": ver_sig.hex(),
+            "expected_verify": False,
+            "source_file": "generated/cavp_fetch.py",
+            "source_count": f"sigver_neg_hash[{i}]",
+        })
+
     return pub_vectors, secret_vectors, siggen_vectors, sigver_vectors
 
 
@@ -1073,8 +1117,10 @@ def pack_payload(v: dict) -> bytes:
         return struct.pack("<H", len(msg)) + msg
     if alg == "HMAC-SHA-256":
         key, msg = h(v["key_hex"]), h(v["msg_hex"])
+        tlen = int(v.get("tlen", 32))
         return (struct.pack("<H", len(key)) + key
-                + struct.pack("<H", len(msg)) + msg)
+                + struct.pack("<H", len(msg)) + msg
+                + bytes([tlen]))
     if alg == "HKDF-SHA-256":
         ikm, salt, info = h(v["ikm_hex"]), h(v["salt_hex"]), h(v["info_hex"])
         L = int(v["l"])

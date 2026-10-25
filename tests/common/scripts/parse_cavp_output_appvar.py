@@ -188,13 +188,18 @@ def grade_sha256(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
 
 
 def grade_hmac(result: bytes, expected: dict[str, Any]) -> tuple[bool, str]:
-    """Result wire format: tag_len(1) + tag(32)."""
-    if len(result) != 33 or result[0] != 32:
-        return False, f"malformed result ({len(result)} bytes, first={result[:1].hex()})"
-    tag = result[1:]
+    """Result wire format: tag_len(1) + tag(tag_len). tag_len matches the tlen field."""
+    if len(result) < 2:
+        return False, f"result too short ({len(result)} bytes)"
+    tlen = result[0]
+    if tlen < 1 or tlen > 32:
+        return False, f"malformed tlen={tlen}"
+    if len(result) != 1 + tlen:
+        return False, f"result length mismatch: got {len(result)}, expected {1 + tlen}"
+    tag = result[1:1 + tlen]
     exp = bytes.fromhex(expected["expected_hex"])
-    if tag != exp:
-        return False, f"tag mismatch: got {tag.hex()}, expected {exp.hex()}"
+    if tag != exp[:tlen]:
+        return False, f"tag mismatch: got {tag.hex()}, expected {exp[:tlen].hex()}"
     return True, "ok"
 
 
