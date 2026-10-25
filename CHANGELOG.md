@@ -118,3 +118,4 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - Switch from RFC 6066 `max_fragment_length` to RFC 8449 `record_size_limit`.
 - Add *NIST SP 800-90A Rev. 1, 9.1 / 9.3.1: prediction_resistance_flag* via new function `tls_random_bytes_pr()`.
 - Fix CAVP identitied AES-GCM failures for IV lengths > 128 bits.
+- reduce peer public key mod p before ladder (RFC 7748 §5)
