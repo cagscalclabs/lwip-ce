@@ -325,7 +325,7 @@ def fetch_aes_gcm() -> list[dict[str, Any]]:
                 text = zf.read(filename).decode("latin-1")
                 for t in parse_rsp(text, anchor="Count"):
                     if (t.get("Keylen") != str(key_bits) or
-                            t.get("IVlen") != "96" or t.get("Taglen") != "128"):
+                            t.get("Taglen") != "128"):
                         continue
                     if not all(k in t for k in ("Key", "IV", "AAD", "CT", "Tag")):
                         continue

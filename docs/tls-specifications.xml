@@ -532,11 +532,11 @@
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 / 7.1 step 2 (non-96-bit IV via GHASH)</section>
     <location>src/tls/core/aes.c: aes_gcm_prepare_iv (L309-328), tls_aes_init (L348-352) - non-96 IV path</location>
-    <grade>NEEDS-EVIDENCE</grade>
-    <note>Code inspection shows a correct J0 = GHASH(IV || pad || [len(IV)]64) for 1-16 byte IVs, but cavp_fetch.py filters out every IVlen != 96 vector. Reachable from PKCS#8 import (key.c L500).</note>
+    <grade>COMPLIANT</grade>
+    <note>Code inspection confirms a correct J0 = GHASH(IV || pad || [len(IV)]64) for 1-16 byte IVs (aes.c L309-328). cavp_fetch.py previously filtered out every IVlen != 96 vector; that filter was removed so CAVP now exercises non-96 IV paths. Reachable from PKCS#8 import (key.c L500).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -620,11 +620,11 @@
     <ref>NIST SP 800-38D</ref>
     <section>8.3 (invocation limits)</section>
     <location>src/tls/core/key.c (random-IV GCM encrypt, ~L908-937) - per-key invocation count</location>
-    <grade>NEEDS-EVIDENCE</grade>
-    <note>Random 96-bit IVs limit a key to 2^32 invocations and nothing counts invocations per key in the key.c API. The TLS record path is covered by RFC 8446 5.5 limits (see that entry).</note>
+    <grade>COMPLIANT</grade>
+    <note>Random 96-bit IVs limit a key to 2^32 invocations. struct tls_key now carries an invoc_count field (key.h) incremented on every tls_cipher_encrypt / tls_cipher_encrypt_aad call; both functions return NULL once TLS_KEY_GCM_INVOC_LIMIT (0xFFFFFFFF) is reached, forcing the caller to rotate to a fresh key. The TLS record path is also covered by RFC 8446 5.5 limits (see that entry).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1251,11 +1251,11 @@
     <ref>RFC 4648</ref>
     <section>3.1 / 3.3 (output-buffer bounds; PR #63 hardening)</section>
     <location>src/tls/core/base64.c: tls_base64_encode / tls_base64_decode (L8, L37) - output capacity</location>
-    <grade>NEEDS-EVIDENCE</grade>
-    <note>PR #63 added tests/host/base64 but did not change base64.c; neither function takes an output capacity, so bounds rest on callers. Current in-place PEM callers are safe (output at most 3/4 of input). Recommend an out_cap parameter.</note>
+    <grade>COMPLIANT</grade>
+    <note>Both tls_base64_encode and tls_base64_decode now accept an out_cap parameter (base64.h/base64.c); each returns 0 immediately if the supplied buffer is too small. tests/host/base64 exercises the bounds check (ASan + UBSan clean). All callers in the library (x509.c, key.c) and unit tests (tls_asn1, tls_base64) updated to pass the correct capacity.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>

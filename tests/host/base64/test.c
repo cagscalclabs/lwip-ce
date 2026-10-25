@@ -4,15 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf);
-size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf);
+size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf, size_t out_cap);
+size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf, size_t out_cap);
 
 static size_t dec(const char *s, uint8_t *out)
 {
     size_t n = strlen(s);
     uint8_t *in = malloc(n ? n : 1);
     memcpy(in, s, n);
-    n = tls_base64_decode(in, n, out);
+    n = tls_base64_decode(in, n, out, 64);
     free(in);
     return n;
 }
@@ -29,7 +29,7 @@ int main(void)
     assert(dec("TQ=a", out) == 0);
     {
         uint8_t with_nul[4] = {'T', 'W', 'F', 0};
-        assert(tls_base64_decode(with_nul, 4, out) == 0); /* NUL is not a sextet */
+        assert(tls_base64_decode(with_nul, 4, out, 64) == 0); /* NUL is not a sextet */
     }
     assert(dec("TQ==", out) == 1 && out[0] == 'M');
     assert(dec("TWE=", out) == 2 && !memcmp(out, "Ma", 2));
@@ -39,9 +39,9 @@ int main(void)
         uint8_t raw[40];
         for (size_t i = 0; i < len; i++)
             raw[i] = (uint8_t)(i * 37 + len);
-        size_t n = tls_base64_encode(raw, len, enc);
+        size_t n = tls_base64_encode(raw, len, enc, sizeof enc);
         assert(n == 4 * ((len + 2) / 3));
-        assert(tls_base64_decode(enc, n, enc) == len);
+        assert(tls_base64_decode(enc, n, enc, sizeof enc) == len);
         assert(!memcmp(enc, raw, len));
     }
     puts("base64 regressions passed (ASan + UBSan)");

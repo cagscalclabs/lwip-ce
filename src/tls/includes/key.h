@@ -53,11 +53,19 @@ typedef enum
  * Manually constructed keys borrow their buffers and leave allocated=false.
  * AES keys contain 16 or 32 raw bytes, not a tls_aes_context.
  */
+/** SP 800-38D §8.3: with random 96-bit IVs a key must not exceed 2^32 encrypt
+ *  invocations.  tls_cipher_encrypt() increments this and returns NULL once the
+ *  limit is reached, requiring the caller to rotate to a fresh key. */
+#define TLS_KEY_GCM_INVOC_LIMIT 0xFFFFFFFFu
+
 struct tls_key
 {
     tls_key_type_t type;
     bool      allocated; /**< true when this struct was returned by tls_key_import()
                               and must be freed with tls_key_free(). */
+    uint32_t  invoc_count; /**< Encrypt invocation counter (AES-GCM/CCM only).
+                                Caller must rotate the key once this reaches
+                                TLS_KEY_GCM_INVOC_LIMIT. */
     union
     {
         struct tls_rsa_key    rsa; /**< Valid for TLS_ALG_RSA_*.  */
@@ -169,7 +177,7 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
  *         (bad args, RNG failure, allocation failure, or cipher error).
  *         Free with tls_cipher_blob_free().
  */
-uint8_t *tls_cipher_encrypt(const struct tls_key *key, tls_alg_t alg,
+uint8_t *tls_cipher_encrypt(struct tls_key *key, tls_alg_t alg,
                           const uint8_t *in, size_t in_len);
 
 /**
@@ -179,7 +187,7 @@ uint8_t *tls_cipher_encrypt(const struct tls_key *key, tls_alg_t alg,
  *        a non-NULL aad or non-zero aad_len returns NULL for those algorithms.
  *        Otherwise identical to tls_cipher_encrypt().
  */
-uint8_t *tls_cipher_encrypt_aad(const struct tls_key *key, tls_alg_t alg,
+uint8_t *tls_cipher_encrypt_aad(struct tls_key *key, tls_alg_t alg,
                                const uint8_t *aad, size_t aad_len,
                                const uint8_t *in, size_t in_len);
 

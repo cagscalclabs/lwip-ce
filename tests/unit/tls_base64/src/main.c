@@ -49,54 +49,54 @@ int main(void)
 
     // test 1: encode
     memset(buf, 0, sizeof buf);
-    olen = tls_base64_encode(test1, strlen(test1), buf);
+    olen = tls_base64_encode(test1, strlen(test1), buf, sizeof buf);
     ok = (strncmp(buf, encoded1, olen) == 0) && (olen == strlen(encoded1));
     show_result(ok);
 
     // test 2: encode
     memset(buf, 0, sizeof buf);
-    olen = tls_base64_encode(test2, strlen(test2), buf);
+    olen = tls_base64_encode(test2, strlen(test2), buf, sizeof buf);
     ok = (strncmp(buf, encoded2, olen) == 0) && (olen == strlen(encoded2));
     show_result(ok);
 
     // test 3: encode
     memset(buf, 0, sizeof buf);
-    olen = tls_base64_encode(test3, strlen(test3), buf);
+    olen = tls_base64_encode(test3, strlen(test3), buf, sizeof buf);
     ok = (strncmp(buf, encoded3, olen) == 0) && (olen == strlen(encoded3));
     show_result(ok);
 
     // test 4: decode
     memset(buf, 0, sizeof buf);
-    olen = tls_base64_decode(encoded1, strlen(encoded1), buf);
+    olen = tls_base64_decode(encoded1, strlen(encoded1), buf, sizeof buf);
     ok = (strncmp(buf, decoded1, olen) == 0) && (olen == strlen(decoded1));
     show_result(ok);
 
     // test 5: decode
     memset(buf, 0, sizeof buf);
-    olen = tls_base64_decode(encoded2, strlen(encoded2), buf);
+    olen = tls_base64_decode(encoded2, strlen(encoded2), buf, sizeof buf);
     ok = (strncmp(buf, decoded2, olen) == 0) && (olen == strlen(decoded2));
     show_result(ok);
 
     // test 6: decode
     memset(buf, 0, sizeof buf);
-    olen = tls_base64_decode(encoded3, strlen(encoded3), buf);
+    olen = tls_base64_decode(encoded3, strlen(encoded3), buf, sizeof buf);
     ok = (strncmp(buf, decoded3, olen) == 0) && (olen == strlen(decoded3));
     show_result(ok);
 
     // malformed input must fail without reading beyond its bounds
-    olen = tls_base64_decode((const uint8_t *)"", 0, (uint8_t *)buf);
+    olen = tls_base64_decode((const uint8_t *)"", 0, (uint8_t *)buf, sizeof buf);
     ok = (olen == 0);
     show_result(ok);
 
-    olen = tls_base64_decode((const uint8_t *)"Z", 1, (uint8_t *)buf);
+    olen = tls_base64_decode((const uint8_t *)"Z", 1, (uint8_t *)buf, sizeof buf);
     ok = (olen == 0);
     show_result(ok);
 
-    olen = tls_base64_decode((const uint8_t *)"Zm$v", 4, (uint8_t *)buf);
+    olen = tls_base64_decode((const uint8_t *)"Zm$v", 4, (uint8_t *)buf, sizeof buf);
     ok = (olen == 0);
     show_result(ok);
 
-    olen = tls_base64_decode((const uint8_t *)"Zg=A", 4, (uint8_t *)buf);
+    olen = tls_base64_decode((const uint8_t *)"Zg=A", 4, (uint8_t *)buf, sizeof buf);
     ok = (olen == 0);
     show_result(ok);
 

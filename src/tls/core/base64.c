@@ -5,8 +5,10 @@
 //#define MIN(a,b) (((a)<(b))?(a):(b))
 static const char b64_charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static int mod_table[] = {0, 2, 1};
-size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
+size_t tls_base64_encode(const uint8_t *inbuf, size_t len, uint8_t *outbuf, size_t out_cap){
     size_t olen = 4 * ((len + 2) / 3);
+    if (!inbuf || !outbuf || out_cap < olen)
+        return 0;
     size_t j = 0;
     for (size_t i = 0; i < len;) {
 
@@ -35,10 +37,11 @@ static int b64_value(uint8_t ch)
     return p ? (int)(p - b64_charset) : -1;
 }
 
-size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf){
+size_t tls_base64_decode(const uint8_t *inbuf, size_t len, uint8_t *outbuf, size_t out_cap){
     size_t j = 0;
+    size_t max_out = (len / 4) * 3;
 
-    if (!inbuf || !outbuf || len == 0 || (len & 3u) != 0)
+    if (!inbuf || !outbuf || len == 0 || (len & 3u) != 0 || out_cap < max_out)
         return 0;
 
     for (size_t i = 0; i < len; i += 4) {

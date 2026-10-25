@@ -1789,7 +1789,7 @@ static bool tls_x509_decode_pem_certificate(const char *pem_data,
         return false;
     }
 
-    i = tls_base64_decode(der_out, b64_count, der_out);
+    i = tls_base64_decode(der_out, b64_count, der_out, der_out_len);
     if (i == 0 || i > der_out_len)
     {
         ERROR_CODE(0x58);

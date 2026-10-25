@@ -69,7 +69,7 @@ static void test_cursor_large_dump(void)
     os_ClrHome();
     os_FontSelect(os_SmallFont);
 
-    der_len = tls_base64_decode(test1_b64, sizeof(test1_b64) - 1, der);
+    der_len = tls_base64_decode(test1_b64, sizeof(test1_b64) - 1, der, sizeof(der));
     if (der_len == 0)
     {
         draw_line("decode large der: fail", &y);
