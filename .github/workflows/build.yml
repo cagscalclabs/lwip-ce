@@ -198,6 +198,14 @@ jobs:
           path: ${{ github.workspace }}/lwip.zip
           if-no-files-found: error
 
+      - name: Trigger downstream correctness tests
+        if: steps.upload_build_artifact.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run cavp.yml  --ref "${{ github.ref }}"
+          gh workflow run tests.yml --ref "${{ github.ref }}"
+
       - name: Publish job summary
         if: always()
         run: |

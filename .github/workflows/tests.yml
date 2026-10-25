@@ -4,26 +4,11 @@ name: Unit Tests
 # tests/unit/. These tests link against the curated, manifest-gated
 # lwip.lib produced by build.yml -- the same artifact a real consumer app
 # would dyload. This catches curation drops / ABI mismatches / missing
-# manifest entries that a white-box build can't see. Triggers on build.yml's
-# completion (workflow_run) so it always has a fresh artifact to pull from.
+# manifest entries that a white-box build can't see. Dispatched explicitly
+# by build.yml only when a new artifact was successfully uploaded.
 
 on:
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      artifact_name:
-        description: "Name of an in-run build artifact (e.g. lwip-latest) to download instead of fetching the published nightly release."
-        required: false
-        type: string
-  # Triggered off build.yml's completion rather than our own push/PR filter:
-  # this job needs build.yml's lwip-latest artifact, and a push-triggered
-  # run here would race build.yml's own run on the same commit (and often
-  # lose -- see incident where "no valid artifacts found to download" fired
-  # because our run queried before build.yml's had finished uploading).
-  # workflow_run guarantees build.yml is done (success or not) before we start.
-  workflow_run:
-    workflows: ["Build Latest lwIP Dylib"]
-    types: [completed]
 
 permissions:
   contents: read
@@ -44,7 +29,6 @@ env:
 
 jobs:
   dylib_unit_tests:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
 
     steps:
@@ -52,7 +36,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Load pinned CI dependency versions
         id: ci_versions
@@ -79,68 +62,27 @@ jobs:
           echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
           echo $GITHUB_PATH
 
-      - name: Download in-run build artifact
-        if: inputs.artifact_name != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.artifact_name }}
-          path: ${{github.workspace}}/release
-
-      - name: Download build.yml artifact
-        # On workflow_run, download from the exact build.yml run that
-        # triggered us (its head_sha is what we checked out above) --
-        # no need to re-query "latest successful", which is what raced
-        # build.yml's own upload in the old push-triggered design.
-        #
-        # build.yml's own dylib_latest job can legitimately SKIP (its
-        # sentinel-cache gate found nothing changed since the last
-        # successful build -- e.g. a scheduled run that lands on a
-        # no-op tick) while the overall run still reports "success"
-        # (a skipped job doesn't fail a workflow). That means a
-        # workflow_run completion here is not a guarantee an artifact
-        # actually exists. Treat "no artifact" as "nothing to test this
-        # time" (found=false, job exits clean) rather than a failure --
-        # the alternative is this job hard-failing on every build.yml
-        # no-op tick with nothing to actually report on.
-        if: inputs.artifact_name == ''
-        id: download_build_artifact
+      - name: Download lwip-latest artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{github.workspace}}/release"
-          run_id="${{ github.event.workflow_run.id }}"
-          if [ -z "$run_id" ]; then
-            run_id=$(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=success&branch=master&per_page=1" \
-              --jq '.workflow_runs[0].id')
-          fi
+          run_id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select(.name == "lwip-latest" and .expired == false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id')
           if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-            echo "::warning::No build.yml run found to pull an artifact from -- nothing to test."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::No lwip-latest artifact found in this repo. Run build.yml first."
+            exit 1
           fi
-          has_artifact=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" \
-            --jq '.artifacts[] | select(.name == "lwip-latest") | .name' | head -1)
-          if [ -z "$has_artifact" ]; then
-            echo "::warning::build.yml run $run_id has no lwip-latest artifact (its build job likely skipped as a no-op) -- nothing to test."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          echo "Downloading lwip-latest from run $run_id"
           gh run download "$run_id" --repo "${{ github.repository }}" --name lwip-latest --dir "${{github.workspace}}/release"
-          echo "found=true" >> "$GITHUB_OUTPUT"
-
-      - name: No artifact to test
-        if: inputs.artifact_name == '' && steps.download_build_artifact.outputs.found != 'true'
-        run: echo "No lwip-latest artifact available this run; skipping unit tests." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify build artifact contents
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           test -f "${{github.workspace}}/release/appinst/lwIPINST.8xp"
           test -n "$(find "${{github.workspace}}/release/appinst" -name 'LWIP.*.8xv' -print -quit)"
           ls -lh "${{github.workspace}}/release"
 
       - name: Install lwip.lib + headers into CEdev
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           mkdir -p "${{env.CEDEV}}/lib/libload" "${{env.CEDEV}}/include"
           cp "${{github.workspace}}/release/lwip.lib" "${{env.CEDEV}}/lib/libload/lwip.lib"
@@ -151,7 +93,6 @@ jobs:
           test -d "${{env.CEDEV}}/include/lwip"
 
       - name: Download CEmu Rom
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           curl -fSL \
             --retry 3 \
@@ -175,7 +116,6 @@ jobs:
           echo "Decrypted ROM size: ${FILE_SIZE} bytes"
 
       - name: Checkout CEmu
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         uses: actions/checkout@v4
         with:
           repository: CE-Programming/CEmu
@@ -184,7 +124,6 @@ jobs:
           persist-credentials: false
 
       - name: Cache CEmu Build Outputs
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         id: cemu-cache
         uses: actions/cache@v5
         with:
@@ -194,19 +133,17 @@ jobs:
             ${{env.CEMU_PATH}}/tests/autotester/autotester
 
       - name: Build CEmu
-        if: (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true') && steps.cemu-cache.outputs.cache-hit != 'true'
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/core
 
       - name: Build Autotester CLI
-        if: (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true') && steps.cemu-cache.outputs.cache-hit != 'true'
+        if: steps.cemu-cache.outputs.cache-hit != 'true'
         run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
 
       - name: Install Autotester CLI
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
 
       - name: Verify saveVar Support In Autotester
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar" || {
             echo "ERROR: Installed autotester does not include saveVar support."
@@ -214,7 +151,6 @@ jobs:
           }
 
       - name: Verify Autotester Setup
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           echo "Testing autotester with xvfb..."
           echo "ROM path: ${{env.AUTOTESTER_ROM}}"
@@ -222,7 +158,6 @@ jobs:
           xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
 
       - name: Prepare shared dyload test files
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           mkdir -p ${{env.LWIP_TESTS_COMMON}}
           cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
@@ -250,7 +185,6 @@ jobs:
           ls -lh ${{env.LWIP_TESTS_COMMON}}
 
       - name: Run Dyload Unit Tests
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         run: |
           total_tests=0
           total_passed=0
@@ -340,7 +274,7 @@ jobs:
           exit $total_failed
 
       - name: Generate Dyload JSON Results
-        if: always() && (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true')
+        if: always()
         run: |
           echo -e "{\"results\":{" > ${{github.workspace}}/results-dylib.json
           cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-dylib.json
@@ -360,7 +294,7 @@ jobs:
           rm ${{github.workspace}}/summary.json
 
       - name: Publish Dyload Test Summary
-        if: always() && (inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true')
+        if: always()
         run: |
           echo "## Dyload Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -435,7 +369,6 @@ jobs:
           done
 
       - name: Upload Dyload Results Logfile
-        if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: results-dylib.json
