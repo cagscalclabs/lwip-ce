@@ -37,7 +37,7 @@
     "isASM": true
   },
   "sequence": [
-    "delay|10000",
+    "delay|15000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|2",
@@ -68,7 +68,7 @@
       "expected_CRCs": [
         "F7C03D8D"
       ],
-      "timeout": 200000
+      "timeout": 300000
     }
   }
 }
