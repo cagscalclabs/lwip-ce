@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 from collections import Counter, defaultdict
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -18,6 +19,7 @@ CSS = r"""
   --dev-bg:#ffebe9; --dev-fg:#82071e; --ev-bg:#fff8c5; --ev-fg:#7d4e00;
   --part-bg:#ddf4ff; --part-fg:#0550ae; --na-bg:#eaeef2; --na-fg:#424a53;
   --rev-bg:#f0f6ff; --rev-fg:#0550ae; --rev-border:#b0c8f0;
+  --overlay:#0004; --modal-bg:#fff; --modal-shadow:0 8px 32px #0003;
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
@@ -26,7 +28,8 @@ main { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
 h1 { font-size:1.6rem; margin:0 0 4px; }
 h2 { font-size:1.15rem; margin:32px 0 8px; padding-top:8px;
      border-top:1px solid var(--line); }
-p.lead { color:var(--muted); margin:0 0 16px; }
+p.lead { color:var(--muted); margin:0 0 4px; }
+p.hint { color:var(--muted); font-size:12px; margin:0 0 16px; }
 .summary { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; }
 .badge { display:inline-block; padding:1px 8px; border-radius:999px;
          font-size:12px; font-weight:600; white-space:nowrap; }
@@ -51,23 +54,43 @@ p.lead { color:var(--muted); margin:0 0 16px; }
 .policy { margin:12px 0 18px; padding:10px 14px;
           border-left:4px solid var(--dev-fg); border-radius:4px;
           background:var(--panel); }
-td.justification { color:var(--muted); }
 .missing-justification { color:var(--dev-fg); font-style:italic; }
 nav.toc { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:13px; }
-nav.toc a,.back a { color:var(--link); text-decoration:none; }
+nav.toc a { color:var(--link); text-decoration:none; }
 nav.toc a:hover { text-decoration:underline; }
 table { width:100%; border-collapse:collapse; table-layout:fixed; }
-th,td { text-align:left; vertical-align:top; padding:8px 10px;
-        border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
-th { color:var(--muted); font-size:12px; text-transform:uppercase;
+th,td { text-align:left; vertical-align:middle; padding:6px 10px;
+        border-bottom:1px solid var(--line); overflow-wrap:anywhere;
+        font-size:13px; }
+th { color:var(--muted); font-size:11px; text-transform:uppercase;
      letter-spacing:.04em; }
-td.sec { width:13%; overflow-wrap:anywhere; word-break:break-word; }
-td.grade { width:120px; }
-td.loc { font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:20%;
-         word-break:break-all; overflow-wrap:anywhere; }
-td.note { width:22%; overflow-wrap:anywhere; word-break:break-word; }
-td.justification { width:18%; overflow-wrap:anywhere; word-break:break-word; }
-td.reviews { width:17%; overflow-wrap:anywhere; word-break:break-word; }
+tr[data-grade] { cursor:pointer; }
+tr[data-grade]:hover { background:var(--panel); }
+td.sec { width:40%; overflow-wrap:anywhere; word-break:break-word; }
+td.grade { width:140px; }
+td.loc { font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:35%;
+         word-break:break-all; overflow-wrap:anywhere; color:var(--muted); }
+[hidden] { display:none !important; }
+/* modal overlay */
+.modal-backdrop { position:fixed; inset:0; background:var(--overlay);
+                  display:flex; align-items:center; justify-content:center;
+                  z-index:1000; padding:16px; }
+.modal-backdrop[hidden] { display:none !important; }
+.modal { background:var(--modal-bg); border-radius:10px;
+         box-shadow:var(--modal-shadow); max-width:680px; width:100%;
+         max-height:90vh; overflow-y:auto; padding:24px 28px; position:relative; }
+.modal-close { position:absolute; top:14px; right:16px; border:none;
+               background:none; font-size:20px; cursor:pointer;
+               color:var(--muted); line-height:1; padding:4px 8px; }
+.modal-close:hover { color:var(--fg); }
+.modal h3 { margin:0 0 16px; font-size:1.05rem; padding-right:32px; }
+.detail-grid { display:grid; grid-template-columns:max-content 1fr;
+               gap:6px 16px; font-size:13px; }
+.detail-label { color:var(--muted); font-weight:600; white-space:nowrap;
+                padding-top:1px; }
+.detail-value { overflow-wrap:anywhere; word-break:break-word; }
+.detail-value.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                     font-size:12px; color:var(--muted); }
 .review-entry { margin-bottom:6px; padding:5px 8px; border-radius:4px;
                 background:var(--rev-bg); border:1px solid var(--rev-border); }
 .review-entry:last-child { margin-bottom:0; }
@@ -75,12 +98,14 @@ td.reviews { width:17%; overflow-wrap:anywhere; word-break:break-word; }
 .review-scope { color:var(--muted); font-size:11px; font-style:italic; }
 .review-note { font-size:12px; margin-top:2px; }
 .no-reviews { color:var(--muted); font-style:italic; font-size:12px; }
-[hidden] { display:none !important; }
 @media (max-width:720px) {
   table,thead,tbody,tr,td { display:block; }
   thead { display:none; }
   tr { border-bottom:1px solid var(--line); padding:8px 0; }
   td { border:0; padding:2px 0; width:auto !important; }
+  .modal { padding:16px 18px; }
+  .detail-grid { grid-template-columns:1fr; }
+  .detail-label { padding-bottom:0; }
 }
 """
 
@@ -92,6 +117,8 @@ SCRIPT = r"""
   var groups = document.querySelectorAll(".audit-group");
   var tocLinks = document.querySelectorAll("[data-audit-link]");
   var total = document.querySelectorAll("tr[data-grade]").length;
+
+  /* --- grade filter --- */
   function applyGradeFilter() {
     var selected = filter.value;
     var visibleTotal = 0;
@@ -112,6 +139,71 @@ SCRIPT = r"""
   }
   filter.addEventListener("change", applyGradeFilter);
   applyGradeFilter();
+
+  /* --- detail modal --- */
+  var backdrop = document.getElementById("detail-modal");
+  var modalTitle = document.getElementById("modal-title");
+  var modalGrid  = document.getElementById("modal-grid");
+
+  function closeModal() {
+    backdrop.hidden = true;
+    document.removeEventListener("keydown", onKey);
+  }
+  function onKey(e) { if (e.key === "Escape") closeModal(); }
+
+  backdrop.addEventListener("click", function(e) {
+    if (e.target === backdrop) closeModal();
+  });
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+
+  function row(label, value, cls) {
+    if (!value) return "";
+    return '<dt class="detail-label">' + label + '</dt>'
+         + '<dd class="detail-value' + (cls ? " " + cls : "") + '">' + value + '</dd>';
+  }
+
+  document.querySelectorAll("tr[data-grade]").forEach(function(tr) {
+    tr.addEventListener("click", function() {
+      var d = tr.dataset;
+      modalTitle.textContent = d.ref + " — " + d.section;
+
+      var grade = '<span class="badge ' + d.grade + '">' + d.grade + '</span>';
+
+      var reviewsHtml = "";
+      try {
+        var reviewers = JSON.parse(d.reviewers || "[]");
+        if (reviewers.length) {
+          reviewers.forEach(function(r) {
+            reviewsHtml += '<div class="review-entry">'
+              + '<div class="review-person">' + r.person + '</div>'
+              + (r.scope ? '<div class="review-scope">' + r.scope + '</div>' : '')
+              + (r.note  ? '<div class="review-note">'  + r.note  + '</div>' : '')
+              + '</div>';
+          });
+        } else {
+          reviewsHtml = '<span class="no-reviews">—</span>';
+        }
+      } catch(e) {
+        reviewsHtml = '<span class="no-reviews">—</span>';
+      }
+
+      var just = d.justification || "";
+      if (!just && d.grade === "DEVIANT")
+        just = '<span class="missing-justification">Not yet documented.</span>';
+
+      modalGrid.innerHTML =
+          row("Publication", d.ref)
+        + row("Section",     d.section)
+        + row("Grade",       grade)
+        + row("Location",    d.location, "mono")
+        + row("Note",        d.note)
+        + row("Justification", just)
+        + row("Reviews",     reviewsHtml);
+
+      backdrop.hidden = false;
+      document.addEventListener("keydown", onKey);
+    });
+  });
 }());
 """
 
@@ -158,6 +250,7 @@ def _build_body(requirements: list[dict], groups: dict[str, list[dict]]) -> list
     out = ['<p class="lead">Clause-by-clause ledger mapping the standards this TLS '
            "implementation targets (RFC, NIST SP, FIPS) to the code that satisfies "
            f"or deviates from them. {len(requirements)} entries.</p>",
+           '<p class="hint">Click any row to see full details.</p>',
            '<div class="summary">']
     for grade in sorted(counts):
         out.append(f'<div class="stat"><b>{counts[grade]}</b>'
@@ -188,33 +281,35 @@ def _build_body(requirements: list[dict], groups: dict[str, list[dict]]) -> list
 
     for ref in ordered_refs:
         out.extend([f'<section class="audit-group"><h2 id="{anchors[ref]}">{esc(ref)}</h2>',
-                    '<table><thead><tr><th>Section</th><th>Location</th><th>Grade</th>'
-                    '<th>Note</th><th>Justification</th><th>Reviews</th></tr></thead><tbody>'])
+                    '<table><thead><tr><th>Section</th>'
+                    '<th>Grade</th><th>Location</th></tr></thead><tbody>'])
         for item in groups[ref]:
-            justification = esc(item["justification"])
-            if not justification and item["grade"] == "DEVIANT":
-                justification = '<span class="missing-justification">Not yet documented.</span>'
-            if item["reviewers"]:
-                reviews_html = ""
-                for r in item["reviewers"]:
-                    reviews_html += '<div class="review-entry">'
-                    reviews_html += f'<div class="review-person">{esc(r["person"])}</div>'
-                    if r["scope"]:
-                        reviews_html += f'<div class="review-scope">{esc(r["scope"])}</div>'
-                    if r["note"]:
-                        reviews_html += f'<div class="review-note">{esc(r["note"])}</div>'
-                    reviews_html += '</div>'
-            else:
-                reviews_html = '<span class="no-reviews">—</span>'
-            out.append(f'<tr data-grade="{esc(item["grade"])}">'
-                       f'<td class="sec">{esc(item["section"])}</td>'
-                       f'<td class="loc">{esc(item["location"])}</td>'
-                       f'<td class="grade"><span class="badge {esc(item["grade"])}">'
-                       f'{esc(item["grade"])}</span></td>'
-                       f'<td class="note">{esc(item["note"])}</td>'
-                       f'<td class="justification">{justification}</td>'
-                       f'<td class="reviews">{reviews_html}</td></tr>')
+            reviewers_json = esc(json.dumps(item["reviewers"], ensure_ascii=False))
+            out.append(
+                f'<tr data-grade="{esc(item["grade"])}"'
+                f' data-ref="{esc(item["ref"])}"'
+                f' data-section="{esc(item["section"])}"'
+                f' data-location="{esc(item["location"])}"'
+                f' data-note="{esc(item["note"])}"'
+                f' data-justification="{esc(item["justification"])}"'
+                f' data-reviewers="{reviewers_json}">'
+                f'<td class="sec">{esc(item["section"])}</td>'
+                f'<td class="grade"><span class="badge {esc(item["grade"])}">'
+                f'{esc(item["grade"])}</span></td>'
+                f'<td class="loc">{esc(item["location"])}</td>'
+                f'</tr>'
+            )
         out.append('</tbody></table></section>')
+
+    # modal markup — hidden until a row is clicked
+    out.append(
+        '<div id="detail-modal" class="modal-backdrop" hidden aria-modal="true" role="dialog">'
+        '<div class="modal">'
+        '<button id="modal-close" class="modal-close" aria-label="Close">&times;</button>'
+        '<h3 id="modal-title"></h3>'
+        '<dl id="modal-grid" class="detail-grid"></dl>'
+        '</div></div>'
+    )
     out.append(f"<script>{SCRIPT}</script>")
     return out
 

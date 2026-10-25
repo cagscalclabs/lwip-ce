@@ -635,7 +635,10 @@
     <note>Requested strength is 128 bits (correct for P-256/X25519), but the DRBG has no CAVP/KAT coverage (tests/profiling/tls_cavp/README.md: "DRBG is intentionally NOT included") and the entropy estimate is unvalidated (see SP 800-90B 3.1.5).</note>
   <justification>Platform-specific deviation: ACE-defense. The TI-84+ CE provides no isolated execution environment or tamper-resistant storage; DRBG state lives in application RAM shared with the OS. Implementing the strength attestation required by 5.6.1.2 in this threat model would exposing a possible ACE exploit allowing an attack to substitute DRBG state. The underlying primitives (HMAC-SHA-256 DRBG, X25519, P-256) provide 128-bit classical security; the deviation is in formal attestation, not in the actual cryptographic strength.</justification>
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -921,8 +924,11 @@
     <note>No known-answer self-test runs before first use; tls_rng_healthcheck only checks a non-NULL source pointer and a one-bit mask. The CAVP DRBG slot is a stub (tests/profiling/tls_cavp/src/main.c L485).</note>
     <justification>See justication from NIST SP 800-56A Rev. 3, 5.6.1.2 (approved RBG with at least 128-bit strength)</justification>
 
-    <reviews>
-      <reviewed-by></reviewed-by>
+     <reviews>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -977,8 +983,11 @@
     <justification>Window size per collection is 952 bits. We scale the threshholds to this window size.</justification>
     <note>Two 952-sample windows with continuous RCT/APT state, discarded and never credited, but a ~520-byte wipe runs between them so the samples are not the at least 1024 consecutive samples 4.3 requires.</note>
 
-    <reviews>
-      <reviewed-by></reviewed-by>
+     <reviews>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1000,8 +1009,11 @@
     <justification>Window size per collection is 952 bits. We scale the threshholds to this window size.</justification>
     <note>4.4.2 requires W = 1024 for binary sources; code uses W = 952 (cutoff 844 is correct for W=952; would be 906 for W=1024). Small security impact.</note>
 
-    <reviews>
-      <reviewed-by></reviewed-by>
+      <reviews>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1076,17 +1088,6 @@
     <location>src/tls/core/p256.s: .rodata.__p256_const (L246-328) - curve constants</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. p, n, n-1, n-2, 2n and Montgomery-form b, Gx, Gy, R, R^2 mod p and R^2 mod n were recomputed in Python and match byte for byte.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>Project policy</ref>
-    <section>altcp recv/recved re-entrancy (RX_BUSY guard removal; not an RFC clause)</section>
-    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_recved (L2257-2301), altcp_tls_ce_pass_rx_data (L1727-1786) - nested delivery from app recv callback</location>
-    <grade>NOT-APPLICABLE</grade>
-    <note>BUG (non-crypto robustness regression in the uncommitted working tree): with RX_BUSY removed, an app calling altcp_recved() inside its recv callback re-enters handle_rx_appldata and delivers record N+1 before N returns; a non-OK return then loses or reorders plaintext, and a nested abort leads to use-after-free or a fatal LWIP_ASSERT. Restore the guard or make delivery iterative.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -1506,8 +1507,11 @@
     <grade>DEVIANT</grade>
     <note>No path building: cert i must be signed by wire cert i+1 and the topmost issuer must be the anchor, so out-of-order, extraneous or cross-signed chains are rejected (fail-closed, RAM-driven). Chain depth is capped at TLS_CERT_CHAIN_MAX=8 (handshake.c L999, enforced at L1531) with a fatal illegal_parameter alert; CPU DoS via deep chains is addressed.</note>
   <justification>Strict in-order-only chain acceptance is a deliberate RAM-driven design choice for the eZ80 platform. Supporting path reordering would require buffering the entire certificate message (up to TLS_CERT_CHAIN_MAX × ~1.5KB) simultaneously, which exceeds available heap. The deviation is fail-closed: out-of-order chains are rejected rather than accepted. The RFC uses SHOULD for ordering (§4.4.2). This is documented as a known interop limitation.</justification>
-    <reviews>
-      <reviewed-by></reviewed-by>
+      <reviews>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1552,7 +1556,10 @@
     <justification>Not achievable on this platform; permanently out of scope. CRL distribution points are fetched over HTTP, which requires a working network connection — circular for a TLS stack that has not yet completed a handshake. Delta-CRL storage requires persistent memory the platform does not reliably provide. OCSP stapling would require the server to cooperate, is not universally deployed, and the response still requires signature verification over an untrusted network before keys are established.</justification>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1563,8 +1570,11 @@
     <note>No policy tree (effectively anyPolicy, no explicit-policy). policyConstraints/inhibitAnyPolicy (MUST be critical) are rejected by the unknown-critical rule, so the only outcome-changing case fails closed.</note>
     <justification>A full RFC 5280 policy tree requires substantial ASN.1 traversal machinery, recursive constraint propagation across the chain, and memory proportional to the number of policy OIDs encountered — all disproportionate to the available heap on this platform. Consistent with other constrained embedded TLS implementations (e.g. Mbed TLS, WolfSSL) which also omit policy processing. The fail-closed behavior on policyConstraints/inhibitAnyPolicy critical extensions means the dangerous cases are handled correctly. Permanently out of scope.</justification>
 
-    <reviews>
-      <reviewed-by></reviewed-by>
+     <reviews>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2581,17 +2591,6 @@
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
-    <section>5.2 / 5.3 (re-entrant record processing)</section>
-    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata (L1794-1989) - re-entrant record loop after RX_BUSY removal</location>
-    <grade>NOT-APPLICABLE</grade>
-    <note>Re-entry happens only after a record is fully decrypted and authenticated; nested calls walk state-&gt;rx in order, so no double decryption, sequence reuse or pre-authentication release. The delivery-ordering regression is recorded under Project policy.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>RFC 8446</ref>
     <section>5.2 / 5.4 (2^14+256 ciphertext and 2^14+1 inner plaintext limits)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_decrypt_record_stream (L378-399) - record_overflow</location>
     <grade>COMPLIANT</grade>
@@ -2839,9 +2838,11 @@
     <grade>DEVIANT</grade>
     <note>TLS_AES_128_GCM_SHA256 (MUST) and TLS_AES_128_CCM_SHA256 are implemented; SHOULD-level TLS_AES_256_GCM_SHA384 and TLS_CHACHA20_POLY1305_SHA256 are absent. No practical interop impact since every TLS 1.3 server supports TLS_AES_128_GCM_SHA256.</note>
     <justification>Partial: TLS_CHACHA20_POLY1305_SHA256 is not intended for this platform — ChaCha20 and Poly1305 would require two entirely new primitives with no other in-tree users, for a cipher suite that no production server requires. TLS_AES_256_GCM_SHA384 is blocked on SHA-384 support, which is low priority and may one day be added.</justification>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
+  <reviews>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <scope>compliance, threat assessment</scope>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
