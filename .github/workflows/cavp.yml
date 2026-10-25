@@ -131,16 +131,23 @@ jobs:
           has_artifact=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" \
             --jq '.artifacts[] | select(.name == "lwip-latest") | .name' | head -1)
           if [ -z "$has_artifact" ]; then
-            echo "::warning::build.yml run $run_id has no lwip-latest artifact (its build job likely skipped as a no-op) -- nothing to test."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::notice::build.yml run $run_id has no lwip-latest artifact (build job skipped as no-op); falling back to last successful artifact."
+            # Find the most recent run that actually produced lwip-latest
+            run_id=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=lwip-latest&per_page=1" \
+              --jq '.artifacts[0].workflow_run.id')
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "::warning::No lwip-latest artifact found anywhere in this repo -- nothing to test."
+              echo "found=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::notice::Falling back to artifact from run $run_id."
           fi
           gh run download "$run_id" --repo "${{ github.repository }}" --name lwip-latest --dir "${{github.workspace}}/release"
           echo "found=true" >> "$GITHUB_OUTPUT"
 
       - name: No artifact to test
         if: inputs.artifact_name == '' && steps.download_build_artifact.outputs.found != 'true'
-        run: echo "No lwip-latest artifact available this run; skipping CAVP." >> "$GITHUB_STEP_SUMMARY"
+        run: echo "No lwip-latest artifact found in any build run; skipping CAVP." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify build artifact contents
         if: inputs.artifact_name != '' || steps.download_build_artifact.outputs.found == 'true'
