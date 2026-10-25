@@ -1,4 +1,4 @@
-name: CAVP Primitive Validation
+name: CAVP-adjacent
 
 # Runs NIST CAVP test vectors against the shipping cryptographic primitives.
 # Dyload variant: links tests/profiling/tls_cavp against the curated,
@@ -133,8 +133,8 @@ jobs:
           if [ -z "$has_artifact" ]; then
             echo "::notice::build.yml run $run_id has no lwip-latest artifact (build job skipped as no-op); falling back to last successful artifact."
             # Find the most recent run that actually produced lwip-latest
-            run_id=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=lwip-latest&per_page=1" \
-              --jq '.artifacts[0].workflow_run.id')
+            run_id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+              --jq '[.artifacts[] | select(.name == "lwip-latest" and .expired == false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id')
             if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
               echo "::warning::No lwip-latest artifact found anywhere in this repo -- nothing to test."
               echo "found=false" >> "$GITHUB_OUTPUT"
