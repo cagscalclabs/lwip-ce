@@ -38,6 +38,8 @@ p.hint { color:var(--muted); font-size:12px; margin:0 0 16px; }
 .NEEDS-EVIDENCE { background:var(--ev-bg); color:var(--ev-fg); }
 .PARTIAL { background:var(--part-bg); color:var(--part-fg); }
 .NOT-APPLICABLE { background:var(--na-bg); color:var(--na-fg); }
+.MANUAL { background:var(--rev-bg); color:var(--rev-fg); }
+.AUTO { background:var(--na-bg); color:var(--na-fg); }
 .stat { padding:8px 14px; border-radius:8px; background:var(--panel);
         border:1px solid var(--line); }
 .stat b { font-size:1.3rem; display:block; line-height:1.2; }
@@ -112,33 +114,40 @@ td.loc { font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; width:35%;
 
 SCRIPT = r"""
 (function () {
-  var filter = document.getElementById("grade-filter");
+  var gradeFilter = document.getElementById("grade-filter");
+  var reviewFilter = document.getElementById("review-filter");
   var status = document.getElementById("filter-status");
   var groups = document.querySelectorAll(".audit-group");
   var tocLinks = document.querySelectorAll("[data-audit-link]");
   var total = document.querySelectorAll("tr[data-grade]").length;
 
-  /* --- grade filter --- */
-  function applyGradeFilter() {
-    var selected = filter.value;
+  /* --- grade and review-status filters --- */
+  function applyFilters() {
+    var selectedGrade = gradeFilter.value;
+    var selectedReview = reviewFilter.value;
     var visibleTotal = 0;
     for (var i = 0; i < groups.length; i++) {
       var rows = groups[i].querySelectorAll("tr[data-grade]");
       var visibleInGroup = 0;
       for (var j = 0; j < rows.length; j++) {
-        var show = selected === "ALL" || rows[j].dataset.grade === selected;
+        var gradeMatches = selectedGrade === "ALL"
+          || rows[j].dataset.grade === selectedGrade;
+        var reviewMatches = selectedReview === "ALL"
+          || rows[j].dataset.reviewStatus === selectedReview;
+        var show = gradeMatches && reviewMatches;
         rows[j].hidden = !show;
         if (show) { visibleInGroup++; visibleTotal++; }
       }
       groups[i].hidden = visibleInGroup === 0;
       if (tocLinks[i]) { tocLinks[i].hidden = visibleInGroup === 0; }
     }
-    status.textContent = selected === "ALL"
+    status.textContent = visibleTotal === total
       ? "Showing all " + total + " entries"
       : "Showing " + visibleTotal + " of " + total + " entries";
   }
-  filter.addEventListener("change", applyGradeFilter);
-  applyGradeFilter();
+  gradeFilter.addEventListener("change", applyFilters);
+  reviewFilter.addEventListener("change", applyFilters);
+  applyFilters();
 
   /* --- detail modal --- */
   var backdrop = document.getElementById("detail-modal");
@@ -168,6 +177,8 @@ SCRIPT = r"""
       modalTitle.textContent = d.ref + " — " + d.section;
 
       var grade = '<span class="badge ' + d.grade + '">' + d.grade + '</span>';
+      var reviewStatus = '<span class="badge ' + d.reviewStatus + '">'
+        + d.reviewStatus + '</span>';
 
       var reviewsHtml = "";
       try {
@@ -195,6 +206,7 @@ SCRIPT = r"""
           row("Publication", d.ref)
         + row("Section",     d.section)
         + row("Grade",       grade)
+        + row("Review status", reviewStatus)
         + row("Location",    d.location, "mono")
         + row("Note",        d.note)
         + row("Justification", just)
@@ -240,6 +252,7 @@ def _parse_requirements(source: Path) -> tuple[list[dict], dict[str, list[dict]]
                 if reviewer["person"]:
                     reviewers.append(reviewer)
         item["reviewers"] = reviewers
+        item["review_status"] = "MANUAL" if reviewers else "AUTO"
         requirements.append(item)
         groups[item["ref"]].append(item)
     return requirements, groups
@@ -261,6 +274,13 @@ def _build_body(requirements: list[dict], groups: dict[str, list[dict]]) -> list
     for grade in sorted(counts):
         out.append(f'<option value="{esc(grade)}">{esc(grade)}</option>')
     out.extend(['</select></div>',
+                '<div class="filter-field">',
+                '<label for="review-filter">Filter by review status</label>',
+                '<select id="review-filter">',
+                '<option value="ALL">All review statuses</option>',
+                '<option value="MANUAL">Manual</option>',
+                '<option value="AUTO">Auto</option>',
+                '</select></div>',
                 f'<div id="filter-status" class="filter-status" aria-live="polite">'
                 f'Showing all {len(requirements)} entries</div></div>',
                 '<p class="policy"><strong>Deviation policy:</strong> Every '
@@ -287,6 +307,7 @@ def _build_body(requirements: list[dict], groups: dict[str, list[dict]]) -> list
             reviewers_json = esc(json.dumps(item["reviewers"], ensure_ascii=False))
             out.append(
                 f'<tr data-grade="{esc(item["grade"])}"'
+                f' data-review-status="{esc(item["review_status"])}"'
                 f' data-ref="{esc(item["ref"])}"'
                 f' data-section="{esc(item["section"])}"'
                 f' data-location="{esc(item["location"])}"'
