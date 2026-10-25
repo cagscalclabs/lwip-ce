@@ -1,0 +1,265 @@
+diff --git a/installer/src/ports.s b/installer/src/ports.s
+index c64ec3a..e624dd7 100644
+--- a/installer/src/ports.s
++++ b/installer/src/ports.s
+@@ -1,45 +1,18 @@
+-; Copyright 2015-2026 Matt "MateoConLechuga" Waltz
+-;
+-; Redistribution and use in source and binary forms, with or without
+-; modification, are permitted provided that the following conditions are met:
+-;
+-; 1. Redistributions of source code must retain the above copyright notice,
+-;    this list of conditions and the following disclaimer.
+-;
+-; 2. Redistributions in binary form must reproduce the above copyright notice,
+-;    this list of conditions and the following disclaimer in the documentation
+-;    and/or other materials provided with the distribution.
+-;
+-; 3. Neither the name of the copyright holder nor the names of its contributors
+-;    may be used to endorse or promote products derived from this software
+-;    without specific prior written permission.
+-;
+-; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+-; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+-; IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+-; ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+-; LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+-; CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+-; SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+-; INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+-; CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+-; ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+-; POSSIBILITY OF SUCH DAMAGE.
+-
+ 	.assume	adl=1
+ 	.section	.text
+ 
+-	.equ	ti.flags, 0xD00080
+ 	.equ	ti.StrCmpre, 0x021DB0
+-	.equ	ti.heapBot, 0xD1887C
+ 	.equ	ti._frameset0, 0x000130
+ 	.equ	ti.textShadow, 0xD006C0
++	.equ	ti.CheckIfEmulated, 0x000578
++	.equ 	ti.KeypadScanFull, 0x0003D4
++	.equ 	ti._indcall, 0x00015C
+ 
+ 	.global	_port_setup
+ _port_setup:
+-	push	ix
+-	call	port_setup
+-	pop	ix
++	push ix
++	call port_setup
++	pop ix
+ 	ret
+ 
+ port_setup:
+@@ -48,133 +21,87 @@ port_setup:
+ 	ld	bc,port_reloc.size
+ 	ld	de,___port_reloc
+ 	ldir
+-	ld	b,1
+-	or	a,a
+-	sbc	hl,hl
+-port_setup.find:
+-	ld	a,(hl)
+-	inc	hl
+-	cp	a,$80
+-	jr	z,port_setup.found_80
+-	cp	a,$ed
+-	jr	nz,port_setup.find
+-	ld	a,(hl)
+-	sub	a,$41
+-	jr	z,port_setup.found_ed41
+-	cp	a,$73
+-	jr	nz,port_setup.find
+-	dec	b
+-	dec	hl
+-	ld	(port_new.target),hl
+-	inc	hl
+-	jr	port_setup.find
+-port_setup.found_80:
+-	ld	a,(hl)
+-	cp	a,$0f
+-	jr	nz,port_setup.find
+-	and	a,b
+-	ret	nz
+-	ld	hl,port_new.unlock
+-	jr	port_setup.store_smc
+-port_setup.found_ed41:
+-	dec	hl
+-	ld	(port_old.target),hl
+-	inc	hl
+-	push	hl
+-	pop	ix
+-	bit	0,(ix+4)
+-	jr	nz,port_setup.find
+-	ld	hl,port_old.unlock
+-port_setup.store_smc:
+-	ld	(_port_unlock.code),hl
++	ld hl, ($000008+5)
++	ld a, (hl)
++	cp a, $CD
++	ret nz
++	inc hl
++	ld de, (hl)
++	ld hl, (ti.CheckIfEmulated+1)
++	sbc hl, de
++	ret nz
++	ld hl, (ti.KeypadScanFull+1)
++	ld bc, 10
++	add hl, bc
++	push hl
++	ld b, port_pattern.size
++	ld de, port_pattern
++	call ti.StrCmpre
++	pop hl
++	ret nz
++	ld (___port_unlock.target), hl
++	xor a, a
++	ret
++
++port_pattern:
++	.db $ED,$79,$78,$FE,$A0,$28,$01,$CF
++	.equ port_pattern.size, $-port_pattern
++
++	.global _port_unlock
++_port_unlock:
++	push ix
++	push de
++	push bc
++	push hl
++	call ___port_unlock
++	jr _port_lock.pop
++
++	.global _port_lock
++_port_lock:
++	push ix
++	push de
++	push bc
++	push hl
++	call ___port_lock
++
++_port_lock.pop:
++	pop hl
++	pop bc
++	pop de
++	pop ix
+ 	ret
+ 
+-	; these functions must be placed below 0xD1887C
+-	; use textShadow (0xD006C0) for this purpose
+-	; must be placement independent, cannot use absolute jumps
+ port_reloc:
+ 	.equ	___port_reloc, ti.textShadow
+ 	.equ	___port_unlock, ___port_reloc
+-	ld	a,$8c
+-	out0	($24),a
+-	in0	a,($06)
+-	or	a,4
+-	out0	($06),a
+-	ret
+-	.equ	___port_lock, ___port_reloc + ($-port_reloc)
+-	xor	a,a
+-	out0	($28),a
+-	in0	a,($06)
+-	res	2,a
+-	out0	($06),a
+-	ld	a,$88
+-	out0	($24),a
+-	ld	a,$d1
+-	out0	($22),a
+-	ret
+-	.equ	port_reloc.size, $-port_reloc
++	call ti._frameset0
++	ld iy, ___port_unlock.unlockfinish
++	ld sp, ti._indcall + 7
++	ld bc, $22
++	xor a, a
+ 
+-	; these functions are okay to be in user ram
+-port_old.unlock:
+-	ld	iy,$d00080
+-	call	port_old.unlockhelper
+-	jp	___port_unlock
+-port_old.unlockhelper:
+-	call	ti._frameset0
+-	push	de
+-	ld	bc,$0022
+-	jp	0
+-	.equ	port_old.target, $-3
++	.equ ___port_unlock.target, ___port_reloc + (($+1)-port_reloc)
++	jp 0
+ 
+-port_new.unlock:
+-	ld	iy,$d00080
+-	ld	de,$d19881
+-	push	de
+-	or	a,a
+-	sbc	hl,hl
+-	push	hl
+-	ld	de,$03d1
+-	push	de
+-	push	hl
+-	call	port_new.unlockhelper
+-	ld	hl,12
+-	add	hl,sp
+-	ld	sp,hl
+-	jp	___port_unlock
+-port_new.unlockhelper:
+-	push	hl
+-	ex	(sp),ix
+-	add	ix,sp
+-	push	hl
+-	push	de
+-	ld	de,$887c00
+-	push	de
+-	ld	bc,$10de
+-	ld	de,$0f22
+-	add	hl,sp
+-	jp	0
+-	.equ	port_new.target, $-3
+-
+-	.global	_port_unlock
+-_port_unlock:
+-	push	ix
+-	push	de
+-	push	bc
+-	push	hl
+-	call	0
+-	.equ	_port_unlock.code, $-3
+-	jr	_port_lock.pop
++	.equ	___port_unlock.unlockfinish, ___port_reloc + ($-port_reloc)
++	ld sp, ix
++	pop ix
++	ld a, $8C
++	out0 ($24), a
++	in0 a, ($06)
++	or a, 4
++	out0 ($06), a
++	ret
+ 
+-	.global	_port_lock
+-_port_lock:
+-	push	ix
+-	push	de
+-	push	bc
+-	push	hl
+-	call	___port_lock
+-_port_lock.pop:
+-	pop	hl
+-	pop	bc
+-	pop	de
+-	pop	ix
++	.equ	___port_lock, ___port_reloc + ($-port_reloc)
++	xor a, a
++	out0 ($28), a
++	in0 a, ($06)
++	res 2, a
++	out0 ($06), a
++	ld a, $88
++	out0 ($24), a
++	ld a, $D1
++	out0 ($22), a
+ 	ret
++	.equ	port_reloc.size, $-port_reloc

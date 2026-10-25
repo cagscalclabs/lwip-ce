@@ -16,7 +16,12 @@ version = "3.0.0"
 init = "lwip_init_runtime_internal"
 linker_script = "build-tools/meta/linker_script_lwip.ld"
 retain_removed = true
-installer_patches = ["build-tools/patches/app_tools-installer-lwip.patch"]
+# ce-libify v1.1.2 pins app_tools at 3409a9d. Backport app_tools ef0e3c1
+# (new boot-code support) and 0fb268f (relocated SMC target fix) first.
+installer_patches = [
+    "build-tools/patches/app_tools-newest-boot.patch",
+    "build-tools/patches/app_tools-installer-lwip.patch",
+]
 imports = [
     "usb_ResetDevice",
     "usb_DisableDevice",
