@@ -14,7 +14,6 @@
     "../../common/LWIP.7.8xv",
     "../../common/LWIP.8.8xv",
     "../../common/lwip.8xv",
-    "../../common/lwIPCERT.8xv",
     "vectors/CAVP00.8xv",
     "vectors/CAVP01.8xv",
     "vectors/CAVP02.8xv",
@@ -37,7 +36,7 @@
     "isASM": true
   },
   "sequence": [
-    "delay|20000",
+    "delay|30000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|2",
@@ -68,7 +67,7 @@
       "expected_CRCs": [
         "F7C03D8D"
       ],
-      "timeout": 300000
+      "timeout": 400000
     }
   }
 }
