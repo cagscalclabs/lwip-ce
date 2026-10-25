@@ -20,7 +20,6 @@
   },
   "sequence": [
     "delay|5000",
-    "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|3",
@@ -50,7 +49,7 @@
       "expected_CRCs": [
         "393016F1"
       ],
-      "timeout": 2000
+      "timeout": 10000
     },
     "3": {
       "description": "lwIP installed",

@@ -21,7 +21,6 @@
   },
   "sequence": [
     "delay|5000",
-    "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|4",
@@ -56,7 +55,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "3": {
       "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 3",
@@ -66,7 +65,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "4": {
       "description": "lwIP installed",

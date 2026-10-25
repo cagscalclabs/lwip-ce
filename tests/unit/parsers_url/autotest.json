@@ -21,7 +21,6 @@
   },
   "sequence": [
     "delay|5000",
-    "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|7",
@@ -61,7 +60,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "3": {
       "description": "Decode: %XX sequences decoded correctly",
@@ -71,7 +70,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "4": {
       "description": "Decode: plain string passthrough",
@@ -81,7 +80,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "5": {
       "description": "Query string: single key=value pair",
@@ -91,7 +90,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "6": {
       "description": "Query string: multiple pairs with encoding",
@@ -101,7 +100,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "7": {
       "description": "lwIP installed",

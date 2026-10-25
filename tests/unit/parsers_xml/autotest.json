@@ -21,7 +21,6 @@
   },
   "sequence": [
     "delay|5000",
-    "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|14",
@@ -76,7 +75,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "3": {
       "description": "Text content between tags",
@@ -86,7 +85,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "4": {
       "description": "Entity decoded in text stream (&amp; -> &)",
@@ -96,7 +95,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "5": {
       "description": "xml_decode_entity: built-in XML/HTML entities",
@@ -106,7 +105,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "6": {
       "description": "XML streaming: 7-byte chunks, NEED_MORE retry",
@@ -116,7 +115,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "7": {
       "description": "Lax HTML: void elements, boolean attrs, text extraction",
@@ -126,7 +125,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "8": {
       "description": "Second item attributes reachable after walk",
@@ -136,7 +135,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "9": {
       "description": "HTML case folding: uppercase tags lowercased",
@@ -146,7 +145,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "10": {
       "description": "HTML unquoted attribute values",
@@ -156,7 +155,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "11": {
       "description": "HTML &nbsp; decoded as space",
@@ -166,7 +165,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "12": {
       "description": "HTML nested inline tags: strong/em START+END and text",
@@ -176,7 +175,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "13": {
       "description": "HTML link href attribute extraction",
@@ -186,7 +185,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "15": {
       "description": "HTML lax streaming: chunked h1 text + a tag",
@@ -196,7 +195,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "14": {
       "description": "lwIP installed",

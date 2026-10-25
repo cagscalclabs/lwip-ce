@@ -40,6 +40,8 @@ func,tls_aes_update_ciphertext,cryptography,src/tls/includes/aes.h,lwip/cryptogr
 func,tls_aes_digest,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_decrypt,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_verify,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
+func,tls_aes_pkcs7_apply,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
+func,tls_aes_pkcs7_remove,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_asn1_cursor_init,cryptography,src/tls/includes/asn1.h,lwip/cryptography/asn1.h
 func,tls_asn1_next,cryptography,src/tls/includes/asn1.h,lwip/cryptography/asn1.h
 func,tls_asn1_child_cursor,cryptography,src/tls/includes/asn1.h,lwip/cryptography/asn1.h

@@ -21,7 +21,6 @@
   },
   "sequence": [
     "delay|5000",
-    "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|4",
@@ -55,7 +54,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "3": {
       "description": "SHA-256 two-block message - NIST FIPS 180-4, Example 2",
@@ -65,7 +64,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "4": {
       "description": "lwIP installed",

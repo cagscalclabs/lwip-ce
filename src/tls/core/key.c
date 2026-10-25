@@ -522,22 +522,9 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
             goto done;
         if (!tls_aes_decrypt(&aes_ctx, enc_data.value, enc_data.len, buf))
             goto done;
-        /* Strip PKCS#7 padding (RFC 5652 6.3): 1..16 bytes, every pad byte
-         * equal to the pad length, and a whole number of blocks. */
-        if (enc_data.len == 0 || (enc_data.len % TLS_AES_BLOCK_SIZE) != 0)
+        pt_len = tls_aes_pkcs7_remove(buf, enc_data.len);
+        if (pt_len == 0)
             goto done;
-        {
-            uint8_t pad = buf[enc_data.len - 1];
-            uint8_t diff = 0;
-
-            if (pad == 0 || pad > TLS_AES_BLOCK_SIZE || pad > enc_data.len)
-                goto done;
-            for (size_t i = 0; i < pad; i++)
-                diff |= (uint8_t)(buf[enc_data.len - 1 - i] ^ pad);
-            if (diff != 0)
-                goto done;
-            pt_len = enc_data.len - pad;
-        }
         ok = true;
     }
 
@@ -948,28 +935,25 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
     }
     else
     {
-        if (tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
-            (!aad || !aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
-            (in_len == 0 || tls_aes_encrypt(&ctx, inbuf, in_len, ct)) &&
-            (!aead || tls_aes_digest(&ctx, tag)))
+        if (mode == TLS_AES_CBC)
         {
-            if (mode == TLS_AES_CBC)
-            {
-                /* PKCS#7: append the padding block (full 0x10 block when aligned). */
-                size_t rem = in_len % TLS_AES_BLOCK_SIZE;
-                uint8_t pad_byte = (uint8_t)(TLS_AES_BLOCK_SIZE - rem);
-                uint8_t pad_block[TLS_AES_BLOCK_SIZE];
-                memset(pad_block, pad_byte, sizeof(pad_block));
-                ok = tls_aes_encrypt(&ctx, pad_block, sizeof(pad_block),
-                                     ct + ct_len - TLS_AES_BLOCK_SIZE);
-                tls_secure_memzero(pad_block, sizeof(pad_block));
-            }
-            else
-            {
+            /* PKCS#7: pad into the already-allocated ciphertext buffer, then
+             * encrypt in-place. ct is large enough (ct_len = padded size). */
+            if (tls_aes_pkcs7_apply(inbuf, in_len, ct) == ct_len &&
+                tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
+                tls_aes_encrypt(&ctx, ct, ct_len, ct))
                 ok = true;
-            }
+            tls_secure_memzero(&ctx, sizeof(ctx));
         }
-        tls_secure_memzero(&ctx, sizeof(ctx));
+        else
+        {
+            if (tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
+                (!aad || !aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
+                (in_len == 0 || tls_aes_encrypt(&ctx, inbuf, in_len, ct)) &&
+                (!aead || tls_aes_digest(&ctx, tag)))
+                ok = true;
+            tls_secure_memzero(&ctx, sizeof(ctx));
+        }
     }
 
     if (!ok)
@@ -1138,21 +1122,13 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
             /* Strip PKCS#7 padding for CBC blobs and update the blob length. */
             if (!key_is_aead(alg) && ct_len > 0)
             {
-                uint8_t pad = plain[ct_len - 1];
-                uint8_t diff = 0;
-                if (pad == 0 || pad > TLS_AES_BLOCK_SIZE || pad > ct_len)
+                size_t plain_len = tls_aes_pkcs7_remove(plain, ct_len);
+                if (plain_len == 0)
                 {
                     tls_cipher_blob_free(out);
                     return NULL;
                 }
-                for (size_t i = 0; i < pad; i++)
-                    diff |= (uint8_t)(plain[ct_len - 1 - i] ^ pad);
-                if (diff != 0)
-                {
-                    tls_cipher_blob_free(out);
-                    return NULL;
-                }
-                blob_write_u16(out, (uint16_t)(ct_len - pad));
+                blob_write_u16(out, (uint16_t)plain_len);
             }
             return out;
         }

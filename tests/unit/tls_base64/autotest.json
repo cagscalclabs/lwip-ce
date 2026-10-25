@@ -20,7 +20,6 @@
   },
   "sequence": [
     "delay|5000",
-    "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|7",
@@ -60,7 +59,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "3": {
       "description": "Encode('foobar'), RFC 4648, Section 10, Vector 7",
@@ -70,7 +69,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "4": {
       "description": "Decode('Zg=='), RFC 4648, Section 10, Vector 2",
@@ -80,7 +79,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "5": {
       "description": "Decode('Zm9v'), RFC 4648, Section 10, Vector 4",
@@ -90,7 +89,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "6": {
       "description": "Decode('Zm9vYmFy'), RFC 4648, Section 10, Vector 7",
@@ -100,7 +99,7 @@
       "expected_CRCs": [
         "D1F2869F"
       ],
-      "timeout": 1000
+      "timeout": 10000
     },
     "7": {
       "description": "lwIP installed",

@@ -203,4 +203,19 @@ bool tls_aes_verify(struct tls_aes_context *ctx,
                     const uint8_t *ciphertext, size_t ciphertext_len,
                     const uint8_t *tag);
 
+/**
+ * Apply PKCS#7 padding to @p inbuf and write the result to @p outbuf.
+ * @p outbuf must hold at least @p in_len + (16 - in_len % 16) bytes.
+ * @p inbuf and @p outbuf may alias (in-place is safe).
+ * @returns Padded length on success, 0 on invalid arguments.
+ */
+size_t tls_aes_pkcs7_apply(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf);
+
+/**
+ * Strip PKCS#7 padding from @p buf (in-place).  Zeroes the removed bytes.
+ * @p buf must be a multiple of 16 bytes.
+ * @returns Unpadded length on success, 0 if padding is invalid.
+ */
+size_t tls_aes_pkcs7_remove(uint8_t *buf, size_t len);
+
 #endif

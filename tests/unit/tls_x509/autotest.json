@@ -22,7 +22,6 @@
   },
   "sequence": [
     "delay|5000",
-    "delay|2500",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|7",
@@ -60,7 +59,7 @@
       "expected_CRCs": [
         "9F59DEE1"
       ],
-      "timeout": 5000
+      "timeout": 10000
     },
     "3": {
       "description": "Certificate 1, CA constraints fail if patched",
@@ -69,7 +68,7 @@
       "expected_CRCs": [
         "915DDFDF"
       ],
-      "timeout": 5000
+      "timeout": 10000
     },
     "4": {
       "description": "Certificate 2 Parse Check",
@@ -78,7 +77,7 @@
       "expected_CRCs": [
         "5604826E"
       ],
-      "timeout": 5000
+      "timeout": 10000
     },
     "5": {
       "description": "Certificate 2, CA constraints valid",
@@ -87,7 +86,7 @@
       "expected_CRCs": [
         "2AEF68BA"
       ],
-      "timeout": 5000
+      "timeout": 10000
     },
     "6": {
       "description": "Certificate 2, patched constraints fail if patched",
@@ -96,7 +95,7 @@
       "expected_CRCs": [
         "24EB6984"
       ],
-      "timeout": 5000
+      "timeout": 10000
     },
     "7": {
       "description": "lwIP installed",

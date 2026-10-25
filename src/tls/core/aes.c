@@ -683,9 +683,10 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
     }
     case TLS_AES_CBC:
     {
+        if (in_len % AES_BLOCK_SIZE != 0)
+            goto cleanup;
         aes_prepare_encrypt();
         size_t blocks = in_len / AES_BLOCK_SIZE;
-        size_t rem = in_len % AES_BLOCK_SIZE;
         for (size_t idx = 0; idx < blocks; idx++)
         {
             aes_xor_buf(inbuf, iv, AES_BLOCK_SIZE);
@@ -693,12 +694,6 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             memcpy(outbuf, iv, AES_BLOCK_SIZE);
             inbuf += AES_BLOCK_SIZE;
             outbuf += AES_BLOCK_SIZE;
-        }
-        if (rem)
-        {
-            aes_xor_buf(inbuf, iv, rem);
-            aes_encrypt_block(iv, iv, ctx);
-            memcpy(outbuf, iv, AES_BLOCK_SIZE);
         }
         break;
     }
@@ -922,4 +917,34 @@ done:
     tls_secure_memzero(&ctx, sizeof ctx);
     tls_secure_memzero(digest, sizeof digest);
     return ok;
+}
+
+size_t tls_aes_pkcs7_apply(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
+{
+    if (!inbuf || !outbuf)
+        return 0;
+    size_t rem = in_len % AES_BLOCK_SIZE;
+    uint8_t pad = (uint8_t)(AES_BLOCK_SIZE - rem);
+    size_t out_len = in_len + pad;
+    /* memmove so inbuf == outbuf is safe */
+    memmove(outbuf, inbuf, in_len);
+    memset(outbuf + in_len, pad, pad);
+    return out_len;
+}
+
+size_t tls_aes_pkcs7_remove(uint8_t *buf, size_t len)
+{
+    if (!buf || len == 0 || len % AES_BLOCK_SIZE != 0)
+        return 0;
+    uint8_t pad = buf[len - 1];
+    if (pad == 0 || pad > AES_BLOCK_SIZE)
+        return 0;
+    /* Constant-time validation of all padding bytes */
+    uint8_t diff = 0;
+    for (size_t i = 0; i < pad; i++)
+        diff |= buf[len - 1 - i] ^ pad;
+    if (diff != 0)
+        return 0;
+    memset(buf + len - pad, 0, pad);
+    return len - pad;
 }
