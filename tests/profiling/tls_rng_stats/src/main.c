@@ -22,6 +22,7 @@
 #define RNG_STATS_APPVAR "RNGSTATS"
 #define RNG_STATS_RUNS 8u
 #define RNG_STATS_SAMPLES_PER_RUN 32768u
+#define RNG_READY_TIMEOUT_MS 15000u
 
 static uint8_t output_handle;
 
@@ -91,6 +92,15 @@ int main(void)
     if (!lwip_start())
     {
         printf("lwip_start failed: %u\n", (unsigned int)lwip_start_last_error());
+        printf("Press any key\n");
+        os_GetKey();
+        return 1;
+    }
+
+    if (!lwip_tls_rng_wait_for_ready(RNG_READY_TIMEOUT_MS))
+    {
+        printf("RNG setup timed out\n");
+        lwip_stop();
         printf("Press any key\n");
         os_GetKey();
         return 1;

@@ -1,10 +1,39 @@
 CE_LIBIFY ?= ce-libify
 CEDEV_TOOLCHAIN ?= $(if $(CEDEV),$(CEDEV),$(shell cedev-config --prefix))
+APP_TOOLS_CACHE := obj/libify/app_tools
+APP_TOOLS_INPUTS := ce-libify.toml $(wildcard build-tools/patches/app_tools-*.patch)
+APP_TOOLS_INPUT_STAMP := $(APP_TOOLS_CACHE)/.lwip-ce-inputs
 
-.PHONY: all build
+.PHONY: all build prepare-installer
 all: dylib
-build:
+
+# ce-libify 1.1.2 reuses its app_tools checkout without checking whether the
+# selected ref or installer patches changed. Invalidate only that generated
+# checkout when one of its inputs is newer, then let ce-libify recreate it.
+prepare-installer:
+	@if [ -d "$(APP_TOOLS_CACHE)" ]; then \
+		refresh=; \
+		if [ ! -f "$(APP_TOOLS_INPUT_STAMP)" ]; then \
+			refresh=1; \
+		else \
+			for input in $(APP_TOOLS_INPUTS); do \
+				if [ "$$input" -nt "$(APP_TOOLS_INPUT_STAMP)" ]; then \
+					refresh=1; \
+					break; \
+				fi; \
+			done; \
+		fi; \
+		if [ -n "$$refresh" ]; then \
+			echo "[installer] invalidating stale app_tools cache"; \
+			rm -rf "$(APP_TOOLS_CACHE)"; \
+		fi; \
+	fi
+
+build: prepare-installer
 	$(CE_LIBIFY) build
+	@if [ -d "$(APP_TOOLS_CACHE)" ]; then \
+		touch "$(APP_TOOLS_INPUT_STAMP)"; \
+	fi
 
 .PHONY: dylib
 dylib: build
