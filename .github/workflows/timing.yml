@@ -8,10 +8,14 @@ name: Timing Profiling
 # over% > 50% or a failing c=4 rigorous result emit warnings (green workflow).
 
 on:
-  schedule:
-    - cron: '0 4 * * *'
+  push:
+    branches:
+      - master
+    paths:
+      - statistics/timing/*
+      - tests/profiling/tls_timing/tools/summarize_timing_stats.py
+      - .github/workflows/timing.yml
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
