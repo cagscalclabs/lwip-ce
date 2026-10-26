@@ -11,7 +11,9 @@ from acvp_client import (HEADER, MAGIC_REQUEST, MAGIC_RESPONSE, OP_P256_CDH,
                          OP_RSA_PKCS1_SHA2_256_VERIFY, OP_RSA_PSS_SHA2_256_VERIFY,
                          OP_SHA2_256, OP_X25519_SSC, SocketBackend,
                          process_document, reference_backend)
+from generate_vectors import GENERATED_ALGORITHMS, build_corpus
 from summary import render
+from validate import validate_document
 
 HERE = Path(__file__).resolve().parent
 prompt = json.loads((HERE / "fixtures" / "prompt.json").read_text())
@@ -28,10 +30,66 @@ actual = process_document(prompt, reference_backend)
 if actual != expected:
     raise SystemExit("ACVP fixture response mismatch")
 
-markdown, report, passed = render(prompt, expected, actual, "success")
+markdown, report, passed = render(prompt, expected, actual, {}, "success")
 assert passed and report["passedTests"] == 10 and "10/10 test cases matched" in markdown
-_, failed_report, passed = render(prompt, expected, None, "failure")
+_, failed_report, passed = render(prompt, expected, None, {}, "failure")
 assert not passed and failed_report["failedTests"] == 10
+
+corpus, corpus_expected, corpus_oracle = build_corpus()
+assert sum(corpus_oracle["counts"].values()) == 416
+assert all(count >= 32 for count in corpus_oracle["counts"].values())
+deterministic = [corpus[0], *[vector for vector in corpus[1:]
+                              if vector["algorithm"] not in GENERATED_ALGORITHMS]]
+assert process_document(deterministic, reference_backend) == corpus_expected
+
+# Exercise semantic grading for all generated-key vector families.
+class SemanticBackend:
+    def __init__(self):
+        from cryptography.hazmat.primitives.asymmetric import ec
+        self.ec = ec
+        self.signing_key = ec.derive_private_key(7, ec.SECP256R1())
+        self.signature_cache = {}
+        self.counter = 0
+
+    @staticmethod
+    def point(public) -> bytes:
+        numbers = public.public_numbers()
+        return b"\x04" + numbers.x.to_bytes(32, "big") + numbers.y.to_bytes(32, "big")
+
+    def __call__(self, operation: int, payload: bytes) -> bytes:
+        from hashlib import sha256
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec, utils, x25519
+        if operation == OP_P256_SIGGEN_BEGIN:
+            return self.point(self.signing_key.public_key())
+        if operation == OP_P256_SIGGEN_ACTIVE:
+            if payload not in self.signature_cache:
+                der = self.signing_key.sign(payload, ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+                r, s = utils.decode_dss_signature(der)
+                self.signature_cache[payload] = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+            return self.signature_cache[payload]
+        if operation == OP_X25519_SSC:
+            self.counter += 1
+            private = x25519.X25519PrivateKey.from_private_bytes(
+                sha256(b"x" + self.counter.to_bytes(2, "big")).digest())
+            public = private.public_key().public_bytes(serialization.Encoding.Raw,
+                                                        serialization.PublicFormat.Raw)
+            return public + private.exchange(x25519.X25519PublicKey.from_public_bytes(payload))
+        if operation == OP_P256_CDH:
+            self.counter += 1
+            scalar = 1 + int.from_bytes(sha256(b"p" + self.counter.to_bytes(2, "big")).digest(), "big") % (2**255)
+            private = ec.derive_private_key(scalar, ec.SECP256R1())
+            peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), payload)
+            return self.point(private.public_key()) + private.exchange(ec.ECDH(), peer)
+        return reference_backend(operation, payload)
+
+corpus_response = process_document(corpus, SemanticBackend())
+corpus_report = validate_document(corpus, corpus_expected, corpus_response, corpus_oracle)
+assert corpus_report["passed"] and corpus_report["passedTests"] == 416
+corpus_markdown, corpus_summary, passed = render(
+    corpus, corpus_expected, corpus_response, corpus_oracle, "success")
+assert passed and corpus_summary["passedTests"] == 416
+assert "416/416 test cases matched" in corpus_markdown and "| SHA2-256 |" in corpus_markdown
 
 # Revision 1.0 carries HMAC lengths on the group instead of each test case.
 revision_one = {

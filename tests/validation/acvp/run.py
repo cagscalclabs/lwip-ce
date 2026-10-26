@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 
 from acvp_client import AcvpError, SocketBackend, process_file
+from validate import validate_document
 
 HERE = Path(__file__).resolve().parent
 COMMON = HERE.parents[1] / "common"
@@ -62,8 +63,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--autotester", required=True)
     parser.add_argument("--usb", required=True)
-    parser.add_argument("--vectors", type=Path, default=HERE / "fixtures" / "prompt.json")
-    parser.add_argument("--expected", type=Path, default=HERE / "fixtures" / "expected.json")
+    parser.add_argument("--vectors", type=Path, default=HERE / "corpus" / "prompt.json")
+    parser.add_argument("--expected", type=Path, default=HERE / "corpus" / "expected.json")
+    parser.add_argument("--oracle", type=Path, default=HERE / "corpus" / "oracle.json")
     parser.add_argument("--response", type=Path, default=HERE / "response.json")
     parser.add_argument("--timeout-ms", type=int, default=900000)
     args = parser.parse_args()
@@ -105,8 +107,14 @@ def main() -> int:
     if thread.is_alive() or "response" not in outcome:
         print("ACVP host did not complete", file=sys.stderr)
         return 1
-    if args.expected and json.loads(args.expected.read_text()) != outcome["response"]:
-        print("ACVP response differs from the expected fixture", file=sys.stderr)
+    report = validate_document(json.loads(args.vectors.read_text()),
+                               json.loads(args.expected.read_text()),
+                               outcome["response"], json.loads(args.oracle.read_text()))
+    if not report["passed"]:
+        failures = [row for row in report["tests"] if not row["passed"]]
+        print(f"ACVP corpus failed {len(failures)}/{report['total']} vectors", file=sys.stderr)
+        for row in failures[:20]:
+            print(f"  {row['algorithm']} tcId {row['tcId']}: {row['detail']}", file=sys.stderr)
         return 1
     if not log_path.exists():
         print("calculator did not produce NETLOG", file=sys.stderr)

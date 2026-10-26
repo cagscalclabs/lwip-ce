@@ -24,11 +24,14 @@ the shipping RNG; private material is zeroized after use. Hash_DRBG is not
 advertised: the production RNG intentionally has no API for injecting ACVP's
 deterministic entropy, nonce, and reseed strings.
 
-`fixtures/prompt.json` is an ACVP-shaped deterministic smoke test.
-`selftest.py` verifies host parsing and response construction without CEmu;
-`run.py` executes the same prompt through the calculator. `summary.py` compares
-the response per test case and publishes the result table in the Actions job
-summary, with matching Markdown and JSON files in the workflow artifact.
+`fixtures/prompt.json` remains a small parser smoke test. The workflow uses
+`generate_vectors.py` to build a 416-vector differential corpus: 64 SHA-256
+vectors and 32 vectors for every other advertised primitive. It covers MCT,
+both cipher directions, valid and invalid authentication/signature cases,
+boundary lengths, and all generated-key operations. `run.py` executes that
+corpus through the calculator. `summary.py` publishes per-primitive counts and
+results, with Markdown, JSON, prompts, expected results, and semantic-validation
+oracles retained in the workflow artifact.
 `capabilities.json` is the exact byte-aligned capability subset implemented by
 the current host and calculator pair; it is a template for the algorithms
 portion of a live ACVTS registration. Its generated-key entries use the

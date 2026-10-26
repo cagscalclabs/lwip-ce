@@ -31,6 +31,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-cryptography
 
+      - name: Generate 416-vector differential corpus
+        run: python3 tests/validation/acvp/generate_vectors.py
+
       - name: Check host ACVP parsing
         run: python3 tests/validation/acvp/selftest.py
 
@@ -70,6 +73,7 @@ jobs:
             tests/validation/acvp/response.json
             tests/validation/acvp/results.json
             tests/validation/acvp/summary.md
+            tests/validation/acvp/corpus/*.json
             tests/validation/acvp/NETLOG.8xv
             tests/validation/acvp/autotest.json
           if-no-files-found: ignore
