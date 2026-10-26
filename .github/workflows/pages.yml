@@ -42,11 +42,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
 
       - name: Install Doxygen
         run: |
-          sudo apt-get update
-          sudo apt-get install -y graphviz clang-18 libclang-18-dev
           wget -q "https://github.com/doxygen/doxygen/releases/download/Release_1_17_0/doxygen-1.17.0.linux.bin.tar.gz" -O /tmp/doxygen.tar.gz
           tar -xzf /tmp/doxygen.tar.gz -C /tmp
           sudo cp /tmp/doxygen-1.17.0/bin/doxygen /usr/local/bin/doxygen
