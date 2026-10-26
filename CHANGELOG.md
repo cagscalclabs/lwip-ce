@@ -121,3 +121,4 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - reduce peer public key mod p before ladder (RFC 7748 §5)
 - Fix issue where missing truststore would de-init the RNG.
 - Streamlined the event logging system: corrected some classifications, removed noisy events.
+- Previously *verify before encrypt* was a suggested policy; `tls_aes_decrypt()` is now locked until tag verification on authenticating cipher modes.

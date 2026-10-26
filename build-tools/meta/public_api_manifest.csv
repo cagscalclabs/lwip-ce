@@ -32,11 +32,8 @@ func,lwip_debug_file_name,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,lwip_debug_state_change_name,core,src/include/lwip/logging.h,lwip/core/logging.h
 func,tls_aes_init,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_ccm_init,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
-func,tls_aes_ccm_encrypt,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
-func,tls_aes_ccm_decrypt,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_update_aad,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_encrypt,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
-func,tls_aes_update_ciphertext,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_digest,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_decrypt,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,tls_aes_verify,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h

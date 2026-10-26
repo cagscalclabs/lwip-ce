@@ -466,10 +466,12 @@
     <section>8.19 (OBJECT IDENTIFIER)</section>
     <location>src/tls/core/x509.c: tls_x509_oid_eq / tls_x509_oid_to_sig_alg (L80-86, L1584-1614); src/tls/includes/tls_algorithms.h (L53-77) - OID matching</location>
     <grade>COMPLIANT</grade>
-    <note>OIDs are compared byte-for-byte against fixed DER constants (checked against dotted forms); a non-minimal subidentifier can only fail to match, which rejects.</note>
+    <note>Known OIDs are compared byte-for-byte against canonical DER constants, so non-minimal encodings cannot alias supported algorithms or recognized extensions. Generic OID contents are not independently validated; malformed unknown non-critical extension or Name OIDs may be treated as unknown and ignored.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -477,10 +479,13 @@
     <section>6.2 (CBC mode chaining)</section>
     <location>src/tls/core/aes.c: tls_aes_encrypt CBC (L664-676), tls_aes_decrypt CBC (L747-769) - chaining</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Correct chaining; in-place decrypt safe; decrypt rejects non-multiple-of-16 lengths. Covered by CAVP CBC MMT and SP 800-38A F.2.1-F.2.6. outbuf==NULL is not checked in CBC decrypt (UB on misuse).</note>
+    <note>Correct chaining; in-place decrypt safe; decrypt rejects non-multiple-of-16 lengths. Covered by CAVP CBC MMT and SP 800-38A F.2.1-F.2.6. outbuf==NULL is not checked in CBC decrypt (UB on misuse).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>CBC outbuf==NULL dereference bug fixed in v3.0.0-rc3</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -488,10 +493,13 @@
     <section>6.5 (CTR mode exposure)</section>
     <location>src/tls/core/aes.c: tls_aes_gcm_ctr (L706-712) - raw GCTR export</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Only raw CTR exposure is GCTR on a GCM context; its only user (altcp_tls_ce.c L480) runs after tag verification. Missing lock check: see SP 800-38D 7.1/7.2 ordering entry.</note>
+    <note>Only raw CTR exposure is GCTR on a GCM context; its only user (altcp_tls_ce.c L480) runs after tag verification. Missing lock check: see SP 800-38D 7.1/7.2 ordering entry.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Revised as of v3.0.0-rc3. tls_aes_gcm_ctr was never part of the public API and has now been removed; the record path uses the common tls_aes_decrypt API after the context reaches its verified state.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -499,10 +507,13 @@
     <section>Appendix A (padding; project intends PKCS#7)</section>
     <location>src/tls/core/aes.c: tls_aes_encrypt CBC final block (L697-707) - padding block; src/tls/core/key.c: tls_key_encrypt CBC ct_len calc (L906-910) - always include padding block</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. FIXED: padding loop uses iv[idx] correctly. Block-aligned input previously got no padding block (ct_len was in_len when rem==0); both aes.c (removed the `if (rem)` guard — padding block is always written) and key.c (ct_len now always in_len - rem + AES_BLOCK_SIZE regardless of rem) are corrected.</note>
+    <note>FIXED: padding loop uses iv[idx] correctly. Block-aligned input previously got no padding block (ct_len was in_len when rem==0); both aes.c (removed the `if (rem)` guard — padding block is always written) and key.c (ct_len now always in_len - rem + AES_BLOCK_SIZE regardless of rem) are corrected.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc2. Raw CBC API performs no padding and rejects non-block-aligned input. Callers requiring PKCS#7 must call tls_aes_pkcs7_apply before encryption and tls_aes_pkcs7_remove after decryption; the higher-level key API does this automatically.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -510,10 +521,13 @@
     <section>Appendix C (unpredictable CBC IV)</section>
     <location>src/tls/core/aes.c: tls_aes_init (L367); src/tls/core/key.c (tls_random_bytes(iv), ~L908) - CBC IV source</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. The only CBC encrypt caller draws the IV from the DRBG after tls_rng_healthcheck(). No padding oracle: tls_aes_decrypt does not check padding and the PKCS#8 strip (key.c L518-521) is offline import.</note>
+    <note>The only CBC encrypt caller draws the IV from the DRBG after tls_rng_healthcheck(). No padding oracle: tls_aes_decrypt does not check padding and the PKCS#8 strip (key.c L518-521) is offline import.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Clarification/revision: The low-level AES primitive is entropy-agnostic and requires the caller to provide an appropriate IV. The tls_key encryption API requires a healthy DRBG and generates a fresh CBC IV. PKCS#7 padding is handled by the helpers noted under Appendix A.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -521,7 +535,7 @@
     <section>6.1 / 6.2 (Tlen parameter integrity)</section>
     <location>src/tls/core/aes.c: tls_aes_ccm_encrypt (L841, L852), tls_aes_ccm_decrypt (L873, L884) - size_t to uint8_t tag_len truncation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (medium, API misuse): tag_len is validated after a cast to uint8_t (260 becomes 4) but the original size_t is used for memcpy, so encrypt over-reads the 16-byte stack digest (adjacent ctx holds round keys) into the caller's tag. Current callers pass the constant TLS_KEY_AES_TAG_LEN. Fix: reject tag_len &gt; 16 before the cast.</note>
+    <note>BUG (medium, API misuse): tag_len is validated after a cast to uint8_t (260 becomes 4) but the original size_t is used for memcpy, so encrypt over-reads the 16-byte stack digest (adjacent ctx holds round keys) into the caller's tag. Current callers pass the constant TLS_KEY_AES_TAG_LEN. Fix: reject tag_len &gt; 16 before the cast.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -532,10 +546,13 @@
     <section>6.2 (decryption-verification: return INVALID only)</section>
     <location>src/tls/core/aes.c: tls_aes_ccm_decrypt (L857-893) - plaintext release on tag failure</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (medium): plaintext is written before verification and wiped on mismatch only if plaintext != ciphertext (L888-889), so an in-place call leaves unverified plaintext in the buffer. Tag compare is constant-time (tls_bytes_compare, L884).</note>
+    <note>BUG (medium): plaintext is written before verification and wiped on mismatch only if plaintext != ciphertext (L888-889), so an in-place call leaves unverified plaintext in the buffer. Tag compare is constant-time (tls_bytes_compare, L884).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc3. The one-shot CCM decrypt surface was removed. CCM now uses tls_aes_ccm_init with the common verify/decrypt dispatch, and plaintext-producing decrypt fails until a successful tag check transitions the context to its verified state.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -546,7 +563,10 @@
     <note>Compliant as of/before v3.0.0-rc1. ccm_process_message guards outbuf writes behind `if (outbuf)` (L203); tls_aes_verify passes NULL, so no plaintext is emitted during the tag-check pass. The API-level hazard exists only if a caller passes a live output buffer before verifying — no in-tree caller does this.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc3. CCM verification authenticates with a NULL output, then marks the original context verified and resets its counter stream for the authorized plaintext-producing pass. A non-NULL decrypt before verification is rejected.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -667,7 +687,10 @@
     <note>Compliant as of/before v3.0.0-rc1. BUG (low): AAD after ciphertext is rejected, but update_ciphertext does not reject use after digest or on an encrypt-associated context, tls_aes_gcm_ctr checks neither lock nor op_assoc, and update_aad does not NULL-check. Misuse silently corrupts state instead of failing closed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc3. GCM and CCM now have an explicit verified state. Plaintext-producing calls through the common decrypt API fail unless a successful constant-time tag check has transitioned that same context to the verified state; the internal GCM ciphertext helper also enforces the operation association.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -678,7 +701,10 @@
     <note>Compliant as of/before v3.0.0-rc1. tls_aes_decrypt GCM branch guards the CTR-XOR behind `if (outbuf)` (L764); tls_aes_verify passes NULL for the tag-check pass and never emits plaintext. The API-level hazard exists only for a caller that passes a live output buffer — no in-tree caller does this.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc3. GCM plaintext-producing decrypt now fails unless a successful constant-time tag check has transitioned that same context to the verified state.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -700,7 +726,10 @@
     <note>Compliant as of/before v3.0.0-rc1. Tag recomputed on a context copy and compared with tls_bytes_compare; aes.h L198-199 requires decrypt only after verify. Callers comply (key.c L503-509, L1117-1120; altcp_tls_ce.c L415-444 two-pass). CAVP gcmDecrypt FAIL vectors included.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Strengthened as of v3.0.0-rc3. Successful tls_aes_verify now transitions the original GCM or CCM context to an explicit verified state; tls_aes_decrypt refuses caller-visible plaintext before that transition.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2673,7 +2702,10 @@
     <note>Compliant as of/before v3.0.0-rc1. Pass 1 authenticates the whole ciphertext with a constant-time tag OR-compare; plaintext produced only in pass 2; AAD is the received 5-byte header. Covered by the chunked-CTR fix validation and tests/unit/tls_aes. Note: GCM length-block bug for records of 8 KiB or more (see SP 800-38D 5.2.1.1).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Strengthened as of v3.0.0-rc3. The record path now completes its constant-time tag check by transitioning the existing AES-GCM context to verified, then performs the plaintext pass on that context. The decrypt primitive cannot release plaintext before verification.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>

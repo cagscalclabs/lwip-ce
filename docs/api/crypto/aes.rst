@@ -86,27 +86,14 @@ Context API
    :param tag: Expected authentication tag.
    :returns: ``true`` if the tag is valid, ``false`` if authentication fails.
 
-.. c:function:: bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t *ct, size_t ct_len)
-
-   Feed ciphertext into a GCM context for GHASH computation only, without
-   producing plaintext. Used for a verify-before-decrypt streaming pattern:
-   walk the full ciphertext through GHASH, check the tag, then decrypt in a
-   second pass over the authenticated ciphertext.
-
-   :param ctx: AES-GCM context, after ``tls_aes_update_aad()``.
-   :param ct: Ciphertext bytes to authenticate.
-   :param ct_len: Length of ciphertext.
-   :returns: ``true`` on success, ``false`` on error.
-
-CCM one-shot API
-----------------
+CCM initialization
+------------------
 
 .. c:function:: bool tls_aes_ccm_init(struct tls_aes_context *ctx, const uint8_t *key, size_t key_len, const uint8_t *nonce, size_t nonce_len, uint8_t tag_len, size_t msg_len, size_t aad_len)
 
-   Initialize an AES-CCM context for incremental AAD and data feeding. Use
-   this when you cannot supply all data at once; otherwise prefer the
-   one-shot ``tls_aes_ccm_encrypt()`` / ``tls_aes_ccm_decrypt()`` helpers.
-   Total ``msg_len`` and ``aad_len`` must be known up front.
+   Initialize an AES-CCM context for use with the common AES update,
+   encrypt/decrypt, digest, and verify functions. Total ``msg_len`` and
+   ``aad_len`` must be known up front.
 
    :param ctx: Caller-allocated AES context.
    :param key: AES key (16, 24, or 32 bytes).
@@ -117,44 +104,6 @@ CCM one-shot API
    :param msg_len: Total plaintext/ciphertext length.
    :param aad_len: Total associated data length.
    :returns: ``true`` on success, ``false`` on invalid parameters.
-
-.. c:function:: bool tls_aes_ccm_encrypt(const uint8_t *key, size_t key_len, const uint8_t *nonce, size_t nonce_len, const uint8_t *aad, size_t aad_len, const uint8_t *plaintext, size_t pt_len, uint8_t *ciphertext, uint8_t *tag, size_t tag_len)
-
-   One-shot AES-CCM encryption. Encrypts ``plaintext`` and produces
-   ``ciphertext`` and an authentication ``tag`` in a single call.
-
-   :param key: AES key.
-   :param key_len: Key length (16, 24, or 32 bytes).
-   :param nonce: CCM nonce (7–13 bytes).
-   :param nonce_len: Nonce length.
-   :param aad: Associated data (authenticated but not encrypted). ``NULL`` if none.
-   :param aad_len: Associated data length.
-   :param plaintext: Input plaintext.
-   :param pt_len: Plaintext length.
-   :param ciphertext: Output ciphertext buffer (at least ``pt_len`` bytes).
-   :param tag: Output authentication tag buffer.
-   :param tag_len: Desired tag length (4, 6, 8, 10, 12, 14, or 16 bytes).
-   :returns: ``true`` on success, ``false`` on error.
-
-.. c:function:: bool tls_aes_ccm_decrypt(const uint8_t *key, size_t key_len, const uint8_t *nonce, size_t nonce_len, const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext, size_t ct_len, const uint8_t *tag, size_t tag_len, uint8_t *plaintext)
-
-   One-shot AES-CCM decryption with tag verification. If the tag check fails,
-   ``plaintext`` is zeroed and ``false`` is returned — never use output from a
-   failed call.
-
-   :param key: AES key.
-   :param key_len: Key length (16, 24, or 32 bytes).
-   :param nonce: CCM nonce.
-   :param nonce_len: Nonce length.
-   :param aad: Associated data. ``NULL`` if none.
-   :param aad_len: Associated data length.
-   :param ciphertext: Input ciphertext.
-   :param ct_len: Ciphertext length.
-   :param tag: Authentication tag to verify.
-   :param tag_len: Tag length.
-   :param plaintext: Output plaintext buffer (at least ``ct_len`` bytes).
-   :returns: ``true`` on success and tag valid, ``false`` if tag verification
-      fails (plaintext is zeroed on failure).
 
 Examples
 --------
@@ -180,22 +129,20 @@ Examples
        tls_aes_decrypt(&ctx, ciphertext, ct_len, plaintext);
    }
 
-**One-shot CCM:**
+**CCM using the common AES operations:**
 
 .. code-block:: c
 
-   /* Encrypt */
-   tls_aes_ccm_encrypt(key, key_len, nonce, nonce_len,
-                       aad, aad_len,
-                       plaintext, pt_len,
-                       ciphertext, tag, tag_len);
+   /* Encrypt. tls_aes_digest writes 16 bytes; transmit the configured prefix. */
+   tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len,
+                    tag_len, pt_len, aad_len);
+   tls_aes_update_aad(&ctx, aad, aad_len);
+   tls_aes_encrypt(&ctx, plaintext, pt_len, ciphertext);
+   tls_aes_digest(&ctx, full_tag);
 
-   /* Decrypt — zeroes plaintext and returns false if tag fails */
-   tls_aes_ccm_decrypt(key, key_len, nonce, nonce_len,
-                       aad, aad_len,
-                       ciphertext, ct_len,
-                       tag, tag_len,
-                       plaintext);
-
-For incremental CCM, use ``tls_aes_ccm_init()`` followed by
-``tls_aes_update_aad()`` and ``tls_aes_encrypt()`` / ``tls_aes_decrypt()``.
+   /* Decrypt only after the authentication-only pass succeeds. */
+   tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len,
+                    tag_len, ct_len, aad_len);
+   if (tls_aes_verify(&ctx, aad, aad_len, ciphertext, ct_len, tag)) {
+       tls_aes_decrypt(&ctx, ciphertext, ct_len, plaintext);
+   }

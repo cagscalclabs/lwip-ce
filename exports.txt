@@ -31,11 +31,8 @@ lwip_debug_file_name
 lwip_debug_state_change_name
 tls_aes_init
 tls_aes_ccm_init
-tls_aes_ccm_encrypt
-tls_aes_ccm_decrypt
 tls_aes_update_aad
 tls_aes_encrypt
-tls_aes_update_ciphertext
 tls_aes_digest
 tls_aes_decrypt
 tls_aes_verify

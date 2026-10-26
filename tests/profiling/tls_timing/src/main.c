@@ -649,11 +649,7 @@ static uint32_t time_aes_gcm_decrypt_verify_case(uint8_t input_class)
     ok = tls_aes_init(&dec, TLS_AES_GCM, key, sizeof(key), iv, sizeof(iv));
     ok = ok && tls_aes_verify(&dec, aad, sizeof(aad), ct, sizeof(ct), tag);
     if (ok)
-    {
-        ok = tls_aes_init(&dec, TLS_AES_GCM, key, sizeof(key), iv, sizeof(iv));
-        ok = ok && tls_aes_update_aad(&dec, aad, sizeof(aad));
         ok = ok && tls_aes_decrypt(&dec, ct, sizeof(ct), recovered);
-    }
     if (!ok)
     {
         timing_sink ^= 0xA7;
@@ -746,17 +742,19 @@ static uint32_t time_aes_ccm_encrypt_case(uint8_t input_class)
     uint8_t pt[64];
     uint8_t ct[64];
     uint8_t tag[TLS_AES_AUTH_TAG_SIZE];
+    struct tls_aes_context ctx;
     bool ok;
     clock_t start;
 
     fill_pattern(pt, sizeof(pt), input_class);
 
     start = clock();
-    ok = tls_aes_ccm_encrypt(key, sizeof(key),
-                             nonce, sizeof(nonce),
-                             aad, sizeof(aad),
-                             pt, sizeof(pt),
-                             ct, tag, TLS_AES_AUTH_TAG_SIZE);
+    ok = tls_aes_ccm_init(&ctx, key, sizeof(key), nonce, sizeof(nonce),
+                          TLS_AES_AUTH_TAG_SIZE, sizeof(pt), sizeof(aad));
+    ok = ok && tls_aes_update_aad(&ctx, aad, sizeof(aad));
+    ok = ok && tls_aes_encrypt(&ctx, pt, sizeof(pt), ct);
+    ok = ok && tls_aes_digest(&ctx, tag);
+    tls_aes_destroy_ctx(&ctx);
     if (!ok)
     {
         timing_sink ^= 0xAC;
@@ -782,16 +780,18 @@ static uint32_t time_aes_ccm_decrypt_case(uint8_t input_class)
     uint8_t recovered[64];
     uint8_t ct[64];
     uint8_t tag[TLS_AES_AUTH_TAG_SIZE];
+    struct tls_aes_context ctx;
     bool ok;
     clock_t start;
 
     fill_pattern(pt, sizeof(pt), input_class);
 
-    ok = tls_aes_ccm_encrypt(key, sizeof(key),
-                             nonce, sizeof(nonce),
-                             aad, sizeof(aad),
-                             pt, sizeof(pt),
-                             ct, tag, TLS_AES_AUTH_TAG_SIZE);
+    ok = tls_aes_ccm_init(&ctx, key, sizeof(key), nonce, sizeof(nonce),
+                          TLS_AES_AUTH_TAG_SIZE, sizeof(pt), sizeof(aad));
+    ok = ok && tls_aes_update_aad(&ctx, aad, sizeof(aad));
+    ok = ok && tls_aes_encrypt(&ctx, pt, sizeof(pt), ct);
+    ok = ok && tls_aes_digest(&ctx, tag);
+    tls_aes_destroy_ctx(&ctx);
     if (!ok)
     {
         timing_sink ^= 0xAD;
@@ -799,12 +799,11 @@ static uint32_t time_aes_ccm_decrypt_case(uint8_t input_class)
     }
 
     start = clock();
-    ok = tls_aes_ccm_decrypt(key, sizeof(key),
-                             nonce, sizeof(nonce),
-                             aad, sizeof(aad),
-                             ct, sizeof(ct),
-                             tag, TLS_AES_AUTH_TAG_SIZE,
-                             recovered);
+    ok = tls_aes_ccm_init(&ctx, key, sizeof(key), nonce, sizeof(nonce),
+                          TLS_AES_AUTH_TAG_SIZE, sizeof(ct), sizeof(aad));
+    ok = ok && tls_aes_verify(&ctx, aad, sizeof(aad), ct, sizeof(ct), tag);
+    ok = ok && tls_aes_decrypt(&ctx, ct, sizeof(ct), recovered);
+    tls_aes_destroy_ctx(&ctx);
     if (!ok)
     {
         timing_sink ^= 0xAE;

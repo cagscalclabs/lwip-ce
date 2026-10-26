@@ -509,10 +509,6 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
             goto done;
         if (!tls_aes_verify(&aes_ctx, NULL, 0, enc_data.value, pt_len, tag))
             goto done;
-        /* Re-init for decrypt (verify consumed the context). */
-        if (!tls_aes_init(&aes_ctx, TLS_AES_GCM,
-                          derived, key_len, iv_tlv.value, iv_tlv.len))
-            goto done;
         ok = tls_aes_decrypt(&aes_ctx, enc_data.value, pt_len, buf);
     }
     else /* CBC */
@@ -925,36 +921,28 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
     bool ok = false;
     memset(&ctx, 0, sizeof(ctx));
 
-    if (mode == TLS_AES_CCM)
+    if (mode == TLS_AES_CBC)
     {
-        ok = tls_aes_ccm_encrypt(key_data, key_len,
-                                  iv, iv_len,
-                                  aad, aad_len,
-                                  inbuf, in_len,
-                                  ct, tag, TLS_KEY_AES_TAG_LEN);
+        /* PKCS#7: pad into the already-allocated ciphertext buffer, then
+         * encrypt in-place. ct is large enough (ct_len = padded size). */
+        if (tls_aes_pkcs7_apply(inbuf, in_len, ct) == ct_len &&
+            tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
+            tls_aes_encrypt(&ctx, ct, ct_len, ct))
+            ok = true;
     }
     else
     {
-        if (mode == TLS_AES_CBC)
-        {
-            /* PKCS#7: pad into the already-allocated ciphertext buffer, then
-             * encrypt in-place. ct is large enough (ct_len = padded size). */
-            if (tls_aes_pkcs7_apply(inbuf, in_len, ct) == ct_len &&
-                tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
-                tls_aes_encrypt(&ctx, ct, ct_len, ct))
-                ok = true;
-            tls_aes_destroy_ctx(&ctx);
-        }
-        else
-        {
-            if (tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
-                (!aad || !aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
-                (in_len == 0 || tls_aes_encrypt(&ctx, inbuf, in_len, ct)) &&
-                (!aead || tls_aes_digest(&ctx, tag)))
-                ok = true;
-            tls_aes_destroy_ctx(&ctx);
-        }
+        bool initialized = mode == TLS_AES_CCM
+            ? tls_aes_ccm_init(&ctx, key_data, key_len, iv, iv_len,
+                               TLS_KEY_AES_TAG_LEN, in_len, aad_len)
+            : tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len);
+        if (initialized &&
+            (!aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
+            (in_len == 0 || tls_aes_encrypt(&ctx, inbuf, in_len, ct)) &&
+            tls_aes_digest(&ctx, tag))
+            ok = true;
     }
+    tls_aes_destroy_ctx(&ctx);
 
     if (!ok)
     {
@@ -1120,8 +1108,12 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
             /* fall through */
         case TLS_ALG_AES_128_GCM:
         case TLS_ALG_AES_256_GCM:
+        case TLS_ALG_AES_128_CCM:
+        case TLS_ALG_AES_256_CCM:
         {
-            if (iv_len == 0 || (key_is_aead(alg) && tag_len == 0))
+            bool aead = key_is_aead(alg);
+            uint8_t mode = key_aes_mode(alg);
+            if (iv_len == 0 || (aead && tag_len != TLS_KEY_AES_TAG_LEN))
                 return NULL;
             uint8_t *plain;
             uint8_t *out = decrypt_blob_alloc(ct_len, &plain);
@@ -1129,11 +1121,16 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
                 return NULL;
             struct tls_aes_context ctx;
             bool ok = false;
-            if (tls_aes_init(&ctx, key_aes_mode(alg),
-                              key->aes.data, key->aes.len, iv, iv_len))
+            bool initialized = mode == TLS_AES_CCM
+                ? tls_aes_ccm_init(&ctx, key->aes.data, key->aes.len,
+                                   iv, iv_len, (uint8_t)tag_len,
+                                   ct_len, aad_len)
+                : tls_aes_init(&ctx, mode, key->aes.data, key->aes.len,
+                               iv, iv_len);
+            if (initialized)
             {
-                if (!key_is_aead(alg) ||
-                    tls_aes_verify(&ctx, aad, aad_len, ct, ct_len, tag))
+                if (!aead || tls_aes_verify(&ctx, aad, aad_len,
+                                            ct, ct_len, tag))
                 {
                     if (tls_aes_decrypt(&ctx, ct, ct_len, plain))
                         ok = true;
@@ -1146,7 +1143,7 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
                 return NULL;
             }
             /* Strip PKCS#7 padding for CBC blobs and update the blob length. */
-            if (!key_is_aead(alg) && ct_len > 0)
+            if (!aead && ct_len > 0)
             {
                 size_t plain_len = tls_aes_pkcs7_remove(plain, ct_len);
                 if (plain_len == 0)
@@ -1155,28 +1152,6 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
                     return NULL;
                 }
                 blob_write_u16(out, (uint16_t)plain_len);
-            }
-            return out;
-        }
-
-        case TLS_ALG_AES_128_CCM:
-        case TLS_ALG_AES_256_CCM:
-        {
-            if (iv_len == 0 || tag_len == 0)
-                return NULL;
-            uint8_t *plain;
-            uint8_t *out = decrypt_blob_alloc(ct_len, &plain);
-            if (!out)
-                return NULL;
-            if (!tls_aes_ccm_decrypt(key->aes.data, key->aes.len,
-                                      iv, iv_len,
-                                      aad, aad_len,
-                                      ct, ct_len,
-                                      tag, TLS_KEY_AES_TAG_LEN,
-                                      plain))
-            {
-                tls_cipher_blob_free(out);
-                return NULL;
             }
             return out;
         }

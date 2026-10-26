@@ -247,18 +247,32 @@ static size_t run_aes_ccm(const uint8_t *in, size_t in_len, uint8_t *out, size_t
     if (direction == 0) {
         uint8_t *ciphertext = out + o;
         uint8_t *tag_out = ciphertext + data_len + 1;
-        if (!tls_aes_ccm_encrypt(key, key_len, nonce, nonce_len,
-                                 aad_len ? aad : NULL, aad_len,
-                                 data, data_len, ciphertext, tag_out, tag_len))
+        uint8_t digest[TLS_AES_AUTH_TAG_SIZE];
+        struct tls_aes_context ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        bool accepted = tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len,
+                                         tag_len, data_len, aad_len) &&
+                        (!aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
+                        tls_aes_encrypt(&ctx, data, data_len, ciphertext) &&
+                        tls_aes_digest(&ctx, digest);
+        if (accepted)
+            memcpy(tag_out, digest, tag_len);
+        tls_aes_destroy_ctx(&ctx);
+        memset(digest, 0, sizeof(digest));
+        if (!accepted)
             return 0;
         o += data_len;
         out[o++] = tag_len;
         o += tag_len;
     } else {
-        bool accepted = tls_aes_ccm_decrypt(key, key_len, nonce, nonce_len,
-                                            aad_len ? aad : NULL, aad_len,
-                                            data, data_len, tag_in, tag_len,
-                                            out + o);
+        struct tls_aes_context ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        bool accepted = tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len,
+                                         tag_len, data_len, aad_len) &&
+                        tls_aes_verify(&ctx, aad_len ? aad : NULL, aad_len,
+                                       data, data_len, tag_in) &&
+                        tls_aes_decrypt(&ctx, data, data_len, out + o);
+        tls_aes_destroy_ctx(&ctx);
         out[0] = accepted ? 1 : 0;
         if (accepted) {
             o += data_len;

@@ -114,6 +114,51 @@ uint8_t ccm_tag_2[] = {
 uint8_t gcm_big_tag[] = {
     0x4c, 0xcb, 0x3b, 0x95, 0x8e, 0xf1, 0x6f, 0x25, 0x2e, 0x38, 0x42, 0x88, 0x12, 0x76, 0x7e, 0x42};
 
+static bool ccm_encrypt(const uint8_t *key, size_t key_len,
+                        const uint8_t *nonce, size_t nonce_len,
+                        const uint8_t *aad, size_t aad_len,
+                        const uint8_t *plaintext, size_t plaintext_len,
+                        uint8_t *ciphertext, uint8_t *tag, size_t tag_len)
+{
+    struct tls_aes_context ctx;
+    uint8_t digest[TLS_AES_AUTH_TAG_SIZE];
+    memset(&ctx, 0, sizeof(ctx));
+    bool ok = tag_len <= sizeof(digest) &&
+              tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len,
+                               (uint8_t)tag_len, plaintext_len, aad_len) &&
+              (!aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
+              tls_aes_encrypt(&ctx, plaintext, plaintext_len, ciphertext) &&
+              tls_aes_digest(&ctx, digest);
+    if (ok)
+        memcpy(tag, digest, tag_len);
+    tls_aes_destroy_ctx(&ctx);
+    memset(digest, 0, sizeof(digest));
+    return ok;
+}
+
+static bool ccm_decrypt(const uint8_t *key, size_t key_len,
+                        const uint8_t *nonce, size_t nonce_len,
+                        const uint8_t *aad, size_t aad_len,
+                        const uint8_t *ciphertext, size_t ciphertext_len,
+                        const uint8_t *tag, size_t tag_len,
+                        uint8_t *plaintext)
+{
+    struct tls_aes_context ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    bool ok = tag_len <= UINT8_MAX &&
+              tls_aes_ccm_init(&ctx, key, key_len, nonce, nonce_len,
+                               (uint8_t)tag_len, ciphertext_len, aad_len);
+    /* Authenticated modes must refuse caller-visible plaintext before verify. */
+    if (ok)
+        ok = !tls_aes_decrypt(&ctx, ciphertext, ciphertext_len, plaintext);
+    if (ok)
+        ok = tls_aes_verify(&ctx, aad, aad_len,
+                            ciphertext, ciphertext_len, tag) &&
+             tls_aes_decrypt(&ctx, ciphertext, ciphertext_len, plaintext);
+    tls_aes_destroy_ctx(&ctx);
+    return ok;
+}
+
 static void show_result(bool ok)
 {
     if (ok)
@@ -153,9 +198,21 @@ int main(void)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm_key, sizeof gcm_key, gcm_iv, sizeof gcm_iv);
+    status &= !tls_aes_decrypt(&ctx, gcm_ciphertext, sizeof gcm_ciphertext, tbuf);
     status &= tls_aes_verify(&ctx, gcm_aad, sizeof gcm_aad, gcm_ciphertext, sizeof gcm_ciphertext, gcm_tag);
     status &= tls_aes_decrypt(&ctx, gcm_ciphertext, sizeof gcm_ciphertext, tbuf);
-    ok = status && (memcmp(tbuf, gcm_plaintext, sizeof gcm_plaintext) == 0);
+    status &= memcmp(tbuf, gcm_plaintext, sizeof gcm_plaintext) == 0;
+    memcpy(tag, gcm_tag, sizeof gcm_tag);
+    tag[0] ^= 0x01;
+    memset(tbuf, 0xaa, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm_key, sizeof gcm_key, gcm_iv, sizeof gcm_iv);
+    status &= !tls_aes_verify(&ctx, gcm_aad, sizeof gcm_aad,
+                              gcm_ciphertext, sizeof gcm_ciphertext, tag);
+    status &= !tls_aes_decrypt(&ctx, gcm_ciphertext,
+                               sizeof gcm_ciphertext, tbuf);
+    for (size_t i = 0; i < sizeof gcm_plaintext; i++)
+        status &= tbuf[i] == 0xaa;
+    ok = status;
     show_result(ok);
 
     // Test 3: AES-CBC encrypt (NIST SP 800-38A F.2.1)
@@ -170,6 +227,7 @@ int main(void)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     status &= tls_aes_init(&ctx, TLS_AES_CBC, cbc_key, sizeof cbc_key, cbc_iv, sizeof cbc_iv);
+    status &= !tls_aes_decrypt(&ctx, cbc_ciphertext, sizeof cbc_ciphertext, NULL);
     status &= tls_aes_decrypt(&ctx, cbc_ciphertext, sizeof cbc_ciphertext, tbuf);
     ok = status && (memcmp(tbuf, cbc_plaintext, sizeof cbc_plaintext) == 0);
     show_result(ok);
@@ -178,7 +236,7 @@ int main(void)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     memset(tag, 0, sizeof(tag));
-    status &= tls_aes_ccm_encrypt(ccm_key, sizeof ccm_key,
+    status &= ccm_encrypt(ccm_key, sizeof ccm_key,
                                   ccm_nonce_1, sizeof ccm_nonce_1,
                                   ccm_aad, sizeof ccm_aad,
                                   ccm_plaintext_1, sizeof ccm_plaintext_1,
@@ -191,7 +249,7 @@ int main(void)
     // Test 6: AES-CCM decrypt (RFC 3610 Packet Vector #1)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
-    status &= tls_aes_ccm_decrypt(ccm_key, sizeof ccm_key,
+    status &= ccm_decrypt(ccm_key, sizeof ccm_key,
                                   ccm_nonce_1, sizeof ccm_nonce_1,
                                   ccm_aad, sizeof ccm_aad,
                                   ccm_ciphertext_1, sizeof ccm_ciphertext_1,
@@ -204,7 +262,7 @@ int main(void)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
     memset(tag, 0, sizeof(tag));
-    status &= tls_aes_ccm_encrypt(ccm_key, sizeof ccm_key,
+    status &= ccm_encrypt(ccm_key, sizeof ccm_key,
                                   ccm_nonce_2, sizeof ccm_nonce_2,
                                   ccm_aad, sizeof ccm_aad,
                                   ccm_plaintext_2, sizeof ccm_plaintext_2,
@@ -217,7 +275,7 @@ int main(void)
     // Test 8: AES-CCM decrypt (RFC 3610 Packet Vector #2)
     status = true;
     memset(tbuf, 0, sizeof(tbuf));
-    status &= tls_aes_ccm_decrypt(ccm_key, sizeof ccm_key,
+    status &= ccm_decrypt(ccm_key, sizeof ccm_key,
                                   ccm_nonce_2, sizeof ccm_nonce_2,
                                   ccm_aad, sizeof ccm_aad,
                                   ccm_ciphertext_2, sizeof ccm_ciphertext_2,
@@ -226,13 +284,13 @@ int main(void)
     ok = status && (memcmp(tbuf, ccm_plaintext_2, sizeof ccm_plaintext_2) == 0);
     show_result(ok);
 
-    // Test 9: AES-CCM decrypt rejects bad tag and zeroes plaintext
+    // Test 9: AES-CCM decrypt rejects bad tag without releasing plaintext
     status = true;
     memset(tbuf, 0xaa, sizeof(tbuf));
     uint8_t bad_tag[sizeof ccm_tag_2];
     memcpy(bad_tag, ccm_tag_2, sizeof bad_tag);
     bad_tag[0] ^= 0x01;
-    ok = tls_aes_ccm_decrypt(ccm_key, sizeof ccm_key,
+    ok = ccm_decrypt(ccm_key, sizeof ccm_key,
                              ccm_nonce_2, sizeof ccm_nonce_2,
                              ccm_aad, sizeof ccm_aad,
                              ccm_ciphertext_2, sizeof ccm_ciphertext_2,
@@ -240,7 +298,7 @@ int main(void)
                              tbuf);
     status &= !ok;
     for (size_t i = 0; i < sizeof ccm_plaintext_2; i++)
-        status &= (tbuf[i] == 0);
+        status &= (tbuf[i] == 0xaa);
     show_result(status);
 
     // Test 10: AES-CCM chunked encrypt and authentication-only decrypt

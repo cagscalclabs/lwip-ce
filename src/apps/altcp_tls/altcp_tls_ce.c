@@ -17,12 +17,13 @@
 #include "lwip/priv/altcp_priv.h"
 #include "lwip/mem.h"
 #include "altcp_tls_ce.h"
+#include "../../tls/includes/aes.h"
 
 /* Internal record-layer hook implemented by handshake.c. */
 extern bool tls_update_write_keys_if_needed(struct tls_handshake_context *ctx);
-/* CTR-only path used by the two-pass GCM decrypt (tag verified in pass 1). */
-extern bool tls_aes_gcm_ctr(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf);
-#include "../../tls/includes/aes.h"
+/* Internal streaming-authentication hooks for the TLS record layer. */
+extern bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t *ct, size_t ct_len);
+extern bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag);
 #include "../../tls/includes/bytes.h"
 #include "../../tls/includes/crypto_guard.h"
 #include "../../tls/includes/handshake.h"
@@ -380,7 +381,6 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
 {
     uint8_t header[5];
     uint8_t nonce[12];
-    uint8_t computed_tag[16];
     uint8_t received_tag[16];
     TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
     struct pbuf *out_head = NULL;
@@ -393,7 +393,6 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     size_t processed;
     err_t status = ERR_OK;
     uint8_t *scratch = NULL;
-    uint8_t diff = 0;
 
     if (!state || !conn || !plaintext || !written || !inner_content_type)
     {
@@ -467,33 +466,15 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         status = ERR_VAL;
         goto fail;
     }
-    if (!tls_aes_digest(&aes_ctx, computed_tag))
-    {
-        status = ERR_VAL;
-        goto fail;
-    }
     if (pbuf_copy_partial(state->rx, received_tag, sizeof(received_tag),
                           (u16_t)(sizeof(header) + actual_plaintext_len)) != sizeof(received_tag))
     {
         status = ERR_BUF;
         goto fail;
     }
-    for (size_t i = 0; i < sizeof(computed_tag); i++)
-    {
-        diff |= computed_tag[i] ^ received_tag[i];
-    }
-    if (diff != 0)
+    if (!tls_aes_verify_tag(&aes_ctx, received_tag))
     {
         (void)tls_send_fatal_alert(ctx, TLS_ALERT_BAD_RECORD_MAC);
-        status = ERR_VAL;
-        goto fail;
-    }
-
-    /* Tag verified. Re-init AES for the decrypt pass. */
-    if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce,
-                                       actual_plaintext_len) ||
-        !tls_aes_update_aad(&aes_ctx, header, sizeof(header)))
-    {
         status = ERR_VAL;
         goto fail;
     }
@@ -517,9 +498,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         {
             goto fail;
         }
-        if (ctx->cipher_suite == TLS_AES_128_GCM_SHA256
-                ? !tls_aes_gcm_ctr(&aes_ctx, scratch, take, scratch)
-                : !tls_aes_decrypt(&aes_ctx, scratch, take, scratch))
+        if (!tls_aes_decrypt(&aes_ctx, scratch, take, scratch))
         {
             goto fail;
         }

@@ -112,26 +112,6 @@ bool tls_aes_ccm_init(struct tls_aes_context *ctx,
                       uint8_t tag_len, size_t msg_len, size_t aad_len);
 
 /********************************************************************
- * @brief One-shot AES-CCM encryption.
- */
-bool tls_aes_ccm_encrypt(const uint8_t *key, size_t key_len,
-                         const uint8_t *nonce, size_t nonce_len,
-                         const uint8_t *aad, size_t aad_len,
-                         const uint8_t *plaintext, size_t pt_len,
-                         uint8_t *ciphertext, uint8_t *tag, size_t tag_len);
-
-/********************************************************************
- * @brief One-shot AES-CCM decryption with tag verification.
- * @note Plaintext is zeroed if tag verification fails.
- */
-bool tls_aes_ccm_decrypt(const uint8_t *key, size_t key_len,
-                         const uint8_t *nonce, size_t nonce_len,
-                         const uint8_t *aad, size_t aad_len,
-                         const uint8_t *ciphertext, size_t ct_len,
-                         const uint8_t *tag, size_t tag_len,
-                         uint8_t *plaintext);
-
-/********************************************************************
  * @brief Updates a context for associated data.
  * @param ctx       Pointer to an AES context.
  * @param aad       Pointer to associated data.
@@ -154,23 +134,6 @@ bool tls_aes_encrypt(struct tls_aes_context *ctx,
                      uint8_t *outbuf);
 
 /********************************************************************
- * @brief Updates a GCM context with ciphertext bytes for tag computation
- *        only, without producing plaintext.
- *
- * Used as the verification pass of a streaming decrypt: walk the entire
- * ciphertext through GHASH first, compare the resulting tag against the
- * record trailer, and only then run the actual decryption pass on the
- * trusted ciphertext.
- *
- * @param ctx       AES-GCM context (must be post tls_aes_update_aad).
- * @param ct        Ciphertext bytes to authenticate.
- * @param ct_len    Length of ciphertext.
- * @returns @b true if success, @b false if error.
- */
-bool tls_aes_update_ciphertext(struct tls_aes_context *ctx,
-                               const uint8_t *ct, size_t ct_len);
-
-/********************************************************************
  * @brief Returns a digest for the current context state.
  * @param ctx       Pointer to an AES context.
  * @param digest        Pointer to a buffer to write the tag to.
@@ -184,6 +147,9 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest);
  * @param inbuf     Pointer to data to decrypt.
  * @param in_len        Length of data to decrypt.
  * @param outbuf    Pointer to buffer to write decrypted data.
+ * @note GCM and CCM contexts produce plaintext only after a successful
+ * tls_aes_verify() call on that context. A NULL output remains available for
+ * internal authentication-only streaming.
  * @returns @b true if success, @b false if error.
  */
 bool tls_aes_decrypt(struct tls_aes_context *ctx,
@@ -201,6 +167,8 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx,
  * @note AAD and ciphertext pointers may be NULL when their corresponding
  * lengths are zero.
  * @returns @b true if tag valid, @b false otherwise.
+ * @note Success transitions the context to its verified state, authorizing
+ * subsequent plaintext-producing decryption.
  * @note For security, this function does not decrypt the ciphertext. Call \p tls_aes_decrypt
  * if this function returns @b true.
  */
