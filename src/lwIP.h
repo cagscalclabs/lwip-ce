@@ -292,11 +292,13 @@ bool     lwip_network_up(void);
 void     lwip_service_events(void);
 uint32_t lwip_now_ms(void);
 
-/* Pump the stack until the TLS random generator is ready for
- * tls_random_bytes() (192-bit strength). Returns true once ready, false on
- * timeout or RNG failure. Call after lwip_start() before using crypto APIs
- * that need random bytes (tls_random_bytes, key encryption, RSA-OAEP, ...). */
-bool     lwip_tls_rng_wait_for_ready(uint32_t timeout_ms);
+/* Pump the stack until the TLS random generator reaches security_strength,
+ * which must be 128 (TLS_RNG_STRENGTH_128) or 192
+ * (TLS_RNG_STRENGTH_192). Returns true once ready, false for an invalid
+ * strength, timeout, a stopped lifecycle, or RNG failure. Call after
+ * lwip_start() before using crypto APIs that need random bytes. */
+bool     lwip_tls_rng_wait_for_ready(uint16_t security_strength,
+                                     uint32_t timeout_ms);
 bool     lwip_default_netif_info(lwip_netif_info_t *info);
 
 lwip_error_t lwip_request_services(uint8_t flags, uint32_t timeout_ms);

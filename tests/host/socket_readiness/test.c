@@ -4,6 +4,26 @@ static void wait_on(struct lwip_socket *c, const char *host) {
     c->pending_port=80;c->connect_deadline=1000;
 }
 int main(void) {
+    rng_strength=TLS_RNG_STRENGTH_192;rng_state=4;now=0;service_calls=0;
+    assert(lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192,10) && service_calls==0);
+    rng_strength=TLS_RNG_STRENGTH_128;
+    assert(lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_128,0));
+    assert(!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192,0));
+    assert(!lwip_tls_rng_wait_for_ready(0,10) && service_calls==0);
+    assert(!lwip_tls_rng_wait_for_ready(256,10) && service_calls==0);
+    rng_strength=0;rng_state=TLS_RNG_STOPPED;
+    assert(!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_128,10) && service_calls==0);
+    rng_state=TLS_RNG_FAILED;
+    assert(!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_128,10) && service_calls==0);
+    rng_state=1;
+    assert(!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_128,0) && service_calls==0);
+    ready_after_calls=3;
+    assert(lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192,10) && service_calls==3);
+    rng_strength=0;ready_after_calls=0;service_calls=0;now=0;
+    assert(!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192,3) && service_calls==3);
+    rng_strength=0;ready_after_calls=2;service_calls=0;now=UINT32_MAX-1u;
+    assert(lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192,3) && service_calls==2);
+
     struct netif clock_netif={true,true,true,false,0};
     assert(!netif_service_ready(&clock_netif,LWIP_SOCKET_SVC_SNTP));
     sntp_running=true;

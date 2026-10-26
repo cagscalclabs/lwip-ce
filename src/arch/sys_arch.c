@@ -6,14 +6,19 @@
 #include <time.h>
 #include <usbdrvce.h>
 
+#if CLOCKS_PER_SEC != 32768UL
+#error "sys_now requires the CE 32768 Hz monotonic clock"
+#endif
+
 u32_t sys_jiffies(void)
 {
     return clock();
 }
 
 /* clock() * 1000 overflows 32 bits after 131 s, which made the ms count wrap at
- * 131072 instead of 2^32 and broke every lwIP timer. Accumulate elapsed ticks
- * instead, so the result wraps at 2^32 like lwIP expects. */
+ * 131072 instead of 2^32 and broke every lwIP timer. Accumulate modular elapsed
+ * ticks and the fractional remainder instead. This spans the raw clock() wrap
+ * and makes the returned millisecond count wrap at 2^32 as lwIP expects. */
 u32_t sys_now(void)
 {
     static u32_t last_ticks;

@@ -35,6 +35,10 @@ def execute(length):
             return 0x300
         if x == '_sprng_entropy_pool+1':
             return 0x301
+        if x == '_sprng_conditioned_bytes':
+            return 24
+        if x == '_sprng_overlay.size-1':
+            return 519
         if x == 'l':
             return regs['hl'] & 255
         return int(x)

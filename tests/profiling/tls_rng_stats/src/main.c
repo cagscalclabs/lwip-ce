@@ -97,7 +97,8 @@ int main(void)
         return 1;
     }
 
-    if (!lwip_tls_rng_wait_for_ready(RNG_READY_TIMEOUT_MS))
+    if (!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192,
+                                     RNG_READY_TIMEOUT_MS))
     {
         printf("RNG setup timed out\n");
         lwip_stop();

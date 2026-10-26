@@ -92,7 +92,8 @@ live DRBG state or restoring an earlier calculator state.
    This call does not wait: the DRBG is seeded by a stack timer that only runs
    while ``lwip_service_events()`` is being pumped, so right after
    ``lwip_start()`` it returns ``NULL`` until the DRBG is ready. Call
-   ``lwip_tls_rng_wait_for_ready()`` first. Once instantiated, output does not
+   ``lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192, timeout_ms)`` first.
+   Once instantiated, output does not
    consume entropy one-for-one. A complete timer-prepared entropy reserve is
    incorporated before output.
 
@@ -113,19 +114,27 @@ live DRBG state or restoring an earlier calculator state.
 
 .. c:function:: void *tls_random_bytes_pr(void *buffer, size_t len, uint16_t strength_bits)
 
-   Functionally-equivalent to ``tls_random_bytes_ex`` but with prediction-resistance enabled (SP 800-90A §9.3.1). Forces an immediate reseed of the DRBG from available entropy, fails-closed if entropy not available.
+   Equivalent to ``tls_random_bytes_ex`` for a single Hash_DRBG Generate
+   request, but with prediction resistance enabled (SP 800-90A §9.3.1). It
+   forces an immediate reseed from available entropy and fails closed if that
+   entropy is unavailable. ``len`` must not exceed 65536 bytes; larger ordinary
+   requests can be split safely, but prediction resistance requires a fresh
+   reseed for each underlying Generate request.
 
    :returns: ``buffer`` on success, or ``NULL`` with the destination zeroized.
 
-.. c:function:: bool lwip_tls_rng_wait_for_ready(uint32_t timeout_ms)
+.. c:function:: bool lwip_tls_rng_wait_for_ready(uint16_t security_strength, uint32_t timeout_ms)
 
-   Pump the stack's event loop until the random generator reaches 192-bit
-   readiness, so that ``tls_random_bytes()`` and the APIs built on it
-   (one-shot encryption, RSA-OAEP, ...) can be used without the caller writing
-   a wait loop. Call it once after ``lwip_start()``.
+   Pump the stack's event loop until the random generator reaches the requested
+   security strength. Pass ``TLS_RNG_STRENGTH_128`` for TLS 1.3 operations or
+   ``TLS_RNG_STRENGTH_192`` for ``tls_random_bytes()`` and the APIs built on it
+   (one-shot encryption, RSA-OAEP, ...). Call it after ``lwip_start()``.
 
+   :param security_strength: ``128``/``TLS_RNG_STRENGTH_128`` or
+      ``192``/``TLS_RNG_STRENGTH_192``. Any other value fails immediately.
    :param timeout_ms: Maximum time to wait. ``0`` checks once without waiting.
-   :returns: ``true`` once ready, ``false`` on timeout or RNG failure.
+   :returns: ``true`` once ready, ``false`` if the RNG lifecycle is stopped,
+      the timeout expires, or the RNG fails.
 
 .. c:function:: tls_rng_state_t tls_rng_status(void)
 

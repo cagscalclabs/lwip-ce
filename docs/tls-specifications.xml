@@ -877,24 +877,28 @@
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>8.6.3 / 9 (state reuse across reset or snapshot)</section>
-    <location>src/tls/core/random.c: g_tls_drbg (L121-127), tls_rng_cleanup (L1311-1318) - persistence</location>
+    <section>7.4 item 4 / 8.6.3 / 9.1 / 9.4 (fresh instantiation and state destruction across stack restarts)</section>
+    <location>src/tls/core/random.c: g_tls_drbg, tls_rng_begin_initialization, tls_rng_timer_stop, tls_rng_cleanup; src/tls/core/tls.c: tls_init, tls_cleanup, tls_psk_cache_save - lifecycle and persistence</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. DRBG state lives only in RAM, is never persisted (PSK appvar holds no RNG state), is zeroized at cleanup and rebuilt from fresh entropy on every tls_init. Emulator snapshot/memory-read attackers explicitly out of scope (random.h L105-107).</note>
+    <note>Compliant as of/before v3.0.0-rc1. In the supported LWIP_TIMERS=1 configuration, tls_cleanup calls tls_rng_cleanup, whose timer-stop path zeroizes both DRBG instances and pending entropy. A later lifecycle start resets them again before gathering fresh entropy and instantiating. Only PSK-cache entries are serialized by tls_psk_cache_save; no DRBG state is persisted. Restoring an emulator snapshot or directly reading process memory is outside the stated threat model (src/tls/includes/random.h).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>8.6.7 (nonce)</section>
-    <location>src/tls/core/random.c: tls_drbg_entropy_gather_step (L637-672), compile-time checks (L44-54) - nonce</location>
+    <section>8.6.7 case (a) (entropy-source nonce / extra-strong entropy input)</section>
+    <location>src/tls/core/random.c: Hash_DRBG instantiation constants and compile-time checks, tls_hash_drbg_instantiate, tls_drbg_entropy_gather_step - nonce construction</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. 128-bit instance: one 192-bit conditioned block as 128-bit entropy plus 64-bit nonce (3s/2 in one call, permitted). 192-bit instance: independent 24-byte nonce. Conditional on the SP 800-90B entropy credit.</note>
+    <note>Compliant as of/before v3.0.0-rc1, conditional on the SP 800-90B entropy credit tracked separately. Section 8.6.7 case (a) permits the nonce to be acquired from the entropy source with the entropy input and treated as one extra-strong entropy input carrying at least 3s/2 bits of entropy. The 128-bit instance uses one fresh 192-bit conditioned contribution, exactly 3s/2. The later 192-bit instance concatenates two fresh 192-bit conditioned contributions (384 bits total), exceeding the 288-bit minimum; its second contribution also exceeds the 96-bit nonce minimum. Compile-time checks enforce both bounds and the byte/bit accounting.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -905,172 +909,204 @@
     <note>tls_random_bytes_pr() implements the SP 800-90A §9.3.1 per-call prediction-resistance flag: it unconditionally calls tls_drbg_apply_entropy_reserve() before generating, and returns NULL (zeroising the output buffer) if the entropy reserve is not ready. No output is ever produced from a state that has not been freshly reseeded on that exact call.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>9.2 (reseed trigger)</section>
-    <location>src/tls/core/random.c: tls_drbg_apply_entropy_reserve (L676-696), tls_random_bytes_ex (L989-1002) - reseed scheduling</location>
+    <section>9.2 (reseed scheduling)</section>
+    <location>src/tls/core/random.c: tls_drbg_apply_entropy_reserve, tls_rng_request_dispatch, tls_random_bytes_ex, tls_drbg_generate_bytes - entropy-available and seedlife triggers</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. A full 192-bit reserve is applied before every generate once READY_192 and wiped afterwards; READY_128 has no reseed path, acceptable because the 2^48 interval is unreachable.</note>
+    <note>Compliant as of/before v3.0.0-rc1, conditional on the separately tracked entropy credit. Section 9.2 recommends reseeding and permits it to be triggered when entropy is available or at the end of the seedlife. In READY_192, the background dispatcher gathers a 192-bit reserve; the next generation consumes it through the Hash_DRBG reseed algorithm and wipes it, then rearms gathering. Generation may continue while the replacement reserve is pending, as permitted. Independently, tls_drbg_generate_bytes refuses generation when reseed_counter exceeds the 2^48 interval; tls_random_bytes_ex then succeeds only if a completed reserve can first be applied, otherwise it fails closed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>9.3 (error handling, blocking request loop)</section>
-    <location>src/tls/core/random.c: tls_request_random_bytes (L1059-1099) - loop termination</location>
+    <section>9.3.1 / 11.4 (generate error handling and blocking request termination)</section>
+    <location>src/tls/core/random.c: tls_request_random_bytes, tls_rng_request_try_complete, tls_rng_fail; src/arch/sys_arch.c: sys_now - bounded blocking generation and failure state</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): the loop exits only on success or state FAILED. If generate/reserve-apply keeps failing while READY_192, or the source repeatedly fails after READY_128 (each restart grants a fresh 15 s deadline), it never ends. Fix: bounded deadline or latch FAILED on generate error.</note>
+    <note>Compliant as of/before v3.0.0-rc1. FIXED in commit 42d5699f28: every blocking request receives its own absolute 15-second deadline, independent of lifecycle restarts, and checks it with wrap-safe subtraction against the 32-bit millisecond sys_now time base. Generate failure is terminal through tls_rng_fail; timeout likewise enters FAILED, zeroizes DRBG state, reports failure to the callback and clears the active request. Repeated source loss or reserve failure therefore cannot keep the blocking loop alive indefinitely. Covered by tests/host/tls_random/test_lifecycle.py.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>9.3 (error state; fail-closed before seeding)</section>
-    <location>src/tls/core/random.c: tls_random_bytes_ex (L966-1034), tls_rng_fail (L528-535) - generate before ready / after failure</location>
+    <section>9.3.1 / 11.4.2 (fail-closed generation and terminal error state)</section>
+    <location>src/tls/core/random.c: tls_random_bytes_ex, tls_rng_available_strength, tls_rng_fail, tls_rng_drive_initialization; src/tls/includes/random.h: direct-generation contract</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Insufficient strength returns NULL immediately (L984-988) with the destination zeroized (L1032-1034); FAILED zeroizes the DRBG and is terminal until restart. random.h L99-101 comment ("synchronously drives source initialization") is stale.</note>
+    <note>Compliant as of/before v3.0.0-rc1. For every nonempty request with a valid destination, tls_random_bytes_ex checks the available strength before generation and zeroizes the entire destination on every failure exit. A terminal tls_rng_fail zeroizes both DRBG instances and pending entropy before entering FAILED; the lifecycle driver performs no further DRBG operation in that state. Recovery requires an explicit cleanup/start lifecycle restart. The public header now correctly states that direct generation fails immediately rather than synchronously driving entropy initialization. Pre-seed and post-failure behavior is covered by tests/host/tls_random/test_lifecycle.py.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>9.3 (readiness deadline time base)</section>
-    <location>src/arch/sys_arch.c: sys_now (L14-19) - time base for random.c tls_rng_deadline_expired (L504-508) and lwIP.c lwip_tls_rng_wait_for_ready (L374-388)</location>
+    <section>9.3.1 / 11.4 (readiness and request deadline time base)</section>
+    <location>src/arch/sys_arch.c: sys_now; src/tls/core/random.c: tls_rng_deadline_expired, tls_request_random_bytes; src/lwIP.c: lwip_tls_rng_wait_for_ready - wrap-safe timeout accounting</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Regraded this audit against an uncommitted working-tree fix (previously: 32-bit clock()*1000/32768 overflow, ~131 s wrap). New split computation is exact floor(t*1000/32768), overflow-free and monotonic (CLOCKS_PER_SEC = 32768UL confirmed in toolchain time.h). Residual (low, fails safe): sys_now wraps at 131,072,000 rather than 2^32, so a deadline armed in the last 15 s before the ~36.4 h timer wrap never expires and wait_for_ready can time out early. Suggest a static assert on CLOCKS_PER_SEC.</note>
+    <note>Compliant as of/before v3.0.0-rc1. FIXED in commit 4da99b7f4f: sys_now no longer multiplies the absolute 32-bit tick count by 1000. It accumulates unsigned elapsed ticks plus a fractional remainder, so subtraction spans the raw clock wrap and conversion remains exact; the exported millisecond count wraps at 2^32 as lwIP expects. RNG deadlines use wrap-safe subtraction and are far below the 2^31-ms comparison bound. A compile-time check now fixes the port assumption at CLOCKS_PER_SEC = 32768UL, and tests/host/tls_random/test_failure_paths.py models conversion across the raw tick wrap.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>9.3 (wait-for-ready helper, commit db1dcddca)</section>
-    <location>src/lwIP.c: lwip_tls_rng_wait_for_ready (L374-388) - bounded wait</location>
+    <section>9.3.1 (wait-for-ready helper, commit db1dcddca)</section>
+    <location>src/lwIP.c: lwip_tls_rng_wait_for_ready; src/lwIP.h and docs/using-cryptography.rst: strength-selectable bounded readiness wait</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Bounded by timeout_ms with wrap-safe subtraction, returns false on FAILED, pumps lwip_service_events. Minor: waits for 192 bits though TLS sockets gate on 128 (lwIP.c L1520); spins the full timeout if the RNG was never started; affected by the sys_now wrap.</note>
+    <note>Compliant as of/before v3.0.0-rc1. The caller selects TLS_RNG_STRENGTH_128 or TLS_RNG_STRENGTH_192; other values fail immediately. The helper returns true as soon as the selected strength is available and otherwise pumps lwip_service_events until readiness or the wrap-safe timeout. Thus a zero-timeout check at READY_128 succeeds for 128 and fails for 192, while a nonzero 192-bit request may wait for promotion. STOPPED and FAILED return false immediately. tests/host/socket_readiness covers both strengths, invalid input, promotion, lifecycle errors, timeout and clock wrap.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>9.4 / 8.3 (uninstantiate, internal state protection)</section>
-    <location>src/tls/core/random.c: tls_drbg_reset (L175-181), tls_hash_df (L309), tls_sha256_buf (L277); src/tls/core/primitives/sha256.s: _tls_sha256_digest - residual state copies</location>
+    <section>7.4 item 4 / 8.3 / 9.4 (uninstantiate and internal-state residue)</section>
+    <location>src/tls/core/random.c: tls_drbg_reset, tls_sha256_buf, tls_hash_df, tls_hash_drbg_hashgen, tls_drbg_generate_bytes; src/tls/core/primitives/sha256.s: _tls_sha256_digest, _sha256_transform - state and scratch zeroization</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): V and C are zeroized correctly, but the SHA contexts inside Hash_df/Hashgen are unwiped stack locals and the static message schedule keeps the last block. The residue 0x03||V_prev lets the last output (e.g. the P-256 private key, last draw at handshake.c L1799) be recomputed until overwritten. Fix: zeroize hctx and the digest frame/m_buffer.</note>
+    <note>Compliant as of/before v3.0.0-rc1. FIXED in commit 42d5699f28 and preserved through the primitive reorganization: tls_drbg_reset wipes V, C, counters, both DRBG instances and pending entropy; the Hash_df and Hashgen callers wipe their SHA contexts, intermediate digests, copied V and 0x03||V material on success and failure paths. _tls_sha256_digest wipes its non-destructive context-copy frame, while _sha256_transform wipes its state/spill frame and the complete 256-byte shared message schedule before returning. The previously identified 0x03||V_prev recomputation residue therefore does not remain after generation or uninstantiation. tests/host/tls_random/test_failure_paths.py checks every erasure layer structurally.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.1 (internal state V, C, reseed_counter; seedlen 440)</section>
-    <location>src/tls/core/random.c: struct tls_hash_drbg_state (L112-119) - internal state</location>
+    <location>src/tls/core/random.c: TLS_HASH_DRBG_SEED_BITS, TLS_HASH_DRBG_SEED_BYTES, struct tls_hash_drbg_state - working and administrative state</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. 55-byte V and C, uint64 reseed_counter. Evidence is a 300-case host differential test against an independent SP 800-90A model (0 mismatches) - NOT CAVP: tests/profiling/tls_cavp run_drbg_sha256 (main.c L485) is a stub.</note>
+    <note>Compliant as of/before v3.0.0-rc1. The working state contains separate 55-byte V and C arrays (440 bits each) and an exact-width uint64_t reseed_counter; strength_bits and seeded are administrative state. A compile-time invariant fixes SHA-256 Hash_DRBG seedlen at 440 bits. The former claim of a 300-case host differential test was removed because no such test is checked in. This layout finding is directly verifiable and does not depend on that missing evidence. DRBG CAVP coverage remains absent: tests/profiling/tls_cavp run_drbg_sha256 explicitly returns unsupported.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>10.1.1.2 (instantiate)</section>
-    <location>src/tls/core/random.c: tls_hash_drbg_instantiate (L372-399) - V = Hash_df(seed), C = Hash_df(0x00||V), counter = 1</location>
+    <section>10.1.1.2 (Hash_DRBG instantiate algorithm)</section>
+    <location>src/tls/core/random.c: tls_hash_df, tls_hash_drbg_make_c, tls_hash_drbg_instantiate, tls_drbg_entropy_gather_step - seed-material derivation and state initialization</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Matches the spec (make_c L358-370); instance reset on failure. Differential test only (no CAVP).</note>
+    <note>Compliant as of/before v3.0.0-rc1. The internal call sites provide seed_material as entropy_input || nonce with an empty personalization string. tls_hash_drbg_instantiate derives the 440-bit V with Hash_df(seed_material), derives C with Hash_df(0x00 || V), sets reseed_counter to 1, and marks the instance usable only after both derivations succeed. It resets the complete destination state before starting and again if either derivation fails. tests/host/tls_random/test_failure_paths.py checks this sequence and rollback structurally, while test_lifecycle.py exercises successful 128- and 192-bit instantiation. No deterministic DRBG CAVP or independent differential test is currently checked in; tests/profiling/tls_cavp retains an explicit unsupported stub.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>10.1.1.2 / 8.7.1 (personalization string)</section>
-    <location>src/tls/core/random.c: tls_drbg_entropy_gather_step (L637-672) - personalization_string</location>
+    <section>9.1 / 10.1.1.2 / 8.7.1 (unsupported optional personalization string)</section>
+    <location>src/tls/core/random.c: tls_hash_drbg_instantiate, tls_drbg_entropy_gather_step - seed_material contains entropy input and nonce only</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. No personalization input (optional). 8.7.1 recommends one; a device-unique value (calculator ID) would be cheap defence against cloned state.</note>
+    <note>Compliant as of/before v3.0.0-rc1. This implementation does not support personalization; SP 800-90A permits an implementation to omit that optional instantiate parameter and the corresponding concatenation step. Accordingly, seed_material contains entropy_input || nonce, with an empty personalization string. Section 8.7.1 recommends, but does not require, personalization to distinguish instantiations. A fixed device identifier would add no entropy and would only separate otherwise identical inputs across devices; it would not prevent cloning or rollback of an already-instantiated state. No suitable per-device identifier is integrated into this RNG, so the former calculator-ID recommendation was removed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>10.1.1.3 (reseed)</section>
-    <location>src/tls/core/random.c: tls_hash_drbg_reseed (L401-430) - V = Hash_df(0x01||V||entropy)</location>
+    <section>9.2 / 10.1.1.3 (Hash_DRBG reseed algorithm)</section>
+    <location>src/tls/core/random.c: TLS_HASH_DRBG_RESEED_TARGET_BITS, tls_hash_drbg_reseed, tls_hash_drbg_make_c, tls_drbg_apply_entropy_reserve - reseed derivation and state update</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Matches the spec with 192 bits of entropy per reseed (L55-57); instance reset if make_c fails. Covered by the reseed branch of the differential test.</note>
+    <note>Compliant as of/before v3.0.0-rc1, conditional on the separately tracked SP 800-90B entropy credit. Additional input is unsupported and therefore omitted as permitted. Each reseed uses one 24-byte conditioned contribution as entropy_input and computes new_V = Hash_df(0x01 || old_V || entropy_input), then C = Hash_df(0x00 || new_V), and resets reseed_counter to 1. new_V is derived in temporary storage, so failure of its Hash_df leaves the old working state unchanged; failure while rebuilding C resets the complete instance. Seed material and temporary V are wiped on every derivation exit. tests/host/tls_random/test_failure_paths.py checks the construction, ordering, rollback, and erasure structurally, while test_lifecycle.py exercises a successful reseed and counter reset. No deterministic DRBG CAVP or independent differential test is currently checked in.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>10.1.1.4 / Table 2 (max_number_of_bits_per_request 2^19)</section>
-    <location>src/tls/core/random.c: tls_drbg_generate_bytes (L473), tls_random_bytes_ex (L1004-1016), tls_rng_request_try_complete (L721-723) - request size</location>
+    <location>src/tls/core/random.c: TLS_HASH_DRBG_MAX_REQUEST_BITS, TLS_HASH_DRBG_MAX_REQUEST_BYTES, tls_drbg_generate_bytes, tls_random_bytes_ex, tls_random_bytes_pr, tls_rng_request_try_complete - per-Generate request size</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Cap is 65536 bytes; larger requests are split into separate generate calls with their own state update.</note>
+    <note>Compliant as of/before v3.0.0-rc1. A compile-time invariant converts the Table 2 limit of 2^19 bits to exactly 65536 bytes, and the internal Generate function rejects anything larger. The ordinary synchronous and queued APIs split larger buffers into calls of at most 65536 bytes; every chunk performs the complete Hash_DRBG state update and increments reseed_counter. The prediction-resistance API instead rejects oversized buffers, because satisfying one public call with multiple Generate requests after only one reseed would not provide prediction resistance for every underlying request. tests/host/tls_random/test_lifecycle.py covers rejection at the primitive and PR boundaries and verifies that a 65537-byte ordinary request becomes two state-updating Generate calls.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>10.1.1.4 step 1 (reseed_counter &gt; reseed_interval)</section>
-    <location>src/tls/core/random.c: tls_drbg_generate_bytes (L472-475), tls_random_bytes_ex (L989-999) - reseed interval</location>
+    <section>10.1.1.4 step 1 / Table 2 (reseed_counter &gt; 2^48)</section>
+    <location>src/tls/core/random.c: TLS_HASH_DRBG_RESEED_INTERVAL, tls_drbg_generate_bytes, tls_random_bytes_ex, tls_drbg_apply_entropy_reserve - seedlife boundary and recovery</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Interval 2^48 (L59); generation refused above it unless a 192-bit reserve can reseed.</note>
+    <note>Compliant as of/before v3.0.0-rc1. TLS_HASH_DRBG_RESEED_INTERVAL is explicitly 2^48. The Generate primitive uses the required strict comparison: reseed_counter = 2^48 is accepted for the last permitted request and increments to 2^48 + 1; any later request is refused without producing output or updating state. The synchronous wrapper can proceed only by first applying a complete 192-bit entropy reserve, which resets reseed_counter to 1 before generation increments it to 2. Without that reserve it fails closed and zeroizes the destination. tests/host/tls_random/test_lifecycle.py exercises the exact boundary, refusal, and successful reseed recovery.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>10.1.1.4 step 2 (additional_input)</section>
-    <location>src/tls/core/random.c: tls_drbg_generate_bytes (L463-496) - additional input</location>
+    <section>9.3.1 / 10.1.1.4 step 2 (unsupported optional additional_input)</section>
+    <location>src/tls/core/random.c: tls_drbg_generate_bytes; src/tls/includes/random.h: tls_random_bytes, tls_random_bytes_ex, tls_random_bytes_pr - null-additional-input Generate interface</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. additional_input is not supported (optional); null-input path only.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Generate-time additional_input is not supported by either the internal primitive or the public APIs. SP 800-90A permits an implementation to omit that optional parameter and Hash_DRBG step 2. Consequently, tls_drbg_generate_bytes proceeds from the seedlife and request-size checks directly to Hashgen using the current V, then performs the mandatory 0x03 || V state update. No entropy credit or claimed security strength depends on additional input. tests/host/tls_random/test_failure_paths.py checks this interface and ordering structurally.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>10.1.1.4 step 3 (Hashgen)</section>
-    <location>src/tls/core/random.c: tls_hash_drbg_hashgen (L432-461) - data = V; w_i = Hash(data); data += 1</location>
+    <section>10.1.1.4 step 3 / Hashgen (pseudorandom output generation)</section>
+    <location>src/tls/core/random.c: tls_hash_drbg_hashgen, tls_hash_drbg_increment - block generation, concatenation, and 440-bit counter increment</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Increment mod 2^440 (L347-356), last block truncated; multi-block outputs matched the differential model.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Hashgen copies V into a private 55-byte data value, hashes each successive value, concatenates complete SHA-256 blocks, and copies only the requested prefix of the final block. tls_hash_drbg_increment treats data as a big-endian 440-bit integer and discards carry beyond its most-significant byte, implementing addition modulo 2^440. The original V is not modified by Hashgen, and its local data and digest are wiped on success and failure. tests/host/tls_random/test_lifecycle.py deterministically exercises a 33-byte two-block output from an all-ones V, verifying wrap to zero, final-block truncation, destination bounds, and unchanged V. The former differential-model claim was removed because no such test is checked in; DRBG CAVP coverage remains absent.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
-    <section>10.1.1.4 step 4-6 (V update)</section>
-    <location>src/tls/core/random.c: tls_drbg_generate_bytes (L479-487) - H = Hash(0x03||V); V = V+H+C+reseed_counter</location>
+    <section>10.1.1.4 steps 4-6 (post-generation V and counter update)</section>
+    <location>src/tls/core/random.c: tls_store_u64_be, tls_hash_drbg_add, tls_drbg_generate_bytes - H, C, and reseed_counter state update</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Big-endian add mod 2^440 (L330-345) with right-aligned addends; counter added before increment as required.</note>
+    <note>Compliant as of/before v3.0.0-rc1. After Hashgen, the implementation computes H = Hash(0x03 || pre-update V), then updates V by adding H, C, and the current reseed_counter in that order before incrementing the counter. H and the big-endian 64-bit counter are right-aligned with the 440-bit V; C is already 440 bits. tls_hash_drbg_add propagates carry toward the most-significant byte and discards final carry, implementing arithmetic modulo 2^440. tests/host/tls_random/test_lifecycle.py verifies right alignment, full-width wrap, the deterministic V transition for known V/C/counter values, preservation of C, and use of the old counter value before increment. tests/host/tls_random/test_failure_paths.py also fixes the source-level operation order.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1081,7 +1117,9 @@
     <note>Compliant as of/before v3.0.0-rc1. Hash(counter || 0x000001B8 || input), counter from 0x01, truncated to 55 bytes; digest scratch zeroized. Differential test only.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1116,12 +1154,14 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>3.1.5.1.1 (vetted conditioning component)</section>
-    <location>src/tls/core/primitives/random.s: _tls_entropy_gather192 (L668-693), _tls_entropy_collect (L1482-1544) - SHA-256 over 119-byte pool truncated to 192 bits</location>
+    <location>src/tls/core/primitives/random.s: _sprng_conditioned_bytes, _tls_entropy_gather192, _tls_entropy_collect; src/tls/core/share/virtuals.inc: _sprng_entropy_pool.size, _sprng_sha_digest.size, _sprng_overlay.size - SHA-256 conditioning and truncation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. SHA-256 is vetted; n_in 952, n_out 192; overlay zeroized after each copy and destination zeroized on failure. Conditional on the 3.1.5 estimate.</note>
+    <note>Compliant as of/before v3.0.0-rc1 for the conditioning construction. SP 800-90B lists an approved FIPS 180 hash function as a vetted unkeyed conditioning component; this code hashes one 119-byte pool (n_in = 952 primary-source bits) with SHA-256 and returns the leftmost 24 digest bytes (n_out = 192), a permitted truncation. Assembly-time invariants bind the pool, output, digest, and complete 520-byte overlay-wipe sizes. The entropy/SHA overlay is wiped immediately after each successful copy and after a health-test failure; tls_entropy_collect zeroizes the full requested destination and returns NULL if gathering fails. This is not a claim of CMVP entropy-source certification or an issued algorithm certificate. Crediting the truncated output with 192 bits remains conditional on the separately graded NEEDS-EVIDENCE Section 3.1.5 entropy estimate.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1141,12 +1181,14 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>4.3 (failure handling / persistent failure)</section>
-    <location>src/tls/core/primitives/random.s: .Lrandom_health_fail (L697-714), .Lhealth_recover (L1419-1475); src/tls/core/random.c: tls_drbg_entropy_gather_step (L602-623) - failure notification and recovery</location>
+    <location>src/tls/core/primitives/random.s: .Lrandom_health_fail, .Lhealth_recover; src/tls/core/random.c: tls_drbg_entropy_gather_step, TLS_DRBG_GATHER_MAX_EPOCH_CHANGES - failure notification and recovery</location>
     <grade>NEEDS-EVIDENCE</grade>
-    <note>Pool wiped and epoch bumped on failure; recovery switches to a backup tap after retest, but the permitted rescan can re-select the tap that just failed and nothing distinguishes intermittent from persistent failure.</note>
+    <note>Regraded against the current working tree. The failed pool is wiped and the health epoch is bumped before recovery; replacement taps are retested and any epoch-crossing output is discarded. One recovered source change is treated as intermittent. A second consecutive gather with another source change is treated as persistent: tls_rng_fail latches FAILED, zeroizes the DRBG, reports TLS_RNG_FAILURE_SOURCE_HEALTH, and prevents output until cleanup followed by start. The lifecycle host test covers both transitions. Still needs the 4.3 submission evidence that an isolated failure is extremely likely to be intermittent; alpha = 2^-20 and the two-failure policy are documented in code, but are not by themselves that evidence.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1167,12 +1209,14 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>4.4.1 (Repetition Count Test)</section>
-    <location>src/tls/core/primitives/random.s: .Lhc_sample (L1130-1166), .Lsample_health_check (L826+), cutoff (L96) - RCT</location>
+    <location>src/tls/core/primitives/random.s: _sprng_rct_cutoff, .Lsample_health_check, .Lhc_sample, .Lhealth_reset - RCT</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. C = 1 + ceil(20/0.269) = 76 for alpha 2^-20; runs on every sample before conditioning with persistent state. Boundaries checked in tests/host/tls_random/test_health.py L129-131.</note>
+    <note>Compliant as of/before v3.0.0-rc1, conditional on the SP 800-90B 3.1.5 entropy estimate. For H = 17630/65536 and alpha = 2^-20, C = 1 + ceil(20/H) = 76; the implementation accepts a run of 75 and fails at 76. .Lsample_health_check applies the test to every selected-bit sample before SHA-256 conditioning, retaining run state across successful gathers and resetting it only when a newly validated tap becomes active or recovery fails. tests/host/tls_random/test_health.py checks the cutoff formula, minimality inequality, 75/76 boundary, and a run split across gather calls; it is a host model plus assembly-structure check, not execution of the eZ80 routine.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1203,13 +1247,15 @@
   </requirement>
   <requirement>
     <ref>NIST SP 800-90C</ref>
-    <section>Full-entropy definition (h_in at least n_out + 64)</section>
-    <location>src/tls/core/random.c: compile-time checks (L41-46) - conditioning margin</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. A compile-time #error enforces credited raw bits &gt;= 192 + 64; inherits the unvalidated H estimate.</note>
+    <section>2.1 / 3.2.1.2 / 3.2.2.2 (full-entropy conditioning)</section>
+    <location>src/tls/core/random.c: TLS_ENTROPY_RAW_CREDIT_BITS, TLS_ENTROPY_CONDITIONING_MARGIN_BITS; src/tls/core/primitives/random.s: _tls_entropy_gather192, _sprng_conditioned_bytes - conditioning margin</location>
+    <grade>NOT-APPLICABLE</grade>
+    <note>Regraded against the final September 2025 SP 800-90C. This is an RBG2-like construction and does not expose full-entropy output; its 192-bit conditioned blocks are internal Hash_DRBG seed/reseed inputs. The compile-time check enforces a conservative local margin of 192 + 64 = 256 credited input bits, conditional on the unvalidated SP 800-90B entropy estimate. It does not satisfy the Section 3.2.2.2 procedure for full-entropy conditioning: direct SHA-256 has output_len = 256, so each hash invocation would require 256 + 64 = 320 credited input bits, produce the complete 256-bit digest, and only then permit left truncation. Comments and host assertions now distinguish the local margin from a full-entropy claim.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>

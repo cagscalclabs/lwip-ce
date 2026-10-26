@@ -157,7 +157,7 @@ int main(void)
     os_ClrHome();
 
     /* One-shot encryption needs a seeded DRBG for its fresh IV. */
-    if (!lwip_tls_rng_wait_for_ready(60000u))
+    if (!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192, 60000u))
     {
         printf("RNG setup timed out");
         os_GetKey();

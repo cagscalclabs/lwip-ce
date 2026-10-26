@@ -18,7 +18,8 @@
 #define TLS_RNG_REQUEST_INTERVAL_MS 50u
 #define TLS_RNG_READY_TIMEOUT_MS 15000u
 #define TLS_RNG_REQUEST_QUEUE_MAX_DEPTH 16u
-#define TLS_HASH_DRBG_SEED_BYTES 55u
+#define TLS_HASH_DRBG_SEED_BITS 440u
+#define TLS_HASH_DRBG_SEED_BYTES (TLS_HASH_DRBG_SEED_BITS / 8u)
 #define TLS_HASH_DRBG_ENTROPY_BYTES 24u
 #define TLS_HASH_DRBG_NONCE_BYTES 24u
 #define TLS_HASH_DRBG_128_INSTANTIATE_BYTES TLS_HASH_DRBG_ENTROPY_BYTES
@@ -31,18 +32,33 @@
 #define TLS_HASH_DRBG_192_INSTANTIATE_TARGET_BITS 384u
 #define TLS_ENTROPY_RAW_SAMPLES_PER_STEP (UINT32_C(119) * UINT32_C(8))
 /* Provisional engineering floor: 0.269 bits per selected raw bit, Q16.
- * h_in = 952 * 0.269 = 256.088 bits, satisfying the SP 800-90C
- * full-entropy margin for a 192-bit conditioned contribution
- * (n_out + 64 = 256). Replace after formal non-IID assessment. */
+ * h_in = 952 * 0.269 = 256.088 bits. The 64-bit excess over the
+ * 192-bit contribution is a conservative local conditioning margin, not an
+ * SP 800-90C full-entropy claim: direct SHA-256 has output_len = 256 and
+ * Section 3.2.2.2 would require 320 credited input bits. Replace the floor
+ * after formal non-IID assessment. */
 #define TLS_ENTROPY_HMIN_Q16 UINT32_C(17630)
 #define TLS_ENTROPY_RAW_CREDIT_BITS \
     ((TLS_ENTROPY_RAW_SAMPLES_PER_STEP * TLS_ENTROPY_HMIN_Q16) >> 16)
 #define TLS_ENTROPY_CONTRIBUTION_BITS (TLS_HASH_DRBG_ENTROPY_BYTES * 8u)
-#if TLS_ENTROPY_RAW_CREDIT_BITS < (TLS_ENTROPY_CONTRIBUTION_BITS + 64u)
+#define TLS_ENTROPY_CONDITIONING_MARGIN_BITS 64u
+#if (TLS_HASH_DRBG_SEED_BITS % 8u) != 0u || TLS_HASH_DRBG_SEED_BYTES != 55u
+#error "SHA-256 Hash_DRBG seedlen must be exactly 440 bits"
+#endif
+#if TLS_ENTROPY_RAW_CREDIT_BITS < \
+    (TLS_ENTROPY_CONTRIBUTION_BITS + TLS_ENTROPY_CONDITIONING_MARGIN_BITS)
 #error "Configured entropy policy lacks the conditioning safety margin"
 #endif
 #if TLS_ENTROPY_CONTRIBUTION_BITS != TLS_RNG_STRENGTH_192
 #error "Hash_DRBG entropy input is shorter than its security strength"
+#endif
+#if TLS_HASH_DRBG_128_INSTANTIATE_TARGET_BITS != \
+    (TLS_HASH_DRBG_128_INSTANTIATE_BYTES * 8u)
+#error "128-bit Hash_DRBG instantiation accounting does not match its seed material"
+#endif
+#if TLS_HASH_DRBG_128_INSTANTIATE_TARGET_BITS < \
+    ((TLS_RNG_STRENGTH_128 * 3u) / 2u)
+#error "128-bit Hash_DRBG instantiation lacks 3/2-strength entropy for an implicit nonce"
 #endif
 #if (TLS_HASH_DRBG_NONCE_BYTES * 8u) < \
     (TLS_RNG_STRENGTH_192 / 2u)
@@ -52,11 +68,20 @@
     (TLS_HASH_DRBG_192_INSTANTIATE_BYTES * 8u)
 #error "Hash_DRBG instantiation accounting does not match its seed material"
 #endif
+#if TLS_HASH_DRBG_192_INSTANTIATE_TARGET_BITS < \
+    ((TLS_RNG_STRENGTH_192 * 3u) / 2u)
+#error "192-bit Hash_DRBG instantiation lacks 3/2-strength entropy and nonce material"
+#endif
 #if TLS_HASH_DRBG_RESEED_TARGET_BITS != (TLS_HASH_DRBG_ENTROPY_BYTES * 8u)
 #error "Hash_DRBG reseed accounting does not match its entropy input"
 #endif
-#define TLS_HASH_DRBG_MAX_REQUEST_BYTES 65536u
-#define TLS_HASH_DRBG_RESEED_INTERVAL UINT64_C(0x0001000000000000)
+#define TLS_HASH_DRBG_MAX_REQUEST_BITS (UINT32_C(1) << 19)
+#define TLS_HASH_DRBG_MAX_REQUEST_BYTES (TLS_HASH_DRBG_MAX_REQUEST_BITS / 8u)
+#if (TLS_HASH_DRBG_MAX_REQUEST_BITS % 8u) != 0u || \
+    TLS_HASH_DRBG_MAX_REQUEST_BYTES != 65536u
+#error "SHA-256 Hash_DRBG request limit must be exactly 2^19 bits"
+#endif
+#define TLS_HASH_DRBG_RESEED_INTERVAL (UINT64_C(1) << 48)
 #define TLS_RNG_STATS_CAPTURE_CHUNK 32u
 
 /* Assembly accessor for the selected bit within the sampled SRAM byte. */
@@ -103,6 +128,7 @@ static struct tls_rng_request_ctx *g_tls_rng_request_q_tail = NULL;
 static uint8_t g_tls_rng_request_q_depth = 0;
 struct tls_hash_drbg_state
 {
+    /* SP 800-90A 10.1.1.1 working state, followed by administrative state. */
     uint8_t v[TLS_HASH_DRBG_SEED_BYTES];
     uint8_t c[TLS_HASH_DRBG_SEED_BYTES];
     uint64_t reseed_counter;
@@ -330,6 +356,8 @@ static bool tls_hash_df(const uint8_t *input, size_t input_len,
 static void tls_hash_drbg_add(uint8_t value[TLS_HASH_DRBG_SEED_BYTES],
                               const uint8_t *addend, size_t addend_len)
 {
+    /* Both operands are big-endian. Align the addend at the least-significant
+     * end of V and discard final carry to compute modulo 2^440. */
     size_t vi = TLS_HASH_DRBG_SEED_BYTES;
     size_t ai = addend_len;
     uint16_t carry = 0;
@@ -346,6 +374,8 @@ static void tls_hash_drbg_add(uint8_t value[TLS_HASH_DRBG_SEED_BYTES],
 
 static void tls_hash_drbg_increment(uint8_t value[TLS_HASH_DRBG_SEED_BYTES])
 {
+    /* V/data is big-endian; discarding carry out of byte zero implements
+     * addition modulo 2^440. */
     size_t i = TLS_HASH_DRBG_SEED_BYTES;
     while (i != 0u)
     {
@@ -375,12 +405,15 @@ static bool tls_hash_drbg_instantiate(
     size_t seed_material_len,
     uint16_t strength_bits)
 {
-    /* The 128-bit instance partitions one independently conditioned 192-bit
-     * contribution into a 128-bit entropy input and 64-bit nonce, meeting
-     * SP 800-90A's 3/2-strength combined entropy+nonce requirement.
+    /* Personalization input is not supported, so the optional parameter is
+     * omitted and seed_material consists only of entropy input and nonce.
+     * Under SP 800-90A section 8.6.7 case (a), the nonce may be acquired from
+     * the entropy source with the entropy input and treated as one extra-strong
+     * entropy input. The 128-bit instance uses one conditioned 192-bit
+     * contribution, exactly meeting that 3/2-strength requirement.
      * The 192-bit instance uses a fresh 192-bit entropy input followed by a
-     * fresh independently conditioned 192-bit nonce contribution (96 bits
-     * are required). Seed material is never reused between the instances. */
+     * second fresh conditioned 192-bit contribution as nonce material (only
+     * 96 bits are required). Seed material is never reused between instances. */
     if (drbg == NULL || seed_material == NULL ||
         (strength_bits != TLS_RNG_STRENGTH_128 &&
          strength_bits != TLS_RNG_STRENGTH_192))
@@ -405,7 +438,9 @@ static bool tls_hash_drbg_reseed(
     uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES];
     uint8_t new_v[TLS_HASH_DRBG_SEED_BYTES];
 
-    if (drbg == NULL || !drbg->seeded)
+    /* Additional input is not supported, so seed material is 0x01 || V ||
+     * entropy_input as permitted by SP 800-90A section 10.1.1.3. */
+    if (drbg == NULL || entropy == NULL || !drbg->seeded)
         return false;
     material[0] = 1u;
     memcpy(material + 1u, drbg->v, sizeof(drbg->v));
@@ -473,6 +508,8 @@ static bool tls_drbg_generate_bytes(
         len > TLS_HASH_DRBG_MAX_REQUEST_BYTES ||
         drbg->reseed_counter > TLS_HASH_DRBG_RESEED_INTERVAL)
         return false;
+    /* Generate-time additional input is not supported, so SP 800-90A
+     * 10.1.1.4 step 2 is omitted and Hashgen uses the current V directly. */
     if (!tls_hash_drbg_hashgen(drbg, out, len))
         return false;
 
@@ -598,8 +635,9 @@ static bool tls_drbg_entropy_gather_step(void)
      * If the epoch changed the asm layer already selected a new tap and
      * wiped its pool -- discard this step's bytes and let the caller loop
      * back to collect fresh entropy from the replacement source.
-     * Bound retries: each health failure costs a full rescan; more than
-     * TLS_DRBG_GATHER_MAX_EPOCH_CHANGES per step means no stable source. (B3) */
+     * Bound retries: each health failure may cost a full rescan; reaching
+     * TLS_DRBG_GATHER_MAX_EPOCH_CHANGES without a clean gather means no
+     * stable source exists. (B3) */
     if (source_epoch != tls_random_health_epoch())
     {
         tls_rng_log_health_failure();
@@ -610,7 +648,10 @@ static bool tls_drbg_entropy_gather_step(void)
         g_tls_rng_epoch_changes++;
         if (g_tls_rng_epoch_changes >= TLS_DRBG_GATHER_MAX_EPOCH_CHANGES)
         {
-            tls_rng_begin_initialization(TLS_RNG_FAILURE_SOURCE_HEALTH);
+            /* The first recovered source change is treated as intermittent.
+             * A second change without a clean gather is persistent: notify
+             * the consumer and cease output until an explicit restart. */
+            tls_rng_fail(TLS_RNG_FAILURE_SOURCE_HEALTH);
             return false;
         }
         DEBUG(); /* source changed mid-gather -- retrying rather than abandoning */
@@ -1028,6 +1069,14 @@ void *tls_random_bytes_pr(void *buffer, size_t len, uint16_t strength_bits)
         return NULL;
     if (len == 0u)
         return buffer;
+    /* Prediction resistance applies to one Generate request. Do not turn one
+     * reseed into multiple requests when the caller exceeds the DRBG limit. */
+    if (len > TLS_HASH_DRBG_MAX_REQUEST_BYTES)
+    {
+        DEBUG();
+        tls_secure_memzero(buffer, len);
+        return NULL;
+    }
     if (strength_bits != TLS_RNG_STRENGTH_128 &&
         strength_bits != TLS_RNG_STRENGTH_192)
     {

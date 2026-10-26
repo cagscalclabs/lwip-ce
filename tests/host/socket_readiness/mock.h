@@ -26,9 +26,12 @@
 #define LWIP_SOCKET_ERR_OP_TLS_INIT 9
 #define TLS_RNG_FAILURE_TIMEOUT 9
 #define TLS_RNG_STRENGTH_128 128
+#define TLS_RNG_STRENGTH_192 192
+#define TLS_RNG_STOPPED 0
 #define TLS_RNG_FAILED 5
 #define LWIP_DISPATCH_CONN_SERVICES 0
 typedef int lwip_error_t;
+typedef unsigned tls_rng_state_t;
 typedef int lwip_socket_bind_descriptor_t;
 typedef unsigned netif_nsc_reason_t;
 typedef int netif_ext_callback_args_t;
@@ -52,9 +55,16 @@ static unsigned connects, starts, period_sets;
 static uint16_t period;
 static int apply_error;
 static unsigned rng_strength=256, rng_state=4, socket_errors;
+static unsigned service_calls, ready_after_calls;
 static unsigned tls_rng_available_strength(void) { return rng_strength; }
 static unsigned tls_rng_status(void) { return rng_state; }
 static unsigned tls_rng_last_failure(void) { return TLS_RNG_FAILURE_TIMEOUT; }
+static void lwip_service_events(void) {
+    service_calls++;
+    now++;
+    if (ready_after_calls && service_calls >= ready_after_calls)
+        rng_strength = TLS_RNG_STRENGTH_192;
+}
 static bool netif_is_loop_network(const struct netif *n) { return n && n->loop; }
 static bool host_requires_dns(const char *h) { return h && !strcmp(h,"example.com"); }
 static bool netif_is_up(const struct netif *n) { return n->up; }

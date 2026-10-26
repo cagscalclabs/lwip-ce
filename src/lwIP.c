@@ -375,13 +375,20 @@ uint32_t lwip_now_ms(void)
     return sys_now();
 }
 
-bool lwip_tls_rng_wait_for_ready(uint32_t timeout_ms)
+bool lwip_tls_rng_wait_for_ready(uint16_t security_strength, uint32_t timeout_ms)
 {
     uint32_t start = sys_now();
 
-    while (tls_rng_available_strength() < TLS_RNG_STRENGTH_192)
+    if (security_strength != TLS_RNG_STRENGTH_128 &&
+        security_strength != TLS_RNG_STRENGTH_192)
     {
-        if (tls_rng_status() == TLS_RNG_FAILED ||
+        return false;
+    }
+
+    while (tls_rng_available_strength() < security_strength)
+    {
+        tls_rng_state_t state = tls_rng_status();
+        if (state == TLS_RNG_STOPPED || state == TLS_RNG_FAILED ||
             (uint32_t)(sys_now() - start) >= timeout_ms)
         {
             return false;

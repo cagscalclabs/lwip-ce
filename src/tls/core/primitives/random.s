@@ -86,7 +86,9 @@ globl _sprng_last_health_mask
 ; SP 800-90B continuous health-test parameters. The engineering Hmin floor is
 ; TLS_ENTROPY_HMIN_Q16 = 17630/65536 ≈ 0.269 bits per selected-bit sample.
 ; h_in = 952 * 0.269 = 256.088 bits >= n_out+64 = 256 for a 192-bit
-; conditioned contribution (SP 800-90C full-entropy margin).
+; conditioned contribution. This is a conservative local margin, not an
+; SP 800-90C full-entropy claim: direct SHA-256 has a 256-bit output block,
+; for which SP 800-90C 3.2.2.2 requires 320 credited input bits.
 ; With H=0.269 and alpha=2^-20:
 ;
 ;   RCT: C = 1 + ceil(20 / 0.269) = 76
@@ -96,6 +98,17 @@ globl _sprng_last_health_mask
 .equ _sprng_rct_cutoff,         76
 .equ _sprng_apt_window,         952
 .equ _sprng_apt_cutoff,         844
+.equ _sprng_conditioned_bytes,  24
+
+.if (_sprng_entropy_pool.size * 8) <> _sprng_apt_window
+.error "entropy pool must contain exactly one 952-sample conditioning block"
+.endif
+.if _sprng_conditioned_bytes > _sprng_sha_digest.size
+.error "conditioned output cannot exceed the SHA-256 digest"
+.endif
+.if _sprng_overlay.size <> 520
+.error "RNG entropy/SHA overlay size changed; update complete-wipe paths"
+.endif
 
 ; Seven diagnostic pass bits mirrored by TLS_RNG_HEALTH_* in random.h.
 ; A set bit passed; a clear bit failed.
@@ -670,7 +683,7 @@ _tls_entropy_gather192:
     push hl
     call _tls_sha256_init
     pop bc
-    ld hl, 119
+    ld hl, _sprng_entropy_pool.size
     push hl
     ld hl, _sprng_entropy_pool
     push hl
@@ -700,7 +713,7 @@ _tls_entropy_gather192:
     ld hl,_sprng_entropy_pool
     ld (hl),0
     ld de,_sprng_entropy_pool+1
-    ld bc,519
+    ld bc,_sprng_overlay.size-1
     ldir
     ld a,(_sprng_health_epoch_value)
     inc a
@@ -1497,7 +1510,7 @@ _tls_entropy_collect:
     or a,a
     jr z,.Lbytes_failed
     ld hl,(ix+9)
-    ld bc,24
+    ld bc,_sprng_conditioned_bytes
     or a,a
     sbc hl,bc
     jr nc,.Lbytes_full
@@ -1521,7 +1534,7 @@ _tls_entropy_collect:
     ld hl,_sprng_entropy_pool
     ld (hl),0
     ld de,_sprng_entropy_pool+1
-    ld bc,519
+    ld bc,_sprng_overlay.size-1
     ldir
     jr .Lbytes_loop
 .Lbytes_done:

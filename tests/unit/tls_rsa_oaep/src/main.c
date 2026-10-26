@@ -102,7 +102,7 @@ int main(void)
     if (!lwip_start()) return 1;
 
     /* OAEP encoding draws a random seed. */
-    if (!lwip_tls_rng_wait_for_ready(10000u))
+    if (!lwip_tls_rng_wait_for_ready(TLS_RNG_STRENGTH_192, 10000u))
     {
         printf("RNG setup timed out");
         os_GetKey();

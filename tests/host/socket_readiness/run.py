@@ -9,7 +9,7 @@ here = Path(__file__).resolve().parent
 source = (here.parents[2] / 'src/lwIP.c').read_text()
 
 def function(name):
-    match = re.search(r'^static [^\n]*\b' + name + r'\([^;]*?\n\{', source, re.M)
+    match = re.search(r'^(?:static )?[^\n]*\b' + name + r'\([^;]*?\n\{', source, re.M)
     assert match, name
     start = match.start()
     brace = source.index('{', start)
@@ -21,6 +21,7 @@ def function(name):
     return source[start:end]
 
 names = ['netif_service_base_ready', 'netif_service_ready',
+         'lwip_tls_rng_wait_for_ready',
          'socket_netif_changed', 'socket_required_services', 'socket_uses_tls',
          'socket_network_ready',
          'conn_registry_has_waiting_services', 'conn_waiting_services_poll',

@@ -16,13 +16,15 @@
 ; consumers replace the whole window and are never live at the same time.
 extern	_sprng_entropy_pool
 .equ	_sprng_entropy_pool.size, 119
+.equ	_sprng_sha_digest.size, 32
 .equ	_sprng_sha_digest,   _sprng_entropy_pool + _sprng_entropy_pool.size
-.equ	_sprng_sha_mbuffer,  _sprng_sha_digest + 32
+.equ	_sprng_sha_mbuffer,  _sprng_sha_digest + _sprng_sha_digest.size
 .equ	_sprng_rand,         _sprng_sha_mbuffer + 64 * 4
 .equ	_sprng_hash_ctx,     _sprng_rand + 8
+.equ	_sprng_overlay.size, _sprng_entropy_pool.size + _sprng_sha_digest.size + 64 * 4 + 8 + _sha256ctx_size
 ; Offset (in bytes) of _sprng_rand from the entropy pool base — i.e.
 ; (_sprng_sha_digest 32) + (_sprng_sha_mbuffer 64*4) on top of the pool.
 ; Defined via literal arithmetic so it stays an assemble-time constant now
 ; that _sprng_entropy_pool is an external (overlay) symbol — a direct
 ; "_sprng_rand - _sprng_entropy_pool" can no longer be folded.
-.equ	_sprng_rand.offset,  _sprng_entropy_pool.size + 32 + 64 * 4
+.equ	_sprng_rand.offset,  _sprng_entropy_pool.size + _sprng_sha_digest.size + 64 * 4

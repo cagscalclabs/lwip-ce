@@ -27,7 +27,7 @@
 typedef enum tls_rng_failure
 {
     TLS_RNG_FAILURE_SOURCE_INIT = 1, /**< No usable entropy tap could be selected. */
-    TLS_RNG_FAILURE_SOURCE_HEALTH,   /**< A continuous health test replaced the tap. */
+    TLS_RNG_FAILURE_SOURCE_HEALTH,   /**< Persistent continuous-health-test failure. */
     TLS_RNG_FAILURE_COLLECTION,      /**< Conditioned entropy collection failed. */
     TLS_RNG_FAILURE_ACCOUNTING,      /**< Internal reserve length/credit mismatch. */
     TLS_RNG_FAILURE_INSTANTIATE,     /**< Hash_DRBG instantiation failed. */
@@ -96,12 +96,12 @@ uint64_t tls_random(void);
  * @brief Fills a buffer from the 192-bit-strength SHA-256 Hash_DRBG.
  * @param buffer    Pointer to a buffer to fill with random bytes.
  * @param len    Length of buffer to fill.
- * If the 192-bit DRBG is not yet instantiated, this call synchronously drives
- * source initialization, 128-bit availability, and fresh 192-bit promotion.
- * A complete timer-prepared reseed reserve is incorporated before output is
- * generated.
- * @returns @p buffer on success, or NULL if instantiation/reseeding fails or
- * the RNG request engine is busy. On failure, the destination is zeroized.
+ * This function does not drive entropy collection. If the asynchronous
+ * lifecycle has not yet instantiated the 192-bit DRBG, it fails immediately.
+ * A complete timer-prepared reseed reserve is incorporated when available.
+ * @returns @p buffer on success, or NULL if the requested strength is not
+ * ready, generation/reseeding fails, or the RNG request engine is busy. On
+ * failure, the destination is zeroized.
  * @warning The calculator cannot isolate or securely persist DRBG state.
  * Callers must not assume resistance to an attacker capable of reading or
  * modifying process memory or restoring prior machine state.
@@ -111,10 +111,10 @@ void *tls_random_bytes(void *buffer, size_t len);
 /**
  * Fill a buffer using a DRBG instantiated at no less than @p strength_bits.
  *
- * A call made before that strength is ready drives initialization
- * synchronously for compatibility with existing direct crypto callers. TLS
- * sockets normally avoid this path by waiting asynchronously for 128-bit
- * readiness before constructing their TLS PCB.
+ * This function does not drive entropy collection. A call made before the
+ * requested strength is ready fails immediately with the destination
+ * zeroized. TLS sockets wait asynchronously for 128-bit readiness before
+ * constructing their TLS PCB.
  *
  * @param buffer Destination buffer.
  * @param len Number of bytes to generate.
@@ -130,10 +130,12 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits);
  * Equivalent to @ref tls_random_bytes_ex but forces an immediate reseed from
  * the entropy reserve before generating. Fails if the reserve is not ready,
  * guaranteeing that output is never produced from a state that has not been
- * freshly reseeded on this call.
+ * freshly reseeded on this call. Unlike the ordinary APIs, which split larger
+ * buffers into independent Generate requests, this function rejects lengths
+ * above the Hash_DRBG per-request limit of 65536 bytes.
  *
  * @param buffer Destination buffer.
- * @param len Number of bytes to generate.
+ * @param len Number of bytes to generate, at most 65536.
  * @param strength_bits Either @ref TLS_RNG_STRENGTH_128 or
  *        @ref TLS_RNG_STRENGTH_192.
  * @return @p buffer on success, otherwise NULL with the destination zeroized.
