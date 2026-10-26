@@ -3,7 +3,7 @@
 # ----------------------------
 NAME = XXML
 ICON = icon.png
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "parsers_xml test"
 COMPRESSED = NO

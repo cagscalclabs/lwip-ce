@@ -3,7 +3,7 @@
 # ----------------------------
 NAME = XURL
 ICON = icon.png
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "parsers_url test"
 COMPRESSED = NO

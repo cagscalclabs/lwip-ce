@@ -3,7 +3,7 @@
 # ----------------------------
 NAME = XJSON
 ICON = icon.png
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "parsers_json test"
 COMPRESSED = NO

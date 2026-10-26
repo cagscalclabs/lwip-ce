@@ -5,7 +5,7 @@
 # tls_x25519_secret/tls_x25519_publickey wrappers, not the raw asm).
 
 NAME = X25519
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "X25519 RFC 7748 Test"
 COMPRESSED = NO

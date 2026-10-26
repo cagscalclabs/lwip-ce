@@ -3,7 +3,7 @@
 # ----------------------------
 
 NAME = P256
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "P-256 ECDH/ECDSA Test"
 COMPRESSED = NO
