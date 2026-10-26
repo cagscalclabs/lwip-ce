@@ -21,6 +21,7 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"cannot load timing summarizer from {SUMMARIZER_PATH}")
 SUMMARIZER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SUMMARIZER)
+COUNT = len(SUMMARIZER.PRIMITIVES)
 
 
 def fixture(model: str = "TI-84 Plus CE / M", failure: str = "BYTES") -> dict:
@@ -71,11 +72,11 @@ def fixture(model: str = "TI-84 Plus CE / M", failure: str = "BYTES") -> dict:
         "profiler": "lwIP-CE tests/profiling/tls_timing",
         "configuration": dict(SUMMARIZER.CONFIGURATION),
         "summary": {
-            "primitives": 12,
+            "primitives": COUNT,
             "samples_per_class": 32,
-            "standard_passes": 11,
+            "standard_passes": COUNT - 1,
             "standard_failures": 1,
-            "rigorous_passes": 12,
+            "rigorous_passes": COUNT,
             "rigorous_failures": 0,
         },
         "primitives": primitives,
@@ -131,9 +132,9 @@ class TimingStatisticsTests(unittest.TestCase):
 
         self.assertEqual(report["capture_format"], "cagscalclabs-ctstats-summary-v1")
         self.assertEqual(report["scopes"][0]["profiles"], 2)
-        self.assertEqual(report["scopes"][0]["primitive_evaluations"], 24)
-        self.assertEqual(report["scopes"][0]["standard_passes"], 22)
-        self.assertEqual(report["scopes"][0]["rigorous_passes"], 24)
+        self.assertEqual(report["scopes"][0]["primitive_evaluations"], 2 * COUNT)
+        self.assertEqual(report["scopes"][0]["standard_passes"], 2 * COUNT - 2)
+        self.assertEqual(report["scopes"][0]["rigorous_passes"], 2 * COUNT)
         self.assertEqual([row["scope"] for row in report["scopes"][1:]], [
             "TI-84 Plus CE / L",
             "TI-84 Plus CE / M",
@@ -143,7 +144,7 @@ class TimingStatisticsTests(unittest.TestCase):
 
     def test_rejects_inconsistent_stored_summary(self) -> None:
         profile = fixture()
-        profile["summary"]["standard_passes"] = 12
+        profile["summary"]["standard_passes"] = COUNT
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "bad_ctstats.json"
             path.write_text(json.dumps(profile), encoding="utf-8")

@@ -6,9 +6,12 @@ These tests check routing and lifecycle; they do not test RSA arithmetic.
 """
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 here = Path(__file__).resolve().parent
+LOGGING_SHIM = ('#define INFO(...) ((void)0)\n#define ERROR(...) ((void)0)\n'
+                '#define DEBUG(...) ((void)0)\n#define WARN(...) ((void)0)\n')
 root = here.parents[2]
 x509 = (root / 'src/tls/core/x509.c').read_text()
 hs = (root / 'src/tls/core/handshake.c').read_text()
@@ -184,12 +187,20 @@ for i, (ext, host, expected, cn) in enumerate(cases):
     source += f'static const uint8_t identity_{i}[] = {{' + ','.join(map(str, ext or b'\0')) + '};\n'
     checks.append(f'assert(tls_x509_hostname_matches(identity_{i}, {len(ext)}, (const uint8_t *)"{cn}", {len(cn)}, "{host}") == {int(expected)});')
 source += 'static void identity_tests(void) {\n' + '\n'.join(checks) + '\n}\n'
+
+if len(sys.argv) > 1:
+    out = Path(sys.argv[1])
+    (out / 'lwip').mkdir(parents=True, exist_ok=True)
+    (out / 'lwip/logging.h').write_text(LOGGING_SHIM)
+    (out / 'tls_unit.c').write_text(source + function(hs, 'tls_cert_walker_feed'))
+    sys.exit(0)
+
 source += (here / 'test.c').read_text()
 
 with tempfile.TemporaryDirectory() as tmp:
     tmp = Path(tmp)
     (tmp / 'lwip').mkdir()
-    (tmp / 'lwip/logging.h').write_text('#define INFO(...) ((void)0)\n#define ERROR(...) ((void)0)\n#define DEBUG(...) ((void)0)\n#define WARN(...) ((void)0)\n')
+    (tmp / 'lwip/logging.h').write_text(LOGGING_SHIM)
     unit = tmp / 'test.c'
     unit.write_text(source)
     binary = tmp / 'test'
