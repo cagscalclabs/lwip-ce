@@ -69,6 +69,7 @@ dylib: build
 	mkdir -p tests/common
 	rm -f tests/common/LWIP.*.8xv
 	cp build/appinst/* build/lwip.8xv build/lwip.lib tests/common/
+	python3 tests/common/scripts/sync_appvars.py
 
 .PHONY: clean
 clean:

@@ -12,6 +12,7 @@
     "../../common/LWIP.5.8xv",
     "../../common/LWIP.6.8xv",
     "../../common/LWIP.7.8xv",
+    "../../common/LWIP.8.8xv",
     "../../common/lwip.8xv",
     "vectors/CAVP00.8xv",
     "vectors/CAVP01.8xv",
@@ -58,7 +59,7 @@
       ],
       "timeout": 60000000
     },
-      "2": {
+    "2": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",
