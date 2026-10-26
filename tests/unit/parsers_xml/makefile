@@ -6,7 +6,7 @@ ICON = icon.png
 ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "parsers_xml test"
-COMPRESSED = NO
+COMPRESSED = YES
 
 CFLAGS = -Wall -Wextra -Oz
 CXXFLAGS = -Wall -Wextra -Oz
