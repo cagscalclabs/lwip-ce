@@ -1,0 +1,101 @@
+name: lwIP-CE emulator environment
+description: >
+  CEdev with the latest lwip-latest build installed, the decrypted CE ROM,
+  the shared dyload files in tests/common, and the CEmu-lwIP-CE autotester
+  with its emulated USB Ethernet adapter bridged to a NATed TAP interface.
+
+inputs:
+  rom-name:
+    description: ROM object name (vars.AUTOTESTER_ROM).
+    required: true
+  rom-key:
+    description: ROM decryption passphrase (secrets.AES_ENCRYPT_KEY).
+    required: true
+  github-token:
+    description: Token used to download the lwip-latest artifact.
+    required: true
+
+outputs:
+  autotester:
+    description: Path to the autotester binary.
+    value: ${{ steps.cemu.outputs.autotester }}
+  usb-step:
+    description: Autotester sequence step that plugs the Ethernet adapter in.
+    value: ${{ steps.cemu.outputs.usb-step }}
+
+runs:
+  using: composite
+  steps:
+    - name: Load pinned CI dependency versions
+      id: ci_versions
+      shell: bash
+      run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+    - name: Cache CEdev Toolchain
+      id: cedev-cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ github.workspace }}/CEdev
+        key: ${{ runner.os }}-cedev-${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
+
+    - name: Download and extract CEdev
+      if: steps.cedev-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
+
+    - name: Add CEdev to PATH
+      shell: bash
+      run: |
+        echo "CEDEV=${{ github.workspace }}/CEdev" >> "$GITHUB_ENV"
+        echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
+
+    - name: Download lwip-latest artifact
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        mkdir -p "${{ github.workspace }}/release"
+        run_id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+          --jq '[.artifacts[] | select(.name == "lwip-latest" and .expired == false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id')
+        if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+          echo "::error::No lwip-latest artifact found in this repo. Run build.yml first."
+          exit 1
+        fi
+        gh run download "$run_id" --repo "${{ github.repository }}" --name lwip-latest --dir "${{ github.workspace }}/release"
+
+    - name: Install lwip.lib + headers into CEdev
+      shell: bash
+      run: |
+        mkdir -p "$CEDEV/lib/libload" "$CEDEV/include"
+        cp release/lwip.lib "$CEDEV/lib/libload/lwip.lib"
+        cp release/*.h "$CEDEV/include/"
+        cp -r release/lwip "$CEDEV/include/lwip"
+
+    - name: Prepare shared dyload test files
+      shell: bash
+      run: |
+        mkdir -p tests/common
+        cp release/appinst/* release/lwip.8xv release/lwip.lib tests/common/
+        curl -fsSL --retry 3 -o tests/common/lwIPCERT.8xv \
+          "https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv"
+        curl -fsSL --retry 3 -o tests/common/clibs.8xg \
+          https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+        ls -lh tests/common
+
+    - name: Decrypt CE ROM
+      shell: bash
+      env:
+        ROM_KEY: ${{ inputs.rom-key }}
+        ROM_NAME: ${{ inputs.rom-name }}
+      run: |
+        curl -fsSL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/CE.rom.enc" \
+          "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
+        gpg --batch --yes --passphrase "$ROM_KEY" --output "$RUNNER_TEMP/ce.rom" --decrypt "$RUNNER_TEMP/CE.rom.enc"
+        shred -u "$RUNNER_TEMP/CE.rom.enc"
+        echo "AUTOTESTER_ROM=$RUNNER_TEMP/ce.rom" >> "$GITHUB_ENV"
+
+    - name: Set up CEmu with emulated networking
+      id: cemu
+      uses: alessiodam/cemu-net-action@v1
+      with:
+        cemu-ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
