@@ -18,14 +18,24 @@
 
 <hr>
 
+**Runtime and Robustness Testing**
+
+![Network Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/net.yml/badge.svg?branch=master&cache=1)
+![Host Tests and Fuzzing](https://github.com/cagscalclabs/lwip-ce/actions/workflows/host.yml/badge.svg?branch=master&cache=1)
+
+*Network Tests exercise the built library on a network-enabled CEmu instance, covering sockets, raw IPv4 and IPv6 APIs, TLS clients and servers, record limits, live DAST probes, and performance measurements.*
+
+*Host Tests and Fuzzing run host-compiled regression tests with AddressSanitizer and UndefinedBehaviorSanitizer, then use libFuzzer to exercise parsers and network-facing protocol handlers with persistent corpora.*
+
+<hr>
+
 **Cryptography Quality Checks**
 
 
 ![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
+![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 
 *CAVP selects 16 random samples from the NIST RSP datasets that match the primitives we provide (with the exception of SHA-256 Monte Carlo, which selects one) (totaling 185 samples covering AES-CBC, GCM, CCM, SHA-256, HMAC-SHA-256, PBKDF2, HKDF, RSA-PSS-RSAE-SHA256, RSA-PKCS1-SHA256, and X25519). Where NIST publishes no RSP for a primitive (or in the case of RSA with e=65537), the output of python3-cryptography is used instead. Our workflow caches the expected values and then serializes the inputs into an AppVar for transfer to the TI-84+ CE. The CAVP profiler runs on the calculator, dumping the on-device primitive output to an AppVar that gets fed back to the test environment. The AppVar is then parsed and graded against the expectations cached. This test does not constitute a formal NIST CAVP certification; it validates our implementations against samples drawn from NIST’s published CAVP validation-vector datasets.*
-
-![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 
 *Timing analysis checks for secret-dependent timing leaks: it samples repeated runs of a primitive across input classes designed to exercise different internal code paths (e.g. a bad MAC vs. a good one), then looks for variance in runtime that tracks the input class rather than noise. Some allowance is given for CPU jitter, computed via MAD-based sigma over the baseline class. This test does not prove the absence of secret-dependent timing leaks, but it provides statistical evidence that runtime stays consistent across all classes of input. Our test result is obtained by parsing the per-model stats committed to this repo at `statistics/timing`*
 
