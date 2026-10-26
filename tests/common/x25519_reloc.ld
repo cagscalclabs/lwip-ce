@@ -3,8 +3,8 @@ SECTIONS
     .x25519_data : AT(LOADADDR(.powmod.reloc) + SIZEOF(.powmod.reloc))
     {
         . = ALIGN(0x100) + 0xC0;
-        KEEP(*(.x25519.data))
-        KEEP(*(.x25519.data.*))
+        KEEP(*(.crypto_scratch.x25519))
+        KEEP(*(.crypto_scratch.x25519.*))
         _x25519_data_end = .;
     } >prgm
 

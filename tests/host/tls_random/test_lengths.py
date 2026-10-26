@@ -5,7 +5,7 @@ This is a source-level instruction simulation, not an eZ80 machine emulator.
 """
 from pathlib import Path
 
-source = (Path(__file__).resolve().parents[3] / 'src/tls/core/random.s').read_text()
+source = (Path(__file__).resolve().parents[3] / 'src/tls/core/primitives/random.s').read_text()
 body = source.split('_tls_entropy_collect:\n', 1)[1].split('; ---------------------------------------------------------', 1)[0]
 code = [line.split(';')[0].strip() for line in body.splitlines()]
 code = [line for line in code if line]

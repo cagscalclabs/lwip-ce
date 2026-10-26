@@ -1,97 +1,104 @@
-
 #include <string.h>
 #include "../includes/hash.h"
 #include "../includes/hmac.h"
 #include "../includes/bytes.h"
+#include "../includes/crypto_guard.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_HMAC
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
 
-static bool tls_hmac_sha256_init_adapter(void *ctx)
+bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
+                           const uint8_t *key, size_t keylen)
 {
-    return tls_sha256_init((struct tls_sha256_context *)ctx);
-}
-
-static void tls_hmac_sha256_update_adapter(void *ctx, const uint8_t *data, size_t len)
-{
-    tls_sha256_update((struct tls_sha256_context *)ctx, data, len);
-}
-
-static void tls_hmac_sha256_digest_adapter(void *ctx, uint8_t *digest)
-{
-    tls_sha256_digest((struct tls_sha256_context *)ctx, digest);
-}
-
-bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm, const uint8_t* key, size_t keylen){
-    if(ctx == NULL) { ERROR(); return false; }
-    tls_hmac_clear(ctx);
-    if(key == NULL && keylen != 0) { ERROR(); return false; }
-
-    switch(algorithm){
-        case TLS_HASH_SHA256:
-            ctx->digestlen = TLS_SHA256_DIGEST_LEN;
-            ctx->update = tls_hmac_update;
-            ctx->digest = tls_hmac_digest;
-            ctx->_init = tls_hmac_sha256_init_adapter;
-            ctx->_update = tls_hmac_sha256_update_adapter;
-            ctx->_final = tls_hmac_sha256_digest_adapter;
-            break;
-        default:
-            ERROR_CODE(algorithm);
-            return false;
-    }
-
     struct tls_hash_context htmp = {0};
-    uint8_t sum[64] = {0};
-    
-    if(keylen > 64){
-        if(!tls_hash_context_init(&htmp, algorithm)) {
-            ERROR();
-            tls_hmac_clear(ctx);
-            return false;
-        }
-        htmp.update(&htmp._private, key, keylen);
-        htmp.digest(&htmp._private, sum);
-        tls_hash_clear(&htmp);
-        keylen = 32;
-    }
-    else if (keylen != 0) memcpy(sum, key, keylen);
-    
-    memset( ctx->ipad, 0x36, 64 );
-    memset( ctx->opad, 0x5C, 64 );
-    
-    for(int i = 0; i < 64; i++ ){
-        ctx->ipad[i] ^= sum[i];
-        ctx->opad[i] ^= sum[i];
-    }
-    tls_secure_memzero(sum, sizeof sum);
-    
-    if (!ctx->_init(&ctx->_private)) {
+    uint8_t sum[TLS_HASH_MAX_BLOCK_LEN] = {0};
+    uint8_t pad[TLS_HASH_MAX_BLOCK_LEN];
+
+    if (ctx == NULL) { ERROR(); return false; }
+    tls_hmac_clear(ctx);
+    if (key == NULL && keylen != 0) { ERROR(); return false; }
+
+    if (!tls_hash_context_init(&ctx->_inner, algorithm)) {
         tls_hmac_clear(ctx);
         return false;
     }
-    ctx->_update(&ctx->_private, ctx->ipad, sizeof ctx->ipad);
+    ctx->digestlen = ctx->_inner.digestlen;
+    ctx->blocklen = ctx->_inner.blocklen;
+    ctx->update = tls_hmac_update;
+    ctx->digest = tls_hmac_digest;
+
+    if (ctx->blocklen == 0 || ctx->blocklen > TLS_HASH_MAX_BLOCK_LEN ||
+        ctx->digestlen == 0 || ctx->digestlen > TLS_HASH_MAX_DIGEST_LEN ||
+        ctx->digestlen > ctx->blocklen) {
+        ERROR_CODE(algorithm);
+        tls_hmac_clear(ctx);
+        return false;
+    }
+
+    if (keylen > ctx->blocklen) {
+        if (!tls_hash_context_init(&htmp, algorithm)) {
+            ERROR();
+            tls_hash_clear(&htmp);
+            tls_secure_memzero(sum, sizeof sum);
+            tls_secure_memzero(pad, sizeof pad);
+            tls_hmac_clear(ctx);
+            return false;
+        }
+        tls_hash_update(&htmp, key, keylen);
+        tls_hash_digest(&htmp, sum);
+        keylen = htmp.digestlen;
+        tls_hash_clear(&htmp);
+    } else if (keylen != 0) {
+        memcpy(sum, key, keylen);
+    }
+
+    for (size_t i = 0; i < ctx->blocklen; i++)
+        pad[i] = sum[i] ^ 0x36;
+
+    tls_crypto_guard_enable();
+    ctx->_inner.update(&ctx->_inner._private, pad, ctx->blocklen);
+
+    for (size_t i = 0; i < ctx->blocklen; i++)
+        pad[i] = sum[i] ^ 0x5C;
+    if (!ctx->_inner.init(&ctx->_outer)) {
+        tls_crypto_guard_disable();
+        tls_secure_memzero(sum, sizeof sum);
+        tls_secure_memzero(pad, sizeof pad);
+        tls_hmac_clear(ctx);
+        return false;
+    }
+    ctx->_inner.update(&ctx->_outer, pad, ctx->blocklen);
+    tls_crypto_guard_disable();
+
+    tls_secure_memzero(sum, sizeof sum);
+    tls_secure_memzero(pad, sizeof pad);
     return true;
 }
 
-void tls_hmac_update(struct tls_hmac_context *ctx, const uint8_t *data, size_t len) {
-    ctx->_update(&ctx->_private, data, len);
+void tls_hmac_update(struct tls_hmac_context *ctx, const uint8_t *data, size_t len)
+{
+    tls_crypto_guard_enable();
+    ctx->_inner.update(&ctx->_inner._private, data, len);
+    tls_crypto_guard_disable();
 }
 
+void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *digest)
+{
+    uint8_t tbuf[TLS_HASH_MAX_DIGEST_LEN];
+    union tls_hash_state inner;
+    union tls_hash_state outer;
 
-void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *digest){
-    uint8_t tbuf[64];
-    struct tls_hmac_context htmp;
-    memcpy(&htmp, ctx, sizeof(htmp));
-    htmp._final(&htmp._private, tbuf);
-    
-    htmp._init(&htmp._private);
-    htmp._update(&htmp._private, htmp.opad, sizeof htmp.opad);
-    htmp._update(&htmp._private, tbuf, htmp.digestlen);
-    htmp._final(&htmp._private, digest);
+    memcpy(&inner, &ctx->_inner._private, sizeof inner);
+    memcpy(&outer, &ctx->_outer, sizeof outer);
+    tls_crypto_guard_enable();
+    ctx->_inner.digest(&inner, tbuf);
+    ctx->_inner.update(&outer, tbuf, ctx->digestlen);
+    ctx->_inner.digest(&outer, digest);
+    tls_crypto_guard_disable();
     tls_secure_memzero(tbuf, sizeof tbuf);
-    tls_secure_memzero(&htmp, sizeof htmp);
+    tls_secure_memzero(&inner, sizeof inner);
+    tls_secure_memzero(&outer, sizeof outer);
 }
 
 void tls_hmac_clear(struct tls_hmac_context *ctx)

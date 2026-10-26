@@ -50,7 +50,7 @@
 ; r + n < p) with no field inversion.  That engine must never be given
 ; secret data; keygen, ECDH and signing use only the constant-time paths.
 ;
-; Non-reentrant: one static scratch block (.bss.__p256_scratch), like the
+; Non-reentrant: one static scratch block (.crypto_scratch.p256), like the
 ; X25519 engine.  The scratch is zeroed before every public entry returns.
 ;
 ; Internal calling convention (not C ABI):
@@ -78,14 +78,13 @@
 ;   r0,r1 contiguous and saved0,saved1 contiguous (single 192-byte ldir).
 ;   The RFC 6979 state (DK_*) overlays r0.. -- it is dead before the ladder.
 ;
-; This buffer is the single shared scratch for P-256, powmod, and HKDF/RSA.
-; All consumers are mutually exclusive at runtime.  The linker provides
-; __tls_scratch_start/__tls_scratch_end aliases to __p256_scratch_start/_end.
+; This buffer is one member of the linker-enforced crypto scratch overlay.
+; P-256, RSA/HKDF, and X25519 are mutually exclusive at runtime.
 ; ===========================================================================
 .include "scratch.inc"
 globl __p256_scratch_start
 globl __p256_scratch_end
-    .section .bss.__p256_scratch,"aw",@nobits
+    .section .crypto_scratch.p256,"aw",@nobits
 __p256_scratch_start:
 ; --- p256_mul_p / p256_sq_p working set.  The index displacements are
 ; computed by the assembler from these labels (it rejects any that leave

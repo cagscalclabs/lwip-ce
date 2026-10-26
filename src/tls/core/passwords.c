@@ -48,7 +48,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     
     // make a copy of initial to counter and update it with salt
     memcpy(&counter, &initial, sizeof counter);
-    counter._update(&counter._private, salt, saltlen);
+    counter.update(&counter, salt, saltlen);
     
     for(outlen = 0; outlen < keylen; outlen+=hash_len, ctr++){
         //T(i) = F(password, salt, c, i) = U1 xor U2 xor ... xor Uc
@@ -62,12 +62,12 @@ bool tls_pbkdf2(const char* password, size_t passlen,
         c[2] = (ctr >> 8) & 0xff;
         c[3] = ctr & 0xff;
         memcpy(&state, &counter, sizeof state);
-        state._update(&state._private, c, sizeof c);
+        state.update(&state, c, sizeof c);
         state.digest(&state, hash_buffer);
         memcpy(hash_composite, hash_buffer, hash_len);
         for(size_t ic=1; ic<rounds; ic++){
             memcpy(&state, &initial, sizeof state);
-            state._update(&state._private, hash_buffer, hash_len);
+            state.update(&state, hash_buffer, hash_len);
             state.digest(&state, hash_buffer);
             for(uint8_t j=0; j < hash_len; j++)
                 hash_composite[j] ^= hash_buffer[j];

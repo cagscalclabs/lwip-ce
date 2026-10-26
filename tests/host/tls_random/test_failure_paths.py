@@ -6,7 +6,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[3]
 C_SOURCE = (ROOT / "src/tls/core/random.c").read_text()
-ASM_SOURCE = (ROOT / "src/tls/core/random.s").read_text()
+ASM_SOURCE = (ROOT / "src/tls/core/primitives/random.s").read_text()
 LOG_SOURCE = (ROOT / "src/core/log_file.c").read_text()
 STATS_SOURCE = (ROOT / "tests/profiling/tls_rng_stats/src/main.c").read_text()
 

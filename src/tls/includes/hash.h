@@ -20,6 +20,12 @@
 
 /** @def Defines digest length of SHA-256. */
 #define TLS_SHA256_DIGEST_LEN 32
+#define TLS_SHA256_BLOCK_LEN 64
+
+/* Largest block and digest among the hash backends compiled into this build.
+ * Increase these when registering a backend with larger parameters. */
+#define TLS_HASH_MAX_BLOCK_LEN TLS_SHA256_BLOCK_LEN
+#define TLS_HASH_MAX_DIGEST_LEN TLS_SHA256_DIGEST_LEN
 
 /** @enum Implemented hash algorithms. */
 enum _hash_algorithms
@@ -49,17 +55,21 @@ void tls_sha256hw_update(struct tls_sha256_context *ctx, const uint8_t *data, si
 void tls_sha256hw_digest(struct tls_sha256_context *ctx, uint8_t *digest);
  */
 
+/** Storage for any registered hash backend's private state. */
+union tls_hash_state
+{
+    struct tls_sha256_context sha256;
+};
+
 /** @struct Defines generic hash context. */
 struct tls_hash_context
 {
     uint8_t digestlen;
+    uint8_t blocklen;
     bool (*init)(void *ctx);
     void (*update)(void *ctx, const uint8_t *data, size_t len);
     void (*digest)(void *ctx, uint8_t *digest);
-    union
-    {
-        struct tls_sha256_context sha256;
-    } _private;
+    union tls_hash_state _private;
 };
 
 /***************************************************************************

@@ -85,8 +85,10 @@ typedef uint16_t lwip_crypto_job_t;
 static lwip_crypto_job_t lwip_crypto_x25519(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
 static lwip_crypto_job_t lwip_crypto_p256(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
 static lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t *d, const uint8_t *p, const uint8_t *rs) { return 0; }
+static unsigned rsa_offload_calls;
 static lwip_crypto_job_t lwip_crypto_rsa_verify(uint8_t a, const uint8_t *d, const uint8_t *m, size_t ml,
-                                                const uint8_t *e, size_t el, const uint8_t *s) { return 0; }
+                                                const uint8_t *e, size_t el, const uint8_t *s)
+{ rsa_offload_calls++; return 0; }
 static void lwip_crypto_cancel(lwip_crypto_job_t job) {}
 static void lwip_crypto_reseed(void) {}
 /* Whether the "bridge" computes P-256; decides the key shares sent. */

@@ -90,7 +90,7 @@ Follow-up: calculator trace after handshake fixes
 
 The supplied photo reaches the WARN immediately before tls_random_bytes(mask, 4)
 inside altcp_ws_write, but not the marker after it. Inspection found a shared
-assembly bug in src/tls/core/random.s: a final chunk shorter than eight bytes
+assembly bug in src/tls/core/primitives/random.s: a final chunk shorter than eight bytes
 stored len-8 as the remaining 24-bit length and used its low byte as the copy
 count. For len=4, this copies 252 bytes from an eight-byte source into a four-byte
 mask and continues with remaining=0xfffffc. This explains why the 16-byte HTTP

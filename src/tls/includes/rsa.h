@@ -47,6 +47,12 @@ struct tls_rsa_key {
     const uint8_t *modulus;   /**< big-endian modulus bytes                  */
 };
 
+/* Validate the public-key properties shared by local and offloaded RSA
+ * operations.  modulus is an unsigned, unpadded magnitude: any DER sign byte
+ * must already have been removed, so the high bit of modulus[0] determines
+ * whether mod_len describes the actual modulus bit length. */
+bool tls_rsa_public_key_shape_ok(const struct tls_rsa_key *key);
+
 /* Input is preserved unless inbuf == outbuf for exact in-place operation.
  * Partial input/output overlap is rejected. */
 bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,

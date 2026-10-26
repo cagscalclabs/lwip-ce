@@ -1,7 +1,7 @@
 /**
  * @file hmac.h
  * @author Anthony Cagliano
- * @brief HMAC-SHA-256 implementation.
+ * @brief Hash-independent HMAC construction.
  * @license: GNU GPL v3.0
  * @reference: RFC 2104
  * @reference: RFC 4231
@@ -16,17 +16,11 @@
 struct tls_hmac_context
 {
     uint8_t digestlen;
+    uint8_t blocklen;
     void (*update)(struct tls_hmac_context *ctx, const uint8_t *data, size_t len);
     void (*digest)(struct tls_hmac_context *ctx, uint8_t *digest);
-    bool (*_init)(void *ctx);
-    void (*_update)(void *ctx, const uint8_t *data, size_t len);
-    void (*_final)(void *ctx, uint8_t *digest);
-    uint8_t ipad[64]; /**< holds the key xored with a magic value to be hashed with the inner digest */
-    uint8_t opad[64]; /**< holds the key xored with a magic value to be hashed with the outer digest */
-    union
-    {
-        struct tls_sha256_context sha256;
-    } _private;
+    struct tls_hash_context _inner;
+    union tls_hash_state _outer; /**< state after processing the outer padded key */
 };
 
 /***************************************************************************
@@ -45,7 +39,7 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
  * @param ctx       Pointer to a HMAC context to update.
  * @param data     Pointer to data to hash.
  * @param len       Length of data to hash.
- * @note A more object-oriented call style may be used. @code ctx.update(ctx._private, data, len) @endcode.
+ * @note A more object-oriented call style may be used. @code ctx.update(&ctx, data, len) @endcode.
  */
 void tls_hmac_update(struct tls_hmac_context *ctx, const uint8_t *data, size_t len);
 
@@ -53,7 +47,7 @@ void tls_hmac_update(struct tls_hmac_context *ctx, const uint8_t *data, size_t l
  * @brief Returns an HMAC digest from the context state.
  * @param ctx       Pointer to an HMAC context.
  * @param digest     Pointer to buffer to write digest to.
- * @note A more object-oriented call style may be used. @code ctx.digest(ctx._private, digest) @endcode.
+ * @note A more object-oriented call style may be used. @code ctx.digest(&ctx, digest) @endcode.
  */
 void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *digest);
 
@@ -61,7 +55,7 @@ void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *digest);
  * @brief Securely clears an HMAC context.
  * @param ctx       Pointer to the HMAC context to clear. May be NULL.
  * @note Call when the context is no longer needed to erase the key-derived
- *       ipad/opad values and intermediate hash state.
+ *       inner/outer hash states.
  */
 void tls_hmac_clear(struct tls_hmac_context *ctx);
 

@@ -70,7 +70,7 @@ ARCHIVED = "NO"
 LTO = "NO"
 CFLAGS = "-Wall -Wextra -Oz -I src/include"
 CXXFLAGS = "-Wall -Wextra -Oz -I src/include"
-ASFLAGS = "-I src/tls/core -I src/tls/core/share"
+ASFLAGS = "-I src/tls/core/primitives -I src/tls/core/share"
 BSSHEAP_HIGH = "0xD072C6"
 
 [[step]]

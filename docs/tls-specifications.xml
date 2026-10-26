@@ -3,7 +3,7 @@
   <requirement>
     <ref>FIPS 180-4</ref>
     <section>1 / 5.1.1 (message length limit, streaming state)</section>
-    <location>src/tls/core/sha256.s: _tls_sha256_update (L222-276), _tls_sha256_digest (L288-292) - 64-bit bitlen, non-destructive digest</location>
+    <location>src/tls/core/primitives/sha256.s: _tls_sha256_update (L222-276), _tls_sha256_digest (L288-292) - 64-bit bitlen, non-destructive digest</location>
     <grade>COMPLIANT</grade>
     <note>bitlen is uint64 (no 2^64 overflow check, unreachable). Digest operates on a stack copy so the transcript context stays usable (hash.h L77-82); len==0 update is a no-op.</note>
 
@@ -17,7 +17,7 @@
   <requirement>
     <ref>FIPS 180-4</ref>
     <section>5.1.1 (padding)</section>
-    <location>src/tls/core/sha256.s: _tls_sha256_digest (L280-346) - 0x80, zero fill, 64-bit big-endian length</location>
+    <location>src/tls/core/primitives/sha256.s: _tls_sha256_digest (L280-346) - 0x80, zero fill, 64-bit big-endian length</location>
     <grade>COMPLIANT</grade>
     <note>Both the one-block (datalen &lt;= 55) and two-block padding branches are present. Covered by CAVP SHA256ShortMsg/LongMsg/Monte and tests/unit/tls_hash FIPS examples ("abc", "", 448-bit message).</note>
 
@@ -31,7 +31,7 @@
   <requirement>
     <ref>FIPS 180-4</ref>
     <section>6.2 (SHA-256 computation; 4.2.2 constants; 5.3.3 H(0))</section>
-    <location>src/tls/core/sha256.s: _sha256_transform (L350-728), _sha256_state_init (L730-738), _sha256_k (L740-804) - compression</location>
+    <location>src/tls/core/primitives/sha256.s: _sha256_transform (L350-728), _sha256_state_init (L730-738), _sha256_k (L740-804) - compression</location>
     <grade>COMPLIANT</grade>
     <note>Constants and compression are validated by the CAVP SHA-256 Monte vectors. The message schedule lives in static _sprng_sha_mbuffer (L18); see the ISO/IEC 19790 zeroization entry.</note>
 
@@ -61,7 +61,7 @@
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.1 (ECDSA signing; nonce per RFC 6979; r=0 or s=0 means new k)</section>
-    <location>src/tls/core/p256.s: _tls_p256_sign (.Lsg_retry path), p256_det_k_continue (new label after L3602)</location>
+    <location>src/tls/core/primitives/p256.s: _tls_p256_sign (.Lsg_retry path), p256_det_k_continue (new label after L3602)</location>
     <grade>COMPLIANT</grade>
     <note>FIXED: r==0 or s==0 now jumps to .Lsg_retry which calls p256_det_k_continue (new entry at .Ldk_gen with K/V state preserved), then repeats the scalar multiply per RFC 6979 §3.2 step h.3. Probability of needing the retry is ~2^-256. RFC 6979 A.2.5 vector continues to pass.</note>
 
@@ -76,7 +76,7 @@
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 1 (r, s in [1, n-1])</section>
-    <location>src/tls/core/p256.s: _tls_p256_verify (L3381-3397); src/tls/core/x509.c: tls_ecdsa_parse_int (L25-55) - r/s range</location>
+    <location>src/tls/core/primitives/p256.s: _tls_p256_verify (L3381-3397); src/tls/core/x509.c: tls_ecdsa_parse_int (L25-55) - r/s range</location>
     <grade>COMPLIANT</grade>
     <note>p256_import_be with C=1 rejects 0 and values &gt;= n for both r and s; DER is strictly minimal, non-negative, at most 32 magnitude bytes. Covered by tests/unit/tls_p256 test_reject_r0/s0/rn/sn.</note>
 
@@ -90,7 +90,7 @@
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 2-3 (hash to integer e)</section>
-    <location>src/tls/core/p256.s: _tls_p256_verify (L3400-3406) - e derivation</location>
+    <location>src/tls/core/primitives/p256.s: _tls_p256_verify (L3400-3406) - e derivation</location>
     <grade>COMPLIANT</grade>
     <note>The API fixes a 32-byte SHA-256 digest (hlen = N = 256) so no truncation is needed; e is reduced mod n.</note>
 
@@ -104,7 +104,7 @@
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 4-6 (w = s^-1, u1, u2, R = u1*G + u2*Q)</section>
-    <location>src/tls/core/p256.s: _tls_p256_verify (L3407-3413), p256_verify_shamir (L2856+) - double-scalar multiply</location>
+    <location>src/tls/core/primitives/p256.s: _tls_p256_verify (L3407-3413), p256_verify_shamir (L2856+) - double-scalar multiply</location>
     <grade>COMPLIANT</grade>
     <note>Variable-time inverse and Straus/Shamir are acceptable because all inputs are public. Verified by the RFC 6979 A.2.5 vector plus tamper and off-curve negatives in tests/unit/tls_p256.</note>
 
@@ -118,7 +118,7 @@
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 6 (R = O rejected)</section>
-    <location>src/tls/core/p256.s: _tls_p256_verify (L3414-3424) - infinity rejection</location>
+    <location>src/tls/core/primitives/p256.s: _tls_p256_verify (L3414-3424) - infinity rejection</location>
     <grade>COMPLIANT</grade>
     <note>Rejects when vs_inf is set and separately when Z(R)==0, so the projective x-check cannot degenerate.</note>
 
@@ -132,7 +132,7 @@
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.2 step 7-8 (v = x_R mod n; accept iff v == r)</section>
-    <location>src/tls/core/p256.s: _tls_p256_verify (L3425-3453) - projective x(R) mod n == r</location>
+    <location>src/tls/core/primitives/p256.s: _tls_p256_verify (L3425-3453) - projective x(R) mod n == r</location>
     <grade>COMPLIANT</grade>
     <note>Checks X == r*Z^2 (mod p) and, only when r+n &lt; p, X == (r+n)*Z^2; equivalent to x_R mod n == r without inversion.</note>
 
@@ -146,7 +146,7 @@
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.1 (Cipher; Nk/Nr combinations)</section>
-    <location>src/tls/core/aes.s: _aes_encrypt_block (L217-373) - round count and cipher</location>
+    <location>src/tls/core/primitives/aes.s: _aes_encrypt_block (L217-373) - round count and cipher</location>
     <grade>COMPLIANT</grade>
     <note>Nr = keysize/32+6 (10/12/14). Covered by CAVP CBC GFSbox/KeySbox/VarKey/VarTxt/MMT for 128/192/256 and tests/unit/tls_aes SP 800-38A F.2.x.</note>
 
@@ -160,7 +160,7 @@
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.1.1 (SubBytes implementation side channel; project policy)</section>
-    <location>src/tls/core/aes.s: _aes_encrypt_block/.Lencrypt_subbytes (L310-319), _aes_key_schedule (L117-128), _gf128_mul (L377-492) - table-lookup timing</location>
+    <location>src/tls/core/primitives/aes.s: _aes_encrypt_block/.Lencrypt_subbytes (L310-319), _aes_key_schedule (L117-128), _gf128_mul (L377-492) - table-lookup timing</location>
     <grade>COMPLIANT</grade>
     <note>Byte S-box (no T-tables) on an eZ80 with no data cache; xtime and GF(2^128) reduction use branch-free masks; branches depend only on key size or loop counters. Power/EM leakage not assessed.</note>
 
@@ -174,7 +174,7 @@
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.2 (KeyExpansion)</section>
-    <location>src/tls/core/aes.s: _aes_key_schedule (L81-190); src/tls/core/aes.c: tls_aes_init (L354-365) - 128/192/256 expansion</location>
+    <location>src/tls/core/primitives/aes.s: _aes_key_schedule (L81-190); src/tls/core/primitives/aes.c: tls_aes_init (L354-365) - 128/192/256 expansion</location>
     <grade>COMPLIANT</grade>
     <note>Rcon doubling and the AES-256 SubWord at i mod 8 = 4 special case are present; only 16/24/32-byte keys accepted. Covered by CAVP KeySbox/VarKey for all sizes.</note>
 
@@ -188,7 +188,7 @@
   <requirement>
     <ref>FIPS 197</ref>
     <section>5.3 (InvCipher)</section>
-    <location>src/tls/core/aes.s: _aes_decrypt_block (L519-678) - inverse cipher</location>
+    <location>src/tls/core/primitives/aes.s: _aes_decrypt_block (L519-678) - inverse cipher</location>
     <grade>COMPLIANT</grade>
     <note>Straightforward inverse cipher with InvSBox. Covered by CAVP CBC decrypt and tests/unit/tls_aes F.2.2/F.2.4/F.2.6.</note>
 
@@ -230,7 +230,7 @@
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
-    <location>src/tls/contrib/x25519/src/x25519.s: .x25519.data (L779-807), _tls_x25519_secret epilogue (L123-139) - X25519 scratch residue</location>
+    <location>src/tls/contrib/x25519/src/x25519.s: .crypto_scratch.x25519, _tls_x25519_secret epilogue - X25519 scratch residue</location>
     <grade>COMPLIANT</grade>
     <note>BUG: _clamped (the private scalar), ladder state _a.._f and _product (pre-normalisation shared secret) live in static .bss and are never wiped; handshake X25519 calls (handshake.c L1781-1797, L2760-2786) are not wrapped in tls_crypto_guard, unlike P-256. Fix: zero the 388-byte block before both returns and wrap the calls.</note>
 
@@ -244,7 +244,7 @@
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
-    <location>src/tls/core/aes.c: tls_aes_verify (L795-824), tls_aes_ccm_encrypt (L833-854), tls_aes_ccm_decrypt (L864-892), tls_aes_init (L391-393) - AES context residue</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_verify (L795-824), tls_aes_ccm_encrypt (L833-854), tls_aes_ccm_decrypt (L864-892), tls_aes_init (L391-393) - AES context residue</location>
     <grade>COMPLIANT</grade>
     <note>BUG (medium): tls_aes_verify memcpy's the whole context (round keys and GHASH key H) to stack tmp and never wipes it (the memset at L816 is commented out); leaking H enables GCM forgeries under that key. One-shot CCM leaves ctx on the stack; no tls_aes_clear API. The altcp record aes_ctx is also never wiped (see RFC 8446 7.1).</note>
 
@@ -258,7 +258,7 @@
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
-    <location>src/tls/core/bytes.s: _tls_secure_memzero (L34-53) - erase helper</location>
+    <location>src/tls/core/primitives/bytes.s: _tls_secure_memzero (L34-53) - erase helper</location>
     <grade>COMPLIANT</grade>
     <note>External assembly routine (seed byte plus overlapping ldir) that the compiler cannot elide; len 0/1 handled. The bytes.h L27 comment ("Uses volatile") is inaccurate but harmless.</note>
 
@@ -274,7 +274,7 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/hmac.c: tls_hmac_context_init, tls_hmac_digest, tls_hmac_clear; src/tls/core/hkdf.c; src/tls/core/passwords.c</location>
     <grade>COMPLIANT</grade>
-    <note>HMAC initialization and digest wipe their temporary padded/hashed key material, inner digest, and copied context. tls_hmac_clear securely erases the caller-owned K0 xor ipad/opad values and intermediate hash state; HKDF and PBKDF2 call it for their internal contexts. tls_hash_clear provides the equivalent lifecycle operation for hash contexts. Handshake callers additionally use whole-frame crypto-guard cleanup.</note>
+    <note>HMAC initialization and digest wipe their temporary padded/hashed key material, inner digest, and copied context. tls_hmac_clear securely erases the key-derived inner/outer hash states; HKDF and PBKDF2 call it for their internal contexts. tls_hash_clear provides the equivalent lifecycle operation for hash contexts. Handshake callers additionally use whole-frame crypto-guard cleanup.</note>
 
     <reviews>
       <reviewed-by>
@@ -286,7 +286,7 @@
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
-    <location>src/tls/core/p256.s: p256_di/p256_wipe/p256_exit (L3217-3263), _tls_p256_sign saferam wipe (L3692-3699); src/tls/core/handshake.c: tls_handshake_cleanup (L5045-5103) - P-256 and ephemeral key zeroization</location>
+    <location>src/tls/core/primitives/p256.s: p256_di/p256_wipe/p256_exit (L3217-3263), _tls_p256_sign saferam wipe (L3692-3699); src/tls/core/handshake.c: tls_handshake_cleanup (L5045-5103) - P-256 and ephemeral key zeroization</location>
     <grade>COMPLIANT</grade>
     <note>__p256_scratch is wiped on entry and every exit, _sprng_sha_mbuffer after RFC 6979, handshake P-256 calls are wrapped in crypto_guard, and the used private key and shared secret are zeroed right after ECDH. The unused group's private key survives until tls_handshake_cleanup (informational).</note>
 
@@ -313,7 +313,7 @@
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
-    <location>src/tls/core/rsa.c: tls_rsa_encrypt (L277), tls_rsa_decrypt_signature (L336); src/tls/core/share/bigint.s: scrub (L258-275); src/tls/core/key.c (L1076-1094) - RSA scratch</location>
+    <location>src/tls/core/rsa.c: tls_rsa_encrypt (L277), tls_rsa_decrypt_signature (L336); src/tls/core/primitives/rsa.s: scrub (L258-275); src/tls/core/key.c (L1076-1094) - RSA scratch</location>
     <grade>COMPLIANT</grade>
     <note>Top 2*mod_len bytes of shared scratch and relocated powmod slots/alternate registers are cleared after every powmod; __rsa_transient and OAEP tmp zeroed in key.c. tls_rsa_decode_oaep's own frame is scrubbed only when the caller wraps it in tls_crypto_guard.</note>
 
@@ -327,7 +327,7 @@
   <requirement>
     <ref>ISO/IEC 19790</ref>
     <section>7.9.7 (SSP zeroisation)</section>
-    <location>src/tls/core/sha256.s: _tls_sha256_digest (L344), _sha256_transform (L726), _sha256_m_buffer=_sprng_sha_mbuffer (L18) - SHA-256 working state residue</location>
+    <location>src/tls/core/primitives/sha256.s: _tls_sha256_digest (L344), _sha256_transform (L726), _sha256_m_buffer=_sprng_sha_mbuffer (L18) - SHA-256 working state residue</location>
     <grade>COMPLIANT</grade>
     <note>The digest's 105-byte local context copy and the transform frame are not wiped; the static 256-byte W buffer is never wiped and after HMAC init holds K xor ipad. HMAC/HKDF/PBKDF2 call tls_sha256_* directly and bypass the crypto_guard scrub that tls_hash_update/digest get (hash.c L58-70).</note>
 
@@ -477,7 +477,7 @@
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>6.2 (CBC mode chaining)</section>
-    <location>src/tls/core/aes.c: tls_aes_encrypt CBC (L664-676), tls_aes_decrypt CBC (L747-769) - chaining</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_encrypt CBC (L664-676), tls_aes_decrypt CBC (L747-769) - chaining</location>
     <grade>COMPLIANT</grade>
     <note>Correct chaining; in-place decrypt safe; decrypt rejects non-multiple-of-16 lengths. Covered by CAVP CBC MMT and SP 800-38A F.2.1-F.2.6. outbuf==NULL is not checked in CBC decrypt (UB on misuse).</note>
 
@@ -491,7 +491,7 @@
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>6.5 (CTR mode exposure)</section>
-    <location>src/tls/core/aes.c: tls_aes_gcm_ctr (L706-712) - raw GCTR export</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_gcm_ctr (L706-712) - raw GCTR export</location>
     <grade>COMPLIANT</grade>
     <note>Only raw CTR exposure is GCTR on a GCM context; its only user (altcp_tls_ce.c L480) runs after tag verification. Missing lock check: see SP 800-38D 7.1/7.2 ordering entry.</note>
 
@@ -505,7 +505,7 @@
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>Appendix A (padding; project intends PKCS#7)</section>
-    <location>src/tls/core/aes.c: tls_aes_encrypt CBC final block (L697-707) - padding block; src/tls/core/key.c: tls_key_encrypt CBC ct_len calc (L906-910) - always include padding block</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_encrypt CBC final block (L697-707) - padding block; src/tls/core/key.c: tls_key_encrypt CBC ct_len calc (L906-910) - always include padding block</location>
     <grade>COMPLIANT</grade>
     <note>FIXED: padding loop uses iv[idx] correctly. Block-aligned input previously got no padding block (ct_len was in_len when rem==0); both aes.c (removed the `if (rem)` guard — padding block is always written) and key.c (ct_len now always in_len - rem + AES_BLOCK_SIZE regardless of rem) are corrected.</note>
 
@@ -519,7 +519,7 @@
   <requirement>
     <ref>NIST SP 800-38A</ref>
     <section>Appendix C (unpredictable CBC IV)</section>
-    <location>src/tls/core/aes.c: tls_aes_init (L367); src/tls/core/key.c (tls_random_bytes(iv), ~L908) - CBC IV source</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_init (L367); src/tls/core/key.c (tls_random_bytes(iv), ~L908) - CBC IV source</location>
     <grade>COMPLIANT</grade>
     <note>The only CBC encrypt caller draws the IV from the DRBG after tls_rng_healthcheck(). No padding oracle: tls_aes_decrypt does not check padding and the PKCS#8 strip (key.c L518-521) is offline import.</note>
 
@@ -533,18 +533,21 @@
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>6.1 / 6.2 (Tlen parameter integrity)</section>
-    <location>src/tls/core/aes.c: tls_aes_ccm_encrypt (L841, L852), tls_aes_ccm_decrypt (L873, L884) - size_t to uint8_t tag_len truncation</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_ccm_encrypt (L841, L852), tls_aes_ccm_decrypt (L873, L884) - size_t to uint8_t tag_len truncation</location>
     <grade>COMPLIANT</grade>
     <note>BUG (medium, API misuse): tag_len is validated after a cast to uint8_t (260 becomes 4) but the original size_t is used for memcpy, so encrypt over-reads the 16-byte stack digest (adjacent ctx holds round keys) into the caller's tag. Current callers pass the constant TLS_KEY_AES_TAG_LEN. Fix: reject tag_len &gt; 16 before the cast.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc3. The former one-shot CCM API and its size_t-to-uint8_t length mismatch no longer exist. tls_aes_ccm_init accepts an 8-bit tag length and rejects values outside {4,6,8,10,12,14,16} before storing or encoding it. Tag generation and verification subsequently use only the validated stored length, so the former stack over-read is no longer reachable.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>6.2 (decryption-verification: return INVALID only)</section>
-    <location>src/tls/core/aes.c: tls_aes_ccm_decrypt (L857-893) - plaintext release on tag failure</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_ccm_decrypt (L857-893) - plaintext release on tag failure</location>
     <grade>COMPLIANT</grade>
     <note>BUG (medium): plaintext is written before verification and wiped on mismatch only if plaintext != ciphertext (L888-889), so an in-place call leaves unverified plaintext in the buffer. Tag compare is constant-time (tls_bytes_compare, L884).</note>
 
@@ -558,7 +561,7 @@
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>6.2 (streaming decryption-verification)</section>
-    <location>src/tls/core/aes.c: ccm_process_message (L203), tls_aes_verify (L832)</location>
+    <location>src/tls/core/primitives/aes.c: ccm_process_message (L203), tls_aes_verify (L832)</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. ccm_process_message guards outbuf writes behind `if (outbuf)` (L203); tls_aes_verify passes NULL, so no plaintext is emitted during the tag-check pass. The API-level hazard exists only if a caller passes a live output buffer before verifying — no in-tree caller does this.</note>
 
@@ -572,18 +575,20 @@
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>Appendix A.1 (Nlen 7..13, Tlen in {4,6,...,16}, Q &lt; 2^(8q))</section>
-    <location>src/tls/core/aes.c: ccm_validate_params (L67-83) - parameter limits</location>
+    <location>src/tls/core/primitives/aes.c: ccm_validate_params (L67-83) - parameter limits</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Nonce 7-13, even tag 4-16, q range and message length bound enforced. Covered by CAVP CCM VNT/VTT/VPT/VADT/DVPT (128/192/256).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>Appendix A.2.1 / A.2.2 (B0 formatting, AAD encoding)</section>
-    <location>src/tls/core/aes.c: tls_aes_ccm_init (L430-433), ccm_update_aad (L98-162) - B0/AAD formatting</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_ccm_init (L430-433), ccm_update_aad (L98-162) - B0/AAD formatting</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Flags and Q encoding correct; AAD length 2/6/10-byte encodings; AAD must be supplied in one call matching aad_len_total (fails closed otherwise). Covered by CAVP CCM and RFC 3610 packet vectors #1/#2 (tests/unit/tls_aes).</note>
 
@@ -594,18 +599,20 @@
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>Appendix A.3 / 6.1 step 10 (counter blocks, T xor S0)</section>
-    <location>src/tls/core/aes.c: ccm_prepare_counter (L164-172), tls_aes_ccm_init (L435-437), tls_aes_digest CCM (L501-514) - CTR/S0</location>
+    <location>src/tls/core/primitives/aes.c: ccm_prepare_counter (L164-172), tls_aes_ccm_init (L435-437), tls_aes_digest CCM (L501-514) - CTR/S0</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. S0 = E(Ctr0), data from Ctr1, tag = MAC xor S0 truncated; digest fails closed if AAD or message totals are incomplete (L503-506).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (96-bit IV: J0 = IV || 0^31 || 1)</section>
-    <location>src/tls/core/aes.c: aes_gcm_prepare_iv (L297-329), tls_aes_init (L376-386) - 96-bit IV path</location>
+    <location>src/tls/core/primitives/aes.c: aes_gcm_prepare_iv (L297-329), tls_aes_init (L376-386) - 96-bit IV path</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Covered by CAVP gcmEncryptExtIV/gcmDecrypt (IVlen=96) and tests/unit/tls_aes McGrew-Viega TC4.</note>
 
@@ -616,7 +623,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (input length limits; GHASH length block)</section>
-    <location>src/tls/core/bytes.s: _bytelen_to_bitlen (L59-83), used by src/tls/core/aes.c: tls_aes_digest (L491-492) - [len(A)]64 || [len(C)]64</location>
+    <location>src/tls/core/primitives/bytes.s: _bytelen_to_bitlen (L59-83), used by src/tls/core/primitives/aes.c: tls_aes_digest (L491-492) - [len(A)]64 || [len(C)]64</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (medium): after the x8 shift, bit-length bits 16-23 are never stored, so any AAD or ciphertext of 8192 bytes or more gets a wrong length block (8192 bytes encodes as 0). GCM tags are wrong for TLS records of 8 KiB or more (inbound 16 KiB records fail closed; outbound records of 8 KiB or more get bad tags) and the encoding is not injective. CAVP GCM vectors are at most 408 bits, so untested. Fix: store all of A/HLU/H/L into bytes 4-7.</note>
 
@@ -627,7 +634,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (IV length at least 1 bit)</section>
-    <location>src/tls/core/aes.c: tls_aes_init (L348-352) - zero-length IV</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_init (L348-352) - zero-length IV</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (low): iv_len==0 is accepted for GCM. key.c L1106 guards its own caller, but the PKCS#8 import path (key.c L500) and the primitive do not fail closed.</note>
 
@@ -638,7 +645,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (length accumulators)</section>
-    <location>src/tls/core/aes.c: tls_aes_update_aad (L451-452), tls_aes_update_ciphertext (L541-542) - size_t accumulators</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_update_aad (L451-452), tls_aes_update_ciphertext (L541-542) - size_t accumulators</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (low): 24-bit aad_len/ct_len accumulate across streaming calls with no overflow check and wrap at 16 MiB. The 2^39-256 bound is unreachable, but the accumulators should fail closed.</note>
 
@@ -649,7 +656,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 / 7.1 step 2 (non-96-bit IV via GHASH)</section>
-    <location>src/tls/core/aes.c: aes_gcm_prepare_iv (L309-328), tls_aes_init (L348-352) - non-96 IV path</location>
+    <location>src/tls/core/primitives/aes.c: aes_gcm_prepare_iv (L309-328), tls_aes_init (L348-352) - non-96 IV path</location>
     <grade>COMPLIANT</grade>
     <note>Code inspection confirms a correct J0 = GHASH(IV || pad || [len(IV)]64) for 1-16 byte IVs (aes.c L309-328). cavp_fetch.py previously filtered out every IVlen != 96 vector; that filter was removed so CAVP now exercises non-96 IV paths. Reachable from PKCS#8 import (key.c L500).</note>
 
@@ -660,7 +667,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.2 (tag length)</section>
-    <location>src/tls/core/aes.c: tls_aes_digest (L470-500), tls_aes_verify (L817-819) - GCM tag length</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_digest (L470-500), tls_aes_verify (L817-819) - GCM tag length</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Only 128-bit tags produced and verified (allowed subset). CAVP vectors filtered to Taglen=128.</note>
 
@@ -671,7 +678,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>6.5 (GCTR inc32, keystream continuity)</section>
-    <location>src/tls/core/aes.c: gcm_ctr_xor (L570-618), increment_iv (L48-59) - CTR keystream</location>
+    <location>src/tls/core/primitives/aes.c: gcm_ctr_xor (L570-618), increment_iv (L48-59) - CTR keystream</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. inc32 on bytes 12-15; partial-block keystream carried across chunks. Chunked CTR previously validated 3000/0 against PyCryptodome (not re-run in this audit). 2^32-block wrap unguarded but each record re-initializes the context.</note>
 
@@ -682,7 +689,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.1 / 7.2 (A then C ordering; state machine)</section>
-    <location>src/tls/core/aes.c: tls_aes_update_aad (L443-462), tls_aes_update_ciphertext (L518-544), tls_aes_gcm_ctr (L706-712) - lock/op_assoc</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_update_aad (L443-462), tls_aes_update_ciphertext (L518-544), tls_aes_gcm_ctr (L706-712) - lock/op_assoc</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (low): AAD after ciphertext is rejected, but update_ciphertext does not reject use after digest or on an encrypt-associated context, tls_aes_gcm_ctr checks neither lock nor op_assoc, and update_aad does not NULL-check. Misuse silently corrupts state instead of failing closed.</note>
 
@@ -696,7 +703,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.2 (GCM-AD must not output P on FAIL; streaming API)</section>
-    <location>src/tls/core/aes.c: tls_aes_decrypt GCM branch (L764)</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_decrypt GCM branch (L764)</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. tls_aes_decrypt GCM branch guards the CTR-XOR behind `if (outbuf)` (L764); tls_aes_verify passes NULL for the tag-check pass and never emits plaintext. The API-level hazard exists only for a caller that passes a live output buffer — no in-tree caller does this.</note>
 
@@ -710,7 +717,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.2 step 6 (T = T' constant-time comparison)</section>
-    <location>src/tls/core/bytes.s: _tls_bytes_compare (L7-28) - constant-time equality</location>
+    <location>src/tls/core/primitives/bytes.s: _tls_bytes_compare (L7-28) - constant-time equality</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. OR-accumulates a xor b over every byte with no early exit and a branch-free 0/1 result. Hazard: len==0 wraps BC and compares 2^24 bytes; no current caller passes 0.</note>
 
@@ -721,7 +728,7 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.2 steps 5-7 (release P only if T = T')</section>
-    <location>src/tls/core/aes.c: tls_aes_verify (L786-825) - verify-on-copy path</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_verify (L786-825) - verify-on-copy path</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Tag recomputed on a context copy and compared with tls_bytes_compare; aes.h L198-199 requires decrypt only after verify. Callers comply (key.c L503-509, L1117-1120; altcp_tls_ce.c L415-444 two-pass). CAVP gcmDecrypt FAIL vectors included.</note>
 
@@ -771,7 +778,7 @@
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.1.2 / 5.7.1.2 (constant-time P-256 scalar multiplication)</section>
-    <location>src/tls/core/p256.s: p256_scalar_mul (L2281-2513), p256_scalar_mul_ml (L2210-2278), p256_point_cswap/select (L677-713), p256_reduce_top/addback (L566-610) - constant-time ladder</location>
+    <location>src/tls/core/primitives/p256.s: p256_scalar_mul (L2281-2513), p256_scalar_mul_ml (L2210-2278), p256_point_cswap/select (L677-713), p256_reduce_top/addback (L566-610) - constant-time ladder</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Co-Z Montgomery ladder; scalar bit used only as cswap/select mask; exceptional k handled by constant-time select; branches only on loop counters and public values (inspection). Evidence: RFC 5903 KAT (tests/unit/tls_p256) and tests/profiling/tls_timing; the co-Z correctness model is not committed (header L27-29).</note>
 
@@ -782,7 +789,7 @@
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.1.2.2 (key-pair generation by testing candidates)</section>
-    <location>src/tls/core/handshake.c: tls_handshake_init (L1799-1820); src/tls/core/p256.s: _tls_p256_publickey (L3295-3301) - private scalar in [1, n-1]</location>
+    <location>src/tls/core/handshake.c: tls_handshake_init (L1799-1820); src/tls/core/primitives/p256.s: _tls_p256_publickey (L3295-3301) - private scalar in [1, n-1]</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. 32 DRBG bytes accepted only if 1 &lt;= d &lt;= n-1 (uniform). An out-of-range candidate (about 2^-32) aborts handshake init instead of retrying (availability only).</note>
 
@@ -793,7 +800,7 @@
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.2.3.3 (full public-key validation, nQ = O)</section>
-    <location>src/tls/core/p256.s: p256_point_import (L3144-3188) - order check</location>
+    <location>src/tls/core/primitives/p256.s: p256_point_import (L3144-3188) - order check</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. No explicit nQ=O check; P-256 cofactor h=1 makes partial validation equivalent to full validation (equivalence argument, not an explicit check).</note>
 
@@ -804,7 +811,7 @@
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.2.3.4 (partial public-key validation)</section>
-    <location>src/tls/core/p256.s: p256_point_import (L3144-3188) - peer and verify-key point validation</location>
+    <location>src/tls/core/primitives/p256.s: p256_point_import (L3144-3188) - peer and verify-key point validation</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Requires 0x04 prefix, x &lt; p, y &lt; p, and y^2 == x^3 - 3x + b; used by _tls_p256_secret and _tls_p256_verify. Covered by tests/unit/tls_p256 test_reject_offcurve (no x &gt;= p / y &gt;= p test).</note>
 
@@ -815,7 +822,7 @@
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.7.1.2 (ECC CDH: P = O is an error; Z = x_P)</section>
-    <location>src/tls/core/p256.s: _tls_p256_secret (L3321-3359), p256_affine_export (L3100-3142); src/tls/core/handshake.c: tls_recv_server_hello (L2788-2818) - shared point and secret</location>
+    <location>src/tls/core/primitives/p256.s: _tls_p256_secret (L3321-3359), p256_affine_export (L3100-3142); src/tls/core/handshake.c: tls_recv_server_hello (L2788-2818) - shared point and secret</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. affine_export fails on Z==0; handshake zeroes secret and private key and sends fatal illegal_parameter. Only the 32-byte big-endian x-coordinate is output. RFC 5903 8.1 vectors in tests/unit/tls_p256.</note>
 
@@ -928,7 +935,7 @@
   <requirement>
     <ref>NIST SP 800-90A Rev. 1</ref>
     <section>9.4 / 8.3 (uninstantiate, internal state protection)</section>
-    <location>src/tls/core/random.c: tls_drbg_reset (L175-181), tls_hash_df (L309), tls_sha256_buf (L277); src/tls/core/sha256.s: _tls_sha256_digest - residual state copies</location>
+    <location>src/tls/core/random.c: tls_drbg_reset (L175-181), tls_hash_df (L309), tls_sha256_buf (L277); src/tls/core/primitives/sha256.s: _tls_sha256_digest - residual state copies</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (low): V and C are zeroized correctly, but the SHA contexts inside Hash_df/Hashgen are unwiped stack locals and the static message schedule keeps the last block. The residue 0x03||V_prev lets the last output (e.g. the P-256 private key, last draw at handshake.c L1799) be recomputed until overwritten. Fix: zeroize hctx and the digest frame/m_buffer.</note>
 
@@ -1064,7 +1071,7 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>3.1.5 / 3.1.5.1.2 (entropy estimate and conditioning credit)</section>
-    <location>src/tls/core/random.c: TLS_ENTROPY_HMIN_Q16 (L33-43); src/tls/core/random.s: _tls_entropy_gather192 (L642-695) - h_in per 952-sample block</location>
+    <location>src/tls/core/random.c: TLS_ENTROPY_HMIN_Q16 (L33-43); src/tls/core/primitives/random.s: _tls_entropy_gather192 (L642-695) - h_in per 952-sample block</location>
     <grade>NEEDS-EVIDENCE</grade>
     <note>H_min = 0.269 bits/sample is self-described as a "Provisional engineering floor ... Replace after formal non-IID assessment"; no 6.3 estimator output exists. tests/host/tls_random/test_health.py only re-checks the arithmetic.</note>
 
@@ -1078,7 +1085,7 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>3.1.5.1.1 (vetted conditioning component)</section>
-    <location>src/tls/core/random.s: _tls_entropy_gather192 (L668-693), _tls_entropy_collect (L1482-1544) - SHA-256 over 119-byte pool truncated to 192 bits</location>
+    <location>src/tls/core/primitives/random.s: _tls_entropy_gather192 (L668-693), _tls_entropy_collect (L1482-1544) - SHA-256 over 119-byte pool truncated to 192 bits</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. SHA-256 is vetted; n_in 952, n_out 192; overlay zeroized after each copy and destination zeroized on failure. Conditional on the 3.1.5 estimate.</note>
 
@@ -1089,7 +1096,7 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>3.2.2 (noise source documentation)</section>
-    <location>src/tls/core/random.s: _tls_random_init_entropy (L29-240) - floating-bus/SRAM bit at 0xD65800..+512</location>
+    <location>src/tls/core/primitives/random.s: _tls_random_init_entropy (L29-240) - floating-bus/SRAM bit at 0xD65800..+512</location>
     <grade>NEEDS-EVIDENCE</grade>
     <note>Only a header comment ("sense-amplifier noise"); no physical model, independence analysis or restart data. Unmapped reads may echo bus traffic (LCD DMA, USB) that an attacker could predict or influence.</note>
 
@@ -1103,7 +1110,7 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>4.3 (failure handling / persistent failure)</section>
-    <location>src/tls/core/random.s: .Lrandom_health_fail (L697-714), .Lhealth_recover (L1419-1475); src/tls/core/random.c: tls_drbg_entropy_gather_step (L602-623) - failure notification and recovery</location>
+    <location>src/tls/core/primitives/random.s: .Lrandom_health_fail (L697-714), .Lhealth_recover (L1419-1475); src/tls/core/random.c: tls_drbg_entropy_gather_step (L602-623) - failure notification and recovery</location>
     <grade>NEEDS-EVIDENCE</grade>
     <note>Pool wiped and epoch bumped on failure; recovery switches to a backup tap after retest, but the permitted rescan can re-select the tap that just failed and nothing distinguishes intermittent from persistent failure.</note>
 
@@ -1114,7 +1121,7 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>4.3 (start-up tests: 1024 consecutive samples)</section>
-    <location>src/tls/core/random.s: .Linit_validate_candidate (L246-361) - start-up samples</location>
+    <location>src/tls/core/primitives/random.s: .Linit_validate_candidate (L246-361) - start-up samples</location>
     <grade>DEVIANT</grade>
     <justification>Window size per collection is 952 bits. We scale the threshholds to this window size.</justification>
     <note>Two 952-sample windows with continuous RCT/APT state, discarded and never credited, but a ~520-byte wipe runs between them so the samples are not the at least 1024 consecutive samples 4.3 requires.</note>
@@ -1129,7 +1136,7 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>4.4.1 (Repetition Count Test)</section>
-    <location>src/tls/core/random.s: .Lhc_sample (L1130-1166), .Lsample_health_check (L826+), cutoff (L96) - RCT</location>
+    <location>src/tls/core/primitives/random.s: .Lhc_sample (L1130-1166), .Lsample_health_check (L826+), cutoff (L96) - RCT</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. C = 1 + ceil(20/0.269) = 76 for alpha 2^-20; runs on every sample before conditioning with persistent state. Boundaries checked in tests/host/tls_random/test_health.py L129-131.</note>
 
@@ -1140,7 +1147,7 @@
   <requirement>
     <ref>NIST SP 800-90B</ref>
     <section>4.4.2 (Adaptive Proportion Test)</section>
-    <location>src/tls/core/random.s: .Lhealth_apt (L1168-1213), parameters (L93-98) - APT window/cutoff</location>
+    <location>src/tls/core/primitives/random.s: .Lhealth_apt (L1168-1213), parameters (L93-98) - APT window/cutoff</location>
     <grade>DEVIANT</grade>
     <justification>Window size per collection is 952 bits. We scale the threshholds to this window size.</justification>
     <note>4.4.2 requires W = 1024 for binary sources; code uses W = 952 (cutoff 844 is correct for W=952; would be 906 for W=1024). Small security impact.</note>
@@ -1192,43 +1199,53 @@
     <section>3 / Table 2 (RSA modulus at least 2048 bits for signature verification)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L857-869); src/tls/core/rsa.c: tls_rsa_decrypt_signature (L302-303) - modulus size lower bound</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Minimum enforced on byte length (mod_len &gt;= 256 after stripping one leading 0x00), not bit length, so a 2041-2047-bit modulus encoded in 256 bytes passes. Low risk; fix by requiring a nonzero top byte or counting bits.</note>
+    <note>Initially deviant. Minimum enforced on byte length (mod_len &gt;= 256 after stripping one leading 0x00), not bit length, so a 2041-2047-bit modulus encoded in 256 bytes passes. Low risk; fix by requiring a nonzero top byte or counting bits.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Before v3.0.0-rc3 local RSA was compliant; As of v3.0.0-rc3 the offloaded RSA path applies the same sanity check before dispatching.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-132</ref>
-    <section>5.1 (salt: random portion at least 128 bits)</section>
-    <location>src/tls/core/passwords.c: tls_pbkdf2 (L23) - salt length</location>
+    <section>5.1 (salt: randomly generated portion at least 128 bits)</section>
+    <location>src/tls/core/key.c: tls_key_import_pkcs8 (L423-434) - imported salt minimum; docs/using-cryptography.rst: save_encrypted (L1299-1315) - salt generation</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. Only saltlen==0 is rejected. Only caller is PKCS#8 import (key.c L484) with file-supplied salt; defensible for decrypt-only interop, but a generation path would need the minimum. Salt length is now enforced &gt;= 16 bytes (key.c, after PBKDF2-params parse).</note>
+    <note>Compliant as of v3.0.0-rc2. Section 5.1 constrains salt generation, not the generic PBKDF2 primitive. tls_pbkdf2 intentionally accepts any nonempty salt for RFC 8018 compatibility. The PKCS#8 decrypt-only import path conservatively rejects salts shorter than 16 bytes before derivation, while the documented storage-encryption path generates a 16-byte salt with tls_random_bytes. Applications calling the public tls_pbkdf2 API directly remain responsible for ensuring that a newly generated salt contains at least 128 random bits.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-132</ref>
     <section>5.2 (iteration count; minimum 1000 recommended)</section>
-    <location>src/tls/core/passwords.c: tls_pbkdf2 (L25, L59) - iteration count; src/tls/core/key.c: tls_key_import_pkcs8 - rounds cap</location>
+    <location>src/tls/core/passwords.c: tls_pbkdf2 (L14-29) - iteration bounds; src/tls/core/key.c: tls_key_import_pkcs8 (L484-495) - imported iteration-count cap</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. FIXED: tls_key_import_pkcs8 now rejects rounds==0 or rounds&gt;600000 with TLS_KEY_IMPORT_DECRYPT_FAIL before calling tls_pbkdf2. Cap of 600,000 is above the OWASP-recommended minimum (210,000 for PBKDF2-SHA256) and below the CPU-DoS threshold on a 48 MHz eZ80.</note>
+    <note>Compliant as of v3.0.0-rc2. Section 5.2 recommends, rather than mandates, a minimum of 1,000 iterations and directs applications to select the largest count consistent with acceptable performance. tls_pbkdf2 accepts 1-1,000,000 rounds; the PKCS#8 decrypt-only import path accepts 1-600,000, with the upper bound preventing CPU denial of service from an attacker-controlled file. No minimum is enforced because imported files and public API callers supply the work factor. The 48 MHz eZ80 target materially limits feasible counts, so applications must benchmark and select the highest usable value; lower counts reduce offline-guessing resistance and are a constrained-platform tradeoff.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>The reviewer accepts COMPLIANT because SP 800-132 makes the iteration count performance-dependent and states 1,000 as a recommendation, not a mandatory minimum. Contemporary OWASP guidance recommends 600,000 iterations for PBKDF2-HMAC-SHA256, but that target is not necessarily feasible on a 48 MHz eZ80. Unless PBKDF2 is materially optimized or accelerated, lower counts may be required for usable latency; such counts should be selected from target-device benchmarks and documented as reduced brute-force resistance.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-186</ref>
     <section>3.2.1.3 (P-256 domain parameters)</section>
-    <location>src/tls/core/p256.s: .rodata.__p256_const (L246-328) - curve constants</location>
+    <location>src/tls/core/primitives/p256.s: .rodata.__p256_const (L246-326), p256_point_double (L2068-2103), p256_point_import (L3143-3184) - P-256 constants and a=-3 curve equation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. p, n, n-1, n-2, 2n and Montgomery-form b, Gx, Gy, R, R^2 mod p and R^2 mod n were recomputed in Python and match byte for byte.</note>
+    <note>Reconfirmed in the current tree. The stored little-endian p and n match the P-256 domain parameters. With R=2^256, bR mod p, GxR mod p, GyR mod p, R mod p, R^2 mod p, and R^2 mod n recompute exactly; n-1, n-2, and 2n mod 2^256 also match. The parameter a=-3 is embodied directly in the point-arithmetic and point-validation formulas; h=1 requires no stored runtime constant.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1267,7 +1284,7 @@
   <requirement>
     <ref>Project policy</ref>
     <section>Overlay 0xE30800 relocated-code hygiene</section>
-    <location>build-tools/meta/linker_script_lwip.ld: OVERLAY 0xE30800 (L171-233); src/tls/contrib/x25519/src/x25519.s: _x25519_reloc_run_start..end (L360-777); src/tls/core/share/bigint.s: scrub (L258-275) - cursorImage relocated-code residue</location>
+    <location>build-tools/meta/linker_script_lwip.ld: OVERLAY 0xE30800 (L171-233); src/tls/contrib/x25519/src/x25519.s: _x25519_reloc_run_start..end (L360-777); src/tls/core/primitives/rsa.s: scrub (L258-275) - cursorImage relocated-code residue</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. All operations that use the 0xE30800 overlay (X25519, P-256 ECDH/sign, RSA powmod) are wrapped by tls_crypto_guard_enable()/disable() at every call site in handshake.c, and additionally inside p256.s and hash.c. The guard scrubs the overlay window and SHA-256 stack frames below SP on return, ensuring no key material persists in the shared safe-RAM region between operations.</note>
 
@@ -1732,7 +1749,7 @@
   <requirement>
     <ref>RFC 5480</ref>
     <section>2.2 (ECPoint uncompressed; public key validity)</section>
-    <location>src/tls/core/x509.c: tls_x509_signature_verify_digest (L1820-1848); src/tls/core/p256.s: p256_point_import (L3144-3188) - point validation</location>
+    <location>src/tls/core/x509.c: tls_x509_signature_verify_digest (L1820-1848); src/tls/core/primitives/p256.s: p256_point_import (L3144-3188) - point validation</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Key length must be 65; p256_point_import enforces 0x04, coordinates below p and on-curve.</note>
 
@@ -1910,7 +1927,7 @@
   <requirement>
     <ref>RFC 8017</ref>
     <section>5.1.1 / 5.2.2 (RSAEP/RSAVP1 implementation timing)</section>
-    <location>src/tls/core/share/bigint.s: _powmod_exp_u24 trampoline/orchestration (L64-275) - public-exponent powmod</location>
+    <location>src/tls/core/primitives/rsa.s: _powmod_exp_u24 trampoline/orchestration (L64-275) - public-exponent powmod</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Branches leak only size, modulus or exponent (public); base handled data-independently (".Lreduce ... constant time" L439), which also covers OAEP encryption of a secret EM. Precondition base &lt; 2*mod met by the s &lt; n check.</note>
 
@@ -2295,7 +2312,7 @@
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.8.2 (secp256r1 UncompressedPointRepresentation)</section>
-    <location>src/tls/core/handshake.c: tls_recv_server_hello (L2787-2817), ClientHello key_share build (L1885-1935); src/tls/core/p256.s: p256_point_import - P-256 encoding and validation</location>
+    <location>src/tls/core/handshake.c: tls_recv_server_hello (L2787-2817), ClientHello key_share build (L1885-1935); src/tls/core/primitives/p256.s: p256_point_import - P-256 encoding and validation</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Client sends 65-byte 04||X||Y; server share must be 65 bytes with 0x04 and pass coordinate-range and on-curve checks (failure sends illegal_parameter). tests/unit/tls_p256 covers off-curve only, not x &gt;= p / y &gt;= p.</note>
 
@@ -3158,7 +3175,7 @@
   <requirement>
     <ref>SEC 1 v2.0</ref>
     <section>2.3.4 (octet-string-to-point for key_share)</section>
-    <location>src/tls/core/handshake.c: tls_recv_server_hello (L2788-2796); src/tls/core/p256.s:
+    <location>src/tls/core/handshake.c: tls_recv_server_hello (L2788-2796); src/tls/core/primitives/p256.s:
       p256_point_import (L3148-3150) - point decoding</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. ke_len must be 65 with prefix 0x04; compressed and 1-byte infinity encodings rejected.

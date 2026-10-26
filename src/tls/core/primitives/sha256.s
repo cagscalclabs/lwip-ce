@@ -1,5 +1,5 @@
 ;--------------------------------------------
-; SHA-256 EZ80 implementation
+; SHA-256 eZ80 implementation
 ; Author: beckadamtheinventor
 ;--------------------------------------------
 
@@ -364,7 +364,11 @@ _sha256_transform:
 ._a := -32
 ._state_vars := -32
 ._i := -35
-._frame_offset := -35
+._kptr := -38
+._frame_offset := -38
+	; Calling the relocated loop pushes a three-byte return address below the
+	; fixed transform frame; its push/pop spill slots begin below that address.
+._round_frame_offset := -41
 	; The round code uses the 12 bytes immediately below the fixed frame as
 	; temporary push/pop spill slots. Pops restore SP but do not erase them.
 ._spill_size := 12
@@ -379,6 +383,8 @@ _sha256_transform:
 
 	ld c, 64-16
 	push bc                         ; set the _i variable and finish stack frame setup
+	ld hl,_sha256_k
+	push hl                         ; avoid a relocatable address inside fastMem code
 
 	ld hl,_sha256_m_buffer
 	ld b,16
@@ -493,6 +499,16 @@ _sha256_transform:
 	dec (ix + ._i)
 	jp nz, .Ltransform_loop2
 
+	; The compression rounds dominate SHA-256 runtime. Copy only that compact
+	; loop to fastMem; the message schedule and state folding remain in flash.
+	ld hl,_sha256_reloc_load_start
+	ld de,_sha256_reloc_run_start
+	ld bc,_sha256_reloc_len
+	ldir
+	call _sha256_reloc_run_start
+
+	.section .sha256.reloc,"ax",@progbits
+_sha256_reloc_run_start:
 .Ltransform_loop3:
 ; tmp1 = h + EP1(e) + CH(e,f,g) + k[i] + m[i];
 
@@ -519,7 +535,7 @@ _sha256_transform:
 	xor a,c
 	and a,e
 	xor a,c
-	ld (ix + ._frame_offset - 3 + 2), a
+	ld (ix + ._round_frame_offset - 3 + 2), a
 	ld a, (ix + ._f + 3)
 	xor a,b
 	and a,d
@@ -541,17 +557,17 @@ _sha256_transform:
 	ld c,a     ; (x >> 25)[3]
 	; EP1[0] == (x >> 6)[0] ^ (x >> 11)[0] ^ (x >> 25)[0] == (x << 2)[1] ^ (x << 5)[2] ^ (x >> 25)[0]
 	ld a,l     ; (x >> 25)[0]
-	xor a, (ix + ._frame_offset - 9 + 2) ; (x << 5)[2]
+	xor a, (ix + ._round_frame_offset - 9 + 2) ; (x << 5)[2]
 	xor a,e    ; (x << 2)[1]
 	ld l,a     ; EP1[0]
 	; EP1[1] == (x >> 6)[1] ^ (x >> 11)[1] ^ (x >> 25)[1] == (x << 2)[2] ^ (x << 5)[3] ^ (x >> 25)[1]
 	ld a,h     ; (x >> 25)[1]
-	xor a, (ix + ._frame_offset - 6 + 2) ; (x << 2)[2]
+	xor a, (ix + ._round_frame_offset - 6 + 2) ; (x << 2)[2]
 	xor a,d    ; (x << 5)[3]
 	ld h,a     ; EP1[1]
 	; EP1[2] == (x >> 6)[2] ^ (x >> 11)[2] ^ (x >> 25)[2] == (x << 2)[3] ^ (x << 5)[0] ^ (x >> 25)[2]
 	ex (sp),hl ; pop (x << 5)[0:1], push EP1[0:1] and (x >> 25)[2]
-	lea de, ix + ._frame_offset - 9 + 2
+	lea de, ix + ._round_frame_offset - 9 + 2
 	ld a, (de) ; (x >> 25)[2]
 	xor a,b    ; (x << 2)[3]
 	xor a,l    ; (x << 5)[0]
@@ -582,7 +598,7 @@ _sha256_transform:
 	adc a,(iy + 3)
 
 ; + k[i]
-	ld iy,_sha256_k
+	ld iy,(ix + ._kptr)
 	add iy,bc
 	ld de,(iy + 0)
 	add hl,de
@@ -632,7 +648,7 @@ _sha256_transform:
 	xor a,e
 	and a, (ix + ._c + 2)
 	or a,c
-	ld (ix + ._frame_offset - 6 + 2),a
+	ld (ix + ._round_frame_offset - 6 + 2),a
 	ld a,h
 	and a,d
 	ld c,a
@@ -670,12 +686,12 @@ _sha256_transform:
 	ld c,a     ; (x >> 2)[3]
 	; EP0[0] == (x >> 2)[0] ^ (x >> 13)[0] ^ (x >> 22)[0] == (x >> 2)[0] ^ (x >> 5)[1] ^ (x >> 6)[2]
 	ld a,l     ; (x >> 2)[0]
-	xor a, (ix + ._frame_offset - 9 + 2) ; (x >> 6)[2]
+	xor a, (ix + ._round_frame_offset - 9 + 2) ; (x >> 6)[2]
 	xor a,b    ; (x >> 5)[1]
 	ld l,a     ; EP0[0]
 	; EP0[1] == (x >> 2)[1] ^ (x >> 13)[1] ^ (x >> 22)[1] == (x >> 2)[1] ^ (x >> 5)[2] ^ (x >> 6)[3]
 	ld a,h     ; (x >> 2)[1]
-	xor a, (ix + ._frame_offset - 12 + 2) ; (x >> 5)[2]
+	xor a, (ix + ._round_frame_offset - 12 + 2) ; (x >> 5)[2]
 	xor a,e    ; (x >> 6)[3]
 	ld h,a     ; EP0[1]
 	; EP0[2] == (x >> 2)[2] ^ (x >> 13)[2] ^ (x >> 22)[2] == (x >> 2)[2] ^ (x >> 5)[3] ^ (x >> 6)[0]
@@ -683,8 +699,8 @@ _sha256_transform:
 	pop de     ; pop (x >> 5)[0:1]
 	ex (sp),hl ; pop (x >> 6)[0:1], push EP0[0:1] and (x >> 2)[2]
 	xor a,l    ; (x >> 6)[0]
-	xor a, (ix + ._frame_offset - 9 + 2) ; (x >> 2)[2]
-	ld (ix + ._frame_offset - 9 + 2), a ; EP0[2]
+	xor a, (ix + ._round_frame_offset - 9 + 2) ; (x >> 2)[2]
+	ld (ix + ._round_frame_offset - 9 + 2), a ; EP0[2]
 	; EP0[3] == (x >> 2)[3] ^ (x >> 13)[3] ^ (x >> 22)[3] == (x >> 2)[3] ^ (x >> 5)[0] ^ (x >> 6)[1]
 	ld a,c     ; (x >> 2)[3]
 	xor a,h    ; (x >> 6)[1]
@@ -710,6 +726,9 @@ _sha256_transform:
 	add a,4
 	ld (hl), a
 	jp nc,.Ltransform_loop3
+	ret
+
+	.section .text,"ax",@progbits
 
 	ld iy, (ix + 6)
 	lea hl, iy + sha256_offset_state
@@ -736,8 +755,8 @@ _sha256_transform:
 	; the shared message schedule. The latter can contain K xor ipad blocks
 	; after HMAC operations.
 	ld hl,$FF0000
-	lea de, ix + ._frame_offset - ._spill_size
-	ld bc,-._frame_offset + ._spill_size
+	lea de, ix + ._round_frame_offset - ._spill_size
+	ld bc,-._round_frame_offset + ._spill_size
 	ldir
 	ld hl,$FF0000
 	ld de,_sha256_m_buffer

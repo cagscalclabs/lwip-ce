@@ -2,7 +2,7 @@
 # build-tools/scripts/helpers/find_static_functions.sh — list non-static functions in a .c that are
 # never referenced from any other TU.
 #
-# Usage: build-tools/scripts/helpers/find_static_functions.sh src/tls/core/aes.c
+# Usage: build-tools/scripts/helpers/find_static_functions.sh src/tls/core/primitives/aes.c
 #
 # Each candidate is a function defined in the file with no `static`
 # qualifier that no other .c/.h grep can find. Mark them `static` in
