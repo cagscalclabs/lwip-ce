@@ -4,6 +4,7 @@
 import json
 import socket
 import threading
+import tempfile
 from pathlib import Path
 
 from acvp_client import (HEADER, MAGIC_REQUEST, MAGIC_RESPONSE, OP_P256_CDH,
@@ -12,7 +13,7 @@ from acvp_client import (HEADER, MAGIC_REQUEST, MAGIC_RESPONSE, OP_P256_CDH,
                          OP_SHA2_256, OP_X25519_SSC, SocketBackend,
                          process_document, reference_backend)
 from generate_vectors import GENERATED_ALGORITHMS, build_corpus
-from summary import render
+from summary import render, write_evidence_bundle
 from validate import validate_document
 
 HERE = Path(__file__).resolve().parent
@@ -90,8 +91,19 @@ corpus_markdown, corpus_summary, passed = render(
     corpus, corpus_expected, corpus_response, corpus_oracle, "success")
 assert passed and corpus_summary["passedTests"] == 416
 assert "416/416 test cases matched" in corpus_markdown and "| SHA2-256 |" in corpus_markdown
-assert "<summary>Actual vector inputs (416 cases; local ACVP IDs)</summary>" in corpus_markdown
-assert '"tcId": 416' in corpus_markdown and len(corpus_markdown.encode()) < 900_000
+assert "Actual vector inputs" not in corpus_markdown
+with tempfile.TemporaryDirectory() as artifact_tmp:
+    artifact_dir = Path(artifact_tmp)
+    write_evidence_bundle(artifact_dir, corpus, corpus_expected,
+                          corpus_response, corpus_summary, corpus_oracle)
+    assert {path.name for path in artifact_dir.iterdir()} == {"acvp-validation.vectors"}
+    bundle = json.loads((artifact_dir / "acvp-validation.vectors").read_text())
+    assert bundle["format"] == "lwip-ce-acvp-vectors-v1"
+    assert bundle["knownAnswerVectors"] == corpus
+    assert bundle["expectedResults"]["exactResults"] == corpus_expected
+    assert bundle["calculatorResults"] == corpus_response
+    assert bundle["validationResults"]["passedTests"] == 416
+    assert len(bundle["expectedResults"]["semanticExpectations"]["XECDH"]["serverPrivateByTcId"]) == 32
 
 # Revision 1.0 carries HMAC lengths on the group instead of each test case.
 revision_one = {

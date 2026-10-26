@@ -19,6 +19,35 @@ def table_text(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
+def write_evidence_bundle(directory: Path, prompt: Any, expected: Any,
+                          response: Any | None, report: dict, oracle: dict) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    expected_bundle = {
+        "exactResults": expected,
+        "semanticExpectations": {
+            "DetECDSA": {
+                "rule": "Each P-256/SHA2-256 signature must verify under the returned group public key; repeated messages must produce identical RFC 6979 signatures."
+            },
+            "XECDH": {
+                "rule": "The returned Curve25519 public key and shared secret must match an independent exchange using the test server private key.",
+                "serverPrivateByTcId": oracle.get("x25519", {}),
+            },
+            "KAS-ECC": {
+                "rule": "The returned P-256 public key and shared secret must match an independent CDH exchange using the test server private scalar.",
+                "serverPrivateByTcId": oracle.get("p256", {}),
+            },
+        },
+    }
+    bundle = {
+        "format": "lwip-ce-acvp-vectors-v1",
+        "knownAnswerVectors": prompt,
+        "expectedResults": expected_bundle,
+        "calculatorResults": response,
+        "validationResults": report,
+    }
+    (directory / "acvp-validation.vectors").write_text(json.dumps(bundle, indent=2) + "\n")
+
+
 def render(
     prompt: Any,
     expected: Any,
@@ -56,22 +85,13 @@ def render(
     failures = [row for row in rows if not row["passed"]]
     if failures:
         lines.extend(["", "### Failures", ""])
-        lines.extend(f"- `{row['algorithm']} tcId {row['tcId']}`: {table_text(row['detail'])}"
+        lines.extend(f"- `{row['algorithm']} ({row['mode']})`: {table_text(row['detail'])}"
                      for row in failures[:50])
     lines.extend([
         "",
         "Deterministic responses are compared with independent host implementations; generated-key ECDSA, X25519, and P-256 results are verified semantically.",
         "",
-        "<details>",
-        f"<summary>Actual vector inputs ({len(rows)} cases; local ACVP IDs)</summary>",
-        "",
-        "> `vsId`, `tgId`, and `tcId` are locally assigned for this generated corpus. "
-        "A live ACVTS session supplies its own IDs, which are echoed unchanged.",
-        "",
-        "```json",
-        json.dumps(prompt, indent=2),
-        "```",
-        "</details>",
+        "The complete known-answer vectors, expected results, calculator responses, and per-vector validation results are attached as `acvp-validation.vectors` in the workflow artifact.",
         "",
     ])
     return "\n".join(lines), report, overall
@@ -85,6 +105,7 @@ def main() -> int:
     parser.add_argument("--response", type=Path, default=HERE / "response.json")
     parser.add_argument("--markdown", type=Path, default=HERE / "summary.md")
     parser.add_argument("--results", type=Path, default=HERE / "results.json")
+    parser.add_argument("--artifact-dir", type=Path, default=HERE / "artifacts")
     parser.add_argument("--github-summary", type=Path)
     parser.add_argument("--run-outcome", default="success")
     args = parser.parse_args()
@@ -95,6 +116,7 @@ def main() -> int:
         oracle = json.loads(args.oracle.read_text())
         response = json.loads(args.response.read_text()) if args.response.is_file() else None
         markdown, report, passed = render(prompt, expected, response, oracle, args.run_outcome)
+        write_evidence_bundle(args.artifact_dir, prompt, expected, response, report, oracle)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         markdown = f"## ACVP primitive validation\n\n❌ **FAIL** — unable to render results: `{table_text(exc)}`.\n"
         report = {"passed": False, "runOutcome": args.run_outcome, "error": str(exc)}

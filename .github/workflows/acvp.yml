@@ -70,10 +70,8 @@ jobs:
         with:
           name: acvp-validation
           path: |
-            tests/validation/acvp/response.json
-            tests/validation/acvp/results.json
+            tests/validation/acvp/artifacts/acvp-validation.vectors
             tests/validation/acvp/summary.md
-            tests/validation/acvp/corpus/*.json
             tests/validation/acvp/NETLOG.8xv
             tests/validation/acvp/autotest.json
           if-no-files-found: ignore
