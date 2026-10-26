@@ -6,9 +6,9 @@ name: Network Tests
 # tests.yml and cavp.yml, and run directly on pull requests that change the
 # suites or their harness.
 #
-#   nettest: tests/net -- DHCP, DNS, TCP/ALTCP/WS/UDP echo, bulk download,
-#            listening server, connection churn, refused/NXDOMAIN/untrusted
-#            TLS failures, and HTTPS against real internet hosts.
+#   nettest: tests/net, one matrix job per suite (see tests/net/README.md):
+#            sockets, raw lwIP APIs + IPv4/IPv6 protocol machinery, TLS,
+#            TLS record limits, TLS server role, and performance metrics.
 #   dast:    tests/profiling/lwip_dast -- the full DAST probe set driven
 #            unattended by build-tools/dast/lwip-dast.py, gated by
 #            dast_report.py exactly like the committed hardware report.
@@ -33,9 +33,13 @@ concurrency:
 
 jobs:
   nettest:
-    name: NETTEST
+    name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [sockets, raw, tls, records, server, perf]
     steps:
       - uses: actions/checkout@v4
 
@@ -46,11 +50,17 @@ jobs:
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
           github-token: ${{ github.token }}
 
-      - name: Build NETTEST
-        run: make -C tests/net
+      - name: Install scapy
+        run: sudo pip install --break-system-packages scapy
 
-      - name: Run NETTEST
-        run: python3 tests/net/run.py --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+      - name: Build ${{ matrix.suite }}
+        run: make -C tests/net ${{ matrix.suite }}
+
+      - name: Run ${{ matrix.suite }}
+        run: |
+          sudo --preserve-env=AUTOTESTER_ROM,GITHUB_STEP_SUMMARY python3 tests/net/run.py \
+            --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
+            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
 
       - name: Remove CEmu Rom
         if: always()
@@ -59,10 +69,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nettest
+          name: net-${{ matrix.suite }}
           path: |
-            tests/net/NETLOG.8xv
-            tests/net/autotest.json
+            tests/net/NETLOG-*.8xv
+            tests/net/metrics.json
+            tests/net/*.pcap
+            tests/net/autotest-*.json
           if-no-files-found: ignore
 
   dast:

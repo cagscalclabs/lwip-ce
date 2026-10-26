@@ -1,17 +1,11 @@
-# ----------------------------
-# Makefile Options
-# ----------------------------
-NAME = NETTEST
-ARCHIVED = YES
-BSSHEAP_LOW = 0xD072C6
-DESCRIPTION = "lwIP-CE networked integration test"
-COMPRESSED = YES
+SUITES = sockets raw tls records server perf
 
-CFLAGS = -Wall -Wextra -Oz
-CXXFLAGS = -Wall -Wextra -Oz
-EXTRA_LDFLAGS += --no-warn-execstack
-EXTRA_PRE_LDFLAGS += --no-warn-execstack
+.PHONY: all clean $(SUITES)
 
-# ----------------------------
+all: $(SUITES)
 
-include $(shell cedev-config --makefile)
+$(SUITES):
+	$(MAKE) -C $@
+
+clean:
+	$(foreach s,$(SUITES),$(MAKE) -C $(s) clean &&) true
