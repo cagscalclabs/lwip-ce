@@ -3,9 +3,28 @@ CEDEV_TOOLCHAIN ?= $(if $(CEDEV),$(CEDEV),$(shell cedev-config --prefix))
 APP_TOOLS_CACHE := obj/libify/app_tools
 APP_TOOLS_INPUTS := ce-libify.toml $(wildcard build-tools/patches/app_tools-*.patch)
 APP_TOOLS_INPUT_STAMP := $(APP_TOOLS_CACHE)/.lwip-ce-inputs
+X25519_DIR := src/tls/contrib/x25519
+X25519_PATCH := build-tools/patches/x25519-scratch-overlay.patch
 
-.PHONY: all build prepare-installer
+.PHONY: all build prepare-installer prepare-x25519
 all: dylib
+
+# The upstream X25519 submodule declares its working buffer as loadable
+# .x25519.data.  lwIP overlays that buffer with the other TLS scratch regions,
+# so convert it to an uninitialized, primitive-owned input section before the
+# build.  Keep this as a checked-in patch: edits made directly in a submodule
+# worktree are not carried by the parent repository and therefore disappear in
+# clean CI checkouts.
+prepare-x25519:
+	@if git -C "$(X25519_DIR)" apply --reverse --check "$(CURDIR)/$(X25519_PATCH)" >/dev/null 2>&1; then \
+		:; \
+	elif git -C "$(X25519_DIR)" apply --check "$(CURDIR)/$(X25519_PATCH)"; then \
+		echo "[x25519] applying TLS scratch-overlay section patch"; \
+		git -C "$(X25519_DIR)" apply "$(CURDIR)/$(X25519_PATCH)"; \
+	else \
+		echo "[x25519] scratch-overlay patch does not apply cleanly" >&2; \
+		exit 1; \
+	fi
 
 # ce-libify 1.1.2 reuses its app_tools checkout without checking whether the
 # selected ref or installer patches changed. Invalidate only that generated
@@ -29,7 +48,7 @@ prepare-installer:
 		fi; \
 	fi
 
-build: prepare-installer
+build: prepare-x25519 prepare-installer
 	$(CE_LIBIFY) build
 	@if [ -d "$(APP_TOOLS_CACHE)" ]; then \
 		touch "$(APP_TOOLS_INPUT_STAMP)"; \

@@ -1,0 +1,27 @@
+diff --git a/relocate.ld b/relocate.ld
+index 51e6fb4..a4f90fa 100644
+--- a/relocate.ld
++++ b/relocate.ld
+@@ -5,8 +5,8 @@ SECTIONS
+     .x25519_data :
+     {
+         . = ALIGN(0x100) + 0xC0;
+-        KEEP(*(.x25519.data))
+-        KEEP(*(.x25519.data.*))
++        KEEP(*(.crypto_scratch.x25519))
++        KEEP(*(.crypto_scratch.x25519.*))
+         _x25519_data_end = .;
+     } >prgm
+ 
+diff --git a/src/x25519.s b/src/x25519.s
+index 3f40883..32ca163 100644
+--- a/src/x25519.s
++++ b/src/x25519.s
+@@ -825,6 +825,6 @@ _BigInt16Mul.offset = . + 1
+ _x25519_reloc_run_end:
+ 
+-    .section .x25519.data, "aw", @progbits
++    .section .crypto_scratch.x25519, "aw", @nobits
+ 
+ ; Duplicate of the input point, but with msb reset
+ _point:
