@@ -237,7 +237,7 @@
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
-        <note>.bss wipe leak fixed as of v3.0.0-rc1.</note>
+        <note>.bss wipe leak fixed as of v3.0.0-rc1, others compliant prior.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -251,7 +251,7 @@
     <reviews>
      <reviewed-by>
         <person>Anthony Cagliano</person>
-        <note>fixed as of v3.0.0-rc1.</note>
+        <note>Fixed as of v3.0.0-rc3 via tls_aes_destroy_ctx().</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -260,10 +260,13 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/bytes.s: _tls_secure_memzero (L34-53) - erase helper</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. External assembly routine (seed byte plus overlapping ldir) that the compiler cannot elide; len 0/1 handled. The bytes.h L27 comment ("Uses volatile") is inaccurate but harmless.</note>
+    <note>External assembly routine (seed byte plus overlapping ldir) that the compiler cannot elide; len 0/1 handled. The bytes.h L27 comment ("Uses volatile") is inaccurate but harmless.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of/before v3.0.0-rc1.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -290,7 +293,7 @@
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
-        <note>Compliant as of/before v3.0.0-rc1.</note>
+        <note>Compliant as of/before v3.0.0-rc1 under the stipulation that it is wrapped in cryptoguard calls (tls_crypto_guard_{enable/disable}()); scratch region and SHA buffer wiped inside p256.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -299,10 +302,12 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/passwords.c: tls_pbkdf2 (L27-30) - hash_buffer, hash_composite, HMAC contexts</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Last T block (derived key material), Uc and three HMAC contexts holding password xor ipad/opad stay on the stack unwiped.</note>
-
+    <note>Last T block (derived key material), Uc and three HMAC contexts holding password xor ipad/opad stay on the stack unwiped.</note>
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of v3.0.0-rc1. The final T block, Uc buffer, block counter, and all three password-derived HMAC contexts are securely zeroized. Initialization failures also clear partially initialized HMAC state.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -310,10 +315,13 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/rsa.c: tls_rsa_encrypt (L277), tls_rsa_decrypt_signature (L336); src/tls/core/share/bigint.s: scrub (L258-275); src/tls/core/key.c (L1076-1094) - RSA scratch</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Top 2*mod_len bytes of shared scratch and relocated powmod slots/alternate registers are cleared after every powmod; __rsa_transient and OAEP tmp zeroed in key.c. tls_rsa_decode_oaep's own frame is scrubbed only when the caller wraps it in tls_crypto_guard.</note>
+    <note>Top 2*mod_len bytes of shared scratch and relocated powmod slots/alternate registers are cleared after every powmod; __rsa_transient and OAEP tmp zeroed in key.c. tls_rsa_decode_oaep's own frame is scrubbed only when the caller wraps it in tls_crypto_guard.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Compliant as of v3.0.0-rc3.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -321,10 +329,13 @@
     <section>7.9.7 (SSP zeroisation)</section>
     <location>src/tls/core/sha256.s: _tls_sha256_digest (L344), _sha256_transform (L726), _sha256_m_buffer=_sprng_sha_mbuffer (L18) - SHA-256 working state residue</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. The digest's 105-byte local context copy and the transform frame are not wiped; the static 256-byte W buffer is never wiped and after HMAC init holds K xor ipad. HMAC/HKDF/PBKDF2 call tls_sha256_* directly and bypass the crypto_guard scrub that tls_hash_update/digest get (hash.c L58-70).</note>
+    <note>The digest's 105-byte local context copy and the transform frame are not wiped; the static 256-byte W buffer is never wiped and after HMAC init holds K xor ipad. HMAC/HKDF/PBKDF2 call tls_sha256_* directly and bypass the crypto_guard scrub that tls_hash_update/digest get (hash.c L58-70).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of/before v3.0.0-rc1. Extended stack scrub depth at end of _sha256_transform.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -335,7 +346,10 @@
     <note>Compliant as of/before v3.0.0-rc1. Many checks use only tls_asn1_tag_number(), so e.g. a context-specific [2] or a constructed OCTET STRING passes where INTEGER/primitive OCTET STRING is required. Low risk (content is CA-signed) but not strict DER; tls_cert_extract_sig_material and tls_x509_signature_algorithm compare raw tag bytes correctly.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>False-flag. Identified lax checks are stale or used prevalidated helpers; not an issue.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>

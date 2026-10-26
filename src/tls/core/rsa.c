@@ -42,13 +42,14 @@ static bool rsa_mgf1_digest(const uint8_t *seed, size_t seed_len,
                             uint32_t counter, uint8_t *digest,
                             size_t *digest_len, uint8_t hash_alg)
 {
-    struct tls_hash_context hash;
-    uint8_t ctr[4];
+    struct tls_hash_context hash = {0};
+    uint8_t ctr[4] = {0};
+    bool ok = false;
 
     if (!tls_hash_context_init(&hash, hash_alg))
-        return false;
+        goto cleanup;
     if (hash.digestlen > TLS_SHA256_DIGEST_LEN)
-        return false;
+        goto cleanup;
 
     ctr[0] = (uint8_t)(counter >> 24);
     ctr[1] = (uint8_t)(counter >> 16);
@@ -59,22 +60,28 @@ static bool rsa_mgf1_digest(const uint8_t *seed, size_t seed_len,
     hash.update(&hash._private, ctr, sizeof(ctr));
     hash.digest(&hash._private, digest);
     *digest_len = hash.digestlen;
-    return true;
+    ok = true;
+
+cleanup:
+    tls_hash_clear(&hash);
+    tls_secure_memzero(ctr, sizeof ctr);
+    return ok;
 }
 
 static bool rsa_mgf1_xor(uint8_t *buf, size_t len,
                          const uint8_t *seed, size_t seed_len,
                          uint8_t hash_alg)
 {
-    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    uint8_t digest[TLS_SHA256_DIGEST_LEN] = {0};
     size_t digest_len = 0;
     uint32_t counter = 0;
     size_t off = 0;
+    bool ok = false;
 
     while (off < len)
     {
         if (!rsa_mgf1_digest(seed, seed_len, counter++, digest, &digest_len, hash_alg))
-            return false;
+            goto cleanup;
         size_t chunk = len - off;
         if (chunk > digest_len)
             chunk = digest_len;
@@ -82,7 +89,11 @@ static bool rsa_mgf1_xor(uint8_t *buf, size_t len,
             buf[off + i] ^= digest[i];
         off += chunk;
     }
-    return true;
+    ok = true;
+
+cleanup:
+    tls_secure_memzero(digest, sizeof digest);
+    return ok;
 }
 
 // CRYPTO_FN
@@ -102,7 +113,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
 
     bool ok = false;
 
-    struct tls_hash_context hash;
+    struct tls_hash_context hash = {0};
     if (!tls_hash_context_init(&hash, hash_alg))
         goto cleanup;
     size_t min_padding_len = (hash.digestlen << 1) + 2;
@@ -148,6 +159,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     // Return the static size of 256
     ok = true;
 cleanup:
+    tls_hash_clear(&hash);
     return ok;
 }
 
@@ -168,19 +180,18 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         return 0;
 
     /* seed/sha256_digest/mgf_block below hold the recovered OAEP seed
-     * and its derived masks -- real secret material held on this
-     * function's own stack frame. They're cleaned up by the caller,
-     * which wraps this call with tls_crypto_guard_enable()/disable(). */
+     * and its derived masks -- real secret material. Every post-validation
+     * exit converges on cleanup so this public API is self-cleaning. */
     size_t out_len = 0;
 
-    struct tls_hash_context hash;
+    struct tls_hash_context hash = {0};
+    uint8_t sha256_digest[TLS_SHA256_DIGEST_LEN] = {0};
+    uint8_t seed[TLS_SHA256_DIGEST_LEN] = {0};
+    uint8_t mgf_block[TLS_SHA256_DIGEST_LEN] = {0};
     if (!tls_hash_context_init(&hash, hash_alg))
         goto cleanup;
 
     size_t db_len = in_len - hash.digestlen - 1;
-    uint8_t sha256_digest[TLS_SHA256_DIGEST_LEN];
-    uint8_t seed[TLS_SHA256_DIGEST_LEN];
-    uint8_t mgf_block[TLS_SHA256_DIGEST_LEN];
     size_t mgf_len = 0;
     uint32_t counter = 0;
     size_t masked_db = ENCODE_SALT + hash.digestlen;
@@ -242,6 +253,10 @@ size_t tls_rsa_decode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         out_len = 0;
 
 cleanup:
+    tls_secure_memzero(seed, sizeof seed);
+    tls_secure_memzero(sha256_digest, sizeof sha256_digest);
+    tls_secure_memzero(mgf_block, sizeof mgf_block);
+    tls_hash_clear(&hash);
     return out_len;
 }
 

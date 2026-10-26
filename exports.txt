@@ -475,3 +475,6 @@ lwip_wifi_save_enterprise_profile
 tls_random_bytes_pr
 tls_hash_clear
 tls_hmac_clear
+tls_aes_destroy_ctx
+tls_aes_pkcs7_apply
+tls_aes_pkcs7_remove

@@ -571,7 +571,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         if (pt_end == 0)
         {
             pbuf_free(out_head);
-            tls_secure_memzero(&aes_ctx, sizeof aes_ctx);
+            tls_aes_destroy_ctx(&aes_ctx);
             (void)tls_send_fatal_alert(ctx, TLS_ALERT_UNEXPECTED_MESSAGE);
             return ERR_VAL;
         }
@@ -581,7 +581,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     }
 
     *plaintext = out_head;
-    tls_secure_memzero(&aes_ctx, sizeof aes_ctx);
+    tls_aes_destroy_ctx(&aes_ctx);
     return ERR_OK;
 
 fail:
@@ -595,7 +595,7 @@ fail:
     {
         pbuf_free(out_head);
     }
-    tls_secure_memzero(&aes_ctx, sizeof aes_ctx);
+    tls_aes_destroy_ctx(&aes_ctx);
     return (status != ERR_OK) ? status : ERR_VAL;
 }
 

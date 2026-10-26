@@ -341,20 +341,34 @@ static void aes_gcm_prepare_iv(struct tls_aes_context *ctx, const uint8_t *iv, s
 #define AES_GCM_CTR_LEN 4
 #define AES_GCM_POLY 0xe1 // polynomial used in AES-GCM
 
+void tls_aes_destroy_ctx(struct tls_aes_context *ctx)
+{
+    if (ctx != NULL)
+        tls_secure_memzero(ctx, sizeof(*ctx));
+}
+
 // Performs the action of generating the keys that will be used in every round of
 // encryption. "key" is the user-supplied input key, "w" is the output key schedule,
 // "keysize" is the length in bits of "key", must be 128, 192, or 256.
 bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key, size_t key_len, const uint8_t *iv, size_t iv_len)
 {
-    if ((ctx == NULL) ||
-        (key == NULL) ||
-        (iv == NULL))
+    if (ctx == NULL)
+    {
+        ERROR();
+        return false;
+    }
+    /* A failed reinitialization must not leave the previous key schedule, nor
+     * may a later validation failure leave a partially initialized one. */
+    tls_aes_destroy_ctx(ctx);
+
+    if ((key == NULL) || (iv == NULL))
     {
         ERROR();
         return false;
     }
 
-    if ((mode != TLS_AES_GCM && iv_len > AES_BLOCK_SIZE) ||
+    if (((mode != TLS_AES_GCM) && (mode != TLS_AES_CBC)) ||
+        (mode != TLS_AES_GCM && iv_len > AES_BLOCK_SIZE) ||
         (mode == TLS_AES_GCM && iv_len == 0))
     {
         /* SP 800-38D 5.2.1.1: a GCM IV is at least 1 bit; an empty one would
@@ -363,7 +377,6 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         ERROR();
         return false;
     }
-    tls_secure_memzero(ctx, sizeof(struct tls_aes_context));
     switch (key_len)
     {
     case 16:
@@ -406,6 +419,7 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         break;
     default:
         ERROR_CODE(mode);
+        tls_aes_destroy_ctx(ctx);
         return false;
     }
     ctx->mode = mode;
@@ -421,7 +435,11 @@ bool tls_aes_ccm_init(struct tls_aes_context *ctx,
     uint8_t b0[AES_BLOCK_SIZE];
     uint8_t zero_iv[AES_BLOCK_SIZE] = {0};
 
-    if ((ctx == NULL) || (key == NULL) || (nonce == NULL))
+    if (ctx == NULL)
+        return false;
+    tls_aes_destroy_ctx(ctx);
+
+    if ((key == NULL) || (nonce == NULL))
         return false;
     if (!ccm_validate_params(nonce_len, tag_len, msg_len))
         return false;
@@ -850,7 +868,7 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
         ERROR();
     }
 done:
-    tls_secure_memzero(&tmp, sizeof(tmp));
+    tls_aes_destroy_ctx(&tmp);
     tls_secure_memzero(digest, sizeof digest);
     return tag_ok;
 }
@@ -885,7 +903,7 @@ bool tls_aes_ccm_encrypt(const uint8_t *key, size_t key_len,
     memcpy(tag, digest, tag_len);
     ok = true;
 done:
-    tls_secure_memzero(&ctx, sizeof ctx);
+    tls_aes_destroy_ctx(&ctx);
     tls_secure_memzero(digest, sizeof digest);
     return ok;
 }
@@ -928,7 +946,7 @@ done:
      * the decrypt ran in place over the ciphertext. */
     if (!ok && wrote)
         tls_secure_memzero(plaintext, ct_len);
-    tls_secure_memzero(&ctx, sizeof ctx);
+    tls_aes_destroy_ctx(&ctx);
     tls_secure_memzero(digest, sizeof digest);
     return ok;
 }

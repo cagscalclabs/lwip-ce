@@ -529,7 +529,7 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
     }
 
 done:
-    tls_secure_memzero(&aes_ctx, sizeof(aes_ctx));
+    tls_aes_destroy_ctx(&aes_ctx);
     tls_secure_memzero(derived,  sizeof(derived));
     if (!ok) return TLS_KEY_IMPORT_DECRYPT_FAIL;
 
@@ -943,7 +943,7 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
                 tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
                 tls_aes_encrypt(&ctx, ct, ct_len, ct))
                 ok = true;
-            tls_secure_memzero(&ctx, sizeof(ctx));
+            tls_aes_destroy_ctx(&ctx);
         }
         else
         {
@@ -952,7 +952,7 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
                 (in_len == 0 || tls_aes_encrypt(&ctx, inbuf, in_len, ct)) &&
                 (!aead || tls_aes_digest(&ctx, tag)))
                 ok = true;
-            tls_secure_memzero(&ctx, sizeof(ctx));
+            tls_aes_destroy_ctx(&ctx);
         }
     }
 
@@ -1139,7 +1139,7 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
                         ok = true;
                 }
             }
-            tls_secure_memzero(&ctx, sizeof(ctx));
+            tls_aes_destroy_ctx(&ctx);
             if (!ok)
             {
                 tls_cipher_blob_free(out);

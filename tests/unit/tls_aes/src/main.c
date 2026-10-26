@@ -326,5 +326,27 @@ int main(void)
         show_result(ok);
     }
 
+    // Test 16: failed initialization and explicit destruction clear the context
+    memset(&ctx, 0xa5, sizeof ctx);
+    status = !tls_aes_init(&ctx, 0xff, gcm_key, sizeof gcm_key,
+                           gcm_iv, sizeof gcm_iv);
+    for (size_t i = 0; i < sizeof ctx; i++)
+        status &= ((const uint8_t *)&ctx)[i] == 0;
+
+    memset(&ctx, 0xa5, sizeof ctx);
+    status &= !tls_aes_ccm_init(&ctx, ccm_key, sizeof ccm_key,
+                                ccm_nonce_1, 1, sizeof ccm_tag_1,
+                                sizeof ccm_plaintext_1, sizeof ccm_aad);
+    for (size_t i = 0; i < sizeof ctx; i++)
+        status &= ((const uint8_t *)&ctx)[i] == 0;
+
+    status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm_key, sizeof gcm_key,
+                           gcm_iv, sizeof gcm_iv);
+    tls_aes_destroy_ctx(&ctx);
+    for (size_t i = 0; i < sizeof ctx; i++)
+        status &= ((const uint8_t *)&ctx)[i] == 0;
+    tls_aes_destroy_ctx(NULL);
+    show_result(status);
+
     return 0;
 }

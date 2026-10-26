@@ -365,6 +365,9 @@ _sha256_transform:
 ._state_vars := -32
 ._i := -35
 ._frame_offset := -35
+	; The round code uses the 12 bytes immediately below the fixed frame as
+	; temporary push/pop spill slots. Pops restore SP but do not erase them.
+._spill_size := 12
 	ld hl,._state_vars              ; exclude the _i variable for now
 	call __frameset
 
@@ -729,11 +732,12 @@ _sha256_transform:
 	djnz .Ltransform_loop4
 	lea ix, ix + -8*4
 
-	; Wipe both the transform frame and the shared message schedule. The latter
-	; can contain K xor ipad blocks after HMAC operations.
+	; Wipe the temporary push/pop spill slots, the fixed transform frame, and
+	; the shared message schedule. The latter can contain K xor ipad blocks
+	; after HMAC operations.
 	ld hl,$FF0000
-	lea de, ix + ._frame_offset
-	ld bc,-._frame_offset
+	lea de, ix + ._frame_offset - ._spill_size
+	ld bc,-._frame_offset + ._spill_size
 	ldir
 	ld hl,$FF0000
 	ld de,_sha256_m_buffer

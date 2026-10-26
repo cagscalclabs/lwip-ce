@@ -89,6 +89,12 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode,
                   const uint8_t *iv, size_t iv_len);
 
 /********************************************************************
+ * @brief Securely destroys an AES context, including its expanded key.
+ * @param ctx Pointer to an AES context. May be NULL.
+ */
+void tls_aes_destroy_ctx(struct tls_aes_context *ctx);
+
+/********************************************************************
  * @brief Initializes an AES-CCM context.
  * @param ctx       Pointer to an AES context.
  * @param key       Pointer to an AES key.

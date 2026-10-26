@@ -477,3 +477,4 @@
 	export	tls_random_bytes_pr
 	export	tls_hash_clear
 	export	tls_hmac_clear
+	export	tls_aes_destroy_ctx
