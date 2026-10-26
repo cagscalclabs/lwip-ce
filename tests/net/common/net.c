@@ -135,16 +135,16 @@ bool host_call(const char *cmd, char *reply, size_t reply_len, uint32_t timeout_
     /* Emulated time runs ahead of the host's wall clock; give slow host
      * actions (ping, openssl peers) room before retrying. */
     if (timeout_ms < 30000) timeout_ms = 30000;
-    for (int attempt = 0; attempt < 3; attempt++)
+    control_have = false;
+    for (uint32_t start = lwip_now_ms(); !control_have && lwip_now_ms() - start < timeout_ms;)
     {
         size_t len = strlen(cmd);
         struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)len, PBUF_RAM);
         if (!p) return false;
         pbuf_take(p, cmd, (u16_t)len);
-        control_have = false;
         udp_sendto(control, p, &host, PORT_CONTROL);
         pbuf_free(p);
-        if (pump(control_done, NULL, timeout_ms / 3 + 1)) break;
+        pump(control_done, NULL, 5000);
     }
     if (!control_have || strncmp(control_reply, "OK", 2)) return false;
     if (reply && reply_len)

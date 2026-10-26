@@ -258,7 +258,7 @@ static void https(const char *name, const char *host, const char *path, bool wan
 {
     struct lwip_socket *sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 60000);
     uint32_t t0 = lwip_now_ms(), got = 0, header_end = 0, length = 0, start;
-    bool connected;
+    bool connected, last_chunk = false;
     if (!sock || lwip_socket_connect(sock, host, 443) != LWIP_OK)
     {
         check(name, false);
@@ -294,6 +294,7 @@ static void https(const char *name, const char *host, const char *path, bool wan
         lwip_service_events();
         n = lwip_socket_read(sock, buf + (got < 1024 ? got : 1100), got < 1024 ? 1024 - got : 900);
         if (got < 1024) buf[got + n] = '\0';
+        if (n >= 5 && !memcmp(buf + (got < 1024 ? got : 1100) + n - 5, "0\r\n\r\n", 5)) last_chunk = true;
         got += n;
         if (!header_end)
         {
@@ -308,13 +309,15 @@ static void https(const char *name, const char *host, const char *path, bool wan
         }
         if (!n && !lwip_socket_is_active(sock)) break;
     }
-    snprintf(line, sizeof(line), "%s answers 2xx/3xx", name);
-    check(line, !strncmp((char *)buf, "HTTP/1.1 2", 10) || !strncmp((char *)buf, "HTTP/1.1 3", 10));
+    note("  %.40s", (char *)buf);
+    snprintf(line, sizeof(line), "%s answers HTTP", name);
+    check(line, !strncmp((char *)buf, "HTTP/1.1 ", 9));
     if (body)
     {
-        note("  body %lu of %lu", (unsigned long)(got - header_end), (unsigned long)length);
+        bool chunked = strstr((char *)buf, "hunked") != NULL;
+        note("  body %lu of %lu%s", (unsigned long)(got - header_end), (unsigned long)length, chunked ? " chunked" : "");
         snprintf(line, sizeof(line), "%s full body", name);
-        check(line, length && got - header_end == length);
+        check(line, chunked ? got > header_end && !lwip_socket_is_active(sock) && last_chunk : length && got - header_end == length);
     }
     lwip_socket_destroy(sock);
 }

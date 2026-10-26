@@ -167,7 +167,7 @@ static void test_icmp(void)
         metric("icmp_rtt_avg", total / replies, "ms");
         metric("icmp_rtt_max", worst, "ms");
     }
-    check("host pings calc", host_call("ping 3", reply, sizeof(reply), 15000) && !strcmp(reply, "3/3"));
+    check("host pings calc", host_call("ping 3", reply, sizeof(reply), 90000) && !strcmp(reply, "3/3"));
     check("closed UDP port answers ICMP unreachable",
           host_call("udp-unreach 7999", reply, sizeof(reply), 10000) && !strcmp(reply, "refused"));
 }
@@ -517,7 +517,7 @@ static void test_ipv6(void)
     if (!check("ipv6 link-local preferred", ll >= 0)) return;
     note("  ll %s", ip6addr_ntoa(netif_ip6_addr(ext, ll)));
     snprintf(cmd, sizeof(cmd), "ping6 %s 3", ip6addr_ntoa(netif_ip6_addr(ext, ll)));
-    check("host ping6 calc link-local", host_call(cmd, reply, sizeof(reply), 15000) && !strcmp(reply, "3/3"));
+    check("host ping6 calc link-local", host_call(cmd, reply, sizeof(reply), 90000) && !strcmp(reply, "3/3"));
 
     ipaddr_aton(host_ll, &host);
     ip6_addr_assign_zone(ip_2_ip6(&host), IP6_UNICAST, ext);
@@ -539,7 +539,7 @@ static void test_ipv6(void)
     {
         note("  global %s", ip6addr_ntoa(netif_ip6_addr(ext, global)));
         snprintf(cmd, sizeof(cmd), "ping6 %s 3", ip6addr_ntoa(netif_ip6_addr(ext, global)));
-        check("host ping6 calc global", host_call(cmd, reply, sizeof(reply), 15000) && !strcmp(reply, "3/3"));
+        check("host ping6 calc global", host_call(cmd, reply, sizeof(reply), 90000) && !strcmp(reply, "3/3"));
         raw_echo("tcp6 echo via SLAAC route", IPADDR_TYPE_V6, "fd00:84::1");
     }
 

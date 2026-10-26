@@ -313,6 +313,7 @@ class Control:
         self.claimed: set[str] = set()
         self.last: dict[str, str] = {}
         self.last_request = ""
+        self.last_group = "-"
         (tmp / "bulk.bin").write_bytes(pattern(0, 131072))
         threading.Thread(target=self.serve, daemon=True).start()
 
@@ -403,13 +404,13 @@ class Control:
         return Broadcast.got or "none"
 
     def cmd_ping(self, count: str = "3") -> str:
-        r = subprocess.run(["ping", "-c", count, "-W", "2", CALC], capture_output=True, text=True)
+        r = subprocess.run(["ping", "-c", count, "-w", "20", CALC], capture_output=True, text=True)
         m = re.search(r"(\d+) received", r.stdout)
         return f"{m.group(1) if m else 0}/{count}"
 
     def cmd_ping6(self, addr: str, count: str = "3") -> str:
         target = f"{addr}%{IFACE}" if addr.startswith("fe80") else addr
-        r = subprocess.run(["ping", "-6", "-c", count, "-W", "2", target], capture_output=True, text=True)
+        r = subprocess.run(["ping", "-6", "-c", count, "-w", "20", target], capture_output=True, text=True)
         m = re.search(r"(\d+) received", r.stdout)
         return f"{m.group(1) if m else 0}/{count}"
 
@@ -459,7 +460,9 @@ class Control:
         from scapy.contrib.igmp import IGMP
 
         def record(pkt):
-            if IGMP in pkt:
+            if pkt.haslayer("TCP") and pkt["TCP"].sport == 7100:
+                self.server_hello_group(bytes(pkt["TCP"].payload))
+            elif IGMP in pkt:
                 self.sniffed.append(f"igmp {pkt[IGMP].type:#x} {pkt[IGMP].gaddr}")
             elif pkt.haslayer("ICMPv6MLReport2"):
                 for rec in pkt["ICMPv6MLReport2"].records:
@@ -476,7 +479,23 @@ class Control:
                           ARP(op=2, hwsrc=mac, psrc=pkt[ARP].pdst, hwdst=pkt[ARP].hwsrc, pdst=pkt[ARP].pdst),
                           iface=IFACE, verbose=False)
 
-        AsyncSniffer(iface=IFACE, prn=record, store=False, filter="igmp or ip6 or arp").start()
+        AsyncSniffer(iface=IFACE, prn=record, store=False, filter="igmp or ip6 or arp or tcp src port 7100").start()
+
+    def server_hello_group(self, data: bytes):
+        """Records the key_share group of a plaintext ServerHello from the PSK peer."""
+        if len(data) < 44 or data[0] != 0x16 or data[5] != 0x02:
+            return
+        at = 9 + 2 + 32
+        at += 1 + data[at]
+        at += 3
+        end = at + 2 + int.from_bytes(data[at:at + 2], "big")
+        at += 2
+        while at + 4 <= min(end, len(data)):
+            kind, size = int.from_bytes(data[at:at + 2], "big"), int.from_bytes(data[at + 2:at + 4], "big")
+            if kind == 0x33 and size >= 2:
+                group = int.from_bytes(data[at + 4:at + 6], "big")
+                self.last_group = {0x1d: "X25519", 0x17: "P-256", 0x18: "P-384"}.get(group, hex(group))
+            at += 4 + size
 
     def cmd_sniffed(self, kind: str, what: str) -> str:
         deadline = time.monotonic() + 10
@@ -509,6 +528,7 @@ class Control:
                        naccept: str = "1") -> str:
         if self.peer:
             self.peer.stop()
+        self.last_group = "-"
         args = ["s_server", "-accept", "7100", "-nocert", "-naccept", naccept]
         args += psk_args(cipher, group, PSK if key == "good" else bytes(32),
                          PSK_IDENTITY if ident == "good" else "someone-else")
@@ -536,7 +556,7 @@ class Control:
         group = re.search(r"(?:Peer Temp Key|Negotiated TLS1.3 group): ([\w-]+)", out)
         alpn = re.search(r"ALPN protocols selected: (\S+)", out)
         if cipher:
-            return f"{cipher.group(1)} {group.group(1) if group else '-'} {alpn.group(1) if alpn else '-'}"
+            return f"{cipher.group(1)} {group.group(1) if group else self.last_group} {alpn.group(1) if alpn else '-'}"
         errors = re.findall(r"(?:error|alert)[^\n]{0,70}", out)
         log("s_server output:\n" + out)
         return f"ERR {errors[-1] if errors else 'no handshake'}"
