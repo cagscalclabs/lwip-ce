@@ -588,12 +588,14 @@
   <requirement>
     <ref>NIST SP 800-38C</ref>
     <section>Appendix A.2.1 / A.2.2 (B0 formatting, AAD encoding)</section>
-    <location>src/tls/core/primitives/aes.c: tls_aes_ccm_init (L430-433), ccm_update_aad (L98-162) - B0/AAD formatting</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_ccm_init (L471-474), ccm_update_aad (L120-175) - B0/AAD formatting</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Flags and Q encoding correct; AAD length 2/6/10-byte encodings; AAD must be supplied in one call matching aad_len_total (fails closed otherwise). Covered by CAVP CCM and RFC 3610 packet vectors #1/#2 (tests/unit/tls_aes).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -611,46 +613,57 @@
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
-    <section>5.2.1.1 (96-bit IV: J0 = IV || 0^31 || 1)</section>
-    <location>src/tls/core/primitives/aes.c: aes_gcm_prepare_iv (L297-329), tls_aes_init (L376-386) - 96-bit IV path</location>
+    <section>7.1 step 2 / 7.2 step 3 (96-bit IV: J0 = IV || 0^31 || 1)</section>
+    <location>src/tls/core/primitives/aes.c: aes_gcm_prepare_iv (L304-315), tls_aes_init (L400-421) - 96-bit IV path</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Covered by CAVP gcmEncryptExtIV/gcmDecrypt (IVlen=96) and tests/unit/tls_aes McGrew-Viega TC4.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
-    <section>5.2.1.1 (input length limits; GHASH length block)</section>
-    <location>src/tls/core/primitives/bytes.s: _bytelen_to_bitlen (L59-83), used by src/tls/core/primitives/aes.c: tls_aes_digest (L491-492) - [len(A)]64 || [len(C)]64</location>
+    <section>5.2.1.1 / 7.1 steps 5-6 / 7.2 steps 5-6 (input length limits; GHASH length block)</section>
+    <location>src/tls/core/primitives/bytes.s: _bytelen_to_bitlen (L60-88), used by src/tls/core/primitives/aes.c: tls_aes_digest (L536-539) - [len(A)]64 || [len(C)]64</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (medium): after the x8 shift, bit-length bits 16-23 are never stored, so any AAD or ciphertext of 8192 bytes or more gets a wrong length block (8192 bytes encodes as 0). GCM tags are wrong for TLS records of 8 KiB or more (inbound 16 KiB records fail closed; outbound records of 8 KiB or more get bad tags) and the encoding is not injective. CAVP GCM vectors are at most 408 bits, so untested. Fix: store all of A/HLU/H/L into bytes 4-7.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc1. _bytelen_to_bitlen now retains the carry from the 24-bit byte-length multiplication and emits all four significant big-endian bytes at offsets 4-7. The 9000-byte GCM regression vector in tests/unit/tls_aes exercises bit-length bits 16-23 and matches an independent AES-GCM reference tag.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (IV length at least 1 bit)</section>
-    <location>src/tls/core/primitives/aes.c: tls_aes_init (L348-352) - zero-length IV</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_init (L377-385) - zero-length IV</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): iv_len==0 is accepted for GCM. key.c L1106 guards its own caller, but the PKCS#8 import path (key.c L500) and the primitive do not fail closed.</note>
+    <note>Compliant as of v3.0.0-rc2. BUG (low): iv_len==0 is accepted for GCM. key.c L1106 guards its own caller, but the PKCS#8 import path (key.c L500) and the primitive do not fail closed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc3. tls_aes_init rejects a zero-length GCM IV before key scheduling or IV processing, so all callers—including the PKCS#8 import path—now fail closed. The higher-level key decryption API also rejects iv_len == 0 independently.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.1 (length accumulators)</section>
-    <location>src/tls/core/primitives/aes.c: tls_aes_update_aad (L451-452), tls_aes_update_ciphertext (L541-542) - size_t accumulators</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_update_aad (L490-496), aes_gcm_update_ciphertext (L572-595) - size_t accumulators</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (low): 24-bit aad_len/ct_len accumulate across streaming calls with no overflow check and wrap at 16 MiB. The 2^39-256 bound is unreachable, but the accumulators should fail closed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fixed as of v3.0.0-rc1. Both GCM streaming paths reject an increment when the incoming length exceeds SIZE_MAX minus the accumulated length, before hashing input or updating the counter, so the 24-bit size_t accumulators cannot wrap.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -667,36 +680,40 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>5.2.1.2 (tag length)</section>
-    <location>src/tls/core/primitives/aes.c: tls_aes_digest (L470-500), tls_aes_verify (L817-819) - GCM tag length</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_digest GCM (L508-545), tls_aes_verify_tag (L863-878), tls_aes_verify (L918-923) - fixed 128-bit GCM tag</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Only 128-bit tags produced and verified (allowed subset). CAVP vectors filtered to Taglen=128.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>6.5 (GCTR inc32, keystream continuity)</section>
-    <location>src/tls/core/primitives/aes.c: gcm_ctr_xor (L570-618), increment_iv (L48-59) - CTR keystream</location>
+    <location>src/tls/core/primitives/aes.c: gcm_ctr_xor (L633-680), increment_iv (L62-73) - CTR keystream</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. inc32 on bytes 12-15; partial-block keystream carried across chunks. Chunked CTR previously validated 3000/0 against PyCryptodome (not re-run in this audit). 2^32-block wrap unguarded but each record re-initializes the context.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.1 / 7.2 (A then C ordering; state machine)</section>
-    <location>src/tls/core/primitives/aes.c: tls_aes_update_aad (L443-462), tls_aes_update_ciphertext (L518-544), tls_aes_gcm_ctr (L706-712) - lock/op_assoc</location>
+    <location>src/tls/core/primitives/aes.c: tls_aes_update_aad (L484-505), tls_aes_digest GCM (L514-521), aes_gcm_update_ciphertext/tls_aes_update_ciphertext (L566-606), tls_aes_encrypt/decrypt (L683-724, L758-798) - lock/op_assoc</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. BUG (low): AAD after ciphertext is rejected, but update_ciphertext does not reject use after digest or on an encrypt-associated context, tls_aes_gcm_ctr checks neither lock nor op_assoc, and update_aad does not NULL-check. Misuse silently corrupts state instead of failing closed.</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
-        <note>Fixed as of v3.0.0-rc3. GCM and CCM now have an explicit verified state. Plaintext-producing calls through the common decrypt API fail unless a successful constant-time tag check has transitioned that same context to the verified state; the internal GCM ciphertext helper also enforces the operation association.</note>
+        <note>Fixed as of v3.0.0-rc3. AAD updates validate NULL input and are rejected after the ciphertext phase begins; ciphertext updates are rejected after digest/verification and on an encrypt-associated public path; encrypt and decrypt operation associations cannot be mixed. The former raw tls_aes_gcm_ctr entry point has been removed, and plaintext-producing decryption requires the verified state.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -717,12 +734,14 @@
   <requirement>
     <ref>NIST SP 800-38D</ref>
     <section>7.2 step 6 (T = T' constant-time comparison)</section>
-    <location>src/tls/core/primitives/bytes.s: _tls_bytes_compare (L7-28) - constant-time equality</location>
+    <location>src/tls/core/primitives/bytes.s: _tls_bytes_compare (L8-29) - constant-time equality</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. OR-accumulates a xor b over every byte with no early exit and a branch-free 0/1 result. Hazard: len==0 wraps BC and compares 2^24 bytes; no current caller passes 0.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -741,13 +760,15 @@
   </requirement>
   <requirement>
     <ref>NIST SP 800-38D</ref>
-    <section>8.2 (IV construction / uniqueness)</section>
-    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_build_aead_nonce (L233-241); src/tls/core/handshake.c: tls_build_aead_nonce (L356-364); src/tls/core/key.c (~L908) - caller IV generation</location>
+    <section>8 / 8.2.2 / 8.3 (IV construction / uniqueness; TLS 1.3 approved construction)</section>
+    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_build_aead_nonce (L262-270); src/tls/core/handshake.c: tls_build_aead_nonce (L373-386), record limits/key update (L314-317, L5527-5565); src/tls/core/key.c: aes_encrypt_oneshot (L907-919), tls_cipher_encrypt_aad (L1056-1067) - caller IV generation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. TLS record nonce is static_iv xor 64-bit sequence number (8.2.1 deterministic); key.c cipher API uses DRBG-random IVs (8.2.2).</note>
+    <note>Compliant as of/before v3.0.0-rc1. TLS 1.3 record nonces are static_iv xor the padded 64-bit per-key sequence number, an injective construction that NIST has explicitly announced as approved; conservative record limits trigger key updates well before sequence exhaustion. The generic key cipher API uses health-checked DRBG-random 96-bit IVs and caps successful invocations per key as required by 8.2.2/8.3.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -777,13 +798,15 @@
   </requirement>
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
-    <section>5.6.1.2 / 5.7.1.2 (constant-time P-256 scalar multiplication)</section>
-    <location>src/tls/core/primitives/p256.s: p256_scalar_mul (L2281-2513), p256_scalar_mul_ml (L2210-2278), p256_point_cswap/select (L677-713), p256_reduce_top/addback (L566-610) - constant-time ladder</location>
+    <section>5.6.1.2 / 5.7.1.2 (ECC key generation/ECC CDH; project constant-time implementation requirement)</section>
+    <location>src/tls/core/primitives/p256.s: p256_scalar_mul (L2281-2512), p256_scalar_mul_ml (L2209-2277), p256_point_select/cswap (L673-712), p256_reduce_top/addback (L562-609) - constant-time ladder</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Co-Z Montgomery ladder; scalar bit used only as cswap/select mask; exceptional k handled by constant-time select; branches only on loop counters and public values (inspection). Evidence: RFC 5903 KAT (tests/unit/tls_p256) and tests/profiling/tls_timing; the co-Z correctness model is not committed (header L27-29).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -794,18 +817,22 @@
     <note>Compliant as of/before v3.0.0-rc1. 32 DRBG bytes accepted only if 1 &lt;= d &lt;= n-1 (uniform). An out-of-range candidate (about 2^-32) aborts handshake init instead of retrying (availability only).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.6.2.3.3 (full public-key validation, nQ = O)</section>
-    <location>src/tls/core/primitives/p256.s: p256_point_import (L3144-3188) - order check</location>
+    <location>src/tls/core/primitives/p256.s: p256_point_import (L3143-3187) - encoding, coordinate-range, curve-membership, and implicit order checks</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. No explicit nQ=O check; P-256 cofactor h=1 makes partial validation equivalent to full validation (equivalence argument, not an explicit check).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -816,18 +843,22 @@
     <note>Compliant as of/before v3.0.0-rc1. Requires 0x04 prefix, x &lt; p, y &lt; p, and y^2 == x^3 - 3x + b; used by _tls_p256_secret and _tls_p256_verify. Covered by tests/unit/tls_p256 test_reject_offcurve (no x &gt;= p / y &gt;= p test).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>NIST SP 800-56A Rev. 3</ref>
     <section>5.7.1.2 (ECC CDH: P = O is an error; Z = x_P)</section>
-    <location>src/tls/core/primitives/p256.s: _tls_p256_secret (L3321-3359), p256_affine_export (L3100-3142); src/tls/core/handshake.c: tls_recv_server_hello (L2788-2818) - shared point and secret</location>
+    <location>src/tls/core/primitives/p256.s: p256_affine_export (L3098-3141), _tls_p256_secret (L3320-3358); src/tls/core/handshake.c: tls_recv_server_hello (L3524-3559), tls_settle_ecdhe (L5717-5763) - shared-point derivation, x-coordinate export, and failure handling</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. affine_export fails on Z==0; handshake zeroes secret and private key and sends fatal illegal_parameter. Only the 32-byte big-endian x-coordinate is output. RFC 5903 8.1 vectors in tests/unit/tls_p256.</note>
+    <note>Compliant as of/before v3.0.0-rc1. For P-256 (h=1), the primitive computes dQ; affine_export returns an error when Z==0 and otherwise outputs only the 32-byte big-endian x-coordinate. Both immediate and asynchronous handshake failure paths erase the private key and shared-secret buffer and send fatal illegal_parameter. RFC 5903 8.1 vectors exercise ECDH in both directions in tests/unit/tls_p256; the infinity-error path has no direct test (it is unreachable after valid P-256 scalar and public-key validation).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
