@@ -1,0 +1,56 @@
+[
+  {
+    "acvVersion": "1.0"
+  },
+  {
+    "vsId": 1,
+    "testGroups": [
+      {
+        "tgId": 1,
+        "tests": [
+          {"tcId": 1, "md": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"},
+          {"tcId": 2, "md": "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"}
+        ]
+      }
+    ]
+  },
+  {
+    "vsId": 2,
+    "testGroups": [
+      {
+        "tgId": 2,
+        "tests": [
+          {"tcId": 3, "mac": "B0344C61D8DB38535CA8AFCEAF0BF12B881DC200C9833DA726E9376C2E32CFF7"}
+        ]
+      }
+    ]
+  },
+  {
+    "vsId": 3,
+    "testGroups": [{"tgId": 3, "tests": [{"tcId": 4, "ct": "7649ABAC8119B246CEE98E9B12E9197D"}]}]
+  },
+  {
+    "vsId": 4,
+    "testGroups": [{"tgId": 4, "tests": [{"tcId": 5, "ct": "0388DACE60B6A392F328C2B971B2FE78", "tag": "AB6E47D42CEC13BDF53A67B21257BDDF"}]}]
+  },
+  {
+    "vsId": 5,
+    "testGroups": [{"tgId": 5, "tests": [{"tcId": 6, "ct": "8A4F1F71C1D91D98D5F2CE70"}]}]
+  },
+  {
+    "vsId": 6,
+    "testGroups": [{"tgId": 6, "tests": [{"tcId": 7, "derivedKey": "120FB6CFFCF8B32C43E7225256C4F837A86548C92CCC35480805987CB70BE17B"}]}]
+  },
+  {
+    "vsId": 7,
+    "testGroups": [{"tgId": 7, "tests": [{"tcId": 8, "dkm": "763BD2D9940092CD6D9E784E614338170C593088FF96E24BC6818549BECD3FAC"}]}]
+  },
+  {
+    "vsId": 8,
+    "testGroups": [{"tgId": 8, "tests": [{"tcId": 9, "testPassed": true}]}]
+  },
+  {
+    "vsId": 9,
+    "testGroups": [{"tgId": 9, "tests": [{"tcId": 10, "testPassed": true}]}]
+  }
+]

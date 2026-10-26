@@ -1,0 +1,19 @@
+{
+  "algorithms": [
+    {"algorithm": "SHA2-256", "revision": "1.0", "messageLength": [{"min": 0, "max": 65536, "increment": 8}]},
+    {"algorithm": "HMAC-SHA2-256", "revision": "2.0", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}], "keyLen": [{"min": 8, "max": 2048, "increment": 8}], "macLen": [{"min": 32, "max": 256, "increment": 8}], "msgLen": [{"min": 0, "max": 4096, "increment": 8}]},
+    {"algorithm": "ACVP-AES-CBC", "revision": "1.0", "prereqVals": [{"algorithm": "ACVP-AES-ECB", "valValue": "same"}], "direction": ["encrypt", "decrypt"], "keyLen": [128, 192, 256], "payloadLen": [{"min": 128, "max": 32768, "increment": 128}]},
+    {"algorithm": "ACVP-AES-GCM", "revision": "1.0", "prereqVals": [{"algorithm": "ACVP-AES-ECB", "valValue": "same"}], "direction": ["encrypt", "decrypt"], "keyLen": [128, 192, 256], "ivGen": "external", "ivGenMode": "8.2.2", "ivLen": [96], "tagLen": [128], "payloadLen": [{"min": 0, "max": 16384, "increment": 8}], "aadLen": [{"min": 0, "max": 16384, "increment": 8}]},
+    {"algorithm": "ACVP-AES-CCM", "revision": "1.0", "prereqVals": [{"algorithm": "ACVP-AES-ECB", "valValue": "same"}], "direction": ["encrypt", "decrypt"], "keyLen": [128, 192, 256], "ivLen": [{"min": 56, "max": 104, "increment": 8}], "tagLen": [{"min": 32, "max": 128, "increment": 16}], "payloadLen": [{"min": 0, "max": 16384, "increment": 8}], "aadLen": [{"min": 0, "max": 16384, "increment": 8}]},
+    {"algorithm": "PBKDF", "revision": "1.0", "capabilities": [{"iterationCount": [{"min": 1, "max": 10000, "increment": 1}], "keyLen": [{"min": 8, "max": 4096, "increment": 8}], "passwordLen": [{"min": 1, "max": 128, "increment": 1}], "saltLen": [{"min": 8, "max": 4096, "increment": 8}], "hmacAlg": ["SHA2-256"]}]},
+    {"algorithm": "KDA", "mode": "HKDF", "revision": "Sp800-56Cr1", "fixedInfoPattern": "uPartyInfo||vPartyInfo||l", "encoding": ["concatenation"], "hmacAlg": ["SHA2-256"], "macSaltMethods": ["default", "random"], "l": 4096, "z": [{"min": 112, "max": 4096, "increment": 8}]},
+    {"algorithm": "RSA", "mode": "sigVer", "revision": "FIPS186-5", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}], "pubExpMode": "fixed", "fixedPubExp": "010001", "capabilities": [
+      {"sigType": "pkcs1v1.5", "properties": [{"modulo": 2048, "hashPair": [{"hashAlg": "SHA2-256"}]}, {"modulo": 3072, "hashPair": [{"hashAlg": "SHA2-256"}]}, {"modulo": 4096, "hashPair": [{"hashAlg": "SHA2-256"}]}]},
+      {"sigType": "pss", "properties": [{"modulo": 2048, "maskFunction": ["mgf1"], "hashPair": [{"hashAlg": "SHA2-256", "saltLen": 32}]}, {"modulo": 3072, "maskFunction": ["mgf1"], "hashPair": [{"hashAlg": "SHA2-256", "saltLen": 32}]}, {"modulo": 4096, "maskFunction": ["mgf1"], "hashPair": [{"hashAlg": "SHA2-256", "saltLen": 32}]}]}
+    ]},
+    {"algorithm": "ECDSA", "mode": "sigVer", "revision": "FIPS186-5", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}], "capabilities": [{"curve": ["P-256"], "hashAlg": ["SHA2-256"]}]},
+    {"algorithm": "DetECDSA", "mode": "sigGen", "revision": "FIPS186-5", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}, {"algorithm": "DRBG", "valValue": "same"}], "componentTest": false, "capabilities": [{"curve": ["P-256"], "hashAlg": ["SHA2-256"]}]},
+    {"algorithm": "XECDH", "mode": "SSC", "revision": "RFC7748", "prereqVals": [{"algorithm": "DRBG", "valValue": "same"}], "curve": ["Curve25519"]},
+    {"algorithm": "KAS-ECC", "mode": "CDH-Component", "revision": "1.0", "prereqVals": [{"algorithm": "ECDSA", "valValue": "same"}], "function": ["keyPairGen"], "curve": ["P-256"]}
+  ]
+}

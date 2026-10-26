@@ -106,5 +106,7 @@ tests/net/autotest-*.json
 tests/net/NETLOG*.8xv
 tests/net/metrics.json
 tests/net/*.pcap
+tests/validation/acvp/autotest.json
+tests/validation/acvp/response.json
 tests/profiling/lwip_dast/autotest.json
 tests/profiling/lwip_dast/autotester.log

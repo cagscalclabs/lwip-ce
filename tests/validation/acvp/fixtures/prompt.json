@@ -1,0 +1,78 @@
+[
+  {
+    "acvVersion": "1.0"
+  },
+  {
+    "vsId": 1,
+    "algorithm": "SHA2-256",
+    "revision": "1.0",
+    "testGroups": [
+      {
+        "tgId": 1,
+        "testType": "AFT",
+        "tests": [
+          {"tcId": 1, "len": 0, "msg": "00"},
+          {"tcId": 2, "len": 24, "msg": "616263"}
+        ]
+      }
+    ]
+  },
+  {
+    "vsId": 2,
+    "algorithm": "HMAC-SHA2-256",
+    "revision": "2.0",
+    "testGroups": [
+      {
+        "tgId": 2,
+        "testType": "AFT",
+        "keyLen": 160,
+        "macLen": 256,
+        "tests": [
+          {
+            "tcId": 3,
+            "len": 64,
+            "msg": "4869205468657265",
+            "key": "0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "vsId": 3, "algorithm": "ACVP-AES-CBC", "revision": "1.0",
+    "testGroups": [{"tgId": 3, "testType": "AFT", "direction": "encrypt", "keyLen": 128, "payloadLen": 128,
+      "tests": [{"tcId": 4, "key": "2B7E151628AED2A6ABF7158809CF4F3C", "iv": "000102030405060708090A0B0C0D0E0F", "pt": "6BC1BEE22E409F96E93D7E117393172A"}]}]
+  },
+  {
+    "vsId": 4, "algorithm": "ACVP-AES-GCM", "revision": "1.0",
+    "testGroups": [{"tgId": 4, "testType": "AFT", "direction": "encrypt", "keyLen": 128, "ivLen": 96, "ivGen": "external", "payloadLen": 128, "aadLen": 0, "tagLen": 128,
+      "tests": [{"tcId": 5, "key": "00000000000000000000000000000000", "iv": "000000000000000000000000", "pt": "00000000000000000000000000000000", "aad": ""}]}]
+  },
+  {
+    "vsId": 5, "algorithm": "ACVP-AES-CCM", "revision": "1.0",
+    "testGroups": [{"tgId": 5, "testType": "AFT", "direction": "encrypt", "keyLen": 128, "ivLen": 56, "payloadLen": 32, "aadLen": 64, "tagLen": 64,
+      "tests": [{"tcId": 6, "key": "000102030405060708090A0B0C0D0E0F", "iv": "10111213141516", "pt": "20212223", "aad": "0001020304050607"}]}]
+  },
+  {
+    "vsId": 6, "algorithm": "PBKDF", "revision": "1.0",
+    "testGroups": [{"tgId": 6, "testType": "AFT", "hmacAlg": "SHA2-256",
+      "tests": [{"tcId": 7, "password": "password", "salt": "73616C74", "iterationCount": 1, "keyLen": 256}]}]
+  },
+  {
+    "vsId": 7, "algorithm": "KDA", "mode": "HKDF", "revision": "Sp800-56Cr1",
+    "testGroups": [{"tgId": 7, "testType": "AFT", "zLength": 176,
+      "kdfConfiguration": {"kdfType": "hkdf", "l": 256, "saltLen": 104, "saltMethod": "random", "fixedInfoPattern": "uPartyInfo||vPartyInfo||l", "fixedInfoEncoding": "concatenation", "hmacAlg": "SHA2-256"},
+      "tests": [{"tcId": 8, "kdfParameter": {"kdfType": "hkdf", "salt": "000102030405060708090A0B0C", "z": "0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B0B", "l": 256}, "fixedInfoPartyU": {"partyId": "A0A1"}, "fixedInfoPartyV": {"partyId": "B0B1"}}]}]
+  },
+  {
+    "vsId": 8, "algorithm": "ECDSA", "mode": "sigVer", "revision": "FIPS186-5",
+    "testGroups": [{"tgId": 8, "testType": "AFT", "curve": "P-256", "hashAlg": "SHA2-256",
+      "tests": [{"tcId": 9, "message": "73616D706C65", "qx": "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6", "qy": "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299", "r": "EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716", "s": "F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8"}]}]
+  },
+  {
+    "vsId": 9, "algorithm": "RSA", "mode": "sigVer", "revision": "FIPS186-5",
+    "testGroups": [{"tgId": 9, "testType": "AFT", "sigType": "pkcs1v1.5", "hashAlg": "SHA2-256", "modulo": 2048, "e": "010001",
+      "n": "AA9E3D17C97A05D8FE1334E2AD5294F915EEA69B73F523B29C6D500145D4DFBA24C4E0E6EA2BA75118ED9CB976187E59F40150025E45B89D9B4B59E5FD6A8C3CB5472F0E8342711A240AD3E5D4823C96BB698C2E71DA230130A174B432D06FD3B342098E53272E0A20826C6E5E14F64F9B8E2466BA20A510400A1070008CD9FE17F9C4BFD2D5F8603AE049E93A95FB71689CA4BA161D38EC7CA8B71986359703926D908B4B917E52CB44E4057436ACBE341E45A13F70307E575733F54B773A0C984FE15AD5C5348048D3C28883AFFD9723DB98977A4BE646E6E4DD75E9B553C4A0679800C27D877CD6713D792E10672A88E9E60866F6E5AC70A53ED4B83B8EB1",
+      "tests": [{"tcId": 10, "message": "6C7749502D434520414356502052534120736967566572", "signature": "44F45154F5F538B2E6801E7B661B2B749484B8352EDF472C45967DA11154CBF1F2193F43B54A4E61BA4108A8B80DBD394244C4B4D479C5F12D281AB3FB767FD793D4EC3505BE8FC42CB4BEC2B4D53EFEB7CDCC03650745E6B9581B2D8BC0639CAB432B1EA31AD8CF26DA125B60AD066C303773A70D9B50722314D3BF504C6DC7BB2BF91704046D406E7D74DC8C5FDD84CFB882D1D2F674E909ACB1EBF12DAE46B2DA401783F298F5CE40EA0F465DC855C0F0C75C478F87C48709C8DA7D28308F11336DBEA05F9707F29B9F361D27CC969DCA8B2724CC653092A6BBC3AC3E84513B6079FEEDA07792458AF05B662867AB70047791C1B2BB8F6578EB122F0673C6"}]}]
+  }
+]

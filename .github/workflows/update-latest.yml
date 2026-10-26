@@ -6,8 +6,8 @@ name: Update Latest Release
 # published -- re-running this on every unrelated run (e.g. a no-op
 # rebuild) would just re-tag/re-publish identical bits.
 #
-# Gate: all of build.yml, cavp.yml, timing.yml, tests.yml, net.yml, host.yml,
-# sast.yml, and dast.yml must "cover" HEAD. A workflow covers HEAD if either its latest
+# Gate: all of build.yml, acvp.yml, cavp.yml, timing.yml, tests.yml, net.yml,
+# host.yml, sast.yml, and dast.yml must "cover" HEAD. A workflow covers HEAD if either its latest
 # successful run is AT HEAD, or its latest successful run's commit has no
 # diff against HEAD restricted to that workflow's own `paths:` filter (i.e.
 # nothing that would have re-triggered it actually changed since).
@@ -159,6 +159,7 @@ jobs:
         run: |
           declare -A PATHS
           PATHS[build.yml]="src/** build-tools/** ce-libify.toml exports.txt makefile tests/** !tests/dast.json .github/ci-versions.env .github/workflows/build.yml"
+          PATHS[acvp.yml]="src/** tests/validation/acvp/** tests/net/common/** .github/actions/emulator-env/** .github/workflows/acvp.yml"
           PATHS[cavp.yml]="src/** tests/profiling/tls_cavp/** tests/common/** .github/workflows/cavp.yml"
           PATHS[timing.yml]="src/** tests/profiling/tls_timing/** tests/common/** .github/workflows/timing.yml"
           PATHS[tests.yml]="src/** tests/unit/** tests/common/** .github/workflows/tests.yml"
@@ -170,7 +171,7 @@ jobs:
           all_covered=true
           report=""
 
-          for wf in build.yml cavp.yml timing.yml tests.yml net.yml host.yml sast.yml dast.yml; do
+          for wf in build.yml acvp.yml cavp.yml timing.yml tests.yml net.yml host.yml sast.yml dast.yml; do
             run_json=$(gh api "repos/${{ github.repository }}/actions/workflows/$wf/runs?status=success&branch=master&per_page=1" \
               --jq '.workflow_runs[0]')
             run_sha=$(echo "$run_json" | jq -r '.head_sha // empty')

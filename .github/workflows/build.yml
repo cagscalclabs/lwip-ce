@@ -4,7 +4,8 @@ name: Build Dylib
 # uploads both as artifacts. This workflow ONLY attempts the build -- it no
 # longer runs unit tests, CAVP, SAST, or DAST, and it no longer publishes a
 # release. Those are independent workflows on their own triggers now (see
-# tests.yml, net.yml, host.yml, cavp.yml, sast.yml, dast.yml, timing.yml); update-latest.yml is
+# tests.yml, net.yml, host.yml, acvp.yml, cavp.yml, sast.yml, dast.yml,
+# timing.yml); update-latest.yml is
 # the single gate that checks all of them before tagging/publishing a
 # release from whatever this workflow last built successfully.
 
@@ -170,6 +171,7 @@ jobs:
           gh workflow run cavp.yml  --repo "${{ github.repository }}" --ref "$REF"
           gh workflow run tests.yml --repo "${{ github.repository }}" --ref "$REF"
           if [ "${{ github.event_name }}" != pull_request ]; then
+            gh workflow run acvp.yml --repo "${{ github.repository }}" --ref "$REF"
             gh workflow run net.yml --repo "${{ github.repository }}" --ref "$REF"
           fi
 

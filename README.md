@@ -9,6 +9,7 @@
 ![Network Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/net.yml/badge.svg?branch=master&cache=1)
 ![Host Tests and Fuzzing](https://github.com/cagscalclabs/lwip-ce/actions/workflows/host.yml/badge.svg?branch=master&cache=1)
 <br>
+![ACVP Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/acvp.yml/badge.svg?branch=master&cache=1)
 ![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 
@@ -29,6 +30,8 @@ Host Tests and Fuzzing run host-compiled regression tests with AddressSanitizer 
 <hr>
 
 **Cryptography Quality Checks**
+
+ACVP Validation parses native ACVP vector-set JSON on the host and streams bounded primitive operations over the private CEmu network to the shipping `lwip.lib`. Its adapters cover SHA2-256, HMAC-SHA2-256, AES-CBC/GCM/CCM, PBKDF2, KDA/HKDF, RSA signature verification, P-256 ECDSA/CDH, and X25519 SSC; deterministic fixtures exercise the hash, MAC, symmetric, KDF, RSA, and ECDSA verification paths in CI, while host schema tests cover the generated-key families. Hash_DRBG is deliberately not advertised because the production RNG has no deterministic entropy-injection API. Live NIST ACVTS submission is not enabled, so this remains an interoperability and implementation check rather than a formal validation.
 
 CAVP selects 16 random samples from the NIST RSP datasets that match the primitives we provide (with the exception of SHA-256 Monte Carlo, which selects one) (totaling 185 samples covering AES-CBC, GCM, CCM, SHA-256, HMAC-SHA-256, PBKDF2, HKDF, RSA-PSS-RSAE-SHA256, RSA-PKCS1-SHA256, and X25519). Where NIST publishes no RSP for a primitive (or in the case of RSA with e=65537), the output of python3-cryptography is used instead. Our workflow caches the expected values and then serializes the inputs into an AppVar for transfer to the TI-84+ CE. The CAVP profiler runs on the calculator, dumping the on-device primitive output to an AppVar that gets fed back to the test environment. The AppVar is then parsed and graded against the expectations cached. This test does not constitute a formal NIST CAVP certification; it validates our implementations against samples drawn from NIST’s published CAVP validation-vector datasets.
 
