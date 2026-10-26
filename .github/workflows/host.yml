@@ -1,0 +1,90 @@
+name: Host Tests and Fuzzing
+
+# Host-compiled checks of production sources, no emulator needed:
+#
+#   host-tests: every tests/host/*/run.py and tests/host/*/test_*.py, built
+#               with ASan + UBSan by the scripts themselves.
+#   fuzz:       libFuzzer + ASan + UBSan harnesses in tests/fuzz for the
+#               parsers that take network or file input (JSON, XML, URL,
+#               base64, ASN.1, X.509, PCAP decode, WebSocket frames, TLS
+#               EncryptedExtensions / CertificateRequest / Certificate).
+#               Corpora persist across runs through the cache; nightly runs
+#               fuzz ten times longer than push/PR runs.
+
+on:
+  push:
+    branches: [master, wireless]
+    paths:
+      - 'src/**'
+      - 'tests/host/**'
+      - 'tests/fuzz/**'
+      - 'tests/profiling/tls_timing/tools/**'
+      - 'statistics/**'
+      - '.github/workflows/host.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/host/**'
+      - 'tests/fuzz/**'
+      - 'tests/profiling/tls_timing/tools/**'
+      - 'statistics/**'
+      - '.github/workflows/host.yml'
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lwip-host-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Run host tests
+        run: |
+          status=0
+          for test in tests/host/*/run.py tests/host/*/test_*.py; do
+            echo "::group::$test"
+            python3 "$test" || { status=1; echo "::error file=$test::$test failed"; }
+            echo "::endgroup::"
+          done
+          exit $status
+
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [json, xml, url, base64, asn1, pcap, x509, ws, tls]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Restore corpus
+        uses: actions/cache@v5
+        with:
+          path: tests/fuzz/out/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        run: make -C tests/fuzz run-${{ matrix.target }} FUZZ_SECONDS=${{ github.event_name == 'schedule' && 3000 || 300 }}
+
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: tests/fuzz/out/artifacts/
+          if-no-files-found: ignore

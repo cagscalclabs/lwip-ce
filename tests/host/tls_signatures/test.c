@@ -43,7 +43,7 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
     };
     assert(memcmp(buf + 38, fixed_body, sizeof(fixed_body)) == 0);
     assert(be16(buf+47) == n-49);
-    unsigned versions = 0, groups = 0, key_share = 0, max_fragment_length = 0;
+    unsigned versions = 0, groups = 0, key_share = 0, record_size_limit = 0;
     unsigned signatures = 0, alpn = 0, sni = 0, psk_modes = 0, psk_ext = 0;
     for (size_t off = 49; off < n; )
     {
@@ -82,10 +82,11 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
             assert(memcmp(buf+off+79, ctx.ecdhe_public, 32) == 0);
             key_share++;
         }
-        if (type == TLS_EXT_MAX_FRAGMENT_LENGTH)
+        if (type == TLS_EXT_RECORD_SIZE_LIMIT)
         {
-            assert(len == 1 && buf[off+4] == TLS_MAX_FRAGMENT_LENGTH_4096);
-            max_fragment_length++;
+            assert(len == 2 && buf[off+4] == TLS_RECORD_SIZE_LIMIT_4096_HI &&
+                   buf[off+5] == TLS_RECORD_SIZE_LIMIT_4096_LO);
+            record_size_limit++;
         }
         if (type == 0)
         {
@@ -128,7 +129,7 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         off += 4 + len;
     }
     assert(versions == 1 && groups == 1 && key_share == 1);
-    assert(max_fragment_length == 1);
+    assert(record_size_limit == 1);
     assert(signatures == 2 && alpn == (unsigned)offer_alpn);
     assert(sni == (unsigned)(hostname && !strcmp(hostname, "example.test")));
     assert(psk_modes == (unsigned)psk && psk_ext == (unsigned)psk);
@@ -164,20 +165,22 @@ static void handshake_extension_tests(void)
         TLS_EXT_SUPPORTED_GROUPS & 0xff, 0, 6,
         0, 4, 0, 0x1d, 0, 0x1d
     };
-    static const uint8_t ee_mfl_4096[] = {
-        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 7,
-        0, 5, 0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1,
-        TLS_MAX_FRAGMENT_LENGTH_4096
+    static const uint8_t ee_rsl_4096[] = {
+        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 8,
+        0, 6, 0, TLS_EXT_RECORD_SIZE_LIMIT, 0, 2,
+        TLS_RECORD_SIZE_LIMIT_4096_HI, TLS_RECORD_SIZE_LIMIT_4096_LO
     };
-    static const uint8_t ee_mfl_wrong[] = {
-        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 7,
-        0, 5, 0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1, 3
+    static const uint8_t ee_rsl_wrong[] = {
+        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 8,
+        0, 6, 0, TLS_EXT_RECORD_SIZE_LIMIT, 0, 2, 0x40, 0x01
     };
-    static const uint8_t ee_mfl_duplicate[] = {
-        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 12,
-        0, 10,
-        0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1, TLS_MAX_FRAGMENT_LENGTH_4096,
-        0, TLS_EXT_MAX_FRAGMENT_LENGTH, 0, 1, TLS_MAX_FRAGMENT_LENGTH_4096
+    static const uint8_t ee_rsl_duplicate[] = {
+        TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS, 0, 0, 14,
+        0, 12,
+        0, TLS_EXT_RECORD_SIZE_LIMIT, 0, 2,
+        TLS_RECORD_SIZE_LIMIT_4096_HI, TLS_RECORD_SIZE_LIMIT_4096_LO,
+        0, TLS_EXT_RECORD_SIZE_LIMIT, 0, 2,
+        TLS_RECORD_SIZE_LIMIT_4096_HI, TLS_RECORD_SIZE_LIMIT_4096_LO
     };
     static const uint8_t cert_request[] = {
         TLS_HANDSHAKE_CERTIFICATE_REQUEST, 0, 0, 11,
@@ -233,18 +236,18 @@ static void handshake_extension_tests(void)
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
-    assert(tls_recv_encrypted_extensions(&ctx, ee_mfl_4096,
-                                          sizeof(ee_mfl_4096)));
+    assert(tls_recv_encrypted_extensions(&ctx, ee_rsl_4096,
+                                          sizeof(ee_rsl_4096)));
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
     last_alert = 0;
-    assert(!tls_recv_encrypted_extensions(&ctx, ee_mfl_wrong,
-                                           sizeof(ee_mfl_wrong)));
+    assert(!tls_recv_encrypted_extensions(&ctx, ee_rsl_wrong,
+                                           sizeof(ee_rsl_wrong)));
     assert(last_alert == TLS_ALERT_ILLEGAL_PARAMETER);
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
-    assert(!tls_recv_encrypted_extensions(&ctx, ee_mfl_duplicate,
-                                           sizeof(ee_mfl_duplicate)));
+    assert(!tls_recv_encrypted_extensions(&ctx, ee_rsl_duplicate,
+                                           sizeof(ee_rsl_duplicate)));
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;

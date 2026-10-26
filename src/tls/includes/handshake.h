@@ -557,6 +557,19 @@ extern "C"
 /** Send one fatal alert under the currently active record epoch. */
 bool tls_send_fatal_alert(struct tls_handshake_context *ctx, uint8_t description);
 
+/* Server role (external PSK + X25519, psk_dhe_ke). Parses the ClientHello and
+ * builds the ServerHello into `out`; then tls_derive_handshake_keys(), then
+ * tls_server_send_flight() for EncryptedExtensions + Finished (to encrypt
+ * with handshake keys), then tls_derive_application_keys(), and finally
+ * tls_server_recv_finished() on the client's Finished. */
+bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
+                                  const uint8_t *msg, size_t len,
+                                  uint8_t *out, size_t out_cap, size_t *written);
+bool tls_server_send_flight(struct tls_handshake_context *ctx,
+                            uint8_t *out, size_t out_cap, size_t *written);
+bool tls_server_recv_finished(struct tls_handshake_context *ctx,
+                              const uint8_t *msg, size_t len);
+
 /** Return a human-readable name for a TLS alert description byte (e.g. "bad_record_mac"). */
 const char *tls_alert_name(uint8_t description);
 

@@ -1,0 +1,126 @@
+name: Network Tests
+
+# Networked tests of the latest lwip-latest build on CEmu-lwIP-CE, whose
+# emulated USB Ethernet adapter is bridged to a NATed TAP interface on the
+# runner by alessiodam/cemu-net-action. Dispatched by build.yml next to
+# tests.yml and cavp.yml, and run directly on pull requests that change the
+# suites or their harness.
+#
+#   nettest: tests/net, one matrix job per suite (see tests/net/README.md):
+#            sockets, raw lwIP APIs + IPv4/IPv6 protocol machinery, TLS,
+#            TLS record limits, TLS server role, and performance metrics.
+#   dast:    tests/profiling/lwip_dast -- the full DAST probe set driven
+#            unattended by build-tools/dast/lwip-dast.py, gated by
+#            dast_report.py exactly like the committed hardware report.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tests/net/**'
+      - 'tests/profiling/lwip_dast/**'
+      - 'build-tools/dast/**'
+      - '.github/actions/emulator-env/**'
+      - '.github/workflows/net.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: lwip-net-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nettest:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [sockets, raw, tls, records, server, perf]
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: env
+        uses: ./.github/actions/emulator-env
+        with:
+          rom-name: ${{ vars.AUTOTESTER_ROM }}
+          rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+          github-token: ${{ github.token }}
+
+      - name: Install scapy
+        run: sudo pip install --break-system-packages scapy
+
+      - name: Build ${{ matrix.suite }}
+        run: make -C tests/net ${{ matrix.suite }}
+
+      - name: Run ${{ matrix.suite }}
+        run: |
+          sudo --preserve-env=AUTOTESTER_ROM,GITHUB_STEP_SUMMARY python3 tests/net/run.py \
+            --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
+            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+
+      - name: Remove CEmu Rom
+        if: always()
+        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: net-${{ matrix.suite }}
+          path: |
+            tests/net/NETLOG-*.8xv
+            tests/net/metrics.json
+            tests/net/*.pcap
+            tests/net/autotest-*.json
+          if-no-files-found: ignore
+
+  dast:
+    name: DAST (live, emulated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check calc-side test list matches the manifest
+        run: |
+          python3 build-tools/dast/lwip-dast.py --gen-header
+          git diff --exit-code tests/profiling/lwip_dast/src/dast_tests.h
+
+      - id: env
+        uses: ./.github/actions/emulator-env
+        with:
+          rom-name: ${{ vars.AUTOTESTER_ROM }}
+          rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+          github-token: ${{ github.token }}
+
+      - name: Install scapy
+        run: sudo pip install --break-system-packages scapy
+
+      - name: Build LWDAST
+        run: make -C tests/profiling/lwip_dast RELEASE_ROOT="${{ github.workspace }}/release"
+
+      - name: Run DAST probes
+        run: |
+          sudo --preserve-env=AUTOTESTER_ROM python3 tests/profiling/lwip_dast/ci.py \
+            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+
+      - name: Render report and gate on failures
+        run: python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove CEmu Rom
+        if: always()
+        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dast-live
+          path: |
+            tests/dast.json
+            tests/profiling/lwip_dast/autotester.log
+          if-no-files-found: ignore

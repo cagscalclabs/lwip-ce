@@ -22,7 +22,6 @@ env:
   AUTOTESTER_ROM: ${{ github.workspace }}/${{ vars.AUTOTESTER_ROM }}
   LWIP_PROF_TESTS: ${{github.workspace}}/tests/profiling
   LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
-  CEMU_PATH: ${{github.workspace}}/CEmu
   CEDEV: ${{github.workspace}}/CEdev
   CEDEV_BIN: ${{github.workspace}}/CEdev/bin
   CAVP_TEST_DIR: ${{github.workspace}}/tests/profiling/tls_cavp
@@ -45,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update && \
-          sudo apt-get install -y make tar wget qt5-qmake qtbase5-dev xvfb \
+          sudo apt-get install -y make tar wget \
                                   python3 python3-pip
           # cryptography>=44 required for ec.ECDSA(deterministic_signing=True)
           # (RFC 6979 P-256 SIGGEN reference). The Ubuntu package is too old;
@@ -118,45 +117,16 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout CEmu
-        uses: actions/checkout@v4
+      - name: Set up CEmu with emulated networking
+        id: cemu
+        uses: alessiodam/cemu-net-action@v1
         with:
-          repository: CE-Programming/CEmu
-          ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
-          path: ${{env.CEMU_PATH}}
-          persist-credentials: false
-
-      - name: Cache CEmu Build Outputs
-        id: cemu-cache
-        uses: actions/cache@v5
-        with:
-          key: ${{ runner.os }}-cemu-${{ steps.ci_versions.outputs.CEMU_REF }}
-          path: |
-            ${{env.CEMU_PATH}}/core/CEmu
-            ${{env.CEMU_PATH}}/tests/autotester/autotester
-
-      - name: Build CEmu
-        if: steps.cemu-cache.outputs.cache-hit != 'true'
-        run: make -j4 -C ${{env.CEMU_PATH}}/core
-
-      - name: Build Autotester CLI
-        if: steps.cemu-cache.outputs.cache-hit != 'true'
-        run: make -j4 -C ${{env.CEMU_PATH}}/tests/autotester
+          cemu-ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
 
       - name: Install Autotester CLI
-        run: cmake -E copy ${{env.CEMU_PATH}}/tests/autotester/autotester ${{env.CEDEV_BIN}}/cemu-autotester
-
-      - name: Verify saveVar Support In Autotester
         run: |
-          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar" || {
-            echo "ERROR: Installed autotester does not include saveVar support."
-            exit 1
-          }
-
-      - name: Verify Autotester Setup
-        run: |
-          ls -lh ${{env.AUTOTESTER_ROM}}
-          xvfb-run -a ${{env.CEDEV_BIN}}/cemu-autotester --help || echo "Autotester help failed (may be normal)"
+          cmake -E copy "${{ steps.cemu.outputs.autotester }}" "${{env.CEDEV_BIN}}/cemu-autotester"
+          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar"
 
       - name: Prepare shared dyload test files
         run: |

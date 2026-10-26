@@ -246,6 +246,7 @@ static void altcp_tls_ce_rx_release_arm(void)
 static err_t altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p, err_t err);
 static err_t altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_conn);
 static err_t altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
+static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
 static void altcp_tls_ce_cert_job_arm(void);
 
 /* True once the held-back server flight has been replayed and the server
@@ -1122,7 +1123,16 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
      * available again for future RX bursts. */
     altcp_tls_ce_queue_rx(state, p);
 
-    return altcp_tls_ce_lower_recv_process(conn, state);
+    /* p is ours now (copied into state->rx and freed). Anything but ERR_ABRT
+     * would tell TCP the segment was refused, so it would keep the freed pbuf
+     * as refused_data and free it a second time. Data the application could
+     * not take yet stays queued here and is retried on recved/poll. */
+    if (altcp_tls_ce_lower_recv_process(conn, state) == ERR_ABRT)
+    {
+        /* ERROR_AUDIT: propagates an abort already logged by recv_process. */
+        return ERR_ABRT;
+    }
+    return ERR_OK;
 }
 
 /* Collects work handed to the Wi-Fi bridge. ERR_INPROGRESS while it is still
@@ -1422,6 +1432,200 @@ static void altcp_tls_ce_cert_job_arm(void)
     lwip_dispatch_start();
 }
 
+/* ========== Server role ========== */
+
+/* The record layer encrypts with the client_* keys and decrypts with the
+ * server_* keys. A server swaps the two sets after each derivation so the same
+ * record code protects its traffic in the right direction. */
+static void altcp_tls_ce_swap_keys(uint8_t *a_key, uint8_t *a_iv, uint8_t *b_key, uint8_t *b_iv)
+{
+    uint8_t tmp[16];
+    memcpy(tmp, a_key, 16);
+    memcpy(a_key, b_key, 16);
+    memcpy(b_key, tmp, 16);
+    memcpy(tmp, a_iv, 12);
+    memcpy(a_iv, b_iv, 12);
+    memcpy(b_iv, tmp, 12);
+    tls_secure_memzero(tmp, sizeof(tmp));
+}
+
+/* ClientHello -> ServerHello, then EncryptedExtensions + Finished in one
+ * handshake-key record. */
+static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *state,
+                                      const uint8_t *client_hello, size_t len)
+{
+    struct tls_handshake_context *ctx = &state->tls_ctx;
+    struct tls_traffic_keys *k = &ctx->keys;
+    uint8_t hello[5 + 128];
+    uint8_t flight[64];
+    uint8_t record[5 + sizeof(flight) + 1 + TLS_AES_AUTH_TAG_SIZE];
+    size_t hello_len = 0, flight_len = 0, record_len = 0;
+    bool ok;
+
+    tls_crypto_guard_enable();
+    ok = tls_server_recv_client_hello(ctx, client_hello, len, hello + 5, sizeof(hello) - 5, &hello_len);
+    tls_crypto_guard_disable();
+    if (!ok)
+    {
+        return false;
+    }
+    hello[0] = TLS_CONTENT_TYPE_HANDSHAKE;
+    hello[1] = 0x03;
+    hello[2] = 0x03;
+    hello[3] = (uint8_t)(hello_len >> 8);
+    hello[4] = (uint8_t)hello_len;
+    if (altcp_write(conn->inner_conn, hello, (u16_t)(5 + hello_len), TCP_WRITE_FLAG_COPY) != ERR_OK)
+    {
+        return false;
+    }
+
+    tls_crypto_guard_enable();
+    ok = tls_derive_handshake_keys(ctx);
+    tls_crypto_guard_disable();
+    if (!ok)
+    {
+        return false;
+    }
+    altcp_tls_ce_swap_keys(k->client_handshake_key, k->client_handshake_iv,
+                           k->server_handshake_key, k->server_handshake_iv);
+
+    tls_crypto_guard_enable();
+    ok = tls_server_send_flight(ctx, flight, sizeof(flight), &flight_len);
+    tls_crypto_guard_disable();
+    if (!ok || !altcp_tls_ce_encrypt_record_stream(ctx, true, TLS_CONTENT_TYPE_HANDSHAKE, flight, flight_len,
+                                                   record, sizeof(record), &record_len))
+    {
+        tls_secure_memzero(flight, sizeof(flight));
+        return false;
+    }
+    tls_secure_memzero(flight, sizeof(flight));
+    ctx->client_hs_seq_num++;
+    if (altcp_write(conn->inner_conn, record, (u16_t)record_len, TCP_WRITE_FLAG_COPY) != ERR_OK)
+    {
+        return false;
+    }
+    altcp_output(conn->inner_conn);
+
+    /* Application keys come from the transcript through the server Finished. */
+    tls_crypto_guard_enable();
+    ok = tls_derive_application_keys(ctx);
+    tls_crypto_guard_disable();
+    if (!ok)
+    {
+        return false;
+    }
+    altcp_tls_ce_swap_keys(k->client_application_key, k->client_application_iv,
+                           k->server_application_key, k->server_application_iv);
+    return true;
+}
+
+static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
+{
+    struct tls_handshake_context *ctx = &state->tls_ctx;
+
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED) && !altcp_tls_ce_init_handshake(state))
+    {
+        return ERR_OK; /* RNG not ready yet; retried on the next segment or poll */
+    }
+
+    while (state->rx != NULL && state->rx->tot_len >= 5 &&
+           !(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
+    {
+        uint8_t header[5];
+        size_t rec_len, total_len;
+
+        pbuf_copy_partial(state->rx, header, sizeof(header), 0);
+        rec_len = ((size_t)header[3] << 8) | header[4];
+        total_len = 5 + rec_len;
+        if (rec_len == 0 || rec_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT + 256u)
+        {
+            (void)tls_send_fatal_alert(ctx, TLS_ALERT_RECORD_OVERFLOW);
+            ALTCP_TLS_CE_ERROR_ABORT(conn);
+            return ERR_ABRT;
+        }
+        if ((size_t)state->rx->tot_len < total_len)
+        {
+            break;
+        }
+
+        if (header[0] == TLS_CONTENT_TYPE_CHANGE_CIPHER_SPEC)
+        {
+            /* Middlebox-compatibility CCS (RFC 8446 D.4): ignored. */
+            altcp_tls_ce_consume_recved(state, total_len);
+            continue;
+        }
+
+        if (ctx->state == TLS_STATE_INIT && header[0] == TLS_CONTENT_TYPE_HANDSHAKE)
+        {
+            uint8_t *hello = (uint8_t *)mem_malloc(rec_len);
+            bool ok;
+            if (hello == NULL)
+            {
+                return ERR_OK; /* retry once memory frees up */
+            }
+            pbuf_copy_partial(state->rx, hello, (u16_t)rec_len, 5);
+            altcp_tls_ce_consume_recved(state, total_len);
+            ok = altcp_tls_ce_server_hello(conn, state, hello, rec_len);
+            mem_free(hello);
+            if (!ok)
+            {
+                ALTCP_TLS_CE_ERROR_ABORT(conn);
+                return ERR_ABRT;
+            }
+            continue;
+        }
+
+        if (ctx->state == TLS_STATE_SERVER_FINISHED_RECEIVED &&
+            header[0] == TLS_CONTENT_TYPE_APPLICATION_DATA)
+        {
+            struct pbuf *plain = NULL;
+            size_t plain_len = 0;
+            uint8_t inner_type = 0, finished[36];
+            err_t err = altcp_tls_ce_decrypt_record_stream(state, conn, true, total_len,
+                                                          &plain, &plain_len, &inner_type);
+            bool ok;
+            if (err == ERR_MEM)
+            {
+                return ERR_OK;
+            }
+            if (err != ERR_OK)
+            {
+                ALTCP_TLS_CE_ERROR_ABORT_CODE(conn, -err);
+                return ERR_ABRT;
+            }
+            ok = inner_type == TLS_CONTENT_TYPE_HANDSHAKE && plain_len == sizeof(finished) &&
+                 pbuf_copy_partial(plain, finished, sizeof(finished), 0) == sizeof(finished);
+            pbuf_free(plain);
+            if (ok)
+            {
+                tls_crypto_guard_enable();
+                ok = tls_server_recv_finished(ctx, finished, sizeof(finished));
+                tls_crypto_guard_disable();
+            }
+            if (!ok)
+            {
+                (void)tls_send_fatal_alert(ctx, TLS_ALERT_DECRYPT_ERROR);
+                ALTCP_TLS_CE_ERROR_ABORT(conn);
+                return ERR_ABRT;
+            }
+            state->flags |= ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE | ALTCP_TLS_CE_FLAGS_UPPER_CALLED;
+            ctx->tx_epoch = 2;
+            STATE_CHG(conn, LWIP_STATE_TLS_HANDSHAKE_DONE);
+            break;
+        }
+
+        (void)tls_send_fatal_alert(ctx, TLS_ALERT_UNEXPECTED_MESSAGE);
+        ALTCP_TLS_CE_ERROR_ABORT(conn);
+        return ERR_ABRT;
+    }
+
+    if ((state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) && state->rx != NULL)
+    {
+        return altcp_tls_ce_handle_rx_appldata(conn, state);
+    }
+    return ERR_OK;
+}
+
 /**
  * @brief Process received data (handshake or application data)
  */
@@ -1436,11 +1640,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
         if (config->is_server)
         {
-            /* Server: expect ClientHello, send ServerHello */
-            /* @todo: implement server handshake processing */
-            LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: server handshake not yet implemented\n"));
-            ALTCP_TLS_CE_ERROR_ABORT(conn);
-            return ERR_ABRT;
+            return altcp_tls_ce_server_process(conn, state);
         }
         else
         {
@@ -2381,7 +2581,12 @@ altcp_tls_ce_remove_callbacks(struct altcp_pcb *inner_conn)
     altcp_recv(inner_conn, NULL);
     altcp_sent(inner_conn, NULL);
     altcp_err(inner_conn, NULL);
-    altcp_poll(inner_conn, NULL, inner_conn->pollinterval);
+    /* A listening pcb never gets a poll callback, and tcp_poll() asserts on
+     * one, so only clear a poll that was set. */
+    if (inner_conn->poll != NULL)
+    {
+        altcp_poll(inner_conn, NULL, inner_conn->pollinterval);
+    }
 }
 
 static void
@@ -2668,7 +2873,10 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
              * set — the alert is on the wire even though the TCP-side
              * close didn't go through. */
             altcp_tls_ce_setup_callbacks(conn, inner_conn);
-            altcp_poll(inner_conn, oldpoll, inner_conn->pollinterval);
+            if (oldpoll != NULL)
+            {
+                altcp_poll(inner_conn, oldpoll, inner_conn->pollinterval);
+            }
             ERROR_CODE(-err);
             return err;
         }
