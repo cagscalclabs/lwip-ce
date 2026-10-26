@@ -62,6 +62,17 @@ def render(
         "",
         "Deterministic responses are compared with independent host implementations; generated-key ECDSA, X25519, and P-256 results are verified semantically.",
         "",
+        "<details>",
+        f"<summary>Actual vector inputs ({len(rows)} cases; local ACVP IDs)</summary>",
+        "",
+        "> `vsId`, `tgId`, and `tcId` are locally assigned for this generated corpus. "
+        "A live ACVTS session supplies its own IDs, which are echoed unchanged.",
+        "",
+        "```json",
+        json.dumps(prompt, indent=2),
+        "```",
+        "</details>",
+        "",
     ])
     return "\n".join(lines), report, overall
 
@@ -97,7 +108,8 @@ def main() -> int:
     if github_summary:
         with github_summary.open("a") as stream:
             stream.write(markdown)
-    print(markdown)
+    print(f"ACVP summary: {report.get('passedTests', 0)}/{report.get('total', 0)} vectors passed; "
+          f"Markdown written to {args.markdown}")
     return 0 if passed else 1
 
 

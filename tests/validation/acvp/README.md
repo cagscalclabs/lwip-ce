@@ -31,7 +31,11 @@ both cipher directions, valid and invalid authentication/signature cases,
 boundary lengths, and all generated-key operations. `run.py` executes that
 corpus through the calculator. `summary.py` publishes per-primitive counts and
 results, with Markdown, JSON, prompts, expected results, and semantic-validation
-oracles retained in the workflow artifact.
+oracles retained in the workflow artifact. A collapsed section at the bottom
+of the job summary embeds the exact prompt JSON, including every local
+`vsId`, `tgId`, and `tcId`. Live ACVTS sessions replace those local identifiers
+with server-assigned IDs; ACVP does not define permanent catalogue numbers for
+individual generated test cases.
 `capabilities.json` is the exact byte-aligned capability subset implemented by
 the current host and calculator pair; it is a template for the algorithms
 portion of a live ACVTS registration. Its generated-key entries use the

@@ -90,6 +90,8 @@ corpus_markdown, corpus_summary, passed = render(
     corpus, corpus_expected, corpus_response, corpus_oracle, "success")
 assert passed and corpus_summary["passedTests"] == 416
 assert "416/416 test cases matched" in corpus_markdown and "| SHA2-256 |" in corpus_markdown
+assert "<summary>Actual vector inputs (416 cases; local ACVP IDs)</summary>" in corpus_markdown
+assert '"tcId": 416' in corpus_markdown and len(corpus_markdown.encode()) < 900_000
 
 # Revision 1.0 carries HMAC lengths on the group instead of each test case.
 revision_one = {
