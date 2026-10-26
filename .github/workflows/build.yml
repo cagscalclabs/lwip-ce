@@ -163,10 +163,15 @@ jobs:
         if: steps.upload_build_artifact.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A pull request's refs/pull/N/merge cannot be dispatched; run the
+          # branch itself. net.yml has its own pull_request trigger.
+          REF: ${{ github.head_ref || github.ref_name }}
         run: |
-          gh workflow run cavp.yml  --ref "${{ github.ref }}"
-          gh workflow run tests.yml --ref "${{ github.ref }}"
-          gh workflow run net.yml   --ref "${{ github.ref }}"
+          gh workflow run cavp.yml  --repo "${{ github.repository }}" --ref "$REF"
+          gh workflow run tests.yml --repo "${{ github.repository }}" --ref "$REF"
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            gh workflow run net.yml --repo "${{ github.repository }}" --ref "$REF"
+          fi
 
       - name: Publish job summary
         if: always()
@@ -201,4 +206,4 @@ jobs:
             echo
             echo "[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } > comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body-file comment.md
