@@ -42,11 +42,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
 
       - name: Install Doxygen
         run: |
-          sudo apt-get update
-          sudo apt-get install -y graphviz clang-18 libclang-18-dev
           wget -q "https://github.com/doxygen/doxygen/releases/download/Release_1_17_0/doxygen-1.17.0.linux.bin.tar.gz" -O /tmp/doxygen.tar.gz
           tar -xzf /tmp/doxygen.tar.gz -C /tmp
           sudo cp /tmp/doxygen-1.17.0/bin/doxygen /usr/local/bin/doxygen
@@ -57,6 +57,23 @@ jobs:
 
       - name: Build docs
         run: make -C docs html
+
+      - name: Collect the Wi-Fi bridge firmware
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          out=docs/_build/html/firmware
+          mkdir -p "$out"
+          gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.draft | not) | . as $r | .assets[] | select(.name | test("^lwip_wifi_bridge-esp32s3-.*-merged\\.bin$")) | {tag: $r.tag_name, prerelease: $r.prerelease, file: .name}' \
+            | jq -s . > "$out/releases.json"
+          jq -r '.[] | [.tag, .file] | @tsv' "$out/releases.json" | while IFS=$'\t' read -r tag file; do
+            gh release download "$tag" -p "$file" -D "$out"
+          done
+          ls -l "$out"
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'

@@ -14,7 +14,7 @@ manage saved networks. The lwIP-CE app uses the same API for its Wi-Fi screen.
 .. code-block:: text
 
     ┌────────────┐   USB    ┌──────────────────┐   802.11   ┌──────────┐
-    │ Calculator │─────────▶│ lwIP-CE Wi-Fi    │ ·  ·  ·  · │ Wi-Fi    │
+    │ Calculator │────────▶│ lwIP-CE Wi-Fi    │ ·  ·  ·  · │ Wi-Fi    │
     │ (device)   │  stock   │ bridge (host)    │            │ network  │
     └────────────┘  cable   └──────────────────┘            └──────────┘
 
@@ -28,7 +28,9 @@ One of these boards:
   and a printable enclosure. It is built around an ESP32-S3-WROOM-1-N16R8. The
   USB-C port powers the board and carries the console through a CH340K, which
   also handles reset and boot for flashing. The S3's own USB drives the USB-A
-  port for the calculator. The red LED is lit while the bridge is on Wi-Fi.
+  port for the calculator. The red LED blinks quickly while the bridge
+  boots, blinks once a second while it joins a network, and stays lit while it
+  is on Wi-Fi. Otherwise it flashes briefly every 3 seconds.
 - **A Waveshare ESP32-P4 Module Dev Kit** (target ``esp32p4``), which reaches its
   ESP32-C6 Wi-Fi co-processor over SDIO. It works as is.
 
@@ -73,6 +75,9 @@ are produced by the ``wifi_bridge.yml`` workflow for both targets as
 .. code-block:: text
 
     esptool.py --chip esp32s3 write_flash 0x0 lwip_wifi_bridge-esp32s3-<version>-merged.bin
+
+The bridge board can also be flashed from the browser with a released
+firmware: see :doc:`flasher`.
 
 The bridge starts with no saved networks. Open the lwIP-CE app on the
 calculator, choose **Wi-Fi**, then **Scan for networks** or **Add a network**.

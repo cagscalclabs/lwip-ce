@@ -13,6 +13,8 @@ on:
       - 'wifi_bridge/**'
       - '.github/workflows/wifi_bridge.yml'
       - '.github/ci-versions.env'
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -44,7 +46,12 @@ jobs:
 
       - name: Resolve the version
         id: version
-        run: echo "value=$(git describe --tags --always --dirty 2>/dev/null || echo "${GITHUB_SHA:0:7}")" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "value=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=$(git describe --tags --always --dirty 2>/dev/null || echo "${GITHUB_SHA:0:7}")" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Cache the component manager downloads
         uses: actions/cache@v4
@@ -100,3 +107,24 @@ jobs:
           name: lwip-wifi-bridge-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: firmware
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lwip-wifi-bridge-*
+          path: dist
+
+      - name: Attach the firmware to the release and rebuild the docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload "${{ github.ref_name }}" dist/*/*-merged.bin --clobber
+          gh workflow run pages.yml --ref master

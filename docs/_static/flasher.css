@@ -1,0 +1,148 @@
+.tool {
+  border: 1px solid #e1e4e5;
+  border-radius: 6px;
+  margin: 0 0 24px;
+  max-width: 40rem;
+  padding: 20px;
+}
+
+.tool fieldset {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.tool fieldset:disabled {
+  opacity: .5;
+}
+
+.tool h4 {
+  font-size: 100%;
+  margin: 20px 0 8px;
+}
+
+.tool-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.tool-fields > label {
+  display: grid;
+  font-weight: 700;
+  gap: 4px;
+}
+
+.tool-fields > label[hidden] {
+  display: none;
+}
+
+.tool select,
+.tool input:not([type="checkbox"]) {
+  border: 1px solid #c9cdd1;
+  border-radius: 4px;
+  box-shadow: none;
+  box-sizing: border-box;
+  font: inherit;
+  font-weight: 400;
+  height: 34px;
+  min-width: 0;
+  padding: 4px 8px;
+  width: 100%;
+}
+
+.tool-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.tool-row > select,
+.tool-row > .tool-status,
+.tool-row > progress {
+  flex: 1;
+}
+
+.tool .btn {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.tool-fields + .tool-row,
+.tool-checks + .tool-row {
+  margin-top: 16px;
+}
+
+.tool-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: 12px;
+}
+
+.tool-checks label[hidden] {
+  display: none;
+}
+
+.tool-status {
+  color: #555;
+  margin: 12px 0 0;
+  min-height: 1.5em;
+}
+
+.tool-row > .tool-status {
+  margin: 0;
+}
+
+.tool-status.ok {
+  color: #1e7f3c;
+}
+
+.tool-status.error {
+  color: #b3261e;
+}
+
+.tool-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.tool-table td {
+  border-top: 1px solid #e1e4e5;
+  padding: 6px 4px;
+  vertical-align: middle;
+}
+
+.tool-table tr:last-child td {
+  border-bottom: 1px solid #e1e4e5;
+}
+
+.tool-table td:nth-child(2) {
+  color: #555;
+}
+
+.tool-table td:last-child {
+  text-align: right;
+}
+
+.tool-table .btn {
+  font-size: 80%;
+  padding: 4px 10px;
+}
+
+.tool details {
+  margin-top: 12px;
+}
+
+.tool summary {
+  cursor: pointer;
+}
+
+.tool pre {
+  font-size: 75%;
+  margin: 8px 0 0;
+  max-height: 20em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
