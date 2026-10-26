@@ -11,6 +11,7 @@ from acvp_client import (HEADER, MAGIC_REQUEST, MAGIC_RESPONSE, OP_P256_CDH,
                          OP_RSA_PKCS1_SHA2_256_VERIFY, OP_RSA_PSS_SHA2_256_VERIFY,
                          OP_SHA2_256, OP_X25519_SSC, SocketBackend,
                          process_document, reference_backend)
+from summary import render
 
 HERE = Path(__file__).resolve().parent
 prompt = json.loads((HERE / "fixtures" / "prompt.json").read_text())
@@ -26,6 +27,11 @@ assert {(item["algorithm"], item.get("mode")) for item in capabilities} == {
 actual = process_document(prompt, reference_backend)
 if actual != expected:
     raise SystemExit("ACVP fixture response mismatch")
+
+markdown, report, passed = render(prompt, expected, actual, "success")
+assert passed and report["passedTests"] == 10 and "10/10 test cases matched" in markdown
+_, failed_report, passed = render(prompt, expected, None, "failure")
+assert not passed and failed_report["failedTests"] == 10
 
 # Revision 1.0 carries HMAC lengths on the group instead of each test case.
 revision_one = {

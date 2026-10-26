@@ -45,10 +45,18 @@ jobs:
         run: make -C tests/validation/acvp
 
       - name: Process ACVP fixture through CEmu
+        id: run_acvp
         run: |
           sudo --preserve-env=AUTOTESTER_ROM python3 tests/validation/acvp/run.py \
             --autotester "${{ steps.env.outputs.autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}"
+
+      - name: Publish ACVP results
+        if: always()
+        run: |
+          python3 tests/validation/acvp/summary.py \
+            --run-outcome "${{ steps.run_acvp.outcome }}" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Remove CEmu ROM
         if: always()
@@ -60,6 +68,8 @@ jobs:
           name: acvp-validation
           path: |
             tests/validation/acvp/response.json
+            tests/validation/acvp/results.json
+            tests/validation/acvp/summary.md
             tests/validation/acvp/NETLOG.8xv
             tests/validation/acvp/autotest.json
           if-no-files-found: ignore
