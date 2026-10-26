@@ -14,7 +14,7 @@ manage saved networks. The lwIP-CE app uses the same API for its Wi-Fi screen.
 .. code-block:: text
 
     ┌────────────┐   USB    ┌──────────────────┐   802.11   ┌──────────┐
-    │ Calculator │─────────▶│ lwIP-CE Wi-Fi    │ ·  ·  ·  · │ Wi-Fi    │
+    │ Calculator │────────▶│ lwIP-CE Wi-Fi    │ ·  ·  ·  · │ Wi-Fi    │
     │ (device)   │  stock   │ bridge (host)    │            │ network  │
     └────────────┘  cable   └──────────────────┘            └──────────┘
 
