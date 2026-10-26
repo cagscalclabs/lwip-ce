@@ -1,11 +1,6 @@
-/* NETSRV: lwIP-CE's TLS server role (external PSK), driven by openssl
- * s_client from tests/net/run.py.
- *
- * lwIP-CE exports the PSK server configuration, but the server handshake is
- * not implemented: the connection is accepted and then refused when the
- * ClientHello arrives. This suite checks that path stays safe -- the client
- * is refused, the listener closes cleanly and the stack keeps working. When
- * server handshakes land, expect "echo" from psk-client instead. */
+/* NETSRV: lwIP-CE as a TLS 1.3 server with an external PSK, driven by
+ * openssl s_client from tests/net/run.py. Each cipher suite is checked
+ * with a client that echoes a line through the calc. */
 #include <string.h>
 
 #include "net.h"
@@ -43,12 +38,13 @@ static err_t srv_accept(void *arg, struct altcp_pcb *pcb, err_t err)
 static void test_psk_server(void)
 {
     struct tls_psk_identity id = {0};
-    memcpy(id.identity, PSK_IDENTITY, strlen(PSK_IDENTITY));
-    id.identity_len = strlen(PSK_IDENTITY);
-    struct altcp_tls_config *conf = altcp_tls_create_config_psk_server(psk, &id);
+    struct altcp_tls_config *conf;
     struct altcp_pcb *l;
     char reply[64];
     err_t err;
+    memcpy(id.identity, PSK_IDENTITY, strlen(PSK_IDENTITY));
+    id.identity_len = strlen(PSK_IDENTITY);
+    conf = altcp_tls_create_config_psk_server(psk, &id);
     if (!check("altcp_tls_create_config_psk_server", conf != NULL)) return;
     l = altcp_tls_new(conf, IPADDR_TYPE_V4);
     if (check("TLS server bind", l && altcp_bind(l, IP_ANY_TYPE, PORT_PSK + 1) == ERR_OK))
@@ -58,10 +54,13 @@ static void test_psk_server(void)
         {
             altcp_accept(l, srv_accept);
             server_peer = NULL;
-            /* host_call() reports false when the host answers ERR: s_client failed. */
-            check("s_client refused (server handshake not implemented)",
-                  !host_call("psk-client 7101 gcm x25519", reply, sizeof(reply), 120000));
-            check("TLS server accepted the TCP connection", server_peer != NULL);
+            check("s_client echo through calc TLS server (AES-128-GCM)",
+                  host_call("psk-client 7101 gcm x25519", reply, sizeof(reply), 180000) && !strcmp(reply, "echo"));
+            check("TLS server accepted", server_peer != NULL);
+            server_peer = NULL;
+            check("s_client echo through calc TLS server (AES-128-CCM)",
+                  host_call("psk-client 7101 ccm x25519", reply, sizeof(reply), 180000) && !strcmp(reply, "echo"));
+            check("s_client with a wrong PSK refused", !host_call("psk-client-badkey 7101", reply, sizeof(reply), 180000));
             check("TLS listener closes", altcp_close(l) == ERR_OK);
         }
     }
@@ -73,7 +72,7 @@ static void test_still_alive(void)
     struct lwip_socket *sock = open_socket(LWIP_SOCKET_TCP, HOST, PORT_ECHO, NULL, 15000);
     bool ok = sock && write_all(sock, (const uint8_t *)"alive", 5) && read_exact(sock, buf, 5, 10000) == 5 &&
               !memcmp(buf, "alive", 5);
-    check("stack healthy after refused TLS server session", ok);
+    check("stack healthy after TLS server sessions", ok);
     close_socket(sock);
 }
 

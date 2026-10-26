@@ -590,13 +590,17 @@ class Control:
         self.peer.send("K\n" if kind == "requested" else "k\n")
         return "OK"
 
-    def cmd_psk_client(self, port: str, cipher: str, group: str) -> str:
-        peer = OpenSSL(["s_client", "-connect", f"{CALC}:{port}", *psk_args(cipher, group), "-quiet"],
+    def cmd_psk_client_badkey(self, port: str) -> str:
+        return self.cmd_psk_client(port, "gcm", "x25519", bytes(32))
+
+    def cmd_psk_client(self, port: str, cipher: str, group: str, key: bytes = PSK) -> str:
+        peer = OpenSSL(["s_client", "-connect", f"{CALC}:{port}", *psk_args(cipher, group, key), "-quiet"],
                        self.tmp, None)
         time.sleep(2)
         peer.send("lwip-ce psk server check\n")
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and peer.output.count("lwip-ce psk server check") < 1:
+        deadline = time.monotonic() + 60
+        while (time.monotonic() < deadline and "lwip-ce psk server check" not in peer.output
+               and peer.proc.poll() is None):
             time.sleep(0.2)
         peer.stop()
         return "echo" if "lwip-ce psk server check" in peer.output else f"ERR {peer.output[-70:]!r}"

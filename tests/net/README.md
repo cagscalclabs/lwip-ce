@@ -14,7 +14,7 @@ Shared calc code lives in [`common/`](common).
 | [`raw`](raw/src/main.c) | `NETRAW` | lwIP's own APIs: address/checksum/string helpers, netif lookup, pbuf chains, `sys_timeout` ordering, raw ICMP echo, host pings and ICMP port unreachable, raw TCP client/server/abort/poll, raw UDP, broadcast, IPv4 fragmentation and reassembly (and its bound), loopback UDP, DNS A/AAAA/cache/NXDOMAIN, ARP, IGMP join/leave on the wire, IPv6 link-local, SLAAC from a router advertisement, TCP over IPv6, IPv6 fragmentation, MLD, ACD probe and conflict, SNTP, DHCP renew/release/restart |
 | [`tls`](tls/src/main.c) | `NETTLS` | External-PSK TLS 1.3 against `openssl s_server`: AES-128-GCM and AES-128-CCM with X25519, wrong key, unknown identity, unsupported cipher and groups (P-256 is refused without the Wi-Fi bridge by design), KeyUpdate with update_requested, 128 KiB download, raw altcp TLS API, ALPN, session tickets and resumption. Certificate validation against real hosts (ISRG, DigiCert, Starfield chains) and rejection of P-384 chains, TLS 1.2-only servers, expired, wrong-host, self-signed and untrusted-root certificates. WSS echo |
 | [`records`](records/src/main.c) | `NETREC` | 128 KiB over TLS in maximum-size (16 KiB) records with GCM and CCM |
-| [`server`](server/src/main.c) | `NETSRV` | lwIP-CE's TLS PSK server role against `openssl s_client` (see notes) |
+| [`server`](server/src/main.c) | `NETSRV` | lwIP-CE as a TLS 1.3 PSK server: `openssl s_client` echo with GCM and CCM, wrong-PSK rejection, listener close |
 | [`perf`](perf/src/main.c) | `NETPERF` | Throughput (TCP down/up via sockets and the raw API, UDP, WebSocket, loopback, TLS GCM/CCM down and up), latency (TCP connect, TCP/UDP/WS round trips, TLS handshake), heap at idle and peak per workload |
 
 Metrics are measured on the calc's clock (emulated eZ80 time). `run.py` writes them to `metrics.json` and, in CI,
@@ -26,10 +26,9 @@ to the job summary.
   16 KiB records even though lwIP-CE asks for 4 KiB. This suite found two bugs, both now fixed. The socket API
   refused plaintext larger than its rx ring, and the TLS and WebSocket layers then returned that refusal to TCP for
   pbufs they had already freed (a double free).
-- `server`: `altcp_tls_create_config_psk_server` is exported, but the TLS server handshake is not implemented, so the
-  connection is refused on the ClientHello. The suite checks that this path stays safe: the TCP connection is
-  accepted, the client is refused, the listener closes, and the stack keeps working. Closing a TLS listener used to
-  trip `tcp_poll`'s LISTEN assert and reset the calc.
+- `server` checks lwIP-CE as a TLS 1.3 server with an external PSK (psk_dhe_ke over X25519). `openssl s_client`
+  echoes a line through the calc with AES-128-GCM and AES-128-CCM, a client with the wrong PSK is refused, and the
+  listener closes cleanly.
 
 ## Running
 
