@@ -154,6 +154,9 @@ jobs:
           test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.5.8xv
           test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.6.8xv
           ls -lh ${{env.LWIP_TESTS_COMMON}}
+          # The dylib spans as many LWIP.<n>.8xv appvars as it needs; make every
+          # autotest.json transfer exactly the ones this build produced.
+          python3 tests/common/scripts/sync_appvars.py
 
       - name: Cache CAVP vector archives
         # NIST CAVP zips are bandwidth-friendly to cache (a few MB each) and
