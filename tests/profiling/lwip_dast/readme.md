@@ -53,8 +53,14 @@ Crash-vs-abort is a human call, so the runner asks you. Results land in
 ## CI gate
 
 `.github/workflows/dast.yml` renders the committed `tests/dast.json` to the
-job summary and **fails the run if any test is graded `fail`**. It does not
-run probes (CI has no calc); it gates whatever report you commit.
+job summary and **fails the run if any test is graded `fail`**. It gates
+whatever report you commit from real hardware.
+
+`.github/workflows/net.yml` also runs the whole probe set live on every
+build: [`ci.py`](ci.py) launches `LWDAST` in CEmu-lwIP-CE, whose emulated
+USB Ethernet adapter is bridged to a TAP interface by
+`alessiodam/cemu-net-action`, waits for the calc to answer pings, then runs
+`lwip-dast.py` against it unattended and gates the fresh report the same way.
 Run the same renderer locally with `python3 build-tools/dast/dast_report.py`.
 
 ## Dependencies
