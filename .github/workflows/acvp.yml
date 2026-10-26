@@ -52,7 +52,8 @@ jobs:
         run: |
           sudo --preserve-env=AUTOTESTER_ROM python3 tests/validation/acvp/run.py \
             --autotester "${{ steps.env.outputs.autotester }}" \
-            --usb "${{ steps.env.outputs.usb-step }}"
+            --usb "${{ steps.env.outputs.usb-step }}" \
+            --timeout-ms 60000000
 
       - name: Publish ACVP results
         if: always()

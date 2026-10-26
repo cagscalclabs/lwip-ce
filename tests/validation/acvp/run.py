@@ -67,7 +67,10 @@ def main() -> int:
     parser.add_argument("--expected", type=Path, default=HERE / "corpus" / "expected.json")
     parser.add_argument("--oracle", type=Path, default=HERE / "corpus" / "oracle.json")
     parser.add_argument("--response", type=Path, default=HERE / "response.json")
-    parser.add_argument("--timeout-ms", type=int, default=900000)
+    # CEmu's autotester deadline advances with emulated time.  Full ACVP
+    # Monte Carlo groups perform hundreds of thousands of primitive calls, so
+    # use the same generous allowance as the legacy CAVP profiling harness.
+    parser.add_argument("--timeout-ms", type=int, default=60000000)
     args = parser.parse_args()
 
     Control()
