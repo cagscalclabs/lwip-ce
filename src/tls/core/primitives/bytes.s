@@ -1,3 +1,4 @@
+; Constant-time byte primitives.
 .assume adl=1
 
 .section	.text,"ax",@progbits

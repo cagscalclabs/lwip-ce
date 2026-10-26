@@ -35,6 +35,7 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
     {
     case TLS_HASH_SHA256:
         ctx->digestlen = TLS_SHA256_DIGEST_LEN;
+        ctx->blocklen = TLS_SHA256_BLOCK_LEN;
         ctx->init = tls_sha256_init_adapter;
         ctx->update = tls_sha256_update_adapter;
         ctx->digest = tls_sha256_digest_adapter;

@@ -142,13 +142,15 @@ Currently defined:
 ## File Organization
 
 ### Core Cryptographic Components
-- `src/tls/core/sha256.asm` - SHA-256 hash (optimized assembly)
-- `src/tls/core/aes.c` - AES block cipher
-- `src/tls/core/gcm.c` - GCM authenticated encryption mode
+- `src/tls/core/primitives/sha256.s` - SHA-256 hash (optimized assembly)
+- `src/tls/core/primitives/aes.c`, `aes.s` - AES block cipher and modes
+- `src/tls/core/primitives/bytes.s` - constant-time byte primitives
 - `src/tls/core/hmac.c` - HMAC construction
+- `src/tls/core/primitives/p256.s` - NIST P-256 arithmetic
+- `src/tls/core/primitives/rsa.s` - RSA multi-precision arithmetic
 - `src/tls/core/hkdf.c` - HKDF key derivation
-- `src/tls/core/random.asm` - TRNG implementation
-- `src/tls/core/rsa.c` - RSA modular exponentiation
+- `src/tls/core/primitives/random.s` - TRNG implementation
+- `src/tls/core/rsa.c` - RSA encoding and verification orchestration
 - `src/tls/core/share/x25519_*.asm` - X25519 field arithmetic
 
 ### Protocol Components

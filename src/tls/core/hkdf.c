@@ -17,10 +17,10 @@
 
 #define TLS_HKDF_LABEL_SCRATCH_SIZE 520u
 
-/* Shared BSS crypto scratch from share/memory.s. This is not persistent and
- * must not be used concurrently with powmod. HKDF key derivation and RSA
- * modexp are not live at the same time in the TLS flow, so using it here keeps
- * the 512-byte HkdfLabel builder off the eZ80 stack. */
+/* Shared RSA/HKDF member of the linker-enforced BSS crypto overlay. This is
+ * not persistent and must not be used concurrently with powmod. HKDF key
+ * derivation and RSA modexp are not live at the same time in the TLS flow, so
+ * using it here keeps the 512-byte HkdfLabel builder off the eZ80 stack. */
 extern uint8_t __tls_scratch[TLS_HKDF_LABEL_SCRATCH_SIZE];
 
 /**

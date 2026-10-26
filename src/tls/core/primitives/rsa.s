@@ -1,4 +1,5 @@
 
+; RSA multi-precision primitives.
 .assume adl=1
 
 .section	.text,"ax",@progbits
@@ -52,10 +53,8 @@ globl _powmod_exp_u24
 ; and the RNG scratch — see linker_script_lwip.ld.
 ;void powmod_exp_u24(uint16_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
 
-; __tls_scratch / __tls_scratch_end are defined in share/memory.s (assembled
-; as its own translation unit). Reference them as externals here — do NOT
-; .include memory.s, or its .space reservations get defined twice (here and
-; in memory.s.o) and the link fails with "multiple definition".
+; __tls_scratch / __tls_scratch_end are linker aliases for the RSA/HKDF member
+; of the general BSS crypto overlay. Reference them as externals here.
 
    .equ   Lret,  6                 ; frame of _powmod_exp_u24_impl
    .equ   Lsize, Lret  + 3

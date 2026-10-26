@@ -104,8 +104,39 @@ SECTIONS
         *(.dynbss)
         *(.bss .bss.* .gnu.linkonce.b.*)
         *(COMMON)
-        ___bss_high = .;
     } >bss :NONE
+
+    /* General TLS scratch overlay. Each primitive owns a distinct input
+     * section, so the linker—not matching hand-written aliases—enforces that
+     * their mutually exclusive working sets occupy the same BSS address.
+     * Keep the largest member first for a clear map and stable base symbols.
+     * X25519 retains its low-byte addressing alignment inside its member. */
+    OVERLAY : NOCROSSREFS
+    {
+        .crypto_scratch.p256
+        {
+            KEEP(*(.crypto_scratch.p256))
+            KEEP(*(.crypto_scratch.p256.*))
+        }
+        .crypto_scratch.rsa
+        {
+            __rsa_scratch_start = .;
+            KEEP(*(.crypto_scratch.rsa))
+            KEEP(*(.crypto_scratch.rsa.*))
+            /* Maximum RSA-4096 powmod working set plus transient output. */
+            . = __rsa_scratch_start + 1647;
+            __rsa_scratch_end = .;
+        }
+        .crypto_scratch.x25519
+        {
+            . = ALIGN(0x100) + 0xC0;
+            KEEP(*(.crypto_scratch.x25519))
+            KEEP(*(.crypto_scratch.x25519.*))
+            _x25519_data_end = .;
+        }
+    } >bss
+
+    ___bss_high = .;
     ___bss_len = ___bss_high - ___bss_low;
 
     /* C-visible aliases for the .bss/.data bounds. crt0 (assembly) reads
@@ -122,33 +153,26 @@ SECTIONS
     PROVIDE(____data_lma = ___data_lma);
     PROVIDE(____data_len = ___data_len);
 
-    /* Shared crypto scratch aliases.  __p256_scratch_start/_end are the
-     * single authoritative .bss.__p256_scratch region (p256.s).  powmod,
-     * HKDF, and the RSA transient buffer all alias the same region; they
-     * are never live concurrently with P-256. */
-    PROVIDE(__tls_scratch_start  = __p256_scratch_start);
-    PROVIDE(__tls_scratch_end    = __p256_scratch_end);
-    PROVIDE(___tls_scratch_start = __p256_scratch_start);
-    PROVIDE(___tls_scratch_end   = __p256_scratch_end);
-    PROVIDE(__tls_scratch        = __p256_scratch_start);
-    PROVIDE(___tls_scratch       = __p256_scratch_start);
+    /* Canonical RSA/HKDF aliases point at their explicit overlay member. */
+    PROVIDE(__tls_scratch_start  = __rsa_scratch_start);
+    PROVIDE(__tls_scratch_end    = __rsa_scratch_end);
+    PROVIDE(___tls_scratch_start = __rsa_scratch_start);
+    PROVIDE(___tls_scratch_end   = __rsa_scratch_end);
+    PROVIDE(__tls_scratch        = __rsa_scratch_start);
+    PROVIDE(___tls_scratch       = __rsa_scratch_start);
     /* RSA result/transient buffer: bottom 512 bytes of shared scratch.
      * powmod Lacc/Ltmp occupy the top 2*mod_len bytes and never reach here. */
-    PROVIDE(__rsa_transient      = __p256_scratch_start);
-    PROVIDE(___rsa_transient     = __p256_scratch_start);
+    PROVIDE(__rsa_transient      = __rsa_scratch_start);
+    PROVIDE(___rsa_transient     = __rsa_scratch_start);
 
-    /* X25519 scratch variables. Uninitialized (NOLOAD) bss, page-aligned
-     * so the hot loop can address them by patching only the low byte of
-     * each address (R_Z80_BYTE0 relocations against a fixed page). Kept in
-     * the bss region; must be placed before the dot jumps to BSSHEAP_HIGH
-     * below. See src/tls/contrib/x25519/src/x25519.s. */
-    .x25519_data (NOLOAD) :
-    {
-        . = ALIGN(0x100) + 0xC0;
-        KEEP(*(.x25519.data))
-        KEEP(*(.x25519.data.*))
-        _x25519_data_end = .;
-    } >bss
+    ASSERT(ADDR(.crypto_scratch.p256) == ADDR(.crypto_scratch.rsa),
+           "Error: P-256 and RSA scratch are not overlaid")
+    ASSERT(ADDR(.crypto_scratch.p256) == ADDR(.crypto_scratch.x25519),
+           "Error: P-256 and X25519 scratch are not overlaid")
+    ASSERT(SIZEOF(.crypto_scratch.p256) >= SIZEOF(.crypto_scratch.rsa),
+           "Error: largest crypto scratch overlay member must be first")
+    ASSERT(SIZEOF(.crypto_scratch.p256) >= SIZEOF(.crypto_scratch.x25519),
+           "Error: largest crypto scratch overlay member must be first")
 
     ASSERT(. <= BSSHEAP_HIGH, "Error: BSS exceed BSSHEAP_HIGH limit")
 
@@ -161,12 +185,15 @@ SECTIONS
 
     /* Safe-RAM scratch overlay (0xE30800, ti.cursorImage).
      *
-     * Three consumers share this address window, never live at the same
+     * Consumers share this address window, never live at the same
      * instant — it is deliberately reused as quick scratch:
      *   - .x25519.reloc : the X25519 hot loop, copied here at the start of
      *     each call (it has a load image in prgm) and run at this VMA.
      *   - .powmod.reloc : the RSA modexp hot loop, same deal (load image in
      *     prgm, copied + run here; relocated because it self-modifies).
+     *   - .sha256.reloc : the compact SHA-256 compression-round loop. The
+     *     RNG/SHA scratch starts above its reserved 384-byte prefix so these
+     *     two members can be live together.
      *   - .saferam.rng  : the RNG entropy/SHA scratch. No load image — it
      *     is written in place; this member only reserves the VMA span so
      *     the linker knows the window size and flags a collision if either
@@ -226,8 +253,19 @@ SECTIONS
             KEEP(*(.powmod.reloc.*))
             _powmod_reloc_run_end = .;
         }
+        .sha256.reloc
+        {
+            _sha256_reloc_run_start = .;
+            _sha256_reloc_load_start = . + (LOADADDR(.sha256.reloc) - ADDR(.sha256.reloc));
+            KEEP(*(.sha256.reloc))
+            KEEP(*(.sha256.reloc.*))
+            _sha256_reloc_run_end = .;
+        }
         .saferam.rng
         {
+            /* Reserve the first 384 bytes for the SHA-256 compression loop.
+             * Other overlay consumers may still reuse the whole window. */
+            . = . + 0x180;
             _sprng_entropy_pool = .;
             . = . + 520;   /* total RNG scratch: see virtuals.inc */
         }
@@ -243,14 +281,15 @@ SECTIONS
     _aes_encrypt_reloc_len   = SIZEOF(.aes.encrypt.reloc);
     _aes_decrypt_reloc_len   = SIZEOF(.aes.decrypt.reloc);
 
-    /* Copy-loop symbols for the powmod trampoline in bigint.s (RSA modexp
+    /* Copy-loop symbols for the powmod trampoline in rsa.s (RSA modexp
      * relocated to writable RAM because it self-modifies). Shares the
      * 0xE30800 overlay VMA with X25519/RNG — sequential, never co-resident.
      * NOTE: _powmod_reloc_load_start is defined INSIDE the .powmod.reloc block
      * above (not here), for the same reason. */
     _powmod_reloc_len        = SIZEOF(.powmod.reloc);
+    _sha256_reloc_len        = SIZEOF(.sha256.reloc);
 
-    /* Guard: no consumer may outgrow the shared window. */
+    /* Guard: no consumer may outgrow the 1020-byte shared window. */
     ASSERT(SIZEOF(.x25519.reloc) <= 0x400,
            "Error: .x25519.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.aes.encrypt.reloc) <= 0x400,
@@ -261,6 +300,10 @@ SECTIONS
            "Error: .saferam.rng exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.powmod.reloc) <= 0x400,
            "Error: .powmod.reloc exceeds safe-RAM overlay window")
+    ASSERT(SIZEOF(.sha256.reloc) <= 0x180,
+           "Error: SHA-256 hot loop exceeds its 384-byte fastMem budget")
+    ASSERT(SIZEOF(.saferam.rng) <= 1020,
+           "Error: SHA-256 code plus RNG scratch exceeds 1020-byte fastMem")
 
         /* Debug info (kept out of loadable memory) */
     .debug_info 0 : { KEEP(*(.debug_info .debug_info.*)) }

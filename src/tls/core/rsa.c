@@ -38,6 +38,27 @@ static bool rsa_buffers_overlap(const void *a, size_t a_len,
     return a_len != 0 && b_len != 0 && a_start < b_end && b_start < a_end;
 }
 
+bool tls_rsa_public_key_shape_ok(const struct tls_rsa_key *key)
+{
+    uint32_t exp = 0;
+
+    if (!key || !key->modulus || !key->exponent ||
+        key->mod_len < RSA_MODULUS_MIN_SUPPORTED ||
+        key->mod_len > RSA_MODULUS_MAX_SUPPORTED ||
+        !(key->modulus[0] & 0x80) ||
+        !(key->modulus[key->mod_len - 1] & 1) ||
+        key->exp_len == 0 || key->exp_len > 3)
+        return false;
+
+    for (size_t i = 0; i < key->exp_len; i++)
+        exp = (exp << 8) | key->exponent[i];
+
+    /* FIPS 186-5 section 5.4 requires 2^16 < e < 2^256. This
+     * implementation accepts at most 24 exponent bits, so enforce the lower
+     * bound and oddness here. */
+    return exp > UINT32_C(65536) && (exp & 1);
+}
+
 static bool rsa_mgf1_digest(const uint8_t *seed, size_t seed_len,
                             uint32_t counter, uint8_t *digest,
                             size_t *digest_len, uint8_t hash_alg)
@@ -263,23 +284,6 @@ cleanup:
 void powmod_exp_u24(uint16_t size, uint8_t *restrict base, uint24_t exp, const uint8_t *restrict mod);
 #define RSA_PUBLIC_EXP 65537
 // CRYPTO_FN
-/* RFC 8017 section 3.1 / SP 800-131A: the public exponent must be odd and at
- * least 3, and the modulus must use its full leading byte (its first nonzero
- * byte has the top bit set) so the bit length is a multiple of 8, which is
- * what the EMSA-PSS emBits computation assumes. */
-static bool rsa_public_key_shape_ok(const struct tls_rsa_key *key, uint24_t exp)
-{
-    size_t lead = 0;
-
-    /* FIPS 186-5 5.4 requires 2^16 < e < 2^256. This implementation stores
-     * at most 24 exponent bits, so enforce the lower bound and oddness here. */
-    if (exp <= UINT32_C(65536) || !(exp & 1))
-        return false;
-    while (lead < key->mod_len && key->modulus[lead] == 0)
-        lead++;
-    return lead < key->mod_len && (key->modulus[lead] & 0x80);
-}
-
 bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
                      const struct tls_rsa_key *key, uint8_t hash_alg)
 {
@@ -306,7 +310,7 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
     uint24_t exp = 0;
     for (size_t i = 0; i < key->exp_len; i++)
         exp = (exp << 8) | key->exponent[i];
-    if (!rsa_public_key_shape_ok(key, exp))
+    if (!tls_rsa_public_key_shape_ok(key))
     {
         ERROR();
         return false;
@@ -361,7 +365,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
     uint24_t exp = 0;
     for (size_t i = 0; i < key->exp_len; i++)
         exp = (exp << 8) | key->exponent[i];
-    if (!rsa_public_key_shape_ok(key, exp))
+    if (!tls_rsa_public_key_shape_ok(key))
     {
         ERROR();
         return false;

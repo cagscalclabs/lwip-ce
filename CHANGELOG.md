@@ -115,13 +115,15 @@ Users can now disable TLS completely through the app config wizard, for any unco
 
 ## v3.0.0-rc3
 
-- Switch from RFC 6066 `max_fragment_length` to RFC 8449 `record_size_limit`.
-- Add *NIST SP 800-90A Rev. 1, 9.1 / 9.3.1: prediction_resistance_flag* via new function `tls_random_bytes_pr()`.
-- Fix CAVP identitied AES-GCM failures for IV lengths > 128 bits.
-- reduce peer public key mod p before ladder (RFC 7748 §5)
+- An AI-assisted workflow was used to generate an RFC compliance ledger based on all cryptographic publications and to perform initial triage on the implementation. This was followed by a manual code review that yielded the following fixes/tightening:
+  - Switch from RFC 6066 `max_fragment_length` to RFC 8449 `record_size_limit`.
+  - Add *NIST SP 800-90A Rev. 1, 9.1 / 9.3.1: prediction_resistance_flag* via new function `tls_random_bytes_pr()`.
+  - reduce peer public key mod p before ladder (RFC 7748 §5) (P-256)
+  - Previously *verify before encrypt* was a suggested policy; `tls_aes_decrypt()` is now locked until tag verification on authenticating cipher modes. This enforces RFC compliance rather than suggesting it.
+- Additional fixes identified by above review:
+  - Fix CAVP identitied AES-GCM failures for IV lengths > 128 bits.
 - Fix issue where missing truststore would de-init the RNG.
 - Streamlined the event logging system: corrected some classifications, removed noisy events.
-- Previously *verify before encrypt* was a suggested policy; `tls_aes_decrypt()` is now locked until tag verification on authenticating cipher modes.
 - Fix a double free when the application could not take decrypted data yet: the TLS and WebSocket layers had already freed the received TCP pbuf but reported it refused, so TCP freed it again.
 - Socket API no longer stalls on data larger than its receive ring (for example a 16 KiB TLS record from a server that ignores `record_size_limit`); the rest waits and is copied in as the application reads.
 - Closing a TLS listener no longer trips the `tcp_poll` LISTEN assertion.

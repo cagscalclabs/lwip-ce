@@ -10,12 +10,10 @@
 ; ------------------------------
 ; snrg / common sha state
 ;
-; _sprng_entropy_pool is the base of the .saferam.rng overlay member,
-; provided by the linker (linker_script_lwip.ld) at 0xE30800. It shares
-; that address window with the relocated X25519 hot loop — the two are
-; never live simultaneously (used as quick scratch). The offsets below
-; remain assemble-time constants relative to that base; only the base is
-; now a relocatable symbol rather than a literal address.
+; _sprng_entropy_pool is the scratch base within the .saferam.rng overlay
+; member. The linker reserves the first 384 bytes of fastMem for the SHA-256
+; compression loop, then places this 520-byte region above it. Other overlay
+; consumers replace the whole window and are never live at the same time.
 extern	_sprng_entropy_pool
 .equ	_sprng_entropy_pool.size, 119
 .equ	_sprng_sha_digest,   _sprng_entropy_pool + _sprng_entropy_pool.size

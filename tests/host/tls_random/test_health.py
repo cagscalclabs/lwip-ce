@@ -10,7 +10,7 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = (ROOT / "src/tls/core/random.s").read_text()
+SOURCE = (ROOT / "src/tls/core/primitives/random.s").read_text()
 C_SOURCE = (ROOT / "src/tls/core/random.c").read_text()
 HEADER = (ROOT / "src/tls/includes/random.h").read_text()
 

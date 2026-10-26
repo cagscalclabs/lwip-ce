@@ -77,7 +77,7 @@ void tls_secure_memzero(void *ptr, size_t len);
 /***********************************************************************
  * @brief Struct-type counterpart to TLS_AUTOZERO_DECL(), for secret
  *        state held in a struct rather than a fixed array (e.g. an
- *        HMAC context whose ipad/opad hold derived key material). Call
+ *        HMAC context holding key-derived inner/outer hash states). Call
  *        once at file scope per distinct struct type.
  *
  * @param type_ The struct tag (without the `struct` keyword), e.g.

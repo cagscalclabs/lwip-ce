@@ -64,12 +64,12 @@ typedef enum lwip_debug_file_id
     LWIP_FILE_TLS,                  /* tls/core/tls.c            */
     LWIP_FILE_HANDSHAKE,            /* tls/core/handshake.c      */
     LWIP_FILE_TRUSTSTORE,           /* tls/core/truststore.c     */
-    LWIP_FILE_AES,                  /* tls/core/aes.c            */
+    LWIP_FILE_AES,                  /* tls/core/primitives/aes.c */
     LWIP_FILE_ASN1,                 /* tls/core/asn1.c           */
     LWIP_FILE_BASE64,               /* tls/core/base64.c         */
     LWIP_FILE_HASH,                 /* tls/core/hash.c           */
     LWIP_FILE_HKDF,                 /* tls/core/hkdf.c           */
-    LWIP_FILE_HMAC,                 /* tls/core/hmac.c           */
+    LWIP_FILE_HMAC,                 /* tls/core/hmac.c */
     LWIP_FILE_KEYOBJECT,            /* tls/core/keyobject.c      */
     LWIP_FILE_PASSWORDS,            /* tls/core/passwords.c      */
     LWIP_FILE_PKCS8,                /* tls/core/pkcs8.c          */

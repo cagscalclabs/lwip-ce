@@ -1,5 +1,5 @@
 ;--------------------------------------------
-; AES EZ80 implementation
+; AES eZ80 implementation
 ; Author: calc84maniac
 ;--------------------------------------------
 

@@ -123,6 +123,7 @@ source += function(x509, 'tls_ecdsa_parse_int')
 source += x509[x509.index('static bool tls_x509_is_string_tag'):x509.index('static bool tls_x509_decode_pem_certificate')]
 source += x509[x509.index('static const uint8_t oid_rsa_encryption'):]
 key_source = (root / 'src/tls/core/key.c').read_text()
+source += function((root / 'src/tls/core/rsa.c').read_text(), 'tls_rsa_public_key_shape_ok')
 for name in ['tls_key_verify', 'tls_key_sign']:
     source += function(key_source, name)
 # Include internal AES helpers and blob helpers (not aes_encrypt_oneshot, which is mocked).

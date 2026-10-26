@@ -1,5 +1,5 @@
 ;--------------------------------------------
-; TRNG
+; TRNG primitive support
 ; Author: nefariousarcher, beckadamtheinventor
 ;--------------------------------------------
 ; include to supported algorithms

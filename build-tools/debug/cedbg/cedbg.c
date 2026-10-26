@@ -4,7 +4,7 @@
  * Drives the eZ80 emulator from a line-oriented command stream (stdin or a
  * script file) and exposes register/memory inspection, breakpoints, watch-
  * points, single-stepping and screenshots -- the pieces needed to debug
- * eZ80 assembly (e.g. bigint.s) without the Qt GUI.
+ * eZ80 assembly (e.g. rsa.s) without the Qt GUI.
  *
  * The CEmu core calls gui_debug_open() synchronously the instant a break/
  * watch/step fires; the CPU is frozen for the duration of that call, so the

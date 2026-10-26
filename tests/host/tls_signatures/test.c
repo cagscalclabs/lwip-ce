@@ -479,6 +479,45 @@ int main(void)
                                   digest, sig, 128) == TLS_KEY_OP_INVALID);
     assert(tls_cert_verify_digest(NULL, TLS_ALG_RSA_PSS_RSAE_SHA256, &ec.pubkey, digest, sig, 128) == TLS_KEY_OP_INVALID);
 
+    /* RSA offload must enforce the same full-width modulus policy as the
+     * local verifier instead of relying on the accelerator's import policy. */
+    {
+        struct tls_handshake_context offload_ctx = {0};
+        uint8_t modulus[RSA_MODULUS_MAX_SUPPORTED];
+        uint8_t exponent[] = {0x01, 0x00, 0x01};
+        uint8_t rsa_sig[RSA_MODULUS_MAX_SUPPORTED] = {0};
+        const size_t widths[] = {
+            RSA_MODULUS_MIN_SUPPORTED,
+            RSA_MODULUS_MAX_SUPPORTED,
+        };
+        struct tls_key rsa_key = {
+            .type = TLS_KEY_TYPE_RSA,
+            .rsa = {
+                .exp_len = sizeof(exponent),
+                .exponent = exponent,
+                .modulus = modulus,
+            },
+        };
+        unsigned before_offload = rsa_offload_calls;
+
+        for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); i++)
+        {
+            rsa_key.rsa.mod_len = widths[i];
+            memset(modulus, 0x81, widths[i]);
+            modulus[0] = 0x41;
+            assert(!tls_verify_deferred(&offload_ctx, TLS_ALG_RSA_PSS_RSAE_SHA256,
+                                        &rsa_key, digest, rsa_sig, widths[i],
+                                        TLS_ALERT_BAD_CERTIFICATE));
+            assert(rsa_offload_calls == before_offload + i);
+
+            modulus[0] = 0x81;
+            assert(!tls_verify_deferred(&offload_ctx, TLS_ALG_RSA_PSS_RSAE_SHA256,
+                                        &rsa_key, digest, rsa_sig, widths[i],
+                                        TLS_ALERT_BAD_CERTIFICATE));
+            assert(rsa_offload_calls == before_offload + i + 1);
+        }
+    }
+
     /* Chain-policy distinction: a correctly-sized signature under an RSA key
      * wider than the platform cap is unsupported, while a width mismatch is
      * invalid and must remain fail-closed. */

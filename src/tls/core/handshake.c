@@ -750,10 +750,7 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
         key_len = 65;
     }
     else if ((alg == TLS_ALG_RSA_PKCS1_SHA256 || alg == TLS_ALG_RSA_PSS_RSAE_SHA256) &&
-             rsa->modulus && rsa->exponent && sig_len == rsa->mod_len &&
-             rsa->mod_len >= RSA_MODULUS_MIN_SUPPORTED &&
-             rsa->mod_len <= RSA_MODULUS_MAX_SUPPORTED &&
-             (rsa->modulus[rsa->mod_len - 1] & 1) && rsa->exp_len != 0 && rsa->exp_len <= 3)
+             sig_len == rsa->mod_len && tls_rsa_public_key_shape_ok(rsa))
     {
         job = lwip_crypto_rsa_verify(alg == TLS_ALG_RSA_PSS_RSAE_SHA256 ? CTL_RSA_PSS_SHA256
                                                                        : CTL_RSA_PKCS1_SHA256,

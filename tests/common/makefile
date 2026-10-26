@@ -37,16 +37,15 @@ X25519_DIR_REL := ../../../src/tls/contrib/x25519/src
 # because -I flags don't go through the OBJDIR pattern mangling.
 TLS_ASM_INCLUDES := -I $(TLS_CORE)/share
 
-TLS_ASM_SHA256 := $(TLS_CORE_REL)/sha256.s
-TLS_ASM_BYTES := $(TLS_CORE_REL)/bytes.s
-TLS_ASM_BIGINT := $(TLS_CORE_REL)/share/bigint.s
+TLS_ASM_SHA256 := $(TLS_CORE_REL)/primitives/sha256.s
+TLS_ASM_BYTES := $(TLS_CORE_REL)/primitives/bytes.s
+TLS_ASM_RSA := $(TLS_CORE_REL)/primitives/rsa.s
 TLS_ASM_HELPERS := $(TLS_CORE_REL)/share/helpers.s
-TLS_ASM_RANDOM := $(TLS_CORE_REL)/random.s
+TLS_ASM_RANDOM := $(TLS_CORE_REL)/primitives/random.s
 TLS_ASM_CRYPTO_GUARD := $(TLS_CORE_REL)/share/crypto_guard.s
-# __tls_scratch / __rsa_transient definitions (bigint.s's powmod path
-# references these via `extern`). Must be assembled wherever TLS_ASM_BIGINT is.
+# Documentation translation unit for the linker-provided scratch layout.
 TLS_ASM_MEMORY := $(TLS_CORE_REL)/share/memory.s
 
-TLS_ASM_AES := $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
-TLS_ASM_HASH := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
-TLS_ASM_TLS_FULL := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_BIGINT) $(TLS_ASM_HELPERS) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
+TLS_ASM_AES := $(TLS_ASM_BYTES) $(TLS_ASM_RSA) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
+TLS_ASM_HASH := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_RSA) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
+TLS_ASM_TLS_FULL := $(TLS_ASM_SHA256) $(TLS_ASM_BYTES) $(TLS_ASM_RSA) $(TLS_ASM_HELPERS) $(TLS_ASM_RANDOM) $(TLS_ASM_CRYPTO_GUARD) $(TLS_ASM_MEMORY)
