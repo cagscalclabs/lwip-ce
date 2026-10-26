@@ -99,3 +99,10 @@ wifi_bridge/build/
 wifi_bridge/managed_components/
 wifi_bridge/sdkconfig.old
 wifi_tools/.lwip-installed
+
+# fuzzing
+tests/fuzz/out/
+tests/net/autotest.json
+tests/net/NETLOG.8xv
+tests/profiling/lwip_dast/autotest.json
+tests/profiling/lwip_dast/autotester.log
