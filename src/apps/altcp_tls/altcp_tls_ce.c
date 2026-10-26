@@ -1122,7 +1122,16 @@ altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p,
      * available again for future RX bursts. */
     altcp_tls_ce_queue_rx(state, p);
 
-    return altcp_tls_ce_lower_recv_process(conn, state);
+    /* p is ours now (copied into state->rx and freed). Anything but ERR_ABRT
+     * would tell TCP the segment was refused, so it would keep the freed pbuf
+     * as refused_data and free it a second time. Data the application could
+     * not take yet stays queued here and is retried on recved/poll. */
+    if (altcp_tls_ce_lower_recv_process(conn, state) == ERR_ABRT)
+    {
+        /* ERROR_AUDIT: propagates an abort already logged by recv_process. */
+        return ERR_ABRT;
+    }
+    return ERR_OK;
 }
 
 /* Collects work handed to the Wi-Fi bridge. ERR_INPROGRESS while it is still
@@ -2381,7 +2390,12 @@ altcp_tls_ce_remove_callbacks(struct altcp_pcb *inner_conn)
     altcp_recv(inner_conn, NULL);
     altcp_sent(inner_conn, NULL);
     altcp_err(inner_conn, NULL);
-    altcp_poll(inner_conn, NULL, inner_conn->pollinterval);
+    /* A listening pcb never gets a poll callback, and tcp_poll() asserts on
+     * one, so only clear a poll that was set. */
+    if (inner_conn->poll != NULL)
+    {
+        altcp_poll(inner_conn, NULL, inner_conn->pollinterval);
+    }
 }
 
 static void
@@ -2668,7 +2682,10 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
              * set — the alert is on the wire even though the TCP-side
              * close didn't go through. */
             altcp_tls_ce_setup_callbacks(conn, inner_conn);
-            altcp_poll(inner_conn, oldpoll, inner_conn->pollinterval);
+            if (oldpoll != NULL)
+            {
+                altcp_poll(inner_conn, oldpoll, inner_conn->pollinterval);
+            }
             ERROR_CODE(-err);
             return err;
         }

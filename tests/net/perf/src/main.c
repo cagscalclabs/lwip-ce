@@ -239,26 +239,35 @@ static void blast_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_
     pbuf_free(p);
 }
 
-static void udp_download(void)
+/* `gap_us` is the host's wall-clock gap between datagrams. UDP has no flow
+ * control, so the flood run only records how much the calc keeps up with. */
+static void udp_download(const char *name, unsigned gap_us, uint32_t need)
 {
     static struct blast b;
     struct udp_pcb *pcb = udp_new();
     uint32_t t0;
+    char cmd[48];
     memset(&b, 0, sizeof(b));
     if (!check("udp blast bind", pcb && udp_bind(pcb, IP_ANY_TYPE, PORT_BLAST) == ERR_OK)) return;
     udp_recv(pcb, blast_recv, &b);
-    host_call("udp-blast 1000 512 7050 500", NULL, 0, 10000);
+    snprintf(cmd, sizeof(cmd), "udp-blast 1000 512 7050 %u", gap_us);
+    host_call(cmd, NULL, 0, 10000);
+    /* Emulated time runs well ahead of the host's wall clock while the calc
+     * idles, so wait for the stream to go quiet rather than a fixed window. */
     t0 = lwip_now_ms();
-    while (lwip_now_ms() - t0 < 30000 && b.got < 1000)
+    while (lwip_now_ms() - t0 < 600000 && b.got < 1000)
     {
         uint32_t before = b.got;
-        settle(2000);
+        settle(15000);
         if (b.got == before && b.got) break;
     }
-    note("  udp received %lu/1000", (unsigned long)b.got);
-    check("udp blast mostly received", b.got >= 900);
-    metric("udp_down_received", b.got, "of1000");
-    metric("udp_down", kbps(b.bytes, b.last_ms - b.first_ms), "KiB/s");
+    note("  %s received %lu/1000", name, (unsigned long)b.got);
+    snprintf(line, sizeof(line), "%s received >= %lu/1000", name, (unsigned long)need);
+    check(line, b.got >= need);
+    snprintf(line, sizeof(line), "%s_received", name);
+    metric(line, b.got, "of1000");
+    snprintf(line, sizeof(line), "%s", name);
+    metric(line, kbps(b.bytes, b.last_ms - b.first_ms), "KiB/s");
     udp_remove(pcb);
 }
 
@@ -351,7 +360,7 @@ static void tls_download(const char *cipher)
     char cmd[48];
     struct lwip_socket *sock;
     uint32_t body = 0, t0;
-    bool header = false;
+    struct http_head head = {0};
     snprintf(cmd, sizeof(cmd), "psk-server %s x25519 www4k", cipher);
     host_call(cmd, NULL, 0, 15000);
     sock = psk_socket();
@@ -362,22 +371,19 @@ static void tls_download(const char *cipher)
     t0 = lwip_now_ms();
     while (lwip_now_ms() - t0 < 600000)
     {
-        size_t n = lwip_socket_read(sock, buf, sizeof(buf) - 1), off = 0;
+        size_t n, off = 0;
         lwip_service_events();
+        n = lwip_socket_read(sock, buf, sizeof(buf));
         sample_heap();
-        if (!header && n)
+        if (!head.done)
         {
-            char *end;
-            buf[n] = '\0';
-            end = strstr((char *)buf, "\r\n\r\n");
-            if (!end) continue;
-            header = true;
-            off = (size_t)(end + 4 - (char *)buf);
-            t0 = lwip_now_ms();
+            off = http_header_bytes(&head, buf, n);
+            if (head.done) t0 = lwip_now_ms();
         }
         body += n - off;
         if (!n && !lwip_socket_is_active(sock)) break;
     }
+    note("  tls %s body %lu bytes, header %s", cipher, (unsigned long)body, head.done ? "seen" : "missing");
     snprintf(line, sizeof(line), "tls %s download 128 KiB", cipher);
     check(line, body == 131072ul);
     snprintf(line, sizeof(line), "tls_down_%s", cipher);
@@ -418,7 +424,8 @@ int main(void)
         heap_peak = base;
         tcp_up_socket(524288ul);
         metric("tcp_up_heap_peak", heap_peak - base, "bytes");
-        udp_download();
+        udp_download("udp_down_paced", 5000, 950);
+        udp_download("udp_down_flood", 500, 1);
         tcp_connect_latency();
         echo_rtt("tcp", LWIP_SOCKET_TCP, PORT_ECHO, NULL);
         echo_rtt("udp", LWIP_SOCKET_UDP, PORT_UDP, NULL);

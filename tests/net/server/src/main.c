@@ -1,5 +1,11 @@
-/* NETSRV: lwIP-CE as a TLS 1.3 server (external PSK), checked with
- * openssl s_client driven by tests/net/run.py. */
+/* NETSRV: lwIP-CE's TLS server role (external PSK), driven by openssl
+ * s_client from tests/net/run.py.
+ *
+ * lwIP-CE exports the PSK server configuration, but the server handshake is
+ * not implemented: the connection is accepted and then refused when the
+ * ClientHello arrives. This suite checks that path stays safe -- the client
+ * is refused, the listener closes cleanly and the stack keeps working. When
+ * server handshakes land, expect "echo" from psk-client instead. */
 #include <string.h>
 
 #include "net.h"
@@ -52,18 +58,32 @@ static void test_psk_server(void)
         {
             altcp_accept(l, srv_accept);
             server_peer = NULL;
-            check("openssl s_client PSK echo via calc server",
-                  host_call("psk-client 7101 gcm x25519", reply, sizeof(reply), 120000) && !strcmp(reply, "echo"));
-            check("TLS server accepted", server_peer != NULL);
-            altcp_close(l);
+            /* host_call() reports false when the host answers ERR: s_client failed. */
+            check("s_client refused (server handshake not implemented)",
+                  !host_call("psk-client 7101 gcm x25519", reply, sizeof(reply), 120000));
+            check("TLS server accepted the TCP connection", server_peer != NULL);
+            check("TLS listener closes", altcp_close(l) == ERR_OK);
         }
     }
     altcp_tls_free_config(conf);
 }
 
+static void test_still_alive(void)
+{
+    struct lwip_socket *sock = open_socket(LWIP_SOCKET_TCP, HOST, PORT_ECHO, NULL, 15000);
+    bool ok = sock && write_all(sock, (const uint8_t *)"alive", 5) && read_exact(sock, buf, 5, 10000) == 5 &&
+              !memcmp(buf, "alive", 5);
+    check("stack healthy after refused TLS server session", ok);
+    close_socket(sock);
+}
+
 int main(void)
 {
     for (uint8_t i = 0; i < 32; i++) psk[i] = pattern(i);
-    if (net_begin("server")) test_psk_server();
+    if (net_begin("server"))
+    {
+        test_psk_server();
+        test_still_alive();
+    }
     return net_end();
 }

@@ -122,3 +122,6 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - Fix issue where missing truststore would de-init the RNG.
 - Streamlined the event logging system: corrected some classifications, removed noisy events.
 - Previously *verify before encrypt* was a suggested policy; `tls_aes_decrypt()` is now locked until tag verification on authenticating cipher modes.
+- Fix a double free when the application could not take decrypted data yet: the TLS and WebSocket layers had already freed the received TCP pbuf but reported it refused, so TCP freed it again.
+- Socket API no longer stalls on data larger than its receive ring (for example a 16 KiB TLS record from a server that ignores `record_size_limit`); the rest waits and is copied in as the application reads.
+- Closing a TLS listener no longer trips the `tcp_poll` LISTEN assertion.

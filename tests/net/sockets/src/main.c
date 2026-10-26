@@ -280,7 +280,11 @@ static void test_events(void)
     if (!sock) return;
     lwip_socket_on_event(sock, LWIP_SOCKET_EVENTF_STATE_CHANGE, on_event, &peer);
     lwip_socket_connect(sock, HOST, PORT_CLOSER);
+    pump(not_connecting, sock, 15000);
+    read_exact(sock, buf, 3, 15000);
     pump(not_active, sock, 15000);
+    settle(500); /* events are delivered from lwip_service_events() after the status flips */
+    note("  peer close events %u last status %u", peer.closed, peer.last);
     check("STATE_CHANGE to CLOSED on peer FIN", peer.closed > 0 && peer.last == LWIP_STATUS_CLOSED);
     lwip_socket_destroy(sock);
 }

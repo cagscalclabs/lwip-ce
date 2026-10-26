@@ -99,17 +99,25 @@ size_t heap_used(void)
 
 /* ---- host control channel (raw UDP API) ------------------------------- */
 
+/* Requests are "<seq> <command>"; the host answers "<seq> OK ..." or
+ * "<seq> ERR ...". The sequence number keeps a late answer to an earlier
+ * request from being taken as the answer to the current one. */
 static struct udp_pcb *control;
 static char control_reply[96];
+static unsigned control_seq;
 static bool control_have;
 
 static void control_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
+    char msg[96];
+    char *rest;
     (void)arg; (void)pcb; (void)addr; (void)port;
     if (!p) return;
-    control_reply[pbuf_copy_partial(p, control_reply, sizeof(control_reply) - 1, 0)] = '\0';
-    control_have = true;
+    msg[pbuf_copy_partial(p, msg, sizeof(msg) - 1, 0)] = '\0';
     pbuf_free(p);
+    if (strtoul(msg, &rest, 10) != control_seq || *rest != ' ') return;
+    strcpy(control_reply, rest + 1);
+    control_have = true;
 }
 
 static bool control_done(void *arg)
@@ -120,28 +128,27 @@ static bool control_done(void *arg)
 
 bool host_call(const char *cmd, char *reply, size_t reply_len, uint32_t timeout_ms)
 {
+    char request[96];
     ip_addr_t host;
+    size_t len;
     if (!control)
     {
         control = udp_new();
         if (!control || udp_bind(control, IP4_ADDR_ANY, PORT_CONTROL) != ERR_OK) return false;
         udp_recv(control, control_recv, NULL);
     }
-    static unsigned seq;
-    char request[96];
-    snprintf(request, sizeof(request), "%u %s", ++seq, cmd);
-    cmd = request;
+    snprintf(request, sizeof(request), "%u %s", ++control_seq, cmd);
+    len = strlen(request);
     ipaddr_aton(HOST, &host);
     /* Emulated time runs ahead of the host's wall clock; give slow host
-     * actions (ping, openssl peers) room before retrying. */
-    if (timeout_ms < 30000) timeout_ms = 30000;
+     * actions (ping, openssl peers, scapy) plenty of room. */
+    if (timeout_ms < 120000) timeout_ms = 120000;
     control_have = false;
     for (uint32_t start = lwip_now_ms(); !control_have && lwip_now_ms() - start < timeout_ms;)
     {
-        size_t len = strlen(cmd);
         struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)len, PBUF_RAM);
         if (!p) return false;
-        pbuf_take(p, cmd, (u16_t)len);
+        pbuf_take(p, request, (u16_t)len);
         udp_sendto(control, p, &host, PORT_CONTROL);
         pbuf_free(p);
         pump(control_done, NULL, 5000);
@@ -230,6 +237,19 @@ void close_socket(struct lwip_socket *sock)
     lwip_socket_close(sock);
     pump(not_active, sock, 10000);
     lwip_socket_destroy(sock);
+}
+
+size_t http_header_bytes(struct http_head *h, const uint8_t *data, size_t n)
+{
+    static const char end[] = "\r\n\r\n";
+    size_t i = 0;
+    while (!h->done && i < n)
+    {
+        h->matched = data[i] == (uint8_t)end[h->matched] ? h->matched + 1 : data[i] == '\r';
+        i++;
+        h->done = h->matched == 4;
+    }
+    return i;
 }
 
 /* ---- lifecycle --------------------------------------------------------- */

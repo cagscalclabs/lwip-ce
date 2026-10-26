@@ -340,10 +340,11 @@ class Control:
         except Exception as e:  # noqa: BLE001
             reply = f"ERR {type(e).__name__}: {e}"
         reply = reply if reply.startswith(("OK", "ERR")) else f"OK {reply}"
+        reply = f"{cmd.split()[0]} {reply}"[:95]
         self.last[cmd] = reply
         inflight.discard(cmd)
         log(f"{cmd} -> {reply}")
-        self.sock.sendto(reply.encode()[:95], addr)
+        self.sock.sendto(reply.encode(), addr)
 
     # -- generic ------------------------------------------------------------
 
@@ -409,6 +410,7 @@ class Control:
         return f"{m.group(1) if m else 0}/{count}"
 
     def cmd_ping6(self, addr: str, count: str = "3") -> str:
+        addr = addr.lower()
         target = f"{addr}%{IFACE}" if addr.startswith("fe80") else addr
         r = subprocess.run(["ping", "-6", "-c", count, "-w", "20", target], capture_output=True, text=True)
         m = re.search(r"(\d+) received", r.stdout)

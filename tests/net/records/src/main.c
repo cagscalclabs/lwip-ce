@@ -37,7 +37,7 @@ static void test_psk_bulk(const char *server, const char *name)
 {
     struct lwip_socket *sock;
     uint32_t body = 0, bad = 0, start;
-    bool header = false;
+    struct http_head head = {0};
     if (!host_call(server, NULL, 0, 15000)) return;
     sock = psk_socket(NULL);
     if (!check("tls bulk session", sock != NULL)) return;
@@ -45,18 +45,10 @@ static void test_psk_bulk(const char *server, const char *name)
     start = lwip_now_ms();
     while (lwip_now_ms() - start < 300000)
     {
-        size_t n, off = 0;
+        size_t n, off;
         lwip_service_events();
-        n = lwip_socket_read(sock, buf, sizeof(buf) - 1);
-        if (!header && n)
-        {
-            char *end;
-            buf[n] = '\0';
-            end = strstr((char *)buf, "\r\n\r\n");
-            if (!end) continue;
-            header = true;
-            off = (size_t)(end + 4 - (char *)buf);
-        }
+        n = lwip_socket_read(sock, buf, sizeof(buf));
+        off = http_header_bytes(&head, buf, n);
         for (size_t i = off; i < n; i++)
             if (buf[i] != pattern(body + i - off)) bad++;
         body += n - off;

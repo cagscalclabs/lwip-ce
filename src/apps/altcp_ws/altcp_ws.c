@@ -690,8 +690,10 @@ static err_t altcp_ws_lower_recv(void *arg, struct altcp_pcb *inner_conn,
 
     if (!conn || !conn->state)
     {
+        /* Freed here, so report it consumed: an error would make TCP keep
+         * p as refused data and free it again. */
         if (p) pbuf_free(p);
-        return ERR_VAL;
+        return ERR_OK;
     }
     state = (altcp_ws_state_t *)conn->state;
 
@@ -717,7 +719,8 @@ static err_t altcp_ws_lower_recv(void *arg, struct altcp_pcb *inner_conn,
     else
         pbuf_cat(state->rx, copy);
 
-    return altcp_ws_lower_recv_process(conn, state);
+    /* p is consumed; only ERR_ABRT may go back to TCP (see above). */
+    return altcp_ws_lower_recv_process(conn, state) == ERR_ABRT ? ERR_ABRT : ERR_OK;
 }
 
 static err_t altcp_ws_lower_sent(void *arg, struct altcp_pcb *inner_conn,

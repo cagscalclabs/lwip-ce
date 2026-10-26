@@ -61,4 +61,9 @@ bool write_all(struct lwip_socket *sock, const uint8_t *data, size_t len);
 size_t read_exact(struct lwip_socket *sock, uint8_t *dst, size_t len, uint32_t timeout_ms);
 void close_socket(struct lwip_socket *sock);
 
+/* Finds the end of an HTTP response header across reads. */
+struct http_head { uint8_t matched; bool done; };
+/* Returns how many leading bytes of `data` still belong to the header. */
+size_t http_header_bytes(struct http_head *h, const uint8_t *data, size_t n);
+
 #endif

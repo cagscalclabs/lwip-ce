@@ -119,6 +119,9 @@ struct lwip_socket
     uint8_t  tls_psk_identity[TLS_PSK_IDENTITY_MAX_LEN];
     size_t   tls_psk_identity_len;
     struct mem_buffer          *rx_ring;
+    /* Stream bytes received but not yet copied into rx_ring because it was
+     * full. Kept in arrival order; drained by reads. */
+    struct pbuf                *rx_pending;
     size_t                      rx_ring_init;
     size_t                      rx_ring_max;
     uint16_t                    last_sent_len;
@@ -909,6 +912,66 @@ static void lwip_socket_rx_ring_destroy(struct lwip_socket *conn)
         mem_buffer_destroy(conn->rx_ring);
         conn->rx_ring = NULL;
     }
+    if (conn && conn->rx_pending)
+    {
+        pbuf_free(conn->rx_pending);
+        conn->rx_pending = NULL;
+    }
+}
+
+/* Move as much of rx_pending into rx_ring as currently fits. */
+static void lwip_socket_rx_fill(struct lwip_socket *conn)
+{
+    while (conn->rx_pending && conn->rx_ring)
+    {
+        struct pbuf *q = conn->rx_pending;
+        u16_t seg = q->len;
+        size_t n = seg;
+        if (n && !mem_buffer_reserve(conn->rx_ring, n))
+        {
+            n = mem_buffer_space(conn->rx_ring);
+            if (n > seg)
+            {
+                n = seg;
+            }
+        }
+        if (n && !mem_buffer_push(conn->rx_ring, (const uint8_t *)q->payload, n))
+        {
+            return;
+        }
+        if (n == 0 && seg != 0)
+        {
+            return; /* ring full until the app reads */
+        }
+        conn->rx_pending = pbuf_free_header(q, (u16_t)n);
+        if (n < seg)
+        {
+            return;
+        }
+    }
+}
+
+/* Takes ownership of a received stream pbuf. Whatever does not fit in the
+ * rx ring now waits in rx_pending, so a pbuf larger than the ring (a TLS
+ * record or WebSocket message) is never refused back to the transport.
+ * TCP flow control is unaffected: the window opens only as reads drain. */
+static bool lwip_socket_take_stream(struct lwip_socket *conn, struct pbuf *p)
+{
+    if (lwip_socket_rx_ring_create(conn) != LWIP_OK)
+    {
+        ERROR();
+        return false;
+    }
+    if (conn->rx_pending)
+    {
+        pbuf_cat(conn->rx_pending, p);
+    }
+    else
+    {
+        conn->rx_pending = p;
+    }
+    lwip_socket_rx_fill(conn);
+    return true;
 }
 
 static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
@@ -2109,11 +2172,10 @@ static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
         conn_event_enqueue(c, CONN_PENDING_CLOSED, LWIP_OK);
         return ERR_OK;
     }
-    if (!lwip_socket_buffer_pbuf(c, p))
+    if (!lwip_socket_take_stream(c, p))
     {
         return ERR_MEM;
     }
-    pbuf_free(p);
     conn_event_enqueue(c, CONN_PENDING_READABLE, LWIP_OK);
     return ERR_OK;
 }
@@ -2284,11 +2346,10 @@ static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
         conn_event_enqueue(c, CONN_PENDING_CLOSED, LWIP_OK);
         return ERR_OK;
     }
-    if (!lwip_socket_buffer_pbuf(c, p))
+    if (!lwip_socket_take_stream(c, p))
     {
         return ERR_MEM;
     }
-    pbuf_free(p);
     conn_event_enqueue(c, CONN_PENDING_READABLE, LWIP_OK);
     return ERR_OK;
 }
@@ -3302,6 +3363,7 @@ size_t lwip_socket_read(struct lwip_socket *conn, uint8_t *buf, size_t len)
     {
         return 0;
     }
+    lwip_socket_rx_fill(conn);
     /* mem_buffer_pop requires len <= bytes available; clamp to what's there. */
     size_t avail = mem_buffer_len(conn->rx_ring);
     if (avail == 0)
@@ -3317,6 +3379,7 @@ size_t lwip_socket_read(struct lwip_socket *conn, uint8_t *buf, size_t len)
         len = avail;
     }
     len = mem_buffer_pop(conn->rx_ring, buf, len);
+    lwip_socket_rx_fill(conn);
     switch ((lwip_socket_type_t)conn->protocol)
     {
 #if LWIP_TCP
@@ -3635,6 +3698,7 @@ lwip_error_t lwip_socket_resize_rx_max(struct lwip_socket *conn,
         }
     }
     conn->rx_ring_max = new_max;
+    lwip_socket_rx_fill(conn);
     return LWIP_OK;
 }
 
