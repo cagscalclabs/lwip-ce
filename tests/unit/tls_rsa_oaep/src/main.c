@@ -15,6 +15,7 @@
 #include <lwip.h>
 #include <lwip/cryptography/rsa.h>
 #include <lwip/cryptography/hash.h>
+#include <lwip/cryptography/random.h>
 
 /**
  * Test 1: RSA-OAEP Encode
