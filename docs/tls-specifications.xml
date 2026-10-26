@@ -360,7 +360,10 @@
     <note>Compliant as of/before v3.0.0-rc1. A tag with low bits 0x1F is treated as tag 31 and its continuation octet is parsed as the length instead of being rejected. Parser differential inside signed content; limited impact.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>False-flag; Code explicitly rejects the high-tag-number marker before passing (asn1.c ln 82).</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -368,10 +371,12 @@
     <section>8.1.3 (length vs. available content; bounds)</section>
     <location>src/tls/core/asn1.c: tls_asn1_parse_len / tls_asn1_next / tls_asn1_child_cursor (L29-32, L88-91, L100-113) - buffer bounds</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Length octets and content length are checked against the cursor end (end - p &lt; content_len, no size_t overflow); child cursors are confined to the parent value.</note>
+    <note>Length octets and content length are checked against the cursor end (end - p &lt; content_len, no size_t overflow); child cursors are confined to the parent value.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -379,10 +384,12 @@
     <section>8.1.3.2 / 8.1.3.5 / 10.1 (definite length only, shortest form)</section>
     <location>src/tls/core/asn1.c: tls_asn1_parse_len (L5-50) - definite/minimal length</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Indefinite form rejected (L25), leading 0x00 length octet rejected (L33-36), long form encoding a value under 0x80 rejected (L42-45), too many length octets rejected (PR #63). tests/unit/tls_asn1 covers basic cases only; no negative vectors for non-minimal lengths.</note>
+    <note>Indefinite form rejected (L25), leading 0x00 length octet rejected (L33-36), long form encoding a value under 0x80 rejected (L42-45), too many length octets rejected (PR #63). tests/unit/tls_asn1 covers basic cases only; no negative vectors for non-minimal lengths.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -393,7 +400,10 @@
     <note>Compliant as of/before v3.0.0-rc1. Only 0x00/0xFF accepted (correct per 11.1), but an explicitly encoded DEFAULT FALSE (critical=FALSE or cA=FALSE) is accepted, violating 11.5. Lenient; no security effect.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>False (or stale) flag; x509.c ln 519 rejects critical = FALSE; x509.c ln 592 rejects cA= FALSE.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -401,10 +411,12 @@
     <section>8.3.2 (INTEGER minimal encoding)</section>
     <location>src/tls/core/x509.c: tls_ecdsa_parse_int (L25-55) - ECDSA r/s</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Rejects negative values, zero, redundant leading 0x00 and long-form lengths; the SEQUENCE length must match sig_len exactly (L1830-1841).</note>
+    <note>Rejects negative values, zero, redundant leading 0x00 and long-form lengths; the SEQUENCE length must match sig_len exactly (L1830-1841).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -412,10 +424,13 @@
     <section>8.3.2 (INTEGER minimal encoding)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L528-531), tls_x509_parse_certificate (L1371-1387) - pathLenConstraint / RSA modulus+exponent / serial</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. pathLen accepts a redundant leading 0x00; RSA modulus strips one leading 0x00 and does not reject a negative modulus; serial encoding is never checked. Low impact (signed content).</note>
+    <note>pathLen accepts a redundant leading 0x00; RSA modulus strips one leading 0x00 and does not reject a negative modulus; serial encoding is never checked. Low impact (signed content).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>False-flag; x509.c ln 84 rejects empty, negative, redundant leading-zero, and optionally zero values; x509.c ln 601 rejects negative/redunant padding, canon zero rem; x509.c ln 1298 forbids zero and enforces 20-octet limit; x509 ln 1462 same as previous and strips modulus sign byte</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -423,10 +438,13 @@
     <section>8.6.2 / 11.2.1 (BIT STRING unused-bits octet)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1352, L1392); src/tls/core/handshake.c: tls_cert_extract_sig_material (L645-649) - SPKI and signatureValue</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. SPKI and signatureValue BIT STRINGs require 0 unused bits and length &gt;= 2.</note>
+    <note>SPKI and signatureValue BIT STRINGs require 0 unused bits and length &gt;= 2.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>tls_x509_parse_certificate only requires len &gt;=1 which is valid DER but not a usable signature; verification paths use stricter checks.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -434,10 +452,13 @@
     <section>8.6.2.2 / 11.2.2 (BIT STRING padding bits zero; no trailing zero bits)</section>
     <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L536-543) - keyUsage BIT STRING</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Unused-bits count is range-checked (0..7) but padding bits are not checked to be zero and trailing zero bits are not rejected; a KU with unused=7 still reads keyCertSign from padding. Low impact (signed content).</note>
+    <note>Unused-bits count is range-checked (0..7) but padding bits are not checked to be zero and trailing zero bits are not rejected; a KU with unused=7 still reads keyCertSign from padding. Low impact (signed content).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Fully compliant as of v3.0.0-rc3.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -445,7 +466,7 @@
     <section>8.19 (OBJECT IDENTIFIER)</section>
     <location>src/tls/core/x509.c: tls_x509_oid_eq / tls_x509_oid_to_sig_alg (L80-86, L1584-1614); src/tls/includes/tls_algorithms.h (L53-77) - OID matching</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. OIDs are compared byte-for-byte against fixed DER constants (checked against dotted forms); a non-minimal subidentifier can only fail to match, which rejects.</note>
+    <note>OIDs are compared byte-for-byte against fixed DER constants (checked against dotted forms); a non-minimal subidentifier can only fail to match, which rejects.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>

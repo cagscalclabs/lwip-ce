@@ -611,15 +611,16 @@ basic_constraints_done:
         {
             if (have_ku || inner.tag != ASN1_BITSTRING ||
                 inner.len < 2 || inner.value[0] > 7) return false;
-            if (inner.value[0] != 0)
             {
-                uint8_t padding_mask = (uint8_t)((1u << inner.value[0]) - 1u);
-                if ((inner.value[inner.len - 1] & padding_mask) != 0)
+                uint8_t unused = inner.value[0];
+                uint8_t last = inner.value[inner.len - 1];
+                uint8_t padding_mask = (uint8_t)((1u << unused) - 1u);
+                /* Padding is zero, and DER omits every trailing zero bit from
+                 * a named-bit list, so its final used bit must be one. */
+                if ((last & padding_mask) != 0 ||
+                    (last & (uint8_t)(1u << unused)) == 0)
                     return false;
             }
-            /* DER omits trailing zero bits in a named-bit list. */
-            if (inner.value[inner.len - 1] == 0)
-                return false;
             have_ku = true;
             digital_signature = (inner.value[1] & 0x80) != 0;
             key_cert_sign = (inner.value[1] & 0x04) != 0;

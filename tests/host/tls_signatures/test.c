@@ -462,6 +462,12 @@ int main(void)
     assert(!tls_x509_parse_certificate(cert_bad_aki,
                                        sizeof(cert_bad_aki), &with_aki));
 
+    struct tls_x509_object nonminimal_ku;
+    assert(tls_x509_parse_certificate(cert_nonminimal_ku,
+                                      sizeof(cert_nonminimal_ku), &nonminimal_ku));
+    assert(!tls_x509_validate_path_extensions(&nonminimal_ku, true, 0,
+                                              "example.test"));
+
     struct tls_x509_object ec;
     assert(tls_x509_parse_certificate(cert_ec, sizeof(cert_ec), &ec));
     assert(ec.pubkey.type == TLS_KEY_TYPE_EC_P256 && ec.pubkey.ec.len == 65);

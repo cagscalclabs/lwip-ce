@@ -60,7 +60,7 @@ valid = seq(tlv(0x17, b'200101000000Z'), tlv(0x17, b'491231235959Z'))
 base_extensions = (
     seq(oid('551d11'), tlv(4, seq(tlv(0x82, b'example.test')))),
     seq(oid('551d13'), tlv(1, b'\xff'), tlv(4, seq(tlv(1, b'\xff')))),
-    seq(oid('551d0f'), tlv(1, b'\xff'), tlv(4, tlv(3, b'\x00\x84'))),
+    seq(oid('551d0f'), tlv(1, b'\xff'), tlv(4, tlv(3, b'\x02\x84'))),
     seq(oid('551d25'), tlv(4, seq(oid('2b06010505070301')))),
 )
 cert_extensions = tlv(0xa3, seq(*base_extensions))
@@ -76,6 +76,12 @@ cert_extensions_duplicate_aki = tlv(0xa3, seq(
 cert_extensions_bad_aki = tlv(0xa3, seq(
     *base_extensions,
     seq(oid('551d23'), tlv(4, seq(tlv(0xa0, authority_key_id)))),
+))
+cert_extensions_nonminimal_ku = tlv(0xa3, seq(
+    base_extensions[0],
+    base_extensions[1],
+    seq(oid('551d0f'), tlv(1, b'\xff'), tlv(4, tlv(3, b'\x00\x84'))),
+    base_extensions[3],
 ))
 
 
@@ -105,6 +111,7 @@ vectors = {
     'cert_aki': cert(pkcs, extensions=cert_extensions_aki),
     'cert_duplicate_aki': cert(pkcs, extensions=cert_extensions_duplicate_aki),
     'cert_bad_aki': cert(pkcs, extensions=cert_extensions_bad_aki),
+    'cert_nonminimal_ku': cert(pkcs, extensions=cert_extensions_nonminimal_ku),
     'cert_ec': cert(pkcs, ec_spki), 'cert_mismatch': cert(pss, inner=pkcs),
 }
 
