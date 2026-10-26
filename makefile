@@ -48,6 +48,7 @@ dylib: build
 	cp -R build/lwip/. "$(CEDEV_TOOLCHAIN)/include/lwip"
 	cp build/lwip.h build/cryptography.h build/parsers.h build/wireless.h "$(CEDEV_TOOLCHAIN)/include/"
 	mkdir -p tests/common
+	rm -f tests/common/LWIP.*.8xv
 	cp build/appinst/* build/lwip.8xv build/lwip.lib tests/common/
 
 .PHONY: clean

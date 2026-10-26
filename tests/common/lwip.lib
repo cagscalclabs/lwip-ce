@@ -33,11 +33,8 @@
 	export	lwip_debug_state_change_name
 	export	tls_aes_init
 	export	tls_aes_ccm_init
-	export	tls_aes_ccm_encrypt
-	export	tls_aes_ccm_decrypt
 	export	tls_aes_update_aad
 	export	tls_aes_encrypt
-	export	tls_aes_update_ciphertext
 	export	tls_aes_digest
 	export	tls_aes_decrypt
 	export	tls_aes_verify
@@ -478,3 +475,5 @@
 	export	tls_hash_clear
 	export	tls_hmac_clear
 	export	tls_aes_destroy_ctx
+	export	tls_aes_pkcs7_apply
+	export	tls_aes_pkcs7_remove
