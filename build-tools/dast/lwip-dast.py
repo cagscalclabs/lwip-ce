@@ -316,11 +316,18 @@ def ensure_test_cert(kind: str, server_ip: str) -> tuple[Path, Path]:
     now = datetime.now(timezone.utc)
     not_before = (now - _dt.timedelta(hours=1)).strftime("%Y%m%d%H%M%SZ")
     not_after  = (now + _dt.timedelta(hours=2)).strftime("%Y%m%d%H%M%SZ")
+    # -not_before/-not_after need OpenSSL 3.4+; older releases (Ubuntu
+    # 24.04 ships 3.0) only take -days, which starts the window at now.
+    req_help = subprocess.run([openssl, "req", "-help"], capture_output=True, text=True)
+    if "-not_before" in req_help.stdout + req_help.stderr:
+        validity = ["-not_before", not_before, "-not_after", not_after]
+    else:
+        validity = ["-days", "1"]
     if kind == "rsa":
         subprocess.run([
             openssl, "req", "-x509", "-newkey", "rsa:2048",
             "-sha256", "-nodes",
-            "-not_before", not_before, "-not_after", not_after,
+            *validity,
             "-subj", "/CN=lwip-dast-rsa",
             "-addext", f"subjectAltName=IP:{server_ip}",
             "-keyout", str(key), "-out", str(cert),
@@ -332,7 +339,7 @@ def ensure_test_cert(kind: str, server_ip: str) -> tuple[Path, Path]:
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run([
             openssl, "req", "-new", "-x509", "-sha256",
-            "-not_before", not_before, "-not_after", not_after,
+            *validity,
             "-subj", "/CN=lwip-dast-ecdsa",
             "-addext", f"subjectAltName=IP:{server_ip}",
             "-key", str(key), "-out", str(cert),
