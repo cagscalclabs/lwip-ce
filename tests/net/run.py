@@ -18,12 +18,14 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import os
 import re
 import shutil
 import socket
 import socketserver
+import ssl
 import struct
 import subprocess
 import sys
@@ -49,6 +51,18 @@ PSK = bytes(((i * 31) + (i >> 8)) & 0xFF for i in range(32))
 PSK_IDENTITY = "lwip-ce-nettest"
 CIPHERS = {"gcm": "TLS_AES_128_GCM_SHA256", "ccm": "TLS_AES_128_CCM_SHA256", "aes256": "TLS_AES_256_GCM_SHA384"}
 GROUPS = {"x25519": "X25519", "p256": "P-256", "p384": "P-384"}
+HTTPS_PATHS = {
+    "tls13.akamai.io": "/",
+    "httpbin.dev": "/get",
+    "raw.githubusercontent.com": "/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/udp.c",
+    "duckduckgo.com": "/",
+    "www.amazon.com": "/",
+}
+HTTPS_FAILURE = re.compile(
+    r"^FAIL https (?P<host>[A-Za-z0-9.-]+)(?: \([^)]*\))?"
+    r"(?P<phase> answers HTTP| full body)?$"
+)
+SOCKET_STATUS = re.compile(r"^\s+\S+: status (\d+) err (\d+)(?: in \d+ ms)?$")
 
 
 def pattern(start: int, n: int) -> bytes:
@@ -657,7 +671,122 @@ def read_log(path: Path) -> str:
     return data[0x4A:0x4A + length].decode("latin-1")
 
 
-def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int) -> tuple[bool, str, dict]:
+def host_https_probe(host: str, phase: str, timeout: float = 15.0) -> tuple[bool, str, str]:
+    """Probe a failed public HTTPS endpoint with the runner's TLS stack."""
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
+    try:
+        if phase == "tls":
+            with socket.create_connection((host, 443), timeout=timeout) as raw:
+                with context.wrap_socket(raw, server_hostname=host):
+                    pass
+        else:
+            connection = http.client.HTTPSConnection(host, 443, timeout=timeout, context=context)
+            try:
+                method = "GET" if phase == "body" else "HEAD"
+                connection.request(method, HTTPS_PATHS.get(host, "/"), headers={
+                    "Host": host,
+                    "Connection": "close",
+                    "User-Agent": "lwip-ce-host-corroboration",
+                })
+                response = connection.getresponse()
+                if phase == "body":
+                    response.read()
+            finally:
+                connection.close()
+        return True, "ok", "runner completed the equivalent probe"
+    except socket.gaierror as exc:
+        return False, "dns", f"DNS failure: {exc}"
+    except (TimeoutError, socket.timeout) as exc:
+        return False, "timeout", f"timeout: {exc}"
+    except ConnectionResetError as exc:
+        return False, "reset", f"connection reset: {exc}"
+    except ssl.SSLCertVerificationError as exc:
+        return False, "certificate", f"certificate verification failed: {exc.verify_message}"
+    except ssl.SSLEOFError as exc:
+        return False, "closed", f"TLS peer closed unexpectedly: {exc}"
+    except ssl.SSLError as exc:
+        return False, "tls", f"TLS failure: {exc.reason or exc}"
+    except (ConnectionAbortedError, ConnectionRefusedError, BrokenPipeError, EOFError) as exc:
+        return False, "closed", f"connection closed: {exc}"
+    except http.client.HTTPException as exc:
+        return False, "http", f"HTTP failure: {exc}"
+    except OSError as exc:
+        return False, "connect", f"connection failure: {exc}"
+
+
+def cemu_failure_issue(lines: list[str], index: int, phase: str) -> str:
+    if phase != "tls":
+        return "http"
+    for line in reversed(lines[max(0, index - 3):index]):
+        match = SOCKET_STATUS.match(line)
+        if not match:
+            continue
+        status, error = map(int, match.groups())
+        if status == 7:
+            return "reset"
+        if status == 3 and error == 0:
+            return "timeout"
+        if status == 2 or error == 5:
+            return "dns"
+        return "connect"
+    return "connect"
+
+
+def similar_endpoint_issue(cemu_issue: str, host_issue: str) -> bool:
+    similar = {
+        "dns": {"dns"},
+        "reset": {"reset", "closed"},
+        "timeout": {"timeout"},
+        "connect": {"reset", "closed", "timeout", "connect", "tls", "certificate"},
+        "http": {"reset", "closed", "timeout", "connect", "tls", "certificate", "http"},
+    }
+    return host_issue in similar.get(cemu_issue, set())
+
+
+def corroborate_external_https_failures(text: str, probe=host_https_probe) -> tuple[str, int, list[dict]]:
+    """Turn only host-reproduced public HTTPS failures into explicit skips."""
+    lines = text.splitlines()
+    rendered: list[str] = []
+    records: list[dict] = []
+    skipped = 0
+    for index, line in enumerate(lines):
+        match = HTTPS_FAILURE.match(line)
+        if not match:
+            rendered.append(line)
+            continue
+        host = match.group("host")
+        suffix = match.group("phase") or ""
+        phase = "http" if suffix == " answers HTTP" else "body" if suffix == " full body" else "tls"
+        cemu_issue = cemu_failure_issue(lines, index, phase)
+        host_ok, host_issue, detail = probe(host, phase)
+        corroborated = not host_ok and similar_endpoint_issue(cemu_issue, host_issue)
+        records.append({
+            "test": line[5:],
+            "host": host,
+            "phase": phase,
+            "cemuIssue": cemu_issue,
+            "hostIssue": host_issue,
+            "hostDetail": detail,
+            "skipped": corroborated,
+        })
+        if corroborated:
+            skipped += 1
+            rendered.append(
+                f"SKIP {line[5:]} - endpoint issue/latency; host reproduced "
+                f"{host_issue} after CEmu reported {cemu_issue}"
+            )
+            rendered.append(f"  host probe: {detail}")
+        else:
+            rendered.append(line)
+            rendered.append(
+                f"  host probe: {'passed; CEmu failure remains authoritative' if host_ok else detail}"
+            )
+    return "\n".join(rendered) + ("\n" if text.endswith("\n") else ""), skipped, records
+
+
+def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int) -> tuple[bool, str, dict, list[dict]]:
     autotest = HERE / f"autotest-{suite}.json"
     log_path = HERE / "NETLOG.8xv"
     log_path.unlink(missing_ok=True)
@@ -679,17 +808,25 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int) -> tuple[b
         # Without NETLOG the calc never reached the end: it reset (NMI or the
         # home-screen CRC) or hung until the hash timeout.
         return False, (f"{SUITES[suite]}: calc crashed or hung after host request "
-                       f"{CONTROL.last_request!r} (autotester exit {status})"), {}
+                       f"{CONTROL.last_request!r} (autotester exit {status})"), {}, []
     if False:
-        return False, f"{SUITES[suite]}: NETLOG.8xv was not saved (autotester exit {status})", {}
-    text = read_log(log_path)
+        return False, f"{SUITES[suite]}: NETLOG.8xv was not saved (autotester exit {status})", {}, []
+    raw_text = read_log(log_path)
     log_path.replace(HERE / f"NETLOG-{suite}.8xv")
     metrics = {m.group(1): {"value": int(m.group(2)), "unit": m.group(3)}
-               for m in re.finditer(r"^METRIC (\S+) (\d+) (\S+)$", text, re.M)}
+               for m in re.finditer(r"^METRIC (\S+) (\d+) (\S+)$", raw_text, re.M)}
     metrics["host_wall_time"] = {"value": round(wall), "unit": "s"}
-    done = re.search(r"DONE pass (\d+) fail (\d+)", text)
-    ok = status == 0 and bool(done) and done.group(2) == "0" and int(done.group(1)) > 0
-    return ok, text, metrics
+    done = re.search(r"DONE pass (\d+) fail (\d+)", raw_text)
+    text, skipped, probes = corroborate_external_https_failures(raw_text)
+    if done:
+        effective_failures = max(0, int(done.group(2)) - skipped)
+        text += (f"HOST-GRADE pass {done.group(1)} fail {effective_failures} "
+                 f"skip {skipped}\n")
+    else:
+        effective_failures = 1
+    metrics["host_skipped_endpoint_failures"] = {"value": skipped, "unit": "tests"}
+    ok = status == 0 and bool(done) and effective_failures == 0 and int(done.group(1)) > 0
+    return ok, text, metrics, probes
 
 
 def write_summary(results, metrics):
@@ -698,11 +835,17 @@ def write_summary(results, metrics):
         return
     with open(summary, "a", encoding="utf-8") as f:
         for suite, ok, text in results:
-            counts = re.search(r"DONE pass (\d+) fail (\d+)", text)
+            counts = re.search(r"HOST-GRADE pass (\d+) fail (\d+) skip (\d+)", text)
+            if not counts:
+                counts = re.search(r"DONE pass (\d+) fail (\d+)", text)
             f.write(f"## {SUITES[suite]} {'✅' if ok else '❌'} {counts.group(0) if counts else ''}\n\n")
             fails = [line for line in text.splitlines() if line.startswith("FAIL")]
+            skips = [line for line in text.splitlines() if line.startswith("SKIP")]
             if fails:
                 f.write("```\n" + "\n".join(fails) + "\n```\n\n")
+            if skips:
+                f.write("### Host-corroborated endpoint skips\n\n```")
+                f.write("\n" + "\n".join(skips) + "\n```\n\n")
             f.write("<details><summary>log</summary>\n\n```\n" + text + "\n```\n</details>\n\n")
         f.write("## Metrics\n\nMeasured on the calc's clock, i.e. emulated eZ80 time.\n\n"
                 "| suite | metric | value |\n| --- | --- | --- |\n")
@@ -718,6 +861,7 @@ def main() -> int:
     ap.add_argument("--suite", action="append", choices=list(SUITES))
     ap.add_argument("--timeout", type=int, default=1800000)
     ap.add_argument("--metrics", default=str(HERE / "metrics.json"))
+    ap.add_argument("--endpoint-probes", default=str(HERE / "endpoint-probes.json"))
     ap.add_argument("--pcap", help="capture the TAP interface to this file (needs root and scapy)")
     args = ap.parse_args()
 
@@ -745,11 +889,12 @@ def main() -> int:
             except ImportError:
                 log("scapy missing: multicast, ACD and IPv6 router checks will fail")
 
-        results, metrics = [], {}
+        results, metrics, endpoint_probes = [], {}, []
         for suite in args.suite or list(SUITES):
             log(f"running {SUITES[suite]}")
-            ok, text, values = run_suite(suite, args.autotester, args.usb, args.timeout)
+            ok, text, values, probes = run_suite(suite, args.autotester, args.usb, args.timeout)
             metrics[suite] = values
+            endpoint_probes.extend({"suite": suite, **probe} for probe in probes)
             results.append((suite, ok, text))
             print(text, flush=True)
 
@@ -758,6 +903,7 @@ def main() -> int:
             wrpcap(args.pcap, capture.stop())
 
     Path(args.metrics).write_text(json.dumps(metrics, indent=2) + "\n")
+    Path(args.endpoint_probes).write_text(json.dumps(endpoint_probes, indent=2) + "\n")
     write_summary(results, metrics)
     for suite, ok, _ in results:
         print(f"{SUITES[suite]}: {'PASS' if ok else 'FAIL'}")

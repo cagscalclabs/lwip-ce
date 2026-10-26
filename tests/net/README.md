@@ -17,6 +17,13 @@ Shared calc code lives in [`common/`](common).
 | [`server`](server/src/main.c) | `NETSRV` | lwIP-CE as a TLS 1.3 PSK server: `openssl s_client` echo with GCM and CCM, wrong-PSK rejection, listener close |
 | [`perf`](perf/src/main.c) | `NETPERF` | Throughput (TCP down/up via sockets and the raw API, UDP, WebSocket, loopback, TLS GCM/CCM down and up), latency (TCP connect, TCP/UDP/WS round trips, TLS handshake), heap at idle and peak per workload |
 
+Positive external-HTTPS failures remain failures unless the GitHub runner
+immediately reproduces a compatible DNS, transport, TLS, HTTP, or timeout
+failure against the same endpoint. Such cases are reported as `SKIP` with
+both symptoms in the job summary and `endpoint-probes.json`. Local tests,
+negative certificate tests, and failures for which the host probe succeeds
+are never waived.
+
 Metrics are measured on the calc's clock (emulated eZ80 time). `run.py` writes them to `metrics.json` and, in CI,
 to the job summary.
 

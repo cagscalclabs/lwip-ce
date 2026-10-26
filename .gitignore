@@ -105,6 +105,7 @@ tests/fuzz/out/
 tests/net/autotest-*.json
 tests/net/NETLOG*.8xv
 tests/net/metrics.json
+tests/net/endpoint-probes.json
 tests/net/*.pcap
 tests/validation/acvp/autotest.json
 tests/validation/acvp/response.json

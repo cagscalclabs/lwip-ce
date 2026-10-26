@@ -53,6 +53,10 @@ jobs:
       - name: Install scapy
         run: sudo pip install --break-system-packages scapy
 
+      - name: Test host endpoint corroboration
+        if: matrix.suite == 'tls'
+        run: python3 tests/net/test_host_corroboration.py
+
       - name: Build ${{ matrix.suite }}
         run: make -C tests/net ${{ matrix.suite }}
 
@@ -73,6 +77,7 @@ jobs:
           path: |
             tests/net/NETLOG-*.8xv
             tests/net/metrics.json
+            tests/net/endpoint-probes.json
             tests/net/*.pcap
             tests/net/autotest-*.json
           if-no-files-found: ignore
