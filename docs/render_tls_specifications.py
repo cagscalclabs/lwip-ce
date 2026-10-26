@@ -17,6 +17,7 @@ CSS = r"""
   --bg:#fff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0;
   --panel:#f6f8fa; --link:#0969da; --ok-bg:#dafbe1; --ok-fg:#116329;
   --dev-bg:#ffebe9; --dev-fg:#82071e; --ev-bg:#fff8c5; --ev-fg:#7d4e00;
+  --needs-review-bg:#fbefff; --needs-review-fg:#6639ba;
   --part-bg:#ddf4ff; --part-fg:#0550ae; --na-bg:#eaeef2; --na-fg:#424a53;
   --rev-bg:#f0f6ff; --rev-fg:#0550ae; --rev-border:#b0c8f0;
   --overlay:#0004; --modal-bg:#fff; --modal-shadow:0 8px 32px #0003;
@@ -36,6 +37,7 @@ p.hint { color:var(--muted); font-size:12px; margin:0 0 16px; }
 .COMPLIANT { background:var(--ok-bg); color:var(--ok-fg); }
 .DEVIANT { background:var(--dev-bg); color:var(--dev-fg); }
 .NEEDS-EVIDENCE { background:var(--ev-bg); color:var(--ev-fg); }
+.NEEDS-REVIEW { background:var(--needs-review-bg); color:var(--needs-review-fg); }
 .PARTIAL { background:var(--part-bg); color:var(--part-fg); }
 .NOT-APPLICABLE { background:var(--na-bg); color:var(--na-fg); }
 .MANUAL { background:var(--rev-bg); color:var(--rev-fg); }

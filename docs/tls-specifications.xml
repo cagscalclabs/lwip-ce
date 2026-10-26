@@ -831,7 +831,10 @@
     <note>Seed-size arithmetic supports the 128/192 claims, but the credited bits rest on the unvalidated H_min = 0.269 (see SP 800-90B 3.1.5).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Community-sourced entropy analysis underway (see: https://cagscalclabs.net/contribute/captures/rngstats/)</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1066,7 +1069,10 @@
     <note>H_min = 0.269 bits/sample is self-described as a "Provisional engineering floor ... Replace after formal non-IID assessment"; no 6.3 estimator output exists. tests/host/tls_random/test_health.py only re-checks the arithmetic.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Current evidence suggests entropy well in excess of the established floor, but sample size is currently limited. Entropy sampling is current underway.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1088,7 +1094,10 @@
     <note>Only a header comment ("sense-amplifier noise"); no physical model, independence analysis or restart data. Unmapped reads may echo bus traffic (LCD DMA, USB) that an attacker could predict or influence.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Entropy claims hedge on community-sourced entropy samples continuing to support the established Hmin.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1147,7 +1156,7 @@
     <ref>NIST SP 800-90C</ref>
     <section>4 (RBG2 construction: instantiate with 3s/2, reseed with at least s)</section>
     <location>src/tls/core/random.c: tls_drbg_entropy_gather_step (L637-672), defines (L29-57) - seeding construction</location>
-    <grade>NEEDS-EVIDENCE</grade>
+    <grade>NEEDS-REVIEW</grade>
     <note>RBG2-like structure (physical source, no PR) with correct seed sizes, but every 90C claim depends on a 90B-validated source, which does not exist.</note>
 
     <reviews>
@@ -1173,7 +1182,9 @@
     <note>No SP 800-108 KDF exists; the only KDFs are HKDF and PBKDF2.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1272,7 +1283,10 @@
     <note>No security-relevant crypto logic. __tls_scratch (1647 B) is shared by P-256, powmod, X25519 and HKDF; mutual exclusion is documented, not enforced.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Consideration: TLS scratch occupies a .bss section semantically distinct from consumer-use provided the BSSHEAP contract documented is complied with; The TI-84+ CE has no secure memory contract, so enforcement is provisional. (linker_script_lwip.ld ln 125, p256.s ln 81)</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1789,7 +1803,9 @@
     <note>Omitted in favor of the more modern RFC 8449 record_size_limit.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2306,7 +2322,9 @@
     <note>0-RTT is never offered; an early_data extension in EncryptedExtensions falls to the default case and gets unsupported_extension (correct).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2368,7 +2386,7 @@
     <ref>RFC 8446</ref>
     <section>4.2.11.2 (PSK binder)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L2282-2291) - binder transcript after HRR</location>
-    <grade>NEEDS-EVIDENCE</grade>
+    <grade>NEEDS-REVIEW</grade>
     <note>Hashes message_hash(CH1) || HRR || truncated CH2, correct by inspection; no test or interop run covers PSK combined with HRR.</note>
 
     <reviews>
@@ -2548,7 +2566,9 @@
     <note>Never sent because 0-RTT is not offered.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2958,7 +2978,9 @@
     <note>No 0-RTT offered; 8.1 single-use ticket enforcement is a server-side mechanism (client-side ticket reuse is tracked under Appendix C.4).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3045,7 +3067,7 @@
     <ref>RFC 8446</ref>
     <section>Appendix E.1 (handshake security properties: server authentication)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_streamed / tls_recv_certificate_verify / tls_recv_finished - server authentication</location>
-    <grade>NEEDS-EVIDENCE</grade>
+    <grade>NEEDS-REVIEW</grade>
     <note>Protocol glue is correct (CertificateVerify and Finished mandatory) and the separate PKI
       pass found chain anchoring fail-closed, but the overall property rests on the PKI deviations
       recorded under RFC 5280 (CN-only anchor lookup, no revocation, no path building) and has no
