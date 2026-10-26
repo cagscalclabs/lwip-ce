@@ -20,4 +20,5 @@ void app_main(void)
     ESP_ERROR_CHECK(crypto_init());
     ESP_ERROR_CHECK(bridge_init());
     ESP_ERROR_CHECK(wifi_init());
+    ESP_ERROR_CHECK(console_init());
 }

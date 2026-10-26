@@ -16,6 +16,7 @@
 #define RETRY_MS 15000
 
 static TaskHandle_t s_task;
+static TaskHandle_t s_led_task;
 static SemaphoreHandle_t s_scan_lock;
 static volatile bool s_connected;
 static volatile bool s_joining;
@@ -24,6 +25,48 @@ static volatile uint8_t s_pending = PROFILE_NONE;
 static uint8_t s_slot = PROFILE_NONE;
 static volatile uint8_t s_reason = LWIP_WIFI_REASON_NONE;
 static wifi_ap_record_t s_records[WIFI_SCAN_MAX];
+
+static void set_led(bool on)
+{
+#if CONFIG_BRIDGE_LED_GPIO >= 0
+    gpio_set_level(CONFIG_BRIDGE_LED_GPIO, on);
+#else
+    (void)on;
+#endif
+}
+
+static void led_kick(void)
+{
+    if (s_led_task != NULL) {
+        xTaskNotifyGive(s_led_task);
+    }
+}
+
+static void led_task(void *arg)
+{
+    (void)arg;
+
+    for (int i = 0; i < 20; i++) {
+        set_led(i % 2 == 0);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    for (;;) {
+        if (s_connected) {
+            set_led(true);
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        } else if (s_joining) {
+            set_led(true);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+            set_led(false);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+        } else {
+            set_led(true);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            set_led(false);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3000));
+        }
+    }
+}
 
 static wifi_auth_mode_t auth_for(uint8_t security)
 {
@@ -200,6 +243,7 @@ static void join(uint8_t slot)
     if (esp_wifi_connect() != ESP_OK) {
         s_joining = false;
     }
+    led_kick();
 }
 
 static void wifi_task(void *arg)
@@ -271,6 +315,7 @@ void wifi_get_status(wifi_status_t *out)
     memset(out, 0, sizeof *out);
     out->slot = PROFILE_NONE;
     out->connected = s_connected;
+    out->joining = s_joining || s_pending != PROFILE_NONE;
     out->reason = s_reason;
     if (s_connected && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         out->slot = profiles_active();
@@ -309,15 +354,6 @@ static uint8_t reason_from_event(uint8_t reason)
     }
 }
 
-static void set_led(bool on)
-{
-#if CONFIG_BRIDGE_LED_GPIO >= 0
-    gpio_set_level(CONFIG_BRIDGE_LED_GPIO, on);
-#else
-    (void)on;
-#endif
-}
-
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -332,7 +368,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = false;
         s_joining = false;
         profiles_clear_active();
-        set_led(false);
+        led_kick();
         bridge_set_wifi(false);
         control_notify();
         /* Lost a working link: look for a network now. A failed join waits for
@@ -346,7 +382,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = true;
         s_joining = false;
         profiles_mark_active(s_slot);
-        set_led(true);
+        led_kick();
         bridge_set_wifi(true);
         control_notify();
     }
@@ -364,7 +400,7 @@ esp_err_t wifi_init(void)
 #if CONFIG_BRIDGE_LED_GPIO >= 0
     gpio_reset_pin(CONFIG_BRIDGE_LED_GPIO);
     gpio_set_direction(CONFIG_BRIDGE_LED_GPIO, GPIO_MODE_OUTPUT);
-    set_led(false);
+    xTaskCreate(led_task, "led", 2048, NULL, 2, &s_led_task);
 #endif
 
     err = profiles_init();
