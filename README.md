@@ -4,36 +4,27 @@
 
 ![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=master&cache=1)
 ![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=master&cache=1)
+![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?branch=master&cache=1)
+<br>
+![Network Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/net.yml/badge.svg?branch=master&cache=1)
+![Host Tests and Fuzzing](https://github.com/cagscalclabs/lwip-ce/actions/workflows/host.yml/badge.svg?branch=master&cache=1)
+<br>
+![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
+![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 
 <hr>
 
 **Code Quality**
 
-![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?branch=master&cache=1)
-![DAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/dast.yml/badge.svg?branch=master&cache=1)
-
 *SAST uses `git diff` against upstream lwIP to filter out untouched upstream code and scans only targets unique to this repository. For upstream issues, file an issue with [nonGNU](https://savannah.nongnu.org/bugs/?group=lwip).*
 
-*DAST uses a locally-run hardware-in-the-loop workflow because the current emulator does not support Ethernet devices. A helper program runs on the calculator and exposes the DAST target while a local script attaches to it, performs network probes, advances the calculator-side test state, and writes results to JSON. This workflow then parses the JSON report and updates the test state accordingly.*
-
-<hr>
-
 **Runtime and Robustness Testing**
-
-![Network Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/net.yml/badge.svg?branch=master&cache=1)
-![Host Tests and Fuzzing](https://github.com/cagscalclabs/lwip-ce/actions/workflows/host.yml/badge.svg?branch=master&cache=1)
 
 *Network Tests exercise the built library on a network-enabled CEmu instance, covering sockets, raw IPv4 and IPv6 APIs, TLS clients and servers, record limits, live DAST probes, and performance measurements.*
 
 *Host Tests and Fuzzing run host-compiled regression tests with AddressSanitizer and UndefinedBehaviorSanitizer, then use libFuzzer to exercise parsers and network-facing protocol handlers with persistent corpora.*
 
-<hr>
-
 **Cryptography Quality Checks**
-
-
-![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
-![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 
 *CAVP selects 16 random samples from the NIST RSP datasets that match the primitives we provide (with the exception of SHA-256 Monte Carlo, which selects one) (totaling 185 samples covering AES-CBC, GCM, CCM, SHA-256, HMAC-SHA-256, PBKDF2, HKDF, RSA-PSS-RSAE-SHA256, RSA-PKCS1-SHA256, and X25519). Where NIST publishes no RSP for a primitive (or in the case of RSA with e=65537), the output of python3-cryptography is used instead. Our workflow caches the expected values and then serializes the inputs into an AppVar for transfer to the TI-84+ CE. The CAVP profiler runs on the calculator, dumping the on-device primitive output to an AppVar that gets fed back to the test environment. The AppVar is then parsed and graded against the expectations cached. This test does not constitute a formal NIST CAVP certification; it validates our implementations against samples drawn from NIST’s published CAVP validation-vector datasets.*
 
