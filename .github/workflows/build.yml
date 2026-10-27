@@ -3,7 +3,7 @@ name: Build
 # staging is the integration branch. Ordinary pushes only inspect commit
 # subjects for an urgent prefix. A nightly scheduler dispatches this same
 # workflow on staging when staging received an unpromoted commit in the last
-# 24 hours. Successful full runs fast-forward master to the exact tested SHA.
+# 24 hours. Successful full runs promote the exact tested SHA through a PR.
 
 on:
   schedule:
@@ -27,6 +27,7 @@ permissions:
   contents: write
   actions: write
   issues: write
+  pull-requests: write
   security-events: write
 
 concurrency:
@@ -242,36 +243,91 @@ jobs:
     secrets: inherit
 
   promote:
-    name: Promote tested staging SHA to master
+    name: Promote tested staging SHA through PR
     needs: [decide, build, tests]
     if: >-
       always() && needs.decide.outputs.run_gate == 'true' &&
       needs.build.result == 'success' && needs.tests.result == 'success'
     permissions:
+      actions: write
       contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fast-forward master to the tested commit
+      - name: Open and merge promotion PR
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          short_sha=${GATE_SHA:0:12}
+          promotion_branch="automation/promote-$short_sha"
+
           git fetch --no-tags origin master staging
-          if [ "$(git rev-parse origin/master)" = "$GATE_SHA" ]; then
-            echo "master already points at the tested commit."
-            exit 0
+          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
+            echo "The tested commit is already contained in master."
+          else
+            existing_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
+              --jq '.object.sha' 2>/dev/null || true)
+            if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
+              echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
+              exit 1
+            fi
+            if [ -z "$existing_sha" ]; then
+              gh api --method POST "repos/${{ github.repository }}/git/refs" \
+                -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+            fi
+
+            pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
+              --base master --head "$promotion_branch" --json number \
+              --jq '.[0].number // empty')
+            if [ -z "$pr_number" ]; then
+              body="$RUNNER_TEMP/promotion-pr.md"
+              {
+                echo "Automated promotion of the exact staging commit that passed the full gate."
+                echo
+                echo "- Tested commit: \`$GATE_SHA\`"
+                echo "- Source branch: \`staging\`"
+                echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                echo
+                echo "The temporary head branch is pinned to the tested SHA so later staging pushes are excluded."
+              } > "$body"
+              pr_url=$(gh pr create --repo "${{ github.repository }}" \
+                --base master --head "$promotion_branch" \
+                --title "Promote staging $short_sha to master" --body-file "$body")
+              pr_number=${pr_url##*/}
+            fi
+
+            gh pr merge "$pr_number" --repo "${{ github.repository }}" \
+              --merge --delete-branch --match-head-commit "$GATE_SHA"
+
+            git fetch --no-tags origin master
+            if ! git merge-base --is-ancestor "$GATE_SHA" origin/master; then
+              echo "::error::Promotion PR completed without placing tested SHA $GATE_SHA in master."
+              exit 1
+            fi
+            echo "Promotion PR #$pr_number merged; staging remains intact."
           fi
-          if ! git merge-base --is-ancestor origin/master "$GATE_SHA"; then
-            echo "::error::master is not an ancestor of the tested staging commit; refusing a non-fast-forward promotion."
-            exit 1
-          fi
-          gh api --method PATCH "repos/${{ github.repository }}/git/refs/heads/master" \
-            -f sha="$GATE_SHA" -F force=false
+
+          # GITHUB_TOKEN events do not start another push workflow, so dispatch
+          # both release channels explicitly after the tested SHA is promoted.
+          dispatch_deploy() {
+            branch=$1
+            for attempt in 1 2 3; do
+              if gh workflow run deploy.yml --repo "${{ github.repository }}" --ref "$branch"; then
+                return 0
+              fi
+              echo "Deploy dispatch for $branch was not ready (attempt $attempt); retrying."
+              sleep 3
+            done
+            return 1
+          }
+          dispatch_deploy master
+          dispatch_deploy staging
 
   notify_build_failure:
     name: Notify commit author of build failure
