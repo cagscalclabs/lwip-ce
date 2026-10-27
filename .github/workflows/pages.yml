@@ -58,23 +58,6 @@ jobs:
       - name: Build docs
         run: make -C docs html
 
-      - name: Collect the Wi-Fi bridge firmware
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: alessiodam/lwIP-CE-WiFi-bridge
-        run: |
-          set -euo pipefail
-          out=docs/_build/html/firmware
-          mkdir -p "$out"
-          gh api --paginate "repos/$GH_REPO/releases" \
-            --jq '.[] | select(.draft | not) | . as $r | .assets[] | select(.name | test("^lwip_wifi_bridge-esp32s3-.*-merged\\.bin$")) | {tag: $r.tag_name, prerelease: $r.prerelease, file: .name}' \
-            | jq -s . > "$out/releases.json"
-          jq -r '.[] | [.tag, .file] | @tsv' "$out/releases.json" | while IFS=$'\t' read -r tag file; do
-            gh release download "$tag" -p "$file" -D "$out"
-          done
-          ls -l "$out"
-
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4

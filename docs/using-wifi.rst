@@ -63,15 +63,10 @@ kit's as ``/dev/ttyACM0``.
 
 .. code-block:: text
 
-    make dylib                                           # lwIP-CE release in build/
-    wifi_tools/push.sh --bridge /dev/ttyUSB0             # flash the bridge, then push
-                                                         # lwIP and the examples
-    wifi_tools/push.sh                                   # calculator only
-    wifi_tools/push.sh --bridge /dev/ttyUSB0 --bridge-only
-    idf.py -C wifi_bridge monitor                        # bridge log
+    idf.py -C wifi_bridge -p /dev/ttyUSB0 build flash    # build and flash the bridge
+    idf.py -C wifi_bridge -p /dev/ttyUSB0 monitor        # bridge log
 
-``wifi_tools/push.sh`` needs libticalcs2 (it builds a small ``calclink``
-helper) and, for ``--bridge``, ESP-IDF v6.1. The firmware has its own
+Building the firmware needs ESP-IDF v6.1. The firmware has its own
 Semantic Versioning version. Its
 `releases <https://github.com/alessiodam/lwIP-CE-WiFi-bridge/releases>`_ ship
 ``lwip_wifi_bridge-<target>-<version>-merged.bin``, which flashes at offset

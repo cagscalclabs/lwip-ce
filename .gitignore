@@ -94,9 +94,6 @@ tests/common/*.8xp
 tests/common/*.8xv
 tests/common/*.8xg
 
-# Wi-Fi bridge firmware and tools
-wifi_tools/.lwip-installed
-
 # fuzzing
 tests/fuzz/out/
 tests/net/autotest-*.json

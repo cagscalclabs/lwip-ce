@@ -3,6 +3,7 @@ import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.
 const boards = [
   { name: "lwIP-CE bridge board (ESP32-S3-WROOM-1-N16R8)", chip: "ESP32-S3", flash: "16MB" },
 ];
+const firmware = "https://alessiodam.github.io/lwIP-CE-WiFi-bridge/firmware/";
 const minimumVersion = [1, 0, 0];
 const securityNames = ["Open", "WEP", "WPA", "WPA2", "WPA3", "WPA2/WPA3", "Enterprise"];
 const SEC_OPEN = 0;
@@ -79,12 +80,13 @@ const toHex = (text) => Array.from(encoder.encode(text), (b) => b.toString(16).p
 const fromHex = (hex) => decoder.decode(new Uint8Array((hex.match(/../g) ?? []).map((b) => parseInt(b, 16))));
 
 function newer(version, minimum) {
-  const parts = version.match(/^v?(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number);
-  if (!parts) return false;
+  const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)(-[^+]+)?/);
+  if (!match) return false;
+  const parts = match.slice(1, 4).map(Number);
   for (let i = 0; i < 3; i++) {
     if (parts[i] !== minimum[i]) return parts[i] > minimum[i];
   }
-  return true;
+  return !match[4];
 }
 
 function say(element, text, kind = "") {
@@ -218,11 +220,11 @@ async function connectBridge() {
   }
   if (!version) {
     await closeBridge();
-    throw new Error("The bridge did not answer. Flash firmware 1.0.0 or newer above, then connect again.");
+    throw new Error(`The bridge did not answer. Flash firmware ${minimumVersion.join(".")} or newer above, then connect again.`);
   }
   if (!newer(version, minimumVersion)) {
     await closeBridge();
-    throw new Error(`The bridge runs firmware ${version}. Flash 1.0.0 or newer above, then connect again.`);
+    throw new Error(`The bridge runs firmware ${version}. Flash ${minimumVersion.join(".")} or newer above, then connect again.`);
   }
   bridge.version = version;
   update();
@@ -312,10 +314,11 @@ async function waitForJoin(name) {
 }
 
 for (const b of boards) board.add(new Option(b.name));
-const releases = await fetch("firmware/releases.json")
+const releases = await fetch(firmware + "releases.json")
   .then((r) => (r.ok ? r.json() : []))
   .catch(() => []);
 for (const r of releases) release.add(new Option(r.prerelease ? `${r.tag} (pre-release)` : r.tag, r.file));
+release.selectedIndex = Math.max(0, releases.findIndex((r) => !r.prerelease));
 
 updateFields();
 if (!("serial" in navigator)) {
@@ -337,7 +340,7 @@ flashButton.addEventListener("click", () => run(flashStatus, async () => {
   await closeBridge();
   try {
     bridge.port = await navigator.serial.requestPort();
-    const response = await fetch("firmware/" + release.value);
+    const response = await fetch(firmware + release.value);
     if (!response.ok) throw new Error(`Could not download ${release.value} (HTTP ${response.status}).`);
     const data = new Uint8Array(await response.arrayBuffer());
 
