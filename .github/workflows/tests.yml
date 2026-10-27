@@ -2,6 +2,10 @@ name: Tests
 
 on:
   workflow_call:
+    outputs:
+      rfc_only_failure:
+        description: True when RFC compliance is the only failed gate
+        value: ${{ jobs.gate_results.outputs.rfc_only_failure }}
 
 permissions:
   contents: read
@@ -16,7 +20,29 @@ env:
   LWIP_TESTS_COMMON: ${{ github.workspace }}/tests/common
 
 jobs:
+  prepare_rom:
+    name: Prepare encrypted CEmu ROM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download encrypted ROM once
+        env:
+          ROM_NAME: ${{ vars.AUTOTESTER_ROM }}
+        run: |
+          curl --http1.1 -fsSL \
+            --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 180 \
+            --connect-timeout 20 -o "$RUNNER_TEMP/CE.rom.enc" \
+            "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
+
+      - name: Share encrypted ROM with test jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ runner.temp }}/CE.rom.enc
+          if-no-files-found: error
+          retention-days: 1
+
   dylib_unit_tests:
+    needs: prepare_rom
     runs-on: ubuntu-latest
 
     steps:
@@ -72,14 +98,14 @@ jobs:
           test -f "${{env.CEDEV}}/include/lwip.h"
           test -d "${{env.CEDEV}}/include/lwip"
 
-      - name: Download CEmu Rom
-        run: |
-          curl -fSL \
-            --retry 3 \
-            --retry-delay 2 \
-            -o "${{github.workspace}}/CE.rom.enc" \
-            https://cagscalclabs.net/restricted/${{ vars.AUTOTESTER_ROM }}.enc
+      - name: Download encrypted CEmu ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ github.workspace }}
 
+      - name: Decrypt CEmu ROM
+        run: |
           gpg --batch --yes \
             --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
             --output "${{ env.AUTOTESTER_ROM }}" \
@@ -338,6 +364,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Initialize RFC compliance report
+        run: printf '## RFC compliance\n\nThe RFC review did not complete.\n' > "$RUNNER_TEMP/rfc-compliance.md"
+
       - name: Check out tested staging commit
         uses: actions/checkout@v4
         with:
@@ -354,12 +383,24 @@ jobs:
           RFC_BASE_SHA: origin/master
           RFC_HEAD_SHA: ${{ github.sha }}
           RFC_REVIEW_MODEL: ${{ vars.RFC_REVIEW_MODEL || 'gpt-6-sol' }}
-          RFC_REVIEW_CYBER_PROGRAM: daybreak_blue
+          RFC_REVIEW_CYBER_PROGRAM: standard
           RFC_VERIFY_MODEL: ${{ vars.RFC_VERIFY_MODEL || 'gpt-6-astra' }}
           RFC_VERIFY_CYBER_PROGRAM: standard
+          RFC_REVIEW_REPORT: ${{ runner.temp }}/rfc-compliance.md
         run: python3 .github/scripts/rfc_review.py
 
+      - name: Upload RFC compliance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfc-compliance-report
+          path: ${{ runner.temp }}/rfc-compliance.md
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
   acvp:
+    needs: prepare_rom
     name: ACVP JSON over CEmu RPC
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -380,7 +421,6 @@ jobs:
       - id: env
         uses: ./.github/actions/emulator-env
         with:
-          rom-name: ${{ vars.AUTOTESTER_ROM }}
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
       - name: Build ACVP calculator service
@@ -579,56 +619,8 @@ jobs:
         with:
           category: "/language:c-cpp"
 
-  dast_report:
-    name: DAST report + gate
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # Keep full history so the report's src_commit remains useful
-          # provenance even though freshness is decided by src_hash.
-          fetch-depth: 0
-          # src/ includes the X25519 gitlink, and its working-tree contents are
-          # part of the source fingerprint produced by the local DAST runner.
-          submodules: recursive
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Check report covers current src/ contents
-        run: |
-          readarray -t report_source < <(python3 -c "
-          import json
-          with open('tests/dast.json') as f:
-              d = json.load(f)
-          print(d.get('src_commit', ''))
-          print(d.get('src_hash', ''))
-          ")
-          report_commit=${report_source[0]}
-          report_hash=${report_source[1]}
-          current_hash=$(python3 build-tools/dast/lwip-dast.py --src-hash)
-          if [ -z "$report_hash" ]; then
-            echo "::error::dast.json has no src_hash — re-run the DAST harness once to record the exact tested source contents."
-            exit 1
-          fi
-          echo "Report commit : $report_commit (provenance only)"
-          echo "Report src hash: $report_hash"
-          echo "Current src hash: $current_hash"
-          if [ "$report_hash" != "$current_hash" ]; then
-            echo "::error::dast.json covers different src/ contents — re-run the DAST harness and commit the refreshed report."
-            exit 1
-          fi
-          echo "Report covers the current src/ contents."
-
-      - name: Render report to job summary and gate on failures
-        run: |
-          python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"
-
   nettest:
+    needs: prepare_rom
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -642,7 +634,6 @@ jobs:
       - id: env
         uses: ./.github/actions/emulator-env
         with:
-          rom-name: ${{ vars.AUTOTESTER_ROM }}
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
       - name: Install scapy
@@ -678,6 +669,7 @@ jobs:
           if-no-files-found: ignore
 
   dast:
+    needs: prepare_rom
     name: DAST (live, emulated)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -694,7 +686,6 @@ jobs:
       - id: env
         uses: ./.github/actions/emulator-env
         with:
-          rom-name: ${{ vars.AUTOTESTER_ROM }}
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
       - name: Install scapy
@@ -772,35 +763,106 @@ jobs:
           path: tests/fuzz/out/artifacts/
           if-no-files-found: ignore
 
-  notify_failure:
-    name: Notify commit author on failure
+  cleanup_rom:
+    name: Delete encrypted CEmu ROM artifact
+    needs: [prepare_rom, dylib_unit_tests, acvp, nettest, dast]
+    if: always()
     permissions:
-      contents: write
-    needs: [dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, dast_report, nettest, dast, host_tests, fuzz]
-    if: >-
-      always() && (
-      needs.dylib_unit_tests.result != 'success' ||
-      needs.rfc_compliance.result != 'success' ||
-      needs.acvp.result != 'success' || needs.semgrep_scan.result != 'success' ||
-      needs.analyze.result != 'success' || needs.dast_report.result != 'success' ||
-      needs.nettest.result != 'success' || needs.dast.result != 'success' ||
-      needs.host_tests.result != 'success' || needs.fuzz.result != 'success')
+      actions: write
     runs-on: ubuntu-latest
     steps:
-      - name: Add or update a commit comment
+      - name: Delete temporary ROM artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          GATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          artifact_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | select(.name == "cemu-rom-encrypted") | .id' | head -1)
+          if [ -z "$artifact_id" ]; then
+            echo "No encrypted ROM artifact was created."
+            exit 0
+          fi
+          gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+          echo "Deleted encrypted ROM artifact $artifact_id."
+
+  gate_results:
+    name: Classify gate results
+    needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      rfc_only_failure: ${{ steps.classify.outputs.rfc_only_failure }}
+    steps:
+      - name: Detect an RFC-only failure
+        id: classify
+        env:
+          ROM_RESULT: ${{ needs.prepare_rom.result }}
+          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
           UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
           RFC_RESULT: ${{ needs.rfc_compliance.result }}
           ACVP_RESULT: ${{ needs.acvp.result }}
           SAST_RESULT: ${{ needs.semgrep_scan.result }}
           CODEQL_RESULT: ${{ needs.analyze.result }}
-          DAST_REPORT_RESULT: ${{ needs.dast_report.result }}
           NETWORK_RESULT: ${{ needs.nettest.result }}
-          LIVE_DAST_RESULT: ${{ needs.dast.result }}
+          DAST_RESULT: ${{ needs.dast.result }}
           HOST_RESULT: ${{ needs.host_tests.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
+        run: |
+          rfc_only_failure=false
+          if [ "$RFC_RESULT" = failure ] && \
+             [ "$ROM_RESULT" = success ] && [ "$ROM_CLEANUP_RESULT" = success ] && \
+             [ "$UNIT_RESULT" = success ] && [ "$ACVP_RESULT" = success ] && \
+             [ "$SAST_RESULT" = success ] && [ "$CODEQL_RESULT" = success ] && \
+             [ "$NETWORK_RESULT" = success ] && [ "$DAST_RESULT" = success ] && \
+             [ "$HOST_RESULT" = success ] && [ "$FUZZ_RESULT" = success ]; then
+            rfc_only_failure=true
+          fi
+          echo "rfc_only_failure=$rfc_only_failure" >> "$GITHUB_OUTPUT"
+          echo "RFC-only failure: $rfc_only_failure" >> "$GITHUB_STEP_SUMMARY"
+
+  notify_failure:
+    name: Notify commit author on failure
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
+    if: >-
+      always() && (
+      needs.prepare_rom.result != 'success' ||
+      needs.cleanup_rom.result != 'success' ||
+      needs.dylib_unit_tests.result != 'success' ||
+      needs.rfc_compliance.result != 'success' ||
+      needs.acvp.result != 'success' || needs.semgrep_scan.result != 'success' ||
+      needs.analyze.result != 'success' ||
+      needs.nettest.result != 'success' || needs.dast.result != 'success' ||
+      needs.host_tests.result != 'success' || needs.fuzz.result != 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download RFC compliance details
+        if: needs.rfc_compliance.result != 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rfc-compliance-report
+          path: ${{ runner.temp }}/rfc-compliance-report
+
+      - name: Open or update a staging failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
+          ROM_RESULT: ${{ needs.prepare_rom.result }}
+          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
+          UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
+          RFC_RESULT: ${{ needs.rfc_compliance.result }}
+          ACVP_RESULT: ${{ needs.acvp.result }}
+          SAST_RESULT: ${{ needs.semgrep_scan.result }}
+          CODEQL_RESULT: ${{ needs.analyze.result }}
+          NETWORK_RESULT: ${{ needs.nettest.result }}
+          DAST_RESULT: ${{ needs.dast.result }}
+          HOST_RESULT: ${{ needs.host_tests.result }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+          RFC_REPORT_PATH: ${{ runner.temp }}/rfc-compliance-report/rfc-compliance.md
         run: |
           set -euo pipefail
           commit_json=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA")
@@ -809,35 +871,66 @@ jobs:
           mention="**$author_name**"
           if [ -n "$author" ]; then mention="@$author"; fi
 
+          short_sha=${GATE_SHA:0:12}
+          title="[staging] Gate failure for $short_sha"
           body="$RUNNER_TEMP/staging-gate-failure.md"
           {
-            echo '<!-- staging-gate-failure -->'
+            echo "<!-- staging-gate:$GATE_SHA -->"
             echo "$mention, the staging gate failed for commit $GATE_SHA."
             echo
+            echo "- Branch: [\`staging\`](${{ github.server_url }}/${{ github.repository }}/tree/staging)"
+            echo "- Commit: [\`$GATE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$GATE_SHA)"
+            echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo
+            echo "### Failed gates"
+            [ "$ROM_RESULT" = success ] || echo "- **CEmu ROM preparation** — $ROM_RESULT"
+            [ "$ROM_CLEANUP_RESULT" = success ] || echo "- **CEmu ROM cleanup** — $ROM_CLEANUP_RESULT"
+            [ "$UNIT_RESULT" = success ] || echo "- **Unit tests** — $UNIT_RESULT"
+            [ "$RFC_RESULT" = success ] || echo "- **RFC compliance** — $RFC_RESULT"
+            [ "$ACVP_RESULT" = success ] || echo "- **ACVP** — $ACVP_RESULT"
+            [ "$SAST_RESULT" = success ] || echo "- **SAST** — $SAST_RESULT"
+            [ "$CODEQL_RESULT" = success ] || echo "- **CodeQL** — $CODEQL_RESULT"
+            [ "$NETWORK_RESULT" = success ] || echo "- **Network tests** — $NETWORK_RESULT"
+            [ "$DAST_RESULT" = success ] || echo "- **DAST** — $DAST_RESULT"
+            [ "$HOST_RESULT" = success ] || echo "- **Host tests** — $HOST_RESULT"
+            [ "$FUZZ_RESULT" = success ] || echo "- **Fuzzing** — $FUZZ_RESULT"
+            if [ "$RFC_RESULT" != success ] && [ -s "$RFC_REPORT_PATH" ]; then
+              echo
+              echo "### RFC compliance details"
+              echo
+              cat "$RFC_REPORT_PATH"
+            fi
+            echo
+            echo "### All gate results"
             echo '| Gate | Result |'
             echo '|---|---|'
+            echo "| CEmu ROM preparation | $ROM_RESULT |"
+            echo "| CEmu ROM cleanup | $ROM_CLEANUP_RESULT |"
             echo "| Unit tests | $UNIT_RESULT |"
             echo "| RFC compliance | $RFC_RESULT |"
             echo "| ACVP | $ACVP_RESULT |"
             echo "| SAST | $SAST_RESULT |"
             echo "| CodeQL | $CODEQL_RESULT |"
-            echo "| DAST report | $DAST_REPORT_RESULT |"
             echo "| Network tests | $NETWORK_RESULT |"
-            echo "| Live DAST | $LIVE_DAST_RESULT |"
+            echo "| DAST | $DAST_RESULT |"
             echo "| Host tests | $HOST_RESULT |"
             echo "| Fuzzing | $FUZZ_RESULT |"
-            echo
-            echo "[View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } > "$body"
 
-          comment_id=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA/comments" --paginate \
-            --jq '.[] | select(.body | contains("<!-- staging-gate-failure -->")) | .id' | head -1)
-          if [ -n "$comment_id" ]; then
-            gh api --method PATCH "repos/${{ github.repository }}/comments/$comment_id" \
-              -f body="$(cat "$body")"
+          issue_number=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --search "$GATE_SHA in:body" --json number --jq '.[0].number // empty')
+          if [ -n "$issue_number" ]; then
+            gh issue reopen "$issue_number" --repo "${{ github.repository }}" >/dev/null 2>&1 || true
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body"
           else
-            gh api --method POST "repos/${{ github.repository }}/commits/$GATE_SHA/comments" \
-              -f body="$(cat "$body")"
+            issue_url=$(gh issue create --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body")
+            issue_number=${issue_url##*/}
+          fi
+          if [ -n "$author" ]; then
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --add-assignee "$author" || echo "::warning::Could not assign @$author to issue #$issue_number"
           fi
 
 

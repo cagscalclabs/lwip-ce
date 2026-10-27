@@ -2,12 +2,19 @@
 
 **Main CI**
 
-![Staging Gate](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=staging&cache=1)
+![Build + Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=staging&cache=1)
 
-The staging gate builds and runs Unit, RFC Compliance, ACVP, SAST, CodeQL, DAST, Network, and Host/Fuzz checks as one workflow. It promotes the exact tested `staging` commit to `master` only after every gate passes. Prefix a commit subject with `#hotfix`, `#urgent`, or `#priority` to run the gate immediately; other changes are collected by the nightly run.
+To enforce protection of branch `master`, pushing to master directly is disallowed. Contributors should commit to `staging`, and the staging gate will perform the following:
 
-![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
-![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
+- Build the lwIP binaries
+- Run an assortment of tests including:
+  - Fuzzing and Host Regression Tests
+  - Emulator-driven unit tests
+  - Emulator & Host-driven Network Tests & DAST probes
+  - ACVP-style host-generated vectors
+  - Semgrep Pro and CodeQL
+- On pass, `master` is brought up to date with `staging`.
+- On fail, an issue is opened notifying the commit author of issues.
 
 <hr>
 

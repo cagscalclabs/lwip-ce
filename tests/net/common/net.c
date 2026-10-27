@@ -63,15 +63,6 @@ void metric(const char *name, unsigned long value, const char *unit)
     out(msg, C_CYAN);
 }
 
-void note_traceback(uint8_t max)
-{
-    struct lwip_traceback_entry tb[8];
-    size_t count = lwip_traceback_copy(tb, LWIP_MIN(sizeof(tb) / sizeof(tb[0]), (size_t)max));
-    for (size_t i = 0; i < count; i++)
-        note("  tb %s %s:%lu x%u r%d", lwip_debug_module_name(tb[i].module), lwip_debug_file_name(tb[i].file),
-             (unsigned long)tb[i].line, tb[i].extra, tb[i].raw_error);
-}
-
 uint8_t pattern(uint32_t i) { return (uint8_t)(i * 31u + (i >> 8)); }
 
 bool pump(bool (*done)(void *), void *arg, uint32_t timeout_ms)

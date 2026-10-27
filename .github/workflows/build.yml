@@ -1,0 +1,472 @@
+name: Build
+
+# staging is the integration branch. Ordinary pushes only inspect commit
+# subjects for an urgent prefix. A nightly scheduler dispatches this same
+# workflow on staging when staging received an unpromoted commit in the last
+# 24 hours. Successful full runs promote the exact tested SHA through a PR.
+
+on:
+  schedule:
+    # 03:00 UTC is 10/11 PM US Eastern, depending on daylight saving time.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Run the full gate (select the staging branch when dispatching)
+        required: false
+        type: boolean
+        default: true
+      reason:
+        description: Why the gate was requested
+        required: false
+        default: manual
+  push:
+    branches: [staging]
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: lwip-staging-gate
+  cancel-in-progress: false
+
+env:
+  CEDEV: ${{ github.workspace }}/CEdev
+  CEDEV_BIN: ${{ github.workspace }}/CEdev/bin
+  AUTOTESTER_ROM: ${{ github.workspace }}/${{ vars.AUTOTESTER_ROM }}
+  LWIP_DYLIB_TESTS: ${{ github.workspace }}/tests/unit
+  LWIP_TESTS_COMMON: ${{ github.workspace }}/tests/common
+
+jobs:
+  decide:
+    name: Decide whether to run the gate
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      run_gate: ${{ steps.decision.outputs.run_gate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Evaluate trigger
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE_SHA: ${{ github.event.before }}
+          FORCE_GATE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          echo "run_gate=false" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.event_name }}" = schedule ]; then
+            git fetch --no-tags origin master staging
+            if [ -n "$(git rev-list --max-count=1 --since='24 hours ago' origin/master..origin/staging)" ]; then
+              echo "staging changed in the last 24 hours; dispatching the gate on staging"
+              gh workflow run build.yml --repo "${{ github.repository }}" --ref staging \
+                -f force=true -f reason=nightly
+            else
+              echo "No unpromoted staging commits from the last 24 hours."
+            fi
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            if [ "${{ github.ref_name }}" != staging ]; then
+              echo "::error::Manual staging gates must be dispatched with the staging branch selected."
+              exit 1
+            fi
+            if [ "$FORCE_GATE" = true ]; then
+              echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          range="${BEFORE_SHA}..${GITHUB_SHA}"
+          if [ -z "$BEFORE_SHA" ] || [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            range="$GITHUB_SHA"
+          fi
+          if git log --format=%s "$range" \
+            | grep -Eiq '^#(hotfix|urgent|priority)([[:space:]:-]|$)'; then
+            echo "Priority commit detected; running the full gate now."
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No priority prefix; this push will be covered by the nightly gate."
+          fi
+
+  build:
+    name: Build lwIP
+    needs: decide
+    if: needs.decide.outputs.run_gate == 'true'
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout lwIP-CE
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Load pinned CI dependency versions
+        id: ci_versions
+        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make tar curl unzip zip libxml2-utils unifdef python3 python3-clang libclang-dev
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/CEdev
+          key: ${{ runner.os }}-cedev-${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
+
+      - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
+
+      - name: Add CEdev to PATH
+        run: |
+          echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout fixed convbin branch
+        uses: actions/checkout@v4
+        with:
+          repository: mateoconlechuga/convbin
+          ref: R_Z80_BYTE012
+          path: ${{ github.workspace }}/convbin
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build fixed convbin from source
+        run: |
+          make -C "${{ github.workspace }}/convbin" -j"$(nproc)"
+          cmake -E copy "${{ github.workspace }}/convbin/bin/convbin" "${{ env.CEDEV_BIN }}/convbin"
+          "${{ env.CEDEV_BIN }}/convbin" --version || true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install ce-libify
+        run: |
+          git clone --depth 1 --branch "${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}" https://github.com/alessiodam/toolchain_libify.git "${{ runner.temp }}/ce-libify"
+          GOCACHE="${{ runner.temp }}/go-cache" go test -C "${{ runner.temp }}/ce-libify" ./...
+          make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
+          ce-libify --version
+
+      - name: Audit fatal error logging
+        run: python3 tests/host/error_logging/test_error_sites.py
+
+      - name: make dylib-release
+        id: make_dylib
+        run: make dylib-release
+
+      - name: verify libload lib
+        id: make_libload
+        run: |
+          test -f "${{ github.workspace }}/build/lwip.8xv"
+          test -f "${{ github.workspace }}/build/lwip.lib"
+          test -f "${{ env.CEDEV }}/lib/libload/lwip.lib"
+          test -d "${{ env.CEDEV }}/include/lwip"
+          test -f "${{ github.workspace }}/lwip.zip"
+
+      - name: build Wi-Fi examples
+        id: make_wifi_examples
+        run: |
+          make -C examples/wifi_ping
+          make -C examples/wifi_api
+          mkdir -p wifi-examples
+          cp examples/wifi_ping/bin/LWPING.8xp examples/wifi_api/bin/LWWIFI.8xp wifi-examples/
+
+      - name: upload Wi-Fi examples artifact
+        id: upload_wifi_examples
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-wifi-examples
+          path: ${{ github.workspace }}/wifi-examples/
+          if-no-files-found: error
+
+      - name: upload build artifact
+        id: upload_build_artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/build/
+          if-no-files-found: error
+
+      - name: upload release zip artifact
+        id: upload_zip_artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-release-zip
+          path: ${{ github.workspace }}/lwip.zip
+          if-no-files-found: error
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          {
+            echo "## lwIP Latest Dylib"
+            echo
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| make dylib-release | ${{ steps.make_dylib.outcome }} |"
+            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
+            echo "| build Wi-Fi examples | ${{ steps.make_wifi_examples.outcome }} |"
+            echo "| upload build artifact | ${{ steps.upload_build_artifact.outcome }} |"
+            echo "| upload release zip artifact | ${{ steps.upload_zip_artifact.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    outputs:
+      build_success: ${{ steps.upload_build_artifact.outcome == 'success' && steps.upload_zip_artifact.outcome == 'success' }}
+
+  tests:
+    name: Tests
+    needs: build
+    uses: ./.github/workflows/tests.yml
+    secrets: inherit
+
+  open_rfc_review_pr:
+    name: Open promotion PR for RFC review
+    needs: [decide, build, tests]
+    if: >-
+      always() && needs.decide.outputs.run_gate == 'true' &&
+      needs.build.result == 'success' && needs.tests.result == 'failure' &&
+      needs.tests.outputs.rfc_only_failure == 'true'
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download RFC compliance details
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rfc-compliance-report
+          path: ${{ runner.temp }}/rfc-compliance-report
+
+      - name: Open maintainer-review promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
+          RFC_REPORT_PATH: ${{ runner.temp }}/rfc-compliance-report/rfc-compliance.md
+        run: |
+          set -euo pipefail
+          short_sha=${GATE_SHA:0:12}
+          promotion_branch="automation/promote-$short_sha"
+
+          git fetch --no-tags origin master staging
+          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
+            echo "The tested commit is already contained in master."
+            exit 0
+          fi
+
+          existing_sha=""
+          if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
+            --jq '.object.sha' 2>/dev/null); then
+            existing_sha=$ref_sha
+          fi
+          if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
+            echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
+            exit 1
+          fi
+          if [ -z "$existing_sha" ]; then
+            gh api --method POST "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+          fi
+
+          body="$RUNNER_TEMP/rfc-review-pr.md"
+          {
+            echo "All automated gates except **RFC compliance** passed for this exact staging commit."
+            echo
+            echo "- Tested commit: \`$GATE_SHA\`"
+            echo "- Source branch: \`staging\`"
+            echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "> This PR will not be merged automatically. A maintainer may merge it after reviewing and accepting the RFC findings."
+            if [ -s "$RFC_REPORT_PATH" ]; then
+              echo
+              echo "## RFC compliance report"
+              echo
+              cat "$RFC_REPORT_PATH"
+            fi
+            echo
+            echo "The temporary head branch is pinned to the tested SHA, so later staging pushes are excluded."
+          } > "$body"
+
+          pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
+            --base master --head "$promotion_branch" --json number \
+            --jq '.[0].number // empty')
+          title="RFC review required: promote staging $short_sha"
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body"
+            echo "Updated RFC-review promotion PR #$pr_number."
+          else
+            gh pr create --repo "${{ github.repository }}" \
+              --base master --head "$promotion_branch" \
+              --title "$title" --body-file "$body"
+          fi
+
+  promote:
+    name: Promote tested staging SHA through PR
+    needs: [decide, build, tests]
+    if: >-
+      always() && needs.decide.outputs.run_gate == 'true' &&
+      needs.build.result == 'success' && needs.tests.result == 'success'
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open and merge promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          short_sha=${GATE_SHA:0:12}
+          promotion_branch="automation/promote-$short_sha"
+
+          git fetch --no-tags origin master staging
+          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
+            echo "The tested commit is already contained in master."
+          else
+            existing_sha=""
+            if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
+              --jq '.object.sha' 2>/dev/null); then
+              existing_sha=$ref_sha
+            fi
+            if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
+              echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
+              exit 1
+            fi
+            if [ -z "$existing_sha" ]; then
+              gh api --method POST "repos/${{ github.repository }}/git/refs" \
+                -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+            fi
+
+            pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
+              --base master --head "$promotion_branch" --json number \
+              --jq '.[0].number // empty')
+            if [ -z "$pr_number" ]; then
+              body="$RUNNER_TEMP/promotion-pr.md"
+              {
+                echo "Automated promotion of the exact staging commit that passed the full gate."
+                echo
+                echo "- Tested commit: \`$GATE_SHA\`"
+                echo "- Source branch: \`staging\`"
+                echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                echo
+                echo "The temporary head branch is pinned to the tested SHA so later staging pushes are excluded."
+              } > "$body"
+              pr_url=$(gh pr create --repo "${{ github.repository }}" \
+                --base master --head "$promotion_branch" \
+                --title "Promote staging $short_sha to master" --body-file "$body")
+              pr_number=${pr_url##*/}
+            fi
+
+            gh pr merge "$pr_number" --repo "${{ github.repository }}" \
+              --merge --delete-branch --match-head-commit "$GATE_SHA"
+
+            git fetch --no-tags origin master
+            if ! git merge-base --is-ancestor "$GATE_SHA" origin/master; then
+              echo "::error::Promotion PR completed without placing tested SHA $GATE_SHA in master."
+              exit 1
+            fi
+            echo "Promotion PR #$pr_number merged; staging remains intact."
+          fi
+
+          # GITHUB_TOKEN events do not start another push workflow, so dispatch
+          # both release channels explicitly after the tested SHA is promoted.
+          dispatch_deploy() {
+            branch=$1
+            for attempt in 1 2 3; do
+              if gh workflow run deploy.yml --repo "${{ github.repository }}" --ref "$branch"; then
+                return 0
+              fi
+              echo "Deploy dispatch for $branch was not ready (attempt $attempt); retrying."
+              sleep 3
+            done
+            return 1
+          }
+          dispatch_deploy master
+          dispatch_deploy staging
+
+  notify_build_failure:
+    name: Notify commit author of build failure
+    needs: [decide, build]
+    if: >-
+      always() && needs.decide.outputs.run_gate == 'true' &&
+      needs.build.result != 'success'
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update a staging failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          commit_json=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA")
+          author=$(jq -r '.author.login // .committer.login // empty' <<< "$commit_json")
+          author_name=$(jq -r '.commit.author.name // "the commit author"' <<< "$commit_json")
+          mention="**$author_name**"
+          if [ -n "$author" ]; then mention="@$author"; fi
+          short_sha=${GATE_SHA:0:12}
+          title="[staging] Gate failure for $short_sha"
+          body="$RUNNER_TEMP/staging-build-failure.md"
+          {
+            echo "<!-- staging-gate:$GATE_SHA -->"
+            echo "$mention, the staging gate failed during the build."
+            echo
+            echo "- Branch: [\`staging\`](${{ github.server_url }}/${{ github.repository }}/tree/staging)"
+            echo "- Commit: [\`$GATE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$GATE_SHA)"
+            echo "- Failed gate: **Build**"
+            echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > "$body"
+
+          issue_number=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --search "$GATE_SHA in:body" --json number --jq '.[0].number // empty')
+          if [ -n "$issue_number" ]; then
+            gh issue reopen "$issue_number" --repo "${{ github.repository }}" >/dev/null 2>&1 || true
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body"
+          else
+            issue_url=$(gh issue create --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body")
+            issue_number=${issue_url##*/}
+          fi
+          if [ -n "$author" ]; then
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --add-assignee "$author" || echo "::warning::Could not assign @$author to issue #$issue_number"
+          fi
+

@@ -5,9 +5,6 @@ description: >
   with its emulated USB Ethernet adapter bridged to a NATed TAP interface.
 
 inputs:
-  rom-name:
-    description: ROM object name (vars.AUTOTESTER_ROM).
-    required: true
   rom-key:
     description: ROM decryption passphrase (secrets.AES_ENCRYPT_KEY).
     required: true
@@ -70,14 +67,17 @@ runs:
           https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
         ls -lh tests/common
 
+    - name: Download encrypted CEmu ROM artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: cemu-rom-encrypted
+        path: ${{ runner.temp }}
+
     - name: Decrypt CE ROM
       shell: bash
       env:
         ROM_KEY: ${{ inputs.rom-key }}
-        ROM_NAME: ${{ inputs.rom-name }}
       run: |
-        curl -fsSL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/CE.rom.enc" \
-          "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
         gpg --batch --yes --passphrase "$ROM_KEY" --output "$RUNNER_TEMP/ce.rom" --decrypt "$RUNNER_TEMP/CE.rom.enc"
         shred -u "$RUNNER_TEMP/CE.rom.enc"
         echo "AUTOTESTER_ROM=$RUNNER_TEMP/ce.rom" >> "$GITHUB_ENV"

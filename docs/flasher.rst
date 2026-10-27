@@ -2,7 +2,9 @@ Flashing the Bridge
 ===================
 
 This page flashes a release of the Wi-Fi bridge firmware from the browser. It
-needs Web Serial, which Chrome, Edge and Opera have on desktop.
+needs Web Serial, which Chrome, Edge and Opera have on desktop. The list shows
+every `lwIP-CE-WiFi-bridge release <https://github.com/alessiodam/lwIP-CE-WiFi-bridge/releases>`_,
+newest version first, and selects the newest stable one.
 
 Plug the bridge board into this computer through its USB-C port. Choose a
 release and the board, then press **Flash** and pick the board's serial port.

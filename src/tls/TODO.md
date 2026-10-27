@@ -20,11 +20,19 @@ eZ80), which dominates AEAD record processing. A 4-bit table (16 entries x
 16 bytes, built from H at `tls_aes_init`) should cut that by roughly 3x.
 Table indices are key-dependent, like the existing byte S-box.
 
-### 2. Fixed-base P-256 key generation
+### 2. Asymmetric primitives: what is left is algorithmic
 
-Key generation (`d*G`) uses the general co-Z ladder (9M+5S per bit). The
-generator is public, so a constant-time 4-bit comb table (~1.4 KB rodata)
-would roughly halve the ~0.9 s keygen cost on the software path.
+All three asymmetric primitives now execute their hot loops from fast RAM
+(`.x25519.reloc`, `.powmod.reloc`, and the two `.p256.*.reloc` MAC blocks),
+so what remains is the number of multiplies, not where they run:
+
+- P-256 field multiply: ~8 cycles per 8x8 MAC, i.e. already at the machine
+  limit for `ld/ld/mlt/add`. Cutting it means Karatsuba over 16-byte halves
+  (~25% fewer products, est. 15-20% end to end) or an x-only ladder for
+  keygen (6M+3S per bit instead of 9M+5S, ~35%, needs a `y` recovery).
+- Fixed-base comb for `d*G`: constant-time 4-bit table (~1.4 KB rodata) for
+  the public generator, which also speeds the `u1*G` half of verification.
+- RSA modexp: 18 modmuls at e=65537; Karatsuba/mixed radix is the only lever.
 
 ### 3. RSA-PSS Signature Verification (implemented)
 

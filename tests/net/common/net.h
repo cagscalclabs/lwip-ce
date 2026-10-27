@@ -41,8 +41,6 @@ int net_end(void);
 void note(const char *fmt, ...);
 bool check(const char *name, bool ok);
 void metric(const char *name, unsigned long value, const char *unit);
-/* Logs the newest `max` entries of lwIP-CE's error traceback. */
-void note_traceback(uint8_t max);
 
 bool pump(bool (*done)(void *), void *arg, uint32_t timeout_ms);
 void settle(uint32_t ms);

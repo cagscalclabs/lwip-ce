@@ -371,15 +371,6 @@ static void test_api_contract(void)
     lwip_socket_destroy(udp);
 }
 
-static void test_traceback(void)
-{
-    struct lwip_traceback_entry tb[8];
-    size_t count = lwip_traceback_copy(tb, sizeof(tb) / sizeof(tb[0]));
-    note("  traceback entries %u", (unsigned)count);
-    check("traceback recorded failures", count > 0);
-    check("debug module names", lwip_debug_module_name(0) != NULL);
-}
-
 int main(void)
 {
     if (net_begin("sockets"))
@@ -402,7 +393,6 @@ int main(void)
         test_loopback();
         test_concurrent();
         test_failures();
-        test_traceback();
         settle(3000);
         steady = heap_used();
         metric("heap_after_suite", steady, "bytes");

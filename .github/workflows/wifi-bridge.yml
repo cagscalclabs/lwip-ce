@@ -1,0 +1,40 @@
+name: Update Wi-Fi Bridge
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wifi-bridge-update
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+
+      - name: Point wifi_bridge at the latest bridge release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE: alessiodam/lwIP-CE-WiFi-bridge
+        run: |
+          set -euo pipefail
+          tag=$(gh release view -R "$BRIDGE" --json tagName --jq .tagName)
+          sha=$(git ls-remote "https://github.com/$BRIDGE.git" "refs/tags/$tag" "refs/tags/$tag^{}" | tail -1 | cut -f1)
+          current=$(git ls-tree HEAD wifi_bridge | awk '{print $3}')
+          if [ "$sha" = "$current" ]; then
+            echo "wifi_bridge is already at $tag"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git update-index --cacheinfo "160000,$sha,wifi_bridge"
+          git commit -m "Bump wifi_bridge to ${tag#v}"
+          git push origin HEAD:staging

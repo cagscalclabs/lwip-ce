@@ -51,13 +51,28 @@ PSK = bytes(((i * 31) + (i >> 8)) & 0xFF for i in range(32))
 PSK_IDENTITY = "lwip-ce-nettest"
 CIPHERS = {"gcm": "TLS_AES_128_GCM_SHA256", "ccm": "TLS_AES_128_CCM_SHA256", "aes256": "TLS_AES_256_GCM_SHA384"}
 GROUPS = {"x25519": "X25519", "p256": "P-256", "p384": "P-384"}
-HTTPS_PATHS = {
-    "tls13.akamai.io": "/",
-    "valid.rootca1.demo.amazontrust.com": "/",
-    "valid.rootca3.demo.amazontrust.com": "/",
-    "raw.githubusercontent.com": "/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/udp.c",
-    "www.amazontrust.com": "/",
+ENDPOINT_POOLS = {
+    # Fungible smoke tests may use a different provider. Certificate-policy
+    # tests only use alternatives that exercise the same CA and key type.
+    "tls13": [("tls13.akamai.io", "/"), ("www.cloudflare.com", "/")],
+    "rsa2048": [("valid.rootca1.demo.amazontrust.com", "/"),
+                ("good.sca1a.amazontrust.com", "/")],
+    "ecdsa256": [("valid.rootca3.demo.amazontrust.com", "/"),
+                 ("good.sca3a.amazontrust.com", "/")],
+    "body": [("raw.githubusercontent.com",
+              "/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/udp.c"),
+             ("www.amazontrust.com", "/")],
+    "starfield": [("www.amazontrust.com", "/"),
+                  ("valid.sfg2.demo.amazontrust.com", "/")],
+    "p384": [("valid.rootca4.demo.amazontrust.com", "/"),
+             ("good.sca4a.amazontrust.com", "/")],
+    "wss": [("echo.websocket.in", "/"), ("websocket-echo.com", "/")],
 }
+ENDPOINT_PHASES = {
+    "body": "body",
+    "wss": "wss",
+}
+HTTPS_PATHS = {host: path for pool in ENDPOINT_POOLS.values() for host, path in pool}
 HTTPS_FAILURE = re.compile(
     r"^FAIL https (?P<host>[A-Za-z0-9.-]+)(?: \([^)]*\))?"
     r"(?P<phase> answers HTTP| full body)?$"
@@ -327,6 +342,7 @@ class Control:
         self.claimed: set[str] = set()
         self.last: dict[str, str] = {}
         self.last_request = ""
+        self.endpoint_selected: dict[str, tuple[str, str]] = {}
         self.last_group = "-"
         (tmp / "bulk.bin").write_bytes(pattern(0, 131072))
         threading.Thread(target=self.serve, daemon=True).start()
@@ -376,6 +392,28 @@ class Control:
 
     def cmd_time(self) -> str:
         return str(int(time.time()))
+
+    def cmd_endpoint_pick(self, test: str) -> str:
+        pool = ENDPOINT_POOLS.get(test)
+        if not pool:
+            return f"ERR unknown endpoint pool {test}"
+        phase = ENDPOINT_PHASES.get(test, "tls")
+        failures = []
+        for host, path in pool:
+            if phase == "wss":
+                ok, issue, detail = host_wss_probe(host, path)
+            else:
+                ok, issue, detail = host_https_probe(host, phase, path=path)
+            log(f"endpoint probe {test} {host}{path}: {detail}")
+            if ok:
+                self.endpoint_selected[test] = (host, path)
+                return host
+            failures.append(f"{host}:{issue}")
+        return "ERR no healthy endpoint: " + ",".join(failures)
+
+    def cmd_endpoint_path(self, test: str) -> str:
+        selected = self.endpoint_selected.get(test)
+        return selected[1] if selected else f"ERR no endpoint selected for {test}"
 
     def cmd_connect(self, port: str, count: str) -> str:
         self.connect_results = []
@@ -540,6 +578,20 @@ class Control:
 
     # -- TLS peers ------------------------------------------------------------
 
+    def cmd_tls12_server(self) -> str:
+        """Start a deterministic TLS 1.2-only peer for version rejection."""
+        if self.peer:
+            self.peer.stop()
+        args = [
+            "s_server", "-accept", "7100", "-tls1_2", "-nocert", "-naccept", "1",
+            "-psk", PSK.hex(), "-psk_identity", PSK_IDENTITY,
+            "-cipher", "PSK-AES128-GCM-SHA256",
+        ]
+        self.peer = OpenSSL(args, self.tmp, "ACCEPT")
+        if not self.peer.ready.wait(10):
+            return f"ERR TLS 1.2 s_server did not start: {self.peer.output[-80:]}"
+        return "OK"
+
     def cmd_psk_server(self, cipher: str, group: str, mode: str, key: str = "good", ident: str = "good",
                        naccept: str = "1") -> str:
         if self.peer:
@@ -671,7 +723,8 @@ def read_log(path: Path) -> str:
     return data[0x4A:0x4A + length].decode("latin-1")
 
 
-def host_https_probe(host: str, phase: str, timeout: float = 15.0) -> tuple[bool, str, str]:
+def host_https_probe(host: str, phase: str, timeout: float = 15.0,
+                     path: str | None = None) -> tuple[bool, str, str]:
     """Probe a failed public HTTPS endpoint with the runner's TLS stack."""
     context = ssl.create_default_context()
     context.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -685,7 +738,7 @@ def host_https_probe(host: str, phase: str, timeout: float = 15.0) -> tuple[bool
             connection = http.client.HTTPSConnection(host, 443, timeout=timeout, context=context)
             try:
                 method = "GET" if phase == "body" else "HEAD"
-                connection.request(method, HTTPS_PATHS.get(host, "/"), headers={
+                connection.request(method, path or HTTPS_PATHS.get(host, "/"), headers={
                     "Host": host,
                     "Connection": "close",
                     "User-Agent": "lwip-ce-host-corroboration",
@@ -713,6 +766,43 @@ def host_https_probe(host: str, phase: str, timeout: float = 15.0) -> tuple[bool
     except http.client.HTTPException as exc:
         return False, "http", f"HTTP failure: {exc}"
     except OSError as exc:
+        return False, "connect", f"connection failure: {exc}"
+
+
+def host_wss_probe(host: str, path: str, timeout: float = 15.0) -> tuple[bool, str, str]:
+    """Verify that a candidate completes a TLS 1.3 WebSocket upgrade."""
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
+    try:
+        with socket.create_connection((host, 443), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                tls.settimeout(timeout)
+                request = (
+                    f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n"
+                    "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+                )
+                tls.sendall(request.encode())
+                response = b""
+                while b"\r\n\r\n" not in response and len(response) < 8192:
+                    chunk = tls.recv(1024)
+                    if not chunk:
+                        break
+                    response += chunk
+                status = response.split(b"\r\n", 1)[0]
+                if b" 101 " not in status:
+                    return False, "http", f"WebSocket upgrade returned {status[:80]!r}"
+        return True, "ok", "runner completed TLS 1.3 WebSocket upgrade"
+    except socket.gaierror as exc:
+        return False, "dns", f"DNS failure: {exc}"
+    except (TimeoutError, socket.timeout) as exc:
+        return False, "timeout", f"timeout: {exc}"
+    except ssl.SSLCertVerificationError as exc:
+        return False, "certificate", f"certificate verification failed: {exc.verify_message}"
+    except ssl.SSLError as exc:
+        return False, "tls", f"TLS failure: {exc.reason or exc}"
+    except (ConnectionError, OSError, http.client.HTTPException) as exc:
         return False, "connect", f"connection failure: {exc}"
 
 

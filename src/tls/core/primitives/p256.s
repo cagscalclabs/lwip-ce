@@ -903,6 +903,12 @@ p256_mont_core:
     push    bc
     ret
 
+; The 32-term MAC block lives in the relocated fast-RAM member
+; (.p256.reloc, end of this file); p256_mul_p copies it in before use.
+
+; Flash copy for p256_mont_core (the generic reference multiply used by the
+; test shim and the non-co-Z fallback): it keeps its own in-place block so it
+; does not depend on the fast-RAM copy being loaded.
 ; 32-term MAC block: term n is acc += (ix+n) * (iy-n).  Each term is exactly
 ; 9 bytes (3+3+2+1); the entry for a c-term column is .Lmac_end - 9*c.
 ; Uses only D, E, HL, IX, IY (read-only).  BC and A are preserved.
@@ -1010,14 +1016,14 @@ p256_mont_core:
 ;               IY = bcopy + 31 (phase 1) / bcopy + k (phase 2).
 .macro P256_MCOL k
   .if \k < 32
-    call    .Lmac_end - 9*(\k + 1)
+    call    p256_mac_mul_end - 9*(\k + 1)
     P256_RED ix, (mm_u - (mm_acopy + \k - 31)), \k
     ld      (ix + (mm_u - (mm_acopy - 31))), l      ; q[k]
     P256_SHIFT iy, (mm_acc2 - (mm_bcopy + 31))
     inc     ix
   .else
     .if \k < 63
-    call    .Lmac_end - 9*(63 - \k)
+    call    p256_mac_mul_end - 9*(63 - \k)
     .endif
     P256_RED iy, (mm_u - (mm_bcopy + \k)), \k
     ld      (iy + (mm_u - mm_bcopy)), l             ; t[k-32]
@@ -1030,11 +1036,11 @@ p256_mont_core:
 .macro P256_SCOL j
   .if \j < 16
     .if \j > 0
-    call    .Lsqmac_end - 10*\j
+    call    p256_mac_sq_end - 10*\j
     .endif
   .else
     .if \j < 31
-    call    .Lsqmac_end - 10*(31 - \j)
+    call    p256_mac_sq_end - 10*(31 - \j)
     .endif
   .endif
     ld      d, (iy - 32)        ; a[j]
@@ -1046,10 +1052,10 @@ p256_mont_core:
     P256_SHIFT iy, (mm_acc2 - (mm_acopy + 32 + \j))
     inc     ix
   .if \j < 16
-    call    .Lsqmac_end - 10*(\j + 1)
+    call    p256_mac_sq_end - 10*(\j + 1)
   .else
     .if \j < 31
-    call    .Lsqmac_end - 10*(31 - \j)
+    call    p256_mac_sq_end - 10*(31 - \j)
     .endif
   .endif
     P256_RED iy, (mm_u - (mm_acopy + 32 + \j)), (2*\j + 1)
@@ -1060,7 +1066,14 @@ p256_mont_core:
 
 p256_mul_p:
     push    ix
+    push    hl                  ; a
+    push    de                  ; b
+    push    bc                  ; out
+    call    p256_reloc_load_mul ; hot MAC block -> fast RAM (clobbers AF,BC,DE,HL)
+    pop     bc
     ld      (mm_out), bc
+    pop     de                  ; b
+    pop     hl                  ; a
     push    de
     ld      de, mm_acopy
     ld      bc, 32
@@ -1093,7 +1106,12 @@ p256_mul_p:
 
 p256_sq_p:
     push    ix
+    push    hl                  ; a
+    push    bc                  ; out
+    call    p256_reloc_load_sq  ; hot MAC block -> fast RAM (clobbers AF,BC,DE,HL)
+    pop     bc
     ld      (mm_out), bc
+    pop     hl                  ; a
     ld      de, mm_acopy
     ld      bc, 32
     ldir                        ; acopy = a
@@ -1106,19 +1124,7 @@ p256_sq_p:
 .endr
     jp      .Lpm_final
 
-; 16-term doubling MAC block for p256_sq_p: term n (16..31) is
-; acc += 2 * (ix+n) * (iy-n).  10 bytes per term; entry for an m-term
-; column is .Lsqmac_end - 10*m.  Uses D, E, HL; preserves A, BC, IX, IY.
-.Lsqmac_blk:
-.irp n, 16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
-    ld      d, (ix + \n)
-    ld      e, (iy - \n)
-    mlt     de
-    add     hl, de
-    add     hl, de
-.endr
-.Lsqmac_end:
-    ret
+; The 16-term doubling MAC block also lives in .p256.reloc (fast RAM).
 
 
 ; ===========================================================================
@@ -3778,6 +3784,95 @@ _tls_p256_sign:
 .Lsg_fail:
     xor     a, a
     jp      p256_exit
+
+; ===========================================================================
+; Relocated field-multiply inner blocks (fast RAM at 0xE30800).
+;
+; The field multiply is ~90% of every P-256 operation and its MAC block is
+; fetch-bound, so it runs from the shared safe-RAM window instead of flash.
+; p256_mul_p / p256_sq_p copy this member in on every call: the same window is
+; used by .sha256.reloc, .aes.*.reloc, .x25519.reloc, .powmod.reloc and
+; .saferam.rng, any of which may have run since the last field multiply (the
+; RFC 6979 HMAC inside tls_p256_sign, for example).
+;
+; Entries inside this member are addressed through their run-time labels
+; (p256_mac_mul_end - 9*c), which the assembler resolves against the run VMA,
+; so the copied image is callable as-is.
+; ===========================================================================
+.section .p256.mul.reloc, "ax", @progbits
+_p256_reloc_run_start:
+
+; 32-term MAC block: term n is acc += (ix+n) * (iy-n).  Each term is exactly
+; 9 bytes (3+3+2+1); the entry for a c-term column is p256_mac_mul_end - 9*c.
+; Uses only D, E, HL, IX, IY (read-only).  BC and A are preserved.
+p256_mac_mul:
+.irp n, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    ld      d, (ix + \n)
+    ld      e, (iy - \n)
+    mlt     de
+    add     hl, de
+.endr
+p256_mac_mul_end:
+    ret
+_p256_reloc_run_end:
+_p256_mul_reloc_run_start = _p256_reloc_run_start
+_p256_mul_reloc_run_end = _p256_reloc_run_end
+
+.section .p256.sq.reloc, "ax", @progbits
+_p256_sq_reloc_run_start:
+; 16-term doubling MAC block for p256_sq_p: term n (16..31) is
+; acc += 2 * (ix+n) * (iy-n).  10 bytes per term; entry for an m-term
+; column is p256_mac_sq_end - 10*m.  Uses D, E, HL; preserves A, BC, IX, IY.
+p256_mac_sq:
+.irp n, 16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    ld      d, (ix + \n)
+    ld      e, (iy - \n)
+    mlt     de
+    add     hl, de
+    add     hl, de
+.endr
+p256_mac_sq_end:
+    ret
+_p256_sq_reloc_run_end:
+
+.text
+
+; void p256_reloc_load_mul(void) / p256_reloc_load_sq(void)
+; Refresh the fast-RAM block the caller is about to run.
+;
+; The copy is skipped when the first three bytes at the window base already
+; equal the load image: every other member of the 0xE30800 overlay (.sha256,
+; .aes.*, .x25519, .powmod) writes from offset 0, and .saferam.rng reserves a
+; 0x180-byte prefix before its pool, so nothing can disturb a P-256 block
+; without changing byte 0. The linker asserts both P-256 members stay under
+; 0x180 bytes, which keeps that invariant true if the blocks ever grow.
+;
+; Clobbers AF, BC, DE, HL, so callers save their arguments around it.
+p256_reloc_load_mul:
+    ld      hl, (_p256_mul_reloc_load_start)
+    ld      de, (_p256_mul_reloc_run_start)
+    or      a, a
+    sbc     hl, de               ; first 3 code bytes already match?
+    jr      z, .Lmul_reloc_done
+    ld      hl, _p256_mul_reloc_load_start
+    ld      de, _p256_mul_reloc_run_start
+    ld      bc, _p256_mul_reloc_len
+    ldir
+.Lmul_reloc_done:
+    ret
+
+p256_reloc_load_sq:
+    ld      hl, (_p256_sq_reloc_load_start)
+    ld      de, (_p256_sq_reloc_run_start)
+    or      a, a
+    sbc     hl, de
+    jr      z, .Lsq_reloc_done
+    ld      hl, _p256_sq_reloc_load_start
+    ld      de, _p256_sq_reloc_run_start
+    ld      bc, _p256_sq_reloc_len
+    ldir
+.Lsq_reloc_done:
+    ret
 
 ; ===========================================================================
 ; Test/profiling shims (C ABI) -- assembled only with --defsym P256_TEST=1.
