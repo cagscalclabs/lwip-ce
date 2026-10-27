@@ -16,8 +16,9 @@
 
 /*
  * Known constraints:
- * - Only x25519 key exchange is supported. HelloRetryRequest transcript and
- *   cookie handling are implemented; unsupported groups abort the handshake.
+ * - X25519 is sent in ClientHello1. P-256 is advertised and generated only
+ *   speculatively through bridge offload or on demand after a conforming
+ *   HelloRetryRequest.
  * - Cross-record non-Certificate handshake message reassembly is bounded at
  *   TLS_HS_REASSEMBLY_MAX bytes (16KB). Certificate chains stream through a
  *   dedicated walker and are not subject to that whole-message bound.
@@ -235,10 +236,9 @@ extern "C"
             TLS_STATE_ERROR
         } state;
 
-        /* Pre-connect pseudo-handshake state. Client ALTCP users generate one
-         * key share per dispatch turn and do not open TCP until both readiness
-         * bits are set. The ordinary TLS state remains TLS_STATE_INIT until
-         * ClientHello is actually sent. */
+        /* Pre-connect pseudo-handshake state. Client ALTCP users gate TCP on
+         * the X25519 share only. P-256 may continue through bridge offload in
+         * the background, or be generated on demand after an HRR. */
         enum
         {
             TLS_KEYSHARE_STATE_IDLE,
@@ -248,7 +248,8 @@ extern "C"
         } keyshare_state;
         uint8_t keyshare_ready;
 
-        /* ECDHE key exchange state (X25519 and P-256 are both offered) */
+        /* ECDHE key exchange state. Both groups are advertised, but
+         * ClientHello1 carries only the X25519 key share. */
         uint8_t ecdhe_private[32];   /* Ephemeral X25519 private key */
         uint8_t ecdhe_shared[32];    /* Computed ECDHE shared secret (32 bytes) */
         uint8_t ecdhe_public[32];    /* Our ephemeral X25519 public key */
@@ -272,6 +273,7 @@ extern "C"
          * rejected with unexpected_message (RFC 8446 §4.1.4 forbids two HRRs). */
         uint8_t *hrr_cookie;         /* Heap-allocated HRR cookie bytes, or NULL */
         size_t   hrr_cookie_len;     /* Length of hrr_cookie, 0 = no cookie */
+        uint16_t hrr_requested_group;/* NamedGroup requested by HRR, or 0 */
         bool     hrr_done;           /* True once one HRR has been processed */
         uint32_t ticket_age_add;     /* NST ticket_age_add */
         uint32_t ticket_received_ms; /* sys_now() when last ticket was accepted */
@@ -393,12 +395,17 @@ extern "C"
         const uint8_t psk[32],
         const struct tls_psk_identity *psk_identity);
 
-    /**
-     * Advance staged public-share generation by at most one share.
-     * @return 1 when both shares are ready, 0 while more work is required,
-     *         or -1 on a permanent generation failure.
-     */
+    /** Advance staged X25519 generation. TCP may open when this returns 1. */
     int tls_handshake_keyshares_step(struct tls_handshake_context *ctx);
+
+    /**
+     * Advance P-256 public-share generation.
+     * @param allow_software  Permit the blocking local fallback. This is false
+     *        for speculative work and true only after an HRR requests P-256.
+     * @return 1 when ready, 0 while bridge work is pending, or -1 on failure.
+     */
+    int tls_handshake_p256_step(struct tls_handshake_context *ctx,
+                                bool allow_software);
 
     /**
      * @brief Generate ClientHello message

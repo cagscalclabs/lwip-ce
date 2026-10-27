@@ -54,7 +54,6 @@ GROUPS = {"x25519": "X25519", "p256": "P-256", "p384": "P-384"}
 HTTPS_PATHS = {
     "tls13.akamai.io": "/",
     "valid.rootca1.demo.amazontrust.com": "/",
-    "valid.rootca2.demo.amazontrust.com": "/",
     "valid.rootca3.demo.amazontrust.com": "/",
     "raw.githubusercontent.com": "/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/udp.c",
     "www.amazontrust.com": "/",

@@ -30,6 +30,8 @@ extern bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag);
 #include "../../tls/includes/random.h"
 #include "../../tls/includes/tls.h"
 #include "../../drivers/mem.h"
+#include "../../wireless/crypto.h"
+#include "../../wireless/wifi_proto.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_ALTCP_TLS_CE
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -1272,6 +1274,18 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
         return ERR_OK; /* already sent (and not retrying after HRR) */
     }
 
+    /* ClientHello2 cannot be serialized until the HRR-selected P-256 share is
+     * ready. Generation runs from the dispatcher so receive processing can
+     * release the HRR record and retry the send afterward. */
+    if (state->tls_ctx.state == TLS_STATE_HRR_RECEIVED &&
+        state->tls_ctx.hrr_requested_group == TLS_NAMED_GROUP_SECP256R1 &&
+        !(state->tls_ctx.keyshare_ready & TLS_KEYSHARE_P256_READY))
+    {
+        state->flags |= ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
+        altcp_tls_ce_keyshare_arm();
+        return ERR_MEM;
+    }
+
     /* Deferred key generation: setup could not run tls_handshake_init because
      * the async DRBG was not seeded yet. Attempt it now; if the RNG is still
      * not ready (tls_random_bytes_ex returns NULL immediately rather than
@@ -1494,9 +1508,9 @@ static err_t altcp_tls_ce_start_lower_connect(altcp_tls_ce_state_t *state)
                          altcp_tls_ce_lower_connected);
 }
 
-/* Advance one share for one client per turn. A completed P-256 operation
- * always returns to the dispatcher before X25519 begins. TCP remains unopened
- * until the readiness bitmask says that both ClientHello shares are present. */
+/* Gate TCP on X25519 only. Once it is ready, bridge-backed P-256 generation
+ * may continue speculatively while TCP and ClientHello1 proceed. The blocking
+ * software fallback is used only after an HRR actually requests P-256. */
 static void altcp_tls_ce_keyshare_dispatch(void)
 {
     altcp_tls_ce_state_t *state;
@@ -1515,40 +1529,92 @@ static void altcp_tls_ce_keyshare_dispatch(void)
             return; /* asynchronous RNG is not ready; try on the next tick */
         }
 
-        result = tls_handshake_keyshares_step(&state->tls_ctx);
-        if (result < 0)
+        if (!(state->flags & ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED))
         {
-            bool connect_pending =
-                (state->flags & ALTCP_TLS_CE_FLAGS_CONNECT_PENDING) != 0;
-            struct altcp_pcb *conn = state->conn;
-
-            state->flags &= (u16_t)~(ALTCP_TLS_CE_FLAGS_GENERATING_SHARES |
-                                    ALTCP_TLS_CE_FLAGS_CONNECT_PENDING);
-            if (connect_pending && conn && conn->connected)
+            result = tls_handshake_keyshares_step(&state->tls_ctx);
+            if (result < 0)
             {
-                (void)conn->connected(conn->arg, conn, ERR_ABRT);
+                bool connect_pending =
+                    (state->flags & ALTCP_TLS_CE_FLAGS_CONNECT_PENDING) != 0;
+                struct altcp_pcb *conn = state->conn;
+
+                state->flags &= (u16_t)~(ALTCP_TLS_CE_FLAGS_GENERATING_SHARES |
+                                        ALTCP_TLS_CE_FLAGS_CONNECT_PENDING);
+                if (connect_pending && conn && conn->connected)
+                {
+                    (void)conn->connected(conn->arg, conn, ERR_ABRT);
+                }
+                return;
             }
+            if (result == 0 ||
+                !(state->tls_ctx.keyshare_ready & TLS_KEYSHARE_X25519_READY))
+            {
+                return;
+            }
+
+            state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
+            if (state->flags & ALTCP_TLS_CE_FLAGS_CONNECT_PENDING)
+            {
+                struct altcp_pcb *conn = state->conn;
+                err_t err = altcp_tls_ce_start_lower_connect(state);
+                if (err != ERR_OK && conn && conn->connected)
+                {
+                    (void)conn->connected(conn->arg, conn, err);
+                    return;
+                }
+            }
+        }
+
+        if (state->tls_ctx.state == TLS_STATE_HRR_RECEIVED &&
+            state->tls_ctx.hrr_requested_group == TLS_NAMED_GROUP_SECP256R1)
+        {
+            result = tls_handshake_p256_step(&state->tls_ctx, true);
+            if (result < 0)
+            {
+                struct altcp_pcb *conn = state->conn;
+                state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
+                if (conn && conn->err)
+                {
+                    conn->err(conn->arg, ERR_ABRT);
+                }
+                if (conn)
+                {
+                    ALTCP_TLS_CE_ERROR_ABORT(conn);
+                }
+                return;
+            }
+            if (result == 0)
+            {
+                return;
+            }
+            state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
+            (void)altcp_tls_ce_send_client_hello(state->conn, state);
+            return; /* callbacks may have freed state */
+        }
+
+        /* Once a real ServerHello arrives, its selected-group path either
+         * consumed or canceled every public-share job. Never restart one. */
+        if (state->tls_ctx.state >= TLS_STATE_SERVER_HELLO_RECEIVED)
+        {
+            state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
             return;
         }
-        if (result == 0 ||
-            (state->tls_ctx.keyshare_ready & TLS_KEYSHARE_BOTH_READY) !=
-                TLS_KEYSHARE_BOTH_READY)
+
+        if (!(lwip_crypto_caps() & CTL_CAP_P256) ||
+            (state->tls_ctx.keyshare_ready & TLS_KEYSHARE_P256_READY))
         {
+            state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
             return;
         }
 
-        state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
-        state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
-        if (state->flags & ALTCP_TLS_CE_FLAGS_CONNECT_PENDING)
+        /* Speculation is offload-only. Failure merely abandons the unused
+         * optimization; an HRR can still trigger the software fallback. */
+        result = tls_handshake_p256_step(&state->tls_ctx, false);
+        if (result != 0)
         {
-            struct altcp_pcb *conn = state->conn;
-            err_t err = altcp_tls_ce_start_lower_connect(state);
-            if (err != ERR_OK && conn && conn->connected)
-            {
-                (void)conn->connected(conn->arg, conn, err);
-            }
+            state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
         }
-        return; /* callbacks may have freed state */
+        return;
     }
     lwip_dispatch_set_period(LWIP_DISPATCH_TLS_KEYSHARE, 0);
 }

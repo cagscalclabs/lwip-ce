@@ -302,11 +302,11 @@ this list will reject the handshake.
      - TLS 1.3 only (``0x0304``)
    * - ``supported_groups``
      - Always
-     - ``secp256r1`` (``0x0017``), ``x25519`` (``0x001d``); P-256 preferred
+     - ``x25519`` (``0x001d``), ``secp256r1`` (``0x0017``)
    * - ``key_share``
      - Always
-     - Ephemeral P-256 (65 B uncompressed) + X25519 (32 B). P-256 omitted
-       when unavailable; falls back to X25519-only share.
+     - ClientHello1 contains X25519 (32 B). ClientHello2 contains P-256
+       (65 B uncompressed) only when selected by HelloRetryRequest.
    * - ``signature_algorithms``
      - Always
      - ``rsa_pss_rsae_sha256``, ``ecdsa_secp256r1_sha256``
@@ -338,10 +338,11 @@ this list will reject the handshake.
        Binder is HMAC-SHA-256 over the transcript up to but not including the
        binders field.
 
-Both P-256 and X25519 key shares are sent speculatively in the first
-``ClientHello``, eliminating an HRR round-trip in the common case. If the
-server's HRR requests a group not in the original offer, the handshake is
-aborted; new key material is not generated in response to an HRR.
+ClientHello1 is gated only on X25519. P-256 generation proceeds speculatively
+when Wi-Fi bridge offload is available; without offload, its blocking software
+implementation is deferred until an HRR selects P-256. ClientHello2 then
+contains exactly that P-256 share. An HRR that repeats X25519 or requests an
+unadvertised group is rejected with ``illegal_parameter``.
 
 Security Posture
 ~~~~~~~~~~~~~~~~~

@@ -57,19 +57,16 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         }
         if (type == 10)
         {
-            static const uint8_t expected[] = {0, 4, 0, 0x17, 0, 0x1d};
+            static const uint8_t expected[] = {0, 4, 0, 0x1d, 0, 0x17};
             assert(len == sizeof(expected) && memcmp(buf+off+4, expected, len) == 0);
             groups++;
         }
         if (type == 51)
         {
-            static const uint8_t expected_header[] = {0, 0x69, 0, 0x17, 0, 0x41};
-            static const uint8_t x25519_header[] = {0, 0x1d, 0, 0x20};
-            assert(len == 107 &&
+            static const uint8_t expected_header[] = {0, 0x24, 0, 0x1d, 0, 0x20};
+            assert(len == 38 &&
                    memcmp(buf+off+4, expected_header, sizeof(expected_header)) == 0);
-            assert(memcmp(buf+off+10, ctx.p256_public, 65) == 0);
-            assert(memcmp(buf+off+75, x25519_header, sizeof(x25519_header)) == 0);
-            assert(memcmp(buf+off+79, ctx.ecdhe_public, 32) == 0);
+            assert(memcmp(buf+off+10, ctx.ecdhe_public, 32) == 0);
             key_share++;
         }
         if (type == TLS_EXT_RECORD_SIZE_LIMIT)
@@ -123,6 +120,112 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
     assert(signatures == 2 && alpn == (unsigned)offer_alpn);
     assert(sni == (unsigned)(hostname && !strcmp(hostname, "example.test")));
     assert(psk_modes == (unsigned)psk && psk_ext == (unsigned)psk);
+
+    /* A P-256 HRR changes ClientHello2's key_share to exactly one P-256
+     * entry while leaving both groups advertised in the same order. */
+    ctx.state = TLS_STATE_HRR_RECEIVED;
+    ctx.hrr_requested_group = TLS_NAMED_GROUP_SECP256R1;
+    ctx.keyshare_ready |= TLS_KEYSHARE_P256_READY;
+    assert(tls_send_client_hello(&ctx, NULL, 0, &required));
+    assert(tls_send_client_hello(&ctx, buf, sizeof(buf), &n));
+    assert(n == required);
+    unsigned p256_share = 0;
+    for (size_t off = 49; off < n; )
+    {
+        unsigned type = be16(buf + off), len = be16(buf + off + 2);
+        assert(off + 4 + len <= n);
+        if (type == TLS_EXT_KEY_SHARE)
+        {
+            static const uint8_t expected_header[] = {
+                0, 0x45, 0, 0x17, 0, 0x41
+            };
+            assert(len == 71);
+            assert(memcmp(buf + off + 4, expected_header,
+                          sizeof(expected_header)) == 0);
+            assert(memcmp(buf + off + 10, ctx.p256_public, 65) == 0);
+            p256_share++;
+        }
+        off += 4 + len;
+    }
+    assert(p256_share == 1);
+    tls_handshake_cleanup(&ctx);
+}
+
+static void hrr_keyshare_tests(void)
+{
+    static const uint8_t hrr_p256[] = {
+        TLS_HANDSHAKE_SERVER_HELLO, 0, 0, 52,
+        3, 3,
+        0xcf, 0x21, 0xad, 0x74, 0xe5, 0x9a, 0x61, 0x11,
+        0xbe, 0x1d, 0x8c, 0x02, 0x1e, 0x65, 0xb8, 0x91,
+        0xc2, 0xa2, 0x11, 0x16, 0x7a, 0xbb, 0x8c, 0x5e,
+        0x07, 0x9e, 0x09, 0xe2, 0xc8, 0xa8, 0x33, 0x9c,
+        0,                    /* legacy_session_id */
+        0x13, 0x01,           /* TLS_AES_128_GCM_SHA256 */
+        0,                    /* legacy_compression_method */
+        0, 12,                /* extensions length */
+        0, 43, 0, 2, 3, 4,   /* supported_versions: TLS 1.3 */
+        0, 51, 0, 2, 0, 0x17 /* key_share: secp256r1 */
+    };
+    struct tls_handshake_context ctx;
+    uint8_t client_hello[512];
+    size_t written;
+
+    assert(tls_handshake_keyshares_begin(&ctx, NULL, NULL));
+    assert(tls_handshake_keyshares_step(&ctx) == 1);
+    assert(tls_send_client_hello(&ctx, client_hello,
+                                 sizeof(client_hello), &written));
+    assert(tls_recv_server_hello(&ctx, hrr_p256, sizeof(hrr_p256)));
+    assert(ctx.state == TLS_STATE_HRR_RECEIVED);
+    assert(ctx.hrr_done);
+    assert(ctx.hrr_requested_group == TLS_NAMED_GROUP_SECP256R1);
+    assert(tls_handshake_p256_step(&ctx, true) == 1);
+    assert(tls_send_client_hello(&ctx, client_hello,
+                                 sizeof(client_hello), &written));
+    uint8_t server_hello[123] = {0};
+    server_hello[0] = TLS_HANDSHAKE_SERVER_HELLO;
+    server_hello[3] = 119;
+    server_hello[4] = 3;
+    server_hello[5] = 3;
+    memset(server_hello + 6, 0x11, 32); /* ordinary ServerHello.random */
+    server_hello[38] = 0;              /* legacy_session_id */
+    server_hello[39] = 0x13;
+    server_hello[40] = 0x01;
+    server_hello[41] = 0;              /* legacy_compression_method */
+    server_hello[42] = 0;
+    server_hello[43] = 79;             /* extensions length */
+    server_hello[44] = 0;
+    server_hello[45] = 43;
+    server_hello[46] = 0;
+    server_hello[47] = 2;
+    server_hello[48] = 3;
+    server_hello[49] = 4;
+    server_hello[50] = 0;
+    server_hello[51] = 51;
+    server_hello[52] = 0;
+    server_hello[53] = 69;
+    server_hello[54] = 0;
+    server_hello[55] = 0x17;
+    server_hello[56] = 0;
+    server_hello[57] = 65;
+    server_hello[58] = 0x04;
+    memset(server_hello + 59, 0x22, 64);
+    assert(tls_recv_server_hello(&ctx, server_hello, sizeof(server_hello)));
+    assert(ctx.state == TLS_STATE_SERVER_HELLO_RECEIVED);
+    assert(ctx.ecdhe_negotiated);
+    tls_handshake_cleanup(&ctx);
+
+    /* Requesting X25519 is illegal because ClientHello1 already sent it. */
+    uint8_t hrr_x25519[sizeof(hrr_p256)];
+    memcpy(hrr_x25519, hrr_p256, sizeof(hrr_p256));
+    hrr_x25519[sizeof(hrr_x25519) - 1] = 0x1d;
+    assert(tls_handshake_keyshares_begin(&ctx, NULL, NULL));
+    assert(tls_handshake_keyshares_step(&ctx) == 1);
+    assert(tls_send_client_hello(&ctx, client_hello,
+                                 sizeof(client_hello), &written));
+    last_alert = 0;
+    assert(!tls_recv_server_hello(&ctx, hrr_x25519, sizeof(hrr_x25519)));
+    assert(last_alert == TLS_ALERT_ILLEGAL_PARAMETER);
     tls_handshake_cleanup(&ctx);
 }
 
@@ -620,8 +723,8 @@ static void extended_key_usage_tests(void)
 
 int main(void)
 {
-    /* Staged client setup must yield after each local public-key operation and
-     * expose readiness only when the exact two-share mask is complete. */
+    /* Staged client setup gates ClientHello1 on X25519 only. P-256's blocking
+     * software fallback is deferred until an HRR requests it. */
     {
         struct tls_handshake_context staged;
         x25519_public_calls = 0;
@@ -629,13 +732,13 @@ int main(void)
         assert(tls_handshake_keyshares_begin(&staged, NULL, NULL));
         assert(staged.keyshare_state == TLS_KEYSHARE_STATE_GENERATING);
         assert(staged.keyshare_ready == 0);
-        assert(tls_handshake_keyshares_step(&staged) == 0);
-        assert(x25519_public_calls == 0 && p256_public_calls == 1);
-        assert(staged.keyshare_ready == TLS_KEYSHARE_P256_READY);
         assert(tls_handshake_keyshares_step(&staged) == 1);
+        assert(x25519_public_calls == 1 && p256_public_calls == 0);
+        assert(staged.keyshare_ready == TLS_KEYSHARE_X25519_READY);
+        assert(staged.keyshare_state == TLS_KEYSHARE_STATE_READY);
+        assert(tls_handshake_p256_step(&staged, true) == 1);
         assert(x25519_public_calls == 1 && p256_public_calls == 1);
         assert(staged.keyshare_ready == TLS_KEYSHARE_BOTH_READY);
-        assert(staged.keyshare_state == TLS_KEYSHARE_STATE_READY);
         tls_handshake_cleanup(&staged);
     }
 
@@ -653,6 +756,7 @@ int main(void)
     ALG(bad_mgf_hash, false, 0); ALG(bad_duplicate, false, 0);
     ALG(bad_trailer, false, 0); ALG(bad_key_oid, false, 0);
     hello(false, NULL, false); hello(true, NULL, false);
+    hrr_keyshare_tests();
     hello(false, "example.test", true); hello(true, "example.test", true);
     hello(false, "192.168.2.10", false); hello(true, "192.168.2.10", false);
     hello(false, "2001:db8::1", false); hello(true, "2001:db8::1", false);

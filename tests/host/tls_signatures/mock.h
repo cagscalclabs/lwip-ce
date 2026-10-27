@@ -75,8 +75,13 @@ static unsigned x25519_public_calls;
 static unsigned p256_public_calls;
 static bool tls_x25519_publickey(uint8_t *pub, const uint8_t *priv, void *a, void *b)
 { (void)pub; (void)priv; (void)a; (void)b; x25519_public_calls++; return true; }
+static bool tls_x25519_secret(uint8_t *out, const uint8_t *priv,
+                             const uint8_t *peer, void *a, void *b)
+{ (void)priv; (void)peer; (void)a; (void)b; memset(out, 0x33, 32); return true; }
 static bool tls_p256_publickey(uint8_t *pub, const uint8_t *priv)
 { p256_public_calls++; (void)priv; memset(pub, 0x5a, 65); pub[0] = 0x04; return true; }
+static bool tls_p256_secret(uint8_t *out, const uint8_t *priv, const uint8_t *peer)
+{ (void)priv; (void)peer; memset(out, 0x44, 32); return true; }
 static bool tls_p256_verify(const uint8_t *sig, const uint8_t *hash, const uint8_t *pub)
 { (void)sig; (void)hash; (void)pub; return true; }
 static void tls_crypto_guard_enable(void) {}

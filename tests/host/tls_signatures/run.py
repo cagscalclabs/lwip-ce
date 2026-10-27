@@ -284,10 +284,13 @@ for name in ['tls_cipher_blob_free', 'tls_cipher_encrypt', 'tls_cipher_encrypt_a
 source += hs[hs.index('enum tls_cert_walk_state'):hs.index('/* Feed body bytes into the walker.')]
 for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_digest',
              'tls_parse_handshake_header',
+             'tls_cipher_suite_supported',
              'tls_extension_type_known',
              'tls_handshake_init_common', 'tls_handshake_keyshares_begin',
              'tls_handshake_keyshare_fail', 'tls_handshake_keyshares_step',
+             'tls_handshake_p256_step',
              'tls_handshake_init', 'tls_send_client_hello',
+             'tls_recv_server_hello',
              'tls_recv_encrypted_extensions', 'tls_recv_certificate_request',
              'tls_recv_certificate_streamed', 'tls_certverify_rsa_pss_sha256',
              'tls_hs_defer_bytes', 'tls_cert_jobs_pending', 'tls_cert_jobs_step',

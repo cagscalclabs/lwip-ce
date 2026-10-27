@@ -122,8 +122,8 @@
  *     rejected. CertificateVerify itself is always required and verified
  *     against the chain's leaf SPKI.
  *   - 0-RTT / early_data.
- *   - HelloRetryRequest negotiation of a different key-exchange group — we
- *     only support x25519, so a request for another group aborts.
+ *   - Key-exchange groups other than X25519 and P-256. ClientHello1 sends an
+ *     X25519 share; P-256 is supplied only after a conforming HRR requests it.
  *   - Server-side handshake (this is a client-only implementation; the
  *     altcp layer has a server entry point that returns "not implemented").
  *
@@ -2558,49 +2558,10 @@ int tls_handshake_keyshares_step(struct tls_handshake_context *ctx)
         return -1;
     }
 
-    /* P-256 is the preferred group and owns the first dispatch turn. Even
-     * when it completes in this turn, X25519 is left for the next one. */
-    if (!(ctx->keyshare_ready & TLS_KEYSHARE_P256_READY))
-    {
-        if (ctx->p256_job == 0)
-        {
-            ctx->p256_job = lwip_crypto_p256(ctx->p256_private, NULL,
-                                             ctx->p256_public);
-            if (ctx->p256_job != 0)
-            {
-                return 0;
-            }
-            tls_crypto_guard_enable();
-            ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
-            tls_crypto_guard_disable();
-        }
-        else
-        {
-            status = lwip_crypto_take(ctx->p256_job);
-            if (status == LWIP_CRYPTO_PENDING)
-            {
-                return 0;
-            }
-            ctx->p256_job = 0;
-            if (status == LWIP_CRYPTO_FAILED)
-            {
-                tls_crypto_guard_enable();
-                ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
-                tls_crypto_guard_disable();
-            }
-            else
-            {
-                ok = status == LWIP_CRYPTO_OK;
-            }
-        }
-        if (!ok)
-        {
-            return tls_handshake_keyshare_fail(ctx, 0x2b);
-        }
-        ctx->keyshare_ready |= TLS_KEYSHARE_P256_READY;
-        return 0;
-    }
-
+    /* X25519 is the only share required before TCP and ClientHello1. P-256 is
+     * deliberately not computed here: bridge-capable clients speculate after
+     * opening TCP, while software clients defer the expensive operation until
+     * a server actually requests it in HelloRetryRequest. */
     if (!(ctx->keyshare_ready & TLS_KEYSHARE_X25519_READY))
     {
         if (ctx->ecdhe_job == 0)
@@ -2643,12 +2604,75 @@ int tls_handshake_keyshares_step(struct tls_handshake_context *ctx)
         ctx->keyshare_ready |= TLS_KEYSHARE_X25519_READY;
     }
 
-    if ((ctx->keyshare_ready & TLS_KEYSHARE_BOTH_READY) == TLS_KEYSHARE_BOTH_READY)
+    ctx->keyshare_state = TLS_KEYSHARE_STATE_READY;
+    return 1;
+}
+
+int tls_handshake_p256_step(struct tls_handshake_context *ctx,
+                            bool allow_software)
+{
+    lwip_crypto_status_t status;
+    bool ok;
+
+    if (!ctx || ctx->state == TLS_STATE_ERROR)
     {
-        ctx->keyshare_state = TLS_KEYSHARE_STATE_READY;
+        return -1;
+    }
+    if (ctx->keyshare_ready & TLS_KEYSHARE_P256_READY)
+    {
         return 1;
     }
-    return 0;
+
+    if (ctx->p256_job == 0)
+    {
+        ctx->p256_job = lwip_crypto_p256(ctx->p256_private, NULL,
+                                         ctx->p256_public);
+        if (ctx->p256_job != 0)
+        {
+            return 0;
+        }
+        if (!allow_software)
+        {
+            return -1;
+        }
+        tls_crypto_guard_enable();
+        ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
+        tls_crypto_guard_disable();
+    }
+    else
+    {
+        status = lwip_crypto_take(ctx->p256_job);
+        if (status == LWIP_CRYPTO_PENDING)
+        {
+            return 0;
+        }
+        ctx->p256_job = 0;
+        if (status != LWIP_CRYPTO_OK)
+        {
+            if (!allow_software)
+            {
+                return -1;
+            }
+            tls_crypto_guard_enable();
+            ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
+            tls_crypto_guard_disable();
+        }
+        else
+        {
+            ok = true;
+        }
+    }
+
+    if (!ok)
+    {
+        if (allow_software)
+        {
+            return tls_handshake_keyshare_fail(ctx, 0x2b);
+        }
+        return -1;
+    }
+    ctx->keyshare_ready |= TLS_KEYSHARE_P256_READY;
+    return 1;
 }
 
 bool tls_handshake_init(
@@ -2724,8 +2748,9 @@ bool tls_handshake_init(
  * The interesting work is in the extensions block. We always emit:
  *
  *    supported_versions     : tells the server we speak TLS 1.3
- *    supported_groups       : secp256r1 and x25519
- *    key_share              : our ephemeral P-256 and x25519 public keys
+ *    supported_groups       : x25519 and secp256r1
+ *    key_share              : X25519 in ClientHello1; P-256 only in CH2 when
+ *                             selected by HelloRetryRequest
  *    record_size_limit      : request 4096-byte plaintext records (RFC 8449)
  *    psk_key_exchange_modes : if PSK mode, advertise psk_dhe_ke
  *    server_name            : SNI hostname (if set)
@@ -2758,18 +2783,17 @@ bool tls_send_client_hello(
         HELLO_RANDOM_OFFSET = 6,
         HELLO_EXT_LEN_OFFSET = 47,
         HELLO_EXT_START = 49,
-        /* P-256 uncompressed public key (65 bytes) is first key_share entry */
-        HELLO_P256_KEY_SHARE_OFFSET = 76,
-        /* x25519 public key (32 bytes) follows P-256 entry */
-        HELLO_KEY_SHARE_OFFSET = 145
+        HELLO_GROUPS_LIST_OFFSET = 62,
+        HELLO_KEY_SHARE_EXT_OFFSET = 66,
+        HELLO_KEY_SHARE_EXT_END = 177
     };
-    /* Base ClientHello with zero placeholders for the 32-byte client random,
-     * 65-byte P-256 key share, 32-byte x25519 key share, and dependent
-     * lengths. Optional extensions append.
+    /* Base ClientHello retains placeholders for both key-share encodings so
+     * the common prefix and suffix stay in one audited byte template. The
+     * serializer emits only one of them. Optional extensions append.
      *
      * Extensions layout (all offsets from byte 0 of this array):
      *   [49..55]  supported_versions: TLS 1.3
-     *   [56..65]  supported_groups: secp256r1 + x25519 (P-256 preferred)
+     *   [56..65]  supported_groups: patched to x25519 + secp256r1
      *   [66..75]  key_share ext header + vector length + secp256r1 group/len
      *   [76..140] P-256 public key (65 bytes, patched)
      *   [141..144] x25519 group/len
@@ -2792,7 +2816,7 @@ bool tls_send_client_hello(
         0x00, 0x00,              /* extensions length patched */
         /* supported_versions: TLS 1.3 */
         0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04,
-        /* supported_groups: secp256r1 (0x0017) + x25519 (0x001d) (P-256 preferred) */
+        /* supported_groups placeholder, patched to x25519 + secp256r1 */
         /* ext_type=0x000a, ext_len=6, list_len=4 */
         0x00, 0x0a, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x1d,
         /* key_share: ext_type=0x0033, ext_len=0x006b=107,
@@ -2822,6 +2846,16 @@ bool tls_send_client_hello(
         /* record_size_limit: 4096 bytes (RFC 8449) */
         0x00, 0x1c, 0x00, 0x02, TLS_RECORD_SIZE_LIMIT_4096_HI, TLS_RECORD_SIZE_LIMIT_4096_LO
     };
+    /* ClientHello1 carries only X25519. If an HRR selects P-256,
+     * ClientHello2 carries exactly one P-256 share as required by RFC 8446
+     * section 4.2.8. */
+    static const uint8_t x25519_share_header[] = {
+        0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20
+    };
+    static const uint8_t p256_share_header[] = {
+        0x00, 0x33, 0x00, 0x47, 0x00, 0x45, 0x00, 0x17, 0x00, 0x41
+    };
+    static const uint8_t x25519_first_groups[] = {0x00, 0x1d, 0x00, 0x17};
     static const uint8_t sni_header[] = {
         0x00, 0x00,             /* server_name */
         0x00, 0x00,             /* extension length patched */
@@ -2865,9 +2899,19 @@ bool tls_send_client_hello(
         return false;
     }
 
-    /* This implementation reuses the original key_shares in ClientHello2;
-     * a cookie-only HRR leaves key_share unchanged. */
-    size_t template_len = sizeof(hello_template);
+    bool use_p256_share = is_hrr_retry &&
+        ctx->hrr_requested_group == TLS_NAMED_GROUP_SECP256R1;
+    if (use_p256_share &&
+        !(ctx->keyshare_ready & TLS_KEYSHARE_P256_READY))
+    {
+        ERROR_CODE(0x2b);
+        return false;
+    }
+    /* A cookie-only HRR leaves the X25519 key share unchanged. */
+    size_t share_len = use_p256_share ? 65u : 32u;
+    size_t template_len = sizeof(hello_template) -
+        (HELLO_KEY_SHARE_EXT_END - HELLO_KEY_SHARE_EXT_OFFSET) +
+        sizeof(x25519_share_header) + share_len;
 
     /* early_secret/binder_key/finished_key/binder/hmac_ctx are secret
      * material only ever populated inside the ctx->psk_mode block below,
@@ -3006,9 +3050,20 @@ bool tls_send_client_hello(
         return false;
     }
 
-    memcpy(out, hello_template, sizeof(hello_template));
-    memcpy(out + HELLO_KEY_SHARE_OFFSET, ctx->ecdhe_public, 32);
-    memcpy(out + HELLO_P256_KEY_SHARE_OFFSET, ctx->p256_public, 65);
+    memcpy(out, hello_template, HELLO_KEY_SHARE_EXT_OFFSET);
+    memcpy(out + HELLO_GROUPS_LIST_OFFSET, x25519_first_groups,
+           sizeof(x25519_first_groups));
+    offset = HELLO_KEY_SHARE_EXT_OFFSET;
+    memcpy(out + offset,
+           use_p256_share ? p256_share_header : x25519_share_header,
+           sizeof(x25519_share_header));
+    offset += sizeof(x25519_share_header);
+    memcpy(out + offset,
+           use_p256_share ? ctx->p256_public : ctx->ecdhe_public,
+           share_len);
+    offset += share_len;
+    memcpy(out + offset, hello_template + HELLO_KEY_SHARE_EXT_END,
+           sizeof(hello_template) - HELLO_KEY_SHARE_EXT_END);
     memcpy(out + HELLO_RANDOM_OFFSET, ctx->client_random, 32);
     offset = template_len;
     size_t ext_len_offset = HELLO_EXT_LEN_OFFSET;
@@ -3251,15 +3306,15 @@ bool tls_send_client_hello(
  *
  *   - server_random (32 bytes, but watch for HelloRetryRequest sentinel —
  *     RFC 8446 §4.1.3 reserves a specific value to signal HRR. We parse
- *     the HRR extensions: if the requested group is x25519 (or absent) we
- *     do the transcript replacement and return TLS_STATE_HRR_RECEIVED so
- *     the caller can send a second ClientHello. Any other group sends
- *     handshake_failure. A second HRR on the same connection is rejected
+ *     the HRR extensions: P-256 may be requested because ClientHello1 only
+ *     carries X25519. Repeated X25519 and unoffered groups are rejected. A
+ *     valid HRR performs transcript replacement and returns
+ *     TLS_STATE_HRR_RECEIVED so the caller can send ClientHello2. A second HRR
+ *     on the same connection is rejected
  *     with unexpected_message per RFC 8446 §4.1.4).
  *   - selected cipher suite (must match what we offered).
  *   - extensions: supported_versions (must indicate TLS 1.3 = 0x0304),
- *     key_share (server's x25519 pubkey → we compute the ECDHE shared
- *     secret here via x25519(our_priv, server_pub)), and optionally
+ *     key_share (X25519, or P-256 after HRR), and optionally
  *     pre_shared_key (which PSK identity the server chose, if any).
  *
  * IMPORTANT INVARIANT: this function does NOT derive the handshake keys
@@ -3408,6 +3463,7 @@ bool tls_recv_server_hello(
 
             const uint8_t *cookie_data = NULL;
             uint16_t cookie_len = 0;
+            uint16_t hrr_requested_group = 0;
             bool hrr_version = false, hrr_key_share = false, hrr_cookie_seen = false;
 
             while (hrr_offset + 4 <= hrr_ext_end)
@@ -3433,6 +3489,8 @@ bool tls_recv_server_hello(
                         return false;
                     }
                     hrr_key_share = true;
+                    hrr_requested_group = ((uint16_t)data[hrr_offset] << 8) |
+                                          data[hrr_offset + 1];
                 }
                 else if (etype == TLS_EXT_COOKIE)
                 {
@@ -3485,17 +3543,19 @@ bool tls_recv_server_hello(
                 return false;
             }
 
-            /* A conforming HRR cannot request either group because the first
-             * ClientHello included key shares for both, so any requested group
-             * ends the handshake. */
             if (hrr_key_share)
             {
-                /* RFC 8446 4.2.8: a HelloRetryRequest naming a group we already
-                 * sent a share for, or one we did not offer, is illegal. */
-                tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
-                               TLS_ALERT_ILLEGAL_PARAMETER);
-                ERROR_CODE(0x4b);
-                return false;
+                /* ClientHello1 sent X25519 and advertised X25519 + P-256.
+                 * RFC 8446 4.2.8 therefore permits only P-256 here: requesting
+                 * X25519 repeats a sent share, and every other group was
+                 * unoffered. */
+                if (hrr_requested_group != TLS_NAMED_GROUP_SECP256R1)
+                {
+                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                                   TLS_ALERT_ILLEGAL_PARAMETER);
+                    ERROR_CODE(0x4b);
+                    return false;
+                }
             }
 
             /* RFC 8446 §4.4.1 transcript replacement: replace the transcript
@@ -3547,6 +3607,7 @@ bool tls_recv_server_hello(
             }
 
             ctx->hrr_done = true;
+            ctx->hrr_requested_group = hrr_requested_group;
             ctx->state = TLS_STATE_HRR_RECEIVED;
             return true;
         }
@@ -3671,12 +3732,23 @@ bool tls_recv_server_hello(
             }
             if (group == TLS_NAMED_GROUP_X25519)
             {
-                if (ke_len != 32)
+                /* After an HRR selecting P-256, ClientHello2 contains only
+                 * P-256, so the server may no longer select X25519. */
+                if ((ctx->hrr_done &&
+                     ctx->hrr_requested_group == TLS_NAMED_GROUP_SECP256R1) ||
+                    ke_len != 32)
                 {
                     ctx->state = TLS_STATE_ERROR;
                     ERROR_CODE(0x5a);
                     return false;
                 }
+                /* Any speculative P-256 public-share job is now unused. */
+                lwip_crypto_cancel(ctx->p256_job);
+                ctx->p256_job = 0;
+                tls_secure_memzero(ctx->p256_private,
+                                   sizeof(ctx->p256_private));
+                tls_secure_memzero(ctx->p256_public,
+                                   sizeof(ctx->p256_public));
                 /* Hand the shared secret to the bridge when we can; it is
                  * collected by tls_offload_settle() before key derivation. */
                 memcpy(ctx->ecdhe_peer, data + offset + 4, 32);
@@ -3712,6 +3784,16 @@ bool tls_recv_server_hello(
             }
             else if (group == TLS_NAMED_GROUP_SECP256R1)
             {
+                /* P-256 was not present in ClientHello1. It is selectable only
+                 * after an HRR requested it and ClientHello2 supplied it. */
+                if (!ctx->hrr_done ||
+                    ctx->hrr_requested_group != TLS_NAMED_GROUP_SECP256R1 ||
+                    !(ctx->keyshare_ready & TLS_KEYSHARE_P256_READY))
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x5a);
+                    return false;
+                }
                 /* P-256 uncompressed point: 0x04 || x(32) || y(32) = 65 bytes */
                 if (ke_len != 65 || data[offset + 4] != 0x04)
                 {
@@ -3748,6 +3830,10 @@ bool tls_recv_server_hello(
                 }
                 /* Securely erase P-256 private key immediately */
                 tls_secure_memzero(ctx->p256_private, 32);
+                tls_secure_memzero(ctx->ecdhe_private,
+                                   sizeof(ctx->ecdhe_private));
+                tls_secure_memzero(ctx->ecdhe_public,
+                                   sizeof(ctx->ecdhe_public));
             }
             else
             {
@@ -6297,7 +6383,11 @@ int tls_offload_settle(struct tls_handshake_context *ctx)
     {
         return settled;
     }
-    if (ctx->p256_job && (settled = tls_settle_ecdhe(ctx, &ctx->p256_job, true)) <= 0)
+    /* Public-share generation is owned by tls_handshake_p256_step(), which
+     * also records P256_READY. Here p256_job denotes a shared-secret job only
+     * after ServerHello selected ECDHE. */
+    if (ctx->p256_job && ctx->ecdhe_negotiated &&
+        (settled = tls_settle_ecdhe(ctx, &ctx->p256_job, true)) <= 0)
     {
         return settled;
     }

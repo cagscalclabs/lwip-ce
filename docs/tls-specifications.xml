@@ -2262,7 +2262,7 @@
     <section>4.1.4 (HelloRetryRequest)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2442-2576) - HRR validation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Empty session ID, offered suite, compression 0, supported_versions 0x0304, no duplicates; unknown extensions get unsupported_extension; an HRR with neither key_share nor cookie is rejected silently. No HRR tests.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Empty session ID, offered suite, compression 0, supported_versions 0x0304, no duplicates; unknown extensions get unsupported_extension; an HRR with neither key_share nor cookie is rejected silently. Host regressions cover accepted P-256 selection and rejection of a repeated X25519 selection.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -2273,7 +2273,7 @@
     <section>4.1.4 / 4.2.8 (HRR selected_group already offered means illegal_parameter)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2578-2587) - HRR key_share</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Every HRR with a key_share is correctly rejected (both groups already offered), but with handshake_failure; 4.2.8 requires illegal_parameter if any alert is sent.</note>
+    <note>Compliant. ClientHello1 advertises X25519 and P-256 but sends only an X25519 share. An HRR may therefore select P-256; selecting X25519 again or an unadvertised group is rejected with illegal_parameter. Host regressions cover the accepted and repeated-group cases.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -2284,7 +2284,7 @@
     <section>4.1.4 / 4.4.1 (message_hash transcript, cookie echo)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2589-2635), tls_send_client_hello (L2129-2143) - HRR transcript</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Transcript replaced with 0xFE 00 00 20 || H(CH1) then HRR; cookie (1..65535) echoed in CH2, which reuses the same random and shares. No HRR interop test.</note>
+    <note>Compliant. Transcript replaced with 0xFE 00 00 20 || H(CH1) then HRR; cookie (1..65535) is echoed in CH2. A cookie-only retry reuses the X25519 share, while a P-256 selected_group produces a CH2 containing exactly the generated P-256 share. The forced-P-256 NETTLS case exercises the HRR path.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -2361,7 +2361,7 @@
     <section>4.2.7 (supported_groups)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello (L1902-1945), tls_recv_encrypted_extensions (L3226-3265) - groups</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. secp256r1 then x25519 offered with key_share in the same order; server supported_groups in EE treated as informational with unknown values tolerated (test ee_supported_groups).</note>
+    <note>Compliant. X25519 then secp256r1 are advertised. ClientHello1 supplies X25519; secp256r1 remains eligible for selection through HRR. Server supported_groups in EE is treated as informational with unknown values tolerated (test ee_supported_groups).</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -2383,7 +2383,7 @@
     <section>4.2.8.2 (secp256r1 UncompressedPointRepresentation)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello (L2787-2817), ClientHello key_share build (L1885-1935); src/tls/core/primitives/p256.s: p256_point_import - P-256 encoding and validation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Client sends 65-byte 04||X||Y; server share must be 65 bytes with 0x04 and pass coordinate-range and on-curve checks (failure sends illegal_parameter). tests/unit/tls_p256 covers off-curve only, not x &gt;= p / y &gt;= p.</note>
+    <note>Compliant. After an HRR selects secp256r1, ClientHello2 sends a 65-byte 04||X||Y share; the server share must be 65 bytes with 0x04 and pass coordinate-range and on-curve checks (failure sends illegal_parameter). tests/unit/tls_p256 covers off-curve only, not x &gt;= p / y &gt;= p.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>

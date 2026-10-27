@@ -1214,8 +1214,8 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 			Extension & Presence & Value / Notes \\
 			\midrule
 			\texttt{supported\_versions} & Always & TLS~1.3 only (\texttt{0x0304}) \\
-			\texttt{supported\_groups} & Always & \texttt{secp256r1} (\texttt{0x0017}), \texttt{x25519} (\texttt{0x001d}); P-256 preferred \\
-			\texttt{key\_share} & Always & Ephemeral P-256 (65~B uncompressed) + X25519 (32~B) key shares; P-256 omitted if unavailable, falling back to X25519 only \\
+			\texttt{supported\_groups} & Always & \texttt{x25519} (\texttt{0x001d}), \texttt{secp256r1} (\texttt{0x0017}) \\
+			\texttt{key\_share} & Always & ClientHello1 carries X25519 (32~B); ClientHello2 carries P-256 (65~B uncompressed) only after HRR selects it \\
 			\texttt{signature\_algorithms} & Always & \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp256r1\_sha256} \\
 			\texttt{signature\_algorithms\_cert} & Always & \texttt{rsa\_pkcs1\_sha256}, \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp256r1\_sha256} \\
 			\texttt{record\_size\_limit} & Always & 4096 bytes as \texttt{uint16} (RFC~8449) \\
@@ -1236,7 +1236,7 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	The \texttt{record\_size\_limit} extension (RFC~8449) requests 4096-byte plaintext records. A server that echoes the extension must not exceed the negotiated limit; a server that ignores it may send up to the TLS maximum (16~KB), which the implementation accepts from heap. Either way, a record exceeding the negotiated (or default) limit triggers a fatal \texttt{record\_overflow} alert per RFC~8449~\S4.
 
 	\paragraph{Key exchange}
-	Both P-256 and X25519 key shares are sent speculatively in the initial \texttt{ClientHello}, eliminating a HelloRetryRequest round-trip in the common case. If the server issues an HRR requesting a group not in the original offer, the handshake is aborted; the implementation does not generate new key material in response to an HRR.
+	ClientHello1 is gated only on X25519. P-256 generation proceeds speculatively when Wi-Fi bridge offload is available; without offload, the blocking local operation is deferred until an HRR selects P-256. ClientHello2 then carries exactly the P-256 share. An HRR that repeats X25519 or requests an unadvertised group is rejected with \texttt{illegal\_parameter}.
 
 	\textit{The remainder of the handshake hedges on the negotiation of material within \texttt{ClientHello}, \texttt{ServerHello}, and \texttt{HelloRetryRequest} and will not be documented here. See RFC 8446 if you would like a breakdown of the entire handshake process.}
 
