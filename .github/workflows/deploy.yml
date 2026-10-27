@@ -1,11 +1,8 @@
 name: Deploy
 
-# Staging deployments are dispatched by build.yml only after the complete gate
-# passes. Master is dispatched after promotion as well as on direct pushes.
+# Deployments are dispatched by build.yml only after the branch gate passes.
 on:
   workflow_dispatch:
-  push:
-    branches: [master]
 
 permissions:
   contents: write

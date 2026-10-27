@@ -1,14 +1,14 @@
 name: Build
 
-# staging is the integration branch. Every push is processed immediately.
-# Code changes run the build/test gate; non-code-only changes proceed directly
-# to promotion. Successful runs promote the exact signed staging commit through
-# a PR; an RFC-only failure opens the same PR for maintainer review.
+# staging is the integration branch. Every staging push is processed
+# immediately; code changes run the gate and non-code-only changes proceed
+# directly to promotion. Every master push runs the complete build/test gate
+# before deployment. An RFC-only staging failure opens a maintainer-review PR.
 
 on:
   workflow_dispatch:
   push:
-    branches: [staging]
+    branches: [master, staging]
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ permissions:
   security-events: write
 
 concurrency:
-  group: lwip-staging-gate
+  group: lwip-${{ github.ref_name }}-gate
   cancel-in-progress: false
 
 env:
@@ -41,7 +41,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Classify the staging changes
+      - name: Classify branch changes
         id: decision
         run: |
           set -euo pipefail
@@ -49,22 +49,27 @@ jobs:
 
           git fetch --no-tags origin master
           code_changed=false
-          while IFS= read -r -d '' path; do
-            case "$path" in
-              src/*|tests/*|examples/*|contrib/*|wifi_bridge/*|submodules/*|upstream-lwip/*|build-tools/*|bin/*|makefile|ce-libify.toml|exports.txt|reduce.sh|.gitmodules|.github/scripts/*|.github/ci-versions.env|.github/rfc-review-schema.json)
-                code_changed=true
-                echo "Gate-relevant change: $path"
-                ;;
-              *)
-                echo "Non-code change: $path"
-                ;;
-            esac
-          done < <(git diff --name-only -z "origin/master...$GITHUB_SHA")
+          if [ "${{ github.ref_name }}" = master ]; then
+            code_changed=true
+            echo "Master always runs the complete build/test gate."
+          else
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                src/*|tests/*|examples/*|contrib/*|wifi_bridge/*|submodules/*|upstream-lwip/*|build-tools/*|bin/*|makefile|ce-libify.toml|exports.txt|reduce.sh|.gitmodules|.github/scripts/*|.github/ci-versions.env|.github/rfc-review-schema.json)
+                  code_changed=true
+                  echo "Gate-relevant change: $path"
+                  ;;
+                *)
+                  echo "Non-code change: $path"
+                  ;;
+              esac
+            done < <(git diff --name-only -z "origin/master...$GITHUB_SHA")
+          fi
           echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
 
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
-            if [ "${{ github.ref_name }}" != staging ]; then
-              echo "::error::Manual staging gates must be dispatched with the staging branch selected."
+            if [ "${{ github.ref_name }}" != staging ] && [ "${{ github.ref_name }}" != master ]; then
+              echo "::error::Manual gates must use either the staging or master branch."
               exit 1
             fi
           fi
@@ -297,7 +302,8 @@ jobs:
     name: Open promotion PR for RFC review
     needs: [decide, build, tests, promotion_policy]
     if: >-
-      always() && needs.promotion_policy.result == 'success' &&
+      always() && github.ref_name == 'staging' &&
+      needs.promotion_policy.result == 'success' &&
       needs.promotion_policy.outputs.decision == 'review'
     permissions:
       actions: read
@@ -383,7 +389,8 @@ jobs:
     name: Promote signed staging commit through PR
     needs: [decide, build, tests, rfc_compliance_no_changes, promotion_policy]
     if: >-
-      always() && needs.promotion_policy.result == 'success' &&
+      always() && github.ref_name == 'staging' &&
+      needs.promotion_policy.result == 'success' &&
       needs.promotion_policy.outputs.decision == 'auto'
     permissions:
       actions: write
@@ -404,10 +411,12 @@ jobs:
           set -euo pipefail
           short_sha=${GATE_SHA:0:12}
           promotion_branch="automation/promote-$short_sha"
+          promotion_merged=false
 
           git fetch --no-tags origin master staging
           if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
             echo "The tested staging commit is already contained in master."
+            promotion_merged=true
           else
             existing_sha=""
             if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
@@ -454,29 +463,47 @@ jobs:
             fi
           fi
 
-          # GITHUB_TOKEN events do not start another push workflow, so dispatch
-          # both release channels explicitly after gated code is promoted.
-          dispatch_deploy() {
-            branch=$1
+          # GITHUB_TOKEN events do not reliably start another push workflow, so
+          # explicitly gate master after an immediate automated merge.
+          dispatch_workflow() {
+            workflow=$1
+            branch=$2
             for attempt in 1 2 3; do
-              if gh workflow run deploy.yml --repo "${{ github.repository }}" --ref "$branch"; then
+              if gh workflow run "$workflow" --repo "${{ github.repository }}" --ref "$branch"; then
                 return 0
               fi
-              echo "Deploy dispatch for $branch was not ready (attempt $attempt); retrying."
+              echo "$workflow dispatch for $branch was not ready (attempt $attempt); retrying."
               sleep 3
             done
             return 1
           }
           if [ "$CODE_CHANGED" = true ]; then
-            dispatch_deploy staging
+            dispatch_workflow deploy.yml staging
             if [ "$promotion_merged" = true ]; then
-              dispatch_deploy master
+              dispatch_workflow build.yml master
             else
-              echo "The auto-merge push to master will trigger its deployment."
+              echo "The eventual auto-merge push to master will trigger its gate."
             fi
           else
             echo "No code changed; release rebuilds are unnecessary."
           fi
+
+  deploy_master:
+    name: Deploy gated master
+    needs: promotion_policy
+    if: >-
+      always() && github.ref_name == 'master' &&
+      needs.promotion_policy.result == 'success' &&
+      needs.promotion_policy.outputs.decision == 'auto'
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch stable deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy.yml --repo "${{ github.repository }}" --ref master
 
   notify_build_failure:
     name: Notify commit author of build failure
@@ -490,10 +517,11 @@ jobs:
       issues: write
     runs-on: ubuntu-latest
     steps:
-      - name: Open or update a staging failure issue
+      - name: Open or update a branch failure issue
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ github.sha }}
+          BRANCH_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           commit_json=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA")
@@ -502,13 +530,13 @@ jobs:
           mention="**$author_name**"
           if [ -n "$author" ]; then mention="@$author"; fi
           short_sha=${GATE_SHA:0:12}
-          title="[staging] Gate failure for $short_sha"
-          body="$RUNNER_TEMP/staging-build-failure.md"
+          title="[$BRANCH_NAME] Gate failure for $short_sha"
+          body="$RUNNER_TEMP/branch-build-failure.md"
           {
-            echo "<!-- staging-gate:$GATE_SHA -->"
-            echo "$mention, the staging gate failed during the build."
+            echo "<!-- branch-gate:$GATE_SHA -->"
+            echo "$mention, the $BRANCH_NAME gate failed during the build."
             echo
-            echo "- Branch: [\`staging\`](${{ github.server_url }}/${{ github.repository }}/tree/staging)"
+            echo "- Branch: [\`$BRANCH_NAME\`](${{ github.server_url }}/${{ github.repository }}/tree/$BRANCH_NAME)"
             echo "- Commit: [\`$GATE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$GATE_SHA)"
             echo "- Failed gate: **Build**"
             echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"

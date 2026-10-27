@@ -1,0 +1,243 @@
+name: Documentation
+
+on:
+  push:
+    paths:
+      - docs/**
+      - src/**
+      - exports.txt
+      - build-tools/scripts/generate_lwip_headers.py
+      - build-tools/scripts/header_dump.py
+      - build-tools/meta/public_api_manifest.csv
+      - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
+      - tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py
+      - statistics/rng/**
+      - statistics/timing/**
+      - .github/workflows/documentation.yml
+  pull_request:
+    paths:
+      - docs/**
+      - src/**
+      - exports.txt
+      - build-tools/scripts/generate_lwip_headers.py
+      - build-tools/scripts/header_dump.py
+      - build-tools/meta/public_api_manifest.csv
+      - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
+      - tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py
+      - statistics/rng/**
+      - statistics/timing/**
+      - .github/workflows/documentation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    name: Classify documentation changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      pages: ${{ steps.filter.outputs.pages }}
+      whitepaper: ${{ steps.filter.outputs.whitepaper }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Match documentation paths
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          pages=false
+          whitepaper=false
+
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            echo "pages=true" >> "$GITHUB_OUTPUT"
+            echo "whitepaper=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_paths="$RUNNER_TEMP/documentation-changed-paths"
+          if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            git diff-tree --root --no-commit-id --name-only -r -z "$HEAD_SHA" > "$changed_paths"
+          elif [ "${{ github.event_name }}" = pull_request ]; then
+            git diff --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"
+          else
+            git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"
+          fi
+
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              docs/*|src/*|exports.txt|build-tools/scripts/generate_lwip_headers.py|build-tools/scripts/header_dump.py|build-tools/meta/public_api_manifest.csv|.github/workflows/documentation.yml)
+                pages=true
+                ;;
+            esac
+            case "$path" in
+              docs/whitepaper/whitepaper.tex|docs/whitepaper/scripts/*|docs/whitepaper/datasets/*|src/tls/includes/random.h|tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py|tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py|statistics/rng/*|statistics/timing/*|.github/workflows/documentation.yml)
+                whitepaper=true
+                ;;
+            esac
+          done < "$changed_paths"
+
+          echo "pages=$pages" >> "$GITHUB_OUTPUT"
+          echo "whitepaper=$whitepaper" >> "$GITHUB_OUTPUT"
+
+  pages:
+    name: Build Pages
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (needs.changes.outputs.pages == 'true' &&
+       (github.event_name == 'pull_request' || github.ref == 'refs/heads/master'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install Doxygen
+        run: |
+          wget -q "https://github.com/doxygen/doxygen/releases/download/Release_1_17_0/doxygen-1.17.0.linux.bin.tar.gz" -O /tmp/doxygen.tar.gz
+          tar -xzf /tmp/doxygen.tar.gz -C /tmp
+          sudo cp /tmp/doxygen-1.17.0/bin/doxygen /usr/local/bin/doxygen
+          doxygen --version
+
+      - name: Install docs dependencies
+        run: python -m pip install -r docs/requirements.txt
+
+      - name: Build docs
+        run: make -C docs html
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/_build/html
+
+  deploy_pages:
+    name: Deploy Pages
+    if: github.event_name != 'pull_request'
+    needs: pages
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  whitepaper:
+    name: Build Whitepaper
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.whitepaper == 'true'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      APT_CACHE_DIR: ${{ github.workspace }}/.cache/apt/archives
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache LaTeX apt packages
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: ${{ runner.os }}-whitepaper-apt-v1
+
+      - name: Cache LaTeX build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            docs/whitepaper/_minted-whitepaper
+            docs/whitepaper/whitepaper.aux
+            docs/whitepaper/whitepaper.fdb_latexmk
+            docs/whitepaper/whitepaper.fls
+            docs/whitepaper/whitepaper.out
+            docs/whitepaper/whitepaper.toc
+          key: ${{ runner.os }}-whitepaper-build-${{ hashFiles('docs/whitepaper/whitepaper.tex', 'docs/whitepaper/scripts/**', 'docs/whitepaper/datasets/**', 'src/tls/includes/random.h', 'tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py', 'tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py', 'statistics/rng/**') }}
+          restore-keys: |
+            ${{ runner.os }}-whitepaper-build-
+
+      - name: Prepare apt package cache
+        run: mkdir -p "$APT_CACHE_DIR/partial"
+
+      - name: Install LaTeX dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get \
+            -o Dir::Cache::archives="$APT_CACHE_DIR" \
+            install -y \
+            latexmk \
+            librsvg2-bin \
+            python3-pygments \
+            texlive-fonts-recommended \
+            texlive-fonts-extra \
+            texlive-latex-extra \
+            texlive-pictures \
+            texlive-science
+
+      - name: Normalize apt package cache permissions
+        run: |
+          sudo rm -f "$APT_CACHE_DIR/lock"
+          sudo rm -rf "$APT_CACHE_DIR/partial"
+          sudo chown -R "$USER:$USER" "$APT_CACHE_DIR"
+
+      - name: Generate whitepaper data
+        run: |
+          python3 scripts/generate_docs_data.py
+          rsvg-convert \
+            --format pdf \
+            --output generated/rng_entropy_distributions.pdf \
+            generated/rng_entropy_distributions.svg
+        working-directory: docs/whitepaper
+
+      - name: Build PDF
+        run: latexmk -pdf -shell-escape -interaction=nonstopmode -file-line-error whitepaper.tex
+        working-directory: docs/whitepaper
+
+      - name: Publish latest whitepaper release
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f whitepaper-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/whitepaper-latest
+
+          if gh release view whitepaper-latest >/dev/null 2>&1; then
+            gh release edit whitepaper-latest \
+              --title "whitepaper-latest" \
+              --notes "Latest generated lwIP-CE whitepaper PDF."
+          else
+            gh release create whitepaper-latest \
+              --title "whitepaper-latest" \
+              --notes "Latest generated lwIP-CE whitepaper PDF." \
+              --latest
+          fi
+
+          gh release upload whitepaper-latest docs/whitepaper/whitepaper.pdf \
+            --clobber
