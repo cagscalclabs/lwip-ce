@@ -14,7 +14,7 @@ To enforce protection of branch `master`, pushing to master directly is disallow
   - Emulator & Host-driven Network Tests & DAST probes
   - ACVP-style host-generated vectors
   - Semgrep Pro and CodeQL
-- On pass, `master` is brought up to date with `staging`.
+- Code changes are promoted after the full gate passes; documentation/statistics-only changes skip directly to promotion.
 - On fail, an issue is opened notifying the commit author of issues.
 - Deploy then generates builds:
   - master -> https://github.com/cagscalclabs/lwip-ce/releases/tag/latest-stable
