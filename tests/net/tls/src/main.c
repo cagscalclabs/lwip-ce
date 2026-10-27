@@ -318,10 +318,14 @@ static void https(const char *name, const char *host, const char *path, bool wan
 
 static void test_wss(void)
 {
-    struct lwip_socket *sock = open_socket(LWIP_SOCKET_ALTCP_WSS, "echo.websocket.in", 443, "/", 60000);
+    uint32_t start = lwip_now_ms();
+    /* Leave enough emulated time for longer public certificate chains before
+     * the WebSocket upgrade shares the same socket timeout budget. */
+    struct lwip_socket *sock =
+        open_socket(LWIP_SOCKET_ALTCP_WSS, "echo.websocket.in", 443, "/", 120000);
     size_t got = 0;
-    uint32_t start;
     if (!check("wss connect echo.websocket.in", sock != NULL)) return;
+    metric("wss_connect_echo_websocket_in", lwip_now_ms() - start, "ms");
     write_all(sock, (const uint8_t *)"lwip-ce wss echo", 16);
     start = lwip_now_ms();
     while (lwip_now_ms() - start < 30000 && got < sizeof(buf) - 1)
