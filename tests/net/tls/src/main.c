@@ -346,8 +346,8 @@ int main(void)
         psk_reject("unknown PSK identity rejected", "gcm x25519 rev good bad");
         psk_reject("AES-256 only server rejected", "aes256 x25519 rev");
         psk_reject("P-384 only server rejected", "gcm p384 rev");
-        psk_reject("P-256 only server refused (X25519 only without Wi-Fi bridge)", "gcm p256 rev");
-        psk_reject("P-256 only server refused with CCM", "ccm p256 rev");
+        psk_matrix("gcm", "p256", "TLS_AES_128_GCM_SHA256", "P-256");
+        psk_matrix("ccm", "p256", "TLS_AES_128_CCM_SHA256", "P-256");
         test_psk_key_update();
         test_psk_bulk("psk-server gcm x25519 www4k", "128 KiB over TLS in 4 KiB records");
         test_raw_alpn_and_resumption();
