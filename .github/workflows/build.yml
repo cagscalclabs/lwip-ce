@@ -298,6 +298,82 @@ jobs:
             exit 1
           fi
 
+  publish_ci_status:
+    name: Publish CI status matrix
+    needs: [decide, build, tests, rfc_compliance_no_changes, promotion_policy]
+    if: always() && (github.ref_name == 'master' || github.ref_name == 'staging')
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out status renderer
+        uses: actions/checkout@v4
+
+      - name: Render branch status matrix
+        env:
+          CI_CLASSIFY: ${{ needs.decide.result }}
+          CI_BUILD: ${{ needs.build.result }}
+          CI_TESTS: ${{ needs.tests.result }}
+          CI_UNIT: ${{ needs.tests.outputs.unit_result }}
+          CI_RFC: ${{ needs.tests.outputs.rfc_result || needs.rfc_compliance_no_changes.result }}
+          CI_ACVP: ${{ needs.tests.outputs.acvp_result }}
+          CI_SAST: ${{ needs.tests.outputs.sast_result }}
+          CI_CODEQL: ${{ needs.tests.outputs.codeql_result }}
+          CI_NETWORK: ${{ needs.tests.outputs.network_result }}
+          CI_DAST: ${{ needs.tests.outputs.dast_result }}
+          CI_HOST: ${{ needs.tests.outputs.host_result }}
+          CI_FUZZ: ${{ needs.tests.outputs.fuzz_result }}
+          CI_ROM: ${{ needs.tests.outputs.rom_result }}
+          CI_ROM_CLEANUP: ${{ needs.tests.outputs.rom_cleanup_result }}
+          CI_POLICY: ${{ needs.promotion_policy.outputs.decision || needs.promotion_policy.result }}
+        run: |
+          python3 .github/scripts/render_ci_status.py \
+            --branch "${{ github.ref_name }}" \
+            --sha "${{ github.sha }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --output "$RUNNER_TEMP/ci-status.svg"
+
+      - name: Upload run status artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-status-${{ github.ref_name }}
+          path: ${{ runner.temp }}/ci-status.svg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Update stable branch status asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          status_tag="ci-status-$BRANCH_NAME"
+          notes="$RUNNER_TEMP/ci-status-notes.md"
+          {
+            echo "Latest CI status matrix for \`$BRANCH_NAME\`."
+            echo
+            echo "- Commit: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})"
+            echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > "$notes"
+
+          git tag --force "$status_tag" "${{ github.sha }}"
+          git push --force origin "refs/tags/$status_tag"
+
+          if gh release view "$status_tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$status_tag" --repo "${{ github.repository }}" \
+              --title "CI Status: $BRANCH_NAME" --notes-file "$notes" --prerelease
+          else
+            gh release create "$status_tag" --repo "${{ github.repository }}" \
+              --verify-tag --title "CI Status: $BRANCH_NAME" \
+              --notes-file "$notes" --prerelease
+          fi
+
+          gh release upload "$status_tag" "$RUNNER_TEMP/ci-status.svg" \
+            --repo "${{ github.repository }}" --clobber
+
+          echo "Published ${{ github.server_url }}/${{ github.repository }}/releases/download/$status_tag/ci-status.svg" \
+            >> "$GITHUB_STEP_SUMMARY"
+
   open_rfc_review_pr:
     name: Open promotion PR for RFC review
     needs: [decide, build, tests, promotion_policy]
