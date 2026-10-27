@@ -327,16 +327,28 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     root_entry->len = sizeof(*root_entry) + 259;
     root_entry->alg_id = expected == TLS_ALG_RSA_PKCS1_SHA256
         ? TLS_CERT_SIG_RSA_PSS_SHA256 : TLS_CERT_SIG_RSA_PKCS1_SHA256;
+    memcpy(root_entry->subject, w->pending_issuer_name_digest,
+           TLS_TRUSTSTORE_SUBJECT_LEN);
     root_entry->key[0] = root_entry->key[2] = 1;
     memset(root_entry->key + 3, 0x81, 256);
     struct tls_truststore_entry *wrong_root = calloc(1, sizeof(*wrong_root) + 259);
     wrong_root->len = sizeof(*wrong_root) + 259;
     wrong_root->alg_id = root_entry->alg_id;
+    memcpy(wrong_root->subject, w->pending_issuer_name_digest,
+           TLS_TRUSTSTORE_SUBJECT_LEN);
     wrong_root->key[0] = wrong_root->key[2] = 1;
     memset(wrong_root->key + 3, 0x82, 256);
     root_candidates[0] = wrong_root;
     root_candidates[1] = root_entry;
     root_candidate_count = 2;
+    if (w->topmost_authority_key_id_present)
+    {
+        uint8_t alert = 0;
+        root_entry->subject[0] ^= 1;
+        assert(!tls_cert_anchor_root(w, &alert));
+        assert(alert == TLS_ALERT_UNKNOWN_CA);
+        root_entry->subject[0] ^= 1;
+    }
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
     assert(tls_recv_certificate_streamed(&ctx, w));
     assert(ctx.cert_jobs_count == 2); // link + root, nothing verified yet
@@ -428,9 +440,180 @@ static void time_tests(void)
                                   ASN1_GENERALIZEDTIME, &t));
 }
 
+static void walker_set_certificate(struct tls_cert_walker *w,
+                                   const uint8_t *der, size_t der_len)
+{
+    if (w->cert_buf)
+    {
+        mem_stats_tls_direct_release(w->cert_buf_cap, w->cert_buf_cap);
+        mem_buffer_custom_free(w->cert_buf);
+    }
+    w->cert_buf = mem_buffer_custom_malloc(der_len);
+    assert(w->cert_buf);
+    memcpy(w->cert_buf, der, der_len);
+    w->cert_buf_len = w->cert_buf_cap = der_len;
+    mem_stats_tls_direct_add(der_len, der_len);
+}
+
+static void path_len_tests(void)
+{
+    struct tls_handshake_context ctx;
+    struct tls_cert_walker *w;
+
+    /* A normal subordinate CA consumes one unit, so its pathLen=0 parent
+     * must reject it. */
+    assert(tls_handshake_init(&ctx, NULL, NULL));
+    w = tls_cert_walker_new(&ctx);
+    assert(w);
+    ctx.cert_walker = w;
+    w->cert_index = 1;
+    walker_set_certificate(w, cert_ca_ordinary, sizeof(cert_ca_ordinary));
+    assert(tls_cert_walker_validate_one(w));
+    assert(w->non_self_issued_ca_count == 1);
+    w->cert_index = 2;
+    walker_set_certificate(w, cert_ca_ordinary_parent,
+                           sizeof(cert_ca_ordinary_parent));
+    assert(!tls_cert_walker_validate_one(w));
+    tls_handshake_cleanup(&ctx);
+    assert(allocated == 0);
+
+    /* A self-issued rollover CA does not consume path length, so a pathLen=0
+     * parent with the same subject Name remains valid. */
+    assert(tls_handshake_init(&ctx, NULL, NULL));
+    w = tls_cert_walker_new(&ctx);
+    assert(w);
+    ctx.cert_walker = w;
+    w->cert_index = 1;
+    walker_set_certificate(w, cert_ca_self_issued,
+                           sizeof(cert_ca_self_issued));
+    assert(tls_cert_walker_validate_one(w));
+    assert(w->non_self_issued_ca_count == 0);
+    w->cert_index = 2;
+    walker_set_certificate(w, cert_ca_rollover_parent,
+                           sizeof(cert_ca_rollover_parent));
+    assert(tls_cert_walker_validate_one(w));
+    tls_handshake_cleanup(&ctx);
+    assert(allocated == 0);
+}
+
+static bool name_constraint_chain(const uint8_t *leaf, size_t leaf_len,
+                                  const char *hostname,
+                                  const uint8_t *issuer, size_t issuer_len)
+{
+    struct tls_handshake_context ctx;
+    struct tls_cert_walker *w;
+    bool ok;
+
+    assert(tls_handshake_init(&ctx, NULL, NULL));
+    ctx.hostname = hostname;
+    w = tls_cert_walker_new(&ctx);
+    assert(w);
+    ctx.cert_walker = w;
+    walker_set_certificate(w, leaf, leaf_len);
+    assert(tls_cert_walker_validate_one(w));
+    w->cert_index = 1;
+    walker_set_certificate(w, issuer, issuer_len);
+    ok = tls_cert_walker_validate_one(w);
+    tls_handshake_cleanup(&ctx);
+    assert(allocated == 0);
+    return ok;
+}
+
+static void name_constraint_tests(void)
+{
+    struct tls_x509_object cert;
+
+    /* Every dNSName is checked, case-insensitively, rather than only the
+     * connection hostname. */
+    assert(name_constraint_chain(cert_nc_leaf_good,
+                                 sizeof(cert_nc_leaf_good),
+                                 "www.example.test", cert_nc_ca_dns,
+                                 sizeof(cert_nc_ca_dns)));
+    assert(!name_constraint_chain(cert_nc_leaf_extra,
+                                  sizeof(cert_nc_leaf_extra),
+                                  "www.example.test", cert_nc_ca_dns,
+                                  sizeof(cert_nc_ca_dns)));
+    assert(!name_constraint_chain(cert_nc_leaf_good,
+                                  sizeof(cert_nc_leaf_good),
+                                  "www.example.test", cert_nc_ca_excluded,
+                                  sizeof(cert_nc_ca_excluded)));
+
+    /* A permitted dNSName subtree is irrelevant when the subordinate has no
+     * dNSName; its iPAddress identity remains acceptable. */
+    assert(name_constraint_chain(cert_nc_leaf_ip,
+                                 sizeof(cert_nc_leaf_ip), "192.0.2.1",
+                                 cert_nc_ca_dns, sizeof(cert_nc_ca_dns)));
+
+    /* Mandatory directoryName processing accepts a subject whose leading
+     * RDN sequence is the permitted subtree. */
+    assert(name_constraint_chain(cert_nc_leaf_good,
+                                 sizeof(cert_nc_leaf_good),
+                                 "www.example.test", cert_nc_ca_directory,
+                                 sizeof(cert_nc_ca_directory)));
+
+    assert(tls_x509_parse_certificate(cert_nc_ca_noncritical,
+                                      sizeof(cert_nc_ca_noncritical), &cert));
+    assert(!tls_x509_validate_path_extensions(&cert, true, 0));
+    assert(tls_x509_parse_certificate(cert_nc_ca_bad_minimum,
+                                      sizeof(cert_nc_ca_bad_minimum), &cert));
+    assert(!tls_x509_validate_path_extensions(&cert, true, 0));
+    assert(tls_x509_parse_certificate(cert_nc_ca_empty,
+                                      sizeof(cert_nc_ca_empty), &cert));
+    assert(!tls_x509_validate_path_extensions(&cert, true, 0));
+    assert(tls_x509_parse_certificate(cert_nc_ca_unsupported,
+                                      sizeof(cert_nc_ca_unsupported), &cert));
+    assert(!tls_x509_validate_path_extensions(&cert, true, 0));
+    assert(tls_x509_parse_certificate(cert_nc_ca_duplicate,
+                                      sizeof(cert_nc_ca_duplicate), &cert));
+    assert(!tls_x509_validate_path_extensions(&cert, true, 0));
+    assert(tls_x509_parse_certificate(cert_nc_leaf_has_nc,
+                                      sizeof(cert_nc_leaf_has_nc), &cert));
+    assert(!tls_x509_validate_path_extensions(&cert, false, 0));
+}
+
+static bool certificate_extensions_valid(const uint8_t *der, size_t der_len,
+                                         bool is_ca)
+{
+    struct tls_x509_object cert;
+    assert(tls_x509_parse_certificate(der, der_len, &cert));
+    return tls_x509_validate_path_extensions(&cert, is_ca, 0);
+}
+
+static void extended_key_usage_tests(void)
+{
+    /* serverAuth, anyExtendedKeyUsage, and an absent EKU all authorize the
+     * TLS server purpose; RFC 5280 permits critical or non-critical EKU. */
+    assert(certificate_extensions_valid(cert_pkcs, sizeof(cert_pkcs), false));
+    assert(certificate_extensions_valid(cert_eku_any,
+                                        sizeof(cert_eku_any), false));
+    assert(certificate_extensions_valid(cert_eku_absent,
+                                        sizeof(cert_eku_absent), false));
+    assert(certificate_extensions_valid(cert_eku_critical,
+                                        sizeof(cert_eku_critical), false));
+
+    /* The project also applies an issuer EKU as a server-auth path policy. */
+    assert(certificate_extensions_valid(cert_pkcs, sizeof(cert_pkcs), true));
+    assert(certificate_extensions_valid(cert_eku_any,
+                                        sizeof(cert_eku_any), true));
+    assert(certificate_extensions_valid(cert_eku_absent,
+                                        sizeof(cert_eku_absent), true));
+
+    assert(!certificate_extensions_valid(cert_eku_client,
+                                         sizeof(cert_eku_client), false));
+    assert(!certificate_extensions_valid(cert_eku_client,
+                                         sizeof(cert_eku_client), true));
+    assert(!certificate_extensions_valid(cert_eku_empty,
+                                         sizeof(cert_eku_empty), false));
+    assert(!certificate_extensions_valid(cert_eku_malformed_oid,
+                                         sizeof(cert_eku_malformed_oid), false));
+}
+
 int main(void)
 {
     time_tests();
+    path_len_tests();
+    name_constraint_tests();
+    extended_key_usage_tests();
     ALG(alg_pkcs, true, TLS_ALG_RSA_PKCS1_SHA256);
     ALG(alg_pss, true, TLS_ALG_RSA_PSS_RSAE_SHA256);
     ALG(alg_pss_trailer, true, TLS_ALG_RSA_PSS_RSAE_SHA256);
@@ -468,8 +651,7 @@ int main(void)
     struct tls_x509_object nonminimal_ku;
     assert(tls_x509_parse_certificate(cert_nonminimal_ku,
                                       sizeof(cert_nonminimal_ku), &nonminimal_ku));
-    assert(!tls_x509_validate_path_extensions(&nonminimal_ku, true, 0,
-                                              "example.test"));
+    assert(!tls_x509_validate_path_extensions(&nonminimal_ku, true, 0));
 
     struct tls_x509_object ec;
     assert(tls_x509_parse_certificate(cert_ec, sizeof(cert_ec), &ec));

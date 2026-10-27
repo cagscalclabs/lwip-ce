@@ -15,7 +15,7 @@
 #include <lwip/cryptography/truststore.h>
 #include <lwip.h>
 
-#define TEST_TRUSTSTORE_VERSION 2
+#define TEST_TRUSTSTORE_VERSION 3
 #define TEST_TRUSTSTORE_INDEX_ENTRY_LEN 34u
 
 static int text_y = 20;

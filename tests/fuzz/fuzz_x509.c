@@ -18,8 +18,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
                                   cert.subject_cn, cert.subject_cn_len, "www.example.com");
         tls_x509_hostname_matches(cert.extensions, cert.extensions_len,
                                   cert.subject_cn, cert.subject_cn_len, "192.168.84.1");
-        tls_x509_validate_path_extensions(&cert, false, 0, "a.example.com");
-        tls_x509_validate_path_extensions(&cert, true, 2, NULL);
+        tls_x509_validate_path_extensions(&cert, false, 0);
+        tls_x509_validate_path_extensions(&cert, true, 2);
         tls_x509_time_in_validity(&cert, 1790000000u);
         tls_x509_has_valid_constraints(cert.extensions, cert.extensions_len);
     }

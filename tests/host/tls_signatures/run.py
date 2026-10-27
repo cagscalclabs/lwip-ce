@@ -59,6 +59,13 @@ spki = seq(seq(rsa, b'\x05\x00'), tlv(3, b'\0' + seq(
 ec_spki = seq(seq(oid('2a8648ce3d0201'), oid('2a8648ce3d030107')),
               tlv(3, b'\0\x04' + b'\x01' * 64))
 name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'example.test'))))
+name_org_rdn = tlv(0x31, seq(oid('55040a'), tlv(0x0c, b'Example Org')))
+deep_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'example.test'))),
+                name_org_rdn)
+rollover_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'rollover.test'))))
+ordinary_child_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'child.test'))))
+ordinary_parent_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'parent.test'))))
+root_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'root.test'))))
 valid = seq(tlv(0x17, b'200101000000Z'), tlv(0x17, b'491231235959Z'))
 base_extensions = (
     seq(oid('551d11'), tlv(4, seq(tlv(0x82, b'example.test')))),
@@ -86,12 +93,111 @@ cert_extensions_nonminimal_ku = tlv(0xa3, seq(
     seq(oid('551d0f'), tlv(1, b'\xff'), tlv(4, tlv(3, b'\x00\x84'))),
     base_extensions[3],
 ))
+cert_extensions_pathlen0 = tlv(0xa3, seq(
+    base_extensions[0],
+    seq(oid('551d13'), tlv(1, b'\xff'),
+        tlv(4, seq(tlv(1, b'\xff'), tlv(2, b'\x00')))),
+    base_extensions[2],
+    base_extensions[3],
+))
 
 
-def cert(algorithm, key=spki, inner=None, extensions=cert_extensions):
+def san_extension(*names):
+    return seq(oid('551d11'), tlv(4, seq(*names)))
+
+
+def nc_extension(permitted=(), excluded=(), critical=True,
+                 raw_fields=None):
+    fields = raw_fields
+    if fields is None:
+        fields = b''
+        if permitted:
+            fields += tlv(0xa0, b''.join(seq(base) for base in permitted))
+        if excluded:
+            fields += tlv(0xa1, b''.join(seq(base) for base in excluded))
+    parts = [oid('551d1e')]
+    if critical:
+        parts.append(tlv(1, b'\xff'))
+    parts.append(tlv(4, seq(fields)))
+    return seq(*parts)
+
+
+def extensions_with_san(san, *extra):
+    return tlv(0xa3, seq(san, *base_extensions[1:], *extra))
+
+
+def eku_extension(*purposes, critical=False):
+    parts = [oid('551d25')]
+    if critical:
+        parts.append(tlv(1, b'\xff'))
+    parts.append(tlv(4, seq(*purposes)))
+    return seq(*parts)
+
+
+def extensions_with_eku(eku=None):
+    values = list(base_extensions[:3])
+    if eku is not None:
+        values.append(eku)
+    return tlv(0xa3, seq(*values))
+
+
+server_auth_purpose = oid('2b06010505070301')
+client_auth_purpose = oid('2b06010505070302')
+any_eku_purpose = oid('551d2500')
+eku_any_extensions = extensions_with_eku(eku_extension(any_eku_purpose))
+eku_absent_extensions = extensions_with_eku()
+eku_client_extensions = extensions_with_eku(eku_extension(client_auth_purpose))
+eku_empty_extensions = extensions_with_eku(eku_extension())
+eku_critical_extensions = extensions_with_eku(
+    eku_extension(server_auth_purpose, critical=True))
+eku_malformed_oid_extensions = extensions_with_eku(
+    eku_extension(server_auth_purpose, tlv(6, b'\x80\x01')))
+
+
+nc_dns_permitted = nc_extension(permitted=(tlv(0x82, b'example.test'),))
+nc_dns_excluded_upper = nc_extension(excluded=(tlv(0x82, b'.EXAMPLE.TEST'),))
+nc_directory_permitted = nc_extension(permitted=(tlv(0xa4, name),))
+nc_noncritical = nc_extension(permitted=(tlv(0x82, b'example.test'),),
+                              critical=False)
+nc_bad_minimum = nc_extension(raw_fields=tlv(
+    0xa0, seq(tlv(0x82, b'example.test'), tlv(0x80, b'\0'))))
+nc_empty_subtrees = nc_extension(raw_fields=tlv(0xa0, b''))
+nc_unsupported_ip = nc_extension(
+    permitted=(tlv(0x87, bytes((192, 0, 2, 0, 255, 255, 255, 0))),))
+nc_duplicate_permitted = nc_extension(raw_fields=(
+    tlv(0xa0, seq(tlv(0x82, b'example.test'))) +
+    tlv(0xa0, seq(tlv(0x82, b'example.test')))))
+
+leaf_good_extensions = extensions_with_san(
+    san_extension(tlv(0x82, b'WWW.Example.test'),
+                  tlv(0x82, b'api.example.test')))
+leaf_extra_extensions = extensions_with_san(
+    san_extension(tlv(0x82, b'www.example.test'),
+                  tlv(0x82, b'evil.test')))
+leaf_ip_extensions = extensions_with_san(
+    san_extension(tlv(0x87, bytes((192, 0, 2, 1)))))
+ca_nc_dns_extensions = extensions_with_san(base_extensions[0], nc_dns_permitted)
+ca_nc_excluded_extensions = extensions_with_san(base_extensions[0],
+                                                 nc_dns_excluded_upper)
+ca_nc_directory_extensions = extensions_with_san(base_extensions[0],
+                                                  nc_directory_permitted)
+ca_nc_noncritical_extensions = extensions_with_san(base_extensions[0],
+                                                    nc_noncritical)
+ca_nc_bad_minimum_extensions = extensions_with_san(base_extensions[0],
+                                                    nc_bad_minimum)
+ca_nc_empty_extensions = extensions_with_san(base_extensions[0],
+                                              nc_empty_subtrees)
+ca_nc_unsupported_extensions = extensions_with_san(base_extensions[0],
+                                                    nc_unsupported_ip)
+ca_nc_duplicate_extensions = extensions_with_san(base_extensions[0],
+                                                  nc_duplicate_permitted)
+
+
+def cert(algorithm, key=spki, inner=None, extensions=cert_extensions,
+         issuer=name, subject=name):
     # Extensions require v3 (version INTEGER 2 in [0] EXPLICIT).
     tbs = seq(tlv(0xa0, b'\x02\x01\x02'), b'\x02\x01\x01',
-              inner or algorithm, name, valid, name, key,
+              inner or algorithm, issuer, valid, subject, key,
               extensions)
     signature = bytes([0x22 if algorithm == pss else 0x11]) * 256
     return seq(tbs, algorithm, tlv(3, b'\0' + signature))
@@ -115,6 +221,47 @@ vectors = {
     'cert_duplicate_aki': cert(pkcs, extensions=cert_extensions_duplicate_aki),
     'cert_bad_aki': cert(pkcs, extensions=cert_extensions_bad_aki),
     'cert_nonminimal_ku': cert(pkcs, extensions=cert_extensions_nonminimal_ku),
+    'cert_eku_any': cert(pkcs, extensions=eku_any_extensions),
+    'cert_eku_absent': cert(pkcs, extensions=eku_absent_extensions),
+    'cert_eku_client': cert(pkcs, extensions=eku_client_extensions),
+    'cert_eku_empty': cert(pkcs, extensions=eku_empty_extensions),
+    'cert_eku_critical': cert(pkcs, extensions=eku_critical_extensions),
+    'cert_eku_malformed_oid': cert(pkcs,
+                                  extensions=eku_malformed_oid_extensions),
+    'cert_ca_self_issued': cert(
+        pkcs, issuer=rollover_name, subject=rollover_name),
+    'cert_ca_rollover_parent': cert(
+        pkcs, extensions=cert_extensions_pathlen0,
+        issuer=root_name, subject=rollover_name),
+    'cert_ca_ordinary': cert(
+        pkcs, issuer=ordinary_parent_name, subject=ordinary_child_name),
+    'cert_ca_ordinary_parent': cert(
+        pkcs, extensions=cert_extensions_pathlen0,
+        issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_leaf_good': cert(pkcs, extensions=leaf_good_extensions,
+                             issuer=ordinary_parent_name, subject=deep_name),
+    'cert_nc_leaf_extra': cert(pkcs, extensions=leaf_extra_extensions,
+                              issuer=ordinary_parent_name, subject=deep_name),
+    'cert_nc_leaf_ip': cert(pkcs, extensions=leaf_ip_extensions,
+                           issuer=ordinary_parent_name, subject=deep_name),
+    'cert_nc_ca_dns': cert(pkcs, extensions=ca_nc_dns_extensions,
+                          issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_ca_excluded': cert(pkcs, extensions=ca_nc_excluded_extensions,
+                               issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_ca_directory': cert(pkcs, extensions=ca_nc_directory_extensions,
+                                issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_ca_noncritical': cert(pkcs, extensions=ca_nc_noncritical_extensions,
+                                  issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_ca_bad_minimum': cert(pkcs, extensions=ca_nc_bad_minimum_extensions,
+                                  issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_ca_empty': cert(pkcs, extensions=ca_nc_empty_extensions,
+                            issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_ca_unsupported': cert(pkcs, extensions=ca_nc_unsupported_extensions,
+                                  issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_ca_duplicate': cert(pkcs, extensions=ca_nc_duplicate_extensions,
+                                issuer=root_name, subject=ordinary_parent_name),
+    'cert_nc_leaf_has_nc': cert(pkcs, extensions=ca_nc_dns_extensions,
+                               issuer=ordinary_parent_name, subject=deep_name),
     'cert_ec': cert(pkcs, ec_spki), 'cert_mismatch': cert(pss, inner=pkcs),
 }
 

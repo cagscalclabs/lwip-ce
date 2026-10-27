@@ -81,6 +81,25 @@ static bool tls_x509_oid_eq(const struct tls_asn1_tlv *oid_tlv, const uint8_t *o
            memcmp(oid_tlv->value, oid, oid_len) == 0;
 }
 
+/* Validate the DER value octets of an OBJECT IDENTIFIER. Each subidentifier
+ * is base-128 encoded, must terminate, and must not contain a redundant
+ * leading zero continuation octet. The first subidentifier combines arcs
+ * zero and one but follows the same base-128 encoding rules. */
+static bool tls_x509_oid_value_der(const uint8_t *value, size_t len)
+{
+    bool at_subidentifier_start = true;
+
+    if (!value || len == 0)
+        return false;
+    for (size_t i = 0; i < len; i++)
+    {
+        if (at_subidentifier_start && value[i] == 0x80u)
+            return false;
+        at_subidentifier_start = (value[i] & 0x80u) == 0;
+    }
+    return at_subidentifier_start;
+}
+
 static bool tls_x509_positive_integer_der(const struct tls_asn1_tlv *v,
                                           bool allow_zero)
 {
@@ -357,67 +376,173 @@ static bool tls_x509_parse_algorithm_identifier(const struct tls_asn1_tlv *alg_t
     return c.cur == c.end;
 }
 
-/* Returns true if `hostname` matches the dNSName constraint `constraint`.
+static uint8_t nc_ascii_lower(uint8_t c)
+{
+    return (c >= 'A' && c <= 'Z') ? (uint8_t)(c + ('a' - 'A')) : c;
+}
+
+static bool nc_equal_ci(const uint8_t *a, const uint8_t *b, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        if (nc_ascii_lower(a[i]) != nc_ascii_lower(b[i]))
+            return false;
+    return true;
+}
+
+/* Returns true if `name` matches the dNSName constraint `constraint`.
  * RFC 5280 §4.2.1.10: a leading '.' in the constraint is a domain suffix
  * match (".example.com" matches "a.example.com"); otherwise exact match or
- * subdomain (same as SAN matching). */
-static bool nc_dns_matches(const char *hostname, size_t hlen,
+ * subdomain. Section 7.2 requires case-insensitive, label-wise comparison. */
+static bool nc_dns_matches(const uint8_t *name, size_t name_len,
                             const uint8_t *constraint, size_t clen)
 {
-    if (clen == 0 || hlen == 0)
+    if (clen == 0 || name_len == 0)
         return false;
-    /* Leading dot: constraint is a suffix. */
     if (constraint[0] == '.')
     {
-        if (hlen <= clen)
+        if (name_len <= clen)
             return false;
-        return memcmp(hostname + hlen - clen, constraint, clen) == 0;
+        return nc_equal_ci(name + name_len - clen, constraint, clen);
     }
-    /* No leading dot: exact match or host is a direct subdomain. */
-    if (hlen == clen)
-        return memcmp(hostname, constraint, clen) == 0;
-    if (hlen > clen + 1 &&
-        hostname[hlen - clen - 1] == '.' &&
-        memcmp(hostname + hlen - clen, constraint, clen) == 0)
+    if (name_len == clen)
+        return nc_equal_ci(name, constraint, clen);
+    if (name_len > clen + 1 && name[name_len - clen - 1] == '.' &&
+        nc_equal_ci(name + name_len - clen, constraint, clen))
         return true;
     return false;
 }
 
-/* Parse and enforce RFC 5280 nameConstraints on `hostname`.
- * `nc_value` is the OCTET STRING value of the extension.
- * Returns false (reject) if:
- *   - The constraint contains non-dNSName entries in a critical extension
- *   - The hostname fails a permittedSubtrees or excludedSubtrees check. */
-static bool nc_validate_hostname(const uint8_t *nc_value, size_t nc_len,
-                                  bool critical, const char *hostname)
+static bool nc_dns_constraint_valid(const uint8_t *name, size_t len)
 {
-    if (!hostname)
-        return !critical; /* no hostname to check; skip non-critical */
+    size_t label_start = 0;
 
-    size_t hlen = strlen(hostname);
+    if (!name || len == 0)
+        return false;
+    if (name[0] == '.')
+        label_start = 1;
+    if (label_start == len || len - label_start > 253)
+        return false;
+    for (size_t i = label_start; i <= len; i++)
+    {
+        if (i == len || name[i] == '.')
+        {
+            size_t label_len = i - label_start;
+            if (label_len == 0 || label_len > 63 ||
+                name[label_start] == '-' || name[i - 1] == '-')
+                return false;
+            label_start = i + 1;
+            continue;
+        }
+        uint8_t c = name[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '-'))
+            return false;
+    }
+    return true;
+}
+
+static bool nc_name_der_valid(const uint8_t *der, size_t der_len)
+{
+    struct tls_asn1_cursor outer, rdns;
+    struct tls_asn1_tlv name, rdn;
+
+    if (!tls_asn1_cursor_init(&outer, der, der_len) ||
+        !tls_asn1_next(&outer, &name) || outer.cur != outer.end ||
+        name.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+        !tls_asn1_child_cursor(&name, &rdns))
+        return false;
+    while (rdns.cur < rdns.end)
+    {
+        struct tls_asn1_cursor attrs;
+        struct tls_asn1_tlv attr;
+        if (!tls_asn1_next(&rdns, &rdn) ||
+            rdn.tag != (ASN1_CONSTRUCTED | ASN1_SET) || rdn.len == 0 ||
+            !tls_asn1_child_cursor(&rdn, &attrs))
+            return false;
+        while (attrs.cur < attrs.end)
+        {
+            struct tls_asn1_cursor fields;
+            struct tls_asn1_tlv oid, value;
+            if (!tls_asn1_next(&attrs, &attr) ||
+                attr.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+                !tls_asn1_child_cursor(&attr, &fields) ||
+                !tls_asn1_next(&fields, &oid) || oid.tag != ASN1_OBJECTID ||
+                oid.len == 0 || !tls_asn1_next(&fields, &value) ||
+                fields.cur != fields.end)
+                return false;
+        }
+    }
+    return true;
+}
+
+/* RFC 5280 7.1 defines a directoryName subtree by the leading RDNs of a
+ * subject Name. This uses exact DER RDN equality, consistent with this
+ * stack's documented constrained-platform Name-comparison policy. */
+static bool nc_directory_matches(const uint8_t *name, size_t name_len,
+                                 const struct tls_asn1_tlv *base)
+{
+    struct tls_asn1_cursor name_outer, constraint_outer, name_rdns, constraint_rdns;
+    struct tls_asn1_tlv name_seq, constraint_seq, name_rdn, constraint_rdn;
+
+    if (!nc_name_der_valid(name, name_len) ||
+        !nc_name_der_valid(base->value, base->len) ||
+        !tls_asn1_cursor_init(&name_outer, name, name_len) ||
+        !tls_asn1_next(&name_outer, &name_seq) ||
+        name_seq.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+        name_outer.cur != name_outer.end ||
+        !tls_asn1_cursor_init(&constraint_outer, base->value, base->len) ||
+        !tls_asn1_next(&constraint_outer, &constraint_seq) ||
+        constraint_seq.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+        constraint_outer.cur != constraint_outer.end ||
+        !tls_asn1_child_cursor(&name_seq, &name_rdns) ||
+        !tls_asn1_child_cursor(&constraint_seq, &constraint_rdns))
+        return false;
+
+    while (constraint_rdns.cur < constraint_rdns.end)
+    {
+        if (!tls_asn1_next(&constraint_rdns, &constraint_rdn) ||
+            !tls_asn1_next(&name_rdns, &name_rdn) ||
+            constraint_rdn.header_len + constraint_rdn.len !=
+                name_rdn.header_len + name_rdn.len ||
+            memcmp(constraint_rdn.tlv, name_rdn.tlv,
+                   constraint_rdn.header_len + constraint_rdn.len) != 0)
+            return false;
+    }
+    return true;
+}
+
+/* Strictly parse one nameConstraints value and, when name is non-NULL,
+ * enforce the subtrees of the matching GeneralName form against that name.
+ * The mandatory directoryName form and dNSName are implemented. Other forms
+ * fail closed rather than being silently ignored. */
+static bool nc_validate_name(const uint8_t *nc_value, size_t nc_len,
+                             uint8_t name_form,
+                             const uint8_t *name, size_t name_len)
+{
     struct tls_asn1_cursor nc_cur, subtrees_cur;
     struct tls_asn1_tlv nc_seq, subtrees;
+    bool seen_permitted = false, seen_excluded = false;
+    bool has_permitted = false, name_permitted = false;
 
     if (!tls_asn1_cursor_init(&nc_cur, nc_value, nc_len) ||
         !tls_asn1_next(&nc_cur, &nc_seq) ||
-        nc_seq.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+        nc_seq.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+        nc_cur.cur != nc_cur.end || nc_seq.len == 0 ||
+        !tls_asn1_child_cursor(&nc_seq, &nc_cur))
         return false;
-
-    if (!tls_asn1_child_cursor(&nc_seq, &nc_cur))
-        return false;
-
-    bool has_permitted = false;
-    bool hostname_permitted = false;
 
     while (nc_cur.cur < nc_cur.end)
     {
         if (!tls_asn1_next(&nc_cur, &subtrees))
             return false;
-        /* [0] = permittedSubtrees, [1] = excludedSubtrees (CONTEXT CONSTRUCTED) */
-        bool is_permitted = subtrees.tag == (0xA0u); /* [0] CONSTRUCTED */
-        bool is_excluded  = subtrees.tag == (0xA1u); /* [1] CONSTRUCTED */
-        if (!is_permitted && !is_excluded)
-            return false; /* unexpected item in NameConstraints */
+        bool is_permitted = subtrees.tag == 0xA0u;
+        bool is_excluded = subtrees.tag == 0xA1u;
+        if ((!is_permitted && !is_excluded) ||
+            (is_permitted && (seen_permitted || seen_excluded)) ||
+            (is_excluded && seen_excluded) || subtrees.len == 0)
+            return false;
+        seen_permitted |= is_permitted;
+        seen_excluded |= is_excluded;
 
         if (!tls_asn1_child_cursor(&subtrees, &subtrees_cur))
             return false;
@@ -433,41 +558,52 @@ static bool nc_validate_hostname(const uint8_t *nc_value, size_t nc_len,
                 !tls_asn1_next(&sub_cur, &base))
                 return false;
 
-            /* dNSName is CONTEXT IMPLICIT tag 2 (0x82). */
-            if (base.tag == 0x82u)
+            /* minimum has DEFAULT 0 and must therefore be absent in DER;
+             * RFC 5280 also requires maximum to be absent. */
+            if ((base.tag != 0x82u && base.tag != 0xA4u) ||
+                base.len == 0 || sub_cur.cur != sub_cur.end ||
+                (base.tag == 0x82u &&
+                 !nc_dns_constraint_valid(base.value, base.len)))
+                return false;
+            if (base.tag == 0xA4u)
             {
-                bool matches = nc_dns_matches(hostname, hlen,
-                                               base.value, base.len);
+                struct tls_asn1_cursor dc;
+                struct tls_asn1_tlv dn;
+                if (!nc_name_der_valid(base.value, base.len) ||
+                    !tls_asn1_cursor_init(&dc, base.value, base.len) ||
+                    !tls_asn1_next(&dc, &dn) || dc.cur != dc.end ||
+                    dn.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+                    return false;
+            }
+
+            if (name && base.tag == name_form)
+            {
+                bool matches = base.tag == 0x82u
+                    ? nc_dns_matches(name, name_len, base.value, base.len)
+                    : nc_directory_matches(name, name_len, &base);
                 if (is_permitted)
                 {
                     has_permitted = true;
-                    if (matches) hostname_permitted = true;
+                    name_permitted |= matches;
                 }
-                else /* excluded */
-                {
-                    if (matches) return false; /* hostname excluded */
-                }
-            }
-            else if (critical)
-            {
-                /* Unsupported GeneralName type in a critical extension. */
-                return false;
+                else if (matches)
+                    return false;
             }
         }
     }
 
-    /* If any permitted subtrees exist, hostname must match at least one. */
-    if (has_permitted && !hostname_permitted)
+    if (!seen_permitted && !seen_excluded)
+        return false;
+    if (name && has_permitted && !name_permitted)
         return false;
     return true;
 }
 
 /* Validate the extension subset needed by this client path builder. Anything
  * critical that we do not interpret is rejected; nameConstraints are parsed
- * and enforced for dNSName entries. */
+ * for directoryName and dNSName entries, then enforced by the chain walker. */
 bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
-                                       bool is_ca, size_t subordinate_ca_count,
-                                       const char *hostname)
+                                       bool is_ca, size_t subordinate_ca_count)
 {
     static const uint8_t oid_basic_constraints[] = {0x55, 0x1D, 0x13};
     static const uint8_t oid_key_usage[] = {0x55, 0x1D, 0x0F};
@@ -565,7 +701,10 @@ bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
 
         if (is_nc)
         {
-            if (!nc_validate_hostname(value.value, value.len, critical, hostname))
+            /* RFC 5280 4.2.1.10: only CA certificates may carry this
+             * extension and conforming issuers must mark it critical. */
+            if (!is_ca || !critical ||
+                !nc_validate_name(value.value, value.len, 0, NULL, 0))
                 return false;
             continue;
         }
@@ -635,7 +774,9 @@ basic_constraints_done:
             while (eku.cur < eku.end)
             {
                 if (!tls_asn1_next(&eku, &purpose) ||
-                    purpose.tag != ASN1_OBJECTID) return false;
+                    purpose.tag != ASN1_OBJECTID ||
+                    !tls_x509_oid_value_der(purpose.value, purpose.len))
+                    return false;
                 if ((purpose.len == sizeof(oid_server_auth) &&
                      memcmp(purpose.value, oid_server_auth, sizeof(oid_server_auth)) == 0) ||
                     (purpose.len == sizeof(oid_any_eku) &&
@@ -676,6 +817,177 @@ basic_constraints_done:
         DEBUG(); /* leaf cert rejected: EKU present but lacks serverAuth/anyEKU */
     }
     return (!have_ku || digital_signature) && (!have_eku || server_auth);
+}
+
+static bool nc_store_name(uint8_t form, const uint8_t *name, size_t name_len,
+                          uint8_t *out, size_t out_cap, size_t *used)
+{
+    if (!name || name_len == 0 || name_len > 0xFFFFFFu ||
+        name_len > SIZE_MAX - 4u ||
+        *used > SIZE_MAX - 4u - name_len)
+        return false;
+    if (out)
+    {
+        if (*used + 4u + name_len > out_cap)
+            return false;
+        out[*used] = form;
+        out[*used + 1] = (uint8_t)(name_len >> 16);
+        out[*used + 2] = (uint8_t)(name_len >> 8);
+        out[*used + 3] = (uint8_t)name_len;
+        memcpy(out + *used + 4, name, name_len);
+    }
+    *used += 4u + name_len;
+    return true;
+}
+
+/* Retain only names relevant to the supported constraint forms: the subject
+ * distinguished Name plus dNSName and directoryName SAN entries. */
+bool tls_x509_collect_constraint_names(const struct tls_x509_object *cert,
+                                       uint8_t *out, size_t out_cap,
+                                       size_t *out_len)
+{
+    static const uint8_t oid_san[] = {0x55, 0x1D, 0x11};
+    struct tls_asn1_cursor outer, list;
+    struct tls_asn1_tlv item;
+    size_t used = 0;
+
+    if (!cert || !out_len)
+        return false;
+    *out_len = 0;
+    if (!nc_name_der_valid(cert->subject_name, cert->subject_name_len) ||
+        !nc_store_name(0xA4u, cert->subject_name, cert->subject_name_len,
+                       out, out_cap, &used))
+        return false;
+    if (!cert->extensions || cert->extensions_len == 0)
+    {
+        *out_len = used;
+        return true;
+    }
+    if (!tls_asn1_cursor_init(&outer, cert->extensions,
+                              cert->extensions_len) ||
+        !tls_asn1_next(&outer, &item))
+        return false;
+    list = outer;
+    if (item.header_len + item.len == cert->extensions_len &&
+        item.tag == (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+    {
+        if (!tls_asn1_child_cursor(&item, &list)) return false;
+    }
+    else
+        list.cur = cert->extensions;
+
+    while (list.cur < list.end)
+    {
+        struct tls_asn1_cursor ec, vc, names;
+        struct tls_asn1_tlv ext, oid, value, name, seq;
+        if (!tls_asn1_next(&list, &ext) ||
+            ext.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+            !tls_asn1_child_cursor(&ext, &ec) ||
+            !tls_asn1_next(&ec, &oid) || oid.tag != ASN1_OBJECTID ||
+            !tls_asn1_next(&ec, &value))
+            return false;
+        if (value.tag == ASN1_BOOLEAN && !tls_asn1_next(&ec, &value))
+            return false;
+        if (value.tag != ASN1_OCTETSTRING || ec.cur != ec.end)
+            return false;
+        if (oid.len != sizeof(oid_san) ||
+            memcmp(oid.value, oid_san, sizeof(oid_san)) != 0)
+            continue;
+        if (!tls_asn1_cursor_init(&vc, value.value, value.len) ||
+            !tls_asn1_next(&vc, &seq) || vc.cur != vc.end ||
+            seq.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) || seq.len == 0 ||
+            !tls_asn1_child_cursor(&seq, &names))
+            return false;
+        while (names.cur < names.end)
+        {
+            if (!tls_asn1_next(&names, &name))
+                return false;
+            if (name.tag != 0x82u && name.tag != 0xA4u)
+                continue;
+            if (name.tag == 0xA4u)
+            {
+                struct tls_asn1_cursor dc;
+                struct tls_asn1_tlv dn;
+                if (!nc_name_der_valid(name.value, name.len) ||
+                    !tls_asn1_cursor_init(&dc, name.value, name.len) ||
+                    !tls_asn1_next(&dc, &dn) || dc.cur != dc.end ||
+                    dn.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+                    return false;
+            }
+            if (!nc_store_name(name.tag, name.value, name.len,
+                               out, out_cap, &used))
+                return false;
+        }
+        break;
+    }
+    *out_len = used;
+    return true;
+}
+
+bool tls_x509_name_constraints_allow(const struct tls_x509_object *issuer,
+                                     const uint8_t *names,
+                                     size_t names_len)
+{
+    static const uint8_t oid_nc[] = {0x55, 0x1D, 0x1E};
+    struct tls_asn1_cursor outer, list;
+    struct tls_asn1_tlv item;
+
+    if (!issuer || (names_len != 0 && !names))
+        return false;
+    if (!issuer->extensions || issuer->extensions_len == 0)
+        return true;
+    if (!tls_asn1_cursor_init(&outer, issuer->extensions,
+                              issuer->extensions_len) ||
+        !tls_asn1_next(&outer, &item))
+        return false;
+    list = outer;
+    if (item.header_len + item.len == issuer->extensions_len &&
+        item.tag == (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+    {
+        if (!tls_asn1_child_cursor(&item, &list)) return false;
+    }
+    else
+        list.cur = issuer->extensions;
+
+    while (list.cur < list.end)
+    {
+        struct tls_asn1_cursor ec;
+        struct tls_asn1_tlv ext, oid, value;
+        if (!tls_asn1_next(&list, &ext) ||
+            ext.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+            !tls_asn1_child_cursor(&ext, &ec) ||
+            !tls_asn1_next(&ec, &oid) || oid.tag != ASN1_OBJECTID ||
+            !tls_asn1_next(&ec, &value))
+            return false;
+        if (value.tag == ASN1_BOOLEAN && !tls_asn1_next(&ec, &value))
+            return false;
+        if (value.tag != ASN1_OCTETSTRING || ec.cur != ec.end)
+            return false;
+        if (oid.len != sizeof(oid_nc) ||
+            memcmp(oid.value, oid_nc, sizeof(oid_nc)) != 0)
+            continue;
+
+        size_t off = 0;
+        while (off < names_len)
+        {
+            uint8_t form;
+            size_t name_len;
+            if (names_len - off < 4)
+                return false;
+            form = names[off];
+            name_len = ((size_t)names[off + 1] << 16) |
+                       ((size_t)names[off + 2] << 8) | names[off + 3];
+            off += 4;
+            if ((form != 0x82u && form != 0xA4u) ||
+                name_len > names_len - off ||
+                !nc_validate_name(value.value, value.len, form,
+                                  names + off, name_len))
+                return false;
+            off += name_len;
+        }
+        return nc_validate_name(value.value, value.len, 0, NULL, 0);
+    }
+    return true;
 }
 
 static uint8_t tls_x509_ascii_lower(uint8_t c)
@@ -1164,7 +1476,7 @@ bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len)
     struct tls_x509_object cert = {0};
     cert.extensions = ext_data;
     cert.extensions_len = ext_len;
-    return tls_x509_validate_path_extensions(&cert, true, 0, NULL);
+    return tls_x509_validate_path_extensions(&cert, true, 0);
 }
 
 bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len)

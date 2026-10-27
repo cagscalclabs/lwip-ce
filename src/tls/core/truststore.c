@@ -31,7 +31,7 @@
  * | Header (264B)       |  <- tls_truststore_header (sig, version, timestamp, count)
  * +---------------------+
  * | SKI index[count]      |  <- sorted key[32] + metadata offset[2]
- * | Subject index[count]  |  <- sorted key[32] + metadata offset[2]
+ * | Subject index[count]  |  <- sorted SHA-256(DER Name)[32] + metadata offset[2]
  * | Metadata...           |  <- Variable-length tls_truststore_entry records
  * +---------------------+
  *
@@ -44,7 +44,7 @@
  *
  * struct tls_truststore_entry (see truststore.h):
  *    uint32_t len;                       // total byte size of this entry
- *    uint8_t  subject[TLS_TRUSTSTORE_SUBJECT_LEN]; // Subject CN, null-padded
+ *    uint8_t  subject[TLS_TRUSTSTORE_SUBJECT_LEN]; // SHA-256(DER Subject Name)
  *    uint8_t  ski[TLS_TRUSTSTORE_SKI_LEN];         // Subject Key Identifier
  *    uint32_t expiry_start;              // notBefore Unix timestamp
  *    uint32_t expiry_end;                // notAfter  Unix timestamp
@@ -53,8 +53,9 @@
  *
  * Root anchoring: a chain's topmost cert normally selects a root by matching
  * its AuthorityKeyIdentifier to the stored SubjectKeyIdentifier. If the AKI
- * keyIdentifier is absent, all current roots with the issuer CN are tried and
- * the topmost certificate's signature decides which key, if any, is valid.
+ * keyIdentifier is absent, all current roots with the complete issuer Name
+ * digest are tried and the topmost certificate's signature decides which key,
+ * if any, is valid.
  * Failure to find and verify an anchor aborts the handshake.
  *
  * Stores older than the configured age threshold emit a warning after their
@@ -91,7 +92,7 @@ static uint16_t tls_truststore_index_offset(const uint8_t *record)
     return tls_truststore_read_u16(record + TLS_TRUSTSTORE_INDEX_KEY_LEN);
 }
 
-/* Validate the entire signed v2 layout once, before making the store usable.
+/* Validate the entire signed v3 layout once, before making the store usable.
  * The SKI index is also the canonical metadata-order index: requiring its
  * offsets to describe every metadata entry exactly once makes arbitrary or
  * interior pointers impossible. The subject index may reorder those same
@@ -555,7 +556,7 @@ bool tls_truststore_lookup_by_subject_index(const uint8_t *subject,
                                             uint16_t match_index,
                                             struct tls_truststore_entry **result)
 {
-    if (subject == NULL || subject_len == 0 || subject_len > TLS_TRUSTSTORE_SUBJECT_LEN ||
+    if (subject == NULL || subject_len != TLS_TRUSTSTORE_SUBJECT_LEN ||
         !truststore_valid_for_session)
         return false;
 

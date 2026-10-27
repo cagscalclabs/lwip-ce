@@ -125,17 +125,18 @@ bool tls_truststore_lookup_by_subject_index(const uint8_t *subject, size_t len,
                                             uint16_t index,
                                             struct tls_truststore_entry **out)
 {
-    (void)subject;
-    (void)len;
+    if (!subject || len != TLS_TRUSTSTORE_SUBJECT_LEN) return false;
     if (root_candidate_count != 0)
     {
         if (index >= root_candidate_count) return false;
         *out = root_candidates[index];
-        return *out != NULL;
+        return *out != NULL &&
+               memcmp((*out)->subject, subject, TLS_TRUSTSTORE_SUBJECT_LEN) == 0;
     }
     if (index != 0) return false;
     *out = root_entry;
-    return root_entry != NULL;
+    return root_entry != NULL &&
+           memcmp(root_entry->subject, subject, TLS_TRUSTSTORE_SUBJECT_LEN) == 0;
 }
 bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t len, struct tls_truststore_entry **out)
 {

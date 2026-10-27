@@ -17,4 +17,14 @@ bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
 const uint8_t *tls_ecdsa_parse_int(const uint8_t *der, size_t len,
                                    uint8_t out[32]);
 
+/* Internal path-builder helpers. Names are serialized as a GeneralName tag,
+ * a three-byte big-endian length, and raw value bytes. The mandatory
+ * directoryName form stores the complete inner Name TLV. */
+bool tls_x509_collect_constraint_names(const struct tls_x509_object *cert,
+                                       uint8_t *out, size_t out_cap,
+                                       size_t *out_len);
+bool tls_x509_name_constraints_allow(const struct tls_x509_object *issuer,
+                                     const uint8_t *names,
+                                     size_t names_len);
+
 #endif

@@ -64,12 +64,11 @@ bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_l
  * For a CA certificate, basicConstraints CA=TRUE is mandatory, keyCertSign
  * is mandatory when keyUsage is present, and pathLenConstraint is enforced.
  * For a leaf, digitalSignature/serverAuth are required when their respective
- * extensions are present.  nameConstraints are parsed; dNSName constraints
- * are enforced against `hostname` (if non-NULL); unsupported subtree types
- * in a critical nameConstraints extension cause rejection. */
+ * extensions are present. nameConstraints syntax, placement, criticality,
+ * and supported directoryName/dNSName subtree forms are validated here; the
+ * streaming path builder applies them to every subordinate certificate name. */
 bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
-                                       bool is_ca, size_t subordinate_ca_count,
-                                       const char *hostname);
+                                       bool is_ca, size_t subordinate_ca_count);
 
 /**
  * @brief Map a DER-encoded OID to an algorithm identifier.

@@ -9,8 +9,9 @@
  *
  * @warning Certificate paths fail closed unless the topmost certificate can
  * be anchored. AuthorityKeyIdentifier selects a root by stored SKI; chains
- * without an AKI try every current matching subject entry and accept only a
- * key that verifies the topmost certificate's signature.
+ * without an AKI try every current entry whose full subject Name digest
+ * matches the topmost issuer Name and accept only a key that verifies the
+ * topmost certificate's signature.
  */
 
 #ifndef TLS_TRUSTSTORE_H
@@ -22,11 +23,12 @@
 
 #define TLS_TRUSTSTORE_SUBJECT_LEN  32
 #define TLS_TRUSTSTORE_SKI_LEN      32
-#define TLS_TRUSTSTORE_VERSION      2
+#define TLS_TRUSTSTORE_VERSION      3
 
-/* Version 2 stores two fixed-width lookup indexes before the variable-length
+/* Version 3 stores two fixed-width lookup indexes before the variable-length
  * metadata block. Each index record is key[32] followed by a little-endian
- * uint16 offset relative to the start of the metadata block. */
+ * uint16 offset relative to the start of the metadata block. The subject key
+ * is SHA-256 over the complete DER-encoded X.509 Name. */
 #define TLS_TRUSTSTORE_INDEX_KEY_LEN    32
 #define TLS_TRUSTSTORE_INDEX_ENTRY_LEN  (TLS_TRUSTSTORE_INDEX_KEY_LEN + 2u)
 
@@ -76,7 +78,7 @@ struct tls_truststore_header
 struct tls_truststore_entry
 {
     uint32_t len;                            /* total byte size of this entry */
-    uint8_t  subject[TLS_TRUSTSTORE_SUBJECT_LEN]; /* Subject CN, null-terminated, padded */
+    uint8_t  subject[TLS_TRUSTSTORE_SUBJECT_LEN]; /* SHA-256(DER Subject Name) */
     uint8_t  ski[TLS_TRUSTSTORE_SKI_LEN];         /* Subject Key Identifier, padded to 32 B */
     uint32_t expiry_start;                  /* notBefore Unix timestamp (uint32_t) */
     uint32_t expiry_end;                    /* notAfter  Unix timestamp (uint32_t) */
@@ -112,9 +114,9 @@ bool tls_truststore_lookup_key_id(const uint8_t *key_id, size_t key_id_len,
 
 /********************
  * @brief Attempts to find a truststore entry whose subject[] matches the given
- *        name (issuer CN of the topmost cert in the chain).
- * @param subject   Name bytes (up to TLS_TRUSTSTORE_SUBJECT_LEN), null-padded.
- * @param subject_len  Meaningful bytes in subject (0 < subject_len <= TLS_TRUSTSTORE_SUBJECT_LEN).
+ *        SHA-256 digest of the complete DER-encoded issuer Name.
+ * @param subject   TLS_TRUSTSTORE_SUBJECT_LEN-byte issuer Name digest.
+ * @param subject_len  Must equal TLS_TRUSTSTORE_SUBJECT_LEN.
  * @param result    Out-pointer set to a bounded internal copy on match. The
  *                  copy remains valid until the next truststore lookup. May
  *                  be NULL when only presence is needed.
@@ -125,8 +127,8 @@ bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len
 
 /** @internal
  * Find the zero-based @p match_index current entry with the requested subject.
- * This supports the AKI-absent fallback, where duplicate CN entries must each
- * be tried cryptographically instead of trusting storage order.
+ * This supports the AKI-absent fallback, where anchors with the same subject
+ * Name must each be tried cryptographically instead of trusting storage order.
  */
 bool tls_truststore_lookup_by_subject_index(const uint8_t *subject,
                                             size_t subject_len,

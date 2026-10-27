@@ -1408,12 +1408,14 @@
   <requirement>
     <ref>RFC 3279</ref>
     <section>2.3.1 (rsaEncryption parameters MUST be NULL)</section>
-    <location>src/tls/core/x509.c: tls_x509_parse_algorithm_identifier (L212-246) as called for the SPKI (L1315-1320) - RSA SPKI params</location>
+    <location>src/tls/core/x509.c: tls_x509_parse_algorithm_identifier (L282-345), SPKI processing (L1407-1438); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1298-1305) - rsaEncryption parameter enforcement</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Absent params or an OID param are also accepted for the rsaEncryption SPKI. Lenient; no security effect.</note>
+    <note>RSA SubjectPublicKeyInfo is recognized only when the rsaEncryption AlgorithmIdentifier parameters are an ASN.1 NULL with zero length. Absent or non-NULL parameters leave the key type unknown, causing certificate validation to fail.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1443,12 +1445,14 @@
   <requirement>
     <ref>RFC 4648</ref>
     <section>3.2 (padding)</section>
-    <location>src/tls/core/base64.c: tls_base64_decode (L40-56) - padding position and length</location>
+    <location>src/tls/core/base64.c: tls_base64_encode (L8-30), tls_base64_decode (L40-72); tests/host/base64/test.c (L23-36) - padding emission, position, and length</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Rejects non-multiple-of-4 or empty input, "=" outside the final quartet and misplaced padding. Covered by tests/host/base64 ("TQ", "T=Fu", "TQ==TWFu", "TQ=a").</note>
+    <note>The encoder emits the required one or two "=" characters when the input length is not divisible by three. The decoder requires complete four-character quanta and accepts padding only in the final quartet and in its valid positions. Host regression tests cover valid padded values as well as truncated, misplaced, and non-final padding.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1493,64 +1497,75 @@
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1 (Certificate SEQUENCE of exactly three elements; no trailing data)</section>
-    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1143-1164, L1405-1415) - trailing elements</location>
+    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1217-1239, L1397-1404, L1453-1468, L1498-1532) - exact sequence consumption and trailing-element rejection</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. No check that cert_seq consumes cert_der, that nothing follows signatureValue, or that SPKI/RSAPublicKey have no trailing items; items after SPKI before [3] and after [3] are ignored. Malleability, not forgery (outer bytes unsigned).</note>
+    <note>The outer Certificate SEQUENCE must consume the complete DER input and contain exactly tbsCertificate, signatureAlgorithm, and signatureValue. SubjectPublicKeyInfo must contain exactly its algorithm and key BIT STRING, and an embedded RSAPublicKey must contain exactly its modulus and exponent. Remaining TBSCertificate fields are accepted only as ordered, unique, version-appropriate context-specific fields [1], [2], and [3]; unknown, duplicate, out-of-order, or trailing elements are rejected.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.1.2 (signatureAlgorithm MUST equal tbsCertificate.signature)</section>
-    <location>src/tls/core/handshake.c: tls_cert_extract_sig_material (L622-641) - inner/outer AlgorithmIdentifier equality</location>
+    <location>src/tls/core/handshake.c: tls_cert_extract_sig_material (L651-669); tests/host/tls_signatures/test.c (L572-573) - inner/outer AlgorithmIdentifier equality</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Tag, length and value bytes compared byte-exact for every chain certificate before verification. Covered indirectly by tests/host/tls_signatures chain().</note>
+    <note>The signed TBSCertificate signature AlgorithmIdentifier and the outer Certificate signatureAlgorithm are compared byte-exact by tag, length, and value before signature verification. A dedicated host regression certificate with mismatched inner and outer algorithms is rejected.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.1 / 4.1.2.9 (version; extensions only if v3)</section>
-    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1200-1210, L1405-1415) - version value unchecked</location>
+    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1275-1297, L1498-1532) - version parsing and version-gated optional fields</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. The [0] version wrapper is skipped without reading its INTEGER; unknown versions are accepted and [3] extensions honoured on v1/v2. v1 CA certs are still rejected (no basicConstraints, L445-446).</note>
+    <note>An omitted version field selects the v1 default. When present, the [0] EXPLICIT wrapper must contain exactly one single-octet INTEGER with value 1 (v2) or 2 (v3); an explicitly encoded default v1 value, malformed wrapper, or unknown version is rejected. Issuer and subject unique identifiers are rejected for v1, and extensions [3] are accepted only for v3.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.2 (serialNumber; RP leniency)</section>
-    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1212-1216) - serial</location>
+    <location>src/tls/core/x509.c: tls_x509_positive_integer_der (L84-93), tls_x509_parse_certificate (L1299-1303) - serial number syntax and length</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Only required to be an INTEGER; any length or sign tolerated, as 4.1.2.2 asks of relying parties.</note>
+    <note>The parser accepts minimally encoded positive, nonzero DER INTEGER serial numbers of up to 20 octets, satisfying the mandatory relying-party length requirement. Negative, zero, non-minimal, empty, and longer serial numbers are rejected. Rejecting negative or zero serials is stricter than RFC 5280's recommendation that certificate users gracefully handle certificates issued by non-conforming CAs, and may reduce interoperability without weakening validation.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.4 (issuer MUST be a non-empty DN)</section>
-    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1228-1238) - empty issuer</location>
+    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1315-1330); src/tls/core/handshake.c: tls_cert_chain_verify_one (L1265-1273), tls_cert_walker_validate_one (L1396-1422) - issuer presence, chaining, and anchor lookup</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. An empty issuer SEQUENCE is not rejected at parse time; an empty or CN-less topmost issuer is still rejected at anchoring (handshake.c tls_recv_certificate_streamed L3048-3057), so not fail-open.</note>
+    <note>The certificate parser requires the issuer to be a non-empty constructed SEQUENCE and rejects an empty or incorrectly tagged issuer immediately. The complete DER Name is retained for adjacent-certificate name chaining. A Common Name is not required by RFC 5280; it is extracted only for the legacy AKI-absent trust-anchor fallback, while AKI/SKI anchoring supports issuers without a CN.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
-    <section>4.1.2.4 / 6.1.3(a)(4) (issuer/subject name chaining)</section>
-    <location>src/tls/core/handshake.c: tls_cert_chain_verify_one (L704-826) - DN chaining</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Full DER issuer Name is SHA-256-compared with the next certificate's full DER subject; binary comparison can falsely reject but never falsely accept.</note>
+    <section>4.1.2.4 / 6.1.3(a)(4) / 7.1 (issuer/subject name chaining)</section>
+    <location>src/tls/core/handshake.c: tls_cert_chain_verify_one (L1163-1179, L1265-1273) - exact-DER DN chaining</location>
+    <grade>DEVIANT</grade>
+    <note>The complete DER issuer Name is SHA-256-hashed and compared with the next certificate's complete DER subject Name. This accepts byte-identical Names but does not implement RFC 5280 section 7.1 LDAP StringPrep, insignificant-space handling, caseIgnoreMatch, or equivalent DirectoryString encoding comparison. Semantically equal Names with different valid encodings can therefore be rejected; the comparison does not create a practical fail-open path, assuming SHA-256 collision resistance.</note>
+    <justification>Normalized X.500 Name comparison requires recursive ASN.1 attribute processing, Unicode and legacy DirectoryString decoding, RFC 4518 string preparation, case folding, and space normalization. That code and data footprint is disproportionate for the constrained eZ80 target. Exact-DER comparison is retained as a deliberate fail-closed interoperability limitation.</justification>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -1559,12 +1574,14 @@
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.5 (99991231235959Z means no well-defined expiration)</section>
-    <location>src/tls/core/x509.c: tls_x509_time_to_unix (L1011-1019) - uint32 range</location>
+    <location>src/tls/core/x509.c: tls_x509_time_to_unix (L1030-1118), tls_x509_time_in_validity (L1121-1159); tests/host/tls_signatures/test.c (L413-414) - out-of-range saturation and no-expiration sentinel</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (interop): any time after 2106-02-07 or before 1970 fails, so a cert using the RFC-defined 99991231235959Z sentinel is always rejected (fails closed). Fix: saturate notAfter to UINT32_MAX and notBefore to 0.</note>
+    <note>Syntactically valid instants outside the uint32 Unix-time range are saturated rather than rejected: pre-1970 values map to zero and post-2106 values map to UINT32_MAX. Consequently, the RFC-defined 99991231235959Z notAfter sentinel remains valid throughout the platform's representable clock range. A host regression verifies the sentinel conversion.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1581,20 +1598,22 @@
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.5.1 / 4.1.2.5.2 (UTCTime pivot 50; GeneralizedTime with Z, no fractions)</section>
-    <location>src/tls/core/x509.c: tls_x509_time_to_unix (L937-1023) - time encoding</location>
+    <location>src/tls/core/x509.c: tls_x509_day_valid (L1020-1028), tls_x509_time_to_unix (L1036-1118); tests/host/tls_signatures/test.c (L409-428); tests/unit/tls_x509/src/main.c (L400-429) - canonical time syntax, pivot, and calendar validation</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Exactly 13 or 15 bytes with trailing 'Z', digits only, correct 50/49 pivot. Covered by tests/unit/tls_x509 (UTCTime/GeneralizedTime parse, rejects no Z).</note>
+    <note>UTCTime must be exactly YYMMDDHHMMSSZ and maps years 50-99 to 1950-1999 and 00-49 to 2000-2049. GeneralizedTime must be exactly YYYYMMDDHHMMSSZ, excluding fractions and offsets. Both forms require decimal digits, valid calendar fields, seconds, and a trailing Z. Host and unit regressions cover both encodings, the 1950 pivot boundary, missing Z, leap-year handling, and invalid calendar dates.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.1.2.7 / RFC 5480 2.1.1 (id-ecPublicKey with namedCurve secp256r1)</section>
-    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1328-1345, L1389-1399) - EC SPKI</location>
+    <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1397-1438, L1483-1492); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1292-1303); tests/host/tls_signatures/test.c (L474-479, L558-568) - EC SPKI parameters and supported curve</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. EC key accepted only with namedCurve secp256r1; other curves become TLS_KEY_TYPE_UNKNOWN and are rejected (handshake.c L849-856). Fail-closed, but P-384 chains (e.g. Let's Encrypt E5-E9 / ISRG X2) are unsupported.</note>
+    <note>EC SubjectPublicKeyInfo is recognized only when the algorithm is id-ecPublicKey and its required parameter is the namedCurve OID secp256r1. Absent, NULL, explicit, implicit, or unsupported curve parameters are rejected either during AlgorithmIdentifier parsing or by leaving the key type unknown. P-384 and all other curves are unsupported as a fail-closed interoperability limitation. Host regressions cover P-256 parsing and EC leaf-key capture.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -1603,89 +1622,105 @@
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2 (no more than one instance of an extension)</section>
-    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L505), tls_x509_san_matches (L845-853) - duplicate SAN</location>
+    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L507-552); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1326-1343) - duplicate extension rejection before SAN matching</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): duplicate BC/KU/EKU are rejected but duplicate SAN (and duplicate unknown non-critical extensions) are not; the SAN matcher keeps scanning so a second SAN can match.</note>
+    <note>Every extension OID is compared with all preceding extension OIDs, and any duplicate is rejected, including duplicate subjectAltName and duplicate unknown non-critical extensions. Certificate-path validation performs this check before leaf hostname matching, so a second SAN cannot supply an accepted identity.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2 / 6.1.4(o) (unrecognised critical extension MUST reject)</section>
-    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L499-504) - critical handling</location>
+    <location>src/tls/core/x509.c: nc_validate_hostname (L386-462), tls_x509_validate_path_extensions (L507-579); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1326-1334) - critical-extension handling</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Any critical extension other than BC/KU/SAN/EKU fails; extension framing parsed strictly (L469-486).</note>
+    <note>Critical basicConstraints, keyUsage, subjectAltName, extendedKeyUsage, and nameConstraints extensions are recognized; every other critical extension OID rejects the certificate. Critical nameConstraints values are parsed and unsupported GeneralName forms fail closed. Extension framing and the critical BOOLEAN encoding are validated strictly before dispatch.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.3 / 6.1.4(n) (keyUsage)</section>
-    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L536-543, L571, L587) - keyUsage</location>
+    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L610-673); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1326-1334); tests/host/tls_signatures/test.c (L468-472) - keyUsage parsing and enforcement</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. If KU is present, CA requires keyCertSign and the leaf requires digitalSignature; correct bit masks. Absent KU accepted.</note>
+    <note>When keyUsage is present, issuing CA certificates require keyCertSign and TLS leaf certificates require digitalSignature; absence is accepted because the extension is optional. The BIT STRING tag, unused-bit count, zero padding, and DER-minimal named-bit encoding are validated before the usage bits are read. Host regression coverage rejects a non-minimal keyUsage encoding.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.9 / 6.1.4(k) (basicConstraints cA=TRUE for intermediates)</section>
-    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L510-535, L565-586) - cA</location>
+    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L488-489, L580-608, L648-668), tls_x509_has_valid_constraints / tls_x509_has_required_ca_constraints (L1162-1186); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1326-1334); tests/unit/tls_x509/src/main.c (L285-328) - basicConstraints CA enforcement</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Every non-leaf needs BC with cA=TRUE; pathLen without cA rejected; extension-less (v1) CA rejected. tests/unit/tls_x509 "patched reject" cases exercise the legacy helper, not this function.</note>
+    <note>Every certificate used as an issuer must contain basicConstraints with cA=TRUE. A pathLenConstraint without cA=TRUE, malformed or trailing basicConstraints fields, and extension-less v1/v2 intermediates are rejected. The unit tests' patched-cA rejection cases reach the current validator through compatibility helpers that delegate to tls_x509_validate_path_extensions.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.9 / 6.1.4(l)-(m) (pathLenConstraint)</section>
-    <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L879-888); src/tls/core/x509.c (L575, L584) - path length</location>
+    <location>src/tls/core/handshake.c: tls_cert_is_self_issued (L1281-1293), tls_cert_walker_validate_one (L1339-1351, L1451-1457); src/tls/core/x509.c: tls_x509_validate_path_extensions (L580-608, L648-668); tests/host/tls_signatures/test.c: path_len_tests (L446-484) - pathLenConstraint parsing and non-self-issued CA count</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Issuer at wire index N is checked against N-1 subordinate CAs; self-issued certs are counted rather than exempted (stricter, fail-closed). Relies on strict wire ordering.</note>
+    <note>The streaming chain walker carries the number of accepted non-self-issued subordinate CA certificates and supplies that count when validating each issuer's pathLenConstraint. Self-issued rollover certificates are identified by equal issuer and subject Names and do not consume path length. Host regressions verify that pathLenConstraint=0 accepts a self-issued rollover CA but rejects an ordinary subordinate CA.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.10 / 6.1.3(b)-(c) (nameConstraints)</section>
-    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L499) - nameConstraints</location>
+    <location>src/tls/core/x509.c: nc_validate_name / tls_x509_collect_constraint_names / tls_x509_name_constraints_allow (L495-580, L801-969); src/tls/core/handshake.c: tls_cert_walker_append_constraint_names / tls_cert_walker_validate_one (L1313-1350, L1401-1422, L1524-1537); tests/host/tls_signatures/test.c: name_constraint_tests (L487-560) - nameConstraints parsing, path state, and enforcement</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. Not implemented; any certificate carrying nameConstraints (critical or not) is rejected. Fail-closed and defensible, but breaks technically-constrained intermediates. dNSName permittedSubtrees and excludedSubtrees are now parsed and enforced against the connection hostname (x509.c nc_validate_hostname). Unsupported GeneralName types in a critical nameConstraints extension still fail closed.</note>
+    <note>Implemented as of v3.0.0-rc3. Critical CA nameConstraints are parsed and enforced for the mandatory directoryName form and for dNSName. The leaf-first streaming walker retains each applicable subordinate subject Name and every directoryName/dNSName subjectAltName, applies every issuer's permittedSubtrees and excludedSubtrees to all names of the corresponding form, and exempts non-final self-issued rollover certificates. DNS comparison is case-insensitive and label-boundary aware; directoryName constraints use leading-RDN subtree matching under the separately documented exact-DER Name-comparison policy. Empty or duplicate subtree fields, non-CA or non-critical placement, explicit minimum, maximum, malformed DER, and unsupported GeneralName constraint forms are rejected fail closed. Host regressions cover permitted and excluded DNS names, mixed case, multiple SANs, IP-only leaves, directoryName subtrees, malformed encodings, unsupported forms, and placement/criticality rules.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>4.2.1.12 (extendedKeyUsage serverAuth)</section>
-    <location>src/tls/core/x509.c: tls_x509_validate_path_extensions (L544-562, L579, L591) - EKU</location>
+    <location>src/tls/core/x509.c: tls_x509_oid_value_der (L84-101), tls_x509_validate_path_extensions (L605-619, L767-819); tests/host/tls_signatures/test.c: extended_key_usage_tests (L562-597) - EKU syntax and TLS server-purpose enforcement</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. If present, the leaf must include id-kp-serverAuth or anyEKU; CA EKU must include serverAuth (CA/B-style policy beyond 5280). Absent EKU accepted.</note>
+    <note>Fully reviewed as of v3.0.0-rc3. An extendedKeyUsage value must be a non-empty SEQUENCE of strictly encoded OBJECT IDENTIFIER values. For TLS server authentication, a present leaf EKU must contain id-kp-serverAuth or anyExtendedKeyUsage; unrelated purposes may coexist and need not be recognized. Critical and non-critical EKU are both accepted, and absence is accepted because RFC 5280 permits applications, but does not require them, to mandate EKU. KeyUsage and EKU are processed independently, so a TLS 1.3 leaf with both extensions requires both digitalSignature and an accepted server-auth purpose. Issuer certificates carrying EKU are additionally required to contain serverAuth or anyExtendedKeyUsage, a deliberate fail-closed server-auth path policy stricter than RFC 5280. Host regressions cover serverAuth, anyExtendedKeyUsage, absent and critical EKU, clientAuth-only rejection, the stricter CA rule, an empty sequence, and malformed KeyPurposeId encoding.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1 (path must terminate at a trust anchor)</section>
-    <location>src/tls/core/handshake.c: tls_recv_certificate_streamed (L2907-3062) - no-truststore-entry branch (L3040-3047)</location>
+    <location>src/tls/core/handshake.c: tls_cert_anchor_root / tls_cert_job_run_head / tls_recv_certificate_streamed (L929-985, L1101-1124, L3753-3800); src/tls/core/truststore.c: tls_truststore_lookup_key_id / tls_truststore_lookup_by_subject_index (L489-617) - mandatory trust-anchor lookup and verification</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. With the bad-status diagnostic branch removed in the working tree, a NOT_FOUND or unverified store makes lookup_by_subject() false and reaches the "No truststore entry found" reject branch; empty issuer CN also rejected (L3048-3057). No fail-open path; only the specific status code is no longer logged.</note>
+    <note>Fully reviewed as of v3.0.0-rc3. Finalizing a non-PSK certificate message queues a mandatory trust-anchor job behind all adjacent-chain signature jobs, and later handshake messages remain blocked until every job succeeds. If the topmost certificate carries an authorityKeyIdentifier keyIdentifier, the anchor must be a current entry whose SKI matches it and whose complete subject Name digest matches the certificate's issuer Name; a missing, empty, oversized, unmatched, or name-inconsistent identifier is fatal and does not fall back. Without an AKI, every current trust anchor with the complete issuer Name digest is tried. In either path, lookup alone is insufficient: the topmost certificate's pending signature must verify with the selected anchor public key. Truststore lookups are disabled unless the store was authenticated for the current session, so a missing, invalid, or unverified store cannot terminate a path. Failures produce a fatal unknown_ca or bad_certificate alert; there is no fail-open path.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1705,23 +1740,27 @@
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.1(d) / 6.1.3(a)(1) (trust anchor input; topmost signature verified with anchor key)</section>
-    <location>src/tls/core/handshake.c: tls_recv_certificate_streamed (L2907-3062) - root anchoring</location>
+    <location>src/tls/core/handshake.c: tls_cert_verify_pending_link / tls_cert_verify_root_entry / tls_cert_anchor_root (L843-985), tls_cert_job_run_head / tls_cert_job_enqueue (L1101-1174), tls_recv_certificate_streamed (L3753-3800), tls_offload_settle (L6203-6242); tests/host/tls_signatures/test.c: chain (L291-407) - trust-anchor signature verification</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Topmost pending signature is verified with the anchor key (RSA or P-256); unknown anchor algorithm, missing entry or CN-less issuer all fail. Not fail-open, contrary to older comments and project memory. Covered by tests/host/tls_signatures chain() (signature bit flip rejected).</note>
+    <note>Fully reviewed as of v3.0.0-rc3. The authenticated truststore entry supplies the trusted public-key type and key material; supported anchor inputs are RSA and EC P-256, whose parameters are fixed by the serialized key type. The topmost certificate's own parsed AlgorithmIdentifier selects RSA PKCS#1 v1.5 with SHA-256, RSA-PSS with SHA-256, or ECDSA P-256 with SHA-256, and its retained tbsCertificate digest and signature must verify with the selected anchor key. Unsupported or mismatched algorithms, malformed key material, an absent matching anchor, and a bad signature all fail closed. Verification may be offloaded, but accelerator success remains provisional until tls_offload_settle obtains the verdict; an accelerator failure is checked locally, and failure of both paths sends a fatal alert before the handshake completes. Host regressions exercise successful RSA anchoring, same-subject candidate selection by signature, and rejection after a signature bit flip. Trusted-issuer-name binding is assessed separately under RFC 5280 sections 6.1.1(d) and 6.1.3(a)(4).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 5280</ref>
-    <section>6.1.1(d) / 7.1 (anchor identified by name and key)</section>
-    <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L952-973); src/tls/core/truststore.c: tls_truststore_lookup_by_subject (L270-310) - CN-only, 32-byte-truncated anchor lookup</location>
+    <section>6.1.1(d) / 6.1.3(a)(4) (anchor identified by name and key)</section>
+    <location>src/tls/core/handshake.c: tls_cert_chain_verify_one / tls_cert_anchor_root (L1179-1301, L924-988); src/tls/core/truststore.c: tls_truststore_lookup_key_id / tls_truststore_lookup_by_subject_index (L490-618); .github/workflows/truststore.yml - full trust-anchor Name binding</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (interop): anchor selected only by issuer CN truncated to 32 bytes, first current entry wins; full DN and AKI/SKI ignored. Roots sharing a CN (e.g. GlobalSign R3/R6) pick the wrong key and are falsely rejected (no forgery risk). Fix: match full-DN hash or AKI against SKI and try every candidate.</note>
+    <note>Implemented as of v3.0.0-rc3 with signed truststore schema v3. Each trust anchor stores SHA-256 over its complete DER-encoded subject Name in addition to its SKI, public-key algorithm, and public key. The streaming path walker independently hashes the topmost certificate's complete DER issuer Name. When AKI keyIdentifier is present, it selects the anchor by SKI, after which the full Name digests must also match before the anchor key is used. Without AKI, the Name digest selects all anchors with that exact subject Name and each candidate key is tried until the signature verifies. This removes the former truncated-CN and first-candidate behavior without increasing the fixed-width index or metadata record size. Schema v2 stores are rejected by the version gate and must be regenerated by the truststore workflow. Name hashing follows the project's separately documented exact-DER comparison policy; RFC 5280 section 7.1 normalized X.500 comparison remains a deliberate fail-closed deviation under the issuer/subject name-chaining entry.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2555,7 +2594,7 @@
     <section>4.4.2.4 (receiving a Certificate message)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_streamed (L2907-3062) - unanchored chain fails closed</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Missing truststore entry, missing issuer CN or unsupported root algorithm all abort. Comments in handshake.h L9-14 and handshake.c (L119-123, L5110-5130) still describe "warn and proceed" and are stale. DAST tls-unsupported-certverify exercises this path.</note>
+    <note>Missing or unverified truststore entries, a topmost issuer Name absent from the authenticated anchor set, unsupported root algorithms, and anchor signature failures all abort. AKI/SKI selection is additionally bound to the complete issuer/subject Name. DAST tls-unsupported-certverify and host certificate-chain regressions exercise fail-closed paths.</note>
 
     <reviews>
       <reviewed-by></reviewed-by>
@@ -3117,7 +3156,7 @@
     <grade>NEEDS-REVIEW</grade>
     <note>Protocol glue is correct (CertificateVerify and Finished mandatory) and the separate PKI
       pass found chain anchoring fail-closed, but the overall property rests on the PKI deviations
-      recorded under RFC 5280 (CN-only anchor lookup, no revocation, no path building) and has no
+      recorded under RFC 5280 (exact-DER rather than normalized X.500 Name comparison, no revocation, no path building) and has no
       end-to-end RFC 8448 handshake vector.</note>
 
     <reviews>

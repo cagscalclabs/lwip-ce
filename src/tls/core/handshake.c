@@ -527,6 +527,16 @@ struct tls_cert_walker
      * leaf. Used by tls_cert_walker_validate_one to know when to capture
      * the leaf public key into ctx->leaf_pubkey. */
     uint16_t cert_index;
+    /* Number of accepted, non-self-issued CA certificates below the current
+     * certificate. RFC 5280 excludes self-issued rollover certificates from
+     * pathLenConstraint accounting. */
+    uint16_t non_self_issued_ca_count;
+    /* Constraint-relevant names from all non-self-issued certificates below
+     * the current certificate. This is the minimum state needed to apply an
+     * issuer's nameConstraints while walking leaf-first. */
+    uint8_t *subordinate_names;
+    size_t subordinate_names_len;
+    size_t subordinate_names_cap;
     /* Owning handshake context, so per-cert callbacks can reach back for
      * leaf SPKI capture etc. Set by the caller via tls_cert_walker_new. */
     struct tls_handshake_context *ctx;
@@ -548,11 +558,6 @@ struct tls_cert_walker
     uint8_t *pending_sig;          /* signatureValue of prior cert (heap copy) */
     size_t pending_sig_len;
 
-    /* Issuer CN of the last (topmost) cert walked, for truststore root lookup.
-     * Overwritten on each cert; after CW_DONE it holds the topmost cert's
-     * issuer_cn bytes (the root CA subject we should find in the truststore). */
-    uint8_t topmost_issuer_cn[TLS_TRUSTSTORE_SUBJECT_LEN];
-    uint8_t topmost_issuer_cn_len;
     /* AuthorityKeyIdentifier of the last certificate walked. When present,
      * this selects the trust anchor by its stored SubjectKeyIdentifier. */
     uint8_t topmost_authority_key_id[TLS_TRUSTSTORE_SKI_LEN];
@@ -591,6 +596,12 @@ static void tls_cert_walker_free(struct tls_cert_walker *w)
     {
         mem_stats_tls_direct_release(w->pending_sig_len, w->pending_sig_len);
         mem_buffer_custom_free(w->pending_sig);
+    }
+    if (w->subordinate_names)
+    {
+        mem_stats_tls_direct_release(w->subordinate_names_cap,
+                                     w->subordinate_names_cap);
+        mem_buffer_custom_free(w->subordinate_names);
     }
     mem_stats_tls_direct_release(sizeof(*w), sizeof(*w));
     mem_buffer_custom_free(w);
@@ -912,10 +923,11 @@ static tls_key_op_result_t tls_cert_verify_root_entry(
 
 /* Anchor the topmost certificate (the walker's pending link) in the
  * truststore. Prefer the AuthorityKeyIdentifier: it names the issuer key and
- * maps directly to the truststore root's SKI, avoiding ambiguous CNs such as
- * the several GlobalSign roots whose CN is simply "GlobalSign". An AKI that is
- * present but cannot be represented or found fails closed; the subject
- * fallback is only for certificates without an AKI. */
+ * maps directly to the truststore root's SKI. In either path, require the
+ * selected anchor's complete subject Name digest to equal the issuer Name of
+ * the topmost certificate. An AKI that is present but cannot be represented,
+ * found, or name-bound fails closed; subject-digest lookup is only for
+ * certificates without an AKI. */
 static bool tls_cert_anchor_root(const struct tls_cert_walker *w, uint8_t *alert)
 {
     if (alert)
@@ -931,6 +943,12 @@ static bool tls_cert_anchor_root(const struct tls_cert_walker *w, uint8_t *alert
             ERROR_CODE(0x65);
             return false;
         }
+        if (memcmp(root_entry->subject, w->pending_issuer_name_digest,
+                   TLS_TRUSTSTORE_SUBJECT_LEN) != 0)
+        {
+            ERROR_CODE(0x65);
+            return false;
+        }
         if (tls_cert_verify_root_entry(w, root_entry, true) != TLS_KEY_OP_OK)
         {
             if (alert) *alert = TLS_ALERT_BAD_CERTIFICATE;
@@ -939,16 +957,17 @@ static bool tls_cert_anchor_root(const struct tls_cert_walker *w, uint8_t *alert
         }
         return true;
     }
-    if (w->topmost_issuer_cn_len > 0)
+    if (w->pending_link)
     {
-        /* Legacy AKI-absent fallback. CN is not unique, so try every current
-         * matching trust anchor and let the pending certificate signature
-         * identify the correct key. Never make truststore order authoritative. */
+        /* AKI-absent fallback. A subject Name is not necessarily unique, so
+         * try every current exact-Name anchor and let the pending certificate
+         * signature identify the correct key. */
         uint16_t match_index = 0;
         bool found_candidate = false;
         struct tls_truststore_entry *root_entry = NULL;
         while (tls_truststore_lookup_by_subject_index(
-                   w->topmost_issuer_cn, w->topmost_issuer_cn_len,
+                   w->pending_issuer_name_digest,
+                   TLS_TRUSTSTORE_SUBJECT_LEN,
                    match_index++, &root_entry))
         {
             found_candidate = true;
@@ -963,7 +982,7 @@ static bool tls_cert_anchor_root(const struct tls_cert_walker *w, uint8_t *alert
         ERROR_CODE(0x66);
         return false;
     }
-    /* No AKI and no parsed issuer CN leaves no bounded truststore lookup. */
+    /* No pending topmost link leaves nothing that can be anchored. */
     ERROR_CODE(0x67);
     return false;
 }
@@ -994,6 +1013,8 @@ static bool tls_cert_anchor_root(const struct tls_cert_walker *w, uint8_t *alert
 #define TLS_CERT_JOB_MAX 4u
 /* Each certificate costs a slow signature check, so bound the chain length. */
 #define TLS_CERT_CHAIN_MAX 8u
+/* Bound retained subject/SAN material independently of certificate sizes. */
+#define TLS_CERT_CONSTRAINT_NAMES_MAX 4096u
 #define TLS_HS_DEFERRED_MAX 3072u
 
 struct tls_cert_job
@@ -1132,6 +1153,11 @@ static bool tls_cert_job_enqueue(struct tls_cert_walker *w, const struct tls_key
     job->snap.cert_buf = NULL;
     job->snap.cert_buf_cap = 0;
     job->snap.cert_buf_len = 0;
+    /* The verification job does not use path-name state and must not retain
+     * the walker's borrowed ownership of it. */
+    job->snap.subordinate_names = NULL;
+    job->snap.subordinate_names_len = 0;
+    job->snap.subordinate_names_cap = 0;
     job->is_root = (issuer == NULL);
     if (issuer && !tls_cert_job_clone_key(job, issuer))
     {
@@ -1275,6 +1301,58 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
     return true;
 }
 
+/* RFC 5280 defines a certificate as self-issued when its issuer and subject
+ * Names are the same. Use the same exact-DER Name comparison as adjacent-link
+ * chaining; normalized X.500 comparison is tracked separately as a broader
+ * interoperability limitation. */
+static bool tls_cert_is_self_issued(const struct tls_x509_object *cert)
+{
+    return cert && cert->issuer_name && cert->subject_name &&
+           cert->issuer_name_len == cert->subject_name_len &&
+           memcmp(cert->issuer_name, cert->subject_name,
+                  cert->issuer_name_len) == 0;
+}
+
+static bool tls_cert_walker_append_constraint_names(
+    struct tls_cert_walker *w, const struct tls_x509_object *cert)
+{
+    size_t add = 0, written = 0, need;
+    uint8_t *names;
+
+    if (!tls_x509_collect_constraint_names(cert, NULL, 0, &add))
+        return false;
+    if (add == 0)
+        return true;
+    if (w->subordinate_names_len > SIZE_MAX - add)
+        return false;
+    need = w->subordinate_names_len + add;
+    if (need > TLS_CERT_CONSTRAINT_NAMES_MAX)
+        return false;
+    names = (uint8_t *)mem_buffer_custom_malloc(need);
+    if (!names)
+        return false;
+    if (w->subordinate_names_len)
+        memcpy(names, w->subordinate_names, w->subordinate_names_len);
+    if (!tls_x509_collect_constraint_names(cert,
+                                           names + w->subordinate_names_len,
+                                           add, &written) || written != add)
+    {
+        mem_buffer_custom_free(names);
+        return false;
+    }
+    if (w->subordinate_names)
+    {
+        mem_stats_tls_direct_release(w->subordinate_names_cap,
+                                     w->subordinate_names_cap);
+        mem_buffer_custom_free(w->subordinate_names);
+    }
+    mem_stats_tls_direct_add(need, need);
+    w->subordinate_names = names;
+    w->subordinate_names_len = need;
+    w->subordinate_names_cap = need;
+    return true;
+}
+
 /* Run per-cert handling on the just-completed cert_buf, walking the chain one
  * cert at a time (leaf first). Captures the leaf SPKI for the mandatory
  * CertificateVerify, then runs the adjacent-link chain check (verifies the
@@ -1323,14 +1401,26 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         return false;
     }
 
-    /* Enforce leaf TLS usage and every issuer's CA/key/path constraints.
-     * cert_index excludes the leaf, so an issuer at index N has N-1
-     * subordinate CA certificates beneath it. */
+    /* Enforce leaf TLS usage and every issuer's CA/key/path constraints. The
+     * accumulated count excludes the leaf and self-issued rollover CAs. */
     if (!tls_x509_validate_path_extensions(&cert, !is_leaf,
-                                            is_leaf ? 0 : w->cert_index - 1u,
-                                            w->ctx ? w->ctx->hostname : NULL))
+                                            is_leaf ? 0 :
+                                                w->non_self_issued_ca_count))
     {
         ERROR_CODE(0x12);
+        return false;
+    }
+
+    /* An issuer's constraints apply to every subject/SAN name below it in
+     * the path. The leaf-first walker has already compactly retained those
+     * names, so no certificate buffering or constraint-state reversal is
+     * required. Unsupported constraint forms were rejected above. */
+    if (!is_leaf &&
+        !tls_x509_name_constraints_allow(&cert,
+                                         w->subordinate_names,
+                                         w->subordinate_names_len))
+    {
+        ERROR_CODE(0x13);
         return false;
     }
 
@@ -1393,29 +1483,6 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         }
     }
 
-    /* Issuer CN — captured for truststore root lookup. Each cert processed
-     * overwrites this with its own issuer CN, so once the walk finishes it
-     * holds the topmost cert's issuer. A cert with no/empty issuer CN must
-     * clear it rather than leave an earlier (non-topmost) cert's value
-     * stale -- otherwise root anchoring below would silently validate
-     * against the wrong issuer name. */
-    if (cert.issuer_cn && cert.issuer_cn_len > 0)
-    {
-        uint8_t copy_len = (cert.issuer_cn_len < TLS_TRUSTSTORE_SUBJECT_LEN)
-                           ? (uint8_t)cert.issuer_cn_len
-                           : TLS_TRUSTSTORE_SUBJECT_LEN;
-        memcpy(w->topmost_issuer_cn, cert.issuer_cn, copy_len);
-        memset(w->topmost_issuer_cn + copy_len, 0,
-               TLS_TRUSTSTORE_SUBJECT_LEN - copy_len);
-        w->topmost_issuer_cn_len = copy_len;
-    }
-    else
-    {
-        DEBUG(); /* this cert's issuer has no CN -- clearing so a stale earlier value can't be used */
-        memset(w->topmost_issuer_cn, 0, TLS_TRUSTSTORE_SUBJECT_LEN);
-        w->topmost_issuer_cn_len = 0;
-    }
-
     w->topmost_authority_key_id_present = cert.authority_key_id != NULL;
     w->topmost_authority_key_id_len = 0;
     memset(w->topmost_authority_key_id, 0,
@@ -1433,6 +1500,21 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         ERROR_CODE(0x11);
         return false;
     }
+
+    /* Higher issuers constrain this certificate too, except that RFC 5280
+     * 4.2.1.10 exempts non-final self-issued rollover certificates. */
+    if ((is_leaf || !tls_cert_is_self_issued(&cert)) &&
+        !tls_cert_walker_append_constraint_names(w, &cert))
+    {
+        ERROR_CODE(0x14);
+        return false;
+    }
+
+    /* This certificate is subordinate to every issuer that follows it in the
+     * chain. Count ordinary CAs only; RFC 5280 6.1.4(l) does not decrement
+     * path length for self-issued certificates. */
+    if (!is_leaf && !tls_cert_is_self_issued(&cert))
+        w->non_self_issued_ca_count++;
 
     if (w->ctx && w->ctx->leaf_pubkey.type != TLS_KEY_TYPE_UNKNOWN)
         w->chain_validated = true;

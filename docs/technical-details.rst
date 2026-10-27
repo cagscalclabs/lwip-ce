@@ -363,11 +363,12 @@ Security Posture
    * - TLS trust store
      - A curated trust store derived from CA material staged on a common Linux
        box, shipped as a signed AppVar and verified with RSA-PSS-SHA256 against
-       an embedded public key at ``tls_truststore_init``. Schema v2 uses signed,
-       fixed-width SKI and subject indexes containing validated offsets into a
+       an embedded public key at ``tls_truststore_init``. Schema v3 uses signed,
+       fixed-width SKI and full DER subject-Name-digest indexes containing validated offsets into a
        variable-length root-metadata block. Normal anchoring binary-searches the
-       root SKI from the certificate's AKI; subject lookup is the fail-closed
-       fallback when AKI is absent (see Certificate chain below).
+       root SKI from the certificate's AKI and verifies the complete issuer Name;
+       subject-Name-digest lookup is the fail-closed fallback when AKI is absent
+       (see Certificate chain below).
    * - Certificate chain
      - The stack walks the server's certificate chain link by link. Each link
        is verified against the next certificate's public key. RSA PKCS#1 v1.5 /
@@ -376,7 +377,8 @@ Security Posture
        Unsupported signature types (wider RSA-PSS hashes, unknown key types) fail closed as of ``v3.0.0-rc1``.
 
        Once the adjacent-link walk finishes, the topmost certificate's issuer
-       is looked up in the trust store by subject name. If found and the stored
+       is looked up in the trust store by SKI and complete subject Name digest,
+       or by subject Name digest when AKI is absent. If found and the stored
        key is RSA (PSS or PKCS#1-SHA256) or ECDSA P-256, the root signature is
        verified for real -- a bad signature is an ``ERROR`` and aborts. If the
        root entry is absent or uses an unsupported algorithm the handshake fails-closed as of ``v3.0.0-rc1``.

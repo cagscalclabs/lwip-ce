@@ -4,6 +4,14 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 0 1 */3 *"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/truststore.yml"
+      - "src/tls/includes/truststore.h"
+      - "src/tls/core/truststore.c"
+      - "src/tls/core/handshake.c"
 
 permissions:
   contents: write
@@ -73,6 +81,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import calendar
+          import hashlib
           import os
           import re
           import struct
@@ -98,7 +107,8 @@ jobs:
           RSA_MOD_MIN  = 256   # 2048 bits
           RSA_MOD_MAX  = 512   # 4096 bits
           EC_POINT_LEN = 65
-          # Fixed-size prefix before key[]: len(4) + subject(32) + ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) = 77
+          # Fixed-size prefix before key[]: len(4) + subject Name digest(32) +
+          # ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) = 77
           ENTRY_FIXED_PREFIX = 4 + SUBJECT_LEN + SKI_LEN + 4 + 4 + 1
           INDEX_ENTRY_LEN = 32 + 2  # fixed key plus uint16 metadata offset
 
@@ -123,6 +133,48 @@ jobs:
               data = data[:length]
               return data + b"\x00" * (length - len(data))
 
+          def der_tlv(blob, offset):
+              """Return (tag, value_start, end) for one definite-length DER TLV."""
+              if offset + 2 > len(blob):
+                  raise RuntimeError("truncated DER")
+              tag = blob[offset]
+              first_len = blob[offset + 1]
+              pos = offset + 2
+              if first_len & 0x80:
+                  count = first_len & 0x7f
+                  if count == 0 or count > 4 or pos + count > len(blob):
+                      raise RuntimeError("invalid DER length")
+                  length = int.from_bytes(blob[pos:pos + count], "big")
+                  pos += count
+              else:
+                  length = first_len
+              end = pos + length
+              if end > len(blob):
+                  raise RuntimeError("truncated DER value")
+              return tag, pos, end
+
+          def extract_subject_name_digest(path):
+              """SHA-256 over the exact DER Subject Name TLV from Certificate."""
+              cert = run_cmd(["openssl", "x509", "-in", path, "-outform", "DER"])
+              tag, cert_body, cert_end = der_tlv(cert, 0)
+              if tag != 0x30 or cert_end != len(cert):
+                  raise RuntimeError("invalid Certificate DER")
+              tag, tbs_body, tbs_end = der_tlv(cert, cert_body)
+              if tag != 0x30:
+                  raise RuntimeError("missing TBSCertificate")
+              pos = tbs_body
+              tag, _value, end = der_tlv(cert, pos)
+              if tag == 0xa0:  # explicit version
+                  pos = end
+              # serialNumber, signature, issuer, validity precede subject.
+              for _ in range(4):
+                  _tag, _value, pos = der_tlv(cert, pos)
+              subject_start = pos
+              tag, _value, subject_end = der_tlv(cert, subject_start)
+              if tag != 0x30 or subject_end > tbs_end:
+                  raise RuntimeError("missing Subject Name")
+              return hashlib.sha256(cert[subject_start:subject_end]).digest()
+
           def parse_subject_and_dates(path):
               meta = run_cmd([
                   "openssl", "x509", "-in", path, "-noout",
@@ -146,7 +198,7 @@ jobs:
 
           def extract_ski(path):
               """Extract SubjectKeyIdentifier extension bytes (raw hex).
-              Returns a zero-padded SKI_LEN buffer. Version 2 requires an SKI
+              Returns a zero-padded SKI_LEN buffer. Version 3 requires an SKI
               because it is the primary sorted lookup key."""
               try:
                   out = run_cmd([
@@ -220,7 +272,8 @@ jobs:
               for path in cert_paths:
                   try:
                       subject_cn, not_before, not_after = parse_subject_and_dates(path)
-                      ski     = extract_ski(path)
+                      subject_digest = extract_subject_name_digest(path)
+                      ski = extract_ski(path)
 
                       pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
                       pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
@@ -256,7 +309,8 @@ jobs:
                       exclusions.append((path, reason))
                       continue
                   entries[bytes(ski)] = (
-                      pad_field(subject_cn.encode("ascii", "replace"), SUBJECT_LEN),
+                      subject_digest,
+                      subject_cn,
                       ski,
                       not_before,
                       not_after,
@@ -281,18 +335,18 @@ jobs:
 
           created_ts = int(time.time())
           entry_count = len(entries)
-          version = 2
+          version = 3
           header_fields = struct.pack("<H", version) + struct.pack("<IH", created_ts, entry_count)
 
           entry_bytes = bytearray()
           metadata_offsets = []
-          for subject, ski, not_before, not_after, sig_alg, key_bytes in entries:
+          for subject_digest, _subject_cn, ski, not_before, not_after, sig_alg, key_bytes in entries:
               if len(entry_bytes) > 0xFFFF:
                   raise RuntimeError("truststore metadata offset exceeds uint16")
               metadata_offsets.append(len(entry_bytes))
               entry_len = ENTRY_FIXED_PREFIX + len(key_bytes)
               entry_bytes.extend(struct.pack("<I", entry_len))     # len (uint32_t)
-              entry_bytes.extend(subject)                          # subject[32]
+              entry_bytes.extend(subject_digest)                   # SHA-256(DER Subject Name)
               entry_bytes.extend(ski)                              # ski[32]
               entry_bytes.extend(struct.pack("<I", not_before))    # expiry_start (uint32_t)
               entry_bytes.extend(struct.pack("<I", not_after))     # expiry_end (uint32_t)
@@ -308,12 +362,12 @@ jobs:
           # has one canonical encoding.
           ski_index = bytearray()
           for entry, offset in zip(entries, metadata_offsets):
-              ski_index.extend(entry[1])
+              ski_index.extend(entry[2])
               ski_index.extend(struct.pack("<H", offset))
 
           subject_index = bytearray()
           subject_rows = sorted(
-              ((entry[0], entry[1], offset)
+              ((entry[0], entry[2], offset)
                for entry, offset in zip(entries, metadata_offsets)),
               key=lambda row: (row[0], row[1]),
           )
@@ -363,10 +417,10 @@ jobs:
           print(f"bin={bin_path}")
 
           with open(notes_path, "w", encoding="utf-8") as notes:
-              notes.write("Truststore schema: **v2** (indexed SKI/subject metadata lookup).\n\n")
+              notes.write("Truststore schema: **v3** (indexed SKI/full-Name-digest metadata lookup).\n\n")
               notes.write("This release includes the following CA roots:\n\n")
-              for subject, _ski, not_before, not_after, sig_alg, _key in entries:
-                  subj = subject.split(b"\x00", 1)[0].decode("ascii", "ignore")
+              for _digest, subject_cn, _ski, not_before, not_after, sig_alg, _key in entries:
+                  subj = subject_cn
                   alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
                   nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
                   na = datetime.utcfromtimestamp(not_after).strftime("%Y-%m-%d")
@@ -380,7 +434,7 @@ jobs:
 
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as summary:
-                  summary.write(f"## Truststore Build Summary (v2)\n\n")
+                  summary.write(f"## Truststore Build Summary (v3)\n\n")
                   summary.write(f"{len(entries)} accepted, {len(exclusions)} excluded\n\n")
 
                   summary.write("### Allowed key types\n\n")
@@ -393,8 +447,8 @@ jobs:
                   summary.write("### Accepted roots\n\n")
                   summary.write("Subject | SKI (hex) | Not Before | Not After | Key type\n")
                   summary.write("--- | --- | --- | --- | ---\n")
-                  for subject, ski, not_before, not_after, sig_alg, _key in entries:
-                      subj = subject.split(b"\x00", 1)[0].decode("ascii", "ignore")
+                  for _digest, subject_cn, ski, not_before, not_after, sig_alg, _key in entries:
+                      subj = subject_cn
                       ski_hex = ski.hex()[:16] + "..."
                       alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
                       nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
@@ -415,7 +469,7 @@ jobs:
         run: |
           convbin -i truststore_out/lwIPCERT.bin -o truststore_out/lwIPCERT.8xv -j bin -k 8xv -n lwIPCERT -r
 
-      - name: Validate truststore v2 layout
+      - name: Validate truststore v3 layout
         run: |
           python3 - <<'PY'
           import struct
@@ -430,9 +484,9 @@ jobs:
           ENTRY_PREFIX_LEN = 4 + 32 + 32 + 4 + 4 + 1
 
           if len(blob) < HEADER_LEN:
-              raise RuntimeError("truststore shorter than v2 header")
+              raise RuntimeError("truststore shorter than v3 header")
           version, _created, count = struct.unpack_from("<HIH", blob, SIGNATURE_LEN)
-          if version != 2 or count == 0:
+          if version != 3 or count == 0:
               raise RuntimeError("invalid truststore version or empty index")
 
           index_len = count * INDEX_ENTRY_LEN
@@ -480,7 +534,7 @@ jobs:
           if subject_order != sorted(subject_order):
               raise RuntimeError("subject index is not sorted by subject and SKI")
 
-          print(f"validated truststore v2: {count} entries, {len(blob)} bytes")
+          print(f"validated truststore v3: {count} entries, {len(blob)} bytes")
           PY
 
       - name: Verify truststore signature

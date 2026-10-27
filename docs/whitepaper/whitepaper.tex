@@ -1132,12 +1132,12 @@ for (uint8_t i = 0; i < count; i++) {
 		\item Scans common CA-certificate locations on the runner (for example \texttt{/etc/ssl/certs}) and collects parseable trust anchors.
 		\item Extracts the following from each certificate, skipping any whose key the device-side verifier cannot handle (RSA moduli above the supported size, or non-P-256 EC keys):
 		\begin{itemize}
-			\item The subject common name (CN) and the \texttt{SubjectKeyIdentifier} extension. The normal anchor lookup matches the topmost certificate's Authority Key Identifier to the root SKI; subject lookup is retained for certificates without an AKI.
+			\item The SHA-256 digest of the complete DER-encoded subject Name and the \texttt{SubjectKeyIdentifier} extension. The normal anchor lookup matches the topmost certificate's Authority Key Identifier to the root SKI and then binds the full issuer Name; subject-Name-digest lookup is retained for certificates without an AKI.
 			\item The expiry timestamps (not-before, not-after)
 			\item The signature algorithm class (RSA-PSS/SHA-256, RSA-PKCS\#1~v1.5/SHA-256, or ECDSA-P-256/SHA-256), recorded as a compact internal code rather than an ASN.1 OID
 			\item The raw public key material used by the root-anchoring RSA verification described above
 		\end{itemize}
-		\item Serializes schema version 2 with two sorted, fixed-width lookup indexes followed by a shared metadata block. Index offsets are unsigned 16-bit values relative to the metadata block. Per-entry metadata records remain variable-length because the trailing key field depends on key type:
+		\item Serializes schema version 3 with two sorted, fixed-width lookup indexes followed by a shared metadata block. Index offsets are unsigned 16-bit values relative to the metadata block. Per-entry metadata records remain variable-length because the trailing key field depends on key type:
 		\begin{figure}[H]
 			\centering
 			\scriptsize
@@ -1157,12 +1157,12 @@ for (uint8_t i = 0; i < count; i++) {
 				Metadata Offset & 2 bytes & Little-endian offset relative to the metadata block \\
 				\rowcolor{gray!22}
 				\multicolumn{3}{@{}l@{}}{\textbf{Subject lookup index (repeated \texttt{Entry Count} times, sorted by subject then SKI)}} \\
-				Subject & 32 bytes & Null-padded subject CN lookup key \\
+				Subject Name digest & 32 bytes & SHA-256 over the complete DER-encoded subject Name \\
 				Metadata Offset & 2 bytes & Little-endian offset relative to the metadata block \\
 				\rowcolor{gray!22}
 				\multicolumn{3}{@{}l@{}}{\textbf{Metadata record (repeated \texttt{Entry Count} times, variable length)}} \\
 				Entry Length & 4 bytes & Total byte size of this record, including the key field \\
-				Subject & 32 bytes & Subject CN, null-terminated and padded \\
+				Subject Name digest & 32 bytes & SHA-256 over the complete DER-encoded subject Name \\
 				Subject Key Identifier & 32 bytes & SKI extension bytes, padded \\
 				Not-Before & 4 bytes & Validity start timestamp \\
 				Not-After & 4 bytes & Validity end timestamp \\
@@ -1173,8 +1173,8 @@ for (uint8_t i = 0; i < count; i++) {
 		\end{figure}
 		The device validates both index orderings, every index-to-metadata key
 		match, every offset and record length, and exact coverage of the metadata
-		block before marking the signed store usable. SKI and subject lookups then
-		use binary search; duplicate subjects remain adjacent and are tried in SKI
+		block before marking the signed store usable. SKI and subject-Name-digest lookups then
+		use binary search; duplicate subject Names remain adjacent and are tried in SKI
 		order until a root verifies the pending certificate signature.
 		\item Signs the truststore bytes from \texttt{Store Version} through \texttt{EOF} using RSA-2048 PSS-SHA-256 and writes the signature into \texttt{Signature Field}.
 		\item Stores the signing key in GitHub Secrets, materializes it only in runner temp storage for signing/verification, then deletes it (including \texttt{shred} cleanup).
