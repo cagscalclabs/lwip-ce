@@ -242,6 +242,93 @@ jobs:
     uses: ./.github/workflows/tests.yml
     secrets: inherit
 
+  open_rfc_review_pr:
+    name: Open promotion PR for RFC review
+    needs: [decide, build, tests]
+    if: >-
+      always() && needs.decide.outputs.run_gate == 'true' &&
+      needs.build.result == 'success' && needs.tests.result == 'failure' &&
+      needs.tests.outputs.rfc_only_failure == 'true'
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download RFC compliance details
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rfc-compliance-report
+          path: ${{ runner.temp }}/rfc-compliance-report
+
+      - name: Open maintainer-review promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
+          RFC_REPORT_PATH: ${{ runner.temp }}/rfc-compliance-report/rfc-compliance.md
+        run: |
+          set -euo pipefail
+          short_sha=${GATE_SHA:0:12}
+          promotion_branch="automation/promote-$short_sha"
+
+          git fetch --no-tags origin master staging
+          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
+            echo "The tested commit is already contained in master."
+            exit 0
+          fi
+
+          existing_sha=""
+          if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
+            --jq '.object.sha' 2>/dev/null); then
+            existing_sha=$ref_sha
+          fi
+          if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
+            echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
+            exit 1
+          fi
+          if [ -z "$existing_sha" ]; then
+            gh api --method POST "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+          fi
+
+          body="$RUNNER_TEMP/rfc-review-pr.md"
+          {
+            echo "All automated gates except **RFC compliance** passed for this exact staging commit."
+            echo
+            echo "- Tested commit: \`$GATE_SHA\`"
+            echo "- Source branch: \`staging\`"
+            echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "> This PR will not be merged automatically. A maintainer may merge it after reviewing and accepting the RFC findings."
+            if [ -s "$RFC_REPORT_PATH" ]; then
+              echo
+              echo "## RFC compliance report"
+              echo
+              cat "$RFC_REPORT_PATH"
+            fi
+            echo
+            echo "The temporary head branch is pinned to the tested SHA, so later staging pushes are excluded."
+          } > "$body"
+
+          pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
+            --base master --head "$promotion_branch" --json number \
+            --jq '.[0].number // empty')
+          title="RFC review required: promote staging $short_sha"
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body"
+            echo "Updated RFC-review promotion PR #$pr_number."
+          else
+            gh pr create --repo "${{ github.repository }}" \
+              --base master --head "$promotion_branch" \
+              --title "$title" --body-file "$body"
+          fi
+
   promote:
     name: Promote tested staging SHA through PR
     needs: [decide, build, tests]

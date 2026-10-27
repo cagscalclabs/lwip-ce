@@ -2,6 +2,10 @@ name: Tests
 
 on:
   workflow_call:
+    outputs:
+      rfc_only_failure:
+        description: True when RFC compliance is the only failed gate
+        value: ${{ jobs.gate_results.outputs.rfc_only_failure }}
 
 permissions:
   contents: read
@@ -780,6 +784,41 @@ jobs:
           fi
           gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
           echo "Deleted encrypted ROM artifact $artifact_id."
+
+  gate_results:
+    name: Classify gate results
+    needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      rfc_only_failure: ${{ steps.classify.outputs.rfc_only_failure }}
+    steps:
+      - name: Detect an RFC-only failure
+        id: classify
+        env:
+          ROM_RESULT: ${{ needs.prepare_rom.result }}
+          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
+          UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
+          RFC_RESULT: ${{ needs.rfc_compliance.result }}
+          ACVP_RESULT: ${{ needs.acvp.result }}
+          SAST_RESULT: ${{ needs.semgrep_scan.result }}
+          CODEQL_RESULT: ${{ needs.analyze.result }}
+          NETWORK_RESULT: ${{ needs.nettest.result }}
+          DAST_RESULT: ${{ needs.dast.result }}
+          HOST_RESULT: ${{ needs.host_tests.result }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+        run: |
+          rfc_only_failure=false
+          if [ "$RFC_RESULT" = failure ] && \
+             [ "$ROM_RESULT" = success ] && [ "$ROM_CLEANUP_RESULT" = success ] && \
+             [ "$UNIT_RESULT" = success ] && [ "$ACVP_RESULT" = success ] && \
+             [ "$SAST_RESULT" = success ] && [ "$CODEQL_RESULT" = success ] && \
+             [ "$NETWORK_RESULT" = success ] && [ "$DAST_RESULT" = success ] && \
+             [ "$HOST_RESULT" = success ] && [ "$FUZZ_RESULT" = success ]; then
+            rfc_only_failure=true
+          fi
+          echo "rfc_only_failure=$rfc_only_failure" >> "$GITHUB_OUTPUT"
+          echo "RFC-only failure: $rfc_only_failure" >> "$GITHUB_STEP_SUMMARY"
 
   notify_failure:
     name: Notify commit author on failure
