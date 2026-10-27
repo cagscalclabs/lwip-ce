@@ -26,7 +26,6 @@ static struct lwip_socket *psk_socket(uint32_t *handshake_ms)
     if (lwip_socket_status(sock) != LWIP_STATUS_CONNECTED)
     {
         note("  status %u err %u", lwip_socket_status(sock), lwip_socket_last_error(sock));
-        note_traceback(4);
         lwip_socket_destroy(sock);
         return NULL;
     }
