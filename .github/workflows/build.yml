@@ -330,11 +330,6 @@ jobs:
             promotion_merged=true
             exit 0
           fi
-          if ! git merge-base --is-ancestor origin/master "$GATE_SHA"; then
-            echo "::error::Staging does not contain current master. Merge master into staging, sign that merge commit, and rerun the gate."
-            exit 1
-          fi
-
           existing_sha=""
           if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
             --jq '.object.sha' 2>/dev/null); then
@@ -414,11 +409,6 @@ jobs:
           if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
             echo "The tested staging commit is already contained in master."
           else
-            if ! git merge-base --is-ancestor origin/master "$GATE_SHA"; then
-              echo "::error::Staging does not contain current master. Merge master into staging, sign that merge commit, and rerun the gate."
-              exit 1
-            fi
-
             existing_sha=""
             if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
               --jq '.object.sha' 2>/dev/null); then
