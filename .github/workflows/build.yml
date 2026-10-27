@@ -2,8 +2,9 @@ name: Build
 
 # staging is the integration branch. Ordinary pushes only inspect commit
 # subjects for an urgent prefix. A nightly scheduler dispatches this same
-# workflow on staging when staging received an unpromoted commit in the last
-# 24 hours. Successful full runs promote the exact tested SHA through a PR.
+# workflow on staging when staging received an unpromoted code commit in the
+# last 24 hours. Non-code-only changes are promoted immediately without the
+# build/test gate. Successful runs promote the exact staging SHA through a PR.
 
 on:
   schedule:
@@ -12,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: Run the full gate (select the staging branch when dispatching)
+        description: Process staging now; run the full gate when code changed
         required: false
         type: boolean
         default: true
@@ -50,6 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run_gate: ${{ steps.decision.outputs.run_gate }}
+      code_changed: ${{ steps.decision.outputs.code_changed }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,6 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "run_gate=false" >> "$GITHUB_OUTPUT"
+          echo "code_changed=false" >> "$GITHUB_OUTPUT"
 
           if [ "${{ github.event_name }}" = schedule ]; then
             git fetch --no-tags origin master staging
@@ -77,6 +80,22 @@ jobs:
             exit 0
           fi
 
+          git fetch --no-tags origin master
+          code_changed=false
+          # Keep this bypass allowlist narrow: unknown paths, build metadata,
+          # tests, and CI logic must still exercise the full gate.
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              *.md|COPYING|docs/*|statistics/*)
+                ;;
+              *)
+                code_changed=true
+                echo "Gate-relevant change: $path"
+                ;;
+            esac
+          done < <(git diff --name-only -z "origin/master...$GITHUB_SHA")
+          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
+
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
             if [ "${{ github.ref_name }}" != staging ]; then
               echo "::error::Manual staging gates must be dispatched with the staging branch selected."
@@ -85,6 +104,12 @@ jobs:
             if [ "$FORCE_GATE" = true ]; then
               echo "run_gate=true" >> "$GITHUB_OUTPUT"
             fi
+            exit 0
+          fi
+
+          if [ "$code_changed" = false ]; then
+            echo "Only documentation/statistics changed; promoting without build and test checks."
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -103,7 +128,9 @@ jobs:
   build:
     name: Build lwIP
     needs: decide
-    if: needs.decide.outputs.run_gate == 'true'
+    if: >-
+      needs.decide.outputs.run_gate == 'true' &&
+      needs.decide.outputs.code_changed == 'true'
     permissions:
       actions: read
       contents: read
@@ -238,7 +265,11 @@ jobs:
 
   tests:
     name: Tests
-    needs: build
+    needs: [decide, build]
+    if: >-
+      needs.decide.outputs.run_gate == 'true' &&
+      needs.decide.outputs.code_changed == 'true' &&
+      needs.build.result == 'success'
     uses: ./.github/workflows/tests.yml
     secrets: inherit
 
@@ -247,6 +278,7 @@ jobs:
     needs: [decide, build, tests]
     if: >-
       always() && needs.decide.outputs.run_gate == 'true' &&
+      needs.decide.outputs.code_changed == 'true' &&
       needs.build.result == 'success' && needs.tests.result == 'failure' &&
       needs.tests.outputs.rfc_only_failure == 'true'
     permissions:
@@ -330,11 +362,13 @@ jobs:
           fi
 
   promote:
-    name: Promote tested staging SHA through PR
+    name: Promote staging SHA through PR
     needs: [decide, build, tests]
     if: >-
       always() && needs.decide.outputs.run_gate == 'true' &&
-      needs.build.result == 'success' && needs.tests.result == 'success'
+      ((needs.decide.outputs.code_changed == 'true' &&
+        needs.build.result == 'success' && needs.tests.result == 'success') ||
+       needs.decide.outputs.code_changed == 'false')
     permissions:
       actions: write
       contents: write
@@ -349,6 +383,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ github.sha }}
+          CODE_CHANGED: ${{ needs.decide.outputs.code_changed }}
         run: |
           set -euo pipefail
           short_sha=${GATE_SHA:0:12}
@@ -378,7 +413,11 @@ jobs:
             if [ -z "$pr_number" ]; then
               body="$RUNNER_TEMP/promotion-pr.md"
               {
-                echo "Automated promotion of the exact staging commit that passed the full gate."
+                if [ "$CODE_CHANGED" = true ]; then
+                  echo "Automated promotion of the exact staging commit that passed the full gate."
+                else
+                  echo "Automated promotion of an exact staging commit containing only documentation/statistics changes. Build and test checks were skipped."
+                fi
                 echo
                 echo "- Tested commit: \`$GATE_SHA\`"
                 echo "- Source branch: \`staging\`"
@@ -404,7 +443,7 @@ jobs:
           fi
 
           # GITHUB_TOKEN events do not start another push workflow, so dispatch
-          # both release channels explicitly after the tested SHA is promoted.
+          # both release channels explicitly after gated code is promoted.
           dispatch_deploy() {
             branch=$1
             for attempt in 1 2 3; do
@@ -416,14 +455,19 @@ jobs:
             done
             return 1
           }
-          dispatch_deploy master
-          dispatch_deploy staging
+          if [ "$CODE_CHANGED" = true ]; then
+            dispatch_deploy master
+            dispatch_deploy staging
+          else
+            echo "No code changed; release rebuilds are unnecessary."
+          fi
 
   notify_build_failure:
     name: Notify commit author of build failure
     needs: [decide, build]
     if: >-
       always() && needs.decide.outputs.run_gate == 'true' &&
+      needs.decide.outputs.code_changed == 'true' &&
       needs.build.result != 'success'
     permissions:
       contents: read
