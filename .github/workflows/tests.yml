@@ -6,39 +6,6 @@ on:
       rfc_only_failure:
         description: True when RFC compliance is the only failed gate
         value: ${{ jobs.gate_results.outputs.rfc_only_failure }}
-      rom_result:
-        description: CEmu ROM preparation result
-        value: ${{ jobs.gate_results.outputs.rom_result }}
-      rom_cleanup_result:
-        description: CEmu ROM cleanup result
-        value: ${{ jobs.gate_results.outputs.rom_cleanup_result }}
-      unit_result:
-        description: Unit test result
-        value: ${{ jobs.gate_results.outputs.unit_result }}
-      rfc_result:
-        description: RFC compliance result
-        value: ${{ jobs.gate_results.outputs.rfc_result }}
-      acvp_result:
-        description: ACVP result
-        value: ${{ jobs.gate_results.outputs.acvp_result }}
-      sast_result:
-        description: Semgrep SAST result
-        value: ${{ jobs.gate_results.outputs.sast_result }}
-      codeql_result:
-        description: CodeQL result
-        value: ${{ jobs.gate_results.outputs.codeql_result }}
-      network_result:
-        description: Network test result
-        value: ${{ jobs.gate_results.outputs.network_result }}
-      dast_result:
-        description: DAST result
-        value: ${{ jobs.gate_results.outputs.dast_result }}
-      host_result:
-        description: Host test result
-        value: ${{ jobs.gate_results.outputs.host_result }}
-      fuzz_result:
-        description: Fuzzing result
-        value: ${{ jobs.gate_results.outputs.fuzz_result }}
 
 permissions:
   contents: read
@@ -825,17 +792,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rfc_only_failure: ${{ steps.classify.outputs.rfc_only_failure }}
-      rom_result: ${{ steps.classify.outputs.rom_result }}
-      rom_cleanup_result: ${{ steps.classify.outputs.rom_cleanup_result }}
-      unit_result: ${{ steps.classify.outputs.unit_result }}
-      rfc_result: ${{ steps.classify.outputs.rfc_result }}
-      acvp_result: ${{ steps.classify.outputs.acvp_result }}
-      sast_result: ${{ steps.classify.outputs.sast_result }}
-      codeql_result: ${{ steps.classify.outputs.codeql_result }}
-      network_result: ${{ steps.classify.outputs.network_result }}
-      dast_result: ${{ steps.classify.outputs.dast_result }}
-      host_result: ${{ steps.classify.outputs.host_result }}
-      fuzz_result: ${{ steps.classify.outputs.fuzz_result }}
     steps:
       - name: Detect an RFC-only failure
         id: classify
@@ -862,17 +818,6 @@ jobs:
             rfc_only_failure=true
           fi
           echo "rfc_only_failure=$rfc_only_failure" >> "$GITHUB_OUTPUT"
-          echo "rom_result=$ROM_RESULT" >> "$GITHUB_OUTPUT"
-          echo "rom_cleanup_result=$ROM_CLEANUP_RESULT" >> "$GITHUB_OUTPUT"
-          echo "unit_result=$UNIT_RESULT" >> "$GITHUB_OUTPUT"
-          echo "rfc_result=$RFC_RESULT" >> "$GITHUB_OUTPUT"
-          echo "acvp_result=$ACVP_RESULT" >> "$GITHUB_OUTPUT"
-          echo "sast_result=$SAST_RESULT" >> "$GITHUB_OUTPUT"
-          echo "codeql_result=$CODEQL_RESULT" >> "$GITHUB_OUTPUT"
-          echo "network_result=$NETWORK_RESULT" >> "$GITHUB_OUTPUT"
-          echo "dast_result=$DAST_RESULT" >> "$GITHUB_OUTPUT"
-          echo "host_result=$HOST_RESULT" >> "$GITHUB_OUTPUT"
-          echo "fuzz_result=$FUZZ_RESULT" >> "$GITHUB_OUTPUT"
           echo "RFC-only failure: $rfc_only_failure" >> "$GITHUB_STEP_SUMMARY"
 
   notify_failure:
