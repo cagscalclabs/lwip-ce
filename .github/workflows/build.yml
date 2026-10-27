@@ -25,7 +25,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
   issues: write
   security-events: write
 

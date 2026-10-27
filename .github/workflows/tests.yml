@@ -16,7 +16,29 @@ env:
   LWIP_TESTS_COMMON: ${{ github.workspace }}/tests/common
 
 jobs:
+  prepare_rom:
+    name: Prepare encrypted CEmu ROM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download encrypted ROM once
+        env:
+          ROM_NAME: ${{ vars.AUTOTESTER_ROM }}
+        run: |
+          curl --http1.1 -fsSL \
+            --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 180 \
+            --connect-timeout 20 -o "$RUNNER_TEMP/CE.rom.enc" \
+            "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
+
+      - name: Share encrypted ROM with test jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ runner.temp }}/CE.rom.enc
+          if-no-files-found: error
+          retention-days: 1
+
   dylib_unit_tests:
+    needs: prepare_rom
     runs-on: ubuntu-latest
 
     steps:
@@ -72,14 +94,14 @@ jobs:
           test -f "${{env.CEDEV}}/include/lwip.h"
           test -d "${{env.CEDEV}}/include/lwip"
 
-      - name: Download CEmu Rom
-        run: |
-          curl -fSL \
-            --retry 3 \
-            --retry-delay 2 \
-            -o "${{github.workspace}}/CE.rom.enc" \
-            https://cagscalclabs.net/restricted/${{ vars.AUTOTESTER_ROM }}.enc
+      - name: Download encrypted CEmu ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ github.workspace }}
 
+      - name: Decrypt CEmu ROM
+        run: |
           gpg --batch --yes \
             --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
             --output "${{ env.AUTOTESTER_ROM }}" \
@@ -360,6 +382,7 @@ jobs:
         run: python3 .github/scripts/rfc_review.py
 
   acvp:
+    needs: prepare_rom
     name: ACVP JSON over CEmu RPC
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -380,7 +403,6 @@ jobs:
       - id: env
         uses: ./.github/actions/emulator-env
         with:
-          rom-name: ${{ vars.AUTOTESTER_ROM }}
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
       - name: Build ACVP calculator service
@@ -580,6 +602,7 @@ jobs:
           category: "/language:c-cpp"
 
   nettest:
+    needs: prepare_rom
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -593,7 +616,6 @@ jobs:
       - id: env
         uses: ./.github/actions/emulator-env
         with:
-          rom-name: ${{ vars.AUTOTESTER_ROM }}
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
       - name: Install scapy
@@ -629,6 +651,7 @@ jobs:
           if-no-files-found: ignore
 
   dast:
+    needs: prepare_rom
     name: DAST (live, emulated)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -645,7 +668,6 @@ jobs:
       - id: env
         uses: ./.github/actions/emulator-env
         with:
-          rom-name: ${{ vars.AUTOTESTER_ROM }}
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
       - name: Install scapy
@@ -723,14 +745,38 @@ jobs:
           path: tests/fuzz/out/artifacts/
           if-no-files-found: ignore
 
+  cleanup_rom:
+    name: Delete encrypted CEmu ROM artifact
+    needs: [prepare_rom, dylib_unit_tests, acvp, nettest, dast]
+    if: always()
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete temporary ROM artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | select(.name == "cemu-rom-encrypted") | .id' | head -1)
+          if [ -z "$artifact_id" ]; then
+            echo "No encrypted ROM artifact was created."
+            exit 0
+          fi
+          gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+          echo "Deleted encrypted ROM artifact $artifact_id."
+
   notify_failure:
     name: Notify commit author on failure
     permissions:
       contents: read
       issues: write
-    needs: [dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz]
+    needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
     if: >-
       always() && (
+      needs.prepare_rom.result != 'success' ||
+      needs.cleanup_rom.result != 'success' ||
       needs.dylib_unit_tests.result != 'success' ||
       needs.rfc_compliance.result != 'success' ||
       needs.acvp.result != 'success' || needs.semgrep_scan.result != 'success' ||
@@ -743,6 +789,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ github.sha }}
+          ROM_RESULT: ${{ needs.prepare_rom.result }}
+          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
           UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
           RFC_RESULT: ${{ needs.rfc_compliance.result }}
           ACVP_RESULT: ${{ needs.acvp.result }}
@@ -772,6 +820,8 @@ jobs:
             echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
             echo
             echo "### Failed gates"
+            [ "$ROM_RESULT" = success ] || echo "- **CEmu ROM preparation** — $ROM_RESULT"
+            [ "$ROM_CLEANUP_RESULT" = success ] || echo "- **CEmu ROM cleanup** — $ROM_CLEANUP_RESULT"
             [ "$UNIT_RESULT" = success ] || echo "- **Unit tests** — $UNIT_RESULT"
             [ "$RFC_RESULT" = success ] || echo "- **RFC compliance** — $RFC_RESULT"
             [ "$ACVP_RESULT" = success ] || echo "- **ACVP** — $ACVP_RESULT"
@@ -785,6 +835,8 @@ jobs:
             echo "### All gate results"
             echo '| Gate | Result |'
             echo '|---|---|'
+            echo "| CEmu ROM preparation | $ROM_RESULT |"
+            echo "| CEmu ROM cleanup | $ROM_CLEANUP_RESULT |"
             echo "| Unit tests | $UNIT_RESULT |"
             echo "| RFC compliance | $RFC_RESULT |"
             echo "| ACVP | $ACVP_RESULT |"
