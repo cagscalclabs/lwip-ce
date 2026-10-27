@@ -122,6 +122,30 @@ static void test_psk_bulk(const char *server, const char *name)
     lwip_socket_destroy(sock);
 }
 
+static void test_tls12_rejected(void)
+{
+    const char *name = "TLS 1.2-only server rejected";
+    struct lwip_socket *sock;
+
+    if (!host_call("tls12-server", NULL, 0, 15000))
+    {
+        check(name, false);
+        return;
+    }
+    sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 30000);
+    if (!sock || lwip_socket_connect(sock, HOST, PORT_PSK) != LWIP_OK)
+    {
+        check(name, false);
+        if (sock) lwip_socket_destroy(sock);
+        return;
+    }
+    pump(not_connecting, sock, 40000);
+    note("  TLS 1.2 peer: status %u err %u", lwip_socket_status(sock),
+         lwip_socket_last_error(sock));
+    check(name, lwip_socket_status(sock) != LWIP_STATUS_CONNECTED);
+    lwip_socket_destroy(sock);
+}
+
 /* ---- raw altcp TLS API ------------------------------------------------- */
 
 struct atls { bool connected, error, closed; size_t rx; char data[64]; };
@@ -316,16 +340,46 @@ static void https(const char *name, const char *host, const char *path, bool wan
     lwip_socket_destroy(sock);
 }
 
+static bool select_endpoint(const char *pool, char *host, size_t host_len,
+                            char *path, size_t path_len)
+{
+    char cmd[48];
+    snprintf(cmd, sizeof(cmd), "endpoint-pick %s", pool);
+    if (!host_call(cmd, host, host_len, 20000)) return false;
+    snprintf(cmd, sizeof(cmd), "endpoint-path %s", pool);
+    return host_call(cmd, path, path_len, 5000);
+}
+
+static void pooled_https(const char *pool, const char *suffix, bool want_ok, bool body)
+{
+    char host[96], path[128], name[160];
+    if (!select_endpoint(pool, host, sizeof(host), path, sizeof(path)))
+    {
+        snprintf(name, sizeof(name), "select %s endpoint", pool);
+        check(name, false);
+        return;
+    }
+    snprintf(name, sizeof(name), "https %s%s", host, suffix);
+    https(name, host, path, want_ok, body);
+}
+
 static void test_wss(void)
 {
     uint32_t start = lwip_now_ms();
+    char host[96], path[128], name[160];
+    if (!select_endpoint("wss", host, sizeof(host), path, sizeof(path)))
+    {
+        check("select wss endpoint", false);
+        return;
+    }
     /* Leave enough emulated time for longer public certificate chains before
      * the WebSocket upgrade shares the same socket timeout budget. */
     struct lwip_socket *sock =
-        open_socket(LWIP_SOCKET_ALTCP_WSS, "echo.websocket.in", 443, "/", 120000);
+        open_socket(LWIP_SOCKET_ALTCP_WSS, host, 443, path, 120000);
     size_t got = 0;
-    if (!check("wss connect echo.websocket.in", sock != NULL)) return;
-    metric("wss_connect_echo_websocket_in", lwip_now_ms() - start, "ms");
+    snprintf(name, sizeof(name), "wss connect %s", host);
+    if (!check(name, sock != NULL)) return;
+    metric("wss_connect", lwip_now_ms() - start, "ms");
     write_all(sock, (const uint8_t *)"lwip-ce wss echo", 16);
     start = lwip_now_ms();
     while (lwip_now_ms() - start < 30000 && got < sizeof(buf) - 1)
@@ -356,22 +410,18 @@ int main(void)
         test_psk_bulk("psk-server gcm x25519 www4k", "128 KiB over TLS in 4 KiB records");
         test_raw_alpn_and_resumption();
 
-        https("https tls13.akamai.io", "tls13.akamai.io", "/", true, false);
-        https("https valid.rootca1.demo.amazontrust.com (RSA-2048)",
-              "valid.rootca1.demo.amazontrust.com", "/", true, false);
+        pooled_https("tls13", "", true, false);
+        pooled_https("rsa2048", " (RSA-2048)", true, false);
         /* Root CA 2's demo chain uses sha384WithRSAEncryption.  Do not use it
          * as a positive RSA-4096 test until SHA-384 certificate signatures are
          * implemented; rejecting that chain is currently the correct result. */
-        https("https valid.rootca3.demo.amazontrust.com (ECDSA P-256)",
-              "valid.rootca3.demo.amazontrust.com", "/", true, false);
-        https("https raw.githubusercontent.com", "raw.githubusercontent.com",
-              "/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/udp.c", true, true);
+        pooled_https("ecdsa256", " (ECDSA P-256)", true, false);
+        pooled_https("body", "", true, true);
         /* The retail Amazon CDN varies its wire chain by edge.  The CA-owned
          * endpoint consistently exercises Amazon Root CA 1 via Starfield. */
-        https("https www.amazontrust.com (Starfield)", "www.amazontrust.com", "/", true, false);
-        https("Amazon Root CA 4 P-384 chain rejected",
-              "valid.rootca4.demo.amazontrust.com", "/", false, false);
-        https("TLS 1.2-only server rejected", "httpbin.org", "/", false, false);
+        pooled_https("starfield", " (Starfield)", true, false);
+        pooled_https("p384", " (P-384 chain rejected)", false, false);
+        test_tls12_rejected();
         test_wss();
     }
     return net_end();

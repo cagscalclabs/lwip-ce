@@ -426,10 +426,22 @@ def update_comment(
 
 
 def write_summary(text: str) -> None:
+    rendered = text.rstrip() + "\n"
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
         with open(path, "a", encoding="utf-8") as summary:
-            summary.write(text.rstrip() + "\n")
+            summary.write(rendered)
+    report_path = os.environ.get("RFC_REVIEW_REPORT")
+    if report_path:
+        Path(report_path).write_text(rendered, encoding="utf-8")
+
+
+def emit_error(message: str) -> None:
+    """Show a failing verdict prominently in both logs and GitHub annotations."""
+    escaped = (
+        message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    )
+    print(f"::error title=RFC compliance::{escaped}", file=sys.stderr)
 
 
 def self_test() -> int:
@@ -557,6 +569,7 @@ def main() -> int:
             if not commit_mode:
                 update_comment(repository, number, github_token, message)
             write_summary("## RFC compliance\n\n⚠️ " + first_summary)
+            emit_error("RFC compliance requires human review: " + first_summary)
             return 1
 
         verification_input = (
@@ -596,12 +609,14 @@ def main() -> int:
             if not commit_mode:
                 update_comment(repository, number, github_token, human_comment(reason))
             write_summary("## RFC compliance\n\n⚠️ " + reason)
+            emit_error(reason)
             return 1
 
         message = break_comment(confirmed)
         if not commit_mode:
             update_comment(repository, number, github_token, message)
         write_summary("## RFC compliance\n\n❌ " + message.replace(COMMENT_MARKER, "").strip())
+        emit_error(message.replace(COMMENT_MARKER, "").strip())
         return 1
     except ReviewError as exc:
         reason = f"Automated review could not complete safely: {exc}"
@@ -611,7 +626,7 @@ def main() -> int:
         except ReviewError as comment_exc:
             print(f"Could not update PR comment: {comment_exc}", file=sys.stderr)
         write_summary("## RFC compliance\n\n⚠️ " + reason)
-        print(reason, file=sys.stderr)
+        emit_error(reason)
         return 1
 
 
@@ -619,5 +634,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ReviewError as exc:
-        print(f"RFC review configuration error: {exc}", file=sys.stderr)
+        emit_error(f"RFC review configuration error: {exc}")
         raise SystemExit(1)

@@ -360,6 +360,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Initialize RFC compliance report
+        run: printf '## RFC compliance\n\nThe RFC review did not complete.\n' > "$RUNNER_TEMP/rfc-compliance.md"
+
       - name: Check out tested staging commit
         uses: actions/checkout@v4
         with:
@@ -379,7 +382,18 @@ jobs:
           RFC_REVIEW_CYBER_PROGRAM: standard
           RFC_VERIFY_MODEL: ${{ vars.RFC_VERIFY_MODEL || 'gpt-6-astra' }}
           RFC_VERIFY_CYBER_PROGRAM: standard
+          RFC_REVIEW_REPORT: ${{ runner.temp }}/rfc-compliance.md
         run: python3 .github/scripts/rfc_review.py
+
+      - name: Upload RFC compliance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfc-compliance-report
+          path: ${{ runner.temp }}/rfc-compliance.md
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
   acvp:
     needs: prepare_rom
@@ -770,6 +784,7 @@ jobs:
   notify_failure:
     name: Notify commit author on failure
     permissions:
+      actions: read
       contents: read
       issues: write
     needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
@@ -785,6 +800,14 @@ jobs:
       needs.host_tests.result != 'success' || needs.fuzz.result != 'success')
     runs-on: ubuntu-latest
     steps:
+      - name: Download RFC compliance details
+        if: needs.rfc_compliance.result != 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rfc-compliance-report
+          path: ${{ runner.temp }}/rfc-compliance-report
+
       - name: Open or update a staging failure issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -800,6 +823,7 @@ jobs:
           DAST_RESULT: ${{ needs.dast.result }}
           HOST_RESULT: ${{ needs.host_tests.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
+          RFC_REPORT_PATH: ${{ runner.temp }}/rfc-compliance-report/rfc-compliance.md
         run: |
           set -euo pipefail
           commit_json=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA")
@@ -831,6 +855,12 @@ jobs:
             [ "$DAST_RESULT" = success ] || echo "- **DAST** — $DAST_RESULT"
             [ "$HOST_RESULT" = success ] || echo "- **Host tests** — $HOST_RESULT"
             [ "$FUZZ_RESULT" = success ] || echo "- **Fuzzing** — $FUZZ_RESULT"
+            if [ "$RFC_RESULT" != success ] && [ -s "$RFC_REPORT_PATH" ]; then
+              echo
+              echo "### RFC compliance details"
+              echo
+              cat "$RFC_REPORT_PATH"
+            fi
             echo
             echo "### All gate results"
             echo '| Gate | Result |'
