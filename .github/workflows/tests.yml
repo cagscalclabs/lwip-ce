@@ -579,55 +579,6 @@ jobs:
         with:
           category: "/language:c-cpp"
 
-  dast_report:
-    name: DAST report + gate
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # Keep full history so the report's src_commit remains useful
-          # provenance even though freshness is decided by src_hash.
-          fetch-depth: 0
-          # src/ includes the X25519 gitlink, and its working-tree contents are
-          # part of the source fingerprint produced by the local DAST runner.
-          submodules: recursive
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Check report covers current src/ contents
-        run: |
-          readarray -t report_source < <(python3 -c "
-          import json
-          with open('tests/dast.json') as f:
-              d = json.load(f)
-          print(d.get('src_commit', ''))
-          print(d.get('src_hash', ''))
-          ")
-          report_commit=${report_source[0]}
-          report_hash=${report_source[1]}
-          current_hash=$(python3 build-tools/dast/lwip-dast.py --src-hash)
-          if [ -z "$report_hash" ]; then
-            echo "::error::dast.json has no src_hash — re-run the DAST harness once to record the exact tested source contents."
-            exit 1
-          fi
-          echo "Report commit : $report_commit (provenance only)"
-          echo "Report src hash: $report_hash"
-          echo "Current src hash: $current_hash"
-          if [ "$report_hash" != "$current_hash" ]; then
-            echo "::error::dast.json covers different src/ contents — re-run the DAST harness and commit the refreshed report."
-            exit 1
-          fi
-          echo "Report covers the current src/ contents."
-
-      - name: Render report to job summary and gate on failures
-        run: |
-          python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"
-
   nettest:
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
@@ -775,19 +726,20 @@ jobs:
   notify_failure:
     name: Notify commit author on failure
     permissions:
-      contents: write
-    needs: [dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, dast_report, nettest, dast, host_tests, fuzz]
+      contents: read
+      issues: write
+    needs: [dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz]
     if: >-
       always() && (
       needs.dylib_unit_tests.result != 'success' ||
       needs.rfc_compliance.result != 'success' ||
       needs.acvp.result != 'success' || needs.semgrep_scan.result != 'success' ||
-      needs.analyze.result != 'success' || needs.dast_report.result != 'success' ||
+      needs.analyze.result != 'success' ||
       needs.nettest.result != 'success' || needs.dast.result != 'success' ||
       needs.host_tests.result != 'success' || needs.fuzz.result != 'success')
     runs-on: ubuntu-latest
     steps:
-      - name: Add or update a commit comment
+      - name: Open or update a staging failure issue
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ github.sha }}
@@ -796,9 +748,8 @@ jobs:
           ACVP_RESULT: ${{ needs.acvp.result }}
           SAST_RESULT: ${{ needs.semgrep_scan.result }}
           CODEQL_RESULT: ${{ needs.analyze.result }}
-          DAST_REPORT_RESULT: ${{ needs.dast_report.result }}
           NETWORK_RESULT: ${{ needs.nettest.result }}
-          LIVE_DAST_RESULT: ${{ needs.dast.result }}
+          DAST_RESULT: ${{ needs.dast.result }}
           HOST_RESULT: ${{ needs.host_tests.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
         run: |
@@ -809,11 +760,29 @@ jobs:
           mention="**$author_name**"
           if [ -n "$author" ]; then mention="@$author"; fi
 
+          short_sha=${GATE_SHA:0:12}
+          title="[staging] Gate failure for $short_sha"
           body="$RUNNER_TEMP/staging-gate-failure.md"
           {
-            echo '<!-- staging-gate-failure -->'
+            echo "<!-- staging-gate:$GATE_SHA -->"
             echo "$mention, the staging gate failed for commit $GATE_SHA."
             echo
+            echo "- Branch: [\`staging\`](${{ github.server_url }}/${{ github.repository }}/tree/staging)"
+            echo "- Commit: [\`$GATE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$GATE_SHA)"
+            echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo
+            echo "### Failed gates"
+            [ "$UNIT_RESULT" = success ] || echo "- **Unit tests** — $UNIT_RESULT"
+            [ "$RFC_RESULT" = success ] || echo "- **RFC compliance** — $RFC_RESULT"
+            [ "$ACVP_RESULT" = success ] || echo "- **ACVP** — $ACVP_RESULT"
+            [ "$SAST_RESULT" = success ] || echo "- **SAST** — $SAST_RESULT"
+            [ "$CODEQL_RESULT" = success ] || echo "- **CodeQL** — $CODEQL_RESULT"
+            [ "$NETWORK_RESULT" = success ] || echo "- **Network tests** — $NETWORK_RESULT"
+            [ "$DAST_RESULT" = success ] || echo "- **DAST** — $DAST_RESULT"
+            [ "$HOST_RESULT" = success ] || echo "- **Host tests** — $HOST_RESULT"
+            [ "$FUZZ_RESULT" = success ] || echo "- **Fuzzing** — $FUZZ_RESULT"
+            echo
+            echo "### All gate results"
             echo '| Gate | Result |'
             echo '|---|---|'
             echo "| Unit tests | $UNIT_RESULT |"
@@ -821,23 +790,26 @@ jobs:
             echo "| ACVP | $ACVP_RESULT |"
             echo "| SAST | $SAST_RESULT |"
             echo "| CodeQL | $CODEQL_RESULT |"
-            echo "| DAST report | $DAST_REPORT_RESULT |"
             echo "| Network tests | $NETWORK_RESULT |"
-            echo "| Live DAST | $LIVE_DAST_RESULT |"
+            echo "| DAST | $DAST_RESULT |"
             echo "| Host tests | $HOST_RESULT |"
             echo "| Fuzzing | $FUZZ_RESULT |"
-            echo
-            echo "[View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } > "$body"
 
-          comment_id=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA/comments" --paginate \
-            --jq '.[] | select(.body | contains("<!-- staging-gate-failure -->")) | .id' | head -1)
-          if [ -n "$comment_id" ]; then
-            gh api --method PATCH "repos/${{ github.repository }}/comments/$comment_id" \
-              -f body="$(cat "$body")"
+          issue_number=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --search "$GATE_SHA in:body" --json number --jq '.[0].number // empty')
+          if [ -n "$issue_number" ]; then
+            gh issue reopen "$issue_number" --repo "${{ github.repository }}" >/dev/null 2>&1 || true
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body"
           else
-            gh api --method POST "repos/${{ github.repository }}/commits/$GATE_SHA/comments" \
-              -f body="$(cat "$body")"
+            issue_url=$(gh issue create --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body")
+            issue_number=${issue_url##*/}
+          fi
+          if [ -n "$author" ]; then
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --add-assignee "$author" || echo "::warning::Could not assign @$author to issue #$issue_number"
           fi
 
 

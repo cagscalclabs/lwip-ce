@@ -26,6 +26,7 @@ on:
 permissions:
   contents: write
   actions: read
+  issues: write
   security-events: write
 
 concurrency:
@@ -279,10 +280,11 @@ jobs:
       always() && needs.decide.outputs.run_gate == 'true' &&
       needs.build.result != 'success'
     permissions:
-      contents: write
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     steps:
-      - name: Add or update a commit comment
+      - name: Open or update a staging failure issue
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ github.sha }}
@@ -293,15 +295,32 @@ jobs:
           author_name=$(jq -r '.commit.author.name // "the commit author"' <<< "$commit_json")
           mention="**$author_name**"
           if [ -n "$author" ]; then mention="@$author"; fi
-          body="<!-- staging-build-failure -->
-          $mention, the staging build failed for commit $GATE_SHA.
+          short_sha=${GATE_SHA:0:12}
+          title="[staging] Gate failure for $short_sha"
+          body="$RUNNER_TEMP/staging-build-failure.md"
+          {
+            echo "<!-- staging-gate:$GATE_SHA -->"
+            echo "$mention, the staging gate failed during the build."
+            echo
+            echo "- Branch: [\`staging\`](${{ github.server_url }}/${{ github.repository }}/tree/staging)"
+            echo "- Commit: [\`$GATE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$GATE_SHA)"
+            echo "- Failed gate: **Build**"
+            echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > "$body"
 
-          [View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-          comment_id=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA/comments" --paginate \
-            --jq '.[] | select(.body | contains("<!-- staging-build-failure -->")) | .id' | head -1)
-          if [ -n "$comment_id" ]; then
-            gh api --method PATCH "repos/${{ github.repository }}/comments/$comment_id" -f body="$body"
+          issue_number=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --search "$GATE_SHA in:body" --json number --jq '.[0].number // empty')
+          if [ -n "$issue_number" ]; then
+            gh issue reopen "$issue_number" --repo "${{ github.repository }}" >/dev/null 2>&1 || true
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body"
           else
-            gh api --method POST "repos/${{ github.repository }}/commits/$GATE_SHA/comments" -f body="$body"
+            issue_url=$(gh issue create --repo "${{ github.repository }}" \
+              --title "$title" --body-file "$body")
+            issue_number=${issue_url##*/}
+          fi
+          if [ -n "$author" ]; then
+            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
+              --add-assignee "$author" || echo "::warning::Could not assign @$author to issue #$issue_number"
           fi
 
