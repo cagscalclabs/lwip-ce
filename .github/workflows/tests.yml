@@ -376,7 +376,7 @@ jobs:
           RFC_BASE_SHA: origin/master
           RFC_HEAD_SHA: ${{ github.sha }}
           RFC_REVIEW_MODEL: ${{ vars.RFC_REVIEW_MODEL || 'gpt-6-sol' }}
-          RFC_REVIEW_CYBER_PROGRAM: daybreak_blue
+          RFC_REVIEW_CYBER_PROGRAM: standard
           RFC_VERIFY_MODEL: ${{ vars.RFC_VERIFY_MODEL || 'gpt-6-astra' }}
           RFC_VERIFY_CYBER_PROGRAM: standard
         run: python3 .github/scripts/rfc_review.py

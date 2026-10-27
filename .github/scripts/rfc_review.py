@@ -536,7 +536,7 @@ def main() -> int:
             api_key=api_key,
             model=os.environ.get("RFC_REVIEW_MODEL", "gpt-6-sol"),
             cyber_program=os.environ.get(
-                "RFC_REVIEW_CYBER_PROGRAM", "daybreak_blue"
+                "RFC_REVIEW_CYBER_PROGRAM", "standard"
             ),
             system_prompt=system_prompt,
             user_prompt="Perform the initial RFC regression review.\n\n" + evidence,
