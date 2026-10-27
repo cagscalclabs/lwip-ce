@@ -30,8 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         # esp32s3: the bridge board in wifi_bridge/hardware (default)
-        # esp32p4: Waveshare ESP32-P4 Module Dev Kit
-        target: [esp32s3, esp32p4]
+        target: [esp32s3]
     env:
       IDF_TARGET: ${{ matrix.target }}
 
