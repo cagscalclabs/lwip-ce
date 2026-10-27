@@ -308,23 +308,31 @@ jobs:
           promotion_branch="automation/promote-$short_sha"
 
           git fetch --no-tags origin master staging
-          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-            echo "The tested commit is already contained in master."
+          gate_tree=$(git rev-parse "$GATE_SHA^{tree}")
+          master_tree=$(git rev-parse "origin/master^{tree}")
+          if [ "$gate_tree" = "$master_tree" ]; then
+            echo "Master already has the exact tested staging tree."
             exit 0
           fi
+
+          export GIT_AUTHOR_DATE
+          export GIT_COMMITTER_DATE
+          GIT_AUTHOR_DATE=$(git show -s --format=%aI "$GATE_SHA")
+          GIT_COMMITTER_DATE=$GIT_AUTHOR_DATE
+          promotion_sha=$(printf 'Promote tested staging snapshot %s\n' "$GATE_SHA" \
+            | git -c user.name=github-actions -c 'user.email=41898282+github-actions[bot]@users.noreply.github.com' \
+              commit-tree "$gate_tree" -p origin/master)
 
           existing_sha=""
           if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
             --jq '.object.sha' 2>/dev/null); then
             existing_sha=$ref_sha
           fi
-          if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
-            echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
-            exit 1
-          fi
           if [ -z "$existing_sha" ]; then
-            gh api --method POST "repos/${{ github.repository }}/git/refs" \
-              -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+            git push origin "$promotion_sha:refs/heads/$promotion_branch"
+          elif [ "$existing_sha" != "$promotion_sha" ]; then
+            git push --force-with-lease="refs/heads/$promotion_branch:$existing_sha" \
+              origin "$promotion_sha:refs/heads/$promotion_branch"
           fi
 
           body="$RUNNER_TEMP/rfc-review-pr.md"
@@ -343,7 +351,7 @@ jobs:
               cat "$RFC_REPORT_PATH"
             fi
             echo
-            echo "The temporary head branch is pinned to the tested SHA, so later staging pushes are excluded."
+            echo "The temporary head branch is based on current master and has the exact tested staging tree, so later staging pushes are excluded."
           } > "$body"
 
           pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
@@ -389,21 +397,29 @@ jobs:
           promotion_branch="automation/promote-$short_sha"
 
           git fetch --no-tags origin master staging
-          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-            echo "The tested commit is already contained in master."
+          gate_tree=$(git rev-parse "$GATE_SHA^{tree}")
+          master_tree=$(git rev-parse "origin/master^{tree}")
+          if [ "$gate_tree" = "$master_tree" ]; then
+            echo "Master already has the exact tested staging tree."
           else
+            export GIT_AUTHOR_DATE
+            export GIT_COMMITTER_DATE
+            GIT_AUTHOR_DATE=$(git show -s --format=%aI "$GATE_SHA")
+            GIT_COMMITTER_DATE=$GIT_AUTHOR_DATE
+            promotion_sha=$(printf 'Promote tested staging snapshot %s\n' "$GATE_SHA" \
+              | git -c user.name=github-actions -c 'user.email=41898282+github-actions[bot]@users.noreply.github.com' \
+                commit-tree "$gate_tree" -p origin/master)
+
             existing_sha=""
             if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
               --jq '.object.sha' 2>/dev/null); then
               existing_sha=$ref_sha
             fi
-            if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
-              echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
-              exit 1
-            fi
             if [ -z "$existing_sha" ]; then
-              gh api --method POST "repos/${{ github.repository }}/git/refs" \
-                -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+              git push origin "$promotion_sha:refs/heads/$promotion_branch"
+            elif [ "$existing_sha" != "$promotion_sha" ]; then
+              git push --force-with-lease="refs/heads/$promotion_branch:$existing_sha" \
+                origin "$promotion_sha:refs/heads/$promotion_branch"
             fi
 
             pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
@@ -422,7 +438,7 @@ jobs:
                 echo "- Source branch: \`staging\`"
                 echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                 echo
-                echo "The temporary head branch is pinned to the tested SHA so later staging pushes are excluded."
+                echo "The temporary head branch is based on current master and has the exact tested staging tree, so later staging pushes are excluded."
               } > "$body"
               pr_url=$(gh pr create --repo "${{ github.repository }}" \
                 --base master --head "$promotion_branch" \
@@ -431,11 +447,12 @@ jobs:
             fi
 
             gh pr merge "$pr_number" --repo "${{ github.repository }}" \
-              --admin --merge --delete-branch --match-head-commit "$GATE_SHA"
+              --admin --merge --delete-branch --match-head-commit "$promotion_sha"
 
             git fetch --no-tags origin master
-            if ! git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-              echo "::error::Promotion PR completed without placing tested SHA $GATE_SHA in master."
+            promoted_tree=$(git rev-parse "origin/master^{tree}")
+            if [ "$promoted_tree" != "$gate_tree" ]; then
+              echo "::error::Promotion PR completed without placing the exact tested tree in master."
               exit 1
             fi
             echo "Promotion PR #$pr_number merged; staging remains intact."
