@@ -1,4 +1,0 @@
-# lwIP-CE bridge board (wifi_bridge/hardware): ESP32-S3-WROOM-1-N16R8.
-# Native USB (GPIO19/20) is the calculator's host port, so the console stays on
-# UART0 through the CH340K.
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

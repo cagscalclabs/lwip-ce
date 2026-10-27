@@ -2,7 +2,9 @@ Using Wi-Fi
 ===========
 
 lwIP-CE can reach a Wi-Fi network through the **lwIP-CE Wi-Fi bridge**, an
-ESP32-S3 or ESP32-P4 board running the firmware in ``wifi_bridge/``. The calculator plugs
+ESP32-S3 or ESP32-P4 board running the firmware from
+`lwIP-CE-WiFi-bridge <https://github.com/alessiodam/lwIP-CE-WiFi-bridge>`_, checked
+out in ``wifi_bridge/`` as a submodule. The calculator plugs
 into the bridge with its stock USB cable and gets an ordinary Ethernet
 interface. Everything that works over a USB Ethernet adapter (DHCP, TCP, UDP,
 TLS, DNS) works the same way over the bridge.
@@ -46,7 +48,9 @@ Setting Up
 ----------
 
 Flash the bridge once, then install lwIP-CE on the calculator as usual (see
-:doc:`getting-started`). The firmware builds for the bridge board by default.
+:doc:`getting-started`). Fetch the firmware first if the checkout lacks it
+(``git submodule update --init wifi_bridge``). It builds for the bridge board
+by default.
 For the ESP32-P4 kit, switch the target once (this resets
 ``wifi_bridge/sdkconfig``; ``set-target esp32s3`` switches back):
 
@@ -67,8 +71,9 @@ kit's as ``/dev/ttyACM0``.
     idf.py -C wifi_bridge monitor                        # bridge log
 
 ``wifi_tools/push.sh`` needs libticalcs2 (it builds a small ``calclink``
-helper) and, for ``--bridge``, ESP-IDF v6.1. Release builds of the firmware
-are produced by the ``wifi_bridge.yml`` workflow for both targets as
+helper) and, for ``--bridge``, ESP-IDF v6.1. The firmware has its own
+Semantic Versioning version. Its
+`releases <https://github.com/alessiodam/lwIP-CE-WiFi-bridge/releases>`_ ship
 ``lwip_wifi_bridge-<target>-<version>-merged.bin``, which flashes at offset
 ``0x0``:
 
