@@ -4,7 +4,8 @@ name: Build
 # subjects for an urgent prefix. A nightly scheduler dispatches this same
 # workflow on staging when staging received an unpromoted code commit in the
 # last 24 hours. Non-code-only changes are promoted immediately without the
-# build/test gate. Successful runs promote the exact staging SHA through a PR.
+# build/test gate. Successful runs push the exact tested staging tree directly
+# to master; an RFC-only failure opens a maintainer-review PR instead.
 
 on:
   schedule:
@@ -369,7 +370,7 @@ jobs:
           fi
 
   promote:
-    name: Promote staging SHA through PR
+    name: Promote tested staging tree to master
     needs: [decide, build, tests]
     if: >-
       always() && needs.decide.outputs.run_gate == 'true' &&
@@ -379,22 +380,19 @@ jobs:
     permissions:
       actions: write
       contents: write
-      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Open and merge promotion PR
+      - name: Push tested tree to master
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ github.sha }}
           CODE_CHANGED: ${{ needs.decide.outputs.code_changed }}
         run: |
           set -euo pipefail
-          short_sha=${GATE_SHA:0:12}
-          promotion_branch="automation/promote-$short_sha"
 
           git fetch --no-tags origin master staging
           gate_tree=$(git rev-parse "$GATE_SHA^{tree}")
@@ -402,60 +400,28 @@ jobs:
           if [ "$gate_tree" = "$master_tree" ]; then
             echo "Master already has the exact tested staging tree."
           else
+            if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
+              echo "::error::Staging is behind master; refusing to replace newer master content."
+              exit 1
+            fi
+
             export GIT_AUTHOR_DATE
             export GIT_COMMITTER_DATE
             GIT_AUTHOR_DATE=$(git show -s --format=%aI "$GATE_SHA")
             GIT_COMMITTER_DATE=$GIT_AUTHOR_DATE
-            promotion_sha=$(printf 'Promote tested staging snapshot %s\n' "$GATE_SHA" \
+            promotion_sha=$(printf 'Promote tested staging tree %s\n' "$GATE_SHA" \
               | git -c user.name=github-actions -c 'user.email=41898282+github-actions[bot]@users.noreply.github.com' \
-                commit-tree "$gate_tree" -p origin/master)
+                commit-tree "$gate_tree" -p origin/master -p "$GATE_SHA")
 
-            existing_sha=""
-            if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
-              --jq '.object.sha' 2>/dev/null); then
-              existing_sha=$ref_sha
-            fi
-            if [ -z "$existing_sha" ]; then
-              git push origin "$promotion_sha:refs/heads/$promotion_branch"
-            elif [ "$existing_sha" != "$promotion_sha" ]; then
-              git push --force-with-lease="refs/heads/$promotion_branch:$existing_sha" \
-                origin "$promotion_sha:refs/heads/$promotion_branch"
-            fi
-
-            pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
-              --base master --head "$promotion_branch" --json number \
-              --jq '.[0].number // empty')
-            if [ -z "$pr_number" ]; then
-              body="$RUNNER_TEMP/promotion-pr.md"
-              {
-                if [ "$CODE_CHANGED" = true ]; then
-                  echo "Automated promotion of the exact staging commit that passed the full gate."
-                else
-                  echo "Automated promotion of an exact staging commit containing only documentation/statistics changes. Build and test checks were skipped."
-                fi
-                echo
-                echo "- Tested commit: \`$GATE_SHA\`"
-                echo "- Source branch: \`staging\`"
-                echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                echo
-                echo "The temporary head branch is based on current master and has the exact tested staging tree, so later staging pushes are excluded."
-              } > "$body"
-              pr_url=$(gh pr create --repo "${{ github.repository }}" \
-                --base master --head "$promotion_branch" \
-                --title "Promote staging $short_sha to master" --body-file "$body")
-              pr_number=${pr_url##*/}
-            fi
-
-            gh pr merge "$pr_number" --repo "${{ github.repository }}" \
-              --admin --merge --delete-branch --match-head-commit "$promotion_sha"
+            git push origin "$promotion_sha:refs/heads/master"
 
             git fetch --no-tags origin master
             promoted_tree=$(git rev-parse "origin/master^{tree}")
             if [ "$promoted_tree" != "$gate_tree" ]; then
-              echo "::error::Promotion PR completed without placing the exact tested tree in master."
+              echo "::error::Direct promotion completed without placing the exact tested tree in master."
               exit 1
             fi
-            echo "Promotion PR #$pr_number merged; staging remains intact."
+            echo "Promoted tested staging tree to master; staging remains intact."
           fi
 
           # GITHUB_TOKEN events do not start another push workflow, so dispatch
