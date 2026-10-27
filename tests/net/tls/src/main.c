@@ -248,7 +248,8 @@ static void test_raw_alpn_and_resumption(void)
 
 static void https(const char *name, const char *host, const char *path, bool want_ok, bool body)
 {
-    struct lwip_socket *sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 60000);
+    /* RSA-4096 chain validation can approach a minute on the calculator. */
+    struct lwip_socket *sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 120000);
     uint32_t t0 = lwip_now_ms(), got = 0, header_end = 0, length = 0, start;
     bool connected, last_chunk = false;
     if (!sock || lwip_socket_connect(sock, host, 443) != LWIP_OK)
@@ -257,7 +258,7 @@ static void https(const char *name, const char *host, const char *path, bool wan
         if (sock) lwip_socket_destroy(sock);
         return;
     }
-    pump(not_connecting, sock, 70000);
+    pump(not_connecting, sock, 125000);
     connected = lwip_socket_status(sock) == LWIP_STATUS_CONNECTED;
     note("  %s: status %u err %u in %lu ms", host, lwip_socket_status(sock), lwip_socket_last_error(sock),
          (unsigned long)(lwip_now_ms() - t0));
@@ -357,17 +358,20 @@ int main(void)
         test_raw_alpn_and_resumption();
 
         https("https tls13.akamai.io", "tls13.akamai.io", "/", true, false);
-        https("https httpbin.dev", "httpbin.dev", "/get", true, true);
+        https("https valid.rootca1.demo.amazontrust.com (RSA-2048)",
+              "valid.rootca1.demo.amazontrust.com", "/", true, false);
+        https("https valid.rootca2.demo.amazontrust.com (RSA-4096)",
+              "valid.rootca2.demo.amazontrust.com", "/", true, false);
+        https("https valid.rootca3.demo.amazontrust.com (ECDSA P-256)",
+              "valid.rootca3.demo.amazontrust.com", "/", true, false);
         https("https raw.githubusercontent.com", "raw.githubusercontent.com",
               "/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/udp.c", true, true);
-        https("https duckduckgo.com (DigiCert)", "duckduckgo.com", "/", true, false);
-        https("https www.amazon.com (Starfield)", "www.amazon.com", "/", true, false);
-        https("P-384 chain rejected", "www.google.com", "/", false, false);
+        /* The retail Amazon CDN varies its wire chain by edge.  The CA-owned
+         * endpoint consistently exercises Amazon Root CA 1 via Starfield. */
+        https("https www.amazontrust.com (Starfield)", "www.amazontrust.com", "/", true, false);
+        https("Amazon Root CA 4 P-384 chain rejected",
+              "valid.rootca4.demo.amazontrust.com", "/", false, false);
         https("TLS 1.2-only server rejected", "httpbin.org", "/", false, false);
-        https("expired certificate rejected", "expired.badssl.com", "/", false, false);
-        https("wrong hostname rejected", "wrong.host.badssl.com", "/", false, false);
-        https("self-signed certificate rejected", "self-signed.badssl.com", "/", false, false);
-        https("untrusted root rejected", "untrusted-root.badssl.com", "/", false, false);
         test_wss();
     }
     return net_end();

@@ -53,10 +53,11 @@ CIPHERS = {"gcm": "TLS_AES_128_GCM_SHA256", "ccm": "TLS_AES_128_CCM_SHA256", "ae
 GROUPS = {"x25519": "X25519", "p256": "P-256", "p384": "P-384"}
 HTTPS_PATHS = {
     "tls13.akamai.io": "/",
-    "httpbin.dev": "/get",
+    "valid.rootca1.demo.amazontrust.com": "/",
+    "valid.rootca2.demo.amazontrust.com": "/",
+    "valid.rootca3.demo.amazontrust.com": "/",
     "raw.githubusercontent.com": "/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/udp.c",
-    "duckduckgo.com": "/",
-    "www.amazon.com": "/",
+    "www.amazontrust.com": "/",
 }
 HTTPS_FAILURE = re.compile(
     r"^FAIL https (?P<host>[A-Za-z0-9.-]+)(?: \([^)]*\))?"

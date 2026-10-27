@@ -4,14 +4,14 @@
 from run import corroborate_external_https_failures
 
 
-RESET_LOG = """  duckduckgo.com: status 7 err 8 in 4338 ms
-FAIL https duckduckgo.com (DigiCert)
+RESET_LOG = """  tls13.akamai.io: status 7 err 8 in 4338 ms
+FAIL https tls13.akamai.io
 DONE pass 56 fail 1
 """
 
 
 def reset_probe(host: str, phase: str):
-    assert (host, phase) == ("duckduckgo.com", "tls")
+    assert (host, phase) == ("tls13.akamai.io", "tls")
     return False, "reset", "connection reset by peer"
 
 
@@ -21,13 +21,13 @@ def passing_probe(host: str, phase: str):
 
 rendered, skipped, records = corroborate_external_https_failures(RESET_LOG, reset_probe)
 assert skipped == 1
-assert rendered.startswith("  duckduckgo.com: status 7")
-assert "SKIP https duckduckgo.com (DigiCert) - endpoint issue/latency" in rendered
+assert rendered.startswith("  tls13.akamai.io: status 7")
+assert "SKIP https tls13.akamai.io - endpoint issue/latency" in rendered
 assert records[0]["skipped"] is True
 
 rendered, skipped, records = corroborate_external_https_failures(RESET_LOG, passing_probe)
 assert skipped == 0
-assert "FAIL https duckduckgo.com (DigiCert)" in rendered
+assert "FAIL https tls13.akamai.io" in rendered
 assert "CEmu failure remains authoritative" in rendered
 assert records[0]["skipped"] is False
 
@@ -36,7 +36,7 @@ rendered, skipped, records = corroborate_external_https_failures(negative_test, 
 assert rendered == negative_test
 assert skipped == 0 and records == []
 
-http_failure = "FAIL https httpbin.dev answers HTTP\nDONE pass 56 fail 1\n"
+http_failure = "FAIL https raw.githubusercontent.com answers HTTP\nDONE pass 56 fail 1\n"
 rendered, skipped, records = corroborate_external_https_failures(
     http_failure, lambda host, phase: (False, "timeout", "timeout")
 )
