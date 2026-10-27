@@ -341,37 +341,48 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Update stable branch status asset
+      - name: Update CDN-backed branch status asset
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          status_tag="ci-status-$BRANCH_NAME"
-          notes="$RUNNER_TEMP/ci-status-notes.md"
-          {
-            echo "Latest CI status matrix for \`$BRANCH_NAME\`."
-            echo
-            echo "- Commit: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})"
-            echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-          } > "$notes"
+          status_branch=ci-status
+          status_path="$BRANCH_NAME.svg"
+          api_base="repos/${{ github.repository }}"
 
-          git tag --force "$status_tag" "${{ github.sha }}"
-          git push --force origin "refs/tags/$status_tag"
-
-          if gh release view "$status_tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release edit "$status_tag" --repo "${{ github.repository }}" \
-              --title "CI Status: $BRANCH_NAME" --notes-file "$notes" --prerelease
-          else
-            gh release create "$status_tag" --repo "${{ github.repository }}" \
-              --verify-tag --title "CI Status: $BRANCH_NAME" \
-              --notes-file "$notes" --prerelease
+          if ! gh api "$api_base/git/ref/heads/$status_branch" >/dev/null 2>&1; then
+            gh api --method POST "$api_base/git/refs" \
+              -f ref="refs/heads/$status_branch" -f sha="${{ github.sha }}" >/dev/null || true
           fi
 
-          gh release upload "$status_tag" "$RUNNER_TEMP/ci-status.svg" \
-            --repo "${{ github.repository }}" --clobber
+          encoded=$(base64 < "$RUNNER_TEMP/ci-status.svg" | tr -d '\n')
+          published=false
+          for attempt in 1 2 3; do
+            file_sha=$(gh api "$api_base/contents/$status_path?ref=$status_branch" \
+              --jq '.sha' 2>/dev/null || true)
+            args=(
+              --method PUT "$api_base/contents/$status_path"
+              -f message="Update $BRANCH_NAME CI status for ${{ github.sha }}"
+              -f content="$encoded"
+              -f branch="$status_branch"
+            )
+            if [ -n "$file_sha" ]; then
+              args+=(-f sha="$file_sha")
+            fi
+            if gh api "${args[@]}" >/dev/null; then
+              published=true
+              break
+            fi
+            echo "Status branch changed concurrently; retrying (attempt $attempt)."
+            sleep 2
+          done
+          if [ "$published" != true ]; then
+            echo "::error::Could not update $status_branch/$status_path"
+            exit 1
+          fi
 
-          echo "Published ${{ github.server_url }}/${{ github.repository }}/releases/download/$status_tag/ci-status.svg" \
+          echo "Published https://raw.githubusercontent.com/${{ github.repository }}/$status_branch/$status_path" \
             >> "$GITHUB_STEP_SUMMARY"
 
   open_rfc_review_pr:

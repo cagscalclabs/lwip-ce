@@ -2,11 +2,11 @@
 
 **Master**
 
-[![Master CI status matrix](https://github.com/cagscalclabs/lwip-ce/releases/download/ci-status-master/ci-status.svg)](https://github.com/cagscalclabs/lwip-ce/releases/tag/ci-status-master)
+[![Master CI status matrix](https://raw.githubusercontent.com/cagscalclabs/lwip-ce/ci-status/master.svg)](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml?query=branch%3Amaster)
 
 **Staging**
 
-[![Staging CI status matrix](https://github.com/cagscalclabs/lwip-ce/releases/download/ci-status-staging/ci-status.svg)](https://github.com/cagscalclabs/lwip-ce/releases/tag/ci-status-staging)
+[![Staging CI status matrix](https://raw.githubusercontent.com/cagscalclabs/lwip-ce/ci-status/staging.svg)](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml?query=branch%3Astaging)
 
 Contributors should commit to `staging`; the staging gate owns routine promotion into `master` and performs the following:
 
