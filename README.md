@@ -2,7 +2,7 @@
 
 **Main CI**
 
-![Build + Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=staging&cache=1)
+![Build + Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=&cache=1)
 ![Deploy](https://github.com/cagscalclabs/lwip-ce/actions/workflows/deploy.yml/badge.svg?branch=staging&cache=1)
 
 Contributors should commit to `staging`; the staging gate owns routine promotion into `master` and performs the following:
@@ -19,7 +19,6 @@ Contributors should commit to `staging`; the staging gate owns routine promotion
 - On build or other test failures, an issue is opened notifying the commit author.
 - Deploy then generates builds:
   - master -> https://github.com/cagscalclabs/lwip-ce/releases/tag/latest-stable
-  - staging -> https://github.com/cagscalclabs/lwip-ce/releases/tag/nightly
 
 <hr>
 

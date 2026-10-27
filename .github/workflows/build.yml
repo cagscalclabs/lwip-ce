@@ -1,27 +1,12 @@
 name: Build
 
-# staging is the integration branch. Ordinary pushes only inspect commit
-# subjects for an urgent prefix. A nightly scheduler dispatches this same
-# workflow on staging when staging received an unpromoted code commit in the
-# last 24 hours. Non-code-only changes are promoted immediately without the
-# build/test gate. Successful runs promote the exact signed staging commit
-# through a PR; an RFC-only failure opens the same PR for maintainer review.
+# staging is the integration branch. Every push is processed immediately.
+# Code changes run the build/test gate; non-code-only changes proceed directly
+# to promotion. Successful runs promote the exact signed staging commit through
+# a PR; an RFC-only failure opens the same PR for maintainer review.
 
 on:
-  schedule:
-    # 03:00 UTC is 10/11 PM US Eastern, depending on daylight saving time.
-    - cron: '0 3 * * *'
   workflow_dispatch:
-    inputs:
-      force:
-        description: Process staging now; run the full gate when code changed
-        required: false
-        type: boolean
-        default: true
-      reason:
-        description: Why the gate was requested
-        required: false
-        default: manual
   push:
     branches: [staging]
 
@@ -45,41 +30,22 @@ env:
 
 jobs:
   decide:
-    name: Decide whether to run the gate
+    name: Classify changes
     permissions:
-      actions: write
       contents: read
     runs-on: ubuntu-latest
     outputs:
-      run_gate: ${{ steps.decision.outputs.run_gate }}
       code_changed: ${{ steps.decision.outputs.code_changed }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Evaluate trigger
+      - name: Classify the staging changes
         id: decision
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BEFORE_SHA: ${{ github.event.before }}
-          FORCE_GATE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          echo "run_gate=false" >> "$GITHUB_OUTPUT"
           echo "code_changed=false" >> "$GITHUB_OUTPUT"
-
-          if [ "${{ github.event_name }}" = schedule ]; then
-            git fetch --no-tags origin master staging
-            if [ -n "$(git rev-list --max-count=1 --since='24 hours ago' origin/master..origin/staging)" ]; then
-              echo "staging changed in the last 24 hours; dispatching the gate on staging"
-              gh workflow run build.yml --repo "${{ github.repository }}" --ref staging \
-                -f force=true -f reason=nightly
-            else
-              echo "No unpromoted staging commits from the last 24 hours."
-            fi
-            exit 0
-          fi
 
           git fetch --no-tags origin master
           code_changed=false
@@ -101,36 +67,18 @@ jobs:
               echo "::error::Manual staging gates must be dispatched with the staging branch selected."
               exit 1
             fi
-            if [ "$FORCE_GATE" = true ]; then
-              echo "run_gate=true" >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
           fi
 
           if [ "$code_changed" = false ]; then
             echo "No project, build, or test code changed; promoting without build and test checks."
-            echo "run_gate=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          range="${BEFORE_SHA}..${GITHUB_SHA}"
-          if [ -z "$BEFORE_SHA" ] || [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
-            range="$GITHUB_SHA"
-          fi
-          if git log --format=%s "$range" \
-            | grep -Eiq '^#(hotfix|urgent|priority)([[:space:]:-]|$)'; then
-            echo "Priority commit detected; running the full gate now."
-            echo "run_gate=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No priority prefix; this push will be covered by the nightly gate."
+            echo "Project, build, or test code changed; running the full gate now."
           fi
 
   build:
     name: Build lwIP
     needs: decide
-    if: >-
-      needs.decide.outputs.run_gate == 'true' &&
-      needs.decide.outputs.code_changed == 'true'
+    if: needs.decide.outputs.code_changed == 'true'
     permissions:
       actions: read
       contents: read
@@ -267,7 +215,6 @@ jobs:
     name: Tests
     needs: [decide, build]
     if: >-
-      needs.decide.outputs.run_gate == 'true' &&
       needs.decide.outputs.code_changed == 'true' &&
       needs.build.result == 'success'
     uses: ./.github/workflows/tests.yml
@@ -276,9 +223,7 @@ jobs:
   rfc_compliance_no_changes:
     name: RFC compliance
     needs: decide
-    if: >-
-      needs.decide.outputs.run_gate == 'true' &&
-      needs.decide.outputs.code_changed == 'false'
+    if: needs.decide.outputs.code_changed == 'false'
     runs-on: ubuntu-latest
     steps:
       - name: Record successful no-op review
@@ -288,14 +233,72 @@ jobs:
           echo >> "$GITHUB_STEP_SUMMARY"
           echo "No RFC-relevant project code changed." >> "$GITHUB_STEP_SUMMARY"
 
+  promotion_policy:
+    name: Promotion policy
+    needs: [decide, build, tests, rfc_compliance_no_changes]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      decision: ${{ steps.policy.outputs.decision }}
+    steps:
+      - name: Evaluate promotion policy
+        id: policy
+        env:
+          CODE_CHANGED: ${{ needs.decide.outputs.code_changed }}
+          DECIDE_RESULT: ${{ needs.decide.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          RFC_ONLY_FAILURE: ${{ needs.tests.outputs.rfc_only_failure }}
+          RFC_NO_CHANGES_RESULT: ${{ needs.rfc_compliance_no_changes.result }}
+        run: |
+          set -euo pipefail
+
+          decision=reject
+          reason="The staging gate did not reach an allowed outcome."
+
+          if [ "$DECIDE_RESULT" != success ]; then
+            reason="The gate trigger could not be evaluated."
+          elif [ "$CODE_CHANGED" = false ] && [ "$RFC_NO_CHANGES_RESULT" = success ]; then
+            decision=auto
+            reason="No gate-relevant code changed; automatic promotion is allowed."
+          elif [ "$CODE_CHANGED" = true ] && \
+               [ "$BUILD_RESULT" = success ] && [ "$TESTS_RESULT" = success ]; then
+            decision=auto
+            reason="The build and every test gate passed; automatic promotion is allowed."
+          elif [ "$CODE_CHANGED" = true ] && \
+               [ "$BUILD_RESULT" = success ] && [ "$TESTS_RESULT" = failure ] && \
+               [ "$RFC_ONLY_FAILURE" = true ]; then
+            decision=review
+            reason="Only RFC compliance failed; promotion requires maintainer review."
+          fi
+
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Promotion policy"
+            echo
+            echo "**Decision:** \`$decision\`"
+            echo
+            echo "$reason"
+            echo
+            echo "| Input | Result |"
+            echo "|---|---|"
+            echo "| Build | $BUILD_RESULT |"
+            echo "| Tests | $TESTS_RESULT |"
+            echo "| RFC-only failure | $RFC_ONLY_FAILURE |"
+            echo "| RFC no-change check | $RFC_NO_CHANGES_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$decision" = reject ]; then
+            echo "::error::$reason"
+            exit 1
+          fi
+
   open_rfc_review_pr:
     name: Open promotion PR for RFC review
-    needs: [decide, build, tests]
+    needs: [decide, build, tests, promotion_policy]
     if: >-
-      always() && needs.decide.outputs.run_gate == 'true' &&
-      needs.decide.outputs.code_changed == 'true' &&
-      needs.build.result == 'success' && needs.tests.result == 'failure' &&
-      needs.tests.outputs.rfc_only_failure == 'true'
+      always() && needs.promotion_policy.result == 'success' &&
+      needs.promotion_policy.outputs.decision == 'review'
     permissions:
       actions: read
       contents: write
@@ -378,13 +381,10 @@ jobs:
 
   promote:
     name: Promote signed staging commit through PR
-    needs: [decide, build, tests, rfc_compliance_no_changes]
+    needs: [decide, build, tests, rfc_compliance_no_changes, promotion_policy]
     if: >-
-      always() && needs.decide.outputs.run_gate == 'true' &&
-      ((needs.decide.outputs.code_changed == 'true' &&
-        needs.build.result == 'success' && needs.tests.result == 'success') ||
-       (needs.decide.outputs.code_changed == 'false' &&
-        needs.rfc_compliance_no_changes.result == 'success'))
+      always() && needs.promotion_policy.result == 'success' &&
+      needs.promotion_policy.outputs.decision == 'auto'
     permissions:
       actions: write
       contents: write
@@ -482,7 +482,7 @@ jobs:
     name: Notify commit author of build failure
     needs: [decide, build]
     if: >-
-      always() && needs.decide.outputs.run_gate == 'true' &&
+      always() &&
       needs.decide.outputs.code_changed == 'true' &&
       needs.build.result != 'success'
     permissions:
