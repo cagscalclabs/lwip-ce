@@ -92,6 +92,9 @@ struct tls_truststore_entry
  */
 tls_truststore_status_t tls_truststore_init(void);
 
+/** @internal Clear all process-local trust decisions and cached lookup state. */
+void tls_truststore_cleanup(void);
+
 /********************
  * @brief Attempts to find a certificate by Subject Key Identifier in the trust store.
  * @param ski       32-byte, zero-padded Subject Key Identifier.

@@ -11,7 +11,6 @@
 #include "../includes/random.h"
 #include "../includes/bytes.h"
 #include "../includes/truststore.h"
-#include "truststore_internal.h"
 #include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_TLS

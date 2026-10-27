@@ -6,7 +6,6 @@
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
 #include "../includes/tls.h"
-#include "truststore_internal.h"
 #include "lwip/sntp_time.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_TRUSTSTORE
