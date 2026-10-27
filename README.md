@@ -2,7 +2,7 @@
 
 **Main CI**
 
-![Staging Gate](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=staging&cache=1)
+![Staging Gate](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=staging&cache=1)
 
 The staging gate builds and runs Unit, RFC Compliance, ACVP, SAST, CodeQL, DAST, Network, and Host/Fuzz checks as one workflow. It promotes the exact tested `staging` commit to `master` only after every gate passes. Prefix a commit subject with `#hotfix`, `#urgent`, or `#priority` to run the gate immediately; other changes are collected by the nightly run.
 

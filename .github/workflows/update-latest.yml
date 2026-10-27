@@ -41,7 +41,7 @@ jobs:
 
       - name: Find latest successful staging-gate run with an artifact
         id: latest_build
-        # tests.yml can legitimately contain only its trigger-decision job
+        # build.yml can legitimately contain only its trigger-decision job
         # (for example, a non-priority push waiting for the nightly gate)
         # while the overall workflow run still reports "success"
         # (a skipped job doesn't fail a run). A run like that has no
@@ -53,7 +53,7 @@ jobs:
         run: |
           run_id=""
           head_sha=""
-          for run_json in $(gh api "repos/${{ github.repository }}/actions/workflows/tests.yml/runs?status=success&branch=staging&per_page=10" \
+          for run_json in $(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=success&branch=staging&per_page=10" \
             --jq '.workflow_runs[] | @base64'); do
             decoded=$(echo "$run_json" | base64 -d)
             candidate_id=$(echo "$decoded" | jq -r '.id')
@@ -116,7 +116,7 @@ jobs:
 
       - name: No artifact found this run
         if: steps.latest_build.outputs.found != 'true'
-        run: echo "No tests.yml run with an lwip-latest artifact available; nothing to compare or publish this run." >> "$GITHUB_STEP_SUMMARY"
+        run: echo "No build.yml run with an lwip-latest artifact available; nothing to compare or publish this run." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save artifact hash for next comparison
         if: steps.compare.outputs.changed == 'true'
