@@ -1,0 +1,205 @@
+name: Statistics
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - statistics/rng/**
+      - statistics/timing/**
+      - .github/workflows/statistics.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rngstats:
+    name: RNG statistics
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(toJSON(github.event.commits), 'statistics/rng/') ||
+      contains(toJSON(github.event.commits), '.github/workflows/statistics.yml')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: rngstats-assets-latest
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install SVG renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends librsvg2-bin
+
+      - name: Generate RNG report
+        env:
+          IMAGE_URL: https://github.com/${{ github.repository }}/releases/download/rngstats-assets-latest/rng-distributions.png?run=${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          python3 tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py \
+            --stats-dir statistics/rng \
+            --output-dir build/statistics/rng \
+            --image-url "$IMAGE_URL"
+          rsvg-convert \
+            --width 1800 \
+            --output build/statistics/rng/rng-distributions.png \
+            build/statistics/rng/rng-distributions.svg
+
+      - name: Upload RNG statistics artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rng-statistics
+          path: build/statistics/rng/
+          if-no-files-found: error
+
+      - name: Publish latest report assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          git tag -f rngstats-assets-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/rngstats-assets-latest
+
+          if ! gh release view rngstats-assets-latest >/dev/null 2>&1; then
+            gh release create rngstats-assets-latest \
+              --title "rngstats-assets-latest" \
+              --notes "Latest generated RNG statistics and visualizations." \
+              --latest=false
+          fi
+
+          mapfile -t assets < <(find build/statistics/rng -maxdepth 1 -type f -print | sort)
+          if ((${#assets[@]} == 0)); then
+            echo "No generated RNG statistics assets were generated." >&2
+            exit 1
+          fi
+          gh release upload rngstats-assets-latest "${assets[@]}" --clobber
+
+      - name: Publish job summary
+        run: cat build/statistics/rng/rng-statistics.md >> "$GITHUB_STEP_SUMMARY"
+
+  timing:
+    name: Timing profiling
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(toJSON(github.event.commits), 'statistics/timing/') ||
+      contains(toJSON(github.event.commits), '.github/workflows/statistics.yml')
+    runs-on: ubuntu-latest
+    env:
+      LWIP_PROF_TESTS: ${{ github.workspace }}/tests/profiling
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Timing Unit Test
+        run: |
+          start_time=$(($(date +%s%N)/1000000))
+          test_start=$start_time
+          test_dir="${{ env.LWIP_PROF_TESTS }}/tls_timing"
+
+          set +e
+          python3 "${{ github.workspace }}/tests/host/tls_timing/check_timing_stats.py" \
+            2>&1 | tee "$test_dir/timing_stats_check.log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          test_done=$(($(date +%s%N)/1000000))
+          test_duration=$((test_done - test_start))
+
+          if [ "$status" -eq 0 ]; then
+            total_passed=1
+            total_failed=0
+            test_status="passed"
+          else
+            total_passed=0
+            total_failed=1
+            test_status="failed"
+          fi
+          echo -e "{\"name\":\"tls_timing\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"\"}" > "$test_dir/result.json"
+
+          end_time=$(($(date +%s%N)/1000000))
+          echo -e "\"summary\":{\"tests\":\"1\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"0\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > "${{ github.workspace }}/summary.json"
+          echo "timing stats checked, $total_passed passed, $total_failed failed!"
+          exit "$total_failed"
+
+      - name: Build Timing Verbose Summary
+        if: always()
+        run: |
+          test_dir="${{ env.LWIP_PROF_TESTS }}/tls_timing"
+          summary_md="${{ github.workspace }}/timing-verbose-summary.md"
+          log="$test_dir/timing_stats_check.log"
+
+          : > "$summary_md"
+          echo "### Timing Statistics Gate (statistics/timing/*.json)" >> "$summary_md"
+          echo "" >> "$summary_md"
+          echo "Pass threshold: c=6 over% < 75% for every primitive across all checked-in profiles." >> "$summary_md"
+          echo "Warning: c=6 over% > 50%, or any profile's c=4 rigorous differential_pass is false." >> "$summary_md"
+          echo "" >> "$summary_md"
+
+          if [ -f "$log" ]; then
+            echo '```' >> "$summary_md"
+            cat "$log" >> "$summary_md"
+            echo '```' >> "$summary_md"
+          else
+            echo "- Timing stats check log was not found." >> "$summary_md"
+          fi
+
+      - name: Generate Timing JSON Results
+        if: always()
+        run: |
+          echo -e "{\"results\":{" > "${{ github.workspace }}/results-timing.json"
+          cat "${{ github.workspace }}/summary.json" >> "${{ github.workspace }}/results-timing.json"
+          echo -e ",\"tests\":[" >> "${{ github.workspace }}/results-timing.json"
+          cat "${{ env.LWIP_PROF_TESTS }}/tls_timing/result.json" >> "${{ github.workspace }}/results-timing.json"
+          rm "${{ env.LWIP_PROF_TESTS }}/tls_timing/result.json"
+          echo -e "]" >> "${{ github.workspace }}/results-timing.json"
+          echo -e "}}" >> "${{ github.workspace }}/results-timing.json"
+          rm "${{ github.workspace }}/summary.json"
+
+      - name: Publish Timing Test Summary
+        if: always()
+        run: |
+          echo "## Timing Test Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          status=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .status' "${{ github.workspace }}/results-timing.json")
+          if [ "$status" = "passed" ]; then
+            status_icon="✅ Passed"
+          else
+            status_icon="❌ Failed"
+          fi
+
+          echo "### Timing Module Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Module | Status | Description |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|--------|-------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| tls_timing | $status_icon | c=6 over% gate against statistics/timing/*.json |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "${{ github.workspace }}/timing-verbose-summary.md" ]; then
+            cat "${{ github.workspace }}/timing-verbose-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Timing verbose summary was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Timing Results Logfile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-timing.json
+          path: ${{ github.workspace }}/results-timing.json
+          if-no-files-found: warn
+
+      - name: Upload Timing Stats Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-timing-stats-log
+          path: |
+            ${{ env.LWIP_PROF_TESTS }}/tls_timing/timing_stats_check.log
+            ${{ github.workspace }}/timing-verbose-summary.md
+          if-no-files-found: warn

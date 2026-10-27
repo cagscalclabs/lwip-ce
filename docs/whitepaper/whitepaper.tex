@@ -1267,7 +1267,7 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 				\midrule
 				\texttt{tests.yml} & Deterministic CEmu unit tests for parser, trust, and primitive behavior. & Hard regression gate; failures name the unit and vector/case. \\
 				\texttt{cavp.yml} & On-device validation against CAVP-derived and compatible generated vectors. & Confirms the shipping eZ80 binary computes expected primitive outputs. \\
-				\texttt{timing.yml} & Differential timing profiler for supported cryptographic units. & Telemetry gate; red rows or elevated exceedance rates flag investigation. \\
+				\texttt{statistics.yml} & RNG statistics publisher and differential timing profiler. & Each statistics job runs only when its corresponding checked-in data changes. \\
 				\texttt{sast.yml} & Semgrep scan over project-owned changes relative to upstream lwIP. & Static review surface focused on added or modified code. \\
 				\texttt{dast.yml} & Network-facing ARP, ICMP, TCP, and UDP probes against the emulated stack. & Integration coverage for transport behavior outside unit scope. \\
 				\bottomrule
@@ -1328,7 +1328,7 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	
 	Each unit is sampled $32$ times, where each sample is a composite of repeated executions selected by algorithm runtime class: fast units use $4$ repetitions, medium units use $2$, and slow units use $1$. This batching further suppresses class-independent timing jitter.
 
-	Latest timing-profiler workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml}.
+	Latest timing-profiler workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/statistics.yml}.
 
 	\subsubsection{CAVP Validation}
 

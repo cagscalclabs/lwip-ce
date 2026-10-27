@@ -3,6 +3,7 @@
 **Main CI**
 
 ![Build + Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=staging&cache=1)
+![Deploy](https://github.com/cagscalclabs/lwip-ce/actions/workflows/deploy.yml/badge.svg?branch=staging&cache=1)
 
 To enforce protection of branch `master`, pushing to master directly is disallowed. Contributors should commit to `staging`, and the staging gate will perform the following:
 
@@ -15,6 +16,9 @@ To enforce protection of branch `master`, pushing to master directly is disallow
   - Semgrep Pro and CodeQL
 - On pass, `master` is brought up to date with `staging`.
 - On fail, an issue is opened notifying the commit author of issues.
+- Deploy then generates builds:
+  - master -> https://github.com/cagscalclabs/lwip-ce/releases/tag/latest-stable
+  - staging -> https://github.com/cagscalclabs/lwip-ce/releases/tag/nightly
 
 <hr>
 
