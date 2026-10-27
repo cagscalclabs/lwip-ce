@@ -2510,19 +2510,6 @@ bool tls_handshake_init(
         return false;
     }
 
-    /* P-256 takes the calculator many seconds per operation, long enough for
-     * some servers to give up, so its key share is only sent when the Wi-Fi
-     * bridge computes it. Otherwise X25519 is the only share offered. */
-    ctx->p256_offered = (lwip_crypto_caps() & CTL_CAP_P256) != 0;
-    if (!ctx->p256_offered)
-    {
-        tls_secure_memzero(ctx->p256_private, sizeof(ctx->p256_private));
-        tls_secure_memzero(ctx->p256_public, sizeof(ctx->p256_public));
-        ctx->ecdhe_negotiated = false;
-        ctx->hostname = NULL;
-        return true;
-    }
-
     if (tls_random_bytes_ex(ctx->p256_private,
                             sizeof(ctx->p256_private),
                             TLS_RNG_STRENGTH_128) == NULL)
@@ -2613,11 +2600,7 @@ bool tls_send_client_hello(
         /* P-256 uncompressed public key (65 bytes) is first key_share entry */
         HELLO_P256_KEY_SHARE_OFFSET = 76,
         /* x25519 public key (32 bytes) follows P-256 entry */
-        HELLO_KEY_SHARE_OFFSET = 145,
-        /* Without a P-256 share, [66..176] become an X25519-only key_share. */
-        HELLO_GROUPS_LIST_OFFSET = 62,
-        HELLO_KEY_SHARE_EXT_OFFSET = 66,
-        HELLO_KEY_SHARE_EXT_END = 177
+        HELLO_KEY_SHARE_OFFSET = 145
     };
     /* Base ClientHello with zero placeholders for the 32-byte client random,
      * 65-byte P-256 key share, 32-byte x25519 key share, and dependent
@@ -2678,12 +2661,6 @@ bool tls_send_client_hello(
         /* record_size_limit: 4096 bytes (RFC 8449) */
         0x00, 0x1c, 0x00, 0x02, TLS_RECORD_SIZE_LIMIT_4096_HI, TLS_RECORD_SIZE_LIMIT_4096_LO
     };
-    /* key_share with only x25519: ext_len=38, client_shares_len=36,
-     * group=0x001d, key_len=32, then the key. */
-    static const uint8_t x25519_share_header[] = {
-        0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20
-    };
-    static const uint8_t x25519_first_groups[] = {0x00, 0x1d, 0x00, 0x17};
     static const uint8_t sni_header[] = {
         0x00, 0x00,             /* server_name */
         0x00, 0x00,             /* extension length patched */
@@ -2727,13 +2704,9 @@ bool tls_send_client_hello(
         return false;
     }
 
-    /* This implementation reuses the original key_shares in ClientHello2.
-     * An HRR asking for secp256r1 when only x25519 was shared is refused in
-     * tls_recv_server_hello; a cookie-only HRR leaves key_share unchanged. */
+    /* This implementation reuses the original key_shares in ClientHello2;
+     * a cookie-only HRR leaves key_share unchanged. */
     size_t template_len = sizeof(hello_template);
-    if (!ctx->p256_offered)
-        template_len -= (HELLO_KEY_SHARE_EXT_END - HELLO_KEY_SHARE_EXT_OFFSET) -
-                        (sizeof(x25519_share_header) + 32);
 
     /* early_secret/binder_key/finished_key/binder/hmac_ctx are secret
      * material only ever populated inside the ctx->psk_mode block below,
@@ -2872,25 +2845,9 @@ bool tls_send_client_hello(
         return false;
     }
 
-    if (ctx->p256_offered)
-    {
-        memcpy(out, hello_template, sizeof(hello_template));
-        memcpy(out + HELLO_KEY_SHARE_OFFSET, ctx->ecdhe_public, 32);
-        memcpy(out + HELLO_P256_KEY_SHARE_OFFSET, ctx->p256_public, 65);
-    }
-    else
-    {
-        size_t at = HELLO_KEY_SHARE_EXT_OFFSET;
-
-        memcpy(out, hello_template, HELLO_KEY_SHARE_EXT_OFFSET);
-        memcpy(out + HELLO_GROUPS_LIST_OFFSET, x25519_first_groups, sizeof(x25519_first_groups));
-        memcpy(out + at, x25519_share_header, sizeof(x25519_share_header));
-        at += sizeof(x25519_share_header);
-        memcpy(out + at, ctx->ecdhe_public, 32);
-        at += 32;
-        memcpy(out + at, hello_template + HELLO_KEY_SHARE_EXT_END,
-               sizeof(hello_template) - HELLO_KEY_SHARE_EXT_END);
-    }
+    memcpy(out, hello_template, sizeof(hello_template));
+    memcpy(out + HELLO_KEY_SHARE_OFFSET, ctx->ecdhe_public, 32);
+    memcpy(out + HELLO_P256_KEY_SHARE_OFFSET, ctx->p256_public, 65);
     memcpy(out + HELLO_RANDOM_OFFSET, ctx->client_random, 32);
     offset = template_len;
     size_t ext_len_offset = HELLO_EXT_LEN_OFFSET;
@@ -3367,9 +3324,9 @@ bool tls_recv_server_hello(
                 return false;
             }
 
-            /* A conforming HRR cannot request a group we sent a share for, and
-             * a second share (secp256r1 when only x25519 was sent) is not
-             * implemented, so any requested group ends the handshake. */
+            /* A conforming HRR cannot request either group because the first
+             * ClientHello included key shares for both, so any requested group
+             * ends the handshake. */
             if (hrr_key_share)
             {
                 /* RFC 8446 4.2.8: a HelloRetryRequest naming a group we already
@@ -3594,15 +3551,6 @@ bool tls_recv_server_hello(
             }
             else if (group == TLS_NAMED_GROUP_SECP256R1)
             {
-                /* No P-256 share was sent, so the server cannot pick it. */
-                if (!ctx->p256_offered)
-                {
-                    tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
-                                   TLS_ALERT_ILLEGAL_PARAMETER);
-                    ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x5a);
-                    return false;
-                }
                 /* P-256 uncompressed point: 0x04 || x(32) || y(32) = 65 bytes */
                 if (ke_len != 65 || data[offset + 4] != 0x04)
                 {

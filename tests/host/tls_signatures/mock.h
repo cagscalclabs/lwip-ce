@@ -91,10 +91,6 @@ static lwip_crypto_job_t lwip_crypto_rsa_verify(uint8_t a, const uint8_t *d, con
 { rsa_offload_calls++; return 0; }
 static void lwip_crypto_cancel(lwip_crypto_job_t job) {}
 static void lwip_crypto_reseed(void) {}
-/* Whether the "bridge" computes P-256; decides the key shares sent. */
-#define CTL_CAP_P256 0x08
-static uint8_t mock_caps = CTL_CAP_P256;
-static uint8_t lwip_crypto_caps(void) { return mock_caps; }
 static uint32_t lwip_sntp_read_rtc_raw(void) { return 1700000000; }
 static uint32_t lwip_sntp_get_unix_time(void) { return 1700000000; }
 static void tls_hs_reasm_reset(struct tls_handshake_context *ctx) {}

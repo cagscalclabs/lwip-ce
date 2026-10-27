@@ -121,6 +121,7 @@ Users can now disable TLS completely through the app config wizard, for any unco
   - reduce peer public key mod p before ladder (RFC 7748 §5) (P-256)
   - Previously *verify before encrypt* was a suggested policy; `tls_aes_decrypt()` is now locked until tag verification on authenticating cipher modes. This enforces RFC compliance rather than suggesting it.
 - Additional fixes identified by above review:
+  - Always generate and advertise both secp256r1 and X25519 TLS key shares. P-256 uses Wi-Fi bridge offload when available and otherwise falls back to the local implementation.
   - Fix CAVP identitied AES-GCM failures for IV lengths > 128 bits.
   - Run key-bearing AES public operations under `tls_crypto_guard`, preserving the caller's interrupt state and scrubbing completed implementation frames.
   - Clear all process-local truststore decisions and cached lookup state during TLS teardown; truststore failure remains scoped to TLS sessions while general cryptography stays available.
