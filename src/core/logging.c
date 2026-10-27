@@ -1,4 +1,7 @@
 #include <stdlib.h>
+#include <string.h>
+
+#include "drivers/mem.h"
 
 #include "lwip/logging.h"
 
@@ -6,15 +9,22 @@
  * I/O: persistence/console/log is entirely the caller's choice inside its
  * callback. See lwip/logging.h. */
 
+/* Override at build time to trade BSS for trace depth. */
+#ifndef LWIP_TRACEBACK_DEPTH
 #define LWIP_TRACEBACK_DEPTH 32u
+#endif
 
 static lwip_event_fn g_event_fn = NULL;
 static uint32_t g_last_debug_loc = 0xFFFFFFFFu; /* no event has this value */
 static lwip_log_verbosity_t g_verbosity = LWIP_LOG_VERBOSITY_INFO;
 static bool g_in_fatal = false;
 static void (*g_fatal_cleanup)(void) = NULL;
+/* Circular ring, newest at g_traceback_next - 1. Only ONE array is kept: the
+ * chronological ordering a reader needs is produced on demand by
+ * lwip_traceback_copy() into a caller-provided buffer (the file logger uses a
+ * short-lived stack array), so there is no second 704-byte ordering copy in
+ * .bss and no memmove on the push path. */
 static struct lwip_traceback_entry g_traceback[LWIP_TRACEBACK_DEPTH];
-static struct lwip_traceback_entry g_traceback_ordered[LWIP_TRACEBACK_DEPTH];
 static uint8_t g_traceback_next = 0;
 static uint8_t g_traceback_count = 0;
 
@@ -94,19 +104,55 @@ static bool kind_admitted(uint8_t kind)
     return g_verbosity >= kind_min_verbosity(kind);
 }
 
+/* Legacy pointer API (kept for ABI compatibility). The ordered copy is taken
+ * from lwIP's heap the first time it is asked for, so build-time .bss stays at
+ * one ring; the file logger and every in-tree caller use lwip_traceback_copy()
+ * and never trigger this allocation. Returns NULL until the memory subsystem
+ * is initialised. */
+static struct lwip_traceback_entry *g_traceback_ordered;
+
 const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count)
 {
-    for (uint8_t i = 0; i < g_traceback_count; i++)
+    if (!g_traceback_ordered)
+    {
+        g_traceback_ordered = (struct lwip_traceback_entry *)
+            mem_buffer_custom_malloc(sizeof(*g_traceback_ordered) * LWIP_TRACEBACK_DEPTH);
+    }
+    if (!g_traceback_ordered)
+    {
+        if (count)
+        {
+            *count = 0;
+        }
+        return NULL;
+    }
+    size_t n = lwip_traceback_copy(g_traceback_ordered, LWIP_TRACEBACK_DEPTH);
+    if (count)
+    {
+        *count = (uint8_t)n;
+    }
+    return g_traceback_ordered;
+}
+
+size_t lwip_traceback_copy(struct lwip_traceback_entry *dst, size_t cap)
+{
+    if (!dst || cap == 0)
+    {
+        return 0;
+    }
+    size_t n = g_traceback_count;
+    if (n > cap)
+    {
+        n = cap;
+    }
+    /* Newest first. */
+    for (size_t i = 0; i < n; i++)
     {
         uint8_t idx = (uint8_t)((g_traceback_next + LWIP_TRACEBACK_DEPTH - 1u - i) %
                                 LWIP_TRACEBACK_DEPTH);
-        g_traceback_ordered[i] = g_traceback[idx];
+        dst[i] = g_traceback[idx];
     }
-    if (count)
-    {
-        *count = g_traceback_count;
-    }
-    return g_traceback_ordered;
+    return n;
 }
 
 void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra)

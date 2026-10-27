@@ -357,18 +357,18 @@ static err_t altcp_tls_ce_pbuf_authenticate(struct tls_aes_context *aes_ctx,
  *          then verify the 16-byte tag. Tag mismatch is fatal and the
  *          input rx chain is left intact for the caller to free.
  *  Pass 2: Re-init the selected AEAD and walk the ciphertext in
- *          ALTCP_TLS_CE_STREAM_CHUNK
- *          strides. Each stride is copied from the head of `state->rx` into
- *          a scratch buffer, decrypted in place, and appended to a fresh
- *          output pbuf chain. After each stride we release the consumed
+ *          ALTCP_TLS_CE_STREAM_CHUNK strides. Each stride is copied from the
+ *          head of `state->rx` straight into a fresh PBUF_RAM output segment
+ *          and decrypted in place there (no per-record scratch buffer).
+ *          After each stride we release the consumed
  *          bytes from `state->rx` via pbuf_free_header and ack them with
  *          altcp_tls_ce_lower_recved. The 5-byte header is released first
  *          (before pass 2 starts), and the 16-byte tag is released after
  *          the last stride.
  *
- * Peak working set during pass 2 is (record_size - consumed) + chunk_scratch
- * + (output pbuf chain so far). Input and output sum stays bounded near
- * record_size — at no point are both copies live at full size.
+ * Peak working set during pass 2 is (record_size - consumed) + (output pbuf
+ * chain so far). Input and output sum stays bounded near record_size — at no
+ * point are both copies live at full size, and no extra scratch is needed.
  * Allocation failure remains retryable only before input consumption begins.
  * Once the header has been consumed, any failure is fatal: retrying would
  * attempt to parse the partially consumed record as a new TLS record.
@@ -397,7 +397,6 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     size_t actual_plaintext_len;
     size_t processed;
     err_t status = ERR_OK;
-    uint8_t *scratch = NULL;
 
     if (!state || !conn || !plaintext || !written || !inner_content_type)
     {
@@ -448,14 +447,10 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
 
     altcp_tls_ce_build_aead_nonce(iv, *seq_num, nonce);
 
-    /* Allocate the pass-2 scratch before the GHASH pass: failing after pass 1
-     * would make every retry redo the whole (slow) authentication. */
-    scratch = (uint8_t *)mem_buffer_custom_malloc(ALTCP_TLS_CE_STREAM_CHUNK);
-    if (!scratch)
-    {
-        return ERR_MEM;
-    }
-    mem_stats_tls_direct_add(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
+    /* Pass 2 decrypts in place inside the output pbuf, so no stream-sized
+     * scratch is needed: one copy out of the RX pbuf instead of
+     * copy-to-scratch + decrypt + copy-to-pbuf, and no 2 KiB allocation (and
+     * free) per record for the allocator to fragment on. */
 
     /* Pass 1: verify the complete record before releasing plaintext. */
     if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce,
@@ -499,22 +494,21 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
                                actual_plaintext_len - processed);
         struct pbuf *out_seg;
 
-        if (pbuf_copy_partial(state->rx, scratch, (u16_t)take, 0) != take)
-        {
-            goto fail;
-        }
-        if (!tls_aes_decrypt(&aes_ctx, scratch, take, scratch))
-        {
-            goto fail;
-        }
-
+        /* PBUF_RAM allocations are contiguous, so payload holds the whole
+         * chunk and can be decrypted in place. */
         out_seg = pbuf_alloc(PBUF_RAW, (u16_t)take, PBUF_RAM);
         if (!out_seg)
         {
             status = ERR_ABRT;
             goto fail;
         }
-        if (pbuf_take(out_seg, scratch, (u16_t)take) != ERR_OK)
+        if (pbuf_copy_partial(state->rx, out_seg->payload, (u16_t)take, 0) != take)
+        {
+            pbuf_free(out_seg);
+            status = ERR_BUF;
+            goto fail;
+        }
+        if (!tls_aes_decrypt(&aes_ctx, out_seg->payload, take, out_seg->payload))
         {
             pbuf_free(out_seg);
             goto fail;
@@ -538,10 +532,6 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     /* Release the trailing 16-byte tag from the input. */
     altcp_tls_ce_consume_recved(state, TLS_AES_AUTH_TAG_SIZE);
 
-    tls_secure_memzero(scratch, ALTCP_TLS_CE_STREAM_CHUNK);
-    mem_stats_tls_direct_release(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
-    mem_buffer_custom_free(scratch);
-    scratch = NULL;
 
     (*seq_num)++;
 
@@ -569,12 +559,6 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     return ERR_OK;
 
 fail:
-    if (scratch)
-    {
-        tls_secure_memzero(scratch, ALTCP_TLS_CE_STREAM_CHUNK);
-        mem_stats_tls_direct_release(ALTCP_TLS_CE_STREAM_CHUNK, ALTCP_TLS_CE_STREAM_CHUNK);
-        mem_buffer_custom_free(scratch);
-    }
     if (out_head)
     {
         pbuf_free(out_head);

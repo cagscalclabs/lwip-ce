@@ -3,17 +3,28 @@
 ## Architecture
 
 ### Current Implementation Status
-- **Protocol**: TLS 1.3 only
-- **Mode**: PSK-only (Pre-Shared Key without ECDHE)
-- **Cipher Suites**: TLS_AES_128_GCM_SHA256 (0x13, 0x01) and TLS_AES_128_CCM_SHA256 (0x13, 0x04)
-- **State**: Handshake, key derivation, and AES-GCM encryption/decryption working
+- **Protocol**: TLS 1.3 only (RFC 8446)
+- **Key exchange**: ECDHE with X25519 (preferred) and secp256r1/P-256
+  (HelloRetryRequest path), plus DHE-less PSK resumption
+- **Cipher suites**: TLS_AES_128_GCM_SHA256 (0x1301) and
+  TLS_AES_128_CCM_SHA256 (0x1304)
+- **Authentication**: RSA-PKCS#1 v1.5, RSA-PSS (rsa_pss_rsae_*), ECDSA P-256
+  server signatures; X.509 chain validation against a signed trust store
+  with hostname verification
+- **Records**: AEAD records with `record_size_limit` (4096) negotiation,
+  verify-before-decrypt, KeyUpdate
 
-### Not Yet Implemented
-- Full ECDHE (Elliptic Curve Diffie-Hellman Ephemeral) handshake
-- Certificate validation beyond parsing
-- RSA signature verification
-- 0-RTT session resumption
-- Additional cipher suites beyond AES-128 GCM/CCM with SHA-256
+`docs/tls-specifications.xml` is the authoritative, per-requirement
+compliance ledger (grade, code location, reviewer note). Do not duplicate
+status claims here; check the ledger.
+
+### Not Implemented (deliberate)
+- Revocation (CRL/OCSP; a stapled OCSP extension is rejected, see ledger
+  RFC 5280 6.1.3(a)(3))
+- 0-RTT early data (never offered)
+- id-RSASSA-PSS SubjectPublicKeyInfo certificates (fail-closed; ledger
+  RFC 4055 1.2/3.1)
+- Groups other than X25519 and P-256 (no P-384/P-521, no FFDHE)
 
 ## Cryptographic Primitives
 

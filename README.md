@@ -2,14 +2,10 @@
 
 **Main CI**
 
-![lwIP Main Build](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=master&cache=1)
-![Unit Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=master&cache=1)
-![SAST](https://github.com/cagscalclabs/lwip-ce/actions/workflows/sast.yml/badge.svg?branch=master&cache=1)
-<br>
-![Network Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/net.yml/badge.svg?branch=master&cache=1)
-![Host Tests and Fuzzing](https://github.com/cagscalclabs/lwip-ce/actions/workflows/host.yml/badge.svg?branch=master&cache=1)
-<br>
-![ACVP Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/acvp.yml/badge.svg?branch=master&cache=1)
+![Staging Gate](https://github.com/cagscalclabs/lwip-ce/actions/workflows/tests.yml/badge.svg?branch=staging&cache=1)
+
+The staging gate builds and runs Unit, RFC Compliance, ACVP, SAST, CodeQL, DAST, Network, and Host/Fuzz checks as one workflow. It promotes the exact tested `staging` commit to `master` only after every gate passes. Prefix a commit subject with `#hotfix`, `#urgent`, or `#priority` to run the gate immediately; other changes are collected by the nightly run.
+
 ![CAVP Primitive Validation](https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml/badge.svg?branch=master&cache=1)
 ![Timing Profiling](https://github.com/cagscalclabs/lwip-ce/actions/workflows/timing.yml/badge.svg?branch=master&cache=1)
 

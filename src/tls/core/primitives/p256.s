@@ -76,7 +76,9 @@
 ; ===========================================================================
 ; Scratch (.bss).  Layout constraints:
 ;   r0,r1 contiguous and saved0,saved1 contiguous (single 192-byte ldir).
-;   The RFC 6979 state (DK_*) overlays r0.. -- it is dead before the ladder.
+;   The RFC 6979 hash state (DK_CTX/DK_PAD/DK_INNER/DK_RFC/DK_H1) overlays
+;   r0.. -- it is dead before the ladder.  The RFC 6979 K/V chain state must
+;   outlive the ladder and lives in the verify-only __p256_pq tail instead.
 ;
 ; This buffer is one member of the linker-enforced crypto scratch overlay.
 ; P-256, RSA/HKDF, and X25519 are mutually exclusive at runtime.
@@ -196,14 +198,22 @@ __p256_scratch_end:
 .equ CZXB, __p256_r1
 .equ CZYB, __p256_r1 + 32
 .equ PZERO, __p256_INF                  ; 32 zero bytes
-; RFC 6979 overlay on r0.. (672 bytes available, 404 used)
+; RFC 6979 working state.
+; DK_CTX/DK_PAD/DK_INNER/DK_RFC/DK_H1 are only live inside p256_det_k and
+; p256_det_k_continue, both of which complete before the ladder runs, so they
+; may overlay the ladder scratch (r0/r1/saved0/saved1/rt).
+; DK_K and DK_V are different: they must survive the ladder and the modular
+; inverse so that the r=0/s=0 retry (RFC 6979 §3.2 step h.3) continues from
+; the correct K/V. __p256_pq is used only by the verify engine and by
+; tls_p256_publickey, never by tls_p256_sign, so the 32 bytes at pq+0..63 are
+; a safe home for them (the ladder clobbers r0, r1, saved0, saved1 and rt).
 .equ DK_CTX,   __p256_r0 + 0        ; struct tls_sha256_context (105 B)
 .equ DK_PAD,   __p256_r0 + 112      ; 64
 .equ DK_INNER, __p256_r0 + 176      ; 32
 .equ DK_RFC,   __p256_r0 + 208      ; 97
-.equ DK_K,     __p256_r0 + 308      ; 32
-.equ DK_V,     __p256_r0 + 340      ; 32
 .equ DK_H1,    __p256_r0 + 372      ; 32
+.equ DK_K,     __p256_pq + 0        ; 32   (must survive the ladder)
+.equ DK_V,     __p256_pq + 32       ; 32   (must survive the ladder)
 
 ; --- field-op macros: o = a (op) b.  Expand to BC=o, HL=a, DE=b, call. ---
 .macro FMUL o, a, b
@@ -3753,7 +3763,9 @@ _tls_p256_sign:
     jp      p256_exit
 .Lsg_retry:
     ; r=0 or s=0: advance K/V per RFC 6979 §3.2 step h.3, then retry.
-    ; DK_K/DK_V still hold valid state from the last p256_det_k run.
+    ; DK_K/DK_V live in __p256_pq (see the DK_* equates), which the ladder
+    ; and p256_ord_inv never touch, so they still hold the exact state the
+    ; last p256_det_k / p256_det_k_continue produced.
     call    _tls_crypto_guard_enable
     call    p256_det_k_continue         ; update K/V, generate new k
     call    _tls_crypto_guard_disable
@@ -3967,6 +3979,53 @@ _p256_test_ord_inv_vt:
     ld      hl, (ix + 9)
     ld      bc, (ix + 6)
     call    p256_ord_inv_vt
+    pop    ix
+    ret
+
+; bool p256_test_retry_k(uint8_t out_k[32], const uint8_t hash[32],
+;                        const uint8_t priv[32])
+; Reproduces the RFC 6979 §3.2 step h.3 path of tls_p256_sign: derive the
+; first nonce, clobber every byte of the ladder scratch (r0, r1, saved0,
+; saved1, rt) exactly as the scalar multiply and the modular inverse do, then
+; advance K/V and derive the retry nonce.  A correct implementation returns
+; the second RFC 6979 nonce; if K/V were kept in the ladder scratch the
+; result would be unrelated to it.
+    globl   _p256_test_retry_k
+    .type   _p256_test_retry_k, @function
+_p256_test_retry_k:
+    push    ix
+    ld      ix, 0
+    add     ix, sp
+    ld      hl, (ix + 6)
+    call    p256_null
+    jr      z, .Ltrk_fail
+    ld      hl, (ix + 9)
+    call    p256_null
+    jr      z, .Ltrk_fail
+    ld      hl, (ix + 12)
+    call    p256_null
+    jr      z, .Ltrk_fail
+    call    p256_di
+    ld      hl, (ix + 9)
+    ld      (dk_hash), hl
+    ld      hl, (ix + 12)
+    ld      (dk_priv), hl
+    call    p256_det_k              ; first nonce (K/V now seeded)
+    ld      hl, __p256_r0           ; simulate the ladder + k^-1 scratch use
+    ld      a, 0x5A
+    ld      (hl), a
+    ld      de, __p256_r0 + 1
+    ld      bc, 96 * 5 - 1          ; r0, r1, saved0, saved1, rt
+    ldir
+    call    p256_det_k_continue     ; advance K/V, derive the retry nonce
+    ld      hl, __p256_k
+    ld      de, (ix + 6)
+    ld      bc, 32
+    ldir
+    ld      a, 1
+    jp      p256_exit
+.Ltrk_fail:
+    xor     a, a
     pop     ix
     ret
 .endif

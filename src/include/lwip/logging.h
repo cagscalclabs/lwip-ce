@@ -246,7 +246,7 @@ struct lwip_event
     } data;
 };
 
-/** One captured traceback entry, newest-first from lwip_get_traceback().
+/** One captured traceback entry, newest-first from lwip_traceback_copy().
  *
  * For WARN/ERROR entries, module/kind/file/line/extra identify the emitting
  * call site. DEBUG events stay callback-only and do not occupy traceback
@@ -293,9 +293,20 @@ void lwip_set_event_cb(lwip_event_fn event_fn);
 lwip_event_fn lwip_get_event_cb(void);
 
 /** Return recent WARN/ERROR/socket-error trace entries, newest first.
- *  The returned pointer is owned by lwIP and remains valid until the next call
- *  to lwip_get_traceback() or until another trace entry is pushed. */
+ *  Legacy API: the returned array lives on lwIP's heap and is allocated on the
+ *  first call, so it costs nothing unless used. The pointer stays valid until
+ *  the next lwip_get_traceback() call. Prefer lwip_traceback_copy(), which
+ *  needs no allocation and writes into the caller's buffer. */
 const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count);
+
+/** Copy recent WARN/ERROR/socket-error trace entries into @p dst, newest
+ *  first, and return how many were written (at most @p cap and at most
+ *  LWIP_TRACEBACK_DEPTH).
+ *
+ *  Copies instead of returning an internal array so the stack keeps only one
+ *  traceback ring: readers that want chronological order (the file logger)
+ *  materialise it in a short-lived buffer of their own. */
+size_t lwip_traceback_copy(struct lwip_traceback_entry *dst, size_t cap);
 
 /** Human-readable label for a module (e.g. "tls"). */
 const char *lwip_debug_module_name(uint16_t module);

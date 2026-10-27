@@ -1,0 +1,46 @@
+{
+  "description": "RFC 6979 section 3.2 h.3 nonce-retry path for P-256 signing",
+  "transfer_files": [
+    "bin/P256RT.8xp",
+    "../../common/clibs.8xg",
+    "../../common/lwIPINST.8xp",
+    "../../common/LWIP.0.8xv",
+    "../../common/LWIP.1.8xv",
+    "../../common/LWIP.2.8xv",
+    "../../common/LWIP.3.8xv",
+    "../../common/LWIP.4.8xv",
+    "../../common/LWIP.5.8xv",
+    "../../common/LWIP.6.8xv",
+    "../../common/LWIP.7.8xv",
+    "../../common/LWIP.8.8xv",
+    "../../common/lwip.8xv"
+  ],
+  "target": {
+    "name": "P256RT",
+    "isASM": true
+  },
+  "sequence": [
+    "delay|10000",
+    "key|clear",
+    "action|launch:INSTALL",
+    "hashWait|16",
+    "key|left",
+    "key|enter",
+    "delay|2000",
+    "action|launch",
+    "hashWait|1",
+    "key|enter"
+  ],
+  "hashes": {
+    "1": {
+      "description": "P-256 retry test passed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 120000
+    }
+  }
+}

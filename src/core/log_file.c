@@ -256,18 +256,24 @@ static const char *kind_str(uint8_t kind)
 
 static uint32_t log_ts(void) { return rtc_Time(); }
 
+#ifndef LWIP_TRACEBACK_DUMP_DEPTH
+#define LWIP_TRACEBACK_DUMP_DEPTH 16u
+#endif
+
 /* Append the current traceback (newest first) to the log immediately after
  * an ERROR line, so a failure's call-site history is captured inline rather
- * than only being queryable live via lwip_get_traceback(). Only entries with
+ * than only being queryable live via lwip_traceback_copy(). Only entries with
  * a real file/line are rendered here; socket-wrapper entries (file==0) are
  * skipped since they carry no {file,line} to show. */
 static void log_dump_traceback(void)
 {
-    uint8_t count = 0;
-    const struct lwip_traceback_entry *tb = lwip_get_traceback(&count);
+    /* Ordered on demand, in this frame's stack, so the traceback ring does not
+     * need a second permanently-allocated ordering array in .bss. */
+    struct lwip_traceback_entry tb[LWIP_TRACEBACK_DUMP_DEPTH];
+    size_t count = lwip_traceback_copy(tb, LWIP_TRACEBACK_DUMP_DEPTH);
     char line[LOG_LINE_MAX];
 
-    for (uint8_t i = 0; i < count; i++)
+    for (size_t i = 0; i < count; i++)
     {
         const struct lwip_traceback_entry *e = &tb[i];
         if (e->file == LWIP_FILE_NONE && e->line == 0 && e->component == 0)

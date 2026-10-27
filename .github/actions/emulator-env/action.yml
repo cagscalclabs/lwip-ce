@@ -1,6 +1,6 @@
 name: lwIP-CE emulator environment
 description: >
-  CEdev with the latest lwip-latest build installed, the decrypted CE ROM,
+  CEdev with this workflow run's lwip-latest build installed, the decrypted CE ROM,
   the shared dyload files in tests/common, and the CEmu-lwIP-CE autotester
   with its emulated USB Ethernet adapter bridged to a NATed TAP interface.
 
@@ -11,10 +11,6 @@ inputs:
   rom-key:
     description: ROM decryption passphrase (secrets.AES_ENCRYPT_KEY).
     required: true
-  github-token:
-    description: Token used to download the lwip-latest artifact.
-    required: true
-
 outputs:
   autotester:
     description: Path to the autotester binary.
@@ -49,44 +45,11 @@ runs:
         echo "CEDEV=${{ github.workspace }}/CEdev" >> "$GITHUB_ENV"
         echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
 
-    - name: Download lwip-latest artifact
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        # The commit under test: the PR head for pull requests, else the run's commit.
-        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      run: |
-        mkdir -p "${{ github.workspace }}/release"
-        # Use the build.yml artifact of this exact commit, waiting for it when
-        # build.yml is still running (pull requests start both at once).
-        run_id=""
-        for _ in $(seq 1 60); do
-          run_id=$(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?head_sha=$SHA&status=success&per_page=1" \
-            --jq '.workflow_runs[0].id // empty')
-          if [ -n "$run_id" ]; then
-            if gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts" \
-                 --jq '.artifacts[].name' | grep -qx lwip-latest; then
-              break
-            fi
-            run_id=""
-            break
-          fi
-          pending=$(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?head_sha=$SHA&per_page=5" \
-            --jq '[.workflow_runs[] | select(.status != "completed")] | length')
-          if [ "$pending" = 0 ]; then break; fi
-          sleep 30
-        done
-        if [ -z "$run_id" ]; then
-          echo "::warning::No successful build.yml run for $SHA; falling back to the newest lwip-latest artifact."
-          run_id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-            --jq '[.artifacts[] | select(.name == "lwip-latest" and .expired == false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id')
-        fi
-        if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-          echo "::error::No lwip-latest artifact found in this repo. Run build.yml first."
-          exit 1
-        fi
-        echo "Using lwip-latest from build.yml run $run_id"
-        gh run download "$run_id" --repo "${{ github.repository }}" --name lwip-latest --dir "${{ github.workspace }}/release"
+    - name: Download this run's lwip-latest artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: lwip-latest
+        path: ${{ github.workspace }}/release
 
     - name: Install lwip.lib + headers into CEdev
       shell: bash

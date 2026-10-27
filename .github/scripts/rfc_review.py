@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Fail a PR check when two model passes confirm a grounded RFC regression.
+"""Fail a change gate when two model passes confirm a grounded RFC regression.
 
-This script is designed for pull_request_target. It must run from the trusted
-base revision and obtains contributor changes only through the GitHub API as
-data. It never checks out or executes pull-request code.
+PR mode is designed for pull_request_target and obtains contributor changes
+only through the GitHub API as data. Commit mode reviews a local git diff from
+RFC_BASE_SHA to RFC_HEAD_SHA and never executes changed source code.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -143,6 +144,56 @@ def build_src_diff(files: list[dict[str, Any]]) -> tuple[str, list[str]]:
             f"src/** patch is {len(diff)} characters; limit is {MAX_SRC_DIFF_CHARS}"
         )
     return diff, incomplete
+
+
+def git_output(*args: str, text: bool = True) -> str | bytes:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=text,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", "replace")
+        raise ReviewError(f"git {' '.join(args)} failed: {stderr[:500]}") from exc
+    return result.stdout
+
+
+def build_commit_src_diff(base: str, head: str) -> tuple[str, set[str]]:
+    """Build inert RFC-review evidence for all unpromoted src/** changes."""
+    raw_names = git_output(
+        "diff", "--name-only", "-z", "--diff-filter=ACMR", base, head, "--", "src", text=False
+    )
+    assert isinstance(raw_names, bytes)
+    changed = {
+        name.decode("utf-8", "surrogateescape")
+        for name in raw_names.split(b"\0")
+        if name
+    }
+    if len(changed) > MAX_FILES:
+        raise ReviewError(f"commit range contains more than {MAX_FILES} changed src files")
+    if not changed:
+        return "", set()
+
+    diff = git_output(
+        "diff",
+        "--no-ext-diff",
+        "--no-color",
+        "--find-renames",
+        "--unified=20",
+        base,
+        head,
+        "--",
+        "src",
+    )
+    assert isinstance(diff, str)
+    if len(diff) > MAX_SRC_DIFF_CHARS:
+        raise ReviewError(
+            f"src/** patch is {len(diff)} characters; limit is {MAX_SRC_DIFF_CHARS}"
+        )
+    return diff, changed
 
 
 def matrix_requirements(matrix_text: str) -> set[tuple[str, str]]:
@@ -422,27 +473,41 @@ def main() -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     github_token = os.environ.get("GITHUB_TOKEN", "")
     api_key = os.environ.get("OPENAI_API_KEY", "")
+    base_sha = os.environ.get("RFC_BASE_SHA", "").strip()
+    head_sha = os.environ.get("RFC_HEAD_SHA", "").strip()
     try:
         number = int(os.environ.get("PR_NUMBER", "0"))
     except ValueError:
         number = 0
-    if not repository or not github_token or number <= 0:
-        raise ReviewError("GITHUB_REPOSITORY, GITHUB_TOKEN, and PR_NUMBER are required")
+    commit_mode = bool(base_sha and head_sha)
+    if commit_mode and number > 0:
+        raise ReviewError("choose either PR_NUMBER or RFC_BASE_SHA/RFC_HEAD_SHA")
+    if not commit_mode and number <= 0:
+        raise ReviewError("PR_NUMBER or RFC_BASE_SHA/RFC_HEAD_SHA is required")
+    if not repository or not github_token:
+        raise ReviewError("GITHUB_REPOSITORY and GITHUB_TOKEN are required")
 
     try:
-        pr = fetch_pr(repository, number, github_token)
-        files = fetch_pr_files(repository, number, github_token)
-        src_diff, incomplete = build_src_diff(files)
-        changed_src_files = set()
-        for item in files:
-            filename = str(item.get("filename", ""))
-            previous_filename = str(item.get("previous_filename", ""))
-            if filename.startswith("src/"):
-                changed_src_files.add(filename)
-            if previous_filename.startswith("src/"):
-                changed_src_files.add(previous_filename)
+        pr_body = ""
+        if commit_mode:
+            src_diff, changed_src_files = build_commit_src_diff(base_sha, head_sha)
+            incomplete: list[str] = []
+        else:
+            pr = fetch_pr(repository, number, github_token)
+            files = fetch_pr_files(repository, number, github_token)
+            src_diff, incomplete = build_src_diff(files)
+            changed_src_files = set()
+            for item in files:
+                filename = str(item.get("filename", ""))
+                previous_filename = str(item.get("previous_filename", ""))
+                if filename.startswith("src/"):
+                    changed_src_files.add(filename)
+                if previous_filename.startswith("src/"):
+                    changed_src_files.add(previous_filename)
+            pr_body = str(pr.get("body") or "")[:MAX_PR_BODY_CHARS]
         if not src_diff:
-            update_comment(repository, number, github_token, None)
+            if not commit_mode:
+                update_comment(repository, number, github_token, None)
             write_summary("## RFC compliance\n\nNo `src/**` changes; model review skipped.")
             print("No src/** changes; RFC review passes.")
             return 0
@@ -482,17 +547,18 @@ def main() -> int:
         )
 
         if first_verdict == "PASS":
-            update_comment(repository, number, github_token, None)
+            if not commit_mode:
+                update_comment(repository, number, github_token, None)
             write_summary("## RFC compliance\n\n✅ " + first_summary)
             print("RFC compliance review passes.")
             return 0
         if first_verdict == "NEEDS_HUMAN_REVIEW":
             message = human_comment(first_summary)
-            update_comment(repository, number, github_token, message)
+            if not commit_mode:
+                update_comment(repository, number, github_token, message)
             write_summary("## RFC compliance\n\n⚠️ " + first_summary)
             return 1
 
-        pr_body = str(pr.get("body") or "")[:MAX_PR_BODY_CHARS]
         verification_input = (
             "Independently verify the proposed RFC_BREAK findings. Return RFC_BREAK only "
             "for findings you independently confirm from the changed lines and the trusted "
@@ -527,18 +593,21 @@ def main() -> int:
                 "The initial model raised a possible RFC regression, but the independent "
                 f"verification pass did not confirm it. Verifier: {second_summary}"
             )
-            update_comment(repository, number, github_token, human_comment(reason))
+            if not commit_mode:
+                update_comment(repository, number, github_token, human_comment(reason))
             write_summary("## RFC compliance\n\n⚠️ " + reason)
             return 1
 
         message = break_comment(confirmed)
-        update_comment(repository, number, github_token, message)
+        if not commit_mode:
+            update_comment(repository, number, github_token, message)
         write_summary("## RFC compliance\n\n❌ " + message.replace(COMMENT_MARKER, "").strip())
         return 1
     except ReviewError as exc:
         reason = f"Automated review could not complete safely: {exc}"
         try:
-            update_comment(repository, number, github_token, human_comment(reason))
+            if not commit_mode:
+                update_comment(repository, number, github_token, human_comment(reason))
         except ReviewError as comment_exc:
             print(f"Could not update PR comment: {comment_exc}", file=sys.stderr)
         write_summary("## RFC compliance\n\n⚠️ " + reason)

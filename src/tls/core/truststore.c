@@ -314,10 +314,13 @@ tls_truststore_status_t tls_truststore_init(void)
     }
     uint8_t *store_db_start = store_header_bytes + TLS_TRUSTSTORE_HEADER_LEN;
     uint16_t store_db_len = truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
-    tls_ctx.truststore.size = truststore_size;
-    tls_ctx.truststore.entry_count = header->entry_count;
-    tls_ctx.truststore.version = header->version;
-    tls_ctx.truststore.created_timestamp = header->created_timestamp;
+    /* Keep the header metadata local until the signature verifies. Publishing
+     * it up front meant a failed validation left tls_ctx.truststore.size,
+     * .entry_count, .version and .created_timestamp describing an unverified
+     * (attacker-supplied) header while .status was an error code. */
+    const uint16_t store_entry_count = header->entry_count;
+    const uint8_t store_version = header->version;
+    const uint32_t store_created = header->created_timestamp;
 
     TS_TRACE("E1 hash hdr");
     // Hash header fields (version + timestamp + entry_count) and entries
@@ -362,11 +365,16 @@ tls_truststore_status_t tls_truststore_init(void)
         memcpy(truststore_verified_hash, tstore_hash,
                sizeof truststore_verified_hash);
         truststore_valid_for_session = true;
+        /* Only now is the header trustworthy enough to publish. */
+        tls_ctx.truststore.size = truststore_size;
+        tls_ctx.truststore.entry_count = store_entry_count;
+        tls_ctx.truststore.version = store_version;
+        tls_ctx.truststore.created_timestamp = store_created;
         tls_ctx.truststore.status = TLS_STORE_OK;
         uint32_t now = lwip_sntp_get_unix_time();
-        if (now != 0 && now > tls_ctx.truststore.created_timestamp &&
-            now - tls_ctx.truststore.created_timestamp > TLS_TRUSTSTORE_AGE_WARN_SECONDS)
-            WARN_CODE((now - tls_ctx.truststore.created_timestamp) / (24u * 60u * 60u));
+        if (now != 0 && now > store_created &&
+            now - store_created > TLS_TRUSTSTORE_AGE_WARN_SECONDS)
+            WARN_CODE((now - store_created) / (24u * 60u * 60u));
         INFO("truststore verified");
     }
     else

@@ -1,33 +1,238 @@
-name: Unit Tests
+name: Tests
 
-# Dyload-based functional correctness for lwIP-CE unit modules under
-# tests/unit/. These tests link against the curated, manifest-gated
-# lwip.lib produced by build.yml -- the same artifact a real consumer app
-# would dyload. This catches curation drops / ABI mismatches / missing
-# manifest entries that a white-box build can't see. Dispatched explicitly
-# by build.yml only when a new artifact was successfully uploaded.
+# staging is the integration branch. Ordinary pushes only inspect commit
+# subjects for an urgent prefix. A nightly scheduler dispatches this same
+# workflow on staging when staging received an unpromoted commit in the last
+# 24 hours. Successful full runs fast-forward master to the exact tested SHA.
 
 on:
+  schedule:
+    # 03:00 UTC is 10/11 PM US Eastern, depending on daylight saving time.
+    - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: Run the full gate (select the staging branch when dispatching)
+        required: false
+        type: boolean
+        default: true
+      reason:
+        description: Why the gate was requested
+        required: false
+        default: manual
+  push:
+    branches: [staging]
 
 permissions:
   contents: read
   actions: read
+  security-events: write
+
+concurrency:
+  group: lwip-staging-gate
+  cancel-in-progress: false
 
 env:
+  CEDEV: ${{ github.workspace }}/CEdev
+  CEDEV_BIN: ${{ github.workspace }}/CEdev/bin
   AUTOTESTER_ROM: ${{ github.workspace }}/${{ vars.AUTOTESTER_ROM }}
-  LWIP_DYLIB_TESTS: ${{github.workspace}}/tests/unit
-  LWIP_TESTS_COMMON: ${{github.workspace}}/tests/common
-  CEDEV: ${{github.workspace}}/CEdev
-  CEDEV_BIN: ${{github.workspace}}/CEdev/bin
-  # Units whose first post-install hash may show 468FCC4B ("RNG setup timed
-  # out") on CEmu because CEmu has no physical TRNG.  A failure on hash #1
-  # with that exact CRC is downgraded to a skip+warning instead of a hard
-  # failure so CI is not broken by an emulator quirk.
-  # EMULATOR_QUIRK_UNITS:
+  LWIP_DYLIB_TESTS: ${{ github.workspace }}/tests/unit
+  LWIP_TESTS_COMMON: ${{ github.workspace }}/tests/common
 
 jobs:
+  decide:
+    name: Decide whether to run the gate
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      run_gate: ${{ steps.decision.outputs.run_gate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Evaluate trigger
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE_SHA: ${{ github.event.before }}
+          FORCE_GATE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          echo "run_gate=false" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.event_name }}" = schedule ]; then
+            git fetch --no-tags origin master staging
+            if [ -n "$(git rev-list --max-count=1 --since='24 hours ago' origin/master..origin/staging)" ]; then
+              echo "staging changed in the last 24 hours; dispatching the gate on staging"
+              gh workflow run tests.yml --repo "${{ github.repository }}" --ref staging \
+                -f force=true -f reason=nightly
+            else
+              echo "No unpromoted staging commits from the last 24 hours."
+            fi
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            if [ "${{ github.ref_name }}" != staging ]; then
+              echo "::error::Manual staging gates must be dispatched with the staging branch selected."
+              exit 1
+            fi
+            if [ "$FORCE_GATE" = true ]; then
+              echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          range="${BEFORE_SHA}..${GITHUB_SHA}"
+          if [ -z "$BEFORE_SHA" ] || [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            range="$GITHUB_SHA"
+          fi
+          if git log --format=%s "$range" \
+            | grep -Eiq '^#(hotfix|urgent|priority)([[:space:]:-]|$)'; then
+            echo "Priority commit detected; running the full gate now."
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No priority prefix; this push will be covered by the nightly gate."
+          fi
+
+  build:
+    name: Build lwIP
+    needs: decide
+    if: needs.decide.outputs.run_gate == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout lwIP-CE
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Load pinned CI dependency versions
+        id: ci_versions
+        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make tar curl unzip zip libxml2-utils unifdef python3 python3-clang libclang-dev
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/CEdev
+          key: ${{ runner.os }}-cedev-${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
+
+      - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
+
+      - name: Add CEdev to PATH
+        run: |
+          echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout fixed convbin branch
+        uses: actions/checkout@v4
+        with:
+          repository: mateoconlechuga/convbin
+          ref: R_Z80_BYTE012
+          path: ${{ github.workspace }}/convbin
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build fixed convbin from source
+        run: |
+          make -C "${{ github.workspace }}/convbin" -j"$(nproc)"
+          cmake -E copy "${{ github.workspace }}/convbin/bin/convbin" "${{ env.CEDEV_BIN }}/convbin"
+          "${{ env.CEDEV_BIN }}/convbin" --version || true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install ce-libify
+        run: |
+          git clone --depth 1 --branch "${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}" https://github.com/alessiodam/toolchain_libify.git "${{ runner.temp }}/ce-libify"
+          GOCACHE="${{ runner.temp }}/go-cache" go test -C "${{ runner.temp }}/ce-libify" ./...
+          make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
+          ce-libify --version
+
+      - name: Audit fatal error logging
+        run: python3 tests/host/error_logging/test_error_sites.py
+
+      - name: make dylib-release
+        id: make_dylib
+        run: make dylib-release
+
+      - name: verify libload lib
+        id: make_libload
+        run: |
+          test -f "${{ github.workspace }}/build/lwip.8xv"
+          test -f "${{ github.workspace }}/build/lwip.lib"
+          test -f "${{ env.CEDEV }}/lib/libload/lwip.lib"
+          test -d "${{ env.CEDEV }}/include/lwip"
+          test -f "${{ github.workspace }}/lwip.zip"
+
+      - name: build Wi-Fi examples
+        id: make_wifi_examples
+        run: |
+          make -C examples/wifi_ping
+          make -C examples/wifi_api
+          mkdir -p wifi-examples
+          cp examples/wifi_ping/bin/LWPING.8xp examples/wifi_api/bin/LWWIFI.8xp wifi-examples/
+
+      - name: upload Wi-Fi examples artifact
+        id: upload_wifi_examples
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-wifi-examples
+          path: ${{ github.workspace }}/wifi-examples/
+          if-no-files-found: error
+
+      - name: upload build artifact
+        id: upload_build_artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/build/
+          if-no-files-found: error
+
+      - name: upload release zip artifact
+        id: upload_zip_artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-release-zip
+          path: ${{ github.workspace }}/lwip.zip
+          if-no-files-found: error
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          {
+            echo "## lwIP Latest Dylib"
+            echo
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| make dylib-release | ${{ steps.make_dylib.outcome }} |"
+            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
+            echo "| build Wi-Fi examples | ${{ steps.make_wifi_examples.outcome }} |"
+            echo "| upload build artifact | ${{ steps.upload_build_artifact.outcome }} |"
+            echo "| upload release zip artifact | ${{ steps.upload_zip_artifact.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    outputs:
+      build_success: ${{ steps.upload_build_artifact.outcome == 'success' && steps.upload_zip_artifact.outcome == 'success' }}
+
   dylib_unit_tests:
+    needs: build
     runs-on: ubuntu-latest
 
     steps:
@@ -61,19 +266,11 @@ jobs:
           echo "${{github.workspace}}/CEdev/bin" >> $GITHUB_PATH
           echo $GITHUB_PATH
 
-      - name: Download lwip-latest artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "${{github.workspace}}/release"
-          run_id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-            --jq '[.artifacts[] | select(.name == "lwip-latest" and .expired == false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id')
-          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-            echo "::error::No lwip-latest artifact found in this repo. Run build.yml first."
-            exit 1
-          fi
-          echo "Downloading lwip-latest from run $run_id"
-          gh run download "$run_id" --repo "${{ github.repository }}" --name lwip-latest --dir "${{github.workspace}}/release"
+      - name: Download this run's lwip-latest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/release
 
       - name: Verify build artifact contents
         run: |
@@ -348,3 +545,562 @@ jobs:
       - name: Remove CEmu Rom
         if: always()
         run: shred -u "${{env.AUTOTESTER_ROM}}" 2>/dev/null || true
+
+  rfc_compliance:
+    name: RFC compliance
+    needs: build
+    if: github.ref == 'refs/heads/staging'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out tested staging commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch current master baseline
+        run: git fetch --no-tags origin master
+
+      - name: Review unpromoted source changes for RFC regressions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RFC_BASE_SHA: origin/master
+          RFC_HEAD_SHA: ${{ github.sha }}
+          RFC_REVIEW_MODEL: ${{ vars.RFC_REVIEW_MODEL || 'gpt-6-sol' }}
+          RFC_REVIEW_CYBER_PROGRAM: daybreak_blue
+          RFC_VERIFY_MODEL: ${{ vars.RFC_VERIFY_MODEL || 'gpt-6-astra' }}
+          RFC_VERIFY_CYBER_PROGRAM: standard
+        run: python3 .github/scripts/rfc_review.py
+
+  acvp:
+    needs: build
+    name: ACVP JSON over CEmu RPC
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host reference dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-cryptography
+
+      - name: Generate 416-vector differential corpus
+        run: python3 tests/validation/acvp/generate_vectors.py
+
+      - name: Check host ACVP parsing
+        run: python3 tests/validation/acvp/selftest.py
+
+      - id: env
+        uses: ./.github/actions/emulator-env
+        with:
+          rom-name: ${{ vars.AUTOTESTER_ROM }}
+          rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+
+      - name: Build ACVP calculator service
+        run: make -C tests/validation/acvp
+
+      - name: Process ACVP fixture through CEmu
+        id: run_acvp
+        run: |
+          sudo --preserve-env=AUTOTESTER_ROM python3 tests/validation/acvp/run.py \
+            --autotester "${{ steps.env.outputs.autotester }}" \
+            --usb "${{ steps.env.outputs.usb-step }}" \
+            --timeout-ms 60000000
+
+      - name: Publish ACVP results
+        if: always()
+        run: |
+          python3 tests/validation/acvp/summary.py \
+            --run-outcome "${{ steps.run_acvp.outcome }}" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove CEmu ROM
+        if: always()
+        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acvp-validation
+          path: |
+            tests/validation/acvp/artifacts/acvp-validation.vectors
+            tests/validation/acvp/summary.md
+            tests/validation/acvp/NETLOG.8xv
+            tests/validation/acvp/autotest.json
+          if-no-files-found: ignore
+
+  semgrep_scan:
+    needs: build
+    name: SAST (semgrep)
+    runs-on: ubuntu-latest
+    container:
+      # A Docker image with Semgrep installed. Do not change this.
+      image: semgrep/semgrep
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build SAST target list
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git remote add source https://github.com/lwip-tcpip/lwip.git || true
+          git fetch --no-tags source master
+
+          BASE="$(git merge-base HEAD FETCH_HEAD || true)"
+          if [ -z "$BASE" ]; then
+            BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+
+          git diff --numstat --diff-filter=ACMR "$BASE" HEAD -- src \
+            | awk '($1 != "0" || $2 != "0") {print $3}' \
+            | grep -E '\.(c|h)$' \
+            | sort -u > semgrep-targets.txt || true
+
+          echo "SAST baseline: $BASE"
+          echo "SAST targets:"
+          cat semgrep-targets.txt
+
+      # Scan files that are new or changed relative to upstream lwIP.
+      - run: |
+          if [ -s semgrep-targets.txt ]; then
+            set --
+            while IFS= read -r target; do
+              set -- "$@" --include "$target"
+            done < semgrep-targets.txt
+            semgrep ci --sarif "$@" > semgrep.sarif
+          else
+            printf '{"version":"2.1.0","runs":[]}\n' > semgrep.sarif
+          fi
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep.sarif
+        if: always()
+
+  analyze:
+    needs: build
+    name: CodeQL Analyze
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout lwIP-CE
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Load pinned CI dependency versions
+        id: ci_versions
+        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Compute upstream-unchanged paths to ignore
+        id: ignore
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git remote add upstream-lwip https://github.com/lwip-tcpip/lwip.git || true
+          git fetch --no-tags upstream-lwip master
+
+          BASE="$(git merge-base HEAD FETCH_HEAD || true)"
+          if [ -z "$BASE" ]; then
+            BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+          echo "CodeQL exclusion baseline: $BASE"
+
+          # Files genuinely touched since the upstream merge-base (content
+          # changes only -- numstat's own 0/0 filter drops mode-only diffs
+          # like an executable-bit flip with no byte change).
+          git diff --numstat --diff-filter=ACMR "$BASE" HEAD -- src \
+            | awk '($1 != "0" || $2 != "0") {print $3}' \
+            | grep -E '\.(c|h)$' \
+            | sort -u > /tmp/changed_files.txt || true
+
+          find src -type f \( -iname '*.c' -o -iname '*.h' \) \
+            | sed 's|^\./||' | sort -u > /tmp/all_src_files.txt
+
+          comm -23 /tmp/all_src_files.txt /tmp/changed_files.txt > /tmp/unchanged_files.txt
+
+          echo "Excluding $(wc -l < /tmp/unchanged_files.txt) byte-identical-to-upstream files from CodeQL."
+
+          {
+            echo "name: \"lwIP-CE CodeQL config (generated)\""
+            echo "paths-ignore:"
+            while IFS= read -r f; do
+              [ -n "$f" ] && echo "  - \"$f\""
+            done < /tmp/unchanged_files.txt
+          } > "$GITHUB_WORKSPACE/codeql-config.generated.yml"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp
+          build-mode: manual
+          config-file: ${{ github.workspace }}/codeql-config.generated.yml
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make tar curl unzip libxml2-utils unifdef python3 python3-clang libclang-dev
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/CEdev
+          key: ${{ runner.os }}-cedev-${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
+
+      - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
+
+      - name: Add CEdev to PATH
+        run: |
+          echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout fixed convbin branch
+        uses: actions/checkout@v4
+        with:
+          repository: mateoconlechuga/convbin
+          ref: R_Z80_BYTE012
+          path: ${{ github.workspace }}/convbin
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build fixed convbin from source
+        run: |
+          make -C "${{ github.workspace }}/convbin" -j"$(nproc)"
+          cmake -E copy "${{ github.workspace }}/convbin/bin/convbin" "${{ env.CEDEV_BIN }}/convbin"
+          "${{ env.CEDEV_BIN }}/convbin" --version || true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install ce-libify
+        run: |
+          git clone --depth 1 --branch "${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}" https://github.com/alessiodam/toolchain_libify.git "${{ runner.temp }}/ce-libify"
+          GOCACHE="${{ runner.temp }}/go-cache" go test -C "${{ runner.temp }}/ce-libify" ./...
+          make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
+          ce-libify --version
+
+      - name: make dylib (traced by CodeQL)
+        run: make dylib
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:c-cpp"
+
+  dast_report:
+    needs: build
+    name: DAST report + gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Keep full history so the report's src_commit remains useful
+          # provenance even though freshness is decided by src_hash.
+          fetch-depth: 0
+          # src/ includes the X25519 gitlink, and its working-tree contents are
+          # part of the source fingerprint produced by the local DAST runner.
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check report covers current src/ contents
+        run: |
+          readarray -t report_source < <(python3 -c "
+          import json
+          with open('tests/dast.json') as f:
+              d = json.load(f)
+          print(d.get('src_commit', ''))
+          print(d.get('src_hash', ''))
+          ")
+          report_commit=${report_source[0]}
+          report_hash=${report_source[1]}
+          current_hash=$(python3 build-tools/dast/lwip-dast.py --src-hash)
+          if [ -z "$report_hash" ]; then
+            echo "::error::dast.json has no src_hash — re-run the DAST harness once to record the exact tested source contents."
+            exit 1
+          fi
+          echo "Report commit : $report_commit (provenance only)"
+          echo "Report src hash: $report_hash"
+          echo "Current src hash: $current_hash"
+          if [ "$report_hash" != "$current_hash" ]; then
+            echo "::error::dast.json covers different src/ contents — re-run the DAST harness and commit the refreshed report."
+            exit 1
+          fi
+          echo "Report covers the current src/ contents."
+
+      - name: Render report to job summary and gate on failures
+        run: |
+          python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"
+
+  nettest:
+    needs: build
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [sockets, raw, tls, records, server, perf]
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: env
+        uses: ./.github/actions/emulator-env
+        with:
+          rom-name: ${{ vars.AUTOTESTER_ROM }}
+          rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+
+      - name: Install scapy
+        run: sudo pip install --break-system-packages scapy
+
+      - name: Test host endpoint corroboration
+        if: matrix.suite == 'tls'
+        run: python3 tests/net/test_host_corroboration.py
+
+      - name: Build ${{ matrix.suite }}
+        run: make -C tests/net ${{ matrix.suite }}
+
+      - name: Run ${{ matrix.suite }}
+        run: |
+          sudo --preserve-env=AUTOTESTER_ROM,GITHUB_STEP_SUMMARY python3 tests/net/run.py \
+            --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
+            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+
+      - name: Remove CEmu Rom
+        if: always()
+        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: net-${{ matrix.suite }}
+          path: |
+            tests/net/NETLOG-*.8xv
+            tests/net/metrics.json
+            tests/net/endpoint-probes.json
+            tests/net/*.pcap
+            tests/net/autotest-*.json
+          if-no-files-found: ignore
+
+  dast:
+    needs: build
+    name: DAST (live, emulated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check calc-side test list matches the manifest
+        run: |
+          python3 build-tools/dast/lwip-dast.py --gen-header
+          git diff --exit-code tests/profiling/lwip_dast/src/dast_tests.h
+
+      - id: env
+        uses: ./.github/actions/emulator-env
+        with:
+          rom-name: ${{ vars.AUTOTESTER_ROM }}
+          rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+
+      - name: Install scapy
+        run: sudo pip install --break-system-packages scapy
+
+      - name: Build LWDAST
+        run: make -C tests/profiling/lwip_dast RELEASE_ROOT="${{ github.workspace }}/release"
+
+      - name: Run DAST probes
+        run: |
+          sudo --preserve-env=AUTOTESTER_ROM python3 tests/profiling/lwip_dast/ci.py \
+            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+
+      - name: Render report and gate on failures
+        run: python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove CEmu Rom
+        if: always()
+        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dast-live
+          path: |
+            tests/dast.json
+            tests/profiling/lwip_dast/autotester.log
+          if-no-files-found: ignore
+
+  host_tests:
+    needs: build
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Run host tests
+        run: |
+          status=0
+          for test in tests/host/*/run.py tests/host/*/test_*.py; do
+            echo "::group::$test"
+            python3 "$test" || { status=1; echo "::error file=$test::$test failed"; }
+            echo "::endgroup::"
+          done
+          exit $status
+
+  fuzz:
+    needs: build
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [json, xml, url, base64, asn1, pcap, x509, ws, tls]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Restore corpus
+        uses: actions/cache@v5
+        with:
+          path: tests/fuzz/out/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        run: make -C tests/fuzz run-${{ matrix.target }} FUZZ_SECONDS=300
+
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: tests/fuzz/out/artifacts/
+          if-no-files-found: ignore
+
+  promote:
+    name: Promote tested staging SHA to master
+    permissions:
+      contents: write
+    needs: [decide, build, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, dast_report, nettest, dast, host_tests, fuzz]
+    if: >-
+      always() && needs.decide.outputs.run_gate == 'true' &&
+      needs.build.result == 'success' && needs.dylib_unit_tests.result == 'success' &&
+      needs.rfc_compliance.result == 'success' &&
+      needs.acvp.result == 'success' && needs.semgrep_scan.result == 'success' &&
+      needs.analyze.result == 'success' && needs.dast_report.result == 'success' &&
+      needs.nettest.result == 'success' && needs.dast.result == 'success' &&
+      needs.host_tests.result == 'success' && needs.fuzz.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward master to the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master staging
+          if [ "$(git rev-parse origin/master)" = "$GATE_SHA" ]; then
+            echo "master already points at the tested commit."
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor origin/master "$GATE_SHA"; then
+            echo "::error::master is not an ancestor of the tested staging commit; refusing a non-fast-forward promotion."
+            exit 1
+          fi
+          gh api --method PATCH "repos/${{ github.repository }}/git/refs/heads/master" \
+            -f sha="$GATE_SHA" -F force=false
+
+  notify_failure:
+    name: Notify commit author on failure
+    permissions:
+      contents: write
+    needs: [decide, build, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, dast_report, nettest, dast, host_tests, fuzz]
+    if: >-
+      always() && needs.decide.outputs.run_gate == 'true' && (
+      needs.build.result != 'success' || needs.dylib_unit_tests.result != 'success' ||
+      needs.rfc_compliance.result != 'success' ||
+      needs.acvp.result != 'success' || needs.semgrep_scan.result != 'success' ||
+      needs.analyze.result != 'success' || needs.dast_report.result != 'success' ||
+      needs.nettest.result != 'success' || needs.dast.result != 'success' ||
+      needs.host_tests.result != 'success' || needs.fuzz.result != 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add or update a commit comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
+          RFC_RESULT: ${{ needs.rfc_compliance.result }}
+          ACVP_RESULT: ${{ needs.acvp.result }}
+          SAST_RESULT: ${{ needs.semgrep_scan.result }}
+          CODEQL_RESULT: ${{ needs.analyze.result }}
+          DAST_REPORT_RESULT: ${{ needs.dast_report.result }}
+          NETWORK_RESULT: ${{ needs.nettest.result }}
+          LIVE_DAST_RESULT: ${{ needs.dast.result }}
+          HOST_RESULT: ${{ needs.host_tests.result }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+        run: |
+          set -euo pipefail
+          commit_json=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA")
+          author=$(jq -r '.author.login // .committer.login // empty' <<< "$commit_json")
+          author_name=$(jq -r '.commit.author.name // "the commit author"' <<< "$commit_json")
+          mention="**$author_name**"
+          if [ -n "$author" ]; then mention="@$author"; fi
+
+          body="$RUNNER_TEMP/staging-gate-failure.md"
+          {
+            echo '<!-- staging-gate-failure -->'
+            echo "$mention, the staging gate failed for commit $GATE_SHA."
+            echo
+            echo '| Gate | Result |'
+            echo '|---|---|'
+            echo "| Build | $BUILD_RESULT |"
+            echo "| Unit tests | $UNIT_RESULT |"
+            echo "| RFC compliance | $RFC_RESULT |"
+            echo "| ACVP | $ACVP_RESULT |"
+            echo "| SAST | $SAST_RESULT |"
+            echo "| CodeQL | $CODEQL_RESULT |"
+            echo "| DAST report | $DAST_REPORT_RESULT |"
+            echo "| Network tests | $NETWORK_RESULT |"
+            echo "| Live DAST | $LIVE_DAST_RESULT |"
+            echo "| Host tests | $HOST_RESULT |"
+            echo "| Fuzzing | $FUZZ_RESULT |"
+            echo
+            echo "[View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > "$body"
+
+          comment_id=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA/comments" --paginate \
+            --jq '.[] | select(.body | contains("<!-- staging-gate-failure -->")) | .id' | head -1)
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "repos/${{ github.repository }}/comments/$comment_id" \
+              -f body="$(cat "$body")"
+          else
+            gh api --method POST "repos/${{ github.repository }}/commits/$GATE_SHA/comments" \
+              -f body="$(cat "$body")"
+          fi
+

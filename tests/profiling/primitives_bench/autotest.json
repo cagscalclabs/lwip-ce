@@ -1,0 +1,48 @@
+{
+  "description": "Cycle-count benchmark; writes TLSBENCH AppVar",
+  "transfer_files": [
+    "bin/XPBENCH.8xp",
+    "../../common/clibs.8xg",
+    "../../common/lwIPINST.8xp",
+    "../../common/LWIP.0.8xv",
+    "../../common/LWIP.1.8xv",
+    "../../common/LWIP.2.8xv",
+    "../../common/LWIP.3.8xv",
+    "../../common/LWIP.4.8xv",
+    "../../common/LWIP.5.8xv",
+    "../../common/LWIP.6.8xv",
+    "../../common/LWIP.7.8xv",
+    "../../common/LWIP.8.8xv",
+    "../../common/lwip.8xv"
+  ],
+  "target": {
+    "name": "XPBENCH",
+    "isASM": true
+  },
+  "sequence": [
+    "delay|60000",
+    "key|clear",
+    "action|launch:INSTALL",
+    "hashWait|16",
+    "key|left",
+    "key|enter",
+    "delay|1000",
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "delay|2000",
+    "saveVar|TLSBENCH"
+  ],
+  "hashes": {
+    "1": {
+      "description": "bench completed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    }
+  }
+}

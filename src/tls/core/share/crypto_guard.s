@@ -20,6 +20,10 @@
 .section .bss._crypto_guard_state,"aw",@nobits
 _crypto_guard_state:
     .zero   2
+; Interrupt state popped by the current tls_crypto_guard_disable. Written and
+; read with interrupts disabled, so a single byte is safe.
+_crypto_guard_ie:
+    .zero   1
  
 .section    .text,"ax",@progbits
  
@@ -46,6 +50,23 @@ _tls_crypto_guard_enable:
 ; void tls_crypto_guard_disable(void)
 _tls_crypto_guard_disable:
 ; _erase_stack:
+    ; Pop the saved interrupt state first (memory-only, no stack traffic) so we
+    ; can tell whether this is the outermost disable. Nested disables skip the
+    ; scrub: every byte a nested frame could have left behind lies below the
+    ; OUTER frame's SP, so the outermost disable still scrubs it. That turns an
+    ; O(calls x stack-depth) cost (e.g. once per HMAC round inside PBKDF2 or
+    ; once per record segment) into one scrub per outermost crypto call.
+    ld hl, _crypto_guard_state + 1
+    srl (hl)
+    dec hl
+    rr (hl)                 ; CY = saved interrupt state
+    ld a, 0
+    rla                     ; a = CY (interrupt state), CY = 0
+    ld (_crypto_guard_ie), a
+    ld a, (_crypto_guard_state)
+    inc hl
+    or a, (hl)              ; other frames still guarded?
+    jr nz, .Lrestore_interrupts
     ; Scrub the stack below our return address down to the floor (stackBot+4),
     ; one byte above the hardware stack-limit guard at stackBot+3 (0xD19881).
     ;
@@ -89,12 +110,11 @@ _tls_crypto_guard_disable:
 
     ; restore interrupts
 .Lrestore_interrupts:
-    ; pop the most recently pushed state and apply it
-    ; if no state has been pushed, this does nothing
-    ld hl, _crypto_guard_state + 1
-    srl (hl)
-    dec hl
-    rr (hl)
+    ; apply the state popped above. An unbalanced disable (nothing pushed)
+    ; pops the saturating 1 bits, i.e. "interrupts were enabled", which is the
+    ; same behaviour the guard had before this split.
+    ld a, (_crypto_guard_ie)
+    rrca                    ; CY = saved interrupt state
     ret nc
     ei
     ret

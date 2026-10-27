@@ -61,15 +61,15 @@
   <requirement>
     <ref>FIPS 186-5</ref>
     <section>6.4.1 (ECDSA signing; nonce per RFC 6979; r=0 or s=0 means new k)</section>
-    <location>src/tls/core/primitives/p256.s: _tls_p256_sign (.Lsg_retry path), p256_det_k_continue (new label after L3602)</location>
+    <location>src/tls/core/primitives/p256.s: tls_p256_sign .Lsg_retry / p256_det_k_continue; DK_K/DK_V equates (~L212-216) place the RFC 6979 chain state in the verify-only __p256_pq tail because the ladder and p256_ord_inv clobber r0/r1/saved0/saved1/rt</location>
     <grade>COMPLIANT</grade>
-    <note>FIXED: r==0 or s==0 now jumps to .Lsg_retry which calls p256_det_k_continue (new entry at .Ldk_gen with K/V state preserved), then repeats the scalar multiply per RFC 6979 §3.2 step h.3. Probability of needing the retry is ~2^-256. RFC 6979 A.2.5 vector continues to pass.</note>
+    <note>r==0 or s==0 jumps to .Lsg_retry, which calls p256_det_k_continue (K = HMAC(K, V||0x00), V = HMAC(K, V), next k) and repeats the sign per RFC 6979 3.2 step h.3; probability ~2^-256. Prior to this audit the K/V chain state lived in the ladder scratch (DK_K at __p256_r0+308 inside __p256_saved1, DK_V at +340, DK_H1 at +372), all of which p256_scalar_mul (96-byte ldir into saved1) and p256_ord_inv (12x32-byte slots at r0) overwrite before the retry test, so the retry advanced from clobbered state instead of the RFC 6979 K/V. DK_K/DK_V now live at __p256_pq+0/+32, which neither routine touches; DK_CTX/DK_PAD/DK_INNER/DK_RFC/DK_H1 stay in r0 because they are dead before the ladder. Regression test: tests/unit/tls_p256_retry drives the full path (seeds K/V, clobbers r0..rt, advances once) and requires the RFC 6979 h.3 nonce 8E83DC49...8FDB, computed with an independent implementation from the A.2.5 key; it fails on the pre-audit layout. The A.2.5 signature vector still passes.</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
         <scope>compliance</scope>
-        <note>Fixed as of v3.0.0-rc2.</note>
+        <note>Fixed as of v3.0.0-rc2. 2026-10-27 audit: the earlier "K/V state preserved" claim was false; layout moved and covered by a regression test.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1114,11 +1114,12 @@
     <section>10.3.1 (Hash_df)</section>
     <location>src/tls/core/random.c: tls_hash_df (L299-328) - counter / no_of_bits_to_return encoding</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Hash(counter || 0x000001B8 || input), counter from 0x01, truncated to 55 bytes; digest scratch zeroized. Differential test only.</note>
+    <note>Hash(counter || no_of_bits_to_return(0x000001B8) || input), counter from 0x01, output truncated to 55 bytes, digest scratch zeroized. Verified by inspection; there is no Hash_df differential test in the tree (tests/unit/tls_random exercises the DRBG end to end, and test_failure_paths.py only checks source strings).</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
+        <note>2026-10-27 audit: note corrected: no differential test exists.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1197,12 +1198,13 @@
     <location>src/tls/core/primitives/random.s: .Linit_validate_candidate (L246-361) - start-up samples</location>
     <grade>DEVIANT</grade>
     <justification>Window size per collection is 952 bits. We scale the threshholds to this window size.</justification>
-    <note>Two 952-sample windows with continuous RCT/APT state, discarded and never credited, but a ~520-byte wipe runs between them so the samples are not the at least 1024 consecutive samples 4.3 requires.</note>
+    <note>Two 952-sample windows with continuous RCT/APT state, discarded and never credited, but the 237-byte collection buffer is reused between them so the samples are not the at least 1024 consecutive samples 4.3 requires.</note>
 
      <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
         <scope>compliance, threat assessment</scope>
+      <note>2026-10-27 audit: wipe between windows is 237 bytes, not ~520.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1276,12 +1278,12 @@
     <section>3 / Table 2 (RSA modulus at least 2048 bits for signature verification)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L857-869); src/tls/core/rsa.c: tls_rsa_decrypt_signature (L302-303) - modulus size lower bound</location>
     <grade>COMPLIANT</grade>
-    <note>Initially deviant. Minimum enforced on byte length (mod_len &gt;= 256 after stripping one leading 0x00), not bit length, so a 2041-2047-bit modulus encoded in 256 bytes passes. Low risk; fix by requiring a nonzero top byte or counting bits.</note>
+    <note>Modulus size floor is enforced on real bit length: tls_rsa_public_key_shape_ok (rsa.c, used by the cert-walker path) rejects a modulus whose leading byte lacks the top bit set, so anything below 2048 bits is refused even when encoded in 256 bytes. The earlier '2041-2047-bit modulus passes' note described the pre-rc3 byte-length-only check.</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
-        <note>Before v3.0.0-rc3 local RSA was compliant; As of v3.0.0-rc3 the offloaded RSA path applies the same sanity check before dispatching.</note>
+        <note>Before v3.0.0-rc3 local RSA was compliant; As of v3.0.0-rc3 the offloaded RSA path applies the same sanity check before dispatching. 2026-10-27 audit: note described a bug that no longer exists (rsa.c top-bit check).</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1330,7 +1332,7 @@
     <section>crypto_guard interrupt masking nesting</section>
     <location>src/tls/core/share/crypto_guard.s: _tls_crypto_guard_enable (L27-44), .Lrestore_interrupts (L91-100) - IFF save/restore</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1 for balanced nesting depths of at most 16. The 16-bit LIFO records IFF2 and executes ei only when the popped level was enabled; depths greater than 16 are unsupported rather than safely saturated. Coverage is partial: HMAC guards its SHA-256 operations, and HKDF/PBKDF2 inherit that per-HMAC protection but are not guarded as whole operations. The principal synchronous handshake X25519 fallbacks are guarded; X25519 also wipes its writable scratch arena internally. As of v3.0.0-rc3 AES key-bearing public operations guard their private implementations, including initialization, streaming updates, encryption/decryption, authentication, and context destruction.</note>
+    <note>Compliant as of/before v3.0.0-rc1 for balanced nesting depths of at most 16. The 16-bit LIFO records IFF2 and executes ei only when the popped level was enabled; depths greater than 16 collapse the 16-deep state stack: the overflow is recorded by setting the MSB of the high byte (set 7,(hl)) so interrupts are eventually re-enabled, which is a lossy recovery rather than a clean failure. Coverage is partial: HMAC guards its SHA-256 operations, and HKDF/PBKDF2 inherit that per-HMAC protection but are not guarded as whole operations. The principal synchronous handshake X25519 fallbacks are guarded; X25519 also wipes its writable scratch arena internally. As of v3.0.0-rc3 AES key-bearing public operations guard their private implementations, including initialization, streaming updates, encryption/decryption, authentication, and context destruction.</note>
 
     <reviews>
       <reviewed-by>
@@ -1397,11 +1399,12 @@
     <section>Truststore readiness / fail-closed</section>
     <location>src/lwIP.c: lwip_stack_init (L277-321); src/tls/core/tls.c: tls_init (L309-343), tls_cleanup (L345-354); src/tls/core/truststore.c: tls_truststore_cleanup (L240-252), tls_truststore_invalidate (L254-260), tls_truststore_init (L262-381), lookup entry points (L491-625); src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_setup (L2602-2612) - component-scoped failure and session gate</location>
     <grade>COMPLIANT</grade>
-    <note>Truststore absence, corruption, version mismatch, layout failure, or signature failure leaves tls_ctx.initialized false and prevents both socket-managed and direct ALTCP TLS sessions. lwip_stack_init treats this as a TLS-component failure and still succeeds, leaving the base stack and general cryptographic APIs available. Truststore lookups additionally require a store verified in the current session; disappearance or modification detected after initialization revokes TLS readiness for subsequent sessions. Initialization and teardown both clear the session-valid flag, verified digest, cached entry, and public truststore metadata.</note>
+    <note>Truststore absence, corruption, version mismatch, layout failure, or signature failure leaves tls_ctx.initialized false and prevents both socket-managed and direct ALTCP TLS sessions. lwip_stack_init treats this as a TLS-component failure and still succeeds, leaving the base stack and general cryptographic APIs available. Truststore lookups additionally require a store verified in the current session; disappearance or modification detected after initialization revokes TLS readiness for subsequent sessions. Initialization and teardown both clear the session-valid flag, verified digest, cached entry, and public truststore metadata. The header-derived metadata (size, entry_count, version, created_timestamp) is held in locals and only published after the RSA-PSS signature and layout checks succeed, so a failed validation leaves no attacker-supplied metadata behind.</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
+      <note>2026-10-27 audit: metadata publication moved after verification so every failure path leaves it cleared.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1421,16 +1424,17 @@
   <requirement>
     <ref>RFC 4055</ref>
     <section>1.2 / 3.1 (id-RSASSA-PSS SPKI and RSASSA-PSS-params)</section>
-    <location>src/tls/core/x509.c: tls_x509_parse_algorithm_identifier (L282-345), SPKI processing (L1407-1438); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1298-1305) - rsaEncryption parameter enforcement</location>
-<grade>COMPLIANT</grade>
-<note>RSA SubjectPublicKeyInfo is recognized only when the rsaEncryption AlgorithmIdentifier parameters are an ASN.1 NULL with zero length. Absent or non-NULL parameters leave the key type unknown, causing certificate validation to fail.</note>
+    <location>src/tls/core/x509.c: tls_x509_parse_algorithm_identifier (SPKI AlgorithmIdentifier); src/tls/core/handshake.c: certificate walker key-type dispatch</location>
+<grade>DEVIANT</grade>
+<note>id-RSASSA-PSS SubjectPublicKeyInfo is not supported. The parser recognises rsaEncryption only with ASN.1 NULL parameters (and id-ecPublicKey); anything else, including id-RSASSA-PSS with RSASSA-PSS-params, leaves the key type unknown and the certificate is rejected fail-closed. The signature-side branch for TLS_ALG_RSA_PSS_RSAE_SHA256 is unreachable because the parser never assigns it. Consequence: a certificate that uses a PSS-only key cannot be validated; rsaEncryption keys signed with PSS (rsa_pss_rsae_*) are still accepted.</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
+      <note>2026-10-27 audit: previous note duplicated the rsaEncryption entry and did not address PSS; graded DEVIANT with justification.</note>
       </reviewed-by>
     </reviews>
-  </requirement>
+  <justification>RSASSA-PSS SPKI requires parsing and enforcing the full RSASSA-PSS-params structure (hash, MGF, salt length, trailer) plus a separate verification path. Rejecting the key fail-closed keeps the security property intact and costs interop only with CA certificates that use PSS-only keys, which are rare in the chains this client encounters. Recorded as deviant rather than compliant because the requirement is unimplemented.</justification></requirement>
   <requirement>
     <ref>RFC 4648</ref>
     <section>3.1 / 3.3 (output-buffer bounds; PR #63 hardening)</section>
@@ -1460,11 +1464,12 @@
     <section>3.3 (reject non-alphabet characters)</section>
     <location>src/tls/core/base64.c: b64_value (L31-35) - NUL byte accepted</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low, latent): strchr(charset, 0) matches the terminator, so a 0x00 byte decodes as sextet 64 and is accepted ("TW\0u" decodes to 3 bytes). In-tree PEM callers (x509.c L1476-1492, key.c L84-95) pre-filter to the alphabet. Fix: ch != 0 check or a 256-entry lookup table.</note>
+    <note>b64_value rejects the NUL byte explicitly ((ch == 0) ? NULL : strchr(alphabet, ch)) before the alphabet lookup, so a 0x00 sextet is rejected instead of being accepted through the string terminator. Any character outside the alphabet is rejected; callers additionally pre-filter whitespace for PEM/DER input.</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
+      <note>2026-10-27 audit: the NUL-acceptance bug described here was already fixed in base64.c.</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1551,11 +1556,12 @@
     <section>4.1.2.4 (issuer MUST be a non-empty DN)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate (L1315-1330); src/tls/core/handshake.c: tls_cert_chain_verify_one (L1265-1273), tls_cert_walker_validate_one (L1396-1422) - issuer presence, chaining, and anchor lookup</location>
     <grade>COMPLIANT</grade>
-    <note>The certificate parser requires the issuer to be a non-empty constructed SEQUENCE and rejects an empty or incorrectly tagged issuer immediately. The complete DER Name is retained for adjacent-certificate name chaining. A Common Name is not required by RFC 5280; it is extracted only for the legacy AKI-absent trust-anchor fallback, while AKI/SKI anchoring supports issuers without a CN.</note>
+    <note>The parser requires the issuer to be a non-empty constructed SEQUENCE and rejects an empty or incorrectly tagged issuer immediately. The complete DER Name is retained for adjacent-certificate name chaining and for trust-anchor selection, which hashes the whole issuer Name (SHA-256) and matches it against the anchors. No Common Name is required and none is used to select an anchor: subject_cn is extracted for diagnostics only and issuer_cn is recorded but never consulted, so an issuer without a CN is handled identically to one with a CN.</note>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
+      <note>2026-10-27 audit: removed the claimed CN-based anchor fallback, which does not exist (lookup is by full issuer Name).</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1781,12 +1787,13 @@
     <section>6.1.3(a)(3) / 6.3 (revocation status)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed CW_EXT_BODY (L1113-1139) - revocation</location>
     <grade>DEVIANT</grade>
-    <note>Revocation deliberately not implemented: no CRL/OCSP and stapled OCSP in CertificateEntry extensions is skipped unread.</note>
+    <note>Revocation deliberately not implemented: no CRL or OCSP checking is performed. A CertificateEntry that carries extensions (for example a stapled OCSP response, which this client never requests) is rejected with a fatal unsupported_extension alert rather than ignored, so such a server cannot complete the handshake with this client.</note>
     <justification>Not achievable on this platform; permanently out of scope. CRL distribution points are fetched over HTTP, which requires a working network connection — circular for a TLS stack that has not yet completed a handshake. Delta-CRL storage requires persistent memory the platform does not reliably provide. OCSP stapling would require the server to cooperate, is not universally deployed, and the response still requires signature verification over an untrusted network before keys are established.</justification>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
+      <note>2026-10-27 audit: corrected: CertificateEntry extensions are rejected, not skipped.</note>
       </reviewed-by>
     </reviews>
   </requirement>

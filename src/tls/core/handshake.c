@@ -2681,28 +2681,23 @@ bool tls_handshake_init(
     const struct tls_psk_identity *psk_identity)
 {
     bool x25519_ok;
-    bool p256_ok;
 
     if (!tls_handshake_init_common(ctx, psk, psk_identity))
     {
         return false;
     }
 
-    ctx->p256_job = lwip_crypto_p256(ctx->p256_private, NULL, ctx->p256_public);
-    p256_ok = ctx->p256_job != 0;
-    if (!p256_ok)
-    {
-        tls_crypto_guard_enable();
-        p256_ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
-        tls_crypto_guard_disable();
-    }
-    if (!p256_ok)
-    {
-        tls_secure_memzero(ctx->ecdhe_private, 32);
-        tls_secure_memzero(ctx->p256_private, 32);
-        ERROR_CODE(0x2b);
-        return false;
-    }
+    /* The P-256 key share is NOT generated here. ClientHello1 only carries
+     * the X25519 share, so a P-256 keypair is needed only after a
+     * HelloRetryRequest that selects secp256r1 (RFC 8446 §4.2.8). Generating
+     * it eagerly cost a full P-256 scalar multiplication (~0.9 s with the
+     * software implementation) on every handshake, including the common case
+     * where the server accepts X25519 and the public key is thrown away.
+     * tls_handshake_p256_step() derives it on demand (offload first, software
+     * fallback) and the HRR path in altcp_tls_ce waits for that step before
+     * building ClientHello2. */
+    ctx->p256_job = 0;
+    ctx->keyshare_ready &= (uint8_t)~TLS_KEYSHARE_P256_READY;
 
     ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, NULL, ctx->ecdhe_public);
     x25519_ok = ctx->ecdhe_job != 0;
@@ -2715,8 +2710,6 @@ bool tls_handshake_init(
     }
     if (!x25519_ok)
     {
-        lwip_crypto_cancel(ctx->p256_job);
-        ctx->p256_job = 0;
         tls_secure_memzero(ctx->ecdhe_private, 32);
         tls_secure_memzero(ctx->p256_private, 32);
         ERROR_CODE(0x2a);

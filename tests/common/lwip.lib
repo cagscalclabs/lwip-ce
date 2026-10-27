@@ -27,6 +27,7 @@
 	export	lwip_socket_set_timeout
 	export	lwip_socket_last_error
 	export	lwip_socket_get_netif
+	export	lwip_traceback_copy
 	export	lwip_get_traceback
 	export	lwip_debug_module_name
 	export	lwip_debug_file_name

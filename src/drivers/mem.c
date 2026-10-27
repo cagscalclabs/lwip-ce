@@ -1151,7 +1151,12 @@ bool mem_buffer_peek(const struct mem_buffer *rb, size_t offset, uint8_t *out, s
         return false;
     }
 
-    size_t pos = (rb->u.ring.head + offset) % rb->current_size;
+    /* offset <= len <= ring.len < current_size, so one subtraction suffices. */
+    size_t pos = rb->u.ring.head + offset;
+    if (pos >= rb->current_size)
+    {
+        pos -= rb->current_size;
+    }
     size_t first = rb->current_size - pos;
     if (first > len)
     {
@@ -1364,7 +1369,13 @@ bool mem_buffer_push(struct mem_buffer *rb, const uint8_t *data, size_t len)
         return false;
     }
 
-    size_t tail = (rb->u.ring.head + rb->u.ring.len) % rb->current_size;
+    /* head < current_size and len <= current_size, so one conditional
+     * subtraction replaces the 24-bit modulo (no divide in the RX path). */
+    size_t tail = rb->u.ring.head + rb->u.ring.len;
+    if (tail >= rb->current_size)
+    {
+        tail -= rb->current_size;
+    }
     size_t first = rb->current_size - tail;
     if (first > len)
     {
@@ -1403,9 +1414,14 @@ size_t mem_buffer_pop(struct mem_buffer *rb, uint8_t *out, size_t len)
     }
 
     size_t old_head = rb->u.ring.head;
-    rb->u.ring.head = (rb->u.ring.head + len) % rb->current_size;
+    size_t new_head = old_head + len;
+    bool wrapped = new_head >= rb->current_size;
+    if (wrapped)
+    {
+        new_head -= rb->current_size;
+    }
+    rb->u.ring.head = new_head;
     rb->u.ring.len -= len;
-    bool wrapped = (old_head + len) >= rb->current_size;
     mem_buffer_maybe_shrink(rb, wrapped);
     mem_pressure_maybe_clear(rb);
     return len;
@@ -1453,6 +1469,15 @@ void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
 
     if (needed > rb->current_size && (rb->flags & BUFFER_LOCK_SIZE) == 0)
     {
+        /* mem_buffer_resize() copies the pool to a new buffer, so growing a
+         * pool that still has live blocks would silently invalidate every
+         * pointer already handed out. Only grow an empty pool; callers see a
+         * plain allocation failure instead of dangling blocks. */
+        if (rb->u.pool.pool_used_blocks != 0)
+        {
+            mem_buffer_notify_pressure(rb, needed, MEM_PRESSURE_CRITICAL);
+            return NULL;
+        }
         bool skip_heap_accounting =
             (rb->flags & (BUFFER_USER_ALLOC | BUFFER_LWIP_PBUF_POOL)) != 0;
         size_t step = rb->step ? rb->step : 256u;
@@ -1556,42 +1581,78 @@ void *mem_buffer_malloc(struct mem_buffer *rb, size_t size)
         return NULL;
     }
 
+    /* First-fit scan over the block bitmap. Whole bytes that are entirely
+     * used or entirely free are consumed in one step, which keeps the scan
+     * short on the common large-pool path (the previous version tested one
+     * bit at a time and divided for every bit). */
+    const size_t block_count = rb->u.pool.pool_block_count;
     size_t run = 0;
     size_t start = 0;
-    for (size_t i = 0; i < rb->u.pool.pool_block_count; i++)
+    bool found = false;
+    size_t i = 0;
+    while (!found && i < block_count)
     {
-        size_t byte = i / 8u;
-        uint8_t mask = (uint8_t)(1u << (i % 8u));
-        bool used = (rb->u.pool.pool_bitmap[byte] & mask) != 0;
-        if (!used)
+        size_t byte = i >> 3;
+        unsigned bit = (unsigned)(i & 7u);
+        uint8_t bits = rb->u.pool.pool_bitmap[byte];
+        if (bit == 0 && (i + 8u) <= block_count)
+        {
+            if (bits == 0xFFu)
+            {
+                run = 0;
+                i += 8u;
+                continue;
+            }
+            if (bits == 0x00u)
+            {
+                if (run == 0)
+                {
+                    start = i;
+                }
+                run += 8u;
+                i += 8u;
+                found = run >= blocks_needed;
+                continue;
+            }
+        }
+        if (((bits >> bit) & 1u) != 0)
+        {
+            run = 0;
+        }
+        else
         {
             if (run == 0)
             {
                 start = i;
             }
             run++;
-            if (run == blocks_needed)
-            {
-                for (size_t j = 0; j < blocks_needed; j++)
-                {
-                    size_t idx = start + j;
-                    size_t b = idx / 8u;
-                    uint8_t m = (uint8_t)(1u << (idx % 8u));
-                    rb->u.pool.pool_bitmap[b] |= m;
-                }
-                uint8_t *base = rb->buf + (start * rb->u.pool.pool_block_size);
-                *(uint16_t *)base = (uint16_t)blocks_needed;
-                rb->u.pool.pool_used_blocks += blocks_needed;
-                return (void *)(base + MEM_POOL_HEADER_SIZE);
-            }
+            found = (run == blocks_needed);
         }
-        else
-        {
-            run = 0;
-        }
+        i++;
     }
 
-    return NULL;
+    if (!found)
+    {
+        return NULL;
+    }
+
+    for (size_t idx = start, left = blocks_needed; left != 0;)
+    {
+        size_t sh = idx & 7u;
+        size_t n = 8u - sh;
+        if (n > left)
+        {
+            n = left;
+        }
+        rb->u.pool.pool_bitmap[idx >> 3] |= (uint8_t)(((1u << n) - 1u) << sh);
+        idx += n;
+        left -= n;
+    }
+
+    uint8_t *base = rb->buf + (start * rb->u.pool.pool_block_size);
+    *(uint16_t *)base = (uint16_t)blocks_needed;
+    rb->u.pool.pool_used_blocks += blocks_needed;
+    return (void *)(base + MEM_POOL_HEADER_SIZE);
 }
 
 void mem_buffer_free(struct mem_buffer *rb, void *ptr)
@@ -1656,12 +1717,17 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
         tls_secure_memzero(base, blocks * rb->u.pool.pool_block_size);
     }
 
-    for (size_t j = 0; j < blocks; j++)
+    for (size_t idx = start, left = blocks; left != 0;)
     {
-        size_t idx = start + j;
-        size_t b = idx / 8u;
-        uint8_t m = (uint8_t)(1u << (idx % 8u));
-        rb->u.pool.pool_bitmap[b] &= (uint8_t)~m;
+        size_t sh = idx & 7u;
+        size_t n = 8u - sh;
+        if (n > left)
+        {
+            n = left;
+        }
+        rb->u.pool.pool_bitmap[idx >> 3] &= (uint8_t)~(((1u << n) - 1u) << sh);
+        idx += n;
+        left -= n;
     }
     if (rb->u.pool.pool_used_blocks >= blocks)
     {
@@ -1674,6 +1740,14 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
 
     if (rb->step == 0 || rb->u.pool.pool_block_size == 0)
     {
+        mem_pressure_maybe_clear(rb);
+        return;
+    }
+    /* Same relocation hazard as grow: never move a pool that still holds
+     * live blocks, even if the trailing run is free. */
+    if (rb->u.pool.pool_used_blocks != 0)
+    {
+        rb->shrink_hits = 0;
         mem_pressure_maybe_clear(rb);
         return;
     }

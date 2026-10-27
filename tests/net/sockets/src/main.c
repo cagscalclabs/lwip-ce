@@ -373,10 +373,10 @@ static void test_api_contract(void)
 
 static void test_traceback(void)
 {
-    uint8_t count = 0;
-    const struct lwip_traceback_entry *tb = lwip_get_traceback(&count);
-    note("  traceback entries %u", count);
-    check("traceback recorded failures", tb != NULL && count > 0);
+    struct lwip_traceback_entry tb[8];
+    size_t count = lwip_traceback_copy(tb, sizeof(tb) / sizeof(tb[0]));
+    note("  traceback entries %u", (unsigned)count);
+    check("traceback recorded failures", count > 0);
     check("debug module names", lwip_debug_module_name(0) != NULL);
 }
 

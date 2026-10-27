@@ -25,6 +25,7 @@ lwip_socket_resize_rx_max
 lwip_socket_set_timeout
 lwip_socket_last_error
 lwip_socket_get_netif
+lwip_traceback_copy
 lwip_get_traceback
 lwip_debug_module_name
 lwip_debug_file_name

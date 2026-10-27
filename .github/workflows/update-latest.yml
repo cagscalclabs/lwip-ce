@@ -1,23 +1,15 @@
 name: Update Latest Release
 
-# The single gate that decides whether the latest build.yml artifact becomes
-# a published release (nightly or versioned tag). Only actually does
-# anything when build.yml's artifact content changed from what's already
-# published -- re-running this on every unrelated run (e.g. a no-op
-# rebuild) would just re-tag/re-publish identical bits.
-#
-# Gate: all of build.yml, acvp.yml, cavp.yml, timing.yml, tests.yml, net.yml,
-# host.yml, sast.yml, and dast.yml must "cover" HEAD. A workflow covers HEAD if either its latest
-# successful run is AT HEAD, or its latest successful run's commit has no
-# diff against HEAD restricted to that workflow's own `paths:` filter (i.e.
-# nothing that would have re-triggered it actually changed since).
+# Publishes the artifact from the latest successful staging gate after
+# confirming that the gate's tested SHA is now master. The staging gate owns
+# all build/test coverage and only promotes after every required job passes.
 #
 # Runs once daily after the nightly build/test window. This avoids one
 # coordinator run for every gating-workflow completion; manual dispatch remains
 # available when a release should be evaluated immediately.
 on:
   schedule:
-    # build.yml starts at 03:00 UTC; allow six hours for all downstream gates.
+    # The staging gate starts at 03:00 UTC; allow six hours for all jobs.
     - cron: '0 9 * * *'
   push:
     branches: [master]
@@ -47,12 +39,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find latest successful build.yml run with an artifact
+      - name: Find latest successful staging-gate run with an artifact
         id: latest_build
-        # build.yml's own dylib_latest job can legitimately SKIP (its
-        # sentinel-cache gate found nothing changed since the last
-        # successful build -- e.g. a scheduled run landing on a no-op
-        # tick) while the overall workflow run still reports "success"
+        # tests.yml can legitimately contain only its trigger-decision job
+        # (for example, a non-priority push waiting for the nightly gate)
+        # while the overall workflow run still reports "success"
         # (a skipped job doesn't fail a run). A run like that has no
         # lwip-latest artifact at all, so checking status=success alone
         # is not enough -- walk back through recent successful runs
@@ -62,7 +53,7 @@ jobs:
         run: |
           run_id=""
           head_sha=""
-          for run_json in $(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=success&branch=master&per_page=10" \
+          for run_json in $(gh api "repos/${{ github.repository }}/actions/workflows/tests.yml/runs?status=success&branch=staging&per_page=10" \
             --jq '.workflow_runs[] | @base64'); do
             decoded=$(echo "$run_json" | base64 -d)
             candidate_id=$(echo "$decoded" | jq -r '.id')
@@ -75,7 +66,7 @@ jobs:
             fi
           done
           if [ -z "$run_id" ]; then
-            echo "::warning::No successful build.yml run with an lwip-latest artifact found in the last 10 runs on master -- nothing to publish."
+            echo "::warning::No successful staging-gate run with an lwip-latest artifact found in the last 10 runs -- nothing to publish."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -83,7 +74,7 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Download latest build.yml artifact
+      - name: Download latest staging-gate artifact
         if: steps.latest_build.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,7 +116,7 @@ jobs:
 
       - name: No artifact found this run
         if: steps.latest_build.outputs.found != 'true'
-        run: echo "No build.yml run with an lwip-latest artifact available; nothing to compare or publish this run." >> "$GITHUB_STEP_SUMMARY"
+        run: echo "No tests.yml run with an lwip-latest artifact available; nothing to compare or publish this run." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save artifact hash for next comparison
         if: steps.compare.outputs.changed == 'true'
@@ -151,71 +142,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check each gating workflow covers HEAD
+      - name: Confirm the tested staging SHA is master
         id: verdict
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ needs.check_artifact_changed.outputs.head_sha }}
         run: |
-          declare -A PATHS
-          PATHS[build.yml]="src/** build-tools/** ce-libify.toml exports.txt makefile tests/** !tests/dast.json .github/ci-versions.env .github/workflows/build.yml"
-          PATHS[acvp.yml]="src/** tests/validation/acvp/** tests/net/common/** .github/actions/emulator-env/** .github/workflows/acvp.yml"
-          PATHS[cavp.yml]="src/** tests/profiling/tls_cavp/** tests/common/** .github/workflows/cavp.yml"
-          PATHS[timing.yml]="src/** tests/profiling/tls_timing/** tests/common/** .github/workflows/timing.yml"
-          PATHS[tests.yml]="src/** tests/unit/** tests/common/** .github/workflows/tests.yml"
-          PATHS[sast.yml]="src/** .github/workflows/sast.yml"
-          PATHS[dast.yml]="src/** tests/dast.json"
-          PATHS[net.yml]="src/** tests/net/** tests/profiling/lwip_dast/** build-tools/dast/** tests/common/** .github/actions/emulator-env/** .github/workflows/net.yml"
-          PATHS[host.yml]="src/** tests/host/** tests/fuzz/** tests/profiling/tls_timing/tools/** statistics/** .github/workflows/host.yml"
-
-          all_covered=true
-          report=""
-
-          for wf in build.yml acvp.yml cavp.yml timing.yml tests.yml net.yml host.yml sast.yml dast.yml; do
-            run_json=$(gh api "repos/${{ github.repository }}/actions/workflows/$wf/runs?status=success&branch=master&per_page=1" \
-              --jq '.workflow_runs[0]')
-            run_sha=$(echo "$run_json" | jq -r '.head_sha // empty')
-
-            if [ -z "$run_sha" ]; then
-              all_covered=false
-              report="${report}- ❌ $wf: no successful run found\n"
-              continue
-            fi
-
-            if [ "$run_sha" = "$HEAD_SHA" ]; then
-              report="${report}- ✅ $wf: latest success is at HEAD ($run_sha)\n"
-              continue
-            fi
-
-            # Build pathspec args, translating a leading '!' into git's
-            # exclude-pathspec syntax.
-            pathspec_args=()
-            for p in ${PATHS[$wf]}; do
-              if [[ "$p" == '!'* ]]; then
-                pathspec_args+=(":(exclude)${p#!}")
-              else
-                pathspec_args+=("$p")
-              fi
-            done
-
-            if git diff --quiet "$run_sha" "$HEAD_SHA" -- "${pathspec_args[@]}"; then
-              report="${report}- ✅ $wf: last success at $run_sha has no diff against HEAD in its paths\n"
-            else
-              all_covered=false
-              report="${report}- ❌ $wf: last success at $run_sha differs from HEAD in its paths\n"
-            fi
-          done
+          master_sha=$(git rev-parse HEAD)
+          all_covered=false
+          if [ "$master_sha" = "$HEAD_SHA" ]; then
+            all_covered=true
+            report="- ✅ master is the successfully gated staging SHA ($HEAD_SHA)"
+          else
+            report="- ❌ master ($master_sha) is not the successfully gated staging SHA ($HEAD_SHA)"
+          fi
 
           echo "all_covered=$all_covered" >> "$GITHUB_OUTPUT"
           {
             echo "report<<EOF"
-            echo -e "$report"
+            echo "$report"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
           echo "## Coverage check" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo -e "$report" >> "$GITHUB_STEP_SUMMARY"
+          echo "$report" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     needs: [check_artifact_changed, check_coverage]

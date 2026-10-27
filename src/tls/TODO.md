@@ -2,33 +2,31 @@
 
 ## Current Status
 
-✅ **Working**: TLS 1.3 handshake with AES-128-GCM-SHA256 and AES-128-CCM-SHA256
-⚠️ **Blocked**: Full TLS 1.3 handshake (needs ECDHE + cert validation)
+The TLS 1.3 client handshake is complete: ECDHE (X25519 and P-256 via HRR),
+PSK resumption, certificate chain validation, RSA/ECDSA server signatures,
+AEAD record protection. Per-requirement evidence lives in
+`docs/tls-specifications.xml`.
 
----
+What remains is optimization and deliberate scope exclusions, not missing
+handshake functionality:
 
-## Critical Path to Full TLS 1.3
+## Open Work
 
-### 1. X25519 Key Exchange
+### 1. Symmetric-path performance
 
-#### ✅ Already Implemented
-- Field arithmetic (mod 2^255-19): multiplication, squaring
-- Montgomery ladder infrastructure
-- Basic field operations optimized in assembly
+`_gf128_mul` in `src/tls/core/primitives/aes.s` is bit-serial: about 318
+CPU cycles per byte of GHASH (~0.2 s for a 4096-byte record on a 48 MHz
+eZ80), which dominates AEAD record processing. A 4-bit table (16 entries x
+16 bytes, built from H at `tls_aes_init`) should cut that by roughly 3x.
+Table indices are key-dependent, like the existing byte S-box.
 
-#### 🔴 Still Needed
-- Complete scalar multiplication function (`x25519_scalarmult`)
-- Public key generation (`x25519_public_key`)
-- Shared secret computation (`x25519_shared_secret`)
-- Integration with handshake state machine
+### 2. Fixed-base P-256 key generation
 
-X25519 has a **simpler** implementation (Montgomery curve, no point addition formula needed). This may be the better choice for constrained devices.
+Key generation (`d*G`) uses the general co-Z ladder (9M+5S per bit). The
+generator is public, so a constant-time 4-bit comb table (~1.4 KB rodata)
+would roughly halve the ~0.9 s keygen cost on the software path.
 
-**Estimated effort**: ~300 lines (mostly integration, field ops done)
-
----
-
-### 2. RSA-PSS Signature Verification ✅ **COMPLETE**
+### 3. RSA-PSS Signature Verification (implemented)
 
 Required for validating server certificates signed with RSA-PSS.
 
