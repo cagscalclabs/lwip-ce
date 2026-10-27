@@ -106,6 +106,7 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - I implemented 3 Claude "agents": A cryptographer, ez80-optimizer, and an auditor. The first two were involved in the production of: (1) An RSA-4096 implementation that almost matched the speed of the pre-existing RSA-2048, and (2) The earlier mentioned secp256r1 implementation that is probably the fastest "slow" algorithm in the implementation.
 - There is a full RFC compliance accountability document now located here (https://cagscalclabs.github.io/lwip-ce/tls-specifications.html) that documents major RFC, special publication, FIPS and other rules and grades us against them.
 - Certificate chain verification now runs asynchronously to avoid long-time crypto TCP socket timeouts. TLDR, we validate the leaf certificate synchronously, then enqueue a timer that continues to walk the Certificate chain per iteration while also continuing to dispatch network activity and handshake records. Certificate link failures still fail closed, and client will not Finish until full chain is verified.
+- Client key-share generation now runs as a pre-connect pseudo-handshake: preferred P-256 is generated first, X25519 follows on a separate dispatcher turn, and TCP starts only after the two-share readiness mask is complete.
 - Users can enable PCAP in the config UI explicitly; users can enable textual logging explicitly in the config UI. PCAPs have a hard size limit, configurable by the user. Log files cap at 16 KB and can rotate up to a user configured log count.
 
 ## v3.0.0-rc2

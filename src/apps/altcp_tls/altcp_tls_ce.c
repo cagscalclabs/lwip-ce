@@ -244,10 +244,12 @@ static void altcp_tls_ce_rx_release_arm(void)
 
 /* Forward declarations */
 static err_t altcp_tls_ce_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *p, err_t err);
+static err_t altcp_tls_ce_lower_poll(void *arg, struct altcp_pcb *inner_conn);
 static err_t altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_conn);
 static err_t altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
 static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
 static void altcp_tls_ce_cert_job_arm(void);
+static void altcp_tls_ce_keyshare_arm(void);
 
 /* True once the held-back server flight has been replayed and the server
  * Finished was processed, but the client Finished / key switch has not run yet
@@ -1190,8 +1192,21 @@ altcp_tls_ce_offload_ready(void)
 /* Generates our key shares and client random. Done before the TCP connect
  * when the RNG is ready: on the calculator alone this takes seconds, and some
  * servers reset a connection that stays silent that long. */
-static bool
-altcp_tls_ce_init_handshake(altcp_tls_ce_state_t *state)
+static void altcp_tls_ce_apply_handshake_config(altcp_tls_ce_state_t *state)
+{
+    struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
+
+    state->tls_ctx.hostname = config->hostname;
+    state->tls_ctx.alpn_protocols = config->alpn_protocols;
+    state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
+    if (config->psk_mode)
+    {
+        state->tls_ctx.psk_type = config->psk_type;
+    }
+    tls_set_transport(&state->tls_ctx, altcp_tls_ce_transport_write, state);
+}
+
+static bool altcp_tls_ce_init_handshake(altcp_tls_ce_state_t *state)
 {
     struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
     bool init_ok;
@@ -1199,8 +1214,6 @@ altcp_tls_ce_init_handshake(altcp_tls_ce_state_t *state)
     if (config->psk_mode)
     {
         init_ok = tls_handshake_init(&state->tls_ctx, config->psk, &config->psk_identity);
-        if (init_ok)
-            state->tls_ctx.psk_type = config->psk_type;
     }
     else
     {
@@ -1208,11 +1221,30 @@ altcp_tls_ce_init_handshake(altcp_tls_ce_state_t *state)
     }
     if (!init_ok)
         return false;
-    /* tls_handshake_init nulls out hostname; reapply from config. */
-    state->tls_ctx.hostname = config->hostname;
-    state->tls_ctx.alpn_protocols = config->alpn_protocols;
-    state->tls_ctx.alpn_protocols_len = config->alpn_protocols_len;
+    altcp_tls_ce_apply_handshake_config(state);
     state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
+    return true;
+}
+
+static bool altcp_tls_ce_begin_keyshares(altcp_tls_ce_state_t *state)
+{
+    struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
+    bool init_ok;
+
+    if (config->psk_mode)
+    {
+        init_ok = tls_handshake_keyshares_begin(&state->tls_ctx, config->psk,
+                                                &config->psk_identity);
+    }
+    else
+    {
+        init_ok = tls_handshake_keyshares_begin(&state->tls_ctx, NULL, NULL);
+    }
+    if (!init_ok)
+    {
+        return false;
+    }
+    altcp_tls_ce_apply_handshake_config(state);
     return true;
 }
 
@@ -1246,6 +1278,16 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
      * spinning), return ERR_MEM so the caller retries next tick. */
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED))
     {
+        struct altcp_tls_ce_config *config = (struct altcp_tls_ce_config *)state->conf;
+
+        /* Outbound clients cannot reach this point before staged generation
+         * completes and opens TCP. Keep the server's deferred-RNG retry for an
+         * already accepted socket. */
+        if (!config->is_server)
+        {
+            altcp_tls_ce_keyshare_arm();
+            return ERR_MEM;
+        }
         tls_dbg_status("clienthello: deferred hs init");
         if (!altcp_tls_ce_init_handshake(state))
         {
@@ -1429,6 +1471,100 @@ static void altcp_tls_ce_cert_job_arm(void)
     }
     lwip_dispatch_set_period(LWIP_DISPATCH_TLS_CERT_JOB,
                              lwip_dispatch_period_from_ms(ALTCP_TLS_CE_CERT_JOB_TICK_MS));
+    lwip_dispatch_start();
+}
+
+#define ALTCP_TLS_CE_KEYSHARE_TICK_MS 10u
+
+static err_t altcp_tls_ce_start_lower_connect(altcp_tls_ce_state_t *state)
+{
+    struct altcp_pcb *conn = state->conn;
+
+    if (!conn || !conn->inner_conn)
+    {
+        return ERR_VAL;
+    }
+    state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_CONNECT_PENDING;
+
+    /* Drive a temporarily blocked ClientHello write even if no receive event
+     * arrives after TCP connection establishment. */
+    altcp_poll(conn->inner_conn, altcp_tls_ce_lower_poll, 1);
+    return altcp_connect(conn->inner_conn, &state->pending_connect_addr,
+                         state->pending_connect_port,
+                         altcp_tls_ce_lower_connected);
+}
+
+/* Advance one share for one client per turn. A completed P-256 operation
+ * always returns to the dispatcher before X25519 begins. TCP remains unopened
+ * until the readiness bitmask says that both ClientHello shares are present. */
+static void altcp_tls_ce_keyshare_dispatch(void)
+{
+    altcp_tls_ce_state_t *state;
+
+    for (state = g_tls_state_head; state != NULL; state = state->next)
+    {
+        int result;
+
+        if (!(state->flags & ALTCP_TLS_CE_FLAGS_GENERATING_SHARES))
+        {
+            continue;
+        }
+        if (state->tls_ctx.keyshare_state == TLS_KEYSHARE_STATE_IDLE &&
+            !altcp_tls_ce_begin_keyshares(state))
+        {
+            return; /* asynchronous RNG is not ready; try on the next tick */
+        }
+
+        result = tls_handshake_keyshares_step(&state->tls_ctx);
+        if (result < 0)
+        {
+            bool connect_pending =
+                (state->flags & ALTCP_TLS_CE_FLAGS_CONNECT_PENDING) != 0;
+            struct altcp_pcb *conn = state->conn;
+
+            state->flags &= (u16_t)~(ALTCP_TLS_CE_FLAGS_GENERATING_SHARES |
+                                    ALTCP_TLS_CE_FLAGS_CONNECT_PENDING);
+            if (connect_pending && conn && conn->connected)
+            {
+                (void)conn->connected(conn->arg, conn, ERR_ABRT);
+            }
+            return;
+        }
+        if (result == 0 ||
+            (state->tls_ctx.keyshare_ready & TLS_KEYSHARE_BOTH_READY) !=
+                TLS_KEYSHARE_BOTH_READY)
+        {
+            return;
+        }
+
+        state->flags &= (u16_t)~ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
+        state->flags |= ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED;
+        if (state->flags & ALTCP_TLS_CE_FLAGS_CONNECT_PENDING)
+        {
+            struct altcp_pcb *conn = state->conn;
+            err_t err = altcp_tls_ce_start_lower_connect(state);
+            if (err != ERR_OK && conn && conn->connected)
+            {
+                (void)conn->connected(conn->arg, conn, err);
+            }
+        }
+        return; /* callbacks may have freed state */
+    }
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_KEYSHARE, 0);
+}
+
+static void altcp_tls_ce_keyshare_arm(void)
+{
+    static bool attached;
+
+    if (!attached)
+    {
+        lwip_dispatch_attach(LWIP_DISPATCH_TLS_KEYSHARE,
+                             altcp_tls_ce_keyshare_dispatch);
+        attached = true;
+    }
+    lwip_dispatch_set_period(LWIP_DISPATCH_TLS_KEYSHARE,
+                             lwip_dispatch_period_from_ms(ALTCP_TLS_CE_KEYSHARE_TICK_MS));
     lwip_dispatch_start();
 }
 
@@ -2627,10 +2763,19 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->conf = conf;
     state->conn = conn;
 
-    /* Key generation runs now when the RNG is ready, so the ClientHello can go
-     * out as soon as TCP connects; otherwise send_client_hello retries it. */
+    /* Accepted server sockets retain their existing synchronous setup. Client
+     * sockets enter the pre-connect pseudo state: one share is generated per
+     * dispatcher turn, and TCP is not opened until both readiness bits exist. */
     tls_dbg_status("setup: hs init");
-    (void)altcp_tls_ce_init_handshake(state);
+    if (((struct altcp_tls_ce_config *)conf)->is_server)
+    {
+        (void)altcp_tls_ce_init_handshake(state);
+    }
+    else
+    {
+        state->flags |= ALTCP_TLS_CE_FLAGS_GENERATING_SHARES;
+        (void)altcp_tls_ce_begin_keyshares(state);
+    }
 
     /* Wire the transport write hook so handshake.c can emit alerts and
      * close_notify without depending on lwIP/altcp directly. */
@@ -2644,6 +2789,10 @@ altcp_tls_ce_setup(void *conf, struct altcp_pcb *conn, struct altcp_pcb *inner_c
     state->rx_throttle_pending = 0;
     tls_state_add(state);
     mem_set_global_pressure_cb(altcp_tls_ce_set_rx_throttle);
+    if (state->flags & ALTCP_TLS_CE_FLAGS_GENERATING_SHARES)
+    {
+        altcp_tls_ce_keyshare_arm();
+    }
 
     tls_dbg_status("setup: done");
 
@@ -2777,27 +2926,39 @@ altcp_tls_ce_recved(struct altcp_pcb *conn, u16_t len)
 static err_t
 altcp_tls_ce_connect(struct altcp_pcb *conn, const ip_addr_t *ipaddr, u16_t port, altcp_connected_fn connected)
 {
-    if (conn == NULL)
+    altcp_tls_ce_state_t *state;
+
+    if (conn == NULL || ipaddr == NULL)
     {
         ERROR_CODE(-ERR_VAL);
         return ERR_VAL;
     }
     conn->connected = connected;
+    state = (altcp_tls_ce_state_t *)conn->state;
+    if (state == NULL)
+    {
+        ERROR_CODE(-ERR_VAL);
+        return ERR_VAL;
+    }
 
-    /* Register a handshake-liveness poll on the inner TCP pcb. Without it, the
-     * only thing that drives altcp_tls_ce_lower_recv_process is inbound data —
-     * but if the ClientHello write returns ERR_MEM (send buffer briefly full at
-     * connect), it's deferred and retried from lower_recv_process, and no data
-     * will arrive until the ClientHello actually goes out. That circular wait
-     * would stall the handshake until the app timeout. The poll (every ~500ms,
-     * tcp coarse-timer units) breaks the deadlock by retrying the deferred
-     * ClientHello. altcp_tls_ce_lower_poll also forwards to any app-set poll, so
-     * a later altcp_tls_ce_set_poll() composes cleanly. */
-    altcp_poll(conn->inner_conn, altcp_tls_ce_lower_poll, 1);
-    /* We use a shorter interval (if supported by port) to retry ClientHello fast */
+    if (!(state->flags & ALTCP_TLS_CE_FLAGS_CTX_INITIALIZED))
+    {
+        if (state->tls_ctx.keyshare_state == TLS_KEYSHARE_STATE_ERROR)
+        {
+            ERROR_CODE(-ERR_ABRT);
+            return ERR_ABRT;
+        }
+        ip_addr_copy(state->pending_connect_addr, *ipaddr);
+        state->pending_connect_port = port;
+        state->flags |= (ALTCP_TLS_CE_FLAGS_GENERATING_SHARES |
+                         ALTCP_TLS_CE_FLAGS_CONNECT_PENDING);
+        altcp_tls_ce_keyshare_arm();
+        return ERR_OK;
+    }
 
-    LWIP_TRACE_RETURN(altcp_connect(conn->inner_conn, ipaddr, port,
-                                   altcp_tls_ce_lower_connected));
+    ip_addr_copy(state->pending_connect_addr, *ipaddr);
+    state->pending_connect_port = port;
+    LWIP_TRACE_RETURN(altcp_tls_ce_start_lower_connect(state));
 }
 
 static struct altcp_pcb *

@@ -2425,7 +2425,7 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
  *      include this in every ClientHello regardless of mode; the server
  *      picks whether to use it.
  */
-bool tls_handshake_init(
+static bool tls_handshake_init_common(
     struct tls_handshake_context *ctx,
     const uint8_t psk[32],
     const struct tls_psk_identity *psk_identity)
@@ -2494,22 +2494,6 @@ bool tls_handshake_init(
         return false;
     }
 
-    ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, NULL, ctx->ecdhe_public);
-    bool x25519_ok = ctx->ecdhe_job != 0;
-    if (!x25519_ok)
-    {
-        tls_crypto_guard_enable();
-        x25519_ok = tls_x25519_publickey(ctx->ecdhe_public,
-                                         ctx->ecdhe_private, NULL, NULL);
-        tls_crypto_guard_disable();
-    }
-    if (!x25519_ok)
-    {
-        tls_secure_memzero(ctx->ecdhe_private, 32);
-        ERROR_CODE(0x2a);
-        return false;
-    }
-
     if (tls_random_bytes_ex(ctx->p256_private,
                             sizeof(ctx->p256_private),
                             TLS_RNG_STRENGTH_128) == NULL)
@@ -2519,8 +2503,166 @@ bool tls_handshake_init(
         return false;
     }
 
+    ctx->ecdhe_negotiated = false;
+    ctx->hostname = NULL;
+    return true;
+}
+
+bool tls_handshake_keyshares_begin(
+    struct tls_handshake_context *ctx,
+    const uint8_t psk[32],
+    const struct tls_psk_identity *psk_identity)
+{
+    if (!tls_handshake_init_common(ctx, psk, psk_identity))
+    {
+        return false;
+    }
+    ctx->keyshare_state = TLS_KEYSHARE_STATE_GENERATING;
+    ctx->keyshare_ready = 0;
+    return true;
+}
+
+static int tls_handshake_keyshare_fail(struct tls_handshake_context *ctx, uint16_t code)
+{
+    lwip_crypto_cancel(ctx->ecdhe_job);
+    lwip_crypto_cancel(ctx->p256_job);
+    ctx->ecdhe_job = 0;
+    ctx->p256_job = 0;
+    tls_secure_memzero(ctx->ecdhe_private, sizeof(ctx->ecdhe_private));
+    tls_secure_memzero(ctx->p256_private, sizeof(ctx->p256_private));
+    ctx->keyshare_state = TLS_KEYSHARE_STATE_ERROR;
+    ctx->state = TLS_STATE_ERROR;
+    ERROR_CODE(code);
+    return -1;
+}
+
+int tls_handshake_keyshares_step(struct tls_handshake_context *ctx)
+{
+    lwip_crypto_status_t status;
+    bool ok;
+
+    if (!ctx || ctx->keyshare_state == TLS_KEYSHARE_STATE_ERROR)
+    {
+        return -1;
+    }
+    if (ctx->keyshare_state == TLS_KEYSHARE_STATE_READY)
+    {
+        return 1;
+    }
+    if (ctx->keyshare_state != TLS_KEYSHARE_STATE_GENERATING)
+    {
+        ERROR_CODE(0x28);
+        return -1;
+    }
+
+    /* P-256 is the preferred group and owns the first dispatch turn. Even
+     * when it completes in this turn, X25519 is left for the next one. */
+    if (!(ctx->keyshare_ready & TLS_KEYSHARE_P256_READY))
+    {
+        if (ctx->p256_job == 0)
+        {
+            ctx->p256_job = lwip_crypto_p256(ctx->p256_private, NULL,
+                                             ctx->p256_public);
+            if (ctx->p256_job != 0)
+            {
+                return 0;
+            }
+            tls_crypto_guard_enable();
+            ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
+            tls_crypto_guard_disable();
+        }
+        else
+        {
+            status = lwip_crypto_take(ctx->p256_job);
+            if (status == LWIP_CRYPTO_PENDING)
+            {
+                return 0;
+            }
+            ctx->p256_job = 0;
+            if (status == LWIP_CRYPTO_FAILED)
+            {
+                tls_crypto_guard_enable();
+                ok = tls_p256_publickey(ctx->p256_public, ctx->p256_private);
+                tls_crypto_guard_disable();
+            }
+            else
+            {
+                ok = status == LWIP_CRYPTO_OK;
+            }
+        }
+        if (!ok)
+        {
+            return tls_handshake_keyshare_fail(ctx, 0x2b);
+        }
+        ctx->keyshare_ready |= TLS_KEYSHARE_P256_READY;
+        return 0;
+    }
+
+    if (!(ctx->keyshare_ready & TLS_KEYSHARE_X25519_READY))
+    {
+        if (ctx->ecdhe_job == 0)
+        {
+            ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, NULL,
+                                                ctx->ecdhe_public);
+            if (ctx->ecdhe_job != 0)
+            {
+                return 0;
+            }
+            tls_crypto_guard_enable();
+            ok = tls_x25519_publickey(ctx->ecdhe_public,
+                                     ctx->ecdhe_private, NULL, NULL);
+            tls_crypto_guard_disable();
+        }
+        else
+        {
+            status = lwip_crypto_take(ctx->ecdhe_job);
+            if (status == LWIP_CRYPTO_PENDING)
+            {
+                return 0;
+            }
+            ctx->ecdhe_job = 0;
+            if (status == LWIP_CRYPTO_FAILED)
+            {
+                tls_crypto_guard_enable();
+                ok = tls_x25519_publickey(ctx->ecdhe_public,
+                                         ctx->ecdhe_private, NULL, NULL);
+                tls_crypto_guard_disable();
+            }
+            else
+            {
+                ok = status == LWIP_CRYPTO_OK;
+            }
+        }
+        if (!ok)
+        {
+            return tls_handshake_keyshare_fail(ctx, 0x2a);
+        }
+        ctx->keyshare_ready |= TLS_KEYSHARE_X25519_READY;
+    }
+
+    if ((ctx->keyshare_ready & TLS_KEYSHARE_BOTH_READY) == TLS_KEYSHARE_BOTH_READY)
+    {
+        ctx->keyshare_state = TLS_KEYSHARE_STATE_READY;
+        return 1;
+    }
+    return 0;
+}
+
+bool tls_handshake_init(
+    struct tls_handshake_context *ctx,
+    const uint8_t psk[32],
+    const struct tls_psk_identity *psk_identity)
+{
+    bool x25519_ok;
+    bool p256_ok;
+
+    if (!tls_handshake_init_common(ctx, psk, psk_identity))
+    {
+        return false;
+    }
+
     ctx->p256_job = lwip_crypto_p256(ctx->p256_private, NULL, ctx->p256_public);
-    bool p256_ok = ctx->p256_job != 0;
+    p256_ok = ctx->p256_job != 0;
     if (!p256_ok)
     {
         tls_crypto_guard_enable();
@@ -2535,8 +2677,24 @@ bool tls_handshake_init(
         return false;
     }
 
-    ctx->ecdhe_negotiated = false;
-    ctx->hostname = NULL;
+    ctx->ecdhe_job = lwip_crypto_x25519(ctx->ecdhe_private, NULL, ctx->ecdhe_public);
+    x25519_ok = ctx->ecdhe_job != 0;
+    if (!x25519_ok)
+    {
+        tls_crypto_guard_enable();
+        x25519_ok = tls_x25519_publickey(ctx->ecdhe_public,
+                                        ctx->ecdhe_private, NULL, NULL);
+        tls_crypto_guard_disable();
+    }
+    if (!x25519_ok)
+    {
+        lwip_crypto_cancel(ctx->p256_job);
+        ctx->p256_job = 0;
+        tls_secure_memzero(ctx->ecdhe_private, 32);
+        tls_secure_memzero(ctx->p256_private, 32);
+        ERROR_CODE(0x2a);
+        return false;
+    }
 
     return true;
 }

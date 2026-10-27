@@ -53,6 +53,8 @@ typedef struct altcp_tls_ce_state {
      * pending. See altcp_tls_ce_send_client_hello. */
     uint8_t *pending_chello;
     uint16_t pending_chello_len;
+    ip_addr_t pending_connect_addr;          /* Valid while CONNECT_PENDING */
+    u16_t pending_connect_port;
 } altcp_tls_ce_state_t;
 
 /* State flags */
@@ -76,6 +78,8 @@ typedef struct altcp_tls_ce_state {
 /* The handshake is waiting on the Wi-Fi bridge (wireless/crypto.h). */
 #define ALTCP_TLS_CE_FLAGS_OFFLOAD_WAIT      0x100
 #define ALTCP_TLS_CE_FLAGS_OFFLOAD_KICK      0x200
+#define ALTCP_TLS_CE_FLAGS_GENERATING_SHARES 0x400
+#define ALTCP_TLS_CE_FLAGS_CONNECT_PENDING   0x800
 
 /**
  * @brief TLS configuration for CE implementation

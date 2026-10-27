@@ -235,6 +235,19 @@ extern "C"
             TLS_STATE_ERROR
         } state;
 
+        /* Pre-connect pseudo-handshake state. Client ALTCP users generate one
+         * key share per dispatch turn and do not open TCP until both readiness
+         * bits are set. The ordinary TLS state remains TLS_STATE_INIT until
+         * ClientHello is actually sent. */
+        enum
+        {
+            TLS_KEYSHARE_STATE_IDLE,
+            TLS_KEYSHARE_STATE_GENERATING,
+            TLS_KEYSHARE_STATE_READY,
+            TLS_KEYSHARE_STATE_ERROR
+        } keyshare_state;
+        uint8_t keyshare_ready;
+
         /* ECDHE key exchange state (X25519 and P-256 are both offered) */
         uint8_t ecdhe_private[32];   /* Ephemeral X25519 private key */
         uint8_t ecdhe_shared[32];    /* Computed ECDHE shared secret (32 bytes) */
@@ -369,6 +382,23 @@ extern "C"
         struct tls_handshake_context *ctx,
         const uint8_t psk[32],
         const struct tls_psk_identity *psk_identity);
+
+#define TLS_KEYSHARE_X25519_READY 0x01u
+#define TLS_KEYSHARE_P256_READY   0x02u
+#define TLS_KEYSHARE_BOTH_READY   (TLS_KEYSHARE_X25519_READY | TLS_KEYSHARE_P256_READY)
+
+    /** Initialize a client handshake without generating its public shares. */
+    bool tls_handshake_keyshares_begin(
+        struct tls_handshake_context *ctx,
+        const uint8_t psk[32],
+        const struct tls_psk_identity *psk_identity);
+
+    /**
+     * Advance staged public-share generation by at most one share.
+     * @return 1 when both shares are ready, 0 while more work is required,
+     *         or -1 on a permanent generation failure.
+     */
+    int tls_handshake_keyshares_step(struct tls_handshake_context *ctx);
 
     /**
      * @brief Generate ClientHello message

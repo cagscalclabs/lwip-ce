@@ -71,20 +71,27 @@ static void mem_stats_tls_direct_add(size_t n, size_t unused) { allocated += n; 
 static void mem_stats_tls_direct_release(size_t n, size_t unused) { assert(allocated >= n); allocated -= n; }
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
 static uint64_t tls_random(void) { return 1; }
-static bool tls_x25519_publickey(uint8_t *pub, const uint8_t *priv, void *a, void *b) { return true; }
+static unsigned x25519_public_calls;
+static unsigned p256_public_calls;
+static bool tls_x25519_publickey(uint8_t *pub, const uint8_t *priv, void *a, void *b)
+{ (void)pub; (void)priv; (void)a; (void)b; x25519_public_calls++; return true; }
 static bool tls_p256_publickey(uint8_t *pub, const uint8_t *priv)
-{ (void)priv; memset(pub, 0x5a, 65); pub[0] = 0x04; return true; }
+{ p256_public_calls++; (void)priv; memset(pub, 0x5a, 65); pub[0] = 0x04; return true; }
 static bool tls_p256_verify(const uint8_t *sig, const uint8_t *hash, const uint8_t *pub)
 { (void)sig; (void)hash; (void)pub; return true; }
 static void tls_crypto_guard_enable(void) {}
 static void tls_crypto_guard_disable(void) {}
 /* No Wi-Fi bridge: every offload start returns 0, so the local code runs. */
 typedef uint16_t lwip_crypto_job_t;
+typedef enum { LWIP_CRYPTO_PENDING, LWIP_CRYPTO_OK, LWIP_CRYPTO_REJECTED,
+               LWIP_CRYPTO_FAILED } lwip_crypto_status_t;
 #define CTL_RSA_PKCS1_SHA256 1
 #define CTL_RSA_PSS_SHA256 2
 static lwip_crypto_job_t lwip_crypto_x25519(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
 static lwip_crypto_job_t lwip_crypto_p256(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
 static lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t *d, const uint8_t *p, const uint8_t *rs) { return 0; }
+static lwip_crypto_status_t lwip_crypto_take(lwip_crypto_job_t job)
+{ (void)job; return LWIP_CRYPTO_FAILED; }
 static unsigned rsa_offload_calls;
 static lwip_crypto_job_t lwip_crypto_rsa_verify(uint8_t a, const uint8_t *d, const uint8_t *m, size_t ml,
                                                 const uint8_t *e, size_t el, const uint8_t *s)

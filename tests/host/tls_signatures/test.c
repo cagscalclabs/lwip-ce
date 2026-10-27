@@ -600,6 +600,25 @@ static void extended_key_usage_tests(void)
 
 int main(void)
 {
+    /* Staged client setup must yield after each local public-key operation and
+     * expose readiness only when the exact two-share mask is complete. */
+    {
+        struct tls_handshake_context staged;
+        x25519_public_calls = 0;
+        p256_public_calls = 0;
+        assert(tls_handshake_keyshares_begin(&staged, NULL, NULL));
+        assert(staged.keyshare_state == TLS_KEYSHARE_STATE_GENERATING);
+        assert(staged.keyshare_ready == 0);
+        assert(tls_handshake_keyshares_step(&staged) == 0);
+        assert(x25519_public_calls == 0 && p256_public_calls == 1);
+        assert(staged.keyshare_ready == TLS_KEYSHARE_P256_READY);
+        assert(tls_handshake_keyshares_step(&staged) == 1);
+        assert(x25519_public_calls == 1 && p256_public_calls == 1);
+        assert(staged.keyshare_ready == TLS_KEYSHARE_BOTH_READY);
+        assert(staged.keyshare_state == TLS_KEYSHARE_STATE_READY);
+        tls_handshake_cleanup(&staged);
+    }
+
     time_tests();
     path_len_tests();
     name_constraint_tests();
