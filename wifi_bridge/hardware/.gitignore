@@ -1,7 +1,0 @@
-# KiCad per-user and local state
-*.kicad_prl
-*.lck
-fp-info-cache
-.history/
-*-backups/
-.mcp-backups/

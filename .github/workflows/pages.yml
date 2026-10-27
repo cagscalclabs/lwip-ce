@@ -62,7 +62,7 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_REPO: alessiodam/lwIP-CE-WiFi-bridge
         run: |
           set -euo pipefail
           out=docs/_build/html/firmware

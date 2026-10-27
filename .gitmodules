@@ -4,3 +4,6 @@
 [submodule "submodules/app_tools"]
 	path = submodules/app_tools
 	url = https://github.com/CE-Programming/app_tools.git
+[submodule "wifi_bridge"]
+	path = wifi_bridge
+	url = https://github.com/alessiodam/lwIP-CE-WiFi-bridge.git
