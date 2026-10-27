@@ -11,6 +11,7 @@
 #include "../includes/random.h"
 #include "../includes/bytes.h"
 #include "../includes/truststore.h"
+#include "truststore_internal.h"
 #include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_TLS
@@ -349,11 +350,7 @@ void tls_cleanup(void)
 
     tls_ctx.initialized = false;
     tls_ctx.network_up = false;
-    tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
-    tls_ctx.truststore.size = 0;
-    tls_ctx.truststore.entry_count = 0;
-    tls_ctx.truststore.version = 0;
-    tls_ctx.truststore.created_timestamp = 0;
+    tls_truststore_cleanup();
 }
 
 /*

@@ -1330,32 +1330,26 @@
     <section>crypto_guard interrupt masking nesting</section>
     <location>src/tls/core/share/crypto_guard.s: _tls_crypto_guard_enable (L27-44), .Lrestore_interrupts (L91-100) - IFF save/restore</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. 16-level LIFO of IFF2 with saturation; ei only if the popped level was enabled. Coverage gap: HMAC/HKDF/PBKDF2/AES and X25519 callers do not use the guard.</note>
+    <note>Compliant as of/before v3.0.0-rc1 for balanced nesting depths of at most 16. The 16-bit LIFO records IFF2 and executes ei only when the popped level was enabled; depths greater than 16 are unsupported rather than safely saturated. Coverage is partial: HMAC guards its SHA-256 operations, and HKDF/PBKDF2 inherit that per-HMAC protection but are not guarded as whole operations. The principal synchronous handshake X25519 fallbacks are guarded; X25519 also wipes its writable scratch arena internally. As of v3.0.0-rc3 AES key-bearing public operations guard their private implementations, including initialization, streaming updates, encryption/decryption, authentication, and context destruction.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>crypto_guard stack scrub bounds (OS stack guard 0xD19881)</section>
     <location>src/tls/core/share/crypto_guard.s: _tls_crypto_guard_disable (L47-100), scrub (L63-88), stackBot equ (L18) - scrub floor</location>
-    <grade>COMPLIANT</grade>
+    <grade>NEEDS-REVIEW</grade>
     <note>Compliant as of/before v3.0.0-rc1. The known overrun is fixed: floor is stackBot+4 = 0xD19882 and the routine skips when SP-1 is below the floor or length is under 3. Assumes SP is on the OS stack.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>Project policy</ref>
-    <section>Documentation accuracy (fail-closed claims)</section>
-    <location>src/tls/includes/truststore.h (L10-13); src/tls/core/truststore.c (L52-54); src/tls/core/handshake.c (L493-500, L665-668) - stale comments</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (doc): comments say unanchored chains are accepted and unsupported signature operations "warn and proceed temporarily", but the code rejects both (handshake.c tls_cert_chain_verify_one, tls_recv_certificate_streamed). Fix the comments (and handshake.h L9-14) so nobody restores the old fail-open behaviour.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Behavior is compliant but review requested by ez80 programmer to ensure stability when frame is very close to or at the stack guard bytes.</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1363,10 +1357,12 @@
     <section>Overlay 0xE30800 relocated-code hygiene</section>
     <location>build-tools/meta/linker_script_lwip.ld: OVERLAY 0xE30800 (L171-233); src/tls/contrib/x25519/src/x25519.s: _x25519_reloc_run_start..end (L360-777); src/tls/core/primitives/rsa.s: scrub (L258-275) - cursorImage relocated-code residue</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. All operations that use the 0xE30800 overlay (X25519, P-256 ECDH/sign, RSA powmod) are wrapped by tls_crypto_guard_enable()/disable() at every call site in handshake.c, and additionally inside p256.s and hash.c. The guard scrubs the overlay window and SHA-256 stack frames below SP on return, ensuring no key material persists in the shared safe-RAM region between operations.</note>
+    <note>Compliant as of/before v3.0.0-rc1. Overlay hygiene does not depend solely on caller-side crypto_guard coverage: X25519 wipes its complete writable scratch arena before return, P-256 wipes its scratch at entry and exit, RSA powmod clears its shared working area, and SHA-256 clears its shared message schedule. The principal synchronous handshake X25519 fallbacks are additionally wrapped by tls_crypto_guard_enable()/disable(), but the offload-failure fallback in tls_settle_ecdhe is not. The guard scrubs dead stack frames below SP; it does not itself scrub the 0xE30800 overlay.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1385,79 +1381,28 @@
   </requirement>
   <requirement>
     <ref>Project policy</ref>
-    <section>Truststore entry iteration bounds</section>
-    <location>src/tls/core/truststore.c: tls_truststore_lookup (L263), tls_truststore_lookup_by_subject (L286-306) - entry_count off-by-one</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. ++count &gt; entry_count after the compare lets entry_count+1 entries be examined; entry bounds checks keep it within db_len, so informational only.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>Project policy</ref>
     <section>Truststore integrity (signed anchor set)</section>
-    <location>src/tls/core/truststore.c: tls_truststore_init (L86-196), tls_truststore_entry_current (L198-203) - store signature and anchor validity</location>
+    <location>src/tls/core/truststore.c: tls_truststore_validate_layout (L100-212), tls_truststore_init (L262-381), tls_truststore_entry_current (L384-389), tls_truststore_open_db (L391-488), tls_truststore_lookup_key_id (L491-548), tls_truststore_lookup_by_subject_index (L555-619); src/tls/core/tls.c: tls_init (L330-335) - signed layout, lookup integrity, bounded copy, and anchor validity</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. RSA-2048 PSS-SHA256 over version||timestamp||count||entries with an embedded key; SIG_INVALID makes tls_init fail (tls.c L326-333). Anchor validity windows enforced on lookup. No rollback protection (an older validly-signed store can be replayed); only an age warning.</note>
+    <note>RSA-2048-PSS-SHA256 authenticates version||timestamp||entry_count||database, including both lookup indexes and all anchor metadata. Initialization validates the signed layout and fails TLS startup on any truststore error. The verified digest is retained and the reopened store is re-hashed before each lookup; anchor validity windows are enforced. A matched entry is bounds-checked and copied into internal storage before the appvar is closed, so no pointer into closed or subsequently modified storage is returned. The platform has no monotonic protected storage, so an older validly signed store can be replayed; stores older than 180 days produce a warning.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>Project policy</ref>
     <section>Truststore readiness / fail-closed</section>
-    <location>src/tls/core/tls.c: tls_cleanup (L343-356) - truststore_valid_for_session not reset</location>
+    <location>src/lwIP.c: lwip_stack_init (L277-321); src/tls/core/tls.c: tls_init (L309-343), tls_cleanup (L345-354); src/tls/core/truststore.c: tls_truststore_cleanup (L240-252), tls_truststore_invalidate (L254-260), tls_truststore_init (L262-381), lookup entry points (L491-625); src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_setup (L2602-2612) - component-scoped failure and session gate</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. tls_cleanup does not reset truststore_valid_for_session, but no path reaches a stale-true flag: cleanup runs only at teardown and every re-init clears it first (truststore.c L99). Hardening: clear the flag in tls_cleanup.</note>
+    <note>Truststore absence, corruption, version mismatch, layout failure, or signature failure leaves tls_ctx.initialized false and prevents both socket-managed and direct ALTCP TLS sessions. lwip_stack_init treats this as a TLS-component failure and still succeeds, leaving the base stack and general cryptographic APIs available. Truststore lookups additionally require a store verified in the current session; disappearance or modification detected after initialization revokes TLS readiness for subsequent sessions. Initialization and teardown both clear the session-valid flag, verified digest, cached entry, and public truststore metadata.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>Project policy</ref>
-    <section>Truststore readiness / fail-closed</section>
-    <location>src/tls/core/tls.c: tls_init (L301-341) - eager truststore load+verify gate (L326-334)</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Current working tree reverts PR #63's lazy tls_truststore_prepare: tls_init calls tls_truststore_init() eagerly and any status other than OK/NOT_FOUND fails init, so altcp_tls_ce_setup (altcp_tls_ce.c L2126) refuses TLS pcbs. No "not yet loaded at handshake time" state exists.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>Project policy</ref>
-    <section>Truststore readiness / fail-closed</section>
-    <location>src/tls/core/truststore.c: tls_truststore_init (L86-196) - session-valid flag set only on PSS success</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. truststore_valid_for_session cleared at entry (L99) and set only after tls_rsa_pss_verify succeeds (L182); all error and NOT_FOUND paths leave it false.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>Project policy</ref>
-    <section>Truststore readiness / fail-closed</section>
-    <location>src/tls/core/truststore.c: tls_truststore_lookup (L235-268), tls_truststore_lookup_by_subject (L270-310) - !truststore_valid_for_session gate</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Both lookups return false unless the store was verified this session; also false on missing appvar, wrong version, SNTP time 0 or an entry outside its validity window.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
-    </reviews>
-  </requirement>
-  <requirement>
-    <ref>Project policy</ref>
-    <section>Truststore verify-then-use (TOCTOU)</section>
-    <location>src/tls/core/truststore.c: tls_truststore_open_db (L205-233), tls_truststore_lookup_by_subject (L270-310) - re-read after verification</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. BUG (low): the appvar is verified once at tls_init but every lookup re-opens and re-reads it without re-verifying, and the returned entry pointer is used after ti_close. Fix: re-verify, cache a digest, or copy the matched entry.</note>
-
-    <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1474,12 +1419,14 @@
   <requirement>
     <ref>RFC 4055</ref>
     <section>1.2 / 3.1 (id-RSASSA-PSS SPKI and RSASSA-PSS-params)</section>
-    <location>src/tls/core/x509.c: tls_x509_signature_algorithm (L1665-1730), tls_x509_parse_certificate (L1341-1345) - PSS</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. PSS signatures require explicit SHA-256 / MGF1-SHA-256 / salt 32 / trailer 1; SHA-1 defaults rejected; a PSS-restricted SPKI is UNKNOWN and rejected. Covered by tests/host/tls_signatures (bad_default, bad_absent, bad_salt, bad_hash, bad_mgf_hash, bad_duplicate, bad_trailer).</note>
+    <location>src/tls/core/x509.c: tls_x509_parse_algorithm_identifier (L282-345), SPKI processing (L1407-1438); src/tls/core/handshake.c: tls_cert_walker_validate_one (L1298-1305) - rsaEncryption parameter enforcement</location>
+<grade>COMPLIANT</grade>
+<note>RSA SubjectPublicKeyInfo is recognized only when the rsaEncryption AlgorithmIdentifier parameters are an ASN.1 NULL with zero length. Absent or non-NULL parameters leave the key type unknown, causing certificate validation to fail.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1512,29 +1459,35 @@
     <note>Compliant as of/before v3.0.0-rc1. BUG (low, latent): strchr(charset, 0) matches the terminator, so a 0x00 byte decodes as sextet 64 and is accepted ("TW\0u" decodes to 3 bytes). In-tree PEM callers (x509.c L1476-1492, key.c L84-95) pre-filter to the alphabet. Fix: ch != 0 check or a 256-entry lookup table.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 4648</ref>
     <section>3.5 (canonical encoding; non-zero pad bits)</section>
-    <location>src/tls/core/base64.c: tls_base64_decode (L58-65) - pad-bit check</location>
-    <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Pad bits are not checked ("TR==" and "TQ==" both decode to 'M'); RFC 4648 says decoders MAY reject. Recommend rejecting for DER/PEM canonical parsing.</note>
+    <location>src/tls/core/base64.c: b64_value (L33-38), tls_base64_decode (L40-69); tests/host/base64/test.c (L32-35) - non-alphabet rejection</location>
+<grade>COMPLIANT</grade>
+<note>The decoder rejects every character outside the Base64 alphabet, including an embedded NUL byte. Padding is accepted only in valid final-quartet positions. Host regression coverage verifies rejection of NUL and other malformed input.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 4648</ref>
     <section>4 (base64 alphabet)</section>
-    <location>src/tls/core/base64.c: tls_base64_encode (L6-29) - alphabet and encoding</location>
+   <location>src/tls/core/base64.c: tls_base64_encode (L6-30); tests/host/base64/test.c (L39-47) - alphabet, padding, and round-trip coverage</location>
     <grade>COMPLIANT</grade>
     <note>Compliant as of/before v3.0.0-rc1. Standard alphabet with "=" padding, output 4*ceil(n/3). tests/host/base64 round-trips lengths 0-39 under ASan/UBSan.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>

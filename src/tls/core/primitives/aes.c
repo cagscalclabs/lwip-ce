@@ -4,6 +4,7 @@
 
 #include "../../includes/aes.h"
 #include "../../includes/bytes.h"
+#include "../../includes/crypto_guard.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_AES
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -348,16 +349,23 @@ static void aes_gcm_prepare_iv(struct tls_aes_context *ctx, const uint8_t *iv, s
 #define AES_GCM_CTR_LEN 4
 #define AES_GCM_POLY 0xe1 // polynomial used in AES-GCM
 
-void tls_aes_destroy_ctx(struct tls_aes_context *ctx)
+static __attribute__((noinline)) void aes_destroy_ctx_impl(struct tls_aes_context *ctx)
 {
     if (ctx != NULL)
         tls_secure_memzero(ctx, sizeof(*ctx));
 }
 
+void tls_aes_destroy_ctx(struct tls_aes_context *ctx)
+{
+    tls_crypto_guard_enable();
+    aes_destroy_ctx_impl(ctx);
+    tls_crypto_guard_disable();
+}
+
 // Performs the action of generating the keys that will be used in every round of
 // encryption. "key" is the user-supplied input key, "w" is the output key schedule,
 // "keysize" is the length in bits of "key", must be 128, 192, or 256.
-bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key, size_t key_len, const uint8_t *iv, size_t iv_len)
+static __attribute__((noinline)) bool aes_init_impl(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key, size_t key_len, const uint8_t *iv, size_t iv_len)
 {
     if (ctx == NULL)
     {
@@ -366,7 +374,7 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
     }
     /* A failed reinitialization must not leave the previous key schedule, nor
      * may a later validation failure leave a partially initialized one. */
-    tls_aes_destroy_ctx(ctx);
+    aes_destroy_ctx_impl(ctx);
 
     if ((key == NULL) || (iv == NULL))
     {
@@ -426,7 +434,7 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
         break;
     default:
         ERROR_CODE(mode);
-        tls_aes_destroy_ctx(ctx);
+        aes_destroy_ctx_impl(ctx);
         return false;
     }
     ctx->mode = mode;
@@ -434,7 +442,16 @@ bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
     return true;
 }
 
-bool tls_aes_ccm_init(struct tls_aes_context *ctx,
+bool tls_aes_init(struct tls_aes_context *ctx, uint8_t mode, const uint8_t *key,
+                  size_t key_len, const uint8_t *iv, size_t iv_len)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_init_impl(ctx, mode, key, key_len, iv, iv_len);
+    tls_crypto_guard_disable();
+    return ok;
+}
+
+static __attribute__((noinline)) bool aes_ccm_init_impl(struct tls_aes_context *ctx,
                       const uint8_t *key, size_t key_len,
                       const uint8_t *nonce, size_t nonce_len,
                       uint8_t tag_len, size_t msg_len, size_t aad_len)
@@ -444,14 +461,14 @@ bool tls_aes_ccm_init(struct tls_aes_context *ctx,
 
     if (ctx == NULL)
         return false;
-    tls_aes_destroy_ctx(ctx);
+    aes_destroy_ctx_impl(ctx);
 
     if ((key == NULL) || (nonce == NULL))
         return false;
     if (!ccm_validate_params(nonce_len, tag_len, msg_len))
         return false;
 
-    if (!tls_aes_init(ctx, TLS_AES_CBC, key, key_len, zero_iv, 0))
+    if (!aes_init_impl(ctx, TLS_AES_CBC, key, key_len, zero_iv, 0))
         return false;
 
     ctx->mode = TLS_AES_CCM;
@@ -481,7 +498,19 @@ bool tls_aes_ccm_init(struct tls_aes_context *ctx,
     return true;
 }
 
-bool tls_aes_update_aad(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len)
+bool tls_aes_ccm_init(struct tls_aes_context *ctx,
+                      const uint8_t *key, size_t key_len,
+                      const uint8_t *nonce, size_t nonce_len,
+                      uint8_t tag_len, size_t msg_len, size_t aad_len)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_ccm_init_impl(ctx, key, key_len, nonce, nonce_len,
+                                tag_len, msg_len, aad_len);
+    tls_crypto_guard_disable();
+    return ok;
+}
+
+static __attribute__((noinline)) bool aes_update_aad_impl(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len)
 {
     if (ctx == NULL || (aad == NULL && aad_len != 0))
         return false;
@@ -505,7 +534,16 @@ bool tls_aes_update_aad(struct tls_aes_context *ctx, const uint8_t *aad, size_t 
     return false;
 }
 
-bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
+bool tls_aes_update_aad(struct tls_aes_context *ctx, const uint8_t *aad,
+                        size_t aad_len)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_update_aad_impl(ctx, aad, aad_len);
+    tls_crypto_guard_disable();
+    return ok;
+}
+
+static __attribute__((noinline)) bool aes_digest_impl(struct tls_aes_context *ctx, uint8_t *digest)
 {
     if ((ctx == NULL) || (digest == NULL))
         return false;
@@ -563,6 +601,14 @@ bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
     return false;
 }
 
+bool tls_aes_digest(struct tls_aes_context *ctx, uint8_t *digest)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_digest_impl(ctx, digest);
+    tls_crypto_guard_disable();
+    return ok;
+}
+
 static bool aes_gcm_update_ciphertext(struct tls_aes_context *ctx,
                                       const uint8_t *ct, size_t ct_len)
 {
@@ -596,14 +642,23 @@ static bool aes_gcm_update_ciphertext(struct tls_aes_context *ctx,
     return true;
 }
 
-bool tls_aes_update_ciphertext(struct tls_aes_context *ctx,
-                               const uint8_t *ct, size_t ct_len)
+static __attribute__((noinline)) bool aes_update_ciphertext_impl(
+    struct tls_aes_context *ctx, const uint8_t *ct, size_t ct_len)
 {
     /* Internal streaming-authentication path for the TLS record layer.
      * Encryption hashes its own output through the private helper. */
     if (ctx != NULL && ctx->op_assoc == AES_OP_ENCRYPT)
         return false;
     return aes_gcm_update_ciphertext(ctx, ct, ct_len);
+}
+
+bool tls_aes_update_ciphertext(struct tls_aes_context *ctx,
+                               const uint8_t *ct, size_t ct_len)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_update_ciphertext_impl(ctx, ct, ct_len);
+    tls_crypto_guard_disable();
+    return ok;
 }
 
 #define AES_BLOCKSIZE 16
@@ -681,7 +736,7 @@ static void gcm_ctr_xor(struct tls_aes_context *ctx,
 }
 
 // CRYPTO_FN
-bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
+static __attribute__((noinline)) bool aes_encrypt_impl(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
     // int keysize = key->keysize;
     // uint32_t *round_keys = key->round_keys;
@@ -755,7 +810,16 @@ cleanup:
     return ok;
 }
 
-bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
+bool tls_aes_encrypt(struct tls_aes_context *ctx, const uint8_t *inbuf,
+                     size_t in_len, uint8_t *outbuf)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_encrypt_impl(ctx, inbuf, in_len, outbuf);
+    tls_crypto_guard_disable();
+    return ok;
+}
+
+static __attribute__((noinline)) bool aes_decrypt_impl(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)
 {
 
     if ((ctx == NULL) ||
@@ -791,7 +855,7 @@ bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf, size_t i
             /* The verified context is pristine, so CTR starts at J0 + 1. */
             gcm_ctr_xor(ctx, inbuf, outbuf, in_len);
         }
-        else if (!tls_aes_update_ciphertext(ctx, inbuf, in_len))
+        else if (!aes_update_ciphertext_impl(ctx, inbuf, in_len))
         {
             goto cleanup;
         }
@@ -835,6 +899,15 @@ cleanup:
     return ok;
 }
 
+bool tls_aes_decrypt(struct tls_aes_context *ctx, const uint8_t *inbuf,
+                     size_t in_len, uint8_t *outbuf)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_decrypt_impl(ctx, inbuf, in_len, outbuf);
+    tls_crypto_guard_disable();
+    return ok;
+}
+
 static void aes_mark_verified(struct tls_aes_context *ctx)
 {
     ctx->op_assoc = AES_OP_DECRYPT;
@@ -860,7 +933,7 @@ static void aes_mark_verified(struct tls_aes_context *ctx)
 
 /* Internal streaming counterpart to tls_aes_verify(): authenticate the data
  * already fed into ctx, then authorize plaintext-producing decryption. */
-bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag)
+static __attribute__((noinline)) bool aes_verify_tag_impl(struct tls_aes_context *ctx, const uint8_t *tag)
 {
     uint8_t digest[AES_BLOCK_SIZE];
     bool ok = false;
@@ -871,7 +944,7 @@ bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag)
     if ((ctx->mode == TLS_AES_GCM && ctx->private.gcm.lock >= LOCK_VERIFIED) ||
         (ctx->mode == TLS_AES_CCM && ctx->private.ccm.lock >= LOCK_VERIFIED))
         return false;
-    if (!tls_aes_digest(ctx, digest))
+    if (!aes_digest_impl(ctx, digest))
         goto done;
     ok = ctx->mode == TLS_AES_CCM
         ? tls_bytes_compare(tag, digest, ctx->private.ccm.tag_len)
@@ -883,7 +956,15 @@ done:
     return ok;
 }
 
-bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *tag)
+bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_verify_tag_impl(ctx, tag);
+    tls_crypto_guard_disable();
+    return ok;
+}
+
+static __attribute__((noinline)) bool aes_verify_impl(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *tag)
 {
     if ((ctx == NULL) ||
         ((aad == NULL) && (aad_len != 0)) ||
@@ -903,19 +984,19 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
     // GHASH key, so it is wiped on every exit
     memcpy(&tmp, ctx, sizeof(tmp));
 
-    if (aad_len && !tls_aes_update_aad(&tmp, aad, aad_len))
+    if (aad_len && !aes_update_aad_impl(&tmp, aad, aad_len))
         goto done;
     if (ciphertext_len)
     {
         if (tmp.mode == TLS_AES_CCM)
         {
-            if (!tls_aes_decrypt(&tmp, ciphertext, ciphertext_len, NULL))
+            if (!aes_decrypt_impl(&tmp, ciphertext, ciphertext_len, NULL))
                 goto done;
         }
-        else if (!tls_aes_update_ciphertext(&tmp, ciphertext, ciphertext_len))
+        else if (!aes_update_ciphertext_impl(&tmp, ciphertext, ciphertext_len))
             goto done;
     }
-    if (!tls_aes_digest(&tmp, digest))
+    if (!aes_digest_impl(&tmp, digest))
         goto done;
 
     tag_ok = (ctx->mode == TLS_AES_CCM)
@@ -930,9 +1011,20 @@ bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad, size_t aad_
         aes_mark_verified(ctx);
     }
 done:
-    tls_aes_destroy_ctx(&tmp);
+    aes_destroy_ctx_impl(&tmp);
     tls_secure_memzero(digest, sizeof digest);
     return tag_ok;
+}
+
+bool tls_aes_verify(struct tls_aes_context *ctx, const uint8_t *aad,
+                    size_t aad_len, const uint8_t *ciphertext,
+                    size_t ciphertext_len, const uint8_t *tag)
+{
+    tls_crypto_guard_enable();
+    bool ok = aes_verify_impl(ctx, aad, aad_len, ciphertext,
+                              ciphertext_len, tag);
+    tls_crypto_guard_disable();
+    return ok;
 }
 
 size_t tls_aes_pkcs7_apply(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf)

@@ -6,6 +6,7 @@
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
 #include "../includes/tls.h"
+#include "truststore_internal.h"
 #include "lwip/sntp_time.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_TRUSTSTORE
@@ -236,6 +237,28 @@ uint8_t trust_store_pubkey[] = {
     0x3D, 0x4D, 0xA5, 0x7B, 0x4B, 0xD5, 0x1A, 0xD0, 0x68, 0xD6, 0x59, 0x7B, 0xF6, 0x23, 0x69, 0x95};
 
 #define TRUSTSTORE_SIG_LEN 256
+void tls_truststore_cleanup(void)
+{
+    truststore_valid_for_session = false;
+    tls_secure_memzero(truststore_verified_hash,
+                       sizeof truststore_verified_hash);
+    tls_secure_memzero(&truststore_entry_copy,
+                       sizeof truststore_entry_copy);
+    tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
+    tls_ctx.truststore.size = 0;
+    tls_ctx.truststore.entry_count = 0;
+    tls_ctx.truststore.version = 0;
+    tls_ctx.truststore.created_timestamp = 0;
+}
+
+static void tls_truststore_invalidate(tls_truststore_status_t status)
+{
+    tls_truststore_cleanup();
+    tls_ctx.truststore.status = status;
+    tls_ctx.initialized = false;
+    tls_ctx.network_up = false;
+}
+
 tls_truststore_status_t tls_truststore_init(void)
 {
     /* Decrypted-signature output uses the shared static RSA scratch region
@@ -249,14 +272,7 @@ tls_truststore_status_t tls_truststore_init(void)
      * a fresh successful validation below. Without this, a stale `true`
      * from a previous lwip session could survive a stop/restart and let
      * certificate lookups trust an unvalidated store (fail-OPEN). */
-    truststore_valid_for_session = false;
-    tls_secure_memzero(truststore_verified_hash,
-                       sizeof truststore_verified_hash);
-    tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
-    tls_ctx.truststore.size = 0;
-    tls_ctx.truststore.entry_count = 0;
-    tls_ctx.truststore.version = 0;
-    tls_ctx.truststore.created_timestamp = 0;
+    tls_truststore_cleanup();
 
     TS_TRACE("E0 enter");
     // If hash init fails, error out early
@@ -381,23 +397,37 @@ static bool tls_truststore_open_db(const uint8_t **ski_index_out,
 {
     uint8_t h = file_fn.ti_open(truststore_name, "r");
     if (!h)
+    {
+        tls_truststore_invalidate(TLS_STORE_NOT_FOUND);
         return false;
+    }
 
     uint16_t truststore_size = file_fn.ti_getsize(h);
     if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
     {
+        tls_truststore_invalidate(TLS_STORE_SIZE_INVALID);
         file_fn.ti_close(h);
         return false;
     }
 
     struct tls_truststore_header *header =
         (struct tls_truststore_header *)file_fn.ti_getdataptr(h);
-    if (header->version != TLS_TRUSTSTORE_VERSION ||
-        !truststore_valid_for_session ||
-        truststore_size != tls_ctx.truststore.size ||
+    if (!truststore_valid_for_session)
+    {
+        file_fn.ti_close(h);
+        return false;
+    }
+    if (header->version != TLS_TRUSTSTORE_VERSION)
+    {
+        tls_truststore_invalidate(TLS_STORE_VERSION_MISMATCH);
+        file_fn.ti_close(h);
+        return false;
+    }
+    if (truststore_size != tls_ctx.truststore.size ||
         header->entry_count != tls_ctx.truststore.entry_count ||
         header->created_timestamp != tls_ctx.truststore.created_timestamp)
     {
+        tls_truststore_invalidate(TLS_STORE_SIZE_INVALID);
         file_fn.ti_close(h);
         return false;
     }
@@ -427,7 +457,7 @@ static bool tls_truststore_open_db(const uint8_t **ski_index_out,
         tls_secure_memzero(current_hash, sizeof current_hash);
         if (!valid)
         {
-            truststore_valid_for_session = false;
+            tls_truststore_invalidate(TLS_STORE_SIG_INVALID);
             file_fn.ti_close(h);
             ERROR_CODE(TLS_STORE_SIG_INVALID);
             return false;
@@ -440,7 +470,7 @@ static bool tls_truststore_open_db(const uint8_t **ski_index_out,
     size_t payload_len = (size_t)truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
     if (indexes_len > payload_len)
     {
-        truststore_valid_for_session = false;
+        tls_truststore_invalidate(TLS_STORE_SIZE_INVALID);
         file_fn.ti_close(h);
         ERROR_CODE(TLS_STORE_SIZE_INVALID);
         return false;

@@ -122,6 +122,8 @@ Users can now disable TLS completely through the app config wizard, for any unco
   - Previously *verify before encrypt* was a suggested policy; `tls_aes_decrypt()` is now locked until tag verification on authenticating cipher modes. This enforces RFC compliance rather than suggesting it.
 - Additional fixes identified by above review:
   - Fix CAVP identitied AES-GCM failures for IV lengths > 128 bits.
+  - Run key-bearing AES public operations under `tls_crypto_guard`, preserving the caller's interrupt state and scrubbing completed implementation frames.
+  - Clear all process-local truststore decisions and cached lookup state during TLS teardown; truststore failure remains scoped to TLS sessions while general cryptography stays available.
 - Fix issue where missing truststore would de-init the RNG.
 - Streamlined the event logging system: corrected some classifications, removed noisy events.
 - Fix a double free when the application could not take decrypted data yet: the TLS and WebSocket layers had already freed the received TCP pbuf but reported it refused, so TCP freed it again.
