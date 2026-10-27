@@ -5,7 +5,7 @@
 ![Build + Tests](https://github.com/cagscalclabs/lwip-ce/actions/workflows/build.yml/badge.svg?branch=staging&cache=1)
 ![Deploy](https://github.com/cagscalclabs/lwip-ce/actions/workflows/deploy.yml/badge.svg?branch=staging&cache=1)
 
-To enforce protection of branch `master`, pushing to master directly is disallowed. Contributors should commit to `staging`, and the staging gate will perform the following:
+Contributors should commit to `staging`; the staging gate owns routine promotion into `master` and performs the following:
 
 - Build the lwIP binaries
 - Run an assortment of tests including:
@@ -14,8 +14,9 @@ To enforce protection of branch `master`, pushing to master directly is disallow
   - Emulator & Host-driven Network Tests & DAST probes
   - ACVP-style host-generated vectors
   - Semgrep Pro and CodeQL
-- Code changes are promoted after the full gate passes; documentation/statistics-only changes skip directly to promotion.
-- On fail, an issue is opened notifying the commit author of issues.
+- Project, build, and test code changes are promoted after the full gate passes; documentation, statistics, and CI-workflow-only changes skip directly to promotion.
+- If RFC compliance is the only failure, a maintainer-review promotion PR is opened.
+- On build or other test failures, an issue is opened notifying the commit author.
 - Deploy then generates builds:
   - master -> https://github.com/cagscalclabs/lwip-ce/releases/tag/latest-stable
   - staging -> https://github.com/cagscalclabs/lwip-ce/releases/tag/nightly

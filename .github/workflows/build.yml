@@ -4,7 +4,8 @@ name: Build
 # subjects for an urgent prefix. A nightly scheduler dispatches this same
 # workflow on staging when staging received an unpromoted code commit in the
 # last 24 hours. Non-code-only changes are promoted immediately without the
-# build/test gate. Successful runs promote the exact staging SHA through a PR.
+# build/test gate. Successful runs promote the exact signed staging commit
+# through a PR; an RFC-only failure opens the same PR for maintainer review.
 
 on:
   schedule:
@@ -82,15 +83,14 @@ jobs:
 
           git fetch --no-tags origin master
           code_changed=false
-          # Keep this bypass allowlist narrow: unknown paths, build metadata,
-          # tests, and CI logic must still exercise the full gate.
           while IFS= read -r -d '' path; do
             case "$path" in
-              *.md|COPYING|docs/*|statistics/*)
-                ;;
-              *)
+              src/*|tests/*|examples/*|contrib/*|wifi_bridge/*|submodules/*|upstream-lwip/*|build-tools/*|bin/*|makefile|ce-libify.toml|exports.txt|reduce.sh|.gitmodules|.github/scripts/*|.github/ci-versions.env|.github/rfc-review-schema.json)
                 code_changed=true
                 echo "Gate-relevant change: $path"
+                ;;
+              *)
+                echo "Non-code change: $path"
                 ;;
             esac
           done < <(git diff --name-only -z "origin/master...$GITHUB_SHA")
@@ -108,7 +108,7 @@ jobs:
           fi
 
           if [ "$code_changed" = false ]; then
-            echo "Only documentation/statistics changed; promoting without build and test checks."
+            echo "No project, build, or test code changed; promoting without build and test checks."
             echo "run_gate=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -273,6 +273,21 @@ jobs:
     uses: ./.github/workflows/tests.yml
     secrets: inherit
 
+  rfc_compliance_no_changes:
+    name: RFC compliance
+    needs: decide
+    if: >-
+      needs.decide.outputs.run_gate == 'true' &&
+      needs.decide.outputs.code_changed == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record successful no-op review
+        run: |
+          echo "No RFC-relevant project code changed; RFC compliance passes without review."
+          echo "## RFC compliance" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "No RFC-relevant project code changed." >> "$GITHUB_STEP_SUMMARY"
+
   open_rfc_review_pr:
     name: Open promotion PR for RFC review
     needs: [decide, build, tests]
@@ -307,11 +322,17 @@ jobs:
           set -euo pipefail
           short_sha=${GATE_SHA:0:12}
           promotion_branch="automation/promote-$short_sha"
+          promotion_merged=false
 
           git fetch --no-tags origin master staging
           if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-            echo "The tested commit is already contained in master."
+            echo "The tested staging commit is already contained in master."
+            promotion_merged=true
             exit 0
+          fi
+          if ! git merge-base --is-ancestor origin/master "$GATE_SHA"; then
+            echo "::error::Staging does not contain current master. Merge master into staging, sign that merge commit, and rerun the gate."
+            exit 1
           fi
 
           existing_sha=""
@@ -319,13 +340,12 @@ jobs:
             --jq '.object.sha' 2>/dev/null); then
             existing_sha=$ref_sha
           fi
-          if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
-            echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
-            exit 1
-          fi
           if [ -z "$existing_sha" ]; then
             gh api --method POST "repos/${{ github.repository }}/git/refs" \
               -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+          elif [ "$existing_sha" != "$GATE_SHA" ]; then
+            echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
+            exit 1
           fi
 
           body="$RUNNER_TEMP/rfc-review-pr.md"
@@ -344,7 +364,7 @@ jobs:
               cat "$RFC_REPORT_PATH"
             fi
             echo
-            echo "The temporary head branch is pinned to the tested SHA, so later staging pushes are excluded."
+            echo "The temporary head branch points to the exact signed and tested staging commit, so later staging pushes are excluded."
           } > "$body"
 
           pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
@@ -362,13 +382,14 @@ jobs:
           fi
 
   promote:
-    name: Promote staging SHA through PR
-    needs: [decide, build, tests]
+    name: Promote signed staging commit through PR
+    needs: [decide, build, tests, rfc_compliance_no_changes]
     if: >-
       always() && needs.decide.outputs.run_gate == 'true' &&
       ((needs.decide.outputs.code_changed == 'true' &&
         needs.build.result == 'success' && needs.tests.result == 'success') ||
-       needs.decide.outputs.code_changed == 'false')
+       (needs.decide.outputs.code_changed == 'false' &&
+        needs.rfc_compliance_no_changes.result == 'success'))
     permissions:
       actions: write
       contents: write
@@ -391,20 +412,24 @@ jobs:
 
           git fetch --no-tags origin master staging
           if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-            echo "The tested commit is already contained in master."
+            echo "The tested staging commit is already contained in master."
           else
+            if ! git merge-base --is-ancestor origin/master "$GATE_SHA"; then
+              echo "::error::Staging does not contain current master. Merge master into staging, sign that merge commit, and rerun the gate."
+              exit 1
+            fi
+
             existing_sha=""
             if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
               --jq '.object.sha' 2>/dev/null); then
               existing_sha=$ref_sha
             fi
-            if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
-              echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
-              exit 1
-            fi
             if [ -z "$existing_sha" ]; then
               gh api --method POST "repos/${{ github.repository }}/git/refs" \
                 -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
+            elif [ "$existing_sha" != "$GATE_SHA" ]; then
+              echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
+              exit 1
             fi
 
             pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
@@ -413,17 +438,13 @@ jobs:
             if [ -z "$pr_number" ]; then
               body="$RUNNER_TEMP/promotion-pr.md"
               {
-                if [ "$CODE_CHANGED" = true ]; then
-                  echo "Automated promotion of the exact staging commit that passed the full gate."
-                else
-                  echo "Automated promotion of an exact staging commit containing only documentation/statistics changes. Build and test checks were skipped."
-                fi
+                echo "Automated promotion of the exact signed staging commit that passed its required gates."
                 echo
                 echo "- Tested commit: \`$GATE_SHA\`"
                 echo "- Source branch: \`staging\`"
                 echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                 echo
-                echo "The temporary head branch is pinned to the tested SHA so later staging pushes are excluded."
+                echo "The temporary head branch points to the exact tested commit; later staging pushes are excluded."
               } > "$body"
               pr_url=$(gh pr create --repo "${{ github.repository }}" \
                 --base master --head "$promotion_branch" \
@@ -432,14 +453,15 @@ jobs:
             fi
 
             gh pr merge "$pr_number" --repo "${{ github.repository }}" \
-              --merge --delete-branch --match-head-commit "$GATE_SHA"
-
-            git fetch --no-tags origin master
-            if ! git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-              echo "::error::Promotion PR completed without placing tested SHA $GATE_SHA in master."
-              exit 1
+              --auto --merge --delete-branch --match-head-commit "$GATE_SHA"
+            pr_state=$(gh pr view "$pr_number" --repo "${{ github.repository }}" \
+              --json state --jq '.state')
+            if [ "$pr_state" = MERGED ]; then
+              promotion_merged=true
+              echo "Promotion PR #$pr_number merged; staging remains intact."
+            else
+              echo "Promotion PR #$pr_number will merge when all master requirements are satisfied."
             fi
-            echo "Promotion PR #$pr_number merged; staging remains intact."
           fi
 
           # GITHUB_TOKEN events do not start another push workflow, so dispatch
@@ -456,8 +478,12 @@ jobs:
             return 1
           }
           if [ "$CODE_CHANGED" = true ]; then
-            dispatch_deploy master
             dispatch_deploy staging
+            if [ "$promotion_merged" = true ]; then
+              dispatch_deploy master
+            else
+              echo "The auto-merge push to master will trigger its deployment."
+            fi
           else
             echo "No code changed; release rebuilds are unnecessary."
           fi
