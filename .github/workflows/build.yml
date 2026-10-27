@@ -271,8 +271,11 @@ jobs:
           if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
             echo "The tested commit is already contained in master."
           else
-            existing_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
-              --jq '.object.sha' 2>/dev/null || true)
+            existing_sha=""
+            if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
+              --jq '.object.sha' 2>/dev/null); then
+              existing_sha=$ref_sha
+            fi
             if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GATE_SHA" ]; then
               echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
               exit 1
