@@ -99,7 +99,8 @@ static lwip_crypto_job_t lwip_crypto_rsa_verify(uint8_t a, const uint8_t *d, con
 static void lwip_crypto_cancel(lwip_crypto_job_t job) {}
 static void lwip_crypto_reseed(void) {}
 static uint32_t lwip_sntp_read_rtc_raw(void) { return 1700000000; }
-static uint32_t lwip_sntp_get_unix_time(void) { return 1700000000; }
+static uint32_t mock_unix_time = 1700000000;
+static uint32_t lwip_sntp_get_unix_time(void) { return mock_unix_time; }
 static void tls_hs_reasm_reset(struct tls_handshake_context *ctx) {}
 bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t alg) { memset(ctx, 0, sizeof(*ctx)); return true; }
 void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_context *src) { memcpy(dst, src, sizeof(*dst)); }

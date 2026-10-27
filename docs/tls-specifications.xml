@@ -1766,12 +1766,14 @@
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.3(a)(2) (validity against current time)</section>
-    <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L870-877); src/core/sntp_time.c: lwip_sntp_get_unix_time (L147-152) - clock source</location>
+    <location>src/tls/core/handshake.c: tls_cert_walker_validate_one (L1365-1404); src/tls/core/x509.c: tls_x509_time_to_unix / tls_x509_time_in_validity (L1348-1467); src/core/sntp_time.c: lwip_sntp_get_unix_time (L147-152); tests/host/tls_signatures/test.c: unset_clock_test; tests/unit/tls_x509/src/main.c (L404-448) - clock state, time parsing, and validity-window coverage</location>
     <grade>COMPLIANT</grade>
-    <note>Compliant as of/before v3.0.0-rc1. Every wire cert checked against the RTC; unset clock (0) fails closed. Covered by tests/unit/tls_x509 (validity window, real expired cert). Caveat: time comes from unauthenticated SNTP.</note>
+    <note>Validity checking was implemented before v3.0.0-rc1; explicit rejection of the unsynchronized-clock sentinel was added after v3.0.0-rc3. Every presented path certificate is checked against the inclusive notBefore/notAfter interval using RTC-derived Unix time. Malformed or inverted intervals, out-of-window certificates, and an unset clock are rejected. Unit tests cover UTCTime and GeneralizedTime parsing, before/inside/after-window cases, and a real expired certificate; host coverage verifies that an epoch-spanning certificate cannot pass when the clock is unset. Caveat: time comes from unauthenticated SNTP.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1785,7 +1787,6 @@
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
-        <scope>compliance, threat assessment</scope>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -1800,7 +1801,6 @@
      <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
-        <scope>compliance, threat assessment</scope>
       </reviewed-by>
     </reviews>
   </requirement>

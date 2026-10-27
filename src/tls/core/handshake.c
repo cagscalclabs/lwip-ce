@@ -1392,9 +1392,12 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         return false;
     }
 
-    /* Validity window check — requires SNTP sync (returns 0 if not set,
-     * which fails closed since no real cert is valid at epoch 0). */
-    if (!tls_x509_time_in_validity(&cert, lwip_sntp_get_unix_time()))
+    /* Validity window check.  A zero timestamp is the SNTP layer's explicit
+     * "not synchronized" sentinel and must be rejected separately: an old
+     * certificate whose validity spans the Unix epoch could otherwise pass
+     * the inclusive window comparison. */
+    uint32_t now = lwip_sntp_get_unix_time();
+    if (now == 0 || !tls_x509_time_in_validity(&cert, now))
     {
         w->fail_alert = TLS_ALERT_CERTIFICATE_EXPIRED;
         ERROR_CODE(0x03);

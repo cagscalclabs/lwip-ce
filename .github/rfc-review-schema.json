@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "RFC_BREAK", "NEEDS_HUMAN_REVIEW"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rfc": { "type": "string" },
+          "section": { "type": "string" },
+          "requirement": { "type": "string" },
+          "file": { "type": "string" },
+          "lines": { "type": "string" },
+          "evidence": { "type": "string" },
+          "justification_present": { "type": "boolean" },
+          "justification_assessment": { "type": "string" },
+          "remediation": { "type": "string" }
+        },
+        "required": [
+          "rfc",
+          "section",
+          "requirement",
+          "file",
+          "lines",
+          "evidence",
+          "justification_present",
+          "justification_assessment",
+          "remediation"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["verdict", "summary", "findings"],
+  "additionalProperties": false
+}

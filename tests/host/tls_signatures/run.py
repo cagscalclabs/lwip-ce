@@ -67,6 +67,8 @@ ordinary_child_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'child.test'))
 ordinary_parent_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'parent.test'))))
 root_name = seq(tlv(0x31, seq(oid('550403'), tlv(0x0c, b'root.test'))))
 valid = seq(tlv(0x17, b'200101000000Z'), tlv(0x17, b'491231235959Z'))
+epoch_spanning_valid = seq(tlv(0x17, b'500101000000Z'),
+                           tlv(0x17, b'491231235959Z'))
 base_extensions = (
     seq(oid('551d11'), tlv(4, seq(tlv(0x82, b'example.test')))),
     seq(oid('551d13'), tlv(1, b'\xff'), tlv(4, seq(tlv(1, b'\xff')))),
@@ -194,10 +196,10 @@ ca_nc_duplicate_extensions = extensions_with_san(base_extensions[0],
 
 
 def cert(algorithm, key=spki, inner=None, extensions=cert_extensions,
-         issuer=name, subject=name):
+         issuer=name, subject=name, validity=valid):
     # Extensions require v3 (version INTEGER 2 in [0] EXPLICIT).
     tbs = seq(tlv(0xa0, b'\x02\x01\x02'), b'\x02\x01\x01',
-              inner or algorithm, issuer, valid, subject, key,
+              inner or algorithm, issuer, validity, subject, key,
               extensions)
     signature = bytes([0x22 if algorithm == pss else 0x11]) * 256
     return seq(tbs, algorithm, tlv(3, b'\0' + signature))
@@ -217,6 +219,7 @@ vectors = {
     'bad_trailer': seq(pss_oid, seq(params + tlv(0xa3, b'\x02\x01\x02'))),
     'bad_key_oid': seq(rsa, b'\x05\x00'),
     'cert_pkcs': cert(pkcs), 'cert_pss': cert(pss),
+    'cert_epoch_spanning': cert(pkcs, validity=epoch_spanning_valid),
     'cert_aki': cert(pkcs, extensions=cert_extensions_aki),
     'cert_duplicate_aki': cert(pkcs, extensions=cert_extensions_duplicate_aki),
     'cert_bad_aki': cert(pkcs, extensions=cert_extensions_bad_aki),

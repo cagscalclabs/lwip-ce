@@ -445,6 +445,26 @@ static void walker_set_certificate(struct tls_cert_walker *w,
     mem_stats_tls_direct_add(der_len, der_len);
 }
 
+static void unset_clock_test(void)
+{
+    struct tls_handshake_context ctx;
+    assert(tls_handshake_init(&ctx, NULL, NULL));
+    ctx.hostname = "example.test";
+    struct tls_cert_walker *w = tls_cert_walker_new(&ctx);
+    assert(w);
+    ctx.cert_walker = w;
+    walker_set_certificate(w, cert_epoch_spanning,
+                           sizeof(cert_epoch_spanning));
+
+    mock_unix_time = 0;
+    assert(!tls_cert_walker_validate_one(w));
+    assert(w->fail_alert == TLS_ALERT_CERTIFICATE_EXPIRED);
+    mock_unix_time = 1700000000;
+
+    tls_handshake_cleanup(&ctx);
+    assert(allocated == 0);
+}
+
 static void path_len_tests(void)
 {
     struct tls_handshake_context ctx;
@@ -620,6 +640,7 @@ int main(void)
     }
 
     time_tests();
+    unset_clock_test();
     path_len_tests();
     name_constraint_tests();
     extended_key_usage_tests();
