@@ -27,7 +27,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 concurrency:
   group: lwip-update-latest
@@ -316,6 +316,7 @@ jobs:
             --title "lwIP-CE ${{ steps.vtag.outputs.tag }}" \
             --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
             "${{ steps.package_release.outputs.asset }}"
+          gh workflow run wifi_bridge.yml --ref "${{ steps.vtag.outputs.tag }}"
 
       - name: Publish nightly release
         id: publish_nightly

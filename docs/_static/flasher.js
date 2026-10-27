@@ -3,7 +3,7 @@ import { ESPLoader, Transport } from "https://cdn.jsdelivr.net/npm/esptool-js@0.
 const boards = [
   { name: "lwIP-CE bridge board (ESP32-S3-WROOM-1-N16R8)", chip: "ESP32-S3", flash: "16MB" },
 ];
-const minimumVersion = [1, 0, 0];
+const minimumVersion = [3, 0, 0];
 const securityNames = ["Open", "WEP", "WPA", "WPA2", "WPA3", "WPA2/WPA3", "Enterprise"];
 const SEC_OPEN = 0;
 const SEC_WEP = 1;
@@ -218,11 +218,11 @@ async function connectBridge() {
   }
   if (!version) {
     await closeBridge();
-    throw new Error("The bridge did not answer. Flash firmware 1.0.0 or newer above, then connect again.");
+    throw new Error("The bridge did not answer. Flash firmware 3.0.0 or newer above, then connect again.");
   }
   if (!newer(version, minimumVersion)) {
     await closeBridge();
-    throw new Error(`The bridge runs firmware ${version}. Flash 1.0.0 or newer above, then connect again.`);
+    throw new Error(`The bridge runs firmware ${version}. Flash 3.0.0 or newer above, then connect again.`);
   }
   bridge.version = version;
   update();

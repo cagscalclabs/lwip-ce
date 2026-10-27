@@ -40,7 +40,7 @@ Setting Up Wi-Fi
 ----------------
 
 The bridge can also be given its networks from here, so they do not have to be
-typed on the calculator. This needs bridge firmware 1.0.0 or newer. Plug the
+typed on the calculator. This needs bridge firmware 3.0.0 or newer. Plug the
 bridge in and press **Connect**; right after flashing, the page connects on its
 own. A network saved here is joined right away, and the page reports whether
 the bridge got on.
