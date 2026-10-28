@@ -264,14 +264,36 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
     # a coloured icon inside the Module column instead: rows stay in one table,
     # sorted so a group's rows are contiguous.
     GROUP_STYLE = {
-        "PREREQUISITE": "\u26aa", "UNIT": "\U0001f7e6", "HOST": "\U0001f7e9",
+        "PREREQUISITE": "\u26aa", "UNIT": "\U0001f7e9", "HOST": "\U0001f7e6",
         "NETTEST": "\U0001f7e8", "DAST": "\U0001f7e7", "ACVP": "\U0001f7ea",
         "RFC": "\U0001f7e5", "SAST": "\U0001f7e5", "FUZZ": "\u26ab",
+    }
+    GROUP_LABEL = {
+        "PREREQUISITE": "prerequisites", "UNIT": "unit tests", "HOST": "host tests",
+        "NETTEST": "network tests", "DAST": "DAST", "ACVP": "ACVP",
+        "RFC": "RFC review", "SAST": "SAST", "FUZZ": "fuzz",
     }
 
     def module_cell(row: dict) -> str:
         icon = GROUP_STYLE.get(str(row.get("group", "")).upper(), "")
         return f"{icon} {row['module']}".strip()
+
+    # Compact legend immediately above the table, listing only the groups that
+    # actually reported, so the icons are self-explanatory.
+    legend = []
+    seen_groups: list[str] = []
+    for row in ordered:
+        group = str(row.get("group", "")).strip() or "OTHER"
+        if group not in seen_groups:
+            seen_groups.append(group)
+    for group in seen_groups:
+        count = sum(1 for row in ordered
+                    if (str(row.get("group", "")).strip() or "OTHER") == group)
+        icon = GROUP_STYLE.get(group.upper(), "")
+        label = GROUP_LABEL.get(group.upper(), group)
+        legend.append(f"{icon} {label} ({count})".strip())
+    if legend:
+        lines += [" | ".join(legend), ""]
 
     lines += ["| Module | Test | Grade | Stats |", "|---|---|---|---|"]
     lines.extend(
