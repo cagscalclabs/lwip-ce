@@ -138,7 +138,8 @@ struct lwip_socket
     uint8_t     pending_svc_flags; /**< service bits still needed before connect_now */
     uint32_t    connect_timeout_ms;
     uint32_t    connect_deadline; /**< inactivity deadline; 0 = disarmed */
-    uint32_t    activity_seen;
+    uint32_t    activity_seen;    /**< snapshot of last_activity_ms */
+    uint32_t    last_activity_ms; /**< this socket's last progress, ms */
 
     struct lwip_socket *registry_next;
 
@@ -2000,12 +2001,15 @@ static void services_arm(void)
 /* ============================================================
  * Connect/handshake inactivity watchdog
  *
- * A socket in RESOLVING / CONNECTING is failed only
- * after `connect_window` ms of NO inbound line activity (eth_last_rx_activity_ms
- * stops advancing). Any received frame pushes the deadline forward, so a
- * slow-but-progressing DNS lookup or TLS handshake is never killed — only a
- * genuinely quiet line is. This replaces the old fixed wall-clock services
- * deadline and also covers the post-resolve phases the deadline never watched.
+ * A socket in RESOLVING / CONNECTING / CONNECTED is failed only after
+ * `connect_window` ms in which *that socket* made no progress. Progress is
+ * this socket's own traffic: received and acknowledged bytes, a completed
+ * connect, a completed lookup, or an application write (see
+ * conn_note_activity). Interface-wide line activity deliberately does not
+ * count — unrelated traffic (another socket, ARP, broadcasts, DHCP renewals)
+ * must not keep a silent or hung socket alive (issue #93). This replaces the
+ * old fixed wall-clock services deadline and also covers the post-resolve
+ * phases the deadline never watched.
  * ============================================================ */
 
 static uint32_t conn_window_ms(const struct lwip_socket *conn)
@@ -2021,6 +2025,16 @@ static uint32_t conn_window_ms(const struct lwip_socket *conn)
  * monitor.  WAITING_SERVICES is excluded: services may take a while and
  * the connect_deadline for that phase is managed by conn_waiting_services_poll,
  * not here.  CONNECTED is included so a silent/hung session times out too. */
+/* Note progress on this socket only. The inactivity deadline is extended by
+ * this socket's own traffic, never by unrelated frames on the wire (see
+ * conn_connect_watchdog). */
+static void conn_note_activity(struct lwip_socket *conn)
+{
+    if (conn)
+        conn->last_activity_ms = sys_now();
+}
+
+
 static bool conn_has_inactivity_timeout(const struct lwip_socket *conn)
 {
     if (!conn || !conn->connect_timeout_ms)
@@ -2092,12 +2106,12 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
 
 static void conn_connect_watchdog(uint32_t now)
 {
-    uint32_t activity = eth_last_rx_activity_ms();
     struct lwip_socket *conn = g_conn_registry;
 
     while (conn)
     {
         struct lwip_socket *next = conn->registry_next;
+        uint32_t activity = conn->last_activity_ms;
 
         if (!conn_has_inactivity_timeout(conn))
         {
@@ -2118,8 +2132,9 @@ static void conn_connect_watchdog(uint32_t now)
         }
         else if (activity != conn->activity_seen)
         {
-            /* Inbound line activity since last tick: socket is alive, push
-             * the deadline forward. */
+            /* This socket made progress since last tick: push the deadline
+             * forward. Frames belonging to other sockets, ARP, broadcasts and
+             * DHCP renewals deliberately do not count. */
             conn->activity_seen = activity;
             conn->connect_deadline = now + conn_window_ms(conn);
         }
@@ -2148,6 +2163,7 @@ static err_t conn_altcp_recv_cb(void *arg, struct altcp_pcb *pcb,
 {
     (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
+    conn_note_activity(c);
     if (!c)
     {
         if (p)
@@ -2191,6 +2207,7 @@ static err_t conn_altcp_sent_cb(void *arg, struct altcp_pcb *pcb, u16_t len)
 {
     (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
+    conn_note_activity(c);
     if (g_lwip_stopping)
         return ERR_OK;
     if (c)
@@ -2254,6 +2271,7 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
 {
     (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
+    conn_note_activity(c);
     if (!c)
         return ERR_OK;
     if (g_lwip_stopping)
@@ -2286,6 +2304,7 @@ static void conn_udp_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     (void)addr;
     (void)port;
     struct lwip_socket *c = (struct lwip_socket *)arg;
+    conn_note_activity(c);
     if (!c)
     {
         if (p)
@@ -2322,6 +2341,7 @@ static err_t conn_tcp_recv_cb(void *arg, struct tcp_pcb *pcb,
 {
     (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
+    conn_note_activity(c);
     if (!c)
     {
         if (p)
@@ -2365,6 +2385,7 @@ static err_t conn_tcp_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len)
 {
     (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
+    conn_note_activity(c);
     if (g_lwip_stopping)
         return ERR_OK;
     if (c)
@@ -2422,6 +2443,7 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
 {
     (void)pcb;
     struct lwip_socket *c = (struct lwip_socket *)arg;
+    conn_note_activity(c);
     if (!c)
         return ERR_OK;
     if (g_lwip_stopping)
@@ -2812,6 +2834,7 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
 {
     (void)name;
     struct lwip_socket *c = (struct lwip_socket *)callback_arg;
+    conn_note_activity(c);
     if (!c)
         return;
     /* The lookup may complete after the inactivity watchdog already failed and
@@ -3268,9 +3291,8 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
                                LWIP_SOCKET_ERR_OP_WRITE, (int)e, mapped);
             return mapped;
         }
-        /* Outbound write extends the inactivity deadline. */
-        if (conn->connect_deadline)
-            conn->connect_deadline = sys_now() + conn_window_ms(conn);
+        /* Outbound write is this socket's progress. */
+        conn_note_activity(conn);
         return LWIP_OK;
     }
 #endif
@@ -3294,8 +3316,7 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
                                LWIP_SOCKET_ERR_OP_SEND, (int)e, mapped);
             return mapped;
         }
-        if (conn->connect_deadline)
-            conn->connect_deadline = sys_now() + conn_window_ms(conn);
+        conn_note_activity(conn);
         return LWIP_OK;
     }
     case LWIP_SOCKET_ALTCP:
@@ -3320,8 +3341,7 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
                                LWIP_SOCKET_ERR_OP_WRITE, (int)e, mapped);
             return mapped;
         }
-        if (conn->connect_deadline)
-            conn->connect_deadline = sys_now() + conn_window_ms(conn);
+        conn_note_activity(conn);
         return LWIP_OK;
     }
     default:

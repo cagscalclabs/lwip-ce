@@ -1,4 +1,4 @@
-SUITES = sockets raw tls records server perf
+SUITES = sockets raw tls records server perf timeouts
 
 .PHONY: all clean $(SUITES)
 
