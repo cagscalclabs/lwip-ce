@@ -919,29 +919,6 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int) -> tuple[b
     return ok, text, metrics, probes
 
 
-def write_summary(results, metrics):
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not summary:
-        return
-    with open(summary, "a", encoding="utf-8") as f:
-        for suite, ok, text in results:
-            counts = re.search(r"HOST-GRADE pass (\d+) fail (\d+) skip (\d+)", text)
-            if not counts:
-                counts = re.search(r"DONE pass (\d+) fail (\d+)", text)
-            f.write(f"## {SUITES[suite]} {'✅' if ok else '❌'} {counts.group(0) if counts else ''}\n\n")
-            fails = [line for line in text.splitlines() if line.startswith("FAIL")]
-            skips = [line for line in text.splitlines() if line.startswith("SKIP")]
-            if fails:
-                f.write("```\n" + "\n".join(fails) + "\n```\n\n")
-            if skips:
-                f.write("### Host-corroborated endpoint skips\n\n```")
-                f.write("\n" + "\n".join(skips) + "\n```\n\n")
-            f.write("<details><summary>log</summary>\n\n```\n" + text + "\n```\n</details>\n\n")
-        f.write("## Metrics\n\nMeasured on the calc's clock, i.e. emulated eZ80 time.\n\n"
-                "| suite | metric | value |\n| --- | --- | --- |\n")
-        for suite, values in metrics.items():
-            for name, v in values.items():
-                f.write(f"| {suite} | {name} | {v['value']} {v['unit']} |\n")
 
 
 def main() -> int:
@@ -952,6 +929,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=1800000)
     ap.add_argument("--metrics", default=str(HERE / "metrics.json"))
     ap.add_argument("--endpoint-probes", default=str(HERE / "endpoint-probes.json"))
+    ap.add_argument("--rows", default=str(HERE / "test-rows.json"))
     ap.add_argument("--pcap", help="capture the TAP interface to this file (needs root and scapy)")
     args = ap.parse_args()
 
@@ -994,7 +972,25 @@ def main() -> int:
 
     Path(args.metrics).write_text(json.dumps(metrics, indent=2) + "\n")
     Path(args.endpoint_probes).write_text(json.dumps(endpoint_probes, indent=2) + "\n")
-    write_summary(results, metrics)
+    table_rows = []
+    for suite, ok, text in results:
+        suite_rows = 0
+        for line in text.splitlines():
+            verdict, separator, test = line.partition(" ")
+            if verdict not in {"PASS", "FAIL", "SKIP"} or not separator:
+                continue
+            table_rows.append({
+                "group": "NETTEST",
+                "module": "NETTEST",
+                "test": f"{suite.upper()} - {test}",
+                "grade": {"PASS": "Pass", "FAIL": "Fail", "SKIP": "Skipped"}[verdict],
+            })
+            suite_rows += 1
+        if not suite_rows:
+            table_rows.append({"group": "NETTEST", "module": "NETTEST",
+                               "test": f"{suite.upper()} - Suite execution",
+                               "grade": "Pass" if ok else "Fail"})
+    Path(args.rows).write_text(json.dumps(table_rows, indent=2) + "\n")
     for suite, ok, _ in results:
         print(f"{SUITES[suite]}: {'PASS' if ok else 'FAIL'}")
     return 0 if all(ok for _, ok, _ in results) else 1

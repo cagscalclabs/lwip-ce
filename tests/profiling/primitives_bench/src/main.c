@@ -22,6 +22,7 @@
 #include <lwip/cryptography/hmac.h>
 #include <lwip/cryptography/p256.h>
 #include <lwip/cryptography/passwords.h>
+#include <lwip/cryptography/rsa.h>
 #include <lwip/cryptography/x25519.h>
 #include <lwip.h>
 
@@ -276,6 +277,35 @@ static void bench_hkdf(void)
     bench_sink += out[0];
 }
 
+/* --- RSA -------------------------------------------------------------- */
+
+static uint8_t rsa_mod[512];
+static uint8_t rsa_sig[512];
+static uint8_t rsa_out[512];
+
+static void bench_rsa(void)
+{
+    static const uint8_t exp[3] = {0x01, 0x00, 0x01};
+    struct tls_rsa_key k2 = {3, exp, 256, rsa_mod};
+    struct tls_rsa_key k4 = {3, exp, 512, rsa_mod};
+    clock_t t0;
+    bool ok, ok2;
+
+    memset(rsa_mod, 0xFF, sizeof(rsa_mod));
+    rsa_mod[255] = 0xFD;   /* odd, top bit set: 2048-bit modulus */
+    rsa_mod[511] = 0xFD;   /* odd, top bit set: 4096-bit modulus */
+    memset(rsa_sig, 0x55, sizeof(rsa_sig));
+
+    t0 = clock();
+    ok = tls_rsa_decrypt_signature(rsa_sig, 256, rsa_out, &k2);
+    bench_emit("rsa2048_pub_exp", (uint32_t)(clock() - t0), ok ? 1u : 0u);
+
+    t0 = clock();
+    ok2 = tls_rsa_decrypt_signature(rsa_sig, 512, rsa_out, &k4);
+    bench_emit("rsa4096_pub_exp", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
+    bench_sink += (uint32_t)ok + rsa_out[0];
+}
+
 /* --- asymmetric ------------------------------------------------------- */
 
 static void bench_x25519(void)
@@ -352,6 +382,7 @@ int main(void)
     bench_gcm_decrypt();
     bench_bytes_compare();
     bench_hkdf();
+    bench_rsa();
     bench_pbkdf2(1000u);
     bench_x25519();
     bench_p256();

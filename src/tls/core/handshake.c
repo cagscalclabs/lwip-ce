@@ -212,6 +212,51 @@ TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 
 /*
  * ============================================================================
+ * Handshake phase timing
+ * ============================================================================
+ * Wall time on this platform is dominated by a handful of operations (ECDHE
+ * key agreement, per-link signature verification) interleaved with network
+ * waits, and the primitive benchmarks cannot say which of those a slow
+ * connection actually spent its time in. This emits one INFO event per
+ * handshake phase, carrying the milliseconds since the previous phase, so a
+ * single connection to a slow host attributes the time instead of leaving it
+ * to inference.
+ *
+ * Cost: active only at DEBUG verbosity, and then one lwip_now_ms() and one
+ * short snprintf per phase. Off entirely with LWIP_TLS_PHASE_TIMING=0.
+ */
+#ifndef LWIP_TLS_PHASE_TIMING
+#define LWIP_TLS_PHASE_TIMING 1
+#endif
+
+#if LWIP_TLS_PHASE_TIMING
+static uint32_t tls_phase_last_ms;
+
+static void tls_phase_trace_begin(void)
+{
+    tls_phase_last_ms = sys_now();
+}
+
+static void tls_phase_trace(const char *phase)
+{
+    if (lwip_get_log_verbosity() < LWIP_LOG_VERBOSITY_DEBUG)
+    {
+        return;
+    }
+    uint32_t now = sys_now();
+    char line[40];
+    snprintf(line, sizeof(line), "tls %s +%lums", phase,
+             (unsigned long)(uint32_t)(now - tls_phase_last_ms));
+    tls_phase_last_ms = now;
+    INFO(line);
+}
+#else
+#define tls_phase_trace_begin() ((void)0)
+#define tls_phase_trace(phase)  ((void)0)
+#endif
+
+/*
+ * ============================================================================
  * Transcript Hash Management
  * ============================================================================
  * The transcript hash is a running SHA-256 hash of all handshake messages.
@@ -2682,6 +2727,7 @@ bool tls_handshake_init(
 {
     bool x25519_ok;
 
+    tls_phase_trace_begin();
     if (!tls_handshake_init_common(ctx, psk, psk_identity))
     {
         return false;
@@ -2708,6 +2754,7 @@ bool tls_handshake_init(
                                         ctx->ecdhe_private, NULL, NULL);
         tls_crypto_guard_disable();
     }
+    tls_phase_trace(x25519_ok ? "keygen" : "keygen_fail");
     if (!x25519_ok)
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
@@ -3288,6 +3335,7 @@ bool tls_send_client_hello(
     }
 
     ctx->state = TLS_STATE_CLIENT_HELLO_SENT;
+    tls_phase_trace("client_hello");
     return true;
 }
 
@@ -3903,6 +3951,7 @@ bool tls_recv_server_hello(
     }
 
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
+    tls_phase_trace("server_hello");
     return true;
 }
 
@@ -3964,6 +4013,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_RECEIVED;
+    tls_phase_trace("chain_queued");
     return true;
 }
 
@@ -4764,6 +4814,7 @@ static bool tls_recv_certificate_verify(
     }
 
     ctx->state = TLS_STATE_CERTIFICATE_VERIFY_RECEIVED;
+    tls_phase_trace("cert_verify");
 
     return true;
 }
@@ -4962,6 +5013,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     /* Advance state so this function is not called again */
     ctx->tx_epoch = 1;
     ctx->state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
+    tls_phase_trace("ecdhe");
 
     return true;
 }
@@ -5464,6 +5516,7 @@ static bool tls_recv_finished(
         /* Client verified server's Finished */
         ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     }
+    tls_phase_trace("server_finished");
 
     return true;
 }
@@ -5800,6 +5853,7 @@ bool tls_server_recv_finished(struct tls_handshake_context *ctx,
         return false;
     }
     ctx->state = TLS_STATE_HANDSHAKE_COMPLETE;
+    tls_phase_trace("complete");
     return true;
 }
 

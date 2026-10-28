@@ -10,8 +10,14 @@ import sys
 import tempfile
 
 here = Path(__file__).resolve().parent
+# The harness extracts individual functions from handshake.c, so file-scope
+# helpers (the phase-trace function and its #if-gated no-op macros) are not
+# part of the generated TU. Stub the trace entry points alongside the log
+# macros so the extracted functions compile unchanged.
 LOGGING_SHIM = ('#define INFO(...) ((void)0)\n#define ERROR(...) ((void)0)\n'
-                '#define DEBUG(...) ((void)0)\n#define WARN(...) ((void)0)\n')
+                '#define DEBUG(...) ((void)0)\n#define WARN(...) ((void)0)\n'
+                '#define tls_phase_trace(p) ((void)0)\n'
+                '#define tls_phase_trace_begin() ((void)0)\n')
 root = here.parents[2]
 x509 = (root / 'src/tls/core/x509.c').read_text()
 hs = (root / 'src/tls/core/handshake.c').read_text()

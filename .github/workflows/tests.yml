@@ -271,86 +271,23 @@ jobs:
           echo -e "}}" >> ${{github.workspace}}/results-dylib.json
           rm ${{github.workspace}}/summary.json
 
-      - name: Publish Dyload Test Summary
+      - name: Normalize unit-test rows
         if: always()
         run: |
-          echo "## Dyload Test Results Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          python3 .github/scripts/test_table.py unit \
+            --results "${{ github.workspace }}/results-dylib.json" \
+            --repo "${{ github.workspace }}" \
+            --output "${{ github.workspace }}/test-rows-unit.json"
 
-          total=$(jq -r '.results.summary.tests' ${{github.workspace}}/results-dylib.json)
-          passed=$(jq -r '.results.summary.passed' ${{github.workspace}}/results-dylib.json)
-          failed=$(jq -r '.results.summary.failed' ${{github.workspace}}/results-dylib.json)
-          timed_out=$(jq -r '.results.summary.skipped' ${{github.workspace}}/results-dylib.json)
-
-          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⏱️ Timed out (manual verification needed) | $timed_out |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### Individual Module Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          jq -c '.results.tests[]' ${{github.workspace}}/results-dylib.json | while read test_obj; do
-            test_name=$(echo "$test_obj" | jq -r '.name')
-            test_dir=$(echo "$test_obj" | jq -r '.dir')
-            test_count=$(jq '[.sequence[] | select(startswith("hashWait"))] | length' "$test_dir/autotest.json" 2>/dev/null || echo "1")
-
-            status=$(echo "$test_obj" | jq -r '.status')
-            failed_hash_ids=$(echo "$test_obj" | jq -r '.failed_hash_ids // ""')
-            module_desc=$(jq -r '.description // empty' "$test_dir/autotest.json" 2>/dev/null)
-            module_desc=${module_desc:-"(no description)"}
-            module_desc=${module_desc//$'\n'/ }
-            module_desc=${module_desc//|/\\|}
-
-            if [ "$status" = "passed" ]; then
-              status_icon="✅ Passed"
-            elif [ "$status" = "timeout; manual verification needed" ]; then
-              status_icon="⏱️ Timed out (manual verification needed)"
-            elif [[ "$status" == skipped* ]]; then
-              status_icon="⚠️ Skipped (emulator non-randomness quirk)"
-            else
-              status_icon="❌ Failed"
-            fi
-
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "#### $test_name" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Module | Tests | Status | Description |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|-------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
-            echo "| $test_name |  | $status_icon | $module_desc |" >> $GITHUB_STEP_SUMMARY
-
-            jq -r '.sequence // [] | map(select(startswith("hashWait")))[]' "$test_dir/autotest.json" 2>/dev/null | while read -r seq_entry; do
-              hash_id="${seq_entry#hashWait|}"
-              hash_desc=$(jq -r ".hashes[\"$hash_id\"].description // \"(no description)\"" "$test_dir/autotest.json" 2>/dev/null)
-              hash_desc=${hash_desc//$'\n'/ }
-              hash_desc=${hash_desc//|/\\|}
-              if [ "$status" = "passed" ]; then
-                hash_status="✅ Passed"
-              elif [ "$status" = "timeout; manual verification needed" ]; then
-                hash_status="⏱️ Unknown (run timed out)"
-              elif [[ "$status" == skipped* ]]; then
-                hash_status="⚠️ Skipped (emulator non-randomness quirk)"
-              elif [[ ",$failed_hash_ids," == *",$hash_id,"* ]]; then
-                hash_status="❌ Failed"
-              else
-                hash_status="✅ Passed"
-              fi
-              echo "|  | $hash_id | $hash_status | $hash_desc |" >> $GITHUB_STEP_SUMMARY
-            done
-            if [ "$test_count" -eq 0 ]; then
-              echo "|  | (none) | $status_icon | (no hash tests) |" >> $GITHUB_STEP_SUMMARY
-            fi
-            echo "" >> $GITHUB_STEP_SUMMARY
-          done
-
-      - name: Upload Dyload Results Logfile
+      - name: Upload unit-test rows
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: results-dylib.json
-          path: ${{github.workspace}}/results-dylib.json
+          name: test-rows-unit
+          path: |
+            ${{ github.workspace }}/test-rows-unit.json
+            ${{ github.workspace }}/results-dylib.json
+          if-no-files-found: warn
 
       - name: Remove CEmu Rom
         if: always()
@@ -377,6 +314,7 @@ jobs:
         run: git fetch --no-tags origin master
 
       - name: Review source changes for RFC regressions
+        id: rfc_review
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -388,6 +326,22 @@ jobs:
           RFC_VERIFY_CYBER_PROGRAM: standard
           RFC_REVIEW_REPORT: ${{ runner.temp }}/rfc-compliance.md
         run: python3 .github/scripts/rfc_review.py
+
+      - name: Normalize RFC row
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py row \
+            --module RFC --test "Compliance review" \
+            --grade "${{ steps.rfc_review.outcome }}" \
+            --output test-rows-rfc.json
+
+      - name: Upload RFC row
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-rows-rfc
+          path: test-rows-rfc.json
+          if-no-files-found: warn
 
       - name: Upload RFC compliance report
         if: always()
@@ -438,8 +392,22 @@ jobs:
         if: always()
         run: |
           python3 tests/validation/acvp/summary.py \
-            --run-outcome "${{ steps.run_acvp.outcome }}" \
-            --github-summary "$GITHUB_STEP_SUMMARY"
+            --run-outcome "${{ steps.run_acvp.outcome }}"
+
+      - name: Normalize ACVP rows
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py acvp \
+            --results tests/validation/acvp/results.json \
+            --output test-rows-acvp.json
+
+      - name: Upload ACVP rows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-rows-acvp
+          path: test-rows-acvp.json
+          if-no-files-found: warn
 
       - name: Remove CEmu ROM
         if: always()
@@ -452,6 +420,7 @@ jobs:
           path: |
             tests/validation/acvp/artifacts/acvp-validation.vectors
             tests/validation/acvp/summary.md
+            tests/validation/acvp/results.json
             tests/validation/acvp/NETLOG.8xv
             tests/validation/acvp/autotest.json
           if-no-files-found: ignore
@@ -488,7 +457,8 @@ jobs:
           cat semgrep-targets.txt
 
       # Scan files that are new or changed relative to upstream lwIP.
-      - run: |
+      - id: semgrep
+        run: |
           if [ -s semgrep-targets.txt ]; then
             set --
             while IFS= read -r target; do
@@ -505,6 +475,21 @@ jobs:
         with:
           sarif_file: semgrep.sarif
         if: always()
+
+      - name: Normalize SAST row
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py row \
+            --module SAST --test Semgrep --grade "${{ steps.semgrep.outcome }}" \
+            --output test-rows-sast.json
+
+      - name: Upload SAST row
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-rows-sast
+          path: test-rows-sast.json
+          if-no-files-found: warn
 
   analyze:
     name: CodeQL Analyze
@@ -615,9 +600,25 @@ jobs:
         run: make dylib
 
       - name: Perform CodeQL Analysis
+        id: codeql
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:c-cpp"
+
+      - name: Normalize CodeQL row
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py row \
+            --module SAST --test CodeQL --grade "${{ steps.codeql.outcome }}" \
+            --output test-rows-codeql.json
+
+      - name: Upload CodeQL row
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-rows-codeql
+          path: test-rows-codeql.json
+          if-no-files-found: warn
 
   nettest:
     needs: prepare_rom
@@ -648,8 +649,9 @@ jobs:
 
       - name: Run ${{ matrix.suite }}
         run: |
-          sudo --preserve-env=AUTOTESTER_ROM,GITHUB_STEP_SUMMARY python3 tests/net/run.py \
+          sudo --preserve-env=AUTOTESTER_ROM python3 tests/net/run.py \
             --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
+            --rows tests/net/test-rows-${{ matrix.suite }}.json \
             --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
 
       - name: Remove CEmu Rom
@@ -659,8 +661,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: net-${{ matrix.suite }}
+          name: test-rows-net-${{ matrix.suite }}
           path: |
+            tests/net/test-rows-${{ matrix.suite }}.json
             tests/net/NETLOG-*.8xv
             tests/net/metrics.json
             tests/net/endpoint-probes.json
@@ -700,7 +703,21 @@ jobs:
             --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
 
       - name: Render report and gate on failures
-        run: python3 build-tools/dast/dast_report.py --summary "$GITHUB_STEP_SUMMARY"
+        run: python3 build-tools/dast/dast_report.py
+
+      - name: Normalize DAST rows
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py dast \
+            --results tests/dast.json --output test-rows-dast.json
+
+      - name: Upload DAST rows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-rows-dast
+          path: test-rows-dast.json
+          if-no-files-found: warn
 
       - name: Remove CEmu Rom
         if: always()
@@ -725,13 +742,35 @@ jobs:
 
       - name: Run host tests
         run: |
-          status=0
+          overall=0
+          rows='[]'
           for test in tests/host/*/run.py tests/host/*/test_*.py; do
             echo "::group::$test"
-            python3 "$test" || { status=1; echo "::error file=$test::$test failed"; }
+            test_status=0
+            python3 "$test" || test_status=$?
+            if [ "$test_status" -eq 0 ]; then
+              result=success
+            else
+              result=failure
+              overall=1
+              echo "::error file=$test::$test failed"
+            fi
+            module=$(basename "$(dirname "$test")" | tr '[:lower:]_' '[:upper:] ')
+            name=$(basename "$test" .py | tr '_' ' ')
+            rows=$(jq -c --arg module "$module" --arg test "$name" --arg grade "$result" \
+              '. + [{group:"HOST",module:$module,test:$test,grade:$grade}]' <<< "$rows")
             echo "::endgroup::"
           done
-          exit $status
+          echo "$rows" > test-rows-host.json
+          exit "$overall"
+
+      - name: Upload host-test rows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-rows-host
+          path: test-rows-host.json
+          if-no-files-found: warn
 
   fuzz:
     name: Fuzz (${{ matrix.target }})
@@ -753,7 +792,24 @@ jobs:
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
       - name: Fuzz
+        id: fuzz_target
         run: make -C tests/fuzz run-${{ matrix.target }} FUZZ_SECONDS=300
+
+      - name: Normalize fuzz row
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py row \
+            --module FUZZ --test "${{ matrix.target }}" \
+            --grade "${{ steps.fuzz_target.outcome }}" \
+            --output test-rows-fuzz-${{ matrix.target }}.json
+
+      - name: Upload fuzz row
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-rows-fuzz-${{ matrix.target }}
+          path: test-rows-fuzz-${{ matrix.target }}.json
+          if-no-files-found: warn
 
       - name: Upload crash inputs
         if: failure()
@@ -789,10 +845,24 @@ jobs:
     name: Collect test results
     needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
     if: always()
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       results: ${{ steps.collect.outputs.results }}
     steps:
+      - name: Check out summary renderer
+        uses: actions/checkout@v4
+
+      - name: Download normalized test rows
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-rows-*
+          path: ${{ runner.temp }}/test-rows
+          merge-multiple: true
+
       - name: Collect result states
         id: collect
         env:
@@ -824,5 +894,34 @@ jobs:
               rfc:$rfc, acvp:$acvp, sast:$sast, codeql:$codeql,
               network:$network, dast:$dast, host:$host, fuzz:$fuzz}')
           echo "results=$results" >> "$GITHUB_OUTPUT"
-          echo "$results" | jq . >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Render consolidated test table
+        env:
+          ROM_RESULT: ${{ needs.prepare_rom.result }}
+          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
+          UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
+          RFC_RESULT: ${{ needs.rfc_compliance.result }}
+          ACVP_RESULT: ${{ needs.acvp.result }}
+          SAST_RESULT: ${{ needs.semgrep_scan.result }}
+          CODEQL_RESULT: ${{ needs.analyze.result }}
+          NETWORK_RESULT: ${{ needs.nettest.result }}
+          DAST_RESULT: ${{ needs.dast.result }}
+          HOST_RESULT: ${{ needs.host_tests.result }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input "${{ runner.temp }}/test-rows" \
+            --output "$RUNNER_TEMP/test-results.md" \
+            --fallback "PREREQUISITE|ROM setup|$ROM_RESULT" \
+            --fallback "PREREQUISITE|ROM cleanup|$ROM_CLEANUP_RESULT" \
+            --fallback "UNIT|Suite execution|$UNIT_RESULT" \
+            --fallback "RFC|Compliance review|$RFC_RESULT" \
+            --fallback "ACVP|Suite execution|$ACVP_RESULT" \
+            --fallback "SAST|Semgrep|$SAST_RESULT" \
+            --fallback "SAST|CodeQL|$CODEQL_RESULT" \
+            --fallback "NETTEST|All network suites|$NETWORK_RESULT" \
+            --fallback "DAST|Suite execution|$DAST_RESULT" \
+            --fallback "HOST|Suite execution|$HOST_RESULT" \
+            --fallback "FUZZ|All targets|$FUZZ_RESULT"
+          cat "$RUNNER_TEMP/test-results.md" >> "$GITHUB_STEP_SUMMARY"
 
