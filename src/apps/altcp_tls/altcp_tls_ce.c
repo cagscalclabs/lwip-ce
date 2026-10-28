@@ -505,14 +505,17 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
             rest = pbuf_alloc(PBUF_RAW, (u16_t)rest_len, PBUF_RAM);
             if (rest == NULL)
             {
-                return ERR_MEM;
+                /* Nothing consumed yet: retryable, and the common exit still
+                 * destroys the AEAD context (the ledger's AES-zeroization
+                 * entry requires every exit to go through it). */
+                status = ERR_MEM;
+                goto fail;
             }
             if (pbuf_copy_partial(state->rx, rest->payload, (u16_t)rest_len,
                                   (u16_t)record_len) != rest_len)
             {
-                pbuf_free(rest);
-                rest = NULL;
-                return ERR_BUF;
+                status = ERR_BUF;
+                goto fail;   /* fail frees `rest` and destroys the context */
             }
         }
     }
