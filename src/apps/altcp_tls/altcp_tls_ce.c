@@ -396,6 +396,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     size_t ciphertext_len;
     size_t actual_plaintext_len;
     size_t processed;
+    struct pbuf *rest = NULL;
     err_t status = ERR_OK;
 
     if (!state || !conn || !plaintext || !written || !inner_content_type)
@@ -484,6 +485,38 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
      * so handshake bytes (pre-acked) aren't double-acked. Post-handshake
      * app-data bytes are not pre-acked here; they are acked exactly once when
      * the decrypter consumes the encrypted record from state->rx. */
+    /* state->rx may hold further records behind this one: a server can stack
+     * several records into one TCP segment and the caller loops over them.
+     * lwIP pbufs cannot be split and pbuf_realloc below frees the tail, so
+     * preserve the trailing bytes now, while the chain is still at the record
+     * start and offsets are record-relative. This is one bounded copy of what
+     * followed the record, replacing the much larger ciphertext-to-plaintext
+     * copy this function used to make.
+     *
+     * Nothing has been consumed yet, so an allocation failure here is still
+     * retryable: report ERR_MEM and let the caller try again on the next recv
+     * rather than aborting a connection under transient memory pressure. */
+    {
+        u16_t buffered = state->rx->tot_len;
+
+        if (buffered > (u16_t)record_len)
+        {
+            size_t rest_len = (size_t)buffered - record_len;
+            rest = pbuf_alloc(PBUF_RAW, (u16_t)rest_len, PBUF_RAM);
+            if (rest == NULL)
+            {
+                return ERR_MEM;
+            }
+            if (pbuf_copy_partial(state->rx, rest->payload, (u16_t)rest_len,
+                                  (u16_t)record_len) != rest_len)
+            {
+                pbuf_free(rest);
+                rest = NULL;
+                return ERR_BUF;
+            }
+        }
+    }
+
     altcp_tls_ce_consume_recved(state, sizeof(header));
 
     /* Pass 2: decrypt the ciphertext in place, in state->rx itself.
@@ -526,41 +559,11 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
 
     /* Drop the trailing 16-byte tag: the chain now ends at the last plaintext
      * byte. The bytes themselves are acked (not freed) so the chain can be
-     * handed to the application intact.
-     *
-     * state->rx may hold further records behind this one (a server can stack
-     * several records into one TCP segment, and the caller loops over them).
-     * lwIP pbufs cannot be split, and pbuf_realloc below frees the tail, so
-     * preserve the trailing bytes first. This copy is bounded by whatever
-     * followed the record in the same buffer, and replaces the far larger
-     * ciphertext-to-plaintext copy this function used to make. */
-    {
-        struct pbuf *rest = NULL;
-        u16_t buffered = state->rx->tot_len;
-
-        if (buffered > (u16_t)record_len)
-        {
-            size_t rest_len = (size_t)buffered - record_len;
-            rest = pbuf_alloc(PBUF_RAW, (u16_t)rest_len, PBUF_RAM);
-            if (rest == NULL)
-            {
-                status = ERR_ABRT;
-                goto fail;
-            }
-            if (pbuf_copy_partial(state->rx, rest->payload, (u16_t)rest_len,
-                                  (u16_t)record_len) != rest_len)
-            {
-                pbuf_free(rest);
-                status = ERR_BUF;
-                goto fail;
-            }
-        }
-
-        pbuf_realloc(state->rx, (u16_t)actual_plaintext_len);
-        altcp_tls_ce_ack_recved(state, actual_plaintext_len + TLS_AES_AUTH_TAG_SIZE);
-        out_head = state->rx;
-        state->rx = rest;   /* NULL when the record was all that was buffered */
-    }
+     * handed to the application intact. */
+    pbuf_realloc(state->rx, (u16_t)actual_plaintext_len);
+    altcp_tls_ce_ack_recved(state, actual_plaintext_len + TLS_AES_AUTH_TAG_SIZE);
+    out_head = state->rx;
+    state->rx = rest;   /* NULL when the record was all that was buffered */
 
     (*seq_num)++;
 
@@ -574,6 +577,10 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         if (pt_end == 0)
         {
             pbuf_free(out_head);
+            if (rest)
+            {
+                pbuf_free(rest);
+            }
             tls_aes_destroy_ctx(&aes_ctx);
             (void)tls_send_fatal_alert(ctx, TLS_ALERT_UNEXPECTED_MESSAGE);
             return ERR_VAL;
@@ -591,6 +598,12 @@ fail:
     if (out_head)
     {
         pbuf_free(out_head);
+    }
+    if (rest)
+    {
+        /* Preserved tail of a coalesced segment: the caller is aborting, so
+         * drop it rather than leaking it. */
+        pbuf_free(rest);
     }
     tls_aes_destroy_ctx(&aes_ctx);
     return (status != ERR_OK) ? status : ERR_VAL;
