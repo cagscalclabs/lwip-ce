@@ -563,7 +563,6 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     pbuf_realloc(state->rx, (u16_t)actual_plaintext_len);
     altcp_tls_ce_ack_recved(state, actual_plaintext_len + TLS_AES_AUTH_TAG_SIZE);
     out_head = state->rx;
-    state->rx = rest;   /* NULL when the record was all that was buffered */
 
     (*seq_num)++;
 
@@ -576,7 +575,10 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         }
         if (pt_end == 0)
         {
-            pbuf_free(out_head);
+            /* out_head and state->rx still refer to the same (now useless)
+             * record chain, so that chain belongs to the caller: it aborts and
+             * its teardown frees state->rx. Only the local preserved tail is
+             * ours to drop here. */
             if (rest)
             {
                 pbuf_free(rest);
@@ -590,6 +592,12 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         pbuf_realloc(out_head, (u16_t)*written);
     }
 
+    /* Ownership handover, and only now: out_head (the record, now plaintext)
+     * goes to the caller, and the preserved tail becomes the new state->rx so
+     * the loop can parse the next record. Until this point `rest` is local, so
+     * every failure path above can free it without leaving state->rx dangling;
+     * after this point there is no failure path. */
+    state->rx = rest;
     *plaintext = out_head;
     tls_aes_destroy_ctx(&aes_ctx);
     return ERR_OK;
