@@ -26,9 +26,9 @@ static uint32_t now_ms(void)
 
 static bool start_unrelated_traffic(void)
 {
-    char reply[32];
-    return host_call("pingburst " PING_SECONDS, reply, sizeof(reply), 5000) &&
-           strstr(reply, "OK") != NULL;
+    /* host_call() already fails unless the host acknowledged with OK; the
+     * acknowledgement carries no payload, so there is nothing to inspect. */
+    return host_call("pingburst " PING_SECONDS, NULL, 0, 5000);
 }
 
 static void test_connect_timeout_under_traffic(void)
@@ -36,7 +36,7 @@ static void test_connect_timeout_under_traffic(void)
     struct lwip_socket *s;
     uint32_t t0, elapsed;
 
-    check("connect: host sends unrelated traffic", start_unrelated_traffic());
+    check("connect: unrelated traffic started", start_unrelated_traffic());
 
     s = lwip_socket_create(LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, IDLE_MS);
     if (!check("connect: socket created", s != NULL))
@@ -67,7 +67,7 @@ static void test_idle_connected_socket_under_traffic(void)
     if (!check("idle: echo socket connected", s != NULL))
         return;
 
-    check("idle: host sends unrelated traffic", start_unrelated_traffic());
+    check("idle: unrelated traffic started", start_unrelated_traffic());
     t0 = now_ms();
     pump(not_active, s, 20000);
     elapsed = now_ms() - t0;
