@@ -89,7 +89,10 @@ def unit_rows(results_path: Path, repo: Path) -> list[dict[str, str]]:
     for result in document.get("results", {}).get("tests", []):
         name = str(result.get("name", "unit"))
         status = str(result.get("status", "failed"))
-        stats = stats_of(result)
+        # No timing here: `duration` is the whole module's wall time, and
+        # repeating it on every vector makes each vector look that slow.
+        stats = stats_of({k: v for k, v in result.items()
+                          if k not in _TIME_KEYS})
         failed = {part for part in str(result.get("failed_hash_ids", "")).split(",") if part}
         manifest_path = manifests.get(name)
         if not manifest_path:
@@ -129,7 +132,7 @@ def acvp_rows(path: Path) -> list[dict[str, str]]:
             label += f" — {detail}"
         rows.append({"group": "ACVP", "module": algorithm, "test": label,
                      "grade": "Pass" if result.get("passed") else "Fail",
-                     "stats": stats_of(result)})
+                     "stats": ""})
     return rows
 
 
@@ -257,31 +260,24 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
                   + ", ".join(f"{row['module']} / {row['test']}" for row in failures[:10])
                   + (f" (+{len(failures) - 10} more)" if len(failures) > 10 else ""),
                   ""]
-    # GitHub sanitises inline styles, so rows cannot be tinted. Groups are
-    # separated into their own table under a coloured heading instead: that
-    # gives each owner's area a distinct block without pretending to shade.
+    # GitHub sanitises inline styles, so rows cannot be tinted. Each group gets
+    # a coloured icon inside the Module column instead: rows stay in one table,
+    # sorted so a group's rows are contiguous.
     GROUP_STYLE = {
         "PREREQUISITE": "\u26aa", "UNIT": "\U0001f7e6", "HOST": "\U0001f7e9",
         "NETTEST": "\U0001f7e8", "DAST": "\U0001f7e7", "ACVP": "\U0001f7ea",
         "RFC": "\U0001f7e5", "SAST": "\U0001f7e5", "FUZZ": "\u26ab",
     }
-    group_of = {}
-    ordered_groups: list[str] = []
-    for row in ordered:
-        group = str(row.get("group", "")).strip() or "OTHER"
-        if group not in group_of:
-            group_of[group] = []
-            ordered_groups.append(group)
-        group_of[group].append(row)
 
-    for group in ordered_groups:
-        icon = GROUP_STYLE.get(group.upper(), "")
-        lines += ["", f"### {icon} {md(group)}".strip(), "",
-                  "| Module | Test | Grade | Stats |", "|---|---|---|---|"]
-        lines.extend(
-            f"| {md(row['module'])} | {md(row['test'])} | {grade_cell(row['grade'])} | "
-            f"{md(row['stats'])} |"
-            for row in group_of[group])
+    def module_cell(row: dict) -> str:
+        icon = GROUP_STYLE.get(str(row.get("group", "")).upper(), "")
+        return f"{icon} {row['module']}".strip()
+
+    lines += ["| Module | Test | Grade | Stats |", "|---|---|---|---|"]
+    lines.extend(
+        f"| {md(module_cell(row))} | {md(row['test'])} | {grade_cell(row['grade'])} | "
+        f"{md(row['stats'])} |"
+        for row in ordered)
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

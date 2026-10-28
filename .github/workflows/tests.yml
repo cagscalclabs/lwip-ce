@@ -383,12 +383,10 @@ jobs:
       - name: Process ACVP fixture through CEmu
         id: run_acvp
         run: |
-          acvp_start=$(($(date +%s%N)/1000000))
           sudo --preserve-env=AUTOTESTER_ROM python3 tests/validation/acvp/run.py \
             --autotester "${{ steps.env.outputs.autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
             --timeout-ms 60000000
-          echo "ACVP_SUITE_MS=$(($(($(date +%s%N)/1000000)) - acvp_start))" >> "$GITHUB_ENV"
 
       - name: Publish ACVP results
         if: always()
@@ -401,7 +399,6 @@ jobs:
         run: |
           python3 .github/scripts/test_table.py acvp \
             --results tests/validation/acvp/results.json \
-            --stat "${ACVP_SUITE_MS:-} ms (ACVP suite wall time)" \
             --output test-rows-acvp.json
 
       - name: Upload ACVP rows
@@ -662,13 +659,13 @@ jobs:
           sudo chown "$(id -un)" \
             "tests/net/test-rows-${{ matrix.suite }}.json" \
             tests/net/metrics.json 2>/dev/null || true
-          suite_ms=$(($(($(date +%s%N)/1000000)) - suite_start))
           python3 - <<PY
           import json, os
           p = "tests/net/test-rows-${{ matrix.suite }}.json"
           rows = json.load(open(p))
-          # Per-test timings already arrive from run.py (METRIC ... ms lines);
-          # add the suite wall time and the heap figures the calc reported.
+          # Per-test timings already arrive from run.py (METRIC ... ms lines,
+          # attached to the row they belong to). Add only the heap figures the
+          # calc reported; a suite-wide wall time says nothing about a test.
           heap = []
           if os.path.exists("tests/net/metrics.json"):
               metrics = json.load(open("tests/net/metrics.json"))
@@ -679,9 +676,10 @@ jobs:
               idle = metrics.get("heap_idle", {}).get("value")
               if idle is not None:
                   heap.append(f"heap idle {idle} B")
-          extra = "; ".join(heap + [f"$suite_ms ms (suite wall time)"])
-          for r in rows:
-              r["stats"] = "; ".join(x for x in (r.get("stats", ""), extra) if x)
+          extra = "; ".join(heap)
+          if extra:
+              for r in rows:
+                  r["stats"] = "; ".join(x for x in (r.get("stats", ""), extra) if x)
           json.dump(rows, open(p, "w"), indent=2)
           PY
 
