@@ -363,23 +363,24 @@ static void pooled_https(const char *pool, const char *suffix, bool want_ok, boo
     https(name, host, path, want_ok, body);
 }
 
-static void test_wss(void)
+static void test_wss(const char *pool, const char *connect_name,
+                     const char *metric_name, uint32_t timeout_ms)
 {
-    uint32_t start = lwip_now_ms();
+    uint32_t start;
     char host[96], path[128], name[160];
-    if (!select_endpoint("wss", host, sizeof(host), path, sizeof(path)))
+    if (!select_endpoint(pool, host, sizeof(host), path, sizeof(path)))
     {
-        check("select wss endpoint", false);
+        snprintf(name, sizeof(name), "select %s endpoint", pool);
+        check(name, false);
         return;
     }
-    /* Leave enough emulated time for longer public certificate chains before
-     * the WebSocket upgrade shares the same socket timeout budget. */
+    start = lwip_now_ms();
     struct lwip_socket *sock =
-        open_socket(LWIP_SOCKET_ALTCP_WSS, host, 443, path, 120000);
+        open_socket(LWIP_SOCKET_ALTCP_WSS, host, 443, path, timeout_ms);
     size_t got = 0;
-    snprintf(name, sizeof(name), "wss connect %s", host);
+    snprintf(name, sizeof(name), "%s %s", connect_name, host);
     if (!check(name, sock != NULL)) return;
-    metric("wss_connect", lwip_now_ms() - start, "ms");
+    metric(metric_name, lwip_now_ms() - start, "ms");
     write_all(sock, (const uint8_t *)"lwip-ce wss echo", 16);
     start = lwip_now_ms();
     while (lwip_now_ms() - start < 30000 && got < sizeof(buf) - 1)
@@ -389,7 +390,8 @@ static void test_wss(void)
         buf[got] = '\0';
         if (strstr((char *)buf, "lwip-ce wss echo")) break;
     }
-    check("wss echo", strstr((char *)buf, "lwip-ce wss echo") != NULL);
+    snprintf(name, sizeof(name), "wss echo %s", host);
+    check(name, strstr((char *)buf, "lwip-ce wss echo") != NULL);
     close_socket(sock);
 }
 
@@ -422,7 +424,11 @@ int main(void)
         pooled_https("starfield", " (Starfield)", true, false);
         pooled_https("p384", " (P-384 chain rejected)", false, false);
         test_tls12_rejected();
-        test_wss();
+        test_wss("wss", "wss connect", "wss_connect", 60000);
+        /* This distant endpoint regularly needs much more emulated time.  Keep
+         * it as a regression test for the extended WSS handshake budget. */
+        test_wss("wss_long", "wss long-handshake connect",
+                 "wss_long_connect", 120000);
     }
     return net_end();
 }

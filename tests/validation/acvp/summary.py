@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Render ACVP fixture results for the GitHub Actions job summary."""
+"""Render and persist ACVP fixture results."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -124,11 +123,8 @@ def main() -> int:
 
     args.markdown.write_text(markdown)
     args.results.write_text(json.dumps(report, indent=2) + "\n")
-    github_summary = args.github_summary or (
-        Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None
-    )
-    if github_summary:
-        with github_summary.open("a") as stream:
+    if args.github_summary:
+        with args.github_summary.open("a") as stream:
             stream.write(markdown)
     print(f"ACVP summary: {report.get('passedTests', 0)}/{report.get('total', 0)} vectors passed; "
           f"Markdown written to {args.markdown}")

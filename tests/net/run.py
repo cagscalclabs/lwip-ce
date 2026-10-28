@@ -66,11 +66,13 @@ ENDPOINT_POOLS = {
                   ("valid.sfg2.demo.amazontrust.com", "/")],
     "p384": [("valid.rootca4.demo.amazontrust.com", "/"),
              ("good.sca4a.amazontrust.com", "/")],
-    "wss": [("echo.websocket.in", "/"), ("websocket-echo.com", "/")],
+    "wss": [("websocket-echo.com", "/")],
+    "wss_long": [("echo.websocket.in", "/")],
 }
 ENDPOINT_PHASES = {
     "body": "body",
     "wss": "wss",
+    "wss_long": "wss",
 }
 HTTPS_PATHS = {host: path for pool in ENDPOINT_POOLS.values() for host, path in pool}
 HTTPS_FAILURE = re.compile(

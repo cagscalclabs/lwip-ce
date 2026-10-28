@@ -388,7 +388,7 @@ jobs:
             --usb "${{ steps.env.outputs.usb-step }}" \
             --timeout-ms 60000000
 
-      - name: Publish ACVP results
+      - name: Build ACVP results
         if: always()
         run: |
           python3 tests/validation/acvp/summary.py \

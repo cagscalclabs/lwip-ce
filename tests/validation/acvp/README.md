@@ -29,8 +29,8 @@ deterministic entropy, nonce, and reseed strings.
 vectors and 32 vectors for every other advertised primitive. It covers MCT,
 both cipher directions, valid and invalid authentication/signature cases,
 boundary lengths, and all generated-key operations. `run.py` executes that
-corpus through the calculator. `summary.py` publishes per-primitive counts and
-results. The `acvp-validation` workflow artifact contains one self-contained,
+corpus through the calculator. `summary.py` writes per-primitive counts and
+results for the consolidated test table and validation artifact. The `acvp-validation` workflow artifact contains one self-contained,
 JSON-encoded `acvp-validation.vectors` evidence bundle with the known-answer
 vectors, expected results, calculator results, and validation results.
 Generated-key cases record semantic expectations and the independent
