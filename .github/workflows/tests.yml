@@ -3,9 +3,9 @@ name: Tests
 on:
   workflow_call:
     outputs:
-      rfc_only_failure:
-        description: True when RFC compliance is the only failed gate
-        value: ${{ jobs.gate_results.outputs.rfc_only_failure }}
+      results:
+        description: JSON object containing every test job result
+        value: ${{ jobs.gate_results.outputs.results }}
 
 permissions:
   contents: read
@@ -358,7 +358,7 @@ jobs:
 
   rfc_compliance:
     name: RFC compliance
-    if: github.ref == 'refs/heads/staging'
+    if: github.ref != 'refs/heads/master'
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -367,7 +367,7 @@ jobs:
       - name: Initialize RFC compliance report
         run: printf '## RFC compliance\n\nThe RFC review did not complete.\n' > "$RUNNER_TEMP/rfc-compliance.md"
 
-      - name: Check out tested staging commit
+      - name: Check out tested commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -376,7 +376,7 @@ jobs:
       - name: Fetch current master baseline
         run: git fetch --no-tags origin master
 
-      - name: Review unpromoted source changes for RFC regressions
+      - name: Review source changes for RFC regressions
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -786,15 +786,15 @@ jobs:
           echo "Deleted encrypted ROM artifact $artifact_id."
 
   gate_results:
-    name: Classify gate results
+    name: Collect test results
     needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
     if: always()
     runs-on: ubuntu-latest
     outputs:
-      rfc_only_failure: ${{ steps.classify.outputs.rfc_only_failure }}
+      results: ${{ steps.collect.outputs.results }}
     steps:
-      - name: Detect an RFC-only failure
-        id: classify
+      - name: Collect result states
+        id: collect
         env:
           ROM_RESULT: ${{ needs.prepare_rom.result }}
           ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
@@ -808,134 +808,21 @@ jobs:
           HOST_RESULT: ${{ needs.host_tests.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
         run: |
-          rfc_only_failure=false
-          if [ "$RFC_RESULT" = failure ] && \
-             [ "$ROM_RESULT" = success ] && [ "$ROM_CLEANUP_RESULT" = success ] && \
-             [ "$UNIT_RESULT" = success ] && [ "$ACVP_RESULT" = success ] && \
-             [ "$SAST_RESULT" = success ] && [ "$CODEQL_RESULT" = success ] && \
-             [ "$NETWORK_RESULT" = success ] && [ "$DAST_RESULT" = success ] && \
-             [ "$HOST_RESULT" = success ] && [ "$FUZZ_RESULT" = success ]; then
-            rfc_only_failure=true
-          fi
-          echo "rfc_only_failure=$rfc_only_failure" >> "$GITHUB_OUTPUT"
-          echo "RFC-only failure: $rfc_only_failure" >> "$GITHUB_STEP_SUMMARY"
-
-  notify_failure:
-    name: Notify commit author on failure
-    permissions:
-      actions: read
-      contents: read
-      issues: write
-    needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
-    if: >-
-      always() && (
-      needs.prepare_rom.result != 'success' ||
-      needs.cleanup_rom.result != 'success' ||
-      needs.dylib_unit_tests.result != 'success' ||
-      (github.ref == 'refs/heads/staging' &&
-       needs.rfc_compliance.result != 'success') ||
-      needs.acvp.result != 'success' || needs.semgrep_scan.result != 'success' ||
-      needs.analyze.result != 'success' ||
-      needs.nettest.result != 'success' || needs.dast.result != 'success' ||
-      needs.host_tests.result != 'success' || needs.fuzz.result != 'success')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download RFC compliance details
-        if: >-
-          github.ref == 'refs/heads/staging' &&
-          needs.rfc_compliance.result != 'success'
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: rfc-compliance-report
-          path: ${{ runner.temp }}/rfc-compliance-report
-
-      - name: Open or update a branch failure issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GATE_SHA: ${{ github.sha }}
-          BRANCH_NAME: ${{ github.ref_name }}
-          ROM_RESULT: ${{ needs.prepare_rom.result }}
-          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
-          UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
-          RFC_RESULT: ${{ needs.rfc_compliance.result }}
-          ACVP_RESULT: ${{ needs.acvp.result }}
-          SAST_RESULT: ${{ needs.semgrep_scan.result }}
-          CODEQL_RESULT: ${{ needs.analyze.result }}
-          NETWORK_RESULT: ${{ needs.nettest.result }}
-          DAST_RESULT: ${{ needs.dast.result }}
-          HOST_RESULT: ${{ needs.host_tests.result }}
-          FUZZ_RESULT: ${{ needs.fuzz.result }}
-          RFC_REPORT_PATH: ${{ runner.temp }}/rfc-compliance-report/rfc-compliance.md
-        run: |
-          set -euo pipefail
-          commit_json=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA")
-          author=$(jq -r '.author.login // .committer.login // empty' <<< "$commit_json")
-          author_name=$(jq -r '.commit.author.name // "the commit author"' <<< "$commit_json")
-          mention="**$author_name**"
-          if [ -n "$author" ]; then mention="@$author"; fi
-
-          short_sha=${GATE_SHA:0:12}
-          title="[$BRANCH_NAME] Gate failure for $short_sha"
-          body="$RUNNER_TEMP/branch-gate-failure.md"
-          {
-            echo "<!-- branch-gate:$GATE_SHA -->"
-            echo "$mention, the $BRANCH_NAME gate failed for commit $GATE_SHA."
-            echo
-            echo "- Branch: [\`$BRANCH_NAME\`](${{ github.server_url }}/${{ github.repository }}/tree/$BRANCH_NAME)"
-            echo "- Commit: [\`$GATE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$GATE_SHA)"
-            echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-            echo
-            echo "### Failed gates"
-            [ "$ROM_RESULT" = success ] || echo "- **CEmu ROM preparation** — $ROM_RESULT"
-            [ "$ROM_CLEANUP_RESULT" = success ] || echo "- **CEmu ROM cleanup** — $ROM_CLEANUP_RESULT"
-            [ "$UNIT_RESULT" = success ] || echo "- **Unit tests** — $UNIT_RESULT"
-            [ "$RFC_RESULT" = success ] || [ "$RFC_RESULT" = skipped ] || echo "- **RFC compliance** — $RFC_RESULT"
-            [ "$ACVP_RESULT" = success ] || echo "- **ACVP** — $ACVP_RESULT"
-            [ "$SAST_RESULT" = success ] || echo "- **SAST** — $SAST_RESULT"
-            [ "$CODEQL_RESULT" = success ] || echo "- **CodeQL** — $CODEQL_RESULT"
-            [ "$NETWORK_RESULT" = success ] || echo "- **Network tests** — $NETWORK_RESULT"
-            [ "$DAST_RESULT" = success ] || echo "- **DAST** — $DAST_RESULT"
-            [ "$HOST_RESULT" = success ] || echo "- **Host tests** — $HOST_RESULT"
-            [ "$FUZZ_RESULT" = success ] || echo "- **Fuzzing** — $FUZZ_RESULT"
-            if [ "$RFC_RESULT" != success ] && [ "$RFC_RESULT" != skipped ] && \
-               [ -s "$RFC_REPORT_PATH" ]; then
-              echo
-              echo "### RFC compliance details"
-              echo
-              cat "$RFC_REPORT_PATH"
-            fi
-            echo
-            echo "### All gate results"
-            echo '| Gate | Result |'
-            echo '|---|---|'
-            echo "| CEmu ROM preparation | $ROM_RESULT |"
-            echo "| CEmu ROM cleanup | $ROM_CLEANUP_RESULT |"
-            echo "| Unit tests | $UNIT_RESULT |"
-            echo "| RFC compliance | $RFC_RESULT |"
-            echo "| ACVP | $ACVP_RESULT |"
-            echo "| SAST | $SAST_RESULT |"
-            echo "| CodeQL | $CODEQL_RESULT |"
-            echo "| Network tests | $NETWORK_RESULT |"
-            echo "| DAST | $DAST_RESULT |"
-            echo "| Host tests | $HOST_RESULT |"
-            echo "| Fuzzing | $FUZZ_RESULT |"
-          } > "$body"
-
-          issue_number=$(gh issue list --repo "${{ github.repository }}" --state all \
-            --search "$GATE_SHA in:body" --json number --jq '.[0].number // empty')
-          if [ -n "$issue_number" ]; then
-            gh issue reopen "$issue_number" --repo "${{ github.repository }}" >/dev/null 2>&1 || true
-            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
-              --title "$title" --body-file "$body"
-          else
-            issue_url=$(gh issue create --repo "${{ github.repository }}" \
-              --title "$title" --body-file "$body")
-            issue_number=${issue_url##*/}
-          fi
-          if [ -n "$author" ]; then
-            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
-              --add-assignee "$author" || echo "::warning::Could not assign @$author to issue #$issue_number"
-          fi
-
+          results=$(jq -nc \
+            --arg rom_setup "$ROM_RESULT" \
+            --arg rom_cleanup "$ROM_CLEANUP_RESULT" \
+            --arg unit "$UNIT_RESULT" \
+            --arg rfc "$RFC_RESULT" \
+            --arg acvp "$ACVP_RESULT" \
+            --arg sast "$SAST_RESULT" \
+            --arg codeql "$CODEQL_RESULT" \
+            --arg network "$NETWORK_RESULT" \
+            --arg dast "$DAST_RESULT" \
+            --arg host "$HOST_RESULT" \
+            --arg fuzz "$FUZZ_RESULT" \
+            '{rom_setup:$rom_setup, rom_cleanup:$rom_cleanup, unit:$unit,
+              rfc:$rfc, acvp:$acvp, sast:$sast, codeql:$codeql,
+              network:$network, dast:$dast, host:$host, fuzz:$fuzz}')
+          echo "results=$results" >> "$GITHUB_OUTPUT"
+          echo "$results" | jq . >> "$GITHUB_STEP_SUMMARY"
 

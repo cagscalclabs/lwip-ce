@@ -1,24 +1,17 @@
-name: Build
-
-# staging is the integration branch. Every staging push is processed
-# immediately; code changes run the gate and non-code-only changes proceed
-# directly to promotion. Every master push runs the complete build/test gate
-# before deployment. An RFC-only staging failure opens a maintainer-review PR.
+name: Build, Run Checks, and Deploy
 
 on:
   workflow_dispatch:
   push:
-    branches: [master, staging]
+  pull_request:
 
 permissions:
-  contents: write
+  contents: read
   actions: write
-  issues: write
-  pull-requests: write
   security-events: write
 
 concurrency:
-  group: lwip-${{ github.ref_name }}-gate
+  group: pipeline-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -29,66 +22,58 @@ env:
   LWIP_TESTS_COMMON: ${{ github.workspace }}/tests/common
 
 jobs:
-  decide:
-    name: Classify changes
-    permissions:
-      contents: read
+  changes:
+    name: Detect relevant content
     runs-on: ubuntu-latest
     outputs:
-      code_changed: ${{ steps.decision.outputs.code_changed }}
+      content_new: ${{ steps.detect.outputs.content_new }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Classify branch changes
-        id: decision
+      - name: Detect relevant changes
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          echo "code_changed=false" >> "$GITHUB_OUTPUT"
-
-          git fetch --no-tags origin master
-          code_changed=false
-          if [ "${{ github.ref_name }}" = master ]; then
-            code_changed=true
-            echo "Master always runs the complete build/test gate."
-          else
-            while IFS= read -r -d '' path; do
-              case "$path" in
-                src/*|tests/*|examples/*|contrib/*|wifi_bridge/*|submodules/*|upstream-lwip/*|build-tools/*|bin/*|makefile|ce-libify.toml|exports.txt|reduce.sh|.gitmodules|.github/scripts/*|.github/ci-versions.env|.github/rfc-review-schema.json)
-                  code_changed=true
-                  echo "Gate-relevant change: $path"
-                  ;;
-                *)
-                  echo "Non-code change: $path"
-                  ;;
-              esac
-            done < <(git diff --name-only -z "origin/master...$GITHUB_SHA")
-          fi
-          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
+          content_new=false
 
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
-            if [ "${{ github.ref_name }}" != staging ] && [ "${{ github.ref_name }}" != master ]; then
-              echo "::error::Manual gates must use either the staging or master branch."
-              exit 1
+            content_new=true
+          else
+            changed_paths="$RUNNER_TEMP/changed-paths"
+            if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+              git diff-tree --root --no-commit-id --name-only -r -z "$HEAD_SHA" > "$changed_paths"
+            elif [ "${{ github.event_name }}" = pull_request ]; then
+              git diff --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"
+            else
+              git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"
             fi
+
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                src/*|tests/*|examples/*|contrib/*|wifi_bridge/*|submodules/*|upstream-lwip/*|build-tools/*|bin/*|makefile|ce-libify.toml|exports.txt|reduce.sh|.gitmodules|.github/actions/*|.github/scripts/*|.github/workflows/build.yml|.github/workflows/tests.yml|.github/ci-versions.env|.github/rfc-review-schema.json)
+                  content_new=true
+                  echo "Relevant content: $path"
+                  ;;
+                *)
+                  echo "Ignored content: $path"
+                  ;;
+              esac
+            done < "$changed_paths"
           fi
 
-          if [ "$code_changed" = false ]; then
-            echo "No project, build, or test code changed; promoting without build and test checks."
-          else
-            echo "Project, build, or test code changed; running the full gate now."
-          fi
+          echo "content_new=$content_new" >> "$GITHUB_OUTPUT"
+          echo "Relevant content changed: $content_new" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build lwIP
-    needs: decide
-    if: needs.decide.outputs.code_changed == 'true'
-    permissions:
-      actions: read
-      contents: read
+    needs: changes
+    if: needs.changes.outputs.content_new == 'true'
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout lwIP-CE
         uses: actions/checkout@v4
@@ -115,11 +100,10 @@ jobs:
       - name: Download and extract CEdev
         if: steps.cedev-cache.outputs.cache-hit != 'true'
         run: |
-          curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
+          curl -sL "https://github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
 
       - name: Add CEdev to PATH
-        run: |
-          echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
+        run: echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
 
       - name: Checkout fixed convbin branch
         uses: actions/checkout@v4
@@ -150,12 +134,12 @@ jobs:
       - name: Audit fatal error logging
         run: python3 tests/host/error_logging/test_error_sites.py
 
-      - name: make dylib-release
+      - name: Build dylib release
         id: make_dylib
         run: make dylib-release
 
-      - name: verify libload lib
-        id: make_libload
+      - name: Verify build outputs
+        id: verify_build
         run: |
           test -f "${{ github.workspace }}/build/lwip.8xv"
           test -f "${{ github.workspace }}/build/lwip.lib"
@@ -163,7 +147,7 @@ jobs:
           test -d "${{ env.CEDEV }}/include/lwip"
           test -f "${{ github.workspace }}/lwip.zip"
 
-      - name: build Wi-Fi examples
+      - name: Build Wi-Fi examples
         id: make_wifi_examples
         run: |
           make -C examples/wifi_ping
@@ -171,390 +155,269 @@ jobs:
           mkdir -p wifi-examples
           cp examples/wifi_ping/bin/LWPING.8xp examples/wifi_api/bin/LWWIFI.8xp wifi-examples/
 
-      - name: upload Wi-Fi examples artifact
+      - name: Upload Wi-Fi examples
         id: upload_wifi_examples
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: lwip-wifi-examples
           path: ${{ github.workspace }}/wifi-examples/
           if-no-files-found: error
 
-      - name: upload build artifact
+      - name: Upload build artifact
         id: upload_build_artifact
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: lwip-latest
           path: ${{ github.workspace }}/build/
           if-no-files-found: error
 
-      - name: upload release zip artifact
+      - name: Upload release zip
         id: upload_zip_artifact
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: lwip-release-zip
           path: ${{ github.workspace }}/lwip.zip
           if-no-files-found: error
 
-      - name: Publish job summary
+      - name: Publish build summary
         if: always()
         run: |
           {
-            echo "## lwIP Latest Dylib"
+            echo "## Build"
             echo
-            echo "| Step | Status |"
-            echo "|------|--------|"
-            echo "| make dylib-release | ${{ steps.make_dylib.outcome }} |"
-            echo "| make libload lib | ${{ steps.make_libload.outcome }} |"
-            echo "| build Wi-Fi examples | ${{ steps.make_wifi_examples.outcome }} |"
-            echo "| upload build artifact | ${{ steps.upload_build_artifact.outcome }} |"
-            echo "| upload release zip artifact | ${{ steps.upload_zip_artifact.outcome }} |"
+            echo "| Step | Result |"
+            echo "|---|---|"
+            echo "| dylib release | ${{ steps.make_dylib.outcome }} |"
+            echo "| output verification | ${{ steps.verify_build.outcome }} |"
+            echo "| Wi-Fi examples | ${{ steps.make_wifi_examples.outcome }} |"
+            echo "| build artifact | ${{ steps.upload_build_artifact.outcome }} |"
+            echo "| release artifact | ${{ steps.upload_zip_artifact.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-    outputs:
-      build_success: ${{ steps.upload_build_artifact.outcome == 'success' && steps.upload_zip_artifact.outcome == 'success' }}
-
   tests:
-    name: Tests
-    needs: [decide, build]
+    name: Run Checks
+    needs: [changes, build]
     if: >-
-      needs.decide.outputs.code_changed == 'true' &&
+      needs.changes.outputs.content_new == 'true' &&
       needs.build.result == 'success'
     uses: ./.github/workflows/tests.yml
     secrets: inherit
 
-  rfc_compliance_no_changes:
-    name: RFC compliance
-    needs: decide
-    if: needs.decide.outputs.code_changed == 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Record successful no-op review
-        run: |
-          echo "No RFC-relevant project code changed; RFC compliance passes without review."
-          echo "## RFC compliance" >> "$GITHUB_STEP_SUMMARY"
-          echo >> "$GITHUB_STEP_SUMMARY"
-          echo "No RFC-relevant project code changed." >> "$GITHUB_STEP_SUMMARY"
-
-  promotion_policy:
-    name: Promotion policy
-    needs: [decide, build, tests, rfc_compliance_no_changes]
+  state:
+    name: Collect pipeline state
+    needs: [changes, build, tests]
     if: always()
     runs-on: ubuntu-latest
     outputs:
-      decision: ${{ steps.policy.outputs.decision }}
+      bitmap: ${{ steps.collect.outputs.bitmap }}
     steps:
-      - name: Evaluate promotion policy
-        id: policy
+      - name: Build result bitmap
+        id: collect
         env:
-          CODE_CHANGED: ${{ needs.decide.outputs.code_changed }}
-          DECIDE_RESULT: ${{ needs.decide.result }}
+          CONTENT_NEW: ${{ needs.changes.outputs.content_new }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
-          RFC_ONLY_FAILURE: ${{ needs.tests.outputs.rfc_only_failure }}
-          RFC_NO_CHANGES_RESULT: ${{ needs.rfc_compliance_no_changes.result }}
+          TEST_JOB_RESULTS: ${{ needs.tests.outputs.results }}
         run: |
           set -euo pipefail
+          bitmap=$(jq -nc \
+            --arg content "$CONTENT_NEW" \
+            --arg changes "$CHANGES_RESULT" \
+            --arg build "$BUILD_RESULT" \
+            --arg tests "$TESTS_RESULT" \
+            --arg test_jobs "$TEST_JOB_RESULTS" '
+              def bit:
+                if . == "success" then true
+                elif . == "failure" or . == "cancelled" or . == "timed_out" then false
+                else null
+                end;
+              ($test_jobs | fromjson? // {}) as $jobs |
+              {
+                content_new: ($content == "true"),
+                content_detection_succeeded: ($changes | bit),
+                build_succeeded: ($build | bit),
+                checks_succeeded: ($tests | bit),
+                checks: ($jobs | with_entries(.value |= bit))
+              }')
 
-          decision=reject
-          reason="The staging gate did not reach an allowed outcome."
-
-          if [ "$DECIDE_RESULT" != success ]; then
-            reason="The gate trigger could not be evaluated."
-          elif [ "$CODE_CHANGED" = false ] && [ "$RFC_NO_CHANGES_RESULT" = success ]; then
-            decision=auto
-            reason="No gate-relevant code changed; automatic promotion is allowed."
-          elif [ "$CODE_CHANGED" = true ] && \
-               [ "$BUILD_RESULT" = success ] && [ "$TESTS_RESULT" = success ]; then
-            decision=auto
-            reason="The build and every test gate passed; automatic promotion is allowed."
-          elif [ "$CODE_CHANGED" = true ] && \
-               [ "$BUILD_RESULT" = success ] && [ "$TESTS_RESULT" = failure ] && \
-               [ "$RFC_ONLY_FAILURE" = true ]; then
-            decision=review
-            reason="Only RFC compliance failed; promotion requires maintainer review."
-          fi
-
-          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "bitmap=$bitmap" >> "$GITHUB_OUTPUT"
           {
-            echo "## Promotion policy"
+            echo "## Pipeline state"
             echo
-            echo "**Decision:** \`$decision\`"
-            echo
-            echo "$reason"
-            echo
-            echo "| Input | Result |"
-            echo "|---|---|"
-            echo "| Build | $BUILD_RESULT |"
-            echo "| Tests | $TESTS_RESULT |"
-            echo "| RFC-only failure | $RFC_ONLY_FAILURE |"
-            echo "| RFC no-change check | $RFC_NO_CHANGES_RESULT |"
+            echo '```json'
+            echo "$bitmap" | jq .
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$decision" = reject ]; then
+  can_merge:
+    name: Merge Ready
+    needs: [changes, build, tests, state]
+    if: always() && github.ref != 'refs/heads/master'
+    runs-on: ubuntu-latest
+    outputs:
+      can_merge: ${{ steps.evaluate.outputs.can_merge }}
+    steps:
+      - name: Evaluate merge readiness
+        id: evaluate
+        env:
+          STATE_RESULT: ${{ needs.state.result }}
+          BITMAP: ${{ needs.state.outputs.bitmap }}
+        run: |
+          set -euo pipefail
+          can_merge=false
+          reason="Pipeline state was unavailable."
+
+          if [ "$STATE_RESULT" = success ] && [ -n "$BITMAP" ]; then
+            content_new=$(jq -r '.content_new' <<< "$BITMAP")
+            detection_ok=$(jq -r '.content_detection_succeeded' <<< "$BITMAP")
+
+            if [ "$detection_ok" != true ]; then
+              reason="Relevant-content detection failed."
+            elif [ "$content_new" = false ]; then
+              can_merge=true
+              reason="No build-relevant content changed."
+            elif jq -e '
+              .build_succeeded == true and
+              .checks_succeeded == true and
+              (.checks | length > 0) and
+              ([.checks[]] | all(. == true))
+            ' <<< "$BITMAP" >/dev/null; then
+              can_merge=true
+              reason="Build prerequisites and every test, including RFC compliance, passed."
+            else
+              reason="The build or at least one required test did not pass."
+            fi
+          fi
+
+          echo "can_merge=$can_merge" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Merge Ready"
+            echo
+            echo "**Ready:** \`$can_merge\`"
+            echo
+            echo "$reason"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$can_merge" != true ]; then
             echo "::error::$reason"
             exit 1
           fi
 
-  open_rfc_review_pr:
-    name: Open promotion PR for RFC review
-    needs: [decide, build, tests, promotion_policy]
+  deploy:
+    name: Deploy master
+    needs: [changes, build, tests, state]
     if: >-
-      always() && github.ref_name == 'staging' &&
-      needs.promotion_policy.result == 'success' &&
-      needs.promotion_policy.outputs.decision == 'review'
+      always() &&
+      github.ref == 'refs/heads/master' &&
+      needs.state.result == 'success' &&
+      fromJSON(needs.state.outputs.bitmap).build_succeeded == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.rom_setup == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.rom_cleanup == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.unit == true &&
+      (fromJSON(needs.state.outputs.bitmap).checks.rfc == true ||
+       fromJSON(needs.state.outputs.bitmap).checks.rfc == null) &&
+      fromJSON(needs.state.outputs.bitmap).checks.acvp == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.sast == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.codeql == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.network == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.dast == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.host == true &&
+      fromJSON(needs.state.outputs.bitmap).checks.fuzz == true
     permissions:
       actions: read
       contents: write
-      pull-requests: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout tested commit
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download RFC compliance details
-        continue-on-error: true
+      - name: Download tested build
         uses: actions/download-artifact@v4
         with:
-          name: rfc-compliance-report
-          path: ${{ runner.temp }}/rfc-compliance-report
+          name: lwip-latest
+          path: ${{ runner.temp }}/build
 
-      - name: Open maintainer-review promotion PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GATE_SHA: ${{ github.sha }}
-          RFC_REPORT_PATH: ${{ runner.temp }}/rfc-compliance-report/rfc-compliance.md
+      - name: Verify tested build
+        run: |
+          test -f "${{ runner.temp }}/build/lwip.8xv"
+          test -f "${{ runner.temp }}/build/lwip.lib"
+
+      - name: Create deterministic release archive
         run: |
           set -euo pipefail
-          short_sha=${GATE_SHA:0:12}
-          promotion_branch="automation/promote-$short_sha"
-          promotion_merged=false
+          source_date_epoch=$(git show -s --format=%ct HEAD)
+          find "${{ runner.temp }}/build" -exec touch -d "@$source_date_epoch" {} +
+          cd "${{ runner.temp }}"
+          find build -type f -print | LC_ALL=C sort > release-files.txt
+          TZ=UTC zip -X lwip.zip -@ < release-files.txt
+          test -s lwip.zip
 
-          git fetch --no-tags origin master staging
-          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-            echo "The tested staging commit is already contained in master."
-            promotion_merged=true
-            exit 0
+      - name: Compare latest stable archive
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="${{ runner.temp }}/lwip.zip"
+          current_hash=$(sha256sum "$archive" | awk '{print $1}')
+          changed=true
+          mkdir -p "$RUNNER_TEMP/previous-release"
+          if gh release download latest-stable --repo "${{ github.repository }}" \
+            --pattern lwip.zip --dir "$RUNNER_TEMP/previous-release" 2>/dev/null; then
+            previous_hash=$(sha256sum "$RUNNER_TEMP/previous-release/lwip.zip" | awk '{print $1}')
+            if [ "$current_hash" = "$previous_hash" ]; then
+              changed=false
+            fi
+            echo "previous_hash=$previous_hash" >> "$GITHUB_OUTPUT"
           fi
-          existing_sha=""
-          if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
-            --jq '.object.sha' 2>/dev/null); then
-            existing_sha=$ref_sha
-          fi
-          if [ -z "$existing_sha" ]; then
-            gh api --method POST "repos/${{ github.repository }}/git/refs" \
-              -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
-          elif [ "$existing_sha" != "$GATE_SHA" ]; then
-            echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
-            exit 1
-          fi
+          echo "current_hash=$current_hash" >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
 
-          body="$RUNNER_TEMP/rfc-review-pr.md"
+      - name: Publish latest stable release
+        id: publish
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE_HASH: ${{ steps.compare.outputs.current_hash }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
           {
-            echo "All automated gates except **RFC compliance** passed for this exact staging commit."
+            echo "Automated build from \`master\`."
             echo
-            echo "- Tested commit: \`$GATE_SHA\`"
-            echo "- Source branch: \`staging\`"
-            echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            echo
-            echo "> This PR will not be merged automatically. A maintainer may merge it after reviewing and accepting the RFC findings."
-            if [ -s "$RFC_REPORT_PATH" ]; then
-              echo
-              echo "## RFC compliance report"
-              echo
-              cat "$RFC_REPORT_PATH"
-            fi
-            echo
-            echo "The temporary head branch points to the exact signed and tested staging commit, so later staging pushes are excluded."
-          } > "$body"
+            echo "- Commit: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})"
+            echo "- SHA-256 (lwip.zip): \`$ARCHIVE_HASH\`"
+            echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > "$notes"
 
-          pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
-            --base master --head "$promotion_branch" --json number \
-            --jq '.[0].number // empty')
-          title="RFC review required: promote staging $short_sha"
-          if [ -n "$pr_number" ]; then
-            gh pr edit "$pr_number" --repo "${{ github.repository }}" \
-              --title "$title" --body-file "$body"
-            echo "Updated RFC-review promotion PR #$pr_number."
+          git tag --force latest-stable "${{ github.sha }}"
+          git push --force origin refs/tags/latest-stable
+
+          if gh release view latest-stable --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit latest-stable --repo "${{ github.repository }}" \
+              --title "latest-stable" --notes-file "$notes" --latest
           else
-            gh pr create --repo "${{ github.repository }}" \
-              --base master --head "$promotion_branch" \
-              --title "$title" --body-file "$body"
+            gh release create latest-stable --repo "${{ github.repository }}" \
+              --verify-tag --title "latest-stable" \
+              --notes-file "$notes" --latest
           fi
+          gh release upload latest-stable "${{ runner.temp }}/lwip.zip" \
+            --repo "${{ github.repository }}" --clobber
 
-  promote:
-    name: Promote signed staging commit through PR
-    needs: [decide, build, tests, rfc_compliance_no_changes, promotion_policy]
-    if: >-
-      always() && github.ref_name == 'staging' &&
-      needs.promotion_policy.result == 'success' &&
-      needs.promotion_policy.outputs.decision == 'auto'
-    permissions:
-      actions: write
-      contents: write
-      pull-requests: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Open and merge promotion PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GATE_SHA: ${{ github.sha }}
-          CODE_CHANGED: ${{ needs.decide.outputs.code_changed }}
+      - name: Publish deployment summary
+        if: always()
         run: |
-          set -euo pipefail
-          short_sha=${GATE_SHA:0:12}
-          promotion_branch="automation/promote-$short_sha"
-          promotion_merged=false
-
-          git fetch --no-tags origin master staging
-          if git merge-base --is-ancestor "$GATE_SHA" origin/master; then
-            echo "The tested staging commit is already contained in master."
-            promotion_merged=true
-          else
-            existing_sha=""
-            if ref_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/$promotion_branch" \
-              --jq '.object.sha' 2>/dev/null); then
-              existing_sha=$ref_sha
-            fi
-            if [ -z "$existing_sha" ]; then
-              gh api --method POST "repos/${{ github.repository }}/git/refs" \
-                -f ref="refs/heads/$promotion_branch" -f sha="$GATE_SHA" >/dev/null
-            elif [ "$existing_sha" != "$GATE_SHA" ]; then
-              echo "::error::$promotion_branch exists at $existing_sha instead of tested SHA $GATE_SHA"
-              exit 1
-            fi
-
-            pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
-              --base master --head "$promotion_branch" --json number \
-              --jq '.[0].number // empty')
-            if [ -z "$pr_number" ]; then
-              body="$RUNNER_TEMP/promotion-pr.md"
-              {
-                echo "Automated promotion of the exact signed staging commit that passed its required gates."
-                echo
-                echo "- Tested commit: \`$GATE_SHA\`"
-                echo "- Source branch: \`staging\`"
-                echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                echo
-                echo "The temporary head branch points to the exact tested commit; later staging pushes are excluded."
-              } > "$body"
-              pr_url=$(gh pr create --repo "${{ github.repository }}" \
-                --base master --head "$promotion_branch" \
-                --title "Promote staging $short_sha to master" --body-file "$body")
-              pr_number=${pr_url##*/}
-            fi
-
-            gh pr merge "$pr_number" --repo "${{ github.repository }}" \
-              --auto --merge --delete-branch --match-head-commit "$GATE_SHA"
-            pr_state=$(gh pr view "$pr_number" --repo "${{ github.repository }}" \
-              --json state --jq '.state')
-            if [ "$pr_state" = MERGED ]; then
-              promotion_merged=true
-              echo "Promotion PR #$pr_number merged; staging remains intact."
-            else
-              echo "Promotion PR #$pr_number will merge when all master requirements are satisfied."
-            fi
-          fi
-
-          # GITHUB_TOKEN events do not reliably start another push workflow, so
-          # explicitly gate master after an immediate automated merge.
-          dispatch_workflow() {
-            workflow=$1
-            branch=$2
-            for attempt in 1 2 3; do
-              if gh workflow run "$workflow" --repo "${{ github.repository }}" --ref "$branch"; then
-                return 0
-              fi
-              echo "$workflow dispatch for $branch was not ready (attempt $attempt); retrying."
-              sleep 3
-            done
-            return 1
-          }
-          if [ "$CODE_CHANGED" = true ]; then
-            dispatch_workflow deploy.yml staging
-            if [ "$promotion_merged" = true ]; then
-              dispatch_workflow build.yml master
-            else
-              echo "The eventual auto-merge push to master will trigger its gate."
-            fi
-          else
-            echo "No code changed; release rebuilds are unnecessary."
-          fi
-
-  deploy_master:
-    name: Deploy gated master
-    needs: promotion_policy
-    if: >-
-      always() && github.ref_name == 'master' &&
-      needs.promotion_policy.result == 'success' &&
-      needs.promotion_policy.outputs.decision == 'auto'
-    permissions:
-      actions: write
-      contents: read
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch stable deployment
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run deploy.yml --repo "${{ github.repository }}" --ref master
-
-  notify_build_failure:
-    name: Notify commit author of build failure
-    needs: [decide, build]
-    if: >-
-      always() &&
-      needs.decide.outputs.code_changed == 'true' &&
-      needs.build.result != 'success'
-    permissions:
-      contents: read
-      issues: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: Open or update a branch failure issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GATE_SHA: ${{ github.sha }}
-          BRANCH_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          commit_json=$(gh api "repos/${{ github.repository }}/commits/$GATE_SHA")
-          author=$(jq -r '.author.login // .committer.login // empty' <<< "$commit_json")
-          author_name=$(jq -r '.commit.author.name // "the commit author"' <<< "$commit_json")
-          mention="**$author_name**"
-          if [ -n "$author" ]; then mention="@$author"; fi
-          short_sha=${GATE_SHA:0:12}
-          title="[$BRANCH_NAME] Gate failure for $short_sha"
-          body="$RUNNER_TEMP/branch-build-failure.md"
           {
-            echo "<!-- branch-gate:$GATE_SHA -->"
-            echo "$mention, the $BRANCH_NAME gate failed during the build."
+            echo "## Deployment"
             echo
-            echo "- Branch: [\`$BRANCH_NAME\`](${{ github.server_url }}/${{ github.repository }}/tree/$BRANCH_NAME)"
-            echo "- Commit: [\`$GATE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$GATE_SHA)"
-            echo "- Failed gate: **Build**"
-            echo "- [View workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-          } > "$body"
-
-          issue_number=$(gh issue list --repo "${{ github.repository }}" --state all \
-            --search "$GATE_SHA in:body" --json number --jq '.[0].number // empty')
-          if [ -n "$issue_number" ]; then
-            gh issue reopen "$issue_number" --repo "${{ github.repository }}" >/dev/null 2>&1 || true
-            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
-              --title "$title" --body-file "$body"
-          else
-            issue_url=$(gh issue create --repo "${{ github.repository }}" \
-              --title "$title" --body-file "$body")
-            issue_number=${issue_url##*/}
-          fi
-          if [ -n "$author" ]; then
-            gh issue edit "$issue_number" --repo "${{ github.repository }}" \
-              --add-assignee "$author" || echo "::warning::Could not assign @$author to issue #$issue_number"
-          fi
-
+            if [ "${{ job.status }}" != success ]; then
+              echo "Deployment failed."
+            elif [ "${{ steps.compare.outputs.changed }}" = true ]; then
+              echo "Published \`latest-stable\` at commit \`${{ github.sha }}\`."
+            else
+              echo "\`latest-stable\` is unchanged because the archive hash matched."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
