@@ -210,7 +210,8 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
         module, test, result = fallback.split("|", 2)
         group_present = module in grouped_fallbacks and module in present_groups
         if not group_present and (module, test) not in present:
-            rows.append({"module": module, "test": test, "grade": grade(result)})
+            rows.append({"group": module, "module": module, "test": test,
+                         "grade": grade(result)})
 
     merged: dict[tuple[str, str], dict[str, str]] = {}
     for row in drop_net_guards(rows):
@@ -260,9 +261,12 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
                   + ", ".join(f"{row['module']} / {row['test']}" for row in failures[:10])
                   + (f" (+{len(failures) - 10} more)" if len(failures) > 10 else ""),
                   ""]
-    # GitHub sanitises inline styles, so rows cannot be tinted. Each group gets
-    # a coloured icon inside the Module column instead: rows stay in one table,
-    # sorted so a group's rows are contiguous.
+    # Presentation: a short summary table at the top (one row per module,
+    # linked to its section) and, underneath, one collapsible table per group.
+    # GitHub sanitises inline styles so rows cannot be tinted, and a table row
+    # cannot contain <details>; a summary table plus anchored sections is the
+    # closest reachable form, and browsers open a closed <details> when you
+    # navigate to an anchor inside it.
     GROUP_STYLE = {
         "PREREQUISITE": "\u26aa", "UNIT": "\U0001f7e9", "HOST": "\U0001f7e6",
         "NETTEST": "\U0001f7e8", "DAST": "\U0001f7e7", "ACVP": "\U0001f7ea",
@@ -273,33 +277,66 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
         "NETTEST": "network tests", "DAST": "DAST", "ACVP": "ACVP",
         "RFC": "RFC review", "SAST": "SAST", "FUZZ": "fuzz",
     }
+    GROUP_ORDER = ["PREREQUISITE", "UNIT", "HOST", "NETTEST", "DAST", "ACVP",
+                   "RFC", "SAST", "FUZZ"]
 
-    def module_cell(row: dict) -> str:
-        icon = GROUP_STYLE.get(str(row.get("group", "")).upper(), "")
-        return f"{icon} {row['module']}".strip()
+    def group_of(row: dict) -> str:
+        return (str(row.get("group", "")).strip()
+                or str(row.get("module", "")).strip() or "OTHER")
 
-    # Compact legend immediately above the table, listing only the groups that
-    # actually reported, so the icons are self-explanatory.
-    legend = []
-    seen_groups: list[str] = []
+    def anchor(group: str) -> str:
+        return "grp-" + group.lower().replace(" ", "-").replace("/", "-")
+
+    # Rows grouped for the sections, modules summarised in the summary table.
+    sections: dict[str, list[dict]] = {}
     for row in ordered:
-        group = str(row.get("group", "")).strip() or "OTHER"
-        if group not in seen_groups:
-            seen_groups.append(group)
-    for group in seen_groups:
-        count = sum(1 for row in ordered
-                    if (str(row.get("group", "")).strip() or "OTHER") == group)
+        sections.setdefault(group_of(row), []).append(row)
+    section_order = sorted(
+        sections,
+        key=lambda g: (GROUP_ORDER.index(g) if g in GROUP_ORDER else len(GROUP_ORDER),
+                       g.casefold()))
+
+    modules: dict[str, dict] = {}
+    for row in ordered:
+        key = str(row["module"])
+        entry = modules.setdefault(key, {"group": group_of(row), "tests": 0,
+                                         "Pass": 0, "Fail": 0, "Skipped": 0})
+        entry["tests"] += 1
+        entry[grade(row["grade"])] += 1
+    module_order = sorted(
+        modules,
+        key=lambda name: (GROUP_ORDER.index(modules[name]["group"])
+                          if modules[name]["group"] in GROUP_ORDER else len(GROUP_ORDER),
+                          modules[name]["group"].casefold(), name.casefold()))
+
+    lines += ["| Module | Tests | Pass | Fail | Skip |", "|---|---|---|---|---|"]
+    for name in module_order:
+        entry = modules[name]
+        icon = GROUP_STYLE.get(entry["group"].upper(), "")
+        cell = f"[{icon} {name}](#{anchor(entry['group'])})".strip()
+        lines.append(f"| {md(cell)} | {entry['tests']} | {entry['Pass']} | "
+                     f"{entry['Fail']} | {entry['Skipped']} |")
+
+    for group in section_order:
+        rows = sections[group]
+        counts_g = {name: sum(1 for row in rows if grade(row["grade"]) == name)
+                    for name in ("Pass", "Fail", "Skipped")}
         icon = GROUP_STYLE.get(group.upper(), "")
         label = GROUP_LABEL.get(group.upper(), group)
-        legend.append(f"{icon} {label} ({count})".strip())
-    if legend:
-        lines += [" | ".join(legend), ""]
+        headline = (f"{icon} {label} — {counts_g['Pass']} pass, "
+                    f"{counts_g['Fail']} fail, {counts_g['Skipped']} skip").strip()
+        # A section with a failure is never hidden behind a click.
+        open_attr = " open" if counts_g["Fail"] else ""
+        lines += ["", f"<details{open_attr}>", f"<summary>{headline}</summary>", "",
+                  f'<a id="{anchor(group)}" name="{anchor(group)}"></a>', "",
+                  f"### {icon} {label}".strip(), "",
+                  "| Module | Test | Grade | Stats |", "|---|---|---|---|"]
+        lines.extend(
+            f"| {md(row['module'])} | {md(row['test'])} | "
+            f"{grade_cell(row['grade'])} | {md(row['stats'])} |"
+            for row in rows)
+        lines += ["", "</details>"]
 
-    lines += ["| Module | Test | Grade | Stats |", "|---|---|---|---|"]
-    lines.extend(
-        f"| {md(module_cell(row))} | {md(row['test'])} | {grade_cell(row['grade'])} | "
-        f"{md(row['stats'])} |"
-        for row in ordered)
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
