@@ -657,6 +657,11 @@ jobs:
             --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
             --rows tests/net/test-rows-${{ matrix.suite }}.json \
             --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+          # run.py runs under sudo, so the files it writes come out root-owned.
+          # Hand them back before the row post-processing below rewrites them.
+          sudo chown "$(id -un)" \
+            "tests/net/test-rows-${{ matrix.suite }}.json" \
+            tests/net/metrics.json 2>/dev/null || true
           suite_ms=$(($(($(date +%s%N)/1000000)) - suite_start))
           python3 - <<PY
           import json, os
