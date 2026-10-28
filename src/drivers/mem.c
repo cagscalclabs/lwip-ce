@@ -1763,13 +1763,15 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
         return;
     }
 
+    /* Reached only when the pool has no live blocks, so this always walks the
+     * whole bitmap: shifts and masks instead of a divide and a modulo per
+     * block. */
     size_t free_blocks = 0;
     for (size_t i = rb->u.pool.pool_block_count; i > 0; i--)
     {
         size_t idx = i - 1;
-        size_t b = idx / 8u;
-        uint8_t m = (uint8_t)(1u << (idx % 8u));
-        if ((rb->u.pool.pool_bitmap[b] & m) != 0)
+        uint8_t m = (uint8_t)(1u << (idx & 7u));
+        if ((rb->u.pool.pool_bitmap[idx >> 3] & m) != 0)
         {
             break;
         }
