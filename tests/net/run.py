@@ -36,7 +36,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 COMMON = HERE.parent / "common"
-SUITES = {"sockets": "NETTEST", "raw": "NETRAW", "tls": "NETTLS", "records": "NETREC", "server": "NETSRV", "perf": "NETPERF"}
+SUITES = {"sockets": "NETTEST", "raw": "NETRAW", "tls": "NETTLS", "records": "NETREC",
+          "server": "NETSRV", "perf": "NETPERF", "timeouts": "NETTMO"}
 CALC = "192.168.84.2"
 HOST = "192.168.84.1"
 HOST6 = "fd00:84::1"
@@ -462,6 +463,24 @@ class Control:
         r = subprocess.run(["ping", "-c", count, "-w", "20", CALC], capture_output=True, text=True)
         m = re.search(r"(\d+) received", r.stdout)
         return f"{m.group(1) if m else 0}/{count}"
+
+    def cmd_pingburst(self, seconds: str = "10") -> str:
+        """Ping the calc for a while without blocking the requesting suite.
+
+        Used by the timeout suite: the point is that unrelated traffic is on
+        the wire while a socket is expected to time out.
+        """
+        limit = max(1, min(30, int(seconds)))
+
+        def racer():
+            deadline = time.monotonic() + limit
+            while time.monotonic() < deadline:
+                subprocess.run(["ping", "-c", "1", "-W", "1", CALC],
+                               capture_output=True, text=True)
+                time.sleep(0.2)
+
+        threading.Thread(target=racer, daemon=True).start()
+        return "OK"
 
     def cmd_ping6(self, addr: str, count: str = "3") -> str:
         addr = addr.lower()

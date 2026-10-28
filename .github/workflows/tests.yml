@@ -628,7 +628,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [sockets, raw, tls, records, server, perf]
+        suite: [sockets, raw, tls, records, server, perf, timeouts]
     steps:
       - uses: actions/checkout@v4
 
