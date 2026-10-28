@@ -24,8 +24,8 @@ both symptoms in the job summary and `endpoint-probes.json`. Local tests,
 negative certificate tests, and failures for which the host probe succeeds
 are never waived.
 
-Metrics are measured on the calc's clock (emulated eZ80 time). `run.py` writes them to `metrics.json` and, in CI,
-to the job summary.
+Metrics are measured on the calc's clock (emulated eZ80 time). `run.py` writes them to `metrics.json`; millisecond
+measurements are also attached to their checks in CI's consolidated job summary.
 
 ## Notes
 

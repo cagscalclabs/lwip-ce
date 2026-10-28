@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize CI test outputs and render one Module | Test | Grade table."""
+"""Normalize CI test outputs and render one table with grades and emulated timings."""
 
 from __future__ import annotations
 
@@ -111,7 +111,8 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
 
     normalized = [
         {"module": str(row["module"]), "test": str(row["test"]),
-         "grade": grade(row["grade"])}
+         "grade": grade(row["grade"]),
+         "emulated_time": str(row.get("emulated_time", ""))}
         for row in rows
     ]
     ordered = sorted(normalized,
@@ -120,8 +121,10 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
     def md(value: str) -> str:
         return value.replace("|", "\\|").replace("\n", " ")
 
-    lines = ["## Test results", "", "| Module | Test | Grade |", "|---|---|---|"]
-    lines.extend(f"| {md(row['module'])} | {md(row['test'])} | {row['grade']} |"
+    lines = ["## Test results", "",
+             "| Module | Test | Grade | Emulated time |", "|---|---|---|---|"]
+    lines.extend(f"| {md(row['module'])} | {md(row['test'])} | {row['grade']} | "
+                 f"{md(row['emulated_time'])} |"
                  for row in ordered)
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

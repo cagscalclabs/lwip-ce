@@ -919,6 +919,48 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int) -> tuple[b
     return ok, text, metrics, probes
 
 
+def build_test_rows(results: list[tuple[str, bool, str]]) -> list[dict[str, str]]:
+    rows = []
+    for suite, ok, text in results:
+        suite_rows = 0
+        last_test_row = None
+        last_metric_name = None
+        for line in text.splitlines():
+            verdict, separator, test = line.partition(" ")
+            if verdict == "METRIC" and separator and last_test_row is not None:
+                parts = test.rsplit(" ", 2)
+                if len(parts) == 3 and parts[2] == "ms":
+                    name, value, unit = parts
+                    timing = f"{value} {unit}"
+                    if last_test_row.get("emulated_time"):
+                        previous = last_test_row["emulated_time"]
+                        if ";" not in previous:
+                            previous_label = last_metric_name.removesuffix("_ms").rsplit(
+                                "_", 1
+                            )[-1]
+                            previous = f"{previous_label}: {previous}"
+                        label = name.removesuffix("_ms").rsplit("_", 1)[-1]
+                        last_test_row["emulated_time"] = f"{previous}; {label}: {timing}"
+                    else:
+                        last_test_row["emulated_time"] = timing
+                    last_metric_name = name
+                continue
+            if verdict not in {"PASS", "FAIL", "SKIP"} or not separator:
+                continue
+            last_test_row = {
+                "group": "NETTEST",
+                "module": "NETTEST",
+                "test": f"{suite.upper()} - {test}",
+                "grade": {"PASS": "Pass", "FAIL": "Fail", "SKIP": "Skipped"}[verdict],
+            }
+            last_metric_name = None
+            rows.append(last_test_row)
+            suite_rows += 1
+        if not suite_rows:
+            rows.append({"group": "NETTEST", "module": "NETTEST",
+                         "test": f"{suite.upper()} - Suite execution",
+                         "grade": "Pass" if ok else "Fail"})
+    return rows
 
 
 def main() -> int:
@@ -972,24 +1014,7 @@ def main() -> int:
 
     Path(args.metrics).write_text(json.dumps(metrics, indent=2) + "\n")
     Path(args.endpoint_probes).write_text(json.dumps(endpoint_probes, indent=2) + "\n")
-    table_rows = []
-    for suite, ok, text in results:
-        suite_rows = 0
-        for line in text.splitlines():
-            verdict, separator, test = line.partition(" ")
-            if verdict not in {"PASS", "FAIL", "SKIP"} or not separator:
-                continue
-            table_rows.append({
-                "group": "NETTEST",
-                "module": "NETTEST",
-                "test": f"{suite.upper()} - {test}",
-                "grade": {"PASS": "Pass", "FAIL": "Fail", "SKIP": "Skipped"}[verdict],
-            })
-            suite_rows += 1
-        if not suite_rows:
-            table_rows.append({"group": "NETTEST", "module": "NETTEST",
-                               "test": f"{suite.upper()} - Suite execution",
-                               "grade": "Pass" if ok else "Fail"})
+    table_rows = build_test_rows(results)
     Path(args.rows).write_text(json.dumps(table_rows, indent=2) + "\n")
     for suite, ok, _ in results:
         print(f"{SUITES[suite]}: {'PASS' if ok else 'FAIL'}")
