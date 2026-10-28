@@ -383,10 +383,12 @@ jobs:
       - name: Process ACVP fixture through CEmu
         id: run_acvp
         run: |
+          acvp_start=$(($(date +%s%N)/1000000))
           sudo --preserve-env=AUTOTESTER_ROM python3 tests/validation/acvp/run.py \
             --autotester "${{ steps.env.outputs.autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
             --timeout-ms 60000000
+          echo "ACVP_SUITE_MS=$(($(($(date +%s%N)/1000000)) - acvp_start))" >> "$GITHUB_ENV"
 
       - name: Publish ACVP results
         if: always()
@@ -399,6 +401,7 @@ jobs:
         run: |
           python3 .github/scripts/test_table.py acvp \
             --results tests/validation/acvp/results.json \
+            --stat "${ACVP_SUITE_MS:-} ms (ACVP suite wall time)" \
             --output test-rows-acvp.json
 
       - name: Upload ACVP rows
@@ -649,10 +652,33 @@ jobs:
 
       - name: Run ${{ matrix.suite }}
         run: |
+          suite_start=$(($(date +%s%N)/1000000))
           sudo --preserve-env=AUTOTESTER_ROM python3 tests/net/run.py \
             --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
             --rows tests/net/test-rows-${{ matrix.suite }}.json \
             --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+          suite_ms=$(($(($(date +%s%N)/1000000)) - suite_start))
+          python3 - <<PY
+          import json, os
+          p = "tests/net/test-rows-${{ matrix.suite }}.json"
+          rows = json.load(open(p))
+          # Per-test timings already arrive from run.py (METRIC ... ms lines);
+          # add the suite wall time and the heap figures the calc reported.
+          heap = []
+          if os.path.exists("tests/net/metrics.json"):
+              metrics = json.load(open("tests/net/metrics.json"))
+              peak = [v["value"] for k, v in metrics.items()
+                      if k.endswith("_heap_peak") and isinstance(v, dict)]
+              if peak:
+                  heap.append(f"heap peak {max(peak)} B")
+              idle = metrics.get("heap_idle", {}).get("value")
+              if idle is not None:
+                  heap.append(f"heap idle {idle} B")
+          extra = "; ".join(heap + [f"$suite_ms ms (suite wall time)"])
+          for r in rows:
+              r["stats"] = "; ".join(x for x in (r.get("stats", ""), extra) if x)
+          json.dump(rows, open(p, "w"), indent=2)
+          PY
 
       - name: Remove CEmu Rom
         if: always()

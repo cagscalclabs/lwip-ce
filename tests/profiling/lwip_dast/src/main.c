@@ -172,9 +172,43 @@ static void dast_ctrl_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     }
 }
 
+static void dast_ctrl_send_ready(void);
+
+/* Highest heap_used observed since the current test started, reported to the
+ * host with the completion ack so each DAST row can carry a peak figure. */
+static size_t dast_heap_peak = 0;
+
+static void dast_heap_sample(void)
+{
+    struct mem_accounting_stats stats;
+    if (mem_get_stats(&stats) && stats.heap_used > dast_heap_peak)
+    {
+        dast_heap_peak = stats.heap_used;
+    }
+}
+
 /* Sends READY back to whichever host last sent us a control message.
  * Used to ack START (before the test loop begins) and to ack completion
  * of each test (before the host's next NEXT can be acted on). */
+static void dast_ctrl_send_ready_heap(size_t peak)
+{
+    if (!dast_ctrl_pcb || !dast_ctrl_peer_valid)
+        return;
+    char line[24];
+    int n = snprintf(line, sizeof(line), "HEAP %lu", (unsigned long)peak);
+    if (n > 0)
+    {
+        struct pbuf *hp = pbuf_alloc(PBUF_TRANSPORT, (u16_t)n, PBUF_RAM);
+        if (hp)
+        {
+            memcpy(hp->payload, line, (size_t)n);
+            udp_sendto(dast_ctrl_pcb, hp, &dast_ctrl_peer, DAST_CTRL_PORT);
+            pbuf_free(hp);
+        }
+    }
+    dast_ctrl_send_ready();
+}
+
 static void dast_ctrl_send_ready(void)
 {
     if (!dast_ctrl_pcb || !dast_ctrl_peer_valid)
@@ -691,6 +725,7 @@ static void dast_draw_start(const lwip_netif_info_t *info)
  * Returns DAST_CTRL_NEXT, DAST_CTRL_DONE, or DAST_CTRL_ABRT. */
 static uint8_t dast_run_test(int idx, const dast_test_t *t)
 {
+    dast_heap_peak = 0;
     bool open_ok = dast_enter_state(t);
     dast_draw_test(idx, t, open_ok);
     lwip_example_draw_mem_stats();
@@ -735,6 +770,7 @@ static uint8_t dast_run_test(int idx, const dast_test_t *t)
     {
         uint8_t key;
         lwip_service_events();
+        dast_heap_sample();
         if (t->state == DAST_STATE_TLS_CLIENT)
             dast_tls_pump_rx();
 
@@ -842,13 +878,18 @@ int main(void)
      * listener -- that doubles as the ack for START, so nothing to send
      * here. */
 
+    uint8_t last_sig = DAST_CTRL_NONE;
     for (int i = 0; i < DAST_TEST_COUNT; i++)
     {
-        uint8_t sig = dast_run_test(i, &dast_tests[i]);
-        if (sig == DAST_CTRL_ABRT || sig == DAST_CTRL_DONE)
+        last_sig = dast_run_test(i, &dast_tests[i]);
+        if (last_sig == DAST_CTRL_ABRT || last_sig == DAST_CTRL_DONE)
             break;
-        dast_ctrl_send_ready();
+        dast_ctrl_send_ready_heap(dast_heap_peak);
     }
+    /* The final test has no following NEXT to carry its ack, so report its
+     * peak heap in reply to DONE. Harmless if the host has already gone. */
+    if (last_sig == DAST_CTRL_DONE)
+        dast_ctrl_send_ready_heap(dast_heap_peak);
 
     lwip_example_show_and_wait("DAST complete", "see host report");
     dast_close_all();

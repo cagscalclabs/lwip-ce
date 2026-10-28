@@ -674,6 +674,10 @@ def write_report(target_ip: str, results: list[dict]) -> None:
 DAST_CTRL_PORT = 9997
 DAST_CTRL_READY_TIMEOUT = 10.0  # seconds to wait for READY after START/NEXT
 
+# Peak heap the calc reported with the most recent completion ack ("HEAP <n>"
+# arrives immediately before READY). None when the calc did not send one.
+_last_peak_heap: int | None = None
+
 
 def ctrl_send(ip: str, msg: str) -> None:
     import socket
@@ -735,6 +739,14 @@ def ctrl_send_and_wait_ready(ip: str, msg: str,
                 print(f"    [ctrl] timed out waiting for READY ({timeout:.0f}s)")
                 return False
             print(f"    [ctrl] got {data!r} from {peer}")
+            global _last_peak_heap
+            if data.startswith(b"HEAP "):
+                try:
+                    _last_peak_heap = int(data.split()[1])
+                except (IndexError, ValueError):
+                    _last_peak_heap = None
+                # Not the ack: keep waiting for READY.
+                continue
             if data.strip() == b"READY":
                 return True
             # Anything else (e.g. a stray NEXT echo) — keep waiting for READY
@@ -806,6 +818,14 @@ def run(args) -> int:
                     die(f"test {t['id']}: calc did not reply READY to NEXT "
                         f"(waited {DAST_CTRL_READY_TIMEOUT:.0f}s) -- it may "
                         "have crashed or hung; see partial results")
+                # The ack we just consumed was the *previous* test's
+                # completion, so its peak-heap figure belongs to that row.
+                global _last_peak_heap
+                if _last_peak_heap is not None and results:
+                    results[-1]["heap"] = _last_peak_heap
+                    print(f"    [heap] peak {_last_peak_heap} B "
+                          f"for {results[-1]['id']}")
+                _last_peak_heap = None
 
         if is_skip:
             reason = t.get("skip_reason", "marked skip in dast_tests.json")
@@ -905,7 +925,15 @@ def run(args) -> int:
         if not args.self_test:
             is_last = (i == len(tests))
             if is_last:
-                ctrl_send(args.ip, "DONE")
+                # The final test has no NEXT to carry its completion ack, so
+                # ask for one with DONE. A calc that does not answer (older
+                # build) must not fail the run.
+                if ctrl_send_and_wait_ready(args.ip, "DONE", timeout=3.0):
+                    if _last_peak_heap is not None and results:
+                        results[-1]["heap"] = _last_peak_heap
+                        print(f"    [heap] peak {_last_peak_heap} B "
+                              f"for {results[-1]['id']}")
+                    _last_peak_heap = None
 
     if args.self_test:
         print("\n[dry-run] report not written")

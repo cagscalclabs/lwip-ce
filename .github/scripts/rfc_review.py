@@ -25,6 +25,31 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / ".github/rfc-review-schema.json"
 PROMPT_PATH = ROOT / ".github/rfc-review-prompt.md"
 MATRIX_PATH = ROOT / "docs/tls-specifications.xml"
+
+# Files the gate treats as trusted inputs. A change to any of them is refused
+# here, deterministically, instead of being put to the model: the model is only
+# given `src/**` evidence, so it cannot see such a change, and asking it to
+# judge an edit to its own instructions or to the compliance matrix is exactly
+# the request a prompt injection would make. Deletions count as changes.
+# The workflow that runs this job is deliberately not in this list: a PR can
+# edit it, so it is defended by branch protection requiring this check rather
+# than by the check itself.
+PROTECTED_INPUTS = {
+    "docs/tls-specifications.xml",
+    ".github/rfc-review-prompt.md",
+    ".github/rfc-review-schema.json",
+    ".github/scripts/rfc_review.py",
+}
+
+# Reported in the summary when a protected input changes.
+PROTECTED_MESSAGE = (
+    "## RFC compliance\n\n"
+    "**Blocked:** this change modifies a file the compliance gate treats as a "
+    "trusted input:\n\n{paths}\n\n"
+    "The compliance matrix and the review machinery are changed by a direct "
+    "push to `master`, never through a review the change itself can influence. "
+    "Split the change so the protected file is updated separately.\n"
+)
 COMMENT_MARKER = "<!-- rfc-compliance-bot -->"
 MAX_SRC_DIFF_CHARS = 250_000
 MAX_PR_BODY_CHARS = 20_000
@@ -159,6 +184,24 @@ def git_output(*args: str, text: bool = True) -> str | bytes:
         stderr = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", "replace")
         raise ReviewError(f"git {' '.join(args)} failed: {stderr[:500]}") from exc
     return result.stdout
+
+
+def protected_changes(changed: set[str]) -> list[str]:
+    """Changed paths that the gate refuses to judge (matrix, prompt, schema)."""
+    return sorted(path for path in changed if path in PROTECTED_INPUTS)
+
+
+def all_commit_changed_files(base: str, head: str) -> set[str]:
+    """Every path the commit range touches, deletions included."""
+    raw = git_output(
+        "diff", "--name-only", "-z", "--diff-filter=ACMRD", base, head, text=False
+    )
+    assert isinstance(raw, bytes)
+    return {
+        name.decode("utf-8", "surrogateescape")
+        for name in raw.split(b"\0")
+        if name
+    }
 
 
 def build_commit_src_diff(base: str, head: str) -> tuple[str, set[str]]:
@@ -474,6 +517,16 @@ def self_test() -> int:
     assert patch_is_complete(complete)
     incomplete = dict(complete, additions=2)
     assert not patch_is_complete(incomplete)
+
+    # The gate refuses to judge edits to its own trusted inputs.
+    assert protected_changes({"src/tls/core/aes.c"}) == []
+    assert protected_changes({"docs/tls-specifications.xml"}) == [
+        "docs/tls-specifications.xml"]
+    assert protected_changes({".github/rfc-review-prompt.md",
+                              ".github/scripts/rfc_review.py",
+                              "src/x.c"}) == [
+        ".github/rfc-review-prompt.md", ".github/scripts/rfc_review.py"]
+
     print("RFC review self-tests passed")
     return 0
 
@@ -502,6 +555,7 @@ def main() -> int:
     try:
         pr_body = ""
         if commit_mode:
+            changed_files = all_commit_changed_files(base_sha, head_sha)
             src_diff, changed_src_files = build_commit_src_diff(base_sha, head_sha)
             incomplete: list[str] = []
         else:
@@ -517,6 +571,26 @@ def main() -> int:
                 if previous_filename.startswith("src/"):
                     changed_src_files.add(previous_filename)
             pr_body = str(pr.get("body") or "")[:MAX_PR_BODY_CHARS]
+            changed_files = set()
+            for item in files:
+                for key in ("filename", "previous_filename"):
+                    name = str(item.get(key, "") or "")
+                    if name:
+                        changed_files.add(name)
+
+        blocked = protected_changes(changed_files)
+        if blocked:
+            message = PROTECTED_MESSAGE.format(
+                paths="\n".join(f"- `{path}`" for path in blocked)
+            )
+            if not commit_mode:
+                update_comment(repository, number, github_token,
+                               COMMENT_MARKER + "\n" + message)
+            write_summary(message)
+            emit_error("RFC compliance blocked: protected input modified ("
+                       + ", ".join(blocked) + ")")
+            return 1
+
         if not src_diff:
             if not commit_mode:
                 update_comment(repository, number, github_token, None)
