@@ -304,6 +304,122 @@ jobs:
             exit 1
           fi
 
+  rfc_review_policy:
+    name: Open RFC review PR
+    needs: [changes, build, tests, state]
+    if: >-
+      always() &&
+      github.ref != 'refs/heads/master' &&
+      (github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/')) &&
+      needs.state.result == 'success' &&
+      fromJSON(needs.state.outputs.bitmap).checks.rfc == false
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download RFC compliance report
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rfc-compliance-report
+          path: ${{ runner.temp }}/rfc-compliance-report
+
+      - name: Open PR and post RFC failure details
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+          SOURCE_OWNER: ${{ github.event.pull_request.head.repo.owner.login || github.repository_owner }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TESTED_SHA: ${{ github.sha }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_PR_BASE: ${{ github.event.pull_request.base.ref }}
+          EVENT_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          MAINTAINER: ${{ vars.RFC_REVIEW_MAINTAINER || 'acagliano' }}
+          RFC_REPORT_PATH: ${{ runner.temp }}/rfc-compliance-report/rfc-compliance.md
+        run: |
+          set -euo pipefail
+          maintainer=${MAINTAINER#@}
+          author=$EVENT_PR_AUTHOR
+          if [ -z "$author" ]; then
+            commit_json=$(gh api "repos/${{ github.repository }}/commits/$SOURCE_SHA")
+            author=$(jq -r '.author.login // .committer.login // empty' <<< "$commit_json")
+          fi
+
+          mentions="@$maintainer"
+          if [ -n "$author" ] && [ "$author" != "$maintainer" ]; then
+            mentions="$mentions @$author"
+          fi
+
+          head_spec=$SOURCE_BRANCH
+          if [ "$SOURCE_OWNER" != "$REPOSITORY_OWNER" ]; then
+            head_spec="$SOURCE_OWNER:$SOURCE_BRANCH"
+          fi
+
+          pr_number=""
+          if [ "$EVENT_PR_BASE" = master ]; then
+            pr_number=$EVENT_PR_NUMBER
+          fi
+          if [ -z "$pr_number" ]; then
+            pr_number=$(gh pr list --repo "${{ github.repository }}" --state open \
+              --base master --head "$head_spec" --json number \
+              --jq '.[0].number // empty')
+          fi
+
+          if [ -z "$pr_number" ]; then
+            short_sha=${SOURCE_SHA:0:12}
+            body="$RUNNER_TEMP/rfc-review-pr.md"
+            {
+              echo "RFC compliance failed for this branch and requires maintainer review."
+              echo
+              echo "- Source: \`$SOURCE_OWNER:$SOURCE_BRANCH\`"
+              echo "- Commit: \`$SOURCE_SHA\`"
+              echo "- [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+              echo
+              echo "The strict **Merge Ready** check remains failed until RFC compliance passes."
+            } > "$body"
+            pr_url=$(gh pr create --repo "${{ github.repository }}" \
+              --base master --head "$head_spec" \
+              --title "RFC review required: $SOURCE_BRANCH $short_sha" \
+              --body-file "$body")
+            pr_number=${pr_url##*/}
+          fi
+
+          comment="$RUNNER_TEMP/rfc-review-comment.md"
+          marker="<!-- rfc-review:$SOURCE_SHA -->"
+          {
+            echo "$marker"
+            echo "$mentions — RFC compliance failed for this change."
+            echo
+            echo "- Source branch: \`$SOURCE_OWNER:$SOURCE_BRANCH\`"
+            echo "- Source commit: [\`$SOURCE_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/$SOURCE_SHA)"
+            echo "- Tested revision: \`$TESTED_SHA\`"
+            echo "- [Workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            if [ -s "$RFC_REPORT_PATH" ]; then
+              echo
+              echo "## RFC compliance details"
+              echo
+              cat "$RFC_REPORT_PATH"
+            else
+              echo
+              echo "> The RFC report artifact was unavailable; inspect the workflow logs for the failure."
+            fi
+          } > "$comment"
+
+          comment_id=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
+            --paginate --jq ".[] | select(.body | contains(\"$marker\")) | .id" \
+            | head -1)
+          if [ -n "$comment_id" ]; then
+            jq -Rs '{body: .}' < "$comment" \
+              | gh api --method PATCH "repos/${{ github.repository }}/issues/comments/$comment_id" \
+                  --input - >/dev/null
+            echo "Updated RFC failure comment on PR #$pr_number."
+          else
+            gh pr comment "$pr_number" --repo "${{ github.repository }}" --body-file "$comment"
+          fi
+
   deploy:
     name: Deploy master
     needs: [changes, build, tests, state]
