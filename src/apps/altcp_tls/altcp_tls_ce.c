@@ -86,6 +86,7 @@ static bool g_tls_rx_release_attached = false;
 
 static void altcp_tls_ce_lower_recved(struct altcp_pcb *inner_conn, int recvd_cnt);
 static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n);
+static void altcp_tls_ce_ack_recved(altcp_tls_ce_state_t *state, size_t n);
 
 #define ALTCP_TLS_CE_RX_RELEASE_MILD_MS 50u
 #define ALTCP_TLS_CE_RX_RELEASE_HIGH_MS 100u
@@ -356,26 +357,25 @@ static err_t altcp_tls_ce_pbuf_authenticate(struct tls_aes_context *aes_ctx,
  *  Pass 1: authenticate the entire ciphertext without retaining plaintext,
  *          then verify the 16-byte tag. Tag mismatch is fatal and the
  *          input rx chain is left intact for the caller to free.
- *  Pass 2: Re-init the selected AEAD and walk the ciphertext in
- *          ALTCP_TLS_CE_STREAM_CHUNK strides. Each stride is copied from the
- *          head of `state->rx` straight into a fresh PBUF_RAM output segment
- *          and decrypted in place there (no per-record scratch buffer).
- *          After each stride we release the consumed
- *          bytes from `state->rx` via pbuf_free_header and ack them with
- *          altcp_tls_ce_lower_recved. The 5-byte header is released first
- *          (before pass 2 starts), and the 16-byte tag is released after
- *          the last stride.
+ *  Pass 2: re-init the selected AEAD and decrypt the ciphertext **in place,
+ *          inside `state->rx` itself**, segment by segment. state->rx is always
+ *          our own writable PBUF_RAM chain (altcp_tls_ce_copy_rx_to_ram), so
+ *          no output pbuf is allocated and the record exists once rather than
+ *          twice. The 5-byte header is released first; the 16-byte tag is
+ *          trimmed with pbuf_realloc after the last segment.
  *
- * Peak working set during pass 2 is (record_size - consumed) + (output pbuf
- * chain so far). Input and output sum stays bounded near record_size — at no
- * point are both copies live at full size, and no extra scratch is needed.
- * Allocation failure remains retryable only before input consumption begins.
- * Once the header has been consumed, any failure is fatal: retrying would
- * attempt to parse the partially consumed record as a new TLS record.
+ * Peak working set for a record is therefore one record's worth of pbuf chain,
+ * down from (ciphertext + plaintext). Nothing is allocated per record, so
+ * there is no allocation-failure path to retry.
  *
- * On success, *plaintext is a pbuf chain containing the decrypted record
- * with trailing zero padding and the inner content-type byte stripped.
- * *written is its length and *inner_content_type is the discovered type. */
+ * On success, *plaintext is that chain (now plaintext, trailing zero padding
+ * and the inner content-type byte stripped), *written is its length and
+ * *inner_content_type is the discovered type. Ownership of the chain passes to
+ * the caller: state->rx is cleared.
+ *
+ * Failure handling: once the header has been consumed the record cannot be
+ * re-parsed, so every failure below is fatal and the caller aborts; the chain
+ * stays in state->rx for the teardown path to free. */
 static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
                                                 struct altcp_pcb *conn,
                                                 bool use_handshake_keys,
@@ -396,6 +396,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     size_t ciphertext_len;
     size_t actual_plaintext_len;
     size_t processed;
+    struct pbuf *rest = NULL;
     err_t status = ERR_OK;
 
     if (!state || !conn || !plaintext || !written || !inner_content_type)
@@ -484,54 +485,87 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
      * so handshake bytes (pre-acked) aren't double-acked. Post-handshake
      * app-data bytes are not pre-acked here; they are acked exactly once when
      * the decrypter consumes the encrypted record from state->rx. */
+    /* state->rx may hold further records behind this one: a server can stack
+     * several records into one TCP segment and the caller loops over them.
+     * lwIP pbufs cannot be split and pbuf_realloc below frees the tail, so
+     * preserve the trailing bytes now, while the chain is still at the record
+     * start and offsets are record-relative. This is one bounded copy of what
+     * followed the record, replacing the much larger ciphertext-to-plaintext
+     * copy this function used to make.
+     *
+     * Nothing has been consumed yet, so an allocation failure here is still
+     * retryable: report ERR_MEM and let the caller try again on the next recv
+     * rather than aborting a connection under transient memory pressure. */
+    {
+        u16_t buffered = state->rx->tot_len;
+
+        if (buffered > (u16_t)record_len)
+        {
+            size_t rest_len = (size_t)buffered - record_len;
+            rest = pbuf_alloc(PBUF_RAW, (u16_t)rest_len, PBUF_RAM);
+            if (rest == NULL)
+            {
+                /* Nothing consumed yet: retryable, and the common exit still
+                 * destroys the AEAD context (the ledger's AES-zeroization
+                 * entry requires every exit to go through it). */
+                status = ERR_MEM;
+                goto fail;
+            }
+            if (pbuf_copy_partial(state->rx, rest->payload, (u16_t)rest_len,
+                                  (u16_t)record_len) != rest_len)
+            {
+                status = ERR_BUF;
+                goto fail;   /* fail frees `rest` and destroys the context */
+            }
+        }
+    }
+
     altcp_tls_ce_consume_recved(state, sizeof(header));
 
-    /* Pass 2: chunked decrypt-and-accumulate, releasing input as we go. */
+    /* Pass 2: decrypt the ciphertext in place, in state->rx itself.
+     *
+     * state->rx is always built by altcp_tls_ce_copy_rx_to_ram, i.e. it is our
+     * own writable PBUF_RAM chain, so the plaintext can replace the ciphertext
+     * segment by segment. That removes the separate output pbuf entirely: the
+     * record exists once, not twice, and the pbuf the application receives is
+     * the one the record arrived in. The caller owns it after this returns.
+     *
+     * Safe because the tag has already verified (pass 1), so no unverified
+     * plaintext can be observed; and because the record is consumed here, a
+     * failure below is fatal rather than retryable — the caller aborts, which
+     * matches the existing rule that consumption begins at the header. */
     processed = 0;
-    while (processed < actual_plaintext_len)
     {
-        size_t take = LWIP_MIN(ALTCP_TLS_CE_STREAM_CHUNK,
-                               actual_plaintext_len - processed);
-        struct pbuf *out_seg;
-
-        /* PBUF_RAM allocations are contiguous, so payload holds the whole
-         * chunk and can be decrypted in place. */
-        out_seg = pbuf_alloc(PBUF_RAW, (u16_t)take, PBUF_RAM);
-        if (!out_seg)
+        struct pbuf *q = state->rx;
+        while (q != NULL && processed < actual_plaintext_len)
         {
-            status = ERR_ABRT;
-            goto fail;
+            size_t take = actual_plaintext_len - processed;
+            if (take > q->len)
+            {
+                take = q->len;
+            }
+            if (!tls_aes_decrypt(&aes_ctx, (u8_t *)q->payload, (size_t)take,
+                                 (u8_t *)q->payload))
+            {
+                status = ERR_VAL;
+                goto fail;
+            }
+            processed += take;
+            q = q->next;
         }
-        if (pbuf_copy_partial(state->rx, out_seg->payload, (u16_t)take, 0) != take)
+        if (processed != actual_plaintext_len)
         {
-            pbuf_free(out_seg);
             status = ERR_BUF;
             goto fail;
         }
-        if (!tls_aes_decrypt(&aes_ctx, out_seg->payload, take, out_seg->payload))
-        {
-            pbuf_free(out_seg);
-            goto fail;
-        }
-        if (!out_head)
-        {
-            out_head = out_seg;
-        }
-        else
-        {
-            /* pbuf_cat updates tot_len from its first argument through the
-             * whole chain.  Passing the tail left out_head->tot_len stale
-             * after a third chunk, corrupting application records over 2 KiB. */
-            pbuf_cat(out_head, out_seg);
-        }
-
-        altcp_tls_ce_consume_recved(state, take);
-        processed += take;
     }
 
-    /* Release the trailing 16-byte tag from the input. */
-    altcp_tls_ce_consume_recved(state, TLS_AES_AUTH_TAG_SIZE);
-
+    /* Drop the trailing 16-byte tag: the chain now ends at the last plaintext
+     * byte. The bytes themselves are acked (not freed) so the chain can be
+     * handed to the application intact. */
+    pbuf_realloc(state->rx, (u16_t)actual_plaintext_len);
+    altcp_tls_ce_ack_recved(state, actual_plaintext_len + TLS_AES_AUTH_TAG_SIZE);
+    out_head = state->rx;
 
     (*seq_num)++;
 
@@ -544,7 +578,14 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         }
         if (pt_end == 0)
         {
-            pbuf_free(out_head);
+            /* out_head and state->rx still refer to the same (now useless)
+             * record chain, so that chain belongs to the caller: it aborts and
+             * its teardown frees state->rx. Only the local preserved tail is
+             * ours to drop here. */
+            if (rest)
+            {
+                pbuf_free(rest);
+            }
             tls_aes_destroy_ctx(&aes_ctx);
             (void)tls_send_fatal_alert(ctx, TLS_ALERT_UNEXPECTED_MESSAGE);
             return ERR_VAL;
@@ -554,6 +595,12 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         pbuf_realloc(out_head, (u16_t)*written);
     }
 
+    /* Ownership handover, and only now: out_head (the record, now plaintext)
+     * goes to the caller, and the preserved tail becomes the new state->rx so
+     * the loop can parse the next record. Until this point `rest` is local, so
+     * every failure path above can free it without leaving state->rx dangling;
+     * after this point there is no failure path. */
+    state->rx = rest;
     *plaintext = out_head;
     tls_aes_destroy_ctx(&aes_ctx);
     return ERR_OK;
@@ -562,6 +609,12 @@ fail:
     if (out_head)
     {
         pbuf_free(out_head);
+    }
+    if (rest)
+    {
+        /* Preserved tail of a coalesced segment: the caller is aborting, so
+         * drop it rather than leaking it. */
+        pbuf_free(rest);
     }
     tls_aes_destroy_ctx(&aes_ctx);
     return (status != ERR_OK) ? status : ERR_VAL;
@@ -765,11 +818,10 @@ static void altcp_tls_ce_queue_rx(altcp_tls_ce_state_t *state, struct pbuf *p)
  * the portion not already pre-acked at queue time (tracked by rx_acked_len).
  * This keeps every received byte acked exactly once across the handshake ->
  * app-data boundary. */
-static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n)
+/* Acknowledge n bytes already removed from state->rx with pbuf_free_header. */
+static void altcp_tls_ce_ack_recved(altcp_tls_ce_state_t *state, size_t n)
 {
     size_t to_ack;
-
-    state->rx = pbuf_free_header(state->rx, (u16_t)n);
 
     if (state->rx_acked_len >= n)
     {
@@ -784,6 +836,12 @@ static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n)
     {
         altcp_tls_ce_lower_recved(state->conn->inner_conn, (int)to_ack);
     }
+}
+
+static void altcp_tls_ce_consume_recved(altcp_tls_ce_state_t *state, size_t n)
+{
+    state->rx = pbuf_free_header(state->rx, (u16_t)n);
+    altcp_tls_ce_ack_recved(state, n);
 }
 
 /* Transport write hook used by handshake.c for alerts and close_notify.

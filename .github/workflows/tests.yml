@@ -747,7 +747,9 @@ jobs:
           for test in tests/host/*/run.py tests/host/*/test_*.py; do
             echo "::group::$test"
             test_status=0
+            test_start=$(($(date +%s%N)/1000000))
             python3 "$test" || test_status=$?
+            test_ms=$(($(($(date +%s%N)/1000000)) - test_start))
             if [ "$test_status" -eq 0 ]; then
               result=success
             else
@@ -758,7 +760,8 @@ jobs:
             module=$(basename "$(dirname "$test")" | tr '[:lower:]_' '[:upper:] ')
             name=$(basename "$test" .py | tr '_' ' ')
             rows=$(jq -c --arg module "$module" --arg test "$name" --arg grade "$result" \
-              '. + [{group:"HOST",module:$module,test:$test,grade:$grade}]' <<< "$rows")
+              --arg stats "${test_ms} ms" \
+              '. + [{group:"HOST",module:$module,test:$test,grade:$grade,stats:$stats}]' <<< "$rows")
             echo "::endgroup::"
           done
           echo "$rows" > test-rows-host.json
