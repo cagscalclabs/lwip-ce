@@ -2062,7 +2062,7 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
             {
             case TLS_SERVER_FLIGHT_ENCRYPTED_EXTENSIONS:
                 msg_cap = 6u + (ctx->negotiated_alpn
-                                ? 6u + ctx->negotiated_alpn_len : 0u);
+                                ? 7u + ctx->negotiated_alpn_len : 0u);
                 break;
             case TLS_SERVER_FLIGHT_CERTIFICATE:
                 msg_cap = cert_cap;

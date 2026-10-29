@@ -7,7 +7,9 @@ import subprocess
 import tempfile
 
 
-source = (Path(__file__).resolve().parents[3] / "src/tls/core/handshake.c").read_text()
+root = Path(__file__).resolve().parents[3]
+source = (root / "src/tls/core/handshake.c").read_text()
+altcp_source = (root / "src/apps/altcp_tls/altcp_tls_ce.c").read_text()
 hello_start = source.index("bool tls_server_recv_client_hello(")
 hello_end = source.index("\n/* Encode a raw 32-byte", hello_start)
 hello = source[hello_start:hello_end]
@@ -44,6 +46,16 @@ assert "? TLS_SERVER_FLIGHT_CERTIFICATE : TLS_SERVER_FLIGHT_FINISHED;" in flight
 assert "ctx->server_flight_step = TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY;" in flight
 assert "ctx->server_flight_step = TLS_SERVER_FLIGHT_FINISHED;" in flight
 assert "ctx->server_flight_step = TLS_SERVER_FLIGHT_DONE;" in flight
+
+# The ALTCP bridge must reserve the handshake header, extensions vector,
+# ALPN extension header, ProtocolNameList length, name length, and name bytes:
+# 6 + 7 + negotiated_alpn_len bytes in total.
+assert re.search(
+    r"msg_cap\s*=\s*6u\s*\+\s*\(ctx->negotiated_alpn\s*"
+    r"\?\s*7u\s*\+\s*ctx->negotiated_alpn_len\s*:\s*0u\)",
+    altcp_source,
+    re.S,
+)
 
 # Certificate-only ClientHellos do not contain the PSK extensions.  Keep the
 # external-PSK requirements and ServerHello selection confined to that mode.
@@ -321,6 +333,18 @@ int main(void)
     ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
     ctx.transcript_hash = &hash;
     assert(!tls_server_send_flight(&ctx, out, 4, &written));
+
+    /* 8. ALPN adds seven framing bytes plus the selected protocol. The caller
+     *    must reserve all 15 bytes for a two-byte protocol such as h2. */
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
+    ctx.transcript_hash = &hash;
+    ctx.negotiated_alpn = (const uint8_t *)"h2";
+    ctx.negotiated_alpn_len = 2;
+    assert(!tls_server_send_flight(&ctx, out, 14, &written));
+    assert(tls_server_send_flight(&ctx, out, 15, &written));
+    assert(written == 15 && out[0] == TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS);
+    assert(out[13] == 'h' && out[14] == '2');
     return 0;
 }
 """
