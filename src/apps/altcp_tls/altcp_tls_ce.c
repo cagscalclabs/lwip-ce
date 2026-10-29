@@ -716,6 +716,69 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     return true;
 }
 
+/* Fragment one handshake message across TLSCiphertext records. The message is
+ * stored at record + 5 so a single-record message can be encrypted in place.
+ * For the first fragment of a longer message, however, the encrypted inner
+ * content-type and tag extend 17 bytes past that fragment and overlap the next
+ * plaintext fragment. Preserve exactly that overlap until TCP_WRITE_FLAG_COPY
+ * has copied the completed record. RFC 8446 section 5.1 permits handshake
+ * messages to cross records, but record framing must not alter their bytes. */
+static err_t altcp_tls_ce_write_handshake_fragments(
+    struct altcp_pcb *inner_conn,
+    struct tls_handshake_context *ctx,
+    uint8_t *record,
+    size_t msg_len)
+{
+    size_t record_len = 0;
+
+    if (!inner_conn || !ctx || !record)
+        return ERR_ARG;
+
+    for (size_t sent = 0; sent < msg_len;)
+    {
+        size_t chunk = msg_len - sent;
+        if (chunk > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 1u)
+            chunk = ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 1u;
+
+        size_t frag_cap = 5u + chunk + 1u + TLS_AES_AUTH_TAG_SIZE;
+        size_t next_plaintext = 5u + sent + chunk;
+        size_t output_end = frag_cap;
+        size_t spill_len = 0;
+        uint8_t spill[1u + TLS_AES_AUTH_TAG_SIZE];
+
+        if (sent + chunk < msg_len && output_end > next_plaintext)
+        {
+            spill_len = output_end - next_plaintext;
+            if (spill_len > msg_len - sent - chunk)
+                spill_len = msg_len - sent - chunk;
+            memcpy(spill, record + next_plaintext, spill_len);
+        }
+
+        bool encrypted = altcp_tls_ce_encrypt_record_stream(
+            ctx, true, TLS_CONTENT_TYPE_HANDSHAKE,
+            record + 5u + sent, chunk,
+            record, frag_cap, &record_len);
+        err_t write_err = encrypted
+            ? altcp_write(inner_conn, record, (u16_t)record_len,
+                          TCP_WRITE_FLAG_COPY)
+            : ERR_VAL;
+
+        /* Restore only after altcp_write(COPY) has consumed the ciphertext;
+         * before that point these bytes are part of the record's tag. */
+        if (spill_len)
+        {
+            memcpy(record + next_plaintext, spill, spill_len);
+            tls_secure_memzero(spill, sizeof(spill));
+        }
+        if (write_err != ERR_OK)
+            return write_err;
+
+        ctx->client_hs_seq_num++;
+        sent += chunk;
+    }
+    return ERR_OK;
+}
+
 static struct pbuf *altcp_tls_ce_copy_rx_to_ram(struct pbuf *p)
 {
     struct pbuf *copy;
@@ -1906,9 +1969,9 @@ static void altcp_tls_ce_swap_keys(uint8_t *a_key, uint8_t *a_iv, uint8_t *b_key
     tls_secure_memzero(tmp, sizeof(tmp));
 }
 
-/* ClientHello -> ServerHello, then the encrypted server flight: one record per
- * handshake message (EncryptedExtensions, Certificate, CertificateVerify,
- * Finished), each built into its own record buffer and encrypted in place. */
+/* ClientHello -> ServerHello, then the encrypted server flight. Each handshake
+ * message (EncryptedExtensions, Certificate, CertificateVerify, Finished) is
+ * built into its own buffer and split across records when required. */
 static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *state,
                                       const uint8_t *client_hello, size_t len)
 {
@@ -1916,7 +1979,7 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
     struct altcp_tls_ce_config *conf = (struct altcp_tls_ce_config *)state->conf;
     struct tls_traffic_keys *k = &ctx->keys;
     uint8_t hello[5 + 128];
-    size_t hello_len = 0, record_len = 0;
+    size_t hello_len = 0;
     bool ok;
 
     /* Wire cert chain into handshake context when configured. */
@@ -2026,30 +2089,8 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
             ok = tls_server_send_flight(ctx, record + 5, msg_cap, &msg_len);
             tls_crypto_guard_disable();
 
-            for (size_t sent = 0; ok && sent < msg_len;)
-            {
-                size_t chunk = msg_len - sent;
-                if (chunk > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 1u)
-                    chunk = ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 1u;
-
-                /* Encrypting from record + 5 into record is an in-place
-                 * transform of the first fragment; later fragments come from
-                 * further into the same buffer. */
-                size_t frag_cap = 5u + chunk + 1u + TLS_AES_AUTH_TAG_SIZE;
-                if (!altcp_tls_ce_encrypt_record_stream(ctx, true,
-                                                        TLS_CONTENT_TYPE_HANDSHAKE,
-                                                        record + 5 + sent, chunk,
-                                                        record, frag_cap,
-                                                        &record_len) ||
-                    altcp_write(conn->inner_conn, record, (u16_t)record_len,
-                                TCP_WRITE_FLAG_COPY) != ERR_OK)
-                {
-                    ok = false;
-                    break;
-                }
-                ctx->client_hs_seq_num++;
-                sent += chunk;
-            }
+            ok = ok && altcp_tls_ce_write_handshake_fragments(
+                           conn->inner_conn, ctx, record, msg_len) == ERR_OK;
             mem_free(record);
         }
     }
@@ -2556,8 +2597,9 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                     if (state->tls_ctx.client_certificate_requested)
                     {
-                        /* Certificate, then CertificateVerify, one record each,
-                         * built straight into the record and encrypted in place.
+                        /* Certificate, then CertificateVerify, each built
+                         * straight into its record buffer and fragmented when
+                         * necessary.
                          * An unsatisfiable request yields an empty Certificate
                          * and no CertificateVerify, ending the flight after one
                          * message. */
@@ -2613,43 +2655,15 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                                 break;
                             }
 
-                            err_t write_err = ERR_OK;
-                            size_t enc_cert_len = 0;
-                            for (size_t sent = 0; cert_ok && write_err == ERR_OK &&
-                                                  sent < msg_len;)
-                            {
-                                size_t chunk = msg_len - sent;
-                                if (chunk > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 1u)
-                                    chunk = ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 1u;
-                                size_t frag_cap = 5u + chunk + 1u + TLS_AES_AUTH_TAG_SIZE;
-                                if (!altcp_tls_ce_encrypt_record_stream(&state->tls_ctx, true,
-                                                                        TLS_CONTENT_TYPE_HANDSHAKE,
-                                                                        record + 5 + sent, chunk,
-                                                                        record, frag_cap,
-                                                                        &enc_cert_len))
-                                {
-                                    cert_ok = false;
-                                    break;
-                                }
-                                write_err = altcp_write(conn->inner_conn, record,
-                                                        (u16_t)enc_cert_len,
-                                                        TCP_WRITE_FLAG_COPY);
-                                if (write_err == ERR_OK)
-                                {
-                                    state->tls_ctx.client_hs_seq_num++;
-                                    sent += chunk;
-                                }
-                            }
+                            err_t write_err = cert_ok
+                                ? altcp_tls_ce_write_handshake_fragments(
+                                      conn->inner_conn, &state->tls_ctx,
+                                      record, msg_len)
+                                : ERR_VAL;
                             mem_free(record);
-                            if (!cert_ok)
-                            {
-                                tls_dbg_status("clientcert: gen/enc fail");
-                                ALTCP_TLS_CE_ERROR_ABORT(conn);
-                                return ERR_ABRT;
-                            }
                             if (write_err != ERR_OK)
                             {
-                                tls_dbg_status("clientcert: write fail");
+                                tls_dbg_status("clientcert: enc/write fail");
                                 ALTCP_TLS_CE_ERROR_ABORT_CODE(conn, -write_err);
                                 return ERR_ABRT;
                             }
