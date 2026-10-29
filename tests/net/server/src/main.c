@@ -1,7 +1,9 @@
-/* NETSRV: lwIP-CE as a TLS 1.3 server with an external PSK, driven by
- * openssl s_client from tests/net/run.py. Each cipher suite is checked
- * with a client that echoes a line through the calc. */
+/* NETSRV: lwIP-CE as a TLS 1.3 server with an external PSK or certificate,
+ * driven by openssl s_client from tests/net/run.py. Each cipher suite is
+ * checked with a client that echoes a line through the calc. */
 #include <string.h>
+
+#include <tice.h>
 
 #include "net.h"
 
@@ -67,6 +69,32 @@ static void test_psk_server(void)
     altcp_tls_free_config(conf);
 }
 
+static void test_cert_server(void)
+{
+    struct altcp_tls_config *conf = altcp_tls_create_config_cert_server(
+        "lwIPSKEY", "lwIPSCRT");
+    if (!check("altcp_tls_create_config_cert_server", conf != NULL)) return;
+
+    struct altcp_pcb *l;
+    char reply[64];
+    err_t err;
+    l = altcp_tls_new(conf, IPADDR_TYPE_V4);
+    if (check("cert TLS server bind", l && altcp_bind(l, IP_ANY_TYPE, PORT_CERT_SRV) == ERR_OK))
+    {
+        l = altcp_listen_with_backlog_and_err(l, 1, &err);
+        if (check("cert TLS server listen", l != NULL))
+        {
+            altcp_accept(l, srv_accept);
+            server_peer = NULL;
+            check("s_client cert echo (accept self-signed)",
+                  host_call("cert-client 7102", reply, sizeof(reply), 180000) && !strcmp(reply, "echo"));
+            check("cert TLS server accepted", server_peer != NULL);
+            check("cert TLS listener closes", altcp_close(l) == ERR_OK);
+        }
+    }
+    altcp_tls_free_config(conf);
+}
+
 static void test_still_alive(void)
 {
     struct lwip_socket *sock = open_socket(LWIP_SOCKET_TCP, HOST, PORT_ECHO, NULL, 15000);
@@ -82,6 +110,7 @@ int main(void)
     if (net_begin("server"))
     {
         test_psk_server();
+        test_cert_server();
         test_still_alive();
     }
     return net_end();

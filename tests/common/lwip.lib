@@ -449,6 +449,7 @@
 	export	tls_p256_secret
 	export	tls_p256_sign
 	export	tls_p256_verify
+	export	lwip_socket_set_tls_cert
 	export	lwip_socket_set_tls_psk
 	export	tls_random_bytes_ex
 	export	tls_rng_status
@@ -478,3 +479,4 @@
 	export	tls_aes_destroy_ctx
 	export	tls_aes_pkcs7_apply
 	export	tls_aes_pkcs7_remove
+	export	altcp_tls_create_config_cert_server

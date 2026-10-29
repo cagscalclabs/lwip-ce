@@ -692,6 +692,21 @@ class Control:
         peer.stop()
         return "echo" if "lwip-ce psk server check" in peer.output else f"ERR {peer.output[-70:]!r}"
 
+    def cmd_cert_client(self, port: str) -> str:
+        """Connect to calc acting as a cert-authenticated TLS 1.3 server.
+        Accepts any certificate (including self-signed) via -verify 0."""
+        peer = OpenSSL(["s_client", "-connect", f"{CALC}:{port}",
+                        "-tls1_3", "-verify", "0", "-quiet"],
+                       self.tmp, None)
+        time.sleep(2)
+        peer.send("lwip-ce cert server check\n")
+        deadline = time.monotonic() + 60
+        while (time.monotonic() < deadline and "lwip-ce cert server check" not in peer.output
+               and peer.proc.poll() is None):
+            time.sleep(0.2)
+        peer.stop()
+        return "echo" if "lwip-ce cert server check" in peer.output else f"ERR {peer.output[-70:]!r}"
+
     # -- perf -----------------------------------------------------------------
 
     def cmd_udp_blast(self, count: str, size: str, port: str, gap_us: str) -> str:

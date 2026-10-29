@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "../includes/hash.h"
+#include "../includes/p256.h"
 #include "../includes/rsa.h"
 #include "../includes/aes.h"
 #include "../includes/random.h"
@@ -208,8 +209,9 @@ key_parse_ec_pub_point(const uint8_t *data, size_t len,
     if (len != 66 || data[0] != 0 || data[1] != 4)
         return TLS_KEY_IMPORT_PARSE_FAIL;
     out->type = TLS_KEY_TYPE_EC_P256;
-    out->ec.data = data + 1;
+    out->ec.pub  = data + 1;
     out->ec.len  = len  - 1;
+    out->ec.priv = NULL;
     return TLS_KEY_IMPORT_OK;
 }
 
@@ -256,7 +258,10 @@ key_parse_sec1(const uint8_t *der, size_t len, struct tls_key *out,
     }
     if (!inherited_p256 && !have_params) return TLS_KEY_IMPORT_BAD_ALG;
     if (!point) return TLS_KEY_IMPORT_PARSE_FAIL;
-    return key_parse_ec_pub_point(point, point_len, out);
+    tls_key_import_result_t rc = key_parse_ec_pub_point(point, point_len, out);
+    if (rc == TLS_KEY_IMPORT_OK)
+        out->ec.priv = secret.value;  /* 32-byte scalar inside der_buf */
+    return rc;
 }
 
 /* ---------------------------------------------------------------------------
@@ -729,21 +734,32 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
                                   uint8_t *sig_out, size_t *sig_len_out,
                                   const struct tls_key *key, tls_alg_t alg)
 {
-    (void)content;
-    (void)content_len;
-    (void)sig_out;
-    (void)sig_len_out;
-
-    if (!key)
-    {
+    if (!key || !content || !sig_out || !sig_len_out)
         return TLS_KEY_OP_INVALID;
-    }
 
     switch (alg)
     {
+        case TLS_ALG_ECDSA_SECP256R1_SHA256:
+        {
+            if (key->type != TLS_KEY_TYPE_EC_P256 || !key->ec.priv)
+                return TLS_KEY_OP_INVALID;
+            struct tls_hash_context hctx;
+            uint8_t digest[32];
+            if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256))
+                return TLS_KEY_OP_INVALID;
+            tls_hash_update(&hctx, content, content_len);
+            tls_hash_digest(&hctx, digest);
+            tls_hash_clear(&hctx);
+            bool ok = tls_p256_sign(sig_out, digest, key->ec.priv);
+            tls_secure_memzero(digest, sizeof digest);
+            if (!ok)
+                return TLS_KEY_OP_INVALID;
+            *sig_len_out = 64;
+            return TLS_KEY_OP_OK;
+        }
+
         case TLS_ALG_RSA_PSS_RSAE_SHA256:
         case TLS_ALG_RSA_PKCS1_SHA256:
-        case TLS_ALG_ECDSA_SECP256R1_SHA256:
             return tls_key_supports_operation(key, alg)
                 ? TLS_KEY_OP_UNSUPPORTED : TLS_KEY_OP_INVALID;
 
@@ -751,7 +767,7 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
             return TLS_KEY_OP_UNKNOWN;
 
         default:
-            /* Encryption-range alg passed to sign — wrong key type. */
+            /* Encryption-range alg passed to sign — wrong operation category. */
             return TLS_KEY_OP_UNKNOWN;
     }
 }

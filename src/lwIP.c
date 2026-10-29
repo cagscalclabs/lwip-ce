@@ -149,6 +149,11 @@ struct lwip_socket
     struct lwip_socket *accept_queue;
     struct lwip_socket *accept_next; /**< link within accept_queue chain */
     bool                is_listen;   /**< pcb.tcp is a listen PCB (tcp_listen was called) */
+
+    /* Certificate-authenticated server mode for LWIP_SOCKET_ALTCP_TLS.
+     * Both set by lwip_socket_set_tls_chain_info(); NUL = not configured. */
+    char tls_key_appvar[9];   /**< appvar name for EC private key (≤8 chars) */
+    char tls_cert_appvar[9];  /**< appvar name for cert/chain (≤8 chars) */
 };
 
 /* ============================================================
@@ -2635,6 +2640,25 @@ fail_mem:
     return NULL;
 }
 
+lwip_error_t lwip_socket_set_tls_cert(struct lwip_socket *socket,
+                                      const char *privkey_appvar,
+                                      const char *chain_appvar)
+{
+    if (!socket || socket->protocol != (uint8_t)LWIP_SOCKET_ALTCP_TLS)
+        return LWIP_ERR_ARG;
+    if (!privkey_appvar || !chain_appvar)
+        return LWIP_ERR_ARG;
+    if (strlen(privkey_appvar) > 8 || strlen(chain_appvar) > 8)
+        return LWIP_ERR_ARG;
+    if (socket->status != LWIP_STATUS_INIT)
+        return LWIP_ERR_STATE;
+    strncpy(socket->tls_key_appvar,  privkey_appvar, 8);
+    socket->tls_key_appvar[8]  = '\0';
+    strncpy(socket->tls_cert_appvar, chain_appvar, 8);
+    socket->tls_cert_appvar[8] = '\0';
+    return LWIP_OK;
+}
+
 lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket,
                                      const uint8_t psk[32],
                                      const uint8_t *identity,
@@ -3157,6 +3181,51 @@ lwip_error_t lwip_socket_connect(struct lwip_socket *conn,
  * callbacks, set it CONNECTED, and enqueue it on the listener's accept_queue.
  * The peer socket is heap-allocated here; ownership transfers to the app when
  * it calls lwip_socket_accept(). */
+static err_t socket_altcp_accept_cb(void *arg, struct altcp_pcb *newpcb, err_t err)
+{
+    struct lwip_socket *listener = (struct lwip_socket *)arg;
+
+    if (err != ERR_OK || !newpcb || !listener)
+    {
+        ERROR_CODE(err != ERR_OK ? (uint16_t)(-err) : (uint16_t)(-ERR_ARG));
+        return ERR_VAL;
+    }
+
+    struct lwip_socket *peer = mem_malloc(sizeof(*peer));
+    if (!peer)
+    {
+        ERROR_CODE(-ERR_MEM);
+        altcp_abort(newpcb);
+        return ERR_ABRT;
+    }
+    memset(peer, 0, sizeof(*peer));
+    peer->status       = LWIP_STATUS_CONNECTED;
+    peer->protocol     = listener->protocol; /* preserves ALTCP_TLS etc. */
+    peer->pcb.altcp    = newpcb;
+    peer->netif        = listener->netif;
+    peer->rx_ring_init = LWIP_SOCKET_RX_RING_INIT_SIZE;
+    peer->rx_ring_max  = listener->rx_ring_max;
+
+    if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
+    {
+        ERROR_CODE(-ERR_MEM);
+        mem_free(peer);
+        altcp_abort(newpcb);
+        return ERR_ABRT;
+    }
+
+    rebind_pcb_callbacks(peer);
+    conn_registry_add(peer);
+
+    struct lwip_socket **tail = &listener->accept_queue;
+    while (*tail)
+        tail = &(*tail)->accept_next;
+    *tail = peer;
+    peer->accept_next = NULL;
+
+    return ERR_OK;
+}
+
 static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
     struct lwip_socket *listener = (struct lwip_socket *)arg;
@@ -3208,24 +3277,93 @@ lwip_error_t lwip_socket_listen(struct lwip_socket *conn, uint16_t port)
 {
     if (!conn)
         return LWIP_ERR_ARG;
-    if ((lwip_socket_type_t)conn->protocol != LWIP_SOCKET_TCP)
-        return LWIP_ERR_PROTO;
-    if (conn->status != LWIP_STATUS_INIT || !conn->pcb.tcp)
+    if (conn->status != LWIP_STATUS_INIT)
         return LWIP_ERR_STATE;
 
-    if (tcp_bind(conn->pcb.tcp, NULL, port) != ERR_OK)
-        return LWIP_ERR_CONNECT;
+    lwip_socket_type_t proto = (lwip_socket_type_t)conn->protocol;
 
-    struct tcp_pcb *lpcb = tcp_listen(conn->pcb.tcp);
-    if (!lpcb)
-        return LWIP_ERR_MEM;
+    /* ---- plain TCP ---- */
+    if (proto == LWIP_SOCKET_TCP)
+    {
+        if (!conn->pcb.tcp)
+            return LWIP_ERR_STATE;
+        if (tcp_bind(conn->pcb.tcp, NULL, port) != ERR_OK)
+            return LWIP_ERR_CONNECT;
+        struct tcp_pcb *lpcb = tcp_listen(conn->pcb.tcp);
+        if (!lpcb)
+            return LWIP_ERR_MEM;
+        conn->pcb.tcp   = lpcb;
+        conn->status    = LWIP_STATUS_CONNECTED;
+        conn->is_listen = true;
+        tcp_arg(lpcb, conn);
+        tcp_accept(lpcb, socket_tcp_accept_cb);
+        return LWIP_OK;
+    }
 
-    conn->pcb.tcp  = lpcb;
-    conn->status   = LWIP_STATUS_CONNECTED; /* reuse CONNECTED to mean "active" */
-    conn->is_listen = true;
-    tcp_arg(lpcb, conn);
-    tcp_accept(lpcb, socket_tcp_accept_cb);
-    return LWIP_OK;
+#if LWIP_ALTCP_TLS
+    /* ---- TLS server ---- */
+    if (proto == LWIP_SOCKET_ALTCP_TLS)
+    {
+        struct altcp_tls_ce_config *conf = NULL;
+
+        if (conn->tls_key_appvar[0] != '\0')
+        {
+            /* Certificate-authenticated server: use cert + key appvars. */
+            conf = altcp_tls_ce_create_config_cert_server(
+                       conn->tls_key_appvar, conn->tls_cert_appvar);
+        }
+        else if (conn->tls_psk_identity_len > 0)
+        {
+            /* PSK-authenticated server: use stored PSK fields. */
+            struct tls_psk_identity id;
+            memset(&id, 0, sizeof(id));
+            memcpy(id.identity, conn->tls_psk_identity,
+                   conn->tls_psk_identity_len);
+            id.identity_len = (uint8_t)conn->tls_psk_identity_len;
+            conf = altcp_tls_ce_create_config_psk_server(conn->tls_psk, &id);
+        }
+        else
+        {
+            /* No credentials configured. */
+            return LWIP_ERR_ARG;
+        }
+
+        if (!conf)
+            return LWIP_ERR_MEM;
+
+        struct altcp_pcb *pcb = altcp_tls_ce_new(conf, IPADDR_TYPE_V4);
+        if (!pcb)
+        {
+            altcp_tls_ce_free_config(conf);
+            return LWIP_ERR_MEM;
+        }
+
+        if (altcp_bind(pcb, NULL, port) != ERR_OK)
+        {
+            altcp_close(pcb);
+            altcp_tls_ce_free_config(conf);
+            return LWIP_ERR_CONNECT;
+        }
+
+        struct altcp_pcb *lpcb = altcp_listen(pcb);
+        if (!lpcb)
+        {
+            altcp_close(pcb);
+            altcp_tls_ce_free_config(conf);
+            return LWIP_ERR_MEM;
+        }
+
+        conn->pcb.altcp = lpcb;
+        conn->tls_conf  = conf;
+        conn->status    = LWIP_STATUS_CONNECTED;
+        conn->is_listen = true;
+        altcp_arg(lpcb, conn);
+        altcp_accept(lpcb, socket_altcp_accept_cb);
+        return LWIP_OK;
+    }
+#endif /* LWIP_ALTCP_TLS */
+
+    return LWIP_ERR_PROTO;
 }
 
 struct lwip_socket *lwip_socket_accept(struct lwip_socket *listener)

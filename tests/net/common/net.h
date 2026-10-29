@@ -25,6 +25,7 @@
 #define PORT_SINK      7007
 #define PORT_HOLD      7008
 #define PORT_PSK       7100
+#define PORT_CERT_SRV  7102
 #define PORT_CLOSED    7999
 #define BULK_BYTES     262144ul
 

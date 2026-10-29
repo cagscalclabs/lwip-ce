@@ -798,11 +798,11 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
     }
     if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256)
     {
-        if (!key->ec.data || key->ec.len != 65 || !tls_ecdsa_sig_rs(sig, sig_len, rs))
+        if (!key->ec.pub || key->ec.len != 65 || !tls_ecdsa_sig_rs(sig, sig_len, rs))
         {
             return false;
         }
-        job = lwip_crypto_p256_verify(digest, key->ec.data, rs);
+        job = lwip_crypto_p256_verify(digest, key->ec.pub, rs);
         key_len = 65;
     }
     else if ((alg == TLS_ALG_RSA_PKCS1_SHA256 || alg == TLS_ALG_RSA_PSS_RSAE_SHA256) &&
@@ -843,8 +843,9 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
     if (key->type == TLS_KEY_TYPE_EC_P256)
     {
         d->key.ec.len = 65;
-        d->key.ec.data = d->data + sig_len;
-        memcpy(d->data + sig_len, key->ec.data, 65);
+        d->key.ec.pub = d->data + sig_len;
+        d->key.ec.priv = NULL;
+        memcpy(d->data + sig_len, key->ec.pub, 65);
     }
     else
     {
@@ -960,7 +961,8 @@ static tls_key_op_result_t tls_cert_verify_root_entry(
         memset(&root_key, 0, sizeof(root_key));
         root_key.type = TLS_KEY_TYPE_EC_P256;
         root_key.ec.len = key_len;
-        root_key.ec.data = entry->key;
+        root_key.ec.pub = entry->key;
+        root_key.ec.priv = NULL;
         return tls_cert_verify_pending_link(w, &root_key, offload);
     }
     return TLS_KEY_OP_UNKNOWN;
@@ -1138,8 +1140,9 @@ static bool tls_cert_job_clone_key(struct tls_cert_job *job, const struct tls_ke
     }
     else
     {
-        memcpy(mat, src->ec.data, src->ec.len);
-        job->issuer.ec.data = mat;
+        memcpy(mat, src->ec.pub, src->ec.len);
+        job->issuer.ec.pub = mat;
+        job->issuer.ec.priv = NULL;
     }
     job->issuer_mat = mat;
     job->issuer_mat_len = mat_len;
@@ -1525,8 +1528,9 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         }
         else
         {
-            memcpy(mat, cert.pubkey.ec.data, cert.pubkey.ec.len);
-            w->ctx->leaf_pubkey.ec.data = mat;
+            memcpy(mat, cert.pubkey.ec.pub, cert.pubkey.ec.len);
+            w->ctx->leaf_pubkey.ec.pub  = mat;
+            w->ctx->leaf_pubkey.ec.priv = NULL;
             w->ctx->leaf_pubkey.ec.len  = cert.pubkey.ec.len;
         }
     }
@@ -4658,7 +4662,7 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
         return false;
     }
 
-    if (!ctx->leaf_pubkey.ec.data || ctx->leaf_pubkey.ec.len != 65)
+    if (!ctx->leaf_pubkey.ec.pub || ctx->leaf_pubkey.ec.len != 65)
     {
         ERROR_CODE(0x86);
         return false;
@@ -4701,7 +4705,7 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
     }
 
     tls_crypto_guard_enable();
-    bool ok = tls_p256_verify(rs, message_hash, ctx->leaf_pubkey.ec.data);
+    bool ok = tls_p256_verify(rs, message_hash, ctx->leaf_pubkey.ec.pub);
     tls_crypto_guard_disable();
 
     tls_secure_memzero(rs, sizeof(rs));
@@ -5796,32 +5800,160 @@ fail:
     return false;
 }
 
+/* Encode a raw 32-byte big-endian integer as a DER INTEGER into dst.
+ * Returns the number of bytes written (2+32 or 2+33 with leading zero). */
+static size_t der_encode_integer(uint8_t *dst, const uint8_t *val32)
+{
+    size_t off = 0;
+    dst[off++] = 0x02; /* INTEGER tag */
+    if (val32[0] & 0x80)
+    {
+        dst[off++] = 33;
+        dst[off++] = 0x00;
+    }
+    else
+    {
+        dst[off++] = 32;
+    }
+    memcpy(dst + off, val32, 32);
+    return off + 32;
+}
+
+/* Encode raw r||s (64 bytes) as DER SEQUENCE { INTEGER r, INTEGER s }.
+ * dst must be at least 72 bytes. Returns encoded length. */
+static size_t der_encode_ecdsa_sig(uint8_t *dst, const uint8_t rs[64])
+{
+    uint8_t r_enc[35], s_enc[35];
+    size_t r_len = der_encode_integer(r_enc, rs);
+    size_t s_len = der_encode_integer(s_enc, rs + 32);
+    size_t body = r_len + s_len;
+    dst[0] = 0x30; /* SEQUENCE */
+    dst[1] = (uint8_t)body;
+    memcpy(dst + 2, r_enc, r_len);
+    memcpy(dst + 2 + r_len, s_enc, s_len);
+    return 2 + body;
+}
+
 bool tls_server_send_flight(struct tls_handshake_context *ctx,
                             uint8_t *out, size_t out_cap, size_t *written)
 {
     size_t ee_len, fin_len = 0, ext_len;
+    size_t off = 0;
 
     if (!ctx || !out || !written || ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
     {
         ERROR_CODE(0xc1);
         return false;
     }
+
+    /* --- Certificate + CertificateVerify (cert mode only) --- */
+    if (ctx->server_cert && ctx->server_key && ctx->server_chain_len > 0)
+    {
+        /* Compute total cert_list size: for each entry: 3+der_len+2 */
+        size_t list_len = 0;
+        for (size_t ci = 0; ci < ctx->server_chain_len; ci++)
+            list_len += 3 + ctx->server_chain[ci]->der_len + 2;
+
+        /* Certificate message body: 1 (context_len) + 3 (list_len) + list */
+        size_t cert_body = 1 + 3 + list_len;
+        size_t cert_msg  = 4 + cert_body;
+
+        /* CertificateVerify body: 2 (scheme) + 2 (sig len) + up to 72 (DER sig) */
+        size_t cv_max = 4 + 2 + 2 + 72;
+
+        if (out_cap < off + cert_msg + cv_max + 200 /* EE+Fin headroom */)
+        {
+            ERROR_CODE(0xc5);
+            return false;
+        }
+
+        /* Build Certificate message header */
+        out[off + 0] = TLS_HANDSHAKE_CERTIFICATE; /* 0x0b */
+        out[off + 1] = (uint8_t)(cert_body >> 16);
+        out[off + 2] = (uint8_t)(cert_body >> 8);
+        out[off + 3] = (uint8_t)(cert_body);
+        out[off + 4] = 0x00; /* context_len */
+        out[off + 5] = (uint8_t)(list_len >> 16);
+        out[off + 6] = (uint8_t)(list_len >> 8);
+        out[off + 7] = (uint8_t)(list_len);
+        size_t ep = off + 8;
+        for (size_t ci = 0; ci < ctx->server_chain_len; ci++)
+        {
+            size_t der_len = ctx->server_chain[ci]->der_len;
+            out[ep++] = (uint8_t)(der_len >> 16);
+            out[ep++] = (uint8_t)(der_len >> 8);
+            out[ep++] = (uint8_t)(der_len);
+            memcpy(out + ep, ctx->server_chain[ci]->der, der_len);
+            ep += der_len;
+            out[ep++] = 0x00; /* extensions len hi */
+            out[ep++] = 0x00; /* extensions len lo */
+        }
+        transcript_hash_update(ctx->transcript_hash, out + off, cert_msg);
+        off += cert_msg;
+
+        /* Build signing content: 64×0x20 || label || 0x00 || transcript_hash */
+        static const char cv_label[] = "TLS 1.3, server CertificateVerify";
+        uint8_t sign_content[64 + 33 + 1 + 32];
+        memset(sign_content, 0x20, 64);
+        memcpy(sign_content + 64, cv_label, 33);
+        sign_content[64 + 33] = 0x00;
+        struct tls_hash_context snap;
+        tls_hash_context_copy(&snap, ctx->transcript_hash);
+        tls_hash_digest(&snap, sign_content + 64 + 33 + 1);
+        tls_hash_clear(&snap);
+
+        /* Sign with private key */
+        uint8_t raw_sig[64];
+        size_t  raw_sig_len = 0;
+        tls_key_op_result_t sign_rc = tls_key_sign(
+            sign_content, sizeof sign_content,
+            raw_sig, &raw_sig_len,
+            ctx->server_key, TLS_ALG_ECDSA_SECP256R1_SHA256);
+        tls_secure_memzero(sign_content, sizeof sign_content);
+        if (sign_rc != TLS_KEY_OP_OK)
+        {
+            ERROR_CODE(0xc6);
+            return false;
+        }
+
+        /* DER-encode the signature */
+        uint8_t der_sig[72];
+        size_t  der_sig_len = der_encode_ecdsa_sig(der_sig, raw_sig);
+        tls_secure_memzero(raw_sig, sizeof raw_sig);
+
+        /* Build CertificateVerify message */
+        size_t cv_body = 2 + 2 + der_sig_len;
+        out[off + 0] = 0x0f; /* CertificateVerify */
+        out[off + 1] = (uint8_t)(cv_body >> 16);
+        out[off + 2] = (uint8_t)(cv_body >> 8);
+        out[off + 3] = (uint8_t)(cv_body);
+        out[off + 4] = 0x04; /* ecdsa_secp256r1_sha256 hi */
+        out[off + 5] = 0x03; /* ecdsa_secp256r1_sha256 lo */
+        out[off + 6] = (uint8_t)(der_sig_len >> 8);
+        out[off + 7] = (uint8_t)(der_sig_len);
+        memcpy(out + off + 8, der_sig, der_sig_len);
+        size_t cv_msg = 4 + cv_body;
+        transcript_hash_update(ctx->transcript_hash, out + off, cv_msg);
+        off += cv_msg;
+    }
+
+    /* --- EncryptedExtensions --- */
     ext_len = ctx->negotiated_alpn ? 4u + 2u + 1u + ctx->negotiated_alpn_len : 0u;
     ee_len = 4 + 2 + ext_len;
-    if (out_cap < ee_len + 36)
+    if (out_cap < off + ee_len + 36)
     {
         ERROR_CODE(0xc2);
         return false;
     }
-    out[0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;
-    out[1] = 0;
-    out[2] = (uint8_t)((2 + ext_len) >> 8);
-    out[3] = (uint8_t)(2 + ext_len);
-    out[4] = (uint8_t)(ext_len >> 8);
-    out[5] = (uint8_t)ext_len;
+    out[off + 0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;
+    out[off + 1] = 0;
+    out[off + 2] = (uint8_t)((2 + ext_len) >> 8);
+    out[off + 3] = (uint8_t)(2 + ext_len);
+    out[off + 4] = (uint8_t)(ext_len >> 8);
+    out[off + 5] = (uint8_t)ext_len;
     if (ctx->negotiated_alpn)
     {
-        size_t p = 6, list = 1u + ctx->negotiated_alpn_len;
+        size_t p = off + 6, list = 1u + ctx->negotiated_alpn_len;
         out[p++] = (uint8_t)(TLS_EXT_ALPN >> 8);
         out[p++] = (uint8_t)TLS_EXT_ALPN;
         out[p++] = (uint8_t)((2 + list) >> 8);
@@ -5831,10 +5963,12 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         out[p++] = ctx->negotiated_alpn_len;
         memcpy(out + p, ctx->negotiated_alpn, ctx->negotiated_alpn_len);
     }
-    transcript_hash_update(ctx->transcript_hash, out, ee_len);
-    if (!tls_send_finished(ctx, false, out + ee_len, out_cap - ee_len, &fin_len))
+    transcript_hash_update(ctx->transcript_hash, out + off, ee_len);
+    off += ee_len;
+
+    if (!tls_send_finished(ctx, false, out + off, out_cap - off, &fin_len))
         return false;
-    *written = ee_len + fin_len;
+    *written = off + fin_len;
     ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     return true;
 }
@@ -5855,6 +5989,17 @@ bool tls_server_recv_finished(struct tls_handshake_context *ctx,
     ctx->state = TLS_STATE_HANDSHAKE_COMPLETE;
     tls_phase_trace("complete");
     return true;
+}
+
+void tls_server_set_cert(struct tls_handshake_context *ctx,
+                         struct tls_x509_object **chain, size_t chain_len,
+                         struct tls_key *key)
+{
+    if (!ctx) return;
+    ctx->server_cert     = (chain && chain_len > 0) ? chain[0] : NULL;
+    ctx->server_key      = key;
+    ctx->server_chain    = chain;
+    ctx->server_chain_len = chain_len;
 }
 
 /**
@@ -6520,7 +6665,7 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
         {
             const uint8_t *mat = is_rsa
                                  ? ctx->leaf_pubkey.rsa.modulus
-                                 : ctx->leaf_pubkey.ec.data;
+                                 : ctx->leaf_pubkey.ec.pub;
             mem_stats_tls_direct_release(mat_len, mat_len);
             mem_buffer_custom_free((void *)mat);
         }

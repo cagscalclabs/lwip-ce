@@ -71,8 +71,9 @@ struct tls_key
         struct tls_rsa_key    rsa; /**< Valid for TLS_ALG_RSA_*.  */
         struct
         {
-            size_t         len;    /**< Length of raw EC point bytes. */
-            const uint8_t *data;   /**< Uncompressed EC public-key.   */
+            size_t         len;    /**< Length of uncompressed public point (65 bytes for P-256). */
+            const uint8_t *pub;    /**< Uncompressed EC public-key (0x04 || X || Y).             */
+            const uint8_t *priv;   /**< 32-byte private scalar, or NULL for public-only keys.    */
         } ec;                      /**< Valid for TLS_ALG_ECDSA_*.    */
         struct {
             size_t len;
@@ -109,7 +110,7 @@ typedef enum
  *        and store a pointer to it in @p *out.
  *
  * The returned key owns its key material in a trailing allocation; it must be
- * freed with tls_key_free().  Pointer members (rsa.modulus, ec.data, etc.)
+ * freed with tls_key_free().  Pointer members (rsa.modulus, ec.pub, ec.priv, etc.)
  * reference that same allocation — never point elsewhere.
  *
  * @param out       Receives the allocated key on success; set to NULL on error.

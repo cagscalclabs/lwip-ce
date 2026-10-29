@@ -35,6 +35,7 @@
 #include <stdbool.h>
 #include "hash.h"
 #include "key.h"
+#include "x509.h"
 #include "tls-alpn.h"
 #include "lwip/logging.h"
 
@@ -370,6 +371,14 @@ extern "C"
          * tls_handshake_cleanup (leaf_pubkey.allocated=true).
          * alg == TLS_ALG_UNKNOWN when no leaf cert has been seen. */
         struct tls_key leaf_pubkey;
+
+        /* Server identity for cert-authenticated server mode. All are caller-
+         * owned and must outlive the handshake (held by the altcp config).
+         * server_cert == server_chain[0] when chain_len > 0. */
+        struct tls_x509_object  *server_cert;       /* leaf cert; NULL = PSK-only mode */
+        struct tls_key          *server_key;        /* private key for leaf cert */
+        struct tls_x509_object **server_chain;      /* cert chain: leaf first, then intermediates */
+        size_t                   server_chain_len;  /* number of entries in server_chain */
     };
 
     /**
@@ -605,6 +614,14 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
                             uint8_t *out, size_t out_cap, size_t *written);
 bool tls_server_recv_finished(struct tls_handshake_context *ctx,
                               const uint8_t *msg, size_t len);
+
+/* Set the server's certificate chain and private key on a server-mode context.
+ * Must be called before tls_server_recv_client_hello.
+ * chain[0] is the leaf; chain[1..chain_len-1] are intermediates (omit root).
+ * key must have ec.priv != NULL. All are caller-owned. */
+void tls_server_set_cert(struct tls_handshake_context *ctx,
+                         struct tls_x509_object **chain, size_t chain_len,
+                         struct tls_key *key);
 
 /** Return a human-readable name for a TLS alert description byte (e.g. "bad_record_mac"). */
 const char *tls_alert_name(uint8_t description);

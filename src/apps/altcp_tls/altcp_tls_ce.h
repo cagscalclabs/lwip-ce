@@ -100,11 +100,12 @@ struct altcp_tls_ce_config {
     uint8_t *alpn_protocols;
     size_t alpn_protocols_len;
 
-    /* Certificate/key for RSA mode (future) */
-    const u8_t *cert;
-    size_t cert_len;
-    const u8_t *privkey;
-    size_t privkey_len;
+    /* Certificate chain + private key for cert-authenticated server mode.
+     * server_chain[0] is the leaf; intermediates follow. Owned by this config,
+     * freed in altcp_tls_ce_free_config. NULL = PSK-only mode. */
+    struct tls_x509_object **server_chain;
+    size_t                   server_chain_len;
+    struct tls_key          *server_key;
 };
 
 /**
@@ -129,6 +130,22 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_client(
 struct altcp_tls_ce_config *altcp_tls_ce_create_config_psk_server(
     const u8_t psk[32],
     const struct tls_psk_identity *psk_identity
+);
+
+/**
+ * @brief Create TLS configuration for a certificate-authenticated server.
+ *
+ * Reads the private key and certificate chain from on-calc appvars.
+ * Both appvars must contain PEM-encoded data (standard -----BEGIN/END----- banners).
+ * The chain appvar may hold multiple certificates (leaf first, then intermediates).
+ *
+ * @param privkey_appvar  Name of appvar holding the PEM EC private key (≤8 chars)
+ * @param chain_appvar    Name of appvar holding the PEM cert chain (≤8 chars)
+ * @return Configuration handle or NULL on any parse or allocation failure
+ */
+struct altcp_tls_ce_config *altcp_tls_ce_create_config_cert_server(
+    const char *privkey_appvar,
+    const char *chain_appvar
 );
 
 /**
