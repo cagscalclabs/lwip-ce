@@ -980,8 +980,13 @@ static char *read_appvar_pem(const char *appvar_name, size_t *out_len)
     if (size == 0) { file_fn.ti_close(h); return NULL; }
     char *buf = (char *)mem_buffer_custom_malloc(size);
     if (!buf) { file_fn.ti_close(h); return NULL; }
-    file_fn.ti_read(buf, 1, size, h);
+    size_t read = file_fn.ti_read(buf, 1, size, h);
     file_fn.ti_close(h);
+    if (read != size)
+    {
+        mem_buffer_custom_free(buf);
+        return NULL;
+    }
     *out_len = size;
     return buf;
 }
@@ -1076,7 +1081,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_cert_server(
         (struct altcp_tls_ce_config *)mem_malloc(sizeof(*conf));
     if (!conf)
     {
-        for (size_t i = 0; i < n_certs; i++) mem_buffer_custom_free(chain[i]);
+        for (size_t i = 0; i < n_certs; i++) tls_x509_object_free(chain[i]);
         mem_free(chain);
         tls_key_free(key);
         return NULL;
