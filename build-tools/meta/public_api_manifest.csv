@@ -791,3 +791,4 @@ func,tls_hash_clear,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.
 func,tls_hmac_clear,cryptography,src/tls/includes/hmac.h,lwip/cryptography/hmac.h
 func,tls_aes_destroy_ctx,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,altcp_tls_create_config_cert_server,tls_transport,src/include/lwip/altcp_tls.h,lwip/core/altcp_tls.h
+func,altcp_tls_create_config_cert_client,tls_transport,src/include/lwip/altcp_tls.h,lwip/core/altcp_tls.h

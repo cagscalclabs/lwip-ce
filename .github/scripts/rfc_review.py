@@ -68,6 +68,7 @@ def request_json(
     payload: dict[str, Any] | None = None,
     accept: str = "application/vnd.github+json",
     retries: int = 3,
+    timeout: int = 90,
 ) -> Any:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {
@@ -80,7 +81,7 @@ def request_json(
     for attempt in range(retries):
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=90) as response:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
                 raw = response.read()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
@@ -90,6 +91,11 @@ def request_json(
         except urllib.error.URLError as exc:
             if attempt + 1 == retries:
                 raise ReviewError(f"request to {url} failed: {exc.reason}") from exc
+        except TimeoutError as exc:
+            if attempt + 1 == retries:
+                raise ReviewError(
+                    f"request to {url} timed out after {timeout} seconds"
+                ) from exc
         time.sleep(2**attempt)
     raise ReviewError(f"request to {url} failed")
 
@@ -277,6 +283,15 @@ def call_model(
     schema: dict[str, Any],
 ) -> dict[str, Any]:
     url = os.environ.get("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
+    try:
+        timeout = int(os.environ.get("RFC_MODEL_TIMEOUT_SECONDS", "240"))
+        retries = int(os.environ.get("RFC_MODEL_RETRIES", "2"))
+    except ValueError as exc:
+        raise ReviewError("RFC model timeout and retries must be integers") from exc
+    if not 30 <= timeout <= 600 or not 1 <= retries <= 3:
+        raise ReviewError(
+            "RFC model timeout must be 30-600 seconds and retries must be 1-3"
+        )
     payload = {
         "model": model,
         "store": False,
@@ -296,7 +311,10 @@ def call_model(
             }
         },
     }
-    response = request_json(url, token=api_key, method="POST", payload=payload)
+    response = request_json(
+        url, token=api_key, method="POST", payload=payload,
+        retries=retries, timeout=timeout,
+    )
     selected_program = (response.get("access_programs") or {}).get("cyber")
     if selected_program != cyber_program:
         raise ReviewError(
@@ -527,6 +545,44 @@ def self_test() -> int:
                               "src/x.c"}) == [
         ".github/rfc-review-prompt.md", ".github/scripts/rfc_review.py"]
 
+    # A socket read timeout is raised directly as TimeoutError on Python 3.12,
+    # not necessarily wrapped in URLError. It must consume a retry instead of
+    # escaping the gate with a traceback.
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"{}"
+
+    attempts = 0
+    seen_timeouts: list[int] = []
+    original_urlopen = urllib.request.urlopen
+    original_sleep = time.sleep
+
+    def flaky_urlopen(req: object, timeout: int) -> FakeResponse:
+        nonlocal attempts
+        del req
+        attempts += 1
+        seen_timeouts.append(timeout)
+        if attempts == 1:
+            raise TimeoutError("read timed out")
+        return FakeResponse()
+
+    try:
+        urllib.request.urlopen = flaky_urlopen
+        time.sleep = lambda _: None
+        assert request_json(
+            "https://example.invalid", token="test", retries=2, timeout=240
+        ) == {}
+    finally:
+        urllib.request.urlopen = original_urlopen
+        time.sleep = original_sleep
+    assert attempts == 2 and seen_timeouts == [240, 240]
+
     print("RFC review self-tests passed")
     return 0
 
@@ -678,7 +734,8 @@ def main() -> int:
         if not confirmed:
             reason = (
                 "The initial model raised a possible RFC regression, but the independent "
-                f"verification pass did not confirm it. Verifier: {second_summary}"
+                "verification pass did not confirm a qualifying RFC_BREAK. "
+                f"Verifier: {second_summary}"
             )
             if not commit_mode:
                 update_comment(repository, number, github_token, human_comment(reason))

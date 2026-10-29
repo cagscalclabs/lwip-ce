@@ -4270,6 +4270,9 @@ static bool tls_recv_encrypted_extensions(
     return true;
 }
 
+/* TLS 1.3 code point used for both server and client CertificateVerify. */
+#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403
+
 /**
  * @brief Parse a TLS 1.3 server CertificateRequest.
  *
@@ -4291,6 +4294,10 @@ static bool tls_recv_certificate_request(
     size_t ext_len;
     size_t ext_offset = 0;
     bool found_signature_algorithms = false;
+    bool p256_signature = false;
+    bool certificate_authorities_seen = false;
+    bool certificate_authority_match = false;
+    bool oid_filters_compatible = true;
 
     if (!ctx || !data || data_len < 7)
     {
@@ -4422,6 +4429,13 @@ static bool tls_recv_certificate_request(
             if (ext_type == TLS_EXT_SIGNATURE_ALGORITHMS)
             {
                 found_signature_algorithms = true;
+                for (size_t i = 2; i + 1 < ext_data_len; i += 2)
+                {
+                    uint16_t scheme = ((uint16_t)ext_data[i] << 8) |
+                                      ext_data[i + 1];
+                    p256_signature |=
+                        scheme == TLS_SIG_ECDSA_SECP256R1_SHA256;
+                }
             }
         }
         else if (ext_type == TLS_EXT_CERTIFICATE_AUTHORITIES)
@@ -4429,6 +4443,7 @@ static bool tls_recv_certificate_request(
             const uint8_t *ext_data = data + offset + ext_offset;
             size_t names_offset = 2;
             uint16_t names_len;
+            certificate_authorities_seen = true;
             if (ext_data_len < 5)
             {
                 ERROR_CODE(0x7a);
@@ -4454,6 +4469,22 @@ static bool tls_recv_certificate_request(
                 {
                     return false;
                 }
+                for (size_t ci = 0; ci < ctx->client_chain_len; ci++)
+                {
+                    if (!ctx->client_chain || !ctx->client_chain[ci])
+                        break;
+                    const struct tls_x509_object *cert = ctx->client_chain[ci];
+                    /* The list names acceptable issuing CAs. Each chain
+                     * certificate's issuer covers both an omitted root and a
+                     * self-signed root without treating a leaf subject as a
+                     * CA name. */
+                    if (cert->issuer_name_len == name_len &&
+                        memcmp(cert->issuer_name,
+                               ext_data + names_offset, name_len) == 0)
+                    {
+                        certificate_authority_match = true;
+                    }
+                }
                 names_offset += name_len;
             }
         }
@@ -4471,6 +4502,10 @@ static bool tls_recv_certificate_request(
             {
                 return false;
             }
+            /* Matching arbitrary certificate-extension values is not yet
+             * implemented. Sending an identity that ignores a non-empty
+             * filter would violate the server's selection constraint. */
+            oid_filters_compatible = filters_len == 0;
             while (filter_offset < ext_data_len)
             {
                 size_t this_filter = filter_offset;
@@ -4529,6 +4564,18 @@ static bool tls_recv_certificate_request(
         transcript_hash_update(ctx->transcript_hash, data, 4 + msg_len);
     }
     ctx->client_certificate_requested = true;
+    /* certificate_authorities is advisory (RFC 8446 section 4.4.2.2: "SHOULD be
+     * used ... to guide certificate selection"), and servers routinely send a
+     * partial list -- roots only, or a cross-signed twin whose Name encoding
+     * differs from ours. Refusing to present an identity because our issuer is
+     * not named turns an advisory hint into a handshake failure, so a mismatched
+     * list only downgrades a note; oid_filters stays disqualifying because it
+     * states which policies the server will accept. */
+    if (certificate_authorities_seen && !certificate_authority_match)
+        INFO("client cert request: no CA name match (advisory, ignored)");
+    ctx->client_certificate_compatible =
+        ctx->client_key && ctx->client_chain && ctx->client_chain_len > 0 &&
+        p256_signature && oid_filters_compatible;
     return true;
 }
 
@@ -4715,9 +4762,6 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
     tls_secure_memzero(message_hash, sizeof(message_hash));
     return ok;
 }
-
-/* TLS 1.3 code point for ecdsa_secp256r1_sha256 (RFC 8446 §4.2.3). */
-#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403
 
 /**
  * @brief Parse and verify the server's CertificateVerify.
@@ -6093,106 +6137,288 @@ static size_t der_encode_ecdsa_sig(uint8_t *dst, const uint8_t rs[64])
     return 2 + body;
 }
 
-bool tls_server_send_flight(struct tls_handshake_context *ctx,
-                            uint8_t *out, size_t out_cap, size_t *written)
+bool tls_send_client_certificate(struct tls_handshake_context *ctx,
+                                 uint8_t *out, size_t out_len,
+                                 size_t *written)
 {
-    size_t ee_len, fin_len = 0, ext_len;
-    size_t off = 0;
-
-    if (!ctx || !out || !written || ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
+    if (!ctx || !out || !written)
+    {
+        ERROR_CODE(0xc1);
+        return false;
+    }
+    if (ctx->client_flight_step == TLS_CLIENT_FLIGHT_DONE)
+    {
+        *written = 0;
+        return true;
+    }
+    if (!ctx->transcript_hash || !ctx->client_certificate_requested ||
+        ctx->state != TLS_STATE_SERVER_FINISHED_RECEIVED)
     {
         ERROR_CODE(0xc1);
         return false;
     }
 
-    /* EncryptedExtensions is always the first encrypted handshake message in
-     * the server flight (RFC 8446 section 4.1.3).  In certificate mode it must
-     * also be in the transcript signed by CertificateVerify. */
-    ext_len = ctx->negotiated_alpn ? 4u + 2u + 1u + ctx->negotiated_alpn_len : 0u;
-    ee_len = 4 + 2 + ext_len;
-    if (out_cap < off + ee_len + 36)
+    /* Emits the client's response to CertificateRequest one message per call:
+     * Certificate, then CertificateVerify. An identity the request cannot
+     * satisfy produces the empty Certificate and no CertificateVerify
+     * (RFC 8446 section 4.4.2). Splitting it lets the caller frame and encrypt
+     * each message on its own, so no buffer holds both at once. */
+    switch (ctx->client_flight_step)
     {
-        ERROR_CODE(0xc2);
+    case TLS_CLIENT_FLIGHT_CERTIFICATE:
+    {
+        if (!ctx->client_certificate_compatible || !ctx->client_key ||
+            !ctx->client_chain || ctx->client_chain_len == 0)
+        {
+            /* Empty list ends the flight: no CertificateVerify follows. */
+            if (!tls_send_empty_certificate(ctx, out, out_len, written))
+                return false;
+            ctx->client_flight_step = TLS_CLIENT_FLIGHT_DONE;
+            return true;
+        }
+
+        size_t list_len = 0;
+        for (size_t ci = 0; ci < ctx->client_chain_len; ci++)
+        {
+            if (!ctx->client_chain[ci])
+            {
+                ERROR_CODE(0xc9);
+                return false;
+            }
+            size_t der_len = ctx->client_chain[ci]->der_len;
+            if (der_len > 0xfffffau || list_len > 0xffffffu - der_len - 5u)
+            {
+                ERROR_CODE(0xca);
+                return false;
+            }
+            list_len += 3u + der_len + 2u;
+        }
+        size_t cert_body = 1u + 3u + list_len;
+        size_t cert_msg = 4u + cert_body;
+        if (cert_body > 0xffffffu || out_len < cert_msg)
+        {
+            ERROR_CODE(0xcb);
+            return false;
+        }
+
+        out[0] = TLS_HANDSHAKE_CERTIFICATE;
+        out[1] = (uint8_t)(cert_body >> 16);
+        out[2] = (uint8_t)(cert_body >> 8);
+        out[3] = (uint8_t)cert_body;
+        out[4] = 0; /* main-handshake certificate_request_context */
+        out[5] = (uint8_t)(list_len >> 16);
+        out[6] = (uint8_t)(list_len >> 8);
+        out[7] = (uint8_t)list_len;
+        size_t p = 8;
+        for (size_t ci = 0; ci < ctx->client_chain_len; ci++)
+        {
+            size_t der_len = ctx->client_chain[ci]->der_len;
+            out[p++] = (uint8_t)(der_len >> 16);
+            out[p++] = (uint8_t)(der_len >> 8);
+            out[p++] = (uint8_t)der_len;
+            memcpy(out + p, ctx->client_chain[ci]->der, der_len);
+            p += der_len;
+            out[p++] = 0;
+            out[p++] = 0; /* CertificateEntry extensions */
+        }
+        transcript_hash_update(ctx->transcript_hash, out, cert_msg);
+        *written = cert_msg;
+        ctx->client_flight_step = TLS_CLIENT_FLIGHT_CERTIFICATE_VERIFY;
+        return true;
+    }
+
+    case TLS_CLIENT_FLIGHT_CERTIFICATE_VERIFY:
+    {
+        static const char cv_label[] = "TLS 1.3, client CertificateVerify";
+        uint8_t sign_content[64 + sizeof(cv_label) - 1 + 1 + 32];
+        memset(sign_content, 0x20, 64);
+        memcpy(sign_content + 64, cv_label, sizeof(cv_label) - 1);
+        sign_content[64 + sizeof(cv_label) - 1] = 0;
+        struct tls_hash_context snap;
+        tls_hash_context_copy(&snap, ctx->transcript_hash);
+        tls_hash_digest(&snap, sign_content + 64 + sizeof(cv_label));
+        tls_hash_clear(&snap);
+
+        uint8_t raw_sig[64], der_sig[72];
+        size_t raw_sig_len = 0;
+        tls_key_op_result_t sign_rc = tls_key_sign(
+            sign_content, sizeof(sign_content), raw_sig, &raw_sig_len,
+            ctx->client_key, TLS_ALG_ECDSA_SECP256R1_SHA256);
+        tls_secure_memzero(sign_content, sizeof(sign_content));
+        if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(raw_sig))
+        {
+            tls_secure_memzero(raw_sig, sizeof(raw_sig));
+            ERROR_CODE(0xcc);
+            return false;
+        }
+        size_t der_sig_len = der_encode_ecdsa_sig(der_sig, raw_sig);
+        tls_secure_memzero(raw_sig, sizeof(raw_sig));
+
+        size_t cv_body = 4u + der_sig_len;
+        size_t cv_msg = 4u + cv_body;
+        if (out_len < cv_msg)
+        {
+            ERROR_CODE(0xcd);
+            return false;
+        }
+        out[0] = TLS_HANDSHAKE_CERTIFICATE_VERIFY;
+        out[1] = (uint8_t)(cv_body >> 16);
+        out[2] = (uint8_t)(cv_body >> 8);
+        out[3] = (uint8_t)cv_body;
+        out[4] = (uint8_t)(TLS_SIG_ECDSA_SECP256R1_SHA256 >> 8);
+        out[5] = (uint8_t)TLS_SIG_ECDSA_SECP256R1_SHA256;
+        out[6] = (uint8_t)(der_sig_len >> 8);
+        out[7] = (uint8_t)der_sig_len;
+        memcpy(out + 8, der_sig, der_sig_len);
+        transcript_hash_update(ctx->transcript_hash, out, cv_msg);
+        *written = cv_msg;
+        ctx->client_flight_step = TLS_CLIENT_FLIGHT_DONE;
+        return true;
+    }
+
+    default:
+        *written = 0;
+        return true;
+    }
+}
+
+bool tls_server_send_flight(struct tls_handshake_context *ctx,
+                            uint8_t *out, size_t out_cap, size_t *written)
+{
+    if (!ctx || !out || !written)
+    {
+        ERROR_CODE(0xc1);
         return false;
     }
-    out[off + 0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;
-    out[off + 1] = 0;
-    out[off + 2] = (uint8_t)((2 + ext_len) >> 8);
-    out[off + 3] = (uint8_t)(2 + ext_len);
-    out[off + 4] = (uint8_t)(ext_len >> 8);
-    out[off + 5] = (uint8_t)ext_len;
-    if (ctx->negotiated_alpn)
+    /* Already complete: report "no more messages" rather than an error, even
+     * though the state has moved on past the flight. */
+    if (ctx->server_flight_step == TLS_SERVER_FLIGHT_DONE)
     {
-        size_t p = off + 6, list = 1u + ctx->negotiated_alpn_len;
-        out[p++] = (uint8_t)(TLS_EXT_ALPN >> 8);
-        out[p++] = (uint8_t)TLS_EXT_ALPN;
-        out[p++] = (uint8_t)((2 + list) >> 8);
-        out[p++] = (uint8_t)(2 + list);
-        out[p++] = (uint8_t)(list >> 8);
-        out[p++] = (uint8_t)list;
-        out[p++] = ctx->negotiated_alpn_len;
-        memcpy(out + p, ctx->negotiated_alpn, ctx->negotiated_alpn_len);
+        *written = 0;
+        return true;
     }
-    transcript_hash_update(ctx->transcript_hash, out + off, ee_len);
-    off += ee_len;
-
-    /* --- Certificate + CertificateVerify (cert mode only) --- */
-    if (ctx->server_cert && ctx->server_key && ctx->server_chain_len > 0)
+    if (!ctx->transcript_hash || ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
     {
-        /* Compute total cert_list size: for each entry: 3+der_len+2 */
+        ERROR_CODE(0xc1);
+        return false;
+    }
+
+    /* Emits the flight one handshake message per call, in order:
+     * EncryptedExtensions, Certificate, CertificateVerify, Finished
+     * (RFC 8446 section 4.1.3). Splitting it lets the caller frame and encrypt
+     * each message on its own, so no buffer has to hold the whole flight.
+     * The transcript is updated in exactly the same order as before, so the
+     * Finished and CertificateVerify inputs are unchanged. */
+    switch (ctx->server_flight_step)
+    {
+    case TLS_SERVER_FLIGHT_ENCRYPTED_EXTENSIONS:
+    {
+        /* EncryptedExtensions is always the first encrypted handshake message
+         * and must be inside the transcript signed by CertificateVerify. */
+        size_t ext_len = ctx->negotiated_alpn
+                         ? 4u + 2u + 1u + ctx->negotiated_alpn_len : 0u;
+        size_t ee_len = 4u + 2u + ext_len;
+        if (out_cap < ee_len)
+        {
+            ERROR_CODE(0xc2);
+            return false;
+        }
+        out[0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;
+        out[1] = 0;
+        out[2] = (uint8_t)((2 + ext_len) >> 8);
+        out[3] = (uint8_t)(2 + ext_len);
+        out[4] = (uint8_t)(ext_len >> 8);
+        out[5] = (uint8_t)ext_len;
+        if (ctx->negotiated_alpn)
+        {
+            size_t p = 6, list = 1u + ctx->negotiated_alpn_len;
+            out[p++] = (uint8_t)(TLS_EXT_ALPN >> 8);
+            out[p++] = (uint8_t)TLS_EXT_ALPN;
+            out[p++] = (uint8_t)((2 + list) >> 8);
+            out[p++] = (uint8_t)(2 + list);
+            out[p++] = (uint8_t)(list >> 8);
+            out[p++] = (uint8_t)list;
+            out[p++] = ctx->negotiated_alpn_len;
+            memcpy(out + p, ctx->negotiated_alpn, ctx->negotiated_alpn_len);
+        }
+        transcript_hash_update(ctx->transcript_hash, out, ee_len);
+        *written = ee_len;
+        /* Without a certificate there is nothing between EE and Finished. */
+        ctx->server_flight_step =
+            (ctx->server_cert && ctx->server_key && ctx->server_chain_len > 0)
+            ? TLS_SERVER_FLIGHT_CERTIFICATE : TLS_SERVER_FLIGHT_FINISHED;
+        return true;
+    }
+
+    case TLS_SERVER_FLIGHT_CERTIFICATE:
+    {
+        /* certificate_list: per entry 3-byte length + DER + 2-byte extensions */
         size_t list_len = 0;
         for (size_t ci = 0; ci < ctx->server_chain_len; ci++)
-            list_len += 3 + ctx->server_chain[ci]->der_len + 2;
+        {
+            if (!ctx->server_chain[ci])
+            {
+                ERROR_CODE(0xc3);
+                return false;
+            }
+            size_t der_len = ctx->server_chain[ci]->der_len;
+            if (der_len > 0xfffffau || list_len > 0xffffffu - der_len - 5u)
+            {
+                /* certificate_list is a 24-bit length; refuse rather than
+                 * silently truncate the field. */
+                ERROR_CODE(0xc4);
+                return false;
+            }
+            list_len += 3u + der_len + 2u;
+        }
 
-        /* Certificate message body: 1 (context_len) + 3 (list_len) + list */
-        size_t cert_body = 1 + 3 + list_len;
-        size_t cert_msg  = 4 + cert_body;
-
-        /* CertificateVerify body: 2 (scheme) + 2 (sig len) + up to 72 (DER sig) */
-        size_t cv_max = 4 + 2 + 2 + 72;
-
-        if (out_cap < off + cert_msg + cv_max + 200 /* EE+Fin headroom */)
+        size_t cert_body = 1u + 3u + list_len;
+        size_t cert_msg  = 4u + cert_body;
+        if (cert_body > 0xffffffu || out_cap < cert_msg)
         {
             ERROR_CODE(0xc5);
             return false;
         }
 
-        /* Build Certificate message header */
-        out[off + 0] = TLS_HANDSHAKE_CERTIFICATE; /* 0x0b */
-        out[off + 1] = (uint8_t)(cert_body >> 16);
-        out[off + 2] = (uint8_t)(cert_body >> 8);
-        out[off + 3] = (uint8_t)(cert_body);
-        out[off + 4] = 0x00; /* context_len */
-        out[off + 5] = (uint8_t)(list_len >> 16);
-        out[off + 6] = (uint8_t)(list_len >> 8);
-        out[off + 7] = (uint8_t)(list_len);
-        size_t ep = off + 8;
+        out[0] = TLS_HANDSHAKE_CERTIFICATE;
+        out[1] = (uint8_t)(cert_body >> 16);
+        out[2] = (uint8_t)(cert_body >> 8);
+        out[3] = (uint8_t)cert_body;
+        out[4] = 0x00; /* context_len */
+        out[5] = (uint8_t)(list_len >> 16);
+        out[6] = (uint8_t)(list_len >> 8);
+        out[7] = (uint8_t)list_len;
+        size_t ep = 8;
         for (size_t ci = 0; ci < ctx->server_chain_len; ci++)
         {
             size_t der_len = ctx->server_chain[ci]->der_len;
             out[ep++] = (uint8_t)(der_len >> 16);
             out[ep++] = (uint8_t)(der_len >> 8);
-            out[ep++] = (uint8_t)(der_len);
+            out[ep++] = (uint8_t)der_len;
             memcpy(out + ep, ctx->server_chain[ci]->der, der_len);
             ep += der_len;
             out[ep++] = 0x00; /* extensions len hi */
             out[ep++] = 0x00; /* extensions len lo */
         }
-        transcript_hash_update(ctx->transcript_hash, out + off, cert_msg);
-        off += cert_msg;
+        transcript_hash_update(ctx->transcript_hash, out, cert_msg);
+        *written = cert_msg;
+        ctx->server_flight_step = TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY;
+        return true;
+    }
 
-        /* Build signing content: 64×0x20 || label || 0x00 || transcript_hash */
+    case TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY:
+    {
+        /* 64x0x20 || label || 0x00 || transcript through Certificate */
         static const char cv_label[] = "TLS 1.3, server CertificateVerify";
-        uint8_t sign_content[64 + 33 + 1 + 32];
+        uint8_t sign_content[64 + sizeof(cv_label) - 1 + 1 + 32];
         memset(sign_content, 0x20, 64);
-        memcpy(sign_content + 64, cv_label, 33);
-        sign_content[64 + 33] = 0x00;
+        memcpy(sign_content + 64, cv_label, sizeof(cv_label) - 1);
+        sign_content[64 + sizeof(cv_label) - 1] = 0x00;
         struct tls_hash_context snap;
         tls_hash_context_copy(&snap, ctx->transcript_hash);
-        tls_hash_digest(&snap, sign_content + 64 + 33 + 1);
+        tls_hash_digest(&snap, sign_content + 64 + sizeof(cv_label));
         tls_hash_clear(&snap);
 
-        /* Sign with private key */
         uint8_t raw_sig[64];
         size_t  raw_sig_len = 0;
         tls_key_op_result_t sign_rc = tls_key_sign(
@@ -6200,38 +6426,54 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
             raw_sig, &raw_sig_len,
             ctx->server_key, TLS_ALG_ECDSA_SECP256R1_SHA256);
         tls_secure_memzero(sign_content, sizeof sign_content);
-        if (sign_rc != TLS_KEY_OP_OK)
+        if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(raw_sig))
         {
+            tls_secure_memzero(raw_sig, sizeof(raw_sig));
             ERROR_CODE(0xc6);
             return false;
         }
 
-        /* DER-encode the signature */
         uint8_t der_sig[72];
-        size_t  der_sig_len = der_encode_ecdsa_sig(der_sig, raw_sig);
+        size_t der_sig_len = der_encode_ecdsa_sig(der_sig, raw_sig);
         tls_secure_memzero(raw_sig, sizeof raw_sig);
 
-        /* Build CertificateVerify message */
-        size_t cv_body = 2 + 2 + der_sig_len;
-        out[off + 0] = 0x0f; /* CertificateVerify */
-        out[off + 1] = (uint8_t)(cv_body >> 16);
-        out[off + 2] = (uint8_t)(cv_body >> 8);
-        out[off + 3] = (uint8_t)(cv_body);
-        out[off + 4] = 0x04; /* ecdsa_secp256r1_sha256 hi */
-        out[off + 5] = 0x03; /* ecdsa_secp256r1_sha256 lo */
-        out[off + 6] = (uint8_t)(der_sig_len >> 8);
-        out[off + 7] = (uint8_t)(der_sig_len);
-        memcpy(out + off + 8, der_sig, der_sig_len);
-        size_t cv_msg = 4 + cv_body;
-        transcript_hash_update(ctx->transcript_hash, out + off, cv_msg);
-        off += cv_msg;
+        size_t cv_body = 2u + 2u + der_sig_len;
+        size_t cv_msg  = 4u + cv_body;
+        if (out_cap < cv_msg)
+        {
+            ERROR_CODE(0xc8);
+            return false;
+        }
+        out[0] = TLS_HANDSHAKE_CERTIFICATE_VERIFY;
+        out[1] = (uint8_t)(cv_body >> 16);
+        out[2] = (uint8_t)(cv_body >> 8);
+        out[3] = (uint8_t)cv_body;
+        out[4] = (uint8_t)(TLS_SIG_ECDSA_SECP256R1_SHA256 >> 8);
+        out[5] = (uint8_t)TLS_SIG_ECDSA_SECP256R1_SHA256;
+        out[6] = (uint8_t)(der_sig_len >> 8);
+        out[7] = (uint8_t)der_sig_len;
+        memcpy(out + 8, der_sig, der_sig_len);
+        transcript_hash_update(ctx->transcript_hash, out, cv_msg);
+        *written = cv_msg;
+        ctx->server_flight_step = TLS_SERVER_FLIGHT_FINISHED;
+        return true;
     }
 
-    if (!tls_send_finished(ctx, false, out + off, out_cap - off, &fin_len))
-        return false;
-    *written = off + fin_len;
-    ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
-    return true;
+    case TLS_SERVER_FLIGHT_FINISHED:
+    {
+        size_t fin_len = 0;
+        if (!tls_send_finished(ctx, false, out, out_cap, &fin_len))
+            return false;
+        *written = fin_len;
+        ctx->server_flight_step = TLS_SERVER_FLIGHT_DONE;
+        ctx->state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+        return true;
+    }
+
+    default:
+        *written = 0;
+        return true;
+    }
 }
 
 bool tls_server_recv_finished(struct tls_handshake_context *ctx,

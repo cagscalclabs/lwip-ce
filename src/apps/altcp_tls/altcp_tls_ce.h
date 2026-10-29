@@ -100,12 +100,16 @@ struct altcp_tls_ce_config {
     uint8_t *alpn_protocols;
     size_t alpn_protocols_len;
 
-    /* Certificate chain + private key for cert-authenticated server mode.
+    /* Certificate chain + private key for certificate authentication.
      * server_chain[0] is the leaf; intermediates follow. Owned by this config,
      * freed in altcp_tls_ce_free_config. NULL = PSK-only mode. */
     struct tls_x509_object **server_chain;
     size_t                   server_chain_len;
     struct tls_key          *server_key;
+    /* Optional client identity used only when a server sends CertificateRequest. */
+    struct tls_x509_object **client_chain;
+    size_t                   client_chain_len;
+    struct tls_key          *client_key;
 };
 
 /**
@@ -157,6 +161,13 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_cert_server(
  */
 struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     const char *hostname
+);
+
+/** Create a full-ECDHE client config with a local P-256 certificate identity. */
+struct altcp_tls_ce_config *altcp_tls_ce_create_config_cert_client(
+    const char *hostname,
+    const char *privkey_appvar,
+    const char *chain_appvar
 );
 
 /**

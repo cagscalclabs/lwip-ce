@@ -5,6 +5,7 @@ Like the WS host tests, compile selected production code with platform mocks.
 These tests check routing and lifecycle; they do not test RSA arithmetic.
 """
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -274,14 +275,31 @@ vectors = {
     'cert_ec': cert(pkcs, ec_spki), 'cert_mismatch': cert(pss, inner=pkcs),
 }
 
-source = (here / 'mock.h').read_text() + '\n#include "ip_identity.h"\n'
+source = (here / 'mock.h').read_text() + '\n#include "ip_identity.h"\n#include "base64.h"\n'
 source += function(x509, 'tls_ecdsa_parse_int')
 source += x509[x509.index('static bool tls_x509_is_string_tag'):x509.index('static bool tls_x509_decode_pem_certificate')]
 source += x509[x509.index('static const uint8_t oid_rsa_encryption'):]
+# PEM decode/import/free, so parse_cert_chain (cert config load) can be driven.
+source += x509[x509.index('static void *tls_x509_alloc'):x509.index('static bool tls_x509_is_string_tag')]
+source += x509[x509.index('static bool tls_x509_decode_pem_certificate'):
+               x509.index('static const uint8_t oid_rsa_encryption')]
 key_source = (root / 'src/tls/core/key.c').read_text()
 source += function((root / 'src/tls/core/rsa.c').read_text(), 'tls_rsa_public_key_shape_ok')
-# tls_p256_sign lives in eZ80 assembly; stub it out for the host build.
-source += 'static bool tls_p256_sign(uint8_t *sig, const uint8_t *hash, const uint8_t *priv) { (void)sig; (void)hash; (void)priv; return false; }\n'
+# tls_p256_sign lives in eZ80 assembly; stub it for the host build. The client
+# CertificateVerify test drives it with a known r||s so the DER encoding and the
+# message framing can be checked byte for byte; every other test sees failure.
+source += ('static bool test_p256_sign_ok;\n'
+           'static const uint8_t test_p256_sign_rs[64] = {\n'
+           '    0x80, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,\n'
+           '    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,\n'
+           '    0x00, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,\n'
+           '    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f };\n'
+           'static bool tls_p256_sign(uint8_t *sig, const uint8_t *hash, const uint8_t *priv) {\n'
+           '    (void)hash; (void)priv;\n'
+           '    if (!test_p256_sign_ok) return false;\n'
+           '    memcpy(sig, test_p256_sign_rs, sizeof(test_p256_sign_rs));\n'
+           '    return true;\n'
+           '}\n')
 for name in ['tls_key_verify', 'tls_key_sign']:
     source += function(key_source, name)
 # Include internal AES helpers and blob helpers (not aes_encrypt_oneshot, which is mocked).
@@ -290,6 +308,22 @@ source += key_source[key_source.index('/* --------------------------------------
 for name in ['tls_cipher_blob_free', 'tls_cipher_encrypt', 'tls_cipher_encrypt_aad']:
     source += function(key_source, name)
 source += hs[hs.index('enum tls_cert_walk_state'):hs.index('/* Feed body bytes into the walker.')]
+
+# Certificate-chain splitting used when a cert listener/client config loads its
+# AppVars. Driven with an exactly-sized, non-NUL-terminated buffer so ASan
+# catches any overread of the kind read_appvar_pem() produces.
+altcp_src = (root / 'src/apps/altcp_tls/altcp_tls_ce.c').read_text()
+source += ('static void *mem_malloc(size_t n) { return malloc(n); }\n'
+           'static void mem_free(void *p) { free(p); }\n')
+_m = re.search(r"^static [\w \*]+parse_cert_chain\([^;]*?\)\s*\{", altcp_src, re.M)
+assert _m, "parse_cert_chain"
+_pos = _m.end()
+_depth = 1
+while _depth:
+    _depth += (altcp_src[_pos] == "{") - (altcp_src[_pos] == "}")
+    _pos += 1
+source += altcp_src[_m.start():_pos] + "\n"
+source += '#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403\n'
 for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_digest',
              'tls_parse_handshake_header',
              'tls_cipher_suite_supported',
@@ -301,11 +335,32 @@ for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_
              'tls_recv_server_hello',
              'tls_recv_encrypted_extensions', 'tls_recv_certificate_request',
              'tls_recv_certificate_streamed', 'tls_certverify_rsa_pss_sha256',
+             'tls_send_empty_certificate', 'der_encode_integer',
+             'der_encode_ecdsa_sig', 'tls_send_client_certificate',
              'tls_hs_defer_bytes', 'tls_cert_jobs_pending', 'tls_cert_jobs_step',
              'tls_handshake_cleanup']:
     source += function(hs, name)
 for name, data in vectors.items():
     source += f'static const uint8_t {name}[] = {{' + ','.join(map(str, data)) + '};\n'
+
+# A PEM fullchain, exactly as an AppVar would hold it (no trailing NUL).
+import base64 as _b64
+
+
+def _pem(der: bytes) -> str:
+    body = _b64.b64encode(der).decode()
+    lines = '\n'.join(body[i:i + 64] for i in range(0, len(body), 64))
+    return ('-----BEGIN CERTIFICATE-----\n' + lines +
+            '\n-----END CERTIFICATE-----\n')
+
+
+_chain_pem = (_pem(bytes(vectors['cert_ec'])) + _pem(bytes(vectors['cert_mismatch'])))
+source += ('static const uint8_t chain_pem[] = {' +
+           ','.join(str(b) for b in _chain_pem.encode()) + '};\n')
+source += 'static const uint8_t single_pem[] = {' + \
+          ','.join(str(b) for b in _pem(bytes(vectors['cert_ec'])).encode()) + '};\n'
+source += f'#define CERT_EC_DER_LEN {len(vectors["cert_ec"])}\n'
+source += f'#define CERT_MISMATCH_DER_LEN {len(vectors["cert_mismatch"])}\n'
 # Exercise the real matcher with DER SANs, including negative identities.
 import ipaddress
 
@@ -373,5 +428,6 @@ with tempfile.TemporaryDirectory() as tmp:
                     '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                     '-I' + str(tmp), '-I' + str(root / 'src/tls/includes'),
                     '-I' + str(root / 'src/tls/core'), str(unit),
-                    str(root / 'src/tls/core/asn1.c'), '-o', str(binary)], check=True)
+                    str(root / 'src/tls/core/asn1.c'),
+                   str(root / 'src/tls/core/base64.c'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

@@ -478,3 +478,4 @@ tls_aes_destroy_ctx
 tls_aes_pkcs7_apply
 tls_aes_pkcs7_remove
 altcp_tls_create_config_cert_server
+altcp_tls_create_config_cert_client

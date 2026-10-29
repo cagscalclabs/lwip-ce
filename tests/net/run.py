@@ -347,6 +347,8 @@ class Control:
         self.last_request = ""
         self.endpoint_selected: dict[str, tuple[str, str]] = {}
         self.last_group = "-"
+        self.socket_tls_result: str | None = None
+        self.socket_tls_thread: threading.Thread | None = None
         (tmp / "bulk.bin").write_bytes(pattern(0, 131072))
         threading.Thread(target=self.serve, daemon=True).start()
 
@@ -692,10 +694,12 @@ class Control:
         peer.stop()
         return "echo" if "lwip-ce psk server check" in peer.output else f"ERR {peer.output[-70:]!r}"
 
-    def cmd_cert_client(self, port: str) -> str:
+    def cmd_cert_client(self, port: str, suite: str = "server") -> str:
         """Connect to calc acting as a cert-authenticated TLS 1.3 server.
         Trust the exact self-signed certificate generated for this suite."""
-        ca_file = HERE / "server/lwIPSCRT.pem"
+        if suite not in {"server", "sockets"}:
+            return f"ERR invalid certificate suite {suite!r}"
+        ca_file = HERE / suite / "lwIPSCRT.pem"
         peer = OpenSSL(["s_client", "-connect", f"{CALC}:{port}",
                         "-tls1_3", "-CAfile", str(ca_file),
                         "-verify_return_error", "-quiet"],
@@ -711,6 +715,40 @@ class Control:
             return "echo"
         log("certificate s_client output:\n" + peer.output)
         return f"ERR {peer.output[-70:]!r}"
+
+    def cmd_socket_tls_start(self, mode: str, port: str) -> str:
+        """Start a TLS client without blocking the calculator's control call.
+
+        The calculator must return from host_call() so it can accept the socket
+        peer and echo the application bytes through lwip_socket_*.
+        """
+        if mode not in {"psk", "cert"}:
+            return f"ERR invalid socket TLS mode {mode!r}"
+        if self.socket_tls_thread and self.socket_tls_thread.is_alive():
+            return "ERR previous socket TLS client still running"
+        self.socket_tls_result = None
+
+        def run() -> None:
+            try:
+                if mode == "psk":
+                    result = self.cmd_psk_client(port, "gcm", "x25519")
+                else:
+                    result = self.cmd_cert_client(port, "sockets")
+            except Exception as exc:  # noqa: BLE001
+                result = f"ERR {type(exc).__name__}: {exc}"
+            self.socket_tls_result = result
+
+        self.socket_tls_thread = threading.Thread(target=run, daemon=True)
+        self.socket_tls_thread.start()
+        return "OK"
+
+    def cmd_socket_tls_result(self) -> str:
+        # Longer than cmd_cert_client's own 60 s wait plus its 2 s settle:
+        # reporting early would fail a handshake that is still progressing.
+        deadline = time.monotonic() + 75
+        while self.socket_tls_result is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+        return self.socket_tls_result or "ERR socket TLS client did not finish"
 
     # -- perf -----------------------------------------------------------------
 

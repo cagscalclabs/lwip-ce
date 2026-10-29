@@ -130,6 +130,40 @@ An example use case is given below:
     * Use s directly in socket calls, then release the owned handle. */
    lwip_socket_destroy(s);
 
+Using TLS
+-----------
+
+The TLS flow is semi-automatic, with some setters to control specific behavior.
+
+If you simply call ``lwip_socket_create`` with type ``LWIP_SOCKET_ALTCP_TLS`` and then subsequently call ``lwip_socket_connect``, the calculator chooses TLS client mode automatically; conversely if you call ``lwip_socket_listen`` the calculator chooses TLS server mode. From there, the mode forks a bit.
+
+Client Mode: As Client, the calculator checks its PSK cache for a valid session resumption/PSK ticket for the remote endpoint. If it finds one, it uses the PSK identity and PSK mode for that connection. If not, it selects ECDSA/full handshake mode. This is automatic and doesn't require explicit handling.
+
+mTLS Client: the Client MAY call ``lwip_socket_set_tls_cert(sock, privkey_appvar, chain_appvar)`` to present an identity. When the server sends a ``CertificateRequest``, the Client replies with its ``Certificate`` and ``CertificateVerify``; if the request cannot be satisfied (no ECDSA P-256 scheme, non-empty oid_filters) it sends an empty Certificate instead. Configuring a client certificate disables PSK for that socket, so mTLS always performs a full handshake.
+
+Server (PSK or Certificate mode): As server, you MUST use a configuration setter to choose PSK mode or Certificate mode. If this is not done, the server fails-closed on ``lwip_socket_listen``. Code may call ``lwip_socket_set_tls_psk`` to set PSK mode or ``lwip_socket_set_tls_cert`` to set Certificate mode.
+
+.. c:function:: lwip_error_t lwip_socket_set_tls_cert(struct lwip_socket *socket, const char *privkey_appvar, const char *chain_appvar);
+
+   Sets the **filenames** of TI AppVars containing the private key and fullchain (or certificate for a self-signed leaf).
+
+   :param socket: An ``ALTCP_TLS`` socket handle.
+   :param privkey_appvar: Name of a TI AppVar containing the private key that will be used to sign the leaf certificate.
+   :param chain_appvar: Name of a TI AppVar containing the full Certificate chain that will be used.
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_STATE`` if socket status not INIT, ``LWIP_ERR_ARG`` if ``socket``, ``privkey_appvar`` or ``chain_appvar`` are not provided. 
+   :note: Appvar names are limited to 8 characters, PSK identity must be non-empty and <= TLS_PSK_IDENTITY_MAX_LEN. If multiple identities set, Certificate modes take precedence.
+
+.. c:function:: lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket, const uint8_t psk[32], const uint8_t *identity, size_t identity_len);
+
+   Configures a pre-shared key, for either role: a Client presents it when connecting, a Server requires it from connecting Clients. The key is held in the socket, so the buffer does not need to outlive the call.
+
+   :param socket: An ``ALTCP_TLS`` socket handle.
+   :param psk: 32-byte pre-shared key, copied into the socket.
+   :param identity: PSK identity bytes, copied into the socket. Not NUL-terminated: give the exact length.
+   :param identity_len: Length of ``identity`` in bytes, 1 to ``TLS_PSK_IDENTITY_MAX_LEN`` (256).
+   :returns: ``LWIP_OK`` on success, ``LWIP_ERR_STATE`` if socket status not INIT, ``LWIP_ERR_ARG`` if ``socket`` or ``psk`` are NULL, ``identity`` is NULL or ``identity_len`` is out of range.
+   :note: If an identity and a certificate are both configured, Certificate mode takes precedence. The first ``lwip_socket_connect`` or ``lwip_socket_listen`` locks the configuration.
+
 Using Websockets
 ------------------
 

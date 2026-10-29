@@ -2473,6 +2473,11 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
 }
 #endif /* LWIP_TCP */
 
+static err_t socket_altcp_accept_cb(void *arg, struct altcp_pcb *newpcb, err_t err);
+#if LWIP_TCP
+static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err);
+#endif
+
 /* Re-bind the underlying pcb's callbacks to our shim functions. Called
  * from create() and again from set_poll() when the interval changes. */
 static void rebind_pcb_callbacks(struct lwip_socket *c)
@@ -2488,10 +2493,17 @@ static void rebind_pcb_callbacks(struct lwip_socket *c)
         if (c->pcb.altcp)
         {
             altcp_arg(c->pcb.altcp, c);
-            altcp_recv(c->pcb.altcp, conn_altcp_recv_cb);
-            altcp_sent(c->pcb.altcp, conn_altcp_sent_cb);
-            altcp_err(c->pcb.altcp, conn_altcp_err_cb);
-            altcp_poll(c->pcb.altcp, conn_altcp_poll_cb, 4);
+            if (c->is_listen)
+            {
+                altcp_accept(c->pcb.altcp, socket_altcp_accept_cb);
+            }
+            else
+            {
+                altcp_recv(c->pcb.altcp, conn_altcp_recv_cb);
+                altcp_sent(c->pcb.altcp, conn_altcp_sent_cb);
+                altcp_err(c->pcb.altcp, conn_altcp_err_cb);
+                altcp_poll(c->pcb.altcp, conn_altcp_poll_cb, 4);
+            }
         }
         break;
 #if LWIP_TCP
@@ -2499,10 +2511,17 @@ static void rebind_pcb_callbacks(struct lwip_socket *c)
         if (c->pcb.tcp)
         {
             tcp_arg(c->pcb.tcp, c);
-            tcp_recv(c->pcb.tcp, conn_tcp_recv_cb);
-            tcp_sent(c->pcb.tcp, conn_tcp_sent_cb);
-            tcp_err(c->pcb.tcp, conn_tcp_err_cb);
-            tcp_poll(c->pcb.tcp, conn_tcp_poll_cb, 4);
+            if (c->is_listen)
+            {
+                tcp_accept(c->pcb.tcp, socket_tcp_accept_cb);
+            }
+            else
+            {
+                tcp_recv(c->pcb.tcp, conn_tcp_recv_cb);
+                tcp_sent(c->pcb.tcp, conn_tcp_sent_cb);
+                tcp_err(c->pcb.tcp, conn_tcp_err_cb);
+                tcp_poll(c->pcb.tcp, conn_tcp_poll_cb, 4);
+            }
         }
         break;
 #endif
@@ -2646,7 +2665,8 @@ lwip_error_t lwip_socket_set_tls_cert(struct lwip_socket *socket,
 {
     if (!socket || socket->protocol != (uint8_t)LWIP_SOCKET_ALTCP_TLS)
         return LWIP_ERR_ARG;
-    if (!privkey_appvar || !chain_appvar)
+    if (!privkey_appvar || !chain_appvar ||
+        privkey_appvar[0] == '\0' || chain_appvar[0] == '\0')
         return LWIP_ERR_ARG;
     if (strlen(privkey_appvar) > 8 || strlen(chain_appvar) > 8)
         return LWIP_ERR_ARG;
@@ -2692,7 +2712,11 @@ static void lwip_socket_detach_pcb_callbacks(struct lwip_socket *conn)
         if (conn->pcb.tcp)
         {
             tcp_arg(conn->pcb.tcp, NULL);
-            if (!conn->is_listen)
+            if (conn->is_listen)
+            {
+                tcp_accept(conn->pcb.tcp, NULL);
+            }
+            else
             {
                 /* tcp_recv/sent/err/poll are only valid on connected PCBs,
                  * not on the listen PCB produced by tcp_listen(). */
@@ -2717,10 +2741,19 @@ static void lwip_socket_detach_pcb_callbacks(struct lwip_socket *conn)
         if (conn->pcb.altcp)
         {
             altcp_arg(conn->pcb.altcp, NULL);
-            altcp_recv(conn->pcb.altcp, NULL);
-            altcp_sent(conn->pcb.altcp, NULL);
-            altcp_err(conn->pcb.altcp, NULL);
-            altcp_poll(conn->pcb.altcp, NULL, conn->pcb.altcp->pollinterval);
+            if (conn->is_listen)
+            {
+                /* ALTCP poll setters ultimately call tcp_poll(), which is
+                 * invalid for the underlying LISTEN PCB. */
+                altcp_accept(conn->pcb.altcp, NULL);
+            }
+            else
+            {
+                altcp_recv(conn->pcb.altcp, NULL);
+                altcp_sent(conn->pcb.altcp, NULL);
+                altcp_err(conn->pcb.altcp, NULL);
+                altcp_poll(conn->pcb.altcp, NULL, conn->pcb.altcp->pollinterval);
+            }
         }
         break;
     default:
@@ -2741,11 +2774,20 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
         struct lwip_socket *q = conn->accept_queue;
         conn->accept_queue = q->accept_next;
         conn_registry_remove(q);
-        if (q->pcb.tcp)
+        if (q->protocol == LWIP_SOCKET_TCP && q->pcb.tcp)
         {
             tcp_arg(q->pcb.tcp, NULL);
             /* ERROR_AUDIT: destroy-owned queued peer cleanup. */
             tcp_abort(q->pcb.tcp);
+        }
+        else if ((q->protocol == LWIP_SOCKET_ALTCP ||
+                  q->protocol == LWIP_SOCKET_ALTCP_TLS ||
+                  q->protocol == LWIP_SOCKET_ALTCP_WS ||
+                  q->protocol == LWIP_SOCKET_ALTCP_WSS) && q->pcb.altcp)
+        {
+            altcp_arg(q->pcb.altcp, NULL);
+            /* ERROR_AUDIT: destroy-owned queued ALTCP peer cleanup. */
+            altcp_abort(q->pcb.altcp);
         }
         lwip_socket_rx_ring_destroy(q);
         mem_free(q);
@@ -2916,7 +2958,12 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
      * both until connect() so the SNI hostname is in hand. */
     if (conn->protocol == LWIP_SOCKET_ALTCP_TLS && conn->pcb.altcp == NULL)
     {
-        if (conn->tls_psk_identity_len > 0)
+        if (conn->tls_key_appvar[0] != '\0')
+        {
+            conn->tls_conf = altcp_tls_ce_create_config_cert_client(
+                host, conn->tls_key_appvar, conn->tls_cert_appvar);
+        }
+        else if (conn->tls_psk_identity_len > 0)
         {
             struct tls_psk_identity id;
             memset(&id, 0, sizeof(id));
@@ -3319,7 +3366,7 @@ lwip_error_t lwip_socket_listen(struct lwip_socket *conn, uint16_t port)
             memset(&id, 0, sizeof(id));
             memcpy(id.identity, conn->tls_psk_identity,
                    conn->tls_psk_identity_len);
-            id.identity_len = (uint8_t)conn->tls_psk_identity_len;
+            id.identity_len = conn->tls_psk_identity_len;
             conf = altcp_tls_ce_create_config_psk_server(conn->tls_psk, &id);
         }
         else

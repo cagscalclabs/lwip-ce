@@ -229,6 +229,198 @@ static void hrr_keyshare_tests(void)
     tls_handshake_cleanup(&ctx);
 }
 
+
+/* The client's mTLS flight: Certificate + CertificateVerify as produced by
+ * tls_send_client_certificate(). Exercised here rather than over the network
+ * because a test server cannot be trusted by the calculator (the trust store
+ * is a signed AppVar and there is no override), so an end-to-end client mTLS
+ * handshake cannot get past server certificate verification in the harness. */
+
+/* parse_cert_chain() turns an AppVar of PEM into the configured chain. Fed with
+ * an exactly-sized, non-NUL-terminated buffer, the shape read_appvar_pem()
+ * allocates, so ASan reports any overread past the PEM text. */
+static void parse_cert_chain_tests(void)
+{
+    size_t n = 0;
+
+    struct tls_x509_object **chain =
+        parse_cert_chain((const char *)chain_pem, sizeof(chain_pem), &n);
+    assert(chain != NULL);
+    assert(n == 2);
+    assert(chain[0] && chain[1]);
+    assert(chain[0]->der_len == CERT_EC_DER_LEN);
+    assert(chain[1]->der_len == CERT_MISMATCH_DER_LEN);
+    assert(memcmp(chain[0]->der, cert_ec, CERT_EC_DER_LEN) == 0);
+    assert(memcmp(chain[1]->der, cert_mismatch, CERT_MISMATCH_DER_LEN) == 0);
+    for (size_t i = 0; i < n; i++)
+        tls_x509_object_free(chain[i]);
+    mem_free(chain);
+
+    /* A single certificate is the self-signed case. */
+    n = 0;
+    chain = parse_cert_chain((const char *)single_pem, sizeof(single_pem), &n);
+    assert(chain != NULL && n == 1);
+    assert(chain[0]->der_len == CERT_EC_DER_LEN);
+    tls_x509_object_free(chain[0]);
+    mem_free(chain);
+
+    /* No banner at all: refused, not a partial chain. */
+    static const char junk[] = "not a certificate";
+    n = 123;
+    assert(parse_cert_chain(junk, sizeof(junk) - 1, &n) == NULL);
+
+    /* Banner with a truncated body: the import fails and nothing leaks. */
+    static const char broken[] =
+        "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+    n = 123;
+    assert(parse_cert_chain(broken, sizeof(broken) - 1, &n) == NULL);
+}
+
+static void client_certificate_flight_tests(void)
+{
+    static const uint8_t der_a[] = {0x30, 0x03, 0x02, 0x01, 0x01};
+    static const uint8_t der_b[] = {0x30, 0x05, 0x02, 0x03, 0x02, 0x03, 0x04};
+    /* tls_x509_object has a flexible DER array, so instances are sized to
+     * their certificate. */
+    struct tls_x509_object *a = calloc(1, sizeof(*a) + sizeof(der_a));
+    struct tls_x509_object *b = calloc(1, sizeof(*b) + sizeof(der_b));
+    struct tls_x509_object *chain[] = {a, b};
+    struct tls_key key;
+    struct tls_handshake_context ctx;
+    struct tls_hash_context transcript;
+    uint8_t out[256];
+    size_t written = 0;
+
+    assert(a && b);
+    memcpy(a->der, der_a, sizeof(der_a)); a->der_len = sizeof(der_a);
+    memcpy(b->der, der_b, sizeof(der_b)); b->der_len = sizeof(der_b);
+    static const uint8_t dummy_priv[32] = {1, 2, 3};
+    memset(&key, 0, sizeof(key));
+    key.type = TLS_KEY_TYPE_EC_P256;
+    key.ec.priv = dummy_priv;   /* the stubbed signer ignores it */
+
+    test_p256_sign_ok = true;
+    memset(&ctx, 0, sizeof(ctx));
+    assert(transcript_hash_init(&transcript));
+    ctx.transcript_hash = &transcript;
+    ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+    ctx.client_certificate_requested = true;
+    ctx.client_certificate_compatible = true;
+    ctx.client_key = &key;
+    ctx.client_chain = chain;
+    ctx.client_chain_len = 2;
+
+    /* Certificate, then CertificateVerify: one message per call. */
+    assert(tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+
+    /* Certificate: type, 24-bit body length, empty request context, list. */
+    size_t list_len = (3u + sizeof(der_a) + 2u) + (3u + sizeof(der_b) + 2u);
+    size_t cert_msg = 4u + 1u + 3u + list_len;
+    assert(out[0] == 0x0b);
+    assert(((size_t)out[1] << 16 | (size_t)out[2] << 8 | out[3]) == 1u + 3u + list_len);
+    assert(out[4] == 0x00);
+    assert(((size_t)out[5] << 16 | (size_t)out[6] << 8 | out[7]) == list_len);
+    size_t p = 8;
+    assert(((size_t)out[p] << 16 | (size_t)out[p + 1] << 8 | out[p + 2]) == sizeof(der_a));
+    p += 3;
+    assert(memcmp(out + p, der_a, sizeof(der_a)) == 0);
+    p += sizeof(der_a);
+    assert(out[p] == 0 && out[p + 1] == 0);   /* CertificateEntry extensions */
+    p += 2;
+    assert(((size_t)out[p] << 16 | (size_t)out[p + 1] << 8 | out[p + 2]) == sizeof(der_b));
+    p += 3;
+    assert(memcmp(out + p, der_b, sizeof(der_b)) == 0);
+    p += sizeof(der_b);
+    assert(out[p] == 0 && out[p + 1] == 0);
+    p += 2;
+    assert(p == cert_msg);
+    assert(written == cert_msg);
+
+    /* CertificateVerify: type, scheme, signature length, DER SEQUENCE{r,s}. */
+    memset(out, 0, sizeof(out));
+    assert(tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+    assert(out[0] == 0x0f);
+    assert(out[4] == 0x04 && out[5] == 0x03);           /* ecdsa_secp256r1_sha256 */
+    size_t sig_len = (size_t)out[6] << 8 | out[7];
+    assert(((size_t)out[1] << 16 | (size_t)out[2] << 8 | out[3]) == 4u + sig_len);
+    assert(written == 8u + sig_len);
+    assert(out[8] == 0x30);
+    assert((size_t)out[9] + 2u == sig_len);
+    /* r starts with 0x80, so it must be encoded as 0x00-prefixed INTEGER 32. */
+    assert(out[10] == 0x02 && out[11] == 0x21 && out[12] == 0x00);
+    assert(memcmp(out + 13, test_p256_sign_rs, 32) == 0);
+    /* s starts with 0x00 then 0x21, so it is a minimal INTEGER 31. */
+    size_t s_off = 13 + 32;
+    assert(out[s_off] == 0x02 && out[s_off + 1] == 0x1f);
+    assert(memcmp(out + s_off + 2, test_p256_sign_rs + 33, 31) == 0);
+
+    /* Flight complete: a further call reports nothing left. */
+    assert(tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+    assert(written == 0);
+
+    /* Incompatible request: empty certificate list once, then nothing (no
+     * CertificateVerify). */
+    memset(&ctx, 0, sizeof(ctx));
+    assert(transcript_hash_init(&transcript));
+    ctx.transcript_hash = &transcript;
+    ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+    ctx.client_certificate_requested = true;
+    ctx.client_certificate_compatible = false;
+    ctx.client_key = &key;
+    ctx.client_chain = chain;
+    ctx.client_chain_len = 2;
+    memset(out, 0xAA, sizeof(out));
+    assert(tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+    assert(written == 8);
+    assert(out[0] == 0x0b && out[3] == 0x04 && out[7] == 0x00);
+    assert(tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+    assert(written == 0);
+
+    /* Compatible but no identity configured: same empty list. */
+    memset(&ctx, 0, sizeof(ctx));
+    assert(transcript_hash_init(&transcript));
+    ctx.transcript_hash = &transcript;
+    ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+    ctx.client_certificate_requested = true;
+    ctx.client_certificate_compatible = true;
+    ctx.client_key = NULL;
+    ctx.client_chain = chain;
+    ctx.client_chain_len = 2;
+    assert(tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+    assert(written == 8);
+
+    /* Signing failure must not emit a half-built CertificateVerify. */
+    memset(&ctx, 0, sizeof(ctx));
+    assert(transcript_hash_init(&transcript));
+    ctx.transcript_hash = &transcript;
+    ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+    ctx.client_certificate_requested = true;
+    ctx.client_certificate_compatible = true;
+    ctx.client_key = &key;
+    ctx.client_chain = chain;
+    ctx.client_chain_len = 2;
+    assert(tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+    assert(written == cert_msg);
+    test_p256_sign_ok = false;
+    assert(!tls_send_client_certificate(&ctx, out, sizeof(out), &written));
+    test_p256_sign_ok = true;
+
+    /* Too small a buffer is refused rather than truncated. */
+    memset(&ctx, 0, sizeof(ctx));
+    assert(transcript_hash_init(&transcript));
+    ctx.transcript_hash = &transcript;
+    ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
+    ctx.client_certificate_requested = true;
+    ctx.client_certificate_compatible = true;
+    ctx.client_key = &key;
+    ctx.client_chain = chain;
+    ctx.client_chain_len = 2;
+    assert(!tls_send_client_certificate(&ctx, out, cert_msg - 1u, &written));
+
+    free(a);
+    free(b);
+}
+
 static void handshake_extension_tests(void)
 {
     static const uint8_t offered[] = {
@@ -281,6 +473,24 @@ static void handshake_extension_tests(void)
         TLS_EXT_SIGNATURE_ALGORITHMS >> 8,
         TLS_EXT_SIGNATURE_ALGORITHMS & 0xff, 0, 4,
         0, 2, 0x08, 0x04
+    };
+    static const uint8_t cert_request_ecdsa[] = {
+        TLS_HANDSHAKE_CERTIFICATE_REQUEST, 0, 0, 11,
+        0, 0, 8,
+        TLS_EXT_SIGNATURE_ALGORITHMS >> 8,
+        TLS_EXT_SIGNATURE_ALGORITHMS & 0xff, 0, 4,
+        0, 2, 0x04, 0x03
+    };
+    static const uint8_t requested_ca[] = {0x30, 0x01, 0x42};
+    static const uint8_t cert_request_ecdsa_ca[] = {
+        TLS_HANDSHAKE_CERTIFICATE_REQUEST, 0, 0, 22,
+        0, 0, 19,
+        TLS_EXT_SIGNATURE_ALGORITHMS >> 8,
+        TLS_EXT_SIGNATURE_ALGORITHMS & 0xff, 0, 4,
+        0, 2, 0x04, 0x03,
+        TLS_EXT_CERTIFICATE_AUTHORITIES >> 8,
+        TLS_EXT_CERTIFICATE_AUTHORITIES & 0xff, 0, 7,
+        0, 5, 0, 3, 0x30, 0x01, 0x42
     };
     static const uint8_t cert_request_no_sig[] = {
         TLS_HANDSHAKE_CERTIFICATE_REQUEST, 0, 0, 3, 0, 0, 0
@@ -347,6 +557,52 @@ static void handshake_extension_tests(void)
     assert(tls_recv_certificate_request(&ctx, cert_request,
                                         sizeof(cert_request)));
     assert(ctx.client_certificate_requested);
+    assert(!ctx.client_certificate_compatible);
+
+    struct tls_key client_key;
+    struct tls_x509_object client_cert;
+    struct tls_x509_object *client_chain[] = {&client_cert};
+    memset(&client_key, 0, sizeof(client_key));
+    memset(&client_cert, 0, sizeof(client_cert));
+    client_cert.issuer_name = requested_ca;
+    client_cert.issuer_name_len = sizeof(requested_ca);
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
+    ctx.client_key = &client_key;
+    ctx.client_chain = client_chain;
+    ctx.client_chain_len = 1;
+    assert(tls_recv_certificate_request(&ctx, cert_request_ecdsa,
+                                        sizeof(cert_request_ecdsa)));
+    assert(ctx.client_certificate_compatible);
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
+    ctx.client_key = &client_key;
+    ctx.client_chain = client_chain;
+    ctx.client_chain_len = 1;
+    assert(tls_recv_certificate_request(&ctx, cert_request_ecdsa_ca,
+                                        sizeof(cert_request_ecdsa_ca)));
+    assert(ctx.client_certificate_compatible);
+
+    /* A CA list that does not name our issuer is advisory: the identity is
+     * still presented (RFC 8446 section 4.4.2.2). */
+    client_cert.issuer_name = (const uint8_t *)"mismatch";
+    client_cert.issuer_name_len = 8;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
+    ctx.client_key = &client_key;
+    ctx.client_chain = client_chain;
+    ctx.client_chain_len = 1;
+    assert(tls_recv_certificate_request(&ctx, cert_request_ecdsa_ca,
+                                        sizeof(cert_request_ecdsa_ca)));
+    assert(ctx.client_certificate_compatible);
+
+    /* No client identity configured: present nothing. */
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
+    assert(tls_recv_certificate_request(&ctx, cert_request_ecdsa,
+                                        sizeof(cert_request_ecdsa)));
+    assert(!ctx.client_certificate_compatible);
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
@@ -723,6 +979,8 @@ static void extended_key_usage_tests(void)
 
 int main(void)
 {
+    client_certificate_flight_tests();
+    parse_cert_chain_tests();
     /* Staged client setup gates ClientHello1 on X25519 only. P-256's blocking
      * software fallback is deferred until an HRR requests it. */
     {

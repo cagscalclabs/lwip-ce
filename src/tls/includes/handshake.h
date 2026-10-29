@@ -86,6 +86,21 @@ extern "C"
 #define TLS_HANDSHAKE_SERVER_HELLO 0x02
 #define TLS_HANDSHAKE_CERTIFICATE 0x0b
 #define TLS_HANDSHAKE_CERTIFICATE_REQUEST 0x0d
+#define TLS_HANDSHAKE_CERTIFICATE_VERIFY 0x0f
+
+/* Cursor for tls_server_send_flight(), which emits one message per call.
+ * Without a server certificate the certificate steps are skipped. */
+#define TLS_SERVER_FLIGHT_ENCRYPTED_EXTENSIONS  0
+#define TLS_SERVER_FLIGHT_CERTIFICATE           1
+#define TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY    2
+#define TLS_SERVER_FLIGHT_FINISHED              3
+#define TLS_SERVER_FLIGHT_DONE                  4
+
+/* Cursor for tls_send_client_certificate(), which emits the client's response
+ * to CertificateRequest one message per call. */
+#define TLS_CLIENT_FLIGHT_CERTIFICATE           0
+#define TLS_CLIENT_FLIGHT_CERTIFICATE_VERIFY    1
+#define TLS_CLIENT_FLIGHT_DONE                  2
 #define TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS 0x08
 #define TLS_HANDSHAKE_FINISHED 0x14
 #define TLS_HANDSHAKE_KEY_UPDATE 0x18
@@ -268,6 +283,7 @@ extern "C"
         uint8_t p256_private[32];    /* Ephemeral P-256 private key */
         uint8_t p256_public[65];     /* Our ephemeral P-256 public key (uncompressed) */
         bool client_certificate_requested; /* True if server sent TLS 1.3 CertificateRequest */
+        bool client_certificate_compatible; /* Configured identity matches the request */
 
         /* HelloRetryRequest state (RFC 8446 §4.1.4).
          * hrr_cookie_len > 0 after a valid HRR that carried a cookie extension.
@@ -383,6 +399,11 @@ extern "C"
         struct tls_key          *server_key;        /* private key for leaf cert */
         struct tls_x509_object **server_chain;      /* cert chain: leaf first, then intermediates */
         size_t                   server_chain_len;  /* number of entries in server_chain */
+        uint8_t                  server_flight_step; /* tls_server_send_flight cursor */
+        uint8_t                  client_flight_step; /* tls_send_client_certificate cursor */
+        struct tls_key          *client_key;        /* optional mTLS private key */
+        struct tls_x509_object **client_chain;      /* mTLS chain, leaf first */
+        size_t                   client_chain_len;
     };
 
     /**
@@ -539,6 +560,13 @@ extern "C"
      * @return true on success, false on failure
      */
     bool tls_send_empty_certificate(
+        struct tls_handshake_context *ctx,
+        uint8_t *out,
+        size_t out_len,
+        size_t *written);
+
+    /** Build client Certificate and CertificateVerify, or an empty Certificate. */
+    bool tls_send_client_certificate(
         struct tls_handshake_context *ctx,
         uint8_t *out,
         size_t out_len,

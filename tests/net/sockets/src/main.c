@@ -8,6 +8,9 @@
 #define PORT_RESET     7010
 #define PORT_CLOSER    7011
 #define PORT_LOOP      7300
+#define PORT_SOCKET_PSK  7103
+#define PORT_SOCKET_CERT 7104
+#define PSK_IDENTITY "lwip-ce-nettest"
 
 static void test_echo(const char *name, lwip_socket_type_t type, uint16_t port, const char *ws_path, size_t total)
 {
@@ -94,6 +97,80 @@ static void test_server(void)
     check("server accepted 3 clients", served == 3);
     check("host saw 3 echoes", host_call("connect-result", reply, sizeof(reply), 15000) && !strcmp(reply, "3/3"));
     lwip_socket_destroy(listener);
+}
+
+static void exercise_tls_socket_server(struct lwip_socket *listener,
+                                       const char *mode, uint16_t port,
+                                       const char *message)
+{
+    struct lwip_socket *peer = NULL;
+    char command[48], reply[32];
+    uint32_t start;
+    size_t message_len = strlen(message);
+
+    snprintf(command, sizeof(command), "socket-tls-start %s %u", mode, port);
+    if (!check("host starts socket TLS client",
+               host_call(command, NULL, 0, 15000)))
+        return;
+
+    start = lwip_now_ms();
+    while (!peer && lwip_now_ms() - start < 120000)
+    {
+        lwip_service_events();
+        peer = lwip_socket_accept(listener);
+    }
+    snprintf(line, sizeof(line), "socket TLS %s accept", mode);
+    if (check(line, peer != NULL))
+    {
+        bool echoed = read_exact(peer, buf, message_len, 30000) == message_len &&
+                      !memcmp(buf, message, message_len) &&
+                      write_all(peer, buf, message_len);
+        snprintf(line, sizeof(line), "socket TLS %s read/write", mode);
+        check(line, echoed);
+        close_socket(peer);
+    }
+    snprintf(line, sizeof(line), "socket TLS %s host echo", mode);
+    check(line, host_call("socket-tls-result", reply, sizeof(reply), 30000) &&
+                !strcmp(reply, "echo"));
+}
+
+static void test_tls_socket_servers(void)
+{
+    struct lwip_socket *listener;
+    uint8_t psk[32];
+
+    listener = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 0);
+    if (!check("socket TLS PSK listener create", listener != NULL)) return;
+    for (uint8_t i = 0; i < sizeof(psk); i++) psk[i] = pattern(i);
+    if (check("socket TLS PSK configure",
+              lwip_socket_set_tls_psk(listener, psk,
+                                      (const uint8_t *)PSK_IDENTITY,
+                                      strlen(PSK_IDENTITY)) == LWIP_OK) &&
+        check("socket TLS PSK listen selects server mode",
+              lwip_socket_listen(listener, PORT_SOCKET_PSK) == LWIP_OK))
+    {
+        check("socket TLS PSK setter locked after listen",
+              lwip_socket_set_tls_psk(listener, psk,
+                                      (const uint8_t *)PSK_IDENTITY,
+                                      strlen(PSK_IDENTITY)) == LWIP_ERR_STATE);
+        exercise_tls_socket_server(listener, "psk", PORT_SOCKET_PSK,
+                                   "lwip-ce psk server check\n");
+    }
+    close_socket(listener);
+
+    listener = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 0);
+    if (!check("socket TLS cert listener create", listener != NULL)) return;
+    if (check("socket TLS cert configure",
+              lwip_socket_set_tls_cert(listener, "lwIPSKEY", "lwIPSCRT") == LWIP_OK) &&
+        check("socket TLS cert listen selects server mode",
+              lwip_socket_listen(listener, PORT_SOCKET_CERT) == LWIP_OK))
+    {
+        check("socket TLS cert setter locked after listen",
+              lwip_socket_set_tls_cert(listener, "lwIPSKEY", "lwIPSCRT") == LWIP_ERR_STATE);
+        exercise_tls_socket_server(listener, "cert", PORT_SOCKET_CERT,
+                                   "lwip-ce cert server check\n");
+    }
+    close_socket(listener);
 }
 
 static void test_churn(void)
@@ -355,20 +432,24 @@ static void test_api_contract(void)
 {
     struct lwip_socket *tcp = lwip_socket_create(LWIP_SOCKET_TCP, LWIP_NETIF_EXT, NULL, 1000);
     struct lwip_socket *udp = lwip_socket_create(LWIP_SOCKET_UDP, LWIP_NETIF_EXT, NULL, 1000);
+    struct lwip_socket *tls = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 1000);
     static const uint8_t psk[32] = {1};
-    check("create returns sockets", tcp && udp);
+    check("create returns sockets", tcp && udp && tls);
     check("status INIT", lwip_socket_status(tcp) == LWIP_STATUS_INIT);
     check("set_timeout", lwip_socket_set_timeout(tcp, 5000) == LWIP_OK);
     check("ws config on TCP rejected", lwip_socket_set_ws_config(tcp, "/", NULL) != LWIP_OK);
     check("psk on TCP rejected", lwip_socket_set_tls_psk(tcp, psk, (const uint8_t *)"id", 2) == LWIP_ERR_ARG);
+    check("cert on TCP rejected", lwip_socket_set_tls_cert(tcp, "KEY", "CERT") == LWIP_ERR_ARG);
     check("write before connect rejected", lwip_socket_write(tcp, buf, 1) != LWIP_OK);
     check("read before connect empty", lwip_socket_read(tcp, buf, 1) == 0);
     check("listen on UDP rejected", lwip_socket_listen(udp, 7400) == LWIP_ERR_PROTO);
+    check("TLS listen without credentials rejected", lwip_socket_listen(tls, 7401) == LWIP_ERR_ARG);
     check("connect NULL host rejected", lwip_socket_connect(tcp, NULL, 1) == LWIP_ERR_ARG);
     check("destroy NULL rejected", lwip_socket_destroy(NULL) == LWIP_ERR_ARG);
     check("accept on non-listener empty", lwip_socket_accept(tcp) == NULL);
     lwip_socket_destroy(tcp);
     lwip_socket_destroy(udp);
+    lwip_socket_destroy(tls);
 }
 
 int main(void)
@@ -385,6 +466,7 @@ int main(void)
         test_udp();
         test_bulk();
         test_server();
+        test_tls_socket_servers();
         test_churn();
         test_halfclose();
         test_peer_close_and_reset();
