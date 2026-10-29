@@ -1,6 +1,6 @@
 /**
  * @file handshake.c
- * @brief TLS 1.3 Handshake Protocol — Client implementation for eZ80
+ * @brief TLS 1.3 Handshake Protocol — client and server implementation for eZ80
  *
  * ============================================================================
  * READER'S GUIDE
@@ -29,9 +29,9 @@
  *                       <----------------     [now encrypted under HS keys]
  *                                             EncryptedExtensions
  *                                             Certificate
- *                                             CertificateVerify   (RSA-PSS-SHA256
- *                                                                  verified against
- *                                                                  leaf SPKI)
+ *                                             CertificateVerify   (RSA-PSS-SHA256 or
+ *                                                                  ECDSA-P256-SHA256,
+ *                                                                  verified against leaf)
  *                                             Finished
  *
  *     [client derives application keys]
@@ -116,16 +116,15 @@
  * 4. WHAT THIS IMPLEMENTATION SKIPS (DELIBERATELY)
  * -------------------------------------------------
  *
- *   - Signature algorithms other than rsa_pss_rsae_sha256 in
- *     CertificateVerify. The leaf SPKI must be an RSA key with modulus
- *     between 1024 and 2048 bits; ECDSA and the wider RSA-PSS hashes are
- *     rejected. CertificateVerify itself is always required and verified
- *     against the chain's leaf SPKI.
+ *   - CertificateVerify schemes other than rsa_pss_rsae_sha256 and
+ *     ecdsa_secp256r1_sha256. CertificateVerify is always required for a
+ *     full handshake and is verified against the chain's leaf SPKI.
  *   - 0-RTT / early_data.
  *   - Key-exchange groups other than X25519 and P-256. ClientHello1 sends an
  *     X25519 share; P-256 is supplied only after a conforming HRR requests it.
- *   - Server-side handshake (this is a client-only implementation; the
- *     altcp layer has a server entry point that returns "not implemented").
+ *   - Server-side groups other than X25519 and server certificate keys other
+ *     than ECDSA P-256. The server prefers AES-128-GCM and also accepts
+ *     AES-128-CCM.
  *
  *
  * 5. STATE MACHINE
@@ -144,6 +143,10 @@
  *                                                 └─> HANDSHAKE_COMPLETE
  *
  *   Any parse/MAC/state error -> ERROR (terminal, connection aborted).
+ *
+ *   Server role uses INIT -> [HRR_RECEIVED ->] SERVER_HELLO_RECEIVED, then
+ *   the shared key-derivation states. HRR is emitted only when the client
+ *   advertised X25519 without supplying an X25519 key share.
  *
  *
  * 6. FILE LAYOUT
@@ -5616,49 +5619,118 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
                                   const uint8_t *msg, size_t len,
                                   uint8_t *out, size_t out_cap, size_t *written)
 {
-    size_t msg_len = 0, off, ext_end, n;
+    static const uint8_t hrr_random[32] = {
+        0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11,
+        0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+        0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
+        0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C
+    };
+    size_t msg_len = 0, off, ext_start, ext_end, n;
     const uint8_t *sid, *share = NULL, *alpn = NULL;
     size_t alpn_len = 0;
     uint8_t sid_len;
     uint16_t suite = 0, selected = 0;
-    bool tls13 = false, dhe_mode = false, psk_ok = false;
-    bool cert_mode;
+    bool offer_gcm = false, offer_ccm = false;
+    bool tls13 = false, x25519_group = false;
+    bool p256_signature = false;
+    bool dhe_mode = false, psk_ok = false;
+    bool versions_seen = false, groups_seen = false, sigalgs_seen = false;
+    bool keyshare_seen = false, psk_modes_seen = false, alpn_seen = false;
+    bool psk_seen = false, early_data_seen = false, cert_mode, retry;
+    size_t share_entries = 0;
+    struct tls_hash_context invariant_hash;
+    uint8_t invariant_digest[32];
+    bool invariant_ready = false;
     uint8_t alert = TLS_ALERT_DECODE_ERROR;
 
-    if (!ctx || !msg || !out || !written || ctx->state != TLS_STATE_INIT ||
+    if (!ctx || !msg || !out || !written ||
+        (ctx->state != TLS_STATE_INIT && ctx->state != TLS_STATE_HRR_RECEIVED) ||
         !ctx->transcript_hash || ctx->ecdhe_job != 0)
     {
         ERROR_CODE(0xc0);
         return false;
     }
+    retry = ctx->state == TLS_STATE_HRR_RECEIVED;
+    if (retry && (!ctx->hrr_done || ctx->hrr_requested_group != TLS_NAMED_GROUP_X25519))
+    {
+        alert = TLS_ALERT_UNEXPECTED_MESSAGE;
+        goto fail;
+    }
     cert_mode = ctx->server_cert && ctx->server_key && ctx->server_chain_len > 0;
     off = tls_parse_handshake_header(msg, len, TLS_HANDSHAKE_CLIENT_HELLO, &msg_len);
-    if (off == 0 || off + msg_len != len || msg_len < 2 + 32 + 1)
+    if (off == 0 || off + msg_len != len || msg_len < 2 + 32 + 1 ||
+        msg[off] != 0x03 || msg[off + 1] != 0x03)
         goto fail;
-    off += 2 + 32; /* legacy_version, random */
+    off += 2;
+    if (retry && memcmp(msg + off, ctx->client_random, 32) != 0)
+    {
+        alert = TLS_ALERT_ILLEGAL_PARAMETER;
+        goto fail;
+    }
+    if (!retry)
+        memcpy(ctx->client_random, msg + off, 32);
+    off += 32;
     sid_len = msg[off++];
     if (sid_len > 32 || off + sid_len + 2 > len)
         goto fail;
     sid = msg + off;
+    if (retry && (sid_len != ctx->hrr_session_id_len ||
+                  memcmp(sid, ctx->hrr_session_id, sid_len) != 0))
+    {
+        alert = TLS_ALERT_ILLEGAL_PARAMETER;
+        goto fail;
+    }
+    if (!retry)
+    {
+        ctx->hrr_session_id_len = sid_len;
+        memcpy(ctx->hrr_session_id, sid, sid_len);
+    }
     off += sid_len;
     n = tls_srv_be16(msg + off);
     off += 2;
-    if ((n & 1u) || off + n + 1 > len)
+    if (n < 2 || (n & 1u) || off + n + 2 > len)
         goto fail;
     for (size_t i = 0; i < n; i += 2)
     {
         uint16_t cs = tls_srv_be16(msg + off + i);
-        if (suite == 0 && tls_cipher_suite_supported(cs))
-            suite = cs;
+        offer_gcm |= cs == TLS_AES_128_GCM_SHA256;
+        offer_ccm |= cs == TLS_AES_128_CCM_SHA256;
     }
+    if (retry)
+    {
+        if ((ctx->cipher_suite == TLS_AES_128_GCM_SHA256 && !offer_gcm) ||
+            (ctx->cipher_suite == TLS_AES_128_CCM_SHA256 && !offer_ccm))
+        {
+            alert = TLS_ALERT_ILLEGAL_PARAMETER;
+            goto fail;
+        }
+        suite = ctx->cipher_suite;
+    }
+    else
+        suite = offer_gcm ? TLS_AES_128_GCM_SHA256
+                          : (offer_ccm ? TLS_AES_128_CCM_SHA256 : 0);
     off += n;
-    off += 1u + msg[off]; /* legacy_compression_methods */
+    if (msg[off] != 1 || msg[off + 1] != 0)
+        goto fail;
+    off += 2; /* legacy_compression_methods = { null } */
     if (off + 2 > len)
         goto fail;
     ext_end = off + 2 + tls_srv_be16(msg + off);
     off += 2;
     if (ext_end != len)
         goto fail;
+    ext_start = off;
+    if (!tls_hash_context_init(&invariant_hash, TLS_HASH_SHA256))
+    {
+        alert = TLS_ALERT_INTERNAL_ERROR;
+        goto fail;
+    }
+    invariant_ready = true;
+    /* CH2 must equal CH1 except for fields RFC 8446 section 4.1.2 permits
+     * changing. Exclude key_share, early_data (which CH2 must remove), and
+     * pre_shared_key (whose binders must be recomputed), plus the enclosing
+     * lengths. Certificate mode ignores offered PSKs and early data. */
+    tls_hash_update(&invariant_hash, msg + 4, ext_start - 2 - 4);
 
     while (off + 4 <= ext_end)
     {
@@ -5667,38 +5739,107 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
         const uint8_t *e = msg + off + 4;
         if (off + 4 + elen > ext_end)
             goto fail;
+
+        /* RFC 8446 section 4.2: an extension type may appear only once. */
+        for (size_t prev = ext_start; prev < off;)
+        {
+            if (prev + 4 > off)
+                goto fail;
+            size_t prev_len = tls_srv_be16(msg + prev + 2);
+            if (prev + 4 + prev_len > off)
+                goto fail;
+            if (tls_srv_be16(msg + prev) == type)
+            {
+                alert = TLS_ALERT_ILLEGAL_PARAMETER;
+                goto fail;
+            }
+            prev += 4 + prev_len;
+        }
+
+        if (type != TLS_EXT_KEY_SHARE && type != TLS_EXT_EARLY_DATA &&
+            type != TLS_EXT_PRE_SHARED_KEY)
+            tls_hash_update(&invariant_hash, msg + off, 4 + elen);
+
         if (type == TLS_EXT_SUPPORTED_VERSIONS)
         {
-            for (size_t i = 1; elen && i + 1 < elen && i < 1u + e[0]; i += 2)
-                tls13 |= tls_srv_be16(e + i) == 0x0304;
-        }
-        else if (type == TLS_EXT_KEY_SHARE && elen >= 2)
-        {
-            size_t list_end = 2 + tls_srv_be16(e);
-            if (list_end > elen)
+            versions_seen = true;
+            if (elen < 3 || e[0] != elen - 1 || (e[0] & 1u))
                 goto fail;
-            for (size_t i = 2; i + 4 <= list_end;)
+            for (size_t i = 1; i + 1 < elen; i += 2)
+                tls13 |= tls_srv_be16(e + i) == TLS_VERSION_1_3;
+        }
+        else if (type == TLS_EXT_SUPPORTED_GROUPS)
+        {
+            groups_seen = true;
+            if (elen < 4 || tls_srv_be16(e) != elen - 2 || ((elen - 2) & 1u))
+                goto fail;
+            for (size_t i = 2; i + 1 < elen; i += 2)
+                x25519_group |= tls_srv_be16(e + i) == TLS_NAMED_GROUP_X25519;
+        }
+        else if (type == TLS_EXT_SIGNATURE_ALGORITHMS)
+        {
+            sigalgs_seen = true;
+            if (elen < 4 || tls_srv_be16(e) != elen - 2 || ((elen - 2) & 1u))
+                goto fail;
+            for (size_t i = 2; i + 1 < elen; i += 2)
+                p256_signature |= tls_srv_be16(e + i) == TLS_SIG_ECDSA_SECP256R1_SHA256;
+        }
+        else if (type == TLS_EXT_SIGNATURE_ALGORITHMS_CERT)
+        {
+            if (elen < 4 || tls_srv_be16(e) != elen - 2 || ((elen - 2) & 1u))
+                goto fail;
+        }
+        else if (type == TLS_EXT_KEY_SHARE)
+        {
+            keyshare_seen = true;
+            if (elen < 2 || tls_srv_be16(e) != elen - 2)
+                goto fail;
+            for (size_t i = 2; i < elen;)
             {
-                uint16_t group = tls_srv_be16(e + i), key_len = tls_srv_be16(e + i + 2);
-                if (i + 4 + key_len > list_end)
+                if (i + 4 > elen)
                     goto fail;
-                if (group == 0x001d && key_len == 32 && !share)
+                uint16_t group = tls_srv_be16(e + i), key_len = tls_srv_be16(e + i + 2);
+                if (key_len == 0 || i + 4 + key_len > elen)
+                    goto fail;
+                share_entries++;
+                if (group == TLS_NAMED_GROUP_X25519)
+                {
+                    if (share || key_len != 32)
+                    {
+                        alert = TLS_ALERT_ILLEGAL_PARAMETER;
+                        goto fail;
+                    }
                     share = e + i + 4;
+                }
                 i += 4u + key_len;
             }
         }
         else if (type == TLS_EXT_PSK_KEY_EXCHANGE_MODES)
         {
-            for (size_t i = 1; elen && i < elen && i < 1u + e[0]; i++)
+            psk_modes_seen = true;
+            if (elen < 2 || e[0] != elen - 1)
+                goto fail;
+            for (size_t i = 1; i < elen; i++)
                 dhe_mode |= e[i] == 1; /* psk_dhe_ke */
         }
         else if (type == TLS_EXT_ALPN)
         {
+            alpn_seen = true;
+            if (elen < 3 || tls_srv_be16(e) != elen - 2)
+                goto fail;
+            for (size_t i = 2; i < elen;)
+            {
+                size_t protocol_len = e[i++];
+                if (protocol_len == 0 || i + protocol_len > elen)
+                    goto fail;
+                i += protocol_len;
+            }
             alpn = e;
             alpn_len = elen;
         }
         else if (type == TLS_EXT_PRE_SHARED_KEY)
         {
+            psk_seen = true;
             if (off + 4 + elen != ext_end) /* must be the last extension */
             {
                 alert = TLS_ALERT_ILLEGAL_PARAMETER;
@@ -5707,17 +5848,118 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
             if (!cert_mode)
                 psk_ok = tls_server_check_psk(ctx, msg, (size_t)(e - msg), e, elen, &selected);
         }
+        else if (type == TLS_EXT_EARLY_DATA)
+        {
+            if (elen != 0 || retry)
+            {
+                alert = TLS_ALERT_ILLEGAL_PARAMETER;
+                goto fail;
+            }
+            early_data_seen = true;
+        }
+        else if (type == TLS_EXT_COOKIE)
+        {
+            /* This server never sends an HRR cookie. */
+            alert = TLS_ALERT_ILLEGAL_PARAMETER;
+            goto fail;
+        }
         off += 4 + elen;
     }
     if (off != ext_end)
         goto fail;
-    if (!tls13)
+    tls_hash_digest(&invariant_hash, invariant_digest);
+    tls_hash_clear(&invariant_hash);
+    invariant_ready = false;
+    if (retry && memcmp(invariant_digest, ctx->hrr_ch1_invariant_hash,
+                        sizeof(invariant_digest)) != 0)
+    {
+        alert = TLS_ALERT_ILLEGAL_PARAMETER;
+        goto fail;
+    }
+    if (!versions_seen || !tls13)
     {
         alert = TLS_ALERT_PROTOCOL_VERSION;
         goto fail;
     }
-    if (!suite || !share || (!cert_mode && (!dhe_mode || !psk_ok)))
+    if (early_data_seen && !psk_seen)
     {
+        alert = TLS_ALERT_ILLEGAL_PARAMETER;
+        goto fail;
+    }
+    if (!suite || !groups_seen || !x25519_group ||
+        (cert_mode && (!sigalgs_seen || !p256_signature)) ||
+        (!cert_mode && (!psk_modes_seen || !psk_seen || !dhe_mode || !psk_ok)))
+    {
+        alert = TLS_ALERT_HANDSHAKE_FAILURE;
+        goto fail;
+    }
+    if (retry && (!keyshare_seen || share_entries != 1 || !share))
+    {
+        alert = TLS_ALERT_ILLEGAL_PARAMETER;
+        goto fail;
+    }
+
+    /* RFC 8446 section 4.1.4 permits HRR only for a group the client listed
+     * in supported_groups but omitted from key_share. This server prefers
+     * X25519 and sends at most one HRR. External-PSK HRR would also require
+     * validating the second binder over the replaced transcript, so keep the
+     * external-PSK profile to the share it already requires in CH1. */
+    if (!share)
+    {
+        if (!retry && cert_mode && x25519_group)
+        {
+            size_t hrr_len = 4 + 2 + 32 + 1 + sid_len + 2 + 1 + 2 + 12;
+            if (out_cap < hrr_len)
+            {
+                alert = TLS_ALERT_INTERNAL_ERROR;
+                goto fail;
+            }
+            off = 0;
+            out[off++] = TLS_HANDSHAKE_SERVER_HELLO;
+            out[off++] = 0;
+            out[off++] = (uint8_t)((hrr_len - 4) >> 8);
+            out[off++] = (uint8_t)(hrr_len - 4);
+            out[off++] = 0x03;
+            out[off++] = 0x03;
+            memcpy(out + off, hrr_random, sizeof(hrr_random));
+            off += sizeof(hrr_random);
+            out[off++] = sid_len;
+            memcpy(out + off, sid, sid_len);
+            off += sid_len;
+            out[off++] = (uint8_t)(suite >> 8);
+            out[off++] = (uint8_t)suite;
+            out[off++] = 0;
+            out[off++] = 0;
+            out[off++] = 12;
+            memcpy(out + off,
+                   (const uint8_t[]){0x00, 0x2b, 0x00, 0x02, 0x03, 0x04,
+                                     0x00, 0x33, 0x00, 0x02, 0x00, 0x1d},
+                   12);
+            off += 12;
+
+            transcript_hash_update(ctx->transcript_hash, msg, len);
+            uint8_t ch1_digest[32];
+            uint8_t synth[36] = {0xfe, 0, 0, 32};
+            tls_hash_digest(ctx->transcript_hash, ch1_digest);
+            if (!transcript_hash_init(ctx->transcript_hash))
+            {
+                alert = TLS_ALERT_INTERNAL_ERROR;
+                goto fail;
+            }
+            memcpy(synth + 4, ch1_digest, sizeof(ch1_digest));
+            transcript_hash_update(ctx->transcript_hash, synth, sizeof(synth));
+            transcript_hash_update(ctx->transcript_hash, out, off);
+            tls_secure_memzero(ch1_digest, sizeof(ch1_digest));
+
+            ctx->cipher_suite = suite;
+            ctx->hrr_done = true;
+            ctx->hrr_requested_group = TLS_NAMED_GROUP_X25519;
+            memcpy(ctx->hrr_ch1_invariant_hash, invariant_digest,
+                   sizeof(invariant_digest));
+            ctx->state = TLS_STATE_HRR_RECEIVED;
+            *written = off;
+            return true;
+        }
         alert = TLS_ALERT_HANDSHAKE_FAILURE;
         goto fail;
     }
@@ -5725,7 +5967,7 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     /* ALPN: the first of our protocols the client also offered. */
     ctx->negotiated_alpn = NULL;
     ctx->negotiated_alpn_len = 0;
-    if (alpn && alpn_len >= 2 && ctx->alpn_protocols_len)
+    if (alpn_seen && alpn && alpn_len >= 2 && ctx->alpn_protocols_len)
     {
         for (size_t o = 0; o < ctx->alpn_protocols_len && !ctx->negotiated_alpn;
              o += 1u + ctx->alpn_protocols[o])
@@ -5802,6 +6044,8 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     return true;
 
 fail:
+    if (invariant_ready)
+        tls_hash_clear(&invariant_hash);
     ERROR_CODE(alert);
     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
     ctx->state = TLS_STATE_ERROR;

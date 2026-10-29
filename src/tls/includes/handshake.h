@@ -66,6 +66,7 @@ extern "C"
 #define TLS_EXT_SUPPORTED_VERSIONS 0x002b
 #define TLS_EXT_PSK_KEY_EXCHANGE_MODES 0x002d
 #define TLS_EXT_PRE_SHARED_KEY 0x0029
+#define TLS_EXT_EARLY_DATA 0x002a
 #define TLS_EXT_COOKIE 0x002c
 
 /* RFC 8449 record_size_limit value: 4096 bytes as big-endian uint16. */
@@ -226,7 +227,7 @@ extern "C"
         {
             TLS_STATE_INIT,
             TLS_STATE_CLIENT_HELLO_SENT,
-            TLS_STATE_HRR_RECEIVED,      /* HRR arrived; second ClientHello pending */
+            TLS_STATE_HRR_RECEIVED,      /* HRR sent/received; second ClientHello pending */
             TLS_STATE_SERVER_HELLO_RECEIVED,
             TLS_STATE_HANDSHAKE_KEYS_DERIVED,
             TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED,
@@ -276,6 +277,9 @@ extern "C"
         size_t   hrr_cookie_len;     /* Length of hrr_cookie, 0 = no cookie */
         uint16_t hrr_requested_group;/* NamedGroup requested by HRR, or 0 */
         bool     hrr_done;           /* True once one HRR has been processed */
+        uint8_t  hrr_session_id[32]; /* CH1 legacy_session_id echoed by the server */
+        uint8_t  hrr_session_id_len;
+        uint8_t  hrr_ch1_invariant_hash[32]; /* CH1 excluding key_share */
         uint32_t ticket_age_add;     /* NST ticket_age_add */
         uint32_t ticket_received_ms; /* sys_now() when last ticket was accepted */
         uint32_t ticket_lifetime;    /* NST ticket_lifetime, seconds (RFC 8446 4.6.1) */
@@ -602,11 +606,12 @@ extern "C"
 /** Send one fatal alert under the currently active record epoch. */
 bool tls_send_fatal_alert(struct tls_handshake_context *ctx, uint8_t description);
 
-/* Server role (external PSK + X25519, psk_dhe_ke). Parses the ClientHello and
- * builds the ServerHello into `out`; then tls_derive_handshake_keys(), then
- * tls_server_send_flight() for EncryptedExtensions + Finished (to encrypt
- * with handshake keys), then tls_derive_application_keys(), and finally
- * tls_server_recv_finished() on the client's Finished. */
+/* TLS 1.3 server role (ECDSA P-256 certificate or external PSK, with X25519).
+ * Parses ClientHello and builds either a legal X25519 HelloRetryRequest or
+ * ServerHello into `out`; then tls_derive_handshake_keys(), followed by
+ * tls_server_send_flight() for EncryptedExtensions, optional Certificate and
+ * CertificateVerify, and Finished. Finally derive application keys and call
+ * tls_server_recv_finished() for the client's Finished. */
 bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
                                   const uint8_t *msg, size_t len,
                                   uint8_t *out, size_t out_cap, size_t *written);

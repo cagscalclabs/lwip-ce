@@ -1076,6 +1076,18 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_cert_server(
         tls_key_free(key);
         return NULL;
     }
+    /* Fail configuration immediately if CertificateVerify would use a key
+     * other than the leaf certificate's P-256 public key. */
+    if (n_certs == 0 || chain[0]->pubkey.type != TLS_KEY_TYPE_EC_P256 ||
+        chain[0]->pubkey.ec.len != 65 || !chain[0]->pubkey.ec.pub ||
+        key->ec.len != 65 || !key->ec.pub ||
+        memcmp(chain[0]->pubkey.ec.pub, key->ec.pub, 65) != 0)
+    {
+        for (size_t i = 0; i < n_certs; i++) tls_x509_object_free(chain[i]);
+        mem_free(chain);
+        tls_key_free(key);
+        return NULL;
+    }
 
     struct altcp_tls_ce_config *conf =
         (struct altcp_tls_ce_config *)mem_malloc(sizeof(*conf));
@@ -1863,6 +1875,14 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
         return false;
     }
 
+    /* HelloRetryRequest is a complete plaintext flight. Wait for the second
+     * ClientHello before deriving handshake keys or sending encrypted data. */
+    if (ctx->state == TLS_STATE_HRR_RECEIVED)
+    {
+        altcp_output(conn->inner_conn);
+        return true;
+    }
+
     tls_crypto_guard_enable();
     ok = tls_derive_handshake_keys(ctx);
     tls_crypto_guard_disable();
@@ -1875,7 +1895,20 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
 
     /* Cert-authenticated server flights are variable-length; heap-allocate. */
     bool cert_mode = conf && conf->server_chain && conf->server_chain_len > 0;
-    size_t flight_cap  = cert_mode ? (conf->server_chain[0]->der_len + 512) : 64;
+    size_t flight_cap = cert_mode ? 512u : 64u;
+    if (cert_mode)
+    {
+        /* Certificate carries every configured chain entry, each with a
+         * three-byte length and two-byte extensions length. */
+        for (size_t i = 0; i < conf->server_chain_len; i++)
+        {
+            size_t der_len = conf->server_chain[i]->der_len;
+            if (flight_cap > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 5u ||
+                der_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - flight_cap - 5u)
+                return false;
+            flight_cap += der_len + 5u;
+        }
+    }
     size_t record_cap  = 5 + flight_cap + 1 + TLS_AES_AUTH_TAG_SIZE;
     uint8_t *flight = (uint8_t *)mem_malloc(flight_cap);
     uint8_t *record = (uint8_t *)mem_malloc(record_cap);
@@ -1957,7 +1990,8 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
             continue;
         }
 
-        if (ctx->state == TLS_STATE_INIT && header[0] == TLS_CONTENT_TYPE_HANDSHAKE)
+        if ((ctx->state == TLS_STATE_INIT || ctx->state == TLS_STATE_HRR_RECEIVED) &&
+            header[0] == TLS_CONTENT_TYPE_HANDSHAKE)
         {
             uint8_t *hello = (uint8_t *)mem_malloc(rec_len);
             bool ok;
