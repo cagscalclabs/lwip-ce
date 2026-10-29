@@ -1294,7 +1294,7 @@
     <section>5.1 (salt: randomly generated portion at least 128 bits)</section>
     <location>src/tls/core/key.c: tls_key_import_pkcs8 - imported salt minimum; docs/using-cryptography.rst: save_encrypted - salt generation</location>
     <grade>COMPLIANT</grade>
-    <note>Section 5.1 constrains salt generation, not the generic PBKDF2 primitive. tls_pbkdf2 intentionally accepts any nonempty salt for RFC 8018 compatibility. The PKCS#8 decrypt-only import path conservatively rejects salts shorter than 16 bytes before derivation, while the documented storage-encryption path generates a 16-byte salt with tls_random_bytes. Applications calling the public tls_pbkdf2 API directly remain responsible for ensuring that a newly generated salt contains at least 128 random bits.</note>
+    <note>Section 5.1 constrains salt generation, not the generic PBKDF2 primitive. tls_pbkdf2 intentionally accepts any nonempty salt. The PKCS#8 decrypt-only import path follows RFC 8018 Section 4.1 and rejects salts shorter than 8 bytes; this also accepts the 8-byte PBES2 default emitted by OpenSSL before 3.2. New application-generated storage encryption should still prefer a 16-byte random salt. Applications calling the public tls_pbkdf2 API directly remain responsible for salt selection.</note>
 
     <reviews>
       <reviewed-by>

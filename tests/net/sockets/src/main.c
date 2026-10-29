@@ -11,6 +11,16 @@
 #define PORT_SOCKET_PSK  7103
 #define PORT_SOCKET_CERT 7104
 #define PSK_IDENTITY "lwip-ce-nettest"
+#define CERT_PASSWORD "lwip-ce-test-password"
+
+static char cert_password[] = CERT_PASSWORD;
+static uint8_t cert_password_calls;
+
+static char *cert_password_input(void)
+{
+    cert_password_calls++;
+    return cert_password;
+}
 
 static void test_echo(const char *name, lwip_socket_type_t type, uint16_t port, const char *ws_path, size_t total)
 {
@@ -160,16 +170,48 @@ static void test_tls_socket_servers(void)
 
     listener = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 0);
     if (!check("socket TLS cert listener create", listener != NULL)) return;
-    if (check("socket TLS cert configure",
+    bool cert_ready =
+        check("socket TLS cert configure",
               lwip_socket_set_tls_cert(listener, "lwIPSKEY", "lwIPSCRT") == LWIP_OK) &&
-        check("socket TLS cert listen selects server mode",
-              lwip_socket_listen(listener, PORT_SOCKET_CERT) == LWIP_OK))
+        check("encrypted cert key fails closed without TTY",
+              lwip_socket_listen(listener, PORT_SOCKET_CERT) == LWIP_ERR_MEM);
+    bool cert_attempted = cert_ready;
+    if (cert_ready)
     {
+        uint32_t started = lwip_now_ms();
+        lwip_set_tty(cert_password_input);
+        lwip_error_t result = lwip_socket_listen(listener, PORT_SOCKET_CERT);
+        note("  encrypted cert listen result %u, callback calls %u, %lu ms",
+             result, cert_password_calls,
+             (unsigned long)(lwip_now_ms() - started));
+        check("encrypted cert TTY callback invoked", cert_password_calls == 1);
+        cert_ready = result == LWIP_OK;
+    }
+    if (cert_attempted &&
+        check("socket TLS cert listen selects server mode", cert_ready))
+    {
+        bool password_cleared = true;
+        for (size_t i = 0; i < sizeof(cert_password) - 1; i++)
+            password_cleared &= cert_password[i] == '\0';
+        check("encrypted cert password buffer wiped after use", password_cleared);
+        struct lwip_socket *tty_probe =
+            lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 0);
+        bool probe_ready =
+            check("socket TLS one-shot TTY probe create", tty_probe != NULL) &&
+            check("socket TLS one-shot TTY probe configure",
+                  lwip_socket_set_tls_cert(tty_probe, "lwIPSKEY", "lwIPSCRT") == LWIP_OK);
+        if (probe_ready)
+        {
+            check("encrypted cert TTY callback consumed after use",
+                  lwip_socket_listen(tty_probe, PORT_SOCKET_CERT + 1) == LWIP_ERR_MEM);
+        }
+        close_socket(tty_probe);
         check("socket TLS cert setter locked after listen",
               lwip_socket_set_tls_cert(listener, "lwIPSKEY", "lwIPSCRT") == LWIP_ERR_STATE);
         exercise_tls_socket_server(listener, "cert", PORT_SOCKET_CERT,
                                    "lwip-ce cert server check\n");
     }
+    lwip_set_tty(NULL);
     close_socket(listener);
 }
 

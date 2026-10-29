@@ -219,6 +219,12 @@ typedef void (*lwip_socket_event_cb)(struct lwip_socket *sock,
                                      const void *ev_data,
                                      void *arg);
 
+/** Application-supplied text input used for secrets such as an encrypted
+ *  private-key password. Return a writable, NUL-terminated buffer that remains
+ *  valid until the invoking lwIP operation returns; lwIP wipes its password
+ *  bytes immediately after use. Return NULL to cancel/fail. */
+typedef char *(*lwip_tty_input_fn)(void);
+
 /** Service wait flags. */
 #define LWIP_SOCKET_SVC_DHCP   (1u << 0)
 #define LWIP_SOCKET_SVC_SNTP   (1u << 1)
@@ -283,6 +289,13 @@ uint8_t  lwip_get_start_errno(void);
 const char *lwip_version_string(void);
 void     lwip_stop(void);
 bool     lwip_init_runtime_internal(const void *imports_src, size_t imports_len);
+
+/** Install the application's secret-input callback, or NULL to remove it.
+ *  lwIP provides no built-in terminal or UI. Operations that need input fail
+ *  closed when no callback is installed or the callback returns NULL.
+ *  The callback is single-use and is removed before lwIP invokes it;
+ *  lwip_stop() also removes an unused callback. */
+void     lwip_set_tty(lwip_tty_input_fn input);
 
 /* Bring the network up: USB/netif init plus TLS connection-support data
  * (truststore, PSK cache). Requires the stack to already be initialized,

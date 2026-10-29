@@ -1,6 +1,7 @@
 type,symbol,category,source_header,output_header
 func,lwip_start_last_error,socket,src/lwIP.h,lwip.h
 func,lwip_version_string,socket,src/lwIP.h,lwip.h
+func,lwip_set_tty,socket,src/lwIP.h,lwip.h
 func,lwip_network_up,socket,src/lwIP.h,lwip.h
 func,lwip_stop,socket,src/lwIP.h,lwip.h
 func,lwip_service_events,socket,src/lwIP.h,lwip.h
@@ -419,6 +420,7 @@ typedef,lwip_netif_service_status_t,socket,src/lwIP.h,lwip.h
 typedef,lwip_socket_addrinfo_t,socket,src/lwIP.h,lwip.h
 typedef,lwip_socket_bind_descriptor_t,socket,src/lwIP.h,lwip.h
 typedef,lwip_socket_event_cb,socket,src/lwIP.h,lwip.h
+typedef,lwip_tty_input_fn,socket,src/lwIP.h,lwip.h
 typedef,lwip_socket_event_type_t,socket,src/lwIP.h,lwip.h
 typedef,lwip_socket_type_t,socket,src/lwIP.h,lwip.h
 typedef,lwip_status_t,socket,src/lwIP.h,lwip.h

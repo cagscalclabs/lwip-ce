@@ -361,6 +361,8 @@ uint8_t lwip_start_last_error(void)
 
 void lwip_stop(void)
 {
+    /* Never retain a callback into an application after its lwIP lifecycle. */
+    lwip_set_tty(NULL);
     lwip_stack_cleanup();
 }
 

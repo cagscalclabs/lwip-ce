@@ -434,8 +434,9 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
         tls_asn1_tag_number(rounds_tlv.tag) != ASN1_INTEGER)
         return TLS_KEY_IMPORT_PARSE_FAIL;
 
-    /* SP 800-132 §5.1: salt random portion must be at least 128 bits (16 bytes). */
-    if (salt.len < 16)
+    /* RFC 8018 Section 4.1 recommends at least eight random salt octets.
+     * OpenSSL versions before 3.2 use that 8-byte PBES2 default. */
+    if (salt.len < 8)
         return TLS_KEY_IMPORT_DECRYPT_FAIL;
 
     /* Optional keyLength and prf. */
