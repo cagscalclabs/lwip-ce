@@ -15,17 +15,35 @@ start = source.index("bool tls_server_send_flight(")
 end = source.index("\nbool tls_server_recv_finished(", start)
 flight = source[start:end]
 
-encrypted_extensions = flight.index(
-    "out[off + 0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;"
-)
-certificate = flight.index("out[off + 0] = TLS_HANDSHAKE_CERTIFICATE;")
-certificate_verify = flight.index("out[off + 0] = 0x0f;")
-finished = flight.index("tls_send_finished(")
+# The flight is emitted one message per call, so the order is expressed by the
+# cursor cases rather than by a single function body.
+encrypted_extensions = flight.index("case TLS_SERVER_FLIGHT_ENCRYPTED_EXTENSIONS:")
+certificate = flight.index("case TLS_SERVER_FLIGHT_CERTIFICATE:")
+certificate_verify = flight.index("case TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY:")
+finished = flight.index("case TLS_SERVER_FLIGHT_FINISHED:")
 
 assert encrypted_extensions < certificate < certificate_verify < finished
-assert flight.index("transcript_hash_update", encrypted_extensions) < flight.index(
-    "tls_key_sign("
-)
+
+# Each case emits its own message type.
+assert flight.index("out[0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;") > encrypted_extensions
+assert flight.index("out[0] = TLS_HANDSHAKE_CERTIFICATE;") > certificate
+assert flight.index("out[0] = TLS_HANDSHAKE_CERTIFICATE_VERIFY;") > certificate_verify
+
+# EncryptedExtensions and Certificate enter the transcript before the
+# CertificateVerify signing content is produced; CertificateVerify enters it
+# after signing.
+ee_hash = flight.index("transcript_hash_update", encrypted_extensions)
+cert_hash = flight.index("transcript_hash_update", certificate)
+cv_hash = flight.index("transcript_hash_update", certificate_verify)
+sign = flight.index("tls_key_sign(")
+assert ee_hash < sign and cert_hash < sign and sign < cv_hash
+
+# The cursor advances in order, and a certificate-less server skips straight
+# from EncryptedExtensions to Finished.
+assert "? TLS_SERVER_FLIGHT_CERTIFICATE : TLS_SERVER_FLIGHT_FINISHED;" in flight
+assert "ctx->server_flight_step = TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY;" in flight
+assert "ctx->server_flight_step = TLS_SERVER_FLIGHT_FINISHED;" in flight
+assert "ctx->server_flight_step = TLS_SERVER_FLIGHT_DONE;" in flight
 
 # Certificate-only ClientHellos do not contain the PSK extensions.  Keep the
 # external-PSK requirements and ServerHello selection confined to that mode.
