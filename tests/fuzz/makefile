@@ -24,11 +24,11 @@ bin/fuzz_ws: fuzz_ws.c ws_unit.py ../host/altcp_ws/mock.h $(SRC)/apps/altcp_ws/a
 	$(CC) $(filter-out -I%,$(CFLAGS)) -Ibin -o $@ $<
 
 bin/fuzz_tls: fuzz_tls.c ../host/tls_signatures/run.py ../host/tls_signatures/mock.h $(SRC)/tls/core/handshake.c \
-		$(SRC)/tls/core/x509.c $(SRC)/tls/core/key.c
+		$(SRC)/tls/core/x509.c $(SRC)/tls/core/key.c $(SRC)/tls/core/base64.c
 	mkdir -p bin/tls
 	python3 ../host/tls_signatures/run.py bin/tls
 	$(CC) $(filter-out -I% -D%,$(CFLAGS)) -Wno-array-parameter -Ibin/tls -I$(SRC)/tls/includes -I$(SRC)/tls/core \
-		-o $@ $< $(SRC)/tls/core/asn1.c
+		-o $@ $< $(SRC)/tls/core/asn1.c $(SRC)/tls/core/base64.c
 
 bin/fuzz_%: fuzz_%.c $(wildcard ../../src/parsers/*.c ../../src/tls/core/*.c) x509_stubs.c
 	mkdir -p bin

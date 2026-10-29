@@ -2473,6 +2473,11 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
 }
 #endif /* LWIP_TCP */
 
+static err_t socket_altcp_accept_cb(void *arg, struct altcp_pcb *newpcb, err_t err);
+#if LWIP_TCP
+static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err);
+#endif
+
 /* Re-bind the underlying pcb's callbacks to our shim functions. Called
  * from create() and again from set_poll() when the interval changes. */
 static void rebind_pcb_callbacks(struct lwip_socket *c)
@@ -2488,10 +2493,17 @@ static void rebind_pcb_callbacks(struct lwip_socket *c)
         if (c->pcb.altcp)
         {
             altcp_arg(c->pcb.altcp, c);
-            altcp_recv(c->pcb.altcp, conn_altcp_recv_cb);
-            altcp_sent(c->pcb.altcp, conn_altcp_sent_cb);
-            altcp_err(c->pcb.altcp, conn_altcp_err_cb);
-            altcp_poll(c->pcb.altcp, conn_altcp_poll_cb, 4);
+            if (c->is_listen)
+            {
+                altcp_accept(c->pcb.altcp, socket_altcp_accept_cb);
+            }
+            else
+            {
+                altcp_recv(c->pcb.altcp, conn_altcp_recv_cb);
+                altcp_sent(c->pcb.altcp, conn_altcp_sent_cb);
+                altcp_err(c->pcb.altcp, conn_altcp_err_cb);
+                altcp_poll(c->pcb.altcp, conn_altcp_poll_cb, 4);
+            }
         }
         break;
 #if LWIP_TCP
@@ -2499,10 +2511,17 @@ static void rebind_pcb_callbacks(struct lwip_socket *c)
         if (c->pcb.tcp)
         {
             tcp_arg(c->pcb.tcp, c);
-            tcp_recv(c->pcb.tcp, conn_tcp_recv_cb);
-            tcp_sent(c->pcb.tcp, conn_tcp_sent_cb);
-            tcp_err(c->pcb.tcp, conn_tcp_err_cb);
-            tcp_poll(c->pcb.tcp, conn_tcp_poll_cb, 4);
+            if (c->is_listen)
+            {
+                tcp_accept(c->pcb.tcp, socket_tcp_accept_cb);
+            }
+            else
+            {
+                tcp_recv(c->pcb.tcp, conn_tcp_recv_cb);
+                tcp_sent(c->pcb.tcp, conn_tcp_sent_cb);
+                tcp_err(c->pcb.tcp, conn_tcp_err_cb);
+                tcp_poll(c->pcb.tcp, conn_tcp_poll_cb, 4);
+            }
         }
         break;
 #endif
@@ -2693,7 +2712,11 @@ static void lwip_socket_detach_pcb_callbacks(struct lwip_socket *conn)
         if (conn->pcb.tcp)
         {
             tcp_arg(conn->pcb.tcp, NULL);
-            if (!conn->is_listen)
+            if (conn->is_listen)
+            {
+                tcp_accept(conn->pcb.tcp, NULL);
+            }
+            else
             {
                 /* tcp_recv/sent/err/poll are only valid on connected PCBs,
                  * not on the listen PCB produced by tcp_listen(). */
@@ -2718,10 +2741,19 @@ static void lwip_socket_detach_pcb_callbacks(struct lwip_socket *conn)
         if (conn->pcb.altcp)
         {
             altcp_arg(conn->pcb.altcp, NULL);
-            altcp_recv(conn->pcb.altcp, NULL);
-            altcp_sent(conn->pcb.altcp, NULL);
-            altcp_err(conn->pcb.altcp, NULL);
-            altcp_poll(conn->pcb.altcp, NULL, conn->pcb.altcp->pollinterval);
+            if (conn->is_listen)
+            {
+                /* ALTCP poll setters ultimately call tcp_poll(), which is
+                 * invalid for the underlying LISTEN PCB. */
+                altcp_accept(conn->pcb.altcp, NULL);
+            }
+            else
+            {
+                altcp_recv(conn->pcb.altcp, NULL);
+                altcp_sent(conn->pcb.altcp, NULL);
+                altcp_err(conn->pcb.altcp, NULL);
+                altcp_poll(conn->pcb.altcp, NULL, conn->pcb.altcp->pollinterval);
+            }
         }
         break;
     default:
