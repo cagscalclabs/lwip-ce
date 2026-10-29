@@ -694,9 +694,11 @@ class Control:
 
     def cmd_cert_client(self, port: str) -> str:
         """Connect to calc acting as a cert-authenticated TLS 1.3 server.
-        Accepts any certificate (including self-signed) via -verify 0."""
+        Trust the exact self-signed certificate generated for this suite."""
+        ca_file = HERE / "server/lwIPSCRT.pem"
         peer = OpenSSL(["s_client", "-connect", f"{CALC}:{port}",
-                        "-tls1_3", "-verify", "0", "-quiet"],
+                        "-tls1_3", "-CAfile", str(ca_file),
+                        "-verify_return_error", "-quiet"],
                        self.tmp, None)
         time.sleep(2)
         peer.send("lwip-ce cert server check\n")
