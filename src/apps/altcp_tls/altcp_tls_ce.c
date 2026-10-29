@@ -1053,6 +1053,7 @@ static bool load_cert_identity(const char *privkey_appvar,
     *chain_out = NULL;
     *chain_len_out = 0;
     *key_out = NULL;
+    INFO("tls-cert: loading identity");
     char *key_pem   = read_appvar_pem(privkey_appvar, &key_len);
     char *chain_pem = read_appvar_pem(chain_appvar,   &chain_len);
 
@@ -1096,6 +1097,7 @@ static bool load_cert_identity(const char *privkey_appvar,
         return false;
     }
 
+    INFO("tls-cert: identity loaded");
     *chain_out = chain;
     *chain_len_out = n_certs;
     *key_out = key;
@@ -1977,9 +1979,17 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
                 cert_cap += der_len + 5u;
             }
         }
+        INFO("tls-srv: flight begin");
         for (int step = TLS_SERVER_FLIGHT_ENCRYPTED_EXTENSIONS;
              ok && step <= TLS_SERVER_FLIGHT_FINISHED; step++)
         {
+            switch (step)
+            {
+            case TLS_SERVER_FLIGHT_ENCRYPTED_EXTENSIONS: INFO("tls-srv: ee"); break;
+            case TLS_SERVER_FLIGHT_CERTIFICATE: INFO("tls-srv: certificate"); break;
+            case TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY: INFO("tls-srv: certverify"); break;
+            default: INFO("tls-srv: finished"); break;
+            }
             if ((step == TLS_SERVER_FLIGHT_CERTIFICATE ||
                  step == TLS_SERVER_FLIGHT_CERTIFICATE_VERIFY) && !cert_mode)
                 continue;
@@ -2045,7 +2055,11 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
     }
 
     if (!ok)
+    {
+        INFO("tls-srv: flight failed");
         return false;
+    }
+    INFO("tls-srv: flight sent");
     altcp_output(conn->inner_conn);
 
     /* Application keys come from the transcript through the server Finished. */

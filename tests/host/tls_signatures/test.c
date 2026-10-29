@@ -235,6 +235,47 @@ static void hrr_keyshare_tests(void)
  * because a test server cannot be trusted by the calculator (the trust store
  * is a signed AppVar and there is no override), so an end-to-end client mTLS
  * handshake cannot get past server certificate verification in the harness. */
+
+/* parse_cert_chain() turns an AppVar of PEM into the configured chain. Fed with
+ * an exactly-sized, non-NUL-terminated buffer, the shape read_appvar_pem()
+ * allocates, so ASan reports any overread past the PEM text. */
+static void parse_cert_chain_tests(void)
+{
+    size_t n = 0;
+
+    struct tls_x509_object **chain =
+        parse_cert_chain((const char *)chain_pem, sizeof(chain_pem), &n);
+    assert(chain != NULL);
+    assert(n == 2);
+    assert(chain[0] && chain[1]);
+    assert(chain[0]->der_len == CERT_EC_DER_LEN);
+    assert(chain[1]->der_len == CERT_MISMATCH_DER_LEN);
+    assert(memcmp(chain[0]->der, cert_ec, CERT_EC_DER_LEN) == 0);
+    assert(memcmp(chain[1]->der, cert_mismatch, CERT_MISMATCH_DER_LEN) == 0);
+    for (size_t i = 0; i < n; i++)
+        tls_x509_object_free(chain[i]);
+    mem_free(chain);
+
+    /* A single certificate is the self-signed case. */
+    n = 0;
+    chain = parse_cert_chain((const char *)single_pem, sizeof(single_pem), &n);
+    assert(chain != NULL && n == 1);
+    assert(chain[0]->der_len == CERT_EC_DER_LEN);
+    tls_x509_object_free(chain[0]);
+    mem_free(chain);
+
+    /* No banner at all: refused, not a partial chain. */
+    static const char junk[] = "not a certificate";
+    n = 123;
+    assert(parse_cert_chain(junk, sizeof(junk) - 1, &n) == NULL);
+
+    /* Banner with a truncated body: the import fails and nothing leaks. */
+    static const char broken[] =
+        "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+    n = 123;
+    assert(parse_cert_chain(broken, sizeof(broken) - 1, &n) == NULL);
+}
+
 static void client_certificate_flight_tests(void)
 {
     static const uint8_t der_a[] = {0x30, 0x03, 0x02, 0x01, 0x01};
@@ -939,6 +980,7 @@ static void extended_key_usage_tests(void)
 int main(void)
 {
     client_certificate_flight_tests();
+    parse_cert_chain_tests();
     /* Staged client setup gates ClientHello1 on X25519 only. P-256's blocking
      * software fallback is deferred until an HRR requests it. */
     {

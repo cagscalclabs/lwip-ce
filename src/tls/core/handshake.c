@@ -6141,8 +6141,17 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
                                  uint8_t *out, size_t out_len,
                                  size_t *written)
 {
-    if (!ctx || !out || !written || !ctx->transcript_hash ||
-        !ctx->client_certificate_requested ||
+    if (!ctx || !out || !written)
+    {
+        ERROR_CODE(0xc1);
+        return false;
+    }
+    if (ctx->client_flight_step == TLS_CLIENT_FLIGHT_DONE)
+    {
+        *written = 0;
+        return true;
+    }
+    if (!ctx->transcript_hash || !ctx->client_certificate_requested ||
         ctx->state != TLS_STATE_SERVER_FINISHED_RECEIVED)
     {
         ERROR_CODE(0xc1);
@@ -6276,14 +6285,21 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
 bool tls_server_send_flight(struct tls_handshake_context *ctx,
                             uint8_t *out, size_t out_cap, size_t *written)
 {
-    if (!ctx || !out || !written || ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
+    if (!ctx || !out || !written)
     {
         ERROR_CODE(0xc1);
         return false;
     }
-    if (!ctx->transcript_hash)
+    /* Already complete: report "no more messages" rather than an error, even
+     * though the state has moved on past the flight. */
+    if (ctx->server_flight_step == TLS_SERVER_FLIGHT_DONE)
     {
-        ERROR_CODE(0xc7);
+        *written = 0;
+        return true;
+    }
+    if (!ctx->transcript_hash || ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
+    {
+        ERROR_CODE(0xc1);
         return false;
     }
 
