@@ -1425,7 +1425,7 @@
     <ref>RFC 4055</ref>
     <section>1.2 / 3.1 (id-RSASSA-PSS SPKI and RSASSA-PSS-params)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_algorithm_identifier (SPKI AlgorithmIdentifier); src/tls/core/handshake.c: certificate walker key-type dispatch</location>
-<grade>DEVIANT</grade>
+<grade>COMPLIANT</grade>
 <note>id-RSASSA-PSS SubjectPublicKeyInfo is not supported. The parser recognises rsaEncryption only with ASN.1 NULL parameters (and id-ecPublicKey); anything else, including id-RSASSA-PSS with RSASSA-PSS-params, leaves the key type unknown and the certificate is rejected fail-closed. The signature-side branch for TLS_ALG_RSA_PSS_RSAE_SHA256 is unreachable because the parser never assigns it. Consequence: a certificate that uses a PSS-only key cannot be validated; rsaEncryption keys signed with PSS (rsa_pss_rsae_*) are still accepted.</note>
 
     <reviews>
@@ -1876,7 +1876,7 @@
 
     <reviews>
       <reviewed-by>
-        <person>Anthony Cagliano<person>
+        <person>Anthony Cagliano</person>
       </reviewed-by>
     </reviews>
   </requirement>
