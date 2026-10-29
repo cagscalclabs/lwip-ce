@@ -130,6 +130,16 @@ bool tls_hkdf_expand(
         return false;
     }
 
+    if (prk_len < hash_len) {
+        ERROR();
+        return false;
+    }
+
+    if (!info && info_len > 0) {
+        ERROR();
+        return false;
+    }
+
     /* Check okm_len is not too large: max = 255 * HashLen */
     if (okm_len > 255 * hash_len) {
         ERROR();

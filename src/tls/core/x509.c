@@ -1733,6 +1733,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             static const uint8_t rsa_oid[] = {TLS_OID_RSA_ENCRYPTION_BYTES};
             static const uint8_t ec_oid[] = {TLS_OID_EC_PUBLIC_KEY_BYTES};
             static const uint8_t p256_oid[] = {TLS_OID_SECP256R1_BYTES};
+            static const uint8_t pss_oid[] = {TLS_OID_RSASSA_PSS_BYTES};
             tls_alg_t alg = TLS_ALG_UNKNOWN;
             if (scratch_alg.len == sizeof(rsa_oid) &&
                 !memcmp(scratch_alg.data, rsa_oid, sizeof(rsa_oid)) &&
@@ -1743,10 +1744,25 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                      scratch_param.tag == ASN1_OBJECTID && scratch_param.len == sizeof(p256_oid) &&
                      !memcmp(scratch_param.data, p256_oid, sizeof(p256_oid)))
                 alg = TLS_ALG_ECDSA_SECP256R1_SHA256;
-            /* PSS-restricted SPKIs require separate key restrictions and TLS
-             * rsa_pss_pss schemes, neither of which is implemented yet. */
+            else if (scratch_alg.len == sizeof(pss_oid) &&
+                     !memcmp(scratch_alg.data, pss_oid, sizeof(pss_oid)))
+            {
+                /* id-RSASSA-PSS SPKI: validate that the embedded RSASSA-PSS-params
+                 * specify SHA-256 / MGF1-SHA-256 / saltLen=32, which is the only
+                 * PSS profile our verifier supports.  Any other profile rejects
+                 * the certificate fail-closed rather than silently accepting it. */
+                tls_alg_t pss_scheme = TLS_ALG_UNKNOWN;
+                if (!tls_x509_signature_algorithm(&spki_alg, &pss_scheme) ||
+                    pss_scheme != TLS_ALG_RSA_PSS_RSAE_SHA256)
+                {
+                    ERROR_CODE(0x51);
+                    return false;
+                }
+                alg = TLS_ALG_RSA_PSS_RSAE_SHA256;
+            }
             out->pubkey.type = alg == TLS_ALG_RSA_PKCS1_SHA256 ? TLS_KEY_TYPE_RSA
-                : alg == TLS_ALG_ECDSA_SECP256R1_SHA256 ? TLS_KEY_TYPE_EC_P256
+                : alg == TLS_ALG_RSA_PSS_RSAE_SHA256     ? TLS_KEY_TYPE_RSA
+                : alg == TLS_ALG_ECDSA_SECP256R1_SHA256   ? TLS_KEY_TYPE_EC_P256
                 : TLS_KEY_TYPE_UNKNOWN;
             out->pubkey.allocated = false;
 

@@ -381,12 +381,12 @@ int main(void)
                                           "attacker.example.org");
         ok &= show_result("hostname mismatch rejected", pass);
 
-        /* CN-only fallback: cert1/cert2 have no SAN extension at all. */
+        /* RFC 9525: CN fallback is forbidden; cert with no SAN must be rejected. */
         pass = obj1 && obj1->subject_cn &&
-               tls_x509_hostname_matches(obj1->extensions, obj1->extensions_len,
-                                         obj1->subject_cn, obj1->subject_cn_len,
-                                         "Anthony");
-        ok &= show_result("CN fallback when no SAN", pass);
+               !tls_x509_hostname_matches(obj1->extensions, obj1->extensions_len,
+                                          obj1->subject_cn, obj1->subject_cn_len,
+                                          "Anthony");
+        ok &= show_result("CN fallback rejected (RFC 9525)", pass);
 
         /* No hostname must fail closed. */
         pass = obj_san && !tls_x509_hostname_matches(ext_data, ext_len,
