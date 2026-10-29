@@ -280,6 +280,8 @@ source += x509[x509.index('static bool tls_x509_is_string_tag'):x509.index('stat
 source += x509[x509.index('static const uint8_t oid_rsa_encryption'):]
 key_source = (root / 'src/tls/core/key.c').read_text()
 source += function((root / 'src/tls/core/rsa.c').read_text(), 'tls_rsa_public_key_shape_ok')
+# tls_p256_sign lives in eZ80 assembly; stub it out for the host build.
+source += 'static bool tls_p256_sign(uint8_t *sig, const uint8_t *hash, const uint8_t *priv) { (void)sig; (void)hash; (void)priv; return false; }\n'
 for name in ['tls_key_verify', 'tls_key_sign']:
     source += function(key_source, name)
 # Include internal AES helpers and blob helpers (not aes_encrypt_oneshot, which is mocked).

@@ -111,6 +111,7 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t alg) { memset(c
 void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_context *src) { memcpy(dst, src, sizeof(*dst)); }
 void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *p, size_t n) {}
 void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *out) { memset(out, 0x42, 32); }
+void tls_hash_clear(struct tls_hash_context *ctx) { memset(ctx, 0, sizeof(*ctx)); }
 bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t n, const uint8_t *hash, const struct tls_rsa_key *key)
 {
     pkcs_calls++;

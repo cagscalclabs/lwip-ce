@@ -736,7 +736,9 @@ def serve(server, port: int, handler):
 
 def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int) -> None:
     program = SUITES[suite]
-    files = [f"{suite}/bin/{program}.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*"))
+    suite_dir = HERE / suite
+    extra = sorted(os.path.relpath(f, HERE) for f in suite_dir.glob("*.8xv"))
+    files = [f"{suite}/bin/{program}.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*")) + extra
     path.write_text(json.dumps({
         "description": f"lwIP-CE networked suite {program}",
         "transfer_files": files,

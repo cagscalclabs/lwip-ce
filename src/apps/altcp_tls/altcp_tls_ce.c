@@ -968,7 +968,7 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     return conf;
 }
 
-/* Read an appvar into a heap buffer via the dylib file_fn table.
+/* Read an appvar into a heap buffer via the file_fn table.
  * Returns a mem_buffer_custom_malloc'd block; caller must free it.
  * *out_len receives the byte count. Returns NULL on any error. */
 static char *read_appvar_pem(const char *appvar_name, size_t *out_len)
@@ -1025,7 +1025,7 @@ static struct tls_x509_object **parse_cert_chain(const char *pem, size_t pem_len
         arr[idx] = tls_x509_import_certificate(start, cert_len);
         if (!arr[idx])
         {
-            for (size_t j = 0; j < idx; j++) mem_buffer_custom_free(arr[j]);
+            for (size_t j = 0; j < idx; j++) tls_x509_object_free(arr[j]);
             mem_free(arr);
             return NULL;
         }

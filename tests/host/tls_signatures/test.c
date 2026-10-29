@@ -914,7 +914,7 @@ int main(void)
     assert(tls_key_verify(digest, 32, sig, 128, &aes, TLS_ALG_UNKNOWN) == TLS_KEY_OP_UNKNOWN);
     size_t signature_len = 0;
     assert(tls_key_sign(digest, 32, sig, &signature_len, &aes, TLS_ALG_RSA_PKCS1_SHA256) == TLS_KEY_OP_INVALID);
-    assert(tls_key_sign(digest, 32, sig, &signature_len, &ec.pubkey, TLS_ALG_ECDSA_SECP256R1_SHA256) == TLS_KEY_OP_UNSUPPORTED);
+    assert(tls_key_sign(digest, 32, sig, &signature_len, &ec.pubkey, TLS_ALG_ECDSA_SECP256R1_SHA256) == TLS_KEY_OP_INVALID);
     puts("TLS signature dispatch/lifecycle regressions passed");
     return 0;
 }
