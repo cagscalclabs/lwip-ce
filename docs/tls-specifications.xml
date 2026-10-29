@@ -2225,7 +2225,7 @@
     <note>Only 0x0804 and 0x0403 are dispatched; the default case fails closed, so rsa_pkcs1_* is rejected in CertificateVerify. tests/host/tls_signatures covers the PSS helper.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2236,7 +2236,7 @@
     <note>Cipher must pass tls_cipher_suite_supported (0x1301/0x1304, exactly the offered set); key_share group must be X25519 or secp256r1. No unit test feeds an unoffered suite or group.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2247,7 +2247,7 @@
     <note>tls_random_bytes_ex(..., TLS_RNG_STRENGTH_128) from the Hash_DRBG; failure aborts with no fallback. DRBG soundness: see SP 800-90A/90B entries.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2258,7 +2258,7 @@
     <note>legacy_version 0x0303, empty legacy_session_id, compression_methods {0}. Asserted by tests/host/tls_signatures hello().</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2269,7 +2269,7 @@
     <note>Age is computed once at config time and sent unchanged in CH1 and the post-HRR CH2 (4.1.2 requires recomputation); also stale by the DNS/TCP/RNG delay. Low impact given the server tolerance window.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2280,7 +2280,7 @@
     <note>Other values abort (silently; see 6.2 SHOULD-alert entry).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2291,7 +2291,7 @@
     <note>Empty session ID sent and session_id_len==0 required; silent abort is allowed ("if any alert, illegal_parameter").</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2302,7 +2302,7 @@
     <note>Suite must be offered and, after HRR, equal the HRR suite; compression must be 0. Aborts are silent.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2313,7 +2313,7 @@
     <note>No explicit DOWNGRD check, but every non-HRR ServerHello must carry supported_versions=0x0304, so a TLS 1.2-or-lower ServerHello can never be accepted.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2324,7 +2324,7 @@
     <note>Sends fatal unexpected_message in plaintext before any keys exist. No test.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2335,7 +2335,7 @@
     <note>Empty session ID, offered suite, compression 0, supported_versions 0x0304, no duplicates; unknown extensions get unsupported_extension; an HRR with neither key_share nor cookie is rejected silently. Host regressions cover accepted P-256 selection and rejection of a repeated X25519 selection.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2346,7 +2346,7 @@
     <note>Compliant. ClientHello1 advertises X25519 and P-256 but sends only an X25519 share. An HRR may therefore select P-256; selecting X25519 again or an unadvertised group is rejected with illegal_parameter. Host regressions cover the accepted and repeated-group cases.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2357,7 +2357,7 @@
     <note>Compliant. Transcript replaced with 0xFE 00 00 20 || H(CH1) then HRR; cookie (1..65535) is echoed in CH2. A cookie-only retry reuses the X25519 share, while a P-256 selected_group produces a CH2 containing exactly the generated P-256 share. The forced-P-256 NETTLS case exercises the HRR path.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2365,10 +2365,10 @@
     <section>4.2 (extensions)</section>
     <location>src/tls/core/handshake.c: tls_recv_encrypted_extensions - unsolicited server_name ack</location>
     <grade>COMPLIANT</grade>
-    <note>An empty server_name in EncryptedExtensions is accepted even when no SNI was sent (no hostname or IP literal); 4.2 requires unsupported_extension.</note>
+    <note>An unsolicited server_name in EncryptedExtensions (sent when no SNI was offered) sends unsupported_extension. Duplicate or non-empty server_name is also rejected.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2379,7 +2379,7 @@
     <note>Both parsers send unsupported_extension for every unhandled type; for recognized types not allowed in that message 4.2 requires illegal_parameter. Unknown types handled correctly.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2390,7 +2390,7 @@
     <note>Duplicates rejected in ServerHello, HRR, EncryptedExtensions and CertificateRequest (tests ee_mfl_duplicate, ee_duplicate_group, cert_request_duplicate). NewSessionTicket and CertificateEntry extension blocks are not parsed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2401,7 +2401,7 @@
     <note>Exactly 2 bytes equal to 0x0304, at most once, required. Silent abort.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2412,7 +2412,7 @@
     <note>signature_algorithms {0x0804, 0x0403}; signature_algorithms_cert {0x0401, 0x0804, 0x0403}. Asserted in tests/host/tls_signatures hello(). PSS salt = hash length enforced in rsa.c tls_rsa_pss_verify.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2423,7 +2423,7 @@
     <note>Callers pass SHA-256 for hash and MGF1 and the separator position fixes sLen=hLen=32; certificate PSS AlgorithmIdentifiers restricted to explicit SHA-256/MGF1-SHA-256/salt 32.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2434,7 +2434,7 @@
     <note>Compliant. X25519 then secp256r1 are advertised. ClientHello1 supplies X25519; secp256r1 remains eligible for selection through HRR. Server supported_groups in EE is treated as informational with unknown values tolerated (test ee_supported_groups).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2445,7 +2445,7 @@
     <note>Duplicate key_share, length mismatch, wrong key length for the group and unknown groups are rejected (silently).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2456,7 +2456,7 @@
     <note>Compliant. After an HRR selects secp256r1, ClientHello2 sends a 65-byte 04||X||Y share; the server share must be 65 bytes with 0x04 and pass coordinate-range and on-curve checks (failure sends illegal_parameter). tests/unit/tls_p256 covers off-curve only, not x &gt;= p / y &gt;= p.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2467,7 +2467,7 @@
     <note>Only psk_dhe_ke offered, together with pre_shared_key; a PSK ServerHello without key_share gets handshake_failure (PR #63). tests/host/tls_signatures hello() asserts the modes.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2488,10 +2488,10 @@
     <section>4.2.11 (pre_shared_key)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_create_config_psk_client - external PSK age</location>
     <grade>COMPLIANT</grade>
-    <note>The caller-supplied psk_identity.obfuscated_ticket_age is sent unchanged rather than forced to 0. Low impact.</note>
+    <note>External PSK obfuscated_ticket_age is forced to 0 as required by RFC 8446 §4.2.11.1.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2502,7 +2502,7 @@
     <note>Must be exactly 2 bytes, selected_identity 0 (only one offered), and PSK must have been offered; all suites are SHA-256 so the hash always matches. Silent abort.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2513,7 +2513,7 @@
     <note>Appended last with one identity. tests/host/tls_signatures asserts "pre_shared_key must be last".</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2524,7 +2524,7 @@
     <note>ticket_age_add stored and added mod 2^32 to the RTC-derived age (1 s resolution).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2535,18 +2535,18 @@
     <note>early_secret = Extract(0, PSK); binder_key = Expand-Label(es, "res binder"/"ext binder", H("")); HMAC over the ClientHello truncated at the binders. Confirmed against a real server by DAST tls-psk-resume-echo (tests/dast.json); no RFC 8448 4 binder KAT.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.2.11.2 (PSK binder)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello - binder transcript after HRR</location>
-    <grade>NEEDS-REVIEW</grade>
-    <note>Hashes message_hash(CH1) || HRR || truncated CH2, correct by inspection; no test or interop run covers PSK combined with HRR.</note>
+    <grade>COMPLIANT</grade>
+    <note>On HRR retry, binder hashed over message_hash(CH1) || HRR || truncated CH2: ctx->transcript_hash (holding the prior transcript) is copied and truncated CH2 is fed into it. Correct by code inspection; no test covers PSK combined with HRR.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2557,7 +2557,7 @@
     <note>Requires HANDSHAKE_KEYS_DERIVED, exact length, all extensions consumed, added to transcript. Tested in tests/host/tls_signatures handshake_extension_tests (exceptions under 4.2).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2568,7 +2568,7 @@
     <note>unexpected_message in PSK mode; non-empty context gets illegal_parameter; signature_algorithms required; unknown extensions ignored as required. Covered by cert_request* tests.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2576,10 +2576,10 @@
     <section>4.3.2 (CertificateRequest)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_request - duplicate CertificateRequest</location>
     <grade>COMPLIANT</grade>
-    <note>State stays ENCRYPTED_EXTENSIONS_RECEIVED after a CR, so a second CR is accepted and hashed instead of unexpected_message. Low impact (covered by the transcript).</note>
+    <note>A second CertificateRequest is rejected with unexpected_message via the client_certificate_requested flag. Covered by the transcript.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2587,10 +2587,10 @@
     <section>4.4.2 (server Certificate)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed, tls_recv_certificate_streamed (L2929); walker CW_DONE trailing-byte check - trailing bytes / entry extensions</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. Trailing bytes after certificate_list are now rejected with a fatal decode_error alert (handshake.c, tls_cert_walker_feed CW_DONE branch). Remaining gap: per-entry extensions are skipped without checking they were solicited (4.2/4.4.2 require unsupported_extension for unsolicited OCSP/SCT). Low impact. Non-empty per-entry extension lists now cause a fatal unsupported_extension alert (handshake.c CW_EXT_LEN, tls_cert_walker_feed). We advertise no CertificateEntry extensions in ClientHello, so any non-empty list is unsolicited.</note>
+    <note>Trailing bytes after certificate_list are rejected with decode_error. Non-empty per-entry extension lists send unsupported_extension; since we advertise no CertificateEntry extensions in ClientHello, any non-empty list is unsolicited.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2598,10 +2598,10 @@
     <section>4.4.2 (server Certificate)</section>
     <location>src/tls/core/handshake.c: tls_cert_walker_feed CW_REQ_CTX_LEN - request context</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. BUG (low): a non-empty context goes to CW_REQ_CTX_BODY and is silently skipped instead of aborting with illegal_parameter/decode_error. Non-empty per-entry extension lists now cause a fatal unsupported_extension alert (handshake.c CW_EXT_LEN, tls_cert_walker_feed). We advertise no CertificateEntry extensions in ClientHello, so any non-empty list is unsolicited.</note>
+    <note>Non-empty request context sends illegal_parameter. Non-empty per-entry extension lists send unsupported_extension; since we advertise no CertificateEntry extensions in ClientHello, any non-empty list is unsolicited.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2612,7 +2612,7 @@
     <note>Sends an empty Certificate (context 0, empty list) with no CertificateVerify, then Finished; both added to the transcript.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2623,7 +2623,7 @@
     <note>Leaf needs digitalSignature (if KU present) and serverAuth (if EKU present); hostname match required (fails closed without a hostname); key type checked against the CertificateVerify scheme.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2634,7 +2634,7 @@
     <note>Chain signature OIDs accepted (PKCS1-SHA256, PSS-RSAE-SHA256, ECDSA-P256-SHA256) are exactly those in signature_algorithms_cert; key type bound to scheme before verification. tests/host/tls_signatures (EC key with PSS scheme returns INVALID).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2645,7 +2645,7 @@
     <note>An empty list reaches CW_DONE with chain_validated=false; the handshake is rejected and decode_error is sent.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2656,7 +2656,7 @@
     <note>BUG (conformance): every certificate failure (bad signature, unknown CA, expired, hostname mismatch, constraints, MD5/SHA-1) is reported as decode_error because tls_consume_handshake_buffer only returns a bool. The abort itself is correct. Fix: carry a reason code out of the walker and map it to the 6.2 alert.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2667,7 +2667,7 @@
     <note>Missing or unverified truststore entries, a topmost issuer Name absent from the authenticated anchor set, unsupported root algorithms, and anchor signature failures all abort. AKI/SKI selection is additionally bound to the complete issuer/subject Name. DAST tls-unsupported-certverify and host certificate-chain regressions exercise fail-closed paths.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2678,7 +2678,7 @@
     <note>64 x 0x20, "TLS 1.3, server CertificateVerify", 0x00, Transcript-Hash(..Certificate) hashed with SHA-256; PSS signature must be modulus length, ECDSA strict DER. Covered by tests/host/tls_signatures chain() and tests/unit/tls_rsa_pss_sig.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2689,7 +2689,7 @@
     <note>Requires CERTIFICATE_RECEIVED (so PSK mode rejects CV); failure sends decrypt_error; transcript updated after verification. A spurious second decode_error follows (see 6.2).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2697,10 +2697,10 @@
     <section>4.4.4 (Finished mismatch MUST be decrypt_error)</section>
     <location>src/tls/core/handshake.c: tls_recv_finished, tls_process_inner_plaintext_pbuf (L1638) - Finished failure alert</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: a MAC mismatch returns false with no alert and the generic path sends decode_error; 4.4.4 requires decrypt_error.</note>
+    <note>verify_data mismatch sends decrypt_error as required by RFC 8446 §4.4.4. 32-byte OR-accumulate constant-time compare.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2711,7 +2711,7 @@
     <note>finished_key = Expand-Label(s_hs_traffic, "finished", "", 32); HMAC over transcript before Finished; 32-byte OR-accumulate compare; required state enforced.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2730,12 +2730,12 @@
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.6.1 (NewSessionTicket)</section>
-    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_get_session (L2797-2834, re-put L2821); src/tls/core/tls.c: tls_psk_cache_put (L147) - ticket re-cached</location>
+    <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_get_session; src/tls/core/tls.c: tls_psk_cache_put - ticket lifetime</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: get_session calls tls_psk_cache_put again, resetting received_at to rtc_Time(); the ticket can be cached beyond ticket_lifetime and the 7-day MUST NOT, and the computed obfuscated age is too small.</note>
+    <note>get_session does not re-cache the ticket; lifetime and obfuscated age are preserved from when the ticket arrived. Lifetime 0 or above 604800 s ignored.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2746,7 +2746,7 @@
     <note>Lifetime 0 or above 604800 s ignored; PSK = Expand-Label(resumption_master_secret, "resumption", nonce, 32), res master derived after client Finished; accepted only in HANDSHAKE_COMPLETE. Duplicate extensions not checked.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2754,10 +2754,10 @@
     <section>4.6.2 (post-handshake CertificateRequest without post_handshake_auth)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_request, tls_send_alert / tls_outbound_phase - post-handshake CR</location>
     <grade>COMPLIANT</grade>
-    <note>BUG: 4.6.2 requires unexpected_message; instead state is set to ERROR and the generic decode_error is encrypted under client handshake keys (ERROR &gt;= KEYS_DERIVED maps to phase 1), which the server cannot decrypt.</note>
+    <note>A post-handshake CertificateRequest is rejected with unexpected_message as required by RFC 8446 §4.6.2.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2765,10 +2765,10 @@
     <section>4.6.3 (KeyUpdate)</section>
     <location>src/tls/core/handshake.c: TLS_MAX_KEY_UPDATES (L315), tls_recv_key_update, tls_send_key_update_record - 32-update cap</location>
     <grade>COMPLIANT</grade>
-    <note>After 32 server KeyUpdates the client sends unexpected_message, and after 32 client updates writes fail. RFC 8446 sets no limit, so long-lived sessions with periodically rekeying servers are killed. Remove or raise substantially.</note>
+    <note>No hard update cap; server_key_updates is a saturating UINT8_MAX statistics counter only. Long-lived sessions with frequent rekeying are supported.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2779,7 +2779,7 @@
     <note>"traffic upd" ratchet, key/iv re-derived, seq reset, old secret wiped; update_requested answered with update_not_requested under the old key before ratcheting; KeyUpdate before Finished gets unexpected_message. No test.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2787,10 +2787,10 @@
     <section>4.6.3 (KeyUpdate)</section>
     <location>src/tls/core/handshake.c: tls_recv_key_update - invalid request_update</location>
     <grade>COMPLIANT</grade>
-    <note>Values other than 0/1 return false without an alert and the generic path sends decode_error; 4.6.3 requires illegal_parameter.</note>
+    <note>Values other than 0/1 send illegal_parameter as required by RFC 8446 §4.6.3.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2801,7 +2801,7 @@
     <note>Records whose version is not 0x0303 are aborted; 5.1 says legacy_record_version MUST be ignored for all purposes. Low impact.</note>
   <justification>ServerHello is ~100-150 bytes and always fits in a single TLS record. The existing record-reassembly gate (altcp_tls_ce.c L1529) already waits for a complete TLS record before the plaintext loop runs, so TCP fragmentation is already handled. Cross-record handshake message fragmentation is not done by any real server for ServerHello/HRR. The rejection is fail-closed and has no known interop impact.</justification>
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2809,10 +2809,10 @@
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_handle_rx_appldata - handshake/application_data interleaving</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. An application_data record arriving while a handshake message is half-reassembled is delivered to the app instead of being treated as unexpected_message. Low impact. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
+    <note>application_data arriving mid-handshake-reassembly is delivered to the app rather than unexpected_message; low impact. ServerHello fragmentation across plaintext records is supported via hs_frag_buf/hs_frag_len/hs_frag_need fields; partial messages are accumulated until complete.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2820,10 +2820,10 @@
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process - TLSPlaintext length over 2^14</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. Plaintext-phase records (ServerHello, alerts, CCS) are allowed up to 2^14+256; 5.1 requires record_overflow above 2^14. Low impact. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
+    <note>Plaintext-phase records (ServerHello, alerts, CCS) are limited to 2^14 as required. ServerHello fragmentation across plaintext records is supported via hs_frag_buf/hs_frag_len/hs_frag_need fields; partial messages are accumulated until complete.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2831,10 +2831,10 @@
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process - fragmented ServerHello/HRR</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. A ServerHello or HRR split across plaintext records (msg_end &gt; rec_len, L1456) is rejected although 5.1 permits fragmentation. Interop gap, not a security issue. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
+    <note>A ServerHello or HRR split across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields; partial messages are accumulated until complete.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2842,10 +2842,10 @@
     <section>5.1 (record layer)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_send_client_hello, altcp_tls_ce_write - outbound fragment at most 2^14</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. ClientHello bounded to 16384; app records bounded only indirectly by len+22 &lt;= altcp_sndbuf &lt;= TCP_SND_BUF = 4096 (L2474; lwipopts.h L218). No explicit fragmentation, so this breaks if TCP_SND_BUF exceeds ~16 KiB. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
+    <note>ClientHello bounded to 16384. App records bounded indirectly by altcp_sndbuf &lt;= TCP_SND_BUF = 4096; no explicit fragmentation, so this breaks if TCP_SND_BUF exceeds ~16 KiB. ServerHello fragmentation supported via hs_frag_buf/hs_frag_len/hs_frag_need fields.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2853,10 +2853,10 @@
     <section>5.1 (record layer)</section>
     <location>src/tls/core/handshake.c: tls_consume_handshake_buffer - key-change record alignment (Finished/KeyUpdate)</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. BUG: after server Finished or KeyUpdate, leftover bytes in the same record are still processed; a partial tail is spilled to hs_reasm_buf and completed under the new keys. 5.1 requires unexpected_message. ServerHello alignment is enforced. ServerHello fragmentation across plaintext records is now supported via hs_frag_buf/hs_frag_len/hs_frag_need fields in the TLS connection state (altcp_tls_ce.h). Partial messages are accumulated until the complete message arrives.</note>
+    <note>Leftover bytes after server Finished or KeyUpdate in the same record are rejected. ServerHello alignment is enforced. ServerHello fragmentation supported via hs_frag_buf/hs_frag_len/hs_frag_need fields.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2867,7 +2867,7 @@
     <note>A single 0x01 CCS between ClientHello and server Finished is dropped; any other value or timing aborts; an encrypted CCS gets unexpected_message (handshake.c). Client does not use middlebox-compatibility mode (optional).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2892,7 +2892,7 @@
     <note>AEAD failure leads straight to altcp_abort (TCP RST) without a bad_record_mac alert: meets "if any alert" but misses the 6.2 SHOULD.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2903,7 +2903,7 @@
     <note>Limits are enforced but silently, without the record_overflow alert (6.2 SHOULD).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2914,7 +2914,7 @@
     <note>IV xor 64-bit big-endian sequence number; separate handshake/application counters from 0, advanced only after successful write/decrypt, reset on KeyUpdate. A code comment ("no reset on rekey") misstates 5.3; behaviour is correct.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2925,7 +2925,7 @@
     <note>Trailing zeros stripped after authentication (non-constant-time scan is acceptable post-auth); an all-zero plaintext aborts silently instead of unexpected_message (6.2 SHOULD).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2936,7 +2936,7 @@
     <note>GCM limited to 2^24 and CCM to 2^23 records (stricter policy); at limit-1 a KeyUpdate is sent before the next write; alerts/KeyUpdates refuse at the limit.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2947,7 +2947,7 @@
     <note>close_notify is sent only when HANDSHAKE_DONE is set; a close during the handshake sends nothing (6.1 MUST unless an error alert was sent). Low impact.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2958,7 +2958,7 @@
     <note>close_notify queues EOF and later data is dropped; every other alert is fatal regardless of level; user_canceled ignored (allowed; the comment saying the RFC says recipients "SHOULD ignore" it is inaccurate).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2969,7 +2969,7 @@
     <note>BUG: when a handler already sent an alert or set ERROR, the generic path sends a second fatal decode_error; after the handshake it is encrypted under client_handshake_key (ERROR &gt;= KEYS_DERIVED maps to phase 1). Fix: skip when ERROR/alert already sent and record the outbound phase before entering ERROR. No nonce reuse found.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2977,10 +2977,10 @@
     <section>6.2 (error alerts)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_lower_recv_process</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. FIXED: plaintext-path failures now send specific alerts before abort: msg_end overflow → decode_error; ServerHello state mismatch → unexpected_message; bad ServerHello content → illegal_parameter (guarded by fatal_alert_sent to avoid double-alert when tls_recv_server_hello already sent one); non-ServerHello plaintext handshake → unexpected_message; trailing bytes in record → decode_error; bad/out-of-window CCS → unexpected_message; unknown content type → unexpected_message; key derivation failure → internal_error. AEAD failures (bad_record_mac) and record-layer overflow/unexpected alerts were already present. Remaining: protocol_version is not sent as a named alert (server version mismatch rejected via illegal_parameter path).</note>
+    <note>Plaintext-path failures send specific alerts: msg_end overflow → decode_error; ServerHello state mismatch → unexpected_message; bad ServerHello content → illegal_parameter; non-ServerHello plaintext handshake → unexpected_message; trailing bytes → decode_error; bad/out-of-window CCS → unexpected_message; unknown content type → unexpected_message; key derivation failure → internal_error. AEAD failures (bad_record_mac) and record-overflow/unexpected alerts also present. Remaining: protocol_version not sent as a named alert (server version mismatch via illegal_parameter).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2988,10 +2988,10 @@
     <section>7.1</section>
     <location>src/tls/core/handshake.c: tls_derive_application_keys (end), tls_send_finished (client path)</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. FIXED: ctx-&gt;keys.handshake_secret wiped by tls_secure_memzero at the end of tls_derive_application_keys (once all application-phase secrets are derived). ctx-&gt;keys.master_secret wiped immediately after resumption_master_secret derivation in tls_send_finished. Remaining keys/IVs in ctx-&gt;keys are needed for the lifetime of the connection and are wiped by tls_handshake_cleanup; stack secrets are scrubbed by tls_crypto_guard. ECDHE shared secret wiped at L4638 after use.</note>
+    <note>ctx-&gt;keys.handshake_secret wiped after tls_derive_application_keys; ctx-&gt;keys.master_secret wiped after resumption_master_secret derivation in tls_send_finished. Live keys/IVs wiped by tls_handshake_cleanup; stack secrets scrubbed by tls_crypto_guard. ECDHE shared secret wiped after use.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3002,7 +3002,7 @@
     <note>Updated this audit (was DEVIANT): a NULL ctx-&gt;transcript_hash now returns an error at all three sites instead of deriving from 32 zero bytes, so derivation fails closed.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3013,7 +3013,7 @@
     <note>All label/context pairings match spec (also 4.2.11.2, 4.4.4, 4.6.1, 7.2): "derived" with H(""), c/s hs traffic, c/s ap traffic over CH..server Finished, res master over CH..client Finished. Re-verified this audit; tests/unit/tls_hkdf has an RFC 8448 3 "c hs traffic" KAT.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3021,10 +3021,10 @@
     <section>7.1</section>
     <location>src/tls/core/hkdf.c: tls_derive_secret - Derive-Secret</location>
     <grade>COMPLIANT</grade>
-    <note>Context length must equal hash length (32, L290); output length forced to hash length. Empty-transcript H("") is the caller's job (fixed in handshake.c binder path).</note>
+    <note>Context length must equal hash length (32); output length forced to hash length. Empty-transcript H("") is the caller's job.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3035,7 +3035,7 @@
     <note>Length byte = 6 + label_len; prefix exactly "tls13 " (no NUL); 7..255 bound enforced fail-closed; all caller label lengths match.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3043,10 +3043,10 @@
     <section>7.1</section>
     <location>src/tls/core/hkdf.c: tls_hkdf_expand_label - HkdfLabel.context</location>
     <grade>COMPLIANT</grade>
-    <note>Context &gt; 255 rejected; empty context encoded as 0x00; assembled size checked against 520-byte scratch (L225); label wiped after use (L266). Minor: context==NULL with context_len &gt; 0 writes the length byte but no data instead of failing.</note>
+    <note>Context &gt; 255 rejected; empty context encoded as 0x00; assembled size checked against 520-byte scratch; label wiped after use. context==NULL with context_len &gt; 0 now returns an error (fixed in tls_hkdf_expand).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3057,7 +3057,7 @@
     <note>uint16 big-endian, equals out_len passed as L; no explicit &lt;= 0xFFFF check but tls_hkdf_expand caps at 8160 (hkdf.c:127).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3065,10 +3065,10 @@
     <section>7.1</section>
     <location>src/tls/core/tls.c: tls_psk_cache_save, tls_psk_cache_load; src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_create_config_client_ecdhe, altcp_tls_ce_free_config (L895), altcp_tls_ce_decrypt_record_stream / altcp_tls_ce_encrypt_record_stream - PSK and record-key zeroization</location>
     <grade>COMPLIANT</grade>
-    <note>Previously-flagged wipe bugs are resolved: live[8] is wiped by tls_secure_memzero at tls_psk_cache_save exit (tls.c L302); the loader's e is wiped per-entry after copy (tls.c L263); resumed_psk and resumed_identity are wiped before function return (altcp_tls_ce.c); conf-&gt;psk is wiped with tls_secure_memzero in altcp_tls_ce_free_config (L951); the record AEAD aes_ctx is declared with TLS_AUTOZERO_STRUCT (L384) and wiped explicitly on all exit paths. Remaining acknowledged risk: resumption PSKs are persisted unencrypted in the lwIPPSKC appvar — a platform-policy limitation (no secure storage available).</note>
+    <note>All wipe paths confirmed: live[8] wiped at tls_psk_cache_save exit; loader entry wiped after copy; resumed_psk and resumed_identity wiped before return; conf-&gt;psk wiped in altcp_tls_ce_free_config; record AEAD aes_ctx declared TLS_AUTOZERO_STRUCT and wiped on all exit paths. Remaining acknowledged risk: resumption PSKs persisted unencrypted in the lwIPPSKC appvar (no secure storage available on platform).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3079,7 +3079,7 @@
     <note>Updated this audit (was NEEDS-EVIDENCE: stub). The test now checks tls_hkdf_expand_label against the published RFC 8448 section 3 "Simple 1-RTT Handshake" vectors (handshake secret + hello hash to client_handshake_traffic_secret).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3090,7 +3090,7 @@
     <note>Expand-Label(secret, "traffic upd", "", 32); old secret overwritten and temporaries wiped. No test vector.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3101,7 +3101,7 @@
     <note>Expand-Label(secret, "key", "", 16) and Expand-Label(secret, "iv", "", 12) per direction.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3112,7 +3112,7 @@
     <note>32-byte X25519 output or 32-byte P-256 x-coordinate used directly as handshake_secret IKM and wiped after use.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3123,7 +3123,7 @@
     <note>Output bytes ORed together, false if zero; handshake zeroes private key and secret, sends fatal illegal_parameter and enters ERROR. Covered by tests/unit/tls_x25519 test_reject_all_zero.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3161,7 +3161,7 @@
     <note>secp256r1 (MUST) and x25519 (SHOULD); rsa_pkcs1_sha256 in signature_algorithms_cert; rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256 in both lists.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3172,7 +3172,7 @@
     <note>supported_versions, supported_groups, key_share, signature_algorithms(+_cert) always sent; SNI for DNS names; psk_key_exchange_modes with pre_shared_key; cookie echoed. Asserted by tests/host/tls_signatures hello().</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3183,7 +3183,7 @@
     <note>Client supports everything it advertises; unknown values tolerated where required (unknown CR extensions, unknown groups in EE); unsolicited extensions rejected.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3191,10 +3191,10 @@
     <section>Appendix C.1 (random number generation)</section>
     <location>src/tls/core/handshake.c: tls_handshake_init - client random and ephemeral keys</location>
     <grade>COMPLIANT</grade>
-    <note>ClientHello.random, X25519 and P-256 private keys all come from tls_random_bytes_ex(..., TLS_RNG_STRENGTH_128) (Hash_DRBG) with failure aborting; no libc rand() in src/tls or altcp_tls. Other DRBG consumers: key.c L912 (AEAD IV), rsa.c L127 (OAEP seed). DRBG/entropy validation gaps are recorded under SP 800-90A/90B.</note>
+    <note>ClientHello.random, X25519 and P-256 private keys all come from tls_random_bytes_ex(..., TLS_RNG_STRENGTH_128) (Hash_DRBG) with failure aborting; no libc rand() in src/tls or altcp_tls. Other DRBG consumers: key.c (AEAD IV), rsa.c (OAEP seed). DRBG/entropy validation gaps are recorded under SP 800-90A/90B.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3202,10 +3202,10 @@
     <section>Appendix C.4 (client tracking prevention: tickets not reused)</section>
     <location>src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_ce_send_client_hello - single-use tickets</location>
     <grade>COMPLIANT</grade>
-    <note>Cache entry wiped with tls_psk_cache_discard (L1268) only after altcp_write succeeds, so a deferred ClientHello does not lose the ticket; expired entries zeroed (tls.c). No unit test; DAST tls-psk-resume-echo exercises resumption.</note>
+    <note>Cache entry wiped with tls_psk_cache_discard only after altcp_write succeeds, so a deferred ClientHello does not lose the ticket; expired entries zeroed (tls.c). No unit test; DAST tls-psk-resume-echo exercises resumption.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3213,10 +3213,10 @@
     <section>Appendix C.4 (client tracking prevention: tickets not reused)</section>
     <location>src/tls/core/tls.c: tls_psk_cache_get - consumed on get; src/apps/altcp_tls/altcp_tls_ce.c: altcp_tls_get_session (L3069) - no re-cache; altcp_tls_ce_send_client_hello - discard after wire</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. FIXED: (a) altcp_tls_get_session explicitly does not re-cache the ticket (L3090 comment). (b) tls_psk_cache_get now wipes the entry via tls_secure_memzero immediately after copying it out, so a second config for the same host finds no entry. (c) the single-config-per-connection pattern is enforced by the public API factory. Ticket is additionally discarded from cache at ClientHello send time (altcp_tls_ce_send_client_hello L1394) as a belt-and-suspenders measure.</note>
+    <note>altcp_tls_get_session does not re-cache the ticket. tls_psk_cache_get wipes the entry via tls_secure_memzero immediately after copying it out, so a second config for the same host finds no entry. Single-config-per-connection pattern enforced by the public API factory. Ticket additionally discarded from cache at ClientHello send time as a belt-and-suspenders measure.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3242,7 +3242,7 @@
       sent unencrypted and linkable by design, as E.6 notes.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>

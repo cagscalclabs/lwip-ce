@@ -136,15 +136,12 @@ Users can now disable TLS completely through the app config wizard, for any unco
 
 ## Unreleased
 
-- **Ledger audit (docs/tls-specifications.xml):** re-checked every entry that carries a `reviewed-by` person against the current tree. Corrected entries whose notes described fixed bugs or non-existent behaviour (RFC 4648 NUL rejection, RSA modulus bit-length floor, RFC 6979 retry, truststore metadata, RFC 5280 issuer/CN, stapled OCSP, Hash_df test coverage, SP 800-90B wipe size, crypto-guard saturation) and re-graded RFC 4055 1.2/3.1 id-RSASSA-PSS SPKI as DEVIANT with a justification (PSS-only key certificates are rejected fail-closed). Later fixed and regraded as COMPLIANT.
-- **P-256 RFC 6979 retry was deriving from clobbered state:** the K/V chain state for the `r == 0 || s == 0` retry lived in the ladder scratch and was overwritten by the scalar multiply and the modular inverse before the retry test. DK_K/DK_V now live in the verify-only `__p256_pq` tail. New `tests/unit/tls_p256_retry` drives the full path (seed, clobber, advance once) and requires the RFC 6979 h.3 nonce from an independent implementation; it fails on the old layout.
-- **Handshake no longer generates an unused P-256 keypair:** `tls_handshake_init` only starts the X25519 share. The P-256 share is produced on demand by `tls_handshake_p256_step()` when a HelloRetryRequest selects secp256r1, saving a full P-256 scalar multiplication on handshakes where the server accepts X25519.
-- **Record decryption no longer needs a 2 KiB per-record scratch:** pass 2 copies ciphertext straight into a fresh `PBUF_RAM` output segment and decrypts it in place there, removing one full-record copy and a `malloc`/`free` per record.
-- **`mem.c` hot paths:** ring push/pop/peek use conditional subtraction instead of 24-bit modulo; the pool allocator scans its bitmap a byte at a time (whole free/used bytes at once) and sets/clears allocation bits with shift-masks instead of per-block division. `tests/host/mem_pool` models both structures against the production code.
-- **Traceback ring no longer duplicated in .bss:** `lwip_get_traceback()` is replaced by `lwip_traceback_copy()`, which orders entries into a caller-provided buffer, so the file logger leases a short-lived stack array. Saves 704 bytes of .bss (total .bss 5093 -> 4389). Exported symbol renamed accordingly.
-- **`crypto_guard`** scrubs the stack only when the outermost guarded call returns, instead of on every nested primitive call.
+- Fix P-256 RFC 6979 retry deriving from clobbered state.
+- Handshake only offers an X25519 key_share upfront, generates P-256 is `HelloRetryRequest` asks for it.
+- (Optimization/Heap Use) Record decryption now done in place (verify-then-decrypt policy still enforced).
+- (Optimization/Speed) Some memory subsystem optimizations.
+- (Optimization/BSS Use) Traceback ring no longer duplicated in .bss.
+- (Optimization/Speed) Cryptoguard defers stack scrub until the outermost guarded call preventing multiple unnecessary multi-kilobyte zeroing operations.
 - `src/tls/INFO.md` and `src/tls/TODO.md` rewritten: they still described the pre-ECDHE PSK-only state.
-
-- **P-256 hot loops now run from fast RAM.** The field multiply is ~90% of every P-256 operation and its 32-term MAC block was executing from flash. Both MAC blocks (multiply and square) are now separate members of the 0xE30800 safe-RAM overlay, copied in on demand by `p256_mul_p`/`p256_sq_p`. The copy is skipped when byte 0 at the window base already matches the load image (every other overlay member writes from offset 0, and the RNG reserves a 0x180-byte prefix, so nothing can disturb a block without touching byte 0; the linker asserts both members stay under 0x180). Measured on CEmu: keygen 285,773 -> 170,454 ticks, sign 345,974 -> 230,770, verify 245,283 -> 153,214 (**-40% / -33% / -38%**). X25519 and the RSA powmod were already relocated and are unchanged.
-
-- **Handshake phase timing.** `handshake.c` now emits one INFO event per phase (`keygen`, `client_hello`, `server_hello`, `chain_queued`, `ecdhe`, `cert_verify`, `server_finished`, `complete`) carrying the milliseconds since the previous phase, produced only at DEBUG verbosity and compiled out with `LWIP_TLS_PHASE_TIMING=0`. Costs 4 bytes of .bss. It exists because wall time on this platform is spent across ECDHE, per-link signature verification and network waits, and the primitive benchmarks cannot tell which one a slow connection actually paid for — one trace now attributes it instead of leaving it to inference.
+- (Optimization/Speed) P-256 hot loops relocated to `cursorImage`.
+- (Debugging) Handshake emits `INFO` events at every handshake phase. If logging enabled, this can reveal timings as well due to timestamps.
