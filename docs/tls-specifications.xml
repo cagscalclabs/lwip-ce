@@ -2029,7 +2029,9 @@
     <note>tls_rsa_encrypt and tls_rsa_decrypt_signature decode the public exponent and reject e &lt;= 2^16 or even e before invoking powmod. The RSA-OAEP unit test explicitly covers rejection of e=1 by the encryption entry point.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2040,7 +2042,9 @@
     <note>Branches leak only size, modulus or exponent (public); base handled data-independently (".Lreduce ... constant time" L439), which also covers OAEP encryption of a secret EM. Precondition base &lt; 2*mod met by the s &lt; n check.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2048,10 +2052,12 @@
     <section>5.2.2 (RSAVP1 step 1: 0 &lt;= s &lt; n)</section>
     <location>src/tls/core/rsa.c: tls_rsa_decrypt_signature - s &lt; n range check</location>
     <grade>COMPLIANT</grade>
-    <note>L327 rejects s &gt;= n after L301 forces signature_len == mod_len. Exercised by tests/profiling/tls_cavp RSA-2048-PSS positive/negative cases and tests/unit/tls_rsa_pss_sig.</note>
+    <note>signature_len == mod_len enforced; s &gt;= n rejected via memcmp before powmod. Exercised by tests/profiling/tls_cavp RSA-2048-PSS positive/negative cases and tests/unit/tls_rsa_pss_sig.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2059,21 +2065,26 @@
     <section>7.1.1 (RSAES-OAEP-ENCRYPT)</section>
     <location>src/tls/core/rsa.c: tls_rsa_encode_oaep, tls_rsa_encrypt - lHash, PS, MGF1, seed</location>
     <grade>COMPLIANT</grade>
-    <note>EM layout, mLen bound (L114), DRBG seed with failure check and lHash = SHA-256(label or "") verified by hand. Only a self round-trip test (tests/unit/tls_rsa_oaep); external interop unproven. Comment at L148 ("static size of 256") is stale.</note>
+    <note>EM layout, mLen bound, DRBG seed with failure check, and lHash = SHA-256(label or "") verified by hand. Stale comment removed. Only a self round-trip test (tests/unit/tls_rsa_oaep); external interop unproven.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
     <ref>RFC 8017</ref>
     <section>7.1.2 step 2 (RSADP uses private exponent d / CRT)</section>
     <location>src/tls/core/key.c: tls_cipher_decrypt_aad RSA_OAEP case, key_parse_rsa_priv - RSA decryption primitive</location>
-    <grade>COMPLIANT</grade>
-    <note>BUG: "decryption" calls tls_rsa_decrypt_signature (c^e mod n with the public exponent); key_parse_rsa_priv keeps only n and e, so OAEP decryption can never recover a real plaintext. Fails closed; no private-key operation exists. Drop it or implement real RSADP.</note>
+    <grade>DEVIANT</grade>
+    <note>RSADP, OAEP-decrypt, and RSA-sign are not implemented. The existing "decrypt" path calls the public-exponent operation and cannot recover plaintext.</note>
+    <justification>Private-key RSA on a TI-84+ CE at 48 MHz is unfeasible; as a TLS client only, RSADP is never needed. In a TLS server context, P-256 signing is a viable alternative.</justification>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2081,10 +2092,12 @@
     <section>7.1.2 step 3 (indistinguishable decoding errors / Manger)</section>
     <location>src/tls/core/rsa.c: tls_rsa_decode_oaep</location>
     <grade>COMPLIANT</grade>
-    <note>Fixed as of v3.0.0-rc2. FIXED: Y-byte check, lHash comparison, and PS/0x01 scan now all accumulate into a single `bad` byte; the loop runs to completion unconditionally and returns 0 iff bad != 0. All three former early exits are eliminated.</note>
+    <note>Y-byte check, lHash comparison, and PS/0x01 scan all accumulate into a single `bad` byte; loop runs to completion unconditionally; returns 0 iff bad != 0. Early exits on MGF1 infrastructure failure are acceptable (do not distinguish ciphertext values).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2092,10 +2105,12 @@
     <section>8.1.2 steps 1-3 (RSASSA-PSS-VERIFY length check, RSAVP1, I2OSP)</section>
     <location>src/tls/core/handshake.c: tls_certverify_rsa_pss_sha256; src/tls/core/x509.c: tls_x509_signature_verify_digest - length check</location>
     <grade>COMPLIANT</grade>
-    <note>sig_len == mod_len checked (handshake L3605, x509 L1805) before RSAVP1; EM in __rsa_transient zeroed afterwards.</note>
+    <note>sig_len == mod_len enforced in both handshake and x509 paths before RSAVP1; EM in __rsa_transient zeroed afterwards.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2106,7 +2121,9 @@
     <note>Requires 00 01, at least 8 bytes 0xFF, 00, then exactly the 19-byte SHA-256 DigestInfo (NULL params) and the 32-byte hash, with no slack: equivalent to encode-and-compare, closes Bleichenbacher'06 forgeries. Absent-parameter DigestInfo rejected (strict). No dedicated PKCS#1 v1.5 KAT; only indirect coverage via chain verification tests.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2117,7 +2134,9 @@
     <note>EM[emLen-1] != 0xBC is rejected.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2125,10 +2144,12 @@
     <section>9.1.2 step 6 / 8.1.2 step 2 (emBits = modBits - 1)</section>
     <location>src/tls/core/rsa.c: tls_rsa_pss_verify - leftmost-bits-zero check</location>
     <grade>COMPLIANT</grade>
-    <note>emBits is hard-coded to 8*em_len-1 (L370), assuming modBits is a multiple of 8; for other moduli the mask is too permissive or valid signatures are rejected. Fails closed for interop only; real 2048/3072/4096-bit keys are byte-aligned.</note>
+    <note>emBits is hard-coded to 8*em_len-1, assuming modBits is a multiple of 8; for non-byte-aligned moduli the mask would be wrong. Benign in practice: all supported key sizes (2048/3072/4096 bits) are byte-aligned.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2139,7 +2160,9 @@
     <note>MGF1(H) with 4-byte big-endian counter, DB[0] masked, all bytes before emLen-2hLen-2 must be 0x00 and that byte 0x01 (sLen = hLen).</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2150,7 +2173,9 @@
     <note>Compared with tls_bytes_compare. Covered by tests/unit/tls_rsa_pss (OpenSSL fixture), tests/unit/tls_rsa_pss_sig (2048/4096) and CAVP RSA-PSS negatives.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -2158,10 +2183,12 @@
     <section>Appendix B.2.1 (MGF1)</section>
     <location>src/tls/core/hash.c: tls_mgf1 - mask generation</location>
     <grade>COMPLIANT</grade>
-    <note>Counter from 0, 4 bytes big-endian, output truncated to maskLen. Exercised by tests/unit/tls_rsa_oaep and tls_rsa_pss. Digest scratch and hash contexts not zeroized (low).</note>
+    <note>Counter from 0, 4 bytes big-endian, output truncated to maskLen. Digest scratch and both hash contexts zeroized on exit. Exercised by tests/unit/tls_rsa_oaep and tls_rsa_pss.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3252,7 +3279,9 @@
     <note>CN is never consulted; a cert with no SAN extension is rejected. Covered by tests/host/tls_signatures and tests/unit/tls_x509 ("CN fallback rejected (RFC 9525)").</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>

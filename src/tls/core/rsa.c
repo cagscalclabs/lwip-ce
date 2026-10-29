@@ -177,7 +177,6 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
                       &outbuf[encode_lhash], db_len, hash_alg))
         goto cleanup;
 
-    // Return the static size of 256
     ok = true;
 cleanup:
     tls_hash_clear(&hash);
