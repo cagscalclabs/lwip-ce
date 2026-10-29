@@ -1816,8 +1816,9 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                     ERROR_CODE(0x50);
                     return false;
                 }
-                out->pubkey.ec.data = spki_bits.value + 1;
+                out->pubkey.ec.pub  = spki_bits.value + 1;
                 out->pubkey.ec.len  = spki_bits.len  - 1;
+                out->pubkey.ec.priv = NULL;
             }
             /* else: unknown alg — pubkey fields remain zeroed; callers that
              * need to verify will fail via tls_key_verify returning UNKNOWN. */
@@ -2266,7 +2267,7 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
         {
             if (!tls_key_supports_operation(key, alg))
                 return TLS_KEY_OP_INVALID;
-            if (key->ec.len != 65 || !key->ec.data)
+            if (key->ec.len != 65 || !key->ec.pub)
                 return TLS_KEY_OP_INVALID;
             /* sig is a DER SEQUENCE { INTEGER r, INTEGER s }.
              * Decode into a flat 64-byte r||s buffer for tls_p256_verify. */
@@ -2286,7 +2287,7 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                     return TLS_KEY_OP_INVALID;
             }
             tls_crypto_guard_enable();
-            bool p256_ok = tls_p256_verify(rs, digest, key->ec.data);
+            bool p256_ok = tls_p256_verify(rs, digest, key->ec.pub);
             tls_crypto_guard_disable();
             tls_secure_memzero(rs, sizeof(rs));
             return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;

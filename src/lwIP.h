@@ -426,6 +426,19 @@ lwip_error_t lwip_socket_set_ws_config(struct lwip_socket *socket,
                                        const char *path,
                                        const char *subprotocol);
 
+/** Configure an LWIP_SOCKET_ALTCP_TLS socket for certificate-authenticated
+ *  server mode.  Must be called after lwip_socket_create() and before
+ *  lwip_socket_listen().  When set, lwip_socket_listen() will use
+ *  altcp_tls_create_config_cert_server() to build the TLS config.
+ *
+ *  @param socket         ALTCP_TLS socket handle in LWIP_STATUS_INIT state.
+ *  @param privkey_appvar Name of the on-calc appvar holding the PEM EC private key (≤8 chars).
+ *  @param chain_appvar   Name of the on-calc appvar holding the PEM cert chain (≤8 chars).
+ *  @returns LWIP_OK, LWIP_ERR_ARG (wrong type/NULL/name too long), or LWIP_ERR_STATE. */
+lwip_error_t lwip_socket_set_tls_cert(struct lwip_socket *socket,
+                                      const char *privkey_appvar,
+                                      const char *chain_appvar);
+
 /** Configure an LWIP_SOCKET_ALTCP_TLS socket for external PSK mode.
  *  Must be called after lwip_socket_create() and before lwip_socket_connect().
  *  When set, the TLS handshake uses an external pre-shared key instead of

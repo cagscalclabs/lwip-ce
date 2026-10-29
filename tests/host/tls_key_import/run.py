@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
  if(expected==TLS_KEY_TYPE_UNKNOWN) { assert(rc!=TLS_KEY_IMPORT_OK && key==NULL); free(data); return 0; }
  assert(rc==TLS_KEY_IMPORT_OK && key && key->allocated && key->type==expected);
  if(expected==TLS_KEY_TYPE_RSA) { assert(key->rsa.mod_len==128); assert(key->rsa.exp_len==3); assert(key->rsa.exponent[0]==1 && key->rsa.exponent[1]==0 && key->rsa.exponent[2]==1); }
- else { assert(key->ec.len==65 && key->ec.data[0]==4); }
+ else { assert(key->ec.len==65 && key->ec.pub[0]==4); }
  tls_alg_t choices[]={TLS_ALG_RSA_PSS_RSAE_SHA256,TLS_ALG_RSA_PKCS1_SHA256,TLS_ALG_RSA_OAEP_SHA256,TLS_ALG_ECDSA_SECP256R1_SHA256,TLS_ALG_AES_128_GCM};
  for(size_t i=0;i<sizeof(choices)/sizeof(*choices);i++) {
   bool compatible=expected==TLS_KEY_TYPE_RSA ? i<3 : i==3;

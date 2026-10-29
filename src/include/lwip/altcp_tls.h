@@ -114,6 +114,18 @@ struct altcp_tls_config *altcp_tls_create_config_psk_client(
 struct altcp_tls_config *altcp_tls_create_config_psk_server(
     const u8_t psk[32],
     const struct tls_psk_identity *psk_identity);
+
+/** @ingroup altcp_tls
+ * Create an ALTCP_TLS server configuration handle for certificate-authenticated
+ * TLS 1.3.  Both arguments are the names of on-calc appvars (≤8 chars each)
+ * whose contents are PEM-encoded.  @p privkey_appvar holds the EC private key
+ * (SEC1 or PKCS#8); @p chain_appvar holds the certificate chain (leaf first,
+ * then any intermediates — no root required).  Returns NULL on any parse or
+ * allocation failure.
+ */
+struct altcp_tls_config *altcp_tls_create_config_cert_server(
+    const char *privkey_appvar,
+    const char *chain_appvar);
 #endif
 
 /** @ingroup altcp_tls

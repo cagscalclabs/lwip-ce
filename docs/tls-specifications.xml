@@ -1240,11 +1240,13 @@
     <ref>NIST SP 800-90C</ref>
     <section>4 (RBG2 construction: instantiate with 3s/2, reseed with at least s)</section>
     <location>src/tls/core/random.c: tls_drbg_entropy_gather_step, defines - seeding construction</location>
-    <grade>NEEDS-REVIEW</grade>
+    <grade>NEEDS-EVIDENCE</grade>
     <note>RBG2-like structure (physical source, no PR) with correct seed sizes, but every 90C claim depends on a 90B-validated source, which does not exist.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -1574,7 +1576,7 @@
     <justification>Normalized X.500 Name comparison requires recursive ASN.1 attribute processing, Unicode and legacy DirectoryString decoding, RFC 4518 string preparation, case folding, and space normalization. That code and data footprint is disproportionate for the constrained eZ80 target. Exact-DER comparison is retained as a deliberate fail-closed interoperability limitation.</justification>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
     </reviews>
   </requirement>
   <requirement>
@@ -3223,14 +3225,17 @@
     <ref>RFC 8446</ref>
     <section>Appendix E.1 (handshake security properties: server authentication)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_streamed / tls_recv_certificate_verify / tls_recv_finished - server authentication</location>
-    <grade>NEEDS-REVIEW</grade>
+    <grade>COMPLIANT</grade>
     <note>Protocol glue is correct (CertificateVerify and Finished mandatory) and the separate PKI
       pass found chain anchoring fail-closed, but the overall property rests on the PKI deviations
       recorded under RFC 5280 (exact-DER rather than normalized X.500 Name comparison, no revocation, no path building) and has no
       end-to-end RFC 8448 handshake vector.</note>
 
     <reviews>
-      <reviewed-by></reviewed-by>
+      <reviewed-by>
+        <person>Anthony Cagliano</person>
+        <note>Disclaimer: Grade is based on code inspection and extensive regression test passage; Building a KAT that requires known-state injection is impractical on this platform for multiple reasons. (1) Our truststore serialization and semantics differ from WebPKI making our inputs not a byte-for-byte match to known vectors anyway, (2) State mutation/injection is an attack vector on this platform whereas it would not be on a system with hardware security and process/ownership isolation (an adversary could use those same mechanics).</note>
+      </reviewed-by>
     </reviews>
   </requirement>
   <requirement>

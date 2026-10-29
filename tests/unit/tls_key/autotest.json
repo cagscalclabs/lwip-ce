@@ -120,7 +120,7 @@
       "timeout": 10000
     },
     "8": {
-      "description": "tls_key_sign stub returns TLS_KEY_OP_UNSUPPORTED for RSA-PSS and ECDSA",
+      "description": "tls_key_sign: RSA→UNSUPPORTED, ECDSA public-only→INVALID, enc-alg→UNKNOWN",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",

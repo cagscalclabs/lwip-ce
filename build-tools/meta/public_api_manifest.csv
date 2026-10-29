@@ -760,6 +760,7 @@ func,altcp_ws_new,ws,src/apps/altcp_ws/altcp_ws.h,lwip/core/altcp_ws.h
 func,altcp_ws_new_tls,ws,src/apps/altcp_ws/altcp_ws.h,lwip/core/altcp_ws.h
 func,altcp_ws_alloc,ws,src/apps/altcp_ws/altcp_ws.h,lwip/core/altcp_ws.h
 func,lwip_socket_set_ws_config,socket,src/lwIP.h,lwip.h
+func,lwip_socket_set_tls_cert,socket,src/lwIP.h,lwip.h
 func,lwip_socket_set_tls_psk,socket,src/lwIP.h,lwip.h
 func,tls_rsa_pkcs1_v15_sha256_verify,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
 func,lwip_attach_usb_callback,driver,src/drivers/usb_ethernet.h,lwip/drivers/usb_ethernet.h
@@ -789,3 +790,4 @@ func,lwip_wifi_save_enterprise_profile,wireless,src/wireless/wifi.h,lwip/wireles
 func,tls_hash_clear,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 func,tls_hmac_clear,cryptography,src/tls/includes/hmac.h,lwip/cryptography/hmac.h
 func,tls_aes_destroy_ctx,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
+func,altcp_tls_create_config_cert_server,tls_transport,src/include/lwip/altcp_tls.h,lwip/core/altcp_tls.h

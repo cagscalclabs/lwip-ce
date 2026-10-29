@@ -692,6 +692,26 @@ class Control:
         peer.stop()
         return "echo" if "lwip-ce psk server check" in peer.output else f"ERR {peer.output[-70:]!r}"
 
+    def cmd_cert_client(self, port: str) -> str:
+        """Connect to calc acting as a cert-authenticated TLS 1.3 server.
+        Trust the exact self-signed certificate generated for this suite."""
+        ca_file = HERE / "server/lwIPSCRT.pem"
+        peer = OpenSSL(["s_client", "-connect", f"{CALC}:{port}",
+                        "-tls1_3", "-CAfile", str(ca_file),
+                        "-verify_return_error", "-quiet"],
+                       self.tmp, None)
+        time.sleep(2)
+        peer.send("lwip-ce cert server check\n")
+        deadline = time.monotonic() + 60
+        while (time.monotonic() < deadline and "lwip-ce cert server check" not in peer.output
+               and peer.proc.poll() is None):
+            time.sleep(0.2)
+        peer.stop()
+        if "lwip-ce cert server check" in peer.output:
+            return "echo"
+        log("certificate s_client output:\n" + peer.output)
+        return f"ERR {peer.output[-70:]!r}"
+
     # -- perf -----------------------------------------------------------------
 
     def cmd_udp_blast(self, count: str, size: str, port: str, gap_us: str) -> str:
@@ -721,7 +741,9 @@ def serve(server, port: int, handler):
 
 def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int) -> None:
     program = SUITES[suite]
-    files = [f"{suite}/bin/{program}.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*"))
+    suite_dir = HERE / suite
+    extra = sorted(os.path.relpath(f, HERE) for f in suite_dir.glob("*.8xv"))
+    files = [f"{suite}/bin/{program}.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*")) + extra
     path.write_text(json.dumps({
         "description": f"lwIP-CE networked suite {program}",
         "transfer_files": files,

@@ -10,7 +10,7 @@
  *   5.  AES-128-CCM  round-trip with AAD
  *   6.  AES-128-CBC  round-trip (no AAD)
  *   7.  AES-256-CBC  round-trip (no AAD)
- *   8.  tls_key_sign stub → TLS_KEY_OP_UNSUPPORTED
+ *   8.  tls_key_sign: RSA→UNSUPPORTED, ECDSA public-only→INVALID, enc-alg→UNKNOWN
  *   9.  tls_key_verify with unknown alg → TLS_KEY_OP_UNKNOWN
  *
  * Encrypt returns a self-describing blob:
@@ -315,8 +315,10 @@ int main(void)
     show_result(ok);
 
     /* ------------------------------------------------------------------
-     * Test 8: tls_key_sign stub → UNSUPPORTED for signing algs,
-     *         UNKNOWN for encryption-range algs (wrong key type for sign)
+     * Test 8: tls_key_sign dispatch:
+     *   RSA sign → UNSUPPORTED (RSA private signing not implemented)
+     *   ECDSA with public-only key (ec.priv==NULL) → INVALID
+     *   Encryption-range alg passed to sign → UNKNOWN
      * ------------------------------------------------------------------ */
     uint8_t sig_buf[256];
     size_t  sig_len = 0;
@@ -327,9 +329,10 @@ int main(void)
     ok = (tls_key_sign(gcm_plaintext, sizeof gcm_plaintext,
                        sig_buf, &sig_len, &k, alg) == TLS_KEY_OP_UNSUPPORTED);
     k.type = TLS_KEY_TYPE_EC_P256;
+    k.ec.priv = NULL; /* public-only: no private scalar */
     alg = TLS_ALG_ECDSA_SECP256R1_SHA256;
     ok = ok && (tls_key_sign(gcm_plaintext, sizeof gcm_plaintext,
-                             sig_buf, &sig_len, &k, alg) == TLS_KEY_OP_UNSUPPORTED);
+                             sig_buf, &sig_len, &k, alg) == TLS_KEY_OP_INVALID);
     /* Encryption-range alg passed to sign → UNKNOWN (wrong key type) */
     k.type = TLS_KEY_TYPE_AES;
     alg = TLS_ALG_AES_128_GCM;

@@ -447,6 +447,7 @@ tls_p256_publickey
 tls_p256_secret
 tls_p256_sign
 tls_p256_verify
+lwip_socket_set_tls_cert
 lwip_socket_set_tls_psk
 tls_random_bytes_ex
 tls_rng_status
@@ -476,3 +477,4 @@ tls_hmac_clear
 tls_aes_destroy_ctx
 tls_aes_pkcs7_apply
 tls_aes_pkcs7_remove
+altcp_tls_create_config_cert_server

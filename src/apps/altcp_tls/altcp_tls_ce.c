@@ -28,6 +28,7 @@ extern bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag);
 #include "../../tls/includes/crypto_guard.h"
 #include "../../tls/includes/handshake.h"
 #include "../../tls/includes/random.h"
+#include "../../lwip-imports.h"
 #include "../../tls/includes/tls.h"
 #include "../../drivers/mem.h"
 #include "../../wireless/crypto.h"
@@ -967,6 +968,146 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
     return conf;
 }
 
+/* Read an appvar into a heap buffer via the file_fn table.
+ * Returns a mem_buffer_custom_malloc'd block; caller must free it.
+ * *out_len receives the byte count. Returns NULL on any error. */
+static char *read_appvar_pem(const char *appvar_name, size_t *out_len)
+{
+    if (!appvar_name || !out_len) return NULL;
+    uint8_t h = file_fn.ti_open(appvar_name, "r");
+    if (!h) return NULL;
+    uint16_t size = file_fn.ti_getsize(h);
+    if (size == 0) { file_fn.ti_close(h); return NULL; }
+    char *buf = (char *)mem_buffer_custom_malloc(size);
+    if (!buf) { file_fn.ti_close(h); return NULL; }
+    size_t read = file_fn.ti_read(buf, 1, size, h);
+    file_fn.ti_close(h);
+    if (read != size)
+    {
+        mem_buffer_custom_free(buf);
+        return NULL;
+    }
+    *out_len = size;
+    return buf;
+}
+
+/* Parse a multi-cert PEM blob into a heap array of tls_x509_object pointers.
+ * Returns the array (mem_malloc'd); *n receives the count. NULL on failure. */
+static struct tls_x509_object **parse_cert_chain(const char *pem, size_t pem_len,
+                                                  size_t *n)
+{
+    static const char banner[] = "-----BEGIN CERTIFICATE-----";
+    const size_t blen = sizeof(banner) - 1;
+    const char *p = pem, *end = pem + pem_len;
+    size_t count = 0;
+
+    /* Count banners. */
+    for (const char *s = p; s + blen <= end; s++)
+        if (memcmp(s, banner, blen) == 0) { count++; s += blen - 1; }
+    if (count == 0) return NULL;
+
+    struct tls_x509_object **arr =
+        (struct tls_x509_object **)mem_malloc(count * sizeof(*arr));
+    if (!arr) return NULL;
+    memset(arr, 0, count * sizeof(*arr));
+
+    size_t idx = 0;
+    p = pem;
+    while (p + blen <= end && idx < count)
+    {
+        /* Find next banner start. */
+        const char *start = NULL;
+        for (const char *s = p; s + blen <= end; s++)
+            if (memcmp(s, banner, blen) == 0) { start = s; break; }
+        if (!start) break;
+
+        /* Find where this cert ends (next banner or end of blob). */
+        const char *next = NULL;
+        for (const char *s = start + blen; s + blen <= end; s++)
+            if (memcmp(s, banner, blen) == 0) { next = s; break; }
+        size_t cert_len = next ? (size_t)(next - start) : (size_t)(end - start);
+
+        arr[idx] = tls_x509_import_certificate(start, cert_len);
+        if (!arr[idx])
+        {
+            for (size_t j = 0; j < idx; j++) tls_x509_object_free(arr[j]);
+            mem_free(arr);
+            return NULL;
+        }
+        idx++;
+        p = start + blen;
+    }
+    *n = idx;
+    return arr;
+}
+
+struct altcp_tls_ce_config *altcp_tls_ce_create_config_cert_server(
+    const char *privkey_appvar,
+    const char *chain_appvar)
+{
+    size_t key_len = 0, chain_len = 0;
+    char *key_pem   = read_appvar_pem(privkey_appvar, &key_len);
+    char *chain_pem = read_appvar_pem(chain_appvar,   &chain_len);
+
+    if (!key_pem || !chain_pem)
+    {
+        if (key_pem)   mem_buffer_custom_free(key_pem);
+        if (chain_pem) mem_buffer_custom_free(chain_pem);
+        return NULL;
+    }
+
+    struct tls_key *key = NULL;
+    tls_key_import_result_t rc = tls_key_import(&key, key_pem, key_len,
+                                                TLS_KEY_FORMAT_PEM, NULL);
+    mem_buffer_custom_free(key_pem);
+    if (rc != TLS_KEY_IMPORT_OK || !key ||
+        key->type != TLS_KEY_TYPE_EC_P256 || !key->ec.priv)
+    {
+        if (key) tls_key_free(key);
+        mem_buffer_custom_free(chain_pem);
+        return NULL;
+    }
+
+    size_t n_certs = 0;
+    struct tls_x509_object **chain = parse_cert_chain(chain_pem, chain_len, &n_certs);
+    mem_buffer_custom_free(chain_pem);
+    if (!chain)
+    {
+        tls_key_free(key);
+        return NULL;
+    }
+    /* Fail configuration immediately if CertificateVerify would use a key
+     * other than the leaf certificate's P-256 public key. */
+    if (n_certs == 0 || chain[0]->pubkey.type != TLS_KEY_TYPE_EC_P256 ||
+        chain[0]->pubkey.ec.len != 65 || !chain[0]->pubkey.ec.pub ||
+        key->ec.len != 65 || !key->ec.pub ||
+        memcmp(chain[0]->pubkey.ec.pub, key->ec.pub, 65) != 0)
+    {
+        for (size_t i = 0; i < n_certs; i++) tls_x509_object_free(chain[i]);
+        mem_free(chain);
+        tls_key_free(key);
+        return NULL;
+    }
+
+    struct altcp_tls_ce_config *conf =
+        (struct altcp_tls_ce_config *)mem_malloc(sizeof(*conf));
+    if (!conf)
+    {
+        for (size_t i = 0; i < n_certs; i++) tls_x509_object_free(chain[i]);
+        mem_free(chain);
+        tls_key_free(key);
+        return NULL;
+    }
+    mem_stats_tls_direct_add(sizeof(*conf), sizeof(*conf));
+    memset(conf, 0, sizeof(*conf));
+    conf->is_server        = 1;
+    conf->psk_mode         = 0;
+    conf->server_chain     = chain;
+    conf->server_chain_len = n_certs;
+    conf->server_key       = key;
+    return conf;
+}
+
 void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
 {
     if (conf)
@@ -977,6 +1118,14 @@ void altcp_tls_ce_free_config(struct altcp_tls_ce_config *conf)
                                          conf->alpn_protocols_len);
             mem_free(conf->alpn_protocols);
         }
+        if (conf->server_chain)
+        {
+            for (size_t i = 0; i < conf->server_chain_len; i++)
+                tls_x509_object_free(conf->server_chain[i]);
+            mem_free(conf->server_chain);
+        }
+        if (conf->server_key)
+            tls_key_free(conf->server_key);
         tls_secure_memzero(conf->psk, sizeof conf->psk);
         size_t size = sizeof(*conf);
         if (conf->hostname == (const char *)(conf + 1))
@@ -1699,12 +1848,15 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
                                       const uint8_t *client_hello, size_t len)
 {
     struct tls_handshake_context *ctx = &state->tls_ctx;
+    struct altcp_tls_ce_config *conf = (struct altcp_tls_ce_config *)state->conf;
     struct tls_traffic_keys *k = &ctx->keys;
     uint8_t hello[5 + 128];
-    uint8_t flight[64];
-    uint8_t record[5 + sizeof(flight) + 1 + TLS_AES_AUTH_TAG_SIZE];
     size_t hello_len = 0, flight_len = 0, record_len = 0;
     bool ok;
+
+    /* Wire cert chain into handshake context when configured. */
+    if (conf && conf->server_chain && conf->server_chain_len > 0 && conf->server_key)
+        tls_server_set_cert(ctx, conf->server_chain, conf->server_chain_len, conf->server_key);
 
     tls_crypto_guard_enable();
     ok = tls_server_recv_client_hello(ctx, client_hello, len, hello + 5, sizeof(hello) - 5, &hello_len);
@@ -1723,6 +1875,14 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
         return false;
     }
 
+    /* HelloRetryRequest is a complete plaintext flight. Wait for the second
+     * ClientHello before deriving handshake keys or sending encrypted data. */
+    if (ctx->state == TLS_STATE_HRR_RECEIVED)
+    {
+        altcp_output(conn->inner_conn);
+        return true;
+    }
+
     tls_crypto_guard_enable();
     ok = tls_derive_handshake_keys(ctx);
     tls_crypto_guard_disable();
@@ -1733,21 +1893,52 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
     altcp_tls_ce_swap_keys(k->client_handshake_key, k->client_handshake_iv,
                            k->server_handshake_key, k->server_handshake_iv);
 
-    tls_crypto_guard_enable();
-    ok = tls_server_send_flight(ctx, flight, sizeof(flight), &flight_len);
-    tls_crypto_guard_disable();
-    if (!ok || !altcp_tls_ce_encrypt_record_stream(ctx, true, TLS_CONTENT_TYPE_HANDSHAKE, flight, flight_len,
-                                                   record, sizeof(record), &record_len))
+    /* Cert-authenticated server flights are variable-length; heap-allocate. */
+    bool cert_mode = conf && conf->server_chain && conf->server_chain_len > 0;
+    size_t flight_cap = cert_mode ? 512u : 64u;
+    if (cert_mode)
     {
-        tls_secure_memzero(flight, sizeof(flight));
+        /* Certificate carries every configured chain entry, each with a
+         * three-byte length and two-byte extensions length. */
+        for (size_t i = 0; i < conf->server_chain_len; i++)
+        {
+            size_t der_len = conf->server_chain[i]->der_len;
+            if (flight_cap > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - 5u ||
+                der_len > ALTCP_TLS_CE_MAX_RECORD_PLAINTEXT - flight_cap - 5u)
+                return false;
+            flight_cap += der_len + 5u;
+        }
+    }
+    size_t record_cap  = 5 + flight_cap + 1 + TLS_AES_AUTH_TAG_SIZE;
+    uint8_t *flight = (uint8_t *)mem_malloc(flight_cap);
+    uint8_t *record = (uint8_t *)mem_malloc(record_cap);
+    if (!flight || !record)
+    {
+        mem_free(flight);
+        mem_free(record);
         return false;
     }
-    tls_secure_memzero(flight, sizeof(flight));
+
+    tls_crypto_guard_enable();
+    ok = tls_server_send_flight(ctx, flight, flight_cap, &flight_len);
+    tls_crypto_guard_disable();
+    if (!ok || !altcp_tls_ce_encrypt_record_stream(ctx, true, TLS_CONTENT_TYPE_HANDSHAKE, flight, flight_len,
+                                                   record, record_cap, &record_len))
+    {
+        tls_secure_memzero(flight, flight_cap);
+        mem_free(flight);
+        mem_free(record);
+        return false;
+    }
+    tls_secure_memzero(flight, flight_cap);
+    mem_free(flight);
     ctx->client_hs_seq_num++;
     if (altcp_write(conn->inner_conn, record, (u16_t)record_len, TCP_WRITE_FLAG_COPY) != ERR_OK)
     {
+        mem_free(record);
         return false;
     }
+    mem_free(record);
     altcp_output(conn->inner_conn);
 
     /* Application keys come from the transcript through the server Finished. */
@@ -1799,7 +1990,8 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
             continue;
         }
 
-        if (ctx->state == TLS_STATE_INIT && header[0] == TLS_CONTENT_TYPE_HANDSHAKE)
+        if ((ctx->state == TLS_STATE_INIT || ctx->state == TLS_STATE_HRR_RECEIVED) &&
+            header[0] == TLS_CONTENT_TYPE_HANDSHAKE)
         {
             uint8_t *hello = (uint8_t *)mem_malloc(rec_len);
             bool ok;
@@ -3431,6 +3623,14 @@ struct altcp_tls_config *altcp_tls_create_config_psk_server(
     const struct tls_psk_identity *psk_identity)
 {
     return (struct altcp_tls_config *)altcp_tls_ce_create_config_psk_server(psk, psk_identity);
+}
+
+struct altcp_tls_config *altcp_tls_create_config_cert_server(
+    const char *privkey_appvar,
+    const char *chain_appvar)
+{
+    return (struct altcp_tls_config *)altcp_tls_ce_create_config_cert_server(
+                privkey_appvar, chain_appvar);
 }
 
 struct altcp_tls_config *altcp_tls_create_config_client_2wayauth(
