@@ -480,3 +480,4 @@
 	export	tls_aes_pkcs7_apply
 	export	tls_aes_pkcs7_remove
 	export	altcp_tls_create_config_cert_server
+	export	altcp_tls_create_config_cert_client

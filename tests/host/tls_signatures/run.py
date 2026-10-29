@@ -280,8 +280,21 @@ source += x509[x509.index('static bool tls_x509_is_string_tag'):x509.index('stat
 source += x509[x509.index('static const uint8_t oid_rsa_encryption'):]
 key_source = (root / 'src/tls/core/key.c').read_text()
 source += function((root / 'src/tls/core/rsa.c').read_text(), 'tls_rsa_public_key_shape_ok')
-# tls_p256_sign lives in eZ80 assembly; stub it out for the host build.
-source += 'static bool tls_p256_sign(uint8_t *sig, const uint8_t *hash, const uint8_t *priv) { (void)sig; (void)hash; (void)priv; return false; }\n'
+# tls_p256_sign lives in eZ80 assembly; stub it for the host build. The client
+# CertificateVerify test drives it with a known r||s so the DER encoding and the
+# message framing can be checked byte for byte; every other test sees failure.
+source += ('static bool test_p256_sign_ok;\n'
+           'static const uint8_t test_p256_sign_rs[64] = {\n'
+           '    0x80, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,\n'
+           '    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,\n'
+           '    0x00, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,\n'
+           '    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f };\n'
+           'static bool tls_p256_sign(uint8_t *sig, const uint8_t *hash, const uint8_t *priv) {\n'
+           '    (void)hash; (void)priv;\n'
+           '    if (!test_p256_sign_ok) return false;\n'
+           '    memcpy(sig, test_p256_sign_rs, sizeof(test_p256_sign_rs));\n'
+           '    return true;\n'
+           '}\n')
 for name in ['tls_key_verify', 'tls_key_sign']:
     source += function(key_source, name)
 # Include internal AES helpers and blob helpers (not aes_encrypt_oneshot, which is mocked).
@@ -290,6 +303,7 @@ source += key_source[key_source.index('/* --------------------------------------
 for name in ['tls_cipher_blob_free', 'tls_cipher_encrypt', 'tls_cipher_encrypt_aad']:
     source += function(key_source, name)
 source += hs[hs.index('enum tls_cert_walk_state'):hs.index('/* Feed body bytes into the walker.')]
+source += '#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403\n'
 for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_digest',
              'tls_parse_handshake_header',
              'tls_cipher_suite_supported',
@@ -301,6 +315,8 @@ for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_
              'tls_recv_server_hello',
              'tls_recv_encrypted_extensions', 'tls_recv_certificate_request',
              'tls_recv_certificate_streamed', 'tls_certverify_rsa_pss_sha256',
+             'tls_send_empty_certificate', 'der_encode_integer',
+             'der_encode_ecdsa_sig', 'tls_send_client_certificate',
              'tls_hs_defer_bytes', 'tls_cert_jobs_pending', 'tls_cert_jobs_step',
              'tls_handshake_cleanup']:
     source += function(hs, name)

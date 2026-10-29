@@ -2646,7 +2646,8 @@ lwip_error_t lwip_socket_set_tls_cert(struct lwip_socket *socket,
 {
     if (!socket || socket->protocol != (uint8_t)LWIP_SOCKET_ALTCP_TLS)
         return LWIP_ERR_ARG;
-    if (!privkey_appvar || !chain_appvar)
+    if (!privkey_appvar || !chain_appvar ||
+        privkey_appvar[0] == '\0' || chain_appvar[0] == '\0')
         return LWIP_ERR_ARG;
     if (strlen(privkey_appvar) > 8 || strlen(chain_appvar) > 8)
         return LWIP_ERR_ARG;
@@ -2741,11 +2742,20 @@ lwip_error_t lwip_socket_destroy(struct lwip_socket *conn)
         struct lwip_socket *q = conn->accept_queue;
         conn->accept_queue = q->accept_next;
         conn_registry_remove(q);
-        if (q->pcb.tcp)
+        if (q->protocol == LWIP_SOCKET_TCP && q->pcb.tcp)
         {
             tcp_arg(q->pcb.tcp, NULL);
             /* ERROR_AUDIT: destroy-owned queued peer cleanup. */
             tcp_abort(q->pcb.tcp);
+        }
+        else if ((q->protocol == LWIP_SOCKET_ALTCP ||
+                  q->protocol == LWIP_SOCKET_ALTCP_TLS ||
+                  q->protocol == LWIP_SOCKET_ALTCP_WS ||
+                  q->protocol == LWIP_SOCKET_ALTCP_WSS) && q->pcb.altcp)
+        {
+            altcp_arg(q->pcb.altcp, NULL);
+            /* ERROR_AUDIT: destroy-owned queued ALTCP peer cleanup. */
+            altcp_abort(q->pcb.altcp);
         }
         lwip_socket_rx_ring_destroy(q);
         mem_free(q);
@@ -2916,7 +2926,12 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
      * both until connect() so the SNI hostname is in hand. */
     if (conn->protocol == LWIP_SOCKET_ALTCP_TLS && conn->pcb.altcp == NULL)
     {
-        if (conn->tls_psk_identity_len > 0)
+        if (conn->tls_key_appvar[0] != '\0')
+        {
+            conn->tls_conf = altcp_tls_ce_create_config_cert_client(
+                host, conn->tls_key_appvar, conn->tls_cert_appvar);
+        }
+        else if (conn->tls_psk_identity_len > 0)
         {
             struct tls_psk_identity id;
             memset(&id, 0, sizeof(id));
@@ -3319,7 +3334,7 @@ lwip_error_t lwip_socket_listen(struct lwip_socket *conn, uint16_t port)
             memset(&id, 0, sizeof(id));
             memcpy(id.identity, conn->tls_psk_identity,
                    conn->tls_psk_identity_len);
-            id.identity_len = (uint8_t)conn->tls_psk_identity_len;
+            id.identity_len = conn->tls_psk_identity_len;
             conf = altcp_tls_ce_create_config_psk_server(conn->tls_psk, &id);
         }
         else

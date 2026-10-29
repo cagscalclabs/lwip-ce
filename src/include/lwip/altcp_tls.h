@@ -126,6 +126,12 @@ struct altcp_tls_config *altcp_tls_create_config_psk_server(
 struct altcp_tls_config *altcp_tls_create_config_cert_server(
     const char *privkey_appvar,
     const char *chain_appvar);
+
+/** Create a certificate-authenticated client identity for mutual TLS. */
+struct altcp_tls_config *altcp_tls_create_config_cert_client(
+    const char *hostname,
+    const char *privkey_appvar,
+    const char *chain_appvar);
 #endif
 
 /** @ingroup altcp_tls
