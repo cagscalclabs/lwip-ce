@@ -5622,6 +5622,7 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     uint8_t sid_len;
     uint16_t suite = 0, selected = 0;
     bool tls13 = false, dhe_mode = false, psk_ok = false;
+    bool cert_mode;
     uint8_t alert = TLS_ALERT_DECODE_ERROR;
 
     if (!ctx || !msg || !out || !written || ctx->state != TLS_STATE_INIT ||
@@ -5630,6 +5631,7 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
         ERROR_CODE(0xc0);
         return false;
     }
+    cert_mode = ctx->server_cert && ctx->server_key && ctx->server_chain_len > 0;
     off = tls_parse_handshake_header(msg, len, TLS_HANDSHAKE_CLIENT_HELLO, &msg_len);
     if (off == 0 || off + msg_len != len || msg_len < 2 + 32 + 1)
         goto fail;
@@ -5702,7 +5704,8 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
                 alert = TLS_ALERT_ILLEGAL_PARAMETER;
                 goto fail;
             }
-            psk_ok = tls_server_check_psk(ctx, msg, (size_t)(e - msg), e, elen, &selected);
+            if (!cert_mode)
+                psk_ok = tls_server_check_psk(ctx, msg, (size_t)(e - msg), e, elen, &selected);
         }
         off += 4 + elen;
     }
@@ -5713,7 +5716,7 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
         alert = TLS_ALERT_PROTOCOL_VERSION;
         goto fail;
     }
-    if (!suite || !share || !dhe_mode || !psk_ok)
+    if (!suite || !share || (!cert_mode && (!dhe_mode || !psk_ok)))
     {
         alert = TLS_ALERT_HANDSHAKE_FAILURE;
         goto fail;
@@ -5741,8 +5744,9 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     }
 
     ctx->cipher_suite = suite;
-    ctx->psk_mode = true;
-    ctx->psk_type = TLS_PSK_TYPE_EXTERNAL;
+    ctx->psk_mode = !cert_mode;
+    if (!cert_mode)
+        ctx->psk_type = TLS_PSK_TYPE_EXTERNAL;
     if (!tls_x25519_secret(ctx->ecdhe_shared, ctx->ecdhe_private, share, NULL, NULL) ||
         tls_random_bytes_ex(ctx->server_random, 32, TLS_RNG_STRENGTH_128) == NULL)
     {
@@ -5752,8 +5756,9 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     ctx->ecdhe_negotiated = true;
     transcript_hash_update(ctx->transcript_hash, msg, len);
 
-    /* ServerHello: supported_versions, key_share (X25519), pre_shared_key. */
-    n = 4 + 2 + 32 + 1 + sid_len + 3 + 2 + 6 + 40 + 6;
+    /* A certificate handshake must not select a PSK. */
+    size_t extensions_len = 6 + 40 + (cert_mode ? 0 : 6);
+    n = 4 + 2 + 32 + 1 + sid_len + 3 + 2 + extensions_len;
     if (out_cap < n)
     {
         alert = TLS_ALERT_INTERNAL_ERROR;
@@ -5774,20 +5779,23 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     out[off++] = (uint8_t)(suite >> 8);
     out[off++] = (uint8_t)suite;
     out[off++] = 0; /* legacy_compression_method */
-    out[off++] = 0;
-    out[off++] = 6 + 40 + 6;
+    out[off++] = (uint8_t)(extensions_len >> 8);
+    out[off++] = (uint8_t)extensions_len;
     memcpy(out + off, (const uint8_t[]){0x00, 0x2b, 0x00, 0x02, 0x03, 0x04}, 6);
     off += 6;
     memcpy(out + off, (const uint8_t[]){0x00, 0x33, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20}, 8);
     off += 8;
     memcpy(out + off, ctx->ecdhe_public, 32);
     off += 32;
-    out[off++] = 0x00;
-    out[off++] = 0x29;
-    out[off++] = 0x00;
-    out[off++] = 0x02;
-    out[off++] = (uint8_t)(selected >> 8);
-    out[off++] = (uint8_t)selected;
+    if (!cert_mode)
+    {
+        out[off++] = 0x00;
+        out[off++] = 0x29;
+        out[off++] = 0x00;
+        out[off++] = 0x02;
+        out[off++] = (uint8_t)(selected >> 8);
+        out[off++] = (uint8_t)selected;
+    }
     transcript_hash_update(ctx->transcript_hash, out, off);
     *written = off;
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
