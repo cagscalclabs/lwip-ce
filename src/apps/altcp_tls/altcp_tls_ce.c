@@ -970,19 +970,26 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
 
 /* Read an appvar into a heap buffer via the file_fn table.
  * Returns a mem_buffer_custom_malloc'd block; caller must free it.
- * *out_len receives the byte count. Returns NULL on any error. */
+ * *out_len receives the byte count. Returns NULL on any error.
+ *
+ * convbin --oformat 8xv prepends a 4-byte internal header (total_size LE16,
+ * payload_size LE16) before the actual data; skip it. */
 static char *read_appvar_pem(const char *appvar_name, size_t *out_len)
 {
     if (!appvar_name || !out_len) return NULL;
     uint8_t h = file_fn.ti_open(appvar_name, "r");
     if (!h) return NULL;
     uint16_t size = file_fn.ti_getsize(h);
-    if (size == 0) { file_fn.ti_close(h); return NULL; }
-    char *buf = (char *)mem_buffer_custom_malloc(size);
+    const uint16_t HDR = 4; /* convbin 8xv internal header */
+    if (size <= HDR) { file_fn.ti_close(h); return NULL; }
+    uint16_t pem_size = size - HDR;
+    const char *raw = (const char *)file_fn.ti_getdataptr(h);
+    if (!raw) { file_fn.ti_close(h); return NULL; }
+    char *buf = (char *)mem_buffer_custom_malloc(pem_size);
     if (!buf) { file_fn.ti_close(h); return NULL; }
-    file_fn.ti_read(buf, 1, size, h);
+    memcpy(buf, raw + HDR, pem_size);
     file_fn.ti_close(h);
-    *out_len = size;
+    *out_len = pem_size;
     return buf;
 }
 
