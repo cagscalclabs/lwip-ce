@@ -136,8 +136,8 @@ Users can now disable TLS completely through the app config wizard, for any unco
 
 ## Unreleased
 
-- Fix P-256 RFC 6979 retry deriving from clobbered state.
-- Handshake only offers an X25519 key_share upfront, generates P-256 is `HelloRetryRequest` asks for it.
+- (Fix) P-256 RFC 6979 retry deriving from clobbered state.
+- (Optimization/Speed) Handshake only offers an X25519 key_share upfront, generates P-256 is `HelloRetryRequest` asks for it.
 - (Optimization/Heap Use) Record decryption now done in place (verify-then-decrypt policy still enforced).
 - (Optimization/Speed) Some memory subsystem optimizations.
 - (Optimization/BSS Use) Traceback ring no longer duplicated in .bss.
@@ -145,3 +145,5 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - `src/tls/INFO.md` and `src/tls/TODO.md` rewritten: they still described the pre-ECDHE PSK-only state.
 - (Optimization/Speed) P-256 hot loops relocated to `cursorImage`.
 - (Debugging) Handshake emits `INFO` events at every handshake phase. If logging enabled, this can reveal timings as well due to timestamps.
+- (Feature) mTLS implemented, Certificate Server mode implemented for TLS.
+- (Feature) TTY registration function, used currently only for password input.

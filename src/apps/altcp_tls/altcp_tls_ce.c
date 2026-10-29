@@ -17,6 +17,7 @@
 #include "lwip/priv/altcp_priv.h"
 #include "lwip/mem.h"
 #include "altcp_tls_ce.h"
+#include "../../lwIP.h"
 #include "../../tls/includes/aes.h"
 
 /* Internal record-layer hook implemented by handshake.c. */
@@ -69,6 +70,12 @@ TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 
 static enum mem_pressure_level g_tls_rx_throttle_level = MEM_PRESSURE_NONE;
 static altcp_tls_ce_state_t *g_tls_state_head = NULL;
+static lwip_tty_input_fn g_tty_input = NULL;
+
+void lwip_set_tty(lwip_tty_input_fn input)
+{
+    g_tty_input = input;
+}
 
 /* True while `state` is still linked, i.e. has not been freed by an app
  * callback that closed or aborted the connection. */
@@ -1127,9 +1134,32 @@ static bool load_cert_identity(const char *privkey_appvar,
         return false;
     }
 
+    static const char encrypted_banner[] = "-----BEGIN ENCRYPTED PRIVATE KEY-----";
+    char *password = NULL;
+    size_t password_len = 0;
+    if (key_len >= sizeof(encrypted_banner) - 1 &&
+        memcmp(key_pem, encrypted_banner, sizeof(encrypted_banner) - 1) == 0)
+    {
+        /* The library deliberately owns no terminal or UI implementation.
+         * An encrypted identity is unusable unless the application provides
+         * the password synchronously. Consume the callback before invoking it
+         * so every outcome, including re-entry or cancellation, is one-shot. */
+        lwip_tty_input_fn input = g_tty_input;
+        g_tty_input = NULL;
+        if (!input || !(password = input()))
+        {
+            mem_buffer_custom_free(key_pem);
+            mem_buffer_custom_free(chain_pem);
+            return false;
+        }
+        password_len = strlen(password);
+    }
+
     struct tls_key *key = NULL;
     tls_key_import_result_t rc = tls_key_import(&key, key_pem, key_len,
-                                                TLS_KEY_FORMAT_PEM, NULL);
+                                                TLS_KEY_FORMAT_PEM, password);
+    if (password_len)
+        tls_secure_memzero(password, password_len);
     mem_buffer_custom_free(key_pem);
     if (rc != TLS_KEY_IMPORT_OK || !key ||
         key->type != TLS_KEY_TYPE_EC_P256 || !key->ec.priv)

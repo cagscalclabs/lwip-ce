@@ -143,6 +143,19 @@ mTLS Client: the Client MAY call ``lwip_socket_set_tls_cert(sock, privkey_appvar
 
 Server (PSK or Certificate mode): As server, you MUST use a configuration setter to choose PSK mode or Certificate mode. If this is not done, the server fails-closed on ``lwip_socket_listen``. Code may call ``lwip_socket_set_tls_psk`` to set PSK mode or ``lwip_socket_set_tls_cert`` to set Certificate mode.
 
+.. c:function:: void lwip_set_tty(char *(*input)(void));
+
+   Installs the application-owned text-input function used when an encrypted
+   private-key AppVar needs a password. lwIP supplies no terminal or password
+   UI of its own. If this function has not been set, or if ``input()`` returns
+   ``NULL``, encrypted-key loading fails closed. ``input()`` must return a
+   writable, NUL-terminated buffer that remains valid until the invoking lwIP
+   operation returns. lwIP wipes the password bytes immediately after key
+   import returns, whether import succeeds or fails. The callback is single-use:
+   lwIP removes it before invoking it. Pass ``NULL`` to remove an unused
+   callback. ``lwip_stop()`` also removes one so a callback into an exiting
+   application is never retained.
+
 .. c:function:: lwip_error_t lwip_socket_set_tls_cert(struct lwip_socket *socket, const char *privkey_appvar, const char *chain_appvar);
 
    Sets the **filenames** of TI AppVars containing the private key and fullchain (or certificate for a self-signed leaf).
@@ -152,6 +165,22 @@ Server (PSK or Certificate mode): As server, you MUST use a configuration setter
    :param chain_appvar: Name of a TI AppVar containing the full Certificate chain that will be used.
    :returns: ``LWIP_OK`` on success, ``LWIP_ERR_STATE`` if socket status not INIT, ``LWIP_ERR_ARG`` if ``socket``, ``privkey_appvar`` or ``chain_appvar`` are not provided. 
    :note: Appvar names are limited to 8 characters, PSK identity must be non-empty and <= TLS_PSK_IDENTITY_MAX_LEN. If multiple identities set, Certificate modes take precedence.
+
+Use ``tools/lwip-cert-converter`` to validate a P-256 identity and create the
+two AppVars expected by this function::
+
+   tools/lwip-cert-converter \
+       --pkey server-key.pem \
+       --fullchain fullchain.pem \
+       --pkey_name TLSKEY \
+       --chain_name TLSCHAIN
+
+If ``fullchain.pem`` omits the leaf certificate, add ``--cert leaf.pem``. The
+converter rejects incomplete or disconnected chains, removes a duplicate leaf,
+and checks that the key matches it. An encrypted input key remains encrypted;
+unsupported encryption can be re-encrypted to a supported format only after an
+explicit confirmation. Run ``tools/lwip-cert-converter --help`` for dependency
+details.
 
 .. c:function:: lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket, const uint8_t psk[32], const uint8_t *identity, size_t identity_len);
 
