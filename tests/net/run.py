@@ -707,7 +707,10 @@ class Control:
                and peer.proc.poll() is None):
             time.sleep(0.2)
         peer.stop()
-        return "echo" if "lwip-ce cert server check" in peer.output else f"ERR {peer.output[-70:]!r}"
+        if "lwip-ce cert server check" in peer.output:
+            return "echo"
+        log("certificate s_client output:\n" + peer.output)
+        return f"ERR {peer.output[-70:]!r}"
 
     # -- perf -----------------------------------------------------------------
 

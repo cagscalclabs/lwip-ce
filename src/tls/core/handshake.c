@@ -5800,23 +5800,30 @@ fail:
     return false;
 }
 
-/* Encode a raw 32-byte big-endian integer as a DER INTEGER into dst.
- * Returns the number of bytes written (2+32 or 2+33 with leading zero). */
+/* Encode a raw 32-byte big-endian integer as a minimal positive DER INTEGER.
+ * Returns the number of bytes written, including tag and length. */
 static size_t der_encode_integer(uint8_t *dst, const uint8_t *val32)
 {
+    size_t first = 0;
+    size_t len;
     size_t off = 0;
+
+    while (first < 31 && val32[first] == 0)
+        first++;
+    len = 32 - first;
+
     dst[off++] = 0x02; /* INTEGER tag */
-    if (val32[0] & 0x80)
+    if (val32[first] & 0x80)
     {
-        dst[off++] = 33;
+        dst[off++] = (uint8_t)(len + 1);
         dst[off++] = 0x00;
     }
     else
     {
-        dst[off++] = 32;
+        dst[off++] = (uint8_t)len;
     }
-    memcpy(dst + off, val32, 32);
-    return off + 32;
+    memcpy(dst + off, val32 + first, len);
+    return off + len;
 }
 
 /* Encode raw r||s (64 bytes) as DER SEQUENCE { INTEGER r, INTEGER s }.
@@ -5845,6 +5852,37 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         ERROR_CODE(0xc1);
         return false;
     }
+
+    /* EncryptedExtensions is always the first encrypted handshake message in
+     * the server flight (RFC 8446 section 4.1.3).  In certificate mode it must
+     * also be in the transcript signed by CertificateVerify. */
+    ext_len = ctx->negotiated_alpn ? 4u + 2u + 1u + ctx->negotiated_alpn_len : 0u;
+    ee_len = 4 + 2 + ext_len;
+    if (out_cap < off + ee_len + 36)
+    {
+        ERROR_CODE(0xc2);
+        return false;
+    }
+    out[off + 0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;
+    out[off + 1] = 0;
+    out[off + 2] = (uint8_t)((2 + ext_len) >> 8);
+    out[off + 3] = (uint8_t)(2 + ext_len);
+    out[off + 4] = (uint8_t)(ext_len >> 8);
+    out[off + 5] = (uint8_t)ext_len;
+    if (ctx->negotiated_alpn)
+    {
+        size_t p = off + 6, list = 1u + ctx->negotiated_alpn_len;
+        out[p++] = (uint8_t)(TLS_EXT_ALPN >> 8);
+        out[p++] = (uint8_t)TLS_EXT_ALPN;
+        out[p++] = (uint8_t)((2 + list) >> 8);
+        out[p++] = (uint8_t)(2 + list);
+        out[p++] = (uint8_t)(list >> 8);
+        out[p++] = (uint8_t)list;
+        out[p++] = ctx->negotiated_alpn_len;
+        memcpy(out + p, ctx->negotiated_alpn, ctx->negotiated_alpn_len);
+    }
+    transcript_hash_update(ctx->transcript_hash, out + off, ee_len);
+    off += ee_len;
 
     /* --- Certificate + CertificateVerify (cert mode only) --- */
     if (ctx->server_cert && ctx->server_key && ctx->server_chain_len > 0)
@@ -5936,35 +5974,6 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         transcript_hash_update(ctx->transcript_hash, out + off, cv_msg);
         off += cv_msg;
     }
-
-    /* --- EncryptedExtensions --- */
-    ext_len = ctx->negotiated_alpn ? 4u + 2u + 1u + ctx->negotiated_alpn_len : 0u;
-    ee_len = 4 + 2 + ext_len;
-    if (out_cap < off + ee_len + 36)
-    {
-        ERROR_CODE(0xc2);
-        return false;
-    }
-    out[off + 0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;
-    out[off + 1] = 0;
-    out[off + 2] = (uint8_t)((2 + ext_len) >> 8);
-    out[off + 3] = (uint8_t)(2 + ext_len);
-    out[off + 4] = (uint8_t)(ext_len >> 8);
-    out[off + 5] = (uint8_t)ext_len;
-    if (ctx->negotiated_alpn)
-    {
-        size_t p = off + 6, list = 1u + ctx->negotiated_alpn_len;
-        out[p++] = (uint8_t)(TLS_EXT_ALPN >> 8);
-        out[p++] = (uint8_t)TLS_EXT_ALPN;
-        out[p++] = (uint8_t)((2 + list) >> 8);
-        out[p++] = (uint8_t)(2 + list);
-        out[p++] = (uint8_t)(list >> 8);
-        out[p++] = (uint8_t)list;
-        out[p++] = ctx->negotiated_alpn_len;
-        memcpy(out + p, ctx->negotiated_alpn, ctx->negotiated_alpn_len);
-    }
-    transcript_hash_update(ctx->transcript_hash, out + off, ee_len);
-    off += ee_len;
 
     if (!tls_send_finished(ctx, false, out + off, out_cap - off, &fin_len))
         return false;
