@@ -1164,6 +1164,8 @@ static bool load_cert_identity(const char *privkey_appvar,
     if (rc != TLS_KEY_IMPORT_OK || !key ||
         key->type != TLS_KEY_TYPE_EC_P256 || !key->ec.priv)
     {
+        if (rc != TLS_KEY_IMPORT_OK)
+            ERROR_CODE(rc);
         if (key) tls_key_free(key);
         mem_buffer_custom_free(chain_pem);
         return false;
