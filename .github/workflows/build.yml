@@ -149,20 +149,22 @@ jobs:
           test -d "${{ env.CEDEV }}/include/lwip"
           test -f "${{ github.workspace }}/lwip.zip"
 
-      - name: Build Wi-Fi examples
-        id: make_wifi_examples
+      - name: Build release examples
+        id: make_examples
         run: |
-          make -C examples/wifi_ping
-          make -C examples/wifi_api
-          mkdir -p wifi-examples
-          cp examples/wifi_ping/bin/LWPING.8xp examples/wifi_api/bin/LWWIFI.8xp wifi-examples/
+          make -C examples
+          mkdir -p release-examples
+          cp examples/pcb/bin/LWPCB.8xp \
+             examples/socket/bin/LWSOCKET.8xp \
+             examples/template/bin/LWTMPL.8xp \
+             release-examples/
 
-      - name: Upload Wi-Fi examples
-        id: upload_wifi_examples
+      - name: Upload release examples
+        id: upload_examples
         uses: actions/upload-artifact@v4
         with:
-          name: lwip-wifi-examples
-          path: ${{ github.workspace }}/wifi-examples/
+          name: lwip-examples
+          path: ${{ github.workspace }}/release-examples/
           if-no-files-found: error
 
       - name: Upload build artifact
@@ -191,7 +193,8 @@ jobs:
             echo "|---|---|"
             echo "| dylib release | ${{ steps.make_dylib.outcome }} |"
             echo "| output verification | ${{ steps.verify_build.outcome }} |"
-            echo "| Wi-Fi examples | ${{ steps.make_wifi_examples.outcome }} |"
+            echo "| release examples | ${{ steps.make_examples.outcome }} |"
+            echo "| examples artifact | ${{ steps.upload_examples.outcome }} |"
             echo "| build artifact | ${{ steps.upload_build_artifact.outcome }} |"
             echo "| release artifact | ${{ steps.upload_zip_artifact.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -76,6 +76,7 @@ clean:
 	$(CE_LIBIFY) clean
 
 # Package output of `make dylib` (and readmes) into `lwip.zip`
+RELEASE_TOOLS := tools/lwip-cert-converter
 .PHONY: release
 release:
 	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
@@ -84,6 +85,7 @@ release:
 	cp SECURITY.md build/SECURITY.md
 	rm -f lwip.zip
 	zip -r lwip.zip build/ \
+		$(RELEASE_TOOLS) \
 	    -x "*/obj/*" \
 	    -x "*/bin/*" \
 	    -x "*/.DS_Store" \

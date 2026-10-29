@@ -299,7 +299,7 @@ fontupper=\footnotesize
 	\newpage
 	\section{Foreword}
 
-	\textbf{lwIP-CE} ports the Lightweight IP (lwIP) stack to the TI-84+ CE, bringing USB Ethernet, IPv4/IPv6, and TLS 1.3 to a 48 MHz, single-threaded platform with limited RAM and no native networking abstraction. The objective is not connectivity at any cost, but standards-aligned, interoperable networking within the calculator's hardware constraints.
+	\textbf{lwIP-CE} ports the Lightweight IP (lwIP) stack to the TI-84+ CE, bringing USB Ethernet, IPv4/IPv6, and TLS 1.3 client and server roles to a 48 MHz, single-threaded platform with limited RAM and no native networking abstraction. The objective is not connectivity at any cost, but standards-aligned, interoperable networking within the calculator's hardware constraints.
 
 	This whitepaper documents the resulting architecture, from USB transport and Ethernet abstraction through lwIP integration and TLS. It describes the memory model, resident-application interface, cryptographic components, validation strategy, and engineering trade-offs required to make contemporary secure networking practical on this platform. In doing so, lwIP-CE serves as both a usable networking stack and a proof of feasibility: deeply constrained systems need not abandon protocol correctness, clear architectural boundaries, or systematic testing.
 
@@ -852,7 +852,7 @@ for (uint8_t i = 0; i < count; i++) {
 		\begin{wrapfigure}{r}{0.42\linewidth}
 			\centering
 			\includegraphics[width=\linewidth]{traceback_demo.jpg}
-			\caption{\footnotesize On-device traceback output from the browser example after a TLS fetch failure. The socket-level error appears first, followed by the stack frames that led to it.}
+			\caption{\footnotesize On-device traceback output after a TLS fetch failure. The socket-level error appears first, followed by the stack frames that led to it.}
 			\label{fig:traceback_demo}
 		\end{wrapfigure}
 
@@ -876,7 +876,7 @@ for (uint8_t i = 0; i < count; i++) {
 	\begin{itemize}
 		\item Passive network eavesdropping.
 		\item Active man-in-the-middle (MITM) attacks.
-		\item Malicious or compromised TLS servers.
+		\item Malicious or compromised TLS peers, including clients connecting to a calculator-hosted service and servers contacted by the calculator.
 		\item Malformed or adversarial network inputs intended to trigger parser or protocol failures.
 	\end{itemize}
 	
@@ -901,8 +901,9 @@ for (uint8_t i = 0; i < count; i++) {
 	Within those boundaries, lwIP-CE aims to provide:
 	
 	\begin{itemize}
-		\item Standards-compliant TLS 1.3 handshakes.
+		\item Standards-compliant TLS 1.3 client and server handshakes.
 		\item Protection of application data against passive and active network attackers.
+		\item Certificate authentication of servers, optional certificate authentication of the calculator as an mTLS client, and PSK or certificate authentication when the calculator acts as a server.
 		\item Robust parsing and rejection of malformed protocol inputs.
 		\item Controlled handling of memory and sensitive state where feasible on the platform.
 	\end{itemize}
@@ -1086,8 +1087,8 @@ for (uint8_t i = 0; i < count; i++) {
 
 	The implementation supports two \texttt{CertificateVerify} schemes: \texttt{rsa\_pss\_rsae\_sha256} with a leaf RSA modulus between 2048 and 4096 bits, and \texttt{ecdsa\_secp256r1\_sha256} (P-256/SHA-256). Servers selecting wider RSA-PSS hash variants or RSA-PKCS1 (which RFC~8446 §4.4.3 forbids in \texttt{CertificateVerify} regardless) are rejected with a fatal \texttt{decrypt\_error} alert. RSA keys above 4096 bits remain unsupported.
 
-	\paragraph{CertificateRequest}
-	A server may ask the client to authenticate with its own certificate. Client certificates are currently out of scope for this implementation, but the request still has to be handled correctly: \texttt{CertificateRequest} participates in the handshake transcript that both sides' \texttt{Finished} MACs are computed over, so it cannot simply be ignored. The handshake parser validates the message's nested request-context and extension-list lengths, feeds the exact bytes into the transcript hash, and records that the server asked (\texttt{client\_certificate\_requested}). Rather than aborting or omitting the response, the client replies with an empty \texttt{Certificate} message (a zero-length certificate list, per RFC~8446 §4.4.2) and no \texttt{CertificateVerify}, which is the standard, spec-compliant way to decline client authentication while keeping the transcript---and therefore the handshake---valid.
+	\paragraph{CertificateRequest and mutual TLS}
+	A server may ask the client to authenticate with its own certificate. Applications can configure an ECDSA P-256 private key and leaf-first certificate chain in AppVars; after a valid \texttt{CertificateRequest}, the client sends \texttt{Certificate} followed by \texttt{CertificateVerify} using \texttt{ecdsa\_secp256r1\_sha256}, then sends its \texttt{Finished}. The request context and extension-list lengths are validated, the exact request bytes participate in the transcript, and the server's advertised signature schemes and \texttt{oid\_filters} are checked before the identity is used. If no client identity was configured, P-256/SHA-256 was not offered, or the request contains a non-empty unsupported OID filter, the client instead sends an empty \texttt{Certificate} and omits \texttt{CertificateVerify}, as required by RFC~8446 §4.4.2 when declining authentication. Configuring a client certificate forces a full handshake rather than allowing a cached PSK ticket to bypass the server's authentication request. This provides the client side of mutual TLS; the calculator's server role does not currently request or validate client certificates.
 
 	\paragraph{Certificate Chain Parsing and Adjacent-Link Verification}
 	When operating as a client, the implementation streams the TLS \texttt{Certificate} message one certificate at a time rather than buffering the whole chain, and verifies each \emph{link} against the next certificate's public key. Because certificate $N$ is signed by certificate $N{+}1$, and $N{+}1$ has not yet arrived when $N$ finishes parsing, the walker defers: it holds $N$'s signature material until $N{+}1$ arrives, then verifies the pending link with $N{+}1$'s key.
@@ -1199,10 +1200,22 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 		\item Publish a security advisory across project channels (GitHub, Discord, and community forums).
 	\end{enumerate}
 
+	\subsection{TLS Roles and Authentication Modes}
+
+	At the higher-level socket API, the operation performed on a TLS socket selects its role without a separate role flag: \texttt{lwip\_socket\_connect()} creates a client handshake and \texttt{lwip\_socket\_listen()} creates a server handshake. Credentials must be configured before either operation and are locked once the handshake role has been selected. The lower ALTCP layer exposes separate client and server configuration constructors for callers that work directly with protocol control blocks.
+
+	\paragraph{Client role}
+	A client may perform an ordinary certificate-authenticated handshake, use an explicitly configured external PSK, resume from a cached session ticket, or present an ECDSA P-256 identity when a server requests mutual TLS. Server certificates are checked using the chain, hostname, validity-period, trust-anchor, and \texttt{CertificateVerify} rules described above. Client identity files may be password-protected PKCS~\#8; encrypted keys fail closed unless the application installs the one-shot secret-input callback, and the returned password bytes are wiped after import.
+
+	\paragraph{Server role}
+	The server supports two explicit configurations. External-PSK mode authenticates a configured 32-byte key and identity and requires \texttt{psk\_dhe\_ke} with X25519. Certificate mode loads a leaf-first certificate chain and matching ECDSA P-256 private key from AppVars, sends \texttt{EncryptedExtensions}, \texttt{Certificate}, \texttt{CertificateVerify}, and \texttt{Finished} in RFC order, and fragments handshake messages at record boundaries when necessary. The user-facing \texttt{lwip-cert-converter} validates the identity, normalizes and deduplicates the chain, preserves or explicitly converts supported private-key encryption, and produces the two AppVars consumed by this mode. A listener without either credential configuration fails closed. Both modes support \texttt{TLS\_AES\_128\_GCM\_SHA256} and \texttt{TLS\_AES\_128\_CCM\_SHA256}, preferring GCM when the peer offers both.
+
+	The server accepts an X25519 share directly. In certificate mode only, if the client advertises X25519 in \texttt{supported\_groups} but omits an X25519 \texttt{key\_share}, the server may send one standards-conforming \texttt{HelloRetryRequest} selecting X25519. It never selects a group the client did not advertise, never sends a second HRR, and does not use the HRR path for external PSKs because that would require validating a replacement binder over the rewritten transcript.
+
 	\subsection{ClientHello Profile}
 	\label{ssec:clienthello_profile}
 
-	Every TLS 1.3 connection begins with a \texttt{ClientHello} whose fixed structure is determined at compile time. The table below enumerates the extensions this implementation always or conditionally emits. No other extensions are sent; a server that requires an unlisted extension will not be compatible without a code change.
+	Every client-role TLS 1.3 connection begins with a \texttt{ClientHello} whose fixed structure is determined at compile time. The table below enumerates the extensions this implementation always or conditionally emits. No other extensions are sent; a server that requires an unlisted extension will not be compatible without a code change.
 
 	\begin{figure}[H]
 		\centering
@@ -1236,7 +1249,7 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	The \texttt{record\_size\_limit} extension (RFC~8449) requests 4096-byte plaintext records. A server that echoes the extension must not exceed the negotiated limit; a server that ignores it may send up to the TLS maximum (16~KB), which the implementation accepts from heap. Either way, a record exceeding the negotiated (or default) limit triggers a fatal \texttt{record\_overflow} alert per RFC~8449~\S4.
 
 	\paragraph{Key exchange}
-	ClientHello1 is gated only on X25519. P-256 generation proceeds speculatively when Wi-Fi bridge offload is available; without offload, the blocking local operation is deferred until an HRR selects P-256. ClientHello2 then carries exactly the P-256 share. An HRR that repeats X25519 or requests an unadvertised group is rejected with \texttt{illegal\_parameter}.
+	The initial \texttt{ClientHello} advertises both X25519 and P-256 in \texttt{supported\_groups}, but offers only an X25519 \texttt{key\_share}. This keeps the common path on the faster group and avoids blocking the connection on an unused P-256 generation. P-256 generation proceeds speculatively when Wi-Fi bridge offload is available; without offload, the blocking local operation is deferred until an HRR selects P-256. \texttt{ClientHello2} then carries exactly the P-256 share. An HRR that repeats X25519, requests an unadvertised group, or follows an earlier HRR is rejected with the appropriate fatal alert.
 
 	\textit{The remainder of the handshake hedges on the negotiation of material within \texttt{ClientHello}, \texttt{ServerHello}, and \texttt{HelloRetryRequest} and will not be documented here. See RFC 8446 if you would like a breakdown of the entire handshake process.}
 
@@ -1398,9 +1411,9 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		\newpage
 		
 		\section{Conclusion}
-		This work demonstrates that a modern TCP/IP stack with TLS support can be adapted to the TI-84+ CE class of hardware when the design is shaped around the platform rather than merely compressed to fit it. More broadly, it is an existence proof for a class of device most would write off entirely: a single-core processor in the low tens of megahertz, with no MMU, no hardware cryptographic acceleration, no secure element, and a memory budget measured in kilobytes can still host an interoperable TLS~1.3 client against the live internet --- provided the constraints are treated as first-class design inputs rather than obstacles to paper over. The resulting system combines USB CDC Ethernet transport, lwIP protocol handling, memory-pressure-aware buffering, a resident application call model, and a constrained TLS 1.3 implementation into a coherent network stack for a device with severe memory, timing, and security limitations.
+		This work demonstrates that a modern TCP/IP stack with TLS support can be adapted to the TI-84+ CE class of hardware when the design is shaped around the platform rather than merely compressed to fit it. More broadly, it is an existence proof for a class of device most would write off entirely: a single-core processor in the low tens of megahertz, with no MMU, no hardware cryptographic acceleration, no secure element, and a memory budget measured in kilobytes can still operate as an interoperable TLS~1.3 client or server --- provided the constraints are treated as first-class design inputs rather than obstacles to paper over. The resulting system combines USB CDC Ethernet transport, lwIP protocol handling, memory-pressure-aware buffering, a resident application call model, certificate and PSK server authentication, optional mTLS client authentication, and a constrained TLS 1.3 implementation into a coherent network stack for a device with severe memory, timing, and security limitations.
 		
-		The central engineering result is not that the TI-84+ CE can be made equivalent to a desktop or server environment. It cannot. The platform lacks a hardware root of trust, secure key storage, preemptive multitasking, and the memory budget normally assumed by contemporary networking and cryptographic software. The relevant result is narrower and more useful: with explicit boundaries, conservative assumptions, and targeted validation, the platform can support interoperable secure-client workflows and provide a practical foundation for calculator-native networked applications.
+		The central engineering result is not that the TI-84+ CE can be made equivalent to a desktop or general-purpose server environment. It cannot. The platform lacks a hardware root of trust, secure key storage, preemptive multitasking, and the memory budget normally assumed by contemporary networking and cryptographic software. The relevant result is narrower and more useful: with explicit boundaries, conservative assumptions, and targeted validation, the platform can support interoperable secure client and server workflows and provide a practical foundation for calculator-native networked applications.
 		
 		At the same time, this implementation should be understood as a constrained engineering artifact, not as a certified cryptographic module. It has not undergone formal third-party audit or certification, and its security claims are bounded by the hardware profile described in this document. Local physical attackers, compromised binaries, and side-channel observation remain outside the set of problems this project can fully solve. The mitigations provided here are best-effort hardening measures, not a substitute for secure hardware..
 

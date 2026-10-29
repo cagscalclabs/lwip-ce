@@ -300,9 +300,11 @@ Join a network if the bridge is offline, then wait for it to connect:
 Once the bridge is connected, the interface behaves like any other: wait for a
 DHCP lease and use sockets as described in :doc:`using-the-network`.
 
-``examples/wifi_ping`` (``LWPING``) waits for a lease, pings the gateway and
-then stays reachable for 60 seconds. ``examples/wifi_api`` (``LWWIFI``) calls
-every function above and writes the results to the ``WIFILOG`` AppVar.
+The release examples are intentionally transport-neutral. Start from
+``examples/template`` for a new application, ``examples/pcb`` for lwIP's
+native callback API, or ``examples/socket`` for the higher-level lwIP-CE
+socket API. The same socket and PCB interfaces work over either supported
+network adapter.
 
 The Wi-Fi Screen
 ----------------

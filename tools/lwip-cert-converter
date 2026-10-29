@@ -1,0 +1,577 @@
+#!/usr/bin/env python3
+"""Validate a lwIP-CE P-256 identity and package it as TI AppVars."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+
+CERT_RE = re.compile(
+    rb"-----BEGIN CERTIFICATE-----\s+.*?-----END CERTIFICATE-----",
+    re.DOTALL,
+)
+APPVAR_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,7}\Z")
+SUPPORTED_PBES2_CIPHERS = (
+    "aes-128-cbc",
+    "aes-256-cbc",
+    "aes-128-gcm",
+    "aes-256-gcm",
+)
+KNOWN_PBES2_CIPHERS = SUPPORTED_PBES2_CIPHERS + (
+    "aes-128-ccm",
+    "aes-256-ccm",
+    "des-ede3-cbc",
+)
+
+
+class ConversionError(RuntimeError):
+    pass
+
+
+def command(name: str, env_name: str, repo_root: Path) -> str:
+    override = os.environ.get(env_name)
+    candidates = [override] if override else []
+    found = shutil.which(name)
+    if found:
+        candidates.append(found)
+    cedev = os.environ.get("CEDEV")
+    if cedev:
+        candidates.append(str(Path(cedev) / "bin" / name))
+    candidates.append(str(repo_root / "CEdev" / "bin" / name))
+    if os.name == "nt":
+        candidates += [candidate + ".exe" for candidate in list(candidates)]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    raise ConversionError(
+        f"{name} was not found; install it or set {env_name} to its path"
+    )
+
+
+def require_openssl_3(openssl: str) -> None:
+    version = run([openssl, "version"]).stdout.decode("utf-8", "replace").strip()
+    match = re.match(r"OpenSSL\s+(\d+)\.", version)
+    if not match or int(match.group(1)) < 3:
+        raise ConversionError(
+            "OpenSSL 3.0 or newer is required; set OPENSSL to its executable path"
+        )
+
+
+def run(
+    argv: list[str],
+    *,
+    input_data: bytes | None = None,
+    inherit_stdin: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    stdin = None if inherit_stdin else subprocess.DEVNULL
+    if input_data is not None:
+        stdin = None
+    try:
+        result = subprocess.run(
+            argv,
+            input=input_data,
+            stdin=stdin,
+            stdout=subprocess.PIPE,
+            stderr=None if inherit_stdin else subprocess.PIPE,
+            check=False,
+        )
+    except OSError as exc:
+        raise ConversionError(f"could not run {argv[0]}: {exc}") from exc
+    if result.returncode:
+        detail = ""
+        if result.stderr:
+            detail = ": " + result.stderr.decode("utf-8", "replace").strip()
+        raise ConversionError(f"{Path(argv[0]).name} failed{detail}")
+    return result
+
+
+def ask(question: str) -> bool:
+    if not sys.stdin.isatty():
+        raise ConversionError(question + " (confirmation requires an interactive terminal)")
+    return input(question + " [y/N] ").strip().lower() in {"y", "yes"}
+
+
+def validate_name(value: str, option: str) -> None:
+    if not APPVAR_RE.fullmatch(value):
+        raise ConversionError(
+            f"{option} must be 1-8 ASCII letters/digits and start with a letter"
+        )
+
+
+def pem_certificates(path: Path) -> list[bytes]:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise ConversionError(f"cannot read {path}: {exc}") from exc
+    blocks = CERT_RE.findall(data)
+    remainder = CERT_RE.sub(b"", data)
+    if not blocks or remainder.strip():
+        raise ConversionError(f"{path} must contain only PEM certificates")
+    return [block + b"\n" for block in blocks]
+
+
+def openssl_cert(openssl: str, pem: bytes, *args: str) -> bytes:
+    return run([openssl, "x509", "-inform", "PEM", *args], input_data=pem).stdout
+
+
+def cert_der(openssl: str, pem: bytes) -> bytes:
+    return openssl_cert(openssl, pem, "-outform", "DER")
+
+
+def cert_names(openssl: str, pem: bytes) -> tuple[str, str]:
+    text = openssl_cert(
+        openssl, pem, "-noout", "-subject", "-issuer", "-nameopt", "RFC2253"
+    ).decode("utf-8", "replace").splitlines()
+    if len(text) != 2 or "=" not in text[0] or "=" not in text[1]:
+        raise ConversionError("OpenSSL returned malformed certificate names")
+    return text[0].split("=", 1)[1], text[1].split("=", 1)[1]
+
+
+def normalized_cert(openssl: str, pem: bytes) -> bytes:
+    return openssl_cert(openssl, pem, "-outform", "PEM")
+
+
+def checked_public_der(path: Path) -> bytes:
+    data = path.read_bytes()
+    # `openssl pkey -check` prefixes its success message to the encoded public
+    # key even when -out names a file. The first DER SEQUENCE begins at 0x30.
+    start = data.find(b"\x30")
+    if start < 0:
+        raise ConversionError("OpenSSL did not return a checked public key")
+    return data[start:]
+
+
+def encryption_description(openssl: str, key_path: Path) -> tuple[bool, str, bool]:
+    try:
+        data = key_path.read_bytes()
+    except OSError as exc:
+        raise ConversionError(f"cannot read {key_path}: {exc}") from exc
+    encrypted = (
+        b"-----BEGIN ENCRYPTED PRIVATE KEY-----" in data
+        or b"Proc-Type: 4,ENCRYPTED" in data
+    )
+    if not encrypted:
+        return False, "unencrypted", True
+    if b"-----BEGIN ENCRYPTED PRIVATE KEY-----" not in data:
+        return True, "legacy PEM encryption", False
+    parsed = run(
+        [openssl, "asn1parse", "-inform", "PEM", "-in", str(key_path)]
+    ).stdout.decode("utf-8", "replace").lower()
+    cipher = next((name for name in KNOWN_PBES2_CIPHERS if name in parsed), None)
+    salt_lengths = [
+        int(value)
+        for value in re.findall(
+            r"d=5\s+hl=\d+\s+l=\s*(\d+)\s+prim:\s+octet string",
+            parsed,
+        )
+    ]
+    integers = [
+        int(value, 16)
+        for value in re.findall(
+            r"d=5\s+hl=\d+\s+l=\s*\d+\s+prim:\s+integer\s+:([0-9a-f]+)",
+            parsed,
+        )
+    ]
+    expected_key_len = 16 if cipher and "128" in cipher else 32
+    key_length_ok = len(integers) == 1 or (
+        len(integers) == 2 and integers[1] == expected_key_len
+    )
+    cipher_offset = parsed.find(cipher) if cipher else -1
+    parameter = (
+        re.search(
+            r"d=4\s+hl=\d+\s+l=\s*(\d+)\s+prim:\s+octet string",
+            parsed[cipher_offset:],
+        )
+        if cipher_offset >= 0
+        else None
+    )
+    parameter_len = int(parameter.group(1)) if parameter else 0
+    parameter_ok = (
+        parameter_len == 16
+        if cipher and "cbc" in cipher
+        else parameter_len > 0
+    )
+    supported = (
+        data.startswith(b"-----BEGIN ENCRYPTED PRIVATE KEY-----")
+        and "pbes2" in parsed
+        and "pbkdf2" in parsed
+        and "hmacwithsha256" in parsed
+        and cipher in SUPPORTED_PBES2_CIPHERS
+        and len(salt_lengths) == 1
+        and salt_lengths[0] >= 8
+        and 1 <= len(integers) <= 2
+        and 0 < integers[0] <= 600000
+        and key_length_ok
+        and parameter_ok
+    )
+    description = cipher or "unknown/unsupported PBES2 encryption"
+    return True, description, supported
+
+
+def prepare_private_key(
+    openssl: str,
+    source: Path,
+    destination: Path,
+    target_algorithm: str,
+    force_algorithm: bool,
+) -> tuple[Path, bytes]:
+    encrypted, description, importer_supported = encryption_description(openssl, source)
+    convert_encryption = force_algorithm or (encrypted and not importer_supported)
+
+    if encrypted and not importer_supported:
+        question = (
+            "This key contains an unsupported encryption algorithm or parameters "
+            f"({description}); re-encrypt it with {target_algorithm} anyway?"
+        )
+        if not ask(question):
+            raise ConversionError("conversion cancelled")
+
+    if convert_encryption:
+        if not sys.stdin.isatty():
+            raise ConversionError(
+                "private-key encryption requires an interactive terminal"
+            )
+        if encrypted:
+            print(
+                "OpenSSL will request the existing password, then a password "
+                "for the converted key.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "OpenSSL will request a password for the encrypted key.",
+                file=sys.stderr,
+            )
+        run(
+            [
+                openssl,
+                "pkcs8",
+                "-topk8",
+                "-in",
+                str(source),
+                "-out",
+                str(destination),
+                "-v2",
+                target_algorithm,
+                "-v2prf",
+                "hmacWithSHA256",
+                "-iter",
+                "1000",
+            ],
+            inherit_stdin=True,
+        )
+        destination.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        encrypted = True
+        description = target_algorithm
+        importer_supported = True
+
+    if encrypted:
+        key_for_appvar = destination if convert_encryption else source
+        if not convert_encryption:
+            print(
+                f"OpenSSL will request the {description} private-key password.",
+                file=sys.stderr,
+            )
+
+        if not sys.stdin.isatty():
+            raise ConversionError(
+                "encrypted private-key validation requires an interactive terminal"
+            )
+        public_path = destination.parent / "private-key-public.der"
+        run(
+            [
+                openssl,
+                "pkey",
+                "-in",
+                str(key_for_appvar),
+                "-check",
+                "-pubout",
+                "-outform",
+                "DER",
+                "-out",
+                str(public_path),
+            ],
+            inherit_stdin=True,
+        )
+        return key_for_appvar, checked_public_der(public_path)
+
+    # Normalize unencrypted inputs to a format accepted by the on-device
+    # importer. An encrypted input is deliberately never downgraded.
+    run([openssl, "pkey", "-in", str(source), "-out", str(destination)])
+    destination.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    public_path = destination.parent / "private-key-public.der"
+    run(
+        [
+            openssl,
+            "pkey",
+            "-in",
+            str(destination),
+            "-check",
+            "-pubout",
+            "-outform",
+            "DER",
+            "-out",
+            str(public_path),
+        ]
+    )
+    return destination, checked_public_der(public_path)
+
+
+def certificate_public_key(openssl: str, pem: bytes) -> bytes:
+    public_pem = openssl_cert(openssl, pem, "-pubkey", "-noout")
+    details = run(
+        [openssl, "pkey", "-pubin", "-text", "-noout"], input_data=public_pem
+    ).stdout.decode("utf-8", "replace")
+    if not (
+        re.search(r"Public-Key:\s*\(256 bit\)", details)
+        and re.search(r"ASN1 OID:\s*(?:prime256v1|secp256r1)", details)
+    ):
+        raise ConversionError(
+            "the TLS certificate API supports only a P-256 EC private key"
+        )
+    return run(
+        [openssl, "pkey", "-pubin", "-outform", "DER"], input_data=public_pem
+    ).stdout
+
+
+def verifies_with(openssl: str, directory: Path, child: bytes, issuer: bytes) -> bool:
+    child_path = directory / "candidate-child.pem"
+    issuer_path = directory / "candidate-issuer.pem"
+    child_path.write_bytes(child)
+    issuer_path.write_bytes(issuer)
+    result = subprocess.run(
+        [
+            openssl,
+            "verify",
+            "-partial_chain",
+            "-trusted",
+            str(issuer_path),
+            str(child_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def order_chain(openssl: str, directory: Path, leaf: bytes, rest: list[bytes]) -> list[bytes]:
+    ordered = [leaf]
+    pool = list(rest)
+    while pool:
+        _, issuer_name = cert_names(openssl, ordered[-1])
+        candidates = [cert for cert in pool if cert_names(openssl, cert)[0] == issuer_name]
+        verified = [
+            cert
+            for cert in candidates
+            if verifies_with(openssl, directory, ordered[-1], cert)
+        ]
+        if len(verified) != 1:
+            raise ConversionError(
+                "the certificate bundle is disconnected, ambiguous, or has an invalid signature"
+            )
+        parent = verified[0]
+        ordered.append(parent)
+        pool.remove(parent)
+
+    leaf_subject, leaf_issuer = cert_names(openssl, leaf)
+    if len(ordered) == 1 and leaf_subject != leaf_issuer:
+        raise ConversionError(
+            "the full chain contains only a non-self-signed leaf; include its issuer chain"
+        )
+    return ordered
+
+
+def verify_chain(openssl: str, directory: Path, chain: list[bytes]) -> None:
+    paths: list[Path] = []
+    for index, pem in enumerate(chain):
+        path = directory / f"chain-{index}.pem"
+        path.write_bytes(pem)
+        paths.append(path)
+    argv = [
+        openssl,
+        "verify",
+        "-partial_chain",
+        "-check_ss_sig",
+        "-trusted",
+        str(paths[-1]),
+    ]
+    if len(paths) > 2:
+        middle = directory / "intermediates.pem"
+        middle.write_bytes(b"".join(chain[1:-1]))
+        argv += ["-untrusted", str(middle)]
+    argv.append(str(paths[0]))
+    run(argv)
+
+
+def normalize_chain(
+    openssl: str,
+    directory: Path,
+    fullchain_path: Path,
+    leaf_path: Path | None,
+) -> list[bytes]:
+    supplied = pem_certificates(fullchain_path)
+    if leaf_path:
+        leaf_blocks = pem_certificates(leaf_path)
+        if len(leaf_blocks) != 1:
+            raise ConversionError("--cert must contain exactly one PEM certificate")
+        leaf = leaf_blocks[0]
+    else:
+        leaf = supplied[0]
+
+    seen: set[bytes] = set()
+    unique: list[bytes] = []
+    leaf_der = cert_der(openssl, leaf)
+    for cert in [leaf, *supplied]:
+        der = cert_der(openssl, cert)
+        if der in seen:
+            continue
+        seen.add(der)
+        unique.append(normalized_cert(openssl, cert))
+    if cert_der(openssl, unique[0]) != leaf_der:
+        raise ConversionError("internal leaf normalization failure")
+    chain = order_chain(openssl, directory, unique[0], unique[1:])
+    verify_chain(openssl, directory, chain)
+    return chain
+
+
+def package(
+    convbin: str,
+    source: Path,
+    output: Path,
+    appvar_name: str,
+) -> None:
+    run(
+        [
+            convbin,
+            "-j",
+            "bin",
+            "-i",
+            str(source),
+            "-k",
+            "8xv",
+            "-o",
+            str(output),
+            "-n",
+            appvar_name,
+            "--log-level",
+            "1",
+        ]
+    )
+    if not output.is_file():
+        raise ConversionError(f"convbin did not create {output}")
+
+
+def parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="lwip-cert-converter",
+        description=(
+            "Validate a P-256 TLS identity and convert its private key and "
+            "certificate chain into TI-84 Plus CE AppVars."
+        ),
+        epilog=(
+            "Encrypted source keys remain encrypted. Unsupported encryption may be "
+            "interactively converted to PBES2/PBKDF2-HMAC-SHA256; AES-256-CBC is "
+            "the default target because OpenSSL's PKCS#8 command does not emit AEAD "
+            "ciphers. The converter never silently removes password protection. "
+            "Applications "
+            "loading an encrypted key AppVar must install an lwip_set_tty callback.\n\n"
+            "Dependencies: OpenSSL 3.0+ and convbin. OPENSSL and CONVBIN may "
+            "override their executable paths."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
+def main() -> int:
+    argp = parser()
+    argp.add_argument("--pkey", required=True, type=Path, help="PEM private key")
+    argp.add_argument(
+        "--fullchain",
+        required=True,
+        type=Path,
+        help="PEM certificate chain, normally leaf first",
+    )
+    argp.add_argument(
+        "--cert", type=Path,
+        help="standalone PEM leaf certificate when --fullchain omits it",
+    )
+    argp.add_argument("--pkey_name", required=True, help="on-device key AppVar name")
+    argp.add_argument("--chain_name", required=True, help="on-device chain AppVar name")
+    argp.add_argument(
+        "--algorithm",
+        help=(
+            "target private-key encryption algorithm; supported values: "
+            + ", ".join(SUPPORTED_PBES2_CIPHERS)
+            + " (default for required conversion: aes-256-cbc)"
+        ),
+    )
+    args = argp.parse_args()
+
+    try:
+        validate_name(args.pkey_name, "--pkey_name")
+        validate_name(args.chain_name, "--chain_name")
+        if args.pkey_name.lower() == args.chain_name.lower():
+            raise ConversionError("key and chain AppVars must have different names")
+        if not args.pkey.is_file() or not args.fullchain.is_file():
+            raise ConversionError("--pkey and --fullchain must name existing files")
+        if args.cert and not args.cert.is_file():
+            raise ConversionError("--cert must name an existing file")
+        target_algorithm = args.algorithm or "aes-256-cbc"
+        if target_algorithm not in SUPPORTED_PBES2_CIPHERS:
+            raise ConversionError("algorithm unsupported")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        openssl = command("openssl", "OPENSSL", repo_root)
+        convbin = command("convbin", "CONVBIN", repo_root)
+        require_openssl_3(openssl)
+        key_output = Path.cwd() / f"{args.pkey_name}.8xv"
+        chain_output = Path.cwd() / f"{args.chain_name}.8xv"
+        existing = [path for path in (key_output, chain_output) if path.exists()]
+        if existing and not ask(
+            "Overwrite " + ", ".join(path.name for path in existing) + "?"
+        ):
+            raise ConversionError("conversion cancelled")
+
+        with tempfile.TemporaryDirectory(prefix="lwip-cert-", dir=Path.cwd()) as raw_tmp:
+            tmp = Path(raw_tmp)
+            prepared_key = tmp / "private-key.pem"
+            key_for_appvar, key_public = prepare_private_key(
+                openssl,
+                args.pkey,
+                prepared_key,
+                target_algorithm,
+                args.algorithm is not None,
+            )
+            chain = normalize_chain(openssl, tmp, args.fullchain, args.cert)
+            if certificate_public_key(openssl, chain[0]) != key_public:
+                raise ConversionError("the private key does not match the leaf certificate")
+
+            normalized_chain = tmp / "fullchain.pem"
+            normalized_chain.write_bytes(b"".join(chain))
+            staged_key = tmp / key_output.name
+            staged_chain = tmp / chain_output.name
+            package(convbin, key_for_appvar, staged_key, args.pkey_name)
+            package(convbin, normalized_chain, staged_chain, args.chain_name)
+            os.replace(staged_key, key_output)
+            os.replace(staged_chain, chain_output)
+            key_output.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+        print(key_output.name)
+        print(chain_output.name)
+        return 0
+    except ConversionError as exc:
+        print(f"lwip-cert-converter: error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
