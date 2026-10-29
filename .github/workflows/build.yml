@@ -157,6 +157,7 @@ jobs:
           cp examples/pcb/bin/LWPCB.8xp \
              examples/socket/bin/LWSOCKET.8xp \
              examples/template/bin/LWTMPL.8xp \
+             examples/wifi_api/bin/LWWIFI.8xp \
              release-examples/
 
       - name: Upload release examples

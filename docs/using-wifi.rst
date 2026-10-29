@@ -304,7 +304,9 @@ The release examples are intentionally transport-neutral. Start from
 ``examples/template`` for a new application, ``examples/pcb`` for lwIP's
 native callback API, or ``examples/socket`` for the higher-level lwIP-CE
 socket API. The same socket and PCB interfaces work over either supported
-network adapter.
+network adapter. ``examples/wifi_api`` demonstrates bridge discovery, scanning,
+and saved-profile management and writes its complete results to the
+``WIFILOG`` AppVar.
 
 The Wi-Fi Screen
 ----------------
