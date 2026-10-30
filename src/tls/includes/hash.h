@@ -95,11 +95,16 @@ void tls_sha256hw_update(struct tls_sha256_context *ctx, const uint8_t *data, si
 void tls_sha256hw_digest(struct tls_sha256_context *ctx, uint8_t *digest);
  */
 
-/** Storage for any registered hash backend's private state. */
+/** Storage for any registered hash backend's private state.
+ *
+ * SHA-512 is listed first as the largest digest. Note that the SHA-384 and
+ * SHA-512 context layouts are identical (both retain the full 8-word state
+ * and truncate only at output), so they are the same size; SHA-256 is
+ * smaller. */
 union tls_hash_state
 {
-    struct tls_sha384_context sha384;
     struct tls_sha512_context sha512;
+    struct tls_sha384_context sha384;
     struct tls_sha256_context sha256;
 };
 
