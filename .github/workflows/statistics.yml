@@ -88,7 +88,7 @@ jobs:
               file_sha=$(gh api "$api_base/contents/$asset_path?ref=$assets_branch" \
                 --jq '.sha' 2>/dev/null || true)
               jq -n \
-                --arg message="Update RNG statistics for $GITHUB_SHA" \
+                --arg message "Update RNG statistics for $GITHUB_SHA" \
                 --rawfile content "$encoded_file" \
                 --arg branch "$assets_branch" \
                 --arg sha "$file_sha" \
