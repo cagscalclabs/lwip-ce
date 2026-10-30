@@ -285,21 +285,41 @@ static void altcp_tls_ce_build_aead_nonce(const uint8_t iv[12], uint64_t seq_num
 
 static bool altcp_tls_ce_record_aead_init(struct tls_aes_context *aes_ctx,
                                           const struct tls_handshake_context *ctx,
-                                          const uint8_t key[16],
+                                          const uint8_t *key,
                                           const uint8_t nonce[12],
                                           size_t plaintext_len)
 {
-    if (ctx->cipher_suite == TLS_AES_128_CCM_SHA256)
+    /* The suite fixes the AEAD key length (RFC 8446 Appendix B.4); refuse a
+     * mismatched key_len rather than initializing an AEAD with the wrong
+     * key size. */
+    switch (ctx->cipher_suite)
     {
+    case TLS_AES_128_CCM_SHA256:
+        if (ctx->key_len != 16)
+        {
+            ERROR_CODE(ctx->key_len);
+            return false;
+        }
         return tls_aes_ccm_init(aes_ctx, key, 16, nonce, 12,
                                 TLS_AES_AUTH_TAG_SIZE, plaintext_len, 5);
-    }
-    if (ctx->cipher_suite != TLS_AES_128_GCM_SHA256)
-    {
+    case TLS_AES_128_GCM_SHA256:
+        if (ctx->key_len != 16)
+        {
+            ERROR_CODE(ctx->key_len);
+            return false;
+        }
+        return tls_aes_init(aes_ctx, TLS_AES_GCM, key, 16, nonce, 12);
+    case TLS_AES_256_GCM_SHA384:
+        if (ctx->key_len != 32)
+        {
+            ERROR_CODE(ctx->key_len);
+            return false;
+        }
+        return tls_aes_init(aes_ctx, TLS_AES_GCM, key, 32, nonce, 12);
+    default:
         ERROR_CODE(ctx->cipher_suite);
         return false;
     }
-    return tls_aes_init(aes_ctx, TLS_AES_GCM, key, 16, nonce, 12);
 }
 
 /* Chunk size for streaming AEAD passes. Sized to amortize per-call AES
@@ -1989,12 +2009,14 @@ static void altcp_tls_ce_keyshare_arm(void)
 /* The record layer encrypts with the client_* keys and decrypts with the
  * server_* keys. A server swaps the two sets after each derivation so the same
  * record code protects its traffic in the right direction. */
-static void altcp_tls_ce_swap_keys(uint8_t *a_key, uint8_t *a_iv, uint8_t *b_key, uint8_t *b_iv)
+static void altcp_tls_ce_swap_keys(uint8_t *a_key, uint8_t *a_iv,
+                                   uint8_t *b_key, uint8_t *b_iv,
+                                   size_t key_len)
 {
-    uint8_t tmp[16];
-    memcpy(tmp, a_key, 16);
-    memcpy(a_key, b_key, 16);
-    memcpy(b_key, tmp, 16);
+    uint8_t tmp[TLS_TRAFFIC_KEY_MAX];
+    memcpy(tmp, a_key, key_len);
+    memcpy(a_key, b_key, key_len);
+    memcpy(b_key, tmp, key_len);
     memcpy(tmp, a_iv, 12);
     memcpy(a_iv, b_iv, 12);
     memcpy(b_iv, tmp, 12);
@@ -2051,7 +2073,8 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
         return false;
     }
     altcp_tls_ce_swap_keys(k->client_handshake_key, k->client_handshake_iv,
-                           k->server_handshake_key, k->server_handshake_iv);
+                           k->server_handshake_key, k->server_handshake_iv,
+                           ctx->key_len);
 
     /* Emit the flight one message per record: EncryptedExtensions, Certificate,
      * CertificateVerify, Finished. Each message is built straight into its
@@ -2144,7 +2167,8 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
         return false;
     }
     altcp_tls_ce_swap_keys(k->client_application_key, k->client_application_iv,
-                           k->server_application_key, k->server_application_iv);
+                           k->server_application_key, k->server_application_iv,
+                           ctx->key_len);
     return true;
 }
 

@@ -133,6 +133,9 @@ c_emit = r"""
 #define TLS_HANDSHAKE_CERTIFICATE_VERIFY 0x0f
 #define TLS_EXT_ALPN 0x0010
 #define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403
+#define TLS_SHA256_DIGEST_LEN 32
+#define TLS_SHA384_DIGEST_LEN 48
+#define TLS_HASH_MAX_DIGEST_LEN 48
 #define TLS_ALG_ECDSA_SECP256R1_SHA256 1
 #define TLS_STATE_HANDSHAKE_KEYS_DERIVED 3
 #define TLS_STATE_SERVER_FINISHED_RECEIVED 4
@@ -151,6 +154,7 @@ struct tls_handshake_context {
     uint8_t server_flight_step;
     int state;
     struct tls_hash_context *transcript_hash;
+    uint8_t hash_len;
     struct tls_x509_object *server_cert;
     struct tls_key *server_key;
     struct tls_x509_object **server_chain;
@@ -251,6 +255,7 @@ int main(void)
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = TLS_STATE_HANDSHAKE_KEYS_DERIVED;
     ctx.transcript_hash = &hash;
+    ctx.hash_len = 32;
     ctx.server_cert = &leaf_obj;
     ctx.server_key = &key;
     ctx.server_chain = chain;

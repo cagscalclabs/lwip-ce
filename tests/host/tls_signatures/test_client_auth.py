@@ -62,6 +62,9 @@ c_test = r'''
 #define TLS_CLIENT_FLIGHT_CERTIFICATE_VERIFY 1
 #define TLS_CLIENT_FLIGHT_DONE 2
 #define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403
+#define TLS_SHA256_DIGEST_LEN 32
+#define TLS_SHA384_DIGEST_LEN 48
+#define TLS_HASH_MAX_DIGEST_LEN 48
 #define TLS_ALG_ECDSA_SECP256R1_SHA256 1
 #define TLS_STATE_SERVER_FINISHED_RECEIVED 2
 
@@ -82,6 +85,7 @@ struct tls_handshake_context {
     bool client_certificate_compatible;
     int state;
     struct tls_hash_context *transcript_hash;
+    uint8_t hash_len;
     struct tls_key *client_key;
     struct tls_x509_object **client_chain;
     size_t client_chain_len;
@@ -172,6 +176,7 @@ int main(void)
         .client_certificate_compatible = true,
         .state = TLS_STATE_SERVER_FINISHED_RECEIVED,
         .transcript_hash = &hash,
+        .hash_len = 32,
         .client_key = &key,
         .client_chain = chain,
         .client_chain_len = 2,

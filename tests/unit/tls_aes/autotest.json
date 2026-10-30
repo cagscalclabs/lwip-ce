@@ -1,5 +1,5 @@
 {
-  "description": "Test AES cipher in GCM, CBC, and CCM modes",
+  "description": "Test AES cipher in GCM, CBC, and CCM modes (128- and 256-bit keys)",
   "transfer_files": [
     "bin/XAES.8xp",
     "../../common/clibs.8xg",
@@ -58,6 +58,14 @@
     "key|enter",
     "hashWait|15",
     "key|enter",
+    "key|enter",
+    "hashWait|17",
+    "key|enter",
+    "hashWait|18",
+    "key|enter",
+    "hashWait|19",
+    "key|enter",
+    "hashWait|20",
     "key|enter"
   ],
   "hashes": {
@@ -220,6 +228,46 @@
         "F7C03D8D"
       ],
       "timeout": 100000
+    },
+    "17": {
+      "description": "AES-256-GCM (GCM Spec Test Case 16) encrypt/decrypt/bad tag",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 10000
+    },
+    "18": {
+      "description": "AES-256-CCM encrypt/decrypt/bad tag",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 10000
+    },
+    "19": {
+      "description": "TLS record AES-256-GCM chunked encrypt/decrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 10000
+    },
+    "20": {
+      "description": "TLS record AES-256-CCM chunked encrypt/decrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 10000
     }
   }
 }

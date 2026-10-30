@@ -324,9 +324,14 @@ while _depth:
     _pos += 1
 source += altcp_src[_m.start():_pos] + "\n"
 source += '#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403\n'
+# Suite table plus its lookup helper; they are file-scope data and a
+# struct-returning pointer function the per-function extractor cannot take.
+source += hs[hs.index('#define TLS_AES_GCM_RECORD_LIMIT'):hs.index('static bool tls_cipher_suite_supported')]
 for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_digest',
              'tls_parse_handshake_header',
-             'tls_cipher_suite_supported',
+             'tls_cipher_suite_supported', 'tls_cipher_suite_offered',
+             'tls_cipher_suite_hash', 'tls_client_hello_clear',
+             'tls_client_hello_save', 'tls_transcript_select_suite_hash',
              'tls_extension_type_known',
              'tls_handshake_init_common', 'tls_handshake_keyshares_begin',
              'tls_handshake_keyshare_fail', 'tls_handshake_keyshares_step',

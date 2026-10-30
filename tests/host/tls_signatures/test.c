@@ -10,6 +10,48 @@ static void algorithm(const uint8_t *der, size_t n, bool expected, tls_alg_t sch
 #define ALG(v, ok, scheme) algorithm(v, sizeof(v), ok, scheme)
 
 static unsigned be16(const uint8_t *p) { return (unsigned)p[0] * 256 + p[1]; }
+
+/* A non-PSK ClientHello followed by a ServerHello selecting
+ * TLS_AES_256_GCM_SHA384 must rebuild the transcript under SHA-384. */
+static void sha384_server_hello_test(void)
+{
+    struct tls_handshake_context ctx;
+    assert(tls_handshake_init(&ctx, NULL, NULL));
+    uint8_t ch[512];
+    size_t ch_len;
+    assert(tls_send_client_hello(&ctx, ch, sizeof(ch), &ch_len));
+
+    uint8_t sh[90] = {0};
+    sh[0] = TLS_HANDSHAKE_SERVER_HELLO;
+    sh[3] = 86;
+    sh[4] = 3;
+    sh[5] = 3;
+    memset(sh + 6, 0x11, 32);           /* ServerHello.random */
+    sh[38] = 0;                         /* legacy_session_id */
+    sh[39] = 0x13;                      /* TLS_AES_256_GCM_SHA384 */
+    sh[40] = 0x02;
+    sh[41] = 0;                         /* compression */
+    sh[42] = 0;
+    sh[43] = 46;                        /* extensions length */
+    sh[44] = 0; sh[45] = 43; sh[46] = 0; sh[47] = 2; sh[48] = 3; sh[49] = 4;
+    sh[50] = 0; sh[51] = 51; sh[52] = 0; sh[53] = 36;
+    sh[54] = 0; sh[55] = 0x1d; sh[56] = 0; sh[57] = 32;
+    memset(sh + 58, 0x33, 32);
+
+    assert(tls_recv_server_hello(&ctx, sh, sizeof(sh)));
+    assert(ctx.cipher_suite == TLS_AES_256_GCM_SHA384);
+    assert(ctx.hash_len == TLS_SHA384_DIGEST_LEN);
+    assert(ctx.key_len == 32);
+    assert(ctx.transcript_hash_algo == TLS_HASH_SHA384);
+
+    /* The transcript must have been re-initialised as SHA-384 and fed the
+     * exact ClientHello bytes (not just ServerHello). The harness stubs the
+     * hash itself, so check the algorithm and byte counts. */
+    assert(hash_stub_alg == TLS_HASH_SHA384);
+    assert(hash_stub_bytes == ch_len + sizeof(sh));
+    tls_handshake_cleanup(&ctx);
+    assert(allocated == 0);
+}
 static void hello(bool psk, const char *hostname, bool offer_alpn)
 {
     static const uint8_t protocols[] = {
@@ -38,14 +80,22 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
     assert((((unsigned)buf[1] << 16) | ((unsigned)buf[2] << 8) | buf[3]) == n-4);
     assert(buf[4] == 3 && buf[5] == 3);
     assert(memcmp(buf + 6, ctx.client_random, 32) == 0);
-    static const uint8_t fixed_body[] = {
+    /* PSK mode offers only the SHA-256 suites (binder hash rule); a full
+     * handshake offers the three standardized suites in preference order. */
+    static const uint8_t fixed_body_psk[] = {
         0, 0, 4, 0x13, 0x01, 0x13, 0x04, 1, 0
     };
-    assert(memcmp(buf + 38, fixed_body, sizeof(fixed_body)) == 0);
-    assert(be16(buf+47) == n-49);
+    static const uint8_t fixed_body_full[] = {
+        0, 0, 6, 0x13, 0x01, 0x13, 0x02, 0x13, 0x04, 1, 0
+    };
+    const uint8_t *fixed_body = psk ? fixed_body_psk : fixed_body_full;
+    size_t fixed_len = psk ? sizeof(fixed_body_psk) : sizeof(fixed_body_full);
+    assert(memcmp(buf + 38, fixed_body, fixed_len) == 0);
+    size_t ext_off = psk ? 49 : 51;
+    assert(be16(buf + ext_off - 2) == n - ext_off);
     unsigned versions = 0, groups = 0, key_share = 0, record_size_limit = 0;
     unsigned signatures = 0, alpn = 0, sni = 0, psk_modes = 0, psk_ext = 0;
-    for (size_t off = 49; off < n; )
+    for (size_t off = ext_off; off < n; )
     {
         unsigned type = be16(buf+off), len = be16(buf+off+2);
         assert(off + 4 + len <= n);
@@ -130,7 +180,8 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
     assert(tls_send_client_hello(&ctx, buf, sizeof(buf), &n));
     assert(n == required);
     unsigned p256_share = 0;
-    for (size_t off = 49; off < n; )
+    size_t hrr_ext_off = psk ? 49 : 51;
+    for (size_t off = hrr_ext_off; off < n; )
     {
         unsigned type = be16(buf + off), len = be16(buf + off + 2);
         assert(off + 4 + len <= n);
@@ -153,6 +204,14 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
 
 static void hrr_keyshare_tests(void)
 {
+    assert(tls_cipher_suite_supported(0x1301));
+    assert(tls_cipher_suite_supported(0x1302));
+    assert(tls_cipher_suite_supported(0x1304));
+    /* 0x1303 is ChaCha20-Poly1305 and 0x1305 is TLS_AES_128_CCM_8_SHA256;
+     * neither is implemented. In particular 0x1305 is not an AES-256 suite. */
+    assert(!tls_cipher_suite_supported(0x1303));
+    assert(!tls_cipher_suite_supported(0x1305));
+    assert(!tls_cipher_suite_supported(0x0000));
     static const uint8_t hrr_p256[] = {
         TLS_HANDSHAKE_SERVER_HELLO, 0, 0, 52,
         3, 3,
@@ -226,6 +285,21 @@ static void hrr_keyshare_tests(void)
     last_alert = 0;
     assert(!tls_recv_server_hello(&ctx, hrr_x25519, sizeof(hrr_x25519)));
     assert(last_alert == TLS_ALERT_ILLEGAL_PARAMETER);
+    tls_handshake_cleanup(&ctx);
+
+    /* PSK mode offers only the SHA-256 suites (binder hash binding), so an
+     * HRR selecting TLS_AES_256_GCM_SHA384 is an unoffered suite. */
+    assert(tls_handshake_keyshares_begin(&ctx, NULL, NULL));
+    ctx.psk_mode = true;
+    ctx.psk_identity.identity_len = 1;
+    assert(tls_send_client_hello(&ctx, client_hello,
+                                 sizeof(client_hello), &written));
+    uint8_t hrr_sha384[sizeof(hrr_p256)];
+    memcpy(hrr_sha384, hrr_p256, sizeof(hrr_p256));
+    hrr_sha384[39] = 0x13;
+    hrr_sha384[40] = 0x02;
+    assert(!tls_recv_server_hello(&ctx, hrr_sha384, sizeof(hrr_sha384)));
+    assert(ctx.state == TLS_STATE_ERROR);
     tls_handshake_cleanup(&ctx);
 }
 
@@ -301,7 +375,8 @@ static void client_certificate_flight_tests(void)
 
     test_p256_sign_ok = true;
     memset(&ctx, 0, sizeof(ctx));
-    assert(transcript_hash_init(&transcript));
+    assert(transcript_hash_init(&transcript, TLS_HASH_SHA256));
+    ctx.hash_len = TLS_SHA256_DIGEST_LEN;
     ctx.transcript_hash = &transcript;
     ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     ctx.client_certificate_requested = true;
@@ -361,7 +436,8 @@ static void client_certificate_flight_tests(void)
     /* Incompatible request: empty certificate list once, then nothing (no
      * CertificateVerify). */
     memset(&ctx, 0, sizeof(ctx));
-    assert(transcript_hash_init(&transcript));
+    assert(transcript_hash_init(&transcript, TLS_HASH_SHA256));
+    ctx.hash_len = TLS_SHA256_DIGEST_LEN;
     ctx.transcript_hash = &transcript;
     ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     ctx.client_certificate_requested = true;
@@ -378,7 +454,8 @@ static void client_certificate_flight_tests(void)
 
     /* Compatible but no identity configured: same empty list. */
     memset(&ctx, 0, sizeof(ctx));
-    assert(transcript_hash_init(&transcript));
+    assert(transcript_hash_init(&transcript, TLS_HASH_SHA256));
+    ctx.hash_len = TLS_SHA256_DIGEST_LEN;
     ctx.transcript_hash = &transcript;
     ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     ctx.client_certificate_requested = true;
@@ -391,7 +468,8 @@ static void client_certificate_flight_tests(void)
 
     /* Signing failure must not emit a half-built CertificateVerify. */
     memset(&ctx, 0, sizeof(ctx));
-    assert(transcript_hash_init(&transcript));
+    assert(transcript_hash_init(&transcript, TLS_HASH_SHA256));
+    ctx.hash_len = TLS_SHA256_DIGEST_LEN;
     ctx.transcript_hash = &transcript;
     ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     ctx.client_certificate_requested = true;
@@ -407,7 +485,8 @@ static void client_certificate_flight_tests(void)
 
     /* Too small a buffer is refused rather than truncated. */
     memset(&ctx, 0, sizeof(ctx));
-    assert(transcript_hash_init(&transcript));
+    assert(transcript_hash_init(&transcript, TLS_HASH_SHA256));
+    ctx.hash_len = TLS_SHA256_DIGEST_LEN;
     ctx.transcript_hash = &transcript;
     ctx.state = TLS_STATE_SERVER_FINISHED_RECEIVED;
     ctx.client_certificate_requested = true;
@@ -1173,6 +1252,7 @@ int main(void)
     size_t signature_len = 0;
     assert(tls_key_sign(digest, 32, sig, &signature_len, &aes, TLS_ALG_RSA_PKCS1_SHA256) == TLS_KEY_OP_INVALID);
     assert(tls_key_sign(digest, 32, sig, &signature_len, &ec.pubkey, TLS_ALG_ECDSA_SECP256R1_SHA256) == TLS_KEY_OP_INVALID);
+    sha384_server_hello_test();
     puts("TLS signature dispatch/lifecycle regressions passed");
     return 0;
 }

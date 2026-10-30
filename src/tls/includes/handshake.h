@@ -51,7 +51,14 @@ extern "C"
 
 /* Cipher Suites */
 #define TLS_AES_128_GCM_SHA256 0x1301
+#define TLS_AES_256_GCM_SHA384 0x1302
 #define TLS_AES_128_CCM_SHA256 0x1304
+
+/* Largest traffic-key secret/key sizes across the supported suites. Secrets
+ * follow the transcript hash (48 bytes for SHA-384); AES keys are at most 32
+ * bytes. The IV is always 12 bytes (RFC 8446 section 5.3). */
+#define TLS_TRAFFIC_SECRET_MAX TLS_SHA384_DIGEST_LEN
+#define TLS_TRAFFIC_KEY_MAX 32
 
 /* Extension Types */
 #define TLS_EXT_SERVER_NAME 0x0000
@@ -184,25 +191,25 @@ extern "C"
      */
     struct tls_traffic_keys
     {
-        /* Key schedule secrets */
-        uint8_t handshake_secret[32];
-        uint8_t master_secret[32];
-        uint8_t resumption_master_secret[32];
+        /* Key schedule secrets (suite hash length: 32 or 48 bytes) */
+        uint8_t handshake_secret[TLS_TRAFFIC_SECRET_MAX];
+        uint8_t master_secret[TLS_TRAFFIC_SECRET_MAX];
+        uint8_t resumption_master_secret[TLS_TRAFFIC_SECRET_MAX];
 
         /* Traffic secrets */
-        uint8_t client_handshake_traffic_secret[32];
-        uint8_t server_handshake_traffic_secret[32];
-        uint8_t client_application_traffic_secret[32];
-        uint8_t server_application_traffic_secret[32];
+        uint8_t client_handshake_traffic_secret[TLS_TRAFFIC_SECRET_MAX];
+        uint8_t server_handshake_traffic_secret[TLS_TRAFFIC_SECRET_MAX];
+        uint8_t client_application_traffic_secret[TLS_TRAFFIC_SECRET_MAX];
+        uint8_t server_application_traffic_secret[TLS_TRAFFIC_SECRET_MAX];
 
-        /* Derived keys for AES-GCM */
-        uint8_t client_handshake_key[16];
+        /* Derived AEAD keys/IVs (suite key length: 16 or 32 bytes) */
+        uint8_t client_handshake_key[TLS_TRAFFIC_KEY_MAX];
         uint8_t client_handshake_iv[12];
-        uint8_t server_handshake_key[16];
+        uint8_t server_handshake_key[TLS_TRAFFIC_KEY_MAX];
         uint8_t server_handshake_iv[12];
-        uint8_t client_application_key[16];
+        uint8_t client_application_key[TLS_TRAFFIC_KEY_MAX];
         uint8_t client_application_iv[12];
-        uint8_t server_application_key[16];
+        uint8_t server_application_key[TLS_TRAFFIC_KEY_MAX];
         uint8_t server_application_iv[12];
     };
 
@@ -221,6 +228,16 @@ extern "C"
         uint8_t client_random[32];
         uint8_t server_random[32];
         uint16_t cipher_suite; /* Selected TLS 1.3 cipher suite. */
+        uint8_t hash_len;      /* Suite transcript hash length: 32 or 48. */
+        uint8_t key_len;       /* Suite AEAD key length: 16 or 32. */
+        uint8_t transcript_hash_algo; /* Hash currently running the transcript. */
+
+        /* Serialized first ClientHello. Retained only until the server picks
+         * the suite hash: a SHA-384 suite requires re-hashing the ClientHello
+         * with SHA-384, which is only known after ServerHello. Never populated
+         * in PSK mode (PSK offers SHA-256 suites exclusively). */
+        uint8_t *client_hello_buf;
+        size_t client_hello_len;
 
         /* Transcript Hash (running hash of all handshake messages) */
         struct tls_hash_context transcript_hash_storage; /* Embedded storage */

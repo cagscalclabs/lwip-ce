@@ -114,6 +114,58 @@ uint8_t ccm_tag_2[] = {
 uint8_t gcm_big_tag[] = {
     0x4c, 0xcb, 0x3b, 0x95, 0x8e, 0xf1, 0x6f, 0x25, 0x2e, 0x38, 0x42, 0x88, 0x12, 0x76, 0x7e, 0x42};
 
+/* AES-256-GCM (McGrew/Viega GCM Spec, Test Case 16 with AAD). */
+uint8_t gcm256_key[] = {
+    0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c, 0x6d, 0x6a, 0x8f, 0x94, 0x67, 0x30, 0x83, 0x08,
+    0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c, 0x6d, 0x6a, 0x8f, 0x94, 0x67, 0x30, 0x83, 0x08};
+uint8_t gcm256_ciphertext[] = {
+    0x52, 0x2d, 0xc1, 0xf0, 0x99, 0x56, 0x7d, 0x07, 0xf4, 0x7f, 0x37, 0xa3, 0x2a, 0x84, 0x42, 0x7d,
+    0x64, 0x3a, 0x8c, 0xdc, 0xbf, 0xe5, 0xc0, 0xc9, 0x75, 0x98, 0xa2, 0xbd, 0x25, 0x55, 0xd1, 0xaa,
+    0x8c, 0xb0, 0x8e, 0x48, 0x59, 0x0d, 0xbb, 0x3d, 0xa7, 0xb0, 0x8b, 0x10, 0x56, 0x82, 0x88, 0x38,
+    0xc5, 0xf6, 0x1e, 0x63, 0x93, 0xba, 0x7a, 0x0a, 0xbc, 0xc9, 0xf6, 0x62};
+uint8_t gcm256_tag[] = {
+    0x76, 0xfc, 0x6e, 0xce, 0x0f, 0x4e, 0x17, 0x68, 0xcd, 0xdf, 0x88, 0x53, 0xbb, 0x2d, 0x55, 0x1b};
+
+/* AES-256-CCM, key 0x00..0x1f, RFC 3610-style packet layout. Reference
+ * ciphertext/tag computed with the Python `cryptography` AESCCM. */
+uint8_t ccm256_key[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};
+uint8_t ccm256_plaintext[] = {
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26};
+uint8_t ccm256_ciphertext[] = {
+    0xad, 0x0f, 0x3f, 0xd3, 0x38, 0xe8, 0x56, 0x77, 0x22, 0x11, 0x3a, 0xde, 0x50, 0x76, 0x5e, 0xaa,
+    0xfe, 0x57, 0x69, 0x36, 0x50, 0x5f, 0x4d, 0x8e, 0xe5, 0x3e, 0x6b, 0xc6, 0xed, 0x3e, 0x2b};
+uint8_t ccm256_tag[] = {
+    0x88, 0xa0, 0x93, 0x94, 0x2b, 0x71, 0x2e, 0x03, 0x1f, 0xe8, 0xfe, 0x14, 0x75, 0x47, 0xd3, 0xbf};
+
+/* TLS 1.3 record-level AES-256 vectors: 32-byte content + inner type 23
+ * protected with AEAD AAD = the 5-byte record header, nonce = IV XOR seq 0.
+ * Reference computed with Python AESGCM/AESCCM. */
+uint8_t rec256_iv[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b};
+uint8_t rec256_content[] = {
+    0x01, 0x04, 0x07, 0x0a, 0x0d, 0x10, 0x13, 0x16, 0x19, 0x1c, 0x1f, 0x22, 0x25, 0x28, 0x2b, 0x2e,
+    0x31, 0x34, 0x37, 0x3a, 0x3d, 0x40, 0x43, 0x46, 0x49, 0x4c, 0x4f, 0x52, 0x55, 0x58, 0x5b, 0x5e};
+uint8_t rec256_aad[] = {0x17, 0x03, 0x03, 0x00, 0x21};
+uint8_t rec256_gcm_plaintext[] = {
+    0x01, 0x04, 0x07, 0x0a, 0x0d, 0x10, 0x13, 0x16, 0x19, 0x1c, 0x1f, 0x22, 0x25, 0x28, 0x2b, 0x2e,
+    0x31, 0x34, 0x37, 0x3a, 0x3d, 0x40, 0x43, 0x46, 0x49, 0x4c, 0x4f, 0x52, 0x55, 0x58, 0x5b, 0x5e,
+    0x17};
+uint8_t rec256_gcm_ciphertext[] = {
+    0xfd, 0x97, 0xd7, 0x6d, 0xe8, 0x55, 0x8a, 0xaf, 0x4a, 0x24, 0x97, 0x0a, 0xa2, 0x14, 0xee, 0x3c,
+    0x6b, 0x73, 0x9b, 0x22, 0x66, 0x32, 0xa0, 0xc3, 0x0b, 0xc9, 0x84, 0x37, 0x4c, 0xcb, 0x0b, 0xff,
+    0xc4};
+uint8_t rec256_gcm_tag[] = {
+    0x66, 0xe0, 0x27, 0x35, 0x5c, 0x97, 0x4e, 0xbd, 0x39, 0xe0, 0x53, 0xd2, 0x8b, 0x14, 0x78, 0xc0};
+uint8_t rec256_ccm_ciphertext[] = {
+    0x8b, 0xd1, 0xbf, 0x1c, 0x33, 0x3f, 0xda, 0x81, 0xb5, 0xd5, 0xae, 0x01, 0x28, 0x18, 0x77, 0x6a,
+    0x0c, 0x40, 0x21, 0x4f, 0x04, 0x35, 0x1b, 0xff, 0x2c, 0xe9, 0xcc, 0x07, 0xc0, 0x40, 0x79, 0x2d,
+    0xd2};
+uint8_t rec256_ccm_tag[] = {
+    0xd9, 0x86, 0x70, 0xd9, 0x2d, 0xa2, 0x20, 0x5e, 0x49, 0xee, 0xcc, 0xf4, 0x00, 0x48, 0xd3, 0xd5};
+
 static bool ccm_encrypt(const uint8_t *key, size_t key_len,
                         const uint8_t *nonce, size_t nonce_len,
                         const uint8_t *aad, size_t aad_len,
@@ -404,6 +456,149 @@ int main(void)
     for (size_t i = 0; i < sizeof ctx; i++)
         status &= ((const uint8_t *)&ctx)[i] == 0;
     tls_aes_destroy_ctx(NULL);
+    show_result(status);
+
+    // Test 17: AES-256-GCM encrypt/decrypt and bad-tag rejection
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    memset(tag, 0, sizeof(tag));
+    status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm256_key, sizeof gcm256_key,
+                           gcm_iv, sizeof gcm_iv);
+    status &= tls_aes_update_aad(&ctx, gcm_aad, sizeof gcm_aad);
+    status &= tls_aes_encrypt(&ctx, gcm_plaintext, sizeof gcm_plaintext, tbuf);
+    status &= tls_aes_digest(&ctx, tag);
+    status &= memcmp(tbuf, gcm256_ciphertext, sizeof gcm256_ciphertext) == 0;
+    status &= memcmp(tag, gcm256_tag, sizeof gcm256_tag) == 0;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm256_key, sizeof gcm256_key,
+                           gcm_iv, sizeof gcm_iv);
+    status &= !tls_aes_decrypt(&ctx, gcm256_ciphertext,
+                               sizeof gcm256_ciphertext, tbuf);
+    status &= tls_aes_verify(&ctx, gcm_aad, sizeof gcm_aad,
+                             gcm256_ciphertext, sizeof gcm256_ciphertext,
+                             gcm256_tag);
+    status &= tls_aes_decrypt(&ctx, gcm256_ciphertext,
+                              sizeof gcm256_ciphertext, tbuf);
+    status &= memcmp(tbuf, gcm_plaintext, sizeof gcm_plaintext) == 0;
+    memcpy(tag, gcm256_tag, sizeof gcm256_tag);
+    tag[0] ^= 0x01;
+    memset(tbuf, 0xaa, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm256_key, sizeof gcm256_key,
+                           gcm_iv, sizeof gcm_iv);
+    status &= !tls_aes_verify(&ctx, gcm_aad, sizeof gcm_aad,
+                              gcm256_ciphertext, sizeof gcm256_ciphertext, tag);
+    status &= !tls_aes_decrypt(&ctx, gcm256_ciphertext,
+                               sizeof gcm256_ciphertext, tbuf);
+    for (size_t i = 0; i < sizeof gcm_plaintext; i++)
+        status &= tbuf[i] == 0xaa;
+    show_result(status);
+
+    // Test 18: AES-256-CCM encrypt/decrypt and bad-tag rejection
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    memset(tag, 0, sizeof(tag));
+    status &= ccm_encrypt(ccm256_key, sizeof ccm256_key,
+                          ccm_nonce_1, sizeof ccm_nonce_1,
+                          ccm_aad, sizeof ccm_aad,
+                          ccm256_plaintext, sizeof ccm256_plaintext,
+                          tbuf, tag, sizeof ccm256_tag);
+    status &= memcmp(tbuf, ccm256_ciphertext, sizeof ccm256_ciphertext) == 0;
+    status &= memcmp(tag, ccm256_tag, sizeof ccm256_tag) == 0;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= ccm_decrypt(ccm256_key, sizeof ccm256_key,
+                          ccm_nonce_1, sizeof ccm_nonce_1,
+                          ccm_aad, sizeof ccm_aad,
+                          ccm256_ciphertext, sizeof ccm256_ciphertext,
+                          ccm256_tag, sizeof ccm256_tag, tbuf);
+    status &= memcmp(tbuf, ccm256_plaintext, sizeof ccm256_plaintext) == 0;
+    {
+        uint8_t bad[sizeof ccm256_tag];
+        memcpy(bad, ccm256_tag, sizeof bad);
+        bad[0] ^= 0x01;
+        memset(tbuf, 0xaa, sizeof(tbuf));
+        status &= !ccm_decrypt(ccm256_key, sizeof ccm256_key,
+                               ccm_nonce_1, sizeof ccm_nonce_1,
+                               ccm_aad, sizeof ccm_aad,
+                               ccm256_ciphertext, sizeof ccm256_ciphertext,
+                               bad, sizeof bad, tbuf);
+        for (size_t i = 0; i < sizeof ccm256_plaintext; i++)
+            status &= tbuf[i] == 0xaa;
+    }
+    show_result(status);
+
+    // Test 19: record-level AES-256-GCM with chunked encryption/decryption
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    memset(tag, 0, sizeof(tag));
+    status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm256_key, sizeof gcm256_key,
+                           rec256_iv, sizeof rec256_iv);
+    status &= tls_aes_update_aad(&ctx, rec256_aad, sizeof rec256_aad);
+    status &= tls_aes_encrypt(&ctx, rec256_gcm_plaintext, 5, tbuf);
+    status &= tls_aes_encrypt(&ctx, rec256_gcm_plaintext + 5, 7, tbuf + 5);
+    status &= tls_aes_encrypt(&ctx, rec256_gcm_plaintext + 12,
+                              sizeof rec256_gcm_plaintext - 12, tbuf + 12);
+    status &= tls_aes_digest(&ctx, tag);
+    status &= memcmp(tbuf, rec256_gcm_ciphertext,
+                     sizeof rec256_gcm_ciphertext) == 0;
+    status &= memcmp(tag, rec256_gcm_tag, sizeof rec256_gcm_tag) == 0;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_init(&ctx, TLS_AES_GCM, gcm256_key, sizeof gcm256_key,
+                           rec256_iv, sizeof rec256_iv);
+    status &= !tls_aes_decrypt(&ctx, rec256_gcm_ciphertext,
+                               sizeof rec256_gcm_ciphertext, tbuf);
+    status &= tls_aes_verify(&ctx, rec256_aad, sizeof rec256_aad,
+                             rec256_gcm_ciphertext,
+                             sizeof rec256_gcm_ciphertext, rec256_gcm_tag);
+    status &= tls_aes_decrypt(&ctx, rec256_gcm_ciphertext, 9, tbuf);
+    status &= tls_aes_decrypt(&ctx, rec256_gcm_ciphertext + 9,
+                              sizeof rec256_gcm_ciphertext - 9, tbuf + 9);
+    status &= memcmp(tbuf, rec256_gcm_plaintext,
+                     sizeof rec256_gcm_plaintext) == 0;
+    show_result(status);
+
+    // Test 20: record-level AES-256-CCM with chunked encryption/decryption
+    status = true;
+    memset(tbuf, 0, sizeof(tbuf));
+    memset(tag, 0, sizeof(tag));
+    status &= tls_aes_ccm_init(&ctx, ccm256_key, sizeof ccm256_key,
+                               rec256_iv, sizeof rec256_iv,
+                               sizeof ccm256_tag, sizeof rec256_gcm_plaintext,
+                               sizeof rec256_aad);
+    status &= tls_aes_update_aad(&ctx, rec256_aad, sizeof rec256_aad);
+    status &= tls_aes_encrypt(&ctx, rec256_gcm_plaintext, 3, tbuf);
+    status &= tls_aes_encrypt(&ctx, rec256_gcm_plaintext + 3, 11, tbuf + 3);
+    status &= tls_aes_encrypt(&ctx, rec256_gcm_plaintext + 14,
+                              sizeof rec256_gcm_plaintext - 14, tbuf + 14);
+    status &= tls_aes_digest(&ctx, tag);
+    status &= memcmp(tbuf, rec256_ccm_ciphertext,
+                     sizeof rec256_ccm_ciphertext) == 0;
+    status &= memcmp(tag, rec256_ccm_tag, sizeof rec256_ccm_tag) == 0;
+    memset(tbuf, 0, sizeof(tbuf));
+    status &= tls_aes_ccm_init(&ctx, ccm256_key, sizeof ccm256_key,
+                               rec256_iv, sizeof rec256_iv,
+                               sizeof ccm256_tag, sizeof rec256_ccm_ciphertext,
+                               sizeof rec256_aad);
+    status &= tls_aes_update_aad(&ctx, rec256_aad, sizeof rec256_aad);
+    status &= tls_aes_decrypt(&ctx, rec256_ccm_ciphertext, 4, NULL);
+    status &= tls_aes_decrypt(&ctx, rec256_ccm_ciphertext + 4, 10, NULL);
+    status &= tls_aes_decrypt(&ctx, rec256_ccm_ciphertext + 14,
+                              sizeof rec256_ccm_ciphertext - 14, NULL);
+    status &= tls_aes_digest(&ctx, tag);
+    status &= memcmp(tag, rec256_ccm_tag, sizeof rec256_ccm_tag) == 0;
+    {
+        uint8_t bad[sizeof rec256_ccm_tag];
+        memcpy(bad, rec256_ccm_tag, sizeof bad);
+        bad[0] ^= 0x01;
+        memset(tbuf, 0xaa, sizeof(tbuf));
+        status &= !ccm_decrypt(ccm256_key, sizeof ccm256_key,
+                               rec256_iv, sizeof rec256_iv,
+                               rec256_aad, sizeof rec256_aad,
+                               rec256_ccm_ciphertext,
+                               sizeof rec256_ccm_ciphertext,
+                               bad, sizeof bad, tbuf);
+        for (size_t i = 0; i < sizeof rec256_gcm_plaintext; i++)
+            status &= tbuf[i] == 0xaa;
+    }
     show_result(status);
 
     return 0;
