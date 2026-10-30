@@ -273,16 +273,22 @@ def extract_output_text(response: dict[str, Any]) -> str:
     raise ReviewError("model returned no structured output text")
 
 
-def call_model(
-    *,
-    api_key: str,
-    model: str,
-    cyber_program: str,
-    system_prompt: str,
-    user_prompt: str,
-    schema: dict[str, Any],
-) -> dict[str, Any]:
-    url = os.environ.get("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
+def extract_chat_output_text(response: dict[str, Any]) -> str:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        raise ReviewError("OpenRouter returned an invalid number of choices")
+    choice = choices[0]
+    if not isinstance(choice, dict) or choice.get("finish_reason") != "stop":
+        reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+        raise ReviewError(f"OpenRouter response did not finish normally: {reason!r}")
+    message = choice.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise ReviewError("OpenRouter returned no structured output text")
+    return content
+
+
+def model_request_policy() -> tuple[int, int]:
     try:
         timeout = int(os.environ.get("RFC_MODEL_TIMEOUT_SECONDS", "240"))
         retries = int(os.environ.get("RFC_MODEL_RETRIES", "2"))
@@ -292,6 +298,20 @@ def call_model(
         raise ReviewError(
             "RFC model timeout must be 30-600 seconds and retries must be 1-3"
         )
+    return timeout, retries
+
+
+def call_openai_model(
+    *,
+    api_key: str,
+    model: str,
+    cyber_program: str,
+    system_prompt: str,
+    user_prompt: str,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    url = os.environ.get("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
+    timeout, retries = model_request_policy()
     payload = {
         "model": model,
         "store": False,
@@ -327,6 +347,57 @@ def call_model(
         raise ReviewError("model returned malformed structured JSON") from exc
     if not isinstance(result, dict):
         raise ReviewError("model result was not an object")
+    return result
+
+
+def call_openrouter_model(
+    *,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    url = os.environ.get(
+        "OPENROUTER_CHAT_URL", "https://openrouter.ai/api/v1/chat/completions"
+    )
+    timeout, retries = model_request_policy()
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": 8_000,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "rfc_compliance_review",
+                "strict": True,
+                "schema": schema,
+            },
+        },
+        # Fail closed instead of silently routing to a provider that ignores
+        # the structured-output requirement.
+        "provider": {"require_parameters": True},
+    }
+    response = request_json(
+        url,
+        token=api_key,
+        method="POST",
+        payload=payload,
+        retries=retries,
+        timeout=timeout,
+    )
+    if not isinstance(response, dict):
+        raise ReviewError("OpenRouter returned an invalid response")
+    try:
+        result = json.loads(extract_chat_output_text(response))
+    except json.JSONDecodeError as exc:
+        raise ReviewError("OpenRouter returned malformed structured JSON") from exc
+    if not isinstance(result, dict):
+        raise ReviewError("OpenRouter model result was not an object")
     return result
 
 
@@ -583,6 +654,16 @@ def self_test() -> int:
         time.sleep = original_sleep
     assert attempts == 2 and seen_timeouts == [240, 240]
 
+    chat_response = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": json.dumps(result)},
+            }
+        ]
+    }
+    assert json.loads(extract_chat_output_text(chat_response)) == result
+
     print("RFC review self-tests passed")
     return 0
 
@@ -593,7 +674,8 @@ def main() -> int:
 
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     github_token = os.environ.get("GITHUB_TOKEN", "")
-    api_key = os.environ.get("OPENAI_API_KEY", "")
+    openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+    openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
     base_sha = os.environ.get("RFC_BASE_SHA", "").strip()
     head_sha = os.environ.get("RFC_HEAD_SHA", "").strip()
     try:
@@ -657,7 +739,9 @@ def main() -> int:
             raise ReviewError(
                 "GitHub did not provide complete patches for: " + ", ".join(incomplete)
             )
-        if not api_key:
+        if not openrouter_api_key:
+            raise ReviewError("OPENROUTER_API_KEY is unavailable")
+        if not openai_api_key:
             raise ReviewError("OPENAI_API_KEY is unavailable")
 
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -674,11 +758,10 @@ def main() -> int:
             + src_diff
             + "\n</source_diff>"
         )
-        first = call_model(
-            api_key=api_key,
-            model=os.environ.get("RFC_REVIEW_MODEL", "gpt-6-sol"),
-            cyber_program=os.environ.get(
-                "RFC_REVIEW_CYBER_PROGRAM", "standard"
+        first = call_openrouter_model(
+            api_key=openrouter_api_key,
+            model=os.environ.get(
+                "RFC_REVIEW_MODEL", "deepseek/deepseek-v4.1-flash"
             ),
             system_prompt=system_prompt,
             user_prompt="Perform the initial RFC regression review.\n\n" + evidence,
@@ -715,8 +798,8 @@ def main() -> int:
             + "\n</pr_description>\n\n"
             + evidence
         )
-        second = call_model(
-            api_key=api_key,
+        second = call_openai_model(
+            api_key=openai_api_key,
             model=os.environ.get("RFC_VERIFY_MODEL", "gpt-6-astra"),
             cyber_program=os.environ.get("RFC_VERIFY_CYBER_PROGRAM", "standard"),
             system_prompt=system_prompt,

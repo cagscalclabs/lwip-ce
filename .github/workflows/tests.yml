@@ -318,10 +318,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           RFC_BASE_SHA: origin/master
           RFC_HEAD_SHA: ${{ github.sha }}
-          RFC_REVIEW_MODEL: ${{ vars.RFC_REVIEW_MODEL || 'gpt-6-sol' }}
-          RFC_REVIEW_CYBER_PROGRAM: standard
+          RFC_REVIEW_MODEL: deepseek/deepseek-v4.1-flash
           RFC_VERIFY_MODEL: ${{ vars.RFC_VERIFY_MODEL || 'gpt-6-astra' }}
           RFC_VERIFY_CYBER_PROGRAM: standard
           RFC_REVIEW_REPORT: ${{ runner.temp }}/rfc-compliance.md
