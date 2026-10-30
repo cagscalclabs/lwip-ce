@@ -31,9 +31,10 @@
 #define TLS_SHA512_BLOCK_LEN 128
 
 /* Largest block and digest among the hash backends compiled into this build.
- * Increase these when registering a backend with larger parameters. */
+ * Increase these when registering a backend with larger parameters.
+ * SHA-512 is never used in the TLS key schedule, so the digest max is 48. */
 #define TLS_HASH_MAX_BLOCK_LEN TLS_SHA384_BLOCK_LEN
-#define TLS_HASH_MAX_DIGEST_LEN TLS_SHA512_DIGEST_LEN
+#define TLS_HASH_MAX_DIGEST_LEN TLS_SHA384_DIGEST_LEN
 
 /** @enum Implemented hash algorithms. */
 enum _hash_algorithms
