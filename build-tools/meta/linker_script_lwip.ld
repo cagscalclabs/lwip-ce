@@ -113,6 +113,11 @@ SECTIONS
      * X25519 retains its low-byte addressing alignment inside its member. */
     OVERLAY : NOCROSSREFS
     {
+        .crypto_scratch.p384
+        {
+            KEEP(*(.crypto_scratch.p384))
+            KEEP(*(.crypto_scratch.p384.*))
+        }
         .crypto_scratch.p256
         {
             KEEP(*(.crypto_scratch.p256))
@@ -165,13 +170,17 @@ SECTIONS
     PROVIDE(__rsa_transient      = __rsa_scratch_start);
     PROVIDE(___rsa_transient     = __rsa_scratch_start);
 
-    ASSERT(ADDR(.crypto_scratch.p256) == ADDR(.crypto_scratch.rsa),
-           "Error: P-256 and RSA scratch are not overlaid")
-    ASSERT(ADDR(.crypto_scratch.p256) == ADDR(.crypto_scratch.x25519),
-           "Error: P-256 and X25519 scratch are not overlaid")
-    ASSERT(SIZEOF(.crypto_scratch.p256) >= SIZEOF(.crypto_scratch.rsa),
+    ASSERT(ADDR(.crypto_scratch.p384) == ADDR(.crypto_scratch.p256),
+           "Error: P-384 and P-256 scratch are not overlaid")
+    ASSERT(ADDR(.crypto_scratch.p384) == ADDR(.crypto_scratch.rsa),
+           "Error: P-384 and RSA scratch are not overlaid")
+    ASSERT(ADDR(.crypto_scratch.p384) == ADDR(.crypto_scratch.x25519),
+           "Error: P-384 and X25519 scratch are not overlaid")
+    ASSERT(SIZEOF(.crypto_scratch.p384) >= SIZEOF(.crypto_scratch.p256),
            "Error: largest crypto scratch overlay member must be first")
-    ASSERT(SIZEOF(.crypto_scratch.p256) >= SIZEOF(.crypto_scratch.x25519),
+    ASSERT(SIZEOF(.crypto_scratch.p384) >= SIZEOF(.crypto_scratch.rsa),
+           "Error: largest crypto scratch overlay member must be first")
+    ASSERT(SIZEOF(.crypto_scratch.p384) >= SIZEOF(.crypto_scratch.x25519),
            "Error: largest crypto scratch overlay member must be first")
 
     ASSERT(. <= BSSHEAP_HIGH, "Error: BSS exceed BSSHEAP_HIGH limit")
@@ -251,6 +260,13 @@ SECTIONS
             _p256_sq_reloc_load_start = . + (LOADADDR(.p256.sq.reloc) - ADDR(.p256.sq.reloc));
             KEEP(*(.p256.sq.reloc))
         }
+        .p384.mul.reloc
+        {
+            _p384_mul_reloc_run_start = .;
+            _p384_mul_reloc_load_start = . + (LOADADDR(.p384.mul.reloc) - ADDR(.p384.mul.reloc));
+            KEEP(*(.p384.mul.reloc))
+            KEEP(*(.p384.mul.reloc.*))
+        }
         .powmod.reloc
         {
             _powmod_reloc_run_start = .;
@@ -301,6 +317,7 @@ SECTIONS
     /* Back-compat aliases for the P-256 MAC-block copy loop in p256.s. */
     _p256_mul_reloc_len      = SIZEOF(.p256.mul.reloc);
     _p256_sq_reloc_len       = SIZEOF(.p256.sq.reloc);
+    _p384_mul_reloc_len      = SIZEOF(.p384.mul.reloc);
 
     /* Back-compat aliases for the AES copy loop in aes.s. */
     _aes_encrypt_reloc_len   = SIZEOF(.aes.encrypt.reloc);
@@ -333,6 +350,8 @@ SECTIONS
            "Error: .p256.mul.reloc exceeds the RNG-free window prefix")
     ASSERT(SIZEOF(.p256.sq.reloc) <= 0x180,
            "Error: .p256.sq.reloc exceeds the RNG-free window prefix")
+    ASSERT(SIZEOF(.p384.mul.reloc) <= 1020,
+           "Error: .p384.mul.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.x25519.reloc) <= 0x400,
            "Error: .x25519.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.aes.encrypt.reloc) <= 0x400,
