@@ -75,24 +75,28 @@ jobs:
               -f ref="refs/heads/$assets_branch" -f sha="$GITHUB_SHA" >/dev/null || true
           fi
 
+          request_dir=$(mktemp -d)
+          trap 'rm -rf "$request_dir"' EXIT
           for asset in "${assets[@]}"; do
             asset_name=${asset##*/}
             asset_path="rng/$asset_name"
-            encoded=$(base64 < "$asset" | tr -d '\n')
+            encoded_file="$request_dir/content.b64"
+            request_file="$request_dir/request.json"
+            base64 < "$asset" | tr -d '\n' > "$encoded_file"
             published=false
             for attempt in 1 2 3; do
               file_sha=$(gh api "$api_base/contents/$asset_path?ref=$assets_branch" \
                 --jq '.sha' 2>/dev/null || true)
-              args=(
-                --method PUT "$api_base/contents/$asset_path"
-                -f message="Update RNG statistics for $GITHUB_SHA"
-                -f content="$encoded"
-                -f branch="$assets_branch"
-              )
-              if [ -n "$file_sha" ]; then
-                args+=(-f sha="$file_sha")
-              fi
-              if gh api "${args[@]}" >/dev/null; then
+              jq -n \
+                --arg message="Update RNG statistics for $GITHUB_SHA" \
+                --rawfile content "$encoded_file" \
+                --arg branch "$assets_branch" \
+                --arg sha "$file_sha" \
+                '{message: $message, content: $content, branch: $branch}
+                 + if $sha == "" then {} else {sha: $sha} end' \
+                > "$request_file"
+              if gh api --method PUT "$api_base/contents/$asset_path" \
+                --input "$request_file" >/dev/null; then
                 published=true
                 break
               fi
