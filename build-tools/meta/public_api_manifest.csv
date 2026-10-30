@@ -779,6 +779,10 @@ func,tls_p256_publickey,cryptography,src/tls/includes/p256.h,lwip/cryptography/p
 func,tls_p256_secret,cryptography,src/tls/includes/p256.h,lwip/cryptography/p256.h
 func,tls_p256_sign,cryptography,src/tls/includes/p256.h,lwip/cryptography/p256.h
 func,tls_p256_verify,cryptography,src/tls/includes/p256.h,lwip/cryptography/p256.h
+func,tls_p384_publickey,cryptography,src/tls/includes/p384.h,lwip/cryptography/p384.h
+func,tls_p384_secret,cryptography,src/tls/includes/p384.h,lwip/cryptography/p384.h
+func,tls_p384_sign,cryptography,src/tls/includes/p384.h,lwip/cryptography/p384.h
+func,tls_p384_verify,cryptography,src/tls/includes/p384.h,lwip/cryptography/p384.h
 func,lwip_tls_rng_wait_for_ready,socket,src/lwIP.h,lwip.h
 func,lwip_wifi_available,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h
 func,lwip_wifi_get_state,wireless,src/wireless/wifi.h,lwip/wireless/wifi.h

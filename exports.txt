@@ -453,6 +453,10 @@ tls_p256_publickey
 tls_p256_secret
 tls_p256_sign
 tls_p256_verify
+tls_p384_publickey
+tls_p384_secret
+tls_p384_sign
+tls_p384_verify
 lwip_socket_set_tls_cert
 lwip_socket_set_tls_psk
 tls_random_bytes_ex
