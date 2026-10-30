@@ -2,16 +2,19 @@
 
 Manual timing-constancy smoke test for selected primitives.
 
-Each primitive runs two checks:
-- Stability calibration: repeated timing on identical input (random class) computes:
+Each primitive runs two checks with 32 samples from each of the `best`,
+`worst`, `random`, and `edge` input classes:
+- Stability calibration uses the `best` class as its baseline and computes:
   - `m = median(T1..Tn)`
   - `MAD = median(|Ti - m|)`
   - `sigma = 1.4826 * MAD`
-  - accepted cycle deviation `D = sigma * c`, with `c=8`
-- Differential: compare `best`, `worst`, `random`, and `edge` classes against the random baseline.
-  A primitive fails only if a class exceeds `D` with directional consistency in >=75% of samples.
+  - accepted cycle deviation `D = max(c, sigma * c)`, with standard `c=6`
+    and rigorous `c=4`
+- Differential: compare the other input classes against the `best` baseline.
+  A primitive fails only if a class exceeds `D` with directional consistency
+  in >=75% of samples (at least 24 of 32).
 
-`md` in test output is the raw maximum pairwise mean cycle delta observed.
+`md` in test output is the raw maximum pairwise median cycle delta observed.
 It is not 75%-filtered, so `md` can exceed a threshold while differential still passes.
 
 The test also writes a newline-delimited raw timing log AppVar:
