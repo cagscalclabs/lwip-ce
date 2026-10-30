@@ -194,6 +194,73 @@ When the end user runs the lwIP-CE app directly on the calculator, a configurati
 These are end-user settings, not build-time flags — application code cannot
 override them.
 
+AppVars Created by lwIP-CE
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+lwIP-CE creates a small number of AppVars for persistent configuration and
+optional runtime data. Names are shown with their exact spelling below.
+
+.. list-table:: Runtime-created AppVars
+   :header-rows: 1
+   :widths: 18 27 55
+
+   * - Name
+     - Created when
+     - Contents and lifecycle
+   * - ``lwIPCFG``
+     - The configuration wizard saves its settings.
+     - Archived configuration containing the hostname, time settings, TLS and
+       capture toggles, logging policy, and bridge options. If it is missing or
+       invalid, lwIP-CE uses defaults; the wizard recreates it when settings are
+       saved.
+   * - ``lwIPPCAP``
+     - Packet capture is enabled and the first captured records are flushed.
+     - Packet records from all capturing interfaces. The file grows only to the
+       configured 4, 8, 16, or 32 KiB limit, after which capture stops. It can
+       be viewed and deleted from the configuration application.
+   * - ``lwIPLog``
+     - File logging is enabled and buffered events are flushed.
+     - The active plain-text event and traceback log. It is capped at 16 KiB;
+       when full, it is rotated into an archive slot and a new active log is
+       created.
+   * - ``lwIPLg00`` through ``lwIPLg08``
+     - ``lwIPLog`` rotates.
+     - Archived log files. The configured archive count is between one and
+       nine; once full, the oldest slot is replaced. Rotated slots are archived
+       so they survive a RAM clear.
+   * - ``lwIPLgMD``
+     - The first log rotation completes.
+     - Three-byte archived ring metadata identifying the oldest log slot, the
+       occupied slot count, and the configured maximum. Delete it together with
+       the log files rather than editing it independently.
+   * - ``lwIPPSKC``
+     - ``lwip_stop()`` saves one or more unexpired TLS session tickets.
+     - TLS 1.3 resumption cache for up to eight hosts. It is deleted when no
+       live entries remain; deleting it merely forces later connections to use
+       full handshakes.
+
+.. danger::
+
+   ``lwIPPSKC`` contains unencrypted TLS resumption key material. The
+   calculator has no secure-storage facility, so do not share this AppVar.
+   lwIP-CE validates its structure and ticket lifetime when loading it, but
+   cannot protect it from a local attacker with access to calculator storage.
+
+The following related AppVars are **not** created automatically by the runtime:
+
+- ``lwIPCERT`` is the signed truststore distributed through the project's
+  ``truststore-latest`` release. lwIP-CE reads it but does not generate it.
+- Private-key and certificate-chain AppVars are supplied and named by the
+  application. ``tools/lwip-cert-converter`` creates these files on the host.
+- ``lwip.8xv`` and ``LWIP.N.8xv`` are installation/LibLoad artifacts shipped
+  in the release, not runtime state.
+- Saved Wi-Fi profiles are stored by the lwIP-CE Wi-Fi bridge and are not
+  calculator AppVars.
+
+Avoid deleting or editing runtime AppVars while lwIP-CE is active. Diagnostic
+AppVars may still have buffered data waiting to be flushed, and the ticket
+cache is rewritten during orderly shutdown.
+
 Building from Source
 --------------------
 

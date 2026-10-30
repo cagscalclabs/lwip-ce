@@ -16,7 +16,8 @@ lwIP-CE is a full TCP/IP stack providing:
 - Wi-Fi through the lwIP-CE Wi-Fi bridge, including scanning and saved-network
   management from calculator programs.
 - A membuffer driver designed to optimize resource ownership in a device that has very little RAM.
-- A minimalistic TLS 1.3 client.
+- Constrained TLS 1.3 client and server roles, including PSK, certificate, and
+  mTLS client authentication.
 - An assortment of cryptographic primitives.
 - JSON, XML, and URL encoders.
 
@@ -62,12 +63,6 @@ Contributing
 
 lwIP-CE is under active development and as such welcomes platform-specific contributions.
 It is rebased quarter-annually against upstream lwIP, but the cryptography needs to be written in ez80 assembly by those with knowledge of how to write efficient, timing-safe code.
-
-**Remaining unimplemented mandatory TLS 1.3 algorithms:**
-
-- P-256 key exchange (ECDHE secp256r1)
-- P-256 signature verification (ECDSA secp256r1 SHA-256)
-- RSA, expand support for key sizes through 4096 bits
 
 **Optional / nice to have:**
 
