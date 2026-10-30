@@ -2,6 +2,11 @@
  * @file hmac.h
  * @author Anthony Cagliano
  * @brief Hash-independent HMAC construction.
+ *
+ * Supports every hash registered in `_hash_algorithms`: SHA-256 (32-byte
+ * digest, 64-byte block), SHA-384 (48/128) and SHA-512 (64/128). The digest
+ * and block lengths are taken from the hash context, so no per-algorithm
+ * code is required here.
  * @license: GNU GPL v3.0
  * @reference: RFC 2104
  * @reference: RFC 4231
