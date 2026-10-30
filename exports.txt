@@ -53,6 +53,9 @@ tls_sha256_digest
 tls_sha384_init
 tls_sha384_update
 tls_sha384_digest
+tls_sha512_init
+tls_sha512_update
+tls_sha512_digest
 tls_hash_context_init
 tls_hash_update
 tls_hash_digest

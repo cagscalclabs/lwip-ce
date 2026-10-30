@@ -38,6 +38,21 @@ static void tls_sha384_digest_adapter(void *ctx, uint8_t *digest)
     tls_sha384_digest((struct tls_sha384_context *)ctx, digest);
 }
 
+static bool tls_sha512_init_adapter(void *ctx)
+{
+    return tls_sha512_init((struct tls_sha512_context *)ctx);
+}
+
+static void tls_sha512_update_adapter(void *ctx, const uint8_t *data, size_t len)
+{
+    tls_sha512_update((struct tls_sha512_context *)ctx, data, len);
+}
+
+static void tls_sha512_digest_adapter(void *ctx, uint8_t *digest)
+{
+    tls_sha512_digest((struct tls_sha512_context *)ctx, digest);
+}
+
 bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
 {
     if (ctx == NULL)
@@ -61,6 +76,13 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
         ctx->init = tls_sha384_init_adapter;
         ctx->update = tls_sha384_update_adapter;
         ctx->digest = tls_sha384_digest_adapter;
+        break;
+    case TLS_HASH_SHA512:
+        ctx->digestlen = TLS_SHA512_DIGEST_LEN;
+        ctx->blocklen = TLS_SHA512_BLOCK_LEN;
+        ctx->init = tls_sha512_init_adapter;
+        ctx->update = tls_sha512_update_adapter;
+        ctx->digest = tls_sha512_digest_adapter;
         break; /*
     case TLS_SHA256_HW:
         ctx->digestlen = TLS_SHA256_DIGEST_LEN;

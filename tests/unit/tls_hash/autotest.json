@@ -23,7 +23,7 @@
     "delay|10000",
     "key|clear",
     "action|launch:INSTALL",
-    "hashWait|11",
+    "hashWait|13",
     "key|left",
     "key|enter",
     "delay|1000",
@@ -47,6 +47,10 @@
     "hashWait|9",
     "key|enter",
     "hashWait|10",
+    "key|enter",
+    "hashWait|11",
+    "key|enter",
+    "hashWait|12",
     "key|enter"
   ],
   "hashes": {
@@ -151,6 +155,26 @@
       "timeout": 120000
     },
     "11": {
+      "description": "SHA-512 FIPS 180-4 vectors, padding boundaries, streaming",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 120000
+    },
+    "12": {
+      "description": "HMAC-SHA512 RFC 4231 and MGF1-SHA512",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 120000
+    },
+    "13": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

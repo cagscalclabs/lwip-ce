@@ -32,6 +32,8 @@ static size_t get_hash_length(uint8_t hash_algorithm) {
             return TLS_SHA256_DIGEST_LEN;
         case TLS_HASH_SHA384:
             return TLS_SHA384_DIGEST_LEN;
+        case TLS_HASH_SHA512:
+            return TLS_SHA512_DIGEST_LEN;
         default:
             return 0;
     }

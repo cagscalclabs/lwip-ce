@@ -58,12 +58,13 @@ restoring an earlier machine state.
 
 ### Hash Functions
 - **SHA-256**: Implemented (assembly optimized)
-- **SHA-384**: Not implemented
+- **SHA-384**: Implemented (assembly optimized, truncated SHA-512 core)
+- **SHA-512**: Implemented (assembly optimized, same core as SHA-384)
 
 ### Key Derivation
 - **HKDF** (HMAC-based KDF, RFC 5869): Implemented
 - **HKDF-Expand-Label** (TLS 1.3 specific): Implemented
-- Uses SHA-256 as underlying hash
+- Uses SHA-256, SHA-384 or SHA-512 as selected by the caller (TLS currently negotiates SHA-256)
 
 ### Symmetric Encryption
 - **AES-GCM**: Implemented (supports 128, 192, and 256-bit keys)
@@ -147,7 +148,7 @@ Currently defined:
 3. Add resumption secret derivation
 
 ### Phase 4: Additional Cipher Suites
-1. Implement SHA-384 (for AES-256-GCM)
+1. ~~Implement SHA-384 / SHA-512~~ done (hash, HMAC, HKDF, MGF1)
 2. Consider ChaCha20-Poly1305 (optional)
 
 ## File Organization

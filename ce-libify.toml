@@ -1,5 +1,5 @@
 name = "LWIP"
-lib-version = 3
+lib-version = 4
 exports = "exports.txt"
 depend = ["usbdrvce", "fileioc"]
 exclude = [
