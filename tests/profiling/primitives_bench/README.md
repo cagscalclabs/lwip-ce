@@ -18,3 +18,8 @@ relocated into fast RAM: keygen 285,773 -> 170,454 ticks, sign 345,974 ->
 do not show up here: the benchmark calls primitives directly, so it cannot see
 that `tls_handshake_init` no longer computes an unused P-256 keypair or that
 the record decrypter stopped allocating a 2 KiB scratch per record.
+
+`baselines/sha384_optimization.txt` records the SHA-384 before/after run:
+the 1024-byte sweep dropped from 2,503.6 to 1,211.1 ticks per 128-byte
+compression (2.07x), and the 64-byte hash from 2,713.5 to 1,420.9 ticks
+per block (1.91x; the small case is dominated by the fixed hash API cost).

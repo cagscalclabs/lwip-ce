@@ -274,6 +274,14 @@ SECTIONS
             KEEP(*(.sha256.reloc.*))
             _sha256_reloc_run_end = .;
         }
+        .sha384.reloc
+        {
+            _sha384_reloc_run_start = .;
+            _sha384_reloc_load_start = . + (LOADADDR(.sha384.reloc) - ADDR(.sha384.reloc));
+            KEEP(*(.sha384.reloc))
+            KEEP(*(.sha384.reloc.*))
+            _sha384_reloc_run_end = .;
+        }
         .saferam.rng
         {
             /* Reserve the first 384 bytes for the SHA-256 compression loop.
@@ -305,6 +313,7 @@ SECTIONS
      * above (not here), for the same reason. */
     _powmod_reloc_len        = SIZEOF(.powmod.reloc);
     _sha256_reloc_len        = SIZEOF(.sha256.reloc);
+    _sha384_reloc_len        = SIZEOF(.sha384.reloc);
 
     /* Guard: no consumer may outgrow the 1020-byte shared window. */
     /* P-256 blocks must stay below .saferam.rng's 0x180-byte reservation:
@@ -327,6 +336,8 @@ SECTIONS
            "Error: .powmod.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.sha256.reloc) <= 0x180,
            "Error: SHA-256 hot loop exceeds its 384-byte fastMem budget")
+    ASSERT(SIZEOF(.sha384.reloc) <= 1020,
+           "Error: SHA-384 schedule loop exceeds the 1020-byte fastMem window")
     ASSERT(SIZEOF(.saferam.rng) <= 1020,
            "Error: SHA-256 code plus RNG scratch exceeds 1020-byte fastMem")
 

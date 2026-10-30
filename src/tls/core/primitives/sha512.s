@@ -8,23 +8,34 @@
 ; the eight-word state is transformed in place.
 ;
 ; Representation:
-;   * The state words are native little-endian uint64_t values, i.e. the least
-;     significant byte is at offset 0.
-;   * The message schedule W[0..79] is kept little-endian in BSS.
-;   * All 64-bit additions are byte-serial carry chains.
-;   * Rotations are done with a byte-permute plus a 16-bit right shift built
-;     from SRL A / RR C.  This avoids a 64-bit shift instruction, which the
-;     eZ80 does not have.
+;   * State words and the message schedule are native little-endian uint64_t
+;     values (least significant byte at offset 0).
+;   * A 64-bit add is three overlapping 24-bit chunks.  In ADL mode the eZ80
+;     add/adc on HL+DE are 24-bit operations, so this is 8 cycles of work per
+;     chunk instead of a byte-serial carry chain.
+;   * Rotations use the fact that RR(x,...) can be built from an 8-bit
+;     shift-through-carry chain.  For a 16-bit source pair (high:low) the
+;     result low byte of (pair >> r) is obtained with min(r, 8-r) shift
+;     pairs: right-shift r times, or shift left 8-r times and keep the high
+;     byte.  This halves the work for the large rotations and makes SHR(7)
+;     and SHR(6) cheap.
+;   * The two big Sigma functions are copied into the 0xE30800 fast-RAM
+;     overlay once per compression (the schedule and the rest of the round
+;     stay in flash).  The copy happens with the crypto guard held and is
+;     wiped/clobbered by the next overlay user, like the existing SHA-256,
+;     AES, X25519 and RSA overlays.
 ;
-; Scratch:
-;   _sha512_w    640 bytes  message schedule
-;   _sha512_work  64 bytes  a..h
-;   _sha512_t1     8 bytes
-;   _sha512_t2     8 bytes
-;   _sha512_tmp    8 bytes  Ch/Maj/sigma temporary
-; All of it is wiped before returning because the same block path is used by
-; HMAC with key-derived blocks.  The buffer is plain .bss, deliberately not
-; the RNG fastMem overlay.
+; Scratch (all wiped before return; HMAC key-derived blocks pass through
+; this path):
+;   _sha512_w      256 bytes  16-word rolling schedule plus a mirrored copy
+;                             used to make the (mod 16) reads branch-free.
+;   _sha512_work    64 bytes  a..h
+;   _sha512_t1/t2/tmp 9 bytes each (8 bytes plus one pad byte for the
+;                             3-byte chunks)
+;   control bytes             3 bytes  (inner, outer, schedule flag)
+; The schedule is a 128-byte ring at _sha512_w, mirrored at +128.  The
+; schedule pointer walks forward; only the first 128 bytes are ever used as
+; the "live" ring, and reads that walk past it land in the mirror.
 ;--------------------------------------------
 
 .assume adl=1
@@ -38,16 +49,23 @@ globl _tls_sha512_compress
 ; ---------------------------------------------------------------------------
 .section .bss._sha512_scratch,"aw",@nobits
 .balign 8
+_sha512_scratch:
 _sha512_w:
-	.space 640
+	.space 256
 _sha512_work:
 	.space 64
 _sha512_t1:
-	.space 8
+	.space 9
 _sha512_t2:
-	.space 8
+	.space 9
 _sha512_tmp:
-	.space 8
+	.space 9
+_sha512_inner:
+	.space 1
+_sha512_outer:
+	.space 1
+_sha512_sched:
+	.space 1
 _sha512_scratch_end:
 
 .section .rodata._sha512_k,"a",@progbits
@@ -136,13 +154,202 @@ _sha512_k:
 .section .text,"ax",@progbits
 
 ; ---------------------------------------------------------------------------
-; Helpers.  All of them preserve IX (the caller's frame) and never touch the
-; caller's block or state memory except through explicitly passed pointers.
+; Macros.  The round macros use only AF, BC, DE and HL; IX holds the current
+; schedule word and IY holds the current K word.  The inner/outer counters
+; live in BSS so that B and C remain available as byte temporaries.
+; ---------------------------------------------------------------------------
+
+; DE = src + off.  src is either an absolute symbol or an IX-relative
+; expression; idx selects which form to emit.
+.macro _set_de src, off, idx
+	.if \idx
+		lea	de, \src + \off
+	.else
+		ld	de, \src + \off
+	.endif
+.endm
+
+; 64-bit addition: (\dst) += (\base+\off).  base is ix or iy; off is a
+; compile-time displacement.  The last chunk is only 2 bytes wide, so the
+; 3-byte load may read one byte beyond the word (into padding or the next
+; word) and only the low two bytes are stored.
+.macro _add64_idx dst, base, off
+	ld	hl, (\dst)
+	ld	de, (\base+\off)
+	add	hl, de
+	ld	(\dst), hl
+
+	ld	hl, (\dst+3)
+	ld	de, (\base+\off+3)
+	adc	hl, de
+	ld	(\dst+3), hl
+
+	ld	hl, (\dst+6)
+	ld	de, (\base+\off+6)
+	adc	hl, de
+	ld	a, l
+	ld	(\dst+6), a
+	ld	a, h
+	ld	(\dst+7), a
+.endm
+
+; 64-bit addition: (\dst) += (\src), both absolute symbols.
+.macro _add64_sym dst, src
+	ld	hl, (\dst)
+	ld	de, (\src)
+	add	hl, de
+	ld	(\dst), hl
+
+	ld	hl, (\dst+3)
+	ld	de, (\src+3)
+	adc	hl, de
+	ld	(\dst+3), hl
+
+	ld	hl, (\dst+6)
+	ld	de, (\src+6)
+	adc	hl, de
+	ld	a, l
+	ld	(\dst+6), a
+	ld	a, h
+	ld	(\dst+7), a
+.endm
+
+; 8-byte copy, absolute to absolute.
+.macro _copy64 dst, src
+	ld	hl, (\src)
+	ld	(\dst), hl
+	ld	hl, (\src+3)
+	ld	(\dst+3), hl
+	ld	hl, (\src+5)
+	ld	(\dst+5), hl
+.endm
+
+; One output byte of a byte-aligned rotation (r == 0).
+.macro _rot_byte q, srcbase, first
+	.irp j,0,1,2,3,4,5,6,7
+		ld	a, (\srcbase + ((\j + \q) & 7))
+		.if \first
+			ld	(hl), a
+		.else
+			xor	a, (hl)
+			ld	(hl), a
+		.endif
+		inc	hl
+	.endr
+.endm
+
+; One 64-bit rotation with a non-zero bit shift, XORed into (HL).
+; srcbase is the unshifted source address; q is the whole-byte part of the
+; rotation.  wrap == 0 turns the rotation into a logical shift (the byte
+; above the top of the word is zero).
+.macro _rot_bits r, q, srcbase, first, wrap
+	.irp j,0,1,2,3,4,5,6,7
+		ld	a, (\srcbase + ((\j + \q) & 7))
+		ld	c, a
+		.if \wrap
+			ld	a, (\srcbase + ((\j + \q + 1) & 7))
+		.else
+			.if ((\j + \q + 1) < 8)
+				ld	a, (\srcbase + (\j + \q + 1))
+			.else
+				xor	a, a
+			.endif
+		.endif
+		.if \r <= 4
+			.rept \r
+				srl	a
+				rr	c
+			.endr
+			ld	a, c
+		.else
+			.rept (8 - \r)
+				sla	c
+				adc	a, a
+			.endr
+		.endif
+		.if \first
+			ld	(hl), a
+		.else
+			xor	a, (hl)
+			ld	(hl), a
+		.endif
+		inc	hl
+	.endr
+.endm
+
+.macro _rot n, srcbase, first, wrap
+	.if ((\n & 7) == 0)
+		_rot_byte (\n >> 3), \srcbase, \first
+	.else
+		_rot_bits (\n & 7), (\n >> 3), \srcbase, \first, \wrap
+	.endif
+.endm
+
+; Sigma into \out.  src is an absolute symbol or an IX-relative expression.
+.macro _sigma_big src, n1, n2, n3, out
+	ld	hl, \out
+	_rot \n1, \src, 1, 1
+	ld	hl, \out
+	_rot \n2, \src, 0, 1
+	ld	hl, \out
+	_rot \n3, \src, 0, 1
+.endm
+
+.macro _sigma_small src, n1, n2, sh, out
+	ld	hl, \out
+	_rot \n1, \src, 1, 1
+	ld	hl, \out
+	_rot \n2, \src, 0, 1
+	ld	hl, \out
+	_rot \sh, \src, 0, 0
+.endm
+
+; Ch(e,f,g) = g ^ (e & (f ^ g))
+.macro _ch out
+	ld	hl, \out
+	.irp j,0,1,2,3,4,5,6,7
+		ld	a, (_sha512_work + 40 + \j)
+		ld	c, a
+		ld	a, (_sha512_work + 48 + \j)
+		xor	a, c
+		ld	c, a
+		ld	a, (_sha512_work + 32 + \j)
+		and	a, c
+		ld	c, a
+		ld	a, (_sha512_work + 48 + \j)
+		xor	a, c
+		ld	(hl), a
+		inc	hl
+	.endr
+.endm
+
+; Maj(a,b,c) = (a & b) | (c & (a | b))
+.macro _maj out
+	ld	hl, \out
+	.irp j,0,1,2,3,4,5,6,7
+		ld	a, (_sha512_work + 0 + \j)
+		ld	c, a
+		ld	a, (_sha512_work + 8 + \j)
+		ld	e, a
+		and	a, c
+		ld	b, a
+		ld	a, c
+		or	a, e
+		ld	c, a
+		ld	a, (_sha512_work + 16 + \j)
+		and	a, c
+		or	a, b
+		ld	(hl), a
+		inc	hl
+	.endr
+.endm
+
+; ---------------------------------------------------------------------------
+; Helpers.
 ; ---------------------------------------------------------------------------
 
 ; HL = destination, DE = source.  dst += src (64-bit, little-endian).
-; Clobbers AF, BC, HL, DE (HL/DE advance by 8).  Preserves B?  No: B is not
-; used by this routine; it uses C as the inner counter, so B survives.
+; Clobbers AF, BC, HL, DE.  Used only by the final state feed-forward.
 _sha512_add64:
 	ld	a,(de)
 	add	a,(hl)
@@ -160,34 +367,8 @@ _sha512_add64:
 	jp	nz,.Ladd64_loop
 	ret
 
-; HL = destination, DE = source.  Copy exactly 8 bytes.
-; Clobbers AF, B, DE, HL.
-_sha512_copy64:
-	ld	b,8
-.Lcopy64_loop:
-	ld	a,(de)
-	ld	(hl),a
-	inc	de
-	inc	hl
-	djnz	.Lcopy64_loop
-	ret
-
-; DE = destination.  Zero exactly 8 bytes, preserve DE.
-; Clobbers AF, B, HL.
-_sha512_zero64:
-	push	de
-	ex	de,hl
-	xor	a
-	ld	b,8
-.Lzero64_loop:
-	ld	(hl),a
-	inc	hl
-	djnz	.Lzero64_loop
-	pop	de
-	ret
-
 ; HL = block (big-endian, 128 bytes), DE = W (little-endian, 128 bytes).
-; Clobbers A, C, HL, DE, IY.
+; Clobbers A, C, HL, DE, IY.  Called once per block.
 _sha512_load_block:
 	push	hl
 	ex	de,hl
@@ -223,214 +404,8 @@ _sha512_load_block:
 	jp	nz,.Lload_block_loop
 	ret
 
-; A = word index.  Returns HL = _sha512_w + index * 8.
-; Clobbers A, DE, HL.
-_sha512_get_wptr:
-	ld	hl,0
-	ld	l,a
-	add	hl,hl
-	add	hl,hl
-	add	hl,hl
-	ld	de,_sha512_w
-	add	hl,de
-	ret
-
-; A = round index.  Returns HL = _sha512_k + index * 8.
-; Clobbers A, DE, HL.
-_sha512_get_kptr:
-	ld	hl,0
-	ld	l,a
-	add	hl,hl
-	add	hl,hl
-	add	hl,hl
-	ld	de,_sha512_k
-	add	hl,de
-	ret
-
-; ---------------------------------------------------------------------------
-; ROTR(x, N) XOR into the destination.
-;
-; Input:  IY = x (8-byte little-endian), DE = destination (XORed into, not
-;         overwritten).  N = n*8 + r.
-; The routine keeps DE and IY fixed and uses HL as the destination cursor.
-; Clobbers A, C, HL.
-; ---------------------------------------------------------------------------
-.macro _rotr_xor n, r
-	push	de
-	pop	hl
-	.irp i,0,1,2,3,4,5,6,7
-	.if \r == 0
-	ld	a,(iy + (((\i + \n) & 7)))
-	xor	a,(hl)
-	ld	(hl),a
-	inc	hl
-	.else
-	ld	c,(iy + (((\i + \n) & 7)))
-	ld	a,(iy + (((\i + \n + 1) & 7)))
-	.rept \r
-	srl	a
-	rr	c
-	.endr
-	ld	a,c
-	xor	a,(hl)
-	ld	(hl),a
-	inc	hl
-	.endif
-	.endr
-.endm
-
-; ---------------------------------------------------------------------------
-; SHR(x, r) XOR into the destination.  Unlike ROTR, the byte above the top
-; byte is treated as zero, so this is a logical shift, not a rotation.
-; Input: IY = x, DE = destination, r = 1..7.
-; Clobbers A, C, HL.
-; ---------------------------------------------------------------------------
-.macro _shr_xor r
-	push	de
-	pop	hl
-	.irp i,0,1,2,3,4,5,6,7
-	ld	c,(iy + \i)
-	.if \i == 7
-	.rept \r
-	srl	c
-	.endr
-	ld	a,c
-	.else
-	ld	a,(iy + \i + 1)
-	.rept \r
-	srl	a
-	rr	c
-	.endr
-	ld	a,c
-	.endif
-	xor	a,(hl)
-	ld	(hl),a
-	inc	hl
-	.endr
-.endm
-
-_sha512_shr7:
-	_shr_xor 7
-	ret
-_sha512_shr6:
-	_shr_xor 6
-	ret
-
-_sha512_rotr28:
-	_rotr_xor 3,4
-	ret
-_sha512_rotr34:
-	_rotr_xor 4,2
-	ret
-_sha512_rotr39:
-	_rotr_xor 4,7
-	ret
-_sha512_rotr14:
-	_rotr_xor 1,6
-	ret
-_sha512_rotr18:
-	_rotr_xor 2,2
-	ret
-_sha512_rotr41:
-	_rotr_xor 5,1
-	ret
-_sha512_rotr1:
-	_rotr_xor 0,1
-	ret
-_sha512_rotr8:
-	_rotr_xor 1,0
-	ret
-_sha512_rotr19:
-	_rotr_xor 2,3
-	ret
-_sha512_rotr61:
-	_rotr_xor 7,5
-	ret
-
-; Sigma0(x) = ROTR28 ^ ROTR34 ^ ROTR39.
-; Input HL = x, DE = destination (zeroed first by this routine).
-; Output is written to DE.  Preserves DE; clobbers A, C, HL, IY.
-_sha512_big_sigma0:
-	push	hl
-	pop	iy
-	call	_sha512_zero64
-	call	_sha512_rotr28
-	call	_sha512_rotr34
-	call	_sha512_rotr39
-	ret
-
-; Sigma1(x) = ROTR14 ^ ROTR18 ^ ROTR41.
-_sha512_big_sigma1:
-	push	hl
-	pop	iy
-	call	_sha512_zero64
-	call	_sha512_rotr14
-	call	_sha512_rotr18
-	call	_sha512_rotr41
-	ret
-
-; sigma0(x) = ROTR1 ^ ROTR8 ^ (x >> 7).
-_sha512_small_sigma0:
-	push	hl
-	pop	iy
-	call	_sha512_zero64
-	call	_sha512_rotr1
-	call	_sha512_rotr8
-	call	_sha512_shr7
-	ret
-
-; sigma1(x) = ROTR19 ^ ROTR61 ^ (x >> 6).
-_sha512_small_sigma1:
-	push	hl
-	pop	iy
-	call	_sha512_zero64
-	call	_sha512_rotr19
-	call	_sha512_rotr61
-	call	_sha512_shr6
-	ret
-
-; Ch(e,f,g) -> _sha512_tmp.
-; Input: HL = e, DE = f, IY = g.
-; Clobbers A, HL, DE.
-_sha512_ch64:
-	.irp i,0,1,2,3,4,5,6,7
-	ld	a,(de)
-	xor	a,(iy + \i)
-	and	a,(hl)
-	xor	a,(iy + \i)
-	ld	(_sha512_tmp + \i),a
-	inc	hl
-	inc	de
-	.endr
-	ret
-
-; Maj(a,b,c) -> _sha512_tmp.
-; Input: HL = a, DE = b, IY = c.
-; Clobbers A, B, C, HL, DE.
-_sha512_maj64:
-	.irp i,0,1,2,3,4,5,6,7
-	ld	a,(de)
-	ld	b,a
-	ld	a,(hl)
-	and	a,b
-	ld	c,a
-	ld	a,(hl)
-	or	a,b
-	and	a,(iy + \i)
-	or	a,c
-	ld	(_sha512_tmp + \i),a
-	inc	hl
-	inc	de
-	.endr
-	ret
-
 ; ---------------------------------------------------------------------------
 ; void tls_sha512_compress(uint64_t state[8], const uint8_t block[128]);
-;
-; Frame:
-;   ix + 6  state
-;   ix + 9  block
-;   ix - 3  loop index
 ; ---------------------------------------------------------------------------
 _tls_sha512_compress:
 	ld	hl,-3
@@ -441,59 +416,11 @@ _tls_sha512_compress:
 	ld	de,_sha512_w
 	call	_sha512_load_block
 
-	; W[i] = sigma1(W[i-2]) + W[i-7] + sigma0(W[i-15]) + W[i-16]
-	ld	a,16
-	ld	(ix - 3),a
-.Lw_loop:
-	; t1 = W[i-16]
-	ld	a,(ix - 3)
-	sub	a,16
-	call	_sha512_get_wptr
-	push	hl
-	pop	de
-	ld	hl,_sha512_t1
-	call	_sha512_copy64
-
-	; t1 += W[i-7]
-	ld	a,(ix - 3)
-	sub	a,7
-	call	_sha512_get_wptr
-	push	hl
-	pop	de
-	ld	hl,_sha512_t1
-	call	_sha512_add64
-
-	; t1 += sigma0(W[i-15])
-	ld	a,(ix - 3)
-	sub	a,15
-	call	_sha512_get_wptr
-	ld	de,_sha512_tmp
-	call	_sha512_small_sigma0
-	ld	hl,_sha512_t1
-	ld	de,_sha512_tmp
-	call	_sha512_add64
-
-	; t1 += sigma1(W[i-2])
-	ld	a,(ix - 3)
-	sub	a,2
-	call	_sha512_get_wptr
-	ld	de,_sha512_tmp
-	call	_sha512_small_sigma1
-	ld	hl,_sha512_t1
-	ld	de,_sha512_tmp
-	call	_sha512_add64
-
-	; W[i] = t1
-	ld	a,(ix - 3)
-	call	_sha512_get_wptr
-	ld	de,_sha512_t1
-	call	_sha512_copy64
-
-	ld	a,(ix - 3)
-	inc	a
-	ld	(ix - 3),a
-	cp	a,80
-	jp	nz,.Lw_loop
+	; Mirror the 16-word schedule so mod-16 reads never cross a branch.
+	ld	hl,_sha512_w
+	ld	de,_sha512_w + 128
+	ld	bc,128
+	ldir
 
 	; a..h = state[0..7]
 	ld	hl,(ix + 6)
@@ -501,127 +428,136 @@ _tls_sha512_compress:
 	ld	bc,64
 	ldir
 
-	ld	a,0
-	ld	(ix - 3),a
-.Lround_loop:
-	; t1 = h
-	ld	hl,_sha512_t1
-	ld	de,_sha512_work + 56
-	call	_sha512_copy64
+	; Everything below uses IX as the schedule pointer; keep the frame
+	; pointer on the stack for the epilogue.
+	push	ix
+	ld	ix,_sha512_w
+	ld	iy,_sha512_k
 
-	; t1 += Sigma1(e)
-	ld	hl,_sha512_work + 32
-	ld	de,_sha512_tmp
-	call	_sha512_big_sigma1
-	ld	hl,_sha512_t1
-	ld	de,_sha512_tmp
-	call	_sha512_add64
+	xor	a,a
+	ld	(_sha512_sched),a
+	ld	a,5
+	ld	(_sha512_outer),a
 
-	; t1 += Ch(e,f,g)
-	ld	hl,_sha512_work + 32
-	ld	de,_sha512_work + 40
-	push	hl
-	ld	hl,_sha512_work + 48
-	push	hl
-	pop	iy
-	pop	hl
-	call	_sha512_ch64
-	ld	hl,_sha512_t1
-	ld	de,_sha512_tmp
-	call	_sha512_add64
+	; Copy the big-signature hot blocks into fast RAM once per compression.
+	ld	hl,_sha384_reloc_load_start
+	ld	de,_sha384_reloc_run_start
+	ld	bc,_sha384_reloc_len
+	ldir
 
-	; t1 += K[i]
-	ld	a,(ix - 3)
-	call	_sha512_get_kptr
-	push	hl
-	pop	de
-	ld	hl,_sha512_t1
-	call	_sha512_add64
+.Louter:
+	ld	a,16
+	ld	(_sha512_inner),a
 
-	; t1 += W[i]
-	ld	a,(ix - 3)
-	call	_sha512_get_wptr
-	push	hl
-	pop	de
-	ld	hl,_sha512_t1
-	call	_sha512_add64
+.Linner:
+	; --------------------------------------------------------------
+	; W[i] = sigma1(W[i-2]) + W[i-7] + sigma0(W[i-15]) + W[i-16]
+	; (rounds 16..79 only)
+	; --------------------------------------------------------------
+	ld	a,(_sha512_sched)
+	or	a,a
+	jp	z,.Lno_sched
 
-	; t2 = Sigma0(a)
-	ld	de,_sha512_t2
-	call	_sha512_zero64
-	ld	hl,_sha512_work + 0
-	ld	de,_sha512_t2
-	call	_sha512_big_sigma0
+	; t2 = sigma1(W[i-2]) at IX+112
+	_sigma_small ix + 112, 19, 61, 6, _sha512_t2
+	; t2 += W[i-7]
+	_add64_idx _sha512_t2, ix, 72
+	; tmp = sigma0(W[i-15]) at IX+8
+	_sigma_small ix + 8, 1, 8, 7, _sha512_tmp
+	; t2 += tmp
+	_add64_sym _sha512_t2, _sha512_tmp
+	; t2 += W[i-16]
+	_add64_idx _sha512_t2, ix, 0
 
-	; t2 += Maj(a,b,c)
-	ld	hl,_sha512_work + 0
-	ld	de,_sha512_work + 8
-	push	hl
-	ld	hl,_sha512_work + 16
-	push	hl
-	pop	iy
-	pop	hl
-	call	_sha512_maj64
-	ld	hl,_sha512_t2
-	ld	de,_sha512_tmp
-	call	_sha512_add64
+	; W[i] = t2; keep the 128-byte mirror in sync.
+	ld	hl,(_sha512_t2)
+	ld	(ix),hl
+	ld	hl,(_sha512_t2 + 3)
+	ld	(ix + 3),hl
+	ld	hl,(_sha512_t2 + 5)
+	ld	(ix + 5),hl
+	ld	de,(_sha512_t2)
+	lea	hl,ix + 127
+	inc	hl
+	ld	(hl),de
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	de,(_sha512_t2 + 3)
+	ld	(hl),de
+	inc	hl
+	inc	hl
+	ld	de,(_sha512_t2 + 5)
+	ld	(hl),de
 
-	; h = g; g = f; f = e
-	ld	hl,_sha512_work + 56
-	ld	de,_sha512_work + 48
-	call	_sha512_copy64
-	ld	hl,_sha512_work + 48
-	ld	de,_sha512_work + 40
-	call	_sha512_copy64
-	ld	hl,_sha512_work + 40
-	ld	de,_sha512_work + 32
-	call	_sha512_copy64
 
-	; e = d + t1
-	ld	hl,_sha512_work + 32
-	ld	de,_sha512_work + 24
-	call	_sha512_copy64
-	ld	hl,_sha512_work + 32
-	ld	de,_sha512_t1
-	call	_sha512_add64
+.Lno_sched:
+	; --------------------------------------------------------------
+	; T1 = h + Sigma1(e) + Ch(e,f,g) + K[i] + W[i]
+	; T2 = Sigma0(a) + Maj(a,b,c)
+	; --------------------------------------------------------------
+	_copy64 _sha512_t1, _sha512_work + 56
 
-	; d = c; c = b; b = a
-	ld	hl,_sha512_work + 24
-	ld	de,_sha512_work + 16
-	call	_sha512_copy64
-	ld	hl,_sha512_work + 16
-	ld	de,_sha512_work + 8
-	call	_sha512_copy64
-	ld	hl,_sha512_work + 8
-	ld	de,_sha512_work + 0
-	call	_sha512_copy64
+	call	_sha384_sigma1
+	_add64_sym _sha512_t1, _sha512_t2
 
-	; a = t1 + t2
-	ld	hl,_sha512_work + 0
-	ld	de,_sha512_t1
-	call	_sha512_copy64
-	ld	hl,_sha512_work + 0
-	ld	de,_sha512_t2
-	call	_sha512_add64
+	_ch _sha512_tmp
+	_add64_sym _sha512_t1, _sha512_tmp
 
-	ld	a,(ix - 3)
-	inc	a
-	ld	(ix - 3),a
-	cp	a,80
-	jp	nz,.Lround_loop
+	_add64_idx _sha512_t1, iy, 0
+	_add64_idx _sha512_t1, ix, 0
 
-	; state[i] += work[i] for all eight words.
+	call	_sha384_sigma0
+	_maj _sha512_tmp
+	_add64_sym _sha512_t2, _sha512_tmp
+
+	; a_new = T1 + T2, e_new = d + T1 (old d)
+	_add64_sym _sha512_t2, _sha512_t1
+	_add64_sym _sha512_t1, _sha512_work + 24
+
+	; h=g; g=f; f=e  (high to low, so no overlap problem)
+	_copy64 _sha512_work + 56, _sha512_work + 48
+	_copy64 _sha512_work + 48, _sha512_work + 40
+	_copy64 _sha512_work + 40, _sha512_work + 32
+	; d=c; c=b; b=a
+	_copy64 _sha512_work + 24, _sha512_work + 16
+	_copy64 _sha512_work + 16, _sha512_work + 8
+	_copy64 _sha512_work + 8, _sha512_work + 0
+
+	_copy64 _sha512_work + 0, _sha512_t2
+	_copy64 _sha512_work + 32, _sha512_t1
+
+	lea	ix,ix + 8
+	lea	iy,iy + 8
+
+	ld	a,(_sha512_inner)
+	dec	a
+	ld	(_sha512_inner),a
+	jp	nz,.Linner
+
+	; End of a 16-word schedule group; restart the ring at slot 0.
+	lea	ix,ix - 128
+	ld	a,1
+	ld	(_sha512_sched),a
+
+	ld	a,(_sha512_outer)
+	dec	a
+	ld	(_sha512_outer),a
+	jp	nz,.Louter
+
+	; Restore the frame pointer and fold the work state back in.
+	pop	ix
 	ld	hl,(ix + 6)
 	ld	de,_sha512_work
 	ld	b,8
-.Lfeed_loop:
+.Lfeed:
 	call	_sha512_add64
-	djnz	.Lfeed_loop
+	djnz	.Lfeed
 
 	; Wipe all derived state and schedule (HMAC keys live here).
 	ld	hl,$FF0000
-	ld	de,_sha512_w
-	ld	bc,_sha512_scratch_end - _sha512_w
+	ld	de,_sha512_scratch
+	ld	bc,_sha512_scratch_end - _sha512_scratch
 	ldir
 
 	ld	sp,ix
@@ -631,3 +567,18 @@ _tls_sha512_compress:
 extern __frameset
 
 .section	.note.GNU-stack,"",@progbits
+; ---------------------------------------------------------------------------
+; Big-signature hot blocks.  These run on every one of the 80 rounds and are
+; copied to the fast-RAM overlay (0xE30800) by the trampoline above.  Both
+; blocks are straight-line code with a single ret, so the copied image is
+; position-independent apart from its absolute BSS data references.
+; ---------------------------------------------------------------------------
+.section .sha384.reloc,"ax",@progbits
+_sha384_sigma1:
+	_sigma_big _sha512_work + 32, 14, 18, 41, _sha512_t2
+	ret
+
+_sha384_sigma0:
+	_sigma_big _sha512_work + 0, 28, 34, 39, _sha512_t2
+	ret
+
