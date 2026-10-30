@@ -80,12 +80,20 @@ RELEASE_TOOLS := tools/lwip-cert-converter
 .PHONY: release
 release:
 	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
-	cp README.md build/README.md
-	cp CHANGELOG.md build/CHANGELOG.md
-	cp SECURITY.md build/SECURITY.md
 	rm -f lwip.zip
-	zip -r lwip.zip build/ \
-		$(RELEASE_TOOLS) \
+	@release_stage=$$(mktemp -d); \
+	trap 'rm -rf "$$release_stage"' EXIT; \
+	mkdir -p "$$release_stage/lwip"; \
+	cp -R build/. "$$release_stage/lwip/"; \
+	if [ -e "$$release_stage/lwip/examples" ] || [ -L "$$release_stage/lwip/examples" ]; then \
+		rm -rf "$$release_stage/lwip/examples"; \
+	fi; \
+	cp -R examples "$$release_stage/lwip/examples"; \
+	cp README.md CHANGELOG.md SECURITY.md "$$release_stage/lwip/"; \
+	mkdir -p "$$release_stage/lwip/tools"; \
+	cp $(RELEASE_TOOLS) "$$release_stage/lwip/tools/"; \
+	cd "$$release_stage"; \
+	zip -r "$(CURDIR)/lwip.zip" lwip/ \
 	    -x "*/obj/*" \
 	    -x "*/bin/*" \
 	    -x "*/.DS_Store" \

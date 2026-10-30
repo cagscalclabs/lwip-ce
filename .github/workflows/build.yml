@@ -148,6 +148,16 @@ jobs:
           test -f "${{ env.CEDEV }}/lib/libload/lwip.lib"
           test -d "${{ env.CEDEV }}/include/lwip"
           test -f "${{ github.workspace }}/lwip.zip"
+          unzip -Z1 "${{ github.workspace }}/lwip.zip" > "$RUNNER_TEMP/release-files.txt"
+          grep -Fx 'lwip/tools/lwip-cert-converter' "$RUNNER_TEMP/release-files.txt"
+          grep -Fx 'lwip/examples/pcb/src/main.c' "$RUNNER_TEMP/release-files.txt"
+          grep -Fx 'lwip/examples/socket/src/main.c' "$RUNNER_TEMP/release-files.txt"
+          grep -Fx 'lwip/examples/template/src/main.c' "$RUNNER_TEMP/release-files.txt"
+          grep -Fx 'lwip/examples/wifi_api/src/main.c' "$RUNNER_TEMP/release-files.txt"
+          if grep -Eq '^(build/|tools/)' "$RUNNER_TEMP/release-files.txt"; then
+            echo "::error::Release archive contains files outside its lwip/ root"
+            exit 1
+          fi
 
       - name: Build release examples
         id: make_examples
@@ -456,26 +466,36 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download tested build
+      - name: Download tested release archive
         uses: actions/download-artifact@v4
         with:
-          name: lwip-latest
-          path: ${{ runner.temp }}/build
+          name: lwip-release-zip
+          path: ${{ runner.temp }}/tested-release
 
-      - name: Verify tested build
+      - name: Verify tested release archive
         run: |
-          test -f "${{ runner.temp }}/build/lwip.8xv"
-          test -f "${{ runner.temp }}/build/lwip.lib"
+          test -f "${{ runner.temp }}/tested-release/lwip.zip"
+          unzip -Z1 "${{ runner.temp }}/tested-release/lwip.zip" > "$RUNNER_TEMP/tested-release-files.txt"
+          grep -Fx 'lwip/lwip.8xv' "$RUNNER_TEMP/tested-release-files.txt"
+          grep -Fx 'lwip/lwip.lib' "$RUNNER_TEMP/tested-release-files.txt"
+          grep -Fx 'lwip/tools/lwip-cert-converter' "$RUNNER_TEMP/tested-release-files.txt"
+          grep -Fx 'lwip/examples/pcb/src/main.c' "$RUNNER_TEMP/tested-release-files.txt"
+          grep -Fx 'lwip/examples/socket/src/main.c' "$RUNNER_TEMP/tested-release-files.txt"
+          grep -Fx 'lwip/examples/template/src/main.c' "$RUNNER_TEMP/tested-release-files.txt"
+          grep -Fx 'lwip/examples/wifi_api/src/main.c' "$RUNNER_TEMP/tested-release-files.txt"
 
       - name: Create deterministic release archive
         run: |
           set -euo pipefail
           source_date_epoch=$(git show -s --format=%ct HEAD)
-          find "${{ runner.temp }}/build" -exec touch -d "@$source_date_epoch" {} +
-          cd "${{ runner.temp }}"
-          find build -type f -print | LC_ALL=C sort > release-files.txt
-          TZ=UTC zip -X lwip.zip -@ < release-files.txt
-          test -s lwip.zip
+          release_root="${{ runner.temp }}/release-root"
+          mkdir -p "$release_root"
+          unzip -q "${{ runner.temp }}/tested-release/lwip.zip" -d "$release_root"
+          find "$release_root/lwip" -exec touch -d "@$source_date_epoch" {} +
+          cd "$release_root"
+          find lwip -type f -print | LC_ALL=C sort > "$RUNNER_TEMP/release-files.txt"
+          TZ=UTC zip -X "$RUNNER_TEMP/lwip.zip" -@ < "$RUNNER_TEMP/release-files.txt"
+          test -s "$RUNNER_TEMP/lwip.zip"
 
       - name: Compare latest stable archive
         id: compare
@@ -518,13 +538,15 @@ jobs:
           git tag --force latest-stable "${{ github.sha }}"
           git push --force origin refs/tags/latest-stable
 
+          # This is a rolling build, not the repository's manually promoted
+          # versioned release. Never move GitHub's "Latest release" badge.
           if gh release view latest-stable --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release edit latest-stable --repo "${{ github.repository }}" \
-              --title "latest-stable" --notes-file "$notes" --latest
+              --title "latest-stable" --notes-file "$notes"
           else
             gh release create latest-stable --repo "${{ github.repository }}" \
               --verify-tag --title "latest-stable" \
-              --notes-file "$notes" --latest
+              --notes-file "$notes" --latest=false
           fi
           gh release upload latest-stable "${{ runner.temp }}/lwip.zip" \
             --repo "${{ github.repository }}" --clobber

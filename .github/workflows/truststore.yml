@@ -555,6 +555,7 @@ jobs:
         with:
           tag_name: truststore-latest
           name: truststore-latest
+          make_latest: false
           files: truststore_out/lwIPCERT.8xv
           body_path: truststore_out/release-notes.md
 

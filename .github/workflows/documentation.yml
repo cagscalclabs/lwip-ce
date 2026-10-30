@@ -236,7 +236,7 @@ jobs:
             gh release create whitepaper-latest \
               --title "whitepaper-latest" \
               --notes "Latest generated lwIP-CE whitepaper PDF." \
-              --latest
+              --latest=false
           fi
 
           gh release upload whitepaper-latest docs/whitepaper/whitepaper.pdf \
