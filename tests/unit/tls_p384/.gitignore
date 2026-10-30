@@ -1,0 +1,5 @@
+obj/
+bin/
+*.8xp
+*.8xv
+.DS_Store

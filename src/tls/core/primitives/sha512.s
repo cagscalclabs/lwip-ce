@@ -21,21 +21,31 @@
 ;     and SHR(6) cheap.
 ;   * The two big Sigma functions are copied into the 0xE30800 fast-RAM
 ;     overlay once per compression (the schedule and the rest of the round
-;     stay in flash).  The copy happens with the crypto guard held and is
+;     stay in flash).  The copy happens before the first round and is
 ;     wiped/clobbered by the next overlay user, like the existing SHA-256,
-;     AES, X25519 and RSA overlays.
+;     AES, X25519 and RSA overlays.  Callers must ensure no other overlay
+;     user is live concurrently; this function is not reentrant.
+;
+; Loop structure (optimized):
+;   5 outer passes × 16 inner = 80 rounds.
+;   B is the inner counter; dec b; jp nz replaces the old _sha512_inner BSS
+;   byte (3 BSS ops/round → 2 register ops/round, ~240 cycles saved).
+;   _maj uses A, C, E, HL only — B survives the macro.
+;   Feed-forward: compact 8-iteration djnz loop (IY=state, IX=work).
 ;
 ; Scratch (all wiped before return; HMAC key-derived blocks pass through
 ; this path):
+;   BSS (_sha512_scratch):
 ;   _sha512_w      256 bytes  16-word rolling schedule plus a mirrored copy
 ;                             used to make the (mod 16) reads branch-free.
-;   _sha512_work    64 bytes  a..h
-;   _sha512_t1/t2/tmp 9 bytes each (8 bytes plus one pad byte for the
-;                             3-byte chunks)
-;   control bytes             3 bytes  (inner, outer, schedule flag)
-; The schedule is a 128-byte ring at _sha512_w, mirrored at +128.  The
-; schedule pointer walks forward; only the first 128 bytes are ever used as
-; the "live" ring, and reads that walk past it land in the mirror.
+;                             The mirror is seeded once by a 128-byte ldir
+;                             then kept current per-iteration in rounds 16+.
+;   Fast-RAM overlay tail (0xE30800 + 792, via linker-defined _sha512_*_vma):
+;   _sha512_work    64 bytes  a..h  (IY=_sha512_work during compression;
+;                             offsets to all scratch fit in signed byte (iy+d))
+;   _sha512_t1/t2/tmp 9 bytes each  (iy+64/73/82)
+;   _sha512_outer   1 byte    outer loop counter (iy+91)
+;   _sha512_sched   1 byte    schedule-expansion enable flag (iy+92)
 ;--------------------------------------------
 
 .assume adl=1
@@ -47,26 +57,28 @@ globl _tls_sha512_compress
 ; ---------------------------------------------------------------------------
 ; Scratch storage
 ; ---------------------------------------------------------------------------
+; BSS: message schedule only.
 .section .bss._sha512_scratch,"aw",@nobits
 .balign 8
 _sha512_scratch:
 _sha512_w:
 	.space 256
-_sha512_work:
-	.space 64
-_sha512_t1:
-	.space 9
-_sha512_t2:
-	.space 9
-_sha512_tmp:
-	.space 9
-_sha512_inner:
-	.space 1
-_sha512_outer:
-	.space 1
-_sha512_sched:
-	.space 1
 _sha512_scratch_end:
+
+; Fast-RAM scratch — placed in the 0xE30800 overlay tail by the linker.
+; IY = _sha512_work during compression; all offsets fit in (iy+d).
+extern _sha512_work_vma
+extern _sha512_t1_vma
+extern _sha512_t2_vma
+extern _sha512_tmp_vma
+extern _sha512_outer_vma
+extern _sha512_sched_vma
+.equ _sha512_work,  _sha512_work_vma
+.equ _sha512_t1,    _sha512_t1_vma
+.equ _sha512_t2,    _sha512_t2_vma
+.equ _sha512_tmp,   _sha512_tmp_vma
+.equ _sha512_outer, _sha512_outer_vma
+.equ _sha512_sched, _sha512_sched_vma
 
 .section .rodata._sha512_k,"a",@progbits
 _sha512_k:
@@ -155,8 +167,11 @@ _sha512_k:
 
 ; ---------------------------------------------------------------------------
 ; Macros.  The round macros use only AF, BC, DE and HL; IX holds the current
-; schedule word and IY holds the current K word.  The inner/outer counters
-; live in BSS so that B and C remain available as byte temporaries.
+; schedule word.  During the round body IY = _sha512_work (constant), so the
+; a..h reads in _ch, _maj and the relocated big Sigmas use (iy+d) operands.
+; The K pointer lives in the stack slot just above the return address and is
+; swapped into IY with "ex (sp),iy" only around the K[i] add.  B is the inner
+; counter; the outer counter and schedule flag live in BSS.
 ; ---------------------------------------------------------------------------
 
 ; DE = src + off.  src is either an absolute symbol or an IX-relative
@@ -242,18 +257,56 @@ _sha512_k:
 ; srcbase is the unshifted source address; q is the whole-byte part of the
 ; rotation.  wrap == 0 turns the rotation into a logical shift (the byte
 ; above the top of the word is zero).
+;
+; Carry-over optimisation: for j>0 the high byte of iteration j-1 equals the
+; low byte of iteration j, so we keep it in E and reload with "ld c,e" instead
+; of a second BSS read.  For the wrap case we save src[q] in D before the loop
+; so the j=7 wrap-around can use it without a re-load.
 .macro _rot_bits r, q, srcbase, first, wrap
-	.irp j,0,1,2,3,4,5,6,7
-		ld	a, (\srcbase + ((\j + \q) & 7))
-		ld	c, a
-		.if \wrap
-			ld	a, (\srcbase + ((\j + \q + 1) & 7))
+	; SHR (wrap=0) with q>0 not supported: stale E would give wrong output.
+	.if (\wrap == 0) && (\q != 0)
+		.error "_rot_bits: SHR with q>0 is unsupported"
+	.endif
+	; Load first low byte and prime carry register E with first high byte.
+	ld	a, (\srcbase + (\q & 7))
+	.if \wrap
+		ld	d, a            ; save src[q] for j=7 wrap
+	.endif
+	ld	c, a
+	.if \wrap
+		ld	a, (\srcbase + ((\q + 1) & 7))
+		ld	e, a            ; E = high byte for j=0
+	.else
+		.if ((\q + 1) < 8)
+			ld	a, (\srcbase + (\q + 1))
+			ld	e, a
 		.else
-			.if ((\j + \q + 1) < 8)
-				ld	a, (\srcbase + (\j + \q + 1))
+			xor	a, a        ; high byte is zero (shift, not rotate)
+			ld	e, a
+		.endif
+	.endif
+	.irp j,0,1,2,3,4,5,6,7
+		.if \j
+			; Reuse previous high byte as this iteration's low byte.
+			ld	c, e
+			; Load next high byte into E (or A directly for final shift step).
+			.if \wrap
+				.if \j == 7
+					ld	a, d    ; wrap: high byte is src[q] saved above
+				.else
+					ld	a, (\srcbase + ((\j + \q + 1) & 7))
+					ld	e, a
+				.endif
 			.else
-				xor	a, a
+				.if ((\j + \q + 1) < 8)
+					ld	a, (\srcbase + (\j + \q + 1))
+					ld	e, a
+				.else
+					xor	a, a
+				.endif
 			.endif
+		.else
+			; j=0: A already holds the high byte (loaded above).
 		.endif
 		.if \r <= 4
 			.rept \r
@@ -305,40 +358,38 @@ _sha512_k:
 .endm
 
 ; Ch(e,f,g) = g ^ (e & (f ^ g))
+; Requires IY = _sha512_work (e = iy+32, f = iy+40, g = iy+48).
+; Uses A, C, HL only; B, D, E, IX, IY preserved.  13 bytes per output byte.
 .macro _ch out
 	ld	hl, \out
 	.irp j,0,1,2,3,4,5,6,7
-		ld	a, (_sha512_work + 40 + \j)
-		ld	c, a
-		ld	a, (_sha512_work + 48 + \j)
-		xor	a, c
-		ld	c, a
-		ld	a, (_sha512_work + 32 + \j)
-		and	a, c
-		ld	c, a
-		ld	a, (_sha512_work + 48 + \j)
-		xor	a, c
+		ld	c, (iy + 48 + \j)	; g
+		ld	a, (iy + 40 + \j)	; f
+		xor	a, c			; f ^ g
+		and	a, (iy + 32 + \j)	; e & (f ^ g)
+		xor	a, c			; g ^ (e & (f ^ g))
 		ld	(hl), a
 		inc	hl
 	.endr
 .endm
 
-; Maj(a,b,c) = (a & b) | (c & (a | b))
+; Maj(a,b,c) = b ^ ((a ^ b) & (b ^ c))
+; Per bit: a == b gives b (= a); a != b gives (b ^ c) ^ b = c, which is the
+; majority because a and b disagree.  Equal to (a&b)|(c&(a|b)) on all 8
+; input combinations.
+; Requires IY = _sha512_work (a = iy+0, b = iy+8, c = iy+16).
+; Uses A, C, E, HL only; B, D, IX, IY preserved.  16 bytes per output byte.
 .macro _maj out
 	ld	hl, \out
 	.irp j,0,1,2,3,4,5,6,7
-		ld	a, (_sha512_work + 0 + \j)
-		ld	c, a
-		ld	a, (_sha512_work + 8 + \j)
+		ld	c, (iy + 8 + \j)	; b
+		ld	a, (iy + 0 + \j)	; a
+		xor	a, c			; a ^ b
 		ld	e, a
-		and	a, c
-		ld	b, a
-		ld	a, c
-		or	a, e
-		ld	c, a
-		ld	a, (_sha512_work + 16 + \j)
-		and	a, c
-		or	a, b
+		ld	a, (iy + 16 + \j)	; c
+		xor	a, c			; b ^ c
+		and	a, e			; (a ^ b) & (b ^ c)
+		xor	a, c			; ^ b
 		ld	(hl), a
 		inc	hl
 	.endr
@@ -347,25 +398,6 @@ _sha512_k:
 ; ---------------------------------------------------------------------------
 ; Helpers.
 ; ---------------------------------------------------------------------------
-
-; HL = destination, DE = source.  dst += src (64-bit, little-endian).
-; Clobbers AF, BC, HL, DE.  Used only by the final state feed-forward.
-_sha512_add64:
-	ld	a,(de)
-	add	a,(hl)
-	ld	(hl),a
-	inc	hl
-	inc	de
-	ld	c,7
-.Ladd64_loop:
-	ld	a,(de)
-	adc	a,(hl)
-	ld	(hl),a
-	inc	hl
-	inc	de
-	dec	c
-	jp	nz,.Ladd64_loop
-	ret
 
 ; HL = block (big-endian, 128 bytes), DE = W (little-endian, 128 bytes).
 ; Clobbers A, C, HL, DE, IY.  Called once per block.
@@ -417,6 +449,7 @@ _tls_sha512_compress:
 	call	_sha512_load_block
 
 	; Mirror the 16-word schedule so mod-16 reads never cross a branch.
+	; (Required: rounds 16+ read mirror slots seeded here.)
 	ld	hl,_sha512_w
 	ld	de,_sha512_w + 128
 	ld	bc,128
@@ -428,45 +461,47 @@ _tls_sha512_compress:
 	ld	bc,64
 	ldir
 
-	; Everything below uses IX as the schedule pointer; keep the frame
-	; pointer on the stack for the epilogue.
-	push	ix
-	ld	ix,_sha512_w
-	ld	iy,_sha512_k
-
-	xor	a,a
-	ld	(_sha512_sched),a
-	ld	a,5
-	ld	(_sha512_outer),a
-
-	; Copy the big-signature hot blocks into fast RAM once per compression.
+	; Copy the Sigma hot blocks into fast RAM once per compression.
 	ld	hl,_sha384_reloc_load_start
 	ld	de,_sha384_reloc_run_start
 	ld	bc,_sha384_reloc_len
 	ldir
 
+	; Everything below uses IX as the schedule pointer; keep the frame
+	; pointer on the stack for the epilogue.
+	push	ix
+	ld	ix,_sha512_w
+	; K pointer lives on the stack (swapped into IY only for the K add);
+	; IY = _sha512_work for the rest of the round body.
+	ld	hl,_sha512_k
+	push	hl
+	ld	iy,_sha512_work
+
+	; B is the inner counter (16 per outer pass), advanced with dec b; jp nz.
+	; _maj uses A, C, E, HL only (not B), so this is safe.
+	; _sha512_sched and _sha512_outer stay in BSS (5 and 4 outer iterations
+	; respectively — negligible cost vs the 240 inner-counter BSS ops saved).
+	xor	a,a
+	ld	(_sha512_sched),a
+	ld	a,5
+	ld	(_sha512_outer),a
+
 .Louter:
-	ld	a,16
-	ld	(_sha512_inner),a
+	ld	b,16
 
 .Linner:
-	; --------------------------------------------------------------
+	; ---------------------------------------------------------------
 	; W[i] = sigma1(W[i-2]) + W[i-7] + sigma0(W[i-15]) + W[i-16]
 	; (rounds 16..79 only)
-	; --------------------------------------------------------------
+	; ---------------------------------------------------------------
 	ld	a,(_sha512_sched)
 	or	a,a
 	jp	z,.Lno_sched
 
-	; t2 = sigma1(W[i-2]) at IX+112
 	_sigma_small ix + 112, 19, 61, 6, _sha512_t2
-	; t2 += W[i-7]
 	_add64_idx _sha512_t2, ix, 72
-	; tmp = sigma0(W[i-15]) at IX+8
 	_sigma_small ix + 8, 1, 8, 7, _sha512_tmp
-	; t2 += tmp
 	_add64_sym _sha512_t2, _sha512_tmp
-	; t2 += W[i-16]
 	_add64_idx _sha512_t2, ix, 0
 
 	; W[i] = t2; keep the 128-byte mirror in sync.
@@ -490,12 +525,9 @@ _tls_sha512_compress:
 	ld	de,(_sha512_t2 + 5)
 	ld	(hl),de
 
-
 .Lno_sched:
-	; --------------------------------------------------------------
 	; T1 = h + Sigma1(e) + Ch(e,f,g) + K[i] + W[i]
 	; T2 = Sigma0(a) + Maj(a,b,c)
-	; --------------------------------------------------------------
 	_copy64 _sha512_t1, _sha512_work + 56
 
 	call	_sha384_sigma1
@@ -504,7 +536,10 @@ _tls_sha512_compress:
 	_ch _sha512_tmp
 	_add64_sym _sha512_t1, _sha512_tmp
 
+	ex	(sp),iy			; IY = &K[i], (SP) = _sha512_work
 	_add64_idx _sha512_t1, iy, 0
+	lea	iy,iy + 8
+	ex	(sp),iy			; IY = _sha512_work, (SP) = &K[i+1]
 	_add64_idx _sha512_t1, ix, 0
 
 	call	_sha384_sigma0
@@ -523,19 +558,14 @@ _tls_sha512_compress:
 	_copy64 _sha512_work + 24, _sha512_work + 16
 	_copy64 _sha512_work + 16, _sha512_work + 8
 	_copy64 _sha512_work + 8, _sha512_work + 0
-
 	_copy64 _sha512_work + 0, _sha512_t2
 	_copy64 _sha512_work + 32, _sha512_t1
 
 	lea	ix,ix + 8
-	lea	iy,iy + 8
-
-	ld	a,(_sha512_inner)
-	dec	a
-	ld	(_sha512_inner),a
+	dec	b
 	jp	nz,.Linner
 
-	; End of a 16-word schedule group; restart the ring at slot 0.
+	; End of a 16-word group: wrap the schedule ring back to slot 0.
 	lea	ix,ix - 128
 	ld	a,1
 	ld	(_sha512_sched),a
@@ -546,18 +576,47 @@ _tls_sha512_compress:
 	jp	nz,.Louter
 
 	; Restore the frame pointer and fold the work state back in.
+	; Feed-forward: state[i] += work[i] for i=0..7, as a djnz loop.
+	; IY = state word, IX = work word (both advance by 8).  The frame
+	; pointer is parked on the stack for the duration of the loop.  The
+	; top chunk is a 24-bit add whose third byte is discarded (mod 2^64);
+	; only bytes 6-7 are stored so the next state word is never touched.
+	; The (ix+6) read on the last word reads 1 byte past _sha512_work,
+	; into _sha512_t1 (same BSS block), whose value is discarded.
+	pop	hl			; discard K pointer
 	pop	ix
-	ld	hl,(ix + 6)
-	ld	de,_sha512_work
+	ld	iy,(ix + 6)
+	push	ix
+	ld	ix,_sha512_work
 	ld	b,8
 .Lfeed:
-	call	_sha512_add64
+	ld	hl,(iy + 0)
+	ld	de,(ix + 0)
+	add	hl,de
+	ld	(iy + 0),hl
+	ld	hl,(iy + 3)
+	ld	de,(ix + 3)
+	adc	hl,de
+	ld	(iy + 3),hl
+	ld	hl,(iy + 6)
+	ld	de,(ix + 6)
+	adc	hl,de
+	ld	(iy + 6),l
+	ld	(iy + 7),h
+	lea	iy,iy + 8
+	lea	ix,ix + 8
 	djnz	.Lfeed
+	pop	ix
 
-	; Wipe all derived state and schedule (HMAC keys live here).
+	; Wipe BSS schedule (HMAC key-derived material lives here).
 	ld	hl,$FF0000
 	ld	de,_sha512_scratch
 	ld	bc,_sha512_scratch_end - _sha512_scratch
+	ldir
+	; Wipe fast-RAM scratch (working state + t1/t2/tmp + counters).
+	ld	hl,$FF0000
+	ld	de,_sha512_work
+	ld	bc,93
 	ldir
 
 	ld	sp,ix
@@ -572,13 +631,14 @@ extern __frameset
 ; copied to the fast-RAM overlay (0xE30800) by the trampoline above.  Both
 ; blocks are straight-line code with a single ret, so the copied image is
 ; position-independent apart from its absolute BSS data references.
+; Callers must have IY = _sha512_work: the source words are read as (iy+d).
 ; ---------------------------------------------------------------------------
 .section .sha384.reloc,"ax",@progbits
 _sha384_sigma1:
-	_sigma_big _sha512_work + 32, 14, 18, 41, _sha512_t2
+	_sigma_big iy + 32, 14, 18, 41, _sha512_t2
 	ret
 
 _sha384_sigma0:
-	_sigma_big _sha512_work + 0, 28, 34, 39, _sha512_t2
+	_sigma_big iy + 0, 28, 34, 39, _sha512_t2
 	ret
 
