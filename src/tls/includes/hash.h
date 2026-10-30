@@ -2,7 +2,7 @@
  * @file hash.h
  * @author Anthony Cagliano
  * @author Adam Beckingham
- * @brief SHA-256 (and perhaps eventually SHA-384) implementation
+ * @brief SHA-256 and SHA-384 implementation
  *
  */
 //
@@ -22,15 +22,20 @@
 #define TLS_SHA256_DIGEST_LEN 32
 #define TLS_SHA256_BLOCK_LEN 64
 
+/** @def Defines digest and block length of SHA-384. */
+#define TLS_SHA384_DIGEST_LEN 48
+#define TLS_SHA384_BLOCK_LEN 128
+
 /* Largest block and digest among the hash backends compiled into this build.
  * Increase these when registering a backend with larger parameters. */
-#define TLS_HASH_MAX_BLOCK_LEN TLS_SHA256_BLOCK_LEN
-#define TLS_HASH_MAX_DIGEST_LEN TLS_SHA256_DIGEST_LEN
+#define TLS_HASH_MAX_BLOCK_LEN TLS_SHA384_BLOCK_LEN
+#define TLS_HASH_MAX_DIGEST_LEN TLS_SHA384_DIGEST_LEN
 
 /** @enum Implemented hash algorithms. */
 enum _hash_algorithms
 {
     TLS_HASH_SHA256,
+    TLS_HASH_SHA384,
     //  TLS_HASH_SHA256HW
 };
 
@@ -48,6 +53,21 @@ bool tls_sha256_init(struct tls_sha256_context *ctx);
 void tls_sha256_update(struct tls_sha256_context *ctx, const uint8_t *data, size_t len);
 void tls_sha256_digest(struct tls_sha256_context *ctx, uint8_t *digest);
 
+/** @struct Defines context structure for SHA-384. */
+struct tls_sha384_context
+{
+    uint8_t data[TLS_SHA384_BLOCK_LEN];
+    uint8_t datalen;
+    uint64_t bitlen_hi;
+    uint64_t bitlen_lo;
+    uint64_t state[8];
+};
+
+/** init, update, and digest functions for SHA-384. */
+bool tls_sha384_init(struct tls_sha384_context *ctx);
+void tls_sha384_update(struct tls_sha384_context *ctx, const uint8_t *data, size_t len);
+void tls_sha384_digest(struct tls_sha384_context *ctx, uint8_t *digest);
+
 /** init, update, and digest functions for the TI-84+ SHA-256 accelerator. */
 /*
 bool tls_sha256hw_init(struct tls_sha256_context *ctx);
@@ -58,6 +78,7 @@ void tls_sha256hw_digest(struct tls_sha256_context *ctx, uint8_t *digest);
 /** Storage for any registered hash backend's private state. */
 union tls_hash_state
 {
+    struct tls_sha384_context sha384;
     struct tls_sha256_context sha256;
 };
 

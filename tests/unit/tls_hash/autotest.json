@@ -23,7 +23,7 @@
     "delay|10000",
     "key|clear",
     "action|launch:INSTALL",
-    "hashWait|4",
+    "hashWait|11",
     "key|left",
     "key|enter",
     "delay|1000",
@@ -33,6 +33,20 @@
     "hashWait|2",
     "key|enter",
     "hashWait|3",
+    "key|enter",
+    "hashWait|4",
+    "key|enter",
+    "hashWait|5",
+    "key|enter",
+    "hashWait|6",
+    "key|enter",
+    "hashWait|7",
+    "key|enter",
+    "hashWait|8",
+    "key|enter",
+    "hashWait|9",
+    "key|enter",
+    "hashWait|10",
     "key|enter"
   ],
   "hashes": {
@@ -67,6 +81,76 @@
       "timeout": 10000
     },
     "4": {
+      "description": "SHA-384 short message 'abc' - NIST FIPS 180-4",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 60000
+    },
+    "5": {
+      "description": "SHA-384 empty message - NIST FIPS 180-4",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 60000
+    },
+    "6": {
+      "description": "SHA-384 two-block message - NIST FIPS 180-4",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 60000
+    },
+    "7": {
+      "description": "HMAC-SHA384 RFC 4231 test case 1",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 60000
+    },
+    "8": {
+      "description": "HKDF-SHA384 extract/expand functional vector",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 60000
+    },
+    "9": {
+      "description": "SHA-384 padding boundaries and streaming updates",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 120000
+    },
+    "10": {
+      "description": "HMAC-SHA384 long key, MGF1-SHA384, fail-closed checks",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 120000
+    },
+    "11": {
       "description": "lwIP installed",
       "start": "vram_start",
       "size": "vram_16_size",

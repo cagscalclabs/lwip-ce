@@ -1,4 +1,4 @@
-	library	LWIP, 2
+	library	LWIP, 3
 
 	export	lwip_init_runtime_internal
 	export	lwip_start_last_error
@@ -52,6 +52,9 @@
 	export	tls_sha256_init
 	export	tls_sha256_update
 	export	tls_sha256_digest
+	export	tls_sha384_init
+	export	tls_sha384_update
+	export	tls_sha384_digest
 	export	tls_hash_context_init
 	export	tls_hash_update
 	export	tls_hash_digest

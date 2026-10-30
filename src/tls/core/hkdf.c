@@ -29,7 +29,9 @@ extern uint8_t __tls_scratch[TLS_HKDF_LABEL_SCRATCH_SIZE];
 static size_t get_hash_length(uint8_t hash_algorithm) {
     switch (hash_algorithm) {
         case TLS_HASH_SHA256:
-            return 32;
+            return TLS_SHA256_DIGEST_LEN;
+        case TLS_HASH_SHA384:
+            return TLS_SHA384_DIGEST_LEN;
         default:
             return 0;
     }
@@ -59,11 +61,15 @@ bool tls_hkdf_extract(
         ERROR();
         return false;
     }
+    if (!salt && salt_len != 0) {
+        ERROR();
+        return false;
+    }
 
     /* If no salt or IKM provided, use hash_len zeros. Symmetric handling
      * keeps callers from having to keep their own zero buffer just to
      * pass it in (TLS 1.3 PSK-only-no-ECDHE needs ikm=zeros). */
-    uint8_t zeros[32] = {0};  /* Max hash length */
+    uint8_t zeros[TLS_HASH_MAX_DIGEST_LEN] = {0};  /* Max hash length */
     if (!salt || salt_len == 0) {
         salt = zeros;
         salt_len = hash_len;
@@ -120,7 +126,7 @@ bool tls_hkdf_expand(
 ) {
     struct tls_hmac_context ctx;
     size_t hash_len = get_hash_length(hash_algorithm);
-    uint8_t t_prev[32];  /* Previous T(i) */
+    uint8_t t_prev[TLS_HASH_MAX_DIGEST_LEN];  /* Previous T(i) */
     uint8_t counter;
     size_t n, i;
     size_t offset = 0;
@@ -226,7 +232,8 @@ bool tls_hkdf_expand_label(
     size_t needed;
     bool ok;
 
-    if (!secret || !label || !out) {
+    if (!secret || !label || !out ||
+        (!context && context_len != 0)) {
         ERROR();
         return false;
     }
