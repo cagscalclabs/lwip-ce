@@ -274,6 +274,14 @@ SECTIONS
             KEEP(*(.sha256.reloc.*))
             _sha256_reloc_run_end = .;
         }
+        .sha384.reloc
+        {
+            _sha384_reloc_run_start = .;
+            _sha384_reloc_load_start = . + (LOADADDR(.sha384.reloc) - ADDR(.sha384.reloc));
+            KEEP(*(.sha384.reloc))
+            KEEP(*(.sha384.reloc.*))
+            _sha384_reloc_run_end = .;
+        }
         .saferam.rng
         {
             /* Reserve the first 384 bytes for the SHA-256 compression loop.
@@ -305,6 +313,16 @@ SECTIONS
      * above (not here), for the same reason. */
     _powmod_reloc_len        = SIZEOF(.powmod.reloc);
     _sha256_reloc_len        = SIZEOF(.sha256.reloc);
+    _sha384_reloc_len        = SIZEOF(.sha384.reloc);
+
+    /* SHA-512/384 fast-RAM scratch — 93 bytes in the overlay tail after the
+     * Sigma reloc code.  Never live at the same time as any other consumer. */
+    _sha512_work_vma  = _sha384_reloc_run_end;
+    _sha512_t1_vma    = _sha384_reloc_run_end + 64;
+    _sha512_t2_vma    = _sha384_reloc_run_end + 73;
+    _sha512_tmp_vma   = _sha384_reloc_run_end + 82;
+    _sha512_outer_vma = _sha384_reloc_run_end + 91;
+    _sha512_sched_vma = _sha384_reloc_run_end + 92;
 
     /* Guard: no consumer may outgrow the 1020-byte shared window. */
     /* P-256 blocks must stay below .saferam.rng's 0x180-byte reservation:
@@ -327,6 +345,10 @@ SECTIONS
            "Error: .powmod.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.sha256.reloc) <= 0x180,
            "Error: SHA-256 hot loop exceeds its 384-byte fastMem budget")
+    ASSERT(SIZEOF(.sha384.reloc) <= 1020,
+           "Error: SHA-384 schedule loop exceeds the 1020-byte fastMem window")
+    ASSERT(_sha384_reloc_run_end + 93 <= 0xE30800 + 1020,
+           "Error: SHA-512 fast-RAM scratch overflows overlay tail")
     ASSERT(SIZEOF(.saferam.rng) <= 1020,
            "Error: SHA-256 code plus RNG scratch exceeds 1020-byte fastMem")
 

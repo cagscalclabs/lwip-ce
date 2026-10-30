@@ -23,6 +23,36 @@ static void tls_sha256_digest_adapter(void *ctx, uint8_t *digest)
     tls_sha256_digest((struct tls_sha256_context *)ctx, digest);
 }
 
+static bool tls_sha384_init_adapter(void *ctx)
+{
+    return tls_sha384_init((struct tls_sha384_context *)ctx);
+}
+
+static void tls_sha384_update_adapter(void *ctx, const uint8_t *data, size_t len)
+{
+    tls_sha384_update((struct tls_sha384_context *)ctx, data, len);
+}
+
+static void tls_sha384_digest_adapter(void *ctx, uint8_t *digest)
+{
+    tls_sha384_digest((struct tls_sha384_context *)ctx, digest);
+}
+
+static bool tls_sha512_init_adapter(void *ctx)
+{
+    return tls_sha512_init((struct tls_sha512_context *)ctx);
+}
+
+static void tls_sha512_update_adapter(void *ctx, const uint8_t *data, size_t len)
+{
+    tls_sha512_update((struct tls_sha512_context *)ctx, data, len);
+}
+
+static void tls_sha512_digest_adapter(void *ctx, uint8_t *digest)
+{
+    tls_sha512_digest((struct tls_sha512_context *)ctx, digest);
+}
+
 bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
 {
     if (ctx == NULL)
@@ -39,6 +69,20 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
         ctx->init = tls_sha256_init_adapter;
         ctx->update = tls_sha256_update_adapter;
         ctx->digest = tls_sha256_digest_adapter;
+        break;
+    case TLS_HASH_SHA384:
+        ctx->digestlen = TLS_SHA384_DIGEST_LEN;
+        ctx->blocklen = TLS_SHA384_BLOCK_LEN;
+        ctx->init = tls_sha384_init_adapter;
+        ctx->update = tls_sha384_update_adapter;
+        ctx->digest = tls_sha384_digest_adapter;
+        break;
+    case TLS_HASH_SHA512:
+        ctx->digestlen = TLS_SHA512_DIGEST_LEN;
+        ctx->blocklen = TLS_SHA512_BLOCK_LEN;
+        ctx->init = tls_sha512_init_adapter;
+        ctx->update = tls_sha512_update_adapter;
+        ctx->digest = tls_sha512_digest_adapter;
         break; /*
     case TLS_SHA256_HW:
         ctx->digestlen = TLS_SHA256_DIGEST_LEN;
@@ -65,6 +109,12 @@ void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_c
 
 void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *data, size_t len)
 {
+    if (ctx == NULL || ctx->update == NULL ||
+        (data == NULL && len != 0))
+    {
+        ERROR();
+        return;
+    }
     tls_crypto_guard_enable();
     ctx->update(&ctx->_private, data, len);
     tls_crypto_guard_disable();
@@ -72,6 +122,11 @@ void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *data, size_t l
 
 void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *digest)
 {
+    if (ctx == NULL || ctx->digest == NULL || digest == NULL)
+    {
+        ERROR();
+        return;
+    }
     tls_crypto_guard_enable();
     ctx->digest(&ctx->_private, digest);
     tls_crypto_guard_disable();
@@ -86,14 +141,20 @@ void tls_hash_clear(struct tls_hash_context *ctx)
 bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outlen, uint8_t hash_alg)
 {
     uint32_t ctr = 0;
-    uint8_t hash_digest[TLS_SHA256_DIGEST_LEN], ctr_data[4];
+    uint8_t hash_digest[TLS_HASH_MAX_DIGEST_LEN], ctr_data[4];
     struct tls_hash_context hash_data, hash_ctr;
+    if (outbuf == NULL || (data == NULL && datalen != 0))
+    {
+        ERROR();
+        return false;
+    }
     if (!tls_hash_context_init(&hash_data, hash_alg))
     {
         tls_hash_clear(&hash_data);
         return false;
     }
     size_t hashlen = hash_data.digestlen;
+    tls_crypto_guard_enable();
     hash_data.update(&hash_data._private, data, datalen);
     for (size_t printlen = 0; printlen < outlen; printlen += hashlen, ctr++)
     {
@@ -108,6 +169,7 @@ bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outle
         hash_ctr.digest(&hash_ctr._private, hash_digest);
         memcpy(&outbuf[printlen], hash_digest, copylen);
     }
+    tls_crypto_guard_disable();
     tls_hash_clear(&hash_ctr);
     tls_hash_clear(&hash_data);
     tls_secure_memzero(hash_digest, sizeof hash_digest);

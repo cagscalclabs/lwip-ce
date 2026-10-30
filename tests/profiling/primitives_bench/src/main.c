@@ -105,6 +105,40 @@ static void bench_sha256_sweep(void)
     }
 }
 
+static void bench_sha384_sweep(void)
+{
+    static const uint16_t sizes[] = {64, 256, 1024};
+    char name[24];
+
+    for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++)
+    {
+        uint16_t len = sizes[s];
+        uint16_t reps = (uint16_t)(2048u / len);
+        uint8_t digest[TLS_SHA384_DIGEST_LEN];
+        struct tls_hash_context ctx;
+        clock_t t0;
+        bool ok = true;
+
+        for (uint16_t r = 0; r < 2; r++)
+        {
+            t0 = clock();
+            for (uint16_t i = 0; i < reps; i++)
+            {
+                bool init_ok = tls_hash_context_init(&ctx, TLS_HASH_SHA384);
+                ok = ok && init_ok;
+                if (init_ok)
+                {
+                    tls_hash_update(&ctx, bench_buf, len);
+                    tls_hash_digest(&ctx, digest);
+                }
+            }
+            snprintf(name, sizeof(name), "sha384_%u_rep", (unsigned)len);
+            bench_emit(name, (uint32_t)(clock() - t0), ok ? (uint32_t)len * reps : 0u);
+        }
+        bench_sink += digest[0];
+    }
+}
+
 static void bench_hmac_sweep(void)
 {
     static const uint16_t sizes[] = {0, 64, 1024, 4096};
@@ -376,6 +410,7 @@ int main(void)
     }
     bench_emit("marker_start", 0, 0);
     bench_sha256_sweep();
+    bench_sha384_sweep();
     bench_hmac_sweep();
     bench_cbc_sweep();
     bench_gcm_sweep();

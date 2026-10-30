@@ -53,6 +53,12 @@ func,tls_secure_memzero,cryptography,src/tls/includes/bytes.h,lwip/cryptography/
 func,tls_sha256_init,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 func,tls_sha256_update,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 func,tls_sha256_digest,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+func,tls_sha384_init,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+func,tls_sha384_update,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+func,tls_sha384_digest,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+func,tls_sha512_init,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+func,tls_sha512_update,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+func,tls_sha512_digest,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 func,tls_hash_context_init,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 func,tls_hash_update,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 func,tls_hash_digest,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
@@ -680,6 +686,8 @@ struct,tls_asn1_serialization,cryptography,src/tls/includes/asn1.h,lwip/cryptogr
 struct,tls_asn1_tlv,cryptography,src/tls/includes/asn1.h,lwip/cryptography/asn1.h
 struct,tls_hash_context,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 struct,tls_sha256_context,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+struct,tls_sha384_context,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
+struct,tls_sha512_context,cryptography,src/tls/includes/hash.h,lwip/cryptography/hash.h
 struct,tls_hmac_context,cryptography,src/tls/includes/hmac.h,lwip/cryptography/hmac.h
 struct,tls_rsa_key,cryptography,src/tls/includes/rsa.h,lwip/cryptography/rsa.h
 typedef,tls_random_request_cb_t,cryptography,src/tls/includes/random.h,lwip/cryptography/random.h

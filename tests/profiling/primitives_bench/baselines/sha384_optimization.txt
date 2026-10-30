@@ -1,0 +1,33 @@
+# SHA-384 compression, before and after the 2026 eZ80 optimization pass.
+# Same primitives_bench source and cemu-autotester clock.  Each line is
+#   name,ticks,total_bytes
+# and every measurement was taken twice back-to-back (identical to the
+# other baselines in this directory).
+#
+# "before" is the committed 80-word-schedule byte-serial implementation
+# (commit 874e2cd47). "after" is the rolling 16-word schedule with the
+# 24-bit-chunk adds and the big-sigma hot block copied to the 0xE30800
+# fast-RAM overlay.
+#
+# Derived per-block rates (ticks per 128-byte compression, including the
+# SHA-384 padding block in the hash cost):
+#   size   before ticks/block   after ticks/block   speedup
+#     64            2713.5              1420.9      1.91x
+#    256            2555.2              1262.7      2.02x
+#   1024            2503.6              1211.1      2.07x
+#
+# before:
+sha384_64_rep,86831,2048
+sha384_64_rep,86831,2048
+sha384_256_rep,61325,2048
+sha384_256_rep,61325,2048
+sha384_1024_rep,45065,2048
+sha384_1024_rep,45065,2048
+#
+# after:
+sha384_64_rep,45469,2048
+sha384_64_rep,45470,2048
+sha384_256_rep,30304,2048
+sha384_256_rep,30305,2048
+sha384_1024_rep,21799,2048
+sha384_1024_rep,21800,2048
