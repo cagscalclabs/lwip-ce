@@ -36,3 +36,5 @@ Special thanks to:
 - TIny_Hacker (fasmg to GAS conversion help)
 - Zeroko (entropy analysis)
 - acagliano (CDC Ethernet driver, memory subsystem, TLS implementation, RFC compliance)
+
+And thanks to Adriweb for making weird sporadic CEmu feature additions to help me debug this insanity without wanting to fling myself (or my computer or calculator) out my window (though I can't confirm that didn't almost happen anyway).
