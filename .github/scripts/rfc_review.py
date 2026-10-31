@@ -54,6 +54,17 @@ COMMENT_MARKER = "<!-- rfc-compliance-bot -->"
 MAX_SRC_DIFF_CHARS = 250_000
 MAX_PR_BODY_CHARS = 20_000
 MAX_FILES = 3_000
+OPENROUTER_MAX_TOKENS = 8_000
+OPENROUTER_LENGTH_RETRY_MAX_TOKENS = 32_000
+OPENROUTER_OUTPUT_BUDGET = """
+
+Output-budget requirements:
+
+- Return no more than eight findings, selecting the highest-confidence findings.
+- Keep the summary and every finding field concise and specific.
+- Return only the required JSON object; do not include analysis or prose outside it.
+- Finish the JSON object within the available output-token budget.
+"""
 
 
 class ReviewError(RuntimeError):
@@ -365,11 +376,14 @@ def call_openrouter_model(
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt},
+            {
+                "role": "system",
+                "content": system_prompt + OPENROUTER_OUTPUT_BUDGET,
+            },
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0,
-        "max_tokens": 8_000,
+        "max_tokens": OPENROUTER_MAX_TOKENS,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -382,16 +396,34 @@ def call_openrouter_model(
         # the structured-output requirement.
         "provider": {"require_parameters": True},
     }
-    response = request_json(
-        url,
-        token=api_key,
-        method="POST",
-        payload=payload,
-        retries=retries,
-        timeout=timeout,
-    )
-    if not isinstance(response, dict):
-        raise ReviewError("OpenRouter returned an invalid response")
+    response: Any = None
+    for token_limit in (OPENROUTER_MAX_TOKENS, OPENROUTER_LENGTH_RETRY_MAX_TOKENS):
+        payload["max_tokens"] = token_limit
+        response = request_json(
+            url,
+            token=api_key,
+            method="POST",
+            payload=payload,
+            retries=retries,
+            timeout=timeout,
+        )
+        if not isinstance(response, dict):
+            raise ReviewError("OpenRouter returned an invalid response")
+        choices = response.get("choices")
+        reason = (
+            choices[0].get("finish_reason")
+            if isinstance(choices, list)
+            and len(choices) == 1
+            and isinstance(choices[0], dict)
+            else None
+        )
+        if reason != "length" or token_limit == OPENROUTER_LENGTH_RETRY_MAX_TOKENS:
+            break
+        print(
+            "OpenRouter exhausted the initial output budget; retrying with "
+            f"{OPENROUTER_LENGTH_RETRY_MAX_TOKENS} tokens.",
+            file=sys.stderr,
+        )
     try:
         result = json.loads(extract_chat_output_text(response))
     except json.JSONDecodeError as exc:
@@ -663,6 +695,44 @@ def self_test() -> int:
         ]
     }
     assert json.loads(extract_chat_output_text(chat_response)) == result
+
+    # Never accept a truncated structured response. Output exhaustion is
+    # recoverable, though, so retry it once with a larger completion budget.
+    length_response = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {"content": '{"verdict":"RFC_BREAK"'},
+            }
+        ]
+    }
+    responses = iter((length_response, chat_response))
+    token_limits: list[int] = []
+    original_request_json = request_json
+
+    def fake_request_json(*args: object, **kwargs: Any) -> dict[str, Any]:
+        del args
+        payload = kwargs.get("payload")
+        assert isinstance(payload, dict)
+        token_limits.append(int(payload["max_tokens"]))
+        return next(responses)
+
+    try:
+        globals()["request_json"] = fake_request_json
+        retried = call_openrouter_model(
+            api_key="test",
+            model="test/model",
+            system_prompt="system",
+            user_prompt="user",
+            schema={"type": "object"},
+        )
+    finally:
+        globals()["request_json"] = original_request_json
+    assert retried == result
+    assert token_limits == [
+        OPENROUTER_MAX_TOKENS,
+        OPENROUTER_LENGTH_RETRY_MAX_TOKENS,
+    ]
 
     print("RFC review self-tests passed")
     return 0
