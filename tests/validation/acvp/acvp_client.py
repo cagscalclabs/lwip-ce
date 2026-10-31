@@ -53,6 +53,13 @@ OP_SHA2_384_MCT = 24
 OP_SHA2_512 = 25
 OP_HMAC_SHA2_512 = 26
 OP_SHA2_512_MCT = 27
+OP_P384_PUBLIC = 28
+OP_P384_SECRET = 29
+OP_P384_SIGGEN = 30
+OP_P384_SIGVER = 31
+OP_P384_CDH = 32
+OP_P384_SIGGEN_BEGIN = 33
+OP_P384_SIGGEN_ACTIVE = 34
 
 
 class AcvpError(RuntimeError):
@@ -476,53 +483,83 @@ def _ecdsa_vector_set(vector: dict, backend: Backend) -> dict:
     if mode not in ("sigGen", "sigVer"): raise AcvpError("only ECDSA signature modes are supported")
     groups = []
     for group in vector.get("testGroups", []):
-        if group.get("curve") != "P-256" or group.get("hashAlg") != "SHA2-256":
-            raise AcvpError("only ECDSA P-256 with SHA2-256 is supported")
+        curve = group.get("curve")
+        hash_alg = group.get("hashAlg")
+        if curve == "P-256" and hash_alg == "SHA2-256":
+            coord_len = 32
+            op_begin = OP_P256_SIGGEN_BEGIN
+            op_active = OP_P256_SIGGEN_ACTIVE
+            op_ver = OP_P256_SIGVER
+            op_hash = OP_SHA2_256
+        elif curve == "P-384" and hash_alg == "SHA2-384":
+            coord_len = 48
+            op_begin = OP_P384_SIGGEN_BEGIN
+            op_active = OP_P384_SIGGEN_ACTIVE
+            op_ver = OP_P384_SIGVER
+            op_hash = OP_SHA2_384
+        else:
+            raise AcvpError(f"unsupported ECDSA curve/hash combination {curve!r}/{hash_alg!r}")
         if group.get("testType", "AFT") != "AFT" or group.get("conformance") is not None:
             raise AcvpError("only ordinary ECDSA AFT groups are supported")
+        pub_len = 1 + 2 * coord_len
         group_response = {"tgId": group["tgId"]}
         if mode == "sigGen":
-            public_key = backend(OP_P256_SIGGEN_BEGIN, b"")
-            if len(public_key) != 65 or public_key[0] != 4:
-                raise AcvpError("calculator returned a malformed P-256 public key")
-            group_response.update({"qx": public_key[1:33].hex().upper(),
-                                   "qy": public_key[33:].hex().upper()})
+            public_key = backend(op_begin, b"")
+            if len(public_key) != pub_len or public_key[0] != 4:
+                raise AcvpError(f"calculator returned a malformed {curve} public key")
+            group_response.update({"qx": public_key[1:1 + coord_len].hex().upper(),
+                                   "qy": public_key[1 + coord_len:].hex().upper()})
         tests = []
         for test in group.get("tests", []):
             message = _hex(test.get("message"), "message")
-            digest = backend(OP_SHA2_256, message)
+            digest = backend(op_hash, message)
             if mode == "sigGen":
-                signature = backend(OP_P256_SIGGEN_ACTIVE, digest)
-                if len(signature) != 64: raise AcvpError("calculator returned a malformed ECDSA signature")
-                tests.append({"tcId": test["tcId"], "r": signature[:32].hex().upper(),
-                              "s": signature[32:].hex().upper()})
+                signature = backend(op_active, digest)
+                if len(signature) != 2 * coord_len:
+                    raise AcvpError(f"calculator returned a malformed {curve} ECDSA signature")
+                tests.append({"tcId": test["tcId"], "r": signature[:coord_len].hex().upper(),
+                              "s": signature[coord_len:].hex().upper()})
             else:
                 qx, qy = _hex(test.get("qx"), "qx"), _hex(test.get("qy"), "qy")
                 r, s = _hex(test.get("r"), "r"), _hex(test.get("s"), "s")
-                if any(len(x) != 32 for x in (qx, qy, r, s)):
-                    raise AcvpError("P-256 coordinates and signature components must be 32 bytes")
-                verdict = backend(OP_P256_SIGVER, b"\x04" + qx + qy + digest + r + s)
-                if len(verdict) != 1: raise AcvpError("calculator returned a malformed ECDSA verdict")
+                if any(len(x) != coord_len for x in (qx, qy, r, s)):
+                    raise AcvpError(f"{curve} coordinates and signature components must be {coord_len} bytes")
+                verdict = backend(op_ver, b"\x04" + qx + qy + digest + r + s)
+                if len(verdict) != 1: raise AcvpError(f"calculator returned a malformed {curve} ECDSA verdict")
                 tests.append({"tcId": test["tcId"], "testPassed": bool(verdict[0])})
         group_response["tests"] = tests
         groups.append(group_response)
     return {"vsId": vector["vsId"], "testGroups": groups}
 
 
-def _p256_cdh_vector_set(vector: dict, backend: Backend) -> dict:
+def _ecc_cdh_vector_set(vector: dict, backend: Backend) -> dict:
     if vector.get("mode") != "CDH-Component": raise AcvpError("only KAS-ECC CDH-Component is supported")
     groups = []
     for group in vector.get("testGroups", []):
-        if group.get("curve") != "P-256" or group.get("testType") != "AFT":
-            raise AcvpError("only P-256 CDH-Component AFT is supported")
+        curve = group.get("curve")
+        if group.get("testType") != "AFT":
+            raise AcvpError("only KAS-ECC CDH-Component AFT is supported")
+        if curve == "P-256":
+            coord_len = 32
+            op_cdh = OP_P256_CDH
+        elif curve == "P-384":
+            coord_len = 48
+            op_cdh = OP_P384_CDH
+        else:
+            raise AcvpError(f"unsupported KAS-ECC curve {curve!r}")
+        pub_len = 1 + 2 * coord_len
         tests = []
         for test in group.get("tests", []):
             x, y = _hex(test.get("publicServerX"), "publicServerX"), _hex(test.get("publicServerY"), "publicServerY")
-            if len(x) != 32 or len(y) != 32: raise AcvpError("P-256 server coordinates must be 32 bytes")
-            response = backend(OP_P256_CDH, b"\x04" + x + y)
-            if len(response) != 97 or response[0] != 4: raise AcvpError("calculator returned a malformed P-256 CDH result")
-            tests.append({"tcId": test["tcId"], "publicIutX": response[1:33].hex().upper(),
-                          "publicIutY": response[33:65].hex().upper(), "z": response[65:].hex().upper()})
+            if len(x) != coord_len or len(y) != coord_len:
+                raise AcvpError(f"{curve} server coordinates must be {coord_len} bytes")
+            response = backend(op_cdh, b"\x04" + x + y)
+            if len(response) != pub_len + coord_len or response[0] != 4:
+                raise AcvpError(f"calculator returned a malformed {curve} CDH result")
+            tests.append({"tcId": test["tcId"],
+                          "publicIutX": response[1:1 + coord_len].hex().upper(),
+                          "publicIutY": response[1 + coord_len:pub_len].hex().upper(),
+                          "z": response[pub_len:].hex().upper()})
         groups.append({"tgId": group["tgId"], "tests": tests})
     return {"vsId": vector["vsId"], "testGroups": groups}
 
@@ -559,7 +596,7 @@ def process_document(document: object, backend: Backend) -> object:
         elif algorithm in ("ECDSA", "DetECDSA") and revision in ("FIPS186-4", "FIPS186-5"):
             responses.append(_ecdsa_vector_set(vector, backend))
         elif algorithm == "KAS-ECC" and revision == "1.0":
-            responses.append(_p256_cdh_vector_set(vector, backend))
+            responses.append(_ecc_cdh_vector_set(vector, backend))
         else:
             raise AcvpError(f"unsupported ACVP capability {algorithm!r} revision {revision!r}")
     return [header, *responses] if header else (responses[0] if len(responses) == 1 else responses)
@@ -680,6 +717,24 @@ def reference_backend(operation: int, payload: bytes) -> bytes:
                                                int.from_bytes(payload[129:], "big"))
         try:
             public.verify(signature, payload[65:97], ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+            return b"\1"
+        except InvalidSignature:
+            return b"\0"
+    if operation == OP_P384_SIGVER:
+        try:
+            from cryptography.exceptions import InvalidSignature
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import ec, utils
+        except ImportError as exc:
+            raise AcvpError("reference P-384 tests require python3-cryptography") from exc
+        if len(payload) != 241 or payload[0] != 4: raise AcvpError("malformed reference P-384 payload")
+        public = ec.EllipticCurvePublicNumbers(int.from_bytes(payload[1:49], "big"),
+                                               int.from_bytes(payload[49:97], "big"),
+                                               ec.SECP384R1()).public_key()
+        signature = utils.encode_dss_signature(int.from_bytes(payload[145:193], "big"),
+                                               int.from_bytes(payload[193:], "big"))
+        try:
+            public.verify(signature, payload[97:145], ec.ECDSA(utils.Prehashed(hashes.SHA384())))
             return b"\1"
         except InvalidSignature:
             return b"\0"

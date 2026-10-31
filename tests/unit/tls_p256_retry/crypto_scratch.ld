@@ -23,12 +23,6 @@ SECTIONS
     {
         KEEP(*(.p256.mul.reloc))
     }
-    .p256.sq.reloc 0xE30800 : AT (LOADADDR(.p256.mul.reloc) + SIZEOF(.p256.mul.reloc))
-    {
-        KEEP(*(.p256.sq.reloc))
-    }
     _p256_mul_reloc_load_start = LOADADDR(.p256.mul.reloc);
     _p256_mul_reloc_len = SIZEOF(.p256.mul.reloc);
-    _p256_sq_reloc_load_start = LOADADDR(.p256.sq.reloc);
-    _p256_sq_reloc_len = SIZEOF(.p256.sq.reloc);
 }

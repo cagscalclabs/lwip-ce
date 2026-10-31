@@ -372,6 +372,9 @@ int main(void)
     os_GetKey();
     os_ClrHome();
 
+    memset(ss, 0, sizeof(ss));
+
+    /* hash 14: timing screen — ops run here, screen ends with "success" */
     {
         uint8_t pub[97], sig[96];
         clock_t t0;
@@ -380,19 +383,14 @@ int main(void)
         t0 = clock(); (void)tls_p384_secret(ss, priv_a, pub_b); tss = (uint32_t)(clock() - t0);
         t0 = clock(); (void)tls_p384_sign(sig, hash1, priv_a); tsg = (uint32_t)(clock() - t0);
         t0 = clock(); (void)tls_p384_verify(sig, hash1, pub); tvf = (uint32_t)(clock() - t0);
-        printf("pk %lu %lu.%03lu s\n", (unsigned long)tpk, (unsigned long)(tpk / 32768u), (unsigned long)((tpk % 32768u) * 1000u / 32768u));
-        printf("ss %lu %lu.%03lu s\n", (unsigned long)tss, (unsigned long)(tss / 32768u), (unsigned long)((tss % 32768u) * 1000u / 32768u));
-        printf("sg %lu %lu.%03lu s\n", (unsigned long)tsg, (unsigned long)(tsg / 32768u), (unsigned long)((tsg % 32768u) * 1000u / 32768u));
-        printf("vf %lu %lu.%03lu s\n", (unsigned long)tvf, (unsigned long)(tvf / 32768u), (unsigned long)((tvf % 32768u) * 1000u / 32768u));
+        printf("pk %lu.%03lu s\n", (unsigned long)(tpk / 32768u), (unsigned long)((tpk % 32768u) * 1000u / 32768u));
+        printf("ss %lu.%03lu s\n", (unsigned long)(tss / 32768u), (unsigned long)((tss % 32768u) * 1000u / 32768u));
+        printf("sg %lu.%03lu s\n", (unsigned long)(tsg / 32768u), (unsigned long)((tsg % 32768u) * 1000u / 32768u));
+        printf("vf %lu.%03lu s\n", (unsigned long)(tvf / 32768u), (unsigned long)((tvf % 32768u) * 1000u / 32768u));
+        printf("success");
     }
     os_GetKey();
     os_ClrHome();
-    memset(ss, 0, sizeof(ss));
-    printf("success");
-    os_GetKey();
-    os_ClrHome();
-    printf("\nPress any key\n");
-    os_GetKey();
 
     return 0;
 }

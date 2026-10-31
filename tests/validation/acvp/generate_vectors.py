@@ -22,7 +22,7 @@ class Corpus:
         self.tg = 0
         self.vs = 0
         self.vectors: list[dict] = []
-        self.oracle: dict[str, dict[str, str]] = {"x25519": {}, "p256": {}}
+        self.oracle: dict[str, dict[str, str]] = {"x25519": {}, "p256": {}, "p384": {}}
 
     def bytes(self, length: int) -> bytes:
         return self.rng.randbytes(length)
@@ -197,22 +197,37 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
                                   n=numbers.n.to_bytes(256, "big").hex(), **extra))
     c.vector("RSA", "FIPS186-5", rsa_groups, mode="sigVer")
 
-    # ECDSA verification: alternating valid/invalid signatures.
+    # ECDSA verification: alternating valid/invalid signatures for P-256 and P-384.
+    from cryptography.hazmat.primitives.asymmetric import utils
     ecdsa_key = ec.derive_private_key(1 + int.from_bytes(c.bytes(32), "big") % (2**255), ec.SECP256R1())
     pub = ecdsa_key.public_key().public_numbers(); ecdsa_tests = []
-    from cryptography.hazmat.primitives.asymmetric import utils
     for i in range(32):
         message = c.bytes(i * 9 % 193)
         r, s = utils.decode_dss_signature(ecdsa_key.sign(message, ec.ECDSA(hashes.SHA256())))
         if i & 1: s ^= 1
         ecdsa_tests.append(c.test(message=message.hex(), qx=f"{pub.x:064x}", qy=f"{pub.y:064x}",
                                   r=f"{r:064x}", s=f"{s:064x}"))
-    c.vector("ECDSA", "FIPS186-5", [c.group(ecdsa_tests, testType="AFT", curve="P-256", hashAlg="SHA2-256")], mode="sigVer")
+    ecdsa384_key = ec.derive_private_key(1 + int.from_bytes(c.bytes(48), "big") % (2**383), ec.SECP384R1())
+    pub384 = ecdsa384_key.public_key().public_numbers(); ecdsa384_tests = []
+    for i in range(32):
+        message = c.bytes(i * 9 % 193)
+        r, s = utils.decode_dss_signature(ecdsa384_key.sign(message, ec.ECDSA(hashes.SHA384())))
+        if i & 1: s ^= 1
+        ecdsa384_tests.append(c.test(message=message.hex(), qx=f"{pub384.x:096x}", qy=f"{pub384.y:096x}",
+                                     r=f"{r:096x}", s=f"{s:096x}"))
+    c.vector("ECDSA", "FIPS186-5", [
+        c.group(ecdsa_tests, testType="AFT", curve="P-256", hashAlg="SHA2-256"),
+        c.group(ecdsa384_tests, testType="AFT", curve="P-384", hashAlg="SHA2-384"),
+    ], mode="sigVer")
 
     # Generated-key algorithms are graded semantically instead of by byte equality.
     messages = [c.bytes((i * 7) % 129) for i in range(16)]
     siggen_tests = [c.test(message=messages[i % 16].hex()) for i in range(32)]
-    c.vector("DetECDSA", "FIPS186-5", [c.group(siggen_tests, testType="AFT", curve="P-256", hashAlg="SHA2-256")], mode="sigGen")
+    siggen384_tests = [c.test(message=messages[i % 16].hex()) for i in range(32)]
+    c.vector("DetECDSA", "FIPS186-5", [
+        c.group(siggen_tests, testType="AFT", curve="P-256", hashAlg="SHA2-256"),
+        c.group(siggen384_tests, testType="AFT", curve="P-384", hashAlg="SHA2-384"),
+    ], mode="sigGen")
 
     x_tests = []
     for _ in range(32):
@@ -229,7 +244,16 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
         private = ec.derive_private_key(scalar, ec.SECP256R1()); public = private.public_key().public_numbers()
         test = c.test(publicServerX=f"{public.x:064x}", publicServerY=f"{public.y:064x}")
         c.oracle["p256"][str(test["tcId"])] = f"{scalar:064x}"; p_tests.append(test)
-    c.vector("KAS-ECC", "1.0", [c.group(p_tests, testType="AFT", curve="P-256")], mode="CDH-Component")
+    p384_tests = []
+    for _ in range(32):
+        scalar = 1 + int.from_bytes(c.bytes(48), "big") % (2**383)
+        private = ec.derive_private_key(scalar, ec.SECP384R1()); public = private.public_key().public_numbers()
+        test = c.test(publicServerX=f"{public.x:096x}", publicServerY=f"{public.y:096x}")
+        c.oracle["p384"][str(test["tcId"])] = f"{scalar:096x}"; p384_tests.append(test)
+    c.vector("KAS-ECC", "1.0", [
+        c.group(p_tests, testType="AFT", curve="P-256"),
+        c.group(p384_tests, testType="AFT", curve="P-384"),
+    ], mode="CDH-Component")
 
     prompt = [{"acvVersion": "1.0"}, *c.vectors]
     deterministic = [{"acvVersion": "1.0"}, *[v for v in c.vectors if v["algorithm"] not in GENERATED_ALGORITHMS]]
@@ -238,8 +262,8 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     assert counts == {"SHA2-256": 64, "SHA2-384": 64, "SHA2-512": 64,
                       "HMAC-SHA2-256": 32, "HMAC-SHA2-384": 32, "HMAC-SHA2-512": 32,
                       "ACVP-AES-CBC": 32, "ACVP-AES-GCM": 32, "ACVP-AES-CCM": 32,
-                      "PBKDF": 32, "KDA": 32, "RSA": 32, "ECDSA": 32,
-                      "DetECDSA": 32, "XECDH": 32, "KAS-ECC": 32}
+                      "PBKDF": 32, "KDA": 32, "RSA": 32, "ECDSA": 64,
+                      "DetECDSA": 64, "XECDH": 32, "KAS-ECC": 64}
     c.oracle["counts"] = counts
     return prompt, expected, c.oracle
 

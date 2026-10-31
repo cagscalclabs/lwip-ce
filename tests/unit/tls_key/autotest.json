@@ -13,6 +13,7 @@
     "../../common/LWIP.6.8xv",
     "../../common/LWIP.7.8xv",
     "../../common/LWIP.8.8xv",
+    "../../common/LWIP.9.8xv",
     "../../common/lwip.8xv"
   ],
   "target": {
@@ -120,7 +121,7 @@
       "timeout": 10000
     },
     "8": {
-      "description": "tls_key_sign: RSA→UNSUPPORTED, ECDSA public-only→INVALID, enc-alg→UNKNOWN",
+      "description": "tls_key_sign: RSA\u2192UNSUPPORTED, ECDSA public-only\u2192INVALID, enc-alg\u2192UNKNOWN",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",

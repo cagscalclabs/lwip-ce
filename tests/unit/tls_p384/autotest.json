@@ -13,6 +13,7 @@
     "../../common/LWIP.6.8xv",
     "../../common/LWIP.7.8xv",
     "../../common/LWIP.8.8xv",
+    "../../common/LWIP.9.8xv",
     "../../common/lwip.8xv"
   ],
   "target": {
@@ -20,13 +21,13 @@
     "isASM": true
   },
   "sequence": [
-    "delay|10000",
+    "delay|20000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|13",
     "key|left",
     "key|enter",
-    "delay|2000",
+    "delay|1000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -62,6 +63,8 @@
     "key|enter",
     "delay|1200",
     "hashWait|12",
+    "key|enter",
+    "hashWait|14",
     "key|enter",
     "delay|1200"
   ],
@@ -186,6 +189,16 @@
       ],
       "timeout": 600000
     },
+    "14": {
+      "description": "P-384 timing (pk/ss/sg/vf in seconds)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "0783A776"
+      ],
+      "timeout": 120000
+    },
     "13": {
       "description": "lwIP installed",
       "start": "vram_start",
@@ -194,7 +207,7 @@
       "expected_CRCs": [
         "F7C03D8D"
       ],
-      "timeout": 200000
+      "timeout": 100000
     }
   }
 }
