@@ -1165,11 +1165,17 @@ def main() -> int:
                     help="run public HTTPS/WSS probes as non-gating informational checks")
     ap.add_argument("--truststore-signer", type=Path,
                     help="production TRUSTSTORE_SIGNER key used to sign a runner-local test truststore")
+    ap.add_argument("--convbin", type=Path, default=shutil.which("convbin"),
+                    help="convbin executable used to package the temporary TLS truststore")
     args = ap.parse_args()
 
     requested_suites = args.suite or list(SUITES)
     if "tls" in requested_suites and args.truststore_signer is None:
         ap.error("the tls suite requires --truststore-signer")
+    if "tls" in requested_suites and args.convbin is None:
+        ap.error("the tls suite requires --convbin when convbin is not on PATH")
+    if "tls" in requested_suites and not args.convbin.is_file():
+        ap.error(f"convbin executable does not exist: {args.convbin}")
     if ("tls" in requested_suites and args.external_info
             and not (COMMON / "lwIPCERT.8xv").is_file()):
         ap.error("--external-info requires the production tests/common/lwIPCERT.8xv")
@@ -1185,7 +1191,8 @@ def main() -> int:
                 [sys.executable, str(HERE / "generate_test_truststore.py"),
                  "--certificate", str(fixtures["ca"][0]),
                  "--signer", str(args.truststore_signer),
-                 "--output", str(local_truststore)],
+                 "--output", str(local_truststore),
+                 "--convbin", str(args.convbin)],
                 check=True,
             )
         TLSBad.context = local_server_context(tmp, fixtures)

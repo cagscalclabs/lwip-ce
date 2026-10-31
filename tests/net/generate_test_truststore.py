@@ -13,6 +13,7 @@ import argparse
 import calendar
 import hashlib
 import re
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -117,7 +118,7 @@ def certificate_metadata(cert: Path) -> tuple[bytes, int, int, bytes]:
     return ski, dates["notBefore"], dates["notAfter"], key
 
 
-def build_store(cert: Path, signer: Path, output: Path) -> None:
+def build_store(cert: Path, signer: Path, output: Path, convbin: Path) -> None:
     subject = subject_digest(cert)
     ski, not_before, not_after, key = certificate_metadata(cert)
     entry_len = ENTRY_PREFIX_LEN + len(key)
@@ -159,7 +160,7 @@ def build_store(cert: Path, signer: Path, output: Path) -> None:
         blob.write_bytes(sig + payload)
         output.parent.mkdir(parents=True, exist_ok=True)
         run([
-            "convbin", "-i", str(blob), "-o", str(output),
+            str(convbin), "-i", str(blob), "-o", str(output),
             "-j", "bin", "-k", "8xv", "-n", "lwIPCERT", "-r",
         ])
 
@@ -169,8 +170,16 @@ def main() -> None:
     parser.add_argument("--certificate", required=True, type=Path)
     parser.add_argument("--signer", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    found_convbin = shutil.which("convbin")
+    parser.add_argument("--convbin", type=Path,
+                        default=Path(found_convbin) if found_convbin else None,
+                        help="convbin executable (defaults to the copy on PATH)")
     args = parser.parse_args()
-    build_store(args.certificate, args.signer, args.output)
+    if args.convbin is None:
+        parser.error("convbin was not found on PATH; pass --convbin /absolute/path/to/convbin")
+    if not args.convbin.is_file():
+        parser.error(f"convbin executable does not exist: {args.convbin}")
+    build_store(args.certificate, args.signer, args.output, args.convbin)
     print(f"generated signed v{VERSION} test truststore: {args.output}")
 
 

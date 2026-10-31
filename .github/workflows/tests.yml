@@ -659,13 +659,18 @@ jobs:
           chmod 600 "$signer"
           test -s "$signer"
           openssl pkey -in "$signer" -noout
+          test -x "$CEDEV_BIN/convbin"
 
       - name: Run ${{ matrix.suite }}
         run: |
           suite_start=$(($(date +%s%N)/1000000))
           truststore_args=()
           if [ "${{ matrix.suite }}" = tls ]; then
-            truststore_args=(--truststore-signer "$RUNNER_TEMP/truststore-signer.pem" --external-info)
+            truststore_args=(
+              --truststore-signer "$RUNNER_TEMP/truststore-signer.pem"
+              --convbin "$CEDEV_BIN/convbin"
+              --external-info
+            )
           fi
           sudo --preserve-env=AUTOTESTER_ROM python3 tests/net/run.py \
             --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
