@@ -283,112 +283,10 @@ jobs:
 
       - name: Run Dyload Unit Tests
         run: |
-          total_tests=0
-          total_passed=0
-          total_failed=0
-          total_timeout=0
-          start_time=$(($(date +%s%N)/1000000))
-
-          # A single hung cemu-autotester run has no other way to be noticed --
-          # nothing elsewhere in this job times out, so a stall here would
-          # otherwise block the whole job until GitHub's own ~6h ceiling.
-          # TEST_TIMEOUT_SECONDS bounds one attempt; a hang is retried up to
-          # TEST_MAX_ATTEMPTS times (CEmu/CI flakiness, not necessarily a real
-          # bug -- see the Known CI flakiness note below) before giving up and
-          # recording "timeout" rather than "failed", since a stall is not the
-          # same signal as the autotester actually reporting a mismatch.
-          TEST_TIMEOUT_SECONDS=120
-          TEST_MAX_ATTEMPTS=3
-
-          while IFS= read -r -d '' test; do
-            status=0
-            test_dir=$(dirname "$test")
-            failed_hash_ids=""
-            timed_out=0
-            quirk_skipped=0
-            test_start=$(($(date +%s%N)/1000000))
-            make -C "$test_dir" clean
-            make -C "$test_dir" || ((status=$?))
-            if [ $status -eq 0 ]; then
-              set +e
-              for attempt in $(seq 1 "$TEST_MAX_ATTEMPTS"); do
-                timeout "${TEST_TIMEOUT_SECONDS}s" \
-                  make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
-                status=${PIPESTATUS[0]}
-                if [ "$status" -eq 124 ]; then
-                  echo "::warning::$(basename "$test_dir") timed out after ${TEST_TIMEOUT_SECONDS}s (attempt $attempt/$TEST_MAX_ATTEMPTS)"
-                  timed_out=1
-                  continue
-                fi
-                timed_out=0
-                break
-              done
-              set -e
-              if [ "$status" -ne 0 ] && [ "$timed_out" -eq 0 ]; then
-                # Autotester reports each mismatched hash on its own line, e.g.:
-                #   [Test failed!] Hash #1 ("...") did not match the expected CRC ...
-                # Collect every failed hash id (a run can fail more than one).
-                failed_hash_ids=$(grep -Eo 'Hash #[0-9]+' "$test_dir/autotest.log" | grep -Eo '[0-9]+' | sort -nu | paste -sd, - || true)
-
-                # Emulator-quirk skip: some units require a physical TRNG that
-                # CEmu does not have.  If this unit is in EMULATOR_QUIRK_UNITS,
-                # only hash #1 failed, and its observed CRC is 468FCC4B (the
-                # "RNG setup timed out" screen), downgrade to skipped+warning.
-                unit_name=$(basename "$test_dir")
-                if echo " $EMULATOR_QUIRK_UNITS " | grep -qw "$unit_name"; then
-                  observed_crc=$(grep 'Hash #1 ' "$test_dir/autotest.log" | grep -Eo '\(got [0-9A-Fa-f]+\)' | grep -Eo '[0-9A-Fa-f]+' | head -1 || true)
-                  if [ "$observed_crc" = "468FCC4B" ]; then
-                    echo "::warning::$unit_name hash #1 observed CRC 468FCC4B (RNG setup timed out) — emulator has no physical TRNG; marking skipped"
-                    status=0
-                    quirk_skipped=1
-                    failed_hash_ids=""
-                  fi
-                fi
-              fi
-            fi
-            test_done=$(($(date +%s%N)/1000000))
-            test_duration=$((test_done - test_start))
-            (( total_tests += 1 ))
-            if [ "$quirk_skipped" -eq 1 ]; then
-              (( total_timeout += 1 ))
-              test_status="skipped; emulator has no physical TRNG — test failed to run due to emulator non-randomness quirk"
-            elif [ "$timed_out" -eq 1 ]; then
-              (( total_timeout += 1 ))
-              test_status="timeout; manual verification needed"
-            elif [ $status -eq 0 ]; then
-              (( total_passed += 1 ))
-              test_status="passed"
-            else
-              (( total_failed += 1 ))
-              test_status="failed"
-            fi
-            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"$failed_hash_ids\"}" > "$test_dir/result.json"
-          done < <(find ${{env.LWIP_DYLIB_TESTS}} -name autotest.json -print0)
-
-          end_time=$(($(date +%s%N)/1000000))
-          echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"$total_timeout\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
-          cmake -E echo "$total_tests dyload modules tested, $total_passed passed, $total_failed failed, $total_timeout timed out (skipped; manual verification needed)!"
-          exit $total_failed
-
-      - name: Generate Dyload JSON Results
-        if: always()
-        run: |
-          echo -e "{\"results\":{" > ${{github.workspace}}/results-dylib.json
-          cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-dylib.json
-          echo -e ",\"tests\":[" >> ${{github.workspace}}/results-dylib.json
-          find ${{env.LWIP_DYLIB_TESTS}} -name result.json -print0 | {
-            tmp_json=""
-            while read -rd '' test; do
-              test_dir=$(dirname "$test")
-              tmp_json="$tmp_json,$(cat $test_dir/result.json)"
-              rm $test_dir/result.json
-            done
-            tmp_json="${tmp_json:1}"
-            echo $tmp_json >> ${{github.workspace}}/results-dylib.json
-          }
-          echo -e "]" >> ${{github.workspace}}/results-dylib.json
-          echo -e "}}" >> ${{github.workspace}}/results-dylib.json
-          rm ${{github.workspace}}/summary.json
+          python3 .github/scripts/run_unit_tests.py \
+            "${{ env.LWIP_DYLIB_TESTS }}" \
+            --output "${{ github.workspace }}/results-unit.json" \
+            --flat-output "${{ github.workspace }}/results-dylib.json"
 
       - name: Normalize unit-test rows
         if: always()
@@ -406,6 +304,7 @@ jobs:
           path: |
             ${{ github.workspace }}/test-rows-unit.json
             ${{ github.workspace }}/results-dylib.json
+            ${{ github.workspace }}/results-unit.json
           if-no-files-found: warn
 
       - name: Remove CEmu Rom
