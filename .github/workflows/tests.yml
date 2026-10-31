@@ -60,21 +60,11 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/CE-Programming/CEmu.git "$RUNNER_TEMP/CEmu"
           make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
-          python3 .github/scripts/patch_cemu_autotester_image.py \
-            "$RUNNER_TEMP/CEmu/tests/autotester"
-          # Let cmake configure normally (CMakeLists's own -lcemucore in
-          # CMAKE_EXE_LINKER_FLAGS goes via build.ninja LINK_FLAGS).
-          # Do NOT pass -lcemucore via -DCMAKE_EXE_LINKER_FLAGS: cmake runs
-          # compiler-detection probes with that flag set and they fail because
-          # libcemucore.a isn't built yet during configure.
+          git -C "$RUNNER_TEMP/CEmu" apply \
+            "$GITHUB_WORKSPACE/build-tools/meta/cemu-autotester.patch"
           cmake -S "$RUNNER_TEMP/CEmu/tests/autotester" -B "$RUNNER_TEMP/CEmu/build" \
             -DCMAKE_BUILD_TYPE=Release \
             -GNinja
-          # Patch build.ninja: move -lcemucore from LINK_FLAGS (before objects)
-          # to LINK_LIBRARIES (after objects) so GNU ld sees the archive last.
-          python3 .github/scripts/patch_cemu_ninja.py \
-            "$RUNNER_TEMP/CEmu/build/build.ninja" \
-            "$RUNNER_TEMP/CEmu/core"
           cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
           install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
           install -m755 "$RUNNER_TEMP/CEmu/build/autotester" "$RUNNER_TEMP/cemu-autotester-image"
