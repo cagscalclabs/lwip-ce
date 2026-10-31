@@ -29,7 +29,7 @@ COMMON = ROOT / "tests" / "common"
 
 
 def write_autotest(path: Path, usb: str) -> None:
-    files = ["bin/LWDAST.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*"))
+    files = ["bin/LWDAST.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*") if not f.name.startswith("."))
     path.write_text(json.dumps({
         "description": "LWDAST driven by build-tools/dast/lwip-dast.py over the emulated adapter",
         "transfer_files": files,
