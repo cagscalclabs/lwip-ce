@@ -16,17 +16,15 @@
 ; in the Montgomery domain, a=-3 doubling and the "complete wrapper"
 ; Jacobian addition; those intermediates are bit-identical to the reference.
 ;
-; Scalar multiplication (p256_scalar_mul) is NOT the reference's 256-step
-; Jacobian ladder: it is a co-Z Montgomery ladder (Goundar-Joye-Miyaji
-; 2010 / Rivain 2011, (X,Y)-only XYcZ-ADDC + XYcZ-ADDU per bit, Z recovered
-; once at the end).  Its intermediates differ from ref/p256/p256.c; only
-; the final point agrees.  Preconditions: scalar k < n (0 allowed; k in
-; {0, 1, n-2, n-1} handled in constant time) and input point Z = Montgomery
-; 1 (an imported affine point or G).  The public case x(P) = 0 falls back
-; to the reference-equivalent ladder p256_scalar_mul_ml.  Python oracle for
-; the co-Z buffer-level sequence (coz_seq.py, imports coz.py) lives in an
-; agent session scratchpad and is NOT committed to the repository:
-;   /private/tmp/claude-501/-Users-acagliano-CEdev-source-lwip-ce/48f9ef2d-f514-4722-adac-d1a2d6c4a6c6/scratchpad/model/
+; Variable-base scalar multiplication for ECDH (p256_ws_mul) is NOT the
+; reference's 256-step Jacobian ladder: it is a constant-time width-4 fixed
+; window with Joye-Tunstall signed regular recoding (64 odd digits, 8-entry
+; Jacobian table of odd multiples of Q, 4 doublings + 1 addition per digit,
+; complete addition for the last digit).  Its intermediates differ from
+; ref/p256/p256.c; only the final point agrees.  Preconditions: 1 <= k < n
+; and input point Z = Montgomery 1 (an imported affine point).  Python
+; model of the buffer-level sequence (ws_model.py) lives in an agent
+; session scratchpad and is NOT committed to the repository.
 ;
 ; The structural differences are in the Montgomery multiply: the reference
 ; is operand-scanning (CIOS, a 16-bit carry rippled through t[] on every
@@ -37,9 +35,9 @@
 ; shape of p (p256_mul_p / p256_sq_p, unrolled, dedicated squaring), and
 ; fe_add/fe_sub/final subtraction are p-specific.  The output is identical
 ; (same q digits, same final conditional subtraction); mod n still uses
-; the generic p256_mont_core.  The fallback Jacobian ladder
-; (p256_scalar_mul_ml) uses p256_point_add_ladder, which omits the
-; complete-addition doubling case (unreachable in a ladder).
+; the generic p256_mont_core.  p256_point_add_ladder (the addition without
+; the always-computed doubling case) is used only by the variable-time
+; verify engine, which handles that case explicitly.
 ;
 ; ECDSA verification (tls_p256_verify) uses a separate VARIABLE-TIME engine
 ; because all of its inputs are public: s^-1 by binary extended Euclid
@@ -58,12 +56,17 @@
 ;   - every internal routine preserves IX (the C frame pointer);
 ;   - AF, BC, DE, HL, IY are clobbered unless stated otherwise.
 ;
-; Constant-time notes: the ladder, field arithmetic, point formulas, cswap
-; and select never branch on, or index memory by, secret data.  Branches
-; that do exist depend only on public values (loop counters, the fixed
-; addition chain for a^(p-2), the public exponent n-2, the public x(P) = 0
-; fallback test, input-validation results, and the RFC 6979 retry
-; condition, exactly as in the reference).  The verify engine is the
+; Fixed-base k*G (keygen and signing) uses p256_comb_mul instead: a
+; constant-time w = 4, d = 64 comb over a 15-entry affine ROM table
+; (__p256_COMB), 63 doublings + 64 mixed additions.  ECDH (variable base)
+; uses p256_ws_mul.
+;
+; Constant-time notes: the comb, the windowed ECDH multiply, field
+; arithmetic, point formulas, table lookups and selects never branch on, or
+; index memory by, secret data.  Branches that do exist depend only on
+; public values (loop counters / digit indices, the fixed addition chain
+; for a^(p-2), the public exponent n-2, input-validation results, and the
+; RFC 6979 retry condition, exactly as in the reference).  The verify engine is the
 ; documented exception (public inputs only, see above).
 ; ---------------------------------------------------------------------------
 
@@ -96,8 +99,8 @@ mm_acopy:               .space 32       ; copy of a
 mm_bcopy:               .space 32       ; copy of b
 mm_acc2:                .space 4        ; shift cell: bytes 0-2 written, byte 3 always 0
 __p256_f:               .space 448      ; f[0..13] field temporaries
-__p256_r0:              .space 96       ; ladder R0
-__p256_r1:              .space 96       ; ladder R1
+__p256_r0:              .space 96       ; ECDH: table 3Q; verify: wNAF codes
+__p256_r1:              .space 96       ; ECDH: table 5Q; verify: wNAF work
 __p256_saved0:          .space 96       ; point-op input P (fixed)
 __p256_saved1:          .space 96       ; point-op input Q (fixed)
 __p256_rt:              .space 96       ; point-op result temp
@@ -135,7 +138,7 @@ sm_bit:                 .space 1
 sm_prev:                .space 1
 sm_cnt:                 .space 1
 sm_pt:                  .space 3        ; co-Z ladder: input point
-sm_kp:                  .space 32       ; co-Z ladder: k' = k + n or k + 2n (BE, bit 256 implicit)
+sm_kp:                  .space 32       ; ECDH: k' = k or n - k (LE), recoded
 sm_e0:                  .space 1        ; masks: k == 0, 1, n-1, n-2
 sm_e1:                  .space 1
 sm_em1:                 .space 1
@@ -192,11 +195,6 @@ __p256_scratch_end:
 .equ PQX,  __p256_pq + 0
 .equ PQY,  __p256_pq + 32
 .equ PQZ,  __p256_pq + 64
-; co-Z ladder operands: A = (XA, YA) in r0, B = (XB, YB) in r1 (no Z)
-.equ CZXA, __p256_r0
-.equ CZYA, __p256_r0 + 32
-.equ CZXB, __p256_r1
-.equ CZYB, __p256_r1 + 32
 .equ PZERO, __p256_INF                  ; 32 zero bytes
 ; RFC 6979 working state.
 ; DK_CTX/DK_PAD/DK_INNER/DK_RFC/DK_H1 are only live inside p256_det_k and
@@ -251,6 +249,14 @@ __p256_scratch_end:
     ld      de, \b
     call    p256_ord_add
 .endm
+
+; --- parameters of the shared curve layer (share/ecc_curve.inc) ---
+.equ FIELD_BYTES, 32                    ; field / scalar width in bytes
+.equ SCALAR_BITS, 256
+.equ COMB_D,      64                    ; fixed-base comb strip length (bits)
+.equ COMB_W,      4                     ; fixed-base comb width (strips)
+.equ WS_DIGITS,   64                    ; ECDH signed fixed-window digits
+.include "ecc_curve.inc"
 
 ; ===========================================================================
 ; Read-only constants (all 32-byte little-endian unless *_BE).
@@ -314,22 +320,6 @@ __p256_INF:
     .db     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
     .db     0xFE, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
     .space  32, 0
-; 2n mod 2^256, n-1, n-2 (co-Z ladder scalar recoding / exceptional k).
-__p256_N2:
-    .db     0xA2, 0x4A, 0xC6, 0xF8, 0x85, 0x95, 0x73, 0xE7
-    .db     0x09, 0x3D, 0x2F, 0x4E, 0x5B, 0xF5, 0xCD, 0x79
-    .db     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
-    .db     0x01, 0x00, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF
-__p256_NM1:
-    .db     0x50, 0x25, 0x63, 0xFC, 0xC2, 0xCA, 0xB9, 0xF3
-    .db     0x84, 0x9E, 0x17, 0xA7, 0xAD, 0xFA, 0xE6, 0xBC
-    .db     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
-    .db     0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF
-__p256_NM2:
-    .db     0x4F, 0x25, 0x63, 0xFC, 0xC2, 0xCA, 0xB9, 0xF3
-    .db     0x84, 0x9E, 0x17, 0xA7, 0xAD, 0xFA, 0xE6, 0xBC
-    .db     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
-    .db     0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF
 ; Plain integer 1 (Montgomery-domain exit multiplier).
 __p256_ONE:
     .db     0x01
@@ -492,6 +482,148 @@ __p256_GTAB:
     .db     0xFC, 0x03, 0x98, 0x0C, 0xFD, 0xED, 0xEC, 0xFA
     .db     0x45, 0x47, 0x7B, 0x4D, 0x91, 0xE8, 0x8A, 0xF3
 
+; P256 fixed-base comb table, w = 4, d = 64: entry j (1..15) at
+; __p256_COMB + 64*(j-1) = sum over set bits s of j of 2^(64s) G,
+; affine, Montgomery form (x R, y R mod p), 32-byte LE x || y.
+; Generated by gen_comb_table.py; each entry checked against an
+; independent Jacobian double-and-add of the integer scalar.
+__p256_COMB:
+    ; j =  1: 1 G
+    .db     0x3C, 0x14, 0xA9, 0x18, 0xD4, 0x30, 0xE7, 0x79
+    .db     0x01, 0xB6, 0xED, 0x5F, 0xFC, 0x95, 0xBA, 0x75
+    .db     0x10, 0x25, 0x62, 0x77, 0x2B, 0x73, 0xFB, 0x79
+    .db     0xC6, 0x55, 0x37, 0xA5, 0x76, 0x5F, 0x90, 0x18
+    .db     0x0A, 0x56, 0x95, 0xCE, 0x57, 0x53, 0xF2, 0xDD
+    .db     0x5C, 0xE4, 0x19, 0xBA, 0xE4, 0xB8, 0x4A, 0x8B
+    .db     0x25, 0xF3, 0x21, 0xDD, 0x88, 0x86, 0xE8, 0xD2
+    .db     0x85, 0x5D, 0x88, 0x25, 0x18, 0xFF, 0x71, 0x85
+    ; j =  2: 2^64 G
+    .db     0xBB, 0xD2, 0xA0, 0x16, 0xC5, 0x2F, 0x92, 0x4F
+    .db     0x99, 0x34, 0x62, 0x1A, 0x6C, 0xC1, 0x5C, 0x0D
+    .db     0x8B, 0x2C, 0xC6, 0x57, 0x3A, 0xCF, 0x41, 0x92
+    .db     0x7F, 0x66, 0x1B, 0xFD, 0x61, 0x69, 0x5E, 0x2F
+    .db     0x97, 0x17, 0xA0, 0xF5, 0x0B, 0xC7, 0x15, 0x5C
+    .db     0x92, 0x61, 0x95, 0x60, 0x4D, 0xB4, 0x20, 0x3D
+    .db     0x52, 0xDB, 0x1F, 0x07, 0x37, 0x1B, 0x91, 0x04
+    .db     0x7B, 0x0F, 0x6F, 0x8D, 0x16, 0xF9, 0x48, 0xF6
+    ; j =  3: 1 + 2^64 G
+    .db     0xBC, 0xBB, 0x37, 0xE1, 0x47, 0x68, 0x56, 0x9E
+    .db     0xEC, 0x0B, 0x6A, 0x8A, 0x9E, 0x46, 0x34, 0xE4
+    .db     0x63, 0x34, 0xD7, 0x79, 0x61, 0x27, 0xC4, 0xB1
+    .db     0x15, 0x00, 0x3D, 0x13, 0x85, 0x02, 0xBE, 0x5A
+    .db     0xAB, 0x7D, 0x4C, 0xC0, 0x7C, 0x83, 0xAA, 0x92
+    .db     0x07, 0x0C, 0x26, 0x43, 0x4C, 0x9F, 0x3D, 0x57
+    .db     0x37, 0xCC, 0xE6, 0x78, 0x62, 0x15, 0x93, 0x0C
+    .db     0x83, 0x73, 0x6F, 0x6B, 0x5B, 0x72, 0xBB, 0x94
+    ; j =  4: 2^128 G
+    .db     0x25, 0x09, 0xE2, 0xBF, 0x44, 0xC2, 0xA8, 0x62
+    .db     0x67, 0xE8, 0xDC, 0x8F, 0xC3, 0x9A, 0xC1, 0x91
+    .db     0x63, 0x70, 0x38, 0xDD, 0xD5, 0xA5, 0x96, 0x5A
+    .db     0xF6, 0x24, 0xD3, 0x21, 0xD4, 0x87, 0xD5, 0x61
+    .db     0xEA, 0x73, 0x71, 0xA3, 0xA2, 0x73, 0x76, 0xE8
+    .db     0x65, 0x8B, 0x77, 0x53, 0x08, 0x80, 0x84, 0x23
+    .db     0x3E, 0xB4, 0xBA, 0x05, 0x1E, 0x44, 0xF8, 0x10
+    .db     0xBE, 0xEF, 0x21, 0x46, 0x12, 0xFE, 0x11, 0xFA
+    ; j =  5: 1 + 2^128 G
+    .db     0xFD, 0x9F, 0xB1, 0x2C, 0x2B, 0x1F, 0x89, 0x1C
+    .db     0x23, 0x3C, 0x92, 0xB1, 0x5B, 0x8D, 0xBA, 0x01
+    .db     0x8E, 0xCA, 0xC5, 0x8A, 0x67, 0x3D, 0xD0, 0xB6
+    .db     0xDC, 0xBE, 0x13, 0x1F, 0x4C, 0xB0, 0x6E, 0x58
+    .db     0x09, 0xED, 0xE8, 0x27, 0xE5, 0xC6, 0x35, 0x0C
+    .db     0xE2, 0xED, 0x19, 0x18, 0x3C, 0xA3, 0x81, 0x1E
+    .db     0xFA, 0x52, 0xC6, 0x56, 0xC0, 0xD6, 0x8F, 0x27
+    .db     0x11, 0x4F, 0x86, 0x70, 0x08, 0xAC, 0xD5, 0x19
+    ; j =  6: 2^64 + 2^128 G
+    .db     0xD5, 0x33, 0xB5, 0xD2, 0x34, 0x77, 0x57, 0x62
+    .db     0xC0, 0xDD, 0xBD, 0xA1, 0xF6, 0x8A, 0x3B, 0x67
+    .db     0x93, 0xC2, 0x9E, 0xA7, 0x9A, 0x7C, 0x7E, 0x57
+    .db     0xB1, 0x66, 0xB2, 0xC3, 0x51, 0xE6, 0x6D, 0xBB
+    .db     0xB3, 0x59, 0x52, 0xB6, 0x3A, 0x30, 0xE9, 0xE7
+    .db     0x80, 0x74, 0x3A, 0xD0, 0xD3, 0xAF, 0xA0, 0xD6
+    .db     0x27, 0xFC, 0x3C, 0x9B, 0xD1, 0x83, 0xAC, 0xC5
+    .db     0x9B, 0xB9, 0x18, 0x5D, 0x9A, 0x61, 0xB4, 0x60
+    ; j =  7: 1 + 2^64 + 2^128 G
+    .db     0x1C, 0xAA, 0xE5, 0x1A, 0xE1, 0x38, 0x6A, 0xBD
+    .db     0x58, 0x36, 0xE7, 0x49, 0x2B, 0x65, 0xB7, 0xB8
+    .db     0xED, 0x87, 0x5F, 0xEE, 0x14, 0x00, 0x13, 0x0B
+    .db     0xCD, 0xFF, 0xEB, 0xAE, 0xB2, 0x27, 0x0F, 0x9D
+    .db     0x55, 0x0A, 0x73, 0x7A, 0x31, 0x46, 0x92, 0xCA
+    .db     0x3A, 0xC8, 0xBB, 0xDD, 0x2F, 0x5B, 0x95, 0x9C
+    .db     0x71, 0x9A, 0x01, 0xAC, 0xE0, 0xDF, 0xC1, 0x07
+    .db     0x8D, 0xC4, 0x6E, 0x35, 0x6D, 0x56, 0x4A, 0x24
+    ; j =  8: 2^192 G
+    .db     0x6A, 0xB1, 0xF8, 0xF4, 0x0E, 0x41, 0xF8, 0x56
+    .db     0x6A, 0x26, 0x7B, 0xC4, 0xFE, 0x1A, 0x24, 0x97
+    .db     0xC1, 0x87, 0x9C, 0x6D, 0x8E, 0x6B, 0x40, 0x0A
+    .db     0x1B, 0xAB, 0x42, 0xCD, 0x02, 0x3E, 0x3F, 0x80
+    .db     0x69, 0xEC, 0xDB, 0x04, 0xA8, 0x09, 0x03, 0x7F
+    .db     0x5F, 0xD0, 0xBA, 0x3B, 0xF7, 0x85, 0x3B, 0xA8
+    .db     0x7F, 0x19, 0x8E, 0xAD, 0x73, 0x72, 0x09, 0xC6
+    .db     0xC1, 0xAD, 0x67, 0x50, 0x0E, 0x44, 0x97, 0xC0
+    ; j =  9: 1 + 2^192 G
+    .db     0x34, 0xAB, 0x79, 0xC3, 0xF2, 0x56, 0x6A, 0x84
+    .db     0xD1, 0xF8, 0x1D, 0x84, 0x8B, 0x06, 0xEE, 0xA8
+    .db     0xEF, 0x68, 0x6C, 0x17, 0x59, 0x44, 0x31, 0x20
+    .db     0x30, 0x1F, 0x5F, 0x91, 0xD5, 0x32, 0xAF, 0xF1
+    .db     0x50, 0xBD, 0x75, 0x5D, 0x31, 0x75, 0xC3, 0x99
+    .db     0xBC, 0x67, 0x2F, 0xF7, 0xBA, 0xFF, 0x7C, 0x83
+    .db     0x3F, 0x72, 0xD7, 0x48, 0x18, 0xA4, 0x13, 0x06
+    .db     0x8B, 0x1C, 0xD4, 0xE2, 0x30, 0xF1, 0xD0, 0x23
+    ; j = 10: 2^64 + 2^192 G
+    .db     0x2B, 0x5A, 0xBE, 0xD5, 0x25, 0xE2, 0x93, 0xED
+    .db     0xC6, 0xF3, 0x34, 0x59, 0x83, 0x99, 0xE7, 0x6F
+    .db     0xFC, 0x6F, 0x62, 0x22, 0x26, 0x09, 0x14, 0x43
+    .db     0x6A, 0x21, 0x90, 0x79, 0xD9, 0xB4, 0xBB, 0x50
+    .db     0x3E, 0xC6, 0x7E, 0xE5, 0xC6, 0x91, 0x81, 0x37
+    .db     0xB2, 0xCD, 0x1D, 0x18, 0x40, 0x2C, 0x42, 0x65
+    .db     0xF6, 0xE0, 0x36, 0x02, 0x9B, 0x09, 0xA8, 0x41
+    .db     0xC3, 0x49, 0xFE, 0x01, 0x18, 0x01, 0x10, 0x2B
+    ; j = 11: 1 + 2^64 + 2^192 G
+    .db     0x93, 0x15, 0x39, 0x9B, 0xC5, 0xB5, 0x68, 0xFC
+    .db     0xFC, 0x70, 0x82, 0x59, 0xA2, 0xF5, 0x85, 0xC3
+    .db     0xBB, 0xDC, 0x9A, 0xD1, 0xAA, 0xF3, 0x44, 0x71
+    .db     0x0C, 0xAE, 0xFB, 0x83, 0x99, 0x89, 0x55, 0xDD
+    .db     0xF4, 0x2F, 0xB8, 0x74, 0x8E, 0x8B, 0xB8, 0x93
+    .db     0xC9, 0x34, 0xE7, 0x71, 0x40, 0x3C, 0xE0, 0xD2
+    .db     0x2A, 0x32, 0xC0, 0x43, 0xAF, 0x9E, 0x7A, 0x9A
+    .db     0x41, 0x60, 0x9D, 0x14, 0x51, 0xC5, 0xE4, 0xE6
+    ; j = 12: 2^128 + 2^192 G
+    .db     0xFE, 0x21, 0xEC, 0x80, 0xFE, 0x4B, 0xE1, 0x5F
+    .db     0x82, 0xBE, 0x55, 0xC2, 0x6A, 0x11, 0xCE, 0xF6
+    .db     0x67, 0x5D, 0x4A, 0x2F, 0x07, 0x5A, 0xBC, 0x98
+    .db     0xAF, 0x63, 0x7E, 0xDB, 0x48, 0x71, 0xD2, 0xFA
+    .db     0xB3, 0x05, 0xAB, 0x29, 0xAC, 0xB6, 0xC0, 0x90
+    .db     0xE6, 0x1A, 0x25, 0x4E, 0x3C, 0xA8, 0xA9, 0x37
+    .db     0x7D, 0xDE, 0xAA, 0xC2, 0x75, 0xC8, 0x7D, 0x0A
+    .db     0x84, 0x1A, 0x0E, 0x9F, 0xE3, 0x7D, 0x38, 0x77
+    ; j = 13: 1 + 2^128 + 2^192 G
+    .db     0xD7, 0x0D, 0x6C, 0xA5, 0x49, 0xCC, 0x9E, 0x1E
+    .db     0x74, 0x6C, 0x08, 0x46, 0xD8, 0xFC, 0xCF, 0xA5
+    .db     0xCE, 0xAE, 0x05, 0xF5, 0x08, 0x14, 0x7A, 0x8F
+    .db     0x7E, 0xC4, 0xF0, 0xBE, 0xC0, 0x85, 0x7B, 0xB3
+    .db     0x8F, 0x6A, 0x0E, 0xCC, 0xE4, 0xB6, 0x96, 0x35
+    .db     0x23, 0x8F, 0x38, 0x6B, 0xBF, 0x4B, 0x6D, 0xFD
+    .db     0x4E, 0xEF, 0x9C, 0xC3, 0xFA, 0x53, 0xA4, 0xAB
+    .db     0xD5, 0x28, 0xF6, 0xF9, 0xC8, 0x5A, 0x13, 0x9C
+    ; j = 14: 2^64 + 2^128 + 2^192 G
+    .db     0xBE, 0xF8, 0xC8, 0x95, 0x94, 0x72, 0x1C, 0x0A
+    .db     0xBF, 0x62, 0xF3, 0x3B, 0x80, 0xC4, 0x61, 0x29
+    .db     0xAC, 0xD4, 0x63, 0xDF, 0x03, 0x84, 0x41, 0x9E
+    .db     0x00, 0xE9, 0xEC, 0x91, 0xCB, 0xF9, 0x09, 0xC1
+    .db     0x05, 0x57, 0x94, 0x58, 0xD0, 0x95, 0xD0, 0xC2
+    .db     0xC0, 0x85, 0xEB, 0xDD, 0x96, 0x3D, 0x08, 0xB9
+    .db     0x9B, 0x44, 0x40, 0x7A, 0x8D, 0x2B, 0x69, 0x84
+    .db     0xE1, 0x1E, 0xEE, 0x2E, 0x4F, 0x34, 0xC3, 0x9B
+    ; j = 15: 1 + 2^64 + 2^128 + 2^192 G
+    .db     0x74, 0x30, 0x91, 0x42, 0x56, 0xE3, 0x5A, 0x0D
+    .db     0xB1, 0x42, 0xA5, 0x48, 0x27, 0x1B, 0x49, 0x55
+    .db     0x2A, 0x73, 0x10, 0xB3, 0x65, 0xA6, 0x9C, 0x46
+    .db     0xC1, 0x4C, 0x1A, 0x5F, 0x52, 0x1D, 0x59, 0x29
+    .db     0x3F, 0x98, 0x4F, 0xB8, 0x6B, 0x5B, 0x6F, 0xE7
+    .db     0xE1, 0x84, 0x5F, 0x9F, 0x41, 0xEF, 0x7E, 0xBE
+    .db     0x89, 0xA1, 0xBA, 0x80, 0x96, 0xD4, 0x00, 0x12
+    .db     0x2C, 0x33, 0xEF, 0x18, 0x1F, 0x55, 0x76, 0x63
+
 ; ===========================================================================
 ; Field context and thin wrappers
 ; ===========================================================================
@@ -618,108 +750,17 @@ p256_addback:
     djnz    .Lab_loop
     ret
 
-; p256_raw_ge: A = (a >= m) ? 1 : 0.  In: HL=a, DE=m.  Clobbers AF, B, DE, HL.
-p256_raw_ge:
-    ld      b, 32
-    or      a, a
-.Lge_loop:
-    ld      a, (hl)
-    ex      de, hl
-    sbc     a, (hl)
-    ex      de, hl
-    inc     hl
-    inc     de
-    djnz    .Lge_loop
-    sbc     a, a                ; 0xFF iff a < m
-    inc     a
-    ret
-
-; p256_ct_is_zero: A = 0xFF if the 32 bytes at HL are all zero, else 0x00.
-; In: HL.  Clobbers AF, B, HL.  Branch-free on the data.
-p256_ct_is_zero:
-    ld      b, 32
-    xor     a, a
-.Lz_loop:
-    or      a, (hl)
-    inc     hl
-    djnz    .Lz_loop
-    neg                         ; CF = (A != 0)
-    sbc     a, a                ; 0xFF iff nonzero
-    cpl                         ; 0xFF iff zero
-    ret
-
-; p256_eq32: A = 1 if the 32 bytes at HL equal those at DE, else 0.
-; In: HL, DE.  Clobbers AF, BC, DE, HL.  Branch-free on the data.
-p256_eq32:
-    ld      bc, 32 << 8
-.Leq_loop:
-    ld      a, (de)
-    xor     a, (hl)
-    or      a, c
-    ld      c, a
-    inc     hl
-    inc     de
-    djnz    .Leq_loop
-    ld      a, c
-    sub     a, 1                ; CF iff C == 0
-    sbc     a, a
-    and     a, 0x01
-    ret
-
-; p256_rev32: dst[i] = src[31-i].  In: HL=src, DE=dst (must not overlap).
-; Clobbers AF, BC, DE, HL.
-p256_rev32:
-    ld      bc, 31
-    add     hl, bc
-    ld      b, 32
-.Lrv_loop:
-    ld      a, (hl)
-    ld      (de), a
-    dec     hl
-    inc     de
-    djnz    .Lrv_loop
-    ret
+; p256_raw_ge (A = a >= m), p256_ct_is_zero (A = 0xFF iff zero),
+; p256_eq32 (A = 1 iff equal), p256_rev32 (byte reverse): ecc_curve.inc,
+; ECC_UTILS.  All 32-byte, branch-free on the data.
+    ECC_UTILS p256, 32
 
 ; p256_point_select: out = mask ? b : a  (96 bytes).
 ; In: HL=a, DE=b, IY=out, C=mask (0x00/0xFF).  out may alias a or b.
 ; Clobbers AF, B, DE, HL, IY.
 p256_point_select:
     ld      b, 96
-p256_select_b:                  ; same, B = byte count (1..255)
-.Lps_loop:
-    ld      a, (de)
-    xor     a, (hl)
-    and     a, c
-    xor     a, (hl)
-    ld      (iy + 0), a
-    inc     hl
-    inc     de
-    inc     iy
-    djnz    .Lps_loop
-    ret
-
-; p256_point_cswap: if mask, swap the 96-byte points at HL and DE.
-; In: HL=a, DE=b, C=mask (0x00/0xFF).  Clobbers AF, B, DE, HL, IYL.
-p256_point_cswap:
-    ld      iyl, 96
-    jr      .Lcs_loop
-p256_point_cswap64:             ; same, first 64 bytes (X, Y) only
-    ld      iyl, 64
-.Lcs_loop:
-    ld      a, (de)
-    xor     a, (hl)
-    and     a, c                ; t = mask & (a ^ b)
-    ld      b, a
-    xor     a, (hl)
-    ld      (hl), a             ; a ^= t
-    ld      a, (de)
-    xor     a, b
-    ld      (de), a             ; b ^= t
-    inc     hl
-    inc     de
-    dec     iyl
-    jr      nz, .Lcs_loop
-    ret
+    ECC_SELECT_B p256               ; p256_select_b: same, B = byte count
 
 ; p256_import_be: out = big-endian in[32] as LE; reject if >= m, or (C!=0
 ; and) zero.  In: HL=out, DE=in, IY=m, C=reject_zero.  Out: A = 1 ok / 0.
@@ -904,7 +945,8 @@ p256_mont_core:
     ret
 
 ; The 32-term MAC block lives in the relocated fast-RAM member
-; (.p256.reloc, end of this file); p256_mul_p copies it in before use.
+; (.p256.mul.reloc, end of this file), loaded once per public entry by
+; p256_di (and again after RFC 6979 in signing) -- see p256_reloc_load.
 
 ; Flash copy for p256_mont_core (the generic reference multiply used by the
 ; test shim and the non-co-Z fallback): it keeps its own in-place block so it
@@ -930,7 +972,9 @@ p256_mont_core:
 ;   a, b < p.  Out fully reduced, bit-identical to p256_mont_core with
 ;   m = p (same q digits, same final reduction).  out may alias a and/or b
 ;   (inputs are copied first).  Clobbers AF, BC, DE, HL, IY.  Preserves
-;   IX.  Stack: 9 bytes.  Needs no field context.
+;   IX.  Stack: 6 bytes (IX, b) + 3 for each MAC-block call.  Needs no field
+;   context.  REQUIRES the .p256.mul.reloc image to be resident in fast RAM
+;   (p256_reloc_load; done by p256_di and after RFC 6979 in signing).
 ;
 ; Same product-scanning column loop as p256_mont_core, but the q*m pass is
 ; replaced by four byte adds per column, exploiting the shape of p:
@@ -1066,15 +1110,8 @@ p256_mont_core:
 
 p256_mul_p:
     push    ix
-    push    hl                  ; a
-    push    de                  ; b
-    push    bc                  ; out
-    call    p256_reloc_load_mul ; hot MAC block -> fast RAM (clobbers AF,BC,DE,HL)
-    pop     bc
     ld      (mm_out), bc
-    pop     de                  ; b
-    pop     hl                  ; a
-    push    de
+    push    de                  ; b
     ld      de, mm_acopy
     ld      bc, 32
     ldir                        ; acopy = a
@@ -1106,12 +1143,7 @@ p256_mul_p:
 
 p256_sq_p:
     push    ix
-    push    hl                  ; a
-    push    bc                  ; out
-    call    p256_reloc_load_sq  ; hot MAC block -> fast RAM (clobbers AF,BC,DE,HL)
-    pop     bc
     ld      (mm_out), bc
-    pop     hl                  ; a
     ld      de, mm_acopy
     ld      bc, 32
     ldir                        ; acopy = a
@@ -1124,7 +1156,7 @@ p256_sq_p:
 .endr
     jp      .Lpm_final
 
-; The 16-term doubling MAC block also lives in .p256.reloc (fast RAM).
+; The 16-term doubling MAC block also lives in .p256.mul.reloc (fast RAM).
 
 
 ; ===========================================================================
@@ -2081,494 +2113,56 @@ p256_ord_inv:
 ; Point arithmetic (Montgomery-Jacobian, 96-byte points x||y||z)
 ; ===========================================================================
 
-; p256_point_double: out = 2 * saved0 (a = -3).  In: HL=out.
-; Uses f[0..6], rt.  out must not be saved0, rt or f[].
-; Clobbers AF, BC, DE, HL, IY.
-p256_point_double:
-    ld      (pd_out), hl
-    FSQ     PF0, PS0Z                   ; delta = Z^2
-    FSQ     PF1, PS0Y                   ; gamma = Y^2
-    FMUL    PF2, PS0X, PF1              ; beta = X*gamma
-    FSUB    PF3, PS0X, PF0
-    FADD    PF4, PS0X, PF0
-    FMUL    PF3, PF3, PF4
-    FADD    PF4, PF3, PF3
-    FADD    PF3, PF4, PF3               ; alpha = 3(X-delta)(X+delta)
-    FSQ     PRTX, PF3
-    FADD    PF4, PF2, PF2
-    FADD    PF4, PF4, PF4
-    FADD    PF5, PF4, PF4               ; 8 beta
-    FSUB    PRTX, PRTX, PF5             ; X3 = alpha^2 - 8 beta
-    FADD    PF6, PS0Y, PS0Z
-    FSQ     PF6, PF6
-    FSUB    PF6, PF6, PF1
-    FSUB    PRTZ, PF6, PF0              ; Z3 = (Y+Z)^2 - gamma - delta
-    FSUB    PF4, PF4, PRTX
-    FMUL    PF4, PF3, PF4
-    FSQ     PF1, PF1
-    FADD    PF1, PF1, PF1
-    FADD    PF1, PF1, PF1
-    FADD    PF1, PF1, PF1               ; 8 gamma^2
-    FSUB    PRTY, PF4, PF1              ; Y3 = alpha(4beta - X3) - 8gamma^2
-    ld      hl, PS0Z
-    call    p256_ct_is_zero
-    ld      c, a
-    ld      hl, PRT
-    ld      de, __p256_INF
-    ld      iy, (pd_out)
-    jp      p256_point_select           ; out = (Z==0) ? inf : rt
+; p256_point_double (out = 2 saved0, a = -3), p256_point_add (complete
+; wrapper, out = saved0 + saved1) and p256_point_add_ladder (same without the
+; always-computed doubling; only where that case is unreachable or handled
+; by the caller): ecc_curve.inc, ECC_POINT_DOUBLE_ADD.  In: HL = out.
+; Uses f[0..12], rt, add_result, double_result.
+    ECC_POINT_DOUBLE_ADD p256
 
-; p256_point_add: out = saved0 + saved1 (complete wrapper, as reference).
-; In: HL=out.  Uses f[0..12], rt, add_result, double_result.
-; out must not be saved0/saved1/rt/add_result/double_result/f[].
-; Clobbers AF, BC, DE, HL, IY.
+; ===========================================================================
+; p256_ws_mul: pq = k * Q, constant-time width-4 fixed window with the
+; Joye-Tunstall signed regular recoding (64 odd digits), plus its table
+; lookup p256_ws_lookup and the exception-free addition p256_ws_add.
+; Shared code: ecc_curve.inc, ECC_WS_MUL (table slot 5 = __p256_pa).
 ;
-; p256_point_add_ladder: same, but omits the always-computed doubling and
-; its select.  ONLY valid inside the Montgomery ladder: there saved0 = mP
-; and saved1 = (m+1)P, so the doubling case (both finite, h = r = 0, i.e.
-; saved0 == saved1) would need P = O, which cannot happen (P is G or a
-; validated affine point, and the group order n is prime).  The infinity
-; and P = -Q selects are kept, so the result is identical for every
-; reachable input.  The choice is a public, per-call constant: every
-; ladder step executes the same instruction sequence.
-p256_point_add_ladder:
-    ld      a, 1
-    jr      .Lpa_entry
-p256_point_add:
-    xor     a, a
-.Lpa_entry:
-    ld      (pa_lad), a
-    ld      (pa_out), hl
-    FSQ     PF0, PS0Z
-    FSQ     PF1, PS1Z
-    FMUL    PF2, PS0X, PF1              ; U1
-    FMUL    PF3, PS1X, PF0              ; U2
-    FMUL    PF4, PS1Z, PF1
-    FMUL    PF4, PS0Y, PF4              ; S1
-    FMUL    PF5, PS0Z, PF0
-    FMUL    PF5, PS1Y, PF5              ; S2
-    FSUB    PF6, PF3, PF2               ; H
-    FADD    PF7, PF6, PF6
-    FSQ     PF7, PF7                    ; I
-    FMUL    PF8, PF6, PF7               ; J
-    FSUB    PF9, PF5, PF4
-    FADD    PF9, PF9, PF9               ; r
-    FMUL    PF10, PF2, PF7              ; V
-    FSQ     PRTX, PF9
-    FSUB    PRTX, PRTX, PF8
-    FADD    PF11, PF10, PF10
-    FSUB    PRTX, PRTX, PF11
-    FSUB    PF11, PF10, PRTX
-    FMUL    PF11, PF9, PF11
-    FMUL    PF12, PF4, PF8
-    FADD    PF12, PF12, PF12
-    FSUB    PRTY, PF11, PF12
-    FADD    PF11, PS0Z, PS1Z
-    FSQ     PF11, PF11
-    FSUB    PF11, PF11, PF0
-    FSUB    PF11, PF11, PF1
-    FMUL    PRTZ, PF11, PF6
-    ld      hl, PS0Z
-    call    p256_ct_is_zero
-    ld      (pa_pinf), a
-    ld      hl, PS1Z
-    call    p256_ct_is_zero
-    ld      (pa_qinf), a
-    ld      hl, PF6
-    call    p256_ct_is_zero
-    ld      (pa_h), a
-    ld      hl, PF9
-    call    p256_ct_is_zero
-    ld      (pa_r), a
-    ld      a, (pa_lad)
-    or      a, a
-    jr      nz, .Lpa_nodbl      ; public: ladder variant
-    ld      hl, PRT
-    ld      de, __p256_add_result
-    ld      bc, 96
-    ldir
-    ld      hl, __p256_double_result
-    call    p256_point_double           ; always computed (constant work)
-    ld      a, (pa_h)
-    ld      b, a
-    ld      a, (pa_r)
-    and     a, b
-    ld      c, a                        ; h_zero & r_zero
-    ld      hl, __p256_add_result
-    ld      de, __p256_double_result
-    ld      iy, PRT
-    call    p256_point_select
-.Lpa_nodbl:
-    ld      a, (pa_r)
-    cpl
-    ld      b, a
-    ld      a, (pa_h)
-    and     a, b
-    ld      c, a                        ; h_zero & ~r_zero
-    ld      hl, PRT
-    ld      de, __p256_INF
-    ld      iy, PRT
-    call    p256_point_select
-    ld      a, (pa_pinf)
-    ld      c, a
-    ld      hl, PRT
-    ld      de, PS1
-    ld      iy, PRT
-    call    p256_point_select           ; P = inf -> Q
-    ld      a, (pa_qinf)
-    ld      c, a
-    ld      hl, PRT
-    ld      de, PS0
-    ld      iy, (pa_out)
-    jp      p256_point_select           ; Q = inf -> P
+; In: DE = k (32 B big-endian, 1 <= k < n), pq = Q (validated affine, Z = R).
+; Out: pq = k Q (Jacobian).  Clobbers AF, BC, DE, HL, IY and every scratch
+; buffer except the mm_* field state.  Preserves IX.
+;
+; P-256 specifics of the exactness argument: for i >= 1, 0 < 16 m + 15 <
+; 2^252 + 16 < n, so the plain addition is exact; for i = 0 the wrap
+; 16 m = n + d_0 (k' = n + 2 d_0, e.g. k' = n - 2) IS reachable and the last
+; step uses the complete p256_point_add.  Cost: 1 D + 7 A (table) + 252 D +
+; 63 A + 1 complete A, versus 256 co-Z ladder steps (9M+5S each): about
+; 23M + 25S per 4 bits instead of 36M + 20S.  Validated by a Python model of
+; this exact sequence (ws_model.py, agent scratchpad, not committed).
+; ===========================================================================
+    ECC_WS_MUL p256, 32, __p256_pa
 
-; p256_scalar_mul_ml: out = scalar * point, Montgomery ladder, 256 steps,
-; constant sequence of operations independent of the scalar.  Complete
-; formulas; used by p256_scalar_mul only for the (public) x(P) = 0 case.
-; In: HL=out, DE=scalar (32 B big-endian), BC=point (96 B).
-; scalar/point must not lie in the ladder scratch (r0,r1,saved*,rt,
-; add_result,double_result,f[]).  out may be saved0 or any free buffer.
-; Clobbers AF, BC, DE, HL, IY.
-p256_scalar_mul_ml:
-    ld      (sm_out), hl
-    ld      (sm_k), de
-    push    bc
-    pop     hl
-    ld      de, __p256_r1
-    ld      bc, 96
-    ldir                                ; r1 = point
-    ld      hl, __p256_INF
-    ld      de, __p256_r0
-    ld      bc, 96
-    ldir                                ; r0 = inf
-    xor     a, a
-    ld      (sm_prev), a
-    ld      (sm_cnt), a                 ; 256 iterations
-    ld      a, 0x80
-    ld      (sm_bit), a
-.Lsm_loop:
-    ld      hl, (sm_k)
-    ld      a, (sm_bit)
-    and     a, (hl)
-    add     a, 0xFF                     ; CF = bit set
-    sbc     a, a                        ; A = bit ? 0xFF : 0
-    ld      b, a
-    ld      a, (sm_prev)
-    xor     a, b
-    ld      c, a                        ; swap mask = value ^ previous
-    ld      a, b
-    ld      (sm_prev), a
-    ld      hl, __p256_r0
-    ld      de, __p256_r1
-    call    p256_point_cswap
-    ld      hl, __p256_r0
-    ld      de, __p256_saved0
-    ld      bc, 192
-    ldir                                ; saved0 = r0, saved1 = r1
-    ld      hl, __p256_r1
-    call    p256_point_add_ladder       ; r1 = r0 + r1
-    ld      hl, __p256_r0
-    call    p256_point_double           ; r0 = 2 r0
-    ld      a, (sm_bit)                 ; advance to next bit (public index)
-    rrca
-    ld      (sm_bit), a
-    jr      nc, .Lsm_same
-    ld      hl, (sm_k)
-    inc     hl
-    ld      (sm_k), hl
-.Lsm_same:
-    ld      a, (sm_cnt)
-    dec     a
-    ld      (sm_cnt), a
-    jr      nz, .Lsm_loop
-    ld      a, (sm_prev)
-    ld      c, a
-    ld      hl, __p256_r0
-    ld      de, __p256_r1
-    call    p256_point_cswap
-    ld      hl, __p256_r0
-    ld      de, (sm_out)
-    ld      bc, 96
-    ldir
-    ret
+; p256_add32: (IY) = (HL) + (DE), 32 bytes; A = carry ? 0xFF : 0.
+    ECC_ADDN p256, 32
 
 
 ; ===========================================================================
-; p256_scalar_mul: out = scalar * point.  Co-Z Montgomery ladder
-; (Goundar-Joye-Miyaji 2010 / Rivain 2011, "(X,Y)-only"): per bit one
-; XYcZ-ADDC (5M+3S) and one XYcZ-ADDU (4M+2S) = 9M+5S, versus 14M+10S for
-; the Jacobian ladder.  Z is never tracked; it is recovered once at the end
-; from the known difference R1 - R0 = P.
+; p256_comb_mul: out = k * G, constant-time fixed-base comb (Lim-Lee),
+; w = 4, d = 64, over __p256_COMB; p256_comb_madd is its constant-time mixed
+; addition step.  Shared code: ecc_curve.inc, ECC_COMB.
 ;
-; In: HL=out, DE=scalar (32 B big-endian, < n; 0 allowed), BC=point (96 B,
-;     Jacobian with Z = 1 in the Montgomery domain, i.e. an imported affine
-;     point or G).  out may be saved0 or any free buffer; scalar/point must
-;     not lie in the ladder scratch (r0, r1, saved1, rt, add_result,
-;     double_result, f[]).  Out: Jacobian k*point (Z = 0 for infinity).
-; Clobbers AF, BC, DE, HL, IY.
-;
-; Scalar recoding: k' = k + n if that is >= 2^256, else k + 2n, so k' has
-; exactly 257 bits (bit 256 = 1) and k'P = kP.  The ladder starts from
-; (R0, R1) = (P, 2P) (XYcZ-IDBL) and walks bits 255..0.
-; Exceptional scalars: an intermediate R0 or R1 is O only for k in
-; {0, 1, n-2, n-1} (proof: a prefix m of k' >= 2^256 with m = 0 or
-; m = -1 mod n forces k' in {2n-2 .. 2n+1}); for those the result is
-; replaced, in constant time, by O, P, -2P, -P respectively.
-; Z recovery: after the last ADDC, A = R_b - R_{1-b} = (b ? P : -P) in the
-; co-Z frame, so lambda = 1/Z = s*y_P*X_A / (x_P*Y_A) with s = b ? 1 : -1;
-; the last ADDU multiplies Z by (X_B - X_A).  The output is the Jacobian
-; point (X0*num^2, Y0*num^3, den) with num = s*y_P*X_A and
-; den = x_P*Y_A*(X_B - X_A): no inversion here (affine_export does one).
-; x_P = 0 (two valid points, since b is a QR mod p) would make den = 0, so
-; that PUBLIC condition falls back to p256_scalar_mul_ml.
-; Constant time: same instruction sequence for every scalar; the bit only
-; reaches cswap/select masks.  Validated by a Python model of this exact
-; buffer-level sequence (all exceptional k, random k, G and random P);
-; see the file header for its (uncommitted) location.
+; k (256 bits) is split into four 64-bit strips k = k0 + k1 2^64 + k2 2^128
+; + k3 2^192.  Cost: 63 doublings (3M+5S) + 64 mixed additions (7M+4S) + 64
+; table scans, versus 256 steps of a (9M+5S) co-Z ladder.
+; Completeness: with acc != O and idx != 0, acc != +-T[idx], so H != 0.
+; Proof: before the add at step i, acc = A G with A = sum_s (k_s >> i & ~1)
+; 2^(64s) and T = B G with B = sum_s k_s[i] 2^(64s).  Both are < n (for
+; i >= 1 the top strip term is < 2^255; for i = 0, A <= k < n).  A = B
+; forces every strip term equal, i.e. A = B = 0.  A + B = sum_s (k_s >> i)
+; 2^(64s) <= k < n, so A + B = n is impossible and A + B = 0 means A = B = 0.
+; Both checked in a buffer-level Python model of this sequence (edge and
+; random scalars); see gen_comb_table.py / comb_model.py in the agent
+; scratchpad (not committed).
 ; ===========================================================================
-p256_scalar_mul:
-    ld      (sm_out), hl
-    ld      (sm_k), de
-    ld      (sm_pt), bc
-    push    bc
-    pop     hl
-    call    p256_ct_is_zero             ; x(P) == 0 ?  (public)
-    inc     a
-    jr      nz, .Lcz_go
-    ld      hl, (sm_out)
-    ld      de, (sm_k)
-    ld      bc, (sm_pt)
-    jp      p256_scalar_mul_ml
-.Lcz_go:
-    ld      hl, (sm_k)
-    ld      de, PF10
-    call    p256_rev32                  ; f10 = k (LE)
-    ld      de, PZERO
-    call    .Lcz_eqk
-    ld      (sm_e0), a
-    ld      de, __p256_ONE
-    call    .Lcz_eqk
-    ld      (sm_e1), a
-    ld      de, __p256_NM1
-    call    .Lcz_eqk
-    ld      (sm_em1), a
-    ld      de, __p256_NM2
-    call    .Lcz_eqk
-    ld      (sm_em2), a
-    ld      hl, PF10
-    ld      de, __p256_N
-    ld      iy, PF11
-    call    .Lcz_add32                  ; f11 = k + n, A = carry mask
-    push    af
-    ld      hl, PF10
-    ld      de, __p256_N2
-    ld      iy, PF12
-    call    .Lcz_add32                  ; f12 = k + 2n (mod 2^256)
-    pop     af
-    ld      c, a
-    ld      hl, PF12
-    ld      de, PF11
-    ld      iy, PF12
-    ld      b, 32
-    call    p256_select_b               ; f12 = carry ? k + n : k + 2n
-    ld      hl, PF12
-    ld      de, sm_kp
-    call    p256_rev32                  ; k' (BE, low 256 bits)
-    ld      hl, (sm_pt)
-    ld      de, __p256_saved1
-    ld      bc, 96
-    ldir                                ; saved1 = P = (x, y, 1)
-; ---- XYcZ-IDBL: A = P = (4xy^2, 8y^4), B = 2P, common Z = 2y ----
-    FSQ     PF1, PS1Y
-    FMUL    CZXA, PS1X, PF1
-    FADD    CZXA, CZXA, CZXA
-    FADD    CZXA, CZXA, CZXA            ; S = 4xy^2
-    FSQ     PF1, PF1
-    FADD    PF1, PF1, PF1
-    FADD    PF1, PF1, PF1
-    FADD    CZYA, PF1, PF1              ; 8y^4
-    FSQ     PF2, PS1X
-    FSUB    PF2, PF2, __p256_P_R
-    FADD    PF3, PF2, PF2
-    FADD    PF2, PF3, PF2               ; M = 3(x^2 - 1)
-    FSQ     CZXB, PF2
-    FSUB    CZXB, CZXB, CZXA
-    FSUB    CZXB, CZXB, CZXA            ; X(2P) = M^2 - 2S
-    FSUB    PF3, CZXA, CZXB
-    FMUL    PF3, PF2, PF3
-    FSUB    CZYB, PF3, CZYA             ; Y(2P) = M(S - X) - 8y^4
-; ---- exceptional-k results: add_result = -P, double_result = -2P ----
-    ld      hl, PS1X
-    ld      de, __p256_add_result
-    ld      bc, 32
-    ldir
-    FSUB    __p256_add_result + 32, PZERO, PS1Y
-    ld      hl, __p256_P_R
-    ld      de, __p256_add_result + 64
-    ld      bc, 32
-    ldir
-    ld      hl, CZXB
-    ld      de, __p256_double_result
-    ld      bc, 32
-    ldir
-    FSUB    __p256_double_result + 32, PZERO, CZYB
-    FADD    __p256_double_result + 64, PS1Y, PS1Y
-; ---- ladder over bits 255..1 ----
-    ld      hl, sm_kp
-    ld      (sm_k), hl
-    xor     a, a
-    ld      (sm_prev), a
-    dec     a
-    ld      (sm_cnt), a                 ; 255 iterations
-    ld      a, 0x80
-    ld      (sm_bit), a
-.Lcz_loop:
-    call    .Lcz_bit                    ; A = R_b, B = R_{1-b}
-    call    p256_coz_addc               ; B = A + B, A = A - B
-    call    p256_coz_addu               ; A = B + A (= 2 R_b), B rescaled
-    ld      a, (sm_bit)                 ; advance to next bit (public index)
-    rrca
-    ld      (sm_bit), a
-    jr      nc, .Lcz_same
-    ld      hl, (sm_k)
-    inc     hl
-    ld      (sm_k), hl
-.Lcz_same:
-    ld      a, (sm_cnt)
-    dec     a
-    ld      (sm_cnt), a
-    jr      nz, .Lcz_loop
-; ---- bit 0 with Z recovery ----
-    call    .Lcz_bit
-    call    p256_coz_addc               ; A = (b ? P : -P) in the co-Z frame
-    FSUB    PF7, PZERO, PS1Y
-    ld      a, (sm_prev)
-    ld      c, a
-    ld      hl, PF7
-    ld      de, PS1Y
-    ld      iy, PF7
-    ld      b, 32
-    call    p256_select_b               ; f7 = b ? y : -y
-    FMUL    PF7, PF7, CZXA              ; num = s*y*X_A
-    FMUL    PF8, PS1X, CZYA
-    FSUB    PF9, CZXB, CZXA
-    FMUL    PF8, PF8, PF9               ; den = x*Y_A*(X_B - X_A)
-    call    p256_coz_addu
-    ld      a, (sm_prev)
-    ld      c, a
-    ld      hl, __p256_r0
-    ld      de, __p256_r1
-    call    p256_point_cswap64          ; r0 = R0 = k'P (co-Z X, Y)
-    FSQ     PF9, PF7
-    FMUL    PRTX, CZXA, PF9             ; X0 * num^2
-    FMUL    PF9, PF9, PF7
-    FMUL    PRTY, CZYA, PF9             ; Y0 * num^3
-    ld      hl, PF8
-    ld      de, PRTZ
-    ld      bc, 32
-    ldir                                ; Z = den
-    ld      a, (sm_e1)
-    ld      de, __p256_saved1           ; k = 1   -> P
-    call    .Lcz_fix
-    ld      a, (sm_em1)
-    ld      de, __p256_add_result       ; k = n-1 -> -P
-    call    .Lcz_fix
-    ld      a, (sm_em2)
-    ld      de, __p256_double_result    ; k = n-2 -> -2P
-    call    .Lcz_fix
-    ld      a, (sm_e0)
-    ld      de, __p256_INF              ; k = 0   -> O
-    call    .Lcz_fix
-    ld      hl, PRT
-    ld      de, (sm_out)
-    ld      bc, 96
-    ldir
-    ret
-; rt = mask ? (DE) : rt.  In: A = mask, DE = point.
-.Lcz_fix:
-    ld      c, a
-    ld      hl, PRT
-    ld      iy, PRT
-    jp      p256_point_select
-; A = (f10 == (DE)) ? 0xFF : 0.  Branch-free.
-.Lcz_eqk:
-    ld      hl, PF10
-    call    p256_eq32
-    neg
-    ret
-; (IY) = (HL) + (DE), 32 bytes; A = carry ? 0xFF : 0.
-.Lcz_add32:
-    ld      b, 32
-    or      a, a
-.Lcz_add_loop:
-    ld      a, (de)
-    adc     a, (hl)
-    ld      (iy + 0), a
-    inc     hl
-    inc     de
-    inc     iy
-    djnz    .Lcz_add_loop
-    sbc     a, a
-    ret
-; Current bit -> mask; swap r0/r1 (X, Y) iff it differs from the previous.
-.Lcz_bit:
-    ld      hl, (sm_k)
-    ld      a, (sm_bit)
-    and     a, (hl)
-    add     a, 0xFF                     ; CF = bit set
-    sbc     a, a
-    ld      b, a
-    ld      a, (sm_prev)
-    xor     a, b
-    ld      c, a
-    ld      a, b
-    ld      (sm_prev), a
-    ld      hl, __p256_r0
-    ld      de, __p256_r1
-    jp      p256_point_cswap64
-
-; p256_coz_addc: (A, B) co-Z -> B = A + B, A = A - B (co-Z).  5M + 3S.
-; Uses f0..f6.
-p256_coz_addc:
-    FSUB    PF0, CZXA, CZXB
-    FSQ     PF0, PF0                    ; C = (XA - XB)^2
-    FMUL    PF1, CZXA, PF0              ; W1
-    FMUL    PF2, CZXB, PF0              ; W2
-    FSUB    PF3, CZYA, CZYB
-    FADD    PF4, CZYA, CZYB
-    FSUB    PF5, PF1, PF2
-    FMUL    PF5, CZYA, PF5              ; A1 = YA (W1 - W2)
-    FSQ     PF6, PF3
-    FSUB    PF6, PF6, PF1
-    FSUB    CZXB, PF6, PF2              ; X(A+B) = D - W1 - W2
-    FSUB    PF6, PF1, CZXB
-    FMUL    PF6, PF3, PF6
-    FSUB    CZYB, PF6, PF5              ; Y(A+B)
-    FSQ     PF6, PF4
-    FSUB    PF6, PF6, PF1
-    FSUB    CZXA, PF6, PF2              ; X(A-B) = D' - W1 - W2
-    FSUB    PF6, PF1, CZXA
-    FMUL    PF6, PF4, PF6
-    FSUB    CZYA, PF6, PF5              ; Y(A-B)
-    ret
-
-; p256_coz_addu: (A, B) co-Z -> A = B + A, B = B in the new frame.
-; 4M + 2S.  Uses f0, f2, f3, f6.
-p256_coz_addu:
-    FSUB    PF0, CZXB, CZXA
-    FSQ     PF0, PF0                    ; C
-    FMUL    PF2, CZXA, PF0              ; W2
-    FMUL    CZXB, CZXB, PF0             ; W1 (= new XB)
-    FSUB    PF3, CZYB, CZYA
-    FSUB    PF6, CZXB, PF2
-    FMUL    CZYB, CZYB, PF6             ; A1 (= new YB)
-    FSQ     PF6, PF3
-    FSUB    PF6, PF6, CZXB
-    FSUB    CZXA, PF6, PF2              ; X(B+A)
-    FSUB    PF6, CZXB, CZXA
-    FMUL    PF6, PF3, PF6
-    FSUB    CZYA, PF6, CZYB             ; Y(B+A)
-    ret
+    ECC_COMB p256
 
 ; ===========================================================================
 ; Variable-time ECDSA verification engine.
@@ -2577,8 +2171,8 @@ p256_coz_addu:
 ; public key and values derived from them) and is deliberately NOT constant
 ; time: it branches on scalar bits, skips zero digits and branches on the
 ; exceptional cases of the addition formulas.  It must never see a secret
-; scalar: keygen, ECDH and signing keep using the constant-time co-Z ladder
-; and p256_ord_inv.
+; scalar: keygen, ECDH and signing keep using the constant-time comb /
+; window and p256_ord_inv.
 ;
 ; R = u1*G + u2*Q by interleaved (Straus/Shamir) double-and-add, one shared
 ; doubling chain over bit positions 256..0:
@@ -2600,106 +2194,14 @@ p256_coz_addu:
 ; ===========================================================================
 .equ VS_DIG, __p256_r0                  ; 129 B: wNAF(u2) code i at nibble i
 .equ VS_WK,  __p256_r0 + 136            ; 33 B: wNAF work copy of u2
+.equ VS_T3,  __p256_add_result           ; 3Q   (VS_T3, VS_T5, VS_T7 must stay
+.equ VS_T5,  __p256_double_result        ; 5Q    contiguous: p256_vs_qadd indexes
+.equ VS_T7,  __p256_pa                   ; 7Q    them as add_result + 96 i)
 
-; p256_point_add_affine: acc += A (mixed Jacobian + affine), VARIABLE TIME.
-;   acc = saved0 (Jacobian, Montgomery; O iff vs_inf != 0).
-;   A   = saved1 X||Y (affine, Montgomery), a finite curve point.
-; madd-2007-bl, 7M + 4S.  Exceptional cases (public): acc = O -> acc = A;
-; H = 0 and S2 = Y1 (acc = A) -> doubling; H = 0 otherwise (acc = -A) -> O.
-; Uses f0..f8 (and f0..f6, rt via point_double).  Clobbers AF, BC, DE, HL, IY.
-p256_point_add_affine:
-    ld      a, (vs_inf)
-    or      a, a
-    jr      z, .Lmd_go
-    ld      hl, PS1
-    ld      de, PS0
-    ld      bc, 64
-    ldir                                ; acc = (x, y, ...)
-    ld      hl, __p256_P_R
-    ld      c, 32                       ; BC = 0 after ldir
-    ldir                                ; ... , 1)
-    xor     a, a
-    ld      (vs_inf), a
-    ret
-.Lmd_go:
-    FSQ     PF0, PS0Z                   ; Z1Z1 = Z1^2
-    FMUL    PF1, PS1X, PF0              ; U2 = x2 Z1Z1
-    FMUL    PF2, PS0Z, PF0
-    FMUL    PF2, PS1Y, PF2              ; S2 = y2 Z1 Z1Z1
-    FSUB    PF1, PF1, PS0X              ; H = U2 - X1
-    FSUB    PF2, PF2, PS0Y              ; S2 - Y1
-    ld      hl, PF1
-    call    p256_ct_is_zero
-    inc     a
-    jp      z, .Lmd_hzero               ; public: exceptional case
-    FADD    PF2, PF2, PF2               ; r = 2 (S2 - Y1)
-    FSQ     PF3, PF1                    ; HH = H^2
-    FADD    PF4, PF3, PF3
-    FADD    PF4, PF4, PF4               ; I = 4 HH
-    FMUL    PF5, PF1, PF4               ; J = H I
-    FMUL    PF6, PS0X, PF4              ; V = X1 I
-    FMUL    PF7, PS0Y, PF5              ; Y1 J
-    FSQ     PS0X, PF2                   ; r^2           (X1 dead from here)
-    FSUB    PS0X, PS0X, PF5
-    FSUB    PS0X, PS0X, PF6
-    FSUB    PS0X, PS0X, PF6             ; X3 = r^2 - J - 2V
-    FSUB    PF6, PF6, PS0X
-    FMUL    PF6, PF2, PF6
-    FADD    PF7, PF7, PF7
-    FSUB    PS0Y, PF6, PF7              ; Y3 = r (V - X3) - 2 Y1 J
-    FADD    PF8, PS0Z, PF1
-    FSQ     PF8, PF8
-    FSUB    PF8, PF8, PF0
-    FSUB    PS0Z, PF8, PF3              ; Z3 = (Z1 + H)^2 - Z1Z1 - HH
-    ret
-.Lmd_hzero:
-    ld      hl, PF2
-    call    p256_ct_is_zero
-    inc     a
-    jr      z, p256_dbl_acc             ; acc == A: 2 acc
-.Lvt_inf:
-    ld      a, 1                        ; acc == -A: O
-    ld      (vs_inf), a
-    ret
-
-; p256_dbl_acc: saved0 = 2 saved0.  point_double reads saved0 only before its
-; final select (which reads rt/INF and writes out byte by byte), so
-; out = saved0 is safe here.
-p256_dbl_acc:
-    ld      hl, __p256_saved0
-    jp      p256_point_double
-
-; p256_point_add_vt: acc += saved1 (Jacobian, finite), VARIABLE TIME.
-; Same acc conventions as p256_point_add_affine.  Uses the ladder variant of
-; the Jacobian addition (11M + 5S, no always-computed doubling) and handles
-; its omitted case explicitly: H = 0 and r = 0 (acc == saved1) -> doubling.
-; out = saved0 is safe for point_add_ladder: saved0 is only read by the
-; final select, at the same byte index it writes.
-p256_point_add_vt:
-    ld      a, (vs_inf)
-    or      a, a
-    jr      z, .Lav_go
-    ld      hl, PS1
-    ld      de, PS0
-    ld      bc, 96
-    ldir                                ; O + T = T
-    xor     a, a
-    ld      (vs_inf), a
-    ret
-.Lav_go:
-    ld      hl, __p256_saved0
-    call    p256_point_add_ladder
-    ld      a, (pa_h)
-    or      a, a
-    ret     z                           ; generic case
-    ld      a, (pa_r)
-    or      a, a
-    jr      z, .Lvt_inf                 ; acc == -T (saved0 already O)
-    ld      hl, PS1
-    ld      de, PS0
-    ld      bc, 96
-    ldir                                ; acc == T: acc = 2 T
-    jr      p256_dbl_acc
+; p256_point_add_affine / p256_dbl_acc / p256_point_add_vt: VARIABLE-TIME
+; mixed and Jacobian accumulation for the verify engine (ecc_curve.inc,
+; ECC_VT_ADD).  acc = saved0 (O iff vs_inf != 0).
+    ECC_VT_ADD p256
 
 ; p256_bit_k: A = bit j of u1 (__p256_k, LE).  In: A = j.  Out: A = 0/1,
 ; Z iff 0.  Clobbers AF, BC, DE, HL.
@@ -2726,113 +2228,10 @@ p256_bit_k:
     and     a, 1
     ret
 
-; p256_vs_table: add_result = 3Q, double_result = 5Q, pa = 7Q (Jacobian).
-; The ladder-variant addition is valid: its omitted case would need
-; Q + 2Q, 3Q + 2Q or 5Q + 2Q with equal operands, i.e. Q, 3Q or 5Q = O,
-; impossible for a validated Q (n is a large prime).
-p256_vs_table:
-    ld      hl, __p256_pq
-    ld      de, PS0
-    ld      bc, 96
-    ldir
-    ld      hl, PS1
-    call    p256_point_double           ; saved1 = 2Q
-    ld      hl, __p256_add_result
-    call    p256_point_add_ladder       ; 3Q
-    ld      hl, __p256_add_result
-    ld      de, PS0
-    ld      bc, 96
-    ldir
-    ld      hl, __p256_double_result
-    call    p256_point_add_ladder       ; 5Q
-    ld      hl, __p256_double_result
-    ld      de, PS0
-    ld      bc, 96
-    ldir
-    ld      hl, __p256_pa
-    jp      p256_point_add_ladder       ; 7Q
-
-; p256_vs_wnaf: width-4 NAF of u2 (__p256_x) into VS_DIG, positions 0..256
-; (u2 < 2^256, so 257 digits suffice and the work value ends at 0).
-; Code for digit d: 0 if d = 0, else |d| | (d < 0 ? 8 : 0).
-p256_vs_wnaf:
-    ld      hl, VS_DIG
-    ld      (hl), 0
-    ld      de, VS_DIG + 1
-    ld      bc, VS_WK + 32 - VS_DIG
-    ldir                                ; codes = 0, work[32] = 0
-    ld      hl, __p256_x
-    ld      de, VS_WK
-    ld      bc, 32
-    ldir                                ; work = u2
-    or      a, a
-    sbc     hl, hl
-    ld      (vs_i), hl
-.Lwn_loop:
-    ld      a, (VS_WK)
-    rrca
-    jr      nc, .Lwn_shift              ; even: digit 0
-    rlca
-    and     a, 0x0F                     ; k mod 16 (odd)
-    cp      a, 8
-    jr      c, .Lwn_pos
-    ld      c, a
-    ld      a, 16
-    sub     a, c                        ; |d| = 16 - (k mod 16); d < 0
-    ld      c, a
-    ld      hl, VS_WK
-    add     a, (hl)
-    ld      (hl), a                     ; k += |d|  (low nibble -> 0)
-    ld      b, 32
-.Lwn_carry:
-    inc     hl
-    ld      a, (hl)
-    adc     a, 0
-    ld      (hl), a
-    djnz    .Lwn_carry
-    ld      a, c
-    or      a, 8
-    jr      .Lwn_store
-.Lwn_pos:
-    ld      c, a
-    ld      a, (VS_WK)
-    sub     a, c                        ; k -= d  (low nibble -> 0, no borrow)
-    ld      (VS_WK), a
-    ld      a, c
-.Lwn_store:
-    ld      c, a
-    ld      hl, (vs_i)
-    srl     h
-    rr      l
-    ld      de, VS_DIG
-    add     hl, de                      ; byte i >> 1
-    ld      a, (vs_i)
-    rrca                                ; CF = i & 1
-    ld      a, c
-    jr      nc, .Lwn_lo
-    rlca
-    rlca
-    rlca
-    rlca                                ; odd i: high nibble
-.Lwn_lo:
-    or      a, (hl)
-    ld      (hl), a
-.Lwn_shift:
-    ld      hl, VS_WK + 32
-    ld      b, 33
-    or      a, a
-.Lwn_sh:
-    rr      (hl)                        ; k >>= 1
-    dec     hl
-    djnz    .Lwn_sh
-    ld      hl, (vs_i)
-    inc     hl
-    ld      (vs_i), hl
-    ld      de, 257
-    or      a, a
-    sbc     hl, de
-    jr      nz, .Lwn_loop
-    ret
+; p256_vs_table (3Q, 5Q, 7Q into add_result / double_result / pa) and
+; p256_vs_wnaf (width-4 NAF of u2, positions 0..256): ecc_curve.inc,
+; ECC_VS_TABLE_WNAF.  VARIABLE TIME, public data only.
+    ECC_VS_TABLE_WNAF p256
 
 ; p256_vs_qadd: acc += d Q for the wNAF code in A (1..15).
 p256_vs_qadd:
@@ -3156,51 +2555,9 @@ p256_affine_export:
     ld      a, 1
     ret
 
-; p256_point_import: validate and import an uncompressed SEC1 point into pq.
-; In: HL=pub (65 bytes, non-NULL).  Out: A = 1 ok / 0 reject.
-; Rejects: prefix != 0x04, x >= p, y >= p, point not on the curve.
-p256_point_import:
-    ld      a, (hl)
-    cp      a, 0x04
-    jp      nz, .Lpi_fail
-    inc     hl
-    ld      (pi_src), hl
-    ex      de, hl
-    ld      hl, PF0
-    ld      iy, __p256_P
-    ld      c, 0
-    call    p256_import_be
-    or      a, a
-    jp      z, .Lpi_fail
-    ld      hl, (pi_src)
-    ld      de, 32
-    add     hl, de
-    ex      de, hl
-    ld      hl, PF1
-    ld      iy, __p256_P
-    ld      c, 0
-    call    p256_import_be
-    or      a, a
-    jp      z, .Lpi_fail
-    FMUL    PQX, PF0, __p256_P_R2
-    FMUL    PQY, PF1, __p256_P_R2
-    ld      hl, __p256_P_R
-    ld      de, PQZ
-    ld      bc, 32
-    ldir
-    FSQ     PF2, PQY                    ; y^2
-    FSQ     PF3, PQX
-    FMUL    PF3, PF3, PQX               ; x^3
-    FADD    PF4, PQX, PQX
-    FADD    PF4, PF4, PQX               ; 3x
-    FSUB    PF3, PF3, PF4
-    FADD    PF3, PF3, __p256_P_B_R      ; x^3 - 3x + b
-    ld      hl, PF2
-    ld      de, PF3
-    jp      p256_eq32
-.Lpi_fail:
-    xor     a, a
-    ret
+; p256_point_import: validate and import an uncompressed SEC1 point (65
+; bytes) into pq (ecc_curve.inc, ECC_POINT_IMPORT).
+    ECC_POINT_IMPORT p256, 32
 
 ; p256_order_import: out = (be mod n) * R mod n.  In: HL=out, DE=be.
 ; Uses f[0].  Clobbers AF, BC, DE, HL, IY.
@@ -3229,60 +2586,10 @@ p256_order_export:
     ld      hl, PF1
     jp      p256_rev32
 
-; p256_di: zero the scratch block, save IFF1 into p256_di_save (bit 0),
-; then disable interrupts.  Must be called once per public entry, before
-; any field work.  The wipe establishes the mm_acc[3] = 0 invariant the
-; accumulator shift relies on without depending on the loader zero-filling
-; .bss (dylib), and clears stale data before use.
-; Clobbers AF, BC, DE, HL.  Preserves IX, IY.
-; ld a,i sets PV = IFF2 = IFF1 (outside an NMI); jp pe tests PV immediately.
-p256_di:
-    call    p256_wipe       ; zero scratch (establishes mm_acc[3] = 0)
-    ld      a, i            ; PV = IFF1
-    jp      pe, .Lpd_on     ; PV set = interrupts enabled
-    xor     a
-    ld      (p256_di_save), a   ; save 0: ei not needed on exit
-    di
-    ret
-.Lpd_on:
-    ld      a, 1
-    ld      (p256_di_save), a   ; save 1: ei needed on exit
-    di
-    ret
-
-; p256_wipe: zero the whole scratch block.  Clobbers BC, DE, HL.
-p256_wipe:
-    ld      hl, __p256_scratch_start
-    ld      (hl), 0
-    ld      de, __p256_scratch_start + 1
-    ld      bc, __p256_scratch_end - __p256_scratch_start - 1
-    ldir
-    ret
-
-; p256_exit: common public-API epilogue.  In: A = result.  Expects the
-; stack to hold only the caller's saved IX above the return address.
-; Restores interrupts (re-enables them iff they were enabled on entry).
-; The IFF1 save is the byte we stashed at entry in mm_n0+4 (p256_di_save).
-p256_exit:
-    push    af
-    ld      a, (p256_di_save)   ; save before wipe zeroes it
-    push    af                  ; stash di_save below result
-    call    p256_wipe
-    pop     af                  ; A = di_save
-    bit     0, a
-    jr      z, .Lpx_noei
-    ei
-.Lpx_noei:
-    pop     af                  ; A = result
-    pop     ix
-    ret
-
-; p256_null: Z set iff HL == 0.  Clobbers F.  Preserves HL, DE.
-p256_null:
-    add     hl, de
-    or      a, a
-    sbc     hl, de
-    ret
+; p256_di / p256_wipe / p256_exit / p256_null: shared prologue/epilogue
+; (ecc_curve.inc, ECC_DI_EXIT).  p256_di tail-calls p256_reloc_load to put
+; the field-multiply MAC blocks into fast RAM with interrupts off.
+    ECC_DI_EXIT p256, p256_reloc_load
 
 ; ===========================================================================
 ; Public API: publickey / secret / verify
@@ -3316,8 +2623,7 @@ _tls_p256_publickey:
     jr      z, .Lpk_fail
     ld      hl, __p256_saved0
     ld      de, (ix + 9)
-    ld      bc, __p256_G
-    call    p256_scalar_mul
+    call    p256_comb_mul               ; saved0 = priv G (fixed-base comb)
     ld      hl, (ix + 6)
     ld      (hl), 0x04
     inc     hl
@@ -3360,11 +2666,9 @@ _tls_p256_secret:
     call    p256_point_import
     or      a, a
     jr      z, .Lss_fail
-    ld      hl, __p256_saved0
     ld      de, (ix + 9)
-    ld      bc, __p256_pq
-    call    p256_scalar_mul
-    ld      hl, __p256_saved0
+    call    p256_ws_mul                 ; pq = priv Q (constant-time window)
+    ld      hl, __p256_pq
     ld      de, (ix + 6)
     ld      bc, 0
     call    p256_affine_export
@@ -3448,7 +2752,7 @@ _tls_p256_verify:
     ld      hl, PF8
     ld      de, __p256_N
     ld      iy, PF8
-    call    .Lcz_add32                  ; f8 = r + n
+    call    p256_add32                  ; f8 = r + n
     or      a, a
     jr      nz, .Lvf_fail               ; >= 2^256
     ld      hl, PF8
@@ -3720,10 +3024,12 @@ _tls_p256_sign:
     ld      bc, 64 * 4 - 1
     ldir
 .Lsg_scalar:
+    ; RFC 6979's SHA-256 (.sha256.reloc + .saferam.rng scratch) reuses the
+    ; fast-RAM window: reload the MAC blocks before any field multiply.
+    call    p256_reloc_load
     ld      hl, __p256_saved0
     ld      de, __p256_k
-    ld      bc, __p256_G
-    call    p256_scalar_mul             ; R = k G
+    call    p256_comb_mul               ; R = k G (fixed-base comb)
     ld      hl, __p256_saved0
     ld      de, __p256_x
     ld      bc, 0
@@ -3790,14 +3096,17 @@ _tls_p256_sign:
 ;
 ; The field multiply is ~90% of every P-256 operation and its MAC block is
 ; fetch-bound, so it runs from the shared safe-RAM window instead of flash.
-; p256_mul_p / p256_sq_p copy this member in on every call: the same window is
-; used by .sha256.reloc, .aes.*.reloc, .x25519.reloc, .powmod.reloc and
-; .saferam.rng, any of which may have run since the last field multiply (the
-; RFC 6979 HMAC inside tls_p256_sign, for example).
+; Both blocks (32-term multiply MAC, 16-term doubling MAC for squaring) form
+; ONE overlay member, copied in once per public entry by p256_di and again in
+; tls_p256_sign after RFC 6979 (whose SHA-256 uses .sha256.reloc and the
+; .saferam.rng scratch in the same window).  Between a load and the public
+; entry's return nothing else may run from or write to the window; every
+; P-256 entry point runs with interrupts disabled and calls no other overlay
+; consumer outside the reloaded RFC 6979 bracket.
 ;
 ; Entries inside this member are addressed through their run-time labels
-; (p256_mac_mul_end - 9*c), which the assembler resolves against the run VMA,
-; so the copied image is callable as-is.
+; (p256_mac_mul_end - 9*c, p256_mac_sq_end - 10*m), which the assembler
+; resolves against the run VMA, so the copied image is callable as-is.
 ; ===========================================================================
 .section .p256.mul.reloc, "ax", @progbits
 _p256_reloc_run_start:
@@ -3814,12 +3123,7 @@ p256_mac_mul:
 .endr
 p256_mac_mul_end:
     ret
-_p256_reloc_run_end:
-_p256_mul_reloc_run_start = _p256_reloc_run_start
-_p256_mul_reloc_run_end = _p256_reloc_run_end
 
-.section .p256.sq.reloc, "ax", @progbits
-_p256_sq_reloc_run_start:
 ; 16-term doubling MAC block for p256_sq_p: term n (16..31) is
 ; acc += 2 * (ix+n) * (iy-n).  10 bytes per term; entry for an m-term
 ; column is p256_mac_sq_end - 10*m.  Uses D, E, HL; preserves A, BC, IX, IY.
@@ -3833,45 +3137,23 @@ p256_mac_sq:
 .endr
 p256_mac_sq_end:
     ret
-_p256_sq_reloc_run_end:
+_p256_reloc_run_end:
+_p256_mul_reloc_run_start = _p256_reloc_run_start
+_p256_mul_reloc_run_end = _p256_reloc_run_end
 
 .text
 
-; void p256_reloc_load_mul(void) / p256_reloc_load_sq(void)
-; Refresh the fast-RAM block the caller is about to run.
-;
-; The copy is skipped when the first three bytes at the window base already
-; equal the load image: every other member of the 0xE30800 overlay (.sha256,
-; .aes.*, .x25519, .powmod) writes from offset 0, and .saferam.rng reserves a
-; 0x180-byte prefix before its pool, so nothing can disturb a P-256 block
-; without changing byte 0. The linker asserts both P-256 members stay under
-; 0x180 bytes, which keeps that invariant true if the blocks ever grow.
-;
-; Clobbers AF, BC, DE, HL, so callers save their arguments around it.
-p256_reloc_load_mul:
-    ld      hl, (_p256_mul_reloc_load_start)
-    ld      de, (_p256_mul_reloc_run_start)
-    or      a, a
-    sbc     hl, de               ; first 3 code bytes already match?
-    jr      z, .Lmul_reloc_done
+; p256_reloc_load: copy the whole .p256.mul.reloc member (multiply MAC +
+; doubling MAC) into the fast-RAM window, unconditionally.  Called from
+; p256_di (every public entry, interrupts off) and after RFC 6979 in
+; tls_p256_sign.  Any other overlay consumer (.sha256.reloc, RNG, AES, ...)
+; that runs in between MUST be followed by another call.
+; Clobbers BC, DE, HL.  Preserves AF, IX, IY.
+p256_reloc_load:
     ld      hl, _p256_mul_reloc_load_start
     ld      de, _p256_mul_reloc_run_start
     ld      bc, _p256_mul_reloc_len
     ldir
-.Lmul_reloc_done:
-    ret
-
-p256_reloc_load_sq:
-    ld      hl, (_p256_sq_reloc_load_start)
-    ld      de, (_p256_sq_reloc_run_start)
-    or      a, a
-    sbc     hl, de
-    jr      z, .Lsq_reloc_done
-    ld      hl, _p256_sq_reloc_load_start
-    ld      de, _p256_sq_reloc_run_start
-    ld      bc, _p256_sq_reloc_len
-    ldir
-.Lsq_reloc_done:
     ret
 
 ; ===========================================================================
@@ -3957,6 +3239,7 @@ _p256_test_fe_sq:
     push    ix
     ld      ix, 0
     add     ix, sp
+    call    p256_reloc_load     ; shims bypass p256_di
     ld      bc, (ix + 6)
     ld      hl, (ix + 9)
     ld      de, (ix + 12)       ; ignored by fe_sq
@@ -3969,6 +3252,7 @@ _p256_test_inv:
     push    ix
     ld      ix, 0
     add     ix, sp
+    call    p256_reloc_load     ; shims bypass p256_di
     ld      bc, (ix + 6)
     ld      hl, (ix + 9)
     ld      a, (ix + 12)
@@ -3987,6 +3271,7 @@ _p256_test_point_double:
     push    ix
     ld      ix, 0
     add     ix, sp
+    call    p256_reloc_load     ; shims bypass p256_di
     ld      hl, (ix + 9)
     ld      de, __p256_saved0
     ld      bc, 96
@@ -4002,6 +3287,7 @@ _p256_test_point_add:
     push    ix
     ld      ix, 0
     add     ix, sp
+    call    p256_reloc_load     ; shims bypass p256_di
     ld      hl, (ix + 9)
     ld      de, __p256_saved0
     ld      bc, 96
@@ -4018,14 +3304,22 @@ _p256_test_point_add:
 ; void p256_test_scalar_mul(uint8_t out[96], const uint8_t k_be[32],
 ;                           const uint8_t point[96])
 ; out, k_be and point must be caller buffers (not p256 scratch).
+; Runs p256_ws_mul: requires 1 <= k < n and a point with Z = R.
 _p256_test_scalar_mul:
     push    ix
     ld      ix, 0
     add     ix, sp
-    ld      hl, (ix + 6)
+    call    p256_reloc_load     ; shims bypass p256_di
+    ld      hl, (ix + 12)
+    ld      de, __p256_pq
+    ld      bc, 96
+    ldir
     ld      de, (ix + 9)
-    ld      bc, (ix + 12)
-    call    p256_scalar_mul
+    call    p256_ws_mul
+    ld      hl, __p256_pq
+    ld      de, (ix + 6)
+    ld      bc, 96
+    ldir
     pop     ix
     ret
 
@@ -4044,6 +3338,7 @@ _p256_test_jadd_vt:
     push    ix
     ld      ix, 0
     add     ix, sp
+    call    p256_reloc_load     ; shims bypass p256_di
     push    iy
     ld      hl, (ix + 9)
     ld      de, __p256_saved0

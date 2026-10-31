@@ -15,9 +15,9 @@
       {"sigType": "pkcs1v1.5", "properties": [{"modulo": 2048, "hashPair": [{"hashAlg": "SHA2-256"}]}, {"modulo": 3072, "hashPair": [{"hashAlg": "SHA2-256"}]}, {"modulo": 4096, "hashPair": [{"hashAlg": "SHA2-256"}]}]},
       {"sigType": "pss", "properties": [{"modulo": 2048, "maskFunction": ["mgf1"], "hashPair": [{"hashAlg": "SHA2-256", "saltLen": 32}]}, {"modulo": 3072, "maskFunction": ["mgf1"], "hashPair": [{"hashAlg": "SHA2-256", "saltLen": 32}]}, {"modulo": 4096, "maskFunction": ["mgf1"], "hashPair": [{"hashAlg": "SHA2-256", "saltLen": 32}]}]}
     ]},
-    {"algorithm": "ECDSA", "mode": "sigVer", "revision": "FIPS186-5", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}], "capabilities": [{"curve": ["P-256"], "hashAlg": ["SHA2-256"]}]},
-    {"algorithm": "DetECDSA", "mode": "sigGen", "revision": "FIPS186-5", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}, {"algorithm": "DRBG", "valValue": "same"}], "componentTest": false, "capabilities": [{"curve": ["P-256"], "hashAlg": ["SHA2-256"]}]},
+    {"algorithm": "ECDSA", "mode": "sigVer", "revision": "FIPS186-5", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}], "capabilities": [{"curve": ["P-256"], "hashAlg": ["SHA2-256"]}, {"curve": ["P-384"], "hashAlg": ["SHA2-384"]}]},
+    {"algorithm": "DetECDSA", "mode": "sigGen", "revision": "FIPS186-5", "prereqVals": [{"algorithm": "SHA", "valValue": "same"}, {"algorithm": "DRBG", "valValue": "same"}], "componentTest": false, "capabilities": [{"curve": ["P-256"], "hashAlg": ["SHA2-256"]}, {"curve": ["P-384"], "hashAlg": ["SHA2-384"]}]},
     {"algorithm": "XECDH", "mode": "SSC", "revision": "RFC7748", "prereqVals": [{"algorithm": "DRBG", "valValue": "same"}], "curve": ["Curve25519"]},
-    {"algorithm": "KAS-ECC", "mode": "CDH-Component", "revision": "1.0", "prereqVals": [{"algorithm": "ECDSA", "valValue": "same"}], "function": ["keyPairGen"], "curve": ["P-256"]}
+    {"algorithm": "KAS-ECC", "mode": "CDH-Component", "revision": "1.0", "prereqVals": [{"algorithm": "ECDSA", "valValue": "same"}], "function": ["keyPairGen"], "curve": ["P-256", "P-384"]}
   ]
 }

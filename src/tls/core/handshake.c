@@ -191,6 +191,8 @@ bool tls_p256_publickey(uint8_t pub[65], const uint8_t priv[32]);
 bool tls_p256_secret(uint8_t ss[32], const uint8_t priv[32], const uint8_t peer[65]);
 bool tls_p256_sign(uint8_t sig[64], const uint8_t hash[32], const uint8_t priv[32]);
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32], const uint8_t pub[65]);
+/* P-384 public API (assembly implementation in p384.s). */
+bool tls_p384_verify(const uint8_t sig[96], const uint8_t hash[48], const uint8_t pub[97]);
 #include <string.h>
 #include <usbdrvce.h>
 #include "../../drivers/mem.h"
@@ -899,6 +901,45 @@ static bool tls_ecdsa_sig_rs(const uint8_t *sig, size_t sig_len, uint8_t rs[64])
     if (p)
     {
         p = tls_ecdsa_parse_int(p, (size_t)(sig + sig_len - p), rs + 32);
+    }
+    return p == sig + sig_len;
+}
+
+/* Parse DER SEQUENCE { INTEGER r, INTEGER s } into a flat 96-byte r||s for P-384. */
+static bool tls_ecdsa_sig_rs96(const uint8_t *sig, size_t sig_len, uint8_t rs[96])
+{
+    if (!sig || sig_len < 8 || sig[0] != 0x30 || (sig[1] & 0x80) || 2u + sig[1] != sig_len)
+        return false;
+    /* Reuse the x509 helper that handles arbitrary coord_len. */
+    const uint8_t *p = NULL;
+    /* Parse r into rs[0..47] */
+    {
+        const uint8_t *der = sig + 2;
+        size_t len = sig_len - 2;
+        if (!der || len < 3 || der[0] != 0x02) return false;
+        size_t ilen = der[1];
+        if (ilen == 0 || ilen > 49 || ilen > len - 2) return false;
+        const uint8_t *v = der + 2;
+        if (v[0] & 0x80) return false;
+        if (v[0] == 0x00) { if (ilen < 2 || !(v[1] & 0x80)) return false; v++; ilen--; }
+        if (ilen > 48) return false;
+        memset(rs, 0, 48 - ilen);
+        memcpy(rs + (48 - ilen), v, ilen);
+        p = v + ilen;
+    }
+    /* Parse s into rs[48..95] */
+    {
+        size_t remaining = (size_t)(sig + sig_len - p);
+        if (!p || remaining < 3 || p[0] != 0x02) return false;
+        size_t ilen = p[1];
+        if (ilen == 0 || ilen > 49 || ilen > remaining - 2) return false;
+        const uint8_t *v = p + 2;
+        if (v[0] & 0x80) return false;
+        if (v[0] == 0x00) { if (ilen < 2 || !(v[1] & 0x80)) return false; v++; ilen--; }
+        if (ilen > 48) return false;
+        memset(rs + 48, 0, 48 - ilen);
+        memcpy(rs + 48 + (48 - ilen), v, ilen);
+        p = v + ilen;
     }
     return p == sig + sig_len;
 }
@@ -2972,9 +3013,9 @@ bool tls_send_client_hello(
      *   [76..140] P-256 public key (65 bytes, patched)
      *   [141..144] x25519 group/len
      *   [145..176] x25519 public key (32 bytes, patched)
-     *   [177..186] signature_algorithms
-     *   [187..198] signature_algorithms_cert
-     *   [199..204] record_size_limit: 4096 bytes
+     *   [177..188] signature_algorithms
+     *   [189..202] signature_algorithms_cert
+     *   [203..208] record_size_limit: 4096 bytes
      */
     static const uint8_t hello_template[] = {
         TLS_HANDSHAKE_CLIENT_HELLO, 0x00, 0x00, 0x00, /* body length patched */
@@ -3008,15 +3049,17 @@ bool tls_send_client_hello(
         /* x25519 key patched at offset 145 (32 bytes) */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* signature_algorithms: rsa_pss_rsae_sha256 (0x0804),
-         *                        ecdsa_secp256r1_sha256 (0x0403) */
-        /* ext_type=0x000d, ext_len=6, list_len=4 */
-        0x00, 0x0d, 0x00, 0x06, 0x00, 0x04, 0x08, 0x04, 0x04, 0x03,
+        /* signature_algorithms: ecdsa_secp256r1_sha256 (0x0403),
+         *                        rsa_pss_rsae_sha256 (0x0804),
+         *                        ecdsa_secp384r1_sha384 (0x0503) */
+        /* ext_type=0x000d, ext_len=8, list_len=6 */
+        0x00, 0x0d, 0x00, 0x08, 0x00, 0x06, 0x04, 0x03, 0x08, 0x04, 0x05, 0x03,
         /* signature_algorithms_cert: rsa_pkcs1_sha256 (0x0401),
          *                            rsa_pss_rsae_sha256 (0x0804),
-         *                            ecdsa_secp256r1_sha256 (0x0403) */
-        /* ext_type=0x0032, ext_len=8, list_len=6 */
-        0x00, 0x32, 0x00, 0x08, 0x00, 0x06, 0x04, 0x01, 0x08, 0x04, 0x04, 0x03,
+         *                            ecdsa_secp256r1_sha256 (0x0403),
+         *                            ecdsa_secp384r1_sha384 (0x0503) */
+        /* ext_type=0x0032, ext_len=10, list_len=8 */
+        0x00, 0x32, 0x00, 0x0a, 0x00, 0x08, 0x04, 0x01, 0x08, 0x04, 0x04, 0x03, 0x05, 0x03,
         /* record_size_limit: 4096 bytes (RFC 8449) */
         0x00, 0x1c, 0x00, 0x02, TLS_RECORD_SIZE_LIMIT_4096_HI, TLS_RECORD_SIZE_LIMIT_4096_LO
     };
@@ -4456,8 +4499,9 @@ static bool tls_recv_encrypted_extensions(
     return true;
 }
 
-/* TLS 1.3 code point used for both server and client CertificateVerify. */
+/* TLS 1.3 code points for CertificateVerify signature schemes. */
 #define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403
+#define TLS_SIG_ECDSA_SECP384R1_SHA384 0x0503
 
 /**
  * @brief Parse a TLS 1.3 server CertificateRequest.
@@ -4953,6 +4997,77 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
     return ok;
 }
 
+/* Verify a TLS 1.3 server CertificateVerify using ECDSA P-384 with SHA-384
+ * (ecdsa_secp384r1_sha384, code point 0x0503).  Constructs:
+ *
+ *     content = 64 spaces || "TLS 1.3, server CertificateVerify" || 0x00
+ *               || Transcript-Hash(ClientHello..Certificate)
+ *     digest  = SHA-384(content)
+ *
+ * then calls tls_p384_verify(sig, digest, pubkey).  The signature is a
+ * DER-encoded SEQUENCE { INTEGER r, INTEGER s }; this function decodes
+ * both integers and serialises them as a flat 96-byte r||s buffer. */
+static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
+                                              const uint8_t *sig, size_t sig_len)
+{
+    static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
+    uint8_t spaces[64];
+    uint8_t zero = 0;
+    uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
+    uint8_t message_hash[48];
+    struct tls_hash_context hash_ctx;
+    uint8_t rs[96]; /* flat r||s for tls_p384_verify */
+
+    if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P384 ||
+        !sig || sig_len == 0)
+    {
+        ERROR_CODE(0x8a);
+        return false;
+    }
+
+    if (!ctx->leaf_pubkey.ec.pub || ctx->leaf_pubkey.ec.len != 97)
+    {
+        ERROR_CODE(0x8b);
+        return false;
+    }
+
+    if (!ctx->transcript_hash ||
+        (ctx->hash_len != TLS_SHA256_DIGEST_LEN &&
+         ctx->hash_len != TLS_SHA384_DIGEST_LEN))
+    {
+        ERROR_CODE(0x8c);
+        return false;
+    }
+    transcript_hash_digest(ctx->transcript_hash, transcript);
+
+    memset(spaces, 0x20, sizeof(spaces));
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA384))
+    {
+        ERROR_CODE(0x8d);
+        return false;
+    }
+    tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(&hash_ctx, &zero, 1);
+    tls_hash_update(&hash_ctx, transcript, ctx->hash_len);
+    tls_hash_digest(&hash_ctx, message_hash);
+
+    if (!tls_ecdsa_sig_rs96(sig, sig_len, rs))
+    {
+        tls_secure_memzero(message_hash, sizeof(message_hash));
+        ERROR_CODE(0x8e);
+        return false;
+    }
+
+    tls_crypto_guard_enable();
+    bool ok = tls_p384_verify(rs, message_hash, ctx->leaf_pubkey.ec.pub);
+    tls_crypto_guard_disable();
+
+    tls_secure_memzero(rs, sizeof(rs));
+    tls_secure_memzero(message_hash, sizeof(message_hash));
+    return ok;
+}
+
 /**
  * @brief Parse and verify the server's CertificateVerify.
  *
@@ -4961,7 +5076,7 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
  * just sent. It's the live proof-of-possession that binds "I trust this
  * cert chain" to "I'm actually talking to that cert's owner."
  *
- * Supports rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256.
+ * Supports rsa_pss_rsae_sha256, ecdsa_secp256r1_sha256, and ecdsa_secp384r1_sha384.
  */
 static bool tls_recv_certificate_verify(
     struct tls_handshake_context *ctx,
@@ -5030,6 +5145,9 @@ static bool tls_recv_certificate_verify(
         break;
     case TLS_SIG_ECDSA_SECP256R1_SHA256:
         sig_ok = tls_certverify_ecdsa_p256_sha256(ctx, data + offset, sig_len);
+        break;
+    case TLS_SIG_ECDSA_SECP384R1_SHA384:
+        sig_ok = tls_certverify_ecdsa_p384_sha384(ctx, data + offset, sig_len);
         break;
     default:
         /* Unsupported algorithm — fail closed. */

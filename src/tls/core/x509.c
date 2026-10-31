@@ -14,9 +14,11 @@
 #include "../includes/tls.h"
 #include "../includes/crypto_guard.h"
 
-/* P-256 public API forward declarations (assembly in p256.s). */
+/* P-256 and P-384 public API forward declarations (assembly in p256.s / p384.s). */
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32],
                      const uint8_t pub[65]);
+bool tls_p384_verify(const uint8_t sig[96], const uint8_t hash[48],
+                     const uint8_t pub[97]);
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_X509
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -1733,6 +1735,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             static const uint8_t rsa_oid[] = {TLS_OID_RSA_ENCRYPTION_BYTES};
             static const uint8_t ec_oid[] = {TLS_OID_EC_PUBLIC_KEY_BYTES};
             static const uint8_t p256_oid[] = {TLS_OID_SECP256R1_BYTES};
+            static const uint8_t p384_oid[] = {TLS_OID_SECP384R1_BYTES};
             static const uint8_t pss_oid[] = {TLS_OID_RSASSA_PSS_BYTES};
             tls_alg_t alg = TLS_ALG_UNKNOWN;
             if (scratch_alg.len == sizeof(rsa_oid) &&
@@ -1744,6 +1747,11 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                      scratch_param.tag == ASN1_OBJECTID && scratch_param.len == sizeof(p256_oid) &&
                      !memcmp(scratch_param.data, p256_oid, sizeof(p256_oid)))
                 alg = TLS_ALG_ECDSA_SECP256R1_SHA256;
+            else if (scratch_alg.len == sizeof(ec_oid) &&
+                     !memcmp(scratch_alg.data, ec_oid, sizeof(ec_oid)) &&
+                     scratch_param.tag == ASN1_OBJECTID && scratch_param.len == sizeof(p384_oid) &&
+                     !memcmp(scratch_param.data, p384_oid, sizeof(p384_oid)))
+                alg = TLS_ALG_ECDSA_SECP384R1_SHA384;
             else if (scratch_alg.len == sizeof(pss_oid) &&
                      !memcmp(scratch_alg.data, pss_oid, sizeof(pss_oid)))
             {
@@ -1763,6 +1771,7 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             out->pubkey.type = alg == TLS_ALG_RSA_PKCS1_SHA256 ? TLS_KEY_TYPE_RSA
                 : alg == TLS_ALG_RSA_PSS_RSAE_SHA256     ? TLS_KEY_TYPE_RSA
                 : alg == TLS_ALG_ECDSA_SECP256R1_SHA256   ? TLS_KEY_TYPE_EC_P256
+                : alg == TLS_ALG_ECDSA_SECP384R1_SHA384   ? TLS_KEY_TYPE_EC_P384
                 : TLS_KEY_TYPE_UNKNOWN;
             out->pubkey.allocated = false;
 
@@ -1808,7 +1817,8 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                 out->pubkey.rsa.exponent = rsa_exp.value;
                 out->pubkey.rsa.exp_len  = rsa_exp.len;
             }
-            else if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256)
+            else if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256 ||
+                     alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
             {
                 /* EC public key: BIT STRING value after the unused-bits byte. */
                 if (spki_bits.len < 2 || spki_bits.value[0] != 0)
@@ -2026,6 +2036,9 @@ static const uint8_t oid_rsassa_pss[] = {
 static const uint8_t oid_ecdsa_sha256[] = {
     TLS_OID_ECDSA_WITH_SHA256_BYTES
 };
+static const uint8_t oid_ecdsa_sha384[] = {
+    TLS_OID_ECDSA_WITH_SHA384_BYTES
+};
 
 tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len)
 {
@@ -2055,6 +2068,11 @@ tls_alg_t tls_x509_oid_to_sig_alg(const uint8_t *oid, size_t oid_len)
         memcmp(oid, oid_ecdsa_sha256, oid_len) == 0)
     {
         return TLS_ALG_ECDSA_SECP256R1_SHA256;
+    }
+    if (oid_len == sizeof(oid_ecdsa_sha384) &&
+        memcmp(oid, oid_ecdsa_sha384, oid_len) == 0)
+    {
+        return TLS_ALG_ECDSA_SECP384R1_SHA384;
     }
     return TLS_ALG_UNKNOWN;
 }
@@ -2180,7 +2198,8 @@ bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
         {
             if (!tls_asn1_next(&c, &param) ||
                 (scheme == TLS_ALG_RSA_PKCS1_SHA256 && (param.tag != ASN1_NULL || param.len)) ||
-                scheme == TLS_ALG_ECDSA_SECP256R1_SHA256)
+                scheme == TLS_ALG_ECDSA_SECP256R1_SHA256 ||
+                scheme == TLS_ALG_ECDSA_SECP384R1_SHA384)
             {
                 ERROR_CODE(0x65);
                 return false;
@@ -2210,10 +2229,11 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
         return TLS_KEY_OP_UNKNOWN;
     }
 
-    /* Hash the content. */
     struct tls_hash_context hash_ctx;
-    uint8_t digest[TLS_SHA256_DIGEST_LEN];
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    uint8_t hash_type = (alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
+                        ? (uint8_t)TLS_HASH_SHA384 : (uint8_t)TLS_HASH_SHA256;
+    uint8_t digest[TLS_SHA384_DIGEST_LEN]; /* large enough for both */
+    if (!tls_hash_context_init(&hash_ctx, hash_type))
     {
         return TLS_KEY_OP_INVALID;
     }
@@ -2221,6 +2241,28 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
     tls_hash_digest(&hash_ctx, digest);
 
     return tls_x509_signature_verify_digest(digest, sig, sig_len, key, alg);
+}
+
+/* Parse one DER INTEGER from der[0..len) into a big-endian, left-zero-padded
+ * buffer of coord_len bytes (32 for P-256, 48 for P-384).
+ * Returns pointer past the INTEGER, or NULL on error. */
+static const uint8_t *ecdsa_parse_int_n(const uint8_t *der, size_t len,
+                                        uint8_t *out, size_t coord_len)
+{
+    if (!der || len < 3 || der[0] != 0x02) return NULL;
+    size_t ilen = der[1];
+    if (ilen == 0 || ilen > coord_len + 1 || ilen > len - 2) return NULL;
+    const uint8_t *v = der + 2;
+    if (v[0] & 0x80) return NULL;           /* negative */
+    if (v[0] == 0x00)
+    {
+        if (ilen < 2 || !(v[1] & 0x80)) return NULL;
+        v++; ilen--;
+    }
+    if (ilen > coord_len) return NULL;
+    memset(out, 0, coord_len - ilen);
+    memcpy(out + (coord_len - ilen), v, ilen);
+    return v + ilen;
 }
 
 tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
@@ -2291,6 +2333,33 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
             tls_crypto_guard_disable();
             tls_secure_memzero(rs, sizeof(rs));
             return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
+        }
+
+        case TLS_ALG_ECDSA_SECP384R1_SHA384:
+        {
+            if (!tls_key_supports_operation(key, alg))
+                return TLS_KEY_OP_INVALID;
+            if (key->ec.len != 97 || !key->ec.pub)
+                return TLS_KEY_OP_INVALID;
+            uint8_t rs[96];
+            if (sig_len < 8 || sig[0] != 0x30)
+                return TLS_KEY_OP_INVALID;
+            size_t seq_len = sig[1];
+            if ((seq_len & 0x80) || 2 + seq_len != sig_len)
+                return TLS_KEY_OP_INVALID;
+            {
+                const uint8_t *end = sig + sig_len;
+                const uint8_t *p = ecdsa_parse_int_n(sig + 2, sig_len - 2, rs, 48);
+                if (p)
+                    p = ecdsa_parse_int_n(p, (size_t)(end - p), rs + 48, 48);
+                if (p != end)
+                    return TLS_KEY_OP_INVALID;
+            }
+            tls_crypto_guard_enable();
+            bool p384_ok = tls_p384_verify(rs, digest, key->ec.pub);
+            tls_crypto_guard_disable();
+            tls_secure_memzero(rs, sizeof(rs));
+            return p384_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 
         default:

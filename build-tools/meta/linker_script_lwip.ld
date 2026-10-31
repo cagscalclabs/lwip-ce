@@ -247,18 +247,13 @@ SECTIONS
             KEEP(*(.aes.decrypt.reloc.*))
             _aes_decrypt_reloc_run_end = .;
         }
-        /* P-256 field-multiply MAC blocks. Two members rather than one so a
-         * multiply and a square each copy only their own block; both run at
-         * the same VMA, sequential like every other member here. */
+        /* P-256 field-multiply MAC blocks (multiply + squaring) as ONE
+         * member, copied in once per public entry by p256_di (and again
+         * after RFC 6979 in tls_p256_sign), like .p384.mul.reloc. */
         .p256.mul.reloc
         {
             _p256_mul_reloc_load_start = . + (LOADADDR(.p256.mul.reloc) - ADDR(.p256.mul.reloc));
             KEEP(*(.p256.mul.reloc))
-        }
-        .p256.sq.reloc
-        {
-            _p256_sq_reloc_load_start = . + (LOADADDR(.p256.sq.reloc) - ADDR(.p256.sq.reloc));
-            KEEP(*(.p256.sq.reloc))
         }
         .p384.mul.reloc
         {
@@ -316,7 +311,6 @@ SECTIONS
 
     /* Back-compat aliases for the P-256 MAC-block copy loop in p256.s. */
     _p256_mul_reloc_len      = SIZEOF(.p256.mul.reloc);
-    _p256_sq_reloc_len       = SIZEOF(.p256.sq.reloc);
     _p384_mul_reloc_len      = SIZEOF(.p384.mul.reloc);
 
     /* Back-compat aliases for the AES copy loop in aes.s. */
@@ -342,14 +336,11 @@ SECTIONS
     _sha512_sched_vma = _sha384_reloc_run_end + 92;
 
     /* Guard: no consumer may outgrow the 1020-byte shared window. */
-    /* P-256 blocks must stay below .saferam.rng's 0x180-byte reservation:
-     * p256.s skips the reload when byte 0 still matches its load image, and
-     * that test is only sound while nothing below 0x180 can be overwritten
-     * without touching byte 0. */
-    ASSERT(SIZEOF(.p256.mul.reloc) <= 0x180,
-           "Error: .p256.mul.reloc exceeds the RNG-free window prefix")
-    ASSERT(SIZEOF(.p256.sq.reloc) <= 0x180,
-           "Error: .p256.sq.reloc exceeds the RNG-free window prefix")
+    /* .p256.mul.reloc is reloaded unconditionally at every public entry
+     * and after RFC 6979 (no byte-0 skip test any more), so like
+     * .p384.mul.reloc it only has to fit the 1020-byte window. */
+    ASSERT(SIZEOF(.p256.mul.reloc) <= 1020,
+           "Error: .p256.mul.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.p384.mul.reloc) <= 1020,
            "Error: .p384.mul.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.x25519.reloc) <= 0x400,

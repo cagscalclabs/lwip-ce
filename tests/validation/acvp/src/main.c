@@ -15,6 +15,7 @@
 #include <lwip/cryptography/hkdf.h>
 #include <lwip/cryptography/hmac.h>
 #include <lwip/cryptography/p256.h>
+#include <lwip/cryptography/p384.h>
 #include <lwip/cryptography/passwords.h>
 #include <lwip/cryptography/rsa.h>
 #include <lwip/cryptography/random.h>
@@ -55,6 +56,13 @@ enum acvp_operation {
     ACVP_OP_SHA2_512 = 25,
     ACVP_OP_HMAC_SHA2_512 = 26,
     ACVP_OP_SHA2_512_MCT = 27,
+    ACVP_OP_P384_PUBLIC = 28,
+    ACVP_OP_P384_SECRET = 29,
+    ACVP_OP_P384_SIGGEN = 30,
+    ACVP_OP_P384_SIGVER = 31,
+    ACVP_OP_P384_CDH = 32,
+    ACVP_OP_P384_SIGGEN_BEGIN = 33,
+    ACVP_OP_P384_SIGGEN_ACTIVE = 34,
 };
 
 enum acvp_status {
@@ -127,6 +135,8 @@ static uint8_t request[MAX_REQUEST];
 static uint8_t result[MAX_REQUEST];
 static uint8_t p256_signing_key[32];
 static bool p256_signing_key_ready;
+static uint8_t p384_signing_key[48];
+static bool p384_signing_key_ready;
 
 static uint16_t read_be16(const uint8_t *p)
 {
@@ -566,6 +576,59 @@ static uint8_t dispatch(uint8_t operation, const uint8_t *payload,
         if (!tls_p256_sign(result, payload, p256_signing_key))
             return ACVP_STATUS_INTERNAL;
         *result_len = 64; return ACVP_STATUS_OK;
+
+    case ACVP_OP_P384_PUBLIC:
+        if (payload_len != 48) return ACVP_STATUS_MALFORMED;
+        if (!tls_p384_publickey(result, payload)) return ACVP_STATUS_INTERNAL;
+        *result_len = 97; return ACVP_STATUS_OK;
+    case ACVP_OP_P384_SECRET:
+        if (payload_len != 145) return ACVP_STATUS_MALFORMED;
+        if (!tls_p384_secret(result, payload, payload + 48)) return ACVP_STATUS_INTERNAL;
+        *result_len = 48; return ACVP_STATUS_OK;
+    case ACVP_OP_P384_SIGGEN:
+        if (payload_len != 96) return ACVP_STATUS_MALFORMED;
+        if (!tls_p384_sign(result, payload + 48, payload)) return ACVP_STATUS_INTERNAL;
+        *result_len = 96; return ACVP_STATUS_OK;
+    case ACVP_OP_P384_SIGVER:
+        if (payload_len != 241) return ACVP_STATUS_MALFORMED;
+        result[0] = tls_p384_verify(payload + 145, payload + 97, payload) ? 1 : 0;
+        *result_len = 1; return ACVP_STATUS_OK;
+    case ACVP_OP_P384_CDH: {
+        uint8_t private_key[48];
+        if (payload_len != 97) return ACVP_STATUS_MALFORMED;
+        for (uint8_t attempt = 0; attempt < 8; attempt++) {
+            if (!tls_random_bytes_ex(private_key, sizeof(private_key), TLS_RNG_STRENGTH_128))
+                break;
+            if (tls_p384_publickey(result, private_key) &&
+                tls_p384_secret(result + 97, private_key, payload)) {
+                tls_secure_memzero(private_key, sizeof(private_key));
+                *result_len = 145; return ACVP_STATUS_OK;
+            }
+        }
+        tls_secure_memzero(private_key, sizeof(private_key));
+        return ACVP_STATUS_INTERNAL;
+    }
+    case ACVP_OP_P384_SIGGEN_BEGIN:
+        if (payload_len) return ACVP_STATUS_MALFORMED;
+        p384_signing_key_ready = false;
+        tls_secure_memzero(p384_signing_key, sizeof(p384_signing_key));
+        for (uint8_t attempt = 0; attempt < 8; attempt++) {
+            if (!tls_random_bytes_ex(p384_signing_key, sizeof(p384_signing_key),
+                                     TLS_RNG_STRENGTH_128)) break;
+            if (tls_p384_publickey(result, p384_signing_key)) {
+                p384_signing_key_ready = true;
+                *result_len = 97; return ACVP_STATUS_OK;
+            }
+        }
+        tls_secure_memzero(p384_signing_key, sizeof(p384_signing_key));
+        return ACVP_STATUS_INTERNAL;
+    case ACVP_OP_P384_SIGGEN_ACTIVE:
+        if (payload_len != 48 || !p384_signing_key_ready)
+            return ACVP_STATUS_MALFORMED;
+        if (!tls_p384_sign(result, payload, p384_signing_key))
+            return ACVP_STATUS_INTERNAL;
+        *result_len = 96; return ACVP_STATUS_OK;
+
     case ACVP_OP_AES_CBC_MCT:
         return run_cbc_mct(payload, payload_len, result_len);
 
@@ -693,6 +756,8 @@ static bool run_service(void)
     tls_secure_memzero(result, sizeof(result));
     tls_secure_memzero(p256_signing_key, sizeof(p256_signing_key));
     p256_signing_key_ready = false;
+    tls_secure_memzero(p384_signing_key, sizeof(p384_signing_key));
+    p384_signing_key_ready = false;
     return ok;
 }
 
