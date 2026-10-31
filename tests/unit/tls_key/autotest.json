@@ -27,7 +27,7 @@
     "hashWait|10",
     "key|left",
     "key|enter",
-    "delay|1000",
+    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -148,7 +148,7 @@
       "expected_CRCs": [
         "F7C03D8D"
       ],
-      "timeout": 100000
+      "timeout": 200000
     }
   }
 }

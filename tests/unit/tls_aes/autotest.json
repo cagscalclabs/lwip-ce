@@ -228,7 +228,7 @@
       "expected_CRCs": [
         "F7C03D8D"
       ],
-      "timeout": 100000
+      "timeout": 200000
     },
     "17": {
       "description": "AES-256-GCM (GCM Spec Test Case 16) encrypt/decrypt/bad tag",

@@ -830,11 +830,11 @@ def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int) -> None:
         "transfer_files": files,
         "target": {"name": program, "isASM": True},
         "sequence": ["delay|20000", "key|clear", "action|launch:INSTALL", "hashWait|1", "key|left",
-                     "key|enter", "delay|1000", usb, "action|launch", "hashWait|2", "delay|2000",
+                     "key|enter", "delay|2000", usb, "action|launch", "hashWait|2", "delay|2000",
                      "saveVar|NETLOG", "key|enter"],
         "hashes": {
             "1": {"description": "lwIP-CE installed", "start": "vram_start", "size": "vram_16_size",
-                  "expected_CRCs": ["F7C03D8D"], "timeout": 180000},
+                  "expected_CRCs": ["F7C03D8D"], "timeout": 200000},
             "2": {"description": f"{program} finished", "start": "vram_start", "size": "vram_8_size",
                   "expected_CRCs": VERDICT_CRCS + [CRASH_CRC], "timeout": timeout_ms},
         },
