@@ -365,6 +365,8 @@ static void bench_x25519(void)
 static void bench_p256(void)
 {
     uint8_t pub[65];
+    uint8_t peer[65];
+    uint8_t shared[32];
     uint8_t sig[64];
     uint8_t hash[32];
     clock_t t0;
@@ -375,13 +377,17 @@ static void bench_p256(void)
     t0 = clock();
     ok = tls_p256_publickey(pub, bench_key);
     bench_emit("p256_keygen", (uint32_t)(clock() - t0), ok ? 1u : 0u);
+    memcpy(peer, pub, sizeof(peer));
+    t0 = clock();
+    ok2 = tls_p256_secret(shared, bench_key, peer);
+    bench_emit("p256_ecdh", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
     t0 = clock();
     ok2 = tls_p256_sign(sig, hash, bench_key);
     bench_emit("p256_sign", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
     t0 = clock();
     ok2 = tls_p256_verify(sig, hash, pub);
     bench_emit("p256_verify", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
-    bench_sink += (uint32_t)ok + pub[0] + sig[0];
+    bench_sink += (uint32_t)ok + pub[0] + sig[0] + shared[0];
 }
 
 static void bench_p384(void)

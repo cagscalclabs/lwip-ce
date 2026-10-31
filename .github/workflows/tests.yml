@@ -146,7 +146,19 @@ jobs:
           curl -fL \
             -o ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
             https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          python3 tests/common/scripts/extract_ti_group_var.py \
+            ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
+            ${{env.LWIP_TESTS_COMMON}}/libload.8xv LibLoad
+          python3 tests/common/scripts/extract_ti_group_var.py \
+            ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
+            ${{env.LWIP_TESTS_COMMON}}/fileioc.8xv FILEIOC
+          python3 tests/common/scripts/extract_ti_group_var.py \
+            ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
+            ${{env.LWIP_TESTS_COMMON}}/usbdrvce.8xv USBDRVCE
           test -f ${{env.LWIP_TESTS_COMMON}}/clibs.8xg
+          test -f ${{env.LWIP_TESTS_COMMON}}/libload.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/fileioc.8xv
+          test -f ${{env.LWIP_TESTS_COMMON}}/usbdrvce.8xv
           test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
           test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
           test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
@@ -890,14 +902,27 @@ jobs:
                   rows.append((name, f'{secs*1000:.1f} ms total, {per:.3f} ms/unit, {units} units'))
               else:
                   rows.append((name, f'{secs*1000:.1f} ms'))
+          import os
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY', '')
           if not rows:
               print('No benchmark rows parsed.')
+              if summary_path:
+                  with open(summary_path, 'a') as f:
+                      f.write('## Algorithm Benchmark\n\nNo results parsed.\n')
               sys.exit(0)
           col = max(len(r[0]) for r in rows)
           print(f"{'Algorithm':<{col}}  Elapsed")
           print('-' * (col + 30))
           for name, val in rows:
               print(f'{name:<{col}}  {val}')
+          if summary_path:
+              with open(summary_path, 'a') as f:
+                  f.write('## Algorithm Benchmark\n\n')
+                  f.write('| Algorithm | Elapsed |\n')
+                  f.write('|-----------|----------|\n')
+                  for name, val in rows:
+                      f.write(f'| `{name}` | {val} |\n')
+                  f.write('\n')
           PY
 
       - name: Remove CEmu Rom

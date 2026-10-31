@@ -320,8 +320,10 @@
 ;      k' = (k' - d_i) / 16 = (k' >> 4) | 1   (stays odd; no carries),
 ;    and d_(WS_DIGITS-1) = k' (< 16, odd, positive).  Digit byte =
 ;    (d < 0 ? 0x80 : 0) | (|d| - 1) / 2, computed with masks only.
-; 3. Table T[j] = (2j + 1) Q, j = 0..7, Jacobian, T[j] = T[j-1] + 2Q (never
-;    exceptional for a point of prime order n).  Entries live in buffers that
+; 3. Table T[j] = (2j + 1) Q, j = 0..7, T[j] = T[j-1] + 2Q (never
+;    exceptional for a point of prime order n).  The seven computed entries
+;    are batch-normalized with one inversion, then used in mixed additions.
+;    Entries live in buffers that
 ;    are dead in ECDH: pq, r0, r1, add_result, double_result, `t5`, f7..f9,
 ;    f10..f12.  The lookup reads all eight entries every step (masks only).
 ; 4. acc = T(d_top); for i = top-1 .. 0: acc = 16 acc; acc += d_i Q.  For
@@ -360,9 +362,6 @@
 .equ ws_neg,  sm_em1                    ; current digit sign mask (secret)
 .equ WS_K,    sm_kp                     ; FIELD_BYTES: k' (LE), recoded in place
 .equ WS_DIG,  __\pfx\()_k               ; WS_DIGITS B: digit i at WS_DIG + i (k || x)
-.equ WS_T6,   PF7                       ; 3*FIELD_BYTES: f7..f9
-.equ WS_T7,   PF10                      ; 3*FIELD_BYTES: f10..f12
-
 \pfx\()_ws_mul:
     ex      de, hl
     ld      de, WS_K
@@ -439,13 +438,19 @@
     ldir                                ; saved0 = Q
     ld      hl, PS1
     call    \pfx\()_point_double        ; saved1 = 2Q
-.irp t, __\pfx\()_r0, __\pfx\()_r1, __\pfx\()_add_result, __\pfx\()_double_result, \t5, WS_T6, WS_T7
+.irp t, __\pfx\()_r0, __\pfx\()_r1, __\pfx\()_add_result, __\pfx\()_double_result, \t5, __\pfx\()_rt
     call    \pfx\()_ws_add              ; saved0 += 2Q
     ld      hl, PS0
     ld      de, \t
     ld      bc, 3*FIELD_BYTES
     ldir
 .endr
+    call    \pfx\()_ws_add              ; final entry 15Q
+    ld      hl, PS0
+    ld      de, PS1                     ; 15Q; 2Q is now dead
+    ld      bc, 3*FIELD_BYTES
+    ldir
+    call    \pfx\()_ws_normalize        ; entries become affine
 ; ---- main loop ----
     ld      a, (WS_DIG + WS_DIGITS - 1)
     call    \pfx\()_ws_lookup
@@ -468,7 +473,7 @@
     or      a, a
     sbc     hl, de
     jr      z, .Lws_last                ; public: i == 0
-    call    \pfx\()_ws_add              ; acc += d_i Q  (never exceptional)
+    call    \pfx\()_ws_madd             ; mixed acc += d_i Q
     ld      hl, (ws_ptr)
     dec     hl
     ld      (ws_ptr), hl
@@ -496,7 +501,7 @@
     ld      hl, PS1
     ld      (hl), 0
     ld      de, PS1 + 1
-    ld      bc, 3*FIELD_BYTES - 1
+    ld      bc, 2*FIELD_BYTES - 1
     ldir
     ECC_WS_ENT 0, __\pfx\()_pq
     ECC_WS_ENT 1, __\pfx\()_r0
@@ -504,8 +509,12 @@
     ECC_WS_ENT 3, __\pfx\()_add_result
     ECC_WS_ENT 4, __\pfx\()_double_result
     ECC_WS_ENT 5, \t5
-    ECC_WS_ENT 6, WS_T6
-    ECC_WS_ENT 7, WS_T7
+    ECC_WS_ENT 6, __\pfx\()_batch_z
+    ECC_WS_ENT 7, __\pfx\()_batch_z + 2*FIELD_BYTES
+    ld      hl, __\pfx\()_P_R
+    ld      de, PS1Z
+    ld      bc, FIELD_BYTES
+    ldir                                ; selected table point is affine
     FSUB    PF0, PZERO, PS1Y
     ld      a, (ws_neg)
     ld      c, a
@@ -514,10 +523,10 @@
     ld      iy, PS1Y
     ld      b, FIELD_BYTES
     jp      \pfx\()_select_b
-; saved1 |= (DE) & C, 3*FIELD_BYTES bytes.
+; saved1 |= (DE) & C, affine coordinates only.
 .Lwl_or:
     ld      hl, PS1
-    ld      b, 3*FIELD_BYTES
+    ld      b, 2*FIELD_BYTES
 .Lwl_byte:
     ld      a, (de)
     and     a, c
@@ -567,8 +576,8 @@
 ; __pfx_COMB + 2*FIELD_BYTES*(j-1) = sum over set bits s of j of 2^(d s) G,
 ; Montgomery form, x || y).
 ;
-; pfx_comb_mul: out = k * G.
-;   In: HL = out (3*FIELD_BYTES, may be saved0), DE = k (FIELD_BYTES
+; pfx_comb_mul: saved0 = k * G.
+;   In: HL = saved0, DE = k (FIELD_BYTES
 ;   big-endian, < n; 0 allowed -> O).  k must not lie in f[], saved0, saved1
 ;   or rt.  Out: Jacobian k G (Montgomery domain; O as (0, R, 0)).
 ;   Uses f[0..8], saved0 (accumulator), saved1 (table point), rt.
@@ -608,7 +617,7 @@
 .equ cb_inf, sm_e0
 .equ cb_iz,  sm_e1
 \pfx\()_comb_mul:
-    ld      (cb_out), hl
+    ld      (cb_out), hl                 ; retained for layout compatibility
     ld      hl, FIELD_BYTES - COMB_D/8  ; bit d-1 of strip 0 (BE)
     add     hl, de
     ld      (cb_ptr), hl
@@ -706,10 +715,6 @@
     ld      hl, cb_cnt
     dec     (hl)
     jp      nz, .Lcb_loop
-    ld      hl, PS0
-    ld      de, (cb_out)
-    ld      bc, 3*FIELD_BYTES
-    ldir                                ; (no-op copy when out = saved0)
     ret
 
 \pfx\()_comb_madd:
