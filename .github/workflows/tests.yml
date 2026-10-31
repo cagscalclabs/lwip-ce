@@ -640,20 +640,38 @@ jobs:
       - name: Install scapy
         run: sudo pip install --break-system-packages scapy
 
-      - name: Test host endpoint corroboration
+      - name: Test TLS host helpers
         if: matrix.suite == 'tls'
-        run: python3 tests/net/test_host_corroboration.py
+        run: |
+          python3 tests/net/test_host_corroboration.py
+          python3 tests/net/test_local_pki.py
 
       - name: Build ${{ matrix.suite }}
         run: make -C tests/net ${{ matrix.suite }}
 
+      - name: Prepare truststore signer for local TLS CA
+        if: matrix.suite == 'tls'
+        env:
+          TRUSTSTORE_SIGNER: ${{ secrets.TRUSTSTORE_SIGNER }}
+        run: |
+          signer="$RUNNER_TEMP/truststore-signer.pem"
+          printf '%s' "$TRUSTSTORE_SIGNER" > "$signer"
+          chmod 600 "$signer"
+          test -s "$signer"
+          openssl pkey -in "$signer" -noout
+
       - name: Run ${{ matrix.suite }}
         run: |
           suite_start=$(($(date +%s%N)/1000000))
+          truststore_args=()
+          if [ "${{ matrix.suite }}" = tls ]; then
+            truststore_args=(--truststore-signer "$RUNNER_TEMP/truststore-signer.pem" --external-info)
+          fi
           sudo --preserve-env=AUTOTESTER_ROM python3 tests/net/run.py \
             --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
             --rows tests/net/test-rows-${{ matrix.suite }}.json \
-            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
+            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}" \
+            "${truststore_args[@]}"
           # run.py runs under sudo, so the files it writes come out root-owned.
           # Hand them back before the row post-processing below rewrites them.
           sudo chown "$(id -un)" \
@@ -685,7 +703,9 @@ jobs:
 
       - name: Remove CEmu Rom
         if: always()
-        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+        run: |
+          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$RUNNER_TEMP/truststore-signer.pem" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()

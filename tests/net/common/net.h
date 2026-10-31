@@ -41,6 +41,7 @@ int net_end(void);
 
 void note(const char *fmt, ...);
 bool check(const char *name, bool ok);
+bool observe(const char *name, bool ok);
 void metric(const char *name, unsigned long value, const char *unit);
 
 bool pump(bool (*done)(void *), void *arg, uint32_t timeout_ms);

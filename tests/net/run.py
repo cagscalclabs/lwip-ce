@@ -270,15 +270,68 @@ class TLSBad(Handler):
 
 
 
-def self_signed_context(tmp: Path):
-    import ssl
-    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-                    "-nodes", "-days", "2", "-subj", f"/CN={HOST}", "-addext", f"subjectAltName=IP:{HOST}",
-                    "-keyout", str(tmp / "key.pem"), "-out", str(tmp / "cert.pem")],
-                   check=True, capture_output=True)
+def local_ca_fixtures(tmp: Path) -> dict[str, tuple[Path, Path]]:
+    """Create an ephemeral CA and locally signed RSA/ECDSA server leaves."""
+    ca_key = tmp / "local-ca-key.pem"
+    ca_cert = tmp / "local-ca-cert.pem"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-sha256",
+         "-nodes", "-days", "2", "-subj", "/CN=lwIP-CE runner-local test CA",
+         "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
+         "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+         "-addext", "subjectKeyIdentifier=hash",
+         "-keyout", str(ca_key), "-out", str(ca_cert)],
+        check=True, capture_output=True,
+    )
+
+    ext = tmp / "server.ext"
+    ext.write_text(
+        "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature\n"
+        "extendedKeyUsage=serverAuth\n"
+        f"subjectAltName=IP:{HOST}\n"
+        "subjectKeyIdentifier=hash\n"
+        "authorityKeyIdentifier=keyid,issuer\n"
+    )
+    fixtures: dict[str, tuple[Path, Path]] = {}
+    for serial, key_type in enumerate(("ecdsa", "rsa"), start=100):
+        key = tmp / f"local-{key_type}-key.pem"
+        csr = tmp / f"local-{key_type}.csr"
+        cert = tmp / f"local-{key_type}-cert.pem"
+        if key_type == "ecdsa":
+            subprocess.run(
+                ["openssl", "req", "-new", "-newkey", "ec",
+                 "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                 "-subj", f"/CN={HOST}", "-keyout", str(key), "-out", str(csr)],
+                check=True, capture_output=True,
+            )
+        else:
+            subprocess.run(
+                ["openssl", "req", "-new", "-newkey", "rsa:2048", "-sha256",
+                 "-nodes", "-subj", f"/CN={HOST}",
+                 "-keyout", str(key), "-out", str(csr)],
+                check=True, capture_output=True,
+            )
+        subprocess.run(
+            ["openssl", "x509", "-req", "-in", str(csr), "-sha256",
+             "-CA", str(ca_cert), "-CAkey", str(ca_key),
+             "-set_serial", str(serial), "-days", "2",
+             "-extfile", str(ext), "-out", str(cert)],
+            check=True, capture_output=True,
+        )
+        fixtures[key_type] = (cert, key)
+    fixtures["ca"] = (ca_cert, ca_key)
+    return fixtures
+
+
+def local_server_context(tmp: Path, fixtures: dict[str, tuple[Path, Path]]):
+    cert, key = fixtures["ecdsa"]
+    ca_cert, _ = fixtures["ca"]
+    chain = tmp / "local-ecdsa-chain.pem"
+    chain.write_bytes(cert.read_bytes() + ca_cert.read_bytes())
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-    ctx.load_cert_chain(tmp / "cert.pem", tmp / "key.pem")
+    ctx.load_cert_chain(chain, key)
     return ctx
 
 
@@ -338,8 +391,12 @@ def link_local() -> str:
 # ---------------------------------------------------------------------------
 
 class Control:
-    def __init__(self, tmp: Path):
+    def __init__(self, tmp: Path, fixtures: dict[str, tuple[Path, Path]],
+                 local_trust: bool):
         self.tmp = tmp
+        self.fixtures = fixtures
+        self.local_trust = local_trust
+        self.test_mode = "local"
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", 7000))
@@ -402,6 +459,12 @@ class Control:
     def cmd_time(self) -> str:
         return str(int(time.time()))
 
+    def cmd_local_trust(self) -> str:
+        return "1" if self.local_trust else "0"
+
+    def cmd_test_mode(self) -> str:
+        return self.test_mode
+
     def cmd_endpoint_pick(self, test: str) -> str:
         pool = ENDPOINT_POOLS.get(test)
         if not pool:
@@ -457,25 +520,19 @@ class Control:
     def cmd_tls_bad_result(self) -> str:
         return ",".join(TLSBad.outcomes) or "none"
 
-    def cmd_suite_server(self, cipher: str) -> str:
-        """Start an openssl s_server locked to one TLS 1.3 suite with a self-signed
-        cert.  The calc connects as a TLS client; the handshake will succeed
-        cryptographically but the cert is untrusted, so the calc sends unknown_ca.
-        The server output records exactly which alert it received."""
+    def cmd_suite_server(self, cipher: str, key_type: str = "ecdsa") -> str:
+        """Serve a runner-local CA-signed chain with a forced TLS 1.3 suite."""
         if cipher not in CIPHERS:
             return f"ERR unknown cipher {cipher!r}"
+        if key_type not in ("ecdsa", "rsa"):
+            return f"ERR unknown certificate key type {key_type!r}"
         if self.peer:
             self.peer.stop()
-        cert = self.tmp / f"suite_{cipher}_cert.pem"
-        key  = self.tmp / f"suite_{cipher}_key.pem"
-        subprocess.run(
-            ["openssl", "req", "-x509", "-newkey", "ec",
-             "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2",
-             "-subj", f"/CN=suite-test", "-addext", f"subjectAltName=IP:{HOST}",
-             "-keyout", str(key), "-out", str(cert)],
-            check=True, capture_output=True)
+        cert, key = self.fixtures[key_type]
+        ca_cert, _ = self.fixtures["ca"]
         args = ["s_server", "-accept", "7100", "-naccept", "1",
                 "-cert", str(cert), "-key", str(key),
+                "-cert_chain", str(ca_cert),
                 "-tls1_3", "-ciphersuites", CIPHERS[cipher]]
         self.peer = OpenSSL(args, self.tmp, "ACCEPT")
         if not self.peer.ready.wait(10):
@@ -483,9 +540,7 @@ class Control:
         return "OK"
 
     def cmd_suite_result(self) -> str:
-        """Return a verdict based on what alert the suite server received.
-        UNKNOWN_CA  → crypto correct, cert not trusted as expected (PASS).
-        Anything else (DECRYPT_ERROR, BAD_RECORD_MAC, …) → suite wiring broken."""
+        """Return the runner-local certificate handshake outcome."""
         out = self.wait_peer_exit()
         if re.search(r"unknown CA|unknown_ca|tlsv13 alert unknown ca", out, re.I):
             return "UNKNOWN_CA"
@@ -820,11 +875,17 @@ def serve(server, port: int, handler):
 # Suite runner
 # ---------------------------------------------------------------------------
 
-def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int) -> None:
+def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int,
+                   truststore: Path | None = None) -> None:
     program = SUITES[suite]
     suite_dir = HERE / suite
     extra = sorted(os.path.relpath(f, HERE) for f in suite_dir.glob("*.8xv"))
-    files = [f"{suite}/bin/{program}.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*")) + extra
+    common = [f for f in COMMON.glob("*.8x*")
+              if not f.name.startswith(".") and (truststore is None or f.name != "lwIPCERT.8xv")]
+    files = ([f"{suite}/bin/{program}.8xp"]
+             + sorted(os.path.relpath(f, HERE) for f in common)
+             + ([os.path.relpath(truststore, HERE)] if truststore else [])
+             + extra)
     path.write_text(json.dumps({
         "description": f"lwIP-CE networked suite {program}",
         "transfer_files": files,
@@ -1000,11 +1061,14 @@ def corroborate_external_https_failures(text: str, probe=host_https_probe) -> tu
     return "\n".join(rendered) + ("\n" if text.endswith("\n") else ""), skipped, records
 
 
-def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int) -> tuple[bool, str, dict, list[dict]]:
-    autotest = HERE / f"autotest-{suite}.json"
+def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int,
+              *, run_name: str | None = None,
+              truststore: Path | None = None) -> tuple[bool, str, dict, list[dict]]:
+    run_name = run_name or suite
+    autotest = HERE / f"autotest-{run_name}.json"
     log_path = HERE / "NETLOG.8xv"
     log_path.unlink(missing_ok=True)
-    write_autotest(autotest, suite, usb, timeout_ms)
+    write_autotest(autotest, suite, usb, timeout_ms, truststore)
     started = time.monotonic()
     crashed = False
     proc = subprocess.Popen([autotester, str(autotest)], cwd=HERE, stdout=subprocess.PIPE,
@@ -1026,7 +1090,7 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int) -> tuple[b
     if False:
         return False, f"{SUITES[suite]}: NETLOG.8xv was not saved (autotester exit {status})", {}, []
     raw_text = read_log(log_path)
-    log_path.replace(HERE / f"NETLOG-{suite}.8xv")
+    log_path.replace(HERE / f"NETLOG-{run_name}.8xv")
     metrics = {m.group(1): {"value": int(m.group(2)), "unit": m.group(3)}
                for m in re.finditer(r"^METRIC (\S+) (\d+) (\S+)$", raw_text, re.M)}
     metrics["host_wall_time"] = {"value": round(wall), "unit": "s"}
@@ -1097,12 +1161,34 @@ def main() -> int:
     ap.add_argument("--endpoint-probes", default=str(HERE / "endpoint-probes.json"))
     ap.add_argument("--rows", default=str(HERE / "test-rows.json"))
     ap.add_argument("--pcap", help="capture the TAP interface to this file (needs root and scapy)")
+    ap.add_argument("--external-info", action="store_true",
+                    help="run public HTTPS/WSS probes as non-gating informational checks")
+    ap.add_argument("--truststore-signer", type=Path,
+                    help="production TRUSTSTORE_SIGNER key used to sign a runner-local test truststore")
     args = ap.parse_args()
+
+    requested_suites = args.suite or list(SUITES)
+    if "tls" in requested_suites and args.truststore_signer is None:
+        ap.error("the tls suite requires --truststore-signer")
+    if ("tls" in requested_suites and args.external_info
+            and not (COMMON / "lwIPCERT.8xv").is_file()):
+        ap.error("--external-info requires the production tests/common/lwIPCERT.8xv")
 
     setup_interface()
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        TLSBad.context = self_signed_context(tmp)
+        fixtures = local_ca_fixtures(tmp)
+        local_trust = args.truststore_signer is not None
+        local_truststore = tmp / "lwIPCERT-local.8xv"
+        if local_trust:
+            subprocess.run(
+                [sys.executable, str(HERE / "generate_test_truststore.py"),
+                 "--certificate", str(fixtures["ca"][0]),
+                 "--signer", str(args.truststore_signer),
+                 "--output", str(local_truststore)],
+                check=True,
+            )
+        TLSBad.context = local_server_context(tmp, fixtures)
         for server, port, handler in [
             (TCP6, 7001, Echo), (UDP6, 7002, UDPEcho), (TCP, 7004, WebSocketEcho), (TCP, 7005, TLSBad),
             (TCP, 7006, Bulk), (TCP, 7007, Sink), (TCP, 7008, Hold), (TCP, 7009, HalfClose),
@@ -1111,7 +1197,7 @@ def main() -> int:
         ]:
             serve(server, port, handler)
         global CONTROL
-        control = CONTROL = Control(tmp)
+        control = CONTROL = Control(tmp, fixtures, local_trust)
         capture = None
         if os.geteuid() == 0:
             try:
@@ -1124,13 +1210,35 @@ def main() -> int:
                 log("scapy missing: multicast, ACD and IPv6 router checks will fail")
 
         results, metrics, endpoint_probes = [], {}, []
-        for suite in args.suite or list(SUITES):
+        informational = []
+        for suite in requested_suites:
             log(f"running {SUITES[suite]}")
-            ok, text, values, probes = run_suite(suite, args.autotester, args.usb, args.timeout)
+            truststore = local_truststore if suite == "tls" else None
+            control.test_mode = "local"
+            ok, text, values, probes = run_suite(
+                suite, args.autotester, args.usb, args.timeout,
+                truststore=truststore,
+            )
             metrics[suite] = values
             endpoint_probes.extend({"suite": suite, **probe} for probe in probes)
             results.append((suite, ok, text))
             print(text, flush=True)
+
+            if suite == "tls" and args.external_info:
+                # Boot a fresh calculator with the unmodified production
+                # truststore.  Public endpoint observations never contribute
+                # to the gating result above.
+                control.test_mode = "external"
+                log("running NETTLS external observations with production truststore")
+                info_ok, info_text, info_values, info_probes = run_suite(
+                    suite, args.autotester, args.usb, args.timeout,
+                    run_name="tls-external",
+                )
+                metrics["tls_external"] = info_values
+                endpoint_probes.extend({"suite": "tls_external", **probe}
+                                       for probe in info_probes)
+                informational.append(("tls-external", info_ok, info_text))
+                print(info_text, flush=True)
 
         if capture:
             from scapy.all import wrpcap
@@ -1142,6 +1250,8 @@ def main() -> int:
     Path(args.rows).write_text(json.dumps(table_rows, indent=2) + "\n")
     for suite, ok, _ in results:
         print(f"{SUITES[suite]}: {'PASS' if ok else 'FAIL'}")
+    for suite, ok, _ in informational:
+        print(f"{suite.upper()}: INFORMATIONAL ({'completed' if ok else 'incomplete'})")
     return 0 if all(ok for _, ok, _ in results) else 1
 
 
