@@ -745,6 +745,159 @@ jobs:
             tests/profiling/lwip_dast/autotester.log
           if-no-files-found: ignore
 
+  bench:
+    name: Algorithm benchmark
+    needs: prepare_rom
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Load pinned CI dependency versions
+        id: ci_versions
+        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y make tar wget
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/CEdev
+          key: ${{ runner.os }}-cedev-${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
+
+      - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
+
+      - name: Add CEdev to PATH
+        run: echo "${{ github.workspace }}/CEdev/bin" >> $GITHUB_PATH
+
+      - name: Download this run's lwip-latest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/release
+
+      - name: Install lwip.lib + headers into CEdev
+        run: |
+          mkdir -p "${{ env.CEDEV }}/lib/libload" "${{ env.CEDEV }}/include"
+          cp "${{ github.workspace }}/release/lwip.lib" "${{ env.CEDEV }}/lib/libload/lwip.lib"
+          cp "${{ github.workspace }}/release/lwip.h" "${{ env.CEDEV }}/include/lwip.h"
+          cp -r "${{ github.workspace }}/release/lwip" "${{ env.CEDEV }}/include/lwip"
+
+      - name: Download encrypted CEmu ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ github.workspace }}
+
+      - name: Decrypt CEmu ROM
+        run: |
+          gpg --batch --yes \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "${{ env.AUTOTESTER_ROM }}" \
+            --decrypt "${{ github.workspace }}/CE.rom.enc"
+          shred -u "${{ github.workspace }}/CE.rom.enc"
+
+      - name: Set up CEmu with emulated networking
+        id: cemu
+        uses: alessiodam/cemu-net-action@v1
+        with:
+          cemu-ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
+
+      - name: Install Autotester CLI
+        run: cmake -E copy "${{ steps.cemu.outputs.autotester }}" "${{ env.CEDEV_BIN }}/cemu-autotester"
+
+      - name: Prepare shared dyload files
+        run: |
+          mkdir -p ${{ env.LWIP_TESTS_COMMON }}
+          cp "${{ github.workspace }}/release/appinst/lwIPINST.8xp" ${{ env.LWIP_TESTS_COMMON }}/
+          cp "${{ github.workspace }}/release/lwip.8xv" ${{ env.LWIP_TESTS_COMMON }}/
+          for appvar in "${{ github.workspace }}"/release/appinst/LWIP.*.8xv; do
+            cp "$appvar" "${{ env.LWIP_TESTS_COMMON }}/"
+          done
+          curl -fL \
+            -o ${{ env.LWIP_TESTS_COMMON }}/clibs.8xg \
+            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          python3 tests/common/scripts/sync_appvars.py
+
+      - name: Build primitives benchmark
+        run: make -C tests/profiling/primitives_bench
+
+      - name: Run primitives benchmark
+        run: |
+          timeout 900s cemu-autotester \
+            tests/profiling/primitives_bench/autotest.json 2>&1 || true
+
+      - name: Extract and print benchmark results
+        run: |
+          bench_var=$(find tests/profiling/primitives_bench -name 'TLSBENCH.8xv' 2>/dev/null | head -1)
+          if [ -z "$bench_var" ]; then
+            echo "TLSBENCH appvar not found; benchmark did not complete"
+            exit 0
+          fi
+          convbin -i "$bench_var" -o TLSBENCH.bin -j 8x -k bin
+          python3 - <<'PY'
+          import re, sys
+          TICKS_PER_SEC = 32768.0
+          raw = open('TLSBENCH.bin', 'rb').read().replace(b'\x00', b'').decode('utf-8', errors='replace')
+          in_results = False
+          rows = []
+          for line in raw.splitlines():
+              line = line.strip()
+              if line == 'marker_start':
+                  in_results = True
+                  continue
+              if line == 'marker_done':
+                  break
+              if not in_results or not line:
+                  continue
+              parts = line.split(',')
+              if len(parts) != 3:
+                  continue
+              name, ticks_s, units_s = parts
+              try:
+                  ticks = int(ticks_s)
+                  units = int(units_s)
+              except ValueError:
+                  continue
+              if name.startswith(('probe_', 'sink')):
+                  continue
+              secs = ticks / TICKS_PER_SEC
+              if units > 1:
+                  per = secs / units * 1000
+                  rows.append((name, f'{secs*1000:.1f} ms total, {per:.3f} ms/unit, {units} units'))
+              else:
+                  rows.append((name, f'{secs*1000:.1f} ms'))
+          if not rows:
+              print('No benchmark rows parsed.')
+              sys.exit(0)
+          col = max(len(r[0]) for r in rows)
+          print(f"{'Algorithm':<{col}}  Elapsed")
+          print('-' * (col + 30))
+          for name, val in rows:
+              print(f'{name:<{col}}  {val}')
+          PY
+
+      - name: Remove CEmu Rom
+        if: always()
+        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+
+      - name: Upload benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-primitives
+          path: |
+            tests/profiling/primitives_bench/TLSBENCH.8xv
+            tests/profiling/primitives_bench/autotest.json
+          if-no-files-found: ignore
+
   host_tests:
     name: Host tests
     runs-on: ubuntu-latest
@@ -841,7 +994,7 @@ jobs:
 
   cleanup_rom:
     name: Delete encrypted CEmu ROM artifacts
-    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast, bench]
     if: always()
     permissions:
       actions: write
@@ -865,7 +1018,7 @@ jobs:
 
   gate_results:
     name: Collect test results
-    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, bench, host_tests, fuzz, cleanup_rom]
     if: always()
     permissions:
       actions: read
@@ -897,6 +1050,7 @@ jobs:
           CODEQL_RESULT: ${{ needs.analyze.result }}
           NETWORK_RESULT: ${{ needs.nettest.result }}
           DAST_RESULT: ${{ needs.dast.result }}
+          BENCH_RESULT: ${{ needs.bench.result }}
           HOST_RESULT: ${{ needs.host_tests.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
         run: |
@@ -910,11 +1064,12 @@ jobs:
             --arg codeql "$CODEQL_RESULT" \
             --arg network "$NETWORK_RESULT" \
             --arg dast "$DAST_RESULT" \
+            --arg bench "$BENCH_RESULT" \
             --arg host "$HOST_RESULT" \
             --arg fuzz "$FUZZ_RESULT" \
             '{rom_setup:$rom_setup, rom_cleanup:$rom_cleanup, unit:$unit,
               rfc:$rfc, acvp:$acvp, sast:$sast, codeql:$codeql,
-              network:$network, dast:$dast, host:$host, fuzz:$fuzz}')
+              network:$network, dast:$dast, bench:$bench, host:$host, fuzz:$fuzz}')
           echo "results=$results" >> "$GITHUB_OUTPUT"
 
       - name: Render consolidated test table
@@ -928,6 +1083,7 @@ jobs:
           CODEQL_RESULT: ${{ needs.analyze.result }}
           NETWORK_RESULT: ${{ needs.nettest.result }}
           DAST_RESULT: ${{ needs.dast.result }}
+          BENCH_RESULT: ${{ needs.bench.result }}
           HOST_RESULT: ${{ needs.host_tests.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
         run: |
@@ -943,6 +1099,7 @@ jobs:
             --fallback "SAST|CodeQL|$CODEQL_RESULT" \
             --fallback "NETTEST|All network suites|$NETWORK_RESULT" \
             --fallback "DAST|Suite execution|$DAST_RESULT" \
+            --fallback "BENCH|Algorithm benchmark|$BENCH_RESULT" \
             --fallback "HOST|Suite execution|$HOST_RESULT" \
             --fallback "FUZZ|All targets|$FUZZ_RESULT"
           cat "$RUNNER_TEMP/test-results.md" >> "$GITHUB_STEP_SUMMARY"
