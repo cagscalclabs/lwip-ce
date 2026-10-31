@@ -23,7 +23,7 @@ static void note_traceback(void)
     uint8_t count = 0;
     const struct lwip_traceback_entry *entries = lwip_get_traceback(&count);
 
-    for (uint8_t i = 0; entries && i < count; i++)
+    for (uint8_t i = 0; entries && i < count && i < 8; i++)
     {
         note("  trace %s:%lu kind %u extra 0x%02x",
              lwip_debug_file_name(entries[i].file),

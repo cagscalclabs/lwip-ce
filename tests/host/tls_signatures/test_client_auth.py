@@ -22,6 +22,15 @@ assert "altcp_tls_ce_write_handshake_fragments(" in auth_path
 # The empty-identity path now lives inside the Certificate case of the emitter.
 assert "tls_send_empty_certificate(" not in auth_path
 
+# Finished carries a suite-sized verify_data value: 32 bytes for SHA-256 or
+# 48 bytes for SHA-384. Both client generation and server receipt must reserve
+# the maximum while using the negotiated hash length on the wire.
+assert "uint8_t finished_hs[TLS_FINISHED_MAX_LEN];" in altcp
+assert "finished[TLS_FINISHED_MAX_LEN]" in altcp
+assert "size_t finished_len = 4u + ctx->hash_len;" in altcp
+assert "plain_len == finished_len" in altcp
+assert "tls_server_recv_finished(ctx, finished, finished_len)" in altcp
+
 # At socket level, setting the certificate fields must select the mTLS client
 # configuration before the external-PSK branch.
 connect_start = socket_api.index("static lwip_error_t lwip_socket_connect_now(")
