@@ -55,6 +55,14 @@ def test_documents_are_split_by_algorithm_and_mode() -> None:
     assert MODULE.select_expected(document, selected) == selected
 
 
+def test_worker_count_never_oversubscribes_cpus() -> None:
+    assert MODULE.worker_count(cpu_count=4) == 4
+    assert MODULE.worker_count(requested=2, cpu_count=8) == 2
+    assert MODULE.worker_count(requested=12, cpu_count=4) == 4
+    assert MODULE.worker_count(cpu_count=64) == len(MODULE.UNITS)
+    assert MODULE.worker_count(cpu_count=0) == 1
+
+
 def test_nested_result_matches_other_parallel_runners() -> None:
     unit = MODULE.UNITS[0]
     result = MODULE.nested_unit(unit, {
@@ -92,6 +100,7 @@ if __name__ == "__main__":
     test_every_unit_has_one_build_directory_and_unique_program()
     test_generated_corpus_is_covered_exactly_once()
     test_documents_are_split_by_algorithm_and_mode()
+    test_worker_count_never_oversubscribes_cpus()
     test_nested_result_matches_other_parallel_runners()
     test_single_unit_autotest_transfers_only_its_program()
     print("parallel ACVP runner self-test: PASS")

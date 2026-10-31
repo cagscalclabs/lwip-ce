@@ -34,6 +34,8 @@ all 16 primitive/mode units concurrently. Each gets its own filtered vector
 document, RPC handler, CEmu instance, and isolated `cemu0`. The runner maps
 each RPC connection to the algorithm selected for that worker, while the
 calculator binary independently rejects operations from other primitives.
+The active worker count is capped at `os.cpu_count()`; additional primitives
+remain queued until a CEmu worker releases a CPU slot.
 `run.py` remains the single-unit transport and validation handler. `summary.py`
 merges the per-unit responses and writes per-primitive counts and results for
 the consolidated test table and validation artifact. The `acvp-validation`

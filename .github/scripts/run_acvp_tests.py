@@ -45,6 +45,13 @@ UNITS = (
 )
 
 
+def worker_count(requested: int | None = None, cpu_count: int | None = None) -> int:
+    """Return a worker count that never oversubscribes available CPUs."""
+    available = max(1, cpu_count if cpu_count is not None else (os.cpu_count() or 1))
+    limit = available if requested is None else min(requested, available)
+    return min(max(1, limit), len(UNITS))
+
+
 def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -172,6 +179,8 @@ def main() -> int:
     parser.add_argument("--artifacts-dir", type=Path, required=True)
     parser.add_argument("--timeout-ms", type=int, default=60_000_000)
     parser.add_argument("--process-timeout", type=int, default=3600)
+    parser.add_argument("--max-workers", type=int,
+                        help="optional lower concurrency cap; never exceeds os.cpu_count()")
     args = parser.parse_args()
 
     image = os.environ.get("AUTOTESTER_IMAGE")
@@ -183,6 +192,8 @@ def main() -> int:
         parser.error(f"ACVP test directory does not exist: {args.tests_dir}")
     if not args.validation_dir.is_dir():
         parser.error(f"ACVP validation directory does not exist: {args.validation_dir}")
+    if args.max_workers is not None and args.max_workers < 1:
+        parser.error("--max-workers must be positive")
     if os.geteuid() != 0:
         parser.error("ACVP concurrency requires root network namespaces")
     args.prompt_document = json.loads(args.prompt.read_text())
@@ -193,6 +204,9 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     validate_module = load_module("acvp_validate", args.validation_dir / "validate.py")
+    workers = worker_count(args.max_workers)
+    print(f"ACVP concurrency: {workers} workers for {len(UNITS)} primitives "
+          f"(cpu_count={os.cpu_count() or 1})", flush=True)
     namespaces = {}
     results = {}
     try:
@@ -200,7 +214,9 @@ def main() -> int:
             ns = namespace_for(index)
             namespaces[unit.directory] = ns
             setup_namespace(ns)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(UNITS)) as pool:
+        # ThreadPoolExecutor keeps the remaining primitives queued until an
+        # active CEmu process releases one of the CPU-sized worker slots.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(run_worker, args, unit, namespaces[unit.directory], validate_module): unit
                        for unit in UNITS}
             for future in concurrent.futures.as_completed(futures):
