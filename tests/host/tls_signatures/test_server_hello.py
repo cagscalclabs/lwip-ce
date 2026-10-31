@@ -59,6 +59,8 @@ c_test = r'''
 #define TLS_PSK_TYPE_EXTERNAL 1
 #define TLS_RNG_STRENGTH_128 128
 #define TLS_HASH_SHA256 1
+#define TLS_HASH_SHA384 2
+#define TLS_AES_256_GCM_SHA384 0x1302
 #define TLS_STATE_INIT 0
 #define TLS_STATE_HRR_RECEIVED 2
 #define TLS_STATE_SERVER_HELLO_RECEIVED 3
@@ -86,7 +88,19 @@ struct tls_handshake_context {
     int psk_type;
     uint8_t ecdhe_shared[32], ecdhe_private[32], ecdhe_public[32];
     bool ecdhe_negotiated;
+    uint8_t hash_len;
+    uint8_t key_len;
 };
+
+struct tls_cipher_suite_info { uint16_t id; uint8_t hash; uint8_t hash_len; uint8_t key_len; uint8_t mode; uint64_t record_limit; };
+static const struct tls_cipher_suite_info tls_suite_table[] = {
+    {0x1301, 1, 32, 16, 0, 0}, {0x1302, 2, 48, 32, 0, 0}, {0x1304, 1, 32, 16, 1, 0}
+};
+static const struct tls_cipher_suite_info *tls_cipher_suite_info(uint16_t id)
+{
+    for (size_t i = 0; i < 3; i++) if (tls_suite_table[i].id == id) return &tls_suite_table[i];
+    return NULL;
+}
 
 static uint8_t last_alert;
 static size_t tls_parse_handshake_header(const uint8_t *p, size_t n,
@@ -123,8 +137,8 @@ static void tls_hash_update(struct tls_hash_context *h, const uint8_t *p, size_t
 static void tls_hash_digest(struct tls_hash_context *h, uint8_t out[32])
 { for (size_t i = 0; i < 32; i++) out[i] = (uint8_t)(h->hash >> ((i & 3) * 8)); }
 static void tls_hash_clear(struct tls_hash_context *h) { (void)h; }
-static bool transcript_hash_init(struct tls_hash_context *h)
-{ h->bytes = 0; h->hash = 5381u; h->resets++; return true; }
+static bool transcript_hash_init(struct tls_hash_context *h, uint8_t algorithm)
+{ (void)algorithm; h->bytes = 0; h->hash = 5381u; h->resets++; return true; }
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
 static bool tls_send_alert(struct tls_handshake_context *ctx, uint8_t level,
                            uint8_t description)

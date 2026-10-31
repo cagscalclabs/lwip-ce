@@ -268,26 +268,6 @@ class TLSBad(Handler):
             self.outcomes.append(e.reason or str(e))
 
 
-class SuiteEcho(Handler):
-    """TLS server that forces a single cipher suite and records the outcome.
-
-    A calc client that completes the handshake but rejects the certificate
-    (unknown_ca) proves that key-exchange, transcript hash, and record-layer
-    decryption all worked correctly for this suite — only the trust anchor
-    lookup failed, which is expected since the cert is self-signed."""
-    context = None
-    outcomes: list[str] = []
-
-    def serve(self):
-        import ssl
-        try:
-            with self.context.wrap_socket(self.request, server_side=True) as tls:
-                data = tls.recv(64)
-                if data:
-                    tls.sendall(data[::-1])
-                self.outcomes.append("handshake completed")
-        except ssl.SSLError as e:
-            self.outcomes.append(e.reason or str(e))
 
 
 def self_signed_context(tmp: Path):
@@ -302,22 +282,6 @@ def self_signed_context(tmp: Path):
     return ctx
 
 
-def suite_context(tmp: Path, suite: str):
-    """Self-signed context locked to a single TLS 1.3 cipher suite.
-    The calc will reject the cert (unknown_ca) but must complete key exchange
-    and decrypt the Certificate message using the forced suite's hash."""
-    import ssl
-    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-                    "-nodes", "-days", "2", "-subj", f"/CN=suite-test-{suite}",
-                    "-addext", f"subjectAltName=IP:{HOST}",
-                    "-keyout", str(tmp / f"suite_{suite}_key.pem"),
-                    "-out",    str(tmp / f"suite_{suite}_cert.pem")],
-                   check=True, capture_output=True)
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-    ctx.set_ciphersuites(CIPHERS[suite])
-    ctx.load_cert_chain(tmp / f"suite_{suite}_cert.pem", tmp / f"suite_{suite}_key.pem")
-    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -493,9 +457,44 @@ class Control:
     def cmd_tls_bad_result(self) -> str:
         return ",".join(TLSBad.outcomes) or "none"
 
+    def cmd_suite_server(self, cipher: str) -> str:
+        """Start an openssl s_server locked to one TLS 1.3 suite with a self-signed
+        cert.  The calc connects as a TLS client; the handshake will succeed
+        cryptographically but the cert is untrusted, so the calc sends unknown_ca.
+        The server output records exactly which alert it received."""
+        if cipher not in CIPHERS:
+            return f"ERR unknown cipher {cipher!r}"
+        if self.peer:
+            self.peer.stop()
+        cert = self.tmp / f"suite_{cipher}_cert.pem"
+        key  = self.tmp / f"suite_{cipher}_key.pem"
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "ec",
+             "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2",
+             "-subj", f"/CN=suite-test", "-addext", f"subjectAltName=IP:{HOST}",
+             "-keyout", str(key), "-out", str(cert)],
+            check=True, capture_output=True)
+        args = ["s_server", "-accept", "7100", "-naccept", "1",
+                "-cert", str(cert), "-key", str(key),
+                "-tls1_3", "-ciphersuites", CIPHERS[cipher]]
+        self.peer = OpenSSL(args, self.tmp, "ACCEPT")
+        if not self.peer.ready.wait(10):
+            return f"ERR suite s_server did not start: {self.peer.output[-80:]}"
+        return "OK"
+
     def cmd_suite_result(self) -> str:
-        time.sleep(0.5)
-        return ",".join(SuiteEcho.outcomes) or "none"
+        """Return a verdict based on what alert the suite server received.
+        UNKNOWN_CA  → crypto correct, cert not trusted as expected (PASS).
+        Anything else (DECRYPT_ERROR, BAD_RECORD_MAC, …) → suite wiring broken."""
+        out = self.wait_peer_exit()
+        if re.search(r"unknown CA|unknown_ca|tlsv13 alert unknown ca", out, re.I):
+            return "UNKNOWN_CA"
+        if re.search(r"decrypt.error|bad.record.mac|handshake.failure", out, re.I):
+            m = re.search(r"error[^\n]{0,120}", out, re.I)
+            return f"CRYPTO_ERROR {m.group(0)[:80] if m else ''}"
+        if re.search(r"CIPHER is|Ciphersuite:", out):
+            return "handshake completed"
+        return f"ERR no recognisable outcome: {out[-120:]!r}"
 
     def cmd_rst_result(self) -> str:
         time.sleep(1)
@@ -1104,12 +1103,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         TLSBad.context = self_signed_context(tmp)
-        SuiteEcho.context = suite_context(tmp, "aes256")
         for server, port, handler in [
             (TCP6, 7001, Echo), (UDP6, 7002, UDPEcho), (TCP, 7004, WebSocketEcho), (TCP, 7005, TLSBad),
             (TCP, 7006, Bulk), (TCP, 7007, Sink), (TCP, 7008, Hold), (TCP, 7009, HalfClose),
             (TCP, 7010, Reset), (TCP, 7011, Closer), (TCP, 7012, ExpectReset), (UDP, 7013, Broadcast), (UDP6, 7014, UDPLength),
-            (TCP, 7015, SuiteEcho), (TCP6, 7016, SizedBulk),
+            (TCP6, 7016, SizedBulk),
         ]:
             serve(server, port, handler)
         global CONTROL

@@ -399,17 +399,22 @@ static void test_wss(const char *pool, const char *connect_name,
  * suite.  The calc's truststore will not contain the self-signed cert, so
  * the connection fails with unknown_ca.  That is the expected outcome: it
  * proves key-exchange, transcript hash, and record-layer decryption all
- * succeeded for this suite (the server decrypted our Certificate message and
- * sent back an encrypted alert we could decrypt — otherwise the host would
- * report DECRYPT_ERROR or BAD_RECORD_MAC instead). */
-static void test_suite_forced(const char *suite_name)
+ * succeeded for this suite — a crypto failure would produce DECRYPT_ERROR
+ * or BAD_RECORD_MAC on the server instead. */
+static void test_suite_forced(const char *suite_name, const char *cipher_arg)
 {
-    char name[64], result[64];
+    char cmd[32], name[80], result[80];
     struct lwip_socket *sock;
 
+    snprintf(cmd, sizeof(cmd), "suite-server %s", cipher_arg);
     snprintf(name, sizeof(name), "%s forced suite connect", suite_name);
+    if (!host_call(cmd, NULL, 0, 15000))
+    {
+        check(name, false);
+        return;
+    }
     sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 30000);
-    if (!sock || lwip_socket_connect(sock, HOST, PORT_SUITE) != LWIP_OK)
+    if (!sock || lwip_socket_connect(sock, HOST, PORT_PSK) != LWIP_OK)
     {
         check(name, false);
         if (sock) lwip_socket_destroy(sock);
@@ -422,9 +427,8 @@ static void test_suite_forced(const char *suite_name)
     check(name, lwip_socket_status(sock) != LWIP_STATUS_CONNECTED);
     lwip_socket_destroy(sock);
 
-    /* Ask the host what alert it received.  UNKNOWN_CA means crypto was fine;
-     * anything else (DECRYPT_ERROR, BAD_RECORD_MAC, …) means the suite wiring
-     * is broken. */
+    /* Ask the host what alert the server received.  UNKNOWN_CA means crypto
+     * was correct for this suite; anything else means the wiring is broken. */
     snprintf(name, sizeof(name), "%s forced suite unknown_ca alert", suite_name);
     if (!host_call("suite-result", result, sizeof(result), 10000))
     {
@@ -462,7 +466,7 @@ int main(void)
          * endpoint consistently exercises Amazon Root CA 1 via Starfield. */
         pooled_https("starfield", " (Starfield)", true, false);
         pooled_https("p384", " (P-384 chain rejected)", false, false);
-        test_suite_forced("AES-256-GCM-SHA384");
+        test_suite_forced("AES-256-GCM-SHA384", "aes256");
         test_tls12_rejected();
         test_wss("wss", "wss connect", "wss_connect", 60000);
         /* This distant endpoint regularly needs much more emulated time.  Keep
