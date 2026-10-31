@@ -60,6 +60,8 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/CE-Programming/CEmu.git "$RUNNER_TEMP/CEmu"
           make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
+          python3 .github/scripts/patch_cemu_autotester_image.py \
+            "$RUNNER_TEMP/CEmu/tests/autotester"
           # Let cmake configure normally (CMakeLists's own -lcemucore in
           # CMAKE_EXE_LINKER_FLAGS goes via build.ninja LINK_FLAGS).
           # Do NOT pass -lcemucore via -DCMAKE_EXE_LINKER_FLAGS: cmake runs
@@ -75,6 +77,8 @@ jobs:
             "$RUNNER_TEMP/CEmu/core"
           cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
           install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
+          install -m755 "$RUNNER_TEMP/CEmu/build/autotester" "$RUNNER_TEMP/cemu-autotester-image"
+          strings "$RUNNER_TEMP/cemu-autotester-image" | grep -q "AUTOTESTER_IMAGE"
           "$RUNNER_TEMP/cemu-headless" --version || true
 
       - name: Download lwip-latest build artifact
@@ -123,15 +127,26 @@ jobs:
           done
           SEND_CMDS+="send-file auto $RELEASE/appinst/lwIPINST.8xp\n"
 
-          # Run the installer: launch INSTALL, wait for it to finish (20 s), then save state
+          # Run the installer, dismiss its completion dialog, then save the
+          # ready-to-test state.  Unit tests boot directly from this image.
+          COMMANDS=$(
           {
             printf '%b' "$SEND_CMDS"
             echo "run 5000"
-            echo "launch INSTALL"
-            echo "run 20000"
+            echo "launch INSTALL asm"
+            echo "run 60000"
+            echo "key left"
+            echo "key enter"
+            echo "run 2000"
             echo "save-state $IMAGE"
             echo "quit"
           } | "$HEADLESS" --rom "$ROM"
+          )
+          printf '%s\n' "$COMMANDS"
+          if grep -q '^ERR ' <<<"$COMMANDS"; then
+            echo "cemu-headless rejected an image preparation command" >&2
+            exit 1
+          fi
 
           test -f "$IMAGE"
           ls -lh "$IMAGE"
@@ -152,12 +167,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cemu-rom-patched
-          path: ${{ runner.temp }}/ce-patched.ce.enc
+          path: |
+            ${{ runner.temp }}/ce-patched.ce.enc
+            ${{ runner.temp }}/cemu-autotester-image
           if-no-files-found: error
           retention-days: 1
 
   dylib_unit_tests:
-    needs: [prepare_rom, prepare_patched_rom]
+    needs: prepare_patched_rom
     runs-on: ubuntu-latest
 
     steps:
@@ -213,78 +230,37 @@ jobs:
           test -f "${{env.CEDEV}}/include/lwip.h"
           test -d "${{env.CEDEV}}/include/lwip"
 
-      - name: Download encrypted CEmu ROM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cemu-rom-encrypted
-          path: ${{ runner.temp }}
-
       - name: Download patched CEmu image artifact
         uses: actions/download-artifact@v4
         with:
           name: cemu-rom-patched
           path: ${{ runner.temp }}
 
-      - name: Decrypt CEmu ROM and patched image
+      - name: Decrypt patched CEmu image
         run: |
-          gpg --batch --yes \
-            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
-            --output "${{ env.AUTOTESTER_ROM }}" \
-            --decrypt "${{ runner.temp }}/CE.rom.enc"
-          shred -u "${{ runner.temp }}/CE.rom.enc"
-
           gpg --batch --yes \
             --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
             --output "${{ runner.temp }}/ce-patched.ce" \
             --decrypt "${{ runner.temp }}/ce-patched.ce.enc"
           shred -u "${{ runner.temp }}/ce-patched.ce.enc"
 
-          test -f "${{ env.AUTOTESTER_ROM }}"
           test -f "${{ runner.temp }}/ce-patched.ce"
+          test -f "${{ runner.temp }}/cemu-autotester-image"
           echo "AUTOTESTER_IMAGE=${{ runner.temp }}/ce-patched.ce" >> "$GITHUB_ENV"
-          FILE_SIZE=$(stat -c%s "${{ env.AUTOTESTER_ROM }}" 2>/dev/null || stat -f%z "${{ env.AUTOTESTER_ROM }}")
-          echo "Decrypted ROM size: ${FILE_SIZE} bytes"
-
-      - name: Set up CEmu with emulated networking
-        id: cemu
-        uses: alessiodam/cemu-net-action@v1
-        with:
-          cemu-ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
 
       - name: Install Autotester CLI
         run: |
-          cmake -E copy "${{ steps.cemu.outputs.autotester }}" "${{env.CEDEV_BIN}}/cemu-autotester"
-          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar"
+          install -m755 "${{ runner.temp }}/cemu-autotester-image" "${{env.CEDEV_BIN}}/cemu-autotester"
+          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "AUTOTESTER_IMAGE"
 
-      - name: Prepare shared dyload test files
+      - name: Prepare unit-test truststore
         run: |
           mkdir -p ${{env.LWIP_TESTS_COMMON}}
-          cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
-          cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_TESTS_COMMON}}/
-          for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
-            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/"
-          done
           curl -fL \
             -o ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv \
             https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
-          curl -fL \
-            -o ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
-            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
-          test -f ${{env.LWIP_TESTS_COMMON}}/clibs.8xg
           test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.0.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.1.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.2.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.3.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.4.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.5.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.6.8xv
           ls -lh ${{env.LWIP_TESTS_COMMON}}
-          # The dylib spans as many LWIP.<n>.8xv appvars as it needs; make every
-          # autotest.json transfer exactly the ones this build produced.
-          python3 tests/common/scripts/sync_appvars.py
 
       - name: Run Dyload Unit Tests
         run: |
@@ -315,7 +291,6 @@ jobs:
       - name: Remove CEmu Rom
         if: always()
         run: |
-          shred -u "${{env.AUTOTESTER_ROM}}" 2>/dev/null || true
           shred -u "${{env.AUTOTESTER_IMAGE}}" 2>/dev/null || true
 
   rfc_compliance:

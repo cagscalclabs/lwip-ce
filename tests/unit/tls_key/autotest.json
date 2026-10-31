@@ -1,32 +1,13 @@
 {
   "description": "Test tls_key dispatch layer (verify, sign, encrypt, decrypt)",
   "transfer_files": [
-    "bin/XKEY.8xp",
-    "../../common/clibs.8xg",
-    "../../common/lwIPINST.8xp",
-    "../../common/LWIP.0.8xv",
-    "../../common/LWIP.1.8xv",
-    "../../common/LWIP.2.8xv",
-    "../../common/LWIP.3.8xv",
-    "../../common/LWIP.4.8xv",
-    "../../common/LWIP.5.8xv",
-    "../../common/LWIP.6.8xv",
-    "../../common/LWIP.7.8xv",
-    "../../common/LWIP.8.8xv",
-    "../../common/lwip.8xv"
+    "bin/XKEY.8xp"
   ],
   "target": {
     "name": "XKEY",
     "isASM": true
   },
   "sequence": [
-    "delay|10000",
-    "key|clear",
-    "action|launch:INSTALL",
-    "hashWait|10",
-    "key|left",
-    "key|enter",
-    "delay|1000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -120,7 +101,7 @@
       "timeout": 10000
     },
     "8": {
-      "description": "tls_key_sign: RSA→UNSUPPORTED, ECDSA public-only→INVALID, enc-alg→UNKNOWN",
+      "description": "tls_key_sign: RSA\u2192UNSUPPORTED, ECDSA public-only\u2192INVALID, enc-alg\u2192UNKNOWN",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",
@@ -138,16 +119,6 @@
         "D1F2869F"
       ],
       "timeout": 10000
-    },
-    "10": {
-      "description": "lwIP installed",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "label": "@lwip_installed",
-      "expected_CRCs": [
-        "F7C03D8D"
-      ],
-      "timeout": 100000
     }
   }
 }

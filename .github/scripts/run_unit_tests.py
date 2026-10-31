@@ -191,6 +191,12 @@ def main() -> None:
                     help="Optional: also write the legacy flat results-dylib.json")
     args = ap.parse_args()
 
+    image = os.environ.get("AUTOTESTER_IMAGE")
+    if not image:
+        ap.error("AUTOTESTER_IMAGE must point to the CEmu state with lwIP installed")
+    if not Path(image).is_file():
+        ap.error(f"AUTOTESTER_IMAGE does not exist: {image}")
+
     autotest_files = sorted(args.tests_dir.glob("*/autotest.json"))
     if not autotest_files:
         sys.exit(f"No autotest.json files found under {args.tests_dir}")
