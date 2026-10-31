@@ -38,8 +38,9 @@ def test_nested_result_matches_parallel_runner_schema() -> None:
         "status": "pass",
         "tests": [{
             "test": "Fuzz campaign",
-            "description": "1000 ms",
+            "description": "Fuzz campaign",
             "status": "pass",
+            "stats": "1000 ms",
         }],
     }
 

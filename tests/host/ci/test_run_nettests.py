@@ -29,8 +29,8 @@ def test_nested_unit_matches_unit_runner_schema() -> None:
         "description": "lwIP-CE networked suite NETTEST",
         "status": "pass",
         "tests": [
-            {"test": "lwip_start", "description": "lwip_start", "status": "pass"},
-            {"test": "expected rejection", "description": "expected rejection", "status": "skip"},
+            {"test": "lwip_start", "description": "lwip_start", "status": "pass", "stats": ""},
+            {"test": "expected rejection", "description": "expected rejection", "status": "skip", "stats": ""},
         ],
     }
 

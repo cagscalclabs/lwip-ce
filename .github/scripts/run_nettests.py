@@ -153,6 +153,7 @@ def nested_unit(suite: str, returncode: int, rows: list[dict], *, build_error: b
             "test": name,
             "description": name,
             "status": status_from_grade(row.get("grade")),
+            "stats": str(row.get("stats", "")),
         })
     if not tests:
         name = "Suite build" if build_error else "Suite execution"

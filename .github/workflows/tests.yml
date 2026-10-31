@@ -261,26 +261,14 @@ jobs:
         run: |
           python3 .github/scripts/run_unit_tests.py \
             "${{ env.LWIP_DYLIB_TESTS }}" \
-            --output "${{ github.workspace }}/results-unit.json" \
-            --flat-output "${{ github.workspace }}/results-dylib.json"
-
-      - name: Normalize unit-test rows
-        if: always()
-        run: |
-          python3 .github/scripts/test_table.py unit \
-            --results "${{ github.workspace }}/results-dylib.json" \
-            --repo "${{ github.workspace }}" \
-            --output "${{ github.workspace }}/test-rows-unit.json"
+            --output "${{ github.workspace }}/results-unit.json"
 
       - name: Upload unit-test rows
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-rows-unit
-          path: |
-            ${{ github.workspace }}/test-rows-unit.json
-            ${{ github.workspace }}/results-dylib.json
-            ${{ github.workspace }}/results-unit.json
+          path: ${{ github.workspace }}/results-unit.json
           if-no-files-found: warn
 
       - name: Remove CEmu Rom
@@ -401,19 +389,12 @@ jobs:
           python3 tests/validation/acvp/summary.py \
             --run-outcome "${{ steps.run_acvp.outcome }}"
 
-      - name: Normalize ACVP rows
-        if: always()
-        run: |
-          python3 .github/scripts/test_table.py acvp \
-            --results tests/validation/acvp/results.json \
-            --output test-rows-acvp.json
-
       - name: Upload ACVP rows
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-rows-acvp
-          path: test-rows-acvp.json
+          path: tests/validation/acvp/results-units.json
           if-no-files-found: warn
 
       - name: Remove CEmu ROM
@@ -695,7 +676,6 @@ jobs:
         with:
           name: test-rows-net
           path: |
-            tests/net/test-rows-net.json
             tests/net/results-net.json
             tests/net/metrics.json
             tests/net/endpoint-probes.json
@@ -847,7 +827,6 @@ jobs:
         with:
           name: test-rows-fuzz
           path: |
-            test-rows-fuzz.json
             tests/fuzz/results-fuzz.json
             tests/fuzz/out/logs/
           if-no-files-found: warn

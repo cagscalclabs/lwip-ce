@@ -110,9 +110,12 @@ static bool operation_allowed(uint8_t operation)
     case ACVP_PRIMITIVE_RSA_SIGVER:
         return operation == ACVP_OP_RSA_PSS_SHA2_256_VERIFY ||
                operation == ACVP_OP_RSA_PKCS1_SHA2_256_VERIFY;
-    case ACVP_PRIMITIVE_ECDSA_SIGVER: return operation == ACVP_OP_P256_SIGVER;
+    case ACVP_PRIMITIVE_ECDSA_SIGVER:
+        return operation == ACVP_OP_SHA2_256 ||
+               operation == ACVP_OP_P256_SIGVER;
     case ACVP_PRIMITIVE_DETECDSA_SIGGEN:
-        return operation == ACVP_OP_P256_SIGGEN_BEGIN ||
+        return operation == ACVP_OP_SHA2_256 ||
+               operation == ACVP_OP_P256_SIGGEN_BEGIN ||
                operation == ACVP_OP_P256_SIGGEN_ACTIVE;
     case ACVP_PRIMITIVE_X25519_SSC: return operation == ACVP_OP_X25519_SSC;
     case ACVP_PRIMITIVE_P256_CDH: return operation == ACVP_OP_P256_CDH;

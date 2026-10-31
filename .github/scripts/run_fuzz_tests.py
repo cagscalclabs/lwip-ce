@@ -59,8 +59,9 @@ def nested_unit(result: FuzzResult) -> dict:
         "status": status,
         "tests": [{
             "test": test_name,
-            "description": stats_text(result),
+            "description": test_name,
             "status": status,
+            "stats": stats_text(result),
         }],
     }
     if result.build_error:
