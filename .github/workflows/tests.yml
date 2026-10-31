@@ -809,49 +809,54 @@ jobs:
           if-no-files-found: warn
 
   fuzz:
-    name: Fuzz (${{ matrix.target }})
+    name: Fuzz
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [json, xml, url, base64, asn1, pcap, x509, ws, tls]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: Restore corpus
+      - name: Restore fuzz corpora
         uses: actions/cache@v5
         with:
-          path: tests/fuzz/out/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
-          restore-keys: fuzz-corpus-${{ matrix.target }}-
+          path: |
+            tests/fuzz/out/json
+            tests/fuzz/out/xml
+            tests/fuzz/out/url
+            tests/fuzz/out/base64
+            tests/fuzz/out/asn1
+            tests/fuzz/out/pcap
+            tests/fuzz/out/x509
+            tests/fuzz/out/ws
+            tests/fuzz/out/tls
+          key: fuzz-corpus-all-${{ github.run_id }}
+          restore-keys: fuzz-corpus-all-
 
-      - name: Fuzz
-        id: fuzz_target
-        run: make -C tests/fuzz run-${{ matrix.target }} FUZZ_SECONDS=300
-
-      - name: Normalize fuzz row
-        if: always()
+      - name: Fuzz all targets concurrently
+        id: fuzz_batch
         run: |
-          python3 .github/scripts/test_table.py row \
-            --module FUZZ --test "${{ matrix.target }}" \
-            --grade "${{ steps.fuzz_target.outcome }}" \
-            --output test-rows-fuzz-${{ matrix.target }}.json
+          python3 .github/scripts/run_fuzz_tests.py tests/fuzz \
+            --seconds 300 \
+            --output tests/fuzz/results-fuzz.json \
+            --rows test-rows-fuzz.json \
+            --artifacts-dir tests/fuzz/out/logs
 
-      - name: Upload fuzz row
+      - name: Upload fuzz results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-rows-fuzz-${{ matrix.target }}
-          path: test-rows-fuzz-${{ matrix.target }}.json
+          name: test-rows-fuzz
+          path: |
+            test-rows-fuzz.json
+            tests/fuzz/results-fuzz.json
+            tests/fuzz/out/logs/
           if-no-files-found: warn
 
       - name: Upload crash inputs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-crashes-${{ matrix.target }}
+          name: fuzz-crashes
           path: tests/fuzz/out/artifacts/
           if-no-files-found: ignore
 
