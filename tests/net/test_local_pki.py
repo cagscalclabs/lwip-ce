@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from run import HOST, local_ca_fixtures, write_autotest
+from run import COMMON, HOST, local_ca_fixtures, write_autotest
 
 
 with tempfile.TemporaryDirectory() as tmp_name:
@@ -42,11 +42,15 @@ with tempfile.TemporaryDirectory() as tmp_name:
     write_autotest(external_autotest, "tls", "usb|test", 1000)
     local_files = json.loads(local_autotest.read_text())["transfer_files"]
     external_files = json.loads(external_autotest.read_text())["transfer_files"]
+    preinstalled = {"clibs.8xg", "fileioc.8xv", "libload.8xv", "usbdrvce.8xv",
+                    "lwIPINST.8xp", "lwip.8xv"}
+    assert not preinstalled.intersection(map(os.path.basename, local_files))
+    assert not any(os.path.basename(path).startswith("LWIP.") for path in local_files)
     assert [p for p in local_files if "lwIPCERT" in p] == [
-        os.path.relpath(local_store, Path(__file__).parent)
+        os.path.relpath(local_store, local_autotest.parent)
     ]
     assert [p for p in external_files if "lwIPCERT" in p] == [
-        "../common/lwIPCERT.8xv"
+        os.path.relpath(COMMON / "lwIPCERT.8xv", external_autotest.parent)
     ]
 
 print("runner-local PKI self-test: PASS")

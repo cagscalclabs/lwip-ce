@@ -1,0 +1,4 @@
+NAME = AVH512
+ACVP_ALGORITHM = HMAC-SHA2-512
+ACVP_PRIMITIVE = 6
+include ../suite.mk

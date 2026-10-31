@@ -56,9 +56,14 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgl1-mesa-dev
 
-      - name: Build cemu-headless from CE-Programming/CEmu master
+      - name: Build state-aware networked CEmu tools
         run: |
-          git clone --depth 1 https://github.com/CE-Programming/CEmu.git "$RUNNER_TEMP/CEmu"
+          git init -q "$RUNNER_TEMP/CEmu"
+          git -C "$RUNNER_TEMP/CEmu" fetch -q --depth 1 \
+            https://github.com/alessiodam/CEmu-lwIP-CE.git \
+            "${{ steps.ci_versions.outputs.CEMU_REF }}"
+          git -C "$RUNNER_TEMP/CEmu" checkout -q FETCH_HEAD
+          git -C "$RUNNER_TEMP/CEmu" submodule update -q --init --depth 1
           make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
           git -C "$RUNNER_TEMP/CEmu" apply \
             "$GITHUB_WORKSPACE/build-tools/meta/cemu-autotester.patch"
@@ -356,7 +361,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-cryptography
 
-      - name: Generate 416-vector differential corpus
+      - name: Generate differential corpus
         run: python3 tests/validation/acvp/generate_vectors.py
 
       - name: Check host ACVP parsing
@@ -367,16 +372,28 @@ jobs:
         with:
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
-      - name: Build ACVP calculator service
-        run: make -C tests/validation/acvp
-
-      - name: Process ACVP fixture through CEmu
+      - name: Process ACVP primitives concurrently through CEmu
         id: run_acvp
         run: |
-          sudo --preserve-env=AUTOTESTER_ROM python3 tests/validation/acvp/run.py \
-            --autotester "${{ steps.env.outputs.autotester }}" \
+          set +e
+          sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
+            python3 .github/scripts/run_acvp_tests.py \
+            tests/acvp \
+            --validation-dir tests/validation/acvp \
+            --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
+            --prompt tests/validation/acvp/corpus/prompt.json \
+            --expected tests/validation/acvp/corpus/expected.json \
+            --oracle tests/validation/acvp/corpus/oracle.json \
+            --response tests/validation/acvp/response.json \
+            --output tests/validation/acvp/results-units.json \
+            --artifacts-dir tests/validation/acvp/units \
             --timeout-ms 60000000
+          status=$?
+          sudo chown -R "$(id -un)" tests/acvp tests/validation/acvp/units \
+            tests/validation/acvp/response.json tests/validation/acvp/results-units.json \
+            2>/dev/null || true
+          exit "$status"
 
       - name: Build ACVP results
         if: always()
@@ -413,8 +430,8 @@ jobs:
             tests/validation/acvp/artifacts/acvp-validation.vectors
             tests/validation/acvp/summary.md
             tests/validation/acvp/results.json
-            tests/validation/acvp/NETLOG.8xv
-            tests/validation/acvp/autotest.json
+            tests/validation/acvp/results-units.json
+            tests/validation/acvp/units/
           if-no-files-found: ignore
 
   semgrep_scan:
@@ -614,13 +631,9 @@ jobs:
 
   nettest:
     needs: [prepare_rom, prepare_patched_rom]
-    name: ${{ matrix.suite }}
+    name: NETTEST
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [sockets, raw, tls, records, server, perf, timeouts]
     steps:
       - uses: actions/checkout@v4
 
@@ -633,16 +646,11 @@ jobs:
         run: sudo pip install --break-system-packages scapy
 
       - name: Test TLS host helpers
-        if: matrix.suite == 'tls'
         run: |
           python3 tests/net/test_host_corroboration.py
           python3 tests/net/test_local_pki.py
 
-      - name: Build ${{ matrix.suite }}
-        run: make -C tests/net ${{ matrix.suite }}
-
       - name: Prepare truststore signer for local TLS CA
-        if: matrix.suite == 'tls'
         env:
           TRUSTSTORE_SIGNER: ${{ secrets.TRUSTSTORE_SIGNER }}
         run: |
@@ -653,50 +661,27 @@ jobs:
           openssl pkey -in "$signer" -noout
           test -x "$CEDEV_BIN/convbin"
 
-      - name: Run ${{ matrix.suite }}
+      - name: Run network suites concurrently
         run: |
-          suite_start=$(($(date +%s%N)/1000000))
-          truststore_args=()
-          if [ "${{ matrix.suite }}" = tls ]; then
-            truststore_args=(
-              --truststore-signer "$RUNNER_TEMP/truststore-signer.pem"
-              --convbin "$CEDEV_BIN/convbin"
-              --external-info
-            )
-          fi
-          sudo --preserve-env=AUTOTESTER_ROM python3 tests/net/run.py \
-            --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
-            --rows tests/net/test-rows-${{ matrix.suite }}.json \
-            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}" \
-            "${truststore_args[@]}"
-          # run.py runs under sudo, so the files it writes come out root-owned.
-          # Hand them back before the row post-processing below rewrites them.
-          sudo chown "$(id -un)" \
-            "tests/net/test-rows-${{ matrix.suite }}.json" \
-            tests/net/metrics.json 2>/dev/null || true
-          python3 - <<PY
-          import json, os
-          p = "tests/net/test-rows-${{ matrix.suite }}.json"
-          rows = json.load(open(p))
-          # Per-test timings already arrive from run.py (METRIC ... ms lines,
-          # attached to the row they belong to). Add only the heap figures the
-          # calc reported; a suite-wide wall time says nothing about a test.
-          heap = []
-          if os.path.exists("tests/net/metrics.json"):
-              metrics = json.load(open("tests/net/metrics.json"))
-              peak = [v["value"] for k, v in metrics.items()
-                      if k.endswith("_heap_peak") and isinstance(v, dict)]
-              if peak:
-                  heap.append(f"heap peak {max(peak)} B")
-              idle = metrics.get("heap_idle", {}).get("value")
-              if idle is not None:
-                  heap.append(f"heap idle {idle} B")
-          extra = "; ".join(heap)
-          if extra:
-              for r in rows:
-                  r["stats"] = "; ".join(x for x in (r.get("stats", ""), extra) if x)
-          json.dump(rows, open(p, "w"), indent=2)
-          PY
+          set +e
+          sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
+            python3 .github/scripts/run_nettests.py \
+            tests/net \
+            --autotester "${{ steps.env.outputs.image-autotester }}" \
+            --usb "${{ steps.env.outputs.usb-step }}" \
+            --truststore-signer "$RUNNER_TEMP/truststore-signer.pem" \
+            --convbin "$CEDEV_BIN/convbin" \
+            --external-info \
+            --output tests/net/results-net.json \
+            --rows tests/net/test-rows-net.json \
+            --metrics tests/net/metrics.json \
+            --endpoint-probes tests/net/endpoint-probes.json \
+            --artifacts-dir tests/net/artifacts
+          status=$?
+          sudo chown -R "$(id -un)" tests/net/artifacts \
+            tests/net/results-net.json tests/net/test-rows-net.json \
+            tests/net/metrics.json tests/net/endpoint-probes.json 2>/dev/null || true
+          exit "$status"
 
       - name: Remove CEmu Rom
         if: always()
@@ -708,14 +693,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-rows-net-${{ matrix.suite }}
+          name: test-rows-net
           path: |
-            tests/net/test-rows-${{ matrix.suite }}.json
-            tests/net/NETLOG-*.8xv
+            tests/net/test-rows-net.json
+            tests/net/results-net.json
             tests/net/metrics.json
             tests/net/endpoint-probes.json
-            tests/net/*.pcap
-            tests/net/autotest-*.json
+            tests/net/artifacts/
           if-no-files-found: ignore
 
   dast:

@@ -1,0 +1,5 @@
+NAME = AVDECD
+ACVP_ALGORITHM = DetECDSA
+ACVP_MODE = sigGen
+ACVP_PRIMITIVE = 14
+include ../suite.mk

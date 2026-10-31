@@ -1,0 +1,4 @@
+NAME = AVS512
+ACVP_ALGORITHM = SHA2-512
+ACVP_PRIMITIVE = 3
+include ../suite.mk

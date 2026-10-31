@@ -39,8 +39,16 @@ measurements are also attached to their checks in CI's consolidated job summary.
 
 ## Running
 
-CI runs one job per suite in `.github/workflows/net.yml`, after `alessiodam/cemu-net-action` sets up the TAP
-interface. Locally, after `make dylib`, with `clibs.8xg` and `lwIPCERT.8xv` in `tests/common` and scapy installed:
+CI uses `.github/scripts/run_nettests.py` to build and run all seven suites
+concurrently. Each unchanged `run.py` process gets its own Linux network
+namespace and private `cemu0`, so the suites can retain the fixed calculator
+addresses and service ports without interfering with one another. The runner
+emits the same nested module/unit/test JSON schema as the dyload unit runner,
+plus the existing flat rows, metrics, endpoint probes, pcaps, and `NETLOG`
+artifacts.
+
+Locally, after `make dylib`, with `lwIPCERT.8xv` in `tests/common`, a prepared
+CEmu state, and scapy installed:
 
 ```sh
 make -C tests/net
@@ -50,7 +58,7 @@ unshare -rn sh -c '
   ip tuntap add dev cemu0 mode tap user 0
   ip addr add 192.168.84.1/24 dev cemu0
   ip link set cemu0 up
-  AUTOTESTER_ROM=/path/to/ce.rom python3 tests/net/run.py --suite sockets \
+  AUTOTESTER_IMAGE=/path/to/ce-patched.ce python3 tests/net/run.py --suite sockets \
     --autotester /path/to/CEmu-lwIP-CE/tests/autotester/autotester \
     --usb "usb|eth,cemu0,dhcp=192.168.84.2/24,gw=192.168.84.1,dns=192.168.84.1"'
 ```

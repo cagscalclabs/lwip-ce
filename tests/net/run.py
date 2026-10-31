@@ -36,6 +36,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 COMMON = HERE.parent / "common"
+ARTIFACTS = Path(os.environ.get("NETTEST_OUTPUT_DIR", HERE)).resolve()
 SUITES = {"sockets": "NETTEST", "raw": "NETRAW", "tls": "NETTLS", "records": "NETREC",
           "server": "NETSRV", "perf": "NETPERF", "timeouts": "NETTMO"}
 CALC = "192.168.84.2"
@@ -880,23 +881,27 @@ def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int,
                    truststore: Path | None = None) -> None:
     program = SUITES[suite]
     suite_dir = HERE / suite
-    extra = sorted(os.path.relpath(f, HERE) for f in suite_dir.glob("*.8xv"))
+    relative = lambda item: os.path.relpath(item, path.parent)
+    extra = sorted(relative(f) for f in suite_dir.glob("*.8xv"))
+    preinstalled = re.compile(
+        r"^(?:clibs\.8xg|fileioc\.8xv|libload\.8xv|usbdrvce\.8xv|"
+        r"lwIPINST\.8xp|LWIP\.\d+\.8xv|lwip\.8xv)$",
+        re.I,
+    )
     common = [f for f in COMMON.glob("*.8x*")
-              if not f.name.startswith(".") and (truststore is None or f.name != "lwIPCERT.8xv")]
-    files = ([f"{suite}/bin/{program}.8xp"]
-             + sorted(os.path.relpath(f, HERE) for f in common)
-             + ([os.path.relpath(truststore, HERE)] if truststore else [])
+              if not f.name.startswith(".") and not preinstalled.fullmatch(f.name)
+              and (truststore is None or f.name != "lwIPCERT.8xv")]
+    files = ([relative(suite_dir / "bin" / f"{program}.8xp")]
+             + sorted(relative(f) for f in common)
+             + ([relative(truststore)] if truststore else [])
              + extra)
     path.write_text(json.dumps({
         "description": f"lwIP-CE networked suite {program}",
         "transfer_files": files,
         "target": {"name": program, "isASM": True},
-        "sequence": ["delay|20000", "key|clear", "action|launch:INSTALL", "hashWait|1", "key|left",
-                     "key|enter", "delay|2000", usb, "action|launch", "hashWait|2", "delay|2000",
+        "sequence": ["delay|2000", usb, "action|launch", "hashWait|2", "delay|2000",
                      "saveVar|NETLOG", "key|enter"],
         "hashes": {
-            "1": {"description": "lwIP-CE installed", "start": "vram_start", "size": "vram_16_size",
-                  "expected_CRCs": ["F7C03D8D"], "timeout": 200000},
             "2": {"description": f"{program} finished", "start": "vram_start", "size": "vram_8_size",
                   "expected_CRCs": VERDICT_CRCS + [CRASH_CRC], "timeout": timeout_ms},
         },
@@ -1066,13 +1071,14 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int,
               *, run_name: str | None = None,
               truststore: Path | None = None) -> tuple[bool, str, dict, list[dict]]:
     run_name = run_name or suite
-    autotest = HERE / f"autotest-{run_name}.json"
-    log_path = HERE / "NETLOG.8xv"
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    autotest = ARTIFACTS / f"autotest-{run_name}.json"
+    log_path = ARTIFACTS / "NETLOG.8xv"
     log_path.unlink(missing_ok=True)
     write_autotest(autotest, suite, usb, timeout_ms, truststore)
     started = time.monotonic()
     crashed = False
-    proc = subprocess.Popen([autotester, str(autotest)], cwd=HERE, stdout=subprocess.PIPE,
+    proc = subprocess.Popen([autotester, str(autotest)], cwd=ARTIFACTS, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, errors="replace")
     for out in proc.stdout:
         if "transfer progress" not in out:
@@ -1091,7 +1097,7 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int,
     if False:
         return False, f"{SUITES[suite]}: NETLOG.8xv was not saved (autotester exit {status})", {}, []
     raw_text = read_log(log_path)
-    log_path.replace(HERE / f"NETLOG-{run_name}.8xv")
+    log_path.replace(ARTIFACTS / f"NETLOG-{run_name}.8xv")
     metrics = {m.group(1): {"value": int(m.group(2)), "unit": m.group(3)}
                for m in re.finditer(r"^METRIC (\S+) (\d+) (\S+)$", raw_text, re.M)}
     metrics["host_wall_time"] = {"value": round(wall), "unit": "s"}
@@ -1158,9 +1164,9 @@ def main() -> int:
     ap.add_argument("--usb", required=True)
     ap.add_argument("--suite", action="append", choices=list(SUITES))
     ap.add_argument("--timeout", type=int, default=1800000)
-    ap.add_argument("--metrics", default=str(HERE / "metrics.json"))
-    ap.add_argument("--endpoint-probes", default=str(HERE / "endpoint-probes.json"))
-    ap.add_argument("--rows", default=str(HERE / "test-rows.json"))
+    ap.add_argument("--metrics", default=str(ARTIFACTS / "metrics.json"))
+    ap.add_argument("--endpoint-probes", default=str(ARTIFACTS / "endpoint-probes.json"))
+    ap.add_argument("--rows", default=str(ARTIFACTS / "test-rows.json"))
     ap.add_argument("--pcap", help="capture the TAP interface to this file (needs root and scapy)")
     ap.add_argument("--external-info", action="store_true",
                     help="run public HTTPS/WSS probes as non-gating informational checks")

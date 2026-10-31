@@ -1,0 +1,4 @@
+NAME = AVGCM
+ACVP_ALGORITHM = ACVP-AES-GCM
+ACVP_PRIMITIVE = 8
+include ../suite.mk

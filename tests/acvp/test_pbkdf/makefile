@@ -1,0 +1,4 @@
+NAME = AVPBKDF
+ACVP_ALGORITHM = PBKDF
+ACVP_PRIMITIVE = 10
+include ../suite.mk

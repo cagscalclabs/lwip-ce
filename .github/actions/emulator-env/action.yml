@@ -12,6 +12,9 @@ outputs:
   autotester:
     description: Path to the autotester binary.
     value: ${{ steps.cemu.outputs.autotester }}
+  image-autotester:
+    description: Path to the networked autotester that loads AUTOTESTER_IMAGE.
+    value: ${{ runner.temp }}/cemu-autotester-image
   usb-step:
     description: Autotester sequence step that plugs the Ethernet adapter in.
     value: ${{ steps.cemu.outputs.usb-step }}
@@ -93,6 +96,8 @@ runs:
         shred -u "$RUNNER_TEMP/ce-patched.ce.enc"
         echo "AUTOTESTER_ROM=$RUNNER_TEMP/ce.rom" >> "$GITHUB_ENV"
         echo "AUTOTESTER_IMAGE=$RUNNER_TEMP/ce-patched.ce" >> "$GITHUB_ENV"
+        chmod 755 "$RUNNER_TEMP/cemu-autotester-image"
+        strings "$RUNNER_TEMP/cemu-autotester-image" | grep -q "AUTOTESTER_IMAGE"
 
     - name: Set up CEmu with emulated networking
       id: cemu

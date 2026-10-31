@@ -1,8 +1,9 @@
 # ACVP validation harness
 
 This harness processes ACVP 1.0 vector-set JSON on the host and forwards only
-primitive operations over the private CEmu network to `ACVPRUN`, which calls
-the cryptographic APIs exported by the shipping `lwip.lib`.
+primitive operations over private CEmu networks to the programs under
+`tests/acvp/test_<algorithm>`, which call the cryptographic APIs exported by
+the shipping `lwip.lib`.
 
 The host owns JSON parsing, capability policy, ACVTS session state and (when
 live service support is added) mutual-TLS credentials. No ACVTS credential or
@@ -10,8 +11,8 @@ general-purpose JSON parser is placed on the calculator.
 
 Implemented ACVP adapters:
 
-- `SHA2-256` revision 1.0 AFT and standard MCT groups
-- `HMAC-SHA2-256` revision 1.0 and 2.0 AFT groups
+- `SHA2-256`, `SHA2-384`, and `SHA2-512` revision 1.0 AFT and standard MCT groups
+- `HMAC-SHA2-256`, `HMAC-SHA2-384`, and `HMAC-SHA2-512` revision 1.0 and 2.0 AFT groups
 - `ACVP-AES-CBC` AFT and MCT, plus `ACVP-AES-GCM` and `ACVP-AES-CCM` AFT
 - PBKDF2-HMAC-SHA-256 and SP 800-56C rev. 1 KDA/HKDF-SHA-256
 - RSA PSS and PKCS#1 v1.5 signature verification with SHA2-256 and e=65537
@@ -25,12 +26,18 @@ advertised: the production RNG intentionally has no API for injecting ACVP's
 deterministic entropy, nonce, and reseed strings.
 
 `fixtures/prompt.json` remains a small parser smoke test. The workflow uses
-`generate_vectors.py` to build a 416-vector differential corpus: 64 SHA-256
-vectors and 32 vectors for every other advertised primitive. It covers MCT,
+`generate_vectors.py` to build a 608-vector differential corpus: 64 vectors
+for each SHA-2 digest and 32 vectors for every other advertised primitive. It covers MCT,
 both cipher directions, valid and invalid authentication/signature cases,
-boundary lengths, and all generated-key operations. `run.py` executes that
-corpus through the calculator. `summary.py` writes per-primitive counts and
-results for the consolidated test table and validation artifact. The `acvp-validation` workflow artifact contains one self-contained,
+boundary lengths, and all generated-key operations. The CI orchestrator runs
+all 16 primitive/mode units concurrently. Each gets its own filtered vector
+document, RPC handler, CEmu instance, and isolated `cemu0`. The runner maps
+each RPC connection to the algorithm selected for that worker, while the
+calculator binary independently rejects operations from other primitives.
+`run.py` remains the single-unit transport and validation handler. `summary.py`
+merges the per-unit responses and writes per-primitive counts and results for
+the consolidated test table and validation artifact. The `acvp-validation`
+workflow artifact contains one self-contained,
 JSON-encoded `acvp-validation.vectors` evidence bundle with the known-answer
 vectors, expected results, calculator results, and validation results.
 Generated-key cases record semantic expectations and the independent

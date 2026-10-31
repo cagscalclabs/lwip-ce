@@ -1,0 +1,5 @@
+NAME = AVP256
+ACVP_ALGORITHM = KAS-ECC
+ACVP_MODE = CDH-Component
+ACVP_PRIMITIVE = 16
+include ../suite.mk
