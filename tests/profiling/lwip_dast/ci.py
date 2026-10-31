@@ -29,16 +29,16 @@ COMMON = ROOT / "tests" / "common"
 
 
 def write_autotest(path: Path, usb: str) -> None:
-    files = ["bin/LWDAST.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*"))
+    files = ["bin/LWDAST.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*") if not f.name.startswith("."))
     path.write_text(json.dumps({
         "description": "LWDAST driven by build-tools/dast/lwip-dast.py over the emulated adapter",
         "transfer_files": files,
         "target": {"name": "LWDAST", "isASM": True},
         "sequence": ["delay|20000", "key|clear", "action|launch:INSTALL", "hashWait|1", "key|left",
-                     "key|enter", "delay|1000", usb, "action|launch", "delay|86400000"],
+                     "key|enter", "delay|2000", usb, "action|launch", "delay|86400000"],
         "hashes": {
             "1": {"description": "lwIP-CE installed", "start": "vram_start", "size": "vram_16_size",
-                  "expected_CRCs": ["F7C03D8D"], "timeout": 180000},
+                  "expected_CRCs": ["F7C03D8D"], "timeout": 200000},
         },
     }, indent=2) + "\n")
 

@@ -1,0 +1,4 @@
+NAME = AVCBC
+ACVP_ALGORITHM = ACVP-AES-CBC
+ACVP_PRIMITIVE = 7
+include ../suite.mk

@@ -1,0 +1,4 @@
+NAME = AVH384
+ACVP_ALGORITHM = HMAC-SHA2-384
+ACVP_PRIMITIVE = 5
+include ../suite.mk

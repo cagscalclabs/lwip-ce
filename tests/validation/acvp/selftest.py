@@ -21,23 +21,26 @@ prompt = json.loads((HERE / "fixtures" / "prompt.json").read_text())
 expected = json.loads((HERE / "fixtures" / "expected.json").read_text())
 capabilities = json.loads((HERE / "capabilities.json").read_text())["algorithms"]
 assert {(item["algorithm"], item.get("mode")) for item in capabilities} == {
-    ("SHA2-256", None), ("HMAC-SHA2-256", None),
+    ("SHA2-256", None), ("SHA2-384", None), ("SHA2-512", None),
+    ("HMAC-SHA2-256", None), ("HMAC-SHA2-384", None), ("HMAC-SHA2-512", None),
     ("ACVP-AES-CBC", None), ("ACVP-AES-GCM", None), ("ACVP-AES-CCM", None),
     ("PBKDF", None), ("KDA", "HKDF"), ("RSA", "sigVer"),
     ("ECDSA", "sigVer"), ("DetECDSA", "sigGen"),
     ("XECDH", "SSC"), ("KAS-ECC", "CDH-Component"),
 }
-actual = process_document(prompt, reference_backend)
+fixture_deterministic = [prompt[0], *[vector for vector in prompt[1:]
+                                     if vector["algorithm"] not in GENERATED_ALGORITHMS]]
+actual = process_document(fixture_deterministic, reference_backend)
 if actual != expected:
     raise SystemExit("ACVP fixture response mismatch")
 
-markdown, report, passed = render(prompt, expected, actual, {}, "success")
-assert passed and report["passedTests"] == 10 and "10/10 test cases matched" in markdown
-_, failed_report, passed = render(prompt, expected, None, {}, "failure")
-assert not passed and failed_report["failedTests"] == 10
+markdown, report, passed = render(fixture_deterministic, expected, actual, {}, "success")
+assert passed and report["passedTests"] == 512 and "512/512 test cases matched" in markdown
+_, failed_report, passed = render(fixture_deterministic, expected, None, {}, "failure")
+assert not passed and failed_report["failedTests"] == 512
 
 corpus, corpus_expected, corpus_oracle = build_corpus()
-assert sum(corpus_oracle["counts"].values()) == 416
+assert sum(corpus_oracle["counts"].values()) == 608
 assert all(count >= 32 for count in corpus_oracle["counts"].values())
 deterministic = [corpus[0], *[vector for vector in corpus[1:]
                               if vector["algorithm"] not in GENERATED_ALGORITHMS]]
@@ -86,11 +89,11 @@ class SemanticBackend:
 
 corpus_response = process_document(corpus, SemanticBackend())
 corpus_report = validate_document(corpus, corpus_expected, corpus_response, corpus_oracle)
-assert corpus_report["passed"] and corpus_report["passedTests"] == 416
+assert corpus_report["passed"] and corpus_report["passedTests"] == 608
 corpus_markdown, corpus_summary, passed = render(
     corpus, corpus_expected, corpus_response, corpus_oracle, "success")
-assert passed and corpus_summary["passedTests"] == 416
-assert "416/416 test cases matched" in corpus_markdown and "| SHA2-256 |" in corpus_markdown
+assert passed and corpus_summary["passedTests"] == 608
+assert "608/608 test cases matched" in corpus_markdown and "| SHA2-256 |" in corpus_markdown
 assert "Actual vector inputs" not in corpus_markdown
 with tempfile.TemporaryDirectory() as artifact_tmp:
     artifact_dir = Path(artifact_tmp)
@@ -102,7 +105,7 @@ with tempfile.TemporaryDirectory() as artifact_tmp:
     assert bundle["knownAnswerVectors"] == corpus
     assert bundle["expectedResults"]["exactResults"] == corpus_expected
     assert bundle["calculatorResults"] == corpus_response
-    assert bundle["validationResults"]["passedTests"] == 416
+    assert bundle["validationResults"]["passedTests"] == 608
     assert len(bundle["expectedResults"]["semanticExpectations"]["XECDH"]["serverPrivateByTcId"]) == 32
 
 # Revision 1.0 carries HMAC lengths on the group instead of each test case.
@@ -169,7 +172,8 @@ def reply() -> None:
 thread = threading.Thread(target=reply)
 thread.start()
 backend = SocketBackend(client)
-assert backend(OP_SHA2_256, b"abc").hex() == expected[1]["testGroups"][0]["tests"][1]["md"].lower()
+from hashlib import sha256 as _sha256
+assert backend(OP_SHA2_256, b"abc").hex() == _sha256(b"abc").hexdigest()
 client.close()
 thread.join()
 print("ACVP host client self-test: PASS")

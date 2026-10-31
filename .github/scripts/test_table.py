@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize CI test outputs and render one table of grades and stats.
+"""Normalize CI test outputs and render hierarchical module summaries.
 
 Every suite reports whatever it can measure — milliseconds, heap bytes, or a
 preformatted string — and it all lands in one Stats cell. Net suites emit
@@ -10,6 +10,7 @@ so the row that carries the measurements represents the test.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 from pathlib import Path
 
@@ -194,33 +195,61 @@ def drop_net_guards(rows: list[dict[str, str]]) -> list[dict[str, str]]:
 
 def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
     rows: list[dict[str, str]] = []
+    nested: list[tuple[str, dict]] = []
+    present_categories: set[str] = set()
+
+    def result_category(path: Path, module: str) -> str:
+        name = path.name
+        if name == "results-unit.json":
+            return "UNIT"
+        if name == "results-net.json":
+            return "NETTEST"
+        if name == "results-units.json":
+            return "ACVP"
+        if name == "results-fuzz.json":
+            return "FUZZ"
+        return module.upper()
+
     for path in sorted(input_dir.rglob("*.json")) if input_dir.exists() else []:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         if isinstance(value, list):
-            rows.extend(item for item in value if isinstance(item, dict)
-                        and {"module", "test", "grade"} <= item.keys())
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                if {"module", "status", "units"} <= item.keys() and isinstance(item["units"], list):
+                    category = result_category(path, str(item["module"]))
+                    nested.append((category, item))
+                    present_categories.add(category)
+                elif {"module", "test", "grade"} <= item.keys():
+                    rows.append(item)
 
     present = {(str(row["module"]), str(row["test"])) for row in rows}
-    present_groups = {str(row.get("group", row["module"])) for row in rows}
+    present_groups = {str(row.get("group", row["module"])) for row in rows} | present_categories
     grouped_fallbacks = {"UNIT", "ACVP", "NETTEST", "DAST", "HOST", "FUZZ"}
     for fallback in fallbacks:
         module, test, result = fallback.split("|", 2)
         group_present = module in grouped_fallbacks and module in present_groups
         if not group_present and (module, test) not in present:
-            rows.append({"module": module, "test": test, "grade": grade(result)})
+            rows.append({"group": module, "module": module, "test": test,
+                         "grade": grade(result)})
 
-    merged: dict[tuple[str, str], dict[str, str]] = {}
+    merged: dict[tuple[str, str, str], dict[str, str]] = {}
     for row in drop_net_guards(rows):
-        key = (str(row["module"]), str(row["test"]))
+        group = str(row.get("group", row["module"]))
+        key = (group, str(row["module"]), str(row["test"]))
         stats = stats_of(row)
         if key not in merged:
-            merged[key] = {"group": str(row.get("group", "")),
-                           "module": key[0], "test": key[1],
+            merged[key] = {"group": group,
+                           "module": key[1], "test": key[2],
                            "grade": grade(row["grade"]), "stats": stats}
         else:
+            severity = {"Skipped": 0, "Pass": 1, "Fail": 2}
+            new_grade = grade(row["grade"])
+            if severity[new_grade] > severity[merged[key]["grade"]]:
+                merged[key]["grade"] = new_grade
             parts = [p for p in (merged[key]["stats"], stats) if p]
             seen: set[str] = set()
             merged[key]["stats"] = "; ".join(
@@ -247,59 +276,148 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
     def grade_cell(value: str) -> str:
         return f"{ICONS.get(value, '')} {value}".strip()
 
-    failures = [row for row in ordered if row["grade"] == "Fail"]
+    # Nested runner JSON is authoritative and retains the real
+    # module -> unit -> test hierarchy. Flat rows remain supported for jobs
+    # such as HOST/RFC/SAST that do not yet emit the shared nested schema.
+    hierarchy: dict[str, dict[str, list[dict[str, str]]]] = {}
+    module_categories: dict[str, str] = {}
+    for category, result in nested:
+        module = str(result["module"]).upper()
+        module_categories[module] = category
+        module_units = hierarchy.setdefault(module, {})
+        for index, unit_result in enumerate(result["units"], 1):
+            if not isinstance(unit_result, dict):
+                continue
+            unit = str(unit_result.get("unit", f"unit {index}"))
+            tests = unit_result.get("tests", [])
+            if not isinstance(tests, list) or not tests:
+                tests = [{
+                    "test": "Result",
+                    "description": str(unit_result.get("description", "")),
+                    "status": unit_result.get("status", "fail"),
+                }]
+            destination = module_units.setdefault(unit, [])
+            for test_index, test_result in enumerate(tests, 1):
+                if not isinstance(test_result, dict):
+                    continue
+                destination.append({
+                    "test": str(test_result.get("test", f"test {test_index}")),
+                    "description": str(test_result.get("description", "")),
+                    "grade": grade(test_result.get("status")),
+                    "stats": stats_of(test_result),
+                })
 
-    counts = {name: sum(1 for row in ordered if row["grade"] == name)
-              for name in ("Pass", "Fail", "Skipped")}
+    # Reconstruct the same shape for legacy flat rows.
+    for row in ordered:
+        module = str(row.get("group", "")).strip() or str(row["module"])
+        module_categories.setdefault(module, module.upper())
+        source_unit = str(row["module"])
+        test = str(row["test"])
+        if module.upper() == "NETTEST" and " - " in test:
+            unit, test = test.split(" - ", 1)
+        elif source_unit.casefold() != module.casefold():
+            unit = source_unit
+        else:
+            # Single-row modules (fuzz target, SAST tool, prerequisite, etc.)
+            # use the row itself as a one-test unit.
+            unit, test = test, "Result"
+        hierarchy.setdefault(module, {}).setdefault(unit, []).append({
+            "test": test, "description": "",
+            "grade": row["grade"], "stats": row["stats"],
+        })
+
+    category_rank = {name: i for i, name in enumerate(
+        ["PREREQUISITE", "UNIT", "HOST", "NETTEST", "DAST", "ACVP", "RFC", "SAST", "FUZZ"])}
+    hierarchy = dict(sorted(
+        hierarchy.items(),
+        key=lambda item: (category_rank.get(module_categories[item[0]], 99),
+                          item[0].casefold()),
+    ))
+
+    def aggregate(tests: list[dict[str, str]]) -> str:
+        grades = {test["grade"] for test in tests}
+        if "Fail" in grades:
+            return "Fail"
+        if "Pass" in grades:
+            return "Pass"
+        return "Skipped"
+
+    module_counts: dict[str, dict[str, int]] = {}
+    unit_grades: dict[str, dict[str, str]] = {}
+    for module, units in hierarchy.items():
+        unit_grades[module] = {unit: aggregate(tests) for unit, tests in units.items()}
+        module_counts[module] = {
+            name: sum(value == name for value in unit_grades[module].values())
+            for name in ("Pass", "Fail", "Skipped")
+        }
+
+    failures = [
+        (module, unit, test)
+        for module, units in hierarchy.items()
+        for unit, tests in units.items()
+        for test in tests if test["grade"] == "Fail"
+    ]
+    total_units = sum(len(units) for units in hierarchy.values())
     lines = ["## Test results", "",
-             f"**{counts['Pass']} passed, {counts['Fail']} failed, "
-             f"{counts['Skipped']} skipped** across {len(ordered)} rows.", ""]
+             f"**{len(hierarchy)} modules, {total_units} units, "
+             f"{sum(len(tests) for units in hierarchy.values() for tests in units.values())} tests** — "
+             f"{len(failures)} failing.", ""]
     if failures:
         lines += ["> [!WARNING]",
-                  f"> {len(failures)} failing: "
-                  + ", ".join(f"{row['module']} / {row['test']}" for row in failures[:10])
-                  + (f" (+{len(failures) - 10} more)" if len(failures) > 10 else ""),
-                  ""]
-    # GitHub sanitises inline styles, so rows cannot be tinted. Each group gets
-    # a coloured icon inside the Module column instead: rows stay in one table,
-    # sorted so a group's rows are contiguous.
+                  f"> {len(failures)} test failure"
+                  f"{'s' if len(failures) != 1 else ''}; expand the affected module below.", ""]
+
     GROUP_STYLE = {
         "PREREQUISITE": "\u26aa", "UNIT": "\U0001f7e9", "HOST": "\U0001f7e6",
         "NETTEST": "\U0001f7e8", "DAST": "\U0001f7e7", "ACVP": "\U0001f7ea",
         "RFC": "\U0001f7e5", "SAST": "\U0001f7e5", "FUZZ": "\u26ab",
     }
-    GROUP_LABEL = {
-        "PREREQUISITE": "prerequisites", "UNIT": "unit tests", "HOST": "host tests",
-        "NETTEST": "network tests", "DAST": "DAST", "ACVP": "ACVP",
-        "RFC": "RFC review", "SAST": "SAST", "FUZZ": "fuzz",
-    }
+    lines += ["| Module | # Units | # Pass | # Fail | # Skip |",
+              "|---|---:|---:|---:|---:|"]
+    for module, units in hierarchy.items():
+        counts = module_counts[module]
+        icon = GROUP_STYLE.get(module_categories[module], "")
+        lines.append(
+            f"| {md(f'{icon} {module}'.strip())} | {len(units)} | "
+            f"{counts['Pass']} | {counts['Fail']} | {counts['Skipped']} |"
+        )
 
-    def module_cell(row: dict) -> str:
-        icon = GROUP_STYLE.get(str(row.get("group", "")).upper(), "")
-        return f"{icon} {row['module']}".strip()
+    for module, units in hierarchy.items():
+        module_failures = [(unit, test) for mod, unit, test in failures if mod == module]
+        lines += ["", "<details>",
+                  f"<summary>{html.escape(module)} Units</summary>", ""]
+        if module_failures:
+            lines += ["#### Failures", ""]
+            lines.extend(
+                f"- **{md(unit)}** — {md(test['test'])}"
+                + (f": {md(test['description'])}" if test["description"] and
+                   test["description"] != test["test"] else "")
+                + (f" ({md(test['stats'])})" if test["stats"] else "")
+                for unit, test in module_failures
+            )
+            lines.append("")
 
-    # Compact legend immediately above the table, listing only the groups that
-    # actually reported, so the icons are self-explanatory.
-    legend = []
-    seen_groups: list[str] = []
-    for row in ordered:
-        group = str(row.get("group", "")).strip() or "OTHER"
-        if group not in seen_groups:
-            seen_groups.append(group)
-    for group in seen_groups:
-        count = sum(1 for row in ordered
-                    if (str(row.get("group", "")).strip() or "OTHER") == group)
-        icon = GROUP_STYLE.get(group.upper(), "")
-        label = GROUP_LABEL.get(group.upper(), group)
-        legend.append(f"{icon} {label} ({count})".strip())
-    if legend:
-        lines += [" | ".join(legend), ""]
+        lines += ["| Unit | # Tests | # Pass | # Fail | # Skip |",
+                  "|---|---:|---:|---:|---:|"]
+        for unit, tests in units.items():
+            counts = {name: sum(test["grade"] == name for test in tests)
+                      for name in ("Pass", "Fail", "Skipped")}
+            lines.append(
+                f"| {md(unit)} | {len(tests)} | {counts['Pass']} | "
+                f"{counts['Fail']} | {counts['Skipped']} |"
+            )
 
-    lines += ["| Module | Test | Grade | Stats |", "|---|---|---|---|"]
-    lines.extend(
-        f"| {md(module_cell(row))} | {md(row['test'])} | {grade_cell(row['grade'])} | "
-        f"{md(row['stats'])} |"
-        for row in ordered)
+        for unit, tests in units.items():
+            lines += ["", "<details>",
+                      f"<summary>{html.escape(unit)} Tests — "
+                      f"{grade_cell(unit_grades[module][unit])}</summary>", "",
+                      "| Test | Grade | Description | Stats |", "|---|---|---|---|"]
+            lines.extend(
+                f"| {md(test['test'])} | {grade_cell(test['grade'])} | "
+                f"{md(test['description'])} | {md(test['stats'])} |" for test in tests
+            )
+            lines += ["", "</details>"]
+        lines += ["", "</details>"]
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

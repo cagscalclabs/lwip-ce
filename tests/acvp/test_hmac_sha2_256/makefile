@@ -1,0 +1,4 @@
+NAME = AVH256
+ACVP_ALGORITHM = HMAC-SHA2-256
+ACVP_PRIMITIVE = 4
+include ../suite.mk

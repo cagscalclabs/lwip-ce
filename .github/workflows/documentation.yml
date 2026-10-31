@@ -2,19 +2,8 @@ name: Documentation
 
 on:
   push:
-    paths:
-      - docs/**
-      - src/**
-      - exports.txt
-      - build-tools/scripts/generate_lwip_headers.py
-      - build-tools/scripts/header_dump.py
-      - build-tools/meta/public_api_manifest.csv
-      - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
-      - tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py
-      - statistics/rng/**
-      - statistics/timing/**
-      - .github/workflows/documentation.yml
-  pull_request:
+    branches:
+      - master
     paths:
       - docs/**
       - src/**

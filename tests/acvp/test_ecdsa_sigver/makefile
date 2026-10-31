@@ -1,0 +1,5 @@
+NAME = AVECDSA
+ACVP_ALGORITHM = ECDSA
+ACVP_MODE = sigVer
+ACVP_PRIMITIVE = 13
+include ../suite.mk

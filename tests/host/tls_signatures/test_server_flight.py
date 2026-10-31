@@ -57,6 +57,15 @@ assert re.search(
     re.S,
 )
 
+# Finished is 4 + Hash.length bytes. Both client emission and server receipt
+# must accommodate SHA-384 rather than retaining the old SHA-256-only 36-byte
+# buffers, and the server must validate the negotiated dynamic length.
+assert altcp_source.count("uint8_t finished_hs[4 + TLS_HASH_MAX_DIGEST_LEN];") == 1
+assert altcp_source.count("uint8_t finished[4 + TLS_HASH_MAX_DIGEST_LEN];") == 1
+assert "size_t finished_len = 4u + (size_t)ctx->hash_len;" in altcp_source
+assert "plain_len == finished_len" in altcp_source
+assert "tls_server_recv_finished(ctx, finished, finished_len)" in altcp_source
+
 # Certificate-only ClientHellos do not contain the PSK extensions.  Keep the
 # external-PSK requirements and ServerHello selection confined to that mode.
 assert "!cert_mode && (!psk_modes_seen || !psk_seen || !dhe_mode || !psk_ok)" in hello

@@ -16,8 +16,6 @@ from acvp_client import AcvpError, SocketBackend, process_file
 from validate import validate_document
 
 HERE = Path(__file__).resolve().parent
-COMMON = HERE.parents[1] / "common"
-PROGRAM = "ACVPRUN"
 VERDICT_CRCS = ["A511C030", "22D544B5"]
 CRASH_CRC = "93BFC41E"
 
@@ -35,18 +33,17 @@ class Control:
             self.socket.sendto(sequence + b" OK", address)
 
 
-def write_autotest(path: Path, usb: str, timeout_ms: int) -> None:
-    files = [f"bin/{PROGRAM}.8xp"] + sorted(os.path.relpath(p, HERE) for p in COMMON.glob("*.8x*"))
+def write_autotest(path: Path, usb: str, timeout_ms: int,
+                   program: str, binary: Path) -> None:
+    relative = lambda item: os.path.relpath(item, path.parent)
+    files = [relative(binary)]
     path.write_text(json.dumps({
         "description": "lwIP-CE ACVP network validation",
         "transfer_files": files,
-        "target": {"name": PROGRAM, "isASM": True},
-        "sequence": ["delay|20000", "key|clear", "action|launch:INSTALL", "hashWait|1", "key|left",
-                     "key|enter", "delay|1000", usb, "action|launch", "hashWait|2", "delay|2000",
+        "target": {"name": program, "isASM": True},
+        "sequence": ["delay|1000", usb, "action|launch", "hashWait|2", "delay|2000",
                      "saveVar|NETLOG", "key|enter"],
         "hashes": {
-            "1": {"description": "lwIP-CE installed", "start": "vram_start", "size": "vram_16_size",
-                  "expected_CRCs": ["F7C03D8D"], "timeout": 180000},
             "2": {"description": "ACVP service finished", "start": "vram_start", "size": "vram_8_size",
                   "expected_CRCs": VERDICT_CRCS + [CRASH_CRC], "timeout": timeout_ms},
         },
@@ -67,6 +64,9 @@ def main() -> int:
     parser.add_argument("--expected", type=Path, default=HERE / "corpus" / "expected.json")
     parser.add_argument("--oracle", type=Path, default=HERE / "corpus" / "oracle.json")
     parser.add_argument("--response", type=Path, default=HERE / "response.json")
+    parser.add_argument("--program", required=True)
+    parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--work-dir", type=Path, default=HERE)
     # CEmu's autotester deadline advances with emulated time.  Full ACVP
     # Monte Carlo groups perform hundreds of thousands of primitive calls, so
     # use the same generous allowance as the legacy CAVP profiling harness.
@@ -97,11 +97,12 @@ def main() -> int:
     if not ready.wait(10) or "error" in outcome:
         print(f"ACVP listener failed: {outcome.get('error', 'startup timeout')}", file=sys.stderr)
         return 1
-    autotest = HERE / "autotest.json"
-    log_path = HERE / "NETLOG.8xv"
+    args.work_dir.mkdir(parents=True, exist_ok=True)
+    autotest = args.work_dir / "autotest.json"
+    log_path = args.work_dir / "NETLOG.8xv"
     log_path.unlink(missing_ok=True)
-    write_autotest(autotest, args.usb, args.timeout_ms)
-    proc = subprocess.run([args.autotester, str(autotest)], cwd=HERE)
+    write_autotest(autotest, args.usb, args.timeout_ms, args.program, args.binary)
+    proc = subprocess.run([args.autotester, str(autotest)], cwd=args.work_dir)
     thread.join(timeout=10)
 
     if "error" in outcome:

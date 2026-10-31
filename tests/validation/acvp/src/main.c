@@ -64,6 +64,65 @@ enum acvp_status {
     ACVP_STATUS_INTERNAL = 3,
 };
 
+enum acvp_primitive {
+    ACVP_PRIMITIVE_ALL = 0,
+    ACVP_PRIMITIVE_SHA2_256 = 1,
+    ACVP_PRIMITIVE_SHA2_384,
+    ACVP_PRIMITIVE_SHA2_512,
+    ACVP_PRIMITIVE_HMAC_SHA2_256,
+    ACVP_PRIMITIVE_HMAC_SHA2_384,
+    ACVP_PRIMITIVE_HMAC_SHA2_512,
+    ACVP_PRIMITIVE_AES_CBC,
+    ACVP_PRIMITIVE_AES_GCM,
+    ACVP_PRIMITIVE_AES_CCM,
+    ACVP_PRIMITIVE_PBKDF,
+    ACVP_PRIMITIVE_HKDF,
+    ACVP_PRIMITIVE_RSA_SIGVER,
+    ACVP_PRIMITIVE_ECDSA_SIGVER,
+    ACVP_PRIMITIVE_DETECDSA_SIGGEN,
+    ACVP_PRIMITIVE_X25519_SSC,
+    ACVP_PRIMITIVE_P256_CDH,
+};
+
+#ifndef ACVP_PRIMITIVE
+#define ACVP_PRIMITIVE ACVP_PRIMITIVE_ALL
+#endif
+
+static bool operation_allowed(uint8_t operation)
+{
+    if (ACVP_PRIMITIVE == ACVP_PRIMITIVE_ALL) return true;
+    switch (ACVP_PRIMITIVE) {
+    case ACVP_PRIMITIVE_SHA2_256:
+        return operation == ACVP_OP_SHA2_256 || operation == ACVP_OP_SHA2_256_MCT;
+    case ACVP_PRIMITIVE_SHA2_384:
+        return operation == ACVP_OP_SHA2_384 || operation == ACVP_OP_SHA2_384_MCT;
+    case ACVP_PRIMITIVE_SHA2_512:
+        return operation == ACVP_OP_SHA2_512 || operation == ACVP_OP_SHA2_512_MCT;
+    case ACVP_PRIMITIVE_HMAC_SHA2_256: return operation == ACVP_OP_HMAC_SHA2_256;
+    case ACVP_PRIMITIVE_HMAC_SHA2_384: return operation == ACVP_OP_HMAC_SHA2_384;
+    case ACVP_PRIMITIVE_HMAC_SHA2_512: return operation == ACVP_OP_HMAC_SHA2_512;
+    case ACVP_PRIMITIVE_AES_CBC:
+        return operation == ACVP_OP_AES_CBC || operation == ACVP_OP_AES_CBC_MCT;
+    case ACVP_PRIMITIVE_AES_GCM: return operation == ACVP_OP_AES_GCM;
+    case ACVP_PRIMITIVE_AES_CCM: return operation == ACVP_OP_AES_CCM;
+    case ACVP_PRIMITIVE_PBKDF: return operation == ACVP_OP_PBKDF2_SHA2_256;
+    case ACVP_PRIMITIVE_HKDF: return operation == ACVP_OP_HKDF_SHA2_256;
+    case ACVP_PRIMITIVE_RSA_SIGVER:
+        return operation == ACVP_OP_RSA_PSS_SHA2_256_VERIFY ||
+               operation == ACVP_OP_RSA_PKCS1_SHA2_256_VERIFY;
+    case ACVP_PRIMITIVE_ECDSA_SIGVER:
+        return operation == ACVP_OP_SHA2_256 ||
+               operation == ACVP_OP_P256_SIGVER;
+    case ACVP_PRIMITIVE_DETECDSA_SIGGEN:
+        return operation == ACVP_OP_SHA2_256 ||
+               operation == ACVP_OP_P256_SIGGEN_BEGIN ||
+               operation == ACVP_OP_P256_SIGGEN_ACTIVE;
+    case ACVP_PRIMITIVE_X25519_SSC: return operation == ACVP_OP_X25519_SSC;
+    case ACVP_PRIMITIVE_P256_CDH: return operation == ACVP_OP_P256_CDH;
+    default: return false;
+    }
+}
+
 static uint8_t request[MAX_REQUEST];
 static uint8_t result[MAX_REQUEST];
 static uint8_t p256_signing_key[32];
@@ -618,8 +677,10 @@ static bool run_service(void)
                                                     request_id, 0);
             break;
         }
-        size_t result_len;
-        uint8_t status = dispatch(operation, request, payload_len, &result_len);
+        size_t result_len = 0;
+        uint8_t status = operation_allowed(operation)
+            ? dispatch(operation, request, payload_len, &result_len)
+            : ACVP_STATUS_UNSUPPORTED;
         if (!send_response(socket, status, request_id, result_len)) {
             ok = false;
             break;

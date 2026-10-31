@@ -1,0 +1,4 @@
+NAME = AVS384
+ACVP_ALGORITHM = SHA2-384
+ACVP_PRIMITIVE = 2
+include ../suite.mk

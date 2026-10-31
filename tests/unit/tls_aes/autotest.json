@@ -1,32 +1,13 @@
 {
   "description": "Test AES cipher in GCM, CBC, and CCM modes (128- and 256-bit keys)",
   "transfer_files": [
-    "bin/XAES.8xp",
-    "../../common/clibs.8xg",
-    "../../common/lwIPINST.8xp",
-    "../../common/LWIP.0.8xv",
-    "../../common/LWIP.1.8xv",
-    "../../common/LWIP.2.8xv",
-    "../../common/LWIP.3.8xv",
-    "../../common/LWIP.4.8xv",
-    "../../common/LWIP.5.8xv",
-    "../../common/LWIP.6.8xv",
-    "../../common/LWIP.7.8xv",
-    "../../common/LWIP.8.8xv",
-    "../../common/lwip.8xv"
+    "bin/XAES.8xp"
   ],
   "target": {
     "name": "XAES",
     "isASM": true
   },
   "sequence": [
-    "delay|10000",
-    "key|clear",
-    "action|launch:INSTALL",
-    "hashWait|16",
-    "key|left",
-    "key|enter",
-    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -218,16 +199,6 @@
         "D1F2869F"
       ],
       "timeout": 20000
-    },
-    "16": {
-      "description": "lwIP installed",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "label": "@lwip_installed",
-      "expected_CRCs": [
-        "F7C03D8D"
-      ],
-      "timeout": 100000
     },
     "17": {
       "description": "AES-256-GCM (GCM Spec Test Case 16) encrypt/decrypt/bad tag",

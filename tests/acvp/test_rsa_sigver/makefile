@@ -1,0 +1,5 @@
+NAME = AVRSA
+ACVP_ALGORITHM = RSA
+ACVP_MODE = sigVer
+ACVP_PRIMITIVE = 12
+include ../suite.mk

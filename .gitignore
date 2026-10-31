@@ -25,6 +25,9 @@ build/
 tests/profiling/tls_cavp/vectors/expected.json
 submodules/toolchain/
 
+# cemu-autotester screenshots
+*.rgba
+
 # generated dylib installer artifacts
 *INST.8xp
 *.8ek
@@ -111,3 +114,7 @@ tests/profiling/lwip_dast/autotest.json
 tests/profiling/lwip_dast/autotester.log
 
 POST.md
+
+# local CI simulation script outputs
+*.ce
+scripts/test_prepare_patched_rom.py

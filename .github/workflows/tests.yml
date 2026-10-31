@@ -41,8 +41,135 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  dylib_unit_tests:
+  prepare_patched_rom:
+    name: Install lwIP into CEmu image
     needs: prepare_rom
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Load pinned CI dependency versions
+        id: ci_versions
+        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgl1-mesa-dev
+
+      - name: Build state-aware networked CEmu tools
+        run: |
+          git init -q "$RUNNER_TEMP/CEmu"
+          git -C "$RUNNER_TEMP/CEmu" fetch -q --depth 1 \
+            https://github.com/alessiodam/CEmu-lwIP-CE.git \
+            "${{ steps.ci_versions.outputs.CEMU_REF }}"
+          git -C "$RUNNER_TEMP/CEmu" checkout -q FETCH_HEAD
+          git -C "$RUNNER_TEMP/CEmu" submodule update -q --init --depth 1
+          make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
+          git -C "$RUNNER_TEMP/CEmu" apply \
+            "$GITHUB_WORKSPACE/build-tools/meta/cemu-autotester.patch"
+          cmake -S "$RUNNER_TEMP/CEmu/tests/autotester" -B "$RUNNER_TEMP/CEmu/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -GNinja
+          cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
+          install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
+          install -m755 "$RUNNER_TEMP/CEmu/build/autotester" "$RUNNER_TEMP/cemu-autotester-image"
+          strings "$RUNNER_TEMP/cemu-autotester-image" | grep -q "AUTOTESTER_IMAGE"
+          "$RUNNER_TEMP/cemu-headless" --version || true
+
+      - name: Download lwip-latest build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/release
+
+      - name: Download encrypted CEmu ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ runner.temp }}
+
+      - name: Decrypt CEmu ROM
+        run: |
+          gpg --batch --yes \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "$RUNNER_TEMP/ce.rom" \
+            --decrypt "$RUNNER_TEMP/CE.rom.enc"
+          shred -u "$RUNNER_TEMP/CE.rom.enc"
+          test -f "$RUNNER_TEMP/ce.rom"
+
+      - name: Download clibs.8xg
+        run: |
+          curl -fsSL --retry 3 \
+            -o "$RUNNER_TEMP/clibs.8xg" \
+            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          test -f "$RUNNER_TEMP/clibs.8xg"
+
+      - name: Install lwIP into CEmu via headless
+        run: |
+          set -euo pipefail
+          HEADLESS="$RUNNER_TEMP/cemu-headless"
+          ROM="$RUNNER_TEMP/ce.rom"
+          IMAGE="$RUNNER_TEMP/ce-patched.ce"
+          RELEASE="${{ github.workspace }}/release"
+
+          # Build the send-file command list: clibs.8xg, lwip.8xv, all LWIP.*.8xv, lwIPINST.8xp
+          SEND_CMDS=""
+          SEND_CMDS+="send-file auto $RUNNER_TEMP/clibs.8xg\n"
+          SEND_CMDS+="send-file auto $RELEASE/lwip.8xv\n"
+          for f in "$RELEASE"/appinst/LWIP.*.8xv; do
+            [[ "$(basename "$f")" == ._* ]] && continue
+            SEND_CMDS+="send-file auto $f\n"
+          done
+          SEND_CMDS+="send-file auto $RELEASE/appinst/lwIPINST.8xp\n"
+
+          # Run the installer, dismiss its completion dialog, then save the
+          # ready-to-test state.  Unit tests boot directly from this image.
+          COMMANDS=$(
+          {
+            printf '%b' "$SEND_CMDS"
+            echo "run 5000"
+            echo "launch INSTALL asm"
+            echo "run 60000"
+            echo "key left"
+            echo "key enter"
+            echo "run 2000"
+            echo "save-state $IMAGE"
+            echo "quit"
+          } | "$HEADLESS" --rom "$ROM"
+          )
+          printf '%s\n' "$COMMANDS"
+          if grep -q '^ERR ' <<<"$COMMANDS"; then
+            echo "cemu-headless rejected an image preparation command" >&2
+            exit 1
+          fi
+
+          test -f "$IMAGE"
+          ls -lh "$IMAGE"
+
+      - name: Shred decrypted ROM
+        if: always()
+        run: shred -u "$RUNNER_TEMP/ce.rom" 2>/dev/null || true
+
+      - name: Encrypt patched image for artifact sharing
+        run: |
+          gpg --batch --yes --symmetric \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "$RUNNER_TEMP/ce-patched.ce.enc" \
+            "$RUNNER_TEMP/ce-patched.ce"
+          shred -u "$RUNNER_TEMP/ce-patched.ce"
+
+      - name: Upload patched CEmu image
+        uses: actions/upload-artifact@v4
+        with:
+          name: cemu-rom-patched
+          path: |
+            ${{ runner.temp }}/ce-patched.ce.enc
+            ${{ runner.temp }}/cemu-autotester-image
+          if-no-files-found: error
+          retention-days: 1
+
+  dylib_unit_tests:
+    needs: prepare_patched_rom
     runs-on: ubuntu-latest
 
     steps:
@@ -98,200 +225,56 @@ jobs:
           test -f "${{env.CEDEV}}/include/lwip.h"
           test -d "${{env.CEDEV}}/include/lwip"
 
-      - name: Download encrypted CEmu ROM artifact
+      - name: Download patched CEmu image artifact
         uses: actions/download-artifact@v4
         with:
-          name: cemu-rom-encrypted
-          path: ${{ github.workspace }}
+          name: cemu-rom-patched
+          path: ${{ runner.temp }}
 
-      - name: Decrypt CEmu ROM
+      - name: Decrypt patched CEmu image
         run: |
           gpg --batch --yes \
             --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
-            --output "${{ env.AUTOTESTER_ROM }}" \
-            --decrypt "${{github.workspace}}/CE.rom.enc"
+            --output "${{ runner.temp }}/ce-patched.ce" \
+            --decrypt "${{ runner.temp }}/ce-patched.ce.enc"
+          shred -u "${{ runner.temp }}/ce-patched.ce.enc"
 
-          shred -u "${{github.workspace}}/CE.rom.enc"
-
-          if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
-            echo "ERROR: ROM file not created"
-            exit 1
-          fi
-
-          FILE_SIZE=$(stat -c%s "${{ env.AUTOTESTER_ROM }}" 2>/dev/null || stat -f%z "${{ env.AUTOTESTER_ROM }}")
-          echo "Decrypted ROM size: ${FILE_SIZE} bytes"
-
-      - name: Set up CEmu with emulated networking
-        id: cemu
-        uses: alessiodam/cemu-net-action@v1
-        with:
-          cemu-ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
+          test -f "${{ runner.temp }}/ce-patched.ce"
+          test -f "${{ runner.temp }}/cemu-autotester-image"
+          echo "AUTOTESTER_IMAGE=${{ runner.temp }}/ce-patched.ce" >> "$GITHUB_ENV"
 
       - name: Install Autotester CLI
         run: |
-          cmake -E copy "${{ steps.cemu.outputs.autotester }}" "${{env.CEDEV_BIN}}/cemu-autotester"
-          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "saveVar"
+          install -m755 "${{ runner.temp }}/cemu-autotester-image" "${{env.CEDEV_BIN}}/cemu-autotester"
+          strings "${{env.CEDEV_BIN}}/cemu-autotester" | grep -q "AUTOTESTER_IMAGE"
 
-      - name: Prepare shared dyload test files
+      - name: Prepare unit-test truststore
         run: |
           mkdir -p ${{env.LWIP_TESTS_COMMON}}
-          cp "${{github.workspace}}/release/appinst/lwIPINST.8xp" ${{env.LWIP_TESTS_COMMON}}/
-          cp "${{github.workspace}}/release/lwip.8xv" ${{env.LWIP_TESTS_COMMON}}/
-          for appvar in "${{github.workspace}}"/release/appinst/LWIP.*.8xv; do
-            cp "$appvar" "${{env.LWIP_TESTS_COMMON}}/"
-          done
           curl -fL \
             -o ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv \
             https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv
-          curl -fL \
-            -o ${{env.LWIP_TESTS_COMMON}}/clibs.8xg \
-            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
-          test -f ${{env.LWIP_TESTS_COMMON}}/clibs.8xg
           test -f ${{env.LWIP_TESTS_COMMON}}/lwIPCERT.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwIPINST.8xp
-          test -f ${{env.LWIP_TESTS_COMMON}}/lwip.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.0.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.1.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.2.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.3.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.4.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.5.8xv
-          test -f ${{env.LWIP_TESTS_COMMON}}/LWIP.6.8xv
           ls -lh ${{env.LWIP_TESTS_COMMON}}
-          # The dylib spans as many LWIP.<n>.8xv appvars as it needs; make every
-          # autotest.json transfer exactly the ones this build produced.
-          python3 tests/common/scripts/sync_appvars.py
 
       - name: Run Dyload Unit Tests
         run: |
-          total_tests=0
-          total_passed=0
-          total_failed=0
-          total_timeout=0
-          start_time=$(($(date +%s%N)/1000000))
-
-          # A single hung cemu-autotester run has no other way to be noticed --
-          # nothing elsewhere in this job times out, so a stall here would
-          # otherwise block the whole job until GitHub's own ~6h ceiling.
-          # TEST_TIMEOUT_SECONDS bounds one attempt; a hang is retried up to
-          # TEST_MAX_ATTEMPTS times (CEmu/CI flakiness, not necessarily a real
-          # bug -- see the Known CI flakiness note below) before giving up and
-          # recording "timeout" rather than "failed", since a stall is not the
-          # same signal as the autotester actually reporting a mismatch.
-          TEST_TIMEOUT_SECONDS=120
-          TEST_MAX_ATTEMPTS=3
-
-          while IFS= read -r -d '' test; do
-            status=0
-            test_dir=$(dirname "$test")
-            failed_hash_ids=""
-            timed_out=0
-            quirk_skipped=0
-            test_start=$(($(date +%s%N)/1000000))
-            make -C "$test_dir" clean
-            make -C "$test_dir" || ((status=$?))
-            if [ $status -eq 0 ]; then
-              set +e
-              for attempt in $(seq 1 "$TEST_MAX_ATTEMPTS"); do
-                timeout "${TEST_TIMEOUT_SECONDS}s" \
-                  make -C "$test_dir" test 2>&1 | tee "$test_dir/autotest.log"
-                status=${PIPESTATUS[0]}
-                if [ "$status" -eq 124 ]; then
-                  echo "::warning::$(basename "$test_dir") timed out after ${TEST_TIMEOUT_SECONDS}s (attempt $attempt/$TEST_MAX_ATTEMPTS)"
-                  timed_out=1
-                  continue
-                fi
-                timed_out=0
-                break
-              done
-              set -e
-              if [ "$status" -ne 0 ] && [ "$timed_out" -eq 0 ]; then
-                # Autotester reports each mismatched hash on its own line, e.g.:
-                #   [Test failed!] Hash #1 ("...") did not match the expected CRC ...
-                # Collect every failed hash id (a run can fail more than one).
-                failed_hash_ids=$(grep -Eo 'Hash #[0-9]+' "$test_dir/autotest.log" | grep -Eo '[0-9]+' | sort -nu | paste -sd, - || true)
-
-                # Emulator-quirk skip: some units require a physical TRNG that
-                # CEmu does not have.  If this unit is in EMULATOR_QUIRK_UNITS,
-                # only hash #1 failed, and its observed CRC is 468FCC4B (the
-                # "RNG setup timed out" screen), downgrade to skipped+warning.
-                unit_name=$(basename "$test_dir")
-                if echo " $EMULATOR_QUIRK_UNITS " | grep -qw "$unit_name"; then
-                  observed_crc=$(grep 'Hash #1 ' "$test_dir/autotest.log" | grep -Eo '\(got [0-9A-Fa-f]+\)' | grep -Eo '[0-9A-Fa-f]+' | head -1 || true)
-                  if [ "$observed_crc" = "468FCC4B" ]; then
-                    echo "::warning::$unit_name hash #1 observed CRC 468FCC4B (RNG setup timed out) — emulator has no physical TRNG; marking skipped"
-                    status=0
-                    quirk_skipped=1
-                    failed_hash_ids=""
-                  fi
-                fi
-              fi
-            fi
-            test_done=$(($(date +%s%N)/1000000))
-            test_duration=$((test_done - test_start))
-            (( total_tests += 1 ))
-            if [ "$quirk_skipped" -eq 1 ]; then
-              (( total_timeout += 1 ))
-              test_status="skipped; emulator has no physical TRNG — test failed to run due to emulator non-randomness quirk"
-            elif [ "$timed_out" -eq 1 ]; then
-              (( total_timeout += 1 ))
-              test_status="timeout; manual verification needed"
-            elif [ $status -eq 0 ]; then
-              (( total_passed += 1 ))
-              test_status="passed"
-            else
-              (( total_failed += 1 ))
-              test_status="failed"
-            fi
-            echo -e "{\"name\":\"$(basename "$test_dir")\",\"dir\":\"$test_dir\",\"status\":\"$test_status\",\"duration\":\"$test_duration\",\"failed_hash_ids\":\"$failed_hash_ids\"}" > "$test_dir/result.json"
-          done < <(find ${{env.LWIP_DYLIB_TESTS}} -name autotest.json -print0)
-
-          end_time=$(($(date +%s%N)/1000000))
-          echo -e "\"summary\":{\"tests\":\"$total_tests\",\"passed\":\"$total_passed\",\"failed\":\"$total_failed\",\"pending\":\"0\",\"skipped\":\"$total_timeout\",\"other\":\"0\",\"start\":\"$start_time\",\"stop\":\"$end_time\"}" > ${{github.workspace}}/summary.json
-          cmake -E echo "$total_tests dyload modules tested, $total_passed passed, $total_failed failed, $total_timeout timed out (skipped; manual verification needed)!"
-          exit $total_failed
-
-      - name: Generate Dyload JSON Results
-        if: always()
-        run: |
-          echo -e "{\"results\":{" > ${{github.workspace}}/results-dylib.json
-          cat ${{github.workspace}}/summary.json >> ${{github.workspace}}/results-dylib.json
-          echo -e ",\"tests\":[" >> ${{github.workspace}}/results-dylib.json
-          find ${{env.LWIP_DYLIB_TESTS}} -name result.json -print0 | {
-            tmp_json=""
-            while read -rd '' test; do
-              test_dir=$(dirname "$test")
-              tmp_json="$tmp_json,$(cat $test_dir/result.json)"
-              rm $test_dir/result.json
-            done
-            tmp_json="${tmp_json:1}"
-            echo $tmp_json >> ${{github.workspace}}/results-dylib.json
-          }
-          echo -e "]" >> ${{github.workspace}}/results-dylib.json
-          echo -e "}}" >> ${{github.workspace}}/results-dylib.json
-          rm ${{github.workspace}}/summary.json
-
-      - name: Normalize unit-test rows
-        if: always()
-        run: |
-          python3 .github/scripts/test_table.py unit \
-            --results "${{ github.workspace }}/results-dylib.json" \
-            --repo "${{ github.workspace }}" \
-            --output "${{ github.workspace }}/test-rows-unit.json"
+          python3 .github/scripts/run_unit_tests.py \
+            "${{ env.LWIP_DYLIB_TESTS }}" \
+            --output "${{ github.workspace }}/results-unit.json"
 
       - name: Upload unit-test rows
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-rows-unit
-          path: |
-            ${{ github.workspace }}/test-rows-unit.json
-            ${{ github.workspace }}/results-dylib.json
+          path: ${{ github.workspace }}/results-unit.json
           if-no-files-found: warn
 
       - name: Remove CEmu Rom
         if: always()
-        run: shred -u "${{env.AUTOTESTER_ROM}}" 2>/dev/null || true
+        run: |
+          shred -u "${{env.AUTOTESTER_IMAGE}}" 2>/dev/null || true
 
   rfc_compliance:
     name: RFC compliance
@@ -354,7 +337,7 @@ jobs:
           overwrite: true
 
   acvp:
-    needs: prepare_rom
+    needs: [prepare_rom, prepare_patched_rom]
     name: ACVP JSON over CEmu RPC
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -366,7 +349,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-cryptography
 
-      - name: Generate 416-vector differential corpus
+      - name: Generate differential corpus
         run: python3 tests/validation/acvp/generate_vectors.py
 
       - name: Check host ACVP parsing
@@ -377,16 +360,28 @@ jobs:
         with:
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
 
-      - name: Build ACVP calculator service
-        run: make -C tests/validation/acvp
-
-      - name: Process ACVP fixture through CEmu
+      - name: Process ACVP primitives concurrently through CEmu
         id: run_acvp
         run: |
-          sudo --preserve-env=AUTOTESTER_ROM python3 tests/validation/acvp/run.py \
-            --autotester "${{ steps.env.outputs.autotester }}" \
+          set +e
+          sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
+            python3 .github/scripts/run_acvp_tests.py \
+            tests/acvp \
+            --validation-dir tests/validation/acvp \
+            --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
+            --prompt tests/validation/acvp/corpus/prompt.json \
+            --expected tests/validation/acvp/corpus/expected.json \
+            --oracle tests/validation/acvp/corpus/oracle.json \
+            --response tests/validation/acvp/response.json \
+            --output tests/validation/acvp/results-units.json \
+            --artifacts-dir tests/validation/acvp/units \
             --timeout-ms 60000000
+          status=$?
+          sudo chown -R "$(id -un)" tests/acvp tests/validation/acvp/units \
+            tests/validation/acvp/response.json tests/validation/acvp/results-units.json \
+            2>/dev/null || true
+          exit "$status"
 
       - name: Build ACVP results
         if: always()
@@ -394,24 +389,19 @@ jobs:
           python3 tests/validation/acvp/summary.py \
             --run-outcome "${{ steps.run_acvp.outcome }}"
 
-      - name: Normalize ACVP rows
-        if: always()
-        run: |
-          python3 .github/scripts/test_table.py acvp \
-            --results tests/validation/acvp/results.json \
-            --output test-rows-acvp.json
-
       - name: Upload ACVP rows
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-rows-acvp
-          path: test-rows-acvp.json
+          path: tests/validation/acvp/results-units.json
           if-no-files-found: warn
 
       - name: Remove CEmu ROM
         if: always()
-        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+        run: |
+          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -421,8 +411,8 @@ jobs:
             tests/validation/acvp/artifacts/acvp-validation.vectors
             tests/validation/acvp/summary.md
             tests/validation/acvp/results.json
-            tests/validation/acvp/NETLOG.8xv
-            tests/validation/acvp/autotest.json
+            tests/validation/acvp/results-units.json
+            tests/validation/acvp/units/
           if-no-files-found: ignore
 
   semgrep_scan:
@@ -621,14 +611,10 @@ jobs:
           if-no-files-found: warn
 
   nettest:
-    needs: prepare_rom
-    name: ${{ matrix.suite }}
+    needs: [prepare_rom, prepare_patched_rom]
+    name: NETTEST
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [sockets, raw, tls, records, server, perf, timeouts]
     steps:
       - uses: actions/checkout@v4
 
@@ -640,68 +626,64 @@ jobs:
       - name: Install scapy
         run: sudo pip install --break-system-packages scapy
 
-      - name: Test host endpoint corroboration
-        if: matrix.suite == 'tls'
-        run: python3 tests/net/test_host_corroboration.py
-
-      - name: Build ${{ matrix.suite }}
-        run: make -C tests/net ${{ matrix.suite }}
-
-      - name: Run ${{ matrix.suite }}
+      - name: Test TLS host helpers
         run: |
-          suite_start=$(($(date +%s%N)/1000000))
-          sudo --preserve-env=AUTOTESTER_ROM python3 tests/net/run.py \
-            --suite ${{ matrix.suite }} --pcap tests/net/${{ matrix.suite }}.pcap \
-            --rows tests/net/test-rows-${{ matrix.suite }}.json \
-            --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
-          # run.py runs under sudo, so the files it writes come out root-owned.
-          # Hand them back before the row post-processing below rewrites them.
-          sudo chown "$(id -un)" \
-            "tests/net/test-rows-${{ matrix.suite }}.json" \
-            tests/net/metrics.json 2>/dev/null || true
-          python3 - <<PY
-          import json, os
-          p = "tests/net/test-rows-${{ matrix.suite }}.json"
-          rows = json.load(open(p))
-          # Per-test timings already arrive from run.py (METRIC ... ms lines,
-          # attached to the row they belong to). Add only the heap figures the
-          # calc reported; a suite-wide wall time says nothing about a test.
-          heap = []
-          if os.path.exists("tests/net/metrics.json"):
-              metrics = json.load(open("tests/net/metrics.json"))
-              peak = [v["value"] for k, v in metrics.items()
-                      if k.endswith("_heap_peak") and isinstance(v, dict)]
-              if peak:
-                  heap.append(f"heap peak {max(peak)} B")
-              idle = metrics.get("heap_idle", {}).get("value")
-              if idle is not None:
-                  heap.append(f"heap idle {idle} B")
-          extra = "; ".join(heap)
-          if extra:
-              for r in rows:
-                  r["stats"] = "; ".join(x for x in (r.get("stats", ""), extra) if x)
-          json.dump(rows, open(p, "w"), indent=2)
-          PY
+          python3 tests/net/test_host_corroboration.py
+          python3 tests/net/test_local_pki.py
+
+      - name: Prepare truststore signer for local TLS CA
+        env:
+          TRUSTSTORE_SIGNER: ${{ secrets.TRUSTSTORE_SIGNER }}
+        run: |
+          signer="$RUNNER_TEMP/truststore-signer.pem"
+          printf '%s' "$TRUSTSTORE_SIGNER" > "$signer"
+          chmod 600 "$signer"
+          test -s "$signer"
+          openssl pkey -in "$signer" -noout
+          test -x "$CEDEV_BIN/convbin"
+
+      - name: Run network suites concurrently
+        run: |
+          set +e
+          sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
+            python3 .github/scripts/run_nettests.py \
+            tests/net \
+            --autotester "${{ steps.env.outputs.image-autotester }}" \
+            --usb "${{ steps.env.outputs.usb-step }}" \
+            --truststore-signer "$RUNNER_TEMP/truststore-signer.pem" \
+            --convbin "$CEDEV_BIN/convbin" \
+            --external-info \
+            --output tests/net/results-net.json \
+            --rows tests/net/test-rows-net.json \
+            --metrics tests/net/metrics.json \
+            --endpoint-probes tests/net/endpoint-probes.json \
+            --artifacts-dir tests/net/artifacts
+          status=$?
+          sudo chown -R "$(id -un)" tests/net/artifacts \
+            tests/net/results-net.json tests/net/test-rows-net.json \
+            tests/net/metrics.json tests/net/endpoint-probes.json 2>/dev/null || true
+          exit "$status"
 
       - name: Remove CEmu Rom
         if: always()
-        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+        run: |
+          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
+          shred -u "$RUNNER_TEMP/truststore-signer.pem" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-rows-net-${{ matrix.suite }}
+          name: test-rows-net
           path: |
-            tests/net/test-rows-${{ matrix.suite }}.json
-            tests/net/NETLOG-*.8xv
+            tests/net/results-net.json
             tests/net/metrics.json
             tests/net/endpoint-probes.json
-            tests/net/*.pcap
-            tests/net/autotest-*.json
+            tests/net/artifacts/
           if-no-files-found: ignore
 
   dast:
-    needs: prepare_rom
+    needs: [prepare_rom, prepare_patched_rom]
     name: DAST (live, emulated)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -750,7 +732,9 @@ jobs:
 
       - name: Remove CEmu Rom
         if: always()
-        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+        run: |
+          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -805,77 +789,83 @@ jobs:
           if-no-files-found: warn
 
   fuzz:
-    name: Fuzz (${{ matrix.target }})
+    name: Fuzz
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [json, xml, url, base64, asn1, pcap, x509, ws, tls]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: Restore corpus
+      - name: Restore fuzz corpora
         uses: actions/cache@v5
         with:
-          path: tests/fuzz/out/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
-          restore-keys: fuzz-corpus-${{ matrix.target }}-
+          path: |
+            tests/fuzz/out/json
+            tests/fuzz/out/xml
+            tests/fuzz/out/url
+            tests/fuzz/out/base64
+            tests/fuzz/out/asn1
+            tests/fuzz/out/pcap
+            tests/fuzz/out/x509
+            tests/fuzz/out/ws
+            tests/fuzz/out/tls
+          key: fuzz-corpus-all-${{ github.run_id }}
+          restore-keys: fuzz-corpus-all-
 
-      - name: Fuzz
-        id: fuzz_target
-        run: make -C tests/fuzz run-${{ matrix.target }} FUZZ_SECONDS=300
-
-      - name: Normalize fuzz row
-        if: always()
+      - name: Fuzz all targets concurrently
+        id: fuzz_batch
         run: |
-          python3 .github/scripts/test_table.py row \
-            --module FUZZ --test "${{ matrix.target }}" \
-            --grade "${{ steps.fuzz_target.outcome }}" \
-            --output test-rows-fuzz-${{ matrix.target }}.json
+          python3 .github/scripts/run_fuzz_tests.py tests/fuzz \
+            --seconds 300 \
+            --output tests/fuzz/results-fuzz.json \
+            --rows test-rows-fuzz.json \
+            --artifacts-dir tests/fuzz/out/logs
 
-      - name: Upload fuzz row
+      - name: Upload fuzz results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-rows-fuzz-${{ matrix.target }}
-          path: test-rows-fuzz-${{ matrix.target }}.json
+          name: test-rows-fuzz
+          path: |
+            tests/fuzz/results-fuzz.json
+            tests/fuzz/out/logs/
           if-no-files-found: warn
 
       - name: Upload crash inputs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-crashes-${{ matrix.target }}
+          name: fuzz-crashes
           path: tests/fuzz/out/artifacts/
           if-no-files-found: ignore
 
   cleanup_rom:
-    name: Delete encrypted CEmu ROM artifact
-    needs: [prepare_rom, dylib_unit_tests, acvp, nettest, dast]
+    name: Delete encrypted CEmu ROM artifacts
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast]
     if: always()
     permissions:
       actions: write
     runs-on: ubuntu-latest
     steps:
-      - name: Delete temporary ROM artifact
+      - name: Delete temporary ROM artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          artifact_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
-            --jq '.artifacts[] | select(.name == "cemu-rom-encrypted") | .id' | head -1)
-          if [ -z "$artifact_id" ]; then
-            echo "No encrypted ROM artifact was created."
-            exit 0
-          fi
-          gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
-          echo "Deleted encrypted ROM artifact $artifact_id."
+          for artifact_name in cemu-rom-encrypted cemu-rom-patched; do
+            artifact_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+              --jq ".artifacts[] | select(.name == \"$artifact_name\") | .id" | head -1)
+            if [ -z "$artifact_id" ]; then
+              echo "No $artifact_name artifact was created."
+              continue
+            fi
+            gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+            echo "Deleted $artifact_name artifact $artifact_id."
+          done
 
   gate_results:
     name: Collect test results
-    needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
     if: always()
     permissions:
       actions: read

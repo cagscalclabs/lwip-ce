@@ -22,5 +22,6 @@ make -C tests/fuzz run                          # all targets
 ```
 
 New inputs go to `out/<target>`, crashes to `out/artifacts`. Seeds live in
-`corpus/<target>`. CI runs every target on push and pull request, and ten
-times longer nightly (`.github/workflows/host.yml`).
+`corpus/<target>`. CI uses `.github/scripts/run_fuzz_tests.py` to build and run
+all targets concurrently while retaining a separate corpus, log, result unit,
+and crash prefix for each target.

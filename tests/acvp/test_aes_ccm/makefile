@@ -1,0 +1,4 @@
+NAME = AVCCM
+ACVP_ALGORITHM = ACVP-AES-CCM
+ACVP_PRIMITIVE = 9
+include ../suite.mk
