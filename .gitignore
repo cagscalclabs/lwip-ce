@@ -25,6 +25,9 @@ build/
 tests/profiling/tls_cavp/vectors/expected.json
 submodules/toolchain/
 
+# cemu-autotester screenshots
+*.rgba
+
 # generated dylib installer artifacts
 *INST.8xp
 *.8ek
