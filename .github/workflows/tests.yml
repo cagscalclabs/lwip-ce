@@ -70,7 +70,9 @@ jobs:
             -GNinja
           # Patch build.ninja: move -lcemucore from LINK_FLAGS (before objects)
           # to LINK_LIBRARIES (after objects) so GNU ld sees the archive last.
-          python3 .github/scripts/patch_cemu_ninja.py "$RUNNER_TEMP/CEmu/build/build.ninja"
+          python3 .github/scripts/patch_cemu_ninja.py \
+            "$RUNNER_TEMP/CEmu/build/build.ninja" \
+            "$RUNNER_TEMP/CEmu/core"
           cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
           install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
           "$RUNNER_TEMP/cemu-headless" --version || true

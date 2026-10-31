@@ -16,20 +16,36 @@ into the cemu-headless build block. LINK_LIBRARIES is expanded after $in
 (the .o files), so the archive is seen last — both directions resolved.
 """
 
+import os
 import re
 import sys
 
-path = sys.argv[1]
-text = open(path).read()
+ninja_path = sys.argv[1]
+# Absolute path to the core/ directory where libcemucore.a lives.
+# sys.argv[2] is $RUNNER_TEMP/CEmu/core (passed from the CI step).
+core_dir = sys.argv[2]
+cemucore_a = os.path.join(core_dir, "libcemucore.a")
 
+text = open(ninja_path).read()
+
+# Replace the relative -L../../core/ (wrong from the build dir) with the
+# absolute path, and strip -lcemucore from LINK_FLAGS entirely so it no
+# longer appears before the object files.
+text = re.sub(r"-L\S*core/?", f"-L{core_dir}", text)
 text = text.replace("-lcemucore", "")
 
-text = re.sub(
-    r"(build cemu-headless:.*?)(  TARGET_SUPPORT_DIR = [^\n]+)",
-    r"\1\2\n  LINK_LIBRARIES = -lcemucore",
-    text,
-    flags=re.S,
-)
+# Inject the archive by absolute path into LINK_LIBRARIES for both targets
+# (cemu-headless and autotester).  LINK_LIBRARIES expands after $in (the .o
+# files) in the Ninja link rule, so GNU ld sees the archive last — resolving
+# both directions: .o → archive (emu_run etc.) and archive → .o
+# (gui_console_printf etc.).
+for target in ("cemu-headless", "autotester"):
+    text = re.sub(
+        rf"(build {re.escape(target)}:.*?)(  TARGET_SUPPORT_DIR = [^\n]+)",
+        rf"\1\2\n  LINK_LIBRARIES = {cemucore_a}",
+        text,
+        flags=re.S,
+    )
 
-open(path, "w").write(text)
-print("build.ninja patched: -lcemucore moved to LINK_LIBRARIES (after objects)")
+open(ninja_path, "w").write(text)
+print(f"build.ninja patched: {cemucore_a} injected into LINK_LIBRARIES (after objects)")
