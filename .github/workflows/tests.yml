@@ -646,6 +646,10 @@ jobs:
           python3 tests/net/test_host_corroboration.py
           python3 tests/net/test_local_pki.py
 
+      - name: Test timeout-suite autotest generation
+        if: matrix.suite == 'timeouts'
+        run: python3 tests/net/test_autotest_generation.py
+
       - name: Build ${{ matrix.suite }}
         run: make -C tests/net ${{ matrix.suite }}
 

@@ -38,6 +38,11 @@ HERE = Path(__file__).resolve().parent
 COMMON = HERE.parent / "common"
 SUITES = {"sockets": "NETTEST", "raw": "NETRAW", "tls": "NETTLS", "records": "NETREC",
           "server": "NETSRV", "perf": "NETPERF", "timeouts": "NETTMO"}
+# NETTMO intentionally waits on silent sockets while host-side traffic is in
+# flight. CEmu's hash deadline advances in emulated time even when the runner
+# has not yet scheduled the host peer, so give this suite a wider floor than
+# the general network-test default.
+MIN_SUITE_TIMEOUT_MS = {"timeouts": 3_600_000}
 CALC = "192.168.84.2"
 HOST = "192.168.84.1"
 HOST6 = "fd00:84::1"
@@ -879,6 +884,7 @@ def serve(server, port: int, handler):
 def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int,
                    truststore: Path | None = None) -> None:
     program = SUITES[suite]
+    timeout_ms = max(timeout_ms, MIN_SUITE_TIMEOUT_MS.get(suite, 0))
     suite_dir = HERE / suite
     extra = sorted(os.path.relpath(f, HERE) for f in suite_dir.glob("*.8xv"))
     common = [f for f in COMMON.glob("*.8x*")
