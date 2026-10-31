@@ -16,36 +16,57 @@ into the cemu-headless build block. LINK_LIBRARIES is expanded after $in
 (the .o files), so the archive is seen last — both directions resolved.
 """
 
-import os
 import re
 import sys
+from pathlib import Path
 
-ninja_path = sys.argv[1]
+if len(sys.argv) != 3:
+    raise SystemExit(f"usage: {Path(sys.argv[0]).name} BUILD_NINJA CEMU_CORE_DIR")
+
+ninja_path = Path(sys.argv[1])
 # Absolute path to the core/ directory where libcemucore.a lives.
 # sys.argv[2] is $RUNNER_TEMP/CEmu/core (passed from the CI step).
-core_dir = sys.argv[2]
-cemucore_a = os.path.join(core_dir, "libcemucore.a")
+core_dir = Path(sys.argv[2]).resolve()
+cemucore_a = core_dir / "libcemucore.a"
 
-text = open(ninja_path).read()
+if not ninja_path.is_file():
+    raise SystemExit(f"build.ninja not found: {ninja_path}")
+if not cemucore_a.is_file():
+    raise SystemExit(f"CEmu core archive not found: {cemucore_a}")
+
+text = ninja_path.read_text()
 
 # Replace the relative -L../../core/ (wrong from the build dir) with the
 # absolute path, and strip -lcemucore from LINK_FLAGS entirely so it no
 # longer appears before the object files.
-text = re.sub(r"-L\S*core/?", f"-L{core_dir}", text)
+library_flags = text.count("-lcemucore")
+if library_flags == 0:
+    raise SystemExit("build.ninja contains no -lcemucore flags to relocate")
+text = re.sub(r"-L\S*core/?", "", text)
 text = text.replace("-lcemucore", "")
 
-# Inject the archive by absolute path into LINK_LIBRARIES for both targets
-# (cemu-headless and autotester).  LINK_LIBRARIES expands after $in (the .o
-# files) in the Ninja link rule, so GNU ld sees the archive last — resolving
-# both directions: .o → archive (emu_run etc.) and archive → .o
-# (gui_console_printf etc.).
+# Inject the archive immediately below each executable's ``build`` edge.
+# Per-edge variables may appear in any order in Ninja.  Do not anchor this to
+# TARGET_SUPPORT_DIR: CMake emits that field on macOS but omits it on Linux,
+# which previously made the patch silently do nothing in GitHub Actions.
 for target in ("cemu-headless", "autotester"):
-    text = re.sub(
-        rf"(build {re.escape(target)}:.*?)(  TARGET_SUPPORT_DIR = [^\n]+)",
-        rf"\1\2\n  LINK_LIBRARIES = {cemucore_a}",
+    text, replacements = re.subn(
+        rf"^(build {re.escape(target)}:[^\n]+)$",
+        rf"\1\n  LINK_LIBRARIES = {cemucore_a}",
         text,
-        flags=re.S,
+        count=1,
+        flags=re.M,
     )
+    if replacements != 1:
+        raise SystemExit(
+            f"expected one Ninja build edge for {target}, found {replacements}"
+        )
 
-open(ninja_path, "w").write(text)
-print(f"build.ninja patched: {cemucore_a} injected into LINK_LIBRARIES (after objects)")
+if "-lcemucore" in text:
+    raise SystemExit("failed to remove every early -lcemucore flag")
+
+ninja_path.write_text(text)
+print(
+    f"build.ninja patched: relocated {library_flags} -lcemucore flag(s); "
+    f"injected {cemucore_a} after each target's objects"
+)
