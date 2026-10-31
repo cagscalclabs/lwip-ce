@@ -646,7 +646,7 @@ jobs:
           python3 tests/net/test_host_corroboration.py
           python3 tests/net/test_local_pki.py
 
-      - name: Test timeout-suite autotest generation
+      - name: Test network autotest generation
         if: matrix.suite == 'timeouts'
         run: python3 tests/net/test_autotest_generation.py
 
