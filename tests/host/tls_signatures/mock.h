@@ -107,9 +107,13 @@ static uint32_t lwip_sntp_read_rtc_raw(void) { return 1700000000; }
 static uint32_t mock_unix_time = 1700000000;
 static uint32_t lwip_sntp_get_unix_time(void) { return mock_unix_time; }
 static void tls_hs_reasm_reset(struct tls_handshake_context *ctx) {}
-bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t alg) { memset(ctx, 0, sizeof(*ctx)); return true; }
+static uint8_t hash_stub_alg __attribute__((unused));
+static size_t hash_stub_bytes __attribute__((unused));
+static unsigned hash_stub_inits __attribute__((unused));
+bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t alg)
+{ memset(ctx, 0, sizeof(*ctx)); hash_stub_alg = alg; hash_stub_bytes = 0; hash_stub_inits++; return true; }
 void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_context *src) { memcpy(dst, src, sizeof(*dst)); }
-void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *p, size_t n) {}
+void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *p, size_t n) { hash_stub_bytes += n; }
 void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *out) { memset(out, 0x42, 32); }
 void tls_hash_clear(struct tls_hash_context *ctx) { memset(ctx, 0, sizeof(*ctx)); }
 bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t n, const uint8_t *hash, const struct tls_rsa_key *key)

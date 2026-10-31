@@ -6,8 +6,13 @@
 - **Protocol**: TLS 1.3 only (RFC 8446)
 - **Key exchange**: ECDHE with X25519 (preferred) and secp256r1/P-256
   (HelloRetryRequest path), plus DHE-less PSK resumption
-- **Cipher suites**: TLS_AES_128_GCM_SHA256 (0x1301) and
-  TLS_AES_128_CCM_SHA256 (0x1304)
+- **Cipher suites**: TLS_AES_128_GCM_SHA256 (0x1301),
+  TLS_AES_256_GCM_SHA384 (0x1302), and TLS_AES_128_CCM_SHA256 (0x1304).
+  Non-PSK ClientHello offers those three in that order. PSK/resumption
+  offers only the SHA-256 suites because the in-tree PSK store and binder
+  are SHA-256 (RFC 8446 4.2.11 hash binding). RFC 8446 Appendix B.4 defines
+  no AES-256-CCM suite (0x1305 is TLS_AES_128_CCM_8_SHA256, which needs an
+  8-byte tag and is not offered).
 - **Authentication**: RSA-PKCS#1 v1.5, RSA-PSS (rsa_pss_rsae_*), ECDSA P-256
   server signatures; X.509 chain validation against a signed trust store
   with hostname verification
@@ -64,12 +69,14 @@ restoring an earlier machine state.
 ### Key Derivation
 - **HKDF** (HMAC-based KDF, RFC 5869): Implemented
 - **HKDF-Expand-Label** (TLS 1.3 specific): Implemented
-- Uses SHA-256, SHA-384 or SHA-512 as selected by the caller (TLS currently negotiates SHA-256)
+- Uses the negotiated cipher suite's hash: SHA-256 (32-byte secret/key
+  material) for 0x1301/0x1304, SHA-384 (48-byte secrets, 32-byte AES keys)
+  for 0x1302
 
 ### Symmetric Encryption
 - **AES-GCM**: Implemented (supports 128, 192, and 256-bit keys)
 - **AES-CBC**: Implemented (supports 128, 192, and 256-bit keys)
-- **AES-CCM**: Not implemented
+- **AES-CCM**: Implemented (supports 128, 192, and 256-bit keys)
 
 ### Asymmetric Cryptography
 - **RSA**: Modular exponentiation implemented, PSS padding not implemented
@@ -81,10 +88,17 @@ restoring an earlier machine state.
 
 #### Cipher Suites (TLS Extension)
 These are negotiated in TLS handshake, not ASN.1 OIDs:
-- **TLS_AES_128_GCM_SHA256**: `0x13, 0x01` (REQUIRED, currently supported)
-- **TLS_AES_128_CCM_SHA256**: `0x13, 0x04` (currently supported)
-- **TLS_AES_256_GCM_SHA384**: `0x13, 0x02` (recommended, requires SHA-384)
-- **TLS_CHACHA20_POLY1305_SHA256**: `0x13, 0x03` (optional)
+- **TLS_AES_128_GCM_SHA256**: `0x13, 0x01` (REQUIRED, supported)
+- **TLS_AES_256_GCM_SHA384**: `0x13, 0x02` (supported, SHA-384 backend)
+- **TLS_AES_128_CCM_SHA256**: `0x13, 0x04` (supported)
+- **TLS_CHACHA20_POLY1305_SHA256**: `0x13, 0x03` (optional, not implemented)
+
+P-384 certificate verification and `ecdsa_secp384r1_sha384` (0x0503) are not
+implemented, so the signature_algorithms lists remain RSA-PSS-SHA256,
+ECDSA-P256-SHA256, and RSA-PKCS1-SHA256 (cert list only). The 256-bit AEAD
+suites still authenticate with those P-256/SHA-256 certificate signatures:
+the suite hash selects the transcript hash, while the CertificateVerify
+signature scheme keeps its own hash.
 
 #### Supported Groups (ECDHE)
 For full TLS 1.3 compliance, must support at least one of:
@@ -148,8 +162,11 @@ Currently defined:
 3. Add resumption secret derivation
 
 ### Phase 4: Additional Cipher Suites
-1. ~~Implement SHA-384 / SHA-512~~ done (hash, HMAC, HKDF, MGF1)
+1. ~~Implement SHA-384 / SHA-512~~ done; SHA-384 wired into client key
+   schedule, transcript, Finished, record layer, and 0x1302 suite; SHA-512
+   shares the same assembly core (hash, HMAC, HKDF, MGF1)
 2. Consider ChaCha20-Poly1305 (optional)
+3. P-384 certificate verification / ecdsa_secp384r1_sha384 (next task)
 
 ## File Organization
 

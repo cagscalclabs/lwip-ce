@@ -2235,7 +2235,7 @@
     <section>4.1.1 (cryptographic negotiation: reject unoffered cipher/group)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello - cipher suite and group</location>
     <grade>COMPLIANT</grade>
-    <note>Cipher must pass tls_cipher_suite_supported (0x1301/0x1304, exactly the offered set); key_share group must be X25519 or secp256r1. No unit test feeds an unoffered suite or group.</note>
+    <note>Cipher must pass tls_cipher_suite_offered: supported by the table (0x1301/0x1302/0x1304) and, in PSK mode, SHA-256 only. HRR and ServerHello both use this check, and an HRR must match the eventual ServerHello suite. key_share group must be X25519 or secp256r1. tests/host/tls_signatures feeds an unoffered SHA-384 HRR to a PSK ClientHello (rejected, state ERROR) and an unoffered X25519 repeat group (illegal_parameter).</note>
 
     <reviews>
       <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
@@ -3146,8 +3146,8 @@
     <section>9.1 (MTI cipher suites)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello template - offered suites</location>
     <grade>DEVIANT</grade>
-    <note>TLS_AES_128_GCM_SHA256 (MUST) and TLS_AES_128_CCM_SHA256 are implemented; SHOULD-level TLS_AES_256_GCM_SHA384 and TLS_CHACHA20_POLY1305_SHA256 are absent. No practical interop impact since every TLS 1.3 server supports TLS_AES_128_GCM_SHA256.</note>
-    <justification>Partial: TLS_CHACHA20_POLY1305_SHA256 is not intended for this platform — ChaCha20 and Poly1305 would require two entirely new primitives with no other in-tree users, for a cipher suite that no production server requires. TLS_AES_256_GCM_SHA384 is blocked on SHA-384 support, which is low priority and may one day be added.</justification>
+    <note>TLS_AES_128_GCM_SHA256 (MUST), TLS_AES_128_CCM_SHA256, and SHOULD-level TLS_AES_256_GCM_SHA384 are implemented. Non-PSK ClientHello offers 0x1301, 0x1302, 0x1304; RFC 8446 Appendix B.4 defines no AES-256-CCM suite (0x1305 is TLS_AES_128_CCM_8_SHA256 and is not offered); PSK mode offers only the SHA-256 suites because the PSK store/binder is SHA-256 (RFC 8446 4.2.11). ClientHello byte layout is covered by tests/host/tls_signatures; the SHA-384 key schedule (transcript, Derive-Secret, Finished, AES-256 keys/IVs) by tests/unit/tls_hkdf; AES-256-GCM by tests/unit/tls_aes. SHA-384 interop against a live server is not yet exercised by tests/net.</note>
+    <justification>Partial: TLS_CHACHA20_POLY1305_SHA256 is not intended for this platform — ChaCha20 and Poly1305 would require two entirely new primitives with no other in-tree users, for a cipher suite that no production server requires. The AES-256/SHA-384 suites are now wired end to end; P-384 certificate verification (ecdsa_secp384r1_sha384) remains unimplemented and is not advertised.</justification>
   <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>

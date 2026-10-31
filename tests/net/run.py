@@ -268,6 +268,8 @@ class TLSBad(Handler):
             self.outcomes.append(e.reason or str(e))
 
 
+
+
 def self_signed_context(tmp: Path):
     import ssl
     subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
@@ -278,6 +280,8 @@ def self_signed_context(tmp: Path):
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     ctx.load_cert_chain(tmp / "cert.pem", tmp / "key.pem")
     return ctx
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +456,45 @@ class Control:
 
     def cmd_tls_bad_result(self) -> str:
         return ",".join(TLSBad.outcomes) or "none"
+
+    def cmd_suite_server(self, cipher: str) -> str:
+        """Start an openssl s_server locked to one TLS 1.3 suite with a self-signed
+        cert.  The calc connects as a TLS client; the handshake will succeed
+        cryptographically but the cert is untrusted, so the calc sends unknown_ca.
+        The server output records exactly which alert it received."""
+        if cipher not in CIPHERS:
+            return f"ERR unknown cipher {cipher!r}"
+        if self.peer:
+            self.peer.stop()
+        cert = self.tmp / f"suite_{cipher}_cert.pem"
+        key  = self.tmp / f"suite_{cipher}_key.pem"
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "ec",
+             "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2",
+             "-subj", f"/CN=suite-test", "-addext", f"subjectAltName=IP:{HOST}",
+             "-keyout", str(key), "-out", str(cert)],
+            check=True, capture_output=True)
+        args = ["s_server", "-accept", "7100", "-naccept", "1",
+                "-cert", str(cert), "-key", str(key),
+                "-tls1_3", "-ciphersuites", CIPHERS[cipher]]
+        self.peer = OpenSSL(args, self.tmp, "ACCEPT")
+        if not self.peer.ready.wait(10):
+            return f"ERR suite s_server did not start: {self.peer.output[-80:]}"
+        return "OK"
+
+    def cmd_suite_result(self) -> str:
+        """Return a verdict based on what alert the suite server received.
+        UNKNOWN_CA  → crypto correct, cert not trusted as expected (PASS).
+        Anything else (DECRYPT_ERROR, BAD_RECORD_MAC, …) → suite wiring broken."""
+        out = self.wait_peer_exit()
+        if re.search(r"unknown CA|unknown_ca|tlsv13 alert unknown ca", out, re.I):
+            return "UNKNOWN_CA"
+        if re.search(r"decrypt.error|bad.record.mac|handshake.failure", out, re.I):
+            m = re.search(r"error[^\n]{0,120}", out, re.I)
+            return f"CRYPTO_ERROR {m.group(0)[:80] if m else ''}"
+        if re.search(r"CIPHER is|Ciphersuite:", out):
+            return "handshake completed"
+        return f"ERR no recognisable outcome: {out[-120:]!r}"
 
     def cmd_rst_result(self) -> str:
         time.sleep(1)
