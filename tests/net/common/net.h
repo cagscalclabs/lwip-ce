@@ -21,6 +21,7 @@
 #define PORT_SERVER    7003
 #define PORT_WS        7004
 #define PORT_TLS_BAD   7005
+#define PORT_SUITE     7015
 #define PORT_BULK      7006
 #define PORT_SINK      7007
 #define PORT_HOLD      7008

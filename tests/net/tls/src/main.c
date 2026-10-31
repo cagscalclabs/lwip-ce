@@ -395,6 +395,45 @@ static void test_wss(const char *pool, const char *connect_name,
     close_socket(sock);
 }
 
+/* Connect to a locally-hosted server that forces a single TLS 1.3 cipher
+ * suite.  The calc's truststore will not contain the self-signed cert, so
+ * the connection fails with unknown_ca.  That is the expected outcome: it
+ * proves key-exchange, transcript hash, and record-layer decryption all
+ * succeeded for this suite (the server decrypted our Certificate message and
+ * sent back an encrypted alert we could decrypt — otherwise the host would
+ * report DECRYPT_ERROR or BAD_RECORD_MAC instead). */
+static void test_suite_forced(const char *suite_name)
+{
+    char name[64], result[64];
+    struct lwip_socket *sock;
+
+    snprintf(name, sizeof(name), "%s forced suite connect", suite_name);
+    sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL, 30000);
+    if (!sock || lwip_socket_connect(sock, HOST, PORT_SUITE) != LWIP_OK)
+    {
+        check(name, false);
+        if (sock) lwip_socket_destroy(sock);
+        return;
+    }
+    pump(not_connecting, sock, 40000);
+    note("  %s: status %u err %u", suite_name,
+         lwip_socket_status(sock), lwip_socket_last_error(sock));
+    /* Connection must have failed (untrusted cert), not succeeded. */
+    check(name, lwip_socket_status(sock) != LWIP_STATUS_CONNECTED);
+    lwip_socket_destroy(sock);
+
+    /* Ask the host what alert it received.  UNKNOWN_CA means crypto was fine;
+     * anything else (DECRYPT_ERROR, BAD_RECORD_MAC, …) means the suite wiring
+     * is broken. */
+    snprintf(name, sizeof(name), "%s forced suite unknown_ca alert", suite_name);
+    if (!host_call("suite-result", result, sizeof(result), 10000))
+    {
+        check(name, false);
+        return;
+    }
+    check(name, strstr(result, "UNKNOWN_CA") != NULL);
+}
+
 int main(void)
 {
     for (uint8_t i = 0; i < 32; i++) psk[i] = pattern(i);
@@ -423,6 +462,7 @@ int main(void)
          * endpoint consistently exercises Amazon Root CA 1 via Starfield. */
         pooled_https("starfield", " (Starfield)", true, false);
         pooled_https("p384", " (P-384 chain rejected)", false, false);
+        test_suite_forced("AES-256-GCM-SHA384");
         test_tls12_rejected();
         test_wss("wss", "wss connect", "wss_connect", 60000);
         /* This distant endpoint regularly needs much more emulated time.  Keep

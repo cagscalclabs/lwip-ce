@@ -268,6 +268,28 @@ class TLSBad(Handler):
             self.outcomes.append(e.reason or str(e))
 
 
+class SuiteEcho(Handler):
+    """TLS server that forces a single cipher suite and records the outcome.
+
+    A calc client that completes the handshake but rejects the certificate
+    (unknown_ca) proves that key-exchange, transcript hash, and record-layer
+    decryption all worked correctly for this suite — only the trust anchor
+    lookup failed, which is expected since the cert is self-signed."""
+    context = None
+    outcomes: list[str] = []
+
+    def serve(self):
+        import ssl
+        try:
+            with self.context.wrap_socket(self.request, server_side=True) as tls:
+                data = tls.recv(64)
+                if data:
+                    tls.sendall(data[::-1])
+                self.outcomes.append("handshake completed")
+        except ssl.SSLError as e:
+            self.outcomes.append(e.reason or str(e))
+
+
 def self_signed_context(tmp: Path):
     import ssl
     subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
@@ -277,6 +299,24 @@ def self_signed_context(tmp: Path):
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     ctx.load_cert_chain(tmp / "cert.pem", tmp / "key.pem")
+    return ctx
+
+
+def suite_context(tmp: Path, suite: str):
+    """Self-signed context locked to a single TLS 1.3 cipher suite.
+    The calc will reject the cert (unknown_ca) but must complete key exchange
+    and decrypt the Certificate message using the forced suite's hash."""
+    import ssl
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                    "-nodes", "-days", "2", "-subj", f"/CN=suite-test-{suite}",
+                    "-addext", f"subjectAltName=IP:{HOST}",
+                    "-keyout", str(tmp / f"suite_{suite}_key.pem"),
+                    "-out",    str(tmp / f"suite_{suite}_cert.pem")],
+                   check=True, capture_output=True)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.set_ciphersuites(CIPHERS[suite])
+    ctx.load_cert_chain(tmp / f"suite_{suite}_cert.pem", tmp / f"suite_{suite}_key.pem")
     return ctx
 
 
@@ -452,6 +492,10 @@ class Control:
 
     def cmd_tls_bad_result(self) -> str:
         return ",".join(TLSBad.outcomes) or "none"
+
+    def cmd_suite_result(self) -> str:
+        time.sleep(0.5)
+        return ",".join(SuiteEcho.outcomes) or "none"
 
     def cmd_rst_result(self) -> str:
         time.sleep(1)
@@ -1060,11 +1104,12 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         TLSBad.context = self_signed_context(tmp)
+        SuiteEcho.context = suite_context(tmp, "aes256")
         for server, port, handler in [
             (TCP6, 7001, Echo), (UDP6, 7002, UDPEcho), (TCP, 7004, WebSocketEcho), (TCP, 7005, TLSBad),
             (TCP, 7006, Bulk), (TCP, 7007, Sink), (TCP, 7008, Hold), (TCP, 7009, HalfClose),
             (TCP, 7010, Reset), (TCP, 7011, Closer), (TCP, 7012, ExpectReset), (UDP, 7013, Broadcast), (UDP6, 7014, UDPLength),
-            (TCP6, 7016, SizedBulk),
+            (TCP, 7015, SuiteEcho), (TCP6, 7016, SizedBulk),
         ]:
             serve(server, port, handler)
         global CONTROL
