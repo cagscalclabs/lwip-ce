@@ -2,18 +2,36 @@
  *
  * External-PSK handshakes run against openssl s_server / s_client driven by
  * tests/net/run.py, which lets every cipher suite, key-exchange group,
- * ALPN, KeyUpdate and failure mode be forced from the host. Certificate
- * validation runs against real internet hosts, since the client only trusts
- * the signed lwIPCERT truststore. */
+ * ALPN, KeyUpdate and failure mode be forced from the host. Gating certificate
+ * validation uses runner-local CA-signed chains and a temporary lwIPCERT whose
+ * envelope is signed by the normal GitHub truststore key. Public endpoints are
+ * optional, non-gating observations. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <lwip/core/sntp_time.h>
 
 #include "net.h"
 
 #define PSK_IDENTITY "lwip-ce-nettest"
 
 static uint8_t psk[32];
+
+static void note_traceback(void)
+{
+    uint8_t count = 0;
+    const struct lwip_traceback_entry *entries = lwip_get_traceback(&count);
+
+    for (uint8_t i = 0; entries && i < count && i < 8; i++)
+    {
+        note("  trace %s:%lu kind %u extra 0x%02x",
+             lwip_debug_file_name(entries[i].file),
+             (unsigned long)entries[i].line,
+             (unsigned)entries[i].kind,
+             (unsigned)entries[i].extra);
+    }
+}
 
 /* ---- socket API with external PSK -------------------------------------- */
 
@@ -267,7 +285,7 @@ static void test_raw_alpn_and_resumption(void)
     altcp_tls_free_config(conf);
 }
 
-/* ---- certificate validation against real hosts -------------------------- */
+/* ---- optional, non-gating observations against public hosts ------------- */
 
 static void https(const char *name, const char *host, const char *path, bool want_ok, bool body)
 {
@@ -277,7 +295,7 @@ static void https(const char *name, const char *host, const char *path, bool wan
     bool connected, last_chunk = false;
     if (!sock || lwip_socket_connect(sock, host, 443) != LWIP_OK)
     {
-        check(name, false);
+        observe(name, false);
         if (sock) lwip_socket_destroy(sock);
         return;
     }
@@ -287,11 +305,11 @@ static void https(const char *name, const char *host, const char *path, bool wan
          (unsigned long)(lwip_now_ms() - t0));
     if (!want_ok)
     {
-        check(name, !connected);
+        observe(name, !connected);
         lwip_socket_destroy(sock);
         return;
     }
-    if (!check(name, connected))
+    if (!observe(name, connected))
     {
         lwip_socket_destroy(sock);
         return;
@@ -327,15 +345,15 @@ static void https(const char *name, const char *host, const char *path, bool wan
     }
     note("  %.40s", (char *)buf);
     snprintf(line, sizeof(line), "%s answers HTTP", name);
-    check(line, !strncmp((char *)buf, "HTTP/1.1 ", 9));
+    observe(line, !strncmp((char *)buf, "HTTP/1.1 ", 9));
     if (body)
     {
         bool chunked = strstr((char *)buf, "hunked") != NULL;
         note("  body %lu of %lu%s", (unsigned long)(got - header_end), (unsigned long)length, chunked ? " chunked" : "");
         snprintf(line, sizeof(line), "%s full body", name);
         /* Content-Length, chunked, or delimited by the server closing. */
-        check(line, length ? got - header_end == length
-                           : got > header_end && !lwip_socket_is_active(sock) && (!chunked || last_chunk));
+        observe(line, length ? got - header_end == length
+                             : got > header_end && !lwip_socket_is_active(sock) && (!chunked || last_chunk));
     }
     lwip_socket_destroy(sock);
 }
@@ -356,7 +374,7 @@ static void pooled_https(const char *pool, const char *suffix, bool want_ok, boo
     if (!select_endpoint(pool, host, sizeof(host), path, sizeof(path)))
     {
         snprintf(name, sizeof(name), "select %s endpoint", pool);
-        check(name, false);
+        observe(name, false);
         return;
     }
     snprintf(name, sizeof(name), "https %s%s", host, suffix);
@@ -371,7 +389,7 @@ static void test_wss(const char *pool, const char *connect_name,
     if (!select_endpoint(pool, host, sizeof(host), path, sizeof(path)))
     {
         snprintf(name, sizeof(name), "select %s endpoint", pool);
-        check(name, false);
+        observe(name, false);
         return;
     }
     start = lwip_now_ms();
@@ -379,7 +397,7 @@ static void test_wss(const char *pool, const char *connect_name,
         open_socket(LWIP_SOCKET_ALTCP_WSS, host, 443, path, timeout_ms);
     size_t got = 0;
     snprintf(name, sizeof(name), "%s %s", connect_name, host);
-    if (!check(name, sock != NULL)) return;
+    if (!observe(name, sock != NULL)) return;
     metric(metric_name, lwip_now_ms() - start, "ms");
     write_all(sock, (const uint8_t *)"lwip-ce wss echo", 16);
     start = lwip_now_ms();
@@ -391,23 +409,22 @@ static void test_wss(const char *pool, const char *connect_name,
         if (strstr((char *)buf, "lwip-ce wss echo")) break;
     }
     snprintf(name, sizeof(name), "wss echo %s", host);
-    check(name, strstr((char *)buf, "lwip-ce wss echo") != NULL);
+    observe(name, strstr((char *)buf, "lwip-ce wss echo") != NULL);
     close_socket(sock);
 }
 
-/* Connect to a locally-hosted server that forces a single TLS 1.3 cipher
- * suite.  The calc's truststore will not contain the self-signed cert, so
- * the connection fails with unknown_ca.  That is the expected outcome: it
- * proves key-exchange, transcript hash, and record-layer decryption all
- * succeeded for this suite — a crypto failure would produce DECRYPT_ERROR
- * or BAD_RECORD_MAC on the server instead. */
-static void test_suite_forced(const char *suite_name, const char *cipher_arg)
+/* Connect to a runner-local server with a leaf signed by the ephemeral test
+ * CA.  tests/net/run.py adds that CA to a v3 truststore signed by the normal
+ * GitHub TRUSTSTORE_SIGNER, so this exercises the complete production trust
+ * and handshake path without a public endpoint. */
+static void test_suite_forced(const char *suite_name, const char *cipher_arg,
+                              const char *key_type)
 {
-    char cmd[32], name[80], result[80];
+    char cmd[48], name[80], result[80];
     struct lwip_socket *sock;
 
-    snprintf(cmd, sizeof(cmd), "suite-server %s", cipher_arg);
-    snprintf(name, sizeof(name), "%s forced suite connect", suite_name);
+    snprintf(cmd, sizeof(cmd), "suite-server %s %s", cipher_arg, key_type);
+    snprintf(name, sizeof(name), "%s %s local chain", suite_name, key_type);
     if (!host_call(cmd, NULL, 0, 15000))
     {
         check(name, false);
@@ -423,26 +440,52 @@ static void test_suite_forced(const char *suite_name, const char *cipher_arg)
     pump(not_connecting, sock, 40000);
     note("  %s: status %u err %u", suite_name,
          lwip_socket_status(sock), lwip_socket_last_error(sock));
-    /* Connection must have failed (untrusted cert), not succeeded. */
-    check(name, lwip_socket_status(sock) != LWIP_STATUS_CONNECTED);
-    lwip_socket_destroy(sock);
+    bool connected = lwip_socket_status(sock) == LWIP_STATUS_CONNECTED;
+    if (!connected)
+        note_traceback();
+    check(name, connected);
+    close_socket(sock);
 
-    /* Ask the host what alert the server received.  UNKNOWN_CA means crypto
-     * was correct for this suite; anything else means the wiring is broken. */
-    snprintf(name, sizeof(name), "%s forced suite unknown_ca alert", suite_name);
+    snprintf(name, sizeof(name), "%s %s host handshake", suite_name, key_type);
     if (!host_call("suite-result", result, sizeof(result), 10000))
     {
         check(name, false);
         return;
     }
-    check(name, strstr(result, "UNKNOWN_CA") != NULL);
+    check(name, strstr(result, "handshake completed") != NULL);
 }
 
 int main(void)
 {
+    char test_mode[12] = {0};
+    char local_trust[4] = {0};
+    char runner_time[16] = {0};
     for (uint8_t i = 0; i < 32; i++) psk[i] = pattern(i);
     if (net_begin("tls"))
     {
+        bool external = host_call("test-mode", test_mode, sizeof(test_mode), 5000) &&
+                        !strcmp(test_mode, "external");
+        bool time_ok = host_call("time", runner_time, sizeof(runner_time), 5000) &&
+                       strtoul(runner_time, NULL, 10) != 0;
+        if (time_ok)
+            lwip_sntp_set_time(strtoul(runner_time, NULL, 10));
+
+        if (external)
+        {
+            observe("runner time installed", time_ok && lwip_sntp_time_was_set());
+            pooled_https("tls13", "", true, false);
+            pooled_https("rsa2048", " (RSA-2048)", true, false);
+            pooled_https("ecdsa256", " (ECDSA P-256)", true, false);
+            pooled_https("body", "", true, true);
+            pooled_https("starfield", " (Starfield)", true, false);
+            pooled_https("p384", " (P-384 chain rejected)", false, false);
+            test_wss("wss", "wss connect", "wss_connect", 60000);
+            test_wss("wss_long", "wss long-handshake connect",
+                     "wss_long_connect", 120000);
+            return net_end();
+        }
+
+        check("runner time installed", time_ok && lwip_sntp_time_was_set());
         psk_matrix("gcm", "x25519", "TLS_AES_128_GCM_SHA256", "X25519");
         psk_matrix("ccm", "x25519", "TLS_AES_128_CCM_SHA256", "X25519");
         psk_reject("wrong PSK rejected", "gcm x25519 rev bad good");
@@ -455,24 +498,18 @@ int main(void)
         test_psk_bulk("psk-server gcm x25519 www4k", "128 KiB over TLS in 4 KiB records");
         test_raw_alpn_and_resumption();
 
-        pooled_https("tls13", "", true, false);
-        pooled_https("rsa2048", " (RSA-2048)", true, false);
-        /* Root CA 2's demo chain uses sha384WithRSAEncryption.  Do not use it
-         * as a positive RSA-4096 test until SHA-384 certificate signatures are
-         * implemented; rejecting that chain is currently the correct result. */
-        pooled_https("ecdsa256", " (ECDSA P-256)", true, false);
-        pooled_https("body", "", true, true);
-        /* The retail Amazon CDN varies its wire chain by edge.  The CA-owned
-         * endpoint consistently exercises Amazon Root CA 1 via Starfield. */
-        pooled_https("starfield", " (Starfield)", true, false);
-        pooled_https("p384", " (P-384 chain rejected)", false, false);
-        test_suite_forced("AES-256-GCM-SHA384", "aes256");
+        if (check("runner-local CA truststore provisioned",
+                  host_call("local-trust", local_trust, sizeof(local_trust), 5000) &&
+                  local_trust[0] == '1'))
+        {
+            test_suite_forced("AES-128-GCM-SHA256", "gcm", "ecdsa");
+            test_suite_forced("AES-128-GCM-SHA256", "gcm", "rsa");
+            test_suite_forced("AES-128-CCM-SHA256", "ccm", "ecdsa");
+            test_suite_forced("AES-128-CCM-SHA256", "ccm", "rsa");
+            test_suite_forced("AES-256-GCM-SHA384", "aes256", "ecdsa");
+            test_suite_forced("AES-256-GCM-SHA384", "aes256", "rsa");
+        }
         test_tls12_rejected();
-        test_wss("wss", "wss connect", "wss_connect", 60000);
-        /* This distant endpoint regularly needs much more emulated time.  Keep
-         * it as a regression test for the extended WSS handshake budget. */
-        test_wss("wss_long", "wss long-handshake connect",
-                 "wss_long_connect", 120000);
     }
     return net_end();
 }

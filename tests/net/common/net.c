@@ -56,6 +56,14 @@ bool check(const char *name, bool ok)
     return ok;
 }
 
+bool observe(const char *name, bool ok)
+{
+    char msg[96];
+    snprintf(msg, sizeof(msg), "INFO %s %s", ok ? "PASS" : "FAIL", name);
+    out(msg, C_CYAN);
+    return ok;
+}
+
 void metric(const char *name, unsigned long value, const char *unit)
 {
     char msg[96];
