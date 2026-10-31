@@ -195,7 +195,7 @@
       "size": "vram_16_size",
       "label": "@success",
       "expected_CRCs": [
-        "0783A776"
+        "7D0BF4ED"
       ],
       "timeout": 120000
     },

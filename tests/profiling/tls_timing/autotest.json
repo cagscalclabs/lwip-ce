@@ -2,7 +2,9 @@
   "description": "Verify timing behavior. Compute acceptible jitter-based cycle deviation based on MAD, a tuning factor (c), then test that no input class exceeds the acceptable deviation more than 75% of the time",
   "transfer_files": [
     "bin/XTIMING.8xp",
-    "../../common/clibs.8xg",
+    "../../common/libload.8xv",
+    "../../common/fileioc.8xv",
+    "../../common/usbdrvce.8xv",
     "../../common/lwIPCERT.8xv",
     "../../common/lwIPINST.8xp",
     "../../common/LWIP.0.8xv",

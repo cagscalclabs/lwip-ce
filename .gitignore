@@ -32,6 +32,9 @@ submodules/toolchain/
 *INST.8xp
 *.8ek
 
+# cemu-autotester screenshots
+*.rgba
+
 # httpd server example filesystem includes
 *makefsdata.c.*
 *.fsdata

@@ -19,8 +19,9 @@
 ; Variable-base scalar multiplication for ECDH (p256_ws_mul) is NOT the
 ; reference's 256-step Jacobian ladder: it is a constant-time width-4 fixed
 ; window with Joye-Tunstall signed regular recoding (64 odd digits, 8-entry
-; Jacobian table of odd multiples of Q, 4 doublings + 1 addition per digit,
-; complete addition for the last digit).  Its intermediates differ from
+; batch-normalized affine table of odd multiples of Q, 4 doublings + 1 mixed
+; addition per digit, complete addition for the last digit).  Its
+; intermediates differ from
 ; ref/p256/p256.c; only the final point agrees.  Preconditions: 1 <= k < n
 ; and input point Z = Montgomery 1 (an imported affine point).  Python
 ; model of the buffer-level sequence (ws_model.py) lives in an agent
@@ -107,6 +108,7 @@ __p256_rt:              .space 96       ; point-op result temp
 __p256_add_result:      .space 96       ; verify: 3Q   (add_result, double_result,
 __p256_double_result:   .space 96       ; verify: 5Q    pa must stay contiguous)
 __p256_pa:              .space 96       ; verify: 7Q
+__p256_batch_z:         .space 7*32     ; ECDH: original Z of 3Q..15Q
 __p256_pq:              .space 96       ; imported peer / public point
 __p256_k:               .space 32       ; sign: nonce k (BE); verify: u1 (LE)
 __p256_x:               .space 32       ; sign: x(R) (BE);   verify: u2 (LE)
@@ -2133,12 +2135,90 @@ p256_ord_inv:
 ; P-256 specifics of the exactness argument: for i >= 1, 0 < 16 m + 15 <
 ; 2^252 + 16 < n, so the plain addition is exact; for i = 0 the wrap
 ; 16 m = n + d_0 (k' = n + 2 d_0, e.g. k' = n - 2) IS reachable and the last
-; step uses the complete p256_point_add.  Cost: 1 D + 7 A (table) + 252 D +
-; 63 A + 1 complete A, versus 256 co-Z ladder steps (9M+5S each): about
-; 23M + 25S per 4 bits instead of 36M + 20S.  Validated by a Python model of
-; this exact sequence (ws_model.py, agent scratchpad, not committed).
+; step uses the complete p256_point_add.  The seven computed table points are
+; batch-normalized with one inversion; steady-state additions are mixed
+; 7M+4S operations rather than Jacobian/Jacobian 11M+5S operations.
 ; ===========================================================================
     ECC_WS_MUL p256, 32, __p256_pa
+
+.macro P256_WS_ZSAVE pt, j
+    ld      hl, \pt + 64
+    ld      de, __p256_batch_z + 32*\j
+    ld      bc, 32
+    ldir
+.endm
+.macro P256_WS_PREFIX pt, prev, j
+    FMUL    \pt + 64, \prev, __p256_batch_z + 32*\j
+.endm
+.macro P256_WS_NORMALIZE pt, prev, j
+    FMUL    PF0, PF3, \prev
+    FMUL    PF3, PF3, __p256_batch_z + 32*\j
+    FSQ     PF1, PF0
+    FMUL    \pt, \pt, PF1
+    FMUL    PF1, PF1, PF0
+    FMUL    \pt + 32, \pt + 32, PF1
+.endm
+p256_ws_normalize:
+    P256_WS_ZSAVE __p256_r0, 0
+    P256_WS_ZSAVE __p256_r1, 1
+    P256_WS_ZSAVE __p256_add_result, 2
+    P256_WS_ZSAVE __p256_double_result, 3
+    P256_WS_ZSAVE __p256_pa, 4
+    P256_WS_ZSAVE __p256_rt, 5
+    P256_WS_ZSAVE PS1, 6
+    P256_WS_PREFIX __p256_r1, __p256_r0 + 64, 1
+    P256_WS_PREFIX __p256_add_result, __p256_r1 + 64, 2
+    P256_WS_PREFIX __p256_double_result, __p256_add_result + 64, 3
+    P256_WS_PREFIX __p256_pa, __p256_double_result + 64, 4
+    P256_WS_PREFIX __p256_rt, __p256_pa + 64, 5
+    P256_WS_PREFIX PS1, __p256_rt + 64, 6
+    ld      hl, PS1Z
+    ld      bc, PF3
+    call    p256_fe_inv
+    P256_WS_NORMALIZE PS1, __p256_rt + 64, 6
+    P256_WS_NORMALIZE __p256_rt, __p256_pa + 64, 5
+    P256_WS_NORMALIZE __p256_pa, __p256_double_result + 64, 4
+    P256_WS_NORMALIZE __p256_double_result, __p256_add_result + 64, 3
+    P256_WS_NORMALIZE __p256_add_result, __p256_r1 + 64, 2
+    P256_WS_NORMALIZE __p256_r1, __p256_r0 + 64, 1
+    P256_WS_NORMALIZE __p256_r0, __p256_P_R, 0
+    ld      hl, __p256_rt
+    ld      de, __p256_batch_z
+    ld      bc, 64
+    ldir
+    ld      hl, PS1
+    ld      de, __p256_batch_z + 64
+    ld      bc, 64
+    ldir
+    ret
+
+p256_ws_madd:
+    FSQ     PF0, PS0Z
+    FMUL    PF1, PS1X, PF0
+    FMUL    PF2, PS0Z, PF0
+    FMUL    PF2, PS1Y, PF2
+    FSUB    PF1, PF1, PS0X
+    FSUB    PF2, PF2, PS0Y
+    FADD    PF2, PF2, PF2
+    FSQ     PF3, PF1
+    FADD    PF4, PF3, PF3
+    FADD    PF4, PF4, PF4
+    FMUL    PF5, PF1, PF4
+    FMUL    PF6, PS0X, PF4
+    FMUL    PF7, PS0Y, PF5
+    FSQ     PS0X, PF2
+    FSUB    PS0X, PS0X, PF5
+    FSUB    PS0X, PS0X, PF6
+    FSUB    PS0X, PS0X, PF6
+    FSUB    PF6, PF6, PS0X
+    FMUL    PF6, PF2, PF6
+    FADD    PF7, PF7, PF7
+    FSUB    PS0Y, PF6, PF7
+    FADD    PF8, PS0Z, PF1
+    FSQ     PF8, PF8
+    FSUB    PF8, PF8, PF0
+    FSUB    PS0Z, PF8, PF3
+    ret
 
 ; p256_add32: (IY) = (HL) + (DE), 32 bytes; A = carry ? 0xFF : 0.
     ECC_ADDN p256, 32
