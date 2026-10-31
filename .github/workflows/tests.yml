@@ -858,16 +858,19 @@ jobs:
         run: make -C tests/profiling/primitives_bench
 
       - name: Run primitives benchmark
+        working-directory: tests/profiling/primitives_bench
         run: |
           timeout 900s cemu-autotester \
-            tests/profiling/primitives_bench/autotest.json 2>&1 || true
+            "${{ github.workspace }}/tests/profiling/primitives_bench/autotest.json" \
+            2>&1 | tee autotest.log || true
 
       - name: Extract and print benchmark results
+        working-directory: tests/profiling/primitives_bench
         run: |
-          bench_var=$(find tests/profiling/primitives_bench -name 'TLSBENCH.8xv' 2>/dev/null | head -1)
-          if [ -z "$bench_var" ]; then
-            echo "TLSBENCH appvar not found; benchmark did not complete"
-            exit 0
+          bench_var=TLSBENCH.8xv
+          if [ ! -f "$bench_var" ]; then
+            echo "::error::TLSBENCH appvar not found; benchmark did not complete"
+            exit 1
           fi
           convbin -i "$bench_var" -o TLSBENCH.bin -j 8x -k bin
           python3 - <<'PY'
@@ -936,6 +939,7 @@ jobs:
           name: bench-primitives
           path: |
             tests/profiling/primitives_bench/TLSBENCH.8xv
+            tests/profiling/primitives_bench/autotest.log
             tests/profiling/primitives_bench/autotest.json
           if-no-files-found: ignore
 
