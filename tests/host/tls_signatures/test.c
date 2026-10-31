@@ -133,15 +133,20 @@ static void hello(bool psk, const char *hostname, bool offer_alpn)
         }
         if (type == 13)
         {
-            assert(len == 6 && be16(buf+off+4) == 4 &&
-                   be16(buf+off+6) == 0x0804 && be16(buf+off+8) == 0x0403);
+            /* ecdsa_secp256r1_sha256 (0x0403), rsa_pss_rsae_sha256 (0x0804),
+             * ecdsa_secp384r1_sha384 (0x0503) */
+            assert(len == 8 && be16(buf+off+4) == 6 &&
+                   be16(buf+off+6) == 0x0403 && be16(buf+off+8) == 0x0804 &&
+                   be16(buf+off+10) == 0x0503);
             signatures++;
         }
         if (type == 50)
         {
-            assert(len == 8 && be16(buf+off+4) == 6);
+            /* rsa_pkcs1_sha256 (0x0401), rsa_pss_rsae_sha256 (0x0804),
+             * ecdsa_secp256r1_sha256 (0x0403), ecdsa_secp384r1_sha384 (0x0503) */
+            assert(len == 10 && be16(buf+off+4) == 8);
             assert(be16(buf+off+6) == 0x0401 && be16(buf+off+8) == 0x0804 &&
-                   be16(buf+off+10) == 0x0403);
+                   be16(buf+off+10) == 0x0403 && be16(buf+off+12) == 0x0503);
             signatures++;
         }
         if (type == 16)

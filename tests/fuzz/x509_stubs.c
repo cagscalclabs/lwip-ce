@@ -37,6 +37,11 @@ bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32], const uint8_
     (void)sig; (void)hash; (void)pub;
     return false;
 }
+bool tls_p384_verify(const uint8_t sig[96], const uint8_t hash[48], const uint8_t pub[97])
+{
+    (void)sig; (void)hash; (void)pub;
+    return false;
+}
 bool tls_rsa_decrypt_signature(const uint8_t *signature, size_t signature_len, uint8_t *outbuf,
                                const struct tls_rsa_key *key)
 {

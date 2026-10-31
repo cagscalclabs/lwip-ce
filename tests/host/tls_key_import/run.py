@@ -43,10 +43,11 @@ int main(int argc, char **argv) {
  if(expected==TLS_KEY_TYPE_UNKNOWN) { assert(rc!=TLS_KEY_IMPORT_OK && key==NULL); free(data); return 0; }
  assert(rc==TLS_KEY_IMPORT_OK && key && key->allocated && key->type==expected);
  if(expected==TLS_KEY_TYPE_RSA) { assert(key->rsa.mod_len==128); assert(key->rsa.exp_len==3); assert(key->rsa.exponent[0]==1 && key->rsa.exponent[1]==0 && key->rsa.exponent[2]==1); }
- else { assert(key->ec.len==65 && key->ec.pub[0]==4); }
- tls_alg_t choices[]={TLS_ALG_RSA_PSS_RSAE_SHA256,TLS_ALG_RSA_PKCS1_SHA256,TLS_ALG_RSA_OAEP_SHA256,TLS_ALG_ECDSA_SECP256R1_SHA256,TLS_ALG_AES_128_GCM};
+ else if(expected==TLS_KEY_TYPE_EC_P256) { assert(key->ec.len==65 && key->ec.pub[0]==4); }
+ else if(expected==TLS_KEY_TYPE_EC_P384) { assert(key->ec.len==97 && key->ec.pub[0]==4); }
+ tls_alg_t choices[]={TLS_ALG_RSA_PSS_RSAE_SHA256,TLS_ALG_RSA_PKCS1_SHA256,TLS_ALG_RSA_OAEP_SHA256,TLS_ALG_ECDSA_SECP256R1_SHA256,TLS_ALG_ECDSA_SECP384R1_SHA384,TLS_ALG_AES_128_GCM};
  for(size_t i=0;i<sizeof(choices)/sizeof(*choices);i++) {
-  bool compatible=expected==TLS_KEY_TYPE_RSA ? i<3 : i==3;
+  bool compatible=expected==TLS_KEY_TYPE_RSA ? i<3 : expected==TLS_KEY_TYPE_EC_P256 ? i==3 : expected==TLS_KEY_TYPE_EC_P384 ? i==4 : 0;
   assert(tls_key_supports_operation(key, choices[i])==compatible);
   assert(key->type==expected);
  }
@@ -75,6 +76,12 @@ with tempfile.TemporaryDirectory(prefix='key-import-') as d:
                 count+=1
     openssl('genpkey','-algorithm','EC','-pkeyopt','ec_paramgen_curve:P-384','-out','p384.pem')
     openssl('pkey','-in','p384.pem','-pubout','-out','p384-pub.pem')
-    for name in ['p384.pem','p384-pub.pem']:
-        subprocess.run([str(p/'test'),str(p/name),'0','0'],check=True)
+    openssl('pkcs8','-topk8','-nocrypt','-in','p384.pem','-out','p384-pkcs8.pem')
+    openssl('pkey','-in','p384.pem','-pubout','-outform','DER','-out','p384-pub.der')
+    openssl('pkcs8','-topk8','-nocrypt','-in','p384.pem','-outform','DER','-out','p384-pkcs8.der')
+    # TLS_KEY_TYPE_EC_P384 = 3
+    for name, fmt in [('p384.pem','0'),('p384-pub.pem','0'),('p384-pkcs8.pem','0'),
+                       ('p384-pub.der','1'),('p384-pkcs8.der','1')]:
+        subprocess.run([str(p/'test'),str(p/name),fmt,'3'],check=True)
+        count+=1
     print(f'Passed {count} OpenSSL import formats, operation compatibility, and unsupported curves')
