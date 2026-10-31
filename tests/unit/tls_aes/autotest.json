@@ -13,6 +13,7 @@
     "../../common/LWIP.6.8xv",
     "../../common/LWIP.7.8xv",
     "../../common/LWIP.8.8xv",
+    "../../common/LWIP.9.8xv",
     "../../common/lwip.8xv"
   ],
   "target": {
@@ -227,7 +228,7 @@
       "expected_CRCs": [
         "F7C03D8D"
       ],
-      "timeout": 100000
+      "timeout": 200000
     },
     "17": {
       "description": "AES-256-GCM (GCM Spec Test Case 16) encrypt/decrypt/bad tag",

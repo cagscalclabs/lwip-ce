@@ -15,6 +15,8 @@ static inline bool tls_key_supports_operation(const struct tls_key *key, tls_alg
             return key->type == TLS_KEY_TYPE_RSA;
         case TLS_ALG_ECDSA_SECP256R1_SHA256:
             return key->type == TLS_KEY_TYPE_EC_P256;
+        case TLS_ALG_ECDSA_SECP384R1_SHA384:
+            return key->type == TLS_KEY_TYPE_EC_P384;
         case TLS_ALG_AES_128_GCM:
         case TLS_ALG_AES_128_CCM:
         case TLS_ALG_AES_128_CBC:

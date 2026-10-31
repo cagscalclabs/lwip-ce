@@ -84,6 +84,10 @@ static bool tls_p256_secret(uint8_t *out, const uint8_t *priv, const uint8_t *pe
 { (void)priv; (void)peer; memset(out, 0x44, 32); return true; }
 static bool tls_p256_verify(const uint8_t *sig, const uint8_t *hash, const uint8_t *pub)
 { (void)sig; (void)hash; (void)pub; return true; }
+static bool tls_p384_verify(const uint8_t *sig, const uint8_t *hash, const uint8_t *pub)
+{ (void)sig; (void)hash; (void)pub; return true; }
+static bool tls_p384_sign(uint8_t *sig, const uint8_t *hash, const uint8_t *priv)
+{ (void)hash; (void)priv; memset(sig, 0x5b, 96); return true; }
 static void tls_crypto_guard_enable(void) {}
 static void tls_crypto_guard_disable(void) {}
 /* No Wi-Fi bridge: every offload start returns 0, so the local code runs. */

@@ -455,6 +455,10 @@
 	export	tls_p256_secret
 	export	tls_p256_sign
 	export	tls_p256_verify
+	export	tls_p384_publickey
+	export	tls_p384_secret
+	export	tls_p384_sign
+	export	tls_p384_verify
 	export	lwip_socket_set_tls_cert
 	export	lwip_socket_set_tls_psk
 	export	tls_random_bytes_ex

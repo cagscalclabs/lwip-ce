@@ -21,6 +21,7 @@
 #include <lwip/cryptography/hkdf.h>
 #include <lwip/cryptography/hmac.h>
 #include <lwip/cryptography/p256.h>
+#include <lwip/cryptography/p384.h>
 #include <lwip/cryptography/passwords.h>
 #include <lwip/cryptography/rsa.h>
 #include <lwip/cryptography/x25519.h>
@@ -364,6 +365,8 @@ static void bench_x25519(void)
 static void bench_p256(void)
 {
     uint8_t pub[65];
+    uint8_t peer[65];
+    uint8_t shared[32];
     uint8_t sig[64];
     uint8_t hash[32];
     clock_t t0;
@@ -374,12 +377,53 @@ static void bench_p256(void)
     t0 = clock();
     ok = tls_p256_publickey(pub, bench_key);
     bench_emit("p256_keygen", (uint32_t)(clock() - t0), ok ? 1u : 0u);
+    memcpy(peer, pub, sizeof(peer));
+    t0 = clock();
+    ok2 = tls_p256_secret(shared, bench_key, peer);
+    bench_emit("p256_ecdh", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
     t0 = clock();
     ok2 = tls_p256_sign(sig, hash, bench_key);
     bench_emit("p256_sign", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
     t0 = clock();
     ok2 = tls_p256_verify(sig, hash, pub);
     bench_emit("p256_verify", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
+    bench_sink += (uint32_t)ok + pub[0] + sig[0] + shared[0];
+}
+
+static void bench_p384(void)
+{
+    uint8_t priv[48];
+    uint8_t pub[97];
+    uint8_t peer[97];
+    uint8_t sig[96];
+    uint8_t hash[48];
+    clock_t t0;
+    bool ok;
+    bool ok2;
+
+    memcpy(priv, bench_buf, sizeof(priv));
+    priv[0] |= 0x01; /* ensure nonzero */
+    memcpy(hash, bench_buf + 48, sizeof(hash));
+
+    t0 = clock();
+    ok = tls_p384_publickey(pub, priv);
+    bench_emit("p384_keygen", (uint32_t)(clock() - t0), ok ? 1u : 0u);
+
+    /* use pub as peer for ECDH (self-ECDH: result is not a real shared secret,
+     * but exercises the full scalar-multiplication path) */
+    memcpy(peer, pub, sizeof(peer));
+    t0 = clock();
+    ok2 = tls_p384_secret(pub, priv, peer);
+    bench_emit("p384_ecdh", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
+
+    /* re-derive pub for sign/verify */
+    ok = tls_p384_publickey(pub, priv);
+    t0 = clock();
+    ok2 = tls_p384_sign(sig, hash, priv);
+    bench_emit("p384_sign", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
+    t0 = clock();
+    ok2 = ok2 && tls_p384_verify(sig, hash, pub);
+    bench_emit("p384_verify", (uint32_t)(clock() - t0), ok2 ? 1u : 0u);
     bench_sink += (uint32_t)ok + pub[0] + sig[0];
 }
 
@@ -421,6 +465,7 @@ int main(void)
     bench_pbkdf2(1000u);
     bench_x25519();
     bench_p256();
+    bench_p384();
     bench_emit("sink", bench_sink, 0);
     bench_emit("marker_done", 0, 0);
 

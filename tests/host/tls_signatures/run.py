@@ -299,7 +299,8 @@ source += ('static bool test_p256_sign_ok;\n'
            '    if (!test_p256_sign_ok) return false;\n'
            '    memcpy(sig, test_p256_sign_rs, sizeof(test_p256_sign_rs));\n'
            '    return true;\n'
-           '}\n')
+           '}\n'
+           '/* tls_p384_sign is provided by mock.h */\n')
 for name in ['tls_key_verify', 'tls_key_sign']:
     source += function(key_source, name)
 # Include internal AES helpers and blob helpers (not aes_encrypt_oneshot, which is mocked).
@@ -324,6 +325,7 @@ while _depth:
     _pos += 1
 source += altcp_src[_m.start():_pos] + "\n"
 source += '#define TLS_SIG_ECDSA_SECP256R1_SHA256 0x0403\n'
+source += '#define TLS_SIG_ECDSA_SECP384R1_SHA384 0x0503\n'
 # Suite table plus its lookup helper; they are file-scope data and a
 # struct-returning pointer function the per-function extractor cannot take.
 source += hs[hs.index('#define TLS_AES_GCM_RECORD_LIMIT'):hs.index('static bool tls_cipher_suite_supported')]
@@ -340,6 +342,7 @@ for name in ['transcript_hash_init', 'transcript_hash_update', 'transcript_hash_
              'tls_recv_server_hello',
              'tls_recv_encrypted_extensions', 'tls_recv_certificate_request',
              'tls_recv_certificate_streamed', 'tls_certverify_rsa_pss_sha256',
+             'tls_certverify_ecdsa_p384_sha384',
              'tls_send_empty_certificate', 'der_encode_integer',
              'der_encode_ecdsa_sig', 'tls_send_client_certificate',
              'tls_hs_defer_bytes', 'tls_cert_jobs_pending', 'tls_cert_jobs_step',

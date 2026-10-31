@@ -13,6 +13,7 @@
     "../../common/LWIP.6.8xv",
     "../../common/LWIP.7.8xv",
     "../../common/LWIP.8.8xv",
+    "../../common/LWIP.9.8xv",
     "../../common/lwip.8xv"
   ],
   "target": {
@@ -20,7 +21,7 @@
     "isASM": true
   },
   "sequence": [
-    "delay|10000",
+    "delay|20000",
     "key|clear",
     "action|launch:INSTALL",
     "hashWait|16",
@@ -32,6 +33,16 @@
     "key|enter"
   ],
   "hashes": {
+    "16": {
+      "description": "lwIP installed",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@lwip_installed",
+      "expected_CRCs": [
+        "F7C03D8D"
+      ],
+      "timeout": 200000
+    },
     "1": {
       "description": "P-256 retry test passed",
       "start": "vram_start",
