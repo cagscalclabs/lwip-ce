@@ -1,33 +1,13 @@
 {
   "description": "Cycle-count benchmark; writes TLSBENCH AppVar",
   "transfer_files": [
-    "bin/XPBENCH.8xp",
-    "../../common/clibs.8xg",
-    "../../common/lwIPINST.8xp",
-    "../../common/LWIP.0.8xv",
-    "../../common/LWIP.1.8xv",
-    "../../common/LWIP.2.8xv",
-    "../../common/LWIP.3.8xv",
-    "../../common/LWIP.4.8xv",
-    "../../common/LWIP.5.8xv",
-    "../../common/LWIP.6.8xv",
-    "../../common/LWIP.7.8xv",
-    "../../common/LWIP.8.8xv",
-    "../../common/LWIP.9.8xv",
-    "../../common/lwip.8xv"
+    "bin/XPBENCH.8xp"
   ],
   "target": {
     "name": "XPBENCH",
     "isASM": true
   },
   "sequence": [
-    "delay|60000",
-    "key|clear",
-    "action|launch:INSTALL",
-    "hashWait|2",
-    "key|left",
-    "key|enter",
-    "delay|2000",
     "action|launch",
     "hashWait|1",
     "key|enter",
@@ -44,16 +24,6 @@
         "D1F2869F"
       ],
       "timeout": 600000
-    },
-    "2": {
-      "description": "lwIP installed",
-      "start": "vram_start",
-      "size": "vram_16_size",
-      "label": "@lwip_installed",
-      "expected_CRCs": [
-        "F7C03D8D"
-      ],
-      "timeout": 200000
     }
   }
 }

@@ -89,7 +89,7 @@ enum acvp_primitive {
     ACVP_PRIMITIVE_ECDSA_SIGVER,
     ACVP_PRIMITIVE_DETECDSA_SIGGEN,
     ACVP_PRIMITIVE_X25519_SSC,
-    ACVP_PRIMITIVE_P256_CDH,
+    ACVP_PRIMITIVE_KAS_ECC_CDH,
 };
 
 #ifndef ACVP_PRIMITIVE
@@ -120,13 +120,19 @@ static bool operation_allowed(uint8_t operation)
                operation == ACVP_OP_RSA_PKCS1_SHA2_256_VERIFY;
     case ACVP_PRIMITIVE_ECDSA_SIGVER:
         return operation == ACVP_OP_SHA2_256 ||
-               operation == ACVP_OP_P256_SIGVER;
+               operation == ACVP_OP_SHA2_384 ||
+               operation == ACVP_OP_P256_SIGVER ||
+               operation == ACVP_OP_P384_SIGVER;
     case ACVP_PRIMITIVE_DETECDSA_SIGGEN:
         return operation == ACVP_OP_SHA2_256 ||
+               operation == ACVP_OP_SHA2_384 ||
                operation == ACVP_OP_P256_SIGGEN_BEGIN ||
-               operation == ACVP_OP_P256_SIGGEN_ACTIVE;
+               operation == ACVP_OP_P256_SIGGEN_ACTIVE ||
+               operation == ACVP_OP_P384_SIGGEN_BEGIN ||
+               operation == ACVP_OP_P384_SIGGEN_ACTIVE;
     case ACVP_PRIMITIVE_X25519_SSC: return operation == ACVP_OP_X25519_SSC;
-    case ACVP_PRIMITIVE_P256_CDH: return operation == ACVP_OP_P256_CDH;
+    case ACVP_PRIMITIVE_KAS_ECC_CDH:
+        return operation == ACVP_OP_P256_CDH || operation == ACVP_OP_P384_CDH;
     default: return false;
     }
 }

@@ -747,7 +747,7 @@ jobs:
 
   bench:
     name: Algorithm benchmark
-    needs: prepare_rom
+    needs: prepare_patched_rom
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -790,41 +790,27 @@ jobs:
           cp "${{ github.workspace }}/release/lwip.h" "${{ env.CEDEV }}/include/lwip.h"
           cp -r "${{ github.workspace }}/release/lwip" "${{ env.CEDEV }}/include/lwip"
 
-      - name: Download encrypted CEmu ROM artifact
+      - name: Download patched CEmu image artifact
         uses: actions/download-artifact@v4
         with:
-          name: cemu-rom-encrypted
-          path: ${{ github.workspace }}
+          name: cemu-rom-patched
+          path: ${{ runner.temp }}
 
-      - name: Decrypt CEmu ROM
+      - name: Decrypt patched CEmu image
         run: |
           gpg --batch --yes \
             --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
-            --output "${{ env.AUTOTESTER_ROM }}" \
-            --decrypt "${{ github.workspace }}/CE.rom.enc"
-          shred -u "${{ github.workspace }}/CE.rom.enc"
-
-      - name: Set up CEmu with emulated networking
-        id: cemu
-        uses: alessiodam/cemu-net-action@v1
-        with:
-          cemu-ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
+            --output "${{ runner.temp }}/ce-patched.ce" \
+            --decrypt "${{ runner.temp }}/ce-patched.ce.enc"
+          shred -u "${{ runner.temp }}/ce-patched.ce.enc"
+          test -f "${{ runner.temp }}/ce-patched.ce"
+          test -f "${{ runner.temp }}/cemu-autotester-image"
+          echo "AUTOTESTER_IMAGE=${{ runner.temp }}/ce-patched.ce" >> "$GITHUB_ENV"
 
       - name: Install Autotester CLI
-        run: cmake -E copy "${{ steps.cemu.outputs.autotester }}" "${{ env.CEDEV_BIN }}/cemu-autotester"
-
-      - name: Prepare shared dyload files
         run: |
-          mkdir -p ${{ env.LWIP_TESTS_COMMON }}
-          cp "${{ github.workspace }}/release/appinst/lwIPINST.8xp" ${{ env.LWIP_TESTS_COMMON }}/
-          cp "${{ github.workspace }}/release/lwip.8xv" ${{ env.LWIP_TESTS_COMMON }}/
-          for appvar in "${{ github.workspace }}"/release/appinst/LWIP.*.8xv; do
-            cp "$appvar" "${{ env.LWIP_TESTS_COMMON }}/"
-          done
-          curl -fL \
-            -o ${{ env.LWIP_TESTS_COMMON }}/clibs.8xg \
-            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
-          python3 tests/common/scripts/sync_appvars.py
+          install -m755 "${{ runner.temp }}/cemu-autotester-image" "${{ env.CEDEV_BIN }}/cemu-autotester"
+          strings "${{ env.CEDEV_BIN }}/cemu-autotester" | grep -q "AUTOTESTER_IMAGE"
 
       - name: Build primitives benchmark
         run: make -C tests/profiling/primitives_bench
@@ -900,9 +886,9 @@ jobs:
                   f.write('\n')
           PY
 
-      - name: Remove CEmu Rom
+      - name: Remove patched CEmu image
         if: always()
-        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+        run: shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
 
       - name: Upload benchmark artifact
         if: always()

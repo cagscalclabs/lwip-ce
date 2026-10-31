@@ -3,9 +3,10 @@
 
 This module deliberately keeps ACVP JSON and future ACVTS credentials on the
 host.  The calculator sees only bounded binary primitive-operation requests.
-Supported adapters cover SHA-256/384, HMAC-SHA-256/384, AES-CBC/GCM/CCM,
-PBKDF2-HMAC-SHA-256, KDA/HKDF-SHA-256, RSA signature verification,
-deterministic ECDSA P-256 signing/verification, and X25519 SSC.
+Supported adapters cover SHA-256/384/512, HMAC-SHA-256/384/512,
+AES-CBC/GCM/CCM, PBKDF2-HMAC-SHA-256, KDA/HKDF-SHA-256, RSA signature
+verification, deterministic ECDSA P-256/P-384 signing and verification,
+P-256/P-384 CDH, and X25519 SSC.
 """
 
 from __future__ import annotations
