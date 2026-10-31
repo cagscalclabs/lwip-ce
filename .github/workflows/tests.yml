@@ -60,15 +60,16 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/CE-Programming/CEmu.git "$RUNNER_TEMP/CEmu"
           make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
-          # CEmu's CMakeLists puts -lcemucore in CMAKE_EXE_LINKER_FLAGS.
-          # GNU ld's link rule is: FLAGS LINK_FLAGS <objects> LINK_LIBRARIES
-          # so LINK_FLAGS fires before objects — undefined refs from archive.
-          # Fix: strip -lcemucore from LINK_FLAGS and inject it into
-          # LINK_LIBRARIES (which appears after the .o files) via build.ninja.
+          # Let cmake configure normally (CMakeLists's own -lcemucore in
+          # CMAKE_EXE_LINKER_FLAGS goes via build.ninja LINK_FLAGS).
+          # Do NOT pass -lcemucore via -DCMAKE_EXE_LINKER_FLAGS: cmake runs
+          # compiler-detection probes with that flag set and they fail because
+          # libcemucore.a isn't built yet during configure.
           cmake -S "$RUNNER_TEMP/CEmu/tests/autotester" -B "$RUNNER_TEMP/CEmu/build" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$RUNNER_TEMP/CEmu/core" \
             -GNinja
+          # Patch build.ninja: move -lcemucore from LINK_FLAGS (before objects)
+          # to LINK_LIBRARIES (after objects) so GNU ld sees the archive last.
           python3 .github/scripts/patch_cemu_ninja.py "$RUNNER_TEMP/CEmu/build/build.ninja"
           cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
           install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
