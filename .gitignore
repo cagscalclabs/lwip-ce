@@ -114,3 +114,7 @@ tests/profiling/lwip_dast/autotest.json
 tests/profiling/lwip_dast/autotester.log
 
 POST.md
+
+# local CI simulation script outputs
+*.ce
+scripts/test_prepare_patched_rom.py

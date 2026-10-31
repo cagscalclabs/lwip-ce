@@ -15,6 +15,9 @@ outputs:
   usb-step:
     description: Autotester sequence step that plugs the Ethernet adapter in.
     value: ${{ steps.cemu.outputs.usb-step }}
+  patched-image:
+    description: Path to the decrypted patched CEmu image (.ce) with lwIP installed.
+    value: ${{ runner.temp }}/ce-patched.ce
 
 runs:
   using: composite
@@ -73,14 +76,23 @@ runs:
         name: cemu-rom-encrypted
         path: ${{ runner.temp }}
 
-    - name: Decrypt CE ROM
+    - name: Download patched CEmu image artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: cemu-rom-patched
+        path: ${{ runner.temp }}
+
+    - name: Decrypt CE ROM and patched image
       shell: bash
       env:
         ROM_KEY: ${{ inputs.rom-key }}
       run: |
         gpg --batch --yes --passphrase "$ROM_KEY" --output "$RUNNER_TEMP/ce.rom" --decrypt "$RUNNER_TEMP/CE.rom.enc"
         shred -u "$RUNNER_TEMP/CE.rom.enc"
+        gpg --batch --yes --passphrase "$ROM_KEY" --output "$RUNNER_TEMP/ce-patched.ce" --decrypt "$RUNNER_TEMP/ce-patched.ce.enc"
+        shred -u "$RUNNER_TEMP/ce-patched.ce.enc"
         echo "AUTOTESTER_ROM=$RUNNER_TEMP/ce.rom" >> "$GITHUB_ENV"
+        echo "AUTOTESTER_IMAGE=$RUNNER_TEMP/ce-patched.ce" >> "$GITHUB_ENV"
 
     - name: Set up CEmu with emulated networking
       id: cemu

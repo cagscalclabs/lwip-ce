@@ -41,8 +41,113 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  dylib_unit_tests:
+  prepare_patched_rom:
+    name: Install lwIP into CEmu image
     needs: prepare_rom
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Load pinned CI dependency versions
+        id: ci_versions
+        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgl1-mesa-dev
+
+      - name: Build cemu-headless from CE-Programming/CEmu master
+        run: |
+          git clone --depth 1 https://github.com/CE-Programming/CEmu.git "$RUNNER_TEMP/CEmu"
+          make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
+          cmake -S "$RUNNER_TEMP/CEmu/tests/autotester" -B "$RUNNER_TEMP/CEmu/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -GNinja
+          cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
+          install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
+          "$RUNNER_TEMP/cemu-headless" --version || true
+
+      - name: Download lwip-latest build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/release
+
+      - name: Download encrypted CEmu ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ runner.temp }}
+
+      - name: Decrypt CEmu ROM
+        run: |
+          gpg --batch --yes \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "$RUNNER_TEMP/ce.rom" \
+            --decrypt "$RUNNER_TEMP/CE.rom.enc"
+          shred -u "$RUNNER_TEMP/CE.rom.enc"
+          test -f "$RUNNER_TEMP/ce.rom"
+
+      - name: Download clibs.8xg
+        run: |
+          curl -fsSL --retry 3 \
+            -o "$RUNNER_TEMP/clibs.8xg" \
+            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+          test -f "$RUNNER_TEMP/clibs.8xg"
+
+      - name: Install lwIP into CEmu via headless
+        run: |
+          set -euo pipefail
+          HEADLESS="$RUNNER_TEMP/cemu-headless"
+          ROM="$RUNNER_TEMP/ce.rom"
+          IMAGE="$RUNNER_TEMP/ce-patched.ce"
+          RELEASE="${{ github.workspace }}/release"
+
+          # Build the send-file command list: clibs.8xg, lwip.8xv, all LWIP.*.8xv, lwIPINST.8xp
+          SEND_CMDS=""
+          SEND_CMDS+="send-file auto $RUNNER_TEMP/clibs.8xg\n"
+          SEND_CMDS+="send-file auto $RELEASE/lwip.8xv\n"
+          for f in "$RELEASE"/appinst/LWIP.*.8xv; do
+            [[ "$(basename "$f")" == ._* ]] && continue
+            SEND_CMDS+="send-file auto $f\n"
+          done
+          SEND_CMDS+="send-file auto $RELEASE/appinst/lwIPINST.8xp\n"
+
+          # Run the installer: launch INSTALL, wait for it to finish (20 s), then save state
+          {
+            printf '%b' "$SEND_CMDS"
+            echo "run 5000"
+            echo "launch INSTALL"
+            echo "run 20000"
+            echo "save-state $IMAGE"
+            echo "quit"
+          } | "$HEADLESS" --rom "$ROM"
+
+          test -f "$IMAGE"
+          ls -lh "$IMAGE"
+
+      - name: Shred decrypted ROM
+        if: always()
+        run: shred -u "$RUNNER_TEMP/ce.rom" 2>/dev/null || true
+
+      - name: Encrypt patched image for artifact sharing
+        run: |
+          gpg --batch --yes --symmetric \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "$RUNNER_TEMP/ce-patched.ce.enc" \
+            "$RUNNER_TEMP/ce-patched.ce"
+          shred -u "$RUNNER_TEMP/ce-patched.ce"
+
+      - name: Upload patched CEmu image
+        uses: actions/upload-artifact@v4
+        with:
+          name: cemu-rom-patched
+          path: ${{ runner.temp }}/ce-patched.ce.enc
+          if-no-files-found: error
+          retention-days: 1
+
+  dylib_unit_tests:
+    needs: [prepare_rom, prepare_patched_rom]
     runs-on: ubuntu-latest
 
     steps:
@@ -102,22 +207,31 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: cemu-rom-encrypted
-          path: ${{ github.workspace }}
+          path: ${{ runner.temp }}
 
-      - name: Decrypt CEmu ROM
+      - name: Download patched CEmu image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-patched
+          path: ${{ runner.temp }}
+
+      - name: Decrypt CEmu ROM and patched image
         run: |
           gpg --batch --yes \
             --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
             --output "${{ env.AUTOTESTER_ROM }}" \
-            --decrypt "${{github.workspace}}/CE.rom.enc"
+            --decrypt "${{ runner.temp }}/CE.rom.enc"
+          shred -u "${{ runner.temp }}/CE.rom.enc"
 
-          shred -u "${{github.workspace}}/CE.rom.enc"
+          gpg --batch --yes \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "${{ runner.temp }}/ce-patched.ce" \
+            --decrypt "${{ runner.temp }}/ce-patched.ce.enc"
+          shred -u "${{ runner.temp }}/ce-patched.ce.enc"
 
-          if [ ! -f "${{ env.AUTOTESTER_ROM }}" ]; then
-            echo "ERROR: ROM file not created"
-            exit 1
-          fi
-
+          test -f "${{ env.AUTOTESTER_ROM }}"
+          test -f "${{ runner.temp }}/ce-patched.ce"
+          echo "AUTOTESTER_IMAGE=${{ runner.temp }}/ce-patched.ce" >> "$GITHUB_ENV"
           FILE_SIZE=$(stat -c%s "${{ env.AUTOTESTER_ROM }}" 2>/dev/null || stat -f%z "${{ env.AUTOTESTER_ROM }}")
           echo "Decrypted ROM size: ${FILE_SIZE} bytes"
 
@@ -291,7 +405,9 @@ jobs:
 
       - name: Remove CEmu Rom
         if: always()
-        run: shred -u "${{env.AUTOTESTER_ROM}}" 2>/dev/null || true
+        run: |
+          shred -u "${{env.AUTOTESTER_ROM}}" 2>/dev/null || true
+          shred -u "${{env.AUTOTESTER_IMAGE}}" 2>/dev/null || true
 
   rfc_compliance:
     name: RFC compliance
@@ -354,7 +470,7 @@ jobs:
           overwrite: true
 
   acvp:
-    needs: prepare_rom
+    needs: [prepare_rom, prepare_patched_rom]
     name: ACVP JSON over CEmu RPC
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -411,7 +527,9 @@ jobs:
 
       - name: Remove CEmu ROM
         if: always()
-        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+        run: |
+          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -621,7 +739,7 @@ jobs:
           if-no-files-found: warn
 
   nettest:
-    needs: prepare_rom
+    needs: [prepare_rom, prepare_patched_rom]
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -710,6 +828,7 @@ jobs:
         if: always()
         run: |
           shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
           shred -u "$RUNNER_TEMP/truststore-signer.pem" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
@@ -726,7 +845,7 @@ jobs:
           if-no-files-found: ignore
 
   dast:
-    needs: prepare_rom
+    needs: [prepare_rom, prepare_patched_rom]
     name: DAST (live, emulated)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -775,7 +894,9 @@ jobs:
 
       - name: Remove CEmu Rom
         if: always()
-        run: shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+        run: |
+          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -877,30 +998,32 @@ jobs:
           if-no-files-found: ignore
 
   cleanup_rom:
-    name: Delete encrypted CEmu ROM artifact
-    needs: [prepare_rom, dylib_unit_tests, acvp, nettest, dast]
+    name: Delete encrypted CEmu ROM artifacts
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast]
     if: always()
     permissions:
       actions: write
     runs-on: ubuntu-latest
     steps:
-      - name: Delete temporary ROM artifact
+      - name: Delete temporary ROM artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          artifact_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
-            --jq '.artifacts[] | select(.name == "cemu-rom-encrypted") | .id' | head -1)
-          if [ -z "$artifact_id" ]; then
-            echo "No encrypted ROM artifact was created."
-            exit 0
-          fi
-          gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
-          echo "Deleted encrypted ROM artifact $artifact_id."
+          for artifact_name in cemu-rom-encrypted cemu-rom-patched; do
+            artifact_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+              --jq ".artifacts[] | select(.name == \"$artifact_name\") | .id" | head -1)
+            if [ -z "$artifact_id" ]; then
+              echo "No $artifact_name artifact was created."
+              continue
+            fi
+            gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+            echo "Deleted $artifact_name artifact $artifact_id."
+          done
 
   gate_results:
     name: Collect test results
-    needs: [prepare_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
     if: always()
     permissions:
       actions: read
