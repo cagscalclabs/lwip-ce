@@ -1,0 +1,79 @@
+diff --git a/tests/autotester/CMakeLists.txt b/tests/autotester/CMakeLists.txt
+index 3cbdd46..4e44bab 100644
+--- a/tests/autotester/CMakeLists.txt
++++ b/tests/autotester/CMakeLists.txt
+@@ -5,14 +5,16 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O3 -g3 -W -Wall")
+ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-parameter -Werror=shadow -Werror=write-strings -Werror=redundant-decls -Werror=format -Werror=format-security -Werror=declaration-after-statement -Werror=implicit-function-declaration -Werror=date-time -Werror=return-type -Werror=pointer-arith -Winit-self")
+ 
+ # You first need to build the cemucore library. Basically, type `make` in the core directory.
+-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L${CMAKE_SOURCE_DIR}/../../core/ -lcemucore")
++set(CEMUCORE_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../../core/libcemucore.a")
+ 
+ set(SOURCE_FILES
+     autotester.cpp
+     autotester_cli.cpp)
+ 
+ add_executable(autotester ${SOURCE_FILES})
++target_link_libraries(autotester PRIVATE "${CEMUCORE_LIBRARY}")
+ 
+ add_executable(cemu-headless
+     autotester.cpp
+     headless_cli.cpp)
++target_link_libraries(cemu-headless PRIVATE "${CEMUCORE_LIBRARY}")
+diff --git a/tests/autotester/autotester.cpp b/tests/autotester/autotester.cpp
+index 39bb3e6..3052349 100644
+--- a/tests/autotester/autotester.cpp
++++ b/tests/autotester/autotester.cpp
+@@ -617,7 +617,9 @@ bool loadJSONConfig(const std::string& jsonContents)
+ 
+     json11::Json tmp, tmp2;
+ 
+-    const char* forced_rom_path = getenv("AUTOTESTER_ROM");
++    const char* forced_image_path = getenv("AUTOTESTER_IMAGE");
++    const char* forced_rom_path = forced_image_path
++        ? forced_image_path : getenv("AUTOTESTER_ROM");
+     if (forced_rom_path)
+     {
+         const std::string tmp_path(forced_rom_path);
+diff --git a/tests/autotester/autotester_cli.cpp b/tests/autotester/autotester_cli.cpp
+index cdcb6ad..9f11a39 100644
+--- a/tests/autotester/autotester_cli.cpp
++++ b/tests/autotester/autotester_cli.cpp
+@@ -117,7 +117,9 @@ int main(int argc, char* argv[])
+         return -1;
+     }
+ 
+-    if (cemucore::EMU_STATE_VALID != cemucore::emu_load(cemucore::EMU_DATA_ROM, autotester::config.rom.c_str()))
++    const cemucore::emu_data_t input_type = getenv("AUTOTESTER_IMAGE")
++        ? cemucore::EMU_DATA_IMAGE : cemucore::EMU_DATA_ROM;
++    if (cemucore::EMU_STATE_VALID != cemucore::emu_load(input_type, autotester::config.rom.c_str()))
+     {
+         std::cerr << "[Error] Couldn't start emulation!" << std::endl;
+         return -1;
+diff --git a/tests/autotester/headless_cli.cpp b/tests/autotester/headless_cli.cpp
+index 4e286e4..558b94c 100644
+--- a/tests/autotester/headless_cli.cpp
++++ b/tests/autotester/headless_cli.cpp
+@@ -397,6 +397,22 @@ bool runCommand(const std::string& line)
+         }
+         return true;
+     }
++    if (command == "launch") {
++        std::string program;
++        std::string mode;
++        input >> program >> mode;
++        if (program.empty() || (mode != "" && mode != "asm")) {
++            respond("ERR usage: launch <program> [asm]");
++        } else {
++            autotester::config.target.isASM = mode == "asm";
++            if (autotester::launchCommand({"action", "launch:" + program})) {
++                respond("OK launch " + program);
++            } else {
++                respond("ERR invalid program name");
++            }
++        }
++        return true;
++    }
+     if (command == "reset") {
+         cemucore::emu_reset();
+         respond("OK reset");
