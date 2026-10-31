@@ -542,6 +542,7 @@ class Control:
     def cmd_suite_result(self) -> str:
         """Return the runner-local certificate handshake outcome."""
         out = self.wait_peer_exit()
+        log("suite s_server output:\n" + out)
         if re.search(r"unknown CA|unknown_ca|tlsv13 alert unknown ca", out, re.I):
             return "UNKNOWN_CA"
         if re.search(r"decrypt.error|bad.record.mac|handshake.failure", out, re.I):

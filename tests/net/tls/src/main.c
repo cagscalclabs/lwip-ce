@@ -18,6 +18,21 @@
 
 static uint8_t psk[32];
 
+static void note_traceback(void)
+{
+    uint8_t count = 0;
+    const struct lwip_traceback_entry *entries = lwip_get_traceback(&count);
+
+    for (uint8_t i = 0; entries && i < count; i++)
+    {
+        note("  trace %s:%lu kind %u extra 0x%02x",
+             lwip_debug_file_name(entries[i].file),
+             (unsigned long)entries[i].line,
+             (unsigned)entries[i].kind,
+             (unsigned)entries[i].extra);
+    }
+}
+
 /* ---- socket API with external PSK -------------------------------------- */
 
 static struct lwip_socket *psk_socket(uint32_t *handshake_ms)
@@ -425,7 +440,10 @@ static void test_suite_forced(const char *suite_name, const char *cipher_arg,
     pump(not_connecting, sock, 40000);
     note("  %s: status %u err %u", suite_name,
          lwip_socket_status(sock), lwip_socket_last_error(sock));
-    check(name, lwip_socket_status(sock) == LWIP_STATUS_CONNECTED);
+    bool connected = lwip_socket_status(sock) == LWIP_STATUS_CONNECTED;
+    if (!connected)
+        note_traceback();
+    check(name, connected);
     close_socket(sock);
 
     snprintf(name, sizeof(name), "%s %s host handshake", suite_name, key_type);
