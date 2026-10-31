@@ -59,8 +59,6 @@ extern "C"
  * bytes. The IV is always 12 bytes (RFC 8446 section 5.3). */
 #define TLS_TRAFFIC_SECRET_MAX TLS_SHA384_DIGEST_LEN
 #define TLS_TRAFFIC_KEY_MAX 32
-/* Handshake header plus the largest supported suite's verify_data. */
-#define TLS_FINISHED_MAX_LEN (4u + TLS_HASH_MAX_DIGEST_LEN)
 
 /* Extension Types */
 #define TLS_EXT_SERVER_NAME 0x0000

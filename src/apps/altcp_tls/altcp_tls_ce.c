@@ -2234,8 +2234,7 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
         {
             struct pbuf *plain = NULL;
             size_t plain_len = 0;
-            uint8_t inner_type = 0, finished[TLS_FINISHED_MAX_LEN];
-            size_t finished_len = 4u + ctx->hash_len;
+            uint8_t inner_type = 0, finished[36];
             err_t err = altcp_tls_ce_decrypt_record_stream(state, conn, true, total_len,
                                                           &plain, &plain_len, &inner_type);
             bool ok;
@@ -2248,14 +2247,13 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
                 ALTCP_TLS_CE_ERROR_ABORT_CODE(conn, -err);
                 return ERR_ABRT;
             }
-            ok = inner_type == TLS_CONTENT_TYPE_HANDSHAKE &&
-                 finished_len <= sizeof(finished) && plain_len == finished_len &&
-                 pbuf_copy_partial(plain, finished, (u16_t)finished_len, 0) == finished_len;
+            ok = inner_type == TLS_CONTENT_TYPE_HANDSHAKE && plain_len == sizeof(finished) &&
+                 pbuf_copy_partial(plain, finished, sizeof(finished), 0) == sizeof(finished);
             pbuf_free(plain);
             if (ok)
             {
                 tls_crypto_guard_enable();
-                ok = tls_server_recv_finished(ctx, finished, finished_len);
+                ok = tls_server_recv_finished(ctx, finished, sizeof(finished));
                 tls_crypto_guard_disable();
             }
             if (!ok)
@@ -2736,7 +2734,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     }
 
                     /* Generate client Finished message (plaintext handshake) */
-                    uint8_t finished_hs[TLS_FINISHED_MAX_LEN];
+                    uint8_t finished_hs[36];
                     size_t finished_hs_len = 0;
                     tls_dbg_status("clientfin: gen");
                     /* tls_send_finished holds finished_key/verify_data/
