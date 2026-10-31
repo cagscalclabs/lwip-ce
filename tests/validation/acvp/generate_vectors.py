@@ -59,6 +59,26 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
                           testType="MCT", mctVersion="standard")]
     c.vector("SHA2-256", "1.0", sha_groups)
 
+    # SHA-384: same AFT length spread plus one MCT seed.
+    lengths384 = [0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 55, 56, 63, 64, 65,
+                  127, 128, 255, 256, 511, 512, 1023, 2048, 4096, 8192]
+    lengths384 += [c.rng.randrange(0, 8193) for _ in range(63 - len(lengths384))]
+    sha384_aft = [c.test(len=n * 8, msg=(c.bytes(n).hex() if n else "00")) for n in lengths384]
+    sha384_groups = [c.group(sha384_aft, testType="AFT"),
+                     c.group([c.test(len=384, msg=c.bytes(48).hex())],
+                             testType="MCT", mctVersion="standard")]
+    c.vector("SHA2-384", "1.0", sha384_groups)
+
+    # SHA-512: same AFT length spread plus one MCT seed.
+    lengths512 = [0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 55, 56, 63, 64, 65,
+                  127, 128, 255, 256, 511, 512, 1023, 2048, 4096, 8192]
+    lengths512 += [c.rng.randrange(0, 8193) for _ in range(63 - len(lengths512))]
+    sha512_aft = [c.test(len=n * 8, msg=(c.bytes(n).hex() if n else "00")) for n in lengths512]
+    sha512_groups = [c.group(sha512_aft, testType="AFT"),
+                     c.group([c.test(len=512, msg=c.bytes(64).hex())],
+                             testType="MCT", mctVersion="standard")]
+    c.vector("SHA2-512", "1.0", sha512_groups)
+
     # HMAC: key, message, and truncation boundaries.
     hmac_tests = []
     key_lengths = [1, 4, 16, 32, 63, 64, 65, 128, 256]
@@ -70,6 +90,30 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
                                  msg=(c.bytes(ml).hex() if ml else ""), len=ml * 8,
                                  macLen=tl * 8))
     c.vector("HMAC-SHA2-256", "2.0", [c.group(hmac_tests, testType="AFT")])
+
+    # HMAC-SHA-384: same spread, mac truncation up to 48 bytes.
+    hmac384_tests = []
+    mac384_lengths = [4, 8, 16, 24, 32, 48]
+    for i in range(32):
+        kl = key_lengths[i % len(key_lengths)]
+        ml = msg_lengths[(i * 3) % len(msg_lengths)]
+        tl = mac384_lengths[i % len(mac384_lengths)]
+        hmac384_tests.append(c.test(key=c.bytes(kl).hex(), keyLen=kl * 8,
+                                    msg=(c.bytes(ml).hex() if ml else ""), len=ml * 8,
+                                    macLen=tl * 8))
+    c.vector("HMAC-SHA2-384", "2.0", [c.group(hmac384_tests, testType="AFT")])
+
+    # HMAC-SHA-512: same spread, mac truncation up to 64 bytes.
+    hmac512_tests = []
+    mac512_lengths = [4, 8, 16, 24, 32, 48, 64]
+    for i in range(32):
+        kl = key_lengths[i % len(key_lengths)]
+        ml = msg_lengths[(i * 3) % len(msg_lengths)]
+        tl = mac512_lengths[i % len(mac512_lengths)]
+        hmac512_tests.append(c.test(key=c.bytes(kl).hex(), keyLen=kl * 8,
+                                    msg=(c.bytes(ml).hex() if ml else ""), len=ml * 8,
+                                    macLen=tl * 8))
+    c.vector("HMAC-SHA2-512", "2.0", [c.group(hmac512_tests, testType="AFT")])
 
     # AES-CBC: 15 AFTs in each direction and one MCT seed per direction.
     cbc_groups = []
@@ -191,10 +235,11 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     deterministic = [{"acvVersion": "1.0"}, *[v for v in c.vectors if v["algorithm"] not in GENERATED_ALGORITHMS]]
     expected = process_document(deterministic, reference_backend)
     counts = {v["algorithm"]: sum(len(g["tests"]) for g in v["testGroups"]) for v in c.vectors}
-    assert counts == {"SHA2-256": 64, "HMAC-SHA2-256": 32, "ACVP-AES-CBC": 32,
-                      "ACVP-AES-GCM": 32, "ACVP-AES-CCM": 32, "PBKDF": 32,
-                      "KDA": 32, "RSA": 32, "ECDSA": 32, "DetECDSA": 32,
-                      "XECDH": 32, "KAS-ECC": 32}
+    assert counts == {"SHA2-256": 64, "SHA2-384": 64, "SHA2-512": 64,
+                      "HMAC-SHA2-256": 32, "HMAC-SHA2-384": 32, "HMAC-SHA2-512": 32,
+                      "ACVP-AES-CBC": 32, "ACVP-AES-GCM": 32, "ACVP-AES-CCM": 32,
+                      "PBKDF": 32, "KDA": 32, "RSA": 32, "ECDSA": 32,
+                      "DetECDSA": 32, "XECDH": 32, "KAS-ECC": 32}
     c.oracle["counts"] = counts
     return prompt, expected, c.oracle
 

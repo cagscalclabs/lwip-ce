@@ -49,6 +49,12 @@ enum acvp_operation {
     ACVP_OP_P256_SIGGEN_BEGIN = 19,
     ACVP_OP_P256_SIGGEN_ACTIVE = 20,
     ACVP_OP_AES_CBC_MCT = 21,
+    ACVP_OP_SHA2_384 = 22,
+    ACVP_OP_HMAC_SHA2_384 = 23,
+    ACVP_OP_SHA2_384_MCT = 24,
+    ACVP_OP_SHA2_512 = 25,
+    ACVP_OP_HMAC_SHA2_512 = 26,
+    ACVP_OP_SHA2_512_MCT = 27,
 };
 
 enum acvp_status {
@@ -111,6 +117,62 @@ static bool sha256_mct(const uint8_t seed[32], uint8_t digest[32])
         }
         memmove(state, state + 32, 64);
         memcpy(state + 64, digest, 32);
+    }
+    tls_secure_memzero(state, sizeof(state));
+    return true;
+}
+
+static bool sha384(const uint8_t *message, size_t message_len, uint8_t digest[48])
+{
+    struct tls_hash_context ctx;
+    if (!tls_hash_context_init(&ctx, TLS_HASH_SHA384)) return false;
+    if (message_len) tls_hash_update(&ctx, message, message_len);
+    tls_hash_digest(&ctx, digest);
+    tls_hash_clear(&ctx);
+    return true;
+}
+
+static bool sha384_mct(const uint8_t seed[48], uint8_t digest[48])
+{
+    static uint8_t state[144];
+    memcpy(state, seed, 48);
+    memcpy(state + 48, seed, 48);
+    memcpy(state + 96, seed, 48);
+    for (uint16_t i = 0; i < 1000; i++) {
+        if (!sha384(state, sizeof(state), digest)) {
+            tls_secure_memzero(state, sizeof(state));
+            return false;
+        }
+        memmove(state, state + 48, 96);
+        memcpy(state + 96, digest, 48);
+    }
+    tls_secure_memzero(state, sizeof(state));
+    return true;
+}
+
+static bool sha512(const uint8_t *message, size_t message_len, uint8_t digest[64])
+{
+    struct tls_hash_context ctx;
+    if (!tls_hash_context_init(&ctx, TLS_HASH_SHA512)) return false;
+    if (message_len) tls_hash_update(&ctx, message, message_len);
+    tls_hash_digest(&ctx, digest);
+    tls_hash_clear(&ctx);
+    return true;
+}
+
+static bool sha512_mct(const uint8_t seed[64], uint8_t digest[64])
+{
+    static uint8_t state[192];
+    memcpy(state, seed, 64);
+    memcpy(state + 64, seed, 64);
+    memcpy(state + 128, seed, 64);
+    for (uint16_t i = 0; i < 1000; i++) {
+        if (!sha512(state, sizeof(state), digest)) {
+            tls_secure_memzero(state, sizeof(state));
+            return false;
+        }
+        memmove(state, state + 64, 128);
+        memcpy(state + 128, digest, 64);
     }
     tls_secure_memzero(state, sizeof(state));
     return true;
@@ -447,6 +509,66 @@ static uint8_t dispatch(uint8_t operation, const uint8_t *payload,
         *result_len = 64; return ACVP_STATUS_OK;
     case ACVP_OP_AES_CBC_MCT:
         return run_cbc_mct(payload, payload_len, result_len);
+
+    case ACVP_OP_SHA2_384:
+        if (!sha384(payload, payload_len, result)) return ACVP_STATUS_INTERNAL;
+        *result_len = 48;
+        return ACVP_STATUS_OK;
+
+    case ACVP_OP_SHA2_384_MCT:
+        if (payload_len != 48) return ACVP_STATUS_MALFORMED;
+        if (!sha384_mct(payload, result)) return ACVP_STATUS_INTERNAL;
+        *result_len = 48;
+        return ACVP_STATUS_OK;
+
+    case ACVP_OP_HMAC_SHA2_384: {
+        struct tls_hmac_context ctx;
+        if (payload_len < 4) return ACVP_STATUS_MALFORMED;
+        size_t key_len = read_be16(payload);
+        size_t mac_len = read_be16(payload + 2);
+        if (!key_len || !mac_len || mac_len > 48 ||
+            key_len > payload_len - 4) return ACVP_STATUS_MALFORMED;
+        const uint8_t *key = payload + 4;
+        const uint8_t *message = key + key_len;
+        size_t message_len = payload_len - 4 - key_len;
+        if (!tls_hmac_context_init(&ctx, TLS_HASH_SHA384, key, key_len))
+            return ACVP_STATUS_INTERNAL;
+        if (message_len) tls_hmac_update(&ctx, message, message_len);
+        tls_hmac_digest(&ctx, result);
+        tls_hmac_clear(&ctx);
+        *result_len = mac_len;
+        return ACVP_STATUS_OK;
+    }
+
+    case ACVP_OP_SHA2_512:
+        if (!sha512(payload, payload_len, result)) return ACVP_STATUS_INTERNAL;
+        *result_len = 64;
+        return ACVP_STATUS_OK;
+
+    case ACVP_OP_SHA2_512_MCT:
+        if (payload_len != 64) return ACVP_STATUS_MALFORMED;
+        if (!sha512_mct(payload, result)) return ACVP_STATUS_INTERNAL;
+        *result_len = 64;
+        return ACVP_STATUS_OK;
+
+    case ACVP_OP_HMAC_SHA2_512: {
+        struct tls_hmac_context ctx;
+        if (payload_len < 4) return ACVP_STATUS_MALFORMED;
+        size_t key_len = read_be16(payload);
+        size_t mac_len = read_be16(payload + 2);
+        if (!key_len || !mac_len || mac_len > 64 ||
+            key_len > payload_len - 4) return ACVP_STATUS_MALFORMED;
+        const uint8_t *key = payload + 4;
+        const uint8_t *message = key + key_len;
+        size_t message_len = payload_len - 4 - key_len;
+        if (!tls_hmac_context_init(&ctx, TLS_HASH_SHA512, key, key_len))
+            return ACVP_STATUS_INTERNAL;
+        if (message_len) tls_hmac_update(&ctx, message, message_len);
+        tls_hmac_digest(&ctx, result);
+        tls_hmac_clear(&ctx);
+        *result_len = mac_len;
+        return ACVP_STATUS_OK;
+    }
 
     default:
         return ACVP_STATUS_UNSUPPORTED;

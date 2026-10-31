@@ -3,7 +3,7 @@
 
 This module deliberately keeps ACVP JSON and future ACVTS credentials on the
 host.  The calculator sees only bounded binary primitive-operation requests.
-Supported adapters cover SHA-256, HMAC-SHA-256, AES-CBC/GCM/CCM,
+Supported adapters cover SHA-256/384, HMAC-SHA-256/384, AES-CBC/GCM/CCM,
 PBKDF2-HMAC-SHA-256, KDA/HKDF-SHA-256, RSA signature verification,
 deterministic ECDSA P-256 signing/verification, and X25519 SSC.
 """
@@ -47,6 +47,12 @@ OP_P256_CDH = 18
 OP_P256_SIGGEN_BEGIN = 19
 OP_P256_SIGGEN_ACTIVE = 20
 OP_AES_CBC_MCT = 21
+OP_SHA2_384 = 22
+OP_HMAC_SHA2_384 = 23
+OP_SHA2_384_MCT = 24
+OP_SHA2_512 = 25
+OP_HMAC_SHA2_512 = 26
+OP_SHA2_512_MCT = 27
 
 
 class AcvpError(RuntimeError):
@@ -122,6 +128,35 @@ def _sha_vector_set(vector: dict, backend: Backend) -> dict:
     return {"vsId": vector["vsId"], "testGroups": groups}
 
 
+def _sha384_vector_set(vector: dict, backend: Backend) -> dict:
+    groups = []
+    for group in vector.get("testGroups", []):
+        test_type = group.get("testType")
+        tests = []
+        if test_type == "AFT":
+            for test in group.get("tests", []):
+                digest = backend(OP_SHA2_384, _byte_message(test))
+                if len(digest) != 48:
+                    raise AcvpError("calculator returned a non-SHA-384-sized digest")
+                tests.append({"tcId": test["tcId"], "md": digest.hex().upper()})
+        elif test_type == "MCT" and group.get("mctVersion", "standard") == "standard":
+            for test in group.get("tests", []):
+                seed = _byte_message(test)
+                if len(seed) != 48:
+                    raise AcvpError("SHA2-384 MCT seed must be 384 bits")
+                iterations = []
+                for _ in range(100):
+                    seed = backend(OP_SHA2_384_MCT, seed)
+                    if len(seed) != 48:
+                        raise AcvpError("calculator returned a non-SHA-384-sized MCT digest")
+                    iterations.append({"md": seed.hex().upper()})
+                tests.append({"tcId": test["tcId"], "resultsArray": iterations})
+        else:
+            raise AcvpError(f"unsupported SHA2-384 test group {test_type!r}")
+        groups.append({"tgId": group["tgId"], "tests": tests})
+    return {"vsId": vector["vsId"], "testGroups": groups}
+
+
 def _hmac_vector_set(vector: dict, backend: Backend) -> dict:
     groups = []
     for group in vector.get("testGroups", []):
@@ -141,6 +176,83 @@ def _hmac_vector_set(vector: dict, backend: Backend) -> dict:
             mac = backend(OP_HMAC_SHA2_256, payload)
             if len(mac) != mac_bits // 8:
                 raise AcvpError("calculator returned an incorrectly sized HMAC")
+            tests.append({"tcId": test["tcId"], "mac": mac.hex().upper()})
+        groups.append({"tgId": group["tgId"], "tests": tests})
+    return {"vsId": vector["vsId"], "testGroups": groups}
+
+
+def _sha512_vector_set(vector: dict, backend: Backend) -> dict:
+    groups = []
+    for group in vector.get("testGroups", []):
+        test_type = group.get("testType")
+        tests = []
+        if test_type == "AFT":
+            for test in group.get("tests", []):
+                digest = backend(OP_SHA2_512, _byte_message(test))
+                if len(digest) != 64:
+                    raise AcvpError("calculator returned a non-SHA-512-sized digest")
+                tests.append({"tcId": test["tcId"], "md": digest.hex().upper()})
+        elif test_type == "MCT" and group.get("mctVersion", "standard") == "standard":
+            for test in group.get("tests", []):
+                seed = _byte_message(test)
+                if len(seed) != 64:
+                    raise AcvpError("SHA2-512 MCT seed must be 512 bits")
+                iterations = []
+                for _ in range(100):
+                    seed = backend(OP_SHA2_512_MCT, seed)
+                    if len(seed) != 64:
+                        raise AcvpError("calculator returned a non-SHA-512-sized MCT digest")
+                    iterations.append({"md": seed.hex().upper()})
+                tests.append({"tcId": test["tcId"], "resultsArray": iterations})
+        else:
+            raise AcvpError(f"unsupported SHA2-512 test group {test_type!r}")
+        groups.append({"tgId": group["tgId"], "tests": tests})
+    return {"vsId": vector["vsId"], "testGroups": groups}
+
+
+def _hmac_sha384_vector_set(vector: dict, backend: Backend) -> dict:
+    groups = []
+    for group in vector.get("testGroups", []):
+        if group.get("testType", "AFT") != "AFT":
+            raise AcvpError(f"unsupported HMAC-SHA384 test group {group.get('testType')!r}")
+        tests = []
+        for test in group.get("tests", []):
+            key = _hex(test.get("key"), "key")
+            key_len = test.get("keyLen", group.get("keyLen", len(key) * 8))
+            mac_bits = test.get("macLen", group.get("macLen"))
+            if key_len != len(key) * 8 or not key or len(key) > 0xFFFF:
+                raise AcvpError(f"tcId {test.get('tcId')}: invalid HMAC key length")
+            if not isinstance(mac_bits, int) or mac_bits < 32 or mac_bits > 384 or mac_bits % 8:
+                raise AcvpError(f"tcId {test.get('tcId')}: invalid HMAC-SHA384 output length")
+            message = _byte_message(test, default_length=group.get("msgLen"))
+            payload = struct.pack("!HH", len(key), mac_bits // 8) + key + message
+            mac = backend(OP_HMAC_SHA2_384, payload)
+            if len(mac) != mac_bits // 8:
+                raise AcvpError("calculator returned an incorrectly sized HMAC-SHA384")
+            tests.append({"tcId": test["tcId"], "mac": mac.hex().upper()})
+        groups.append({"tgId": group["tgId"], "tests": tests})
+    return {"vsId": vector["vsId"], "testGroups": groups}
+
+
+def _hmac_sha512_vector_set(vector: dict, backend: Backend) -> dict:
+    groups = []
+    for group in vector.get("testGroups", []):
+        if group.get("testType", "AFT") != "AFT":
+            raise AcvpError(f"unsupported HMAC-SHA512 test group {group.get('testType')!r}")
+        tests = []
+        for test in group.get("tests", []):
+            key = _hex(test.get("key"), "key")
+            key_len = test.get("keyLen", group.get("keyLen", len(key) * 8))
+            mac_bits = test.get("macLen", group.get("macLen"))
+            if key_len != len(key) * 8 or not key or len(key) > 0xFFFF:
+                raise AcvpError(f"tcId {test.get('tcId')}: invalid HMAC key length")
+            if not isinstance(mac_bits, int) or mac_bits < 32 or mac_bits > 512 or mac_bits % 8:
+                raise AcvpError(f"tcId {test.get('tcId')}: invalid HMAC-SHA512 output length")
+            message = _byte_message(test, default_length=group.get("msgLen"))
+            payload = struct.pack("!HH", len(key), mac_bits // 8) + key + message
+            mac = backend(OP_HMAC_SHA2_512, payload)
+            if len(mac) != mac_bits // 8:
+                raise AcvpError("calculator returned an incorrectly sized HMAC-SHA512")
             tests.append({"tcId": test["tcId"], "mac": mac.hex().upper()})
         groups.append({"tgId": group["tgId"], "tests": tests})
     return {"vsId": vector["vsId"], "testGroups": groups}
@@ -424,8 +536,16 @@ def process_document(document: object, backend: Backend) -> object:
         revision = vector.get("revision")
         if algorithm == "SHA2-256" and revision == "1.0":
             responses.append(_sha_vector_set(vector, backend))
+        elif algorithm == "SHA2-384" and revision == "1.0":
+            responses.append(_sha384_vector_set(vector, backend))
+        elif algorithm == "SHA2-512" and revision == "1.0":
+            responses.append(_sha512_vector_set(vector, backend))
         elif algorithm == "HMAC-SHA2-256" and revision in ("1.0", "2.0"):
             responses.append(_hmac_vector_set(vector, backend))
+        elif algorithm == "HMAC-SHA2-384" and revision in ("1.0", "2.0"):
+            responses.append(_hmac_sha384_vector_set(vector, backend))
+        elif algorithm == "HMAC-SHA2-512" and revision in ("1.0", "2.0"):
+            responses.append(_hmac_sha512_vector_set(vector, backend))
         elif algorithm in ("ACVP-AES-CBC", "ACVP-AES-GCM", "ACVP-AES-CCM") and revision == "1.0":
             responses.append(_aes_vector_set(vector, backend))
         elif algorithm == "PBKDF" and revision == "1.0":
@@ -485,6 +605,32 @@ def reference_backend(operation: int, payload: bytes) -> bytes:
     """Host implementation used only by parser/protocol self-tests."""
     if operation == OP_SHA2_256:
         return sha256(payload).digest()
+    if operation == OP_SHA2_384:
+        return hashlib.sha384(payload).digest()
+    if operation == OP_SHA2_384_MCT:
+        a = b = c = payload
+        for _ in range(1000):
+            a, b, c = b, c, hashlib.sha384(a + b + c).digest()
+        return c
+    if operation == OP_HMAC_SHA2_384:
+        if len(payload) < 4:
+            raise AcvpError("short HMAC-SHA384 payload")
+        key_len, mac_len = struct.unpack("!HH", payload[:4])
+        key = payload[4:4 + key_len]
+        return hmac.digest(key, payload[4 + key_len:], "sha384")[:mac_len]
+    if operation == OP_SHA2_512:
+        return hashlib.sha512(payload).digest()
+    if operation == OP_SHA2_512_MCT:
+        a = b = c = payload
+        for _ in range(1000):
+            a, b, c = b, c, hashlib.sha512(a + b + c).digest()
+        return c
+    if operation == OP_HMAC_SHA2_512:
+        if len(payload) < 4:
+            raise AcvpError("short HMAC-SHA512 payload")
+        key_len, mac_len = struct.unpack("!HH", payload[:4])
+        key = payload[4:4 + key_len]
+        return hmac.digest(key, payload[4 + key_len:], "sha512")[:mac_len]
     if operation == OP_HMAC_SHA2_256:
         if len(payload) < 4:
             raise AcvpError("short HMAC payload")
