@@ -134,7 +134,7 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - Closing a TLS listener no longer trips the `tcp_poll` LISTEN assertion.
 - Implement the TLS 1.3 server role for external PSKs (`altcp_tls_create_config_psk_server`): psk_dhe_ke with X25519, AES-128-GCM or AES-128-CCM, binder verification and ALPN selection.
 
-## Unreleased
+## v3.0.0
 
 - (Fix) P-256 RFC 6979 retry deriving from clobbered state.
 - (Optimization/Speed) Handshake only offers an X25519 key_share upfront, generates P-256 is `HelloRetryRequest` asks for it.
@@ -153,3 +153,9 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - (Feature/Truststore) The truststore generator and runtime accept EC P-384 roots (`alg_id` 3, 97-byte uncompressed point, OID 1.2.840.10045.4.3.3) alongside RSA and P-256.
 - (Fix/Keys API) `tls_key_verify` now accepts the raw `r||s` ECDSA signatures produced by `tls_key_sign` (as well as DER), so sign/verify round-trips for P-256 and P-384. Added P-256/P-384 PKCS#8 import, sign, verify, and tamper-rejection tests.
 - (CI) The prepared CEmu image now waits for the installer's completion screen instead of fixed delays, preventing half-installed images from breaking dylib unit tests.
+
+## v3.1.0
+
+- Implement SHA-512 and SHA-384.
+- Expose `aes-256-gcm-sha384` as a viable ciphersuite.
+- Implement `secp384r1` sign, verify, keygen, and ecdhe. This curve is only exposed as a Certificate/CertificateVerify algorithm and it's last in list. It is also exposed in the keys API as a sign/verify algorithm. It is NOT exposed as an ECDHE key share or an mTLS signing algorithm.
