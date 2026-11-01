@@ -256,9 +256,25 @@ def chunk_sections(sections: list[str], limit: int) -> list[str]:
 
     A single oversized section is continued on line boundaries. Its first line
     is repeated so every continuation remains attributable to the same file.
+    Small src/**/share/** sections are repeated in every batch: callers often
+    contain only macro instantiations, so reviewing them without the shared
+    implementation would omit the security-critical behavior they execute.
     """
     if limit < 1:
         raise ReviewError("source-patch batch limit must be positive")
+
+    shared = [
+        section for section in sections
+        if "/share/" in (section.splitlines()[0] if section.splitlines() else "")
+    ]
+    ordinary = [section for section in sections if section not in shared]
+    shared_text = "\n\n".join(shared)
+    if shared and ordinary and len(shared_text) + 2 <= limit // 2:
+        body_limit = limit - len(shared_text) - 2
+        return [
+            shared_text + "\n\n" + chunk
+            for chunk in chunk_sections(ordinary, body_limit)
+        ]
 
     pieces: list[str] = []
     for section in sections:
@@ -702,6 +718,15 @@ def self_test() -> int:
         chunk.startswith("diff --git a/src/a.c b/src/a.c\n") for chunk in split
     )
     assert "CONTINUED_SOURCE_PATCH" in split[1]
+
+    shared = "diff --git a/src/tls/core/share/ecc.inc b/src/tls/core/share/ecc.inc\n" + "s" * 12
+    callers = [
+        "diff --git a/src/tls/core/p256.s b/src/tls/core/p256.s\n" + "p" * 30,
+        "diff --git a/src/tls/core/p384.s b/src/tls/core/p384.s\n" + "q" * 30,
+    ]
+    with_shared = chunk_sections([*callers, shared], 200)
+    assert len(with_shared) >= 2
+    assert all(shared in chunk and len(chunk) <= 200 for chunk in with_shared)
 
     # A socket read timeout is raised directly as TimeoutError on Python 3.12,
     # not necessarily wrapped in URLError. It must consume a retry instead of
