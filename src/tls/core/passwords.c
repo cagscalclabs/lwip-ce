@@ -10,7 +10,8 @@
 #include "lwip/logging.h"
 
 #define MIN(x, y)   ((x) < (y)) ? (x) : (y)
-#define HASH_BLOCK_OUT_MAX  32
+/* PBKDF2 is hash-agnostic; size for the largest registered digest (SHA-512). */
+#define HASH_BLOCK_OUT_MAX  TLS_HASH_MAX_DIGEST_LEN
 /* Bounds the blocking work a malicious encrypted-key file can demand. */
 #define TLS_PBKDF2_MAX_ROUNDS 1000000u
 
@@ -35,8 +36,8 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     size_t outlen;
     uint32_t ctr = 1;
     
-    //HASH = sha256
-    // DK = T(i) for i in 0 => (keylen/HASH), concat
+    // DK = T(i) for i in 0 => (keylen/HASH), concat; HASH is the selected
+    // algorithm (SHA-256, SHA-384, or SHA-512).
     if(!tls_hmac_context_init(&initial, algorithm,
                               (const uint8_t *)password, passlen)) {
         tls_hmac_clear(&initial);
@@ -45,6 +46,12 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     }
     
     size_t hash_len = initial.digestlen;
+    if (hash_len == 0 || hash_len > HASH_BLOCK_OUT_MAX)
+    {
+        tls_hmac_clear(&initial);
+        ERROR();
+        return false;
+    }
     
     // make a copy of initial to counter and update it with salt
     memcpy(&counter, &initial, sizeof counter);
@@ -69,7 +76,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
             memcpy(&state, &initial, sizeof state);
             state.update(&state, hash_buffer, hash_len);
             state.digest(&state, hash_buffer);
-            for(uint8_t j=0; j < hash_len; j++)
+            for(size_t j=0; j < hash_len; j++)
                 hash_composite[j] ^= hash_buffer[j];
         }
         memcpy(&key[outlen], hash_composite, copylen);

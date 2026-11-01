@@ -15,6 +15,8 @@
     "key|enter",
     "hashWait|3",
     "key|enter",
+    "hashWait|4",
+    "key|enter",
     "key|enter"
   ],
   "hashes": {
@@ -47,6 +49,16 @@
         "D1F2869F"
       ],
       "timeout": 10000
+    },
+    "4": {
+      "description": "PBKDF2-HMAC-SHA384/SHA-512 digest sizes",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 60000
     }
   }
 }
