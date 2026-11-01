@@ -155,6 +155,35 @@ def apply_autotester_patch(cemu_dir: Path) -> None:
     print("CEmu autotester patch is already applied.")
 
 
+def patch_build_ninja(build_dir: Path, core_dir: Path) -> None:
+    """Fix GNU ld link-order bug in CEmu's generated build.ninja.
+
+    CMakeLists.txt puts -lcemucore in CMAKE_EXE_LINKER_FLAGS, which the
+    Ninja link rule expands before the object files.  GNU ld's left-to-right
+    pass then leaves both directions of the archive↔frontend mutual dependency
+    unresolved (emu_run etc. and gui_console_printf etc.).
+
+    Fix: remove -lcemucore from LINK_FLAGS, correct the relative -L path to
+    an absolute one, and inject LINK_LIBRARIES = /abs/path/libcemucore.a into
+    each executable's build block — LINK_LIBRARIES expands after $in (the .o
+    files), so the archive is seen last and both directions resolve.
+    """
+    import re as _re
+    cemucore_a = str(core_dir / "libcemucore.a")
+    ninja = build_dir / "build.ninja"
+    text = ninja.read_text(encoding="utf-8")
+    text = _re.sub(r"-L\S*core/?", f"-L{core_dir}", text)
+    text = text.replace("-lcemucore", "")
+    for target in ("cemu-headless", "autotester"):
+        text = _re.sub(
+            rf"(build {_re.escape(target)}:.*?)(  TARGET_SUPPORT_DIR = [^\n]+)",
+            rf"\1\2\n  LINK_LIBRARIES = {cemucore_a}",
+            text, flags=_re.S,
+        )
+    ninja.write_text(text, encoding="utf-8")
+    print(f"build.ninja patched: {cemucore_a} moved to LINK_LIBRARIES (after objects)")
+
+
 def build_cemu_tools(cemu_dir: Path, jobs: int) -> tuple[Path, Path]:
     run(["make", "-C", str(cemu_dir / "core"), f"-j{jobs}"])
     apply_autotester_patch(cemu_dir)
@@ -164,6 +193,7 @@ def build_cemu_tools(cemu_dir: Path, jobs: int) -> tuple[Path, Path]:
         "cmake", "-S", str(cemu_dir / "tests" / "autotester"),
         "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-GNinja",
     ])
+    patch_build_ninja(build_dir, cemu_dir / "core")
     run(["cmake", "--build", str(build_dir), f"-j{jobs}"])
 
     headless = build_dir / "cemu-headless"

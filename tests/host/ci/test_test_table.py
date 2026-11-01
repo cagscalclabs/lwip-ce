@@ -74,7 +74,26 @@ def test_fallback_is_a_one_test_unit() -> None:
     assert "| Result | ❌ Fail |  |  |" in text
 
 
+def test_render_accepts_one_result_file() -> None:
+    nested = [{
+        "module": "fuzz", "status": "pass", "units": [{
+            "unit": "x509", "status": "pass",
+            "tests": [{"test": "Fuzz campaign", "status": "pass"}],
+        }],
+    }]
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        result = root / "results-fuzz.json"
+        result.write_text(json.dumps(nested))
+        output = root / "summary.md"
+        MODULE.render(result, output, ["FUZZ|All targets|failure"])
+        text = output.read_text()
+    assert "| ⚫ FUZZ | 1 | 1 | 0 | 0 |" in text
+    assert "<summary>x509 Tests — ✅ Pass</summary>" in text
+
+
 if __name__ == "__main__":
     test_render_builds_module_unit_test_hierarchy()
     test_fallback_is_a_one_test_unit()
+    test_render_accepts_one_result_file()
     print("hierarchical test summary renderer: PASS")

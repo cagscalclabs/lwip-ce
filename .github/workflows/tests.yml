@@ -213,6 +213,14 @@ jobs:
         run: |
           shred -u "${{env.AUTOTESTER_IMAGE}}" 2>/dev/null || true
 
+      - name: Publish unit-test summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input "${{ github.workspace }}/results-unit.json" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "UNIT|Suite execution|${{ job.status }}"
+
   rfc_compliance:
     name: RFC compliance
     if: github.ref != 'refs/heads/master'
@@ -245,6 +253,7 @@ jobs:
           RFC_VERIFY_MODEL: ${{ vars.RFC_VERIFY_MODEL || 'gpt-6-astra' }}
           RFC_VERIFY_CYBER_PROGRAM: standard
           RFC_REVIEW_REPORT: ${{ runner.temp }}/rfc-compliance.md
+          RFC_PUBLISH_STEP_SUMMARY: "0"
         run: python3 .github/scripts/rfc_review.py
 
       - name: Normalize RFC row
@@ -272,6 +281,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           overwrite: true
+
+      - name: Publish RFC summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-rfc.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "RFC|Compliance review|${{ steps.rfc_review.outcome }}"
 
   acvp:
     needs: [prepare_rom, prepare_patched_rom]
@@ -352,6 +369,14 @@ jobs:
             tests/validation/acvp/units/
           if-no-files-found: ignore
 
+      - name: Publish ACVP summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/validation/acvp/results-units.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "ACVP|Suite execution|${{ steps.run_acvp.outcome }}"
+
   semgrep_scan:
     name: SAST (semgrep)
     runs-on: ubuntu-latest
@@ -417,6 +442,14 @@ jobs:
           name: test-rows-sast
           path: test-rows-sast.json
           if-no-files-found: warn
+
+      - name: Publish Semgrep summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-sast.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "SAST|Semgrep|${{ steps.semgrep.outcome }}"
 
   analyze:
     name: CodeQL Analyze
@@ -547,6 +580,14 @@ jobs:
           path: test-rows-codeql.json
           if-no-files-found: warn
 
+      - name: Publish CodeQL summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-codeql.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "SAST|CodeQL|${{ steps.codeql.outcome }}"
+
   nettest:
     needs: [prepare_rom, prepare_patched_rom]
     name: NETTEST
@@ -619,6 +660,14 @@ jobs:
             tests/net/artifacts/
           if-no-files-found: ignore
 
+      - name: Publish network-test summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/net/results-net.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "NETTEST|All network suites|${{ job.status }}"
+
   dast:
     needs: [prepare_rom, prepare_patched_rom]
     name: DAST (live, emulated)
@@ -681,6 +730,14 @@ jobs:
             tests/dast.json
             tests/profiling/lwip_dast/autotester.log
           if-no-files-found: ignore
+
+      - name: Publish DAST summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-dast.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "DAST|Suite execution|${{ job.status }}"
 
   bench:
     name: Algorithm benchmark
@@ -769,17 +826,17 @@ jobs:
           fi
           convbin -i "$bench_var" -o TLSBENCH.bin -j 8x -k bin
           python3 - <<'PY'
-          import re, sys
+          import json, re, sys
           TICKS_PER_SEC = 32768.0
-          raw = open('TLSBENCH.bin', 'rb').read().replace(b'\x00', b'').decode('utf-8', errors='replace')
+          raw = open('TLSBENCH.bin', 'rb').read().decode('utf-8', errors='replace')
           in_results = False
           rows = []
           for line in raw.splitlines():
               line = line.strip()
-              if line == 'marker_start':
+              if line.startswith('marker_start,'):
                   in_results = True
                   continue
-              if line == 'marker_done':
+              if line.startswith('marker_done,'):
                   break
               if not in_results or not line:
                   continue
@@ -801,26 +858,22 @@ jobs:
               else:
                   rows.append((name, f'{secs*1000:.1f} ms'))
           import os
-          summary_path = os.environ.get('GITHUB_STEP_SUMMARY', '')
           if not rows:
               print('No benchmark rows parsed.')
-              if summary_path:
-                  with open(summary_path, 'a') as f:
-                      f.write('## Algorithm Benchmark\n\nNo results parsed.\n')
+              with open('results-benchmark.json', 'w') as f:
+                  json.dump([{"group":"BENCH", "module":"BENCH",
+                              "test":"Algorithm benchmark", "grade":"Skipped",
+                              "stats":"No results parsed"}], f, indent=2)
               sys.exit(0)
           col = max(len(r[0]) for r in rows)
           print(f"{'Algorithm':<{col}}  Elapsed")
           print('-' * (col + 30))
           for name, val in rows:
               print(f'{name:<{col}}  {val}')
-          if summary_path:
-              with open(summary_path, 'a') as f:
-                  f.write('## Algorithm Benchmark\n\n')
-                  f.write('| Algorithm | Elapsed |\n')
-                  f.write('|-----------|----------|\n')
-                  for name, val in rows:
-                      f.write(f'| `{name}` | {val} |\n')
-                  f.write('\n')
+          with open('results-benchmark.json', 'w') as f:
+              json.dump([{"group":"BENCH", "module":"BENCH", "test":name,
+                          "grade":"Pass", "stats":val} for name, val in rows],
+                        f, indent=2)
           PY
 
       - name: Remove patched CEmu image
@@ -836,7 +889,16 @@ jobs:
             tests/profiling/primitives_bench/TLSBENCH.8xv
             tests/profiling/primitives_bench/autotest.log
             tests/profiling/primitives_bench/autotest.json
+            tests/profiling/primitives_bench/results-benchmark.json
           if-no-files-found: ignore
+
+      - name: Publish benchmark summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/profiling/primitives_bench/results-benchmark.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "BENCH|Algorithm benchmark|${{ job.status }}"
 
   host_tests:
     name: Host tests
@@ -880,6 +942,14 @@ jobs:
           name: test-rows-host
           path: test-rows-host.json
           if-no-files-found: warn
+
+      - name: Publish host-test summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-host.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "HOST|Suite execution|${{ job.status }}"
 
   fuzz:
     name: Fuzz
@@ -932,6 +1002,14 @@ jobs:
           path: tests/fuzz/out/artifacts/
           if-no-files-found: ignore
 
+      - name: Publish fuzz summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/fuzz/results-fuzz.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "FUZZ|All targets|${{ steps.fuzz_batch.outcome }}"
+
   cleanup_rom:
     name: Delete encrypted CEmu ROM artifacts
     needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast, bench]
@@ -967,17 +1045,6 @@ jobs:
     outputs:
       results: ${{ steps.collect.outputs.results }}
     steps:
-      - name: Check out summary renderer
-        uses: actions/checkout@v4
-
-      - name: Download normalized test rows
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: test-rows-*
-          path: ${{ runner.temp }}/test-rows
-          merge-multiple: true
-
       - name: Collect result states
         id: collect
         env:
@@ -1012,35 +1079,4 @@ jobs:
               network:$network, dast:$dast, bench:$bench, host:$host, fuzz:$fuzz}')
           echo "results=$results" >> "$GITHUB_OUTPUT"
 
-      - name: Render consolidated test table
-        env:
-          ROM_RESULT: ${{ needs.prepare_rom.result }}
-          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
-          UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
-          RFC_RESULT: ${{ needs.rfc_compliance.result }}
-          ACVP_RESULT: ${{ needs.acvp.result }}
-          SAST_RESULT: ${{ needs.semgrep_scan.result }}
-          CODEQL_RESULT: ${{ needs.analyze.result }}
-          NETWORK_RESULT: ${{ needs.nettest.result }}
-          DAST_RESULT: ${{ needs.dast.result }}
-          BENCH_RESULT: ${{ needs.bench.result }}
-          HOST_RESULT: ${{ needs.host_tests.result }}
-          FUZZ_RESULT: ${{ needs.fuzz.result }}
-        run: |
-          python3 .github/scripts/test_table.py render \
-            --input "${{ runner.temp }}/test-rows" \
-            --output "$RUNNER_TEMP/test-results.md" \
-            --fallback "PREREQUISITE|ROM setup|$ROM_RESULT" \
-            --fallback "PREREQUISITE|ROM cleanup|$ROM_CLEANUP_RESULT" \
-            --fallback "UNIT|Suite execution|$UNIT_RESULT" \
-            --fallback "RFC|Compliance review|$RFC_RESULT" \
-            --fallback "ACVP|Suite execution|$ACVP_RESULT" \
-            --fallback "SAST|Semgrep|$SAST_RESULT" \
-            --fallback "SAST|CodeQL|$CODEQL_RESULT" \
-            --fallback "NETTEST|All network suites|$NETWORK_RESULT" \
-            --fallback "DAST|Suite execution|$DAST_RESULT" \
-            --fallback "BENCH|Algorithm benchmark|$BENCH_RESULT" \
-            --fallback "HOST|Suite execution|$HOST_RESULT" \
-            --fallback "FUZZ|All targets|$FUZZ_RESULT"
-          cat "$RUNNER_TEMP/test-results.md" >> "$GITHUB_STEP_SUMMARY"
 

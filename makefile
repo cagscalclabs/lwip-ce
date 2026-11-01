@@ -16,10 +16,18 @@ all: dylib
 #
 # Set LOCAL_NETWORK_TESTS=1 and TRUSTSTORE_SIGNER_FILE=/secure/key.pem on
 # Linux to include the root/network-namespace calculator suites.
-run-tests: dylib
+LOCAL_TEST_ROOT ?= $(CURDIR)/build/local-tests
+FUZZ_SECONDS ?= 300
+run-tests:
+	@if [ -z "$(AUTOTESTER_ROM)" ]; then \
+		echo "AUTOTESTER_ROM=/path/to/ce.rom is required" >&2; \
+		exit 2; \
+	fi
+	$(MAKE) dylib
 	python3 .github/scripts/run_local_tests.py \
-		--work-dir "$(CURDIR)/build/local-tests" \
-		--fuzz-seconds "$${FUZZ_SECONDS:-300}"
+		--rom "$(AUTOTESTER_ROM)" \
+		--work-dir "$(LOCAL_TEST_ROOT)" \
+		--fuzz-seconds "$(FUZZ_SECONDS)"
 
 # The upstream X25519 submodule declares its working buffer as loadable
 # .x25519.data.  lwIP overlays that buffer with the other TLS scratch regions,

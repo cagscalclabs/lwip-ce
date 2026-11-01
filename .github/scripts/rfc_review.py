@@ -651,7 +651,7 @@ def update_comment(
 def write_summary(text: str) -> None:
     rendered = text.rstrip() + "\n"
     path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if path:
+    if path and os.environ.get("RFC_PUBLISH_STEP_SUMMARY", "1") != "0":
         with open(path, "a", encoding="utf-8") as summary:
             summary.write(rendered)
     report_path = os.environ.get("RFC_REVIEW_REPORT")
