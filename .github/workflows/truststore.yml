@@ -26,7 +26,8 @@ env:
   #
   # Each entry must have:
   #   serialized_id:  integer written into tls_truststore_entry.alg_id (matches tls_cert_sig_alg_t)
-  #   key_type:       "rsa" or "ec" -- which root public key type maps to this id
+  #   key_type:       "rsa", "ec-p256" or "ec-p384" -- which root public key
+  #                   type maps to this id
   #   oid:            ASN.1 dotted OID, for documentation/reference only
   #   display_name:   shown in the job summary
   # To add a new key type: add an entry here AND add the matching enum value to
@@ -42,9 +43,13 @@ env:
       oid: "1.2.840.113549.1.1.11"
       display_name: "RSA-PKCS1-SHA256"
     - serialized_id: 2
-      key_type: "ec"
+      key_type: "ec-p256"
       oid: "1.2.840.10045.4.3.2"
-      display_name: "ECDSA-SHA256"
+      display_name: "ECDSA-SHA256 (P-256)"
+    - serialized_id: 3
+      key_type: "ec-p384"
+      oid: "1.2.840.10045.4.3.3"
+      display_name: "ECDSA-SHA384 (P-384)"
 
 jobs:
   truststore:
@@ -106,7 +111,8 @@ jobs:
           SKI_LEN      = 32
           RSA_MOD_MIN  = 256   # 2048 bits
           RSA_MOD_MAX  = 512   # 4096 bits
-          EC_POINT_LEN = 65
+          EC_P256_POINT_LEN = 65
+          EC_P384_POINT_LEN = 97
           # Fixed-size prefix before key[]: len(4) + subject Name digest(32) +
           # ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) = 77
           ENTRY_FIXED_PREFIX = 4 + SUBJECT_LEN + SKI_LEN + 4 + 4 + 1
@@ -255,16 +261,18 @@ jobs:
               return exp_le, mod_bytes
 
           def extract_ec_pubkey(path):
-              """Return 65-byte uncompressed P-256 public key (0x04 || x || y).
-              Raises RuntimeError for non-P256 curves (e.g. P-384)."""
+              """Return an uncompressed EC public key (0x04 || x || y).
+              Returns 65 bytes for P-256 and 97 bytes for P-384. Raises
+              RuntimeError for other curves (e.g. P-521)."""
               pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
               pubkey_der = run_cmd(["openssl", "pkey", "-pubin", "-outform", "DER"], pubkey_pem)
-              # Uncompressed P-256 point: 0x04 + x(32) + y(32) = 65 bytes
-              # Preceded by 0x00 unused-bits byte in the BIT STRING
-              for i in range(len(pubkey_der) - 65, -1, -1):
-                  if pubkey_der[i] == 0x00 and pubkey_der[i+1] == 0x04 and (len(pubkey_der) - i - 1) == 65:
-                      return bytes(pubkey_der[i+1:i+66])  # 0x04 || x || y
-              raise RuntimeError("EC key is not P-256 (P-384/P-521 not supported), skipping")
+              # The point is preceded by a 0x00 unused-bits byte in the BIT STRING.
+              for point_len in (EC_P384_POINT_LEN, EC_P256_POINT_LEN):
+                  for i in range(len(pubkey_der) - point_len, -1, -1):
+                      if (pubkey_der[i] == 0x00 and pubkey_der[i+1] == 0x04 and
+                              (len(pubkey_der) - i - 1) == point_len):
+                          return bytes(pubkey_der[i+1:i+1+point_len])
+              raise RuntimeError("EC key is not P-256 or P-384, skipping")
 
           def build_entries(cert_paths):
               entries = {}
@@ -280,23 +288,24 @@ jobs:
                       OID_RSA = bytes([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01])
                       OID_EC  = bytes([0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01])
                       if OID_RSA in pubkey_der:
-                          is_rsa = True
+                          key_type = "rsa"
+                          exp_le, mod_be = extract_rsa_pubkey(path)
+                          key_bytes = exp_le + mod_be
                       elif OID_EC in pubkey_der:
-                          is_rsa = False
+                          point = extract_ec_pubkey(path)
+                          if len(point) == EC_P256_POINT_LEN:
+                              key_type = "ec-p256"
+                          elif len(point) == EC_P384_POINT_LEN:
+                              key_type = "ec-p384"
+                          else:
+                              raise RuntimeError("unsupported EC point length, skipping")
+                          key_bytes = point
                       else:
                           raise RuntimeError("unknown public key algorithm OID")
 
-                      key_type = "rsa" if is_rsa else "ec"
                       if key_type not in KEY_TYPE_TO_SERIALIZED_ID:
                           raise RuntimeError(f"key type {key_type} not in allowed list")
                       sig_alg = KEY_TYPE_TO_SERIALIZED_ID[key_type]
-
-                      if is_rsa:
-                          exp_le, mod_be = extract_rsa_pubkey(path)
-                          key_bytes = exp_le + mod_be
-                      else:
-                          point = extract_ec_pubkey(path)
-                          key_bytes = point
 
                   except Exception as e:
                       print(f"  skip {path}: {e}", flush=True)

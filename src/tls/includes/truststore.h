@@ -39,6 +39,7 @@ typedef enum
     TLS_CERT_SIG_RSA_PSS_SHA256       = 0, /* rsaEncryption + id-RSASSA-PSS / SHA-256 */
     TLS_CERT_SIG_RSA_PKCS1_SHA256     = 1, /* sha256WithRSAEncryption (PKCS#1 v1.5)   */
     TLS_CERT_SIG_ECDSA_SHA256         = 2, /* ecdsa-with-SHA256 (P-256)               */
+    TLS_CERT_SIG_ECDSA_SHA384         = 3, /* ecdsa-with-SHA384 (P-384)               */
     TLS_CERT_SIG_UNKNOWN              = 0xFF
 } tls_cert_sig_alg_t;
 
@@ -73,7 +74,8 @@ struct tls_truststore_header
 /* Variable-length per-entry record. The key[] FAM holds the raw public key
  * bytes whose format depends on alg_id:
  *   RSA: uint8_t exp[3] (little-endian uint24) || uint8_t mod[key_len - 3]
- *   EC:  uint8_t point[key_len]  (uncompressed: 0x04 || x || y, 65 bytes)
+ *   EC:  uint8_t point[key_len]  (uncompressed 0x04 || x || y; 65 bytes for
+ *                                 P-256, 97 bytes for P-384)
  * len covers the entire struct including the key[] bytes. */
 struct tls_truststore_entry
 {

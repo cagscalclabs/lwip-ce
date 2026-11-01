@@ -714,15 +714,15 @@ struct tls_cert_walker
      *
      * A cert is signed by the NEXT cert in the wire chain (cert N signed-by
      * cert N+1), but N+1 arrives only after N. So when a cert finishes we
-     * stash the material needed to verify it — the SHA-256 digest of its
-     * tbsCertificate and a copy of its signatureValue — and run the actual
-     * verification once the next cert's public key is in hand. The topmost
-     * cert is checked against the truststore when an issuer entry is found.
-     * RSA PKCS#1 v1.5 and PSS with SHA-256 are implemented. */
+     * stash the material needed to verify it — the digest of its
+     * tbsCertificate (SHA-256, or SHA-384 for ecdsa_secp384r1_sha384) and a
+     * copy of its signatureValue — and run the actual verification once the
+     * next cert's public key is in hand. The topmost cert is checked against
+     * the truststore when an issuer entry is found. */
     bool pending_link;             /* a prior cert is awaiting its issuer key */
     bool pending_sig_omitted;      /* unsupported algorithm/width; bytes omitted */
     tls_alg_t pending_sig_alg;     /* scheme from the signed certificate */
-    uint8_t pending_tbs_digest[32];/* SHA-256(tbsCertificate) of prior cert    */
+    uint8_t pending_tbs_digest[TLS_HASH_MAX_DIGEST_LEN]; /* tbsCertificate    */
     uint8_t pending_issuer_name_digest[32]; /* DER Name named by prior cert    */
     uint8_t *pending_sig;          /* signatureValue of prior cert (heap copy) */
     size_t pending_sig_len;
@@ -1029,7 +1029,7 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
 static tls_key_op_result_t tls_cert_verify_digest(struct tls_handshake_context *ctx,
                                                  tls_alg_t scheme,
                                                  const struct tls_key *issuer,
-                                                 const uint8_t digest[32],
+                                                 const uint8_t digest[TLS_HASH_MAX_DIGEST_LEN],
                                                  const uint8_t *sig, size_t sig_len)
 {
     if (tls_verify_deferred(ctx, scheme, issuer, digest, sig, sig_len,
@@ -1116,14 +1116,30 @@ static tls_key_op_result_t tls_cert_verify_root_entry(
         root_key.rsa.modulus = entry->key + 3;
         return tls_cert_verify_pending_link(w, &root_key, offload);
     }
-    if (alg == TLS_CERT_SIG_ECDSA_SHA256)
+    if (alg == TLS_CERT_SIG_ECDSA_SHA256 || alg == TLS_CERT_SIG_ECDSA_SHA384)
     {
         struct tls_key root_key;
-        if (key_len != 65)
+        tls_key_type_t type;
+        size_t point_len;
+
+        if (alg == TLS_CERT_SIG_ECDSA_SHA256)
+        {
+            type = TLS_KEY_TYPE_EC_P256;
+            point_len = 65;
+        }
+        else
+        {
+            /* Truststore entry alg_id selects the root *key* type; the
+             * certificate's AlgorithmIdentifier still selects the signature
+             * scheme and hash (see tls_cert_verify_pending_link). */
+            type = TLS_KEY_TYPE_EC_P384;
+            point_len = 97;
+        }
+        if (key_len != point_len)
             return TLS_KEY_OP_INVALID;
         memset(&root_key, 0, sizeof(root_key));
-        root_key.type = TLS_KEY_TYPE_EC_P256;
-        root_key.ec.len = key_len;
+        root_key.type = type;
+        root_key.ec.len = point_len;
         root_key.ec.pub = entry->key;
         root_key.ec.priv = NULL;
         return tls_cert_verify_pending_link(w, &root_key, offload);
@@ -1446,7 +1462,9 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
     }
     {
         struct tls_hash_context hctx;
-        if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256))
+        uint8_t tbs_hash = (sig_alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
+            ? TLS_HASH_SHA384 : TLS_HASH_SHA256;
+        if (!tls_hash_context_init(&hctx, tbs_hash))
         {
             ERROR_CODE(0x0c);
             return false;
