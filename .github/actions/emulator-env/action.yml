@@ -84,6 +84,6 @@ runs:
 
     - name: Set up CEmu with emulated networking
       id: cemu
-      uses: alessiodam/cemu-net-action@v1
+      uses: alessiodam/cemu-net-action@v1.1
       with:
         cemu-ref: ${{ steps.ci_versions.outputs.CEMU_REF }}
