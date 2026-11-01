@@ -2224,7 +2224,7 @@
     <section>4.1.1 (cryptographic negotiation: CertificateVerify scheme must be offered)</section>
     <location>src/tls/core/handshake.c: tls_recv_certificate_verify - CV scheme</location>
     <grade>COMPLIANT</grade>
-    <note>Only 0x0804 and 0x0403 are dispatched; the default case fails closed, so rsa_pkcs1_* is rejected in CertificateVerify. tests/host/tls_signatures covers the PSS helper.</note>
+    <note>0x0804 (rsa_pss_rsae_sha256), 0x0403 (ecdsa_secp256r1_sha256), and 0x0503 (ecdsa_secp384r1_sha384) are dispatched; the default case fails closed, so rsa_pkcs1_* is rejected in CertificateVerify. tests/host/tls_signatures covers the PSS and P-256 ECDSA helpers; P-384 CertificateVerify is exercised by the P-384 certificate tests.</note>
 
     <reviews>
       <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
@@ -2235,7 +2235,7 @@
     <section>4.1.1 (cryptographic negotiation: reject unoffered cipher/group)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello - cipher suite and group</location>
     <grade>COMPLIANT</grade>
-    <note>Cipher must pass tls_cipher_suite_offered: supported by the table (0x1301/0x1302/0x1304) and, in PSK mode, SHA-256 only. HRR and ServerHello both use this check, and an HRR must match the eventual ServerHello suite. key_share group must be X25519 or secp256r1. tests/host/tls_signatures feeds an unoffered SHA-384 HRR to a PSK ClientHello (rejected, state ERROR) and an unoffered X25519 repeat group (illegal_parameter).</note>
+    <note>Cipher must pass tls_cipher_suite_offered: supported by the table (0x1301/0x1302/0x1304) and, in PSK mode, SHA-256 only (0x1301/0x1304). HRR and ServerHello both use this check, and an HRR must match the eventual ServerHello suite. key_share group must be X25519 or secp256r1 (P-384 is not offered as a key exchange group). tests/host/tls_signatures feeds an unoffered SHA-384 HRR to a PSK ClientHello (rejected, state ERROR) and an unoffered X25519 repeat group (illegal_parameter).</note>
 
     <reviews>
       <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
@@ -2411,7 +2411,7 @@
     <section>4.2.3 (signature_algorithms)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello - offered schemes</location>
     <grade>COMPLIANT</grade>
-    <note>signature_algorithms {0x0804, 0x0403}; signature_algorithms_cert {0x0401, 0x0804, 0x0403}. Asserted in tests/host/tls_signatures hello(). PSS salt = hash length enforced in rsa.c tls_rsa_pss_verify.</note>
+    <note>signature_algorithms {0x0804, 0x0403, 0x0503}; signature_algorithms_cert {0x0401, 0x0804, 0x0403, 0x0503}. Asserted in tests/host/tls_signatures hello(). PSS salt = hash length enforced in rsa.c tls_rsa_pss_verify. ecdsa_secp384r1_sha384 (0x0503) is advertised last in both lists; P-384 signature verification is significantly slower than P-256 on the 48 MHz eZ80, and servers with tight handshake timeout windows may time out before CertificateVerify completes.</note>
 
     <reviews>
       <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
@@ -3146,7 +3146,7 @@
     <section>9.1 (MTI cipher suites)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello template - offered suites</location>
     <grade>DEVIANT</grade>
-    <note>TLS_AES_128_GCM_SHA256 (MUST), TLS_AES_128_CCM_SHA256, and SHOULD-level TLS_AES_256_GCM_SHA384 are implemented. Non-PSK ClientHello offers 0x1301, 0x1302, 0x1304; RFC 8446 Appendix B.4 defines no AES-256-CCM suite (0x1305 is TLS_AES_128_CCM_8_SHA256 and is not offered); PSK mode offers only the SHA-256 suites because the PSK store/binder is SHA-256 (RFC 8446 4.2.11). ClientHello byte layout is covered by tests/host/tls_signatures; the SHA-384 key schedule (transcript, Derive-Secret, Finished, AES-256 keys/IVs) by tests/unit/tls_hkdf; AES-256-GCM by tests/unit/tls_aes. SHA-384 interop against a live server is not yet exercised by tests/net.</note>
+    <note>Implemented cipher suites: TLS_AES_128_GCM_SHA256 (0x1301, MUST), TLS_AES_256_GCM_SHA384 (0x1302, SHOULD), TLS_AES_128_CCM_SHA256 (0x1304). Non-PSK ClientHello offers all three; PSK mode offers only the SHA-256 suites (0x1301/0x1304) because the PSK store/binder is SHA-256 (RFC 8446 4.2.11). RFC 8446 Appendix B.4 defines no AES-256-CCM suite (0x1305 is TLS_AES_128_CCM_8_SHA256 and is not offered). ECDHE key shares: X25519 (sent in ClientHello1) and secp256r1/P-256 (eligible via HRR); P-384 is not offered as a key exchange group. Certificate algorithms supported: RSA up to 4096-bit modulus (PKCS#1 v1.5 SHA-256 and PSS-RSAE-SHA256), ECDSA P-256 with SHA-256, and ECDSA P-384 with SHA-384. P-384 signature verification is significantly slower than P-256 on the 48 MHz eZ80; servers with tight handshake timeout windows may time out before CertificateVerify completes. ClientHello byte layout is covered by tests/host/tls_signatures; the SHA-384 key schedule (transcript, Derive-Secret, Finished, AES-256 keys/IVs) by tests/unit/tls_hkdf; AES-256-GCM by tests/unit/tls_aes. SHA-384 interop against a live server is not yet exercised by tests/net.</note>
     <justification>Partial: TLS_CHACHA20_POLY1305_SHA256 is not intended for this platform — ChaCha20 and Poly1305 would require two entirely new primitives with no other in-tree users, for a cipher suite that no production server requires. The AES-256/SHA-384 suites are wired end to end. P-384 certificate verification (ecdsa_secp384r1_sha384, 0x0503) is implemented and advertised last in the signature_algorithms lists; it is not used for ECDHE (group 0x0018 is not offered). SHA-384 interop against a live server and P-384 truststore end-to-end coverage remain unexercised by tests/net.</justification>
   <reviews>
       <reviewed-by>
@@ -3160,7 +3160,7 @@
     <section>9.1 (MTI groups and signature schemes)</section>
     <location>src/tls/core/handshake.c: tls_send_client_hello - groups and schemes</location>
     <grade>COMPLIANT</grade>
-    <note>secp256r1 (MUST) and x25519 (SHOULD); rsa_pkcs1_sha256 in signature_algorithms_cert; rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256 in both lists.</note>
+    <note>secp256r1 (MUST) and x25519 (SHOULD); P-384 is not offered as an ECDHE group. rsa_pkcs1_sha256 in signature_algorithms_cert; rsa_pss_rsae_sha256 and ecdsa_secp256r1_sha256 in both lists; ecdsa_secp384r1_sha384 advertised last in both lists for certificate algorithm coverage.</note>
 
     <reviews>
       <reviewed-by><person>Anthony Cagliano</person></reviewed-by>

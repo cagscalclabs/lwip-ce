@@ -745,13 +745,73 @@ void tls_key_free(struct tls_key *key)
  * tls_key_verify / tls_key_sign
  * --------------------------------------------------------------------------- */
 
+/* Encode one big-endian INTEGER (minimal, with a leading 0x00 when the high
+ * bit is set) into dst. Returns the encoded length. */
+static size_t ecdsa_der_integer(uint8_t *dst, const uint8_t *val, size_t val_len)
+{
+    size_t first = 0;
+    size_t len;
+    size_t off = 0;
+
+    while (first + 1 < val_len && val[first] == 0)
+        first++;
+    len = val_len - first;
+
+    dst[off++] = 0x02; /* INTEGER */
+    if (val[first] & 0x80)
+    {
+        dst[off++] = (uint8_t)(len + 1);
+        dst[off++] = 0x00;
+    }
+    else
+    {
+        dst[off++] = (uint8_t)len;
+    }
+    memcpy(dst + off, val + first, len);
+    return off + len;
+}
+
+/* SEQUENCE { INTEGER r, INTEGER s } from raw r||s (32 or 48 bytes each).
+ * dst must have room for 2 + 2*(2 + coord_len + 1). Returns the length. */
+static size_t ecdsa_raw_to_der(uint8_t *dst, const uint8_t *raw, size_t coord_len)
+{
+    uint8_t r_enc[64], s_enc[64];
+    size_t r_len = ecdsa_der_integer(r_enc, raw, coord_len);
+    size_t s_len = ecdsa_der_integer(s_enc, raw + coord_len, coord_len);
+    size_t body = r_len + s_len;
+
+    dst[0] = 0x30; /* SEQUENCE */
+    dst[1] = (uint8_t)body;
+    memcpy(dst + 2, r_enc, r_len);
+    memcpy(dst + 2 + r_len, s_enc, s_len);
+    return 2 + body;
+}
+
 tls_key_op_result_t tls_key_verify(const uint8_t *content, size_t content_len,
                                     const uint8_t *sig, size_t sig_len,
                                     const struct tls_key *key, tls_alg_t alg)
 {
-    if (!key)
+    if (!key || !sig)
     {
         return TLS_KEY_OP_INVALID;
+    }
+    /* tls_key_sign() returns ECDSA signatures as raw r||s, while X.509 and
+     * TLS carry DER SEQUENCE { INTEGER r, INTEGER s }. Accept the raw form
+     * produced by the keys API as well as the wire form. A structurally valid
+     * DER SEQUENCE is always treated as DER. */
+    if ((alg == TLS_ALG_ECDSA_SECP256R1_SHA256 && sig_len == 64) ||
+        (alg == TLS_ALG_ECDSA_SECP384R1_SHA384 && sig_len == 96))
+    {
+        bool looks_der = sig_len >= 2 && sig[0] == 0x30 &&
+                         (sig[1] & 0x80) == 0 &&
+                         (size_t)sig[1] + 2 == sig_len;
+        if (!looks_der)
+        {
+            uint8_t der[110];
+            size_t der_len = ecdsa_raw_to_der(der, sig, sig_len / 2);
+            return tls_x509_signature_verify(content, content_len,
+                                             der, der_len, key, alg);
+        }
     }
     return tls_x509_signature_verify(content, content_len, sig, sig_len, key, alg);
 }

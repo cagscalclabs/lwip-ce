@@ -23,6 +23,7 @@
 - **Signatures:** RSA-PKCS#1 v1.5 and RSA-PSS-SHA256, ECDSA P-256/SHA-256, and ECDSA P-384/SHA-384 (`ecdsa_secp384r1_sha384`, `0x0503`, offered last / least preferred).
 - **Hashes:** SHA-256, SHA-384, and SHA-512 are implemented and available through the hash, HMAC, HKDF, PBKDF2, and MGF1 APIs. TLS 1.3 negotiates SHA-256 or SHA-384 per cipher suite; no RFC 8446 suite uses SHA-512.
 - **Truststore roots:** RSA, EC P-256, and EC P-384 anchors are accepted (P-384 added as `alg_id` 3); chain links verify RSA/SHA-256, ECDSA P-256/SHA-256, and ECDSA P-384/SHA-384.
+- **Keys API:** `tls_key_import` accepts RSA, P-256, and P-384 keys; `tls_key_sign`/`tls_key_verify` support ECDSA P-256/P-384 (RFC 6979, raw `r||s` or DER). RSA private signing is not implemented.
 
 ## Related media
 

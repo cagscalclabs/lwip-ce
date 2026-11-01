@@ -34,7 +34,8 @@ typedef enum
 {
     TLS_KEY_OP_OK          = 0, /**< Operation succeeded.                                       */
     TLS_KEY_OP_INVALID     = 1, /**< Operation failed (bad signature, wrong key, etc.).          */
-    TLS_KEY_OP_UNSUPPORTED = 2, /**< Algorithm is known but not yet implemented (e.g. ECDSA).   */
+    TLS_KEY_OP_UNSUPPORTED = 2, /**< Algorithm is known but unsupported for this key/operation
+                                     (e.g. RSA private signing).                                  */
     TLS_KEY_OP_UNKNOWN     = 3, /**< Unknown algorithm or wrong operation category.   */
 } tls_key_op_result_t;
 
@@ -72,9 +73,9 @@ struct tls_key
         struct tls_rsa_key    rsa; /**< Valid for TLS_ALG_RSA_*.  */
         struct
         {
-            size_t         len;    /**< Length of uncompressed public point (65 bytes for P-256). */
+            size_t         len;    /**< Uncompressed point length: 65 for P-256, 97 for P-384.   */
             const uint8_t *pub;    /**< Uncompressed EC public-key (0x04 || X || Y).             */
-            const uint8_t *priv;   /**< 32-byte private scalar, or NULL for public-only keys.    */
+            const uint8_t *priv;   /**< 32-byte (P-256) or 48-byte (P-384) scalar, or NULL.      */
         } ec;                      /**< Valid for TLS_ALG_ECDSA_*.    */
         struct {
             size_t len;
@@ -120,7 +121,8 @@ typedef enum
  * @param format    TLS_KEY_FORMAT_PEM or TLS_KEY_FORMAT_DER.
  * PEM and DER both infer type from their structure and algorithm OID.
  * Unsupported OIDs/restrictions are rejected, not treated as unrestricted keys.
- * Private-key imports currently expose only public components.
+ * EC private-key imports expose both the public point and the private
+ * scalar (P-256 or P-384). RSA private signing is not implemented.
  * @param password  Passphrase for PBES2-encrypted private keys; may be NULL
  *                  for unencrypted keys.
  * @return tls_key_import_result_t status code.
@@ -143,8 +145,12 @@ void tls_key_free(struct tls_key *key);
 /**
  * @brief Verify a signature over @p content using @p key.
  *
- * Dispatches on alg after checking key->type; hashes content with SHA-256.
- * Only valid for signing-range algorithms (TLS_ALG_IS_SIGNING).
+ * Dispatches on alg after checking key->type. Content is hashed with the
+ * scheme's hash: SHA-256 for ECDSA P-256 and the RSA schemes, SHA-384 for
+ * ecdsa_secp384r1_sha384. ECDSA signatures may be DER SEQUENCE
+ * { INTEGER r, INTEGER s } (X.509/TLS wire format) or the raw 64/96-byte
+ * r||s produced by tls_key_sign(). Only valid for signing-range algorithms
+ * (TLS_ALG_IS_SIGNING).
  * @param alg Signature scheme to use; must be compatible with key->type.
  */
 tls_key_op_result_t tls_key_verify(const uint8_t *content, size_t content_len,
@@ -154,10 +160,13 @@ tls_key_op_result_t tls_key_verify(const uint8_t *content, size_t content_len,
 /**
  * @brief Sign @p content with @p key, writing the raw signature to @p sig_out.
  *
+ * Supports ECDSA P-256/SHA-256 (64-byte output) and ECDSA P-384/SHA-384
+ * (96-byte output) using RFC 6979 deterministic nonces. The output is the
+ * raw r||s form; DER-encode it for X.509/TLS CertificateVerify. RSA private
+ * signing is not implemented and returns TLS_KEY_OP_UNSUPPORTED.
  * @param alg Signature scheme to use; must be compatible with key->type.
- * @p sig_len_out receives the number of bytes written on success.
- * Returns TLS_KEY_OP_UNSUPPORTED for all algorithms until private-key
- * signing is implemented.
+ * @p sig_len_out receives the number of bytes written on success (at least
+ * 64 bytes for P-256, 96 for P-384).
  */
 tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
                                   uint8_t *sig_out, size_t *sig_len_out,

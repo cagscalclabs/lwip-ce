@@ -12,6 +12,7 @@
  *   7.  AES-256-CBC  round-trip (no AAD)
  *   8.  tls_key_sign: RSA→UNSUPPORTED, ECDSA public-only→INVALID, enc-alg→UNKNOWN
  *   9.  tls_key_verify with unknown alg → TLS_KEY_OP_UNKNOWN
+ *   10. ECDSA P-256/P-384 key import (PKCS#8), sign, verify, tamper rejection
  *
  * Encrypt returns a self-describing blob:
  *   <u16 iv_len><iv><u16 ct_len><ct><u16 tag_len><tag>
@@ -38,6 +39,23 @@
 /* --------------------------------------------------------------------------
  * Test vectors
  * -------------------------------------------------------------------------- */
+
+/* P-384 PKCS#8 private key used by the keys-API dispatch test. */
+static const char p384_priv_pem[] =
+    "-----BEGIN PRIVATE KEY-----\n"
+    "MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDBWe7jvMrBbzcP0/+MQ\n"
+    "sYOKC6rusoOTQqeMs7MnBaE9f7cXLjxBu2DDy1rtrMmI5LShZANiAARshG0pkNfV\n"
+    "3roWACqrkBoIbZaaoD2I45/08Ge2qDSrPGtDaDAL71cb8SiVrchs6jOYOCYaUjPo\n"
+    "SlcmzL2/Dyz2B+ta01Hwch8hrdbK2SfrFu5TnPxRpx8fH9Q0YVfOWvA=\n"
+    "-----END PRIVATE KEY-----\n";
+
+static const char p256_priv_pem[] =
+    "-----BEGIN PRIVATE KEY-----\n"
+    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg+WvXir8npaI8T089\n"
+    "vF2dKlNENeJH34g5aKr6fZjaogihRANCAASylrYhzNbx9RzrIaxh++Y2jvfp1qDc\n"
+    "sZRutf+p9DJ6eW2n5PwyEPsC91S64bQqpYab9ujbd/vB0asHTW5fOc3F\n"
+    "-----END PRIVATE KEY-----\n";
+
 
 /* McGrew/Viega GCM Spec, Appendix B, Test Case 4 — 128-bit key */
 static const uint8_t gcm128_key[] = {
@@ -368,6 +386,68 @@ int main(void)
         ok = ok && rej_dec == NULL;
     }
     show_result(ok);
+
+    /* ------------------------------------------------------------------
+     * Test 10: ECDSA keys API round-trips
+     *   - PKCS#8 import selects EC_P256 (65-byte point, 32-byte scalar) and
+     *     EC_P384 (97-byte point, 48-byte scalar)
+     *   - tls_key_sign dispatches to P-256/SHA-256 and P-384/SHA-384
+     *   - tls_key_verify accepts the raw r||s output and rejects tampering
+     * ------------------------------------------------------------------ */
+    {
+        struct tls_key *k256 = NULL;
+        struct tls_key *k384 = NULL;
+        uint8_t sig256[64], sig384[96];
+        size_t sig256_len = 0, sig384_len = 0;
+
+        tls_key_import_result_t ir256 = tls_key_import(
+            &k256, p256_priv_pem, strlen(p256_priv_pem), TLS_KEY_FORMAT_PEM, NULL);
+        tls_key_import_result_t ir384 = tls_key_import(
+            &k384, p384_priv_pem, strlen(p384_priv_pem), TLS_KEY_FORMAT_PEM, NULL);
+        ok = ir256 == TLS_KEY_IMPORT_OK && ir384 == TLS_KEY_IMPORT_OK &&
+             k256 && k256->type == TLS_KEY_TYPE_EC_P256 &&
+             k256->ec.len == 65 && k256->ec.pub && k256->ec.priv &&
+             k384 && k384->type == TLS_KEY_TYPE_EC_P384 &&
+             k384->ec.len == 97 && k384->ec.pub && k384->ec.priv;
+
+        if (ok)
+        {
+            ok = tls_key_sign(gcm_plaintext, sizeof gcm_plaintext, sig256,
+                              &sig256_len, k256,
+                              TLS_ALG_ECDSA_SECP256R1_SHA256) == TLS_KEY_OP_OK &&
+                 sig256_len == 64;
+        }
+        if (ok)
+        {
+            ok = tls_key_sign(gcm_plaintext, sizeof gcm_plaintext, sig384,
+                              &sig384_len, k384,
+                              TLS_ALG_ECDSA_SECP384R1_SHA384) == TLS_KEY_OP_OK &&
+                 sig384_len == 96;
+        }
+        if (ok)
+        {
+            ok = tls_key_verify(gcm_plaintext, sizeof gcm_plaintext, sig256,
+                                sig256_len, k256,
+                                TLS_ALG_ECDSA_SECP256R1_SHA256) == TLS_KEY_OP_OK &&
+                 tls_key_verify(gcm_plaintext, sizeof gcm_plaintext, sig384,
+                                sig384_len, k384,
+                                TLS_ALG_ECDSA_SECP384R1_SHA384) == TLS_KEY_OP_OK;
+        }
+        if (ok)
+        {
+            sig256[0] ^= 0x01;
+            sig384[0] ^= 0x01;
+            ok = tls_key_verify(gcm_plaintext, sizeof gcm_plaintext, sig256,
+                                sig256_len, k256,
+                                TLS_ALG_ECDSA_SECP256R1_SHA256) != TLS_KEY_OP_OK &&
+                 tls_key_verify(gcm_plaintext, sizeof gcm_plaintext, sig384,
+                                sig384_len, k384,
+                                TLS_ALG_ECDSA_SECP384R1_SHA384) != TLS_KEY_OP_OK;
+        }
+        show_result(ok);
+        tls_key_free(k256);
+        tls_key_free(k384);
+    }
 
     return 0;
 }

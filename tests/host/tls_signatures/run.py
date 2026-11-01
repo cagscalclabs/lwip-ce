@@ -301,7 +301,7 @@ source += ('static bool test_p256_sign_ok;\n'
            '    return true;\n'
            '}\n'
            '/* tls_p384_sign is provided by mock.h */\n')
-for name in ['tls_key_verify', 'tls_key_sign']:
+for name in ['ecdsa_der_integer', 'ecdsa_raw_to_der', 'tls_key_verify', 'tls_key_sign']:
     source += function(key_source, name)
 # Include internal AES helpers and blob helpers (not aes_encrypt_oneshot, which is mocked).
 source += key_source[key_source.index('/* ---------------------------------------------------------------------------\n * Internal helpers'):

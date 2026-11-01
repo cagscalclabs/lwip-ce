@@ -98,6 +98,11 @@ TLS 1.3 cipher suite that uses SHA-512, so it is not negotiated by TLS.
   CertificateVerify, chain links, and truststore anchors. The ECDHE group
   (0x0018) is not offered
 
+The typed keys API (`tls_key_import`, `tls_key_sign`, `tls_key_verify`)
+accepts RSA, P-256, and P-384 keys. ECDSA sign/verify support P-256/SHA-256
+and P-384/SHA-384; `tls_key_sign` emits raw `r||s` and `tls_key_verify`
+accepts raw `r||s` or DER. RSA private signing is not implemented.
+
 ## Required Object Identifiers (ASN.1)
 
 ### For TLS 1.3 Compliance

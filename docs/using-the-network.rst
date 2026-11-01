@@ -159,6 +159,10 @@ Algorithm support
 - **Truststore roots:** RSA, EC P-256, and EC P-384 anchors are accepted
   (P-384 is truststore algorithm id 3). Chain links verify RSA/SHA-256,
   ECDSA P-256/SHA-256, and ECDSA P-384/SHA-384.
+- **Keys API:** ``tls_key_import`` accepts RSA, P-256, and P-384 keys.
+  ``tls_key_sign``/``tls_key_verify`` support ECDSA P-256/SHA-256 and
+  P-384/SHA-384 with RFC 6979 nonces; sign emits raw ``r||s`` and verify
+  accepts raw ``r||s`` or DER. RSA private signing is not implemented.
 
 If you simply call ``lwip_socket_create`` with type ``LWIP_SOCKET_ALTCP_TLS`` and then subsequently call ``lwip_socket_connect``, the calculator chooses TLS client mode automatically; conversely if you call ``lwip_socket_listen`` the calculator chooses TLS server mode. From there, the mode forks a bit.
 
