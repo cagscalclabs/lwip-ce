@@ -239,10 +239,15 @@ def installer_commands(clibs: Path, release_dir: Path, output: Path) -> str:
     commands.extend([
         "run 5000",
         "launch INSTALL asm",
-        "run 60000",
+        # The dylib is split into ~64 KiB appvars and the count grows with the
+        # library. Headless "run N" is emulated time, so a generous settle
+        # costs no wall time and avoids saving a half-installed image (which
+        # shows up later as "Variable used is not currently defined" in the
+        # first test that loads a symbol from the truncated last chunk).
+        "run 300000",
         "key left",
         "key enter",
-        "run 2000",
+        "run 30000",
         f"save-state {output}",
         "quit",
     ])
