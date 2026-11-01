@@ -29,8 +29,9 @@
  *                       <----------------     [now encrypted under HS keys]
  *                                             EncryptedExtensions
  *                                             Certificate
- *                                             CertificateVerify   (RSA-PSS-SHA256 or
- *                                                                  ECDSA-P256-SHA256,
+ *                                             CertificateVerify   (RSA-PSS-SHA256,
+ *                                                                  ECDSA-P256-SHA256, or
+ *                                                                  ECDSA-P384-SHA384;
  *                                                                  verified against leaf)
  *                                             Finished
  *
@@ -2968,7 +2969,8 @@ bool tls_handshake_init(
  *      |      |           |       |       |          |         |        |
  *      |      |           |       |       |          |         |        +-- extensions block
  *      |      |           |       |       |          |         +-- compression_methods (always 0x00)
- *      |      |           |       |       |          +-- cipher_suites (0x1301, 0x1304)
+ *      |      |           |       |       |          +-- cipher_suites
+ *      |      |           |       |       |              (0x1301, 0x1302, 0x1304)
  *      |      |           |       |       +-- legacy session ID (empty / 32B echo)
  *      |      |           |       +-- 32-byte client_random
  *      |      |           +-- legacy_version 0x0303 (TLS 1.2 — TLS 1.3 hides in extensions)
@@ -2978,7 +2980,8 @@ bool tls_handshake_init(
  * The interesting work is in the extensions block. We always emit:
  *
  *    supported_versions     : tells the server we speak TLS 1.3
- *    supported_groups       : x25519 and secp256r1
+ *    supported_groups       : x25519 and secp256r1 (P-384 group 0x0018 is not
+ *                             offered; P-384 is used for ECDSA/trust anchors)
  *    key_share              : X25519 in ClientHello1; P-256 only in CH2 when
  *                             selected by HelloRetryRequest
  *    record_size_limit      : request 4096-byte plaintext records (RFC 8449)

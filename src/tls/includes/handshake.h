@@ -49,7 +49,8 @@ extern "C"
 #define TLS_LEGACY_VERSION 0x0303 /* TLS 1.2 for compatibility */
 #define TLS_PSK_IDENTITY_MAX_LEN 256
 
-/* Cipher Suites */
+/* Cipher Suites. Non-PSK ClientHello offers 0x1301, 0x1302, 0x1304 in that
+ * order; PSK/resumption offers only the SHA-256 suites (0x1301, 0x1304). */
 #define TLS_AES_128_GCM_SHA256 0x1301
 #define TLS_AES_256_GCM_SHA384 0x1302
 #define TLS_AES_128_CCM_SHA256 0x1304
@@ -80,7 +81,9 @@ extern "C"
 #define TLS_RECORD_SIZE_LIMIT_4096_HI 0x10
 #define TLS_RECORD_SIZE_LIMIT_4096_LO 0x00
 
-/* Named Groups */
+/* Named Groups. Only X25519 and P-256 are offered for ECDHE. P-384
+ * (0x0018) has primitives but is not offered as a key-exchange group; it is
+ * used for ECDSA signatures and truststore anchors. */
 #define TLS_NAMED_GROUP_X25519    0x001d
 #define TLS_NAMED_GROUP_SECP256R1 0x0017
 

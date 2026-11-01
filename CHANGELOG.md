@@ -147,3 +147,8 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - (Debugging) Handshake emits `INFO` events at every handshake phase. If logging enabled, this can reveal timings as well due to timestamps.
 - (Feature) mTLS implemented, Certificate Server mode implemented for TLS.
 - (Feature) TTY registration function, used currently only for password input.
+- (Feature/Crypto) SHA-384 and SHA-512 added to the hash API and shared with HMAC, HKDF, PBKDF2, and MGF1. SHA-384 is the transcript/PRF hash for `TLS_AES_256_GCM_SHA384` (0x1302); SHA-512 is API-only because RFC 8446 defines no SHA-512 cipher suite.
+- (Feature/TLS) `TLS_AES_256_GCM_SHA384` (0x1302) offered and negotiated end to end (transcript, key schedule, Finished, AES-256-GCM records). Non-PSK ClientHello offers 0x1301, 0x1302, 0x1304; PSK remains SHA-256 only.
+- (Feature/Crypto) P-384 (secp384r1) ECDHE and ECDSA (RFC 6979) primitives. P-384 ECDSA is wired into CertificateVerify (`ecdsa_secp384r1_sha384`, 0x0503), certificate chain links, and truststore anchors. P-384 is advertised last in the signature lists, and its ECDHE group (0x0018) is not offered; local identity (mTLS) signing remains P-256.
+- (Feature/Truststore) The truststore generator and runtime accept EC P-384 roots (`alg_id` 3, 97-byte uncompressed point, OID 1.2.840.10045.4.3.3) alongside RSA and P-256.
+- (CI) The prepared CEmu image now waits for the installer's completion screen instead of fixed delays, preventing half-installed images from breaking dylib unit tests.

@@ -1623,7 +1623,7 @@
     <section>4.1.2.7 / RFC 5480 2.1.1 (id-ecPublicKey with namedCurve secp256r1)</section>
     <location>src/tls/core/x509.c: tls_x509_parse_certificate; src/tls/core/handshake.c: tls_cert_walker_validate_one; tests/host/tls_signatures/test.c - EC SPKI parameters and supported curve</location>
     <grade>COMPLIANT</grade>
-    <note>EC SubjectPublicKeyInfo is recognized only when the algorithm is id-ecPublicKey and its required parameter is the namedCurve OID secp256r1. Absent, NULL, explicit, implicit, or unsupported curve parameters are rejected either during AlgorithmIdentifier parsing or by leaving the key type unknown. P-384 and all other curves are unsupported as a fail-closed interoperability limitation. Host regressions cover P-256 parsing and EC leaf-key capture.</note>
+    <note>EC SubjectPublicKeyInfo is recognized when the algorithm is id-ecPublicKey and its required parameter is the namedCurve OID secp256r1 or secp384r1. Absent, NULL, explicit, implicit, or unsupported curve parameters are rejected either during AlgorithmIdentifier parsing or by leaving the key type unknown. P-521 and other curves remain unsupported as a fail-closed interoperability limitation. Host regressions cover P-256 parsing and EC leaf-key capture; P-384 parsing is exercised by the P-384 certificate/signature paths.</note>
 
     <reviews>
       <reviewed-by>
@@ -1754,7 +1754,7 @@
     <section>6.1.1(d) / 6.1.3(a)(1) (trust anchor input; topmost signature verified with anchor key)</section>
     <location>src/tls/core/handshake.c: tls_cert_verify_pending_link / tls_cert_verify_root_entry / tls_cert_anchor_root, tls_cert_job_run_head / tls_cert_job_enqueue, tls_recv_certificate_streamed, tls_offload_settle; tests/host/tls_signatures/test.c: chain - trust-anchor signature verification</location>
     <grade>COMPLIANT</grade>
-    <note>Fully reviewed as of v3.0.0-rc3. The authenticated truststore entry supplies the trusted public-key type and key material; supported anchor inputs are RSA and EC P-256, whose parameters are fixed by the serialized key type. The topmost certificate's own parsed AlgorithmIdentifier selects RSA PKCS#1 v1.5 with SHA-256, RSA-PSS with SHA-256, or ECDSA P-256 with SHA-256, and its retained tbsCertificate digest and signature must verify with the selected anchor key. Unsupported or mismatched algorithms, malformed key material, an absent matching anchor, and a bad signature all fail closed. Verification may be offloaded, but accelerator success remains provisional until tls_offload_settle obtains the verdict; an accelerator failure is checked locally, and failure of both paths sends a fatal alert before the handshake completes. Host regressions exercise successful RSA anchoring, same-subject candidate selection by signature, and rejection after a signature bit flip. Trusted-issuer-name binding is assessed separately under RFC 5280 sections 6.1.1(d) and 6.1.3(a)(4).</note>
+    <note>Fully reviewed as of v3.0.0-rc3; P-384 anchors added. The authenticated truststore entry supplies the trusted public-key type and key material; supported anchor inputs are RSA, EC P-256, and EC P-384, whose parameters are fixed by the serialized key type (alg_id 1/2/3). The topmost certificate's own parsed AlgorithmIdentifier selects RSA PKCS#1 v1.5 with SHA-256, RSA-PSS with SHA-256, ECDSA P-256 with SHA-256, or ECDSA P-384 with SHA-384, and its retained tbsCertificate digest and signature must verify with the selected anchor key. The walker hashes tbsCertificate with SHA-384 for ecdsa_secp384r1_sha384 and SHA-256 for the other schemes. Unsupported or mismatched algorithms, malformed key material, an absent matching anchor, and a bad signature all fail closed. Verification may be offloaded, but accelerator success remains provisional until tls_offload_settle obtains the verdict; an accelerator failure is checked locally, and failure of both paths sends a fatal alert before the handshake completes. Host regressions exercise successful RSA anchoring, same-subject candidate selection by signature, and rejection after a signature bit flip. Trusted-issuer-name binding is assessed separately under RFC 5280 sections 6.1.1(d) and 6.1.3(a)(4).</note>
 
     <reviews>
       <reviewed-by>
@@ -2198,7 +2198,7 @@
     <section>5.2 (PBKDF2: F, U1..Uc, INT(i))</section>
     <location>src/tls/core/passwords.c: tls_pbkdf2 - core algorithm</location>
     <grade>COMPLIANT</grade>
-    <note>Big-endian block index INT(i); U1 = HMAC(password, salt||INT(i)); Uc = HMAC(password, U_{c-1}); XOR-accumulated T(i); last block truncated. Covered by tests/unit/tls_pbkdf2 and CAVP-harness ACVP-shaped vectors (both Python-generated; RFC 6070 is SHA-1 only).</note>
+    <note>Big-endian block index INT(i); U1 = HMAC(password, salt||INT(i)); Uc = HMAC(password, U_{c-1}); XOR-accumulated T(i); last block truncated. Hash-agnostic: buffers are sized to TLS_HASH_MAX_DIGEST_LEN, and the function accepts SHA-256, SHA-384, and SHA-512. Covered by tests/unit/tls_pbkdf2 (SHA-256 c=1/c=2, plus SHA-384 and SHA-512 48/64-byte outputs) and CAVP-harness ACVP-shaped vectors (both Python-generated; RFC 6070 is SHA-1 only).</note>
 
     <reviews>
       <reviewed-by>
@@ -2501,7 +2501,7 @@
     <section>4.2.11 (pre_shared_key)</section>
     <location>src/tls/core/handshake.c: tls_recv_server_hello - pre_shared_key response</location>
     <grade>COMPLIANT</grade>
-    <note>Must be exactly 2 bytes, selected_identity 0 (only one offered), and PSK must have been offered; all suites are SHA-256 so the hash always matches. Silent abort.</note>
+    <note>Must be exactly 2 bytes, selected_identity 0 (only one offered), and PSK must have been offered. PSK/resumption offers only the SHA-256 suites (0x1301/0x1304) because the ticket store and binder are SHA-256, so the PSK hash always matches; a SHA-384 suite (0x1302) is offered only in non-PSK ClientHellos. Silent abort.</note>
 
     <reviews>
       <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
@@ -2675,9 +2675,9 @@
   <requirement>
     <ref>RFC 8446</ref>
     <section>4.4.3 (CertificateVerify signed content)</section>
-    <location>src/tls/core/handshake.c: tls_certverify_rsa_pss_sha256 / tls_certverify_ecdsa_p256_sha256 - signed content</location>
+    <location>src/tls/core/handshake.c: tls_certverify_rsa_pss_sha256 / tls_certverify_ecdsa_p256_sha256 / tls_certverify_ecdsa_p384_sha384 - signed content</location>
     <grade>COMPLIANT</grade>
-    <note>64 x 0x20, "TLS 1.3, server CertificateVerify", 0x00, Transcript-Hash(..Certificate) hashed with SHA-256; PSS signature must be modulus length, ECDSA strict DER. Covered by tests/host/tls_signatures chain() and tests/unit/tls_rsa_pss_sig.</note>
+    <note>64 x 0x20, "TLS 1.3, server CertificateVerify", 0x00, Transcript-Hash(..Certificate). The transcript hash is SHA-256 or SHA-384 according to the negotiated cipher suite; the signature scheme then hashes the constructed content with its own hash (SHA-256 for RSA-PSS/ECDSA-P256, SHA-384 for ecdsa_secp384r1_sha384). PSS signatures must be modulus length and ECDSA signatures strict DER. Covered by tests/host/tls_signatures chain() and tests/unit/tls_rsa_pss_sig; the P-384 CertificateVerify path is exercised by the P-384 certificate tests.</note>
 
     <reviews>
       <reviewed-by><person>Anthony Cagliano</person></reviewed-by>
@@ -3147,7 +3147,7 @@
     <location>src/tls/core/handshake.c: tls_send_client_hello template - offered suites</location>
     <grade>DEVIANT</grade>
     <note>TLS_AES_128_GCM_SHA256 (MUST), TLS_AES_128_CCM_SHA256, and SHOULD-level TLS_AES_256_GCM_SHA384 are implemented. Non-PSK ClientHello offers 0x1301, 0x1302, 0x1304; RFC 8446 Appendix B.4 defines no AES-256-CCM suite (0x1305 is TLS_AES_128_CCM_8_SHA256 and is not offered); PSK mode offers only the SHA-256 suites because the PSK store/binder is SHA-256 (RFC 8446 4.2.11). ClientHello byte layout is covered by tests/host/tls_signatures; the SHA-384 key schedule (transcript, Derive-Secret, Finished, AES-256 keys/IVs) by tests/unit/tls_hkdf; AES-256-GCM by tests/unit/tls_aes. SHA-384 interop against a live server is not yet exercised by tests/net.</note>
-    <justification>Partial: TLS_CHACHA20_POLY1305_SHA256 is not intended for this platform — ChaCha20 and Poly1305 would require two entirely new primitives with no other in-tree users, for a cipher suite that no production server requires. The AES-256/SHA-384 suites are now wired end to end; P-384 certificate verification (ecdsa_secp384r1_sha384) remains unimplemented and is not advertised.</justification>
+    <justification>Partial: TLS_CHACHA20_POLY1305_SHA256 is not intended for this platform — ChaCha20 and Poly1305 would require two entirely new primitives with no other in-tree users, for a cipher suite that no production server requires. The AES-256/SHA-384 suites are wired end to end. P-384 certificate verification (ecdsa_secp384r1_sha384, 0x0503) is implemented and advertised last in the signature_algorithms lists; it is not used for ECDHE (group 0x0018 is not offered). SHA-384 interop against a live server and P-384 truststore end-to-end coverage remain unexercised by tests/net.</justification>
   <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>

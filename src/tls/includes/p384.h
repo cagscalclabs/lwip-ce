@@ -7,6 +7,11 @@
  * All functions are constant-time with respect to private key material.
  * tls_p384_verify is variable-time (safe: all inputs are public).
  *
+ * TLS use: P-384 is offered for ECDSA signatures
+ * (ecdsa_secp384r1_sha384, 0x0503), used for CertificateVerify, certificate
+ * chain links, and truststore anchors. The secp384r1 ECDHE group (0x0018) is
+ * not currently offered, and local identity (mTLS) signing remains P-256.
+ *
  * Interrupt safety: each call saves IFF1, asserts DI for the duration, and
  * restores IFF1 on return. Scratch memory is wiped on entry and exit.
  */

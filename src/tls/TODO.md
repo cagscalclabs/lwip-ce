@@ -111,7 +111,9 @@ Integrate ECDHE and signature verification into handshake state machine.
 - [ ] Hostname verification (match CN/SAN to domain)
 - [ ] Session resumption (0-RTT)
 - [ ] Additional cipher suites (AES-256-GCM, ChaCha20)
-- [ ] P-384 curve support (overkill for calculator)
+- [x] P-384 curve support: ECDHE/ECDSA primitives, P-384 CertificateVerify,
+  chain links, and truststore anchors. The P-384 ECDHE group (0x0018) is not
+  offered and local identity signing remains P-256.
 
 ---
 

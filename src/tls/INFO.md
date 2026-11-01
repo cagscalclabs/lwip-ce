@@ -5,7 +5,10 @@
 ### Current Implementation Status
 - **Protocol**: TLS 1.3 only (RFC 8446)
 - **Key exchange**: ECDHE with X25519 (preferred) and secp256r1/P-256
-  (HelloRetryRequest path), plus DHE-less PSK resumption
+  (HelloRetryRequest path), plus DHE-less PSK resumption. P-384 ECDHE
+  primitives (`tls_p384_publickey`/`tls_p384_secret`) are implemented, but the
+  secp384r1 key-exchange group (0x0018) is not offered; P-384 is used for
+  ECDSA signatures and trust anchors
 - **Cipher suites**: TLS_AES_128_GCM_SHA256 (0x1301),
   TLS_AES_256_GCM_SHA384 (0x1302), and TLS_AES_128_CCM_SHA256 (0x1304).
   Non-PSK ClientHello offers those three in that order. PSK/resumption
@@ -14,8 +17,9 @@
   no AES-256-CCM suite (0x1305 is TLS_AES_128_CCM_8_SHA256, which needs an
   8-byte tag and is not offered).
 - **Authentication**: RSA-PKCS#1 v1.5, RSA-PSS (rsa_pss_rsae_*), ECDSA P-256
-  server signatures; X.509 chain validation against a signed trust store
-  with hostname verification
+  (ecdsa_secp256r1_sha256), and ECDSA P-384 (ecdsa_secp384r1_sha384) server
+  signatures; X.509 chain validation against a signed trust store (RSA,
+  P-256, and P-384 anchors) with hostname verification
 - **Records**: AEAD records with `record_size_limit` (4096) negotiation,
   verify-before-decrypt, KeyUpdate
 
@@ -29,7 +33,9 @@ status claims here; check the ledger.
 - 0-RTT early data (never offered)
 - id-RSASSA-PSS SubjectPublicKeyInfo certificates (fail-closed; ledger
   RFC 4055 1.2/3.1)
-- Groups other than X25519 and P-256 (no P-384/P-521, no FFDHE)
+- Key-exchange groups other than X25519 and P-256 (no P-384 group, no
+  P-521, no FFDHE). P-384 arithmetic is implemented and used for ECDSA and
+  truststore anchors; only its key-exchange group (0x0018) is not offered
 
 ## Cryptographic Primitives
 
@@ -66,6 +72,11 @@ restoring an earlier machine state.
 - **SHA-384**: Implemented (assembly optimized, truncated SHA-512 core)
 - **SHA-512**: Implemented (assembly optimized, same core as SHA-384)
 
+SHA-384 is the transcript/HKDF/Finished hash for TLS_AES_256_GCM_SHA384
+(0x1302) and the hash used by `ecdsa_secp384r1_sha384`. SHA-512 is exposed
+through the hash, HMAC, HKDF, PBKDF2, and MGF1 APIs; RFC 8446 defines no
+TLS 1.3 cipher suite that uses SHA-512, so it is not negotiated by TLS.
+
 ### Key Derivation
 - **HKDF** (HMAC-based KDF, RFC 5869): Implemented
 - **HKDF-Expand-Label** (TLS 1.3 specific): Implemented
@@ -79,8 +90,13 @@ restoring an earlier machine state.
 - **AES-CCM**: Implemented (supports 128, 192, and 256-bit keys)
 
 ### Asymmetric Cryptography
-- **RSA**: Modular exponentiation implemented, PSS padding not implemented
-- **X25519**: Field arithmetic implemented, key exchange not integrated
+- **RSA**: Modular exponentiation implemented (PKCS#1 v1.5 and PSS-SHA256)
+- **X25519**: Implemented and used for ECDHE (group 0x001d)
+- **P-256**: ECDH and ECDSA (RFC 6979) implemented; offered for ECDHE (HRR) and
+  used for P-256 certificate signatures
+- **P-384**: ECDH and ECDSA (RFC 6979) implemented; used for P-384
+  CertificateVerify, chain links, and truststore anchors. The ECDHE group
+  (0x0018) is not offered
 
 ## Required Object Identifiers (ASN.1)
 
@@ -93,31 +109,35 @@ These are negotiated in TLS handshake, not ASN.1 OIDs:
 - **TLS_AES_128_CCM_SHA256**: `0x13, 0x04` (supported)
 - **TLS_CHACHA20_POLY1305_SHA256**: `0x13, 0x03` (optional, not implemented)
 
-P-384 certificate verification and `ecdsa_secp384r1_sha384` (0x0503) are not
-implemented, so the signature_algorithms lists remain RSA-PSS-SHA256,
-ECDSA-P256-SHA256, and RSA-PKCS1-SHA256 (cert list only). The 256-bit AEAD
-suites still authenticate with those P-256/SHA-256 certificate signatures:
-the suite hash selects the transcript hash, while the CertificateVerify
-signature scheme keeps its own hash.
+`ecdsa_secp384r1_sha384` (0x0503) is implemented for CertificateVerify,
+chain links, and truststore anchors. The offered signature_algorithms order is
+ECDSA-P256, RSA-PSS-SHA256, then ECDSA-P384 (cert list: RSA-PKCS1, RSA-PSS,
+ECDSA-P256, ECDSA-P384), so P-384 is the least preferred signature scheme.
+The suite hash selects the transcript/PRF hash independently of the
+CertificateVerify signature scheme's own hash.
 
 #### Supported Groups (ECDHE)
-For full TLS 1.3 compliance, must support at least one of:
-- **x25519**: `1.3.101.110` - Not yet defined in enum
-- **secp384r1** (P-384): `1.3.132.0.34` - Not yet defined
+Offered groups:
+- **x25519**: `0x001d` (offered in ClientHello)
+- **secp256r1** (P-256): `0x0017` (offered; selected through HRR)
+- **secp384r1** (P-384): `0x0018` (primitives implemented, group not offered)
 
 #### Signature Algorithms (X.509)
-Currently defined in `keyobject.h`:
+Recognized by `src/tls/core/x509.c` / `tls_algorithms.h`:
 - **sha256WithRSAEncryption**: `1.2.840.113549.1.1.11` - `TLS_OID_SHA256_RSA_ENCRYPTION`
-- **ecdsa-with-SHA256**: `1.2.840.10045.4.3.2` - `TLS_OID_SHA256_ECDSA`
+- **ecdsa-with-SHA256**: `1.2.840.10045.4.3.2` (P-256)
+- **ecdsa-with-SHA384**: `1.2.840.10045.4.3.3` (P-384)
+- **rsassa-pss** (SHA-256/MGF1-SHA-256/salt 32): `1.2.840.113549.1.1.10`
 
 For broader compatibility, consider adding:
-- **sha384WithRSAEncryption**: `1.2.840.113549.1.1.12` - Already defined as `TLS_OID_SHA384_RSA_ENCRYPTION`
-- **rsassa-pss**: `1.2.840.113549.1.1.10` - Not yet defined
+- **sha384WithRSAEncryption**: `1.2.840.113549.1.1.12` - OID defined, not implemented
 
 #### Public Key Algorithms
 Currently defined:
 - **rsaEncryption**: `1.2.840.113549.1.1.1` - `TLS_OID_RSA_ENCRYPTION`
 - **id-ecPublicKey**: `1.2.840.10045.2.1` - `TLS_OID_EC_PUBLICKEY`
+  (namedCurve params: secp256r1 `1.2.840.10045.3.1.7`, secp384r1
+  `1.3.132.0.34` / `TLS_OID_SECP384R1_BYTES`)
 
 #### Encryption Algorithms (for encrypted private keys)
 Currently defined:
@@ -166,7 +186,9 @@ Currently defined:
    schedule, transcript, Finished, record layer, and 0x1302 suite; SHA-512
    shares the same assembly core (hash, HMAC, HKDF, MGF1)
 2. Consider ChaCha20-Poly1305 (optional)
-3. P-384 certificate verification / ecdsa_secp384r1_sha384 (next task)
+3. ~~P-384 certificate verification / ecdsa_secp384r1_sha384~~ done for
+   CertificateVerify, chain links, and truststore anchors; P-384 ECDHE group
+   (0x0018) remains unoffered
 
 ## File Organization
 

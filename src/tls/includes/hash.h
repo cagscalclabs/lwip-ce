@@ -26,7 +26,11 @@
 #define TLS_SHA384_DIGEST_LEN 48
 #define TLS_SHA384_BLOCK_LEN 128
 
-/** @def Defines digest and block length of SHA-512. */
+/** @def Defines digest and block length of SHA-512.
+ *
+ * SHA-512 is available to the hash/HMAC/HKDF/PBKDF2/MGF1 APIs but is not
+ * selected by any TLS 1.3 cipher suite (RFC 8446 defines none). TLS uses
+ * SHA-256 or SHA-384 according to the negotiated suite. */
 #define TLS_SHA512_DIGEST_LEN 64
 #define TLS_SHA512_BLOCK_LEN 128
 

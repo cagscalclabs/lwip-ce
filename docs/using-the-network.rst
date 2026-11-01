@@ -135,11 +135,36 @@ Using TLS
 
 The TLS flow is semi-automatic, with some setters to control specific behavior.
 
+Algorithm support
+~~~~~~~~~~~~~~~~~
+
+- **Cipher suites:** ``TLS_AES_128_GCM_SHA256`` (``0x1301``),
+  ``TLS_AES_256_GCM_SHA384`` (``0x1302``), and
+  ``TLS_AES_128_CCM_SHA256`` (``0x1304``). PSK/resumption offers only the
+  SHA-256 suites because the PSK store and binder are SHA-256 (RFC 8446
+  §4.2.11).
+- **Key exchange:** X25519 (preferred, sent in ClientHello1) and
+  secp256r1/P-256 (selected through HelloRetryRequest). P-384 ECDHE
+  primitives are available, but the secp384r1 group (``0x0018``) is not
+  offered.
+- **Server authentication:** RSA-PKCS#1 v1.5 and RSA-PSS-SHA256, ECDSA
+  P-256/SHA-256, and ECDSA P-384/SHA-384 (``0x0503``). P-384 is advertised
+  last, so it is the least-preferred signature scheme.
+- **Client identities (mTLS):** identity keys are ECDSA P-256/SHA-256; the
+  P-384 signing primitive exists but is not wired into the identity path.
+- **Hashes:** SHA-256, SHA-384, and SHA-512 are implemented and available
+  through the hash, HMAC, HKDF, PBKDF2, and MGF1 APIs. TLS 1.3 uses SHA-256
+  or SHA-384 according to the negotiated cipher suite; no RFC 8446 suite
+  uses SHA-512.
+- **Truststore roots:** RSA, EC P-256, and EC P-384 anchors are accepted
+  (P-384 is truststore algorithm id 3). Chain links verify RSA/SHA-256,
+  ECDSA P-256/SHA-256, and ECDSA P-384/SHA-384.
+
 If you simply call ``lwip_socket_create`` with type ``LWIP_SOCKET_ALTCP_TLS`` and then subsequently call ``lwip_socket_connect``, the calculator chooses TLS client mode automatically; conversely if you call ``lwip_socket_listen`` the calculator chooses TLS server mode. From there, the mode forks a bit.
 
 Client Mode: As Client, the calculator checks its PSK cache for a valid session resumption/PSK ticket for the remote endpoint. If it finds one, it uses the PSK identity and PSK mode for that connection. If not, it selects ECDSA/full handshake mode. This is automatic and doesn't require explicit handling.
 
-mTLS Client: the Client MAY call ``lwip_socket_set_tls_cert(sock, privkey_appvar, chain_appvar)`` to present an identity. When the server sends a ``CertificateRequest``, the Client replies with its ``Certificate`` and ``CertificateVerify``; if the request cannot be satisfied (no ECDSA P-256 scheme, non-empty oid_filters) it sends an empty Certificate instead. Configuring a client certificate disables PSK for that socket, so mTLS always performs a full handshake.
+mTLS Client: the Client MAY call ``lwip_socket_set_tls_cert(sock, privkey_appvar, chain_appvar)`` to present an identity. When the server sends a ``CertificateRequest``, the Client replies with its ``Certificate`` and ``CertificateVerify``; if the request cannot be satisfied (the identity is ECDSA P-256/SHA-256 only, or the oid_filters are non-empty) it sends an empty Certificate instead. Configuring a client certificate disables PSK for that socket, so mTLS always performs a full handshake.
 
 Server (PSK or Certificate mode): As server, you MUST use a configuration setter to choose PSK mode or Certificate mode. If this is not done, the server fails-closed on ``lwip_socket_listen``. Code may call ``lwip_socket_set_tls_psk`` to set PSK mode or ``lwip_socket_set_tls_cert`` to set Certificate mode.
 
@@ -166,7 +191,7 @@ Server (PSK or Certificate mode): As server, you MUST use a configuration setter
    :returns: ``LWIP_OK`` on success, ``LWIP_ERR_STATE`` if socket status not INIT, ``LWIP_ERR_ARG`` if ``socket``, ``privkey_appvar`` or ``chain_appvar`` are not provided. 
    :note: Appvar names are limited to 8 characters.
 
-Use ``tools/lwip-cert-converter`` to validate a P-256 identity and create the
+Use ``tools/lwip-cert-converter`` to validate a P-256 identity (identity certificates are P-256; P-384 is currently used for verification and trust anchors, not for the local identity) and create the
 two AppVars expected by this function::
 
    tools/lwip-cert-converter \
