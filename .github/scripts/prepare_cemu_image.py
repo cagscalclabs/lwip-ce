@@ -233,25 +233,42 @@ def release_files(release_dir: Path) -> list[Path]:
     return files
 
 
-def installer_commands(clibs: Path, release_dir: Path, output: Path) -> str:
+# FNV-1a hash of the full 320x240 frame for the installer's completion
+# screen ("Successfully installed. App: lwIP"). The installer is built from
+# this repo and the CEmu ROM/toolchain is pinned, so this is stable. If the
+# installer UI text changes, update this constant; the wait fails closed
+# rather than saving a half-installed image.
+INSTALLED_SCREEN_HASH = "F104ABEC"
+INSTALL_POLL_STEP_MS = 1000
+INSTALL_TIMEOUT_MS = 300000
+
+
+def installer_commands(clibs: Path, release_dir: Path) -> list[str]:
+    """Commands that stage every release file and start the installer."""
     commands = [f"send-file auto {clibs}"]
     commands.extend(f"send-file auto {path}" for path in release_files(release_dir))
-    commands.extend([
-        "run 5000",
-        "launch INSTALL asm",
-        # The dylib is split into ~64 KiB appvars and the count grows with the
-        # library. Headless "run N" is emulated time, so a generous settle
-        # costs no wall time and avoids saving a half-installed image (which
-        # shows up later as "Variable used is not currently defined" in the
-        # first test that loads a symbol from the truncated last chunk).
-        "run 300000",
-        "key left",
-        "key enter",
-        "run 30000",
-        f"save-state {output}",
-        "quit",
-    ])
-    return "\n".join(commands) + "\n"
+    commands.extend(["run 5000", "launch INSTALL asm"])
+    return commands
+
+
+def installer_finish_commands(output: Path) -> list[str]:
+    """Dismiss the completion prompt, settle, and save the prepared image."""
+    return ["key left", "key enter", "run 5000", f"save-state {output}", "quit"]
+
+
+def _headless_send(process: subprocess.Popen[str], command: str) -> str:
+    process.stdin.write(command + "\n")
+    process.stdin.flush()
+    while True:
+        line = process.stdout.readline()
+        if not line:
+            raise PreparationError(f"cemu-headless exited while running: {command}")
+        line = line.rstrip("\n")
+        if line.startswith("ERR "):
+            raise PreparationError(f"cemu-headless rejected {command!r}: {line}")
+        if line.startswith("OK "):
+            return line
+        # Startup diagnostics and USB transfer progress are not responses.
 
 
 def install_release(
@@ -266,18 +283,41 @@ def install_release(
         ensure_path_has_no_whitespace(path, label)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    result = run(
+    process = subprocess.Popen(
         [str(headless), "--rom", str(rom)],
-        input_text=installer_commands(clibs, release_dir, output),
-        capture=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
-    if result.stdout:
-        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
-    errors = [line for line in result.stdout.splitlines() if line.startswith("ERR ")]
-    if errors:
-        raise PreparationError(
-            "cemu-headless rejected an image preparation command: " + errors[0]
-        )
+    try:
+        for command in installer_commands(clibs, release_dir):
+            _headless_send(process, command)
+
+        waited = 0
+        screen_hash = "?"
+        while waited < INSTALL_TIMEOUT_MS:
+            _headless_send(process, f"run {INSTALL_POLL_STEP_MS}")
+            waited += INSTALL_POLL_STEP_MS
+            response = _headless_send(process, "screen-hash")
+            screen_hash = response.rsplit(" ", 1)[-1]
+            if screen_hash == INSTALLED_SCREEN_HASH:
+                break
+        else:
+            raise PreparationError(
+                "installer did not reach its completion screen within "
+                f"{INSTALL_TIMEOUT_MS} ms (last hash {screen_hash})"
+            )
+
+        for command in installer_finish_commands(output):
+            _headless_send(process, command)
+        process.wait(timeout=60)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
     if not output.is_file():
         raise PreparationError(f"CEmu did not create the prepared image: {output}")
 

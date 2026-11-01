@@ -28,22 +28,28 @@ def test_installer_commands_match_ci_sequence() -> None:
         release, lwip, appvar, installer = make_release(root)
         clibs = root / "clibs.8xg"
         output = root / "prepared.ce"
-        commands = MODULE.installer_commands(clibs, release, output).splitlines()
 
-        assert commands == [
+        assert MODULE.installer_commands(clibs, release) == [
             f"send-file auto {clibs}",
             f"send-file auto {lwip}",
             f"send-file auto {appvar}",
             f"send-file auto {installer}",
             "run 5000",
             "launch INSTALL asm",
-            "run 60000",
+        ]
+        assert MODULE.installer_finish_commands(output) == [
             "key left",
             "key enter",
-            "run 2000",
+            "run 5000",
             f"save-state {output}",
             "quit",
         ]
+
+
+def test_installer_wait_is_deterministic() -> None:
+    assert MODULE.INSTALLED_SCREEN_HASH
+    assert MODULE.INSTALL_POLL_STEP_MS > 0
+    assert MODULE.INSTALL_TIMEOUT_MS >= MODULE.INSTALL_POLL_STEP_MS
 
 
 def test_release_files_rejects_missing_appvars() -> None:
@@ -61,5 +67,6 @@ def test_release_files_rejects_missing_appvars() -> None:
 
 if __name__ == "__main__":
     test_installer_commands_match_ci_sequence()
+    test_installer_wait_is_deterministic()
     test_release_files_rejects_missing_appvars()
     print("CEmu image preparation self-test: PASS")
