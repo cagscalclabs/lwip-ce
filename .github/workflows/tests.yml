@@ -49,32 +49,8 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Load pinned CI dependency versions
-        id: ci_versions
-        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
-
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgl1-mesa-dev
-
-      - name: Build state-aware networked CEmu tools
-        run: |
-          git init -q "$RUNNER_TEMP/CEmu"
-          git -C "$RUNNER_TEMP/CEmu" fetch -q --depth 1 \
-            https://github.com/alessiodam/CEmu-lwIP-CE.git \
-            "${{ steps.ci_versions.outputs.CEMU_REF }}"
-          git -C "$RUNNER_TEMP/CEmu" checkout -q FETCH_HEAD
-          git -C "$RUNNER_TEMP/CEmu" submodule update -q --init --depth 1
-          make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
-          git -C "$RUNNER_TEMP/CEmu" apply \
-            "$GITHUB_WORKSPACE/build-tools/meta/cemu-autotester.patch"
-          cmake -S "$RUNNER_TEMP/CEmu/tests/autotester" -B "$RUNNER_TEMP/CEmu/build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -GNinja
-          cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
-          install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
-          install -m755 "$RUNNER_TEMP/CEmu/build/autotester" "$RUNNER_TEMP/cemu-autotester-image"
-          strings "$RUNNER_TEMP/cemu-autotester-image" | grep -q "AUTOTESTER_IMAGE"
-          "$RUNNER_TEMP/cemu-headless" --version || true
 
       - name: Download lwip-latest build artifact
         uses: actions/download-artifact@v4
@@ -97,54 +73,15 @@ jobs:
           shred -u "$RUNNER_TEMP/CE.rom.enc"
           test -f "$RUNNER_TEMP/ce.rom"
 
-      - name: Download clibs.8xg
+      - name: Build CEmu and install lwIP into a reproducible image
         run: |
-          curl -fsSL --retry 3 \
-            -o "$RUNNER_TEMP/clibs.8xg" \
-            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
-          test -f "$RUNNER_TEMP/clibs.8xg"
-
-      - name: Install lwIP into CEmu via headless
-        run: |
-          set -euo pipefail
-          HEADLESS="$RUNNER_TEMP/cemu-headless"
-          ROM="$RUNNER_TEMP/ce.rom"
-          IMAGE="$RUNNER_TEMP/ce-patched.ce"
-          RELEASE="${{ github.workspace }}/release"
-
-          # Build the send-file command list: clibs.8xg, lwip.8xv, all LWIP.*.8xv, lwIPINST.8xp
-          SEND_CMDS=""
-          SEND_CMDS+="send-file auto $RUNNER_TEMP/clibs.8xg\n"
-          SEND_CMDS+="send-file auto $RELEASE/lwip.8xv\n"
-          for f in "$RELEASE"/appinst/LWIP.*.8xv; do
-            [[ "$(basename "$f")" == ._* ]] && continue
-            SEND_CMDS+="send-file auto $f\n"
-          done
-          SEND_CMDS+="send-file auto $RELEASE/appinst/lwIPINST.8xp\n"
-
-          # Run the installer, dismiss its completion dialog, then save the
-          # ready-to-test state.  Unit tests boot directly from this image.
-          COMMANDS=$(
-          {
-            printf '%b' "$SEND_CMDS"
-            echo "run 5000"
-            echo "launch INSTALL asm"
-            echo "run 60000"
-            echo "key left"
-            echo "key enter"
-            echo "run 2000"
-            echo "save-state $IMAGE"
-            echo "quit"
-          } | "$HEADLESS" --rom "$ROM"
-          )
-          printf '%s\n' "$COMMANDS"
-          if grep -q '^ERR ' <<<"$COMMANDS"; then
-            echo "cemu-headless rejected an image preparation command" >&2
-            exit 1
-          fi
-
-          test -f "$IMAGE"
-          ls -lh "$IMAGE"
+          python3 .github/scripts/prepare_cemu_image.py \
+            --rom "$RUNNER_TEMP/ce.rom" \
+            --release "$GITHUB_WORKSPACE/release" \
+            --output "$RUNNER_TEMP/ce-patched.ce" \
+            --autotester-output "$RUNNER_TEMP/cemu-autotester-image" \
+            --headless-output "$RUNNER_TEMP/cemu-headless" \
+            --work-dir "$RUNNER_TEMP/CEmu"
 
       - name: Shred decrypted ROM
         if: always()
