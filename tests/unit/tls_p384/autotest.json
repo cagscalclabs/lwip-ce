@@ -1,0 +1,183 @@
+{
+  "description": "Test P-384 keygen, ECDH, deterministic ECDSA, input validation",
+  "transfer_files": [
+    "bin/P384.8xp"
+  ],
+  "target": {
+    "name": "P384",
+    "isASM": true
+  },
+  "sequence": [
+    "action|launch",
+    "hashWait|1",
+    "key|enter",
+    "delay|1200",
+    "hashWait|2",
+    "key|enter",
+    "delay|1200",
+    "hashWait|3",
+    "key|enter",
+    "delay|1200",
+    "hashWait|4",
+    "key|enter",
+    "delay|1200",
+    "hashWait|5",
+    "key|enter",
+    "delay|1200",
+    "hashWait|6",
+    "key|enter",
+    "delay|1200",
+    "hashWait|7",
+    "key|enter",
+    "delay|1200",
+    "hashWait|8",
+    "key|enter",
+    "delay|1200",
+    "hashWait|9",
+    "key|enter",
+    "delay|1200",
+    "hashWait|10",
+    "key|enter",
+    "delay|1200",
+    "hashWait|11",
+    "key|enter",
+    "delay|1200",
+    "hashWait|12",
+    "key|enter",
+    "hashWait|14",
+    "key|enter",
+    "delay|1200"
+  ],
+  "hashes": {
+    "1": {
+      "description": "P-384 keygen priv=1 equals G",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "2": {
+      "description": "P-384 keygen priv=n-1 equals -G",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "3": {
+      "description": "P-384 keygen deterministic private key A",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "4": {
+      "description": "P-384 ECDH A->B matches reference",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "5": {
+      "description": "P-384 ECDH B->A matches reference",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "6": {
+      "description": "P-384 RFC6979 HMAC-SHA384 sign (hash1), deterministic repeat",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "7": {
+      "description": "P-384 verify valid signature",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "8": {
+      "description": "P-384 sign/verify second key and hash",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "9": {
+      "description": "P-384 sign/verify all-zero hash boundary",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "10": {
+      "description": "P-384 reject tampered sig, wrong hash, off-curve, x>=p, bad prefix",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "11": {
+      "description": "P-384 reject r=0, s=0, r=n, s=n",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "12": {
+      "description": "P-384 priv vs n-priv equivalence",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 600000
+    },
+    "14": {
+      "description": "P-384 timing (pk/ss/sg/vf in seconds)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "7D0BF4ED"
+      ],
+      "timeout": 120000
+    }
+  }
+}

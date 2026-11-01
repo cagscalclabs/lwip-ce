@@ -49,32 +49,8 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Load pinned CI dependency versions
-        id: ci_versions
-        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
-
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgl1-mesa-dev
-
-      - name: Build state-aware networked CEmu tools
-        run: |
-          git init -q "$RUNNER_TEMP/CEmu"
-          git -C "$RUNNER_TEMP/CEmu" fetch -q --depth 1 \
-            https://github.com/alessiodam/CEmu-lwIP-CE.git \
-            "${{ steps.ci_versions.outputs.CEMU_REF }}"
-          git -C "$RUNNER_TEMP/CEmu" checkout -q FETCH_HEAD
-          git -C "$RUNNER_TEMP/CEmu" submodule update -q --init --depth 1
-          make -C "$RUNNER_TEMP/CEmu/core" -j"$(nproc)"
-          git -C "$RUNNER_TEMP/CEmu" apply \
-            "$GITHUB_WORKSPACE/build-tools/meta/cemu-autotester.patch"
-          cmake -S "$RUNNER_TEMP/CEmu/tests/autotester" -B "$RUNNER_TEMP/CEmu/build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -GNinja
-          cmake --build "$RUNNER_TEMP/CEmu/build" -j"$(nproc)"
-          install -m755 "$RUNNER_TEMP/CEmu/build/cemu-headless" "$RUNNER_TEMP/cemu-headless"
-          install -m755 "$RUNNER_TEMP/CEmu/build/autotester" "$RUNNER_TEMP/cemu-autotester-image"
-          strings "$RUNNER_TEMP/cemu-autotester-image" | grep -q "AUTOTESTER_IMAGE"
-          "$RUNNER_TEMP/cemu-headless" --version || true
 
       - name: Download lwip-latest build artifact
         uses: actions/download-artifact@v4
@@ -97,54 +73,15 @@ jobs:
           shred -u "$RUNNER_TEMP/CE.rom.enc"
           test -f "$RUNNER_TEMP/ce.rom"
 
-      - name: Download clibs.8xg
+      - name: Build CEmu and install lwIP into a reproducible image
         run: |
-          curl -fsSL --retry 3 \
-            -o "$RUNNER_TEMP/clibs.8xg" \
-            https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
-          test -f "$RUNNER_TEMP/clibs.8xg"
-
-      - name: Install lwIP into CEmu via headless
-        run: |
-          set -euo pipefail
-          HEADLESS="$RUNNER_TEMP/cemu-headless"
-          ROM="$RUNNER_TEMP/ce.rom"
-          IMAGE="$RUNNER_TEMP/ce-patched.ce"
-          RELEASE="${{ github.workspace }}/release"
-
-          # Build the send-file command list: clibs.8xg, lwip.8xv, all LWIP.*.8xv, lwIPINST.8xp
-          SEND_CMDS=""
-          SEND_CMDS+="send-file auto $RUNNER_TEMP/clibs.8xg\n"
-          SEND_CMDS+="send-file auto $RELEASE/lwip.8xv\n"
-          for f in "$RELEASE"/appinst/LWIP.*.8xv; do
-            [[ "$(basename "$f")" == ._* ]] && continue
-            SEND_CMDS+="send-file auto $f\n"
-          done
-          SEND_CMDS+="send-file auto $RELEASE/appinst/lwIPINST.8xp\n"
-
-          # Run the installer, dismiss its completion dialog, then save the
-          # ready-to-test state.  Unit tests boot directly from this image.
-          COMMANDS=$(
-          {
-            printf '%b' "$SEND_CMDS"
-            echo "run 5000"
-            echo "launch INSTALL asm"
-            echo "run 60000"
-            echo "key left"
-            echo "key enter"
-            echo "run 2000"
-            echo "save-state $IMAGE"
-            echo "quit"
-          } | "$HEADLESS" --rom "$ROM"
-          )
-          printf '%s\n' "$COMMANDS"
-          if grep -q '^ERR ' <<<"$COMMANDS"; then
-            echo "cemu-headless rejected an image preparation command" >&2
-            exit 1
-          fi
-
-          test -f "$IMAGE"
-          ls -lh "$IMAGE"
+          python3 .github/scripts/prepare_cemu_image.py \
+            --rom "$RUNNER_TEMP/ce.rom" \
+            --release "$GITHUB_WORKSPACE/release" \
+            --output "$RUNNER_TEMP/ce-patched.ce" \
+            --autotester-output "$RUNNER_TEMP/cemu-autotester-image" \
+            --headless-output "$RUNNER_TEMP/cemu-headless" \
+            --work-dir "$RUNNER_TEMP/CEmu"
 
       - name: Shred decrypted ROM
         if: always()
@@ -276,6 +213,14 @@ jobs:
         run: |
           shred -u "${{env.AUTOTESTER_IMAGE}}" 2>/dev/null || true
 
+      - name: Publish unit-test summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input "${{ github.workspace }}/results-unit.json" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "UNIT|Suite execution|${{ job.status }}"
+
   rfc_compliance:
     name: RFC compliance
     if: github.ref != 'refs/heads/master'
@@ -308,6 +253,7 @@ jobs:
           RFC_VERIFY_MODEL: ${{ vars.RFC_VERIFY_MODEL || 'gpt-6-astra' }}
           RFC_VERIFY_CYBER_PROGRAM: standard
           RFC_REVIEW_REPORT: ${{ runner.temp }}/rfc-compliance.md
+          RFC_PUBLISH_STEP_SUMMARY: "0"
         run: python3 .github/scripts/rfc_review.py
 
       - name: Normalize RFC row
@@ -335,6 +281,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           overwrite: true
+
+      - name: Publish RFC summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-rfc.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "RFC|Compliance review|${{ steps.rfc_review.outcome }}"
 
   acvp:
     needs: [prepare_rom, prepare_patched_rom]
@@ -415,6 +369,14 @@ jobs:
             tests/validation/acvp/units/
           if-no-files-found: ignore
 
+      - name: Publish ACVP summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/validation/acvp/results-units.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "ACVP|Suite execution|${{ steps.run_acvp.outcome }}"
+
   semgrep_scan:
     name: SAST (semgrep)
     runs-on: ubuntu-latest
@@ -480,6 +442,14 @@ jobs:
           name: test-rows-sast
           path: test-rows-sast.json
           if-no-files-found: warn
+
+      - name: Publish Semgrep summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-sast.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "SAST|Semgrep|${{ steps.semgrep.outcome }}"
 
   analyze:
     name: CodeQL Analyze
@@ -610,6 +580,14 @@ jobs:
           path: test-rows-codeql.json
           if-no-files-found: warn
 
+      - name: Publish CodeQL summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-codeql.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "SAST|CodeQL|${{ steps.codeql.outcome }}"
+
   nettest:
     needs: [prepare_rom, prepare_patched_rom]
     name: NETTEST
@@ -682,6 +660,14 @@ jobs:
             tests/net/artifacts/
           if-no-files-found: ignore
 
+      - name: Publish network-test summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/net/results-net.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "NETTEST|All network suites|${{ job.status }}"
+
   dast:
     needs: [prepare_rom, prepare_patched_rom]
     name: DAST (live, emulated)
@@ -745,6 +731,175 @@ jobs:
             tests/profiling/lwip_dast/autotester.log
           if-no-files-found: ignore
 
+      - name: Publish DAST summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-dast.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "DAST|Suite execution|${{ job.status }}"
+
+  bench:
+    name: Algorithm benchmark
+    needs: prepare_patched_rom
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Load pinned CI dependency versions
+        id: ci_versions
+        run: grep -E '^[A-Z_]+=' .github/ci-versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y make tar wget
+
+      - name: Cache CEdev Toolchain
+        id: cedev-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/CEdev
+          key: ${{ runner.os }}-cedev-${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
+
+      - name: Download and extract CEdev
+        if: steps.cedev-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "github.com/CE-Programming/toolchain/releases/download/${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}/CEdev-Linux.tar.gz" | tar xz
+
+      - name: Add CEdev to PATH
+        run: echo "${{ github.workspace }}/CEdev/bin" >> $GITHUB_PATH
+
+      - name: Download this run's lwip-latest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/release
+
+      - name: Install lwip.lib + headers into CEdev
+        run: |
+          mkdir -p "${{ env.CEDEV }}/lib/libload" "${{ env.CEDEV }}/include"
+          cp "${{ github.workspace }}/release/lwip.lib" "${{ env.CEDEV }}/lib/libload/lwip.lib"
+          cp "${{ github.workspace }}/release/lwip.h" "${{ env.CEDEV }}/include/lwip.h"
+          cp -r "${{ github.workspace }}/release/lwip" "${{ env.CEDEV }}/include/lwip"
+
+      - name: Download patched CEmu image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-patched
+          path: ${{ runner.temp }}
+
+      - name: Decrypt patched CEmu image
+        run: |
+          gpg --batch --yes \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "${{ runner.temp }}/ce-patched.ce" \
+            --decrypt "${{ runner.temp }}/ce-patched.ce.enc"
+          shred -u "${{ runner.temp }}/ce-patched.ce.enc"
+          test -f "${{ runner.temp }}/ce-patched.ce"
+          test -f "${{ runner.temp }}/cemu-autotester-image"
+          echo "AUTOTESTER_IMAGE=${{ runner.temp }}/ce-patched.ce" >> "$GITHUB_ENV"
+
+      - name: Install Autotester CLI
+        run: |
+          install -m755 "${{ runner.temp }}/cemu-autotester-image" "${{ env.CEDEV_BIN }}/cemu-autotester"
+          strings "${{ env.CEDEV_BIN }}/cemu-autotester" | grep -q "AUTOTESTER_IMAGE"
+
+      - name: Build primitives benchmark
+        run: make -C tests/profiling/primitives_bench
+
+      - name: Run primitives benchmark
+        working-directory: tests/profiling/primitives_bench
+        run: |
+          timeout 900s cemu-autotester \
+            "${{ github.workspace }}/tests/profiling/primitives_bench/autotest.json" \
+            2>&1 | tee autotest.log || true
+
+      - name: Extract and print benchmark results
+        working-directory: tests/profiling/primitives_bench
+        run: |
+          bench_var=TLSBENCH.8xv
+          if [ ! -f "$bench_var" ]; then
+            echo "::error::TLSBENCH appvar not found; benchmark did not complete"
+            exit 1
+          fi
+          convbin -i "$bench_var" -o TLSBENCH.bin -j 8x -k bin
+          python3 - <<'PY'
+          import json, re, sys
+          TICKS_PER_SEC = 32768.0
+          raw = open('TLSBENCH.bin', 'rb').read().decode('utf-8', errors='replace')
+          in_results = False
+          rows = []
+          for line in raw.splitlines():
+              line = line.strip()
+              if line.startswith('marker_start,'):
+                  in_results = True
+                  continue
+              if line.startswith('marker_done,'):
+                  break
+              if not in_results or not line:
+                  continue
+              parts = line.split(',')
+              if len(parts) != 3:
+                  continue
+              name, ticks_s, units_s = parts
+              try:
+                  ticks = int(ticks_s)
+                  units = int(units_s)
+              except ValueError:
+                  continue
+              if name.startswith(('probe_', 'sink')):
+                  continue
+              secs = ticks / TICKS_PER_SEC
+              if units > 1:
+                  per = secs / units * 1000
+                  rows.append((name, f'{secs*1000:.1f} ms total, {per:.3f} ms/unit, {units} units'))
+              else:
+                  rows.append((name, f'{secs*1000:.1f} ms'))
+          import os
+          if not rows:
+              print('No benchmark rows parsed.')
+              with open('results-benchmark.json', 'w') as f:
+                  json.dump([{"group":"BENCH", "module":"BENCH",
+                              "test":"Algorithm benchmark", "grade":"Skipped",
+                              "stats":"No results parsed"}], f, indent=2)
+              sys.exit(0)
+          col = max(len(r[0]) for r in rows)
+          print(f"{'Algorithm':<{col}}  Elapsed")
+          print('-' * (col + 30))
+          for name, val in rows:
+              print(f'{name:<{col}}  {val}')
+          with open('results-benchmark.json', 'w') as f:
+              json.dump([{"group":"BENCH", "module":"BENCH", "test":name,
+                          "grade":"Pass", "stats":val} for name, val in rows],
+                        f, indent=2)
+          PY
+
+      - name: Remove patched CEmu image
+        if: always()
+        run: shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
+
+      - name: Upload benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-primitives
+          path: |
+            tests/profiling/primitives_bench/TLSBENCH.8xv
+            tests/profiling/primitives_bench/autotest.log
+            tests/profiling/primitives_bench/autotest.json
+            tests/profiling/primitives_bench/results-benchmark.json
+          if-no-files-found: ignore
+
+      - name: Publish benchmark summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/profiling/primitives_bench/results-benchmark.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "BENCH|Algorithm benchmark|${{ job.status }}"
+
   host_tests:
     name: Host tests
     runs-on: ubuntu-latest
@@ -787,6 +942,14 @@ jobs:
           name: test-rows-host
           path: test-rows-host.json
           if-no-files-found: warn
+
+      - name: Publish host-test summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input test-rows-host.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "HOST|Suite execution|${{ job.status }}"
 
   fuzz:
     name: Fuzz
@@ -839,9 +1002,17 @@ jobs:
           path: tests/fuzz/out/artifacts/
           if-no-files-found: ignore
 
+      - name: Publish fuzz summary
+        if: always()
+        run: |
+          python3 .github/scripts/test_table.py render \
+            --input tests/fuzz/results-fuzz.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "FUZZ|All targets|${{ steps.fuzz_batch.outcome }}"
+
   cleanup_rom:
     name: Delete encrypted CEmu ROM artifacts
-    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast, bench]
     if: always()
     permissions:
       actions: write
@@ -865,7 +1036,7 @@ jobs:
 
   gate_results:
     name: Collect test results
-    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, host_tests, fuzz, cleanup_rom]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, bench, host_tests, fuzz, cleanup_rom]
     if: always()
     permissions:
       actions: read
@@ -874,17 +1045,6 @@ jobs:
     outputs:
       results: ${{ steps.collect.outputs.results }}
     steps:
-      - name: Check out summary renderer
-        uses: actions/checkout@v4
-
-      - name: Download normalized test rows
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: test-rows-*
-          path: ${{ runner.temp }}/test-rows
-          merge-multiple: true
-
       - name: Collect result states
         id: collect
         env:
@@ -897,6 +1057,7 @@ jobs:
           CODEQL_RESULT: ${{ needs.analyze.result }}
           NETWORK_RESULT: ${{ needs.nettest.result }}
           DAST_RESULT: ${{ needs.dast.result }}
+          BENCH_RESULT: ${{ needs.bench.result }}
           HOST_RESULT: ${{ needs.host_tests.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
         run: |
@@ -910,40 +1071,12 @@ jobs:
             --arg codeql "$CODEQL_RESULT" \
             --arg network "$NETWORK_RESULT" \
             --arg dast "$DAST_RESULT" \
+            --arg bench "$BENCH_RESULT" \
             --arg host "$HOST_RESULT" \
             --arg fuzz "$FUZZ_RESULT" \
             '{rom_setup:$rom_setup, rom_cleanup:$rom_cleanup, unit:$unit,
               rfc:$rfc, acvp:$acvp, sast:$sast, codeql:$codeql,
-              network:$network, dast:$dast, host:$host, fuzz:$fuzz}')
+              network:$network, dast:$dast, bench:$bench, host:$host, fuzz:$fuzz}')
           echo "results=$results" >> "$GITHUB_OUTPUT"
 
-      - name: Render consolidated test table
-        env:
-          ROM_RESULT: ${{ needs.prepare_rom.result }}
-          ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
-          UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
-          RFC_RESULT: ${{ needs.rfc_compliance.result }}
-          ACVP_RESULT: ${{ needs.acvp.result }}
-          SAST_RESULT: ${{ needs.semgrep_scan.result }}
-          CODEQL_RESULT: ${{ needs.analyze.result }}
-          NETWORK_RESULT: ${{ needs.nettest.result }}
-          DAST_RESULT: ${{ needs.dast.result }}
-          HOST_RESULT: ${{ needs.host_tests.result }}
-          FUZZ_RESULT: ${{ needs.fuzz.result }}
-        run: |
-          python3 .github/scripts/test_table.py render \
-            --input "${{ runner.temp }}/test-rows" \
-            --output "$RUNNER_TEMP/test-results.md" \
-            --fallback "PREREQUISITE|ROM setup|$ROM_RESULT" \
-            --fallback "PREREQUISITE|ROM cleanup|$ROM_CLEANUP_RESULT" \
-            --fallback "UNIT|Suite execution|$UNIT_RESULT" \
-            --fallback "RFC|Compliance review|$RFC_RESULT" \
-            --fallback "ACVP|Suite execution|$ACVP_RESULT" \
-            --fallback "SAST|Semgrep|$SAST_RESULT" \
-            --fallback "SAST|CodeQL|$CODEQL_RESULT" \
-            --fallback "NETTEST|All network suites|$NETWORK_RESULT" \
-            --fallback "DAST|Suite execution|$DAST_RESULT" \
-            --fallback "HOST|Suite execution|$HOST_RESULT" \
-            --fallback "FUZZ|All targets|$FUZZ_RESULT"
-          cat "$RUNNER_TEMP/test-results.md" >> "$GITHUB_STEP_SUMMARY"
 

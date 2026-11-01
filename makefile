@@ -6,8 +6,28 @@ APP_TOOLS_INPUT_STAMP := $(APP_TOOLS_CACHE)/.lwip-ce-inputs
 X25519_DIR := src/tls/contrib/x25519
 X25519_PATCH := build-tools/patches/x25519-scratch-overlay.patch
 
-.PHONY: all build prepare-installer prepare-x25519
+.PHONY: all build prepare-installer prepare-x25519 run-tests
 all: dylib
+
+# Reproduce the locally runnable CI workflow. A calculator ROM must be
+# supplied by the developer; it is never downloaded or stored by this repo.
+#
+#   AUTOTESTER_ROM=/path/to/ce.rom make run-tests
+#
+# Set LOCAL_NETWORK_TESTS=1 and TRUSTSTORE_SIGNER_FILE=/secure/key.pem on
+# Linux to include the root/network-namespace calculator suites.
+LOCAL_TEST_ROOT ?= $(CURDIR)/build/local-tests
+FUZZ_SECONDS ?= 300
+run-tests:
+	@if [ -z "$(AUTOTESTER_ROM)" ]; then \
+		echo "AUTOTESTER_ROM=/path/to/ce.rom is required" >&2; \
+		exit 2; \
+	fi
+	$(MAKE) dylib
+	python3 .github/scripts/run_local_tests.py \
+		--rom "$(AUTOTESTER_ROM)" \
+		--work-dir "$(LOCAL_TEST_ROOT)" \
+		--fuzz-seconds "$(FUZZ_SECONDS)"
 
 # The upstream X25519 submodule declares its working buffer as loadable
 # .x25519.data.  lwIP overlays that buffer with the other TLS scratch regions,

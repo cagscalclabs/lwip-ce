@@ -210,7 +210,14 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
             return "FUZZ"
         return module.upper()
 
-    for path in sorted(input_dir.rglob("*.json")) if input_dir.exists() else []:
+    if input_dir.is_file():
+        result_paths = [input_dir]
+    elif input_dir.exists():
+        result_paths = sorted(input_dir.rglob("*.json"))
+    else:
+        result_paths = []
+
+    for path in result_paths:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -228,7 +235,7 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
 
     present = {(str(row["module"]), str(row["test"])) for row in rows}
     present_groups = {str(row.get("group", row["module"])) for row in rows} | present_categories
-    grouped_fallbacks = {"UNIT", "ACVP", "NETTEST", "DAST", "HOST", "FUZZ"}
+    grouped_fallbacks = {"UNIT", "ACVP", "NETTEST", "DAST", "HOST", "BENCH", "FUZZ"}
     for fallback in fallbacks:
         module, test, result = fallback.split("|", 2)
         group_present = module in grouped_fallbacks and module in present_groups
@@ -258,7 +265,7 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
             )
     normalized = list(merged.values())
     group_rank = {name: i for i, name in enumerate(
-        ["PREREQUISITE", "UNIT", "HOST", "NETTEST", "DAST", "ACVP", "RFC", "SAST", "FUZZ"])}
+        ["PREREQUISITE", "UNIT", "HOST", "NETTEST", "DAST", "ACVP", "RFC", "SAST", "BENCH", "FUZZ"])}
     ordered = sorted(normalized,
                      key=lambda row: (group_rank.get(str(row.get("group", "")).upper(), 99),
                                       str(row.get("group", "")).casefold(),
@@ -327,7 +334,7 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
         })
 
     category_rank = {name: i for i, name in enumerate(
-        ["PREREQUISITE", "UNIT", "HOST", "NETTEST", "DAST", "ACVP", "RFC", "SAST", "FUZZ"])}
+        ["PREREQUISITE", "UNIT", "HOST", "NETTEST", "DAST", "ACVP", "RFC", "SAST", "BENCH", "FUZZ"])}
     hierarchy = dict(sorted(
         hierarchy.items(),
         key=lambda item: (category_rank.get(module_categories[item[0]], 99),
@@ -370,7 +377,8 @@ def render(input_dir: Path, output: Path, fallbacks: list[str]) -> None:
     GROUP_STYLE = {
         "PREREQUISITE": "\u26aa", "UNIT": "\U0001f7e9", "HOST": "\U0001f7e6",
         "NETTEST": "\U0001f7e8", "DAST": "\U0001f7e7", "ACVP": "\U0001f7ea",
-        "RFC": "\U0001f7e5", "SAST": "\U0001f7e5", "FUZZ": "\u26ab",
+        "RFC": "\U0001f7e5", "SAST": "\U0001f7e5", "BENCH": "\U0001f7e6",
+        "FUZZ": "\u26ab",
     }
     lines += ["| Module | # Units | # Pass | # Fail | # Skip |",
               "|---|---:|---:|---:|---:|"]

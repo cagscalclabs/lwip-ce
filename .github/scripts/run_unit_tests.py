@@ -210,6 +210,20 @@ def main() -> None:
         unit_result = run_unit(test_dir)
         with lock:
             results[test_dir] = unit_result
+            # Emit live progress so CI logs show failures as they happen,
+            # not just in the final summary.
+            umod = module_of(test_dir)
+            uname = unit_result["unit"]
+            status = unit_result["status"]
+            failed_tests = [t for t in unit_result.get("tests", []) if t["status"] == "fail"]
+            if status == "fail":
+                for t in failed_tests:
+                    print(f"::error::{umod}/{uname}: FAIL — {t['description']}", flush=True)
+            elif status == "skip":
+                reason = "build error" if unit_result.get("build_error") else "timeout/quirk"
+                print(f"::warning::{umod}/{uname}: SKIP ({reason})", flush=True)
+            else:
+                print(f"[pass] {umod}/{uname}", flush=True)
 
     threads = [threading.Thread(target=worker, args=(f,)) for f in autotest_files]
     for t in threads:

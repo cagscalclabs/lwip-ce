@@ -1,8 +1,7 @@
 {
   "description": "X.509 certificate parsing tests",
   "transfer_files": [
-    "bin/X509T.8xp",
-    "../../common/lwIPCERT.8xv"
+    "bin/X509T.8xp"
   ],
   "target": {
     "name": "X509T",

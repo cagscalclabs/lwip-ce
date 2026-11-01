@@ -41,7 +41,7 @@ UNITS = (
     AcvpUnit("test_ecdsa_sigver", "ECDSA", "sigVer", "AVECDSA"),
     AcvpUnit("test_detecdsa_siggen", "DetECDSA", "sigGen", "AVDECD"),
     AcvpUnit("test_x25519_ssc", "XECDH", "SSC", "AVX255"),
-    AcvpUnit("test_p256_cdh", "KAS-ECC", "CDH-Component", "AVP256"),
+    AcvpUnit("test_kas_ecc_cdh", "KAS-ECC", "CDH-Component", "AVKECDH"),
 )
 
 
@@ -88,6 +88,7 @@ def select_oracle(document: dict, unit: AcvpUnit) -> dict:
         "counts": {unit.algorithm: document.get("counts", {}).get(unit.algorithm, 0)},
         "x25519": document.get("x25519", {}) if unit.algorithm == "XECDH" else {},
         "p256": document.get("p256", {}) if unit.algorithm == "KAS-ECC" else {},
+        "p384": document.get("p384", {}) if unit.algorithm == "KAS-ECC" else {},
     }
 
 

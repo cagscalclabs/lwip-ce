@@ -16,6 +16,7 @@
 
 #include "../includes/hash.h"
 #include "../includes/p256.h"
+#include "../includes/p384.h"
 #include "../includes/rsa.h"
 #include "../includes/aes.h"
 #include "../includes/random.h"
@@ -206,25 +207,44 @@ key_parse_ec_pub_point(const uint8_t *data, size_t len,
                        struct tls_key *out)
 {
     /* BIT STRING has a leading unused-bits byte; skip it. */
-    if (len != 66 || data[0] != 0 || data[1] != 4)
-        return TLS_KEY_IMPORT_PARSE_FAIL;
-    out->type = TLS_KEY_TYPE_EC_P256;
-    out->ec.pub  = data + 1;
-    out->ec.len  = len  - 1;
-    out->ec.priv = NULL;
-    return TLS_KEY_IMPORT_OK;
+    if (len == 66 && data[0] == 0 && data[1] == 4)
+    {
+        out->type = TLS_KEY_TYPE_EC_P256;
+        out->ec.pub  = data + 1;
+        out->ec.len  = len  - 1;
+        out->ec.priv = NULL;
+        return TLS_KEY_IMPORT_OK;
+    }
+    if (len == 98 && data[0] == 0 && data[1] == 4)
+    {
+        out->type = TLS_KEY_TYPE_EC_P384;
+        out->ec.pub  = data + 1;
+        out->ec.len  = len  - 1;
+        out->ec.priv = NULL;
+        return TLS_KEY_IMPORT_OK;
+    }
+    return TLS_KEY_IMPORT_PARSE_FAIL;
 }
 
-/* Only named P-256 is representable by the current EC algorithm enum. */
 static bool key_p256(const struct tls_asn1_tlv *param)
 {
     static const uint8_t oid[] = {TLS_OID_SECP256R1_BYTES};
     return oid_eq(param, oid, sizeof(oid));
 }
 
+static bool key_p384(const struct tls_asn1_tlv *param)
+{
+    static const uint8_t oid[] = {TLS_OID_SECP384R1_BYTES};
+    return oid_eq(param, oid, sizeof(oid));
+}
+
+/* key_parse_sec1: parse SEC 1 ECPrivateKey.
+ * inherited_curve: 0 = no inherited curve (curve must be in the params field),
+ *                  1 = P-256 inherited from PKCS#8 alg params,
+ *                  2 = P-384 inherited from PKCS#8 alg params. */
 static tls_key_import_result_t
 key_parse_sec1(const uint8_t *der, size_t len, struct tls_key *out,
-               bool inherited_p256)
+               int inherited_curve)
 {
     struct tls_asn1_cursor c, body;
     struct tls_asn1_tlv seq, version, secret, field, value;
@@ -235,7 +255,8 @@ key_parse_sec1(const uint8_t *der, size_t len, struct tls_key *out,
         c.cur != c.end || seq.tag != 0x30 || !tls_asn1_child_cursor(&seq, &body) ||
         !tls_asn1_next(&body, &version) || version.tag != ASN1_INTEGER ||
         version.len != 1 || version.value[0] != 1 ||
-        !tls_asn1_next(&body, &secret) || secret.tag != ASN1_OCTETSTRING || secret.len != 32)
+        !tls_asn1_next(&body, &secret) || secret.tag != ASN1_OCTETSTRING ||
+        (secret.len != 32 && secret.len != 48))
         return TLS_KEY_IMPORT_PARSE_FAIL;
     while (body.cur != body.end)
     {
@@ -246,7 +267,7 @@ key_parse_sec1(const uint8_t *der, size_t len, struct tls_key *out,
             return TLS_KEY_IMPORT_PARSE_FAIL;
         if (field.tag == 0xa0 && !have_params && !point)
         {
-            if (!key_p256(&value)) return TLS_KEY_IMPORT_BAD_ALG;
+            if (!key_p256(&value) && !key_p384(&value)) return TLS_KEY_IMPORT_BAD_ALG;
             have_params = true;
         }
         else if (field.tag == 0xa1 && !point && value.tag == ASN1_BITSTRING)
@@ -256,11 +277,11 @@ key_parse_sec1(const uint8_t *der, size_t len, struct tls_key *out,
         }
         else return TLS_KEY_IMPORT_PARSE_FAIL;
     }
-    if (!inherited_p256 && !have_params) return TLS_KEY_IMPORT_BAD_ALG;
+    if (!inherited_curve && !have_params) return TLS_KEY_IMPORT_BAD_ALG;
     if (!point) return TLS_KEY_IMPORT_PARSE_FAIL;
     tls_key_import_result_t rc = key_parse_ec_pub_point(point, point_len, out);
     if (rc == TLS_KEY_IMPORT_OK)
-        out->ec.priv = secret.value;  /* 32-byte scalar inside der_buf */
+        out->ec.priv = secret.value;  /* private scalar inside der_buf */
     return rc;
 }
 
@@ -302,7 +323,9 @@ key_parse_spki(const uint8_t *der, size_t der_len, struct tls_key *out)
     if (oid_eq(&alg_oid, OID_EC_PUBLICKEY, sizeof(OID_EC_PUBLICKEY)))
     {
         struct tls_asn1_tlv curve;
-        if (!tls_asn1_next(&alg_body, &curve) || !key_p256(&curve) || alg_body.cur != alg_body.end)
+        if (!tls_asn1_next(&alg_body, &curve) ||
+            (!key_p256(&curve) && !key_p384(&curve)) ||
+            alg_body.cur != alg_body.end)
             return TLS_KEY_IMPORT_BAD_ALG;
         return key_parse_ec_pub_point(spk_bits.value, spk_bits.len, out);
     }
@@ -346,9 +369,11 @@ key_parse_pkcs8_priv(const uint8_t *der, size_t der_len, struct tls_key *out)
     if (oid_eq(&alg_oid, OID_EC_PUBLICKEY, sizeof(OID_EC_PUBLICKEY)))
     {
         struct tls_asn1_tlv curve;
-        if (!tls_asn1_next(&alg_body, &curve) || !key_p256(&curve) || alg_body.cur != alg_body.end)
+        if (!tls_asn1_next(&alg_body, &curve) || alg_body.cur != alg_body.end)
             return TLS_KEY_IMPORT_BAD_ALG;
-        return key_parse_sec1(priv_octet.value, priv_octet.len, out, true);
+        int inherited = key_p256(&curve) ? 1 : key_p384(&curve) ? 2 : 0;
+        if (!inherited) return TLS_KEY_IMPORT_BAD_ALG;
+        return key_parse_sec1(priv_octet.value, priv_octet.len, out, inherited);
     }
 
     return TLS_KEY_IMPORT_BAD_ALG;
@@ -756,6 +781,25 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
             if (!ok)
                 return TLS_KEY_OP_INVALID;
             *sig_len_out = 64;
+            return TLS_KEY_OP_OK;
+        }
+
+        case TLS_ALG_ECDSA_SECP384R1_SHA384:
+        {
+            if (key->type != TLS_KEY_TYPE_EC_P384 || !key->ec.priv)
+                return TLS_KEY_OP_INVALID;
+            struct tls_hash_context hctx;
+            uint8_t digest[48];
+            if (!tls_hash_context_init(&hctx, TLS_HASH_SHA384))
+                return TLS_KEY_OP_INVALID;
+            tls_hash_update(&hctx, content, content_len);
+            tls_hash_digest(&hctx, digest);
+            tls_hash_clear(&hctx);
+            bool ok = tls_p384_sign(sig_out, digest, key->ec.priv);
+            tls_secure_memzero(digest, sizeof digest);
+            if (!ok)
+                return TLS_KEY_OP_INVALID;
+            *sig_len_out = 96;
             return TLS_KEY_OP_OK;
         }
 

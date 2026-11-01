@@ -32,6 +32,7 @@ typedef enum
     TLS_ALG_RSA_PSS_RSAE_SHA256    = 0x00,
     TLS_ALG_RSA_PKCS1_SHA256       = 0x01,
     TLS_ALG_ECDSA_SECP256R1_SHA256 = 0x02,
+    TLS_ALG_ECDSA_SECP384R1_SHA384 = 0x03,
 
     /* Encryption / decryption. */
     TLS_ALG_AES_128_GCM            = 0x10,
@@ -59,6 +60,8 @@ typedef enum
     0x2a,0x86,0x48,0xce,0x3d,0x02,0x01           /* 1.2.840.10045.2.1 */
 #define TLS_OID_SECP256R1_BYTES \
     0x2a,0x86,0x48,0xce,0x3d,0x03,0x01,0x07      /* 1.2.840.10045.3.1.7 */
+#define TLS_OID_SECP384R1_BYTES \
+    0x2b,0x81,0x04,0x00,0x22                      /* 1.3.132.0.34 */
 #define TLS_OID_X25519_BYTES \
     0x2b,0x65,0x6e                                /* 1.3.101.110 */
 
@@ -71,6 +74,8 @@ typedef enum
     0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x01,0x08 /* 1.2.840.113549.1.1.8 */
 #define TLS_OID_ECDSA_WITH_SHA256_BYTES \
     0x2a,0x86,0x48,0xce,0x3d,0x04,0x03,0x02      /* 1.2.840.10045.4.3.2 */
+#define TLS_OID_ECDSA_WITH_SHA384_BYTES \
+    0x2a,0x86,0x48,0xce,0x3d,0x04,0x03,0x03      /* 1.2.840.10045.4.3.3 */
 
 /* Hash, MAC, password KDF, and password-based encryption algorithms. */
 #define TLS_OID_SHA256_BYTES \

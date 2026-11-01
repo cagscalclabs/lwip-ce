@@ -39,13 +39,14 @@ typedef enum
 } tls_key_op_result_t;
 
 /** Key material type, independent of padding, hash, or cipher mode.
- * Zero initialization denotes an empty key. EC imports currently support P-256.
+ * Zero initialization denotes an empty key. EC imports support P-256 and P-384.
  */
 typedef enum
 {
     TLS_KEY_TYPE_UNKNOWN = 0,
     TLS_KEY_TYPE_RSA,
     TLS_KEY_TYPE_EC_P256,
+    TLS_KEY_TYPE_EC_P384,
     TLS_KEY_TYPE_AES,
 } tls_key_type_t;
 

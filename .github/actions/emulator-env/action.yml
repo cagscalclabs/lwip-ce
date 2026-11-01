@@ -71,6 +71,12 @@ runs:
           "https://github.com/${{ github.repository }}/releases/download/truststore-latest/lwIPCERT.8xv"
         curl -fsSL --retry 3 -o tests/common/clibs.8xg \
           https://github.com/CE-Programming/libraries/releases/latest/download/clibs.8xg
+        python3 tests/common/scripts/extract_ti_group_var.py \
+          tests/common/clibs.8xg tests/common/libload.8xv LibLoad
+        python3 tests/common/scripts/extract_ti_group_var.py \
+          tests/common/clibs.8xg tests/common/fileioc.8xv FILEIOC
+        python3 tests/common/scripts/extract_ti_group_var.py \
+          tests/common/clibs.8xg tests/common/usbdrvce.8xv USBDRVCE
         ls -lh tests/common
 
     - name: Download encrypted CEmu ROM artifact

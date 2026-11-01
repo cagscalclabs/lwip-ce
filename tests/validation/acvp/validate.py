@@ -28,12 +28,17 @@ def _semantic_generated(algorithm: str, prompt_group: dict, response_group: dict
         from cryptography.hazmat.primitives.asymmetric import ec, utils, x25519
         tc_id = int(prompt_test["tcId"])
         if algorithm == "DetECDSA":
+            curve_name = prompt_group.get("curve", "P-256")
+            if curve_name == "P-384":
+                curve, hash_algo = ec.SECP384R1(), hashes.SHA384()
+            else:
+                curve, hash_algo = ec.SECP256R1(), hashes.SHA256()
             qx, qy = int(response_group["qx"], 16), int(response_group["qy"], 16)
-            public = ec.EllipticCurvePublicNumbers(qx, qy, ec.SECP256R1()).public_key()
+            public = ec.EllipticCurvePublicNumbers(qx, qy, curve).public_key()
             r, s = int(actual["r"], 16), int(actual["s"], 16)
             signature = utils.encode_dss_signature(r, s)
             message = bytes.fromhex(prompt_test["message"])
-            public.verify(signature, message, ec.ECDSA(hashes.SHA256()))
+            public.verify(signature, message, ec.ECDSA(hash_algo))
             key = (int(prompt_group["tgId"]), prompt_test["message"])
             value = (actual["r"].upper(), actual["s"].upper())
             if key in seen and seen[key] != value:
@@ -47,11 +52,17 @@ def _semantic_generated(algorithm: str, prompt_group: dict, response_group: dict
             return (server.exchange(public) == bytes.fromhex(actual["z"]),
                     "shared secret matched independent host computation")
         if algorithm == "KAS-ECC":
-            scalar = int(oracle["p256"][str(tc_id)], 16)
-            server = ec.derive_private_key(scalar, ec.SECP256R1())
+            curve_name = prompt_group.get("curve", "P-256")
+            if curve_name == "P-384":
+                curve = ec.SECP384R1()
+                scalar = int(oracle["p384"][str(tc_id)], 16)
+            else:
+                curve = ec.SECP256R1()
+                scalar = int(oracle["p256"][str(tc_id)], 16)
+            server = ec.derive_private_key(scalar, curve)
             public = ec.EllipticCurvePublicNumbers(int(actual["publicIutX"], 16),
                                                    int(actual["publicIutY"], 16),
-                                                   ec.SECP256R1()).public_key()
+                                                   curve).public_key()
             return (server.exchange(ec.ECDH(), public) == bytes.fromhex(actual["z"]),
                     "shared secret matched independent host computation")
     except (KeyError, ValueError, InvalidSignature) as exc:
