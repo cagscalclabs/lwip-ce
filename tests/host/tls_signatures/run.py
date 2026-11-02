@@ -300,7 +300,9 @@ source += ('static bool test_p256_sign_ok;\n'
            '    memcpy(sig, test_p256_sign_rs, sizeof(test_p256_sign_rs));\n'
            '    return true;\n'
            '}\n'
-           '/* tls_p384_sign is provided by mock.h */\n')
+           '/* tls_p384_sign is provided by mock.h */\n'
+           '/* tls_crypto_guard_cleanup: eZ80-only; no-op for host build */\n'
+           'static void tls_crypto_guard_cleanup(void) {}\n')
 for name in ['ecdsa_der_integer', 'ecdsa_raw_to_der', 'tls_key_verify', 'tls_key_sign']:
     source += function(key_source, name)
 # Include internal AES helpers and blob helpers (not aes_encrypt_oneshot, which is mocked).

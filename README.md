@@ -16,7 +16,7 @@
 - The app-facing API is `lwip_socket_*` (create/connect/read/write/close) — a small, fixed verb set over TCP/UDP/TLS. Lower-level lwIP primitives (raw `tcp_*`/`udp_*` PCB callbacks) are still available for advanced use; see `lwip.h` and the doc site for both layers.
 - TLS, the custom allocator, the USB Ethernet driver, and the truststore/CI validation pipeline are all covered in depth in the whitepaper and the doc site — this README intentionally stays short.
 
-## TLS 1.3 at a glance
+## TLS 1.3 overview
 
 - **Cipher suites:** TLS_AES_128_GCM_SHA256 (`0x1301`), TLS_AES_256_GCM_SHA384 (`0x1302`), TLS_AES_128_CCM_SHA256 (`0x1304`). PSK/resumption offers only the SHA-256 suites (binder hash binding).
 - **Key exchange:** X25519 (preferred) and secp256r1/P-256 via HelloRetryRequest. The P-384 ECDHE primitives exist, but the secp384r1 group (`0x0018`) is not offered.
