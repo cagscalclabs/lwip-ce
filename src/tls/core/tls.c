@@ -11,6 +11,7 @@
 #include "../includes/random.h"
 #include "../includes/bytes.h"
 #include "../includes/truststore.h"
+#include "../includes/crypto_guard.h"
 #include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_TLS
@@ -350,6 +351,7 @@ void tls_cleanup(void)
     tls_ctx.initialized = false;
     tls_ctx.network_up = false;
     tls_truststore_cleanup();
+    tls_crypto_guard_cleanup();
 }
 
 /*

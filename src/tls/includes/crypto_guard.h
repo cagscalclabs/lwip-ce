@@ -14,4 +14,9 @@
 void tls_crypto_guard_enable(void);
 void tls_crypto_guard_disable(void);
 
+/* Unconditional teardown: re-enables interrupts, resets the nesting counter,
+ * and scrubs the stack down to the hardware floor.  Call once at TLS cleanup
+ * to recover from any interrupted or aborted crypto operation. */
+void tls_crypto_guard_cleanup(void);
+
 #endif

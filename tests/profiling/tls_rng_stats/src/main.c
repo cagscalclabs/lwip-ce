@@ -236,21 +236,5 @@ int main(void)
 
     output_close(ok);
     lwip_stop();
-
-    os_ClrHome();
-    if (ok)
-    {
-        printf("Profile complete\n");
-        printf("Saved %s\n", RNG_STATS_APPVAR);
-        printf("%lu raw bits\n",
-               (unsigned long)RNG_STATS_RUNS * RNG_STATS_SAMPLES_PER_RUN);
-    }
-    else
-    {
-        printf("Profile failed\n");
-        printf("partial output discarded\n");
-    }
-    printf("Press any key\n");
-    os_GetKey();
     return ok ? 0 : 1;
 }

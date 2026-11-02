@@ -3,17 +3,22 @@
 ; -----------------------------------
 ; C-callable crypto guards (ez80)
 ; -----------------------------------
-; tls_crypto_guard_enable() -> save interrupt state, disable interrupts
+; tls_crypto_guard_enable()   -> save interrupt state, disable interrupts
 ; tls_crypto_guard_disable()  -> clear stack, restore interrupt state
- 
+; tls_crypto_guard_cleanup()  -> unconditional ei + state reset + full scrub
+;                                Call once at TLS teardown to recover from any
+;                                interrupted or aborted crypto operation.
+
 .assume adl=1
 .section    .text,"ax",@progbits
- 
- 
+
+
 .globl _tls_crypto_guard_enable
 .globl _tls_crypto_guard_disable
+.globl _tls_crypto_guard_cleanup
 .type   _tls_crypto_guard_enable,@function
 .type   _tls_crypto_guard_disable,@function
+.type   _tls_crypto_guard_cleanup,@function
  
 .equ stackBot, 0x0D1987E
  
@@ -116,6 +121,56 @@ _tls_crypto_guard_disable:
     ld a, (_crypto_guard_ie)
     rrca                    ; CY = saved interrupt state
     ret nc
+    ei
+    ret
+
+; void tls_crypto_guard_cleanup(void)
+;
+; Unconditional recovery for TLS teardown: re-enable interrupts regardless
+; of nesting depth, reset the guard state, then scrub the entire stack below
+; our return address down to stackBot+4.
+;
+; This differs from tls_crypto_guard_disable in two ways:
+;  1. No nesting check — always resets _crypto_guard_state to zero.
+;  2. Always issues ei unconditionally (interrupts must be on after cleanup).
+; The scrub uses the same push/pop idiom as disable to load bc and de.
+; At teardown the caller is a top-level C function so SP is well above
+; stackBot+4 and the push instructions are always safe.
+_tls_crypto_guard_cleanup:
+    ; Reset nesting counter and interrupt state.
+    xor a, a
+    ld hl, _crypto_guard_state
+    ld (hl), a
+    inc hl
+    ld (hl), a
+    ld (_crypto_guard_ie), a
+
+    ; Scrub from SP-1 (byte just below our return address) down to stackBot+4.
+    ; Length = (SP-1) - (stackBot+4).  Skip if SP is too low to have room.
+    scf
+    sbc hl, hl
+    add hl, sp
+    ld de, stackBot + 4
+    xor a, a
+    sbc hl, de              ; hl = (SP-1) - (stackBot+4) = scrub length
+    jr c, .Lcleanup_ei      ; SP at or below floor: skip scrub
+    ; Need length >= 1 (lddr requires bc != 0; length==0 would wrap).
+    ; hl is the length; if zero, skip.
+    ld a, h
+    or a, l
+    jr z, .Lcleanup_ei
+    push hl
+    pop bc                  ; bc = length
+    ld de, stackBot + 4
+    add hl, de              ; hl = SP-1
+    push hl
+    pop de
+    dec de                  ; de = SP-2
+    xor a, a
+    ld (hl), a              ; seed top byte = 0
+    lddr
+
+.Lcleanup_ei:
     ei
     ret
 

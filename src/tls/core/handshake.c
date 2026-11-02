@@ -7618,6 +7618,11 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
     tls_secure_memzero(&ctx->keys, sizeof(ctx->keys));
     tls_secure_memzero(ctx, sizeof(*ctx));
     ctx->leaf_pubkey.type = TLS_KEY_TYPE_UNKNOWN;
+
+    /* Reset guard state: unconditionally re-enable interrupts, zero the
+     * nesting counter, and scrub the stack down to the hardware floor.
+     * Handles the case where the handshake was aborted mid-crypto-op. */
+    tls_crypto_guard_cleanup();
 }
 
 /*

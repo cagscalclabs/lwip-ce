@@ -11,12 +11,9 @@
 
 #include <lwip/cryptography/aes.h>
 #include <lwip/cryptography/bytes.h>
-#include <lwip/cryptography/hash.h>
-#include <lwip/cryptography/hkdf.h>
-#include <lwip/cryptography/hmac.h>
-#include <lwip/cryptography/passwords.h>
 #include <lwip/cryptography/x25519.h>
 #include <lwip/cryptography/p256.h>
+#include <lwip/cryptography/p384.h>
 #include <lwip.h>
 
 /* Dyload call overhead is far higher than the old statically-linked path
@@ -444,142 +441,6 @@ static uint32_t time_bytes_compare_case(uint8_t input_class)
     return (uint32_t)(clock() - start);
 }
 
-static uint32_t time_sha256_case(uint8_t input_class)
-{
-    uint8_t msg[128];
-    uint8_t digest[TLS_SHA256_DIGEST_LEN];
-    struct tls_hash_context ctx;
-    bool ok;
-    clock_t start;
-
-    fill_pattern(msg, sizeof(msg), input_class);
-
-    start = clock();
-    ok = tls_hash_context_init(&ctx, TLS_HASH_SHA256);
-    if (!ok)
-    {
-        timing_sink ^= 0xA1;
-        return (uint32_t)(clock() - start);
-    }
-    tls_hash_update(&ctx, msg, sizeof(msg));
-    tls_hash_digest(&ctx, digest);
-    timing_sink ^= digest[0];
-
-    return (uint32_t)(clock() - start);
-}
-
-static uint32_t time_hmac_case(uint8_t input_class)
-{
-    static const uint8_t key[32] = {
-        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
-        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-        0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F};
-    uint8_t msg[128];
-    struct tls_hmac_context ctx;
-    uint8_t digest[TLS_SHA256_DIGEST_LEN];
-    bool ok;
-    clock_t start;
-
-    fill_pattern(msg, sizeof(msg), input_class);
-
-    start = clock();
-    ok = tls_hmac_context_init(&ctx, TLS_HASH_SHA256, key, sizeof(key));
-    if (!ok)
-    {
-        timing_sink ^= 0xA2;
-        return (uint32_t)(clock() - start);
-    }
-    tls_hmac_update(&ctx, msg, sizeof(msg));
-    tls_hmac_digest(&ctx, digest);
-    timing_sink ^= digest[0];
-
-    return (uint32_t)(clock() - start);
-}
-
-static uint32_t time_hkdf_case(uint8_t input_class)
-{
-    uint8_t salt[32];
-    uint8_t ikm[32];
-    uint8_t info[32];
-    uint8_t prk[32];
-    uint8_t okm[64];
-    bool ok;
-    clock_t start;
-
-    fill_pattern(salt, sizeof(salt), input_class);
-    fill_pattern(ikm, sizeof(ikm), input_class);
-    fill_pattern(info, sizeof(info), input_class);
-
-    start = clock();
-    ok = tls_hkdf_extract(TLS_HASH_SHA256, salt, sizeof(salt), ikm, sizeof(ikm), prk);
-    ok = ok && tls_hkdf_expand(TLS_HASH_SHA256, prk, sizeof(prk), info, sizeof(info), okm, sizeof(okm));
-    if (!ok)
-    {
-        timing_sink ^= 0xA3;
-        return (uint32_t)(clock() - start);
-    }
-
-    timing_sink ^= okm[0];
-    return (uint32_t)(clock() - start);
-}
-
-static uint32_t time_pbkdf2_case(uint8_t input_class)
-{
-    static const uint8_t salt[16] = {
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-        0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
-    char password[16];
-    uint8_t key[32];
-    bool ok;
-    clock_t start;
-
-    switch (input_class)
-    {
-    case TIMING_CLASS_BEST:
-        memset(password, 'a', sizeof(password));
-        break;
-    case TIMING_CLASS_WORST:
-        memset(password, 'Z', sizeof(password));
-        break;
-    case TIMING_CLASS_RANDOM:
-    {
-        uint8_t i;
-        for (i = 0; i < sizeof(password); i++)
-        {
-            password[i] = (char)('a' + (prng_next() % 26u));
-        }
-    }
-    break;
-    case TIMING_CLASS_EDGE:
-        memset(password, 0, sizeof(password));
-        password[0] = 'A';
-        password[sizeof(password) - 1] = 'z';
-        break;
-    default:
-        memset(password, 'x', sizeof(password));
-        break;
-    }
-
-    start = clock();
-    ok = tls_pbkdf2(password,
-                    sizeof(password),
-                    salt,
-                    sizeof(salt),
-                    key,
-                    sizeof(key),
-                    32,
-                    TLS_HASH_SHA256);
-    if (!ok)
-    {
-        timing_sink ^= 0xA4;
-        return (uint32_t)(clock() - start);
-    }
-
-    timing_sink ^= key[0];
-    return (uint32_t)(clock() - start);
-}
-
 static uint32_t time_aes_gcm_encrypt_case(uint8_t input_class)
 {
     static const uint8_t key[16] = {
@@ -949,6 +810,166 @@ static uint8_t p256_sig_scratch[64];
 static uint8_t p256_random_scalar[32];
 static uint8_t p256_random_hash[32];
 
+/* ---------------------------------------------------------------------------
+ * P-384 timing entries.
+ *
+ * Same structure as P-256: KG (keygen), DH (ECDH), SG (sign).
+ * Scalars and hashes are 48 bytes; public keys 97 bytes; signatures 96 bytes.
+ *
+ * Scalar classes:
+ *   best  = low Hamming-weight (only bit 0 set)
+ *   worst = n-1 (P-384 order minus 1, high Hamming weight)
+ *   random = prng scalar (sampled fresh each call)
+ *   edge  = leading-zero scalar (0x00 0x00 0x01 0x00 ... 0x00)
+ *
+ * Hash classes for sign (same rationale as P-256):
+ *   best  = SHA-384("")
+ *   worst = SHA-384(0xFF x 48)
+ *   random = fresh prng bytes each call
+ *   edge  = SHA-384("test")
+ *
+ * VF (verify) is variable-time; not included here.
+ * --------------------------------------------------------------------------*/
+
+/* P-384 order n minus 1 (big-endian, 48 bytes). */
+static const uint8_t p384_scalar_worst[48] = {
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xc7,0x63,0x4d,0x81,0xf4,0x37,0x2d,0xdf,
+    0x58,0x1a,0x0d,0xb2,0x48,0xb0,0xa7,0x7a,0xec,0xec,0x19,0x6a,0xcc,0xc5,0x29,0x72
+};
+/* Low Hamming-weight: bit 0 set only. */
+static const uint8_t p384_scalar_best[48] = {
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01
+};
+/* Edge: leading zeros then 0x01 at byte 2. */
+static const uint8_t p384_scalar_edge[48] = {
+    0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/* Fixed peer public key: P-384 point derived from RFC 5903 §8.2 initiator X
+ * coordinate (E558DBEF...EEF9DAD), with Y solved on-curve.  Only the X
+ * coordinate is from the RFC; Y was computed to satisfy the curve equation
+ * (the original constant had several transposed bytes in X and was one byte
+ * short in Y, causing p384_point_import to reject it and DH to fast-exit). */
+static const uint8_t p384_peer_pub[97] = {
+    0x04,0xe5,0x58,0xdb,0xef,0x53,0xee,0xcd,0xe3,0xd3,0xfc,0xfc,0xc1,0xae,0xe0,0xa3,
+    0xc8,0xf1,0x45,0x05,0x3d,0x6c,0x26,0xb4,0x0f,0x88,0xef,0x02,0x2d,0x91,0xfe,0xaa,
+    0x4d,0x86,0x48,0x4b,0xae,0xff,0x14,0x33,0x82,0xef,0x9a,0x9d,0xa4,0x1e,0xef,0x9d,
+    0xad,0x1f,0x5f,0xbf,0xca,0x89,0x4e,0xd6,0x58,0x92,0xb5,0xc4,0xc9,0x67,0xf4,0x8d,
+    0x1b,0x15,0x12,0xd6,0x38,0xf8,0x85,0xa5,0x1c,0xeb,0xda,0xd2,0x59,0x0c,0x4e,0xce,
+    0x18,0x6b,0x76,0xc7,0xe0,0x55,0x95,0x17,0xca,0x16,0xc0,0x32,0x50,0x56,0x32,0xc2,
+    0xa0
+};
+
+/* P-384 signing key (arbitrary fixed key for CT-leakage testing). */
+static const uint8_t p384_sign_priv[48] = {
+    0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,
+    0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,0x20,
+    0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,0x30
+};
+/* SHA-384("") */
+static const uint8_t p384_hash_best[48] = {
+    0x38,0xb0,0x60,0xa7,0x51,0xac,0x96,0x38,0x4c,0xd9,0x32,0x7e,0xb1,0xb1,0xe3,0x6a,
+    0x21,0xfd,0xb7,0x11,0x14,0xbe,0x07,0x43,0x4c,0x0c,0xc7,0xbf,0x63,0xf6,0xe1,0xda,
+    0x27,0x4e,0xde,0xbf,0xe7,0x6f,0x65,0xfb,0xd5,0x1a,0xd2,0xf1,0x48,0x98,0xb9,0x5b
+};
+/* SHA-384(0xFF x 48) */
+static const uint8_t p384_hash_worst[48] = {
+    0x54,0x96,0xb9,0x98,0x54,0xdc,0x5c,0xcf,0xa2,0x5f,0x68,0x1e,0xf8,0xbe,0xb3,0x1d,
+    0x4f,0xc5,0x4c,0x77,0x48,0x83,0xf1,0xf5,0x0a,0x21,0x78,0xb8,0x64,0xc0,0x55,0x6d,
+    0x85,0xe8,0xea,0x6f,0x28,0xb4,0x25,0x39,0x03,0x4d,0x61,0xa1,0x1b,0x60,0x4c,0x26
+};
+/* SHA-384("test") */
+static const uint8_t p384_hash_edge[48] = {
+    0x76,0x84,0x12,0x32,0x0f,0x7b,0x0a,0xa5,0x81,0x2f,0xce,0x42,0x8d,0xc4,0x70,0x6b,
+    0x3c,0xae,0x50,0xe0,0x2a,0x64,0xca,0xa1,0x6a,0x78,0x22,0x49,0xbf,0xe8,0xef,0xc4,
+    0xb7,0xef,0x1c,0xcb,0x12,0x62,0x55,0xd1,0x96,0x04,0x7d,0xfe,0xdf,0x17,0xa0,0xa9
+};
+
+static uint8_t p384_pub_scratch[97];
+static uint8_t p384_ss_scratch[48];
+static uint8_t p384_sig_scratch[96];
+static uint8_t p384_random_scalar[48];
+static uint8_t p384_random_hash[48];
+
+static uint32_t time_p384_keygen(uint8_t input_class)
+{
+    const uint8_t *priv;
+    clock_t start;
+    bool ok;
+
+    switch (input_class)
+    {
+    case TIMING_CLASS_BEST:   priv = p384_scalar_best;   break;
+    case TIMING_CLASS_WORST:  priv = p384_scalar_worst;  break;
+    case TIMING_CLASS_RANDOM:
+        fill_pattern(p384_random_scalar, sizeof(p384_random_scalar), TIMING_CLASS_RANDOM);
+        if (p384_random_scalar[47] == 0) p384_random_scalar[47] = 0x01;
+        priv = p384_random_scalar;
+        break;
+    case TIMING_CLASS_EDGE:   priv = p384_scalar_edge;   break;
+    default:                  priv = p384_scalar_best;   break;
+    }
+
+    start = clock();
+    ok = tls_p384_publickey(p384_pub_scratch, priv);
+    timing_sink ^= (uint8_t)ok ^ p384_pub_scratch[1];
+    return (uint32_t)(clock() - start);
+}
+
+static uint32_t time_p384_secret(uint8_t input_class)
+{
+    const uint8_t *priv;
+    clock_t start;
+    bool ok;
+
+    switch (input_class)
+    {
+    case TIMING_CLASS_BEST:   priv = p384_scalar_best;   break;
+    case TIMING_CLASS_WORST:  priv = p384_scalar_worst;  break;
+    case TIMING_CLASS_RANDOM:
+        fill_pattern(p384_random_scalar, sizeof(p384_random_scalar), TIMING_CLASS_RANDOM);
+        if (p384_random_scalar[47] == 0) p384_random_scalar[47] = 0x01;
+        priv = p384_random_scalar;
+        break;
+    case TIMING_CLASS_EDGE:   priv = p384_scalar_edge;   break;
+    default:                  priv = p384_scalar_best;   break;
+    }
+
+    start = clock();
+    ok = tls_p384_secret(p384_ss_scratch, priv, p384_peer_pub);
+    timing_sink ^= (uint8_t)ok ^ p384_ss_scratch[0];
+    return (uint32_t)(clock() - start);
+}
+
+static uint32_t time_p384_sign(uint8_t input_class)
+{
+    const uint8_t *hash;
+    clock_t start;
+    bool ok;
+
+    switch (input_class)
+    {
+    case TIMING_CLASS_BEST:   hash = p384_hash_best;   break;
+    case TIMING_CLASS_WORST:  hash = p384_hash_worst;  break;
+    case TIMING_CLASS_RANDOM:
+        fill_pattern(p384_random_hash, sizeof(p384_random_hash), TIMING_CLASS_RANDOM);
+        hash = p384_random_hash;
+        break;
+    case TIMING_CLASS_EDGE:   hash = p384_hash_edge;   break;
+    default:                  hash = p384_hash_best;   break;
+    }
+
+    start = clock();
+    ok = tls_p384_sign(p384_sig_scratch, hash, p384_sign_priv);
+    timing_sink ^= (uint8_t)ok ^ p384_sig_scratch[0];
+    return (uint32_t)(clock() - start);
+}
+
 static uint32_t time_p256_keygen(uint8_t input_class)
 {
     const uint8_t *priv;
@@ -1270,10 +1291,6 @@ static void show_result(const char *name, const struct primitive_result *result)
 int main(void)
 {
     struct primitive_result r_bytes;
-    struct primitive_result r_sha;
-    struct primitive_result r_hmac;
-    struct primitive_result r_hkdf;
-    struct primitive_result r_pbkdf2;
     struct primitive_result r_aes_gcm_enc;
     struct primitive_result r_aes_gcm_decver;
     struct primitive_result r_aes_cbc_enc;
@@ -1284,6 +1301,9 @@ int main(void)
     struct primitive_result r_p256_kg;
     struct primitive_result r_p256_dh;
     struct primitive_result r_p256_sg;
+    struct primitive_result r_p384_kg;
+    struct primitive_result r_p384_dh;
+    struct primitive_result r_p384_sg;
 
     if (!lwip_start())
     {
@@ -1313,18 +1333,6 @@ int main(void)
 
     run_primitive("BYTES", time_bytes_compare_case, TIMING_REPS_FAST, &r_bytes);
     show_result("BYTES", &r_bytes);
-
-    run_primitive("SHA256", time_sha256_case, TIMING_REPS_FAST, &r_sha);
-    show_result("SHA256", &r_sha);
-
-    run_primitive("HMAC", time_hmac_case, TIMING_REPS_MEDIUM, &r_hmac);
-    show_result("HMAC", &r_hmac);
-
-    run_primitive("HKDF", time_hkdf_case, TIMING_REPS_MEDIUM, &r_hkdf);
-    show_result("HKDF", &r_hkdf);
-
-    run_primitive("PBKDF2", time_pbkdf2_case, TIMING_REPS_SLOW, &r_pbkdf2);
-    show_result("PBKDF2", &r_pbkdf2);
 
     run_primitive("AESGCM-E", time_aes_gcm_encrypt_case, TIMING_REPS_MEDIUM, &r_aes_gcm_enc);
     show_result("AESGCM-E", &r_aes_gcm_enc);
@@ -1365,15 +1373,35 @@ int main(void)
     run_primitive("P256-SG", time_p256_sign, TIMING_REPS_LOWREP, &r_p256_sg);
     show_result("P256-SG", &r_p256_sg);
 
+    /* --- P384 --- */
+    timing_logf("tls_timing,section,P384\n");
+    os_ClrHome();
+    os_FontSelect(os_LargeFont);
+    printf("--- P384 ---\n");
+#ifndef TLS_TIMING_AUTORUN
+    printf("Press any key");
+    os_GetKey();
+#endif
+    run_primitive("P384-KG", time_p384_keygen, TIMING_REPS_LOWREP, &r_p384_kg);
+    show_result("P384-KG", &r_p384_kg);
+
+    run_primitive("P384-DH", time_p384_secret, TIMING_REPS_LOWREP, &r_p384_dh);
+    show_result("P384-DH", &r_p384_dh);
+
+    run_primitive("P384-SG", time_p384_sign, TIMING_REPS_LOWREP, &r_p384_sg);
+    show_result("P384-SG", &r_p384_sg);
+
     timing_logf("tls_timing,end\n");
     timing_log_end();
     os_EnableAPD();
 
+#ifndef TLS_TIMING_AUTORUN
     os_ClrHome();
     os_FontSelect(os_LargeFont);
     printf("TLS Timing\n");
     printf("Done.");
     os_GetKey();
+#endif
 
     return 0;
 }

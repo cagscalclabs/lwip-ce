@@ -55,12 +55,37 @@ def main() -> int:
 
     print(f"Loaded {len(profiles)} profile(s) from {stats_dir}\n")
 
-    # Collect per-primitive stats across all profiles
-    # Key: primitive name
-    # Value: dict with max_c6_over, max_c4_over, any_c4_fail, per_profile_c6_over
-    primitive_names: list[str] = [p["name"] for p in profiles[0]["data"]["primitives"]]
+    # Union of primitive names across all profiles, preserving first-seen order.
+    # Profiles recorded before or after a primitive was added will simply have
+    # fewer data points for that primitive — that is expected during transitions.
+    seen: set[str] = set()
+    primitive_names: list[str] = []
+    for profile in profiles:
+        for prim_row in profile["data"]["primitives"]:
+            name = prim_row["name"]
+            if name not in seen:
+                seen.add(name)
+                primitive_names.append(name)
 
-    # {prim: {class: [over% per profile]}}
+    # Warn about primitives that are not present in every profile so the
+    # operator knows the gate has less coverage for those entries.
+    profile_sets = [
+        {prim_row["name"] for prim_row in p["data"]["primitives"]}
+        for p in profiles
+    ]
+    all_names = set(primitive_names)
+    partial: list[str] = [
+        name for name in primitive_names
+        if not all(name in ps for ps in profile_sets)
+    ]
+    if partial:
+        print(
+            f"NOTE: {len(partial)} primitive(s) appear in only some profiles "
+            f"(transition in progress): {', '.join(partial)}"
+        )
+        print()
+
+    # {prim: {class: [over% per profile that contains this primitive]}}
     c6_by_class: dict[str, dict[str, list[float]]] = {
         name: {cls: [] for cls in CLASSES} for name in primitive_names
     }
@@ -72,6 +97,8 @@ def main() -> int:
     for profile in profiles:
         for prim_row in profile["data"]["primitives"]:
             name = prim_row["name"]
+            if name not in all_names:
+                continue
             for cls in CLASSES:
                 c6_by_class[name][cls].append(
                     prim_row["classes"][cls]["over_percent"]
@@ -120,9 +147,12 @@ def main() -> int:
     print("Chart: average c=6 over% per class (each bar = 0–100%)")
     print()
     for name in primitive_names:
-        # worst class average
+        # worst class average (guard against a primitive with zero samples)
         class_avgs = {
-            cls: sum(c6_by_class[name][cls]) / len(c6_by_class[name][cls])
+            cls: (
+                sum(c6_by_class[name][cls]) / len(c6_by_class[name][cls])
+                if c6_by_class[name][cls] else 0.0
+            )
             for cls in CLASSES
         }
         max_avg = max(class_avgs.values())
@@ -131,7 +161,9 @@ def main() -> int:
             flag = " ❌"
         elif name in warning_over50 or name in warning_c4:
             flag = " ⚠️"
-        print(f"  {name}{flag}")
+        n_profiles = len(c6_by_class[name][CLASSES[0]])
+        coverage = f" ({n_profiles}/{len(profiles)} profiles)" if name in partial else ""
+        print(f"  {name}{flag}{coverage}")
         for cls in CLASSES:
             avg = class_avgs[cls]
             print(f"    {cls:<8} [{bar(avg)}] {avg:.1f}%")

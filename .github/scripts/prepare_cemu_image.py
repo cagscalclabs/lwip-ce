@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSIONS_FILE = ROOT / ".github" / "ci-versions.env"
-AUTOTESTER_PATCH = ROOT / "build-tools" / "meta" / "cemu-autotester.patch"
+AUTOTESTER_PATCH = ROOT / "build-tools" / "patches" / "cemu-autotester.patch"
 CEMU_REPOSITORY = "https://github.com/alessiodam/CEmu-lwIP-CE.git"
 CLIBS_URL = (
     "https://github.com/CE-Programming/libraries/releases/latest/download/"
