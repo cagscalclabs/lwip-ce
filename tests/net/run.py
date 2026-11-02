@@ -1237,6 +1237,7 @@ def main() -> int:
             endpoint_probes.extend({"suite": suite, **probe} for probe in probes)
             results.append((suite, ok, text))
             print(text, flush=True)
+            time.sleep(3)
 
             if suite == "tls" and args.external_info:
                 # Boot a fresh calculator with the unmodified production
