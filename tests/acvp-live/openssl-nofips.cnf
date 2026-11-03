@@ -1,0 +1,12 @@
+# Minimal OpenSSL config for CI — loads only the default provider.
+# FIPS provider is intentionally absent; the runner has no FIPS module.
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+default = default_sect
+
+[default_sect]
+activate = 1
