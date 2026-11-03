@@ -1,0 +1,77 @@
+name: ACVP Live Validation
+
+# Manual trigger only — not run in normal CI.
+# Requires a physical TI-84 Plus CE connected via USB-ECM at 192.168.84.100.
+on:
+  workflow_dispatch:
+    inputs:
+      calc_host:
+        description: "Calculator USB-ECM IP address"
+        required: false
+        default: "192.168.84.100"
+      calc_port:
+        description: "ACVP service port on calculator"
+        required: false
+        default: "7200"
+      timeout:
+        description: "Per-vector-set timeout (seconds)"
+        required: false
+        default: "3600"
+
+jobs:
+  acvp-live:
+    name: NIST ACVP offline validation
+    runs-on: self-hosted
+    timeout-minutes: 480
+
+    env:
+      ACV_SERVER: demo.acvts.nist.gov
+      ACV_PORT: 443
+      ACV_CERT_FILE: ${{ github.workspace }}/tests/acvp-live/client.cer
+      ACV_KEY_FILE: ${{ github.workspace }}/tests/acvp-live/client.key
+      ACV_TOTP_SEED: ${{ secrets.ACVP_TOTP }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake libtool libcurl4-openssl-dev pkg-config
+
+      - name: Build acvp_app
+        run: python3 tests/acvp-live/acvp_offline.py build
+
+      - name: Fetch vectors from NIST
+        run: python3 tests/acvp-live/acvp_offline.py fetch
+
+      - name: Run vectors through calculator
+        env:
+          CALC_HOST: ${{ github.event.inputs.calc_host }}
+          CALC_PORT: ${{ github.event.inputs.calc_port }}
+          CALC_TIMEOUT: ${{ github.event.inputs.timeout }}
+        run: |
+          python3 tests/acvp-live/run.py \
+            --host "$CALC_HOST" \
+            --port "$CALC_PORT" \
+            --timeout "$CALC_TIMEOUT"
+
+      - name: Submit responses to NIST
+        run: python3 tests/acvp-live/acvp_offline.py submit
+
+      - name: Fetch and display grading results
+        run: python3 tests/acvp-live/acvp_offline.py get_results
+
+      - name: Upload evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acvp-live-evidence
+          path: |
+            tests/acvp-live/vectors/
+            tests/acvp-live/responses/
+            tests/acvp-live/session.json
+            tests/acvp-live/results.json
+          retention-days: 90

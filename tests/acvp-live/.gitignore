@@ -1,0 +1,14 @@
+# Downloaded NIST vector sets — not committed (fetched at runtime)
+vectors/
+# Calc responses before upload — not committed
+responses/
+combined_responses.json
+vectors_combined.json
+# Session file from acvp_app (contains auth state)
+session.json
+# libacvp build tree
+libacvp/
+# Grading results from NIST (fetched at runtime)
+results.json
+# Private key — never committed
+*.key
