@@ -370,7 +370,6 @@ def cmd_submit(args: argparse.Namespace) -> int:
     result = subprocess.run(
         [
             str(ACVP_APP),
-            "--manual_registration", str(CAPABILITIES_FILE),
             "--disable_fips",
             "--vector_upload", str(combined_rsp),
         ],

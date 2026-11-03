@@ -126,5 +126,27 @@ class TestResultCommand(unittest.TestCase):
             self.assertTrue(json.loads(offline.RESULTS_FILE.read_text())["passed"])
 
 
+class TestSubmitCommand(unittest.TestCase):
+    def test_upload_uses_saved_session_envelope_without_registration(self):
+        with temporary_layout():
+            offline.LIBACVP_DIR.mkdir()
+            offline.SESSION_FILE.write_text("[]")
+            combined = offline.HERE / "combined_responses.json"
+            offline._secure_write(combined, [CONTEXT, RESPONSE])
+            completed = subprocess.CompletedProcess([], 0)
+            with (mock.patch.object(offline, "build_libacvp"),
+                  mock.patch.object(offline, "validate_credentials"),
+                  mock.patch.object(offline, "acvp_env", return_value={}),
+                  mock.patch.object(offline, "collect_responses", return_value=combined),
+                  mock.patch.object(offline.subprocess, "run", return_value=completed) as run):
+                status = offline.cmd_submit(argparse.Namespace(session=None))
+
+            self.assertEqual(status, 0)
+            command = run.call_args.args[0]
+            self.assertEqual(command[1:3], ["--disable_fips", "--vector_upload"])
+            self.assertEqual(command[3], str(combined))
+            self.assertNotIn("--manual_registration", command)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
