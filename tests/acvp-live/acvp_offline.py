@@ -77,7 +77,11 @@ def acvp_env() -> dict[str, str]:
 
 
 def write_vector_files(combined_req: Path) -> list[Path]:
-    """Split a combined acvp_app vector request file into per-vsId files."""
+    """Split a combined acvp_app vector request file into per-vsId files.
+
+    Also writes vectors/combined.json in ACVP prompt-list format
+    ([{acvVersion}, {vsId...}, ...]) for use with the CEmu runner.
+    """
     VECTORS_DIR.mkdir(exist_ok=True)
     data = json.loads(combined_req.read_text())
     # acvp_app saves as an array of vector set objects
@@ -94,14 +98,36 @@ def write_vector_files(combined_req: Path) -> list[Path]:
         out.write_text(json.dumps(vs, indent=2) + "\n")
         paths.append(out)
         print(f"  vector set {vsid} → {out.name}", flush=True)
+    # Write combined prompt in ACVP list format for the CEmu runner
+    combined = [{"acvVersion": "1.0"}, *sets]
+    (VECTORS_DIR / "combined.json").write_text(json.dumps(combined, indent=2) + "\n")
     return paths
 
 
 def collect_responses() -> Path:
-    """Merge per-vsId response files into a combined response file for upload."""
+    """Collect responses for upload.
+
+    If responses/combined.json exists (written by the CEmu runner), use it
+    directly after splitting it into per-vsId files.  Otherwise merge all
+    per-vsId files in responses/.
+    """
     RESPONSES_DIR.mkdir(exist_ok=True)
+    cemu_combined = RESPONSES_DIR / "combined.json"
+    if cemu_combined.exists():
+        # CEmu runner writes a list; split into per-vsId files as well
+        data = json.loads(cemu_combined.read_text())
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            vsid = item.get("vsId", "unknown")
+            (RESPONSES_DIR / f"{vsid}.json").write_text(
+                json.dumps(item, indent=2) + "\n")
+        combined = HERE / "combined_responses.json"
+        combined.write_text(json.dumps(items, indent=2) + "\n")
+        return combined
     responses = []
     for f in sorted(RESPONSES_DIR.glob("*.json")):
+        if f.name == "combined.json":
+            continue
         responses.append(json.loads(f.read_text()))
     combined = HERE / "combined_responses.json"
     combined.write_text(json.dumps(responses, indent=2) + "\n")

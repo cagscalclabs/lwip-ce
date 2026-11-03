@@ -332,7 +332,7 @@ jobs:
             --artifacts-dir tests/validation/acvp/units \
             --timeout-ms 60000000
           status=$?
-          sudo chown -R "$(id -un)" tests/acvp tests/validation/acvp/units \
+          sudo chown -R "$(id -un)" tests/acvp-fast tests/validation/acvp/units \
             tests/validation/acvp/response.json tests/validation/acvp/results-units.json \
             2>/dev/null || true
           exit "$status"

@@ -1,27 +1,35 @@
 name: ACVP Live Validation
 
 # Manual trigger only — not run in normal CI.
-# Requires a physical TI-84 Plus CE connected via USB-ECM at 192.168.84.100.
 on:
   workflow_dispatch:
-    inputs:
-      calc_host:
-        description: "Calculator USB-ECM IP address"
-        required: false
-        default: "192.168.84.100"
-      calc_port:
-        description: "ACVP service port on calculator"
-        required: false
-        default: "7200"
-      timeout:
-        description: "Per-vector-set timeout (seconds)"
-        required: false
-        default: "3600"
 
 jobs:
+  prepare_rom:
+    name: Prepare encrypted CEmu ROM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download encrypted ROM
+        env:
+          ROM_NAME: ${{ vars.AUTOTESTER_ROM }}
+        run: |
+          curl --http1.1 -fsSL \
+            --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 180 \
+            --connect-timeout 20 -o "$RUNNER_TEMP/CE.rom.enc" \
+            "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
+
+      - name: Share encrypted ROM with test job
+        uses: actions/upload-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ runner.temp }}/CE.rom.enc
+          if-no-files-found: error
+          retention-days: 1
+
   acvp-live:
-    name: NIST ACVP offline validation
-    runs-on: self-hosted
+    name: NIST ACVP live validation
+    needs: [prepare_rom]
+    runs-on: ubuntu-latest
     timeout-minutes: 480
 
     env:
@@ -42,11 +50,12 @@ jobs:
           printf '%s' "$ACVP_CLIENT_KEY" > tests/acvp-live/client.key
           chmod 600 tests/acvp-live/client.key
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake libtool libcurl4-openssl-dev pkg-config
+            autoconf automake libtool libcurl4-openssl-dev pkg-config \
+            python3-cryptography
 
       - name: Build acvp_app
         run: python3 tests/acvp-live/acvp_offline.py build
@@ -54,22 +63,37 @@ jobs:
       - name: Fetch vectors from NIST
         run: python3 tests/acvp-live/acvp_offline.py fetch
 
-      - name: Run vectors through calculator
-        env:
-          CALC_HOST: ${{ github.event.inputs.calc_host }}
-          CALC_PORT: ${{ github.event.inputs.calc_port }}
-          CALC_TIMEOUT: ${{ github.event.inputs.timeout }}
+      - id: env
+        uses: ./.github/actions/emulator-env
+        with:
+          rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+
+      - name: Run vectors through CEmu
         run: |
-          python3 tests/acvp-live/run.py \
-            --host "$CALC_HOST" \
-            --port "$CALC_PORT" \
-            --timeout "$CALC_TIMEOUT"
+          set +e
+          sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
+            python3 tests/acvp-live/run.py \
+            --cemu \
+            --autotester "${{ steps.env.outputs.image-autotester }}" \
+            --usb "${{ steps.env.outputs.usb-step }}" \
+            --binary tests/validation/acvp/bin/ACVPRUN.8xp \
+            --timeout 3600000
+          status=$?
+          sudo chown -R "$(id -un)" tests/acvp-live/responses/ \
+            2>/dev/null || true
+          exit "$status"
 
       - name: Submit responses to NIST
         run: python3 tests/acvp-live/acvp_offline.py submit
 
       - name: Fetch and display grading results
         run: python3 tests/acvp-live/acvp_offline.py get_results
+
+      - name: Remove CEmu ROM
+        if: always()
+        run: |
+          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
+          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
 
       - name: Remove client private key
         if: always()
@@ -85,4 +109,6 @@ jobs:
             tests/acvp-live/responses/
             tests/acvp-live/session.json
             tests/acvp-live/results.json
+            tests/acvp-live/results-units.json
+            tests/acvp-live/units/
           retention-days: 90
