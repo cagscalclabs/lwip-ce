@@ -4,6 +4,10 @@ name: ACVP Live Validation
 on:
   workflow_dispatch:
 
+concurrency:
+  group: acvp-live-validation
+  cancel-in-progress: false
+
 jobs:
   prepare_rom:
     name: Prepare encrypted CEmu ROM
@@ -113,6 +117,8 @@ jobs:
       ACV_CERT_FILE: ${{ github.workspace }}/tests/acvp-live/client.cer
       ACV_KEY_FILE: ${{ github.workspace }}/tests/acvp-live/client.key
       ACV_TOTP_SEED: ${{ secrets.ACVP_TOTP }}
+      LIBACVP_REF: v2.3.1
+      OPENSSL_CONF: ${{ github.workspace }}/tests/acvp-live/openssl-nofips.cnf
 
     steps:
       - name: Checkout
@@ -144,6 +150,13 @@ jobs:
           sudo ln -sf $SSL_LIB/libcrypto.so /usr/local/ssl/lib/libcrypto.so
           sudo ln -sf /usr/include/openssl  /usr/local/ssl/include
 
+      - name: Run offline ACVP host tests
+        run: |
+          python3 -I tests/acvp-live/test_run_local.py
+          python3 -I tests/acvp-live/test_acvp_offline.py
+          python3 tests/validation/acvp/generate_vectors.py
+          python3 tests/validation/acvp/selftest.py
+
       - name: Build acvp_app
         run: python3 tests/acvp-live/acvp_offline.py build
 
@@ -151,6 +164,11 @@ jobs:
         uses: ./.github/actions/emulator-env
         with:
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+
+      - name: Build ACVPRUN against the installed latest release
+        run: |
+          make -C tests/acvp-live clean
+          make -C tests/acvp-live
 
       - name: Fetch vectors from NIST
         run: python3 tests/acvp-live/acvp_offline.py fetch
@@ -163,10 +181,11 @@ jobs:
             --cemu \
             --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
-            --binary "${{ github.workspace }}/tests/validation/acvp/bin/ACVPRUN.8xp" \
-            --timeout 3600
+            --binary "${{ github.workspace }}/tests/acvp-live/bin/ACVPRUN.8xp" \
+            --timeout 25200
           status=$?
           sudo chown -R "$(id -un)" tests/acvp-live/responses/ \
+            tests/acvp-live/cemu_work/ \
             2>/dev/null || true
           exit "$status"
 
@@ -184,7 +203,13 @@ jobs:
 
       - name: Remove client private key
         if: always()
-        run: shred -u tests/acvp-live/client.key 2>/dev/null || rm -f tests/acvp-live/client.key
+        run: |
+          shred -u tests/acvp-live/client.key 2>/dev/null || rm -f tests/acvp-live/client.key
+          shred -u tests/acvp-live/session.json \
+            tests/acvp-live/upload_context.json \
+            tests/acvp-live/combined_responses.json \
+            tests/acvp-live/vectors_combined.json \
+            tests/acvp-live/acvpLiveSession*.json 2>/dev/null || true
 
       - name: Upload evidence bundle
         if: always()
@@ -194,8 +219,8 @@ jobs:
           path: |
             tests/acvp-live/vectors/
             tests/acvp-live/responses/
-            tests/acvp-live/session.json
             tests/acvp-live/results.json
-            tests/acvp-live/results-units.json
-            tests/acvp-live/units/
+            tests/acvp-live/results.log
+            tests/acvp-live/cemu_work/autotest.json
+            tests/acvp-live/cemu_work/NETLOG.8xv
           retention-days: 90

@@ -144,7 +144,10 @@ def _patch_port(port: int):
 def _patch_control():
     """Replace Control() with a no-op so UDP port 7000 is not contested."""
     orig = run_mod.Control
-    run_mod.Control = lambda: None  # type: ignore[assignment]
+    class NoOpControl:
+        def close(self):
+            pass
+    run_mod.Control = NoOpControl  # type: ignore[assignment]
     try:
         yield
     finally:
@@ -161,7 +164,12 @@ def _patch_subprocess(stub_calc: Path):
         safe_kwargs = {k: v for k, v in kwargs.items()
                        if k in ("cwd", "timeout", "env", "capture_output",
                                 "stdout", "stderr", "stdin", "check")}
-        return orig([sys.executable, "-I", str(stub_calc)], **safe_kwargs)
+        result = orig([sys.executable, "-I", str(stub_calc)], **safe_kwargs)
+        log = b"SUITE acvp\nPASS stub calculator\nDONE pass 1 fail 0\n"
+        appvar = bytearray(0x4A)
+        appvar[0x48:0x4A] = len(log).to_bytes(2, "little")
+        (Path(kwargs["cwd"]) / "NETLOG.8xv").write_bytes(appvar + log)
+        return result
 
     run_mod.subprocess.run = patched  # type: ignore[assignment]
     try:
@@ -200,6 +208,7 @@ class RunCemuTestBase(unittest.TestCase):
             autotester="/nonexistent/autotester",  # patched away
             usb="usb|plug",
             binary=Path("/nonexistent/ACVPRUN.8xp"),
+            work_dir=tmp / "cemu_work",
         )
 
         with _patch_port(port), _patch_control(), _patch_subprocess(stub_calc):
@@ -616,10 +625,45 @@ class TestRunCemuThreadingAndBugRegression(RunCemuTestBase):
             autotester="/nonexistent/autotester",
             usb="usb|plug",
             binary=Path("/nonexistent/ACVPRUN.8xp"),
+            work_dir=tmp / "cemu_work",
         )
         with _patch_control():
             rc = run_mod.run_cemu(args)
         self.assertEqual(rc, 1)
+
+    def test_calculator_never_connects_reports_root_cause(self):
+        """A launcher false-positive must not be masked by listener EINVAL."""
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        port = _find_free_port()
+        tmp = Path(tempfile.mkdtemp(prefix="acvp_stub_"))
+        vectors_dir = tmp / "vectors"
+        vectors_dir.mkdir()
+        (vectors_dir / "combined.json").write_text(json.dumps([
+            {"acvVersion": "1.0"}, SHA256_VS,
+        ]))
+        args = argparse.Namespace(
+            vectors=vectors_dir,
+            responses=tmp / "responses",
+            timeout=2,
+            cemu=True,
+            autotester="/nonexistent/autotester",
+            usb="usb|plug",
+            binary=Path("/nonexistent/ACVPRUN.8xp"),
+            work_dir=tmp / "cemu_work",
+        )
+        stderr = io.StringIO()
+        completed = subprocess.CompletedProcess([], 0)
+        with (_patch_port(port), _patch_control(),
+              mock.patch.object(run_mod.subprocess, "run", return_value=completed),
+              redirect_stderr(stderr)):
+            rc = run_mod.run_cemu(args)
+
+        self.assertEqual(rc, 1)
+        self.assertIn("calculator never connected", stderr.getvalue())
+        self.assertNotIn("Invalid argument", stderr.getvalue())
 
     def test_server_error_propagates(self):
         """If the fake server rejects an op, run_cemu should return non-zero or raise."""

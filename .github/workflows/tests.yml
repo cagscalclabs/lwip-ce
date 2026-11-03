@@ -307,7 +307,10 @@ jobs:
         run: python3 tests/validation/acvp/generate_vectors.py
 
       - name: Check host ACVP parsing
-        run: python3 tests/validation/acvp/selftest.py
+        run: |
+          python3 tests/validation/acvp/selftest.py
+          python3 -I tests/acvp-live/test_run_local.py
+          python3 -I tests/acvp-live/test_acvp_offline.py
 
       - id: env
         uses: ./.github/actions/emulator-env

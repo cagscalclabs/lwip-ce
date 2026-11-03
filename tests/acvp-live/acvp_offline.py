@@ -24,31 +24,51 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LIBACVP_REPO = "https://github.com/cisco/libacvp"
+LIBACVP_REF = os.environ.get("LIBACVP_REF", "v2.3.1")
 LIBACVP_DIR = HERE / "libacvp"
 ACVP_APP = LIBACVP_DIR / "app" / "acvp_app"
 VECTORS_DIR = HERE / "vectors"
 RESPONSES_DIR = HERE / "responses"
 SESSION_FILE = HERE / "session.json"
+UPLOAD_CONTEXT_FILE = HERE / "upload_context.json"
 CAPABILITIES_FILE = HERE / "capabilities.json"
+RESULTS_FILE = HERE / "results.json"
+RESULTS_LOG = HERE / "results.log"
 
 
 def build_libacvp() -> None:
     """Clone and build acvp_app if not already present."""
+    LIBACVP_DIR.mkdir(parents=True, exist_ok=True)
+    if not (LIBACVP_DIR / ".git").exists():
+        print("Cloning libacvp...", flush=True)
+        subprocess.run(
+            ["git", "clone", "--depth=1", "--branch", LIBACVP_REF,
+             LIBACVP_REPO, str(LIBACVP_DIR)],
+            check=True,
+        )
+    expected = subprocess.run(
+        ["git", "rev-parse", f"{LIBACVP_REF}^{{commit}}"], cwd=LIBACVP_DIR,
+        text=True, capture_output=True,
+    )
+    actual = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=LIBACVP_DIR,
+        text=True, capture_output=True, check=True,
+    ).stdout.strip()
+    if expected.returncode == 0 and actual != expected.stdout.strip():
+        raise RuntimeError(
+            f"existing libacvp checkout is {actual}, expected {LIBACVP_REF}; "
+            f"remove {LIBACVP_DIR} and retry"
+        )
     if ACVP_APP.exists():
         return
     print("Building libacvp...", flush=True)
-    LIBACVP_DIR.mkdir(parents=True, exist_ok=True)
-    if not (LIBACVP_DIR / ".git").exists():
-        subprocess.run(
-            ["git", "clone", "--depth=1", LIBACVP_REPO, str(LIBACVP_DIR)],
-            check=True,
-        )
     subprocess.run(["autoreconf", "-i"], cwd=LIBACVP_DIR, check=True)
     subprocess.run(
         [
@@ -78,7 +98,92 @@ def acvp_env() -> dict[str, str]:
     missing = [k for k in required if not env.get(k)]
     if missing:
         raise RuntimeError(f"Required env vars not set: {', '.join(missing)}")
+    env["ACV_SESSION_SAVE_PATH"] = str(HERE)
+    env["ACV_SESSION_SAVE_PREFIX"] = "acvpLiveSession"
     return env
+
+
+def _openssl(args: list[str]) -> bytes:
+    result = subprocess.run(
+        ["openssl", *args], capture_output=True, check=False,
+    )
+    if result.returncode:
+        detail = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"openssl {' '.join(args[:2])} failed: {detail}")
+    return result.stdout
+
+
+def validate_credentials(env: dict[str, str]) -> None:
+    """Fail before registration if the configured client key is unusable."""
+    certificate = Path(env["ACV_CERT_FILE"])
+    private_key = Path(env["ACV_KEY_FILE"])
+    if not certificate.is_file() or not private_key.is_file():
+        raise RuntimeError("ACVP client certificate or private key is missing")
+    # The job may run for almost eight hours; reject a certificate that could
+    # expire while the test session is active.
+    _openssl(["x509", "-in", str(certificate), "-noout", "-checkend", "28800"])
+    cert_public = _openssl(["x509", "-in", str(certificate), "-pubkey", "-noout"])
+    key_public = _openssl(["pkey", "-in", str(private_key), "-pubout"])
+    if cert_public != key_public:
+        raise RuntimeError("ACVP client private key does not match client.cer")
+
+
+def _secure_write(path: Path, value: object) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.unlink(missing_ok=True)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(value, stream, indent=2)
+            stream.write("\n")
+        temporary.replace(path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _load_upload_context() -> dict:
+    if not UPLOAD_CONTEXT_FILE.is_file():
+        raise RuntimeError("ACVP upload context is missing; run fetch first")
+    value = json.loads(UPLOAD_CONTEXT_FILE.read_text())
+    required = ("url", "jwt", "vectorSetUrls")
+    if not isinstance(value, dict) or any(name not in value for name in required):
+        raise RuntimeError("ACVP upload context is malformed")
+    return value
+
+
+def _order_and_validate_responses(context: dict,
+                                  responses: list[dict]) -> list[dict]:
+    """Require one response for every vector set in the registered session."""
+    urls = context.get("vectorSetUrls")
+    if not isinstance(urls, list) or not urls or not all(isinstance(url, str)
+                                                         for url in urls):
+        raise RuntimeError("ACVP upload context has invalid vector-set URLs")
+    expected = [url.rstrip("/").rsplit("/", 1)[-1] for url in urls]
+    if any(not vsid.isdigit() for vsid in expected) or len(set(expected)) != len(expected):
+        raise RuntimeError("ACVP upload context has invalid vector-set IDs")
+
+    by_vsid: dict[str, dict] = {}
+    for response in responses:
+        if not isinstance(response, dict) or "vsId" not in response:
+            raise RuntimeError("calculator response contains a malformed vector set")
+        vsid = str(response["vsId"])
+        if vsid in by_vsid:
+            raise RuntimeError(f"calculator returned duplicate response for vsId {vsid}")
+        by_vsid[vsid] = response
+
+    expected_set = set(expected)
+    missing = [vsid for vsid in expected if vsid not in by_vsid]
+    unexpected = [vsid for vsid in by_vsid if vsid not in expected_set]
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append(f"missing vsId(s): {', '.join(missing)}")
+        if unexpected:
+            details.append(f"unexpected vsId(s): {', '.join(unexpected)}")
+        raise RuntimeError("calculator responses do not match the ACVP session (" +
+                           "; ".join(details) + ")")
+    return [by_vsid[vsid] for vsid in expected]
 
 
 def write_vector_files(combined_req: Path) -> list[Path]:
@@ -87,15 +192,24 @@ def write_vector_files(combined_req: Path) -> list[Path]:
     Also writes vectors/combined.json in ACVP prompt-list format
     ([{acvVersion}, {vsId...}, ...]) for use with the CEmu runner.
     """
-    VECTORS_DIR.mkdir(exist_ok=True)
+    if VECTORS_DIR.exists():
+        shutil.rmtree(VECTORS_DIR)
+    VECTORS_DIR.mkdir()
     data = json.loads(combined_req.read_text())
-    # acvp_app saves as an array of vector set objects
-    if isinstance(data, list):
-        sets = data
-    elif isinstance(data, dict) and "vectorSets" in data:
-        sets = data["vectorSets"]
-    else:
-        sets = [data]
+    # libacvp request-only files are [session metadata, vector set, ...].
+    # The metadata is required again for --vector_upload but must never be
+    # presented to the calculator as an algorithm vector set.
+    if not isinstance(data, list) or len(data) < 2 or not isinstance(data[0], dict):
+        raise RuntimeError("libacvp vector request has an unexpected structure")
+    context = data[0]
+    required = ("url", "jwt", "vectorSetUrls")
+    if any(name not in context for name in required):
+        raise RuntimeError("libacvp vector request is missing session metadata")
+    sets = data[1:]
+    if not all(isinstance(vs, dict) and "vsId" in vs and "algorithm" in vs
+               for vs in sets):
+        raise RuntimeError("libacvp vector request contains a malformed vector set")
+    _secure_write(UPLOAD_CONTEXT_FILE, context)
     paths = []
     for vs in sets:
         vsid = vs.get("vsId", "unknown")
@@ -116,18 +230,27 @@ def collect_responses() -> Path:
     directly after splitting it into per-vsId files.  Otherwise merge all
     per-vsId files in responses/.
     """
+    context = _load_upload_context()
     RESPONSES_DIR.mkdir(exist_ok=True)
     cemu_combined = RESPONSES_DIR / "combined.json"
     if cemu_combined.exists():
-        # CEmu runner writes a list; split into per-vsId files as well
+        # CEmu writes [ACVP version header, response, ...].  libacvp upload
+        # requires [session metadata, response, ...].
         data = json.loads(cemu_combined.read_text())
-        items = data if isinstance(data, list) else [data]
+        if (not isinstance(data, list) or not data or
+                not isinstance(data[0], dict) or "acvVersion" not in data[0]):
+            raise RuntimeError("calculator response has an unexpected structure")
+        items = data[1:]
+        if not items or not all(isinstance(item, dict) and "vsId" in item
+                                for item in items):
+            raise RuntimeError("calculator response contains no vector-set responses")
+        items = _order_and_validate_responses(context, items)
         for item in items:
             vsid = item.get("vsId", "unknown")
             (RESPONSES_DIR / f"{vsid}.json").write_text(
                 json.dumps(item, indent=2) + "\n")
         combined = HERE / "combined_responses.json"
-        combined.write_text(json.dumps(items, indent=2) + "\n")
+        _secure_write(combined, [context, *items])
         return combined
     responses = []
     for f in sorted(RESPONSES_DIR.glob("*.json")):
@@ -135,15 +258,23 @@ def collect_responses() -> Path:
             continue
         responses.append(json.loads(f.read_text()))
     combined = HERE / "combined_responses.json"
-    combined.write_text(json.dumps(responses, indent=2) + "\n")
+    if not responses:
+        raise RuntimeError("no calculator responses are available for upload")
+    responses = _order_and_validate_responses(context, responses)
+    _secure_write(combined, [context, *responses])
     return combined
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
     build_libacvp()
     env = acvp_env()
-    VECTORS_DIR.mkdir(exist_ok=True)
+    validate_credentials(env)
     combined_req = HERE / "vectors_combined.json"
+    combined_req.unlink(missing_ok=True)
+    SESSION_FILE.unlink(missing_ok=True)
+    UPLOAD_CONTEXT_FILE.unlink(missing_ok=True)
+    for old_session in HERE.glob("acvpLiveSession*.json"):
+        old_session.unlink()
 
     # Phase 1: register capabilities and download vector sets
     print("Fetching vectors from NIST ACVP...", flush=True)
@@ -163,17 +294,21 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
     # Split into per-vsId files for run.py
     paths = write_vector_files(combined_req)
+    combined_req.unlink(missing_ok=True)
     print(f"Downloaded {len(paths)} vector set(s) to {VECTORS_DIR}/", flush=True)
 
     # Save the session file path for submit step
-    sessions = list(LIBACVP_DIR.glob("testSession_*.json"))
+    sessions = list(HERE.glob("acvpLiveSession*.json"))
     if sessions:
-        newest = max(sessions, key=lambda p: p.stat().st_mtime)
-        import shutil
-        shutil.copy2(newest, SESSION_FILE)
+        if len(sessions) != 1:
+            raise RuntimeError(f"expected one ACVP session file, found {len(sessions)}")
+        newest = sessions[0]
+        newest.replace(SESSION_FILE)
+        SESSION_FILE.chmod(0o600)
         print(f"Session saved to {SESSION_FILE}", flush=True)
     else:
-        print("Warning: no testSession_*.json found; submit step will need --session", flush=True)
+        print("libacvp did not create a session file", file=sys.stderr)
+        return 1
 
     return 0
 
@@ -181,6 +316,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 def cmd_get_results(args: argparse.Namespace) -> int:
     build_libacvp()
     env = acvp_env()
+    validate_credentials(env)
 
     session = args.session or SESSION_FILE
     if not Path(session).exists():
@@ -188,60 +324,38 @@ def cmd_get_results(args: argparse.Namespace) -> int:
         print("Run --fetch first, or pass --session <path>", file=sys.stderr)
         return 1
 
-    results_file = HERE / "results.json"
     print("Fetching grading results from NIST ACVP...", flush=True)
     result = subprocess.run(
         [
             str(ACVP_APP),
-            "--get_results",
+            "--get_results", str(session),
             "--disable_fips",
-            "--session", str(session),
-            "--save_to", str(results_file),
         ],
         env=env,
         cwd=str(LIBACVP_DIR),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
-    if result.returncode != 0:
-        print("acvp_app get_results failed", file=sys.stderr)
+    output = result.stdout or ""
+    RESULTS_LOG.write_text(output)
+    print(output, end="" if output.endswith("\n") else "\n")
+    passed = result.returncode == 0 and "Passed all vectors in test session!" in output
+    RESULTS_FILE.write_text(json.dumps({
+        "passed": passed,
+        "acvp_app_status": result.returncode,
+        "log": RESULTS_LOG.name,
+    }, indent=2) + "\n")
+    if not passed:
+        print("NIST ACVP grading did not report a passing test session", file=sys.stderr)
         return 1
-
-    if not results_file.exists():
-        print("No results file produced; server may still be grading — retry later",
-              file=sys.stderr)
-        return 1
-
-    data = json.loads(results_file.read_text())
-    _print_results(data)
     return 0
-
-
-def _print_results(data: object) -> None:
-    """Pretty-print grading results to stdout."""
-    sets = data if isinstance(data, list) else data.get("vectorSets", [data])
-    passed = 0
-    failed = 0
-    for vs in sets:
-        vsid = vs.get("vsId", "?")
-        status = vs.get("status", vs.get("disposition", "unknown"))
-        alg = vs.get("algorithm", "")
-        mode = vs.get("mode", "")
-        label = f"{alg}/{mode}" if mode else alg
-        ok = str(status).lower() in ("passed", "approved")
-        mark = "PASS" if ok else "FAIL"
-        print(f"  [{mark}] vsId {vsid:>6}  {label}  ({status})")
-        if ok:
-            passed += 1
-        else:
-            failed += 1
-    total = passed + failed
-    print(f"\n{passed}/{total} vector set(s) passed.")
-    if failed:
-        print(f"{failed} FAILED — check results.json for details.")
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
     build_libacvp()
     env = acvp_env()
+    validate_credentials(env)
 
     session = args.session or SESSION_FILE
     if not Path(session).exists():
@@ -250,7 +364,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         return 1
 
     combined_rsp = collect_responses()
-    n = len(json.loads(combined_rsp.read_text()))
+    n = len(json.loads(combined_rsp.read_text())) - 1
     print(f"Uploading {n} response(s) to NIST ACVP...", flush=True)
 
     result = subprocess.run(
@@ -309,4 +423,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError,
+            subprocess.SubprocessError) as exc:
+        print(f"ACVP offline error: {exc}", file=sys.stderr)
+        sys.exit(1)

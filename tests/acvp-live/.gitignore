@@ -4,15 +4,20 @@ vectors/
 responses/
 combined_responses.json
 vectors_combined.json
+upload_context.json
 # Session file from acvp_app (contains auth state)
 session.json
 # libacvp build tree
 libacvp/
 # Grading results from NIST (fetched at runtime)
 results.json
+results.log
 # Private key — never committed
 *.key
+*_totp.txt
 # CEmu autotest working directory (generated at runtime)
 cemu_work/
+bin/
+obj/
 # Stub test temporaries
 __pycache__/

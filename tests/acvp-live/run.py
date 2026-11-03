@@ -35,7 +35,8 @@ RESPONSES_DIR = HERE / "responses"
 
 # Reuse the protocol implementation from the offline validation harness.
 sys.path.insert(0, str(HERE.parent / "validation" / "acvp"))
-from acvp_client import AcvpError, SocketBackend, process_file  # noqa: E402
+from acvp_client import (AcvpError, SocketBackend, process_document,
+                         process_file)  # noqa: E402
 
 DEFAULT_HOST = "192.168.84.100"
 DEFAULT_PORT = 7200
@@ -46,20 +47,35 @@ ACVP_PROGRAM = "ACVPRUN"
 
 class Control:
     def __init__(self) -> None:
+        self.stopping = threading.Event()
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(("0.0.0.0", 7000))
-        threading.Thread(target=self._serve, daemon=True).start()
+        self.socket.settimeout(1)
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
 
     def _serve(self) -> None:
-        while True:
-            data, address = self.socket.recvfrom(256)
+        while not self.stopping.is_set():
+            try:
+                data, address = self.socket.recvfrom(256)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
             sequence = data.split(b" ", 1)[0]
             self.socket.sendto(sequence + b" OK", address)
 
+    def close(self) -> None:
+        self.stopping.set()
+        self.socket.close()
+        self.thread.join(timeout=2)
 
-# CRC of the screen ACVPRUN shows after the service loop exits (observed).
-# The autotester waits up to timeout_ms for this hash to appear.
-ACVPRUN_DONE_CRC = "E657DD59"
+
+# These come from tests/validation/acvp/run.py and the shared net_end() verdict
+# screen.  Accepting red/crash here lets us save NETLOG and report the actual
+# calculator failure instead of timing out with no diagnostic evidence.
+VERDICT_CRCS = ["A511C030", "22D544B5"]
+CRASH_CRC = "93BFC41E"
 
 
 def write_autotest(path: Path, usb: str, timeout_ms: int,
@@ -69,15 +85,35 @@ def write_autotest(path: Path, usb: str, timeout_ms: int,
         "description": "lwIP-CE ACVP live validation",
         "transfer_files": [relative(binary)],
         "target": {"name": ACVP_PROGRAM, "isASM": True},
-        "sequence": ["delay|1000", usb, "action|launch", "delay|2000",
-                     "key|enter", "hashWait|2"],
+        "sequence": ["delay|1000", usb, "action|launch", "hashWait|2",
+                     "delay|2000", "saveVar|NETLOG", "key|enter"],
         "hashes": {
             "2": {"description": "ACVP service complete",
                   "start": "vram_start", "size": "vram_8_size",
-                  "expected_CRCs": [ACVPRUN_DONE_CRC],
+                  "expected_CRCs": VERDICT_CRCS + [CRASH_CRC],
                   "timeout": timeout_ms},
         },
     }, indent=2) + "\n")
+
+
+def read_log(path: Path) -> str:
+    """Read a TI appvar saved by the autotester."""
+    data = path.read_bytes()
+    if len(data) < 0x4A:
+        raise AcvpError(f"calculator log is truncated: {path}")
+    length = int.from_bytes(data[0x48:0x4A], "little")
+    if 0x4A + length > len(data):
+        raise AcvpError(f"calculator log length is invalid: {path}")
+    return data[0x4A:0x4A + length].decode("latin-1")
+
+
+def write_checkpoint(path: Path, header: dict | None,
+                     responses: list[dict]) -> None:
+    """Persist completed vector sets so a later failure leaves useful evidence."""
+    document: object = [header, *responses] if header else responses
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(document, indent=2) + "\n")
+    temporary.replace(path)
 
 
 def run_cemu(args: argparse.Namespace) -> int:
@@ -89,22 +125,34 @@ def run_cemu(args: argparse.Namespace) -> int:
 
     args.responses.mkdir(parents=True, exist_ok=True)
     rsp_path = args.responses / "combined.json"
+    rsp_path.unlink(missing_ok=True)
 
-    Control()
+    control = Control()
     ready = threading.Event()
+    cancel = threading.Event()
+    connected = threading.Event()
     outcome: dict[str, object] = {}
-    listener_ref: list[socket.socket] = []
 
     def serve() -> None:
         try:
             with socket.create_server(("0.0.0.0", DEFAULT_PORT),
                                       reuse_port=False) as listener:
-                listener.settimeout(max(300, args.timeout))
-                listener_ref.append(listener)
+                listener.settimeout(1)
                 ready.set()
                 print(f"ACVP host: listening on 0.0.0.0:{DEFAULT_PORT}, "
                       f"waiting for calculator to connect…", flush=True)
-                connection, addr = listener.accept()
+                connection = None
+                addr = None
+                while not cancel.is_set():
+                    try:
+                        connection, addr = listener.accept()
+                        break
+                    except socket.timeout:
+                        continue
+                if connection is None or addr is None:
+                    outcome["error"] = AcvpError("calculator never connected to the ACVP host")
+                    return
+                connected.set()
                 print(f"ACVP host: calculator connected from {addr[0]}:{addr[1]}", flush=True)
                 with connection:
                     connection.settimeout(args.timeout)
@@ -138,7 +186,26 @@ def run_cemu(args: argparse.Namespace) -> int:
 
                     raw_backend = SocketBackend(connection)
                     backend = _LoggingBackend(raw_backend)
-                    outcome["response"] = process_file(combined, rsp_path, backend)
+                    document = json.loads(combined.read_text())
+                    if not isinstance(document, list) or not document:
+                        raise AcvpError("combined vector file must be a non-empty ACVP array")
+                    header = (document[0] if isinstance(document[0], dict) and
+                              "acvVersion" in document[0] else None)
+                    vectors = document[1:] if header else document
+                    if not vectors:
+                        raise AcvpError("combined vector file contains no vector sets")
+                    responses: list[dict] = []
+                    for index, vector in enumerate(vectors, 1):
+                        if not isinstance(vector, dict):
+                            raise AcvpError(f"vector set {index} is not an object")
+                        print(f"ACVP host: processing vsId {vector.get('vsId', '?')} "
+                              f"{vector.get('algorithm', '?')}", flush=True)
+                        response = process_document(vector, backend)
+                        if not isinstance(response, dict):
+                            raise AcvpError("single vector set produced a non-object response")
+                        responses.append(response)
+                        write_checkpoint(rsp_path, header, responses)
+                    outcome["response"] = [header, *responses] if header else responses
                     backend.stop()
         except Exception as exc:  # noqa: BLE001
             outcome["error"] = exc
@@ -147,26 +214,26 @@ def run_cemu(args: argparse.Namespace) -> int:
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     if not ready.wait(10) or "error" in outcome:
+        cancel.set()
+        thread.join(timeout=2)
+        control.close()
         print(f"ACVP listener failed: {outcome.get('error', 'startup timeout')}",
               file=sys.stderr)
         return 1
 
-    work_dir = HERE / "cemu_work"
-    work_dir.mkdir(exist_ok=True)
+    work_dir = args.work_dir
+    work_dir.mkdir(parents=True, exist_ok=True)
     autotest = work_dir / "autotest.json"
+    log_path = work_dir / "NETLOG.8xv"
+    log_path.unlink(missing_ok=True)
     write_autotest(autotest, args.usb, args.timeout * 1000, args.binary)
 
-    proc = subprocess.run([args.autotester, str(autotest)], cwd=work_dir)
-
-    # If the calc never connected (networking failure), the serve thread is
-    # stuck in accept().  Closing the listener unblocks it immediately.
-    if thread.is_alive() and listener_ref:
-        try:
-            listener_ref[0].shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-
-    thread.join(timeout=10)
+    try:
+        proc = subprocess.run([args.autotester, str(autotest)], cwd=work_dir)
+    finally:
+        cancel.set()
+        thread.join(timeout=30)
+        control.close()
 
     if "error" in outcome:
         print(f"ACVP host error: {outcome['error']}", file=sys.stderr)
@@ -176,9 +243,24 @@ def run_cemu(args: argparse.Namespace) -> int:
               f"has_response={'response' in outcome})", file=sys.stderr)
         return 1
 
+    if proc.returncode:
+        print(f"CEmu autotester failed with status {proc.returncode}", file=sys.stderr)
+        return proc.returncode
+    if not connected.is_set():
+        print("calculator did not connect to the ACVP host", file=sys.stderr)
+        return 1
+    if not log_path.exists():
+        print("calculator did not produce NETLOG", file=sys.stderr)
+        return 1
+    log = read_log(log_path)
+    print(log)
+    if any(line.startswith("FAIL ") for line in log.splitlines()):
+        print("calculator NETLOG contains failures", file=sys.stderr)
+        return 1
+
     print(f"CEmu run complete. Response written to {rsp_path}", flush=True)
     print("Next step: python3 acvp_offline.py submit", flush=True)
-    return proc.returncode
+    return 0
 
 
 # ── Direct TCP mode ────────────────────────────────────────────────────────────
@@ -263,8 +345,8 @@ def main() -> int:
     )
     parser.add_argument("--vectors", type=Path, default=VECTORS_DIR)
     parser.add_argument("--responses", type=Path, default=RESPONSES_DIR)
-    parser.add_argument("--timeout", type=int, default=3600,
-                        help="Socket / CEmu timeout in seconds (default: 3600)")
+    parser.add_argument("--timeout", type=int, default=25200,
+                        help="Socket / CEmu timeout in seconds (default: 25200 / 7 hours)")
 
     cemu = parser.add_argument_group("CEmu mode (--cemu)")
     cemu.add_argument("--cemu", action="store_true",
@@ -273,6 +355,8 @@ def main() -> int:
     cemu.add_argument("--usb", help="Autotester USB plug sequence step")
     cemu.add_argument("--binary", type=Path,
                       help="Path to ACVPRUN.8xp calculator binary")
+    cemu.add_argument("--work-dir", type=Path, default=HERE / "cemu_work",
+                      help="Generated autotest and NETLOG directory")
 
     tcp = parser.add_argument_group("Direct TCP mode (default)")
     tcp.add_argument("--host", default=DEFAULT_HOST)
