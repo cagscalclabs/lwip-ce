@@ -57,6 +57,10 @@ class Control:
             self.socket.sendto(sequence + b" OK", address)
 
 
+VERDICT_CRCS = ["A511C030", "22D544B5"]
+CRASH_CRC = "93BFC41E"
+
+
 def write_autotest(path: Path, usb: str, timeout_ms: int,
                    binary: Path) -> None:
     relative = lambda item: os.path.relpath(item, path.parent)
@@ -64,12 +68,13 @@ def write_autotest(path: Path, usb: str, timeout_ms: int,
         "description": "lwIP-CE ACVP live validation",
         "transfer_files": [relative(binary)],
         "target": {"name": ACVP_PROGRAM, "isASM": True},
-        "sequence": ["delay|1000", usb, "action|launch", "hashWait|2", "delay|2000",
-                     "key|enter"],
+        "sequence": ["delay|1000", usb, "action|launch", "delay|2000",
+                     "key|enter", "hashWait|2"],
         "hashes": {
-            "2": {"description": "ACVP service running",
+            "2": {"description": "ACVP run complete",
                   "start": "vram_start", "size": "vram_8_size",
-                  "expected_CRCs": [], "timeout": timeout_ms},
+                  "expected_CRCs": VERDICT_CRCS + [CRASH_CRC],
+                  "timeout": timeout_ms},
         },
     }, indent=2) + "\n")
 
