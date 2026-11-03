@@ -1,0 +1,572 @@
+Archive member included to satisfy reference by file (symbol)
+
+/Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+                              obj/ACVPRUN.o (_malloc)
+
+Merging object attributes
+
+
+Discarded input sections
+
+ .comment       0x00000000      0x14f obj/ACVPRUN.o
+ .note.GNU-stack
+                0x00000000        0x0 obj/ACVPRUN.o
+ .init.weak_crt
+                0x00000000       0x10 obj/ACVPRUN.o
+ .text          0x00000000        0x0 obj/crt0.o
+ .data          0x00000000        0x0 obj/crt0.o
+ .bss           0x00000000        0x0 obj/crt0.o
+ .text          0x00000000        0x0 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+ .data          0x00000000        0x0 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+ .bss           0x00000000        0x0 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+ .comment       0x00000000       0x70 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+ .note.GNU-stack
+                0x00000000        0x0 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+prgm             0x00d1a87f         0x00400000
+bss              0x00d072c6         0x0000cd12
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+                0x00d1a87f                        LOAD_ADDR = 0xd1a87f
+                0x00d072c6                        BSSHEAP_LOW = 0xd072c6
+                0x00d13fd8                        BSSHEAP_HIGH = 0xd13fd8
+                0x00d1a87e                        STACK_HIGH = 0xd1a87e
+                0x00000001                        __TICE__ = 0x1
+                0x00d1a87f                        . = LOAD_ADDR
+
+.header         0x00d1a87f       0x28
+ *(.header)
+ .header        0x00d1a87f        0x3 obj/crt0.o
+ *(.header.icon)
+ .header.icon   0x00d1a882       0x25 obj/ACVPRUN.o
+                0x00d1a887                ___description
+
+.init           0x00d1a8a7      0x230
+ *(.init)
+ .init          0x00d1a8a7      0x230 obj/crt0.o
+                0x00d1a8a7                __start
+                0x00d1a904                __libload_library_FILEIOC
+                0x00d1a90e                _ti_Open
+                0x00d1a912                _ti_Close
+                0x00d1a916                _ti_Write
+                0x00d1a91a                _ti_Delete
+                0x00d1a91e                _ti_SetArchiveStatus
+                0x00d1a922                __libload_library_GRAPHX
+                0x00d1a92b                _gfx_Begin
+                0x00d1a92f                _gfx_End
+                0x00d1a933                _gfx_SetColor
+                0x00d1a937                _gfx_FillScreen
+                0x00d1a93b                _gfx_PrintStringXY
+                0x00d1a93f                _gfx_SetTextBGColor
+                0x00d1a943                _gfx_SetTextFGColor
+                0x00d1a947                _gfx_SetTextTransparentColor
+                0x00d1a94b                _gfx_SetMonospaceFont
+                0x00d1a94f                _gfx_FillRectangle_NoClip
+                0x00d1a953                _gfx_ShiftUp
+                0x00d1a957                __libload_library_LWIP
+                0x00d1a95e                _lwip_network_up
+                0x00d1a962                _lwip_stop
+                0x00d1a966                _lwip_service_events
+                0x00d1a96a                _lwip_now_ms
+                0x00d1a96e                _lwip_default_netif_info
+                0x00d1a972                _lwip_netif_request_services
+                0x00d1a976                _lwip_socket_create
+                0x00d1a97a                _lwip_socket_destroy
+                0x00d1a97e                _lwip_socket_connect
+                0x00d1a982                _lwip_socket_write
+                0x00d1a986                _lwip_socket_available
+                0x00d1a98a                _lwip_socket_read
+                0x00d1a98e                _lwip_socket_status
+                0x00d1a992                _lwip_socket_close
+                0x00d1a996                _lwip_socket_is_active
+                0x00d1a99a                _lwip_socket_last_error
+                0x00d1a99e                _tls_aes_init
+                0x00d1a9a2                _tls_aes_ccm_init
+                0x00d1a9a6                _tls_aes_update_aad
+                0x00d1a9aa                _tls_aes_encrypt
+                0x00d1a9ae                _tls_aes_digest
+                0x00d1a9b2                _tls_aes_decrypt
+                0x00d1a9b6                _tls_aes_verify
+                0x00d1a9ba                _tls_secure_memzero
+                0x00d1a9be                _tls_hash_context_init
+                0x00d1a9c2                _tls_hash_update
+                0x00d1a9c6                _tls_hash_digest
+                0x00d1a9ca                _tls_hkdf_extract
+                0x00d1a9ce                _tls_hkdf_expand
+                0x00d1a9d2                _tls_hmac_context_init
+                0x00d1a9d6                _tls_hmac_update
+                0x00d1a9da                _tls_hmac_digest
+                0x00d1a9de                _tls_pbkdf2
+                0x00d1a9e2                _tls_rsa_decrypt_signature
+                0x00d1a9e6                _tls_rsa_pss_verify
+                0x00d1a9ea                _ipaddr_aton
+                0x00d1a9ee                _pbuf_alloc
+                0x00d1a9f2                _pbuf_free
+                0x00d1a9f6                _pbuf_copy_partial
+                0x00d1a9fa                _pbuf_take
+                0x00d1a9fe                _udp_new
+                0x00d1aa02                _udp_remove
+                0x00d1aa06                _udp_bind
+                0x00d1aa0a                _udp_recv
+                0x00d1aa0e                _udp_sendto
+                0x00d1aa12                _tls_x25519_publickey
+                0x00d1aa16                _tls_x25519_secret
+                0x00d1aa1a                _lwip_socket_set_ws_config
+                0x00d1aa1e                _tls_rsa_pkcs1_v15_sha256_verify
+                0x00d1aa22                _lwip_version_string
+                0x00d1aa26                _lwip_start_with_crt
+                0x00d1aa2a                _tls_p256_publickey
+                0x00d1aa2e                _tls_p256_secret
+                0x00d1aa32                _tls_p256_sign
+                0x00d1aa36                _tls_p256_verify
+                0x00d1aa3a                _tls_p384_publickey
+                0x00d1aa3e                _tls_p384_secret
+                0x00d1aa42                _tls_p384_sign
+                0x00d1aa46                _tls_p384_verify
+                0x00d1aa4a                _tls_random_bytes_ex
+                0x00d1aa4e                _tls_rng_status
+                0x00d1aa52                _tls_rng_available_strength
+                0x00d1aa56                _tls_hash_clear
+                0x00d1aa5a                _tls_hmac_clear
+                0x00d1aa5e                _tls_aes_destroy_ctx
+                0x00d1aa9b                ___exithl
+                0x00d1aa9c                _exit.sp
+
+.text           0x00d1aad7     0x5b18
+ *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ *(.text.exit .text.exit.*)
+ *(.text.startup .text.startup.*)
+ *(.text.hot .text.hot.*)
+ *(SORT_BY_NAME(.text.sorted.*))
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ .text          0x00d1aad7      0x4f9 obj/ACVPRUN.o
+                0x00d1aad7                __land
+                0x00d1aadb                __iand
+                0x00d1aaf2                __bshl
+                0x00d1aafb                __dcmp
+                0x00d1ab59                __frameset
+                0x00d1ab67                __frameset0
+                0x00d1ab72                __ftod
+                0x00d1abba                __imuls
+                0x00d1abba                __imulu
+                0x00d1abea                __indcallhl
+                0x00d1abeb                __ishl
+                0x00d1abeb                __sshl
+                0x00d1ac11                __ishru
+                0x00d1ac16                __ishrs
+                0x00d1ac52                __ladd
+                0x00d1ac58                __lcmpu
+                0x00d1ac60                __lcmpzero
+                0x00d1ac60                __lequzero
+                0x00d1ac6b                __lladd
+                0x00d1ac8f                __lland
+                0x00d1accb                __llcmps
+                0x00d1acf8                __llcmpu
+                0x00d1ad22                __llequzero
+                0x00d1ad22                __llcmpzero
+                0x00d1ad37                __lldivu
+                0x00d1ad4b                __lldvrmu
+                0x00d1ad52                __lldvrmu.hijack
+                0x00d1ada9                __llmulu
+                0x00d1adfe                __llshl
+                0x00d1ae18                __llshru
+                0x00d1ae48                __llshrs
+                0x00d1ae84                __llxor
+                0x00d1aec0                __lshl
+                0x00d1aecd                __lshrs
+                0x00d1aee7                __lshru
+                0x00d1aef5                __lsub
+                0x00d1aeff                __lor
+                0x00d1af03                __ior
+                0x00d1af1a                __sand
+                0x00d1af23                __setflag
+                0x00d1af2d                __lxor
+                0x00d1af31                __ixor
+                0x00d1af48                _memcpy
+                0x00d1af69                _memmove
+                0x00d1af99                __lmulu_b
+                0x00d1afc3                __lneg
+ .text._note    0x00d1afd0       0x3d obj/ACVPRUN.o
+                0x00d1afd0                _note
+ .text._out     0x00d1b00d       0x9a obj/ACVPRUN.o
+ .text._check   0x00d1b0a7       0x70 obj/ACVPRUN.o
+                0x00d1b0a7                _check
+ .text._metric  0x00d1b117       0x47 obj/ACVPRUN.o
+                0x00d1b117                _metric
+ .text._pump    0x00d1b15e       0x4e obj/ACVPRUN.o
+                0x00d1b15e                _pump
+ .text._host_call
+                0x00d1b1ac      0x2a2 obj/ACVPRUN.o
+                0x00d1b1ac                _host_call
+ .text._control_recv
+                0x00d1b44e       0x84 obj/ACVPRUN.o
+ .text._control_done
+                0x00d1b4d2        0xb obj/ACVPRUN.o
+ .text._not_connecting
+                0x00d1b4dd       0x19 obj/ACVPRUN.o
+                0x00d1b4dd                _not_connecting
+ .text._not_active
+                0x00d1b4f6       0x14 obj/ACVPRUN.o
+                0x00d1b4f6                _not_active
+ .text._open_socket
+                0x00d1b50a       0xdd obj/ACVPRUN.o
+                0x00d1b50a                _open_socket
+ .text._write_all
+                0x00d1b5e7       0xc5 obj/ACVPRUN.o
+                0x00d1b5e7                _write_all
+ .text._read_exact
+                0x00d1b6ac       0x95 obj/ACVPRUN.o
+                0x00d1b6ac                _read_exact
+ .text._close_socket
+                0x00d1b741       0x39 obj/ACVPRUN.o
+                0x00d1b741                _close_socket
+ .text._net_begin
+                0x00d1b77a      0x2cc obj/ACVPRUN.o
+                0x00d1b77a                _net_begin
+ .text._has_ipv4
+                0x00d1ba46       0x1d obj/ACVPRUN.o
+ .text._on_service
+                0x00d1ba63       0x2e obj/ACVPRUN.o
+ .text._services_done
+                0x00d1ba91       0x21 obj/ACVPRUN.o
+ .text._net_end
+                0x00d1bab2      0x10d obj/ACVPRUN.o
+                0x00d1bab2                _net_end
+ .text._main    0x00d1bbbf     0x2110 obj/ACVPRUN.o
+                0x00d1bbbf                _main
+ .text._read_be32
+                0x00d1dccf       0x85 obj/ACVPRUN.o
+ .text._send_response
+                0x00d1dd54       0x85 obj/ACVPRUN.o
+ .text._sha256  0x00d1ddd9       0x9a obj/ACVPRUN.o
+ .text._run_aead
+                0x00d1de73      0x76b obj/ACVPRUN.o
+ .text._run_rsa_verify
+                0x00d1e5de      0x236 obj/ACVPRUN.o
+ .text._sha384  0x00d1e814       0x9d obj/ACVPRUN.o
+ .text._sha512  0x00d1e8b1       0x9d obj/ACVPRUN.o
+ .text._npf_vpprintf
+                0x00d1e94e     0x1775 obj/ACVPRUN.o
+                0x00d1e94e                _npf_vpprintf
+ .text._NPF_PUTC_IMPL
+                0x00d200c3       0x2d obj/ACVPRUN.o
+ .text._npf_utoa_rev
+                0x00d200f0       0xe6 obj/ACVPRUN.o
+ .text._vsnprintf
+                0x00d201d6       0x88 obj/ACVPRUN.o
+                0x00d201d6                _vsnprintf
+ .text._npf_bufputc
+                0x00d2025e       0x25 obj/ACVPRUN.o
+ .text._npf_bufputc_nop
+                0x00d20283        0x7 obj/ACVPRUN.o
+ .text._snprintf
+                0x00d2028a       0x28 obj/ACVPRUN.o
+                0x00d2028a                _snprintf
+ .text.__bctlz  0x00d202b2       0x22 obj/ACVPRUN.o
+                0x00d202b2                __bctlz
+ .text.__sctlz  0x00d202d4        0xc obj/ACVPRUN.o
+                0x00d202d4                __sctlz
+ .text.__ictlz  0x00d202e0       0x12 obj/ACVPRUN.o
+                0x00d202e0                __ictlz
+ .text.__llctlz
+                0x00d202f2        0xe obj/ACVPRUN.o
+                0x00d202f2                __llctlz
+ .text.__i48ctlz
+                0x00d20300       0x15 obj/ACVPRUN.o
+                0x00d20300                __i48ctlz
+ .text._strtoul
+                0x00d20315       0x17 obj/ACVPRUN.o
+                0x00d20315                _strtoul
+ .text.__strtol_common
+                0x00d2032c       0xc8 obj/ACVPRUN.o
+ .text._malloc  0x00d203f4       0xc2 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+                0x00d203f4                _malloc
+ .text._free    0x00d204b6       0xbd /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+                0x00d204b6                _free
+ .text._realloc
+                0x00d20573       0x7c /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+                0x00d20573                _realloc
+ *(.gnu.warning)
+
+.rodata         0x00d205ef      0x318
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata._main  0x00d205ef       0x66 obj/ACVPRUN.o
+ .rodata._.str  0x00d20655        0xa obj/ACVPRUN.o
+ .rodata._.str.1
+                0x00d2065f        0x9 obj/ACVPRUN.o
+ .rodata._.str.2
+                0x00d20668        0x9 obj/ACVPRUN.o
+ .rodata._.str.3
+                0x00d20671       0x11 obj/ACVPRUN.o
+ .rodata._ip_addr_any
+                0x00d20682       0x12 obj/ACVPRUN.o
+ .rodata._.str.4
+                0x00d20694        0x6 obj/ACVPRUN.o
+ .rodata._.str.7
+                0x00d2069a       0x13 obj/ACVPRUN.o
+ .rodata._.str.8
+                0x00d206ad        0xf obj/ACVPRUN.o
+ .rodata._net_begin.want_ip
+                0x00d206bc        0x4 obj/ACVPRUN.o
+ .rodata._net_begin.want_gw
+                0x00d206c0        0x4 obj/ACVPRUN.o
+ .rodata._.str.9
+                0x00d206c4        0x7 obj/ACVPRUN.o
+ .rodata._.str.10
+                0x00d206cb        0x2 obj/ACVPRUN.o
+ .rodata._.str.11
+                0x00d206cd        0x9 obj/ACVPRUN.o
+ .rodata._.str.12
+                0x00d206d6        0xb obj/ACVPRUN.o
+ .rodata._.str.13
+                0x00d206e1        0xb obj/ACVPRUN.o
+ .rodata._.str.14
+                0x00d206ec       0x10 obj/ACVPRUN.o
+ .rodata._.str.15
+                0x00d206fc        0xb obj/ACVPRUN.o
+ .rodata._.str.16
+                0x00d20707        0xe obj/ACVPRUN.o
+ .rodata._.str.17
+                0x00d20715        0x3 obj/ACVPRUN.o
+ .rodata._.str.18
+                0x00d20718        0xd obj/ACVPRUN.o
+ .rodata._.str.19
+                0x00d20725        0xd obj/ACVPRUN.o
+ .rodata._.str.20
+                0x00d20732       0x11 obj/ACVPRUN.o
+ .rodata._.str.21
+                0x00d20743        0xf obj/ACVPRUN.o
+ .rodata._.str.22
+                0x00d20752        0x9 obj/ACVPRUN.o
+ .rodata._.str.23
+                0x00d2075b       0x15 obj/ACVPRUN.o
+ .rodata._.str.24
+                0x00d20770       0x15 obj/ACVPRUN.o
+ .rodata._.str.25
+                0x00d20785        0x4 obj/ACVPRUN.o
+ .rodata._.str.26
+                0x00d20789        0x2 obj/ACVPRUN.o
+ .rodata._.str.27
+                0x00d2078b        0x2 obj/ACVPRUN.o
+ .rodata._.str.6
+                0x00d2078d        0x5 obj/ACVPRUN.o
+ .rodata._.str.1.7
+                0x00d20792       0x13 obj/ACVPRUN.o
+ .rodata._.str.2.11
+                0x00d207a5       0x14 obj/ACVPRUN.o
+ .rodata._.str.3.8
+                0x00d207b9        0xd obj/ACVPRUN.o
+ .rodata._.str.4.9
+                0x00d207c6       0x15 obj/ACVPRUN.o
+ .rodata._.str.5.10
+                0x00d207db        0x5 obj/ACVPRUN.o
+ .rodata._run_rsa_verify.exponent
+                0x00d207e0        0x3 obj/ACVPRUN.o
+ .rodata._npf_vpprintf
+                0x00d207e3      0x102 obj/ACVPRUN.o
+ .rodata.libload
+                0x00d208e5       0x22 obj/crt0.o
+
+.init_array     0x00d20907        0x0
+                [!provide]                        PROVIDE (__init_array_start = .)
+ *(.preinit_array)
+ *(SORT_BY_INIT_PRIORITY(.init_array.*))
+ *(.init_array)
+                [!provide]                        PROVIDE (__init_array_end = .)
+
+.fini_array     0x00d20907        0x0
+                [!provide]                        PROVIDE (__fini_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.fini_array.*))
+ *(.fini_array)
+                [!provide]                        PROVIDE (__fini_array_end = .)
+                0x00d20907                        ___data_low = .
+
+.data           0x00d20907        0x3
+ *(.data .data.* .gnu.linkonce.d.*)
+ .data._heap_ptr
+                0x00d20907        0x3 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+ *(.data1)
+                0x00d2090a                        ___runprgm_reloc_start = .
+ *(.runprgm.reloc)
+                0x00d2090a                        ___runprgm_reloc_end = .
+                0x00d2090a                        ___data_high = .
+                0x00000003                        ___data_len = (___data_high - ___data_low)
+                0x00d072c6                        . = BSSHEAP_LOW
+                0x00d072c6                        ___bss_low = .
+
+.bss            0x00d072c6     0x44e0
+ *(.dynbss)
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss._passed   0x00d072c6        0x3 obj/ACVPRUN.o
+ .bss._failed   0x00d072c9        0x3 obj/ACVPRUN.o
+ .bss._control  0x00d072cc        0x3 obj/ACVPRUN.o
+ .bss._control_seq
+                0x00d072cf        0x3 obj/ACVPRUN.o
+ .bss._control_have
+                0x00d072d2        0x1 obj/ACVPRUN.o
+ .bss._control_reply
+                0x00d072d3       0x60 obj/ACVPRUN.o
+ .bss._log_handle
+                0x00d07333        0x1 obj/ACVPRUN.o
+ .bss._started  0x00d07334        0x1 obj/ACVPRUN.o
+ .bss._line     0x00d07335       0x60 obj/ACVPRUN.o
+                0x00d07335                _line
+ .bss._request  0x00d07395     0x2000 obj/ACVPRUN.o
+ .bss._result   0x00d09395     0x2000 obj/ACVPRUN.o
+ .bss._p256_signing_key
+                0x00d0b395       0x20 obj/ACVPRUN.o
+ .bss._p256_signing_key_ready
+                0x00d0b3b5        0x1 obj/ACVPRUN.o
+ .bss._p384_signing_key
+                0x00d0b3b6       0x30 obj/ACVPRUN.o
+ .bss._p384_signing_key_ready
+                0x00d0b3e6        0x1 obj/ACVPRUN.o
+ .bss._sha256_mct.state
+                0x00d0b3e7       0x60 obj/ACVPRUN.o
+ .bss._run_rsa_verify.encoded
+                0x00d0b447      0x200 obj/ACVPRUN.o
+ .bss._sha384_mct.state
+                0x00d0b647       0x90 obj/ACVPRUN.o
+ .bss._sha512_mct.state
+                0x00d0b6d7       0xc0 obj/ACVPRUN.o
+ .bss._pc_cnt.0
+                0x00d0b797        0x3 obj/ACVPRUN.o
+ .bss._pc_cnt.1
+                0x00d0b79a        0x3 obj/ACVPRUN.o
+ .bss._pc_cnt.2
+                0x00d0b79d        0x3 obj/ACVPRUN.o
+ .bss.__alloc_base
+                0x00d0b7a0        0x6 /Users/acagliano/CEdev/lib/libc/allocator_standard.a(allocator_standard.o)
+ *(COMMON)
+                0x00d0b7a6                        ___bss_high = .
+                0x000044e0                        ___bss_len = (___bss_high - ___bss_low)
+                0x00000001                        ASSERT ((. <= BSSHEAP_HIGH), Error: BSS exceed BSSHEAP_HIGH limit)
+                0x00d0b7a6                        ___heap_low = .
+                0x00d13fd8                        . = BSSHEAP_HIGH
+                0x00d13fd8                        ___heap_high = .
+
+.runprgm
+ *(.runprgm.reloc)
+
+.debug_info
+ *(.debug_info .debug_info.*)
+
+.debug_abbrev
+ *(.debug_abbrev .debug_abbrev.*)
+
+.debug_line
+ *(.debug_line .debug_line.*)
+
+.debug_line_str
+ *(.debug_line_str .debug_line_str.*)
+
+.debug_str
+ *(.debug_str .debug_str.*)
+
+.debug_str_offsets
+ *(.debug_str_offsets .debug_str_offsets.*)
+
+.debug_addr
+ *(.debug_addr .debug_addr.*)
+
+.debug_aranges
+ *(.debug_aranges .debug_aranges.*)
+
+.debug_ranges
+ *(.debug_ranges .debug_ranges.*)
+
+.debug_rnglists
+ *(.debug_rnglists .debug_rnglists.*)
+
+.debug_loc
+ *(.debug_loc .debug_loc.*)
+
+.debug_loclists
+ *(.debug_loclists .debug_loclists.*)
+
+.debug_frame
+ *(.debug_frame .debug_frame.*)
+
+.debug_macro
+ *(.debug_macro .debug_macro.*)
+
+.debug_macinfo
+ *(.debug_macinfo .debug_macinfo.*)
+
+.debug_names
+ *(.debug_names .debug_names.*)
+
+.debug_pubnames
+ *(.debug_pubnames .debug_pubnames.*)
+
+.debug_pubtypes
+ *(.debug_pubtypes .debug_pubtypes.*)
+
+.debug_types
+ *(.debug_types .debug_types.*)
+
+.debug_sup
+ *(.debug_sup .debug_sup.*)
+
+.debug_cu_index
+ *(.debug_cu_index .debug_cu_index.*)
+
+.debug_tu_index
+ *(.debug_tu_index .debug_tu_index.*)
+
+.gdb_index
+ *(.gdb_index)
+
+.debug_gdb_scripts
+ *(.debug_gdb_scripts)
+
+.debug_abbrev.dwo
+ *(.debug_abbrev.dwo .debug_abbrev.dwo.*)
+
+.debug_info.dwo
+ *(.debug_info.dwo .debug_info.dwo.*)
+
+.debug_line.dwo
+ *(.debug_line.dwo .debug_line.dwo.*)
+
+.debug_loclists.dwo
+ *(.debug_loclists.dwo .debug_loclists.dwo.*)
+
+.debug_macro.dwo
+ *(.debug_macro.dwo .debug_macro.dwo.*)
+
+.debug_rnglists.dwo
+ *(.debug_rnglists.dwo .debug_rnglists.dwo.*)
+
+.debug_str.dwo
+ *(.debug_str.dwo .debug_str.dwo.*)
+
+.debug_str_offsets.dwo
+ *(.debug_str_offsets.dwo .debug_str_offsets.dwo.*)
+
+.eh_frame
+ *(.eh_frame)
+
+.eh_frame_hdr
+ *(.eh_frame_hdr)
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+                [!provide]                        PROVIDE (___runprgm_reloc_len = (___runprgm_reloc_end - ___runprgm_reloc_start))
+LOAD obj/ACVPRUN.o
+LOAD obj/crt0.o
+START GROUP
+LOAD /Users/acagliano/CEdev/lib/libc/allocator_standard.a
+LOAD /Users/acagliano/CEdev/lib/crt/libcrt.a
+LOAD /Users/acagliano/CEdev/lib/ce/libce.a
+LOAD /Users/acagliano/CEdev/lib/softfloat/libsoftfloat.a
+LOAD /Users/acagliano/CEdev/lib/libc/libc_os.a
+LOAD /Users/acagliano/CEdev/lib/libcxx/libcxx.a
+END GROUP
+OUTPUT(bin/ACVPRUN.obj elf32-z80)

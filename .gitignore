@@ -19,6 +19,8 @@ __pycache__/
 # build and object directories
 obj
 bin
+!tests/validation/acvp/bin/
+!tests/validation/acvp/bin/ACVPRUN.8xp
 *.8xv
 release/
 build/

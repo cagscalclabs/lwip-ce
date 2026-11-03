@@ -147,13 +147,13 @@ jobs:
       - name: Build acvp_app
         run: python3 tests/acvp-live/acvp_offline.py build
 
-      - name: Fetch vectors from NIST
-        run: python3 tests/acvp-live/acvp_offline.py fetch
-
       - id: env
         uses: ./.github/actions/emulator-env
         with:
           rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+
+      - name: Fetch vectors from NIST
+        run: python3 tests/acvp-live/acvp_offline.py fetch
 
       - name: Run vectors through CEmu
         run: |
@@ -163,7 +163,7 @@ jobs:
             --cemu \
             --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
-            --binary tests/validation/acvp/bin/ACVPRUN.8xp \
+            --binary "${{ github.workspace }}/tests/validation/acvp/bin/ACVPRUN.8xp" \
             --timeout 3600000
           status=$?
           sudo chown -R "$(id -un)" tests/acvp-live/responses/ \
