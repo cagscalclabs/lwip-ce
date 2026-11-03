@@ -38,6 +38,10 @@ jobs:
       ACV_CERT_FILE: ${{ github.workspace }}/tests/acvp-live/client.cer
       ACV_KEY_FILE: ${{ github.workspace }}/tests/acvp-live/client.key
       ACV_TOTP_SEED: ${{ secrets.ACVP_TOTP }}
+      # Point to a minimal OpenSSL config that loads only the default provider
+      # (no FIPS); the runner has no FIPS module installed and acvp_app's
+      # startup self-test would otherwise abort.
+      OPENSSL_CONF: ${{ github.workspace }}/tests/acvp-live/openssl-nofips.cnf
 
     steps:
       - name: Checkout

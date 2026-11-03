@@ -51,7 +51,12 @@ def build_libacvp() -> None:
         )
     subprocess.run(["autoreconf", "-i"], cwd=LIBACVP_DIR, check=True)
     subprocess.run(
-        ["./configure", "--with-libcurl-dir=/usr", "--with-ssl-dir=/usr/local/ssl"],
+        [
+            "./configure",
+            "--with-libcurl-dir=/usr",
+            "--with-ssl-dir=/usr/local/ssl",
+            "--disable-fom",
+        ],
         cwd=LIBACVP_DIR, check=True,
     )
     subprocess.run(["make", "-j4"], cwd=LIBACVP_DIR, check=True)
