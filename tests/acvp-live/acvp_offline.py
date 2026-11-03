@@ -150,7 +150,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     result = subprocess.run(
         [
             str(ACVP_APP),
-            "--all_algs",
+            "--manual_registration", str(CAPABILITIES_FILE),
             "--disable_fips",
             "--vector_req", str(combined_req),
         ],
@@ -256,7 +256,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     result = subprocess.run(
         [
             str(ACVP_APP),
-            "--all_algs",
+            "--manual_registration", str(CAPABILITIES_FILE),
             "--disable_fips",
             "--vector_upload", str(combined_rsp),
         ],
