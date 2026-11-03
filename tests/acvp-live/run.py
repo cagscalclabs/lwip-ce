@@ -57,6 +57,11 @@ class Control:
             self.socket.sendto(sequence + b" OK", address)
 
 
+# CRC of the screen ACVPRUN shows after the service loop exits (observed).
+# The autotester waits up to timeout_ms for this hash to appear.
+ACVPRUN_DONE_CRC = "E657DD59"
+
+
 def write_autotest(path: Path, usb: str, timeout_ms: int,
                    binary: Path) -> None:
     relative = lambda item: os.path.relpath(item, path.parent)
@@ -65,7 +70,13 @@ def write_autotest(path: Path, usb: str, timeout_ms: int,
         "transfer_files": [relative(binary)],
         "target": {"name": ACVP_PROGRAM, "isASM": True},
         "sequence": ["delay|1000", usb, "action|launch", "delay|2000",
-                     "key|enter", f"delay|{timeout_ms}"],
+                     "key|enter", "hashWait|2"],
+        "hashes": {
+            "2": {"description": "ACVP service complete",
+                  "start": "vram_start", "size": "vram_8_size",
+                  "expected_CRCs": [ACVPRUN_DONE_CRC],
+                  "timeout": timeout_ms},
+        },
     }, indent=2) + "\n")
 
 
