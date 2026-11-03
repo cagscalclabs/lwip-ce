@@ -151,6 +151,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         [
             str(ACVP_APP),
             "--all_algs",
+            "--disable_fips",
             "--vector_req", str(combined_req),
         ],
         env=env,
@@ -193,6 +194,7 @@ def cmd_get_results(args: argparse.Namespace) -> int:
         [
             str(ACVP_APP),
             "--get_results",
+            "--disable_fips",
             "--session", str(session),
             "--save_to", str(results_file),
         ],
@@ -255,6 +257,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         [
             str(ACVP_APP),
             "--all_algs",
+            "--disable_fips",
             "--vector_upload", str(combined_rsp),
         ],
         env=env,
