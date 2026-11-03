@@ -204,6 +204,7 @@ class RunCemuTestBase(unittest.TestCase):
             vectors=vectors_dir,
             responses=responses_dir,
             timeout=30,
+            autotester_timeout_ms=60_000_000,
             cemu=True,
             autotester="/nonexistent/autotester",  # patched away
             usb="usb|plug",
@@ -621,6 +622,7 @@ class TestRunCemuThreadingAndBugRegression(RunCemuTestBase):
             vectors=vectors_dir,
             responses=responses_dir,
             timeout=30,
+            autotester_timeout_ms=60_000_000,
             cemu=True,
             autotester="/nonexistent/autotester",
             usb="usb|plug",
@@ -648,6 +650,7 @@ class TestRunCemuThreadingAndBugRegression(RunCemuTestBase):
             vectors=vectors_dir,
             responses=tmp / "responses",
             timeout=2,
+            autotester_timeout_ms=60_000_000,
             cemu=True,
             autotester="/nonexistent/autotester",
             usb="usb|plug",

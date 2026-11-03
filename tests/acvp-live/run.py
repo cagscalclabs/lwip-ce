@@ -226,7 +226,10 @@ def run_cemu(args: argparse.Namespace) -> int:
     autotest = work_dir / "autotest.json"
     log_path = work_dir / "NETLOG.8xv"
     log_path.unlink(missing_ok=True)
-    write_autotest(autotest, args.usb, args.timeout * 1000, args.binary)
+    # CEmu's hashWait timeout is measured in emulated calculator milliseconds,
+    # not host wall time.  Keep it independent from the socket timeout: a busy
+    # calculator can advance hours of emulated time in a much shorter CI run.
+    write_autotest(autotest, args.usb, args.autotester_timeout_ms, args.binary)
 
     try:
         proc = subprocess.run([args.autotester, str(autotest)], cwd=work_dir)
@@ -345,8 +348,13 @@ def main() -> int:
     )
     parser.add_argument("--vectors", type=Path, default=VECTORS_DIR)
     parser.add_argument("--responses", type=Path, default=RESPONSES_DIR)
-    parser.add_argument("--timeout", type=int, default=25200,
-                        help="Socket / CEmu timeout in seconds (default: 25200 / 7 hours)")
+    parser.add_argument("--timeout", type=int, default=21600,
+                        help="Host socket timeout in seconds (default: 21600 / 6 hours)")
+    parser.add_argument(
+        "--autotester-timeout-ms", type=int, default=600_000_000,
+        help=("CEmu hashWait timeout in emulated milliseconds "
+              "(default: 600000000)"),
+    )
 
     cemu = parser.add_argument_group("CEmu mode (--cemu)")
     cemu.add_argument("--cemu", action="store_true",

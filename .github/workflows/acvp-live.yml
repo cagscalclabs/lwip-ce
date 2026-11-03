@@ -109,7 +109,7 @@ jobs:
     name: NIST ACVP live validation
     needs: [prepare_patched_rom]
     runs-on: ubuntu-latest
-    timeout-minutes: 480
+    timeout-minutes: 360
 
     env:
       ACV_SERVER: demo.acvts.nist.gov
@@ -182,7 +182,8 @@ jobs:
             --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
             --binary "${{ github.workspace }}/tests/acvp-live/bin/ACVPRUN.8xp" \
-            --timeout 25200
+            --timeout 21600 \
+            --autotester-timeout-ms 600000000
           status=$?
           sudo chown -R "$(id -un)" tests/acvp-live/responses/ \
             tests/acvp-live/cemu_work/ \
