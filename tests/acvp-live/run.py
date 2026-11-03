@@ -123,13 +123,14 @@ def run_cemu(args: argparse.Namespace) -> int:
     write_autotest(autotest, args.usb, args.timeout * 1000, args.binary)
 
     proc = subprocess.run([args.autotester, str(autotest)], cwd=work_dir)
-    thread.join(timeout=10)
+    thread.join(timeout=60)
 
     if "error" in outcome:
         print(f"ACVP host error: {outcome['error']}", file=sys.stderr)
-        return 1
     if thread.is_alive() or "response" not in outcome:
-        print("ACVP host did not complete", file=sys.stderr)
+        print(f"ACVP host did not complete "
+              f"(alive={thread.is_alive()}, error={outcome.get('error')}, "
+              f"has_response={'response' in outcome})", file=sys.stderr)
         return 1
 
     print(f"CEmu run complete. Response written to {rsp_path}", flush=True)

@@ -12,3 +12,7 @@ libacvp/
 results.json
 # Private key — never committed
 *.key
+# CEmu autotest working directory (generated at runtime)
+cemu_work/
+# Stub test temporaries
+__pycache__/
