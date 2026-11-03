@@ -50,6 +50,7 @@ runs:
 
     - name: Download this run's lwip-latest artifact
       uses: actions/download-artifact@v4
+      if: ${{ hashFiles('release/lwip.lib') == '' }}
       with:
         name: lwip-latest
         path: ${{ github.workspace }}/release
