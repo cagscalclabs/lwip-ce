@@ -57,6 +57,18 @@ jobs:
             autoconf automake libtool libcurl4-openssl-dev libssl-dev pkg-config \
             python3-cryptography
 
+      - name: Prepare OpenSSL symlinks for libacvp configure
+        run: |
+          ARCH=$(dpkg --print-architecture)
+          TRIPLET=$(gcc -print-multiarch)
+          SSL_LIB=/usr/lib/$TRIPLET
+          # libacvp configure looks for $ssl_dir/lib/libssl.so — symlink the
+          # arch-specific directory so --with-ssl-dir=/usr/local/ssl works
+          sudo mkdir -p /usr/local/ssl/lib
+          sudo ln -sf $SSL_LIB/libssl.so    /usr/local/ssl/lib/libssl.so
+          sudo ln -sf $SSL_LIB/libcrypto.so /usr/local/ssl/lib/libcrypto.so
+          sudo ln -sf /usr/include/openssl  /usr/local/ssl/include
+
       - name: Build acvp_app
         run: python3 tests/acvp-live/acvp_offline.py build
 
