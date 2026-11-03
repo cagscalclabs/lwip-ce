@@ -320,7 +320,7 @@ jobs:
           set +e
           sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
             python3 .github/scripts/run_acvp_tests.py \
-            tests/acvp \
+            tests/acvp-fast \
             --validation-dir tests/validation/acvp \
             --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \

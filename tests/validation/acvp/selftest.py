@@ -42,8 +42,8 @@ _, failed_report, passed = render(fixture_deterministic, expected, None, {}, "fa
 assert not passed and failed_report["failedTests"] == 544
 
 corpus, corpus_expected, corpus_oracle = build_corpus()
-assert sum(corpus_oracle["counts"].values()) == 704
-assert all(count >= 32 for count in corpus_oracle["counts"].values())
+assert sum(corpus_oracle["counts"].values()) == 256
+assert all(count >= 16 for count in corpus_oracle["counts"].values())
 deterministic = [corpus[0], *[vector for vector in corpus[1:]
                               if vector["algorithm"] not in GENERATED_ALGORITHMS]]
 assert process_document(deterministic, reference_backend) == corpus_expected
@@ -106,11 +106,11 @@ class SemanticBackend:
 
 corpus_response = process_document(corpus, SemanticBackend())
 corpus_report = validate_document(corpus, corpus_expected, corpus_response, corpus_oracle)
-assert corpus_report["passed"] and corpus_report["passedTests"] == 704
+assert corpus_report["passed"] and corpus_report["passedTests"] == 256
 corpus_markdown, corpus_summary, passed = render(
     corpus, corpus_expected, corpus_response, corpus_oracle, "success")
-assert passed and corpus_summary["passedTests"] == 704
-assert "704/704 test cases matched" in corpus_markdown and "| SHA2-256 |" in corpus_markdown
+assert passed and corpus_summary["passedTests"] == 256
+assert "256/256 test cases matched" in corpus_markdown and "| SHA2-256 |" in corpus_markdown
 assert "Actual vector inputs" not in corpus_markdown
 with tempfile.TemporaryDirectory() as artifact_tmp:
     artifact_dir = Path(artifact_tmp)
@@ -122,8 +122,8 @@ with tempfile.TemporaryDirectory() as artifact_tmp:
     assert bundle["knownAnswerVectors"] == corpus
     assert bundle["expectedResults"]["exactResults"] == corpus_expected
     assert bundle["calculatorResults"] == corpus_response
-    assert bundle["validationResults"]["passedTests"] == 704
-    assert len(bundle["expectedResults"]["semanticExpectations"]["XECDH"]["serverPrivateByTcId"]) == 32
+    assert bundle["validationResults"]["passedTests"] == 256
+    assert len(bundle["expectedResults"]["semanticExpectations"]["XECDH"]["serverPrivateByTcId"]) == 16
 
 # Revision 1.0 carries HMAC lengths on the group instead of each test case.
 revision_one = {

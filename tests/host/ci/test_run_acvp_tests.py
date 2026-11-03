@@ -21,7 +21,7 @@ def test_every_unit_has_one_build_directory_and_unique_program() -> None:
     assert len({unit.program for unit in MODULE.UNITS}) == len(MODULE.UNITS)
     primitives = set()
     for unit in MODULE.UNITS:
-        makefile = ROOT / "tests/acvp" / unit.directory / "makefile"
+        makefile = ROOT / "tests/acvp-fast" / unit.directory / "makefile"
         text = makefile.read_text()
         assert f"NAME = {unit.program}" in text
         assert f"ACVP_ALGORITHM = {unit.algorithm}" in text

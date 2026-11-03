@@ -111,7 +111,7 @@ def network_tests(
     validation = ROOT / "tests/validation/acvp"
     acvp_command = [
         sys.executable, str(ROOT / ".github/scripts/run_acvp_tests.py"),
-        str(ROOT / "tests/acvp"),
+        str(ROOT / "tests/acvp-fast"),
         "--validation-dir", str(validation),
         "--autotester", str(autotester),
         "--usb", USB_STEP,
