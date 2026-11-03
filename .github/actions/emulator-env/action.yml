@@ -6,8 +6,16 @@ description: >
 
 inputs:
   rom-key:
-    description: ROM decryption passphrase (secrets.AES_ENCRYPT_KEY).
-    required: true
+    description: ROM decryption passphrase when artifact-backed assets are used.
+    required: false
+    default: ""
+  local-assets:
+    description: >
+      Use release/, $RUNNER_TEMP/ce.rom, $RUNNER_TEMP/ce-patched.ce, and
+      $RUNNER_TEMP/cemu-autotester-image already prepared in this job instead
+      of downloading ROM-bearing artifacts.
+    required: false
+    default: "false"
 outputs:
   autotester:
     description: Path to the autotester binary.
@@ -49,6 +57,7 @@ runs:
         echo "${{ github.workspace }}/CEdev/bin" >> "$GITHUB_PATH"
 
     - name: Download this run's lwip-latest artifact
+      if: inputs.local-assets != 'true'
       uses: actions/download-artifact@v4
       with:
         name: lwip-latest
@@ -80,18 +89,21 @@ runs:
         ls -lh tests/common
 
     - name: Download encrypted CEmu ROM artifact
+      if: inputs.local-assets != 'true'
       uses: actions/download-artifact@v4
       with:
         name: cemu-rom-encrypted
         path: ${{ runner.temp }}
 
     - name: Download patched CEmu image artifact
+      if: inputs.local-assets != 'true'
       uses: actions/download-artifact@v4
       with:
         name: cemu-rom-patched
         path: ${{ runner.temp }}
 
     - name: Decrypt CE ROM and patched image
+      if: inputs.local-assets != 'true'
       shell: bash
       env:
         ROM_KEY: ${{ inputs.rom-key }}
@@ -100,6 +112,18 @@ runs:
         shred -u "$RUNNER_TEMP/CE.rom.enc"
         gpg --batch --yes --passphrase "$ROM_KEY" --output "$RUNNER_TEMP/ce-patched.ce" --decrypt "$RUNNER_TEMP/ce-patched.ce.enc"
         shred -u "$RUNNER_TEMP/ce-patched.ce.enc"
+        echo "AUTOTESTER_ROM=$RUNNER_TEMP/ce.rom" >> "$GITHUB_ENV"
+        echo "AUTOTESTER_IMAGE=$RUNNER_TEMP/ce-patched.ce" >> "$GITHUB_ENV"
+        chmod 755 "$RUNNER_TEMP/cemu-autotester-image"
+        strings "$RUNNER_TEMP/cemu-autotester-image" | grep -q "AUTOTESTER_IMAGE"
+
+    - name: Use job-local CE ROM and patched image
+      if: inputs.local-assets == 'true'
+      shell: bash
+      run: |
+        test -f "$RUNNER_TEMP/ce.rom"
+        test -f "$RUNNER_TEMP/ce-patched.ce"
+        test -f "$RUNNER_TEMP/cemu-autotester-image"
         echo "AUTOTESTER_ROM=$RUNNER_TEMP/ce.rom" >> "$GITHUB_ENV"
         echo "AUTOTESTER_IMAGE=$RUNNER_TEMP/ce-patched.ce" >> "$GITHUB_ENV"
         chmod 755 "$RUNNER_TEMP/cemu-autotester-image"

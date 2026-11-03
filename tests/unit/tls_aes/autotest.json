@@ -47,6 +47,8 @@
     "hashWait|19",
     "key|enter",
     "hashWait|20",
+    "key|enter",
+    "hashWait|21",
     "key|enter"
   ],
   "hashes": {
@@ -232,6 +234,16 @@
     },
     "20": {
       "description": "TLS record AES-256-CCM chunked encrypt/decrypt",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "label": "@success",
+      "expected_CRCs": [
+        "D1F2869F"
+      ],
+      "timeout": 10000
+    },
+    "21": {
+      "description": "AES-128-GCM with 8-bit and 1024-bit IV boundaries",
       "start": "vram_start",
       "size": "vram_16_size",
       "label": "@success",

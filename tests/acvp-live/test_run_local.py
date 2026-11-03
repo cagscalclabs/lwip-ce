@@ -412,6 +412,33 @@ AES_GCM_VS = {
     ],
 }
 
+# Cover both ends of the IV range supported by Python's independent AESGCM
+# oracle.  The calculator unit suite separately covers ACVP's 8-bit minimum;
+# cryptography intentionally rejects IVs shorter than 64 bits.
+for _tg_id, _tc_id, _iv in (
+    (2, 2, bytes(range(8))),
+    (3, 3, bytes(range(128))),
+):
+    AES_GCM_VS["testGroups"].append({
+        "tgId": _tg_id,
+        "testType": "AFT",
+        "direction": "encrypt",
+        "keyLen": 128,
+        "ivLen": len(_iv) * 8,
+        "tagLen": 128,
+        "payloadLen": 128,
+        "aadLen": 0,
+        "ivGen": "external",
+        "ivGenMode": "8.2.2",
+        "tests": [{
+            "tcId": _tc_id,
+            "key": "000102030405060708090a0b0c0d0e0f",
+            "iv": _iv.hex(),
+            "pt": "000102030405060708090a0b0c0d0e0f",
+            "aad": "",
+        }],
+    })
+
 AES_CCM_VS = {
     "vsId": 1008,
     "algorithm": "ACVP-AES-CCM",
@@ -516,9 +543,12 @@ class TestRunCemuSingleAlgorithm(RunCemuTestBase):
         self.assertTrue(rsp.exists())
         data = json.loads(rsp.read_text())
         vs_rsp = data[1] if isinstance(data, list) else data
-        test = vs_rsp["testGroups"][0]["tests"][0]
-        self.assertIn("ct", test)
-        self.assertIn("tag", test)
+        groups = vs_rsp["testGroups"]
+        self.assertEqual(len(groups), 3)
+        for group in groups:
+            test = group["tests"][0]
+            self.assertIn("ct", test)
+            self.assertIn("tag", test)
 
     def test_aes_ccm(self):
         rc, rsp = self._run([AES_CCM_VS])

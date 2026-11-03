@@ -31,6 +31,39 @@ uint8_t gcm_ciphertext[] = {
 uint8_t gcm_tag[] = {
     0x5b, 0xc9, 0x4f, 0xbc, 0x32, 0x21, 0xa5, 0xdb, 0x94, 0xfa, 0xe9, 0x5a, 0xe7, 0x12, 0x1a, 0x47};
 
+/* AES-128-GCM with the ACVP IV-domain boundaries: 8 and 1024 bits.
+ * Expected values were independently generated from SP 800-38D's GHASH/J0
+ * construction and cross-checked against Python cryptography at 1024 bits. */
+uint8_t gcm_variable_key[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+uint8_t gcm_variable_aad[] = {0xaa, 0xbb, 0xcc};
+uint8_t gcm_variable_plaintext[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};
+uint8_t gcm_variable_ciphertext[][32] = {
+    {
+        0xe0, 0xf8, 0xdb, 0xf1, 0x8a, 0xc2, 0x05, 0x59,
+        0x70, 0x0e, 0xad, 0x53, 0xe0, 0x65, 0x67, 0x93,
+        0x7e, 0x76, 0xf1, 0x6c, 0x71, 0x45, 0xd7, 0x52,
+        0x6b, 0x65, 0x03, 0xd0, 0x7b, 0x8c, 0x18, 0x60,
+    },
+    {
+        0x48, 0x13, 0xde, 0xdd, 0x82, 0x21, 0xf2, 0x87,
+        0xe9, 0x0e, 0xa2, 0xa6, 0x18, 0x7d, 0xfa, 0x1b,
+        0x3f, 0xbf, 0x16, 0x12, 0xb3, 0x0e, 0xc9, 0xbe,
+        0x33, 0xa3, 0x9b, 0x6c, 0x70, 0xe1, 0x51, 0x4b,
+    },
+};
+uint8_t gcm_variable_tag[][TLS_AES_AUTH_TAG_SIZE] = {
+    {0x3a, 0x0f, 0x26, 0x0b, 0x3f, 0xb7, 0xec, 0xd2,
+     0xd5, 0x87, 0x05, 0xb5, 0xe0, 0x49, 0x03, 0x3d},
+    {0x2f, 0x02, 0x90, 0xcc, 0x09, 0xfe, 0xc0, 0x39,
+     0x33, 0x79, 0x72, 0x64, 0x32, 0x5e, 0x29, 0x05},
+};
+
 /*
  * NIST SP 800-38A AES-128-CBC Test Vector
  * Source: SP 800-38A, Appendix F.2.1 (CBC-AES128.Encrypt)
@@ -598,6 +631,51 @@ int main(void)
                                bad, sizeof bad, tbuf);
         for (size_t i = 0; i < sizeof rec256_gcm_plaintext; i++)
             status &= tbuf[i] == 0xaa;
+    }
+    show_result(status);
+
+    // Test 21: AES-GCM ACVP IV boundaries (8-bit and 1024-bit IVs)
+    status = true;
+    {
+        uint8_t min_iv[] = {0xa5};
+        uint8_t max_iv[128];
+        const uint8_t *ivs[] = {min_iv, max_iv};
+        const size_t iv_lengths[] = {sizeof min_iv, sizeof max_iv};
+        for (size_t i = 0; i < sizeof max_iv; i++)
+            max_iv[i] = (uint8_t)i;
+        for (size_t i = 0; i < 2; i++)
+        {
+            memset(tbuf, 0, sizeof(tbuf));
+            memset(tag, 0, sizeof(tag));
+            status &= tls_aes_init(&ctx, TLS_AES_GCM,
+                                   gcm_variable_key, sizeof gcm_variable_key,
+                                   ivs[i], iv_lengths[i]);
+            status &= tls_aes_update_aad(&ctx, gcm_variable_aad,
+                                         sizeof gcm_variable_aad);
+            status &= tls_aes_encrypt(&ctx, gcm_variable_plaintext,
+                                      sizeof gcm_variable_plaintext, tbuf);
+            status &= tls_aes_digest(&ctx, tag);
+            status &= memcmp(tbuf, gcm_variable_ciphertext[i],
+                             sizeof gcm_variable_plaintext) == 0;
+            status &= memcmp(tag, gcm_variable_tag[i], sizeof tag) == 0;
+
+            memset(tbuf, 0, sizeof(tbuf));
+            status &= tls_aes_init(&ctx, TLS_AES_GCM,
+                                   gcm_variable_key, sizeof gcm_variable_key,
+                                   ivs[i], iv_lengths[i]);
+            status &= tls_aes_verify(&ctx, gcm_variable_aad,
+                                     sizeof gcm_variable_aad,
+                                     gcm_variable_ciphertext[i],
+                                     sizeof gcm_variable_ciphertext[i],
+                                     gcm_variable_tag[i]);
+            status &= tls_aes_decrypt(&ctx, gcm_variable_ciphertext[i],
+                                      sizeof gcm_variable_ciphertext[i], tbuf);
+            status &= memcmp(tbuf, gcm_variable_plaintext,
+                             sizeof gcm_variable_plaintext) == 0;
+        }
+        status &= !tls_aes_init(&ctx, TLS_AES_GCM,
+                                gcm_variable_key, sizeof gcm_variable_key,
+                                min_iv, 0);
     }
     show_result(status);
 

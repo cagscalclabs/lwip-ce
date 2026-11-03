@@ -132,8 +132,15 @@ def build_corpus(num: int = 16) -> tuple[list[dict], list[dict], dict]:
 
     def add_aead(algorithm: str) -> None:
         groups = []
+        # Exercise the optimized 96-bit GCM path and representative values
+        # across the registered 8..1024-bit, byte-aligned IV domain.  Python's
+        # AESGCM oracle accepts IVs of at least 8 bytes, so the 1-byte boundary
+        # is covered by the calculator AES unit test instead.
+        gcm_iv_lengths = (8, 12, 16, 31, 64, 128)
         for i in range(half):
-            key = c.bytes((16, 24, 32)[i % 3]); iv_len = 12 if algorithm.endswith("GCM") else 7 + i % 7
+            key = c.bytes((16, 24, 32)[i % 3])
+            iv_len = (gcm_iv_lengths[i % len(gcm_iv_lengths)]
+                      if algorithm.endswith("GCM") else 7 + i % 7)
             iv, aad = c.bytes(iv_len), c.bytes((i * 7) % 65)
             plain = c.bytes((i * 13) % 129)
             tag_len = 16 if algorithm.endswith("GCM") else (4, 6, 8, 10, 12, 14, 16)[i % 7]

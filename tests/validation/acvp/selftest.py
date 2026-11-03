@@ -30,6 +30,9 @@ assert {(item["algorithm"], item.get("mode")) for item in capabilities} == {
     ("ECDSA", "sigVer"), ("DetECDSA", "sigGen"),
     ("XECDH", "SSC"), ("KAS-ECC", "CDH-Component"),
 }
+gcm_capability = next(item for item in capabilities
+                      if item["algorithm"] == "ACVP-AES-GCM")
+assert gcm_capability["ivLen"] == [{"min": 8, "max": 1024, "increment": 8}]
 fixture_deterministic = [prompt[0], *[vector for vector in prompt[1:]
                                      if vector["algorithm"] not in GENERATED_ALGORITHMS]]
 actual = process_document(fixture_deterministic, reference_backend)

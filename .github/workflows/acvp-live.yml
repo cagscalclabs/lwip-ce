@@ -9,105 +9,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare_rom:
-    name: Prepare encrypted CEmu ROM
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download encrypted ROM
-        env:
-          ROM_NAME: ${{ vars.AUTOTESTER_ROM }}
-        run: |
-          curl --http1.1 -fsSL \
-            --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 180 \
-            --connect-timeout 20 -o "$RUNNER_TEMP/CE.rom.enc" \
-            "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
-
-      - name: Share encrypted ROM with test job
-        uses: actions/upload-artifact@v4
-        with:
-          name: cemu-rom-encrypted
-          path: ${{ runner.temp }}/CE.rom.enc
-          if-no-files-found: error
-          retention-days: 1
-
-  prepare_patched_rom:
-    name: Install lwIP into CEmu image
-    needs: prepare_rom
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgl1-mesa-dev
-
-      - name: Download lwip release from latest
-        run: |
-          mkdir -p "$RUNNER_TEMP/lwip-release" "$GITHUB_WORKSPACE/release"
-          curl -fsSL \
-            "https://github.com/${{ github.repository }}/releases/latest/download/lwip.zip" \
-            -o "$RUNNER_TEMP/lwip-release/lwip.zip"
-          unzip -q "$RUNNER_TEMP/lwip-release/lwip.zip" -d "$RUNNER_TEMP/lwip-release"
-          cp -r "$RUNNER_TEMP/lwip-release/lwip/." "$GITHUB_WORKSPACE/release/"
-
-      - name: Download encrypted CEmu ROM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cemu-rom-encrypted
-          path: ${{ runner.temp }}
-
-      - name: Decrypt CEmu ROM
-        run: |
-          gpg --batch --yes \
-            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
-            --output "$RUNNER_TEMP/ce.rom" \
-            --decrypt "$RUNNER_TEMP/CE.rom.enc"
-          shred -u "$RUNNER_TEMP/CE.rom.enc"
-          test -f "$RUNNER_TEMP/ce.rom"
-
-      - name: Build CEmu and install lwIP into a reproducible image
-        run: |
-          python3 .github/scripts/prepare_cemu_image.py \
-            --rom "$RUNNER_TEMP/ce.rom" \
-            --release "$GITHUB_WORKSPACE/release" \
-            --output "$RUNNER_TEMP/ce-patched.ce" \
-            --autotester-output "$RUNNER_TEMP/cemu-autotester-image" \
-            --headless-output "$RUNNER_TEMP/cemu-headless" \
-            --work-dir "$RUNNER_TEMP/CEmu"
-
-      - name: Shred decrypted ROM
-        if: always()
-        run: shred -u "$RUNNER_TEMP/ce.rom" 2>/dev/null || true
-
-      - name: Encrypt patched image for artifact sharing
-        run: |
-          gpg --batch --yes --symmetric \
-            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
-            --output "$RUNNER_TEMP/ce-patched.ce.enc" \
-            "$RUNNER_TEMP/ce-patched.ce"
-          shred -u "$RUNNER_TEMP/ce-patched.ce"
-
-      - name: Upload patched CEmu image
-        uses: actions/upload-artifact@v4
-        with:
-          name: cemu-rom-patched
-          path: |
-            ${{ runner.temp }}/ce-patched.ce.enc
-            ${{ runner.temp }}/cemu-autotester-image
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload lwip-latest artifact for emulator-env
-        uses: actions/upload-artifact@v4
-        with:
-          name: lwip-latest
-          path: ${{ github.workspace }}/release/
-          if-no-files-found: error
-          retention-days: 1
-
   acvp-live:
     name: NIST ACVP live validation
-    needs: [prepare_patched_rom]
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -135,8 +38,49 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake libtool libcurl4-openssl-dev libssl-dev pkg-config \
-            python3-cryptography
+            autoconf automake cmake libgl1-mesa-dev libtool \
+            libcurl4-openssl-dev libssl-dev ninja-build pkg-config \
+            python3-cryptography unzip
+
+      - name: Download lwIP release marked latest
+        run: |
+          mkdir -p "$RUNNER_TEMP/lwip-release" "$GITHUB_WORKSPACE/release"
+          curl -fsSL \
+            "https://github.com/${{ github.repository }}/releases/latest/download/lwip.zip" \
+            -o "$RUNNER_TEMP/lwip-release/lwip.zip"
+          unzip -q "$RUNNER_TEMP/lwip-release/lwip.zip" \
+            -d "$RUNNER_TEMP/lwip-release"
+          cp -r "$RUNNER_TEMP/lwip-release/lwip/." \
+            "$GITHUB_WORKSPACE/release/"
+
+      - name: Download encrypted CEmu ROM into runner-local storage
+        env:
+          ROM_NAME: ${{ vars.AUTOTESTER_ROM }}
+        run: |
+          curl --http1.1 -fsSL \
+            --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 180 \
+            --connect-timeout 20 -o "$RUNNER_TEMP/CE.rom.enc" \
+            "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
+
+      - name: Decrypt CEmu ROM in runner-local storage
+        env:
+          ROM_KEY: ${{ secrets.AES_ENCRYPT_KEY }}
+        run: |
+          gpg --batch --yes --passphrase "$ROM_KEY" \
+            --output "$RUNNER_TEMP/ce.rom" \
+            --decrypt "$RUNNER_TEMP/CE.rom.enc"
+          shred -u "$RUNNER_TEMP/CE.rom.enc"
+          test -f "$RUNNER_TEMP/ce.rom"
+
+      - name: Build CEmu and install the latest lwIP release
+        run: |
+          python3 .github/scripts/prepare_cemu_image.py \
+            --rom "$RUNNER_TEMP/ce.rom" \
+            --release "$GITHUB_WORKSPACE/release" \
+            --output "$RUNNER_TEMP/ce-patched.ce" \
+            --autotester-output "$RUNNER_TEMP/cemu-autotester-image" \
+            --headless-output "$RUNNER_TEMP/cemu-headless" \
+            --work-dir "$RUNNER_TEMP/CEmu"
 
       - name: Prepare OpenSSL symlinks for libacvp configure
         run: |
@@ -155,6 +99,7 @@ jobs:
           python3 -I tests/acvp-live/test_run_local.py
           python3 -I tests/acvp-live/test_acvp_offline.py
           python3 -I tests/acvp-live/test_run_concurrent.py
+          python3 -I tests/acvp-live/test_summary.py
           python3 tests/validation/acvp/generate_vectors.py
           python3 tests/validation/acvp/selftest.py
 
@@ -164,7 +109,7 @@ jobs:
       - id: env
         uses: ./.github/actions/emulator-env
         with:
-          rom-key: ${{ secrets.AES_ENCRYPT_KEY }}
+          local-assets: "true"
 
       - name: Build ACVPRUN against the installed latest release
         run: |
@@ -175,6 +120,7 @@ jobs:
         run: python3 tests/acvp-live/acvp_offline.py fetch
 
       - name: Run vector sets concurrently through isolated CEmu instances
+        id: run_vectors
         run: |
           set +e
           sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
@@ -196,16 +142,20 @@ jobs:
           exit "$status"
 
       - name: Submit responses to NIST
+        id: submit
         run: python3 tests/acvp-live/acvp_offline.py submit
 
       - name: Fetch and display grading results
+        id: grade
         run: python3 tests/acvp-live/acvp_offline.py get_results
 
-      - name: Remove CEmu ROM
+      - name: Remove all runner-local CEmu ROM material
         if: always()
         run: |
-          shred -u "$AUTOTESTER_ROM" 2>/dev/null || true
-          shred -u "$AUTOTESTER_IMAGE" 2>/dev/null || true
+          shred -u "$RUNNER_TEMP/CE.rom.enc" 2>/dev/null || true
+          shred -u "$RUNNER_TEMP/ce.rom" 2>/dev/null || true
+          shred -u "$RUNNER_TEMP/ce-patched.ce" 2>/dev/null || true
+          shred -u "$RUNNER_TEMP/ce-patched.ce.enc" 2>/dev/null || true
 
       - name: Remove client private key
         if: always()
@@ -217,6 +167,22 @@ jobs:
             tests/acvp-live/vectors_combined.json \
             tests/acvp-live/acvpLiveSession*.json 2>/dev/null || true
 
+      - name: Build and publish ACVP live summary
+        if: always()
+        run: |
+          python3 tests/acvp-live/summary.py \
+            --vectors tests/acvp-live/vectors/combined.json \
+            --responses tests/acvp-live/responses/combined.json \
+            --grading tests/acvp-live/results.json \
+            --output tests/acvp-live/results-units.json \
+            --run-outcome "${{ steps.run_vectors.outcome }}" \
+            --submit-outcome "${{ steps.submit.outcome }}" \
+            --grade-outcome "${{ steps.grade.outcome }}"
+          python3 .github/scripts/test_table.py render \
+            --input tests/acvp-live/results-units.json \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --fallback "ACVP|Live workflow|${{ job.status }}"
+
       - name: Upload evidence bundle
         if: always()
         uses: actions/upload-artifact@v4
@@ -226,6 +192,8 @@ jobs:
             tests/acvp-live/vectors/
             tests/acvp-live/responses/
             tests/acvp-live/results.json
+            tests/acvp-live/results-units.json
             tests/acvp-live/results.log
             tests/acvp-live/units/
+          if-no-files-found: warn
           retention-days: 90
