@@ -75,6 +75,17 @@ jobs:
       - name: Fetch vectors from NIST
         run: python3 tests/acvp-live/acvp_offline.py fetch
 
+      - name: Download lwip release from latest tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download latest \
+            --repo "${{ github.repository }}" \
+            --pattern lwip.zip \
+            --dir "$RUNNER_TEMP/lwip-release"
+          unzip -q "$RUNNER_TEMP/lwip-release/lwip.zip" -d "$RUNNER_TEMP/lwip-release"
+          cp -r "$RUNNER_TEMP/lwip-release/lwip/." "${{ github.workspace }}/release/"
+
       - id: env
         uses: ./.github/actions/emulator-env
         with:
