@@ -93,17 +93,51 @@ def run_cemu(args: argparse.Namespace) -> int:
     Control()
     ready = threading.Event()
     outcome: dict[str, object] = {}
+    listener_ref: list[socket.socket] = []
 
     def serve() -> None:
         try:
             with socket.create_server(("0.0.0.0", DEFAULT_PORT),
                                       reuse_port=False) as listener:
                 listener.settimeout(max(300, args.timeout))
+                listener_ref.append(listener)
                 ready.set()
-                connection, _ = listener.accept()
+                print(f"ACVP host: listening on 0.0.0.0:{DEFAULT_PORT}, "
+                      f"waiting for calculator to connect…", flush=True)
+                connection, addr = listener.accept()
+                print(f"ACVP host: calculator connected from {addr[0]}:{addr[1]}", flush=True)
                 with connection:
                     connection.settimeout(args.timeout)
-                    backend = SocketBackend(connection)
+                    op_count = 0
+
+                    class _LoggingBackend:
+                        """Wraps SocketBackend and prints per-vector-set progress."""
+                        def __init__(self, inner: SocketBackend) -> None:
+                            self._inner = inner
+                            self._last_op: int | None = None
+                            self._op_count = 0
+
+                        def __call__(self, operation: int, payload: bytes) -> bytes:
+                            nonlocal op_count
+                            if operation != self._last_op:
+                                if self._last_op is not None:
+                                    print(f"  op {self._last_op}: {self._op_count} calls", flush=True)
+                                self._last_op = operation
+                                self._op_count = 0
+                            self._op_count += 1
+                            op_count += 1
+                            if op_count % 100 == 0:
+                                print(f"  … {op_count} operations so far", flush=True)
+                            return self._inner(operation, payload)
+
+                        def stop(self) -> None:
+                            if self._last_op is not None:
+                                print(f"  op {self._last_op}: {self._op_count} calls", flush=True)
+                            print(f"ACVP host: sending STOP after {op_count} total operations", flush=True)
+                            self._inner.stop()
+
+                    raw_backend = SocketBackend(connection)
+                    backend = _LoggingBackend(raw_backend)
                     outcome["response"] = process_file(combined, rsp_path, backend)
                     backend.stop()
         except Exception as exc:  # noqa: BLE001
@@ -123,7 +157,16 @@ def run_cemu(args: argparse.Namespace) -> int:
     write_autotest(autotest, args.usb, args.timeout * 1000, args.binary)
 
     proc = subprocess.run([args.autotester, str(autotest)], cwd=work_dir)
-    thread.join(timeout=60)
+
+    # If the calc never connected (networking failure), the serve thread is
+    # stuck in accept().  Closing the listener unblocks it immediately.
+    if thread.is_alive() and listener_ref:
+        try:
+            listener_ref[0].shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    thread.join(timeout=10)
 
     if "error" in outcome:
         print(f"ACVP host error: {outcome['error']}", file=sys.stderr)

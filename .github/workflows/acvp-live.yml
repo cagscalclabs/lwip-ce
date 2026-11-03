@@ -164,7 +164,7 @@ jobs:
             --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
             --binary "${{ github.workspace }}/tests/validation/acvp/bin/ACVPRUN.8xp" \
-            --timeout 3600000
+            --timeout 3600
           status=$?
           sudo chown -R "$(id -un)" tests/acvp-live/responses/ \
             2>/dev/null || true
