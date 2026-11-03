@@ -445,12 +445,19 @@ def _rsa_vector_set(vector: dict, backend: Backend) -> dict:
         sig_type = group.get("sigType")
         if group.get("hashAlg") != "SHA2-256" or sig_type not in ("pss", "pkcs1v1.5"):
             raise AcvpError("only RSA PSS/PKCS1v1.5 verification with SHA2-256 is supported")
-        if group.get("testType", "AFT") != "AFT" or group.get("conformance") is not None:
-            raise AcvpError("only ordinary RSA sigVer AFT groups are supported")
+        test_type = group.get("testType", "AFT")
+        conformance = group.get("conformance")
+        if test_type not in ("AFT", "GDT"):
+            raise AcvpError(f"unsupported RSA sigVer test type {test_type!r}")
+        if conformance not in (None, "", "none"):
+            raise AcvpError(f"unsupported RSA sigVer conformance {conformance!r}")
         if sig_type == "pss" and (group.get("saltLen") != 32 or
                                   group.get("maskFunction", "mgf1").lower() != "mgf1"):
             raise AcvpError("RSA-PSS requires a 32-byte salt and MGF1")
-        n, e = _hex(group.get("n"), "n"), _hex(group.get("e"), "e")
+        n = _hex(group.get("n"), "n")
+        # This registration advertises pubExpMode=fixed and
+        # fixedPubExp=010001.  Some servers omit e from such prompt groups.
+        e = _hex(group.get("e", "010001"), "e")
         if e != b"\x01\x00\x01": raise AcvpError("the RSA implementation supports public exponent 65537 only")
         tests = []
         for test in group.get("tests", []):

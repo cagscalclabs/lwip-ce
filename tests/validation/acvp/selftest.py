@@ -164,9 +164,15 @@ def asymmetric_backend(operation: int, payload: bytes) -> bytes:
 
 asymmetric_vectors = [
     {"vsId": 8, "algorithm": "RSA", "mode": "sigVer", "revision": "FIPS186-5",
-     "testGroups": [{"tgId": 8, "testType": "AFT", "sigType": "pkcs1v1.5",
-                     "hashAlg": "SHA2-256", "n": "AA" * 256, "e": "010001",
-                     "tests": [{"tcId": 9, "message": "00", "signature": "BB" * 256}]}]},
+     "testGroups": [
+         {"tgId": 8, "testType": "GDT", "conformance": "none",
+          "sigType": "pkcs1v1.5", "hashAlg": "SHA2-256", "n": "AA" * 256,
+          "tests": [{"tcId": 9, "message": "00", "signature": "BB" * 256}]},
+         {"tgId": 18, "testType": "AFT", "sigType": "pss",
+          "hashAlg": "SHA2-256", "saltLen": 32, "maskFunction": "mgf1",
+          "n": "AA" * 256, "e": "010001",
+          "tests": [{"tcId": 19, "message": "00", "signature": "BB" * 256}]},
+     ]},
     {"vsId": 9, "algorithm": "ECDSA", "mode": "sigVer", "revision": "FIPS186-5",
      "testGroups": [
          {"tgId": 9, "testType": "AFT", "curve": "P-256", "hashAlg": "SHA2-256",

@@ -154,6 +154,7 @@ jobs:
         run: |
           python3 -I tests/acvp-live/test_run_local.py
           python3 -I tests/acvp-live/test_acvp_offline.py
+          python3 -I tests/acvp-live/test_run_concurrent.py
           python3 tests/validation/acvp/generate_vectors.py
           python3 tests/validation/acvp/selftest.py
 
@@ -173,20 +174,24 @@ jobs:
       - name: Fetch vectors from NIST
         run: python3 tests/acvp-live/acvp_offline.py fetch
 
-      - name: Run vectors through CEmu
+      - name: Run vector sets concurrently through isolated CEmu instances
         run: |
           set +e
           sudo env PATH="$PATH" CEDEV="$CEDEV" AUTOTESTER_IMAGE="$AUTOTESTER_IMAGE" \
-            python3 tests/acvp-live/run.py \
-            --cemu \
+            python3 .github/scripts/run_acvp_live_tests.py \
+            --runner "${{ github.workspace }}/tests/acvp-live/run.py" \
             --autotester "${{ steps.env.outputs.image-autotester }}" \
             --usb "${{ steps.env.outputs.usb-step }}" \
             --binary "${{ github.workspace }}/tests/acvp-live/bin/ACVPRUN.8xp" \
-            --timeout 21600 \
-            --autotester-timeout-ms 600000000
+            --vectors "${{ github.workspace }}/tests/acvp-live/vectors/combined.json" \
+            --response "${{ github.workspace }}/tests/acvp-live/responses/combined.json" \
+            --artifacts-dir "${{ github.workspace }}/tests/acvp-live/units" \
+            --socket-timeout 21600 \
+            --autotester-timeout-ms 600000000 \
+            --process-timeout 18000
           status=$?
           sudo chown -R "$(id -un)" tests/acvp-live/responses/ \
-            tests/acvp-live/cemu_work/ \
+            tests/acvp-live/units/ \
             2>/dev/null || true
           exit "$status"
 
@@ -222,6 +227,5 @@ jobs:
             tests/acvp-live/responses/
             tests/acvp-live/results.json
             tests/acvp-live/results.log
-            tests/acvp-live/cemu_work/autotest.json
-            tests/acvp-live/cemu_work/NETLOG.8xv
+            tests/acvp-live/units/
           retention-days: 90

@@ -17,6 +17,7 @@ results.log
 *_totp.txt
 # CEmu autotest working directory (generated at runtime)
 cemu_work/
+units/
 bin/
 obj/
 # Stub test temporaries
