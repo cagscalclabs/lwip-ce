@@ -172,16 +172,9 @@ jobs:
         run: |
           python3 tests/acvp-live/summary.py \
             --vectors tests/acvp-live/vectors/combined.json \
-            --responses tests/acvp-live/responses/combined.json \
             --grading tests/acvp-live/results.json \
-            --output tests/acvp-live/results-units.json \
-            --run-outcome "${{ steps.run_vectors.outcome }}" \
-            --submit-outcome "${{ steps.submit.outcome }}" \
-            --grade-outcome "${{ steps.grade.outcome }}"
-          python3 .github/scripts/test_table.py render \
-            --input tests/acvp-live/results-units.json \
-            --output "$GITHUB_STEP_SUMMARY" \
-            --fallback "ACVP|Live workflow|${{ job.status }}"
+            --server "$ACV_SERVER" \
+            --output "$GITHUB_STEP_SUMMARY"
 
       - name: Upload evidence bundle
         if: always()
@@ -192,7 +185,6 @@ jobs:
             tests/acvp-live/vectors/
             tests/acvp-live/responses/
             tests/acvp-live/results.json
-            tests/acvp-live/results-units.json
             tests/acvp-live/results.log
             tests/acvp-live/units/
           if-no-files-found: warn

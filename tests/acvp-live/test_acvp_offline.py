@@ -109,7 +109,9 @@ class TestResultCommand(unittest.TestCase):
     def test_get_results_uses_session_as_required_argument(self):
         with temporary_layout() as root:
             offline.LIBACVP_DIR.mkdir()
-            offline.SESSION_FILE.write_text("[]")
+            offline.SESSION_FILE.write_text(json.dumps({
+                "url": "/acvp/v1/testSessions/42",
+            }))
             completed = subprocess.CompletedProcess(
                 [], 0, stdout="[ACVP]: Passed all vectors in test session!\n",
             )
@@ -123,7 +125,9 @@ class TestResultCommand(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertEqual(command[1:3], ["--get_results", str(offline.SESSION_FILE)])
             self.assertNotIn("--session", command)
-            self.assertTrue(json.loads(offline.RESULTS_FILE.read_text())["passed"])
+            result = json.loads(offline.RESULTS_FILE.read_text())
+            self.assertTrue(result["passed"])
+            self.assertEqual(result["test_session_id"], 42)
 
 
 class TestSubmitCommand(unittest.TestCase):

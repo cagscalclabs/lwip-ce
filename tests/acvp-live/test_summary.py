@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the live ACVP job-summary adapter."""
+"""Tests for the live ACVP job-summary renderer."""
 
 from __future__ import annotations
 
@@ -16,48 +16,35 @@ SPEC.loader.exec_module(summary)
 
 
 class SummaryTests(unittest.TestCase):
-    def test_groups_vector_sets_and_reports_partial_failure(self):
+    def test_renders_one_nist_graded_row_per_vector_set(self):
         vectors = [
             {"acvVersion": "1.0"},
             {"vsId": 11, "algorithm": "SHA2-256"},
-            {"vsId": 12, "algorithm": "SHA2-256"},
-            {"vsId": 13, "algorithm": "ACVP-AES-GCM"},
+            {"vsId": 12, "algorithm": "ECDSA", "mode": "sigVer"},
         ]
-        responses = [
-            {"acvVersion": "1.0"},
-            {"vsId": 11, "testGroups": []},
-            {"vsId": 13, "testGroups": []},
-        ]
-        results = summary.build_results(
-            vectors, responses, None, "failure", "skipped", "skipped"
+        text = summary.build_summary(
+            vectors,
+            {"passed": True, "test_session_id": 42},
+            "demo.acvts.nist.gov",
         )
-        self.assertEqual([item["module"] for item in results],
-                         ["SHA2-256", "ACVP-AES-GCM"])
-        sha_units = results[0]["units"]
-        self.assertEqual(sha_units[0]["tests"][0]["status"], "pass")
-        self.assertEqual(sha_units[1]["tests"][0]["status"], "fail")
-        self.assertEqual(results[0]["status"], "fail")
 
-    def test_applies_successful_nist_grade_to_every_vector_set(self):
-        vectors = [{"vsId": 21, "algorithm": "ECDSA", "mode": "sigVer"}]
-        responses = [{"vsId": 21, "testGroups": []}]
-        results = summary.build_results(
-            vectors, responses, {"passed": True},
-            "success", "success", "success",
-        )
-        self.assertEqual(results[0]["module"], "ECDSA sigVer")
-        self.assertEqual(results[0]["status"], "pass")
-        self.assertTrue(all(
-            test["status"] == "pass"
-            for test in results[0]["units"][0]["tests"]
-        ))
+        self.assertIn("**Test session:** `42`", text)
+        self.assertIn("| 11 | SHA2-256 | ✅ Pass |", text)
+        self.assertIn("| 12 | ECDSA sigVer | ✅ Pass |", text)
+        self.assertNotIn("Calculator response", text)
+        self.assertNotIn("Unit", text)
 
-    def test_missing_vectors_produces_workflow_fallback(self):
-        results = summary.build_results(
-            None, None, None, "failure", "skipped", "skipped"
+    def test_failed_nist_grade_is_visible(self):
+        text = summary.build_summary(
+            [{"vsId": 21, "algorithm": "ACVP-AES-GCM"}],
+            {"passed": False},
+            "demo.acvts.nist.gov",
         )
-        self.assertEqual(results[0]["module"], "ACVP LIVE")
-        self.assertEqual(results[0]["status"], "fail")
+        self.assertIn("| 21 | ACVP-AES-GCM | ❌ Fail |", text)
+
+    def test_missing_vectors_and_grade_have_clear_fallback(self):
+        text = summary.build_summary(None, None, "demo.acvts.nist.gov")
+        self.assertIn("| — | No vector sets available | ⚪ Not graded |", text)
 
 
 if __name__ == "__main__":

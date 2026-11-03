@@ -341,8 +341,16 @@ def cmd_get_results(args: argparse.Namespace) -> int:
     RESULTS_LOG.write_text(output)
     print(output, end="" if output.endswith("\n") else "\n")
     passed = result.returncode == 0 and "Passed all vectors in test session!" in output
+    session_data = json.loads(Path(session).read_text())
+    session_url = session_data.get("url") if isinstance(session_data, dict) else None
+    session_id = None
+    if isinstance(session_url, str):
+        candidate = session_url.rstrip("/").rsplit("/", 1)[-1]
+        if candidate.isdigit():
+            session_id = int(candidate)
     RESULTS_FILE.write_text(json.dumps({
         "passed": passed,
+        "test_session_id": session_id,
         "acvp_app_status": result.returncode,
         "log": RESULTS_LOG.name,
     }, indent=2) + "\n")
