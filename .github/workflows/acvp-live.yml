@@ -26,9 +26,84 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  prepare_patched_rom:
+    name: Install lwIP into CEmu image
+    needs: prepare_rom
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libgl1-mesa-dev
+
+      - name: Download lwip release from latest
+        run: |
+          mkdir -p "$RUNNER_TEMP/lwip-release" "$GITHUB_WORKSPACE/release"
+          curl -fsSL \
+            "https://github.com/${{ github.repository }}/releases/latest/download/lwip.zip" \
+            -o "$RUNNER_TEMP/lwip-release/lwip.zip"
+          unzip -q "$RUNNER_TEMP/lwip-release/lwip.zip" -d "$RUNNER_TEMP/lwip-release"
+          cp -r "$RUNNER_TEMP/lwip-release/lwip/." "$GITHUB_WORKSPACE/release/"
+
+      - name: Download encrypted CEmu ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cemu-rom-encrypted
+          path: ${{ runner.temp }}
+
+      - name: Decrypt CEmu ROM
+        run: |
+          gpg --batch --yes \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "$RUNNER_TEMP/ce.rom" \
+            --decrypt "$RUNNER_TEMP/CE.rom.enc"
+          shred -u "$RUNNER_TEMP/CE.rom.enc"
+          test -f "$RUNNER_TEMP/ce.rom"
+
+      - name: Build CEmu and install lwIP into a reproducible image
+        run: |
+          python3 .github/scripts/prepare_cemu_image.py \
+            --rom "$RUNNER_TEMP/ce.rom" \
+            --release "$GITHUB_WORKSPACE/release" \
+            --output "$RUNNER_TEMP/ce-patched.ce" \
+            --autotester-output "$RUNNER_TEMP/cemu-autotester-image" \
+            --headless-output "$RUNNER_TEMP/cemu-headless" \
+            --work-dir "$RUNNER_TEMP/CEmu"
+
+      - name: Shred decrypted ROM
+        if: always()
+        run: shred -u "$RUNNER_TEMP/ce.rom" 2>/dev/null || true
+
+      - name: Encrypt patched image for artifact sharing
+        run: |
+          gpg --batch --yes --symmetric \
+            --passphrase "${{ secrets.AES_ENCRYPT_KEY }}" \
+            --output "$RUNNER_TEMP/ce-patched.ce.enc" \
+            "$RUNNER_TEMP/ce-patched.ce"
+          shred -u "$RUNNER_TEMP/ce-patched.ce"
+
+      - name: Upload patched CEmu image
+        uses: actions/upload-artifact@v4
+        with:
+          name: cemu-rom-patched
+          path: |
+            ${{ runner.temp }}/ce-patched.ce.enc
+            ${{ runner.temp }}/cemu-autotester-image
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload lwip-latest artifact for emulator-env
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwip-latest
+          path: ${{ github.workspace }}/release/
+          if-no-files-found: error
+          retention-days: 1
+
   acvp-live:
     name: NIST ACVP live validation
-    needs: [prepare_rom]
+    needs: [prepare_patched_rom]
     runs-on: ubuntu-latest
     timeout-minutes: 480
 
@@ -74,15 +149,6 @@ jobs:
 
       - name: Fetch vectors from NIST
         run: python3 tests/acvp-live/acvp_offline.py fetch
-
-      - name: Download lwip release from latest
-        run: |
-          mkdir -p "$RUNNER_TEMP/lwip-release" "$GITHUB_WORKSPACE/release"
-          curl -fsSL \
-            "https://github.com/${{ github.repository }}/releases/latest/download/lwip.zip" \
-            -o "$RUNNER_TEMP/lwip-release/lwip.zip"
-          unzip -q "$RUNNER_TEMP/lwip-release/lwip.zip" -d "$RUNNER_TEMP/lwip-release"
-          cp -r "$RUNNER_TEMP/lwip-release/lwip/." "$GITHUB_WORKSPACE/release/"
 
       - id: env
         uses: ./.github/actions/emulator-env
