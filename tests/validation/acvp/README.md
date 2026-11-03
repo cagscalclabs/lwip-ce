@@ -26,8 +26,9 @@ advertised: the production RNG intentionally has no API for injecting ACVP's
 deterministic entropy, nonce, and reseed strings.
 
 `fixtures/prompt.json` remains a small parser smoke test. The workflow uses
-`generate_vectors.py` to build a 608-vector differential corpus: 64 vectors
-for each SHA-2 digest and 32 vectors for every other advertised primitive. It covers MCT,
+`generate_vectors.py` to build a 256-vector self-test corpus (16 vectors per
+primitive by default; pass `--samples N` to change). Formal NIST validation
+runs separately via the live ACVP workflow in `tests/acvp-live/`. It covers MCT,
 both cipher directions, valid and invalid authentication/signature cases,
 boundary lengths, and all generated-key operations. The CI orchestrator runs
 all 16 primitive/mode units concurrently. Each gets its own filtered vector

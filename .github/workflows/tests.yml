@@ -290,9 +290,9 @@ jobs:
             --output "$GITHUB_STEP_SUMMARY" \
             --fallback "RFC|Compliance review|${{ steps.rfc_review.outcome }}"
 
-  acvp:
+  acvp_self_test:
     needs: [prepare_rom, prepare_patched_rom]
-    name: ACVP JSON over CEmu RPC
+    name: ACVP self-test (internal corpus)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -1012,7 +1012,7 @@ jobs:
 
   cleanup_rom:
     name: Delete encrypted CEmu ROM artifacts
-    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp, nettest, dast, bench]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, acvp_self_test, nettest, dast, bench]
     if: always()
     permissions:
       actions: write
@@ -1036,7 +1036,7 @@ jobs:
 
   gate_results:
     name: Collect test results
-    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp, semgrep_scan, analyze, nettest, dast, bench, host_tests, fuzz, cleanup_rom]
+    needs: [prepare_rom, prepare_patched_rom, dylib_unit_tests, rfc_compliance, acvp_self_test, semgrep_scan, analyze, nettest, dast, bench, host_tests, fuzz, cleanup_rom]
     if: always()
     permissions:
       actions: read
@@ -1052,7 +1052,7 @@ jobs:
           ROM_CLEANUP_RESULT: ${{ needs.cleanup_rom.result }}
           UNIT_RESULT: ${{ needs.dylib_unit_tests.result }}
           RFC_RESULT: ${{ needs.rfc_compliance.result }}
-          ACVP_RESULT: ${{ needs.acvp.result }}
+          ACVP_RESULT: ${{ needs.acvp_self_test.result }}
           SAST_RESULT: ${{ needs.semgrep_scan.result }}
           CODEQL_RESULT: ${{ needs.analyze.result }}
           NETWORK_RESULT: ${{ needs.nettest.result }}

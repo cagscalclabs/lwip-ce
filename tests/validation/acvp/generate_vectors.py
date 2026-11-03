@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a substantial ACVP-shaped differential corpus."""
+"""Generate an ACVP-shaped differential corpus for self-test validation."""
 
 from __future__ import annotations
 
@@ -41,18 +41,19 @@ class Corpus:
                              "revision": revision, **fields, "testGroups": groups})
 
 
-def build_corpus() -> tuple[list[dict], list[dict], dict]:
+def build_corpus(num: int = 16) -> tuple[list[dict], list[dict], dict]:
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, x25519
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives.ciphers.aead import AESCCM, AESGCM
 
     c = Corpus()
+    half = max(1, num // 2)
 
-    # SHA-256: 63 AFT lengths plus one full standard MCT seed.
-    lengths = [0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 55, 56, 63, 64, 65,
-               127, 128, 255, 256, 511, 512, 1023, 2048, 4096, 8192]
-    lengths += [c.rng.randrange(0, 8193) for _ in range(63 - len(lengths))]
+    # SHA-256: (num-1) AFT lengths plus one full standard MCT seed.
+    sha_fixed = [0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 55, 56, 63, 64, 65,
+                 127, 128, 255, 256, 511, 512, 1023, 2048, 4096, 8192]
+    lengths = sha_fixed[:num - 1] + [c.rng.randrange(0, 8193) for _ in range(max(0, num - 1 - len(sha_fixed)))]
     sha_aft = [c.test(len=n * 8, msg=(c.bytes(n).hex() if n else "00")) for n in lengths]
     sha_groups = [c.group(sha_aft, testType="AFT"),
                   c.group([c.test(len=256, msg=c.bytes(32).hex())],
@@ -60,9 +61,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     c.vector("SHA2-256", "1.0", sha_groups)
 
     # SHA-384: same AFT length spread plus one MCT seed.
-    lengths384 = [0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 55, 56, 63, 64, 65,
-                  127, 128, 255, 256, 511, 512, 1023, 2048, 4096, 8192]
-    lengths384 += [c.rng.randrange(0, 8193) for _ in range(63 - len(lengths384))]
+    lengths384 = sha_fixed[:num - 1] + [c.rng.randrange(0, 8193) for _ in range(max(0, num - 1 - len(sha_fixed)))]
     sha384_aft = [c.test(len=n * 8, msg=(c.bytes(n).hex() if n else "00")) for n in lengths384]
     sha384_groups = [c.group(sha384_aft, testType="AFT"),
                      c.group([c.test(len=384, msg=c.bytes(48).hex())],
@@ -70,9 +69,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     c.vector("SHA2-384", "1.0", sha384_groups)
 
     # SHA-512: same AFT length spread plus one MCT seed.
-    lengths512 = [0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 55, 56, 63, 64, 65,
-                  127, 128, 255, 256, 511, 512, 1023, 2048, 4096, 8192]
-    lengths512 += [c.rng.randrange(0, 8193) for _ in range(63 - len(lengths512))]
+    lengths512 = sha_fixed[:num - 1] + [c.rng.randrange(0, 8193) for _ in range(max(0, num - 1 - len(sha_fixed)))]
     sha512_aft = [c.test(len=n * 8, msg=(c.bytes(n).hex() if n else "00")) for n in lengths512]
     sha512_groups = [c.group(sha512_aft, testType="AFT"),
                      c.group([c.test(len=512, msg=c.bytes(64).hex())],
@@ -84,7 +81,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     key_lengths = [1, 4, 16, 32, 63, 64, 65, 128, 256]
     msg_lengths = [0, 1, 15, 16, 31, 32, 55, 56, 64, 65, 127, 255, 512]
     mac_lengths = [4, 8, 16, 24, 32]
-    for i in range(32):
+    for i in range(num):
         kl, ml, tl = key_lengths[i % len(key_lengths)], msg_lengths[(i * 3) % len(msg_lengths)], mac_lengths[i % 5]
         hmac_tests.append(c.test(key=c.bytes(kl).hex(), keyLen=kl * 8,
                                  msg=(c.bytes(ml).hex() if ml else ""), len=ml * 8,
@@ -94,7 +91,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     # HMAC-SHA-384: same spread, mac truncation up to 48 bytes.
     hmac384_tests = []
     mac384_lengths = [4, 8, 16, 24, 32, 48]
-    for i in range(32):
+    for i in range(num):
         kl = key_lengths[i % len(key_lengths)]
         ml = msg_lengths[(i * 3) % len(msg_lengths)]
         tl = mac384_lengths[i % len(mac384_lengths)]
@@ -106,7 +103,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     # HMAC-SHA-512: same spread, mac truncation up to 64 bytes.
     hmac512_tests = []
     mac512_lengths = [4, 8, 16, 24, 32, 48, 64]
-    for i in range(32):
+    for i in range(num):
         kl = key_lengths[i % len(key_lengths)]
         ml = msg_lengths[(i * 3) % len(msg_lengths)]
         tl = mac512_lengths[i % len(mac512_lengths)]
@@ -115,10 +112,10 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
                                     macLen=tl * 8))
     c.vector("HMAC-SHA2-512", "2.0", [c.group(hmac512_tests, testType="AFT")])
 
-    # AES-CBC: 15 AFTs in each direction and one MCT seed per direction.
+    # AES-CBC: (half-1) AFTs in each direction and one MCT seed per direction.
     cbc_groups = []
     for direction in ("encrypt", "decrypt"):
-        for i in range(15):
+        for i in range(half - 1):
             key = c.bytes((16, 24, 32)[i % 3]); iv = c.bytes(16)
             plain = c.bytes(16 * (1 + i % 8))
             enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
@@ -135,7 +132,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
 
     def add_aead(algorithm: str) -> None:
         groups = []
-        for i in range(16):
+        for i in range(half):
             key = c.bytes((16, 24, 32)[i % 3]); iv_len = 12 if algorithm.endswith("GCM") else 7 + i % 7
             iv, aad = c.bytes(iv_len), c.bytes((i * 7) % 65)
             plain = c.bytes((i * 13) % 129)
@@ -158,7 +155,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     add_aead("ACVP-AES-CCM")
 
     pbkdf_tests = []
-    for i in range(32):
+    for i in range(num):
         password = "p" + c.bytes(1 + i % 31).hex()
         salt = c.bytes(1 + (i * 5) % 64)
         pbkdf_tests.append(c.test(password=password, salt=salt.hex(),
@@ -167,7 +164,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     c.vector("PBKDF", "1.0", [c.group(pbkdf_tests, testType="AFT", hmacAlg="SHA2-256")])
 
     hkdf_tests = []
-    for i in range(32):
+    for i in range(num):
         z, salt = c.bytes(14 + i % 65), c.bytes(i % 33)
         out_len = (1, 16, 32, 64, 96, 128)[i % 6]
         hkdf_tests.append(c.test(
@@ -186,7 +183,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     for sig_type in ("pkcs1v1.5", "pss"):
         tests = []
         scheme = padding.PKCS1v15() if sig_type == "pkcs1v1.5" else padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32)
-        for i in range(16):
+        for i in range(half):
             message = c.bytes(i * 11 % 257)
             signature = rsa_key.sign(message, scheme, hashes.SHA256())
             if i & 1: signature = signature[:-1] + bytes((signature[-1] ^ 1,))
@@ -201,7 +198,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     from cryptography.hazmat.primitives.asymmetric import utils
     ecdsa_key = ec.derive_private_key(1 + int.from_bytes(c.bytes(32), "big") % (2**255), ec.SECP256R1())
     pub = ecdsa_key.public_key().public_numbers(); ecdsa_tests = []
-    for i in range(32):
+    for i in range(half):
         message = c.bytes(i * 9 % 193)
         r, s = utils.decode_dss_signature(ecdsa_key.sign(message, ec.ECDSA(hashes.SHA256())))
         if i & 1: s ^= 1
@@ -209,7 +206,7 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
                                   r=f"{r:064x}", s=f"{s:064x}"))
     ecdsa384_key = ec.derive_private_key(1 + int.from_bytes(c.bytes(48), "big") % (2**383), ec.SECP384R1())
     pub384 = ecdsa384_key.public_key().public_numbers(); ecdsa384_tests = []
-    for i in range(32):
+    for i in range(half):
         message = c.bytes(i * 9 % 193)
         r, s = utils.decode_dss_signature(ecdsa384_key.sign(message, ec.ECDSA(hashes.SHA384())))
         if i & 1: s ^= 1
@@ -221,16 +218,16 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     ], mode="sigVer")
 
     # Generated-key algorithms are graded semantically instead of by byte equality.
-    messages = [c.bytes((i * 7) % 129) for i in range(16)]
-    siggen_tests = [c.test(message=messages[i % 16].hex()) for i in range(32)]
-    siggen384_tests = [c.test(message=messages[i % 16].hex()) for i in range(32)]
+    messages = [c.bytes((i * 7) % 129) for i in range(half)]
+    siggen_tests = [c.test(message=messages[i % half].hex()) for i in range(half)]
+    siggen384_tests = [c.test(message=messages[i % half].hex()) for i in range(half)]
     c.vector("DetECDSA", "FIPS186-5", [
         c.group(siggen_tests, testType="AFT", curve="P-256", hashAlg="SHA2-256"),
         c.group(siggen384_tests, testType="AFT", curve="P-384", hashAlg="SHA2-384"),
     ], mode="sigGen")
 
     x_tests = []
-    for _ in range(32):
+    for _ in range(num):
         private_bytes = c.bytes(32)
         private = x25519.X25519PrivateKey.from_private_bytes(private_bytes)
         public = private.public_key().public_bytes(serialization.Encoding.Raw,
@@ -239,13 +236,13 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     c.vector("XECDH", "RFC7748", [c.group(x_tests, testType="AFT", curve="Curve25519")], mode="SSC")
 
     p_tests = []
-    for _ in range(32):
+    for _ in range(half):
         scalar = 1 + int.from_bytes(c.bytes(32), "big") % (2**255)
         private = ec.derive_private_key(scalar, ec.SECP256R1()); public = private.public_key().public_numbers()
         test = c.test(publicServerX=f"{public.x:064x}", publicServerY=f"{public.y:064x}")
         c.oracle["p256"][str(test["tcId"])] = f"{scalar:064x}"; p_tests.append(test)
     p384_tests = []
-    for _ in range(32):
+    for _ in range(half):
         scalar = 1 + int.from_bytes(c.bytes(48), "big") % (2**383)
         private = ec.derive_private_key(scalar, ec.SECP384R1()); public = private.public_key().public_numbers()
         test = c.test(publicServerX=f"{public.x:096x}", publicServerY=f"{public.y:096x}")
@@ -259,11 +256,14 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
     deterministic = [{"acvVersion": "1.0"}, *[v for v in c.vectors if v["algorithm"] not in GENERATED_ALGORITHMS]]
     expected = process_document(deterministic, reference_backend)
     counts = {v["algorithm"]: sum(len(g["tests"]) for g in v["testGroups"]) for v in c.vectors}
-    assert counts == {"SHA2-256": 64, "SHA2-384": 64, "SHA2-512": 64,
-                      "HMAC-SHA2-256": 32, "HMAC-SHA2-384": 32, "HMAC-SHA2-512": 32,
-                      "ACVP-AES-CBC": 32, "ACVP-AES-GCM": 32, "ACVP-AES-CCM": 32,
-                      "PBKDF": 32, "KDA": 32, "RSA": 32, "ECDSA": 64,
-                      "DetECDSA": 64, "XECDH": 32, "KAS-ECC": 64}
+    expected_counts = {
+        "SHA2-256": num, "SHA2-384": num, "SHA2-512": num,
+        "HMAC-SHA2-256": num, "HMAC-SHA2-384": num, "HMAC-SHA2-512": num,
+        "ACVP-AES-CBC": num, "ACVP-AES-GCM": num, "ACVP-AES-CCM": num,
+        "PBKDF": num, "KDA": num, "RSA": num,
+        "ECDSA": num, "DetECDSA": num, "XECDH": num, "KAS-ECC": num,
+    }
+    assert counts == expected_counts, f"vector counts mismatch: {counts} != {expected_counts}"
     c.oracle["counts"] = counts
     return prompt, expected, c.oracle
 
@@ -271,8 +271,10 @@ def build_corpus() -> tuple[list[dict], list[dict], dict]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=HERE / "corpus")
+    parser.add_argument("--samples", type=int, default=16,
+                        help="Vectors per primitive (default: 16)")
     args = parser.parse_args(); args.output.mkdir(parents=True, exist_ok=True)
-    prompt, expected, oracle = build_corpus()
+    prompt, expected, oracle = build_corpus(args.samples)
     for name, value in (("prompt.json", prompt), ("expected.json", expected), ("oracle.json", oracle)):
         (args.output / name).write_text(json.dumps(value, indent=2) + "\n")
     print(f"generated {sum(oracle['counts'].values())} ACVP vectors: {oracle['counts']}")

@@ -35,6 +35,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Write client private key
+        env:
+          ACVP_CLIENT_KEY: ${{ secrets.ACVP_CLIENT_KEY }}
+        run: |
+          printf '%s' "$ACVP_CLIENT_KEY" > tests/acvp-live/client.key
+          chmod 600 tests/acvp-live/client.key
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -63,6 +70,10 @@ jobs:
 
       - name: Fetch and display grading results
         run: python3 tests/acvp-live/acvp_offline.py get_results
+
+      - name: Remove client private key
+        if: always()
+        run: shred -u tests/acvp-live/client.key 2>/dev/null || rm -f tests/acvp-live/client.key
 
       - name: Upload evidence bundle
         if: always()
