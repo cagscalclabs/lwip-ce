@@ -12,10 +12,6 @@ from typing import Any
 
 PRIMITIVES = (
     "BYTES",
-    "SHA256",
-    "HMAC",
-    "HKDF",
-    "PBKDF2",
     "AESGCM-E",
     "AESGCM-DV",
     "AESCBC-E",
@@ -26,6 +22,9 @@ PRIMITIVES = (
     "P256-KG",
     "P256-DH",
     "P256-SG",
+    "P384-KG",
+    "P384-DH",
+    "P384-SG",
 )
 CLASSES = {"best", "worst", "random", "edge"}
 CONFIGURATION = {"c": 6, "c_rig": 4, "sigma_scale": 14826}
@@ -92,7 +91,11 @@ def validate_threshold(value: Any, label: str, expected_c: int) -> dict[str, Any
 def validate_profile(path: Path, stored: Any) -> dict[str, Any]:
     if not isinstance(stored, dict):
         raise ValueError(f"{path}: root must be an object")
-    if stored.get("capture_format") not in ("cagscalclabs-ctstats-v1", "cagscalclabs-ctstats-v3"):
+    if stored.get("capture_format") not in (
+        "cagscalclabs-ctstats-v1",
+        "cagscalclabs-ctstats-v3",
+        "cagscalclabs-ctstats-v4",
+    ):
         raise ValueError(f"{path}: unsupported capture_format")
     model = stored.get("model")
     if not isinstance(model, str) or not model.strip():
@@ -214,6 +217,17 @@ def build_report(profiles: list[dict[str, Any]]) -> dict[str, Any]:
             for model in sorted(grouped, key=str.casefold)
         ],
         "primitives": [summarize_primitive(name, profiles) for name in PRIMITIVES],
+        "models": [
+            {
+                "model": model,
+                "profiles": len(grouped[model]),
+                "primitives": [
+                    summarize_primitive(name, grouped[model])
+                    for name in PRIMITIVES
+                ],
+            }
+            for model in sorted(grouped, key=str.casefold)
+        ],
     }
 
 
@@ -223,6 +237,15 @@ def markdown_escape(value: str) -> str:
 
 def ratio(passes: int, failures: int) -> str:
     return f"{passes}/{passes + failures}"
+
+
+def timing_result(primitive: dict[str, Any]) -> str:
+    if primitive["standard_failures"]:
+        return "❌ Fail"
+    if (primitive["worst_standard_over_percent"] > 50.0
+            or primitive["rigorous_failures"]):
+        return "⚠️ Warn"
+    return "✅ Pass"
 
 
 def write_markdown(path: Path, report: dict[str, Any]) -> None:
@@ -238,55 +261,37 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         "",
         "## Aggregate",
         "",
-        "| Scope | Profiles | Evaluations | Standard pass | Standard failures | Rigorous pass | Rigorous failures |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Scope | Profiles | Checks | c=6 pass | c=4 pass |",
+        "|---|---:|---:|---:|---:|",
     ]
     for scope in report["scopes"][:1]:
         lines.append(
             f"| {markdown_escape(scope['scope'])} | {scope['profiles']} "
             f"| {scope['primitive_evaluations']} "
             f"| {ratio(scope['standard_passes'], scope['standard_failures'])} "
-            f"| {scope['standard_failures']} "
-            f"| {ratio(scope['rigorous_passes'], scope['rigorous_failures'])} "
-            f"| {scope['rigorous_failures']} |"
+            f"| {ratio(scope['rigorous_passes'], scope['rigorous_failures'])} |"
         )
 
-    lines.extend(
-        [
-            "",
-            "## Per model",
-            "",
-            "| Model | Profiles | Evaluations | Standard pass | Standard failures | Rigorous pass | Rigorous failures |",
-            "|---|---:|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for scope in report["scopes"][1:]:
-        lines.append(
-            f"| {markdown_escape(scope['scope'])} | {scope['profiles']} "
-            f"| {scope['primitive_evaluations']} "
-            f"| {ratio(scope['standard_passes'], scope['standard_failures'])} "
-            f"| {scope['standard_failures']} "
-            f"| {ratio(scope['rigorous_passes'], scope['rigorous_failures'])} "
-            f"| {scope['rigorous_failures']} |"
+    lines.extend(["", "## Per model"])
+    for model in report["models"]:
+        profile_label = "profile" if model["profiles"] == 1 else "profiles"
+        lines.extend(
+            [
+                "",
+                f"### {markdown_escape(model['model'])} "
+                f"({model['profiles']} {profile_label})",
+                "",
+                "| Primitive | Max c=6 deviation | Max c=4 deviation | Result |",
+                "|---|---:|---:|:---:|",
+            ]
         )
-
-    lines.extend(
-        [
-            "",
-            "## Per primitive",
-            "",
-            "| Primitive | Profiles | Standard pass | Rigorous pass | Worst standard over | Worst rigorous over |",
-            "|---|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for primitive in report["primitives"]:
-        lines.append(
-            f"| {primitive['primitive']} | {primitive['profiles']} "
-            f"| {ratio(primitive['standard_passes'], primitive['standard_failures'])} "
-            f"| {ratio(primitive['rigorous_passes'], primitive['rigorous_failures'])} "
-            f"| {primitive['worst_standard_over_percent']:.2f}% "
-            f"| {primitive['worst_rigorous_over_percent']:.2f}% |"
-        )
+        for primitive in model["primitives"]:
+            lines.append(
+                f"| {primitive['primitive']} "
+                f"| {primitive['worst_standard_over_percent']:.2f}% "
+                f"| {primitive['worst_rigorous_over_percent']:.2f}% "
+                f"| {timing_result(primitive)} |"
+            )
 
     lines.extend(
         [

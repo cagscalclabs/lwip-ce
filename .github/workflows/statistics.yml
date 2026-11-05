@@ -7,6 +7,9 @@ on:
     paths:
       - statistics/rng/**
       - statistics/timing/**
+      - tests/profiling/tls_rng_stats/tools/**
+      - tests/profiling/tls_timing/tools/**
+      - tests/host/tls_timing/**
       - .github/workflows/statistics.yml
   workflow_dispatch:
 
@@ -19,6 +22,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       contains(toJSON(github.event.commits), 'statistics/rng/') ||
+      contains(toJSON(github.event.commits), 'tests/profiling/tls_rng_stats/tools/') ||
       contains(toJSON(github.event.commits), '.github/workflows/statistics.yml')
     runs-on: ubuntu-latest
     permissions:
@@ -120,6 +124,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       contains(toJSON(github.event.commits), 'statistics/timing/') ||
+      contains(toJSON(github.event.commits), 'tests/profiling/tls_timing/tools/') ||
+      contains(toJSON(github.event.commits), 'tests/host/tls_timing/') ||
       contains(toJSON(github.event.commits), '.github/workflows/statistics.yml')
     runs-on: ubuntu-latest
     env:
@@ -211,6 +217,14 @@ jobs:
             echo "- Timing stats check log was not found." >> "$summary_md"
           fi
 
+      - name: Generate per-model timing report
+        if: always()
+        run: |
+          python3 -I tests/host/tls_timing/test_stats_summarizer.py
+          python3 tests/profiling/tls_timing/tools/summarize_timing_stats.py \
+            --stats-dir statistics/timing \
+            --output-dir build/statistics/timing
+
       - name: Generate Timing JSON Results
         if: always()
         run: |
@@ -226,27 +240,13 @@ jobs:
       - name: Publish Timing Test Summary
         if: always()
         run: |
-          echo "## Timing Test Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          status=$(jq -r '.results.tests[] | select(.name == "tls_timing") | .status' "${{ github.workspace }}/results-timing.json")
-          if [ "$status" = "passed" ]; then
-            status_icon="✅ Passed"
+          report="${{ github.workspace }}/build/statistics/timing/timing-statistics.md"
+          if [ -f "$report" ]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
           else
-            status_icon="❌ Failed"
-          fi
-
-          echo "### Timing Module Result" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Module | Status | Description |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|--------|--------|-------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| tls_timing | $status_icon | c=6 over% gate against statistics/timing/*.json |" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -f "${{ github.workspace }}/timing-verbose-summary.md" ]; then
-            cat "${{ github.workspace }}/timing-verbose-summary.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- Timing verbose summary was not generated." >> "$GITHUB_STEP_SUMMARY"
+            echo "## TLS timing statistics" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Timing statistics report was not generated." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload Timing Results Logfile
@@ -265,4 +265,5 @@ jobs:
           path: |
             ${{ env.LWIP_PROF_TESTS }}/tls_timing/timing_stats_check.log
             ${{ github.workspace }}/timing-verbose-summary.md
+            ${{ github.workspace }}/build/statistics/timing/
           if-no-files-found: warn

@@ -115,7 +115,8 @@ class TimingStatisticsTests(unittest.TestCase):
             self.assertEqual(report["scopes"][0]["standard_failures"], 1)
             self.assertTrue((output_dir / "timing-statistics.csv").is_file())
             self.assertIn("# TLS timing statistics", markdown)
-            self.assertIn("| BYTES | 1 | 0/1 | 1/1 |", markdown)
+            self.assertIn("### TI-84 Plus CE / M", markdown)
+            self.assertIn("| BYTES | 0.00% | 0.50% | ❌ Fail |", markdown)
 
     def test_loads_and_aggregates_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -124,7 +125,7 @@ class TimingStatisticsTests(unittest.TestCase):
                 json.dumps(fixture()), encoding="utf-8"
             )
             (stats_dir / "second_ctstats.json").write_text(
-                json.dumps(fixture(model="TI-84 Plus CE / L", failure="SHA256")),
+                json.dumps(fixture(model="TI-84 Plus CE / L", failure="AESGCM-E")),
                 encoding="utf-8",
             )
 
@@ -141,6 +142,10 @@ class TimingStatisticsTests(unittest.TestCase):
         ])
         self.assertEqual(report["primitives"][0]["standard_failures"], 1)
         self.assertEqual(report["primitives"][1]["standard_failures"], 1)
+        self.assertEqual([row["model"] for row in report["models"]], [
+            "TI-84 Plus CE / L",
+            "TI-84 Plus CE / M",
+        ])
 
     def test_rejects_inconsistent_stored_summary(self) -> None:
         profile = fixture()

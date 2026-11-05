@@ -195,25 +195,46 @@ def markdown_escape(value: str) -> str:
 
 def summary_table(scopes: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| Scope | Profiles | Windows | Samples | Marginal H₉₉ | Worst ρ₁…₄ (heuristic) | Projected lag-screen failures | Markov H₉₉ | Dependency factor | Conservative H |",
-        "|---|---:|---:|---:|---:|---|---:|---:|---:|---:|",
+        "| Model | Sample size | H₉₉ | Markov H₉₉ | Adjusted H₉₉ |",
+        "|---|---:|---:|---:|---:|",
     ]
     for scope in scopes:
-        lag_values = scope["worst_lag_correlations"]
-        lag_summary = ", ".join(
-            f"ρ{lag}={float(value):+.4f}" if value is not None else f"ρ{lag}=n/a"
-            for lag, value in lag_values.items()
+        lines.append(
+            f"| {markdown_escape(str(scope['scope']))} "
+            f"| {int(scope['samples']):,} bits<br>{int(scope['windows'])} windows "
+            f"| {float(scope['marginal_h_lower_99_bits_per_raw_bit']):.6f} "
+            f"| {float(scope['markov_h_lower_99_bits_per_raw_bit']):.6f} "
+            f"| {float(scope['conservative_h_bits_per_raw_bit']):.6f} |"
+        )
+    return lines
+
+
+def health_table(scopes: list[dict[str, Any]]) -> list[str]:
+    lines = [
+        "| Model | Runs | Masks (evaluated/passed) | Failures |",
+        "|---|---:|:---:|---|",
+    ]
+    for scope in scopes:
+        evaluated = scope["health_tests_evaluated_mask"]
+        passed = scope["health_tests_passed_mask"]
+        masks = (
+            f"0x{int(evaluated):02X} / 0x{int(passed):02X}"
+            if evaluated is not None and passed is not None else "n/a"
+        )
+        failures = (
+            f"RCT {int(scope['rct_failures'])} · "
+            f"APT {int(scope['apt_failures'])}/{int(scope['apt_windows'])}<br>"
+            f"Startup {int(scope['startup_marginal_failures'])} · "
+            f"Lag 1–4 {int(scope['window_lag1_failures'])}/"
+            f"{int(scope['window_lag2_failures'])}/"
+            f"{int(scope['window_lag3_failures'])}/"
+            f"{int(scope['window_lag4_failures'])} · "
+            f"Distribution {int(scope['distribution_failures'])}/"
+            f"{int(scope['distribution_windows'])}"
         )
         lines.append(
             f"| {markdown_escape(str(scope['scope']))} "
-            f"| {int(scope['profiles'])} | {int(scope['windows'])} "
-            f"| {int(scope['samples']):,} "
-            f"| {float(scope['marginal_h_lower_99_bits_per_raw_bit']):.6f} "
-            f"| {lag_summary} "
-            f"| {int(scope['projected_lag_screen_failures'])}/{int(scope['projected_lag_screen_windows'])} "
-            f"| {float(scope['markov_h_lower_99_bits_per_raw_bit']):.6f} "
-            f"| {float(scope['first_order_dependency_factor']):.6f} "
-            f"| {float(scope['conservative_h_bits_per_raw_bit']):.6f} |"
+            f"| {int(scope['health_profile_windows'])} | {masks} | {failures} |"
         )
     return lines
 
@@ -246,31 +267,14 @@ def write_markdown(path: Path, report: dict[str, Any], image_url: str) -> None:
         "",
         "## Production health-test diagnostics",
         "",
-        "| Scope | Version 4 runs | Evaluated mask | Passed mask | RCT failures | APT failures/windows | Startup marginal failures | Lag 1/2/3/4 failures | Distribution failures/windows |",
-        "|---|---:|---:|---:|---:|---:|---:|---|---:|",
-        *[
-            f"| {markdown_escape(str(scope['scope']))} "
-            f"| {int(scope['health_profile_windows'])} "
-            f"| {('0x%02X' % int(scope['health_tests_evaluated_mask'])) if scope['health_tests_evaluated_mask'] is not None else 'n/a'} "
-            f"| {('0x%02X' % int(scope['health_tests_passed_mask'])) if scope['health_tests_passed_mask'] is not None else 'n/a'} "
-            f"| {int(scope['rct_failures'])} "
-            f"| {int(scope['apt_failures'])}/{int(scope['apt_windows'])} "
-            f"| {int(scope['startup_marginal_failures'])} "
-            f"| {int(scope['window_lag1_failures'])}/"
-            f"{int(scope['window_lag2_failures'])}/"
-            f"{int(scope['window_lag3_failures'])}/"
-            f"{int(scope['window_lag4_failures'])} "
-            f"| {int(scope['distribution_failures'])}/"
-            f"{int(scope['distribution_windows'])} |"
-            for scope in scopes
-        ],
+        *health_table(scopes),
         "",
         "## Interpretation",
         "",
-        "- **Marginal H₉₉** is the lower 99% MCV estimate, conservatively taking the poorer of the pooled and worst-window results.",
+        "- **H₉₉** is the lower 99% marginal MCV estimate, conservatively taking the poorer of the pooled and worst-window results.",
         "- **Worst ρ₁…₄** uses the stationary-binary correlation heuristic `1-qₖ/(2p₀p₁)`; these values diagnose periodicity and do not add entropy credit.",
         "- **Projected lag-screen failures** compares each version 3-or-newer run's aggregate lag rates with the startup bounds; version 4 health diagnostics separately count exact non-overlapping 952-sample windows.",
-        "- **Conservative H** is the lower of the marginal and first-order Markov estimates.",
+        "- **Adjusted H₉₉** is the lower of the marginal and first-order Markov estimates.",
         "- The aggregate headline is a worst-supported bound across the dataset, not an average calculator.",
         "",
         f"> ⚠️ {report['scope_warning']}",
