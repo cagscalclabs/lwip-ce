@@ -2,7 +2,7 @@
 
 Processed **4 profiles** and **32 test windows**. Entropy values are bits per raw bit.
 
-![RNG entropy and lag-1 through lag-4 correlation distributions](https://raw.githubusercontent.com/cagscalclabs/lwip-ce/statistics-assets/rng/rng-distributions.png?run=41951179930-1)
+![RNG entropy and lag-1 through lag-4 correlation distributions](https://raw.githubusercontent.com/cagscalclabs/lwip-ce/statistics-assets/rng/rng-distributions.png?run=42054121046-1)
 
 > Smoothed distributions are descriptive rather than fitted normal curves. Every circle is an individual test window.
 
