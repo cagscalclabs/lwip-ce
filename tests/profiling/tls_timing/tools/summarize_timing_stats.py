@@ -259,6 +259,36 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
             "c=4. Pass counts reproduce each profiler's differential-pass decision."
         ),
         "",
+        "## What this means",
+        "",
+        (
+            "This is a median-absolute-deviation (MAD) based statistical "
+            "constant-time profiler. For each primitive it collects 32 timing "
+            "samples from each of four input classes: `best`, `worst`, `random`, "
+            "and `edge`. The `best` class is the calibration baseline."
+        ),
+        "",
+        "`median = median(samples)`",
+        "",
+        "`MAD = median(abs(sample - median))`",
+        "",
+        "`acceptable CPU jitter margin = max(c, 1.4826 × MAD × c)`",
+        "",
+        (
+            "The standard check uses `c=6`; the more sensitive rigorous check "
+            "uses `c=4`. A class becomes a candidate timing deviation when its "
+            "median differs from the baseline median by more than the applicable "
+            "jitter margin."
+        ),
+        "",
+        (
+            "To distinguish a likely input-dependent branch from an isolated "
+            "jitter spike, a branch-style deviation is reported only when at "
+            "least 75% of that class's samples—24 of 32—cross the same side of "
+            "the baseline margin. The c=6 gate fails at 75% deviation; results "
+            "above 50%, or a failed c=4 check, are warnings."
+        ),
+        "",
         "## Aggregate",
         "",
         "| Scope | Profiles | Checks | c=6 pass | c=4 pass |",

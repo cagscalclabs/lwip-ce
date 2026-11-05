@@ -115,6 +115,9 @@ class TimingStatisticsTests(unittest.TestCase):
             self.assertEqual(report["scopes"][0]["standard_failures"], 1)
             self.assertTrue((output_dir / "timing-statistics.csv").is_file())
             self.assertIn("# TLS timing statistics", markdown)
+            self.assertIn("## What this means", markdown)
+            self.assertIn("acceptable CPU jitter margin", markdown)
+            self.assertIn("24 of 32", markdown)
             self.assertIn("### TI-84 Plus CE / M", markdown)
             self.assertIn("| BYTES | 0.00% | 0.50% | ❌ Fail |", markdown)
 
