@@ -43,13 +43,18 @@ static bool bench_log_ok;
 static void bench_emit(const char *name, uint32_t ticks, uint32_t units)
 {
     char line[64];
+    size_t len;
     if (!bench_log_ok)
     {
         return;
     }
     snprintf(line, sizeof(line), "%s,%lu,%lu\n", name,
              (unsigned long)ticks, (unsigned long)units);
-    ti_Write(line, 1, (uint8_t)strlen(line), bench_handle);
+    len = strlen(line);
+    if (ti_Write(line, 1, (uint8_t)len, bench_handle) != len)
+    {
+        bench_log_ok = false;
+    }
 }
 
 static void bench_fill(void)
@@ -440,11 +445,13 @@ int main(void)
     }
     bench_fill();
 
+    (void)ti_Delete(BENCH_APPVAR);
     bench_handle = ti_Open(BENCH_APPVAR, "w");
     bench_log_ok = bench_handle != 0;
     if (bench_log_ok)
     {
         ti_Seek(0, SEEK_SET, bench_handle);
+        (void)ti_SetArchiveStatus(false, bench_handle);
     }
 
     {
@@ -469,10 +476,20 @@ int main(void)
     bench_emit("sink", bench_sink, 0);
     bench_emit("marker_done", 0, 0);
 
-    if (bench_log_ok)
+    if (bench_log_ok && bench_handle)
     {
+        bool archived = ti_SetArchiveStatus(true, bench_handle);
         ti_Close(bench_handle);
+        bench_handle = 0;
         bench_log_ok = false;
+        if (!archived)
+        {
+            os_ClrHome();
+            printf("archive failed\n");
+            printf("Press any key");
+            while (!os_GetCSC()) {}
+            return 1;
+        }
     }
 
     os_ClrHome();

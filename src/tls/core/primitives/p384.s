@@ -18,7 +18,8 @@
 ; digits).  Field (mod p) multiply/square use fully unrolled column code with
 ; the q*p pass replaced by p's sparse signed-digit structure and the MAC
 ; blocks run from the fast-RAM window (p384_mul_p / p384_sq_p); the order
-; (mod n) path keeps the generic p384_mont_core.  Field inversion uses a fixed
+; (mod n) path uses p384_mont_core with the unrolled MAC block dispatched via a
+; ROM entry table (requires .p384.mul.reloc resident).  Field inversion uses a fixed
 ; addition chain.  The constant-time variable-base scalar multiplication
 ; (ECDH, p384_ws_mul) is a width-4 fixed window with Joye-Tunstall signed
 ; regular recoding over an 8-entry batch-normalized affine table of odd
@@ -105,6 +106,7 @@ mm_k:                   .space 1
 mm_qk:                  .space 1
 mm_cnt:                 .space 1
 mm_acc:                 .space 4        ; [acc_lo, acc_mid, acc_hi, 0]
+mm_tgt:                 .space 3        ; mont_core: MAC entry for this column
 rt_x:                   .space 3
 rt_m:                   .space 3
 rt_top:                 .space 1
@@ -361,6 +363,11 @@ __p384_NM2_BE:
     .db     0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A
     .db     0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x71
 
+; p384_mont_core: entry of p384_mac_mul for c = 0..48 terms (public).
+__p384_macent:
+.irp c, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48
+    .d24    p384_mac_mul_end - 9*\c
+.endr
 ; Odd multiples (2i+1)G, i = 0..15, affine, Montgomery form, for the
 ; variable-time width-5 verification engine.  Generated independently with
 ; affine integer arithmetic; entry zero equals __p384_G/__p384_G_Y.
@@ -2023,13 +2030,16 @@ p384_import_be:
 ; p384_mont_core: out = a * b * 2^-384 mod m
 ;   In: HL=a, DE=b, BC=out (48-byte LE), mm_mod=m, mm_n0=-m^-1 mod 256.
 ;   Out fully reduced.  out may alias a and/or b.  Preserves IX.
+;   REQUIRES: full .p384.mul.reloc image resident (p384_mac_mul block at its
+;   run VMA).  Loaded by p384_di at every public entry and by p384_reloc_load_all
+;   after every RFC 6979 / SHA step in signing.  Any caller added in future must
+;   ensure the image is resident; see p384_reloc_load_all.
 ; ===========================================================================
 p384_mont_core:
     push    ix
     ld      (mm_out), bc
     ld      (mm_a0), hl
     ld      (mm_b0), de
-    call    p384_mul_reloc_load
     ld      hl, mm_u                ; q[0..47] = 0
     ld      (hl), 0
     ld      de, mm_u + 1
@@ -2037,115 +2047,83 @@ p384_mont_core:
     ldir
     xor     a, a
     ld      (mm_k), a
-    ld      hl, 0                   ; acc = 0 (carries across columns)
-.Lmm_p1:
+    sbc     hl, hl                  ; acc = 0 (CF = 0 from xor)
+.Lmm_p1:                            ; column k = 0..47: k + 1 terms per pass
+    ld      a, (mm_k)
+    inc     a
+    call    .Lmm_ent                ; DE = p384_mac_mul_end - 9*(k+1)
+    ld      (mm_tgt), de
+    ld      a, (mm_k)
+    ld      bc, 0
+    ld      c, a                    ; BC = k (preserved by the MAC block)
     ld      ix, (mm_a0)
-    ld      a, (mm_k)
-    ld      de, 0
-    ld      e, a
+    add     ix, bc
     ld      iy, (mm_b0)
-    add     iy, de                  ; b + k
-    ld      a, (mm_k)
-    inc     a
-    ld      b, a
-    call    p384_mul_mac
-    ld      ix, mm_u
-    ld      a, (mm_k)
-    ld      de, 0
-    ld      e, a
+    ld      de, 47
+    add     iy, de                  ; IY = b + 47
+    ld      de, -47
+    add     ix, de                  ; IX = a + k - 47
+    ld      de, (mm_tgt)
+    call    .Lmm_jp_de              ; acc += sum a[i] b[k-i]
+    ld      ix, mm_u - 47
+    add     ix, bc                  ; IX = q + k - 47 (q[k] is still 0)
     ld      iy, (mm_mod)
-    add     iy, de                  ; m + k
-    ld      a, (mm_k)
-    inc     a
-    ld      b, a
-    call    p384_mul_mac
+    ld      de, 47
+    add     iy, de                  ; IY = m + 47
+    ld      de, (mm_tgt)
+    call    .Lmm_jp_de              ; acc += sum q[i] m[k-i], i < k
     ld      a, (mm_n0)
     ld      d, a
     ld      e, l
     mlt     de                      ; E = q_k
-    ld      a, e
-    ld      (mm_qk), a
-    push    hl
-    ld      a, (mm_k)
-    ld      bc, 0
-    ld      c, a
-    ld      ix, mm_u
-    add     ix, bc
-    ld      a, (mm_qk)
-    ld      (ix + 0), a              ; q[k]
-    ld      hl, (mm_mod)
-    ld      d, (hl)                 ; m[0]
-    ld      e, a
+    ld      iy, mm_u
+    add     iy, bc
+    ld      (iy + 0), e             ; q[k]
+    ld      iy, (mm_mod)
+    ld      d, (iy + 0)             ; m[0]
     mlt     de                      ; DE = q_k * m[0]
-    pop     hl
     add     hl, de
     ld      (mm_acc), hl
     ld      hl, (mm_acc + 1)        ; acc >>= 8
-    ld      a, (mm_k)
+    ld      a, c
     inc     a
     ld      (mm_k), a
     cp      a, 48
     jp      nz, .Lmm_p1
 
-    ld      a, 48
-    ld      (mm_k), a
-.Lmm_p2:
+.Lmm_p2:                            ; column k = 48..94: 95 - k terms per pass
     ld      a, (mm_k)
-    sub     a, 47
-    ld      bc, 0
     ld      c, a
-    ld      ix, (mm_a0)
-    add     ix, bc                  ; a + k - 47
+    ld      a, 95
+    sub     a, c
+    call    .Lmm_ent                ; DE = p384_mac_mul_end - 9*(95-k)
+    ld      (mm_tgt), de
+    ld      a, (mm_k)
+    ld      bc, 0
+    ld      c, a                    ; BC = k
+    ld      ix, (mm_a0)             ; IX = a
     ld      iy, (mm_b0)
-    ld      de, 47
-    add     iy, de                  ; b + 47
-    ld      a, (mm_k)
-    ld      c, a
-    ld      a, 95
-    sub     a, c
-    ld      b, a                    ; 95 - k terms
-    call    p384_mul_mac
-    ld      a, (mm_k)
-    sub     a, 47
-    ld      bc, 0
-    ld      c, a
-    ld      ix, mm_u
-    add     ix, bc
+    add     iy, bc                  ; IY = b + k
+    call    .Lmm_jp_de              ; acc += sum_{n=k-47..47} a[n] b[k-n]
+    ld      ix, mm_u                ; IX = q
     ld      iy, (mm_mod)
-    ld      de, 47
-    add     iy, de
-    ld      a, (mm_k)
-    ld      c, a
-    ld      a, 95
-    sub     a, c
-    ld      b, a
-    call    p384_mul_mac
-    ld      a, l
-    push    af
-    ld      a, (mm_k)
-    sub     a, 48
-    ld      bc, 0
-    ld      c, a
+    add     iy, bc                  ; IY = m + k
+    ld      de, (mm_tgt)
+    call    .Lmm_jp_de
     ld      ix, (mm_out)
     add     ix, bc
-    pop     af
-    ld      (ix + 0), a             ; out[k-48]
+    ld      (ix - 48), l            ; out[k-48]
     ld      (mm_acc), hl
     ld      hl, (mm_acc + 1)
-    ld      a, (mm_k)
+    ld      a, c
     inc     a
     ld      (mm_k), a
     cp      a, 95
     jp      nz, .Lmm_p2
 
-    ld      c, l
-    ld      a, h
-    push    af
-    ld      hl, (mm_out)
-    ld      de, 47
-    add     hl, de
-    ld      (hl), c                 ; out[47]
-    pop     af
+    ld      ix, (mm_out)
+    ld      (ix + 47), l            ; out[47]
+    ld      a, h                    ; top
     neg
     sbc     a, a
     ld      c, a
@@ -2153,6 +2131,22 @@ p384_mont_core:
     ld      hl, (mm_out)
     ld      de, (mm_mod)
     jp      p384_reduce_top
+
+; DE = entry of the unrolled 48-term MAC block for A (1..48, public) terms.
+; Clobbers DE, IY.  Preserves A, BC, HL, IX.
+.Lmm_ent:
+    ld      de, 0
+    ld      e, a
+    ld      iy, __p384_macent
+    add     iy, de
+    add     iy, de
+    add     iy, de
+    ld      de, (iy + 0)
+    ret
+; Indirect call target: jumps to DE (a public code address).
+.Lmm_jp_de:
+    push    de
+    ret
 
 ; ===========================================================================
 ; p-specific Montgomery multiply / square  (THE hot path for the ladder)
@@ -2273,15 +2267,30 @@ p384_mont_core:
 .endm
 ; sq column pair j (k = 2j, 2j+1): IX = acopy + j - 48 (+1 for odd),
 ; IY = acopy + 48 + j; q[x] at (iy + mm_u - (acopy + 48 + j) + x).
+; The column carry H lives in BC between columns (BCU = mm_acc2[3] = 0).
+; Each column starts from HL = 0, sums its m off-diagonal products once
+; through the plain 9-byte MAC block (terms 24..47 of p384_mac_mul, same
+; (ix+n)*(iy-n) addressing as before), doubles with ADD HL,HL and only then
+; adds the carry: X = 2*S + H + [a^2] + red.  Bound: 2*24*0xFE01 + 12.5e3 +
+; 0xFE01 + 1532 < 3.2e6 < 2^24 (unchanged), so no ADD ever sets CF.
+.macro P384_SQSTART m
+    or      a, a
+    sbc     hl, hl                  ; HL = 0
+  .if \m > 0
+    call    p384_mac_mul_end - 9*(\m)
+    add     hl, hl                  ; 2 * off-diagonal sum
+  .endif
+    add     hl, bc                  ; + carry from the previous column
+.endm
+.macro P384_SQSHIFT d
+    ld      (iy + (\d)), hl
+    ld      bc, (iy + (\d) + 1)     ; BC = X >> 8 (byte 3 of mm_acc2 is 0)
+.endm
 .macro P384_SCOL j
   .if \j < 24
-    .if \j > 0
-    call    p384_mac_sq_end - 10*\j
-    .endif
+    P384_SQSTART \j
   .else
-    .if \j < 47
-    call    p384_mac_sq_end - 10*(47 - \j)
-    .endif
+    P384_SQSTART (47 - \j)
   .endif
     ld      d, (iy - 48)            ; a[j]
     ld      e, d
@@ -2289,18 +2298,16 @@ p384_mont_core:
     add     hl, de                  ; + a[j]^2
     P384_RED iy, (mm_u - (mm_acopy + 48 + \j)), (2*\j)
     P384_STORE iy, (mm_u - (mm_acopy + 48 + \j)), (2*\j)
-    P384_SHIFT iy, (mm_acc2 - (mm_acopy + 48 + \j))
+    P384_SQSHIFT (mm_acc2 - (mm_acopy + 48 + \j))
     inc     ix
   .if \j < 24
-    call    p384_mac_sq_end - 10*(\j + 1)
+    P384_SQSTART (\j + 1)
   .else
-    .if \j < 47
-    call    p384_mac_sq_end - 10*(47 - \j)
-    .endif
+    P384_SQSTART (47 - \j)
   .endif
     P384_RED iy, (mm_u - (mm_acopy + 48 + \j)), (2*\j + 1)
     P384_STORE iy, (mm_u - (mm_acopy + 48 + \j)), (2*\j + 1)
-    P384_SHIFT iy, (mm_acc2 - (mm_acopy + 48 + \j))
+    P384_SQSHIFT (mm_acc2 - (mm_acopy + 48 + \j))
     inc     iy
 .endm
 
@@ -2329,6 +2336,7 @@ p384_mul_p:
 .endr
 .Lpm384_final:                      ; In: L = H_95 = top + 2, t in mm_u
     ld      a, l
+.Lpm384_final_a:                    ; In: A = H_95 = top + 2
     sub     a, 2
     neg                             ; A = top ? 0xFF : 0
     ld      hl, mm_u
@@ -2345,12 +2353,12 @@ p384_sq_p:
     ldir                            ; acopy = a
     ld      ix, mm_acopy - 48       ; IX = acopy + j - 48 (even column)
     ld      iy, mm_acopy + 48       ; IY = acopy + 48 + j
-    or      a, a
-    sbc     hl, hl                  ; H = 0
+    ld      bc, 0                   ; carry H = 0 (BCU = 0)
 .irp j, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47
     P384_SCOL \j
 .endr
-    jp      .Lpm384_final
+    ld      a, c                    ; H_95 = top + 2 (carry is in BC)
+    jp      .Lpm384_final_a
 
 ; ===========================================================================
 ; Modular inversion by Fermat: out = a^(m-2) in the Montgomery domain.
@@ -2805,6 +2813,7 @@ p384_ws_normalize:
 ; Exception-free mixed Jacobian-affine addition for the secret ECDH loop.
 ; The regular-recoding proof guarantees saved0 != +-saved1 for every use.
 ; Cost 7M+4S, down from the Jacobian/Jacobian 11M+5S p384_ws_add.
+    .section .p384.mul.reloc,"ax",@progbits
 p384_ws_madd:
     FSQ     PF0, PS0Z
     FMUL    PF1, PS1X, PF0
@@ -2833,6 +2842,7 @@ p384_ws_madd:
     FSUB    PS0Z, PF8, PF3
     ret
 
+    .section .text.__p384,"ax",@progbits
 ; ===========================================================================
 ; Variable-time ECDSA verification engine (port of the p256.s engine).
 ;
@@ -3576,19 +3586,8 @@ _tls_p384_sign:
     jp      p384_exit
 
 
-; p384_mul_reloc_load: copy only the generic djnz MAC loop (the first 16
-; bytes of the block) for p384_mont_core, which keeps working stand-alone.
-; The prefix is identical to the full image, so this never disturbs the
-; unrolled blocks.  Clobbers BC, DE, HL.
-p384_mul_reloc_load:
-    ld      hl, _p384_mul_reloc_load_start
-    ld      de, _p384_mul_reloc_run_start
-    ld      bc, p384_mul_mac_end - _p384_mul_reloc_run_start
-    ldir
-    ret
-
-; p384_reloc_load_all: copy the whole .p384.mul.reloc member (generic loop +
-; 48-term MAC + 24-term doubling MAC) into the fast-RAM window.  Called from
+; p384_reloc_load_all: copy the whole .p384.mul.reloc member (48-term MAC block;
+; sq_p reuses the last 24 terms of that block) into the fast-RAM window.  Called from
 ; p384_di (every public entry, interrupts off) and after RFC 6979 in signing.
 ; Any other overlay consumer (.sha384.reloc, .sha256.reloc, RNG, AES, ...)
 ; that runs in between MUST be followed by another call.  Clobbers BC, DE, HL.
@@ -3606,17 +3605,6 @@ p384_reloc_load_all:
 ; ===========================================================================
     .section .p384.mul.reloc,"ax",@progbits
 _p384_mul_reloc_run_start:
-; Generic loop for p384_mont_core: acc += sum (IX+i)*(IY-i), B terms.
-p384_mul_mac:
-    ld      d, (ix + 0)
-    ld      e, (iy + 0)
-    mlt     de
-    add     hl, de
-    inc     ix
-    dec     iy
-    djnz    p384_mul_mac
-    ret
-p384_mul_mac_end:
 ; 48-term MAC block: term n is acc += (ix+n) * (iy-n).  Each term is exactly
 ; 9 bytes; the entry for a c-term column is p384_mac_mul_end - 9*c.
 ; Uses only D, E, HL, IX, IY (read-only).  A and BC are preserved.
@@ -3815,132 +3803,8 @@ p384_mac_mul:
     add     hl, de
 p384_mac_mul_end:
     ret
-; 24-term doubling MAC block for p384_sq_p: term n (24..47) is
-; acc += 2 * (ix+n) * (iy-n).  10 bytes per term; entry for an m-term
-; column is p384_mac_sq_end - 10*m.  Uses D, E, HL; preserves A, BC, IX, IY.
-p384_mac_sq:
-    ld      d, (ix + 24)
-    ld      e, (iy - 24)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 25)
-    ld      e, (iy - 25)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 26)
-    ld      e, (iy - 26)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 27)
-    ld      e, (iy - 27)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 28)
-    ld      e, (iy - 28)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 29)
-    ld      e, (iy - 29)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 30)
-    ld      e, (iy - 30)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 31)
-    ld      e, (iy - 31)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 32)
-    ld      e, (iy - 32)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 33)
-    ld      e, (iy - 33)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 34)
-    ld      e, (iy - 34)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 35)
-    ld      e, (iy - 35)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 36)
-    ld      e, (iy - 36)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 37)
-    ld      e, (iy - 37)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 38)
-    ld      e, (iy - 38)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 39)
-    ld      e, (iy - 39)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 40)
-    ld      e, (iy - 40)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 41)
-    ld      e, (iy - 41)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 42)
-    ld      e, (iy - 42)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 43)
-    ld      e, (iy - 43)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 44)
-    ld      e, (iy - 44)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 45)
-    ld      e, (iy - 45)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 46)
-    ld      e, (iy - 46)
-    mlt     de
-    add     hl, de
-    add     hl, de
-    ld      d, (ix + 47)
-    ld      e, (iy - 47)
-    mlt     de
-    add     hl, de
-    add     hl, de
-p384_mac_sq_end:
-    ret
+; (p384_sq_p uses the last 24 terms of p384_mac_mul and doubles once per
+; column; the former 10-byte doubling block is gone.)
 _p384_mul_reloc_run_end:
 
     .section .text.__p384,"ax",@progbits
