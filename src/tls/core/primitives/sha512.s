@@ -462,9 +462,7 @@ _tls_sha512_compress:
 	ldir
 
 	; Copy the Sigma hot blocks into fast RAM once per compression.
-	ld	hl,_lwip_reloc_image_base
-	ld	de,_sha384_reloc_load_offset
-	add	hl,de
+	ld	hl,_sha384_reloc_load_start
 	ld	de,_sha384_reloc_run_start
 	ld	bc,_sha384_reloc_len
 	ldir
