@@ -19,8 +19,9 @@
 ; the q*p pass replaced by p's sparse signed-digit structure and the MAC
 ; blocks run from the fast-RAM window (p384_mul_p / p384_sq_p); the order
 ; (mod n) path uses p384_mont_core with the unrolled MAC block dispatched via a
-; ROM entry table (requires .p384.mul.reloc resident).  Field inversion uses a fixed
-; addition chain.  The constant-time variable-base scalar multiplication
+; ROM entry table (requires the P-384 relocation image resident).  Field
+; inversion uses a fixed addition chain.  The constant-time variable-base
+; scalar multiplication
 ; (ECDH, p384_ws_mul) is a width-4 fixed window with Joye-Tunstall signed
 ; regular recoding over an 8-entry batch-normalized affine table of odd
 ; multiples of Q.
@@ -363,7 +364,7 @@ __p384_NM2_BE:
     .db     0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A
     .db     0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x71
 
-; p384_mont_core: entry of p384_mac_mul for c = 0..48 terms (public).
+; p384_mont_core: run entry of p384_mac_mul for c = 0..48 terms (public).
 __p384_macent:
 .irp c, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48
     .d24    p384_mac_mul_end - 9*\c
@@ -2814,7 +2815,9 @@ p384_ws_normalize:
 ; The regular-recoding proof guarantees saved0 != +-saved1 for every use.
 ; Cost 7M+4S, down from the Jacobian/Jacobian 11M+5S p384_ws_add.
     .section .p384.mul.reloc,"ax",@progbits
-p384_ws_madd:
+globl relocation_p384_start
+relocation_p384_start:
+p384_ws_madd_load:
     FSQ     PF0, PS0Z
     FMUL    PF1, PS1X, PF0
     FMUL    PF2, PS0Z, PF0
@@ -3586,15 +3589,20 @@ _tls_p384_sign:
     jp      p384_exit
 
 
-; p384_reloc_load_all: copy the whole .p384.mul.reloc member (48-term MAC block;
-; sq_p reuses the last 24 terms of that block) into the fast-RAM window.  Called from
+; p384_reloc_load_all: copy the whole contiguous P-384 image (mixed-add hot
+; path plus 48-term MAC block; sq_p reuses the last 24 MAC terms) into the
+; fast-RAM window.  The source image is linked at its real program VMA, so its
+; calls into ordinary dylib text are relocated before this copy.  Called from
 ; p384_di (every public entry, interrupts off) and after RFC 6979 in signing.
 ; Any other overlay consumer (.sha384.reloc, .sha256.reloc, RNG, AES, ...)
 ; that runs in between MUST be followed by another call.  Clobbers BC, DE, HL.
 p384_reloc_load_all:
-    ld      hl, _p384_mul_reloc_load_start
+    ; Reference the input-section bounds directly.  Besides making the copy
+    ; independent of the shared run VMA, these relocations keep the image alive
+    ; through ce-libify's intermediate --gc-sections link.
+    ld      hl, relocation_p384_start
     ld      de, _p384_mul_reloc_run_start
-    ld      bc, _p384_mul_reloc_len
+    ld      bc, relocation_p384_end - relocation_p384_start
     ldir
     ret
 
@@ -3607,7 +3615,7 @@ p384_reloc_load_all:
 ; 48-term MAC block: term n is acc += (ix+n) * (iy-n).  Each term is exactly
 ; 9 bytes; the entry for a c-term column is p384_mac_mul_end - 9*c.
 ; Uses only D, E, HL, IX, IY (read-only).  A and BC are preserved.
-p384_mac_mul:
+p384_mac_mul_load:
     ld      d, (ix + 0)
     ld      e, (iy - 0)
     mlt     de
@@ -3800,10 +3808,19 @@ p384_mac_mul:
     ld      e, (iy - 47)
     mlt     de
     add     hl, de
-p384_mac_mul_end:
+p384_mac_mul_load_end:
     ret
 ; (p384_sq_p uses the last 24 terms of p384_mac_mul and doubles once per
 ; column; the former 10-byte doubling block is gone.)
+globl relocation_p384_end
+relocation_p384_end:
+
+; Run-address aliases.  The load image has a unique program VMA for correct
+; installer relocation; execution uses the same offsets in the P-384-owned
+; fast-RAM window.
+.set p384_ws_madd, _p384_mul_reloc_run_start + (p384_ws_madd_load - relocation_p384_start)
+.set p384_mac_mul, _p384_mul_reloc_run_start + (p384_mac_mul_load - relocation_p384_start)
+.set p384_mac_mul_end, _p384_mul_reloc_run_start + (p384_mac_mul_load_end - relocation_p384_start)
 
     .section .text.__p384,"ax",@progbits
 

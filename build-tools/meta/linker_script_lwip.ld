@@ -65,6 +65,23 @@ SECTIONS
         *(.gnu.warning)
     } >prgm
 
+    /* P-384 fast-RAM image.
+     *
+     * Unlike the self-contained leaf blocks in the OVERLAY below, this image
+     * contains hot paths which call back into ordinary dylib text.  Give the
+     * image its real program VMA so convbin records those relocations against
+     * the unique flash image rather than an ambiguous shared 0xE30800 VMA.
+     * P-384 copies the already-relocated bytes to 0xE30800 in one LDIR and
+     * calls run-address aliases defined by p384.s.
+     */
+    .p384.mul.reloc :
+    {
+        _p384_mul_reloc_load_start = .;
+        KEEP(*(.p384.mul.reloc))
+        KEEP(*(.p384.mul.reloc.*))
+        _p384_mul_reloc_load_end = .;
+    } >prgm
+
     .rodata :
     {
         *(.rodata .rodata.* .gnu.linkonce.r.*)
@@ -249,18 +266,11 @@ SECTIONS
         }
         /* P-256 field-multiply MAC blocks (multiply + squaring) as ONE
          * member, copied in once per public entry by p256_di (and again
-         * after RFC 6979 in tls_p256_sign), like .p384.mul.reloc. */
+         * after RFC 6979 in tls_p256_sign), like the P-384 image above. */
         .p256.mul.reloc
         {
             _p256_mul_reloc_load_start = . + (LOADADDR(.p256.mul.reloc) - ADDR(.p256.mul.reloc));
             KEEP(*(.p256.mul.reloc))
-        }
-        .p384.mul.reloc
-        {
-            _p384_mul_reloc_run_start = .;
-            _p384_mul_reloc_load_start = . + (LOADADDR(.p384.mul.reloc) - ADDR(.p384.mul.reloc));
-            KEEP(*(.p384.mul.reloc))
-            KEEP(*(.p384.mul.reloc.*))
         }
         .powmod.reloc
         {
@@ -311,7 +321,12 @@ SECTIONS
 
     /* Back-compat aliases for the P-256 MAC-block copy loop in p256.s. */
     _p256_mul_reloc_len      = SIZEOF(.p256.mul.reloc);
-    _p384_mul_reloc_len      = SIZEOF(.p384.mul.reloc);
+
+    /* P-384 owns the same whole fast-RAM window while active, but its source
+     * image has a unique program VMA so cross-section relocations are
+     * unambiguous. */
+    _p384_mul_reloc_run_start = 0xE30800;
+    _p384_mul_reloc_len       = SIZEOF(.p384.mul.reloc);
 
     /* Back-compat aliases for the AES copy loop in aes.s. */
     _aes_encrypt_reloc_len   = SIZEOF(.aes.encrypt.reloc);
@@ -337,8 +352,8 @@ SECTIONS
 
     /* Guard: no consumer may outgrow the 1020-byte shared window. */
     /* .p256.mul.reloc is reloaded unconditionally at every public entry
-     * and after RFC 6979 (no byte-0 skip test any more), so like
-     * .p384.mul.reloc it only has to fit the 1020-byte window. */
+     * and after RFC 6979 (no byte-0 skip test any more), so like the P-384
+     * relocation image it only has to fit the 1020-byte window. */
     ASSERT(SIZEOF(.p256.mul.reloc) <= 1020,
            "Error: .p256.mul.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.p384.mul.reloc) <= 1020,
