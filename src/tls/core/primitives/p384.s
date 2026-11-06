@@ -28,7 +28,7 @@
 ; Jacobian point formulas use a = -3.  ECDSA verification is variable-time
 ; with respect to its (public) inputs: s^-1 by binary extended Euclid
 ; (p384_ord_inv_vt), then u1*G + u2*Q in one interleaved doubling chain
-; (u2: width-4 NAF over Q, 3Q, 5Q, 7Q; u1: width-5 sliding window over a
+; (u2: width-4 NAF over Q, 3Q, 5Q, 7Q; u1: width-6 sliding window over a
 ; static affine odd-G table), and x(R) mod n == r checked projectively
 ; (X == r Z^2, also r + n when r + n < p) with no field inversion.  That
 ; engine must never be given secret data.
@@ -156,10 +156,10 @@ dk_priv:                .space 3
 vs_inf:                 .space 1
 vs_t:                   .space 1
 vs_i:                   .space 3        ; verify: position 384..0 / wNAF index
-vs_gpend:               .space 1        ; pending u1 width-5 window
+vs_gpend:               .space 1        ; pending u1 width-6 window
 vs_gpos:                .space 3        ; low bit position of pending window
 vs_gcur:                .space 3        ; window-construction cursor
-vs_gval:                .space 1        ; pending odd value 1..31
+vs_gval:                .space 1        ; pending odd value 1..63
 __p384_scratch_end:
 
 ; --- field-temporary names ---
@@ -378,8 +378,8 @@ __p384_macent:
 .irp c, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48
     .d24    p384_mac_mul_end - 9*\c
 .endr
-; Odd multiples (2i+1)G, i = 0..15, affine, Montgomery form, for the
-; variable-time width-5 verification engine.  Generated independently with
+; Odd multiples (2i+1)G, i = 0..31, affine, Montgomery form, for the
+; variable-time width-6 verification engine.  Generated independently with
 ; affine integer arithmetic; entry zero equals __p384_G/__p384_G_Y.
 __p384_GTAB:
     ; 1G
@@ -590,6 +590,7 @@ __p384_GTAB:
     .db     0x1C, 0x7A, 0x5A, 0x04, 0x4F, 0x46, 0xDD, 0xD7
     .db     0xC4, 0xEC, 0xBE, 0x36, 0x6D, 0x0D, 0x3D, 0x5B
     .db     0x9D, 0xA1, 0x98, 0x63, 0x75, 0x3E, 0x5A, 0x47
+    .include "p384_gtab_w6.inc"          ; 33G..63G for width-6 verification
 ; P384 fixed-base comb table, w = 4, d = 96: entry j (1..15) at
 ; __p384_COMB + 96*(j-1) = sum over set bits s of j of 2^(96s) G,
 ; affine, Montgomery form (x R, y R mod p), 48-byte LE x || y.
@@ -2871,8 +2872,8 @@ p384_ws_madd:
 ;   u2 (Q): width-4 NAF, digits 0, +-1, +-3, +-5, +-7, recoded right to left
 ;           into nibble codes (VS_DIG); table Q (affine, = pq), 3Q, 5Q, 7Q
 ;           (Jacobian, computed per call).  +-Q uses mixed addition.
-;   u1 (G): width-5 left-to-right sliding window over __p384_GTAB, the
-;           affine odd multiples G..31G in ROM; always mixed addition.
+;   u1 (G): width-6 left-to-right sliding window over __p384_GTAB, the
+;           affine odd multiples G..63G in ROM; always mixed addition.
 ;
 ; Scratch use: accumulator = saved0 (vs_inf = 1 means O; its bytes are then
 ; don't-care), add operand = saved1, 3Q / 5Q / 7Q = add_result /
@@ -2987,7 +2988,7 @@ p384_verify_shamir:
 .Lvs_lo:
     and     a, 0x0F
     call    nz, p384_vs_qadd
-    ; ---- u1: width-5 sliding window over bits 383..0 ----
+    ; ---- u1: width-6 sliding window over bits 383..0 ----
     ld      hl, (vs_i)
     ld      de, 384
     or      a, a
@@ -3000,12 +3001,12 @@ p384_verify_shamir:
     call    p384_bit_k
     jp      z, .Lvs_next
     ld      hl, (vs_i)                  ; open a window at bit i
-    ld      de, 4
+    ld      de, 5
     or      a, a
     sbc     hl, de
     jr      nc, .Lvs_find
     or      a, a                        ; clear borrow
-    sbc     hl, hl                      ; low end max(i - 4, 0)
+    sbc     hl, hl                      ; low end max(i - 5, 0)
 .Lvs_find:                              ; j = lowest set bit in [low, i]
     ld      (vs_gpos), hl
     call    p384_bit_k
