@@ -49,7 +49,9 @@ _aes_xor_buf:
 	.global _aes_prepare_encrypt
 	.type _aes_prepare_encrypt,@function
 _aes_prepare_encrypt:
-	ld	hl, _aes_encrypt_reloc_load_start
+	ld	hl, _lwip_reloc_image_base
+	ld	de, _aes_encrypt_reloc_load_offset
+	add	hl, de
 	ld	de, _aes_encrypt_reloc_run_start
 	ld	bc, _gf128_mul - _aes_encrypt_reloc_run_start
 	ldir
@@ -59,7 +61,9 @@ _aes_prepare_encrypt:
 	.global _aes_prepare_ghash
 	.type _aes_prepare_ghash,@function
 _aes_prepare_ghash:
-	ld	hl, _aes_encrypt_reloc_load_start + (_gf128_mul - _aes_encrypt_reloc_run_start)
+	ld	hl, _lwip_reloc_image_base
+	ld	de, _aes_encrypt_reloc_load_offset + (_gf128_mul - _aes_encrypt_reloc_run_start)
+	add	hl, de
 	ld	de, _gf128_mul
 	ld	bc, _aes_encrypt_reloc_len - (_gf128_mul - _aes_encrypt_reloc_run_start)
 	ldir
@@ -69,7 +73,9 @@ _aes_prepare_ghash:
 	.global _aes_prepare_decrypt
 	.type _aes_prepare_decrypt,@function
 _aes_prepare_decrypt:
-	ld	hl, _aes_decrypt_reloc_load_start
+	ld	hl, _lwip_reloc_image_base
+	ld	de, _aes_decrypt_reloc_load_offset
+	add	hl, de
 	ld	de, _aes_decrypt_reloc_run_start
 	ld	bc, _aes_decrypt_reloc_len
 	ldir

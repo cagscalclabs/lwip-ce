@@ -501,7 +501,9 @@ _sha256_transform:
 
 	; The compression rounds dominate SHA-256 runtime. Copy only that compact
 	; loop to fastMem; the message schedule and state folding remain in flash.
-	ld hl,_sha256_reloc_load_start
+	ld hl,_lwip_reloc_image_base
+	ld de,_sha256_reloc_load_offset
+	add hl,de
 	ld de,_sha256_reloc_run_start
 	ld bc,_sha256_reloc_len
 	ldir

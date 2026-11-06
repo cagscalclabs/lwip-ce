@@ -10,6 +10,12 @@ SECTIONS
 
     .header :
     {
+        /* Stable relocation anchor for all copied fast-RAM load images.
+         * Symbols defined inside OVERLAY members inherit the shared run VMA,
+         * which makes a relocation to their distinct LMAs converter-sensitive.
+         * Copy loops instead relocate this ordinary prgm symbol, then add the
+         * absolute LMA offset declared below the overlay. */
+        _lwip_reloc_image_base = .;
         KEEP (*(.header))
         PROVIDE_HIDDEN (___icon_optional = .);
         KEEP (*(.header.icon))
@@ -231,11 +237,6 @@ SECTIONS
         .x25519.reloc
         {
             _x25519_reloc_run_start = .;
-            /* Relocatable load-image pointer — same fix as .powmod.reloc below:
-             * `. + (LOADADDR - ADDR)` is a prgm-section-relative symbol the
-             * installer patches, vs a bare LOADADDR() (absolute, never patched
-             * → x25519.s copy loop would ldir from the link-time LMA garbage). */
-            _x25519_reloc_load_start = . + (LOADADDR(.x25519.reloc) - ADDR(.x25519.reloc));
             KEEP(*(.x25519.reloc))
             KEEP(*(.x25519.reloc.*))
             _x25519_reloc_run_end = .;
@@ -243,11 +244,6 @@ SECTIONS
         .aes.encrypt.reloc
         {
             _aes_encrypt_reloc_run_start = .;
-            /* Relocatable load-image pointer — same fix as .powmod.reloc below:
-             * `. + (LOADADDR - ADDR)` is a prgm-section-relative symbol the
-             * installer patches, vs a bare LOADADDR() (absolute, never patched
-             * → aes.s copy loop would ldir from the link-time LMA garbage). */
-            _aes_encrypt_reloc_load_start = . + (LOADADDR(.aes.encrypt.reloc) - ADDR(.aes.encrypt.reloc));
             KEEP(*(.aes.encrypt.reloc))
             KEEP(*(.aes.encrypt.reloc.*))
             _aes_encrypt_reloc_run_end = .;
@@ -255,11 +251,6 @@ SECTIONS
         .aes.decrypt.reloc
         {
             _aes_decrypt_reloc_run_start = .;
-            /* Relocatable load-image pointer — same fix as .powmod.reloc below:
-             * `. + (LOADADDR - ADDR)` is a prgm-section-relative symbol the
-             * installer patches, vs a bare LOADADDR() (absolute, never patched
-             * → aes.s copy loop would ldir from the link-time LMA garbage). */
-            _aes_decrypt_reloc_load_start = . + (LOADADDR(.aes.decrypt.reloc) - ADDR(.aes.decrypt.reloc));
             KEEP(*(.aes.decrypt.reloc))
             KEEP(*(.aes.decrypt.reloc.*))
             _aes_decrypt_reloc_run_end = .;
@@ -269,20 +260,11 @@ SECTIONS
          * after RFC 6979 in tls_p256_sign), like the P-384 image above. */
         .p256.mul.reloc
         {
-            _p256_mul_reloc_load_start = . + (LOADADDR(.p256.mul.reloc) - ADDR(.p256.mul.reloc));
             KEEP(*(.p256.mul.reloc))
         }
         .powmod.reloc
         {
             _powmod_reloc_run_start = .;
-            /* Relocatable load-image pointer. Anchoring (LOADADDR - ADDR) to a
-             * section-relative `.` (the .data trick) makes this a prgm-section-
-             * relative symbol that convbin records and the installer PATCHES to
-             * the real installed flash base. A bare `LOADADDR(.powmod.reloc)`
-             * outside any section is an ABSOLUTE symbol (no reloc record), so
-             * the trampoline's ldir reads the link-time LMA (~0x04127A, garbage
-             * in low/OS flash) instead of base+offset — the powmod crash. */
-            _powmod_reloc_load_start = . + (LOADADDR(.powmod.reloc) - ADDR(.powmod.reloc));
             KEEP(*(.powmod.reloc))
             KEEP(*(.powmod.reloc.*))
             _powmod_reloc_run_end = .;
@@ -290,7 +272,6 @@ SECTIONS
         .sha256.reloc
         {
             _sha256_reloc_run_start = .;
-            _sha256_reloc_load_start = . + (LOADADDR(.sha256.reloc) - ADDR(.sha256.reloc));
             KEEP(*(.sha256.reloc))
             KEEP(*(.sha256.reloc.*))
             _sha256_reloc_run_end = .;
@@ -298,7 +279,6 @@ SECTIONS
         .sha384.reloc
         {
             _sha384_reloc_run_start = .;
-            _sha384_reloc_load_start = . + (LOADADDR(.sha384.reloc) - ADDR(.sha384.reloc));
             KEEP(*(.sha384.reloc))
             KEEP(*(.sha384.reloc.*))
             _sha384_reloc_run_end = .;
@@ -324,14 +304,21 @@ SECTIONS
         }
     }
 
-    /* Back-compat aliases for the X25519 copy loop in x25519.s.
-     * NOTE: _x25519_reloc_load_start is defined INSIDE the .x25519.reloc block
-     * above (not here) so it is a relocatable/patched symbol, not an absolute
-     * LOADADDR. See the comment there. */
+    /* Every copier relocates the ordinary prgm anchor above, then adds one of
+     * these absolute LMA offsets.  No relocation therefore targets an
+     * ambiguous shared-VMA OVERLAY member. */
     _x25519_reloc_len        = SIZEOF(.x25519.reloc);
+    _x25519_reloc_load_offset = ABSOLUTE(LOADADDR(.x25519.reloc) - ORIGIN(prgm));
 
     /* Back-compat aliases for the P-256 MAC-block copy loop in p256.s. */
     _p256_mul_reloc_len      = SIZEOF(.p256.mul.reloc);
+    _p256_mul_reloc_load_offset = ABSOLUTE(LOADADDR(.p256.mul.reloc) - ORIGIN(prgm));
+
+    _aes_encrypt_reloc_load_offset = ABSOLUTE(LOADADDR(.aes.encrypt.reloc) - ORIGIN(prgm));
+    _aes_decrypt_reloc_load_offset = ABSOLUTE(LOADADDR(.aes.decrypt.reloc) - ORIGIN(prgm));
+    _powmod_reloc_load_offset = ABSOLUTE(LOADADDR(.powmod.reloc) - ORIGIN(prgm));
+    _sha256_reloc_load_offset = ABSOLUTE(LOADADDR(.sha256.reloc) - ORIGIN(prgm));
+    _sha384_reloc_load_offset = ABSOLUTE(LOADADDR(.sha384.reloc) - ORIGIN(prgm));
 
     /* P-384 owns the same whole fast-RAM window while active, but its source
      * image has a unique program VMA so cross-section relocations are

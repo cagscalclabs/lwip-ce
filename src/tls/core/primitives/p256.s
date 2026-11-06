@@ -3230,7 +3230,9 @@ _p256_mul_reloc_run_end = _p256_reloc_run_end
 ; that runs in between MUST be followed by another call.
 ; Clobbers BC, DE, HL.  Preserves AF, IX, IY.
 p256_reloc_load:
-    ld      hl, _p256_mul_reloc_load_start
+    ld      hl, _lwip_reloc_image_base
+    ld      de, _p256_mul_reloc_load_offset
+    add     hl, de
     ld      de, _p256_mul_reloc_run_start
     ld      bc, _p256_mul_reloc_len
     ldir

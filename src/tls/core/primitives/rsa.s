@@ -66,7 +66,9 @@ globl _powmod_exp_u24
    .equ   Lcnt0, Ltmp  - 3         ; {hi_adj(size), lo(size), 0}
 
 _powmod_exp_u24:
-   ld   hl, _powmod_reloc_load_start
+   ld   hl, _lwip_reloc_image_base
+   ld   de, _powmod_reloc_load_offset
+   add  hl, de
    ld   de, _powmod_reloc_run_start
    ld   bc, _powmod_reloc_len
    ldir
