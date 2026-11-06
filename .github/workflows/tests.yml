@@ -818,7 +818,7 @@ jobs:
         run: |
           timeout 900s cemu-autotester \
             "${{ github.workspace }}/tests/profiling/primitives_bench/autotest.json" \
-            2>&1 | tee autotest.log || true
+            2>&1 | tee autotest.log
 
       - name: Extract and print benchmark results
         working-directory: tests/profiling/primitives_bench

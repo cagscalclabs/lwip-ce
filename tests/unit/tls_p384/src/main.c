@@ -1,7 +1,7 @@
 /**
  * @file main.c
  * @brief P-384 (secp384r1) unit tests — keygen, ECDH, deterministic ECDSA,
- *        input rejection, and timing.
+ *        and input rejection.
  *
  * Reference values were generated with an independent pure-Python P-384
  * implementation (affine point arithmetic + RFC 6979 HMAC-SHA-384).
@@ -11,7 +11,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include <ti/screen.h>
 #include <ti/getkey.h>
 
@@ -307,7 +306,6 @@ static bool test_reject_range(void)
 int main(void)
 {
     bool ok;
-    uint8_t ss[48];
 
     if (!lwip_start()) return 1;
 
@@ -369,26 +367,6 @@ int main(void)
 
     ok = test_pub_a_neg();
     report(ok);
-    os_GetKey();
-    os_ClrHome();
-
-    memset(ss, 0, sizeof(ss));
-
-    /* hash 14: timing screen — ops run here, screen ends with "success" */
-    {
-        uint8_t pub[97], sig[96];
-        clock_t t0;
-        uint32_t tpk, tss, tsg, tvf;
-        t0 = clock(); (void)tls_p384_publickey(pub, priv_a); tpk = (uint32_t)(clock() - t0);
-        t0 = clock(); (void)tls_p384_secret(ss, priv_a, pub_b); tss = (uint32_t)(clock() - t0);
-        t0 = clock(); (void)tls_p384_sign(sig, hash1, priv_a); tsg = (uint32_t)(clock() - t0);
-        t0 = clock(); (void)tls_p384_verify(sig, hash1, pub); tvf = (uint32_t)(clock() - t0);
-        printf("pk %lu.%03lu s\n", (unsigned long)(tpk / 32768u), (unsigned long)((tpk % 32768u) * 1000u / 32768u));
-        printf("ss %lu.%03lu s\n", (unsigned long)(tss / 32768u), (unsigned long)((tss % 32768u) * 1000u / 32768u));
-        printf("sg %lu.%03lu s\n", (unsigned long)(tsg / 32768u), (unsigned long)((tsg % 32768u) * 1000u / 32768u));
-        printf("vf %lu.%03lu s\n", (unsigned long)(tvf / 32768u), (unsigned long)((tvf % 32768u) * 1000u / 32768u));
-        printf("success");
-    }
     os_GetKey();
     os_ClrHome();
 
