@@ -10,6 +10,8 @@
   "sequence": [
     "action|launch",
     "hashWait|1",
+    "delay|2000",
+    "saveVar|TLSBENCH",
     "key|enter"
   ],
   "hashes": {
