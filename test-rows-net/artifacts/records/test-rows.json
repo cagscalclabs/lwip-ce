@@ -1,8 +1,0 @@
-[
-  {
-    "group": "NETTEST",
-    "module": "NETTEST",
-    "test": "RECORDS - Suite execution",
-    "grade": "Fail"
-  }
-]
