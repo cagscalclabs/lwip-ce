@@ -2462,7 +2462,7 @@ p384_kadd48:
 ; Absolute half-differences keep the third multiply at 24x24; their comparison
 ; masks select its sign without branching.  The normalized product then enters the
 ; same sparse-prime Montgomery recurrence used by the schoolbook multiplier.
-p384_mul_p:
+p384_mul_p_karatsuba:
     push    ix
     ld      (mm_out), bc
     push    de                      ; b
@@ -2540,8 +2540,8 @@ p384_mul_p:
 .endr
     jp      .Lpm384_final
 
-; Retained temporarily as a differential/reference implementation while the
-; Karatsuba path is profiled on target.
+; Schoolbook product-scanning multiply — faster on eZ80 than Karatsuba.
+p384_mul_p:
 p384_mul_p_schoolbook:
     push    ix
     ld      (mm_out), bc
@@ -3137,31 +3137,29 @@ p384_bit_k:
     ret
 
 ; p384_vs_qadd: acc += d Q for the wNAF code in A (1..15).
+; 3Q, 5Q, 7Q are affine after p384_vs_normalize_qtab, so all additions use
+; the cheaper mixed-addition path (7M+4S vs 11M+5S Jacobian).
 p384_vs_qadd:
     ld      (vs_t), a
     and     a, 7
     cp      a, 1
-    jr      nz, .Lqa_jac
-    ld      hl, __p384_pq               ; |d| = 1: Q itself is affine (Z = 1)
-    ld      de, PS1
-    ld      bc, 96
-    ldir
-    call    .Lqa_neg
-    jp      p384_point_add_affine
-.Lqa_jac:                               ; |d| = 3, 5, 7
-    ld      hl, VS_T3
+    jr      z, .Lqa_q                   ; |d| = 1: use Q (pq)
+    ld      hl, VS_T3                   ; |d| = 3, 5, 7: pick affine table entry
     cp      a, 3
     jr      z, .Lqa_cp
     ld      hl, VS_T5
     cp      a, 5
     jr      z, .Lqa_cp
     ld      hl, VS_T7
-.Lqa_cp:
+    jr      .Lqa_cp
+.Lqa_q:
+    ld      hl, __p384_pq               ; Q is affine (Z = R)
+.Lqa_cp:                                ; copy X || Y (96 bytes); all entries affine
     ld      de, PS1
-    ld      bc, 144
+    ld      bc, 96
     ldir
     call    .Lqa_neg
-    jp      p384_point_add_vt
+    jp      p384_point_add_affine
 .Lqa_neg:                               ; d < 0: saved1 Y = -Y
     ld      a, (vs_t)
     and     a, 8

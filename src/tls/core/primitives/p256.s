@@ -2314,29 +2314,28 @@ p256_bit_k:
     ECC_VS_TABLE_WNAF p256
 
 ; p256_vs_qadd: acc += d Q for the wNAF code in A (1..15).
+; 3Q, 5Q, 7Q are affine after p256_vs_normalize_qtab, so all additions use
+; the cheaper mixed-addition path (7M+4S vs 11M+5S Jacobian).
 p256_vs_qadd:
     ld      (vs_t), a
     and     a, 7
     dec     a
-    jr      nz, .Lqa_jac
-    ld      hl, __p256_pq               ; |d| = 1: Q itself is affine (Z = 1)
-    ld      de, PS1
-    ld      bc, 64
-    ldir
-    call    .Lqa_neg
-    jp      p256_point_add_affine
-.Lqa_jac:                               ; A = |d| - 1 = 2, 4, 6
+    jr      nz, .Lqa_sel357
+    ld      hl, __p256_pq               ; |d| = 1: Q itself is affine (Z = R)
+    jr      .Lqa_cp
+.Lqa_sel357:                            ; A = |d| - 1 = 2, 4, 6; index affine table
     ld      hl, __p256_add_result - 96
     ld      de, 96
 .Lqa_idx:
     add     hl, de
     sub     a, 2
     jr      nz, .Lqa_idx                ; 3Q, 5Q, 7Q
+.Lqa_cp:                                ; copy X || Y (64 bytes); all entries affine
     ld      de, PS1
-    ld      bc, 96
+    ld      bc, 64
     ldir
     call    .Lqa_neg
-    jp      p256_point_add_vt
+    jp      p256_point_add_affine
 .Lqa_neg:                               ; d < 0: saved1 Y = -Y
     ld      a, (vs_t)
     and     a, 8

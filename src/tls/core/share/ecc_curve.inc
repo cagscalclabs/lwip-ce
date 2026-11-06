@@ -880,7 +880,14 @@
 ; ===========================================================================
 ; ECC_VS_TABLE_WNAF pfx -- VARIABLE-TIME verify-engine helpers (public data).
 ;
-; pfx_vs_table: VS_T3 = 3Q, VS_T5 = 5Q, VS_T7 = 7Q (Jacobian), from pq = Q.
+; pfx_vs_table: VS_T3 = 3Q, VS_T5 = 5Q, VS_T7 = 7Q (affine, Montgomery),
+;   from pq = Q (affine, Z = R).  Builds the three Jacobian multiples via
+;   point_add_ladder, then batch-normalizes them with one field inversion so
+;   that the verify loop can use the cheaper point_add_affine (7M+4S) instead
+;   of point_add_vt (11M+5S) for every wNAF digit +-3, +-5, +-7.
+;   Saves ~(11M+5S - 7M+4S) * ~38 uses ≈ 152M+38S per ECDSA verify.
+;   Reuses __pfx_batch_z[0..2] (3*FIELD_BYTES) for the three saved Z values;
+;   that buffer is only live during ECDH which is never co-resident.
 ;   The ladder-variant addition is valid: its omitted case would need
 ;   Q + 2Q, 3Q + 2Q or 5Q + 2Q with equal operands, i.e. Q, 3Q or 5Q = O,
 ;   impossible for a validated Q (n is a large prime).
@@ -900,19 +907,71 @@
     ld      hl, PS1
     call    \pfx\()_point_double        ; saved1 = 2Q
     ld      hl, VS_T3
-    call    \pfx\()_point_add_ladder    ; 3Q
+    call    \pfx\()_point_add_ladder    ; 3Q (Jacobian)
     ld      hl, VS_T3
     ld      de, PS0
     ld      bc, 3*FIELD_BYTES
     ldir
     ld      hl, VS_T5
-    call    \pfx\()_point_add_ladder    ; 5Q
+    call    \pfx\()_point_add_ladder    ; 5Q (Jacobian)
     ld      hl, VS_T5
     ld      de, PS0
     ld      bc, 3*FIELD_BYTES
     ldir
     ld      hl, VS_T7
-    jp      \pfx\()_point_add_ladder    ; 7Q
+    call    \pfx\()_point_add_ladder    ; 7Q (Jacobian)
+    ; Fall through into batch normalization.
+    ; Saves Z(T3), Z(T5), Z(T7); computes prefix products in Z slots;
+    ; inverts the final product; unwinds to give each point affine X, Y.
+    ; Uses PF0..PF3 (via FMUL/FSQ/fe_inv) and __pfx_batch_z[0..2*FIELD_BYTES].
+\pfx\()_vs_normalize_qtab:
+    ; --- save original Z values ---
+    ld      hl, VS_T3 + 2*FIELD_BYTES
+    ld      de, __\pfx\()_batch_z
+    ld      bc, FIELD_BYTES
+    ldir                                ; batch_z[0] = Z(T3)
+    ld      hl, VS_T5 + 2*FIELD_BYTES
+    ld      de, __\pfx\()_batch_z + FIELD_BYTES
+    ld      bc, FIELD_BYTES
+    ldir                                ; batch_z[1] = Z(T5)
+    ld      hl, VS_T7 + 2*FIELD_BYTES
+    ld      de, __\pfx\()_batch_z + 2*FIELD_BYTES
+    ld      bc, FIELD_BYTES
+    ldir                                ; batch_z[2] = Z(T7)
+    ; --- build prefix products (overwrite Z slots) ---
+    ; Z(T5) := Z(T3) * Z(T5)
+    FMUL    VS_T5 + 2*FIELD_BYTES, VS_T3 + 2*FIELD_BYTES, __\pfx\()_batch_z + FIELD_BYTES
+    ; Z(T7) := Z(T3)*Z(T5) * Z(T7)
+    FMUL    VS_T7 + 2*FIELD_BYTES, VS_T5 + 2*FIELD_BYTES, __\pfx\()_batch_z + 2*FIELD_BYTES
+    ; --- invert the total product ---
+    ld      hl, VS_T7 + 2*FIELD_BYTES
+    ld      bc, PF3
+    call    \pfx\()_fe_inv              ; PF3 = 1 / (Z3*Z5*Z7)
+    ; --- unwind: T7 first ---
+    ; z7_inv = PF3 * prefix[T5..T3] = PF3 * (Z3*Z5)
+    FMUL    PF0, PF3, VS_T5 + 2*FIELD_BYTES
+    ; advance PF3: PF3 := PF3 * batch_z[2] = 1/(Z3*Z5)
+    FMUL    PF3, PF3, __\pfx\()_batch_z + 2*FIELD_BYTES
+    FSQ     PF1, PF0                    ; z7_inv^2
+    FMUL    VS_T7, VS_T7, PF1           ; X7 /= Z7^2
+    FMUL    PF1, PF1, PF0
+    FMUL    VS_T7 + FIELD_BYTES, VS_T7 + FIELD_BYTES, PF1   ; Y7 /= Z7^3
+    ; --- T5 ---
+    ; z5_inv = PF3 * batch_z[0] = (1/(Z3*Z5)) * Z3 = 1/Z5
+    FMUL    PF0, PF3, __\pfx\()_batch_z
+    ; advance PF3: PF3 := PF3 * batch_z[1] = 1/Z3
+    FMUL    PF3, PF3, __\pfx\()_batch_z + FIELD_BYTES
+    FSQ     PF1, PF0
+    FMUL    VS_T5, VS_T5, PF1           ; X5 /= Z5^2
+    FMUL    PF1, PF1, PF0
+    FMUL    VS_T5 + FIELD_BYTES, VS_T5 + FIELD_BYTES, PF1   ; Y5 /= Z5^3
+    ; --- T3 ---
+    ; z3_inv = PF3 (= 1/Z3)
+    FSQ     PF1, PF3
+    FMUL    VS_T3, VS_T3, PF1           ; X3 /= Z3^2
+    FMUL    PF1, PF1, PF3
+    FMUL    VS_T3 + FIELD_BYTES, VS_T3 + FIELD_BYTES, PF1   ; Y3 /= Z3^3
+    ret
 
 \pfx\()_vs_wnaf:
     ld      hl, VS_DIG
