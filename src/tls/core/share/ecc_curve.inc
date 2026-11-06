@@ -157,8 +157,12 @@
 .endm
 
 ; ===========================================================================
-; ECC_POINT_DOUBLE_ADD pfx -- Jacobian point formulas (Montgomery domain,
+; ECC_POINT_DOUBLE_ADD pfx, double_label, add_section -- Jacobian point
+; formulas (Montgomery domain,
 ; points are X||Y||Z, 3*FIELD_BYTES bytes, a = -3).
+; The point-double body is emitted in the caller's current section under
+; double_label; the point-add bodies resume in add_section.  This lets a curve
+; relocate only its hot doubling path without duplicating the formulas.
 ;
 ; pfx_point_double: out = 2 * saved0.  In: HL=out.
 ;   Uses f[0..6], rt.  out must not be saved0's rt or f[] (out = saved0 is
@@ -176,8 +180,8 @@
 ;   and P = -Q selects are kept.  The choice is a public, per-call constant.
 ;   On return pa_h / pa_r hold the H == 0 / r == 0 masks.
 ; ===========================================================================
-.macro ECC_POINT_DOUBLE_ADD pfx
-\pfx\()_point_double:
+.macro ECC_POINT_DOUBLE_ADD pfx, double_label, add_section
+\double_label:
     ld      (pd_out), hl
     FSQ     PF0, PS0Z                   ; delta = Z^2
     FSQ     PF1, PS0Y                   ; gamma = Y^2
@@ -211,6 +215,7 @@
     ld      iy, (pd_out)
     jp      \pfx\()_point_select        ; out = (Z==0) ? inf : rt
 
+    .section \add_section,"ax",@progbits
 \pfx\()_point_add_ladder:
     ld      a, 1
     jr      .Lpa_entry
@@ -1043,7 +1048,8 @@
 .endm
 
 ; ===========================================================================
-; ECC_DI_EXIT pfx, reload -- public-entry prologue/epilogue helpers.
+; ECC_DI_EXIT pfx, reload, fast_start, fast_len -- public-entry
+; prologue/epilogue helpers.
 ;
 ; pfx_di: zero the scratch block, save IFF1 into pfx_di_save (bit 0),
 ;   disable interrupts, then tail-call `reload` (the curve's fast-RAM MAC
@@ -1052,13 +1058,14 @@
 ;   shift relies on and clears stale data.  ld a,i sets PV = IFF2 = IFF1
 ;   (outside an NMI); jp pe tests PV immediately.
 ;   Clobbers AF, BC, DE, HL (plus whatever `reload` clobbers).
-; pfx_wipe: zero the whole scratch block.  Clobbers BC, DE, HL.
+; pfx_wipe: zero the whole BSS scratch block and, when fast_len is nonzero,
+;   the curve-private fast-memory scratch block.  Clobbers BC, DE, HL.
 ; pfx_exit: common public-API epilogue.  In: A = result.  Expects the stack
 ;   to hold only the caller's saved IX above the return address.  Wipes the
 ;   scratch, then re-enables interrupts iff they were enabled on entry.
 ; pfx_null: Z set iff HL == 0 (all 24 bits).  Clobbers F.  Preserves HL, DE.
 ; ===========================================================================
-.macro ECC_DI_EXIT pfx, reload
+.macro ECC_DI_EXIT pfx, reload, fast_start, fast_len
 \pfx\()_di:
     call    \pfx\()_wipe                ; zero scratch (establishes mm_acc[3] = 0)
     ld      a, i                        ; PV = IFF1
@@ -1079,6 +1086,13 @@
     ld      de, __\pfx\()_scratch_start + 1
     ld      bc, __\pfx\()_scratch_end - __\pfx\()_scratch_start - 1
     ldir
+.if \fast_len
+    ld      hl, \fast_start
+    ld      (hl), 0
+    ld      de, \fast_start + 1
+    ld      bc, \fast_len - 1
+    ldir
+.endif
     ret
 
 \pfx\()_exit:

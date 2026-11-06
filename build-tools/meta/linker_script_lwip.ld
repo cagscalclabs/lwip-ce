@@ -311,6 +311,17 @@ SECTIONS
             _sprng_entropy_pool = .;
             . = . + 520;   /* total RNG scratch: see virtuals.inc */
         }
+        .p384.fast.scratch
+        {
+            /* P-384 owns this overlay member by itself.  Leave room for its
+             * copied code at the window base, then place the secret
+             * Montgomery working set directly in the remaining fast tail. */
+            . = . + SIZEOF(.p384.mul.reloc);
+            _p384_fast_scratch_start = .;
+            KEEP(*(.p384.fast.scratch))
+            KEEP(*(.p384.fast.scratch.*))
+            _p384_fast_scratch_end = .;
+        }
     }
 
     /* Back-compat aliases for the X25519 copy loop in x25519.s.
@@ -324,9 +335,11 @@ SECTIONS
 
     /* P-384 owns the same whole fast-RAM window while active, but its source
      * image has a unique program VMA so cross-section relocations are
-     * unambiguous. */
+     * unambiguous.  Its secret Montgomery working set occupies the otherwise
+     * unused tail immediately after the copied code. */
     _p384_mul_reloc_run_start = 0xE30800;
     _p384_mul_reloc_len       = SIZEOF(.p384.mul.reloc);
+    _p384_fast_scratch_len    = _p384_fast_scratch_end - _p384_fast_scratch_start;
 
     /* Back-compat aliases for the AES copy loop in aes.s. */
     _aes_encrypt_reloc_len   = SIZEOF(.aes.encrypt.reloc);
@@ -356,8 +369,14 @@ SECTIONS
      * relocation image it only has to fit the 1020-byte window. */
     ASSERT(SIZEOF(.p256.mul.reloc) <= 1020,
            "Error: .p256.mul.reloc exceeds safe-RAM overlay window")
-    ASSERT(SIZEOF(.p384.mul.reloc) <= 1020,
-           "Error: .p384.mul.reloc exceeds safe-RAM overlay window")
+    ASSERT(__p384_fast_scratch_start == _p384_fast_scratch_start,
+           "Error: P-384 fast scratch does not follow its relocated code")
+    ASSERT(__p384_fast_scratch_end == _p384_fast_scratch_end,
+           "Error: P-384 fast scratch linker bounds disagree")
+    ASSERT(_p384_fast_scratch_len == 171,
+           "Error: unexpected P-384 fast scratch size")
+    ASSERT(SIZEOF(.p384.fast.scratch) <= 1020,
+           "Error: P-384 code plus fast scratch exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.x25519.reloc) <= 0x400,
            "Error: .x25519.reloc exceeds safe-RAM overlay window")
     ASSERT(SIZEOF(.aes.encrypt.reloc) <= 0x400,

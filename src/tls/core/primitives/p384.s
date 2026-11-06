@@ -65,22 +65,41 @@
 .include "scratch.inc"
 
 ; ===========================================================================
-; Scratch (.bss).  This buffer is one member of the linker-enforced crypto
-; scratch overlay; P-384, P-256, RSA/HKDF and X25519 are mutually exclusive
-; at runtime.
+; Scratch.  The Montgomery multiply/square working set occupies the unused
+; tail of P-384's fast-RAM image; the larger point/scalar workspace remains
+; one member of the linker-enforced BSS crypto overlay.  Both regions are
+; wiped on entry and before every return.
 ; ===========================================================================
-globl __p384_scratch_start
-globl __p384_scratch_end
-    .section .crypto_scratch.p384,"aw",@nobits
-__p384_scratch_start:
 ; mm_acopy | mm_u | mm_bcopy | mm_acc2 must stay contiguous and in this
 ; order: p384_mul_p / p384_sq_p reach all four through IX/IY displacements
 ; whose ranges (-128..127) were derived for exactly this layout.
+globl __p384_fast_scratch_start
+globl __p384_fast_scratch_end
+    .section .p384.fast.scratch,"aw",@nobits
+__p384_fast_scratch_start:
 mm_acopy:               .space 48       ; mul_p/sq_p: copy of a
 mm_u:                   .space 48       ; q[0..47], then t[0..47] in place
 __p384_red:                             ; reduce_top temp (ord path), aliases
 mm_bcopy:               .space 48       ; mul_p: copy of b
 mm_acc2:                .space 4        ; shift cell (byte 3 always 0)
+; Montgomery routine state follows the 148-byte arithmetic workspace.
+mm_out:                 .space 3
+mm_a0:                  .space 3
+mm_b0:                  .space 3
+mm_mod:                 .space 3
+mm_n0:                  .space 1
+mm_k:                   .space 1
+mm_qk:                  .space 1
+mm_cnt:                 .space 1
+mm_acc:                 .space 4        ; [acc_lo, acc_mid, acc_hi, 0]
+mm_tgt:                 .space 3        ; mont_core: MAC entry for this column
+__p384_fast_scratch_end:
+.equ P384_FAST_SCRATCH_LEN, __p384_fast_scratch_end - __p384_fast_scratch_start
+
+globl __p384_scratch_start
+globl __p384_scratch_end
+    .section .crypto_scratch.p384,"aw",@nobits
+__p384_scratch_start:
 __p384_f:               .space 14*48    ; f[0..13] field temporaries
 __p384_tmp:             .space 48       ; generic 48-byte temporary
 __p384_tmp2:            .space 48       ; second 48-byte temporary (scalar BE)
@@ -98,16 +117,6 @@ __p384_x:               .space 48       ; sign: x(R) (BE);   verify: u2 (LE)
 __p384_batch_z:         .space 7*48     ; ECDH: original Z of 3Q..15Q
                                         ; ECDH: k||x = 96 recoded digits
 ; --- routine state ---
-mm_out:                 .space 3
-mm_a0:                  .space 3
-mm_b0:                  .space 3
-mm_mod:                 .space 3
-mm_n0:                  .space 1
-mm_k:                   .space 1
-mm_qk:                  .space 1
-mm_cnt:                 .space 1
-mm_acc:                 .space 4        ; [acc_lo, acc_mid, acc_hi, 0]
-mm_tgt:                 .space 3        ; mont_core: MAC entry for this column
 rt_x:                   .space 3
 rt_m:                   .space 3
 rt_top:                 .space 1
@@ -2729,7 +2738,11 @@ p384_point_select:
 ; out = saved0 + saved1) and p384_point_add_ladder (same without the
 ; always-computed doubling): ecc_curve.inc, ECC_POINT_DOUBLE_ADD.
 ; In: HL = out.  Uses f[0..12], rt, add_result, double_result.
-    ECC_POINT_DOUBLE_ADD p384
+    .section .p384.mul.reloc,"ax",@progbits
+globl relocation_p384_start
+relocation_p384_start:
+    ECC_POINT_DOUBLE_ADD p384, p384_point_double_load, .text.__p384
+.set p384_point_double, _p384_mul_reloc_run_start + (p384_point_double_load - relocation_p384_start)
 
 ; p384_add48: (IY) = (HL) + (DE), 48 bytes; A = carry ? 0xFF : 0.
     ECC_ADDN p384, 48
@@ -2814,10 +2827,7 @@ p384_ws_normalize:
 ; Exception-free mixed Jacobian-affine addition for the secret ECDH loop.
 ; The regular-recoding proof guarantees saved0 != +-saved1 for every use.
 ; Cost 7M+4S, down from the Jacobian/Jacobian 11M+5S p384_ws_add.
-    .section .p384.mul.reloc,"ax",@progbits
-globl relocation_p384_start
-relocation_p384_start:
-p384_ws_madd_load:
+p384_ws_madd:
     FSQ     PF0, PS0Z
     FMUL    PF1, PS1X, PF0
     FMUL    PF2, PS0Z, PF0
@@ -2845,7 +2855,6 @@ p384_ws_madd_load:
     FSUB    PS0Z, PF8, PF3
     ret
 
-    .section .text.__p384,"ax",@progbits
 ; ===========================================================================
 ; Variable-time ECDSA verification engine (port of the p256.s engine).
 ;
@@ -3132,7 +3141,7 @@ p384_affine_export:
 ; (ecc_curve.inc, ECC_DI_EXIT).  p384_di tail-calls p384_reloc_load_all so
 ; the field-multiply blocks are loaded into fast RAM with interrupts off
 ; (nothing can touch the window until p384_exit).
-    ECC_DI_EXIT p384, p384_reloc_load_all
+    ECC_DI_EXIT p384, p384_reloc_load_all, __p384_fast_scratch_start, P384_FAST_SCRATCH_LEN
 
 ; ===========================================================================
 ; Public API: publickey / secret / verify
@@ -3589,9 +3598,10 @@ _tls_p384_sign:
     jp      p384_exit
 
 
-; p384_reloc_load_all: copy the whole contiguous P-384 image (mixed-add hot
-; path plus 48-term MAC block; sq_p reuses the last 24 MAC terms) into the
-; fast-RAM window.  The source image is linked at its real program VMA, so its
+; p384_reloc_load_all: copy the whole contiguous P-384 image (point doubling
+; plus the 48-term MAC block; sq_p reuses the last 24 MAC terms) into the
+; fast-RAM window.  The 171-byte Montgomery scratch immediately follows the
+; copied image.  The source image is linked at its real program VMA, so its
 ; calls into ordinary dylib text are relocated before this copy.  Called from
 ; p384_di (every public entry, interrupts off) and after RFC 6979 in signing.
 ; Any other overlay consumer (.sha384.reloc, .sha256.reloc, RNG, AES, ...)
@@ -3603,6 +3613,14 @@ p384_reloc_load_all:
     ld      hl, relocation_p384_start
     ld      de, _p384_mul_reloc_run_start
     ld      bc, relocation_p384_end - relocation_p384_start
+    ldir
+    ; SHA-384 and the other overlay users may have overwritten the tail too.
+    ; Clear it on every reload, both for secret hygiene and to reestablish the
+    ; permanent zero high byte of mm_acc/mm_acc2 before Montgomery arithmetic.
+    ld      hl, __p384_fast_scratch_start
+    ld      (hl), 0
+    ld      de, __p384_fast_scratch_start + 1
+    ld      bc, P384_FAST_SCRATCH_LEN - 1
     ldir
     ret
 
@@ -3818,7 +3836,6 @@ relocation_p384_end:
 ; Run-address aliases.  The load image has a unique program VMA for correct
 ; installer relocation; execution uses the same offsets in the P-384-owned
 ; fast-RAM window.
-.set p384_ws_madd, _p384_mul_reloc_run_start + (p384_ws_madd_load - relocation_p384_start)
 .set p384_mac_mul, _p384_mul_reloc_run_start + (p384_mac_mul_load - relocation_p384_start)
 .set p384_mac_mul_end, _p384_mul_reloc_run_start + (p384_mac_mul_load_end - relocation_p384_start)
 

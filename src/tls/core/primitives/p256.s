@@ -2120,7 +2120,7 @@ p256_ord_inv:
 ; always-computed doubling; only where that case is unreachable or handled
 ; by the caller): ecc_curve.inc, ECC_POINT_DOUBLE_ADD.  In: HL = out.
 ; Uses f[0..12], rt, add_result, double_result.
-    ECC_POINT_DOUBLE_ADD p256
+    ECC_POINT_DOUBLE_ADD p256, p256_point_double, .text.__p256
 
 ; ===========================================================================
 ; p256_ws_mul: pq = k * Q, constant-time width-4 fixed window with the
@@ -2669,7 +2669,7 @@ p256_order_export:
 ; p256_di / p256_wipe / p256_exit / p256_null: shared prologue/epilogue
 ; (ecc_curve.inc, ECC_DI_EXIT).  p256_di tail-calls p256_reloc_load to put
 ; the field-multiply MAC blocks into fast RAM with interrupts off.
-    ECC_DI_EXIT p256, p256_reloc_load
+    ECC_DI_EXIT p256, p256_reloc_load, 0, 0
 
 ; ===========================================================================
 ; Public API: publickey / secret / verify
