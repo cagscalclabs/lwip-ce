@@ -1601,7 +1601,10 @@ p384_fe_sub:
 ;   In: HL = t (48 bytes), DE = x (may equal HL), A = top mask (0x00/0xFF).
 ;   Clobbers AF, BC, DE, HL, IY.  Preserves IX.
 ;   Pass 1 computes only carry(t + c); pass 2 writes t + (c & mask).
-p384_redp:
+    .section .p384.mul.reloc,"ax",@progbits
+globl relocation_p384_start
+relocation_p384_start:
+p384_redp_load:
     ld      iyh, a                  ; top mask
     push    hl
     ld      bc, 0x0000FF            ; B = 0, C = 0xFF
@@ -1993,6 +1996,9 @@ p384_redp:
     adc     a, b
     ld      (de), a
     ret
+
+    .section .text.__p384,"ax",@progbits
+.set p384_redp, _p384_mul_reloc_run_start + (p384_redp_load - relocation_p384_start)
 
 ; p384_raw_ge (A = a >= m), p384_ct_is_zero (A = 0xFF iff zero),
 ; p384_eq48 (A = 1 iff equal), p384_rev48 (byte reverse): ecc_curve.inc,
@@ -2738,11 +2744,7 @@ p384_point_select:
 ; out = saved0 + saved1) and p384_point_add_ladder (same without the
 ; always-computed doubling): ecc_curve.inc, ECC_POINT_DOUBLE_ADD.
 ; In: HL = out.  Uses f[0..12], rt, add_result, double_result.
-    .section .p384.mul.reloc,"ax",@progbits
-globl relocation_p384_start
-relocation_p384_start:
-    ECC_POINT_DOUBLE_ADD p384, p384_point_double_load, .text.__p384
-.set p384_point_double, _p384_mul_reloc_run_start + (p384_point_double_load - relocation_p384_start)
+    ECC_POINT_DOUBLE_ADD p384, p384_point_double, .text.__p384
 
 ; p384_add48: (IY) = (HL) + (DE), 48 bytes; A = carry ? 0xFF : 0.
     ECC_ADDN p384, 48
@@ -3598,9 +3600,10 @@ _tls_p384_sign:
     jp      p384_exit
 
 
-; p384_reloc_load_all: copy the whole contiguous P-384 image (point doubling
-; plus the 48-term MAC block; sq_p reuses the last 24 MAC terms) into the
-; fast-RAM window.  The 171-byte Montgomery scratch immediately follows the
+; p384_reloc_load_all: copy the whole contiguous P-384 image (the final
+; p-specific reduction plus the 48-term MAC block; sq_p reuses the last 24
+; MAC terms) into the fast-RAM window.  The 171-byte Montgomery scratch
+; immediately follows the
 ; copied image.  The source image is linked at its real program VMA, so its
 ; calls into ordinary dylib text are relocated before this copy.  Called from
 ; p384_di (every public entry, interrupts off) and after RFC 6979 in signing.
@@ -3625,7 +3628,7 @@ p384_reloc_load_all:
     ret
 
 ; ===========================================================================
-; Relocated field-multiply inner blocks (fast RAM at 0xE30800).
+; Relocated field-multiply hot paths (fast RAM at 0xE30800).
 ; Entries are addressed through their run-time labels, which resolve against
 ; the run VMA, so the copied image is callable as-is.
 ; ===========================================================================
