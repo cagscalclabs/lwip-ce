@@ -2056,20 +2056,14 @@ p384_mont_core:
     ld      a, (mm_k)
     ld      bc, 0
     ld      c, a                    ; BC = k (preserved by the MAC block)
-    ld      ix, (mm_a0)
-    add     ix, bc
+    ld      ix, (mm_a0)             ; IX = a
     ld      iy, (mm_b0)
-    ld      de, 47
-    add     iy, de                  ; IY = b + 47
-    ld      de, -47
-    add     ix, de                  ; IX = a + k - 47
+    add     iy, bc                  ; IY = b + k
     ld      de, (mm_tgt)
-    call    .Lmm_jp_de              ; acc += sum a[i] b[k-i]
-    ld      ix, mm_u - 47
-    add     ix, bc                  ; IX = q + k - 47 (q[k] is still 0)
+    call    .Lmm_jp_de              ; acc += sum_{n=0..k} a[n] * b[k-n]
+    ld      ix, mm_u                ; IX = q
     ld      iy, (mm_mod)
-    ld      de, 47
-    add     iy, de                  ; IY = m + 47
+    add     iy, bc                  ; IY = m + k
     ld      de, (mm_tgt)
     call    .Lmm_jp_de              ; acc += sum q[i] m[k-i], i < k
     ld      a, (mm_n0)
@@ -2099,23 +2093,29 @@ p384_mont_core:
     call    .Lmm_ent                ; DE = p384_mac_mul_end - 9*(95-k)
     ld      (mm_tgt), de
     ld      a, (mm_k)
+    sub     a, 47
     ld      bc, 0
-    ld      c, a                    ; BC = k
-    ld      ix, (mm_a0)             ; IX = a
+    ld      c, a                    ; BC = k - 47
+    ld      ix, (mm_a0)
+    add     ix, bc                  ; IX = a + (k-47)
     ld      iy, (mm_b0)
-    add     iy, bc                  ; IY = b + k
-    call    .Lmm_jp_de              ; acc += sum_{n=k-47..47} a[n] b[k-n]
-    ld      ix, mm_u                ; IX = q
+    ld      de, 47
+    add     iy, de                  ; IY = b + 47
+    ld      de, (mm_tgt)
+    call    .Lmm_jp_de              ; acc += sum_{n=0..94-k} a[k-47+n] * b[47-n]
+    ld      ix, mm_u
+    add     ix, bc                  ; IX = q + (k-47)
     ld      iy, (mm_mod)
-    add     iy, bc                  ; IY = m + k
+    ld      de, 47
+    add     iy, de                  ; IY = m + 47
     ld      de, (mm_tgt)
     call    .Lmm_jp_de
     ld      ix, (mm_out)
     add     ix, bc
-    ld      (ix - 48), l            ; out[k-48]
+    ld      (ix - 1), l             ; out[k-48] (BC = k-47)
     ld      (mm_acc), hl
     ld      hl, (mm_acc + 1)
-    ld      a, c
+    ld      a, (mm_k)
     inc     a
     ld      (mm_k), a
     cp      a, 95
