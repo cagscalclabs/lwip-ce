@@ -1,0 +1,571 @@
+#ifndef LWIP_PUBLIC_LWIP_H
+#define LWIP_PUBLIC_LWIP_H
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#include "lwip/core/acd.h"
+#include "lwip/core/altcp.h"
+#include "lwip/core/altcp_tls.h"
+#include "lwip/core/altcp_tls_mbedtls_opts.h"
+#include "lwip/core/altcp_ws.h"
+#include "lwip/core/arch.h"
+#include "lwip/core/autoip.h"
+#include "lwip/core/cc.h"
+#include "lwip/core/def.h"
+#include "lwip/core/dhcp.h"
+#include "lwip/core/dns.h"
+#include "lwip/core/drivers_mem.h"
+#include "lwip/core/err.h"
+#include "lwip/core/etharp.h"
+#include "lwip/core/ethernet.h"
+#include "lwip/core/icmp.h"
+#include "lwip/core/icmp6.h"
+#include "lwip/core/ieee.h"
+#include "lwip/core/igmp.h"
+#include "lwip/core/inet_chksum.h"
+#include "lwip/core/init.h"
+#include "lwip/core/ip.h"
+#include "lwip/core/ip4.h"
+#include "lwip/core/ip4_addr.h"
+#include "lwip/core/ip4_frag.h"
+#include "lwip/core/ip6.h"
+#include "lwip/core/ip6_addr.h"
+#include "lwip/core/ip6_frag.h"
+#include "lwip/core/ip6_zone.h"
+#include "lwip/core/ip_addr.h"
+#include "lwip/core/logging.h"
+#include "lwip/core/mem.h"
+#include "lwip/core/mem_priv.h"
+#include "lwip/core/memp.h"
+#include "lwip/core/memp_priv.h"
+#include "lwip/core/mld6.h"
+#include "lwip/core/nd6.h"
+#include "lwip/core/netif.h"
+#include "lwip/core/pbuf.h"
+#include "lwip/core/pcap.h"
+#include "lwip/core/prot_acd.h"
+#include "lwip/core/prot_etharp.h"
+#include "lwip/core/prot_icmp.h"
+#include "lwip/core/prot_icmp6.h"
+#include "lwip/core/prot_ip.h"
+#include "lwip/core/prot_ip4.h"
+#include "lwip/core/prot_ip6.h"
+#include "lwip/core/prot_udp.h"
+#include "lwip/core/raw.h"
+#include "lwip/core/sntp_time.h"
+#include "lwip/core/stats.h"
+#include "lwip/core/sys.h"
+#include "lwip/core/tcp.h"
+#include "lwip/core/tcpbase.h"
+#include "lwip/core/timeouts.h"
+#include "lwip/core/tls-alpn.h"
+#include "lwip/core/udp.h"
+#include "lwip/core/usb_ethernet.h"
+
+/* ================================================================
+ * lwIP-CE socket API — the preferred high-level surface.
+ * Inlined here (rather than a buried subheader) because this is
+ * the API most apps should use: lwip_socket_create / _connect /
+ * _write / _read / _close. The core includes above expose
+ * the lower-level lwIP primitives for advanced use.
+ * ================================================================ */
+
+/**
+ * @file lwip.h
+ * @brief App-facing socket API.
+ *
+ * Hides the altcp / altcp_tls_ce / raw tcp / udp factoring behind a single
+ * socket handle and a fixed verb set. Intended for application code
+ * that just wants to open a socket-like endpoint, attach a single event
+ * callback, and send/recv bytes. The TLS and altcp layers are still directly
+ * usable for anyone who needs them — this is an additive convenience layer.
+ *
+ * Lifecycle:
+ *   lwip_start()                — once at load time (libload bootstrap +
+ *                                  stack memory/timers/RNG; no network yet).
+ *                                  Sufficient on its own for crypto/memory
+ *                                  primitives (every unit test under
+ *                                  tests/unit/ relies on this).
+ *   lwip_network_up()           — bring up USB/netif; call once before
+ *                                  networking
+ *   lwip_service_events()  — every main-loop iteration (drives callbacks)
+ *   lwip_socket_create()        — allocate handle, bind netif, kick DHCP
+ *   lwip_socket_on_event()      — register single event callback + arg
+ *   lwip_socket_connect()       — initiate connect; completion fires STATE_CHANGE
+ *   lwip_socket_available() / lwip_socket_read() — data path in main loop
+ *   lwip_socket_write()         — send data (from CONNECTED callback or loop)
+ *   lwip_socket_shutdown() / close / abort — teardown
+ *   lwip_socket_destroy()       — free handle
+ *   lwip_stop()                 — stack shutdown
+ *
+ * Typical main loop:
+ *   while (lwip_socket_is_active(sock) && !done) {
+ *       lwip_service_events();
+ *       size_t n = lwip_socket_available(sock);
+ *       if (n) lwip_socket_read(sock, buf, n);
+ *   }
+ */
+
+#ifndef LWIP_HDR_LWIP_APP_H
+#define LWIP_HDR_LWIP_APP_H
+
+#include "lwip/core/err.h"
+#include "lwip/core/ip_addr.h"
+#include "lwip/core/pbuf.h"
+#include "lwip/core/logging.h"
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/** lwIP-CE release version (distinct from the vendored upstream lwIP version). */
+#define LWIP_CE_VERSION_MAJOR 3
+#define LWIP_CE_VERSION_MINOR 0
+#define LWIP_CE_VERSION_PATCH 0
+#define LWIP_CE_VERSION_STRING "3.0.0"
+
+    struct netif;
+    struct tcp_pcb;
+    struct udp_pcb;
+    struct altcp_pcb;
+    struct altcp_tls_ce_config;
+    struct altcp_ws_config;
+    struct mem_buffer;
+    struct lwip_socket; /* forward decl for callback typedefs */
+
+    /** API result codes. */
+    typedef enum
+    {
+        LWIP_OK = 0,
+        LWIP_ERR_ARG,      /**< NULL / out-of-range argument */
+        LWIP_ERR_STATE,    /**< called in wrong lifecycle state */
+        LWIP_ERR_MEM,      /**< allocation failed */
+        LWIP_ERR_NETIF,    /**< no netif available / not up */
+        LWIP_ERR_DNS,      /**< DNS resolution failed / unavailable */
+        LWIP_ERR_CONNECT,  /**< connect() failed at transport layer */
+        LWIP_ERR_PROTO,    /**< unsupported protocol for this op */
+        LWIP_ERR_CLOSED,   /**< peer has closed (or local close pending) */
+        LWIP_ERR_INTERNAL, /**< lwIP returned an unexpected err_t */
+        LWIP_ERR_SERVICES, /**< required network services (DHCP/DNS/SNTP) not yet ready */
+    } lwip_error_t;
+
+    /** Transport selector for lwip_socket_create. */
+    typedef enum
+    {
+        LWIP_SOCKET_TCP = 0,   /**< raw TCP via tcp_*  */
+        LWIP_SOCKET_UDP,       /**< UDP via udp_*      */
+        LWIP_SOCKET_ALTCP,     /**< altcp (default TCP allocator) */
+        LWIP_SOCKET_ALTCP_TLS, /**< altcp wrapped in TLS 1.3 (altcp_tls_ce) */
+        LWIP_SOCKET_ALTCP_WS,  /**< WebSocket over plain TCP (RFC 6455)     */
+        LWIP_SOCKET_ALTCP_WSS, /**< WebSocket over TLS (WSS)                */
+    } lwip_socket_type_t;
+
+    /** Which netif a socket attaches to at create(). */
+    typedef enum
+    {
+        LWIP_NETIF_ANY = 0, /**< first usable netif (loopback or external) */
+        LWIP_NETIF_LOOP,    /**< loopback only */
+        LWIP_NETIF_EXT,     /**< external Ethernet only */
+    } lwip_socket_bind_descriptor_t;
+
+    /** Optional static IPv4 configuration. Pass NULL for DHCP. */
+    typedef struct
+    {
+        ip4_addr_t ip;
+        ip4_addr_t netmask;
+        ip4_addr_t gateway;
+    } lwip_socket_addrinfo_t;
+
+    /** Socket lifecycle status. Poll via socket->status or STATE_CHANGE events. */
+    typedef enum
+    {
+        LWIP_STATUS_INIT = 0,         /**< handle created, not connecting yet */
+        LWIP_STATUS_WAITING_SERVICES, /**< waiting for DHCP/DNS/SNTP before connect */
+        LWIP_STATUS_RESOLVING,        /**< DNS lookup in flight */
+        LWIP_STATUS_CONNECTING,       /**< TCP / TLS handshake in flight */
+        LWIP_STATUS_CONNECTED,        /**< ready for write/read */
+        LWIP_STATUS_CLOSING,          /**< local shutdown / close issued */
+        LWIP_STATUS_CLOSED,           /**< peer sent FIN, clean close */
+        LWIP_STATUS_RESET,            /**< peer sent RST, connection immediately gone */
+        LWIP_STATUS_ERROR,            /**< stack error (timeout, OOM, abort) */
+    } lwip_status_t;
+
+    /** Socket event types delivered to the event callback.
+     *
+     *  ERROR is always delivered if a callback is registered, regardless of flags.
+     *  For STATE_CHANGE, ev_data is lwip_socket_state_data_t* (previous + current
+     *  status). For IO, ev_data is lwip_socket_io_data_t*. For ERROR, ev_data is
+     *  lwip_socket_error_data_t* with the full component/operation/raw breakdown.
+     *  All ev_data pointers are valid only for the duration of the callback. */
+    typedef enum
+    {
+        LWIP_SOCKET_EV_ERROR = 0,
+        LWIP_SOCKET_EV_STATE_CHANGE,
+        LWIP_SOCKET_EV_IO,
+    } lwip_socket_event_type_t;
+
+#define LWIP_SOCKET_EVENTF_ERROR        (1u << LWIP_SOCKET_EV_ERROR)
+#define LWIP_SOCKET_EVENTF_STATE_CHANGE (1u << LWIP_SOCKET_EV_STATE_CHANGE)
+#define LWIP_SOCKET_EVENTF_IO           (1u << LWIP_SOCKET_EV_IO)
+#define LWIP_SOCKET_EVENTF_ALL          (LWIP_SOCKET_EVENTF_ERROR | \
+                                         LWIP_SOCKET_EVENTF_STATE_CHANGE | \
+                                         LWIP_SOCKET_EVENTF_IO)
+
+/** IO event flags within lwip_socket_io_data_t.flags. */
+typedef enum
+{
+    LWIP_SOCKET_IO_READABLE = 1u << 0,  /**< data in ring; call lwip_socket_read */
+    LWIP_SOCKET_IO_WRITABLE = 1u << 1,  /**< peer ACKed sent data */
+    LWIP_SOCKET_IO_POLL     = 1u << 2,  /**< periodic poll tick */
+} lwip_socket_io_flags_t;
+
+/** Error component — which subsystem reported the error. */
+typedef enum
+{
+    LWIP_SOCKET_ERR_COMP_SOCKET = 0,
+    LWIP_SOCKET_ERR_COMP_NETIF,
+    LWIP_SOCKET_ERR_COMP_SERVICES,
+    LWIP_SOCKET_ERR_COMP_DNS,
+    LWIP_SOCKET_ERR_COMP_TCP,
+    LWIP_SOCKET_ERR_COMP_UDP,
+    LWIP_SOCKET_ERR_COMP_ALTCP,
+    LWIP_SOCKET_ERR_COMP_TLS,
+    LWIP_SOCKET_ERR_COMP_MEM,
+} lwip_socket_error_component_t;
+
+/** Error operation — what was being attempted when the error occurred. */
+typedef enum
+{
+    LWIP_SOCKET_ERR_OP_NONE = 0,
+    LWIP_SOCKET_ERR_OP_CREATE,
+    LWIP_SOCKET_ERR_OP_CONNECT,
+    LWIP_SOCKET_ERR_OP_DNS_LOOKUP,
+    LWIP_SOCKET_ERR_OP_RECV,
+    LWIP_SOCKET_ERR_OP_SEND,
+    LWIP_SOCKET_ERR_OP_WRITE,
+    LWIP_SOCKET_ERR_OP_CLOSE,
+    LWIP_SOCKET_ERR_OP_SHUTDOWN,
+    LWIP_SOCKET_ERR_OP_TLS_INIT,
+    LWIP_SOCKET_ERR_OP_TLS_CONFIG,
+    LWIP_SOCKET_ERR_OP_ALLOC,
+} lwip_socket_error_operation_t;
+
+/** ev_data for LWIP_SOCKET_EV_ERROR events. */
+typedef struct
+{
+    uint16_t      component;   /**< lwip_socket_error_component_t */
+    uint16_t      operation;   /**< lwip_socket_error_operation_t */
+    int           raw_error;   /**< raw err_t / module code */
+    lwip_error_t  err;         /**< mapped app-facing result */
+    lwip_status_t status;      /**< socket status at time of error */
+} lwip_socket_error_data_t;
+
+/** ev_data for LWIP_SOCKET_EV_STATE_CHANGE events. */
+typedef struct
+{
+    lwip_status_t previous;
+    lwip_status_t current;
+} lwip_socket_state_data_t;
+
+/** ev_data for LWIP_SOCKET_EV_IO events. */
+typedef struct
+{
+    uint8_t  flags;    /**< lwip_socket_io_flags_t bitmap */
+    size_t   readable; /**< bytes in ring for lwip_socket_read */
+    uint16_t written;  /**< bytes peer ACKed (WRITABLE flag set) */
+} lwip_socket_io_data_t;
+
+/** Single typed event callback.
+ *
+ *  sock     — the socket that generated the event.
+ *  type     — LWIP_SOCKET_EV_ERROR / STATE_CHANGE / IO.
+ *  ev_data  — typed payload (cast to the matching _data_t* for the event type).
+ *             Valid only for the duration of the callback.
+ *  arg      — user pointer supplied to lwip_socket_on_event(). */
+typedef void (*lwip_socket_event_cb)(struct lwip_socket *sock,
+                                     lwip_socket_event_type_t type,
+                                     const void *ev_data,
+                                     void *arg);
+
+/** Application-supplied text input used for secrets such as an encrypted
+ *  private-key password. Return a writable, NUL-terminated buffer that remains
+ *  valid until the invoking lwIP operation returns; lwIP wipes its password
+ *  bytes immediately after use. Return NULL to cancel/fail. */
+typedef char *(*lwip_tty_input_fn)(void);
+
+/** Service wait flags. */
+#define LWIP_SOCKET_SVC_DHCP   (1u << 0)
+#define LWIP_SOCKET_SVC_SNTP   (1u << 1)
+#define LWIP_SOCKET_SVC_DNS    (1u << 2)
+
+typedef enum
+{
+    LWIP_NETIF_SERVICE_UP = 0,
+    LWIP_NETIF_SERVICE_FAILED,
+    LWIP_NETIF_SERVICE_TIMEOUT,
+} lwip_netif_service_status_t;
+
+/** Event payload delivered to lwip_netif_service_cb on each per-service
+ *  transition.  The callback fires once per service as it becomes ready,
+ *  fails, or times out — never batched.
+ *
+ *  service_id   — the single service that just fired (LWIP_SOCKET_SVC_*)
+ *  status       — UP / FAILED / TIMEOUT for that service
+ *  ready_bitmap — bitmask of ALL services currently up on this netif
+ *                 (same bits as LWIP_SOCKET_SVC_*; useful to check
+ *                  "are all the services I care about up?" inline) */
+typedef struct
+{
+    uint8_t                    service_id;
+    lwip_netif_service_status_t status;
+    uint8_t                    ready_bitmap;
+} lwip_netif_service_event_t;
+
+typedef void (*lwip_netif_service_cb)(struct netif *netif,
+                                      const lwip_netif_service_event_t *ev,
+                                      void *arg);
+
+/** Snapshot of the default lwIP netif. */
+typedef struct
+{
+    bool    has_netif;
+    bool    up;
+    bool    link_up;
+    bool    dhcp_running;
+    uint8_t dhcp_state;
+    bool    has_ipv4;
+    bool    has_ipv4_gateway;
+    uint8_t ipv4_addr[4];
+    uint8_t ipv4_netmask[4];
+    uint8_t ipv4_gateway[4];
+} lwip_netif_info_t;
+
+/** Timing constants. */
+#define LWIP_SOCKET_RX_RING_INIT_SIZE    512u
+#define LWIP_SOCKET_RX_RING_STEP_SIZE    512u
+#define LWIP_SOCKET_RX_RING_MAX_SIZE     4096u
+
+/** Socket handle — opaque. Allocated by lwip_socket_create(); freed by
+ *  lwip_socket_destroy(). Do not embed or stack-allocate. */
+struct lwip_socket;
+
+/* ------------------------------------------------------------------ */
+
+uint8_t  lwip_start_last_error(void);
+/** Returns the NUL-terminated lwIP-CE release version string. */
+const char *lwip_version_string(void);
+void     lwip_stop(void);
+
+/** Install the application's secret-input callback, or NULL to remove it.
+ *  lwIP provides no built-in terminal or UI. Operations that need input fail
+ *  closed when no callback is installed or the callback returns NULL.
+ *  The callback is single-use and is removed before lwIP invokes it;
+ *  lwip_stop() also removes an unused callback. */
+void     lwip_set_tty(lwip_tty_input_fn input);
+
+/* Bring the network up: USB/netif init plus TLS connection-support data
+ * (truststore, PSK cache). Requires the stack to already be initialized,
+ * which lwip_start_with_crt() (aliased to lwip_start() for the caller's
+ * own CRT) does automatically at load time. */
+bool     lwip_network_up(void);
+void     lwip_service_events(void);
+uint32_t lwip_now_ms(void);
+
+/* Pump the stack until the TLS random generator reaches security_strength,
+ * which must be 128 (TLS_RNG_STRENGTH_128) or 192
+ * (TLS_RNG_STRENGTH_192). Returns true once ready, false for an invalid
+ * strength, timeout, a stopped lifecycle, or RNG failure. Call after
+ * lwip_start() before using crypto APIs that need random bytes. */
+bool     lwip_tls_rng_wait_for_ready(uint16_t security_strength,
+                                     uint32_t timeout_ms);
+bool     lwip_default_netif_info(lwip_netif_info_t *info);
+
+lwip_error_t lwip_request_services(uint8_t flags, uint32_t timeout_ms);
+lwip_error_t lwip_netif_request_services(struct netif *netif,
+                                         uint8_t flags,
+                                         uint32_t timeout_ms,
+                                         lwip_netif_service_cb cb,
+                                         void *cb_data);
+
+/** Returns true iff every service bit set in @p flags is currently up on
+ *  @p netif (NULL = default netif).  Pure synchronous poll — no side effects,
+ *  no timer involvement.  Useful as the main-loop readiness gate after calling
+ *  lwip_netif_request_services(). */
+bool lwip_are_services_ready(struct netif *netif, uint8_t flags);
+
+/** Create a socket handle. Non-blocking: returns immediately after binding
+ *  the netif preference and kicking DHCP/static-IP. Readiness is awaited
+ *  asynchronously by lwip_socket_connect.
+ *
+ *  @param type       Transport selector (lwip_socket_type_t).
+ *  @param bind       Netif preference (lwip_socket_bind_descriptor_t).
+ *  @param addrinfo   NULL for DHCP; non-NULL for static IPv4.
+ *  @param timeout_ms Inactivity watchdog window (ms) applied across all socket
+ *                    states — connect, handshake, and data transfer.
+ *                    0 = no inactivity timeout (app manages lifetime).
+ *  @returns          Heap-allocated socket handle, or NULL on hard failure
+ *                    (OOM or invalid arguments). */
+struct lwip_socket *lwip_socket_create(lwip_socket_type_t type,
+                                       lwip_socket_bind_descriptor_t bind,
+                                       const lwip_socket_addrinfo_t *addrinfo,
+                                       uint32_t timeout_ms);
+
+/** Like lwip_socket_create but with an explicit RX ring maximum.
+ *  rx_ring_max == 0 uses LWIP_SOCKET_RX_RING_MAX_SIZE. */
+struct lwip_socket *lwip_socket_create_ex(lwip_socket_type_t type,
+                                          lwip_socket_bind_descriptor_t bind,
+                                          const lwip_socket_addrinfo_t *addrinfo,
+                                          uint32_t timeout_ms,
+                                          size_t rx_ring_max);
+
+lwip_error_t lwip_socket_destroy(struct lwip_socket *socket);
+
+lwip_error_t lwip_socket_connect(struct lwip_socket *socket,
+                                 const char *host,
+                                 uint16_t port);
+
+/** Bind a TCP socket to a local port and begin listening for connections.
+ *  Only valid on a LWIP_SOCKET_TCP socket in LWIP_STATUS_INIT state.
+ *  After this call the socket is a passive listener; do not call
+ *  lwip_socket_connect() on it.  Accepted peers arrive via lwip_socket_accept().
+ *
+ *  @param socket  Caller-created TCP socket handle.
+ *  @param port    Local port number (host byte order).
+ *  @returns LWIP_OK on success, LWIP_ERR_STATE / LWIP_ERR_PROTO / LWIP_ERR_MEM
+ *           on failure. */
+lwip_error_t lwip_socket_listen(struct lwip_socket *socket, uint16_t port);
+
+/** Dequeue one accepted peer socket from a listening socket.
+ *  Non-blocking: returns NULL if no peer is ready yet.
+ *  On success returns a heap-allocated socket in LWIP_STATUS_CONNECTED state;
+ *  the caller owns it and must call lwip_socket_destroy() when done.
+ *
+ *  @param socket  Listening socket (must have called lwip_socket_listen()).
+ *  @returns Heap-allocated peer socket, or NULL if queue is empty. */
+struct lwip_socket *lwip_socket_accept(struct lwip_socket *socket);
+
+/** Register the single event callback.
+ *
+ *  flags    — bitwise OR of LWIP_SOCKET_EVENTF_* to subscribe to; ERROR is
+ *             always delivered regardless.
+ *  cb       — callback: void cb(sock, type, ev_data, arg)
+ *  arg      — user pointer passed as the last argument to cb.
+ *
+ *  Call before lwip_socket_connect. Only one callback is supported per socket;
+ *  calling again replaces the previous registration. */
+void lwip_socket_on_event(struct lwip_socket *socket,
+                          uint8_t event_flags,
+                          lwip_socket_event_cb cb,
+                          void *arg);
+
+/** True while the socket is in a pre-terminal lifecycle state
+ *  (INIT / WAITING / RESOLVING / CONNECTING / CONNECTED / CLOSING).
+ *  Returns false once the socket reaches CLOSED, RESET, or ERROR — use this
+ *  as the main-loop exit condition. */
+bool lwip_socket_is_active(const struct lwip_socket *socket);
+
+/** Set (or update) the socket's timeout window.  Applies to all socket
+ *  states — service wait, connect/handshake, and data transfer.  The
+ *  deadline is extended by any inbound or outbound wire activity, so a
+ *  socket making progress never times out.  0 = disable the timeout. */
+lwip_error_t lwip_socket_set_timeout(struct lwip_socket *socket,
+                                     uint32_t timeout_ms);
+/** Write one transport chunk. len must fit in lwIP's 16-bit pbuf/TCP length
+ *  fields; values above UINT16_MAX fail with LWIP_ERR_ARG. */
+lwip_error_t lwip_socket_write(struct lwip_socket *socket,
+                               const uint8_t *buf,
+                               size_t len);
+size_t       lwip_socket_available(const struct lwip_socket *socket);
+/** Read up to len bytes from the socket ring. Returns bytes actually read
+ *  (clamped to available); never blocks. */
+size_t       lwip_socket_read(struct lwip_socket *socket,
+                              uint8_t *buf,
+                              size_t len);
+lwip_status_t  lwip_socket_status(const struct lwip_socket *socket);
+lwip_error_t   lwip_socket_last_error(const struct lwip_socket *socket);
+struct netif  *lwip_socket_get_netif(const struct lwip_socket *socket);
+lwip_error_t  lwip_socket_shutdown(struct lwip_socket *socket);
+lwip_error_t  lwip_socket_close(struct lwip_socket *socket);
+lwip_error_t  lwip_socket_abort(struct lwip_socket *socket);
+
+/** Resize the socket's RX ring ceiling immediately (grow or shrink); the
+ *  initial size set at socket creation is never changed by this call. Data
+ *  already in the ring is preserved — this fails only if there isn't enough
+ *  heap to grow, or there's more data in the ring than the new max could
+ *  hold when shrinking. Safe to call at any time, with any amount of data
+ *  already buffered. */
+lwip_error_t lwip_socket_resize_rx_max(struct lwip_socket *socket,
+                                       size_t new_max);
+
+/** Set the WebSocket path and optional subprotocol for a WS/WSS socket.
+ *  Must be called after lwip_socket_create() and before lwip_socket_connect().
+ *  The strings are copied; the caller does not need to keep them alive.
+ *  The host field is filled in automatically at connect time. */
+lwip_error_t lwip_socket_set_ws_config(struct lwip_socket *socket,
+                                       const char *path,
+                                       const char *subprotocol);
+
+/** Configure an LWIP_SOCKET_ALTCP_TLS socket with a local certificate identity.
+ *  Must be called after lwip_socket_create() and before connect or listen.
+ *  connect() presents it when the server requests mutual TLS; listen() uses it
+ *  as the TLS server identity. Certificate configuration takes precedence over
+ *  PSK fields if both were set.
+ *
+ *  @param socket         ALTCP_TLS socket handle in LWIP_STATUS_INIT state.
+ *  @param privkey_appvar Name of the on-calc appvar holding the PEM EC private key (≤8 chars).
+ *  @param chain_appvar   Name of the on-calc appvar holding the PEM cert chain (≤8 chars).
+ *  @returns LWIP_OK, LWIP_ERR_ARG (wrong type/NULL/name too long), or LWIP_ERR_STATE. */
+lwip_error_t lwip_socket_set_tls_cert(struct lwip_socket *socket,
+                                      const char *privkey_appvar,
+                                      const char *chain_appvar);
+
+/** Configure an LWIP_SOCKET_ALTCP_TLS socket for external PSK mode.
+ *  Must be called after lwip_socket_create() and before lwip_socket_connect()
+ *  or lwip_socket_listen(). Connect uses a PSK client configuration; listen
+ *  uses a PSK server configuration unless certificate AppVars were set.
+ *
+ *  @param socket       ALTCP_TLS socket handle in LWIP_STATUS_INIT state.
+ *  @param psk          32-byte pre-shared key.
+ *  @param identity     PSK identity bytes (label).
+ *  @param identity_len Length of identity in bytes (1 to TLS_PSK_IDENTITY_MAX_LEN).
+ *  @returns LWIP_OK, LWIP_ERR_ARG (wrong type/bad params), or LWIP_ERR_STATE. */
+lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket,
+                                     const uint8_t psk[32],
+                                     const uint8_t *identity,
+                                     size_t identity_len);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* LWIP_HDR_LWIP_APP_H */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Bring up the dynamically-loaded lwIP runtime: patches export
+ * trampolines and brings up stack memory/timers/RNG (no network;
+ * see lwip_network_up() for that). Returns true on success.
+ * On failure, call lwip_get_start_errstring() for a human-readable
+ * reason, and lwip_is_newer() to check whether the resident app
+ * has more exports than this build expected (informational only,
+ * not itself a failure). */
+bool lwip_start_with_crt(void *malloc_fn, void *free_fn, void *realloc_fn);
+char *lwip_get_start_errstring(void);
+uint8_t lwip_get_start_errno(void);
+bool lwip_is_newer(void);
+
+#define lwip_start() \
+    lwip_start_with_crt(malloc, free, realloc)
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* LWIP_PUBLIC_LWIP_H */

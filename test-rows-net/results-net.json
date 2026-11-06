@@ -1,0 +1,790 @@
+[
+  {
+    "module": "net",
+    "description": "Network subsystem tests",
+    "status": "fail",
+    "units": [
+      {
+        "unit": "sockets",
+        "description": "lwIP-CE networked suite NETTEST",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Suite execution",
+            "description": "Suite execution",
+            "status": "fail",
+            "stats": ""
+          }
+        ]
+      },
+      {
+        "unit": "raw",
+        "description": "lwIP-CE networked suite NETRAW",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "lwip_start",
+            "description": "lwip_start",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "lwip_network_up",
+            "description": "lwip_network_up",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp lease",
+            "description": "dhcp lease",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp address",
+            "description": "dhcp address",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp gateway",
+            "description": "dhcp gateway",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "services request",
+            "description": "services request",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "services ready",
+            "description": "services ready",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "host control channel",
+            "description": "host control channel",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "external netif",
+            "description": "external netif",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ip4addr_aton/ntoa",
+            "description": "ip4addr_aton/ntoa",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ip4addr_aton rejects junk",
+            "description": "ip4addr_aton rejects junk",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ip6addr_aton/ntoa",
+            "description": "ip6addr_aton/ntoa",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "byte order",
+            "description": "byte order",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "inet_chksum RFC 1071 vector",
+            "description": "inet_chksum RFC 1071 vector",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "lwip_strnstr",
+            "description": "lwip_strnstr",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "lwip_stricmp",
+            "description": "lwip_stricmp",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "netif index/name round trip",
+            "description": "netif index/name round trip",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "netif_find",
+            "description": "netif_find",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_alloc pool chain",
+            "description": "pbuf_alloc pool chain",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_take",
+            "description": "pbuf_take",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_copy_partial across segments",
+            "description": "pbuf_copy_partial across segments",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_get_at / put_at",
+            "description": "pbuf_get_at / put_at",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_memfind",
+            "description": "pbuf_memfind",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_memcmp",
+            "description": "pbuf_memcmp",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_cat + strstr",
+            "description": "pbuf_cat + strstr",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_clone contiguous copy",
+            "description": "pbuf_clone contiguous copy",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_add/remove_header",
+            "description": "pbuf_add/remove_header",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_ref / free counts",
+            "description": "pbuf_ref / free counts",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "pbuf_free chain",
+            "description": "pbuf_free chain",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "sys_timeout fires in deadline order",
+            "description": "sys_timeout fires in deadline order",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "raw_new ICMP",
+            "description": "raw_new ICMP",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "raw ICMP echo to host 5/5",
+            "description": "raw ICMP echo to host 5/5",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "host pings calc",
+            "description": "host pings calc",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "closed UDP port answers ICMP unreachable",
+            "description": "closed UDP port answers ICMP unreachable",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "raw tcp echo connect",
+            "description": "raw tcp echo connect",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "raw tcp echo 4096 bytes",
+            "description": "raw tcp echo 4096 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "raw tcp echo sent callbacks ack all",
+            "description": "raw tcp echo sent callbacks ack all",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "tcp_bind server",
+            "description": "tcp_bind server",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "tcp_listen_with_backlog",
+            "description": "tcp_listen_with_backlog",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "host connects to raw server",
+            "description": "host connects to raw server",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "raw server echoed 2 clients",
+            "description": "raw server echoed 2 clients",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "abort connect",
+            "description": "abort connect",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "tcp_abort sends RST",
+            "description": "tcp_abort sends RST",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "tcp_poll callback fires",
+            "description": "tcp_poll callback fires",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp_new + bind",
+            "description": "udp_new + bind",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp echo 64 bytes",
+            "description": "udp echo 64 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp fragmented tx+rx 2800 bytes",
+            "description": "udp fragmented tx+rx 2800 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp fragmented tx 8000 bytes",
+            "description": "udp fragmented tx 8000 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ip4 reassembly 2900 bytes",
+            "description": "ip4 reassembly 2900 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "oversize reassembly dropped cleanly",
+            "description": "oversize reassembly dropped cleanly",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "stack healthy after reassembly overflow",
+            "description": "stack healthy after reassembly overflow",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp_connect + send",
+            "description": "udp_connect + send",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp_send echoed",
+            "description": "udp_send echoed",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "subnet broadcast reaches host",
+            "description": "subnet broadcast reaches host",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp over loopback netif",
+            "description": "udp over loopback netif",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dns A example.com",
+            "description": "dns A example.com",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dns cache hit",
+            "description": "dns cache hit",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dns AAAA one.one.one.one",
+            "description": "dns AAAA one.one.one.one",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dns NXDOMAIN reports not found",
+            "description": "dns NXDOMAIN reports not found",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dns literal address resolves inline",
+            "description": "dns literal address resolves inline",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dns server configured",
+            "description": "dns server configured",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "arp entry for gateway",
+            "description": "arp entry for gateway",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "arp mac matches host",
+            "description": "arp mac matches host",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "etharp_request",
+            "description": "etharp_request",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "igmp join",
+            "description": "igmp join",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "IGMP report sent",
+            "description": "IGMP report sent",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "multicast datagram received",
+            "description": "multicast datagram received",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "igmp leave",
+            "description": "igmp leave",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "IGMP leave sent",
+            "description": "IGMP leave sent",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ipv6 link-local preferred",
+            "description": "ipv6 link-local preferred",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "host ping6 calc link-local",
+            "description": "host ping6 calc link-local",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp6 bind",
+            "description": "udp6 bind",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "udp6 echo via host link-local",
+            "description": "udp6 echo via host link-local",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ipv6 fragmented tx+rx 2600 bytes",
+            "description": "ipv6 fragmented tx+rx 2600 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ip6 reassembly 2700 bytes",
+            "description": "ip6 reassembly 2700 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "router advertisement sent",
+            "description": "router advertisement sent",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "SLAAC global address",
+            "description": "SLAAC global address",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "host ping6 calc global",
+            "description": "host ping6 calc global",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "tcp6 echo via SLAAC route connect",
+            "description": "tcp6 echo via SLAAC route connect",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "tcp6 echo via SLAAC route 4096 bytes",
+            "description": "tcp6 echo via SLAAC route 4096 bytes",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "tcp6 echo via SLAAC route sent callbacks ack all",
+            "description": "tcp6 echo via SLAAC route sent callbacks ack all",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "mld6 join",
+            "description": "mld6 join",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "MLD report sent",
+            "description": "MLD report sent",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ipv6 multicast datagram received",
+            "description": "ipv6 multicast datagram received",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "mld6 leave",
+            "description": "mld6 leave",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "acd_add",
+            "description": "acd_add",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "acd free address accepted",
+            "description": "acd free address accepted",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "ACD probe seen on wire",
+            "description": "ACD probe seen on wire",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "acd conflict detected",
+            "description": "acd conflict detected",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "sntp time set",
+            "description": "sntp time set",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "sntp clock within 5 minutes of host",
+            "description": "sntp clock within 5 minutes of host",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp supplied address",
+            "description": "dhcp supplied address",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp_renew",
+            "description": "dhcp_renew",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "lease kept after renew",
+            "description": "lease kept after renew",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "release drops address",
+            "description": "release drops address",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp_start",
+            "description": "dhcp_start",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "new lease after restart",
+            "description": "new lease after restart",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "network usable after re-lease",
+            "description": "network usable after re-lease",
+            "status": "pass",
+            "stats": ""
+          }
+        ]
+      },
+      {
+        "unit": "tls",
+        "description": "lwIP-CE networked suite NETTLS",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Suite execution",
+            "description": "Suite execution",
+            "status": "fail",
+            "stats": ""
+          }
+        ]
+      },
+      {
+        "unit": "records",
+        "description": "lwIP-CE networked suite NETREC",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Suite execution",
+            "description": "Suite execution",
+            "status": "fail",
+            "stats": ""
+          }
+        ]
+      },
+      {
+        "unit": "server",
+        "description": "lwIP-CE networked suite NETSRV",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Suite execution",
+            "description": "Suite execution",
+            "status": "fail",
+            "stats": ""
+          }
+        ]
+      },
+      {
+        "unit": "perf",
+        "description": "lwIP-CE networked suite NETPERF",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Suite execution",
+            "description": "Suite execution",
+            "status": "fail",
+            "stats": ""
+          }
+        ]
+      },
+      {
+        "unit": "timeouts",
+        "description": "lwIP-CE networked suite NETTMO",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "lwip_start",
+            "description": "lwip_start",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "lwip_network_up",
+            "description": "lwip_network_up",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp lease",
+            "description": "dhcp lease",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp address",
+            "description": "dhcp address",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "dhcp gateway",
+            "description": "dhcp gateway",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "services request",
+            "description": "services request",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "services ready",
+            "description": "services ready",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "host control channel",
+            "description": "host control channel",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "connect: unrelated traffic started",
+            "description": "connect: unrelated traffic started",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "connect: socket created",
+            "description": "connect: socket created",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "connect: silent socket failed",
+            "description": "connect: silent socket failed",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "connect: failed near its window (2-9 s)",
+            "description": "connect: failed near its window (2-9 s)",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "idle: echo socket connected",
+            "description": "idle: echo socket connected",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "idle: unrelated traffic started",
+            "description": "idle: unrelated traffic started",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "idle: quiet socket failed",
+            "description": "idle: quiet socket failed",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "idle: failed near its window (2-9 s)",
+            "description": "idle: failed near its window (2-9 s)",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "progress: echo socket connected",
+            "description": "progress: echo socket connected",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "progress: socket stayed alive",
+            "description": "progress: socket stayed alive",
+            "status": "pass",
+            "stats": ""
+          },
+          {
+            "test": "progress: still connected after 4.8 s",
+            "description": "progress: still connected after 4.8 s",
+            "status": "pass",
+            "stats": ""
+          }
+        ]
+      }
+    ]
+  }
+]

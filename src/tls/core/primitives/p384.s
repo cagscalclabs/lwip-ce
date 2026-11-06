@@ -2056,14 +2056,20 @@ p384_mont_core:
     ld      a, (mm_k)
     ld      bc, 0
     ld      c, a                    ; BC = k (preserved by the MAC block)
-    ld      ix, (mm_a0)             ; IX = a
+    ld      ix, (mm_a0)
+    add     ix, bc
     ld      iy, (mm_b0)
-    add     iy, bc                  ; IY = b + k
+    ld      de, 47
+    add     iy, de                  ; IY = b + 47
+    ld      de, -47
+    add     ix, de                  ; IX = a + k - 47
     ld      de, (mm_tgt)
-    call    .Lmm_jp_de              ; acc += sum_{n=0..k} a[n] * b[k-n]
-    ld      ix, mm_u                ; IX = q
+    call    .Lmm_jp_de              ; acc += sum_{n=47-k..47} a[k-47+n]*b[47-n]
+    ld      ix, mm_u - 47
+    add     ix, bc                  ; IX = q + k - 47
     ld      iy, (mm_mod)
-    add     iy, bc                  ; IY = m + k
+    ld      de, 47
+    add     iy, de                  ; IY = m + 47
     ld      de, (mm_tgt)
     call    .Lmm_jp_de              ; acc += sum q[i] m[k-i], i < k
     ld      a, (mm_n0)
@@ -2093,29 +2099,23 @@ p384_mont_core:
     call    .Lmm_ent                ; DE = p384_mac_mul_end - 9*(95-k)
     ld      (mm_tgt), de
     ld      a, (mm_k)
-    sub     a, 47
     ld      bc, 0
-    ld      c, a                    ; BC = k - 47
-    ld      ix, (mm_a0)
-    add     ix, bc                  ; IX = a + (k-47)
+    ld      c, a                    ; BC = k
+    ld      ix, (mm_a0)             ; IX = a
     ld      iy, (mm_b0)
-    ld      de, 47
-    add     iy, de                  ; IY = b + 47
-    ld      de, (mm_tgt)
-    call    .Lmm_jp_de              ; acc += sum_{n=0..94-k} a[k-47+n] * b[47-n]
-    ld      ix, mm_u
-    add     ix, bc                  ; IX = q + (k-47)
+    add     iy, bc                  ; IY = b + k
+    call    .Lmm_jp_de              ; acc += sum_{n=k-47..47} a[n]*b[k-n]
+    ld      ix, mm_u                ; IX = q
     ld      iy, (mm_mod)
-    ld      de, 47
-    add     iy, de                  ; IY = m + 47
+    add     iy, bc                  ; IY = m + k
     ld      de, (mm_tgt)
     call    .Lmm_jp_de
     ld      ix, (mm_out)
     add     ix, bc
-    ld      (ix - 1), l             ; out[k-48] (BC = k-47)
+    ld      (ix - 48), l            ; out[k-48]
     ld      (mm_acc), hl
     ld      hl, (mm_acc + 1)
-    ld      a, (mm_k)
+    ld      a, c
     inc     a
     ld      (mm_k), a
     cp      a, 95
@@ -3604,7 +3604,6 @@ p384_reloc_load_all:
 ; the run VMA, so the copied image is callable as-is.
 ; ===========================================================================
     .section .p384.mul.reloc,"ax",@progbits
-_p384_mul_reloc_run_start:
 ; 48-term MAC block: term n is acc += (ix+n) * (iy-n).  Each term is exactly
 ; 9 bytes; the entry for a c-term column is p384_mac_mul_end - 9*c.
 ; Uses only D, E, HL, IX, IY (read-only).  A and BC are preserved.
@@ -3805,7 +3804,6 @@ p384_mac_mul_end:
     ret
 ; (p384_sq_p uses the last 24 terms of p384_mac_mul and doubles once per
 ; column; the former 10-byte doubling block is gone.)
-_p384_mul_reloc_run_end:
 
     .section .text.__p384,"ax",@progbits
 

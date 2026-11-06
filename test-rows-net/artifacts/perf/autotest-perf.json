@@ -1,0 +1,33 @@
+{
+  "description": "lwIP-CE networked suite NETPERF",
+  "transfer_files": [
+    "../../perf/bin/NETPERF.8xp",
+    "../../../common/lwIPCERT.8xv"
+  ],
+  "target": {
+    "name": "NETPERF",
+    "isASM": true
+  },
+  "sequence": [
+    "delay|2000",
+    "usb|eth,cemu0,dhcp=192.168.84.2/24,gw=192.168.84.1,dns=1.1.1.1",
+    "action|launch",
+    "hashWait|2",
+    "delay|2000",
+    "saveVar|NETLOG",
+    "key|enter"
+  ],
+  "hashes": {
+    "2": {
+      "description": "NETPERF finished",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": [
+        "A511C030",
+        "22D544B5",
+        "93BFC41E"
+      ],
+      "timeout": 1800000
+    }
+  }
+}

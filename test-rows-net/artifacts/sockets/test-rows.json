@@ -1,0 +1,8 @@
+[
+  {
+    "group": "NETTEST",
+    "module": "NETTEST",
+    "test": "SOCKETS - Suite execution",
+    "grade": "Fail"
+  }
+]

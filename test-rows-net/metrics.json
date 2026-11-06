@@ -1,0 +1,60 @@
+{
+  "sockets": {},
+  "raw": {
+    "dhcp_lease_ms": {
+      "value": 353,
+      "unit": "ms"
+    },
+    "icmp_rtt_avg": {
+      "value": 9,
+      "unit": "ms"
+    },
+    "icmp_rtt_max": {
+      "value": 12,
+      "unit": "ms"
+    },
+    "dns_lookup_ms": {
+      "value": 122,
+      "unit": "ms"
+    },
+    "dhcp_relese_relet_ms": {
+      "value": 75,
+      "unit": "ms"
+    },
+    "host_wall_time": {
+      "value": 20,
+      "unit": "s"
+    },
+    "host_skipped_endpoint_failures": {
+      "value": 0,
+      "unit": "tests"
+    }
+  },
+  "tls": {},
+  "tls_external": {},
+  "records": {},
+  "server": {},
+  "perf": {},
+  "timeouts": {
+    "dhcp_lease_ms": {
+      "value": 353,
+      "unit": "ms"
+    },
+    "connect_timeout_ms": {
+      "value": 3019,
+      "unit": "ms"
+    },
+    "idle_timeout_ms": {
+      "value": 2918,
+      "unit": "ms"
+    },
+    "host_wall_time": {
+      "value": 9,
+      "unit": "s"
+    },
+    "host_skipped_endpoint_failures": {
+      "value": 0,
+      "unit": "tests"
+    }
+  }
+}

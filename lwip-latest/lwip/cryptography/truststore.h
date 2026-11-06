@@ -1,0 +1,122 @@
+/**
+ * @file truststore.h
+ * @author Anthony Cagliano
+ * @brief Provides API for initializing and checking the CA root truststore.
+ * @reference: RFC 5280
+ *
+ * @note Custom PKI architecture engineered for constrained
+ * runtime and storage environments.
+ *
+ * @warning Certificate paths fail closed unless the topmost certificate can
+ * be anchored. AuthorityKeyIdentifier selects a root by stored SKI; chains
+ * without an AKI try every current entry whose full subject Name digest
+ * matches the topmost issuer Name and accept only a key that verifies the
+ * topmost certificate's signature.
+ */
+
+#ifndef TLS_TRUSTSTORE_H
+#define TLS_TRUSTSTORE_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+#define TLS_TRUSTSTORE_SUBJECT_LEN  32
+#define TLS_TRUSTSTORE_SKI_LEN      32
+#define TLS_TRUSTSTORE_VERSION      3
+
+/* Version 3 stores two fixed-width lookup indexes before the variable-length
+ * metadata block. Each index record is key[32] followed by a little-endian
+ * uint16 offset relative to the start of the metadata block. The subject key
+ * is SHA-256 over the complete DER-encoded X.509 Name. */
+#define TLS_TRUSTSTORE_INDEX_KEY_LEN    32
+#define TLS_TRUSTSTORE_INDEX_ENTRY_LEN  (TLS_TRUSTSTORE_INDEX_KEY_LEN + 2u)
+
+/* Serialized signature algorithm IDs used in tls_truststore_entry.alg_id.
+ * These are lwIP-internal codes, NOT ASN.1/DER OIDs. */
+typedef enum
+{
+    TLS_CERT_SIG_RSA_PSS_SHA256       = 0, /* rsaEncryption + id-RSASSA-PSS / SHA-256 */
+    TLS_CERT_SIG_RSA_PKCS1_SHA256     = 1, /* sha256WithRSAEncryption (PKCS#1 v1.5)   */
+    TLS_CERT_SIG_ECDSA_SHA256         = 2, /* ecdsa-with-SHA256 (P-256)               */
+    TLS_CERT_SIG_ECDSA_SHA384         = 3, /* ecdsa-with-SHA384 (P-384)               */
+    TLS_CERT_SIG_UNKNOWN              = 0xFF
+} tls_cert_sig_alg_t;
+
+typedef enum
+{
+    TLS_STORE_OK = 0,
+    TLS_STORE_NOT_FOUND,
+    TLS_STORE_SIZE_INVALID,
+    TLS_STORE_VERSION_MISMATCH,
+    TLS_STORE_HASH_FAIL,
+    TLS_STORE_SIG_INVALID
+} tls_truststore_status_t;
+
+struct tls_truststore_state
+{
+    tls_truststore_status_t status;
+    uint16_t size;
+    uint16_t entry_count;
+    uint16_t version;
+    uint32_t created_timestamp;
+};
+
+struct tls_truststore_header
+{
+    uint8_t sig[256];           /* RSA-2048 signature over header fields + indexes + metadata */
+    uint16_t version;           /* Truststore format version */
+    uint32_t created_timestamp; /* Unix timestamp when truststore was generated */
+    uint16_t entry_count;       /* Number of entries in truststore */
+};
+#define TLS_TRUSTSTORE_HEADER_LEN sizeof(struct tls_truststore_header)
+
+/* Variable-length per-entry record. The key[] FAM holds the raw public key
+ * bytes whose format depends on alg_id:
+ *   RSA: uint8_t exp[3] (little-endian uint24) || uint8_t mod[key_len - 3]
+ *   EC:  uint8_t point[key_len]  (uncompressed 0x04 || x || y; 65 bytes for
+ *                                 P-256, 97 bytes for P-384)
+ * len covers the entire struct including the key[] bytes. */
+struct tls_truststore_entry
+{
+    uint32_t len;                            /* total byte size of this entry */
+    uint8_t  subject[TLS_TRUSTSTORE_SUBJECT_LEN]; /* SHA-256(DER Subject Name) */
+    uint8_t  ski[TLS_TRUSTSTORE_SKI_LEN];         /* Subject Key Identifier, padded to 32 B */
+    uint32_t expiry_start;                  /* notBefore Unix timestamp (uint32_t) */
+    uint32_t expiry_end;                    /* notAfter  Unix timestamp (uint32_t) */
+    uint8_t  alg_id;                        /* tls_cert_sig_alg_t */
+    uint8_t  key[];                         /* variable-length public key bytes */
+};
+
+/******************
+ * @brief Initializes the trust store, checks for the truststore appvar,
+ * RSA-decrypts the signature, verifies the signature, sets a flag
+ * for session if looks good.
+ * @returns [tls_truststore_status_t] status code
+ */
+tls_truststore_status_t tls_truststore_init(void);
+
+/********************
+ * @brief Attempts to find a certificate by Subject Key Identifier in the trust store.
+ * @param ski       32-byte, zero-padded Subject Key Identifier.
+ * @param result    Out-pointer set to a bounded internal copy on match. The
+ *                  copy remains valid until the next truststore lookup. May
+ *                  be NULL when only presence is needed.
+ * @returns [bool] True if match found, false otherwise.
+ */
+bool tls_truststore_lookup(const uint8_t *ski, struct tls_truststore_entry **result);
+
+/********************
+ * @brief Attempts to find a truststore entry whose subject[] matches the given
+ *        SHA-256 digest of the complete DER-encoded issuer Name.
+ * @param subject   TLS_TRUSTSTORE_SUBJECT_LEN-byte issuer Name digest.
+ * @param subject_len  Must equal TLS_TRUSTSTORE_SUBJECT_LEN.
+ * @param result    Out-pointer set to a bounded internal copy on match. The
+ *                  copy remains valid until the next truststore lookup. May
+ *                  be NULL when only presence is needed.
+ * @returns [bool] True if match found, false otherwise.
+ */
+bool tls_truststore_lookup_by_subject(const uint8_t *subject, size_t subject_len,
+                                      struct tls_truststore_entry **result);
+
+#endif /* TLS_TRUSTSTORE_H */

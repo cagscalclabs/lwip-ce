@@ -1,0 +1,821 @@
+[
+  {
+    "module": "parsers",
+    "description": "PARSERS subsystem tests",
+    "status": "pass",
+    "units": [
+      {
+        "unit": "json",
+        "description": "JSON pull parser: object/array/skip/copy correctness",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "Object string value extraction",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "Number and bool values",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "Null value",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "Array of strings",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "json_skip over nested object",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "json_slice_copy into NUL-terminated buffer",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "url",
+        "description": "URL percent-encode/decode and query string builder correctness",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "Encode: unreserved chars pass through unchanged",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "Encode: spaces and special chars become %XX",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "Decode: %XX sequences decoded correctly",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "Decode: plain string passthrough",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "Query string: single key=value pair",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "Query string: multiple pairs with encoding",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "xml",
+        "description": "XML/HTML ring-buffered parser: element/attribute/entity/streaming/lax correctness",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "Pull walk: PI and comment skipped, structure correct",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "xml_get_attr: quoted attribute extraction",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "Text content between tags",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "Entity decoded in text stream (&amp; -> &)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "xml_decode_entity: built-in XML/HTML entities",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "XML streaming: 7-byte chunks, NEED_MORE retry",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 7",
+            "description": "Lax HTML: void elements, boolean attrs, text extraction",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 8",
+            "description": "Second item attributes reachable after walk",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 9",
+            "description": "HTML case folding: uppercase tags lowercased",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 10",
+            "description": "HTML unquoted attribute values",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 11",
+            "description": "HTML &nbsp; decoded as space",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 12",
+            "description": "HTML nested inline tags: strong/em START+END and text",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 13",
+            "description": "HTML link href attribute extraction",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 15",
+            "description": "HTML lax streaming: chunked h1 text + a tag",
+            "status": "pass"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "module": "tls",
+    "description": "TLS subsystem tests",
+    "status": "fail",
+    "units": [
+      {
+        "unit": "aes",
+        "description": "Test AES cipher in GCM, CBC, and CCM modes (128- and 256-bit keys)",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "GCM Spec (McGrew/Viega), Appendix B, Test Case 4",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "NIST SP 800-38A, Appendix F.2.1, CBC-AES128.Encrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "NIST SP 800-38A, Appendix F.2.2, CBC-AES128.Decrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "RFC 3610, Section 8, AES-CCM Packet Vector #1 (encrypt)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "RFC 3610, Section 8, AES-CCM Packet Vector #1 (decrypt)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 7",
+            "description": "RFC 3610, Section 8, AES-CCM Packet Vector #2 (encrypt)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 8",
+            "description": "RFC 3610, Section 8, AES-CCM Packet Vector #2 (decrypt)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 9",
+            "description": "RFC 3610, Section 8, AES-CCM Packet Vector #2 (bad tag zeroes plaintext)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 10",
+            "description": "RFC 3610 AES-CCM vector #2 with chunked record processing",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 11",
+            "description": "NIST SP 800-38A, Appendix F.2.3, CBC-AES192.Encrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 12",
+            "description": "NIST SP 800-38A, Appendix F.2.4, CBC-AES192.Decrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 13",
+            "description": "NIST SP 800-38A, Appendix F.2.5, CBC-AES256.Encrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 14",
+            "description": "NIST SP 800-38A, Appendix F.2.6, CBC-AES256.Decrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 15",
+            "description": "AES-128-GCM tag over a 9000-byte record (length block bits 16..23)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 17",
+            "description": "AES-256-GCM (GCM Spec Test Case 16) encrypt/decrypt/bad tag",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 18",
+            "description": "AES-256-CCM encrypt/decrypt/bad tag",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 19",
+            "description": "TLS record AES-256-GCM chunked encrypt/decrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 20",
+            "description": "TLS record AES-256-CCM chunked encrypt/decrypt",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 21",
+            "description": "AES-128-GCM with 8-bit and 1024-bit IV boundaries",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "asn1",
+        "description": "",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "ASN.1 cursor simple parse",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "ASN.1 cursor large DER dump",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "base64",
+        "description": "",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "Encode('f'), RFC 4648, Section 10, Vector 2",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "Encode('foo'), RFC 4648, Section 10, Vector 4",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "Encode('foobar'), RFC 4648, Section 10, Vector 7",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "Decode('Zg=='), RFC 4648, Section 10, Vector 2",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "Decode('Zm9v'), RFC 4648, Section 10, Vector 4",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "Decode('Zm9vYmFy'), RFC 4648, Section 10, Vector 7",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "hash",
+        "description": "Test TLS_HASH primitive",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "SHA-256 short message 'abc' - NIST FIPS 180-4, Example 1",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "SHA-256 empty message - NIST FIPS 180-4, Empty String",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "SHA-256 two-block message - NIST FIPS 180-4, Example 2",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "SHA-384 short message 'abc' - NIST FIPS 180-4",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "SHA-384 empty message - NIST FIPS 180-4",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "SHA-384 two-block message - NIST FIPS 180-4",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 7",
+            "description": "HMAC-SHA384 RFC 4231 test case 1",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 8",
+            "description": "HKDF-SHA384 extract/expand functional vector",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 9",
+            "description": "SHA-384 padding boundaries and streaming updates",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 10",
+            "description": "HMAC-SHA384 long key, MGF1-SHA384, fail-closed checks",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 11",
+            "description": "SHA-512 FIPS 180-4 vectors, padding boundaries, streaming",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 12",
+            "description": "HMAC-SHA512 RFC 4231 and MGF1-SHA512",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "hkdf",
+        "description": "",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "HKDF-SHA256 - RFC 5869, Appendix A, Test Case 1",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "HKDF-SHA256 - RFC 5869, Appendix A, Test Case 2",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "HKDF-SHA256 - RFC 5869, Appendix A, Test Case 3",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "HKDF-Expand-Label (RFC 8446 7.1) vs RFC 8448 3 client_handshake_traffic_secret",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "TLS 1.3 SHA-384 key schedule (AES-256-GCM), Python reference",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "hmac",
+        "description": "Test TLS_HMAC primitive",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 1",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 2",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "HMAC-SHA-256 - RFC 4231, Section 4, Test Case 3",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "key",
+        "description": "Test tls_key dispatch layer (verify, sign, encrypt, decrypt)",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "AES-128-GCM round-trip, no AAD",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "AES-128-GCM round-trip with AAD",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "AES-256-GCM round-trip with AAD",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "AES-128-GCM bad tag \u2014 decrypt must return false",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "AES-128-CCM round-trip with AAD (RFC 3610 Packet Vector #1 key)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "AES-128-CBC round-trip, no AAD (NIST SP 800-38A F.2.1 key)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 7",
+            "description": "AES-256-CBC round-trip, no AAD (NIST SP 800-38A F.2.5 key)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 8",
+            "description": "tls_key_sign: RSA\u2192UNSUPPORTED, ECDSA public-only\u2192INVALID, enc-alg\u2192UNKNOWN",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 9",
+            "description": "tls_key_verify with encryption-range alg returns TLS_KEY_OP_UNKNOWN",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 10",
+            "description": "P-384 keys API import/sign/verify/tamper",
+            "status": "fail"
+          }
+        ]
+      },
+      {
+        "unit": "p256",
+        "description": "Test P-256 ECDH, deterministic ECDSA, and input validation",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "P-256 RFC 5903 S8.1 - initiator public key derivation",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "P-256 RFC 5903 S8.1 - ECDH initiator side",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "P-256 RFC 5903 S8.1 - ECDH responder side",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "P-256 RFC 6979 A.2.5 - deterministic sign (exact r,s)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "P-256 RFC 6979 A.2.5 - verify valid signature",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "P-256 FIPS186-4 S6.4 - reject tampered signature",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 7",
+            "description": "P-256 FIPS186-4 S6.4 - reject off-curve public key",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 8",
+            "description": "P-256 FIPS186-4 S6.4 - reject r=0",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 9",
+            "description": "P-256 FIPS186-4 S6.4 - reject s=0",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 10",
+            "description": "P-256 FIPS186-4 S6.4 - reject r=n",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 11",
+            "description": "P-256 FIPS186-4 S6.4 - reject s=n",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "p256_retry",
+        "description": "RFC 6979 section 3.2 h.3 nonce-retry path for P-256 signing",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "P-256 retry test passed",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "p384",
+        "description": "Test P-384 keygen, ECDH, deterministic ECDSA, input validation",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "P-384 keygen priv=1 equals G",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 2",
+            "description": "P-384 keygen priv=n-1 equals -G",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 3",
+            "description": "P-384 keygen deterministic private key A",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 4",
+            "description": "P-384 ECDH A->B matches reference",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 5",
+            "description": "P-384 ECDH B->A matches reference",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 6",
+            "description": "P-384 RFC6979 HMAC-SHA384 sign (hash1), deterministic repeat",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 7",
+            "description": "P-384 verify valid signature",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 8",
+            "description": "P-384 sign/verify second key and hash",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 9",
+            "description": "P-384 sign/verify all-zero hash boundary",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 10",
+            "description": "P-384 reject tampered sig, wrong hash, off-curve, x>=p, bad prefix",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 11",
+            "description": "P-384 reject r=0, s=0, r=n, s=n",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 12",
+            "description": "P-384 priv vs n-priv equivalence",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 14",
+            "description": "P-384 timing (pk/ss/sg/vf in seconds)",
+            "status": "fail"
+          }
+        ]
+      },
+      {
+        "unit": "pbkdf2",
+        "description": "Test Password-Based Key Derivation",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 1 (c=1)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 2 (c=2)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "PBKDF2-HMAC-SHA256 - RFC 6070 style, Test Case 7 (c=1, 32 bytes)",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "PBKDF2-HMAC-SHA384/SHA-512 digest sizes",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "rsa_oaep",
+        "description": "Tests OAEP primitive standalone",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "RSA-OAEP encode - RFC 8017 (PKCS#1 v2.2) SHA-256",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "RSA-OAEP decode - RFC 8017 (PKCS#1 v2.2) SHA-256",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "rsa_pss",
+        "description": "Tests PSS verification primitive standalone",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "RSA-PSS verify - RFC 8017 against an OpenSSL-generated fixture",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "RSA-PSS verify - synthetic TLS 1.3 CertificateVerify-shaped fixture (EMSA-PSS-ENCODE, fixed salt, 2048-bit modulus)",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "rsa_pss_sig",
+        "description": "RSA-PSS signature verification using a known signature and public key",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "RSA-2048-PSS signature verify - success",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "RSA-4096-PSS signature verify - success",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "truststore",
+        "description": "Truststore v2 signature, index layout, and first-entry owner check",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "Verify truststore signature",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "Verify first entry expected",
+            "status": "pass"
+          }
+        ]
+      },
+      {
+        "unit": "x25519",
+        "description": "",
+        "status": "fail",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "x25519 RFC 7748, 6.1 - Alice private * Bob public",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 2",
+            "description": "x25519 RFC 7748, 6.1 - Bob private * Alice public",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 3",
+            "description": "x25519 RFC 7748, 6.1 - Alice pubkey gen",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 4",
+            "description": "x25519 RFC 7748, 5.2 - one iteration (k=9, u=9)",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 5",
+            "description": "x25519 RFC 7748 - Edge case, clamping test",
+            "status": "fail"
+          },
+          {
+            "test": "Hash 6",
+            "description": "x25519 RFC 7748 - Edge case, high bit test",
+            "status": "fail"
+          }
+        ]
+      },
+      {
+        "unit": "x509",
+        "description": "X.509 certificate parsing tests",
+        "status": "pass",
+        "tests": [
+          {
+            "test": "Hash 1",
+            "description": "Certificate 1 Parse Check",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 2",
+            "description": "Certificate 1, CA constraints valid",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 3",
+            "description": "Certificate 1, CA constraints fail if patched",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 4",
+            "description": "Certificate 2 Parse Check",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 5",
+            "description": "Certificate 2, CA constraints valid",
+            "status": "pass"
+          },
+          {
+            "test": "Hash 6",
+            "description": "Certificate 2, patched constraints fail if patched",
+            "status": "pass"
+          }
+        ]
+      }
+    ]
+  }
+]

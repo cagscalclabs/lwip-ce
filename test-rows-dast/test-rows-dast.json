@@ -1,0 +1,142 @@
+[
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "ICMP echo baseline",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Malformed ARP",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "ARP request flood",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Oversized ICMP echo (fragmented)",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Malformed ICMP",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "IP bad header checksum",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Overlapping IP fragments",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Incomplete fragment bomb",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "UDP recv baseline",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Oversized fragmented UDP",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "UDP bad length/checksum",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "SYN to closed port",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "TCP listen baseline",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Malformed TCP flags",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Tiny/zero window + overlap",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "Oversized TCP data burst",
+    "grade": "Pass",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "TLS clean echo",
+    "grade": "Skipped",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "TLS PSK resume echo",
+    "grade": "Skipped",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "TLS missing record",
+    "grade": "Skipped",
+    "stats": ""
+  },
+  {
+    "group": "DAST",
+    "module": "DAST",
+    "test": "TLS ECDSA certverify reject",
+    "grade": "Skipped",
+    "stats": ""
+  }
+]
