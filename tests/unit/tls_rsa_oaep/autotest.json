@@ -1,8 +1,7 @@
 {
   "description": "Tests OAEP primitive standalone",
   "transfer_files": [
-    "bin/XOAEP.8xp",
-    "../../common/lwIPCERT.8xv"
+    "bin/XOAEP.8xp"
   ],
   "target": {
     "name": "XOAEP",

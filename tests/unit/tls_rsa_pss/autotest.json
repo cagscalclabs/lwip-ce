@@ -1,8 +1,7 @@
 {
   "description": "Tests PSS verification primitive standalone",
   "transfer_files": [
-    "bin/XPSS.8xp",
-    "../../common/lwIPCERT.8xv"
+    "bin/XPSS.8xp"
   ],
   "target": {
     "name": "XPSS",

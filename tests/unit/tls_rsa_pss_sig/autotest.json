@@ -1,8 +1,7 @@
 {
   "description": "RSA-PSS signature verification using a known signature and public key",
   "transfer_files": [
-    "bin/XPSSSIG.8xp",
-    "../../common/lwIPCERT.8xv"
+    "bin/XPSSSIG.8xp"
   ],
   "target": {
     "name": "XPSSSIG",
