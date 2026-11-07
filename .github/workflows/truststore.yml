@@ -9,6 +9,7 @@ on:
       - master
     paths:
       - ".github/workflows/truststore.yml"
+      - ".github/ca-root.pem"
       - "src/tls/includes/truststore.h"
       - "src/tls/core/truststore.c"
       - "src/tls/core/handshake.c"
@@ -339,6 +340,9 @@ jobs:
           cert_paths = []
           for pattern in cert_globs:
               cert_paths.extend(glob(pattern))
+          ca_root = os.path.join(os.environ["GITHUB_WORKSPACE"], ".github", "ca-root.pem")
+          if os.path.isfile(ca_root):
+              cert_paths.append(ca_root)
           cert_paths = sorted(set(cert_paths))
           entries, exclusions = build_entries(cert_paths)
 
