@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 VERSIONS_FILE = ROOT / ".github" / "ci-versions.env"
 AUTOTESTER_PATCH = ROOT / "build-tools" / "patches" / "cemu-autotester.patch"
+NMI_PATCH = ROOT / "build-tools" / "patches" / "cemu-nmi-pc.patch"
 CEMU_REPOSITORY = "https://github.com/alessiodam/CEmu-lwIP-CE.git"
 CLIBS_URL = (
     "https://github.com/CE-Programming/libraries/releases/latest/download/"
@@ -184,7 +185,32 @@ def patch_build_ninja(build_dir: Path, core_dir: Path) -> None:
     print(f"build.ninja patched: {cemucore_a} moved to LINK_LIBRARIES (after objects)")
 
 
+def apply_nmi_patch(cemu_dir: Path) -> None:
+    """Log the faulting PC/registers on an unprivileged flash write NMI."""
+    check = run(
+        ["git", "-C", str(cemu_dir), "apply", "--check", str(NMI_PATCH)],
+        capture=True,
+        check=False,
+    )
+    if check.returncode == 0:
+        run(["git", "-C", str(cemu_dir), "apply", str(NMI_PATCH)])
+        return
+
+    reverse = run(
+        ["git", "-C", str(cemu_dir), "apply", "--reverse", "--check", str(NMI_PATCH)],
+        capture=True,
+        check=False,
+    )
+    if reverse.returncode == 0:
+        return
+
+    raise PreparationError(
+        f"{NMI_PATCH.name} does not apply cleanly to {cemu_dir}"
+    )
+
+
 def build_cemu_tools(cemu_dir: Path, jobs: int) -> tuple[Path, Path]:
+    apply_nmi_patch(cemu_dir)
     run(["make", "-C", str(cemu_dir / "core"), f"-j{jobs}"])
     apply_autotester_patch(cemu_dir)
 

@@ -1,0 +1,16 @@
+diff --git a/core/mem.c b/core/mem.c
+index 1119d87..78fda6f 100644
+--- a/core/mem.c
++++ b/core/mem.c
+@@ -785,6 +785,11 @@ void mem_write_cpu(uint32_t addr, uint8_t value) {
+                 if (unprivileged_code()) {
+                     control.protectionStatus |= 2;
+                     gui_console_err_printf("[CEmu] NMI reset caused by writing to flash at address %#06x from unprivileged code. Hint: Possibly a null pointer dereference.\n", addr);
++                    gui_console_err_printf("[CEmu] NMI state: PC=%#08x SP=%#08x AF=%#06x BC=%#08x DE=%#08x HL=%#08x IX=%#08x IY=%#08x\n",
++                        (unsigned)cpu.registers.PC, (unsigned)cpu.registers.SPL,
++                        (unsigned)cpu.registers.AF, (unsigned)cpu.registers.BC,
++                        (unsigned)cpu.registers.DE, (unsigned)cpu.registers.HL,
++                        (unsigned)cpu.registers.IX, (unsigned)cpu.registers.IY);
+                     cpu_nmi();
+                 } else {
+                     mem_write_flash(addr, value);
