@@ -277,10 +277,12 @@ vectors = {
 
 source = (here / 'mock.h').read_text() + '\n#include "ip_identity.h"\n#include "base64.h"\n'
 source += function(x509, 'tls_ecdsa_parse_int')
+# Allocation helpers must precede production functions that now use heap-backed
+# cryptographic/parser workspaces.
+source += x509[x509.index('static void *tls_x509_alloc'):x509.index('static bool tls_x509_is_string_tag')]
 source += x509[x509.index('static bool tls_x509_is_string_tag'):x509.index('static bool tls_x509_decode_pem_certificate')]
 source += x509[x509.index('static const uint8_t oid_rsa_encryption'):]
 # PEM decode/import/free, so parse_cert_chain (cert config load) can be driven.
-source += x509[x509.index('static void *tls_x509_alloc'):x509.index('static bool tls_x509_is_string_tag')]
 source += x509[x509.index('static bool tls_x509_decode_pem_certificate'):
                x509.index('static const uint8_t oid_rsa_encryption')]
 key_source = (root / 'src/tls/core/key.c').read_text()

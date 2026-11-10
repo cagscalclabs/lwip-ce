@@ -12,7 +12,6 @@ on:
       - ".github/ca-root.pem"
       - "src/tls/includes/truststore.h"
       - "src/tls/core/truststore.c"
-      - "src/tls/core/handshake.c"
 
 permissions:
   contents: write

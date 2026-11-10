@@ -1615,6 +1615,8 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
             ERROR_CODE(0x41);
             return false;
         }
+        out->serial     = item.value;
+        out->serial_len = item.len;
 
         if (!tls_asn1_next(&tbs_cursor, &sig_alg)  ||
             !tls_asn1_next(&tbs_cursor, &issuer)    ||
@@ -1816,6 +1818,9 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                 out->pubkey.rsa.mod_len  = mod_len;
                 out->pubkey.rsa.exponent = rsa_exp.value;
                 out->pubkey.rsa.exp_len  = rsa_exp.len;
+                /* Raw SubjectPublicKey (BIT STRING body, skip unused-bits byte). */
+                out->subject_pubkey_raw     = spki_bits.value + 1;
+                out->subject_pubkey_raw_len = spki_bits.len  - 1;
             }
             else if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256 ||
                      alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
@@ -1829,6 +1834,9 @@ bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
                 out->pubkey.ec.pub  = spki_bits.value + 1;
                 out->pubkey.ec.len  = spki_bits.len  - 1;
                 out->pubkey.ec.priv = NULL;
+                /* Raw SubjectPublicKey (BIT STRING body, skip unused-bits byte). */
+                out->subject_pubkey_raw     = spki_bits.value + 1;
+                out->subject_pubkey_raw_len = spki_bits.len  - 1;
             }
             /* else: unknown alg — pubkey fields remain zeroed; callers that
              * need to verify will fail via tls_key_verify returning UNKNOWN. */
@@ -2229,16 +2237,24 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
         return TLS_KEY_OP_UNKNOWN;
     }
 
-    struct tls_hash_context hash_ctx;
+    struct tls_hash_context *hash_ctx;
     uint8_t hash_type = (alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
                         ? (uint8_t)TLS_HASH_SHA384 : (uint8_t)TLS_HASH_SHA256;
     uint8_t digest[TLS_SHA384_DIGEST_LEN]; /* large enough for both */
-    if (!tls_hash_context_init(&hash_ctx, hash_type))
+    hash_ctx = (struct tls_hash_context *)tls_x509_alloc(sizeof(*hash_ctx));
+    if (!hash_ctx)
     {
         return TLS_KEY_OP_INVALID;
     }
-    tls_hash_update(&hash_ctx, content, content_len);
-    tls_hash_digest(&hash_ctx, digest);
+    if (!tls_hash_context_init(hash_ctx, hash_type))
+    {
+        tls_x509_free(hash_ctx);
+        return TLS_KEY_OP_INVALID;
+    }
+    tls_hash_update(hash_ctx, content, content_len);
+    tls_hash_digest(hash_ctx, digest);
+    tls_hash_clear(hash_ctx);
+    tls_x509_free(hash_ctx);
 
     return tls_x509_signature_verify_digest(digest, sig, sig_len, key, alg);
 }
@@ -2368,3 +2384,4 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
 
     return ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
 }
+

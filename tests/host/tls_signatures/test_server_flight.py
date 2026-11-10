@@ -60,7 +60,12 @@ assert re.search(
 # Finished is 4 + Hash.length bytes. Both client emission and server receipt
 # must accommodate SHA-384 rather than retaining the old SHA-256-only 36-byte
 # buffers, and the server must validate the negotiated dynamic length.
-assert altcp_source.count("uint8_t finished_hs[4 + TLS_HASH_MAX_DIGEST_LEN];") == 1
+# Client Finished scratch is intentionally heap-backed: the target stack is too
+# small to retain both plaintext and encrypted records across the crypto calls.
+assert "#define FINISHED_HS_MAX (4 + TLS_HASH_MAX_DIGEST_LEN)" in altcp_source
+assert "mem_malloc(FINISHED_HS_MAX + ENC_FINISHED_MAX)" in altcp_source
+assert "uint8_t *enc_finished = finished_hs + FINISHED_HS_MAX;" in altcp_source
+assert altcp_source.count("mem_free(finished_hs);") >= 3
 assert altcp_source.count("uint8_t finished[4 + TLS_HASH_MAX_DIGEST_LEN];") == 1
 assert "size_t finished_len = 4u + (size_t)ctx->hash_len;" in altcp_source
 assert "plain_len == finished_len" in altcp_source

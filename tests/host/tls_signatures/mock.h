@@ -120,11 +120,11 @@ void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_c
 void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *p, size_t n) { hash_stub_bytes += n; }
 void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *out) { memset(out, 0x42, 32); }
 void tls_hash_clear(struct tls_hash_context *ctx) { memset(ctx, 0, sizeof(*ctx)); }
-bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t n, const uint8_t *hash, const struct tls_rsa_key *key)
+bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t n, const uint8_t digest[32], const struct tls_rsa_key *key)
 {
     pkcs_calls++;
     return n == key->mod_len && key->modulus && key->modulus[0] == 0x81 &&
-           sig[0] == 0x11 && hash[0] == 0x42;
+           sig[0] == 0x11 && digest[0] == 0x42;
 }
 bool tls_rsa_decrypt_signature(const uint8_t *sig, size_t n, uint8_t *em, const struct tls_rsa_key *key)
 {

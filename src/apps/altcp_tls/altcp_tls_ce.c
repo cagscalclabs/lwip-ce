@@ -35,11 +35,18 @@ extern bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag);
 #include "../../wireless/crypto.h"
 #include "../../wireless/wifi_proto.h"
 
+#include "lwip/app_config.h"
+#include "lwip/sys.h"
+#include "lwip/tcp.h"
+#include "lwip/dns.h"
+
 #define LWIP_DBG_FILE_ID LWIP_FILE_ALTCP_TLS_CE
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
 #include "lwip/sntp_time.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 
@@ -415,7 +422,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     uint8_t header[5];
     uint8_t nonce[12];
     uint8_t received_tag[16];
-    TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
+    struct tls_aes_context *aes_ctx;
     struct pbuf *out_head = NULL;
     struct tls_handshake_context *ctx = &state->tls_ctx;
     const uint8_t *key;
@@ -443,6 +450,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
     {
         return ERR_BUF;
     }
+    aes_ctx = &ctx->record_aes;
 
     if (pbuf_copy_partial(state->rx, header, sizeof(header), 0) != sizeof(header))
     {
@@ -482,14 +490,14 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
      * free) per record for the allocator to fragment on. */
 
     /* Pass 1: verify the complete record before releasing plaintext. */
-    if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce,
+    if (!altcp_tls_ce_record_aead_init(aes_ctx, ctx, key, nonce,
                                        actual_plaintext_len) ||
-        !tls_aes_update_aad(&aes_ctx, header, sizeof(header)))
+        !tls_aes_update_aad(aes_ctx, header, sizeof(header)))
     {
         status = ERR_VAL;
         goto fail;
     }
-    if (altcp_tls_ce_pbuf_authenticate(&aes_ctx, state->rx, sizeof(header),
+    if (altcp_tls_ce_pbuf_authenticate(aes_ctx, state->rx, sizeof(header),
                                        actual_plaintext_len) != ERR_OK)
     {
         status = ERR_VAL;
@@ -501,7 +509,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
         status = ERR_BUF;
         goto fail;
     }
-    if (!tls_aes_verify_tag(&aes_ctx, received_tag))
+    if (!tls_aes_verify_tag(aes_ctx, received_tag))
     {
         (void)tls_send_fatal_alert(ctx, TLS_ALERT_BAD_RECORD_MAC);
         status = ERR_VAL;
@@ -572,7 +580,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
             {
                 take = q->len;
             }
-            if (!tls_aes_decrypt(&aes_ctx, (u8_t *)q->payload, (size_t)take,
+            if (!tls_aes_decrypt(aes_ctx, (u8_t *)q->payload, (size_t)take,
                                  (u8_t *)q->payload))
             {
                 status = ERR_VAL;
@@ -614,7 +622,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
             {
                 pbuf_free(rest);
             }
-            tls_aes_destroy_ctx(&aes_ctx);
+            tls_aes_destroy_ctx(aes_ctx);
             (void)tls_send_fatal_alert(ctx, TLS_ALERT_UNEXPECTED_MESSAGE);
             return ERR_VAL;
         }
@@ -630,7 +638,7 @@ static err_t altcp_tls_ce_decrypt_record_stream(altcp_tls_ce_state_t *state,
      * after this point there is no failure path. */
     state->rx = rest;
     *plaintext = out_head;
-    tls_aes_destroy_ctx(&aes_ctx);
+    tls_aes_destroy_ctx(aes_ctx);
     return ERR_OK;
 
 fail:
@@ -644,7 +652,7 @@ fail:
          * drop it rather than leaking it. */
         pbuf_free(rest);
     }
-    tls_aes_destroy_ctx(&aes_ctx);
+    tls_aes_destroy_ctx(aes_ctx);
     return (status != ERR_OK) ? status : ERR_VAL;
 }
 
@@ -667,7 +675,7 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
                                                size_t *written)
 {
     uint8_t nonce[12];
-    TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
+    struct tls_aes_context *aes_ctx;
     const uint8_t *key;
     const uint8_t *iv;
     uint64_t *seq_num;
@@ -680,6 +688,7 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     {
         return false;
     }
+    aes_ctx = &ctx->record_aes;
 
     inner_len = plaintext_len + 1; /* + inner content-type byte */
     total_len = 5 + inner_len + TLS_AES_AUTH_TAG_SIZE;
@@ -708,8 +717,8 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     record[4] = (uint8_t)((inner_len + TLS_AES_AUTH_TAG_SIZE) & 0xFF);
 
     altcp_tls_ce_build_aead_nonce(iv, *seq_num, nonce);
-    if (!altcp_tls_ce_record_aead_init(&aes_ctx, ctx, key, nonce, inner_len) ||
-        !tls_aes_update_aad(&aes_ctx, record, 5))
+    if (!altcp_tls_ce_record_aead_init(aes_ctx, ctx, key, nonce, inner_len) ||
+        !tls_aes_update_aad(aes_ctx, record, 5))
     {
         return false;
     }
@@ -718,7 +727,7 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     while (processed < plaintext_len)
     {
         size_t take = LWIP_MIN(ALTCP_TLS_CE_STREAM_CHUNK, plaintext_len - processed);
-        if (!tls_aes_encrypt(&aes_ctx, plaintext + processed, take,
+        if (!tls_aes_encrypt(aes_ctx, plaintext + processed, take,
                              record + 5 + processed))
         {
             return false;
@@ -727,13 +736,13 @@ static bool altcp_tls_ce_encrypt_record_stream(struct tls_handshake_context *ctx
     }
 
     /* Encrypt the inner content-type byte as a 1-byte final stride. */
-    if (!tls_aes_encrypt(&aes_ctx, &inner_content_type, 1,
+    if (!tls_aes_encrypt(aes_ctx, &inner_content_type, 1,
                          record + 5 + plaintext_len))
     {
         return false;
     }
 
-    if (!tls_aes_digest(&aes_ctx, auth_tag))
+    if (!tls_aes_digest(aes_ctx, auth_tag))
     {
         return false;
     }
@@ -1817,6 +1826,7 @@ altcp_tls_ce_send_client_hello(struct altcp_pcb *conn, altcp_tls_ce_state_t *sta
     return ERR_OK;
 }
 
+
 #define ALTCP_TLS_CE_CERT_JOB_TICK_MS 20u
 
 /* Runs one queued certificate verification for the first connection that has
@@ -1830,14 +1840,14 @@ static void altcp_tls_ce_cert_job_dispatch(void)
         struct altcp_pcb *conn = state->conn;
 
         if (!conn || !tls_cert_jobs_pending(&state->tls_ctx))
-        {
             continue;
-        }
+
         if (!tls_cert_jobs_step(&state->tls_ctx))
         {
             ALTCP_TLS_CE_ERROR_ABORT(conn);
             return; /* state may be freed */
         }
+
         (void)altcp_tls_ce_lower_recv_process(conn, state);
         return; /* state may be freed; resume from the list head next tick */
     }
@@ -2065,9 +2075,7 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
         return true;
     }
 
-    tls_crypto_guard_enable();
     ok = tls_derive_handshake_keys(ctx);
-    tls_crypto_guard_disable();
     if (!ok)
     {
         return false;
@@ -2159,9 +2167,7 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
     altcp_output(conn->inner_conn);
 
     /* Application keys come from the transcript through the server Finished. */
-    tls_crypto_guard_enable();
     ok = tls_derive_application_keys(ctx);
-    tls_crypto_guard_disable();
     if (!ok)
     {
         return false;
@@ -2256,11 +2262,7 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
                  pbuf_copy_partial(plain, finished, (u16_t)finished_len, 0) == finished_len;
             pbuf_free(plain);
             if (ok)
-            {
-                tls_crypto_guard_enable();
                 ok = tls_server_recv_finished(ctx, finished, finished_len);
-                tls_crypto_guard_disable();
-            }
             if (!ok)
             {
                 (void)tls_send_fatal_alert(ctx, TLS_ALERT_DECRYPT_ERROR);
@@ -2386,14 +2388,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                         ALTCP_TLS_CE_ERROR_ABORT(conn);
                         return ERR_ABRT;
                     }
-                    /* tls_derive_handshake_keys holds early_secret/
-                     * handshake_secret/derived_secret on its own stack
-                     * frame; wrapping the call lets tls_crypto_guard_disable()
-                     * scrub that whole frame once it's returned and SP is
-                     * back above it. */
-                    tls_crypto_guard_enable();
                     bool derive_ok = tls_derive_handshake_keys(&state->tls_ctx);
-                    tls_crypto_guard_disable();
                     if (!derive_ok)
                     {
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: handshake key derivation failed\n"));
@@ -2639,14 +2634,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                      * RFC 8446 Section 7.1 uses transcript through server Finished only.
                      * tls_send_finished() will update the transcript with client Finished. */
                     tls_dbg_status("keys: derive app");
-                    /* tls_derive_application_keys holds master_secret/
-                     * derived_secret on its own stack frame; wrapping the
-                     * call lets tls_crypto_guard_disable() scrub that
-                     * whole frame once it's returned and SP is back
-                     * above it. */
-                    tls_crypto_guard_enable();
                     bool derive_app_ok = tls_derive_application_keys(&state->tls_ctx);
-                    tls_crypto_guard_disable();
                     if (!derive_app_ok)
                     {
                         tls_dbg_status("keys: derive app fail");
@@ -2739,19 +2727,24 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     }
 
                     /* Generate client Finished message (plaintext handshake) */
-                    uint8_t finished_hs[4 + TLS_HASH_MAX_DIGEST_LEN];
+#define FINISHED_HS_MAX (4 + TLS_HASH_MAX_DIGEST_LEN)
+#define ENC_FINISHED_MAX 128
+                    uint8_t *finished_hs = (uint8_t *)mem_malloc(FINISHED_HS_MAX + ENC_FINISHED_MAX);
+                    if (!finished_hs)
+                    {
+                        tls_dbg_status("clientfin: alloc fail");
+                        ALTCP_TLS_CE_ERROR_ABORT(conn);
+                        return ERR_ABRT;
+                    }
+                    uint8_t *enc_finished = finished_hs + FINISHED_HS_MAX;
                     size_t finished_hs_len = 0;
+                    size_t enc_finished_len = 0;
                     tls_dbg_status("clientfin: gen");
-                    /* tls_send_finished holds finished_key/verify_data/
-                     * hmac_ctx on its own stack frame; wrapping the call
-                     * lets tls_crypto_guard_disable() scrub that whole
-                     * frame once it's returned and SP is back above it. */
-                    tls_crypto_guard_enable();
                     bool send_finished_ok = tls_send_finished(&state->tls_ctx, true, finished_hs,
-                                                              sizeof(finished_hs), &finished_hs_len);
-                    tls_crypto_guard_disable();
+                                                              FINISHED_HS_MAX, &finished_hs_len);
                     if (!send_finished_ok)
                     {
+                        mem_free(finished_hs);
                         tls_dbg_status("clientfin: gen fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished generation failed\n"));
                         ALTCP_TLS_CE_ERROR_ABORT(conn);
@@ -2759,15 +2752,14 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     }
 
                     /* Encrypt the Finished as a TLS 1.3 record */
-                    uint8_t enc_finished[128];
-                    size_t enc_finished_len = 0;
                     tls_dbg_status("clientfin: encrypt");
                     if (!altcp_tls_ce_encrypt_record_stream(&state->tls_ctx, true,
                                                             TLS_CONTENT_TYPE_HANDSHAKE,
                                                             finished_hs, finished_hs_len,
-                                                            enc_finished, sizeof(enc_finished),
+                                                            enc_finished, ENC_FINISHED_MAX,
                                                             &enc_finished_len))
                     {
+                        mem_free(finished_hs);
                         tls_dbg_status("clientfin: enc fail");
                         LWIP_DEBUGF(ALTCP_TLS_CE_DEBUG, ("TLS CE: Finished encryption failed\n"));
                         ALTCP_TLS_CE_ERROR_ABORT(conn);
@@ -2776,6 +2768,7 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
 
                     err_t write_err = altcp_write(conn->inner_conn, enc_finished,
                                                   (u16_t)enc_finished_len, TCP_WRITE_FLAG_COPY);
+                    mem_free(finished_hs);
                     altcp_output(conn->inner_conn);
 
                     if (write_err != ERR_OK)
@@ -3572,7 +3565,8 @@ altcp_tls_ce_close(struct altcp_pcb *conn)
      * TCP-level close hits ERR_MEM and the caller retries) doesn't
      * re-emit the alert — the peer has already seen one. */
     altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
-    if (state && !state->tls_ctx.fatal_alert_sent &&
+    if (state && (state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE) &&
+        !state->tls_ctx.fatal_alert_sent &&
         !(state->flags & ALTCP_TLS_CE_FLAGS_CLOSE_NOTIFY_SENT))
     {
         if (tls_send_close_notify(&state->tls_ctx))

@@ -322,6 +322,7 @@ def local_ca_fixtures(tmp: Path) -> dict[str, tuple[Path, Path]]:
         )
         fixtures[key_type] = (cert, key)
     fixtures["ca"] = (ca_cert, ca_key)
+
     return fixtures
 
 
@@ -334,8 +335,6 @@ def local_server_context(tmp: Path, fixtures: dict[str, tuple[Path, Path]]):
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     ctx.load_cert_chain(chain, key)
     return ctx
-
-
 
 
 # ---------------------------------------------------------------------------

@@ -199,7 +199,7 @@ bool tls_p384_verify(const uint8_t sig[96], const uint8_t hash[48], const uint8_
 #include "../../drivers/mem.h"
 #include "lwip/timeouts.h"
 #include "lwip/sntp_time.h"
-#include "lwip/app_config.h"
+#include "x509_internal.h"
 #include "lwip/sys.h"
 #include "lwip/pbuf.h"
 #include "../../wireless/crypto.h"
@@ -209,11 +209,7 @@ bool tls_p384_verify(const uint8_t sig[96], const uint8_t hash[48], const uint8_
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
 
-/* Cleanup helpers for TLS_AUTOZERO_BUF/TLS_AUTOZERO_STRUCT (bytes.h):
- * every stack-local secret buffer in this file is one of these two
- * shapes, so one helper per shape covers the whole file. */
-TLS_AUTOZERO_DECL(uint8_t, 32)
-TLS_AUTOZERO_DECL_STRUCT(tls_hmac_context)
+/* Cleanup helper for the remaining stack-local AES contexts. */
 TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 
 /*
@@ -711,6 +707,13 @@ struct tls_cert_walker
      * leaf SPKI capture etc. Set by the caller via tls_cert_walker_new. */
     struct tls_handshake_context *ctx;
 
+    /* Reused descriptor for the certificate currently in cert_buf. Keeping
+     * this on the heap avoids nesting it inside the streaming walker's large
+     * compiler-generated frame. Its pointers borrow cert_buf and are reset
+     * before every parse. */
+    struct tls_x509_object *parsed_cert;
+    struct tls_hash_context *cert_hash;
+
     /* Deferred adjacent-link verification state.
      *
      * A cert is signed by the NEXT cert in the wire chain (cert N signed-by
@@ -733,6 +736,7 @@ struct tls_cert_walker
     uint8_t topmost_authority_key_id[TLS_TRUSTSTORE_SKI_LEN];
     uint8_t topmost_authority_key_id_len;
     bool topmost_authority_key_id_present;
+
 };
 
 static struct tls_cert_walker *tls_cert_walker_new(struct tls_handshake_context *ctx)
@@ -745,6 +749,29 @@ static struct tls_cert_walker *tls_cert_walker_new(struct tls_handshake_context 
     }
     mem_stats_tls_direct_add(sizeof(*w), sizeof(*w));
     memset(w, 0, sizeof(*w));
+    w->parsed_cert = (struct tls_x509_object *)
+        mem_buffer_custom_malloc(sizeof(*w->parsed_cert));
+    if (!w->parsed_cert)
+    {
+        mem_stats_tls_direct_release(sizeof(*w), sizeof(*w));
+        mem_buffer_custom_free(w);
+        return NULL;
+    }
+    mem_stats_tls_direct_add(sizeof(*w->parsed_cert), sizeof(*w->parsed_cert));
+    memset(w->parsed_cert, 0, sizeof(*w->parsed_cert));
+    w->cert_hash = (struct tls_hash_context *)
+        mem_buffer_custom_malloc(sizeof(*w->cert_hash));
+    if (!w->cert_hash)
+    {
+        mem_stats_tls_direct_release(sizeof(*w->parsed_cert),
+                                     sizeof(*w->parsed_cert));
+        mem_buffer_custom_free(w->parsed_cert);
+        mem_stats_tls_direct_release(sizeof(*w), sizeof(*w));
+        mem_buffer_custom_free(w);
+        return NULL;
+    }
+    mem_stats_tls_direct_add(sizeof(*w->cert_hash), sizeof(*w->cert_hash));
+    memset(w->cert_hash, 0, sizeof(*w->cert_hash));
     w->state = CW_REQ_CTX_LEN;
     w->len_need = 1;
     w->ctx = ctx;
@@ -772,6 +799,19 @@ static void tls_cert_walker_free(struct tls_cert_walker *w)
         mem_stats_tls_direct_release(w->subordinate_names_cap,
                                      w->subordinate_names_cap);
         mem_buffer_custom_free(w->subordinate_names);
+    }
+    if (w->parsed_cert)
+    {
+        mem_stats_tls_direct_release(sizeof(*w->parsed_cert),
+                                     sizeof(*w->parsed_cert));
+        mem_buffer_custom_free(w->parsed_cert);
+    }
+    if (w->cert_hash)
+    {
+        tls_hash_clear(w->cert_hash);
+        mem_stats_tls_direct_release(sizeof(*w->cert_hash),
+                                     sizeof(*w->cert_hash));
+        mem_buffer_custom_free(w->cert_hash);
     }
     mem_stats_tls_direct_release(sizeof(*w), sizeof(*w));
     mem_buffer_custom_free(w);
@@ -1252,6 +1292,7 @@ struct tls_cert_job
     struct tls_key issuer;
     uint8_t *issuer_mat;
     size_t issuer_mat_len;
+
 };
 
 static void tls_cert_job_free(struct tls_cert_job *job)
@@ -1387,6 +1428,7 @@ static bool tls_cert_job_enqueue(struct tls_cert_walker *w, const struct tls_key
     job->snap.subordinate_names_len = 0;
     job->snap.subordinate_names_cap = 0;
     job->is_root = (issuer == NULL);
+
     if (issuer && !tls_cert_job_clone_key(job, issuer))
     {
         job->snap.pending_sig = NULL; /* still owned by the walker */
@@ -1419,18 +1461,18 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
     if (w->pending_link)
     {
         uint8_t subject_name_digest[32];
-        struct tls_hash_context name_hash;
         if (!cert->subject_name || cert->subject_name_len == 0 ||
-            !tls_hash_context_init(&name_hash, TLS_HASH_SHA256))
+            !tls_hash_context_init(w->cert_hash, TLS_HASH_SHA256))
             return false;
-        tls_hash_update(&name_hash, cert->subject_name, cert->subject_name_len);
-        tls_hash_digest(&name_hash, subject_name_digest);
+        tls_hash_update(w->cert_hash, cert->subject_name, cert->subject_name_len);
+        tls_hash_digest(w->cert_hash, subject_name_digest);
         if (memcmp(subject_name_digest, w->pending_issuer_name_digest,
                    sizeof(subject_name_digest)) != 0)
         {
             ERROR_CODE(0x15);
             return false;
         }
+
         /* The signature check itself is deferred: it is queued as a job and
          * run from the dispatch tick (see the job section above). */
         if (!tls_cert_job_enqueue(w, &cert->pubkey))
@@ -1462,16 +1504,15 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         return false;
     }
     {
-        struct tls_hash_context hctx;
         uint8_t tbs_hash = (sig_alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
             ? TLS_HASH_SHA384 : TLS_HASH_SHA256;
-        if (!tls_hash_context_init(&hctx, tbs_hash))
+        if (!tls_hash_context_init(w->cert_hash, tbs_hash))
         {
             ERROR_CODE(0x0c);
             return false;
         }
-        tls_hash_update(&hctx, tbs, tbs_len);
-        tls_hash_digest(&hctx, w->pending_tbs_digest);
+        tls_hash_update(w->cert_hash, tbs, tbs_len);
+        tls_hash_digest(w->cert_hash, w->pending_tbs_digest);
     }
     /* Copy the signature (it lives in cert_buf, which is freed after this
      * call returns). Oversized RSA signatures are retained by length only so
@@ -1522,10 +1563,9 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
     if (!cert->issuer_name || cert->issuer_name_len == 0)
         return false;
     {
-        struct tls_hash_context name_hash;
-        if (!tls_hash_context_init(&name_hash, TLS_HASH_SHA256)) return false;
-        tls_hash_update(&name_hash, cert->issuer_name, cert->issuer_name_len);
-        tls_hash_digest(&name_hash, w->pending_issuer_name_digest);
+        if (!tls_hash_context_init(w->cert_hash, TLS_HASH_SHA256)) return false;
+        tls_hash_update(w->cert_hash, cert->issuer_name, cert->issuer_name_len);
+        tls_hash_digest(w->cert_hash, w->pending_issuer_name_digest);
     }
     (void)is_leaf;
     return true;
@@ -1594,9 +1634,13 @@ static bool tls_cert_walker_append_constraint_names(
  */
 static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 {
-    struct tls_x509_object cert = {0};
+    /* This local alias intentionally expands to the walker's heap descriptor,
+     * preserving the existing field-oriented validation code without placing
+     * the descriptor on the eZ80 stack. */
+#define cert (*w->parsed_cert)
     bool is_leaf = (w->cert_index == 0);
 
+    memset(&cert, 0, sizeof(cert));
     w->fail_alert = TLS_ALERT_BAD_CERTIFICATE;
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len, &cert))
     {
@@ -1735,6 +1779,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         return false;
     }
 
+
     /* Higher issuers constrain this certificate too, except that RFC 5280
      * 4.2.1.10 exempts non-final self-issued rollover certificates. */
     if ((is_leaf || !tls_cert_is_self_issued(&cert)) &&
@@ -1754,6 +1799,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         w->chain_validated = true;
 
     return true;
+#undef cert
 }
 
 /* Feed body bytes into the walker. Consumes from `bytes` until either
@@ -2384,6 +2430,7 @@ bool tls_cert_jobs_pending(const struct tls_handshake_context *ctx)
     return ctx != NULL && ctx->cert_jobs != NULL;
 }
 
+
 bool tls_cert_jobs_step(struct tls_handshake_context *ctx)
 {
     if (!ctx || !ctx->cert_jobs)
@@ -2436,6 +2483,7 @@ bool tls_cert_jobs_step(struct tls_handshake_context *ctx)
     return true;
 }
 
+
 /**
  * @brief Dispatch one complete inner handshake message (header + body).
  *
@@ -2449,10 +2497,9 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
 {
     bool ok;
 
-    /* Certificate verification jobs must have all passed before any further
-     * handshake message (CertificateVerify, Finished, ...) is acted on. The
-     * consume path holds such messages back, so reaching here with jobs
-     * queued is a logic error: fail closed. */
+    /* Certificate verification jobs must all have passed before any further
+     * handshake message is acted on.  The consume path holds such messages
+     * back; reaching here with jobs queued is a logic error: fail closed. */
     if (ctx->cert_jobs != NULL)
     {
         ERROR_CODE(0x74);
@@ -2473,13 +2520,7 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
         ok = tls_recv_certificate_verify(ctx, msg, msg_len);
         break;
     case TLS_HANDSHAKE_FINISHED:
-        /* tls_recv_finished holds finished_key/expected_verify_data/
-         * hmac_ctx on its own stack frame; wrapping the call (rather than
-         * scrubbing from inside it) lets tls_crypto_guard_disable() reach
-         * that whole frame once it's returned and SP is back above it. */
-        tls_crypto_guard_enable();
         ok = tls_recv_finished(ctx, true, msg, msg_len);
-        tls_crypto_guard_disable();
         break;
     case TLS_SERVER_HANDSHAKE_NEW_SESSION_TICKET:
         ok = tls_recv_new_session_ticket(ctx, msg, msg_len);
@@ -4849,11 +4890,10 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
                                           const uint8_t *sig, size_t sig_len)
 {
     static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
-    uint8_t spaces[64];
+    static const uint8_t spaces[64] = {[0 ... 63] = 0x20};
     uint8_t zero = 0;
     uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
     uint8_t message_hash[32];
-    struct tls_hash_context hash_ctx;
     uint8_t *em = NULL;
     bool ok = false;
 
@@ -4890,18 +4930,25 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
 
     transcript_hash_digest(ctx->transcript_hash, transcript);
 
-    memset(spaces, 0x20, sizeof(spaces));
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    struct tls_hash_context *hash_ctx =
+        (struct tls_hash_context *)mem_buffer_custom_malloc(sizeof(*hash_ctx));
+    if (!hash_ctx)
     {
         ERROR_CODE(0x7c);
         return false;
     }
-
-    tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
-    tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
-    tls_hash_update(&hash_ctx, &zero, 1);
-    tls_hash_update(&hash_ctx, transcript, ctx->hash_len);
-    tls_hash_digest(&hash_ctx, message_hash);
+    if (!tls_hash_context_init(hash_ctx, TLS_HASH_SHA256))
+    {
+        mem_buffer_custom_free(hash_ctx);
+        ERROR_CODE(0x7c);
+        return false;
+    }
+    tls_hash_update(hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(hash_ctx, &zero, 1);
+    tls_hash_update(hash_ctx, transcript, ctx->hash_len);
+    tls_hash_digest(hash_ctx, message_hash);
+    mem_buffer_custom_free(hash_ctx);
 
     /* RSA decrypt the signature, then run the PSS padding check. */
     if (rsa->mod_len > RSA_TRANSIENT_SIZE ||
@@ -4951,11 +4998,10 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
                                               const uint8_t *sig, size_t sig_len)
 {
     static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
-    uint8_t spaces[64];
+    static const uint8_t spaces[64] = {[0 ... 63] = 0x20};
     uint8_t zero = 0;
     uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
     uint8_t message_hash[32];
-    struct tls_hash_context hash_ctx;
     uint8_t rs[64]; /* flat r||s for tls_p256_verify */
 
     if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P256 ||
@@ -4981,17 +5027,25 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
     }
     transcript_hash_digest(ctx->transcript_hash, transcript);
 
-    memset(spaces, 0x20, sizeof(spaces));
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    struct tls_hash_context *hash_ctx =
+        (struct tls_hash_context *)mem_buffer_custom_malloc(sizeof(*hash_ctx));
+    if (!hash_ctx)
     {
         ERROR_CODE(0x88);
         return false;
     }
-    tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
-    tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
-    tls_hash_update(&hash_ctx, &zero, 1);
-    tls_hash_update(&hash_ctx, transcript, ctx->hash_len);
-    tls_hash_digest(&hash_ctx, message_hash);
+    if (!tls_hash_context_init(hash_ctx, TLS_HASH_SHA256))
+    {
+        mem_buffer_custom_free(hash_ctx);
+        ERROR_CODE(0x88);
+        return false;
+    }
+    tls_hash_update(hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(hash_ctx, &zero, 1);
+    tls_hash_update(hash_ctx, transcript, ctx->hash_len);
+    tls_hash_digest(hash_ctx, message_hash);
+    mem_buffer_custom_free(hash_ctx);
 
     if (tls_verify_deferred(ctx, TLS_ALG_ECDSA_SECP256R1_SHA256, &ctx->leaf_pubkey,
                             message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
@@ -5032,11 +5086,10 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
                                               const uint8_t *sig, size_t sig_len)
 {
     static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
-    uint8_t spaces[64];
+    static const uint8_t spaces[64] = {[0 ... 63] = 0x20};
     uint8_t zero = 0;
     uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
     uint8_t message_hash[48];
-    struct tls_hash_context hash_ctx;
     uint8_t rs[96]; /* flat r||s for tls_p384_verify */
 
     if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P384 ||
@@ -5061,17 +5114,25 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
     }
     transcript_hash_digest(ctx->transcript_hash, transcript);
 
-    memset(spaces, 0x20, sizeof(spaces));
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA384))
+    struct tls_hash_context *hash_ctx =
+        (struct tls_hash_context *)mem_buffer_custom_malloc(sizeof(*hash_ctx));
+    if (!hash_ctx)
     {
         ERROR_CODE(0x8d);
         return false;
     }
-    tls_hash_update(&hash_ctx, spaces, sizeof(spaces));
-    tls_hash_update(&hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
-    tls_hash_update(&hash_ctx, &zero, 1);
-    tls_hash_update(&hash_ctx, transcript, ctx->hash_len);
-    tls_hash_digest(&hash_ctx, message_hash);
+    if (!tls_hash_context_init(hash_ctx, TLS_HASH_SHA384))
+    {
+        mem_buffer_custom_free(hash_ctx);
+        ERROR_CODE(0x8d);
+        return false;
+    }
+    tls_hash_update(hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(hash_ctx, &zero, 1);
+    tls_hash_update(hash_ctx, transcript, ctx->hash_len);
+    tls_hash_digest(hash_ctx, message_hash);
+    mem_buffer_custom_free(hash_ctx);
 
     if (!tls_ecdsa_sig_rs96(sig, sig_len, rs))
     {
@@ -5256,16 +5317,21 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
-    /* early_secret/handshake_secret/derived_secret are real TLS 1.3
-     * secrets held on this function's own stack frame. They're cleaned
-     * up by the caller, which wraps this call with
-     * tls_crypto_guard_enable()/disable(). */
-    uint8_t early_secret[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t handshake_secret[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t derived_secret[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t empty_hash[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
-    struct tls_hash_context hash_ctx;
+    /* Secret-derived material: heap-allocated to keep this function's large
+     * locals off the eZ80 stack.  Scrubbed explicitly before free. */
+    struct {
+        uint8_t early_secret[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t handshake_secret[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t derived_secret[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t empty_hash[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
+        struct tls_hash_context hash_ctx;
+    } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
+    if (!sec)
+    {
+        ERROR_CODE(0x85);
+        return false;
+    }
 
     /* Step 1: Compute early_secret from selected PSK, or zeros for a
      * full ECDHE handshake. A PSK offered but not selected has already
@@ -5277,27 +5343,32 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         const uint8_t *psk_ikm = ctx->psk_mode ? ctx->psk : NULL;
         size_t psk_len = ctx->psk_mode ? sizeof(ctx->psk) : hlen;
         if (!tls_hkdf_extract(hash_alg, NULL, 0, psk_ikm, psk_len,
-                              early_secret))
+                              sec->early_secret))
         {
+            tls_secure_memzero(sec, sizeof(*sec));
+            mem_buffer_custom_free(sec);
             ERROR_CODE(0x85);
             return false;
         }
     }
 
     /* Step 2: Compute empty hash for "derived" secret. */
-    if (!tls_hash_context_init(&hash_ctx, hash_alg))
+    if (!tls_hash_context_init(&sec->hash_ctx, hash_alg))
     {
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x86);
         return false;
     }
-    tls_hash_digest(&hash_ctx, empty_hash);
+    tls_hash_digest(&sec->hash_ctx, sec->empty_hash);
 
     /* Step 3: Derive "derived" secret from early_secret
      * derived = Derive-Secret(early_secret, "derived", empty_hash)
      */
-    if (!tls_derive_secret(hash_alg, early_secret, hlen,
-                           "derived", 7, empty_hash, hlen, derived_secret))
+    if (!tls_derive_secret(hash_alg, sec->early_secret, hlen,
+                           "derived", 7, sec->empty_hash, hlen, sec->derived_secret))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x87);
         return false;
     }
@@ -5311,9 +5382,11 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
          * output; the all-zero fallback spans the hash length. */
         const uint8_t *ecdhe_ikm = ctx->ecdhe_negotiated ? ctx->ecdhe_shared : NULL;
         size_t ecdhe_len = ctx->ecdhe_negotiated ? sizeof(ctx->ecdhe_shared) : hlen;
-        if (!tls_hkdf_extract(hash_alg, derived_secret, hlen,
-                              ecdhe_ikm, ecdhe_len, handshake_secret))
+        if (!tls_hkdf_extract(hash_alg, sec->derived_secret, hlen,
+                              ecdhe_ikm, ecdhe_len, sec->handshake_secret))
         {
+            tls_secure_memzero(sec, sizeof(*sec));
+            mem_buffer_custom_free(sec);
             ERROR_CODE(0x88);
             return false;
         }
@@ -5331,19 +5404,23 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
      * refuse instead of falling back. */
     if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0xb5);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Step 6: Derive client handshake traffic secret
      * client_handshake_traffic_secret =
      *     Derive-Secret(handshake_secret, "c hs traffic", transcript_hash)
      */
-    if (!tls_derive_secret(hash_alg, handshake_secret, hlen,
-                           "c hs traffic", 12, transcript_hash, hlen,
+    if (!tls_derive_secret(hash_alg, sec->handshake_secret, hlen,
+                           "c hs traffic", 12, sec->transcript_hash, hlen,
                            ctx->keys.client_handshake_traffic_secret))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x89);
         return false;
     }
@@ -5352,10 +5429,12 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
      * server_handshake_traffic_secret =
      *     Derive-Secret(handshake_secret, "s hs traffic", transcript_hash)
      */
-    if (!tls_derive_secret(hash_alg, handshake_secret, hlen,
-                           "s hs traffic", 12, transcript_hash, hlen,
+    if (!tls_derive_secret(hash_alg, sec->handshake_secret, hlen,
+                           "s hs traffic", 12, sec->transcript_hash, hlen,
                            ctx->keys.server_handshake_traffic_secret))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x8a);
         return false;
     }
@@ -5364,6 +5443,12 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
      * key = HKDF-Expand-Label(secret, "key", "", key_len)
      * iv = HKDF-Expand-Label(secret, "iv", "", 12)
      */
+    /* Store handshake_secret before freeing sec */
+    memcpy(ctx->keys.handshake_secret, sec->handshake_secret, hlen);
+
+    tls_secure_memzero(sec, sizeof(*sec));
+    mem_buffer_custom_free(sec);
+
     if (!tls_hkdf_expand_label(hash_alg,
                                ctx->keys.client_handshake_traffic_secret, hlen,
                                "key", 3, NULL, 0,
@@ -5400,9 +5485,6 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         ERROR_CODE(0x8e);
         return false;
     }
-
-    /* Store handshake_secret for later use in application key derivation */
-    memcpy(ctx->keys.handshake_secret, handshake_secret, hlen);
 
     /* Advance state so this function is not called again */
     ctx->tx_epoch = 1;
@@ -5466,29 +5548,38 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
         return false;
     }
 
-    /* master_secret/derived_secret are real TLS 1.3 secrets held on this
-     * function's own stack frame. They're cleaned up by the caller,
-     * which wraps this call with tls_crypto_guard_enable()/disable(). */
-    uint8_t master_secret[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t derived_secret[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t empty_hash[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
-    struct tls_hash_context hash_ctx;
-
-    /* Step 1: Compute empty hash for "derived" secret. */
-    if (!tls_hash_context_init(&hash_ctx, hash_alg))
+    /* Secret-derived material: heap-allocated to keep this function's large
+     * locals off the eZ80 stack.  Scrubbed explicitly before free. */
+    struct {
+        uint8_t master_secret[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t derived_secret[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t empty_hash[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
+        struct tls_hash_context hash_ctx;
+    } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
+    if (!sec)
     {
         ERROR_CODE(0x8f);
         return false;
     }
-    tls_hash_digest(&hash_ctx, empty_hash);
+
+    /* Step 1: Compute empty hash for "derived" secret. */
+    if (!tls_hash_context_init(&sec->hash_ctx, hash_alg))
+    {
+        mem_buffer_custom_free(sec);
+        ERROR_CODE(0x8f);
+        return false;
+    }
+    tls_hash_digest(&sec->hash_ctx, sec->empty_hash);
 
     /* Step 2: Derive "derived" secret from handshake_secret
      * derived = Derive-Secret(handshake_secret, "derived", empty_hash)
      */
     if (!tls_derive_secret(hash_alg, ctx->keys.handshake_secret, hlen,
-                           "derived", 7, empty_hash, hlen, derived_secret))
+                           "derived", 7, sec->empty_hash, hlen, sec->derived_secret))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x90);
         return false;
     }
@@ -5497,13 +5588,15 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
      * master_secret = HKDF-Extract(salt=derived, IKM=0)
      * ikm=NULL tells hkdf_extract to use hash-length zero bytes.
      */
-    if (!tls_hkdf_extract(hash_alg, derived_secret, hlen,
-                          NULL, hlen, master_secret))
+    if (!tls_hkdf_extract(hash_alg, sec->derived_secret, hlen,
+                          NULL, hlen, sec->master_secret))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x91);
         return false;
     }
-    memcpy(ctx->keys.master_secret, master_secret, hlen);
+    memcpy(ctx->keys.master_secret, sec->master_secret, hlen);
 
     /* Step 4: Get transcript hash (ClientHello...server Finished). A
      * missing transcript_hash context means transcript hashing was never
@@ -5511,19 +5604,23 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
      * against zero bytes. */
     if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0xb6);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Step 5: Derive client application traffic secret
      * client_application_traffic_secret =
      *     Derive-Secret(master_secret, "c ap traffic", transcript_hash)
      */
-    if (!tls_derive_secret(hash_alg, master_secret, hlen,
-                           "c ap traffic", 12, transcript_hash, hlen,
+    if (!tls_derive_secret(hash_alg, sec->master_secret, hlen,
+                           "c ap traffic", 12, sec->transcript_hash, hlen,
                            ctx->keys.client_application_traffic_secret))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x92);
         return false;
     }
@@ -5532,13 +5629,18 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
      * server_application_traffic_secret =
      *     Derive-Secret(master_secret, "s ap traffic", transcript_hash)
      */
-    if (!tls_derive_secret(hash_alg, master_secret, hlen,
-                           "s ap traffic", 12, transcript_hash, hlen,
+    if (!tls_derive_secret(hash_alg, sec->master_secret, hlen,
+                           "s ap traffic", 12, sec->transcript_hash, hlen,
                            ctx->keys.server_application_traffic_secret))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x93);
         return false;
     }
+
+    tls_secure_memzero(sec, sizeof(*sec));
+    mem_buffer_custom_free(sec);
 
     /* Step 7: Derive client application key and IV
      * key = HKDF-Expand-Label(secret, "key", "", key_len)
@@ -5644,17 +5746,22 @@ bool tls_send_finished(
         return false;
     }
 
-    /* finished_key/verify_data/hmac_ctx are secret-derived material held
-     * on this function's own stack frame. They're cleaned up by the
-     * caller, which wraps this call with
-     * tls_crypto_guard_enable()/disable(). */
-    uint8_t finished_key[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t verify_data[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
+    /* Secret-derived material: heap-allocated to keep this function's large
+     * locals off the eZ80 stack.  Scrubbed explicitly before free. */
+    struct {
+        uint8_t finished_key[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t verify_data[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
+        struct tls_hmac_context hmac_ctx;
+    } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
+    if (!sec)
+    {
+        ERROR_CODE(0x98);
+        return false;
+    }
     uint8_t finished_header[4] = {
         TLS_HANDSHAKE_FINISHED, 0x00, 0x00, (uint8_t)hlen
     };
-    struct tls_hmac_context hmac_ctx;
     const uint8_t *traffic_secret;
 
     /* Step 1: Select appropriate traffic secret */
@@ -5671,8 +5778,10 @@ bool tls_send_finished(
      * finished_key = HKDF-Expand-Label(traffic_secret, "finished", "", Hash.length)
      */
     if (!tls_hkdf_expand_label(hash_alg, traffic_secret, hlen,
-                               "finished", 8, NULL, 0, finished_key, hlen))
+                               "finished", 8, NULL, 0, sec->finished_key, hlen))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x9a);
         return false;
     }
@@ -5683,24 +5792,31 @@ bool tls_send_finished(
      * against zero bytes. */
     if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0xb7);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Step 4: Compute verify_data = HMAC(finished_key, transcript_hash) */
-    if (!tls_hmac_context_init(&hmac_ctx, hash_alg, finished_key, hlen))
+    if (!tls_hmac_context_init(&sec->hmac_ctx, hash_alg, sec->finished_key, hlen))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0x9b);
         return false;
     }
-    tls_hmac_update(&hmac_ctx, transcript_hash, hlen);
-    tls_hmac_digest(&hmac_ctx, verify_data);
+    tls_hmac_update(&sec->hmac_ctx, sec->transcript_hash, hlen);
+    tls_hmac_digest(&sec->hmac_ctx, sec->verify_data);
 
     /* Step 5: Copy the fixed header, then append the dynamic verify_data. */
     memcpy(out, finished_header, sizeof(finished_header));
-    memcpy(out + sizeof(finished_header), verify_data, hlen);
+    memcpy(out + sizeof(finished_header), sec->verify_data, hlen);
     size_t offset = sizeof(finished_header) + hlen;
+
+    tls_secure_memzero(sec, sizeof(*sec));
+    mem_buffer_custom_free(sec);
 
     *written = offset;
 
@@ -5719,9 +5835,11 @@ bool tls_send_finished(
                                "res master", 10, transcript_hash_full, hlen,
                                ctx->keys.resumption_master_secret))
         {
+            tls_secure_memzero(transcript_hash_full, sizeof(transcript_hash_full));
             ERROR_CODE(0x9c);
             return false;
         }
+        tls_secure_memzero(transcript_hash_full, sizeof(transcript_hash_full));
         /* master_secret served its last purpose; wipe per RFC 8446 §7.1. */
         tls_secure_memzero(ctx->keys.master_secret, sizeof(ctx->keys.master_secret));
     }
@@ -5841,16 +5959,20 @@ static bool tls_recv_finished(
         }
     }
 
-    /* finished_key/expected_verify_data/hmac_ctx are secret-derived
-     * material held on this function's own stack frame. They're cleaned
-     * up by the caller, which wraps this call with
-     * tls_crypto_guard_enable()/disable() -- once this function returns,
-     * its whole frame sits below the caller's SP and gets scrubbed from
-     * there, regardless of which exit path was taken. */
-    uint8_t finished_key[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t expected_verify_data[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
-    struct tls_hmac_context hmac_ctx;
+    /* Secret-derived material: heap-allocated so this function's large
+     * locals don't blow the eZ80 stack.  Scrubbed explicitly before free
+     * so the crypto guard's stack scrub is not required here. */
+    struct {
+        uint8_t finished_key[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t expected_verify_data[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t transcript_hash[TLS_HASH_MAX_DIGEST_LEN];
+        struct tls_hmac_context hmac_ctx;
+    } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
+    if (!sec)
+    {
+        ERROR_CODE(0xa0);
+        return false;
+    }
     const uint8_t *traffic_secret;
 
     /* Step 1: Parse Finished message header */
@@ -5860,6 +5982,8 @@ static bool tls_recv_finished(
                                                &msg_len);
     if (offset == 0 || msg_len != hlen || offset + hlen != data_len)
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0xa1);
         return false;
     }
@@ -5881,8 +6005,10 @@ static bool tls_recv_finished(
 
     /* Derive finished_key */
     if (!tls_hkdf_expand_label(hash_alg, traffic_secret, hlen,
-                               "finished", 8, NULL, 0, finished_key, hlen))
+                               "finished", 8, NULL, 0, sec->finished_key, hlen))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0xa2);
         return false;
     }
@@ -5894,26 +6020,33 @@ static bool tls_recv_finished(
      * zero-transcript expectation either way. */
     if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0xb8);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, transcript_hash);
+    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Compute expected verify_data */
-    if (!tls_hmac_context_init(&hmac_ctx, hash_alg, finished_key, hlen))
+    if (!tls_hmac_context_init(&sec->hmac_ctx, hash_alg, sec->finished_key, hlen))
     {
+        tls_secure_memzero(sec, sizeof(*sec));
+        mem_buffer_custom_free(sec);
         ERROR_CODE(0xa3);
         return false;
     }
-    tls_hmac_update(&hmac_ctx, transcript_hash, hlen);
-    tls_hmac_digest(&hmac_ctx, expected_verify_data);
+    tls_hmac_update(&sec->hmac_ctx, sec->transcript_hash, hlen);
+    tls_hmac_digest(&sec->hmac_ctx, sec->expected_verify_data);
 
     /* Step 3: Constant-time compare */
     uint8_t diff = 0;
     for (size_t i = 0; i < hlen; i++)
     {
-        diff |= received_verify_data[i] ^ expected_verify_data[i];
+        diff |= received_verify_data[i] ^ sec->expected_verify_data[i];
     }
+
+    tls_secure_memzero(sec, sizeof(*sec));
+    mem_buffer_custom_free(sec);
 
     if (diff != 0)
     {
@@ -7565,6 +7698,7 @@ void tls_handshake_cleanup(struct tls_handshake_context *ctx)
 
     /* Release the cross-record reassembly buffer if one is in flight. */
     tls_hs_reasm_reset(ctx);
+    tls_secure_memzero(&ctx->record_aes, sizeof(ctx->record_aes));
 
     /* Free any in-flight Certificate walker (cert_walker plus its
      * per-cert buffer). Safe on NULL. */

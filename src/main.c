@@ -431,8 +431,8 @@ static void restore_os_screen(void)
 
 int main(void)
 {
-    ui_item_t items[20];
-    uint8_t roles[20];
+    ui_item_t items[22];
+    uint8_t roles[22];
     char tz[16];
     char pcap[16];
     char slots[4];

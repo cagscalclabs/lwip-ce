@@ -455,6 +455,7 @@ static void test_suite_forced(const char *suite_name, const char *cipher_arg,
     check(name, strstr(result, "handshake completed") != NULL);
 }
 
+
 int main(void)
 {
     char test_mode[12] = {0};

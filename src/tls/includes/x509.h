@@ -45,6 +45,13 @@ struct tls_x509_object
     /* Extensions content bytes (SEQUENCE OF Extension, inner of [3] EXPLICIT). */
     const uint8_t *extensions;    size_t extensions_len;
 
+    /* Certificate serial number (DER INTEGER value bytes, no tag/length). */
+    const uint8_t *serial;        size_t serial_len;
+
+    /* Raw SubjectPublicKey bytes: the BIT STRING body after the unused-bits byte.
+     * Points into cert DER; valid as long as the cert buffer is live. */
+    const uint8_t *subject_pubkey_raw; size_t subject_pubkey_raw_len;
+
     /* authorityKeyIdentifier.keyIdentifier, when present. This identifies
      * the issuer key and is matched against a trust anchor's stored SKI. */
     const uint8_t *authority_key_id; size_t authority_key_id_len;

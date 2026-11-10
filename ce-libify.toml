@@ -70,6 +70,8 @@ ARCHIVED = "NO"
 LTO = "NO"
 CFLAGS = "-Wall -Wextra -Oz -I src/include"
 CXXFLAGS = "-Wall -Wextra -Oz -I src/include"
+# Pending ez80-opts branch toolchain (codex/ez80-opts patches):
+# CFLAGS += "-Xclang -fmerge-functions -mllvm -inline-threshold=0 -mllvm -z80-machine-outliner-min-sequence-bytes=11 -mllvm -z80-internal-regargs-on-merged-ir"
 ASFLAGS = "-I src/tls/core/primitives -I src/tls/core/share"
 BSSHEAP_HIGH = "0xD072C6"
 

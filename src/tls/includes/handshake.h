@@ -34,6 +34,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "hash.h"
+#include "aes.h"
 #include "key.h"
 #include "x509.h"
 #include "tls-alpn.h"
@@ -147,8 +148,9 @@ extern "C"
 #define TLS_ALERT_BAD_RECORD_MAC 0x14
 #define TLS_ALERT_RECORD_OVERFLOW 0x16
 #define TLS_ALERT_HANDSHAKE_FAILURE 0x28
-#define TLS_ALERT_BAD_CERTIFICATE 0x2A
-#define TLS_ALERT_CERTIFICATE_EXPIRED 0x2D
+#define TLS_ALERT_BAD_CERTIFICATE      0x2A
+#define TLS_ALERT_CERTIFICATE_REVOKED  0x2C
+#define TLS_ALERT_CERTIFICATE_EXPIRED  0x2D
 #define TLS_ALERT_UNKNOWN_CA 0x30
 #define TLS_ALERT_ILLEGAL_PARAMETER 0x2F
 #define TLS_ALERT_DECODE_ERROR 0x32
@@ -248,6 +250,11 @@ extern "C"
 
         /* Derived Keys */
         struct tls_traffic_keys keys;
+
+        /* Record AEAD working state. Kept in the (heap) handshake context so
+         * the record path does not put a tls_aes_context on the 4 KiB stack
+         * or allocate one per record. */
+        struct tls_aes_context record_aes;
 
         /* Sequence Numbers (for record layer) */
         uint64_t client_seq_num;
@@ -387,6 +394,7 @@ extern "C"
         uint8_t *hs_deferred;
         size_t hs_deferred_len;
         size_t hs_deferred_cap;
+
 
         /* True once close_notify has been sent so we don't send it twice. */
         bool close_notify_sent;
@@ -618,6 +626,7 @@ extern "C"
      */
     bool tls_cert_jobs_pending(const struct tls_handshake_context *ctx);
 
+
     /**
      * @brief Run one queued certificate verification job.
      *
@@ -688,6 +697,7 @@ const char *tls_alert_name(uint8_t description);
      * @param ctx Handshake context to clean
      */
     void tls_handshake_cleanup(struct tls_handshake_context *ctx);
+
 
 #ifdef __cplusplus
 }
