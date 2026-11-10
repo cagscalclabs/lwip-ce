@@ -47,7 +47,7 @@ jobs:
             content_new=true
           else
             changed_paths="$RUNNER_TEMP/changed-paths"
-            if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]] || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
               git diff-tree --root --no-commit-id --name-only -r -z "$HEAD_SHA" > "$changed_paths"
             elif [ "${{ github.event_name }}" = pull_request ]; then
               git diff --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"
