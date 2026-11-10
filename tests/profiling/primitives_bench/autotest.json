@@ -8,6 +8,7 @@
     "isASM": true
   },
   "sequence": [
+    "delay|3000",
     "action|launch",
     "hashWait|1",
     "delay|2000",
