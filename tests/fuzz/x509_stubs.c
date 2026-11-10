@@ -32,6 +32,10 @@ void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *digest)
     (void)ctx;
     memset(digest, 0, 32);
 }
+void tls_hash_clear(struct tls_hash_context *ctx)
+{
+    (void)ctx;
+}
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32], const uint8_t pub[65])
 {
     (void)sig; (void)hash; (void)pub;
