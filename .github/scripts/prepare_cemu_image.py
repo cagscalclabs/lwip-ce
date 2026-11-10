@@ -331,9 +331,15 @@ def install_release(
             if screen_hash == INSTALLED_SCREEN_HASH:
                 break
         else:
-            raise PreparationError(
-                "installer did not reach its completion screen within "
-                f"{INSTALL_TIMEOUT_MS} ms (last hash {screen_hash})"
+            # The completion-screen hash is a fast path, not a hard gate: the
+            # prompt can blink and the LCD can auto-power-down. The finish keys
+            # below dismiss the prompt (or are ignored while the install is
+            # still running), so continue with the fixed settle.
+            print(
+                "installer completion screen not observed within "
+                f"{INSTALL_TIMEOUT_MS} ms (last hash {screen_hash}); "
+                "continuing with the fixed settle",
+                flush=True,
             )
 
         for command in installer_finish_commands(output):

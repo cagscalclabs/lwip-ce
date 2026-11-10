@@ -67,3 +67,15 @@ index 184d3f5..6aaefab 100644
              }
              return SUCCESS;
              break;
+
+--- a/installer/src/main.c
++++ b/installer/src/main.c
+@@ -137,7 +137,7 @@ static int install(void)
+             /* first appvar contains app name */
+             if (i == 0)
+             {
+-                strncpy(app_name, (const char *)(appvar->data + 256 + 3), sizeof app_name);
++                strncpy(app_name, (const char *)(appvar->data + 256 + 5), sizeof app_name);
+ 
+                 dbg_printf("App %s\n", app_name);
+ 
