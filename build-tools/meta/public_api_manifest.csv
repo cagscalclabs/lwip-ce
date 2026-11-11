@@ -806,3 +806,7 @@ func,tls_hmac_clear,cryptography,src/tls/includes/hmac.h,lwip/cryptography/hmac.
 func,tls_aes_destroy_ctx,cryptography,src/tls/includes/aes.h,lwip/cryptography/aes.h
 func,altcp_tls_create_config_cert_server,tls_transport,src/include/lwip/altcp_tls.h,lwip/core/altcp_tls.h
 func,altcp_tls_create_config_cert_client,tls_transport,src/include/lwip/altcp_tls.h,lwip/core/altcp_tls.h
+func,tls_x509_get_ocsp_url,cryptography,src/tls/includes/ocsp.h,lwip/cryptography/ocsp.h
+func,tls_ocsp_hash_issuer,cryptography,src/tls/includes/ocsp.h,lwip/cryptography/ocsp.h
+func,tls_ocsp_build_request,cryptography,src/tls/includes/ocsp.h,lwip/cryptography/ocsp.h
+func,tls_ocsp_free,cryptography,src/tls/includes/ocsp.h,lwip/cryptography/ocsp.h

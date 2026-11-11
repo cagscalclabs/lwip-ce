@@ -490,3 +490,7 @@ tls_aes_pkcs7_remove
 altcp_tls_create_config_cert_server
 altcp_tls_create_config_cert_client
 lwip_set_tty
+tls_x509_get_ocsp_url
+tls_ocsp_hash_issuer
+tls_ocsp_build_request
+tls_ocsp_free

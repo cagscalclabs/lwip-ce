@@ -22,6 +22,38 @@
     "hashWait|5",
     "key|enter",
     "hashWait|6",
+    "key|enter",
+    "hashWait|7",
+    "key|enter",
+    "hashWait|8",
+    "key|enter",
+    "hashWait|9",
+    "key|enter",
+    "hashWait|10",
+    "key|enter",
+    "hashWait|11",
+    "key|enter",
+    "hashWait|12",
+    "key|enter",
+    "hashWait|13",
+    "key|enter",
+    "hashWait|14",
+    "key|enter",
+    "hashWait|15",
+    "key|enter",
+    "hashWait|16",
+    "key|enter",
+    "hashWait|17",
+    "key|enter",
+    "hashWait|18",
+    "key|enter",
+    "hashWait|19",
+    "key|enter",
+    "hashWait|20",
+    "key|enter",
+    "hashWait|21",
+    "key|enter",
+    "hashWait|22",
     "key|enter"
   ],
   "hashes": {
@@ -77,6 +109,118 @@
       "expected_CRCs": [
         "24EB6984"
       ],
+      "timeout": 10000
+    },
+    "7": {
+      "description": "SAN cert parse",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "8": {
+      "description": "hostname exact SAN match",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "9": {
+      "description": "hostname wildcard SAN match",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "10": {
+      "description": "wildcard rejects bare suffix",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "11": {
+      "description": "wildcard rejects multi-label",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "12": {
+      "description": "hostname mismatch rejected",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "13": {
+      "description": "CN fallback rejected (RFC 9525)",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "14": {
+      "description": "null hostname rejected",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "15": {
+      "description": "UTCTime parse known value",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "16": {
+      "description": "GeneralizedTime parse known value",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "17": {
+      "description": "time parse rejects no Z",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "18": {
+      "description": "validity window: inside",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "19": {
+      "description": "validity window: before notBefore",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "20": {
+      "description": "validity window: after notAfter",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "21": {
+      "description": "real expired cert rejected",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
+      "timeout": 10000
+    },
+    "22": {
+      "description": "ocsp steps 1-3",
+      "start": "vram_start",
+      "size": "vram_16_size",
+      "expected_CRCs": [],
       "timeout": 10000
     }
   }

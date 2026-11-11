@@ -1258,6 +1258,9 @@ int main(void)
     assert(tls_key_sign(digest, 32, sig, &signature_len, &aes, TLS_ALG_RSA_PKCS1_SHA256) == TLS_KEY_OP_INVALID);
     assert(tls_key_sign(digest, 32, sig, &signature_len, &ec.pubkey, TLS_ALG_ECDSA_SECP256R1_SHA256) == TLS_KEY_OP_INVALID);
     sha384_server_hello_test();
+    ocsp_url_tests();
+    ocsp_sha1_test();
+    ocsp_build_request_test();
     puts("TLS signature dispatch/lifecycle regressions passed");
     return 0;
 }

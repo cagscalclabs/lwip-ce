@@ -426,6 +426,117 @@ if len(sys.argv) > 1:
     (out / 'tls_unit.c').write_text(source + function(hs, 'tls_cert_walker_feed'))
     sys.exit(0)
 
+# ---------------------------------------------------------------------------
+# OCSP steps 1-3 host tests — injected BEFORE test.c (which contains main()).
+# ---------------------------------------------------------------------------
+
+def aia_extension(entries):
+    """Build a DER AIA extension (id-pe-authorityInfoAccess).
+
+    entries: list of (access_method_oid_hex, access_location_tag, value_bytes)
+    Returns the full Extension SEQUENCE bytes.
+    """
+    access_descs = b''
+    for method_hex, loc_tag, loc_val in entries:
+        method_oid = oid(method_hex)
+        loc = tlv(loc_tag, loc_val)
+        access_descs += seq(method_oid + loc)
+    access_list = tlv(0x30, access_descs)
+    ext_value = tlv(4, access_list)
+    return seq(oid('2b06010505070101') + ext_value)
+
+def extensions_inner_with_aia(aia_ext, *extra):
+    """Return the raw SEQUENCE OF Extension bytes (no [3] wrapper) for passing
+    directly to tls_x509_get_ocsp_url as ext_data."""
+    return seq(*(list(base_extensions) + [aia_ext] + list(extra)))
+
+_ocsp_url = b'http://ocsp.example.com'
+_cai_url  = b'http://ca.example.com/issuer.crt'
+
+aia_ocsp_only        = aia_extension([('2b06010505073001', 0x86, _ocsp_url)])
+aia_caissuers_only   = aia_extension([('2b06010505073002', 0x86, _cai_url)])
+aia_ocsp_and_cai     = aia_extension([
+    ('2b06010505073001', 0x86, _ocsp_url),
+    ('2b06010505073002', 0x86, _cai_url),
+])
+aia_cai_then_ocsp    = aia_extension([
+    ('2b06010505073002', 0x86, _cai_url),
+    ('2b06010505073001', 0x86, _ocsp_url),
+])
+
+ext_with_ocsp     = extensions_inner_with_aia(aia_ocsp_only)
+ext_no_ocsp       = extensions_inner_with_aia(aia_caissuers_only)
+ext_ocsp_and_cai  = extensions_inner_with_aia(aia_ocsp_and_cai)
+ext_cai_then_ocsp = extensions_inner_with_aia(aia_cai_then_ocsp)
+
+def _c_bytes(data):
+    return ','.join(map(str, data))
+
+ocsp_checks = []
+def ocsp_url_case(ext_bytes, expected_url):
+    idx = len(ocsp_checks)
+    source_name = f'ocsp_ext_{idx}'
+    null_or_str = f'"{expected_url}"' if expected_url is not None else 'NULL'
+    ocsp_checks.append((source_name, ext_bytes, expected_url, null_or_str))
+
+ocsp_url_case(ext_with_ocsp,     _ocsp_url.decode())
+ocsp_url_case(ext_no_ocsp,       None)
+ocsp_url_case(ext_ocsp_and_cai,  _ocsp_url.decode())
+ocsp_url_case(ext_cai_then_ocsp, _ocsp_url.decode())
+ocsp_url_case(b'',               None)
+
+source += '#include "ocsp.h"\n'
+for name, ext_bytes, _, _ in ocsp_checks:
+    _eb = ext_bytes if ext_bytes else b'\x00'
+    source += f'static const uint8_t {name}[] = {{{_c_bytes(_eb)}}};\n'
+source += 'static void ocsp_url_tests(void) {\n'
+for name, ext_bytes, expected_url, null_or_str in ocsp_checks:
+    ext_len = len(ext_bytes)
+    null_ptr = 'NULL' if ext_len == 0 else name
+    source += f'  {{ char *url = NULL;\n'
+    source += f'    assert(tls_x509_get_ocsp_url({null_ptr}, {ext_len}, &url));\n'
+    if expected_url is not None:
+        source += f'    assert(url && strcmp(url, {null_or_str}) == 0);\n'
+        source += f'    free(url);\n'
+    else:
+        source += f'    assert(url == NULL);\n'
+    source += '  }\n'
+source += '}\n'
+
+source += (
+    'static void ocsp_sha1_test(void) {\n'
+    '  static const uint8_t abc[] = {0x61,0x62,0x63};\n'
+    '  static const uint8_t expected[] = {\n'
+    '    0xa9,0x99,0x3e,0x36,0x47,0x06,0x81,0x6a,0xba,0x3e,\n'
+    '    0x25,0x71,0x78,0x50,0xc2,0x6c,0x9c,0xd0,0xd8,0x9d\n'
+    '  };\n'
+    '  uint8_t nh[OCSP_SHA1_LEN], kh[OCSP_SHA1_LEN];\n'
+    '  assert(tls_ocsp_hash_issuer(abc, 3, abc, 3, nh, kh));\n'
+    '  assert(memcmp(nh, expected, OCSP_SHA1_LEN) == 0);\n'
+    '  assert(memcmp(kh, expected, OCSP_SHA1_LEN) == 0);\n'
+    '}\n'
+)
+source += (
+    'static void ocsp_build_request_test(void) {\n'
+    '  static const uint8_t serial[] = {0x01,0x02,0x03};\n'
+    '  uint8_t nh[OCSP_SHA1_LEN], kh[OCSP_SHA1_LEN];\n'
+    '  memset(nh, 0xAA, OCSP_SHA1_LEN);\n'
+    '  memset(kh, 0xBB, OCSP_SHA1_LEN);\n'
+    '  uint8_t *req = NULL; size_t req_len = 0;\n'
+    '  assert(tls_ocsp_build_request(serial, sizeof(serial), nh, kh, &req, &req_len));\n'
+    '  assert(req && req_len > 0);\n'
+    '  assert(req[0] == 0x30);\n'
+    '  int found = 0;\n'
+    '  for (size_t i = 0; i + 3 <= req_len; i++)\n'
+    '    if (memcmp(req+i, serial, 3) == 0) { found = 1; break; }\n'
+    '  assert(found);\n'
+    '  free(req);\n'
+    '  assert(!tls_ocsp_build_request(NULL, 1, nh, kh, &req, &req_len));\n'
+    '  assert(!tls_ocsp_build_request(serial, 0, nh, kh, &req, &req_len));\n'
+    '  assert(!tls_ocsp_build_request(serial, 21, nh, kh, &req, &req_len));\n'
+    '}\n'
+)
+
 source += (here / 'test.c').read_text()
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -434,6 +545,15 @@ with tempfile.TemporaryDirectory() as tmp:
     (tmp / 'lwip/logging.h').write_text(LOGGING_SHIM)
     unit = tmp / 'test.c'
     unit.write_text(source)
+    # ocsp.c calls tls_fileio_alloc/free as external symbols; provide them in a
+    # separate TU so the static definitions in mock.h don't interfere.
+    alloc_shim = tmp / 'ocsp_alloc_shim.c'
+    alloc_shim.write_text(
+        '#include <stdlib.h>\n'
+        '#include <stddef.h>\n'
+        'void *tls_fileio_alloc(size_t n) { return malloc(n); }\n'
+        'void  tls_fileio_free(void *p)   { free(p); }\n'
+    )
     binary = tmp / 'test'
     subprocess.run(['cc', '-std=c99', '-g', '-Wall', '-Wextra',
                     '-Wno-unused-function', '-Wno-unused-parameter',
@@ -441,5 +561,8 @@ with tempfile.TemporaryDirectory() as tmp:
                     '-I' + str(tmp), '-I' + str(root / 'src/tls/includes'),
                     '-I' + str(root / 'src/tls/core'), str(unit),
                     str(root / 'src/tls/core/asn1.c'),
-                   str(root / 'src/tls/core/base64.c'), '-o', str(binary)], check=True)
+                    str(root / 'src/tls/core/base64.c'),
+                    str(root / 'src/tls/core/ocsp.c'),
+                    str(alloc_shim),
+                    '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

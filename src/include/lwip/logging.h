@@ -99,6 +99,7 @@ typedef enum lwip_debug_file_id
     LWIP_FILE_LOG_FILE,             /* core/log_file.c           */
 
     /* Appended to preserve existing traceback IDs. */
+    LWIP_FILE_OCSP,                 /* tls/core/ocsp.c           */
     LWIP_FILE_DNS,
     LWIP_FILE_UDP,
     LWIP_FILE_IP4,

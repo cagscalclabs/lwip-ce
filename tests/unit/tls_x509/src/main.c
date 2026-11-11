@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include <lwip/cryptography/x509.h>
+#include <lwip/cryptography/ocsp.h>
 #include <lwip.h>
 
 static void draw_line(const char *msg, int *y)
@@ -259,6 +260,91 @@ static const char cert2_pem[] =
     "i7P5ofHug8rThiTS\n"
     "-----END CERTIFICATE-----\n";
 
+/*
+ * Minimal DER extensions block containing a single AIA extension with one
+ * id-ad-ocsp AccessDescription pointing to "http://r.example.com".
+ *
+ * Layout:
+ *   SEQUENCE {                              [outer extensions SEQUENCE OF]
+ *     SEQUENCE {                            [Extension]
+ *       OID 1.3.6.1.5.5.7.1.1             [id-pe-authorityInfoAccess]
+ *       OCTET STRING {
+ *         SEQUENCE {                        [AccessDescriptions]
+ *           SEQUENCE {                      [AccessDescription]
+ *             OID 1.3.6.1.5.5.7.48.1       [id-ad-ocsp]
+ *             [6] "http://r.example.com"
+ *           }
+ *         }
+ *       }
+ *     }
+ *   }
+ */
+static const uint8_t ocsp_ext_der[] = {
+    /* outer SEQUENCE OF Extension */
+    0x30, 0x2f,
+      /* Extension SEQUENCE */
+      0x30, 0x2d,
+        /* OID id-pe-authorityInfoAccess */
+        0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x01,
+        /* OCTET STRING wrapping the AccessDescriptions */
+        0x04, 0x21,
+          /* AccessDescriptions SEQUENCE */
+          0x30, 0x1f,
+            /* AccessDescription SEQUENCE */
+            0x30, 0x1d,
+              /* OID id-ad-ocsp */
+              0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01,
+              /* [6] IMPLICIT IA5String "http://r.example.com" (19 bytes) */
+              0x86, 0x13,
+                'h','t','t','p',':','/','/','r','.','e','x','a','m','p','l','e','.','c','o','m'
+};
+
+static bool test_ocsp_steps(void)
+{
+    bool ok = true;
+    char *url = NULL;
+
+    /* Step 1: URL extraction */
+    if (!tls_x509_get_ocsp_url(ocsp_ext_der, sizeof(ocsp_ext_der), &url))
+        return false;
+    if (!url) return false;
+    if (strcmp(url, "http://r.example.com") != 0) { tls_ocsp_free(url); return false; }
+    tls_ocsp_free(url);
+
+    /* Step 1b: absent extensions return NULL without error */
+    url = NULL;
+    if (!tls_x509_get_ocsp_url(NULL, 0, &url)) return false;
+    if (url != NULL) return false;
+
+    /* Step 2: hash_issuer with known SHA-1("abc") vector */
+    static const uint8_t abc[] = {'a', 'b', 'c'};
+    static const uint8_t sha1_abc[] = {
+        0xa9,0x99,0x3e,0x36,0x47,0x06,0x81,0x6a,0xba,0x3e,
+        0x25,0x71,0x78,0x50,0xc2,0x6c,0x9c,0xd0,0xd8,0x9d
+    };
+    uint8_t nh[OCSP_SHA1_LEN], kh[OCSP_SHA1_LEN];
+    if (!tls_ocsp_hash_issuer(abc, 3, abc, 3, nh, kh)) return false;
+    if (memcmp(nh, sha1_abc, OCSP_SHA1_LEN) != 0) return false;
+    if (memcmp(kh, sha1_abc, OCSP_SHA1_LEN) != 0) return false;
+    if (tls_ocsp_hash_issuer(NULL, 0, abc, 3, nh, kh)) return false;
+
+    /* Step 3: build_request returns a valid DER SEQUENCE */
+    static const uint8_t serial[] = {0x01, 0x02, 0x03};
+    uint8_t *req = NULL;
+    size_t req_len = 0;
+    if (!tls_ocsp_build_request(serial, sizeof(serial), nh, kh, &req, &req_len))
+        return false;
+    if (!req || req_len == 0) return false;
+    ok = (req[0] == 0x30);
+    tls_ocsp_free(req);
+
+    /* Bad args rejected */
+    if (tls_ocsp_build_request(NULL, 1, nh, kh, &req, &req_len)) return false;
+    if (tls_ocsp_build_request(serial, 0, nh, kh, &req, &req_len)) return false;
+
+    return ok;
+}
+
 int main(void)
 {
     uint8_t der_patched[1800];
@@ -449,6 +535,8 @@ int main(void)
 
         tls_x509_object_free(obj_san);
     }
+
+    ok &= show_result("ocsp steps 1-3", test_ocsp_steps());
 
     os_ClrHome();
     tls_x509_object_free(obj1);
