@@ -115,112 +115,112 @@
       "description": "SAN cert parse",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["48125B10"],
       "timeout": 10000
     },
     "8": {
       "description": "hostname exact SAN match",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["BA114363"],
       "timeout": 10000
     },
     "9": {
       "description": "hostname wildcard SAN match",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["A699EA3D"],
       "timeout": 10000
     },
     "10": {
       "description": "wildcard rejects bare suffix",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["105678E6"],
       "timeout": 10000
     },
     "11": {
       "description": "wildcard rejects multi-label",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["280EB93C"],
       "timeout": 10000
     },
     "12": {
       "description": "hostname mismatch rejected",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["CE4D2164"],
       "timeout": 10000
     },
     "13": {
       "description": "CN fallback rejected (RFC 9525)",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["3B9A9D5F"],
       "timeout": 10000
     },
     "14": {
       "description": "null hostname rejected",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["FBB3C470"],
       "timeout": 10000
     },
     "15": {
       "description": "UTCTime parse known value",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["3473C2A8"],
       "timeout": 10000
     },
     "16": {
       "description": "GeneralizedTime parse known value",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["51323635"],
       "timeout": 10000
     },
     "17": {
       "description": "time parse rejects no Z",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["B5A05DC5"],
       "timeout": 10000
     },
     "18": {
       "description": "validity window: inside",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["E130F350"],
       "timeout": 10000
     },
     "19": {
       "description": "validity window: before notBefore",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["832A78CC"],
       "timeout": 10000
     },
     "20": {
       "description": "validity window: after notAfter",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["B07848E5"],
       "timeout": 10000
     },
     "21": {
       "description": "real expired cert rejected",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["7ED1DC68"],
       "timeout": 10000
     },
     "22": {
       "description": "ocsp steps 1-3",
       "start": "vram_start",
       "size": "vram_16_size",
-      "expected_CRCs": [],
+      "expected_CRCs": ["726ABF89"],
       "timeout": 10000
     }
   }

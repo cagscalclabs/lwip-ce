@@ -362,6 +362,7 @@ const char *lwip_debug_file_name(uint8_t file_id)
     case LWIP_FILE_LOGGING:              return "logging.c";
     case LWIP_FILE_MAIN:                 return "main.c";
     case LWIP_FILE_LOG_FILE:             return "log_file.c";
+    case LWIP_FILE_OCSP:                 return "ocsp.c";
     default:                             return "?";
     }
 }

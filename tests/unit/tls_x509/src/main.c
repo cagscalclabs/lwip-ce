@@ -281,21 +281,21 @@ static const char cert2_pem[] =
  */
 static const uint8_t ocsp_ext_der[] = {
     /* outer SEQUENCE OF Extension */
-    0x30, 0x2f,
+    0x30, 0x32,
       /* Extension SEQUENCE */
-      0x30, 0x2d,
+      0x30, 0x30,
         /* OID id-pe-authorityInfoAccess */
         0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x01,
         /* OCTET STRING wrapping the AccessDescriptions */
-        0x04, 0x21,
+        0x04, 0x24,
           /* AccessDescriptions SEQUENCE */
-          0x30, 0x1f,
+          0x30, 0x22,
             /* AccessDescription SEQUENCE */
-            0x30, 0x1d,
+            0x30, 0x20,
               /* OID id-ad-ocsp */
               0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01,
-              /* [6] IMPLICIT IA5String "http://r.example.com" (19 bytes) */
-              0x86, 0x13,
+              /* [6] IMPLICIT IA5String "http://r.example.com" (20 bytes) */
+              0x86, 0x14,
                 'h','t','t','p',':','/','/','r','.','e','x','a','m','p','l','e','.','c','o','m'
 };
 

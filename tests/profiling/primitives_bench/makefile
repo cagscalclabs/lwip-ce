@@ -2,10 +2,10 @@
 # Makefile Options
 # ----------------------------
 NAME = XPBENCH
-ARCHIVED = NO
+ARCHIVED = YES
 BSSHEAP_LOW = 0xD072C6
 DESCRIPTION = "tls primitives bench"
-COMPRESSED = NO
+COMPRESSED = YES
 
 CFLAGS = -Wall -Wextra -Oz
 CXXFLAGS = -Wall -Wextra -Oz

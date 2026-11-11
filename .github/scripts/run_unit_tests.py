@@ -158,11 +158,19 @@ def run_unit(test_dir: Path) -> dict:
 
         unit_status = "pass" if rc == 0 else "fail"
 
+    # A nonzero autotester exit without a hash-specific diagnostic usually
+    # means the manifest was invalid or the program failed before the first
+    # hash.  Do not misreport every hash as passing in that case.
+    unit_error = rc != 0 and not failed_hashes and not timed_out and not quirk
+    error_tail = ""
+    if unit_error:
+        error_tail = "\n".join(line for line in log.splitlines() if line.strip())[-2000:]
+
     # ---- per-test status
     tests: list[dict] = []
     for hid in hash_ids:
         desc = hash_descs.get(hid, f"Hash {hid}")
-        if timed_out or quirk:
+        if timed_out or quirk or unit_error:
             t_status = "skip"
         elif hid in failed_hashes:
             t_status = "fail"
@@ -170,12 +178,15 @@ def run_unit(test_dir: Path) -> dict:
             t_status = "pass"
         tests.append({"test": f"Hash {hid}", "description": desc, "status": t_status})
 
-    return {
+    result = {
         "unit": uname,
         "description": udesc,
         "status": unit_status,
         "tests": tests,
     }
+    if unit_error:
+        result["error"] = error_tail or f"autotester exited with status {rc}"
+    return result
 
 
 # --------------------------------------------------------------------- main
@@ -217,8 +228,13 @@ def main() -> None:
             status = unit_result["status"]
             failed_tests = [t for t in unit_result.get("tests", []) if t["status"] == "fail"]
             if status == "fail":
-                for t in failed_tests:
-                    print(f"::error::{umod}/{uname}: FAIL — {t['description']}", flush=True)
+                if failed_tests:
+                    for t in failed_tests:
+                        print(f"::error::{umod}/{uname}: FAIL — {t['description']}", flush=True)
+                else:
+                    print(f"::error::{umod}/{uname}: FAIL before a hash-specific result", flush=True)
+                    if unit_result.get("error"):
+                        print(unit_result["error"], flush=True)
             elif status == "skip":
                 reason = "build error" if unit_result.get("build_error") else "timeout/quirk"
                 print(f"::warning::{umod}/{uname}: SKIP ({reason})", flush=True)
