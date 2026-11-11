@@ -455,10 +455,59 @@ static void test_suite_forced(const char *suite_name, const char *cipher_arg,
     check(name, strstr(result, "handshake completed") != NULL);
 }
 
+static void test_ocsp_case(const char *name, const char *status,
+                           bool want_connected, bool want_request)
+{
+    struct lwip_socket *sock;
+    char command[32], result[96], count[16];
+    bool connected;
+
+    snprintf(command, sizeof(command), "ocsp-mode %s", status);
+    if (!check(name, host_call(command, NULL, 0, 5000) &&
+                     host_call("suite-server gcm ecdsa", NULL, 0, 15000)))
+        return;
+
+    sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL,
+                              30000);
+    if (!sock || lwip_socket_connect(sock, HOST, PORT_PSK) != LWIP_OK)
+    {
+        connected = false;
+    }
+    else
+    {
+        pump(not_connecting, sock, 45000);
+        connected = lwip_socket_status(sock) == LWIP_STATUS_CONNECTED;
+    }
+    note("  %s: status %u err %u", name,
+         sock ? lwip_socket_status(sock) : 0,
+         sock ? lwip_socket_last_error(sock) : 0);
+    if (sock)
+    {
+        if (connected)
+            close_socket(sock);
+        else
+            lwip_socket_destroy(sock);
+    }
+
+    snprintf(line, sizeof(line), "%s handshake", name);
+    check(line, connected == want_connected);
+    snprintf(line, sizeof(line), "%s responder lookup", name);
+    check(line, host_call("ocsp-count", count, sizeof(count), 5000) &&
+                ((strtoul(count, NULL, 10) != 0) == want_request));
+    snprintf(line, sizeof(line), "%s peer result", name);
+    if (check(line, host_call("suite-result", result, sizeof(result), 10000)))
+    {
+        check(want_connected ? "OCSP peer completed handshake"
+                             : "OCSP peer received revoked alert",
+              want_connected ? strstr(result, "handshake completed") != NULL
+                             : strstr(result, "CERTIFICATE_REVOKED") != NULL);
+    }
+}
+
 
 int main(void)
 {
-    char test_mode[12] = {0};
+    char test_mode[16] = {0};
     char local_trust[4] = {0};
     char runner_time[16] = {0};
     for (uint8_t i = 0; i < 32; i++) psk[i] = pattern(i);
@@ -486,6 +535,21 @@ int main(void)
             return net_end();
         }
 
+        if (!strcmp(test_mode, "ocsp-good") ||
+            !strcmp(test_mode, "ocsp-revoked"))
+        {
+            bool revoked = !strcmp(test_mode, "ocsp-revoked");
+            check("runner time installed", time_ok && lwip_sntp_time_was_set());
+            check("runner-local CA truststore provisioned",
+                  host_call("local-trust", local_trust, sizeof(local_trust), 5000) &&
+                  local_trust[0] == '1');
+            test_ocsp_case(revoked ? "OCSP revoked checking on"
+                                    : "OCSP good checking on",
+                           revoked ? "revoked" : "good",
+                           !revoked, true);
+            return net_end();
+        }
+
         check("runner time installed", time_ok && lwip_sntp_time_was_set());
         psk_matrix("gcm", "x25519", "TLS_AES_128_GCM_SHA256", "X25519");
         psk_matrix("ccm", "x25519", "TLS_AES_128_CCM_SHA256", "X25519");
@@ -503,6 +567,7 @@ int main(void)
                   host_call("local-trust", local_trust, sizeof(local_trust), 5000) &&
                   local_trust[0] == '1'))
         {
+            test_ocsp_case("OCSP good checking off", "good", true, false);
             test_suite_forced("AES-128-GCM-SHA256", "gcm", "ecdsa");
             test_suite_forced("AES-128-GCM-SHA256", "gcm", "rsa");
             test_suite_forced("AES-128-CCM-SHA256", "ccm", "ecdsa");

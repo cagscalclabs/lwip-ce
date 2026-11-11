@@ -1061,6 +1061,32 @@ static void extended_key_usage_tests(void)
                                          sizeof(cert_eku_malformed_oid), false));
 }
 
+static bool ocsp_responder_extensions_valid(const uint8_t *der, size_t der_len)
+{
+    struct tls_x509_object cert;
+    assert(tls_x509_parse_certificate(der, der_len, &cert));
+    return tls_x509_validate_ocsp_responder_extensions(&cert);
+}
+
+static void ocsp_responder_extension_tests(void)
+{
+    assert(ocsp_responder_extensions_valid(cert_ocsp, sizeof(cert_ocsp)));
+    assert(ocsp_responder_extensions_valid(cert_ocsp_no_ku,
+                                           sizeof(cert_ocsp_no_ku)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_bad_ku,
+                                            sizeof(cert_ocsp_bad_ku)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_ca,
+                                            sizeof(cert_ocsp_ca)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_server,
+                                            sizeof(cert_ocsp_server)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_any,
+                                            sizeof(cert_ocsp_any)));
+    assert(!ocsp_responder_extensions_valid(
+        cert_ocsp_unknown_critical, sizeof(cert_ocsp_unknown_critical)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_duplicate,
+                                            sizeof(cert_ocsp_duplicate)));
+}
+
 int main(void)
 {
     client_certificate_flight_tests();
@@ -1089,6 +1115,7 @@ int main(void)
     path_len_tests();
     name_constraint_tests();
     extended_key_usage_tests();
+    ocsp_responder_extension_tests();
     ALG(alg_pkcs, true, TLS_ALG_RSA_PKCS1_SHA256);
     ALG(alg_pss, true, TLS_ALG_RSA_PSS_RSAE_SHA256);
     ALG(alg_pss_trailer, true, TLS_ALG_RSA_PSS_RSAE_SHA256);

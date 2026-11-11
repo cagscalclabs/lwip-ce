@@ -32,6 +32,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -45,6 +46,7 @@ HOST6 = "fd00:84::1"
 IFACE = "cemu0"
 CONTROL = None
 BULK_BYTES = 262144
+PORT_OCSP = 7015
 # CRC-32C of a solid green / red 8bpp screen: the suites' pass and fail verdicts.
 VERDICT_CRCS = ["A511C030", "22D544B5"]
 # CRC-32C of the home screen after the calc reset itself (crash).
@@ -269,9 +271,44 @@ class TLSBad(Handler):
             self.outcomes.append(e.reason or str(e))
 
 
+class OCSPResponder(Handler):
+    """Minimal runner-local HTTP transport for pre-signed OCSP responses."""
+
+    def serve(self):
+        head = b""
+        while b"\r\n\r\n" not in head and len(head) < 8192:
+            data = self.request.recv(1024)
+            if not data:
+                return
+            head += data
+        header, _, body = head.partition(b"\r\n\r\n")
+        length = re.search(rb"(?im)^Content-Length:\s*(\d+)\s*$", header)
+        if not header.startswith(b"POST /ocsp HTTP/") or not length:
+            self.request.sendall(b"HTTP/1.0 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            return
+        remaining = int(length.group(1)) - len(body)
+        if remaining < 0 or remaining > 65535:
+            return
+        if remaining:
+            body += self.recv_exact(remaining)
+        control = CONTROL
+        if control is None or control.ocsp_mode not in control.ocsp_responses:
+            self.request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            return
+        control.ocsp_requests += 1
+        response = control.ocsp_responses[control.ocsp_mode]
+        self.request.sendall(
+            b"HTTP/1.0 200 OK\r\nContent-Type: application/ocsp-response\r\n"
+            + f"Content-Length: {len(response)}\r\nConnection: close\r\n\r\n".encode()
+            + response
+        )
 
 
-def local_ca_fixtures(tmp: Path) -> dict[str, tuple[Path, Path]]:
+
+
+def local_ca_fixtures(
+    tmp: Path,
+) -> tuple[dict[str, tuple[Path, Path]], dict[str, bytes]]:
     """Create an ephemeral CA and locally signed RSA/ECDSA server leaves."""
     ca_key = tmp / "local-ca-key.pem"
     ca_cert = tmp / "local-ca-cert.pem"
@@ -293,6 +330,7 @@ def local_ca_fixtures(tmp: Path) -> dict[str, tuple[Path, Path]]:
         f"subjectAltName=IP:{HOST}\n"
         "subjectKeyIdentifier=hash\n"
         "authorityKeyIdentifier=keyid,issuer\n"
+        f"authorityInfoAccess=OCSP;URI:http://{HOST}:{PORT_OCSP}/ocsp\n"
     )
     fixtures: dict[str, tuple[Path, Path]] = {}
     for serial, key_type in enumerate(("ecdsa", "rsa"), start=100):
@@ -323,7 +361,30 @@ def local_ca_fixtures(tmp: Path) -> dict[str, tuple[Path, Path]]:
         fixtures[key_type] = (cert, key)
     fixtures["ca"] = (ca_cert, ca_key)
 
-    return fixtures
+    request = tmp / "ocsp-request.der"
+    subprocess.run(
+        ["openssl", "ocsp", "-issuer", str(ca_cert),
+         "-cert", str(fixtures["ecdsa"][0]), "-reqout", str(request)],
+        check=True, capture_output=True,
+    )
+    responses: dict[str, bytes] = {}
+    revoked_at = datetime.now(timezone.utc).strftime("%y%m%d%H%M%SZ")
+    for status, index_line in {
+        "good": f"V\t351231235959Z\t\t64\tunknown\t/CN={HOST}\n",
+        "revoked": f"R\t351231235959Z\t{revoked_at}\t64\tunknown\t/CN={HOST}\n",
+    }.items():
+        index = tmp / f"ocsp-{status}.index"
+        response = tmp / f"ocsp-{status}.der"
+        index.write_text(index_line)
+        subprocess.run(
+            ["openssl", "ocsp", "-index", str(index), "-CA", str(ca_cert),
+             "-rsigner", str(ca_cert), "-rkey", str(ca_key),
+             "-reqin", str(request), "-respout", str(response), "-ndays", "1"],
+            check=True, capture_output=True,
+        )
+        responses[status] = response.read_bytes()
+
+    return fixtures, responses
 
 
 def local_server_context(tmp: Path, fixtures: dict[str, tuple[Path, Path]]):
@@ -335,6 +396,18 @@ def local_server_context(tmp: Path, fixtures: dict[str, tuple[Path, Path]]):
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     ctx.load_cert_chain(chain, key)
     return ctx
+
+
+def build_test_config(enabled: bool, output: Path, convbin: Path) -> None:
+    """Package the tagged lwIPCFG OCSP setting consumed during bootstrap."""
+    payload = b"LWCF" + bytes((1, 8, 3, 0, 13, 1, int(enabled)))
+    raw = output.with_suffix(".bin")
+    raw.write_bytes(payload)
+    subprocess.run(
+        [str(convbin), "-i", str(raw), "-o", str(output),
+         "-j", "bin", "-k", "8xv", "-n", "lwIPCFG", "-r"],
+        check=True, capture_output=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -392,10 +465,13 @@ def link_local() -> str:
 
 class Control:
     def __init__(self, tmp: Path, fixtures: dict[str, tuple[Path, Path]],
-                 local_trust: bool):
+                 local_trust: bool, ocsp_responses: dict[str, bytes]):
         self.tmp = tmp
         self.fixtures = fixtures
         self.local_trust = local_trust
+        self.ocsp_responses = ocsp_responses
+        self.ocsp_mode = "good"
+        self.ocsp_requests = 0
         self.test_mode = "local"
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -461,6 +537,16 @@ class Control:
 
     def cmd_local_trust(self) -> str:
         return "1" if self.local_trust else "0"
+
+    def cmd_ocsp_mode(self, mode: str) -> str:
+        if mode not in self.ocsp_responses:
+            return f"ERR unknown OCSP mode {mode!r}"
+        self.ocsp_mode = mode
+        self.ocsp_requests = 0
+        return "OK"
+
+    def cmd_ocsp_count(self) -> str:
+        return str(self.ocsp_requests)
 
     def cmd_test_mode(self) -> str:
         return self.test_mode
@@ -545,6 +631,8 @@ class Control:
         log("suite s_server output:\n" + out)
         if re.search(r"unknown CA|unknown_ca|tlsv13 alert unknown ca", out, re.I):
             return "UNKNOWN_CA"
+        if re.search(r"certificate revoked|alert number 44", out, re.I):
+            return "CERTIFICATE_REVOKED"
         if re.search(r"decrypt.error|bad.record.mac|handshake.failure", out, re.I):
             m = re.search(r"error[^\n]{0,120}", out, re.I)
             return f"CRYPTO_ERROR {m.group(0)[:80] if m else ''}"
@@ -877,7 +965,8 @@ def serve(server, port: int, handler):
 # ---------------------------------------------------------------------------
 
 def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int,
-                   truststore: Path | None = None) -> None:
+                   truststore: Path | None = None,
+                   config: Path | None = None) -> None:
     program = SUITES[suite]
     suite_dir = HERE / suite
     relative = lambda item: os.path.relpath(item, path.parent)
@@ -889,10 +978,12 @@ def write_autotest(path: Path, suite: str, usb: str, timeout_ms: int,
     )
     common = [f for f in COMMON.glob("*.8x*")
               if not f.name.startswith(".") and not preinstalled.fullmatch(f.name)
-              and (truststore is None or f.name != "lwIPCERT.8xv")]
+              and (truststore is None or f.name != "lwIPCERT.8xv")
+              and (config is None or f.name != "lwIPCFG.8xv")]
     files = ([relative(suite_dir / "bin" / f"{program}.8xp")]
              + sorted(relative(f) for f in common)
              + ([relative(truststore)] if truststore else [])
+             + ([relative(config)] if config else [])
              + extra)
     path.write_text(json.dumps({
         "description": f"lwIP-CE networked suite {program}",
@@ -1068,13 +1159,14 @@ def corroborate_external_https_failures(text: str, probe=host_https_probe) -> tu
 
 def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int,
               *, run_name: str | None = None,
-              truststore: Path | None = None) -> tuple[bool, str, dict, list[dict]]:
+              truststore: Path | None = None,
+              config: Path | None = None) -> tuple[bool, str, dict, list[dict]]:
     run_name = run_name or suite
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     autotest = ARTIFACTS / f"autotest-{run_name}.json"
     log_path = ARTIFACTS / "NETLOG.8xv"
     log_path.unlink(missing_ok=True)
-    write_autotest(autotest, suite, usb, timeout_ms, truststore)
+    write_autotest(autotest, suite, usb, timeout_ms, truststore, config)
     started = time.monotonic()
     crashed = False
     proc = subprocess.Popen([autotester, str(autotest)], cwd=ARTIFACTS, stdout=subprocess.PIPE,
@@ -1189,9 +1281,11 @@ def main() -> int:
     setup_interface()
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        fixtures = local_ca_fixtures(tmp)
+        fixtures, ocsp_responses = local_ca_fixtures(tmp)
         local_trust = args.truststore_signer is not None
         local_truststore = tmp / "lwIPCERT-local.8xv"
+        config_off = tmp / "lwIPCFG-off.8xv"
+        config_on = tmp / "lwIPCFG-on.8xv"
         if local_trust:
             subprocess.run(
                 [sys.executable, str(HERE / "generate_test_truststore.py"),
@@ -1201,16 +1295,19 @@ def main() -> int:
                  "--convbin", str(args.convbin)],
                 check=True,
             )
+            build_test_config(False, config_off, args.convbin)
+            build_test_config(True, config_on, args.convbin)
         TLSBad.context = local_server_context(tmp, fixtures)
         for server, port, handler in [
             (TCP6, 7001, Echo), (UDP6, 7002, UDPEcho), (TCP, 7004, WebSocketEcho), (TCP, 7005, TLSBad),
             (TCP, 7006, Bulk), (TCP, 7007, Sink), (TCP, 7008, Hold), (TCP, 7009, HalfClose),
             (TCP, 7010, Reset), (TCP, 7011, Closer), (TCP, 7012, ExpectReset), (UDP, 7013, Broadcast), (UDP6, 7014, UDPLength),
             (TCP6, 7016, SizedBulk),
+            (TCP, PORT_OCSP, OCSPResponder),
         ]:
             serve(server, port, handler)
         global CONTROL
-        control = CONTROL = Control(tmp, fixtures, local_trust)
+        control = CONTROL = Control(tmp, fixtures, local_trust, ocsp_responses)
         capture = None
         if os.geteuid() == 0:
             try:
@@ -1227,16 +1324,39 @@ def main() -> int:
         for suite in requested_suites:
             log(f"running {SUITES[suite]}")
             truststore = local_truststore if suite == "tls" else None
+            config = config_off if suite == "tls" else None
             control.test_mode = "local"
             ok, text, values, probes = run_suite(
                 suite, args.autotester, args.usb, args.timeout,
-                truststore=truststore,
+                truststore=truststore, config=config,
             )
             metrics[suite] = values
             endpoint_probes.extend({"suite": suite, **probe} for probe in probes)
-            results.append((suite, ok, text))
+            suite_ok = ok
+            suite_text = text
             print(text, flush=True)
             time.sleep(3)
+
+            if suite == "tls":
+                for mode in ("ocsp-good", "ocsp-revoked"):
+                    control.test_mode = mode
+                    log(f"running NETTLS {mode} with OCSP-enabled lwIPCFG")
+                    mode_ok, mode_text, mode_values, mode_probes = run_suite(
+                        suite, args.autotester, args.usb, args.timeout,
+                        run_name=f"tls-{mode}", truststore=truststore,
+                        config=config_on,
+                    )
+                    metrics[f"tls_{mode.replace('-', '_')}"] = mode_values
+                    endpoint_probes.extend(
+                        {"suite": f"tls-{mode}", **probe}
+                        for probe in mode_probes
+                    )
+                    suite_ok = suite_ok and mode_ok
+                    suite_text += mode_text
+                    print(mode_text, flush=True)
+                    time.sleep(3)
+
+            results.append((suite, suite_ok, suite_text))
 
             if suite == "tls" and args.external_info:
                 # Boot a fresh calculator with the unmodified production

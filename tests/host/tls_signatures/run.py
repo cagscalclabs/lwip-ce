@@ -153,6 +153,7 @@ def extensions_with_eku(eku=None):
 server_auth_purpose = oid('2b06010505070301')
 client_auth_purpose = oid('2b06010505070302')
 any_eku_purpose = oid('551d2500')
+ocsp_signing_purpose = oid('2b06010505070309')
 eku_any_extensions = extensions_with_eku(eku_extension(any_eku_purpose))
 eku_absent_extensions = extensions_with_eku()
 eku_client_extensions = extensions_with_eku(eku_extension(client_auth_purpose))
@@ -161,6 +162,32 @@ eku_critical_extensions = extensions_with_eku(
     eku_extension(server_auth_purpose, critical=True))
 eku_malformed_oid_extensions = extensions_with_eku(
     eku_extension(server_auth_purpose, tlv(6, b'\x80\x01')))
+
+ocsp_basic_non_ca = seq(oid('551d13'), tlv(1, b'\xff'), tlv(4, seq()))
+ocsp_digital_signature = seq(
+    oid('551d0f'), tlv(1, b'\xff'), tlv(4, tlv(3, b'\x07\x80')))
+ocsp_no_digital_signature = seq(
+    oid('551d0f'), tlv(1, b'\xff'), tlv(4, tlv(3, b'\x01\x06')))
+ocsp_eku = eku_extension(ocsp_signing_purpose)
+ocsp_extensions = tlv(0xa3, seq(
+    ocsp_basic_non_ca, ocsp_digital_signature, ocsp_eku))
+ocsp_extensions_no_ku = tlv(0xa3, seq(ocsp_basic_non_ca, ocsp_eku))
+ocsp_extensions_bad_ku = tlv(0xa3, seq(
+    ocsp_basic_non_ca, ocsp_no_digital_signature, ocsp_eku))
+ocsp_extensions_ca = tlv(0xa3, seq(
+    base_extensions[1], ocsp_digital_signature, ocsp_eku))
+ocsp_extensions_server = tlv(0xa3, seq(
+    ocsp_basic_non_ca, ocsp_digital_signature,
+    eku_extension(server_auth_purpose)))
+ocsp_extensions_any = tlv(0xa3, seq(
+    ocsp_basic_non_ca, ocsp_digital_signature,
+    eku_extension(any_eku_purpose)))
+ocsp_unknown_critical = seq(oid('2a0304'), tlv(1, b'\xff'), tlv(4, tlv(5, b'')))
+ocsp_extensions_unknown_critical = tlv(0xa3, seq(
+    ocsp_basic_non_ca, ocsp_digital_signature, ocsp_eku,
+    ocsp_unknown_critical))
+ocsp_extensions_duplicate = tlv(0xa3, seq(
+    ocsp_basic_non_ca, ocsp_digital_signature, ocsp_eku, ocsp_eku))
 
 
 nc_dns_permitted = nc_extension(permitted=(tlv(0x82, b'example.test'),))
@@ -238,6 +265,15 @@ vectors = {
     'cert_eku_critical': cert(pkcs, extensions=eku_critical_extensions),
     'cert_eku_malformed_oid': cert(pkcs,
                                   extensions=eku_malformed_oid_extensions),
+    'cert_ocsp': cert(pkcs, extensions=ocsp_extensions),
+    'cert_ocsp_no_ku': cert(pkcs, extensions=ocsp_extensions_no_ku),
+    'cert_ocsp_bad_ku': cert(pkcs, extensions=ocsp_extensions_bad_ku),
+    'cert_ocsp_ca': cert(pkcs, extensions=ocsp_extensions_ca),
+    'cert_ocsp_server': cert(pkcs, extensions=ocsp_extensions_server),
+    'cert_ocsp_any': cert(pkcs, extensions=ocsp_extensions_any),
+    'cert_ocsp_unknown_critical': cert(
+        pkcs, extensions=ocsp_extensions_unknown_critical),
+    'cert_ocsp_duplicate': cert(pkcs, extensions=ocsp_extensions_duplicate),
     'cert_ca_self_issued': cert(
         pkcs, issuer=rollover_name, subject=rollover_name),
     'cert_ca_rollover_parent': cert(
@@ -312,6 +348,7 @@ source += key_source[key_source.index('/* --------------------------------------
                      key_source.index('/* ---------------------------------------------------------------------------\n * AES one-shot encrypt')]
 for name in ['tls_cipher_blob_free', 'tls_cipher_encrypt', 'tls_cipher_encrypt_aad']:
     source += function(key_source, name)
+source += '#include "ocsp.h"\n'
 source += hs[hs.index('enum tls_cert_walk_state'):hs.index('/* Feed body bytes into the walker.')]
 
 # Certificate-chain splitting used when a cert listener/client config loads its
@@ -485,7 +522,6 @@ ocsp_url_case(ext_ocsp_and_cai,  _ocsp_url.decode())
 ocsp_url_case(ext_cai_then_ocsp, _ocsp_url.decode())
 ocsp_url_case(b'',               None)
 
-source += '#include "ocsp.h"\n'
 for name, ext_bytes, _, _ in ocsp_checks:
     _eb = ext_bytes if ext_bytes else b'\x00'
     source += f'static const uint8_t {name}[] = {{{_c_bytes(_eb)}}};\n'
@@ -556,6 +592,7 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     binary = tmp / 'test'
     subprocess.run(['cc', '-std=c99', '-g', '-Wall', '-Wextra',
+                    '-Duint24_t=uint32_t',
                     '-Wno-unused-function', '-Wno-unused-parameter',
                     '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                     '-I' + str(tmp), '-I' + str(root / 'src/tls/includes'),

@@ -186,6 +186,7 @@
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
 #include "../includes/x509.h"
+#include "../includes/ocsp.h"
 #include "../contrib/x25519/src/x25519.h"
 /* P-256 public API (assembly implementation in p256.s). */
 bool tls_p256_publickey(uint8_t pub[65], const uint8_t priv[32]);
@@ -737,6 +738,14 @@ struct tls_cert_walker
     uint8_t topmost_authority_key_id_len;
     bool topmost_authority_key_id_present;
 
+    /* Revocation material for the prior certificate. It is completed when
+     * that certificate's issuer arrives and transferred to the link job. */
+    char pending_ocsp_url[128];
+    uint8_t pending_ocsp_serial[20];
+    uint8_t pending_ocsp_serial_len;
+    uint8_t pending_ocsp_issuer_name_hash[OCSP_SHA1_LEN];
+    uint8_t pending_ocsp_issuer_key_hash[OCSP_SHA1_LEN];
+
 };
 
 static struct tls_cert_walker *tls_cert_walker_new(struct tls_handshake_context *ctx)
@@ -830,76 +839,8 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
                                           const uint8_t **sig_out,
                                           size_t *sig_len_out)
 {
-    struct tls_asn1_cursor top, items;
-    struct tls_asn1_tlv cert_seq, tbs, sig_alg, sig_val;
-
-    *sig_alg_out = TLS_ALG_UNKNOWN;
-
-    if (!tls_asn1_cursor_init(&top, der, der_len) ||
-        !tls_asn1_next(&top, &cert_seq) ||
-        tls_asn1_tag_number(cert_seq.tag) != ASN1_SEQUENCE ||
-        !tls_asn1_tag_constructed(cert_seq.tag))
-    {
-        ERROR_CODE(0x03);
-        return false;
-    }
-    if (!tls_asn1_child_cursor(&cert_seq, &items) ||
-        !tls_asn1_next(&items, &tbs) ||
-        !tls_asn1_next(&items, &sig_alg) ||
-        !tls_asn1_next(&items, &sig_val))
-    {
-        ERROR_CODE(0x04);
-        return false;
-    }
-    if (!tls_asn1_tag_constructed(tbs.tag) ||
-        tls_asn1_tag_number(tbs.tag) != ASN1_SEQUENCE ||
-        tls_asn1_tag_number(sig_val.tag) != ASN1_BITSTRING)
-    {
-        ERROR_CODE(0x05);
-        return false;
-    }
-
-    /* The signature covers the whole tbsCertificate TLV (tag+len+value). */
-    *tbs_out = tbs.tlv;
-    *tbs_len_out = tbs.header_len + tbs.len;
-
-    if (!tls_x509_signature_algorithm(&sig_alg, sig_alg_out))
-    {
-        ERROR_CODE(0x06);
-        return false;
-    }
-
-    /* The signed inner AlgorithmIdentifier must agree with the outer one. */
-    struct tls_asn1_cursor body;
-    struct tls_asn1_tlv serial, inner_alg;
-    if (!tls_asn1_child_cursor(&tbs, &body) || !tls_asn1_next(&body, &serial))
-    {
-        ERROR_CODE(0x07);
-        return false;
-    }
-    if (serial.tag == 0xa0 && !tls_asn1_next(&body, &serial))
-    {
-        ERROR_CODE(0x08);
-        return false;
-    }
-    if (serial.tag != ASN1_INTEGER || !tls_asn1_next(&body, &inner_alg) ||
-        inner_alg.tag != sig_alg.tag || inner_alg.len != sig_alg.len ||
-        memcmp(inner_alg.value, sig_alg.value, sig_alg.len))
-    {
-        ERROR_CODE(0x09);
-        return false;
-    }
-
-    /* signatureValue BIT STRING: first content byte is the unused-bits count
-     * (0 for a byte-aligned signature); the rest is the signature. */
-    if (sig_val.len < 2 || sig_val.value[0] != 0x00)
-    {
-        ERROR_CODE(0x0a);
-        return false;
-    }
-    *sig_out = sig_val.value + 1;
-    *sig_len_out = sig_val.len - 1;
-    return true;
+    return tls_x509_certificate_signature_material(
+        der, der_len, tbs_out, tbs_len_out, sig_alg_out, sig_out, sig_len_out);
 }
 
 /* An RSA check handed to the Wi-Fi bridge. It carries copies of everything
@@ -1293,6 +1234,12 @@ struct tls_cert_job
     uint8_t *issuer_mat;
     size_t issuer_mat_len;
 
+    char ocsp_url[128];
+    uint8_t ocsp_serial[20];
+    uint8_t ocsp_serial_len;
+    uint8_t ocsp_issuer_name_hash[OCSP_SHA1_LEN];
+    uint8_t ocsp_issuer_key_hash[OCSP_SHA1_LEN];
+
 };
 
 static void tls_cert_job_free(struct tls_cert_job *job)
@@ -1429,6 +1376,20 @@ static bool tls_cert_job_enqueue(struct tls_cert_walker *w, const struct tls_key
     job->snap.subordinate_names_cap = 0;
     job->is_root = (issuer == NULL);
 
+    if (!job->is_root && w->pending_ocsp_url[0] != '\0')
+    {
+        memcpy(job->ocsp_url, w->pending_ocsp_url, sizeof(job->ocsp_url));
+        job->ocsp_serial_len = w->pending_ocsp_serial_len;
+        memcpy(job->ocsp_serial, w->pending_ocsp_serial,
+               w->pending_ocsp_serial_len);
+        memcpy(job->ocsp_issuer_name_hash,
+               w->pending_ocsp_issuer_name_hash, OCSP_SHA1_LEN);
+        memcpy(job->ocsp_issuer_key_hash,
+               w->pending_ocsp_issuer_key_hash, OCSP_SHA1_LEN);
+        w->pending_ocsp_url[0] = '\0';
+        w->pending_ocsp_serial_len = 0;
+    }
+
     if (issuer && !tls_cert_job_clone_key(job, issuer))
     {
         job->snap.pending_sig = NULL; /* still owned by the walker */
@@ -1471,6 +1432,21 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         {
             ERROR_CODE(0x15);
             return false;
+        }
+
+        if (w->pending_ocsp_url[0] != '\0')
+        {
+            if (!cert->subject_pubkey_raw || cert->subject_pubkey_raw_len == 0 ||
+                !tls_ocsp_hash_issuer(cert->subject_name,
+                                      cert->subject_name_len,
+                                      cert->subject_pubkey_raw,
+                                      cert->subject_pubkey_raw_len,
+                                      w->pending_ocsp_issuer_name_hash,
+                                      w->pending_ocsp_issuer_key_hash))
+            {
+                ERROR_CODE(0x16);
+                return false;
+            }
         }
 
         /* The signature check itself is deferred: it is queued as a job and
@@ -1777,6 +1753,34 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     {
         ERROR_CODE(0x11);
         return false;
+    }
+
+    w->pending_ocsp_url[0] = '\0';
+    w->pending_ocsp_serial_len = 0;
+    if (w->ctx && w->ctx->ocsp_enabled && cert.extensions &&
+        cert.extensions_len > 0 && cert.serial && cert.serial_len > 0 &&
+        cert.serial_len <= sizeof(w->pending_ocsp_serial))
+    {
+        char *url = NULL;
+        if (!tls_x509_get_ocsp_url(cert.extensions, cert.extensions_len, &url))
+        {
+            ERROR_CODE(0x17);
+            return false;
+        }
+        if (url)
+        {
+            size_t url_len = strlen(url);
+            if (url_len == 0 || url_len >= sizeof(w->pending_ocsp_url))
+            {
+                tls_ocsp_free(url);
+                ERROR_CODE(0x18);
+                return false;
+            }
+            memcpy(w->pending_ocsp_url, url, url_len + 1u);
+            memcpy(w->pending_ocsp_serial, cert.serial, cert.serial_len);
+            w->pending_ocsp_serial_len = (uint8_t)cert.serial_len;
+            tls_ocsp_free(url);
+        }
     }
 
 
@@ -2295,7 +2299,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
     {
         /* A Certificate was just finished and its verification is queued:
          * hold everything after it until the jobs have run. */
-        if (ctx->cert_jobs != NULL)
+        if (ctx->cert_jobs != NULL || ctx->ocsp_jobs_pending != 0)
             return tls_hs_defer_bytes(ctx, buf + off, buf_len - off);
 
         /* RFC 8446 5.1: a key-changing message (Finished, KeyUpdate) must end
@@ -2405,7 +2409,8 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
     }
 
     /* If we have a leftover header fragment (1-3 bytes), spill it too. */
-    if (off < buf_len && ctx->cert_jobs != NULL)
+    if (off < buf_len &&
+        (ctx->cert_jobs != NULL || ctx->ocsp_jobs_pending != 0))
         return tls_hs_defer_bytes(ctx, buf + off, buf_len - off);
     if (off < buf_len)
     {
@@ -2430,23 +2435,89 @@ bool tls_cert_jobs_pending(const struct tls_handshake_context *ctx)
     return ctx != NULL && ctx->cert_jobs != NULL;
 }
 
+bool tls_cert_job_peek_ocsp(
+    const struct tls_handshake_context *ctx,
+    char url_out[128],
+    uint8_t serial_out[20], uint8_t *serial_len_out,
+    uint8_t issuer_name_hash_out[20],
+    uint8_t issuer_key_hash_out[20],
+    struct tls_key *issuer_out,
+    uint8_t *issuer_mat_out, size_t issuer_mat_cap,
+    size_t *issuer_mat_len_out)
+{
+    const struct tls_cert_job *job;
+    size_t mat_len;
+
+    if (!ctx || !ctx->cert_jobs || !url_out || !serial_out ||
+        !serial_len_out || !issuer_name_hash_out || !issuer_key_hash_out ||
+        !issuer_out || !issuer_mat_out || !issuer_mat_len_out)
+        return false;
+    job = ctx->cert_jobs;
+    if (job->is_root || job->ocsp_url[0] == '\0')
+        return false;
+    if (job->issuer.type == TLS_KEY_TYPE_RSA)
+        mat_len = job->issuer.rsa.mod_len + job->issuer.rsa.exp_len;
+    else if (job->issuer.type == TLS_KEY_TYPE_EC_P256 ||
+             job->issuer.type == TLS_KEY_TYPE_EC_P384)
+        mat_len = job->issuer.ec.len;
+    else
+        return false;
+    if (mat_len == 0 || mat_len > issuer_mat_cap)
+        return false;
+
+    memcpy(url_out, job->ocsp_url, 128);
+    memcpy(serial_out, job->ocsp_serial, sizeof(job->ocsp_serial));
+    *serial_len_out = job->ocsp_serial_len;
+    memcpy(issuer_name_hash_out, job->ocsp_issuer_name_hash, OCSP_SHA1_LEN);
+    memcpy(issuer_key_hash_out, job->ocsp_issuer_key_hash, OCSP_SHA1_LEN);
+    *issuer_out = job->issuer;
+    issuer_out->allocated = false;
+    if (job->issuer.type == TLS_KEY_TYPE_RSA)
+    {
+        memcpy(issuer_mat_out, job->issuer.rsa.modulus,
+               job->issuer.rsa.mod_len);
+        memcpy(issuer_mat_out + job->issuer.rsa.mod_len,
+               job->issuer.rsa.exponent, job->issuer.rsa.exp_len);
+        issuer_out->rsa.modulus = issuer_mat_out;
+        issuer_out->rsa.exponent = issuer_mat_out + job->issuer.rsa.mod_len;
+    }
+    else
+    {
+        memcpy(issuer_mat_out, job->issuer.ec.pub, job->issuer.ec.len);
+        issuer_out->ec.pub = issuer_mat_out;
+        issuer_out->ec.priv = NULL;
+    }
+    *issuer_mat_len_out = mat_len;
+    return true;
+}
+
+bool tls_cert_job_has_ocsp(const struct tls_handshake_context *ctx)
+{
+    return ctx && ctx->cert_jobs && !ctx->cert_jobs->is_root &&
+           ctx->cert_jobs->ocsp_url[0] != '\0';
+}
+
 
 bool tls_cert_jobs_step(struct tls_handshake_context *ctx)
 {
-    if (!ctx || !ctx->cert_jobs)
-        return true;
-
-    uint8_t alert = TLS_ALERT_BAD_CERTIFICATE;
-
-    if (!tls_cert_job_run_head(ctx, &alert))
-    {
-        tls_cert_jobs_discard(ctx);
-        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
-        ctx->state = TLS_STATE_ERROR;
+    if (!ctx)
         return false;
+
+    if (ctx->cert_jobs)
+    {
+        uint8_t alert = TLS_ALERT_BAD_CERTIFICATE;
+
+        if (!tls_cert_job_run_head(ctx, &alert))
+        {
+            tls_cert_jobs_discard(ctx);
+            tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
+            ctx->state = TLS_STATE_ERROR;
+            return false;
+        }
     }
 
-    if (ctx->cert_jobs == NULL && ctx->hs_deferred_len > 0)
+    if (ctx->cert_jobs == NULL && ctx->ocsp_jobs_pending == 0 &&
+        ctx->hs_deferred_len > 0)
     {
         /* Queue drained: replay the held handshake bytes in order. Detach the
          * buffer first so the replay does not re-defer into it. */
@@ -2483,6 +2554,36 @@ bool tls_cert_jobs_step(struct tls_handshake_context *ctx)
     return true;
 }
 
+bool tls_ocsp_jobs_pending(const struct tls_handshake_context *ctx)
+{
+    return ctx && ctx->ocsp_jobs_pending != 0;
+}
+
+void tls_ocsp_job_begin(struct tls_handshake_context *ctx)
+{
+    if (ctx && ctx->ocsp_jobs_pending != UINT8_MAX)
+        ctx->ocsp_jobs_pending++;
+}
+
+bool tls_ocsp_job_done(struct tls_handshake_context *ctx, bool failed)
+{
+    if (!ctx || ctx->ocsp_jobs_pending == 0)
+        return false;
+    ctx->ocsp_jobs_pending--;
+    if (failed)
+    {
+        tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
+                       TLS_ALERT_CERTIFICATE_REVOKED);
+        ctx->state = TLS_STATE_ERROR;
+        return false;
+    }
+    /* Remaining certificate jobs must stay on the certificate dispatcher so
+     * it can inspect each one's OCSP metadata before consuming it. */
+    if (ctx->cert_jobs != NULL)
+        return true;
+    return tls_cert_jobs_step(ctx);
+}
+
 
 /**
  * @brief Dispatch one complete inner handshake message (header + body).
@@ -2500,7 +2601,7 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     /* Certificate verification jobs must all have passed before any further
      * handshake message is acted on.  The consume path holds such messages
      * back; reaching here with jobs queued is a logic error: fail closed. */
-    if (ctx->cert_jobs != NULL)
+    if (ctx->cert_jobs != NULL || ctx->ocsp_jobs_pending != 0)
     {
         ERROR_CODE(0x74);
         ctx->state = TLS_STATE_ERROR;

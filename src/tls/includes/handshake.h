@@ -391,6 +391,8 @@ extern "C"
 
         struct tls_cert_job *cert_jobs;
         uint8_t cert_jobs_count;
+        uint8_t ocsp_jobs_pending;
+        uint8_t ocsp_enabled;
         uint8_t *hs_deferred;
         size_t hs_deferred_len;
         size_t hs_deferred_cap;
@@ -626,6 +628,18 @@ extern "C"
      */
     bool tls_cert_jobs_pending(const struct tls_handshake_context *ctx);
 
+    /** Copy OCSP launch material from the next certificate job, if present. */
+    bool tls_cert_job_peek_ocsp(
+        const struct tls_handshake_context *ctx,
+        char url_out[128],
+        uint8_t serial_out[20], uint8_t *serial_len_out,
+        uint8_t issuer_name_hash_out[20],
+        uint8_t issuer_key_hash_out[20],
+        struct tls_key *issuer_out,
+        uint8_t *issuer_mat_out, size_t issuer_mat_cap,
+        size_t *issuer_mat_len_out);
+    bool tls_cert_job_has_ocsp(const struct tls_handshake_context *ctx);
+
 
     /**
      * @brief Run one queued certificate verification job.
@@ -637,6 +651,10 @@ extern "C"
      * TLS_STATE_ERROR, and the caller must abort the connection.
      */
     bool tls_cert_jobs_step(struct tls_handshake_context *ctx);
+
+    bool tls_ocsp_jobs_pending(const struct tls_handshake_context *ctx);
+    void tls_ocsp_job_begin(struct tls_handshake_context *ctx);
+    bool tls_ocsp_job_done(struct tls_handshake_context *ctx, bool failed);
 
     /**
      * @brief Register a transport write callback for outbound records.

@@ -604,6 +604,191 @@ static bool nc_validate_name(const uint8_t *nc_value, size_t nc_len,
 /* Validate the extension subset needed by this client path builder. Anything
  * critical that we do not interpret is rejected; nameConstraints are parsed
  * for directoryName and dNSName entries, then enforced by the chain walker. */
+bool tls_x509_certificate_signature_material(const uint8_t *der, size_t der_len,
+                                              const uint8_t **tbs_out,
+                                              size_t *tbs_len_out,
+                                              tls_alg_t *sig_alg_out,
+                                              const uint8_t **sig_out,
+                                              size_t *sig_len_out)
+{
+    struct tls_asn1_cursor top, items, body;
+    struct tls_asn1_tlv cert_seq, tbs, sig_alg, sig_val, serial, inner_alg;
+
+    if (!der || !tbs_out || !tbs_len_out || !sig_alg_out || !sig_out ||
+        !sig_len_out)
+        return false;
+    *sig_alg_out = TLS_ALG_UNKNOWN;
+    if (!tls_asn1_cursor_init(&top, der, der_len) ||
+        !tls_asn1_next(&top, &cert_seq) || top.cur != top.end ||
+        cert_seq.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+        !tls_asn1_child_cursor(&cert_seq, &items) ||
+        !tls_asn1_next(&items, &tbs) ||
+        !tls_asn1_next(&items, &sig_alg) ||
+        !tls_asn1_next(&items, &sig_val) || items.cur != items.end ||
+        tbs.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+        sig_val.tag != ASN1_BITSTRING || sig_val.len < 2 ||
+        sig_val.value[0] != 0 ||
+        !tls_x509_signature_algorithm(&sig_alg, sig_alg_out) ||
+        !tls_asn1_child_cursor(&tbs, &body) ||
+        !tls_asn1_next(&body, &serial))
+        return false;
+    if (serial.tag == (ASN1_CONSTRUCTED | ASN1_CONTEXTSPEC) &&
+        !tls_asn1_next(&body, &serial))
+        return false;
+    if (serial.tag != ASN1_INTEGER || !tls_asn1_next(&body, &inner_alg) ||
+        inner_alg.tag != sig_alg.tag || inner_alg.len != sig_alg.len ||
+        memcmp(inner_alg.value, sig_alg.value, sig_alg.len) != 0)
+        return false;
+
+    *tbs_out = tbs.tlv;
+    *tbs_len_out = tbs.header_len + tbs.len;
+    *sig_out = sig_val.value + 1;
+    *sig_len_out = sig_val.len - 1;
+    return true;
+}
+
+bool tls_x509_validate_ocsp_responder_extensions(
+    const struct tls_x509_object *cert)
+{
+    static const uint8_t oid_basic_constraints[] = {0x55, 0x1D, 0x13};
+    static const uint8_t oid_key_usage[] = {0x55, 0x1D, 0x0F};
+    static const uint8_t oid_extended_key_usage[] = {0x55, 0x1D, 0x25};
+    static const uint8_t oid_ocsp_signing[] = {
+        0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09
+    };
+    struct tls_asn1_cursor outer, list;
+    struct tls_asn1_tlv item;
+    const uint8_t *extensions_start;
+    bool have_bc = false, have_ku = false, have_eku = false;
+    bool digital_signature = false, ocsp_signing = false;
+
+    if (!cert || !cert->extensions || cert->extensions_len == 0 ||
+        !tls_asn1_cursor_init(&outer, cert->extensions, cert->extensions_len))
+        return false;
+    list = outer;
+    if (!tls_asn1_next(&outer, &item))
+        return false;
+    if (item.header_len + item.len == cert->extensions_len &&
+        item.tag == (ASN1_CONSTRUCTED | ASN1_SEQUENCE))
+    {
+        if (!tls_asn1_child_cursor(&item, &list))
+            return false;
+    }
+    else
+    {
+        list = outer;
+        list.cur = cert->extensions;
+    }
+    extensions_start = list.cur;
+
+    while (list.cur < list.end)
+    {
+        struct tls_asn1_cursor ec, vc;
+        struct tls_asn1_tlv ext, oid, next, value, inner;
+        bool critical = false;
+        bool is_bc, is_ku, is_eku;
+
+        if (!tls_asn1_next(&list, &ext) ||
+            ext.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+            !tls_asn1_child_cursor(&ext, &ec) ||
+            !tls_asn1_next(&ec, &oid) || oid.tag != ASN1_OBJECTID ||
+            !tls_x509_oid_value_der(oid.value, oid.len) ||
+            !tls_asn1_next(&ec, &next))
+            return false;
+        if (next.tag == ASN1_BOOLEAN)
+        {
+            if (next.len != 1 || next.value[0] != 0xFF ||
+                !tls_asn1_next(&ec, &value))
+                return false;
+            critical = true;
+        }
+        else
+            value = next;
+        if (value.tag != ASN1_OCTETSTRING || ec.cur != ec.end)
+            return false;
+
+        {
+            struct tls_asn1_cursor prior = {extensions_start, ext.tlv};
+            struct tls_asn1_tlv prior_ext;
+            while (prior.cur < prior.end)
+            {
+                struct tls_asn1_cursor prior_body;
+                struct tls_asn1_tlv prior_oid;
+                if (!tls_asn1_next(&prior, &prior_ext) ||
+                    prior_ext.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+                    !tls_asn1_child_cursor(&prior_ext, &prior_body) ||
+                    !tls_asn1_next(&prior_body, &prior_oid) ||
+                    prior_oid.tag != ASN1_OBJECTID)
+                    return false;
+                if (prior_oid.len == oid.len &&
+                    memcmp(prior_oid.value, oid.value, oid.len) == 0)
+                    return false;
+            }
+        }
+
+        is_bc = oid.len == sizeof(oid_basic_constraints) &&
+                memcmp(oid.value, oid_basic_constraints, oid.len) == 0;
+        is_ku = oid.len == sizeof(oid_key_usage) &&
+                memcmp(oid.value, oid_key_usage, oid.len) == 0;
+        is_eku = oid.len == sizeof(oid_extended_key_usage) &&
+                 memcmp(oid.value, oid_extended_key_usage, oid.len) == 0;
+        if (!is_bc && !is_ku && !is_eku)
+        {
+            if (critical)
+                return false;
+            continue;
+        }
+        if (!tls_asn1_cursor_init(&vc, value.value, value.len) ||
+            !tls_asn1_next(&vc, &inner) || vc.cur != vc.end)
+            return false;
+
+        if (is_bc)
+        {
+            struct tls_asn1_cursor bc;
+            if (have_bc || inner.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+                !tls_asn1_child_cursor(&inner, &bc) || bc.cur != bc.end)
+                return false;
+            have_bc = true;
+        }
+        else if (is_ku)
+        {
+            uint8_t unused, last, padding_mask;
+            if (have_ku || inner.tag != ASN1_BITSTRING || inner.len < 2 ||
+                inner.value[0] > 7)
+                return false;
+            unused = inner.value[0];
+            last = inner.value[inner.len - 1];
+            padding_mask = (uint8_t)((1u << unused) - 1u);
+            if ((last & padding_mask) != 0 ||
+                (last & (uint8_t)(1u << unused)) == 0)
+                return false;
+            have_ku = true;
+            digital_signature = (inner.value[1] & 0x80u) != 0;
+        }
+        else
+        {
+            struct tls_asn1_cursor eku;
+            struct tls_asn1_tlv purpose;
+            if (have_eku || inner.tag != (ASN1_CONSTRUCTED | ASN1_SEQUENCE) ||
+                !tls_asn1_child_cursor(&inner, &eku) || eku.cur == eku.end)
+                return false;
+            have_eku = true;
+            while (eku.cur < eku.end)
+            {
+                if (!tls_asn1_next(&eku, &purpose) ||
+                    purpose.tag != ASN1_OBJECTID ||
+                    !tls_x509_oid_value_der(purpose.value, purpose.len))
+                    return false;
+                if (purpose.len == sizeof(oid_ocsp_signing) &&
+                    memcmp(purpose.value, oid_ocsp_signing,
+                           sizeof(oid_ocsp_signing)) == 0)
+                    ocsp_signing = true;
+            }
+        }
+    }
+    return have_eku && ocsp_signing && (!have_ku || digital_signature);
+}
+
 bool tls_x509_validate_path_extensions(const struct tls_x509_object *cert,
                                        bool is_ca, size_t subordinate_ca_count)
 {
