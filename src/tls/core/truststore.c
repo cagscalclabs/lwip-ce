@@ -290,8 +290,6 @@ tls_truststore_status_t tls_truststore_init(void)
     uint8_t ts_h = file_fn.ti_open(truststore_name, "r");
     if (!ts_h)
     {
-        tls_hash_context_free(hash_ctx);
-        hash_ctx = NULL;
         tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
         WARN_CODE(TLS_STORE_NOT_FOUND);
         return TLS_STORE_NOT_FOUND;
