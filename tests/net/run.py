@@ -1174,8 +1174,13 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int,
     for out in proc.stdout:
         if "transfer progress" not in out:
             print(out, end="", flush=True)
-        if ("NMI reset" in out or CRASH_CRC in out) and not crashed:
-            # The calc rebooted; nothing more will come from this suite.
+        if "NMI reset" in out and not crashed:
+            # The patched CEmu prints the faulting PC/registers on the next
+            # line.  Mark the run failed now, but let that diagnostic line
+            # reach the artifact before stopping the emulator.
+            crashed = True
+            continue
+        if (crashed and "NMI state:" in out) or (CRASH_CRC in out and not crashed):
             crashed = True
             proc.kill()
     status = proc.wait()
