@@ -328,7 +328,8 @@ bool tls_init(void)
 
     tls_ctx.network_up = true;
     tls_ctx.truststore.status = tls_truststore_init();
-    if (tls_ctx.truststore.status != TLS_STORE_OK)
+    if (tls_ctx.truststore.status != TLS_STORE_OK &&
+        tls_ctx.truststore.status != TLS_STORE_NOT_FOUND)
     {
         tls_ctx.network_up = false;
         return false;
