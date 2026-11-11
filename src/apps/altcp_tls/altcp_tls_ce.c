@@ -71,6 +71,34 @@ TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
     altcp_abort(pcb); \
 } while (0)
 
+/* ---- TEMPORARY DIAGNOSTIC: nettls NMI hunt -------------------------------
+ * CEmu's patched build reports the address of any flash write as an NMI
+ * line that tests/net/run.py captures. Writing one byte to flash address
+ * 0x200+k is therefore a self-reporting assertion: the artifact shows
+ * "writing to flash at address 0x02xx", where xx names the first failed
+ * checkpoint below. Remove this block when the corruption is found. */
+#ifndef TLS_NMI_TRAP_DIAG
+#define TLS_NMI_TRAP_DIAG 1
+#endif
+#if TLS_NMI_TRAP_DIAG
+#define TLS_DIAG_TRAP(k) (*(volatile uint8_t *)(uintptr_t)(0x200u + (k)) = 0xA5u)
+/* A local's address is SP-relative: if SP escaped the OS stack, so does
+ * the probe. Generous bounds avoid false positives from legal frames. */
+#define TLS_DIAG_SP(k) do { \
+    volatile uint8_t probe_; \
+    uintptr_t a_ = (uintptr_t)&probe_; \
+    if (a_ < 0xD19000u || a_ > 0xD1A900u) TLS_DIAG_TRAP(k); \
+} while (0)
+#define TLS_DIAG_BLOCK(ptr, k) do { \
+    if (!mem_debug_block_ok(ptr)) TLS_DIAG_TRAP(k); \
+} while (0)
+#else
+#define TLS_DIAG_TRAP(k) ((void)0)
+#define TLS_DIAG_SP(k) ((void)0)
+#define TLS_DIAG_BLOCK(ptr, k) ((void)0)
+#endif
+/* ------------------------------------------------------------------------ */
+
 /* Debug flag for TLS CE layer */
 #ifndef ALTCP_TLS_CE_DEBUG
 #define ALTCP_TLS_CE_DEBUG LWIP_DBG_OFF
@@ -1977,6 +2005,8 @@ static void altcp_tls_ce_ocsp_job_finish(struct tls_ocsp_job *job, bool failed)
     struct tls_handshake_context *hs = job->hs;
     struct altcp_pcb *owner = job->owner_conn;
 
+    TLS_DIAG_SP(0x05);
+
     if (job->tcp)
     {
         struct altcp_pcb *tcp = job->tcp;
@@ -1995,13 +2025,17 @@ static void altcp_tls_ce_ocsp_job_finish(struct tls_ocsp_job *job, bool failed)
 
     if (!tls_ocsp_job_done(hs, failed))
     {
+        TLS_DIAG_SP(0x06);
         if (owner)
             ALTCP_TLS_CE_ERROR_ABORT(owner);
+        TLS_DIAG_SP(0x0D);
         return;
     }
+    TLS_DIAG_SP(0x0E);
     if (owner && owner->state)
         (void)altcp_tls_ce_lower_recv_process(
             owner, (altcp_tls_ce_state_t *)owner->state);
+    TLS_DIAG_SP(0x07);
 }
 
 /* TCP and DNS callbacks run inside lwIP's input/timeout call stack.  Resuming
@@ -2252,6 +2286,7 @@ static err_t altcp_tls_ce_ocsp_tcp_recv(void *arg, struct altcp_pcb *tcp,
 {
     struct tls_ocsp_job *job = (struct tls_ocsp_job *)arg;
 
+    TLS_DIAG_SP(0x08);
     if (!job || job->job_state == OCSP_JOB_DONE)
     {
         if (p)
@@ -2261,6 +2296,7 @@ static err_t altcp_tls_ce_ocsp_tcp_recv(void *arg, struct altcp_pcb *tcp,
         }
         return ERR_OK;
     }
+    TLS_DIAG_BLOCK(job->resp_buf, 0x09);
     if (err != ERR_OK)
         goto fail;
     if (!p)
@@ -2316,6 +2352,8 @@ static err_t altcp_tls_ce_ocsp_tcp_recv(void *arg, struct altcp_pcb *tcp,
     pbuf_free(p);
     if (job->headers_done && job->resp_len == job->content_length)
         job->job_state = OCSP_JOB_RESPONSE_READY;
+    TLS_DIAG_SP(0x0A);
+    TLS_DIAG_BLOCK(job->resp_buf, 0x0B);
     return ERR_OK;
 
 fail:
@@ -2534,14 +2572,18 @@ static void altcp_tls_ce_ocsp_job_dispatch(void)
     uint32_t now = sys_now();
     struct tls_ocsp_job *job;
 
+    TLS_DIAG_SP(0x01);
     altcp_tls_ce_ocsp_pending_launch();
     job = g_ocsp_job_head;
     while (job)
     {
         struct tls_ocsp_job *next = job->next;
+        TLS_DIAG_BLOCK(job->resp_buf, 0x02);
         if (job->job_state == OCSP_JOB_RESPONSE_READY)
         {
             tls_ocsp_status_t status = altcp_tls_ce_ocsp_parse_job(job);
+            TLS_DIAG_SP(0x03);
+            TLS_DIAG_BLOCK(job->resp_buf, 0x04);
             altcp_tls_ce_ocsp_job_finish(job, status != OCSP_GOOD);
             return;
         }
@@ -2600,6 +2642,7 @@ static void altcp_tls_ce_ocsp_job_arm(void)
  * stretch to a single signature check. */
 static void altcp_tls_ce_cert_job_dispatch(void)
 {
+    TLS_DIAG_SP(0x0F);
     for (altcp_tls_ce_state_t *state = g_tls_state_head; state != NULL; state = state->next)
     {
         struct altcp_pcb *conn = state->conn;
@@ -3119,6 +3162,7 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
 static err_t
 altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state)
 {
+    TLS_DIAG_SP(0x0C);
     if (!(state->flags & ALTCP_TLS_CE_FLAGS_HANDSHAKE_DONE))
     {
         tls_dbg_status("rx: handshake path");

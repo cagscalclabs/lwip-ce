@@ -286,6 +286,9 @@ bool mem_buffer_peek(const struct mem_buffer *mb, size_t offset, uint8_t *out, s
  * @return true if initialized and ready, false otherwise.
  */
 bool mem_is_ready(void);
+/* TEMPORARY DIAGNOSTIC (nettls NMI hunt): header sanity for a live
+ * direct allocation. Remove with the TLS_NMI_TRAP_DIAG checkpoints. */
+bool mem_debug_block_ok(const void *ptr);
 /**
  * @brief Get last reported global pressure level.
  * @return Current global pressure level.
