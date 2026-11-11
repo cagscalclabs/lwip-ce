@@ -1856,6 +1856,7 @@ enum tls_ocsp_job_state
     OCSP_JOB_CONNECTING,
     OCSP_JOB_SENDING,
     OCSP_JOB_RECEIVING,
+    OCSP_JOB_RESPONSE_READY,
     OCSP_JOB_DONE
 };
 
@@ -1866,6 +1867,7 @@ struct tls_ocsp_job
     struct altcp_pcb *tcp;
     struct altcp_pcb *owner_conn;
     enum tls_ocsp_job_state job_state;
+    bool failed;
     uint32_t deadline_ms;
 
     uint8_t serial[20];
@@ -2000,6 +2002,21 @@ static void altcp_tls_ce_ocsp_job_finish(struct tls_ocsp_job *job, bool failed)
     if (owner && owner->state)
         (void)altcp_tls_ce_lower_recv_process(
             owner, (altcp_tls_ce_state_t *)owner->state);
+}
+
+/* TCP and DNS callbacks run inside lwIP's input/timeout call stack.  Resuming
+ * the held TLS flight from one of those callbacks nests certificate and
+ * Finished processing under that already-deep stack, which can exhaust the
+ * eZ80 stack.  Record completion here and let the OCSP dispatcher perform
+ * teardown and resume the handshake on its next tick. */
+static void altcp_tls_ce_ocsp_job_complete(struct tls_ocsp_job *job,
+                                            bool failed)
+{
+    if (!job || job->job_state == OCSP_JOB_RESPONSE_READY ||
+        job->job_state == OCSP_JOB_DONE)
+        return;
+    job->failed = failed;
+    job->job_state = OCSP_JOB_DONE;
 }
 
 static bool altcp_tls_ce_ocsp_parse_url(struct tls_ocsp_job *job,
@@ -2237,7 +2254,11 @@ static err_t altcp_tls_ce_ocsp_tcp_recv(void *arg, struct altcp_pcb *tcp,
 
     if (!job || job->job_state == OCSP_JOB_DONE)
     {
-        if (p) pbuf_free(p);
+        if (p)
+        {
+            altcp_recved(tcp, p->tot_len);
+            pbuf_free(p);
+        }
         return ERR_OK;
     }
     if (err != ERR_OK)
@@ -2246,10 +2267,10 @@ static err_t altcp_tls_ce_ocsp_tcp_recv(void *arg, struct altcp_pcb *tcp,
     {
         bool complete = job->headers_done && job->resp_buf &&
                         job->resp_len == job->content_length;
-        tls_ocsp_status_t status = complete
-            ? altcp_tls_ce_ocsp_parse_job(job) : OCSP_PARSE_ERROR;
-        job->job_state = OCSP_JOB_DONE;
-        altcp_tls_ce_ocsp_job_finish(job, status != OCSP_GOOD);
+        if (complete)
+            job->job_state = OCSP_JOB_RESPONSE_READY;
+        else
+            altcp_tls_ce_ocsp_job_complete(job, true);
         return ERR_OK;
     }
 
@@ -2294,19 +2315,14 @@ static err_t altcp_tls_ce_ocsp_tcp_recv(void *arg, struct altcp_pcb *tcp,
     altcp_recved(tcp, p->tot_len);
     pbuf_free(p);
     if (job->headers_done && job->resp_len == job->content_length)
-    {
-        tls_ocsp_status_t status = altcp_tls_ce_ocsp_parse_job(job);
-        job->job_state = OCSP_JOB_DONE;
-        altcp_tls_ce_ocsp_job_finish(job, status != OCSP_GOOD);
-    }
+        job->job_state = OCSP_JOB_RESPONSE_READY;
     return ERR_OK;
 
 fail:
     if (p) pbuf_free(p);
-    job->job_state = OCSP_JOB_DONE;
     ERROR();
-    altcp_tls_ce_ocsp_job_finish(job, true);
-    return ERR_ABRT;
+    altcp_tls_ce_ocsp_job_complete(job, true);
+    return ERR_OK;
 }
 
 static err_t altcp_tls_ce_ocsp_tcp_sent(void *arg, struct altcp_pcb *tcp,
@@ -2332,9 +2348,8 @@ static err_t altcp_tls_ce_ocsp_tcp_sent(void *arg, struct altcp_pcb *tcp,
         else if (write_err != ERR_MEM)
         {
             ERROR_CODE(-write_err);
-            job->job_state = OCSP_JOB_DONE;
-            altcp_tls_ce_ocsp_job_finish(job, true);
-            return ERR_ABRT;
+            altcp_tls_ce_ocsp_job_complete(job, true);
+            return ERR_OK;
         }
     }
     if (job->http_sent == job->http_len)
@@ -2355,9 +2370,8 @@ static err_t altcp_tls_ce_ocsp_tcp_connected(void *arg,
     if (err != ERR_OK)
     {
         ERROR_CODE(-err);
-        job->job_state = OCSP_JOB_DONE;
-        altcp_tls_ce_ocsp_job_finish(job, true);
-        return ERR_ABRT;
+        altcp_tls_ce_ocsp_job_complete(job, true);
+        return ERR_OK;
     }
     job->job_state = OCSP_JOB_SENDING;
     chunk = (u16_t)(job->http_len > 0xFFFFu ? 0xFFFFu : job->http_len);
@@ -2365,9 +2379,8 @@ static err_t altcp_tls_ce_ocsp_tcp_connected(void *arg,
     if (write_err != ERR_OK)
     {
         ERROR_CODE(-write_err);
-        job->job_state = OCSP_JOB_DONE;
-        altcp_tls_ce_ocsp_job_finish(job, true);
-        return ERR_ABRT;
+        altcp_tls_ce_ocsp_job_complete(job, true);
+        return ERR_OK;
     }
     job->http_sent = chunk;
     if (job->http_sent == job->http_len)
@@ -2380,11 +2393,13 @@ static void altcp_tls_ce_ocsp_tcp_err(void *arg, err_t err)
 {
     struct tls_ocsp_job *job = (struct tls_ocsp_job *)arg;
     LWIP_UNUSED_ARG(err);
-    if (!job || job->job_state == OCSP_JOB_DONE)
+    if (!job)
         return;
     job->tcp = NULL;
-    job->job_state = OCSP_JOB_DONE;
-    altcp_tls_ce_ocsp_job_finish(job, true);
+    if (job->job_state == OCSP_JOB_RESPONSE_READY ||
+        job->job_state == OCSP_JOB_DONE)
+        return;
+    altcp_tls_ce_ocsp_job_complete(job, true);
 }
 
 static void altcp_tls_ce_ocsp_dns_cb(const char *name,
@@ -2403,15 +2418,13 @@ static void altcp_tls_ce_ocsp_dns_cb(const char *name,
     }
     if (!ipaddr)
     {
-        job->job_state = OCSP_JOB_DONE;
-        altcp_tls_ce_ocsp_job_finish(job, true);
+        altcp_tls_ce_ocsp_job_complete(job, true);
         return;
     }
     tcp = altcp_tcp_new_ip_type(IP_GET_TYPE(ipaddr));
     if (!tcp)
     {
-        job->job_state = OCSP_JOB_DONE;
-        altcp_tls_ce_ocsp_job_finish(job, true);
+        altcp_tls_ce_ocsp_job_complete(job, true);
         return;
     }
     altcp_arg(tcp, job);
@@ -2423,10 +2436,13 @@ static void altcp_tls_ce_ocsp_dns_cb(const char *name,
     if (altcp_connect(tcp, ipaddr, job->port,
                       altcp_tls_ce_ocsp_tcp_connected) != ERR_OK)
     {
-        ALTCP_TLS_CE_ERROR_ABORT(tcp);
+        altcp_arg(tcp, NULL);
+        altcp_recv(tcp, NULL);
+        altcp_sent(tcp, NULL);
+        altcp_err(tcp, NULL);
         job->tcp = NULL;
-        job->job_state = OCSP_JOB_DONE;
-        altcp_tls_ce_ocsp_job_finish(job, true);
+        ALTCP_TLS_CE_ERROR_ABORT(tcp);
+        altcp_tls_ce_ocsp_job_complete(job, true);
     }
 }
 
@@ -2523,6 +2539,17 @@ static void altcp_tls_ce_ocsp_job_dispatch(void)
     while (job)
     {
         struct tls_ocsp_job *next = job->next;
+        if (job->job_state == OCSP_JOB_RESPONSE_READY)
+        {
+            tls_ocsp_status_t status = altcp_tls_ce_ocsp_parse_job(job);
+            altcp_tls_ce_ocsp_job_finish(job, status != OCSP_GOOD);
+            return;
+        }
+        if (job->job_state == OCSP_JOB_DONE)
+        {
+            altcp_tls_ce_ocsp_job_finish(job, job->failed);
+            return;
+        }
         if (job->job_state != OCSP_JOB_DONE &&
             (int32_t)(now - job->deadline_ms) >= 0)
         {
@@ -2579,6 +2606,24 @@ static void altcp_tls_ce_cert_job_dispatch(void)
 
         if (!conn || !tls_cert_jobs_pending(&state->tls_ctx))
             continue;
+
+        /* A chain-link job can hand its signature check to the bridge.  Do
+         * not consume the next link (especially the trust-anchor job) until
+         * that check has actually completed.  Besides preserving strict
+         * leaf-to-root ordering, this prevents an untrusted-root failure
+         * from aborting the TLS object while an RSA verification job is
+         * still live.  That used to drive handshake cleanup/cancellation
+         * from this dispatcher while the verification was live -- the exact
+         * state in which the sockets suite observed a corrupted eZ80 return
+         * stack on its expected unknown_ca path. */
+        err_t settle_err = altcp_tls_ce_settle(state);
+        if (settle_err == ERR_INPROGRESS)
+            return;
+        if (settle_err != ERR_OK)
+        {
+            ALTCP_TLS_CE_ERROR_ABORT(conn);
+            return;
+        }
 
         struct altcp_tls_ce_ocsp_peek *peek = NULL;
         struct altcp_tls_ce_ocsp_pending *pending = NULL;

@@ -14,6 +14,8 @@ void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t e
 }
 void tls_crypto_guard_enable(void) {}
 void tls_crypto_guard_disable(void) {}
+void *mem_buffer_custom_malloc(size_t size) { return malloc(size); }
+void mem_buffer_custom_free(void *ptr) { free(ptr); }
 void *tls_fileio_alloc(size_t size) { return malloc(size); }
 void tls_fileio_free(void *ptr) { free(ptr); }
 void tls_secure_memzero(void *ptr, size_t len) { memset(ptr, 0, len); }
