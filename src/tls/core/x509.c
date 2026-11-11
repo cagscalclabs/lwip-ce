@@ -13,6 +13,7 @@
 #include "key_internal.h"
 #include "../includes/tls.h"
 #include "../includes/crypto_guard.h"
+#include "../../drivers/mem.h"
 
 /* P-256 and P-384 public API forward declarations (assembly in p256.s / p384.s). */
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32],
@@ -2514,26 +2515,31 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 return TLS_KEY_OP_INVALID;
             /* sig is a DER SEQUENCE { INTEGER r, INTEGER s }.
              * Decode into a flat 64-byte r||s buffer for tls_p256_verify.
-             * Static: not reentrant (crypto guard serializes these calls). */
-            static uint8_t rs[64];
+             * Static pointer in BSS — survives crypto guard stack scrub. Non-reentrant. */
+            static uint8_t *rs = NULL;
+            rs = mem_buffer_custom_malloc(64);
+            if (!rs)
+                return TLS_KEY_OP_INVALID;
             /* Minimum valid DER ECDSA-Sig-Value is 8 bytes. */
             if (sig_len < 8 || sig[0] != 0x30)
-                return TLS_KEY_OP_INVALID;
+            { mem_buffer_custom_free(rs); rs = NULL; return TLS_KEY_OP_INVALID; }
             size_t seq_len = sig[1];
             if ((seq_len & 0x80) || 2 + seq_len != sig_len)
-                return TLS_KEY_OP_INVALID;
+            { mem_buffer_custom_free(rs); rs = NULL; return TLS_KEY_OP_INVALID; }
             {
                 const uint8_t *end = sig + sig_len;
                 const uint8_t *p = tls_ecdsa_parse_int(sig + 2, sig_len - 2, rs);
                 if (p)
                     p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
                 if (p != end)   /* NULL (parse error) or trailing bytes */
-                    return TLS_KEY_OP_INVALID;
+                { mem_buffer_custom_free(rs); rs = NULL; return TLS_KEY_OP_INVALID; }
             }
             tls_crypto_guard_enable();
             bool p256_ok = tls_p256_verify(rs, digest, key->ec.pub);
-            tls_secure_memzero(rs, sizeof(rs));
+            tls_secure_memzero(rs, 64);
             tls_crypto_guard_disable();
+            mem_buffer_custom_free(rs);
+            rs = NULL;
             return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 
@@ -2543,25 +2549,30 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 return TLS_KEY_OP_INVALID;
             if (key->ec.len != 97 || !key->ec.pub)
                 return TLS_KEY_OP_INVALID;
-            /* Static: not reentrant (crypto guard serializes these calls). */
-            static uint8_t rs[96];
-            if (sig_len < 8 || sig[0] != 0x30)
+            /* Static pointer in BSS — survives crypto guard stack scrub. Non-reentrant. */
+            static uint8_t *rs = NULL;
+            rs = mem_buffer_custom_malloc(96);
+            if (!rs)
                 return TLS_KEY_OP_INVALID;
+            if (sig_len < 8 || sig[0] != 0x30)
+            { mem_buffer_custom_free(rs); rs = NULL; return TLS_KEY_OP_INVALID; }
             size_t seq_len = sig[1];
             if ((seq_len & 0x80) || 2 + seq_len != sig_len)
-                return TLS_KEY_OP_INVALID;
+            { mem_buffer_custom_free(rs); rs = NULL; return TLS_KEY_OP_INVALID; }
             {
                 const uint8_t *end = sig + sig_len;
                 const uint8_t *p = ecdsa_parse_int_n(sig + 2, sig_len - 2, rs, 48);
                 if (p)
                     p = ecdsa_parse_int_n(p, (size_t)(end - p), rs + 48, 48);
                 if (p != end)
-                    return TLS_KEY_OP_INVALID;
+                { mem_buffer_custom_free(rs); rs = NULL; return TLS_KEY_OP_INVALID; }
             }
             tls_crypto_guard_enable();
             bool p384_ok = tls_p384_verify(rs, digest, key->ec.pub);
-            tls_secure_memzero(rs, sizeof(rs));
+            tls_secure_memzero(rs, 96);
             tls_crypto_guard_disable();
+            mem_buffer_custom_free(rs);
+            rs = NULL;
             return p384_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 
