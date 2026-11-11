@@ -120,6 +120,9 @@ void tls_hash_context_copy(struct tls_hash_context *dst, const struct tls_hash_c
 void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *p, size_t n) { hash_stub_bytes += n; }
 void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *out) { memset(out, 0x42, 32); }
 void tls_hash_clear(struct tls_hash_context *ctx) { memset(ctx, 0, sizeof(*ctx)); }
+struct tls_hash_context *tls_hash_context_alloc(uint8_t alg)
+{ struct tls_hash_context *c = malloc(sizeof(*c)); if (c) tls_hash_context_init(c, alg); return c; }
+void tls_hash_context_free(struct tls_hash_context *ctx) { if (ctx) { tls_hash_clear(ctx); free(ctx); } }
 bool tls_rsa_pkcs1_v15_sha256_verify(const uint8_t *sig, size_t n, const uint8_t digest[32], const struct tls_rsa_key *key)
 {
     pkcs_calls++;

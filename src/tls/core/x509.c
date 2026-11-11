@@ -2513,8 +2513,9 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
             if (key->ec.len != 65 || !key->ec.pub)
                 return TLS_KEY_OP_INVALID;
             /* sig is a DER SEQUENCE { INTEGER r, INTEGER s }.
-             * Decode into a flat 64-byte r||s buffer for tls_p256_verify. */
-            uint8_t rs[64];
+             * Decode into a flat 64-byte r||s buffer for tls_p256_verify.
+             * Static: not reentrant (crypto guard serializes these calls). */
+            static uint8_t rs[64];
             /* Minimum valid DER ECDSA-Sig-Value is 8 bytes. */
             if (sig_len < 8 || sig[0] != 0x30)
                 return TLS_KEY_OP_INVALID;
@@ -2531,8 +2532,8 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
             }
             tls_crypto_guard_enable();
             bool p256_ok = tls_p256_verify(rs, digest, key->ec.pub);
-            tls_crypto_guard_disable();
             tls_secure_memzero(rs, sizeof(rs));
+            tls_crypto_guard_disable();
             return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 
@@ -2542,7 +2543,8 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 return TLS_KEY_OP_INVALID;
             if (key->ec.len != 97 || !key->ec.pub)
                 return TLS_KEY_OP_INVALID;
-            uint8_t rs[96];
+            /* Static: not reentrant (crypto guard serializes these calls). */
+            static uint8_t rs[96];
             if (sig_len < 8 || sig[0] != 0x30)
                 return TLS_KEY_OP_INVALID;
             size_t seq_len = sig[1];
@@ -2558,8 +2560,8 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
             }
             tls_crypto_guard_enable();
             bool p384_ok = tls_p384_verify(rs, digest, key->ec.pub);
-            tls_crypto_guard_disable();
             tls_secure_memzero(rs, sizeof(rs));
+            tls_crypto_guard_disable();
             return p384_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 

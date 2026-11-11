@@ -27,7 +27,8 @@ typedef struct { uint32_t h[5]; uint8_t buf[64]; uint32_t lo, hi; } sha1_ctx_t;
 
 static void sha1_process_block(sha1_ctx_t *ctx, const uint8_t block[64])
 {
-    uint32_t w[80], a, b, c, d, e, f, k, temp;
+    /* 16-word rolling schedule avoids a 320-byte w[80] on the eZ80 stack. */
+    uint32_t w[16], a, b, c, d, e, f, k, temp;
     int i;
 
     for (i = 0; i < 16; i++)
@@ -37,19 +38,22 @@ static void sha1_process_block(sha1_ctx_t *ctx, const uint8_t block[64])
         w[i] |= (uint32_t)block[i*4+2] <<  8;
         w[i] |= (uint32_t)block[i*4+3];
     }
-    for (i = 16; i < 80; i++)
-        w[i] = SHA1_ROTL(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
 
     a = ctx->h[0]; b = ctx->h[1]; c = ctx->h[2];
     d = ctx->h[3]; e = ctx->h[4];
 
     for (i = 0; i < 80; i++)
     {
+        if (i >= 16)
+        {
+            uint32_t s = w[(i-3)&15] ^ w[(i-8)&15] ^ w[(i-14)&15] ^ w[i&15];
+            w[i&15] = SHA1_ROTL(s, 1);
+        }
         if      (i < 20) { f = (b & c) ^ (~b & d); k = 0x5A827999u; }
         else if (i < 40) { f = b ^ c ^ d;           k = 0x6ED9EBA1u; }
         else if (i < 60) { f = (b & c) ^ (b & d) ^ (c & d); k = 0x8F1BBCDCu; }
         else             { f = b ^ c ^ d;           k = 0xCA62C1D6u; }
-        temp = SHA1_ROTL(a, 5) + f + e + k + w[i];
+        temp = SHA1_ROTL(a, 5) + f + e + k + w[i&15];
         e = d; d = c; c = SHA1_ROTL(b, 30); b = a; a = temp;
     }
     ctx->h[0] += a; ctx->h[1] += b; ctx->h[2] += c;

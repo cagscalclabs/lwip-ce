@@ -3,6 +3,7 @@
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
+#include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_HASH
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -136,6 +137,28 @@ void tls_hash_clear(struct tls_hash_context *ctx)
 {
     if (ctx != NULL)
         tls_secure_memzero(ctx, sizeof(*ctx));
+}
+
+struct tls_hash_context *tls_hash_context_alloc(uint8_t algorithm)
+{
+    struct tls_hash_context *ctx = mem_buffer_custom_malloc(sizeof(*ctx));
+    if (!ctx)
+        return NULL;
+    if (!tls_hash_context_init(ctx, algorithm))
+    {
+        mem_buffer_custom_free(ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+void tls_hash_context_free(struct tls_hash_context *ctx)
+{
+    if (ctx)
+    {
+        tls_hash_clear(ctx);
+        mem_buffer_custom_free(ctx);
+    }
 }
 
 bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outlen, uint8_t hash_alg)
