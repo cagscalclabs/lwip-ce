@@ -266,7 +266,7 @@ tls_truststore_status_t tls_truststore_init(void)
      * truststore->rsa->powmod call chain off the eZ80 stack. */
     uint8_t *d_sig = __rsa_transient;
     uint8_t tstore_hash[TLS_SHA256_DIGEST_LEN];
-    struct tls_hash_context *hash_ctx = NULL;
+    struct tls_hash_context hash_ctx;
 
     /* Clear the session-valid flag up front so it is only ever true after
      * a fresh successful validation below. Without this, a stale `true`
@@ -276,8 +276,7 @@ tls_truststore_status_t tls_truststore_init(void)
 
     TS_TRACE("E0 enter");
     // If hash init fails, error out early
-    hash_ctx = tls_hash_context_alloc(TLS_HASH_SHA256);
-    if (!hash_ctx)
+    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
     {
         tls_ctx.truststore.status = TLS_STORE_HASH_FAIL;
         ERROR_CODE(TLS_STORE_HASH_FAIL);
@@ -289,7 +288,6 @@ tls_truststore_status_t tls_truststore_init(void)
     uint8_t ts_h = file_fn.ti_open(truststore_name, "r");
     if (!ts_h)
     {
-        tls_hash_context_free(hash_ctx);
         tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
         WARN_CODE(TLS_STORE_NOT_FOUND);
         return TLS_STORE_NOT_FOUND;
@@ -300,7 +298,6 @@ tls_truststore_status_t tls_truststore_init(void)
     uint16_t truststore_size = file_fn.ti_getsize(ts_h);
     if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
     {
-        tls_hash_context_free(hash_ctx);
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_SIZE_INVALID;
         ERROR_CODE(TLS_STORE_SIZE_INVALID);
@@ -310,7 +307,6 @@ tls_truststore_status_t tls_truststore_init(void)
     struct tls_truststore_header *header = (struct tls_truststore_header *)store_header_bytes;
     if (header->version != TLS_TRUSTSTORE_VERSION)
     {
-        tls_hash_context_free(hash_ctx);
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_VERSION_MISMATCH;
         ERROR_CODE(TLS_STORE_VERSION_MISMATCH);
@@ -328,12 +324,12 @@ tls_truststore_status_t tls_truststore_init(void)
 
     TS_TRACE("E1 hash hdr");
     // Hash header fields (version + timestamp + entry_count) and entries
-    tls_hash_update(hash_ctx, (const uint8_t *)&header->version,
+    tls_hash_update(&hash_ctx, (const uint8_t *)&header->version,
                     sizeof(header->version) + sizeof(header->created_timestamp) + sizeof(header->entry_count));
     TS_TRACE("E2 hash db");
-    tls_hash_update(hash_ctx, store_db_start, store_db_len);
+    tls_hash_update(&hash_ctx, store_db_start, store_db_len);
     TS_TRACE("E3 digest");
-    tls_hash_digest(hash_ctx, tstore_hash);
+    tls_hash_digest(&hash_ctx, tstore_hash);
 
     TS_TRACE("E4 rsa decrypt");
     // Decrypt the truststore signature
@@ -344,7 +340,6 @@ tls_truststore_status_t tls_truststore_init(void)
     };
     if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, &trust_store_key))
     {
-        tls_hash_context_free(hash_ctx);
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_SIG_INVALID;
         ERROR_CODE(TLS_STORE_SIG_INVALID);
@@ -352,7 +347,7 @@ tls_truststore_status_t tls_truststore_init(void)
     }
     TS_TRACE("E5 pss verify");
     // Verify the signature
-    bool verified = tls_rsa_pss_verify(d_sig, TRUSTSTORE_SIG_LEN, tstore_hash, hash_ctx->digestlen, TLS_HASH_SHA256);
+    bool verified = tls_rsa_pss_verify(d_sig, TRUSTSTORE_SIG_LEN, tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
     tls_secure_memzero(d_sig, TRUSTSTORE_SIG_LEN);
     if (verified &&
         !tls_truststore_validate_layout(header, truststore_size,
@@ -363,7 +358,7 @@ tls_truststore_status_t tls_truststore_init(void)
         ERROR_CODE(TLS_STORE_SIZE_INVALID);
     }
     file_fn.ti_close(ts_h);
-    tls_hash_context_free(hash_ctx);
+    tls_secure_memzero(&hash_ctx, sizeof hash_ctx);
     TS_TRACE("E6 verify done");
     if (verified)
     {
@@ -449,24 +444,24 @@ static bool tls_truststore_open_db(const uint8_t **ski_index_out,
      * Re-hash the exact signed payload before using it, then return only a
      * copied entry so no pointer survives ti_close(). */
     {
-        struct tls_hash_context *hash_ctx = tls_hash_context_alloc(TLS_HASH_SHA256);
+        struct tls_hash_context hash_ctx = {0};
         uint8_t current_hash[TLS_SHA256_DIGEST_LEN] = {0};
         uint8_t *db = (uint8_t *)header + TLS_TRUSTSTORE_HEADER_LEN;
         uint16_t db_len = truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
-        bool valid = (hash_ctx != NULL);
+        bool valid = tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256);
 
         if (valid)
         {
-            tls_hash_update(hash_ctx, (const uint8_t *)&header->version,
+            tls_hash_update(&hash_ctx, (const uint8_t *)&header->version,
                             sizeof(header->version) +
                             sizeof(header->created_timestamp) +
                             sizeof(header->entry_count));
-            tls_hash_update(hash_ctx, db, db_len);
-            tls_hash_digest(hash_ctx, current_hash);
+            tls_hash_update(&hash_ctx, db, db_len);
+            tls_hash_digest(&hash_ctx, current_hash);
             valid = tls_bytes_compare(current_hash, truststore_verified_hash,
                                       sizeof current_hash);
         }
-        tls_hash_context_free(hash_ctx);
+        tls_secure_memzero(&hash_ctx, sizeof hash_ctx);
         tls_secure_memzero(current_hash, sizeof current_hash);
         if (!valid)
         {
