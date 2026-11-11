@@ -1,9 +1,0 @@
-[
-  {
-    "group": "SAST",
-    "module": "SAST",
-    "test": "Semgrep",
-    "grade": "Pass",
-    "stats": ""
-  }
-]

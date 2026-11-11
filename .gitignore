@@ -128,3 +128,13 @@ scripts/test_prepare_patched_rom.py
 /acvp-validation/
 /test-rows-acvp/
 /tests/unit/tls_truststore/failure_*_dump.bin
+
+# GitHub Actions artifacts downloaded during local investigation
+/cemu-rom-encrypted/
+/cemu-rom-patched/
+/dast-live/
+/lwip-examples/
+/lwip-latest/
+/lwip-release-zip/
+/release-examples/
+/test-rows-*/

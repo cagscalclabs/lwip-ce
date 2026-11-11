@@ -1,9 +1,0 @@
-[
-  {
-    "group": "SAST",
-    "module": "SAST",
-    "test": "CodeQL",
-    "grade": "Pass",
-    "stats": ""
-  }
-]

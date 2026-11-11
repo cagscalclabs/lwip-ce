@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -185,8 +186,9 @@ def parse_args() -> argparse.Namespace:
         help="local CE ROM (default: AUTOTESTER_ROM)",
     )
     parser.add_argument(
-        "--work-dir", type=Path, default=ROOT / "build/local-tests",
-        help="prepared image, tools, logs, and JSON results",
+        "--work-dir", type=Path,
+        default=Path(tempfile.gettempdir()) / "lwip-ce-local-tests",
+        help="prepared image, tools, logs, and JSON results (default: system temp directory)",
     )
     parser.add_argument(
         "--fuzz-seconds", type=int,

@@ -16,7 +16,7 @@ all: dylib
 #
 # Set LOCAL_NETWORK_TESTS=1 and TRUSTSTORE_SIGNER_FILE=/secure/key.pem on
 # Linux to include the root/network-namespace calculator suites.
-LOCAL_TEST_ROOT ?= $(CURDIR)/build/local-tests
+LOCAL_TEST_ROOT ?= $(if $(TMPDIR),$(TMPDIR)lwip-ce-local-tests,/tmp/lwip-ce-local-tests)
 FUZZ_SECONDS ?= 300
 run-tests:
 	@if [ -z "$(AUTOTESTER_ROM)" ]; then \
