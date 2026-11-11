@@ -28,7 +28,6 @@ c_test = r'''
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define ERROR_CODE(x) ((void)(x))
@@ -138,10 +137,6 @@ static void tls_hash_update(struct tls_hash_context *h, const uint8_t *p, size_t
 static void tls_hash_digest(struct tls_hash_context *h, uint8_t out[32])
 { for (size_t i = 0; i < 32; i++) out[i] = (uint8_t)(h->hash >> ((i & 3) * 8)); }
 static void tls_hash_clear(struct tls_hash_context *h) { (void)h; }
-static struct tls_hash_context *tls_hash_context_alloc(int alg)
-{ struct tls_hash_context *ctx = malloc(sizeof(*ctx)); if (ctx) tls_hash_context_init(ctx, alg); return ctx; }
-static void tls_hash_context_free(struct tls_hash_context *ctx)
-{ if (ctx) { tls_hash_clear(ctx); free(ctx); } }
 static bool transcript_hash_init(struct tls_hash_context *h, uint8_t algorithm)
 { (void)algorithm; h->bytes = 0; h->hash = 5381u; h->resets++; return true; }
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
