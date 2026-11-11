@@ -461,15 +461,6 @@ if len(sys.argv) > 1:
     (out / 'lwip').mkdir(parents=True, exist_ok=True)
     (out / 'lwip/logging.h').write_text(LOGGING_SHIM)
     (out / 'tls_unit.c').write_text(source + function(hs, 'tls_cert_walker_feed'))
-    # ocsp.c uses tls_fileio_alloc/free as external symbols; mock.h defines them
-    # as static, so a separate TU must provide non-static definitions for the fuzz
-    # linker when ocsp.c is compiled as its own translation unit.
-    (out / 'ocsp_alloc_shim.c').write_text(
-        '#include <stdlib.h>\n'
-        '#include <stddef.h>\n'
-        'void *tls_fileio_alloc(size_t n) { return malloc(n); }\n'
-        'void  tls_fileio_free(void *p)   { free(p); }\n'
-    )
     sys.exit(0)
 
 # ---------------------------------------------------------------------------

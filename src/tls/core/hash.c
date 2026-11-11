@@ -3,7 +3,6 @@
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
-#include "../../drivers/mem.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_HASH
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -139,65 +138,41 @@ void tls_hash_clear(struct tls_hash_context *ctx)
         tls_secure_memzero(ctx, sizeof(*ctx));
 }
 
-struct tls_hash_context *tls_hash_context_alloc(uint8_t algorithm)
-{
-    struct tls_hash_context *ctx =
-        (struct tls_hash_context *)mem_buffer_custom_malloc(sizeof(*ctx));
-    if (!ctx)
-        return NULL;
-    if (!tls_hash_context_init(ctx, algorithm))
-    {
-        mem_buffer_custom_free(ctx);
-        return NULL;
-    }
-    return ctx;
-}
-
-void tls_hash_context_free(struct tls_hash_context *ctx)
-{
-    if (ctx)
-    {
-        tls_hash_clear(ctx);
-        mem_buffer_custom_free(ctx);
-    }
-}
-
 bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outlen, uint8_t hash_alg)
 {
     uint32_t ctr = 0;
     uint8_t hash_digest[TLS_HASH_MAX_DIGEST_LEN], ctr_data[4];
-    struct tls_hash_context *hash_data, *hash_ctr;
-    bool ok = false;
+    struct tls_hash_context hash_data, hash_ctr;
     if (outbuf == NULL || (data == NULL && datalen != 0))
     {
         ERROR();
         return false;
     }
-    hash_data = tls_hash_context_alloc(hash_alg);
-    hash_ctr  = tls_hash_context_alloc(hash_alg);
-    if (!hash_data || !hash_ctr)
-        goto cleanup;
-    size_t hashlen = hash_data->digestlen;
+    if (!tls_hash_context_init(&hash_data, hash_alg))
+    {
+        tls_hash_clear(&hash_data);
+        return false;
+    }
+    size_t hashlen = hash_data.digestlen;
     tls_crypto_guard_enable();
-    hash_data->update(&hash_data->_private, data, datalen);
+    hash_data.update(&hash_data._private, data, datalen);
     for (size_t printlen = 0; printlen < outlen; printlen += hashlen, ctr++)
     {
         size_t copylen = (outlen - printlen > hashlen) ? hashlen : outlen - printlen;
+        // memcpy(ctr_data, &ctr, 4);
         ctr_data[0] = (uint8_t)((ctr >> 24) & 0xff);
         ctr_data[1] = (uint8_t)((ctr >> 16) & 0xff);
         ctr_data[2] = (uint8_t)((ctr >> 8) & 0xff);
         ctr_data[3] = (uint8_t)((ctr >> 0) & 0xff);
-        memcpy(hash_ctr, hash_data, sizeof(*hash_ctr));
-        hash_ctr->update(&hash_ctr->_private, ctr_data, 4);
-        hash_ctr->digest(&hash_ctr->_private, hash_digest);
+        memcpy(&hash_ctr, &hash_data, sizeof hash_ctr);
+        hash_ctr.update(&hash_ctr._private, ctr_data, 4);
+        hash_ctr.digest(&hash_ctr._private, hash_digest);
         memcpy(&outbuf[printlen], hash_digest, copylen);
     }
     tls_crypto_guard_disable();
-    ok = true;
-cleanup:
-    tls_hash_context_free(hash_ctr);
-    tls_hash_context_free(hash_data);
+    tls_hash_clear(&hash_ctr);
+    tls_hash_clear(&hash_data);
     tls_secure_memzero(hash_digest, sizeof hash_digest);
     tls_secure_memzero(ctr_data, sizeof ctr_data);
-    return ok;
+    return true;
 }

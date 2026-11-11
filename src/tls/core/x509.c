@@ -7,7 +7,6 @@
 #include "../includes/bytes.h"
 #include "../includes/hash.h"
 #include "../includes/rsa.h"
-#include "../../drivers/mem.h"
 #include "../includes/x509.h"
 #include "x509_internal.h"
 #include "ip_identity.h"
@@ -2515,14 +2514,12 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 return TLS_KEY_OP_INVALID;
             /* sig is a DER SEQUENCE { INTEGER r, INTEGER s }.
              * Decode into a flat 64-byte r||s buffer for tls_p256_verify. */
+            uint8_t rs[64];
             /* Minimum valid DER ECDSA-Sig-Value is 8 bytes. */
             if (sig_len < 8 || sig[0] != 0x30)
                 return TLS_KEY_OP_INVALID;
             size_t seq_len = sig[1];
             if ((seq_len & 0x80) || 2 + seq_len != sig_len)
-                return TLS_KEY_OP_INVALID;
-            uint8_t *rs = (uint8_t *)mem_buffer_custom_malloc(64);
-            if (!rs)
                 return TLS_KEY_OP_INVALID;
             {
                 const uint8_t *end = sig + sig_len;
@@ -2530,16 +2527,12 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 if (p)
                     p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
                 if (p != end)   /* NULL (parse error) or trailing bytes */
-                {
-                    mem_buffer_custom_free(rs);
                     return TLS_KEY_OP_INVALID;
-                }
             }
             tls_crypto_guard_enable();
             bool p256_ok = tls_p256_verify(rs, digest, key->ec.pub);
             tls_crypto_guard_disable();
-            tls_secure_memzero(rs, 64);
-            mem_buffer_custom_free(rs);
+            tls_secure_memzero(rs, sizeof(rs));
             return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 
@@ -2549,13 +2542,11 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 return TLS_KEY_OP_INVALID;
             if (key->ec.len != 97 || !key->ec.pub)
                 return TLS_KEY_OP_INVALID;
+            uint8_t rs[96];
             if (sig_len < 8 || sig[0] != 0x30)
                 return TLS_KEY_OP_INVALID;
             size_t seq_len = sig[1];
             if ((seq_len & 0x80) || 2 + seq_len != sig_len)
-                return TLS_KEY_OP_INVALID;
-            uint8_t *rs = (uint8_t *)mem_buffer_custom_malloc(96);
-            if (!rs)
                 return TLS_KEY_OP_INVALID;
             {
                 const uint8_t *end = sig + sig_len;
@@ -2563,16 +2554,12 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 if (p)
                     p = ecdsa_parse_int_n(p, (size_t)(end - p), rs + 48, 48);
                 if (p != end)
-                {
-                    mem_buffer_custom_free(rs);
                     return TLS_KEY_OP_INVALID;
-                }
             }
             tls_crypto_guard_enable();
             bool p384_ok = tls_p384_verify(rs, digest, key->ec.pub);
             tls_crypto_guard_disable();
-            tls_secure_memzero(rs, 96);
-            mem_buffer_custom_free(rs);
+            tls_secure_memzero(rs, sizeof(rs));
             return p384_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 

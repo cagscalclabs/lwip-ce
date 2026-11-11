@@ -179,18 +179,4 @@ void tls_hash_clear(struct tls_hash_context *ctx);
  */
 bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outlen, uint8_t hash_alg);
 
-/***************************************************************************
- * Heap-allocate a hash context, initialised to the given algorithm.
- * Returns NULL on allocation failure or unknown algorithm.
- * Must be freed with tls_hash_context_free() when no longer needed.
- * Uses mem_buffer_custom_malloc internally.
- */
-struct tls_hash_context *tls_hash_context_alloc(uint8_t algorithm);
-
-/***************************************************************************
- * Free a heap-allocated hash context (securely zeroed before release).
- * Safe to call with NULL.
- */
-void tls_hash_context_free(struct tls_hash_context *ctx);
-
 #endif
