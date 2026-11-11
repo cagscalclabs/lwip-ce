@@ -27,8 +27,9 @@ bin/fuzz_tls: fuzz_tls.c ../host/tls_signatures/run.py ../host/tls_signatures/mo
 		$(SRC)/tls/core/x509.c $(SRC)/tls/core/key.c $(SRC)/tls/core/base64.c
 	mkdir -p bin/tls
 	python3 ../host/tls_signatures/run.py bin/tls
-	$(CC) $(filter-out -I% -D%,$(CFLAGS)) -Wno-array-parameter -Ibin/tls -I$(SRC)/tls/includes -I$(SRC)/tls/core \
-		-o $@ $< $(SRC)/tls/core/asn1.c $(SRC)/tls/core/base64.c
+	$(CC) $(filter-out -I% -D%,$(CFLAGS)) -Duint24_t=uint32_t -Dint24_t=int32_t \
+		-Wno-array-parameter -Ibin/tls -I$(SRC)/tls/includes -I$(SRC)/tls/core \
+		-o $@ $< $(SRC)/tls/core/asn1.c $(SRC)/tls/core/base64.c $(SRC)/tls/core/ocsp.c bin/tls/ocsp_alloc_shim.c
 
 bin/fuzz_%: fuzz_%.c $(wildcard ../../src/parsers/*.c ../../src/tls/core/*.c) x509_stubs.c
 	mkdir -p bin
