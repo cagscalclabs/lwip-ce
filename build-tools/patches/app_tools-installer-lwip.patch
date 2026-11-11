@@ -1,8 +1,7 @@
 diff --git a/installer/src/main.c b/installer/src/main.c
-index 184d3f5..6aaefab 100644
 --- a/installer/src/main.c
 +++ b/installer/src/main.c
-@@ -25,9 +25,11 @@ enum
+@@ -25,9 +25,11 @@
  
  struct appvar
  {
@@ -14,12 +13,9 @@ index 184d3f5..6aaefab 100644
  };
  
  static struct appvar appvars[MAX_APPVARS];
-@@ -61,9 +63,10 @@ static bool check_variable_overlaps(const uint8_t *app_start)
-         {
-             char appvar_name[10];
+@@ -63,7 +65,8 @@
  
--            sprintf(name, APPVAR_PREFIX "%u", i);
-+            sprintf(appvar_name, APPVAR_PREFIX "%u", i);
+             sprintf(appvar_name, APPVAR_PREFIX "%u", i);
  
 -            if (strncmp(name, appvar_name, length) == 0)
 +            if (strlen(appvar_name) == length &&
@@ -27,7 +23,7 @@ index 184d3f5..6aaefab 100644
              {
                  const uint24_t addr = (uintptr_t)app_start + (APPVAR_SPLIT_SIZE * i);
  
-@@ -123,10 +126,13 @@ static int install(void)
+@@ -123,10 +126,13 @@
              {
                  d += 10 + namelen;
              }
@@ -42,7 +38,7 @@ index 184d3f5..6aaefab 100644
  
              /* first appvar contains app name */
              if (i == 0)
-@@ -221,6 +227,11 @@ static int install(void)
+@@ -221,6 +227,11 @@
              written = dst_start;
              if (dst_start == seg_start)
              {
@@ -54,7 +50,7 @@ index 184d3f5..6aaefab 100644
                  appvar--;
              }
          }
-@@ -279,11 +290,10 @@ int main(int argc, char **argv)
+@@ -279,11 +290,10 @@
              os_PutStrFull(app_name);
              os_NewLine();
              os_NewLine();
@@ -67,15 +63,3 @@ index 184d3f5..6aaefab 100644
              }
              return SUCCESS;
              break;
-
---- a/installer/src/main.c
-+++ b/installer/src/main.c
-@@ -137,7 +137,7 @@ static int install(void)
-             /* first appvar contains app name */
-             if (i == 0)
-             {
--                strncpy(app_name, (const char *)(appvar->data + 256 + 3), sizeof app_name);
-+                strncpy(app_name, (const char *)(appvar->data + 256 + 5), sizeof app_name);
- 
-                 dbg_printf("App %s\n", app_name);
- 

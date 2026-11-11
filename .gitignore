@@ -123,3 +123,8 @@ POST.md
 # local CI simulation script outputs
 *.ce
 scripts/test_prepare_patched_rom.py
+
+# local ACVP and emulator failure artifacts
+/acvp-validation/
+/test-rows-acvp/
+/tests/unit/tls_truststore/failure_*_dump.bin
