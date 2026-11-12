@@ -21,10 +21,10 @@ index 3cbdd46..4e44bab 100644
      headless_cli.cpp)
 +target_link_libraries(cemu-headless PRIVATE "${CEMUCORE_LIBRARY}")
 diff --git a/tests/autotester/autotester.cpp b/tests/autotester/autotester.cpp
-index 39bb3e6..3052349 100644
+index a7acb7d..b7f56c7 100644
 --- a/tests/autotester/autotester.cpp
 +++ b/tests/autotester/autotester.cpp
-@@ -617,7 +617,9 @@ bool loadJSONConfig(const std::string& jsonContents)
+@@ -636,7 +636,9 @@ bool loadJSONConfig(const std::string& jsonContents)
  
      json11::Json tmp, tmp2;
  
@@ -36,22 +36,24 @@ index 39bb3e6..3052349 100644
      {
          const std::string tmp_path(forced_rom_path);
 diff --git a/tests/autotester/autotester_cli.cpp b/tests/autotester/autotester_cli.cpp
-index cdcb6ad..9f11a39 100644
+index cdcb6ad..656cd90 100644
 --- a/tests/autotester/autotester_cli.cpp
 +++ b/tests/autotester/autotester_cli.cpp
-@@ -30,6 +30,7 @@ namespace cemucore
+@@ -30,6 +30,8 @@ namespace cemucore
      extern "C"
      {
          void gui_console_clear() {}
++        void debug_init(void);
 +        void debug_flag(int mask, bool set);
          void gui_debug_close(void) {}
          void gui_debug_open(int reason, uint32_t data) {
              printf("[CEmu debug open] reason=%d, data=0x%X\n", reason, data);
-@@ -117,10 +118,14 @@ int main(int argc, char* argv[])
+@@ -117,12 +119,17 @@ int main(int argc, char* argv[])
          return -1;
      }
  
 -    if (cemucore::EMU_STATE_VALID != cemucore::emu_load(cemucore::EMU_DATA_ROM, autotester::config.rom.c_str()))
++    cemucore::debug_init();
 +    const cemucore::emu_data_t input_type = getenv("AUTOTESTER_IMAGE")
 +        ? cemucore::EMU_DATA_IMAGE : cemucore::EMU_DATA_ROM;
 +    if (cemucore::EMU_STATE_VALID != cemucore::emu_load(input_type, autotester::config.rom.c_str()))
@@ -63,11 +65,21 @@ index cdcb6ad..9f11a39 100644
 +    cemucore::debug_flag(1 << 1 /* DBG_SOFT_COMMANDS */, true);
 +
      cemucore::emu_set_run_rate(1000);
+     cemucore::emu_run(10000);
+ 
 diff --git a/tests/autotester/headless_cli.cpp b/tests/autotester/headless_cli.cpp
-index 4e286e4..558b94c 100644
+index 4e286e4..2bc4009 100644
 --- a/tests/autotester/headless_cli.cpp
 +++ b/tests/autotester/headless_cli.cpp
-@@ -397,6 +397,22 @@ bool runCommand(const std::string& line)
+@@ -29,6 +29,7 @@ namespace cemucore
+         #include "../../core/usb/usb.h"
+ 
+         void gui_console_clear() {}
++        void debug_init(void);
+         void gui_debug_close(void) {}
+         void gui_debug_open(int reason, uint32_t data) {
+             std::fprintf(stderr, "[CEmu debug open] reason=%d, data=0x%X\n", reason, data);
+@@ -397,6 +398,22 @@ bool runCommand(const std::string& line)
          }
          return true;
      }
@@ -90,3 +102,11 @@ index 4e286e4..558b94c 100644
      if (command == "reset") {
          cemucore::emu_reset();
          respond("OK reset");
+@@ -426,6 +443,7 @@ int main(int argc, char **argv)
+     const cemucore::emu_data_t type = options.image.empty()
+         ? cemucore::EMU_DATA_ROM : cemucore::EMU_DATA_IMAGE;
+     const std::string& path = options.image.empty() ? options.rom : options.image;
++    cemucore::debug_init();
+     if (cemucore::emu_load(type, path.c_str()) != cemucore::EMU_STATE_VALID) {
+         std::cerr << "Failed to load " << path << '\n';
+         return EXIT_FAILURE;
