@@ -138,3 +138,4 @@ scripts/test_prepare_patched_rom.py
 /lwip-release-zip/
 /release-examples/
 /test-rows-*/
+/bench-primitives/
