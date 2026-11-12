@@ -5,6 +5,7 @@
 
 #include "../includes/asn1.h"
 #include "../includes/ocsp.h"
+#include "../includes/diag_trap.h"
 #include "../includes/x509.h"
 #include "x509_internal.h"
 
@@ -525,6 +526,7 @@ tls_ocsp_status_t tls_ocsp_parse_response(
     const struct tls_key *issuer_key,
     uint32_t now_secs)
 {
+    LWDIAG(0x40);
     static const uint8_t oid_basic[] = {
         0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01
     };

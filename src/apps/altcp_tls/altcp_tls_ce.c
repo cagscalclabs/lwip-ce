@@ -30,6 +30,7 @@ extern bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag);
 #include "../../tls/includes/handshake.h"
 #include "../../tls/includes/random.h"
 #include "../../tls/includes/ocsp.h"
+#include "../../tls/includes/diag_trap.h"
 #include "../../lwip-imports.h"
 #include "../../tls/includes/tls.h"
 #include "../../drivers/mem.h"
@@ -85,6 +86,7 @@ TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 /* A local's address is SP-relative: if SP escaped the OS stack, so does
  * the probe. Generous bounds avoid false positives from legal frames. */
 #define TLS_DIAG_SP(k) do { \
+    LWDIAG(k); \
     volatile uint8_t probe_; \
     uintptr_t a_ = (uintptr_t)&probe_; \
     if (a_ < 0xD19000u || a_ > 0xD1A900u) TLS_DIAG_TRAP(k); \

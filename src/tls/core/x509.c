@@ -14,6 +14,7 @@
 #include "../includes/tls.h"
 #include "../includes/crypto_guard.h"
 #include "../../drivers/mem.h"
+#include "../includes/diag_trap.h"
 
 /* P-256 and P-384 public API forward declarations (assembly in p256.s / p384.s). */
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32],
@@ -2423,6 +2424,7 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
         return TLS_KEY_OP_UNKNOWN;
     }
 
+    LWDIAG(0x20);
     struct tls_hash_context *hash_ctx;
     uint8_t hash_type = (alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
                         ? (uint8_t)TLS_HASH_SHA384 : (uint8_t)TLS_HASH_SHA256;
@@ -2441,8 +2443,11 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
     tls_hash_digest(hash_ctx, digest);
     tls_hash_clear(hash_ctx);
     tls_x509_free(hash_ctx);
+    LWDIAG(0x21);
 
-    return tls_x509_signature_verify_digest(digest, sig, sig_len, key, alg);
+    tls_key_op_result_t diag_rc = tls_x509_signature_verify_digest(digest, sig, sig_len, key, alg);
+    LWDIAG(0x22);
+    return diag_rc;
 }
 
 /* Parse one DER INTEGER from der[0..len) into a big-endian, left-zero-padded
@@ -2534,11 +2539,14 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 if (p != end)   /* NULL (parse error) or trailing bytes */
                 { mem_buffer_custom_free(rs); rs = NULL; return TLS_KEY_OP_INVALID; }
             }
+            LWDIAG(0x23);
             tls_crypto_guard_enable();
             bool p256_ok = tls_p256_verify(rs, digest, key->ec.pub);
             tls_secure_memzero(rs, 64);
             tls_crypto_guard_disable();
+            LWDIAG(0x24);
             mem_buffer_custom_free(rs);
+            LWDIAG(0x25);
             rs = NULL;
             return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }

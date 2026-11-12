@@ -16,6 +16,7 @@
 
 #include "../includes/hash.h"
 #include "../../drivers/mem.h"
+#include "../includes/diag_trap.h"
 #include "../includes/p256.h"
 #include "../includes/p384.h"
 #include "../includes/rsa.h"
@@ -840,6 +841,7 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
         {
             if (key->type != TLS_KEY_TYPE_EC_P256 || !key->ec.priv)
                 return TLS_KEY_OP_INVALID;
+            LWDIAG(0x30);
             struct tls_hash_context *hctx = tls_hash_context_alloc(TLS_HASH_SHA256);
             if (!hctx)
                 return TLS_KEY_OP_INVALID;
@@ -847,7 +849,9 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
             tls_hash_update(hctx, content, content_len);
             tls_hash_digest(hctx, digest);
             tls_hash_context_free(hctx);
+            LWDIAG(0x31);
             bool ok = tls_p256_sign(sig_out, digest, key->ec.priv);
+            LWDIAG(0x32);
             tls_secure_memzero(digest, sizeof digest);
             if (!ok)
                 return TLS_KEY_OP_INVALID;

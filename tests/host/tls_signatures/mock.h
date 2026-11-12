@@ -12,6 +12,9 @@ typedef uint32_t uint24_t;
 
 // Binder crypto is irrelevant to serialization/length checks in these tests.
 #define ERROR_CODE(...) ((void)0)
+#ifndef LWDIAG
+#define LWDIAG(k) ((void)0)
+#endif
 static bool tls_hkdf_extract(uint8_t alg, const uint8_t *salt, size_t slen, const uint8_t *ikm, size_t ilen, uint8_t *out)
 { memset(out, 0, 32); return true; }
 static bool tls_hkdf_expand_label(uint8_t alg, const uint8_t *secret, size_t slen, const char *label, size_t llen, const uint8_t *context, size_t clen, uint8_t *out, size_t n)

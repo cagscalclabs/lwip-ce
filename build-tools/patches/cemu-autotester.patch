@@ -39,7 +39,15 @@ diff --git a/tests/autotester/autotester_cli.cpp b/tests/autotester/autotester_c
 index cdcb6ad..9f11a39 100644
 --- a/tests/autotester/autotester_cli.cpp
 +++ b/tests/autotester/autotester_cli.cpp
-@@ -117,7 +117,9 @@ int main(int argc, char* argv[])
+@@ -30,6 +30,7 @@ namespace cemucore
+     extern "C"
+     {
+         void gui_console_clear() {}
++        void debug_flag(int mask, bool set);
+         void gui_debug_close(void) {}
+         void gui_debug_open(int reason, uint32_t data) {
+             printf("[CEmu debug open] reason=%d, data=0x%X\n", reason, data);
+@@ -117,10 +118,14 @@ int main(int argc, char* argv[])
          return -1;
      }
  
@@ -50,6 +58,11 @@ index cdcb6ad..9f11a39 100644
      {
          std::cerr << "[Error] Couldn't start emulation!" << std::endl;
          return -1;
+     }
+ 
++    cemucore::debug_flag(1 << 1 /* DBG_SOFT_COMMANDS */, true);
++
+     cemucore::emu_set_run_rate(1000);
 diff --git a/tests/autotester/headless_cli.cpp b/tests/autotester/headless_cli.cpp
 index 4e286e4..558b94c 100644
 --- a/tests/autotester/headless_cli.cpp
