@@ -66,7 +66,7 @@ assert "#define FINISHED_HS_MAX (4 + TLS_HASH_MAX_DIGEST_LEN)" in altcp_source
 assert "mem_malloc(FINISHED_HS_MAX + ENC_FINISHED_MAX)" in altcp_source
 assert "uint8_t *enc_finished = finished_hs + FINISHED_HS_MAX;" in altcp_source
 assert altcp_source.count("mem_free(finished_hs);") >= 3
-assert altcp_source.count("uint8_t finished[4 + TLS_HASH_MAX_DIGEST_LEN];") == 1
+assert altcp_source.count("const size_t finished_cap = 4 + TLS_HASH_MAX_DIGEST_LEN;") == 1
 assert "size_t finished_len = 4u + (size_t)ctx->hash_len;" in altcp_source
 assert "plain_len == finished_len" in altcp_source
 assert "tls_server_recv_finished(ctx, finished, finished_len)" in altcp_source
@@ -84,7 +84,7 @@ assert hello.count("if (!cert_mode)") >= 3
 # The server sends one legal X25519 HRR, performs RFC 8446 transcript
 # replacement, and requires CH2 to contain exactly the requested share.
 assert "ctx->hrr_requested_group = TLS_NAMED_GROUP_X25519;" in hello
-assert "uint8_t synth[36] = {0xfe, 0, 0, 32};" in hello
+assert "t->synth[0] = 0xfe;" in hello and "t->synth[3] = 32;" in hello
 assert "share_entries != 1" in hello
 assert "offer_gcm ? TLS_AES_128_GCM_SHA256" in hello
 
@@ -202,6 +202,9 @@ static void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *out)
 }
 static void tls_hash_clear(struct tls_hash_context *ctx) { memset(ctx, 0, sizeof(*ctx)); }
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
+#include <stdlib.h>
+static void *tls_scratch_alloc(size_t n) { return malloc(n); }
+static void tls_scratch_free(void *p, size_t n) { if (p) { tls_secure_memzero(p, n); free(p); } }
 
 static tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
                                         uint8_t *sig_out, size_t *sig_len_out,

@@ -72,6 +72,17 @@ static void tls_hash_update(struct tls_hash_context *ctx,
 {{ while (n--) ctx->state = ctx->state * 33u + *p++; }}
 static void tls_hash_digest(struct tls_hash_context *ctx, uint8_t out[32])
 {{ for (unsigned i = 0; i < 32; i++) out[i] = (uint8_t)(ctx->state + i * 17u); }}
+static void *tls_scratch_alloc(size_t n) {{ return malloc(n); }}
+static void tls_scratch_free(void *p, size_t n)
+{{ if (p) {{ tls_secure_memzero(p, n); free(p); }} }}
+static struct tls_hash_context *tls_hash_context_alloc(uint8_t alg)
+{{
+    struct tls_hash_context *ctx = tls_scratch_alloc(sizeof(*ctx));
+    if (ctx) tls_hash_context_init(ctx, alg);
+    return ctx;
+}}
+static void tls_hash_context_free(struct tls_hash_context *ctx)
+{{ tls_scratch_free(ctx, sizeof(*ctx)); }}
 
 bool tls_random_init_entropy(void)
 {{

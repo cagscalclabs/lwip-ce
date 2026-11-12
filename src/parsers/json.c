@@ -4,6 +4,7 @@
  */
 
 #include "json.h"
+#include "lwip/mem.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -287,10 +288,18 @@ json_err_t json_get_number(json_parser_t *p, const char *key, long *out)
     json_err_t err = json_get_key_value(p, key, &k, &v);
     if (err != JSON_OK) return err;
     if (v.type != JSON_TOK_NUMBER) return JSON_ERR_INVALID;
-    char buf[24];
-    if (!json_slice_copy(buf, sizeof(buf), &v.value)) return JSON_ERR_INVALID;
-    *out = strtol(buf, &end, 10);
-    if (*end != '\0')
-        return JSON_ERR_INVALID;
-    return JSON_OK;
+    const size_t buf_cap = 24;
+    char *buf = (char *)mem_malloc(buf_cap);
+    if (!buf) return JSON_ERR_INVALID;
+    err = JSON_OK;
+    if (!json_slice_copy(buf, buf_cap, &v.value))
+        err = JSON_ERR_INVALID;
+    else
+    {
+        *out = strtol(buf, &end, 10);
+        if (*end != '\0')
+            err = JSON_ERR_INVALID;
+    }
+    mem_free(buf);
+    return err;
 }

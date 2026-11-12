@@ -4,6 +4,7 @@
 #include "../includes/hmac.h"
 #include "../includes/passwords.h"
 #include "../includes/bytes.h"
+#include "../includes/scratch.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_PASSWORDS
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -29,34 +30,40 @@ bool tls_pbkdf2(const char* password, size_t passlen,
        (rounds==0) ||
        (rounds > TLS_PBKDF2_MAX_ROUNDS)) { ERROR(); return false; }
        
-    uint8_t hash_buffer[HASH_BLOCK_OUT_MAX] = {0},
-            hash_composite[HASH_BLOCK_OUT_MAX] = {0};
+    struct {
+        uint8_t hash_buffer[HASH_BLOCK_OUT_MAX];
+        uint8_t hash_composite[HASH_BLOCK_OUT_MAX];
+        struct tls_hmac_context initial, counter, state;
+    } *t;
     uint8_t c[4] = {0};
-    struct tls_hmac_context initial = {0}, counter = {0}, state = {0};
     size_t outlen;
     uint32_t ctr = 1;
-    
+
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t) { ERROR(); return false; }
+    memset(t, 0, sizeof(*t));
+
     // DK = T(i) for i in 0 => (keylen/HASH), concat; HASH is the selected
     // algorithm (SHA-256, SHA-384, or SHA-512).
-    if(!tls_hmac_context_init(&initial, algorithm,
+    if(!tls_hmac_context_init(&t->initial, algorithm,
                               (const uint8_t *)password, passlen)) {
-        tls_hmac_clear(&initial);
+        tls_scratch_free(t, sizeof(*t));
         ERROR();
         return false;
     }
-    
-    size_t hash_len = initial.digestlen;
+
+    size_t hash_len = t->initial.digestlen;
     if (hash_len == 0 || hash_len > HASH_BLOCK_OUT_MAX)
     {
-        tls_hmac_clear(&initial);
+        tls_scratch_free(t, sizeof(*t));
         ERROR();
         return false;
     }
-    
+
     // make a copy of initial to counter and update it with salt
-    memcpy(&counter, &initial, sizeof counter);
-    counter.update(&counter, salt, saltlen);
-    
+    memcpy(&t->counter, &t->initial, sizeof t->counter);
+    t->counter.update(&t->counter, salt, saltlen);
+
     for(outlen = 0; outlen < keylen; outlen+=hash_len, ctr++){
         //T(i) = F(password, salt, c, i) = U1 xor U2 xor ... xor Uc
         //U1 = PRF1(Password, Salt + INT_32_BE(i))
@@ -68,24 +75,20 @@ bool tls_pbkdf2(const char* password, size_t passlen,
         c[1] = (ctr >> 16) & 0xff;
         c[2] = (ctr >> 8) & 0xff;
         c[3] = ctr & 0xff;
-        memcpy(&state, &counter, sizeof state);
-        state.update(&state, c, sizeof c);
-        state.digest(&state, hash_buffer);
-        memcpy(hash_composite, hash_buffer, hash_len);
+        memcpy(&t->state, &t->counter, sizeof t->state);
+        t->state.update(&t->state, c, sizeof c);
+        t->state.digest(&t->state, t->hash_buffer);
+        memcpy(t->hash_composite, t->hash_buffer, hash_len);
         for(size_t ic=1; ic<rounds; ic++){
-            memcpy(&state, &initial, sizeof state);
-            state.update(&state, hash_buffer, hash_len);
-            state.digest(&state, hash_buffer);
+            memcpy(&t->state, &t->initial, sizeof t->state);
+            t->state.update(&t->state, t->hash_buffer, hash_len);
+            t->state.digest(&t->state, t->hash_buffer);
             for(size_t j=0; j < hash_len; j++)
-                hash_composite[j] ^= hash_buffer[j];
+                t->hash_composite[j] ^= t->hash_buffer[j];
         }
-        memcpy(&key[outlen], hash_composite, copylen);
+        memcpy(&key[outlen], t->hash_composite, copylen);
     }
-    tls_secure_memzero(hash_buffer, sizeof hash_buffer);
-    tls_secure_memzero(hash_composite, sizeof hash_composite);
+    tls_scratch_free(t, sizeof(*t));
     tls_secure_memzero(c, sizeof c);
-    tls_hmac_clear(&initial);
-    tls_hmac_clear(&counter);
-    tls_hmac_clear(&state);
     return true;
 }

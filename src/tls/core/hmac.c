@@ -3,6 +3,7 @@
 #include "../includes/hmac.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
+#include "../includes/scratch.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_HMAC
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -11,7 +12,7 @@
 bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
                            const uint8_t *key, size_t keylen)
 {
-    uint8_t sum[TLS_HASH_MAX_BLOCK_LEN];
+    uint8_t *sum;
 
     if (ctx == NULL) { ERROR(); return false; }
     tls_hmac_clear(ctx);
@@ -34,18 +35,23 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
         return false;
     }
 
-    memset(sum, 0, sizeof sum);
+    sum = tls_scratch_alloc(TLS_HASH_MAX_BLOCK_LEN);
+    if (!sum) {
+        ERROR();
+        tls_hmac_clear(ctx);
+        return false;
+    }
+    memset(sum, 0, TLS_HASH_MAX_BLOCK_LEN);
 
     if (keylen > ctx->blocklen) {
         /* Hash the long key with the inner hash context, then reinitialize it
-         * for the actual inner HMAC pad.  This keeps the 130+ byte temporary
-         * hash context and the separate 128-byte pad buffer off the stack. */
+         * for the actual inner HMAC pad. */
         tls_hash_update(&ctx->_inner, key, keylen);
         tls_hash_digest(&ctx->_inner, sum);
         keylen = ctx->digestlen;
         if (!tls_hash_context_init(&ctx->_inner, algorithm)) {
             ERROR();
-            tls_secure_memzero(sum, sizeof sum);
+            tls_scratch_free(sum, TLS_HASH_MAX_BLOCK_LEN);
             tls_hmac_clear(ctx);
             return false;
         }
@@ -64,14 +70,14 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
         sum[i] ^= 0x36 ^ 0x5C;
     if (!ctx->_inner.init(&ctx->_outer)) {
         tls_crypto_guard_disable();
-        tls_secure_memzero(sum, sizeof sum);
+        tls_scratch_free(sum, TLS_HASH_MAX_BLOCK_LEN);
         tls_hmac_clear(ctx);
         return false;
     }
     ctx->_inner.update(&ctx->_outer, sum, ctx->blocklen);
     tls_crypto_guard_disable();
 
-    tls_secure_memzero(sum, sizeof sum);
+    tls_scratch_free(sum, TLS_HASH_MAX_BLOCK_LEN);
     return true;
 }
 
@@ -82,23 +88,28 @@ void tls_hmac_update(struct tls_hmac_context *ctx, const uint8_t *data, size_t l
     tls_crypto_guard_disable();
 }
 
+/* tls_hmac_digest cannot report failure, so its scratch is static rather than
+ * heap. It is not reentrant: nothing that runs inside it computes an HMAC. */
+static struct {
+    uint8_t tbuf[TLS_HASH_MAX_DIGEST_LEN];
+    union tls_hash_state state;
+} hmac_digest_scratch;
+
 void tls_hmac_digest(struct tls_hmac_context *ctx, uint8_t *digest)
 {
-    uint8_t tbuf[TLS_HASH_MAX_DIGEST_LEN];
-    union tls_hash_state scratch;
-
     /* Digest a copy of the inner state, then reuse the same scratch for a
-     * copy of the outer state.  The context itself stays intact, as before,
-     * with one state-sized stack slot instead of two. */
-    memcpy(&scratch, &ctx->_inner._private, sizeof scratch);
+     * copy of the outer state.  The context itself stays intact. */
+    memcpy(&hmac_digest_scratch.state, &ctx->_inner._private,
+           sizeof hmac_digest_scratch.state);
     tls_crypto_guard_enable();
-    ctx->_inner.digest(&scratch, tbuf);
-    memcpy(&scratch, &ctx->_outer, sizeof scratch);
-    ctx->_inner.update(&scratch, tbuf, ctx->digestlen);
-    ctx->_inner.digest(&scratch, digest);
+    ctx->_inner.digest(&hmac_digest_scratch.state, hmac_digest_scratch.tbuf);
+    memcpy(&hmac_digest_scratch.state, &ctx->_outer,
+           sizeof hmac_digest_scratch.state);
+    ctx->_inner.update(&hmac_digest_scratch.state, hmac_digest_scratch.tbuf,
+                       ctx->digestlen);
+    ctx->_inner.digest(&hmac_digest_scratch.state, digest);
     tls_crypto_guard_disable();
-    tls_secure_memzero(tbuf, sizeof tbuf);
-    tls_secure_memzero(&scratch, sizeof scratch);
+    tls_secure_memzero(&hmac_digest_scratch, sizeof hmac_digest_scratch);
 }
 
 void tls_hmac_clear(struct tls_hmac_context *ctx)

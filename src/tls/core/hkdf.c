@@ -9,6 +9,7 @@
 #include "../includes/hmac.h"
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
+#include "../includes/scratch.h"
 #include <string.h>
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_HKDF
@@ -56,7 +57,7 @@ bool tls_hkdf_extract(
     size_t ikm_len,
     uint8_t *prk
 ) {
-    struct tls_hmac_context ctx;
+    struct tls_hmac_context *ctx;
     size_t hash_len = get_hash_length(hash_algorithm);
 
     if (hash_len == 0 || !prk) {
@@ -71,7 +72,7 @@ bool tls_hkdf_extract(
     /* If no salt or IKM provided, use hash_len zeros. Symmetric handling
      * keeps callers from having to keep their own zero buffer just to
      * pass it in (TLS 1.3 PSK-only-no-ECDHE needs ikm=zeros). */
-    uint8_t zeros[TLS_HASH_MAX_DIGEST_LEN] = {0};  /* Max hash length */
+    static const uint8_t zeros[TLS_HASH_MAX_DIGEST_LEN] = {0};
     if (!salt || salt_len == 0) {
         salt = zeros;
         salt_len = hash_len;
@@ -86,16 +87,22 @@ bool tls_hkdf_extract(
         ikm = zeros;
     }
 
-    /* PRK = HMAC(salt, ikm) */
-    if (!tls_hmac_context_init(&ctx, hash_algorithm, salt, salt_len)) {
+    ctx = tls_scratch_alloc(sizeof(*ctx));
+    if (!ctx) {
         ERROR();
-        tls_hmac_clear(&ctx);
         return false;
     }
 
-    tls_hmac_update(&ctx, ikm, ikm_len);
-    tls_hmac_digest(&ctx, prk);
-    tls_hmac_clear(&ctx);
+    /* PRK = HMAC(salt, ikm) */
+    if (!tls_hmac_context_init(ctx, hash_algorithm, salt, salt_len)) {
+        ERROR();
+        tls_scratch_free(ctx, sizeof(*ctx));
+        return false;
+    }
+
+    tls_hmac_update(ctx, ikm, ikm_len);
+    tls_hmac_digest(ctx, prk);
+    tls_scratch_free(ctx, sizeof(*ctx));
 
     return true;
 }
@@ -126,9 +133,11 @@ bool tls_hkdf_expand(
     uint8_t *okm,
     size_t okm_len
 ) {
-    struct tls_hmac_context ctx;
+    struct {
+        struct tls_hmac_context ctx;
+        uint8_t t_prev[TLS_HASH_MAX_DIGEST_LEN];  /* Previous T(i) */
+    } *t;
     size_t hash_len = get_hash_length(hash_algorithm);
-    uint8_t t_prev[TLS_HASH_MAX_DIGEST_LEN];  /* Previous T(i) */
     uint8_t counter;
     size_t n, i;
     size_t offset = 0;
@@ -157,47 +166,51 @@ bool tls_hkdf_expand(
     /* Calculate N = ceil(okm_len / hash_len) */
     n = (okm_len + hash_len - 1) / hash_len;
 
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t) {
+        ERROR();
+        return false;
+    }
+
     /* Generate T(1) through T(N) */
     for (i = 1; i <= n; i++) {
         counter = (uint8_t)i;
 
         /* Initialize HMAC with PRK */
-        if (!tls_hmac_context_init(&ctx, hash_algorithm, prk, prk_len)) {
+        if (!tls_hmac_context_init(&t->ctx, hash_algorithm, prk, prk_len)) {
             ERROR();
-            tls_hmac_clear(&ctx);
-            tls_secure_memzero(t_prev, sizeof t_prev);
+            tls_scratch_free(t, sizeof(*t));
             return false;
         }
 
         /* T(i) = HMAC(PRK, T(i-1) | info | i) */
         if (i > 1) {
             /* Add T(i-1) */
-            tls_hmac_update(&ctx, t_prev, hash_len);
+            tls_hmac_update(&t->ctx, t->t_prev, hash_len);
         }
 
         /* Add info */
         if (info && info_len > 0) {
-            tls_hmac_update(&ctx, info, info_len);
+            tls_hmac_update(&t->ctx, info, info_len);
         }
 
         /* Add counter byte */
-        tls_hmac_update(&ctx, &counter, 1);
+        tls_hmac_update(&t->ctx, &counter, 1);
 
         /* Compute T(i) */
-        tls_hmac_digest(&ctx, t_prev);
-        tls_hmac_clear(&ctx);
+        tls_hmac_digest(&t->ctx, t->t_prev);
+        tls_hmac_clear(&t->ctx);
 
         /* Copy to output (possibly partial on last iteration) */
         size_t to_copy = hash_len;
         if (offset + to_copy > okm_len) {
             to_copy = okm_len - offset;
         }
-        memcpy(okm + offset, t_prev, to_copy);
+        memcpy(okm + offset, t->t_prev, to_copy);
         offset += to_copy;
     }
 
-    tls_hmac_clear(&ctx);
-    tls_secure_memzero(t_prev, sizeof t_prev);
+    tls_scratch_free(t, sizeof(*t));
     return true;
 }
 

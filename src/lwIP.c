@@ -1498,18 +1498,17 @@ static bool netif_has_usable_gateway(const struct netif *n)
 
 static bool host_requires_dns(const char *host)
 {
-    ip_addr_t parsed;
-
     if (!host || !*host)
     {
         return false;
     }
-    if (ip4addr_aton(host, ip_2_ip4(&parsed)))
+    /* A NULL output makes lwIP's aton just validate the literal. */
+    if (ip4addr_aton(host, NULL))
     {
         return false;
     }
 #if LWIP_IPV6
-    if (ip6addr_aton(host, ip_2_ip6(&parsed)))
+    if (ip6addr_aton(host, NULL))
     {
         return false;
     }
@@ -2967,15 +2966,23 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         }
         else if (conn->tls_psk_identity_len > 0)
         {
-            struct tls_psk_identity id;
-            memset(&id, 0, sizeof(id));
-            size_t copy = conn->tls_psk_identity_len;
-            if (copy > sizeof(id.identity))
-                copy = sizeof(id.identity);
-            memcpy(id.identity, conn->tls_psk_identity, copy);
-            id.identity_len = copy;
-            conn->tls_conf = altcp_tls_ce_create_config_psk_client(
-                conn->tls_psk, &id);
+            struct tls_psk_identity *id = (struct tls_psk_identity *)mem_malloc(sizeof(*id));
+            if (id)
+            {
+                memset(id, 0, sizeof(*id));
+                size_t copy = conn->tls_psk_identity_len;
+                if (copy > sizeof(id->identity))
+                    copy = sizeof(id->identity);
+                memcpy(id->identity, conn->tls_psk_identity, copy);
+                id->identity_len = copy;
+                conn->tls_conf = altcp_tls_ce_create_config_psk_client(
+                    conn->tls_psk, id);
+                mem_free(id);
+            }
+            else
+            {
+                conn->tls_conf = NULL;
+            }
         }
         else
         {
@@ -3364,12 +3371,16 @@ lwip_error_t lwip_socket_listen(struct lwip_socket *conn, uint16_t port)
         else if (conn->tls_psk_identity_len > 0)
         {
             /* PSK-authenticated server: use stored PSK fields. */
-            struct tls_psk_identity id;
-            memset(&id, 0, sizeof(id));
-            memcpy(id.identity, conn->tls_psk_identity,
-                   conn->tls_psk_identity_len);
-            id.identity_len = conn->tls_psk_identity_len;
-            conf = altcp_tls_ce_create_config_psk_server(conn->tls_psk, &id);
+            struct tls_psk_identity *id = (struct tls_psk_identity *)mem_malloc(sizeof(*id));
+            if (id)
+            {
+                memset(id, 0, sizeof(*id));
+                memcpy(id->identity, conn->tls_psk_identity,
+                       conn->tls_psk_identity_len);
+                id->identity_len = conn->tls_psk_identity_len;
+                conf = altcp_tls_ce_create_config_psk_server(conn->tls_psk, id);
+                mem_free(id);
+            }
         }
         else
         {
@@ -3563,7 +3574,7 @@ static size_t lwip_socket_read_datagram(struct lwip_socket *conn,
     left -= take;
     while (left)
     {
-        uint8_t skip[32];
+        uint8_t skip[16];
         size_t n = left < sizeof(skip) ? left : sizeof(skip);
         mem_buffer_pop(conn->rx_ring, skip, n);
         left -= n;

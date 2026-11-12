@@ -81,9 +81,13 @@ void tls_sha512_core_update(void *vctx, const uint8_t *data, size_t len)
     }
 }
 
+/* tls_sha512_core_digest cannot report failure, so its working copy is static
+ * rather than heap. It is not reentrant and is wiped before returning. */
+static struct sha512_state_view sha512_digest_scratch;
+
 void tls_sha512_core_digest(void *vctx, uint8_t *digest, size_t digest_len)
 {
-    struct sha512_state_view local;
+    struct sha512_state_view *local = &sha512_digest_scratch;
     struct sha512_state_view *ctx = vctx;
     uint64_t bitlen_hi;
     uint64_t bitlen_lo;
@@ -92,31 +96,31 @@ void tls_sha512_core_digest(void *vctx, uint8_t *digest, size_t digest_len)
     if (ctx == NULL || digest == NULL)
         return;
 
-    memcpy(&local, ctx, sizeof(local));
-    bitlen_hi = local.bitlen_hi;
-    bitlen_lo = local.bitlen_lo;
+    memcpy(local, ctx, sizeof(*local));
+    bitlen_hi = local->bitlen_hi;
+    bitlen_lo = local->bitlen_lo;
 
-    local.data[local.datalen++] = 0x80;
-    if (local.datalen > (TLS_SHA512_BLOCK_LEN - 16))
+    local->data[local->datalen++] = 0x80;
+    if (local->datalen > (TLS_SHA512_BLOCK_LEN - 16))
     {
-        memset(local.data + local.datalen, 0,
-               (size_t)TLS_SHA512_BLOCK_LEN - (size_t)local.datalen);
-        tls_sha512_compress(local.state, local.data);
-        local.datalen = 0;
+        memset(local->data + local->datalen, 0,
+               (size_t)TLS_SHA512_BLOCK_LEN - (size_t)local->datalen);
+        tls_sha512_compress(local->state, local->data);
+        local->datalen = 0;
     }
-    memset(local.data + local.datalen, 0,
-           (size_t)(TLS_SHA512_BLOCK_LEN - 16) - (size_t)local.datalen);
+    memset(local->data + local->datalen, 0,
+           (size_t)(TLS_SHA512_BLOCK_LEN - 16) - (size_t)local->datalen);
 
     for (i = 0; i < 8; i++)
     {
-        local.data[112 + i] = (uint8_t)(bitlen_hi >> (56 - 8 * i));
-        local.data[120 + i] = (uint8_t)(bitlen_lo >> (56 - 8 * i));
+        local->data[112 + i] = (uint8_t)(bitlen_hi >> (56 - 8 * i));
+        local->data[120 + i] = (uint8_t)(bitlen_lo >> (56 - 8 * i));
     }
-    tls_sha512_compress(local.state, local.data);
+    tls_sha512_compress(local->state, local->data);
 
     for (i = 0; i < digest_len / 8; i++)
     {
-        uint64_t w = local.state[i];
+        uint64_t w = local->state[i];
         digest[8 * i + 0] = (uint8_t)(w >> 56);
         digest[8 * i + 1] = (uint8_t)(w >> 48);
         digest[8 * i + 2] = (uint8_t)(w >> 40);
@@ -127,7 +131,7 @@ void tls_sha512_core_digest(void *vctx, uint8_t *digest, size_t digest_len)
         digest[8 * i + 7] = (uint8_t)(w >> 0);
     }
 
-    tls_secure_memzero(&local, sizeof(local));
+    tls_secure_memzero(local, sizeof(*local));
 }
 
 bool tls_sha512_init(struct tls_sha512_context *ctx)

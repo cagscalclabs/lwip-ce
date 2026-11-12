@@ -140,6 +140,9 @@ static void tls_hash_clear(struct tls_hash_context *h) { (void)h; }
 static bool transcript_hash_init(struct tls_hash_context *h, uint8_t algorithm)
 { (void)algorithm; h->bytes = 0; h->hash = 5381u; h->resets++; return true; }
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
+#include <stdlib.h>
+static void *tls_scratch_alloc(size_t n) { return malloc(n); }
+static void tls_scratch_free(void *p, size_t n) { if (p) { tls_secure_memzero(p, n); free(p); } }
 static bool tls_send_alert(struct tls_handshake_context *ctx, uint8_t level,
                            uint8_t description)
 { (void)level; last_alert = description; ctx->state = TLS_STATE_ERROR; return true; }

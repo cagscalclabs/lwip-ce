@@ -58,6 +58,8 @@ static size_t root_candidate_count;
 static unsigned ski_lookup_calls;
 static void *mem_buffer_custom_malloc(size_t n) { return malloc(n); }
 static void mem_buffer_custom_free(void *p) { free(p); }
+static void *tls_scratch_alloc(size_t n) { return malloc(n); }
+static void tls_scratch_free(void *p, size_t n) { if (p) { memset(p, 0, n); free(p); } }
 static void *tls_fileio_alloc(size_t n) { return malloc(n); }
 static void tls_fileio_free(void *p) { free(p); }
 static bool tls_rng_healthcheck(void) { return true; }

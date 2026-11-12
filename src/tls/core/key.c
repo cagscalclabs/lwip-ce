@@ -22,6 +22,7 @@
 #include "../includes/random.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
+#include "../includes/scratch.h"
 #include "../includes/base64.h"
 #include "../includes/passwords.h"
 #include "../includes/asn1.h"
@@ -517,17 +518,30 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
     if (rounds == 0 || rounds > 600000u)
         return TLS_KEY_IMPORT_DECRYPT_FAIL;
 
+    struct {
+        uint8_t derived[32];
+        struct tls_aes_context aes_ctx;
+    } *t;
+    /* keyLength comes from the file; it must fit the derived-key buffer. */
+    if (key_len == 0 || key_len > sizeof(t->derived))
+        return TLS_KEY_IMPORT_DECRYPT_FAIL;
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
+        return TLS_KEY_IMPORT_DECRYPT_FAIL;
+    memset(t, 0, sizeof(*t));
+
     /* Derive the wrapping key with PBKDF2-HMAC-SHA256. */
-    uint8_t derived[32];
     if (!tls_pbkdf2(password, strlen(password),
                     salt.value, salt.len,
-                    derived, key_len,
+                    t->derived, key_len,
                     rounds, TLS_HASH_SHA256))
+    {
+        tls_scratch_free(t, sizeof(*t));
         return TLS_KEY_IMPORT_DECRYPT_FAIL;
+    }
 
     /* Decrypt into buf.  GCM carries a 16-byte tag appended to ciphertext. */
     size_t pt_len = enc_data.len;
-    struct tls_aes_context aes_ctx;
     bool ok = false;
 
     if (aes_mode == TLS_AES_GCM)
@@ -535,19 +549,19 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
         if (pt_len < TLS_AES_AUTH_TAG_SIZE) goto done;
         pt_len -= TLS_AES_AUTH_TAG_SIZE;
         const uint8_t *tag = enc_data.value + pt_len;
-        if (!tls_aes_init(&aes_ctx, TLS_AES_GCM,
-                          derived, key_len, iv_tlv.value, iv_tlv.len))
+        if (!tls_aes_init(&t->aes_ctx, TLS_AES_GCM,
+                          t->derived, key_len, iv_tlv.value, iv_tlv.len))
             goto done;
-        if (!tls_aes_verify(&aes_ctx, NULL, 0, enc_data.value, pt_len, tag))
+        if (!tls_aes_verify(&t->aes_ctx, NULL, 0, enc_data.value, pt_len, tag))
             goto done;
-        ok = tls_aes_decrypt(&aes_ctx, enc_data.value, pt_len, buf);
+        ok = tls_aes_decrypt(&t->aes_ctx, enc_data.value, pt_len, buf);
     }
     else /* CBC */
     {
-        if (!tls_aes_init(&aes_ctx, TLS_AES_CBC,
-                          derived, key_len, iv_tlv.value, iv_tlv.len))
+        if (!tls_aes_init(&t->aes_ctx, TLS_AES_CBC,
+                          t->derived, key_len, iv_tlv.value, iv_tlv.len))
             goto done;
-        if (!tls_aes_decrypt(&aes_ctx, enc_data.value, enc_data.len, buf))
+        if (!tls_aes_decrypt(&t->aes_ctx, enc_data.value, enc_data.len, buf))
             goto done;
         pt_len = tls_aes_pkcs7_remove(buf, enc_data.len);
         if (pt_len == 0)
@@ -556,8 +570,8 @@ key_decrypt_pbes2(const uint8_t *epi_der, size_t epi_len,
     }
 
 done:
-    tls_aes_destroy_ctx(&aes_ctx);
-    tls_secure_memzero(derived,  sizeof(derived));
+    tls_aes_destroy_ctx(&t->aes_ctx);
+    tls_scratch_free(t, sizeof(*t));
     if (!ok) return TLS_KEY_IMPORT_DECRYPT_FAIL;
 
     *inner_der     = buf;
@@ -775,15 +789,12 @@ static size_t ecdsa_der_integer(uint8_t *dst, const uint8_t *val, size_t val_len
  * dst must have room for 2 + 2*(2 + coord_len + 1). Returns the length. */
 static size_t ecdsa_raw_to_der(uint8_t *dst, const uint8_t *raw, size_t coord_len)
 {
-    uint8_t r_enc[64], s_enc[64];
-    size_t r_len = ecdsa_der_integer(r_enc, raw, coord_len);
-    size_t s_len = ecdsa_der_integer(s_enc, raw + coord_len, coord_len);
+    size_t r_len = ecdsa_der_integer(dst + 2, raw, coord_len);
+    size_t s_len = ecdsa_der_integer(dst + 2 + r_len, raw + coord_len, coord_len);
     size_t body = r_len + s_len;
 
     dst[0] = 0x30; /* SEQUENCE */
     dst[1] = (uint8_t)body;
-    memcpy(dst + 2, r_enc, r_len);
-    memcpy(dst + 2 + r_len, s_enc, s_len);
     return 2 + body;
 }
 
@@ -807,10 +818,16 @@ tls_key_op_result_t tls_key_verify(const uint8_t *content, size_t content_len,
                          (size_t)sig[1] + 2 == sig_len;
         if (!looks_der)
         {
-            uint8_t der[110];
+            const size_t der_cap = 110;
+            uint8_t *der = tls_scratch_alloc(der_cap);
+            tls_key_op_result_t res;
+            if (!der)
+                return TLS_KEY_OP_INVALID;
             size_t der_len = ecdsa_raw_to_der(der, sig, sig_len / 2);
-            return tls_x509_signature_verify(content, content_len,
-                                             der, der_len, key, alg);
+            res = tls_x509_signature_verify(content, content_len,
+                                            der, der_len, key, alg);
+            tls_scratch_free(der, der_cap);
+            return res;
         }
     }
     return tls_x509_signature_verify(content, content_len, sig, sig_len, key, alg);
@@ -829,15 +846,21 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
         {
             if (key->type != TLS_KEY_TYPE_EC_P256 || !key->ec.priv)
                 return TLS_KEY_OP_INVALID;
-            struct tls_hash_context hctx;
-            uint8_t digest[32];
-            if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256))
+            struct {
+                struct tls_hash_context hctx;
+                uint8_t digest[32];
+            } *t = tls_scratch_alloc(sizeof(*t));
+            if (!t)
                 return TLS_KEY_OP_INVALID;
-            tls_hash_update(&hctx, content, content_len);
-            tls_hash_digest(&hctx, digest);
-            tls_hash_clear(&hctx);
-            bool ok = tls_p256_sign(sig_out, digest, key->ec.priv);
-            tls_secure_memzero(digest, sizeof digest);
+            if (!tls_hash_context_init(&t->hctx, TLS_HASH_SHA256))
+            {
+                tls_scratch_free(t, sizeof(*t));
+                return TLS_KEY_OP_INVALID;
+            }
+            tls_hash_update(&t->hctx, content, content_len);
+            tls_hash_digest(&t->hctx, t->digest);
+            bool ok = tls_p256_sign(sig_out, t->digest, key->ec.priv);
+            tls_scratch_free(t, sizeof(*t));
             if (!ok)
                 return TLS_KEY_OP_INVALID;
             *sig_len_out = 64;
@@ -848,15 +871,21 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
         {
             if (key->type != TLS_KEY_TYPE_EC_P384 || !key->ec.priv)
                 return TLS_KEY_OP_INVALID;
-            struct tls_hash_context hctx;
-            uint8_t digest[48];
-            if (!tls_hash_context_init(&hctx, TLS_HASH_SHA384))
+            struct {
+                struct tls_hash_context hctx;
+                uint8_t digest[48];
+            } *t = tls_scratch_alloc(sizeof(*t));
+            if (!t)
                 return TLS_KEY_OP_INVALID;
-            tls_hash_update(&hctx, content, content_len);
-            tls_hash_digest(&hctx, digest);
-            tls_hash_clear(&hctx);
-            bool ok = tls_p384_sign(sig_out, digest, key->ec.priv);
-            tls_secure_memzero(digest, sizeof digest);
+            if (!tls_hash_context_init(&t->hctx, TLS_HASH_SHA384))
+            {
+                tls_scratch_free(t, sizeof(*t));
+                return TLS_KEY_OP_INVALID;
+            }
+            tls_hash_update(&t->hctx, content, content_len);
+            tls_hash_digest(&t->hctx, t->digest);
+            bool ok = tls_p384_sign(sig_out, t->digest, key->ec.priv);
+            tls_scratch_free(t, sizeof(*t));
             if (!ok)
                 return TLS_KEY_OP_INVALID;
             *sig_len_out = 96;
@@ -1007,7 +1036,7 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
                                      const uint8_t *inbuf,
                                      size_t in_len)
 {
-    struct tls_aes_context ctx;
+    struct tls_aes_context *ctx;
     size_t iv_len  = key_iv_len(alg);
     uint8_t mode   = key_aes_mode(alg);
     bool aead      = key_is_aead(alg);
@@ -1040,30 +1069,37 @@ static uint8_t *aes_encrypt_oneshot(tls_alg_t alg,
     }
 
     bool ok = false;
-    memset(&ctx, 0, sizeof(ctx));
+    ctx = tls_scratch_alloc(sizeof(*ctx));
+    if (!ctx)
+    {
+        tls_cipher_blob_free(blob);
+        return NULL;
+    }
+    memset(ctx, 0, sizeof(*ctx));
 
     if (mode == TLS_AES_CBC)
     {
         /* PKCS#7: pad into the already-allocated ciphertext buffer, then
          * encrypt in-place. ct is large enough (ct_len = padded size). */
         if (tls_aes_pkcs7_apply(inbuf, in_len, ct) == ct_len &&
-            tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len) &&
-            tls_aes_encrypt(&ctx, ct, ct_len, ct))
+            tls_aes_init(ctx, mode, key_data, key_len, iv, iv_len) &&
+            tls_aes_encrypt(ctx, ct, ct_len, ct))
             ok = true;
     }
     else
     {
         bool initialized = mode == TLS_AES_CCM
-            ? tls_aes_ccm_init(&ctx, key_data, key_len, iv, iv_len,
+            ? tls_aes_ccm_init(ctx, key_data, key_len, iv, iv_len,
                                TLS_KEY_AES_TAG_LEN, in_len, aad_len)
-            : tls_aes_init(&ctx, mode, key_data, key_len, iv, iv_len);
+            : tls_aes_init(ctx, mode, key_data, key_len, iv, iv_len);
         if (initialized &&
-            (!aad_len || tls_aes_update_aad(&ctx, aad, aad_len)) &&
-            (in_len == 0 || tls_aes_encrypt(&ctx, inbuf, in_len, ct)) &&
-            tls_aes_digest(&ctx, tag))
+            (!aad_len || tls_aes_update_aad(ctx, aad, aad_len)) &&
+            (in_len == 0 || tls_aes_encrypt(ctx, inbuf, in_len, ct)) &&
+            tls_aes_digest(ctx, tag))
             ok = true;
     }
-    tls_aes_destroy_ctx(&ctx);
+    tls_aes_destroy_ctx(ctx);
+    tls_scratch_free(ctx, sizeof(*ctx));
 
     if (!ok)
     {
@@ -1240,24 +1276,31 @@ uint8_t *tls_cipher_decrypt_aad(const struct tls_key *key, tls_alg_t alg,
             uint8_t *out = decrypt_blob_alloc(ct_len, &plain);
             if (!out)
                 return NULL;
-            struct tls_aes_context ctx;
+            struct tls_aes_context *ctx = tls_scratch_alloc(sizeof(*ctx));
             bool ok = false;
+            if (!ctx)
+            {
+                tls_cipher_blob_free(out);
+                return NULL;
+            }
+            memset(ctx, 0, sizeof(*ctx));
             bool initialized = mode == TLS_AES_CCM
-                ? tls_aes_ccm_init(&ctx, key->aes.data, key->aes.len,
+                ? tls_aes_ccm_init(ctx, key->aes.data, key->aes.len,
                                    iv, iv_len, (uint8_t)tag_len,
                                    ct_len, aad_len)
-                : tls_aes_init(&ctx, mode, key->aes.data, key->aes.len,
+                : tls_aes_init(ctx, mode, key->aes.data, key->aes.len,
                                iv, iv_len);
             if (initialized)
             {
-                if (!aead || tls_aes_verify(&ctx, aad, aad_len,
+                if (!aead || tls_aes_verify(ctx, aad, aad_len,
                                             ct, ct_len, tag))
                 {
-                    if (tls_aes_decrypt(&ctx, ct, ct_len, plain))
+                    if (tls_aes_decrypt(ctx, ct, ct_len, plain))
                         ok = true;
                 }
             }
-            tls_aes_destroy_ctx(&ctx);
+            tls_aes_destroy_ctx(ctx);
+            tls_scratch_free(ctx, sizeof(*ctx));
             if (!ok)
             {
                 tls_cipher_blob_free(out);

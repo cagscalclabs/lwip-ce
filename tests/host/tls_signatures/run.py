@@ -553,6 +553,9 @@ with tempfile.TemporaryDirectory() as tmp:
         '#include <stddef.h>\n'
         'void *tls_fileio_alloc(size_t n) { return malloc(n); }\n'
         'void  tls_fileio_free(void *p)   { free(p); }\n'
+        'void *mem_buffer_custom_malloc(size_t n) { return malloc(n); }\n'
+        'void  mem_buffer_custom_free(void *p)   { free(p); }\n'
+        'void  tls_secure_memzero(void *p, size_t n) { volatile unsigned char *q = p; while (n--) *q++ = 0; }\n'
     )
     binary = tmp / 'test'
     subprocess.run(['cc', '-std=c99', '-g', '-Wall', '-Wextra',

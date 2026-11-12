@@ -185,6 +185,7 @@
 #include "../includes/truststore.h"
 #include "../includes/bytes.h"
 #include "../includes/crypto_guard.h"
+#include "../includes/scratch.h"
 #include "../includes/x509.h"
 #include "../contrib/x25519/src/x25519.h"
 /* P-256 public API (assembly implementation in p256.s). */
@@ -209,8 +210,6 @@ bool tls_p384_verify(const uint8_t sig[96], const uint8_t hash[48], const uint8_
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
 #include "lwip/logging.h"
 
-/* Cleanup helper for the remaining stack-local AES contexts. */
-TLS_AUTOZERO_DECL_STRUCT(tls_aes_context)
 
 /*
  * ============================================================================
@@ -246,11 +245,16 @@ static void tls_phase_trace(const char *phase)
         return;
     }
     uint32_t now = sys_now();
-    char line[40];
-    snprintf(line, sizeof(line), "tls %s +%lums", phase,
-             (unsigned long)(uint32_t)(now - tls_phase_last_ms));
+    const size_t line_cap = 40;
+    char *line = tls_scratch_alloc(line_cap);
+    if (line)
+    {
+        snprintf(line, line_cap, "tls %s +%lums", phase,
+                 (unsigned long)(uint32_t)(now - tls_phase_last_ms));
+        INFO(line);
+        tls_scratch_free(line, line_cap);
+    }
     tls_phase_last_ms = now;
-    INFO(line);
 }
 #else
 #define tls_phase_trace_begin() ((void)0)
@@ -285,14 +289,20 @@ static void transcript_hash_update(struct tls_hash_context *ctx,
 /**
  * @brief Get current transcript hash value
  */
-static void transcript_hash_digest(struct tls_hash_context *ctx,
+static bool transcript_hash_digest(struct tls_hash_context *ctx,
                                    uint8_t *digest)
 {
     /* Make a copy to get digest without destroying context */
-    struct tls_hash_context ctx_copy;
-    memcpy(&ctx_copy, ctx, sizeof(ctx_copy));
-    tls_hash_digest(&ctx_copy, digest);
-    tls_hash_clear(&ctx_copy);
+    struct tls_hash_context *ctx_copy = tls_scratch_alloc(sizeof(*ctx_copy));
+    if (!ctx_copy)
+    {
+        ERROR();
+        return false;
+    }
+    memcpy(ctx_copy, ctx, sizeof(*ctx_copy));
+    tls_hash_digest(ctx_copy, digest);
+    tls_scratch_free(ctx_copy, sizeof(*ctx_copy));
+    return true;
 }
 
 /*
@@ -994,7 +1004,6 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
     lwip_crypto_job_t job;
     size_t key_len;
     size_t size;
-    uint8_t rs[64];
 
     if (!ctx || !tls_key_supports_operation(key, alg))
     {
@@ -1002,11 +1011,14 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
     }
     if (alg == TLS_ALG_ECDSA_SECP256R1_SHA256)
     {
-        if (!key->ec.pub || key->ec.len != 65 || !tls_ecdsa_sig_rs(sig, sig_len, rs))
+        uint8_t *rs = tls_scratch_alloc(64);
+        if (!rs || !key->ec.pub || key->ec.len != 65 || !tls_ecdsa_sig_rs(sig, sig_len, rs))
         {
+            tls_scratch_free(rs, 64);
             return false;
         }
         job = lwip_crypto_p256_verify(digest, key->ec.pub, rs);
+        tls_scratch_free(rs, 64);
         key_len = 65;
     }
     else if ((alg == TLS_ALG_RSA_PKCS1_SHA256 || alg == TLS_ALG_RSA_PSS_RSAE_SHA256) &&
@@ -1141,25 +1153,32 @@ static tls_key_op_result_t tls_cert_verify_root_entry(
     {
         size_t mod_len = key_len > 3 ? key_len - 3 : 0;
         uint8_t exp_be[3];
-        struct tls_key root_key;
+        struct tls_key *root_key;
+        tls_key_op_result_t rc;
 
         if (key_len < 3 + RSA_MODULUS_MIN_SUPPORTED ||
             mod_len > RSA_MODULUS_MAX_SUPPORTED)
             return TLS_KEY_OP_INVALID;
+        root_key = tls_scratch_alloc(sizeof(*root_key));
+        if (!root_key)
+            return TLS_KEY_OP_INVALID;
         exp_be[0] = entry->key[2];
         exp_be[1] = entry->key[1];
         exp_be[2] = entry->key[0];
-        memset(&root_key, 0, sizeof(root_key));
-        root_key.type = TLS_KEY_TYPE_RSA;
-        root_key.rsa.exp_len = sizeof(exp_be);
-        root_key.rsa.exponent = exp_be;
-        root_key.rsa.mod_len = mod_len;
-        root_key.rsa.modulus = entry->key + 3;
-        return tls_cert_verify_pending_link(w, &root_key, offload);
+        memset(root_key, 0, sizeof(*root_key));
+        root_key->type = TLS_KEY_TYPE_RSA;
+        root_key->rsa.exp_len = sizeof(exp_be);
+        root_key->rsa.exponent = exp_be;
+        root_key->rsa.mod_len = mod_len;
+        root_key->rsa.modulus = entry->key + 3;
+        rc = tls_cert_verify_pending_link(w, root_key, offload);
+        tls_scratch_free(root_key, sizeof(*root_key));
+        return rc;
     }
     if (alg == TLS_CERT_SIG_ECDSA_SHA256 || alg == TLS_CERT_SIG_ECDSA_SHA384)
     {
-        struct tls_key root_key;
+        struct tls_key *root_key;
+        tls_key_op_result_t rc;
         tls_key_type_t type;
         size_t point_len;
 
@@ -1178,12 +1197,17 @@ static tls_key_op_result_t tls_cert_verify_root_entry(
         }
         if (key_len != point_len)
             return TLS_KEY_OP_INVALID;
-        memset(&root_key, 0, sizeof(root_key));
-        root_key.type = type;
-        root_key.ec.len = point_len;
-        root_key.ec.pub = entry->key;
-        root_key.ec.priv = NULL;
-        return tls_cert_verify_pending_link(w, &root_key, offload);
+        root_key = tls_scratch_alloc(sizeof(*root_key));
+        if (!root_key)
+            return TLS_KEY_OP_INVALID;
+        memset(root_key, 0, sizeof(*root_key));
+        root_key->type = type;
+        root_key->ec.len = point_len;
+        root_key->ec.pub = entry->key;
+        root_key->ec.priv = NULL;
+        rc = tls_cert_verify_pending_link(w, root_key, offload);
+        tls_scratch_free(root_key, sizeof(*root_key));
+        return rc;
     }
     return TLS_KEY_OP_UNKNOWN;
 }
@@ -1460,14 +1484,20 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
      * issuer — verify the pending link now. */
     if (w->pending_link)
     {
-        uint8_t subject_name_digest[32];
+        uint8_t *subject_name_digest;
+        bool name_match;
         if (!cert->subject_name || cert->subject_name_len == 0 ||
             !tls_hash_context_init(w->cert_hash, TLS_HASH_SHA256))
             return false;
+        subject_name_digest = tls_scratch_alloc(TLS_SHA256_DIGEST_LEN);
+        if (!subject_name_digest)
+            return false;
         tls_hash_update(w->cert_hash, cert->subject_name, cert->subject_name_len);
         tls_hash_digest(w->cert_hash, subject_name_digest);
-        if (memcmp(subject_name_digest, w->pending_issuer_name_digest,
-                   sizeof(subject_name_digest)) != 0)
+        name_match = memcmp(subject_name_digest, w->pending_issuer_name_digest,
+                            TLS_SHA256_DIGEST_LEN) == 0;
+        tls_scratch_free(subject_name_digest, TLS_SHA256_DIGEST_LEN);
+        if (!name_match)
         {
             ERROR_CODE(0x15);
             return false;
@@ -3196,18 +3226,6 @@ bool tls_send_client_hello(
         (HELLO_KEY_SHARE_EXT_END - HELLO_KEY_SHARE_EXT_OFFSET) +
         sizeof(x25519_share_header) + share_len + cs_extra;
 
-    /* early_secret/binder_key/finished_key/binder/hmac_ctx are secret
-     * material only ever populated inside the ctx->psk_mode block below,
-     * held on this function's own stack frame. They're cleaned up by
-     * the caller, which wraps this call with
-     * tls_crypto_guard_enable()/disable(). */
-    uint8_t early_secret[32];
-    uint8_t binder_key[32];
-    uint8_t finished_key[32];
-    uint8_t binder[32];
-    uint8_t partial_hash[32];
-    struct tls_hash_context hash_ctx;
-    struct tls_hmac_context hmac_ctx;
     size_t offset = 0;
     size_t msg_start = 4; /* After handshake header */
     size_t binder_offset;
@@ -3418,6 +3436,24 @@ bool tls_send_client_hello(
 
     if (ctx->psk_mode)
     {
+        /* PSK binder temporaries are secret; keep them off the eZ80 stack
+         * and wipe them on every exit from this block. */
+        struct {
+            uint8_t early_secret[32];
+            uint8_t binder_key[32];
+            uint8_t finished_key[32];
+            uint8_t binder[32];
+            uint8_t partial_hash[32];
+            struct tls_hash_context hash_ctx;
+            struct tls_hmac_context hmac_ctx;
+        } *psk_tmp = tls_scratch_alloc(sizeof(*psk_tmp));
+        bool psk_ok = false;
+        if (!psk_tmp)
+        {
+            ERROR_CODE(0x34);
+            return false;
+        }
+
         /* Extension 4: psk_key_exchange_modes.
          * Advertise psk_dhe_ke only -- never psk_ke. Offering psk_ke lets
          * the server pick PSK-only resumption with no fresh ECDHE, so a
@@ -3443,7 +3479,7 @@ bool tls_send_client_hello(
         if (offset + ctx->psk_identity.identity_len > out_len)
         {
             ERROR_CODE(0x35);
-            return false;
+            goto psk_cleanup;
         }
         memcpy(out + offset, ctx->psk_identity.identity, ctx->psk_identity.identity_len);
         offset += ctx->psk_identity.identity_len;
@@ -3473,10 +3509,10 @@ bool tls_send_client_hello(
         offset += sizeof(binder_header);
 
         /* Calculate PSK binder */
-        if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret))
+        if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, psk_tmp->early_secret))
         {
             ERROR_CODE(0x36);
-            return false;
+            goto psk_cleanup;
         }
 
         const char *binder_label = (ctx->psk_type == TLS_PSK_TYPE_EXTERNAL)
@@ -3485,26 +3521,26 @@ bool tls_send_client_hello(
         /* RFC 8446 derives binder_key with Derive-Secret(..., ""),
          * so the HKDF context is Transcript-Hash(empty), not a zero-length
          * context field. */
-        if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+        if (!tls_hash_context_init(&psk_tmp->hash_ctx, TLS_HASH_SHA256))
         {
             ERROR_CODE(0x37);
-            return false;
+            goto psk_cleanup;
         }
-        tls_hash_digest(&hash_ctx, partial_hash);
+        tls_hash_digest(&psk_tmp->hash_ctx, psk_tmp->partial_hash);
 
-        if (!tls_hkdf_expand_label(TLS_HASH_SHA256, early_secret, 32,
+        if (!tls_hkdf_expand_label(TLS_HASH_SHA256, psk_tmp->early_secret, 32,
                                    binder_label, 10,
-                                   partial_hash, 32, binder_key, 32))
+                                   psk_tmp->partial_hash, 32, psk_tmp->binder_key, 32))
         {
             ERROR_CODE(0x38);
-            return false;
+            goto psk_cleanup;
         }
 
-        if (!tls_hkdf_expand_label(TLS_HASH_SHA256, binder_key, 32,
-                                   "finished", 8, NULL, 0, finished_key, 32))
+        if (!tls_hkdf_expand_label(TLS_HASH_SHA256, psk_tmp->binder_key, 32,
+                                   "finished", 8, NULL, 0, psk_tmp->finished_key, 32))
         {
             ERROR_CODE(0x39);
-            return false;
+            goto psk_cleanup;
         }
 
         /* Fill in length fields for binder hash computation */
@@ -3540,33 +3576,38 @@ bool tls_send_client_hello(
          * branch off a copy of it instead of starting from empty. */
         if (is_hrr_retry && ctx->transcript_hash)
         {
-            tls_hash_context_copy(&hash_ctx, ctx->transcript_hash);
+            tls_hash_context_copy(&psk_tmp->hash_ctx, ctx->transcript_hash);
         }
-        else if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+        else if (!tls_hash_context_init(&psk_tmp->hash_ctx, TLS_HASH_SHA256))
         {
             ERROR_CODE(0x3a);
-            return false;
+            goto psk_cleanup;
         }
-        tls_hash_update(&hash_ctx, out, binder_offset);
-        tls_hash_digest(&hash_ctx, partial_hash);
+        tls_hash_update(&psk_tmp->hash_ctx, out, binder_offset);
+        tls_hash_digest(&psk_tmp->hash_ctx, psk_tmp->partial_hash);
 
         /* Compute binder = HMAC(finished_key, partial_hash) */
-        if (!tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
+        if (!tls_hmac_context_init(&psk_tmp->hmac_ctx, TLS_HASH_SHA256, psk_tmp->finished_key, 32))
         {
             ERROR_CODE(0x3b);
-            return false;
+            goto psk_cleanup;
         }
-        tls_hmac_update(&hmac_ctx, partial_hash, 32);
-        tls_hmac_digest(&hmac_ctx, binder);
+        tls_hmac_update(&psk_tmp->hmac_ctx, psk_tmp->partial_hash, 32);
+        tls_hmac_digest(&psk_tmp->hmac_ctx, psk_tmp->binder);
 
         /* Write binder value */
         if (offset + 32 > out_len)
         {
             ERROR_CODE(0x3c);
-            return false;
+            goto psk_cleanup;
         }
-        memcpy(out + offset, binder, 32);
+        memcpy(out + offset, psk_tmp->binder, 32);
         offset += 32;
+        psk_ok = true;
+psk_cleanup:
+        tls_scratch_free(psk_tmp, sizeof(*psk_tmp));
+        if (!psk_ok)
+            return false;
     }
     else
     {
@@ -3872,7 +3913,15 @@ bool tls_recv_server_hello(
             {
                 uint8_t algorithm = tls_cipher_suite_hash(ctx->cipher_suite);
                 size_t hlen = ctx->hash_len;
-                uint8_t ch1_digest[TLS_HASH_MAX_DIGEST_LEN];
+                /* synthetic message_hash message; CH1's digest lands at +4 */
+                const size_t synth_cap = 4 + TLS_HASH_MAX_DIGEST_LEN;
+                uint8_t *synth = tls_scratch_alloc(synth_cap);
+                if (!synth)
+                {
+                    ctx->state = TLS_STATE_ERROR;
+                    ERROR_CODE(0x4c);
+                    return false;
+                }
 
                 /* The suite hash is known from the HRR, so rebuild the CH1
                  * transcript under it when it differs from SHA-256. */
@@ -3881,6 +3930,7 @@ bool tls_recv_server_hello(
                     if (!ctx->client_hello_buf || ctx->client_hello_len == 0 ||
                         !tls_hash_context_init(ctx->transcript_hash, algorithm))
                     {
+                        tls_scratch_free(synth, synth_cap);
                         ctx->state = TLS_STATE_ERROR;
                         ERROR_CODE(0x4c);
                         return false;
@@ -3888,11 +3938,12 @@ bool tls_recv_server_hello(
                     tls_hash_update(ctx->transcript_hash, ctx->client_hello_buf,
                                     ctx->client_hello_len);
                 }
-                tls_hash_digest(ctx->transcript_hash, ch1_digest);
+                tls_hash_digest(ctx->transcript_hash, synth + 4);
 
                 /* Re-initialise the transcript hash. */
                 if (!transcript_hash_init(ctx->transcript_hash, algorithm))
                 {
+                    tls_scratch_free(synth, synth_cap);
                     ctx->state = TLS_STATE_ERROR;
                     ERROR_CODE(0x4c);
                     return false;
@@ -3900,14 +3951,12 @@ bool tls_recv_server_hello(
                 ctx->transcript_hash_algo = algorithm;
 
                 /* Feed the synthetic message_hash message. */
-                uint8_t synth[4 + TLS_HASH_MAX_DIGEST_LEN];
                 synth[0] = 0xFE; /* message_hash */
                 synth[1] = 0x00;
                 synth[2] = 0x00;
                 synth[3] = (uint8_t)hlen;
-                memcpy(synth + 4, ch1_digest, hlen);
                 transcript_hash_update(ctx->transcript_hash, synth, 4 + hlen);
-                tls_secure_memzero(ch1_digest, sizeof(ch1_digest));
+                tls_scratch_free(synth, synth_cap);
                 tls_client_hello_clear(ctx);
             }
 
@@ -4892,8 +4941,11 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
     static const uint8_t spaces[64] = {[0 ... 63] = 0x20};
     uint8_t zero = 0;
-    uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t message_hash[32];
+    struct {
+        struct tls_hash_context hash_ctx;
+        uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t message_hash[32];
+    } *cv = NULL;
     uint8_t *em = NULL;
     bool ok = false;
 
@@ -4928,28 +4980,6 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
         return false;
     }
 
-    transcript_hash_digest(ctx->transcript_hash, transcript);
-
-    struct tls_hash_context *hash_ctx =
-        (struct tls_hash_context *)mem_buffer_custom_malloc(sizeof(*hash_ctx));
-    if (!hash_ctx)
-    {
-        ERROR_CODE(0x7c);
-        return false;
-    }
-    if (!tls_hash_context_init(hash_ctx, TLS_HASH_SHA256))
-    {
-        mem_buffer_custom_free(hash_ctx);
-        ERROR_CODE(0x7c);
-        return false;
-    }
-    tls_hash_update(hash_ctx, spaces, sizeof(spaces));
-    tls_hash_update(hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
-    tls_hash_update(hash_ctx, &zero, 1);
-    tls_hash_update(hash_ctx, transcript, ctx->hash_len);
-    tls_hash_digest(hash_ctx, message_hash);
-    mem_buffer_custom_free(hash_ctx);
-
     /* RSA decrypt the signature, then run the PSS padding check. */
     if (rsa->mod_len > RSA_TRANSIENT_SIZE ||
         rsa->mod_len < RSA_MODULUS_MIN_SUPPORTED)
@@ -4958,10 +4988,29 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
         return false;
     }
 
-    if (tls_verify_deferred(ctx, TLS_ALG_RSA_PSS_RSAE_SHA256, &ctx->leaf_pubkey,
-                            message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
+    cv = tls_scratch_alloc(sizeof(*cv));
+    if (!cv)
     {
-        return true;
+        ERROR_CODE(0x7c);
+        return false;
+    }
+    if (!transcript_hash_digest(ctx->transcript_hash, cv->transcript) ||
+        !tls_hash_context_init(&cv->hash_ctx, TLS_HASH_SHA256))
+    {
+        ERROR_CODE(0x7c);
+        goto cleanup;
+    }
+    tls_hash_update(&cv->hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(&cv->hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(&cv->hash_ctx, &zero, 1);
+    tls_hash_update(&cv->hash_ctx, cv->transcript, ctx->hash_len);
+    tls_hash_digest(&cv->hash_ctx, cv->message_hash);
+
+    if (tls_verify_deferred(ctx, TLS_ALG_RSA_PSS_RSAE_SHA256, &ctx->leaf_pubkey,
+                            cv->message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
+    {
+        ok = true;
+        goto cleanup;
     }
 
     em = __rsa_transient;
@@ -4969,8 +5018,8 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     {
         goto cleanup;
     }
-    if (!tls_rsa_pss_verify(em, rsa->mod_len, message_hash, sizeof(message_hash),
-                            TLS_HASH_SHA256))
+    if (!tls_rsa_pss_verify(em, rsa->mod_len, cv->message_hash,
+                            sizeof(cv->message_hash), TLS_HASH_SHA256))
     {
         goto cleanup;
     }
@@ -4981,6 +5030,7 @@ cleanup:
     {
         tls_secure_memzero(em, rsa->mod_len);
     }
+    tls_scratch_free(cv, sizeof(*cv));
     return ok;
 }
 
@@ -5000,9 +5050,13 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
     static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
     static const uint8_t spaces[64] = {[0 ... 63] = 0x20};
     uint8_t zero = 0;
-    uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t message_hash[32];
-    uint8_t rs[64]; /* flat r||s for tls_p256_verify */
+    struct {
+        struct tls_hash_context hash_ctx;
+        uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t message_hash[32];
+        uint8_t rs[64]; /* flat r||s for tls_p256_verify */
+    } *cv;
+    bool ok = false;
 
     if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P256 ||
         !sig || sig_len == 0)
@@ -5025,50 +5079,47 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
         ERROR_CODE(0x87);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, transcript);
 
-    struct tls_hash_context *hash_ctx =
-        (struct tls_hash_context *)mem_buffer_custom_malloc(sizeof(*hash_ctx));
-    if (!hash_ctx)
+    cv = tls_scratch_alloc(sizeof(*cv));
+    if (!cv)
     {
         ERROR_CODE(0x88);
         return false;
     }
-    if (!tls_hash_context_init(hash_ctx, TLS_HASH_SHA256))
+    if (!transcript_hash_digest(ctx->transcript_hash, cv->transcript) ||
+        !tls_hash_context_init(&cv->hash_ctx, TLS_HASH_SHA256))
     {
-        mem_buffer_custom_free(hash_ctx);
         ERROR_CODE(0x88);
-        return false;
+        goto done;
     }
-    tls_hash_update(hash_ctx, spaces, sizeof(spaces));
-    tls_hash_update(hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
-    tls_hash_update(hash_ctx, &zero, 1);
-    tls_hash_update(hash_ctx, transcript, ctx->hash_len);
-    tls_hash_digest(hash_ctx, message_hash);
-    mem_buffer_custom_free(hash_ctx);
+    tls_hash_update(&cv->hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(&cv->hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(&cv->hash_ctx, &zero, 1);
+    tls_hash_update(&cv->hash_ctx, cv->transcript, ctx->hash_len);
+    tls_hash_digest(&cv->hash_ctx, cv->message_hash);
 
     if (tls_verify_deferred(ctx, TLS_ALG_ECDSA_SECP256R1_SHA256, &ctx->leaf_pubkey,
-                            message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
+                            cv->message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
     {
-        tls_secure_memzero(message_hash, sizeof(message_hash));
-        return true;
+        ok = true;
+        goto done;
     }
 
     /* Parse DER SEQUENCE { INTEGER r, INTEGER s } → flat 64-byte r||s.
      * Integers are parsed as strict DER (minimal, non-negative) by
      * tls_ecdsa_parse_int (x509.c). */
-    if (!tls_ecdsa_sig_rs(sig, sig_len, rs))
+    if (!tls_ecdsa_sig_rs(sig, sig_len, cv->rs))
     {
         ERROR_CODE(0x89);
-        return false;
+        goto done;
     }
 
     tls_crypto_guard_enable();
-    bool ok = tls_p256_verify(rs, message_hash, ctx->leaf_pubkey.ec.pub);
+    ok = tls_p256_verify(cv->rs, cv->message_hash, ctx->leaf_pubkey.ec.pub);
     tls_crypto_guard_disable();
 
-    tls_secure_memzero(rs, sizeof(rs));
-    tls_secure_memzero(message_hash, sizeof(message_hash));
+done:
+    tls_scratch_free(cv, sizeof(*cv));
     return ok;
 }
 
@@ -5088,9 +5139,13 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
     static const char ctx_label[] = "TLS 1.3, server CertificateVerify";
     static const uint8_t spaces[64] = {[0 ... 63] = 0x20};
     uint8_t zero = 0;
-    uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
-    uint8_t message_hash[48];
-    uint8_t rs[96]; /* flat r||s for tls_p384_verify */
+    struct {
+        struct tls_hash_context hash_ctx;
+        uint8_t transcript[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t message_hash[48];
+        uint8_t rs[96]; /* flat r||s for tls_p384_verify */
+    } *cv;
+    bool ok = false;
 
     if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P384 ||
         !sig || sig_len == 0)
@@ -5112,41 +5167,37 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
         ERROR_CODE(0x8c);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, transcript);
 
-    struct tls_hash_context *hash_ctx =
-        (struct tls_hash_context *)mem_buffer_custom_malloc(sizeof(*hash_ctx));
-    if (!hash_ctx)
+    cv = tls_scratch_alloc(sizeof(*cv));
+    if (!cv)
     {
         ERROR_CODE(0x8d);
         return false;
     }
-    if (!tls_hash_context_init(hash_ctx, TLS_HASH_SHA384))
+    if (!transcript_hash_digest(ctx->transcript_hash, cv->transcript) ||
+        !tls_hash_context_init(&cv->hash_ctx, TLS_HASH_SHA384))
     {
-        mem_buffer_custom_free(hash_ctx);
         ERROR_CODE(0x8d);
-        return false;
+        goto done;
     }
-    tls_hash_update(hash_ctx, spaces, sizeof(spaces));
-    tls_hash_update(hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
-    tls_hash_update(hash_ctx, &zero, 1);
-    tls_hash_update(hash_ctx, transcript, ctx->hash_len);
-    tls_hash_digest(hash_ctx, message_hash);
-    mem_buffer_custom_free(hash_ctx);
+    tls_hash_update(&cv->hash_ctx, spaces, sizeof(spaces));
+    tls_hash_update(&cv->hash_ctx, (const uint8_t *)ctx_label, sizeof(ctx_label) - 1);
+    tls_hash_update(&cv->hash_ctx, &zero, 1);
+    tls_hash_update(&cv->hash_ctx, cv->transcript, ctx->hash_len);
+    tls_hash_digest(&cv->hash_ctx, cv->message_hash);
 
-    if (!tls_ecdsa_sig_rs96(sig, sig_len, rs))
+    if (!tls_ecdsa_sig_rs96(sig, sig_len, cv->rs))
     {
-        tls_secure_memzero(message_hash, sizeof(message_hash));
         ERROR_CODE(0x8e);
-        return false;
+        goto done;
     }
 
     tls_crypto_guard_enable();
-    bool ok = tls_p384_verify(rs, message_hash, ctx->leaf_pubkey.ec.pub);
+    ok = tls_p384_verify(cv->rs, cv->message_hash, ctx->leaf_pubkey.ec.pub);
     tls_crypto_guard_disable();
 
-    tls_secure_memzero(rs, sizeof(rs));
-    tls_secure_memzero(message_hash, sizeof(message_hash));
+done:
+    tls_scratch_free(cv, sizeof(*cv));
     return ok;
 }
 
@@ -5402,14 +5453,14 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
      * for this connection -- deriving keys against zero bytes instead
      * would silently produce the wrong secret rather than failing, so
      * refuse instead of falling back. */
-    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
+    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen ||
+        !transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash))
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
         ERROR_CODE(0xb5);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Step 6: Derive client handshake traffic secret
      * client_handshake_traffic_secret =
@@ -5602,14 +5653,14 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
      * missing transcript_hash context means transcript hashing was never
      * started for this connection -- fail rather than silently deriving
      * against zero bytes. */
-    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
+    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen ||
+        !transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash))
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
         ERROR_CODE(0xb6);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Step 5: Derive client application traffic secret
      * client_application_traffic_secret =
@@ -5790,14 +5841,14 @@ bool tls_send_finished(
      * transcript_hash context means transcript hashing was never started
      * for this connection -- fail rather than computing verify_data
      * against zero bytes. */
-    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
+    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen ||
+        !transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash))
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
         ERROR_CODE(0xb7);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Step 4: Compute verify_data = HMAC(finished_key, transcript_hash) */
     if (!tls_hmac_context_init(&sec->hmac_ctx, hash_alg, sec->finished_key, hlen))
@@ -5829,17 +5880,18 @@ bool tls_send_finished(
     /* Client Finished completes transcript needed for resumption master secret. */
     if (is_client && ctx->transcript_hash)
     {
-        uint8_t transcript_hash_full[TLS_HASH_MAX_DIGEST_LEN];
-        transcript_hash_digest(ctx->transcript_hash, transcript_hash_full);
-        if (!tls_derive_secret(hash_alg, ctx->keys.master_secret, hlen,
+        uint8_t *transcript_hash_full = tls_scratch_alloc(TLS_HASH_MAX_DIGEST_LEN);
+        if (!transcript_hash_full ||
+            !transcript_hash_digest(ctx->transcript_hash, transcript_hash_full) ||
+            !tls_derive_secret(hash_alg, ctx->keys.master_secret, hlen,
                                "res master", 10, transcript_hash_full, hlen,
                                ctx->keys.resumption_master_secret))
         {
-            tls_secure_memzero(transcript_hash_full, sizeof(transcript_hash_full));
+            tls_scratch_free(transcript_hash_full, TLS_HASH_MAX_DIGEST_LEN);
             ERROR_CODE(0x9c);
             return false;
         }
-        tls_secure_memzero(transcript_hash_full, sizeof(transcript_hash_full));
+        tls_scratch_free(transcript_hash_full, TLS_HASH_MAX_DIGEST_LEN);
         /* master_secret served its last purpose; wipe per RFC 8446 §7.1. */
         tls_secure_memzero(ctx->keys.master_secret, sizeof(ctx->keys.master_secret));
     }
@@ -6018,14 +6070,14 @@ static bool tls_recv_finished(
      * for this connection -- fail rather than verifying against 32 zero
      * bytes, even though a real peer's verify_data would not match a
      * zero-transcript expectation either way. */
-    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen)
+    if (!ctx->transcript_hash || ctx->transcript_hash->digestlen != hlen ||
+        !transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash))
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
         ERROR_CODE(0xb8);
         return false;
     }
-    transcript_hash_digest(ctx->transcript_hash, sec->transcript_hash);
 
     /* Compute expected verify_data */
     if (!tls_hmac_context_init(&sec->hmac_ctx, hash_alg, sec->finished_key, hlen))
@@ -6094,14 +6146,17 @@ static bool tls_server_check_psk(struct tls_handshake_context *ctx,
                                  const uint8_t *ext, size_t ext_len,
                                  uint16_t *selected)
 {
-    uint8_t early_secret[32], binder_key[32], finished_key[32];
-    uint8_t empty_hash[32], partial_hash[32], expected[32];
-    struct tls_hash_context hash_ctx;
-    struct tls_hmac_context hmac_ctx;
+    struct {
+        uint8_t early_secret[32], binder_key[32], finished_key[32];
+        uint8_t empty_hash[32], partial_hash[32], expected[32];
+        struct tls_hash_context hash_ctx;
+        struct tls_hmac_context hmac_ctx;
+    } *t;
     size_t ids_len, at, binders_at;
     uint16_t index = 0;
     int found = -1;
     uint8_t diff = 0;
+    bool ok = false;
 
     if (ext_len < 2)
         return false;
@@ -6137,26 +6192,32 @@ static bool tls_server_check_psk(struct tls_handshake_context *ctx,
     if (at + 33 > ext_len || ext[at] != 32)
         return false;
 
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
         return false;
-    tls_hash_digest(&hash_ctx, empty_hash);
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
-        return false;
-    tls_hash_update(&hash_ctx, msg, ext_off + binders_at);
-    tls_hash_digest(&hash_ctx, partial_hash);
-    if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, early_secret) ||
-        !tls_hkdf_expand_label(TLS_HASH_SHA256, early_secret, 32, "ext binder", 10,
-                               empty_hash, 32, binder_key, 32) ||
-        !tls_hkdf_expand_label(TLS_HASH_SHA256, binder_key, 32, "finished", 8,
-                               NULL, 0, finished_key, 32) ||
-        !tls_hmac_context_init(&hmac_ctx, TLS_HASH_SHA256, finished_key, 32))
-        return false;
-    tls_hmac_update(&hmac_ctx, partial_hash, 32);
-    tls_hmac_digest(&hmac_ctx, expected);
+    if (!tls_hash_context_init(&t->hash_ctx, TLS_HASH_SHA256))
+        goto cleanup;
+    tls_hash_digest(&t->hash_ctx, t->empty_hash);
+    if (!tls_hash_context_init(&t->hash_ctx, TLS_HASH_SHA256))
+        goto cleanup;
+    tls_hash_update(&t->hash_ctx, msg, ext_off + binders_at);
+    tls_hash_digest(&t->hash_ctx, t->partial_hash);
+    if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, t->early_secret) ||
+        !tls_hkdf_expand_label(TLS_HASH_SHA256, t->early_secret, 32, "ext binder", 10,
+                               t->empty_hash, 32, t->binder_key, 32) ||
+        !tls_hkdf_expand_label(TLS_HASH_SHA256, t->binder_key, 32, "finished", 8,
+                               NULL, 0, t->finished_key, 32) ||
+        !tls_hmac_context_init(&t->hmac_ctx, TLS_HASH_SHA256, t->finished_key, 32))
+        goto cleanup;
+    tls_hmac_update(&t->hmac_ctx, t->partial_hash, 32);
+    tls_hmac_digest(&t->hmac_ctx, t->expected);
     for (size_t i = 0; i < 32; i++)
-        diff |= expected[i] ^ ext[at + 1 + i];
+        diff |= t->expected[i] ^ ext[at + 1 + i];
     *selected = (uint16_t)found;
-    return diff == 0;
+    ok = (diff == 0);
+cleanup:
+    tls_scratch_free(t, sizeof(*t));
+    return ok;
 }
 
 bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
@@ -6182,9 +6243,12 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     bool keyshare_seen = false, psk_modes_seen = false, alpn_seen = false;
     bool psk_seen = false, early_data_seen = false, cert_mode, retry;
     size_t share_entries = 0;
-    struct tls_hash_context invariant_hash;
-    uint8_t invariant_digest[32];
-    bool invariant_ready = false;
+    struct {
+        struct tls_hash_context invariant_hash;
+        uint8_t invariant_digest[32];
+        uint8_t ch1_digest[32];
+        uint8_t synth[36];
+    } *t = NULL;
     uint8_t alert = TLS_ALERT_DECODE_ERROR;
 
     if (!ctx || !msg || !out || !written ||
@@ -6264,17 +6328,17 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     if (ext_end != len)
         goto fail;
     ext_start = off;
-    if (!tls_hash_context_init(&invariant_hash, TLS_HASH_SHA256))
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t || !tls_hash_context_init(&t->invariant_hash, TLS_HASH_SHA256))
     {
         alert = TLS_ALERT_INTERNAL_ERROR;
         goto fail;
     }
-    invariant_ready = true;
     /* CH2 must equal CH1 except for fields RFC 8446 section 4.1.2 permits
      * changing. Exclude key_share, early_data (which CH2 must remove), and
      * pre_shared_key (whose binders must be recomputed), plus the enclosing
      * lengths. Certificate mode ignores offered PSKs and early data. */
-    tls_hash_update(&invariant_hash, msg + 4, ext_start - 2 - 4);
+    tls_hash_update(&t->invariant_hash, msg + 4, ext_start - 2 - 4);
 
     while (off + 4 <= ext_end)
     {
@@ -6302,7 +6366,7 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
 
         if (type != TLS_EXT_KEY_SHARE && type != TLS_EXT_EARLY_DATA &&
             type != TLS_EXT_PRE_SHARED_KEY)
-            tls_hash_update(&invariant_hash, msg + off, 4 + elen);
+            tls_hash_update(&t->invariant_hash, msg + off, 4 + elen);
 
         if (type == TLS_EXT_SUPPORTED_VERSIONS)
         {
@@ -6411,11 +6475,10 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     }
     if (off != ext_end)
         goto fail;
-    tls_hash_digest(&invariant_hash, invariant_digest);
-    tls_hash_clear(&invariant_hash);
-    invariant_ready = false;
-    if (retry && memcmp(invariant_digest, ctx->hrr_ch1_invariant_hash,
-                        sizeof(invariant_digest)) != 0)
+    tls_hash_digest(&t->invariant_hash, t->invariant_digest);
+    tls_hash_clear(&t->invariant_hash);
+    if (retry && memcmp(t->invariant_digest, ctx->hrr_ch1_invariant_hash,
+                        sizeof(t->invariant_digest)) != 0)
     {
         alert = TLS_ALERT_ILLEGAL_PARAMETER;
         goto fail;
@@ -6482,28 +6545,30 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
             off += 12;
 
             transcript_hash_update(ctx->transcript_hash, msg, len);
-            uint8_t ch1_digest[32];
-            uint8_t synth[36] = {0xfe, 0, 0, 32};
-            tls_hash_digest(ctx->transcript_hash, ch1_digest);
+            tls_hash_digest(ctx->transcript_hash, t->ch1_digest);
             if (!transcript_hash_init(ctx->transcript_hash, TLS_HASH_SHA256))
             {
                 alert = TLS_ALERT_INTERNAL_ERROR;
                 goto fail;
             }
-            memcpy(synth + 4, ch1_digest, sizeof(ch1_digest));
-            transcript_hash_update(ctx->transcript_hash, synth, sizeof(synth));
+            t->synth[0] = 0xfe;
+            t->synth[1] = 0;
+            t->synth[2] = 0;
+            t->synth[3] = 32;
+            memcpy(t->synth + 4, t->ch1_digest, sizeof(t->ch1_digest));
+            transcript_hash_update(ctx->transcript_hash, t->synth, sizeof(t->synth));
             transcript_hash_update(ctx->transcript_hash, out, off);
-            tls_secure_memzero(ch1_digest, sizeof(ch1_digest));
 
             ctx->cipher_suite = suite;
             ctx->hash_len = (uint8_t)tls_cipher_suite_info(suite)->hash_len;
             ctx->key_len = tls_cipher_suite_info(suite)->key_len;
             ctx->hrr_done = true;
             ctx->hrr_requested_group = TLS_NAMED_GROUP_X25519;
-            memcpy(ctx->hrr_ch1_invariant_hash, invariant_digest,
-                   sizeof(invariant_digest));
+            memcpy(ctx->hrr_ch1_invariant_hash, t->invariant_digest,
+                   sizeof(t->invariant_digest));
             ctx->state = TLS_STATE_HRR_RECEIVED;
             *written = off;
+            tls_scratch_free(t, sizeof(*t));
             return true;
         }
         alert = TLS_ALERT_HANDSHAKE_FAILURE;
@@ -6589,11 +6654,11 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
     transcript_hash_update(ctx->transcript_hash, out, off);
     *written = off;
     ctx->state = TLS_STATE_SERVER_HELLO_RECEIVED;
+    tls_scratch_free(t, sizeof(*t));
     return true;
 
 fail:
-    if (invariant_ready)
-        tls_hash_clear(&invariant_hash);
+    tls_scratch_free(t, sizeof(*t));
     ERROR_CODE(alert);
     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
     ctx->state = TLS_STATE_ERROR;
@@ -6630,14 +6695,11 @@ static size_t der_encode_integer(uint8_t *dst, const uint8_t *val32)
  * dst must be at least 72 bytes. Returns encoded length. */
 static size_t der_encode_ecdsa_sig(uint8_t *dst, const uint8_t rs[64])
 {
-    uint8_t r_enc[35], s_enc[35];
-    size_t r_len = der_encode_integer(r_enc, rs);
-    size_t s_len = der_encode_integer(s_enc, rs + 32);
+    size_t r_len = der_encode_integer(dst + 2, rs);
+    size_t s_len = der_encode_integer(dst + 2 + r_len, rs + 32);
     size_t body = r_len + s_len;
     dst[0] = 0x30; /* SEQUENCE */
     dst[1] = (uint8_t)body;
-    memcpy(dst + 2, r_enc, r_len);
-    memcpy(dst + 2 + r_len, s_enc, s_len);
     return 2 + body;
 }
 
@@ -6744,36 +6806,43 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
         /* The transcript hash slot is the suite hash length (32 or 48); the
          * signature scheme (ECDSA P-256 SHA-256) hashes these bytes with
          * SHA-256. */
-        uint8_t sign_content[64 + sizeof(cv_label) - 1 + 1 +
-                             TLS_HASH_MAX_DIGEST_LEN];
-        memset(sign_content, 0x20, 64);
-        memcpy(sign_content + 64, cv_label, sizeof(cv_label) - 1);
-        sign_content[64 + sizeof(cv_label) - 1] = 0;
-        struct tls_hash_context snap;
-        tls_hash_context_copy(&snap, ctx->transcript_hash);
-        tls_hash_digest(&snap, sign_content + 64 + sizeof(cv_label));
-        tls_hash_clear(&snap);
-        size_t sign_content_len = 64 + sizeof(cv_label) + ctx->hash_len;
-
-        uint8_t raw_sig[64], der_sig[72];
-        size_t raw_sig_len = 0;
-        tls_key_op_result_t sign_rc = tls_key_sign(
-            sign_content, sign_content_len, raw_sig, &raw_sig_len,
-            ctx->client_key, TLS_ALG_ECDSA_SECP256R1_SHA256);
-        tls_secure_memzero(sign_content, sizeof(sign_content));
-        if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(raw_sig))
+        struct {
+            uint8_t sign_content[64 + sizeof(cv_label) - 1 + 1 +
+                                 TLS_HASH_MAX_DIGEST_LEN];
+            struct tls_hash_context snap;
+            uint8_t raw_sig[64];
+            uint8_t der_sig[72];
+        } *sv = tls_scratch_alloc(sizeof(*sv));
+        if (!sv)
         {
-            tls_secure_memzero(raw_sig, sizeof(raw_sig));
             ERROR_CODE(0xcc);
             return false;
         }
-        size_t der_sig_len = der_encode_ecdsa_sig(der_sig, raw_sig);
-        tls_secure_memzero(raw_sig, sizeof(raw_sig));
+        memset(sv->sign_content, 0x20, 64);
+        memcpy(sv->sign_content + 64, cv_label, sizeof(cv_label) - 1);
+        sv->sign_content[64 + sizeof(cv_label) - 1] = 0;
+        tls_hash_context_copy(&sv->snap, ctx->transcript_hash);
+        tls_hash_digest(&sv->snap, sv->sign_content + 64 + sizeof(cv_label));
+        tls_hash_clear(&sv->snap);
+        size_t sign_content_len = 64 + sizeof(cv_label) + ctx->hash_len;
+
+        size_t raw_sig_len = 0;
+        tls_key_op_result_t sign_rc = tls_key_sign(
+            sv->sign_content, sign_content_len, sv->raw_sig, &raw_sig_len,
+            ctx->client_key, TLS_ALG_ECDSA_SECP256R1_SHA256);
+        if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(sv->raw_sig))
+        {
+            tls_scratch_free(sv, sizeof(*sv));
+            ERROR_CODE(0xcc);
+            return false;
+        }
+        size_t der_sig_len = der_encode_ecdsa_sig(sv->der_sig, sv->raw_sig);
 
         size_t cv_body = 4u + der_sig_len;
         size_t cv_msg = 4u + cv_body;
         if (out_len < cv_msg)
         {
+            tls_scratch_free(sv, sizeof(*sv));
             ERROR_CODE(0xcd);
             return false;
         }
@@ -6785,7 +6854,8 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
         out[5] = (uint8_t)TLS_SIG_ECDSA_SECP256R1_SHA256;
         out[6] = (uint8_t)(der_sig_len >> 8);
         out[7] = (uint8_t)der_sig_len;
-        memcpy(out + 8, der_sig, der_sig_len);
+        memcpy(out + 8, sv->der_sig, der_sig_len);
+        tls_scratch_free(sv, sizeof(*sv));
         transcript_hash_update(ctx->transcript_hash, out, cv_msg);
         *written = cv_msg;
         ctx->client_flight_step = TLS_CLIENT_FLIGHT_DONE;
@@ -6933,39 +7003,45 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
             ERROR_CODE(0xc6);
             return false;
         }
-        uint8_t sign_content[64 + sizeof(cv_label) - 1 + 1 +
-                            TLS_HASH_MAX_DIGEST_LEN];
-        memset(sign_content, 0x20, 64);
-        memcpy(sign_content + 64, cv_label, sizeof(cv_label) - 1);
-        sign_content[64 + sizeof(cv_label) - 1] = 0x00;
-        struct tls_hash_context snap;
-        tls_hash_context_copy(&snap, ctx->transcript_hash);
-        tls_hash_digest(&snap, sign_content + 64 + sizeof(cv_label));
-        tls_hash_clear(&snap);
+        struct {
+            uint8_t sign_content[64 + sizeof(cv_label) - 1 + 1 +
+                                 TLS_HASH_MAX_DIGEST_LEN];
+            struct tls_hash_context snap;
+            uint8_t raw_sig[64];
+            uint8_t der_sig[72];
+        } *sv = tls_scratch_alloc(sizeof(*sv));
+        if (!sv)
+        {
+            ERROR_CODE(0xc6);
+            return false;
+        }
+        memset(sv->sign_content, 0x20, 64);
+        memcpy(sv->sign_content + 64, cv_label, sizeof(cv_label) - 1);
+        sv->sign_content[64 + sizeof(cv_label) - 1] = 0;
+        tls_hash_context_copy(&sv->snap, ctx->transcript_hash);
+        tls_hash_digest(&sv->snap, sv->sign_content + 64 + sizeof(cv_label));
+        tls_hash_clear(&sv->snap);
         size_t sign_content_len = 64 + sizeof(cv_label) + ctx->hash_len;
 
-        uint8_t raw_sig[64];
         size_t  raw_sig_len = 0;
         tls_key_op_result_t sign_rc = tls_key_sign(
-            sign_content, sign_content_len,
-            raw_sig, &raw_sig_len,
+            sv->sign_content, sign_content_len,
+            sv->raw_sig, &raw_sig_len,
             ctx->server_key, TLS_ALG_ECDSA_SECP256R1_SHA256);
-        tls_secure_memzero(sign_content, sizeof sign_content);
-        if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(raw_sig))
+        if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(sv->raw_sig))
         {
-            tls_secure_memzero(raw_sig, sizeof(raw_sig));
+            tls_scratch_free(sv, sizeof(*sv));
             ERROR_CODE(0xc6);
             return false;
         }
 
-        uint8_t der_sig[72];
-        size_t der_sig_len = der_encode_ecdsa_sig(der_sig, raw_sig);
-        tls_secure_memzero(raw_sig, sizeof raw_sig);
+        size_t der_sig_len = der_encode_ecdsa_sig(sv->der_sig, sv->raw_sig);
 
         size_t cv_body = 2u + 2u + der_sig_len;
         size_t cv_msg  = 4u + cv_body;
         if (out_cap < cv_msg)
         {
+            tls_scratch_free(sv, sizeof(*sv));
             ERROR_CODE(0xc8);
             return false;
         }
@@ -6977,7 +7053,8 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         out[5] = (uint8_t)TLS_SIG_ECDSA_SECP256R1_SHA256;
         out[6] = (uint8_t)(der_sig_len >> 8);
         out[7] = (uint8_t)der_sig_len;
-        memcpy(out + 8, der_sig, der_sig_len);
+        memcpy(out + 8, sv->der_sig, der_sig_len);
+        tls_scratch_free(sv, sizeof(*sv));
         transcript_hash_update(ctx->transcript_hash, out, cv_msg);
         *written = cv_msg;
         ctx->server_flight_step = TLS_SERVER_FLIGHT_FINISHED;
@@ -7265,7 +7342,11 @@ static bool tls_recv_key_update(
     uint8_t hash_alg = tls_cipher_suite_hash(ctx->cipher_suite);
     size_t hlen = ctx->hash_len;
     size_t klen = ctx->key_len;
-    uint8_t next_secret[TLS_HASH_MAX_DIGEST_LEN], next_key[TLS_TRAFFIC_KEY_MAX], next_iv[12];
+    struct {
+        uint8_t next_secret[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t next_key[TLS_TRAFFIC_KEY_MAX];
+        uint8_t next_iv[12];
+    } *k;
     if ((hash_alg != TLS_HASH_SHA256 && hash_alg != TLS_HASH_SHA384) ||
         (hlen != TLS_SHA256_DIGEST_LEN && hlen != TLS_SHA384_DIGEST_LEN) ||
         (klen != 16 && klen != 32))
@@ -7273,39 +7354,43 @@ static bool tls_recv_key_update(
         ERROR_CODE(0xbc);
         return false;
     }
-    if (!tls_hkdf_expand_label(hash_alg,
-                               ctx->keys.server_application_traffic_secret, hlen,
-                               "traffic upd", 11, NULL, 0,
-                               next_secret, hlen))
+    k = tls_scratch_alloc(sizeof(*k));
+    if (!k)
     {
         ERROR_CODE(0xb0);
         return false;
     }
     if (!tls_hkdf_expand_label(hash_alg,
-                               next_secret, hlen,
-                               "key", 3, NULL, 0,
-                               next_key, klen))
+                               ctx->keys.server_application_traffic_secret, hlen,
+                               "traffic upd", 11, NULL, 0,
+                               k->next_secret, hlen))
     {
-        tls_secure_memzero(next_secret, sizeof(next_secret));
+        tls_scratch_free(k, sizeof(*k));
+        ERROR_CODE(0xb0);
+        return false;
+    }
+    if (!tls_hkdf_expand_label(hash_alg,
+                               k->next_secret, hlen,
+                               "key", 3, NULL, 0,
+                               k->next_key, klen))
+    {
+        tls_scratch_free(k, sizeof(*k));
         ERROR_CODE(0xb1);
         return false;
     }
     if (!tls_hkdf_expand_label(hash_alg,
-                               next_secret, hlen,
+                               k->next_secret, hlen,
                                "iv", 2, NULL, 0,
-                               next_iv, 12))
+                               k->next_iv, 12))
     {
-        tls_secure_memzero(next_secret, sizeof(next_secret));
-        tls_secure_memzero(next_key, sizeof(next_key));
+        tls_scratch_free(k, sizeof(*k));
         ERROR_CODE(0xb2);
         return false;
     }
-    memcpy(ctx->keys.server_application_traffic_secret, next_secret, hlen);
-    memcpy(ctx->keys.server_application_key, next_key, klen);
-    memcpy(ctx->keys.server_application_iv, next_iv, 12);
-    tls_secure_memzero(next_secret, sizeof(next_secret));
-    tls_secure_memzero(next_key, sizeof(next_key));
-    tls_secure_memzero(next_iv, sizeof(next_iv));
+    memcpy(ctx->keys.server_application_traffic_secret, k->next_secret, hlen);
+    memcpy(ctx->keys.server_application_key, k->next_key, klen);
+    memcpy(ctx->keys.server_application_iv, k->next_iv, 12);
+    tls_scratch_free(k, sizeof(*k));
     ctx->server_seq_num = 0;
     if (ctx->server_key_updates < UINT8_MAX)
         ctx->server_key_updates++; /* statistic only; long sessions are fine */
@@ -7355,7 +7440,11 @@ static bool tls_ratchet_client_application_keys(struct tls_handshake_context *ct
     uint8_t hash_alg = tls_cipher_suite_hash(ctx->cipher_suite);
     size_t hlen = ctx->hash_len;
     size_t klen = ctx->key_len;
-    uint8_t next_secret[TLS_HASH_MAX_DIGEST_LEN], next_key[TLS_TRAFFIC_KEY_MAX], next_iv[12];
+    struct {
+        uint8_t next_secret[TLS_HASH_MAX_DIGEST_LEN];
+        uint8_t next_key[TLS_TRAFFIC_KEY_MAX];
+        uint8_t next_iv[12];
+    } *k;
     if ((hash_alg != TLS_HASH_SHA256 && hash_alg != TLS_HASH_SHA384) ||
         (hlen != TLS_SHA256_DIGEST_LEN && hlen != TLS_SHA384_DIGEST_LEN) ||
         (klen != 16 && klen != 32))
@@ -7363,55 +7452,68 @@ static bool tls_ratchet_client_application_keys(struct tls_handshake_context *ct
         ERROR_CODE(0xbd);
         return false;
     }
+    k = tls_scratch_alloc(sizeof(*k));
+    if (!k)
+        return false;
     bool ok = tls_hkdf_expand_label(hash_alg,
                                     ctx->keys.client_application_traffic_secret, hlen,
-                                    "traffic upd", 11, NULL, 0, next_secret, hlen) &&
-              tls_hkdf_expand_label(hash_alg, next_secret, hlen,
-                                    "key", 3, NULL, 0, next_key, klen) &&
-              tls_hkdf_expand_label(hash_alg, next_secret, hlen,
-                                    "iv", 2, NULL, 0, next_iv, 12);
+                                    "traffic upd", 11, NULL, 0, k->next_secret, hlen) &&
+              tls_hkdf_expand_label(hash_alg, k->next_secret, hlen,
+                                    "key", 3, NULL, 0, k->next_key, klen) &&
+              tls_hkdf_expand_label(hash_alg, k->next_secret, hlen,
+                                    "iv", 2, NULL, 0, k->next_iv, 12);
     if (ok)
     {
-        memcpy(ctx->keys.client_application_traffic_secret, next_secret, hlen);
-        memcpy(ctx->keys.client_application_key, next_key, klen);
-        memcpy(ctx->keys.client_application_iv, next_iv, 12);
+        memcpy(ctx->keys.client_application_traffic_secret, k->next_secret, hlen);
+        memcpy(ctx->keys.client_application_key, k->next_key, klen);
+        memcpy(ctx->keys.client_application_iv, k->next_iv, 12);
         ctx->client_seq_num = 0;
         if (ctx->client_key_updates < UINT8_MAX)
             ctx->client_key_updates++;
     }
-    tls_secure_memzero(next_secret, sizeof(next_secret));
-    tls_secure_memzero(next_key, sizeof(next_key));
-    tls_secure_memzero(next_iv, sizeof(next_iv));
+    tls_scratch_free(k, sizeof(*k));
     return ok;
 }
 
 static bool tls_send_key_update_record(struct tls_handshake_context *ctx)
 {
-    uint8_t record[27]; /* 5 header + 5 handshake + 1 inner type + 16 tag */
+    struct {
+        struct tls_aes_context aes_ctx;
+        uint8_t record[27]; /* 5 header + 5 handshake + 1 inner type + 16 tag */
+    } *t;
     uint8_t nonce[12], tag[16];
-    TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
     static const uint8_t message[5] = {TLS_HANDSHAKE_KEY_UPDATE, 0, 0, 1, 0};
+    bool sent = false;
 
     if (!ctx || ctx->state != TLS_STATE_HANDSHAKE_COMPLETE ||
         !ctx->transport_write ||
         ctx->client_seq_num >= tls_cipher_suite_record_limit(ctx->cipher_suite))
         return false;
-    record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
-    record[1] = 0x03; record[2] = 0x03;
-    record[3] = 0; record[4] = 22;
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
+        return false;
+    memset(t, 0, sizeof(*t));
+    t->record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
+    t->record[1] = 0x03; t->record[2] = 0x03;
+    t->record[3] = 0; t->record[4] = 22;
     tls_build_aead_nonce(ctx->keys.client_application_iv, ctx->client_seq_num, nonce);
-    if (!tls_record_aead_init(&aes_ctx, ctx->cipher_suite,
-                              ctx->keys.client_application_key, ctx->key_len, nonce,
-                              sizeof(message) + 1) ||
-        !tls_aes_update_aad(&aes_ctx, record, 5) ||
-        !tls_aes_encrypt(&aes_ctx, message, sizeof(message), record + 5))
-        return false;
     uint8_t inner_type = TLS_CONTENT_TYPE_HANDSHAKE;
-    if (!tls_aes_encrypt(&aes_ctx, &inner_type, 1, record + 10) ||
-        !tls_aes_digest(&aes_ctx, tag))
-        return false;
-    memcpy(record + 11, tag, sizeof(tag));
-    if (!ctx->transport_write(ctx->transport_arg, record, sizeof(record)))
+    if (tls_record_aead_init(&t->aes_ctx, ctx->cipher_suite,
+                             ctx->keys.client_application_key, ctx->key_len, nonce,
+                             sizeof(message) + 1) &&
+        tls_aes_update_aad(&t->aes_ctx, t->record, 5) &&
+        tls_aes_encrypt(&t->aes_ctx, message, sizeof(message), t->record + 5) &&
+        tls_aes_encrypt(&t->aes_ctx, &inner_type, 1, t->record + 10) &&
+        tls_aes_digest(&t->aes_ctx, tag))
+    {
+        memcpy(t->record + 11, tag, sizeof(tag));
+        sent = ctx->transport_write(ctx->transport_arg, t->record, sizeof(t->record));
+    }
+    tls_aes_destroy_ctx(&t->aes_ctx);
+    tls_scratch_free(t, sizeof(*t));
+    tls_secure_memzero(nonce, sizeof(nonce));
+    tls_secure_memzero(tag, sizeof(tag));
+    if (!sent)
         return false;
     ctx->client_seq_num++;
     return tls_ratchet_client_application_keys(ctx);
@@ -7497,14 +7599,15 @@ static bool tls_send_alert(
             /* Encrypt under the active client traffic keys. The inner record
              * is just 2 alert bytes + 1 inner content-type, so we inline the
              * AEAD path rather than depending on a general encrypt helper. */
-            uint8_t record[24];          /* 5 hdr + 2 body + 1 type + 16 tag */
+            /* aes_ctx holds the expanded AES-GCM key schedule derived from
+             * the live client traffic key; wiped before it is freed. */
+            struct {
+                struct tls_aes_context aes_ctx;
+                uint8_t record[24];      /* 5 hdr + 2 body + 1 type + 16 tag */
+            } *t;
             const uint8_t *key, *iv;
             uint64_t *seq_num;
             uint8_t nonce[12];
-            /* aes_ctx holds the expanded AES-GCM key schedule derived from
-             * the live client traffic key; TLS_AUTOZERO_STRUCT zeroes it
-             * automatically when this block ends. */
-            TLS_AUTOZERO_STRUCT(tls_aes_context, aes_ctx);
             uint8_t auth_tag[16];
 
             if (phase == 1)
@@ -7523,26 +7626,34 @@ static bool tls_send_alert(
             if (*seq_num >= tls_cipher_suite_record_limit(ctx->cipher_suite))
                 return false;
 
-            record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
-            record[1] = 0x03;
-            record[2] = 0x03;
-            record[3] = 0x00;
-            record[4] = 3 + 16; /* 2 body + 1 type + 16 tag */
-
-            tls_build_aead_nonce(iv, *seq_num, nonce);
-            if (tls_record_aead_init(&aes_ctx, ctx->cipher_suite, key,
-                                     ctx->key_len, nonce, 3) &&
-                tls_aes_update_aad(&aes_ctx, record, 5) &&
-                tls_aes_encrypt(&aes_ctx, alert_body, 2, record + 5))
+            t = tls_scratch_alloc(sizeof(*t));
+            if (t)
             {
-                uint8_t type_byte = TLS_CONTENT_TYPE_ALERT;
-                if (tls_aes_encrypt(&aes_ctx, &type_byte, 1, record + 7) &&
-                    tls_aes_digest(&aes_ctx, auth_tag))
+                memset(t, 0, sizeof(*t));
+                t->record[0] = TLS_CONTENT_TYPE_APPLICATION_DATA;
+                t->record[1] = 0x03;
+                t->record[2] = 0x03;
+                t->record[3] = 0x00;
+                t->record[4] = 3 + 16; /* 2 body + 1 type + 16 tag */
+
+                tls_build_aead_nonce(iv, *seq_num, nonce);
+                if (tls_record_aead_init(&t->aes_ctx, ctx->cipher_suite, key,
+                                         ctx->key_len, nonce, 3) &&
+                    tls_aes_update_aad(&t->aes_ctx, t->record, 5) &&
+                    tls_aes_encrypt(&t->aes_ctx, alert_body, 2, t->record + 5))
                 {
-                    memcpy(record + 8, auth_tag, 16);
-                    ok = ctx->transport_write(ctx->transport_arg, record, sizeof(record));
-                    if (ok) (*seq_num)++;
+                    uint8_t type_byte = TLS_CONTENT_TYPE_ALERT;
+                    if (tls_aes_encrypt(&t->aes_ctx, &type_byte, 1, t->record + 7) &&
+                        tls_aes_digest(&t->aes_ctx, auth_tag))
+                    {
+                        memcpy(t->record + 8, auth_tag, 16);
+                        ok = ctx->transport_write(ctx->transport_arg, t->record,
+                                                  sizeof(t->record));
+                        if (ok) (*seq_num)++;
+                    }
                 }
+                tls_aes_destroy_ctx(&t->aes_ctx);
+                tls_scratch_free(t, sizeof(*t));
             }
         }
     }

@@ -251,20 +251,23 @@ static void tls_psk_cache_load(void)
     unsigned out = 0;
     for (uint16_t i = 0; i < hdr.count && out < TLS_PSK_CACHE_MAX_ENTRIES; i++)
     {
-        struct tls_psk_cache_entry e = {0};
-        file_fn.ti_read(&e, sizeof(e), 1, h);
-        const char *hostname_end = (const char *)memchr(e.hostname, '\0', sizeof(e.hostname));
-        bool valid = e.in_use && hostname_end && hostname_end != e.hostname &&
-                     e.identity.identity_len != 0 &&
-                     e.identity.identity_len <= sizeof(e.identity.identity) &&
-                     e.ticket_lifetime != 0 &&
-                     e.ticket_lifetime <= 7u * 24u * 60u * 60u &&
-                     (e.psk_type == TLS_PSK_TYPE_RESUMPTION ||
-                      e.psk_type == TLS_PSK_TYPE_EXTERNAL) &&
-                     !tls_psk_cache_entry_expired(&e, now);
+        /* Read straight into the next free slot; a rejected entry is wiped
+         * and the slot reused. */
+        struct tls_psk_cache_entry *e = &g_psk_cache[out];
+        file_fn.ti_read(e, sizeof(*e), 1, h);
+        const char *hostname_end = (const char *)memchr(e->hostname, '\0', sizeof(e->hostname));
+        bool valid = e->in_use && hostname_end && hostname_end != e->hostname &&
+                     e->identity.identity_len != 0 &&
+                     e->identity.identity_len <= sizeof(e->identity.identity) &&
+                     e->ticket_lifetime != 0 &&
+                     e->ticket_lifetime <= 7u * 24u * 60u * 60u &&
+                     (e->psk_type == TLS_PSK_TYPE_RESUMPTION ||
+                      e->psk_type == TLS_PSK_TYPE_EXTERNAL) &&
+                     !tls_psk_cache_entry_expired(e, now);
         if (valid)
-            g_psk_cache[out++] = e;
-        tls_secure_memzero(&e, sizeof e);
+            out++;
+        else
+            tls_secure_memzero(e, sizeof(*e));
     }
     file_fn.ti_close(h);
 }
@@ -276,18 +279,17 @@ static void tls_psk_cache_save(void)
     if (!g_psk_cache)
         return;
 
-    struct tls_psk_cache_entry live[TLS_PSK_CACHE_MAX_ENTRIES];
     uint32_t now = rtc_Time();
     uint16_t count = 0;
     for (unsigned i = 0; i < TLS_PSK_CACHE_MAX_ENTRIES; i++)
     {
         if (g_psk_cache[i].in_use && !tls_psk_cache_entry_expired(&g_psk_cache[i], now))
-            live[count++] = g_psk_cache[i];
+            count++;
     }
 
     file_fn.ti_delete(TLS_PSK_CACHE_APPVAR);
     if (count == 0)
-        goto done; /* nothing live to persist; leave no stale appvar behind */
+        return; /* nothing live to persist; leave no stale appvar behind */
 
     struct tls_psk_cache_store_header hdr = {
         .magic   = TLS_PSK_CACHE_MAGIC,
@@ -297,13 +299,15 @@ static void tls_psk_cache_save(void)
 
     uint8_t h = file_fn.ti_open(TLS_PSK_CACHE_APPVAR, "w");
     if (!h)
-        goto done;
+        return;
     file_fn.ti_resize(total, h);
     file_fn.ti_write(&hdr, sizeof(hdr), 1, h);
-    file_fn.ti_write(live, sizeof(struct tls_psk_cache_entry), count, h);
+    for (unsigned i = 0; i < TLS_PSK_CACHE_MAX_ENTRIES; i++)
+    {
+        if (g_psk_cache[i].in_use && !tls_psk_cache_entry_expired(&g_psk_cache[i], now))
+            file_fn.ti_write(&g_psk_cache[i], sizeof(struct tls_psk_cache_entry), 1, h);
+    }
     file_fn.ti_close(h);
-done:
-    tls_secure_memzero(live, sizeof live);
 }
 
 bool tls_init(void)

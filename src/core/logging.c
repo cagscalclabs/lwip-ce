@@ -28,36 +28,33 @@ static struct lwip_traceback_entry g_traceback[LWIP_TRACEBACK_DEPTH];
 static uint8_t g_traceback_next = 0;
 static uint8_t g_traceback_count = 0;
 
-static void lwip_traceback_push(const struct lwip_traceback_entry *entry)
+/* Claims the next ring slot; the caller fills it in place. */
+static struct lwip_traceback_entry *lwip_traceback_reserve(void)
 {
-    if (!entry)
-    {
-        return;
-    }
-    g_traceback[g_traceback_next] = *entry;
+    struct lwip_traceback_entry *entry = &g_traceback[g_traceback_next];
     g_traceback_next = (uint8_t)((g_traceback_next + 1u) % LWIP_TRACEBACK_DEPTH);
     if (g_traceback_count < LWIP_TRACEBACK_DEPTH)
     {
         g_traceback_count++;
     }
+    return entry;
 }
 
 static void lwip_traceback_push_code(uint8_t module, uint8_t kind,
                                      uint32_t loc, uint16_t extra)
 {
-    struct lwip_traceback_entry entry;
+    struct lwip_traceback_entry *entry = lwip_traceback_reserve();
 
-    entry.module = module;
-    entry.kind = kind;
-    entry.file = LWIP_EVENT_CODE_FILE(loc);
-    entry.line = LWIP_EVENT_CODE_LINE(loc);
-    entry.extra = extra;
-    entry.component = 0;
-    entry.operation = 0;
-    entry.raw_error = 0;
-    entry.mapped_error = 0;
-    entry.status = 0;
-    lwip_traceback_push(&entry);
+    entry->module = module;
+    entry->kind = kind;
+    entry->file = LWIP_EVENT_CODE_FILE(loc);
+    entry->line = LWIP_EVENT_CODE_LINE(loc);
+    entry->extra = extra;
+    entry->component = 0;
+    entry->operation = 0;
+    entry->raw_error = 0;
+    entry->mapped_error = 0;
+    entry->status = 0;
 }
 
 void lwip_debug_set_fatal_cleanup(void (*cleanup)(void))
@@ -134,6 +131,18 @@ const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count)
     return g_traceback_ordered;
 }
 
+/* Internal: i-th newest traceback entry in place, NULL past the end. Lets the
+ * file logger walk the ring without copying it. */
+const struct lwip_traceback_entry *lwip_traceback_at(size_t i)
+{
+    if (i >= g_traceback_count)
+    {
+        return NULL;
+    }
+    return &g_traceback[(g_traceback_next + LWIP_TRACEBACK_DEPTH - 1u - i) %
+                        LWIP_TRACEBACK_DEPTH];
+}
+
 size_t lwip_traceback_copy(struct lwip_traceback_entry *dst, size_t cap)
 {
     if (!dst || cap == 0)
@@ -189,19 +198,18 @@ void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
                                 int raw_error, uint16_t mapped_error,
                                 uint16_t status)
 {
-    struct lwip_traceback_entry entry;
+    struct lwip_traceback_entry *entry = lwip_traceback_reserve();
 
-    entry.module = LWIP_DBG_MOD_LWIP;
-    entry.kind = LWIP_EV_ERROR;
-    entry.file = LWIP_FILE_NONE;
-    entry.line = 0;
-    entry.extra = 0;
-    entry.component = component;
-    entry.operation = operation;
-    entry.raw_error = raw_error;
-    entry.mapped_error = mapped_error;
-    entry.status = status;
-    lwip_traceback_push(&entry);
+    entry->module = LWIP_DBG_MOD_LWIP;
+    entry->kind = LWIP_EV_ERROR;
+    entry->file = LWIP_FILE_NONE;
+    entry->line = 0;
+    entry->extra = 0;
+    entry->component = component;
+    entry->operation = operation;
+    entry->raw_error = raw_error;
+    entry->mapped_error = mapped_error;
+    entry->status = status;
 }
 
 void lwip_event_emit_info(uint8_t module, const char *msg)

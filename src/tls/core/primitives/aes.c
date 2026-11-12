@@ -5,6 +5,7 @@
 #include "../../includes/aes.h"
 #include "../../includes/bytes.h"
 #include "../../includes/crypto_guard.h"
+#include "../../includes/scratch.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_AES
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -976,27 +977,30 @@ static __attribute__((noinline)) bool aes_verify_impl(struct tls_aes_context *ct
     if ((ctx->mode == TLS_AES_GCM && ctx->private.gcm.lock >= LOCK_VERIFIED) ||
         (ctx->mode == TLS_AES_CCM && ctx->private.ccm.lock >= LOCK_VERIFIED))
         return false;
-    struct tls_aes_context tmp;
+    struct tls_aes_context *tmp;
     uint8_t digest[AES_BLOCK_SIZE];
     bool tag_ok = false;
 
     // do this work on a copy of ctx; the copy holds the round keys and the
     // GHASH key, so it is wiped on every exit
-    memcpy(&tmp, ctx, sizeof(tmp));
+    tmp = tls_scratch_alloc(sizeof(*tmp));
+    if (tmp == NULL)
+        return false;
+    memcpy(tmp, ctx, sizeof(*tmp));
 
-    if (aad_len && !aes_update_aad_impl(&tmp, aad, aad_len))
+    if (aad_len && !aes_update_aad_impl(tmp, aad, aad_len))
         goto done;
     if (ciphertext_len)
     {
-        if (tmp.mode == TLS_AES_CCM)
+        if (tmp->mode == TLS_AES_CCM)
         {
-            if (!aes_decrypt_impl(&tmp, ciphertext, ciphertext_len, NULL))
+            if (!aes_decrypt_impl(tmp, ciphertext, ciphertext_len, NULL))
                 goto done;
         }
-        else if (!aes_update_ciphertext_impl(&tmp, ciphertext, ciphertext_len))
+        else if (!aes_update_ciphertext_impl(tmp, ciphertext, ciphertext_len))
             goto done;
     }
-    if (!aes_digest_impl(&tmp, digest))
+    if (!aes_digest_impl(tmp, digest))
         goto done;
 
     tag_ok = (ctx->mode == TLS_AES_CCM)
@@ -1011,7 +1015,8 @@ static __attribute__((noinline)) bool aes_verify_impl(struct tls_aes_context *ct
         aes_mark_verified(ctx);
     }
 done:
-    aes_destroy_ctx_impl(&tmp);
+    aes_destroy_ctx_impl(tmp);
+    tls_scratch_free(tmp, sizeof(*tmp));
     tls_secure_memzero(digest, sizeof digest);
     return tag_ok;
 }

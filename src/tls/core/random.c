@@ -10,6 +10,7 @@
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
 #include "../../drivers/mem.h"
+#include "../includes/scratch.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_RANDOM
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -293,15 +294,12 @@ static void tls_rng_request_q_clear(void)
 
 static bool tls_sha256_buf(const uint8_t *in, size_t in_len, uint8_t out[32])
 {
-    struct tls_hash_context hctx = {0};
-    if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256))
-    {
-        tls_secure_memzero(&hctx, sizeof hctx);
+    struct tls_hash_context *hctx = tls_hash_context_alloc(TLS_HASH_SHA256);
+    if (!hctx)
         return false;
-    }
-    tls_hash_update(&hctx, in, in_len);
-    tls_hash_digest(&hctx, out);
-    tls_secure_memzero(&hctx, sizeof hctx);
+    tls_hash_update(hctx, in, in_len);
+    tls_hash_digest(hctx, out);
+    tls_hash_context_free(hctx);
     return true;
 }
 
@@ -321,35 +319,38 @@ static void tls_store_u64_be(uint64_t x, uint8_t out[8])
 static bool tls_hash_df(const uint8_t *input, size_t input_len,
                         uint8_t output[TLS_HASH_DRBG_SEED_BYTES])
 {
-    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    struct {
+        struct tls_hash_context ctx;
+        uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    } *t;
     uint8_t header[5] = {1u, 0u, 0u, 1u, 0xB8u}; /* 440, big endian. */
     size_t written = 0;
 
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
+        return false;
     while (written < TLS_HASH_DRBG_SEED_BYTES)
     {
-        struct tls_hash_context ctx = {0};
         size_t take;
 
-        if (!tls_hash_context_init(&ctx, TLS_HASH_SHA256))
+        if (!tls_hash_context_init(&t->ctx, TLS_HASH_SHA256))
         {
-            tls_secure_memzero(&ctx, sizeof ctx);
-            tls_secure_memzero(digest, sizeof digest);
+            tls_scratch_free(t, sizeof(*t));
             return false;
         }
-        tls_hash_update(&ctx, header, sizeof(header));
-        tls_hash_update(&ctx, input, input_len);
-        tls_hash_digest(&ctx, digest);
-        tls_secure_memzero(&ctx, sizeof ctx);
+        tls_hash_update(&t->ctx, header, sizeof(header));
+        tls_hash_update(&t->ctx, input, input_len);
+        tls_hash_digest(&t->ctx, t->digest);
 
         take = TLS_HASH_DRBG_SEED_BYTES - written;
-        if (take > sizeof(digest))
-            take = sizeof(digest);
-        memcpy(output + written, digest, take);
+        if (take > sizeof(t->digest))
+            take = sizeof(t->digest);
+        memcpy(output + written, t->digest, take);
         written += take;
         header[0]++;
     }
 
-    tls_secure_memzero(digest, sizeof(digest));
+    tls_scratch_free(t, sizeof(*t));
     return true;
 }
 
@@ -387,16 +388,16 @@ static void tls_hash_drbg_increment(uint8_t value[TLS_HASH_DRBG_SEED_BYTES])
 
 static bool tls_hash_drbg_make_c(struct tls_hash_drbg_state *drbg)
 {
-    uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES];
+    const size_t material_len = 1u + TLS_HASH_DRBG_SEED_BYTES;
+    uint8_t *material = tls_scratch_alloc(material_len);
+    bool ok;
+    if (!material)
+        return false;
     material[0] = 0u;
     memcpy(material + 1u, drbg->v, sizeof(drbg->v));
-    if (!tls_hash_df(material, sizeof(material), drbg->c))
-    {
-        tls_secure_memzero(material, sizeof(material));
-        return false;
-    }
-    tls_secure_memzero(material, sizeof(material));
-    return true;
+    ok = tls_hash_df(material, material_len, drbg->c);
+    tls_scratch_free(material, material_len);
+    return ok;
 }
 
 static bool tls_hash_drbg_instantiate(
@@ -435,26 +436,29 @@ static bool tls_hash_drbg_reseed(
     struct tls_hash_drbg_state *drbg,
     const uint8_t entropy[TLS_HASH_DRBG_ENTROPY_BYTES])
 {
-    uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES];
-    uint8_t new_v[TLS_HASH_DRBG_SEED_BYTES];
+    struct {
+        uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES];
+        uint8_t new_v[TLS_HASH_DRBG_SEED_BYTES];
+    } *t;
 
     /* Additional input is not supported, so seed material is 0x01 || V ||
      * entropy_input as permitted by SP 800-90A section 10.1.1.3. */
     if (drbg == NULL || entropy == NULL || !drbg->seeded)
         return false;
-    material[0] = 1u;
-    memcpy(material + 1u, drbg->v, sizeof(drbg->v));
-    memcpy(material + 1u + sizeof(drbg->v), entropy,
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
+        return false;
+    t->material[0] = 1u;
+    memcpy(t->material + 1u, drbg->v, sizeof(drbg->v));
+    memcpy(t->material + 1u + sizeof(drbg->v), entropy,
            TLS_HASH_DRBG_ENTROPY_BYTES);
-    if (!tls_hash_df(material, sizeof(material), new_v))
+    if (!tls_hash_df(t->material, sizeof(t->material), t->new_v))
     {
-        tls_secure_memzero(material, sizeof(material));
-        tls_secure_memzero(new_v, sizeof(new_v));
+        tls_scratch_free(t, sizeof(*t));
         return false;
     }
-    memcpy(drbg->v, new_v, sizeof(drbg->v));
-    tls_secure_memzero(new_v, sizeof(new_v));
-    tls_secure_memzero(material, sizeof(material));
+    memcpy(drbg->v, t->new_v, sizeof(drbg->v));
+    tls_scratch_free(t, sizeof(*t));
     if (!tls_hash_drbg_make_c(drbg))
     {
         tls_hash_drbg_reset(drbg);
@@ -469,29 +473,32 @@ static bool tls_hash_drbg_hashgen(
     uint8_t *out,
     size_t len)
 {
-    uint8_t data[TLS_HASH_DRBG_SEED_BYTES];
-    uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    struct {
+        uint8_t data[TLS_HASH_DRBG_SEED_BYTES];
+        uint8_t digest[TLS_SHA256_DIGEST_LEN];
+    } *t;
     size_t produced = 0;
 
-    memcpy(data, drbg->v, sizeof(data));
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
+        return false;
+    memcpy(t->data, drbg->v, sizeof(t->data));
     while (produced < len)
     {
         size_t take = len - produced;
-        if (!tls_sha256_buf(data, sizeof(data), digest))
+        if (!tls_sha256_buf(t->data, sizeof(t->data), t->digest))
             goto fail;
-        if (take > sizeof(digest))
-            take = sizeof(digest);
-        memcpy(out + produced, digest, take);
+        if (take > sizeof(t->digest))
+            take = sizeof(t->digest);
+        memcpy(out + produced, t->digest, take);
         produced += take;
-        tls_hash_drbg_increment(data);
+        tls_hash_drbg_increment(t->data);
     }
-    tls_secure_memzero(data, sizeof(data));
-    tls_secure_memzero(digest, sizeof(digest));
+    tls_scratch_free(t, sizeof(*t));
     return true;
 
 fail:
-    tls_secure_memzero(data, sizeof(data));
-    tls_secure_memzero(digest, sizeof(digest));
+    tls_scratch_free(t, sizeof(*t));
     return false;
 }
 
@@ -500,8 +507,10 @@ static bool tls_drbg_generate_bytes(
     uint8_t *out,
     size_t len)
 {
-    uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES];
-    uint8_t h[TLS_SHA256_DIGEST_LEN];
+    struct {
+        uint8_t material[1u + TLS_HASH_DRBG_SEED_BYTES];
+        uint8_t h[TLS_SHA256_DIGEST_LEN];
+    } *t;
     uint8_t counter_be[8];
 
     if (drbg == NULL || !drbg->seeded || out == NULL ||
@@ -513,22 +522,23 @@ static bool tls_drbg_generate_bytes(
     if (!tls_hash_drbg_hashgen(drbg, out, len))
         return false;
 
-    material[0] = 3u;
-    memcpy(material + 1u, drbg->v, sizeof(drbg->v));
-    if (!tls_sha256_buf(material, sizeof(material), h))
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
+        return false;
+    t->material[0] = 3u;
+    memcpy(t->material + 1u, drbg->v, sizeof(drbg->v));
+    if (!tls_sha256_buf(t->material, sizeof(t->material), t->h))
         goto fail;
-    tls_hash_drbg_add(drbg->v, h, sizeof(h));
+    tls_hash_drbg_add(drbg->v, t->h, sizeof(t->h));
     tls_hash_drbg_add(drbg->v, drbg->c, sizeof(drbg->c));
     tls_store_u64_be(drbg->reseed_counter, counter_be);
     tls_hash_drbg_add(drbg->v, counter_be, sizeof(counter_be));
     drbg->reseed_counter++;
-    tls_secure_memzero(material, sizeof(material));
-    tls_secure_memzero(h, sizeof(h));
+    tls_scratch_free(t, sizeof(*t));
     return true;
 
 fail:
-    tls_secure_memzero(material, sizeof(material));
-    tls_secure_memzero(h, sizeof(h));
+    tls_scratch_free(t, sizeof(*t));
     return false;
 }
 
@@ -577,7 +587,7 @@ static bool tls_rng_drive_initialization(void);
 
 static bool tls_drbg_entropy_gather_step(void)
 {
-    uint8_t entropy[TLS_HASH_DRBG_ENTROPY_STEP_BYTES];
+    uint8_t *entropy;
     uint8_t health_epoch;
     uint8_t source_epoch;
     size_t target_bytes;
@@ -620,12 +630,16 @@ static bool tls_drbg_entropy_gather_step(void)
     }
 
     collect_len = target_bytes - g_tls_entropy_reserve_len;
-    if (collect_len > sizeof(entropy))
-        collect_len = sizeof(entropy);
+    if (collect_len > TLS_HASH_DRBG_ENTROPY_STEP_BYTES)
+        collect_len = TLS_HASH_DRBG_ENTROPY_STEP_BYTES;
 
+    entropy = tls_scratch_alloc(TLS_HASH_DRBG_ENTROPY_STEP_BYTES);
+    if (!entropy)
+        return false;
     source_epoch = tls_random_health_epoch();
     if (tls_entropy_collect(entropy, collect_len) == NULL)
     {
+        tls_scratch_free(entropy, TLS_HASH_DRBG_ENTROPY_STEP_BYTES);
         tls_rng_log_health_failure();
         tls_rng_begin_initialization(TLS_RNG_FAILURE_COLLECTION);
         return false;
@@ -641,7 +655,7 @@ static bool tls_drbg_entropy_gather_step(void)
     if (source_epoch != tls_random_health_epoch())
     {
         tls_rng_log_health_failure();
-        tls_secure_memzero(entropy, sizeof(entropy));
+        tls_scratch_free(entropy, TLS_HASH_DRBG_ENTROPY_STEP_BYTES);
         /* Discard material that may span two physical sources. An already
          * instantiated DRBG remains valid after a recovered source change. */
         tls_entropy_reserve_reset();
@@ -660,6 +674,7 @@ static bool tls_drbg_entropy_gather_step(void)
 
     memcpy(g_tls_entropy_reserve + g_tls_entropy_reserve_len,
            entropy, collect_len);
+    tls_scratch_free(entropy, TLS_HASH_DRBG_ENTROPY_STEP_BYTES);
     g_tls_entropy_reserve_len += collect_len;
     /* tls_entropy_collect() truncates SHA-256 to 192 bits. The raw source
      * supplies at least 256 accounted bits, leaving the configured 64-bit
@@ -668,7 +683,6 @@ static bool tls_drbg_entropy_gather_step(void)
     g_tls_entropy_reserve_bits = (uint16_t)(
         g_tls_entropy_reserve_bits + conditioned_bits);
     g_tls_rng_epoch_changes = 0;
-    tls_secure_memzero(entropy, sizeof(entropy));
 
     if (g_tls_rng_state == TLS_RNG_DRBG_SEEDING &&
         g_tls_entropy_reserve_bits >= TLS_HASH_DRBG_128_INSTANTIATE_TARGET_BITS)
@@ -1209,16 +1223,21 @@ bool tls_random_add_entropy(const uint8_t *data, size_t len)
         return false;
     if (len == TLS_HASH_DRBG_192_INSTANTIATE_BYTES)
     {
-        uint8_t material[TLS_HASH_DRBG_192_INSTANTIATE_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES];
+        const size_t material_len =
+            TLS_HASH_DRBG_192_INSTANTIATE_BYTES + TLS_HASH_DRBG_ENTROPY_BYTES;
+        uint8_t *material;
         bool ok;
 
         if (!g_tls_drbg.seeded)
             return false;
+        material = tls_scratch_alloc(material_len);
+        if (!material)
+            return false;
         memcpy(material, data, len);
         ok = tls_drbg_generate_bytes(&g_tls_drbg, material + len, TLS_HASH_DRBG_ENTROPY_BYTES) &&
-             tls_hash_drbg_instantiate(&g_tls_drbg_upgrade, material, sizeof(material),
+             tls_hash_drbg_instantiate(&g_tls_drbg_upgrade, material, material_len,
                                        TLS_RNG_STRENGTH_192);
-        tls_secure_memzero(material, sizeof(material));
+        tls_scratch_free(material, material_len);
         if (!ok)
         {
             tls_hash_drbg_reset(&g_tls_drbg_upgrade);
@@ -1252,7 +1271,7 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
 {
     const volatile uint8_t *source;
     uint8_t source_mask;
-    uint8_t captured[TLS_RNG_STATS_CAPTURE_CHUNK];
+    uint8_t *captured;
     uint8_t lag_history[TLS_RNG_STATS_LAG_COUNT];
     uint8_t lag_history_count = 0u;
     uint8_t lag_history_next = 0u;
@@ -1299,6 +1318,11 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
     stats->health_tests_passed = TLS_RNG_HEALTH_ALL_PASS;
     remaining = (uint32_t)sample_count;
 
+    captured = tls_scratch_alloc(TLS_RNG_STATS_CAPTURE_CHUNK);
+    if (captured == NULL)
+    {
+        return false;
+    }
     while (remaining != 0u)
     {
         uint8_t count = (remaining > TLS_RNG_STATS_CAPTURE_CHUNK)
@@ -1594,6 +1618,7 @@ bool tls_rng_compute_stats(size_t sample_count, struct tls_rng_stats *stats)
     }
     stats->health_tests_passed &= stats->health_tests_evaluated;
 
+    tls_scratch_free(captured, TLS_RNG_STATS_CAPTURE_CHUNK);
     return true;
 }
 

@@ -127,6 +127,9 @@ static void tls_secure_memzero(void *p, size_t len)
 {
     memset(p, 0, len);
 }
+#include <stdlib.h>
+static void *tls_scratch_alloc(size_t n) { return malloc(n); }
+static void tls_scratch_free(void *p, size_t n) { if (p) { tls_secure_memzero(p, n); free(p); } }
 
 static tls_key_op_result_t tls_key_sign(
     const uint8_t *content, size_t content_len,

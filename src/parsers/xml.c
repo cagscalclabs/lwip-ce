@@ -4,6 +4,7 @@
  */
 
 #include "xml.h"
+#include "lwip/mem.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -738,42 +739,52 @@ bool xml_get_attr(const xml_event_t *evt, const char *name,
 
 xml_err_t xml_skip(xml_ctx_t *ctx)
 {
-    xml_event_t evt;
+    xml_event_t *evt = (xml_event_t *)mem_malloc(sizeof(*evt));
+    xml_err_t err = XML_OK;
     int depth = 1;
 
+    if (!evt)
+        return XML_ERR_INVALID;
     while (depth > 0) {
-        xml_err_t err = xml_next(ctx, &evt);
+        err = xml_next(ctx, evt);
         if (err != XML_OK)
-            return err;
-        if (evt.type == XML_EVT_ELEMENT_START && !evt.self_closing) {
+            break;
+        if (evt->type == XML_EVT_ELEMENT_START && !evt->self_closing) {
             depth++;
-        } else if (evt.type == XML_EVT_ELEMENT_END) {
+        } else if (evt->type == XML_EVT_ELEMENT_END) {
             depth--;
         }
     }
-    return XML_OK;
+    mem_free(evt);
+    return err;
 }
 
 xml_err_t xml_get_inner_text(xml_ctx_t *ctx, char *dst, size_t dst_len)
 {
-    xml_event_t evt;
-    xml_err_t err = xml_next(ctx, &evt);
+    xml_event_t *evt = (xml_event_t *)mem_malloc(sizeof(*evt));
+    xml_err_t err;
 
+    if (!evt)
+        return XML_ERR_INVALID;
+    err = xml_next(ctx, evt);
     if (err != XML_OK)
-        return err;
-    if (evt.type == XML_EVT_ELEMENT_END)
-        return XML_ERR_DONE;
-    if (evt.type != XML_EVT_TEXT)
-        return XML_ERR_INVALID;
-    if (!slice_copy(dst, dst_len, evt.text, strlen(evt.text)))
-        return XML_ERR_INVALID;
+        goto done;
+    if (evt->type == XML_EVT_ELEMENT_END) {
+        err = XML_ERR_DONE;
+        goto done;
+    }
+    if (evt->type != XML_EVT_TEXT ||
+        !slice_copy(dst, dst_len, evt->text, strlen(evt->text))) {
+        err = XML_ERR_INVALID;
+        goto done;
+    }
 
-    err = xml_next(ctx, &evt);
-    if (err != XML_OK)
-        return err;
-    if (evt.type != XML_EVT_ELEMENT_END)
-        return XML_ERR_INVALID;
-    return XML_OK;
+    err = xml_next(ctx, evt);
+    if (err == XML_OK && evt->type != XML_EVT_ELEMENT_END)
+        err = XML_ERR_INVALID;
+done:
+    mem_free(evt);
+    return err;
 }
 
 size_t xml_list_attrs(const xml_event_t *evt, char *dst, size_t dst_len)

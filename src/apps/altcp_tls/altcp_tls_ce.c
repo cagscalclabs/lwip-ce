@@ -27,6 +27,7 @@ extern bool tls_aes_update_ciphertext(struct tls_aes_context *ctx, const uint8_t
 extern bool tls_aes_verify_tag(struct tls_aes_context *ctx, const uint8_t *tag);
 #include "../../tls/includes/bytes.h"
 #include "../../tls/includes/crypto_guard.h"
+#include "../../tls/includes/scratch.h"
 #include "../../tls/includes/handshake.h"
 #include "../../tls/includes/random.h"
 #include "../../lwip-imports.h"
@@ -780,13 +781,17 @@ static err_t altcp_tls_ce_write_handshake_fragments(
         size_t next_plaintext = 5u + sent + chunk;
         size_t output_end = frag_cap;
         size_t spill_len = 0;
-        uint8_t spill[1u + TLS_AES_AUTH_TAG_SIZE];
+        const size_t spill_cap = 1u + TLS_AES_AUTH_TAG_SIZE;
+        uint8_t *spill = NULL;
 
         if (sent + chunk < msg_len && output_end > next_plaintext)
         {
             spill_len = output_end - next_plaintext;
             if (spill_len > msg_len - sent - chunk)
                 spill_len = msg_len - sent - chunk;
+            spill = tls_scratch_alloc(spill_cap);
+            if (!spill)
+                return ERR_MEM;
             memcpy(spill, record + next_plaintext, spill_len);
         }
 
@@ -804,7 +809,7 @@ static err_t altcp_tls_ce_write_handshake_fragments(
         if (spill_len)
         {
             memcpy(record + next_plaintext, spill, spill_len);
-            tls_secure_memzero(spill, sizeof(spill));
+            tls_scratch_free(spill, spill_cap);
         }
         if (write_err != ERR_OK)
             return write_err;
@@ -1027,8 +1032,6 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
 {
     struct altcp_tls_ce_config *conf;
     uint8_t resumed_psk_type;
-    uint8_t resumed_psk[32];
-    struct tls_psk_identity resumed_identity;
 
     tls_dbg_status("config: ecdhe enter");
     size_t host_len = hostname ? strlen(hostname) + 1 : 0;
@@ -1051,17 +1054,18 @@ struct altcp_tls_ce_config *altcp_tls_ce_create_config_client_ecdhe(
      * PSK reuse is a protocol violation; a miss silently falls back to a
      * fresh ECDHE handshake. */
     tls_dbg_status("config: pski lookup");
-    if (hostname && tls_psk_cache_get(hostname, &resumed_psk_type, resumed_psk, &resumed_identity))
+    if (hostname && tls_psk_cache_get(hostname, &resumed_psk_type, conf->psk,
+                                      &conf->psk_identity))
     {
         conf->psk_mode = 1;
         conf->psk_type = resumed_psk_type;
-        memcpy(conf->psk, resumed_psk, sizeof(conf->psk));
-        memcpy(&conf->psk_identity, &resumed_identity, sizeof(conf->psk_identity));
         tls_dbg_status("config: resume found");
     }
-
-    tls_secure_memzero(resumed_psk, sizeof resumed_psk);
-    tls_secure_memzero(&resumed_identity, sizeof resumed_identity);
+    else
+    {
+        tls_secure_memzero(conf->psk, sizeof(conf->psk));
+        tls_secure_memzero(&conf->psk_identity, sizeof(conf->psk_identity));
+    }
 
     tls_dbg_status("config: done");
     return conf;
@@ -2023,14 +2027,20 @@ static void altcp_tls_ce_swap_keys(uint8_t *a_key, uint8_t *a_iv,
                                    uint8_t *b_key, uint8_t *b_iv,
                                    size_t key_len)
 {
-    uint8_t tmp[TLS_TRAFFIC_KEY_MAX];
-    memcpy(tmp, a_key, key_len);
-    memcpy(a_key, b_key, key_len);
-    memcpy(b_key, tmp, key_len);
-    memcpy(tmp, a_iv, 12);
-    memcpy(a_iv, b_iv, 12);
-    memcpy(b_iv, tmp, 12);
-    tls_secure_memzero(tmp, sizeof(tmp));
+    uint8_t tmp;
+    for (size_t i = 0; i < key_len; i++)
+    {
+        tmp = a_key[i];
+        a_key[i] = b_key[i];
+        b_key[i] = tmp;
+    }
+    for (size_t i = 0; i < 12; i++)
+    {
+        tmp = a_iv[i];
+        a_iv[i] = b_iv[i];
+        b_iv[i] = tmp;
+    }
+    tmp = 0;
 }
 
 /* ClientHello -> ServerHello, then the encrypted server flight. Each handshake
@@ -2042,7 +2052,8 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
     struct tls_handshake_context *ctx = &state->tls_ctx;
     struct altcp_tls_ce_config *conf = (struct altcp_tls_ce_config *)state->conf;
     struct tls_traffic_keys *k = &ctx->keys;
-    uint8_t hello[5 + 128];
+    const size_t hello_cap = 5 + 128;
+    uint8_t *hello;
     size_t hello_len = 0;
     bool ok;
 
@@ -2050,19 +2061,26 @@ static bool altcp_tls_ce_server_hello(struct altcp_pcb *conn, altcp_tls_ce_state
     if (conf && conf->server_chain && conf->server_chain_len > 0 && conf->server_key)
         tls_server_set_cert(ctx, conf->server_chain, conf->server_chain_len, conf->server_key);
 
-    tls_crypto_guard_enable();
-    ok = tls_server_recv_client_hello(ctx, client_hello, len, hello + 5, sizeof(hello) - 5, &hello_len);
-    tls_crypto_guard_disable();
-    if (!ok)
+    hello = tls_scratch_alloc(hello_cap);
+    if (!hello)
     {
         return false;
     }
-    hello[0] = TLS_CONTENT_TYPE_HANDSHAKE;
-    hello[1] = 0x03;
-    hello[2] = 0x03;
-    hello[3] = (uint8_t)(hello_len >> 8);
-    hello[4] = (uint8_t)hello_len;
-    if (altcp_write(conn->inner_conn, hello, (u16_t)(5 + hello_len), TCP_WRITE_FLAG_COPY) != ERR_OK)
+    tls_crypto_guard_enable();
+    ok = tls_server_recv_client_hello(ctx, client_hello, len, hello + 5, hello_cap - 5, &hello_len);
+    tls_crypto_guard_disable();
+    if (ok)
+    {
+        hello[0] = TLS_CONTENT_TYPE_HANDSHAKE;
+        hello[1] = 0x03;
+        hello[2] = 0x03;
+        hello[3] = (uint8_t)(hello_len >> 8);
+        hello[4] = (uint8_t)hello_len;
+        ok = altcp_write(conn->inner_conn, hello, (u16_t)(5 + hello_len),
+                         TCP_WRITE_FLAG_COPY) == ERR_OK;
+    }
+    tls_scratch_free(hello, hello_cap);
+    if (!ok)
     {
         return false;
     }
@@ -2241,7 +2259,8 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
             struct pbuf *plain = NULL;
             size_t plain_len = 0;
             uint8_t inner_type = 0;
-            uint8_t finished[4 + TLS_HASH_MAX_DIGEST_LEN];
+            const size_t finished_cap = 4 + TLS_HASH_MAX_DIGEST_LEN;
+            uint8_t *finished;
             size_t finished_len = 4u + (size_t)ctx->hash_len;
             err_t err = altcp_tls_ce_decrypt_record_stream(state, conn, true, total_len,
                                                           &plain, &plain_len, &inner_type);
@@ -2255,7 +2274,9 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
                 ALTCP_TLS_CE_ERROR_ABORT_CODE(conn, -err);
                 return ERR_ABRT;
             }
-            ok = (ctx->hash_len == TLS_SHA256_DIGEST_LEN ||
+            finished = tls_scratch_alloc(finished_cap);
+            ok = finished != NULL &&
+                 (ctx->hash_len == TLS_SHA256_DIGEST_LEN ||
                   ctx->hash_len == TLS_SHA384_DIGEST_LEN) &&
                  inner_type == TLS_CONTENT_TYPE_HANDSHAKE &&
                  plain_len == finished_len &&
@@ -2263,6 +2284,7 @@ static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_st
             pbuf_free(plain);
             if (ok)
                 ok = tls_server_recv_finished(ctx, finished, finished_len);
+            tls_scratch_free(finished, finished_cap);
             if (!ok)
             {
                 (void)tls_send_fatal_alert(ctx, TLS_ALERT_DECRYPT_ERROR);

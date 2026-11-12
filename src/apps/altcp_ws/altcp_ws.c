@@ -187,21 +187,30 @@ static void altcp_ws_remove_callbacks(struct altcp_pcb *inner)
 static err_t altcp_ws_send_upgrade_request(struct altcp_pcb *conn,
                                            altcp_ws_state_t *state)
 {
-    char buf[512];
-    char key_b64[25];
+    struct {
+        char buf[512];
+        char key_b64[25];
+    } *t;
     uint8_t key_raw[16];
     int n;
+    err_t e;
 
     if (tls_random_bytes(key_raw, sizeof(key_raw)) == NULL)
     {
         ERROR();
         return ERR_VAL;
     }
-    ws_base64_encode16(key_raw, key_b64);
+    t = (void *)mem_malloc(sizeof(*t));
+    if (!t)
+    {
+        ERROR();
+        return ERR_MEM;
+    }
+    ws_base64_encode16(key_raw, t->key_b64);
 
     if (state->conf->subprotocol)
     {
-        n = snprintf(buf, sizeof(buf),
+        n = snprintf(t->buf, sizeof(t->buf),
                      "GET %s HTTP/1.1\r\n"
                      "Host: %s\r\n"
                      "Upgrade: websocket\r\n"
@@ -212,12 +221,12 @@ static err_t altcp_ws_send_upgrade_request(struct altcp_pcb *conn,
                      "\r\n",
                      state->conf->path,
                      state->conf->host,
-                     key_b64,
+                     t->key_b64,
                      state->conf->subprotocol);
     }
     else
     {
-        n = snprintf(buf, sizeof(buf),
+        n = snprintf(t->buf, sizeof(t->buf),
                      "GET %s HTTP/1.1\r\n"
                      "Host: %s\r\n"
                      "Upgrade: websocket\r\n"
@@ -227,16 +236,18 @@ static err_t altcp_ws_send_upgrade_request(struct altcp_pcb *conn,
                      "\r\n",
                      state->conf->path,
                      state->conf->host,
-                     key_b64);
+                     t->key_b64);
     }
 
-    if (n <= 0 || (size_t)n >= sizeof(buf))
+    if (n <= 0 || (size_t)n >= sizeof(t->buf))
     {
+        mem_free(t);
         ERROR();
         return ERR_VAL;
     }
 
-    err_t e = altcp_write(conn->inner_conn, buf, (u16_t)n, TCP_WRITE_FLAG_COPY);
+    e = altcp_write(conn->inner_conn, t->buf, (u16_t)n, TCP_WRITE_FLAG_COPY);
+    mem_free(t);
     if (e != ERR_OK)
     {
         ERROR_CODE((int)e);
@@ -272,23 +283,30 @@ static void altcp_ws_send_pong(struct altcp_pcb *conn,
     if (payload_len > 125u)
         payload_len = 0u;
 
-    uint8_t frame[6u + 125u];
+    const size_t frame_cap = 6u + 125u;
+    uint8_t *frame = (uint8_t *)mem_malloc(frame_cap);
+    if (!frame)
+        return;
     frame[0] = WS_FIN | WS_OP_PONG;
     frame[1] = (uint8_t)(WS_MASK_BIT | payload_len);
     if (tls_random_bytes(&frame[2], 4) == NULL)
+    {
+        mem_free(frame);
         return;
+    }
 
     if (payload_len > 0u && state->rx)
     {
-        uint8_t ping_pay[125];
-        pbuf_copy_partial(state->rx, ping_pay, payload_len, hdr_size);
+        /* Copy the ping payload into place, then mask it there. */
+        pbuf_copy_partial(state->rx, frame + 6u, payload_len, hdr_size);
         const uint8_t *mask = &frame[2];
         for (u16_t i = 0; i < payload_len; i++)
-            frame[6u + i] = ping_pay[i] ^ mask[i & 3u];
+            frame[6u + i] ^= mask[i & 3u];
     }
 
     altcp_write(conn->inner_conn, frame, (u16_t)(6u + payload_len),
                 TCP_WRITE_FLAG_COPY);
+    mem_free(frame);
     altcp_output(conn->inner_conn);
 }
 
@@ -404,8 +422,13 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
          * Connection: Upgrade (case-insensitive substring scan).
          * We do not validate Sec-WebSocket-Accept (requires SHA-1). */
         {
-            uint8_t hdr_buf[header_end < 512u ? header_end : 512u];
             u16_t   scan_len = (u16_t)(header_end < 512u ? header_end : 512u);
+            uint8_t *hdr_buf = (uint8_t *)mem_malloc(scan_len);
+            if (!hdr_buf)
+            {
+                ALTCP_WS_ERROR_ABORT(conn->inner_conn);
+                return ERR_ABRT;
+            }
             pbuf_copy_partial(p, hdr_buf, scan_len, 0);
 
             /* Lowercase scan: look for "upgrade: websocket" and
@@ -477,6 +500,7 @@ static err_t altcp_ws_lower_recv_process(struct altcp_pcb *conn,
                 }
             }
 
+            mem_free(hdr_buf);
             if (!found_upgrade || !found_connection)
             {
                 ALTCP_WS_ERROR_ABORT(conn->inner_conn);

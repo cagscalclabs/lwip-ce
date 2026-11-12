@@ -13,6 +13,7 @@
 #include "key_internal.h"
 #include "../includes/tls.h"
 #include "../includes/crypto_guard.h"
+#include "../includes/scratch.h"
 
 /* P-256 and P-384 public API forward declarations (assembly in p256.s / p384.s). */
 bool tls_p256_verify(const uint8_t sig[64], const uint8_t hash[32],
@@ -1475,29 +1476,44 @@ bool tls_x509_time_in_validity(const struct tls_x509_object *cert, uint32_t now_
 
 bool tls_x509_has_valid_constraints(const uint8_t *ext_data, size_t ext_len)
 {
-    struct tls_x509_object cert = {0};
-    cert.extensions = ext_data;
-    cert.extensions_len = ext_len;
-    return tls_x509_validate_path_extensions(&cert, true, 0);
+    struct tls_x509_object *cert = tls_scratch_alloc(sizeof(*cert));
+    bool ok;
+    if (!cert)
+        return false;
+    memset(cert, 0, sizeof(*cert));
+    cert->extensions = ext_data;
+    cert->extensions_len = ext_len;
+    ok = tls_x509_validate_path_extensions(cert, true, 0);
+    tls_scratch_free(cert, sizeof(*cert));
+    return ok;
 }
 
 bool tls_x509_has_required_ca_constraints(const uint8_t *cert_der, size_t cert_len)
 {
-    struct tls_x509_object parsed = {0};
+    struct tls_x509_object *parsed = tls_scratch_alloc(sizeof(*parsed));
+    const uint8_t *extensions;
+    size_t extensions_len;
 
-    if (!tls_x509_parse_certificate(cert_der, cert_len, &parsed))
+    if (!parsed)
+        return false;
+    memset(parsed, 0, sizeof(*parsed));
+    if (!tls_x509_parse_certificate(cert_der, cert_len, parsed))
     {
+        tls_scratch_free(parsed, sizeof(*parsed));
         ERROR_CODE(0x37);
         return false;
     }
+    extensions = parsed->extensions;
+    extensions_len = parsed->extensions_len;
+    tls_scratch_free(parsed, sizeof(*parsed));
 
-    if (!parsed.extensions || parsed.extensions_len == 0)
+    if (!extensions || extensions_len == 0)
     {
         ERROR_CODE(0x38);
         return false;
     }
 
-    return tls_x509_has_valid_constraints(parsed.extensions, parsed.extensions_len);
+    return tls_x509_has_valid_constraints(extensions, extensions_len);
 }
 
 bool tls_x509_parse_certificate(const uint8_t *cert_der, size_t cert_len,
@@ -1897,8 +1913,8 @@ static bool tls_x509_decode_pem_certificate(const char *pem_data,
                                             size_t der_out_len,
                                             size_t *der_written)
 {
-    const char begin_banner[] = "-----BEGIN CERTIFICATE-----";
-    const char end_banner[] = "-----END CERTIFICATE-----";
+    static const char begin_banner[] = "-----BEGIN CERTIFICATE-----";
+    static const char end_banner[] = "-----END CERTIFICATE-----";
     const char *p;
     const char *end;
     size_t b64_count = 0;
@@ -2237,26 +2253,30 @@ tls_key_op_result_t tls_x509_signature_verify(const uint8_t *content, size_t con
         return TLS_KEY_OP_UNKNOWN;
     }
 
-    struct tls_hash_context *hash_ctx;
+    struct {
+        struct tls_hash_context hash_ctx;
+        uint8_t digest[TLS_SHA384_DIGEST_LEN]; /* large enough for both */
+    } *t;
+    tls_key_op_result_t res;
     uint8_t hash_type = (alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
                         ? (uint8_t)TLS_HASH_SHA384 : (uint8_t)TLS_HASH_SHA256;
-    uint8_t digest[TLS_SHA384_DIGEST_LEN]; /* large enough for both */
-    hash_ctx = (struct tls_hash_context *)tls_x509_alloc(sizeof(*hash_ctx));
-    if (!hash_ctx)
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t)
     {
         return TLS_KEY_OP_INVALID;
     }
-    if (!tls_hash_context_init(hash_ctx, hash_type))
+    if (!tls_hash_context_init(&t->hash_ctx, hash_type))
     {
-        tls_x509_free(hash_ctx);
+        tls_scratch_free(t, sizeof(*t));
         return TLS_KEY_OP_INVALID;
     }
-    tls_hash_update(hash_ctx, content, content_len);
-    tls_hash_digest(hash_ctx, digest);
-    tls_hash_clear(hash_ctx);
-    tls_x509_free(hash_ctx);
+    tls_hash_update(&t->hash_ctx, content, content_len);
+    tls_hash_digest(&t->hash_ctx, t->digest);
+    tls_hash_clear(&t->hash_ctx);
 
-    return tls_x509_signature_verify_digest(digest, sig, sig_len, key, alg);
+    res = tls_x509_signature_verify_digest(t->digest, sig, sig_len, key, alg);
+    tls_scratch_free(t, sizeof(*t));
+    return res;
 }
 
 /* Parse one DER INTEGER from der[0..len) into a big-endian, left-zero-padded
@@ -2329,12 +2349,14 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 return TLS_KEY_OP_INVALID;
             /* sig is a DER SEQUENCE { INTEGER r, INTEGER s }.
              * Decode into a flat 64-byte r||s buffer for tls_p256_verify. */
-            uint8_t rs[64];
             /* Minimum valid DER ECDSA-Sig-Value is 8 bytes. */
             if (sig_len < 8 || sig[0] != 0x30)
                 return TLS_KEY_OP_INVALID;
             size_t seq_len = sig[1];
             if ((seq_len & 0x80) || 2 + seq_len != sig_len)
+                return TLS_KEY_OP_INVALID;
+            uint8_t *rs = tls_scratch_alloc(64);
+            if (!rs)
                 return TLS_KEY_OP_INVALID;
             {
                 const uint8_t *end = sig + sig_len;
@@ -2342,12 +2364,15 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 if (p)
                     p = tls_ecdsa_parse_int(p, (size_t)(end - p), rs + 32);
                 if (p != end)   /* NULL (parse error) or trailing bytes */
+                {
+                    tls_scratch_free(rs, 64);
                     return TLS_KEY_OP_INVALID;
+                }
             }
             tls_crypto_guard_enable();
             bool p256_ok = tls_p256_verify(rs, digest, key->ec.pub);
             tls_crypto_guard_disable();
-            tls_secure_memzero(rs, sizeof(rs));
+            tls_scratch_free(rs, 64);
             return p256_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 
@@ -2357,11 +2382,13 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 return TLS_KEY_OP_INVALID;
             if (key->ec.len != 97 || !key->ec.pub)
                 return TLS_KEY_OP_INVALID;
-            uint8_t rs[96];
             if (sig_len < 8 || sig[0] != 0x30)
                 return TLS_KEY_OP_INVALID;
             size_t seq_len = sig[1];
             if ((seq_len & 0x80) || 2 + seq_len != sig_len)
+                return TLS_KEY_OP_INVALID;
+            uint8_t *rs = tls_scratch_alloc(96);
+            if (!rs)
                 return TLS_KEY_OP_INVALID;
             {
                 const uint8_t *end = sig + sig_len;
@@ -2369,12 +2396,15 @@ tls_key_op_result_t tls_x509_signature_verify_digest(const uint8_t digest[32],
                 if (p)
                     p = ecdsa_parse_int_n(p, (size_t)(end - p), rs + 48, 48);
                 if (p != end)
+                {
+                    tls_scratch_free(rs, 96);
                     return TLS_KEY_OP_INVALID;
+                }
             }
             tls_crypto_guard_enable();
             bool p384_ok = tls_p384_verify(rs, digest, key->ec.pub);
             tls_crypto_guard_disable();
-            tls_secure_memzero(rs, sizeof(rs));
+            tls_scratch_free(rs, 96);
             return p384_ok ? TLS_KEY_OP_OK : TLS_KEY_OP_INVALID;
         }
 

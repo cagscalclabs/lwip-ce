@@ -5,8 +5,8 @@ CFLAGS = -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
 TARGETS = json xml url base64 asn1 pcap x509 ws tls
 SRC = ../../src
 
-json_SRC = $(SRC)/parsers/json.c
-xml_SRC = $(SRC)/parsers/xml.c
+json_SRC = parser_stubs.c $(SRC)/parsers/json.c
+xml_SRC = parser_stubs.c $(SRC)/parsers/xml.c
 url_SRC = $(SRC)/parsers/url.c
 base64_SRC = $(SRC)/tls/core/base64.c
 asn1_SRC = $(SRC)/tls/core/asn1.c
@@ -30,7 +30,7 @@ bin/fuzz_tls: fuzz_tls.c ../host/tls_signatures/run.py ../host/tls_signatures/mo
 	$(CC) $(filter-out -I% -D%,$(CFLAGS)) -Wno-array-parameter -Ibin/tls -I$(SRC)/tls/includes -I$(SRC)/tls/core \
 		-o $@ $< $(SRC)/tls/core/asn1.c $(SRC)/tls/core/base64.c
 
-bin/fuzz_%: fuzz_%.c $(wildcard ../../src/parsers/*.c ../../src/tls/core/*.c) x509_stubs.c
+bin/fuzz_%: fuzz_%.c $(wildcard ../../src/parsers/*.c ../../src/tls/core/*.c) x509_stubs.c parser_stubs.c
 	mkdir -p bin
 	$(CC) $(CFLAGS) -o $@ $< $($*_SRC)
 

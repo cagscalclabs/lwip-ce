@@ -5,6 +5,7 @@
 #include "../includes/rsa.h"
 #include "../includes/hash.h"
 #include "../includes/bytes.h"
+#include "../includes/scratch.h"
 #include "../includes/tls.h"
 #include "lwip/sntp_time.h"
 
@@ -69,10 +70,9 @@ static uint8_t truststore_verified_hash[TLS_SHA256_DIGEST_LEN];
 
 #define TLS_TRUSTSTORE_ENTRY_MAX \
     (sizeof(struct tls_truststore_entry) + 3u + RSA_MODULUS_MAX_SUPPORTED)
-static union {
-    uint32_t align;
-    uint8_t bytes[TLS_TRUSTSTORE_ENTRY_MAX];
-} truststore_entry_copy;
+/* Lookup results are copied here so no pointer into the appvar survives
+ * ti_close(). Allocated once the store verifies; freed by cleanup. */
+static uint8_t *truststore_entry_copy;
 
 #define TLS_TRUSTSTORE_AGE_WARN_SECONDS (180u * 24u * 60u * 60u)
 
@@ -153,7 +153,7 @@ static bool tls_truststore_validate_layout(
         entry = (const struct tls_truststore_entry *)(metadata + offset);
         entry_len = entry->len;
         if (entry_len < sizeof(struct tls_truststore_entry) ||
-            entry_len > sizeof truststore_entry_copy.bytes ||
+            entry_len > TLS_TRUSTSTORE_ENTRY_MAX ||
             entry_len > metadata_len - expected_offset ||
             memcmp(record, entry->ski, TLS_TRUSTSTORE_SKI_LEN) != 0)
             return false;
@@ -218,7 +218,7 @@ static bool tls_truststore_validate_layout(
     return true;
 }
 
-uint8_t trust_store_pubkey[] = {
+static const uint8_t trust_store_pubkey[] = {
     0xA1, 0xD3, 0x45, 0x9D, 0xC3, 0xD2, 0x1D, 0x6A, 0x9B, 0xA1, 0xD2, 0xCD, 0xEB, 0x4A, 0x10, 0xD0,
     0x79, 0x34, 0xB1, 0x06, 0xDA, 0xB3, 0x6D, 0x36, 0x01, 0x75, 0x3E, 0xA3, 0x56, 0xBD, 0x74, 0xDB,
     0x5A, 0xBF, 0xC4, 0xF4, 0x25, 0x5A, 0xA6, 0x50, 0x8F, 0x5D, 0xDC, 0x1B, 0x99, 0x13, 0x0E, 0xD5,
@@ -242,8 +242,8 @@ void tls_truststore_cleanup(void)
     truststore_valid_for_session = false;
     tls_secure_memzero(truststore_verified_hash,
                        sizeof truststore_verified_hash);
-    tls_secure_memzero(&truststore_entry_copy,
-                       sizeof truststore_entry_copy);
+    tls_scratch_free(truststore_entry_copy, TLS_TRUSTSTORE_ENTRY_MAX);
+    truststore_entry_copy = NULL;
     tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
     tls_ctx.truststore.size = 0;
     tls_ctx.truststore.entry_count = 0;
@@ -265,8 +265,11 @@ tls_truststore_status_t tls_truststore_init(void)
      * (.bss) instead of a 256-byte stack local, to keep the deep
      * truststore->rsa->powmod call chain off the eZ80 stack. */
     uint8_t *d_sig = __rsa_transient;
-    uint8_t tstore_hash[TLS_SHA256_DIGEST_LEN];
-    struct tls_hash_context hash_ctx;
+    struct {
+        struct tls_hash_context hash_ctx;
+        uint8_t tstore_hash[TLS_SHA256_DIGEST_LEN];
+    } *t;
+    tls_truststore_status_t result;
 
     /* Clear the session-valid flag up front so it is only ever true after
      * a fresh successful validation below. Without this, a stale `true`
@@ -276,8 +279,10 @@ tls_truststore_status_t tls_truststore_init(void)
 
     TS_TRACE("E0 enter");
     // If hash init fails, error out early
-    if (!tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256))
+    t = tls_scratch_alloc(sizeof(*t));
+    if (!t || !tls_hash_context_init(&t->hash_ctx, TLS_HASH_SHA256))
     {
+        tls_scratch_free(t, sizeof(*t));
         tls_ctx.truststore.status = TLS_STORE_HASH_FAIL;
         ERROR_CODE(TLS_STORE_HASH_FAIL);
         return TLS_STORE_HASH_FAIL;
@@ -288,6 +293,7 @@ tls_truststore_status_t tls_truststore_init(void)
     uint8_t ts_h = file_fn.ti_open(truststore_name, "r");
     if (!ts_h)
     {
+        tls_scratch_free(t, sizeof(*t));
         tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
         WARN_CODE(TLS_STORE_NOT_FOUND);
         return TLS_STORE_NOT_FOUND;
@@ -298,6 +304,7 @@ tls_truststore_status_t tls_truststore_init(void)
     uint16_t truststore_size = file_fn.ti_getsize(ts_h);
     if (truststore_size < TLS_TRUSTSTORE_HEADER_LEN)
     {
+        tls_scratch_free(t, sizeof(*t));
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_SIZE_INVALID;
         ERROR_CODE(TLS_STORE_SIZE_INVALID);
@@ -307,6 +314,7 @@ tls_truststore_status_t tls_truststore_init(void)
     struct tls_truststore_header *header = (struct tls_truststore_header *)store_header_bytes;
     if (header->version != TLS_TRUSTSTORE_VERSION)
     {
+        tls_scratch_free(t, sizeof(*t));
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_VERSION_MISMATCH;
         ERROR_CODE(TLS_STORE_VERSION_MISMATCH);
@@ -324,12 +332,12 @@ tls_truststore_status_t tls_truststore_init(void)
 
     TS_TRACE("E1 hash hdr");
     // Hash header fields (version + timestamp + entry_count) and entries
-    tls_hash_update(&hash_ctx, (const uint8_t *)&header->version,
+    tls_hash_update(&t->hash_ctx, (const uint8_t *)&header->version,
                     sizeof(header->version) + sizeof(header->created_timestamp) + sizeof(header->entry_count));
     TS_TRACE("E2 hash db");
-    tls_hash_update(&hash_ctx, store_db_start, store_db_len);
+    tls_hash_update(&t->hash_ctx, store_db_start, store_db_len);
     TS_TRACE("E3 digest");
-    tls_hash_digest(&hash_ctx, tstore_hash);
+    tls_hash_digest(&t->hash_ctx, t->tstore_hash);
 
     TS_TRACE("E4 rsa decrypt");
     // Decrypt the truststore signature
@@ -340,6 +348,7 @@ tls_truststore_status_t tls_truststore_init(void)
     };
     if (!tls_rsa_decrypt_signature(header->sig, TRUSTSTORE_SIG_LEN, d_sig, &trust_store_key))
     {
+        tls_scratch_free(t, sizeof(*t));
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_SIG_INVALID;
         ERROR_CODE(TLS_STORE_SIG_INVALID);
@@ -347,7 +356,7 @@ tls_truststore_status_t tls_truststore_init(void)
     }
     TS_TRACE("E5 pss verify");
     // Verify the signature
-    bool verified = tls_rsa_pss_verify(d_sig, TRUSTSTORE_SIG_LEN, tstore_hash, hash_ctx.digestlen, TLS_HASH_SHA256);
+    bool verified = tls_rsa_pss_verify(d_sig, TRUSTSTORE_SIG_LEN, t->tstore_hash, t->hash_ctx.digestlen, TLS_HASH_SHA256);
     tls_secure_memzero(d_sig, TRUSTSTORE_SIG_LEN);
     if (verified &&
         !tls_truststore_validate_layout(header, truststore_size,
@@ -358,11 +367,20 @@ tls_truststore_status_t tls_truststore_init(void)
         ERROR_CODE(TLS_STORE_SIZE_INVALID);
     }
     file_fn.ti_close(ts_h);
-    tls_secure_memzero(&hash_ctx, sizeof hash_ctx);
     TS_TRACE("E6 verify done");
     if (verified)
     {
-        memcpy(truststore_verified_hash, tstore_hash,
+        truststore_entry_copy = tls_scratch_alloc(TLS_TRUSTSTORE_ENTRY_MAX);
+        if (!truststore_entry_copy)
+        {
+            verified = false;
+            tls_ctx.truststore.status = TLS_STORE_HASH_FAIL;
+            ERROR_CODE(TLS_STORE_HASH_FAIL);
+        }
+    }
+    if (verified)
+    {
+        memcpy(truststore_verified_hash, t->tstore_hash,
                sizeof truststore_verified_hash);
         truststore_valid_for_session = true;
         /* Only now is the header trustworthy enough to publish. */
@@ -379,14 +397,16 @@ tls_truststore_status_t tls_truststore_init(void)
     }
     else
     {
-        if (tls_ctx.truststore.status != TLS_STORE_SIZE_INVALID)
+        if (tls_ctx.truststore.status != TLS_STORE_SIZE_INVALID &&
+            tls_ctx.truststore.status != TLS_STORE_HASH_FAIL)
         {
             tls_ctx.truststore.status = TLS_STORE_SIG_INVALID;
             ERROR_CODE(TLS_STORE_SIG_INVALID);
         }
     }
-    tls_secure_memzero(tstore_hash, sizeof tstore_hash);
-    return verified ? TLS_STORE_OK : tls_ctx.truststore.status;
+    tls_scratch_free(t, sizeof(*t));
+    result = verified ? TLS_STORE_OK : tls_ctx.truststore.status;
+    return result;
 }
 
 static bool tls_truststore_entry_current(const struct tls_truststore_entry *entry)
@@ -444,25 +464,26 @@ static bool tls_truststore_open_db(const uint8_t **ski_index_out,
      * Re-hash the exact signed payload before using it, then return only a
      * copied entry so no pointer survives ti_close(). */
     {
-        struct tls_hash_context hash_ctx = {0};
-        uint8_t current_hash[TLS_SHA256_DIGEST_LEN] = {0};
+        struct {
+            struct tls_hash_context hash_ctx;
+            uint8_t current_hash[TLS_SHA256_DIGEST_LEN];
+        } *t = tls_scratch_alloc(sizeof(*t));
         uint8_t *db = (uint8_t *)header + TLS_TRUSTSTORE_HEADER_LEN;
         uint16_t db_len = truststore_size - TLS_TRUSTSTORE_HEADER_LEN;
-        bool valid = tls_hash_context_init(&hash_ctx, TLS_HASH_SHA256);
+        bool valid = t != NULL && tls_hash_context_init(&t->hash_ctx, TLS_HASH_SHA256);
 
         if (valid)
         {
-            tls_hash_update(&hash_ctx, (const uint8_t *)&header->version,
+            tls_hash_update(&t->hash_ctx, (const uint8_t *)&header->version,
                             sizeof(header->version) +
                             sizeof(header->created_timestamp) +
                             sizeof(header->entry_count));
-            tls_hash_update(&hash_ctx, db, db_len);
-            tls_hash_digest(&hash_ctx, current_hash);
-            valid = tls_bytes_compare(current_hash, truststore_verified_hash,
-                                      sizeof current_hash);
+            tls_hash_update(&t->hash_ctx, db, db_len);
+            tls_hash_digest(&t->hash_ctx, t->current_hash);
+            valid = tls_bytes_compare(t->current_hash, truststore_verified_hash,
+                                      sizeof t->current_hash);
         }
-        tls_secure_memzero(&hash_ctx, sizeof hash_ctx);
-        tls_secure_memzero(current_hash, sizeof current_hash);
+        tls_scratch_free(t, sizeof(*t));
         if (!valid)
         {
             tls_truststore_invalidate(TLS_STORE_SIG_INVALID);
@@ -514,8 +535,14 @@ bool tls_truststore_lookup_key_id(const uint8_t *ski, size_t ski_len,
     (void)subject_index;
 
     bool found = false;
-    uint8_t lookup_key[TLS_TRUSTSTORE_SKI_LEN] = {0};
+    uint8_t *lookup_key = tls_scratch_alloc(TLS_TRUSTSTORE_SKI_LEN);
     uint16_t low = 0, high = header->entry_count;
+    if (!lookup_key)
+    {
+        file_fn.ti_close(h);
+        return false;
+    }
+    memset(lookup_key, 0, TLS_TRUSTSTORE_SKI_LEN);
     memcpy(lookup_key, ski, ski_len);
     while (low < high)
     {
@@ -536,20 +563,21 @@ bool tls_truststore_lookup_key_id(const uint8_t *ski, size_t ski_len,
             const struct tls_truststore_entry *entry =
                 (const struct tls_truststore_entry *)(metadata + offset);
             if (entry->len >= sizeof(struct tls_truststore_entry) &&
-                entry->len <= sizeof truststore_entry_copy.bytes &&
+                entry->len <= TLS_TRUSTSTORE_ENTRY_MAX &&
                 entry->len <= (size_t)metadata_len - offset &&
+                truststore_entry_copy != NULL &&
                 tls_truststore_entry_current(entry))
             {
                 if (result)
                 {
-                    memcpy(truststore_entry_copy.bytes, entry, entry->len);
-                    *result = (struct tls_truststore_entry *)truststore_entry_copy.bytes;
+                    memcpy(truststore_entry_copy, entry, entry->len);
+                    *result = (struct tls_truststore_entry *)truststore_entry_copy;
                 }
                 found = true;
             }
         }
     }
-    tls_secure_memzero(lookup_key, sizeof lookup_key);
+    tls_scratch_free(lookup_key, TLS_TRUSTSTORE_SKI_LEN);
     file_fn.ti_close(h);
     return found;
 }
@@ -580,10 +608,9 @@ bool tls_truststore_lookup_by_subject_index(const uint8_t *subject,
     (void)ski_index;
 
     bool found = false;
-    uint8_t lookup_key[TLS_TRUSTSTORE_SUBJECT_LEN] = {0};
+    const uint8_t *lookup_key = subject;  /* subject_len == SUBJECT_LEN */
     uint16_t matches = 0;
     uint16_t low = 0, high = header->entry_count;
-    memcpy(lookup_key, subject, subject_len);
     while (low < high)
     {
         uint16_t mid = (uint16_t)(low + (high - low) / 2u);
@@ -606,22 +633,22 @@ bool tls_truststore_lookup_by_subject_index(const uint8_t *subject,
             break;
         entry = (const struct tls_truststore_entry *)(metadata + offset);
         if (entry->len < sizeof(struct tls_truststore_entry) ||
-            entry->len > sizeof truststore_entry_copy.bytes ||
-            entry->len > (size_t)metadata_len - offset)
+            entry->len > TLS_TRUSTSTORE_ENTRY_MAX ||
+            entry->len > (size_t)metadata_len - offset ||
+            truststore_entry_copy == NULL)
             break;
         if (tls_truststore_entry_current(entry) && matches++ == match_index)
         {
             if (result)
             {
-                memcpy(truststore_entry_copy.bytes, entry, entry->len);
-                *result = (struct tls_truststore_entry *)truststore_entry_copy.bytes;
+                memcpy(truststore_entry_copy, entry, entry->len);
+                *result = (struct tls_truststore_entry *)truststore_entry_copy;
             }
             found = true;
             break;
         }
         low++;
     }
-    tls_secure_memzero(lookup_key, sizeof lookup_key);
     file_fn.ti_close(h);
     return found;
 }

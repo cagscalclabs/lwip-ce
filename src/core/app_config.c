@@ -280,30 +280,38 @@ static bool parse_legacy_config(lwip_app_config_t *cfg,
         return false;
     version = read_u16_le(data);
 
+    /* Read the old layouts in place: size is checked and the eZ80 has no
+     * alignment requirement. */
     if (version == 1u && size >= sizeof(lwip_app_config_v1_t))
     {
-        lwip_app_config_v1_t stored;
-        memcpy(&stored, data, sizeof(stored));
-        migrate_common(cfg, stored.flags, stored.tz_offset_minutes,
-                       stored.dst_enabled, stored.pcap_max_bytes,
-                       stored.hostname, stored.tls_enabled);
+        const lwip_app_config_v1_t *stored = (const lwip_app_config_v1_t *)data;
+        migrate_common(cfg, stored->flags, stored->tz_offset_minutes,
+                       stored->dst_enabled, stored->pcap_max_bytes,
+                       stored->hostname, stored->tls_enabled);
         return true;
     }
     if (version == 2u && size >= sizeof(lwip_app_config_v2_t))
     {
-        lwip_app_config_v2_t stored;
-        memcpy(&stored, data, sizeof(stored));
-        migrate_common(cfg, stored.flags, stored.tz_offset_minutes,
-                       stored.dst_enabled, stored.pcap_max_bytes,
-                       stored.hostname, stored.tls_enabled);
+        const lwip_app_config_v2_t *stored = (const lwip_app_config_v2_t *)data;
+        migrate_common(cfg, stored->flags, stored->tz_offset_minutes,
+                       stored->dst_enabled, stored->pcap_max_bytes,
+                       stored->hostname, stored->tls_enabled);
         return true;
     }
     return false;
 }
 
+/* Load runs before lwip_init() has set up the heap, and the config app saves
+ * without lwIP running at all, so the serialization buffer is static. Load and
+ * save never overlap. */
+static struct {
+    uint8_t serialized[LWIP_CFG_SERIALIZED_MAX];
+    lwip_app_config_t normalized;
+} g_cfg_io;
+
 bool lwip_app_config_load(lwip_app_config_t *cfg)
 {
-    uint8_t serialized[LWIP_CFG_SERIALIZED_MAX];
+    uint8_t *serialized = g_cfg_io.serialized;
     uint8_t h;
     uint16_t size;
     bool valid;
@@ -318,7 +326,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
         return false;
     }
     size = file_fn.ti_getsize(h);
-    if (size == 0u || size > sizeof(serialized) ||
+    if (size == 0u || size > sizeof(g_cfg_io.serialized) ||
         file_fn.ti_read(serialized, size, 1, h) != 1u)
     {
         ERROR_CODE(size);
@@ -341,22 +349,24 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
 
 bool lwip_app_config_save(const lwip_app_config_t *cfg)
 {
-    uint8_t serialized[LWIP_CFG_SERIALIZED_MAX] = {0};
+    uint8_t *serialized = g_cfg_io.serialized;
+    const size_t serialized_cap = sizeof(g_cfg_io.serialized);
+    lwip_app_config_t *normalized = &g_cfg_io.normalized;
     uint8_t scalar[2];
     uint8_t h;
     size_t hostname_len = 0;
     size_t used = LWIP_CFG_HEADER_SIZE;
-    lwip_app_config_t normalized;
 
     if (!cfg)
     {
         ERROR();
         return false;
     }
-    normalized = *cfg;
-    lwip_app_config_normalize(&normalized);
+    memset(serialized, 0, serialized_cap);
+    *normalized = *cfg;
+    lwip_app_config_normalize(normalized);
     while (hostname_len < LWIP_CFG_HOSTNAME_MAX - 1u &&
-           normalized.hostname[hostname_len] != '\0')
+           normalized->hostname[hostname_len] != '\0')
     {
         hostname_len++;
     }
@@ -365,37 +375,37 @@ bool lwip_app_config_save(const lwip_app_config_t *cfg)
     serialized[4] = LWIP_CFG_FORMAT_VERSION;
     serialized[5] = LWIP_CFG_HEADER_SIZE;
 
-    if (!append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_FLAGS, &normalized.flags, 1u))
+    if (!append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_FLAGS, &normalized->flags, 1u))
         return false;
-    write_u16_le(scalar, (uint16_t)normalized.tz_offset_minutes);
-    if (!append_setting(serialized, sizeof(serialized), &used,
+    write_u16_le(scalar, (uint16_t)normalized->tz_offset_minutes);
+    if (!append_setting(serialized, serialized_cap, &used,
                         LWIP_CFG_ID_TZ_OFFSET, scalar, sizeof(scalar)) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_DST_ENABLED, &normalized.dst_enabled, 1u))
+        !append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_DST_ENABLED, &normalized->dst_enabled, 1u))
         return false;
-    write_u16_le(scalar, normalized.pcap_max_bytes);
-    if (!append_setting(serialized, sizeof(serialized), &used,
+    write_u16_le(scalar, normalized->pcap_max_bytes);
+    if (!append_setting(serialized, serialized_cap, &used,
                         LWIP_CFG_ID_PCAP_MAX_BYTES, scalar, sizeof(scalar)) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_HOSTNAME, normalized.hostname,
+        !append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_HOSTNAME, normalized->hostname,
                         (uint8_t)hostname_len) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_TLS_ENABLED, &normalized.tls_enabled, 1u) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_PCAP_ENABLED, &normalized.pcap_enabled, 1u))
+        !append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_TLS_ENABLED, &normalized->tls_enabled, 1u) ||
+        !append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_PCAP_ENABLED, &normalized->pcap_enabled, 1u))
         return false;
-    if (!append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_FILE_LOG_ENABLED, &normalized.file_log_enabled, 1u) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_LOG_ARCHIVE_SLOTS, &normalized.log_archive_slots, 1u) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_LOG_VERBOSITY, &normalized.log_verbosity, 1u))
+    if (!append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_FILE_LOG_ENABLED, &normalized->file_log_enabled, 1u) ||
+        !append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_LOG_ARCHIVE_SLOTS, &normalized->log_archive_slots, 1u) ||
+        !append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_LOG_VERBOSITY, &normalized->log_verbosity, 1u))
         return false;
-    if (!append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_CRYPTO_OFFLOAD, &normalized.crypto_offload, 1u) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_BRIDGE_RNG, &normalized.bridge_rng, 1u))
+    if (!append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_CRYPTO_OFFLOAD, &normalized->crypto_offload, 1u) ||
+        !append_setting(serialized, serialized_cap, &used,
+                        LWIP_CFG_ID_BRIDGE_RNG, &normalized->bridge_rng, 1u))
         return false;
 
     write_u16_le(serialized + 6, (uint16_t)(used - LWIP_CFG_HEADER_SIZE));

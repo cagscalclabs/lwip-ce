@@ -42,6 +42,7 @@ c_test = r'''
 #define ERR_OK 0
 #define ERR_ARG -1
 #define ERR_VAL -2
+#define ERR_MEM -3
 typedef int err_t;
 typedef uint16_t u16_t;
 
@@ -53,6 +54,9 @@ static size_t observed_len;
 static unsigned write_calls;
 
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
+#include <stdlib.h>
+static void *tls_scratch_alloc(size_t n) { return malloc(n); }
+static void tls_scratch_free(void *p, size_t n) { if (p) { tls_secure_memzero(p, n); free(p); } }
 
 /* Capture the plaintext offered to AEAD, then deliberately overwrite the
  * complete output record including the inner type and tag. This reproduces

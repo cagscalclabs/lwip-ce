@@ -256,6 +256,13 @@ static const char *kind_str(uint8_t kind)
 
 static uint32_t log_ts(void) { return rtc_Time(); }
 
+/* One formatted line at a time: the event callback stages its line before
+ * log_dump_traceback() reuses the buffer. Static because the callback runs for
+ * allocator events too, so it must not allocate. */
+static char g_log_line[LOG_LINE_MAX];
+
+const struct lwip_traceback_entry *lwip_traceback_at(size_t i);
+
 #ifndef LWIP_TRACEBACK_DUMP_DEPTH
 #define LWIP_TRACEBACK_DUMP_DEPTH 16u
 #endif
@@ -267,15 +274,14 @@ static uint32_t log_ts(void) { return rtc_Time(); }
  * skipped since they carry no {file,line} to show. */
 static void log_dump_traceback(void)
 {
-    /* Ordered on demand, in this frame's stack, so the traceback ring does not
-     * need a second permanently-allocated ordering array in .bss. */
-    struct lwip_traceback_entry tb[LWIP_TRACEBACK_DUMP_DEPTH];
-    size_t count = lwip_traceback_copy(tb, LWIP_TRACEBACK_DUMP_DEPTH);
-    char line[LOG_LINE_MAX];
+    /* Walks the ring in place (newest first); nothing is copied. */
+    char *line = g_log_line;
 
-    for (size_t i = 0; i < count; i++)
+    for (size_t i = 0; i < LWIP_TRACEBACK_DUMP_DEPTH; i++)
     {
-        const struct lwip_traceback_entry *e = &tb[i];
+        const struct lwip_traceback_entry *e = lwip_traceback_at(i);
+        if (!e)
+            break;
         if (e->file == LWIP_FILE_NONE && e->line == 0 && e->component == 0)
             continue; /* nothing meaningful to show */
 
@@ -283,11 +289,11 @@ static void log_dump_traceback(void)
         const char *fname = lwip_debug_file_name(e->file);
         int n;
         if (e->extra)
-            n = snprintf(line, sizeof(line), "  tb[%u]: %s %s %s:%lu x%x\n",
+            n = snprintf(line, LOG_LINE_MAX, "  tb[%u]: %s %s %s:%lu x%x\n",
                          (unsigned)i, kind_str(e->kind), mod, fname,
                          (unsigned long)e->line, (unsigned)e->extra);
         else
-            n = snprintf(line, sizeof(line), "  tb[%u]: %s %s %s:%lu\n",
+            n = snprintf(line, LOG_LINE_MAX, "  tb[%u]: %s %s %s:%lu\n",
                          (unsigned)i, kind_str(e->kind), mod, fname,
                          (unsigned long)e->line);
         if (n > 0)
@@ -307,7 +313,7 @@ static void log_event_cb(const struct lwip_event *ev)
     if (!g_running)
         return;
 
-    char line[LOG_LINE_MAX];
+    char *line = g_log_line;
     int n = 0;
     uint32_t ts = log_ts();
     const char *mod = lwip_debug_module_name(ev->module);
@@ -322,11 +328,11 @@ static void log_event_cb(const struct lwip_event *ev)
         uint16_t extra = ev->data.code.extra;
         const char *fname = lwip_debug_file_name(fid);
         if (extra)
-            n = snprintf(line, sizeof(line), "%lu: TBK: %s %s:%lu x%x\n",
+            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s %s:%lu x%x\n",
                          (unsigned long)ts, mod, fname,
                          (unsigned long)lnum, (unsigned)extra);
         else
-            n = snprintf(line, sizeof(line), "%lu: TBK: %s %s:%lu\n",
+            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s %s:%lu\n",
                          (unsigned long)ts, mod, fname, (unsigned long)lnum);
         break;
     }
@@ -335,28 +341,28 @@ static void log_event_cb(const struct lwip_event *ev)
         uint8_t  fid  = LWIP_EVENT_CODE_FILE(ev->data.code.loc);
         uint32_t lnum = LWIP_EVENT_CODE_LINE(ev->data.code.loc);
         const char *fname = lwip_debug_file_name(fid);
-        n = snprintf(line, sizeof(line), "%lu: EVT: DBG %s %s:%lu\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: DBG %s %s:%lu\n",
                      (unsigned long)ts, mod, fname, (unsigned long)lnum);
         break;
     }
     case LWIP_EV_INFO:
     {
         const char *msg = ev->data.msg ? ev->data.msg : "";
-        n = snprintf(line, sizeof(line), "%lu: EVT: INFO %s %s\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: INFO %s %s\n",
                      (unsigned long)ts, mod, msg);
         break;
     }
     case LWIP_EV_ERROR_MSG:
     {
         const char *msg = ev->data.msg ? ev->data.msg : "";
-        n = snprintf(line, sizeof(line), "%lu: EVT: ERR: %s %s\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: ERR: %s %s\n",
                      (unsigned long)ts, mod, msg);
         break;
     }
     case LWIP_EV_STATE_CHG:
     {
         const char *sname = lwip_debug_state_change_name(ev->data.state.change_event);
-        n = snprintf(line, sizeof(line), "%lu: EVT: STATE %s %s\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: STATE %s %s\n",
                      (unsigned long)ts, mod, sname);
         break;
     }
@@ -364,7 +370,7 @@ static void log_event_cb(const struct lwip_event *ev)
     {
         const char *dir  = (ev->data.file.dir == LWIP_IO_READ) ? "RD" : "WR";
         const char *name = ev->data.file.name ? ev->data.file.name : "?";
-        n = snprintf(line, sizeof(line), "%lu: EVT: IOFILE %s %s %s %lu\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: IOFILE %s %s %s %lu\n",
                      (unsigned long)ts, mod, dir, name,
                      (unsigned long)ev->data.file.bytes);
         break;
@@ -372,19 +378,19 @@ static void log_event_cb(const struct lwip_event *ev)
     case LWIP_EV_IO_ETH:
     {
         const char *dir = (ev->data.eth.dir == LWIP_IO_RX) ? "RX" : "TX";
-        n = snprintf(line, sizeof(line), "%lu: EVT: IOETH %s %s %lu\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: IOETH %s %s %lu\n",
                      (unsigned long)ts, mod, dir,
                      (unsigned long)ev->data.eth.bytes);
         break;
     }
     case LWIP_EV_POWER:
-        n = snprintf(line, sizeof(line), "%lu: EVT: PWR %s sub=%u chrg=%u\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: PWR %s sub=%u chrg=%u\n",
                      (unsigned long)ts, mod,
                      (unsigned)ev->data.power.subtype,
                      (unsigned)ev->data.power.charging);
         break;
     default:
-        n = snprintf(line, sizeof(line), "%lu: EVT: %s %s\n",
+        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: %s %s\n",
                      (unsigned long)ts, kind_str(ev->kind), mod);
         break;
     }

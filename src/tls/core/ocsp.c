@@ -5,6 +5,7 @@
 
 #include "../includes/asn1.h"
 #include "../includes/ocsp.h"
+#include "../includes/scratch.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_OCSP
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -21,11 +22,13 @@ void  tls_fileio_free(void *ptr);
 
 #define SHA1_ROTL(v, n) (((v) << (n)) | ((v) >> (32 - (n))))
 
-typedef struct { uint32_t h[5]; uint8_t buf[64]; uint32_t lo, hi; } sha1_ctx_t;
+typedef struct { uint32_t h[5]; uint8_t buf[64]; uint32_t lo, hi; uint32_t w[16]; } sha1_ctx_t;
 
 static void sha1_process_block(sha1_ctx_t *ctx, const uint8_t block[64])
 {
-    uint32_t w[80], a, b, c, d, e, f, k, temp;
+    /* 16-word rolling message schedule, held in the (heap) context. */
+    uint32_t *w = ctx->w;
+    uint32_t a, b, c, d, e, f, k, temp;
     int i;
 
     for (i = 0; i < 16; i++)
@@ -35,19 +38,22 @@ static void sha1_process_block(sha1_ctx_t *ctx, const uint8_t block[64])
         w[i] |= (uint32_t)block[i*4+2] <<  8;
         w[i] |= (uint32_t)block[i*4+3];
     }
-    for (i = 16; i < 80; i++)
-        w[i] = SHA1_ROTL(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
 
     a = ctx->h[0]; b = ctx->h[1]; c = ctx->h[2];
     d = ctx->h[3]; e = ctx->h[4];
 
     for (i = 0; i < 80; i++)
     {
+        if (i >= 16)
+        {
+            uint32_t s = w[(i-3)&15] ^ w[(i-8)&15] ^ w[(i-14)&15] ^ w[i&15];
+            w[i&15] = SHA1_ROTL(s, 1);
+        }
         if      (i < 20) { f = (b & c) ^ (~b & d); k = 0x5A827999u; }
         else if (i < 40) { f = b ^ c ^ d;           k = 0x6ED9EBA1u; }
         else if (i < 60) { f = (b & c) ^ (b & d) ^ (c & d); k = 0x8F1BBCDCu; }
         else             { f = b ^ c ^ d;           k = 0xCA62C1D6u; }
-        temp = SHA1_ROTL(a, 5) + f + e + k + w[i];
+        temp = SHA1_ROTL(a, 5) + f + e + k + w[i&15];
         e = d; d = c; c = SHA1_ROTL(b, 30); b = a; a = temp;
     }
     ctx->h[0] += a; ctx->h[1] += b; ctx->h[2] += c;
@@ -112,13 +118,17 @@ static void sha1_final(sha1_ctx_t *ctx, uint8_t out[20])
     memset(ctx, 0, sizeof(*ctx));
 }
 
-static void sha1_oneshot(const uint8_t *data, size_t len,
+static bool sha1_oneshot(const uint8_t *data, size_t len,
                          uint8_t out[OCSP_SHA1_LEN])
 {
-    sha1_ctx_t ctx;
-    sha1_init(&ctx);
-    sha1_update(&ctx, data, len);
-    sha1_final(&ctx, out);
+    sha1_ctx_t *ctx = tls_scratch_alloc(sizeof(*ctx));
+    if (!ctx)
+        return false;
+    sha1_init(ctx);
+    sha1_update(ctx, data, len);
+    sha1_final(ctx, out);
+    tls_scratch_free(ctx, sizeof(*ctx));
+    return true;
 }
 
 /* -----------------------------------------------------------------------
@@ -271,9 +281,8 @@ bool tls_ocsp_hash_issuer(const uint8_t *issuer_name,  size_t issuer_name_len,
         !name_hash   || !key_hash)
         return false;
 
-    sha1_oneshot(issuer_name, issuer_name_len, name_hash);
-    sha1_oneshot(issuer_key,  issuer_key_len,   key_hash);
-    return true;
+    return sha1_oneshot(issuer_name, issuer_name_len, name_hash) &&
+           sha1_oneshot(issuer_key,  issuer_key_len,   key_hash);
 }
 
 /* -----------------------------------------------------------------------

@@ -57,29 +57,62 @@ void lwip_wifi_set_event_cb(lwip_wifi_event_fn fn, void *arg)
 
 err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
 {
-    uint8_t header[CTL_HEADER];
+    const uint8_t *header;
+    uint8_t *header_copy = NULL;
     uint16_t length;
 
-    if (netif != eth_device_netif() || p->tot_len < CTL_HEADER ||
-        pbuf_copy_partial(p, header, CTL_HEADER, 0) != CTL_HEADER ||
-        ((header[12] << 8) | header[13]) != CTL_ETHERTYPE)
+    if (netif != eth_device_netif() || p->tot_len < CTL_HEADER)
         return ERR_VAL;
+    /* The header is read in place; only a chain that splits it is copied.
+     * Nothing reads it after p is freed. */
+    if (p->len >= CTL_HEADER)
+    {
+        header = (const uint8_t *)p->payload;
+    }
+    else
+    {
+        header_copy = (uint8_t *)mem_malloc(CTL_HEADER);
+        if (!header_copy ||
+            pbuf_copy_partial(p, header_copy, CTL_HEADER, 0) != CTL_HEADER)
+        {
+            if (header_copy)
+                mem_free(header_copy);
+            return ERR_VAL;
+        }
+        header = header_copy;
+    }
+    if (((header[12] << 8) | header[13]) != CTL_ETHERTYPE)
+    {
+        if (header_copy)
+            mem_free(header_copy);
+        return ERR_VAL;
+    }
 
     if (header[14] == CTL_VERSION && header[15] == (CTL_OP_EVENT | CTL_REPLY) && g_event_fn)
     {
-        uint8_t body[13 + LWIP_WIFI_SSID_MAX];
-        lwip_wifi_state_t state;
-        uint16_t got = pbuf_copy_partial(p, body, sizeof body, CTL_HEADER);
+        struct {
+            uint8_t body[13 + LWIP_WIFI_SSID_MAX];
+            lwip_wifi_state_t state;
+        } *ev = (void *)mem_malloc(sizeof(*ev));
+        uint16_t got = ev ? pbuf_copy_partial(p, ev->body, sizeof ev->body, CTL_HEADER) : 0;
 
         pbuf_free(p);
-        if (parse_state(body, got, &state))
-            g_event_fn(&state, g_event_arg);
+        if (header_copy)
+            mem_free(header_copy);
+        if (ev)
+        {
+            if (parse_state(ev->body, got, &ev->state))
+                g_event_fn(&ev->state, g_event_arg);
+            mem_free(ev);
+        }
         return ERR_OK;
     }
 
     if (lwip_crypto_reply(header, p))
     {
         pbuf_free(p);
+        if (header_copy)
+            mem_free(header_copy);
         return ERR_OK;
     }
 
@@ -94,6 +127,8 @@ err_t lwip_wifi_eth_input(struct pbuf *p, struct netif *netif)
         g_done = true;
     }
     pbuf_free(p);
+    if (header_copy)
+        mem_free(header_copy);
     return ERR_OK;
 }
 
@@ -316,7 +351,9 @@ lwip_wifi_error_t lwip_wifi_scan(lwip_wifi_network_t *networks, uint8_t max, uin
 static lwip_wifi_error_t save(uint8_t slot, const char *ssid, const char *username, const char *password,
                               uint8_t security, uint8_t flags, uint8_t *saved)
 {
-    uint8_t body[3 + 1 + LWIP_WIFI_SSID_MAX + 1 + LWIP_WIFI_PASSWORD_MAX + 1 + LWIP_WIFI_USERNAME_MAX];
+    const size_t body_cap = 3 + 1 + LWIP_WIFI_SSID_MAX + 1 + LWIP_WIFI_PASSWORD_MAX + 1 +
+                            LWIP_WIFI_USERNAME_MAX;
+    uint8_t *body;
     uint16_t length = 3;
     lwip_wifi_error_t err;
 
@@ -324,6 +361,9 @@ static lwip_wifi_error_t save(uint8_t slot, const char *ssid, const char *userna
         (password && strlen(password) > LWIP_WIFI_PASSWORD_MAX) ||
         (username && strlen(username) > LWIP_WIFI_USERNAME_MAX))
         return LWIP_WIFI_ERR_BAD_REQUEST;
+    body = (uint8_t *)mem_malloc(body_cap);
+    if (!body)
+        return LWIP_WIFI_ERR_MEM;
 
     body[0] = slot;
     body[1] = security;
@@ -333,7 +373,8 @@ static lwip_wifi_error_t save(uint8_t slot, const char *ssid, const char *userna
     if (username)
         length = (uint16_t)(length + put_string(&body[length], username, LWIP_WIFI_USERNAME_MAX));
     err = request(CTL_OP_SAVE, body, length, WIFI_CHANGE_TIMEOUT_MS);
-    tls_secure_memzero(body, sizeof body);
+    tls_secure_memzero(body, body_cap);
+    mem_free(body);
     if (err == LWIP_WIFI_OK && saved)
         *saved = g_reply_len ? g_reply[0] : LWIP_WIFI_SLOT_NONE;
     return err == LWIP_WIFI_OK ? release(err) : err;

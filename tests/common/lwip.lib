@@ -492,3 +492,7 @@
 	export	altcp_tls_create_config_cert_server
 	export	altcp_tls_create_config_cert_client
 	export	lwip_set_tty
+	export	tls_x509_get_ocsp_url
+	export	tls_ocsp_hash_issuer
+	export	tls_ocsp_build_request
+	export	tls_ocsp_free

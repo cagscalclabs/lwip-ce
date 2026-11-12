@@ -7,6 +7,7 @@
 #include "apps/altcp_tls/altcp_tls_ce.h"
 #include "../tls/includes/bytes.h"
 #include "../tls/includes/random.h"
+#include "../tls/includes/scratch.h"
 #include "wireless/crypto.h"
 #include "wireless/wifi_hook.h"
 #include "wireless/wifi_proto.h"
@@ -312,19 +313,24 @@ static void on_info(const uint8_t *header, struct pbuf *p)
  * dropped, and the next handshake asks again. */
 static void on_random(const uint8_t *header, struct pbuf *p)
 {
-    uint8_t bytes[CTL_RANDOM_MAX];
+    uint8_t *bytes;
     uint8_t len = g_random_len;
 
-    if (header[17] != CTL_ST_OK || !(g_caps & CTL_CAP_RANDOM) ||
-        pbuf_copy_partial(p, bytes, len, CTL_HEADER) != len)
+    if (header[17] != CTL_ST_OK || !(g_caps & CTL_CAP_RANDOM))
         return;
-    g_random_len = 0;
-    if (tls_random_add_entropy(bytes, len) && len == CRYPTO_INSTANTIATE_BYTES)
+    bytes = tls_scratch_alloc(CTL_RANDOM_MAX);
+    if (!bytes)
+        return;
+    if (pbuf_copy_partial(p, bytes, len, CTL_HEADER) == len)
     {
-        g_trng = true;
-        tls_random_set_external(true);
+        g_random_len = 0;
+        if (tls_random_add_entropy(bytes, len) && len == CRYPTO_INSTANTIATE_BYTES)
+        {
+            g_trng = true;
+            tls_random_set_external(true);
+        }
     }
-    tls_secure_memzero(bytes, sizeof bytes);
+    tls_scratch_free(bytes, CTL_RANDOM_MAX);
 }
 
 bool lwip_crypto_reply(const uint8_t *header, struct pbuf *p)

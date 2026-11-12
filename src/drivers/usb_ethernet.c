@@ -541,7 +541,7 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
              * program (lwip_log_fatal_at), which would defeat the
              * recover-and-continue behavior below. */
             WARN_CODE(remaining > 0xFFFF ? 0xFFFF : remaining);
-            uint8_t skip[64];
+            uint8_t skip[16];
             while (remaining > 0)
             {
                 size_t n = remaining < sizeof(skip) ? remaining : sizeof(skip);
@@ -1313,8 +1313,8 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 
     memset(obuf->payload, 0, ntb_len);
 
-    // declare NTH, NDP, and NDP_IDX structures
-    uint8_t hdr_buf[NCM_HBUF_SIZE] = {0};
+    // build NTH, NDP, and NDP_IDX in place; obuf is one zeroed PBUF_RAM block
+    uint8_t *hdr_buf = (uint8_t *)obuf->payload;
     struct ncm_nth *nth = (struct ncm_nth *)hdr_buf;
     struct ncm_ndp *ndp = (struct ncm_ndp *)&hdr_buf[offset_ndp];
 
@@ -1333,9 +1333,6 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     ndp->wDatagramIdx[0].wDatagramLen = p->tot_len;
     ndp->wDatagramIdx[1].wDatagramIndex = 0;
     ndp->wDatagramIdx[1].wDatagramLen = 0;
-
-    // absorb the populated structs into the obuf
-    pbuf_take(obuf, hdr_buf, NCM_HBUF_SIZE);
 
     // copy the datagram to the pbuf
     pbuf_copy_partial(p, obuf->payload + NCM_HBUF_SIZE, p->tot_len, 0);
@@ -1714,17 +1711,19 @@ static bool init_ethernet_usb_device(usb_device_t device)
         usb_descriptor_t desc;               // descriptor type aliases
         usb_device_descriptor_t dev;         // .. device descriptor alias
         usb_configuration_descriptor_t conf; // .. config descriptor alias
-    } descriptor;
-    err = usb_fn.get_descriptor(device, USB_DEVICE_DESCRIPTOR, 0, &descriptor.dev, sizeof(usb_device_descriptor_t), &xferd);
+    } *descriptor = mem_malloc(sizeof(*descriptor));
+    if (!descriptor)
+        goto fail;
+    err = usb_fn.get_descriptor(device, USB_DEVICE_DESCRIPTOR, 0, &descriptor->dev, sizeof(usb_device_descriptor_t), &xferd);
     if (err || (xferd != sizeof(usb_device_descriptor_t)))
         goto fail;
 
     // check for main DeviceClass being type 0x00 - composite/if-specific
-    if (descriptor.dev.bDeviceClass != USB_INTERFACE_SPECIFIC_CLASS)
+    if (descriptor->dev.bDeviceClass != USB_INTERFACE_SPECIFIC_CLASS)
         goto fail;
 
     // parse both configs for the correct one
-    uint8_t num_configs = descriptor.dev.bNumConfigurations;
+    uint8_t num_configs = descriptor->dev.bNumConfigurations;
     for (uint8_t config = 0; config < num_configs; config++)
     {
         uint8_t ifnum = 0;
@@ -1735,13 +1734,13 @@ static bool init_ethernet_usb_device(usb_device_t device)
             // if we overflow buffer, skip descriptor
             continue;
         // fetch config descriptor
-        err = usb_fn.get_descriptor(device, USB_CONFIGURATION_DESCRIPTOR, config, &descriptor.conf, desc_len, &xferd);
+        err = usb_fn.get_descriptor(device, USB_CONFIGURATION_DESCRIPTOR, config, &descriptor->conf, desc_len, &xferd);
         if (err || (xferd != desc_len))
             // if error or not full descriptor, skip
             continue;
 
         // set pointer to current working descriptor
-        usb_descriptor_t *desc = &descriptor.desc;
+        usb_descriptor_t *desc = &descriptor->desc;
         while (parsed_len < desc_len)
         {
             switch (desc->bDescriptorType)
@@ -1809,7 +1808,7 @@ static bool init_ethernet_usb_device(usb_device_t device)
                              (iface->bInterfaceSubClass == USB_NCM_SUBCLASS)))
                         {
                             // use this to set configuration
-                            configdata.addr = &descriptor.conf;
+                            configdata.addr = &descriptor->conf;
                             configdata.len = desc_len;
                             eth->type = iface->bInterfaceSubClass;
                             if (usb_fn.set_configuration(device, configdata.addr, configdata.len))
@@ -1830,13 +1829,13 @@ static bool init_ethernet_usb_device(usb_device_t device)
                         usb_ethernet_functional_descriptor_t *ethdesc = (usb_ethernet_functional_descriptor_t *)cs;
                         usb_control_setup_t get_mac_addr = {0b10100001, REQUEST_GET_NET_ADDRESS, 0, 0, 6};
                         size_t xferd_tmp;
-                        uint8_t string_descriptor_buf[DESCRIPTOR_MAX_LEN];
+                        uint8_t *string_descriptor_buf = mem_malloc(DESCRIPTOR_MAX_LEN);
                         usb_string_descriptor_t *macaddr = (usb_string_descriptor_t *)string_descriptor_buf;
                         // Get MAC address and save for lwIP use (ETHARP header)
                         // if index for iMacAddress valid and GetStringDescriptor success, save MAC address
                         // else attempt control transfer to get mac address and save it
                         // else generate random compliant local MAC address and send control request to set the hwaddr, then save it
-                        if (ethdesc->iMacAddress &&
+                        if (macaddr && ethdesc->iMacAddress &&
                             (!usb_fn.get_string_descriptor(device, ethdesc->iMacAddress, 0, macaddr, DESCRIPTOR_MAX_LEN, &xferd_tmp)))
                         {
                             for (uint24_t i = 0; i < NETIF_MAX_HWADDR_LEN; i++)
@@ -1863,6 +1862,8 @@ static bool init_ethernet_usb_device(usb_device_t device)
                                 parse_state |= PARSE_HAS_MAC_ADDR;
                             }
                         }
+                        if (string_descriptor_buf)
+                            mem_free(string_descriptor_buf);
                     }
                     break;
                     case USB_UNION_FUNCTIONAL_DESCRIPTOR:
@@ -1933,9 +1934,12 @@ init_success:
         goto fail;
     }
     eth_transfer_began(eth);
+    mem_free(descriptor);
     return true;
 
 fail:
+    if (descriptor)
+        mem_free(descriptor);
     /* eth is always a fresh allocation here (no resume path -- see the
      * comment at function entry), so new_eth is always true: a failure at
      * any point, from the very first descriptor fetch through the final
@@ -2151,13 +2155,22 @@ eth_usb_event_callback(usb_event_t event, void *event_data,
             {
                 uint8_t bytes[DESCRIPTOR_MAX_LEN];   // allocate 256 bytes for descriptors
                 usb_configuration_descriptor_t conf; // .. config descriptor alias
-            } descriptor;
+            } *descriptor;
             size_t desc_len = usb_fn.get_config_descriptor_len(usb_device, 0);
             size_t xferd;
-            usb_fn.get_descriptor(usb_device, USB_CONFIGURATION_DESCRIPTOR, 0, &descriptor.conf, desc_len, &xferd);
-            if (desc_len != xferd)
+            if (desc_len > DESCRIPTOR_MAX_LEN)
                 break;
-            usb_fn.set_configuration(usb_device, &descriptor.conf, desc_len);
+            descriptor = mem_malloc(sizeof(*descriptor));
+            if (!descriptor)
+                break;
+            usb_fn.get_descriptor(usb_device, USB_CONFIGURATION_DESCRIPTOR, 0, &descriptor->conf, desc_len, &xferd);
+            if (desc_len != xferd)
+            {
+                mem_free(descriptor);
+                break;
+            }
+            usb_fn.set_configuration(usb_device, &descriptor->conf, desc_len);
+            mem_free(descriptor);
             LWIP_DEBUGF(ETH_DEBUG | LWIP_DBG_STATE,
                         ("NEW device=%p, type=hub", usb_device));
 

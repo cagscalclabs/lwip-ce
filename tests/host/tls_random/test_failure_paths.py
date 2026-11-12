@@ -47,8 +47,9 @@ make_c = C_SOURCE.split("static bool tls_hash_drbg_make_c", 1)[1].split(
 )[0]
 assert "material[0] = 0u;" in make_c
 assert "memcpy(material + 1u, drbg->v, sizeof(drbg->v));" in make_c
-assert "tls_hash_df(material, sizeof(material), drbg->c)" in make_c
-assert make_c.count("tls_secure_memzero(material, sizeof(material));") == 2
+assert "tls_hash_df(material, material_len, drbg->c)" in make_c
+# Heap scratch: one exit, wiped by tls_scratch_free.
+assert make_c.count("tls_scratch_free(material, material_len);") == 1
 
 instantiate = C_SOURCE.split("static bool tls_hash_drbg_instantiate", 1)[1].split(
     "static bool tls_hash_drbg_reseed", 1
@@ -72,21 +73,21 @@ reseed = C_SOURCE.split("static bool tls_hash_drbg_reseed", 1)[1].split(
     "static bool tls_hash_drbg_hashgen", 1
 )[0]
 assert "drbg == NULL || entropy == NULL || !drbg->seeded" in reseed
-assert "material[0] = 1u;" in reseed
-assert "memcpy(material + 1u, drbg->v, sizeof(drbg->v));" in reseed
-assert "memcpy(material + 1u + sizeof(drbg->v), entropy," in reseed
-assert "tls_hash_df(material, sizeof(material), new_v)" in reseed
-assert reseed.index("tls_hash_df(material") < reseed.index(
-    "memcpy(drbg->v, new_v, sizeof(drbg->v));"
+assert "t->material[0] = 1u;" in reseed
+assert "memcpy(t->material + 1u, drbg->v, sizeof(drbg->v));" in reseed
+assert "memcpy(t->material + 1u + sizeof(drbg->v), entropy," in reseed
+assert "tls_hash_df(t->material, sizeof(t->material), t->new_v)" in reseed
+assert reseed.index("tls_hash_df(t->material") < reseed.index(
+    "memcpy(drbg->v, t->new_v, sizeof(drbg->v));"
 )
-assert reseed.index("memcpy(drbg->v, new_v") < reseed.index(
+assert reseed.index("memcpy(drbg->v, t->new_v") < reseed.index(
     "tls_hash_drbg_make_c(drbg)"
 )
 assert reseed.index("tls_hash_drbg_make_c(drbg)") < reseed.index(
     "drbg->reseed_counter = 1u;"
 )
-assert reseed.count("tls_secure_memzero(material, sizeof(material));") == 2
-assert reseed.count("tls_secure_memzero(new_v, sizeof(new_v));") == 2
+# material and new_v share one heap block, wiped on both exits.
+assert reseed.count("tls_scratch_free(t, sizeof(*t));") == 2
 assert "tls_hash_drbg_reset(drbg);" in reseed
 
 
@@ -95,19 +96,19 @@ assert "tls_hash_drbg_reset(drbg);" in reseed
 sha_buf = C_SOURCE.split("static bool tls_sha256_buf", 1)[1].split(
     "static void tls_store_u64_be", 1
 )[0]
-assert sha_buf.count("tls_secure_memzero(&hctx, sizeof hctx);") == 2
+# Allocation failure returns before any state exists; the one live exit wipes.
+assert sha_buf.count("tls_hash_context_free(hctx);") == 1
 
 hash_df = C_SOURCE.split("static bool tls_hash_df", 1)[1].split(
     "static void tls_hash_drbg_add", 1
 )[0]
-assert hash_df.count("tls_secure_memzero(&ctx, sizeof ctx);") == 2
-assert hash_df.count("tls_secure_memzero(digest,") == 2
+# ctx and digest share one heap block, wiped on both exits.
+assert hash_df.count("tls_scratch_free(t, sizeof(*t));") == 2
 
 hashgen = C_SOURCE.split("static bool tls_hash_drbg_hashgen", 1)[1].split(
     "static bool tls_drbg_generate_bytes", 1
 )[0]
-assert hashgen.count("tls_secure_memzero(data, sizeof(data));") == 2
-assert hashgen.count("tls_secure_memzero(digest, sizeof(digest));") == 2
+assert hashgen.count("tls_scratch_free(t, sizeof(*t));") == 2
 
 generate = C_SOURCE.split("static bool tls_drbg_generate_bytes", 1)[1].split(
     "#define TLS_DRBG_GATHER_MAX_EPOCH_CHANGES", 1
@@ -117,13 +118,13 @@ assert "additional_input" not in generate_signature
 assert "Generate-time additional input is not supported" in generate
 assert "drbg->reseed_counter > TLS_HASH_DRBG_RESEED_INTERVAL" in generate
 assert generate.index("tls_hash_drbg_hashgen(drbg, out, len)") < generate.index(
-    "material[0] = 3u;"
+    "t->material[0] = 3u;"
 )
 state_update_steps = [
-    "material[0] = 3u;",
-    "memcpy(material + 1u, drbg->v, sizeof(drbg->v));",
-    "tls_sha256_buf(material, sizeof(material), h)",
-    "tls_hash_drbg_add(drbg->v, h, sizeof(h));",
+    "t->material[0] = 3u;",
+    "memcpy(t->material + 1u, drbg->v, sizeof(drbg->v));",
+    "tls_sha256_buf(t->material, sizeof(t->material), t->h)",
+    "tls_hash_drbg_add(drbg->v, t->h, sizeof(t->h));",
     "tls_hash_drbg_add(drbg->v, drbg->c, sizeof(drbg->c));",
     "tls_store_u64_be(drbg->reseed_counter, counter_be);",
     "tls_hash_drbg_add(drbg->v, counter_be, sizeof(counter_be));",
@@ -133,8 +134,7 @@ assert all(step in generate for step in state_update_steps)
 assert [generate.index(step) for step in state_update_steps] == sorted(
     generate.index(step) for step in state_update_steps
 )
-assert generate.count("tls_secure_memzero(material, sizeof(material));") == 2
-assert generate.count("tls_secure_memzero(h, sizeof(h));") == 2
+assert generate.count("tls_scratch_free(t, sizeof(*t));") == 2
 
 digest_asm = SHA_SOURCE.split("_tls_sha256_digest:", 1)[1].split(
     "_sha256_transform:", 1
