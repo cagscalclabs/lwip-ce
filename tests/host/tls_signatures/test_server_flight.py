@@ -104,10 +104,7 @@ c_test = r"""
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
-static void *mem_buffer_custom_malloc(size_t n) { return malloc(n); }
-static void mem_buffer_custom_free(void *p) { free(p); }
 """ + function("der_encode_integer") + function("der_encode_ecdsa_sig") + r"""
 int main(void)
 {
@@ -142,7 +139,6 @@ c_emit = r"""
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define ERROR_CODE(...) ((void)0)
@@ -206,21 +202,6 @@ static void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *out)
 }
 static void tls_hash_clear(struct tls_hash_context *ctx) { memset(ctx, 0, sizeof(*ctx)); }
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
-static void *mem_buffer_custom_malloc(size_t n) { return malloc(n); }
-static void mem_buffer_custom_free(void *p) { free(p); }
-static struct tls_hash_context *tls_hash_context_alloc(uint8_t alg) __attribute__((unused));
-static struct tls_hash_context *tls_hash_context_alloc(uint8_t alg)
-{
-    (void)alg;
-    struct tls_hash_context *c = malloc(sizeof(*c));
-    if (c) memset(c, 0, sizeof(*c));
-    return c;
-}
-static void tls_hash_context_free(struct tls_hash_context *ctx) __attribute__((unused));
-static void tls_hash_context_free(struct tls_hash_context *ctx)
-{
-    if (ctx) { memset(ctx, 0, sizeof(*ctx)); free(ctx); }
-}
 
 static tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
                                         uint8_t *sig_out, size_t *sig_len_out,

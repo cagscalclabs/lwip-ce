@@ -15,8 +15,6 @@
 #include <string.h>
 
 #include "../includes/hash.h"
-#include "../../drivers/mem.h"
-#include "../includes/diag_trap.h"
 #include "../includes/p256.h"
 #include "../includes/p384.h"
 #include "../includes/rsa.h"
@@ -777,11 +775,7 @@ static size_t ecdsa_der_integer(uint8_t *dst, const uint8_t *val, size_t val_len
  * dst must have room for 2 + 2*(2 + coord_len + 1). Returns the length. */
 static size_t ecdsa_raw_to_der(uint8_t *dst, const uint8_t *raw, size_t coord_len)
 {
-    uint8_t *enc = mem_buffer_custom_malloc(128);
-    if (!enc)
-        return 0;
-    uint8_t *r_enc = enc;
-    uint8_t *s_enc = enc + 64;
+    uint8_t r_enc[64], s_enc[64];
     size_t r_len = ecdsa_der_integer(r_enc, raw, coord_len);
     size_t s_len = ecdsa_der_integer(s_enc, raw + coord_len, coord_len);
     size_t body = r_len + s_len;
@@ -790,7 +784,6 @@ static size_t ecdsa_raw_to_der(uint8_t *dst, const uint8_t *raw, size_t coord_le
     dst[1] = (uint8_t)body;
     memcpy(dst + 2, r_enc, r_len);
     memcpy(dst + 2 + r_len, s_enc, s_len);
-    mem_buffer_custom_free(enc);
     return 2 + body;
 }
 
@@ -814,15 +807,10 @@ tls_key_op_result_t tls_key_verify(const uint8_t *content, size_t content_len,
                          (size_t)sig[1] + 2 == sig_len;
         if (!looks_der)
         {
-            uint8_t *der = mem_buffer_custom_malloc(110);
-            if (!der)
-                return TLS_KEY_OP_INVALID;
+            uint8_t der[110];
             size_t der_len = ecdsa_raw_to_der(der, sig, sig_len / 2);
-            tls_key_op_result_t res = (der_len > 0)
-                ? tls_x509_signature_verify(content, content_len, der, der_len, key, alg)
-                : TLS_KEY_OP_INVALID;
-            mem_buffer_custom_free(der);
-            return res;
+            return tls_x509_signature_verify(content, content_len,
+                                             der, der_len, key, alg);
         }
     }
     return tls_x509_signature_verify(content, content_len, sig, sig_len, key, alg);
@@ -841,17 +829,14 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
         {
             if (key->type != TLS_KEY_TYPE_EC_P256 || !key->ec.priv)
                 return TLS_KEY_OP_INVALID;
-            LWDIAG(0x30);
-            struct tls_hash_context *hctx = tls_hash_context_alloc(TLS_HASH_SHA256);
-            if (!hctx)
-                return TLS_KEY_OP_INVALID;
+            struct tls_hash_context hctx;
             uint8_t digest[32];
-            tls_hash_update(hctx, content, content_len);
-            tls_hash_digest(hctx, digest);
-            tls_hash_context_free(hctx);
-            LWDIAG(0x31);
+            if (!tls_hash_context_init(&hctx, TLS_HASH_SHA256))
+                return TLS_KEY_OP_INVALID;
+            tls_hash_update(&hctx, content, content_len);
+            tls_hash_digest(&hctx, digest);
+            tls_hash_clear(&hctx);
             bool ok = tls_p256_sign(sig_out, digest, key->ec.priv);
-            LWDIAG(0x32);
             tls_secure_memzero(digest, sizeof digest);
             if (!ok)
                 return TLS_KEY_OP_INVALID;
@@ -863,13 +848,13 @@ tls_key_op_result_t tls_key_sign(const uint8_t *content, size_t content_len,
         {
             if (key->type != TLS_KEY_TYPE_EC_P384 || !key->ec.priv)
                 return TLS_KEY_OP_INVALID;
-            struct tls_hash_context *hctx = tls_hash_context_alloc(TLS_HASH_SHA384);
-            if (!hctx)
-                return TLS_KEY_OP_INVALID;
+            struct tls_hash_context hctx;
             uint8_t digest[48];
-            tls_hash_update(hctx, content, content_len);
-            tls_hash_digest(hctx, digest);
-            tls_hash_context_free(hctx);
+            if (!tls_hash_context_init(&hctx, TLS_HASH_SHA384))
+                return TLS_KEY_OP_INVALID;
+            tls_hash_update(&hctx, content, content_len);
+            tls_hash_digest(&hctx, digest);
+            tls_hash_clear(&hctx);
             bool ok = tls_p384_sign(sig_out, digest, key->ec.priv);
             tls_secure_memzero(digest, sizeof digest);
             if (!ok)

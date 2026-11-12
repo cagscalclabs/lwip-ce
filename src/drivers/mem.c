@@ -764,22 +764,6 @@ bool mem_is_ready(void)
     return g_mem_cfg_ready;
 }
 
-/* TEMPORARY DIAGNOSTIC (nettls NMI hunt): sanity-check a live direct
- * allocation's header without freeing it. Pool-backed pointers are not
- * valid inputs. Remove together with the TLS_NMI_TRAP_DIAG checkpoints. */
-bool mem_debug_block_ok(const void *ptr)
-{
-    if (!ptr)
-    {
-        return true;
-    }
-    const struct mem_direct_header *hdr =
-        (const struct mem_direct_header *)((const uint8_t *)ptr -
-                                           sizeof(struct mem_direct_header));
-    return hdr->magic == MEM_DIRECT_MAGIC &&
-           hdr->size <= g_mem_cfg.max_heap;
-}
-
 enum mem_pressure_level mem_get_global_pressure_level(void)
 {
     if (!g_mem_cfg_ready)

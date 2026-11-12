@@ -8,21 +8,6 @@
 bool tls_x509_signature_algorithm(const struct tls_asn1_tlv *identifier,
                                   tls_alg_t *alg);
 
-/* Extract and validate the material covered by a certificate's issuer
- * signature. All returned pointers borrow from der. */
-bool tls_x509_certificate_signature_material(const uint8_t *der, size_t der_len,
-                                              const uint8_t **tbs_out,
-                                              size_t *tbs_len_out,
-                                              tls_alg_t *sig_alg_out,
-                                              const uint8_t **sig_out,
-                                              size_t *sig_len_out);
-
-/* Validate the extension profile required for an RFC 6960 delegated OCSP
- * responder: non-CA, id-kp-OCSPSigning EKU, and digitalSignature when KU is
- * present. Unknown critical and duplicate extensions fail closed. */
-bool tls_x509_validate_ocsp_responder_extensions(
-    const struct tls_x509_object *cert);
-
 /* Internal: parse one strict-DER INTEGER (r or s of an ECDSA-Sig-Value)
  * from der[0..len) into a big-endian, left-zero-padded 32-byte buffer.
  * Rejects: wrong tag, long-form/zero/over-33 length, length past len,

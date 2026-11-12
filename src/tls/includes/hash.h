@@ -170,20 +170,6 @@ void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *digest);
 void tls_hash_clear(struct tls_hash_context *ctx);
 
 /***************************************************************************
- * @brief Heap-allocates and initialises a hash context.
- * @param algorithm     One of \p _hash_algorithms .
- * @returns Pointer to newly allocated context, or NULL on failure.
- */
-struct tls_hash_context *tls_hash_context_alloc(uint8_t algorithm);
-
-/***************************************************************************
- * @brief Securely clears and frees a heap-allocated hash context.
- * @param ctx       Pointer previously returned by tls_hash_context_alloc.
- *                  NULL is a no-op.
- */
-void tls_hash_context_free(struct tls_hash_context *ctx);
-
-/***************************************************************************
  * @brief Returns a MGF1 digest from some data. Used with RSA.
  * @param data      Pointer to data to hash.
  * @param datalen   Length of data to hash.

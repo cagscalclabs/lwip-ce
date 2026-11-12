@@ -50,7 +50,6 @@ typedef enum {
     LWIP_DISPATCH_TLS_RX_RECVD,      /**< TLS receive-window release */
     LWIP_DISPATCH_CONN_SERVICES,    /**< lwip_socket waiting-for-services poll */
     LWIP_DISPATCH_TLS_CERT_JOB,     /**< deferred TLS certificate verification */
-    LWIP_DISPATCH_TLS_OCSP_JOB,     /**< deferred TLS OCSP lookup */
     LWIP_DISPATCH_TLS_KEYSHARE,     /**< staged pre-connect TLS key generation */
     LWIP_DISPATCH_PCAP_FLUSH,       /**< periodic PCAP staging-buffer flush */
     LWIP_DISPATCH_COUNT

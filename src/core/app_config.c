@@ -31,7 +31,6 @@ enum lwip_cfg_setting_id {
     LWIP_CFG_ID_LOG_VERBOSITY,
     LWIP_CFG_ID_CRYPTO_OFFLOAD,
     LWIP_CFG_ID_BRIDGE_RNG,
-    LWIP_CFG_ID_OCSP_ENABLED,
 };
 
 static const uint8_t lwip_cfg_magic[4] = {'L', 'W', 'C', 'F'};
@@ -115,7 +114,6 @@ static void lwip_app_config_normalize(lwip_app_config_t *cfg)
     cfg->file_log_enabled = cfg->file_log_enabled ? 1u : 0u;
     cfg->crypto_offload = cfg->crypto_offload ? 1u : 0u;
     cfg->bridge_rng = cfg->bridge_rng ? 1u : 0u;
-    cfg->ocsp_enabled = cfg->ocsp_enabled ? 1u : 0u;
 
     switch (cfg->pcap_max_bytes)
     {
@@ -154,7 +152,6 @@ void lwip_app_config_defaults(lwip_app_config_t *cfg)
     cfg->log_archive_slots = LWIP_CFG_LOG_ARCHIVE_SLOTS_DEFAULT;
     cfg->crypto_offload = 1;
     cfg->bridge_rng = 1;
-    cfg->ocsp_enabled = 0;
 }
 
 static bool parse_serialized_config(lwip_app_config_t *cfg,
@@ -243,10 +240,6 @@ static bool parse_serialized_config(lwip_app_config_t *cfg,
         case LWIP_CFG_ID_BRIDGE_RNG:
             if (length != 1u) return false;
             cfg->bridge_rng = data[pos];
-            break;
-        case LWIP_CFG_ID_OCSP_ENABLED:
-            if (length != 1u) return false;
-            cfg->ocsp_enabled = data[pos];
             break;
         default:
             /* Forward-compatible setting: retain framing, ignore value. */
@@ -402,9 +395,7 @@ bool lwip_app_config_save(const lwip_app_config_t *cfg)
     if (!append_setting(serialized, sizeof(serialized), &used,
                         LWIP_CFG_ID_CRYPTO_OFFLOAD, &normalized.crypto_offload, 1u) ||
         !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_BRIDGE_RNG, &normalized.bridge_rng, 1u) ||
-        !append_setting(serialized, sizeof(serialized), &used,
-                        LWIP_CFG_ID_OCSP_ENABLED, &normalized.ocsp_enabled, 1u))
+                        LWIP_CFG_ID_BRIDGE_RNG, &normalized.bridge_rng, 1u))
         return false;
 
     write_u16_le(serialized + 6, (uint16_t)(used - LWIP_CFG_HEADER_SIZE));

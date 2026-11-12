@@ -211,8 +211,7 @@ def apply_nmi_patch(cemu_dir: Path) -> None:
 
 def build_cemu_tools(cemu_dir: Path, jobs: int) -> tuple[Path, Path]:
     apply_nmi_patch(cemu_dir)
-    run(["make", "-C", str(cemu_dir / "core"), f"-j{jobs}",
-         "CPPFLAGS=-DDEBUG_SUPPORT"])
+    run(["make", "-C", str(cemu_dir / "core"), f"-j{jobs}"])
     apply_autotester_patch(cemu_dir)
 
     build_dir = cemu_dir / "build"

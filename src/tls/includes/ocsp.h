@@ -2,8 +2,8 @@
  * @file ocsp.h
  * @brief OCSP (Online Certificate Status Protocol) support — RFC 6960.
  *
- * AIA URL extraction, CertID construction, request encoding, and authenticated
- * response parsing. Network dispatch lives in the altcp layer.
+ * Steps 1–3: AIA URL extraction, CertID construction, request encoding.
+ * Network dispatch lives in the altcp layer and is not declared here.
  */
 
 #ifndef TLS_OCSP_H
@@ -13,18 +13,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "key.h"
-
 /** SHA-1 digest length used by OCSP CertID. */
 #define OCSP_SHA1_LEN 20
-#define OCSP_RESP_MAX 4096u
-
-typedef enum tls_ocsp_status {
-    OCSP_GOOD = 0,
-    OCSP_REVOKED,
-    OCSP_UNKNOWN,
-    OCSP_PARSE_ERROR
-} tls_ocsp_status_t;
 
 /**
  * @brief Extract the OCSP responder URL from a certificate's AIA extension.
@@ -102,14 +92,5 @@ bool tls_ocsp_build_request(const uint8_t *serial, size_t serial_len,
                              const uint8_t name_hash[OCSP_SHA1_LEN],
                              const uint8_t  key_hash[OCSP_SHA1_LEN],
                              uint8_t **out, size_t *out_len);
-
-/** Parse and authenticate an issuer-signed DER OCSPResponse. */
-tls_ocsp_status_t tls_ocsp_parse_response(
-    const uint8_t *buf, size_t len,
-    const uint8_t *serial, size_t serial_len,
-    const uint8_t issuer_name_hash[OCSP_SHA1_LEN],
-    const uint8_t issuer_key_hash[OCSP_SHA1_LEN],
-    const struct tls_key *issuer_key,
-    uint32_t now_secs);
 
 #endif /* TLS_OCSP_H */

@@ -52,7 +52,6 @@ c_test = r'''
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define ERROR_CODE(...) ((void)0)
@@ -127,23 +126,6 @@ static void tls_hash_clear(struct tls_hash_context *ctx)
 static void tls_secure_memzero(void *p, size_t len)
 {
     memset(p, 0, len);
-}
-
-static void *mem_buffer_custom_malloc(size_t n) { return malloc(n); }
-static void mem_buffer_custom_free(void *p) { free(p); }
-
-static struct tls_hash_context *tls_hash_context_alloc(uint8_t alg) __attribute__((unused));
-static struct tls_hash_context *tls_hash_context_alloc(uint8_t alg)
-{
-    (void)alg;
-    struct tls_hash_context *c = malloc(sizeof(*c));
-    if (c) memset(c, 0, sizeof(*c));
-    return c;
-}
-static void tls_hash_context_free(struct tls_hash_context *ctx) __attribute__((unused));
-static void tls_hash_context_free(struct tls_hash_context *ctx)
-{
-    if (ctx) { memset(ctx, 0, sizeof(*ctx)); free(ctx); }
 }
 
 static tls_key_op_result_t tls_key_sign(
