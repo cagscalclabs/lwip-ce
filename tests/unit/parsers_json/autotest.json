@@ -5,7 +5,7 @@
   ],
   "target": {
     "name": "XJSON",
-    "isASM": true
+    "isASM": false
   },
   "sequence": [
     "delay|3000",

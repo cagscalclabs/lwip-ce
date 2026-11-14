@@ -266,18 +266,22 @@ def release_files(release_dir: Path) -> list[Path]:
 # rather than saving a half-installed image.
 INSTALLED_SCREEN_HASH = "F104ABEC"
 INSTALL_POLL_STEP_MS = 1000
-INSTALL_TIMEOUT_MS = 300000
+# Per launch attempt. The install itself completes in ~6 s of emulated time.
+INSTALL_TIMEOUT_MS = 60000
+
+# `launch` pokes keys into the OS key buffer, and neither form is reliable
+# everywhere: CI's `asm` form typed GDB1 at 742f61406, while locally the plain
+# form hits ERR:SYNTAX every time. Try each, verifying the installer started.
+INSTALL_LAUNCHES = ("launch INSTALL asm", "launch INSTALL", "launch INSTALL asm")
+# Quit the error menu and clear the home screen before the next attempt.
+LAUNCH_RECOVERY_COMMANDS = ("key enter", "run 1000", "key clear", "run 1000")
 
 
 def installer_commands(clibs: Path, release_dir: Path) -> list[str]:
-    """Commands that stage every release file and start the installer."""
+    """Commands that stage every release file before the installer launch."""
     commands = [f"send-file auto {clibs}"]
     commands.extend(f"send-file auto {path}" for path in release_files(release_dir))
-    # OS 5.3+ runs native programs from prgm directly. The injected Asm( key
-    # (2-byte 0xFC9C poke) can arrive as a different token after the
-    # transfers; it typed GDB1 with the 742f61406 build and the install
-    # never started.
-    commands.extend(["run 5000", "launch INSTALL"])
+    commands.append("run 5000")
     return commands
 
 
@@ -325,25 +329,31 @@ def install_release(
         for command in installer_commands(clibs, release_dir):
             _headless_send(process, command)
 
-        waited = 0
+        installed = False
         screen_hash = "?"
-        while waited < INSTALL_TIMEOUT_MS:
-            _headless_send(process, f"run {INSTALL_POLL_STEP_MS}")
-            waited += INSTALL_POLL_STEP_MS
-            response = _headless_send(process, "screen-hash")
-            screen_hash = response.rsplit(" ", 1)[-1]
-            if screen_hash == INSTALLED_SCREEN_HASH:
+        for launch in INSTALL_LAUNCHES:
+            _headless_send(process, launch)
+            waited = 0
+            while waited < INSTALL_TIMEOUT_MS:
+                _headless_send(process, f"run {INSTALL_POLL_STEP_MS}")
+                waited += INSTALL_POLL_STEP_MS
+                response = _headless_send(process, "screen-hash")
+                screen_hash = response.rsplit(" ", 1)[-1]
+                if screen_hash == INSTALLED_SCREEN_HASH:
+                    installed = True
+                    break
+            if installed:
                 break
-        else:
-            # The completion-screen hash is a fast path, not a hard gate: the
-            # prompt can blink and the LCD can auto-power-down. The finish keys
-            # below dismiss the prompt (or are ignored while the install is
-            # still running), so continue with the fixed settle.
-            print(
-                "installer completion screen not observed within "
-                f"{INSTALL_TIMEOUT_MS} ms (last hash {screen_hash}); "
-                "continuing with the fixed settle",
-                flush=True,
+            print(f"{launch!r} did not complete the install (last hash {screen_hash}); "
+                  "retrying", flush=True)
+            for command in LAUNCH_RECOVERY_COMMANDS:
+                _headless_send(process, command)
+        if not installed:
+            # Saving anyway produced images without lwIP, which surfaced only
+            # as every calc test failing downstream.
+            raise PreparationError(
+                f"installer completion screen not observed after {len(INSTALL_LAUNCHES)} "
+                f"launches (last hash {screen_hash})"
             )
 
         for command in installer_finish_commands(output):

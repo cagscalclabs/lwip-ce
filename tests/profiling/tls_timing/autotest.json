@@ -20,7 +20,7 @@
   ],
   "target": {
     "name": "XTIMING",
-    "isASM": true
+    "isASM": false
   },
   "sequence": [
     "delay|20000",

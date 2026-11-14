@@ -53,6 +53,7 @@ PSK = bytes(((i * 31) + (i >> 8)) & 0xFF for i in range(32))
 PSK_IDENTITY = "lwip-ce-nettest"
 CIPHERS = {"gcm": "TLS_AES_128_GCM_SHA256", "ccm": "TLS_AES_128_CCM_SHA256", "aes256": "TLS_AES_256_GCM_SHA384"}
 GROUPS = {"x25519": "X25519", "p256": "P-256", "p384": "P-384"}
+OPENSSL_GROUPS = {"x25519": "X25519", "secp256r1": "P-256", "prime256v1": "P-256", "secp384r1": "P-384"}
 ENDPOINT_POOLS = {
     # Fungible smoke tests may use a different provider. Certificate-policy
     # tests only use alternatives that exercise the same CA and key type.
@@ -746,7 +747,10 @@ class Control:
         group = re.search(r"(?:Peer Temp Key|Negotiated TLS1.3 group): ([\w-]+)", out)
         alpn = re.search(r"ALPN protocols selected: (\S+)", out)
         if cipher:
-            return f"{cipher.group(1)} {group.group(1) if group else self.last_group} {alpn.group(1) if alpn else '-'}"
+            # OpenSSL 3.5+ reports the group by its own name (secp256r1).
+            name = group.group(1) if group else self.last_group
+            name = OPENSSL_GROUPS.get(name.lower(), name)
+            return f"{cipher.group(1)} {name} {alpn.group(1) if alpn else '-'}"
         errors = re.findall(r"(?:error|alert)[^\n]{0,70}", out)
         log("s_server output:\n" + out)
         return f"ERR {errors[-1] if errors else 'no handshake'}"

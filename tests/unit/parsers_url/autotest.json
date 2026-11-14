@@ -5,7 +5,7 @@
   ],
   "target": {
     "name": "XURL",
-    "isASM": true
+    "isASM": false
   },
   "sequence": [
     "delay|3000",

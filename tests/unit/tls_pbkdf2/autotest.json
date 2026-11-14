@@ -5,7 +5,7 @@
   ],
   "target": {
     "name": "XPBKDF2",
-    "isASM": true
+    "isASM": false
   },
   "sequence": [
     "delay|3000",
