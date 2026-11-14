@@ -1,12 +1,12 @@
 {
-  "description": "Truststore v2 signature, index layout, and first-entry owner check",
+  "description": "Truststore v3 signature, index layout, and first-entry owner check",
   "transfer_files": [
     "bin/XTRUST.8xp",
     "../../common/lwIPCERT.8xv"
   ],
   "target": {
     "name": "XTRUST",
-    "isASM": true
+    "isASM": false
   },
   "sequence": [
     "delay|3000",
