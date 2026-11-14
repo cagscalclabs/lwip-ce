@@ -6,7 +6,7 @@
   ],
   "target": {
     "name": "XTRUST",
-    "isASM": false
+    "isASM": true
   },
   "sequence": [
     "delay|3000",

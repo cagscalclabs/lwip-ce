@@ -10,6 +10,13 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+NET_SCRIPT = Path(__file__).resolve().parents[3] / "tests/net/run.py"
+NET_SPEC = importlib.util.spec_from_file_location("net_run", NET_SCRIPT)
+NET_MODULE = importlib.util.module_from_spec(NET_SPEC)
+assert NET_SPEC.loader is not None
+sys.modules[NET_SPEC.name] = NET_MODULE
+NET_SPEC.loader.exec_module(NET_MODULE)
+
 
 def test_namespace_names_fit_linux_interface_limit() -> None:
     namespaces = [MODULE.namespace_for(index) for index in range(len(MODULE.SUITES))]
@@ -55,6 +62,19 @@ def test_heap_metrics_are_added_to_legacy_rows() -> None:
         "heap_idle": {"value": 400, "unit": "B"},
     })
     assert rows[0]["stats"] == "heap peak 1800 B; heap idle 400 B"
+
+
+def test_openssl_group_name_handles_report_variants() -> None:
+    assert NET_MODULE.openssl_group_name(
+        "Peer Temp Key: ECDH, P-256, 256 bits\n", "packet-group"
+    ) == "P-256"
+    assert NET_MODULE.openssl_group_name(
+        "Peer Temp Key: X25519, 253 bits\n", "packet-group"
+    ) == "X25519"
+    assert NET_MODULE.openssl_group_name(
+        "Negotiated TLS1.3 group: secp256r1\n", "packet-group"
+    ) == "P-256"
+    assert NET_MODULE.openssl_group_name("unrecognized output", "packet-group") == "packet-group"
 
 
 if __name__ == "__main__":

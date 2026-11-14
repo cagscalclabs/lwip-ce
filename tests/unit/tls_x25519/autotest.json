@@ -4,7 +4,7 @@
   ],
   "target": {
     "name": "X25519",
-    "isASM": false
+    "isASM": true
   },
   "sequence": [
     "delay|3000",

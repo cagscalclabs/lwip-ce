@@ -53,7 +53,14 @@ PSK = bytes(((i * 31) + (i >> 8)) & 0xFF for i in range(32))
 PSK_IDENTITY = "lwip-ce-nettest"
 CIPHERS = {"gcm": "TLS_AES_128_GCM_SHA256", "ccm": "TLS_AES_128_CCM_SHA256", "aes256": "TLS_AES_256_GCM_SHA384"}
 GROUPS = {"x25519": "X25519", "p256": "P-256", "p384": "P-384"}
-OPENSSL_GROUPS = {"x25519": "X25519", "secp256r1": "P-256", "prime256v1": "P-256", "secp384r1": "P-384"}
+OPENSSL_GROUPS = {
+    "x25519": "X25519",
+    "p-256": "P-256",
+    "secp256r1": "P-256",
+    "prime256v1": "P-256",
+    "p-384": "P-384",
+    "secp384r1": "P-384",
+}
 ENDPOINT_POOLS = {
     # Fungible smoke tests may use a different provider. Certificate-policy
     # tests only use alternatives that exercise the same CA and key type.
@@ -87,6 +94,25 @@ SOCKET_STATUS = re.compile(r"^\s+\S+: status (\d+) err (\d+)(?: in \d+ ms)?$")
 
 def pattern(start: int, n: int) -> bytes:
     return bytes(((i * 31) + (i >> 8)) & 0xFF for i in range(start, start + n))
+
+
+def openssl_group_name(output: str, fallback: str) -> str:
+    """Normalize the TLS 1.3 group reported by different OpenSSL releases."""
+    negotiated = re.search(r"Negotiated TLS1\.3 group:\s*([^,\s]+)", output)
+    if negotiated:
+        name = negotiated.group(1)
+        return OPENSSL_GROUPS.get(name.lower(), name)
+
+    peer_key = re.search(r"Peer Temp Key:\s*([^\r\n]+)", output)
+    if peer_key:
+        # OpenSSL has emitted both "X25519, 253 bits" and
+        # "ECDH, P-256, 256 bits". Select the recognized group token rather
+        # than the generic key type at the start of the latter form.
+        for token in (part.strip() for part in peer_key.group(1).split(",")):
+            name = OPENSSL_GROUPS.get(token.lower())
+            if name:
+                return name
+    return fallback
 
 
 def log(msg: str) -> None:
@@ -744,12 +770,9 @@ class Control:
     def cmd_psk_result(self) -> str:
         out = self.wait_peer_exit()
         cipher = re.search(r"(?:CIPHER is|Ciphersuite:) (\S+)", out)
-        group = re.search(r"(?:Peer Temp Key|Negotiated TLS1.3 group): ([\w-]+)", out)
         alpn = re.search(r"ALPN protocols selected: (\S+)", out)
         if cipher:
-            # OpenSSL 3.5+ reports the group by its own name (secp256r1).
-            name = group.group(1) if group else self.last_group
-            name = OPENSSL_GROUPS.get(name.lower(), name)
+            name = openssl_group_name(out, self.last_group)
             return f"{cipher.group(1)} {name} {alpn.group(1) if alpn else '-'}"
         errors = re.findall(r"(?:error|alert)[^\n]{0,70}", out)
         log("s_server output:\n" + out)

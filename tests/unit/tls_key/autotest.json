@@ -5,7 +5,7 @@
   ],
   "target": {
     "name": "XKEY",
-    "isASM": false
+    "isASM": true
   },
   "sequence": [
     "delay|3000",

@@ -4,7 +4,7 @@
   ],
   "target": {
     "name": "XBASE64",
-    "isASM": false
+    "isASM": true
   },
   "sequence": [
     "delay|3000",
