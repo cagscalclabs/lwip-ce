@@ -57,10 +57,38 @@ jobs:
         env:
           ROM_NAME: ${{ vars.AUTOTESTER_ROM }}
         run: |
-          curl --http1.1 -fsSL \
-            --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 180 \
-            --connect-timeout 20 -o "$RUNNER_TEMP/CE.rom.enc" \
-            "https://cagscalclabs.net/restricted/$ROM_NAME.enc"
+          rom_url="https://cagscalclabs.net/restricted/$ROM_NAME.enc"
+          rom_output="$RUNNER_TEMP/CE.rom.enc"
+          rom_partial="$rom_output.part"
+
+          # Resume truncated Cloudflare/origin responses rather than
+          # discarding progress and restarting the same transfer from zero.
+          for attempt in 1 2 3 4 5 6; do
+            set +e
+            curl -fL --show-error \
+              --connect-timeout 20 --max-time 120 \
+              --speed-limit 1024 --speed-time 30 \
+              --continue-at - --output "$rom_partial" "$rom_url"
+            curl_status=$?
+            set -e
+
+            if [ "$curl_status" -eq 0 ]; then
+              mv "$rom_partial" "$rom_output"
+              chmod 600 "$rom_output"
+              echo "Encrypted ROM downloaded ($(stat -c%s "$rom_output") bytes)"
+              break
+            fi
+            if [ "$curl_status" -eq 33 ]; then
+              : > "$rom_partial"
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Encrypted ROM download failed after $attempt attempts (curl $curl_status)" >&2
+              exit "$curl_status"
+            fi
+            echo "ROM download attempt $attempt failed (curl $curl_status); resuming after backoff" >&2
+            sleep $((attempt * 3))
+          done
+          test -s "$rom_output"
 
       - name: Decrypt CEmu ROM in runner-local storage
         env:
