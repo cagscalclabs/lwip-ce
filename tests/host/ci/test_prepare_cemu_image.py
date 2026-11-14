@@ -35,7 +35,7 @@ def test_installer_commands_match_ci_sequence() -> None:
             f"send-file auto {appvar}",
             f"send-file auto {installer}",
             "run 5000",
-            "launch INSTALL asm",
+            "launch INSTALL",
         ]
         assert MODULE.installer_finish_commands(output) == [
             "key left",

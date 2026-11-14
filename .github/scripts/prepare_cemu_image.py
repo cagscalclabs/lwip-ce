@@ -273,7 +273,11 @@ def installer_commands(clibs: Path, release_dir: Path) -> list[str]:
     """Commands that stage every release file and start the installer."""
     commands = [f"send-file auto {clibs}"]
     commands.extend(f"send-file auto {path}" for path in release_files(release_dir))
-    commands.extend(["run 5000", "launch INSTALL asm"])
+    # OS 5.3+ runs native programs from prgm directly. The injected Asm( key
+    # (2-byte 0xFC9C poke) can arrive as a different token after the
+    # transfers; it typed GDB1 with the 742f61406 build and the install
+    # never started.
+    commands.extend(["run 5000", "launch INSTALL"])
     return commands
 
 
