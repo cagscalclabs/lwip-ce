@@ -188,6 +188,12 @@ When the end user runs the lwIP-CE app directly on the calculator, a configurati
      - When off, any attempt by an application to open a TLS socket fails
        immediately. Gives the end user final authority over whether the
        calculator makes encrypted connections.
+   * - Revocation checking
+     - Off by default. When on, each server certificate that names an OCSP
+       responder is checked for revocation during the TLS handshake. A
+       revoked certificate, or a responder that cannot be reached or gives an
+       invalid answer, aborts the connection. Needs a working network path to
+       the responder over plain HTTP (port 80 unless the URL says otherwise).
    * - Capture limit / Packet capture
      - Largest packet capture AppVar, and a viewer for captured packets.
 
@@ -209,8 +215,9 @@ optional runtime data. Names are shown with their exact spelling below.
      - Contents and lifecycle
    * - ``lwIPCFG``
      - The configuration wizard saves its settings.
-     - Archived configuration containing the hostname, time settings, TLS and
-       capture toggles, logging policy, and bridge options. If it is missing or
+     - Archived configuration containing the hostname, time settings, TLS,
+       revocation-checking and capture toggles, logging policy, and bridge
+       options. If it is missing or
        invalid, lwIP-CE uses defaults; the wizard recreates it when settings are
        saved.
    * - ``lwIPPCAP``

@@ -159,6 +159,12 @@ Algorithm support
 - **Truststore roots:** RSA, EC P-256, and EC P-384 anchors are accepted
   (P-384 is truststore algorithm id 3). Chain links verify RSA/SHA-256,
   ECDSA P-256/SHA-256, and ECDSA P-384/SHA-384.
+- **Revocation:** OCSP (RFC 6960), when the user enables *Revocation
+  checking* in the configuration wizard (off by default). Every presented
+  certificate that names an OCSP responder is checked while the handshake
+  waits; a revoked, unknown, unverifiable or unreachable status fails the
+  connection. CRLs are not supported because of their size, and OCSP
+  stapling is not supported. Applications cannot override the setting.
 - **Keys API:** ``tls_key_import`` accepts RSA, P-256, and P-384 keys.
   ``tls_key_sign``/``tls_key_verify`` support ECDSA P-256/SHA-256 and
   P-384/SHA-384 with RFC 6979 nonces; sign emits raw ``r||s`` and verify

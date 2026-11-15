@@ -113,9 +113,11 @@ jobs:
           RSA_MOD_MAX  = 512   # 4096 bits
           EC_P256_POINT_LEN = 65
           EC_P384_POINT_LEN = 97
+          NAME_SHA1_LEN = 20
           # Fixed-size prefix before key[]: len(4) + subject Name digest(32) +
-          # ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) = 77
-          ENTRY_FIXED_PREFIX = 4 + SUBJECT_LEN + SKI_LEN + 4 + 4 + 1
+          # ski(32) + expiry_start(4) + expiry_end(4) + alg_id(1) +
+          # SHA-1 subject Name(20) = 97
+          ENTRY_FIXED_PREFIX = 4 + SUBJECT_LEN + SKI_LEN + 4 + 4 + 1 + NAME_SHA1_LEN
           INDEX_ENTRY_LEN = 32 + 2  # fixed key plus uint16 metadata offset
 
           def run_cmd(args, input_bytes=None):
@@ -159,8 +161,10 @@ jobs:
                   raise RuntimeError("truncated DER value")
               return tag, pos, end
 
-          def extract_subject_name_digest(path):
-              """SHA-256 over the exact DER Subject Name TLV from Certificate."""
+          def extract_subject_name_digests(path):
+              """SHA-256 and SHA-1 over the exact DER Subject Name TLV. The
+              SHA-1 is the OCSP CertID issuerNameHash for certificates the
+              root issues."""
               cert = run_cmd(["openssl", "x509", "-in", path, "-outform", "DER"])
               tag, cert_body, cert_end = der_tlv(cert, 0)
               if tag != 0x30 or cert_end != len(cert):
@@ -179,7 +183,42 @@ jobs:
               tag, _value, subject_end = der_tlv(cert, subject_start)
               if tag != 0x30 or subject_end > tbs_end:
                   raise RuntimeError("missing Subject Name")
-              return hashlib.sha256(cert[subject_start:subject_end]).digest()
+              name = cert[subject_start:subject_end]
+              return hashlib.sha256(name).digest(), hashlib.sha1(name).digest()
+
+          def der_header(tag, length):
+              if length < 0x80:
+                  return bytes([tag, length])
+              if length < 0x100:
+                  return bytes([tag, 0x81, length])
+              return bytes([tag, 0x82, length >> 8, length & 0xFF])
+
+          def der_uint(value):
+              value = value.lstrip(b"\0") or b"\0"
+              if value[0] & 0x80:
+                  value = b"\0" + value
+              return der_header(0x02, len(value)) + value
+
+          def check_ocsp_key_hash(pubkey_der, key_type, key_bytes):
+              """The calculator derives the OCSP issuerKeyHash from key[]
+              (tls_ocsp_hash_key). Require that derivation to equal SHA-1 of
+              the certificate's real subjectPublicKey BIT STRING value."""
+              tag, spki_body, spki_end = der_tlv(pubkey_der, 0)
+              if tag != 0x30 or spki_end != len(pubkey_der):
+                  raise RuntimeError("invalid SubjectPublicKeyInfo")
+              _tag, _value, pos = der_tlv(pubkey_der, spki_body)  # algorithm
+              tag, bits, bits_end = der_tlv(pubkey_der, pos)
+              if tag != 0x03 or bits_end != spki_end or pubkey_der[bits] != 0:
+                  raise RuntimeError("invalid subjectPublicKey BIT STRING")
+              expected = hashlib.sha1(pubkey_der[bits + 1:bits_end]).digest()
+              if key_type == "rsa":
+                  # RSAPublicKey ::= SEQUENCE { modulus, publicExponent }
+                  ints = der_uint(key_bytes[3:]) + der_uint(key_bytes[2::-1])
+                  derived = hashlib.sha1(der_header(0x30, len(ints)) + ints).digest()
+              else:
+                  derived = hashlib.sha1(key_bytes).digest()
+              if derived != expected:
+                  raise RuntimeError("stored key does not reproduce the OCSP issuerKeyHash")
 
           def parse_subject_and_dates(path):
               meta = run_cmd([
@@ -280,7 +319,7 @@ jobs:
               for path in cert_paths:
                   try:
                       subject_cn, not_before, not_after = parse_subject_and_dates(path)
-                      subject_digest = extract_subject_name_digest(path)
+                      subject_digest, name_sha1 = extract_subject_name_digests(path)
                       ski = extract_ski(path)
 
                       pubkey_pem = run_cmd(["openssl", "x509", "-in", path, "-pubkey", "-noout"])
@@ -306,6 +345,7 @@ jobs:
                       if key_type not in KEY_TYPE_TO_SERIALIZED_ID:
                           raise RuntimeError(f"key type {key_type} not in allowed list")
                       sig_alg = KEY_TYPE_TO_SERIALIZED_ID[key_type]
+                      check_ocsp_key_hash(pubkey_der, key_type, key_bytes)
 
                   except Exception as e:
                       print(f"  skip {path}: {e}", flush=True)
@@ -325,6 +365,7 @@ jobs:
                       not_after,
                       sig_alg,
                       key_bytes,
+                      name_sha1,
                   )
 
               return [entries[k] for k in sorted(entries.keys())], exclusions
@@ -347,12 +388,12 @@ jobs:
 
           created_ts = int(time.time())
           entry_count = len(entries)
-          version = 3
+          version = 4
           header_fields = struct.pack("<H", version) + struct.pack("<IH", created_ts, entry_count)
 
           entry_bytes = bytearray()
           metadata_offsets = []
-          for subject_digest, _subject_cn, ski, not_before, not_after, sig_alg, key_bytes in entries:
+          for subject_digest, _subject_cn, ski, not_before, not_after, sig_alg, key_bytes, name_sha1 in entries:
               if len(entry_bytes) > 0xFFFF:
                   raise RuntimeError("truststore metadata offset exceeds uint16")
               metadata_offsets.append(len(entry_bytes))
@@ -363,6 +404,7 @@ jobs:
               entry_bytes.extend(struct.pack("<I", not_before))    # expiry_start (uint32_t)
               entry_bytes.extend(struct.pack("<I", not_after))     # expiry_end (uint32_t)
               entry_bytes.extend(struct.pack("B", sig_alg))        # alg_id (uint8_t)
+              entry_bytes.extend(name_sha1)                        # SHA-1(DER Subject Name)
               entry_bytes.extend(key_bytes)                        # key[]
 
           if len(entry_bytes) > 0xFFFF:
@@ -429,9 +471,9 @@ jobs:
           print(f"bin={bin_path}")
 
           with open(notes_path, "w", encoding="utf-8") as notes:
-              notes.write("Truststore schema: **v3** (indexed SKI/full-Name-digest metadata lookup).\n\n")
+              notes.write("Truststore schema: **v4** (indexed SKI/full-Name-digest metadata lookup; per-root OCSP issuer Name hash).\n\n")
               notes.write("This release includes the following CA roots:\n\n")
-              for _digest, subject_cn, _ski, not_before, not_after, sig_alg, _key in entries:
+              for _digest, subject_cn, _ski, not_before, not_after, sig_alg, _key, _name_sha1 in entries:
                   subj = subject_cn
                   alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
                   nb = datetime.utcfromtimestamp(not_before).strftime("%Y-%m-%d")
@@ -446,7 +488,7 @@ jobs:
 
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as summary:
-                  summary.write(f"## Truststore Build Summary (v3)\n\n")
+                  summary.write(f"## Truststore Build Summary (v4)\n\n")
                   summary.write(f"{len(entries)} accepted, {len(exclusions)} excluded\n\n")
 
                   summary.write("### Allowed key types\n\n")
@@ -459,7 +501,7 @@ jobs:
                   summary.write("### Accepted roots\n\n")
                   summary.write("Subject | SKI (hex) | Not Before | Not After | Key type\n")
                   summary.write("--- | --- | --- | --- | ---\n")
-                  for _digest, subject_cn, ski, not_before, not_after, sig_alg, _key in entries:
+                  for _digest, subject_cn, ski, not_before, not_after, sig_alg, _key, _name_sha1 in entries:
                       subj = subject_cn
                       ski_hex = ski.hex()[:16] + "..."
                       alg_name = ID_TO_DISPLAY.get(sig_alg, f"0x{sig_alg:02x}")
@@ -481,7 +523,7 @@ jobs:
         run: |
           convbin -i truststore_out/lwIPCERT.bin -o truststore_out/lwIPCERT.8xv -j bin -k 8xv -n lwIPCERT -r
 
-      - name: Validate truststore v3 layout
+      - name: Validate truststore v4 layout
         run: |
           python3 - <<'PY'
           import struct
@@ -493,12 +535,12 @@ jobs:
           HEADER_LEN = SIGNATURE_LEN + 2 + 4 + 2
           KEY_LEN = 32
           INDEX_ENTRY_LEN = KEY_LEN + 2
-          ENTRY_PREFIX_LEN = 4 + 32 + 32 + 4 + 4 + 1
+          ENTRY_PREFIX_LEN = 4 + 32 + 32 + 4 + 4 + 1 + 20
 
           if len(blob) < HEADER_LEN:
-              raise RuntimeError("truststore shorter than v3 header")
+              raise RuntimeError("truststore shorter than v4 header")
           version, _created, count = struct.unpack_from("<HIH", blob, SIGNATURE_LEN)
-          if version != 3 or count == 0:
+          if version != 4 or count == 0:
               raise RuntimeError("invalid truststore version or empty index")
 
           index_len = count * INDEX_ENTRY_LEN
@@ -546,7 +588,7 @@ jobs:
           if subject_order != sorted(subject_order):
               raise RuntimeError("subject index is not sorted by subject and SKI")
 
-          print(f"validated truststore v3: {count} entries, {len(blob)} bytes")
+          print(f"validated truststore v4: {count} entries, {len(blob)} bytes")
           PY
 
       - name: Verify truststore signature

@@ -294,7 +294,13 @@ mem_malloc(mem_size_t size)
  */
 void mem_free(void *rmem)
 {
-  LWIP_ASSERT("rmem != NULL", (rmem != NULL));
+  /* Match the lwIP heap mem_free() and libc free(): NULL is a no-op. Here
+   * LWIP_ASSERT is fatal (exit after lwip_fatal_cleanup), not a debug check. */
+  if (rmem == NULL)
+  {
+    LWIP_DEBUGF(MEM_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_LEVEL_SERIOUS, ("mem_free(p == NULL) was called.\n"));
+    return;
+  }
   LWIP_ASSERT("rmem == MEM_ALIGN(rmem)", (rmem == LWIP_MEM_ALIGN(rmem)));
 #if LWIP_STATS && MEM_STATS
   rmem = (u8_t *)rmem - MEM_LIBC_STATSHELPER_SIZE;

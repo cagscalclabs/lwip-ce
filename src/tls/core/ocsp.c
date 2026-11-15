@@ -7,6 +7,7 @@
 #include "../includes/ocsp.h"
 #include "../includes/x509.h"
 #include "x509_internal.h"
+#include "ocsp_internal.h"
 
 #define LWIP_DBG_FILE_ID LWIP_FILE_OCSP
 #define LWIP_DBG_MODULE  LWIP_DBG_MOD_TLS
@@ -291,6 +292,64 @@ bool tls_ocsp_hash_issuer(const uint8_t *issuer_name,  size_t issuer_name_len,
 
     return sha1_oneshot(issuer_name, issuer_name_len, name_hash) &&
            sha1_oneshot(issuer_key,  issuer_key_len,   key_hash);
+}
+
+/* Strip leading zero octets; report whether DER INTEGER needs a 0x00 pad. */
+static const uint8_t *der_uint_trim(const uint8_t *v, size_t *len, bool *pad)
+{
+    while (*len > 1 && *v == 0)
+    {
+        v++;
+        (*len)--;
+    }
+    *pad = (*v & 0x80u) != 0;
+    return v;
+}
+
+bool tls_ocsp_hash_key(const struct tls_key *key, uint8_t key_hash[OCSP_SHA1_LEN])
+{
+    const uint8_t *mod, *exp;
+    size_t mod_len, exp_len, mod_int, exp_int;
+    bool mod_pad, exp_pad;
+    uint8_t hdr[4];
+    sha1_ctx_t *ctx;
+
+    if (!key || !key_hash)
+        return false;
+    /* issuerKeyHash covers the subjectPublicKey BIT STRING value without the
+     * unused-bits octet: the EC point itself, or a DER RSAPublicKey. */
+    if (key->type == TLS_KEY_TYPE_EC_P256 || key->type == TLS_KEY_TYPE_EC_P384)
+        return key->ec.pub && key->ec.len &&
+               sha1_oneshot(key->ec.pub, key->ec.len, key_hash);
+    if (key->type != TLS_KEY_TYPE_RSA || !key->rsa.modulus || !key->rsa.mod_len ||
+        !key->rsa.exponent || !key->rsa.exp_len)
+        return false;
+
+    /* RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER } */
+    mod_len = key->rsa.mod_len;
+    exp_len = key->rsa.exp_len;
+    mod = der_uint_trim(key->rsa.modulus, &mod_len, &mod_pad);
+    exp = der_uint_trim(key->rsa.exponent, &exp_len, &exp_pad);
+    mod_int = mod_len + (mod_pad ? 1u : 0u);
+    exp_int = exp_len + (exp_pad ? 1u : 0u);
+
+    ctx = tls_fileio_alloc(sizeof(*ctx));
+    if (!ctx)
+        return false;
+    sha1_init(ctx);
+    sha1_update(ctx, hdr, der_write_header(hdr, 0x30,
+                                           der_tlv_size(mod_int) + der_tlv_size(exp_int)));
+    sha1_update(ctx, hdr, der_write_header(hdr, 0x02, mod_int));
+    if (mod_pad)
+        sha1_update(ctx, (const uint8_t *)"", 1);
+    sha1_update(ctx, mod, mod_len);
+    sha1_update(ctx, hdr, der_write_header(hdr, 0x02, exp_int));
+    if (exp_pad)
+        sha1_update(ctx, (const uint8_t *)"", 1);
+    sha1_update(ctx, exp, exp_len);
+    sha1_final(ctx, key_hash);
+    tls_fileio_free(ctx);
+    return true;
 }
 
 /* -----------------------------------------------------------------------

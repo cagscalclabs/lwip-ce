@@ -6,7 +6,6 @@ on:
       - master
     paths:
       - docs/**
-      - src/**
       - exports.txt
       - build-tools/scripts/generate_lwip_headers.py
       - build-tools/scripts/header_dump.py

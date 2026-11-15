@@ -159,3 +159,10 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - Implement SHA-512 and SHA-384.
 - Expose `aes-256-gcm-sha384` as a viable ciphersuite.
 - Implement `secp384r1` sign, verify, keygen, and ecdhe. This curve is only exposed as a Certificate/CertificateVerify algorithm and it's last in list. It is also exposed in the keys API as a sign/verify algorithm. It is NOT exposed as an ECDHE key share or an mTLS signing algorithm.
+
+## v3.2.0
+
+- (Feature/TLS) OCSP certificate revocation checking (RFC 6960), opt-in via the app config (`ocsp_enabled`, default off). Each presented certificate with an OCSP responder URL is checked over HTTP while the handshake waits, including the topmost certificate, whose issuer is its truststore root. Responses must be signed by the issuer or a delegated responder and be fresh. Checking fails closed: a revoked certificate aborts with `certificate_revoked`; an unknown, invalid, oversized or unreachable response aborts with `bad_certificate`. CRL checking is out of scope because of CRL payload sizes.
+- OCSP runs asyncronously similarly to certificate-chain link verification; job queue can grow up the implementation's max chain depth of 8.
+- (Breaking/Truststore) The truststore format is now v4: each root entry carries the SHA-1 of its subject Name, used to build OCSP requests. **Update `lwIPCERT` together with this release.** v3.2.0 rejects a v3 truststore, and older releases reject a v4 truststore.
+- (Fix/Memory) `mem_free(NULL)` is now a no-op, as in libc and upstream lwIP's heap allocator.

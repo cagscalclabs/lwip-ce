@@ -456,8 +456,12 @@ static void test_suite_forced(const char *suite_name, const char *cipher_arg,
 }
 
 
+/* server is the suite-server request. The default chain carries the CA, so
+ * the leaf's issuer is presented; "leaf" sends the leaf alone, so its OCSP
+ * issuer is the truststore root. */
 static void test_ocsp_case(const char *name, const char *status,
-                           bool want_connected, bool want_request)
+                           const char *server, bool want_connected,
+                           bool want_request)
 {
     struct lwip_socket *sock;
     char command[32], result[96], count[16];
@@ -465,7 +469,7 @@ static void test_ocsp_case(const char *name, const char *status,
 
     snprintf(command, sizeof(command), "ocsp-mode %s", status);
     if (!check(name, host_call(command, NULL, 0, 5000) &&
-                     host_call("suite-server gcm ecdsa", NULL, 0, 15000)))
+                     host_call(server, NULL, 0, 15000)))
         return;
 
     sock = lwip_socket_create(LWIP_SOCKET_ALTCP_TLS, LWIP_NETIF_EXT, NULL,
@@ -498,10 +502,12 @@ static void test_ocsp_case(const char *name, const char *status,
     snprintf(line, sizeof(line), "%s peer result", name);
     if (check(line, host_call("suite-result", result, sizeof(result), 10000)))
     {
-        check(want_connected ? "OCSP peer completed handshake"
-                             : "OCSP peer received revoked alert",
-              want_connected ? strstr(result, "handshake completed") != NULL
-                             : strstr(result, "CERTIFICATE_REVOKED") != NULL);
+        snprintf(line, sizeof(line), want_connected
+                     ? "%s peer completed handshake"
+                     : "%s peer received revoked alert", name);
+        check(line, want_connected
+                        ? strstr(result, "handshake completed") != NULL
+                        : strstr(result, "CERTIFICATE_REVOKED") != NULL);
     }
 }
 
@@ -547,7 +553,11 @@ int main(void)
             test_ocsp_case(revoked ? "OCSP revoked checking on"
                                     : "OCSP good checking on",
                            revoked ? "revoked" : "good",
-                           !revoked, true);
+                           "suite-server gcm ecdsa", !revoked, true);
+            test_ocsp_case(revoked ? "OCSP revoked leaf-only"
+                                    : "OCSP good leaf-only",
+                           revoked ? "revoked" : "good",
+                           "suite-server gcm ecdsa leaf", !revoked, true);
             return net_end();
         }
 
@@ -568,7 +578,8 @@ int main(void)
                   host_call("local-trust", local_trust, sizeof(local_trust), 5000) &&
                   local_trust[0] == '1'))
         {
-            test_ocsp_case("OCSP good checking off", "good", true, false);
+            test_ocsp_case("OCSP good checking off", "good",
+                           "suite-server gcm ecdsa", true, false);
             test_suite_forced("AES-128-GCM-SHA256", "gcm", "ecdsa");
             test_suite_forced("AES-128-GCM-SHA256", "gcm", "rsa");
             test_suite_forced("AES-128-CCM-SHA256", "ccm", "ecdsa");

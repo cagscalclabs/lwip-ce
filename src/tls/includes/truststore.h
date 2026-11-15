@@ -23,12 +23,15 @@
 
 #define TLS_TRUSTSTORE_SUBJECT_LEN  32
 #define TLS_TRUSTSTORE_SKI_LEN      32
-#define TLS_TRUSTSTORE_VERSION      3
+#define TLS_TRUSTSTORE_NAME_SHA1_LEN 20
+#define TLS_TRUSTSTORE_VERSION      4
 
-/* Version 3 stores two fixed-width lookup indexes before the variable-length
+/* The store holds two fixed-width lookup indexes before the variable-length
  * metadata block. Each index record is key[32] followed by a little-endian
  * uint16 offset relative to the start of the metadata block. The subject key
- * is SHA-256 over the complete DER-encoded X.509 Name. */
+ * is SHA-256 over the complete DER-encoded X.509 Name. Version 4 adds the
+ * SHA-1 of that Name to each entry, the OCSP CertID issuerNameHash for
+ * certificates issued by the root; the issuerKeyHash is derived from key[]. */
 #define TLS_TRUSTSTORE_INDEX_KEY_LEN    32
 #define TLS_TRUSTSTORE_INDEX_ENTRY_LEN  (TLS_TRUSTSTORE_INDEX_KEY_LEN + 2u)
 
@@ -85,6 +88,7 @@ struct tls_truststore_entry
     uint32_t expiry_start;                  /* notBefore Unix timestamp (uint32_t) */
     uint32_t expiry_end;                    /* notAfter  Unix timestamp (uint32_t) */
     uint8_t  alg_id;                        /* tls_cert_sig_alg_t */
+    uint8_t  name_sha1[TLS_TRUSTSTORE_NAME_SHA1_LEN]; /* SHA-1(DER Subject Name), OCSP issuerNameHash */
     uint8_t  key[];                         /* variable-length public key bytes */
 };
 

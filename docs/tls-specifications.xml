@@ -1791,15 +1791,15 @@
   <requirement>
     <ref>RFC 5280</ref>
     <section>6.1.3(a)(3) / 6.3 (revocation status)</section>
-    <location>src/tls/core/handshake.c: tls_cert_walker_feed CW_EXT_BODY - revocation</location>
+    <location>src/tls/core/handshake.c: tls_cert_walker_validate_one / tls_cert_job_enqueue / tls_cert_job_root_ocsp_issuer / tls_cert_jobs_step_ocsp / tls_ocsp_job_done, tls_cert_walker_feed CW_EXT_LEN - revocation; src/tls/core/ocsp.c: tls_x509_get_ocsp_url / tls_ocsp_hash_key / tls_ocsp_build_request / tls_ocsp_parse_response; src/tls/includes/truststore.h: tls_truststore_entry.name_sha1; .github/workflows/truststore.yml: check_ocsp_key_hash; src/apps/altcp_tls/altcp_tls_ocsp.c - HTTP transport; tests/host/tls_ocsp/test_ocsp.py; tests/net/tls/src/main.c - OCSP good/revoked</location>
     <grade>DEVIANT</grade>
-    <note>Revocation deliberately not implemented: no CRL or OCSP checking is performed. A CertificateEntry that carries extensions (for example a stapled OCSP response, which this client never requests) is rejected with a fatal unsupported_extension alert rather than ignored, so such a server cannot complete the handshake with this client.</note>
-    <justification>Not achievable on this platform; permanently out of scope. CRL distribution points are fetched over HTTP, which requires a working network connection — circular for a TLS stack that has not yet completed a handshake. Delta-CRL storage requires persistent memory the platform does not reliably provide. OCSP stapling would require the server to cooperate, is not universally deployed, and the response still requires signature verification over an untrusted network before keys are established.</justification>
+    <note>Revocation is implemented via OCSP (RFC 6960) only; CRL processing is not implemented. OCSP is opt-in (lwIPCFG ocsp_enabled, default off). When enabled, each presented certificate that carries an AIA id-ad-ocsp URL is checked after its signature verifies. The CertID issuer is the next presented certificate or, for the topmost certificate, its truststore anchor: v4 truststore entries carry SHA-1(subject Name) for issuerNameHash, and issuerKeyHash is derived from the stored key (re-encoded RSAPublicKey or the EC point; the truststore build rejects any root whose derivation does not reproduce its real SubjectPublicKeyInfo hash). A self-issued topmost certificate is a presented trust anchor and is not checked. A SHA-1 CertID request is POSTed over plain HTTP to the responder while the handshake is held, and the response must be signed by the issuer or by a delegated responder certificate (issued by that issuer, id-kp-OCSPSigning, within validity), match the CertID, and be fresh (thisUpdate/nextUpdate with 300 s skew; 24 h maximum age without nextUpdate). Fail-closed: revoked aborts with certificate_revoked; unknown, unparseable, unauthenticated, oversized (over 4096 bytes), or unreachable (10 s timeout) responses abort with bad_certificate. Gaps: no request nonce is sent, and freshness relies on unauthenticated SNTP time. Stapling is not supported: a CertificateEntry that carries extensions (for example a stapled OCSP response, which this client never requests) is rejected with a fatal unsupported_extension alert.</note>
+    <justification>CRL checking is out of scope because of payload size. A CA's full CRL routinely runs from tens of kilobytes to megabytes and must be downloaded and held in full to verify its signature before any entry can be trusted. That exceeds the platform's heap and is impractical over this link during a handshake. Delta CRLs would also require persistent storage the platform does not reliably provide. OCSP answers for a single certificate in one small signed response (bounded here at 4096 bytes), so it is the only revocation mechanism that fits these limits.</justification>
 
     <reviews>
       <reviewed-by>
         <person>Anthony Cagliano</person>
-      <note>2026-10-27 audit: corrected: CertificateEntry extensions are rejected, not skipped.</note>
+      <note>2026-10-27 audit: corrected: CertificateEntry extensions are rejected, not skipped. 2026-11-15: revised: OCSP revocation implemented (opt-in, fail-closed); CRL out of scope due to payload size. 2026-11-15: topmost certificate now OCSP-checked against its truststore anchor (truststore v4).</note>
       </reviewed-by>
     </reviews>
   </requirement>
@@ -3228,7 +3228,7 @@
     <grade>COMPLIANT</grade>
     <note>Protocol glue is correct (CertificateVerify and Finished mandatory) and the separate PKI
       pass found chain anchoring fail-closed, but the overall property rests on the PKI deviations
-      recorded under RFC 5280 (exact-DER rather than normalized X.500 Name comparison, no revocation, no path building) and has no
+      recorded under RFC 5280 (exact-DER rather than normalized X.500 Name comparison, opt-in OCSP-only revocation with no CRL, no path building) and has no
       end-to-end RFC 8448 handshake vector.</note>
 
     <reviews>

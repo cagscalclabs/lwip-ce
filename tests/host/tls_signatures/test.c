@@ -735,7 +735,7 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     w->cert_buf_len = w->cert_buf_cap = n;
     mem_stats_tls_direct_add(n, n);
     assert(tls_cert_walker_validate_one(w));
-    assert(w->pending_sig_alg == expected);
+    assert(w->link.pending_sig_alg == expected);
     assert(ctx.leaf_pubkey.allocated && ctx.leaf_pubkey.rsa.mod_len == 256);
     assert(ctx.leaf_pubkey.rsa.exponent[0] == 1);
     // One imported/captured RSA key, two independent signature operations.
@@ -760,25 +760,25 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     root_entry->len = sizeof(*root_entry) + 259;
     root_entry->alg_id = expected == TLS_ALG_RSA_PKCS1_SHA256
         ? TLS_CERT_SIG_RSA_PSS_SHA256 : TLS_CERT_SIG_RSA_PKCS1_SHA256;
-    memcpy(root_entry->subject, w->pending_issuer_name_digest,
+    memcpy(root_entry->subject, w->link.pending_issuer_name_digest,
            TLS_TRUSTSTORE_SUBJECT_LEN);
     root_entry->key[0] = root_entry->key[2] = 1;
     memset(root_entry->key + 3, 0x81, 256);
     struct tls_truststore_entry *wrong_root = calloc(1, sizeof(*wrong_root) + 259);
     wrong_root->len = sizeof(*wrong_root) + 259;
     wrong_root->alg_id = root_entry->alg_id;
-    memcpy(wrong_root->subject, w->pending_issuer_name_digest,
+    memcpy(wrong_root->subject, w->link.pending_issuer_name_digest,
            TLS_TRUSTSTORE_SUBJECT_LEN);
     wrong_root->key[0] = wrong_root->key[2] = 1;
     memset(wrong_root->key + 3, 0x82, 256);
     root_candidates[0] = wrong_root;
     root_candidates[1] = root_entry;
     root_candidate_count = 2;
-    if (w->topmost_authority_key_id_present)
+    if (w->link.topmost_authority_key_id_present)
     {
         uint8_t alert = 0;
         root_entry->subject[0] ^= 1;
-        assert(!tls_cert_anchor_root(w, &alert));
+        assert(!tls_cert_anchor_root(w->ctx, &w->link, &alert, NULL));
         assert(alert == TLS_ALERT_UNKNOWN_CA);
         root_entry->subject[0] ^= 1;
     }
@@ -805,12 +805,12 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     root_candidate_count = 0;
     free(wrong_root);
     // The root job took the walker's signature; give it a fresh valid one.
-    assert(w->pending_sig == NULL && w->pending_link);
-    w->pending_sig = malloc(256);
+    assert(w->link.pending_sig == NULL && w->link.pending_link);
+    w->link.pending_sig = malloc(256);
     mem_stats_tls_direct_add(256, 256);
-    memset(w->pending_sig, expected == TLS_ALG_RSA_PKCS1_SHA256 ? 0x11 : 0x22, 256);
-    w->pending_sig_len = 256;
-    w->pending_sig[0] ^= 1;
+    memset(w->link.pending_sig, expected == TLS_ALG_RSA_PKCS1_SHA256 ? 0x11 : 0x22, 256);
+    w->link.pending_sig_len = 256;
+    w->link.pending_sig[0] ^= 1;
     ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
     ctx.fatal_alert_sent = false; /* synthetic second connection phase */
     last_alert = 0;
@@ -828,15 +828,20 @@ static void chain(const uint8_t *der, size_t n, tls_alg_t expected)
     assert(tls_cert_walker_validate_one(w));
     assert(!drain_jobs(&ctx));
     assert(!tls_cert_jobs_pending(&ctx));
-    // Queue bound: a full queue runs the oldest job inline.
-    for (int i = 0; i < 6; i++)
+    // Queue bound: jobs accumulate one per link up to the chain cap without
+    // running any inline (so each can start an OCSP lookup); one more fails
+    // closed and leaves the queue intact.
+    ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
+    w->link.pending_link = true;
+    for (unsigned i = 0; i < TLS_CERT_CHAIN_MAX; i++)
     {
-        ctx.state = TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED;
-        root_candidate_count = 0;
-        assert(tls_cert_walker_validate_one(w) || true);
-        assert(ctx.cert_jobs_count <= TLS_CERT_JOB_MAX);
-        (void)drain_jobs(&ctx);
+        unsigned before = pkcs_calls + pss_calls;
+        assert(tls_cert_job_enqueue(w, &ctx.leaf_pubkey));
+        assert(ctx.cert_jobs_count == i + 1);
+        assert(pkcs_calls + pss_calls == before);
     }
+    assert(!tls_cert_job_enqueue(w, &ctx.leaf_pubkey));
+    assert(ctx.cert_jobs_count == TLS_CERT_CHAIN_MAX);
     // Cleanup frees whatever is still queued (accounting checked below).
     assert(tls_cert_walker_validate_one(w) || true);
     assert(tls_hs_defer_bytes(&ctx, (const uint8_t *)"q", 1));
@@ -1228,7 +1233,7 @@ int main(void)
     /* Chain-policy distinction: a correctly-sized signature under an RSA key
      * wider than the platform cap is unsupported, while a width mismatch is
      * invalid and must remain fail-closed. */
-    struct tls_cert_walker pending = {0};
+    struct tls_cert_link pending = {0};
     uint8_t rsa_oversize_modulus[RSA_MODULUS_MAX_SUPPORTED + 1] = {0};
     uint8_t rsa_exponent[] = {1, 0, 1};
     struct tls_key rsa_oversize = {
@@ -1244,17 +1249,17 @@ int main(void)
     pending.pending_sig_omitted = true;
     pending.pending_sig_alg = TLS_ALG_RSA_PKCS1_SHA256;
     pending.pending_sig_len = sizeof(rsa_oversize_modulus);
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
+    assert(tls_cert_verify_pending_link(NULL, &pending, &rsa_oversize, false) ==
            TLS_KEY_OP_UNSUPPORTED);
     pending.pending_sig_len = 256;
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
+    assert(tls_cert_verify_pending_link(NULL, &pending, &rsa_oversize, false) ==
            TLS_KEY_OP_INVALID);
 
     /* A structurally accepted but unknown signature OID follows the same
      * temporary unsupported-operation policy without retaining its bytes. */
     pending.pending_sig_alg = TLS_ALG_UNKNOWN;
     pending.pending_sig_len = 384;
-    assert(tls_cert_verify_pending_link(&pending, &rsa_oversize, false) ==
+    assert(tls_cert_verify_pending_link(NULL, &pending, &rsa_oversize, false) ==
            TLS_KEY_OP_UNSUPPORTED);
 
     struct tls_handshake_context ctx;

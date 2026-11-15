@@ -364,9 +364,12 @@ Security Posture
    * - TLS trust store
      - A curated trust store derived from CA material staged on a common Linux
        box, shipped as a signed AppVar and verified with RSA-PSS-SHA256 against
-       an embedded public key at ``tls_truststore_init``. Schema v3 uses signed,
+       an embedded public key at ``tls_truststore_init``. Schema v4 uses signed,
        fixed-width SKI and full DER subject-Name-digest indexes containing validated offsets into a
-       variable-length root-metadata block. Normal anchoring binary-searches the
+       variable-length root-metadata block. Each root entry also carries the
+       SHA-1 of its subject Name (the OCSP issuerNameHash), so a certificate the
+       root issues directly can be OCSP-checked; the issuerKeyHash is derived
+       from the stored key. Normal anchoring binary-searches the
        root SKI from the certificate's AKI and verifies the complete issuer Name;
        subject-Name-digest lookup is the fail-closed fallback when AKI is absent
        (see Certificate chain below).
@@ -383,6 +386,23 @@ Security Posture
        key is RSA (PSS or PKCS#1-SHA256) or ECDSA P-256, the root signature is
        verified for real -- a bad signature is an ``ERROR`` and aborts. If the
        root entry is absent or uses an unsupported algorithm the handshake fails-closed as of ``v3.0.0-rc1``.
+
+   * - Certificate revocation
+     - OCSP (RFC 6960), opt-in through the configuration wizard (off by
+       default). After a certificate's signature verifies, the handshake is
+       held while a SHA-1 CertID request goes to the responder in its AIA
+       extension over plain HTTP. The issuer is the next presented
+       certificate or, for the topmost certificate, its truststore root. The
+       response must be signed by the issuer or a delegated responder,
+       match the CertID, and be fresh (5-minute skew, 24-hour maximum age
+       without ``nextUpdate``). Checking fails closed: ``revoked`` aborts
+       with ``certificate_revoked``; ``unknown``, malformed, unauthenticated,
+       oversized (over 4 KiB) or unreachable (10 s timeout) aborts with
+       ``bad_certificate``. A self-signed root presented by the server is
+       not checked. Known limits: no request nonce, freshness relies on
+       unauthenticated SNTP time, and no stapling. CRLs are out of scope:
+       a full CRL can be megabytes and must be held in full to verify its
+       signature.
 
    * - CertificateVerify
      - ``CertificateVerify`` is mandatory. Both ``rsa_pss_rsae_sha256``

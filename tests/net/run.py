@@ -637,20 +637,28 @@ class Control:
     def cmd_tls_bad_result(self) -> str:
         return ",".join(TLSBad.outcomes) or "none"
 
-    def cmd_suite_server(self, cipher: str, key_type: str = "ecdsa") -> str:
-        """Serve a runner-local CA-signed chain with a forced TLS 1.3 suite."""
+    def cmd_suite_server(self, cipher: str, key_type: str = "ecdsa",
+                         chain: str = "full") -> str:
+        """Serve a runner-local CA-signed chain with a forced TLS 1.3 suite.
+
+        chain "leaf" omits the CA certificate, so the client anchors the leaf
+        directly to its truststore root.
+        """
         if cipher not in CIPHERS:
             return f"ERR unknown cipher {cipher!r}"
         if key_type not in ("ecdsa", "rsa"):
             return f"ERR unknown certificate key type {key_type!r}"
+        if chain not in ("full", "leaf"):
+            return f"ERR unknown chain {chain!r}"
         if self.peer:
             self.peer.stop()
         cert, key = self.fixtures[key_type]
         ca_cert, _ = self.fixtures["ca"]
         args = ["s_server", "-accept", "7100", "-naccept", "1",
-                "-cert", str(cert), "-key", str(key),
-                "-cert_chain", str(ca_cert),
-                "-tls1_3", "-ciphersuites", CIPHERS[cipher]]
+                "-cert", str(cert), "-key", str(key)]
+        if chain == "full":
+            args += ["-cert_chain", str(ca_cert)]
+        args += ["-tls1_3", "-ciphersuites", CIPHERS[cipher]]
         self.peer = OpenSSL(args, self.tmp, "ACCEPT")
         if not self.peer.ready.wait(10):
             return f"ERR suite s_server did not start: {self.peer.output[-80:]}"

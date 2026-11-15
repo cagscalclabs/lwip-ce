@@ -810,3 +810,4 @@ func,tls_x509_get_ocsp_url,cryptography,src/tls/includes/ocsp.h,lwip/cryptograph
 func,tls_ocsp_hash_issuer,cryptography,src/tls/includes/ocsp.h,lwip/cryptography/ocsp.h
 func,tls_ocsp_build_request,cryptography,src/tls/includes/ocsp.h,lwip/cryptography/ocsp.h
 func,tls_ocsp_free,cryptography,src/tls/includes/ocsp.h,lwip/cryptography/ocsp.h
+macro,TLS_TRUSTSTORE_NAME_SHA1_LEN,cryptography,src/tls/includes/truststore.h,lwip/cryptography/truststore.h

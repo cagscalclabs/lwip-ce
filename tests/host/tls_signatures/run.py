@@ -349,7 +349,7 @@ source += key_source[key_source.index('/* --------------------------------------
                      key_source.index('/* ---------------------------------------------------------------------------\n * AES one-shot encrypt')]
 for name in ['tls_cipher_blob_free', 'tls_cipher_encrypt', 'tls_cipher_encrypt_aad']:
     source += function(key_source, name)
-source += '#include "ocsp.h"\n'
+source += '#include "ocsp.h"\n#include "ocsp_internal.h"\n'
 source += hs[hs.index('enum tls_cert_walk_state'):hs.index('/* Feed body bytes into the walker.')]
 
 # Certificate-chain splitting used when a cert listener/client config loads its

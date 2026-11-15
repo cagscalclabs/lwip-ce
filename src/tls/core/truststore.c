@@ -50,6 +50,7 @@
  *    uint32_t expiry_start;              // notBefore Unix timestamp
  *    uint32_t expiry_end;                // notAfter  Unix timestamp
  *    uint8_t  alg_id;                    // tls_cert_sig_alg_t
+ *    uint8_t  name_sha1[20];             // SHA-1(DER Subject Name), v4+
  *    uint8_t  key[];                     // raw public key bytes (RSA exp+mod, or EC point)
  *
  * Root anchoring: a chain's topmost cert normally selects a root by matching

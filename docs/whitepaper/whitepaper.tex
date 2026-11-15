@@ -1137,8 +1137,9 @@ for (uint8_t i = 0; i < count; i++) {
 			\item The expiry timestamps (not-before, not-after)
 			\item The signature algorithm class (RSA-PSS/SHA-256, RSA-PKCS\#1~v1.5/SHA-256, or ECDSA-P-256/SHA-256), recorded as a compact internal code rather than an ASN.1 OID
 			\item The raw public key material used by the root-anchoring RSA verification described above
+			\item The SHA-1 digest of the complete DER-encoded subject Name, the OCSP \texttt{issuerNameHash} for certificates the root issues directly. The matching \texttt{issuerKeyHash} is derived on the device from the stored key; the build drops any root whose stored key does not reproduce the hash of its real \texttt{SubjectPublicKeyInfo}.
 		\end{itemize}
-		\item Serializes schema version 3 with two sorted, fixed-width lookup indexes followed by a shared metadata block. Index offsets are unsigned 16-bit values relative to the metadata block. Per-entry metadata records remain variable-length because the trailing key field depends on key type:
+		\item Serializes schema version 4 with two sorted, fixed-width lookup indexes followed by a shared metadata block. Index offsets are unsigned 16-bit values relative to the metadata block. Per-entry metadata records remain variable-length because the trailing key field depends on key type:
 		\begin{figure}[H]
 			\centering
 			\scriptsize
@@ -1168,6 +1169,7 @@ for (uint8_t i = 0; i < count; i++) {
 				Not-Before & 4 bytes & Validity start timestamp \\
 				Not-After & 4 bytes & Validity end timestamp \\
 				Algorithm Id & 1 byte & RSA-PSS, RSA-PKCS\#1~v1.5, or ECDSA-P-256 \\
+				Subject Name SHA-1 & 20 bytes & OCSP \texttt{issuerNameHash} (schema v4) \\
 				Key & variable & Raw public key: RSA exponent+modulus, or an EC point \\
 				\bottomrule
 			\end{tabularx}
@@ -1205,7 +1207,7 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	At the higher-level socket API, the operation performed on a TLS socket selects its role without a separate role flag: \texttt{lwip\_socket\_connect()} creates a client handshake and \texttt{lwip\_socket\_listen()} creates a server handshake. Credentials must be configured before either operation and are locked once the handshake role has been selected. The lower ALTCP layer exposes separate client and server configuration constructors for callers that work directly with protocol control blocks.
 
 	\paragraph{Client role}
-	A client may perform an ordinary certificate-authenticated handshake, use an explicitly configured external PSK, resume from a cached session ticket, or present an ECDSA P-256 identity when a server requests mutual TLS. Server certificates are checked using the chain, hostname, validity-period, trust-anchor, and \texttt{CertificateVerify} rules described above. Client identity files may be password-protected PKCS~\#8; encrypted keys fail closed unless the application installs the one-shot secret-input callback, and the returned password bytes are wiped after import.
+	A client may perform an ordinary certificate-authenticated handshake, use an explicitly configured external PSK, resume from a cached session ticket, or present an ECDSA P-256 identity when a server requests mutual TLS. Server certificates are checked using the chain, hostname, validity-period, trust-anchor, and \texttt{CertificateVerify} rules described above, plus OCSP revocation checking when the user enables it in the configuration wizard (off by default). With checking on, every presented certificate that names an OCSP responder is checked over HTTP while the handshake waits, the topmost one against its truststore root. Responses must be signed by the issuer or a delegated responder and be fresh, and anything other than a verified \texttt{good} status aborts the handshake (\texttt{certificate\_revoked} for \texttt{revoked}, \texttt{bad\_certificate} otherwise). Client identity files may be password-protected PKCS~\#8; encrypted keys fail closed unless the application installs the one-shot secret-input callback, and the returned password bytes are wiped after import.
 
 	\paragraph{Server role}
 	The server supports two explicit configurations. External-PSK mode authenticates a configured 32-byte key and identity and requires \texttt{psk\_dhe\_ke} with X25519. Certificate mode loads a leaf-first certificate chain and matching ECDSA P-256 private key from AppVars, sends \texttt{EncryptedExtensions}, \texttt{Certificate}, \texttt{CertificateVerify}, and \texttt{Finished} in RFC order, and fragments handshake messages at record boundaries when necessary. The user-facing \texttt{lwip-cert-converter} validates the identity, normalizes and deduplicates the chain, preserves or explicitly converts supported private-key encryption, and produces the two AppVars consumed by this mode. A listener without either credential configuration fails closed. Both modes support \texttt{TLS\_AES\_128\_GCM\_SHA256} and \texttt{TLS\_AES\_128\_CCM\_SHA256}, preferring GCM when the peer offers both.
@@ -1632,7 +1634,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		& No path reordering or extra certificate handling. Chain must be in wire order; any out-of-order or extraneous certificate aborts. Buffering an unordered chain would require RAM proportional to the chain length, which is not available. \\
 		\addlinespace
 		RFC 5280 \S6.1.3(a)(3), \S6.3 (revocation)
-		& No CRL or OCSP support. Revocation checking requires a live HTTP fetch during the handshake, which would require a second concurrent TCP connection --- not feasible on this platform. Permanently out of scope. \\
+		& Revocation is checked by OCSP (RFC 6960) only, and only when the user enables it (off by default). CRL processing is permanently out of scope: a CA's full CRL runs from tens of kilobytes to megabytes and must be downloaded and held in full to verify its signature, which exceeds the platform's heap. OCSP answers for one certificate in a small signed response (capped at 4~KiB). Remaining gaps: no request nonce, freshness relies on unauthenticated SNTP time, and OCSP stapling is not supported. \\
 		\addlinespace
 		RFC 5280 \S6.1.3(d)--(f), \S6.1.5 (policy tree)
 		& No certificate policy tree processing. A conformant policy tree requires recursive ASN.1 traversal and memory proportional to chain depth, neither of which is viable on eZ80. \\

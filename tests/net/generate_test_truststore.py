@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a v3 lwIPCERT containing the runner-local CA.
+"""Build a v4 lwIPCERT containing the runner-local CA.
 
 The store is test-only, but its envelope is signed by the production
 TRUSTSTORE_SIGNER supplied by GitHub Actions.  The production library can
@@ -21,9 +21,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-VERSION = 3
+VERSION = 4
 INDEX_KEY_LEN = 32
-ENTRY_PREFIX_LEN = 77
+# len, subject digest, SKI, notBefore, notAfter, alg_id, SHA-1(subject Name)
+ENTRY_PREFIX_LEN = 4 + 32 + 32 + 4 + 4 + 1 + 20
 RSA_PKCS1_SHA256 = 1
 
 
@@ -57,7 +58,7 @@ def der_tlv(blob: bytes, offset: int) -> tuple[int, int, int]:
     return tag, pos, end
 
 
-def subject_digest(cert: Path) -> bytes:
+def subject_name(cert: Path) -> bytes:
     der = run(["openssl", "x509", "-in", str(cert), "-outform", "DER"])
     tag, cert_body, cert_end = der_tlv(der, 0)
     if tag != 0x30 or cert_end != len(der):
@@ -75,7 +76,7 @@ def subject_digest(cert: Path) -> bytes:
     tag, _, end = der_tlv(der, start)
     if tag != 0x30:
         raise ValueError("missing Subject Name")
-    return hashlib.sha256(der[start:end]).digest()
+    return der[start:end]
 
 
 def certificate_metadata(cert: Path) -> tuple[bytes, int, int, bytes]:
@@ -119,7 +120,8 @@ def certificate_metadata(cert: Path) -> tuple[bytes, int, int, bytes]:
 
 
 def build_store(cert: Path, signer: Path, output: Path, convbin: Path) -> None:
-    subject = subject_digest(cert)
+    name = subject_name(cert)
+    subject = hashlib.sha256(name).digest()
     ski, not_before, not_after, key = certificate_metadata(cert)
     entry_len = ENTRY_PREFIX_LEN + len(key)
     entry = b"".join([
@@ -128,6 +130,7 @@ def build_store(cert: Path, signer: Path, output: Path, convbin: Path) -> None:
         ski,
         struct.pack("<II", not_before, not_after),
         bytes([RSA_PKCS1_SHA256]),
+        hashlib.sha1(name).digest(),
         key,
     ])
     with tempfile.TemporaryDirectory() as tmp_name:

@@ -85,7 +85,7 @@ cert_id = seq(OID_SHA1, tlv(0x04, NAME_HASH), tlv(0x04, KEY_HASH), tlv(0x02, b"\
 expected_request = seq(seq(seq(seq(cert_id))))
 
 
-def openssl_vector() -> tuple[bytes, bytes, bytes]:
+def openssl_vector() -> tuple[bytes, bytes, bytes, bytes, bytes, bytes]:
     """Produce the same issuer-signed response shape used by NETTLS."""
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -128,10 +128,23 @@ def openssl_vector() -> tuple[bytes, bytes, bytes]:
         name = re.search(r"Issuer Name Hash:\s*([0-9A-Fa-f]+)", request_text)
         key = re.search(r"Issuer Key Hash:\s*([0-9A-Fa-f]+)", request_text)
         assert name and key
-        return response_file.read_bytes(), bytes.fromhex(name.group(1)), bytes.fromhex(key.group(1))
+        modulus = subprocess.run([
+            "openssl", "x509", "-in", str(ca_cert), "-noout", "-modulus",
+        ], check=True, capture_output=True, text=True).stdout.strip()
+        # The leaf's EC point is the BIT STRING tail of its 91-byte P-256 SPKI.
+        leaf_spki = subprocess.run([
+            "openssl", "pkey", "-in", str(leaf_key), "-pubout", "-outform", "DER",
+        ], check=True, capture_output=True).stdout
+        assert len(leaf_spki) == 91 and leaf_spki[-66:-64] == b"\x00\x04"
+        leaf_point = leaf_spki[-65:]
+        return (response_file.read_bytes(), bytes.fromhex(name.group(1)),
+                bytes.fromhex(key.group(1)),
+                bytes.fromhex(modulus.removeprefix("Modulus=")),
+                leaf_point, hashlib.sha1(leaf_point).digest())
 
 
-openssl_response, openssl_name_hash, openssl_key_hash = openssl_vector()
+(openssl_response, openssl_name_hash, openssl_key_hash, openssl_ca_modulus,
+ openssl_leaf_point, openssl_leaf_key_hash) = openssl_vector()
 
 source = r'''
 #include <assert.h>
@@ -141,6 +154,7 @@ source = r'''
 #include <string.h>
 
 #include "ocsp.h"
+#include "ocsp_internal.h"
 #include "x509_internal.h"
 
 static bool force_bad_signature;
@@ -259,6 +273,10 @@ for name, data in {
     "openssl_response": openssl_response,
     "openssl_name_hash": openssl_name_hash,
     "openssl_key_hash": openssl_key_hash,
+    "openssl_ca_modulus": openssl_ca_modulus,
+    "openssl_ca_modulus_padded": b"\x00" + openssl_ca_modulus,
+    "openssl_leaf_point": openssl_leaf_point,
+    "openssl_leaf_key_hash": openssl_leaf_key_hash,
 }.items():
     source += c_array(name, data)
 
@@ -311,6 +329,29 @@ int main(void)
                                 name_hash, key_hash));
     assert(!memcmp(name_hash, sha1_abc, sizeof(name_hash)));
     assert(!memcmp(key_hash, sha1_abc, sizeof(key_hash)));
+
+    /* issuerKeyHash derived from a bare key, as for truststore roots. */
+    {
+        static const uint8_t exp_be[] = {0x01, 0x00, 0x01};
+        struct tls_key k = {.type = TLS_KEY_TYPE_RSA};
+        k.rsa.exponent = exp_be;
+        k.rsa.exp_len = sizeof(exp_be);
+        k.rsa.modulus = openssl_ca_modulus;
+        k.rsa.mod_len = sizeof(openssl_ca_modulus);
+        assert(tls_ocsp_hash_key(&k, key_hash));
+        assert(!memcmp(key_hash, openssl_key_hash, sizeof(key_hash)));
+        k.rsa.modulus = openssl_ca_modulus_padded;
+        k.rsa.mod_len = sizeof(openssl_ca_modulus_padded);
+        assert(tls_ocsp_hash_key(&k, key_hash));
+        assert(!memcmp(key_hash, openssl_key_hash, sizeof(key_hash)));
+        k = (struct tls_key){.type = TLS_KEY_TYPE_EC_P256};
+        k.ec.pub = openssl_leaf_point;
+        k.ec.len = sizeof(openssl_leaf_point);
+        assert(tls_ocsp_hash_key(&k, key_hash));
+        assert(!memcmp(key_hash, openssl_leaf_key_hash, sizeof(key_hash)));
+        k = (struct tls_key){.type = TLS_KEY_TYPE_RSA};
+        assert(!tls_ocsp_hash_key(&k, key_hash));
+    }
 
     assert(tls_ocsp_build_request(serial, sizeof(serial),
                                   (const uint8_t[]){1,2,3,4,5,6,7,8,9,10,
