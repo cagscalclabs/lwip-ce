@@ -391,6 +391,8 @@ extern "C"
 
         struct tls_cert_job *cert_jobs;
         uint8_t cert_jobs_count;
+        bool ocsp_enabled;
+        bool ocsp_pending;
         uint8_t *hs_deferred;
         size_t hs_deferred_len;
         size_t hs_deferred_cap;
@@ -626,6 +628,21 @@ extern "C"
      */
     bool tls_cert_jobs_pending(const struct tls_handshake_context *ctx);
 
+#define TLS_OCSP_URL_MAX 128u
+
+    /* One authenticated status lookup detached from a verified certificate
+     * link. The transport owns this object until tls_ocsp_query_free(). */
+    struct tls_ocsp_query {
+        char url[TLS_OCSP_URL_MAX];
+        uint8_t serial[20];
+        uint8_t serial_len;
+        uint8_t issuer_name_hash[20];
+        uint8_t issuer_key_hash[20];
+        struct tls_key issuer;
+        uint8_t *issuer_mat;
+        size_t issuer_mat_len;
+    };
+
 
     /**
      * @brief Run one queued certificate verification job.
@@ -637,6 +654,15 @@ extern "C"
      * TLS_STATE_ERROR, and the caller must abort the connection.
      */
     bool tls_cert_jobs_step(struct tls_handshake_context *ctx);
+
+    /* Run one certificate job and transfer any resulting OCSP lookup to the
+     * caller without copying its issuer key. */
+    bool tls_cert_jobs_step_ocsp(struct tls_handshake_context *ctx,
+                                 struct tls_ocsp_query **query_out);
+    void tls_ocsp_query_free(struct tls_ocsp_query *query);
+    bool tls_ocsp_jobs_pending(const struct tls_handshake_context *ctx);
+    bool tls_ocsp_job_done(struct tls_handshake_context *ctx,
+                           int ocsp_status);
 
     /**
      * @brief Register a transport write callback for outbound records.

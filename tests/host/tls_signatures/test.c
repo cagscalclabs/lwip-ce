@@ -1061,6 +1061,57 @@ static void extended_key_usage_tests(void)
                                          sizeof(cert_eku_malformed_oid), false));
 }
 
+static bool ocsp_responder_extensions_valid(const uint8_t *der, size_t der_len)
+{
+    struct tls_x509_object cert;
+    assert(tls_x509_parse_certificate(der, der_len, &cert));
+    return tls_x509_validate_ocsp_responder_extensions(&cert);
+}
+
+static void ocsp_responder_extension_tests(void)
+{
+    assert(ocsp_responder_extensions_valid(cert_ocsp, sizeof(cert_ocsp)));
+    assert(ocsp_responder_extensions_valid(cert_ocsp_no_ku,
+                                           sizeof(cert_ocsp_no_ku)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_bad_ku,
+                                            sizeof(cert_ocsp_bad_ku)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_ca,
+                                            sizeof(cert_ocsp_ca)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_server,
+                                            sizeof(cert_ocsp_server)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_any,
+                                            sizeof(cert_ocsp_any)));
+    assert(!ocsp_responder_extensions_valid(
+        cert_ocsp_unknown_critical, sizeof(cert_ocsp_unknown_critical)));
+    assert(!ocsp_responder_extensions_valid(cert_ocsp_duplicate,
+                                            sizeof(cert_ocsp_duplicate)));
+}
+
+static void ocsp_job_completion_tests(void)
+{
+    struct tls_handshake_context ctx;
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.ocsp_pending = true;
+    last_alert = 0;
+    assert(!tls_ocsp_job_done(&ctx, OCSP_REVOKED));
+    assert(last_alert == TLS_ALERT_CERTIFICATE_REVOKED);
+    assert(ctx.state == TLS_STATE_ERROR && !ctx.ocsp_pending);
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.ocsp_pending = true;
+    last_alert = 0;
+    assert(!tls_ocsp_job_done(&ctx, OCSP_UNKNOWN));
+    assert(last_alert == TLS_ALERT_BAD_CERTIFICATE);
+    assert(ctx.state == TLS_STATE_ERROR && !ctx.ocsp_pending);
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.ocsp_pending = true;
+    assert(tls_ocsp_jobs_pending(&ctx));
+    assert(tls_ocsp_job_done(&ctx, OCSP_GOOD));
+    assert(!tls_ocsp_jobs_pending(&ctx));
+}
+
 int main(void)
 {
     client_certificate_flight_tests();
@@ -1089,6 +1140,8 @@ int main(void)
     path_len_tests();
     name_constraint_tests();
     extended_key_usage_tests();
+    ocsp_responder_extension_tests();
+    ocsp_job_completion_tests();
     ALG(alg_pkcs, true, TLS_ALG_RSA_PKCS1_SHA256);
     ALG(alg_pss, true, TLS_ALG_RSA_PSS_RSAE_SHA256);
     ALG(alg_pss_trailer, true, TLS_ALG_RSA_PSS_RSAE_SHA256);

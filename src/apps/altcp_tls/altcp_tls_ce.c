@@ -17,6 +17,7 @@
 #include "lwip/priv/altcp_priv.h"
 #include "lwip/mem.h"
 #include "altcp_tls_ce.h"
+#include "altcp_tls_ocsp.h"
 #include "../../lwIP.h"
 #include "../../tls/includes/aes.h"
 
@@ -269,6 +270,7 @@ static err_t altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_c
 static err_t altcp_tls_ce_server_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *state);
 static void altcp_tls_ce_cert_job_arm(void);
 static void altcp_tls_ce_keyshare_arm(void);
+static void altcp_tls_ce_ocsp_done(void *arg, tls_ocsp_status_t status);
 
 /* True once the held-back server flight has been replayed and the server
  * Finished was processed, but the client Finished / key switch has not run yet
@@ -1584,6 +1586,7 @@ static void altcp_tls_ce_apply_handshake_config(altcp_tls_ce_state_t *state)
     state->tls_ctx.client_chain = config->client_chain;
     state->tls_ctx.client_chain_len = config->client_chain_len;
     state->tls_ctx.client_key = config->client_key;
+    state->tls_ctx.ocsp_enabled = lwip_app_config_get()->ocsp_enabled != 0;
     if (config->psk_mode)
     {
         state->tls_ctx.psk_type = config->psk_type;
@@ -1846,16 +1849,47 @@ static void altcp_tls_ce_cert_job_dispatch(void)
         if (!conn || !tls_cert_jobs_pending(&state->tls_ctx))
             continue;
 
-        if (!tls_cert_jobs_step(&state->tls_ctx))
+        struct tls_ocsp_query *query = NULL;
+        if (!tls_cert_jobs_step_ocsp(&state->tls_ctx, &query))
         {
             ALTCP_TLS_CE_ERROR_ABORT(conn);
             return; /* state may be freed */
+        }
+
+        if (query)
+        {
+            if (!altcp_tls_ocsp_start(query, state,
+                                      altcp_tls_ce_ocsp_done, state))
+            {
+                tls_ocsp_query_free(query);
+                (void)tls_ocsp_job_done(&state->tls_ctx, OCSP_PARSE_ERROR);
+                ALTCP_TLS_CE_ERROR_ABORT(conn);
+            }
+            return;
         }
 
         (void)altcp_tls_ce_lower_recv_process(conn, state);
         return; /* state may be freed; resume from the list head next tick */
     }
     lwip_dispatch_set_period(LWIP_DISPATCH_TLS_CERT_JOB, 0);
+}
+
+static void altcp_tls_ce_ocsp_done(void *arg, tls_ocsp_status_t status)
+{
+    altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)arg;
+    struct altcp_pcb *conn;
+
+    if (!state || !altcp_tls_ce_state_alive(state) || !state->conn)
+        return;
+    conn = state->conn;
+    if (!tls_ocsp_job_done(&state->tls_ctx, status))
+    {
+        ALTCP_TLS_CE_ERROR_ABORT(conn);
+        return;
+    }
+    if (tls_cert_jobs_pending(&state->tls_ctx))
+        altcp_tls_ce_cert_job_arm();
+    (void)altcp_tls_ce_lower_recv_process(conn, state);
 }
 
 static void altcp_tls_ce_cert_job_arm(void)
@@ -2353,7 +2387,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                 {
                     goto record_processed; /* drive client Finished after a deferred replay */
                 }
-                if (tls_cert_jobs_pending(&state->tls_ctx))
+                if (tls_cert_jobs_pending(&state->tls_ctx) ||
+                    tls_ocsp_jobs_pending(&state->tls_ctx))
                 {
                     /* The server Finished is still held back, so later records
                      * may already be under application keys. Leave them queued;
@@ -2469,7 +2504,8 @@ altcp_tls_ce_lower_recv_process(struct altcp_pcb *conn, altcp_tls_ce_state_t *st
                     tls_dbg_status("rx: inner ok");
 
                     pbuf_free(dec_pbuf);
-                    if (tls_cert_jobs_pending(&state->tls_ctx))
+                    if (tls_cert_jobs_pending(&state->tls_ctx) ||
+                        tls_ocsp_jobs_pending(&state->tls_ctx))
                     {
                         altcp_tls_ce_cert_job_arm();
                     }
@@ -3761,6 +3797,7 @@ altcp_tls_ce_dealloc(struct altcp_pcb *conn)
         altcp_tls_ce_state_t *state = (altcp_tls_ce_state_t *)conn->state;
         if (state)
         {
+            altcp_tls_ocsp_cancel(state);
             tls_handshake_cleanup(&state->tls_ctx);
             state->flags = 0;
 
