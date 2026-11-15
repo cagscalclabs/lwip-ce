@@ -1846,7 +1846,10 @@ static void altcp_tls_ce_cert_job_dispatch(void)
     {
         struct altcp_pcb *conn = state->conn;
 
-        if (!conn || !tls_cert_jobs_pending(&state->tls_ctx))
+        /* An OCSP lookup owns the current verification slot.  Remaining
+         * certificate jobs must wait until its completion callback rearms us. */
+        if (!conn || !tls_cert_jobs_pending(&state->tls_ctx) ||
+            tls_ocsp_jobs_pending(&state->tls_ctx))
             continue;
 
         struct tls_ocsp_query *query = NULL;
