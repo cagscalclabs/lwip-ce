@@ -3,13 +3,13 @@
 #if LWIP_ALTCP
 
 #include "lwip/altcp.h"
-#include "lwip/altcp_tcp.h"
 #include "lwip/dispatch.h"
 #include "lwip/dns.h"
 #include "lwip/mem.h"
 #include "lwip/pbuf.h"
 #include "lwip/sntp_time.h"
 #include "lwip/sys.h"
+#include "lwip/tcp.h"
 
 #include "altcp_tls_ocsp.h"
 #include "../../tls/includes/ocsp.h"
@@ -41,7 +41,7 @@ enum ocsp_http_state {
 struct ocsp_http_job {
     struct ocsp_http_job *next;
     struct tls_ocsp_query *query;
-    struct altcp_pcb *tcp;
+    struct tcp_pcb *tcp;
     void *owner;
     altcp_tls_ocsp_done_fn done;
     void *done_arg;
@@ -93,11 +93,11 @@ static void ocsp_job_close_tcp(struct ocsp_http_job *job)
 {
     if (!job || !job->tcp)
         return;
-    altcp_arg(job->tcp, NULL);
-    altcp_recv(job->tcp, NULL);
-    altcp_sent(job->tcp, NULL);
-    altcp_err(job->tcp, NULL);
-    altcp_abort(job->tcp);
+    tcp_arg(job->tcp, NULL);
+    tcp_recv(job->tcp, NULL);
+    tcp_sent(job->tcp, NULL);
+    tcp_err(job->tcp, NULL);
+    tcp_abort(job->tcp);
     job->tcp = NULL;
 }
 
@@ -398,7 +398,7 @@ static tls_ocsp_status_t ocsp_parse_response(const struct ocsp_http_job *job)
         &job->query->issuer, lwip_sntp_get_unix_time());
 }
 
-static err_t ocsp_recv(void *arg, struct altcp_pcb *tcp,
+static err_t ocsp_recv(void *arg, struct tcp_pcb *tcp,
                        struct pbuf *p, err_t err)
 {
     struct ocsp_http_job *job = (struct ocsp_http_job *)arg;
@@ -426,7 +426,7 @@ static err_t ocsp_recv(void *arg, struct altcp_pcb *tcp,
     packet_len = p->tot_len;
     copied = pbuf_copy_partial(p, job->response + job->response_len,
                                packet_len, 0);
-    altcp_recved(tcp, packet_len);
+    tcp_recved(tcp, packet_len);
     pbuf_free(p);
     if (copied != packet_len)
     {
@@ -480,7 +480,7 @@ static err_t ocsp_recv(void *arg, struct altcp_pcb *tcp,
     return ERR_OK;
 }
 
-static err_t ocsp_sent(void *arg, struct altcp_pcb *tcp, u16_t len)
+static err_t ocsp_sent(void *arg, struct tcp_pcb *tcp, u16_t len)
 {
     struct ocsp_http_job *job = (struct ocsp_http_job *)arg;
     size_t left, chunk;
@@ -499,12 +499,12 @@ static err_t ocsp_sent(void *arg, struct altcp_pcb *tcp, u16_t len)
     /* Keep the request buffer owned by the job until the private PCB is
      * closed. Zero-copy avoids competing for another payload pbuf while the
      * server certificate flight is deliberately retained by the TLS client. */
-    err = altcp_write(tcp, job->request + job->request_sent,
-                      (u16_t)chunk, 0);
+    err = tcp_write(tcp, job->request + job->request_sent,
+                    (u16_t)chunk, 0);
     if (err == ERR_OK)
     {
         job->request_sent += chunk;
-        (void)altcp_output(tcp);
+        (void)tcp_output(tcp);
         if (job->request_sent == job->request_len)
             job->state = OCSP_HTTP_RECEIVING;
     }
@@ -513,26 +513,6 @@ static err_t ocsp_sent(void *arg, struct altcp_pcb *tcp, u16_t len)
         ocsp_job_finish(job, OCSP_PARSE_ERROR);
         return ERR_ABRT;
     }
-    return ERR_OK;
-}
-
-static err_t ocsp_connected(void *arg, struct altcp_pcb *tcp, err_t err)
-{
-    struct ocsp_http_job *job = (struct ocsp_http_job *)arg;
-
-    (void)tcp;
-
-    if (!job || err != ERR_OK)
-    {
-        if (job) ocsp_job_finish(job, OCSP_PARSE_ERROR);
-        return ERR_ABRT;
-    }
-    /* Leave the connect callback before allocating/queuing the request.  On
-     * the calculator this callback is already nested under the TCP input path
-     * (and, for OCSP, under a suspended TLS handshake).  The dispatcher both
-     * keeps that stack bounded and supplies the retry point required when
-     * tcp_write() temporarily returns ERR_MEM. */
-    job->state = OCSP_HTTP_SENDING;
     return ERR_OK;
 }
 
@@ -564,18 +544,21 @@ static void ocsp_dns_found(const char *name, const ip_addr_t *addr, void *arg)
         ocsp_job_finish(job, OCSP_PARSE_ERROR);
         return;
     }
-    job->tcp = altcp_tcp_new_ip_type(IP_GET_TYPE(addr));
+    job->tcp = tcp_new_ip_type(IP_GET_TYPE(addr));
     if (!job->tcp)
     {
         ocsp_job_finish(job, OCSP_PARSE_ERROR);
         return;
     }
-    altcp_arg(job->tcp, job);
-    altcp_recv(job->tcp, ocsp_recv);
-    altcp_sent(job->tcp, ocsp_sent);
-    altcp_err(job->tcp, ocsp_tcp_err);
+    tcp_arg(job->tcp, job);
+    tcp_recv(job->tcp, ocsp_recv);
+    tcp_sent(job->tcp, ocsp_sent);
+    tcp_err(job->tcp, ocsp_tcp_err);
     job->state = OCSP_HTTP_CONNECTING;
-    if (altcp_connect(job->tcp, addr, job->port, ocsp_connected) != ERR_OK)
+    /* A completion callback is unnecessary: the dispatcher observes the raw
+     * PCB state before sending.  Besides saving an ALTCP wrapper, this keeps
+     * connection establishment entirely inside lwIP's TCP input path. */
+    if (tcp_connect(job->tcp, addr, job->port, NULL) != ERR_OK)
         ocsp_job_finish(job, OCSP_PARSE_ERROR);
 }
 
@@ -587,6 +570,18 @@ static void ocsp_dispatch(void)
     while (job)
     {
         struct ocsp_http_job *next = job->next;
+        if (job->state == OCSP_HTTP_CONNECTING && job->tcp)
+        {
+            if (job->tcp->state == ESTABLISHED ||
+                job->tcp->state == CLOSE_WAIT)
+                job->state = OCSP_HTTP_SENDING;
+            else if (job->tcp->state != SYN_SENT)
+            {
+                ocsp_job_finish(job, OCSP_PARSE_ERROR);
+                job = next;
+                continue;
+            }
+        }
         if (job->state == OCSP_HTTP_SENDING && job->tcp &&
             ocsp_sent(job, job->tcp, 0) == ERR_ABRT)
         {
