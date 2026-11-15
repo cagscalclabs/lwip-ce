@@ -192,7 +192,8 @@ When the end user runs the lwIP-CE app directly on the calculator, a configurati
      - Off by default. When on, each server certificate that names an OCSP
        responder is checked for revocation during the TLS handshake. A
        revoked certificate, or a responder that cannot be reached or gives an
-       invalid answer, aborts the connection. Needs a working network path to
+       invalid answer, aborts the connection. A certificate that names no
+       OCSP responder is not checked, and some public CAs no longer run one. Needs a working network path to
        the responder over plain HTTP (port 80 unless the URL says otherwise).
    * - Capture limit / Packet capture
      - Largest packet capture AppVar, and a viewer for captured packets.

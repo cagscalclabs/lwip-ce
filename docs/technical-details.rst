@@ -399,7 +399,9 @@ Security Posture
        with ``certificate_revoked``; ``unknown``, malformed, unauthenticated,
        oversized (over 4 KiB) or unreachable (10 s timeout) aborts with
        ``bad_certificate``. A self-signed root presented by the server is
-       not checked. Known limits: no request nonce, freshness relies on
+       not checked, and neither is a certificate that names no OCSP
+       responder (some public CAs no longer run one): such a certificate is
+       accepted on the remaining path checks. Known limits: no request nonce, freshness relies on
        unauthenticated SNTP time, and no stapling. CRLs are out of scope:
        a full CRL can be megabytes and must be held in full to verify its
        signature.
