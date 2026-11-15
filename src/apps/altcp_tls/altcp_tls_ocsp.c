@@ -496,8 +496,11 @@ static err_t ocsp_sent(void *arg, struct altcp_pcb *tcp, u16_t len)
         return ERR_OK;
     }
     chunk = left > UINT16_MAX ? UINT16_MAX : left;
+    /* Keep the request buffer owned by the job until the private PCB is
+     * closed. Zero-copy avoids competing for another payload pbuf while the
+     * server certificate flight is deliberately retained by the TLS client. */
     err = altcp_write(tcp, job->request + job->request_sent,
-                      (u16_t)chunk, TCP_WRITE_FLAG_COPY);
+                      (u16_t)chunk, 0);
     if (err == ERR_OK)
     {
         job->request_sent += chunk;
@@ -517,13 +520,20 @@ static err_t ocsp_connected(void *arg, struct altcp_pcb *tcp, err_t err)
 {
     struct ocsp_http_job *job = (struct ocsp_http_job *)arg;
 
+    (void)tcp;
+
     if (!job || err != ERR_OK)
     {
         if (job) ocsp_job_finish(job, OCSP_PARSE_ERROR);
         return ERR_ABRT;
     }
+    /* Leave the connect callback before allocating/queuing the request.  On
+     * the calculator this callback is already nested under the TCP input path
+     * (and, for OCSP, under a suspended TLS handshake).  The dispatcher both
+     * keeps that stack bounded and supplies the retry point required when
+     * tcp_write() temporarily returns ERR_MEM. */
     job->state = OCSP_HTTP_SENDING;
-    return ocsp_sent(job, tcp, 0);
+    return ERR_OK;
 }
 
 static void ocsp_tcp_err(void *arg, err_t err)
@@ -577,6 +587,12 @@ static void ocsp_dispatch(void)
     while (job)
     {
         struct ocsp_http_job *next = job->next;
+        if (job->state == OCSP_HTTP_SENDING && job->tcp &&
+            ocsp_sent(job, job->tcp, 0) == ERR_ABRT)
+        {
+            job = next;
+            continue;
+        }
         if (job->state != OCSP_HTTP_DONE &&
             job->state != OCSP_HTTP_DNS_ABANDONED &&
             ocsp_expired(now, job->deadline_ms))

@@ -1,5 +1,38 @@
 #include "tls_unit.c"
 
+/* The generated handshake slice references the OCSP helpers, but this target
+ * keeps revocation checking disabled and fuzzes only handshake framing/path
+ * validation. Keep those dormant dependencies explicit instead of linking the
+ * full network-response parser into this harness. */
+bool tls_ocsp_hash_issuer(const uint8_t *issuer_name, size_t issuer_name_len,
+                          const uint8_t *issuer_key, size_t issuer_key_len,
+                          uint8_t name_hash[OCSP_SHA1_LEN],
+                          uint8_t key_hash[OCSP_SHA1_LEN])
+{
+    (void)issuer_name;
+    (void)issuer_name_len;
+    (void)issuer_key;
+    (void)issuer_key_len;
+    (void)name_hash;
+    (void)key_hash;
+    return false;
+}
+
+bool tls_x509_get_ocsp_url(const uint8_t *ext_data, size_t ext_len,
+                           char **url_out)
+{
+    (void)ext_data;
+    (void)ext_len;
+    if (url_out)
+        *url_out = NULL;
+    return url_out != NULL;
+}
+
+void tls_ocsp_free(void *ptr)
+{
+    free(ptr);
+}
+
 static void walk_certificate(const uint8_t *data, size_t size, size_t chunk)
 {
     struct tls_handshake_context ctx;
