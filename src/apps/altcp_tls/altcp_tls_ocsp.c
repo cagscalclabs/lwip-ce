@@ -35,6 +35,8 @@ enum ocsp_http_state {
     OCSP_HTTP_CONNECTING,
     OCSP_HTTP_SENDING,
     OCSP_HTTP_RECEIVING,
+    OCSP_HTTP_RESPONSE_READY,
+    OCSP_HTTP_FAILED,
     OCSP_HTTP_DONE
 };
 
@@ -57,7 +59,6 @@ struct ocsp_http_job {
     size_t response_len;
     size_t response_cap;
     size_t content_length;
-    bool headers_done;
 };
 
 static struct ocsp_http_job *ocsp_jobs;
@@ -356,7 +357,8 @@ static bool ocsp_parse_headers(struct ocsp_http_job *job, size_t header_len)
     return have_length && have_type && job->content_length > 0;
 }
 
-static bool ocsp_response_grow(struct ocsp_http_job *job, size_t add)
+static __attribute__((noinline)) bool
+ocsp_response_grow(struct ocsp_http_job *job, size_t add)
 {
     size_t need, cap;
     uint8_t *next;
@@ -398,30 +400,59 @@ static tls_ocsp_status_t ocsp_parse_response(const struct ocsp_http_job *job)
         &job->query->issuer, lwip_sntp_get_unix_time());
 }
 
+static tls_ocsp_status_t ocsp_process_http_response(struct ocsp_http_job *job)
+{
+    size_t body_at = 0;
+
+    if (!job || !job->response)
+        return OCSP_PARSE_ERROR;
+    for (size_t i = 3; i < job->response_len; i++)
+    {
+        if (job->response[i - 3] == '\r' &&
+            job->response[i - 2] == '\n' &&
+            job->response[i - 1] == '\r' && job->response[i] == '\n')
+        {
+            body_at = i + 1u;
+            break;
+        }
+    }
+    if (!body_at || body_at > OCSP_HTTP_HEADER_MAX ||
+        !ocsp_parse_headers(job, body_at) ||
+        job->response_len - body_at != job->content_length)
+        return OCSP_PARSE_ERROR;
+    job->response_len -= body_at;
+    memmove(job->response, job->response + body_at, job->response_len);
+    return ocsp_parse_response(job);
+}
+
+/* TCP callbacks are queue producers only: append transport bytes or publish a
+ * terminal state.  HTTP/ASN.1 parsing, TLS continuation, and object teardown
+ * belong to ocsp_dispatch(), outside lwIP's input callback stack. */
 static err_t ocsp_recv(void *arg, struct altcp_pcb *tcp,
                        struct pbuf *p, err_t err)
 {
     struct ocsp_http_job *job = (struct ocsp_http_job *)arg;
     size_t copied, packet_len;
 
-    if (!job || job->state == OCSP_HTTP_DONE)
+    if (!job || job->state == OCSP_HTTP_DONE ||
+        job->state == OCSP_HTTP_RESPONSE_READY ||
+        job->state == OCSP_HTTP_FAILED)
     {
         if (p) pbuf_free(p);
         return ERR_OK;
     }
     if (!p)
     {
-        tls_ocsp_status_t status =
-            job->headers_done && job->response_len == job->content_length
-                ? ocsp_parse_response(job) : OCSP_PARSE_ERROR;
-        ocsp_job_finish(job, status);
-        return ERR_ABRT;
+        job->state = job->state == OCSP_HTTP_RECEIVING
+            ? OCSP_HTTP_RESPONSE_READY : OCSP_HTTP_FAILED;
+        return ERR_OK;
     }
-    if (err != ERR_OK || !ocsp_response_grow(job, p->tot_len))
+    if (err != ERR_OK || job->state != OCSP_HTTP_RECEIVING ||
+        !ocsp_response_grow(job, p->tot_len))
     {
         pbuf_free(p);
-        ocsp_job_finish(job, OCSP_PARSE_ERROR);
-        return ERR_ABRT;
+        job->state = OCSP_HTTP_FAILED;
+        return ERR_OK;
     }
     packet_len = p->tot_len;
     copied = pbuf_copy_partial(p, job->response + job->response_len,
@@ -430,53 +461,10 @@ static err_t ocsp_recv(void *arg, struct altcp_pcb *tcp,
     pbuf_free(p);
     if (copied != packet_len)
     {
-        ocsp_job_finish(job, OCSP_PARSE_ERROR);
-        return ERR_ABRT;
+        job->state = OCSP_HTTP_FAILED;
+        return ERR_OK;
     }
     job->response_len += copied;
-
-    if (!job->headers_done)
-    {
-        size_t body_at = 0;
-        for (size_t i = 3; i < job->response_len; i++)
-        {
-            if (job->response[i - 3] == '\r' &&
-                job->response[i - 2] == '\n' &&
-                job->response[i - 1] == '\r' && job->response[i] == '\n')
-            {
-                body_at = i + 1u;
-                break;
-            }
-        }
-        if (body_at)
-        {
-            if (!ocsp_parse_headers(job, body_at))
-            {
-                ocsp_job_finish(job, OCSP_PARSE_ERROR);
-                return ERR_ABRT;
-            }
-            job->response_len -= body_at;
-            memmove(job->response, job->response + body_at,
-                    job->response_len);
-            job->headers_done = true;
-        }
-        else if (job->response_len > OCSP_HTTP_HEADER_MAX)
-        {
-            ocsp_job_finish(job, OCSP_PARSE_ERROR);
-            return ERR_ABRT;
-        }
-    }
-    if (job->headers_done && job->response_len > job->content_length)
-    {
-        ocsp_job_finish(job, OCSP_PARSE_ERROR);
-        return ERR_ABRT;
-    }
-    if (job->headers_done && job->response_len == job->content_length)
-    {
-        tls_ocsp_status_t status = ocsp_parse_response(job);
-        ocsp_job_finish(job, status);
-        return ERR_ABRT;
-    }
     return ERR_OK;
 }
 
@@ -543,7 +531,7 @@ static void ocsp_tcp_err(void *arg, err_t err)
     if (!job || job->state == OCSP_HTTP_DONE)
         return;
     job->tcp = NULL;
-    ocsp_job_finish(job, OCSP_PARSE_ERROR);
+    job->state = OCSP_HTTP_FAILED;
 }
 
 static void ocsp_dns_found(const char *name, const ip_addr_t *addr, void *arg)
@@ -587,6 +575,19 @@ static void ocsp_dispatch(void)
     while (job)
     {
         struct ocsp_http_job *next = job->next;
+        if (job->state == OCSP_HTTP_RESPONSE_READY)
+        {
+            tls_ocsp_status_t status = ocsp_process_http_response(job);
+            ocsp_job_finish(job, status);
+            job = next;
+            continue;
+        }
+        if (job->state == OCSP_HTTP_FAILED)
+        {
+            ocsp_job_finish(job, OCSP_PARSE_ERROR);
+            job = next;
+            continue;
+        }
         if (job->state == OCSP_HTTP_SENDING && job->tcp &&
             ocsp_sent(job, job->tcp, 0) == ERR_ABRT)
         {
