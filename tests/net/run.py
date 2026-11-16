@@ -1335,6 +1335,20 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int,
     return ok, text, metrics, probes
 
 
+RAMP_STABLE = re.compile(r"^ramp_\w+_stable$")
+RAMP_DROP = re.compile(r"^ramp_\w+?_(\d+)k_drop$")
+
+
+def metric_stat(name: str, value: str, unit: str) -> str:
+    """Render a non-millisecond METRIC for the summary's stats cell."""
+    if RAMP_STABLE.match(name):
+        return f"stable till {value} {unit}"
+    drop = RAMP_DROP.match(name)
+    if drop and unit == "pct_x100":
+        return f"{drop.group(1)} kbps: {int(value) // 100}.{int(value) % 100:02d}% drop"
+    return f"{name} {value} {unit}"
+
+
 def build_test_rows(results: list[tuple[str, bool, str]]) -> list[dict[str, str]]:
     rows = []
     for suite, ok, text in results:
@@ -1345,7 +1359,10 @@ def build_test_rows(results: list[tuple[str, bool, str]]) -> list[dict[str, str]
             verdict, separator, test = line.partition(" ")
             if verdict == "METRIC" and separator and last_test_row is not None:
                 parts = test.rsplit(" ", 2)
-                if len(parts) == 3 and parts[2] == "ms":
+                if len(parts) == 3 and parts[2] != "ms":
+                    stat = metric_stat(*parts)
+                    last_test_row["stats"] = "; ".join(filter(None, (last_test_row.get("stats"), stat)))
+                elif len(parts) == 3:
                     name, value, unit = parts
                     timing = f"{value} {unit}"
                     if last_test_row.get("emulated_time"):
