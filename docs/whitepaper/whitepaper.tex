@@ -666,11 +666,11 @@ fontupper=\footnotesize
 				\endhead
 				\bottomrule
 				\endfoot
-				Ethernet state & $\approx 2200\,\text{B}$ & \texttt{eth\_device\_t} \\
+				Ethernet state & $2414\,\text{B}$ & \texttt{eth\_device\_t} \\
 				RX Ring & 512 - 2048 B & Queues incoming pbufs when the pbuf\_pool is full. \\*
 				\midrule
 				\rowcolor{gray!18}
-				\textbf{Total} & $\boldsymbol{\approx 2.65\text{--}4.15\,\text{KiB}}$ & \textbf{Per connected Ethernet device.} \\
+				\textbf{Total} & $\boldsymbol{\approx 2.86\text{--}4.36\,\text{KiB}}$ & \textbf{Per connected Ethernet device.} \\
 				% Add rows using: first column & second column & third column \\
 			\end{xltabular}
 
@@ -693,13 +693,13 @@ fontupper=\footnotesize
 				\endhead
 				\bottomrule
 				\endfoot
-				Raw PCB & 49 B & \texttt{struct raw\_pcb} \\
-				UDP PCB & 52 B & \texttt{struct udp\_pcb} \\
-				TCP PCB & $\approx 200\,\text{B}$ & \texttt{struct tcp\_pcb} \\
-				ALTCP PCB & $\approx 225\,\text{B}$ & \texttt{struct tcp\_pcb} (wraps a tcp\_pcb) \\*
+				Raw PCB & 58 B & \texttt{struct raw\_pcb} \\
+				UDP PCB & 64 B & \texttt{struct udp\_pcb} \\
+				TCP PCB & 176 B & \texttt{struct tcp\_pcb} \\
+				ALTCP PCB & 31 B & \texttt{struct altcp\_pcb} (wraps a tcp\_pcb, counted separately) \\*
 				\midrule
 				\rowcolor{gray!18}
-				\textbf{Total} & $\boldsymbol{\approx 526\,\text{B}}$ & \textbf{One instance of each listed PCB type.} \\
+				\textbf{Total} & $\boldsymbol{329\,\text{B}}$ & \textbf{One instance of each listed PCB type.} \\
 				% Add rows using: first column & second column & third column \\
 			\end{xltabular}
 
@@ -725,12 +725,12 @@ fontupper=\footnotesize
 				\endfoot
 				\midrule
 				\rowcolor{gray!18}
-				\textbf{Total} & $\boldsymbol{\approx 851\text{--}1059\,\text{B}}$ & \textbf{All listed services; excludes transient SNTP polling overhead.} \\
+				\textbf{Total} & $\boldsymbol{\approx 864\text{--}1120\,\text{B}}$ & \textbf{All listed services; excludes transient SNTP polling overhead.} \\
 				\bottomrule
 				\endlastfoot
-				DHCP & $\approx 63\,\text{B}$ & \\
-				DNS resolver & $704\,\text{B}$ static $+ 0$--$208\,\text{B}$ active & Four-entry cache and request state, plus up to four active UDP PCBs. The PCB portion is already represented by the generic UDP PCB row above. \\
-				SNTP client & $32\,\text{B}$ static $+ 52\,\text{B}$ active & Server and retry state plus one UDP PCB while initialized. Polling briefly adds a 48-byte request payload, pbuf overhead, and a timeout node. \\
+				DHCP & $64\,\text{B}$ & \texttt{struct dhcp} \\
+				DNS resolver & $704\,\text{B}$ static $+ 0$--$256\,\text{B}$ active & Four-entry cache and request state, plus up to four active UDP PCBs. The PCB portion is already represented by the generic UDP PCB row above. \\
+				SNTP client & $32\,\text{B}$ static $+ 64\,\text{B}$ active & Server and retry state plus one UDP PCB while initialized. Polling briefly adds a 48-byte request payload, pbuf overhead, and a timeout node. \\
 				% Add rows using: first column & second column & third column \\
 			\end{xltabular}
 
@@ -754,21 +754,25 @@ fontupper=\footnotesize
 				\endhead
 				\bottomrule
 				\endfoot
-				\texttt{ALTCP\_TLS} & $\approx 1100\,\text{B}$ & \texttt{struct altcp\_tls\_ce\_state\_t}\\
+				\texttt{ALTCP\_TLS} & $2040\,\text{B}$ & \texttt{altcp\_tls\_ce\_state\_t}, including the $1984\,\text{B}$ handshake context. \\
 				Decrypted Record Pbuf & 0 - 16 KiB & Holds a pbuf to store decrypted records. \\
 				Handshake Reassembly Buf\footnotemark[2] & 0 - 16 KiB & \\
-				Certificate decoding buffer & 1 - 5 KiB & Holds the Certificate currently being parsed. \\*
+				Certificate decoding buffer & 1 - 5 KiB & Holds the Certificate currently being parsed. \\
+				Certificate walker & $466\,\text{B}$ & Walker state ($380\,\text{B}$) and the parsed certificate ($86\,\text{B}$), held only while the Certificate message is processed. \\
+				Chain verification jobs & $0$--$2888\,\text{B}$ & $361\,\text{B}$ per queued link, up to eight (the maximum chain depth). \\*
 				\midrule
 				\rowcolor{gray!18}
-				\textbf{Total} & $\boldsymbol{\approx 1.1\text{--}34\,\text{KiB}}$ & \textbf{Practical per-connection range from idle state through a fragmented handshake peak.} \\
+				\textbf{Total} & $\boldsymbol{\approx 2.0\text{--}38\,\text{KiB}}$ & \textbf{Practical per-connection range from idle state through a fragmented handshake peak.} \\
 				% Add rows using: first column & second column & third column \\
 			\end{xltabular}
 		
 			\footnotetext[1]{This region is not part of the caller heap. It is the 8 KiB BSS reservation that requires consumers to set their makefile's \texttt{BSSHEAP\_LOW}.}
-			\footnotetext[2]{While it would appear that \texttt{Decrypted Record Pbuf} and \texttt{Handshake Reassembly Buf} could collectively occupy approximately 32 KiB, in reality, the per-buffer maxima represent a worst-case allocation pattern and are not normally reached simultaneously. In practice, except for particularly hefty Certificate chains or large records, expect somewhere in the handful-of-kilobytes range (and no more than 34 KiB for highly fragmented records).}
+			\footnotetext[2]{While it would appear that \texttt{Decrypted Record Pbuf} and \texttt{Handshake Reassembly Buf} could collectively occupy approximately 32 KiB, in reality, the per-buffer maxima represent a worst-case allocation pattern and are not normally reached simultaneously. In practice, except for particularly hefty Certificate chains or large records, expect somewhere in the handful-of-kilobytes range (and no more than about 38 KiB for highly fragmented records and a full eight-certificate chain).}
 			\setcounter{footnote}{2}
 
-			Multi-connection TLS deployments add roughly $1\,\text{KiB}$ per idle TLS connection, plus transient record/reassembly cost for each concurrent handshake.
+			When revocation checking is enabled, each in-flight OCSP lookup adds a $440\,\text{B}$ HTTP job, its encoded request, a TCP PCB, and a response buffer that grows on demand to at most $5\,\text{KiB}$ (headers plus a $4\,\text{KiB}$ response); everything is released when the lookup completes.
+
+			Multi-connection TLS deployments add roughly $3.5\,\text{KiB}$ per idle TLS connection (socket, PCBs, TLS configuration, TLS state, and a minimum RX ring), plus transient record/reassembly cost for each concurrent handshake.
 
 			For convenience, lwIP-CE exposes a socket-style API modeled after the standard BSD socket interface, including functions such as \texttt{lwip\_socket\_create()}, \texttt{lwip\_socket\_connect()}, and \texttt{lwip\_socket\_listen()}. The API retains lwIP's nonblocking, callback-driven execution model while presenting consumers with opaque socket handles and familiar socket operations.
 
@@ -794,71 +798,67 @@ fontupper=\footnotesize
 				\bottomrule
 				\endfoot
 				UDP socket &
-				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
-				\parbox[t]{\linewidth}{$118\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$52\,\text{B}$ UDP PCB\\$\approx 226\,\text{B}$ total} &
+				$\approx 19.0\text{--}20.5\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$434\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$64\,\text{B}$ UDP PCB\\$554\,\text{B}$ total} &
 				$0.5\text{--}4\,\text{KiB}$ RX ring &
-				$\approx 19.5\text{--}24.5\,\text{KiB}$ \\
+				$\approx 20.0\text{--}25.0\,\text{KiB}$ \\
 
 				TCP socket &
-				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
-				\parbox[t]{\linewidth}{$118\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$\approx 200\,\text{B}$ TCP PCB\\$\approx 374\,\text{B}$ total} &
+				$\approx 19.0\text{--}20.5\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$434\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$176\,\text{B}$ TCP PCB\\$666\,\text{B}$ total} &
 				$0.5\text{--}4\,\text{KiB}$ RX ring &
-				$\approx 19.7\text{--}24.7\,\text{KiB}$ \\
+				$\approx 20.2\text{--}25.2\,\text{KiB}$ \\
 
 				TLS socket, idle &
-				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
-				\parbox[t]{\linewidth}{$118\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$\approx 225\,\text{B}$ ALTCP/TCP\\$321\,\text{B}$ TLS config\\$\approx 1.1\,\text{KiB}$ TLS layer\\$\approx 1.8\,\text{KiB}$ total} &
+				$\approx 19.0\text{--}20.5\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$434\,\text{B}$ socket handle\\$56\,\text{B}$ ring state\\$207\,\text{B}$ ALTCP/TCP\\$327\,\text{B}$ TLS config\\$2040\,\text{B}$ TLS layer\\$\approx 3.0\,\text{KiB}$ total} &
 				$0.5\,\text{KiB}$ RX ring &
-				$\approx 21.1\text{--}22.6\,\text{KiB}$ \\
+				$\approx 22.5\text{--}24.0\,\text{KiB}$ \\
 
 				TLS socket, application data &
-				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
-				$\approx 1.8\,\text{KiB}$ &
+				$\approx 19.0\text{--}20.5\,\text{KiB}$ &
+				$\approx 3.0\,\text{KiB}$ &
 				\parbox[t]{\linewidth}{$0.5\text{--}4\,\text{KiB}$ RX ring\\$0\text{--}16\,\text{KiB}$\\decrypted record} &
-				$\approx 21.1\text{--}42.1\,\text{KiB}$ \\
+				$\approx 22.5\text{--}43.5\,\text{KiB}$ \\
 
 				TLS socket, handshake &
-				$\approx 18.8\text{--}20.3\,\text{KiB}$ &
-				$\approx 1.8\,\text{KiB}$ &
-				\parbox[t]{\linewidth}{$0.5\text{--}4\,\text{KiB}$ RX ring\\up to $\approx 32.9\,\text{KiB}$\\TLS transient} &
-				$\approx 21.1\text{--}59.0\,\text{KiB}$ \\
+				$\approx 19.0\text{--}20.5\,\text{KiB}$ &
+				$\approx 3.0\,\text{KiB}$ &
+				\parbox[t]{\linewidth}{$0.5\text{--}4\,\text{KiB}$ RX ring\\up to $\approx 36.3\,\text{KiB}$\\TLS transient} &
+				$\approx 22.5\text{--}63.8\,\text{KiB}$ \\
 			\end{xltabular}
 
-			\emph{These projections count the shared initialization and one Ethernet device once, then add one socket. They exclude optional DHCP/DNS/SNTP state, allocator bookkeeping, application-owned buffers, and caller data copied into an outbound UDP datagram or TCP send queue. For additional simultaneous sockets, add only the applicable connection-state and transient-buffer columns.}
+			\emph{These projections count the shared initialization and one Ethernet device once, then add one socket. They exclude optional DHCP/DNS/SNTP state, OCSP lookups, allocator bookkeeping, application-owned buffers, and caller data copied into an outbound UDP datagram or TCP send queue. For additional simultaneous sockets, add only the applicable connection-state and transient-buffer columns.}
 			}
 
-		\subsection{Unified Event System and Diagnostic Traceback}
+		\subsection{Diagnostic Tools: Logfiles and PCAPS}\label{ssec:diagnostics}
 
-		Every module that can fail---USB, the custom allocator, TLS handshake/record processing, and the lwIP-CE glue layer itself---routes notable events through a single shared callback rather than each maintaining its own ad-hoc logging. The library performs no I/O of its own; if the caller wants a console, a persisted log, or an on-screen HUD, that happens inside the callback it registers with \texttt{lwip\_set\_event\_cb}. Each event carries a \texttt{module} (which subsystem) and a \texttt{kind}: \texttt{INFO} milestones, \texttt{DEBUG} trace points (self-throttling---a given \{file, line\} only re-fires once it stops repeating), \texttt{WARN} for tolerated problems, \texttt{ERROR} for hard failures, \texttt{STATE\_CHG} for transitions worth surfacing on their own (link up/down, IP acquired/lost, connection established/closed/failed, TLS handshake begin/done/failed), and \texttt{IO\_FILE}/\texttt{IO\_ETH} for AppVar and network byte-level traffic.
+		Most field failures happen on hardware, far from a debugger, and several callback frames removed from the code that could explain them. lwIP-CE therefore ships two on-calculator capture facilities that persist evidence to AppVars for later inspection: a plain-text event logfile and a packet capture (PCAP). Both are controlled exclusively by the user from the configuration application. Neither has an application-facing start, stop, or read API, so a program embedding the stack can neither enable capture the user disabled nor suppress capture the user enabled. Both are viewed, and deleted, from the same application.
 
-		On a single-threaded, callback-buried system like this one, the practical debugging problem is rarely ``something failed''---the application layer already gets that much from a socket error or a closed connection. The problem is finding \emph{where}, several callback frames removed from the code that can act on it, without re-running the failure under a debugger that may not even be attachable (most field failures happen on hardware, not in an emulator). To address this, every \texttt{WARN} and \texttt{ERROR} event additionally pushes a compact entry into a 32-deep ring buffer, independent of whether a callback is even registered. The application can pull this buffer at the moment it actually needs it---typically right after a socket operation reports failure---rather than having had to be watching every event live as it happened.
+		\paragraph{Logfiles}
+		When file logging is enabled, every event raised inside the stack (USB, allocator, TLS, sockets, and the glue layer) that passes the user's verbosity gate (\texttt{ERROR}, \texttt{WARNING}, \texttt{INFO}, or \texttt{DEBUG}) is formatted as one timestamped ASCII line of at most 192 bytes. Lines accumulate in a 576-byte RAM staging buffer and are appended to the active log only when the buffer fills or the stack flushes, which keeps AppVar writes off the per-event path.
 
-		\begin{verbatim}
-const struct lwip_traceback_entry *lwip_get_traceback(uint8_t *count);
-		\end{verbatim}
+		\begin{center}
+			\footnotesize
+			\rowcolors{2}{ltgray}{white}
+			\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.24\textwidth}X@{}}
+				\toprule
+				\rowcolor{gray!18}
+				\textbf{AppVar} & \textbf{Role} \\
+				\midrule
+				\texttt{lwIPLog} & Active log, held in RAM and capped at 16 KiB. \\
+				\texttt{lwIPLg00}--\texttt{lwIPLg08} & Archive slots. The user keeps between one and nine (two by default); once all are occupied, the oldest is replaced. \\
+				\texttt{lwIPLgMD} & Three-byte ring metadata: oldest slot, occupied count, and configured maximum. \\
+				\bottomrule
+			\end{tabularx}
+		\end{center}
 
-		Calling this returns a pointer to an internally-owned array (valid until the next call, or until another entry is pushed) ordered newest-first, along with how many entries it holds. A typical consumer walks it immediately after observing a failure:
+		When \texttt{lwIPLog} reaches its cap it is \emph{renamed} into the next archive slot and archived to flash; a fresh active log starts on the next flush. Rotation never copies log data or appends to an archived variable. Writing to an archived AppVar would first move it back into RAM, which is unaffordable while the stack is running, so the only RAM the logger ever holds is the staging buffer and the single active file. Archived slots survive a RAM clear.
 
-		\begin{verbatim}
-uint8_t count;
-const struct lwip_traceback_entry *entries = lwip_get_traceback(&count);
-for (uint8_t i = 0; i < count; i++) {
-    const struct lwip_traceback_entry *e = &entries[i];
-    printf("file=%s line=%lu err=%d\n",
-           lwip_debug_file_name(e->file), e->line, e->raw_error);
-}
-		\end{verbatim}
+		\paragraph{Packet capture}
+		When PCAP is enabled, every Ethernet frame received or transmitted on a capturing interface is recorded together with a small header identifying the interface, direction, and length. Records are staged in a 2 KiB per-interface buffer, sized so a full 1518-byte frame always fits, which is carved from a pool that grows up to 8 KiB, and flushed to the \texttt{lwIPPCAP} AppVar in batches. The capture file grows only to the user's limit of 4, 8, 16, or 32 KiB, after which capture stops rather than wrapping, so the beginning of a session (link bring-up, DHCP, DNS, and the TLS handshake) is never overwritten. The configuration application includes a capture browser that lists records and decodes Ethernet, ARP, IPv4, TCP, UDP, and DNS headers, with a hex view of each record.
 
-		\begin{wrapfigure}{r}{0.42\linewidth}
-			\centering
-			\includegraphics[width=\linewidth]{traceback_demo.jpg}
-			\caption{\footnotesize On-device traceback output after a TLS fetch failure. The socket-level error appears first, followed by the stack frames that led to it.}
-			\label{fig:traceback_demo}
-		\end{wrapfigure}
-
-		Two kinds of entry can appear in the buffer. A \emph{code} entry (an ordinary \texttt{WARN}/\texttt{ERROR} raised from inside the stack) carries \texttt{module}, \texttt{kind}, \texttt{file}, \texttt{line}, and an optional caller-supplied \texttt{extra} code identifying the exact source location and circumstance. A \emph{socket} entry, pushed by the higher-level socket wrapper API when it maps an internal failure into something the application sees, instead carries \texttt{component} and \texttt{operation} (which socket subsystem and call were involved), \texttt{raw\_error} (the underlying \texttt{err\_t} or module-specific code), \texttt{mapped\_error}, and \texttt{status}---\texttt{file}/\texttt{line} are zero on these, since the causal call site is expected to already be present as a preceding code entry in the same trace. In both cases the entry is small and fixed-size, so the whole buffer costs a bounded, constant amount of memory regardless of how chatty a given failure was.
-
-		The result is that a socket-level failure---a connection that times out, a write that fails, a handshake that aborts---is no longer just a single opaque status code at the top of the call stack. The application can walk backward through exactly the chain of WARN/ERROR events that led to it, down to the file and line where the underlying condition was first detected, without needing to have instrumented anything in advance or reproduced the failure under a debugger.
+		Taken together, the logfile records \emph{what the stack decided} and the PCAP records \emph{what crossed the wire}, which is usually enough to localize a failure to the stack, the network, or the peer without reproducing it under an emulator.
 
 		\newpage
 		\section{TLS 1.3 Implementation Considerations}
@@ -1112,6 +1112,8 @@ for (uint8_t i = 0; i < count; i++) {
 
 	The handshake proceeds while background verification runs because blocking the stack for the full chain duration risks TCP keepalive failures and connection timeouts on constrained hardware. Fail-closed guarantees are preserved regardless: a link that fails signature validation or carries an unsupported algorithm immediately aborts the handshake with a TLS fatal alert. Additionally, if \texttt{CertificateVerify} or \texttt{Finished} arrives before the job queue has drained, the dispatcher holds those messages until every queued link has passed, so a valid-looking \texttt{Finished} cannot be exchanged over a chain that has not yet been fully verified.
 
+	When revocation checking is enabled, OCSP is folded into the same streaming pass rather than requiring a second walk of the chain. While each certificate is parsed, the walker extracts the OCSP responder URL from its \texttt{authorityInfoAccess} extension, its serial number, and the SHA-1 hash of its issuer Name; once the issuer's key is known (the next certificate, or for the topmost certificate the truststore root, whose Name hash is stored and whose key hash is derived on the device), the issuer key hash completes the RFC~6960 \texttt{CertID}. This request state travels with the deferred link, and the query is issued only after that link's signature has verified. Responses are capped at 4~KiB and parsed in place: the single response must match the \texttt{CertID} exactly, must be signed either by the issuer itself or by a delegated responder certificate that the issuer signed and that carries the \texttt{id-kp-OCSPSigning} extended key usage, and must be fresh (\texttt{thisUpdate} no more than five minutes ahead of the device clock, \texttt{nextUpdate} not yet passed). As with chain links, the handshake waits for every outstanding lookup, and any result other than a verified \texttt{good} aborts it.
+
 	\paragraph{Hostname and Validity-Period Checks}
 	Chain-link signatures and \texttt{CertificateVerify} together establish that the presented chain is internally consistent and that the peer holds the leaf private key --- but neither one proves the leaf certificate was actually issued for the host the client meant to connect to, nor that it is currently within its issuer-stated validity period. Both gaps are closed as part of the same per-certificate pass that runs the adjacent-link check above, fail-closed on either:
 	\begin{itemize}
@@ -1131,7 +1133,7 @@ for (uint8_t i = 0; i < count; i++) {
 	The workflow:
 	\begin{enumerate}
 		\item Scans common CA-certificate locations on the runner (for example \texttt{/etc/ssl/certs}) and collects parseable trust anchors.
-		\item Extracts the following from each certificate, skipping any whose key the device-side verifier cannot handle (RSA moduli above the supported size, or non-P-256 EC keys):
+		\item Extracts the following from each certificate with key type matching one of: RSA-2048$\rightarrow$4096, P-256, P-384:
 		\begin{itemize}
 			\item The SHA-256 digest of the complete DER-encoded subject Name and the \texttt{SubjectKeyIdentifier} extension. The normal anchor lookup matches the topmost certificate's Authority Key Identifier to the root SKI and then binds the full issuer Name; subject-Name-digest lookup is retained for certificates without an AKI.
 			\item The expiry timestamps (not-before, not-after)
@@ -1229,10 +1231,10 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 			Extension & Presence & Value / Notes \\
 			\midrule
 			\texttt{supported\_versions} & Always & TLS~1.3 only (\texttt{0x0304}) \\
-			\texttt{supported\_groups} & Always & \texttt{x25519} (\texttt{0x001d}), \texttt{secp256r1} (\texttt{0x0017}) \\
+			\texttt{supported\_groups} & Always & \texttt{x25519} (\texttt{0x001d}), \texttt{secp256r1} (\texttt{0x0017}); P-384 is used for signatures only, not key exchange \\
 			\texttt{key\_share} & Always & ClientHello1 carries X25519 (32~B); ClientHello2 carries P-256 (65~B uncompressed) only after HRR selects it \\
-			\texttt{signature\_algorithms} & Always & \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp256r1\_sha256} \\
-			\texttt{signature\_algorithms\_cert} & Always & \texttt{rsa\_pkcs1\_sha256}, \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp256r1\_sha256} \\
+			\texttt{signature\_algorithms} & Always & \texttt{ecdsa\_secp256r1\_sha256}, \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp384r1\_sha384} \\
+			\texttt{signature\_algorithms\_cert} & Always & \texttt{rsa\_pkcs1\_sha256}, \texttt{rsa\_pss\_rsae\_sha256}, \texttt{ecdsa\_secp256r1\_sha256}, \texttt{ecdsa\_secp384r1\_sha384} \\
 			\texttt{record\_size\_limit} & Always & 4096 bytes as \texttt{uint16} (RFC~8449) \\
 			\texttt{server\_name} (SNI) & If hostname set & Single \texttt{host\_name} entry; omitted for raw-IP connections \\
 			\texttt{psk\_key\_exchange\_modes} & If PSK mode & \texttt{psk\_dhe\_ke} only; pure-PSK (\texttt{psk\_ke}) is not offered \\
@@ -1245,13 +1247,13 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	\end{figure}
 
 	\paragraph{Cipher suites}
-	Two cipher suites are offered, in preference order: \texttt{TLS\_AES\_128\_GCM\_SHA256} (\texttt{0x1301}) and \texttt{TLS\_AES\_128\_CCM\_SHA256} (\texttt{0x1304}). \texttt{TLS\_AES\_256\_GCM\_SHA384} and \texttt{TLS\_CHACHA20\_POLY1305\_SHA256} are not offered; SHA-384 requires a second hash state machine the eZ80 port does not carry, and ChaCha20-Poly1305 is not implemented. A server that supports only 256-bit or ChaCha suites will reject the handshake.
+	Three cipher suites are offered on a full handshake, in preference order: \texttt{TLS\_AES\_128\_GCM\_SHA256} (\texttt{0x1301}), \texttt{TLS\_AES\_256\_GCM\_SHA384} (\texttt{0x1302}), and \texttt{TLS\_AES\_128\_CCM\_SHA256} (\texttt{0x1304}). Selecting the SHA-384 suite switches the transcript hash and key schedule to SHA-384 (48-byte secrets) and AES to 256-bit keys. A ClientHello that offers a PSK carries only the two SHA-256 suites, matching the SHA-256 binder. \texttt{TLS\_CHACHA20\_POLY1305\_SHA256} is not offered because ChaCha20-Poly1305 is not implemented; a server that supports only ChaCha will reject the handshake.
 
 	\paragraph{Record size}
 	The \texttt{record\_size\_limit} extension (RFC~8449) requests 4096-byte plaintext records. A server that echoes the extension must not exceed the negotiated limit; a server that ignores it may send up to the TLS maximum (16~KB), which the implementation accepts from heap. Either way, a record exceeding the negotiated (or default) limit triggers a fatal \texttt{record\_overflow} alert per RFC~8449~\S4.
 
 	\paragraph{Key exchange}
-	The initial \texttt{ClientHello} advertises both X25519 and P-256 in \texttt{supported\_groups}, but offers only an X25519 \texttt{key\_share}. This keeps the common path on the faster group and avoids blocking the connection on an unused P-256 generation. P-256 generation proceeds speculatively when Wi-Fi bridge offload is available; without offload, the blocking local operation is deferred until an HRR selects P-256. \texttt{ClientHello2} then carries exactly the P-256 share. An HRR that repeats X25519, requests an unadvertised group, or follows an earlier HRR is rejected with the appropriate fatal alert.
+	The initial \texttt{ClientHello} advertises both X25519 and P-256 in \texttt{supported\_groups}, but offers only an X25519 \texttt{key\_share}. X25519 is not chosen for speed: on the eZ80 one X25519 handshake costs two full ladders (roughly 4\,s each), while P-256 key generation plus shared-secret derivation together cost less. It is chosen because nearly every TLS 1.3 server accepts an X25519 share, and several large deployments force a HelloRetryRequest to X25519 whatever share the client sends, so leading with X25519 keeps the common path free of retries and avoids an unused P-256 generation. P-256 generation proceeds speculatively when Wi-Fi bridge offload is available; without offload, the blocking local operation is deferred until an HRR selects P-256. \texttt{ClientHello2} then carries exactly the P-256 share. An HRR that repeats X25519, requests an unadvertised group, or follows an earlier HRR is rejected with the appropriate fatal alert.
 
 	\textit{The remainder of the handshake hedges on the negotiation of material within \texttt{ClientHello}, \texttt{ServerHello}, and \texttt{HelloRetryRequest} and will not be documented here. See RFC 8446 if you would like a breakdown of the entire handshake process.}
 
@@ -1268,30 +1270,25 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 
 		The suite is dyload-driven: each test links against the curated, manifest-gated \texttt{lwip.lib} produced by the release build, the same artifact a consumer application loads at runtime. This exercises the released ABI surface and the public \texttt{lwip\_start()} initialization path instead of compiling TLS sources directly from \texttt{src/} or using test-only bootstrap code. A missing export, manifest omission, or ABI mismatch therefore fails the test at build or link time before runtime behavior is considered.
 
-		Unit coverage includes truststore integrity verification, certificate-chain trust decisions, ASN.1/X.509/PKCS parser behavior, malformed-input rejection, and dedicated primitive tests for hashing, HMAC, HKDF, PBKDF2, AES, RSA-OAEP/PSS, X25519, and Base64. Tests use RFC vectors where available, with RFC and section identifiers recorded in metadata, and implementation-directed cases where no official vector set exists.
+		Validation runs as two GitHub Actions pipelines:
+		\begin{enumerate}
+			\item A unified build, test, and deploy workflow (\texttt{build.yml}) that, on every push and pull request:
+			\begin{enumerate}
+				\item builds the release artifact from the commit under test;
+				\item installs that artifact into \texttt{CEmu} and emits a savestate, so every downstream job starts from the same installed image;
+				\item dispatches to the test jobs: the CEmu unit tests, a rapid ACVP-style primitive self-test against the shipping eZ80 binary, network testing of the emulated calculator over a local network driven through an MCP interface, host-side and fuzz tests, SAST (Semgrep and CodeQL), and DAST;
+				\item if every check passes, deploys the tested artifact to the \texttt{latest-stable} release tag.
+			\end{enumerate}
+			\item A separate, manually triggered ACVP long test (\texttt{acvp-live.yml}). It authenticates to NIST's ACVTS demo server with project credentials, downloads the registered vector sets, feeds them to the calculator in \texttt{CEmu} over the same MCP/local-network channel, builds the responses from the calculator's output, and submits them back to NIST for grading.
+		\end{enumerate}
 
-		\texttt{build.yml} orchestrates the validation pipeline by building the dylib once, then fanning out to independent checks:
-		\begin{figure}[H]
-			\centering
-			\scriptsize
-			\rowcolors{2}{ltgray}{white}
-			\begin{tabularx}{0.94\textwidth}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
-				\toprule
-				\rowcolor{gray!18}
-				Workflow & Purpose & Reviewer signal \\
-				\midrule
-				\texttt{tests.yml} & Deterministic CEmu unit tests for parser, trust, and primitive behavior. & Hard regression gate; failures name the unit and vector/case. \\
-				\texttt{cavp.yml} & On-device validation against CAVP-derived and compatible generated vectors. & Confirms the shipping eZ80 binary computes expected primitive outputs. \\
-				\texttt{statistics.yml} & RNG statistics publisher and differential timing profiler. & Each statistics job runs only when its corresponding checked-in data changes. \\
-				\texttt{sast.yml} & Semgrep scan over project-owned changes relative to upstream lwIP. & Static review surface focused on added or modified code. \\
-				\texttt{dast.yml} & Network-facing ARP, ICMP, TCP, and UDP probes against the emulated stack. & Integration coverage for transport behavior outside unit scope. \\
-				\bottomrule
-			\end{tabularx}
-		\end{figure}
+		Additionally, every pull request must pass one further check: \textbf{RFC compliance}. This check uses inference rather than a fixed rule set. The diff against \texttt{master} is put to DeepSeek V4.1 Flash, together with the project's RFC compliance ledger (described below) and the text of the governing RFCs, and asked whether the change introduces behavior that violates any of them. Anything it flags is then independently re-examined by a second model, the OpenAI model configured in the workflow, and the PR is flagged for review only when both passes confirm a grounded violation. Changes to the check's own inputs (the ledger, the prompt, and the response schema) are refused deterministically instead of being put to the models, so a pull request cannot argue the check out of its own instructions.
 
-		These checks are separated so deterministic correctness gates are not conflated with profiling or integration telemetry. Unit and CAVP failures are treated as hard correctness failures; timing results are evidence of drift or input-dependent behavior, not a formal leakage proof under adversarial averaging models. The nightly \texttt{publish} job is gated on the validation set, so release artifacts are not produced from a failed run.
+		The justification for using inference here is the nature of the defect being hunted. An RFC violation is usually code that is perfectly correct as code: it compiles, passes its own tests, and is internally consistent, yet does the wrong thing relative to a specification clause, for example accepting a message in the wrong state, skipping a MUST-level check, or reordering a transcript input. Pattern-based static analysis has no notion of the concept being violated, while inference models, given precise prompting and the specification text as grounding, are surprisingly well suited to recognizing when a change breaks a concept rather than a syntax rule. A flagged PR is routed to human review rather than rewritten, and the two-model confirmation keeps the false-positive rate low enough for the check to be required.
 
-		Each workflow writes a self-contained job summary intended to be usable as an audit artifact without cloning the repository. Unit summaries list the governing RFC section and failing vector where applicable; CAVP summaries report per-primitive pass counts and mismatches; timing summaries include deviation charts and median/exceedance tables; SAST summaries list scoped findings. Current runs are available from the repository Actions page: \url{https://github.com/cagscalclabs/lwip-ce/actions}.
+		These checks are separated so deterministic correctness gates are not conflated with profiling or integration telemetry. Unit and ACVP failures are treated as hard correctness failures; timing results are evidence of drift or input-dependent behavior, not a formal leakage proof under adversarial averaging models. The \texttt{deploy} job is gated on the full validation set, so release artifacts are never produced from a failed run.
+
+		Each workflow writes a self-contained job summary intended to be usable as an audit artifact without cloning the repository. Unit summaries list the governing RFC section and failing vector where applicable; ACVP summaries report per-primitive pass counts and mismatches; timing summaries include deviation charts and median/exceedance tables; SAST summaries list scoped findings. Current runs are available from the repository Actions page: \url{https://github.com/cagscalclabs/lwip-ce/actions}.
 
 		\paragraph{RFC and Standards Compliance Ledger}
 		A clause-by-clause mapping of every RFC, NIST SP, and FIPS requirement this implementation targets is maintained as a machine-readable XML source and published as a static HTML report alongside these docs. Each entry records the standard reference, the specific section, the source location where the requirement is satisfied or deviated from, a \texttt{COMPLIANT}/\texttt{DEVIANT} grade, and a note explaining any deviation or known gap. The ledger is the authoritative cross-reference between the prose descriptions in this document and the actual code. It is available at \url{https://cagscalclabs.github.io/lwip-ce/tls-specifications.html}.
@@ -1299,7 +1296,7 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 		\begin{figure}[H]
 			\centering
 			\includegraphics[width=0.62\linewidth]{ci_pipeline_graph.jpg}
-			\caption{\footnotesize GitHub Actions visualization of a \texttt{build.yml} run: \texttt{dylib\_latest} builds once, then fans out to the unit, CAVP, and timing workflows alongside SAST/DAST, all gating \texttt{publish}.}
+			\caption{\footnotesize GitHub Actions visualization of a \texttt{build.yml} run: the artifact builds once, then fans out to the test jobs, all of which gate deployment.}
 		\end{figure}
 
 		One deliberate exclusion is worth documenting: RNG validation is not part of the emulator unit suite. \texttt{CEmu}'s SRAM behavior is deterministic and does not reproduce the physical bitline noise used by the entropy source, so emulator RNG output is not meaningful evidence for this implementation. RNG behavior is instead validated against hardware captures, following the protocol in Section~\ref{ssec:contributing_data}. There is also no dedicated unit-level harness for the Ethernet RX driver or the \texttt{membuffer} allocator in isolation; network-facing behavior is covered by DAST, while allocator behavior is exercised through stack integration paths.
@@ -1341,22 +1338,16 @@ A truststore age check (warning only, not a rejection condition, comparing \text
 	
 	For each class, the reported statistics include class median deviation from the calibration median and exceedance rate (percentage of samples where $|T_i-m|>\Delta_c$). A differential failure is flagged when separation from calibration exceeds the accepted deviation with directionally consistent behavior across at least a three-quarters majority of samples.	
 	
-	Each unit is sampled $32$ times, where each sample is a composite of repeated executions selected by algorithm runtime class: fast units use $4$ repetitions, medium units use $2$, and slow units use $1$. This batching further suppresses class-independent timing jitter.
+	Each unit is sampled $32$ times, where each sample is a composite of repeated executions selected by algorithm runtime class: fast units use $8$ repetitions, medium units use $4$, slow units use $2$, and the slowest (P-256 and P-384 operations) use $1$. This batching further suppresses class-independent timing jitter.
+
+	Hardware timing captures are collected through the same online capture resource (\url{https://cagscalclabs.net/contribute/captures/lwip/}), which provides the profiler (distributed as \texttt{XTIMING}) for the contributor to run on their own calculator, then collects the resulting metrics file. Accepted datasets are retained in the repository under \href{https://github.com/cagscalclabs/lwip-ce/tree/master/statistics/timing}{\texttt{statistics/timing}}, again with no personally identifying information: only the calculator model, a random capture identifier, the capture time, and the producing tool commits.
 
 	Latest timing-profiler workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/statistics.yml}.
 
-	\subsubsection{CAVP Validation}
+	\subsubsection{RNG Profiler}
+	The \texttt{tls\_rng\_stats} profiler (distributed as \texttt{RNGSTAT}) characterizes the raw hardware entropy tap on real calculators, since \texttt{CEmu} cannot reproduce the SRAM bitline noise the source depends on. It collects eight windows of 32{,}768 raw bits from the selected tap, together with the generator's health-test results, and writes them as text to the \texttt{RNGSTATS} AppVar. The calculator side deliberately does no estimation; the host-side analyzer (\texttt{tools/analyze\_rng\_stats.py}) computes the most-common-value and Markov min-entropy bounds, the first-order dependency factor, and the conservative working estimate reported in Section~\ref{ssec:min_entropy}.
 
-	Formal cryptographic certification depends not only on algorithm behavior, but also on implementation context, build process, operating environment, and hardware security properties. Because this stack runs as calculator application code on hardware without a secure execution environment or certified key-storage boundary, it is not presented as a formally certified cryptographic module.
-
-	
-	Instead, the project demonstrates algorithmic correctness against NIST CAVP-published response files and compatible generated reference vectors. The CAVP workflow downloads the relevant NIST \texttt{.rsp} vector archives for supported primitives and selects 16 random samples per primitive on each run. For primitives without compatible CAVP response files, vectors are generated during the workflow with \texttt{python3-cryptography} using the relevant RFC-defined algorithm parameters. If NIST resources are unavailable, the workflow uses the cached CAVP archives from a previous successful run; if neither the source archive nor cache is available, validation fails closed.
-
-	\paragraph{Round-trip pipeline}: The reason for the AppVar hand-off is that the implementation under test only exists on the calculator --- the same eZ80 binary that ships, not a host re-build --- so the vectors have to travel to the device and the answers have to travel back. The pipeline has four stages. \emph{(1) Serialization}: the host harness encodes the selected vectors (inputs, keys, IVs, and the metadata identifying which primitive and operation each belongs to) into the \texttt{CAVPIN} AppVar, a flat binary layout the on-device runner can walk without a parser. \emph{(2) On-device execution}: \texttt{CAVPIN} is loaded onto the emulator, the runner reads each record, calls the real lwIP-CE implementation, and appends the computed output to the \texttt{CAVPOUT} AppVar --- the device never sees the expected answers, so it cannot accidentally echo them. \emph{(3) Exfiltration}: \texttt{CAVPOUT} is pulled back off the emulator to the host. \emph{(4) Comparison}: the host parses \texttt{CAVPOUT} and checks each computed value against the reference output it withheld in stage~1, byte-for-byte. A mismatch on any sample fails the run and names the offending primitive and vector index, so a regression points at a specific algorithm rather than a vague ``CAVP failed.'' Keeping the reference answers exclusively on the host side is deliberate: it ensures the device is genuinely computing the result, not transporting it.
-
-	\paragraph{Exclusions}: RSA-PSS vectors are generated with \texttt{python3-cryptography} because this implementation fixes $e=65537$, while the available NIST PSS response files do not provide a compatible fixed-exponent set. X25519 vectors are also generated with \texttt{python3-cryptography}, supplemented by RFC 7748 vectors, because CAVP does not publish X25519 coverage for this use case.
-
-	Latest CAVP-validation workflow results: \url{https://github.com/cagscalclabs/lwip-ce/actions/workflows/cavp.yml}.
+	Captures are collected from contributors through the online capture resource at \url{https://cagscalclabs.net/contribute/captures/lwip/}, which provides the profiler for the contributor to run on their own calculator, then collects the resulting \texttt{RNGSTATS} file for inclusion in the project (see Section~\ref{ssec:contributing_data}). Accepted datasets are retained in the repository under \href{https://github.com/cagscalclabs/lwip-ce/tree/master/statistics/rng}{\texttt{statistics/rng}}. They contain no personally identifying information: each records only the calculator model, a random capture identifier, the capture time, and the commits of the tools that produced it.
 
 	\subsection{Profiling and Mitigating Platform Security Limitations}
 	
@@ -1604,7 +1595,7 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 		&
 		Under investigation (may be resolved by recent RFC audit).
 		&
-		Appears near the end of the handshake; may be a missing or mis-sequenced record from the server. If you encounter this, please submit a traceback (see Section~\ref{ssec:contributing_data}). \\
+		Appears near the end of the handshake; may be a missing or mis-sequenced record from the server. If you encounter this, please file a bug report with a log and packet capture attached (see Appendix~\ref{ssec:bug_reports}). \\
 		\addlinespace
 	\end{longtable}
 
@@ -1755,16 +1746,12 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 	Two of the analyses in this document --- the raw-tap entropy characterization in Section~\ref{ssec:min_entropy} and the differential timing characterization above --- benefit materially from broader hardware coverage than any individual developer can produce. The TI-84+ CE has gone through several hardware revisions over its production lifetime, and physical-source behavior (in particular the SRAM bitline characteristics underlying the entropy tap) is not guaranteed to be uniform across them. Community-contributed captures expand the empirical envelope rather than re-validate the existing bound: each submission adds coverage for a device class the project's own benches do not include.
 
 	\paragraph{What to capture}
-	The project maintainer hosts two online profiling tests for the purpose of assisting users with running capture tools on their calculator without having to use a sketchy, zipped pre-release build and profiling tool. The profiler sources binaries from a Github release tagged \texttt{capture-builds}, which is pinned to \texttt{v3.0.0-rc2} (this release is stable enough for the capture code).
-
-	The profiler is powered by WebTiLP, which means that it can communicate with your calculator via WebUSB and remotely control your device. The profilers execute the following steps:
+	The project maintainer hosts a capture resource at \url{https://cagscalclabs.net/contribute/captures/lwip/} so that contributors can run the profiling tools without hunting down a zipped pre-release build. The page supplies the software from a GitHub release tagged \texttt{capture-builds}, which is pinned to \texttt{v3.0.0-rc2} (stable enough for the capture code). The capture itself is run by the contributor, not automated:
 
 	\begin{itemize}
-		\item Locate the \texttt{lwIP} resident application on your device.
-		\item Jump to the version string, linked in the lwIP build at offset $0x1000$ from $app\_base$. Verify that it matches v3.0.0 or later.
-		\item [Conditional] If user's lwIP version is <3.0.0, uninstall lwIP, download the dylib installer bundle from the \texttt{capture-build} release, verify file integrity, transfer the files to your calculator, then run the app installer program on your calculator. The profiler then waits for the calculator to become responsive and for a directory check to report lwIP exists.
-		\item Download the profiler tool (RNGSTAT for the RNG capture, XTIMIG for the timing profiler), verify file integrity, transfer the profiler to your calculator, then run the profiler tool. The profiler then waits for the calculator to become responsive and for a directory check to report the metrics file exists (RNGSTATS for the RNG profiler, TLSTMLOG for the timing profiler).
-		\item Transfer the metrics file from the calculator into the browser. Parse the file into readable json, which gets emitted into a project-run Discord channel for accumulation.
+		\item Download the lwIP-CE installer bundle (if your calculator does not already have lwIP v3.0.0 or later) and the profiler you want to run: \texttt{RNGSTAT} for the RNG capture or \texttt{XTIMING} for the timing profiler.
+		\item Transfer them to your calculator, install lwIP if needed, and run the profiler. When it finishes it leaves a metrics file on the calculator: \texttt{RNGSTATS} for the RNG profiler, \texttt{TLSTMLOG} for the timing profiler.
+		\item Return to the capture page and connect the calculator. The page uses WebTiLP to read the metrics file over WebUSB, parses it into JSON, and posts it to a project-run Discord channel for accumulation.
 	\end{itemize}
 
 	\paragraph{Device identification}\label{par:device_id}
@@ -1772,26 +1759,26 @@ When evaluated in unison, these mechanisms provide best-effort memory sanitizati
 
 	The device identifier is used to sort the the heuristics into per-model datasets, which in turn can help us see if behavior is reliable, or differs, across models.
 
-	\paragraph{Issue tracebacks}\label{par:issue_tracebacks}
-	The known and outstanding issues tracked in Appendix~\ref{ssec:known_issues} (notably \texttt{st closed sent 0}/\texttt{st closed sent 1}) are presently blocked on field reproduction data rather than RNG or timing coverage, and benefit from the same submission channels. A useful traceback report includes:
-	\begin{itemize}
-		\item \textbf{Traceback output.} The v1.0-rc4 traceback system's captured output at the point of failure (see Section~\ref{ssec:engineering_notes}), including the state string (e.g.\ \texttt{st closed sent 0}) and any preceding trace lines, not just the final line.
-		\item \textbf{Peer/server identity.} The hostname or service the connection was made to, and, if known, the TLS server implementation (e.g.\ nginx, a specific embedded TLS stack) --- the suspected cause is a missing or misinterpreted record type from certain peers.
-		\item \textbf{Reproducibility.} Whether the failure is consistent against that peer or intermittent, and approximately how far into the post-handshake exchange it occurs.
-		\item \textbf{Build/version.} The lwIP-CE library version and, where applicable, the calling application's version, since trampoline and record-handling behavior can shift between revisions.
-		\item \textbf{Device metadata.} The same hardware revision, OS version, and boot code requested under \nameref{par:device_id} above, in case the failure correlates with a hardware or firmware class.
-	\end{itemize}
-	As with calibration captures, tracebacks carry no submitter-identifying metadata by default and are evaluated purely on their technical content.
+	\paragraph{Issue reports}\label{par:issue_tracebacks}
+	Any problem with lwIP-CE, not just the known issues in Appendix~\ref{ssec:known_issues}, can be filed through the bug reporter at \url{https://cagscalclabs.net/contribute/captures/bugreport/}. It transfers logs and packet captures directly from the calculator alongside the issue description; see Appendix~\ref{ssec:bug_reports} for how a report is handled.
 
 	\paragraph{How to submit}
-	Submissions can be sent via either channel below:
-	\begin{itemize}
-		\item Project Discord: \url{https://discord.gg/CtEq3rXZGJ} --- a dedicated channel exists for capture submissions and questions about the protocol.
-		\item Direct email: \texttt{info@cagscalclabs.net} --- preferred when attaching large AppVar bundles.
-	\end{itemize}
+	Profiler captures go through the online captures page at \url{https://cagscalclabs.net/contribute/captures/lwip/}; issue reports go through the bug reporter at \url{https://cagscalclabs.net/contribute/captures/bugreport/} (Appendix~\ref{ssec:bug_reports}). Questions about the process can be asked in the project Discord (\url{https://discord.gg/CtEq3rXZGJ}).
 	The capture tool itself, its source, and the parsing scripts are versioned within this repository; contributors are asked to record which tool version produced their submission so the analysis pipeline can account for any schema changes between releases.
 
 	\paragraph{Privacy and licensing}
 	The project does not collect personally identifying information from contributors and does not maintain an attribution roster for submitted captures. This is a deliberate privacy-by-design choice: the community includes minors, and the analytical value of a capture is determined entirely by the device metadata accompanying it (hardware revision, OS version, boot code), not by the identity of the submitter. Captures are processed and incorporated into the published dataset under the project's existing license; once accepted, a capture is not retraceable to its submitter through any project-controlled record. Contributors who wish to be visible may identify themselves publicly on Discord or in GitHub discussions, but the project itself maintains no such linkage.
+
+
+	\subsection{Bug Reports}\label{ssec:bug_reports}
+	The bug reporter at \url{https://cagscalclabs.net/contribute/captures/bugreport/} is the general way to file an issue with lwIP-CE. It lets the reporter transfer the on-calculator diagnostics described in Section~\ref{ssec:diagnostics} directly from the calculator over WebUSB (or from \texttt{.8xv} files already on disk) and enter the issue details in the same form. Only qualifying files are offered (\texttt{lwIPLog}, the archive slots \texttt{lwIPLg00}--\texttt{lwIPLg08}, \texttt{lwIPLgMD}, and \texttt{lwIPPCAP}), only the files the reporter selects are sent, and the WebUSB path only reads existing files and installs nothing on the calculator. A useful description covers what you were doing, what you expected, and what happened, plus the lwIP-CE version, calculator model, and OS version if known.
+
+	Submitting does two things at once:
+	\begin{enumerate}
+		\item A GitHub issue is opened automatically on the lwIP-CE repository, with the description as its context.
+		\item The selected files are converted and posted to the development team's Discord accumulation channel. Log AppVars are parsed into plain \texttt{.log} files that open in any desktop log viewer, and \texttt{lwIPPCAP} is converted into a standard \texttt{.pcap} file that opens directly in Wireshark.
+	\end{enumerate}
+
+	Because logs and captures may contain sensitive information (hostnames, IP addresses, server names, connection metadata, and packet contents), they remain private to the project developers. They are not posted with the public issue, and they are not retained once the issue is resolved.
 
 \end{document}
