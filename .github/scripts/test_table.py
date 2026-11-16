@@ -368,8 +368,9 @@ def render_section(category: str, units: dict[str, list[dict[str, str]]]) -> lis
         lines += ["> [!CAUTION]", f"> **{len(failures)} failed**", ""]
         lines += [f"| {noun} | Test | Detail |", "|---|---|---|"]
         for unit, t in failures[:FAILURE_LIMIT]:
-            detail = t["stats"] or (t["description"] if t["description"] != t["test"] else "")
-            lines.append(f"| {md(unit)} | {md(t['test'])} | {md(detail)} |")
+            # A single-result unit's only test is a placeholder ("Result").
+            name = "—" if len(units[unit]) == 1 and t["test"] in {"Result", "run"} else test_label(t, set())
+            lines.append(f"| {md(unit)} | {md(name)} | {md(t['stats'])} |")
         if len(failures) > FAILURE_LIMIT:
             lines.append(f"| … | {len(failures) - FAILURE_LIMIT} more | expand the {plural} below |")
         lines.append("")

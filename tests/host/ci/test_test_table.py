@@ -14,7 +14,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-def test_render_builds_module_unit_test_hierarchy() -> None:
+def test_render_sections_lead_with_status_and_failures() -> None:
     nested = [{
         "module": "tls",
         "description": "TLS subsystem tests",
@@ -39,6 +39,8 @@ def test_render_builds_module_unit_test_hierarchy() -> None:
     rows = [
         {"group": "NETTEST", "module": "NETTEST", "test": "TLS - handshake",
          "grade": "Pass", "stats": "100 ms"},
+        {"group": "NETTEST", "module": "NETTEST", "test": "TLS - tls bulk session",
+         "grade": "Pass"},
         {"group": "FUZZ", "module": "FUZZ", "test": "x509",
          "grade": "Pass", "stats": "1000 executions"},
     ]
@@ -50,17 +52,27 @@ def test_render_builds_module_unit_test_hierarchy() -> None:
         MODULE.render(root, output, ["UNIT|Suite execution|failure"])
         text = output.read_text()
 
-    assert "| Module | # Units | # Pass | # Fail | # Skip |" in text
-    assert "| 🟩 TLS | 2 | 0 | 1 | 1 |" in text
-    assert "| 🟩 UNIT |" not in text
-    assert "| 🟨 NETTEST | 1 | 1 | 0 | 0 |" in text
-    assert "<summary>TLS Units</summary>" in text
-    assert "- **hash** — SHA-384: known answer (20 ms)" in text
-    assert "| hash | 2 | 1 | 1 | 0 |" in text
-    assert "<summary>hash Tests — ❌ Fail</summary>" in text
-    assert "| SHA-256 | ✅ Pass | known answer | 10 ms |" in text
-    assert "<summary>TLS Tests — ✅ Pass</summary>" in text
-    assert "<summary>x509 Tests — ✅ Pass</summary>" in text
+    # One titled status line per job, in CI order.
+    assert text.startswith("### ❌ Unit tests — 1/3 passed\n")
+    assert "2 units · 1 failed, 1 skipped" in text
+    assert text.index("Unit tests") < text.index("Network tests") < text.index("Fuzzing")
+    # Failures come first, readable without expanding anything.
+    assert "> [!CAUTION]\n> **1 failed**" in text
+    assert "| hash | known answer (SHA-384) | 20 ms |" in text
+    # The fallback is suppressed once the job produced real results.
+    assert "Suite execution" not in text
+    # Overview: one row per unit with its tally.
+    assert "| hash | ❌ | 1/2 |" in text
+    assert "| certificates | ⏭️ | 0/1 |" in text
+    # A failing unit's details open by default; tests keep their measurements.
+    assert "<details open>\n<summary>❌ <b>hash</b> — 1/2 passed</summary>" in text
+    assert "| known answer (SHA-256) | ✅ | 10 ms |" in text
+    # Single-result units carry their measurement in the overview, no tally.
+    assert "### ✅ Network tests — 1/1 passed" in text
+    assert "| TLS | ✅ | 100 ms |" in text
+    assert "| x509 | ✅ | 1000 executions |" in text
+    # A passing connection gate is hidden.
+    assert "tls bulk session" not in text
 
 
 def test_fallback_is_a_one_test_unit() -> None:
@@ -69,9 +81,9 @@ def test_fallback_is_a_one_test_unit() -> None:
         output = root / "summary.md"
         MODULE.render(root / "missing", output, ["SAST|Semgrep|failure"])
         text = output.read_text()
-    assert "| 🟥 SAST | 1 | 0 | 1 | 0 |" in text
-    assert "| Semgrep | 1 | 0 | 1 | 0 |" in text
-    assert "| Result | ❌ Fail |  |  |" in text
+    assert text.startswith("### ❌ Static analysis — 0/1 passed\n")
+    assert "| Semgrep | — |  |" in text
+    assert "| Semgrep | ❌ |" in text
 
 
 def test_render_accepts_one_result_file() -> None:
@@ -88,12 +100,14 @@ def test_render_accepts_one_result_file() -> None:
         output = root / "summary.md"
         MODULE.render(result, output, ["FUZZ|All targets|failure"])
         text = output.read_text()
-    assert "| ⚫ FUZZ | 1 | 1 | 0 | 0 |" in text
-    assert "<summary>x509 Tests — ✅ Pass</summary>" in text
+    assert text.startswith("### ✅ Fuzzing — 1/1 passed\n")
+    assert "| x509 | ✅ |" in text
+    assert "All targets" not in text
+    assert "<details" not in text
 
 
 if __name__ == "__main__":
-    test_render_builds_module_unit_test_hierarchy()
+    test_render_sections_lead_with_status_and_failures()
     test_fallback_is_a_one_test_unit()
     test_render_accepts_one_result_file()
-    print("hierarchical test summary renderer: PASS")
+    print("test summary renderer: PASS")
