@@ -410,6 +410,205 @@ static void tls_upload(void)
     close_socket(sock);
 }
 
+/* ---- rate ramp ------------------------------------------------------------
+ *
+ * Each socket sends upstream at a paced target rate that starts at
+ * RAMP_START_KBPS and rises by RAMP_STEP_KBPS per window up to RAMP_CAP_KBPS.
+ * The host sniffs the calc's traffic and reports, per window, the packets it
+ * saw and (for TCP) how many were retransmissions. Datagram drop = scheduled
+ * datagrams that never reached the host, including ones the calc could not
+ * queue; stream drop = retransmitted segments / data segments. A window is
+ * stable when nothing was dropped and the socket kept up with >= 95% of the
+ * target. The ramp is a profile, not a gate: only session setup is checked. */
+
+#define PORT_RAMP_UDP   7051
+#define PORT_RAMP_TCP   7052
+#define PORT_RAMP_WSS   7053
+#define RAMP_PROTO      253 /* RFC 3692 experimental IP protocol */
+#define RAMP_START_KBPS 64
+#define RAMP_STEP_KBPS  64
+#define RAMP_CAP_KBPS   1024
+#define RAMP_WINDOW_MS  2000
+#define RAMP_CHUNK      512
+#define RAMP_STEPS      ((RAMP_CAP_KBPS - RAMP_START_KBPS) / RAMP_STEP_KBPS + 1)
+
+enum { RAMP_SENT, RAMP_BLOCKED, RAMP_FATAL };
+
+struct ramp_step { uint16_t kbps, achieved, drop_x100; };
+static struct ramp_step steps[RAMP_STEPS];
+
+static int ramp_send_socket(void *ctx)
+{
+    lwip_error_t err = lwip_socket_write(ctx, buf, RAMP_CHUNK);
+    if (err == LWIP_OK) return RAMP_SENT;
+    return err == LWIP_ERR_MEM ? RAMP_BLOCKED : RAMP_FATAL;
+}
+
+static int ramp_send_raw(void *ctx)
+{
+    ip_addr_t host;
+    struct pbuf *p = pbuf_alloc(PBUF_IP, RAMP_CHUNK, PBUF_RAM);
+    err_t err;
+    if (!p) return RAMP_BLOCKED;
+    pbuf_take(p, buf, RAMP_CHUNK);
+    ipaddr_aton(HOST, &host);
+    err = raw_sendto(ctx, p, &host);
+    pbuf_free(p);
+    return err == ERR_OK ? RAMP_SENT : RAMP_BLOCKED;
+}
+
+/* Reads "<packets> <bytes> <retransmits>" for the window just sent. */
+static bool ramp_counters(const char *kind, uint16_t port, unsigned long out[3])
+{
+    char cmd[32], reply[48], *p = reply;
+    snprintf(cmd, sizeof(cmd), "ramp-result %s %u", kind, port);
+    if (!host_call(cmd, reply, sizeof(reply), 30000)) return false;
+    for (int i = 0; i < 3; i++) out[i] = strtoul(p, &p, 10);
+    return true;
+}
+
+/* Runs one paced window. False if the connection failed. */
+static bool ramp_window(const char *kind, uint16_t port, int (*send)(void *), void *ctx, bool datagram,
+                        struct ramp_step *step)
+{
+    char cmd[32];
+    unsigned long seen[3];
+    uint32_t scheduled = 0, accepted = 0, t0, el;
+    snprintf(cmd, sizeof(cmd), "ramp-mark %s %u", kind, port);
+    if (!host_call(cmd, NULL, 0, 15000)) return false;
+    t0 = lwip_now_ms();
+    while ((el = lwip_now_ms() - t0) < RAMP_WINDOW_MS)
+    {
+        lwip_service_events();
+        while (scheduled + RAMP_CHUNK <= (uint32_t)step->kbps * el / 8)
+        {
+            int r = send(ctx);
+            if (r == RAMP_FATAL) return false;
+            /* A datagram the calc could not queue is lost; a stream write
+             * that would block just leaves the socket behind schedule. */
+            if (r == RAMP_BLOCKED && !datagram) break;
+            scheduled += RAMP_CHUNK;
+            if (r == RAMP_SENT) accepted += RAMP_CHUNK;
+        }
+    }
+    settle(500);
+    if (!ramp_counters(kind, port, seen)) return false;
+    step->achieved = (uint16_t)(accepted * 8 / RAMP_WINDOW_MS);
+    if (datagram)
+    {
+        unsigned long want = scheduled / RAMP_CHUNK, got = seen[0] < want ? seen[0] : want;
+        step->drop_x100 = want ? (uint16_t)((want - got) * 10000 / want) : 0;
+    }
+    else
+        step->drop_x100 = seen[0] ? (uint16_t)(seen[2] * 10000 / seen[0]) : 0;
+    return true;
+}
+
+static void ramp(const char *name, const char *kind, uint16_t port, int (*send)(void *), void *ctx, bool datagram)
+{
+    unsigned ran = 0, unstable = RAMP_STEPS;
+    for (unsigned i = 0; i < RAMP_STEPS; i++)
+    {
+        steps[i].kbps = RAMP_START_KBPS + i * RAMP_STEP_KBPS;
+        if (!ramp_window(kind, port, send, ctx, datagram, &steps[i]))
+        {
+            note("  %s ramp stopped at %u kbps", name, steps[i].kbps);
+            break;
+        }
+        ran++;
+        if (unstable == RAMP_STEPS &&
+            (steps[i].drop_x100 || (uint32_t)steps[i].achieved * 100 < (uint32_t)steps[i].kbps * 95))
+            unstable = i;
+    }
+    snprintf(line, sizeof(line), "%s ramp ran all %u windows", name, RAMP_STEPS);
+    check(line, ran == RAMP_STEPS);
+    if (!ran) return;
+    if (unstable == RAMP_STEPS)
+        note("RAMP %s stable through cap %u kbps", name, RAMP_CAP_KBPS);
+    else
+        note("RAMP %s stable till %u kbps", name, unstable ? steps[unstable - 1].kbps : 0);
+    snprintf(line, sizeof(line), "ramp_%s_stable", name);
+    metric(line, unstable == RAMP_STEPS ? RAMP_CAP_KBPS : unstable ? steps[unstable - 1].kbps : 0, "kbps");
+    for (unsigned i = unstable ? unstable - 1 : 0; i < ran; i++)
+    {
+        note("  %4u kbps => %u.%02u%% drop (sent %u kbps)", steps[i].kbps, steps[i].drop_x100 / 100,
+             steps[i].drop_x100 % 100, steps[i].achieved);
+        snprintf(line, sizeof(line), "ramp_%s_%uk_drop", name, steps[i].kbps);
+        metric(line, steps[i].drop_x100, "pct_x100");
+    }
+}
+
+static void ramp_all(void)
+{
+    struct lwip_socket *sock;
+    struct raw_pcb *pcb;
+    char reply[8];
+
+    if (!observe("ramp host counters", host_call("ramp-mark udp 7051", NULL, 0, 15000)))
+    {
+        note("  ramp skipped: host has no sniffer (needs root and scapy)");
+        return;
+    }
+    for (size_t i = 0; i < RAMP_CHUNK; i++) buf[i] = pattern(i);
+
+    sock = open_socket(LWIP_SOCKET_UDP, HOST, PORT_RAMP_UDP, NULL, 15000);
+    if (check("ramp udp session", sock != NULL))
+    {
+        ramp("udp", "udp", PORT_RAMP_UDP, ramp_send_socket, sock, true);
+        lwip_socket_destroy(sock);
+    }
+
+    pcb = raw_new(RAMP_PROTO);
+    if (check("ramp raw pcb", pcb != NULL))
+    {
+        ramp("raw", "raw", 0, ramp_send_raw, pcb, true);
+        raw_remove(pcb);
+    }
+
+    sock = open_socket(LWIP_SOCKET_TCP, HOST, PORT_RAMP_TCP, NULL, 15000);
+    if (check("ramp tcp session", sock != NULL))
+    {
+        ramp("tcp", "tcp", PORT_RAMP_TCP, ramp_send_socket, sock, false);
+        close_socket(sock);
+    }
+
+    sock = open_socket(LWIP_SOCKET_ALTCP, HOST, PORT_RAMP_TCP, NULL, 15000);
+    if (check("ramp altcp session", sock != NULL))
+    {
+        ramp("altcp", "tcp", PORT_RAMP_TCP, ramp_send_socket, sock, false);
+        close_socket(sock);
+    }
+
+    host_call("psk-server gcm x25519 plain", NULL, 0, 15000);
+    sock = psk_socket();
+    if (check("ramp altcp_tls session", sock != NULL))
+    {
+        ramp("altcp_tls", "tcp", PORT_PSK, ramp_send_socket, sock, false);
+        close_socket(sock);
+    }
+
+    sock = open_socket(LWIP_SOCKET_ALTCP_WS, HOST, PORT_WS, "/sink", 15000);
+    if (check("ramp ws session", sock != NULL))
+    {
+        ramp("ws", "tcp", PORT_WS, ramp_send_socket, sock, false);
+        close_socket(sock);
+    }
+
+    /* WSS is certificate-only, so it needs the runner-local test CA in the
+     * truststore; without --truststore-signer it is skipped. */
+    if (!host_call("local-trust", reply, sizeof(reply), 5000) || strcmp(reply, "1"))
+    {
+        observe("ramp wss (no runner-local truststore)", false);
+        return;
+    }
+    sock = open_socket(LWIP_SOCKET_ALTCP_WSS, HOST, PORT_RAMP_WSS, "/sink", 60000);
+    if (check("ramp wss session", sock != NULL))
+    {
+        ramp("wss", "tcp", PORT_RAMP_WSS, ramp_send_socket, sock, false);
+        close_socket(sock);
+    }
+}
+
 int main(void)
 {
     for (uint8_t i = 0; i < 32; i++) psk[i] = pattern(i);
@@ -436,6 +635,7 @@ int main(void)
         tls_download("gcm");
         tls_download("ccm");
         tls_upload();
+        ramp_all();
     }
     return net_end();
 }

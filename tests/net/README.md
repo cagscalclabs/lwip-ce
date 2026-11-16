@@ -15,7 +15,7 @@ Shared calc code lives in [`common/`](common).
 | [`tls`](tls/src/main.c) | `NETTLS` | Runner-local TLS 1.3 against `openssl s_server`: external PSK with AES-128-GCM/CCM and X25519/P-256, rejection cases, KeyUpdate, bulk records, raw altcp, ALPN, tickets and resumption. Certificate mode uses an ephemeral RSA test CA and RSA-2048/ECDSA-P-256 leaves across AES-128-GCM, AES-128-CCM and AES-256-GCM. A runner-local HTTP OCSP responder verifies that a good certificate connects with checking both off and on, while a revoked certificate is rejected when checking is on, both with the CA in the chain and with the leaf alone (issuer taken from the truststore root). CI adds the CA to a v4 test truststore signed by the normal `TRUSTSTORE_SIGNER`, exercising the complete production verification path without a public server. A controlled local peer covers TLS 1.2 rejection. Public HTTPS/WSS probes are optional, non-gating observations. |
 | [`records`](records/src/main.c) | `NETREC` | 128 KiB over TLS in maximum-size (16 KiB) records with GCM and CCM |
 | [`server`](server/src/main.c) | `NETSRV` | lwIP-CE as a TLS 1.3 server: `openssl s_client` echo through external-PSK mode (GCM and CCM, including wrong-PSK rejection) and P-256 certificate-chain mode, plus listener close |
-| [`perf`](perf/src/main.c) | `NETPERF` | Throughput (TCP down/up via sockets and the raw API, UDP, WebSocket, loopback, TLS GCM/CCM down and up), latency (TCP connect, TCP/UDP/WS round trips, TLS handshake), heap at idle and peak per workload |
+| [`perf`](perf/src/main.c) | `NETPERF` | Throughput (TCP down/up via sockets and the raw API, UDP, WebSocket, loopback, TLS GCM/CCM down and up), latency (TCP connect, TCP/UDP/WS round trips, TLS handshake), heap at idle and peak per workload, and an upstream rate ramp (see below) |
 
 Public HTTPS/WSS probes are disabled by default. Passing `--external-info`
 boots the TLS program a second time with the unchanged production `lwIPCERT`
@@ -36,6 +36,32 @@ measurements are also attached to their checks in CI's consolidated job summary.
 - `server` checks lwIP-CE as a TLS 1.3 server with an external PSK (psk_dhe_ke over X25519). `openssl s_client`
   echoes a line through the calc with AES-128-GCM and AES-128-CCM, a client with the wrong PSK is refused, and the
   listener closes cleanly.
+
+## Rate ramp
+
+The last `perf` phase opens UDP, raw IP, TCP, ALTCP, ALTCP_TLS (PSK), WS and WSS
+sessions in turn. Each one sends upstream at a paced rate that starts at 64 kbit/s and rises by 64 kbit/s
+every 2 s window, up to 1024 kbit/s. The bounds are the `RAMP_*` defines in [`perf/src/main.c`](perf/src/main.c).
+`run.py` sniffs the calc's traffic and reports, for each window, the packets it saw and the TCP retransmissions
+(`ramp-mark`/`ramp-result`). The drop rate is calculated by protocol:
+
+- **UDP and raw:** scheduled datagrams that never arrived, including ones the calc could not queue.
+- **TCP-based sockets:** retransmitted segments as a share of all data segments.
+
+A window counts as stable when nothing was dropped and the socket sent at least 95% of the target rate.
+Per socket, the log shows:
+
+```text
+RAMP tcp stable till 384 kbps
+   384 kbps => 0.00% drop (sent 384 kbps)
+   448 kbps => 1.25% drop (sent 431 kbps)
+   ...
+```
+
+The same results appear as the metrics `ramp_<socket>_stable` (kbps) and `ramp_<socket>_<rate>k_drop`
+(hundredths of a percent). Only session setup is graded. The ramp needs scapy and root for the sniffer, and it is
+skipped without them. WSS uses certificate authentication only, so it runs only when `--truststore-signer` is
+given. In that case `perf` receives the same runner-local CA truststore as `tls`.
 
 ## Running
 

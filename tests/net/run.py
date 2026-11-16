@@ -44,6 +44,7 @@ CALC = "192.168.84.2"
 HOST = "192.168.84.1"
 HOST6 = "fd00:84::1"
 PORT_OCSP = 7015
+RAMP_PROTO = 253  # RFC 3692 experimental IP protocol used by the perf rate ramp
 IFACE = "cemu0"
 CONTROL = None
 BULK_BYTES = 262144
@@ -239,7 +240,9 @@ class WebSocketEcho(Handler):
                 return
             head += chunk
         key = re.search(rb"(?i)sec-websocket-key:\s*(\S+)", head)
-        if not key or not head.startswith(b"GET /echo "):
+        # /echo echoes every message; /sink (the perf rate ramp) discards data frames.
+        sink = head.startswith(b"GET /sink ")
+        if not key or not (sink or head.startswith(b"GET /echo ")):
             self.request.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
             return
         accept = base64.b64encode(hashlib.sha1(key.group(1) + self.GUID).digest())
@@ -253,8 +256,11 @@ class WebSocketEcho(Handler):
             elif n == 127:
                 n = int.from_bytes(self.recv_exact(8), "big")
             mask = self.recv_exact(4) if b1 & 0x80 else b"\0\0\0\0"
-            payload = bytes(c ^ mask[i & 3] for i, c in enumerate(self.recv_exact(n)))
             opcode = b0 & 0x0F
+            if sink and opcode < 8:
+                self.recv_exact(n)
+                continue
+            payload = bytes(c ^ mask[i & 3] for i, c in enumerate(self.recv_exact(n)))
             if opcode == 8:
                 self.request.sendall(b"\x88\x00")
                 return
@@ -262,6 +268,29 @@ class WebSocketEcho(Handler):
                 opcode = 10
             header = bytes([0x80 | opcode]) + (bytes([n]) if n < 126 else b"\x7e" + n.to_bytes(2, "big"))
             self.request.sendall(header + payload)
+
+
+class WebSocketTLS(WebSocketEcho):
+    """WebSocketEcho behind TLS 1.3 with the runner-local ECDSA chain (WSS)."""
+    context = None
+
+    def handle(self):
+        try:
+            self.request = self.context.wrap_socket(self.request, server_side=True)
+            self.serve()
+        except (ConnectionError, OSError):
+            pass
+
+
+class Discard(Handler):
+    def serve(self):
+        while self.request.recv(65536):
+            pass
+
+
+class UDPDiscard(socketserver.BaseRequestHandler):
+    def handle(self):
+        pass
 
 
 class UDPEcho(socketserver.BaseRequestHandler):
@@ -517,6 +546,9 @@ class Control:
         self.last_group = "-"
         self.socket_tls_result: str | None = None
         self.socket_tls_thread: threading.Thread | None = None
+        self.ramp: dict[tuple[str, int], dict[str, int | None]] = {}
+        self.ramp_lock = threading.Lock()
+        self.ramp_sniffing = False
         (tmp / "bulk.bin").write_bytes(pattern(0, 131072))
         threading.Thread(target=self.serve, daemon=True).start()
 
@@ -783,6 +815,42 @@ class Control:
                           iface=IFACE, verbose=False)
 
         AsyncSniffer(iface=IFACE, prn=record, store=False, filter="igmp or ip6 or arp or tcp src port 7100").start()
+        AsyncSniffer(iface=IFACE, prn=self.ramp_record, store=False,
+                     filter=f"src host {CALC} and ((tcp and (dst port 7004 or dst port 7052 or dst port 7053 "
+                            f"or dst port 7100)) or (udp and dst port 7051) or ip proto {RAMP_PROTO})").start()
+        self.ramp_sniffing = True
+
+    def ramp_record(self, pkt):
+        """Counts the calc's rate-ramp traffic per (kind, port), and TCP retransmissions.
+
+        A data segment that starts below the highest sequence already seen on
+        its connection is a retransmission."""
+        from scapy.all import IP, TCP, UDP
+        if IP not in pkt:
+            return
+        ip = pkt[IP]
+        if ip.proto == RAMP_PROTO:
+            key, size = ("raw", 0), len(ip.payload)
+        elif UDP in pkt:
+            key, size = ("udp", pkt[UDP].dport), len(pkt[UDP].payload)
+        elif TCP in pkt:
+            key, size = ("tcp", pkt[TCP].dport), ip.len - ip.ihl * 4 - pkt[TCP].dataofs * 4
+        else:
+            return
+        with self.ramp_lock:
+            c = self.ramp.setdefault(key, {"pkts": 0, "bytes": 0, "retrans": 0, "base": None, "end": 0})
+            if key[0] == "tcp":
+                seg = pkt[TCP]
+                if seg.flags.S or c["base"] is None:
+                    c["base"], c["end"] = seg.seq + (1 if seg.flags.S else 0), 0
+                if size <= 0:
+                    return
+                start = (seg.seq - c["base"]) & 0xFFFFFFFF
+                if start < c["end"]:
+                    c["retrans"] += 1
+                c["end"] = max(c["end"], start + size)
+            c["pkts"] += 1
+            c["bytes"] += size
 
     def server_hello_group(self, data: bytes):
         """Records the key_share group of a plaintext ServerHello from the PSK peer."""
@@ -986,6 +1054,29 @@ class Control:
                     time.sleep(int(gap_us) / 1e6)
         threading.Thread(target=blast, daemon=True).start()
         return "OK"
+
+    def cmd_ramp_mark(self, kind: str, port: str) -> str:
+        """Start a rate-ramp window: zero the counters for (kind, port)."""
+        if not self.ramp_sniffing:
+            return "ERR no sniffer (needs root and scapy)"
+        with self.ramp_lock:
+            c = self.ramp.setdefault((kind, int(port)),
+                                     {"pkts": 0, "bytes": 0, "retrans": 0, "base": None, "end": 0})
+            c["pkts"] = c["bytes"] = c["retrans"] = 0
+        return "OK"
+
+    def cmd_ramp_result(self, kind: str, port: str) -> str:
+        """Report "<packets> <bytes> <retransmits>" once the window's traffic goes quiet."""
+        key, last, deadline = (kind, int(port)), None, time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with self.ramp_lock:
+                c = self.ramp.get(key, {"pkts": 0, "bytes": 0, "retrans": 0})
+                now = (c["pkts"], c["bytes"], c["retrans"])
+            if now == last:
+                break
+            last = now
+            time.sleep(0.5)
+        return "{} {} {}".format(*last)
 
 
 def setup_interface():
@@ -1309,9 +1400,9 @@ def main() -> int:
     requested_suites = args.suite or list(SUITES)
     if "tls" in requested_suites and args.truststore_signer is None:
         ap.error("the tls suite requires --truststore-signer")
-    if "tls" in requested_suites and args.convbin is None:
-        ap.error("the tls suite requires --convbin when convbin is not on PATH")
-    if "tls" in requested_suites and not args.convbin.is_file():
+    if args.truststore_signer is not None and args.convbin is None:
+        ap.error("--truststore-signer requires --convbin when convbin is not on PATH")
+    if args.truststore_signer is not None and not args.convbin.is_file():
         ap.error(f"convbin executable does not exist: {args.convbin}")
     if ("tls" in requested_suites and args.external_info
             and not (COMMON / "lwIPCERT.8xv").is_file()):
@@ -1336,12 +1427,12 @@ def main() -> int:
             )
             build_test_config(False, config_off, args.convbin)
             build_test_config(True, config_on, args.convbin)
-        TLSBad.context = local_server_context(tmp, fixtures)
+        TLSBad.context = WebSocketTLS.context = local_server_context(tmp, fixtures)
         for server, port, handler in [
             (TCP6, 7001, Echo), (UDP6, 7002, UDPEcho), (TCP, 7004, WebSocketEcho), (TCP, 7005, TLSBad),
             (TCP, 7006, Bulk), (TCP, 7007, Sink), (TCP, 7008, Hold), (TCP, 7009, HalfClose),
             (TCP, 7010, Reset), (TCP, 7011, Closer), (TCP, 7012, ExpectReset), (UDP, 7013, Broadcast), (UDP6, 7014, UDPLength),
-            (TCP6, 7016, SizedBulk),
+            (TCP6, 7016, SizedBulk), (UDP, 7051, UDPDiscard), (TCP, 7052, Discard), (TCP, 7053, WebSocketTLS),
             (TCP, PORT_OCSP, OCSPResponder),
         ]:
             serve(server, port, handler)
@@ -1362,7 +1453,8 @@ def main() -> int:
         informational = []
         for suite in requested_suites:
             log(f"running {SUITES[suite]}")
-            truststore = local_truststore if suite == "tls" else None
+            # perf's WSS rate ramp needs the CA too, but only when a signer was given.
+            truststore = local_truststore if suite == "tls" or (suite == "perf" and local_trust) else None
             config = config_off if suite == "tls" else None
             control.test_mode = "local"
             ok, text, values, probes = run_suite(

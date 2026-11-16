@@ -207,11 +207,12 @@ def run_suite(args: argparse.Namespace, suite: str, ns: NetworkNamespace) -> tup
         "--usb", args.usb,
         "--timeout", str(args.timeout),
     ]
-    if suite == "tls":
+    # perf takes the signer when available so its WSS rate ramp can trust the local CA.
+    if suite == "tls" or (suite == "perf" and args.truststore_signer and args.convbin):
         child.extend(["--truststore-signer", str(args.truststore_signer.resolve()),
                       "--convbin", str(args.convbin.resolve())])
-        if args.external_info:
-            child.append("--external-info")
+    if suite == "tls" and args.external_info:
+        child.append("--external-info")
     try:
         run = subprocess.run(child, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              timeout=args.process_timeout)
