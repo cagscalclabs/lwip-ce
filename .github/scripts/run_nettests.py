@@ -137,9 +137,9 @@ def add_heap_stats(rows: list[dict], metrics: dict) -> None:
     if idle is not None:
         parts.append(f"heap idle {idle} B")
     extra = "; ".join(parts)
-    if extra:
-        for row in rows:
-            row["stats"] = "; ".join(filter(None, (row.get("stats", ""), extra)))
+    # Suite-wide figures: show them once, on the suite's first row.
+    if extra and rows:
+        rows[0]["stats"] = "; ".join(filter(None, (rows[0].get("stats", ""), extra)))
 
 
 def nested_unit(suite: str, returncode: int, rows: list[dict], *, build_error: bool = False) -> dict:

@@ -130,8 +130,8 @@ static void tcp_down_raw(uint32_t total)
     tcp_output(pcb);
     t0 = lwip_now_ms();
     while (s.got < total && !s.error && lwip_now_ms() - t0 < 600000) lwip_service_events();
-    metric("tcp_down_raw", kbps(s.got, lwip_now_ms() - t0), "KiB/s");
     check("raw tcp download 1 MiB intact", s.got == total && !s.bad);
+    metric("tcp_down_raw", kbps(s.got, lwip_now_ms() - t0), "KiB/s");
     if (!s.error)
     {
         tcp_close(pcb);
@@ -414,12 +414,17 @@ static void tls_upload(void)
  *
  * Each socket sends upstream at a paced target rate that starts at
  * RAMP_START_KBPS and rises by RAMP_STEP_KBPS per window up to RAMP_CAP_KBPS.
- * The host sniffs the calc's traffic and reports, per window, the packets it
- * saw and (for TCP) how many were retransmissions. Datagram drop = scheduled
- * datagrams that never reached the host, including ones the calc could not
- * queue; stream drop = retransmitted segments / data segments. A window is
- * stable when nothing was dropped and the socket kept up with >= 95% of the
- * target. The ramp is a profile, not a gate: only session setup is checked. */
+ * The host sniffs the calc's traffic. Datagrams carry their window number in
+ * byte 0, so the host attributes them exactly; TCP windows are split at the
+ * ramp-mark sent when each window starts. Results are read back once, after
+ * the last window: the autotester's suite timeout is in emulated time, which
+ * runs far ahead of wall time while the calc waits on the host.
+ *
+ * Datagram drop = scheduled datagrams that never reached the host, including
+ * ones the calc could not queue; stream drop = retransmitted segments / data
+ * segments. A socket that never loses anything but cannot reach the target
+ * is sender-limited, not unstable. The ramp is a profile, not a gate: only
+ * session setup is checked. */
 
 #define PORT_RAMP_UDP   7051
 #define PORT_RAMP_TCP   7052
@@ -434,7 +439,7 @@ static void tls_upload(void)
 
 enum { RAMP_SENT, RAMP_BLOCKED, RAMP_FATAL };
 
-struct ramp_step { uint16_t kbps, achieved, drop_x100; };
+struct ramp_step { uint16_t kbps, achieved, want, drop_x100; };
 static struct ramp_step steps[RAMP_STEPS];
 
 static int ramp_send_socket(void *ctx)
@@ -457,25 +462,15 @@ static int ramp_send_raw(void *ctx)
     return err == ERR_OK ? RAMP_SENT : RAMP_BLOCKED;
 }
 
-/* Reads "<packets> <bytes> <retransmits>" for the window just sent. */
-static bool ramp_counters(const char *kind, uint16_t port, unsigned long out[3])
+/* Runs paced window `i`. False if the connection failed. */
+static bool ramp_window(const char *kind, uint16_t port, int (*send)(void *), void *ctx, bool datagram, unsigned i)
 {
-    char cmd[32], reply[48], *p = reply;
-    snprintf(cmd, sizeof(cmd), "ramp-result %s %u", kind, port);
-    if (!host_call(cmd, reply, sizeof(reply), 30000)) return false;
-    for (int i = 0; i < 3; i++) out[i] = strtoul(p, &p, 10);
-    return true;
-}
-
-/* Runs one paced window. False if the connection failed. */
-static bool ramp_window(const char *kind, uint16_t port, int (*send)(void *), void *ctx, bool datagram,
-                        struct ramp_step *step)
-{
-    char cmd[32];
-    unsigned long seen[3];
+    char cmd[40];
+    struct ramp_step *step = &steps[i];
     uint32_t scheduled = 0, accepted = 0, t0, el;
-    snprintf(cmd, sizeof(cmd), "ramp-mark %s %u", kind, port);
+    snprintf(cmd, sizeof(cmd), "ramp-mark %s %u %u", kind, port, i);
     if (!host_call(cmd, NULL, 0, 15000)) return false;
+    buf[0] = (uint8_t)i;
     t0 = lwip_now_ms();
     while ((el = lwip_now_ms() - t0) < RAMP_WINDOW_MS)
     {
@@ -491,13 +486,24 @@ static bool ramp_window(const char *kind, uint16_t port, int (*send)(void *), vo
             if (r == RAMP_SENT) accepted += RAMP_CHUNK;
         }
     }
-    settle(500);
-    if (!ramp_counters(kind, port, seen)) return false;
     step->achieved = (uint16_t)(accepted * 8 / RAMP_WINDOW_MS);
+    step->want = (uint16_t)(scheduled / RAMP_CHUNK);
+    return true;
+}
+
+/* Fills in window `i`'s drop rate from the host's "<packets> <bytes> <retransmits>". */
+static bool ramp_result(const char *kind, uint16_t port, bool datagram, unsigned i)
+{
+    char cmd[40], reply[48], *p = reply;
+    unsigned long seen[3];
+    struct ramp_step *step = &steps[i];
+    snprintf(cmd, sizeof(cmd), "ramp-result %s %u %u", kind, port, i);
+    if (!host_call(cmd, reply, sizeof(reply), 30000)) return false;
+    for (int k = 0; k < 3; k++) seen[k] = strtoul(p, &p, 10);
     if (datagram)
     {
-        unsigned long want = scheduled / RAMP_CHUNK, got = seen[0] < want ? seen[0] : want;
-        step->drop_x100 = want ? (uint16_t)((want - got) * 10000 / want) : 0;
+        unsigned long got = seen[0] < step->want ? seen[0] : step->want;
+        step->drop_x100 = step->want ? (uint16_t)((step->want - got) * 10000 / step->want) : 0;
     }
     else
         step->drop_x100 = seen[0] ? (uint16_t)(seen[2] * 10000 / seen[0]) : 0;
@@ -506,49 +512,87 @@ static bool ramp_window(const char *kind, uint16_t port, int (*send)(void *), vo
 
 static void ramp(const char *name, const char *kind, uint16_t port, int (*send)(void *), void *ctx, bool datagram)
 {
-    unsigned ran = 0, unstable = RAMP_STEPS;
+    unsigned ran = 0, loss = RAMP_STEPS, stable = 0, peak = 0;
     for (unsigned i = 0; i < RAMP_STEPS; i++)
     {
         steps[i].kbps = RAMP_START_KBPS + i * RAMP_STEP_KBPS;
-        if (!ramp_window(kind, port, send, ctx, datagram, &steps[i]))
+        if (!ramp_window(kind, port, send, ctx, datagram, i))
         {
             note("  %s ramp stopped at %u kbps", name, steps[i].kbps);
             break;
         }
         ran++;
-        if (unstable == RAMP_STEPS &&
-            (steps[i].drop_x100 || (uint32_t)steps[i].achieved * 100 < (uint32_t)steps[i].kbps * 95))
-            unstable = i;
     }
-    snprintf(line, sizeof(line), "%s ramp ran all %u windows", name, RAMP_STEPS);
+    settle(500);
+    for (unsigned i = 0; i < ran; i++)
+        if (!ramp_result(kind, port, datagram, i))
+        {
+            note("  %s ramp results lost from %u kbps", name, steps[i].kbps);
+            ran = i;
+            break;
+        }
+    snprintf(line, sizeof(line), "%s rate ramp, %u windows", name, RAMP_STEPS);
     check(line, ran == RAMP_STEPS);
     if (!ran) return;
-    if (unstable == RAMP_STEPS)
-        note("RAMP %s stable through cap %u kbps", name, RAMP_CAP_KBPS);
-    else
-        note("RAMP %s stable till %u kbps", name, unstable ? steps[unstable - 1].kbps : 0);
-    snprintf(line, sizeof(line), "ramp_%s_stable", name);
-    metric(line, unstable == RAMP_STEPS ? RAMP_CAP_KBPS : unstable ? steps[unstable - 1].kbps : 0, "kbps");
-    for (unsigned i = unstable ? unstable - 1 : 0; i < ran; i++)
+
+    /* R = the highest rate actually delivered before the first loss. */
+    for (unsigned i = 0; i < ran; i++)
     {
-        note("  %4u kbps => %u.%02u%% drop (sent %u kbps)", steps[i].kbps, steps[i].drop_x100 / 100,
-             steps[i].drop_x100 % 100, steps[i].achieved);
-        snprintf(line, sizeof(line), "ramp_%s_%uk_drop", name, steps[i].kbps);
-        metric(line, steps[i].drop_x100, "pct_x100");
+        if (steps[i].achieved > peak) peak = steps[i].achieved;
+        if (loss == RAMP_STEPS && steps[i].drop_x100) loss = i;
+        if (loss == RAMP_STEPS && steps[i].achieved > stable) stable = steps[i].achieved;
+    }
+    if (loss < RAMP_STEPS)
+    {
+        note("RAMP %s stable till %u kbps, loss from %u kbps", name, stable, steps[loss].kbps);
+        snprintf(line, sizeof(line), "ramp_%s_stable", name);
+        metric(line, stable, "kbps");
+        for (unsigned i = loss ? loss - 1 : 0; i < ran; i++)
+        {
+            note("  %4u kbps => %u.%02u%% drop (sent %u kbps)", steps[i].kbps, steps[i].drop_x100 / 100,
+                 steps[i].drop_x100 % 100, steps[i].achieved);
+            if (i < loss) continue;
+            snprintf(line, sizeof(line), "ramp_%s_%uk_drop", name, steps[i].kbps);
+            metric(line, steps[i].drop_x100, "pct_x100");
+        }
+    }
+    else if (peak * 100 < (unsigned)RAMP_CAP_KBPS * 95)
+    {
+        note("RAMP %s no loss; sender-limited at %u kbps", name, peak);
+        snprintf(line, sizeof(line), "ramp_%s_limited", name);
+        metric(line, peak, "kbps");
+    }
+    else
+    {
+        note("RAMP %s no loss through %u kbps", name, RAMP_CAP_KBPS);
+        snprintf(line, sizeof(line), "ramp_%s_stable", name);
+        metric(line, peak, "kbps");
     }
 }
 
+static void ramp_sessions(void);
+
 static void ramp_all(void)
+{
+    uint32_t t0 = lwip_now_ms();
+
+    if (!observe("ramp host counters", host_call("ramp-mark udp 7051 0", NULL, 0, 15000)))
+    {
+        note("  ramp skipped: host has no sniffer (needs root and scapy)");
+        return;
+    }
+    ramp_sessions();
+    /* The autotester's suite timeout is in emulated time; keep an eye on
+     * how much of it the ramp uses. */
+    metric("ramp_total", (lwip_now_ms() - t0) / 1000, "s");
+}
+
+static void ramp_sessions(void)
 {
     struct lwip_socket *sock;
     struct raw_pcb *pcb;
     char reply[8];
 
-    if (!observe("ramp host counters", host_call("ramp-mark udp 7051", NULL, 0, 15000)))
-    {
-        note("  ramp skipped: host has no sniffer (needs root and scapy)");
-        return;
-    }
     for (size_t i = 0; i < RAMP_CHUNK; i++) buf[i] = pattern(i);
 
     sock = open_socket(LWIP_SOCKET_UDP, HOST, PORT_RAMP_UDP, NULL, 15000);

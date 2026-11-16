@@ -546,7 +546,7 @@ class Control:
         self.last_group = "-"
         self.socket_tls_result: str | None = None
         self.socket_tls_thread: threading.Thread | None = None
-        self.ramp: dict[tuple[str, int], dict[str, int | None]] = {}
+        self.ramp: dict[tuple[str, int], dict] = {}
         self.ramp_lock = threading.Lock()
         self.ramp_sniffing = False
         (tmp / "bulk.bin").write_bytes(pattern(0, 131072))
@@ -820,37 +820,51 @@ class Control:
                             f"or dst port 7100)) or (udp and dst port 7051) or ip proto {RAMP_PROTO})").start()
         self.ramp_sniffing = True
 
-    def ramp_record(self, pkt):
-        """Counts the calc's rate-ramp traffic per (kind, port), and TCP retransmissions.
+    @staticmethod
+    def ramp_state() -> dict:
+        return {"total": [0, 0, 0], "marks": {}, "windows": {}, "base": None, "end": 0, "last": 0.0}
 
-        A data segment that starts below the highest sequence already seen on
-        its connection is a retransmission."""
+    def ramp_record(self, pkt):
+        """Counts the calc's rate-ramp traffic per (kind, port).
+
+        Datagrams are counted per window from the window number in payload
+        byte 0. TCP keeps running totals of segments, bytes and
+        retransmissions, which cmd_ramp_mark snapshots at each window start;
+        a data segment that starts below the highest sequence already seen
+        on its connection is a retransmission."""
         from scapy.all import IP, TCP, UDP
         if IP not in pkt:
             return
         ip = pkt[IP]
         if ip.proto == RAMP_PROTO:
-            key, size = ("raw", 0), len(ip.payload)
+            key, payload = ("raw", 0), bytes(ip.payload)
         elif UDP in pkt:
-            key, size = ("udp", pkt[UDP].dport), len(pkt[UDP].payload)
+            key, payload = ("udp", pkt[UDP].dport), bytes(pkt[UDP].payload)
         elif TCP in pkt:
-            key, size = ("tcp", pkt[TCP].dport), ip.len - ip.ihl * 4 - pkt[TCP].dataofs * 4
+            key, payload = ("tcp", pkt[TCP].dport), None
         else:
             return
         with self.ramp_lock:
-            c = self.ramp.setdefault(key, {"pkts": 0, "bytes": 0, "retrans": 0, "base": None, "end": 0})
-            if key[0] == "tcp":
-                seg = pkt[TCP]
-                if seg.flags.S or c["base"] is None:
-                    c["base"], c["end"] = seg.seq + (1 if seg.flags.S else 0), 0
-                if size <= 0:
-                    return
-                start = (seg.seq - c["base"]) & 0xFFFFFFFF
-                if start < c["end"]:
-                    c["retrans"] += 1
-                c["end"] = max(c["end"], start + size)
-            c["pkts"] += 1
-            c["bytes"] += size
+            c = self.ramp.setdefault(key, self.ramp_state())
+            c["last"] = time.monotonic()
+            if payload is not None:
+                if payload:
+                    window = c["windows"].setdefault(payload[0], [0, 0, 0])
+                    window[0] += 1
+                    window[1] += len(payload)
+                return
+            seg = pkt[TCP]
+            size = ip.len - ip.ihl * 4 - seg.dataofs * 4
+            if seg.flags.S or c["base"] is None:
+                c["base"], c["end"] = seg.seq + (1 if seg.flags.S else 0), 0
+            if size <= 0:
+                return
+            start = (seg.seq - c["base"]) & 0xFFFFFFFF
+            if start < c["end"]:
+                c["total"][2] += 1
+            c["end"] = max(c["end"], start + size)
+            c["total"][0] += 1
+            c["total"][1] += size
 
     def server_hello_group(self, data: bytes):
         """Records the key_share group of a plaintext ServerHello from the PSK peer."""
@@ -1055,28 +1069,46 @@ class Control:
         threading.Thread(target=blast, daemon=True).start()
         return "OK"
 
-    def cmd_ramp_mark(self, kind: str, port: str) -> str:
-        """Start a rate-ramp window: zero the counters for (kind, port)."""
+    def cmd_ramp_mark(self, kind: str, port: str, window: str) -> str:
+        """Start rate-ramp window `window` for (kind, port); window 0 starts a new ramp."""
         if not self.ramp_sniffing:
             return "ERR no sniffer (needs root and scapy)"
         with self.ramp_lock:
-            c = self.ramp.setdefault((kind, int(port)),
-                                     {"pkts": 0, "bytes": 0, "retrans": 0, "base": None, "end": 0})
-            c["pkts"] = c["bytes"] = c["retrans"] = 0
+            key = (kind, int(port))
+            c = self.ramp.setdefault(key, self.ramp_state())
+            if window == "0":
+                # Keep the TCP sequence tracking; a ramp may reuse a connection.
+                fresh = self.ramp_state()
+                fresh["base"], fresh["end"] = c["base"], c["end"]
+                c = self.ramp[key] = fresh
+            c["marks"][int(window)] = list(c["total"])
         return "OK"
 
-    def cmd_ramp_result(self, kind: str, port: str) -> str:
-        """Report "<packets> <bytes> <retransmits>" once the window's traffic goes quiet."""
-        key, last, deadline = (kind, int(port)), None, time.monotonic() + 10
+    def cmd_ramp_result(self, kind: str, port: str, window: str) -> str:
+        """Report window `window`'s "<packets> <bytes> <retransmits>".
+
+        The calc asks only after its last window, and keeps its clock running
+        while it waits; emulated time runs far ahead of wall time, so wait
+        just until the sniffer has been idle briefly, and only the first
+        query of a ramp ever waits at all."""
+        key, n = (kind, int(port)), int(window)
+        deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             with self.ramp_lock:
-                c = self.ramp.get(key, {"pkts": 0, "bytes": 0, "retrans": 0})
-                now = (c["pkts"], c["bytes"], c["retrans"])
-            if now == last:
+                idle = time.monotonic() - self.ramp.get(key, self.ramp_state())["last"]
+            if idle >= 0.2:
                 break
-            last = now
-            time.sleep(0.5)
-        return "{} {} {}".format(*last)
+            time.sleep(0.05)
+        with self.ramp_lock:
+            c = self.ramp.get(key, self.ramp_state())
+            if kind != "tcp":
+                counts = c["windows"].get(n, [0, 0, 0])
+            elif n not in c["marks"]:
+                return f"ERR window {n} was never marked"
+            else:
+                end = c["marks"].get(n + 1, c["total"])
+                counts = [b - a for a, b in zip(c["marks"][n], end)]
+        return "{} {} {}".format(*counts)
 
 
 def setup_interface():
@@ -1336,6 +1368,7 @@ def run_suite(suite: str, autotester: str, usb: str, timeout_ms: int,
 
 
 RAMP_STABLE = re.compile(r"^ramp_\w+_stable$")
+RAMP_LIMITED = re.compile(r"^ramp_\w+_limited$")
 RAMP_DROP = re.compile(r"^ramp_\w+?_(\d+)k_drop$")
 
 
@@ -1343,10 +1376,20 @@ def metric_stat(name: str, value: str, unit: str) -> str:
     """Render a non-millisecond METRIC for the summary's stats cell."""
     if RAMP_STABLE.match(name):
         return f"stable till {value} {unit}"
+    if RAMP_LIMITED.match(name):
+        return f"no loss; sender-limited at {value} {unit}"
     drop = RAMP_DROP.match(name)
     if drop and unit == "pct_x100":
         return f"{drop.group(1)} kbps: {int(value) // 100}.{int(value) % 100:02d}% drop"
-    return f"{name} {value} {unit}"
+    if name.endswith("heap_peak") or name.endswith("heap_idle"):
+        return f"heap {name.rsplit('_', 1)[-1]} {value} B"
+    if unit.startswith("of") and unit[2:].isdigit():
+        return f"{value}/{unit[2:]} received"
+    if "/" in unit:  # a rate (KiB/s): the row already says what moved
+        return f"{value} {unit}"
+    if unit == "bytes":
+        unit = "B"
+    return f"{name.replace('_', ' ')} {value} {unit}"
 
 
 def build_test_rows(results: list[tuple[str, bool, str]]) -> list[dict[str, str]]:

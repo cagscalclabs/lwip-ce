@@ -24,8 +24,7 @@ That second run never affects the suite verdict. The gating run receives only
 the ephemeral test CA, and all of its TLS traffic stays on the runner-local
 TAP network.
 
-Metrics are measured on the calc's clock (emulated eZ80 time). `run.py` writes them to `metrics.json`; millisecond
-measurements are also attached to their checks in CI's consolidated job summary.
+Metrics are measured on the calc's clock (emulated eZ80 time). `run.py` writes them to `metrics.json` and attaches each one to the check logged just before it, so throughput, timings, heap and rate-ramp results appear beside their checks in the CI job summary.
 
 ## Notes
 
@@ -42,26 +41,40 @@ measurements are also attached to their checks in CI's consolidated job summary.
 The last `perf` phase opens UDP, raw IP, TCP, ALTCP, ALTCP_TLS (PSK), WS and WSS
 sessions in turn. Each one sends upstream at a paced rate that starts at 64 kbit/s and rises by 64 kbit/s
 every 2 s window, up to 1024 kbit/s. The bounds are the `RAMP_*` defines in [`perf/src/main.c`](perf/src/main.c).
-`run.py` sniffs the calc's traffic and reports, for each window, the packets it saw and the TCP retransmissions
-(`ramp-mark`/`ramp-result`). The drop rate is calculated by protocol:
 
-- **UDP and raw:** scheduled datagrams that never arrived, including ones the calc could not queue.
-- **TCP-based sockets:** retransmitted segments as a share of all data segments.
+`run.py` sniffs the calc's traffic to count what arrives:
 
-A window counts as stable when nothing was dropped and the socket sent at least 95% of the target rate.
-Per socket, the log shows:
+- **UDP and raw:** each datagram carries its window number in its first byte, so it is counted against the right
+  window even if it arrives late. The drop rate is the scheduled datagrams that never arrived, including ones the
+  calc could not queue.
+- **TCP-based sockets:** windows are split at the `ramp-mark` sent when each window starts. The drop rate is
+  retransmitted segments as a share of all data segments.
+
+The calc reads every window's result once, after its last window (`ramp-result`). The autotester's suite timeout
+counts emulated time, which runs far ahead of wall time while the calc waits on the host, so per-window host
+waits would use up the budget.
+
+Each socket's result takes one of three forms:
 
 ```text
-RAMP tcp stable till 384 kbps
-   384 kbps => 0.00% drop (sent 384 kbps)
-   448 kbps => 1.25% drop (sent 431 kbps)
+RAMP udp stable till 821 kbps, loss from 896 kbps
+   832 kbps => 0.00% drop (sent 821 kbps)
+   896 kbps => 38.58% drop (sent 870 kbps)
    ...
+RAMP tcp no loss; sender-limited at 299 kbps
+RAMP raw no loss through 1024 kbps
 ```
 
-The same results appear as the metrics `ramp_<socket>_stable` (kbps) and `ramp_<socket>_<rate>k_drop`
-(hundredths of a percent). Only session setup is graded. The ramp needs scapy and root for the sniffer, and it is
-skipped without them. WSS uses certificate authentication only, so it runs only when `--truststore-signer` is
-given. In that case `perf` receives the same runner-local CA truststore as `tls`.
+- **Loss:** the stable rate is the highest rate actually delivered before the first loss. The drop rate is listed
+  for every window from the first loss through the cap.
+- **Sender-limited:** the socket never lost anything but could not reach the target rate.
+- **No loss through the cap:** the socket kept up with every window.
+
+The metrics `ramp_<socket>_stable`, `ramp_<socket>_limited` (kbps) and `ramp_<socket>_<rate>k_drop` (hundredths of
+a percent) carry the same results into the CI job summary, and `ramp_total` records the emulated seconds the ramp
+used. Only session setup is graded. The ramp needs scapy and root for the sniffer, and it is skipped without them.
+WSS uses certificate authentication only, so it runs only when `--truststore-signer` is given. In that case `perf`
+receives the same runner-local CA truststore as `tls`.
 
 ## Running
 
