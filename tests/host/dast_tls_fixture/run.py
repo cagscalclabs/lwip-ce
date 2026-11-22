@@ -10,7 +10,7 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 root = Path(__file__).resolve().parents[3]
-path = root / 'build-tools/dast/lwip-dast.py'
+path = root / 'tools/dast/lwip-dast.py'
 source = path.read_text()
 compile(source, str(path), 'exec')
 

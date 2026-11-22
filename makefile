@@ -1,10 +1,10 @@
 CE_LIBIFY ?= ce-libify
 CEDEV_TOOLCHAIN ?= $(if $(CEDEV),$(CEDEV),$(shell cedev-config --prefix))
 APP_TOOLS_CACHE := obj/libify/app_tools
-APP_TOOLS_INPUTS := ce-libify.toml $(wildcard build-tools/patches/app_tools-*.patch)
+APP_TOOLS_INPUTS := ce-libify.toml $(wildcard tools/build/patches/app_tools-*.patch)
 APP_TOOLS_INPUT_STAMP := $(APP_TOOLS_CACHE)/.lwip-ce-inputs
 X25519_DIR := src/tls/contrib/x25519
-X25519_PATCH := build-tools/patches/x25519-scratch-overlay.patch
+X25519_PATCH := tools/build/patches/x25519-scratch-overlay.patch
 
 .PHONY: all build prepare-installer prepare-x25519 run-tests
 all: dylib
@@ -130,7 +130,7 @@ dylib-release:
 sizes:
 	@if [ ! -f bin/lwIP.map ]; then echo "Run 'make' first to produce bin/lwIP.map"; exit 1; fi
 	@printf '\nlwIP-CE memory footprint (from bin/lwIP.map):\n\n'
-	@MAPFILE=bin/lwIP.map python3 build-tools/scripts/helpers/print_sizes.py
+	@MAPFILE=bin/lwIP.map python3 tools/build/scripts/helpers/print_sizes.py
 	@printf '\n  Consumer link contract:\n'
 	@printf '    --defsym BSSHEAP_LOW=<base>\n'
 	@printf '    --defsym BSSHEAP_HIGH=<base + reserve + heap_shared_with_lwip>\n\n'

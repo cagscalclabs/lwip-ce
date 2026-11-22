@@ -57,7 +57,7 @@ jobs:
 
             while IFS= read -r -d '' path; do
               case "$path" in
-                src/*|tests/*|examples/*|contrib/*|wifi_bridge/*|submodules/*|upstream-lwip/*|build-tools/*|bin/*|makefile|ce-libify.toml|exports.txt|reduce.sh|.gitmodules|.github/actions/*|.github/scripts/*|.github/workflows/build.yml|.github/workflows/tests.yml|.github/ci-versions.env|.github/rfc-review-schema.json)
+                src/*|tests/*|examples/*|contrib/*|wifi_bridge/*|submodules/*|upstream-lwip/*|tools/build/*|bin/*|makefile|ce-libify.toml|exports.txt|reduce.sh|.gitmodules|.github/actions/*|.github/scripts/*|.github/workflows/build.yml|.github/workflows/tests.yml|.github/ci-versions.env|.github/rfc-review-schema.json)
                   content_new=true
                   echo "Relevant content: $path"
                   ;;

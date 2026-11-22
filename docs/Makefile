@@ -18,7 +18,7 @@ doxygen: release-headers
 	$(DOXYGEN) Doxyfile
 
 release-headers:
-	cd .. && LWIP_RELEASE_DIR="$(abspath $(LWIP_RELEASE_DIR))" LWIP_EXPORTS="$(LWIP_EXPORTS)" $(HEADER_PYTHON) build-tools/scripts/generate_lwip_headers.py
+	cd .. && LWIP_RELEASE_DIR="$(abspath $(LWIP_RELEASE_DIR))" LWIP_EXPORTS="$(LWIP_EXPORTS)" $(HEADER_PYTHON) tools/build/scripts/generate_lwip_headers.py
 
 clean:
 	rm -rf "$(BUILDDIR)" "_doxygen" "$(LWIP_RELEASE_DIR)"

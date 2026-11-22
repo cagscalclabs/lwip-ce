@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # lwIP-CE DAST harness launcher.
 #
-#   ./build-tools/dast/lwip-dast.sh --ip 192.168.1.42 [--iface en0] [--settle 1.0] [--tls-bind 0.0.0.0]
+#   ./tools/dast/lwip-dast.sh --ip 192.168.1.42 [--iface en0] [--settle 1.0] [--tls-bind 0.0.0.0]
 #
 # Sends malformed/overflow/flood probes (scapy) and host-side TLS fixtures
 # at a calc running the paired calc-side harness in tests/profiling/lwip_dast,
-# grades each test, and writes tests/dast.json. See build-tools/dast/lwip-dast.py
+# grades each test, and writes tests/dast.json. See tools/dast/lwip-dast.py
 # for details.
 #
 # Raw packet crafting needs root / CAP_NET_RAW; the script re-execs under

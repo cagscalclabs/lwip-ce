@@ -6,7 +6,7 @@ network**. Two halves that walk the same ordered test list in lockstep:
 - **calc side** (this directory) — `LWDAST.8xp`. Brings the stack up (DHCP),
   shows its IP, then for each test enters the listener state the probe needs
   (`idle` / `udp_recv` / `tcp_listen`) and shows a live event counter.
-- **host side** — `build-tools/dast/lwip-dast.sh` → `build-tools/dast/lwip-dast.py`.
+- **host side** — `tools/dast/lwip-dast.sh` → `tools/dast/lwip-dast.py`.
   Sends the malformed / overflow / flood probe (scapy) at the calc, then
   prompts you for what the calc did, grades it, and writes `tests/dast.json`.
 
@@ -15,7 +15,7 @@ The single source of truth for the test set is
 (`src/dast_tests.h`) is generated from it:
 
 ```sh
-python3 build-tools/dast/lwip-dast.py --gen-header
+python3 tools/dast/lwip-dast.py --gen-header
 ```
 
 `lwip-dast.sh` regenerates the header automatically before each run, so the
@@ -31,7 +31,7 @@ two sides cannot drift.
 2. Run `LWDAST` on the calc. It shows its DHCP IP. Press `enter` to begin.
 3. On the host (needs root / CAP_NET_RAW for raw packets):
    ```sh
-   ./build-tools/dast/lwip-dast.sh --ip <calc-ip> [--iface en0]
+   ./tools/dast/lwip-dast.sh --ip <calc-ip> [--iface en0]
    ```
 4. For each test: when the host says so, set the calc to the named state
    (it does this automatically when you press `enter` to advance on the calc),
@@ -61,12 +61,12 @@ build: [`ci.py`](ci.py) launches `LWDAST` in CEmu-lwIP-CE, whose emulated
 USB Ethernet adapter is bridged to a TAP interface by
 `alessiodam/cemu-net-action`, waits for the calc to answer pings, then runs
 `lwip-dast.py` against it unattended and gates the fresh report the same way.
-Run the same renderer locally with `python3 build-tools/dast/dast_report.py`.
+Run the same renderer locally with `python3 tools/dast/dast_report.py`.
 
 ## Dependencies
 
 - host: `python3`, `scapy` (`pip install scapy`), root for raw sockets
-- dry run with no deps/root: `python3 build-tools/dast/lwip-dast.py --ip x --self-test`
+- dry run with no deps/root: `python3 tools/dast/lwip-dast.py --ip x --self-test`
 
 TLS fixtures generate an IP SAN for the runner address selected by the route
 back to the calculator (`--ip`). This is the source of the NEXT control packet

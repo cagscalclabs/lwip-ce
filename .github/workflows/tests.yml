@@ -715,7 +715,7 @@ jobs:
 
       - name: Check calc-side test list matches the manifest
         run: |
-          python3 build-tools/dast/lwip-dast.py --gen-header
+          python3 tools/dast/lwip-dast.py --gen-header
           git diff --exit-code tests/profiling/lwip_dast/src/dast_tests.h
 
       - id: env
@@ -735,7 +735,7 @@ jobs:
             --autotester "${{ steps.env.outputs.autotester }}" --usb "${{ steps.env.outputs.usb-step }}"
 
       - name: Render report and gate on failures
-        run: python3 build-tools/dast/dast_report.py
+        run: python3 tools/dast/dast_report.py
 
       - name: Normalize DAST rows
         if: always()

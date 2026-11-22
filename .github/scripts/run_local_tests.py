@@ -148,7 +148,7 @@ def network_tests(
     dast_dir = ROOT / "tests/profiling/lwip_dast"
     failures += run(
         "generate DAST calculator manifest",
-        [sys.executable, str(ROOT / "build-tools/dast/lwip-dast.py"), "--gen-header"],
+        [sys.executable, str(ROOT / "tools/dast/lwip-dast.py"), "--gen-header"],
         env=env,
     ) != 0
     failures += run(
@@ -173,7 +173,7 @@ def network_tests(
     ) != 0
     failures += run(
         "render DAST report",
-        [sys.executable, str(ROOT / "build-tools/dast/dast_report.py")], env=env,
+        [sys.executable, str(ROOT / "tools/dast/dast_report.py")], env=env,
     ) != 0
     return failures
 

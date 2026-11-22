@@ -18,7 +18,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-REF_FILE="$ROOT_DIR/build-tools/UPSTREAM_LWIP_REF"
+REF_FILE="$ROOT_DIR/tools/build/UPSTREAM_LWIP_REF"
 UPSTREAM_REPO="${UPSTREAM_LWIP_REPO:-https://github.com/lwip-tcpip/lwip.git}"
 UPSTREAM_REMOTE="${UPSTREAM_LWIP_REMOTE:-upstream-lwip-sync}"
 

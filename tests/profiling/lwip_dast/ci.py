@@ -8,7 +8,7 @@ probe runner can reach the emulated calc like a calc on a live network:
     sudo python3 tests/profiling/lwip_dast/ci.py --autotester PATH --usb 'usb|eth,cemu0,...'
 
 LWDAST is launched in the autotester and left running; once it answers
-pings, build-tools/dast/lwip-dast.py drives it over the control channel and
+pings, tools/dast/lwip-dast.py drives it over the control channel and
 writes tests/dast.json. Grading stays automatic: a probe that leaves the
 calc unresponsive is recorded as CRASH.
 """
@@ -31,7 +31,7 @@ COMMON = ROOT / "tests" / "common"
 def write_autotest(path: Path, usb: str) -> None:
     files = ["bin/LWDAST.8xp"] + sorted(os.path.relpath(f, HERE) for f in COMMON.glob("*.8x*") if not f.name.startswith("."))
     path.write_text(json.dumps({
-        "description": "LWDAST driven by build-tools/dast/lwip-dast.py over the emulated adapter",
+        "description": "LWDAST driven by tools/dast/lwip-dast.py over the emulated adapter",
         "transfer_files": files,
         "target": {"name": "LWDAST", "isASM": True},
         "sequence": ["delay|20000", "key|clear", "action|launch:INSTALL", "hashWait|1", "key|left",
@@ -70,7 +70,7 @@ def main() -> int:
                 print(f"LWDAST never answered pings at {args.ip}")
                 return 1
             print(f"LWDAST is up at {args.ip}, starting probes")
-            return subprocess.run([sys.executable, str(ROOT / "build-tools" / "dast" / "lwip-dast.py"),
+            return subprocess.run([sys.executable, str(ROOT / "tools/build" / "dast" / "lwip-dast.py"),
                                    "--ip", args.ip, "--iface", args.iface],
                                   input="\n", text=True).returncode
         finally:

@@ -1,6 +1,6 @@
 /* lwIP-CE DAST calc-side harness.
  *
- * Pairs with build-tools/dast/lwip-dast.py. The script drives the calc
+ * Pairs with tools/dast/lwip-dast.py. The script drives the calc
  * over a UDP control channel (port 9997) — no manual keypress needed to
  * advance tests. The calc opens the appropriate listener for each test,
  * waits for probe traffic, then waits for the script to send NEXT/DONE.

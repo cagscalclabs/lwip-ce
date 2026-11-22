@@ -91,7 +91,7 @@ jobs:
           # come from lines we've also touched in a vendored file, never from
           # unrelated upstream history. See the script header for details.
           set +e
-          ./build-tools/sync_upstream_lwip.sh "${{ steps.upstream_ref.outputs.ref }}" \
+          ./tools/build/sync_upstream_lwip.sh "${{ steps.upstream_ref.outputs.ref }}" \
             > sync_output.log 2>&1
           SYNC_EXIT=$?
           set -e
@@ -140,7 +140,7 @@ jobs:
           grep -Fx "#define LWIP_CE_VERSION_PATCH ${PATCH}" src/lwIP.h
           grep -Fx "#define LWIP_CE_VERSION_STRING \"${VERSION}\"" src/lwIP.h
 
-          git add -A -- src/core src/netif src/include src/api src/apps src/lwIP.h build-tools/UPSTREAM_LWIP_REF
+          git add -A -- src/core src/netif src/include src/api src/apps src/lwIP.h tools/build/UPSTREAM_LWIP_REF
           git commit -m "Sync vendored lwIP paths to ${{ steps.upstream_ref.outputs.ref }} ($(date +%Y-%m-%d))" --allow-empty
 
       - name: Push sync branch
@@ -208,7 +208,7 @@ jobs:
             ### Automated Actions Taken
 
             - ✅ Fetched latest stable tag from upstream lwIP
-            - ✅ Diffed vendored paths against the last-synced ref (`build-tools/UPSTREAM_LWIP_REF`)
+            - ✅ Diffed vendored paths against the last-synced ref (`tools/build/UPSTREAM_LWIP_REF`)
             - ✅ Applied the diff with `git apply --3way`
             ${{ steps.sync_vendor.outputs.has_conflicts == 'true' && '- ⚠️ Some conflicts require manual resolution' || '- ✅ Applied cleanly' }}
 

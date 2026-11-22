@@ -37,7 +37,7 @@ source for "how to report a problem."
   leaf modulus 2048–4096 bit) — this is what proves the peer controls the
   leaf private key, not just that it possesses a public certificate.
 - **Certificate chain trust**: adjacent-link signature verification walks
-  the presented chain — RSA+SHA-256 and P-256+SHA-256 links are cryptographically
+  the presented chain — RSA+SHA-256, P-256+SHA-256, and P-384+SHA-384 links are cryptographically
   verified (a bad signature is a hard abort), other signature types are
   fail-closed. The topmost certificate's issuer is then looked up by
   Subject Key Identifier (falling back to Subject Name) in the on-device trust store and verified the same

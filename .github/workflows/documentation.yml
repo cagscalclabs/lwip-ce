@@ -7,9 +7,9 @@ on:
     paths:
       - docs/**
       - exports.txt
-      - build-tools/scripts/generate_lwip_headers.py
-      - build-tools/scripts/header_dump.py
-      - build-tools/meta/public_api_manifest.csv
+      - tools/build/scripts/generate_lwip_headers.py
+      - tools/build/scripts/header_dump.py
+      - tools/build/meta/public_api_manifest.csv
       - tests/profiling/tls_rng_stats/tools/analyze_rng_stats.py
       - tests/profiling/tls_rng_stats/tools/summarize_rng_stats.py
       - statistics/rng/**
@@ -65,7 +65,7 @@ jobs:
 
           while IFS= read -r -d '' path; do
             case "$path" in
-              docs/*|src/*|exports.txt|build-tools/scripts/generate_lwip_headers.py|build-tools/scripts/header_dump.py|build-tools/meta/public_api_manifest.csv|.github/workflows/documentation.yml)
+              docs/*|src/*|exports.txt|tools/build/scripts/generate_lwip_headers.py|tools/build/scripts/header_dump.py|tools/build/meta/public_api_manifest.csv|.github/workflows/documentation.yml)
                 pages=true
                 ;;
             esac

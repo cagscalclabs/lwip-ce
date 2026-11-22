@@ -17,7 +17,7 @@ python3 .github/scripts/prepare_cemu_image.py \
 ```
 
 The script reads the pinned CEmu revision from `.github/ci-versions.env`,
-applies `build-tools/meta/cemu-autotester.patch`, builds the headless tools,
+applies `tools/build/patches/cemu-autotester.patch`, builds the headless tools,
 downloads `clibs.8xg` unless `--clibs` is supplied, sends the release files,
 runs the installer, and saves the resulting state. It requires `git`, `make`,
 `cmake`, and `ninja`, plus the platform dependencies needed to build CEmu.

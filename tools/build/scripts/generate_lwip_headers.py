@@ -15,7 +15,7 @@ Default layout:
 
 Pruning strategy:
 
-  1. build-tools/meta/public_api_manifest.csv is the manual allowlist. Its category
+  1. tools/build/meta/public_api_manifest.csv is the manual allowlist. Its category
      column chooses socket/core/cryptography output placement.
   2. The ordered libload export manifest (exports.txt) is the canonical
      surface. Dylib builds may instead provide their generated assembly
@@ -31,7 +31,7 @@ and see exactly the surface they can link against via libload.
 
 Run from repo root:
 
-    python3 build-tools/scripts/generate_lwip_headers.py
+    python3 tools/build/scripts/generate_lwip_headers.py
 
 The default exports.txt input works from a clean checkout. Dylib builds pass
 their generated table explicitly after compilation.
@@ -71,7 +71,7 @@ def _import_clang_or_reexec():
             ]
             sys.exit(subprocess.run(
                 cmd,
-                cwd=Path(__file__).resolve().parents[2],
+                cwd=Path(__file__).resolve().parents[3],
                 env=env,
             ).returncode)
         print(
@@ -107,8 +107,8 @@ for _candidate in _libclang_candidates:
         break
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-BUILD_TOOLS_DIR = REPO_ROOT / "build-tools"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BUILD_TOOLS_DIR = REPO_ROOT / "tools/build"
 SRC_DIR = REPO_ROOT / "src"
 OBJ_DIR = REPO_ROOT / "obj" / "src"
 EXPORTS_SOURCE = REPO_ROOT / os.environ.get(
@@ -390,7 +390,7 @@ def source_dependency_closure(initial_headers: list[Path]) -> list[Path]:
         TLS_INCLUDES.resolve(),
         # Contrib x25519 ships tls_x25519_publickey/_secret as public API;
         # its header lives outside src/tls/includes but is part of the
-        # exported surface (see build-tools/meta/public_api_manifest.csv).
+        # exported surface (see tools/build/meta/public_api_manifest.csv).
         (SRC_DIR / "tls" / "contrib" / "x25519" / "src").resolve(),
         (SRC_DIR / "parsers").resolve(),
         (SRC_DIR / "wireless").resolve(),

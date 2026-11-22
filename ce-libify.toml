@@ -14,11 +14,11 @@ header = ["build/lwip.h", "build/cryptography.h", "build/parsers.h", "build/wire
 name = "lwIP"
 version = "3.0.0"
 init = "lwip_init_runtime_internal"
-linker_script = "build-tools/meta/linker_script_lwip.ld"
+linker_script = "tools/build/meta/linker_script_lwip.ld"
 retain_removed = true
 installer_ref = "0fb268f179725d1727c18720343649460c72e629"
 installer_patches = [
-    "build-tools/patches/app_tools-installer-lwip.patch",
+    "tools/build/patches/app_tools-installer-lwip.patch",
 ]
 imports = [
     "usb_ResetDevice",
@@ -74,4 +74,4 @@ ASFLAGS = "-I src/tls/core/primitives -I src/tls/core/share"
 BSSHEAP_HIGH = "0xD072C6"
 
 [[step]]
-run = ["env", "LWIP_EXPORTS=obj/libify/functable.s", "LWIP_RELEASE_DIR=build", "python3", "build-tools/scripts/generate_lwip_headers.py"]
+run = ["env", "LWIP_EXPORTS=obj/libify/functable.s", "LWIP_RELEASE_DIR=build", "python3", "tools/build/scripts/generate_lwip_headers.py"]
