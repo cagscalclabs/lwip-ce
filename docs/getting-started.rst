@@ -259,7 +259,7 @@ The following related AppVars are **not** created automatically by the runtime:
 - ``lwIPCERT`` is the signed truststore distributed through the project's
   ``truststore-latest`` release. lwIP-CE reads it but does not generate it.
 - Private-key and certificate-chain AppVars are supplied and named by the
-  application. ``tools/lwip-cert-converter`` creates these files on the host.
+  application. ``tools/helpers/lwip-cert-converter`` creates these files on the host.
 - ``lwip.8xv`` and ``LWIP.N.8xv`` are installation/LibLoad artifacts shipped
   in the release, not runtime state.
 - Saved Wi-Fi profiles are stored by the lwIP-CE Wi-Fi bridge and are not

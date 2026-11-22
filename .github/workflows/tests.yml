@@ -585,11 +585,11 @@ jobs:
           go-version: '1.26'
 
       - name: Install ce-libify
-        run: |
-          git clone --depth 1 --branch "${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}" https://github.com/alessiodam/toolchain_libify.git "${{ runner.temp }}/ce-libify"
-          GOCACHE="${{ runner.temp }}/go-cache" go test -C "${{ runner.temp }}/ce-libify" ./...
-          make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
-          ce-libify --version
+        uses: ./.github/actions/install-ce-libify
+        with:
+          ce-libify-ref: ${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}
+          toolchain-ref: ${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
+          cedev: ${{ env.CEDEV }}
 
       - name: make dylib (traced by CodeQL)
         run: make dylib

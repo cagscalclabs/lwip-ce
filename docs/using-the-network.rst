@@ -203,10 +203,10 @@ Server (PSK or Certificate mode): As server, you MUST use a configuration setter
    :returns: ``LWIP_OK`` on success, ``LWIP_ERR_STATE`` if socket status not INIT, ``LWIP_ERR_ARG`` if ``socket``, ``privkey_appvar`` or ``chain_appvar`` are not provided. 
    :note: Appvar names are limited to 8 characters.
 
-Use ``tools/lwip-cert-converter`` to validate a P-256 identity (identity certificates are P-256; P-384 is currently used for verification and trust anchors, not for the local identity) and create the
+Use ``tools/helpers/lwip-cert-converter`` to validate a P-256 identity (identity certificates are P-256; P-384 is currently used for verification and trust anchors, not for the local identity) and create the
 two AppVars expected by this function::
 
-   tools/lwip-cert-converter \
+   tools/helpers/lwip-cert-converter \
        --pkey server-key.pem \
        --fullchain fullchain.pem \
        --pkey_name TLSKEY \
@@ -219,7 +219,7 @@ unsupported encryption can be re-encrypted to a supported format only after an
 explicit confirmation. ``--algorithm`` selects any encrypted-PKCS#8 algorithm
 supported by lwIP-CE (AES-128/256-CBC or AES-128/256-GCM); AES-256-CBC is the
 default conversion target because OpenSSL's ``pkcs8`` command does not emit its
-AEAD choices. Run ``tools/lwip-cert-converter --help`` for dependency details.
+AEAD choices. Run ``tools/helpers/lwip-cert-converter --help`` for dependency details.
 
 .. c:function:: lwip_error_t lwip_socket_set_tls_psk(struct lwip_socket *socket, const uint8_t psk[32], const uint8_t *identity, size_t identity_len);
 

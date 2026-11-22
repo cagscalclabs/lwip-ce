@@ -1,0 +1,59 @@
+name: Install ce-libify
+description: >-
+  Clone, test and install ce-libify, with its CE-Programming/toolchain include
+  fetches pinned to the toolchain revision this build already pins.
+
+inputs:
+  ce-libify-ref:
+    description: ce-libify tag or branch to install (CE_LIBIFY_REF).
+    required: true
+  toolchain-ref:
+    description: >-
+      CE-Programming/toolchain revision the includes must come from
+      (TOOLCHAIN_REF).
+    required: true
+  cedev:
+    description: CEDEV directory to install into.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Clone, pin and install ce-libify
+      shell: bash
+      env:
+        CE_LIBIFY_REF: ${{ inputs.ce-libify-ref }}
+        CE_TOOLCHAIN_REF: ${{ inputs.toolchain-ref }}
+        CEDEV: ${{ inputs.cedev }}
+        DEST: ${{ runner.temp }}/ce-libify
+      run: |
+        set -euo pipefail
+        git clone --depth 1 --branch "$CE_LIBIFY_REF" \
+          https://github.com/alessiodam/toolchain_libify.git "$DEST"
+
+        # ce-libify's get_fasmg.py hardcodes the toolchain branch in each
+        # include URL, so TOOLCHAIN_REF never reaches it and an upstream
+        # change breaks a pinned build. It already did: include_library.inc
+        # was renamed to library.inc on master, 404ing every fetch. Rewrite
+        # the URLs to the ref we pin, where the file still exists.
+        #
+        # Remove this once alessiodam/toolchain_libify#3 is released and
+        # CE_LIBIFY_REF is bumped past it -- that version reads
+        # CE_TOOLCHAIN_REF (exported above) on its own.
+        python3 - "$DEST/get_fasmg.py" "$CE_TOOLCHAIN_REF" <<'PATCH'
+        import re, sys
+        path, ref = sys.argv[1], sys.argv[2]
+        src = open(path).read()
+        base = "https://raw.githubusercontent.com/CE-Programming/toolchain/"
+        new, n = re.subn(re.escape(base) + r"[^/]+/", base + ref + "/", src)
+        if not n:
+            sys.exit("get_fasmg.py: no toolchain URLs found; is this patch "
+                     "still needed? If ce-libify now honours CE_TOOLCHAIN_REF, "
+                     "delete this step.")
+        open(path, "w").write(new)
+        print(f"pinned {n} toolchain include URL(s) to {ref}")
+        PATCH
+
+        GOCACHE="${{ runner.temp }}/go-cache" go test -C "$DEST" ./...
+        make -C "$DEST" install CEDEV="$CEDEV" PYTHON=python3
+        ce-libify --version

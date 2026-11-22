@@ -13,7 +13,7 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CONVERTER = REPO_ROOT / "tools" / "lwip-cert-converter"
+CONVERTER = REPO_ROOT / "tools" / "helpers" / "lwip-cert-converter"
 OPENSSL = shutil.which("openssl")
 
 
