@@ -96,7 +96,7 @@ clean:
 	$(CE_LIBIFY) clean
 
 # Package output of `make dylib` (and readmes) into `lwip.zip`
-RELEASE_TOOLS := tools/lwip-cert-converter
+RELEASE_TOOLS := tools/helpers/lwip-cert-converter
 .PHONY: release
 release:
 	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
