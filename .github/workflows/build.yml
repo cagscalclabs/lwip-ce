@@ -127,8 +127,32 @@ jobs:
           go-version: '1.26'
 
       - name: Install ce-libify
+        env:
+          CE_TOOLCHAIN_REF: ${{ steps.ci_versions.outputs.TOOLCHAIN_REF }}
         run: |
           git clone --depth 1 --branch "${{ steps.ci_versions.outputs.CE_LIBIFY_REF }}" https://github.com/alessiodam/toolchain_libify.git "${{ runner.temp }}/ce-libify"
+
+          # ce-libify's get_fasmg.py hardcodes the toolchain branch in each
+          # include URL, so TOOLCHAIN_REF above does not reach it and an
+          # upstream rename breaks a pinned build. It already did:
+          # include_library.inc became library.inc on master, 404ing every
+          # fetch. Rewrite the URLs to our pinned ref, where the file exists.
+          #
+          # Remove this once alessiodam/toolchain_libify#3 is released and
+          # CE_LIBIFY_REF is bumped -- that version reads CE_TOOLCHAIN_REF
+          # (exported above) directly.
+          python3 - "${{ runner.temp }}/ce-libify/get_fasmg.py" "$CE_TOOLCHAIN_REF" <<'PATCH'
+          import re, sys
+          path, ref = sys.argv[1], sys.argv[2]
+          src = open(path).read()
+          base = "https://raw.githubusercontent.com/CE-Programming/toolchain/"
+          new, n = re.subn(re.escape(base) + r"[^/]+/", base + ref + "/", src)
+          if not n:
+              sys.exit("get_fasmg.py: no toolchain URLs found; is the patch still needed?")
+          open(path, "w").write(new)
+          print(f"pinned {n} toolchain include URL(s) to {ref}")
+          PATCH
+
           GOCACHE="${{ runner.temp }}/go-cache" go test -C "${{ runner.temp }}/ce-libify" ./...
           make -C "${{ runner.temp }}/ce-libify" install CEDEV="${{ env.CEDEV }}" PYTHON=python3
           ce-libify --version
