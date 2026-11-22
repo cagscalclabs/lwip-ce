@@ -70,7 +70,7 @@ def main() -> int:
                 print(f"LWDAST never answered pings at {args.ip}")
                 return 1
             print(f"LWDAST is up at {args.ip}, starting probes")
-            return subprocess.run([sys.executable, str(ROOT / "tools/build" / "dast" / "lwip-dast.py"),
+            return subprocess.run([sys.executable, str(ROOT / "tools" / "dast" / "lwip-dast.py"),
                                    "--ip", args.ip, "--iface", args.iface],
                                   input="\n", text=True).returncode
         finally:
