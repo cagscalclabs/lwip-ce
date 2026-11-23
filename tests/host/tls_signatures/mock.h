@@ -101,6 +101,7 @@ typedef enum { LWIP_CRYPTO_PENDING, LWIP_CRYPTO_OK, LWIP_CRYPTO_REJECTED,
 static lwip_crypto_job_t lwip_crypto_x25519(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
 static lwip_crypto_job_t lwip_crypto_p256(const uint8_t *s, const uint8_t *p, uint8_t *o) { return 0; }
 static lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t *d, const uint8_t *p, const uint8_t *rs) { return 0; }
+static lwip_crypto_job_t lwip_crypto_p384_verify(const uint8_t *d, const uint8_t *p, const uint8_t *rs) { return 0; }
 static lwip_crypto_status_t lwip_crypto_take(lwip_crypto_job_t job)
 { (void)job; return LWIP_CRYPTO_FAILED; }
 static unsigned rsa_offload_calls;

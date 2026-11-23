@@ -943,7 +943,7 @@ struct tls_deferred_verify
     lwip_crypto_job_t job;
     tls_alg_t alg;
     uint8_t alert;
-    uint8_t digest[32];
+    uint8_t digest[TLS_SHA384_DIGEST_LEN];
     size_t sig_len;
     struct tls_key key; /* modulus and exponent point into data */
     uint8_t data[];     /* signature, then the key */
@@ -1016,7 +1016,7 @@ static bool tls_ecdsa_sig_rs96(const uint8_t *sig, size_t sig_len, uint8_t rs[96
 }
 
 static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg,
-                                const struct tls_key *key, const uint8_t digest[32],
+                                const struct tls_key *key, const uint8_t *digest,
                                 const uint8_t *sig, size_t sig_len, uint8_t alert)
 {
     const struct tls_rsa_key *rsa = &key->rsa;
@@ -1040,6 +1040,18 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
         job = lwip_crypto_p256_verify(digest, key->ec.pub, rs);
         tls_scratch_free(rs, 64);
         key_len = 65;
+    }
+    else if (alg == TLS_ALG_ECDSA_SECP384R1_SHA384)
+    {
+        uint8_t *rs = tls_scratch_alloc(96);
+        if (!rs || !key->ec.pub || key->ec.len != 97 || !tls_ecdsa_sig_rs96(sig, sig_len, rs))
+        {
+            tls_scratch_free(rs, 96);
+            return false;
+        }
+        job = lwip_crypto_p384_verify(digest, key->ec.pub, rs);
+        tls_scratch_free(rs, 96);
+        key_len = 97;
     }
     else if ((alg == TLS_ALG_RSA_PKCS1_SHA256 || alg == TLS_ALG_RSA_PSS_RSAE_SHA256) &&
              sig_len == rsa->mod_len && tls_rsa_public_key_shape_ok(rsa))
@@ -1072,16 +1084,17 @@ static bool tls_verify_deferred(struct tls_handshake_context *ctx, tls_alg_t alg
     d->job = job;
     d->alg = alg;
     d->alert = alert;
-    memcpy(d->digest, digest, sizeof(d->digest));
+    memcpy(d->digest, digest,
+           alg == TLS_ALG_ECDSA_SECP384R1_SHA384 ? TLS_SHA384_DIGEST_LEN : TLS_SHA256_DIGEST_LEN);
     d->sig_len = sig_len;
     d->key.type = key->type;
     memcpy(d->data, sig, sig_len);
-    if (key->type == TLS_KEY_TYPE_EC_P256)
+    if (key->type != TLS_KEY_TYPE_RSA)
     {
-        d->key.ec.len = 65;
+        d->key.ec.len = key_len;
         d->key.ec.pub = d->data + sig_len;
         d->key.ec.priv = NULL;
-        memcpy(d->data + sig_len, key->ec.pub, 65);
+        memcpy(d->data + sig_len, key->ec.pub, key_len);
     }
     else
     {
@@ -5421,6 +5434,13 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
     tls_hash_update(&cv->hash_ctx, &zero, 1);
     tls_hash_update(&cv->hash_ctx, cv->transcript, ctx->hash_len);
     tls_hash_digest(&cv->hash_ctx, cv->message_hash);
+
+    if (tls_verify_deferred(ctx, TLS_ALG_ECDSA_SECP384R1_SHA384, &ctx->leaf_pubkey,
+                            cv->message_hash, sig, sig_len, TLS_ALERT_DECRYPT_ERROR))
+    {
+        ok = true;
+        goto done;
+    }
 
     if (!tls_ecdsa_sig_rs96(sig, sig_len, cv->rs))
     {
