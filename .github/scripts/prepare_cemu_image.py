@@ -22,6 +22,10 @@ ROOT = Path(__file__).resolve().parents[2]
 VERSIONS_FILE = ROOT / ".github" / "ci-versions.env"
 AUTOTESTER_PATCH = ROOT / "tools/build" / "patches" / "cemu-autotester.patch"
 NMI_PATCH = ROOT / "tools/build" / "patches" / "cemu-nmi-pc.patch"
+# sendKey rewrote keyExtend on one-byte keys, which could land between the
+# OS reading the two halves of a two-byte key: launches typed GDB1 instead of
+# Asm(, so the installer never ran and every calc job failed downstream.
+SENDKEY_PATCH = ROOT / "tools/build" / "patches" / "cemu-sendkey-extend.patch"
 CEMU_REPOSITORY = "https://github.com/alessiodam/CEmu-lwIP-CE.git"
 CLIBS_URL = (
     "https://github.com/CE-Programming/libraries/releases/latest/download/"
@@ -209,8 +213,21 @@ def apply_nmi_patch(cemu_dir: Path) -> None:
     )
 
 
+def apply_core_patch(cemu_dir: Path, patch: Path) -> None:
+    """Apply a core patch, accept it if already applied, fail otherwise."""
+    if run(["git", "-C", str(cemu_dir), "apply", "--check", str(patch)],
+           capture=True, check=False).returncode == 0:
+        run(["git", "-C", str(cemu_dir), "apply", str(patch)])
+        return
+    if run(["git", "-C", str(cemu_dir), "apply", "--reverse", "--check", str(patch)],
+           capture=True, check=False).returncode == 0:
+        return
+    raise PreparationError(f"{patch.name} does not apply cleanly to {cemu_dir}")
+
+
 def build_cemu_tools(cemu_dir: Path, jobs: int) -> tuple[Path, Path]:
     apply_nmi_patch(cemu_dir)
+    apply_core_patch(cemu_dir, SENDKEY_PATCH)
     run(["make", "-C", str(cemu_dir / "core"), f"-j{jobs}"])
     apply_autotester_patch(cemu_dir)
 
@@ -331,7 +348,7 @@ def install_release(
 
         installed = False
         screen_hash = "?"
-        for launch in INSTALL_LAUNCHES:
+        for attempt, launch in enumerate(INSTALL_LAUNCHES, start=1):
             _headless_send(process, launch)
             waited = 0
             while waited < INSTALL_TIMEOUT_MS:
@@ -344,8 +361,13 @@ def install_release(
                     break
             if installed:
                 break
+            # The hash says only that the screen is wrong. Keep the frame
+            # itself, before recovery keys clear it: an installer that stops
+            # early usually says why on screen.
+            shot = output.parent / f"install-fail-{attempt}.bmp"
+            _headless_send(process, f"screenshot {shot}")
             print(f"{launch!r} did not complete the install (last hash {screen_hash}); "
-                  "retrying", flush=True)
+                  f"screen saved to {shot}; retrying", flush=True)
             for command in LAUNCH_RECOVERY_COMMANDS:
                 _headless_send(process, command)
         if not installed:

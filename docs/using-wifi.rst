@@ -108,8 +108,8 @@ The bridge can also take over the slow parts of TLS. Two settings in the
 lwIP-CE app's **Security** section control it, and both are on by default:
 
 **Crypto offload**
-    The bridge computes the X25519 and P-256 key exchanges and checks the RSA
-    and ECDSA P-256 signatures on the server's certificate chain and
+    The bridge computes the X25519 and P-256 key exchanges and checks the RSA,
+    ECDSA P-256 and ECDSA P-384 signatures on the server's certificate chain and
     CertificateVerify, using its hardware accelerators. The calculator still runs the rest of TLS (key schedule,
     record encryption, certificate parsing and policy) itself. P-256 is slow
     enough on the calculator alone that some servers give up, so without
@@ -136,7 +136,9 @@ The key exchange's ephemeral private key and the random bytes cross the USB
 cable to and from the bridge, so the bridge is part of the trusted hardware.
 
 Programs can use the same operations directly: ``lwip_wifi_x25519()``,
-``lwip_wifi_rsa_verify()`` and ``lwip_wifi_random()`` wait for the bridge's
+``lwip_wifi_rsa_verify()``, ``lwip_wifi_random()``, and the SHA-384 and SHA-512
+hashes ``lwip_wifi_sha384()`` and ``lwip_wifi_sha512()`` (at most
+``LWIP_WIFI_SHA_MAX`` bytes per call) wait for the bridge's
 answer, and ``lwip_wifi_crypto_caps()`` reports which ones are available. Call
 them from the main loop, not from a socket callback.
 

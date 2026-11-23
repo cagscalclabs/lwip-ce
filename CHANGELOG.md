@@ -166,3 +166,8 @@ Users can now disable TLS completely through the app config wizard, for any unco
 - OCSP runs asyncronously similarly to certificate-chain link verification; job queue can grow up the implementation's max chain depth of 8.
 - (Breaking/Truststore) The truststore format is now v4: each root entry carries the SHA-1 of its subject Name, used to build OCSP requests. **Update `lwIPCERT` together with this release.** v3.2.0 rejects a v3 truststore, and older releases reject a v4 truststore.
 - (Fix/Memory) `mem_free(NULL)` is now a no-op, as in libc and upstream lwIP's heap allocator.
+
+## Unreleased
+
+- (Feature/Wi-Fi) Crypto offload now covers ECDSA P-384 (`ecdsa_secp384r1_sha384`) for CertificateVerify, certificate chain links, and truststore anchors, run in parallel like the P-256 and RSA checks. Needs a bridge firmware that advertises `LWIP_WIFI_CAP_P384`; older firmware falls back to local code.
+- (Feature/Wi-Fi) `lwip_wifi_sha384()` and `lwip_wifi_sha512()` hash up to `LWIP_WIFI_SHA_MAX` bytes on the bridge. `lwip_wifi_crypto_caps()` reports them as `LWIP_WIFI_CAP_SHA512`, and P-384 as `LWIP_WIFI_CAP_P384`.

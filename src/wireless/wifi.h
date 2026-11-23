@@ -21,8 +21,11 @@
 #define LWIP_WIFI_CAP_RSA 0x02
 #define LWIP_WIFI_CAP_RANDOM 0x04
 #define LWIP_WIFI_CAP_P256 0x08
+#define LWIP_WIFI_CAP_P384 0x10
+#define LWIP_WIFI_CAP_SHA512 0x20
 #define LWIP_WIFI_RANDOM_MAX 64
 #define LWIP_WIFI_VERSION_MAX 32
+#define LWIP_WIFI_SHA_MAX 1024
 
 typedef enum
 {
@@ -143,5 +146,9 @@ lwip_wifi_error_t lwip_wifi_rsa_verify(bool pss, const uint8_t digest[32], const
 
 /* len (at most LWIP_WIFI_RANDOM_MAX) bytes from the bridge TRNG. */
 lwip_wifi_error_t lwip_wifi_random(uint8_t *out, uint8_t len);
+
+lwip_wifi_error_t lwip_wifi_sha384(const uint8_t *data, size_t len, uint8_t out[48]);
+
+lwip_wifi_error_t lwip_wifi_sha512(const uint8_t *data, size_t len, uint8_t out[64]);
 
 #endif

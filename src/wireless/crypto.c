@@ -226,6 +226,44 @@ lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t digest[32], const uint8_
     return send(job, p);
 }
 
+lwip_crypto_job_t lwip_crypto_p384_verify(const uint8_t digest[48], const uint8_t pub[97],
+                                          const uint8_t rs[96])
+{
+    struct pbuf *p;
+    job_t *job = start(CTL_CAP_P384, CTL_OP_ECDSA_P384_VERIFY, 241, &p);
+    uint8_t *body;
+
+    if (!job)
+        return 0;
+    job->out = NULL;
+    job->out_len = 0;
+    body = (uint8_t *)p->payload + CTL_HEADER;
+    memcpy(body, digest, 48);
+    memcpy(body + 48, pub, 97);
+    memcpy(body + 145, rs, 96);
+    return send(job, p);
+}
+
+lwip_crypto_job_t lwip_crypto_sha(uint8_t alg, const uint8_t *data, size_t len, uint8_t *out)
+{
+    struct pbuf *p;
+    job_t *job;
+    uint8_t *body;
+
+    if ((alg != CTL_SHA384 && alg != CTL_SHA512) || len > CTL_SHA_MAX)
+        return 0;
+    job = start(CTL_CAP_SHA512, CTL_OP_SHA, (uint16_t)(1 + len), &p);
+    if (!job)
+        return 0;
+    job->out = out;
+    job->out_len = alg == CTL_SHA384 ? 48 : 64;
+    body = (uint8_t *)p->payload + CTL_HEADER;
+    body[0] = alg;
+    if (len)
+        memcpy(body + 1, data, len);
+    return send(job, p);
+}
+
 lwip_crypto_job_t lwip_crypto_random(uint8_t *out, uint8_t len)
 {
     struct pbuf *p;
@@ -299,7 +337,7 @@ static void on_info(const uint8_t *header, struct pbuf *p)
         pbuf_copy_partial(p, &caps, 1, CTL_HEADER) != 1)
         return;
     if (cfg->crypto_offload)
-        wanted |= CTL_CAP_X25519 | CTL_CAP_RSA | CTL_CAP_P256;
+        wanted |= CTL_CAP_X25519 | CTL_CAP_RSA | CTL_CAP_P256 | CTL_CAP_P384 | CTL_CAP_SHA512;
     if (cfg->bridge_rng)
         wanted |= CTL_CAP_RANDOM;
     g_caps = caps & wanted;
@@ -338,7 +376,7 @@ bool lwip_crypto_reply(const uint8_t *header, struct pbuf *p)
     uint8_t op = header[15] & (uint8_t)~CTL_REPLY;
 
     if (header[14] != CTL_VERSION || !(header[15] & CTL_REPLY) || op < CTL_OP_INFO ||
-        op > CTL_OP_ECDSA_VERIFY)
+        op > CTL_OP_SHA)
         return false;
 
     /* Other Info requests are a program's, waiting in wifi.c. */

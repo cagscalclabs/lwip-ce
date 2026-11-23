@@ -1,0 +1,26 @@
+diff --git a/core/extras.c b/core/extras.c
+index bac5742..b83d131 100644
+--- a/core/extras.c
++++ b/core/extras.c
+@@ -28,10 +28,18 @@ bool EMSCRIPTEN_KEEPALIVE sendKey(uint16_t key) {
+         return false;
+     }
+     if (key < 0x100) {
+-        key <<= 8;
++        /* A one-byte key leaves keyExtend alone: it means nothing unless
++         * kbdKey holds a two-byte prefix. For a two-byte key the OS clears
++         * keyReady after reading kbdKey but before reading keyExtend, so
++         * rewriting keyExtend here can land in that window and turn the
++         * previous key into a different one. Asm( (0xFC 0x9C) followed by
++         * PRGM decoded as GDB1 (0xFC 0x00), which garbled installer and test
++         * launches depending on the exact emulated timing. */
++        mem_poke_byte(CE_kbdKey, (uint8_t)key);
++    } else {
++        mem_poke_byte(CE_kbdKey, (uint8_t)(key >> 8));
++        mem_poke_byte(CE_keyExtend, (uint8_t)(key & 0xFF));
+     }
+-    mem_poke_byte(CE_kbdKey, (uint8_t)(key >> 8));
+-    mem_poke_byte(CE_keyExtend, (uint8_t)(key & 0xFF));
+     mem_poke_byte(CE_graphFlags2, flags | CE_keyReady);
+     return true;
+ }
