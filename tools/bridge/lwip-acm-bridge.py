@@ -1,36 +1,20 @@
 #!/usr/bin/env python3
-"""Bridge the calculator's CDC-ACM link to a real network.
+"""Bridge lwIP-CE's length-prefixed CDC-ACM frames to the internet on macOS.
 
-The calculator in USB device mode presents a CDC-ACM interface carrying raw
-Ethernet frames -- one per USB bulk transfer, no header, no length prefix, no
-escaping. The ESP32 Wi-Fi bridge firmware reads those frames and forwards them
-over Wi-Fi; this does the same job on a computer. The approach is Alessio
-Dam's; this is an independent implementation against the same wire format.
-
-    --listen    decode and print frames; no privileges, nothing written
-    --serve     answer DHCP and ARP in-process, so the calculator gets an
-                address and can reach this host. No TAP driver needed.
-    --tap       forward frames to a TAP interface (Linux). The real bridge:
-                the calculator becomes a host on your network.
-    --accelerate-crypto  answer the existing crypto offload requests with
-                python3-cryptography. Requires Crypto offload enabled on the
-                calculator and a build with the P-256 request-length hint.
-
-On macOS, use the serial port macOS already provides. A tty is a byte stream
-and loses the USB transfer boundaries that are this protocol's only framing,
-so frames are recovered by parsing their headers -- see frame_length(). That
-works for IPv4, IPv6, ARP, 802.3-length and crypto control frames.
-
-On Linux, prefer PyUSB: detach_kernel_driver() releases cdc_acm and bulk
-reads preserve transfer boundaries exactly, so no header parsing is needed.
+The calculator is the network client. This local program answers DHCP and
+ARP, forwards its IPv4 packets through a utun interface, and applies a PF NAT
+rule on the Mac's selected uplink. See tools/bridge/README.md for the network
+path, host changes, and cleanup behavior.
 """
 
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import glob
 import os
 import platform
+import re
 import select
 import socket
 import struct
@@ -1093,10 +1077,66 @@ class ConnectionWatch:
             del self.flows[key]
 
 
+@contextmanager
+def temporary_ipv4_forwarding():
+    """Enable forwarding for a bridge run, then restore its prior value."""
+    import subprocess
+
+    original = subprocess.run(
+        ["sysctl", "-n", "net.inet.ip.forwarding"], check=True,
+        capture_output=True, text=True).stdout.strip()
+    if original not in ("0", "1"):
+        raise RuntimeError(f"unexpected net.inet.ip.forwarding value: {original!r}")
+
+    changed = original == "0"
+    try:
+        if changed:
+            subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=1"],
+                           check=True, capture_output=True, text=True)
+            print("forwarding: enabled for this bridge run")
+        yield
+    finally:
+        if changed:
+            subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=0"],
+                           check=True, capture_output=True, text=True)
+            print("forwarding: restored to 0")
+
+
+def select_pf_nat_anchor(main_rules: str) -> str:
+    """Use an existing NAT anchor point without replacing the main ruleset."""
+    anchors = [line.strip() for line in main_rules.splitlines()
+               if line.strip().startswith("nat-anchor ")]
+    if any('"com.apple/*"' in line for line in anchors):
+        return "com.apple/lwip-ce-bridge"
+    if any('"lwip-ce-bridge"' in line for line in anchors):
+        return "lwip-ce-bridge"  # main rules left by an older bridge run
+    raise RuntimeError("PF has no usable NAT anchor; refusing to replace "
+                       "the main PF ruleset. Load a ruleset with "
+                       "nat-anchor \"com.apple/*\" before starting the bridge")
+
+
+def pf_enable_token(output: str) -> str:
+    match = re.search(r"\bToken\s*:\s*(\d+)\b", output)
+    if not match:
+        raise RuntimeError(f"pfctl -E did not return an enable token: {output.strip()}")
+    return match.group(1)
+
+
 def cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
                verbose: bool = True, tls_dump: bool = False,
                watch: "ConnectionWatch | None" = None,
-               crypto: "CryptoResponder | None" = None) -> int:
+               crypto: "CryptoResponder | None" = None,
+               save_hello: str | None = None) -> int:
+    with temporary_ipv4_forwarding():
+        return _cmd_bridge(fd, net, uplink, seconds, verbose, tls_dump,
+                           watch, crypto, save_hello)
+
+
+def _cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
+                verbose: bool = True, tls_dump: bool = False,
+                watch: "ConnectionWatch | None" = None,
+                crypto: "CryptoResponder | None" = None,
+                save_hello: str | None = None) -> int:
     """Bridge the calculator onto the real network via utun + pf NAT.
 
     The bridge itself does almost nothing: DHCP and ARP (the kernel will not
@@ -1105,6 +1145,9 @@ def cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
     """
     import subprocess
 
+    main_rules = subprocess.run(["pfctl", "-sn"], check=True,
+                                capture_output=True, text=True).stdout
+    anchor = select_pf_nat_anchor(main_rules)
     tun, tun_name = open_utun()
     host_ip = ".".join(str(b) for b in net.host_ip)
     client_ip = ".".join(str(b) for b in net.client_ip)
@@ -1129,60 +1172,41 @@ def cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
         raise RuntimeError(f"route to {client_ip} uses {current_route or 'no interface'}, "
                            f"expected {tun_name}")
 
-    anchor = "lwip-ce-bridge"
     rule = f"nat on {uplink} from {client_ip} to any -> ({uplink})\n"
     print(f"\ninterface : {tun_name}  {host_ip} -> {client_ip}")
     print(f"route     : {client_ip} via {current_route}")
     print(f"uplink    : {uplink}")
     print(f"pf rule   : {rule.strip()}")
 
-    # IP forwarding must be on or the kernel drops anything not addressed to
-    # itself, which looks exactly like a NAT failure.
-    fwd = subprocess.run(["sysctl", "-n", "net.inet.ip.forwarding"],
-                         capture_output=True, text=True).stdout.strip()
-    if fwd != "1":
-        subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=1"],
-                       capture_output=True)
-        print("forwarding: enabled (was off)")
-
-    # An anchor alone does nothing unless the main ruleset references it, and
-    # nothing at all unless pf is enabled. Both are easy to get silently
-    # wrong: pfctl -a <anchor> -f succeeds against a disabled firewall.
-    pf_was_enabled = "Status: Enabled" in subprocess.run(
-        ["pfctl", "-s", "info"], capture_output=True, text=True).stdout
-
-    pf_loaded = False
+    # The anchor needs an active NAT anchor point and a PF enable reference.
+    # -E/-X avoids globally disabling PF if another service starts using it.
+    anchor_loaded = False
+    pf_token = None
     try:
-        main_rules = subprocess.run(
-            ["pfctl", "-sn"], capture_output=True, text=True).stdout
-        if anchor not in main_rules:
-            # Load a minimal ruleset that includes our anchor. pf on macOS
-            # ships with an empty nat ruleset, so this adds rather than
-            # replaces anything the user had.
-            combined = (f'nat-anchor "{anchor}"\n'
-                        f'rdr-anchor "{anchor}"\n')
-            subprocess.run(["pfctl", "-f", "-"], input=combined, text=True,
-                           capture_output=True)
-
         subprocess.run(["pfctl", "-a", anchor, "-f", "-"],
                        input=rule, text=True, check=True, capture_output=True)
+        anchor_loaded = True
 
-        en = subprocess.run(["pfctl", "-e"], capture_output=True, text=True)
+        en = subprocess.run(["pfctl", "-E"], check=True,
+                            capture_output=True, text=True)
+        pf_token = pf_enable_token(en.stdout + en.stderr)
         status = subprocess.run(["pfctl", "-s", "info"],
-                                capture_output=True, text=True).stdout
+                                check=True, capture_output=True, text=True).stdout
         if "Status: Enabled" not in status:
-            print(f"pf        : NOT ENABLED -- NAT will not happen "
-                  f"({en.stderr.strip()})")
-        else:
-            pf_loaded = True
-            print("pf        : enabled, NAT anchor loaded")
+            raise RuntimeError("PF did not enable after pfctl -E")
+        print(f"pf        : enabled, NAT anchor {anchor} loaded")
         # Show what pf thinks it has, so a silent mismatch is visible.
         shown = subprocess.run(["pfctl", "-a", anchor, "-s", "nat"],
-                               capture_output=True, text=True).stdout.strip()
+                               check=True, capture_output=True, text=True).stdout.strip()
         print(f"pf rules  : {shown or '(none -- NAT is not active)'}\n")
-    except subprocess.CalledProcessError as e:
-        print(f"pf        : could not load NAT ({e.stderr.strip()})")
-        print("            outbound traffic will not be translated\n")
+    except BaseException:
+        if anchor_loaded:
+            subprocess.run(["pfctl", "-a", anchor, "-F", "all"],
+                           capture_output=True)
+        if pf_token is not None:
+            subprocess.run(["pfctl", "-X", pf_token], capture_output=True)
+        tun.close()
+        raise
 
     asm = LengthPrefixReassembler()
     start = time.time()
@@ -1258,15 +1282,13 @@ def cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
     except KeyboardInterrupt:
         print("\ninterrupted")
     finally:
-        if pf_loaded:
+        if anchor_loaded:
             subprocess.run(["pfctl", "-a", anchor, "-F", "all"],
                            capture_output=True)
-            if not pf_was_enabled:
-                # Leave the firewall as we found it.
-                subprocess.run(["pfctl", "-d"], capture_output=True)
-                print("pf        : NAT anchor flushed, pf disabled again")
-            else:
-                print("pf        : NAT anchor flushed")
+            print("pf        : NAT anchor flushed")
+        if pf_token is not None:
+            subprocess.run(["pfctl", "-X", pf_token], capture_output=True)
+            print("pf        : enable reference released")
         tun.close()
 
     print(f"\nforwarded {tx} packets out, {rx} in")
@@ -1373,8 +1395,9 @@ def main() -> int:
     except ImportError as e:
         ap.error(f"--accelerate-crypto needs python3-cryptography: {e}")
 
-    if platform.system() not in ("Darwin", "Linux"):
-        print(f"unsupported platform: {platform.system()}", file=sys.stderr)
+    if platform.system() != "Darwin":
+        print("this bridge currently requires macOS (utun and pfctl)",
+              file=sys.stderr)
         return 2
 
     if os.geteuid() != 0:
@@ -1406,9 +1429,9 @@ def main() -> int:
             try:
                 cmd_bridge(fd, net, uplink, args.seconds,
                            verbose=not args.quiet,
-                           tls_dump=args.tls or args.debug,
+                           tls_dump=args.tls or args.debug or bool(args.save_hello),
                            watch=ConnectionWatch(trace=args.debug) if args.debug else None,
-                           crypto=crypto)
+                           crypto=crypto, save_hello=args.save_hello)
             except BlockingIOError as e:
                 print(f"\nbridge I/O would block: {e}", file=sys.stderr)
                 return 2
