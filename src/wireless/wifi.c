@@ -479,3 +479,17 @@ lwip_wifi_error_t lwip_wifi_random(uint8_t *out, uint8_t len)
 {
     return settle(lwip_crypto_random(out, len));
 }
+
+lwip_wifi_error_t lwip_wifi_sha384(const uint8_t *data, size_t len, uint8_t out[48])
+{
+    if ((!data && len) || !out || len > LWIP_WIFI_SHA_MAX)
+        return LWIP_WIFI_ERR_BAD_REQUEST;
+    return settle(lwip_crypto_sha(CTL_SHA384, data, len, out));
+}
+
+lwip_wifi_error_t lwip_wifi_sha512(const uint8_t *data, size_t len, uint8_t out[64])
+{
+    if ((!data && len) || !out || len > LWIP_WIFI_SHA_MAX)
+        return LWIP_WIFI_ERR_BAD_REQUEST;
+    return settle(lwip_crypto_sha(CTL_SHA512, data, len, out));
+}

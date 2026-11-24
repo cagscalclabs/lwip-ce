@@ -496,3 +496,5 @@
 	export	tls_ocsp_hash_issuer
 	export	tls_ocsp_build_request
 	export	tls_ocsp_free
+	export	lwip_wifi_sha384
+	export	lwip_wifi_sha512
