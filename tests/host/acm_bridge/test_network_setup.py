@@ -145,6 +145,21 @@ class HostNetworkingTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
             self.assertTrue(os.path.exists(path + ".1"))
 
+    def test_default_log_path_uses_platform_user_log_dir(self):
+        home = "/home/u"
+        tail = os.path.join("lwip-acm-bridge", "bridge.log")
+        with patch.dict(os.environ, {"XDG_STATE_HOME": "/xdg"}):
+            self.assertEqual(bridge.default_log_path("Darwin", home),
+                             os.path.join(home, "Library", "Logs", tail))
+            self.assertEqual(bridge.default_log_path("Linux", home),
+                             os.path.join("/xdg", tail))
+        for unset in ({}, {"XDG_STATE_HOME": "relative/dir"}):
+            env = {k: v for k, v in os.environ.items() if k != "XDG_STATE_HOME"}
+            env.update(unset)
+            with patch.dict(os.environ, env, clear=True):
+                self.assertEqual(bridge.default_log_path("Linux", home),
+                                 os.path.join(home, ".local", "state", tail))
+
 
 if __name__ == "__main__":
     unittest.main()

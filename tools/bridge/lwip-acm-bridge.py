@@ -64,6 +64,21 @@ class PrivateRotatingFileHandler(RotatingFileHandler):
         return os.fdopen(fd, "a", encoding="utf-8")
 
 
+def default_log_path(system: str, home: str) -> str:
+    """The platform's per-user log location.
+
+    macOS: ~/Library/Logs. Linux: $XDG_STATE_HOME, or ~/.local/state when it
+    is unset or not absolute (per the XDG Base Directory spec).
+    """
+    if system == "Darwin":
+        base = os.path.join(home, "Library", "Logs")
+    else:
+        base = os.environ.get("XDG_STATE_HOME", "")
+        if not os.path.isabs(base):
+            base = os.path.join(home, ".local", "state")
+    return os.path.join(base, "lwip-acm-bridge", "bridge.log")
+
+
 def configure_logging(path: str, debug: bool) -> None:
     """Keep the log owned by the invoking user, even when sudo is available."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), mode=0o700, exist_ok=True)
@@ -1639,7 +1654,9 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true",
                     help="suppress periodic packet counters")
     ap.add_argument("--log-file", metavar="PATH",
-                    help="log path (default: ~/.local/state/lwip-acm-bridge/bridge.log)")
+                    help="log path (default: ~/Library/Logs/lwip-acm-bridge/"
+                         "bridge.log on macOS, $XDG_STATE_HOME/lwip-acm-bridge/"
+                         "bridge.log on Linux, falling back to ~/.local/state)")
     ap.add_argument("--accelerate-crypto", action="store_true",
                     help="answer the calculator's crypto offload requests with "
                          "python3-cryptography")
@@ -1683,8 +1700,7 @@ def main() -> int:
 
     import pwd
     user_home = pwd.getpwuid(os.getuid()).pw_dir
-    log_path = args.log_file or os.path.join(
-        user_home, ".local", "state", "lwip-acm-bridge", "bridge.log")
+    log_path = args.log_file or default_log_path(system, user_home)
     try:
         configure_logging(log_path, args.debug)
     except OSError as e:

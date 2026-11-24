@@ -42,7 +42,10 @@ The script runs as your user and prompts through `sudo` only for host
 networking commands. Invoke it without `sudo`; starting it with `sudo`
 exits immediately so the packet loop cannot run as root or trigger a second
 authentication after dropping privileges. It writes a timestamped, levelled log to
-`~/.local/state/lwip-acm-bridge/bridge.log` by default. The log contains
+the platform's per-user log directory by default:
+`~/Library/Logs/lwip-acm-bridge/bridge.log` on macOS (visible in
+Console.app), and `$XDG_STATE_HOME/lwip-acm-bridge/bridge.log` on Linux,
+which falls back to `~/.local/state` when the variable is unset. The log contains
 settings changes, restoration results, errors and counters. `--debug` adds
 frame directions and byte counts; packet bytes and decoded packet contents
 are never logged. Files are user-owned, mode `0600`, and rotate at 10 MiB
