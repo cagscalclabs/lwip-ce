@@ -884,11 +884,23 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
     return USB_SUCCESS;
 }
 
+/* Device-mode bulk endpoint max packet size (0x40 in device_configuration). */
+#define DEVICE_BULK_MPS 64
+
 /* Device-mode RX reassembly: consume `length` bytes from `data`, extracting
  * complete length-prefixed frames and delivering each via eth_rx_deliver.
- * Partial frames are saved in dev->rx_frame_buf across calls. */
+ * Partial frames are saved in dev->rx_frame_buf across calls.
+ *
+ * Called once per completed receive transfer, so `length` is the whole
+ * transfer. Hosts (the Wi-Fi bridge firmware, the ACM bridge) append one zero
+ * pad byte when prefix + frame is an exact multiple of DEVICE_BULK_MPS, so the
+ * transfer ends on a short packet instead of needing a ZLP. That byte is not
+ * part of any frame; taken as a header byte it would desync reassembly and
+ * cost the next frame. */
 static void ecm_device_rx(eth_device_t *dev, const uint8_t *data, size_t length)
 {
+    const size_t transfer_len = length;
+
     while (length > 0)
     {
         if (dev->rx_frame_len == 0)
@@ -925,6 +937,11 @@ static void ecm_device_rx(eth_device_t *dev, const uint8_t *data, size_t length)
                 eth_rx_deliver(dev, dev->rx_frame_buf, dev->rx_frame_len);
                 dev->rx_frame_len = 0;
                 dev->rx_frame_pos = 0;
+                /* Pad byte: the last byte of the transfer, zero, and exactly
+                 * what made the transfer one past an MPS multiple. */
+                if (length == 1 && *data == 0 &&
+                    transfer_len % DEVICE_BULK_MPS == 1)
+                    break;
             }
         }
     }

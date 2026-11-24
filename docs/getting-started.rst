@@ -137,32 +137,58 @@ networking is active (again, not needed for cryptography or parser-only code). I
 Installing & Using lwIP-CE Application (as End User)
 -----------------------------------------------------
 
-``appinst/`` contains the actual lwIP-CE installer, split into multiple appvars and the installer program. Send the entire contents of that directory and ``lwip.8xv`` to your TI-84+ CE and then run ``lwIPINST.8xp (prgmINSTALL)``. This will install lwIP as a TI Flash Application.
+``appinst/`` contains the lwIP-CE installer: a set of AppVars and the installer program. Send the entire contents of that directory and ``lwip.8xv`` to your TI-84+ CE, then run ``prgmINSTALL`` (the file ``lwIPINST.8xp``). This installs lwIP-CE as a TI Flash Application.
 
 .. note::
 
-    The app installer cannot overwrite an Application that already exists. When updating this library you will need to delete the Application and then possibly ``GarbageCollect`` on your device before trying to install a new version.
+    The installer cannot overwrite an Application that already exists. To update, delete the old Application first, then run ``GarbageCollect`` if the calculator asks for it, before installing the new version.
 
-Any program that uses networking needs either a USB CDC Ethernet adapter (CDC-ECM or CDC-NCM class) on an OTG cable, or the lwIP-CE Wi-Fi bridge on the calculator's stock cable (see :doc:`using-wifi`). Some Ethernet-to-WiFi adapters work as well, provided they speak CDC Ethernet on the USB side and support Wi-Fi Protected Setup (WPS).
+Programs that only use the cryptography or parser APIs need nothing else. Programs that use the network need one of these connections:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 20 54
+
+   * - Connection
+     - Cable
+     - Notes
+   * - USB CDC Ethernet adapter
+     - OTG cable
+     - Any adapter of the CDC-ECM or CDC-NCM class. Some Ethernet-to-Wi-Fi
+       adapters also work, if they speak CDC Ethernet on the USB side and
+       support Wi-Fi Protected Setup (WPS).
+   * - lwIP-CE Wi-Fi bridge
+     - Stock cable
+     - An ESP32 board running the bridge firmware. See :doc:`using-wifi`.
+   * - ACM bridge *(since v3.2.1)*
+     - Stock cable
+     - A macOS or Linux computer running ``tools/lwip-acm-bridge.py`` from the
+       release. It shares the computer's internet connection with the
+       calculator. No extra hardware is needed. See :doc:`acm-bridge`.
+
+The calculator picks the mode from the cable. On an OTG cable it acts as the USB host for an adapter. On the stock cable it acts as a USB device for the Wi-Fi bridge or the computer. Programs don't need to know which connection is in use.
 
 .. code-block:: text
 
     ┌────────────┐   USB   ┌──────────────────┐  Ethernet  ┌────────┐
     │ Calculator │────────▶│ CDC Ethernet     │───────────▶│ Router │
-    └────────────┘         │ adapter          │            └────────┘
-                           └──────────────────┘
+    └────────────┘   OTG   │ adapter          │            └────────┘
+                     cable └──────────────────┘
 
     ┌────────────┐   USB   ┌──────────────────┐   802.11   ┌────────┐
     │ Calculator │────────▶│ CDC Ethernet +   │ ·  ·  ·  · │  Wi-Fi │
-    └────────────┘         │ Wi-Fi adapter    │            │ network│
-                           └──────────────────┘            └────────┘
+    └────────────┘   OTG   │ Wi-Fi adapter    │            │ network│
+                     cable └──────────────────┘            └────────┘
 
     ┌────────────┐   USB   ┌──────────────────┐   802.11   ┌────────┐
     │ Calculator │────────▶│ lwIP-CE Wi-Fi    │ ·  ·  ·  · │  Wi-Fi │
     └────────────┘  stock  │ bridge (ESP32)   │            │ network│
                     cable  └──────────────────┘            └────────┘
 
-Programs that only use the cryptography or parser APIs do not need any adapter.
+    ┌────────────┐   USB   ┌──────────────────┐   uplink   ┌────────┐
+    │ Calculator │────────▶│ Computer running │───────────▶│Internet│
+    └────────────┘  stock  │ the ACM bridge   │  (NAT)     └────────┘
+                    cable  └──────────────────┘
 
 lwIP-CE Configuration Wizard
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

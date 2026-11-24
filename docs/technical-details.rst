@@ -90,12 +90,24 @@ itself:
 
 When the host selects the configuration (``USB_HOST_CONFIGURE_EVENT``), an
 ``en`` netif is created on the bulk endpoints. Each USB transfer carries one
-Ethernet frame. The calculator ends IN transfers with a short or zero-length
-packet (``USB_AUTO_TERMINATE``); the bridge pads frames whose length is a
-multiple of 64 bytes by one byte, so every OUT transfer also ends short and the
-calculator's 1536-byte receive transfers complete per frame. The trailing byte
-is ignored by IP. In device mode the receive transfer stays armed while the
-link is down, so control frames still arrive when Wi-Fi is offline.
+Ethernet frame, preceded by a two-byte big-endian length in the same
+transfer. This applies in both directions.
+
+USB still delivers one frame per transfer, but some host serial drivers
+(macOS's in particular) present CDC-ACM data to programs as a byte stream and
+lose the transfer boundaries. The length lets the host read frames back out of
+that stream. The Wi-Fi bridge firmware and the ACM bridge
+(:doc:`acm-bridge`) both add the length to frames they send and reassemble
+frames by it on receive, as the calculator does.
+
+The calculator ends IN transfers with a short or zero-length packet
+(``USB_AUTO_TERMINATE``). The bridges pad a transfer whose length (prefix plus
+frame) is a multiple of 64 bytes with one byte, so every OUT transfer also ends
+short and the calculator's 1536-byte receive transfers complete per frame. The
+pad byte comes after the declared frame length, and the calculator discards
+it rather than reading it as the start of the next length. In device mode the receive
+transfer stays armed while the link is down, so control frames still arrive
+when Wi-Fi is offline.
 
 On the bridge, frames from the calculator go straight out of the Wi-Fi station
 interface and everything the station receives goes back to the calculator. The

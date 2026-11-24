@@ -6,6 +6,7 @@
    getting-started
    using-the-network
    using-wifi
+   acm-bridge
    flasher
    parsing
    using-cryptography
