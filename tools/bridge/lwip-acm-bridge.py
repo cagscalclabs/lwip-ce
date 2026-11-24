@@ -174,6 +174,9 @@ class LengthPrefixReassembler:
             if len(self.buf) < 2 + n:
                 return
             frame = bytes(self.buf[2:2 + n])
+            # Zero before deleting: del only shifts the tail down, which
+            # can leave consumed bytes (crypto offload secrets) behind.
+            self.buf[:2 + n] = bytes(2 + n)
             del self.buf[:2 + n]
             self.frames += 1
             yield frame
@@ -521,6 +524,38 @@ class UsbLink:
             self.usb.util.dispose_resources(self.dev)
         except Exception:
             pass
+
+
+PR_SET_DUMPABLE = 4
+
+
+def harden_process() -> None:
+    """Keep crypto offload secrets (private scalars, shared secrets) that
+    pass through this process out of core files and away from debuggers.
+
+    RLIMIT_CORE=0 stops ordinary core files. On Linux, PR_SET_DUMPABLE=0 also
+    stops piped core handlers (systemd-coredump, apport), which the kernel
+    does not hold to RLIMIT_CORE, and refuses ptrace and /proc/<pid>/mem
+    access from other processes running as the same user.
+    """
+    import resource
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ValueError, OSError) as e:
+        LOG.warning("Could not disable core dumps: %s", e)
+
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        rc = libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+    except (OSError, AttributeError) as e:
+        LOG.warning("Could not mark process non-dumpable: %s", e)
+        return
+    if rc != 0:
+        LOG.warning("Could not mark process non-dumpable: %s",
+                    os.strerror(ctypes.get_errno()))
 
 
 class CryptoResponder:
@@ -1716,6 +1751,8 @@ def main() -> int:
         crypto = CryptoResponder() if args.accelerate_crypto else None
     except ImportError as e:
         ap.error(f"--accelerate-crypto needs python3-cryptography: {e}")
+    if crypto:
+        harden_process()
 
     if system == "Linux":
         try:

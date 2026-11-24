@@ -61,7 +61,7 @@ when your user has write access there.
 | `--client-ip IP` | The address DHCP gives the calculator. Default `10.84.0.10`. |
 | `--dns IP` | DNS server advertised by DHCP. Default `1.1.1.1`. |
 | `--ntp IP` | NTP server advertised by DHCP. Default `162.159.200.1`. |
-| `--accelerate-crypto` | Answer the calculator's crypto offload requests locally. |
+| `--accelerate-crypto` | Answer the calculator's crypto offload requests locally. See [Crypto offload and secrets](#crypto-offload-and-secrets). |
 | `--quiet` | Suppress periodic packet counters. |
 | `--debug` | Log frame directions and byte counts, without packet contents. |
 | `--log-file PATH` | Write the log to PATH instead of the default user log path. |
@@ -136,6 +136,33 @@ permanent. With `--tap` pointing at an existing interface, the bridge uses
 it as configured and changes nothing on the host. It warns if the
 interface's address does not match `--host-ip` or if the interface is down.
 The printed output includes the commands to undo the setup.
+
+## Crypto offload and secrets
+
+> **Warning:** `--accelerate-crypto` routes X25519 and P-256 operations
+> through the host. Ephemeral private scalars and shared secrets pass through
+> host process memory and are not guaranteed to be wiped (Python's immutable
+> bytes/int objects and the interpreter's copying prevent this). Core dumps
+> are disabled while the flag is active, but swap and a privileged local
+> attacker are not mitigated. If your threat model includes a compromised or
+> untrusted host, leave this flag off.
+
+These values are never logged, written to disk, or forwarded to the network.
+Without the flag, crypto control frames are dropped.
+
+What the bridge does to limit exposure:
+
+- zeroes its receive buffer once each frame has been taken out of it.
+- on Linux, marks itself non-dumpable, so crash handlers such as
+  `systemd-coredump` can't capture its memory and other processes running as
+  your user can't attach a debugger or read it.
+- relies on `python3-cryptography` to clear the key material it holds
+  itself. That doesn't cover the copies Python makes before the key reaches
+  it.
+
+Leaving the flag off keeps all key operations on the calculator. The Wi-Fi
+bridge firmware is the alternative when you want offload without these
+host-side limits.
 
 ## Cleanup caveat
 

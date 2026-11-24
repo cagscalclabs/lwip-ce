@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import stat
+import struct
 import sys
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -144,6 +145,54 @@ class HostNetworkingTest(unittest.TestCase):
                 handler.close()
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
             self.assertTrue(os.path.exists(path + ".1"))
+
+    def test_reassembler_zeroes_consumed_bytes(self):
+        asm = bridge.LengthPrefixReassembler()
+        secret = b"\xaa" * 60
+        seen = []
+        real_delitem = bytearray.__delitem__
+
+        class Spy(bytearray):
+            def __delitem__(self, key):
+                seen.append(bytes(self[key]))
+                real_delitem(self, key)
+
+        asm.buf = Spy()
+        frames = list(asm.feed(struct.pack(">H", len(secret)) + secret))
+        self.assertEqual(frames, [secret])
+        self.assertEqual(seen, [bytes(2 + len(secret))])
+        self.assertEqual(len(asm.buf), 0)
+
+    def test_harden_process_sets_zero_core_limit(self):
+        import resource
+        with patch.object(resource, "setrlimit") as setrlimit, \
+                patch.object(bridge.sys, "platform", "darwin"):
+            bridge.harden_process()
+        setrlimit.assert_called_once_with(resource.RLIMIT_CORE, (0, 0))
+
+    def test_harden_process_marks_linux_process_non_dumpable(self):
+        import ctypes
+        import resource
+        libc = unittest.mock.MagicMock()
+        libc.prctl.return_value = 0
+        with patch.object(resource, "setrlimit"), \
+                patch.object(bridge.sys, "platform", "linux"), \
+                patch.object(ctypes, "CDLL", return_value=libc):
+            bridge.harden_process()
+        libc.prctl.assert_called_once_with(bridge.PR_SET_DUMPABLE, 0, 0, 0, 0)
+
+    def test_harden_process_warns_when_prctl_fails(self):
+        import ctypes
+        import resource
+        libc = unittest.mock.MagicMock()
+        libc.prctl.return_value = -1
+        with patch.object(resource, "setrlimit"), \
+                patch.object(bridge.sys, "platform", "linux"), \
+                patch.object(ctypes, "CDLL", return_value=libc), \
+                patch.object(ctypes, "get_errno", return_value=1), \
+                self.assertLogs(bridge.LOG, level="WARNING") as logs:
+            bridge.harden_process()
+        self.assertIn("non-dumpable", "\n".join(logs.output))
 
     def test_default_log_path_uses_platform_user_log_dir(self):
         home = "/home/u"
