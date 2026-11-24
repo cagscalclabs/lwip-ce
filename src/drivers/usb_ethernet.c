@@ -884,6 +884,52 @@ interrupt_receive_callback(__attribute__((unused)) usb_endpoint_t endpoint,
     return USB_SUCCESS;
 }
 
+/* Device-mode RX reassembly: consume `length` bytes from `data`, extracting
+ * complete length-prefixed frames and delivering each via eth_rx_deliver.
+ * Partial frames are saved in dev->rx_frame_buf across calls. */
+static void ecm_device_rx(eth_device_t *dev, const uint8_t *data, size_t length)
+{
+    while (length > 0)
+    {
+        if (dev->rx_frame_len == 0)
+        {
+            /* Waiting for the 2-byte length header. */
+            size_t need = (size_t)(2 - dev->rx_frame_pos);
+            size_t take = need < length ? need : length;
+            memcpy(dev->rx_frame_buf + dev->rx_frame_pos, data, take);
+            dev->rx_frame_pos += (uint16_t)take;
+            data += take;
+            length -= take;
+            if (dev->rx_frame_pos < 2)
+                break;
+            dev->rx_frame_len = (uint16_t)((dev->rx_frame_buf[0] << 8) | dev->rx_frame_buf[1]);
+            dev->rx_frame_pos = 0;
+            if (dev->rx_frame_len < 14 || dev->rx_frame_len > ETHERNET_MTU)
+            {
+                /* Invalid length — discard and lose sync. Drop the connection. */
+                dev->rx_frame_len = 0;
+                return;
+            }
+        }
+        else
+        {
+            /* Accumulating frame payload. */
+            size_t need = (size_t)(dev->rx_frame_len - dev->rx_frame_pos);
+            size_t take = need < length ? need : length;
+            memcpy(dev->rx_frame_buf + dev->rx_frame_pos, data, take);
+            dev->rx_frame_pos += (uint16_t)take;
+            data += take;
+            length -= take;
+            if (dev->rx_frame_pos == dev->rx_frame_len)
+            {
+                eth_rx_deliver(dev, dev->rx_frame_buf, dev->rx_frame_len);
+                dev->rx_frame_len = 0;
+                dev->rx_frame_pos = 0;
+            }
+        }
+    }
+}
+
 ///---------------------------------------------------
 /// @brief bulk out callback function
 static usb_error_t bulk_transmit_callback(__attribute__((unused)) usb_endpoint_t endpoint,
@@ -989,7 +1035,10 @@ static usb_error_t ecm_receive_callback(__attribute__((unused)) usb_endpoint_t e
     else if (transferred)
     {
         dev->rx_retries = 0;
-        eth_rx_deliver(dev, recvbuf, (uint16_t)transferred);
+        if (dev->device_mode)
+            ecm_device_rx(dev, recvbuf, transferred);
+        else
+            eth_rx_deliver(dev, recvbuf, (uint16_t)transferred);
     }
     /* Self-re-arm on every successful receive so the dispatcher is a
      * safety net rather than the sole continuity path. */
@@ -1014,7 +1063,10 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
         LWIP_TRACE_RETURN(ERR_IF);
     if (p->tot_len > ETHERNET_MTU)
         LWIP_TRACE_RETURN(ERR_MEM);
-    struct pbuf *tbuf = pbuf_alloc(PBUF_RAW, p->tot_len, PBUF_RAM);
+    /* Device mode: prepend a 2-byte big-endian length prefix so the host's
+     * ACM/tty driver can reassemble frames from the byte stream. */
+    u16_t prefix = dev->device_mode ? 2 : 0;
+    struct pbuf *tbuf = pbuf_alloc(PBUF_RAW, (u16_t)(prefix + p->tot_len), PBUF_RAM);
     if (tbuf == NULL)
         LWIP_TRACE_RETURN(ERR_MEM);
     struct eth_tx_ctx *ctx = mem_malloc(sizeof(*ctx));
@@ -1024,9 +1076,14 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
         LWIP_TRACE_RETURN(ERR_MEM);
     }
     LINK_STATS_INC(link.xmit);
-    // Update SNMP stats(only if you use SNMP)
     MIB2_STATS_NETIF_ADD(netif, ifoutoctets, p->tot_len);
-    if (pbuf_copy(tbuf, p))
+    uint8_t *out = (uint8_t *)tbuf->payload;
+    if (prefix)
+    {
+        out[0] = (uint8_t)(p->tot_len >> 8);
+        out[1] = (uint8_t)(p->tot_len & 0xFF);
+    }
+    if (pbuf_copy_partial(p, out + prefix, p->tot_len, 0) != p->tot_len)
     {
         pbuf_free(tbuf);
         mem_free(ctx);
@@ -1035,7 +1092,7 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     ctx->dev = dev;
     ctx->p = tbuf;
     if (dev->pcap.buf)
-        pcap_write(netif, PCAP_DIR_TX, tbuf->payload, tbuf->tot_len);
+        pcap_write(netif, PCAP_DIR_TX, out + prefix, p->tot_len);
     if (usb_fn.schedule_transfer(dev->tx.endpoint, tbuf->payload, tbuf->tot_len,
                                  bulk_transmit_callback, ctx) != USB_SUCCESS)
     {

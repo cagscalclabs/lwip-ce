@@ -189,6 +189,10 @@ typedef struct _eth_device_t
      * Only valid while `dead`. */
     struct _eth_device_t *dead_next;
     struct mem_buffer *rx_ring;
+    /* Reassembly state for device-mode RX (length-prefixed framing). */
+    uint8_t rx_frame_buf[ECM_RX_SIZE];
+    uint16_t rx_frame_pos; /* bytes accumulated so far */
+    uint16_t rx_frame_len; /* declared frame length (0 = waiting for header) */
     struct
     {
         usb_endpoint_t endpoint;
