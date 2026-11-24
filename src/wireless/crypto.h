@@ -49,6 +49,11 @@ lwip_crypto_job_t lwip_crypto_p256(const uint8_t scalar[32], const uint8_t *poin
 lwip_crypto_job_t lwip_crypto_p256_verify(const uint8_t digest[32], const uint8_t pub[65],
                                           const uint8_t rs[64]);
 
+lwip_crypto_job_t lwip_crypto_p384_verify(const uint8_t digest[48], const uint8_t pub[97],
+                                          const uint8_t rs[96]);
+
+lwip_crypto_job_t lwip_crypto_sha(uint8_t alg, const uint8_t *data, size_t len, uint8_t *out);
+
 /* len (at most CTL_RANDOM_MAX) bytes from the bridge TRNG into out. */
 lwip_crypto_job_t lwip_crypto_random(uint8_t *out, uint8_t len);
 

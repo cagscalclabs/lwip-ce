@@ -494,3 +494,5 @@ tls_x509_get_ocsp_url
 tls_ocsp_hash_issuer
 tls_ocsp_build_request
 tls_ocsp_free
+lwip_wifi_sha384
+lwip_wifi_sha512
