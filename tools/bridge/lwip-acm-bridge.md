@@ -11,12 +11,14 @@ In a release, the script is in `tools/`. In the source tree, it is in
 
 ## Requirements
 
-- Python 3.8 or later.
-- **macOS:** root (`sudo`).
+- Python 3.10 or later.
+- **macOS:** `sudo` access for interface and PF changes.
 - **Linux:** `pyusb` (`dnf install python3-pyusb`, `apt install
   python3-usb`, or `pip install pyusb`), plus `iproute2` and `nftables`.
-  Root is needed unless you do the one-time setup in
-  [Linux without root](#linux-without-root).
+  `sudo` access is needed for temporary TAP and firewall setup unless you
+  do the one-time setup in [Linux without root](#linux-without-root). If USB
+  access is not already granted by udev, `getfacl` and `setfacl` are needed
+  for a temporary device ACL.
 - **Optional:** Python's `cryptography` package, only for
   `--accelerate-crypto`.
 
@@ -24,10 +26,10 @@ In a release, the script is in `tools/`. In the source tree, it is in
 
 ```sh
 # macOS
-sudo python3 lwip-acm-bridge.py
+python3 lwip-acm-bridge.py
 
-# Linux, as root
-sudo python3 lwip-acm-bridge.py
+# Linux, temporary TAP
+python3 lwip-acm-bridge.py
 
 # Linux, unprivileged, after the one-time setup below
 python3 lwip-acm-bridge.py --tap lwipce0
@@ -36,6 +38,16 @@ python3 lwip-acm-bridge.py --tap lwipce0
 The bridge waits for the calculator (USB VID:PID `16c0:05e1`), connects, and
 runs until Ctrl+C. After a disconnect it waits for the calculator again;
 `--once` exits instead. `--seconds N` stops after N seconds.
+The script runs as your user and prompts through `sudo` only for host
+networking commands. Invoke it without `sudo`; starting it with `sudo`
+exits immediately so the packet loop cannot run as root or trigger a second
+authentication after dropping privileges. It writes a timestamped, levelled log to
+`~/.local/state/lwip-acm-bridge/bridge.log` by default. The log contains
+settings changes, restoration results, errors and counters. `--debug` adds
+frame directions and byte counts; packet bytes and decoded packet contents
+are never logged. Files are user-owned, mode `0600`, and rotate at 10 MiB
+with three backups. `--log-file /var/log/lwip-acm-bridge.log` is available
+when your user has write access there.
 
 ### Options
 
@@ -47,10 +59,9 @@ runs until Ctrl+C. After a disconnect it waits for the calculator again;
 | `--dns IP` | DNS server advertised by DHCP. Default `1.1.1.1`. |
 | `--ntp IP` | NTP server advertised by DHCP. Default `162.159.200.1`. |
 | `--accelerate-crypto` | Answer the calculator's crypto offload requests locally. |
-| `--quiet` | Print a periodic counter instead of every packet. |
-| `--tls` | Decode TLS records: ClientHello contents and server alerts. |
-| `--debug` | Also report how each connection ended and why. Implies `--tls`. |
-| `--save-hello PATH` | Write the calculator's raw ClientHello record to PATH. |
+| `--quiet` | Suppress periodic packet counters. |
+| `--debug` | Log frame directions and byte counts, without packet contents. |
+| `--log-file PATH` | Write the log to PATH instead of the default user log path. |
 | `--port PATH` | macOS only: serial port to use. Default: auto-detected. |
 | `--tap IFACE` | Linux only: TAP interface to use. See below. |
 | `--print-setup` | Linux only: print the one-time setup commands and exit. |
@@ -78,9 +89,8 @@ Host changes, all undone on exit:
 - **IP forwarding.** `net.inet.ip.forwarding` is set to `1` only if it was
   `0`, and restored only if the bridge changed it.
 - **PF NAT.** A rule such as `nat on en0 from 10.84.0.10 to any -> (en0)`
-  is loaded into the `com.apple/lwip-ce-bridge` anchor, or into an existing
-  legacy `lwip-ce-bridge` anchor. The bridge refuses to replace the main PF
-  ruleset if neither anchor point is active. PF is enabled with a reference
+  is loaded into a unique anchor under `com.apple/*`. The bridge refuses to
+  replace the main PF ruleset if that anchor point is unavailable. PF is enabled with a reference
   token (`pfctl -E`) and only that reference is released (`pfctl -X`), so
   other PF users are unaffected.
 
@@ -89,17 +99,19 @@ Host changes, all undone on exit:
 The bridge talks to the calculator directly over libusb. It detaches the
 `cdc_acm` kernel driver while it runs and reattaches it on exit. Frames go
 through a TAP interface, which is layer 2, so the kernel handles ARP itself.
+If udev has not granted USB access, it asks `sudo` to grant the invoking user
+access to this USB device node for the session and removes that ACL on close.
 
-**As root**, the bridge creates a temporary TAP interface `lwipceN`, and
-then:
+The bridge asks `sudo` to create a temporary TAP interface `lwipceN` owned
+by your user, then asks `sudo` for these setup changes:
 
 - enables IPv4 forwarding on that interface and on the uplink only, not the
   global `ip_forward` switch. The uplink's original value is restored on
   exit.
-- adds an nftables table `lwip_ce_bridge` with a masquerade rule for the
+- adds a uniquely named nftables table with a masquerade rule for the
   calculator's address on the uplink.
-- if firewalld is running, adds the interface to the `trusted` zone (runtime
-  only).
+- if firewalld is running, adds a runtime forwarding rule limited to the
+  calculator's source address, TAP and uplink.
 
 All of these are undone on exit. Without firewalld, the bridge warns if any
 forward chain has a drop policy, because that chain can still discard the
@@ -116,7 +128,7 @@ python3 lwip-acm-bridge.py --print-setup   # review, then run the commands as ro
 python3 lwip-acm-bridge.py --tap lwipce0
 ```
 
-The network part of the setup lasts until reboot. The udev rule is
+The network part of the manual setup lasts until reboot. The udev rule is
 permanent. With `--tap` pointing at an existing interface, the bridge uses
 it as configured and changes nothing on the host. It warns if the
 interface's address does not match `--host-ip` or if the interface is down.
@@ -127,8 +139,10 @@ The printed output includes the commands to undo the setup.
 On both platforms, cleanup runs on normal exit, Ctrl+C, and bridge errors.
 A forced kill (`SIGKILL`) or power loss skips it. To recover:
 
-- **macOS:** run `sudo pfctl -a com.apple/lwip-ce-bridge -F all` and, if
-  needed, `sudo sysctl -w net.inet.ip.forwarding=0`.
-- **Linux:** run `sudo nft delete table ip lwip_ce_bridge` and
-  `sudo ip link delete lwipce0`. On the next run as root, the bridge also
-  replaces any leftover nftables table.
+- **macOS:** inspect `sudo pfctl -s Anchors` for a stale
+  `com.apple/lwip-ce-bridge-*` anchor, flush only that anchor, then restore
+  `net.inet.ip.forwarding` to its recorded prior value.
+- **Linux:** inspect `sudo nft list tables` for a stale
+  `lwip_ce_bridge_*` table, delete only that table, remove the corresponding
+  TAP, and restore uplink forwarding to its recorded prior value. Remove any
+  matching runtime firewalld direct rule.

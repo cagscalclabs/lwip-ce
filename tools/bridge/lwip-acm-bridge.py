@@ -8,17 +8,17 @@ host kernel, which routes and NATs it out of the selected uplink.
 macOS
     Talks to the calculator through the cu.usbmodem serial port, forwards
     IPv4 through a utun interface, answers ARP itself, and loads a PF NAT
-    anchor. Needs root.
+    anchor. Requests sudo only for privileged setup and cleanup.
 
 Linux
     Talks to the calculator directly over libusb (pyusb), detaching cdc_acm
     for the duration, and forwards ARP and IPv4 through a TAP interface, so
     the kernel does ARP as well. Needs pyusb. Two ways to run:
 
-    * as root: creates a temporary TAP interface, enables IPv4 forwarding on
+    * temporary: creates a user-owned TAP interface, enables IPv4 forwarding on
       it and the uplink, adds an nftables masquerade table, and (if firewalld
-      is running) puts the interface in the trusted zone. All of it is undone
-      on exit.
+      is running) permits only the calculator's forwarding flow. Sudo is
+      requested for setup and cleanup; the bridge loop runs as the user.
     * unprivileged: point --tap at a persistent TAP interface you own that
       is already addressed and NATed, and grant USB access with a udev rule.
       --print-setup prints the one-time root commands for that.
@@ -29,14 +29,20 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack, contextmanager
 import glob
+import ipaddress
+import logging
+from logging.handlers import RotatingFileHandler
 import os
 import platform
 import re
+import secrets
 import select
+import shutil
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 
@@ -45,6 +51,56 @@ VID, PID = 0x16C0, 0x05E1
 ETH_HDR = 14
 ETH_MAX = 1514
 USB_MPS = 64     # bulk max packet size
+LOG = logging.getLogger("lwip-acm-bridge")
+CLEANUP_ERRORS = 0
+
+
+class PrivateRotatingFileHandler(RotatingFileHandler):
+    def _open(self):
+        fd = os.open(self.baseFilename,
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+                     0o600)
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "a", encoding="utf-8")
+
+
+def configure_logging(path: str, debug: bool) -> None:
+    """Keep the log owned by the invoking user, even when sudo is available."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), mode=0o700, exist_ok=True)
+    handler = PrivateRotatingFileHandler(path, maxBytes=10 * 1024 * 1024,
+                                         backupCount=3, encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s"))
+    LOG.addHandler(handler)
+    LOG.setLevel(logging.DEBUG if debug else logging.INFO)
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    LOG.addHandler(console)
+
+
+def privileged(*cmd: str, input: str | None = None,
+               check: bool = True) -> subprocess.CompletedProcess:
+    """Run only a specific host-networking command with elevated rights."""
+    argv = list(cmd) if os.geteuid() == 0 else ["sudo", "--", *cmd]
+    try:
+        return subprocess.run(argv, input=input, text=True, check=check,
+                              capture_output=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"required command is missing: {argv[0]}") from exc
+
+
+def cleanup_command(description: str, *cmd: str) -> None:
+    global CLEANUP_ERRORS
+    try:
+        privileged(*cmd)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        CLEANUP_ERRORS += 1
+        detail = getattr(exc, "stderr", None)
+        LOG.error("Failed to restore %s: %s %s", description, exc,
+                  (detail or "").strip())
+    else:
+        LOG.info("Restored %s", description)
 
 # The Wi-Fi bridge's control protocol, from src/wireless/wifi_proto.h. The
 # calculator sends these unprompted when it is looking for a bridge; the
@@ -112,31 +168,6 @@ def mac_str(b: bytes) -> str:
     return ":".join(f"{x:02x}" for x in b)
 
 
-def describe_frame(f: bytes) -> str:
-    et = (f[12] << 8) | f[13]
-    kind = {0x0800: "IPv4", 0x0806: "ARP", 0x86DD: "IPv6"}.get(et, f"0x{et:04x}")
-    extra = ""
-    if et == 0x0800 and len(f) >= 34:
-        proto = {1: "ICMP", 6: "TCP", 17: "UDP"}.get(f[23], str(f[23]))
-        src = ".".join(str(x) for x in f[26:30])
-        dst = ".".join(str(x) for x in f[30:34])
-        extra = f"  {proto} {src}->{dst}"
-        if f[23] == 17 and len(f) >= 38:
-            sp, dp = (f[34] << 8) | f[35], (f[36] << 8) | f[37]
-            extra += f" :{sp}->{dp}"
-            if dp in (67, 68) or sp in (67, 68):
-                extra += "  [DHCP]"
-    elif et == 0x0806 and len(f) >= 42:
-        extra = "  who-has " + ".".join(str(x) for x in f[38:42])
-    elif et == CTL_ETHERTYPE and len(f) >= CTL_HEADER:
-        op = f[15]
-        name = CTL_OP_NAMES.get(op & ~CTL_REPLY, str(op))
-        extra = (f"  CTL v{f[14]} {name}"
-                 f"{' reply' if op & CTL_REPLY else ''} id={f[16]}")
-        kind = "CTL"
-    return f"{kind:>6} {len(f):>5}B  {mac_str(f[6:12])} -> {mac_str(f[0:6])}{extra}"
-
-
 def find_calculator_tty() -> str | None:
     """macOS: the serial port belonging to our VID/PID, or None.
 
@@ -188,11 +219,9 @@ def wait_for(finder, what: str, quiet: bool = False):
     while True:
         found = finder()
         if found:
-            if announced:
-                print(" " * 60, end="\r")
             return found
         if not announced and not quiet:
-            print(f"waiting for {what} ...", end="\r", flush=True)
+            LOG.info("Waiting for %s", what)
             announced = True
         time.sleep(0.5)
 
@@ -216,14 +245,19 @@ def open_tty(port: str):
     import fcntl
 
     fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-    attrs = termios.tcgetattr(fd)
-    attrs[0] = attrs[1] = attrs[3] = 0
-    attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-    attrs[6][termios.VMIN] = 0
-    attrs[6][termios.VTIME] = 0
-    termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    fcntl.ioctl(fd, 0x8004746C, struct.pack("I", 0x002))   # TIOCMBIS, TIOCM_DTR
-    return fd
+    try:
+        attrs = termios.tcgetattr(fd)
+        attrs[0] = attrs[1] = attrs[3] = 0
+        attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+        attrs[6][termios.VMIN] = 0
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        fcntl.ioctl(fd, 0x8004746C,
+                    struct.pack("I", 0x002))  # TIOCMBIS, TIOCM_DTR
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 class SerialFrameWriteError(Exception):
@@ -368,9 +402,13 @@ class UsbLink:
             self.close()
             raise
 
-        self.thread = threading.Thread(target=self._reader, daemon=True,
-                                       name="usb-reader")
-        self.thread.start()
+        try:
+            self.thread = threading.Thread(target=self._reader, daemon=True,
+                                           name="usb-reader")
+            self.thread.start()
+        except BaseException:
+            self.close()
+            raise
 
     def _reader(self) -> None:
         size = self.ep_in.wMaxPacketSize * 32
@@ -445,6 +483,7 @@ class UsbLink:
                     "sent); it is likely hung")
 
     def close(self) -> None:
+        global CLEANUP_ERRORS
         self.closing = True
         thread = getattr(self, "thread", None)
         if thread is not None:
@@ -452,13 +491,15 @@ class UsbLink:
         for n in self.claimed:
             try:
                 self.usb.util.release_interface(self.dev, n)
-            except Exception:
-                pass
+            except Exception as exc:
+                CLEANUP_ERRORS += 1
+                LOG.error("Could not release USB interface %d: %s", n, exc)
         for n in self.detached:
             try:
                 self.dev.attach_kernel_driver(n)
-            except Exception:
-                pass
+            except Exception as exc:
+                CLEANUP_ERRORS += 1
+                LOG.error("Could not reattach USB kernel driver %d: %s", n, exc)
         self.claimed.clear()
         self.detached.clear()
         try:
@@ -660,6 +701,8 @@ class MiniNet:
             if i + 1 >= len(payload):
                 break
             ln = payload[i + 1]
+            if i + 2 + ln > len(payload):
+                return None
             if opt == 53 and ln >= 1:
                 msg_type = payload[i + 2]
             i += 2 + ln
@@ -791,7 +834,7 @@ def open_utun():
     keeps TCP, routing, NAT and DNS in the kernel where they belong, instead
     of in a hand-rolled stack here.
 
-    Needs root. Creating network interfaces is privileged on every OS.
+    Try this as the invoking user first; some macOS versions permit it.
     """
     import fcntl
 
@@ -800,13 +843,82 @@ def open_utun():
     UTUN_OPT_IFNAME = 2
 
     s = socket.socket(AF_SYSTEM, socket.SOCK_DGRAM, SYSPROTO_CONTROL)
-    info = struct.pack("<I96s", 0, b"com.apple.net.utun_control")
-    ctl_id = struct.unpack("<I96s", fcntl.ioctl(s, CTLIOCGINFO, info))[0]
-    s.connect((ctl_id, 0))          # unit 0: kernel picks the next free utun
-    name = s.getsockopt(SYSPROTO_CONTROL, UTUN_OPT_IFNAME, 32)
-    name = name.split(b"\x00")[0].decode()
-    s.setblocking(False)
-    return s, name
+    try:
+        info = struct.pack("<I96s", 0, b"com.apple.net.utun_control")
+        ctl_id = struct.unpack("<I96s", fcntl.ioctl(s, CTLIOCGINFO, info))[0]
+        s.connect((ctl_id, 0))      # unit 0: kernel picks the next free utun
+        name = s.getsockopt(SYSPROTO_CONTROL, UTUN_OPT_IFNAME, 32)
+        name = name.split(b"\x00")[0].decode()
+        s.setblocking(False)
+        return s, name
+    except BaseException:
+        s.close()
+        raise
+
+
+UTUN_HELPER = '''\
+import fcntl, socket, struct, sys
+s = socket.socket(32, socket.SOCK_DGRAM, 2)
+info = struct.pack("<I96s", 0, b"com.apple.net.utun_control")
+ctl_id = struct.unpack("<I96s", fcntl.ioctl(s, 0xC0644E03, info))[0]
+s.connect((ctl_id, 0))
+name = s.getsockopt(2, 2, 32).split(b"\\0")[0]
+with socket.socket(socket.AF_UNIX) as channel:
+    channel.connect(sys.argv[1])
+    channel.sendmsg([name], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                             struct.pack("i", s.fileno()))])
+'''
+
+
+def open_privileged_utun():
+    """Have a short-lived sudo helper create utun and hand back only its fd."""
+    directory = tempfile.mkdtemp(prefix="lwip-acm-utun-")
+    path = os.path.join(directory, "fd.sock")
+    try:
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(path)
+            listener.listen(1)
+            process = subprocess.Popen(
+                ["sudo", "--", sys.executable, "-c", UTUN_HELPER, path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 120
+                while True:
+                    ready, _, _ = select.select([listener], [], [], 0.5)
+                    if ready:
+                        break
+                    if process.poll() is not None:
+                        raise RuntimeError("utun helper failed: " +
+                                           (process.stderr.read() or "unknown error"))
+                    if time.monotonic() >= deadline:
+                        process.terminate()
+                        raise RuntimeError("timed out waiting for sudo utun helper")
+                channel, _ = listener.accept()
+                with channel:
+                    data, controls, _, _ = channel.recvmsg(32, socket.CMSG_SPACE(4))
+                process.wait(timeout=5)
+                if process.returncode:
+                    raise RuntimeError("utun helper failed: " +
+                                       (process.stderr.read() or "unknown error"))
+                fds = [struct.unpack("i", item[:4])[0]
+                       for level, kind, item in controls
+                       if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS]
+                if not data or len(fds) != 1:
+                    raise RuntimeError("utun helper did not pass an interface")
+                # Python cannot infer the family of a macOS kernel-control
+                # socket from its fd (getsockname returns EOPNOTSUPP).
+                sock = socket.socket(32, socket.SOCK_DGRAM, 2, fileno=fds[0])
+                sock.setblocking(False)
+                return sock, data.decode()
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait()
+                process.stderr.close()
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+        os.rmdir(directory)
 
 
 def utun_write(sock, ip_packet: bytes) -> None:
@@ -878,222 +990,9 @@ def clamp_tcp_mss(frame: bytes, limit: int = ACM_SAFE_MSS) -> tuple[bytes, int |
     return frame, None
 
 
-TLS_HANDSHAKE_TYPES = {
-    1: "ClientHello", 2: "ServerHello", 4: "NewSessionTicket",
-    8: "EncryptedExtensions", 11: "Certificate", 13: "CertificateRequest",
-    15: "CertificateVerify", 20: "Finished",
-}
-TLS_ALERTS = {
-    0: "close_notify", 10: "unexpected_message", 20: "bad_record_mac",
-    40: "handshake_failure", 42: "bad_certificate", 43: "unsupported_certificate",
-    44: "certificate_revoked", 45: "certificate_expired", 46: "certificate_unknown",
-    47: "illegal_parameter", 48: "unknown_ca", 49: "access_denied",
-    50: "decode_error", 51: "decrypt_error", 70: "protocol_version",
-    71: "insufficient_security", 80: "internal_error", 86: "inappropriate_fallback",
-    109: "missing_extension", 112: "unrecognized_name",
-    116: "certificate_required", 120: "no_application_protocol",
-}
-
-
-def describe_tls(frame: bytes, direction: str,
-                 save_to: str | None = None) -> None:
-    """Decode a TLS record carried in this frame, if there is one.
-
-    A server that closes immediately after the ClientHello has read it and
-    rejected it, so what we actually put on the wire is the evidence -- not
-    what the code intends to send. Prints the ClientHello's version, cipher
-    suites and extension ids, and decodes any alert the server sends back.
-    """
-    ihl = (frame[14] & 0x0F) * 4
-    off = 14 + ihl
-    if len(frame) < off + 20 or frame[23] != 6:        # TCP only
-        return
-    doff = (frame[off + 12] >> 4) * 4
-    payload = frame[off + doff:]
-    ip_total = (frame[16] << 8) | frame[17]
-    payload = payload[:max(0, ip_total - ihl - doff)]
-    if len(payload) < 6:
-        return
-
-    ctype, ver_hi, ver_lo = payload[0], payload[1], payload[2]
-    rec_len = (payload[3] << 8) | payload[4]
-
-    if ctype == 21 and len(payload) >= 7:              # alert, plaintext
-        level, desc = payload[5], payload[6]
-        name = TLS_ALERTS.get(desc, str(desc))
-        print(f"  !! TLS alert from {direction}: level={level} {name}")
-        return
-    if ctype != 22:                                    # handshake only
-        return
-
-    body = payload[5:5 + rec_len]
-    if len(body) < 4:
-        return
-    htype = body[0]
-    hname = TLS_HANDSHAKE_TYPES.get(htype, f"type {htype}")
-    print(f"  ** TLS {hname} ({direction}): record ver 0x{ver_hi:02x}{ver_lo:02x}, "
-          f"{rec_len} bytes")
-
-    if htype != 1 or len(body) < 39:
-        return
-
-    # ClientHello: legacy_version, random[32], session_id, cipher_suites,
-    # compression, extensions.
-    p = 4
-    legacy = (body[p] << 8) | body[p + 1]
-    p += 2 + 32
-    sid_len = body[p]; p += 1 + sid_len
-    if p + 2 > len(body):
-        return
-    cs_len = (body[p] << 8) | body[p + 1]; p += 2
-    suites = [(body[p + i] << 8) | body[p + i + 1] for i in range(0, cs_len, 2)
-              if p + i + 1 < len(body)]
-    p += cs_len
-    if p >= len(body):
-        return
-    comp_len = body[p]; p += 1 + comp_len
-    print(f"     legacy_version 0x{legacy:04x}, session_id {sid_len}B, "
-          f"suites {['0x%04x' % s for s in suites]}")
-    if p + 2 > len(body):
-        print("     no extensions")
-        return
-    ext_total = (body[p] << 8) | body[p + 1]; p += 2
-    end = min(len(body), p + ext_total)
-    exts = []
-    while p + 4 <= end:
-        eid = (body[p] << 8) | body[p + 1]
-        elen = (body[p + 2] << 8) | body[p + 3]
-        exts.append(f"{eid}({elen}B)")
-        p += 4 + elen
-    print(f"     extensions: {', '.join(exts)}")
-    if p != end:
-        print(f"     *** extension block does not add up: stopped at {p}, "
-              f"expected {end} -- MALFORMED")
-
-    # A server that closes without an alert gives no reason, so the only way
-    # to find out what it objected to is to replay the exact bytes at it and
-    # bisect. Saving them is opt-in and names the path: a tool running as
-    # root should not drop files in the user's working directory uninvited.
-    if save_to:
-        try:
-            with open(save_to, "wb") as fh:
-                fh.write(payload[:5 + rec_len])
-            print(f"     saved {5 + rec_len} bytes to {save_to}")
-        except OSError as e:
-            print(f"     (could not save: {e})")
-
-
-class ConnectionWatch:
-    """Notices how connections end, and says why in plain terms.
-
-    A handshake that fails is usually diagnosed from the last thing that
-    happened before the close, and that evidence is on the wire: a TLS alert
-    naming the reason, a bare RST, or a FIN with nothing sent at all. The
-    calculator's own log records the state it reached, which cannot
-    distinguish "the server objected" from "the server vanished".
-    """
-
-    def __init__(self, trace: bool = False):
-        # keyed by (src_ip, sport, dst_ip, dport) seen from the calculator
-        self.flows: dict = {}
-        # trace prints every TCP segment's flags, which is what distinguishes
-        # "we never sent it" from "we sent it and it was discarded".
-        self.trace = trace
-
-    @staticmethod
-    def _key(f):
-        ihl = (f[14] & 0x0F) * 4
-        off = 14 + ihl
-        sport = (f[off] << 8) | f[off + 1]
-        dport = (f[off + 2] << 8) | f[off + 3]
-        return (bytes(f[26:30]), sport, bytes(f[30:34]), dport)
-
-    def observe(self, frame: bytes, outbound: bool) -> None:
-        if len(frame) < 34 or (frame[12] << 8) | frame[13] != 0x0800:
-            return
-        if frame[23] != 6:                      # TCP only
-            return
-        ihl = (frame[14] & 0x0F) * 4
-        off = 14 + ihl
-        if len(frame) < off + 20:
-            return
-        flags = frame[off + 13]
-        doff = (frame[off + 12] >> 4) * 4
-        ip_total = (frame[16] << 8) | frame[17]
-        plen = max(0, ip_total - ihl - doff)
-        payload = frame[off + doff:off + doff + plen]
-
-        key = self._key(frame)
-        if not outbound:                        # normalise direction
-            key = (key[2], key[3], key[0], key[1])
-        st = self.flows.setdefault(key, {
-            "sent": 0, "recvd": 0, "alert": None,
-            "tls_out": 0, "tls_in": 0, "opened": time.time(),
-        })
-
-        if outbound:
-            st["sent"] += plen
-        else:
-            st["recvd"] += plen
-
-        # Remember any TLS record seen, and any alert in particular.
-        if plen >= 6 and payload[0] in (20, 21, 22, 23):
-            if outbound:
-                st["tls_out"] += 1
-            else:
-                st["tls_in"] += 1
-            if payload[0] == 21 and plen >= 7:
-                st["alert"] = (payload[5], payload[6], outbound)
-
-        SYN, ACK, FIN, RST, PSH = 0x02, 0x10, 0x01, 0x04, 0x08
-        if self.trace:
-            names = [n for bit, n in ((SYN, "SYN"), (ACK, "ACK"), (FIN, "FIN"),
-                                      (RST, "RST"), (PSH, "PSH"))
-                     if flags & bit]
-            arrow = "calc->" if outbound else "  ->calc"
-            seq = struct.unpack(">I", frame[off + 4:off + 8])[0]
-            ack_n = struct.unpack(">I", frame[off + 8:off + 12])[0]
-            print(f"     tcp {arrow} [{','.join(names) or 'none'}] "
-                  f"seq={seq} ack={ack_n} len={plen}")
-
-        if flags & (FIN | RST):
-            who = "calculator" if outbound else "server"
-            how = "RST" if flags & RST else "FIN"
-            dest = ".".join(str(b) for b in key[2])
-            age = time.time() - st["opened"]
-            print(f"\n  == connection to {dest}:{key[3]} closed by {who} "
-                  f"({how}) after {age:.1f}s ==")
-            print(f"     bytes: {st['sent']} sent, {st['recvd']} received; "
-                  f"TLS records: {st['tls_out']} out, {st['tls_in']} in")
-
-            if st["alert"]:
-                level, desc, from_calc = st["alert"]
-                name = TLS_ALERTS.get(desc, f"unknown({desc})")
-                lvl = {1: "warning", 2: "fatal"}.get(level, str(level))
-                src = "calculator" if from_calc else "server"
-                print(f"     REASON: {src} sent a {lvl} TLS alert: {name}")
-            elif st["tls_out"] and not st["tls_in"]:
-                how_long = "reset" if flags & RST else "closed"
-                print(f"     REASON: we sent TLS records and the peer never "
-                      f"replied with one -- it {how_long} the connection "
-                      f"instead of sending an alert.")
-                print("             Usual causes: missing or wrong SNI, no "
-                      "acceptable cipher suite or group, or a malformed "
-                      "hello. Re-run with --tls to see what we sent.")
-            elif not st["sent"]:
-                print("     REASON: the connection was opened but we never "
-                      "sent anything before it closed.")
-            elif flags & RST:
-                print("     REASON: reset without an alert -- the peer "
-                      "abandoned the connection at the TCP layer.")
-            del self.flows[key]
-
-
 @contextmanager
 def temporary_ipv4_forwarding():
     """Enable forwarding for a bridge run, then restore its prior value."""
-    import subprocess
-
     original = subprocess.run(
         ["sysctl", "-n", "net.inet.ip.forwarding"], check=True,
         capture_output=True, text=True).stdout.strip()
@@ -1103,15 +1002,13 @@ def temporary_ipv4_forwarding():
     changed = original == "0"
     try:
         if changed:
-            subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=1"],
-                           check=True, capture_output=True, text=True)
-            print("forwarding: enabled for this bridge run")
+            LOG.info("Setting net.inet.ip.forwarding: 0 -> 1")
+            privileged("sysctl", "-w", "net.inet.ip.forwarding=1")
         yield
     finally:
         if changed:
-            subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=0"],
-                           check=True, capture_output=True, text=True)
-            print("forwarding: restored to 0")
+            cleanup_command("net.inet.ip.forwarding=0", "sysctl", "-w",
+                            "net.inet.ip.forwarding=0")
 
 
 def select_pf_nat_anchor(main_rules: str) -> str:
@@ -1120,8 +1017,6 @@ def select_pf_nat_anchor(main_rules: str) -> str:
                if line.strip().startswith("nat-anchor ")]
     if any('"com.apple/*"' in line for line in anchors):
         return "com.apple/lwip-ce-bridge"
-    if any('"lwip-ce-bridge"' in line for line in anchors):
-        return "lwip-ce-bridge"  # main rules left by an older bridge run
     raise RuntimeError("PF has no usable NAT anchor; refusing to replace "
                        "the main PF ruleset. Load a ruleset with "
                        "nat-anchor \"com.apple/*\" before starting the bridge")
@@ -1165,10 +1060,13 @@ class UtunHost:
         import subprocess
 
         net, uplink = self.net, self.uplink
-        main_rules = subprocess.run(["pfctl", "-sn"], check=True,
-                                    capture_output=True, text=True).stdout
-        anchor = select_pf_nat_anchor(main_rules)
-        self.tun, tun_name = open_utun()
+        main_rules = privileged("pfctl", "-sn").stdout
+        anchor = f"{select_pf_nat_anchor(main_rules)}-{secrets.token_hex(8)}"
+        try:
+            self.tun, tun_name = open_utun()
+        except PermissionError:
+            LOG.info("Creating utun using a short-lived sudo helper")
+            self.tun, tun_name = open_privileged_utun()
         self.stack.callback(self.tun.close)
         host_ip = ".".join(str(b) for b in net.host_ip)
         client_ip = ".".join(str(b) for b in net.client_ip)
@@ -1176,60 +1074,71 @@ class UtunHost:
         netmask = ".".join(str(b) for b in net.netmask)
         # Without an explicit netmask ifconfig defaults a 10.x utun to /8,
         # which makes the kernel treat all of 10.0.0.0/8 as on-link.
-        subprocess.run(["ifconfig", tun_name, host_ip, client_ip,
-                        "netmask", netmask, "up"], check=True)
+        LOG.info("Configuring %s: %s -> %s netmask %s", tun_name,
+                 host_ip, client_ip, netmask)
+        privileged("ifconfig", tun_name, host_ip, client_ip,
+                   "netmask", netmask, "up")
         # ifconfig normally installs the point-to-point host route itself.
         # An unconditional `route add` printed "File exists" even when
         # routing was correct, and a stale route to an old utun could
         # silently steal replies.
         current_route = route_interface(client_ip)
-        if current_route != tun_name:
-            subprocess.run(["route", "-q", "-n", "delete", "-host", client_ip],
-                           capture_output=True, check=False)
-            subprocess.run(["route", "-q", "-n", "add", "-host", client_ip,
-                            "-interface", tun_name], check=True)
+        if current_route is None:
+            LOG.info("Adding host route for %s through %s", client_ip, tun_name)
+            privileged("route", "-q", "-n", "add", "-host", client_ip,
+                       "-interface", tun_name)
+            self.stack.callback(lambda: cleanup_command(
+                f"host route to {client_ip}", "route", "-q", "-n",
+                "delete", "-host", client_ip))
             current_route = route_interface(client_ip)
+        elif current_route != tun_name:
+            # Keep the old route intact. A conflicting route needs operator
+            # attention; deleting it would change unrelated host networking.
+            raise RuntimeError(f"route to {client_ip} uses "
+                               f"{current_route}, expected "
+                               f"{tun_name}; choose another --client-ip")
         if current_route != tun_name:
             raise RuntimeError(f"route to {client_ip} uses "
                                f"{current_route or 'no interface'}, "
                                f"expected {tun_name}")
 
         rule = f"nat on {uplink} from {client_ip} to any -> ({uplink})\n"
-        print(f"\ninterface : {tun_name}  {host_ip} -> {client_ip}")
-        print(f"route     : {client_ip} via {current_route}")
-        print(f"uplink    : {uplink}")
-        print(f"pf rule   : {rule.strip()}")
+        LOG.info("Interface %s: %s -> %s; route via %s; uplink %s",
+                 tun_name, host_ip, client_ip, current_route, uplink)
+        LOG.info("Loading PF NAT rule: %s", rule.strip())
 
         # The anchor needs an active NAT anchor point and a PF enable
         # reference. -E/-X avoids globally disabling PF if another service
         # starts using it.
-        subprocess.run(["pfctl", "-a", anchor, "-f", "-"],
-                       input=rule, text=True, check=True, capture_output=True)
+        privileged("pfctl", "-a", anchor, "-f", "-", input=rule)
 
         def flush_anchor():
-            subprocess.run(["pfctl", "-a", anchor, "-F", "all"],
-                           capture_output=True)
-            print("pf        : NAT anchor flushed")
+            cleanup_command(f"PF NAT anchor {anchor}", "pfctl", "-a",
+                            anchor, "-F", "all")
         self.stack.callback(flush_anchor)
 
-        en = subprocess.run(["pfctl", "-E"], check=True,
-                            capture_output=True, text=True)
-        pf_token = pf_enable_token(en.stdout + en.stderr)
+        LOG.info("Enabling PF with a reference token")
+        en = privileged("pfctl", "-E")
+        try:
+            pf_token = pf_enable_token(en.stdout + en.stderr)
+        except RuntimeError:
+            # pfctl may have enabled PF despite an unexpected output format.
+            # The token cannot be released safely; make this visible.
+            LOG.error("PF enable reference may remain active; output: %s %s",
+                      en.stdout.strip(), en.stderr.strip())
+            raise
 
         def release_pf():
-            subprocess.run(["pfctl", "-X", pf_token], capture_output=True)
-            print("pf        : enable reference released")
+            cleanup_command("PF enable reference", "pfctl", "-X", pf_token)
         self.stack.callback(release_pf)
 
-        status = subprocess.run(["pfctl", "-s", "info"],
-                                check=True, capture_output=True, text=True).stdout
+        status = privileged("pfctl", "-s", "info").stdout
         if "Status: Enabled" not in status:
             raise RuntimeError("PF did not enable after pfctl -E")
-        print(f"pf        : enabled, NAT anchor {anchor} loaded")
+        LOG.info("PF enabled; NAT anchor %s loaded", anchor)
         # Show what pf thinks it has, so a silent mismatch is visible.
-        shown = subprocess.run(["pfctl", "-a", anchor, "-s", "nat"],
-                               check=True, capture_output=True, text=True).stdout.strip()
-        print(f"pf rules  : {shown or '(none -- NAT is not active)'}\n")
+        shown = privileged("pfctl", "-a", anchor, "-s", "nat").stdout.strip()
+        LOG.info("PF NAT rules: %s", shown or "(none; NAT is not active)")
 
     def send(self, frame: bytes) -> None:
         utun_write(self.tun, frame[14:])
@@ -1248,6 +1157,10 @@ TAP_PREFIX = "lwipce"
 NFT_TABLE = "lwip_ce_bridge"
 
 
+def valid_interface(name: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", name)) and name not in (".", "..")
+
+
 def netmask_prefix(mask: bytes) -> int:
     return bin(int.from_bytes(mask, "big")).count("1")
 
@@ -1261,9 +1174,8 @@ class TapHost:
       (nothing NATs v6, and the kernel's multicast chatter would only cost
       USB bandwidth), IPv4 forwarding is enabled on it and on the uplink,
       an nftables table masquerades the calculator's address out of the
-      uplink, and firewalld (if running) gets the TAP in its trusted zone so
-      its forward chain does not reject the traffic. Each step is undone on
-      exit, in reverse.
+      uplink, and firewalld (if running) gets a scoped forwarding rule.
+      Each step is undone on exit, in reverse.
     * preconfigured: --tap names an interface that already exists (typically
       a persistent TAP owned by the user, see --print-setup). Nothing on the
       host is changed; the bridge only checks the address and adopts the
@@ -1352,12 +1264,16 @@ class TapHost:
         return m.group(1) if m else None
 
     @staticmethod
-    def write_sysctl(path: str, value: str) -> str:
-        """Write a /proc/sys value and return the one it replaced."""
-        with open(path) as fh:
-            old = fh.read().strip()
-        with open(path, "w") as fh:
-            fh.write(value)
+    def write_sysctl(key: str, value: str, restore: ExitStack | None = None) -> str:
+        """Use sudo only for the write; return the prior kernel value."""
+        old = subprocess.run(["sysctl", "-n", key], check=True,
+                             capture_output=True, text=True).stdout.strip()
+        if old != value:
+            if restore is not None:
+                restore.callback(lambda: cleanup_command(
+                    f"{key}={old}", "sysctl", "-w", f"{key}={old}"))
+            LOG.info("Setting %s: %s -> %s", key, old, value)
+            privileged("sysctl", "-w", f"{key}={value}")
         return old
 
     @staticmethod
@@ -1373,18 +1289,22 @@ class TapHost:
     @staticmethod
     def print_setup(args, uplink: str | None) -> None:
         """The one-time root commands for running the bridge unprivileged."""
-        import getpass
+        import pwd
+        import shlex
 
         tap = args.tap or f"{TAP_PREFIX}0"
         up = uplink or "UPLINK"
         prefix = netmask_prefix(MiniNet().netmask)
         import textwrap
+        user = shlex.quote(pwd.getpwuid(os.getuid()).pw_name)
 
         print(textwrap.dedent(f"""\
-    # One-time setup, as root, so the bridge can run as {getpass.getuser()}.
+    # One-time setup, as root, so the bridge can run as {user}.
     # The network part lasts until reboot; the udev rule is permanent.
+    # Record this value so it can be restored at cleanup:
+    sysctl -n net.ipv4.conf.{up}.forwarding
 
-    ip tuntap add dev {tap} mode tap user {getpass.getuser()}
+    ip tuntap add dev {tap} mode tap user {user}
     ip link set dev {tap} address 02:ce:ce:00:00:01
     sysctl -w net.ipv6.conf.{tap}.disable_ipv6=1
     ip addr add {args.host_ip}/{prefix} dev {tap}
@@ -1392,8 +1312,8 @@ class TapHost:
     sysctl -w net.ipv4.conf.{tap}.forwarding=1 net.ipv4.conf.{up}.forwarding=1
     nft add table ip {NFT_TABLE}
     nft 'add chain ip {NFT_TABLE} postrouting {{ type nat hook postrouting priority srcnat; }}'
-    nft add rule ip {NFT_TABLE} postrouting ip saddr {args.client_ip} oifname '"{up}"' masquerade
-    firewall-cmd --zone=trusted --add-interface={tap}     # only if firewalld runs
+    nft add rule ip {NFT_TABLE} postrouting iifname '"{tap}"' ip saddr {args.client_ip} oifname '"{up}"' masquerade
+    firewall-cmd --direct --add-rule ipv4 filter FORWARD 0 -i {tap} -s {args.client_ip} -o {up} -j ACCEPT  # only if firewalld runs
 
     # USB access for the logged-in user (also lets the bridge detach cdc_acm):
     echo 'SUBSYSTEM=="usb", ATTR{{idVendor}}=="{VID:04x}", ATTR{{idProduct}}=="{PID:04x}", TAG+="uaccess"' \\
@@ -1403,8 +1323,12 @@ class TapHost:
     # Then, unprivileged:
     #   python3 {sys.argv[0]} --tap {tap}
     #
-    # To undo the network part:
-    #   nft delete table ip {NFT_TABLE}; ip link delete {tap}"""))
+    # To undo the network part, also restore the uplink forwarding value
+    # recorded before setup and remove the firewalld zone assignment:
+    #   firewall-cmd --direct --remove-rule ipv4 filter FORWARD 0 -i {tap} -s {args.client_ip} -o {up} -j ACCEPT
+    #   nft delete table ip {NFT_TABLE}
+    #   sysctl -w net.ipv4.conf.{up}.forwarding=PRIOR_VALUE
+    #   ip link delete {tap}"""))
 
 
     def __enter__(self) -> "TapHost":
@@ -1429,7 +1353,7 @@ class TapHost:
                 f"cannot attach to TAP interface {name}: it is not owned by "
                 "this user. Recreate it with `ip tuntap add ... user "
                 f"{os.environ.get('USER', '$USER')}` (see --print-setup) "
-                "or run as root.") from None
+                "or use the temporary TAP mode.") from None
         except FileNotFoundError:
             raise RuntimeError("/dev/net/tun is missing; load the tun "
                                "module (modprobe tun)") from None
@@ -1443,28 +1367,21 @@ class TapHost:
             self.net.host_mac = bytes.fromhex(fh.read().strip().replace(":", ""))
         host_ip = ".".join(str(b) for b in self.net.host_ip)
         have = self.interface_ipv4(self.name)
-        print(f"\ninterface : {self.name} (preconfigured; host left unchanged)")
-        print(f"address   : {have or 'none'}  mac {mac_str(self.net.host_mac)}")
+        LOG.info("Using preconfigured interface %s, address %s, MAC %s",
+                 self.name, have or "none", mac_str(self.net.host_mac))
         if have != host_ip:
-            print(f"warning   : {self.name} has {have or 'no IPv4 address'}, "
-                  f"but DHCP will name {host_ip} as the router; pass "
-                  f"--host-ip {have} or fix the interface", file=sys.stderr)
+            LOG.warning("%s has %s, but DHCP will name %s as router; "
+                        "fix the interface or pass --host-ip", self.name,
+                        have or "no IPv4 address", host_ip)
         with open(f"{sysfs}/flags") as fh:
             if not int(fh.read(), 16) & 0x1:                # IFF_UP
-                print(f"warning   : {self.name} is down "
-                      f"(ip link set dev {self.name} up)", file=sys.stderr)
-        print()
+                LOG.warning("%s is down (ip link set dev %s up)",
+                            self.name, self.name)
 
     def _create(self) -> None:
         import shutil
         import subprocess
 
-        if os.geteuid() != 0:
-            hint = (f"{self.name} does not exist; " if self.name else "")
-            raise RuntimeError(
-                f"{hint}creating and configuring a TAP interface needs root. "
-                "Re-run with sudo, or set up a persistent interface once "
-                "(--print-setup) and pass it with --tap.")
         for tool in ("ip", "nft"):
             if not shutil.which(tool):
                 raise RuntimeError(f"`{tool}` not found; install "
@@ -1472,23 +1389,36 @@ class TapHost:
         if not self.uplink:
             raise RuntimeError("no outbound interface found; pass --odevice")
 
-        def run(*cmd: str) -> None:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-
         net, uplink = self.net, self.uplink
-        self._open(self.name or f"{TAP_PREFIX}%d")
+        if self.name:
+            tap = self.name
+        else:
+            tap = next((f"{TAP_PREFIX}{n}" for n in range(1000)
+                        if not os.path.exists(f"/sys/class/net/{TAP_PREFIX}{n}")),
+                       None)
+            if tap is None:
+                raise RuntimeError("no free lwipce TAP interface name")
+        LOG.info("Creating TAP %s owned by uid %d", tap, os.getuid())
+        privileged("ip", "tuntap", "add", "dev", tap, "mode", "tap",
+                   "user", str(os.getuid()))
+        self.stack.callback(lambda: cleanup_command(
+            f"TAP {tap}", "ip", "link", "delete", "dev", tap))
+        self._open(tap)
         tap = self.name
         host_ip = ".".join(str(b) for b in net.host_ip)
         client_ip = ".".join(str(b) for b in net.client_ip)
         prefix = netmask_prefix(net.netmask)
 
-        run("ip", "link", "set", "dev", tap, "address", mac_str(net.host_mac))
+        LOG.info("Setting TAP %s MAC to %s", tap, mac_str(net.host_mac))
+        privileged("ip", "link", "set", "dev", tap, "address", mac_str(net.host_mac))
         try:
-            self.write_sysctl(f"/proc/sys/net/ipv6/conf/{tap}/disable_ipv6", "1")
-        except OSError:
+            self.write_sysctl(f"net.ipv6.conf.{tap}.disable_ipv6", "1")
+        except subprocess.CalledProcessError:
             pass                             # IPv6 not built in: nothing to do
-        run("ip", "addr", "add", f"{host_ip}/{prefix}", "dev", tap)
-        run("ip", "link", "set", "dev", tap, "up")
+        LOG.info("Addressing TAP %s with %s/%s", tap, host_ip, prefix)
+        privileged("ip", "addr", "add", f"{host_ip}/{prefix}", "dev", tap)
+        LOG.info("Bringing TAP %s up", tap)
+        privileged("ip", "link", "set", "dev", tap, "up")
         current_route = self.route_interface(client_ip)
         if current_route != tap:
             raise RuntimeError(f"route to {client_ip} uses "
@@ -1499,51 +1429,44 @@ class TapHost:
         # Per-interface forwarding rather than the global ip_forward switch:
         # Linux decides on the ingress interface, so these two are all the
         # path needs, and nothing else on the host starts routing.
-        self.write_sysctl(f"/proc/sys/net/ipv4/conf/{tap}/forwarding", "1")
-        up_path = f"/proc/sys/net/ipv4/conf/{uplink}/forwarding"
-        old = self.write_sysctl(up_path, "1")
-        if old != "1":
-            def restore_forwarding():
-                self.write_sysctl(up_path, old)
-                print(f"forwarding: restored to {old} on {uplink}")
-            self.stack.callback(restore_forwarding)
-            print(f"forwarding: enabled on {uplink} for this bridge run")
+        self.write_sysctl(f"net.ipv4.conf.{tap}.forwarding", "1")
+        up_key = f"net.ipv4.conf.{uplink}.forwarding"
+        self.write_sysctl(up_key, "1", restore=self.stack)
 
-        rule = (f"ip saddr {client_ip} oifname \"{uplink}\" masquerade")
-        ruleset = (f"table ip {NFT_TABLE} {{\n"
+        table = f"{NFT_TABLE}_{secrets.token_hex(8)}"
+        rule = (f"iifname \"{tap}\" ip saddr {client_ip} "
+                f"oifname \"{uplink}\" masquerade")
+        ruleset = (f"table ip {table} {{\n"
                    f"  chain postrouting {{\n"
                    f"    type nat hook postrouting priority srcnat; policy accept;\n"
                    f"    {rule}\n"
                    f"  }}\n"
                    f"}}\n")
-        # A table left by a run that was killed would make `add` merge into
-        # it; replace it instead.
-        subprocess.run(["nft", "delete", "table", "ip", NFT_TABLE],
-                       capture_output=True)
-        subprocess.run(["nft", "-f", "-"], input=ruleset, text=True,
-                       check=True, capture_output=True)
+        LOG.info("Installing nftables table %s with rule: %s", table, rule)
+        privileged("nft", "-f", "-", input=ruleset)
 
         def drop_table():
-            subprocess.run(["nft", "delete", "table", "ip", NFT_TABLE],
-                           capture_output=True)
-            print(f"nft       : table {NFT_TABLE} removed")
+            cleanup_command(f"nftables table {table}", "nft", "delete",
+                            "table", "ip", table)
         self.stack.callback(drop_table)
 
-        print(f"\ninterface : {tap}  {host_ip}/{prefix}  mac {mac_str(net.host_mac)}")
-        print(f"route     : {client_ip} via {current_route}")
-        print(f"uplink    : {uplink}")
-        print(f"nft rule  : {rule}")
+        LOG.info("Interface %s %s/%s; client route via %s; uplink %s",
+                 tap, host_ip, prefix, current_route, uplink)
 
         if self.firewalld_running():
-            run("firewall-cmd", "--zone=trusted", f"--add-interface={tap}")
+            # A source-bound forward rule grants just this calculator's
+            # outbound traffic. It does not trust traffic to host services.
+            direct = (f"-i {tap} -s {client_ip} -o {uplink} -j ACCEPT")
+            argv = ("firewall-cmd", "--direct", "--add-rule", "ipv4",
+                    "filter", "FORWARD", "0", *direct.split())
+            LOG.info("Adding firewalld forward rule: %s", direct)
+            privileged(*argv)
 
             def leave_zone():
-                subprocess.run(["firewall-cmd", "--zone=trusted",
-                                f"--remove-interface={tap}"],
-                               capture_output=True)
-                print(f"firewalld : {tap} removed from the trusted zone")
+                cleanup_command(f"firewalld forward rule for {tap}",
+                                "firewall-cmd", "--direct", "--remove-rule",
+                                "ipv4", "filter", "FORWARD", "0", *direct.split())
             self.stack.callback(leave_zone)
-            print(f"firewalld : {tap} in the trusted zone (runtime only)")
         else:
             # Without firewalld, a drop policy on some other forward chain
             # (Docker installs one) still discards the traffic, and an accept
@@ -1551,10 +1474,8 @@ class TapHost:
             rules = subprocess.run(["nft", "list", "ruleset"],
                                    capture_output=True, text=True).stdout
             if re.search(r"hook forward[^\n]*policy drop", rules):
-                print("warning   : a forward chain has policy drop; the "
-                      "calculator's traffic may be discarded unless that "
-                      f"chain accepts {tap} -> {uplink}", file=sys.stderr)
-        print()
+                LOG.warning("A forward chain has policy drop; traffic may be "
+                            "discarded unless it accepts %s -> %s", tap, uplink)
 
     def send(self, frame: bytes) -> None:
         os.write(self.fd, frame)
@@ -1579,10 +1500,8 @@ class TapHost:
 # -- the bridge loop ---------------------------------------------------------
 
 def run_bridge(link, net: "MiniNet", host, seconds: float,
-               verbose: bool = True, tls_dump: bool = False,
-               watch: "ConnectionWatch | None" = None,
-               crypto: "CryptoResponder | None" = None,
-               save_hello: str | None = None) -> int:
+               quiet: bool = False, debug: bool = False,
+               crypto: "CryptoResponder | None" = None) -> int:
     """Move frames between the calculator and the host network.
 
     host is a UtunHost or TapHost already entered; it decides which
@@ -1592,8 +1511,7 @@ def run_bridge(link, net: "MiniNet", host, seconds: float,
     start = time.time()
     last_tick = start
     tx = rx = 0
-    if verbose:
-        print("  out = calculator -> internet, in = internet -> calculator\n")
+    LOG.info("Bridge started")
     try:
         while seconds <= 0 or time.time() - start < seconds:
             moved = False
@@ -1605,62 +1523,48 @@ def run_bridge(link, net: "MiniNet", host, seconds: float,
                 for frame in asm.feed(chunk):
                     et = (frame[12] << 8) | frame[13]
                     if crypto and (reply := crypto.handle(frame, net.host_mac)):
+                        if debug:
+                            LOG.debug("<- control frame bytes=%d", len(frame))
                         link.write_frame(reply)
-                        if verbose:
-                            print("  <- " + describe_frame(frame))
-                            print("  -> " + describe_frame(reply))
+                        if debug:
+                            LOG.debug("-> control frame bytes=%d", len(reply))
                         continue
                     reply = net.handle(frame)      # DHCP (+ ARP on macOS)
                     if reply:
-                        if verbose:
-                            print("  <- " + describe_frame(frame))
-                            print("  -> " + describe_frame(reply))
+                        if debug:
+                            LOG.debug("<- local frame bytes=%d", len(frame))
                         link.write_frame(reply)
+                        if debug:
+                            LOG.debug("-> local frame bytes=%d", len(reply))
                         continue
                     if et in host.forwards:
                         if et == 0x0800:
-                            if tls_dump:
-                                describe_tls(frame, "calc->net", save_to=save_hello)
-                            if watch:
-                                watch.observe(frame, outbound=True)
-                            frame, old_mss = clamp_tcp_mss(frame)
-                            if old_mss is not None:
-                                print(f"     tcp MSS {old_mss} -> {ACM_SAFE_MSS} "
-                                      "(ACM receive limit)")
+                            frame, _ = clamp_tcp_mss(frame)
                         host.send(frame)
                         tx += 1
-                        if verbose:
-                            print(f"  out {describe_frame(frame)}")
-                    elif verbose:
-                        # Not forwarded: only IPv4 is NATed, and the control
-                        # protocol is for the Wi-Fi bridge, not the network.
-                        print(f"  --  {describe_frame(frame)}  (not forwarded)")
+                        if debug:
+                            LOG.debug("out frame bytes=%d", len(frame))
 
             # kernel -> calculator
             frame = host.recv()
             if frame:
                 moved = True
-                if frame[12:14] == b"\x08\x00":
-                    if tls_dump:
-                        describe_tls(frame, "net->calc")
-                    if watch:
-                        watch.observe(frame, outbound=False)
                 link.write_frame(frame)
                 rx += 1
-                if verbose:
-                    print(f"  in  {describe_frame(frame)}")
+                if debug:
+                    LOG.debug("in frame bytes=%d", len(frame))
 
             if not moved:
                 time.sleep(0.005)
 
             # A silent terminal should still show whether anything is moving.
-            if not verbose and time.time() - last_tick >= 2.0:
+            if not quiet and time.time() - last_tick >= 2.0:
                 last_tick = time.time()
-                print(f"  out {tx}  in {rx}", end="\r", flush=True)
+                LOG.info("Forwarded counters: out=%d in=%d", tx, rx)
     except KeyboardInterrupt:
-        print("\ninterrupted")
+        LOG.info("Bridge interrupted")
 
-    print(f"\nforwarded {tx} packets out, {rx} in")
+    LOG.info("Bridge stopped: forwarded %d packets out, %d in", tx, rx)
     return 0
 
 
@@ -1669,7 +1573,7 @@ def open_link(args, system: str):
     if system == "Darwin":
         port = wait_for_calculator(args.port, quiet=args.quiet)
         link = TtyLink(port)
-        print(f"port: {port}  (DTR asserted)")
+        LOG.info("Port %s opened; DTR asserted", port)
         return link
     import usb.core
 
@@ -1678,16 +1582,39 @@ def open_link(args, system: str):
     try:
         link = UsbLink(dev)
     except usb.core.USBError as e:
-        if e.errno == 13:                                  # EACCES
+        if e.errno != 13:                                  # EACCES
+            raise
+        if not shutil.which("getfacl") or not shutil.which("setfacl"):
             raise RuntimeError(
-                "no permission to open the calculator's USB device; run as "
-                "root, or install the udev rule from --print-setup") from None
-        raise
-    print(f"device: {link.name}  (DTR asserted)")
+                "USB access denied; install the udev rule from --print-setup "
+                "or install the Linux acl tools for a temporary access grant") from None
+        device_path = f"/dev/bus/usb/{dev.bus:03d}/{dev.address:03d}"
+        uid = os.getuid()
+        current = subprocess.run(["getfacl", "-cn", device_path],
+                                 check=True, capture_output=True, text=True).stdout
+        if re.search(rf"^user:{uid}:", current, re.MULTILINE):
+            raise RuntimeError("USB access denied despite an existing user ACL; "
+                               "check the udev rule and device permissions") from None
+        LOG.info("Granting uid %d temporary USB access to %s", uid, device_path)
+        try:
+            privileged("setfacl", "-m", f"u:{uid}:rw", device_path)
+        except BaseException:
+            cleanup_command(f"USB ACL on {device_path}", "setfacl", "-x",
+                            f"u:{uid}", device_path)
+            raise
+        try:
+            link = UsbLink(dev)
+        except BaseException:
+            cleanup_command(f"USB ACL on {device_path}", "setfacl", "-x",
+                            f"u:{uid}", device_path)
+            raise
+        link.usb_acl = (device_path, uid)
+    LOG.info("Device %s opened; DTR asserted", link.name)
     return link
 
 
 def main() -> int:
+    global CLEANUP_ERRORS
     ap = argparse.ArgumentParser(
         description="Bridge the calculator's CDC-ACM link to a real network.")
     ap.add_argument("--odevice", "--uplink", dest="odevice", metavar="IFACE",
@@ -1707,14 +1634,12 @@ def main() -> int:
                     help="how long to run; 0 means until interrupted (default)")
     ap.add_argument("--once", action="store_true",
                     help="exit on disconnect instead of waiting for reconnect")
-    ap.add_argument("--save-hello", metavar="PATH",
-                    help="write the calculator's raw ClientHello record to PATH")
     ap.add_argument("--debug", action="store_true",
-                    help="report how each connection ended and why (implies --tls)")
-    ap.add_argument("--tls", action="store_true",
-                    help="decode TLS records: ClientHello contents and server alerts")
+                    help="log frame directions and byte counts (no packet data)")
     ap.add_argument("--quiet", action="store_true",
-                    help="print only a periodic counter instead of every packet")
+                    help="suppress periodic packet counters")
+    ap.add_argument("--log-file", metavar="PATH",
+                    help="log path (default: ~/.local/state/lwip-acm-bridge/bridge.log)")
     ap.add_argument("--accelerate-crypto", action="store_true",
                     help="answer the calculator's crypto offload requests with "
                          "python3-cryptography")
@@ -1736,6 +1661,35 @@ def main() -> int:
     if system == "Linux" and args.port:
         ap.error("--port is for macOS; on Linux the calculator is opened "
                  "over libusb")
+    for name in (args.tap, args.odevice):
+        if name and not valid_interface(name):
+            ap.error(f"invalid interface name: {name!r}")
+    for label in ("host_ip", "client_ip", "dns", "ntp"):
+        value = getattr(args, label)
+        if value is not None:
+            try:
+                ipaddress.IPv4Address(value)
+            except ipaddress.AddressValueError:
+                ap.error(f"invalid IPv4 address for --{label.replace('_', '-')}: {value!r}")
+    if args.host_ip == args.client_ip:
+        ap.error("--host-ip and --client-ip must differ")
+
+    # A sudo invocation must not keep the packet parser running as root. It
+    # also does not seed the invoking user's sudo timestamp after dropping
+    # privileges, which would cause a second password prompt during setup.
+    if os.geteuid() == 0:
+        ap.error("run without sudo; the bridge will request it once for "
+                 "privileged host networking operations")
+
+    import pwd
+    user_home = pwd.getpwuid(os.getuid()).pw_dir
+    log_path = args.log_file or os.path.join(
+        user_home, ".local", "state", "lwip-acm-bridge", "bridge.log")
+    try:
+        configure_logging(log_path, args.debug)
+    except OSError as e:
+        ap.error(f"cannot open log file {log_path!r}: {e}")
+    LOG.info("Starting bridge; log file %s", log_path)
 
     candidates = active_uplinks()
     if args.print_setup:
@@ -1747,36 +1701,31 @@ def main() -> int:
     except ImportError as e:
         ap.error(f"--accelerate-crypto needs python3-cryptography: {e}")
 
-    if system == "Darwin" and os.geteuid() != 0:
-        print("needs root (creates a utun interface and loads a pf NAT rule)\n"
-              "Re-run with sudo.", file=sys.stderr)
-        return 2
     if system == "Linux":
         try:
             import usb.core
             import usb.backend.libusb1
         except ImportError:
-            print("needs pyusb: dnf install python3-pyusb "
-                  "(or pip install pyusb)", file=sys.stderr)
+            LOG.error("Needs pyusb: dnf install python3-pyusb "
+                      "(or pip install pyusb)")
             return 2
         if usb.backend.libusb1.get_backend() is None:
-            print("pyusb cannot find libusb-1.0: dnf install libusb1",
-                  file=sys.stderr)
+            LOG.error("Pyusb cannot find libusb-1.0: dnf install libusb1")
             return 2
 
     preconfigured = (system == "Linux" and args.tap
                      and os.path.exists(f"/sys/class/net/{args.tap}"))
     uplink = args.odevice or (candidates[0] if candidates else None)
     if not uplink and not preconfigured:
-        print("no active network interface found", file=sys.stderr)
+        LOG.error("No active network interface found")
         return 2
     if not preconfigured:
         if args.odevice and args.odevice not in candidates:
-            print(f"warning: {args.odevice} not among active interfaces "
-                  f"{candidates}", file=sys.stderr)
+            LOG.warning("%s not among active interfaces %s",
+                        args.odevice, candidates)
         elif not args.odevice and len(candidates) > 1:
-            print(f"outbound : {uplink} (also available: "
-                  f"{', '.join(candidates[1:])}; pick with --odevice)")
+            LOG.info("Outbound interface %s (also available: %s)",
+                     uplink, ", ".join(candidates[1:]))
 
     net = MiniNet(args.host_ip, args.client_ip, dns_ip=args.dns, ntp_ip=args.ntp)
     # On Linux the kernel also answers ARP, since the TAP interface is
@@ -1786,43 +1735,65 @@ def main() -> int:
 
     try:
         while True:
+            cleanup_errors_before = CLEANUP_ERRORS
             try:
                 link = open_link(args, system)
-            except RuntimeError as e:
-                print(f"\n{e}", file=sys.stderr)
+            except (RuntimeError, subprocess.CalledProcessError, OSError) as e:
+                LOG.error("%s", e)
+                return 2
+            except Exception as e:
+                LOG.error("Could not open device: %s", type(e).__name__)
                 return 2
             try:
                 host = (UtunHost(net, uplink) if system == "Darwin"
                         else TapHost(net, uplink, args.tap))
                 with host:
-                    run_bridge(link, net, host, args.seconds,
-                               verbose=not args.quiet,
-                               tls_dump=args.tls or args.debug or bool(args.save_hello),
-                               watch=ConnectionWatch(trace=args.debug) if args.debug else None,
-                               crypto=crypto, save_hello=args.save_hello)
+                    try:
+                        run_bridge(link, net, host, args.seconds,
+                                   quiet=args.quiet, debug=args.debug,
+                                   crypto=crypto)
+                    except OSError as e:
+                        LOG.warning("Link I/O stopped (%s); waiting for reconnect",
+                                    e.strerror or type(e).__name__)
             except RuntimeError as e:
-                print(f"\n{e}", file=sys.stderr)
+                LOG.error("%s", e)
                 return 2
             except subprocess.CalledProcessError as e:
                 detail = (e.stderr or "").strip()
-                print(f"\n`{' '.join(e.cmd)}` failed (exit {e.returncode})"
-                      f"{': ' + detail if detail else ''}", file=sys.stderr)
+                LOG.error("`%s` failed (exit %d)%s", " ".join(e.cmd),
+                          e.returncode, f": {detail}" if detail else "")
                 return 2
             except BlockingIOError as e:
-                print(f"\nbridge I/O would block: {e}", file=sys.stderr)
+                LOG.error("Bridge I/O would block: %s", e)
                 return 2
             except OSError as e:
-                print(f"\ndevice went away ({e.strerror or e}); waiting for "
-                      f"it to come back")
+                LOG.error("Host setup or cleanup failed: %s", e)
+                return 2
             except SerialFrameWriteError as e:
-                print(f"\nserial frame write failed: {e}", file=sys.stderr)
+                LOG.error("Serial frame write failed: %s", e)
+                return 2
+            except Exception as e:
+                LOG.error("Unhandled bridge error: %s", type(e).__name__)
                 return 2
             finally:
-                link.close()
+                try:
+                    link.close()
+                except Exception as e:
+                    CLEANUP_ERRORS += 1
+                    LOG.error("Could not close device: %s", type(e).__name__)
+                finally:
+                    acl = getattr(link, "usb_acl", None)
+                    if acl:
+                        cleanup_command(f"USB ACL on {acl[0]}", "setfacl",
+                                        "-x", f"u:{acl[1]}", acl[0])
+            if CLEANUP_ERRORS != cleanup_errors_before:
+                LOG.error("Bridge shutdown left %d host changes unconfirmed",
+                          CLEANUP_ERRORS - cleanup_errors_before)
+                return 2
             if args.seconds > 0 or args.once:
                 return 0
     except KeyboardInterrupt:
-        print("\ninterrupted")
+        LOG.info("Interrupted")
         return 0
 
 
